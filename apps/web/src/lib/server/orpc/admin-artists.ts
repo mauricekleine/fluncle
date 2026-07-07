@@ -11,11 +11,14 @@ import {
   addArtistSocial,
   ArtistSocialNotFoundError,
   confirmArtistSocial,
+  followArtistSocial,
   followPendingArtists,
   InvalidArtistSocialError,
   listArtistSocialsQueue,
   recordOperatorFollow,
   removeArtistSocial,
+  undoArtistSocialFollow,
+  unmuteArtistSocial,
 } from "../artists";
 import { listUnresolvedArtists, resolveArtist } from "../artist-resolution";
 import { backfillArtists } from "../backfill-artists";
@@ -131,6 +134,48 @@ export function adminArtistsHandlers(os: Implementer) {
       }
     });
 
+  // POST /admin/artists/socials/{socialId}/follow-now — operator tier: perform the REAL
+  // Spotify/YouTube follow on demand (the "Follow now" button), then stamp followed_at.
+  const followArtistSocialHandler = os.follow_artist_social
+    .use(adminAuth)
+    .use(operatorGuard)
+    .handler(async ({ input }) => {
+      try {
+        const { platformWarning, social } = await followArtistSocial(input.socialId);
+
+        return { ok: true as const, platformWarning, social };
+      } catch (error) {
+        throw toSocialFault(error);
+      }
+    });
+
+  // POST /admin/artists/socials/{socialId}/unfollow — operator tier: undo a follow (real API
+  // unfollow for Spotify/YouTube, clear the stamp for the no-API platforms).
+  const unfollowArtistSocialHandler = os.unfollow_artist_social
+    .use(adminAuth)
+    .use(operatorGuard)
+    .handler(async ({ input }) => {
+      try {
+        const { platformWarning, social } = await undoArtistSocialFollow(input.socialId);
+
+        return { ok: true as const, platformWarning, social };
+      } catch (error) {
+        throw toSocialFault(error);
+      }
+    });
+
+  // POST /admin/artists/socials/{socialId}/unmute — operator tier: clear the don't-champion skip.
+  const unmuteArtistSocialHandler = os.unmute_artist_social
+    .use(adminAuth)
+    .use(operatorGuard)
+    .handler(async ({ input }) => {
+      try {
+        return { ok: true as const, social: await unmuteArtistSocial(input.socialId) };
+      } catch (error) {
+        throw toSocialFault(error);
+      }
+    });
+
   // POST /admin/artists/socials/{socialId}/confirm — operator tier: candidate → confirmed.
   const confirmArtistSocialHandler = os.confirm_artist_social
     .use(adminAuth)
@@ -223,10 +268,13 @@ export function adminArtistsHandlers(os: Implementer) {
     backfill_artists: backfillArtistsHandler,
     confirm_artist_social: confirmArtistSocialHandler,
     follow_artist: followArtistHandler,
+    follow_artist_social: followArtistSocialHandler,
     list_artist_socials: listArtistSocialsHandler,
     list_unresolved_artists: listUnresolvedArtistsHandler,
     record_operator_follow: recordOperatorFollowHandler,
     remove_artist_social: removeArtistSocialHandler,
     resolve_artist: resolveArtistHandler,
+    unfollow_artist_social: unfollowArtistSocialHandler,
+    unmute_artist_social: unmuteArtistSocialHandler,
   };
 }

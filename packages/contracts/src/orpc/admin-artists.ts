@@ -183,6 +183,16 @@ const ArtistSocialSchema = z
 /** The `{ ok, social }` envelope every single-social operator write returns. */
 const ArtistSocialEnvelope = z.object({ ok: z.literal(true), social: ArtistSocialSchema });
 
+/**
+ * The follow/undo envelope: the row plus a soft `platformWarning`. The platform write
+ * (Spotify/YouTube) is best-effort — a miss (e.g. our Development-mode app's artist-follow
+ * 403) still records the follow-state and returns a human warning line here instead of
+ * failing the request; `null` when the write went through (or the platform has no follow API).
+ */
+const ArtistFollowEnvelope = ArtistSocialEnvelope.extend({
+  platformWarning: z.string().nullable(),
+});
+
 /** One artist in the follow queue, carrying all its socials. */
 const ArtistFollowQueueItemSchema = z
   .object({
@@ -254,6 +264,60 @@ export const followArtist = oc
   );
 
 /**
+ * `follow_artist_social` → `POST /admin/artists/socials/{socialId}/follow-now`
+ * (operationId `followArtistSocial`). Operator tier. Perform the REAL platform follow for one
+ * Spotify/YouTube social on demand (PUT /me/following, subscriptions.insert), then stamp
+ * `followed_at`. Idempotent. A no-API platform is rejected (400) — use `record_operator_follow`
+ * there. The platform write is best-effort: a miss (e.g. our Development-mode app's 403) still
+ * records the follow and returns a soft `platformWarning`. `{ ok, social, platformWarning }`.
+ */
+export const followArtistSocial = oc
+  .route({
+    method: "POST",
+    operationId: "followArtistSocial",
+    path: "/admin/artists/socials/{socialId}/follow-now",
+    summary: "Follow a Spotify/YouTube artist social now via the platform API",
+    tags: ["Admin"],
+  })
+  .input(z.object({ socialId: z.string() }))
+  .output(ArtistFollowEnvelope);
+
+/**
+ * `unfollow_artist_social` → `POST /admin/artists/socials/{socialId}/unfollow`
+ * (operationId `unfollowArtistSocial`). Operator tier. Undo a followed social: a Spotify/YouTube
+ * row is REALLY unfollowed via the API (DELETE /me/following, subscriptions.delete); a no-API
+ * platform just clears `followed_at`. The platform write is best-effort: a miss still clears the
+ * stamp and returns a soft `platformWarning`. Idempotent. `{ ok, social, platformWarning }`.
+ */
+export const unfollowArtistSocial = oc
+  .route({
+    method: "POST",
+    operationId: "unfollowArtistSocial",
+    path: "/admin/artists/socials/{socialId}/unfollow",
+    summary: "Undo a followed artist social (real API unfollow for Spotify/YouTube)",
+    tags: ["Admin"],
+  })
+  .input(z.object({ socialId: z.string() }))
+  .output(ArtistFollowEnvelope);
+
+/**
+ * `unmute_artist_social` → `POST /admin/artists/socials/{socialId}/unmute`
+ * (operationId `unmuteArtistSocial`). Operator tier. Clear a social's mute (`muted_at`),
+ * reversing an Undo's durable skip so the sweep may champion it again. Idempotent. No platform
+ * call. `{ ok, social }`.
+ */
+export const unmuteArtistSocial = oc
+  .route({
+    method: "POST",
+    operationId: "unmuteArtistSocial",
+    path: "/admin/artists/socials/{socialId}/unmute",
+    summary: "Unmute an artist social (clear the don't-champion skip)",
+    tags: ["Admin"],
+  })
+  .input(z.object({ socialId: z.string() }))
+  .output(ArtistSocialEnvelope);
+
+/**
  * `record_operator_follow` → `POST /admin/artists/socials/{socialId}/follow`
  * (operationId `recordOperatorFollow`). Operator tier. Register that the operator
  * manually followed a social (stamps `followed_at`). Idempotent. `{ ok, social }`.
@@ -323,9 +387,12 @@ export const adminArtistsContract = {
   backfill_artists: backfillArtists,
   confirm_artist_social: confirmArtistSocial,
   follow_artist: followArtist,
+  follow_artist_social: followArtistSocial,
   list_artist_socials: listArtistSocials,
   list_unresolved_artists: listUnresolvedArtists,
   record_operator_follow: recordOperatorFollow,
   remove_artist_social: removeArtistSocial,
   resolve_artist: resolveArtist,
+  unfollow_artist_social: unfollowArtistSocial,
+  unmute_artist_social: unmuteArtistSocial,
 };

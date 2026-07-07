@@ -298,6 +298,17 @@ export async function followSpotifyArtist(spotifyArtistId: string): Promise<void
   await spotifyFetch(`/me/following?${params.toString()}`, accessToken, { method: "PUT" });
 }
 
+/**
+ * Reverse `followSpotifyArtist` — `DELETE /me/following?type=artist` (the operator's "Undo").
+ * Same `user-follow-modify` scope; idempotent (unfollowing a not-followed artist is a 200 no-op).
+ */
+export async function unfollowSpotifyArtist(spotifyArtistId: string): Promise<void> {
+  const accessToken = await getSpotifyAccessToken();
+  const params = new URLSearchParams({ ids: spotifyArtistId, type: "artist" });
+
+  await spotifyFetch(`/me/following?${params.toString()}`, accessToken, { method: "DELETE" });
+}
+
 export class ApiError extends Error {
   code: string;
   status: number;

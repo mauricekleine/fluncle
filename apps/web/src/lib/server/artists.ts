@@ -1,8 +1,13 @@
 import { randomUUID } from "node:crypto";
+import { type ArtistSocialPlatform, ARTIST_SOCIAL_PLATFORMS } from "../artist-socials";
 import { getDb, typedRow, typedRows } from "./db";
-import { followSpotifyArtist } from "./spotify";
+import { followSpotifyArtist, unfollowSpotifyArtist } from "./spotify";
 import { fold } from "./track-match";
-import { resolveYouTubeChannelId, subscribeToYouTubeChannel } from "./youtube";
+import {
+  resolveYouTubeChannelId,
+  subscribeToYouTubeChannel,
+  unsubscribeFromYouTubeChannel,
+} from "./youtube";
 
 // The thin-content gate for artist pages: a `/artist/<slug>` page indexes (and
 // enters the sitemap) only at this many coordinate-bearing findings or more.
@@ -14,18 +19,6 @@ export const ARTIST_INDEX_MIN_FINDINGS = 3;
 // The socials the public artist page + `sameAs` render, in a stable display order
 // (the identity-anchor platforms first, then the rest). Rows outside this list, or
 // with a `candidate` status, never reach the public page.
-export type ArtistSocialPlatform =
-  | "spotify"
-  | "youtube"
-  | "soundcloud"
-  | "bandcamp"
-  | "instagram"
-  | "tiktok"
-  | "twitter"
-  | "facebook"
-  | "mixcloud"
-  | "homepage";
-
 const PUBLIC_SOCIAL_ORDER: ArtistSocialPlatform[] = [
   "spotify",
   "youtube",
@@ -497,19 +490,6 @@ export async function upsertTrackArtists(
 }
 
 // ── The identity graph: artist_socials + the agent-tier auto-follow sweep (Unit 5) ──
-/** The canonical platform order (the queue + the add-platform Select render in this order). */
-export const ARTIST_SOCIAL_PLATFORMS: ArtistSocialPlatform[] = [
-  "spotify",
-  "youtube",
-  "soundcloud",
-  "instagram",
-  "tiktok",
-  "mixcloud",
-  "bandcamp",
-  "twitter",
-  "facebook",
-  "homepage",
-];
 
 export type ArtistSocialStatus = "auto" | "candidate" | "confirmed";
 export type ArtistSocialSource = "musicbrainz" | "firecrawl" | "operator";
@@ -524,6 +504,9 @@ export type ArtistSocial = {
   status: ArtistSocialStatus;
   /** ISO stamp of when Fluncle followed/registered this platform, or null. */
   followedAt: string | null;
+  /** ISO stamp of when the operator muted (Undo'd) this platform — excludes it from the
+   *  auto-follow sweep so the robot can't re-follow. Null = not muted. */
+  mutedAt: string | null;
 };
 
 /** One artist in the follow queue, carrying all of its socials for the operator's glance. */
@@ -555,11 +538,13 @@ function toArtistSocial(row: Record<string, unknown>): ArtistSocial {
   const status = typeof row["status"] === "string" ? row["status"] : "candidate";
   const source = typeof row["source"] === "string" ? row["source"] : "operator";
   const followedAt = row["followed_at"];
+  const mutedAt = row["muted_at"];
 
   return {
     artistId: textOf(row["artist_id"]),
     followedAt: typeof followedAt === "string" ? followedAt : null,
     id: textOf(row["id"]),
+    mutedAt: typeof mutedAt === "string" ? mutedAt : null,
     platform: isArtistSocialPlatform(platform) ? platform : "homepage",
     source: (source === "musicbrainz" || source === "firecrawl"
       ? source
@@ -584,7 +569,7 @@ export async function listArtistSocialsQueue(limit = 100): Promise<ArtistFollowQ
   const result = await db.execute({
     args: [Math.max(1, Math.min(limit, 500))],
     sql: `select a.id as artist_id, a.name, a.slug, a.spotify_url,
-                 s.id, s.platform, s.url, s.source, s.status, s.followed_at
+                 s.id, s.platform, s.url, s.source, s.status, s.followed_at, s.muted_at
           from artists a
           join artist_socials s on s.artist_id = a.id
           where a.id in (
@@ -621,6 +606,104 @@ export async function listArtistSocialsQueue(limit = 100): Promise<ArtistFollowQ
   }
 
   return [...byArtist.values()];
+}
+
+export type ArtistOverviewItem = ArtistFollowQueueItem & {
+  /** Coordinate-bearing findings featuring this artist (the canonical track_artists join). */
+  findingCount: number;
+};
+
+// The `/admin/artists` overview — EVERY artist Fluncle features, name-sorted, each with its
+// full socials list (confirmed, auto, and candidate) and its finding count. Unlike the follow
+// QUEUE below (which narrows to the not-yet-done backlog that feeds the /admin attention row),
+// this is the stable MANAGEMENT surface: an artist never drops off it for being resolved, so
+// the operator can edit, add, or remove a link any time — when a profile moves, is deleted, or
+// a missing one turns up. A socialless artist still lists (LEFT JOIN) so a link can be added.
+export async function listAllArtistsWithSocials(): Promise<ArtistOverviewItem[]> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [],
+    sql: `select a.id as artist_id, a.name, a.slug, a.spotify_url,
+                 (select count(*) from tracks t
+                    join track_artists ta on ta.track_id = t.track_id
+                    where ta.artist_id = a.id and t.log_id is not null) as finding_count,
+                 s.id, s.platform, s.url, s.source, s.status, s.followed_at, s.muted_at
+          from artists a
+          left join artist_socials s on s.artist_id = a.id
+          order by a.name asc, s.platform asc`,
+  });
+
+  const byArtist = new Map<string, ArtistOverviewItem>();
+
+  for (const raw of result.rows) {
+    const row = raw as Record<string, unknown>;
+    const artistId = textOf(row["artist_id"]);
+    let artist = byArtist.get(artistId);
+
+    if (!artist) {
+      const spotifyUrl = row["spotify_url"];
+      const findingCount = row["finding_count"];
+      artist = {
+        findingCount: Number(findingCount) || 0,
+        id: artistId,
+        name: textOf(row["name"]),
+        slug: textOf(row["slug"]),
+        socials: [],
+        spotifyUrl: typeof spotifyUrl === "string" ? spotifyUrl : null,
+      };
+      byArtist.set(artistId, artist);
+    }
+
+    // LEFT JOIN: an artist with no socials yields one row with null social columns — skip it.
+    if (row["id"] !== null && row["id"] !== undefined) {
+      artist.socials.push(toArtistSocial({ ...row, artist_id: artistId }));
+    }
+  }
+
+  return [...byArtist.values()];
+}
+
+export type ArtistReviewRow = {
+  artistId: string;
+  name: string;
+  /** The oldest not-yet-actioned social's created stamp — the queue's oldest-first anchor. */
+  anchorAt: string;
+  /** How many socials still need a look (candidates to confirm + followable-not-followed). */
+  pending: number;
+};
+
+// The /admin attention row's honest read: one row per artist with unfinished follow work — a
+// `candidate` social to confirm, or a followable (Spotify/YouTube) social not yet followed —
+// with the count and the oldest such social's stamp (the queue's oldest-first anchor). Mirrors
+// listArtistSocialsQueue's predicate; the pure model turns each into a "Review →" deep-link
+// onto /admin/artists (the manage surface), so the queue surfaces the work and the page does it.
+export async function listArtistReviewRows(): Promise<ArtistReviewRow[]> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [],
+    sql: `select a.id as artist_id, a.name,
+                 count(*) as pending, min(s.created_at) as anchor_at
+          from artists a
+          join artist_socials s on s.artist_id = a.id
+          where s.muted_at is null
+            and (s.status = 'candidate'
+                 or (s.platform in ('spotify', 'youtube')
+                     and s.status in ('auto', 'confirmed')
+                     and s.followed_at is null))
+          group by a.id, a.name
+          order by anchor_at asc`,
+  });
+
+  return result.rows.map((raw) => {
+    const row = raw as Record<string, unknown>;
+
+    return {
+      anchorAt: textOf(row["anchor_at"]),
+      artistId: textOf(row["artist_id"]),
+      name: textOf(row["name"]),
+      pending: Number(row["pending"]) || 0,
+    };
+  });
 }
 
 /** The board's automated-socials aggregate: the Spotify/YouTube follow targets per platform. */
@@ -717,7 +800,7 @@ async function getArtistSocialById(socialId: string): Promise<ArtistSocial | und
   const db = await getDb();
   const result = await db.execute({
     args: [socialId],
-    sql: `select id, artist_id, platform, url, source, status, followed_at
+    sql: `select id, artist_id, platform, url, source, status, followed_at, muted_at
           from artist_socials where id = ? limit 1`,
   });
   const row = result.rows[0] as Record<string, unknown> | undefined;
@@ -746,6 +829,255 @@ export async function recordOperatorFollow(socialId: string): Promise<ArtistSoci
     args: [now, now, socialId],
     sql: `update artist_socials set followed_at = ?, updated_at = ?
           where id = ? and followed_at is null`,
+  });
+
+  const social = await getArtistSocialById(socialId);
+
+  if (!social) {
+    throw new ArtistSocialNotFoundError(socialId);
+  }
+
+  return social;
+}
+
+/** The soft outcome of an operator follow/undo: the fresh row plus a nullable warning. */
+export type ArtistSocialWrite = {
+  /** Null when the platform write went through (or there was nothing to send); a human line
+   *  when the best-effort Spotify/YouTube write missed but the bookkeeping still stamped. */
+  platformWarning: string | null;
+  social: ArtistSocial;
+};
+
+/** Build a soft warning line for a best-effort platform follow/unfollow that didn't go through. */
+function platformWriteWarning(
+  platform: "spotify" | "youtube",
+  verb: "follow" | "unfollow",
+  error: unknown,
+): string {
+  const label = platform === "spotify" ? "Spotify" : "YouTube";
+  const marked = verb === "follow" ? "Marked as followed" : "Marked as unfollowed";
+  const reason = error instanceof Error ? error.message : String(error);
+  const action = verb === "follow" ? "Follow" : "Unfollow";
+
+  return `${marked} here — but the ${label} API ${verb} didn't go through (${reason}). ${action} on ${label} manually if you want it to match.`;
+}
+
+/**
+ * Best-effort real follow for a Spotify/YouTube social. Returns `null` on success, or a soft
+ * warning line if the platform write missed (a 403 from our Development-mode app, an unresolvable
+ * id, a network blip). NEVER throws for a platform miss — the caller stamps `followed_at` either
+ * way, so a Spotify row (whose artist-follow endpoint is API-gated for our app — see
+ * docs/ROADMAP.md) stays markable instead of hard-gating on the 403.
+ */
+async function tryPlatformFollow(
+  platform: "spotify" | "youtube",
+  url: string,
+  storedSpotifyId: unknown,
+): Promise<string | null> {
+  try {
+    if (platform === "spotify") {
+      const stored = typeof storedSpotifyId === "string" ? storedSpotifyId : undefined;
+      const id = stored ?? spotifyArtistIdFromUrl(url);
+
+      if (!id) {
+        throw new InvalidArtistSocialError("no resolvable Spotify artist id");
+      }
+
+      await followSpotifyArtist(id);
+    } else {
+      const channelId = await resolveYouTubeChannelId(url);
+
+      if (!channelId) {
+        throw new InvalidArtistSocialError("no resolvable YouTube channel id");
+      }
+
+      await subscribeToYouTubeChannel(channelId);
+    }
+
+    return null;
+  } catch (error) {
+    return platformWriteWarning(platform, "follow", error);
+  }
+}
+
+/** The mirror of `tryPlatformFollow` for the undo path (real unfollow, best-effort). */
+async function tryPlatformUnfollow(
+  platform: "spotify" | "youtube",
+  url: string,
+  storedSpotifyId: unknown,
+): Promise<string | null> {
+  try {
+    if (platform === "spotify") {
+      const stored = typeof storedSpotifyId === "string" ? storedSpotifyId : undefined;
+      const id = stored ?? spotifyArtistIdFromUrl(url);
+
+      if (!id) {
+        throw new InvalidArtistSocialError("no resolvable Spotify artist id");
+      }
+
+      await unfollowSpotifyArtist(id);
+    } else {
+      const channelId = await resolveYouTubeChannelId(url);
+
+      if (!channelId) {
+        throw new InvalidArtistSocialError("no resolvable YouTube channel id");
+      }
+
+      await unsubscribeFromYouTubeChannel(channelId);
+    }
+
+    return null;
+  } catch (error) {
+    return platformWriteWarning(platform, "unfollow", error);
+  }
+}
+
+/**
+ * Perform the REAL platform follow for one Spotify/YouTube social on demand — the operator's
+ * "Follow now" button. Unlike `recordOperatorFollow` (which only stamps `followed_at` for the
+ * no-API platforms), this actually calls the platform: `followSpotifyArtist` (PUT /me/following)
+ * or `subscribeToYouTubeChannel` (subscriptions.insert), then stamps `followed_at` so the on-box
+ * `fluncle-artist-follow` sweep skips it. Idempotent: an already-followed row is a no-op. Rejects
+ * a no-API platform (use `recordOperatorFollow` there).
+ *
+ * The platform write is BEST-EFFORT: Spotify's artist-follow endpoint 403s for our
+ * Development-mode app (verified — same token, playlist-modify writes 200; not scope/account/
+ * Premium; docs/ROADMAP.md), so a hard gate here would make a Spotify row un-markable. On a
+ * platform miss we still stamp `followed_at` (the operator championed it) and return a soft
+ * `platformWarning` for the UI, rather than throwing.
+ */
+export async function followArtistSocial(socialId: string): Promise<ArtistSocialWrite> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [socialId],
+    sql: `select s.platform, s.url, s.followed_at, a.spotify_artist_id
+          from artist_socials s
+          join artists a on a.id = s.artist_id
+          where s.id = ?`,
+  });
+  const row = result.rows[0] as Record<string, unknown> | undefined;
+
+  if (!row) {
+    throw new ArtistSocialNotFoundError(socialId);
+  }
+
+  const platform = row["platform"];
+
+  if (platform !== "spotify" && platform !== "youtube") {
+    throw new InvalidArtistSocialError(
+      `${String(platform)} has no follow API — record a manual follow instead`,
+    );
+  }
+
+  // Already followed: a no-op (the sweep and the button share the followed_at IS NULL guard).
+  if (row["followed_at"] != null) {
+    const existing = await getArtistSocialById(socialId);
+
+    if (!existing) {
+      throw new ArtistSocialNotFoundError(socialId);
+    }
+
+    return { platformWarning: null, social: existing };
+  }
+
+  const url = textOf(row["url"]);
+  const platformWarning = await tryPlatformFollow(platform, url, row["spotify_artist_id"]);
+
+  const now = new Date().toISOString();
+  // Following clears any mute — the two states are mutually exclusive (a followed row is
+  // never muted). This also lets Follow-now double as an un-mute-and-follow in one tap.
+  await db.execute({
+    args: [now, now, socialId],
+    sql: `update artist_socials set followed_at = ?, muted_at = null, updated_at = ?
+          where id = ? and followed_at is null`,
+  });
+
+  const social = await getArtistSocialById(socialId);
+
+  if (!social) {
+    throw new ArtistSocialNotFoundError(socialId);
+  }
+
+  return { platformWarning, social };
+}
+
+/**
+ * Undo a followed social — the operator's "Undo". The mirror of the follow split: a
+ * Spotify/YouTube row is REALLY unfollowed via the API (`unfollowSpotifyArtist` /
+ * `unsubscribeFromYouTubeChannel`) so the platform matches the stamp; a no-API platform is
+ * bookkeeping-only (just clear `followed_at`). Idempotent (a not-followed row is a no-op).
+ * Clearing `followed_at` + muting the API platforms durably skips the on-box sweep.
+ *
+ * The platform unfollow is BEST-EFFORT (same rationale as `followArtistSocial`): a Spotify/
+ * YouTube API miss (e.g. the Development-mode 403) must not block the operator clearing the
+ * stamp. We attempt the real unfollow, then clear `followed_at` (and mute) either way, and
+ * return a soft `platformWarning` for the UI rather than throwing.
+ */
+export async function undoArtistSocialFollow(socialId: string): Promise<ArtistSocialWrite> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [socialId],
+    sql: `select s.platform, s.url, s.followed_at, a.spotify_artist_id
+          from artist_socials s
+          join artists a on a.id = s.artist_id
+          where s.id = ?`,
+  });
+  const row = result.rows[0] as Record<string, unknown> | undefined;
+
+  if (!row) {
+    throw new ArtistSocialNotFoundError(socialId);
+  }
+
+  // Not followed → nothing to undo (idempotent no-op).
+  if (row["followed_at"] == null) {
+    const existing = await getArtistSocialById(socialId);
+
+    if (!existing) {
+      throw new ArtistSocialNotFoundError(socialId);
+    }
+
+    return { platformWarning: null, social: existing };
+  }
+
+  const platform = row["platform"];
+  const url = textOf(row["url"]);
+  // Only the API platforms are muted — the sweep re-follows them, so undo must durably skip
+  // them. The no-API platforms have no sweep, so clearing the stamp already sticks (no mute).
+  const mute = platform === "spotify" || platform === "youtube";
+  const platformWarning =
+    platform === "spotify" || platform === "youtube"
+      ? await tryPlatformUnfollow(platform, url, row["spotify_artist_id"])
+      : null;
+
+  const now = new Date().toISOString();
+  await db.execute({
+    args: [mute ? now : null, now, socialId],
+    sql: `update artist_socials set followed_at = null, muted_at = ?, updated_at = ? where id = ?`,
+  });
+
+  const social = await getArtistSocialById(socialId);
+
+  if (!social) {
+    throw new ArtistSocialNotFoundError(socialId);
+  }
+
+  return { platformWarning, social };
+}
+
+/**
+ * Unmute a social — clear `muted_at`, reversing an Undo's durable skip. The row returns to the
+ * normal not-followed state: the auto-follow sweep is eligible to champion it again (and the
+ * "Follow now" button reappears for an on-demand follow). Idempotent (a not-muted row is a
+ * no-op). No platform call — muting/unmuting is purely Fluncle-side bookkeeping.
+ */
+export async function unmuteArtistSocial(socialId: string): Promise<ArtistSocial> {
+  const db = await getDb();
+  const now = new Date().toISOString();
+
+  await db.execute({
+    args: [now, socialId],
+    sql: `update artist_socials set muted_at = null, updated_at = ?
+          where id = ? and muted_at is not null`,
   });
 
   const social = await getArtistSocialById(socialId);
@@ -827,17 +1159,6 @@ export function assertHttpUrl(raw: string): string {
   }
 
   return trimmed;
-}
-
-/** Non-throwing sibling of `assertHttpUrl` — the defensive render guard (emit `href` only when true). */
-export function isHttpUrl(raw: string): boolean {
-  try {
-    assertHttpUrl(raw);
-
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 /**
@@ -964,6 +1285,7 @@ export async function followPendingArtists(limit = 5, dryRun = false): Promise<F
           where s.platform in ('spotify', 'youtube')
             and s.status in ('auto', 'confirmed')
             and s.followed_at is null
+            and s.muted_at is null
           order by s.created_at asc
           limit ?`,
   });

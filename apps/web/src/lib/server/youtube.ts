@@ -186,6 +186,57 @@ export async function subscribeToYouTubeChannel(channelId: string): Promise<void
   );
 }
 
+/**
+ * Reverse `subscribeToYouTubeChannel` — the operator's "Undo". `subscriptions.delete` needs the
+ * SUBSCRIPTION id (not the channel id), so first look up the caller's own subscription to this
+ * channel (`subscriptions.list?forChannelId=…&mine=true`), then delete it. Idempotent: no
+ * subscription found → a no-op (already unsubscribed). Same `youtube.force-ssl` scope.
+ */
+export async function unsubscribeFromYouTubeChannel(channelId: string): Promise<void> {
+  const accessToken = await getYouTubeAccessToken();
+  const listParams = new URLSearchParams({ forChannelId: channelId, mine: "true", part: "id" });
+  const listResponse = await fetch(`${youtubeApiBaseUrl}/subscriptions?${listParams.toString()}`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+
+  if (!listResponse.ok) {
+    const body = await listResponse.text();
+
+    throw new ApiError(
+      "youtube_unsubscribe_failed",
+      `YouTube subscription lookup failed: ${listResponse.status} ${listResponse.statusText} - ${body}`,
+      listResponse.status,
+    );
+  }
+
+  const listBody = (await listResponse.json()) as { items?: { id?: string }[] };
+  const subscriptionId = listBody.items?.[0]?.id;
+
+  // Not subscribed → nothing to delete (the idempotent-done case).
+  if (!subscriptionId) {
+    return;
+  }
+
+  const delParams = new URLSearchParams({ id: subscriptionId });
+  const delResponse = await fetch(`${youtubeApiBaseUrl}/subscriptions?${delParams.toString()}`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+    method: "DELETE",
+  });
+
+  // 204 No Content on success.
+  if (delResponse.ok) {
+    return;
+  }
+
+  const body = await delResponse.text();
+
+  throw new ApiError(
+    "youtube_unsubscribe_failed",
+    `YouTube unsubscribe failed: ${delResponse.status} ${delResponse.statusText} - ${body}`,
+    delResponse.status,
+  );
+}
+
 async function requestToken(params: Record<string, string>): Promise<YouTubeTokenResponse> {
   const env = await readEnvs(["YOUTUBE_CLIENT_ID", "YOUTUBE_CLIENT_SECRET"]);
   const response = await fetch(googleTokenUrl, {

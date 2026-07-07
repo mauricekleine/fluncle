@@ -207,6 +207,9 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // only, no operatorGuard): a follow is internal + one-click-reversible, so the box's
   // agent-token `fluncle-artist-follow` cron drives it (the backfill_artists precedent).
   follow_artist: "admin",
+  // The "Follow now" button — operator tier: it performs the real Spotify/YouTube follow on
+  // demand (the agent never follows by hand; the batch `follow_artist` sweep is the agent path).
+  follow_artist_social: "operator",
   // The built clip caption read — admin tier (agent-allowed), the list_clips precedent:
   // a read the clip-card UI + the box can both consume.
   get_clip_caption: "admin",
@@ -321,6 +324,11 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   set_mixtape_cues: "operator",
   start_lastfm_auth: "operator",
   sweep_push_receipts: "admin",
+  // The "Undo" button — operator tier: reverses a follow (real API unfollow for Spotify/YouTube,
+  // clears the stamp for the no-API platforms).
+  unfollow_artist_social: "operator",
+  // The "Unmute" button — operator tier: clears the don't-champion skip Undo set.
+  unmute_artist_social: "operator",
   unsave_private_finding: "private-session",
   update_clip: "operator",
   update_edition: "admin",

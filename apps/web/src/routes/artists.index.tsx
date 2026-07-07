@@ -81,7 +81,7 @@ function ArtistsPage() {
                   <TrackArtwork
                     alt=""
                     className="artist-grid-cover"
-                    src={spotifyAlbumImageAtSize(artist.coverImageUrl, "small")}
+                    src={spotifyAlbumImageAtSize(artist.coverImageUrl, "large")}
                   />
                   <span className="artist-grid-line">{artist.name}</span>
                   <span className="artist-grid-count">

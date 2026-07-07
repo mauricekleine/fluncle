@@ -7,8 +7,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const execute = vi.fn();
 const followSpotifyArtist = vi.fn();
+const unfollowSpotifyArtist = vi.fn();
 const resolveYouTubeChannelId = vi.fn();
 const subscribeToYouTubeChannel = vi.fn();
+const unsubscribeFromYouTubeChannel = vi.fn();
 
 vi.mock("./db", async () => {
   const actual = await vi.importActual<typeof import("./db")>("./db");
@@ -16,8 +18,12 @@ vi.mock("./db", async () => {
   return { ...actual, getDb: async () => ({ execute }) };
 });
 
-vi.mock("./spotify", () => ({ followSpotifyArtist }));
-vi.mock("./youtube", () => ({ resolveYouTubeChannelId, subscribeToYouTubeChannel }));
+vi.mock("./spotify", () => ({ followSpotifyArtist, unfollowSpotifyArtist }));
+vi.mock("./youtube", () => ({
+  resolveYouTubeChannelId,
+  subscribeToYouTubeChannel,
+  unsubscribeFromYouTubeChannel,
+}));
 
 type PendingRow = {
   social_id: string;
@@ -53,8 +59,10 @@ function wireDb(pending: PendingRow[], remaining: number) {
 beforeEach(() => {
   vi.clearAllMocks();
   followSpotifyArtist.mockResolvedValue(undefined);
+  unfollowSpotifyArtist.mockResolvedValue(undefined);
   resolveYouTubeChannelId.mockResolvedValue("UCchannel123");
   subscribeToYouTubeChannel.mockResolvedValue(undefined);
+  unsubscribeFromYouTubeChannel.mockResolvedValue(undefined);
 });
 
 describe("followPendingArtists", () => {
@@ -295,5 +303,244 @@ describe("addArtistSocial URL scheme guard (stored-XSS)", () => {
 
     expect(social.url).toBe("https://open.spotify.com/artist/3TVXtAsR1Inumwj472S9r4");
     expect(execute).toHaveBeenCalled();
+  });
+});
+
+// The "Undo" op (Epic B, Unit 5). Its durable half: undoing a Spotify/YouTube follow REALLY
+// unfollows on the platform AND mutes the row (`muted_at`) so the sweep can't re-follow; a
+// no-API platform is a plain bookkeeping clear (no mute, no platform call).
+describe("undoArtistSocialFollow", () => {
+  // Answer the lookup SELECT + the clearing UPDATE + the getArtistSocialById read-back.
+  function wireUndo(lookup: Record<string, unknown>, finalMutedAt: string | null) {
+    const updates: unknown[][] = [];
+
+    execute.mockImplementation(async ({ args, sql }: { args: unknown[]; sql: string }) => {
+      if (sql.includes("a.spotify_artist_id") && sql.includes("where s.id = ?")) {
+        return { rows: [lookup] };
+      }
+      if (sql.startsWith("update artist_socials set followed_at = null")) {
+        updates.push(args);
+        return { rows: [] };
+      }
+      if (sql.includes("from artist_socials where id = ?")) {
+        return {
+          rows: [
+            {
+              artist_id: "a1",
+              followed_at: null,
+              id: "s1",
+              muted_at: finalMutedAt,
+              platform: lookup["platform"],
+              source: "musicbrainz",
+              status: "auto",
+              url: lookup["url"],
+            },
+          ],
+        };
+      }
+      return { rows: [] };
+    });
+
+    return updates;
+  }
+
+  it("unfollows a Spotify row on the platform and mutes it", async () => {
+    const updates = wireUndo(
+      {
+        followed_at: "2026-07-06T00:00:00.000Z",
+        platform: "spotify",
+        spotify_artist_id: "abc",
+        url: "https://open.spotify.com/artist/abc",
+      },
+      "2026-07-07T00:00:00.000Z",
+    );
+
+    const { undoArtistSocialFollow } = await import("./artists");
+    const { platformWarning, social } = await undoArtistSocialFollow("s1");
+
+    expect(unfollowSpotifyArtist).toHaveBeenCalledWith("abc");
+    // The UPDATE's muted_at arg (args[0]) is a non-null stamp — the durable skip.
+    expect(updates[0]?.[0]).toEqual(expect.any(String));
+    expect(social.mutedAt).not.toBeNull();
+    expect(social.followedAt).toBeNull();
+    // The platform unfollow went through, so no soft warning.
+    expect(platformWarning).toBeNull();
+  });
+
+  it("still clears + mutes + warns when the Spotify unfollow API fails (403)", async () => {
+    // The dev-mode-403 reality: the API unfollow throws, but the operator's Undo must still
+    // stick — clear the stamp, mute the row, and hand back a soft warning (never hard-gate).
+    unfollowSpotifyArtist.mockRejectedValue(new Error("Spotify API request failed: 403 Forbidden"));
+    const updates = wireUndo(
+      {
+        followed_at: "2026-07-06T00:00:00.000Z",
+        platform: "spotify",
+        spotify_artist_id: "abc",
+        url: "https://open.spotify.com/artist/abc",
+      },
+      "2026-07-07T00:00:00.000Z",
+    );
+
+    const { undoArtistSocialFollow } = await import("./artists");
+    const { platformWarning, social } = await undoArtistSocialFollow("s1");
+
+    expect(unfollowSpotifyArtist).toHaveBeenCalledWith("abc");
+    // Bookkeeping still ran: stamp cleared + muted, despite the API miss.
+    expect(updates[0]?.[0]).toEqual(expect.any(String));
+    expect(social.followedAt).toBeNull();
+    expect(social.mutedAt).not.toBeNull();
+    // …and the miss surfaces as a soft warning, not a thrown error.
+    expect(platformWarning).toContain("Spotify");
+    expect(platformWarning).toContain("403");
+  });
+
+  it("clears a no-API row without a platform call and without muting", async () => {
+    const updates = wireUndo(
+      {
+        followed_at: "2026-07-06T00:00:00.000Z",
+        platform: "soundcloud",
+        spotify_artist_id: null,
+        url: "https://soundcloud.com/x",
+      },
+      null,
+    );
+
+    const { undoArtistSocialFollow } = await import("./artists");
+    const { platformWarning, social } = await undoArtistSocialFollow("s1");
+
+    expect(unfollowSpotifyArtist).not.toHaveBeenCalled();
+    expect(unsubscribeFromYouTubeChannel).not.toHaveBeenCalled();
+    // muted_at arg is null for a no-API platform — no durable skip needed (no sweep touches it).
+    expect(updates[0]?.[0]).toBeNull();
+    expect(social.mutedAt).toBeNull();
+    // No API call for a no-API platform, so no warning.
+    expect(platformWarning).toBeNull();
+  });
+});
+
+describe("followArtistSocial", () => {
+  // Answer the lookup SELECT + the stamping UPDATE + the getArtistSocialById read-back.
+  function wireFollow(lookup: Record<string, unknown>) {
+    const updates: unknown[][] = [];
+
+    execute.mockImplementation(async ({ args, sql }: { args: unknown[]; sql: string }) => {
+      if (sql.includes("a.spotify_artist_id") && sql.includes("where s.id = ?")) {
+        return { rows: [lookup] };
+      }
+      if (sql.startsWith("update artist_socials set followed_at = ?")) {
+        updates.push(args);
+        return { rows: [] };
+      }
+      if (sql.includes("from artist_socials where id = ?")) {
+        return {
+          rows: [
+            {
+              artist_id: "a1",
+              // The row is followed after the stamp — the read-back reflects it.
+              followed_at: "2026-07-07T00:00:00.000Z",
+              id: "s1",
+              muted_at: null,
+              platform: lookup["platform"],
+              source: "musicbrainz",
+              status: "auto",
+              url: lookup["url"],
+            },
+          ],
+        };
+      }
+      return { rows: [] };
+    });
+
+    return updates;
+  }
+
+  it("follows a Spotify row on the platform and stamps it (no warning)", async () => {
+    const updates = wireFollow({
+      followed_at: null,
+      platform: "spotify",
+      spotify_artist_id: "abc",
+      url: "https://open.spotify.com/artist/abc",
+    });
+
+    const { followArtistSocial } = await import("./artists");
+    const { platformWarning, social } = await followArtistSocial("s1");
+
+    expect(followSpotifyArtist).toHaveBeenCalledWith("abc");
+    expect(updates).toHaveLength(1);
+    expect(social.followedAt).not.toBeNull();
+    expect(platformWarning).toBeNull();
+  });
+
+  it("still stamps followed_at + warns when the Spotify follow API fails (403)", async () => {
+    // The dev-mode-403 reality on the "Follow now" path: the API follow throws, but the operator
+    // must still be able to mark the row — stamp followed_at and return a soft warning.
+    followSpotifyArtist.mockRejectedValue(new Error("Spotify API request failed: 403 Forbidden"));
+    const updates = wireFollow({
+      followed_at: null,
+      platform: "spotify",
+      spotify_artist_id: "abc",
+      url: "https://open.spotify.com/artist/abc",
+    });
+
+    const { followArtistSocial } = await import("./artists");
+    const { platformWarning, social } = await followArtistSocial("s1");
+
+    expect(followSpotifyArtist).toHaveBeenCalledWith("abc");
+    // Bookkeeping still ran despite the API miss.
+    expect(updates).toHaveLength(1);
+    expect(social.followedAt).not.toBeNull();
+    expect(platformWarning).toContain("Spotify");
+    expect(platformWarning).toContain("403");
+  });
+
+  it("rejects a no-API platform (use recordOperatorFollow there)", async () => {
+    wireFollow({
+      followed_at: null,
+      platform: "soundcloud",
+      spotify_artist_id: null,
+      url: "https://soundcloud.com/x",
+    });
+
+    const { followArtistSocial } = await import("./artists");
+
+    await expect(followArtistSocial("s1")).rejects.toThrow(/no follow API/);
+    expect(followSpotifyArtist).not.toHaveBeenCalled();
+  });
+});
+
+describe("unmuteArtistSocial", () => {
+  it("clears muted_at with no platform call", async () => {
+    const updates: string[] = [];
+
+    execute.mockImplementation(async ({ sql }: { args: unknown[]; sql: string }) => {
+      if (sql.startsWith("update artist_socials set muted_at = null")) {
+        updates.push(sql);
+        return { rows: [] };
+      }
+      if (sql.includes("from artist_socials where id = ?")) {
+        return {
+          rows: [
+            {
+              artist_id: "a1",
+              followed_at: null,
+              id: "s1",
+              muted_at: null,
+              platform: "spotify",
+              source: "musicbrainz",
+              status: "auto",
+              url: "https://open.spotify.com/artist/abc",
+            },
+          ],
+        };
+      }
+      return { rows: [] };
+    });
+
+    const { unmuteArtistSocial } = await import("./artists");
+    const social = await unmuteArtistSocial("s1");
+
+    expect(updates).toHaveLength(1);
+    expect(unfollowSpotifyArtist).not.toHaveBeenCalled();
+    expect(social.mutedAt).toBeNull();
   });
 });

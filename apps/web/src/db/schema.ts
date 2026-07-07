@@ -1037,6 +1037,10 @@ export const trackArtists = sqliteTable(
 // until an operator confirms them — `candidate` rows are excluded from the public
 // artist page and `sameAs` JSON-LD until promoted to `confirmed`. `followedAt` is a
 // single stamp recording when Fluncle followed this platform's profile (null = not yet).
+// `mutedAt` is the operator's "don't champion this one" stamp: set when Undo reverses a
+// Spotify/YouTube follow, it EXCLUDES the row from the auto-follow sweep so the robot can't
+// re-follow it (the durable half of Undo). Invariant: a followed row is never muted and vice
+// versa — following clears `mutedAt`, muting clears `followedAt`. Cleared again by Unmute.
 export const artistSocials = sqliteTable(
   "artist_socials",
   {
@@ -1044,6 +1048,7 @@ export const artistSocials = sqliteTable(
     createdAt: text("created_at").notNull(),
     followedAt: text("followed_at"),
     id: text("id").primaryKey(),
+    mutedAt: text("muted_at"),
     platform: text("platform", {
       enum: [
         "spotify",

@@ -119,6 +119,9 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "POST /admin/artists/follow": "follow_artist",
   "POST /admin/artists/socials/{socialId}/confirm": "confirm_artist_social",
   "POST /admin/artists/socials/{socialId}/follow": "record_operator_follow",
+  "POST /admin/artists/socials/{socialId}/follow-now": "follow_artist_social",
+  "POST /admin/artists/socials/{socialId}/unfollow": "unfollow_artist_social",
+  "POST /admin/artists/socials/{socialId}/unmute": "unmute_artist_social",
   // The artist social-identity resolution (Unit 2.1 of the artist-relationship RFC) —
   // contract-only oRPC (no TanStack route file; oRPC owns the path directly).
   // Agent tier: the box's `fluncle-artist-sweep` cron drives it with its agent token.

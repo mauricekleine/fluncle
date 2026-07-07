@@ -4,6 +4,7 @@ import {
   CircleNotchIcon,
   ClockCountdownIcon,
   FilmSlateIcon,
+  MicrophoneStageIcon,
   ProhibitIcon,
 } from "@phosphor-icons/react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -585,6 +586,7 @@ function AdminQueuePage() {
 // ─── One row ──────────────────────────────────────────────────────────────────
 
 const SOURCE_ICONS: Record<AttentionSource, ComponentType<{ className?: string }>> = {
+  "artist-review": MicrophoneStageIcon,
   "attach-cues": FilmSlateIcon,
   distribute: CassetteTapeIcon,
   "drip-empty": InstagramIcon,
@@ -595,6 +597,7 @@ const SOURCE_ICONS: Record<AttentionSource, ComponentType<{ className?: string }
 // The glyph's text equivalent — the row's source, spoken (the glyph itself is
 // decorative, so a screen reader still hears which platform/task the row is).
 const SOURCE_LABELS: Record<AttentionSource, string> = {
+  "artist-review": "Artist",
   "attach-cues": "Recording",
   distribute: "Mixtape",
   "drip-empty": "Instagram drip",
@@ -729,6 +732,11 @@ function QueueRow({
           ) : undefined}
           {item.source === "drip-empty" ? (
             <span className="font-display tracking-[-0.01em] tabular-nums">0 queued</span>
+          ) : undefined}
+          {item.source === "artist-review" && item.reviewLinks ? (
+            <span className="font-display tracking-[-0.01em] tabular-nums">
+              {item.reviewLinks} to verify
+            </span>
           ) : undefined}
           {item.machine ? (
             <Badge

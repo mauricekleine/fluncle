@@ -15,6 +15,7 @@ import {
 import { BrandIcon } from "@/components/brand-icon";
 import { StoryNotFoundState } from "@/components/stories/stories-states";
 import { TrackArtwork } from "@/components/track-artwork";
+import { type ArtistSocialPlatform } from "@/lib/artist-socials";
 import { siteUrl } from "@/lib/fluncle-links";
 import { jsonLdScript } from "@/lib/json-ld";
 import { artistBreadcrumbsJsonLd, musicGroupJsonLd } from "@/lib/log-schema";
@@ -23,7 +24,6 @@ import { spotifyAlbumImageAtSize } from "@/lib/media";
 import {
   ARTIST_INDEX_MIN_FINDINGS,
   type ArtistSocialLink,
-  type ArtistSocialPlatform,
   countArtistFindings,
   getArtistBySlug,
   getPublicArtistSocials,
@@ -269,7 +269,7 @@ function ArtistPage() {
                     <TrackArtwork
                       alt=""
                       className="artist-grid-cover"
-                      src={spotifyAlbumImageAtSize(finding.albumImageUrl, "small")}
+                      src={spotifyAlbumImageAtSize(finding.albumImageUrl, "large")}
                     />
                     <span className="artist-grid-line">{artistTitleLine(finding)}</span>
                   </Link>

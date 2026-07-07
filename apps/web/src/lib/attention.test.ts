@@ -26,6 +26,7 @@ const DAY = 24 * HOUR;
 const iso = (at: number) => new Date(at).toISOString();
 
 const EMPTY_INPUTS: AttentionInputs = {
+  artistReviews: [],
   clipPosts: [{ scheduledFor: iso(NOW + HOUR), status: "scheduled" }],
   drafts: [],
   mixtapes: [],
@@ -230,6 +231,28 @@ describe("deriveAttentionItems", () => {
   it("keeps the drip row off while anything is still scheduled", () => {
     expect(deriveAttentionItems(EMPTY_INPUTS, NOW)).toEqual([]);
   });
+
+  it("rows each artist needing a look, deep-linked to /admin/artists focused, with the count", () => {
+    const items = deriveAttentionItems(
+      {
+        ...EMPTY_INPUTS,
+        artistReviews: [
+          { anchorAt: iso(NOW - 2 * DAY), artistId: "a1", name: "Aktive", pending: 3 },
+        ],
+      },
+      NOW,
+    );
+
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      anchorAt: iso(NOW - 2 * DAY),
+      href: "/admin/artists?artist=a1",
+      id: "artist-review:a1",
+      reviewLinks: 3,
+      source: "artist-review",
+      title: "Aktive",
+    });
+  });
 });
 
 describe("orderQueue", () => {
@@ -360,5 +383,11 @@ describe("primaryFor", () => {
       kind: "open",
       label: "Cut clips",
     });
+  });
+
+  it("routes an artist-review row to its focused /admin/artists deep-link", () => {
+    expect(
+      primaryFor(item({ href: "/admin/artists?artist=a1", id: "a", source: "artist-review" }), NOW),
+    ).toEqual({ href: "/admin/artists?artist=a1", kind: "open", label: "Review" });
   });
 });

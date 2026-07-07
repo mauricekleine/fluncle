@@ -1,5 +1,5 @@
 // The attention queue's server reads — the thin impure half behind the `/admin`
-// home. Each of the five sources gets one honest, scoped read (the trust rule:
+// home. Each source gets one honest, scoped read (the trust rule:
 // never surface a row the system can't confirm is actionable), then the pure
 // model (lib/attention.ts) derives the rows. The render-queue depth rides along
 // as the queue's one pulse datum (a number in the header, never a row), and the
@@ -11,7 +11,7 @@ import {
   deriveAttentionItems,
   type UnpostedInput,
 } from "../attention";
-import { parseArtistsJson } from "./artists";
+import { listArtistReviewRows, parseArtistsJson } from "./artists";
 import { listClipPosts } from "./clip-social";
 import { getDb, typedRows } from "./db";
 import { listMixtapes } from "./mixtapes";
@@ -99,22 +99,25 @@ async function listUnpostedRows(): Promise<UnpostedInput[]> {
   }));
 }
 
-/** One pass over the five sources + the pulse datum + the zero-state fallback. */
+/** One pass over the sources + the pulse datum + the zero-state fallback. */
 export async function readAttentionSnapshot(now: number = Date.now()): Promise<AttentionSnapshot> {
-  const [drafts, unposted, recordings, mixtapes, clipPosts, renders, newest] = await Promise.all([
-    listTikTokDraftRows(),
-    listUnpostedRows(),
-    listRecordings(),
-    listMixtapes({ includeUnpublished: true }),
-    listClipPosts(),
-    // The render queue's canonical read (`fluncle admin tracks queue`): findings
-    // with context gathered but no video yet.
-    listTracks({ hasContext: true, hasVideo: false, limit: 1 }),
-    listTracks({ limit: 1, order: "desc" }),
-  ]);
+  const [drafts, unposted, recordings, mixtapes, clipPosts, artistReviews, renders, newest] =
+    await Promise.all([
+      listTikTokDraftRows(),
+      listUnpostedRows(),
+      listRecordings(),
+      listMixtapes({ includeUnpublished: true }),
+      listClipPosts(),
+      listArtistReviewRows(),
+      // The render queue's canonical read (`fluncle admin tracks queue`): findings
+      // with context gathered but no video yet.
+      listTracks({ hasContext: true, hasVideo: false, limit: 1 }),
+      listTracks({ limit: 1, order: "desc" }),
+    ]);
 
   const items = deriveAttentionItems(
     {
+      artistReviews,
       clipPosts: clipPosts.map((post) => ({
         scheduledFor: post.scheduledFor,
         status: post.status,

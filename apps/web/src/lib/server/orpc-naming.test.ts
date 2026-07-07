@@ -100,6 +100,13 @@ const APPROVED_VERBS = new Set<string>([
   // deliberately with the artist-relationship `follow_artist` sweep. A genuinely new
   // outward action verb, the automated half of the championing motion.
   "follow",
+  // `unfollow` (undo a follow — real API unfollow for Spotify/YouTube, clear the stamp
+  // otherwise) — added deliberately with `unfollow_artist_social`. The exact reverse of
+  // `follow`; the follow/unfollow pair mirrors the platforms' own vocabulary.
+  "unfollow",
+  // `unmute` (clear the don't-champion skip an Undo set) — added deliberately with
+  // `unmute_artist_social`. The reverse of the mute Undo stamps on a Spotify/YouTube row.
+  "unmute",
   "export",
   "initiate",
   "merge",

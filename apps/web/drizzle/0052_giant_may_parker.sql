@@ -1,0 +1,1 @@
+ALTER TABLE `artist_socials` ADD `muted_at` text;

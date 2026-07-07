@@ -33,6 +33,51 @@ const crawlerBanner = `/*!
 // not. Scoped to the client output (the crawled /assets/*.js); the worker
 // bundle is left untouched. Prod builds emit no sourcemaps, so the leading
 // comment shifts nothing that matters.
+// Client-only stub for `node:crypto`. In Vite dev the client build has no
+// tree-shaking, so a server-only module (`lib/server/**`) can still be EVALUATED
+// in the browser when it is reachable through an isomorphic import chain (a route
+// `head`/`loader`, a shared lib). Its top-level `import { createHmac } from
+// "node:crypto"` binds by reading Vite's externalized stub getter AT MODULE EVAL,
+// which throws "Module node:crypto has been externalized…" — an uncaught error in
+// the client entry chain that ABORTS `hydrateRoot`, so the whole app renders
+// (SSR) but never becomes interactive. This replaces node:crypto with a benign
+// stub in the CLIENT environment only: its exports are dead code on the client
+// (the real signing/uuid calls only ever run server-side), and the production
+// build tree-shakes the entire server chain out of the client bundle. SSR/Worker
+// (`nodejs_compat`) is untouched — the plugin is inert outside the client env.
+function clientNodeCryptoStub(): Plugin {
+  const VIRTUAL = "\0virtual:fluncle-client-node-crypto";
+  const die =
+    '() => { throw new Error("node:crypto is server-only and must never run on the client"); }';
+
+  return {
+    // Dev only: the production build tree-shakes server code out of the client
+    // bundle, so `node:crypto` never reaches the browser there and no stub is
+    // needed. Scoping to `serve` keeps the prod build untouched.
+    apply: "serve",
+    enforce: "pre",
+    load(id) {
+      if (id === VIRTUAL) {
+        return [
+          `export const createHmac = ${die};`,
+          `export const createHash = ${die};`,
+          `export const timingSafeEqual = ${die};`,
+          `export const randomUUID = ${die};`,
+          "export default {};",
+        ].join("\n");
+      }
+    },
+    name: "fluncle-client-node-crypto-stub",
+    resolveId(id) {
+      // Gate inside resolveId on the active environment: only the browser build
+      // gets the stub; SSR/Worker keeps the real node:crypto (nodejs_compat).
+      if (id === "node:crypto" && this.environment.name === "client") {
+        return VIRTUAL;
+      }
+    },
+  };
+}
+
 function crawlerBannerPlugin(): Plugin {
   return {
     apply: "build",
@@ -53,7 +98,17 @@ function crawlerBannerPlugin(): Plugin {
 }
 
 export default defineConfig({
+  // fumadocs-ui (the /docs hub) imports from the `lucide-react` barrel. Without
+  // pre-bundling, Vite dev serves the un-optimized barrel, whose ~1500 static
+  // re-exports each load as a separate module request. Pre-bundling collapses it
+  // to one optimized chunk (prod already tree-shakes it).
+  optimizeDeps: {
+    include: ["lucide-react"],
+  },
   plugins: [
+    // Keep server-only `node:crypto` from throwing during client module-eval in
+    // dev (which would abort hydration). Client env only; see the plugin comment.
+    clientNodeCryptoStub(),
     // Fumadocs MDX: compiles content/docs/*.mdx for the /docs hub and emits the
     // generated .source index the docs routes read. Runs before tanstackStart
     // so the virtual collections resolve during route compilation.

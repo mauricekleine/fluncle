@@ -715,11 +715,11 @@ async function fetchArtistAndIsrcs(
 
   const isrcResult = await db.execute({
     args: [artistId],
-    sql: `select distinct t.isrc
+    sql: `select distinct t.isrc, t.added_at
           from track_artists ta
           join tracks t on t.track_id = ta.track_id
           where ta.artist_id = ? and t.isrc is not null
-          order by t.created_at asc
+          order by t.added_at asc
           limit 20`,
   });
 

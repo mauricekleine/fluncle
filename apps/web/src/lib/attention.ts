@@ -15,8 +15,9 @@ import { TIKTOK_DRAFT_STALE_MS, trackLabel } from "@fluncle/contracts/util";
 
 // ─── The rows ────────────────────────────────────────────────────────────────
 
-/** The five queue sources (the roadmap's data-honesty-verified EXISTS set). */
+/** The queue sources (the roadmap's data-honesty-verified EXISTS set). */
 export type AttentionSource =
+  | "artist-review"
   | "attach-cues"
   | "distribute"
   | "drip-empty"
@@ -40,6 +41,8 @@ export type AttentionItem = {
   machine?: "M2" | "M5";
   /** Distribution legs still missing on a promoted mixtape. */
   missing?: ("mixcloud" | "youtube")[];
+  /** Artist-review rows: how many of an artist's socials still need a look. */
+  reviewLinks?: number;
   source: AttentionSource;
   title: string;
   trackId?: string;
@@ -101,7 +104,18 @@ export type ClipPostInput = {
   status: string;
 };
 
+/** An artist with unfinished follow work (candidates to confirm + followable-not-followed). */
+export type ArtistReviewInput = {
+  /** The oldest not-yet-actioned social's stamp — the queue's oldest-first anchor. */
+  anchorAt: string;
+  artistId: string;
+  name: string;
+  /** How many socials still need a look. */
+  pending: number;
+};
+
 export type AttentionInputs = {
+  artistReviews: ArtistReviewInput[];
   clipPosts: ClipPostInput[];
   drafts: DraftInput[];
   mixtapes: MixtapeInput[];
@@ -218,6 +232,19 @@ export function deriveAttentionItems(inputs: AttentionInputs, now: number): Atte
       id: "drip-empty",
       source: "drip-empty",
       title: "Instagram drip",
+    });
+  }
+
+  // Each artist with unfinished follow work is one row — the count is the datum, the
+  // primary action deep-links to /admin/artists (the manage surface) with it focused.
+  for (const review of inputs.artistReviews) {
+    items.push({
+      anchorAt: review.anchorAt,
+      href: `/admin/artists?artist=${encodeURIComponent(review.artistId)}`,
+      id: `artist-review:${review.artistId}`,
+      reviewLinks: review.pending,
+      source: "artist-review",
+      title: review.name,
     });
   }
 
@@ -389,6 +416,8 @@ export type PrimaryAction =
 
 export function primaryFor(item: AttentionItem, now: number): PrimaryAction {
   switch (item.source) {
+    case "artist-review":
+      return { href: item.href ?? "/admin/artists", kind: "open", label: "Review" };
     case "attach-cues":
       return { href: item.href ?? "/admin/plans", kind: "open", label: "Attach cues" };
     case "distribute":
