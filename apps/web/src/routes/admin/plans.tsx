@@ -251,7 +251,7 @@ function AdminPlansPage() {
           {creating ? "Starting…" : "New plan"}
         </Button>
       }
-      title="Plans"
+      title="Playlists"
     >
       <div className="p-4 sm:p-5">
         {error || notice ? (
