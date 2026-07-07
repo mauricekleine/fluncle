@@ -387,6 +387,7 @@ const (
 	screenMenu          screen = "menu"
 	screenLatest        screen = "latest"
 	screenDetail        screen = "detail"
+	screenArtists       screen = "artists"
 	screenMixtapes      screen = "mixtapes"
 	screenMixtapeDetail screen = "mixtape-detail"
 	screenSearchInput   screen = "search-input"
@@ -413,6 +414,7 @@ type model struct {
 	screen         screen
 	selected       int
 	tracks         []track
+	artists        []artist
 	mixtapes       []mixtape
 	total          int
 	footer         *track
@@ -501,6 +503,14 @@ type track struct {
 	PostedToTelegram bool     `json:"postedToTelegram"`
 }
 
+type artist struct {
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	Slug         string `json:"slug"`
+	FindingCount int    `json:"findingCount"`
+	SpotifyURL   string `json:"spotifyUrl,omitempty"`
+}
+
 type mixtape struct {
 	LogID         string `json:"logId,omitempty"`
 	Title         string `json:"title"`
@@ -561,6 +571,11 @@ type tracksMsg struct {
 	tracks []track
 	total  int
 	err    error
+}
+
+type artistsMsg struct {
+	artists []artist
+	err     error
 }
 
 type mixtapesMsg struct {
@@ -693,6 +708,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if len(msg.tracks) > 0 {
 			m.footer = &msg.tracks[0]
 		}
+	case artistsMsg:
+		m.loading = false
+		if msg.err != nil {
+			m.err = msg.err.Error()
+			return m, nil
+		}
+		m.artists = msg.artists
+		m.selected = 0
 	case mixtapesMsg:
 		m.loading = false
 		if msg.err != nil {
@@ -827,7 +850,7 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch m.screen {
 	case screenMenu:
 		return m.handleMenuKey(key)
-	case screenLatest, screenSearch, screenMixtapes:
+	case screenLatest, screenSearch, screenArtists, screenMixtapes:
 		return m.handleListKey(key)
 	case screenGalaxy:
 		return m.handleGalaxyKey(key)
@@ -878,6 +901,11 @@ func (m model) handleMenuKey(key string) (tea.Model, tea.Cmd) {
 			m.loading = true
 			m.err = ""
 			return m, m.fetchLatest()
+		case "artists":
+			m.screen = screenArtists
+			m.loading = true
+			m.err = ""
+			return m, m.fetchArtists()
 		case "mixtapes":
 			m.screen = screenMixtapes
 			m.loading = true
@@ -1110,6 +1138,8 @@ func (m model) View() tea.View {
 		content = m.renderLatest()
 	case screenDetail:
 		content = m.renderDetail()
+	case screenArtists:
+		content = m.renderArtists()
 	case screenMixtapes:
 		content = m.renderMixtapes()
 	case screenMixtapeDetail:
@@ -1392,6 +1422,38 @@ func (m model) renderDetail() string {
 	}
 	lines = append(lines, "", helpLine("q back", "ctrl+c quit"))
 	return strings.Join(lines, "\n")
+}
+
+func (m model) renderArtists() string {
+	if m.loading {
+		return statusView("Artist archive", "Scanning the archive...")
+	}
+	if m.err != "" {
+		return errorView("Artist archive", m.err)
+	}
+	if len(m.artists) == 0 {
+		return statusView("Artist archive", "No artists in the archive yet.")
+	}
+
+	content := make([]string, 0, len(m.artists))
+	for index, a := range m.artists {
+		count := fmt.Sprintf("%d finding%s", a.FindingCount, func() string {
+			if a.FindingCount == 1 {
+				return ""
+			}
+			return "s"
+		}())
+		if index == m.selected {
+			label := fmt.Sprintf("%-40s  %s", a.Name, count)
+			content = append(content, selectedStyle.Render("> "+label))
+		} else {
+			name := rowArtistStyle.Render(fmt.Sprintf("%-40s", a.Name))
+			info := labelStyle.Render(count)
+			content = append(content, fmt.Sprintf("  %s  %s", name, info))
+		}
+	}
+	help := helpLine("↑/↓ j/k move", "q back", "ctrl+c quit")
+	return scaffold("Artist archive", "", content, help)
 }
 
 func (m model) renderMixtapes() string {
@@ -2054,6 +2116,17 @@ func (m model) fetchLatest() tea.Cmd {
 	}
 }
 
+func (m model) fetchArtists() tea.Cmd {
+	return func() tea.Msg {
+		var response struct {
+			Artists []artist `json:"artists"`
+			OK      bool     `json:"ok"`
+		}
+		err := m.app.getJSON("/api/artists", &response)
+		return artistsMsg{artists: response.Artists, err: err}
+	}
+}
+
 func (m model) fetchMixtapes() tea.Cmd {
 	return func() tea.Msg {
 		var response struct {
@@ -2310,6 +2383,7 @@ func menuItems() []menuItem {
 	return []menuItem{
 		{id: "galaxy", label: "Enter the Galaxy"},
 		{id: "latest", label: "Latest bangers"},
+		{id: "artists", label: "Artist archive"},
 		{id: "mixtapes", label: "Mixtape archive"},
 		{id: "random", label: "Random banger"},
 		{id: "submit", label: "Submit a track"},

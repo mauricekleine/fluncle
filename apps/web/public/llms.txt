@@ -23,6 +23,13 @@ Every finding has a permanent coordinate, a Log ID, written sector.orbit.mark â€
 - [Mixtapes](https://www.fluncle.com/mixtapes): Fluncle's own DJ mixtapes, each a checkpoint with a Log ID such as https://www.fluncle.com/log/019.F.1A
 - [About Fluncle](https://www.fluncle.com/about): who Fluncle is, what the Galaxy is, and how to read a Log ID like fluncle://004.7.2I
 
+## Artists
+
+Every artist in Fluncle's archive has a page at https://www.fluncle.com/artist/<slug> (slug is real-name kebab-case, e.g. `/artist/dbridge`). The page lists every published finding from that artist.
+
+- [Artists API](https://www.fluncle.com/api/v1/artists): all artists with at least one finding, finding-count ordered, as JSON
+- [Artist by slug](https://www.fluncle.com/api/v1/artists/{slug}): one artist's identity and finding count, as JSON
+
 ## Data
 
 - [RSS feed](https://www.fluncle.com/rss.xml): the 25 most recent findings and mixtapes

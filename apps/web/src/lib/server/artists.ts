@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { getDb } from "./db";
+import { getDb, typedRow, typedRows } from "./db";
 
 export function parseArtistsJson(value: string): string[] {
   try {
@@ -14,6 +14,88 @@ export function parseArtistsJson(value: string): string[] {
   }
 
   return [];
+}
+
+// ── Public artist reads ──────────────────────────────────────────────────────
+// These are the read-side functions the public oRPC handlers call. They mirror
+// the `ArtistListItem` shape from `@fluncle/contracts` without importing it
+// (no cross-package dependency at the server layer — the contract package uses
+// type-only imports from the shared Zod schemas; the server derives the same
+// shape independently from raw SQL rows).
+
+export type ArtistListItem = {
+  findingCount: number;
+  id: string;
+  name: string;
+  slug: string;
+  spotifyUrl: string | undefined;
+};
+
+type ArtistRow = {
+  finding_count: number;
+  id: string;
+  name: string;
+  slug: string;
+  spotify_url: string | null;
+};
+
+function toArtistListItem(row: ArtistRow): ArtistListItem {
+  return {
+    findingCount: row.finding_count,
+    id: row.id,
+    name: row.name,
+    slug: row.slug,
+    spotifyUrl: row.spotify_url ?? undefined,
+  };
+}
+
+/**
+ * All artists with at least one published finding, ordered by finding count
+ * descending (most-represented artists first). Used by `list_artists`.
+ */
+export async function listArtists(): Promise<ArtistListItem[]> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [],
+    sql: `select
+            a.id,
+            a.name,
+            a.slug,
+            a.spotify_url,
+            count(ta.track_id) as finding_count
+          from artists a
+          join track_artists ta on ta.artist_id = a.id
+          group by a.id
+          order by finding_count desc, a.name asc`,
+  });
+
+  return typedRows<ArtistRow>(result.rows).map(toArtistListItem);
+}
+
+/**
+ * Look up one artist by their unique slug. Returns `undefined` when the slug
+ * does not match any artist (the caller turns this into a 404). Used by
+ * `get_artist`.
+ */
+export async function getArtistBySlug(slug: string): Promise<ArtistListItem | undefined> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [slug],
+    sql: `select
+            a.id,
+            a.name,
+            a.slug,
+            a.spotify_url,
+            count(ta.track_id) as finding_count
+          from artists a
+          left join track_artists ta on ta.artist_id = a.id
+          where a.slug = ?
+          group by a.id
+          limit 1`,
+  });
+
+  const row = typedRow<ArtistRow>(result.rows);
+  return row ? toArtistListItem(row) : undefined;
 }
 
 // ── Artist entity ────────────────────────────────────────────────────────────

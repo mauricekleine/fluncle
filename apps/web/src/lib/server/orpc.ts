@@ -32,6 +32,7 @@ import { type OrpcContext } from "./orpc-auth";
 import { isApiFaultData } from "./orpc/_shared";
 import { adminArtistsHandlers } from "./orpc/admin-artists";
 import { adminBackfillsHandlers } from "./orpc/admin-backfills";
+import { artistsHandlers } from "./orpc/artists";
 import { adminEditionsHandlers } from "./orpc/admin-editions";
 import { adminHealthHandlers } from "./orpc/admin-health";
 import { adminMixtapesHandlers } from "./orpc/admin-mixtapes";
@@ -72,6 +73,7 @@ const os = implement(contract).$context<OrpcContext>();
 export const router = os.router({
   ...adminArtistsHandlers(os),
   ...adminBackfillsHandlers(os),
+  ...artistsHandlers(os),
   ...adminEditionsHandlers(os),
   ...adminHealthHandlers(os),
   ...adminMixtapesHandlers(os),
