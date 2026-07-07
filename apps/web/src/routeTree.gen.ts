@@ -46,6 +46,7 @@ import { Route as CliLatestDotshRouteImport } from './routes/cli/latest[.]sh'
 import { Route as ArtistSlugRouteImport } from './routes/artist.$slug'
 import { Route as ApiStatusRouteImport } from './routes/api/status'
 import { Route as AdminRendersRouteImport } from './routes/admin/renders'
+import { Route as AdminRecordingsRouteImport } from './routes/admin/recordings'
 import { Route as AdminPlansRouteImport } from './routes/admin/plans'
 import { Route as AdminNewsletterRouteImport } from './routes/admin/newsletter'
 import { Route as AdminMixtapesRouteImport } from './routes/admin/mixtapes'
@@ -271,6 +272,11 @@ const ApiStatusRoute = ApiStatusRouteImport.update({
 const AdminRendersRoute = AdminRendersRouteImport.update({
   id: '/renders',
   path: '/renders',
+  getParentRoute: () => AdminRouteRoute,
+} as any)
+const AdminRecordingsRoute = AdminRecordingsRouteImport.update({
+  id: '/recordings',
+  path: '/recordings',
   getParentRoute: () => AdminRouteRoute,
 } as any)
 const AdminPlansRoute = AdminPlansRouteImport.update({
@@ -522,6 +528,7 @@ export interface FileRoutesByFullPath {
   '/admin/mixtapes': typeof AdminMixtapesRoute
   '/admin/newsletter': typeof AdminNewsletterRoute
   '/admin/plans': typeof AdminPlansRoute
+  '/admin/recordings': typeof AdminRecordingsRoute
   '/admin/renders': typeof AdminRendersRoute
   '/api/status': typeof ApiStatusRoute
   '/artist/$slug': typeof ArtistSlugRoute
@@ -599,6 +606,7 @@ export interface FileRoutesByTo {
   '/admin/mixtapes': typeof AdminMixtapesRoute
   '/admin/newsletter': typeof AdminNewsletterRoute
   '/admin/plans': typeof AdminPlansRoute
+  '/admin/recordings': typeof AdminRecordingsRoute
   '/admin/renders': typeof AdminRendersRoute
   '/api/status': typeof ApiStatusRoute
   '/artist/$slug': typeof ArtistSlugRoute
@@ -679,6 +687,7 @@ export interface FileRoutesById {
   '/admin/mixtapes': typeof AdminMixtapesRoute
   '/admin/newsletter': typeof AdminNewsletterRoute
   '/admin/plans': typeof AdminPlansRoute
+  '/admin/recordings': typeof AdminRecordingsRoute
   '/admin/renders': typeof AdminRendersRoute
   '/api/status': typeof ApiStatusRoute
   '/artist/$slug': typeof ArtistSlugRoute
@@ -760,6 +769,7 @@ export interface FileRouteTypes {
     | '/admin/mixtapes'
     | '/admin/newsletter'
     | '/admin/plans'
+    | '/admin/recordings'
     | '/admin/renders'
     | '/api/status'
     | '/artist/$slug'
@@ -837,6 +847,7 @@ export interface FileRouteTypes {
     | '/admin/mixtapes'
     | '/admin/newsletter'
     | '/admin/plans'
+    | '/admin/recordings'
     | '/admin/renders'
     | '/api/status'
     | '/artist/$slug'
@@ -916,6 +927,7 @@ export interface FileRouteTypes {
     | '/admin/mixtapes'
     | '/admin/newsletter'
     | '/admin/plans'
+    | '/admin/recordings'
     | '/admin/renders'
     | '/api/status'
     | '/artist/$slug'
@@ -1296,6 +1308,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminRendersRouteImport
       parentRoute: typeof AdminRouteRoute
     }
+    '/admin/recordings': {
+      id: '/admin/recordings'
+      path: '/recordings'
+      fullPath: '/admin/recordings'
+      preLoaderRoute: typeof AdminRecordingsRouteImport
+      parentRoute: typeof AdminRouteRoute
+    }
     '/admin/plans': {
       id: '/admin/plans'
       path: '/plans'
@@ -1587,6 +1606,7 @@ interface AdminRouteRouteChildren {
   AdminMixtapesRoute: typeof AdminMixtapesRoute
   AdminNewsletterRoute: typeof AdminNewsletterRoute
   AdminPlansRoute: typeof AdminPlansRoute
+  AdminRecordingsRoute: typeof AdminRecordingsRoute
   AdminRendersRoute: typeof AdminRendersRoute
   AdminIndexRoute: typeof AdminIndexRoute
   AdminStudioRecordingIdRoute: typeof AdminStudioRecordingIdRoute
@@ -1600,6 +1620,7 @@ const AdminRouteRouteChildren: AdminRouteRouteChildren = {
   AdminMixtapesRoute: AdminMixtapesRoute,
   AdminNewsletterRoute: AdminNewsletterRoute,
   AdminPlansRoute: AdminPlansRoute,
+  AdminRecordingsRoute: AdminRecordingsRoute,
   AdminRendersRoute: AdminRendersRoute,
   AdminIndexRoute: AdminIndexRoute,
   AdminStudioRecordingIdRoute: AdminStudioRecordingIdRoute,

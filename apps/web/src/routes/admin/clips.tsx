@@ -1,4 +1,4 @@
-import { FilmStripIcon, ScissorsIcon } from "@phosphor-icons/react";
+import { FilmStripIcon } from "@phosphor-icons/react";
 import { type ClipDTO, type RecordingDTO } from "@fluncle/contracts/orpc";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, redirect } from "@tanstack/react-router";
@@ -6,8 +6,6 @@ import { createServerFn } from "@tanstack/react-start";
 import { type Dispatch, type SetStateAction, useEffect, useMemo, useState } from "react";
 import { AdminShell } from "@/components/admin/admin-shell";
 import { type ClipDrip, ClipCard } from "@/components/admin/clip-card";
-import { UploadRecordingDialog } from "@/components/admin/upload-recording-dialog";
-import { Badge } from "@fluncle/ui/components/badge";
 import { Button } from "@fluncle/ui/components/button";
 import { Label } from "@fluncle/ui/components/label";
 import {
@@ -30,15 +28,15 @@ import {
   sortClipsNewestFirst,
 } from "@/lib/studio-clips";
 
-// The cross-recording clip library + the recordings index (RFC recording-primitive,
-// Design B — Wave 3). A captured set (a RECORDING) yields MANY clips; beyond the per-set
-// editor (/admin/studio/$recordingId) this is ONE continuous grid of EVERY clip, sorted
-// newest-first (by clip `createdAt`) — no per-recording grouping, but each card still
-// carries its own recording label so the operator can tell which set/mixtape a clip is
-// from. Above the grid sits a recordings index so the operator can find + open a
-// CLI-created recording to clip it. Browse, filter (by recording + status), preview
-// inline, download to hand-post. Reads `list_clips` + `list_recordings`; `delete_clip`
-// prunes a bad cut.
+// The cross-recording clip LIBRARY (RFC recording-primitive, Design B — Wave 3). A captured
+// set (a RECORDING) yields MANY clips; beyond the per-set editor (/admin/studio/$recordingId)
+// this is ONE continuous grid of EVERY clip, sorted newest-first (by clip `createdAt`) — no
+// per-recording grouping, but each card still carries its own recording label so the operator
+// can tell which set/mixtape a clip is from. Browse, filter (by recording + status), preview
+// inline, download to hand-post. Reads `list_clips` + `list_recordings` (recordings feed the
+// filter dropdown + the per-card label); `delete_clip` prunes a bad cut. The recordings INDEX
+// + the Upload-recording action live on the sibling Recordings page (/admin/recordings) — the
+// Studio group split them out of here (ADM-03).
 //
 // Distribution rides the Instagram DRIP-FEED (clip-drip-feed RFC §3.6): the page header
 // carries the global KILL SWITCH (a Switch → `set_clip_drip`) and a BATCH schedule action
@@ -278,20 +276,6 @@ function ClipLibraryPage() {
     },
   });
 
-  // The clip count per recording (for the recordings index), over ALL clips (not the
-  // filtered view) so the index is a stable map of the backlog.
-  const clipCountByRecording = useMemo(() => {
-    const counts = new Map<string, number>();
-
-    for (const clip of libraryClips) {
-      if (clip.resolvedRecordingId) {
-        counts.set(clip.resolvedRecordingId, (counts.get(clip.resolvedRecordingId) ?? 0) + 1);
-      }
-    }
-
-    return counts;
-  }, [libraryClips]);
-
   const statusItems = { all: "Any state", done: "Ready", pending: "Cutting" } as const;
 
   // Toggle one clip in the batch-schedule selection.
@@ -323,13 +307,6 @@ function ClipLibraryPage() {
   return (
     <AdminShell
       current="clips"
-      headerActions={
-        <UploadRecordingDialog
-          onUploaded={() =>
-            void queryClient.invalidateQueries({ queryKey: ["admin", "recordings"] })
-          }
-        />
-      }
       subtitle={`${clips.length} ${clips.length === 1 ? "clip" : "clips"} across every recording`}
       title="Clip library"
     >
@@ -342,10 +319,6 @@ function ClipLibraryPage() {
           paused={drip.paused}
           pending={setPaused.isPending}
         />
-
-        {/* The recordings index — every captured set, promoted or not, linking to its
-            Studio. This is how the operator finds + opens a CLI-created recording. */}
-        <RecordingsIndex clipCountByRecording={clipCountByRecording} recordings={recordings} />
 
         <div className="mb-4 flex flex-wrap items-end gap-4">
           <div className="space-y-1.5">
@@ -515,56 +488,6 @@ function BatchScheduleBar({
           Clear
         </Button>
       </div>
-    </div>
-  );
-}
-
-// The recordings index: every captured set with its title, clip count, and a promoted
-// badge, each linking to its Studio. A recording with no clips still appears — that's the
-// point (open it to cut the first clip).
-function RecordingsIndex({
-  clipCountByRecording,
-  recordings,
-}: {
-  clipCountByRecording: Map<string, number>;
-  recordings: RecordingDTO[];
-}) {
-  if (recordings.length === 0) {
-    return (
-      <div className="mb-6 rounded-lg border border-dashed border-border p-4 text-sm text-muted-foreground">
-        No recordings yet. Hit <span className="font-medium text-foreground">Upload recording</span>{" "}
-        up top to stage a captured set, then open it here to clip it.
-      </div>
-    );
-  }
-
-  return (
-    <div className="mb-6">
-      <Label className="flex items-center gap-1.5">
-        <ScissorsIcon aria-hidden="true" />
-        Recordings ({recordings.length})
-      </Label>
-      <ul className="mt-2 divide-y divide-border rounded-lg border border-border">
-        {recordings.map((rec) => (
-          <li className="flex items-center gap-3 px-3 py-2" key={rec.id}>
-            <a
-              className="min-w-0 flex-1 truncate text-sm font-medium hover:text-primary focus-visible:outline-2 focus-visible:outline-ring"
-              href={`/admin/studio/${encodeURIComponent(rec.id)}`}
-            >
-              {rec.title}
-            </a>
-            {rec.logId ? (
-              <Badge variant="default">promoted · fluncle://{rec.logId}</Badge>
-            ) : (
-              <Badge variant="outline">recording</Badge>
-            )}
-            <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
-              {clipCountByRecording.get(rec.id) ?? 0} clip
-              {(clipCountByRecording.get(rec.id) ?? 0) === 1 ? "" : "s"}
-            </span>
-          </li>
-        ))}
-      </ul>
     </div>
   );
 }
