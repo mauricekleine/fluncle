@@ -1110,3 +1110,46 @@ export const editions = sqliteTable("editions", {
   windowSince: text("window_since"),
   windowUntil: text("window_until"),
 });
+
+// The operator's private cost ledger (COST-02) — the single source of truth for
+// Fluncle's recurring + one-off spend. It was pulled from the public repo docs on
+// purpose: vendor names and amounts are the operator's private data, so they live
+// in the DB at runtime, never in a committed file. The `/admin/costs` station is
+// operator-tier; the table ships EMPTY (no seed) and the operator fills it in-app.
+export const subscriptions = sqliteTable("subscriptions", {
+  // The charge in minor units (cents) — an integer never drifts the way a float
+  // does. A one-off or usage line still records its last/expected amount here.
+  amount: integer("amount").notNull(),
+  // A billing dashboard / invoice URL, so the operator can jump straight to the
+  // vendor's account page from the row. Nullable.
+  billingUrl: text("billing_url"),
+  // How the charge recurs: a monthly/annual subscription, a single one-off, or a
+  // metered usage line (variable, amount is the running/estimate).
+  cadence: text("cadence", { enum: ["monthly", "annual", "one-off", "usage"] }).notNull(),
+  // What bucket the spend falls in — a small closed set so the ledger totals by
+  // category. A CHECK constraint (drizzle's typed enum) keeps a typo out.
+  category: text("category", {
+    enum: ["infra", "AI", "media", "distribution", "domains", "tooling"],
+  }).notNull(),
+  createdAt: text("created_at").notNull(),
+  // ISO 4217. Fluncle bills across a few currencies; store each line's own.
+  currency: text("currency").notNull().default("EUR"),
+  id: text("id").primaryKey(),
+  // The human name of the line item (e.g. the plan/product name).
+  name: text("name").notNull(),
+  // A free-text operator note — anything worth remembering about the line.
+  notes: text("notes"),
+  // Which Fluncle surface or cron this spend powers — the "what breaks if I cancel
+  // it" link back to the system. Nullable free text.
+  powers: text("powers"),
+  // ISO date of the next renewal/charge, when known. Null for a one-off or an
+  // untracked cadence.
+  renewsAt: text("renews_at"),
+  // Lifecycle: an active line, a cancelled one (kept for the record), or a trial.
+  status: text("status", { enum: ["active", "cancelled", "trial"] })
+    .notNull()
+    .default("active"),
+  updatedAt: text("updated_at").notNull(),
+  // The vendor/provider the money goes to (e.g. Cloudflare, Anthropic).
+  vendor: text("vendor").notNull(),
+});

@@ -30,6 +30,7 @@ import { adminMixtapesContract } from "./admin-mixtapes";
 import { adminRecordingsContract } from "./admin-recordings";
 import { adminSocialContract } from "./admin-social";
 import { adminSubmissionsContract } from "./admin-submissions";
+import { adminSubscriptionsContract } from "./admin-subscriptions";
 import { adminTokensContract } from "./admin-tokens";
 import { adminTracksContract } from "./admin-tracks";
 import { adminTwitchContract } from "./admin-twitch";
@@ -107,6 +108,12 @@ export {
   rejectSubmission,
 } from "./admin-submissions";
 export {
+  createSubscription,
+  deleteSubscription,
+  listSubscriptions,
+  updateSubscription,
+} from "./admin-subscriptions";
+export {
   exchangeLastfmSession,
   mintMixcloudToken,
   mintYoutubeToken,
@@ -162,6 +169,7 @@ export {
   RecordingTracklistItemSchema,
   SocialPostItemSchema,
   SubmissionSchema,
+  SubscriptionDTOSchema,
   TrackListItemSchema,
   TrackSearchResultSchema,
 } from "./_shared";
@@ -186,6 +194,7 @@ export const contract = {
   ...adminRecordingsContract,
   ...adminSocialContract,
   ...adminSubmissionsContract,
+  ...adminSubscriptionsContract,
   ...adminTokensContract,
   ...adminTracksContract,
   ...adminTwitchContract,

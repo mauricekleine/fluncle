@@ -52,6 +52,7 @@ import { Route as AdminNewsletterRouteImport } from './routes/admin/newsletter'
 import { Route as AdminMixtapesRouteImport } from './routes/admin/mixtapes'
 import { Route as AdminLoginRouteImport } from './routes/admin/login'
 import { Route as AdminFindingsRouteImport } from './routes/admin/findings'
+import { Route as AdminCostsRouteImport } from './routes/admin/costs'
 import { Route as AdminClipsRouteImport } from './routes/admin/clips'
 import { Route as AdminArtistsRouteImport } from './routes/admin/artists'
 import { Route as ApiV1StatusRouteImport } from './routes/api/v1/status'
@@ -304,6 +305,11 @@ const AdminFindingsRoute = AdminFindingsRouteImport.update({
   path: '/findings',
   getParentRoute: () => AdminRouteRoute,
 } as any)
+const AdminCostsRoute = AdminCostsRouteImport.update({
+  id: '/costs',
+  path: '/costs',
+  getParentRoute: () => AdminRouteRoute,
+} as any)
 const AdminClipsRoute = AdminClipsRouteImport.update({
   id: '/clips',
   path: '/clips',
@@ -523,6 +529,7 @@ export interface FileRoutesByFullPath {
   '/status': typeof StatusRoute
   '/admin/artists': typeof AdminArtistsRoute
   '/admin/clips': typeof AdminClipsRoute
+  '/admin/costs': typeof AdminCostsRoute
   '/admin/findings': typeof AdminFindingsRoute
   '/admin/login': typeof AdminLoginRoute
   '/admin/mixtapes': typeof AdminMixtapesRoute
@@ -601,6 +608,7 @@ export interface FileRoutesByTo {
   '/status': typeof StatusRoute
   '/admin/artists': typeof AdminArtistsRoute
   '/admin/clips': typeof AdminClipsRoute
+  '/admin/costs': typeof AdminCostsRoute
   '/admin/findings': typeof AdminFindingsRoute
   '/admin/login': typeof AdminLoginRoute
   '/admin/mixtapes': typeof AdminMixtapesRoute
@@ -682,6 +690,7 @@ export interface FileRoutesById {
   '/status': typeof StatusRoute
   '/admin/artists': typeof AdminArtistsRoute
   '/admin/clips': typeof AdminClipsRoute
+  '/admin/costs': typeof AdminCostsRoute
   '/admin/findings': typeof AdminFindingsRoute
   '/admin/login': typeof AdminLoginRoute
   '/admin/mixtapes': typeof AdminMixtapesRoute
@@ -764,6 +773,7 @@ export interface FileRouteTypes {
     | '/status'
     | '/admin/artists'
     | '/admin/clips'
+    | '/admin/costs'
     | '/admin/findings'
     | '/admin/login'
     | '/admin/mixtapes'
@@ -842,6 +852,7 @@ export interface FileRouteTypes {
     | '/status'
     | '/admin/artists'
     | '/admin/clips'
+    | '/admin/costs'
     | '/admin/findings'
     | '/admin/login'
     | '/admin/mixtapes'
@@ -922,6 +933,7 @@ export interface FileRouteTypes {
     | '/status'
     | '/admin/artists'
     | '/admin/clips'
+    | '/admin/costs'
     | '/admin/findings'
     | '/admin/login'
     | '/admin/mixtapes'
@@ -1350,6 +1362,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminFindingsRouteImport
       parentRoute: typeof AdminRouteRoute
     }
+    '/admin/costs': {
+      id: '/admin/costs'
+      path: '/costs'
+      fullPath: '/admin/costs'
+      preLoaderRoute: typeof AdminCostsRouteImport
+      parentRoute: typeof AdminRouteRoute
+    }
     '/admin/clips': {
       id: '/admin/clips'
       path: '/clips'
@@ -1601,6 +1620,7 @@ declare module '@tanstack/react-router' {
 interface AdminRouteRouteChildren {
   AdminArtistsRoute: typeof AdminArtistsRoute
   AdminClipsRoute: typeof AdminClipsRoute
+  AdminCostsRoute: typeof AdminCostsRoute
   AdminFindingsRoute: typeof AdminFindingsRoute
   AdminLoginRoute: typeof AdminLoginRoute
   AdminMixtapesRoute: typeof AdminMixtapesRoute
@@ -1615,6 +1635,7 @@ interface AdminRouteRouteChildren {
 const AdminRouteRouteChildren: AdminRouteRouteChildren = {
   AdminArtistsRoute: AdminArtistsRoute,
   AdminClipsRoute: AdminClipsRoute,
+  AdminCostsRoute: AdminCostsRoute,
   AdminFindingsRoute: AdminFindingsRoute,
   AdminLoginRoute: AdminLoginRoute,
   AdminMixtapesRoute: AdminMixtapesRoute,

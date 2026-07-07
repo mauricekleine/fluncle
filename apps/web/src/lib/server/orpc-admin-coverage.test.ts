@@ -61,6 +61,10 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // clip-cut cron resolves a recording); the writes + `promote` (mints a coordinate) are
   // operator tier.
   "DELETE /admin/recordings/{recordingId}": "delete_recording",
+  // The operator's private cost ledger (COST-02) — contract-only oRPC (no TanStack
+  // route file; oRPC owns the paths directly). `list` is admin tier; create/update/
+  // delete are operator tier (the operator's private spend data — a valid agent token 403s).
+  "DELETE /admin/subscriptions/{id}": "delete_subscription",
   // The artist-relationship RFC ops (Unit 2.1). `list_unresolved_artists` (the resolve
   // worklist) + `resolve_artist` are agent tier (the box's `fluncle-artist-sweep` cron
   // drives both with its agent-scoped token); `backfill_artists` (Unit 1) is agent tier too.
@@ -91,6 +95,10 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "GET /admin/recordings/{recordingId}": "get_recording",
   "GET /admin/submissions": "list_submissions",
   "GET /admin/submissions/{submissionId}": "get_submission",
+  // The cost-ledger read (COST-02) — contract-only oRPC (no TanStack route file).
+  // Admin tier. `list_subscriptions` matches the public `list_` prefix so the "holds
+  // exactly" check skips it; it lives here for completeness (like `list_artist_socials`).
+  "GET /admin/subscriptions": "list_subscriptions",
   "GET /admin/tracks": "list_tracks_admin",
   // The single-finding admin lookup — contract-only oRPC (no TanStack route file; oRPC
   // owns the path directly, like context_track). Admin tier (agent-allowed read).
@@ -110,6 +118,8 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // create/update are admin tier (agent-allowed drafting); send is operator-only.
   "PATCH /admin/newsletter/editions/{id}": "update_edition",
   "PATCH /admin/recordings/{recordingId}": "update_recording",
+  // The cost-ledger edit (COST-02) — contract-only oRPC (no TanStack route file). Operator tier.
+  "PATCH /admin/subscriptions/{id}": "update_subscription",
   "PATCH /admin/tracks/{trackId}": "update_track",
   "PATCH /admin/tracks/{trackId}/social/{platform}": "update_track_social",
   // The championing motion (Unit 5, Epic B) — all contract-only oRPC (no TanStack route
@@ -195,6 +205,8 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "POST /admin/social/posts/capture": "capture_post_urls",
   "POST /admin/submissions/{submissionId}/approve": "approve_submission",
   "POST /admin/submissions/{submissionId}/reject": "reject_submission",
+  // The cost-ledger create (COST-02) — contract-only oRPC (no TanStack route file). Operator tier.
+  "POST /admin/subscriptions": "create_subscription",
   "POST /admin/tracks": "publish_track",
   // context_track is served by oRPC at its own path; it has no TanStack route FILE
   // (oRPC owns the path directly), so it lives here as a path→op entry without a

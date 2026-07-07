@@ -40,6 +40,7 @@ import {
   type RecordingTracklistItemSchema,
   type SocialPostItemSchema,
   type SubmissionSchema,
+  type SubscriptionDTOSchema,
   type TrackFeaturesSchema,
   type TrackListItemSchema,
   type TrackSearchResultSchema,
@@ -307,6 +308,18 @@ export type EditionDTO = z.infer<typeof EditionDTOSchema>;
 
 export type EditionsResponse = Ok<{ editions: EditionDTO[] }>;
 export type EditionResponse = Ok<{ edition: EditionDTO }>;
+
+// ── Subscription (the operator's private cost ledger, COST-02) ───────────────
+
+/**
+ * One line in the operator's private cost ledger — a recurring or one-off Fluncle
+ * spend. Operator-tier only (never a public route). Inferred from
+ * `SubscriptionDTOSchema` (./orpc/_shared.ts), so this DTO cannot drift from the wire.
+ */
+export type SubscriptionDTO = z.infer<typeof SubscriptionDTOSchema>;
+
+export type SubscriptionsResponse = Ok<{ subscriptions: SubscriptionDTO[] }>;
+export type SubscriptionResponse = Ok<{ subscription: SubscriptionDTO }>;
 
 // ── Mixtape distribution (audio→Mixcloud, video→YouTube) ─────────────────────
 // One CLI command mints a mixtape into `distributing`, moves the local bytes to
