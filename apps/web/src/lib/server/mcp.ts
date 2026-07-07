@@ -6,7 +6,7 @@ import { subscribeToNewsletter } from "./newsletter";
 import { ApiError, searchTrackCandidates } from "./spotify";
 import { getServiceStatuses, type ServiceHealthStatus } from "./status";
 import { createSubmission } from "./submissions";
-import { getRandomTrack, listTracks } from "./tracks";
+import { getRandomTrack, listTracks, toPublicTrackListItem } from "./tracks";
 
 // A small, stateless Model Context Protocol server: the same drum & bass
 // archive the public API exposes, handed to agents as MCP tools over the
@@ -65,7 +65,12 @@ const tools: McpTool[] = [
   {
     description:
       "List the most recent findings and mixtapes in Fluncle's drum & bass archive, newest first. Dates mark when each was found or published into the spine.",
-    execute: async (args) => listTracks({ includeMixtapes: true, limit: clampLimit(args.limit) }),
+    execute: async (args) => {
+      const page = await listTracks({ includeMixtapes: true, limit: clampLimit(args.limit) });
+
+      // Strip the private capture key before the archive world-serves to the agent.
+      return { ...page, tracks: page.tracks.map(toPublicTrackListItem) };
+    },
     inputSchema: {
       properties: {
         limit: {
@@ -86,7 +91,7 @@ const tools: McpTool[] = [
       const track = await getRandomTrack();
 
       return track
-        ? { ok: true, track }
+        ? { ok: true, track: toPublicTrackListItem(track) }
         : { code: "track_not_found", message: "No tracks found", ok: false };
     },
     inputSchema: { properties: {}, type: "object" },

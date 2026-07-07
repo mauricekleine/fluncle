@@ -246,6 +246,30 @@ export function toTrackListItem(row: TrackRow): TrackListItem {
   };
 }
 
+/**
+ * Strip the private full-song capture key from a track/feed item bound for a PUBLIC
+ * surface. `sourceAudioKey` is the R2 key of the CAPTURED copyrighted full song in the
+ * PRIVATE `fluncle-source-audio` bucket (a content hash) — admin/agent-tier capture
+ * state the on-box sweeps read via `?captureQueue`, and it must NEVER world-serve
+ * (audio-source-policy: the full audio is a private analysis artifact; exposing its key
+ * advertises the archive). Every PUBLIC read runs its items through this — the oRPC
+ * public tracks router (`orpc/tracks.ts`) and the in-process MCP tools (`mcp.ts`); the
+ * browser WebMCP surface proxies those same public HTTP reads, so it is covered
+ * transitively. The ADMIN read path deliberately does NOT strip — the sweeps need the
+ * key. A mixtape (or an un-captured finding) has no key, so it passes through untouched.
+ */
+export function toPublicTrackListItem<T extends object>(item: T): T {
+  // `object` (not `{ sourceAudioKey?: string }`): the latter is a WEAK type, so a
+  // FeedItem's mixtape arm — which shares no property with it — would be rejected at the
+  // `list_tracks` map. Read the optional key through a cast instead; a mixtape or an
+  // un-captured finding has none, so it returns untouched.
+  if ((item as { sourceAudioKey?: string }).sourceAudioKey === undefined) {
+    return item;
+  }
+
+  return { ...item, sourceAudioKey: undefined };
+}
+
 /** Fetch a single track by its Spotify trackId or its Log ID. */
 export async function getTrackByIdOrLogId(idOrLogId: string): Promise<TrackListItem | undefined> {
   const db = await getDb();
