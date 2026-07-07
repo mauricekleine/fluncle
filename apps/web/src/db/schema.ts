@@ -153,8 +153,8 @@ export const tracks = sqliteTable("tracks", {
   sourceAudioCapturedAt: text("source_audio_captured_at"),
   // CONSECUTIVE capture failures (reset to 0 on success); drives the backoff window.
   sourceAudioFailures: integer("source_audio_failures").notNull().default(0),
-  // The R2 key of the captured full song (`analysis/source/<logId>/<sha256>.<ext>`
-  // in the private `fluncle-source-audio` bucket). PRESENCE = captured. Null until then.
+  // The R2 key of the captured full song (`<logId>/<sha256>.<ext>` in the private
+  // `fluncle-source-audio` bucket). PRESENCE = captured. Null until then.
   sourceAudioKey: text("source_audio_key"),
   spotifyError: text("spotify_error"),
   spotifyUri: text("spotify_uri").notNull(),

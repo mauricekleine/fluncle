@@ -79,13 +79,9 @@ describe("durationWithinTolerance", () => {
 });
 
 describe("buildSourceAudioKey", () => {
-  test("builds analysis/source/<logId>/<sha>.<ext> and normalizes the ext", () => {
-    expect(buildSourceAudioKey("004.7.2I", "abc123", ".WEBM")).toBe(
-      "analysis/source/004.7.2I/abc123.webm",
-    );
-    expect(buildSourceAudioKey("F-0001", "deadbeef", "opus")).toBe(
-      "analysis/source/F-0001/deadbeef.opus",
-    );
+  test("builds <logId>/<sha>.<ext> and normalizes the ext", () => {
+    expect(buildSourceAudioKey("004.7.2I", "abc123", ".WEBM")).toBe("004.7.2I/abc123.webm");
+    expect(buildSourceAudioKey("F-0001", "deadbeef", "opus")).toBe("F-0001/deadbeef.opus");
   });
 });
 

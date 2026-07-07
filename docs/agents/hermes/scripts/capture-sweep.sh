@@ -22,7 +22,7 @@
 # update_track op. A NON-BLOCKING side-channel: it never gates the enrich/embed queues.
 #
 # PRODUCTION PRE-REQS (see ../capture-timer/README.md for the full runbook):
-#   - yt-dlp AND ffprobe on PATH (a box deploy prereq — the orchestrator installs them).
+#   - yt-dlp at /opt/data/scripts/yt-dlp (on this wrapper's PATH) + ffprobe in the image — box deploy prereqs (see capture-timer/README).
 #   - Secrets in the shared 0600 ${HOME}/.fluncle-secrets.env (op-injected by
 #     fluncle-secrets-sync), sourced below:
 #       FLUNCLE_API_TOKEN — the box's AGENT-scoped token (the update_track write-back).
@@ -42,11 +42,11 @@
 # cron user: `docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/data/scripts/capture-sweep.sh`.
 set -euo pipefail
 
-# The runner execs this with a minimal PATH that omits /usr/local/bin (the bun symlink)
-# and /root/.bun/bin, so a bare `bun`/`yt-dlp`/`ffprobe` is "not found" → exit 127.
-# Prepend the known install dirs so this wrapper's tools resolve regardless of the
-# runner's PATH.
-export PATH="/usr/local/bin:/root/.bun/bin:${PATH:-/usr/bin:/bin}"
+# The runner / docker-exec hands this a minimal PATH, so a bare `bun`/`yt-dlp`/`ffprobe`
+# is "not found" → exit 127. Prepend the known install dirs so this wrapper's tools resolve
+# regardless: /opt/data/scripts holds yt-dlp (installed alongside this sweep on the
+# persistent volume — see capture-timer/README), /usr/local/bin the bun symlink.
+export PATH="/opt/data/scripts:/usr/local/bin:/root/.bun/bin:${PATH:-/usr/bin:/bin}"
 
 # Belt-and-suspenders: pin the absolute interpreter path too (the runner can lose the
 # PATH export above).

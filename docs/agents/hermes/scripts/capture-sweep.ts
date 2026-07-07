@@ -145,11 +145,11 @@ export function durationWithinTolerance(
   return Math.abs(candidateSec - targetSec) <= allowed;
 }
 
-/** The R2 key for a captured full song: `analysis/source/<logId>/<sha256>.<ext>`. */
+/** The R2 key for a captured full song: `<logId>/<sha256>.<ext>` (the bucket is dedicated to source audio, so no prefix). */
 export function buildSourceAudioKey(logId: string, sha256Hex: string, ext: string): string {
   const cleanExt = ext.replace(/^\./, "").toLowerCase();
 
-  return `analysis/source/${logId}/${sha256Hex}.${cleanExt}`;
+  return `${logId}/${sha256Hex}.${cleanExt}`;
 }
 
 // Title markers that signal a WRONG version (a same-length remix/edit slips the duration

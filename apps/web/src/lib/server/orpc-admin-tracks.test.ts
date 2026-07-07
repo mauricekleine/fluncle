@@ -243,7 +243,7 @@ describe("oRPC update_track (PATCH /admin/tracks/{trackId})", () => {
       patch(AGENT_TOKEN, {
         captureStatus: "done",
         sourceAudioCapturedAt: "2026-07-07T12:00:00.000Z",
-        sourceAudioKey: "analysis/source/004.7.2I/abc123.opus",
+        sourceAudioKey: "004.7.2I/abc123.opus",
       }),
     );
 
@@ -253,7 +253,7 @@ describe("oRPC update_track (PATCH /admin/tracks/{trackId})", () => {
     expect(updateTrack).toHaveBeenCalledWith(TRACK_ID, {
       captureStatus: "done",
       sourceAudioCapturedAt: "2026-07-07T12:00:00.000Z",
-      sourceAudioKey: "analysis/source/004.7.2I/abc123.opus",
+      sourceAudioKey: "004.7.2I/abc123.opus",
     });
   });
 
@@ -285,7 +285,7 @@ describe("oRPC update_track (PATCH /admin/tracks/{trackId})", () => {
       patch(AGENT_TOKEN, {
         captureStatus: "done",
         enrichmentStatus: "pending",
-        sourceAudioKey: "analysis/source/004.7.2I/abc123.opus",
+        sourceAudioKey: "004.7.2I/abc123.opus",
       }),
     );
 
@@ -295,7 +295,7 @@ describe("oRPC update_track (PATCH /admin/tracks/{trackId})", () => {
     expect(updateTrack).toHaveBeenCalledWith(TRACK_ID, {
       captureStatus: "done",
       enrichmentStatus: "pending",
-      sourceAudioKey: "analysis/source/004.7.2I/abc123.opus",
+      sourceAudioKey: "004.7.2I/abc123.opus",
     });
   });
 
@@ -306,7 +306,7 @@ describe("oRPC update_track (PATCH /admin/tracks/{trackId})", () => {
     const response = await handleOrpc(
       patch(AGENT_TOKEN, {
         captureStatus: "bogus",
-        sourceAudioKey: "analysis/source/004.7.2I/abc123.opus",
+        sourceAudioKey: "004.7.2I/abc123.opus",
       }),
     );
 
@@ -314,7 +314,7 @@ describe("oRPC update_track (PATCH /admin/tracks/{trackId})", () => {
     // The bad enum value never reaches updateTrack; the valid key still writes.
     const [, update] = updateTrack.mock.calls[0] as [string, Record<string, unknown>];
     expect("captureStatus" in update).toBe(false);
-    expect(update.sourceAudioKey).toBe("analysis/source/004.7.2I/abc123.opus");
+    expect(update.sourceAudioKey).toBe("004.7.2I/abc123.opus");
   });
 
   it.each([
