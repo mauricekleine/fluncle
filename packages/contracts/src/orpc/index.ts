@@ -48,7 +48,15 @@ import { tracksContract } from "./tracks";
 
 // Re-export the per-op contracts so existing importers (and the typed client)
 // keep their entrypoints.
-export { backfillArtists } from "./admin-artists";
+export {
+  addArtistSocial,
+  backfillArtists,
+  confirmArtistSocial,
+  followArtist,
+  listArtistSocials,
+  recordOperatorFollow,
+  removeArtistSocial,
+} from "./admin-artists";
 export { backfillDiscogs, backfillLastfm } from "./admin-backfills";
 export { recordHealth, ServiceHealthStatusSchema } from "./admin-health";
 export {

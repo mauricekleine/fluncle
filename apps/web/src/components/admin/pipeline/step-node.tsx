@@ -21,7 +21,7 @@ const SIZE = {
 
 // State → border/fill. Human steps that are your move (open, ungated) get a touch
 // more presence than a passive open auto step, since that IS the operator's work.
-const STATE_CLASS: Record<BoardStep["state"], string> = {
+export const STATE_CLASS: Record<BoardStep["state"], string> = {
   done: "border-primary/40 bg-primary/15 text-foreground",
   open: "border-border bg-transparent text-muted-foreground",
   partial: "border-dashed border-primary/60 bg-primary/10 text-foreground",

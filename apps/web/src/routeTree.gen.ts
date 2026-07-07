@@ -50,6 +50,7 @@ import { Route as AdminMixtapesRouteImport } from './routes/admin/mixtapes'
 import { Route as AdminLoginRouteImport } from './routes/admin/login'
 import { Route as AdminFindingsRouteImport } from './routes/admin/findings'
 import { Route as AdminClipsRouteImport } from './routes/admin/clips'
+import { Route as AdminArtistsRouteImport } from './routes/admin/artists'
 import { Route as ApiV1StatusRouteImport } from './routes/api/v1/status'
 import { Route as ApiV1PostmanDotjsonRouteImport } from './routes/api/v1/postman[.]json'
 import { Route as ApiV1OpenapiDotjsonRouteImport } from './routes/api/v1/openapi[.]json'
@@ -288,6 +289,11 @@ const AdminClipsRoute = AdminClipsRouteImport.update({
   path: '/clips',
   getParentRoute: () => AdminRouteRoute,
 } as any)
+const AdminArtistsRoute = AdminArtistsRouteImport.update({
+  id: '/artists',
+  path: '/artists',
+  getParentRoute: () => AdminRouteRoute,
+} as any)
 const ApiV1StatusRoute = ApiV1StatusRouteImport.update({
   id: '/api/v1/status',
   path: '/api/v1/status',
@@ -483,6 +489,7 @@ export interface FileRoutesByFullPath {
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/sprites': typeof SpritesRoute
   '/status': typeof StatusRoute
+  '/admin/artists': typeof AdminArtistsRoute
   '/admin/clips': typeof AdminClipsRoute
   '/admin/findings': typeof AdminFindingsRoute
   '/admin/login': typeof AdminLoginRoute
@@ -555,6 +562,7 @@ export interface FileRoutesByTo {
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/sprites': typeof SpritesRoute
   '/status': typeof StatusRoute
+  '/admin/artists': typeof AdminArtistsRoute
   '/admin/clips': typeof AdminClipsRoute
   '/admin/findings': typeof AdminFindingsRoute
   '/admin/login': typeof AdminLoginRoute
@@ -630,6 +638,7 @@ export interface FileRoutesById {
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/sprites': typeof SpritesRoute
   '/status': typeof StatusRoute
+  '/admin/artists': typeof AdminArtistsRoute
   '/admin/clips': typeof AdminClipsRoute
   '/admin/findings': typeof AdminFindingsRoute
   '/admin/login': typeof AdminLoginRoute
@@ -706,6 +715,7 @@ export interface FileRouteTypes {
     | '/sitemap.xml'
     | '/sprites'
     | '/status'
+    | '/admin/artists'
     | '/admin/clips'
     | '/admin/findings'
     | '/admin/login'
@@ -778,6 +788,7 @@ export interface FileRouteTypes {
     | '/sitemap.xml'
     | '/sprites'
     | '/status'
+    | '/admin/artists'
     | '/admin/clips'
     | '/admin/findings'
     | '/admin/login'
@@ -852,6 +863,7 @@ export interface FileRouteTypes {
     | '/sitemap.xml'
     | '/sprites'
     | '/status'
+    | '/admin/artists'
     | '/admin/clips'
     | '/admin/findings'
     | '/admin/login'
@@ -1258,6 +1270,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminClipsRouteImport
       parentRoute: typeof AdminRouteRoute
     }
+    '/admin/artists': {
+      id: '/admin/artists'
+      path: '/artists'
+      fullPath: '/admin/artists'
+      preLoaderRoute: typeof AdminArtistsRouteImport
+      parentRoute: typeof AdminRouteRoute
+    }
     '/api/v1/status': {
       id: '/api/v1/status'
       path: '/api/v1/status'
@@ -1479,6 +1498,7 @@ declare module '@tanstack/react-router' {
 }
 
 interface AdminRouteRouteChildren {
+  AdminArtistsRoute: typeof AdminArtistsRoute
   AdminClipsRoute: typeof AdminClipsRoute
   AdminFindingsRoute: typeof AdminFindingsRoute
   AdminLoginRoute: typeof AdminLoginRoute
@@ -1491,6 +1511,7 @@ interface AdminRouteRouteChildren {
 }
 
 const AdminRouteRouteChildren: AdminRouteRouteChildren = {
+  AdminArtistsRoute: AdminArtistsRoute,
   AdminClipsRoute: AdminClipsRoute,
   AdminFindingsRoute: AdminFindingsRoute,
   AdminLoginRoute: AdminLoginRoute,

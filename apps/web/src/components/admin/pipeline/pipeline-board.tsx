@@ -1,6 +1,13 @@
-import { DotsThreeVerticalIcon, DownloadSimpleIcon, FolderOpenIcon } from "@phosphor-icons/react";
+import {
+  CheckIcon,
+  DotsThreeVerticalIcon,
+  DownloadSimpleIcon,
+  FolderOpenIcon,
+} from "@phosphor-icons/react";
+import { useState } from "react";
 
 import {
+  automatedSocialsBreakdown,
   type BoardActions,
   type BoardProps,
   type BoardStep,
@@ -8,7 +15,7 @@ import {
   type StepKey,
 } from "@/components/admin/pipeline/board-model";
 import { FindingLead } from "@/components/admin/pipeline/finding-lead";
-import { StepNode } from "@/components/admin/pipeline/step-node";
+import { STATE_CLASS, StepNode } from "@/components/admin/pipeline/step-node";
 import { type BoardRow } from "@/components/admin/use-publish";
 import {
   DropdownMenu,
@@ -16,6 +23,8 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@fluncle/ui/components/dropdown-menu";
+import { Popover, PopoverContent, PopoverTrigger } from "@fluncle/ui/components/popover";
+import { cn } from "@/lib/utils";
 
 // The pipeline board — the operator's `/admin` home. The whole pipeline as a
 // pattern: every cell is one state glyph, no label, columns grouped under
@@ -58,10 +67,10 @@ const SHORT: Record<StepKey, string> = {
   context: "Ctx",
   discogs: "Dsc",
   enrich: "Enr",
-  lastfm: "LFM",
   mixtape: "Tape",
   note: "Note",
   observation: "Obs",
+  socials: "Soc",
   tag: "Tag",
   tiktok: "TT",
   video: "Vid",
@@ -204,9 +213,86 @@ function RowMenu({ row }: { row: BoardRow }) {
 }
 
 function Cell({ actions, row, step }: { actions: BoardActions; row: BoardRow; step: BoardStep }) {
+  // The automated-socials cell is a read-only aggregate; instead of a dialog it opens a
+  // hover Popover breaking the Last.fm love + Spotify/YouTube follows down per platform.
+  if (step.key === "socials") {
+    return <SocialsCell row={row} step={step} />;
+  }
+
   return (
     <div className={`flex shrink-0 items-center justify-center py-3.5 ${COL_CLASS}`}>
       <StepNode onClick={() => runStep(step, row, actions)} size="md" step={step} />
+    </div>
+  );
+}
+
+// The automated-socials cell: the repurposed LFM cell. Its glyph reads by the same
+// SHAPE/FILL grammar as every step (round auto glyph, done/partial/open fill), and on
+// hover/focus it opens a Popover (NOT a HoverCard — we have none) listing each hands-off
+// action — the Last.fm love + each artist Spotify/YouTube follow — with a done check.
+function SocialsCell({ row, step }: { row: BoardRow; step: BoardStep }) {
+  const items = automatedSocialsBreakdown(row);
+  const title = `${step.label} — ${step.statusLabel}`;
+  // This base-ui Popover opens on click; drive it open on hover/focus too so the cell
+  // reads like a hover breakdown (there is no HoverCard component). Read-only content, so
+  // closing on mouse-leave is fine — nothing in the popup needs to be reached.
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div className={`flex shrink-0 items-center justify-center py-3.5 ${COL_CLASS}`}>
+      <Popover onOpenChange={setOpen} open={open}>
+        <PopoverTrigger
+          aria-label={title}
+          className={cn(
+            "group relative flex size-8 shrink-0 cursor-default items-center justify-center rounded-full border transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
+            STATE_CLASS[step.state],
+          )}
+          onBlur={() => setOpen(false)}
+          onFocus={() => setOpen(true)}
+          onMouseEnter={() => setOpen(true)}
+          onMouseLeave={() => setOpen(false)}
+          title={title}
+        >
+          <step.Icon
+            aria-hidden="true"
+            className="size-4"
+            weight={step.state === "open" ? "regular" : "fill"}
+          />
+          {step.state === "done" ? (
+            <span
+              aria-hidden="true"
+              className="absolute -right-1 -bottom-1 flex size-3 items-center justify-center rounded-full bg-primary text-primary-foreground"
+            >
+              <CheckIcon className="size-2" weight="bold" />
+            </span>
+          ) : undefined}
+        </PopoverTrigger>
+        <PopoverContent align="center" className="w-60 gap-2" side="top">
+          <p className="text-xs font-bold tracking-wide text-muted-foreground">Automated socials</p>
+          <ul className="m-0 flex list-none flex-col gap-1.5 p-0">
+            {items.map((item) => (
+              <li className="flex items-center gap-2 text-xs" key={item.key}>
+                <item.Icon
+                  aria-hidden="true"
+                  className={cn(
+                    "size-3.5",
+                    item.done ? "text-foreground" : "text-muted-foreground",
+                  )}
+                  weight="fill"
+                />
+                <span className="flex-1 text-foreground">{item.label}</span>
+                {item.done ? (
+                  <CheckIcon aria-hidden="true" className="size-3.5 text-primary" weight="bold" />
+                ) : (
+                  <span aria-hidden="true" className="text-muted-foreground/50">
+                    ·
+                  </span>
+                )}
+              </li>
+            ))}
+          </ul>
+        </PopoverContent>
+      </Popover>
     </div>
   );
 }

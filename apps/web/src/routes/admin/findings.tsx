@@ -34,6 +34,7 @@ import { Button } from "@fluncle/ui/components/button";
 import { Dialog, DialogContent } from "@fluncle/ui/components/dialog";
 import { GALAXIES, galaxyForVibe } from "@/lib/galaxies";
 import { isAdminRequest } from "@/lib/server/admin-auth";
+import { listArtistFollowsForTracks } from "@/lib/server/artists";
 import { listBackfillRanForTracks, listLastfmLovedForTracks } from "@/lib/server/backfill";
 import { readCaptions } from "@/lib/server/captions";
 import { listMixtapeMembershipsForTracks } from "@/lib/server/mixtapes";
@@ -167,23 +168,35 @@ const fetchBoard = createServerFn({ method: "GET" })
     // trackers: `done` once the backfill ran (whether or not it found data), grey
     // only while it's never run — the ran-stamp drives the cell, the data-stamp
     // (release url / loved) only refines the label.
-    const [posts, mixtapes, plans, contextNotes, discogsRan, lastfmRan, lastfmLoved, noteRan] =
-      await Promise.all([
-        listSocialPostsForTracks(trackIds),
-        listMixtapeMembershipsForTracks(trackIds),
-        listPlanMembershipsForTracks(trackIds),
-        listContextNotePresenceForTracks(trackIds),
-        listBackfillRanForTracks(trackIds, "discogs"),
-        listBackfillRanForTracks(trackIds, "lastfm"),
-        listLastfmLovedForTracks(trackIds),
-        listBackfillRanForTracks(trackIds, "note"),
-      ]);
+    const [
+      posts,
+      mixtapes,
+      plans,
+      contextNotes,
+      discogsRan,
+      lastfmRan,
+      lastfmLoved,
+      noteRan,
+      artistFollows,
+    ] = await Promise.all([
+      listSocialPostsForTracks(trackIds),
+      listMixtapeMembershipsForTracks(trackIds),
+      listPlanMembershipsForTracks(trackIds),
+      listContextNotePresenceForTracks(trackIds),
+      listBackfillRanForTracks(trackIds, "discogs"),
+      listBackfillRanForTracks(trackIds, "lastfm"),
+      listLastfmLovedForTracks(trackIds),
+      listBackfillRanForTracks(trackIds, "note"),
+      // The artist Spotify/YouTube follow state (Epic B) — the automated-socials cell.
+      listArtistFollowsForTracks(trackIds),
+    ]);
 
     return {
       nextCursor: page.nextCursor,
       totalCount: page.totalCount,
       tracks: page.tracks.map((track) => ({
         ...track,
+        artistFollows: artistFollows.get(track.trackId) ?? [],
         discogsRan: discogsRan.has(track.trackId),
         hasContextNote: contextNotes.has(track.trackId),
         lastfmLoved: lastfmLoved.has(track.trackId),

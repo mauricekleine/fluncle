@@ -799,6 +799,18 @@ export const SURFACES: readonly Surface[] = [
     weights: { status: "hidden" },
   },
   {
+    command: "fluncle admin artists follow",
+    exposedContent: [
+      "auto-follow high-confidence artists on Spotify + YouTube — the championing motion (--no-agent, Worker HTTP)",
+    ],
+    kind: "cron",
+    name: "cron.artist-follow",
+    operatorNotes:
+      "every 6h. Pure HTTP trigger, zero LLM tokens. Agent tier (the box holds no Spotify/YouTube tokens; the Worker does the PUT /me/following + subscriptions.insert and stamps followed_at). Idempotent by followed_at IS NULL, acting only on status IN (auto, confirmed); quota-paced. Mixcloud is link-only (cut). Source: docs/agents/hermes/scripts/artist-follow-sweep.*. Probed on /status as cron.artist-follow.",
+    probeConfig: { cadenceMs: 6 * 60 * MINUTE_MS, cronName: "fluncle-artist-follow", kind: "cron" },
+    weights: { status: "hidden" },
+  },
+  {
     command: "fluncle admin tracks social --capture",
     exposedContent: [
       "capture the YouTube/TikTok post URLs Postiz withholds on create → write back (--no-agent, Worker HTTP)",
