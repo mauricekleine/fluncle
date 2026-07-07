@@ -15,6 +15,7 @@ import { parseArtistsJson } from "./artists";
 import { getDb, typedRow, typedRows } from "./db";
 import { discogsReleaseUrl } from "./discogs";
 import { type EmbeddingCandidate, parseEmbedding, rankBySimilarity } from "./embedding";
+import { extractYoutubeChannelId } from "./youtube";
 
 export type { FeedListPage, TrackCursor, TrackFeatures, TrackListPage, TrackListItem };
 export type { RadioScheduleEntry };
@@ -42,6 +43,7 @@ export type TrackRow = {
   preview_url: string | null;
   release_date: string | null;
   source_audio_failures: number;
+  source_audio_key: string | null;
   spotify_url: string;
   tiktok_url: string | null;
   youtube_url: string | null;
@@ -80,7 +82,7 @@ type MixtapeFeedRow = {
 // surfaced (parsed) as creative fuel for the video agent.
 const TRACK_SELECT = `tracks.track_id, tracks.spotify_url, tracks.title, tracks.album, tracks.album_image_url, tracks.artists_json,
   tracks.bpm, tracks.duration_ms, tracks.enrichment_status, tracks.features_json, tracks.in_release_id, tracks.isrc, tracks.key, tracks.label, tracks.log_id, tracks.popularity,
-  tracks.preview_url, tracks.release_date, tracks.source_audio_failures, tracks.video_url, tracks.video_squared_at, tracks.video_vehicle, tracks.video_grain, tracks.video_register, tracks.video_model, tracks.video_model_reasoning, tracks.note, tracks.added_at,
+  tracks.preview_url, tracks.release_date, tracks.source_audio_failures, tracks.source_audio_key, tracks.video_url, tracks.video_squared_at, tracks.video_vehicle, tracks.video_grain, tracks.video_register, tracks.video_model, tracks.video_model_reasoning, tracks.note, tracks.added_at,
   tracks.updated_at, tracks.vibe_x, tracks.vibe_y, tracks.added_to_spotify, tracks.posted_to_telegram,
   tracks.observation_audio_url, tracks.observation_duration_ms, tracks.observation_generated_at, tracks.observation_alignment_json,
   (select url from social_posts
@@ -220,6 +222,11 @@ export function toTrackListItem(row: TrackRow): TrackListItem {
     // sweep reads the prior count and increments truthfully (the queue's failure cap
     // depends on it). Only non-zero counts surface; a never-failed finding omits it.
     sourceAudioFailures: row.source_audio_failures > 0 ? row.source_audio_failures : undefined,
+    // The R2 key of the captured full song (`<logId>/<sha256>.<ext>`) — presence
+    // means the song is captured. Admin/agent-tier only (this whole DTO is admin-authed);
+    // the key grants nothing without the private-bucket R2 creds. The enrich + embed
+    // sweeps read it (the embed queue only embeds captured findings). Absent until captured.
+    sourceAudioKey: row.source_audio_key ?? undefined,
     spotifyUrl: row.spotify_url,
     tiktokUrl: row.tiktok_url ?? undefined,
     title: row.title,
@@ -861,9 +868,11 @@ type ListTracksOptions = {
   hasContext?: boolean;
   /**
    * Audio-embedding presence (admin only) — the MuQ embed queue's filter.
-   * `false` = `embedding_json IS NULL` (no MuQ vector yet — the `fluncle-embed`
-   * cron's worklist); `true` = a vector is on file. Omitted for public reads.
-   * Mirrors `hasVideo`/`hasKey`'s tri-state. See docs/audio-embedding-rfc.md.
+   * `false` = the embed worklist: `embedding_json IS NULL` AND a captured source key
+   * on file (`source_audio_key IS NOT NULL`), since MuQ embeds the CAPTURED full song,
+   * not a preview or the unmatched tail (RFC full-audio § Unit 3) — a keyless finding is
+   * excluded. `true` = a vector is on file (a pure presence check, no key gate). Omitted
+   * for public reads. Mirrors `hasVideo`/`hasKey`'s tri-state. See docs/audio-embedding-rfc.md.
    */
   hasEmbedding?: boolean;
   /**
@@ -921,6 +930,82 @@ type ListTracksOptions = {
   until?: string;
 };
 
+/**
+ * Group `artist_socials` YouTube URLs (each joined to a finding via `track_artists`)
+ * by `track_id` into that finding's DEDUPED list of `UC…` channel ids — the capture
+ * queue's artist-own-channel trust signal. Each URL runs through
+ * `extractYoutubeChannelId`, so a `/user/<name>` or `/@handle` link (no directly usable
+ * channel id) contributes nothing; a finding left with no channel id is simply absent
+ * from the returned map. PURE (no DB) so the grouping/dedupe is unit-testable.
+ */
+export function groupArtistYoutubeChannelIds(
+  rows: { track_id: string; url: string }[],
+): Map<string, string[]> {
+  const byTrack = new Map<string, string[]>();
+
+  for (const row of rows) {
+    const channelId = extractYoutubeChannelId(row.url);
+
+    if (!channelId) {
+      continue;
+    }
+
+    const existing = byTrack.get(row.track_id);
+
+    if (!existing) {
+      byTrack.set(row.track_id, [channelId]);
+    } else if (!existing.includes(channelId)) {
+      existing.push(channelId);
+    }
+  }
+
+  return byTrack;
+}
+
+/**
+ * Attach `artistYoutubeChannelIds` to the capture-queue items IN PLACE — a SINGLE
+ * batched read of every listed finding's artists' YouTube socials, so the shared
+ * `TRACK_SELECT`/`toTrackListItem` path (every other consumer) stays free of a
+ * correlated subquery that would bloat every DTO. The full-song capture sweep reads
+ * this field as its strongest trust tier: a candidate on the artist's OWN channel is
+ * the artist's own upload. Bound params only — the track ids are never interpolated.
+ * `status` does not gate (any known artist YouTube link is a valid own-channel signal
+ * for capture). A finding whose artists have no `/channel/UC…` link keeps the field
+ * UNDEFINED — an empty set is omitted, never surfaced as `[]`.
+ */
+async function attachArtistYoutubeChannelIds(
+  db: Awaited<ReturnType<typeof getDb>>,
+  items: TrackListItem[],
+): Promise<void> {
+  const trackIds = items.map((item) => item.trackId);
+
+  if (trackIds.length === 0) {
+    return;
+  }
+
+  const placeholders = trackIds.map(() => "?").join(", ");
+  const result = await db.execute({
+    args: trackIds,
+    sql: `select track_artists.track_id as track_id, artist_socials.url as url
+          from artist_socials
+          join track_artists on track_artists.artist_id = artist_socials.artist_id
+          where artist_socials.platform = 'youtube'
+            and track_artists.track_id in (${placeholders})`,
+  });
+
+  const byTrack = groupArtistYoutubeChannelIds(
+    typedRows<{ track_id: string; url: string }>(result.rows),
+  );
+
+  for (const item of items) {
+    const channelIds = byTrack.get(item.trackId);
+
+    if (channelIds && channelIds.length > 0) {
+      item.artistYoutubeChannelIds = channelIds;
+    }
+  }
+}
+
 export function listTracks(
   options: ListTracksOptions & { includeMixtapes: true },
 ): Promise<FeedListPage>;
@@ -976,12 +1061,16 @@ export async function listTracks({
     filterClauses.push("key is null");
   }
 
-  // The MuQ embed queue: `embedding_json IS NULL` (no audio embedding yet — the
-  // `fluncle-embed` cron's worklist). `true` = a vector is on file. Mirrors hasKey.
+  // The MuQ embed queue (RFC full-audio § Unit 3): `embedding_json IS NULL` AND a
+  // captured source key on file (`source_audio_key IS NOT NULL`) — the `fluncle-embed`
+  // cron's worklist. The key gate is the point: MuQ embeds the CAPTURED full song, never
+  // a preview or the unmatched tail, so a keyless finding is not embeddable yet and stays
+  // out of the queue. `true` = a vector is already on file (a pure presence check — no key
+  // gate; an embedded finding is done regardless of how it was captured). Mirrors hasKey.
   if (hasEmbedding === true) {
     filterClauses.push("embedding_json is not null");
   } else if (hasEmbedding === false) {
-    filterClauses.push("embedding_json is null");
+    filterClauses.push("embedding_json is null and source_audio_key is not null");
   }
 
   // The context queue. `true` = resolved (a note is stored). `false` = the work
@@ -1122,6 +1211,16 @@ export async function listTracks({
   const visibleRows = rows.slice(0, limit);
   const hasMore = rows.length > limit;
   const lastVisibleRow = visibleRows.at(-1);
+  const tracks = visibleRows.map(toTrackListItem);
+
+  // The capture queue's artist-own-channel trust signal: attach each finding's
+  // artists' YouTube channel ids in ONE batched read (never through TRACK_SELECT — that
+  // shared select feeds every consumer, so a correlated subquery there would bloat
+  // every DTO). The full-song capture sweep reads `artistYoutubeChannelIds` as its
+  // strongest trust tier. Capture-queue reads only.
+  if (captureQueue) {
+    await attachArtistYoutubeChannelIds(db, tracks);
+  }
 
   return {
     nextCursor:
@@ -1132,7 +1231,7 @@ export async function listTracks({
           })
         : undefined,
     totalCount,
-    tracks: visibleRows.map(toTrackListItem),
+    tracks,
   };
 }
 

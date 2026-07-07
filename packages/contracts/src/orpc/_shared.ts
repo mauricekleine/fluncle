@@ -27,6 +27,13 @@ export const TrackListItemSchema = z
     addedToSpotify: z.boolean(),
     album: z.string().optional(),
     albumImageUrl: z.string().optional(),
+    // The artist's own YouTube channel id(s) (`UC…`), gathered from the confirmed
+    // `artist_socials` YouTube links of every artist on the finding. Populated ONLY on
+    // the admin capture-queue read (`captureQueue=true`) — the full-song capture sweep
+    // reads it as its STRONGEST trust tier: a candidate on one of these is the artist's
+    // OWN upload. Absent on every other read (an internal, capture-only signal); absent
+    // here too when no artist has a resolvable `/channel/UC…` link.
+    artistYoutubeChannelIds: z.array(z.string()).optional(),
     artists: z.array(z.string()),
     bpm: z.number().optional(),
     discogsReleaseUrl: z.string().optional(),
@@ -65,6 +72,12 @@ export const TrackListItemSchema = z
     // increments truthfully — the queue's failure-cap backoff depends on it. Present only
     // when non-zero (a never-failed finding omits it).
     sourceAudioFailures: z.number().optional(),
+    // The R2 key of the captured full song (`<logId>/<sha256>.<ext>`; RFC full-audio).
+    // Presence = the song is captured. Internal capture state on the admin-authed DTO —
+    // the key grants nothing without the private-bucket R2 creds. The enrich + embed
+    // sweeps read it (the MuQ embed queue only embeds captured findings). Absent until
+    // captured.
+    sourceAudioKey: z.string().optional(),
     spotifyUrl: z.string(),
     tiktokUrl: z.string().optional(),
     title: z.string(),
