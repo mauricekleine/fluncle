@@ -207,6 +207,10 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // the board + CLI + box can all consume.
   get_track_admin: "admin",
   initiate_mixtape_youtube: "operator",
+  // The artist-sweep resolve worklist (artists awaiting social resolution) — agent
+  // tier (adminAuth only): a read the box's `fluncle-artist-sweep` cron drives with
+  // its agent-scoped token to pick the next batch, the list_*_admin precedent.
+  list_artists: "admin",
   // Every clip's IG drip row — admin tier (agent-allowed read), the list_*_admin
   // precedent; the CLI / library merge it onto the clips.
   list_clip_posts: "admin",
@@ -269,6 +273,9 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // re-render — operator-only (adminAuth + operatorGuard); the box agent never
   // clears videos, so an agent token 403s.
   requeue_video: "operator",
+  // resolve_artist — the box's agent-token artist-socials resolution (MB + Firecrawl); internal
+  // enrichment only, so agent-tier (adminAuth, no operatorGuard) like backfill_artists.
+  resolve_artist: "admin",
   // The Mixcloud metadata re-sync — operator tier: it EDITS a LIVE published cloudcast's
   // sections[] (the Mixcloud edit endpoint, server-side with the mixcloud_auth token),
   // so the agent token 403s (the parity twin of resync_mixtape_youtube).

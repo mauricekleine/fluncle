@@ -47,6 +47,8 @@ const APPROVED_VERBS = new Set<string>([
   // The convention's named non-CRUD action set.
   "authorize",
   "backfill",
+  // `resolve` — resolve an artist's social profiles from MB + Firecrawl (the artist-relationship epic).
+  "resolve",
   // `capture` (recover the public YouTube/TikTok post URLs Postiz withholds on
   // create, building each from the platform's native content id) — added
   // deliberately with the `capture_post_urls` sweep.
