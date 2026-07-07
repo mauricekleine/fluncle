@@ -57,12 +57,12 @@ const LEAD_PIN = "sm:sticky sm:left-0";
 const SHORT: Record<StepKey, string> = {
   context: "Ctx",
   discogs: "Dsc",
+  embedding: "Emb",
   enrich: "Enr",
   lastfm: "LFM",
   mixtape: "Tape",
   note: "Note",
   observation: "Obs",
-  tag: "Tag",
   tiktok: "TT",
   video: "Vid",
   youtube: "YT",

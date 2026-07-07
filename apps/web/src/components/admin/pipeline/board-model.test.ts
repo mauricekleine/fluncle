@@ -22,6 +22,7 @@ function makeRow(overrides: Partial<BoardRow>): BoardRow {
     durationMs: 300000,
     enrichmentStatus: "done",
     hasContextNote: true,
+    hasEmbedding: false,
     lastfmLoved: false,
     lastfmRan: false,
     mixtapes: [],
@@ -72,6 +73,53 @@ describe("boardSteps — Discogs cell", () => {
 
     expect(step.state).toBe("open");
     expect(step.statusLabel).toBe("Pending");
+  });
+});
+
+// The Embeddings cell is a read-only presence tracker (like Last.fm/Discogs): its
+// FILL is driven by `state` — `done` (filled gold check) once the finding carries a
+// MuQ audio embedding (`embedding_json IS NOT NULL`, surfaced as `hasEmbedding`),
+// `open` (hollow) while it's still in the embed cron's queue. No operator action — the
+// on-box `fluncle-embed` cron advances it. This is the sonic fingerprint that
+// superseded the retired manual vibe-map Tag cell (docs/audio-embedding-rfc.md).
+function embeddingStep(row: BoardRow) {
+  const step = boardSteps(row).find((s) => s.key === "embedding");
+
+  if (!step) {
+    throw new Error("embedding step missing");
+  }
+
+  return step;
+}
+
+describe("boardSteps — Embeddings cell", () => {
+  it("reads done (filled) once the finding carries a MuQ embedding", () => {
+    const step = embeddingStep(makeRow({ hasEmbedding: true }));
+
+    expect(step.state).toBe("done");
+    expect(step.statusLabel).toBe("Embedded");
+    // A presence mark, not a click target — the embed cron advances it.
+    expect(step.actionable).toBe(false);
+  });
+
+  it("reads open (hollow) while the finding is still in the embed queue", () => {
+    const step = embeddingStep(makeRow({ hasEmbedding: false }));
+
+    expect(step.state).toBe("open");
+    expect(step.statusLabel).toBe("Pending");
+    expect(step.actionable).toBe(false);
+  });
+
+  it("sits in the Agents group, right after Enrich and before Context", () => {
+    const keys = boardSteps(makeRow({})).map((s) => s.key);
+    const enrichAt = keys.indexOf("enrich");
+    const embeddingAt = keys.indexOf("embedding");
+    const contextAt = keys.indexOf("context");
+
+    expect(embeddingAt).toBe(enrichAt + 1);
+    expect(contextAt).toBe(embeddingAt + 1);
+    // The retired Tag cell is gone entirely.
+    expect(keys).not.toContain("tag");
   });
 });
 

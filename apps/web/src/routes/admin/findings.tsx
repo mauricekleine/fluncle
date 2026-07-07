@@ -28,13 +28,11 @@ import { ContextDialog, ObservationDialog } from "@/components/admin/observation
 import { PLATFORMS } from "@/components/admin/platform-cell";
 import { PushDialog } from "@/components/admin/push-dialog";
 import { SubmissionsTray } from "@/components/admin/submissions-tray";
-import { TagDialog } from "@/components/admin/tag-dialog";
 import { type BoardPage, type BoardRow, usePublish } from "@/components/admin/use-publish";
 import { StoriesPlayer } from "@/components/stories/stories-player";
 import { Badge } from "@fluncle/ui/components/badge";
 import { Button } from "@fluncle/ui/components/button";
 import { Dialog, DialogContent } from "@fluncle/ui/components/dialog";
-import { GALAXIES, galaxyForVibe } from "@/lib/galaxies";
 import { isAdminRequest } from "@/lib/server/admin-auth";
 import { listBackfillRanForTracks, listLastfmLovedForTracks } from "@/lib/server/backfill";
 import { readCaptions } from "@/lib/server/captions";
@@ -53,7 +51,7 @@ import { listSocialPostsForTracks } from "@/lib/server/social";
 import { getSpotifyAuthStatus, type SpotifyAuthStatus } from "@/lib/server/spotify";
 import { listPendingSubmissions, type Submission } from "@/lib/server/submissions";
 import { type BlockedOn, trackStage } from "@/lib/server/track-stage";
-import { decodeTrackCursor, listTracks, listVibePoints, type VibePoint } from "@/lib/server/tracks";
+import { decodeTrackCursor, listEmbeddingPresenceForTracks, listTracks } from "@/lib/server/tracks";
 import { cn } from "@/lib/utils";
 
 // The findings board — the per-finding pipeline station at `/admin/findings`
@@ -65,20 +63,20 @@ import { cn } from "@/lib/utils";
 // Agents (an agent does it) and Yours (your hands) — because the pipeline isn't a
 // strict chain: steps run in parallel, fail, and retry. A cell reads by SHAPE
 // (round = agent, square = yours) and FILL (open → in-flight → done), and clicking
-// it opens that step's dialog (Tag → the vibe map; Enrich → re-queue for the box cron;
-// YouTube/TikTok → the publish loop). The board derives its steps from a pure model
+// it opens that step's dialog (Enrich → re-queue for the box cron; YouTube/TikTok →
+// the publish loop). The board derives its steps from a pure model
 // (pipeline/board-model) and wires every cell back to the dialogs through `actions`.
 //
 // Reads + writes go through the same gated admin API the CLI uses. This board is the
-// single admin surface — it folded in the old Posts and Tag pages.
+// single admin surface — it folded in the old Posts and Tag pages. (Manual vibe-map
+// tagging has since been retired — MuQ audio embeddings supersede it — so the board's
+// analysis lane now surfaces embedding presence where the Tag cell used to sit.)
 
 const PAGE_SIZE = 50;
 
 // The board's react-query cache key. Optimistic publish patches + window-focus
 // refetch land on this one entry.
 const BOARD_KEY = ["admin", "posts", "board"] as const;
-// The placed-findings cache for the Tag dialog's map backdrop.
-const POINTS_KEY = ["admin", "tag", "points"] as const;
 // The Spotify connection-status cache for the reconnect banner.
 const SPOTIFY_STATUS_KEY = ["admin", "spotify", "status"] as const;
 // The pending-submissions cache for the candidates tray (and its header badge).
@@ -96,20 +94,17 @@ const OBSERVATION_SCRIPT_KEY = ["admin", "observation-script"] as const;
 // narrows the rows to a focus ("show me everything still needing a video").
 type Worklist = "all" | "needs-tagging" | "needs-video" | "ready-youtube" | "ready-tiktok" | "done";
 
-// The worklists kept to the ones actually worked from: everything, the only manual
-// gate (tagging), and the terminal "Live" bucket. The render/publish-readiness
-// buckets were dropped as noise — each stage's own cell already shows its state, and
-// the per-stage worklists went unused. ?stage values stay back-compatible: an old
-// link to a dropped bucket validates back to "all" (WORKLIST_KEYS no longer has it).
+// The worklists kept to the ones actually worked from: everything and the terminal
+// "Live" bucket. The render/publish-readiness buckets were dropped as noise — each
+// stage's own cell already shows its state — and the "Needs tagging" bucket retired
+// with the vibe map (MuQ embeddings supersede manual tagging; there's no board action
+// left to advance it). ?stage values stay back-compatible: an old link to a dropped
+// bucket validates back to "all" (WORKLIST_KEYS no longer has it).
 type WorklistDef = { blockedOn?: BlockedOn; key: Worklist; label: string };
 // The "all" worklist is the canonical fallback when no key matches; naming it
 // keeps the fallback statically defined (not an unchecked index).
 const ALL_WORKLIST: WorklistDef = { key: "all", label: "All" };
-const WORKLISTS: WorklistDef[] = [
-  ALL_WORKLIST,
-  { blockedOn: "needs tagging", key: "needs-tagging", label: "Needs tagging" },
-  { blockedOn: null, key: "done", label: "Live" },
-];
+const WORKLISTS: WorklistDef[] = [ALL_WORKLIST, { blockedOn: null, key: "done", label: "Live" }];
 
 const WORKLIST_KEYS = new Set(WORKLISTS.map((worklist) => worklist.key));
 
@@ -166,23 +161,35 @@ const fetchBoard = createServerFn({ method: "GET" })
     // posts, the mixtape + plan memberships (which tapes each finding is already
     // on, and which plans it's pencilled into), which
     // findings carry an internal context_note (the Context column status — pulled
-    // admin-only since context_note never rides the public track contract), and the
-    // Discogs/Last.fm backfill RAN-stamps (`*_attempted_at`) + the Last.fm LOVED-stamp
-    // (`backfill_lastfm_done_at`). The board's Discogs/Last.fm cells are workflow
-    // trackers: `done` once the backfill ran (whether or not it found data), grey
-    // only while it's never run — the ran-stamp drives the cell, the data-stamp
-    // (release url / loved) only refines the label.
-    const [posts, mixtapes, plans, contextNotes, discogsRan, lastfmRan, lastfmLoved, noteRan] =
-      await Promise.all([
-        listSocialPostsForTracks(trackIds),
-        listMixtapeMembershipsForTracks(trackIds),
-        listPlanMembershipsForTracks(trackIds),
-        listContextNotePresenceForTracks(trackIds),
-        listBackfillRanForTracks(trackIds, "discogs"),
-        listBackfillRanForTracks(trackIds, "lastfm"),
-        listLastfmLovedForTracks(trackIds),
-        listBackfillRanForTracks(trackIds, "note"),
-      ]);
+    // admin-only since context_note never rides the public track contract), which
+    // carry a MuQ audio embedding (the Embeddings column status — `embedding_json`
+    // presence, admin-only for the same reason), and the Discogs/Last.fm backfill
+    // RAN-stamps (`*_attempted_at`) + the Last.fm LOVED-stamp (`backfill_lastfm_done_at`).
+    // The board's Discogs/Last.fm cells are workflow trackers: `done` once the backfill
+    // ran (whether or not it found data), grey only while it's never run — the
+    // ran-stamp drives the cell, the data-stamp (release url / loved) only refines the
+    // label.
+    const [
+      posts,
+      mixtapes,
+      plans,
+      contextNotes,
+      embeddings,
+      discogsRan,
+      lastfmRan,
+      lastfmLoved,
+      noteRan,
+    ] = await Promise.all([
+      listSocialPostsForTracks(trackIds),
+      listMixtapeMembershipsForTracks(trackIds),
+      listPlanMembershipsForTracks(trackIds),
+      listContextNotePresenceForTracks(trackIds),
+      listEmbeddingPresenceForTracks(trackIds),
+      listBackfillRanForTracks(trackIds, "discogs"),
+      listBackfillRanForTracks(trackIds, "lastfm"),
+      listLastfmLovedForTracks(trackIds),
+      listBackfillRanForTracks(trackIds, "note"),
+    ]);
 
     return {
       nextCursor: page.nextCursor,
@@ -191,6 +198,7 @@ const fetchBoard = createServerFn({ method: "GET" })
         ...track,
         discogsRan: discogsRan.has(track.trackId),
         hasContextNote: contextNotes.has(track.trackId),
+        hasEmbedding: embeddings.has(track.trackId),
         lastfmLoved: lastfmLoved.has(track.trackId),
         lastfmRan: lastfmRan.has(track.trackId),
         mixtapes: mixtapes[track.trackId] ?? [],
@@ -288,18 +296,6 @@ const fetchSpotifyStatus = createServerFn({ method: "GET" }).handler(
   },
 );
 
-// The placed-findings backdrop for the Tag dialog's map — lazily fetched the first
-// time a Tag cell is opened (no preload), then cached + focus-refetched.
-const fetchVibePoints = createServerFn({ method: "GET" }).handler(
-  async (): Promise<VibePoint[]> => {
-    if (!(await isAdminRequest())) {
-      throw redirect({ to: "/admin/login" });
-    }
-
-    return listVibePoints();
-  },
-);
-
 // The candidates tray's pending queue — a small scoped read (pending rows only),
 // fetched on mount for the header badge's honest count and focus-refetched so a
 // fresh crew submission surfaces when the operator tabs back. The writes
@@ -373,13 +369,10 @@ function AdminBoardPage() {
   // Dialogs are keyed by identity (not a row snapshot) so they always render the
   // LIVE row — right after a push the cache patches, the row updates, and the open
   // dialog shows the next step without reopening.
-  const [tagId, setTagId] = useState<string | undefined>();
   const [enrichId, setEnrichId] = useState<string | undefined>();
   const [push, setPush] = useState<{ platformKey: string; trackId: string } | undefined>();
   const [preview, setPreview] = useState<BoardRow | undefined>();
   const [copiedId, setCopiedId] = useState<string | undefined>();
-  const [tagSaving, setTagSaving] = useState(false);
-  const [tagError, setTagError] = useState<string | undefined>();
   const [enrichBusy, setEnrichBusy] = useState(false);
   const [enrichError, setEnrichError] = useState<string | undefined>();
   const [noteId, setNoteId] = useState<string | undefined>();
@@ -420,7 +413,6 @@ function AdminBoardPage() {
     (trackId?: string) => (trackId ? rows.find((row) => row.trackId === trackId) : undefined),
     [rows],
   );
-  const tagRow = rowFor(tagId);
   const enrichRow = rowFor(enrichId);
   const noteRow = rowFor(noteId);
   const contextRow = rowFor(contextId);
@@ -629,14 +621,6 @@ function AdminBoardPage() {
     }
   }, [setError]);
 
-  // The Tag dialog's map backdrop — fetched on first open, then cached.
-  const { data: points = [] } = useQuery({
-    enabled: tagId !== undefined,
-    queryFn: fetchVibePoints,
-    queryKey: POINTS_KEY,
-    refetchOnWindowFocus: true,
-  });
-
   // The Context dialog's note text — lazily read the first time a Context cell is
   // opened, keyed per finding so each opens its own note (cached, never refetched).
   const { data: contextNoteData, isFetching: contextFetching } = useQuery({
@@ -664,50 +648,6 @@ function AdminBoardPage() {
       return index >= 0 && index + 1 < visible.length ? visible[index + 1]?.row.trackId : undefined;
     },
     [visible],
-  );
-
-  const saveTag = useCallback(
-    async (x: number, y: number, advance?: boolean) => {
-      if (!tagRow) {
-        return;
-      }
-
-      setTagSaving(true);
-      setTagError(undefined);
-
-      try {
-        const response = await fetch(`/api/admin/tracks/${tagRow.trackId}`, {
-          body: JSON.stringify({ vibeX: x, vibeY: y }),
-          credentials: "same-origin",
-          headers: { "Content-Type": "application/json" },
-          method: "PATCH",
-        });
-
-        if (!response.ok) {
-          throw new Error(`Save failed (${response.status})`);
-        }
-
-        const key = galaxyForVibe(x, y);
-        patchRow(tagRow.trackId, { galaxy: { key, name: GALAXIES[key].name }, vibeX: x, vibeY: y });
-        // Keep the tag-map cache in step so the Tag dialog's backdrop stays current.
-        queryClient.setQueryData<VibePoint[]>(POINTS_KEY, (current = []) => [
-          ...current.filter((point) => point.trackId !== tagRow.trackId),
-          {
-            artists: tagRow.artists,
-            title: tagRow.title,
-            trackId: tagRow.trackId,
-            vibeX: x,
-            vibeY: y,
-          },
-        ]);
-        setTagId(advance ? nextVisibleTrackId(tagRow.trackId) : undefined);
-      } catch (caught) {
-        setTagError(caught instanceof Error ? caught.message : String(caught));
-      } finally {
-        setTagSaving(false);
-      }
-    },
-    [nextVisibleTrackId, patchRow, queryClient, tagRow],
   );
 
   // Save the finding's note (the editorial "why" that feeds its log-page prose +
@@ -742,34 +682,6 @@ function AdminBoardPage() {
       }
     },
     [nextVisibleTrackId, noteRow, patchRow],
-  );
-
-  // Re-place an already-placed neighbour from inside the Tag dialog (edit-in-place).
-  // Same write as saveTag, but for any trackId, and it throws on failure so the
-  // dialog can surface the error + keep the marker live. Optimistically refreshes
-  // both the map backdrop (POINTS_KEY) and the board row if it's loaded.
-  const savePoint = useCallback(
-    async (trackId: string, x: number, y: number) => {
-      const response = await fetch(`/api/admin/tracks/${trackId}`, {
-        body: JSON.stringify({ vibeX: x, vibeY: y }),
-        credentials: "same-origin",
-        headers: { "Content-Type": "application/json" },
-        method: "PATCH",
-      });
-
-      if (!response.ok) {
-        throw new Error(`Save failed (${response.status})`);
-      }
-
-      const key = galaxyForVibe(x, y);
-      patchRow(trackId, { galaxy: { key, name: GALAXIES[key].name }, vibeX: x, vibeY: y });
-      queryClient.setQueryData<VibePoint[]>(POINTS_KEY, (current = []) =>
-        current.map((point) =>
-          point.trackId === trackId ? { ...point, vibeX: x, vibeY: y } : point,
-        ),
-      );
-    },
-    [patchRow, queryClient],
   );
 
   const runEnrichment = useCallback(async () => {
@@ -869,7 +781,6 @@ function AdminBoardPage() {
       onObservation: (row) => setObservationId(row.trackId),
       onPreview: (row) => setPreview(row),
       onPush: (row, platformKey) => setPush({ platformKey, trackId: row.trackId }),
-      onTag: (row) => setTagId(row.trackId),
     }),
     [],
   );
@@ -983,18 +894,6 @@ function AdminBoardPage() {
         onTrigger={runEnrichment}
         row={enrichRow ?? null}
         triggering={enrichBusy}
-      />
-
-      <TagDialog
-        error={tagError}
-        hasNext={tagRow ? nextVisibleTrackId(tagRow.trackId) !== undefined : false}
-        onOpenChange={(open) => !open && setTagId(undefined)}
-        onSave={(x, y) => void saveTag(x, y)}
-        onSaveAndNext={(x, y) => void saveTag(x, y, true)}
-        onSavePoint={savePoint}
-        points={points}
-        row={tagRow ?? null}
-        saving={tagSaving}
       />
 
       <NoteDialog

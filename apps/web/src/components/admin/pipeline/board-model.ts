@@ -1,8 +1,8 @@
 import {
   CassetteTapeIcon,
-  CrosshairIcon,
   FileTextIcon,
   FilmSlateIcon,
+  FingerprintIcon,
   HeartIcon,
   type IconWeight,
   MicrophoneIcon,
@@ -13,7 +13,6 @@ import {
 import { isStaleTikTokDraft, tikTokDraftAgeHours } from "@fluncle/contracts/util";
 import { type ComponentType } from "react";
 import { TiktokIcon, YoutubeIcon } from "@/components/platform-icons";
-import { GALAXIES, galaxyForVibe } from "@/lib/galaxies";
 import { type BlockedOn, type Stage } from "@/lib/server/track-stage";
 import { type BoardRow } from "@/components/admin/use-publish";
 
@@ -24,9 +23,10 @@ export type StepIcon = ComponentType<{ className?: string; weight?: IconWeight }
 // The shared step model for the board's variant explorer.
 //
 // The board's real problem: a finding moves through ~a dozen steps that are NOT a
-// strict chain — some run on agents (enrich, context, observation, video, discogs),
-// some are the operator's own hands (tag, note, the two pushes, a mixtape, a
-// Last.fm love), they fire in parallel, they fail and retry, and the order drifts.
+// strict chain — most run on agents (enrich, embedding, context, note, observation,
+// video, discogs, a Last.fm love), the rest are the operator's own hands (the two
+// pushes, a mixtape), they fire in parallel, they fail and retry, and the order
+// drifts.
 // Every variant answers the same question — "roughly where is this finding?" — so
 // they all read from ONE derivation here. Add a step once, in STEP_DEFS, and every
 // variant renders it.
@@ -41,8 +41,8 @@ export type StepIcon = ComponentType<{ className?: string; weight?: IconWeight }
 
 export type StepKey =
   | "enrich"
+  | "embedding"
   | "discogs"
-  | "tag"
   | "video"
   | "context"
   | "observation"
@@ -72,7 +72,6 @@ export type StepState = "open" | "running" | "partial" | "done" | "stale" | "pla
 /** The callbacks the board hands every variant — one per openable step dialog. */
 export type BoardActions = {
   onEnrich: (row: BoardRow) => void;
-  onTag: (row: BoardRow) => void;
   onContext: (row: BoardRow) => void;
   onObservation: (row: BoardRow) => void;
   onNote: (row: BoardRow) => void;
@@ -116,20 +115,22 @@ export type BoardProps = {
 
 // The canonical order + identity of every step. Agents first, then your hands.
 // Within agents the order reads as the pipeline settles: the catalogue links
-// (Last.fm, Discogs), then the per-finding chain Enrich → Context → Note →
-// Observation → Video. NOTE sits among the agents in anticipation of auto-drafted
-// notes (the _Auto-drafted finding notes_ slice); until that lands it is still
-// operator-written, but it lives among the agents it will join. Within your hands:
-// Tag, then the social pushes, then the mixtape.
+// (Last.fm, Discogs), then the per-finding chain Enrich → Embeddings → Context →
+// Note → Observation → Video. Embeddings sits right after Enrich — both are on-box
+// analysis crons over the same preview audio (Enrich derives BPM/key/features; the
+// MuQ embed captures the sonic fingerprint that now supersedes the manual vibe map).
+// NOTE sits among the agents in anticipation of auto-drafted notes (the _Auto-drafted
+// finding notes_ slice); until that lands it is still operator-written, but it lives
+// among the agents it will join. Within your hands: the social pushes, then the mixtape.
 const STEP_DEFS: { key: StepKey; kind: StepKind; label: string; Icon: StepIcon }[] = [
   { Icon: HeartIcon, key: "lastfm", kind: "auto", label: "Last.fm" },
   { Icon: VinylRecordIcon, key: "discogs", kind: "auto", label: "Discogs" },
   { Icon: WaveformIcon, key: "enrich", kind: "auto", label: "Enrich" },
+  { Icon: FingerprintIcon, key: "embedding", kind: "auto", label: "Embeddings" },
   { Icon: FileTextIcon, key: "context", kind: "auto", label: "Context" },
   { Icon: NotePencilIcon, key: "note", kind: "auto", label: "Note" },
   { Icon: MicrophoneIcon, key: "observation", kind: "auto", label: "Observation" },
   { Icon: FilmSlateIcon, key: "video", kind: "auto", label: "Video" },
-  { Icon: CrosshairIcon, key: "tag", kind: "human", label: "Tag" },
   { Icon: YoutubeIcon, key: "youtube", kind: "human", label: "YouTube" },
   { Icon: TiktokIcon, key: "tiktok", kind: "human", label: "TikTok" },
   { Icon: CassetteTapeIcon, key: "mixtape", kind: "human", label: "Mixtape" },
@@ -199,12 +200,6 @@ function publishStep(
  * exactly like the live board's cells, so the variants never drift from the real state.
  */
 export function boardSteps(row: BoardRow, now: number = Date.now()): BoardStep[] {
-  const tagged = row.vibeX !== undefined && row.vibeY !== undefined;
-  const galaxy =
-    row.galaxy?.key ??
-    (row.vibeX !== undefined && row.vibeY !== undefined
-      ? galaxyForVibe(row.vibeX, row.vibeY)
-      : undefined);
   const note = row.note?.trim();
   const rendered = Boolean(row.observationAudioUrl);
   // Every mixtape membership is a minted checkpoint now (drafts retired); a plan
@@ -248,6 +243,20 @@ export function boardSteps(row: BoardRow, now: number = Date.now()): BoardStep[]
         : row.discogsRan
           ? "Checked — no release"
           : "Pending",
+    },
+    embedding: {
+      // A read-only presence tracker, like Last.fm/Discogs — no operator action. The
+      // on-box `fluncle-embed` cron drains the `embedding_json IS NULL` queue and
+      // stamps a MuQ vector; `done` (filled) once the finding carries one, grey while
+      // it's still in the queue. This is the sonic fingerprint that supersedes the
+      // manual vibe map — see docs/audio-embedding-rfc.md.
+      actionable: false,
+      gated: false,
+      hint: row.hasEmbedding
+        ? "MuQ audio embedding captured"
+        : "No embedding yet — the embed cron drains the queue",
+      state: row.hasEmbedding ? "done" : "open",
+      statusLabel: row.hasEmbedding ? "Embedded" : "Pending",
     },
     enrich: {
       actionable: true,
@@ -319,13 +328,6 @@ export function boardSteps(row: BoardRow, now: number = Date.now()): BoardStep[]
       state: rendered ? "done" : row.hasContextNote ? "partial" : "open",
       statusLabel: rendered ? "Heard" : row.hasContextNote ? "Ready to voice" : "No clip",
     },
-    tag: {
-      actionable: true,
-      gated: false,
-      hint: "Place on the vibe map",
-      state: tagged ? "done" : "open",
-      statusLabel: tagged ? (galaxy ? GALAXIES[galaxy].name : "Tagged") : "Tag",
-    },
     tiktok: publishStep(row, "tiktok", now),
     video: {
       // Agent-rendered; clicking previews when there's a clip, otherwise it waits.
@@ -352,8 +354,6 @@ export function runStep(step: BoardStep, row: BoardRow, actions: BoardActions): 
   switch (step.key) {
     case "enrich":
       return actions.onEnrich(row);
-    case "tag":
-      return actions.onTag(row);
     case "context":
       return actions.onContext(row);
     case "observation":
@@ -376,7 +376,10 @@ export function runStep(step: BoardStep, row: BoardRow, actions: BoardActions): 
         window.open(row.discogsReleaseUrl, "_blank", "noopener,noreferrer");
       }
       return;
+    case "embedding":
     case "lastfm":
+      // Read-only presence trackers — the agent (the embed / Last.fm crons) advances
+      // them; the cell is a status mark, not a click target.
       return;
   }
 }
