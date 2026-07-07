@@ -4,7 +4,7 @@ import {
   DownloadSimpleIcon,
   FolderOpenIcon,
 } from "@phosphor-icons/react";
-import { useState } from "react";
+import { memo, useCallback, useMemo, useState } from "react";
 
 import {
   automatedSocialsBreakdown,
@@ -12,6 +12,7 @@ import {
   type BoardProps,
   type BoardStep,
   runStep,
+  type SocialBreakdownItem,
   type StepKey,
 } from "@/components/admin/pipeline/board-model";
 import { FindingLead } from "@/components/admin/pipeline/finding-lead";
@@ -231,12 +232,18 @@ function Cell({ actions, row, step }: { actions: BoardActions; row: BoardRow; st
 // hover/focus it opens a Popover (NOT a HoverCard — we have none) listing each hands-off
 // action — the Last.fm love + each artist Spotify/YouTube follow — with a done check.
 function SocialsCell({ row, step }: { row: BoardRow; step: BoardStep }) {
-  const items = automatedSocialsBreakdown(row);
+  // The breakdown derives from the row, not from hover — memoize it so toggling `open`
+  // (four times per hover: enter/leave, focus/blur) doesn't rebuild the array or hand a
+  // fresh identity to the popover list on every toggle.
+  const items = useMemo(() => automatedSocialsBreakdown(row), [row]);
   const title = `${step.label} — ${step.statusLabel}`;
   // This base-ui Popover opens on click; drive it open on hover/focus too so the cell
   // reads like a hover breakdown (there is no HoverCard component). Read-only content, so
-  // closing on mouse-leave is fine — nothing in the popup needs to be reached.
+  // closing on mouse-leave is fine — nothing in the popup needs to be reached. Stable
+  // handlers so the trigger's props don't churn on each hover-driven re-render.
   const [open, setOpen] = useState(false);
+  const openPopover = useCallback(() => setOpen(true), []);
+  const closePopover = useCallback(() => setOpen(false), []);
 
   return (
     <div className={`flex shrink-0 items-center justify-center py-3.5 ${COL_CLASS}`}>
@@ -247,10 +254,10 @@ function SocialsCell({ row, step }: { row: BoardRow; step: BoardStep }) {
             "group relative flex size-8 shrink-0 cursor-default items-center justify-center rounded-full border transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
             STATE_CLASS[step.state],
           )}
-          onBlur={() => setOpen(false)}
-          onFocus={() => setOpen(true)}
-          onMouseEnter={() => setOpen(true)}
-          onMouseLeave={() => setOpen(false)}
+          onBlur={closePopover}
+          onFocus={openPopover}
+          onMouseEnter={openPopover}
+          onMouseLeave={closePopover}
           title={title}
         >
           <step.Icon
@@ -269,30 +276,41 @@ function SocialsCell({ row, step }: { row: BoardRow; step: BoardStep }) {
         </PopoverTrigger>
         <PopoverContent align="center" className="w-60 gap-2" side="top">
           <p className="text-xs font-bold tracking-wide text-muted-foreground">Automated socials</p>
-          <ul className="m-0 flex list-none flex-col gap-1.5 p-0">
-            {items.map((item) => (
-              <li className="flex items-center gap-2 text-xs" key={item.key}>
-                <item.Icon
-                  aria-hidden="true"
-                  className={cn(
-                    "size-3.5",
-                    item.done ? "text-foreground" : "text-muted-foreground",
-                  )}
-                  weight="fill"
-                />
-                <span className="flex-1 text-foreground">{item.label}</span>
-                {item.done ? (
-                  <CheckIcon aria-hidden="true" className="size-3.5 text-primary" weight="bold" />
-                ) : (
-                  <span aria-hidden="true" className="text-muted-foreground/50">
-                    ·
-                  </span>
-                )}
-              </li>
-            ))}
-          </ul>
+          <SocialsBreakdown items={items} />
         </PopoverContent>
       </Popover>
     </div>
   );
 }
+
+// The per-platform breakdown list. Split out and memoized so that toggling the cell's
+// `open` state on hover re-renders only the Popover shell — not this list. With `items`
+// memoized upstream (stable identity while the row is unchanged), the memo bails and the
+// list subtree is skipped entirely on every open/close.
+const SocialsBreakdown = memo(function SocialsBreakdown({
+  items,
+}: {
+  items: SocialBreakdownItem[];
+}) {
+  return (
+    <ul className="m-0 flex list-none flex-col gap-1.5 p-0">
+      {items.map((item) => (
+        <li className="flex items-center gap-2 text-xs" key={item.key}>
+          <item.Icon
+            aria-hidden="true"
+            className={cn("size-3.5", item.done ? "text-foreground" : "text-muted-foreground")}
+            weight="fill"
+          />
+          <span className="flex-1 text-foreground">{item.label}</span>
+          {item.done ? (
+            <CheckIcon aria-hidden="true" className="size-3.5 text-primary" weight="bold" />
+          ) : (
+            <span aria-hidden="true" className="text-muted-foreground/50">
+              ·
+            </span>
+          )}
+        </li>
+      ))}
+    </ul>
+  );
+});
