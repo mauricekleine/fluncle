@@ -1,6 +1,6 @@
 # Full-song audio for MuQ embeddings
 
-Status: Decision pending (operator, morning of 2026-07-07). The embed cron is PAUSED until this resolves.
+Status: SUPERSEDED (2026-07-07) → see [docs/full-audio-rfc.md](./full-audio-rfc.md), the build-ready RFC that absorbs this decision doc. The operator ratified capturing the full song once at add-time (hosted-actor lane) feeding enrichment + embeddings + the live matcher; the RFC carries the reviewed architecture (capture is a non-blocking side-channel; the heavy crons are host timers) and the remaining operator decisions. The embed cron stays PAUSED until the RFC's Unit 3 lands. This file is kept for the original framing/reasoning only; the build deletes it.
 
 ## The decision (ratified)
 

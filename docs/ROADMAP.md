@@ -22,6 +22,12 @@ The full path a finding travels: one human act (Maurice finds the banger and add
 
 ## Next — surface what we make, and tidy reliability
 
+### Live visuals — free mixing without a preloaded tracklist (Tier B, gated on full-audio)
+
+Today the live matcher is **closed-set**: at show start it fingerprints each _planned_ track's 30s preview and only ever asks "has the next planned track started?" (`packages/live/src/bridge/matcher.ts` — a pointer-relative search against current/pending/pending+1; RFC §4 already names whole-catalogue matching as the unbuilt v2). That is why a fixed Rekordbox tracklist must be preloaded before the first beat. The prize is to **drop the tracklist and mix freely** — open-set identification of whatever is actually playing, matched against the whole archive, so the visuals follow the set by ear instead of by plan.
+
+This is **gated on full-audio landing first** ([docs/full-audio-rfc.md](./full-audio-rfc.md)): Tier A there swaps the live reference from the 30s preview to the full song, which both fixes the "reference is only a 30s slice, so a mix-in outside it can never match" miss and is the prerequisite for any open-set path. Open-set itself is a real project, not a byproduct — it must survive DJ **pitch/tempo/EQ** (log-mel cosine is invariant to none of them), **mix overlap** (two tracks at once is an ambiguous blend), and **archive-scale search** (an index, not brute cosine per window). The promising architecture reuses the MuQ embeddings: embed the live window, nearest-neighbour it to a top-K shortlist, then confirm the exact track with the existing `bestOffsetScore`. Gets its own scoping/RFC pass once full-audio is in.
+
 ### Hermes automation — follow-ups
 
 The per-finding pipeline runs entirely as `--no-agent` crons on the Hermes box (enrich, context-note, note, observation, backfill, render, social-capture, studio-clip, newsletter, plus the host healthcheck timer); the source of truth is `docs/agents/hermes/cron/` + the sweep sources in `docs/agents/hermes/scripts/`, managed on the devbox via the **fluncle-hermes-operator** skill. Operating doc + roles: [docs/agents/hermes-agent.md](./agents/hermes-agent.md). Ongoing operation is a verify pass per job, not build work. One follow-up stays separate from the cron wiring:
