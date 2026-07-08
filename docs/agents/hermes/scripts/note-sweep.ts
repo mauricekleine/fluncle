@@ -50,6 +50,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { type BoxCostEvent, emitCost, parseAuthoringSpend } from "./cost-emit";
 
 // ---------------------------------------------------------------------------
 // Config — a SMALL bounded batch: each note burns claude subscription quota, so
@@ -104,14 +105,34 @@ type Finding = {
 type TrackGetResponse = { mixtape?: unknown; track?: Finding };
 
 // The `claude -p --output-format json` envelope. We take `.result` as the note;
-// `is_error`/`subtype` distinguish a clean run from an error.
+// `is_error`/`subtype` distinguish a clean run from an error. `usage` /
+// `total_cost_usd` / `modelUsage` carry the authoring spend — read after the parse
+// and emitted as one `subsidized` anthropic row (COST-01 §5), zero new claude flags.
+type ClaudeUsage = {
+  input_tokens?: number;
+  output_tokens?: number;
+};
+
 type ClaudeEnvelope = {
   is_error?: boolean;
+  modelUsage?: Record<string, unknown>;
   result?: string;
   subtype?: string;
+  total_cost_usd?: number;
+  usage?: ClaudeUsage;
 };
 
 type Outcome = "noted" | "alreadyNoted" | "gateSkipped" | "skipped";
+
+// The authored note plus its MEASURED authoring spend (the COST-01 §5 `note` row):
+// the total_cost_usd the CLI computed, the model, and the token count. `usd` is null
+// only if the envelope carried no `total_cost_usd` (then the row is unpriced, never $0).
+type AuthoredNote = {
+  model: string;
+  note: string;
+  tokens: number;
+  usd: number | null;
+};
 
 // A narrow sentinel the loop throws to abort the batch on a claude auth failure.
 class ClaudeAuthError extends Error {}
@@ -259,7 +280,7 @@ function buildAuthoringPrompt(finding: Finding, contextNote: string): string {
 // other failure (leave the finding queued); returns the note string on success.
 // ---------------------------------------------------------------------------
 
-function authorNote(finding: Finding, contextNote: string): string | null {
+function authorNote(finding: Finding, contextNote: string): AuthoredNote | null {
   const prompt = buildAuthoringPrompt(finding, contextNote);
   const args = [
     "-p",
@@ -323,7 +344,10 @@ function authorNote(finding: Finding, contextNote: string): string | null {
     return null;
   }
 
-  return note;
+  // The measured authoring spend (shared parse — the CLI's own total_cost_usd is
+  // authoritative, the token count is the informational quantity, the model comes off
+  // modelUsage else the one we asked for).
+  return { note, ...parseAuthoringSpend(envelope, NOTE_CLAUDE_MODEL) };
 }
 
 // ---------------------------------------------------------------------------
@@ -425,13 +449,17 @@ function readContextNote(id: string): string {
 // Per-finding: gather → author → deliver.
 // ---------------------------------------------------------------------------
 
-function noteOne(queued: QueueFinding): Outcome {
+// The outcome plus the cost row to emit — non-null ONLY when a note was actually
+// authored AND delivered (so a no-op / gate-skip / failure never records spend).
+type NoteResult = { cost: BoxCostEvent | null; outcome: Outcome };
+
+function noteOne(queued: QueueFinding): NoteResult {
   const id = queued.trackId ?? queued.logId;
 
   if (!id) {
     log("queue item without a trackId/logId — skipping");
 
-    return "skipped";
+    return { cost: null, outcome: "skipped" };
   }
 
   // (a) Gather the finding's identity metadata. `track get` is the SINGULAR public
@@ -443,7 +471,7 @@ function noteOne(queued: QueueFinding): Outcome {
   if (!finding || !finding.title || !finding.artists?.length) {
     log(`${id}: missing finding metadata — skipping`);
 
-    return "skipped";
+    return { cost: null, outcome: "skipped" };
   }
 
   // The fill-empty-only guard lives server-side (the Worker is authoritative), but a
@@ -452,7 +480,7 @@ function noteOne(queued: QueueFinding): Outcome {
   if (finding.note?.trim()) {
     log(`${id}: a note is already on file — skipping the authoring spend`);
 
-    return "alreadyNoted";
+    return { cost: null, outcome: "alreadyNoted" };
   }
 
   // (b) Read the stored context note — the PRIMARY authoring fuel (the firecrawl
@@ -461,14 +489,37 @@ function noteOne(queued: QueueFinding): Outcome {
 
   // (c) Author the note (the one agentic step). Throws ClaudeAuthError to abort the
   // whole batch; returns null to leave THIS finding queued.
-  const note = authorNote(finding, contextNote);
+  const authored = authorNote(finding, contextNote);
 
-  if (!note) {
-    return "skipped";
+  if (!authored) {
+    return { cost: null, outcome: "skipped" };
   }
 
   // (d) Deliver: the CLI posts it; the Worker re-scans + fills-empty-only + stores.
-  return deliverNote(id, note);
+  const outcome = deliverNote(id, authored.note);
+
+  // (e) Record the authoring spend ONLY when the note actually landed (`noted`). A
+  // gate-skip / operator-note no-op / failure spent the tokens too, but attributing a
+  // "note" cost to a finding that has no note would misread — the ledger tracks
+  // DELIVERED work. The token spend on a rejected author is accepted lossiness.
+  const cost: BoxCostEvent | null =
+    outcome === "noted"
+      ? {
+          costBasis: "subsidized",
+          logId: finding.logId ?? null,
+          model: authored.model,
+          occurredAt: new Date().toISOString(),
+          quantity: authored.tokens,
+          source: "measured",
+          step: "note",
+          trackId: finding.trackId ?? null,
+          unitType: "tokens",
+          usd: authored.usd,
+          vendor: "anthropic",
+        }
+      : null;
+
+  return { cost, outcome };
 }
 
 // ---------------------------------------------------------------------------
@@ -514,7 +565,7 @@ function pingClaudeAuthFailure(detail: string): void {
 // Main — drain a bounded batch off the note queue.
 // ---------------------------------------------------------------------------
 
-function main(): void {
+async function main(): Promise<void> {
   // `note --queue --json` returns `{ ok: true, tracks: [...] }`, not a bare array.
   const response = fluncleJson<{ tracks?: QueueFinding[] }>([
     "admin",
@@ -540,9 +591,17 @@ function main(): void {
     return; // fast no-op
   }
 
+  // The tick's authoring-spend rows, POSTed once at the end (best-effort, after the
+  // notes are already durable — a dropped POST only understates the ledger).
+  const costs: BoxCostEvent[] = [];
+
   for (const queued of queue.slice(0, BATCH_CAP)) {
     try {
-      const outcome = noteOne(queued);
+      const { cost, outcome } = noteOne(queued);
+
+      if (cost) {
+        costs.push(cost);
+      }
 
       if (outcome === "noted") {
         summary.noted += 1;
@@ -585,6 +644,15 @@ function main(): void {
   summary.queueRemaining = Math.max(0, queue.length - summary.noted - summary.alreadyNoted);
 
   console.log(JSON.stringify({ ok: true, ...summary }));
+
+  // Record the tick's authoring spend, best-effort, AFTER the summary is printed (the
+  // cron parses the summary as its last stdout line; emitCost only logs to stderr).
+  // Cannot throw; a hard 2.5s cap keeps it well inside the runner budget.
+  await emitCost(costs);
 }
 
-main();
+main().catch((error) => {
+  log(`fatal: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`);
+  console.log(JSON.stringify({ ok: false, reason: "sweep_error" }));
+  process.exit(1);
+});

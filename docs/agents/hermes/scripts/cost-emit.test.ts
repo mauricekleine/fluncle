@@ -11,7 +11,7 @@
 // every failure path, so a ledger hiccup can't break the sweep's real work.
 import { describe, expect, test } from "bun:test";
 
-import { type BoxCostEvent, costEventId, emitCost } from "./cost-emit";
+import { type BoxCostEvent, costEventId, emitCost, parseAuthoringSpend } from "./cost-emit";
 
 const anthropicRow: BoxCostEvent = {
   costBasis: "subsidized",
@@ -69,6 +69,33 @@ describe("costEventId (mirrors the server scheme)", () => {
     expect(costEventId({ ...base, trackId: null })).toBe(
       "note:global:anthropic:tokens:2026-07-08T12:00:00.000Z",
     );
+  });
+});
+
+describe("parseAuthoringSpend (claude -p envelope → spend)", () => {
+  test("reads tokens, the modelUsage key, and total_cost_usd", () => {
+    expect(
+      parseAuthoringSpend(
+        {
+          modelUsage: { "claude-sonnet-4-6": {} },
+          total_cost_usd: 0.042,
+          usage: { input_tokens: 1200, output_tokens: 300 },
+        },
+        "fallback-model",
+      ),
+    ).toEqual({ model: "claude-sonnet-4-6", tokens: 1500, usd: 0.042 });
+  });
+
+  test("falls back to the asked-for model and null usd when the envelope omits them", () => {
+    expect(parseAuthoringSpend({ usage: { input_tokens: 10 } }, "claude-sonnet-4-6")).toEqual({
+      model: "claude-sonnet-4-6",
+      tokens: 10,
+      usd: null,
+    });
+  });
+
+  test("an empty envelope is zero tokens, null usd (unpriced, never $0)", () => {
+    expect(parseAuthoringSpend({}, "m")).toEqual({ model: "m", tokens: 0, usd: null });
   });
 });
 
