@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { subscribeToNewsletter } from "./newsletter";
 
-// The subscribe path is repointed Loops → Resend: it validates + rate-limits, then
-// hands the email to `addContactToSegment`. Mock the Resend call + the auth/limiter
-// so the test asserts the swap (the email reaches Resend) and the validation gates.
+// The subscribe path validates + rate-limits, then hands the email to
+// `addContactToSegment`. Mock the Resend call + the auth/limiter so the test asserts
+// the email reaches Resend and the validation gates hold.
 
 const addContactToSegment = vi.hoisted(() => vi.fn(async () => undefined));
 

@@ -6,7 +6,7 @@
 //   - `create_edition` / `update_edition` — admin tier (`adminAuth`): drafting is
 //     AGENT-ALLOWED. The Friday agent authors + persists the draft.
 //   - `send_edition` — operator tier (`adminAuth` + `operatorGuard`): the send is
-//     the human gate (the old Loops dashboard tap). A valid agent token gets a 403.
+//     the human gate. A valid agent token gets a 403.
 //   - `delete_edition` — operator tier (same tier as send): a HARD delete that
 //     reaches a SENT edition too (the one case that needs pulling from the public
 //     archive). A valid agent token gets a 403.

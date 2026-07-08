@@ -13,14 +13,11 @@ const maxEmailLength = 254;
 // by design; `validateInput` narrows it.
 export type NewsletterInput = NewsletterBody;
 
-// Repointed Loops → Resend. The public
-// contract/endpoint shape is UNCHANGED — same `POST /newsletter`, same validation,
-// same rate limit, same bare `{ ok: true }` — only the list-of-record backend
-// swaps: the email is added to the Fluncle Resend SEGMENT instead of the Loops
-// contacts list. Resend is now the sole list-of-record (the clean mirror of the old
-// Loops-only design; no local subscribers table). The on-subscribe confirmation
-// transactional is dropped for now: single-opt-in stays (RFC §1 non-goals keep
-// today's posture), and every broadcast carries the managed RFC-8058 unsubscribe.
+// `POST /newsletter` — validate, rate-limit, then add the email to the Fluncle
+// Resend SEGMENT. Resend is the sole list-of-record (no local subscribers table);
+// the endpoint returns a bare `{ ok: true }`. No on-subscribe confirmation
+// transactional: single-opt-in stays (RFC §1 non-goals keep today's posture), and
+// every broadcast carries the managed RFC-8058 unsubscribe.
 export async function subscribeToNewsletter(
   body: NewsletterInput,
   request: Request,

@@ -474,7 +474,7 @@ export async function exportAccountData(user: PublicUser): Promise<{
       id: exportId,
       privacyNotes: [
         "Signed-in submissions are included here and kept as anonymized review history if the account is deleted.",
-        "Discord and Loops processor copies may follow their own retention windows.",
+        "Discord and Resend processor copies may follow their own retention windows.",
       ],
       progress,
       savedFindings: saved.savedFindings,

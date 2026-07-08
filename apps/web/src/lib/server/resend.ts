@@ -2,10 +2,10 @@
 // The Worker owns `RESEND_API_KEY`;
 // the agent box never holds it (the agent calls the admin send op; the Worker
 // creates + sends the broadcast). Raw `fetch` against the REST API, mirroring the
-// repo's other vendor clients (`./newsletter` Loops, `./postiz`) — no SDK, so the
-// workerd bundle stays small and the surface is exactly what we call.
+// repo's other vendor clients (`./postiz`) — no SDK, so the workerd bundle stays
+// small and the surface is exactly what we call.
 //
-// The two halves of the move:
+// The two halves:
 //   - Contacts: the subscribe path adds an email to the Fluncle SEGMENT
 //     (`RESEND_SEGMENT_ID`) — `POST /contacts` then `POST /contacts/{email}/segments/{id}`.
 //   - Broadcasts: `send_edition` creates a broadcast to that segment, then sends it
@@ -49,11 +49,11 @@ async function readError(response: Response): Promise<string> {
 }
 
 /**
- * Add an email to the Fluncle segment (the subscribe path's clean mirror of the
- * old Loops `contacts/create`). Two REST calls: create/ensure the contact, then
- * attach it to the segment. Both are idempotent for our purposes — a re-subscribe
- * of an existing contact is success, not an error (the old Loops 409 ⇒ success
- * behavior is preserved). Returns silently on success; throws `ApiError` on a real
+ * Add an email to the Fluncle segment (the subscribe path). Two REST calls:
+ * create/ensure the contact, then attach it to the segment. Both are idempotent for
+ * our purposes — a re-subscribe of an existing contact is success, not an error (a
+ * 409 on an existing contact is treated as success). Returns silently on success;
+ * throws `ApiError` on a real
  * upstream fault so the route emits the same `subscribe_failed`/`rate_limited`
  * codes the caller already maps.
  */
@@ -196,8 +196,8 @@ export async function countSegmentRecipients(): Promise<number | null> {
 }
 
 /**
- * Send a previously-created broadcast (the explicit human gate the old Loops
- * dashboard tap provided). An optional `scheduledAt` (ISO 8601 or Resend natural
+ * Send a previously-created broadcast (the operator's explicit human send gate).
+ * An optional `scheduledAt` (ISO 8601 or Resend natural
  * language like "in 1 hour") defers the send. Idempotency-keyed on the broadcast id
  * so a retried send does not double-fire.
  */

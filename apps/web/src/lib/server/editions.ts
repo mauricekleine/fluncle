@@ -157,7 +157,7 @@ export async function updateEdition(id: string, input: EditionInput): Promise<Ed
 
 /**
  * Send a draft as a Resend broadcast and, on success, MINT the sequential number.
- * The send is the operator's explicit human gate (the old Loops dashboard tap).
+ * The send is the operator's explicit human gate.
  *
  *   1. render the email HTML from the stored `contentJson` (one source → two
  *      renders, the archive page being the other),

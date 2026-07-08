@@ -4,11 +4,11 @@ The weekly newsletter runs as the **`fluncle-newsletter` Hermes `--no-agent` swe
 
 This file is the **authoring doctrine** — the window logic, the voice rails, the zero-find rule, the tidbit discipline. The sweep source ([`hermes/scripts/newsletter-sweep.{sh,ts}`](./hermes/scripts/)) restates the authoring prompt for the fresh, isolated `claude -p` call each Friday tick makes; the operator wiring + the DST mechanics live in [`hermes/cron/README.md`](./hermes/cron/README.md). The server build (the `editions` table, the Resend Broadcast send, the `/newsletter` archive) has shipped; this doc is the authoring layer on top of it.
 
-## The shape (Hermes + Resend, not Spinup + Loops)
+## The shape (Hermes + Resend)
 
 - **Compute:** an on-box Hermes **`--no-agent` sweep** — deterministic window/gather/persist/deliver with **one** bounded `claude -p` authoring call (Claude Code on subscription auth + the baked `copywriting-fluncle` skill; zero OpenRouter). The newsletter authors copy, so that one step needs the LLM — but it is a single call, not a full agent session. (It replaced the old full-agent cron on 2026-06-27, after an agent run flailed 83 model calls on one trigger.) Each Friday tick is a fresh, self-contained invocation.
 - **Persist:** the authored edition is written as a **draft `editions` row** (no number yet) via `fluncle admin newsletter draft` (Worker op `create_edition`, admin tier — agent-allowed). This is the durable artifact; it happens **before** the Discord offer (persist-then-offer), so a missed send never loses the work.
-- **Send:** the sweep posts a one-line Discord summary + the literal `fluncle admin newsletter send <id>` command; the **operator** runs it (Worker op `send_edition`, **operator tier** — a valid agent token gets a 403). The Worker renders the email HTML from the stored `content`, creates + sends the **Resend broadcast**, and mints the sequential edition number. The operator-run command is the human gate that replaces the old Loops dashboard tap. (The old interactive `clarify` Send/Hold button needed the agent loop and is gone with it.)
+- **Send:** the sweep posts a one-line Discord summary + the literal `fluncle admin newsletter send <id>` command; the **operator** runs it (Worker op `send_edition`, **operator tier** — a valid agent token gets a 403). The Worker renders the email HTML from the stored `content`, creates + sends the **Resend broadcast**, and mints the sequential edition number. The operator-run command is the human send gate.
 - **Secrets:** `RESEND_API_KEY` + the segment id stay **Worker secrets**. The box holds only its agent-scoped admin token; it never touches Resend directly.
 - **Archive:** the sent edition lands in the `/newsletter` archive — the same structured `content` payload renders both the email HTML and the archive page (one source → two renders).
 
@@ -29,7 +29,7 @@ You are Fluncle: the uncle with the good records, writing a letter to the people
 
 The discovery window is `[since, until)`. `until` is NOW. `since` is the `windowUntil` of the most recent **sent** edition (read it from `fluncle admin newsletter list --json`, the row with status `sent` and the highest `number`); if no edition has ever been sent, use NOW minus 7 days.
 
-Only **sent** editions anchor the window — that is what makes it self-heal. A skipped Friday, or a drafted-but-never-sent edition, leaves the window open: the next run's `since` is still the last _sent_ cutoff, so those finds re-enter the next window instead of being dropped. (This replaces the old "parse the cutoff out of the Loops campaign name" hack — the cutoff now lives in `editions.windowUntil`, a real column.)
+Only **sent** editions anchor the window — that is what makes it self-heal. A skipped Friday, or a drafted-but-never-sent edition, leaves the window open: the next run's `since` is still the last _sent_ cutoff, so those finds re-enter the next window instead of being dropped. The cutoff lives in `editions.windowUntil`, a real column.
 
 **Miss-recovery comes first.** Before authoring anything, read `admin newsletter list` for an existing **unsent draft** (status `draft`, no `number`). If one exists, do not author a new edition — re-offer _that_ draft's send command. The draft is updated in place, never duplicated; the send is idempotent on the edition id, so a re-offered command never double-mails.
 

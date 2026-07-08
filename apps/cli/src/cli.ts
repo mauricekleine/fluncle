@@ -1220,9 +1220,9 @@ function addAdminCommands(program: Command): void {
       await runNewsletterUpdate(id, options, newsletterUpdateCommand);
     });
 
-  // `send_edition` → `admin newsletter send`. OPERATOR ONLY — the human gate (the
-  // old Loops dashboard tap). The Worker creates + sends the Resend broadcast and
-  // mints the number. A valid AGENT token gets a 403, so the cron can't send.
+  // `send_edition` → `admin newsletter send`. OPERATOR ONLY — the human send gate.
+  // The Worker creates + sends the Resend broadcast and mints the number. A valid
+  // AGENT token gets a 403, so the cron can't send.
   adminNewsletter
     .command("send")
     .description("Send an edition — OPERATOR only (Resend broadcast + mint the number)")

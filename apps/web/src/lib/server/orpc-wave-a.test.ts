@@ -4,7 +4,7 @@ import { get, MIXTAPE, postJson, readJson, TRACK } from "./orpc-test-kit";
 // Wave A — the five public-unauthenticated ops fanned out off the pilot's
 // per-domain pattern. As in orpc.test.ts, the underlying server helpers are
 // mocked: each handler's job is to shape the contract response + the error
-// framing, not to touch Turso/Spotify/Loops. These assertions pin the body the
+// framing, not to touch Turso/Spotify/Resend. These assertions pin the body the
 // live route emitted, now served by oRPC — byte-for-byte.
 
 const listMixtapes = vi.fn();
