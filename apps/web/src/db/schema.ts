@@ -1079,6 +1079,12 @@ export const artists = sqliteTable(
     mbid: text("mbid"),
     name: text("name").notNull(),
     resolvedAt: text("resolved_at"),
+    // When the operator last acknowledged this artist's link list ("Looks good"). The
+    // socials review model (docs/admin-shell.md): an artist "needs a look" when it has a
+    // link discovered AFTER this stamp (or never reviewed) — a single per-artist ack, not
+    // per-link follow bookkeeping. A manual link-add bumps this too (adding implies you
+    // saw the list). Null = never reviewed.
+    reviewedAt: text("reviewed_at"),
     slug: text("slug").notNull().unique(),
     spotifyArtistId: text("spotify_artist_id").unique(),
     spotifyUrl: text("spotify_url"),

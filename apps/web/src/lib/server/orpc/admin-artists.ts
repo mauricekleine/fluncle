@@ -15,8 +15,10 @@ import {
   followPendingArtists,
   InvalidArtistSocialError,
   listArtistSocialsQueue,
+  muteArtistSocial,
   recordOperatorFollow,
   removeArtistSocial,
+  reviewArtist,
   undoArtistSocialFollow,
   unmuteArtistSocial,
 } from "../artists";
@@ -188,6 +190,34 @@ export function adminArtistsHandlers(os: Implementer) {
       }
     });
 
+  // POST /admin/artists/socials/{socialId}/mute — operator tier: the Manage-links auto-follow
+  // toggle OFF (a wrong Spotify/YouTube match). Bookkeeping-only skip of the sweep.
+  const muteArtistSocialHandler = os.mute_artist_social
+    .use(adminAuth)
+    .use(operatorGuard)
+    .handler(async ({ input }) => {
+      try {
+        return { ok: true as const, social: await muteArtistSocial(input.socialId) };
+      } catch (error) {
+        throw toSocialFault(error);
+      }
+    });
+
+  // POST /admin/artists/{artistId}/review — operator tier: the "Looks good" acknowledgment.
+  // Stamps reviewed_at + promotes surviving candidates to confirmed.
+  const reviewArtistHandler = os.review_artist
+    .use(adminAuth)
+    .use(operatorGuard)
+    .handler(async ({ input }) => {
+      try {
+        const { confirmed } = await reviewArtist(input.artistId);
+
+        return { confirmed, ok: true as const };
+      } catch (error) {
+        throw apiFault(error);
+      }
+    });
+
   // POST /admin/artists/{artistId}/socials — operator tier: add/replace a social by platform.
   const addArtistSocialHandler = os.add_artist_social
     .use(adminAuth)
@@ -271,9 +301,11 @@ export function adminArtistsHandlers(os: Implementer) {
     follow_artist_social: followArtistSocialHandler,
     list_artist_socials: listArtistSocialsHandler,
     list_unresolved_artists: listUnresolvedArtistsHandler,
+    mute_artist_social: muteArtistSocialHandler,
     record_operator_follow: recordOperatorFollowHandler,
     remove_artist_social: removeArtistSocialHandler,
     resolve_artist: resolveArtistHandler,
+    review_artist: reviewArtistHandler,
     unfollow_artist_social: unfollowArtistSocialHandler,
     unmute_artist_social: unmuteArtistSocialHandler,
   };

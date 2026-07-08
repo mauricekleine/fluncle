@@ -171,8 +171,10 @@ export const listUnresolvedArtists = oc
 const ArtistSocialSchema = z
   .object({
     artistId: z.string(),
+    createdAt: z.string(),
     followedAt: z.string().nullable(),
     id: z.string(),
+    mutedAt: z.string().nullable(),
     platform: z.string(),
     source: z.string(),
     status: z.string(),
@@ -368,6 +370,43 @@ export const addArtistSocial = oc
   .output(ArtistSocialEnvelope);
 
 /**
+ * `mute_artist_social` → `POST /admin/artists/socials/{socialId}/mute` (operationId
+ * `muteArtistSocial`). Operator tier. Mute a Spotify/YouTube social that's a wrong match — the
+ * Manage-links "follow automatically" toggle turned OFF. Stamps `muted_at` (excludes it from the
+ * auto-follow sweep) and clears `followed_at`. Bookkeeping only, no platform call. Idempotent;
+ * `unmute_artist_social` reverses it. `{ ok, social }`.
+ */
+export const muteArtistSocial = oc
+  .route({
+    method: "POST",
+    operationId: "muteArtistSocial",
+    path: "/admin/artists/socials/{socialId}/mute",
+    summary: "Mute an artist social (skip it in the auto-follow sweep)",
+    tags: ["Admin"],
+  })
+  .input(z.object({ socialId: z.string() }))
+  .output(ArtistSocialEnvelope);
+
+/**
+ * `review_artist` → `POST /admin/artists/{artistId}/review` (operationId `reviewArtist`).
+ * Operator tier. Mark an artist's link list as reviewed — the "Looks good" acknowledgment.
+ * Stamps `reviewed_at = now` (clears needs-a-look until a NEW link is discovered) and promotes
+ * any surviving `candidate` links to `confirmed` (reviewing the list is the trust gate; a wrong
+ * candidate is deleted in Manage links first). Idempotent. `{ ok, confirmed }` — how many
+ * candidates were promoted.
+ */
+export const reviewArtist = oc
+  .route({
+    method: "POST",
+    operationId: "reviewArtist",
+    path: "/admin/artists/{artistId}/review",
+    summary: "Mark an artist's link list as reviewed (Looks good)",
+    tags: ["Admin"],
+  })
+  .input(z.object({ artistId: z.string() }))
+  .output(z.object({ confirmed: z.number(), ok: z.literal(true) }));
+
+/**
  * `remove_artist_social` → `DELETE /admin/artists/socials/{socialId}` (operationId
  * `removeArtistSocial`). Operator tier. Remove one artist social. Idempotent. `{ ok }`.
  */
@@ -391,9 +430,11 @@ export const adminArtistsContract = {
   follow_artist_social: followArtistSocial,
   list_artist_socials: listArtistSocials,
   list_unresolved_artists: listUnresolvedArtists,
+  mute_artist_social: muteArtistSocial,
   record_operator_follow: recordOperatorFollow,
   remove_artist_social: removeArtistSocial,
   resolve_artist: resolveArtist,
+  review_artist: reviewArtist,
   unfollow_artist_social: unfollowArtistSocial,
   unmute_artist_social: unmuteArtistSocial,
 };

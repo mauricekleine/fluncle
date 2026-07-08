@@ -255,6 +255,9 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   merge_private_galaxy_progress: "private-session",
   mint_mixcloud_token: "operator",
   mint_youtube_token: "operator",
+  // The Manage-links auto-follow toggle OFF — operator tier: it changes what Fluncle's account
+  // follows (excludes a wrong Spotify/YouTube match from the sweep).
+  mute_artist_social: "operator",
   // The auto-note authoring step — agent tier (adminAuth only, no operatorGuard), the
   // written-note sibling of observe_track/context_track; the box's agent token drives it.
   note_track: "admin",
@@ -319,6 +322,9 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // The YouTube metadata re-sync — operator tier: it EDITS a LIVE published video's
   // description (videos.update), so the agent token 403s (like publish_mixtape_youtube).
   resync_mixtape_youtube: "operator",
+  // The "Looks good" acknowledgment — operator tier: it stamps the artist reviewed and promotes
+  // surviving candidates onto the public artist page (the trust gate).
+  review_artist: "operator",
   save_private_finding: "private-session",
   send_edition: "operator",
   // The clip drip-feed kill switch — operator tier: pausing/resuming the whole drip is

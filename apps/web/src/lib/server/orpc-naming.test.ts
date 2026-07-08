@@ -110,6 +110,10 @@ const APPROVED_VERBS = new Set<string>([
   "export",
   "initiate",
   "merge",
+  // `mute` (skip an artist social in the auto-follow sweep — the Manage-links "follow
+  // automatically" toggle OFF for a wrong Spotify/YouTube match) — added deliberately with
+  // `mute_artist_social`. The set half of the mute/`unmute` pair (the reverse already exists).
+  "mute",
   "mint",
   "presign",
   // `promote` (turn a captured recording into a full published mixtape — mint-or-reuse a
@@ -131,6 +135,11 @@ const APPROVED_VERBS = new Set<string>([
   // `update_*` (edit fields): this REPLACES all the rows.
   "replace",
   "reset",
+  // `review` (mark an artist's link list as reviewed — the "Looks good" acknowledgment that
+  // stamps reviewed_at and promotes surviving candidates) — added deliberately with
+  // `review_artist`. A single per-artist ack, distinct from `confirm` (one link) and `approve`
+  // (a submission).
+  "review",
   "save",
   "send",
   "set",

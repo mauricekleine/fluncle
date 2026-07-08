@@ -502,10 +502,15 @@ export type ArtistSocial = {
   url: string;
   source: ArtistSocialSource;
   status: ArtistSocialStatus;
-  /** ISO stamp of when Fluncle followed/registered this platform, or null. */
+  /** ISO stamp of when this link was discovered/added — the "is this newer than the last
+   *  review?" anchor behind an artist's needs-a-look flag. */
+  createdAt: string;
+  /** ISO stamp of when Fluncle followed this platform (auto-follow sweep, Spotify/YouTube
+   *  only), or null. Read-only info now — no longer a per-link operator todo. */
   followedAt: string | null;
-  /** ISO stamp of when the operator muted (Undo'd) this platform — excludes it from the
-   *  auto-follow sweep so the robot can't re-follow. Null = not muted. */
+  /** ISO stamp of when the operator muted this platform — excludes it from the auto-follow
+   *  sweep so the robot can't re-follow. Set via the Manage-links auto-follow toggle. Null =
+   *  not muted. */
   mutedAt: string | null;
 };
 
@@ -542,6 +547,7 @@ function toArtistSocial(row: Record<string, unknown>): ArtistSocial {
 
   return {
     artistId: textOf(row["artist_id"]),
+    createdAt: textOf(row["created_at"]),
     followedAt: typeof followedAt === "string" ? followedAt : null,
     id: textOf(row["id"]),
     mutedAt: typeof mutedAt === "string" ? mutedAt : null,
@@ -569,7 +575,7 @@ export async function listArtistSocialsQueue(limit = 100): Promise<ArtistFollowQ
   const result = await db.execute({
     args: [Math.max(1, Math.min(limit, 500))],
     sql: `select a.id as artist_id, a.name, a.slug, a.spotify_url,
-                 s.id, s.platform, s.url, s.source, s.status, s.followed_at, s.muted_at
+                 s.id, s.platform, s.url, s.source, s.status, s.created_at, s.followed_at, s.muted_at
           from artists a
           join artist_socials s on s.artist_id = a.id
           where a.id in (
@@ -611,7 +617,22 @@ export async function listArtistSocialsQueue(limit = 100): Promise<ArtistFollowQ
 export type ArtistOverviewItem = ArtistFollowQueueItem & {
   /** Coordinate-bearing findings featuring this artist (the canonical track_artists join). */
   findingCount: number;
+  /** When the operator last acknowledged this artist's link list ("Looks good"), or null.
+   *  The UI flags "needs a look" when a social's `createdAt` is newer than this. */
+  reviewedAt: string | null;
 };
+
+/** Whether an artist has a link the operator hasn't seen since their last review — the single
+ *  needs-a-look predicate, shared by the overview UI and the /admin attention count. A link is
+ *  "unseen" when it was discovered/added after `reviewedAt` (or the list was never reviewed). */
+export function artistNeedsLook(
+  reviewedAt: string | null,
+  socials: readonly { createdAt: string }[],
+): boolean {
+  const seenThrough = reviewedAt ?? "";
+
+  return socials.some((social) => social.createdAt > seenThrough);
+}
 
 // The `/admin/artists` overview — EVERY artist Fluncle features, name-sorted, each with its
 // full socials list (confirmed, auto, and candidate) and its finding count. Unlike the follow
@@ -623,11 +644,11 @@ export async function listAllArtistsWithSocials(): Promise<ArtistOverviewItem[]>
   const db = await getDb();
   const result = await db.execute({
     args: [],
-    sql: `select a.id as artist_id, a.name, a.slug, a.spotify_url,
+    sql: `select a.id as artist_id, a.name, a.slug, a.spotify_url, a.reviewed_at,
                  (select count(*) from tracks t
                     join track_artists ta on ta.track_id = t.track_id
                     where ta.artist_id = a.id and t.log_id is not null) as finding_count,
-                 s.id, s.platform, s.url, s.source, s.status, s.followed_at, s.muted_at
+                 s.id, s.platform, s.url, s.source, s.status, s.created_at, s.followed_at, s.muted_at
           from artists a
           left join artist_socials s on s.artist_id = a.id
           order by a.name asc, s.platform asc`,
@@ -643,10 +664,12 @@ export async function listAllArtistsWithSocials(): Promise<ArtistOverviewItem[]>
     if (!artist) {
       const spotifyUrl = row["spotify_url"];
       const findingCount = row["finding_count"];
+      const reviewedAt = row["reviewed_at"];
       artist = {
         findingCount: Number(findingCount) || 0,
         id: artistId,
         name: textOf(row["name"]),
+        reviewedAt: typeof reviewedAt === "string" ? reviewedAt : null,
         slug: textOf(row["slug"]),
         socials: [],
         spotifyUrl: typeof spotifyUrl === "string" ? spotifyUrl : null,
@@ -666,17 +689,19 @@ export async function listAllArtistsWithSocials(): Promise<ArtistOverviewItem[]>
 export type ArtistReviewRow = {
   artistId: string;
   name: string;
-  /** The oldest not-yet-actioned social's created stamp — the queue's oldest-first anchor. */
+  /** The oldest unseen link's created stamp — the queue's oldest-first anchor. */
   anchorAt: string;
-  /** How many socials still need a look (candidates to confirm + followable-not-followed). */
+  /** How many links are new since the operator last reviewed this artist. */
   pending: number;
 };
 
-// The /admin attention row's honest read: one row per artist with unfinished follow work — a
-// `candidate` social to confirm, or a followable (Spotify/YouTube) social not yet followed —
-// with the count and the oldest such social's stamp (the queue's oldest-first anchor). Mirrors
-// listArtistSocialsQueue's predicate; the pure model turns each into a "Review →" deep-link
-// onto /admin/artists (the manage surface), so the queue surfaces the work and the page does it.
+// The /admin attention row's honest read: one row per artist with a link discovered SINCE the
+// operator last acknowledged the list ("Looks good") — or never acknowledged — with the count of
+// unseen links and the oldest one's stamp (the queue's oldest-first anchor). Mirrors
+// artistNeedsLook; the pure model turns each into a "Review →" deep-link onto /admin/artists (the
+// manage surface), so the queue surfaces the work and the page does it. This is a per-artist ACK,
+// not per-link follow bookkeeping — a link Fluncle can't act on (no Facebook profile) no longer
+// nags forever.
 export async function listArtistReviewRows(): Promise<ArtistReviewRow[]> {
   const db = await getDb();
   const result = await db.execute({
@@ -685,11 +710,7 @@ export async function listArtistReviewRows(): Promise<ArtistReviewRow[]> {
                  count(*) as pending, min(s.created_at) as anchor_at
           from artists a
           join artist_socials s on s.artist_id = a.id
-          where s.muted_at is null
-            and (s.status = 'candidate'
-                 or (s.platform in ('spotify', 'youtube')
-                     and s.status in ('auto', 'confirmed')
-                     and s.followed_at is null))
+          where s.created_at > coalesce(a.reviewed_at, '')
           group by a.id, a.name
           order by anchor_at asc`,
   });
@@ -800,7 +821,7 @@ async function getArtistSocialById(socialId: string): Promise<ArtistSocial | und
   const db = await getDb();
   const result = await db.execute({
     args: [socialId],
-    sql: `select id, artist_id, platform, url, source, status, followed_at, muted_at
+    sql: `select id, artist_id, platform, url, source, status, created_at, followed_at, muted_at
           from artist_socials where id = ? limit 1`,
   });
   const row = result.rows[0] as Record<string, unknown> | undefined;
@@ -1162,10 +1183,12 @@ export function assertHttpUrl(raw: string): string {
 }
 
 /**
- * Add (or replace) an artist's social by platform — the operator's inline add in the
- * queue. An operator-entered link is trusted, so it lands `source=operator`,
- * `status=confirmed` (it renders publicly at once). Upserts on the `(artist_id,
- * platform)` unique index. Returns the fresh row.
+ * Add (or replace) an artist's social by platform — the operator's add in the Manage-links
+ * dialog. An operator-entered link is trusted, so it lands `source=operator`,
+ * `status=confirmed` (it renders publicly at once). Upserts on the `(artist_id, platform)`
+ * unique index. Adding a link also stamps the artist as reviewed (the operator was looking at
+ * the whole list to add one, so it needn't immediately flip back to "needs a look"). Returns
+ * the fresh row.
  */
 export async function addArtistSocial(
   artistId: string,
@@ -1192,9 +1215,16 @@ export async function addArtistSocial(
             updated_at = excluded.updated_at`,
   });
 
+  // Adding implies the operator saw the list — stamp reviewed so the new link (created_at = now)
+  // doesn't itself re-arm needs-a-look (`created_at > reviewed_at` is false when they're equal).
+  await db.execute({
+    args: [now, now, artistId],
+    sql: `update artists set reviewed_at = ?, updated_at = ? where id = ?`,
+  });
+
   const result = await db.execute({
     args: [artistId, platform],
-    sql: `select id, artist_id, platform, url, source, status, followed_at
+    sql: `select id, artist_id, platform, url, source, status, created_at, followed_at, muted_at
           from artist_socials where artist_id = ? and platform = ? limit 1`,
   });
   const row = result.rows[0] as Record<string, unknown> | undefined;
@@ -1204,6 +1234,56 @@ export async function addArtistSocial(
   }
 
   return toArtistSocial(row);
+}
+
+/**
+ * Mark an artist's link list as reviewed — the operator's "Looks good". Stamps `reviewed_at =
+ * now` so every link discovered up to now counts as seen (needs-a-look clears until a NEW link
+ * arrives), AND promotes any surviving `candidate` links to `confirmed`: reviewing the list IS
+ * the trust gate (a wrong candidate is deleted in Manage links before this), so what's left is
+ * good to go public. Idempotent. Returns the count of candidates promoted.
+ */
+export async function reviewArtist(artistId: string): Promise<{ confirmed: number }> {
+  const db = await getDb();
+  const now = new Date().toISOString();
+
+  const promoted = await db.execute({
+    args: [now, artistId],
+    sql: `update artist_socials set status = 'confirmed', updated_at = ?
+          where artist_id = ? and status = 'candidate'`,
+  });
+
+  await db.execute({
+    args: [now, now, artistId],
+    sql: `update artists set reviewed_at = ?, updated_at = ? where id = ?`,
+  });
+
+  return { confirmed: promoted.rowsAffected ?? 0 };
+}
+
+/**
+ * Mute one artist social — the Manage-links "follow automatically" toggle turned OFF for a
+ * Spotify/YouTube link that's a wrong match. Stamps `muted_at` (excludes it from the auto-follow
+ * sweep) and clears `followed_at` (the invariant: a muted row is never followed). Bookkeeping
+ * only — no platform call (Spotify's follow endpoint is API-gated anyway; the sweep is the thing
+ * this governs). Idempotent. `unmuteArtistSocial` reverses it. Returns the fresh row.
+ */
+export async function muteArtistSocial(socialId: string): Promise<ArtistSocial> {
+  const db = await getDb();
+  const now = new Date().toISOString();
+
+  await db.execute({
+    args: [now, now, socialId],
+    sql: `update artist_socials set muted_at = ?, followed_at = null, updated_at = ? where id = ?`,
+  });
+
+  const social = await getArtistSocialById(socialId);
+
+  if (!social) {
+    throw new ArtistSocialNotFoundError(socialId);
+  }
+
+  return social;
 }
 
 /** Remove one artist social by id (the operator's inline delete). Idempotent. */
