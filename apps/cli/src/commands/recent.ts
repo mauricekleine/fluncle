@@ -35,6 +35,11 @@ export function mapTrack(track: RecentTrack | RecentMixtape): RecentItem {
     postedToTelegram: track.postedToTelegram,
     previewUrl: track.previewUrl,
     releaseDate: track.releaseDate,
+    // The private full-song capture key. The server already strips it from every PUBLIC read
+    // (`toPublicTrackListItem`), so on the public `/api/tracks` path it arrives undefined and
+    // JSON.stringify omits it — `fluncle recent` stays clean. The ADMIN path (`/api/admin/tracks`,
+    // e.g. `embed --queue`) does NOT strip, so the on-box embed sweep gets the real key here.
+    sourceAudioKey: track.sourceAudioKey,
     spotifyUrl: track.spotifyUrl,
     title: track.title,
     trackId: track.trackId,

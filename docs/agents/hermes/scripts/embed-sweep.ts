@@ -14,14 +14,15 @@
 // back through the agent-tier `update_track` path (the box's admin token), exactly like
 // enrich-sweep writes bpm/key/features.
 //
-// SOURCE = the CAPTURED FULL SONG, not the 30s preview. The embed queue gates on
-// `source_audio_key IS NOT NULL AND embedding_json IS NULL` (the key-gate + the DTO's
-// `sourceAudioKey` field are added by a separate slice — this orchestrator CONSUMES them),
-// so a queued finding always has a captured full song in the PRIVATE `fluncle-source-audio`
-// R2 bucket. We deliberately do NOT embed previews (the blind "quiet piano" vectors are the
-// thing this whole effort kills), so a finding with no `sourceAudioKey` is skipped, never
-// preview-fetched. The S3 GET mirrors capture-sweep.ts's signer (which mirrors
-// apps/web/src/lib/server/aws-sigv4.ts) — keep them in step.
+// SOURCE = the CAPTURED FULL SONG, not the 30s preview. The embed queue gates server-side on
+// `source_audio_key IS NOT NULL AND embedding_json IS NULL`, and the admin DTO carries the
+// `sourceAudioKey` — unstripped for admin callers (public reads run it through
+// `toPublicTrackListItem` and lose it), then passed through faithfully by the CLI's `mapTrack`
+// so it reaches this sweep. A queued finding therefore always has a captured full song in the
+// PRIVATE `fluncle-source-audio` R2 bucket. We deliberately do NOT embed previews (the blind
+// "quiet piano" vectors are the thing this whole effort kills), so a finding with no
+// `sourceAudioKey` is skipped, never preview-fetched. The S3 GET mirrors capture-sweep.ts's
+// signer (which mirrors apps/web/src/lib/server/aws-sigv4.ts) — keep them in step.
 //
 // The loop is idempotent by construction (an embedded finding is already out of the
 // `embedding_json IS NULL` queue; re-running never double-writes), a fast no-op when the
@@ -77,8 +78,9 @@ const log = (message: string) => console.error(`[embed-sweep] ${message}`);
 
 export type QueueFinding = {
   logId?: string;
-  // The R2 key for the captured full song (`<logId>/<sha256>.<ext>`), surfaced on the embed
-  // queue DTO by a separate slice. PRESENCE means captured; the queue is key-gated, so this is
+  // The R2 key for the captured full song (`<logId>/<sha256>.<ext>`), surfaced on the ADMIN
+  // embed queue DTO (unstripped for admin callers; the CLI's `mapTrack` passes it through,
+  // while public reads strip it). PRESENCE means captured; the queue is key-gated, so this is
   // populated for every real row — but we still skip defensively when it is absent (never
   // fall back to the preview).
   sourceAudioKey?: string;

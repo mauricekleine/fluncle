@@ -42,6 +42,15 @@ function finding(trackId: string, logId: string): TrackListItem {
 // note-less finding that the `hasContext` gate must exclude.
 const contextedFinding = finding("track_context", "001.1.1");
 
+// A captured finding exactly as the ADMIN embed queue returns it: the private full-song
+// capture key is PRESENT (the admin read path never strips it — only public reads run
+// through `toPublicTrackListItem`). The on-box embed sweep reads this key to S3-GET the
+// full song, so it must survive `mapTrack` on the way to `embed --queue --json`.
+const capturedFinding: TrackListItem = {
+  ...finding("track_captured", "004.6.0Q"),
+  sourceAudioKey: "004.6.0Q/deadbeef.m4a",
+};
+
 // Capture every admin API path the queue requests, and stand in for the server's
 // SQL filter: a request carrying `hasContext=true` returns the context'd finding;
 // without it, the server would also return the note-less finding (the bug the gate
@@ -60,6 +69,13 @@ await mock.module("../api", () => ({
     requestedPaths.push(path);
     const url = new URL(path, "https://fluncle.test");
     const hasContext = url.searchParams.get("hasContext");
+
+    // The embed worklist (server gate: `embedding_json IS NULL AND source_audio_key IS NOT
+    // NULL`). The admin path does NOT strip the key, so the returned row carries it — the
+    // exact shape the box embed sweep consumes.
+    if (url.searchParams.get("hasEmbedding") === "false") {
+      return { nextCursor: undefined, totalCount: 1, tracks: [capturedFinding] };
+    }
 
     if (paginateCatalogue && hasContext === null && url.searchParams.get("hasKey") === null) {
       // Two pages: page 1 hands back a cursor, page 2 ends it. An --all fetch
@@ -82,8 +98,9 @@ await mock.module("../api", () => ({
   },
 }));
 
-const { contextQueueCommand, listCommand, noteQueueCommand, queueCommand } =
+const { contextQueueCommand, embedQueueCommand, listCommand, noteQueueCommand, queueCommand } =
   await import("./admin-tracks");
+const { mapTrack } = await import("./recent");
 
 describe("context queue — --retry-empty plumbing", () => {
   beforeEach(() => {
@@ -181,6 +198,51 @@ describe("video render queue — hasContext hard-gate", () => {
     const logIds = tracks.map((track) => track.logId);
     expect(logIds).toContain("001.1.1");
     expect(logIds).not.toContain("001.1.2");
+  });
+});
+
+describe("embed queue — carries the private capture key through to the box", () => {
+  beforeEach(() => {
+    requestedPaths = [];
+  });
+
+  test("requests the hasEmbedding=false worklist, oldest first", async () => {
+    await embedQueueCommand(10);
+
+    expect(requestedPaths).toHaveLength(1);
+    const url = new URL(requestedPaths[0] ?? "", "https://fluncle.test");
+    // The embed cron's worklist: findings with no MuQ vector yet. The server ANDs in
+    // `source_audio_key IS NOT NULL`, so every row is a captured full song ready to embed.
+    expect(url.searchParams.get("hasEmbedding")).toBe("false");
+    expect(url.searchParams.get("order")).toBe("asc");
+  });
+
+  test("retains sourceAudioKey so the on-box sweep can fetch the full song", async () => {
+    const tracks = await embedQueueCommand(10);
+
+    // The regression guard for the exact bug that left the box embedding NOTHING: mapTrack's
+    // whitelist dropped sourceAudioKey, so `embed --queue --json` handed the sweep a key-less
+    // row and every finding was skipped `no_source_audio`. The admin path must carry it through.
+    expect(tracks).toHaveLength(1);
+    expect(tracks[0]?.sourceAudioKey).toBe("004.6.0Q/deadbeef.m4a");
+  });
+});
+
+describe("mapTrack — faithful sourceAudioKey passthrough", () => {
+  test("preserves the key when the admin path supplies it", () => {
+    const mapped = mapTrack(capturedFinding);
+
+    expect(mapped.type).toBe("finding");
+    expect((mapped as TrackListItem).sourceAudioKey).toBe("004.6.0Q/deadbeef.m4a");
+  });
+
+  test("yields no key when the public path already stripped it (never invents one)", () => {
+    // On `/api/tracks` the server runs `toPublicTrackListItem`, so the key arrives undefined;
+    // mapTrack passes that through untouched and JSON.stringify omits it — `fluncle recent`
+    // never surfaces the private capture key.
+    const mapped = mapTrack(finding("track_public", "005.1.1"));
+
+    expect((mapped as TrackListItem).sourceAudioKey).toBeUndefined();
   });
 });
 
