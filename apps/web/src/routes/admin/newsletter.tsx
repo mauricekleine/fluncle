@@ -6,7 +6,7 @@ import {
   TrashIcon,
 } from "@phosphor-icons/react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { createFileRoute, redirect } from "@tanstack/react-router";
+import { createFileRoute, Link, redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { type Dispatch, type SetStateAction, useEffect, useId, useState } from "react";
 import { AdminShell } from "@/components/admin/admin-shell";
@@ -198,14 +198,15 @@ function EditionRow({
                 is a permanent back issue.
               </span>
               {edition.number ? (
-                <a
+                <Link
                   className="underline-offset-2 hover:text-foreground hover:underline focus-visible:underline focus-visible:outline-2 focus-visible:outline-ring"
-                  href={`/newsletter/${edition.number}`}
+                  params={{ number: String(edition.number) }}
                   rel="noreferrer"
                   target="_blank"
+                  to="/newsletter/$number"
                 >
                   View the public back issue ↗
-                </a>
+                </Link>
               ) : null}
             </div>
           )}

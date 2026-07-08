@@ -18,7 +18,7 @@ import {
   type RecordingTracklistItem,
 } from "@fluncle/contracts/orpc";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { createFileRoute, redirect, useRouter } from "@tanstack/react-router";
+import { createFileRoute, Link, redirect, useRouter } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import {
   type Dispatch,
@@ -1112,14 +1112,15 @@ function PromotedMixtapeBlock({ logId, mixtapeId }: { logId?: string; mixtapeId:
       {logId ? <SetVideoToggle mixtape={mixtape} refresh={refresh} /> : null}
 
       {logId ? (
-        <a
+        <Link
           className="inline-flex text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline focus-visible:underline focus-visible:outline-2 focus-visible:outline-ring"
-          href={`/log/${encodeURIComponent(logId)}`}
+          params={{ logId }}
           rel="noreferrer"
           target="_blank"
+          to="/log/$logId"
         >
           View the public log page ↗
-        </a>
+        </Link>
       ) : null}
     </div>
   );

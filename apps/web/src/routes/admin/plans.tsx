@@ -29,7 +29,7 @@ import {
 } from "@phosphor-icons/react";
 import { type RecordingDTO } from "@fluncle/contracts/orpc";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { createFileRoute, redirect } from "@tanstack/react-router";
+import { createFileRoute, Link, redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import {
   type Dispatch,
@@ -664,12 +664,13 @@ function TakeRow({ clipCount, take }: { clipCount: number; take: RecordingDTO })
       <span className="shrink-0 font-mono text-xs text-muted-foreground tabular-nums">
         v{take.version}
       </span>
-      <a
+      <Link
         className="min-w-0 flex-1 truncate text-sm font-medium hover:text-primary focus-visible:outline-2 focus-visible:outline-ring"
-        href={`/admin/studio/${encodeURIComponent(take.id)}`}
+        params={{ recordingId: take.id }}
+        to="/admin/studio/$recordingId"
       >
         {take.title}
-      </a>
+      </Link>
       {take.logId ? (
         <Badge variant="secondary">promoted · fluncle://{take.logId}</Badge>
       ) : (
@@ -682,7 +683,7 @@ function TakeRow({ clipCount, take }: { clipCount: number; take: RecordingDTO })
         aria-label={`Open ${take.title} in the Studio`}
         className="text-muted-foreground"
         nativeButton={false}
-        render={<a href={`/admin/studio/${encodeURIComponent(take.id)}`} />}
+        render={<Link params={{ recordingId: take.id }} to="/admin/studio/$recordingId" />}
         size="icon"
         title="Open in Studio"
         variant="ghost"

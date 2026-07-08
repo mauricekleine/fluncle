@@ -5,6 +5,7 @@ import {
   ListChecksIcon,
   PlusIcon,
 } from "@phosphor-icons/react";
+import { Link } from "@tanstack/react-router";
 import { useState } from "react";
 import { Button } from "@fluncle/ui/components/button";
 import {
@@ -161,14 +162,15 @@ export function AddToPlanDialog({
                       >
                         <CassetteTapeIcon aria-hidden="true" className="size-3.5 shrink-0" />
                         {membership.status === "published" && membership.logId ? (
-                          <a
+                          <Link
                             className="truncate hover:text-foreground hover:underline"
-                            href={`/log/${encodeURIComponent(membership.logId)}`}
+                            params={{ logId: membership.logId }}
                             rel="noreferrer"
                             target="_blank"
+                            to="/log/$logId"
                           >
                             {label}
-                          </a>
+                          </Link>
                         ) : (
                           <span className="truncate">{label}</span>
                         )}

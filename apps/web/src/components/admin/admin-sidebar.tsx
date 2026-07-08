@@ -307,9 +307,9 @@ export function AdminSidebar({ current }: { current: AdminNavCurrent }) {
             Fluncle art reads against the dark sidebar; the img alt carries the
             link's accessible name in both states, so the visible wordmark is
             marked decorative to avoid a doubled reading. */}
-        <a
+        <Link
           className="flex items-center gap-2 rounded-md p-1 focus-visible:ring-3 focus-visible:ring-ring/50 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:p-0"
-          href="/admin"
+          to="/admin"
         >
           <span className="admin-brand-chip size-8 shrink-0">
             <img alt="Fluncle admin" src="/fluncle-transparant.png" />
@@ -317,7 +317,7 @@ export function AdminSidebar({ current }: { current: AdminNavCurrent }) {
           <span aria-hidden="true" className="admin-wordmark group-data-[collapsible=icon]:hidden">
             Fluncle <span className="text-muted-foreground">admin</span>
           </span>
-        </a>
+        </Link>
       </SidebarHeader>
       <SidebarContent>
         {/* display: contents keeps SidebarContent's flex layout intact while

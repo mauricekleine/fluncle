@@ -12,6 +12,7 @@ import {
 } from "@phosphor-icons/react";
 import { type ClipDTO, type RecordingDTO } from "@fluncle/contracts/orpc";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { InstagramIcon, TiktokIcon } from "@/components/platform-icons";
 import { Button } from "@fluncle/ui/components/button";
@@ -203,12 +204,13 @@ export function ClipCard({
 
       <div className="flex min-w-0 flex-1 flex-col gap-2 p-3">
         {recording?.id ? (
-          <a
+          <Link
             className="min-w-0 truncate text-sm font-medium hover:text-primary focus-visible:outline-2 focus-visible:outline-ring"
-            href={`/admin/studio/${encodeURIComponent(recording.id)}`}
+            params={{ recordingId: recording.id }}
+            to="/admin/studio/$recordingId"
           >
             {setTitle}
-          </a>
+          </Link>
         ) : (
           <span className="min-w-0 truncate text-sm font-medium">{setTitle}</span>
         )}
