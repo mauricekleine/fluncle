@@ -4,9 +4,11 @@ The version-controlled **source** for the Hermes automation cron jobs. The repo 
 
 Every step is a "read a queue → act per item, idempotently" loop over the `fluncle` CLI. There is **no on-add push**: a new find lands at `enrichment_status = pending` (queue-eligible) and is caught on the next tick.
 
+**The schedule is now CODE, not `state.db`.** Every automation cron here has been migrated OFF the Hermes gateway's `hermes cron create` scheduler (which held the schedule in the volume's `state.db`, invisible to git and lost on a re-provision) ONTO a **repo-checked-in host systemd `.timer`/`.service` pair** under `docs/agents/hermes/<job>-timer/` — exactly the pattern `fluncle-capture`/`fluncle-embed`/`fluncle-healthcheck`/`fluncle-pin-watch` already used (docs/hermes-durable-deploy-rfc.md § Unit E). The sweep code + the enrichment DSP skill are BAKED into the image and read from the baked path `/opt/hermes-scripts` (+ `/opt/hermes-skills`); the host timer only triggers them. So the **gateway holds NO automation crons** (`jobs.json` is `"jobs": []`, and `hermes cron list` is empty for automation), and the Discord CHAT agent (`gateway run`) is the only thing left on the gateway. See [§ Deploy model — host systemd timers](#deploy-model--host-systemd-timers-not-gateway-crons) below.
+
 ## Cron roster
 
-Live on the box as of the **2026-06-23 cutover** (+ `fluncle-render` wired **2026-06-24**, the newsletter converted off the agent **2026-06-27**). **Every** job is `--no-agent`; **no agent jobs remain** (`jobs.json` is `"jobs": []`). `fluncle-render` (the video render conductor, below) conducts renders on a separate scale-to-zero box.ascii box (rave-03), not on the Hermes box itself. "Box authoring" is how much model time the job spends locally: none (a pure deterministic trigger) or one `claude -p` call (a hybrid — subscription auth, zero OpenRouter). Run `hermes cron list` on the box for live job IDs + next-run times.
+Live on the box as of the **2026-06-23 cutover** (+ `fluncle-render` wired **2026-06-24**, the newsletter converted off the agent **2026-06-27**, the whole roster migrated to host systemd timers per the durable-deploy RFC). **Every** job is a `--no-agent` sweep on a **host systemd timer** (no agent jobs, no gateway crons remain). `fluncle-render` (the video render conductor, below) conducts renders on a separate scale-to-zero box.ascii box (rave-03), not on the Hermes box itself. "Box authoring" is how much model time the job spends locally: none (a pure deterministic trigger) or one `claude -p` call (a hybrid — subscription auth, zero OpenRouter). Run `systemctl list-timers 'fluncle-*'` on the host for the live timers + next-run times.
 
 | Job                      | Cadence             | Mode                   | Box authoring             | What it does                                                                                                                                                  |
 | ------------------------ | ------------------- | ---------------------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -25,7 +27,38 @@ Live on the box as of the **2026-06-23 cutover** (+ `fluncle-render` wired **202
 | `fluncle-newsletter`     | Fri 15:00 Amsterdam | `--no-agent` hybrid    | one `claude -p`           | draft + persist the weekly edition (send is an operator-run command)                                                                                          |
 | `fluncle-backup`         | every 24h           | `--no-agent`           | none (dump + R2)          | dump the prod DB → gzip → a PRIVATE R2 bucket (owned off-site backup) + prune to 30 daily / 12 monthly (§ The database-backup cron)                           |
 
-The per-cron sections below carry the full mechanism, schedule rationale, and the rebuild-from-scratch wiring for each. In the deploy recipes, `<box>` and `op://<vault>/…` are operator placeholders — substitute your own host and 1Password vault; the exact item paths live in the ops runbook note in 1Password (this repo is open source, so concrete hosts/vault names stay out of it).
+The per-cron sections below carry the full mechanism + schedule rationale for each; the deploy for every one is now the host-timer install (§ Deploy model below + each `<job>-timer/README.md`). In the secret recipes, `op://<vault>/…` is an operator placeholder — substitute your own 1Password vault; the exact item paths live in the ops runbook note in 1Password (this repo is open source, so concrete hosts/vault names stay out of it).
+
+## Deploy model — host systemd timers (not gateway crons)
+
+**Code rides the image; the schedule rides repo-checked-in host systemd timers; the volume holds only state.** There is no `hermes cron create` and no `docker cp` for automation anymore:
+
+- **Code (baked).** The sweep scripts bake into the image at `/opt/hermes-scripts` and the enrichment DSP skill at `/opt/hermes-skills` (Dockerfile, RFC § Unit A). They auto-update from `main` via the hourly `fluncle-pin-watch` rebuild. Consumers read them straight from the baked path — no `/opt/data/scripts` projection.
+- **Schedule (code).** Each automation cron is a `.timer`/`.service` pair under `docs/agents/hermes/<job>-timer/`, modeled on `capture-timer/` + `embed-timer/`. The unit's `ExecStart` is `docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/<sweep>.sh` (the baked path). One installer lays them all down: [`../install-host-timers.sh`](../install-host-timers.sh) loops over every `*-timer/` dir (+ `pin-watch/`), installs each unit into `/etc/systemd/system/`, and `systemctl enable --now`s each timer. Per-job install + smoke live in each `<job>-timer/README.md`.
+- **The /status freshness marker.** The gateway runner used to capture each run's stdout to `~/.hermes/cron/output/<job>/<ts>.md`, which the [`fluncle-healthcheck`](../scripts/fluncle-healthcheck.ts) prober reads. A host-timer `docker exec` sends stdout to journald instead, so every sweep now SELF-WRITES that marker via the shared [`../scripts/cron-output.sh`](../scripts/cron-output.sh) helper (`# Cron Job: fluncle-<job>` header + the JSON summary as the last line). The prober is UNCHANGED. (This also fixed a pre-existing blind spot: `capture`/`embed` were host timers that never wrote a marker, so `cron.capture`/`cron.embed` were cosmetic on `/status`.)
+
+The **13 migrated automation crons**, each with its own timer dir: [`enrich`](../enrich-timer/README.md) · [`context-note`](../context-note-timer/README.md) · [`note`](../note-timer/README.md) · [`observation`](../observation-timer/README.md) · [`backfill`](../backfill-timer/README.md) · [`social-capture`](../social-capture-timer/README.md) · [`artist-sweep`](../artist-sweep-timer/README.md) · [`artist-follow`](../artist-follow-timer/README.md) · [`render`](../render-timer/README.md) · [`studio-clip`](../studio-clip-timer/README.md) · [`live`](../live-timer/README.md) · [`newsletter`](../newsletter-timer/README.md) · [`backup`](../backup-timer/README.md). Already-migrated (unchanged here): [`capture`](../capture-timer/README.md), [`embed`](../embed-timer/README.md), [`healthcheck`](../healthcheck-timer/README.md), [`pin-watch`](../pin-watch/README.md).
+
+Two of these sweeps write a marker the prober does not yet read: `studio-clip` (the prober tracks `clip-drip`, a HELD Instagram drip-feed cron, not `studio-clip`) and `live` (no `cron.live` entry at all). That's a pre-existing `/status` gap, not a regression — reconciling `AUTOMATION_CRONS` is a flagged prober follow-up (the prober was kept UNCHANGED here).
+
+### The reset boundary (what survives a re-provision)
+
+A bare re-provision restores three of the four layers automatically — the fourth (accumulated state) is the one honest follow-on:
+
+- **Code** — baked into the image (Unit A). Restored by the rebuild.
+- **Schedule** — the host-timer units. Restored by running `../install-host-timers.sh` from the repo checkout.
+- **Secrets** — re-injected from 1Password by the host `fluncle-secrets-sync` timer ([`../secrets/`](../secrets/README.md)).
+- **Accumulated `state.db` state** — sessions, memories, kanban, and cron output/run-history under the agent home. This is NOT restored by the above; it restores from the daily [`fluncle-backup`](../backup-timer/README.md) → private-R2 backup, whose **restore tooling is the one sanctioned follow-on** (out of this epic, but named).
+
+### Operator activation runbook (one-time cutover)
+
+The migration is delete-as-you-go — green each host timer, then retire its gateway twin, never both live at once:
+
+1. **Attended image deploy.** Run `rebuild-hermes.sh --force` on rave-02 (watch the pre-smoke pass) so the new image carries the baked scripts + skill under `/opt/hermes-scripts` + `/opt/hermes-skills`. This one step is operator-attended (avoids the first-boot pre-smoke rollback trap).
+2. **Install the timers.** `sudo bash docs/agents/hermes/install-host-timers.sh` — lays down every `.timer`/`.service` and enables each.
+3. **Pilot `enrich` end-to-end.** `sudo systemctl start fluncle-enrich.service`; confirm the sweep runs from the baked path, a marker appears under `/opt/data/cron/output/fluncle-enrich/`, and `/status` shows `cron.enrich` fresh. (`enrich-timer/README.md` has the exact commands.)
+4. **Retire each gateway cron as its timer greens.** In the container: `hermes cron list` → `hermes cron delete <id>` for each `fluncle-<job>` once its host timer is confirmed. Never run a gateway cron and its timer at once (the sweeps are idempotent, so a transient overlap only wastes a tick). When done, `hermes cron list` is EMPTY for automation — the gateway holds NO automation crons; only the Discord CHAT agent (`gateway run`) remains.
+5. **Prune the vestigial volume copies.** Once every timer is green and reads the baked path, delete the now-unused `/opt/data/scripts` + `/opt/data/skills` copies (`docker exec hermes rm -rf /opt/data/scripts /opt/data/skills`) so no stale hand-cp'd code lingers.
 
 ## The `--no-agent` enrichment cron (LIVE)
 
@@ -41,15 +74,7 @@ The per-cron sections below carry the full mechanism, schedule rationale, and th
 | --------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------ |
 | `fluncle-embed` | every 5m | Drain `admin tracks embed --queue` (`hasEmbedding=false`, oldest-first); per finding (bounded batch, cap 3/tick): fetch `/api/preview/<id>` → `embed-track.py` (ffmpeg decode + MuQ mean-pool + L2-normalize, on the box) → `admin tracks update <id> --embedding-file`. No-op when empty. | The `embedding_json` column + the agent-tier `update_track` write + `hasEmbedding` filter. |
 
-**Two gates before wiring (operator).** Unlike the other sweeps, this one needs the **MuQ image layer** first: the pinned torch trio + `muq` + baked model weights + the `/opt/muq-venv` interpreter (see the Dockerfile MuQ layer — it self-deploys via `fluncle-pin-watch` on merge, unless the base image moved off Python 3.11, which is a manual base rebuild). Reconcile the pinned torch/muq versions with the spike's validated set before the first build. Then deploy the scripts and create the cron:
-
-```bash
-# Deploy the script trio (after the MuQ image layer is live on the box), then create the no-agent cron.
-scp docs/agents/hermes/scripts/embed-sweep.{sh,ts} docs/agents/hermes/scripts/embed-track.py <box>:~/.hermes/scripts/
-hermes cron create "every 5m" --no-agent --script embed-sweep.sh --deliver local --name fluncle-embed
-```
-
-Confirm with `hermes cron list`; per-run output lands in `~/.hermes/cron/output/{job_id}/{timestamp}.md`. It is already registered in `@fluncle/registry` (`cron.embed`) + the healthcheck `AUTOMATION_CRONS`, so `/status` shows it (as stale/down until the first tick lands).
+**Two gates before wiring (operator).** Unlike the other sweeps, this one needs the **MuQ image layer** first: the pinned torch trio + `muq` + baked model weights + the `/opt/muq-venv` interpreter (see the Dockerfile MuQ layer — it self-deploys via `fluncle-pin-watch` on merge, unless the base image moved off Python 3.11, which is a manual base rebuild). Reconcile the pinned torch/muq versions with the spike's validated set before the first build. Then deploy is the host timer — the baked `embed-sweep.sh`/`embed-sweep.ts`/`embed-track.py` trio on a 5m `.timer`; install + the mandatory peak-RAM gate live in [`../embed-timer/README.md`](../embed-timer/README.md) (or all timers at once via [`../install-host-timers.sh`](../install-host-timers.sh)). It is registered in `@fluncle/registry` (`cron.embed`) + the healthcheck `AUTOMATION_CRONS`, and the sweep now self-writes its `/status` marker (via `cron-output.sh`), so `cron.embed` reflects real runs — before, embed was a host timer that never wrote a marker, so the row was cosmetic.
 
 ## The `--no-agent` context-note cron (LIVE)
 
@@ -61,13 +86,7 @@ Confirm with `hermes cron list`; per-run output lands in `~/.hermes/cron/output/
 | ---------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
 | `fluncle-context-note` | every 5m | Drain `admin tracks context --queue` (`hasContext=false`, oldest-first); per finding (bounded batch, cap 6/tick): `admin tracks context <id>` → triggers the Worker (Firecrawl + Haiku distill + quiet `context_note` write). Idempotent; no-op when empty. | `context_track` agent-tier endpoint + `hasContext` filter (#86/#88/#129). |
 
-**Every 5m, like enrich:** the sweep burns **no box tokens** (it only triggers the Worker per queued finding) and no-ops on an empty queue, so a tight cadence is cheap — it gets fresh `context_note` onto a new find within minutes, which is the fuel the downstream `note` + `observation` crons consume. The Worker's Firecrawl + Haiku cost is paid only when a finding is actually queued (rare; most ticks no-op), not per-tick. To create it on a rebuilt box:
-
-```bash
-# Deploy the script pair, then create the no-agent cron.
-scp docs/agents/hermes/scripts/context-sweep.{sh,ts} <box>:~/.hermes/scripts/
-hermes cron create "every 5m" --no-agent --script context-sweep.sh --deliver local
-```
+**Every 5m, like enrich:** the sweep burns **no box tokens** (it only triggers the Worker per queued finding) and no-ops on an empty queue, so a tight cadence is cheap — it gets fresh `context_note` onto a new find within minutes, which is the fuel the downstream `note` + `observation` crons consume. The Worker's Firecrawl + Haiku cost is paid only when a finding is actually queued (rare; most ticks no-op), not per-tick. Deploy is the host timer — the baked `context-sweep.sh` on a 5m `.timer`; install + smoke in [`../context-note-timer/README.md`](../context-note-timer/README.md) (or all timers at once via [`../install-host-timers.sh`](../install-host-timers.sh)).
 
 ## The `--no-agent` catalogue-backfill cron (LIVE)
 
@@ -83,13 +102,7 @@ hermes cron create "every 5m" --no-agent --script context-sweep.sh --deliver loc
 
 > **Token tier — resolved: agent tier.** The backfills were reclassified from operator to **agent** tier in the Worker route guard (`adminAuth` only, no `operatorGuard`): they are internal + reversible — loving is idempotent, Discogs ids are internal enrichment, neither publishes — so this is a safe role-boundary move that keeps the box **low-privilege**. The box's existing **agent-scoped** token drives the sweep; no operator token on the box (the cleaner long-term fit, matching the `fluncle-enrich` precedent).
 
-To create it on a rebuilt box (after the token tier above is resolved):
-
-```bash
-# Deploy the script pair, then create the no-agent cron.
-scp docs/agents/hermes/scripts/backfill-sweep.{sh,ts} <box>:~/.hermes/scripts/
-hermes cron create "every 30m" --no-agent --script backfill-sweep.sh --deliver local
-```
+Deploy is the host timer — the baked `backfill-sweep.sh` on a 30m `.timer`; install + smoke in [`../backfill-timer/README.md`](../backfill-timer/README.md) (or all timers at once via [`../install-host-timers.sh`](../install-host-timers.sh)).
 
 ## The `--no-agent` social-URL-capture cron (LIVE)
 
@@ -103,25 +116,13 @@ hermes cron create "every 30m" --no-agent --script backfill-sweep.sh --deliver l
 | ------------------------ | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
 | `fluncle-social-capture` | every 10m | One `curl -fsS` POST to `/api/admin/social/posts/capture` (empty `{}` body). The Worker drains the "pushed but no URL" backlog across YouTube + TikTok: poll Postiz's `/missing`, build each permalink from the native content id, record `url`, link the release-id, flip a captured TikTok draft → published. Idempotent; the Worker no-ops once every pending post has a captured URL. | `capture_post_urls` (agent-tier `POST /admin/social/posts/capture`, #172). |
 
-**Every 10m:** the trigger burns no box tokens and the Worker no-ops once the backlog is drained, so a tight cadence is cheap — it grabs a freshly-published post's URL within minutes of the push settling on the platform. To create it on a rebuilt box (the image already carries `curl`; the agent-scoped token rides the cron env like the other sweeps):
-
-```bash
-# Deploy the lone script, then create the no-agent cron.
-scp docs/agents/hermes/scripts/social-capture-sweep.sh <box>:~/.hermes/scripts/
-hermes cron create "every 10m" --no-agent --script social-capture-sweep.sh --deliver local
-```
+**Every 10m:** the trigger burns no box tokens and the Worker no-ops once the backlog is drained, so a tight cadence is cheap — it grabs a freshly-published post's URL within minutes of the push settling on the platform. Deploy is the host timer — the baked lone `social-capture-sweep.sh` on a 10m `.timer`; install + smoke in [`../social-capture-timer/README.md`](../social-capture-timer/README.md) (or all timers at once via [`../install-host-timers.sh`](../install-host-timers.sh)).
 
 | Job              | Schedule | What it does                                                                                                                                                                                                                                                                   | Server slice                                   |
 | ---------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------- |
 | `fluncle-enrich` | every 5m | Drain `admin tracks enrich --queue`; per finding (bounded batch, cap 4/tick): `tracks get` → `analyze-track.ts` (ffmpeg + DSP on the box) → `admin tracks update --bpm [--key] --features --status done` (or `--status failed` when no preview). Idempotent; no-op when empty. | The existing `admin tracks update` write-back. |
 
-**Every 5m, not hourly:** the sweep burns no tokens and no-ops on an empty queue, so it runs far more often than the hourly hybrid sweeps — a new find enriches within minutes. The Worker-side Spinup trigger + SDK + secrets have been **removed** (this is the only path that enriches a find). The image carries `ffmpeg` + `bun`, and the `fluncle-track-enrichment` skill is installed under `~/.hermes/skills/` (→ `/opt/data/skills/`). To recreate it on a rebuilt box:
-
-```bash
-# Deploy the script pair, then create the no-agent cron.
-scp docs/agents/hermes/scripts/enrich-sweep.{sh,ts} <box>:~/.hermes/scripts/
-hermes cron create "every 5m" --no-agent --script enrich-sweep.sh --deliver local
-```
+**Every 5m, not hourly:** the sweep burns no tokens and no-ops on an empty queue, so it runs far more often than the hourly hybrid sweeps — a new find enriches within minutes. The Worker-side Spinup trigger + SDK + secrets have been **removed** (this is the only path that enriches a find). The image carries `ffmpeg` + `bun`, the sweep bakes to `/opt/hermes-scripts`, and the `fluncle-track-enrichment` skill bakes to `/opt/hermes-skills` (both auto-update from `main` via pin-watch — Unit A). Deploy is the host timer — the baked `enrich-sweep.sh` on a 5m `.timer`; install + smoke in [`../enrich-timer/README.md`](../enrich-timer/README.md) (or all timers at once via [`../install-host-timers.sh`](../install-host-timers.sh)).
 
 ## The HYBRID `--no-agent` observation cron (LIVE)
 
@@ -145,19 +146,7 @@ claude -p --model "$OBSERVE_CLAUDE_MODEL" --allowedTools "Read,Glob,Grep" --outp
 
 **The claude-auth ping.** If `claude -p` fails with an **auth/quota** signature (distinct from a transient model hiccup — the detection is narrow), the sweep **stops the batch**, leaves the queue **intact** (no data lost — the queue is the durable worklist), and emits a loud `{ ok:false, reason:"claude_auth", … }` summary line plus a best-effort POST to `DISCORD_ALERT_WEBHOOK` ("Fluncle observe-sweep: claude auth failed, re-auth needed") when that env is set. An absent webhook still leaves the loud summary + a nonzero exit.
 
-**Production pre-reqs.** The image now carries the `claude` (Claude Code) CLI **and** the `copywriting-fluncle` skill (baked at `/opt/claude/skills/copywriting-fluncle`, discovered via `CLAUDE_CONFIG_DIR=/opt/claude` so the non-root cron user finds it regardless of its HOME — see the Dockerfile + `docs/agents/hermes-agent.md` § The image). So a rebuilt box has both already. The one run-time pre-req is the claude auth token — and it **cannot come from the cron env** (Hermes hard-blocks provider credentials; see **Operational gotchas** below). `observe-sweep.sh` sources it from a `0600` operator-placed file at `${HOME}/.observe-sweep.env` (= `/opt/data/home/.observe-sweep.env`) holding `CLAUDE_CODE_OAUTH_TOKEN` (subscription auth, from `op://<vault>/CLAUDE_CODE_OAUTH_TOKEN/credential`; **not** OpenRouter) plus optionally `DISCORD_ALERT_WEBHOOK` + `OBSERVE_CLAUDE_MODEL`. `observe_track` is **agent tier** (#86), so the box's existing agent-scoped token drives the delivery POST; no operator token. To create it on a rebuilt box:
-
-```bash
-# Deploy the script pair (~/.hermes is hermes-owned 700, so copy IN via docker cp, not scp):
-docker cp observe-sweep.sh hermes:/opt/data/scripts/ && docker cp observe-sweep.ts hermes:/opt/data/scripts/
-docker exec hermes chown 1000:1000 /opt/data/scripts/observe-sweep.* && docker exec hermes chmod +x /opt/data/scripts/observe-sweep.sh
-# Place the 0600 secrets file the script sources (Hermes won't pass the token via env — see Gotchas).
-# The value never prints; it flows op -> the file:
-printf 'CLAUDE_CODE_OAUTH_TOKEN=%s\n' "$(op read op://<vault>/CLAUDE_CODE_OAUTH_TOKEN/credential)" \
-  | ssh <box> 'docker exec -i hermes sh -c "cat > /opt/data/home/.observe-sweep.env && chown hermes:hermes /opt/data/home/.observe-sweep.env && chmod 600 /opt/data/home/.observe-sweep.env"'
-# (append DISCORD_ALERT_WEBHOOK to the same file the same way — optional, for the auth-fail ping.)
-hermes cron create "every 60m" --no-agent --script observe-sweep.sh --deliver local --name fluncle-observation
-```
+**Production pre-reqs.** The image now carries the `claude` (Claude Code) CLI **and** the `copywriting-fluncle` skill (baked at `/opt/claude/skills/copywriting-fluncle`, discovered via `CLAUDE_CONFIG_DIR=/opt/claude` so the non-root cron user finds it regardless of its HOME — see the Dockerfile + `docs/agents/hermes-agent.md` § The image). So a rebuilt box has both already. The one run-time pre-req is the claude auth token — and it **cannot come from the cron env** (Hermes hard-blocks provider credentials; see **Operational gotchas** below). `observe-sweep.sh` sources it from a `0600` operator-placed file at `${HOME}/.observe-sweep.env` (= `/opt/data/home/.observe-sweep.env`) holding `CLAUDE_CODE_OAUTH_TOKEN` (subscription auth, from `op://<vault>/CLAUDE_CODE_OAUTH_TOKEN/credential`; **not** OpenRouter) plus optionally `DISCORD_ALERT_WEBHOOK` + `OBSERVE_CLAUDE_MODEL`. `observe_track` is **agent tier** (#86), so the box's existing agent-scoped token drives the delivery POST; no operator token. The `CLAUDE_CODE_OAUTH_TOKEN` rides the shared `0600` `${HOME}/.fluncle-secrets.env` (op-injected by `fluncle-secrets-sync`; Hermes hard-blocks provider creds from the cron env — see **Operational gotchas**). Deploy is the host timer — the baked `observe-sweep.sh` on a 60m `.timer`; install + smoke in [`../observation-timer/README.md`](../observation-timer/README.md) (or all timers at once via [`../install-host-timers.sh`](../install-host-timers.sh)).
 
 **Every 60m, not 5m:** observation is the paid step (Cartesia credits + subscription quota), and its input is the context note the hourly context sweep produces — so an hourly cadence keeps the two in step. **`BATCH_CAP=1`** (one finding per tick): the cron runner kills a job at 120s and a single `claude -p` authoring + Cartesia render already ≈ that budget (raise the cap only if a healthy run measures well under 120s, or lift `cron.script_timeout_seconds` in `config.yaml`). The queue drains across hourly ticks; a fresh eligible finding is caught next tick.
 
@@ -173,15 +162,7 @@ hermes cron create "every 60m" --no-agent --script observe-sweep.sh --deliver lo
 | -------------- | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
 | `fluncle-note` | every 10m | Drain `admin tracks note --queue` (`hasContext=true AND hasNote=false`, oldest-first); per finding (bounded batch, cap **1**/tick): `track get` → `claude -p` authors the one-line editorial note (read-only tools, `copywriting-fluncle`) → `admin tracks note --script-file` (the Worker voice-gates + **fills an empty note only** + stores). An operator note already on file is a `skipped` no-op (the override wins); a gate reject is skipped (stays queued). Idempotent; no-op when empty. | `note_track` (agent tier) + `hasNote` filter (this slice). |
 
-**Env knobs.** `NOTE_CLAUDE_MODEL` (default `claude-sonnet-4-6`); `NOTE_CLAUDE_EFFORT` (optional, passed as `--effort` when set); `DISCORD_ALERT_WEBHOOK` (optional, the claude-auth-failed ping target). **Production pre-reqs** match observation's: the `claude` CLI + `copywriting-fluncle` skill are baked into the image, and the token is **file-sourced** from a `0600` `${HOME}/.note-sweep.env` (Hermes hard-blocks provider creds from the cron env — see **Operational gotchas**), holding `CLAUDE_CODE_OAUTH_TOKEN` plus optionally `DISCORD_ALERT_WEBHOOK` / `NOTE_CLAUDE_MODEL`. `note_track` is **agent tier**, so the box's existing agent-scoped token drives the delivery POST. The auth-fail ping ("Fluncle note-sweep: claude auth failed, re-auth needed") and the **`BATCH_CAP=1`** under-120s rule are the same as observation. To wire it on a rebuilt box (mirror the observation block above, swapping `observe`→`note`):
-
-```bash
-docker cp note-sweep.sh hermes:/opt/data/scripts/ && docker cp note-sweep.ts hermes:/opt/data/scripts/
-docker exec hermes chown 1000:1000 /opt/data/scripts/note-sweep.* && docker exec hermes chmod +x /opt/data/scripts/note-sweep.sh
-printf 'CLAUDE_CODE_OAUTH_TOKEN=%s\n' "$(op read op://<vault>/CLAUDE_CODE_OAUTH_TOKEN/credential)" \
-  | ssh <box> 'docker exec -i hermes sh -c "cat > /opt/data/home/.note-sweep.env && chown hermes:hermes /opt/data/home/.note-sweep.env && chmod 600 /opt/data/home/.note-sweep.env"'
-hermes cron create "every 10m" --no-agent --script note-sweep.sh --deliver local --name fluncle-note
-```
+**Env knobs.** `NOTE_CLAUDE_MODEL` (default `claude-sonnet-4-6`); `NOTE_CLAUDE_EFFORT` (optional, passed as `--effort` when set); `DISCORD_ALERT_WEBHOOK` (optional, the claude-auth-failed ping target). **Production pre-reqs** match observation's: the `claude` CLI + `copywriting-fluncle` skill are baked into the image, and the token is **file-sourced** from a `0600` `${HOME}/.note-sweep.env` (Hermes hard-blocks provider creds from the cron env — see **Operational gotchas**), holding `CLAUDE_CODE_OAUTH_TOKEN` plus optionally `DISCORD_ALERT_WEBHOOK` / `NOTE_CLAUDE_MODEL`. `note_track` is **agent tier**, so the box's existing agent-scoped token drives the delivery POST. The auth-fail ping ("Fluncle note-sweep: claude auth failed, re-auth needed") and the **`BATCH_CAP=1`** under-120s rule are the same as observation. The `CLAUDE_CODE_OAUTH_TOKEN` rides the shared `0600` `${HOME}/.fluncle-secrets.env` (op-injected by `fluncle-secrets-sync`). Deploy is the host timer — the baked `note-sweep.sh` on a 10m `.timer`; install + smoke in [`../note-timer/README.md`](../note-timer/README.md) (or all timers at once via [`../install-host-timers.sh`](../install-host-timers.sh)).
 
 ## The render conductor cron (LIVE)
 
@@ -208,28 +189,12 @@ hermes cron create "every 10m" --no-agent --script note-sweep.sh --deliver local
 | ---------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
 | `fluncle-render` | every 60m | IDLE→ resume/reprovision rave-03, inject creds, trigger one detached `@fluncle-video` render of the queue head (`admin tracks queue`, oldest-first); RENDERING→ poll + park the box on the done-marker. One render at a time (state + `mkdir` lock). The render box ships via `admin tracks video`. Idempotent; no-op on an empty queue / within the hourly window. | `presign_track_video_uploads` + `track video` (agent tier) + the render-queue prompt's hard rails. |
 
-**Pre-reqs.** The image carries `bun` + the `fluncle` CLI + the **box.ascii CLI** + `openssh-client` (the Dockerfile box block). The render box is provisioned from `main` (no image dep). Run-time pre-reqs: the `0600` secrets file + box.ascii auth. To wire it on a rebuilt box:
-
-```bash
-# 1. Deploy the three scripts (~/.hermes is hermes-owned 700 — copy IN via docker cp, not scp).
-for s in render-conductor.sh provision-rave-03.sh render-detached.sh; do
-  docker cp "docs/agents/hermes/scripts/$s" hermes:/opt/data/scripts/
-done
-docker exec hermes sh -c 'chown 1000:1000 /opt/data/scripts/render-*.sh /opt/data/scripts/provision-rave-03.sh && chmod +x /opt/data/scripts/render-*.sh /opt/data/scripts/provision-rave-03.sh'
-
-# 2. Place the 0600 secrets file (Hermes won't pass these via the cron env). Values never print; op -> the file.
-{ printf 'BOX_API_KEY=%s\n' "$(op read op://<vault>/BOX_API_KEY/credential)"; \
-  printf 'CLAUDE_CODE_OAUTH_TOKEN=%s\n' "$(op read op://<vault>/CLAUDE_CODE_OAUTH_TOKEN/credential)"; } \
-  | ssh <box> 'docker exec -i hermes sh -c "cat > /opt/data/home/.render-conductor.env && chown hermes:hermes /opt/data/home/.render-conductor.env && chmod 600 /opt/data/home/.render-conductor.env"'
-
-# 3. Create the cron (hourly).
-hermes cron create "every 60m" --no-agent --script render-conductor.sh --deliver local --name fluncle-render
-```
+**Pre-reqs.** The image carries `bun` + the `fluncle` CLI + the **box.ascii CLI** + `openssh-client` (the Dockerfile box block), and bakes `render-conductor.sh` (+ `provision-rave-03.sh`, which the conductor execs from its own dir on a reprovision) to `/opt/hermes-scripts`. The render box is provisioned from `main` (no image dep). The `BOX_API_KEY` + `CLAUDE_CODE_OAUTH_TOKEN` provider creds ride the shared `0600` `${HOME}/.fluncle-secrets.env` (op-injected by `fluncle-secrets-sync`, sourced by the conductor), and box.ascii auth persists under the cron user's `HOME`. Deploy is the host timer — the baked `render-conductor.sh` on a 60m `.timer`; install + smoke in [`../render-timer/README.md`](../render-timer/README.md) (or all timers at once via [`../install-host-timers.sh`](../install-host-timers.sh)). Because the conductor is a state machine with many inline `exit`s (not a thin exec-wrapper), its unit writes the `/status` marker by wrapping it (`emit_cron_output render -- bash …`) rather than the sweep sourcing `cron-output.sh` itself.
 
 **Smoke-test before scheduling** (mimic the cron user — `docker exec -u hermes -e HOME=/opt/data/home`, § Operational gotchas):
 
-- `docker exec -u hermes -e HOME=/opt/data/home hermes box login "$(op read op://<vault>/BOX_API_KEY/credential)"` then `box status` → authed.
-- `docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/data/scripts/render-conductor.sh` against a non-empty queue → expect `started render of <logId> on <boxid>`; a second immediate run → `render in flight … single-flight hold`. Watch `~/.render-conductor/conductor.log` + the render box's `~/conductor-run.log`.
+- `docker exec -u hermes -e HOME=/opt/data/home hermes box status` → authed (the conductor `box login`s from the shared secrets on each tick).
+- `docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/render-conductor.sh` against a non-empty queue → expect `started render of <logId> on <boxid>`; a second immediate run → `render in flight … single-flight hold`. Watch `~/.render-conductor/conductor.log` + the render box's `~/conductor-run.log`.
 - Confirm the first render ships (the finding leaves `admin tracks queue`) before walking away. Then schedule + watch a few hourly ticks.
 
 ### box.ascii CLI quirks (handled)
@@ -252,15 +217,15 @@ Operational notes: the cron user is `hermes` (`HOME=/opt/data/home`); `box login
 
 **What it probes (each → `{ service, status: ok|degraded|down, message, latencyMs }`).** All probes are quick HTTP/`dig`/TCP/file reads with a short (3–5s) per-probe timeout, so one hung target can never blow the runner's ~120s kill — the whole tick finishes well under budget.
 
-| Service      | Probe                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `web`        | timed HTTP GET `${HEALTHCHECK_WORKER_URL}/api/health` — `ok` on a 200 (latency = elapsed ms), `down` otherwise (`200 in 142ms`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `r2`         | HTTP HEAD `${HEALTHCHECK_R2_PROBE_URL}` (a known public object) — `ok` on any 2xx.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `dns`        | `dig +short +time=3 +tries=1 ${HEALTHCHECK_DNS_QUERY}` — `ok` on a non-empty answer; `down` on empty/timeout. The message reports the answer **count**, never an address.                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `ssh`        | a TCP-connect to `${HEALTHCHECK_SSH_HOST}:${HEALTHCHECK_SSH_PORT}` (a successful handshake is liveness; we never speak SSH) — `ok` if it connects.                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `cron.*`     | reads `~/.hermes/cron/output/<job>/` for each Hermes gateway cron (enrich, context-note, note, observation, backfill, social-capture, clip-drip, render, newsletter, backup): newest `*.md`, last line parsed as JSON (`.ok !== false`) AND fresh within ~3× the cron's cadence. ONE row PER cron (service id = the registry surface name, e.g. `cron.enrich`); a cron with no output dir yet is "no data" (ok-unknown, never `down`). `cron.healthcheck` is NOT read here (this prober IS that cron, now on a host timer with no gateway output dir) — its row is emitted self-evidently, like `hermes`. |
-| `render-box` | reads `${HOME}/.render-conductor/state` (`idle`/`rendering` both ok; missing = "not yet provisioned", ok). It never wakes the scale-to-zero box; it optionally appends box.ascii plan usage if `box limits --json` returns it. A DISTINCT signal from `cron.render` (the conductor cron's own freshness): this is the box's reachability, that is the cron's last run.                                                                                                                                                                                                                                    |
-| `hermes`     | the cron runs ON the Hermes box, so reaching the probe is self-evident liveness → `ok`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| Service      | Probe                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `web`        | timed HTTP GET `${HEALTHCHECK_WORKER_URL}/api/health` — `ok` on a 200 (latency = elapsed ms), `down` otherwise (`200 in 142ms`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `r2`         | HTTP HEAD `${HEALTHCHECK_R2_PROBE_URL}` (a known public object) — `ok` on any 2xx.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `dns`        | `dig +short +time=3 +tries=1 ${HEALTHCHECK_DNS_QUERY}` — `ok` on a non-empty answer; `down` on empty/timeout. The message reports the answer **count**, never an address.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `ssh`        | a TCP-connect to `${HEALTHCHECK_SSH_HOST}:${HEALTHCHECK_SSH_PORT}` (a successful handshake is liveness; we never speak SSH) — `ok` if it connects.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `cron.*`     | reads `~/.hermes/cron/output/<job>/` for each automation cron (enrich, context-note, note, observation, backfill, artist-sweep, artist-follow, social-capture, clip-drip, render, newsletter, backup): newest `*.md`, last line parsed as JSON (`.ok !== false`) AND fresh within ~3× the cron's cadence. ONE row PER cron (service id = the registry surface name, e.g. `cron.enrich`); a cron with no output dir yet is "no data" (ok-unknown, never `down`). Now that each cron is a HOST TIMER (§ Deploy model), the sweep SELF-WRITES that marker via [`../scripts/cron-output.sh`](../scripts/cron-output.sh) (the gateway runner used to) — so the prober is unchanged. `cron.healthcheck` is NOT read here (this prober IS that cron — a self-read would be circular); its row is emitted self-evidently, like `hermes`. (Two gaps, flagged not fixed: `clip-drip` has no live cron — the drip-feed is un-deployed — while the live `studio-clip` cron has no `cron.*` entry; and `fluncle-live` has none either.) |
+| `render-box` | reads `${HOME}/.render-conductor/state` (`idle`/`rendering` both ok; missing = "not yet provisioned", ok). It never wakes the scale-to-zero box; it optionally appends box.ascii plan usage if `box limits --json` returns it. A DISTINCT signal from `cron.render` (the conductor cron's own freshness): this is the box's reachability, that is the cron's last run.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `hermes`     | the cron runs ON the Hermes box, so reaching the probe is self-evident liveness → `ok`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 
 > `onion` (Tor reachability) is **out of scope for v1** — it needs a SOCKS proxy the box may not have, so the page just won't show it until a later pass (a one-line `TODO` marks the spot in the orchestrator).
 
@@ -285,7 +250,7 @@ Operational notes: the cron user is `hermes` (`HOME=/opt/data/home`); `box login
 
 `FLUNCLE_API_TOKEN` is **not** in that file: the agent-scoped token is already in the **running container's environment** (set at `docker run` from the operator's `--env-file`), and the host timer's `docker exec` inherits it — so it needs to pass only `-e HOME=/opt/data/home`.
 
-The script pair ships with the container at `/opt/data/scripts/` (deploy it as the other sweeps do — `docker cp` + `chown 1000:1000` + `chmod +x`). What's different is the SCHEDULE: instead of `hermes cron create`, the prober is driven by a **host systemd timer**. Install the units, enable the timer, and **retire the old gateway cron** — the full one-time recipe (and the why) lives in [`../healthcheck-timer/README.md`](../healthcheck-timer/README.md):
+The script pair is BAKED into the image at `/opt/hermes-scripts/` (Unit A — auto-updates from `main` via pin-watch, no `docker cp`). What's different from the work sweeps is the SCHEDULE: instead of `hermes cron create`, the prober is driven by a **host systemd timer** — and, because the prober IS the healthcheck, its `.sh` writes NO cron-output marker (a self-read would be circular; its `/status` row is emitted self-evidently). Install the units, enable the timer, and **retire the old gateway cron** — the full one-time recipe (and the why) lives in [`../healthcheck-timer/README.md`](../healthcheck-timer/README.md):
 
 ```bash
 sudo install -m 0644 docs/agents/hermes/healthcheck-timer/fluncle-healthcheck.service /etc/systemd/system/
@@ -312,22 +277,7 @@ docker exec hermes hermes cron remove fluncle-healthcheck   # the host timer now
 - `TWITCH_CLIENT_ID` — the Twitch dev-app client id ([dev.twitch.tv/console/apps](https://dev.twitch.tv/console/apps)).
 - `TWITCH_CLIENT_SECRET` — the Twitch dev-app client secret (Hermes hard-blocks provider-cred-looking vars from the cron env — § Operational gotchas — so it must ride the injected file, not the cron env).
 
-`LIVE_WORKER_URL` (the POST target) defaults to `https://www.fluncle.com` in the orchestrator and `TWITCH_USER_LOGIN` defaults to `flunclelive`, so neither needs configuring (override via the shared file only for testing). `FLUNCLE_API_TOKEN` is **not** a new secret: the agent-scoped token already rides the **cron env** (an unrecognized custom var passes Hermes' provider-cred blocklist, same as the other sweeps). To wire it on the box (the image already carries `bun` + `curl`):
-
-```bash
-# 1. Add the two creds to the box's 1Password secrets vault (the one the
-#    fluncle-secrets-sync timer reads — exact vault/item in the ops runbook), then
-#    reference them from the host inject template, e.g.:
-#      TWITCH_CLIENT_ID=op://<vault>/<item>/client-id
-#      TWITCH_CLIENT_SECRET=op://<vault>/<item>/client-secret
-# 2. Re-render the shared secrets file now (or wait for the ~15m timer):
-sudo systemctl start fluncle-secrets-sync
-# 3. Deploy the script pair (~/.hermes is hermes-owned 700 — copy IN via docker cp, not scp):
-docker cp fluncle-live.sh hermes:/opt/data/scripts/ && docker cp fluncle-live.ts hermes:/opt/data/scripts/
-docker exec hermes sh -c 'chown 1000:1000 /opt/data/scripts/fluncle-live.* && chmod +x /opt/data/scripts/fluncle-live.sh'
-# 4. Create the cron:
-hermes cron create "every 1m" --no-agent --script fluncle-live.sh --deliver local --name fluncle-live
-```
+`LIVE_WORKER_URL` (the POST target) defaults to `https://www.fluncle.com` in the orchestrator and `TWITCH_USER_LOGIN` defaults to `flunclelive`, so neither needs configuring (override via the shared file only for testing). `FLUNCLE_API_TOKEN` is **not** a new secret: the agent-scoped token already rides the **cron env** (an unrecognized custom var passes Hermes' provider-cred blocklist, same as the other sweeps). Add the two Twitch creds to the box's 1Password secrets vault (referenced from the host inject template as `TWITCH_CLIENT_ID` / `TWITCH_CLIENT_SECRET`) and re-render the shared secrets file (`sudo systemctl start fluncle-secrets-sync`). Deploy is the host timer — the baked `fluncle-live.sh` on a 1m `.timer`; install + smoke in [`../live-timer/README.md`](../live-timer/README.md) (or all timers at once via [`../install-host-timers.sh`](../install-host-timers.sh)).
 
 **De-risk before wiring (3 curls, ~30s).** Prove the spine with the operator's `client_id`/`client_secret` before trusting the cron: 1) mint — `curl -X POST 'https://id.twitch.tv/oauth2/token' -d "client_id=…&client_secret=…&grant_type=client_credentials"`; 2) live — `curl -H 'Client-Id: …' -H 'Authorization: Bearer <token>' 'https://api.twitch.tv/helix/streams?user_login=flunclelive'` while the channel is live (expect a populated `data[]`); 3) offline — the same when off (expect `data: []`). If that read works, the whole spine is green.
 
@@ -341,15 +291,9 @@ hermes cron create "every 1m" --no-agent --script fluncle-live.sh --deliver loca
 | --------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------ |
 | `fluncle-studio-clip` | every 15m | Drain `admin clips list --status pending`; per clip (bounded batch, cap **1**/tick): `admin clips cut <id>` → ffmpeg trim + 9:16 crop + brand frame → PUT `<clipId>/footage.mp4` to R2 → finalize. A `set_not_staged` clip is skipped (stays pending). Idempotent; no-op when empty. | `cut_clip` (agent tier) + the `admin clips` worklist (#215). |
 
-**Config (all optional, from the shared `0600` `.fluncle-secrets.env` the other sweeps source).** `CLIP_FONT_FILE` points the brand-frame `drawtext` at a `.ttf` (absent it, fontconfig's default font is used); `CLIP_BATCH_CAP` widens the per-tick batch (default **1** — a clip not reached this tick is picked up ~15m later). Neither is required. To create it on a rebuilt box:
+**Config (all optional, from the shared `0600` `.fluncle-secrets.env` the other sweeps source).** `CLIP_FONT_FILE` points the brand-frame `drawtext` at a `.ttf` (absent it, fontconfig's default font is used); `CLIP_BATCH_CAP` widens the per-tick batch (default **1** — a clip not reached this tick is picked up ~15m later). Neither is required. Deploy is the host timer — the baked `clip-sweep.sh` on a 15m `.timer`; install + smoke in [`../studio-clip-timer/README.md`](../studio-clip-timer/README.md) (or all timers at once via [`../install-host-timers.sh`](../install-host-timers.sh)).
 
-```bash
-# Deploy the script pair, then create the no-agent cron.
-scp docs/agents/hermes/scripts/clip-sweep.{sh,ts} <box>:~/.hermes/scripts/
-hermes cron create "every 15m" --no-agent --script clip-sweep.sh --deliver local --name fluncle-studio-clip
-```
-
-> **Follow-up:** `fluncle-studio-clip` is **not yet** in the `fluncle-healthcheck` `AUTOMATION_CRONS` (`CRON_SPECS`), so it does not yet surface a `cron.studio-clip` row on `/status` — add it there when the healthcheck sweep is next touched.
+> **Follow-up (prober reconcile — flagged, not fixed here):** `fluncle-studio-clip` is **not** in the `fluncle-healthcheck` `AUTOMATION_CRONS`, so it does not surface a `cron.studio-clip` row on `/status`. What the prober DOES list is `cron.clip-drip` (match `clip-drip`) — the separate, DELIBERATELY-un-deployed clip→Instagram drip-feed (`clip-drip-sweep.sh`, excluded from the Unit A bake, no host timer). So the prober has a `clip-drip` row with no live cron, and the live `studio-clip` cron has no row. This is pre-existing (studio-clip was never in `AUTOMATION_CRONS`); the migration writes a `fluncle-studio-clip` marker for future prober support but does not touch the prober. Reconciling this (is `clip-drip` pending or dead? what registry surface should `studio-clip` get?) is an open question for the operator.
 
 ## The `--no-agent` Friday newsletter sweep (LIVE)
 
@@ -400,16 +344,7 @@ The `--no-agent` sweeps (enrich, context, observation, backfill) are plain box-c
    R2_ACCOUNT_ID=0651fd3b33d9e0b2fe72a5f13e5cf65d
    ```
 
-3. **Deploy the pair + create the cron** (`~/.hermes` is `hermes`-owned 700 — copy IN via `docker cp`, per § Operational gotchas):
-
-   ```bash
-   docker cp docs/agents/hermes/scripts/backup-sweep.sh hermes:/opt/data/scripts/
-   docker cp docs/agents/hermes/scripts/backup-sweep.ts hermes:/opt/data/scripts/
-   docker exec hermes sh -c 'chown 1000:1000 /opt/data/scripts/backup-sweep.* && chmod +x /opt/data/scripts/backup-sweep.sh'
-   hermes cron create "every 24h" --no-agent --script backup-sweep.sh --deliver local --name fluncle-backup
-   ```
-
-   Smoke-test as the cron user first (§ Operational gotchas): `docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/data/scripts/backup-sweep.sh` → expect an `{ "ok": true, "dailyKey": … }` summary and the object in R2. Then confirm `cron.backup` goes green on `/status` after a tick.
+3. **Install the host timer.** The sweep pair bakes to `/opt/hermes-scripts` (Unit A); deploy is the host timer — the baked `backup-sweep.sh` on a 24h `.timer`, install + smoke in [`../backup-timer/README.md`](../backup-timer/README.md) (or all timers at once via [`../install-host-timers.sh`](../install-host-timers.sh)). Smoke-test as the cron user first: `docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/backup-sweep.sh` → expect an `{ "ok": true, "dailyKey": … }` summary and the object in R2. Then confirm `cron.backup` goes green on `/status` after a tick.
 
 ## The full-song capture sweep (a HOST systemd timer, PREPARED — not yet deployed)
 
@@ -425,22 +360,21 @@ The `--no-agent` sweeps (enrich, context, observation, backfill) are plain box-c
 | ----------------- | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
 | `fluncle-capture` | every 5m              | Read `admin tracks capture-audio --queue` (`captureQueue=true`, newest-first, backoff-aware) over direct HTTP; per finding (bounded batch, cap 4): `yt-dlp` a sticky-proxy `ytsearch5` → duration-guard → `-f bestaudio` → ffprobe-confirm → S3-direct PUT to `fluncle-source-audio` → `update_track` sets the key + `done`. | The `capture_status`/`source_audio_*` columns + the agent-tier `update_track` write + the queue filter. |
 
-**OPERATOR-GATED wiring — a HOST TIMER (full runbook in [`../capture-timer/`](../capture-timer/README.md)).** The private bucket + the proxy/R2 creds are provisioned (2026-07-07). `yt-dlp` + `ffprobe` on PATH are a box deploy prereq. In short: the secrets are already in the box's `op inject` template (materialized to `~/.fluncle-secrets.env`) — `FLUNCLE_YTDLP_PROXY_HOST` / `_PORT` / `_USERNAME` / `_PASSWORD`, `FLUNCLE_SOURCE_AUDIO_R2_ACCESS_KEY_ID` / `_SECRET_ACCESS_KEY` (scoped Object Read & Write on `fluncle-source-audio` ONLY, never `fluncle-videos`), the reused public `R2_ACCOUNT_ID`, and the box's AGENT-scoped `FLUNCLE_API_TOKEN` for the write-back — then `docker cp` the sweep pair into `/opt/data/scripts/` and install the host units:
+**OPERATOR-GATED wiring — a HOST TIMER (full runbook in [`../capture-timer/`](../capture-timer/README.md)).** The private bucket + the proxy/R2 creds are provisioned (2026-07-07). `yt-dlp` + `ffprobe` on PATH are a box deploy prereq. In short: the secrets are already in the box's `op inject` template (materialized to `~/.fluncle-secrets.env`) — `FLUNCLE_YTDLP_PROXY_HOST` / `_PORT` / `_USERNAME` / `_PASSWORD`, `FLUNCLE_SOURCE_AUDIO_R2_ACCESS_KEY_ID` / `_SECRET_ACCESS_KEY` (scoped Object Read & Write on `fluncle-source-audio` ONLY, never `fluncle-videos`), the reused public `R2_ACCOUNT_ID`, and the box's AGENT-scoped `FLUNCLE_API_TOKEN` for the write-back. The sweep pair + the pinned `yt-dlp` bake to `/opt/hermes-scripts` (Unit A/D — no `docker cp`); install the host units:
 
 ```bash
-docker cp docs/agents/hermes/scripts/capture-sweep.sh hermes:/opt/data/scripts/
-docker cp docs/agents/hermes/scripts/capture-sweep.ts hermes:/opt/data/scripts/
-docker exec hermes sh -c 'chown 1000:1000 /opt/data/scripts/capture-sweep.* && chmod +x /opt/data/scripts/capture-sweep.sh'
 sudo install -m 0644 docs/agents/hermes/capture-timer/fluncle-capture.service /etc/systemd/system/
 sudo install -m 0644 docs/agents/hermes/capture-timer/fluncle-capture.timer   /etc/systemd/system/
 sudo systemctl daemon-reload && sudo systemctl enable --now fluncle-capture.timer
 ```
 
-Smoke-test as the cron user first: `docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/data/scripts/capture-sweep.sh` → expect an `{ "ok": true, "done": … }` summary and an object keyed by the finding's Log ID (`<logId>/…`) in R2. It is registered in `@fluncle/registry` (`cron.capture`) + the healthcheck `AUTOMATION_CRONS`, so `cron.capture` shows on `/status` (stale/down until the first tick lands) — the prober reads the cron output dir the `docker exec` writes, keyed by the `fluncle-capture` name, even though the scheduler is a host timer.
+Smoke-test as the cron user first: `docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/capture-sweep.sh` → expect an `{ "ok": true, "done": … }` summary and an object keyed by the finding's Log ID (`<logId>/…`) in R2. It is registered in `@fluncle/registry` (`cron.capture`) + the healthcheck `AUTOMATION_CRONS`, so `cron.capture` shows on `/status` — the sweep now self-writes the cron-output marker (via `cron-output.sh`; before this it never did, so `cron.capture` was cosmetic), keyed by the `fluncle-capture` name, even though the scheduler is a host timer.
 
 ## The cron mechanism (verified against upstream)
 
 Source: <https://hermes-agent.nousresearch.com/docs/user-guide/features/cron> (fetched 2026-06-21).
+
+> This section describes the **retired** gateway cron scheduler. No automation cron runs on it anymore — every sweep is a host systemd timer (§ Deploy model). It is kept here as reference for the mechanism the migration replaced (and the newsletter box-clock/TZ history, now expressed directly by the newsletter timer's `OnCalendar`).
 
 - **Where jobs live:** `~/.hermes/cron/jobs.json` on the box. Per-run output is saved to `~/.hermes/cron/output/{job_id}/{timestamp}.md`. (Crons are **not** in `config.yaml` — `config.yaml` only carries cron _defaults_ like `cron.wrap_response` / `cron.script_timeout_seconds`.)
 - **Scheduler:** the gateway ticks every 60 s and runs any due job in a **completely fresh, isolated session**. A job's script — and the hybrids' inline `claude -p` authoring prompt — must be self-contained; there is no carried conversation.
@@ -452,19 +386,11 @@ Source: <https://hermes-agent.nousresearch.com/docs/user-guide/features/cron> (f
 
 ## How the operator wires these on the box
 
-**Every cron is a `--no-agent --script` job created on the box** — `jobs.json` holds no jobs (it is the mechanism record + source-of-truth pointer only). Each per-cron section above carries the exact `hermes cron create … --no-agent --script <sweep>.sh …` recipe + its script-deploy step; recreate them from those. The newsletter follows the same `--no-agent --script` form (a cron expression, delivered to Discord so the operator sees the send command) — **not** an agent prompt:
+**Every automation cron is a host systemd timer now — there is no `hermes cron create`.** The schedule is code: the sweep bakes to `/opt/hermes-scripts` (Unit A) and its `.timer`/`.service` pair lives under `docs/agents/hermes/<job>-timer/`. Lay them all down with `sudo bash docs/agents/hermes/install-host-timers.sh` (or per-cron via each `<job>-timer/README.md`), then follow the [operator activation runbook](#operator-activation-runbook-one-time-cutover) at the top: attended `rebuild-hermes.sh --force` → `install-host-timers.sh` → pilot `enrich` → `hermes cron delete` each gateway twin as its timer greens → prune `/opt/data/{scripts,skills}`. After the cutover, `hermes cron list` is empty for automation and `jobs.json` is `"jobs": []`.
 
-```bash
-# On the devbox, over SSH on the tailnet (address in the operator's ops notes).
-# Deploy the sweep pair, then create the no-agent cron.
-# Pin the box clock to Europe/Amsterdam FIRST (see "The newsletter cron's two extras").
-# The claude token rides the shared 0600 ~/.fluncle-secrets.env the sweep sources
-# (CLAUDE_CODE_OAUTH_TOKEN — Hermes withholds provider creds from the cron env).
-scp docs/agents/hermes/scripts/newsletter-sweep.{sh,ts} <box>:~/.hermes/scripts/
-hermes cron create "0 15 * * 5" --no-agent --script newsletter-sweep.sh --deliver discord --name fluncle-newsletter
-```
+The **newsletter** is the one cron whose cadence isn't an interval — the gateway used the cron expression `0 15 * * 5` against the box clock (which is why the box was pinned `TZ=Europe/Amsterdam`); its host timer expresses the timezone directly (`OnCalendar=Fri 15:00 Europe/Amsterdam`), so the pin is no longer load-bearing for it. See [`../newsletter-timer/README.md`](../newsletter-timer/README.md).
 
-After creating, confirm with `hermes cron list` and check `~/.hermes/cron/jobs.json`.
+The gates + smoke tests below still apply — run them by hand against the agent token before enabling each timer.
 
 ### Before wiring (gates from the brief)
 
@@ -484,8 +410,8 @@ After creating, confirm with `hermes cron list` and check `~/.hermes/cron/jobs.j
 
 ### Verify it's healthy
 
-- `hermes cron list` shows `fluncle-enrich` (live) plus the `fluncle-context-note` / `fluncle-note` / `fluncle-backfill` / `fluncle-observation` / `fluncle-social-capture` / `fluncle-healthcheck` / `fluncle-studio-clip` / `fluncle-render` sweeps and the `fluncle-newsletter` hybrid sweep, each with a sane `next_run_at`.
-- After a tick, each job's `~/.hermes/cron/output/{job_id}/` has a fresh run with the expected one-line summary (and a no-op when its queue is empty).
+- `systemctl list-timers 'fluncle-*'` on the host shows a timer for every automation cron (`fluncle-enrich` / `fluncle-context-note` / `fluncle-note` / `fluncle-backfill` / `fluncle-observation` / `fluncle-social-capture` / `fluncle-artist-sweep` / `fluncle-artist-follow` / `fluncle-studio-clip` / `fluncle-live` / `fluncle-render` / `fluncle-newsletter` / `fluncle-backup`, plus the already-migrated `fluncle-capture` / `fluncle-embed` / `fluncle-healthcheck`), each with a sane next-run time; `hermes cron list` is empty for automation.
+- After a tick, each cron's `/opt/data/cron/output/fluncle-<job>/` (= `~/.hermes/cron/output/fluncle-<job>/`) has a fresh marker with the expected one-line summary (written by `cron-output.sh`), and `journalctl -u fluncle-<job>.service` shows the same — a no-op when its queue is empty.
 - Wire the context-note sweep first (cheaper, no paid render — it only triggers the Worker), then the observation (after the claude/skill pre-reqs above), then the newsletter (gate it on the box-TZ pin + one good hand-authored edition end-to-end first, per `docs/agents/newsletter-agent.md`).
 - The newsletter's first live send goes to a **seed/operator-only audience first** (per the RFC's de-risk step) to validate DKIM + the unsubscribe link before any subscriber sees it.
 

@@ -1,0 +1,14 @@
+[Unit]
+Description=fluncle-observation timer — trigger the recovered-audio observation sweep every 60m on the rave-02 host (not the Hermes gateway)
+
+[Timer]
+# First tick shortly after boot (staggered at 4min), then every 60m — the observation cadence
+# (was `every 60m` on the gateway). Persistent catches up a tick missed across a box reboot.
+# Batch cap 1 (each render costs Cartesia credits + subscription quota), idempotent, so a
+# deferred tick just authors the next finding on the following cycle.
+OnBootSec=4min
+OnUnitActiveSec=60min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

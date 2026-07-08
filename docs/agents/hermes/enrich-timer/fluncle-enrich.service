@@ -1,0 +1,25 @@
+[Unit]
+Description=fluncle-enrich — rave-02 host trigger for the on-box enrichment sweep (migrated off the Hermes gateway cron runner)
+Documentation=https://github.com/mauricekleine/fluncle/blob/main/docs/agents/hermes/enrich-timer/README.md
+Wants=network-online.target docker.service
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+# The host unit runs as root (to drive the Docker daemon); `docker exec -u hermes` runs the
+# in-container enrichment WORK as the UNPRIVILEGED hermes user (hermes owns the 0600 secrets
+# file the .sh sources). The sweep trio is BAKED into the image at /opt/hermes-scripts/ and
+# the enrichment DSP skill at /opt/hermes-skills/ (Unit A — both auto-update from main via
+# pin-watch, no /opt/data copy); this host unit only TRIGGERS it, and the sweep self-writes
+# its /status marker (cron-output.sh) so the fluncle-healthcheck prober stays honest. Parallel
+# host timers replace the one serial gateway runner (~300s global budget); a staggered
+# OnBootSec spreads the simultaneous 5-min ticks so the latency-sensitive sweeps never pile.
+ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/enrich-sweep.sh
+# Pure on-box DSP over a bounded batch (cap 4); a clean tick is seconds, a full batch well
+# under two minutes.
+TimeoutStartSec=180
+# Modest hardening for a root docker-driving oneshot.
+NoNewPrivileges=true
+ProtectControlGroups=true
+ProtectKernelTunables=true
+RestrictSUIDSGID=true

@@ -44,9 +44,9 @@ set -euo pipefail
 
 # The runner / docker-exec hands this a minimal PATH, so a bare `bun`/`yt-dlp`/`ffprobe`
 # is "not found" → exit 127. Prepend the known install dirs so this wrapper's tools resolve
-# regardless: /opt/data/scripts holds yt-dlp (installed alongside this sweep on the
-# persistent volume — see capture-timer/README), /usr/local/bin the bun symlink.
-export PATH="/opt/data/scripts:/usr/local/bin:/root/.bun/bin:${PATH:-/usr/bin:/bin}"
+# regardless: /opt/hermes-scripts holds the BAKED yt-dlp (Unit A/D — pinned into the image,
+# no longer a hand-cp'd volume copy — see capture-timer/README), /usr/local/bin the bun symlink.
+export PATH="/opt/hermes-scripts:/usr/local/bin:/root/.bun/bin:${PATH:-/usr/bin:/bin}"
 
 # Belt-and-suspenders: pin the absolute interpreter path too (the runner can lose the
 # PATH export above).
@@ -66,4 +66,10 @@ fi
 # Resolve the orchestrator next to this wrapper so it runs regardless of CWD.
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
-exec "${BUN_BIN}" "${SCRIPT_DIR}/capture-sweep.ts" "$@"
+# Host timers bypass the Hermes gateway runner's stdout capture, so self-report the
+# /status freshness marker the fluncle-healthcheck prober reads (see cron-output.sh) —
+# WRAP the payload (never `exec`) so the marker is written even on a nonzero run. Before
+# this, capture (a host timer since day one) never wrote a marker → cron.capture was cosmetic.
+# shellcheck source=./cron-output.sh
+. "${SCRIPT_DIR}/cron-output.sh"
+emit_cron_output capture -- "${BUN_BIN}" "${SCRIPT_DIR}/capture-sweep.ts" "$@"

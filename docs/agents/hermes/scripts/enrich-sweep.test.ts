@@ -11,7 +11,7 @@ import { describe, expect, test } from "bun:test";
 
 import { buildAnalyzeArgs, extFromKey } from "./enrich-sweep";
 
-const SCRIPT = "/opt/data/skills/fluncle-track-enrichment/scripts/analyze-track.ts";
+const SCRIPT = "/opt/hermes-skills/fluncle-track-enrichment/scripts/analyze-track.ts";
 
 describe("buildAnalyzeArgs", () => {
   test("preview path (no key): artist + title, no --audio-file", () => {

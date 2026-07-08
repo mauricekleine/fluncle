@@ -1,0 +1,22 @@
+[Unit]
+Description=fluncle-context-note — rave-02 host trigger for the context-note sweep (migrated off the Hermes gateway cron runner)
+Documentation=https://github.com/mauricekleine/fluncle/blob/main/docs/agents/hermes/context-note-timer/README.md
+Wants=network-online.target docker.service
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+# Root drives the Docker daemon; `docker exec -u hermes` runs the WORK as the unprivileged
+# hermes user. The .sh/.ts pair is BAKED at /opt/hermes-scripts/ (Unit A — auto-updates from
+# main via pin-watch, no /opt/data copy); this host unit only TRIGGERS it, and the sweep
+# self-writes its /status marker (cron-output.sh) so the fluncle-healthcheck prober stays
+# honest. Parallel host timers replace the one serial gateway runner (~300s global budget).
+ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/context-sweep.sh
+# A pure Worker-trigger over a bounded batch (cap 6); the box burns no tokens, the Worker does
+# the Firecrawl + Haiku distill. Well under two minutes even on a full batch.
+TimeoutStartSec=180
+# Modest hardening for a root docker-driving oneshot.
+NoNewPrivileges=true
+ProtectControlGroups=true
+ProtectKernelTunables=true
+RestrictSUIDSGID=true

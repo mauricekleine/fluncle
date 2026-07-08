@@ -1,0 +1,14 @@
+[Unit]
+Description=fluncle-social-capture timer — trigger the social-URL-capture sweep every 10m on the rave-02 host (not the Hermes gateway)
+
+[Timer]
+# First tick shortly after boot (staggered at 6min), then every 10m — the social-capture
+# cadence (was `every 10m` on the gateway). Persistent catches up a tick missed across a box
+# reboot. Idempotent (the Worker no-ops once every pending post has a captured URL), so a
+# deferred tick just grabs the URLs on the next cycle.
+OnBootSec=6min
+OnUnitActiveSec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

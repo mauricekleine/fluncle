@@ -39,4 +39,9 @@ export FLUNCLE_BIN="${FLUNCLE_BIN:-/usr/local/bin/fluncle}"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
-exec "${BUN_BIN}" "${SCRIPT_DIR}/artist-follow-sweep.ts" "$@"
+# Host timers bypass the Hermes gateway runner's stdout capture, so self-report the
+# /status freshness marker the fluncle-healthcheck prober reads (see cron-output.sh) —
+# WRAP the payload (never `exec`) so the marker is written even on a nonzero run.
+# shellcheck source=./cron-output.sh
+. "${SCRIPT_DIR}/cron-output.sh"
+emit_cron_output artist-follow -- "${BUN_BIN}" "${SCRIPT_DIR}/artist-follow-sweep.ts" "$@"

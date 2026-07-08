@@ -1,0 +1,27 @@
+[Unit]
+Description=fluncle-render — rave-02 host trigger for the video render conductor (migrated off the Hermes gateway cron runner)
+Documentation=https://github.com/mauricekleine/fluncle/blob/main/docs/agents/hermes/render-timer/README.md
+Wants=network-online.target docker.service
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+# Root drives the Docker daemon; `docker exec -u hermes` runs the WORK as the unprivileged
+# hermes user (the box CLI auth + the file-sourced provider creds live under its HOME). The
+# conductor is BAKED at /opt/hermes-scripts/render-conductor.sh (Unit A — auto-updates from
+# main via pin-watch); this host unit only TRIGGERS it. UNLIKE the other sweeps, the conductor
+# is a state-machine with many inline `exit`s (not a thin exec-wrapper), so the /status marker
+# wrap happens HERE at the unit — `. cron-output.sh && emit_cron_output render -- bash …` runs
+# the conductor as a child, captures its summary, and writes the `# Cron Job: fluncle-render`
+# marker the prober reads. The conductor drives a DETACHED ~85m render on the scale-to-zero
+# rave-03 box; this tick itself returns in seconds.
+# NOTE: render-conductor.sh execs provision-rave-03.sh from its own dir, so Unit A MUST bake
+# provision-rave-03.sh alongside it under /opt/hermes-scripts/ (see this dir's README).
+ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home hermes bash -c '. /opt/hermes-scripts/cron-output.sh && emit_cron_output render -- bash /opt/hermes-scripts/render-conductor.sh'
+# The tick is quick (<120s: state read + box poll/trigger); the render runs detached on rave-03.
+TimeoutStartSec=180
+# Modest hardening for a root docker-driving oneshot.
+NoNewPrivileges=true
+ProtectControlGroups=true
+ProtectKernelTunables=true
+RestrictSUIDSGID=true
