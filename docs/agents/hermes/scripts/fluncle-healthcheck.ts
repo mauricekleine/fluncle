@@ -378,6 +378,10 @@ const AUTOMATION_CRONS: CronDef[] = [
   { cadenceMs: 60 * 60_000, match: "artist-sweep", service: "cron.artist-sweep" },
   { cadenceMs: 6 * 60 * 60_000, match: "artist-follow", service: "cron.artist-follow" },
   { cadenceMs: 10 * 60_000, match: "social-capture", service: "cron.social-capture" },
+  // `studio-clip` (11 chars) is checked before `clip-drip` (9) by longest-match-first,
+  // and neither token is a substring of the other's `fluncle-…` header — so each claims
+  // its own dir cleanly.
+  { cadenceMs: 15 * 60_000, match: "studio-clip", service: "cron.studio-clip" },
   { cadenceMs: 20 * 60_000, match: "clip-drip", service: "cron.clip-drip" },
   { cadenceMs: 60 * 60_000, match: "render", service: "cron.render" },
   // NB: cron.healthcheck is NOT here — this prober IS that cron, now run by a host

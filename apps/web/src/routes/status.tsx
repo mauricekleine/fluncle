@@ -94,6 +94,7 @@ const SERVICE_LABELS: Record<string, string> = {
   // reachability. The labels make the distinction obvious.
   "cron.render": "Render cron",
   "cron.social-capture": "Social links",
+  "cron.studio-clip": "Studio clips",
   db: "Database",
   dns: "DNS",
   hermes: "Hermes agent",
@@ -124,6 +125,7 @@ const SERVICE_SUBTITLES: Record<string, string> = {
   "cron.observation": "Fluncle's spoken field observations",
   "cron.render": "the conductor's last run",
   "cron.social-capture": "the live YouTube and TikTok URLs for each posted video",
+  "cron.studio-clip": "cuts set videos into 9:16 clips",
   db: "the archive's persistence",
   dns: "dig.fluncle.com",
   hermes: "the Discord chat agent",

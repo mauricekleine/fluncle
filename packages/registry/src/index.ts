@@ -880,6 +880,17 @@ export const SURFACES: readonly Surface[] = [
     weights: { status: "hidden" },
   },
   {
+    exposedContent: [
+      "cut each pending operator-framed 9:16 clip out of its set video → ship to R2 (--no-agent, ffmpeg)",
+    ],
+    kind: "cron",
+    name: "cron.studio-clip",
+    operatorNotes:
+      "every 15m. Pure-trigger, zero LLM tokens: a deterministic ffmpeg cut driven by the fluncle CLI (`admin clips list` → `admin clips cut`), agent-scoped (list_clips + the agent-tier presign_clip_upload / finalize_clip_cut). Cuts the operator-framed 9:16 clips from the /admin/studio editor (keyed by Log ID) out of the set video → ships `<clipId>/footage.mp4` to R2 for the /admin/clips library + the clip drip-feed. The box runs the standalone bun BINARY (the npm thin client can't spawn ffmpeg). Source: docs/agents/hermes/scripts/clip-sweep.sh. Probed on /status as cron.studio-clip.",
+    probeConfig: { cadenceMs: 15 * MINUTE_MS, cronName: "fluncle-studio-clip", kind: "cron" },
+    weights: { status: "hidden" },
+  },
+  {
     command: "fluncle admin clips drip-pause",
     exposedContent: [
       "post the due, cut clips to Instagram on a jittered ~daily cadence via Postiz (--no-agent, Worker HTTP)",
