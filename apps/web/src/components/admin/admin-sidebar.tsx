@@ -16,6 +16,7 @@ import {
   VinylRecordIcon,
 } from "@phosphor-icons/react";
 import { useQuery } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { useId } from "react";
 import { Label } from "@fluncle/ui/components/label";
@@ -73,13 +74,30 @@ export type AdminNavCurrent =
   | "system"
   | "usage";
 
+// The nav targets, as literal route paths so each entry renders a typed TanStack
+// <Link> (client-side navigation, not a full document reload — the whole point of
+// the persistent shell). All are param-less; System deep-links the /status page.
+type AdminNavPath =
+  | "/admin"
+  | "/admin/artists"
+  | "/admin/clips"
+  | "/admin/costs"
+  | "/admin/findings"
+  | "/admin/mixtapes"
+  | "/admin/newsletter"
+  | "/admin/plans"
+  | "/admin/recordings"
+  | "/admin/renders"
+  | "/admin/usage"
+  | "/status";
+
 type NavEntry = {
   /** Which live count this entry carries, when a cheap read exists. */
   count?: keyof NavCounts;
   icon: Icon;
   key: AdminNavCurrent;
   label: string;
-  to: string;
+  to: AdminNavPath;
 };
 
 // The landing — the attention queue (docs/planning/cockpit-roadmap.md, "The queue"):
@@ -257,12 +275,12 @@ export function AdminSidebar({ current }: { current: AdminNavCurrent }) {
         <SidebarMenuButton
           isActive={active}
           render={
-            <a
+            <Link
               aria-current={active ? "page" : undefined}
               // The visible label plus the live count, so a screen reader hears
               // the number the badge shows (the badge div itself is presentational).
               aria-label={count > 0 ? `${entry.label} (${count})` : undefined}
-              href={entry.to}
+              to={entry.to}
             />
           }
           tooltip={entry.label}
