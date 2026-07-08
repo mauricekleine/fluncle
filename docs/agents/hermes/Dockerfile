@@ -42,6 +42,16 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends ffmpeg unzip openssh-client dnsutils fonts-dejavu-core \
   && rm -rf /var/lib/apt/lists/*
 
+# Bake a PINNED yt-dlp (the fluncle-capture sweep's fetcher) in its OWN EARLY layer — above the
+# frequently-bumped fluncle/claude pins — so a routine pin-watch rebuild never busts this 40MB
+# download (only a base/apt change does). A 40MB binary, never committed to this public repo;
+# bumped deliberately (a watched pin is a follow-up). `mkdir -p` because the sweep-script COPY
+# that creates /opt/hermes-scripts comes later; chmod 755 so the non-root cron user execs it.
+RUN mkdir -p /opt/hermes-scripts \
+  && curl -fsSL https://github.com/yt-dlp/yt-dlp/releases/download/2026.07.04/yt-dlp_linux \
+       -o /opt/hermes-scripts/yt-dlp \
+  && chmod 755 /opt/hermes-scripts/yt-dlp
+
 # ── MuQ audio-embedding toolchain (the `fluncle-embed` cron) ──────────────────
 # The `fluncle-embed` `--no-agent` cron (docs/agents/hermes/scripts/embed-sweep.*)
 # runs MuQ-large on the box to compute a 1024-d audio embedding per finding — the
@@ -165,12 +175,6 @@ RUN rm -f /opt/hermes-scripts/*.test.ts \
           /opt/hermes-scripts/clip-drip-sweep.sh \
  && chmod -R a+rX /opt/hermes-scripts \
  && chmod +x /opt/hermes-scripts/*.sh /opt/hermes-scripts/*.py
-
-# Bake a PINNED yt-dlp (the fluncle-capture sweep's fetcher). Its own layer (a 40MB binary, never
-# committed to this public repo; bumped deliberately — a watched pin is a follow-up). chmod 755 so
-# the non-root cron user execs it.
-RUN curl -fsSL https://github.com/yt-dlp/yt-dlp/releases/download/2026.07.04/yt-dlp_linux \
-      -o /opt/hermes-scripts/yt-dlp && chmod 755 /opt/hermes-scripts/yt-dlp
 
 # Oxanium SemiBold for the Fluncle Studio clip cut — the COORDINATE face. The `admin clips
 # cut` brand frame draws the `fluncle://<logId>` coordinate in Oxanium (DESIGN.md "One
