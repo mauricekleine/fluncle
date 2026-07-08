@@ -147,7 +147,7 @@ function RecordingsIndex({
             className="min-w-0 flex-1 truncate text-sm font-medium hover:text-primary focus-visible:outline-2 focus-visible:outline-ring"
             href={`/admin/studio/${encodeURIComponent(rec.id)}`}
           >
-            {rec.title}
+            {rec.logId ? rec.title.split(" | ")[0] : rec.title}
           </a>
           {rec.logId ? (
             <Badge variant="default">promoted · fluncle://{rec.logId}</Badge>
