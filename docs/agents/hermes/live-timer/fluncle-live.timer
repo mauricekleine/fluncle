@@ -1,0 +1,13 @@
+[Unit]
+Description=fluncle-live timer — poll Twitch for the live-set callout every 1m on the rave-02 host (not the Hermes gateway)
+
+[Timer]
+# First tick shortly after boot (staggered at 30s), then every 1m — the live-poll cadence (was
+# `every 1m` on the gateway). Persistent is deliberately OFF: a missed 1m tick is stale within
+# ~5m by read-side auto-clear, so catching one up on boot would be noise, not signal.
+OnBootSec=30s
+OnUnitActiveSec=1min
+Persistent=false
+
+[Install]
+WantedBy=timers.target

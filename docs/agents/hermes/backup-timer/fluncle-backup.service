@@ -1,0 +1,22 @@
+[Unit]
+Description=fluncle-backup — rave-02 host trigger for the daily database-backup sweep (migrated off the Hermes gateway cron runner)
+Documentation=https://github.com/mauricekleine/fluncle/blob/main/docs/agents/hermes/backup-timer/README.md
+Wants=network-online.target docker.service
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+# Root drives the Docker daemon; `docker exec -u hermes` runs the WORK as the unprivileged
+# hermes user (hermes owns the 0600 secrets file the .sh sources — the Turso dump creds + the
+# private backup-bucket R2 creds). The .sh/.ts pair is BAKED at /opt/hermes-scripts/ (Unit A —
+# auto-updates from main via pin-watch); this host unit only TRIGGERS it, and the sweep
+# self-writes its /status marker (cron-output.sh) so the prober stays honest.
+ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/backup-sweep.sh
+# A full prod-DB dump → gzip → S3-direct PUT to the private R2 bucket + prune (30 daily / 12
+# monthly). Give the dump + upload generous headroom.
+TimeoutStartSec=1800
+# Modest hardening for a root docker-driving oneshot.
+NoNewPrivileges=true
+ProtectControlGroups=true
+ProtectKernelTunables=true
+RestrictSUIDSGID=true

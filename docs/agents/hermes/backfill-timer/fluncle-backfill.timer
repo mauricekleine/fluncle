@@ -1,0 +1,14 @@
+[Unit]
+Description=fluncle-backfill timer — trigger the catalogue-backfill sweep every 30m on the rave-02 host (not the Hermes gateway)
+
+[Timer]
+# First tick shortly after boot (staggered at 5min), then every 30m — the backfill cadence
+# (was `every 30m` on the gateway). The 30m gap lets each vendor's per-minute budget recover
+# between paced batches. Persistent catches up a tick missed across a box reboot; the sweep is
+# idempotent (24h base cooldown per finding), so a deferred tick just resumes the drain.
+OnBootSec=5min
+OnUnitActiveSec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

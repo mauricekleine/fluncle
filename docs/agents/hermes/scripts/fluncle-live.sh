@@ -71,4 +71,10 @@ fi
 # Resolve the orchestrator next to this wrapper so it runs regardless of CWD.
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
-exec "${BUN_BIN}" "${SCRIPT_DIR}/fluncle-live.ts" "$@"
+# Host timers bypass the Hermes gateway runner's stdout capture, so self-report the
+# /status freshness marker (see cron-output.sh) — WRAP the payload (never `exec`) so the
+# marker is written even on a nonzero run. (fluncle-live is not yet in the prober's
+# AUTOMATION_CRONS, so this marker is written for future prober support — harmless today.)
+# shellcheck source=./cron-output.sh
+. "${SCRIPT_DIR}/cron-output.sh"
+emit_cron_output live -- "${BUN_BIN}" "${SCRIPT_DIR}/fluncle-live.ts" "$@"

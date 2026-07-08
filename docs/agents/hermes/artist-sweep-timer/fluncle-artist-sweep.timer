@@ -1,0 +1,14 @@
+[Unit]
+Description=fluncle-artist-sweep timer — trigger the artist-resolution sweep every 60m on the rave-02 host (not the Hermes gateway)
+
+[Timer]
+# First tick shortly after boot (staggered at 7min), then every 60m — the artist-sweep cadence
+# (was `every 60m` on the gateway). Persistent catches up a tick missed across a box reboot.
+# Idempotent + bounded batch, so a deferred tick just resolves the next artists on the following
+# cycle.
+OnBootSec=7min
+OnUnitActiveSec=60min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -39,11 +39,12 @@ import { join } from "node:path";
 const BATCH_CAP = 4; // findings analyzed per tick (sane small cap, 3–5 band)
 const QUEUE_LIMIT = 50; // hard ceiling on the queue read (we only act on BATCH_CAP)
 
-// On the box: /opt/data/skills (the host-mounted ~/.hermes/skills). Overridable so
-// a local dry-run can point at a repo checkout of the skill.
+// On the box: the BAKED enrichment skill at /opt/hermes-skills (Unit A — the skill rides
+// the image and auto-updates from main via pin-watch; no hand-cp'd /opt/data/skills copy).
+// Overridable so a local dry-run can point at a repo checkout of the skill.
 const ANALYZE_SCRIPT =
   process.env.FLUNCLE_ANALYZE_SCRIPT ??
-  "/opt/data/skills/fluncle-track-enrichment/scripts/analyze-track.ts";
+  "/opt/hermes-skills/fluncle-track-enrichment/scripts/analyze-track.ts";
 
 const FLUNCLE_BIN = process.env.FLUNCLE_BIN ?? "fluncle";
 const BUN_BIN = process.env.BUN_BIN ?? "bun";

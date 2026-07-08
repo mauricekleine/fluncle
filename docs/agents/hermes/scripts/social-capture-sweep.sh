@@ -48,7 +48,15 @@ CAPTURE_PATH="/api/admin/social/posts/capture"
 # `invalid_request`. Send `{}` with a JSON content-type. A short --max-time keeps a
 # hung Worker from ever blowing the runner's ~120s kill; -fsS fails on a non-2xx so a
 # bad tick exits nonzero (visible in the run output) instead of swallowing an error.
-curl -fsS --max-time 30 \
+# Resolve this wrapper's dir so the shared marker helper is found next to it.
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
+# Host timers bypass the Hermes gateway runner's stdout capture, so self-report the
+# /status freshness marker the fluncle-healthcheck prober reads (see cron-output.sh) —
+# WRAP the curl (never `exec`) so the marker is written even when the trigger fails.
+# shellcheck source=./cron-output.sh
+. "${SCRIPT_DIR}/cron-output.sh"
+emit_cron_output social-capture -- curl -fsS --max-time 30 \
   -X POST "${API_BASE_URL}${CAPTURE_PATH}" \
   -H "Authorization: Bearer ${FLUNCLE_API_TOKEN}" \
   -H "Content-Type: application/json" \

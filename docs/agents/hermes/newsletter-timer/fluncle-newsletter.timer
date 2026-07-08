@@ -1,0 +1,15 @@
+[Unit]
+Description=fluncle-newsletter timer — draft the weekly edition Fri 15:00 Amsterdam on the rave-02 host (not the Hermes gateway)
+
+[Timer]
+# The weekly Friday 15:00 Amsterdam edition. The gateway used the cron expression `0 15 * * 5`
+# against the CONTAINER clock (which is why the box was pinned TZ=Europe/Amsterdam); a systemd
+# timer expresses the timezone DIRECTLY in OnCalendar, so the slot is correct regardless of the
+# host or container TZ. Persistent catches up a Friday the box slept through on the next boot —
+# harmless, because the sweep only PERSISTS a draft (the Send is a separate operator-gated
+# command), so a late draft never auto-sends.
+OnCalendar=Fri 15:00 Europe/Amsterdam
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,14 @@
+[Unit]
+Description=fluncle-context-note timer — trigger the context-note sweep every 5m on the rave-02 host (not the Hermes gateway)
+
+[Timer]
+# First tick shortly after boot (staggered at 2min so the simultaneous 5-min sweeps don't
+# pile), then every 5m — the context-note cadence (was `every 5m` on the gateway). Persistent
+# catches up a tick missed across a box reboot. Idempotent (hasContext=false queue), so a
+# deferred tick just fills context on the next cycle.
+OnBootSec=2min
+OnUnitActiveSec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

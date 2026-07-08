@@ -1,0 +1,14 @@
+[Unit]
+Description=fluncle-studio-clip timer — trigger the Fluncle Studio clip-cut sweep every 15m on the rave-02 host (not the Hermes gateway)
+
+[Timer]
+# First tick shortly after boot (staggered at 10min), then every 15m — the studio-clip cadence
+# (was `every 15m` on the gateway). Persistent catches up a tick missed across a box reboot.
+# Idempotent (drains `admin clips list --status pending`, cap 1/tick), so a deferred tick just
+# cuts the next clip on the following cycle.
+OnBootSec=10min
+OnUnitActiveSec=15min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

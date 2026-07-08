@@ -8,13 +8,14 @@ After=network-online.target docker.service
 Type=oneshot
 # The host unit runs as root (to drive the Docker daemon); `docker exec -u hermes` runs the
 # in-container embed WORK as the UNPRIVILEGED hermes user (hermes owns the 0600 secrets file
-# the .sh sources). The .sh/.ts/.py trio lives under /opt/data/scripts/; this host unit only
-# TRIGGERS it. A windowed full-song MuQ forward is MINUTES-SCALE (each ~30s window is a full
-# forward; a 5-min song is ~10 windows), so it must NOT ride the one serial Hermes cron runner
-# (a ~300s global budget) where an embed tick would starve the latency-sensitive 5-min
-# enrich/context/note sweeps — the same reason capture, the healthcheck prober, and the
+# the .sh sources). The .sh/.ts/.py trio is BAKED into the image at /opt/hermes-scripts/
+# (Unit A — it auto-updates from main via pin-watch, no /opt/data/scripts copy); this host
+# unit only TRIGGERS it. A windowed full-song MuQ forward is MINUTES-SCALE (each ~30s window
+# is a full forward; a 5-min song is ~10 windows), so it must NOT ride the one serial Hermes
+# cron runner (a ~300s global budget) where an embed tick would starve the latency-sensitive
+# 5-min enrich/context/note sweeps — the same reason capture, the healthcheck prober, and the
 # pin-watch rebuild are host timers.
-ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/data/scripts/embed-sweep.sh
+ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/embed-sweep.sh
 # A worst-case tick (one full-song embed, windowed) can run several minutes; give it headroom
 # well past the gateway's ~300s global budget.
 TimeoutStartSec=900

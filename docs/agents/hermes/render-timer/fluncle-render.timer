@@ -1,0 +1,15 @@
+[Unit]
+Description=fluncle-render timer — trigger the video render conductor every 60m on the rave-02 host (not the Hermes gateway)
+
+[Timer]
+# First tick shortly after boot (staggered at 9min), then every 60m — the render cadence (was
+# `every 60m` on the gateway). The conductor's own state machine + hourly START gate enforce
+# single-flight (only `idle` starts a render; `rendering` ticks only poll), so a tick firing
+# during an in-flight ~85m render just polls. Persistent catches up a tick missed across a box
+# reboot.
+OnBootSec=9min
+OnUnitActiveSec=60min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

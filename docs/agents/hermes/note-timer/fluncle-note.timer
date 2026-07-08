@@ -1,0 +1,13 @@
+[Unit]
+Description=fluncle-note timer — trigger the auto-note authoring sweep every 10m on the rave-02 host (not the Hermes gateway)
+
+[Timer]
+# First tick shortly after boot (staggered at 3min), then every 10m — the note cadence (was
+# `every 10m` on the gateway). Persistent catches up a tick missed across a box reboot. The
+# sweep is fill-empty-only + idempotent, so a deferred tick just authors on the next cycle.
+OnBootSec=3min
+OnUnitActiveSec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
