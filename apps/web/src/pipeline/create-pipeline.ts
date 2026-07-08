@@ -11,7 +11,7 @@
 import { LOGOS } from "./logos";
 
 type MachKey = "worker" | "rave02" | "rave03" | "m5" | "m2" | "browser";
-type Kind = "gate" | "pivot" | "human";
+type Kind = "pivot" | "human";
 type Station = {
   id: string;
   col: number;
@@ -120,7 +120,6 @@ const S: Station[] = [
   {
     col: 3,
     id: "gate1",
-    kind: "gate",
     label: "Spotify playlist",
     lane: 0,
     m: "worker",
@@ -130,7 +129,6 @@ const S: Station[] = [
   {
     col: 4,
     id: "gate2",
-    kind: "gate",
     label: "Telegram post",
     lane: 0,
     m: "worker",
@@ -181,6 +179,14 @@ const S: Station[] = [
     wh: "1024-d vector",
   },
   {
+    col: 8.3,
+    id: "reco",
+    label: "Recommendation engine",
+    lane: -1.3,
+    m: "worker",
+    wh: "cosine → Close in sound",
+  },
+  {
     cad: "5m",
     col: 5.9,
     cron: "context-note",
@@ -209,7 +215,7 @@ const S: Station[] = [
     cron: "note",
     id: "note",
     label: "Editorial note",
-    lane: -0.55,
+    lane: -0.1,
     m: "rave02",
     svc: ["Claude"],
     wh: "fill-empty-only",
@@ -221,7 +227,7 @@ const S: Station[] = [
     id: "obs",
     img: "booth",
     label: "Spoken observation",
-    lane: 0.7,
+    lane: 1.05,
     m: "rave02",
     svc: ["Claude", "Cartesia"],
     wh: "authored → rendered",
@@ -233,7 +239,7 @@ const S: Station[] = [
     id: "rend",
     img: "renderbox",
     label: "Video render",
-    lane: 1.95,
+    lane: 2.2,
     m: "rave03",
     svc: ["Box", "Gemini", "Remotion"],
     wh: "wakes the render box",
@@ -339,6 +345,7 @@ const LINKS: Array<[string, string, number?]> = [
   ["gate2", "cap", 1],
   ["cap", "enr", 1],
   ["cap", "emb", 1],
+  ["emb", "reco", 1],
   ["gate2", "ctx", 1],
   ["gate2", "bkf"],
   ["ctx", "note"],
@@ -429,8 +436,6 @@ const STYLES = `
 .fpl .hb.down{background:#ff6b57;--pc:#ff6b5799;animation:fpl-hbpulse .9s ease-out infinite}
 .fpl .hbstat{color:var(--cream-dim);font-size:11px;display:flex;align-items:center;gap:6px;pointer-events:none}
 .fpl .hbstat .dot{width:7px;height:7px;border-radius:50%;background:#63d69a;--pc:#63d69a80;animation:fpl-hbpulse 1.8s ease-out infinite}
-.fpl .card.gate{border-left:3px solid var(--red)}
-.fpl .card.gate .lb::before{content:"⛔ ";font-size:10px}
 .fpl .card.pivot{border:1px solid var(--gold-2);box-shadow:0 0 0 1px #ffd05733,0 6px 22px #0008}
 .fpl .card.human{border-top-style:dashed}
 .fpl .card.dream{background:#120f16}
@@ -531,7 +536,6 @@ export function createPipeline(container: HTMLElement): { destroy: () => void } 
     const el = document.createElement("div");
     el.className =
       "card" +
-      (s.kind === "gate" ? " gate" : "") +
       (s.kind === "pivot" ? " pivot" : "") +
       (s.kind === "human" ? " human" : "") +
       (s.dream ? " dream" : "");
