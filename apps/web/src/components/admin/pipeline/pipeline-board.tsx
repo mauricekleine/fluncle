@@ -4,7 +4,7 @@ import {
   DownloadSimpleIcon,
   FolderOpenIcon,
 } from "@phosphor-icons/react";
-import { memo, useCallback, useMemo, useState } from "react";
+import { memo, useMemo } from "react";
 
 import {
   automatedSocialsBreakdown,
@@ -24,7 +24,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@fluncle/ui/components/dropdown-menu";
-import { Popover, PopoverContent, PopoverTrigger } from "@fluncle/ui/components/popover";
+import { HoverCard, HoverCardContent, HoverCardTrigger } from "@fluncle/ui/components/hover-card";
 import { cn } from "@/lib/utils";
 
 // The pipeline board — the operator's `/admin` home. The whole pipeline as a
@@ -54,12 +54,13 @@ function r2FolderUrl(logId: string) {
   const prefix = encodeURIComponent(`${logId}/`);
   return `https://dash.cloudflare.com/${R2_ACCOUNT_ID}/r2/default/buckets/${R2_BUCKET}?prefix=${prefix}`;
 }
-// The finding column: it grows to absorb the row's slack (pushing the action
-// cells to the right edge) but never shrinks below a readable floor, and stays
+// The finding column: a FIXED width so every row's lead is identical and the step
+// columns form a rigid grid that lines up row-to-row and with the header. (A `flex-1`
+// lead in a `w-max` board takes its width from each row's title length, so long titles
+// shove that row's columns out of alignment — the horizontal-scroll break.) It stays
 // opaque so columns scroll cleanly underneath it. From `sm` up it's pinned (the
-// `sm:sticky` on each cell); on a phone a 14rem pin would swallow most of the
-// viewport, so it un-pins and scrolls with the rest of the board instead.
-const LEAD_CLASS = "min-w-56 flex-1 bg-card px-4 sm:px-5";
+// `sm:sticky` on each cell); on a phone it un-pins and scrolls with the rest of the board.
+const LEAD_CLASS = "w-72 shrink-0 bg-card px-4 sm:px-5";
 // The pin, applied per cell so it can be dropped below `sm`. z-index keeps the
 // pinned column above the step columns scrolling underneath it.
 const LEAD_PIN = "sm:sticky sm:left-0";
@@ -229,56 +230,51 @@ function Cell({ actions, row, step }: { actions: BoardActions; row: BoardRow; st
 
 // The automated-socials cell: the repurposed LFM cell. Its glyph reads by the same
 // SHAPE/FILL grammar as every step (round auto glyph, done/partial/open fill), and on
-// hover/focus it opens a Popover (NOT a HoverCard — we have none) listing each hands-off
-// action — the Last.fm love + each artist Spotify/YouTube follow — with a done check.
+// hover/focus it reveals a HoverCard listing each hands-off action — the Last.fm love +
+// each artist Spotify/YouTube follow — with a done check. A HoverCard (base-ui PreviewCard)
+// owns the hover intent + open/close delays itself, so it never fights the focus/hover it's
+// driven by — unlike a click-Popover forced open with manual mouse handlers, which flickers.
 function SocialsCell({ row, step }: { row: BoardRow; step: BoardStep }) {
-  // The breakdown derives from the row, not from hover — memoize it so toggling `open`
-  // (four times per hover: enter/leave, focus/blur) doesn't rebuild the array or hand a
-  // fresh identity to the popover list on every toggle.
+  // The breakdown derives from the row, not from hover — memoize it so an open/close doesn't
+  // rebuild the array or hand a fresh identity to the list.
   const items = useMemo(() => automatedSocialsBreakdown(row), [row]);
   const title = `${step.label} — ${step.statusLabel}`;
-  // This base-ui Popover opens on click; drive it open on hover/focus too so the cell
-  // reads like a hover breakdown (there is no HoverCard component). Read-only content, so
-  // closing on mouse-leave is fine — nothing in the popup needs to be reached. Stable
-  // handlers so the trigger's props don't churn on each hover-driven re-render.
-  const [open, setOpen] = useState(false);
-  const openPopover = useCallback(() => setOpen(true), []);
-  const closePopover = useCallback(() => setOpen(false), []);
 
   return (
     <div className={`flex shrink-0 items-center justify-center py-3.5 ${COL_CLASS}`}>
-      <Popover onOpenChange={setOpen} open={open}>
-        <PopoverTrigger
+      <HoverCard>
+        <HoverCardTrigger
           aria-label={title}
-          className={cn(
-            "group relative flex size-8 shrink-0 cursor-default items-center justify-center rounded-full border transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
-            STATE_CLASS[step.state],
-          )}
-          onBlur={closePopover}
-          onFocus={openPopover}
-          onMouseEnter={openPopover}
-          onMouseLeave={closePopover}
-          title={title}
-        >
-          <step.Icon
-            aria-hidden="true"
-            className="size-4"
-            weight={step.state === "open" ? "regular" : "fill"}
-          />
-          {step.state === "done" ? (
-            <span
-              aria-hidden="true"
-              className="absolute -right-1 -bottom-1 flex size-3 items-center justify-center rounded-full bg-primary text-primary-foreground"
+          render={
+            <button
+              className={cn(
+                "group relative flex size-8 shrink-0 cursor-default items-center justify-center rounded-full border transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
+                STATE_CLASS[step.state],
+              )}
+              title={title}
+              type="button"
             >
-              <CheckIcon className="size-2" weight="bold" />
-            </span>
-          ) : undefined}
-        </PopoverTrigger>
-        <PopoverContent align="center" className="w-60 gap-2" side="top">
+              <step.Icon
+                aria-hidden="true"
+                className="size-4"
+                weight={step.state === "open" ? "regular" : "fill"}
+              />
+              {step.state === "done" ? (
+                <span
+                  aria-hidden="true"
+                  className="absolute -right-1 -bottom-1 flex size-3 items-center justify-center rounded-full bg-primary text-primary-foreground"
+                >
+                  <CheckIcon className="size-2" weight="bold" />
+                </span>
+              ) : undefined}
+            </button>
+          }
+        />
+        <HoverCardContent align="center" side="top">
           <p className="text-xs font-bold tracking-wide text-muted-foreground">Automated socials</p>
           <SocialsBreakdown items={items} />
-        </PopoverContent>
-      </Popover>
+        </HoverCardContent>
+      </HoverCard>
     </div>
   );
 }

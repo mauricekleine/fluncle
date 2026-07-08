@@ -3,7 +3,6 @@ import {
   CassetteTapeIcon,
   CircleNotchIcon,
   ClockCountdownIcon,
-  CopyIcon,
   FilmSlateIcon,
   ImageIcon,
   MicrophoneStageIcon,
@@ -344,9 +343,10 @@ function AdminQueuePage() {
   const [flashId, setFlashId] = useState<string | undefined>();
   const [leavingId, setLeavingId] = useState<string | undefined>();
   const [snoozeFor, setSnoozeFor] = useState<string | undefined>();
-  // The open Distribute popover (the finding row's prep → push → confirm panel).
-  const [distributeFor, setDistributeFor] = useState<string | undefined>();
-  const [markUrl, setMarkUrl] = useState("");
+  // The open "Mark posted" popover — a TikTok draft's finish-in-app panel (copy the cover,
+  // paste the live URL). Per-row; the URL field lives inside the popover, so one row's edit
+  // can't leak into another's (the old page-level markUrl leaked the previous track's URL).
+  const [finishFor, setFinishFor] = useState<string | undefined>();
   // The zero state's cover — the last row dealt with this session; a fresh load
   // falls back to the newest finding's cover from the snapshot.
   const [lastCleared, setLastCleared] = useState<{ artUrl?: string } | undefined>();
@@ -479,8 +479,7 @@ function AdminQueuePage() {
         if (!response.ok || !result.ok) {
           throw new Error(result.message ?? `Update failed (${response.status})`);
         }
-        setDistributeFor(undefined);
-        setMarkUrl("");
+        setFinishFor(undefined);
         settleOut(item, () => {
           setClearedIds((current) => new Set(current).add(item.id));
           void queryClient.invalidateQueries({ queryKey: QUEUE_KEY });
@@ -530,7 +529,7 @@ function AdminQueuePage() {
       if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) {
         return;
       }
-      if (snoozeFor !== undefined || distributeFor !== undefined) {
+      if (snoozeFor !== undefined || finishFor !== undefined) {
         return;
       }
       const target = event.target;
@@ -594,7 +593,7 @@ function AdminQueuePage() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [distributeFor, handleWontDo, selectedId, snoozeFor]);
+  }, [finishFor, handleWontDo, selectedId, snoozeFor]);
 
   // Keep the cursor's row on screen as j/k walk past the fold.
   useEffect(() => {
@@ -675,17 +674,12 @@ function AdminQueuePage() {
               key={row.item.id}
               item={row.item}
               leaving={leavingId === row.item.id}
-              distributeOpen={distributeFor === row.item.id}
-              markUrl={markUrl}
+              finishOpen={finishFor === row.item.id}
               now={now}
               onCopyCaption={copyCaption}
               onCopyCover={copyCover}
-              onDistributeOpenChange={(open) => {
-                setDistributeFor(open ? row.item.id : undefined);
-                setMarkUrl("");
-              }}
+              onFinishOpenChange={(open) => setFinishFor(open ? row.item.id : undefined)}
               onMarkPosted={markPosted}
-              onMarkUrlChange={setMarkUrl}
               onPush={handlePush}
               onRePush={rePush}
               onRestore={handleRestore}
@@ -716,6 +710,7 @@ const SOURCE_ICONS: Record<AttentionSource, ComponentType<{ className?: string }
   distribute: CassetteTapeIcon,
   "drip-empty": InstagramIcon,
   "post-tiktok": TiktokIcon,
+  "post-youtube": YoutubeIcon,
   "tiktok-draft": TiktokIcon,
 };
 
@@ -727,23 +722,22 @@ const SOURCE_LABELS: Record<AttentionSource, string> = {
   distribute: "Mixtape",
   "drip-empty": "Instagram drip",
   "post-tiktok": "TikTok",
+  "post-youtube": "YouTube",
   "tiktok-draft": "TikTok draft",
 };
 
 type QueueRowProps = {
   busy: boolean;
   copied: boolean;
-  distributeOpen: boolean;
+  finishOpen: boolean;
   flash: boolean;
   item: AttentionItem;
   leaving: boolean;
-  markUrl: string;
   now: number;
   onCopyCaption: (item: AttentionItem) => void;
   onCopyCover: (item: AttentionItem) => void;
-  onDistributeOpenChange: (open: boolean) => void;
+  onFinishOpenChange: (open: boolean) => void;
   onMarkPosted: (item: AttentionItem, url: string) => void;
-  onMarkUrlChange: (url: string) => void;
   onPush: (item: AttentionItem, platform: Platform) => void;
   onRePush: (item: AttentionItem) => void;
   onRestore: (item: AttentionItem) => void;
@@ -764,17 +758,15 @@ type QueueRowProps = {
 function QueueRow({
   busy,
   copied,
-  distributeOpen,
+  finishOpen,
   flash,
   item,
   leaving,
-  markUrl,
   now,
   onCopyCaption,
   onCopyCover,
-  onDistributeOpenChange,
+  onFinishOpenChange,
   onMarkPosted,
-  onMarkUrlChange,
   onPush,
   onRePush,
   onRestore,
@@ -793,12 +785,20 @@ function QueueRow({
   const SourceIcon = SOURCE_ICONS[item.source];
   const primary = primaryFor(item, now);
   const deadline = item.deadlineAt ? deadlineReadout(item.deadlineAt, now) : undefined;
-  const markInputId = useId();
-  // The distribution rows — a dressed finding (post-tiktok) or a live TikTok draft.
-  // Both carry a trackId + logId, so both host the full push/prep/confirm panel.
-  const canDistribute = item.source === "post-tiktok" || item.source === "tiktok-draft";
-  const ytBusy = item.trackId ? Boolean(pushBusy[`${item.trackId}:youtube:draft`]) : false;
-  const tiktokBusy = item.trackId ? Boolean(pushBusy[`${item.trackId}:tiktok:draft`]) : false;
+  // A fresh post row's primary pushes one platform; reflect that platform's in-flight state.
+  const pushPlatform: Platform | undefined =
+    item.source === "post-youtube"
+      ? "youtube"
+      : item.source === "post-tiktok"
+        ? "tiktok"
+        : undefined;
+  const pushing =
+    pushPlatform && item.trackId
+      ? Boolean(pushBusy[`${item.trackId}:${pushPlatform}:draft`])
+      : false;
+  // A pushed TikTok draft is finished in-app, then marked posted here (copy the cover, paste
+  // the live URL). Only tiktok-draft rows carry that panel.
+  const canFinish = item.source === "tiktok-draft";
   const parked = state === "snoozed" || state === "dismissed";
 
   return (
@@ -913,131 +913,28 @@ function QueueRow({
           </Button>
         ) : (
           <>
-            {canDistribute ? (
-              <Popover onOpenChange={onDistributeOpenChange} open={distributeOpen}>
-                <PopoverTrigger
-                  render={
-                    <Button size="sm" variant="ghost">
-                      <PaperPlaneTiltIcon aria-hidden="true" />
-                      Distribute
-                    </Button>
-                  }
-                />
-                <PopoverContent align="end" className="w-72 space-y-4">
-                  {/* PUSH — the two gated video pushes, straight from the row. */}
-                  <div className="flex flex-col gap-2">
-                    <Label>Push</Label>
-                    <Button
-                      className="justify-start"
-                      disabled={!item.trackId || ytBusy}
-                      onClick={() => onPush(item, "youtube")}
-                      size="sm"
-                      variant="outline"
-                    >
-                      {ytBusy ? (
-                        <CircleNotchIcon
-                          aria-hidden="true"
-                          className="animate-spin"
-                          weight="bold"
-                        />
-                      ) : (
-                        <YoutubeIcon className="size-4" />
-                      )}
-                      Push to YouTube
-                    </Button>
-                    <Button
-                      className="justify-start"
-                      disabled={!item.trackId || tiktokBusy}
-                      onClick={() => onPush(item, "tiktok")}
-                      size="sm"
-                      variant="outline"
-                    >
-                      {tiktokBusy ? (
-                        <CircleNotchIcon
-                          aria-hidden="true"
-                          className="animate-spin"
-                          weight="bold"
-                        />
-                      ) : (
-                        <TiktokIcon className="size-4" />
-                      )}
-                      Push to TikTok
-                    </Button>
-                    <p className="text-[11px] text-muted-foreground">
-                      YouTube posts a public Short now; TikTok drops a silent draft in your inbox.
-                    </p>
-                  </div>
-
-                  {/* PREP — the two things you paste/attach into the app. */}
-                  <div className="flex flex-col gap-2">
-                    <Label>Prep</Label>
-                    <Button
-                      className="justify-start"
-                      disabled={!item.logId}
-                      onClick={() => onCopyCaption(item)}
-                      size="sm"
-                      variant="outline"
-                    >
-                      <CopyIcon aria-hidden="true" />
-                      {copied ? "Copied" : "Copy caption"}
-                    </Button>
-                    <Button
-                      className="justify-start"
-                      disabled={!item.logId}
-                      onClick={() => onCopyCover(item)}
-                      size="sm"
-                      variant="outline"
-                    >
-                      <ImageIcon aria-hidden="true" />
-                      Copy cover
-                    </Button>
-                  </div>
-
-                  {/* CONFIRM — paste the live URL once you've finished in-app. */}
-                  <div className="flex flex-col gap-2">
-                    <Label htmlFor={markInputId}>Mark posted</Label>
-                    <Input
-                      id={markInputId}
-                      inputMode="url"
-                      onChange={(event) => onMarkUrlChange(event.target.value)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter" && isHttpUrl(markUrl.trim())) {
-                          event.preventDefault();
-                          onMarkPosted(item, markUrl.trim());
-                        }
-                      }}
-                      placeholder="https://www.tiktok.com/…"
-                      value={markUrl}
-                    />
-                    <Button
-                      className="w-full"
-                      disabled={busy || !isHttpUrl(markUrl.trim())}
-                      onClick={() => onMarkPosted(item, markUrl.trim())}
-                      size="sm"
-                    >
-                      {busy ? (
-                        <CircleNotchIcon
-                          aria-hidden="true"
-                          className="animate-spin"
-                          weight="bold"
-                        />
-                      ) : undefined}
-                      Mark posted
-                    </Button>
-                  </div>
-                </PopoverContent>
-              </Popover>
-            ) : undefined}
             <PrimaryButton
               busy={busy}
               copied={copied}
               item={item}
               onCopyCaption={onCopyCaption}
+              onPush={onPush}
               onRePush={onRePush}
               primary={primary}
+              pushing={pushing}
               registerPrimary={registerPrimary}
               selected={selected}
             />
+            {canFinish ? (
+              <MarkPostedPopover
+                busy={busy}
+                item={item}
+                onCopyCover={onCopyCover}
+                onMarkPosted={onMarkPosted}
+                onOpenChange={onFinishOpenChange}
+                open={finishOpen}
+              />
+            ) : undefined}
           </>
         )}
         {state !== "dismissed" ? (
@@ -1092,8 +989,11 @@ type PrimaryButtonProps = {
   copied: boolean;
   item: AttentionItem;
   onCopyCaption: (item: AttentionItem) => void;
+  onPush: (item: AttentionItem, platform: Platform) => void;
   onRePush: (item: AttentionItem) => void;
   primary: PrimaryAction;
+  /** True while this row's platform push is in flight (a push-kind primary). */
+  pushing: boolean;
   registerPrimary: (id: string, el: HTMLElement | null) => void;
   selected: boolean;
 };
@@ -1106,8 +1006,10 @@ function PrimaryButton({
   copied,
   item,
   onCopyCaption,
+  onPush,
   onRePush,
   primary,
+  pushing,
   registerPrimary,
   selected,
 }: PrimaryButtonProps) {
@@ -1126,6 +1028,25 @@ function PrimaryButton({
         size="sm"
         variant={variant}
       >
+        {primary.label}
+      </Button>
+    );
+  }
+
+  if (primary.kind === "push") {
+    const platform = primary.platform;
+
+    return (
+      <Button
+        disabled={pushing || !item.trackId}
+        onClick={() => onPush(item, platform)}
+        ref={(el: HTMLElement | null) => registerPrimary(item.id, el)}
+        size="sm"
+        variant={variant}
+      >
+        {pushing ? (
+          <CircleNotchIcon aria-hidden="true" className="animate-spin" weight="bold" />
+        ) : undefined}
         {primary.label}
       </Button>
     );
@@ -1158,6 +1079,90 @@ function PrimaryButton({
     >
       {copied ? "Copied" : primary.label}
     </Button>
+  );
+}
+
+// The "Mark posted" panel for a pushed TikTok draft: copy the cover to attach in-app, then
+// paste the live URL to clear the row. The URL field is LOCAL to this popover, so one row's
+// edit never leaks into another's (the old page-level markUrl surfaced the previous track's
+// URL on a different row).
+function MarkPostedPopover({
+  busy,
+  item,
+  onCopyCover,
+  onMarkPosted,
+  onOpenChange,
+  open,
+}: {
+  busy: boolean;
+  item: AttentionItem;
+  onCopyCover: (item: AttentionItem) => void;
+  onMarkPosted: (item: AttentionItem, url: string) => void;
+  onOpenChange: (open: boolean) => void;
+  open: boolean;
+}) {
+  const inputId = useId();
+  const [url, setUrl] = useState("");
+  const valid = isHttpUrl(url.trim());
+
+  return (
+    <Popover
+      onOpenChange={(next) => {
+        onOpenChange(next);
+        if (!next) {
+          setUrl("");
+        }
+      }}
+      open={open}
+    >
+      <PopoverTrigger
+        render={
+          <Button size="sm" variant="ghost">
+            <PaperPlaneTiltIcon aria-hidden="true" />
+            Mark posted
+          </Button>
+        }
+      />
+      <PopoverContent align="end" className="w-72 space-y-3">
+        <Button
+          className="w-full justify-start"
+          disabled={!item.logId}
+          onClick={() => onCopyCover(item)}
+          size="sm"
+          variant="outline"
+        >
+          <ImageIcon aria-hidden="true" />
+          Copy cover
+        </Button>
+        <div className="flex flex-col gap-2">
+          <Label htmlFor={inputId}>Live URL</Label>
+          <Input
+            id={inputId}
+            inputMode="url"
+            onChange={(event) => setUrl(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && valid) {
+                event.preventDefault();
+                onMarkPosted(item, url.trim());
+              }
+            }}
+            placeholder="https://www.tiktok.com/…"
+            value={url}
+          />
+          <Button
+            className="w-full"
+            disabled={busy || !valid}
+            onClick={() => onMarkPosted(item, url.trim())}
+            size="sm"
+          >
+            {busy ? (
+              <CircleNotchIcon aria-hidden="true" className="animate-spin" weight="bold" />
+            ) : undefined}
+            Mark posted
+          </Button>
+        </div>
+      </PopoverContent>
+    </Popover>
   );
 }
 

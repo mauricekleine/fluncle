@@ -2,8 +2,8 @@ import {
   ArrowsClockwiseIcon,
   BroomIcon,
   CircleNotchIcon,
+  DotsThreeVerticalIcon,
   FilmReelIcon,
-  PlayIcon,
 } from "@phosphor-icons/react";
 import { type TrackListItem } from "@fluncle/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -12,6 +12,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { type Dispatch, type ReactNode, type SetStateAction, useEffect, useState } from "react";
 import { AdminShell } from "@/components/admin/admin-shell";
 import { FindingIdentity } from "@/components/admin/finding-identity";
+import { ObjectList, ObjectRow } from "@/components/admin/object-row";
 import { StoriesPlayer } from "@/components/stories/stories-player";
 import {
   AlertDialog,
@@ -24,8 +25,13 @@ import {
   AlertDialogTitle,
 } from "@fluncle/ui/components/alert-dialog";
 import { Badge } from "@fluncle/ui/components/badge";
-import { Button } from "@fluncle/ui/components/button";
 import { Dialog, DialogContent } from "@fluncle/ui/components/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@fluncle/ui/components/dropdown-menu";
 import { Empty } from "@fluncle/ui/components/empty";
 import { isAdminRequest } from "@/lib/server/admin-auth";
 import { type ServiceHealthStatus, getServiceStatuses } from "@/lib/server/status";
@@ -360,27 +366,34 @@ function QueueSection({
       {queue.length === 0 ? (
         <EmptyRow>Queue’s clear. Nothing’s waiting on the box.</EmptyRow>
       ) : (
-        <ol className="divide-y divide-border rounded-lg border border-border">
+        <ObjectList>
           {queue.map((track, index) => (
-            <RenderRow key={track.trackId} track={track}>
-              <div className="flex w-full shrink-0 items-center justify-end gap-2 sm:w-auto">
-                {index === 0 ? (
-                  <Badge className="border-primary/40 bg-primary/10 text-primary" variant="outline">
-                    Next up
+            <RenderRow
+              key={track.trackId}
+              track={track}
+              trailing={
+                <>
+                  {index === 0 ? (
+                    <Badge
+                      className="border-primary/40 bg-primary/10 text-primary"
+                      variant="outline"
+                    >
+                      Next up
+                    </Badge>
+                  ) : (
+                    <span className="text-xs text-muted-foreground tabular-nums">#{index + 1}</span>
+                  )}
+                  <span className="hidden text-xs text-muted-foreground tabular-nums sm:inline">
+                    waiting {elapsedShort(track.addedAt, now)}
+                  </span>
+                  <Badge className="hidden text-muted-foreground sm:inline-flex" variant="outline">
+                    context ready
                   </Badge>
-                ) : (
-                  <span className="text-xs text-muted-foreground tabular-nums">#{index + 1}</span>
-                )}
-                <span className="hidden text-xs text-muted-foreground tabular-nums sm:inline">
-                  waiting {elapsedShort(track.addedAt, now)}
-                </span>
-                <Badge className="hidden text-muted-foreground sm:inline-flex" variant="outline">
-                  context ready
-                </Badge>
-              </div>
-            </RenderRow>
+                </>
+              }
+            />
           ))}
-        </ol>
+        </ObjectList>
       )}
     </section>
   );
@@ -408,52 +421,34 @@ function ShippedSection({
       {shipped.length === 0 ? (
         <EmptyRow>No renders shipped yet.</EmptyRow>
       ) : (
-        <ul className="divide-y divide-border rounded-lg border border-border">
+        <ObjectList>
           {shipped.map((track) => (
-            <RenderRow key={track.trackId} track={track}>
-              <div className="flex w-full shrink-0 flex-col items-end gap-1.5 sm:w-auto">
-                <Ledger track={track} />
-                {track.videoSquaredAt ? (
-                  <span className="text-xs text-muted-foreground tabular-nums">
-                    {elapsedShort(track.videoSquaredAt, now)} ago
-                  </span>
-                ) : (
-                  <span className="text-xs text-muted-foreground">legacy cut</span>
-                )}
-                <div className="flex items-center gap-1">
-                  <Button
-                    aria-label={`Watch ${track.title}`}
-                    onClick={() => onWatch(track)}
-                    size="sm"
-                    variant="ghost"
-                  >
-                    <PlayIcon aria-hidden="true" weight="fill" />
-                    Watch
-                  </Button>
-                  <Button
-                    aria-label={`Requeue ${track.title}`}
-                    className="text-destructive hover:text-destructive"
-                    onClick={() => onRequeue(track)}
-                    size="sm"
-                    variant="ghost"
-                  >
-                    <ArrowsClockwiseIcon aria-hidden="true" />
-                    Requeue
-                  </Button>
-                  <Button
-                    aria-label={`Purge ${track.title} renditions`}
-                    onClick={() => onPurge(track)}
-                    size="sm"
-                    variant="ghost"
-                  >
-                    <BroomIcon aria-hidden="true" />
-                    Purge
-                  </Button>
-                </div>
-              </div>
-            </RenderRow>
+            <RenderRow
+              key={track.trackId}
+              onWatch={onWatch}
+              track={track}
+              trailing={
+                <>
+                  <div className="flex flex-col items-end gap-0.5">
+                    <Ledger track={track} />
+                    {track.videoSquaredAt ? (
+                      <span className="text-xs text-muted-foreground tabular-nums">
+                        {elapsedShort(track.videoSquaredAt, now)} ago
+                      </span>
+                    ) : (
+                      <span className="text-xs text-muted-foreground">legacy cut</span>
+                    )}
+                  </div>
+                  <RenderActionsMenu
+                    onPurge={() => onPurge(track)}
+                    onRequeue={() => onRequeue(track)}
+                    title={track.title}
+                  />
+                </>
+              }
+            />
           ))}
-        </ul>
+        </ObjectList>
       )}
     </section>
   );
@@ -473,26 +468,67 @@ function Ledger({ track }: { track: TrackListItem }) {
   return <span className="text-xs text-muted-foreground">{parts.join(" · ")}</span>;
 }
 
-// A finding's identity block plus a right-side slot for per-section state/controls. The
-// identity is the shared FindingIdentity (the board's FindingLead binds the same block to a
-// BoardRow; a Renders row carries a plain finding, so it feeds the primitives directly).
-function RenderRow({ children, track }: { children?: ReactNode; track: TrackListItem }) {
-  // flex-wrap so a heavy right slot (the shipped row's ledger + three controls) drops
-  // BELOW the identity on a phone instead of crushing the title; nowrap from sm up,
-  // where the identity grows and the slot pins right. The identity is basis-full on a
-  // phone (its own line) and basis-0/grow from sm.
+// A finding's identity block plus the shared Object Row shell. The identity is the shared
+// FindingIdentity; on a shipped render `onWatch` makes the cover itself the play affordance
+// (the gold story-ring + play badge — the same cover-as-play the findings board uses), so
+// there is no separate Watch button. A queue row has no clip yet, so its cover stays inert.
+function RenderRow({
+  onWatch,
+  track,
+  trailing,
+}: {
+  onWatch?: (track: TrackListItem) => void;
+  track: TrackListItem;
+  trailing?: ReactNode;
+}) {
   return (
-    <li className="flex flex-wrap items-center gap-x-3 gap-y-2 px-3 py-2.5 sm:flex-nowrap sm:px-4">
+    <ObjectRow trailing={trailing}>
       <FindingIdentity
         artists={track.artists}
         className="grow basis-full sm:basis-0"
         cover={track.albumImageUrl}
+        hasClip={Boolean(onWatch)}
         logId={track.logId ?? undefined}
+        onPreview={onWatch ? () => onWatch(track) : undefined}
         size="md"
         title={track.title}
       />
-      {children}
-    </li>
+    </ObjectRow>
+  );
+}
+
+// The two rare, destructive render controls behind a ⋮ (docs/admin-shell.md — one primary
+// action per object; rare actions hidden by default). Requeue clears the video + re-renders;
+// Purge evicts the cached edge renditions. Both route through the page's single confirm
+// dialog, which carries the consequences.
+function RenderActionsMenu({
+  onPurge,
+  onRequeue,
+  title,
+}: {
+  onPurge: () => void;
+  onRequeue: () => void;
+  title: string;
+}) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        aria-label={`Actions for ${title}`}
+        className="flex size-8 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-primary/10 hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+      >
+        <DotsThreeVerticalIcon aria-hidden="true" className="size-4" weight="bold" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="min-w-44">
+        <DropdownMenuItem onClick={onRequeue}>
+          <ArrowsClockwiseIcon aria-hidden="true" className="size-4" />
+          Requeue video
+        </DropdownMenuItem>
+        <DropdownMenuItem onClick={onPurge}>
+          <BroomIcon aria-hidden="true" className="size-4" />
+          Purge renditions
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 

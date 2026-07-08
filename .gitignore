@@ -74,3 +74,6 @@ packages/live/.show-profile/
 
 # Local, never-commit 1Password audit (item/field NAMES only, no values)
 docs/1password-audit.local.md
+
+# impeccable critique scratch (local design-review snapshots)
+.impeccable/

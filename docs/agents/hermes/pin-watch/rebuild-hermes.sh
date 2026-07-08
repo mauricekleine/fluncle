@@ -144,6 +144,15 @@ docker run --rm --env-file "$ENVTMP" --entrypoint fluncle "$NEW_IMAGE" admin tra
 if docker run --rm --env-file "$ENVTMP" --entrypoint fluncle "$NEW_IMAGE" admin add 'https://open.spotify.com/track/0000000000000000pinwatch' >/dev/null 2>&1; then
   presmoke_fail "publish-class command was NOT refused (role boundary regression)"
 fi
+# embed engine (RFC Unit C): prove the MuQ interpreter resolves + torch/muq import, in a
+# hard-capped throwaway container. NOT a full forward — the box has zero swap and the live
+# container is up, so an uncapped MuQ load could OOM the live agent. This catches the actual
+# failure mode (a dangling interpreter symlink / broken venv) cheaply (~2-3s, <1GB). A hang
+# (timeout) is treated as a pre-smoke failure so a wedged build can't swap.
+# shellcheck disable=SC2016  # single-quoted on purpose: $(readlink)/import run in the CONTAINER's sh, not the host
+timeout 120 docker run --rm --memory=3g --memory-swap=3g --entrypoint sh "$NEW_IMAGE" -c \
+  'test -e "$(readlink -f /opt/muq-venv/bin/python)" && /opt/muq-venv/bin/python -c "import torch, muq"' \
+  >/dev/null 2>&1 || presmoke_fail "embed engine broken (interpreter/import)"
 log "pre-smoke passed"
 
 if [ "$MODE" = "--dry-run" ]; then

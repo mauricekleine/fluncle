@@ -1,9 +1,12 @@
 import {
   ArrowSquareOutIcon,
   ArrowUUpLeftIcon,
+  CaretDownIcon,
+  CaretRightIcon,
   CheckCircleIcon,
   GlobeIcon,
   MagnifyingGlassIcon,
+  PencilSimpleIcon,
   PlusIcon,
   ProhibitIcon,
   TrashIcon,
@@ -12,7 +15,7 @@ import {
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
-import { type Ref, useEffect, useMemo, useRef, useState } from "react";
+import { type Ref, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   siBandcamp,
   siFacebook,
@@ -28,6 +31,14 @@ import { AdminShell } from "@/components/admin/admin-shell";
 import { BrandIcon } from "@/components/brand-icon";
 import { Badge } from "@fluncle/ui/components/badge";
 import { Button } from "@fluncle/ui/components/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@fluncle/ui/components/dialog";
 import { Input } from "@fluncle/ui/components/input";
 import { Label } from "@fluncle/ui/components/label";
 import {
@@ -50,16 +61,16 @@ import {
 } from "@/lib/server/artists";
 import { cn } from "@/lib/utils";
 
-// The `/admin/artists` overview — the stable MANAGE surface for every artist Fluncle
-// features (Epic B, Unit 5). Not a worklist: an artist never drops off for being resolved,
-// so the operator can browse, search, and edit/add/remove a link any time — when a profile
-// moves, is deleted, or a missing one turns up. Each card carries the artist's finding count
-// and its full socials list with inline actions: confirm a candidate (→ confirmed, which
-// lets it onto the public artist page), REGISTER a manual follow (stamps followed_at) after
-// tapping out, and add/remove a platform (a Select + URL Input). The WORK — which artists
-// still need a look — surfaces as an /admin attention row (source "artist-review") that
-// deep-links here with ?artist=<id> focused; this page is where that review is done. The
-// automated Spotify/YouTube follows run on their own (the `fluncle-artist-follow` sweep).
+// The `/admin/artists` overview — the stable MANAGE surface for every artist Fluncle features
+// (Epic B, Unit 5). Not a worklist: an artist never drops off for being resolved, so the
+// operator can browse, search, and edit/add/remove a link any time. Following the admin design
+// doctrine (docs/admin-shell.md — one primary per object, rare actions hidden by default),
+// each artist is a COLLAPSED summary row (name, finding count, link count, a "needs a look"
+// flag) that expands to reveal its links and the one contextual review action per link
+// (Confirm a candidate, Follow now / Mark done, Undo). The structural edits — add a platform,
+// remove a link — live behind a "Manage links" dialog, off the resting surface. The WORK
+// (which artists need a look) surfaces as an /admin attention row (source "artist-review")
+// that deep-links here with ?artist=<id>, which auto-expands and rings that artist.
 
 const ARTIST_OVERVIEW_KEY = ["admin", "artists", "overview"] as const;
 // The /admin attention queue's key — a confirm/follow/add here changes an artist-review row,
@@ -103,6 +114,17 @@ const PLATFORM_LABELS: Record<ArtistSocialPlatform, string> = {
 const PLATFORM_OPTIONS: ArtistSocialPlatform[] = [...ARTIST_SOCIAL_PLATFORMS].sort((a, b) =>
   PLATFORM_LABELS[a].localeCompare(PLATFORM_LABELS[b]),
 );
+
+// A link still wants the operator's eyes: a candidate to confirm, or a link-only platform not
+// yet followed (the followable Spotify/YouTube links ride the automated sweep, so they don't
+// count as manual work here).
+function needsReview(social: ArtistSocial): boolean {
+  if (social.status === "candidate") {
+    return true;
+  }
+
+  return social.followedAt === null && social.mutedAt === null && !FOLLOWABLE.has(social.platform);
+}
 
 // The brand marks (simple-icons) for each platform; `homepage` has no brand, so it uses
 // a Phosphor globe (an interface icon — DESIGN.md's platform-vs-interface split).
@@ -158,11 +180,8 @@ export const Route = createFileRoute("/admin/artists")({
 });
 
 function AdminArtistsPage() {
-  // Seed the query from the SSR loader (the same pattern every other admin route
-  // uses) so the list renders server-side — a bare client `useQuery` with no loader
-  // would SSR only its "Loading…" placeholder and hang there until a client fetch
-  // fired (react-query treats an unseeded query as pending on the dehydrated first
-  // paint), which is exactly what stuck this route.
+  // Seed the query from the SSR loader (the same pattern every other admin route uses) so the
+  // list renders server-side.
   const initial = Route.useLoaderData();
   const { artist: focusId } = Route.useSearch();
   const queryClient = useQueryClient();
@@ -176,6 +195,19 @@ function AdminArtistsPage() {
   // best-effort, so a Spotify/YouTube API miss records the follow-state and lands its warning here.
   const [notice, setNotice] = useState<string | undefined>();
   const [query, setQuery] = useState("");
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
+
+  const toggleExpanded = useCallback((id: string) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  }, []);
 
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ARTIST_OVERVIEW_KEY });
@@ -271,9 +303,14 @@ function AdminArtistsPage() {
     [artists, needle],
   );
 
-  // Deep-linked from the /admin attention row (?artist=<id>): scroll it into view and
-  // pulse a ring so the operator lands on the artist that needs a look, not the top.
-  const focusRef = useRef<HTMLLIElement | null>(null);
+  // Deep-linked from the /admin attention row (?artist=<id>): auto-expand it, scroll it into
+  // view, and ring it so the operator lands on the artist that needs a look, ready to review.
+  const focusRef = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    if (focusId) {
+      setExpanded((prev) => new Set(prev).add(focusId));
+    }
+  }, [focusId]);
   useEffect(() => {
     if (focusId && focusRef.current) {
       focusRef.current.scrollIntoView({ block: "center" });
@@ -328,11 +365,12 @@ function AdminArtistsPage() {
                 No artist matches “{query.trim()}”.
               </p>
             ) : (
-              <ul className="m-0 flex list-none flex-col divide-y divide-border/60 p-0">
+              <div className="overflow-hidden rounded-lg border border-border">
                 {visible.map((artist) => (
-                  <ArtistCard
+                  <ArtistAccordion
                     artist={artist}
                     busy={busy}
+                    expanded={expanded.has(artist.id)}
                     focused={artist.id === focusId}
                     key={artist.id}
                     onAdd={(platform, url) =>
@@ -342,12 +380,13 @@ function AdminArtistsPage() {
                     onFollowNow={(socialId) => followNow.mutate(socialId)}
                     onRegister={(socialId) => registerFollow.mutate(socialId)}
                     onRemove={(socialId) => removeSocial.mutate(socialId)}
+                    onToggle={() => toggleExpanded(artist.id)}
                     onUndo={(socialId) => undoFollow.mutate(socialId)}
                     onUnmute={(socialId) => unmute.mutate(socialId)}
                     ref={artist.id === focusId ? focusRef : undefined}
                   />
                 ))}
-              </ul>
+              </div>
             )}
           </>
         )}
@@ -356,89 +395,117 @@ function AdminArtistsPage() {
   );
 }
 
-function ArtistCard({
+function ArtistAccordion({
   artist,
   busy,
+  expanded,
   focused,
   onAdd,
   onConfirm,
   onFollowNow,
   onRegister,
   onRemove,
+  onToggle,
   onUndo,
   onUnmute,
   ref,
 }: {
   artist: ArtistOverviewItem;
   busy: boolean;
+  expanded: boolean;
   focused: boolean;
   onAdd: (platform: string, url: string) => void;
   onConfirm: (socialId: string) => void;
   onFollowNow: (socialId: string) => void;
   onRegister: (socialId: string) => void;
   onRemove: (socialId: string) => void;
+  onToggle: () => void;
   onUndo: (socialId: string) => void;
   onUnmute: (socialId: string) => void;
-  ref?: Ref<HTMLLIElement>;
+  ref?: Ref<HTMLElement>;
 }) {
+  const headerId = useId();
+  const bodyId = useId();
+  const pending = artist.socials.filter(needsReview).length;
+
   return (
-    <li
-      className={cn(
-        "py-5 first:pt-0 last:pb-0",
-        focused && "-mx-2 rounded-md bg-primary/5 px-2 ring-1 ring-primary/40",
-      )}
+    <section
+      className={cn("border-b border-border last:border-b-0", focused && "bg-primary/5")}
       ref={ref}
     >
-      <div className="mb-3 flex items-baseline justify-between gap-3">
-        <div className="flex min-w-0 items-baseline gap-2">
-          <h2 className="truncate text-sm font-bold text-foreground">{artist.name}</h2>
-          <span className="shrink-0 text-xs text-muted-foreground">
-            {artist.findingCount} {artist.findingCount === 1 ? "finding" : "findings"}
-          </span>
+      <button
+        aria-controls={bodyId}
+        aria-expanded={expanded}
+        className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-muted/40 focus-visible:outline-2 focus-visible:outline-ring"
+        id={headerId}
+        onClick={onToggle}
+        type="button"
+      >
+        {expanded ? (
+          <CaretDownIcon aria-hidden="true" className="shrink-0 text-muted-foreground" />
+        ) : (
+          <CaretRightIcon aria-hidden="true" className="shrink-0 text-muted-foreground" />
+        )}
+        <span className="min-w-0 flex-1 truncate text-sm font-medium">{artist.name}</span>
+        {pending > 0 ? (
+          <Badge className="shrink-0 border-primary/40 text-primary" variant="outline">
+            needs a look
+          </Badge>
+        ) : null}
+        <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
+          {artist.findingCount} finding{artist.findingCount === 1 ? "" : "s"} ·{" "}
+          {artist.socials.length} link{artist.socials.length === 1 ? "" : "s"}
+        </span>
+      </button>
+
+      {expanded ? (
+        <div aria-labelledby={headerId} className="space-y-3 px-4 pb-4 pt-1 sm:px-5" id={bodyId}>
+          {artist.socials.length > 0 ? (
+            <ul className="m-0 flex list-none flex-col divide-y divide-border/60 p-0">
+              {artist.socials.map((social) => (
+                <ReviewRow
+                  busy={busy}
+                  key={social.id}
+                  onConfirm={onConfirm}
+                  onFollowNow={onFollowNow}
+                  onRegister={onRegister}
+                  onUndo={onUndo}
+                  onUnmute={onUnmute}
+                  social={social}
+                />
+              ))}
+            </ul>
+          ) : (
+            <p className="text-xs text-muted-foreground">No links yet. Add one to get started.</p>
+          )}
+
+          <div className="flex items-center gap-3">
+            <ManageLinksDialog artist={artist} busy={busy} onAdd={onAdd} onRemove={onRemove} />
+            {artist.spotifyUrl ? (
+              <a
+                className="inline-flex shrink-0 items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+                href={artist.spotifyUrl}
+                rel="noreferrer"
+                target="_blank"
+              >
+                Spotify <ArrowSquareOutIcon aria-hidden="true" className="size-3" />
+              </a>
+            ) : undefined}
+          </div>
         </div>
-        {artist.spotifyUrl ? (
-          <a
-            className="inline-flex shrink-0 items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-            href={artist.spotifyUrl}
-            rel="noreferrer"
-            target="_blank"
-          >
-            Spotify <ArrowSquareOutIcon aria-hidden="true" className="size-3" />
-          </a>
-        ) : undefined}
-      </div>
-
-      {artist.socials.length > 0 ? (
-        <ul className="m-0 flex list-none flex-col gap-2 p-0">
-          {artist.socials.map((social) => (
-            <SocialRow
-              busy={busy}
-              key={social.id}
-              onConfirm={onConfirm}
-              onFollowNow={onFollowNow}
-              onRegister={onRegister}
-              onRemove={onRemove}
-              onUndo={onUndo}
-              onUnmute={onUnmute}
-              social={social}
-            />
-          ))}
-        </ul>
-      ) : (
-        <p className="text-xs text-muted-foreground">No links yet.</p>
-      )}
-
-      <AddPlatformForm busy={busy} onAdd={onAdd} />
-    </li>
+      ) : null}
+    </section>
   );
 }
 
-function SocialRow({
+// One link in the expanded review list: the platform + its URL + its state, and the ONE
+// contextual review action that applies right now (Confirm a candidate, then Follow now /
+// Mark done, or Undo / Unmute). The structural edits — remove, add — live in the dialog.
+function ReviewRow({
   busy,
   onConfirm,
   onFollowNow,
   onRegister,
-  onRemove,
   onUndo,
   onUnmute,
   social,
@@ -447,23 +514,22 @@ function SocialRow({
   onConfirm: (socialId: string) => void;
   onFollowNow: (socialId: string) => void;
   onRegister: (socialId: string) => void;
-  onRemove: (socialId: string) => void;
   onUndo: (socialId: string) => void;
   onUnmute: (socialId: string) => void;
   social: ArtistSocial;
 }) {
   const followable = FOLLOWABLE.has(social.platform);
   const followed = social.followedAt !== null;
-  // Muted = the operator Undid a Spotify/YouTube follow: don't champion it, and keep the sweep
-  // off it. Mutually exclusive with `followed`. Unmute re-opens it.
+  // Muted = the operator Undid a Spotify/YouTube follow: don't champion it, keep the sweep off
+  // it. Mutually exclusive with `followed`. Unmute re-opens it.
   const muted = social.mutedAt !== null;
-  // Belt-and-suspenders: only emit a clickable href for an http(s) URL. React does NOT
-  // sanitize href, so a stored `javascript:`/`data:` URL (should the write-time guard ever
-  // be bypassed) would be click-to-execute XSS in the admin origin — render it inert instead.
+  // Belt-and-suspenders: only emit a clickable href for an http(s) URL. React does NOT sanitize
+  // href, so a stored `javascript:`/`data:` URL would be click-to-execute XSS in the admin
+  // origin — render it inert instead.
   const safeUrl = isHttpUrl(social.url);
 
   return (
-    <li className="flex flex-wrap items-center gap-2 rounded-md border border-border/60 bg-background/40 px-3 py-2">
+    <li className="flex flex-wrap items-center gap-2 py-2">
       <PlatformLogo className="size-4 shrink-0 text-muted-foreground" platform={social.platform} />
       {safeUrl ? (
         <a
@@ -504,38 +570,12 @@ function SocialRow({
         </Badge>
       ) : undefined}
 
-      <div className="flex shrink-0 items-center gap-1.5">
+      <div className="ml-auto flex shrink-0 items-center">
         {social.status === "candidate" ? (
           <Button disabled={busy} onClick={() => onConfirm(social.id)} size="sm" variant="outline">
             Confirm
           </Button>
-        ) : undefined}
-        {!followed && !muted && followable ? (
-          // Spotify/YouTube have a follow API — this button DOES the real follow (PUT
-          // /me/following, subscriptions.insert) server-side, then stamps followed_at, so the
-          // on-box sweep skips it. A missing-scope 403 surfaces in the error banner.
-          <Button disabled={busy} onClick={() => onFollowNow(social.id)} size="sm">
-            <UserPlusIcon aria-hidden="true" className="size-3.5" />
-            Follow now
-          </Button>
-        ) : undefined}
-        {!followed && !muted && !followable ? (
-          // No follow API (Instagram/TikTok/…): the operator follows out-and-back, then
-          // registers it here (bookkeeping — stamps followed_at, no platform call).
-          <Button disabled={busy} onClick={() => onRegister(social.id)} size="sm" variant="outline">
-            <UserPlusIcon aria-hidden="true" className="size-3.5" />
-            Mark done
-          </Button>
-        ) : undefined}
-        {muted ? (
-          // Undo left this Spotify/YouTube row muted so the sweep won't re-follow. Unmute
-          // re-opens it — the sweep may champion it again and "Follow now" returns.
-          <Button disabled={busy} onClick={() => onUnmute(social.id)} size="sm" variant="outline">
-            <UserPlusIcon aria-hidden="true" className="size-3.5" />
-            Unmute
-          </Button>
-        ) : undefined}
-        {followed ? (
+        ) : followed ? (
           // Reverse it: for Spotify/YouTube a real API unfollow that also MUTES the row so the
           // sweep can't re-follow; for the no-API platforms a plain bookkeeping clear.
           <Button
@@ -548,18 +588,95 @@ function SocialRow({
             <ArrowUUpLeftIcon aria-hidden="true" className="size-3.5" />
             Undo
           </Button>
-        ) : undefined}
-        <Button
-          aria-label="Remove this platform"
-          disabled={busy}
-          onClick={() => onRemove(social.id)}
-          size="icon-sm"
-          variant="ghost"
-        >
-          <TrashIcon aria-hidden="true" className="size-3.5" />
-        </Button>
+        ) : muted ? (
+          // Undo left this Spotify/YouTube row muted so the sweep won't re-follow. Unmute
+          // re-opens it — the sweep may champion it again and "Follow now" returns.
+          <Button disabled={busy} onClick={() => onUnmute(social.id)} size="sm" variant="outline">
+            <UserPlusIcon aria-hidden="true" className="size-3.5" />
+            Unmute
+          </Button>
+        ) : followable ? (
+          // Spotify/YouTube have a follow API — this button DOES the real follow (PUT
+          // /me/following, subscriptions.insert) server-side, then stamps followed_at.
+          <Button disabled={busy} onClick={() => onFollowNow(social.id)} size="sm">
+            <UserPlusIcon aria-hidden="true" className="size-3.5" />
+            Follow now
+          </Button>
+        ) : (
+          // No follow API (Instagram/TikTok/…): the operator follows out-and-back, then
+          // registers it here (bookkeeping — stamps followed_at, no platform call).
+          <Button disabled={busy} onClick={() => onRegister(social.id)} size="sm" variant="outline">
+            <UserPlusIcon aria-hidden="true" className="size-3.5" />
+            Mark done
+          </Button>
+        )}
       </div>
     </li>
+  );
+}
+
+// The structural edits, off the resting surface (doctrine: rare actions hidden by default).
+// Lists every link with a Remove, and the Add-a-platform form.
+function ManageLinksDialog({
+  artist,
+  busy,
+  onAdd,
+  onRemove,
+}: {
+  artist: ArtistOverviewItem;
+  busy: boolean;
+  onAdd: (platform: string, url: string) => void;
+  onRemove: (socialId: string) => void;
+}) {
+  return (
+    <Dialog>
+      <DialogTrigger
+        render={
+          <Button size="sm" variant="outline">
+            <PencilSimpleIcon aria-hidden="true" className="size-3.5" />
+            Manage links
+          </Button>
+        }
+      />
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{artist.name} — links</DialogTitle>
+          <DialogDescription>
+            Add a platform or remove a link. Confirming and following happen in the list.
+          </DialogDescription>
+        </DialogHeader>
+
+        {artist.socials.length > 0 ? (
+          <ul className="m-0 flex list-none flex-col divide-y divide-border rounded-md border border-border p-0">
+            {artist.socials.map((social) => (
+              <li className="flex items-center gap-2 px-3 py-2" key={social.id}>
+                <PlatformLogo
+                  className="size-4 shrink-0 text-muted-foreground"
+                  platform={social.platform}
+                />
+                <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+                  {social.url}
+                </span>
+                <Button
+                  aria-label={`Remove ${PLATFORM_LABELS[social.platform]}`}
+                  className="text-muted-foreground hover:text-destructive"
+                  disabled={busy}
+                  onClick={() => onRemove(social.id)}
+                  size="icon-sm"
+                  variant="ghost"
+                >
+                  <TrashIcon aria-hidden="true" className="size-3.5" />
+                </Button>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="text-sm text-muted-foreground">No links yet.</p>
+        )}
+
+        <AddPlatformForm busy={busy} onAdd={onAdd} />
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -570,6 +687,7 @@ function AddPlatformForm({
   busy: boolean;
   onAdd: (platform: string, url: string) => void;
 }) {
+  const selectId = useId();
   const [platform, setPlatform] = useState<ArtistSocialPlatform>("instagram");
   const [url, setUrl] = useState("");
 
@@ -583,8 +701,8 @@ function AddPlatformForm({
   };
 
   return (
-    <div className="mt-3 border-t border-border/50 pt-3">
-      <Label className="mb-1.5 block text-xs" htmlFor="add-platform">
+    <div className="border-t border-border pt-3">
+      <Label className="mb-1.5 block text-xs" htmlFor={selectId}>
         Add a platform
       </Label>
       <div className="flex flex-wrap items-center gap-2">
@@ -593,7 +711,7 @@ function AddPlatformForm({
           onValueChange={(value) => setPlatform(value as ArtistSocialPlatform)}
           value={platform}
         >
-          <SelectTrigger aria-label="Platform" className="w-40 gap-2" id="add-platform" size="sm">
+          <SelectTrigger aria-label="Platform" className="w-40 gap-2" id={selectId} size="sm">
             <PlatformLogo className="size-3.5 shrink-0 text-muted-foreground" platform={platform} />
             <SelectValue />
           </SelectTrigger>

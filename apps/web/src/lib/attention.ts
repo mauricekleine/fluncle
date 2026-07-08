@@ -22,6 +22,7 @@ export type AttentionSource =
   | "distribute"
   | "drip-empty"
   | "post-tiktok"
+  | "post-youtube"
   | "tiktok-draft";
 
 /** One row of the queue — artwork, the object line, data, and action routing. */
@@ -52,26 +53,32 @@ export type AttentionItem = {
 
 // ─── Derivation (server-fed row shapes → items) ─────────────────────────────
 
-/** A pending TikTok inbox draft joined to its finding. */
-export type DraftInput = {
-  artUrl?: string;
-  artists: string[];
-  logId?: string;
-  title: string;
-  trackId: string;
-  /** The push / re-push time — the 24h bounce clock starts here. */
-  updatedAt: string;
-};
+/** A finding's post status on one platform (absent ⇒ never pushed). */
+export type SocialStatus = "draft" | "scheduled" | "published" | "failed";
 
-/** A dressed (video'd) finding with no TikTok post at all, oldest first. */
-export type UnpostedInput = {
+/**
+ * A dressed (video'd) finding with a pending distribution leg, joined to its per-platform
+ * post state. The two platforms post differently, so each is its own todo: TikTok goes
+ * none → draft (a silent inbox draft you finish in-app) → published; YouTube posts a public
+ * Short the moment you push (none → published).
+ */
+export type ClipInput = {
   addedAt: string;
   artUrl?: string;
   artists: string[];
   logId?: string;
   title: string;
   trackId: string;
+  tiktokStatus?: SocialStatus;
+  /** The TikTok draft's push time — the 24h bounce clock (set when tiktokStatus is "draft"). */
+  tiktokUpdatedAt?: string;
+  youtubeStatus?: SocialStatus;
 };
+
+/** A distribution leg is settled once it's live (published) or scheduled to go. */
+function isPosted(status?: SocialStatus): boolean {
+  return status === "published" || status === "scheduled";
+}
 
 /** A recording, trimmed to the cues verdict (`hasVideo && no tracklist`). */
 export type RecordingInput = {
@@ -117,10 +124,9 @@ export type ArtistReviewInput = {
 export type AttentionInputs = {
   artistReviews: ArtistReviewInput[];
   clipPosts: ClipPostInput[];
-  drafts: DraftInput[];
+  clips: ClipInput[];
   mixtapes: MixtapeInput[];
   recordings: RecordingInput[];
-  unposted: UnpostedInput[];
 };
 
 /** When a pushed TikTok draft bounces: `updatedAt` + the shared 24h window. */
@@ -129,48 +135,69 @@ export function draftDeadline(updatedAt: string): string {
 }
 
 /**
- * Map the five sources' raw rows into queue items. Pure and clock-injected; the
- * sources partition cleanly — a finding with ANY TikTok draft is a deadline row
- * (fresh: finish it; bounced: re-push it), never also the unposted row — so one
- * task is never two rows (the trust rule: a row the operator can't act on once
- * kills the queue).
+ * Map the sources' raw rows into queue items. Pure and clock-injected. A clip's two
+ * distribution legs (TikTok, YouTube) are SEPARATE todos — each posts differently — so a
+ * clip yields up to two rows, but only the oldest clip with a pending leg surfaces them:
+ * the next clip appears once both of this one's legs land. Independent of that gate, every
+ * TikTok inbox draft is a deadline row racing its 24h bounce (finish it / re-push it), so an
+ * in-flight draft is never hidden behind the one-clip-at-a-time queue.
  */
 export function deriveAttentionItems(inputs: AttentionInputs, now: number): AttentionItem[] {
   const items: AttentionItem[] = [];
 
-  // Every pending TikTok inbox draft races the 24h bounce — the one true deadline.
-  const drafted = new Set<string>();
-  for (const draft of inputs.drafts) {
-    drafted.add(draft.trackId);
+  // Every pending TikTok inbox draft races the 24h bounce — the one true deadline. ALL are
+  // shown (urgency), regardless of the one-clip-at-a-time gate on fresh pushes below.
+  for (const clip of inputs.clips) {
+    if (clip.tiktokStatus !== "draft" || !clip.tiktokUpdatedAt) {
+      continue;
+    }
     items.push({
-      anchorAt: draft.updatedAt,
-      ...(draft.artUrl ? { artUrl: draft.artUrl } : {}),
-      deadlineAt: draftDeadline(draft.updatedAt),
-      id: `tiktok-draft:${draft.trackId}`,
-      ...(draft.logId ? { logId: draft.logId } : {}),
+      anchorAt: clip.tiktokUpdatedAt,
+      ...(clip.artUrl ? { artUrl: clip.artUrl } : {}),
+      deadlineAt: draftDeadline(clip.tiktokUpdatedAt),
+      id: `tiktok-draft:${clip.trackId}`,
+      ...(clip.logId ? { logId: clip.logId } : {}),
       source: "tiktok-draft",
-      title: trackLabel(draft.artists, draft.title),
-      trackId: draft.trackId,
+      title: trackLabel(clip.artists, clip.title),
+      trackId: clip.trackId,
     });
   }
 
-  // The oldest dressed finding still off TikTok — ONE row (posting is serial:
-  // TikTok caps pending drafts at 5/24h); the rest ride as its `waiting` datum
-  // and surface one at a time as each clears. Defensive re-partition: a finding
-  // already carrying a draft is that deadline row's business.
-  const unposted = inputs.unposted.filter((track) => !drafted.has(track.trackId));
-  const oldest = unposted[0];
-  if (oldest) {
-    items.push({
-      anchorAt: oldest.addedAt,
-      ...(oldest.artUrl ? { artUrl: oldest.artUrl } : {}),
-      id: `post-tiktok:${oldest.trackId}`,
-      ...(oldest.logId ? { logId: oldest.logId } : {}),
-      source: "post-tiktok",
-      title: trackLabel(oldest.artists, oldest.title),
-      trackId: oldest.trackId,
-      waiting: unposted.length,
-    });
+  // The oldest clip with a pending leg is the focus — its pending platforms surface as
+  // separate todos, and the next clip appears only once BOTH of these land. The rest ride as
+  // the `waiting` datum. (TikTok caps pending inbox drafts at 5/24h, so posting stays serial.)
+  const pending = inputs.clips.filter(
+    (clip) => !isPosted(clip.tiktokStatus) || !isPosted(clip.youtubeStatus),
+  );
+  const focus = pending[0];
+  if (focus) {
+    // The TikTok leg — a FRESH push (no post yet, or a prior failed one). A draft is already
+    // the deadline row above, so it is not re-emitted here.
+    if (!isPosted(focus.tiktokStatus) && focus.tiktokStatus !== "draft") {
+      items.push({
+        anchorAt: focus.addedAt,
+        ...(focus.artUrl ? { artUrl: focus.artUrl } : {}),
+        id: `post-tiktok:${focus.trackId}`,
+        ...(focus.logId ? { logId: focus.logId } : {}),
+        source: "post-tiktok",
+        title: trackLabel(focus.artists, focus.title),
+        trackId: focus.trackId,
+        waiting: pending.length,
+      });
+    }
+    // The YouTube leg — a public Short posts the moment you push, so it's a one-tap todo.
+    if (!isPosted(focus.youtubeStatus)) {
+      items.push({
+        anchorAt: focus.addedAt,
+        ...(focus.artUrl ? { artUrl: focus.artUrl } : {}),
+        id: `post-youtube:${focus.trackId}`,
+        ...(focus.logId ? { logId: focus.logId } : {}),
+        source: "post-youtube",
+        title: trackLabel(focus.artists, focus.title),
+        trackId: focus.trackId,
+        waiting: pending.length,
+      });
+    }
   }
 
   // A recorded take with no cue tracklist — nothing downstream (chapters, clips,
@@ -404,14 +431,16 @@ export function snoozeSlots(now: number): SnoozeSlot[] {
 // ─── The primary action ──────────────────────────────────────────────────────
 
 /**
- * What Enter fires on a row. Inline where an op exists (copy the caption for the
- * hand-finished TikTok post; re-push a bounced draft through the same gated op
- * the board's push dialog calls); a deep-link with the object selected everywhere
- * else (the Studio owns cues + distribution, the clip library owns the drip).
+ * What Enter fires on a row. Inline where an op exists: push a platform's video (a fresh
+ * TikTok inbox draft or the public YouTube Short), copy the caption for a TikTok draft you're
+ * finishing in-app, or re-push a bounced draft — all the same gated ops the board push dialog
+ * calls. A deep-link with the object selected everywhere else (the Studio owns cues +
+ * distribution, the clip library owns the drip).
  */
 export type PrimaryAction =
   | { kind: "copy-caption"; label: "Copy caption" }
   | { href: string; kind: "open"; label: string }
+  | { kind: "push"; label: string; platform: "tiktok" | "youtube" }
   | { kind: "re-push"; label: "Re-push draft" };
 
 export function primaryFor(item: AttentionItem, now: number): PrimaryAction {
@@ -425,10 +454,13 @@ export function primaryFor(item: AttentionItem, now: number): PrimaryAction {
     case "drip-empty":
       return { href: item.href ?? "/admin/clips", kind: "open", label: "Cut clips" };
     case "post-tiktok":
-      return { kind: "copy-caption", label: "Copy caption" };
+      // No TikTok post yet — the first step is pushing the silent inbox draft.
+      return { kind: "push", label: "Push draft", platform: "tiktok" };
+    case "post-youtube":
+      return { kind: "push", label: "Post to YouTube", platform: "youtube" };
     case "tiktok-draft": {
       const bounced = item.deadlineAt !== undefined && Date.parse(item.deadlineAt) <= now;
-      // "Re-push draft" — the board push dialog's exact sibling label.
+      // A pushed draft is finished in-app: copy the caption to paste there; re-push if bounced.
       return bounced
         ? { kind: "re-push", label: "Re-push draft" }
         : { kind: "copy-caption", label: "Copy caption" };
