@@ -1045,7 +1045,12 @@ function QueueRow({
             <Popover onOpenChange={onSnoozeOpenChange} open={snoozeOpen}>
               <PopoverTrigger
                 render={
-                  <Button aria-label={`Snooze ${item.title}`} size="icon-sm" variant="ghost">
+                  <Button
+                    aria-label={`Snooze ${item.title}`}
+                    size="icon-sm"
+                    title="Snooze (s)"
+                    variant="ghost"
+                  >
                     <ClockCountdownIcon aria-hidden="true" />
                   </Button>
                 }
@@ -1070,6 +1075,7 @@ function QueueRow({
               aria-label={`Won't do ${item.title}`}
               onClick={() => onWontDo(item)}
               size="icon-sm"
+              title="Won't do (x)"
               variant="ghost"
             >
               <ProhibitIcon aria-hidden="true" />
