@@ -16,9 +16,9 @@ import { Route as RssDotxmlRouteImport } from './routes/rss[.]xml'
 import { Route as RadioRouteImport } from './routes/radio'
 import { Route as PrivacyRouteImport } from './routes/privacy'
 import { Route as PodcastDotxmlRouteImport } from './routes/podcast[.]xml'
+import { Route as PipelineRouteImport } from './routes/pipeline'
 import { Route as GalaxyRouteImport } from './routes/galaxy'
 import { Route as FeedDotjsonRouteImport } from './routes/feed[.]json'
-import { Route as FactoryRouteImport } from './routes/factory'
 import { Route as EarthRouteImport } from './routes/earth'
 import { Route as DocsRouteImport } from './routes/docs'
 import { Route as DeviceRouteImport } from './routes/device'
@@ -125,6 +125,11 @@ const PodcastDotxmlRoute = PodcastDotxmlRouteImport.update({
   path: '/podcast.xml',
   getParentRoute: () => rootRouteImport,
 } as any)
+const PipelineRoute = PipelineRouteImport.update({
+  id: '/pipeline',
+  path: '/pipeline',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const GalaxyRoute = GalaxyRouteImport.update({
   id: '/galaxy',
   path: '/galaxy',
@@ -133,11 +138,6 @@ const GalaxyRoute = GalaxyRouteImport.update({
 const FeedDotjsonRoute = FeedDotjsonRouteImport.update({
   id: '/feed.json',
   path: '/feed.json',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const FactoryRoute = FactoryRouteImport.update({
-  id: '/factory',
-  path: '/factory',
   getParentRoute: () => rootRouteImport,
 } as any)
 const EarthRoute = EarthRouteImport.update({
@@ -523,9 +523,9 @@ export interface FileRoutesByFullPath {
   '/device': typeof DeviceRoute
   '/docs': typeof DocsRouteWithChildren
   '/earth': typeof EarthRoute
-  '/factory': typeof FactoryRoute
   '/feed.json': typeof FeedDotjsonRoute
   '/galaxy': typeof GalaxyRoute
+  '/pipeline': typeof PipelineRoute
   '/podcast.xml': typeof PodcastDotxmlRoute
   '/privacy': typeof PrivacyRoute
   '/radio': typeof RadioRoute
@@ -603,9 +603,9 @@ export interface FileRoutesByTo {
   '/calendar.ics': typeof CalendarDoticsRoute
   '/device': typeof DeviceRoute
   '/earth': typeof EarthRoute
-  '/factory': typeof FactoryRoute
   '/feed.json': typeof FeedDotjsonRoute
   '/galaxy': typeof GalaxyRoute
+  '/pipeline': typeof PipelineRoute
   '/podcast.xml': typeof PodcastDotxmlRoute
   '/privacy': typeof PrivacyRoute
   '/radio': typeof RadioRoute
@@ -686,9 +686,9 @@ export interface FileRoutesById {
   '/device': typeof DeviceRoute
   '/docs': typeof DocsRouteWithChildren
   '/earth': typeof EarthRoute
-  '/factory': typeof FactoryRoute
   '/feed.json': typeof FeedDotjsonRoute
   '/galaxy': typeof GalaxyRoute
+  '/pipeline': typeof PipelineRoute
   '/podcast.xml': typeof PodcastDotxmlRoute
   '/privacy': typeof PrivacyRoute
   '/radio': typeof RadioRoute
@@ -770,9 +770,9 @@ export interface FileRouteTypes {
     | '/device'
     | '/docs'
     | '/earth'
-    | '/factory'
     | '/feed.json'
     | '/galaxy'
+    | '/pipeline'
     | '/podcast.xml'
     | '/privacy'
     | '/radio'
@@ -850,9 +850,9 @@ export interface FileRouteTypes {
     | '/calendar.ics'
     | '/device'
     | '/earth'
-    | '/factory'
     | '/feed.json'
     | '/galaxy'
+    | '/pipeline'
     | '/podcast.xml'
     | '/privacy'
     | '/radio'
@@ -932,9 +932,9 @@ export interface FileRouteTypes {
     | '/device'
     | '/docs'
     | '/earth'
-    | '/factory'
     | '/feed.json'
     | '/galaxy'
+    | '/pipeline'
     | '/podcast.xml'
     | '/privacy'
     | '/radio'
@@ -1015,9 +1015,9 @@ export interface RootRouteChildren {
   DeviceRoute: typeof DeviceRoute
   DocsRoute: typeof DocsRouteWithChildren
   EarthRoute: typeof EarthRoute
-  FactoryRoute: typeof FactoryRoute
   FeedDotjsonRoute: typeof FeedDotjsonRoute
   GalaxyRoute: typeof GalaxyRoute
+  PipelineRoute: typeof PipelineRoute
   PodcastDotxmlRoute: typeof PodcastDotxmlRoute
   PrivacyRoute: typeof PrivacyRoute
   RadioRoute: typeof RadioRoute
@@ -1122,6 +1122,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof PodcastDotxmlRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/pipeline': {
+      id: '/pipeline'
+      path: '/pipeline'
+      fullPath: '/pipeline'
+      preLoaderRoute: typeof PipelineRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/galaxy': {
       id: '/galaxy'
       path: '/galaxy'
@@ -1134,13 +1141,6 @@ declare module '@tanstack/react-router' {
       path: '/feed.json'
       fullPath: '/feed.json'
       preLoaderRoute: typeof FeedDotjsonRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/factory': {
-      id: '/factory'
-      path: '/factory'
-      fullPath: '/factory'
-      preLoaderRoute: typeof FactoryRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/earth': {
@@ -1698,9 +1698,9 @@ const rootRouteChildren: RootRouteChildren = {
   DeviceRoute: DeviceRoute,
   DocsRoute: DocsRouteWithChildren,
   EarthRoute: EarthRoute,
-  FactoryRoute: FactoryRoute,
   FeedDotjsonRoute: FeedDotjsonRoute,
   GalaxyRoute: GalaxyRoute,
+  PipelineRoute: PipelineRoute,
   PodcastDotxmlRoute: PodcastDotxmlRoute,
   PrivacyRoute: PrivacyRoute,
   RadioRoute: RadioRoute,
