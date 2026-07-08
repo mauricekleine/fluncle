@@ -2412,6 +2412,20 @@ body::before {
   }
 }
 
+/* Touch-comfortable admin (DIST-02). The operator triages the queue and pushes
+   distribution from a phone, but the workspace is desktop-dense by default
+   (density is a product permission — DESIGN.md). On a COARSE pointer only, floor
+   every in-page control at the 44px touch target so a thumb lands cleanly; the
+   desktop mouse UI keeps its tight 32px rhythm untouched. Scoped to the admin
+   plate, never the public app. Matches the adapt doctrine: detect the input
+   method, not the screen size. */
+@media (pointer: coarse) {
+  .admin-workspace :is(button, [data-slot="button"], [data-slot="select-trigger"]) {
+    min-block-size: 44px;
+    min-inline-size: 44px;
+  }
+}
+
 /* radio.fluncle.com — the cycling observation station (RFC Unit B). Full-screen,
    dark, cover-led: the finding's clean footage runs full-bleed (landscape on
    desktop, portrait on mobile via the MT crop the JS picks), the spoken

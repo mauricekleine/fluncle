@@ -60,7 +60,7 @@ function AdminLayout() {
             line up top and bottom (docs/admin-shell.md). */}
         <div
           className={cn(
-            "m-2 flex min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-border bg-card/80 outline outline-1 outline-border/40 outline-offset-4 backdrop-blur-xl",
+            "admin-workspace m-2 flex min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-border bg-card/80 outline outline-1 outline-border/40 outline-offset-4 backdrop-blur-xl",
             fill && "lg:min-h-0",
           )}
         >

@@ -833,18 +833,21 @@ function AdminBoardPage() {
 
   const headerActions = (
     <>
-      <Button onClick={() => setTrayOpen(true)} size="sm" variant="ghost">
+      {/* Labels collapse to icons under sm so the two actions + badge stop
+          squeezing the "Findings" title into an ellipsis on a phone (DIST-02).
+          aria-label carries the name when the text is hidden. */}
+      <Button aria-label="Submissions" onClick={() => setTrayOpen(true)} size="sm" variant="ghost">
         <TrayIcon aria-hidden="true" weight={submissions.length > 0 ? "fill" : "regular"} />
-        Submissions
+        <span className="hidden sm:inline">Submissions</span>
         {submissions.length > 0 ? (
           <Badge className="tabular-nums" variant="secondary">
             {submissions.length}
           </Badge>
         ) : undefined}
       </Button>
-      <Button onClick={() => setAddOpen(true)} size="sm">
+      <Button aria-label="Add finding" onClick={() => setAddOpen(true)} size="sm">
         <PlusIcon aria-hidden="true" weight="bold" />
-        Add finding
+        <span className="hidden sm:inline">Add finding</span>
       </Button>
     </>
   );

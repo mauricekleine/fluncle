@@ -63,4 +63,10 @@ BASE_URL=http://127.0.0.1:3000 OUT_DIR=/tmp/shell-smoke bun tests/browser/shell-
 BASE_URL=http://127.0.0.1:3000 OUT_DIR=/tmp/queue-smoke SEED=1 bun tests/browser/queue-smoke.ts
 ```
 
+- `admin-touch-smoke.ts` — pins the touch-comfortable-admin contract (DIST-02): on a coarse-pointer touch context (iPhone viewport, `hasTouch` + `isMobile`) every button-control on every admin surface is ≥44px and no surface bleeds horizontally, while on a fine-pointer mouse context the same controls stay their dense sub-44px selves — proving the 44px floor (`styles.css`, scoped to `.admin-workspace`) is touch-only and never bloats the desktop UI:
+
+```bash
+BASE_URL=http://127.0.0.1:3000 bun tests/browser/admin-touch-smoke.ts
+```
+
 Run them against a live dev server (per [docs/local-database.md](./local-database.md); in a worktree, copy main's `.dev.vars` and run `bun run --cwd apps/web dev:vite`). Read the screenshots after every shell or admin-chrome change.
