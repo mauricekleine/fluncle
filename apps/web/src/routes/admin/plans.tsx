@@ -232,7 +232,7 @@ function AdminPlansPage() {
       if (newId) {
         setExpanded((prev) => new Set(prev).add(newId));
       }
-      setNotice("Plan started. Line up the findings.");
+      setNotice("Playlist started. Line up the findings.");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
@@ -248,7 +248,7 @@ function AdminPlansPage() {
           {creating ? (
             <CircleNotchIcon aria-hidden="true" className="animate-spin" weight="bold" />
           ) : undefined}
-          {creating ? "Starting…" : "New plan"}
+          {creating ? "Starting…" : "New playlist"}
         </Button>
       }
       title="Playlists"
@@ -272,7 +272,7 @@ function AdminPlansPage() {
         {plans.length === 0 ? (
           <Empty>
             <EmptyHeader>
-              <EmptyTitle>No plans yet</EmptyTitle>
+              <EmptyTitle>No playlists yet</EmptyTitle>
               <EmptyDescription>
                 Start a plan to line up the findings for a set. It gets a handle you carry onto
                 Beatport, Rekordbox, and the USB.
@@ -502,13 +502,13 @@ function PlanEditor({
               />
               <AlertDialogContent>
                 <AlertDialogHeader>
-                  <AlertDialogTitle>Discard this plan?</AlertDialogTitle>
+                  <AlertDialogTitle>Discard this playlist?</AlertDialogTitle>
                   <AlertDialogDescription>
                     The plan and its tracklist will be permanently removed. This can't be undone.
                   </AlertDialogDescription>
                 </AlertDialogHeader>
                 <AlertDialogFooter>
-                  <AlertDialogCancel disabled={busy}>Keep plan</AlertDialogCancel>
+                  <AlertDialogCancel disabled={busy}>Keep playlist</AlertDialogCancel>
                   <AlertDialogAction
                     disabled={busy}
                     onClick={() => void discard()}
@@ -517,7 +517,7 @@ function PlanEditor({
                     {busy ? (
                       <CircleNotchIcon aria-hidden="true" className="animate-spin" weight="bold" />
                     ) : undefined}
-                    {busy ? "Discarding…" : "Discard plan"}
+                    {busy ? "Discarding…" : "Discard playlist"}
                   </AlertDialogAction>
                 </AlertDialogFooter>
               </AlertDialogContent>
@@ -550,10 +550,10 @@ function PlanHandleField({ handle }: { handle: string }) {
 
   return (
     <div className="space-y-1.5">
-      <Label>Plan handle</Label>
+      <Label>Playlist handle</Label>
       <div className="flex items-center gap-2">
         <span className="font-mono text-sm tracking-tight text-foreground">{handle}</span>
-        <Button aria-label="Copy the plan handle" onClick={copy} size="sm" variant="outline">
+        <Button aria-label="Copy the playlist handle" onClick={copy} size="sm" variant="outline">
           {copied ? (
             <CheckIcon aria-hidden="true" className="text-primary" weight="bold" />
           ) : (
