@@ -12,7 +12,7 @@ Moving it to a **host** systemd timer decouples it: the host scheduler is never 
 
 ## What a run does
 
-Each tick is one `docker exec -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/fluncle-healthcheck.sh`:
+Each tick is one `docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/fluncle-healthcheck.sh` (the host unit runs as root to drive the Docker daemon; `-u hermes` runs the probe work unprivileged, matching every other `fluncle-*` sweep timer):
 
 1. The container's `fluncle-healthcheck.sh` sources the `0600` `${HOME}/.healthcheck.env` (the probe targets + the Discord webhook) and execs the bun orchestrator.
 2. `fluncle-healthcheck.ts` probes each service in parallel (each with a short 3–5s timeout), diffs every status against `${HOME}/.healthcheck/state.json`, Discord-pings only on a flip to `down` or a recovery, and POSTs the snapshot to the agent-tier `record_health` op that `/status` reads.

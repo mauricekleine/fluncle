@@ -6,13 +6,15 @@ After=network-online.target docker.service
 
 [Service]
 Type=oneshot
-# Runs as root: it drives the Docker daemon (docker exec into the hermes container).
-# The probe WORK is BAKED into the image (the .sh/.ts pair at /opt/hermes-scripts/, Unit A —
-# auto-updates from main via pin-watch, no /opt/data/scripts copy); this host unit only
-# TRIGGERS it, so the prober no longer rides — and is no longer starved by — the Hermes cron
-# gateway it is meant to monitor. (The prober self-emits its own /status row, so — unlike the
-# work sweeps — its .sh writes no cron-output marker: a self-read would be circular.)
-ExecStart=/usr/bin/docker exec -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/fluncle-healthcheck.sh
+# The host unit runs as root (to drive the Docker daemon); `docker exec -u hermes` runs the
+# probe WORK unprivileged inside the container — matching every other fluncle-* sweep timer,
+# so no host cron execs as container-root. The probe WORK is BAKED into the image (the .sh/.ts
+# pair at /opt/hermes-scripts/, Unit A — auto-updates from main via pin-watch, no
+# /opt/data/scripts copy); this host unit only TRIGGERS it, so the prober no longer rides — and
+# is no longer starved by — the Hermes cron gateway it is meant to monitor. (The prober
+# self-emits its own /status row, so — unlike the work sweeps — its .sh writes no cron-output
+# marker: a self-read would be circular.)
+ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/fluncle-healthcheck.sh
 # Matches the old --no-agent cron's 120s job budget (a clean tick runs ~5s).
 TimeoutStartSec=120
 # Modest hardening for a root docker-driving oneshot.
