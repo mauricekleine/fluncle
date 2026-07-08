@@ -47,6 +47,19 @@ describe("getServiceStatuses retired-row filter", () => {
     expect(ids).toEqual(["web", "cron.render", "render-box"]);
   });
 
+  it("drops the retired `cron.artist-follow` row (the removed auto-follow cron)", async () => {
+    execute.mockResolvedValue({
+      rows: [row("cron.artist-sweep"), row("cron.artist-follow"), row("cron.enrich")],
+    });
+
+    const services = await getServiceStatuses();
+    const ids = services.map((service) => service.service);
+
+    expect(ids).not.toContain("cron.artist-follow");
+    // The kept resolution cron (cron.artist-sweep) still passes through.
+    expect(ids).toEqual(["cron.artist-sweep", "cron.enrich"]);
+  });
+
   it("returns every row unchanged when no retired id is present", async () => {
     execute.mockResolvedValue({ rows: [row("web"), row("db"), row("hermes")] });
 

@@ -73,9 +73,11 @@ const SERVICE_CHECK_SAMPLES_KEEP = 90;
 //
 // `automation` is the known orphan: PR #177 split the single aggregate probe into one
 // row per Hermes cron (`cron.enrich`, `cron.render`, …), so the old `automation`
-// aggregate is no longer posted. Add an id here when a probe is retired; remove it
-// once the underlying `service_status` row is dropped.
-const RETIRED_SERVICE_IDS = new Set(["automation"]);
+// aggregate is no longer posted. `cron.artist-follow` is retired too — the flaky
+// auto-follow cron was removed (2026-07-08), but the box's old-image healthcheck keeps
+// upserting it until it re-bakes, and the upserted row lingers after. Add an id here
+// when a probe is retired; remove it once the underlying `service_status` row is dropped.
+const RETIRED_SERVICE_IDS = new Set(["automation", "cron.artist-follow"]);
 
 /**
  * Every CURRENT `service_status` row, newest-checked first — the page's service grid.
