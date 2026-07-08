@@ -50,7 +50,12 @@ inplace() { SRCH="$2" REPL="$3" perl -i -pe 's/\Q$ENV{SRCH}\E/$ENV{REPL}/g' "$1"
 CUR_FLUNCLE="$(sed -n 's#.*releases/download/v\([0-9][0-9.]*\)/fluncle-.*#\1#p' "$DOCKERFILE" | head -1)"
 CUR_CLAUDE="$(sed -n 's#.*@anthropic-ai/claude-code@\([0-9][0-9.]*\).*#\1#p' "$DOCKERFILE" | head -1)"
 CUR_BUN="$(sed -n 's/.*bun-v\([0-9][0-9.]*\).*/\1/p' "$DOCKERFILE" | head -1)"
-CUR_BASE="$(sed -n 's#^FROM nousresearch/hermes-agent:\(.*\)#\1#p' "$DOCKERFILE" | head -1)"
+# The base is DIGEST-pinned (`FROM …@sha256:…`) for reproducible rebuilds, so its FROM line
+# carries no calendar version to drift-compare. The human-readable tag the digest was resolved
+# from lives in the adjacent `docker inspect …:v<ver>` comment — parse the version from there
+# (a `:v<ver>` marker anywhere in the Dockerfile), so the report-only base-drift check still
+# fires instead of FATALing on the digest form.
+CUR_BASE="$(sed -n 's#.*nousresearch/hermes-agent:v\([0-9][0-9.]*\).*#v\1#p' "$DOCKERFILE" | head -1)"
 [ -n "$CUR_FLUNCLE" ] && [ -n "$CUR_CLAUDE" ] && [ -n "$CUR_BUN" ] && [ -n "$CUR_BASE" ] \
   || { log "FATAL: could not parse one of the Dockerfile pins (fluncle='$CUR_FLUNCLE' claude='$CUR_CLAUDE' bun='$CUR_BUN' base='$CUR_BASE')"; exit 1; }
 
