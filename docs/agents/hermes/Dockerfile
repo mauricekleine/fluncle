@@ -15,6 +15,11 @@
 # Hermes BLOCKS provider credentials from `--no-agent` cron script envs (GHSA-rhgp-j443-p4rf),
 # so observe-sweep.sh reads the token from a 0600 file instead — see
 # docs/agents/hermes/cron/README.md § Operational gotchas (do not re-debug these).
+#
+# DURABILITY (RFC Unit B): the base is a MUTABLE tag — pin it to a digest during the attended
+# `rebuild-hermes.sh --force` so a cached venv layer can't sit on a drifted base. Resolve with:
+#   docker inspect nousresearch/hermes-agent:v2026.7.1 --format '{{index .RepoDigests 0}}'
+# then change this line to  FROM nousresearch/hermes-agent@sha256:<digest>
 FROM nousresearch/hermes-agent:v2026.7.1
 
 # Enrichment toolchain (docs/agents/hermes/cron/README.md): the
@@ -64,8 +69,16 @@ RUN apt-get update \
 # (a+rX) so the non-root cron user reads it.
 ENV MUQ_VENV=/opt/muq-venv
 ENV HF_HOME=/opt/muq-cache
-RUN uv python install 3.11 \
-  && uv venv --python 3.11 --seed "${MUQ_VENV}" \
+# DURABILITY (RFC Unit B): relocate uv's standalone python OUT of /root (mode 700 — the
+# non-root cron user can't traverse it, so the venv's interpreter symlink would dangle for
+# `docker exec -u hermes`) into a world-readable baked path — the same "cp out of /root"
+# pattern the bun/box blocks below apply. Patch-pin 3.11.15 (what the working image resolved
+# to) instead of floating 3.11 so the python-build-standalone target is deterministic across
+# rebuilds. The operator confirms 3.11.15 still resolves during the attended `--force` rebuild
+# (fall back to the nearest cp311 patch if uv ever drops it).
+ENV UV_PYTHON_INSTALL_DIR=/opt/uv-python
+RUN uv python install 3.11.15 \
+  && uv venv --python 3.11.15 --seed "${MUQ_VENV}" \
   && "${MUQ_VENV}/bin/pip" install --no-cache-dir --upgrade pip \
   && "${MUQ_VENV}/bin/pip" install --no-cache-dir \
        --index-url https://download.pytorch.org/whl/cpu \
@@ -73,7 +86,7 @@ RUN uv python install 3.11 \
   && "${MUQ_VENV}/bin/pip" install --no-cache-dir muq==0.1.0 numpy==2.4.4 \
   && HF_HOME="${HF_HOME}" "${MUQ_VENV}/bin/python" -c \
        "from muq import MuQ; MuQ.from_pretrained('OpenMuQ/MuQ-large-msd-iter')" \
-  && chmod -R a+rX "${MUQ_VENV}" "${HF_HOME}"
+  && chmod -R a+rX "${MUQ_VENV}" "${HF_HOME}" /opt/uv-python
 
 # Bun — pinned to the repo's toolchain (packageManager bun@1.3.14) so the box runs
 # the same interpreter the skill is authored against. The official installer drops
@@ -142,6 +155,23 @@ RUN arch="$(uname -m)" \
        -o /usr/local/bin/fluncle \
   && chmod 755 /usr/local/bin/fluncle
 
+# Bake the on-box sweep scripts so they ride the image (auto-update via pin-watch) and are
+# read straight from here by the host-timer units — no docker cp, no /opt/data projection.
+# Exclude the co-located tests, the operator-only provision script, and clip-drip-sweep.sh
+# (a deliberately un-deployed cron). World-readable + exec so the non-root hermes cron user runs them.
+COPY docs/agents/hermes/scripts/ /opt/hermes-scripts/
+RUN rm -f /opt/hermes-scripts/*.test.ts \
+          /opt/hermes-scripts/provision-rave-03.sh \
+          /opt/hermes-scripts/clip-drip-sweep.sh \
+ && chmod -R a+rX /opt/hermes-scripts \
+ && chmod +x /opt/hermes-scripts/*.sh /opt/hermes-scripts/*.py
+
+# Bake a PINNED yt-dlp (the fluncle-capture sweep's fetcher). Its own layer (a 40MB binary, never
+# committed to this public repo; bumped deliberately — a watched pin is a follow-up). chmod 755 so
+# the non-root cron user execs it.
+RUN curl -fsSL https://github.com/yt-dlp/yt-dlp/releases/download/2026.07.04/yt-dlp_linux \
+      -o /opt/hermes-scripts/yt-dlp && chmod 755 /opt/hermes-scripts/yt-dlp
+
 # Oxanium SemiBold for the Fluncle Studio clip cut — the COORDINATE face. The `admin clips
 # cut` brand frame draws the `fluncle://<logId>` coordinate in Oxanium (DESIGN.md "One
 # Voice": Oxanium for marks/numerals; the title uses the DejaVu sans above) with ffmpeg's
@@ -183,3 +213,8 @@ ENV CLAUDE_CONFIG_DIR=/opt/claude
 COPY packages/skills/copywriting-fluncle /opt/claude/skills/copywriting-fluncle
 RUN chmod -R a+rX /opt/claude/skills \
   && chmod 1777 /opt/claude
+
+# Bake the enrichment DSP skill (analyze-track.ts + its helpers) so the enrich sweep's analyzer
+# rides the image + auto-updates from main, instead of being hand-`docker cp`'d to /opt/data/skills.
+COPY packages/skills/fluncle-track-enrichment/scripts /opt/hermes-skills/fluncle-track-enrichment/scripts
+RUN chmod -R a+rX /opt/hermes-skills
