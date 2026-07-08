@@ -544,7 +544,7 @@ function ManageLinksDialog({
           </Button>
         }
       />
-      <DialogContent>
+      <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>{artist.name} — links</DialogTitle>
           <DialogDescription>
