@@ -96,29 +96,3 @@ export async function backfillArtistsCommand(
 
   return adminApiPost<ArtistsBackfillResult>(`/api/admin/backfill/artists?${params.toString()}`);
 }
-
-export type FollowArtistResult = {
-  dryRun: boolean;
-  failed: Array<{ error: string; platform: string; socialId: string }>;
-  failedCount: number;
-  followed: Array<{ artistId: string; artistName: string; platform: string; socialId: string }>;
-  followedCount: number;
-  ok: boolean;
-  // Followable targets still unfollowed after this batch. The CLI loops until it's 0.
-  remaining: number;
-};
-
-// One bounded pass of the auto-follow sweep (Epic B) via the admin API — the Worker
-// follows a batch of high-confidence artists on YouTube (status auto/confirmed, idempotent
-// by followed_at IS NULL, quota-paced). Spotify is excluded (its follow endpoint is
-// dev-mode-gated for our app; Spotify championing is manual — see docs/planning/ROADMAP.md).
-// `--dry-run` reports what WOULD be followed without calling the platform or writing. Loop
-// while `remaining > 0`.
-export async function followArtistsCommand(
-  limit: number,
-  dryRun: boolean,
-): Promise<FollowArtistResult> {
-  const params = new URLSearchParams({ dryRun: String(dryRun), limit: String(limit) });
-
-  return adminApiPost<FollowArtistResult>(`/api/admin/artists/follow?${params.toString()}`);
-}

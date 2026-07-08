@@ -12,7 +12,6 @@ import {
   ArtistSocialNotFoundError,
   confirmArtistSocial,
   followArtistSocial,
-  followPendingArtists,
   InvalidArtistSocialError,
   listArtistSocialsQueue,
   muteArtistSocial,
@@ -30,11 +29,6 @@ import { apiFault, type Implementer, parseBool, parseLimit } from "./_shared";
 
 const BACKFILL_DEFAULT_LIMIT = 10;
 const BACKFILL_MAX_LIMIT = 50;
-
-// The auto-follow sweep's per-tick cap: small so a tick stays inside Spotify's +
-// YouTube's quotas. The on-box `fluncle-artist-follow` sweep loops until `remaining` is 0.
-const FOLLOW_DEFAULT_LIMIT = 5;
-const FOLLOW_MAX_LIMIT = 50;
 
 // The resolve worklist page cap (Unit 2.1's `fluncle-artist-sweep` reads this page).
 const QUEUE_DEFAULT_LIMIT = 50;
@@ -106,23 +100,6 @@ export function adminArtistsHandlers(os: Implementer) {
         throw apiFault(error);
       }
     });
-
-  // POST /admin/artists/follow — agent tier (`adminAuth`, no operatorGuard): the
-  // championing motion's automated half. Internal + one-click-reversible (a follow), so
-  // the box's agent-token `fluncle-artist-follow` cron drives it, like the backfill.
-  const followArtistHandler = os.follow_artist.use(adminAuth).handler(async ({ input }) => {
-    try {
-      const { query } = input;
-      const summary = await followPendingArtists(
-        parseLimit(query.limit, FOLLOW_DEFAULT_LIMIT, FOLLOW_MAX_LIMIT),
-        parseBool(query.dryRun),
-      );
-
-      return { ok: true as const, ...summary };
-    } catch (error) {
-      throw apiFault(error);
-    }
-  });
 
   // POST /admin/artists/socials/{socialId}/follow — operator tier: register a manual follow.
   const recordOperatorFollowHandler = os.record_operator_follow
@@ -297,7 +274,6 @@ export function adminArtistsHandlers(os: Implementer) {
     add_artist_social: addArtistSocialHandler,
     backfill_artists: backfillArtistsHandler,
     confirm_artist_social: confirmArtistSocialHandler,
-    follow_artist: followArtistHandler,
     follow_artist_social: followArtistSocialHandler,
     list_artist_socials: listArtistSocialsHandler,
     list_unresolved_artists: listUnresolvedArtistsHandler,

@@ -248,7 +248,7 @@ function socialsStep(
   return {
     actionable: false,
     gated: false,
-    hint: "Automated socials — the Last.fm love + Spotify/YouTube artist follows",
+    hint: "Automated socials — the Last.fm love",
     state,
     statusLabel,
   };

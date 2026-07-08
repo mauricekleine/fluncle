@@ -225,48 +225,6 @@ export const listArtistSocials = oc
   .output(z.object({ artists: z.array(ArtistFollowQueueItemSchema), ok: z.literal(true) }));
 
 /**
- * `follow_artist` → `POST /admin/artists/follow` (operationId `followArtist`).
- *
- * Agent tier (`adminAuth`). The championing motion's automated half: follow a bounded
- * batch of high-confidence artists on YouTube (`status IN (auto, confirmed)`, idempotent
- * by `followed_at IS NULL`, quota-paced). Spotify is excluded — its artist-follow endpoint
- * is dev-mode-gated for our app, so Spotify championing runs through the manual
- * /admin/artists queue (see docs/planning/ROADMAP.md). The on-box `fluncle-artist-follow` sweep
- * loops it via `remaining`. Bodyless POST with query params (the `backfill_artists`
- * shape). Returns `{ ok, dryRun, followed, followedCount, failed, failedCount, remaining }`.
- */
-export const followArtist = oc
-  .route({
-    inputStructure: "detailed",
-    method: "POST",
-    operationId: "followArtist",
-    path: "/admin/artists/follow",
-    summary: "Auto-follow a batch of high-confidence artists on YouTube",
-    tags: ["Admin"],
-  })
-  .input(
-    z.object({ query: z.object({ dryRun: z.string().optional(), limit: z.string().optional() }) }),
-  )
-  .output(
-    z.object({
-      dryRun: z.boolean(),
-      failed: z.array(z.object({ error: z.string(), platform: z.string(), socialId: z.string() })),
-      failedCount: z.number(),
-      followed: z.array(
-        z.object({
-          artistId: z.string(),
-          artistName: z.string(),
-          platform: z.string(),
-          socialId: z.string(),
-        }),
-      ),
-      followedCount: z.number(),
-      ok: z.literal(true),
-      remaining: z.number(),
-    }),
-  );
-
-/**
  * `follow_artist_social` → `POST /admin/artists/socials/{socialId}/follow-now`
  * (operationId `followArtistSocial`). Operator tier. Perform the REAL platform follow for one
  * Spotify/YouTube social on demand (PUT /me/following, subscriptions.insert), then stamp
@@ -426,7 +384,6 @@ export const adminArtistsContract = {
   add_artist_social: addArtistSocial,
   backfill_artists: backfillArtists,
   confirm_artist_social: confirmArtistSocial,
-  follow_artist: followArtist,
   follow_artist_social: followArtistSocial,
   list_artist_socials: listArtistSocials,
   list_unresolved_artists: listUnresolvedArtists,

@@ -123,10 +123,8 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "PATCH /admin/tracks/{trackId}": "update_track",
   "PATCH /admin/tracks/{trackId}/social/{platform}": "update_track_social",
   // The championing motion (Unit 5, Epic B) — all contract-only oRPC (no TanStack route
-  // files; oRPC owns the paths directly). `follow` is agent tier (the on-box
-  // `fluncle-artist-follow` cron auto-follows); the per-social register/confirm/add are
-  // operator tier (the queue's manual motion).
-  "POST /admin/artists/follow": "follow_artist",
+  // files; oRPC owns the paths directly). The per-social register/confirm/add are operator
+  // tier (the queue's manual motion).
   "POST /admin/artists/socials/{socialId}/confirm": "confirm_artist_social",
   "POST /admin/artists/socials/{socialId}/follow": "record_operator_follow",
   "POST /admin/artists/socials/{socialId}/follow-now": "follow_artist_social",

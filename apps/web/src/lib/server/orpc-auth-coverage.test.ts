@@ -207,12 +207,8 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // The autonomous render box links its own cut + sets video_url — agent tier
   // (adminAuth only, no operatorGuard); the box's agent token publishes its renders.
   finalize_track_video: "admin",
-  // The championing motion's automated half (Unit 5, Epic B) — agent tier (adminAuth
-  // only, no operatorGuard): a follow is internal + one-click-reversible, so the box's
-  // agent-token `fluncle-artist-follow` cron drives it (the backfill_artists precedent).
-  follow_artist: "admin",
   // The "Follow now" button — operator tier: it performs the real Spotify/YouTube follow on
-  // demand (the agent never follows by hand; the batch `follow_artist` sweep is the agent path).
+  // demand. Artists are championed by hand through the /admin/artists queue.
   follow_artist_social: "operator",
   // The built clip caption read — admin tier (agent-allowed), the list_clips precedent:
   // a read the clip-card UI + the box can both consume.

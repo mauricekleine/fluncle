@@ -73,8 +73,8 @@ import { cn } from "@/lib/utils";
 // the operator's out-and-back; whether it happened is an external truth we can't observe (and for
 // some platforms — no Fluncle Facebook — can't even do), so we don't pretend to. "Looks good"
 // (review_artist) stamps the whole list seen; a link discovered LATER re-arms the flag
-// (artistNeedsLook, off reviewedAt vs each link's createdAt). Spotify/YouTube auto-follow via the
-// `fluncle-artist-follow` sweep and show a quiet read-only "Followed" pill; a wrong auto match is
+// (artistNeedsLook, off reviewedAt vs each link's createdAt). Spotify/YouTube are followed by hand
+// from the queue's "Follow now" and show a quiet read-only "Followed" pill; a wrong match is
 // muted with the Manage-links "follow automatically" toggle. The structural edits — add, remove,
 // mute — live behind the "Manage links" dialog. The WORK surfaces as an /admin attention row
 // (source "artist-review") that deep-links here with ?artist=<id>, auto-expanding that artist.

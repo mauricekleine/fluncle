@@ -23,7 +23,7 @@
 #     . "${SCRIPT_DIR}/cron-output.sh"
 #     emit_cron_output enrich -- "${BUN_BIN}" "${SCRIPT_DIR}/enrich-sweep.ts" "$@"
 # The first arg is the BARE cron token (enrich, context-note, note, observation, backfill,
-# social-capture, artist-sweep, artist-follow, render, newsletter, backup, studio-clip, …).
+# social-capture, artist-sweep, render, newsletter, backup, studio-clip, …).
 # It becomes the `fluncle-<token>` output dir + the `# Cron Job: fluncle-<token>` header the
 # prober's `AUTOMATION_CRONS` entry matches on (use the SAME token the prober's `match` uses
 # — e.g. `observation`, not `observe`; `context-note`, not `context`).

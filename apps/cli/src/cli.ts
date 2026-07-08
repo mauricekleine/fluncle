@@ -1351,31 +1351,15 @@ function addAdminCommands(program: Command): void {
     });
 
   // `backfill_*` ops → plural `backfills` group (Convention B).
-  // `admin artists` — the artist-relationship epic's agent-tier commands. Today: the
-  // championing motion's auto-follow sweep (Epic B, Unit 5), driven by the on-box
-  // `fluncle-artist-follow` cron.
+  // `admin artists` — the artist-relationship epic's agent-tier commands: the social-identity
+  // resolution sweep (`resolve`), driven by the on-box `fluncle-artist-sweep` cron.
   const artists = configureCommand(
-    admin.command("artists").description("Artist entity + championing commands"),
+    admin.command("artists").description("Artist entity + resolution commands"),
   );
 
   artists.action(() => {
     artists.outputHelp();
   });
-
-  artists
-    .command("follow")
-    .description("Auto-follow high-confidence artists on YouTube (drains the queue)")
-    .option("--dry-run", "Report who WOULD be followed without calling the platform", false)
-    // Default kept low on purpose: a YouTube `subscriptions.insert` costs 50 units against a
-    // 200/day quota (~4 inserts/day), so a manual run must not drain a big backlog in one go.
-    // The on-box cron paces itself (BATCH_CAP=20, every 6h); the server-side daily guard in
-    // followPendingArtists is the real ceiling regardless of what --limit is passed here.
-    .option("--limit <limit>", "Max artists to follow this run", "20")
-    .option("--json", "Print JSON", false)
-    .action(async (options: BackfillSyncOptions) => {
-      const { followArtistsCommand } = await import("./commands/admin-artists");
-      await runFollowArtists(options, followArtistsCommand);
-    });
 
   const backfill = configureCommand(
     admin.command("backfills").description("Backfill operator-only archives"),
@@ -1921,67 +1905,6 @@ async function runArtistResolve(
 
   if (result.wikidataQid) {
     console.log(`  wikidata: ${result.wikidataQid}`);
-  }
-}
-
-async function runFollowArtists(
-  options: BackfillSyncOptions,
-  followArtistsCommand: typeof import("./commands/admin-artists").followArtistsCommand,
-): Promise<void> {
-  const limit = parseListLimit(options.limit);
-  const followed: Array<{ artistName: string; platform: string; socialId: string }> = [];
-  const failed: Array<{ error: string; platform: string; socialId: string }> = [];
-  let dryRun = options.dryRun;
-  let remaining = 0;
-
-  // The op self-drains a bounded batch per call and reports `remaining`; loop until it's
-  // 0 (or we hit the run's `--limit`). A dry run resolves nothing, so it loops once.
-  while (followed.length + failed.length < limit) {
-    const batchLimit = Math.min(50, limit - (followed.length + failed.length));
-    const result = await followArtistsCommand(batchLimit, options.dryRun);
-    dryRun = result.dryRun;
-    remaining = result.remaining;
-    followed.push(...result.followed);
-    failed.push(...result.failed);
-
-    if (!options.json) {
-      const verb = result.dryRun ? "would follow" : "followed";
-      console.log(
-        `  …${verb} ${result.followedCount}; ${result.failedCount} failed; ${result.remaining} remaining`,
-      );
-    }
-
-    // Stop when the queue is drained, a dry run (writes nothing, so `remaining` never
-    // moves), or the batch did no real work (all failures) to avoid a hot loop.
-    if (remaining === 0 || result.dryRun || result.followedCount === 0) {
-      break;
-    }
-  }
-
-  if (options.json) {
-    printJson({
-      dryRun,
-      failed,
-      failedCount: failed.length,
-      followed,
-      followedCount: followed.length,
-      ok: true,
-      remaining,
-    });
-    return;
-  }
-
-  const verb = dryRun ? "Would follow" : "Followed";
-  console.log(
-    `${verb} ${followed.length} artist(s); ${failed.length} failed; ${remaining} remaining.`,
-  );
-
-  for (const item of followed) {
-    console.log(`  ${item.platform}: ${item.artistName}`);
-  }
-
-  for (const item of failed) {
-    console.log(`  ${item.platform} ${item.socialId}: ${item.error}`);
   }
 }
 

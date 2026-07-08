@@ -57,7 +57,6 @@ export {
   adminArtistsContract,
   backfillArtists,
   confirmArtistSocial,
-  followArtist,
   listArtistSocials,
   recordOperatorFollow,
   removeArtistSocial,

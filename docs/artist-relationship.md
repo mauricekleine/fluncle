@@ -25,11 +25,7 @@ The championing motion's **automated** half. Only two platforms have a usable fo
 
 **Mixcloud is cut to link-only** (its follow endpoint is undocumented since 2022); IG / TikTok / SoundCloud have no follow API — those are the manual queue.
 
-`follow_artist` (`POST /admin/artists/follow`, agent tier) follows a bounded batch: `platform IN (spotify, youtube)`, `status IN (auto, confirmed)`, `followed_at IS NULL` (idempotent), oldest first, capped so a tick stays inside the platforms' quotas. On success it stamps `followed_at`; a per-target failure never aborts the batch. It returns `remaining` so the CLI/sweep can loop until the queue drains. `dryRun` reports what would be followed without calling the platforms or writing.
-
-### The sweep
-
-`fluncle admin artists follow` (the CLI) drains the batch, looping on `remaining`. The on-box **`fluncle-artist-follow`** Hermes cron (`docs/agents/hermes/scripts/artist-follow-sweep.{sh,ts}`, cloned from `context-sweep`) triggers it — the box holds no Spotify/YouTube tokens; the Worker does the calls. Registered in `@fluncle/registry` as `cron.artist-follow` (every 6h). Zero LLM tokens on the box.
+> **The automated auto-follow was retired (2026-07-08).** The `follow_artist` batch op, the on-box `fluncle-artist-follow` Hermes cron, and its `cron.artist-follow` registry + `/status` surface were all removed — the YouTube-only sweep was too flaky to earn its keep (most batched follows failed on quota / dev-mode gates). **Championing is now manual-only** through the `/admin/artists` queue below: the operator taps "Follow now" (`follow_artist_social`, a real best-effort platform call) or one-tap registers a manual follow (`record_operator_follow`). The per-social ops (confirm / mute / unfollow / review) are unchanged.
 
 ## The `/admin/artists` follow queue (the manual motion)
 
@@ -37,17 +33,16 @@ Follows are per-artist, so the manual motion lives at the artist grain (not a pe
 
 ### The board's automated-socials cell
 
-The findings board's old **LFM** cell is repurposed into an **automated-socials** aggregate: the Last.fm love **+** the artist's Spotify/YouTube auto-follow state. `done` = every hands-off action taken, `partial` = some, `open` = none. A `Popover` (hover/focus) breaks it down per platform with a done check. The per-finding follow state is batched into the board's `fetchBoard` via `listArtistFollowsForTracks(ids)`. There is no per-track "Yours" follow column — follows are per-artist, owned by the queue.
+The findings board's old **LFM** cell is repurposed into an **automated-socials** aggregate: the Last.fm love **+** the artist's Spotify/YouTube follow state. `done` = every hands-off action taken, `partial` = some, `open` = none. A `Popover` (hover/focus) breaks it down per platform with a done check. The per-finding follow state is batched into the board's `fetchBoard` via `listArtistFollowsForTracks(ids)`. There is no per-track "Yours" follow column — follows are per-artist, owned by the queue.
 
 ## The ops (verb_noun; `packages/contracts/src/orpc/admin-artists.ts`)
 
 | op                       | tier                       | path                                             |
 | ------------------------ | -------------------------- | ------------------------------------------------ |
 | `list_artist_socials`    | admin (agent-allowed read) | `GET /admin/artists/socials`                     |
-| `follow_artist`          | agent (`adminAuth`)        | `POST /admin/artists/follow`                     |
 | `record_operator_follow` | operator                   | `POST /admin/artists/socials/{socialId}/follow`  |
 | `confirm_artist_social`  | operator                   | `POST /admin/artists/socials/{socialId}/confirm` |
 | `add_artist_social`      | operator                   | `POST /admin/artists/{artistId}/socials`         |
 | `remove_artist_social`   | operator                   | `DELETE /admin/artists/socials/{socialId}`       |
 
-All six are enforced by the build-fail coverage tests (`orpc-admin-coverage` / `orpc-auth-coverage`) and the `orpc-naming` verb set. The server layer lives in `apps/web/src/lib/server/artists.ts` (queue + CRUD + the follow batch); the low-level follows in `spotify.ts` (`followSpotifyArtist`) and `youtube.ts` (`resolveYouTubeChannelId` + `subscribeToYouTubeChannel`).
+All five are enforced by the build-fail coverage tests (`orpc-admin-coverage` / `orpc-auth-coverage`) and the `orpc-naming` verb set. The server layer lives in `apps/web/src/lib/server/artists.ts` (queue + CRUD); the low-level follows in `spotify.ts` (`followSpotifyArtist`) and `youtube.ts` (`resolveYouTubeChannelId` + `subscribeToYouTubeChannel`).

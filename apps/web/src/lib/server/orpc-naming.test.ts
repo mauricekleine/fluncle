@@ -97,8 +97,8 @@ const APPROVED_VERBS = new Set<string>([
   "deregister",
   "exchange",
   // `follow` (champion a featured artist — follow them across Spotify + YouTube) — added
-  // deliberately with the artist-relationship `follow_artist` sweep. A genuinely new
-  // outward action verb, the automated half of the championing motion.
+  // deliberately with the artist-relationship `follow_artist_social` op (the /admin/artists
+  // "Follow now"). A genuinely new outward action verb.
   "follow",
   // `unfollow` (undo a follow — real API unfollow for Spotify/YouTube, clear the stamp
   // otherwise) — added deliberately with `unfollow_artist_social`. The exact reverse of
