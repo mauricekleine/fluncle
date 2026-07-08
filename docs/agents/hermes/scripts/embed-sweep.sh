@@ -6,14 +6,15 @@
 # global timeout would starve the latency-sensitive 5-min sweeps — the same reason capture is
 # a host timer). The rave-02 host timer `docker exec`s this script inside the container on a
 # schedule — see ../embed-timer/README.md for the unit files + install. The container runner
-# dispatches by extension (bash for `.sh`), and a manual `bash /opt/data/scripts/embed-sweep.sh`
+# dispatches by extension (bash for `.sh`), and a manual `bash /opt/hermes-scripts/embed-sweep.sh`
 # runs it the same way, so this thin bash wrapper is the entry; all the JSON work lives in the
 # bun orchestrator beside it (embed-sweep.ts, which in turn calls embed-track.py for the MuQ
 # inference). Its stdout is the run output the /status prober reads.
 #
 # LIVE-INTENT. Version-controlled source; the repo is canonical and the box is a deploy
-# target (fluncle-hermes-operator skill). This trio (+ embed-track.py) deploys to
-# /opt/data/scripts/ on the devbox via `docker cp`. See ../embed-timer/README.md and
+# target (fluncle-hermes-operator skill). This trio (embed-sweep.sh/.ts + embed-track.py) is
+# BAKED into the image at /opt/hermes-scripts/ and auto-updates from main via pin-watch; a
+# rave-02 HOST systemd timer docker-execs it — no docker cp. See ../embed-timer/README.md and
 # docs/rfcs/full-audio-rfc.md § Unit 3.
 #
 # PRODUCTION PRE-REQS (see ../embed-timer/README.md for the full runbook):

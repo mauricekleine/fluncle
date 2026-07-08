@@ -2,8 +2,9 @@
 # social-capture-sweep.sh — the `--no-agent` social-URL-capture cron's job ENTRY.
 #
 # LIVE. Version-controlled source; the repo is canonical and the
-# box is a deploy target (fluncle-hermes-operator skill). This script deploys to
-# ~/.hermes/scripts/ on the devbox and the cron is wired there. See ../cron/README.md.
+# box is a deploy target (fluncle-hermes-operator skill). This script is BAKED into the image
+# at /opt/hermes-scripts/ and auto-updates from main via pin-watch; a rave-02 HOST systemd
+# timer docker-execs it — no docker cp. See ../cron/README.md.
 #
 # Why a curl, NOT a `fluncle` CLI call: the capture sweep landed (#172) as the
 # `fluncle admin tracks social --capture` verb, but the box's BAKED fluncle CLI

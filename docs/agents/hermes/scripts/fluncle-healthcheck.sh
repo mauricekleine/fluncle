@@ -3,11 +3,11 @@
 # Fluncle's public /status dashboard.
 #
 # Version-controlled source; the repo is canonical and the box is a deploy target
-# (fluncle-hermes-operator skill). This pair lives in the container at /opt/data/scripts/
-# and is TRIGGERED by a rave-02 HOST systemd timer (`docker exec … bash …/fluncle-healthcheck.sh`)
-# every ~10m — NOT a Hermes `--no-agent` gateway cron. It was moved to a host timer so
-# the prober isn't starved by the busy gateway it monitors. See the units + the one-time
-# deploy in ../healthcheck-timer/README.md.
+# (fluncle-hermes-operator skill). This pair is BAKED into the image at /opt/hermes-scripts/
+# (auto-updates from main via pin-watch, no docker cp) and is TRIGGERED by a rave-02 HOST
+# systemd timer (`docker exec … bash …/fluncle-healthcheck.sh`) every ~10m — NOT a Hermes
+# `--no-agent` gateway cron. It was moved to a host timer so the prober isn't starved by the
+# busy gateway it monitors. See the units + the one-time deploy in ../healthcheck-timer/README.md.
 #
 # WHAT IT DOES: every ~10m it probes each Fluncle service (the Worker, R2, DNS, the
 # SSH app, the on-box automation crons, the scale-to-zero render box, Hermes itself),

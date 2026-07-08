@@ -57,7 +57,7 @@ const QUEUE_LIMIT = 50; // hard ceiling on the queue read (we only act on BATCH_
 
 const FLUNCLE_BIN = process.env.FLUNCLE_BIN ?? "fluncle";
 const PYTHON_BIN = process.env.PYTHON_BIN ?? "python3";
-// The MuQ inference script — deployed beside this orchestrator (/opt/data/scripts/).
+// The MuQ inference script — baked beside this orchestrator (/opt/hermes-scripts/).
 const EMBED_SCRIPT =
   process.env.FLUNCLE_EMBED_SCRIPT ?? new URL("embed-track.py", import.meta.url).pathname;
 
