@@ -129,6 +129,34 @@ export function parseAuthoringSpend(
 }
 
 /**
+ * Build a `self` / `seconds` box-compute row (COST-01 §5): the shared shape the
+ * enrich / embed / studio-clip / render sweeps all emit for on-box wall-clock. Always
+ * `subsidized` (the box is flat-tier) · `measured` (a real start/stop duration) · no
+ * `usd` (the Worker prices `self`-seconds from `cost-rates.ts`). `seconds` is rounded
+ * to a whole number and floored at 0 (a clock hiccup can't write a negative quantity).
+ * One place the shape lives so the four sites can't drift and one test covers them.
+ */
+export function selfSecondsCost(input: {
+  logId?: string | null;
+  occurredAt: string;
+  seconds: number;
+  step: CostStep;
+  trackId?: string | null;
+}): BoxCostEvent {
+  return {
+    costBasis: "subsidized",
+    logId: input.logId ?? null,
+    occurredAt: input.occurredAt,
+    quantity: Math.max(0, Math.round(input.seconds)),
+    source: "measured",
+    step: input.step,
+    trackId: input.trackId ?? null,
+    unitType: "seconds",
+    vendor: "self",
+  };
+}
+
+/**
  * The deterministic idempotency `id` — a VERBATIM mirror of the server's
  * `costEventId` (apps/web/src/lib/server/costs.ts): `${step}:${scope}:${vendor}:
  * ${unitType}:${occurredAt}` where `scope = logId ?? trackId ?? "global"`. Two

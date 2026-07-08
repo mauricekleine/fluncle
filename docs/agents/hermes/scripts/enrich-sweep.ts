@@ -29,6 +29,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { type BoxCostEvent, emitCost, selfSecondsCost } from "./cost-emit";
 
 // ---------------------------------------------------------------------------
 // Config — bounded batch so a tick stays cheap and a transient failure can't
@@ -87,6 +88,12 @@ type AnalyzeOutput = {
 };
 
 type Outcome = "done" | "failed" | "skipped";
+
+// The outcome plus the self-seconds cost row to emit — non-null whenever the analyze
+// compute actually RAN (done / failed / analyzer-error), null on the pre-analyze
+// skips. The box-seconds are a real spend regardless of the analysis result, so unlike
+// the authoring rows this records `failed` too (it tracks compute, not delivered copy).
+type EnrichResult = { cost: BoxCostEvent | null; outcome: Outcome };
 
 // ---------------------------------------------------------------------------
 // Shell helpers — synchronous, fail-loud where it matters.
@@ -279,13 +286,13 @@ async function r2Get(key: string): Promise<Uint8Array> {
 // Per-finding: get → analyze → write back.
 // ---------------------------------------------------------------------------
 
-async function enrichOne(finding: QueueFinding): Promise<Outcome> {
+async function enrichOne(finding: QueueFinding): Promise<EnrichResult> {
   const id = finding.trackId ?? finding.logId;
 
   if (!id) {
     log("queue item without a trackId/logId — skipping");
 
-    return "skipped";
+    return { cost: null, outcome: "skipped" };
   }
 
   // (a) Re-read the finding to get the canonical artist/title/isrc/trackId/sourceAudioKey.
@@ -302,8 +309,10 @@ async function enrichOne(finding: QueueFinding): Promise<Outcome> {
   if (!trackId || !artist || !title) {
     log(`${id}: missing trackId/artist/title — skipping`);
 
-    return "skipped";
+    return { cost: null, outcome: "skipped" };
   }
+
+  const logId = finder.logId ?? finding.logId ?? null;
 
   // (b) Pick the analysis SOURCE. When capture has landed the full song (source_audio_key
   // present), S3-GET it to a temp file and analyze THAT; otherwise the analyzer resolves +
@@ -336,16 +345,27 @@ async function enrichOne(finding: QueueFinding): Promise<Outcome> {
 
   try {
     // (c) Analyze. Exit 2 = no audio / nothing decoded → mark the finding `failed`.
+    // Time the analyze compute (ffmpeg + the DSP) for the self-seconds cost row — the
+    // box-seconds are the spend, so the row is built here and attributed to every
+    // outcome where the analyzer actually RAN (done / failed / analyzer-error).
+    const analyzeStart = Date.now();
     const analysis = run(
       BUN_BIN,
       buildAnalyzeArgs(ANALYZE_SCRIPT, { artist, audioFilePath, isrc, title }),
     );
+    const cost = selfSecondsCost({
+      logId,
+      occurredAt: new Date().toISOString(),
+      seconds: (Date.now() - analyzeStart) / 1000,
+      step: "enrich",
+      trackId,
+    });
 
     if (analysis.code === 2) {
       log(`${trackId}: no audio available → status=failed`);
       fluncleJson(["admin", "tracks", "update", trackId, "--status", "failed"]);
 
-      return "failed";
+      return { cost, outcome: "failed" };
     }
 
     if (analysis.code !== 0) {
@@ -355,7 +375,7 @@ async function enrichOne(finding: QueueFinding): Promise<Outcome> {
         `${trackId}: analyze-track exited ${analysis.code}: ${analysis.stderr.trim().slice(-200)}`,
       );
 
-      return "skipped";
+      return { cost, outcome: "skipped" };
     }
 
     let parsed: AnalyzeOutput;
@@ -365,7 +385,7 @@ async function enrichOne(finding: QueueFinding): Promise<Outcome> {
     } catch {
       log(`${trackId}: analyze-track did not return JSON — leaving queued`);
 
-      return "skipped";
+      return { cost, outcome: "skipped" };
     }
 
     // (d) Write back. `--key` only when non-null (respect the skill's confidence gate);
@@ -390,7 +410,7 @@ async function enrichOne(finding: QueueFinding): Promise<Outcome> {
     const bpmVia = parsed.bpm !== null && parsed.bpmSource ? ` via ${parsed.bpmSource}` : "";
     log(`${trackId}: done (bpm ${parsed.bpm ?? "null"}${bpmVia}, key ${parsed.key ?? "null"})`);
 
-    return "done";
+    return { cost, outcome: "done" };
   } finally {
     if (audioTmpDir) {
       rmSync(audioTmpDir, { force: true, recursive: true });
@@ -422,11 +442,20 @@ async function main(): Promise<void> {
     return; // fast no-op
   }
 
+  // The tick's self-seconds rows, POSTed once at the end (best-effort, after the
+  // write-backs are already durable — a dropped POST only understates the ledger).
+  const costs: BoxCostEvent[] = [];
+
   for (const finding of queue.slice(0, BATCH_CAP)) {
     summary.batch += 1;
 
     try {
-      const outcome = await enrichOne(finding);
+      const { cost, outcome } = await enrichOne(finding);
+
+      if (cost) {
+        costs.push(cost);
+      }
+
       summary[outcome] += 1;
     } catch (error) {
       // One finding's failure must not abort the sweep — log it and move on; it
@@ -441,6 +470,10 @@ async function main(): Promise<void> {
   }
 
   console.log(JSON.stringify({ ok: true, ...summary }));
+
+  // Record the tick's compute spend, best-effort, AFTER the summary is printed (the
+  // cron parses the summary as its last stdout line; emitCost only logs to stderr).
+  await emitCost(costs);
 }
 
 // Guard the entrypoint so importing this module for tests is side-effect free (no

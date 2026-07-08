@@ -27,6 +27,7 @@
 // stdout: one JSON summary line (the cron run output). Diagnostics → stderr.
 
 import { spawnSync } from "node:child_process";
+import { type BoxCostEvent, emitCost, selfSecondsCost } from "./cost-emit";
 
 // ---------------------------------------------------------------------------
 // Config — a SMALL bounded batch so a tick stays well under the Hermes `--no-agent`
@@ -53,6 +54,11 @@ type PendingClip = {
 };
 
 type Outcome = "cut" | "skipped";
+
+// The outcome plus the self-seconds cost row — non-null ONLY on a delivered cut. The
+// clip is a set-level artifact, not a finding, so the row is `global`-scoped (logId +
+// trackId null); occurredAt keeps each cut's row distinct.
+type CutResult = { cost: BoxCostEvent | null; outcome: Outcome };
 
 // ---------------------------------------------------------------------------
 // Shell helpers — synchronous, fail-loud where it matters.
@@ -93,16 +99,21 @@ function fluncleJson<T>(args: string[]): T {
 // failure is also a skip (logged); the clip stays queued.
 // ---------------------------------------------------------------------------
 
-function cutOne(clip: PendingClip): Outcome {
+function cutOne(clip: PendingClip): CutResult {
   const id = clip.id;
 
   if (!id) {
     log("queue item without a clip id — skipping");
 
-    return "skipped";
+    return { cost: null, outcome: "skipped" };
   }
 
+  // Time the on-box ffmpeg cut (trim + 9:16 crop + brand frame + upload) for the
+  // self-seconds row. Only a delivered cut records spend — a skip did the ffmpeg work
+  // partially or not at all, and there's no clip to attribute it to.
+  const cutStart = Date.now();
   const { code, stderr, stdout } = run(FLUNCLE_BIN, ["admin", "clips", "cut", id, "--json"]);
+  const cutSeconds = (Date.now() - cutStart) / 1000;
 
   if (code !== 0) {
     const detail = `${stdout}\n${stderr}`.toLowerCase();
@@ -115,19 +126,26 @@ function cutOne(clip: PendingClip): Outcome {
       log(`${id}: cut exited ${code}: ${stderr.trim().slice(-200)}`);
     }
 
-    return "skipped";
+    return { cost: null, outcome: "skipped" };
   }
 
   log(`${id}: cut`);
 
-  return "cut";
+  return {
+    cost: selfSecondsCost({
+      occurredAt: new Date().toISOString(),
+      seconds: cutSeconds,
+      step: "studio-clip",
+    }),
+    outcome: "cut",
+  };
 }
 
 // ---------------------------------------------------------------------------
 // Main — drain a bounded batch off the pending-clip queue.
 // ---------------------------------------------------------------------------
 
-function main(): void {
+async function main(): Promise<void> {
   const response = fluncleJson<{ clips?: PendingClip[] }>([
     "admin",
     "clips",
@@ -145,11 +163,20 @@ function main(): void {
     return; // fast no-op
   }
 
+  // The tick's self-seconds rows, POSTed once at the end (best-effort, after the cuts
+  // are already durable — a dropped POST only understates the ledger).
+  const costs: BoxCostEvent[] = [];
+
   for (const clip of queue.slice(0, BATCH_CAP)) {
     summary.batch += 1;
 
     try {
-      const outcome = cutOne(clip);
+      const { cost, outcome } = cutOne(clip);
+
+      if (cost) {
+        costs.push(cost);
+      }
+
       summary[outcome] += 1;
     } catch (error) {
       // One clip's failure must not abort the sweep — log it and move on; it stays
@@ -160,6 +187,14 @@ function main(): void {
   }
 
   console.log(JSON.stringify({ ok: true, ...summary }));
+
+  // Record the tick's compute spend, best-effort, AFTER the summary is printed (the
+  // cron parses the summary as its last stdout line; emitCost only logs to stderr).
+  await emitCost(costs);
 }
 
-main();
+main().catch((error) => {
+  log(`fatal: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`);
+  console.log(JSON.stringify({ ok: false, reason: "sweep_error" }));
+  process.exit(1);
+});

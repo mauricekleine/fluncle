@@ -44,6 +44,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { type BoxCostEvent, emitCost, selfSecondsCost } from "./cost-emit";
 
 // ---------------------------------------------------------------------------
 // Config — BATCH_CAP is 1: a windowed full-song MuQ forward is minutes-scale (each ~30s
@@ -370,8 +371,12 @@ async function main(): Promise<void> {
     }
 
     // (2) ONE python call over the batch — the MuQ model load is amortized. embed-track.py
-    // windows the long audio and mean-pools across windows to bound peak RAM.
+    // windows the long audio and mean-pools across windows to bound peak RAM. Time it for
+    // the self-seconds cost row: the model-load is shared, so the wall-time is split evenly
+    // across the findings it embedded (BATCH_CAP is 1, so this is normally one row).
+    const embedStart = Date.now();
     const embed = run(PYTHON_BIN, [EMBED_SCRIPT], JSON.stringify(manifest));
+    const embedSeconds = (Date.now() - embedStart) / 1000;
 
     if (embed.code !== 0) {
       // A batch-level failure (torch import / model load): leave everything queued.
@@ -395,8 +400,23 @@ async function main(): Promise<void> {
     }
 
     // (3) Write each vector back via the agent-tier update path (a file arg — a
-    // 1024-float array is large for an inline flag).
-    for (const result of parsed.results ?? []) {
+    // 1024-float array is large for an inline flag). Each embedded result also carries a
+    // self-seconds cost row (its even share of the batch wall-time) — the embed compute
+    // was spent regardless of whether the write-back lands, so the row is recorded here.
+    const results = parsed.results ?? [];
+    const perResultSeconds = results.length ? embedSeconds / results.length : 0;
+    const costs: BoxCostEvent[] = [];
+
+    for (const result of results) {
+      costs.push(
+        selfSecondsCost({
+          occurredAt: new Date().toISOString(),
+          seconds: perResultSeconds,
+          step: "embed",
+          trackId: result.id,
+        }),
+      );
+
       try {
         const vectorPath = join(workdir, `${result.id}.json`);
         writeFileSync(vectorPath, JSON.stringify(result.embedding));
@@ -417,6 +437,10 @@ async function main(): Promise<void> {
     }
 
     console.log(JSON.stringify({ ok: true, ...summary }));
+
+    // Record the tick's compute spend, best-effort, AFTER the summary is printed (the
+    // /status prober parses the summary as the last stdout line; emitCost is stderr-only).
+    await emitCost(costs);
   } finally {
     // Temp files (the captured audio + the vector JSON) are cleaned up here regardless of outcome.
     rmSync(workdir, { force: true, recursive: true });

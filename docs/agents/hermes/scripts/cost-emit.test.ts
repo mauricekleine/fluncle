@@ -11,7 +11,13 @@
 // every failure path, so a ledger hiccup can't break the sweep's real work.
 import { describe, expect, test } from "bun:test";
 
-import { type BoxCostEvent, costEventId, emitCost, parseAuthoringSpend } from "./cost-emit";
+import {
+  type BoxCostEvent,
+  costEventId,
+  emitCost,
+  parseAuthoringSpend,
+  selfSecondsCost,
+} from "./cost-emit";
 
 const anthropicRow: BoxCostEvent = {
   costBasis: "subsidized",
@@ -96,6 +102,43 @@ describe("parseAuthoringSpend (claude -p envelope → spend)", () => {
 
   test("an empty envelope is zero tokens, null usd (unpriced, never $0)", () => {
     expect(parseAuthoringSpend({}, "m")).toEqual({ model: "m", tokens: 0, usd: null });
+  });
+});
+
+describe("selfSecondsCost (the box-compute row shape)", () => {
+  test("is subsidized/self/seconds/measured with a rounded, floored quantity and no usd", () => {
+    const row = selfSecondsCost({
+      logId: "010.6.12",
+      occurredAt: "2026-07-08T12:00:00.000Z",
+      seconds: 84.6,
+      step: "enrich",
+      trackId: "t1",
+    });
+    expect(row).toEqual({
+      costBasis: "subsidized",
+      logId: "010.6.12",
+      occurredAt: "2026-07-08T12:00:00.000Z",
+      quantity: 85,
+      source: "measured",
+      step: "enrich",
+      trackId: "t1",
+      unitType: "seconds",
+      vendor: "self",
+    });
+    expect(row.usd).toBeUndefined();
+  });
+
+  test("floors a negative duration (a clock hiccup) at 0 and defaults the scope to null", () => {
+    const row = selfSecondsCost({
+      occurredAt: "2026-07-08T12:00:00.000Z",
+      seconds: -3,
+      step: "video",
+    });
+    expect(row.quantity).toBe(0);
+    expect(row.logId).toBeNull();
+    expect(row.trackId).toBeNull();
+    // A scopeless self row falls back to the `global` id scope.
+    expect(costEventId(row)).toBe("video:global:self:seconds:2026-07-08T12:00:00.000Z");
   });
 });
 
