@@ -4,6 +4,7 @@ import { createFileRoute, redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { type ReactNode } from "react";
 import { AdminShell } from "@/components/admin/admin-shell";
+import { StatTile } from "@/components/admin/stat-tile";
 import { spotifyAlbumImageAtSize } from "@/lib/media";
 import { isAdminRequest } from "@/lib/server/admin-auth";
 import { type CostInsights, getCostInsights } from "@/lib/server/costs";
@@ -132,36 +133,6 @@ function TotalsRow({ totals, windowDays }: { totals: CostInsights["totals"]; win
         />
       </div>
     </section>
-  );
-}
-
-function StatTile({
-  accent,
-  hint,
-  icon,
-  label,
-  value,
-}: {
-  accent?: boolean;
-  hint: string;
-  icon: ReactNode;
-  label: string;
-  value: string;
-}) {
-  return (
-    <div className="rounded-lg border border-border bg-card/60 p-4">
-      <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-        <span className={accent ? "text-primary" : undefined}>{icon}</span>
-        <span>{label}</span>
-      </div>
-      <p
-        className={`mt-1 text-2xl font-semibold tabular-nums ${accent ? "text-primary" : ""}`}
-        style={{ fontFamily: OXANIUM_STACK }}
-      >
-        {value}
-      </p>
-      <p className="mt-1 text-xs text-muted-foreground">{hint}</p>
-    </div>
   );
 }
 

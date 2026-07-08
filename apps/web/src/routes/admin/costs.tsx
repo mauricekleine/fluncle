@@ -1,4 +1,18 @@
-import { PencilSimpleIcon, PlusIcon, ReceiptIcon, TrashIcon } from "@phosphor-icons/react";
+import {
+  ChartLineUpIcon,
+  FilmSlateIcon,
+  GlobeSimpleIcon,
+  HardDrivesIcon,
+  type Icon,
+  PaperPlaneTiltIcon,
+  PencilSimpleIcon,
+  PlusIcon,
+  ReceiptIcon,
+  SparkleIcon,
+  TrashIcon,
+  WalletIcon,
+  WrenchIcon,
+} from "@phosphor-icons/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
@@ -36,9 +50,14 @@ import {
 } from "@fluncle/ui/components/select";
 import { Textarea } from "@fluncle/ui/components/textarea";
 import { AdminShell } from "@/components/admin/admin-shell";
+import { StatTile } from "@/components/admin/stat-tile";
 import { formatDate } from "@/lib/format";
 import { isAdminRequest } from "@/lib/server/admin-auth";
 import { listSubscriptions } from "@/lib/server/subscriptions";
+
+// The brand's numeric face — money reads in Oxanium everywhere on this surface, matching
+// the sibling `/admin/usage` spend tiles (DESIGN.md "numeric").
+const OXANIUM_STACK = '"Oxanium", ui-sans-serif, system-ui, sans-serif';
 
 // The Costs station (COST-02) — the operator's PRIVATE cost ledger: every recurring
 // and one-off Fluncle spend in one place. This is the single source of truth for
@@ -78,6 +97,29 @@ const STATUS_ITEMS: Record<Status, string> = {
   active: "Active",
   cancelled: "Cancelled",
   trial: "Trial",
+};
+
+// Rows group by category, and the categories render in this fixed order (spend-shaped:
+// the infrastructure and AI that carry the bill first, the incidentals last) — not the
+// ledger's newest-updated order, which means nothing to the operator. Each gets a
+// semantic Phosphor mark so a group is scannable by its icon alone.
+const CATEGORY_ORDER: Category[] = ["infra", "AI", "media", "distribution", "domains", "tooling"];
+const CATEGORY_ICONS: Record<Category, Icon> = {
+  AI: SparkleIcon,
+  distribution: PaperPlaneTiltIcon,
+  domains: GlobeSimpleIcon,
+  infra: HardDrivesIcon,
+  media: FilmSlateIcon,
+  tooling: WrenchIcon,
+};
+
+// The per-cadence suffix the amount carries (so cadence never needs its own meta chip):
+// recurring lines read "/mo" or "/yr"; usage + one-off name themselves.
+const CADENCE_SUFFIX: Record<Cadence, string> = {
+  annual: "/yr",
+  monthly: "/mo",
+  "one-off": "one-off",
+  usage: "usage",
 };
 
 const SUBSCRIPTIONS_KEY = ["admin", "subscriptions"] as const;
@@ -178,6 +220,70 @@ function monthlyEquivalentCents(sub: SubscriptionDTO): number | undefined {
   return undefined;
 }
 
+type CurrencyTotals = Array<[currency: string, cents: number]>;
+
+type LedgerGroup = {
+  category: Category;
+  lines: SubscriptionDTO[];
+  monthly: CurrencyTotals;
+};
+
+type LedgerModel = {
+  counts: { free: number; inactive: number; paid: number; total: number };
+  groups: LedgerGroup[];
+  monthly: CurrencyTotals;
+};
+
+// Sum monthly-equivalents into a per-currency map (a ledger can mix EUR + USD), then
+// hand back entries sorted heaviest-first so the biggest currency leads every readout.
+function totalsByCurrency(lines: SubscriptionDTO[]): CurrencyTotals {
+  const totals = new Map<string, number>();
+
+  for (const line of lines) {
+    const cents = monthlyEquivalentCents(line);
+
+    if (cents !== undefined && cents > 0) {
+      totals.set(line.currency, (totals.get(line.currency) ?? 0) + cents);
+    }
+  }
+
+  return [...totals.entries()].sort((a, b) => b[1] - a[1]);
+}
+
+// One pass over the ledger → the whole page's data: category groups in CATEGORY_ORDER
+// (each sorted costliest-first, each with its own monthly subtotal), the ledger-wide
+// monthly total, and the paid / free / inactive tallies for the headline tiles.
+function buildLedgerModel(subscriptions: SubscriptionDTO[]): LedgerModel {
+  const counts = { free: 0, inactive: 0, paid: 0, total: subscriptions.length };
+
+  for (const sub of subscriptions) {
+    if (sub.status !== "active") {
+      counts.inactive += 1;
+    } else if (sub.amount > 0) {
+      counts.paid += 1;
+    } else {
+      counts.free += 1;
+    }
+  }
+
+  const groups: LedgerGroup[] = [];
+
+  for (const category of CATEGORY_ORDER) {
+    const lines = subscriptions
+      .filter((sub) => sub.category === category)
+      .sort((a, b) => {
+        const byAmount = (monthlyEquivalentCents(b) ?? -1) - (monthlyEquivalentCents(a) ?? -1);
+        return byAmount !== 0 ? byAmount : a.name.localeCompare(b.name);
+      });
+
+    if (lines.length > 0) {
+      groups.push({ category, lines, monthly: totalsByCurrency(lines) });
+    }
+  }
+
+  return { counts, groups, monthly: totalsByCurrency(subscriptions) };
+}
+
 function CostsPage() {
   const initial = Route.useLoaderData();
   const queryClient = useQueryClient();
@@ -214,27 +320,14 @@ function CostsPage() {
     },
   });
 
-  // The monthly-equivalent running total, grouped by currency (a ledger can mix them).
-  const monthlyTotals = useMemo(() => {
-    const totals = new Map<string, number>();
-
-    for (const sub of subscriptions) {
-      const cents = monthlyEquivalentCents(sub);
-
-      if (cents !== undefined) {
-        totals.set(sub.currency, (totals.get(sub.currency) ?? 0) + cents);
-      }
-    }
-
-    return [...totals.entries()].map(([currency, cents]) => formatMoney(cents, currency));
-  }, [subscriptions]);
+  // The whole read in one pass: category groups (each with its own monthly subtotal),
+  // the ledger-wide monthly total per currency, and the paid/free/inactive counts.
+  const model = useMemo(() => buildLedgerModel(subscriptions), [subscriptions]);
 
   const subtitle =
     subscriptions.length === 0
       ? "Nothing tracked yet"
-      : `${subscriptions.length} ${subscriptions.length === 1 ? "line" : "lines"}${
-          monthlyTotals.length > 0 ? ` · ~${monthlyTotals.join(" + ")}/mo` : ""
-        }`;
+      : `${subscriptions.length} ${subscriptions.length === 1 ? "line" : "lines"}`;
 
   const openNew = () => {
     setEditing(undefined);
@@ -257,22 +350,25 @@ function CostsPage() {
       subtitle={subtitle}
       title="Costs"
     >
-      <div className="p-4 sm:p-5">
-        {subscriptions.length === 0 ? (
+      {subscriptions.length === 0 ? (
+        <div className="p-4 sm:p-5">
           <EmptyLedger onAdd={openNew} />
-        ) : (
-          <ul className="divide-y divide-border rounded-lg border border-border">
-            {subscriptions.map((sub) => (
-              <CostRow
-                key={sub.id}
-                onDelete={() => setDeleting(sub)}
-                onEdit={() => openEdit(sub)}
-                subscription={sub}
+        </div>
+      ) : (
+        <div className="space-y-8 p-4 sm:p-5">
+          <TotalsRow model={model} />
+          <div className="space-y-6">
+            {model.groups.map((group) => (
+              <CategoryGroup
+                group={group}
+                key={group.category}
+                onDelete={setDeleting}
+                onEdit={openEdit}
               />
             ))}
-          </ul>
-        )}
-      </div>
+          </div>
+        </div>
+      )}
 
       <CostDialog
         editing={editing}
@@ -312,6 +408,114 @@ function CostsPage() {
   );
 }
 
+// The headline: the recurring monthly total as the one gold number, its annualized
+// run-rate beside it, and the line tally with its paid / free split. Mirrors the
+// `/admin/usage` totals row so the two Cost stations read as one workspace.
+function TotalsRow({ model }: { model: LedgerModel }) {
+  const { counts, monthly } = model;
+  const perYear: CurrencyTotals = monthly.map(([currency, cents]) => [currency, cents * 12]);
+
+  const lineBreakdown = [
+    counts.paid > 0 ? `${counts.paid} paid` : undefined,
+    counts.free > 0 ? `${counts.free} free` : undefined,
+    counts.inactive > 0 ? `${counts.inactive} inactive` : undefined,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+  return (
+    <section aria-label="Totals" className="grid gap-3 sm:grid-cols-3">
+      <StatTile
+        accent
+        hint="recurring, annual ÷ 12"
+        icon={<WalletIcon aria-hidden="true" className="size-4" weight="fill" />}
+        label="Per month"
+        value={<MoneyStack entries={monthly} />}
+      />
+      <StatTile
+        hint="annualized run-rate"
+        icon={<ChartLineUpIcon aria-hidden="true" className="size-4" />}
+        label="Per year"
+        value={<MoneyStack entries={perYear} />}
+      />
+      <StatTile
+        hint={lineBreakdown || "nothing tracked yet"}
+        icon={<ReceiptIcon aria-hidden="true" className="size-4" />}
+        label="Tracked lines"
+        value={counts.total}
+      />
+    </section>
+  );
+}
+
+// A per-currency money readout. A single currency reads big (the tile's own 2xl); a
+// mixed ledger stacks each currency on its own line, one size down so the tile keeps
+// its height. An all-free / usage-only ledger has no honest recurring figure → em dash.
+function MoneyStack({ entries }: { entries: CurrencyTotals }) {
+  const [first] = entries;
+
+  if (!first) {
+    return <span className="text-muted-foreground">—</span>;
+  }
+
+  if (entries.length === 1) {
+    const [currency, cents] = first;
+    return <span>{formatMoney(cents, currency)}</span>;
+  }
+
+  return (
+    <span className="flex flex-col gap-0.5 leading-tight">
+      {entries.map(([currency, cents]) => (
+        <span className="text-xl" key={currency}>
+          {formatMoney(cents, currency)}
+        </span>
+      ))}
+    </span>
+  );
+}
+
+// One category, its lines under a header that carries the group's own monthly subtotal.
+function CategoryGroup({
+  group,
+  onDelete,
+  onEdit,
+}: {
+  group: LedgerGroup;
+  onDelete: (sub: SubscriptionDTO) => void;
+  onEdit: (sub: SubscriptionDTO) => void;
+}) {
+  const Icon = CATEGORY_ICONS[group.category];
+
+  return (
+    <section aria-label={CATEGORY_ITEMS[group.category]}>
+      <div className="mb-2 flex items-center gap-2 px-1">
+        <Icon aria-hidden="true" className="size-4 text-muted-foreground" />
+        <h2 className="text-sm font-semibold">{CATEGORY_ITEMS[group.category]}</h2>
+        <span className="text-xs text-muted-foreground tabular-nums">({group.lines.length})</span>
+        {group.monthly.length > 0 ? (
+          <span
+            className="ml-auto text-xs text-muted-foreground tabular-nums"
+            style={{ fontFamily: OXANIUM_STACK }}
+          >
+            {group.monthly.map(([currency, cents]) => formatMoney(cents, currency)).join(" + ")}
+            <span className="text-muted-foreground/70">/mo</span>
+          </span>
+        ) : null}
+      </div>
+      <ul className="divide-y divide-border rounded-lg border border-border">
+        {group.lines.map((sub) => (
+          <CostRow
+            key={sub.id}
+            onDelete={() => onDelete(sub)}
+            onEdit={() => onEdit(sub)}
+            subscription={sub}
+          />
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 function EmptyLedger({ onAdd }: { onAdd: () => void }) {
   return (
     <div className="flex flex-col items-center justify-center gap-2 py-16 text-center">
@@ -329,8 +533,10 @@ function EmptyLedger({ onAdd }: { onAdd: () => void }) {
   );
 }
 
-// One cost line: name + vendor, a meta line (category · cadence · status · renewal ·
-// what it powers), the formatted amount on the right, and edit/delete actions.
+// One cost line: name + vendor on top, a quiet meta line (status if not active · renewal
+// · what it powers · billing), then the amount on the right — real spend in full weight,
+// a free plan dimmed to "Free" so the money reads at a glance. Category lives in the
+// group header; cadence rides the amount's "/mo" · "/yr" suffix.
 function CostRow({
   onDelete,
   onEdit,
@@ -341,21 +547,19 @@ function CostRow({
   subscription: SubscriptionDTO;
 }) {
   return (
-    <li className="flex items-center gap-3 px-3 py-3">
+    <li className="group flex items-center gap-3 px-3 py-3 transition-colors hover:bg-primary/[0.04]">
       <div className="min-w-0 flex-1">
         <p className="truncate text-sm font-medium">
           {sub.name} <span className="text-muted-foreground">· {sub.vendor}</span>
         </p>
         <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-          <Badge variant="outline">{CATEGORY_ITEMS[sub.category]}</Badge>
-          <span>{CADENCE_ITEMS[sub.cadence]}</span>
           {sub.status !== "active" ? (
             <Badge variant={sub.status === "trial" ? "secondary" : "outline"}>
               {STATUS_ITEMS[sub.status]}
             </Badge>
           ) : null}
-          {sub.renewsAt ? <span>· renews {formatDate(sub.renewsAt)}</span> : null}
-          {sub.powers ? <span className="truncate">· powers {sub.powers}</span> : null}
+          {sub.renewsAt ? <span>renews {formatDate(sub.renewsAt)}</span> : null}
+          {sub.powers ? <span className="truncate">{sub.powers}</span> : null}
           {sub.billingUrl ? (
             <a
               className="text-primary hover:underline focus-visible:outline-2 focus-visible:outline-ring"
@@ -363,7 +567,7 @@ function CostRow({
               rel="noreferrer"
               target="_blank"
             >
-              · billing
+              billing ↗
             </a>
           ) : null}
         </div>
@@ -372,12 +576,7 @@ function CostRow({
         ) : null}
       </div>
 
-      <div className="shrink-0 text-right text-sm font-medium tabular-nums">
-        {formatMoney(sub.amount, sub.currency)}
-        <span className="block text-xs font-normal text-muted-foreground">
-          {sub.cadence === "monthly" ? "/mo" : sub.cadence === "annual" ? "/yr" : sub.cadence}
-        </span>
-      </div>
+      <AmountCell subscription={sub} />
 
       <div className="flex shrink-0 items-center gap-1">
         <Button aria-label={`Edit ${sub.name}`} onClick={onEdit} size="icon-sm" variant="ghost">
@@ -394,6 +593,36 @@ function CostRow({
         </Button>
       </div>
     </li>
+  );
+}
+
+// The amount, right-aligned in Oxanium. A $0 line is a free plan, not a spend — it reads
+// a quiet "Free" (no cadence suffix) so the eye skips to where the money actually is. A
+// paid line stays full-weight and carries the cadence as its "/mo" · "/yr" · … suffix.
+function AmountCell({ subscription: sub }: { subscription: SubscriptionDTO }) {
+  const isFree = sub.amount === 0;
+
+  if (isFree) {
+    return (
+      <div
+        className="shrink-0 text-right text-sm text-muted-foreground"
+        style={{ fontFamily: OXANIUM_STACK }}
+      >
+        Free
+      </div>
+    );
+  }
+
+  return (
+    <div className="shrink-0 text-right">
+      <div
+        className="text-sm font-semibold tabular-nums text-foreground"
+        style={{ fontFamily: OXANIUM_STACK }}
+      >
+        {formatMoney(sub.amount, sub.currency)}
+      </div>
+      <div className="text-[11px] text-muted-foreground/70">{CADENCE_SUFFIX[sub.cadence]}</div>
+    </div>
   );
 }
 
