@@ -1,0 +1,19 @@
+[Unit]
+Description=fluncle-audit-review — 05:00 reviewer for the nightly audit PR (fix-small-and-merge, or comment + hold)
+Documentation=https://github.com/mauricekleine/fluncle/blob/main/docs/agents/hermes/audit-timer/README.md
+Wants=network-online.target docker.service
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+# Root drives Docker; the WORK runs as unprivileged hermes. Baked at /opt/hermes-scripts (Unit A);
+# self-writes its /status marker (cron-output.sh). Merging lands on main → a production deploy,
+# gated on green required checks (the reviewer confirms via `gh pr checks`).
+ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/audit-review-sweep.sh
+# A full agentic review — re-run scoped checks, maybe fix + push, then merge or comment. Shorter
+# than the auditor but still an agentic session; 45m is a generous ceiling.
+TimeoutStartSec=2700
+NoNewPrivileges=true
+ProtectControlGroups=true
+ProtectKernelTunables=true
+RestrictSUIDSGID=true

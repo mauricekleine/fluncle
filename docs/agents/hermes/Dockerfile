@@ -165,6 +165,23 @@ RUN arch="$(uname -m)" \
        -o /usr/local/bin/fluncle \
   && chmod 755 /usr/local/bin/fluncle
 
+# GitHub CLI — the nightly-audit agents (audit-timer/) drive PRs through it (gh pr create/merge/
+# comment) with GH_TOKEN. Pinned single-binary from the release tarball, like yt-dlp; MANUAL-watch
+# tier (low-churn, backward-compatible) — NOT in hermes-pin-drift's hourly auto-bump, bumped
+# deliberately, with the nightly Security audit as the staleness backstop. pin-watch's pre-smoke
+# does `gh --version` after any rebuild so a broken bump rolls back.
+RUN arch="$(uname -m)" \
+  && case "$arch" in \
+       aarch64|arm64) gharch="arm64" ;; \
+       x86_64|amd64)  gharch="amd64" ;; \
+       *) echo "unsupported arch for gh: $arch" >&2; exit 1 ;; \
+     esac \
+  && curl -fsSL "https://github.com/cli/cli/releases/download/v2.96.0/gh_2.96.0_linux_${gharch}.tar.gz" \
+       -o /tmp/gh.tar.gz \
+  && tar -xzf /tmp/gh.tar.gz -C /tmp \
+  && install -m 755 "/tmp/gh_2.96.0_linux_${gharch}/bin/gh" /usr/local/bin/gh \
+  && rm -rf /tmp/gh.tar.gz "/tmp/gh_2.96.0_linux_${gharch}"
+
 # Bake the on-box sweep scripts so they ride the image (auto-update via pin-watch) and are
 # read straight from here by the host-timer units — no docker cp, no /opt/data projection.
 # Exclude the co-located tests and clip-drip-sweep.sh (a deliberately un-deployed cron). Keep

@@ -1,0 +1,13 @@
+[Unit]
+Description=fluncle-audit timer — the nightly codebase-audit auditor at 01:00 Amsterdam on the rave-02 host (not the Hermes gateway)
+
+[Timer]
+# 01:00 in the box's pinned TZ=Europe/Amsterdam (systemd OnCalendar uses local time), one domain
+# per night on a 7-day rotation (audit/rotation.ts). The 5am reviewer (fluncle-audit-review)
+# reviews + merges the PR this opens. Persistent catches up a tick missed across a box reboot;
+# a late audit is harmless (it just opens tonight's PR whenever it runs).
+OnCalendar=*-*-* 01:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

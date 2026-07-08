@@ -19,4 +19,19 @@ grep -q OPENROUTER_API_KEY "$tg"      || { echo "gateway inject sanity fail" >&2
 grep -q CLAUDE_CODE_OAUTH_TOKEN "$ts" || { echo "sweep inject sanity fail" >&2; exit 1; }
 install -m 600 -o root -g root "$tg" "$GATEWAY_OUT"
 install -m 600 -o 10000 -g 10000 "$ts" "$SWEEP_OUT"
+
+# GSC service-account key → a standalone 0600 json file (its json can't be a clean shell env
+# var, so it rides alongside the env file rather than inside it). The nightly audit's
+# surfaces-seo day points GOOGLE_APPLICATION_CREDENTIALS here. The concrete op:// ref lives in
+# the host bootstrap (FLUNCLE_GSC_OP_REF) — never in this public repo. Unset ⇒ skipped cleanly
+# (the audit degrades to structural SEO checks, never invents metrics).
+if [ -n "${FLUNCLE_GSC_OP_REF:-}" ]; then
+  GSC_OUT=/home/admin/.hermes/home/.fluncle-gsc.json   # = /opt/data/home/.fluncle-gsc.json in-container
+  tj="$(mktemp)"; trap 'rm -f "$tg" "$ts" "$tj"' EXIT
+  if op read "$FLUNCLE_GSC_OP_REF" >"$tj" 2>/dev/null && grep -q '"private_key"' "$tj"; then
+    install -m 600 -o 10000 -g 10000 "$tj" "$GSC_OUT"
+  else
+    echo "fluncle-secrets-sync: GSC key sync failed (audit surfaces-seo will degrade)" >&2
+  fi
+fi
 echo "fluncle-secrets-sync: ok $(date -u +%FT%TZ)"
