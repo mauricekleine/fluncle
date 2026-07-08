@@ -31,12 +31,29 @@ const FIRECRAWL_BODY = {
   },
 };
 
-// An OpenRouter completion that CARRIES `usage` (the field the capture reads).
-const OPENROUTER_BODY = {
+// An OpenRouter completion that CARRIES `usage`. `usage.cost` is OpenRouter's OWN
+// billed figure (credits = USD), returned because the request sends `usage: { include:
+// true }` — the capture prefers it over the per-MTok estimate. Tests that exercise the
+// estimated fallback swap in a body WITHOUT `cost` via `setOpenRouterBody`.
+const OPENROUTER_BODY_MEASURED = {
+  choices: [{ message: { content: "Mr Right On is a 2017 Calibre track." } }],
+  model: "anthropic/claude-haiku-4.5",
+  usage: { completion_tokens: 40, cost: 0.0031, prompt_tokens: 120 },
+};
+
+// The same completion with NO `cost` — the vendor omitted it, so the capture falls back
+// to the token rate table (`priceOpenRouterTokens`) and marks the row `estimated`.
+const OPENROUTER_BODY_NO_COST = {
   choices: [{ message: { content: "Mr Right On is a 2017 Calibre track." } }],
   model: "anthropic/claude-haiku-4.5",
   usage: { completion_tokens: 40, prompt_tokens: 120 },
 };
+
+let openRouterBody: unknown = OPENROUTER_BODY_MEASURED;
+
+function setOpenRouterBody(body: unknown) {
+  openRouterBody = body;
+}
 
 function mockVendorFetch() {
   vi.stubGlobal(
@@ -49,7 +66,7 @@ function mockVendorFetch() {
       }
 
       if (url.includes(OPENROUTER_MATCH)) {
-        return Response.json(OPENROUTER_BODY);
+        return Response.json(openRouterBody);
       }
 
       return new Response("not found", { status: 404 });
@@ -63,6 +80,7 @@ beforeEach(() => {
   delete process.env.OPENROUTER_CONTEXT_MODEL;
   execute.mockReset().mockResolvedValue({ rowsAffected: 1 });
   getDb.mockReset().mockResolvedValue({ execute });
+  setOpenRouterBody(OPENROUTER_BODY_MEASURED);
   mockVendorFetch();
 });
 
@@ -94,17 +112,34 @@ describe("Path A capture — inserts a cost row per vendor call", () => {
     expect(rows).toContain("track-1");
   });
 
-  it("distilContextNote prices the OpenRouter tokens (usd on the row, not null)", async () => {
+  it("distilContextNote stores OpenRouter's OWN billed cost (usage.cost, measured)", async () => {
     await distilContextNote(
       { query: "q", snippets: ["a snippet"], sources: [] },
       { logId: "004.7.2I", trackId: "track-1" },
     );
 
-    // 120 in ($0.12/M×120) + 40 out ($5/M×40) → priced, so estimated_usd (col index
-    // 3 of the 13-tuple) is a number, never null.
+    // The vendor returned `usage.cost: 0.0031` → that authoritative figure is the row's
+    // estimated_usd (col 3), and the row is `measured` (col 8), NOT the token estimate.
+    const args = insertArgs().find((row) => row.includes("openrouter"));
+    expect(args).toBeDefined();
+    expect(args?.[3]).toBe(0.0031);
+    expect(args?.[8]).toBe("measured");
+  });
+
+  it("distilContextNote falls back to the token rate (estimated) when usage.cost is absent", async () => {
+    setOpenRouterBody(OPENROUTER_BODY_NO_COST);
+
+    await distilContextNote(
+      { query: "q", snippets: ["a snippet"], sources: [] },
+      { logId: "004.7.2I", trackId: "track-1" },
+    );
+
+    // No `usage.cost` → 120 in + 40 out priced via `priceOpenRouterTokens`: a number on
+    // the row (col 3), but marked `estimated` (col 8) — a rate guess is never a fact.
     const args = insertArgs().find((row) => row.includes("openrouter"));
     expect(args).toBeDefined();
     expect(typeof args?.[3]).toBe("number");
+    expect(args?.[8]).toBe("estimated");
   });
 });
 

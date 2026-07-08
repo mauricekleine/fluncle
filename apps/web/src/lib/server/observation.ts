@@ -373,11 +373,13 @@ export const CONTEXT_DISTIL_SYSTEM_PROMPT = [
 
 type OpenRouterChatResponse = {
   choices?: { message?: { content?: string } }[];
-  // The billed model + token usage OpenRouter returns in the SAME body we already
-  // parse (it was previously read only for `.content`). Read now to price the one
-  // genuinely-metered LLM call for the cost ledger (COST-01).
+  // The billed model + token usage + the ACTUAL COST OpenRouter returns in the SAME
+  // body we already parse. With `usage: { include: true }` on the request, `usage.cost`
+  // is the real credits (= USD, 1:1) OpenRouter charged — the vendor's own figure, so it
+  // is model-agnostic and survives a model switch where a fixed per-MTok rate would
+  // silently go wrong. Tokens stay as the informational quantity (COST-01).
   model?: string;
-  usage?: { completion_tokens?: number; prompt_tokens?: number };
+  usage?: { completion_tokens?: number; cost?: number; prompt_tokens?: number };
 };
 
 /**
@@ -428,6 +430,10 @@ export async function distilContextNote(
         ],
         model,
         temperature: 0.2,
+        // Ask OpenRouter to return the ACTUAL billed cost in the response's `usage.cost`
+        // (credits = USD). Model-agnostic pricing straight from the vendor — no per-MTok
+        // rate table to keep in sync when the distil model changes (COST-01).
+        usage: { include: true },
       }),
       headers: {
         Authorization: `Bearer ${apiKey}`,
@@ -442,17 +448,26 @@ export async function distilContextNote(
 
     const payload = (await response.json()) as OpenRouterChatResponse;
 
-    // Cost capture (COST-01, Path A — Worker-local, `cash`). The context-distil is
-    // the one genuinely-metered LLM call; read the token usage the body already
-    // carries and price it from the in/out split. BEST-EFFORT: `captureCostEvents`
-    // can never throw, so a ledger write can't break the distil (the note still
-    // returns). Only emit when a real usage number is present.
+    // Cost capture (COST-01, Path A — Worker-local, `cash`). The context-distil is the
+    // one genuinely-metered LLM call. BEST-EFFORT: `captureCostEvents` can never throw, so
+    // a ledger write can't break the distil (the note still returns). Only emit when a real
+    // usage number is present.
     const promptTokens = payload.usage?.prompt_tokens;
     const completionTokens = payload.usage?.completion_tokens;
 
     if (typeof promptTokens === "number" && typeof completionTokens === "number") {
       const billedModel = payload.model ?? model;
       const occurredAt = new Date().toISOString();
+
+      // Prefer OpenRouter's OWN billed cost (`usage.cost`, credits = USD) — authoritative
+      // and model-agnostic, requested via `usage: { include: true }` above. Fall back to
+      // the per-MTok estimate only if the vendor omits it, and mark THAT row `estimated`
+      // so a rate-table guess never reads as a measured fact.
+      const billedCost = payload.usage?.cost;
+      const measured = typeof billedCost === "number";
+      const usd = measured
+        ? billedCost
+        : priceOpenRouterTokens(billedModel, promptTokens, completionTokens);
 
       await captureCostEvents([
         {
@@ -469,11 +484,11 @@ export async function distilContextNote(
           model: billedModel,
           occurredAt,
           quantity: promptTokens + completionTokens,
-          source: "measured",
+          source: measured ? "measured" : "estimated",
           step: "context",
           trackId: capture?.trackId,
           unitType: "tokens",
-          usd: priceOpenRouterTokens(billedModel, promptTokens, completionTokens),
+          usd,
           vendor: "openrouter",
         },
       ]);
