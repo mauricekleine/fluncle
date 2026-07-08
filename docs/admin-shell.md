@@ -69,4 +69,10 @@ BASE_URL=http://127.0.0.1:3000 OUT_DIR=/tmp/queue-smoke SEED=1 bun tests/browser
 BASE_URL=http://127.0.0.1:3000 bun tests/browser/admin-touch-smoke.ts
 ```
 
+- `admin-subscriptions-smoke.ts` — pins the Costs station CRUD (COST-02): drives the `/admin/costs` dialog end-to-end (add a throwaway line → edit its amount → delete it through the confirm), asserting each mutation reflects in the ledger. It proves the whole operator-tier write path — the admin cookie satisfying `operatorGuard` on `create/update/delete_subscription`, the server validation, the list refetch — and is self-cleaning, so a failed run leaves at most one clearly-named row in the local dev DB:
+
+```bash
+BASE_URL=http://127.0.0.1:3000 bun tests/browser/admin-subscriptions-smoke.ts
+```
+
 Run them against a live dev server (per [docs/local-database.md](./local-database.md); in a worktree, copy main's `.dev.vars` and run `bun run --cwd apps/web dev:vite`). Read the screenshots after every shell or admin-chrome change.
