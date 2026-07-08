@@ -28,10 +28,9 @@ const iso = (at: number) => new Date(at).toISOString();
 const EMPTY_INPUTS: AttentionInputs = {
   artistReviews: [],
   clipPosts: [{ scheduledFor: iso(NOW + HOUR), status: "scheduled" }],
-  drafts: [],
+  clips: [],
   mixtapes: [],
   recordings: [],
-  unposted: [],
 };
 
 const item = (overrides: Partial<AttentionItem> & { id: string }): AttentionItem => ({
@@ -51,14 +50,18 @@ describe("deriveAttentionItems", () => {
     const items = deriveAttentionItems(
       {
         ...EMPTY_INPUTS,
-        drafts: [
+        clips: [
           {
+            addedAt: iso(NOW - 3 * DAY),
             artUrl: "https://img/cover.jpg",
             artists: ["IYRE"],
             logId: "020.2.3Y",
+            tiktokStatus: "draft",
+            tiktokUpdatedAt: pushedAt,
             title: "Glowing Embers",
             trackId: "t1",
-            updatedAt: pushedAt,
+            // YouTube already up, so the only pending leg is the TikTok draft.
+            youtubeStatus: "published",
           },
         ],
       },
@@ -77,11 +80,11 @@ describe("deriveAttentionItems", () => {
     expect(Date.parse(draftDeadline(pushedAt))).toBe(Date.parse(pushedAt) + DAY);
   });
 
-  it("surfaces ONE unposted row — the oldest — carrying the waiting count", () => {
+  it("splits the oldest clip into its two pending platform legs, each carrying the waiting count", () => {
     const items = deriveAttentionItems(
       {
         ...EMPTY_INPUTS,
-        unposted: [
+        clips: [
           {
             addedAt: iso(NOW - 17 * DAY),
             artists: ["A"],
@@ -96,16 +99,63 @@ describe("deriveAttentionItems", () => {
       NOW,
     );
 
-    expect(items).toHaveLength(1);
-    expect(items[0]).toMatchObject({ id: "post-tiktok:t1", source: "post-tiktok", waiting: 3 });
+    // Only the oldest clip (t1) surfaces — its TikTok and YouTube legs, both pending; the
+    // waiting count is every clip still needing work.
+    expect(items.map((entry) => entry.id)).toEqual(["post-tiktok:t1", "post-youtube:t1"]);
+    expect(items.every((entry) => entry.waiting === 3)).toBe(true);
   });
 
-  it("partitions: a finding with a draft is the deadline row's business, never also unposted", () => {
+  it("shows only the pending leg when the other is already posted", () => {
     const items = deriveAttentionItems(
       {
         ...EMPTY_INPUTS,
-        drafts: [{ artists: ["A"], title: "One", trackId: "t1", updatedAt: iso(NOW - 30 * HOUR) }],
-        unposted: [
+        clips: [
+          {
+            addedAt: iso(NOW - 3 * DAY),
+            artists: ["A"],
+            logId: "l1",
+            // TikTok is live already; only the YouTube leg is pending.
+            tiktokStatus: "published",
+            title: "One",
+            trackId: "t1",
+          },
+        ],
+      },
+      NOW,
+    );
+
+    expect(items.map((entry) => entry.id)).toEqual(["post-youtube:t1"]);
+  });
+
+  it("keeps a clip off the queue once both legs have landed", () => {
+    const items = deriveAttentionItems(
+      {
+        ...EMPTY_INPUTS,
+        clips: [
+          {
+            addedAt: iso(NOW - 3 * DAY),
+            artists: ["A"],
+            tiktokStatus: "published",
+            title: "Done",
+            trackId: "t1",
+            youtubeStatus: "published",
+          },
+          { addedAt: iso(NOW - DAY), artists: ["B"], logId: "l2", title: "Next", trackId: "t2" },
+        ],
+      },
+      NOW,
+    );
+
+    // t1 is fully distributed, so t2 becomes the focus.
+    expect(items.map((entry) => entry.id)).toEqual(["post-tiktok:t2", "post-youtube:t2"]);
+  });
+
+  it("shows an in-flight TikTok draft as a deadline row even behind the one-clip gate", () => {
+    const items = deriveAttentionItems(
+      {
+        ...EMPTY_INPUTS,
+        clips: [
+          // The focus clip: both legs fresh.
           {
             addedAt: iso(NOW - 17 * DAY),
             artists: ["A"],
@@ -113,17 +163,28 @@ describe("deriveAttentionItems", () => {
             title: "One",
             trackId: "t1",
           },
-          { addedAt: iso(NOW - 3 * DAY), artists: ["B"], logId: "l2", title: "Two", trackId: "t2" },
+          // A newer clip whose TikTok draft is already racing its bounce — must still show.
+          {
+            addedAt: iso(NOW - 3 * DAY),
+            artists: ["B"],
+            logId: "l2",
+            tiktokStatus: "draft",
+            tiktokUpdatedAt: iso(NOW - 30 * HOUR),
+            title: "Two",
+            trackId: "t2",
+            youtubeStatus: "published",
+          },
         ],
       },
       NOW,
     );
 
     const ids = items.map((entry) => entry.id);
-    expect(ids).toContain("tiktok-draft:t1");
-    expect(ids).toContain("post-tiktok:t2");
-    expect(ids).not.toContain("post-tiktok:t1");
-    expect(items.find((entry) => entry.id === "post-tiktok:t2")?.waiting).toBe(1);
+    expect(ids).toContain("tiktok-draft:t2");
+    expect(ids).toContain("post-tiktok:t1");
+    expect(ids).toContain("post-youtube:t1");
+    // t2's TikTok is a draft (its own deadline row), never also a fresh post-tiktok.
+    expect(ids).not.toContain("post-tiktok:t2");
   });
 
   it("surfaces a videoless-cue take, deep-linked to its Studio and M2-badged", () => {
@@ -356,8 +417,20 @@ describe("snoozeSlots", () => {
 });
 
 describe("primaryFor", () => {
-  it("copies the caption for the unposted row and a fresh draft", () => {
-    expect(primaryFor(item({ id: "p", source: "post-tiktok" }), NOW).kind).toBe("copy-caption");
+  it("pushes the platform's video for a fresh post row", () => {
+    expect(primaryFor(item({ id: "p", source: "post-tiktok" }), NOW)).toEqual({
+      kind: "push",
+      label: "Push draft",
+      platform: "tiktok",
+    });
+    expect(primaryFor(item({ id: "y", source: "post-youtube" }), NOW)).toEqual({
+      kind: "push",
+      label: "Post to YouTube",
+      platform: "youtube",
+    });
+  });
+
+  it("copies the caption for a fresh TikTok draft you finish in-app", () => {
     expect(
       primaryFor(item({ deadlineAt: iso(NOW + HOUR), id: "d", source: "tiktok-draft" }), NOW).kind,
     ).toBe("copy-caption");

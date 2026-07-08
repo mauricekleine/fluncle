@@ -5,6 +5,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { type ComponentType } from "react";
 import { siSoundcloud } from "simple-icons";
 import { AdminShell } from "@/components/admin/admin-shell";
+import { ObjectLead, ObjectList, ObjectRow } from "@/components/admin/object-row";
 import { BrandIcon } from "@/components/brand-icon";
 import { MixcloudIcon, YoutubeIcon } from "@/components/platform-icons";
 import { Badge } from "@fluncle/ui/components/badge";
@@ -85,74 +86,75 @@ function MixtapesIndex({ mixtapes }: { mixtapes: MixtapeDTO[] }) {
   }
 
   return (
-    <ul className="divide-y divide-border rounded-lg border border-border">
+    <ObjectList>
       {mixtapes.map((mixtape) => (
         <MixtapeRow key={mixtape.id ?? mixtape.logId} mixtape={mixtape} />
       ))}
-    </ul>
+    </ObjectList>
   );
 }
 
-// One minted mixtape: cover-led (its on-the-fly cover links to the public /log page), the
-// `#N — title`, its `F`-marked coordinate in the Oxanium Log-ID face, the status/date/duration
-// line, and the outbound distribution links to wherever it went (YouTube, Mixcloud, SoundCloud).
+// One minted mixtape as an Object Row: cover-led (its on-the-fly cover links to the public
+// /log page), the `#N — title`, its `F`-marked coordinate in the Log-ID face, the
+// status/date/duration line, and the outbound distribution links to wherever it went
+// (YouTube, Mixcloud, SoundCloud).
 function MixtapeRow({ mixtape }: { mixtape: MixtapeDTO }) {
   const { logId } = mixtape;
   const logHref = logId ? `/log/${encodeURIComponent(logId)}` : undefined;
   const dated = mixtape.publishedAt ?? mixtape.recordedAt;
+  const displayTitle = mixtapeDisplayTitle(mixtape.title);
+  const showSequence =
+    Boolean(mixtape.sequenceNumber) && !displayTitle.includes(`#${mixtape.sequenceNumber}`);
 
   return (
-    <li className="flex items-center gap-3 px-3 py-3">
-      {logId && logHref ? (
-        <a
-          aria-hidden="true"
-          className="shrink-0 focus-visible:outline-2 focus-visible:outline-ring"
-          href={logHref}
-          tabIndex={-1}
-        >
-          <img
-            alt=""
-            className="size-14 rounded-md border border-border object-cover"
-            height={56}
-            loading="lazy"
-            src={mixtapeCoverUrl(logId, "thumb")}
-            width={56}
-          />
-        </a>
-      ) : (
-        <div className="track-artwork-fallback size-14 shrink-0 rounded-md border border-border" />
-      )}
-
-      <div className="min-w-0 flex-1">
-        {logId ? (
-          <a
-            className="block truncate font-display text-xs tracking-tight text-muted-foreground tabular-nums hover:text-primary focus-visible:outline-2 focus-visible:outline-ring"
-            href={logHref}
-          >
-            fluncle://{logId}
-          </a>
-        ) : null}
-        <p className="truncate text-sm font-medium">
-          {mixtape.sequenceNumber &&
-          !mixtapeDisplayTitle(mixtape.title).includes(`#${mixtape.sequenceNumber}`) ? (
-            <span className="text-muted-foreground tabular-nums">#{mixtape.sequenceNumber} </span>
-          ) : null}
-          {mixtapeDisplayTitle(mixtape.title)}
-        </p>
-        <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground tabular-nums">
-          <Badge variant={mixtape.status === "published" ? "secondary" : "outline"}>
-            {mixtape.status === "published" ? "published" : "distributing"}
-          </Badge>
-          {dated ? <span>{formatDate(dated)}</span> : null}
-          {mixtape.durationMs ? <span>· {formatAlbumDuration(mixtape.durationMs)}</span> : null}
-          <span>
-            · {mixtape.memberCount} banger{mixtape.memberCount === 1 ? "" : "s"}
-          </span>
-        </div>
-      </div>
-
-      <DistributionLinks mixtape={mixtape} />
-    </li>
+    <ObjectRow trailing={<DistributionLinks mixtape={mixtape} />}>
+      <ObjectLead
+        coordinate={logId ? `fluncle://${logId}` : undefined}
+        coordinateHref={logHref}
+        leading={
+          logId && logHref ? (
+            <a
+              aria-hidden="true"
+              className="shrink-0 focus-visible:outline-2 focus-visible:outline-ring"
+              href={logHref}
+              tabIndex={-1}
+            >
+              <img
+                alt=""
+                className="size-11 rounded-md border border-border object-cover"
+                height={44}
+                loading="lazy"
+                src={mixtapeCoverUrl(logId, "thumb")}
+                width={44}
+              />
+            </a>
+          ) : (
+            <div className="track-artwork-fallback size-11 shrink-0 rounded-md border border-border" />
+          )
+        }
+        subtitle={
+          <>
+            <Badge variant={mixtape.status === "published" ? "secondary" : "outline"}>
+              {mixtape.status === "published" ? "published" : "distributing"}
+            </Badge>
+            {dated ? <span>{formatDate(dated)}</span> : null}
+            {mixtape.durationMs ? <span>· {formatAlbumDuration(mixtape.durationMs)}</span> : null}
+            <span>
+              · {mixtape.memberCount} banger{mixtape.memberCount === 1 ? "" : "s"}
+            </span>
+          </>
+        }
+        title={
+          <>
+            {showSequence ? (
+              <span className="text-muted-foreground tabular-nums">#{mixtape.sequenceNumber} </span>
+            ) : null}
+            {displayTitle}
+          </>
+        }
+        titleHref={logHref}
+      />
+    </ObjectRow>
   );
 }
 

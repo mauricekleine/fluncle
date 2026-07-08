@@ -5,6 +5,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { AdminShell } from "@/components/admin/admin-shell";
+import { ObjectGlyph, ObjectLead, ObjectList, ObjectRow } from "@/components/admin/object-row";
 import { UploadRecordingDialog } from "@/components/admin/upload-recording-dialog";
 import { Badge } from "@fluncle/ui/components/badge";
 import { isAdminRequest } from "@/lib/server/admin-auth";
@@ -140,26 +141,34 @@ function RecordingsIndex({
   }
 
   return (
-    <ul className="divide-y divide-border rounded-lg border border-border">
-      {recordings.map((rec) => (
-        <li className="flex items-center gap-3 px-3 py-2" key={rec.id}>
-          <a
-            className="min-w-0 flex-1 truncate text-sm font-medium hover:text-primary focus-visible:outline-2 focus-visible:outline-ring"
-            href={`/admin/studio/${encodeURIComponent(rec.id)}`}
+    <ObjectList>
+      {recordings.map((rec) => {
+        const clipCount = clipCountByRecording.get(rec.id) ?? 0;
+
+        return (
+          <ObjectRow
+            key={rec.id}
+            trailing={
+              <>
+                {rec.logId ? (
+                  <Badge variant="default">promoted · fluncle://{rec.logId}</Badge>
+                ) : (
+                  <Badge variant="outline">recording</Badge>
+                )}
+                <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
+                  {clipCount} clip{clipCount === 1 ? "" : "s"}
+                </span>
+              </>
+            }
           >
-            {rec.logId ? rec.title.split(" | ")[0] : rec.title}
-          </a>
-          {rec.logId ? (
-            <Badge variant="default">promoted · fluncle://{rec.logId}</Badge>
-          ) : (
-            <Badge variant="outline">recording</Badge>
-          )}
-          <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
-            {clipCountByRecording.get(rec.id) ?? 0} clip
-            {(clipCountByRecording.get(rec.id) ?? 0) === 1 ? "" : "s"}
-          </span>
-        </li>
-      ))}
-    </ul>
+            <ObjectLead
+              leading={<ObjectGlyph icon={FilmSlateIcon} />}
+              title={rec.logId ? rec.title.split(" | ")[0] : rec.title}
+              titleHref={`/admin/studio/${encodeURIComponent(rec.id)}`}
+            />
+          </ObjectRow>
+        );
+      })}
+    </ObjectList>
   );
 }
