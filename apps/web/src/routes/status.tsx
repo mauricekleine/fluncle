@@ -77,6 +77,8 @@ const SERVICE_ORDER = ["web", "db", "r2", "dns", "ssh", "onion", "hermes", "rend
 // prefix, so an as-yet-unlabeled cron still reads cleanly.
 const SERVICE_LABELS: Record<string, string> = {
   "cron.artist-sweep": "Artist resolution",
+  "cron.audit": "Nightly audit",
+  "cron.audit-review": "Audit reviewer",
   "cron.backfill": "Catalogue backfill",
   "cron.backup": "Database backup",
   "cron.capture": "Full-song capture",
@@ -110,6 +112,8 @@ const SERVICE_LABELS: Record<string, string> = {
 // descriptions name no internal host). Absent for an unknown service.
 const SERVICE_SUBTITLES: Record<string, string> = {
   "cron.artist-sweep": "resolves each artist's socials and identity links",
+  "cron.audit": "nightly one-domain codebase audit → a PR",
+  "cron.audit-review": "reviews + merges the nightly audit PR",
   "cron.backfill": "repairs Discogs ids and Last.fm loves",
   "cron.backup": "a daily off-site snapshot of the archive",
   "cron.capture": "captures each finding's full song once",

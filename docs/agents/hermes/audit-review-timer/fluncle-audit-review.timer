@@ -1,0 +1,13 @@
+[Unit]
+Description=fluncle-audit-review timer — the 05:00 Amsterdam reviewer for the nightly audit PR on the rave-02 host
+
+[Timer]
+# 05:00 in the box's pinned TZ=Europe/Amsterdam — four hours after the 1am auditor, so its PR and
+# CI have settled. Reviews the newest open audit/* PR: fixes small nits + merges when CI is green
+# and nothing high-impact remains, else comments and leaves it for the operator. Persistent
+# catches up a tick missed across a reboot.
+OnCalendar=*-*-* 05:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -77,3 +77,7 @@ docs/1password-audit.local.md
 
 # impeccable critique scratch (local design-review snapshots)
 .impeccable/
+
+# Nightly audit working dir (transient: report.md, verdict.json, seo-data.json).
+# The DURABLE findings record is the committed docs/audit-backlog.md ledger.
+.audit/

@@ -138,6 +138,9 @@ GOT_FLUNCLE="$(docker run --rm --entrypoint fluncle "$NEW_IMAGE" version 2>/dev/
 [ "$GOT_FLUNCLE" = "$WANT_FLUNCLE" ] || presmoke_fail "fluncle version $GOT_FLUNCLE != $WANT_FLUNCLE"
 GOT_CLAUDE="$(docker run --rm --entrypoint claude "$NEW_IMAGE" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
 [ "$GOT_CLAUDE" = "$WANT_CLAUDE" ] || presmoke_fail "claude version $GOT_CLAUDE != $WANT_CLAUDE"
+# gh (the nightly-audit agents' PR driver) must be present + runnable in the new image. It's a
+# manual-watch pin (not auto-bumped), so this just guards that a rebuild never ships a broken gh.
+docker run --rm --entrypoint gh "$NEW_IMAGE" --version >/dev/null 2>&1 || presmoke_fail "gh --version failed (audit PR driver missing)"
 # agent-allowed read with the agent token + live API (expect ok:true)
 docker run --rm --env-file "$ENVTMP" --entrypoint fluncle "$NEW_IMAGE" admin tracks enrich --queue --json --limit 1 2>/dev/null | grep -Eq '"ok" *: *true' || presmoke_fail "agent read did not return ok:true"
 # the server boundary: a publish-class command with the agent token MUST be refused

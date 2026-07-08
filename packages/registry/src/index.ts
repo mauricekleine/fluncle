@@ -940,6 +940,28 @@ export const SURFACES: readonly Surface[] = [
     probeConfig: { cadenceMs: 24 * 60 * MINUTE_MS, cronName: "fluncle-backup", kind: "cron" },
     weights: { status: "secondary" },
   },
+  {
+    exposedContent: [
+      "nightly codebase audit — one domain/night on a 7-day rotation; opens a PR the reviewer merges (claude -p, subscription auth)",
+    ],
+    kind: "cron",
+    name: "cron.audit",
+    operatorNotes:
+      "01:00 Amsterdam, a rave-02 host systemd timer (docs/agents/hermes/audit-timer/). A full agentic claude -p session: audits the day's domain, fixes what's safe, files the rest to docs/audit-backlog.md, opens a PR. Subscription auth (CLAUDE_CODE_OAUTH_TOKEN), zero OpenRouter tokens. Source: docs/agents/hermes/scripts/audit-sweep.sh. Probed on /status as service `cron.audit`.",
+    probeConfig: { cadenceMs: 24 * 60 * MINUTE_MS, cronName: "fluncle-audit", kind: "cron" },
+    weights: { status: "secondary" },
+  },
+  {
+    exposedContent: [
+      "05:00 reviewer for the nightly audit PR — fix-small-and-merge on green CI, else comment + hold (claude -p)",
+    ],
+    kind: "cron",
+    name: "cron.audit-review",
+    operatorNotes:
+      "05:00 Amsterdam, a rave-02 host systemd timer (docs/agents/hermes/audit-review-timer/). Reviews the newest open audit/* PR adversarially; merges when required checks are green and nothing high-impact remains, else comments and leaves it for the operator. Source: docs/agents/hermes/scripts/audit-review-sweep.sh. Probed on /status as service `cron.audit-review`.",
+    probeConfig: { cadenceMs: 24 * 60 * MINUTE_MS, cronName: "fluncle-audit-review", kind: "cron" },
+    weights: { status: "secondary" },
+  },
 ];
 
 // ── Selectors ────────────────────────────────────────────────────────────────

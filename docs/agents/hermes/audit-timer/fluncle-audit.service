@@ -1,0 +1,22 @@
+[Unit]
+Description=fluncle-audit — nightly codebase auditor (one domain/night; opens a PR the 5am reviewer merges)
+Documentation=https://github.com/mauricekleine/fluncle/blob/main/docs/agents/hermes/audit-timer/README.md
+Wants=network-online.target docker.service
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+# Root drives the Docker daemon; `docker exec -u hermes` runs the WORK as the unprivileged
+# hermes user. The .sh + the audit/ tree are BAKED at /opt/hermes-scripts (Unit A — auto-updates
+# from main via pin-watch); this host unit only TRIGGERS the sweep, which self-writes its /status
+# marker (cron-output.sh).
+ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/audit-sweep.sh
+# A full agentic `claude -p` audit — freshen an isolated checkout, bun install, audit → edit →
+# run scoped checks → commit → push → open the PR — needs a long budget, unlike the thin
+# Worker-trigger sweeps (300s). One hour is a generous ceiling; a healthy run is far shorter.
+TimeoutStartSec=3600
+# Modest hardening for a root docker-driving oneshot.
+NoNewPrivileges=true
+ProtectControlGroups=true
+ProtectKernelTunables=true
+RestrictSUIDSGID=true
