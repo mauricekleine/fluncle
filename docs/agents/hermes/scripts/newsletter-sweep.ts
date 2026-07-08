@@ -42,15 +42,16 @@
 //   6. PERSIST (deterministic): write `content` to a temp file, then
 //      `fluncle admin newsletter draft --content-file … --subject … --window-since …
 //      --window-until … --json` (admin tier — the agent token drafts; it can't send).
-//   7. OFFER (deterministic, degraded): the old agent used an interactive `clarify`
-//      Send button, which needs the gateway. A `--no-agent` script can't render one, so
-//      stdout carries the one-line operator summary + the exact send command; the cron
-//      delivers it to Discord and the operator runs `fluncle admin newsletter send <id>`
-//      (operator tier — silence is never consent for a send). The draft persists
-//      regardless; next Friday's miss-recovery re-offers an un-sent one.
+//   7. OFFER (deterministic): a one-line operator summary + the exact send command. It
+//      reaches Discord TWO ways: stdout (captured by the host-timer /status marker +
+//      journald) AND a direct best-effort POST to DISCORD_ALERT_WEBHOOK — the sweep
+//      SELF-DELIVERS, so it no longer depends on the gateway's `--deliver discord` (retired
+//      with the host-timer migration). The operator runs `fluncle admin newsletter send <id>`
+//      (operator tier — silence is never consent for a send). The draft persists regardless;
+//      next Friday's miss-recovery re-offers an un-sent one.
 //
-// stdout: the ONE operator-facing line the cron delivers to Discord (the summary + the
-// send command). All diagnostics + the machine summary → stderr (never the channel).
+// stdout: the ONE operator-facing line (the summary + the send command); also self-POSTed to
+// the ops-alert Discord webhook. All diagnostics + the machine summary → stderr.
 
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -521,6 +522,36 @@ function offerLine(subject: string, id: string, finds: number, mixes: number): s
   ].join("\n");
 }
 
+// Self-deliver the operator offer line to Discord. The host-timer world has no gateway
+// `--deliver discord`, so the sweep POSTs the line to the ops-alert webhook itself (the same
+// DISCORD_ALERT_WEBHOOK pingClaudeAuthFailure uses, sourced from the 0600 secrets file by the
+// .sh). Best-effort: the stdout line is the floor (it still lands in the /status marker +
+// journald), so a missing webhook or a failed POST never fails the run.
+function deliverOffer(line: string): void {
+  if (!DISCORD_ALERT_WEBHOOK) {
+    log("no DISCORD_ALERT_WEBHOOK — offer not posted to Discord (stdout marker is the floor)");
+
+    return;
+  }
+
+  try {
+    run("curl", [
+      "-sS",
+      "-X",
+      "POST",
+      "-H",
+      "Content-Type: application/json",
+      "-d",
+      JSON.stringify({ content: line }),
+      "--max-time",
+      "10",
+      DISCORD_ALERT_WEBHOOK,
+    ]);
+  } catch {
+    // best-effort — stdout already carries the offer
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
@@ -537,7 +568,9 @@ function main(): void {
     const finds = countFindings(existing.content ?? {});
     const mixes = existing.content?.mixtapeRef ? 1 : 0;
     log(`unsent draft ${existing.id} already exists — re-offering, not authoring`);
-    console.log(offerLine(existing.subject ?? "(untitled)", existing.id, finds, mixes));
+    const offer = offerLine(existing.subject ?? "(untitled)", existing.id, finds, mixes);
+    console.log(offer);
+    deliverOffer(offer);
 
     return;
   }
@@ -607,8 +640,12 @@ function main(): void {
 
   log(`drafted edition ${id} (${finds} finds + ${mixes} mixtapes) — send pending`);
 
-  // 7. OFFER (stdout → Discord; operator runs the send)
-  console.log(offerLine(authored.subject, id, finds, mixes));
+  // 7. OFFER — stdout (→ the host-timer /status marker + journald) AND a direct self-POST to
+  // the ops-alert Discord webhook (no gateway --deliver discord under a host timer); the
+  // operator runs the send.
+  const offer = offerLine(authored.subject, id, finds, mixes);
+  console.log(offer);
+  deliverOffer(offer);
 }
 
 main();

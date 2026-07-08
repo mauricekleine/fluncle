@@ -8,8 +8,10 @@
 # Why a .sh that execs a .ts: the Hermes `--no-agent --script` runner dispatches by
 # extension — bash for `.sh`, Python for everything else — so a bare `.ts` would be
 # fed to Python. This thin wrapper is the bash entry; all the JSON work lives in the
-# bun orchestrator beside it (newsletter-sweep.ts). Its stdout is the cron's run
-# output (the one operator line the cron delivers to Discord).
+# bun orchestrator beside it (newsletter-sweep.ts). Its stdout is the one operator line
+# (the draft summary + the send command); the .ts also self-POSTs that line to the ops-alert
+# Discord webhook, so it no longer depends on the gateway's `--deliver discord` (retired with
+# the host-timer migration — see ../newsletter-timer/).
 #
 # THE HYBRID MODEL (same shape as note/observe — this REPLACED the old agent loop that
 # flailed 83 calls / ~$9.61 on a single 2026-06-27 run). Everything is deterministic
@@ -27,13 +29,10 @@
 #     (GHSA-rhgp-j443-p4rf), so the token is read from the 0600 op-synced shared file at
 #     ${HOME}/.fluncle-secrets.env, sourced below.
 #
-# Operator wires it on the devbox (drafting is AGENT tier — the box's agent token drives
-# it; sending stays operator-only):
-#
-#   hermes cron create "0 15 * * 5" --no-agent --script newsletter-sweep.sh --deliver discord --name fluncle-newsletter
-#
-# Confirm with `hermes cron list`. A `--dry-run` arg authors + prints without persisting
-# or delivering (manual validation: `bash newsletter-sweep.sh --dry-run`).
+# Scheduled by a repo-checked-in HOST systemd timer (../newsletter-timer/, installed by
+# ../install-host-timers.sh), NOT a gateway `hermes cron create` — drafting is AGENT tier (the
+# box's agent token drives it; sending stays operator-only). A `--dry-run` arg authors + prints
+# without persisting or delivering (manual validation: `bash newsletter-sweep.sh --dry-run`).
 set -euo pipefail
 
 # The cron runner execs with a minimal PATH; prepend the known install dirs so this
