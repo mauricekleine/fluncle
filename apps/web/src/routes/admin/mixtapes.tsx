@@ -133,7 +133,8 @@ function MixtapeRow({ mixtape }: { mixtape: MixtapeDTO }) {
           </a>
         ) : null}
         <p className="truncate text-sm font-medium">
-          {mixtape.sequenceNumber ? (
+          {mixtape.sequenceNumber &&
+          !mixtapeDisplayTitle(mixtape.title).includes(`#${mixtape.sequenceNumber}`) ? (
             <span className="text-muted-foreground tabular-nums">#{mixtape.sequenceNumber} </span>
           ) : null}
           {mixtapeDisplayTitle(mixtape.title)}
