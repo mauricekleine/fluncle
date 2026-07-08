@@ -243,6 +243,10 @@ The page itself: a recovered logbook plate, one printed document per surface (th
 
 The identity anchor: the cover art mounted flat on the plate, wrapped in a frame whose edge is LIT from the sun side (top/left border heated toward gold) over a bent warm gradient (a radial falloff from the sun corner, gold into Re-entry Red) with grain blended in. The eclipse colors bleed into the frame; the artwork stays untouched. No glass of its own (One Pane).
 
+### Named Rules
+
+**The Quiet Surface Rule.** A surface shows only what's read or used often; everything rare recedes behind a disclosure — a coordinate that carries the date so the row needn't repeat it, pagination folded into the list, an infrequent action behind a `⋮` menu, hover-card, or dialog. Disclosure is not hiding; it's letting the signal sit uncrowded. This governs both registers: the public Track Row drops the Found date and buries load-more in the list; the operator's admin surfaces put requeue/purge/link-editing behind menus and dialogs (the disclosure law, `docs/admin-shell.md`). Density grades by surface; the instinct to quiet the surface does not.
+
 ## 6. Do's and Don'ts
 
 ### Do:
