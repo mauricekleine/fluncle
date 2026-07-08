@@ -5,14 +5,16 @@
 # an unbounded tail that would starve the latency-sensitive 5-min sweeps on the shared
 # serial runner. The rave-02 host timer `docker exec`s this script inside the container
 # every 5m — see ../capture-timer/README.md for the unit files + install. The container
-# runner dispatches by extension (bash for `.sh`), and a manual `bash /opt/data/scripts/
+# runner dispatches by extension (bash for `.sh`), and a manual `bash /opt/hermes-scripts/
 # capture-sweep.sh` runs it the same way, so this thin bash wrapper is the entry; all the
 # work lives in the bun orchestrator beside it (capture-sweep.ts). Its stdout is the run
 # output the /status prober reads.
 #
 # LIVE-INTENT. Version-controlled source; the repo is canonical and the box is a deploy
-# target (fluncle-hermes-operator skill). This pair deploys to /opt/data/scripts/ on the
-# devbox via `docker cp`. See ../cron/README.md § The full-song capture sweep + ../capture-timer/.
+# target (fluncle-hermes-operator skill). This pair is BAKED into the image at
+# /opt/hermes-scripts/ and auto-updates from main via the hourly pin-watch rebuild; a rave-02
+# HOST systemd timer docker-execs it — no docker cp. See ../cron/README.md § The full-song
+# capture sweep + ../capture-timer/.
 #
 # WHAT IT DOES: for each finding still needing a capture (newest-first, backoff-aware),
 # downloads the full song ONCE via yt-dlp through a residential proxy on a per-track STICKY
@@ -22,7 +24,7 @@
 # update_track op. A NON-BLOCKING side-channel: it never gates the enrich/embed queues.
 #
 # PRODUCTION PRE-REQS (see ../capture-timer/README.md for the full runbook):
-#   - yt-dlp at /opt/data/scripts/yt-dlp (on this wrapper's PATH) + ffprobe in the image — box deploy prereqs (see capture-timer/README).
+#   - yt-dlp BAKED PINNED at /opt/hermes-scripts/yt-dlp (on this wrapper's PATH) + ffprobe in the image — both ride the image (see capture-timer/README).
 #   - Secrets in the shared 0600 ${HOME}/.fluncle-secrets.env (op-injected by
 #     fluncle-secrets-sync), sourced below:
 #       FLUNCLE_API_TOKEN — the box's AGENT-scoped token (the update_track write-back).
@@ -35,11 +37,12 @@
 #         FLUNCLE_CAPTURE_BATCH_CAP (4) / _QUEUE_LIMIT (8) / _TOLERANCE_SEC (3) / _TOLERANCE_PCT (0.03).
 #   - The private bucket must exist (operator step; done 2026-07-07).
 #
-# Operator install (host timer — full runbook in ../capture-timer/README.md): docker cp
-# this pair into /opt/data/scripts/, then install fluncle-capture.{service,timer} into
-# /etc/systemd/system/ + `systemctl enable --now fluncle-capture.timer`. The job needs the
-# AGENT token but no operator token — it only writes analysis fields. Smoke-test as the
-# cron user: `docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/data/scripts/capture-sweep.sh`.
+# Operator install (host timer — full runbook in ../capture-timer/README.md): the sweep + the
+# pinned yt-dlp bake to /opt/hermes-scripts/ (auto-update from main via pin-watch — no docker
+# cp); install fluncle-capture.{service,timer} into /etc/systemd/system/ + `systemctl enable
+# --now fluncle-capture.timer`. The job needs the AGENT token but no operator token — it only
+# writes analysis fields. Smoke-test as the cron user:
+# `docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/capture-sweep.sh`.
 set -euo pipefail
 
 # The runner / docker-exec hands this a minimal PATH, so a bare `bun`/`yt-dlp`/`ffprobe`

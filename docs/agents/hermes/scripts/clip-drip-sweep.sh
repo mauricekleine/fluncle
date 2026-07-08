@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 # clip-drip-sweep.sh — the `--no-agent` clip drip-feed cron's job ENTRY.
 #
-# LIVE. Version-controlled source; the repo is canonical and the box is a deploy
-# target (fluncle-hermes-operator skill). This script deploys to ~/.hermes/scripts/ on
-# the devbox and the cron is wired there. See ../cron/README.md.
+# HELD (un-deployed). Version-controlled source; the repo is canonical and the box is a
+# deploy target (fluncle-hermes-operator skill). This script is deliberately NOT baked — the
+# Dockerfile drops it from /opt/hermes-scripts/ (the clip drip-feed is a held cron); when it
+# ships it follows the baked model like the other sweeps (baked at /opt/hermes-scripts/,
+# auto-updated from main via pin-watch, docker-exec'd by a host timer — no docker cp). See
+# ../cron/README.md.
 #
 # WHAT IT DOES: one bounded, idempotent tick of the Instagram clip drip-feed. Every clip
 # auto-enters a schedule (clip-drip-feed RFC §3); this cron fires the due, cut ones to

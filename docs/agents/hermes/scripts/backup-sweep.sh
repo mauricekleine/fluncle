@@ -2,8 +2,9 @@
 # backup-sweep.sh — the `--no-agent` database-backup cron's job ENTRY (`fluncle-backup`).
 #
 # LIVE. Version-controlled source; the repo is canonical and the box is a deploy
-# target (fluncle-hermes-operator skill). This pair deploys to ~/.hermes/scripts/ on
-# the devbox and the cron is wired there. See ../cron/README.md § The database-backup cron.
+# target (fluncle-hermes-operator skill). This pair is BAKED into the image at
+# /opt/hermes-scripts/ and auto-updates from main via pin-watch; a rave-02 HOST systemd
+# timer docker-execs it — no docker cp. See ../cron/README.md § The database-backup cron.
 #
 # Why a .sh that execs a .ts: the Hermes `--no-agent --script` runner dispatches by
 # extension — bash for `.sh`/`.bash`, Python for everything else — so a bare `.ts` would

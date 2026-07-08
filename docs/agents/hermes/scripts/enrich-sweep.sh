@@ -2,8 +2,9 @@
 # enrich-sweep.sh — the `--no-agent` enrichment cron's job ENTRY.
 #
 # LIVE. Version-controlled source; the repo is canonical and the box is a deploy
-# target (fluncle-hermes-operator skill). This pair is deployed to ~/.hermes/scripts/
-# on the devbox and the cron is wired there. The Worker-side enrichment trigger is
+# target (fluncle-hermes-operator skill). This pair is BAKED into the image at
+# /opt/hermes-scripts/ and auto-updates from main via pin-watch; a rave-02 HOST systemd
+# timer docker-execs it — no docker cp. The Worker-side enrichment trigger is
 # removed — this is the only enrichment path. See ../cron/README.md.
 #
 # Why a .sh that execs a .ts: the Hermes `--no-agent --script` runner dispatches by

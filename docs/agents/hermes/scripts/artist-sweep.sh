@@ -2,8 +2,9 @@
 # artist-sweep.sh — the `--no-agent` artist-resolution cron's job ENTRY.
 #
 # LIVE. Version-controlled source; the repo is canonical and the box is a
-# deploy target (fluncle-hermes-operator skill). This pair deploys to
-# ~/.hermes/scripts/ on the devbox and the cron is wired there.
+# deploy target (fluncle-hermes-operator skill). This pair is BAKED into the image at
+# /opt/hermes-scripts/ and auto-updates from main via pin-watch; a rave-02 HOST systemd
+# timer docker-execs it — no docker cp.
 #
 # THE WORKER-PACED MODEL: the box holds NO FIRECRAWL_API_KEY and no YouTube
 # OAuth (the Worker does). So this driver just PACES the resolution endpoint —

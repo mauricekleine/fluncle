@@ -1,8 +1,8 @@
 # fluncle-healthcheck-timer — the prober on a host timer
 
-The rave-02 (Hermes box) host half of the `/status` health loop. `fluncle-healthcheck` is the prober behind Fluncle's public [`/status`](https://www.fluncle.com/status) dashboard: every ~10m it probes each service (web / R2 / DNS / the SSH app / the on-box automation crons / the scale-to-zero render box / Hermes itself), detects status transitions, Discord-pings only on a flip, and POSTs the snapshot to the agent-tier `record_health` op the page reads. This is what SCHEDULES it: a small host systemd timer on the rave-02 host that `docker exec`s the already-deployed probe script inside the `hermes` container every 10m.
+The rave-02 (Hermes box) host half of the `/status` health loop. `fluncle-healthcheck` is the prober behind Fluncle's public [`/status`](https://www.fluncle.com/status) dashboard: every ~10m it probes each service (web / R2 / DNS / the SSH app / the on-box automation crons / the scale-to-zero render box / Hermes itself), detects status transitions, Discord-pings only on a flip, and POSTs the snapshot to the agent-tier `record_health` op the page reads. This is what SCHEDULES it: a small host systemd timer on the rave-02 host that `docker exec`s the baked probe script inside the `hermes` container every 10m.
 
-The probe WORK is unchanged and still lives in the container — the `.sh`/`.ts` pair at `/opt/data/scripts/` (source: [`../scripts/fluncle-healthcheck.sh`](../scripts/fluncle-healthcheck.sh) → [`../scripts/fluncle-healthcheck.ts`](../scripts/fluncle-healthcheck.ts)). The host timer is only the trigger; there is no host-side wrapper script.
+The probe WORK is unchanged and BAKED into the image — the `.sh`/`.ts` pair at `/opt/hermes-scripts/` (source: [`../scripts/fluncle-healthcheck.sh`](../scripts/fluncle-healthcheck.sh) → [`../scripts/fluncle-healthcheck.ts`](../scripts/fluncle-healthcheck.ts)); it rides the image and auto-updates from `main` via the hourly pin-watch rebuild (Unit A) — no `docker cp`, no `/opt/data` copy. The host timer is only the trigger; there is no host-side wrapper script.
 
 ## Why it's a host timer, not a Hermes cron
 
@@ -12,7 +12,7 @@ Moving it to a **host** systemd timer decouples it: the host scheduler is never 
 
 ## What a run does
 
-Each tick is one `docker exec -e HOME=/opt/data/home hermes bash /opt/data/scripts/fluncle-healthcheck.sh`:
+Each tick is one `docker exec -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/fluncle-healthcheck.sh`:
 
 1. The container's `fluncle-healthcheck.sh` sources the `0600` `${HOME}/.healthcheck.env` (the probe targets + the Discord webhook) and execs the bun orchestrator.
 2. `fluncle-healthcheck.ts` probes each service in parallel (each with a short 3–5s timeout), diffs every status against `${HOME}/.healthcheck/state.json`, Discord-pings only on a flip to `down` or a recovery, and POSTs the snapshot to the agent-tier `record_health` op that `/status` reads.
@@ -22,7 +22,7 @@ A clean tick runs ~5s, well inside the unit's `TimeoutStartSec=120` (which match
 
 ## Deploy (on rave-02, one time)
 
-The probe script is already deployed at `/opt/data/scripts/` (it shipped with the Hermes container) — **no script redeploy is needed**. This is only the host-timer install plus retiring the old gateway cron.
+The probe script is BAKED into the image at `/opt/hermes-scripts/` (it rides the image and auto-updates from `main` via pin-watch — no `docker cp`), so **no script redeploy is needed**. This is only the host-timer install plus retiring the old gateway cron.
 
 ```bash
 # 1. Install the host units.
