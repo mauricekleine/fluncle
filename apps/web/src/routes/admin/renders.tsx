@@ -186,7 +186,7 @@ function RendersPage() {
   const subtitle = `${data.queueTotal} awaiting · ${data.shipped.length} recent`;
 
   return (
-    <AdminShell current="renders" subtitle={subtitle} title="Renders">
+    <AdminShell subtitle={subtitle} title="Renders">
       <div className="space-y-8 p-4 sm:p-5">
         <BoxState box={data.box} now={data.now} />
 

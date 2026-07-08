@@ -99,7 +99,6 @@ function RecordingsPage() {
 
   return (
     <AdminShell
-      current="recordings"
       headerActions={
         <UploadRecordingDialog
           onUploaded={() =>

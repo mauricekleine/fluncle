@@ -850,12 +850,7 @@ function AdminBoardPage() {
   );
 
   return (
-    <AdminShell
-      current="findings"
-      headerActions={headerActions}
-      subheader={subheader}
-      title="Findings"
-    >
+    <AdminShell headerActions={headerActions} subheader={subheader} title="Findings">
       {rows.length === 0 ? (
         <Empty>
           <EmptyHeader>

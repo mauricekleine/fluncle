@@ -661,7 +661,7 @@ function AdminQueuePage() {
     ) : undefined;
 
   return (
-    <AdminShell current="dashboard" subheader={subheader} subtitle={subtitle} title="Dashboard">
+    <AdminShell subheader={subheader} subtitle={subtitle} title="Dashboard">
       {showZero ? (
         <ZeroState coverUrl={zeroCover} />
       ) : (

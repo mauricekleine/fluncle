@@ -60,7 +60,6 @@ function MixtapesPage() {
 
   return (
     <AdminShell
-      current="mixtapes"
       subtitle={`${mixtapes.length} ${mixtapes.length === 1 ? "mixtape" : "mixtapes"}`}
       title="Mixtapes"
     >

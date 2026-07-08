@@ -248,7 +248,6 @@ function CostsPage() {
 
   return (
     <AdminShell
-      current="costs"
       headerActions={
         <Button onClick={openNew} size="sm">
           <PlusIcon aria-hidden="true" />

@@ -98,7 +98,6 @@ function AdminNewsletterPage() {
 
   return (
     <AdminShell
-      current="newsletter"
       subtitle={
         editions.length === 0
           ? undefined

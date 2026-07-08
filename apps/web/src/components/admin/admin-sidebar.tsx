@@ -178,6 +178,37 @@ const SYSTEM_ENTRY: NavEntry = {
   to: "/status",
 };
 
+// Every entry, flat — the lookup table behind navKeyForPath.
+const ALL_ENTRIES: NavEntry[] = [
+  HOME_ENTRY,
+  ...OBJECT_SECTIONS.flatMap((section) => section.entries),
+  SYSTEM_ENTRY,
+];
+
+// Which nav entry a pathname belongs to. The shell is mounted ONCE in the /admin
+// layout now (route.tsx), above the Outlet, so it can't be told the active entry
+// by each page — it resolves it from the URL instead. The Studio has no entry of
+// its own; it's opened from a Recordings row and lights Recordings (the comment
+// above). Exact match wins first so "/admin" → dashboard never swallows a deeper
+// path; otherwise the longest `to` that prefixes the path lights its entry, so a
+// future nested station lights its parent.
+export function navKeyForPath(pathname: string): AdminNavCurrent {
+  if (pathname === "/admin/studio" || pathname.startsWith("/admin/studio/")) {
+    return "recordings";
+  }
+
+  const exact = ALL_ENTRIES.find((entry) => entry.to === pathname);
+  if (exact) {
+    return exact.key;
+  }
+
+  const prefixed = ALL_ENTRIES.filter(
+    (entry) => entry.to !== "/admin" && pathname.startsWith(`${entry.to}/`),
+  ).sort((a, b) => b.to.length - a.to.length)[0];
+
+  return prefixed?.key ?? "dashboard";
+}
+
 // The two live counts with a cheap, honest server read TODAY (one scoped COUNT
 // each): the tagging backlog (the operator's one manual gate — the board's
 // "Needs tagging" worklist) and the render backlog (enriched findings still

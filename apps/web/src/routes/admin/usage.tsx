@@ -93,7 +93,7 @@ function UsagePage() {
   const subtitle = `${formatUsd(data.totals.cashUsd)} cash · last ${data.windowDays}d`;
 
   return (
-    <AdminShell current="usage" subtitle={subtitle} title="Usage & cost">
+    <AdminShell subtitle={subtitle} title="Usage & cost">
       <div className="space-y-8 p-4 sm:p-5">
         <TotalsRow totals={data.totals} windowDays={data.windowDays} />
         <StepSection steps={data.steps} />

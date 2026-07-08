@@ -1,6 +1,6 @@
 # The admin shell
 
-The contract for every `/admin` surface. `AdminShell` (`apps/web/src/components/admin/admin-shell.tsx`) is the one workspace chrome: the sidebar (`admin-sidebar.tsx`, the only navigation surface) plus a full-viewport content plate with a fixed header grammar. Every guarded admin page composes it; login stays a bare centered card outside it.
+The contract for every `/admin` surface. The workspace chrome splits across two levels so it stays mounted as the operator moves between stations. The **persistent shell** — the sidebar (`admin-sidebar.tsx`, the only navigation surface, with its live count query) and the full-viewport content plate (the translucent glass pane over the cosmos) — is mounted **once** in the `/admin` layout route (`apps/web/src/routes/admin/route.tsx`), wrapping the `Outlet`. It never re-mounts on navigation, so the sidebar's count badges never blink out and refetch and the plate's backdrop-blur never re-composites (no background flash). Each guarded page renders only its **header + body** through `AdminShell` (`apps/web/src/components/admin/admin-shell.tsx`) — the fixed header grammar (sidebar trigger, title + optional subtitle, the `headerActions` slot) plus an optional `subheader` and the page body. Login stays a bare centered card outside the shell (the layout bypasses it by path). The layout also owns the two cross-page structural bits the page can't set on a shared frame: it lights the active sidebar entry from the URL (`navKeyForPath`), and it switches the one viewport-height, self-scrolling station (the Studio) into fill mode by path.
 
 ## The placement contract
 
@@ -10,7 +10,7 @@ One home per kind of control. Put each control in its slot and nowhere else.
 - **Row actions** live inline on the row, right-aligned.
 - **Bulk actions** live in a selection bar that appears with the selection and names its scope (`3 selected`).
 - **Destructive actions** sit behind a confirm (`AlertDialog` from `@fluncle/ui`) that names the object it destroys.
-- **A new page** gets exactly one sidebar entry, placed with its object group in `admin-sidebar.tsx`. The page declares that entry as its `current` owner key.
+- **A new page** gets exactly one sidebar entry, placed with its object group in `admin-sidebar.tsx`, and its route registered in `navKeyForPath` so the persistent sidebar lights the right entry from the URL (a page with no entry of its own — the Studio — maps to its parent object's entry).
 - **Filters and view state** live in the `subheader` strip and deep-link through search params, so every view survives reload and pasteable URLs stay the operator's bookmarks.
 - **Per-operator display preferences** live behind the sidebar's Display settings cog.
 

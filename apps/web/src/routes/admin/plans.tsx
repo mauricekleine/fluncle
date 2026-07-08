@@ -242,7 +242,6 @@ function AdminPlansPage() {
 
   return (
     <AdminShell
-      current="plans"
       headerActions={
         <Button disabled={creating} onClick={() => void createPlan()} size="sm">
           {creating ? (

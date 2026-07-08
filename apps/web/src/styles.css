@@ -2889,9 +2889,12 @@ body::before {
 /* The admin wordmark — the sidebar's nameplate, the brand mark at instrument
    size (Oxanium caps like the home nameplate, dialled down to a label; The One
    Voice Rule: Oxanium speaks only for the brand). */
+/* No `display` here: this is an unlayered rule, so a `display` set here would beat
+   the layered Tailwind `group-data-[collapsible=icon]:hidden` on the span and the
+   wordmark could never collapse. Left to Tailwind, it hides cleanly on the icon
+   rail (leaving just the brand chip) and shows in the expanded flex row. */
 .admin-wordmark {
   color: var(--starlight-cream);
-  display: block;
   font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
   font-size: 0.82rem;
   font-weight: 800;

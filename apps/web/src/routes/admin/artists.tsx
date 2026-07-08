@@ -319,7 +319,6 @@ function AdminArtistsPage() {
 
   return (
     <AdminShell
-      current="artists"
       subtitle={
         isLoading
           ? "Loading artists…"
