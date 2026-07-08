@@ -57,6 +57,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { type BoxCostEvent, emitCost, parseAuthoringSpend } from "./cost-emit";
 
 // ---------------------------------------------------------------------------
 // Config
@@ -110,7 +111,19 @@ type Mixtape = {
   note?: string;
 };
 
-type ClaudeEnvelope = { is_error?: boolean; result?: string; subtype?: string };
+// The `claude -p --output-format json` envelope. `usage` / `total_cost_usd` /
+// `modelUsage` carry the authoring spend — read after the parse and emitted as one
+// `subsidized` anthropic row (COST-01 §5), zero new claude flags.
+type ClaudeUsage = { input_tokens?: number; output_tokens?: number };
+
+type ClaudeEnvelope = {
+  is_error?: boolean;
+  modelUsage?: Record<string, unknown>;
+  result?: string;
+  subtype?: string;
+  total_cost_usd?: number;
+  usage?: ClaudeUsage;
+};
 
 // The authored payload claude returns: a subject + the content shape the renders read.
 type AuthoredContent = {
@@ -120,6 +133,16 @@ type AuthoredContent = {
   tidbits?: Array<{ source?: string; text?: string }>;
 };
 type Authored = { content?: AuthoredContent; subject?: string };
+
+// The authored edition plus its MEASURED authoring spend (the COST-01 §5 `newsletter`
+// row): the total_cost_usd the CLI computed, the model, and the token count. `usd` is
+// null only if the envelope carried no `total_cost_usd` (then the row is unpriced,
+// never $0). The newsletter is a non-finding, so its ledger row is `global`-scoped.
+type AuthoredEdition = Authored & {
+  model: string;
+  tokens: number;
+  usd: number | null;
+};
 
 class ClaudeAuthError extends Error {}
 
@@ -337,7 +360,11 @@ function extractJson(result: string): string {
   return start >= 0 && end > start ? body.slice(start, end + 1) : body;
 }
 
-function countFindings(content: AuthoredContent): number {
+// Counts the findings across all galaxy blocks. Typed to only what it reads (each
+// block's `findings` length) so it accepts BOTH the authored `AuthoredContent` and the
+// stored `Edition.content` (whose `findings` are `unknown[]`) — the miss-recovery path
+// counts a persisted draft, the author path counts a fresh one.
+function countFindings(content: { galaxies?: Array<{ findings?: unknown[] }> }): number {
   return (content.galaxies ?? []).reduce((sum, block) => sum + (block.findings?.length ?? 0), 0);
 }
 
@@ -347,7 +374,7 @@ function countFindings(content: AuthoredContent): number {
  * or a result that fails validation (so we never persist junk); returns {subject,
  * content} on success.
  */
-function authorEdition(findings: Finding[], mixtapes: Mixtape[]): Authored | null {
+function authorEdition(findings: Finding[], mixtapes: Mixtape[]): AuthoredEdition | null {
   const prompt = buildAuthoringPrompt(findings, mixtapes);
   // READ-ONLY tools so the authoring loads + applies the baked `copywriting-fluncle`
   // skill (the canonical voice — never inlined/forked). The skill read pushes a run to
@@ -432,7 +459,10 @@ function authorEdition(findings: Finding[], mixtapes: Mixtape[]): Authored | nul
     return null;
   }
 
-  return { content, subject };
+  // The measured authoring spend (shared parse — the CLI's own total_cost_usd is
+  // authoritative, the token count is the informational quantity, the model comes off
+  // modelUsage else the one we asked for).
+  return { content, subject, ...parseAuthoringSpend(envelope, NEWSLETTER_CLAUDE_MODEL) };
 }
 
 // ---------------------------------------------------------------------------
@@ -556,7 +586,7 @@ function deliverOffer(line: string): void {
 // Main
 // ---------------------------------------------------------------------------
 
-function main(): void {
+async function main(): Promise<void> {
   const nowIso = new Date().toISOString();
   const editions = listEditions();
 
@@ -594,7 +624,7 @@ function main(): void {
   }
 
   // 5. AUTHOR (the one agentic step)
-  let authored: Authored | null;
+  let authored: AuthoredEdition | null;
 
   try {
     authored = authorEdition(findings, mixtapes);
@@ -646,6 +676,29 @@ function main(): void {
   const offer = offerLine(authored.subject, id, finds, mixes);
   console.log(offer);
   deliverOffer(offer);
+
+  // 8. COST — record the one authoring spend, best-effort, only now that the draft is
+  // durable. The newsletter is a non-finding, so the row is `global`-scoped (logId +
+  // trackId null); occurredAt is the window's `until` (this run). Cannot throw; a hard
+  // 2.5s cap keeps it well inside the runner budget. A dropped POST only understates.
+  const cost: BoxCostEvent = {
+    costBasis: "subsidized",
+    logId: null,
+    model: authored.model,
+    occurredAt: nowIso,
+    quantity: authored.tokens,
+    source: "measured",
+    step: "newsletter",
+    trackId: null,
+    unitType: "tokens",
+    usd: authored.usd,
+    vendor: "anthropic",
+  };
+  await emitCost([cost]);
 }
 
-main();
+main().catch((error) => {
+  log(`fatal: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`);
+  console.error(JSON.stringify({ ok: false, reason: "sweep_error" }));
+  process.exit(1);
+});

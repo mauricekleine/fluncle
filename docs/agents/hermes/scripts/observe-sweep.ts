@@ -47,6 +47,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { type BoxCostEvent, emitCost, parseAuthoringSpend } from "./cost-emit";
 
 // ---------------------------------------------------------------------------
 // Config — a SMALL bounded batch: each observation burns Cartesia credits AND
@@ -100,14 +101,35 @@ type Finding = {
 type TrackGetResponse = { mixtape?: unknown; track?: Finding };
 
 // The `claude -p --output-format json` envelope. We take `.result` as the script;
-// `is_error`/`subtype` distinguish a clean run from an error.
+// `is_error`/`subtype` distinguish a clean run from an error. `usage` /
+// `total_cost_usd` / `modelUsage` carry the authoring spend — read after the parse
+// and emitted as one `subsidized` anthropic row (COST-01 §5), zero new claude flags.
+type ClaudeUsage = {
+  input_tokens?: number;
+  output_tokens?: number;
+};
+
 type ClaudeEnvelope = {
   is_error?: boolean;
+  modelUsage?: Record<string, unknown>;
   result?: string;
   subtype?: string;
+  total_cost_usd?: number;
+  usage?: ClaudeUsage;
 };
 
 type Outcome = "rendered" | "gateSkipped" | "skipped";
+
+// The authored script plus its MEASURED authoring spend (the COST-01 §5 `observe`
+// row): the total_cost_usd the CLI computed, the model, and the token count. `usd` is
+// null only if the envelope carried no `total_cost_usd` (then the row is unpriced,
+// never $0).
+type AuthoredScript = {
+  model: string;
+  script: string;
+  tokens: number;
+  usd: number | null;
+};
 
 // A narrow sentinel the loop throws to abort the batch on a claude auth failure.
 class ClaudeAuthError extends Error {}
@@ -247,7 +269,7 @@ function buildAuthoringPrompt(finding: Finding, contextNote: string): string {
 // other failure (leave the finding queued); returns the script string on success.
 // ---------------------------------------------------------------------------
 
-function authorScript(finding: Finding, contextNote: string): string | null {
+function authorScript(finding: Finding, contextNote: string): AuthoredScript | null {
   const prompt = buildAuthoringPrompt(finding, contextNote);
   const args = [
     "-p",
@@ -311,7 +333,10 @@ function authorScript(finding: Finding, contextNote: string): string | null {
     return null;
   }
 
-  return script;
+  // The measured authoring spend (shared parse — the CLI's own total_cost_usd is
+  // authoritative, the token count is the informational quantity, the model comes off
+  // modelUsage else the one we asked for).
+  return { script, ...parseAuthoringSpend(envelope, OBSERVE_CLAUDE_MODEL) };
 }
 
 // ---------------------------------------------------------------------------
@@ -395,13 +420,17 @@ function readContextNote(id: string): string {
 // Per-finding: gather → author → deliver.
 // ---------------------------------------------------------------------------
 
-function observeOne(queued: QueueFinding): Outcome {
+// The outcome plus the cost row to emit — non-null ONLY when an observation was
+// actually authored AND rendered (so a gate-skip / failure never records spend).
+type ObserveResult = { cost: BoxCostEvent | null; outcome: Outcome };
+
+function observeOne(queued: QueueFinding): ObserveResult {
   const id = queued.trackId ?? queued.logId;
 
   if (!id) {
     log("queue item without a trackId/logId — skipping");
 
-    return "skipped";
+    return { cost: null, outcome: "skipped" };
   }
 
   // (a) Gather the finding's identity metadata. `track get` is the SINGULAR public
@@ -413,7 +442,7 @@ function observeOne(queued: QueueFinding): Outcome {
   if (!finding || !finding.title || !finding.artists?.length) {
     log(`${id}: missing finding metadata — skipping`);
 
-    return "skipped";
+    return { cost: null, outcome: "skipped" };
   }
 
   // (b) Read the stored context note — the PRIMARY authoring fuel (the firecrawl
@@ -422,14 +451,37 @@ function observeOne(queued: QueueFinding): Outcome {
 
   // (c) Author the script (the one agentic step). Throws ClaudeAuthError to abort
   // the whole batch; returns null to leave THIS finding queued.
-  const script = authorScript(finding, contextNote);
+  const authored = authorScript(finding, contextNote);
 
-  if (!script) {
-    return "skipped";
+  if (!authored) {
+    return { cost: null, outcome: "skipped" };
   }
 
-  // (c) Deliver: the CLI posts it; the Worker re-scans + renders + stores.
-  return deliverScript(id, script);
+  // (d) Deliver: the CLI posts it; the Worker re-scans + renders + stores.
+  const outcome = deliverScript(id, authored.script);
+
+  // (e) Record the authoring spend ONLY when the observation actually rendered. A
+  // gate-skip / failure spent the tokens too, but attributing an "observe" cost to a
+  // finding with no observation would misread — the ledger tracks DELIVERED work. The
+  // token spend on a rejected author is accepted lossiness.
+  const cost: BoxCostEvent | null =
+    outcome === "rendered"
+      ? {
+          costBasis: "subsidized",
+          logId: finding.logId ?? null,
+          model: authored.model,
+          occurredAt: new Date().toISOString(),
+          quantity: authored.tokens,
+          source: "measured",
+          step: "observe",
+          trackId: finding.trackId ?? null,
+          unitType: "tokens",
+          usd: authored.usd,
+          vendor: "anthropic",
+        }
+      : null;
+
+  return { cost, outcome };
 }
 
 // ---------------------------------------------------------------------------
@@ -475,7 +527,7 @@ function pingClaudeAuthFailure(detail: string): void {
 // Main — drain a bounded batch off the observe queue.
 // ---------------------------------------------------------------------------
 
-function main(): void {
+async function main(): Promise<void> {
   // `observe --queue --json` returns `{ ok: true, tracks: [...] }`, not a bare array.
   const response = fluncleJson<{ tracks?: QueueFinding[] }>([
     "admin",
@@ -495,9 +547,17 @@ function main(): void {
     return; // fast no-op
   }
 
+  // The tick's authoring-spend rows, POSTed once at the end (best-effort, after the
+  // observations are already durable — a dropped POST only understates the ledger).
+  const costs: BoxCostEvent[] = [];
+
   for (const queued of queue.slice(0, BATCH_CAP)) {
     try {
-      const outcome = observeOne(queued);
+      const { cost, outcome } = observeOne(queued);
+
+      if (cost) {
+        costs.push(cost);
+      }
 
       if (outcome === "rendered") {
         summary.rendered += 1;
@@ -538,6 +598,15 @@ function main(): void {
   summary.queueRemaining = Math.max(0, queue.length - summary.rendered);
 
   console.log(JSON.stringify({ ok: true, ...summary }));
+
+  // Record the tick's authoring spend, best-effort, AFTER the summary is printed (the
+  // cron parses the summary as its last stdout line; emitCost only logs to stderr).
+  // Cannot throw; a hard 2.5s cap keeps it well inside the runner budget.
+  await emitCost(costs);
 }
 
-main();
+main().catch((error) => {
+  log(`fatal: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`);
+  console.log(JSON.stringify({ ok: false, reason: "sweep_error" }));
+  process.exit(1);
+});
