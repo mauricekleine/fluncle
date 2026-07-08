@@ -130,10 +130,10 @@ function artistVoiceFrame(count: number): string {
   }
 
   if (count === 1) {
-    return "I've logged one of theirs so far. Here it is.";
+    return "I've found just one of their tunes so far. Play it loud.";
   }
 
-  return `I've logged ${count} of theirs. Here's the map.`;
+  return `I've found ${count} of their tunes so far. Have a dig.`;
 }
 
 function artistHead(loaderData: ArtistPageData | undefined) {
