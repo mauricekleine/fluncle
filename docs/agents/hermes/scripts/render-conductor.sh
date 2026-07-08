@@ -63,10 +63,11 @@ fi
 # --- state (persisted in the mounted, hermes-writable ~/.hermes) ---
 STATE_DIR="${STATE_DIR:-${HOME:-/opt/data/home}/.render-conductor}"
 mkdir -p "$STATE_DIR"
-STATE_FILE="$STATE_DIR/state"        # "idle" | "rendering"
-BOXID_FILE="$STATE_DIR/box-id"       # the current/last box.ascii id
-STARTED_FILE="$STATE_DIR/started-at" # epoch of the last render START
-LOCK_DIR="$STATE_DIR/lock.d"         # atomic-mkdir single-flight lock
+STATE_FILE="$STATE_DIR/state"          # "idle" | "rendering"
+BOXID_FILE="$STATE_DIR/box-id"         # the current/last box.ascii id
+STARTED_FILE="$STATE_DIR/started-at"   # epoch of the last render START
+RENDER_LOGID_FILE="$STATE_DIR/render-logid" # logId of the in-flight render (its cost scope)
+LOCK_DIR="$STATE_DIR/lock.d"           # atomic-mkdir single-flight lock
 LOG_FILE="$STATE_DIR/conductor.log"
 # The box CLI keeps its auth under $HOME/.ascii; HOME is the mounted, persisted
 # /opt/data/home, so `box login` survives container restarts.
@@ -84,6 +85,37 @@ log() { printf '[%s] %s\n' "$(date -u +%FT%TZ)" "$*" >>"$LOG_FILE" 2>/dev/null |
 emit() { printf '%s\n' "$*"; } # the cron run summary lands on stdout
 now() { date +%s; }
 read_or() { cat "$1" 2>/dev/null || printf '%s' "$2"; }
+
+# Best-effort self-seconds cost emit for a finished render (COST-01 Path B — the bash
+# variant of cost-emit.ts, which the box can't import). Mirrors, inline, the two things
+# that live in the workspace: the deterministic id scheme
+# (${step}:${scope}:${vendor}:${unitType}:${occurredAt}, scope = the rendered logId) and
+# the CostEventInput shape POSTed to /api/admin/costs/events with the agent bearer. The
+# render is `video` · `self` · `seconds` · `subsidized` (rave-03 is flat-tier) ·
+# `measured` (the render's own DURATION). Guards every input and NEVER fails the tick —
+# a dropped emit only understates the ledger.
+#   $1 logId · $2 occurredAt (ISO) · $3 seconds
+emit_render_cost() {
+  local log_id="$1" occurred_at="$2" seconds="$3" id body http
+  if [ -z "${FLUNCLE_API_TOKEN:-}" ] || [ -z "$log_id" ]; then
+    log "cost: skipping render emit (no token or logId)"
+    return 0
+  fi
+  case "$seconds" in '' | *[!0-9]*) log "cost: no numeric DURATION on the marker — skipping emit"; return 0 ;; esac
+  case "$occurred_at" in 20[0-9][0-9]-[0-1][0-9]-[0-3][0-9]T*) : ;; *) log "cost: marker had no ISO timestamp — skipping emit"; return 0 ;; esac
+  id="video:${log_id}:self:seconds:${occurred_at}"
+  body="$(printf '[{"id":"%s","costBasis":"subsidized","logId":"%s","occurredAt":"%s","quantity":%s,"source":"measured","step":"video","unitType":"seconds","vendor":"self"}]' \
+    "$id" "$log_id" "$occurred_at" "$seconds")"
+  http="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
+    -X POST "${API_URL}/api/admin/costs/events" \
+    -H "Authorization: Bearer ${FLUNCLE_API_TOKEN}" \
+    -H "Content-Type: application/json" \
+    -d "$body" 2>>"$LOG_FILE" || printf '000')"
+  case "$http" in
+    2*) log "cost: render self-seconds emitted (${seconds}s, $log_id, HTTP $http)" ;;
+    *) log "cost: render emit HTTP $http (best-effort, ignored)" ;;
+  esac
+}
 
 # Freshen a RESUMED snapshot's stale checkout to current `main`. The render box is
 # scale-to-zero (asleep but for a render), so it can't watch `main` itself like the
@@ -189,6 +221,13 @@ if [ "$state" = "rendering" ]; then
     state=idle
     log "render finished ($result) — box $boxid parked; chaining to the next pick"
     emit "render-conductor: render finished ($result), box parked"
+
+    # Record the render's self-seconds compute (COST-01): DURATION= is the render's own
+    # wall-clock (one box clock), @ <iso> its finish time, attributed to the logId we
+    # stamped at start. Parse with pure expansions; emit_render_cost guards every field.
+    render_iso="${result#*@ }"
+    render_iso="${render_iso%% *}"
+    emit_render_cost "$(read_or "$RENDER_LOGID_FILE" '')" "$render_iso" "${result##*DURATION=}"
     # Chain: fall out of the rendering block to the idle pick in THIS tick — a
     # finished render must not cost a dead hour. The hourly START gate below
     # still holds (the last start is over an hour old once a render finishes).
@@ -290,6 +329,7 @@ rm -f "$creds"
 "$BOX_BIN" ssh "$boxid" 'bash ~/render-detached.sh' >/dev/null 2>&1
 printf 'rendering' >"$STATE_FILE"
 now >"$STARTED_FILE"
+printf '%s' "$head" >"$RENDER_LOGID_FILE" # the finding this render is spending on (cost scope)
 log "started detached render of $head on box $boxid"
 emit "render-conductor: started render of $head on $boxid"
 exit 0
