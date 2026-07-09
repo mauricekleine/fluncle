@@ -67,6 +67,9 @@ export type ExplainerManifest = {
    *  (whisper or hand-authored). When set, it drives one absolute-timed caption
    *  track for the entire video and the per-chapter inline captions are ignored. */
   captionsSrt?: string;
+  /** Burn the "screen capture → …" hint onto placeholder surfaces. Off by default;
+   *  flip on for a capture-planning render that lists what footage each beat needs. */
+  showCaptureHints?: boolean;
 };
 
 export type ExplainerProps = {

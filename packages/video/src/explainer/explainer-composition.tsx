@@ -7,6 +7,7 @@ import { AbsoluteFill, Sequence, useCurrentFrame, useVideoConfig } from "remotio
 import { type CalculateMetadataFunction } from "remotion";
 
 import { srtToCaptionLines } from "./captions";
+import { ExplainerContext } from "./explainer-context";
 import { captionReserveRight, CARD_MS, FPS, msToFrames, TRANSITION_MS } from "./theme";
 import {
   Captions,
@@ -101,31 +102,33 @@ export const ExplainerComposition: React.FC<ExplainerProps> = ({ manifest }) => 
   });
 
   return (
-    <Frame>
-      {scenes.map(({ chapter, durationInFrames, from }) => (
-        <Sequence
-          durationInFrames={durationInFrames}
-          from={from}
-          key={chapter.id}
-          name={chapter.title}
-        >
-          <ChapterScene chapter={chapter} showCaptions={globalCaptions === undefined} />
-        </Sequence>
-      ))}
-      {scenes.slice(1).map(({ from }, index) => (
-        <Sequence
-          durationInFrames={transFrames}
-          from={Math.max(0, from - Math.round(transFrames / 2))}
-          key={`seam-${index}`}
-          name="seam"
-        >
-          <SmearTransition seed={index + 1} />
-        </Sequence>
-      ))}
-      {globalCaptions !== undefined ? (
-        <GlobalCaptions lines={globalCaptions} scenes={scenes} />
-      ) : null}
-    </Frame>
+    <ExplainerContext.Provider value={{ showCaptureHints: manifest.showCaptureHints === true }}>
+      <Frame>
+        {scenes.map(({ chapter, durationInFrames, from }) => (
+          <Sequence
+            durationInFrames={durationInFrames}
+            from={from}
+            key={chapter.id}
+            name={chapter.title}
+          >
+            <ChapterScene chapter={chapter} showCaptions={globalCaptions === undefined} />
+          </Sequence>
+        ))}
+        {scenes.slice(1).map(({ from }, index) => (
+          <Sequence
+            durationInFrames={transFrames}
+            from={Math.max(0, from - Math.round(transFrames / 2))}
+            key={`seam-${index}`}
+            name="seam"
+          >
+            <SmearTransition seed={index + 1} />
+          </Sequence>
+        ))}
+        {globalCaptions !== undefined ? (
+          <GlobalCaptions lines={globalCaptions} scenes={scenes} />
+        ) : null}
+      </Frame>
+    </ExplainerContext.Provider>
   );
 };
 

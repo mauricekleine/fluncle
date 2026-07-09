@@ -3,6 +3,7 @@
 // Nostalgic Cosmos, so the FORMAT is legible before any real footage exists.
 // Everything here is deterministic (random(seed), never Math.random).
 
+import { useContext } from "react";
 import {
   AbsoluteFill,
   OffthreadVideo,
@@ -12,6 +13,7 @@ import {
   useVideoConfig,
 } from "remotion";
 
+import { ExplainerContext } from "./explainer-context";
 import { FACTORY_CLIPS } from "./factory-clips";
 import { c, font, SAFE } from "./theme";
 import { type MockSurface } from "./types";
@@ -560,6 +562,7 @@ export const MockSurfacePanel: React.FC<{ kind: MockSurface; label?: string }> =
   kind,
   label,
 }) => {
+  const { showCaptureHints } = useContext(ExplainerContext);
   if (kind === "face") {
     return <Face />;
   }
@@ -590,9 +593,9 @@ export const MockSurfacePanel: React.FC<{ kind: MockSurface; label?: string }> =
   return (
     <AbsoluteFill style={{ background: c.deepField }}>
       {inner}
-      {/* Build-time hint naming the real capture that lands here; parked top-right,
-          the one corner free of the tag (top-left), caption (bottom) and PiP cam. */}
-      {label !== undefined ? (
+      {/* Build-time hint naming the real capture that lands here; off by default,
+          parked top-right (the one corner free of the tag, caption and PiP cam). */}
+      {label !== undefined && showCaptureHints ? (
         <div
           style={{
             border: `1px dashed ${c.ruleDark}`,
