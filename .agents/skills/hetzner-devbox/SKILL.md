@@ -136,6 +136,20 @@ packages/skills/hetzner-devbox/scripts/deploy-ssh-app-service.sh
 
 The deploy script uploads the binary, writes `/etc/fluncle-ssh.env`, installs `/etc/systemd/system/fluncle-ssh.service`, reloads systemd, restarts `fluncle-ssh`, and prints service status. Remove local `apps/ssh/dist/` artifacts before committing; the repo ignores `apps/*/dist/`.
 
+`deploy-ssh-app-service.sh` is now the **bootstrap only** (first install / the service contract). Ongoing updates self-deploy — see below.
+
+### Self-deploy (fluncle-ssh-freshen)
+
+After bootstrap, the SSH terminal keeps itself current **credential-free** via `apps/ssh/deploy/fluncle-ssh-freshen` — a host systemd timer on rave-01 that watches `main` and, when a commit changes `apps/ssh`'s compiled sources (`*.go`, `go.mod`, `go.sum` — e.g. a `golang.org/x/crypto` CVE bump), rebuilds the binary **on the box**, pre-smokes it in isolation (boot on a throwaway port + a real SSH key-exchange), swaps it into `fluncle-ssh`, restarts, post-smokes, and auto-rolls-back on any failure. It only replaces the binary (the unit + `/etc/fluncle-ssh.env` are untouched) and reads nothing from `op`; the SSH sibling of the rave-02 [`pin-watch`](../../../docs/agents/hermes/pin-watch), beside the rave-01 [`watchdog`](../../../apps/ssh/watchdog) (which only observes — the two never fight). Full doctrine + the run flow: [`apps/ssh/deploy/README.md`](../../../apps/ssh/deploy/README.md).
+
+**One-time operator setup on rave-01** (irreducible steps — an agent cannot run these; they need the box):
+
+1. **Install the Go toolchain** (the one provisioning pre-req; rave-01 is otherwise toolchain-free). Match the `go` version in `apps/ssh/go.mod` — e.g. `sudo apt-get install -y golang-go`, or the official tarball to `/usr/local/go` with `/usr/local/go/bin` on `PATH` for the unit.
+2. **Drop the script** at its deployed path: `sudo install -D -m 0755 apps/ssh/deploy/fluncle-ssh-freshen.sh /opt/fluncle-ssh-freshen/fluncle-ssh-freshen.sh`.
+3. **(Optional) Place `/etc/fluncle/ssh-freshen.env`** (`0600`) with `DISCORD_ALERT_WEBHOOK` + `FLUNCLE_API_TOKEN` (the same agent-scoped pair the watchdog uses; values in the ops runbook note) for the Discord alert + the `self-deploy-ssh` `/status` row. Skip it and the self-deploy still runs, just without that visibility.
+4. **Pilot attended:** `sudo /opt/fluncle-ssh-freshen/fluncle-ssh-freshen.sh --force` (clears debt + validates the recipe end to end). `--dry-run` builds + pre-smokes without touching the live service.
+5. **Install + enable the timer:** `sudo install -m 0644 apps/ssh/deploy/fluncle-ssh-freshen.{service,timer} /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl enable --now fluncle-ssh-freshen.timer`.
+
 ### Optional GeoIP Country Codes
 
 `fluncle-ssh` can show deduplicated country codes for connected sessions when `FLUNCLE_GEOIP_DB` points at a MaxMind-compatible `.mmdb`. Unknown, private, local, or failed lookups render as `VOID`.

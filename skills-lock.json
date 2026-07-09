@@ -96,7 +96,7 @@
     "hetzner-devbox": {
       "source": "packages/skills/hetzner-devbox",
       "sourceType": "local",
-      "computedHash": "440c535abf505741746daa47472173d03669ed58cf610cc8fd7353a9a9c23f35"
+      "computedHash": "89565531f54e661b839d429b4c91f0a27b7f9726a419ad6d8cc652f525fddccc"
     },
     "postiz": {
       "source": "gitroomhq/postiz-agent",
