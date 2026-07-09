@@ -38,7 +38,8 @@ function mockFetch(routes: Array<{ match: string; body?: unknown; response?: Res
 }
 
 const MB_ARTIST_SEARCH = "musicbrainz.org/ws/2/artist?query=";
-const FIRECRAWL = "api.firecrawl.dev/v2/extract";
+const FIRECRAWL_SCRAPE = "api.firecrawl.dev/v2/scrape";
+const FIRECRAWL_SEARCH = "api.firecrawl.dev/v2/search";
 
 // ── classifyMbUrl ─────────────────────────────────────────────────────────────
 
@@ -187,6 +188,29 @@ describe("normalizeProfileUrl", () => {
     expect(await normalizeProfileUrl("homepage", "data:text/html,<script>1</script>")).toBeNull();
     expect(await normalizeProfileUrl("instagram", "javascript:alert(document.cookie)")).toBeNull();
   });
+
+  it("reduces a SoundCloud track deep-link to the profile root", async () => {
+    expect(await normalizeProfileUrl("soundcloud", "https://soundcloud.com/nutone/a-track")).toBe(
+      "https://soundcloud.com/nutone",
+    );
+    // A non-profile section (a track list) has no username → null.
+    expect(await normalizeProfileUrl("soundcloud", "https://soundcloud.com/tracks")).toBeNull();
+  });
+
+  it("reduces a Facebook post and a tweet to the profile root", async () => {
+    expect(
+      await normalizeProfileUrl("facebook", "https://www.facebook.com/dannutone/posts/123"),
+    ).toBe("https://www.facebook.com/dannutone");
+    expect(await normalizeProfileUrl("twitter", "https://twitter.com/nutone/status/999")).toBe(
+      "https://twitter.com/nutone",
+    );
+  });
+
+  it("reduces a Bandcamp album deep-link to the artist origin", async () => {
+    expect(await normalizeProfileUrl("bandcamp", "https://nutone.bandcamp.com/album/x")).toBe(
+      "https://nutone.bandcamp.com",
+    );
+  });
 });
 
 // ── luceneEscapePhrase / parseSpotifyArtistId (pure helpers) ───────────────────
@@ -279,6 +303,37 @@ describe("resolveArtistViaMb (MB name search + Spotify cross-reference)", () => 
     // Name search was the entry point; no ISRC endpoint is ever consulted.
     expect(calls.some((c) => c.includes("artist?query="))).toBe(true);
     expect(calls.some((c) => c.includes("/isrc/"))).toBe(false);
+  });
+
+  it("captures MB link hubs (linktree + homepage) as gap-fill scrape seeds in hubUrls", async () => {
+    mockFetch([
+      {
+        body: { artists: [{ id: "mb-x", name: "X", score: 100 }] },
+        match: MB_ARTIST_SEARCH,
+      },
+      {
+        body: {
+          id: "mb-x",
+          name: "X",
+          relations: [
+            { url: { resource: "https://open.spotify.com/artist/spotifyxid123" } },
+            { url: { resource: "https://linktr.ee/thex" } },
+            { type: "official homepage", url: { resource: "https://thex.com/" } },
+          ],
+        },
+        match: "artist/mb-x",
+      },
+    ]);
+
+    const result = await resolveArtistViaMb("X", "spotifyxid123");
+
+    // The linktree is captured as a hub seed (never a social); the homepage is BOTH a
+    // homepage social AND a hub seed (an artist's own footer lists its socials).
+    expect(result.hubUrls).toContain("https://linktr.ee/thex");
+    expect(result.hubUrls).toContain("https://thex.com");
+    expect(result.socials.map((s) => s.platform)).toContain("homepage");
+    // A link hub is never stored as a social platform row.
+    expect(result.socials.every((s) => !s.url.includes("linktr.ee"))).toBe(true);
   });
 
   it("(a) accepts the Spotify-id match even over a HIGHER-scored earlier candidate", async () => {
@@ -598,10 +653,9 @@ describe("resolveArtistViaMb (MB name search + Spotify cross-reference)", () => 
     expect(result.socials.every((s) => Boolean(s.url))).toBe(true);
   });
 });
-
 // ── resolveGapViaFirecrawl ────────────────────────────────────────────────────
 
-describe("resolveGapViaFirecrawl (Firecrawl /v2/extract gap-fill)", () => {
+describe("resolveGapViaFirecrawl (MB-hub-first scrape + web-search gap-fill)", () => {
   beforeEach(() => {
     process.env.FIRECRAWL_API_KEY = "fc-test-key";
     __setRateLimitForTests(0);
@@ -613,281 +667,288 @@ describe("resolveGapViaFirecrawl (Firecrawl /v2/extract gap-fill)", () => {
     delete process.env.FIRECRAWL_API_KEY;
   });
 
-  it("fills in TikTok and YouTube when both are missing", async () => {
-    mockFetch([
-      {
-        body: {
-          data: {
-            tiktok: "https://www.tiktok.com/@dimension/video/99999",
-            youtube: "https://www.youtube.com/channel/UCdimension",
-          },
-          success: true,
-        },
-        match: FIRECRAWL,
-      },
-    ]);
+  // A routing mock over the two Firecrawl endpoints. `scrape` answers /v2/scrape JSON
+  // mode with a platform→url object under data.json; `search` answers /v2/search with a
+  // `web` result list. Records request URLs + parsed bodies so a test can assert the flow.
+  function mockFirecrawl(opts: { scrape?: Record<string, string>; search?: string[] }) {
+    const calls: string[] = [];
+    const bodies: Array<{ body: Record<string, unknown>; url: string }> = [];
 
-    const missing = new Set<"tiktok" | "youtube">(["tiktok", "youtube"]);
-    const result = await resolveGapViaFirecrawl(
-      "Dimension",
-      "https://open.spotify.com/artist/abc",
-      null,
-      missing,
-    );
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit): Promise<Response> => {
+      const u = typeof url === "string" ? url : String(url);
+      calls.push(u);
 
-    expect(result).toHaveLength(2);
-    const platforms = result.map((s) => s.platform);
-    expect(platforms).toContain("tiktok");
-    expect(platforms).toContain("youtube");
-
-    // All Firecrawl-sourced socials must report source=firecrawl.
-    for (const social of result) {
-      expect(social.source).toBe("firecrawl");
-    }
-  });
-
-  it("normalizes the TikTok URL to the @handle profile root", async () => {
-    mockFetch([
-      {
-        body: {
-          data: {
-            tiktok: "https://www.tiktok.com/@dimension/video/12345",
-          },
-          success: true,
-        },
-        match: FIRECRAWL,
-      },
-    ]);
-
-    const result = await resolveGapViaFirecrawl("Dimension", null, "mb-dim-1", new Set(["tiktok"]));
-
-    expect(result).toHaveLength(1);
-    expect(result[0]?.url).toBe("https://www.tiktok.com/@dimension");
-  });
-
-  it("returns empty when no gap platforms are requested", async () => {
-    const { calls } = mockFetch([]);
-    const result = await resolveGapViaFirecrawl("Dimension", null, null, new Set());
-
-    expect(result).toHaveLength(0);
-    expect(calls).toHaveLength(0);
-  });
-
-  it("returns empty when neither spotify URL nor mbid is present (no anchor)", async () => {
-    const { calls } = mockFetch([]);
-    const result = await resolveGapViaFirecrawl("Dimension", null, null, new Set(["tiktok"]));
-
-    expect(result).toHaveLength(0);
-    expect(calls).toHaveLength(0);
-  });
-
-  it("returns empty when Firecrawl key is absent", async () => {
-    delete process.env.FIRECRAWL_API_KEY;
-    const { calls } = mockFetch([]);
-    const result = await resolveGapViaFirecrawl("Dimension", null, "mb-dim-1", new Set(["tiktok"]));
-
-    expect(result).toHaveLength(0);
-    expect(calls).toHaveLength(0);
-  });
-
-  it("returns empty on a Firecrawl API error (best-effort)", async () => {
-    mockFetch([
-      {
-        match: FIRECRAWL,
-        response: new Response("bad request", { status: 400 }),
-      },
-    ]);
-
-    const result = await resolveGapViaFirecrawl("Dimension", null, "mb-dim-1", new Set(["tiktok"]));
-
-    expect(result).toHaveLength(0);
-  });
-
-  it("returns empty when Firecrawl returns success=false", async () => {
-    mockFetch([
-      {
-        body: { success: false },
-        match: FIRECRAWL,
-      },
-    ]);
-
-    const result = await resolveGapViaFirecrawl("Dimension", null, "mb-dim-1", new Set(["tiktok"]));
-
-    expect(result).toHaveLength(0);
-  });
-
-  it("skips a platform whose URL normalizes to null (e.g. a TikTok homepage with no handle)", async () => {
-    mockFetch([
-      {
-        body: {
-          data: { tiktok: "https://www.tiktok.com/" },
-          success: true,
-        },
-        match: FIRECRAWL,
-      },
-    ]);
-
-    const result = await resolveGapViaFirecrawl("Dimension", null, "mb-dim-1", new Set(["tiktok"]));
-
-    expect(result).toHaveLength(0);
-  });
-
-  // A body-capturing fetch mock: records the parsed request body sent to Firecrawl so a
-  // test can assert on the schema/prompt, and always answers with the given extract data.
-  // (YouTube URLs are pre-normalized /channel/ URLs so normalizeProfileUrl never re-fetches.)
-  function mockFirecrawlCapture(data: Record<string, string>) {
-    const bodies: Array<Record<string, unknown>> = [];
-    const fetchMock = vi.fn(async (_url: string, init?: RequestInit): Promise<Response> => {
       if (typeof init?.body === "string") {
-        bodies.push(JSON.parse(init.body) as Record<string, unknown>);
+        bodies.push({ body: JSON.parse(init.body) as Record<string, unknown>, url: u });
       }
-      return Response.json({ data, success: true });
+
+      if (u.includes(FIRECRAWL_SCRAPE)) {
+        return Response.json({ data: { json: opts.scrape ?? {} }, success: true });
+      }
+
+      if (u.includes(FIRECRAWL_SEARCH)) {
+        return Response.json({
+          data: { web: (opts.search ?? []).map((r) => ({ url: r })) },
+          success: true,
+        });
+      }
+
+      return new Response("not found", { status: 404 });
     });
+
     vi.stubGlobal("fetch", fetchMock);
-    return { bodies, fetchMock };
+
+    return { bodies, calls, fetchMock };
   }
 
-  it("(a) backfills every targeted-AND-missing platform, normalized + source=firecrawl", async () => {
-    mockFirecrawlCapture({
-      bandcamp: "https://andromedik.bandcamp.com",
-      beatport: "https://www.beatport.com/artist/andromedik/12345",
-      instagram: "https://www.instagram.com/andromedik",
-      mixcloud: "https://www.mixcloud.com/andromedik",
-      soundcloud: "https://soundcloud.com/andromedik",
-      tiktok: "https://www.tiktok.com/@andromedik",
-      twitter: "https://twitter.com/andromedik",
-      youtube: "https://www.youtube.com/channel/UCandromedik",
+  /** The scrape request body (its JSON-mode schema property keys) for an assertion. */
+  function scrapeSchemaKeys(
+    bodies: Array<{ body: Record<string, unknown>; url: string }>,
+  ): string[] {
+    const body = bodies.find((b) => b.url.includes(FIRECRAWL_SCRAPE))?.body;
+    const formats = body?.["formats"] as
+      | Array<{ schema?: { properties?: Record<string, unknown> } }>
+      | undefined;
+    return Object.keys(formats?.[0]?.schema?.properties ?? {}).sort();
+  }
+
+  it("Stage 1 — scrapes an MB-provided link hub and never web-searches", async () => {
+    const { calls } = mockFirecrawl({
+      scrape: {
+        instagram: "https://www.instagram.com/nutone/",
+        soundcloud: "https://soundcloud.com/nutone",
+        youtube: "https://www.youtube.com/channel/UCnutone",
+      },
     });
 
-    const missing = new Set<
-      | "instagram"
-      | "tiktok"
-      | "youtube"
-      | "soundcloud"
-      | "bandcamp"
-      | "twitter"
-      | "mixcloud"
-      | "beatport"
-    >([
-      "instagram",
-      "tiktok",
-      "youtube",
-      "soundcloud",
-      "bandcamp",
-      "twitter",
-      "mixcloud",
-      "beatport",
-    ]);
-
     const result = await resolveGapViaFirecrawl(
-      "Andromedik",
-      "https://open.spotify.com/artist/abc",
+      "Nu:Tone",
       null,
-      missing,
+      "mb-nutone",
+      new Set<ArtistSocialPlatform>(["instagram", "soundcloud", "youtube"]),
+      ["https://linktr.ee/dannutone"],
     );
 
-    const platforms = result.map((s) => s.platform).sort();
-    expect(platforms).toEqual([
-      "bandcamp",
-      "beatport",
-      "instagram",
-      "mixcloud",
-      "soundcloud",
-      "tiktok",
-      "twitter",
-      "youtube",
-    ]);
+    expect(result.map((s) => s.platform).sort()).toEqual(["instagram", "soundcloud", "youtube"]);
 
     for (const social of result) {
       expect(social.source).toBe("firecrawl");
     }
 
-    // Beatport went through the stripQuery default normalizer (kept as a profile URL).
-    const beatport = result.find((s) => s.platform === "beatport");
-    expect(beatport?.url).toBe("https://www.beatport.com/artist/andromedik/12345");
+    // The hub covered everything → zero /v2/search spend.
+    expect(calls.some((c) => c.includes(FIRECRAWL_SCRAPE))).toBe(true);
+    expect(calls.some((c) => c.includes(FIRECRAWL_SEARCH))).toBe(false);
   });
 
-  it("(b) does NOT request a platform that is not missing", async () => {
-    const { bodies } = mockFirecrawlCapture({
-      instagram: "https://www.instagram.com/andromedik",
-      // Firecrawl also volunteers a tiktok, but it was NOT requested → ignored.
-      tiktok: "https://www.tiktok.com/@andromedik",
+  it("scrapes the HUB url you give it (not the Spotify seed) and requests only missing platforms", async () => {
+    const { bodies } = mockFirecrawl({
+      scrape: { instagram: "https://www.instagram.com/nutone/" },
+    });
+
+    await resolveGapViaFirecrawl(
+      "Nu:Tone",
+      "https://open.spotify.com/artist/abc",
+      "mb-nutone",
+      new Set<ArtistSocialPlatform>(["instagram"]),
+      ["https://linktr.ee/dannutone"],
+    );
+
+    const scrapeBody = bodies.find((b) => b.url.includes(FIRECRAWL_SCRAPE))?.body;
+    expect(scrapeBody?.["url"]).toBe("https://linktr.ee/dannutone");
+    expect(scrapeSchemaKeys(bodies)).toEqual(["instagram"]);
+  });
+
+  it("Stage 2 — searches for a link hub then scrapes it when MB had none", async () => {
+    const fetchMock = vi.fn(async (url: string): Promise<Response> => {
+      const u = String(url);
+
+      if (u.includes(FIRECRAWL_SEARCH)) {
+        return Response.json({
+          data: { web: [{ url: "https://linktr.ee/dannutone" }] },
+          success: true,
+        });
+      }
+
+      if (u.includes(FIRECRAWL_SCRAPE)) {
+        return Response.json({
+          data: { json: { soundcloud: "https://soundcloud.com/nutone" } },
+          success: true,
+        });
+      }
+
+      return new Response("nf", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await resolveGapViaFirecrawl(
+      "Nu:Tone",
+      null,
+      "mb-nutone",
+      new Set<ArtistSocialPlatform>(["soundcloud"]),
+      [],
+    );
+
+    expect(result.map((s) => s.platform)).toEqual(["soundcloud"]);
+    expect(result[0]?.url).toBe("https://soundcloud.com/nutone");
+  });
+
+  it("Stage 3 — falls back to a broad web search, bucketing profile-root results by host", async () => {
+    // No MB hub; the hub-search finds no linktree → broad search returns raw profiles,
+    // including a deep SoundCloud track link that must reduce to the profile root.
+    mockFirecrawl({
+      search: [
+        "https://www.instagram.com/nutone/?hl=en",
+        "https://soundcloud.com/nutone/one-day-at-a-time",
+        "https://www.facebook.com/dannutone",
+      ],
     });
 
     const result = await resolveGapViaFirecrawl(
-      "Andromedik",
-      "https://open.spotify.com/artist/abc",
+      "Nu:Tone",
       null,
-      new Set(["instagram"]),
+      "mb-nutone",
+      new Set<ArtistSocialPlatform>(["instagram", "soundcloud", "facebook"]),
+      [],
     );
 
-    const schema = bodies[0]?.["schema"] as { properties?: Record<string, unknown> } | undefined;
-    expect(Object.keys(schema?.properties ?? {})).toEqual(["instagram"]);
-    expect(bodies[0]?.["prompt"]).not.toContain("tiktok");
-
-    // A non-requested platform Firecrawl returned anyway is not persisted.
-    expect(result.map((s) => s.platform)).toEqual(["instagram"]);
+    const byPlatform = Object.fromEntries(result.map((s) => [s.platform, s.url]));
+    expect(byPlatform["instagram"]).toBe("https://www.instagram.com/nutone");
+    expect(byPlatform["soundcloud"]).toBe("https://soundcloud.com/nutone");
+    expect(byPlatform["facebook"]).toBe("https://www.facebook.com/dannutone");
   });
 
-  it("(c) never puts homepage or spotify in the requested schema (kept out of the target set)", async () => {
-    const { bodies } = mockFirecrawlCapture({});
+  it("returns [] when no gap platforms are requested (no Firecrawl call)", async () => {
+    const { calls } = mockFirecrawl({});
 
-    // Ask for EVERYTHING, including the two excluded platforms.
-    const missing = new Set<ArtistSocialPlatform>([
-      "spotify",
-      "homepage",
-      "instagram",
-      "tiktok",
-      "youtube",
-      "soundcloud",
-      "bandcamp",
-      "twitter",
-      "facebook",
-      "mixcloud",
-      "beatport",
-    ]);
-
-    await resolveGapViaFirecrawl(
-      "Andromedik",
-      "https://open.spotify.com/artist/abc",
-      null,
-      missing,
-    );
-
-    const schema = bodies[0]?.["schema"] as { properties?: Record<string, unknown> } | undefined;
-    const keys = Object.keys(schema?.properties ?? {});
-    expect(keys).not.toContain("homepage");
-    expect(keys).not.toContain("spotify");
-    // The full target set, homepage + spotify excluded.
-    expect(keys.sort()).toEqual([
-      "bandcamp",
-      "beatport",
-      "facebook",
-      "instagram",
-      "mixcloud",
-      "soundcloud",
-      "tiktok",
-      "twitter",
-      "youtube",
-    ]);
-
-    // Twitter's schema KEY stays `twitter`; only the prose renders "Twitter/X".
-    expect(keys).toContain("twitter");
-    expect(bodies[0]?.["prompt"]).toContain("Twitter/X");
-  });
-
-  it("(d) makes no Firecrawl call when the only 'missing' platforms are non-targets", async () => {
-    const { calls } = mockFetch([]);
-
-    // homepage + spotify are deliberately excluded → targets is empty → no call.
     const result = await resolveGapViaFirecrawl(
-      "Andromedik",
+      "X",
       "https://open.spotify.com/artist/abc",
-      null,
-      new Set<ArtistSocialPlatform>(["homepage", "spotify"]),
+      "mb",
+      new Set(),
+      [],
     );
 
     expect(result).toHaveLength(0);
     expect(calls).toHaveLength(0);
+  });
+
+  it("returns [] with no identity anchor (no spotify, mbid, or MB hub)", async () => {
+    const { calls } = mockFirecrawl({});
+
+    const result = await resolveGapViaFirecrawl("X", null, null, new Set(["instagram"]), []);
+
+    expect(result).toHaveLength(0);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("returns [] when the Firecrawl key is absent", async () => {
+    delete process.env.FIRECRAWL_API_KEY;
+    const { calls } = mockFirecrawl({});
+
+    const result = await resolveGapViaFirecrawl("X", null, "mb", new Set(["instagram"]), [
+      "https://linktr.ee/x",
+    ]);
+
+    expect(result).toHaveLength(0);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("is best-effort: a hub-scrape error yields [] rather than throwing", async () => {
+    const fetchMock = vi.fn(async (url: string): Promise<Response> => {
+      const u = String(url);
+
+      if (u.includes(FIRECRAWL_SCRAPE)) {
+        return new Response("bad", { status: 500 });
+      }
+
+      if (u.includes(FIRECRAWL_SEARCH)) {
+        return Response.json({ data: { web: [] }, success: true });
+      }
+
+      return new Response("nf", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await resolveGapViaFirecrawl("X", null, "mb", new Set(["instagram"]), [
+      "https://linktr.ee/x",
+    ]);
+
+    expect(result).toHaveLength(0);
+  });
+
+  it("never requests homepage or spotify (kept out of the target set)", async () => {
+    const { bodies } = mockFirecrawl({ scrape: {} });
+
+    await resolveGapViaFirecrawl(
+      "X",
+      "https://open.spotify.com/artist/abc",
+      "mb",
+      new Set<ArtistSocialPlatform>(["spotify", "homepage", "instagram", "tiktok"]),
+      ["https://linktr.ee/x"],
+    );
+
+    const keys = scrapeSchemaKeys(bodies);
+    expect(keys).not.toContain("homepage");
+    expect(keys).not.toContain("spotify");
+    expect(keys).toEqual(["instagram", "tiktok"]);
+  });
+
+  it("makes no Firecrawl call when the only missing platforms are non-targets", async () => {
+    const { calls } = mockFirecrawl({});
+
+    const result = await resolveGapViaFirecrawl(
+      "X",
+      "https://open.spotify.com/artist/abc",
+      "mb",
+      new Set<ArtistSocialPlatform>(["homepage", "spotify"]),
+      [],
+    );
+
+    expect(result).toHaveLength(0);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("skips a scraped value that won't normalize to a profile root", async () => {
+    // A TikTok URL with no handle → normalizeProfileUrl returns null → dropped.
+    mockFirecrawl({ scrape: { tiktok: "https://www.tiktok.com/" } });
+
+    const result = await resolveGapViaFirecrawl(
+      "X",
+      null,
+      "mb",
+      new Set<ArtistSocialPlatform>(["tiktok"]),
+      ["https://linktr.ee/x"],
+    );
+
+    expect(result).toHaveLength(0);
+  });
+
+  it("Stage 3 — rejects a namesake/label hit whose handle doesn't relate to the artist name", async () => {
+    // A TikTok search for an act with no TikTok returns the LABEL's account → dropped.
+    mockFirecrawl({ search: ["https://www.tiktok.com/@hospitalrecords"] });
+
+    const result = await resolveGapViaFirecrawl(
+      "Nu:Tone",
+      null,
+      "mb-nutone",
+      new Set<ArtistSocialPlatform>(["tiktok"]),
+      [],
+    );
+
+    expect(result).toHaveLength(0);
+  });
+
+  it("Stage 3 — accepts a hit whose handle relates to the artist name", async () => {
+    mockFirecrawl({ search: ["https://www.tiktok.com/@nutone"] });
+
+    const result = await resolveGapViaFirecrawl(
+      "Nu:Tone",
+      null,
+      "mb-nutone",
+      new Set<ArtistSocialPlatform>(["tiktok"]),
+      [],
+    );
+
+    expect(result.map((s) => s.url)).toEqual(["https://www.tiktok.com/@nutone"]);
   });
 });
