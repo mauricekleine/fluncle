@@ -31,7 +31,6 @@
     "format:check": "oxfmt --check .",
     "lint": "oxlint --ignore-path .prettierignore --type-aware --deny-warnings",
     "lint:fix": "oxlint --fix --ignore-path .prettierignore --type-aware --deny-warnings",
-    "postinstall": "command -v husky > /dev/null 2>&1 && husky || true",
     "skills:install": "bun run scripts/install-skills.ts",
     "social:preview": "bun run --cwd packages/video social:preview",
     "test": "turbo run test",
