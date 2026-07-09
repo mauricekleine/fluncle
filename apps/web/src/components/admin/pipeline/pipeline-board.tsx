@@ -216,7 +216,7 @@ function RowMenu({ row }: { row: BoardRow }) {
 
 function Cell({ actions, row, step }: { actions: BoardActions; row: BoardRow; step: BoardStep }) {
   // The automated-socials cell is a read-only aggregate; instead of a dialog it opens a
-  // hover Popover breaking the Last.fm love + Spotify/YouTube follows down per platform.
+  // hover Popover showing the Last.fm love.
   if (step.key === "socials") {
     return <SocialsCell row={row} step={step} />;
   }
@@ -230,10 +230,10 @@ function Cell({ actions, row, step }: { actions: BoardActions; row: BoardRow; st
 
 // The automated-socials cell: the repurposed LFM cell. Its glyph reads by the same
 // SHAPE/FILL grammar as every step (round auto glyph, done/partial/open fill), and on
-// hover/focus it reveals a HoverCard listing each hands-off action — the Last.fm love +
-// each artist Spotify/YouTube follow — with a done check. A HoverCard (base-ui PreviewCard)
-// owns the hover intent + open/close delays itself, so it never fights the focus/hover it's
-// driven by — unlike a click-Popover forced open with manual mouse handlers, which flickers.
+// hover/focus it reveals a HoverCard listing each hands-off action — the Last.fm love —
+// with a done check. A HoverCard (base-ui PreviewCard) owns the hover intent + open/close
+// delays itself, so it never fights the focus/hover it's driven by — unlike a click-Popover
+// forced open with manual mouse handlers, which flickers.
 function SocialsCell({ row, step }: { row: BoardRow; step: BoardStep }) {
   // The breakdown derives from the row, not from hover — memoize it so an open/close doesn't
   // rebuild the array or hand a fresh identity to the list.

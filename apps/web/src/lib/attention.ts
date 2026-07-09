@@ -111,7 +111,7 @@ export type ClipPostInput = {
   status: string;
 };
 
-/** An artist with unfinished follow work (candidates to confirm + followable-not-followed). */
+/** An artist with unfinished review work (links discovered since the last "Looks good"). */
 export type ArtistReviewInput = {
   /** The oldest not-yet-actioned social's stamp — the queue's oldest-first anchor. */
   anchorAt: string;
@@ -262,7 +262,7 @@ export function deriveAttentionItems(inputs: AttentionInputs, now: number): Atte
     });
   }
 
-  // Each artist with unfinished follow work is one row — the count is the datum, the
+  // Each artist with unfinished review work is one row — the count is the datum, the
   // primary action deep-links to /admin/artists (the manage surface) with it focused.
   for (const review of inputs.artistReviews) {
     items.push({

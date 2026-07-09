@@ -22,13 +22,13 @@ Every index page — a page whose job is "see the objects, open one" (Renders, M
 
 Per page, the primary goal decides the layout — what's loud, what's hidden:
 
-| Page                              | Primary goal (what you came to do)      | Primary action                    | Infrequent → hidden behind                              |
-| --------------------------------- | --------------------------------------- | --------------------------------- | ------------------------------------------------------- |
-| Dashboard                         | Clear the next actionable step          | the row's one inline action / `↵` | snooze, won't-do (icon + tooltip)                       |
-| Findings                          | Scan pipeline state; preview a finding  | cover = play; scan the columns    | run-a-step, R2, silent clip (`⋮`); socials (hover card) |
-| Renders                           | Watch the fresh render                  | cover = play                      | requeue, purge (`⋮` → confirm)                          |
-| Artists                           | Confirm/follow the links needing a look | Confirm / Follow / Mark done      | add, remove, edit a platform (Manage-links dialog)      |
-| Mixtapes / Recordings / Playlists | See the objects; open one               | open the object                   | create/upload (header); dist links                      |
+| Page                              | Primary goal (what you came to do)     | Primary action                    | Infrequent → hidden behind                              |
+| --------------------------------- | -------------------------------------- | --------------------------------- | ------------------------------------------------------- |
+| Dashboard                         | Clear the next actionable step         | the row's one inline action / `↵` | snooze, won't-do (icon + tooltip)                       |
+| Findings                          | Scan pipeline state; preview a finding | cover = play; scan the columns    | run-a-step, R2, silent clip (`⋮`); socials (hover card) |
+| Renders                           | Watch the fresh render                 | cover = play                      | requeue, purge (`⋮` → confirm)                          |
+| Artists                           | Review the links needing a look        | Looks good (review the list)      | add, remove, edit a platform (Manage-links dialog)      |
+| Mixtapes / Recordings / Playlists | See the objects; open one              | open the object                   | create/upload (header); dist links                      |
 
 ## The nav model
 

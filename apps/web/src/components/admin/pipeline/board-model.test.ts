@@ -207,10 +207,9 @@ describe("boardSteps — TikTok publish cell (stale-draft rule)", () => {
   });
 });
 
-// The automated-socials cell (the repurposed LFM cell, Epic B): an aggregate of the
-// finding's hands-off "champion the artist" actions — the Last.fm love (workflow-tracker
-// rule: done once the backfill RAN) + each artist Spotify/YouTube auto-follow. done =
-// all actioned, open = none, partial = some. The Popover breakdown mirrors the count.
+// The automated-socials cell (the repurposed LFM cell): the finding's hands-off Last.fm love
+// (workflow-tracker rule: done once the backfill RAN). done = actioned, open = not yet. The
+// Popover breakdown mirrors the count.
 function socialsStep(row: BoardRow) {
   const step = boardSteps(row).find((s) => s.key === "socials");
 
@@ -222,63 +221,26 @@ function socialsStep(row: BoardRow) {
 }
 
 describe("boardSteps — automated-socials cell", () => {
-  it("is open/Pending when Last.fm hasn't run and there are no follow targets", () => {
-    const step = socialsStep(makeRow({ artistFollows: [], lastfmRan: false }));
+  it("is open/Pending when Last.fm hasn't run", () => {
+    const step = socialsStep(makeRow({ lastfmRan: false }));
 
     expect(step.state).toBe("open");
     expect(step.statusLabel).toBe("Pending");
     expect(step.actionable).toBe(false);
   });
 
-  it("is done/All when the only action (Last.fm) has run and there are no follows", () => {
-    const step = socialsStep(makeRow({ artistFollows: [], lastfmRan: true }));
+  it("is done/All when the Last.fm love has run", () => {
+    const step = socialsStep(makeRow({ lastfmRan: true }));
 
     expect(step.state).toBe("done");
     expect(step.statusLabel).toBe("All");
   });
 
-  it("is partial with a done fraction when some actions are done", () => {
-    const step = socialsStep(
-      makeRow({
-        artistFollows: [
-          { followed: true, platform: "spotify", status: "auto", url: "https://s" },
-          { followed: false, platform: "youtube", status: "confirmed", url: "https://y" },
-        ],
-        lastfmRan: true,
-      }),
-    );
+  it("breaks the action down for the Popover — the Last.fm love", () => {
+    const items = automatedSocialsBreakdown(makeRow({ lastfmLoved: true, lastfmRan: true }));
 
-    // Last.fm done + Spotify done + YouTube pending = 2 of 3.
-    expect(step.state).toBe("partial");
-    expect(step.statusLabel).toBe("2/3");
-  });
-
-  it("is done/All when Last.fm ran and every follow target is followed", () => {
-    const step = socialsStep(
-      makeRow({
-        artistFollows: [
-          { followed: true, platform: "spotify", status: "auto", url: "https://s" },
-          { followed: true, platform: "youtube", status: "confirmed", url: "https://y" },
-        ],
-        lastfmRan: true,
-      }),
-    );
-
-    expect(step.state).toBe("done");
-    expect(step.statusLabel).toBe("All");
-  });
-
-  it("breaks the actions down per platform for the Popover, with the Last.fm love first", () => {
-    const items = automatedSocialsBreakdown(
-      makeRow({
-        artistFollows: [{ followed: true, platform: "spotify", status: "auto", url: "https://s" }],
-        lastfmLoved: true,
-        lastfmRan: true,
-      }),
-    );
-
-    expect(items.map((item) => item.key)).toEqual(["lastfm", "spotify"]);
+    expect(items.map((item) => item.key)).toEqual(["lastfm"]);
     expect(items[0]?.label).toBe("Last.fm — loved");
-    expect(items[1]?.done).toBe(true);
+    expect(items[0]?.done).toBe(true);
   });
 });

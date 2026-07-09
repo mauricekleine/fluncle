@@ -207,9 +207,6 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // The autonomous render box links its own cut + sets video_url — agent tier
   // (adminAuth only, no operatorGuard); the box's agent token publishes its renders.
   finalize_track_video: "admin",
-  // The "Follow now" button — operator tier: it performs the real Spotify/YouTube follow on
-  // demand. Artists are championed by hand through the /admin/artists queue.
-  follow_artist_social: "operator",
   // The built clip caption read — admin tier (agent-allowed), the list_clips precedent:
   // a read the clip-card UI + the box can both consume.
   get_clip_caption: "admin",
@@ -226,8 +223,8 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // the board + CLI + box can all consume.
   get_track_admin: "admin",
   initiate_mixtape_youtube: "operator",
-  // The `/admin/artists` follow queue read — admin tier (agent-allowed), the list_*_admin
-  // precedent; the operator's follow-queue station consumes it.
+  // The `/admin/artists` review queue read — admin tier (agent-allowed), the list_*_admin
+  // precedent; the operator's review-queue station consumes it.
   list_artist_socials: "admin",
   // Every clip's IG drip row — admin tier (agent-allowed read), the list_*_admin
   // precedent; the CLI / library merge it onto the clips.
@@ -251,9 +248,6 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   merge_private_galaxy_progress: "private-session",
   mint_mixcloud_token: "operator",
   mint_youtube_token: "operator",
-  // The Manage-links auto-follow toggle OFF — operator tier: it changes what Fluncle's account
-  // follows (excludes a wrong Spotify/YouTube match from the sweep).
-  mute_artist_social: "operator",
   // The auto-note authoring step — agent tier (adminAuth only, no operatorGuard), the
   // written-note sibling of observe_track/context_track; the box's agent token drives it.
   note_track: "admin",
@@ -296,10 +290,8 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // record_health precedent; it writes only the internal single-row live_state table
   // (no publish), so the box agent token drives it each minute.
   record_live_state: "admin",
-  // The follow queue's one-tap register of a manual follow (stamp followed_at) — operator tier.
-  record_operator_follow: "operator",
   reject_submission: "operator",
-  // The follow queue's inline remove of a social — operator tier.
+  // The review queue's inline remove of a social — operator tier.
   remove_artist_social: "operator",
   // Replace a recording's whole cue set — operator tier (the Rekordbox derivation write
   // target): a write that reshapes what a clip/promote resolves to, so the agent 403s.
@@ -336,11 +328,6 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   set_mixtape_cues: "operator",
   start_lastfm_auth: "operator",
   sweep_push_receipts: "admin",
-  // The "Undo" button — operator tier: reverses a follow (real API unfollow for Spotify/YouTube,
-  // clears the stamp for the no-API platforms).
-  unfollow_artist_social: "operator",
-  // The "Unmute" button — operator tier: clears the don't-champion skip Undo set.
-  unmute_artist_social: "operator",
   unsave_private_finding: "private-session",
   update_clip: "operator",
   update_edition: "admin",

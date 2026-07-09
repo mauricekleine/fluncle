@@ -58,7 +58,6 @@ export {
   backfillArtists,
   confirmArtistSocial,
   listArtistSocials,
-  recordOperatorFollow,
   removeArtistSocial,
   resolveArtist,
   ResolvedSocialSchema,

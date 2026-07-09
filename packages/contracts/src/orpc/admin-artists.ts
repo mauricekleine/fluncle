@@ -162,19 +162,17 @@ export const listUnresolvedArtists = oc
     }),
   );
 
-// ── Epic B: the championing motion (Unit 5) ──────────────────────────────────
-// The `/admin/artists` follow queue + the auto-follow sweep. `artist_socials` is the
-// identity-graph store; these ops read the follow queue, register/confirm socials,
-// add/remove them inline, and drive the agent-tier Spotify/YouTube auto-follow.
+// ── The identity graph: artist_socials (Unit 5) ──────────────────────────────
+// The `/admin/artists` review queue + the per-social operator writes. `artist_socials`
+// is the identity-graph store; these ops read the queue and confirm / add / remove the
+// links that feed the public artist page + `sameAs` JSON-LD.
 
 /** One `artist_socials` row, in the shape the admin surfaces read. */
 const ArtistSocialSchema = z
   .object({
     artistId: z.string(),
     createdAt: z.string(),
-    followedAt: z.string().nullable(),
     id: z.string(),
-    mutedAt: z.string().nullable(),
     platform: z.string(),
     source: z.string(),
     status: z.string(),
@@ -185,18 +183,8 @@ const ArtistSocialSchema = z
 /** The `{ ok, social }` envelope every single-social operator write returns. */
 const ArtistSocialEnvelope = z.object({ ok: z.literal(true), social: ArtistSocialSchema });
 
-/**
- * The follow/undo envelope: the row plus a soft `platformWarning`. The platform write
- * (Spotify/YouTube) is best-effort — a miss (e.g. our Development-mode app's artist-follow
- * 403) still records the follow-state and returns a human warning line here instead of
- * failing the request; `null` when the write went through (or the platform has no follow API).
- */
-const ArtistFollowEnvelope = ArtistSocialEnvelope.extend({
-  platformWarning: z.string().nullable(),
-});
-
-/** One artist in the follow queue, carrying all its socials. */
-const ArtistFollowQueueItemSchema = z
+/** One artist in the review queue, carrying all its socials. */
+const ArtistSocialsQueueItemSchema = z
   .object({
     id: z.string(),
     name: z.string(),
@@ -204,95 +192,24 @@ const ArtistFollowQueueItemSchema = z
     socials: z.array(ArtistSocialSchema),
     spotifyUrl: z.string().nullable(),
   })
-  .meta({ id: "ArtistFollowQueueItem" });
+  .meta({ id: "ArtistSocialsQueueItem" });
 
 /**
  * `list_artist_socials` → `GET /admin/artists/socials` (operationId `listArtistSocials`).
  *
- * Admin tier (agent-allowed read). The `/admin/artists` follow queue: every artist with
- * actionable work (a `candidate` to confirm, or a followable social not yet followed),
- * each carrying ALL its socials. Returns `{ ok, artists }`.
+ * Admin tier (agent-allowed read). The `/admin/artists` review queue: every artist with
+ * a `candidate` social to confirm, each carrying ALL its socials. Returns `{ ok, artists }`.
  */
 export const listArtistSocials = oc
   .route({
     method: "GET",
     operationId: "listArtistSocials",
     path: "/admin/artists/socials",
-    summary: "The artist follow queue (artists with unconfirmed/unfollowed socials)",
+    summary: "The artist review queue (artists with unconfirmed socials)",
     tags: ["Admin"],
   })
   .input(z.object({ limit: z.string().optional() }))
-  .output(z.object({ artists: z.array(ArtistFollowQueueItemSchema), ok: z.literal(true) }));
-
-/**
- * `follow_artist_social` → `POST /admin/artists/socials/{socialId}/follow-now`
- * (operationId `followArtistSocial`). Operator tier. Perform the REAL platform follow for one
- * Spotify/YouTube social on demand (PUT /me/following, subscriptions.insert), then stamp
- * `followed_at`. Idempotent. A no-API platform is rejected (400) — use `record_operator_follow`
- * there. The platform write is best-effort: a miss (e.g. our Development-mode app's 403) still
- * records the follow and returns a soft `platformWarning`. `{ ok, social, platformWarning }`.
- */
-export const followArtistSocial = oc
-  .route({
-    method: "POST",
-    operationId: "followArtistSocial",
-    path: "/admin/artists/socials/{socialId}/follow-now",
-    summary: "Follow a Spotify/YouTube artist social now via the platform API",
-    tags: ["Admin"],
-  })
-  .input(z.object({ socialId: z.string() }))
-  .output(ArtistFollowEnvelope);
-
-/**
- * `unfollow_artist_social` → `POST /admin/artists/socials/{socialId}/unfollow`
- * (operationId `unfollowArtistSocial`). Operator tier. Undo a followed social: a Spotify/YouTube
- * row is REALLY unfollowed via the API (DELETE /me/following, subscriptions.delete); a no-API
- * platform just clears `followed_at`. The platform write is best-effort: a miss still clears the
- * stamp and returns a soft `platformWarning`. Idempotent. `{ ok, social, platformWarning }`.
- */
-export const unfollowArtistSocial = oc
-  .route({
-    method: "POST",
-    operationId: "unfollowArtistSocial",
-    path: "/admin/artists/socials/{socialId}/unfollow",
-    summary: "Undo a followed artist social (real API unfollow for Spotify/YouTube)",
-    tags: ["Admin"],
-  })
-  .input(z.object({ socialId: z.string() }))
-  .output(ArtistFollowEnvelope);
-
-/**
- * `unmute_artist_social` → `POST /admin/artists/socials/{socialId}/unmute`
- * (operationId `unmuteArtistSocial`). Operator tier. Clear a social's mute (`muted_at`),
- * reversing an Undo's durable skip so the sweep may champion it again. Idempotent. No platform
- * call. `{ ok, social }`.
- */
-export const unmuteArtistSocial = oc
-  .route({
-    method: "POST",
-    operationId: "unmuteArtistSocial",
-    path: "/admin/artists/socials/{socialId}/unmute",
-    summary: "Unmute an artist social (clear the don't-champion skip)",
-    tags: ["Admin"],
-  })
-  .input(z.object({ socialId: z.string() }))
-  .output(ArtistSocialEnvelope);
-
-/**
- * `record_operator_follow` → `POST /admin/artists/socials/{socialId}/follow`
- * (operationId `recordOperatorFollow`). Operator tier. Register that the operator
- * manually followed a social (stamps `followed_at`). Idempotent. `{ ok, social }`.
- */
-export const recordOperatorFollow = oc
-  .route({
-    method: "POST",
-    operationId: "recordOperatorFollow",
-    path: "/admin/artists/socials/{socialId}/follow",
-    summary: "Register a manual follow of an artist social (stamp followed_at)",
-    tags: ["Admin"],
-  })
-  .input(z.object({ socialId: z.string() }))
-  .output(ArtistSocialEnvelope);
+  .output(z.object({ artists: z.array(ArtistSocialsQueueItemSchema), ok: z.literal(true) }));
 
 /**
  * `confirm_artist_social` → `POST /admin/artists/socials/{socialId}/confirm`
@@ -325,24 +242,6 @@ export const addArtistSocial = oc
     tags: ["Admin"],
   })
   .input(z.looseObject({ artistId: z.string() }))
-  .output(ArtistSocialEnvelope);
-
-/**
- * `mute_artist_social` → `POST /admin/artists/socials/{socialId}/mute` (operationId
- * `muteArtistSocial`). Operator tier. Mute a Spotify/YouTube social that's a wrong match — the
- * Manage-links "follow automatically" toggle turned OFF. Stamps `muted_at` (excludes it from the
- * auto-follow sweep) and clears `followed_at`. Bookkeeping only, no platform call. Idempotent;
- * `unmute_artist_social` reverses it. `{ ok, social }`.
- */
-export const muteArtistSocial = oc
-  .route({
-    method: "POST",
-    operationId: "muteArtistSocial",
-    path: "/admin/artists/socials/{socialId}/mute",
-    summary: "Mute an artist social (skip it in the auto-follow sweep)",
-    tags: ["Admin"],
-  })
-  .input(z.object({ socialId: z.string() }))
   .output(ArtistSocialEnvelope);
 
 /**
@@ -384,14 +283,9 @@ export const adminArtistsContract = {
   add_artist_social: addArtistSocial,
   backfill_artists: backfillArtists,
   confirm_artist_social: confirmArtistSocial,
-  follow_artist_social: followArtistSocial,
   list_artist_socials: listArtistSocials,
   list_unresolved_artists: listUnresolvedArtists,
-  mute_artist_social: muteArtistSocial,
-  record_operator_follow: recordOperatorFollow,
   remove_artist_social: removeArtistSocial,
   resolve_artist: resolveArtist,
   review_artist: reviewArtist,
-  unfollow_artist_social: unfollowArtistSocial,
-  unmute_artist_social: unmuteArtistSocial,
 };
