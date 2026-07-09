@@ -1237,3 +1237,15 @@ export const subscriptions = sqliteTable("subscriptions", {
   // The vendor/provider the money goes to (e.g. Cloudflare, Anthropic).
   vendor: text("vendor").notNull(),
 });
+
+// A tiny once-a-day cache of foreign-exchange reference rates (ECB, via the free
+// keyless Frankfurter API), so the Costs ledger can show ONE aggregate "what you pay
+// today" figure in EUR without converting each fixed-price line. A singleton row keyed
+// by `base` ("EUR"): `ratesJson` maps EUR→currency (e.g. { "USD": 1.18 }); `ratesDate`
+// is the ECB publish date; `fetchedAt` gates the read-through refresh (>12h ⇒ refetch).
+export const exchangeRates = sqliteTable("exchange_rates", {
+  base: text("base").primaryKey(),
+  fetchedAt: text("fetched_at").notNull(),
+  ratesDate: text("rates_date").notNull(),
+  ratesJson: text("rates_json").notNull(),
+});

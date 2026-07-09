@@ -52,7 +52,9 @@ import { Textarea } from "@fluncle/ui/components/textarea";
 import { AdminShell } from "@/components/admin/admin-shell";
 import { StatTile } from "@/components/admin/stat-tile";
 import { formatDate } from "@/lib/format";
+import { convertToEurCents, type CurrencyTotals } from "@/lib/fx-convert";
 import { isAdminRequest } from "@/lib/server/admin-auth";
+import { getEurRates, type FxRatesDTO } from "@/lib/server/fx";
 import { listSubscriptions } from "@/lib/server/subscriptions";
 
 // The brand's numeric face — money reads in Oxanium everywhere on this surface, matching
@@ -141,10 +143,26 @@ const fetchSubscriptions = createServerFn({ method: "GET" }).handler(
   },
 );
 
+// Today's EUR reference rates (read-through daily cache, best-effort — null when the
+// vendor is down and there is no cache yet). Powers the single aggregate EUR figure.
+const fetchFxRates = createServerFn({ method: "GET" }).handler(
+  async (): Promise<FxRatesDTO | null> => {
+    if (!(await isAdminRequest())) {
+      throw redirect({ to: "/admin/login" });
+    }
+
+    return getEurRates();
+  },
+);
+
 export const Route = createFileRoute("/admin/costs")({
   beforeLoad: () => ensureAdmin(),
   component: CostsPage,
-  loader: () => fetchSubscriptions(),
+  loader: async () => {
+    const [subscriptions, fx] = await Promise.all([fetchSubscriptions(), fetchFxRates()]);
+
+    return { fx, subscriptions };
+  },
 });
 
 // The operator's form values — major-unit amount (converted to cents on submit), the
@@ -220,8 +238,6 @@ function monthlyEquivalentCents(sub: SubscriptionDTO): number | undefined {
   return undefined;
 }
 
-type CurrencyTotals = Array<[currency: string, cents: number]>;
-
 type LedgerGroup = {
   category: Category;
   lines: SubscriptionDTO[];
@@ -288,11 +304,14 @@ function CostsPage() {
   const initial = Route.useLoaderData();
   const queryClient = useQueryClient();
   const { data: subscriptions } = useQuery<SubscriptionDTO[]>({
-    initialData: initial,
+    initialData: initial.subscriptions,
     queryFn: () => fetchSubscriptions(),
     queryKey: SUBSCRIPTIONS_KEY,
     refetchOnWindowFocus: true,
   });
+
+  // Today's EUR rates ride the loader (they only change once/day, so no focus refetch).
+  const fx = initial.fx;
 
   // The dialog is a single reused form: `editing` null = a new line, set = an edit.
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -356,7 +375,7 @@ function CostsPage() {
         </div>
       ) : (
         <div className="space-y-8 p-4 sm:p-5">
-          <TotalsRow model={model} />
+          <TotalsRow fx={fx} model={model} />
           <div className="space-y-6">
             {model.groups.map((group) => (
               <CategoryGroup
@@ -408,12 +427,35 @@ function CostsPage() {
   );
 }
 
-// The headline: the recurring monthly total as the one gold number, its annualized
-// run-rate beside it, and the line tally with its paid / free split. Mirrors the
-// `/admin/usage` totals row so the two Cost stations read as one workspace.
-function TotalsRow({ model }: { model: LedgerModel }) {
+// The headline: the recurring total as the one gold number, its annualized run-rate
+// beside it, and the line tally with its paid / free split. Mirrors the `/admin/usage`
+// totals row so the two Cost stations read as one workspace.
+//
+// When the ledger mixes currencies and today's ECB rates are available, the money tiles
+// collapse to a SINGLE "≈ €X" — the operator's "what do I actually pay" number — with
+// the native per-currency breakdown + the rate date in the hint. Individual lines keep
+// their own fixed-price currency (they are not converted). If rates are missing, or the
+// ledger is EUR-only, the tiles fall back to the per-currency stack, never a fake total.
+function TotalsRow({ fx, model }: { fx: FxRatesDTO | null; model: LedgerModel }) {
   const { counts, monthly } = model;
   const perYear: CurrencyTotals = monthly.map(([currency, cents]) => [currency, cents * 12]);
+  const needsConversion = monthly.some(([currency]) => currency !== "EUR");
+  const monthConv = fx ? convertToEurCents(monthly, fx.rates) : null;
+
+  let monthValue: ReactNode;
+  let monthHint: ReactNode;
+  let yearValue: ReactNode;
+
+  if (fx && monthConv && needsConversion && monthConv.complete) {
+    const native = monthly.map(([currency, cents]) => formatMoney(cents, currency)).join(" + ");
+    monthValue = <span>≈ {formatMoney(monthConv.eurCents, "EUR")}</span>;
+    monthHint = `${native} · ECB ${formatDate(fx.ratesDate)}`;
+    yearValue = <span>≈ {formatMoney(monthConv.eurCents * 12, "EUR")}</span>;
+  } else {
+    monthValue = <MoneyStack entries={monthly} />;
+    monthHint = "recurring, annual ÷ 12";
+    yearValue = <MoneyStack entries={perYear} />;
+  }
 
   const lineBreakdown = [
     counts.paid > 0 ? `${counts.paid} paid` : undefined,
@@ -427,16 +469,16 @@ function TotalsRow({ model }: { model: LedgerModel }) {
     <section aria-label="Totals" className="grid gap-3 sm:grid-cols-3">
       <StatTile
         accent
-        hint="recurring, annual ÷ 12"
+        hint={monthHint}
         icon={<WalletIcon aria-hidden="true" className="size-4" weight="fill" />}
         label="Per month"
-        value={<MoneyStack entries={monthly} />}
+        value={monthValue}
       />
       <StatTile
         hint="annualized run-rate"
         icon={<ChartLineUpIcon aria-hidden="true" className="size-4" />}
         label="Per year"
-        value={<MoneyStack entries={perYear} />}
+        value={yearValue}
       />
       <StatTile
         hint={lineBreakdown || "nothing tracked yet"}
