@@ -1,8 +1,14 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
-import { cronSurfaces } from "@fluncle/registry";
+import { cronSurfaces, type CronSchedule } from "@fluncle/registry";
 import { siteUrl } from "@/lib/fluncle-links";
-import { estimateNextRun, formatCadence, formatCountdown } from "@/lib/next-run";
+import {
+  estimateNextRun,
+  formatCadence,
+  formatCountdown,
+  formatZonedTime,
+  nextScheduledRun,
+} from "@/lib/next-run";
 import { Badge } from "@fluncle/ui/components/badge";
 import {
   getRecentStatusEvents,
@@ -48,11 +54,22 @@ const CRON_ORDER = CRON_SURFACES.map((surface) => surface.name);
 // automation with no declared cadence (e.g. `self-deploy`) simply shows none.
 const CRON_CADENCE_MS: Record<string, number> = {};
 
+// The subset of crons that fire at a FIXED wall-clock time (the 01:00 audit, the Friday
+// newsletter) carry a registry `schedule`; those get an ACCURATE next-fire instead of the
+// cadence estimate (which anchors to the last probe, not the cron's own clock). Interval
+// crons have no schedule and keep the honest `≈` estimate.
+const CRON_SCHEDULE: Record<string, CronSchedule> = {};
+
 for (const surface of CRON_SURFACES) {
   const cadence = surface.probeConfig?.cadenceMs;
+  const schedule = surface.probeConfig?.schedule;
 
   if (cadence !== undefined) {
     CRON_CADENCE_MS[surface.name] = cadence;
+  }
+
+  if (schedule !== undefined) {
+    CRON_SCHEDULE[surface.name] = schedule;
   }
 }
 
@@ -449,14 +466,16 @@ function ServiceRow({
   const subtitle = serviceSubtitle(service.service);
   const oldest = samples[0];
 
-  // Scheduled automations (the registry crons) carry a declared cadence, so their
-  // next run is COMPUTED from that cadence + the last probe timestamp — the operator
-  // can see when each will fire without SSHing the box. Deadpan and honestly
-  // approximate ("next ≈"): the timestamp we have is the ~10m probe, not the cron's
-  // own last-run wall-clock, so a wall-clock schedule (the daily backup, the weekly
-  // newsletter) is a coarse estimate. A row with no declared cadence shows none.
+  // Scheduled automations (the registry crons) show their next run so the operator can see
+  // when each fires without SSHing the box. A cron with a fixed wall-clock `schedule` (the
+  // 01:00 audit, the Friday newsletter) gets its TRUE next fire, DST and all; an interval
+  // cron keeps the honestly-approximate `≈` estimate (its cadence + the ~10m probe, not the
+  // cron's own last-run wall-clock). A row with no declared cadence shows none.
   const cadence = CRON_CADENCE_MS[service.service];
-  const nextRun = cadence === undefined ? null : estimateNextRun(service.checked_at, cadence, now);
+  const schedule = CRON_SCHEDULE[service.service];
+  const nextRun =
+    (schedule ? nextScheduledRun(schedule, now) : null) ??
+    (cadence === undefined ? null : estimateNextRun(service.checked_at, cadence, now));
 
   return (
     <article className="py-6 first:pt-0">
@@ -475,8 +494,12 @@ function ServiceRow({
 
       {nextRun && cadence !== undefined ? (
         <p className="mt-1 text-xs text-muted-foreground tabular-nums">
-          every {formatCadence(cadence)} · next ≈ {formatCheckedAt(nextRun)}{" "}
-          <span className="text-foreground/80">({formatCountdown(nextRun, now)})</span>
+          every {formatCadence(cadence)} · next ≈{" "}
+          {schedule ? formatZonedTime(nextRun, schedule.tz) : formatCheckedAt(nextRun)}{" "}
+          <span className="text-foreground/80">
+            ({schedule ? `${formatCheckedAt(nextRun)}, ` : ""}
+            {formatCountdown(nextRun, now)})
+          </span>
         </p>
       ) : undefined}
 

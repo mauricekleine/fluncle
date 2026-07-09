@@ -86,6 +86,22 @@ export type SurfaceContext = "web" | "ssh" | "cli" | "status";
 export type SurfaceWeights = Partial<Record<SurfaceContext, SurfaceWeight>>;
 
 /**
+ * A wall-clock cron schedule in a named IANA timezone — mirrors a systemd `OnCalendar`
+ * for the crons that fire at a FIXED local time (the 01:00 audit, the Friday newsletter)
+ * rather than on a rolling interval. It lets `/status` compute the TRUE next fire, DST
+ * and all, instead of the coarse `lastProbe + cadence` estimate an interval cron gets.
+ * Keep it in lockstep with the unit file's `OnCalendar` (the source of truth is the box).
+ */
+export type CronSchedule = {
+  /** Local fire time as `HH:MM`, 24h, in `tz` — e.g. "01:00", "15:00". */
+  time: string;
+  /** The IANA timezone the wall-clock `time` is expressed in, e.g. "Europe/Amsterdam". */
+  tz: string;
+  /** Weekday for a weekly schedule (0=Sun … 6=Sat, matching cron/systemd Fri=5); omit for daily. */
+  weekday?: number;
+};
+
+/**
  * How a `/status` prober should check a surface, when it is probeable. `cron`
  * surfaces are checked by freshness of their last on-box run, not an HTTP hit, so
  * they carry the cron name + cadence instead of a URL probe target.
@@ -97,6 +113,12 @@ export type ProbeConfig = {
   cronName?: string;
   /** Expected interval between runs/checks, in ms (a probe cadence or a cron interval). */
   cadenceMs?: number;
+  /**
+   * A fixed wall-clock schedule (kind `cron` only), for a cron that fires at a set local
+   * time rather than on an interval — so `/status` shows the real next fire, not a cadence
+   * estimate. Omit for interval crons (every-5m etc.); their estimate is honest.
+   */
+  schedule?: CronSchedule;
   /** How long the prober waits before calling a check failed, in ms. */
   timeoutMs?: number;
 };
@@ -926,6 +948,7 @@ export const SURFACES: readonly Surface[] = [
       cadenceMs: 7 * 24 * 60 * MINUTE_MS,
       cronName: "fluncle-newsletter",
       kind: "cron",
+      schedule: { time: "15:00", tz: "Europe/Amsterdam", weekday: 5 },
     },
     weights: { status: "secondary" },
   },
@@ -948,7 +971,12 @@ export const SURFACES: readonly Surface[] = [
     name: "cron.audit",
     operatorNotes:
       "01:00 Amsterdam, a rave-02 host systemd timer (docs/agents/hermes/audit-timer/). A full agentic claude -p session: audits the day's domain, fixes what's safe, files the rest to docs/audit-backlog.md, opens a PR. Subscription auth (CLAUDE_CODE_OAUTH_TOKEN), zero OpenRouter tokens. Source: docs/agents/hermes/scripts/audit-sweep.sh. Probed on /status as service `cron.audit`.",
-    probeConfig: { cadenceMs: 24 * 60 * MINUTE_MS, cronName: "fluncle-audit", kind: "cron" },
+    probeConfig: {
+      cadenceMs: 24 * 60 * MINUTE_MS,
+      cronName: "fluncle-audit",
+      kind: "cron",
+      schedule: { time: "01:00", tz: "Europe/Amsterdam" },
+    },
     weights: { status: "secondary" },
   },
   {
@@ -959,7 +987,12 @@ export const SURFACES: readonly Surface[] = [
     name: "cron.audit-review",
     operatorNotes:
       "05:00 Amsterdam, a rave-02 host systemd timer (docs/agents/hermes/audit-review-timer/). Reviews the newest open audit/* PR adversarially; merges when required checks are green and nothing high-impact remains, else comments and leaves it for the operator. Source: docs/agents/hermes/scripts/audit-review-sweep.sh. Probed on /status as service `cron.audit-review`.",
-    probeConfig: { cadenceMs: 24 * 60 * MINUTE_MS, cronName: "fluncle-audit-review", kind: "cron" },
+    probeConfig: {
+      cadenceMs: 24 * 60 * MINUTE_MS,
+      cronName: "fluncle-audit-review",
+      kind: "cron",
+      schedule: { time: "05:00", tz: "Europe/Amsterdam" },
+    },
     weights: { status: "secondary" },
   },
 ];

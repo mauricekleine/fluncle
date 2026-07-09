@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { estimateNextRun, formatCadence, formatCountdown } from "./next-run";
+import {
+  estimateNextRun,
+  formatCadence,
+  formatCountdown,
+  formatZonedTime,
+  nextScheduledRun,
+} from "./next-run";
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
@@ -100,5 +106,68 @@ describe("formatCadence", () => {
     expect(formatCadence(0)).toBe("");
     expect(formatCadence(-1)).toBe("");
     expect(formatCadence(Number.NaN)).toBe("");
+  });
+});
+
+describe("nextScheduledRun", () => {
+  const AUDIT = { time: "01:00", tz: "Europe/Amsterdam" };
+  const NEWSLETTER = { time: "15:00", tz: "Europe/Amsterdam", weekday: 5 };
+
+  it("daily 01:00 Amsterdam in SUMMER resolves to 23:00 UTC (CEST = UTC+2)", () => {
+    // Thu 2026-07-09 12:00 CEST — today's 01:00 already passed, so tomorrow's fire.
+    expect(nextScheduledRun(AUDIT, "2026-07-09T10:00:00.000Z")).toBe("2026-07-09T23:00:00.000Z");
+  });
+
+  it("returns today's fire when it is still ahead", () => {
+    // 2026-07-09 00:30 CEST — 01:00 CEST today is 30m out.
+    expect(nextScheduledRun(AUDIT, "2026-07-08T22:30:00.000Z")).toBe("2026-07-08T23:00:00.000Z");
+  });
+
+  it("daily 01:00 Amsterdam in WINTER resolves to 00:00 UTC (CET = UTC+1)", () => {
+    // The DST-correct half: a fixed LOCAL time maps to a DIFFERENT UTC instant off-season.
+    expect(nextScheduledRun(AUDIT, "2026-01-15T10:00:00.000Z")).toBe("2026-01-16T00:00:00.000Z");
+  });
+
+  it("weekly Friday 15:00 Amsterdam fires the NEXT Friday (13:00 UTC in summer)", () => {
+    // Thu 2026-07-09 → the newsletter fires TOMORROW (Fri Jul 10), not +7d from a probe.
+    expect(nextScheduledRun(NEWSLETTER, "2026-07-09T10:00:00.000Z")).toBe(
+      "2026-07-10T13:00:00.000Z",
+    );
+  });
+
+  it("returns the weekday's fire when it is still ahead", () => {
+    // Fri 2026-07-10 12:00 CEST — today's 15:00 CEST is 3h out.
+    expect(nextScheduledRun(NEWSLETTER, "2026-07-10T10:00:00.000Z")).toBe(
+      "2026-07-10T13:00:00.000Z",
+    );
+  });
+
+  it("rolls to next week once the weekday's time has passed", () => {
+    // Fri 2026-07-10 16:00 CEST — this Friday's 15:00 is gone → Fri Jul 17.
+    expect(nextScheduledRun(NEWSLETTER, "2026-07-10T14:00:00.000Z")).toBe(
+      "2026-07-17T13:00:00.000Z",
+    );
+  });
+
+  it("returns null on an unusable time or now", () => {
+    expect(nextScheduledRun({ time: "oops", tz: "Europe/Amsterdam" }, NOW)).toBeNull();
+    expect(nextScheduledRun(AUDIT, "not-a-date")).toBeNull();
+  });
+});
+
+describe("formatZonedTime", () => {
+  it("renders the instant in its own zone with a city label", () => {
+    // 23:00 UTC = 01:00 the NEXT day in Amsterdam (CEST) — the local face of the audit fire.
+    expect(formatZonedTime("2026-07-09T23:00:00.000Z", "Europe/Amsterdam")).toBe(
+      "Jul 10, 01:00 Amsterdam",
+    );
+    // 13:00 UTC = 15:00 CEST — the newsletter fire.
+    expect(formatZonedTime("2026-07-10T13:00:00.000Z", "Europe/Amsterdam")).toBe(
+      "Jul 10, 15:00 Amsterdam",
+    );
+  });
+
+  it("returns empty on a bad instant", () => {
+    expect(formatZonedTime("not-a-date", "Europe/Amsterdam")).toBe("");
   });
 });

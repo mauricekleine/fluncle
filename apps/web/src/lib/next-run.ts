@@ -20,6 +20,13 @@
 //
 // Kept a pure, dependency-free function so it is unit-tested in isolation
 // (`next-run.test.ts`), the radio-schedule precedent.
+//
+// A cron that fires at a FIXED wall-clock time (the 01:00 audit, the Friday 15:00
+// newsletter) carries a `schedule` in @fluncle/registry, and `nextScheduledRun` below
+// computes its TRUE next fire (DST and all) instead of the cadence estimate — closing the
+// drift the estimate is honestly-labeled `≈` about.
+
+import { type CronSchedule } from "@fluncle/registry";
 
 const MINUTE_MS = 60_000;
 const HOUR_MS = 60 * MINUTE_MS;
@@ -59,6 +66,139 @@ export function estimateNextRun(
   }
 
   return new Date(next).toISOString();
+}
+
+/**
+ * The wall-clock parts a given instant shows in an IANA `tz`. Intl is a Worker-runtime
+ * platform primitive — no dependency, so this stays as unit-testable as the rest of the file.
+ */
+function zonedParts(
+  utcMs: number,
+  tz: string,
+): { day: number; hour: number; minute: number; month: number; second: number; year: number } {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    day: "2-digit",
+    hour: "2-digit",
+    hour12: false,
+    minute: "2-digit",
+    month: "2-digit",
+    second: "2-digit",
+    timeZone: tz,
+    year: "numeric",
+  }).formatToParts(new Date(utcMs));
+  const get = (type: string): number => Number(parts.find((part) => part.type === type)?.value);
+  const hour = get("hour");
+
+  return {
+    day: get("day"),
+    hour: hour === 24 ? 0 : hour, // some ICU builds render midnight as "24"
+    minute: get("minute"),
+    month: get("month"),
+    second: get("second"),
+    year: get("year"),
+  };
+}
+
+/** The tz's UTC offset (localWall − utc) in ms at a given instant — always whole minutes. */
+function zoneOffsetMs(utcMs: number, tz: string): number {
+  const parts = zonedParts(utcMs, tz);
+  const asIfUtc = Date.UTC(
+    parts.year,
+    parts.month - 1,
+    parts.day,
+    parts.hour,
+    parts.minute,
+    parts.second,
+  );
+
+  return Math.round((asIfUtc - utcMs) / MINUTE_MS) * MINUTE_MS;
+}
+
+/**
+ * The UTC instant for a wall-clock `Y-M-D H:M` in `tz`, resolved in two passes so a DST
+ * offset change lands correctly (exact except at the ~1h transition seam itself — fine for a
+ * dashboard's next-run estimate).
+ */
+function zonedWallClockToUtc(
+  year: number,
+  month: number,
+  day: number,
+  hour: number,
+  minute: number,
+  tz: string,
+): number {
+  const asIfUtc = Date.UTC(year, month - 1, day, hour, minute, 0);
+  const offset1 = zoneOffsetMs(asIfUtc, tz);
+  const utc = asIfUtc - offset1;
+  const offset2 = zoneOffsetMs(utc, tz);
+
+  return offset2 === offset1 ? utc : asIfUtc - offset2;
+}
+
+/**
+ * The next fire of a fixed wall-clock cron `schedule` (a local `HH:MM`, optionally on one
+ * weekday) as an ISO string strictly after `nowIso` — or `null` on unusable input. Walks
+ * calendar days forward IN THE SCHEDULE'S TZ (DST handled per-day), up to 8 days, which
+ * covers any daily or weekly schedule. The ACCURATE alternative to `estimateNextRun` for a
+ * wall-clock cron.
+ */
+export function nextScheduledRun(schedule: CronSchedule, nowIso: string): string | null {
+  const now = new Date(nowIso).getTime();
+  const [hour, minute] = schedule.time.split(":").map(Number);
+
+  if (
+    hour === undefined ||
+    minute === undefined ||
+    !Number.isFinite(now) ||
+    !Number.isFinite(hour) ||
+    !Number.isFinite(minute)
+  ) {
+    return null;
+  }
+
+  for (let dayOffset = 0; dayOffset <= 8; dayOffset += 1) {
+    const cand = zonedParts(now + dayOffset * DAY_MS, schedule.tz);
+
+    if (schedule.weekday !== undefined) {
+      const dow = new Date(Date.UTC(cand.year, cand.month - 1, cand.day)).getUTCDay();
+
+      if (dow !== schedule.weekday) {
+        continue;
+      }
+    }
+
+    const fire = zonedWallClockToUtc(cand.year, cand.month, cand.day, hour, minute, schedule.tz);
+
+    if (fire > now) {
+      return new Date(fire).toISOString();
+    }
+  }
+
+  return null;
+}
+
+/**
+ * A scheduled next-run rendered in its own IANA `tz` as "Jul 10, 01:00 Amsterdam" — the local
+ * face of the fire (paired with its UTC form + countdown on /status). Empty on a bad instant.
+ */
+export function formatZonedTime(iso: string, tz: string): string {
+  const date = new Date(iso);
+
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+
+  const stamp = new Intl.DateTimeFormat("en-US", {
+    day: "numeric",
+    hour: "2-digit",
+    hour12: false,
+    minute: "2-digit",
+    month: "short",
+    timeZone: tz,
+  }).format(date);
+  const city = (tz.split("/").pop() ?? tz).replace(/_/g, " ");
+
+  return `${stamp} ${city}`;
 }
 
 /**
