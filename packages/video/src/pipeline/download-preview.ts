@@ -118,12 +118,18 @@ export async function normalizeAndEncode(srcPath: string, m4aPath: string): Prom
 /**
  * Download `url`, normalize loudness (two-pass), and produce both the
  * deliverable m4a and an analysis wav. The m4a lands at public/<trackId>.m4a.
+ * `headers` are forwarded to the fetch — the authenticated archive route needs
+ * the agent-tier bearer; the public live-preview path passes none.
  */
-export async function downloadPreview(url: string, trackId: string): Promise<DownloadedPreview> {
+export async function downloadPreview(
+  url: string,
+  trackId: string,
+  headers?: Record<string, string>,
+): Promise<DownloadedPreview> {
   const tmpDir = await mkdtemp(path.join(tmpdir(), `fluncle-preview-${trackId}-`));
   const srcPath = path.join(tmpDir, "source.mp3");
 
-  const res = await fetch(url);
+  const res = await fetch(url, headers ? { headers } : {});
   if (!res.ok) {
     await rm(tmpDir, { force: true, recursive: true });
     throw new Error(`downloadPreview: GET preview failed with ${res.status} ${res.statusText}`);

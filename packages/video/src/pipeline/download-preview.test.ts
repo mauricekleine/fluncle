@@ -9,9 +9,14 @@ import { mkdtemp, readdir, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 
-import { deletePreviewAudio, normalizeAndEncode, sweepPreviewAudioCache } from "./download-preview";
+import {
+  deletePreviewAudio,
+  downloadPreview,
+  normalizeAndEncode,
+  sweepPreviewAudioCache,
+} from "./download-preview";
 
 const FFMPEG = process.env.FLUNCLE_FFMPEG ?? "ffmpeg";
 const hasFfmpeg = spawnSync(FFMPEG, ["-version"]).status === 0;
@@ -136,6 +141,58 @@ describe("sweepPreviewAudioCache", () => {
     const deleted = await sweepPreviewAudioCache(8, "/nonexistent/fluncle-sweep-dir");
 
     expect(deleted).toEqual([]);
+  });
+});
+
+describe("downloadPreview (fetch headers)", () => {
+  const realFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  // Drive downloadPreview through a swapped fetch that captures the request init
+  // and returns a non-ok response, so it throws before any ffmpeg work — enough
+  // to assert the auth headers reach the fetch (or are absent on the live path).
+  function installCapturingFetch(): { calls: { init: RequestInit | undefined; url: string }[] } {
+    const calls: { init: RequestInit | undefined; url: string }[] = [];
+    globalThis.fetch = (async (
+      input: string | URL | Request,
+      init?: RequestInit,
+    ): Promise<Response> => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      calls.push({ init, url });
+      return { ok: false, status: 404, statusText: "Not Found" } as Response;
+    }) as typeof fetch;
+    return { calls };
+  }
+
+  test("forwards the provided headers to the fetch", async () => {
+    const { calls } = installCapturingFetch();
+
+    let error: unknown;
+    await downloadPreview("https://www.fluncle.com/api/admin/tracks/x/preview-audio", "trk", {
+      authorization: "Bearer agent-token",
+    }).catch((e: unknown) => {
+      error = e;
+    });
+
+    expect((error as Error | undefined)?.message).toMatch(/GET preview failed with 404/);
+    expect((calls[0]?.init?.headers as Record<string, string> | undefined)?.authorization).toBe(
+      "Bearer agent-token",
+    );
+  });
+
+  test("passes no headers on the live-preview path (backward compatible)", async () => {
+    const { calls } = installCapturingFetch();
+
+    let error: unknown;
+    await downloadPreview("https://cdn.deezer.com/live.mp3", "trk").catch((e: unknown) => {
+      error = e;
+    });
+
+    expect((error as Error | undefined)?.message).toMatch(/GET preview failed with 404/);
+    expect(calls[0]?.init?.headers).toBeUndefined();
   });
 });
 

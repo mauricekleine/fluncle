@@ -23,6 +23,11 @@ export type ResolvedPreview = {
   source: PreviewSource;
   url: string;
   confidence: number;
+  /**
+   * Request headers required to fetch `url` — e.g. the agent-tier bearer for the
+   * authenticated archive route. Absent for the public live Deezer/iTunes URLs.
+   */
+  headers?: Record<string, string>;
 };
 
 const CONFIDENCE_FLOOR = 0.6;
