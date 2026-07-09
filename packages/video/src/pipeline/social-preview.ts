@@ -171,7 +171,7 @@ async function main(): Promise<void> {
   console.log(`[social-preview] preview: ${preview.source} (confidence ${preview.confidence})`);
 
   console.log(`[social-preview] downloading + normalizing`);
-  const downloaded = await downloadPreview(preview.url, trackId);
+  const downloaded = await downloadPreview(preview.url, trackId, preview.headers);
   console.log(`[social-preview] m4a -> ${downloaded.m4aPath}`);
 
   let audio;
