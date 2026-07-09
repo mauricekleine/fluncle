@@ -76,11 +76,13 @@ for (const surface of CRON_SURFACES) {
 }
 
 // Self-posted automations that belong under the automation headings but are NOT registry
-// crons: `self-deploy` is the box's host systemd timer (pin-watch) reporting its own
-// health via record_health, not a healthcheck-probed Hermes cron — so it never enters
-// the registry cron catalog, yet it is a humming scheduled system like the rest. It is an
-// OPS automation and LEADS that group (foundational), ahead of the ops crons.
-const SELF_POSTED_AUTOMATION_ORDER = ["self-deploy"];
+// crons: `self-deploy` (rave-02's pin-watch, the Hermes image) and `self-deploy-ssh`
+// (rave-01's fluncle-ssh-freshen, the public SSH terminal) are host systemd timers
+// reporting their own health via record_health, not healthcheck-probed Hermes crons — so
+// they never enter the registry cron catalog, yet they are humming scheduled systems like
+// the rest. Both are OPS automations and LEAD that group (foundational), ahead of the ops
+// crons.
+const SELF_POSTED_AUTOMATION_ORDER = ["self-deploy", "self-deploy-ssh"];
 const AUTOMATION_ORDER = [...SELF_POSTED_AUTOMATION_ORDER, ...CRON_ORDER];
 const AUTOMATION_SERVICE_IDS = new Set(AUTOMATION_ORDER);
 
@@ -95,6 +97,7 @@ const OPS_AUTOMATION_IDS = new Set([
   "cron.backup",
   "cron.healthcheck",
   "self-deploy",
+  "self-deploy-ssh",
 ]);
 
 // The deliberate, fixed display order for the CORE services (the reachability/health of a
@@ -135,6 +138,7 @@ const SERVICE_LABELS: Record<string, string> = {
   r2: "Media storage",
   "render-box": "Render box",
   "self-deploy": "Self-deploy",
+  "self-deploy-ssh": "Self-deploy (SSH)",
   ssh: "SSH terminal",
   web: "Web",
 };
@@ -167,6 +171,7 @@ const SERVICE_SUBTITLES: Record<string, string> = {
   r2: "found.fluncle.com",
   "render-box": "the scale-to-zero box's reachability",
   "self-deploy": "the agent box rebuilds itself when its tools update",
+  "self-deploy-ssh": "the rave terminal rebuilds itself when apps/ssh changes",
   ssh: "rave.fluncle.com",
   web: "www.fluncle.com",
 };

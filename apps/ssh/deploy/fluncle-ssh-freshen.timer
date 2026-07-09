@@ -1,0 +1,17 @@
+[Unit]
+Description=fluncle-ssh-freshen timer — periodic check for an apps/ssh change on main to rebuild + swap the SSH terminal
+Documentation=https://github.com/mauricekleine/fluncle/blob/main/apps/ssh/deploy/README.md
+
+[Timer]
+# First check a few minutes after boot, then hourly. The check is a cheap no-op when
+# HEAD has no compiled-source change since the last deploy (a fetch + a diff), so hourly
+# is nearly free; an actual rebuild only runs when apps/ssh sources moved. A little jitter
+# so this box's timers never fire in lockstep with the ~10m watchdog. Persistent catches
+# up a window missed while the box was asleep/off on the next wake.
+OnBootSec=5min
+OnUnitActiveSec=1h
+RandomizedDelaySec=90
+Persistent=true
+
+[Install]
+WantedBy=timers.target

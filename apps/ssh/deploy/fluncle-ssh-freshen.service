@@ -1,0 +1,32 @@
+[Unit]
+Description=fluncle-ssh-freshen — rave-01 SSH-terminal self-deploy (watch main for apps/ssh changes, rebuild + smoke + swap + auto-rollback)
+Documentation=https://github.com/mauricekleine/fluncle/blob/main/apps/ssh/deploy/README.md
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+# Runs as root: it owns the build clone at /opt/fluncle-ssh-build, swaps the binary at
+# /opt/fluncle-ssh/fluncle-ssh, and drives `systemctl restart fluncle-ssh`. Credential-free
+# — it clones a public repo and reuses the live service's env; it reads nothing from `op`.
+ExecStart=/opt/fluncle-ssh-freshen/fluncle-ssh-freshen.sh
+
+# Optional alert/status inputs (Discord webhook + the agent-scoped API token for the
+# /status `self-deploy-ssh` row). Operator-placed, kept OUT of the repo; the `-` prefix
+# makes it optional, so the self-deploy still runs (silently) when the file is absent.
+# Keys: DISCORD_ALERT_WEBHOOK, FLUNCLE_API_TOKEN (values in the ops runbook note).
+EnvironmentFile=-/etc/fluncle/ssh-freshen.env
+
+# A clean tick is seconds; a full `go build` of the SSH app is well under a minute. Give room.
+TimeoutStartSec=600
+
+# Modest hardening for a root oneshot that builds + swaps a binary and restarts a unit.
+NoNewPrivileges=true
+ProtectControlGroups=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target
