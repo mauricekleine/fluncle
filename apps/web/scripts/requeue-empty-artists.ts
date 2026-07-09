@@ -20,9 +20,18 @@
  * the count it would clear); `--confirm` performs the update. Idempotent — a re-run
  * after the sweep has filled socials clears nothing new.
  *
+ * `--all` widens the target from "0-social artists" to EVERY resolved artist. Use it
+ * after a resolver UPGRADE (not just a bug fix), when even artists that already have
+ * a link or two should be re-resolved to pick up newly-reachable platforms — e.g. a
+ * new platform in the vocabulary (Beatport) or a broadened Firecrawl backfill. It
+ * preserves operator work: `persistResolution` keeps any `status='confirmed'` social
+ * on re-resolution, so re-queuing a hand-curated artist never clobbers it.
+ *
  * Usage:
- *   bun run apps/web/scripts/requeue-empty-artists.ts            # dry run (default)
- *   bun run apps/web/scripts/requeue-empty-artists.ts --confirm  # clear resolved_at
+ *   bun run apps/web/scripts/requeue-empty-artists.ts                  # dry run, 0-social only
+ *   bun run apps/web/scripts/requeue-empty-artists.ts --confirm        # clear resolved_at, 0-social only
+ *   bun run apps/web/scripts/requeue-empty-artists.ts --all            # dry run, EVERY resolved artist
+ *   bun run apps/web/scripts/requeue-empty-artists.ts --all --confirm  # clear resolved_at, every resolved artist
  */
 
 import { getDb, typedRows } from "../src/lib/server/db";
@@ -30,44 +39,54 @@ import { getDb, typedRows } from "../src/lib/server/db";
 type EmptyArtistRow = { id: string; name: string };
 
 // Artists that finished resolution (resolved_at stamped) but have zero socials.
-const SELECT_EMPTY = `
+const EMPTY_ONLY = `and id not in (select distinct artist_id from artist_socials)`;
+
+const selectSql = (all: boolean) => `
   select id, name
     from artists
    where resolved_at is not null
-     and id not in (select distinct artist_id from artist_socials)
+     ${all ? "" : EMPTY_ONLY}
    order by id asc`;
 
-const CLEAR_EMPTY = `
+const clearSql = (all: boolean) => `
   update artists
      set resolved_at = null,
          updated_at = ?
    where resolved_at is not null
-     and id not in (select distinct artist_id from artist_socials)`;
+     ${all ? "" : EMPTY_ONLY}`;
 
 async function main() {
   const confirm = process.argv.includes("--confirm");
+  const all = process.argv.includes("--all");
   const db = await getDb();
 
-  const rows = typedRows<EmptyArtistRow>((await db.execute({ sql: SELECT_EMPTY })).rows);
+  const rows = typedRows<EmptyArtistRow>((await db.execute({ sql: selectSql(all) })).rows);
 
-  console.log(`Resolved-but-empty artists (0 socials, resolved_at stamped): ${rows.length}`);
+  const scope = all
+    ? "All resolved artists (re-resolve to backfill missed links)"
+    : "Resolved-but-empty artists (0 socials, resolved_at stamped)";
+  console.log(`${scope}: ${rows.length}`);
   for (const row of rows) {
     console.log(`  ${row.id}  ${row.name}`);
   }
 
   if (rows.length === 0) {
-    console.log("\nNothing to re-queue — every resolved artist already has socials.");
+    console.log(
+      all
+        ? "\nNothing to re-queue — no resolved artists."
+        : "\nNothing to re-queue — every resolved artist already has socials.",
+    );
     return;
   }
 
   if (!confirm) {
     console.log(
-      `\nDRY RUN — nothing written. Re-run with --confirm to clear resolved_at on these ${rows.length} artists.`,
+      `\nDRY RUN — nothing written. Re-run with ${all ? "--all --confirm" : "--confirm"} to clear resolved_at on these ${rows.length} artists.`,
     );
     return;
   }
 
-  const result = await db.execute({ args: [new Date().toISOString()], sql: CLEAR_EMPTY });
+  const result = await db.execute({ args: [new Date().toISOString()], sql: clearSql(all) });
 
   console.log(`\nCleared resolved_at on ${result.rowsAffected} artists — back in the sweep queue.`);
 }
