@@ -1,0 +1,14 @@
+[Unit]
+Description=fluncle-triage timer — trigger the submission-triage pre-chew sweep every 15m on the rave-02 host (not the Hermes gateway)
+
+[Timer]
+# First tick shortly after boot (staggered at 5min), then every 15m. Submissions are
+# low-volume, so the cadence is relaxed; the sweep acts only on un-triaged pending rows
+# (idempotent), so a deferred tick just annotates on the next cycle. Persistent catches
+# up a tick missed across a box reboot.
+OnBootSec=5min
+OnUnitActiveSec=15min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

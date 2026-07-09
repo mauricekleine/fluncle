@@ -108,6 +108,7 @@ export {
   getSubmission,
   listSubmissions,
   rejectSubmission,
+  triageSubmission,
 } from "./admin-submissions";
 export {
   createSubscription,

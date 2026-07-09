@@ -207,6 +207,9 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "POST /admin/social/posts/capture": "capture_post_urls",
   "POST /admin/submissions/{submissionId}/approve": "approve_submission",
   "POST /admin/submissions/{submissionId}/reject": "reject_submission",
+  // triage_submission (the pre-chew verdict write) is contract-only oRPC — no TanStack
+  // route file; oRPC owns the path directly, like note_track. Admin tier (agent-allowed).
+  "POST /admin/submissions/{submissionId}/triage": "triage_submission",
   // The cost-ledger create (COST-02) — contract-only oRPC (no TanStack route file). Operator tier.
   "POST /admin/subscriptions": "create_subscription",
   "POST /admin/tracks": "publish_track",

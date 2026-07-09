@@ -13,12 +13,14 @@ const listPendingSubmissions = vi.fn();
 const getSubmission = vi.fn();
 const approveSubmission = vi.fn();
 const rejectSubmission = vi.fn();
+const triageSubmission = vi.fn();
 
 vi.mock("./submissions", () => ({
   approveSubmission: (...args: unknown[]) => approveSubmission(...args),
   getSubmission: (...args: unknown[]) => getSubmission(...args),
   listPendingSubmissions: (...args: unknown[]) => listPendingSubmissions(...args),
   rejectSubmission: (...args: unknown[]) => rejectSubmission(...args),
+  triageSubmission: (...args: unknown[]) => triageSubmission(...args),
 }));
 
 const SUBMISSION_ID = "sub-123";
@@ -41,6 +43,7 @@ beforeEach(() => {
   getSubmission.mockReset();
   approveSubmission.mockReset();
   rejectSubmission.mockReset();
+  triageSubmission.mockReset();
 });
 
 // ── list_submissions — admin tier ────────────────────────────────────────────
@@ -146,5 +149,37 @@ describe("oRPC reject_submission (POST .../reject)", () => {
       submission: { ...SUBMISSION, status: "rejected" },
     });
     expect(rejectSubmission).toHaveBeenCalledWith(SUBMISSION_ID);
+  });
+});
+
+// ── triage_submission — admin tier (agent-allowed) ───────────────────────────
+describe("oRPC triage_submission (POST .../triage)", () => {
+  const body = { verdict: "looks like a find — not yet logged" };
+
+  it("401s with no token", async () => {
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      req(`/admin/submissions/${SUBMISSION_ID}/triage`, "POST", undefined, body),
+    );
+
+    expect(response?.status).toBe(401);
+    expect(triageSubmission).not.toHaveBeenCalled();
+  });
+
+  it("lets the AGENT write the verdict (admin tier) and returns the live envelope", async () => {
+    const triaged = { ...SUBMISSION, triageVerdict: "looks like a find — not yet logged" };
+    triageSubmission.mockResolvedValueOnce(triaged);
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      req(`/admin/submissions/${SUBMISSION_ID}/triage`, "POST", AGENT_TOKEN, body),
+    );
+
+    expect(response?.status).toBe(200);
+    expect(await readJson(response)).toEqual({ ok: true, submission: triaged });
+    expect(triageSubmission).toHaveBeenCalledWith(
+      SUBMISSION_ID,
+      "looks like a find — not yet logged",
+    );
   });
 });

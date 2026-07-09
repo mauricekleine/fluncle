@@ -135,6 +135,12 @@ const APPROVED_VERBS = new Set<string>([
   "set",
   "start",
   "sweep",
+  // `triage` (write the pre-chew advisory verdict onto a pending submission) — added
+  // deliberately with the `triage_submission` op. The written-verdict sibling of
+  // `note` (author the finding's note): the on-box `fluncle-triage` sweep pre-chews a
+  // crew submission so it lands in the operator's queue already assessed. Advisory
+  // only; distinct from `approve`/`reject` (the operator's publishing decision).
+  "triage",
   "unsave",
 ]);
 

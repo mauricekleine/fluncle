@@ -1325,6 +1325,41 @@ function addAdminCommands(program: Command): void {
       await approveSubmissionCommand(submissionId, options);
     });
 
+  // `triage_submission` → `admin submissions triage` (Convention B). Write the pre-chew
+  // advisory verdict onto a PENDING submission (the on-box `fluncle-triage` sweep's
+  // delivery step). AGENT tier: moves no approve/reject authority. `--verdict-file` is
+  // the sweep's path (a claude-authored line, no shell-escaping); `--verdict` is inline.
+  submissions
+    .command("triage")
+    .description("Write the pre-chew triage verdict onto a pending submission")
+    .argument("[submissionId]")
+    .option("--verdict <text>", "The triage verdict one-liner")
+    .option("--verdict-file <file>", "Read the verdict from a file")
+    .option("--json", "Print JSON", false)
+    .action(
+      async (
+        submissionId: string | undefined,
+        options: { json?: boolean; verdict?: string; verdictFile?: string },
+      ) => {
+        if (!submissionId) {
+          throw new Error("Missing submission id for: triage");
+        }
+
+        const verdict = options.verdictFile
+          ? readFileSync(options.verdictFile, "utf8")
+          : options.verdict;
+
+        if (!verdict || !verdict.trim()) {
+          throw new Error(
+            "Usage: fluncle admin submissions triage <submissionId> (--verdict <text> | --verdict-file <file>) [--json]",
+          );
+        }
+
+        const { triageSubmissionCommand } = await import("./commands/submissions");
+        await triageSubmissionCommand(submissionId, verdict, { json: options.json });
+      },
+    );
+
   const auth = configureCommand(admin.command("auth").description("Authentication commands"));
 
   auth

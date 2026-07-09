@@ -1,0 +1,22 @@
+[Unit]
+Description=fluncle-triage — rave-02 host trigger for the submission-triage pre-chew sweep
+Documentation=https://github.com/mauricekleine/fluncle/blob/main/docs/agents/hermes/triage-timer/README.md
+Wants=network-online.target docker.service
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+# Root drives the Docker daemon; `docker exec -u hermes` runs the WORK as the unprivileged
+# hermes user (hermes owns the SHARED 0600 secrets file the .sh sources — the same
+# CLAUDE_CODE_OAUTH_TOKEN note-sweep uses; no new secret). The .sh/.ts pair is BAKED at
+# /opt/hermes-scripts/ (Unit A — auto-updates from main via pin-watch); this host unit
+# only TRIGGERS it, and the sweep self-writes its /status marker (cron-output.sh).
+ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/triage-sweep.sh
+# A HYBRID sweep: deterministic everywhere except one `claude -p` verdict per submission
+# (BATCH_CAP=3). Give the model step headroom past the fast Worker-trigger sweeps.
+TimeoutStartSec=300
+# Modest hardening for a root docker-driving oneshot.
+NoNewPrivileges=true
+ProtectControlGroups=true
+ProtectKernelTunables=true
+RestrictSUIDSGID=true

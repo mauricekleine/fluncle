@@ -31,6 +31,7 @@ const EMPTY_INPUTS: AttentionInputs = {
   clips: [],
   mixtapes: [],
   recordings: [],
+  submissions: [],
 };
 
 const item = (overrides: Partial<AttentionItem> & { id: string }): AttentionItem => ({
@@ -314,6 +315,52 @@ describe("deriveAttentionItems", () => {
       title: "Aktive",
     });
   });
+
+  it("rows each pending submission oldest-first, deep-linked to the exact review-tray candidate", () => {
+    const items = deriveAttentionItems(
+      {
+        ...EMPTY_INPUTS,
+        submissions: [
+          {
+            artUrl: "https://img/sub.jpg",
+            artists: ["Calibre"],
+            createdAt: iso(NOW - 5 * HOUR),
+            id: "sub-1",
+            title: "Mr Right On",
+            triageVerdict: "looks like a find — Calibre, not yet logged",
+          },
+        ],
+      },
+      NOW,
+    );
+
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      anchorAt: iso(NOW - 5 * HOUR),
+      artUrl: "https://img/sub.jpg",
+      href: "/admin/findings?submission=sub-1",
+      id: "submission:sub-1",
+      source: "submission",
+      title: "Calibre — Mr Right On",
+      verdict: "looks like a find — Calibre, not yet logged",
+    });
+  });
+
+  it("omits the verdict on a submission the pre-chew sweep has not visited yet", () => {
+    const items = deriveAttentionItems(
+      {
+        ...EMPTY_INPUTS,
+        submissions: [
+          { artists: ["Nu:Tone"], createdAt: iso(NOW - HOUR), id: "sub-2", title: "Falling" },
+        ],
+      },
+      NOW,
+    );
+
+    expect(items).toHaveLength(1);
+    expect(items[0]?.verdict).toBeUndefined();
+    expect(items[0]).toMatchObject({ id: "submission:sub-2", source: "submission" });
+  });
 });
 
 describe("orderQueue", () => {
@@ -462,5 +509,14 @@ describe("primaryFor", () => {
     expect(
       primaryFor(item({ href: "/admin/artists?artist=a1", id: "a", source: "artist-review" }), NOW),
     ).toEqual({ href: "/admin/artists?artist=a1", kind: "open", label: "Review" });
+  });
+
+  it("routes a submission row to its review-tray deep-link (never an inline decision)", () => {
+    expect(
+      primaryFor(
+        item({ href: "/admin/findings?submission=sub-1", id: "s", source: "submission" }),
+        NOW,
+      ),
+    ).toEqual({ href: "/admin/findings?submission=sub-1", kind: "open", label: "Review" });
   });
 });

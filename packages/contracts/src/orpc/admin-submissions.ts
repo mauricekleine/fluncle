@@ -15,6 +15,15 @@ import * as z from "zod";
 import { SubmissionSchema } from "./_shared";
 
 /**
+ * The triage body (POST /admin/submissions/{submissionId}/triage). LOOSE: the live
+ * handler gates the `verdict` itself (`no_verdict`/`verdict_too_short`/
+ * `verdict_too_long`), so the contract stays permissive to keep those codes exact.
+ */
+const TriageSubmissionBodySchema = z.looseObject({
+  verdict: z.unknown().optional(),
+});
+
+/**
  * `list_submissions` → `GET /admin/submissions` (operationId `listSubmissions`).
  *
  * Admin tier (live `requireAdmin`). The pending-review queue. Preserves the live
@@ -104,10 +113,41 @@ export const rejectSubmission = oc
     }),
   );
 
+/**
+ * `triage_submission` → `POST /admin/submissions/{submissionId}/triage` (operationId
+ * `triageSubmission`).
+ *
+ * ADMIN tier (agent-allowed, no `operatorGuard`) — the written-verdict sibling of
+ * `note_track`: the on-box `fluncle-triage` sweep pre-chews a pending submission and
+ * writes an advisory one-line verdict (a "looks like a find / already logged / not our
+ * lane" read) so it lands in the operator's attention queue already assessed. The
+ * verdict is OPERATOR-INTERNAL and ADVISORY only: approve/reject stays operator tier
+ * and untouched — this moves no publishing authority. Writes onto a PENDING submission
+ * only (a reviewed one is a 409). Preserves the `{ ok: true, submission }` envelope.
+ * Codes: `submission_not_found`/404, `invalid_status`/409, `no_verdict`/400,
+ * `verdict_too_short`/422, `verdict_too_long`/422.
+ */
+export const triageSubmission = oc
+  .route({
+    method: "POST",
+    operationId: "triageSubmission",
+    path: "/admin/submissions/{submissionId}/triage",
+    summary: "Write the pre-chew triage verdict onto a pending submission",
+    tags: ["Admin"],
+  })
+  .input(TriageSubmissionBodySchema.extend({ submissionId: z.string() }))
+  .output(
+    z.object({
+      ok: z.literal(true),
+      submission: SubmissionSchema,
+    }),
+  );
+
 /** The `admin-submissions` domain's ops, merged into the root contract by `./index.ts`. */
 export const adminSubmissionsContract = {
   approve_submission: approveSubmission,
   get_submission: getSubmission,
   list_submissions: listSubmissions,
   reject_submission: rejectSubmission,
+  triage_submission: triageSubmission,
 };

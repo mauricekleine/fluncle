@@ -332,6 +332,10 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   set_mixtape_cues: "operator",
   start_lastfm_auth: "operator",
   sweep_push_receipts: "admin",
+  // The pre-chew triage verdict write — agent tier (adminAuth only, no operatorGuard),
+  // the note_track precedent: the on-box `fluncle-triage` sweep annotates a pending
+  // submission with its agent-scoped token. Advisory only; approve/reject stay operator.
+  triage_submission: "admin",
   unsave_private_finding: "private-session",
   update_clip: "operator",
   update_edition: "admin",

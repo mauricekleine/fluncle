@@ -10,6 +10,7 @@ import {
   type ClipInput,
   deriveAttentionItems,
   type SocialStatus,
+  type SubmissionInput,
 } from "../attention";
 import { listArtistReviewRows, parseArtistsJson } from "./artists";
 import { listClipPosts } from "./clip-social";
@@ -75,15 +76,49 @@ async function listClipRows(): Promise<ClipInput[]> {
   }));
 }
 
+type SubmissionRow = {
+  artists_json: string;
+  artwork_url: string | null;
+  created_at: string;
+  id: string;
+  title: string;
+  triage_verdict: string | null;
+};
+
+// Every pending crew submission awaiting the operator's approve/reject — one queue row
+// each, oldest first, carrying its pre-chew triage verdict when the sweep has visited.
+// Scoped to `status = 'pending'` (the trust rule: a reviewed submission is not the
+// operator's business anymore); the pure model deep-links each to the review tray.
+async function listSubmissionRows(): Promise<SubmissionInput[]> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: ["pending"],
+    sql: `select id, title, artists_json, artwork_url, created_at, triage_verdict
+          from submissions
+          where status = ?
+          order by created_at asc`,
+  });
+
+  return typedRows<SubmissionRow>(result.rows).map((row) => ({
+    artists: parseArtistsJson(row.artists_json),
+    ...(row.artwork_url ? { artUrl: row.artwork_url } : {}),
+    createdAt: row.created_at,
+    id: row.id,
+    title: row.title,
+    ...(row.triage_verdict ? { triageVerdict: row.triage_verdict } : {}),
+  }));
+}
+
 /** One pass over the sources + the pulse datum + the zero-state fallback. */
 export async function readAttentionSnapshot(now: number = Date.now()): Promise<AttentionSnapshot> {
-  const [clips, recordings, mixtapes, clipPosts, artistReviews, renders, newest] =
+  const [clips, recordings, mixtapes, clipPosts, artistReviews, submissions, renders, newest] =
     await Promise.all([
       listClipRows(),
       listRecordings(),
       listMixtapes({ includeUnpublished: true }),
       listClipPosts(),
       listArtistReviewRows(),
+      listSubmissionRows(),
       // The render queue's canonical read (`fluncle admin tracks queue`): findings
       // with context gathered but no video yet.
       listTracks({ hasContext: true, hasVideo: false, limit: 1 }),
@@ -119,6 +154,7 @@ export async function readAttentionSnapshot(now: number = Date.now()): Promise<A
         title: recording.title,
         tracklistLength: recording.tracklist.length,
       })),
+      submissions,
     },
     now,
   );

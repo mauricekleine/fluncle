@@ -16,6 +16,13 @@ const contactMaxLength = 120;
 const rateLimitWindowMs = 60 * 60 * 1000;
 const rateLimitMaxSubmissions = 5;
 
+// The triage verdict is a single operator-internal one-liner (advisory, never
+// public), so its bounds are looser than the public `note` gate: floor it above a
+// bare word, cap it at a one-line budget. No banned-word/geography scan — it never
+// reaches a public surface.
+const triageVerdictMinLength = 4;
+const triageVerdictMaxLength = 200;
+
 // The submission body is the contract's inferred input (`@fluncle/contracts/orpc`),
 // the single source of truth — no parallel hand-mirror to drift. LOOSE/all-unknown
 // by design; `validateSubmissionInput` narrows it.
@@ -35,6 +42,7 @@ type SubmissionRow = {
   status: SubmissionStatus;
   created_at: string;
   reviewed_at: string | null;
+  triage_verdict: string | null;
 };
 
 type PublishedTrackRow = {
@@ -144,7 +152,8 @@ export async function listPendingSubmissions(): Promise<Submission[]> {
         source,
         status,
         created_at,
-        reviewed_at
+        reviewed_at,
+        triage_verdict
       from submissions
       where status = ?
       order by created_at asc`,
@@ -170,7 +179,8 @@ export async function getSubmission(id: string): Promise<Submission> {
         source,
         status,
         created_at,
-        reviewed_at
+        reviewed_at,
+        triage_verdict
       from submissions
       where id = ?
       limit 1`,
@@ -222,6 +232,69 @@ export async function approveSubmission(id: string): Promise<Submission> {
   }
 
   await updateSubmissionStatus(id, "approved");
+
+  return getSubmission(id);
+}
+
+/**
+ * Validate the pre-chew triage verdict — a short operator-internal one-liner. Trims
+ * and length-bounds it, throwing a clean `ApiError` (the handler turns it into a
+ * 4xx). Advisory only: it never reaches a public surface, so there is no voice gate.
+ */
+export function gateTriageVerdict(text: unknown): string {
+  if (typeof text !== "string" || !text.trim()) {
+    throw new ApiError("no_verdict", "A `verdict` (the triage one-liner) is required", 400);
+  }
+
+  const trimmed = text.trim();
+
+  if (trimmed.length < triageVerdictMinLength) {
+    throw new ApiError(
+      "verdict_too_short",
+      `The verdict is too short (${trimmed.length} < ${triageVerdictMinLength} chars)`,
+      422,
+    );
+  }
+
+  if (trimmed.length > triageVerdictMaxLength) {
+    throw new ApiError(
+      "verdict_too_long",
+      `The verdict is too long (${trimmed.length} > ${triageVerdictMaxLength} chars)`,
+      422,
+    );
+  }
+
+  return trimmed;
+}
+
+/**
+ * Write the pre-chew triage verdict onto a PENDING submission (the agent-tier sweep's
+ * advisory legwork). Gates the verdict, then updates only while the submission is still
+ * pending — a reviewed (approved/rejected) submission is a 409, so a late sweep tick can
+ * never re-annotate a decided candidate. Advisory only: this moves no approve/reject
+ * authority. Unlike the auto-note's fill-empty-only guard, the sweep MAY refresh its own
+ * prior verdict (it re-reads the archive each tick), so a re-triage overwrites.
+ */
+export async function triageSubmission(id: string, verdict: unknown): Promise<Submission> {
+  const gated = gateTriageVerdict(verdict);
+  const submission = await getSubmission(id);
+
+  if (submission.status !== "pending") {
+    throw new ApiError("invalid_status", "Only pending submissions can be triaged", 409);
+  }
+
+  const db = await getDb();
+  const result = await db.execute({
+    args: [gated, id, "pending"],
+    sql: `update submissions
+      set triage_verdict = ?
+      where id = ?
+        and status = ?`,
+  });
+
+  if (result.rowsAffected === 0) {
+    throw new ApiError("invalid_status", "Only pending submissions can be triaged", 409);
+  }
 
   return getSubmission(id);
 }
@@ -361,6 +434,7 @@ function rowToSubmission(row: SubmissionRow): Submission {
     spotifyUrl: row.spotify_url,
     status: row.status,
     title: row.title,
+    triageVerdict: row.triage_verdict ?? undefined,
   };
 }
 

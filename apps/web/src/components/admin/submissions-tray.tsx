@@ -1,6 +1,6 @@
 import { CheckIcon, CircleNotchIcon, XIcon } from "@phosphor-icons/react";
 import { type Submission } from "@fluncle/contracts";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -22,6 +22,7 @@ import {
 import { Skeleton } from "@fluncle/ui/components/skeleton";
 import { formatDate } from "@/lib/format";
 import { spotifyAlbumImageAtSize } from "@/lib/media";
+import { cn } from "@/lib/utils";
 
 // The candidates tray — the crew's pending submissions (`fluncle submit`, the SSH
 // terminal, the web dialog), reviewed where the operator already works. A quiet
@@ -37,6 +38,8 @@ import { spotifyAlbumImageAtSize } from "@/lib/media";
 // the track, per the placement contract.
 
 type SubmissionsTrayProps = {
+  /** The attention-queue deep-link target (`?submission=<id>`): scroll it into view + ring it. */
+  focusId?: string;
   loading: boolean;
   /** Fired after an approve/reject lands, so the queries refetch. */
   onChanged: () => void;
@@ -48,6 +51,7 @@ type SubmissionsTrayProps = {
 type PendingConfirm = { action: "approve" | "reject"; submission: Submission };
 
 export function SubmissionsTray({
+  focusId,
   loading,
   onChanged,
   onOpenChange,
@@ -57,6 +61,17 @@ export function SubmissionsTray({
   const [busyId, setBusyId] = useState<string | undefined>();
   const [error, setError] = useState<string | undefined>();
   const [confirm, setConfirm] = useState<PendingConfirm | undefined>();
+
+  // Scroll the deep-linked candidate into view once the sheet has opened and its rows
+  // exist (the operator landed here from the /admin attention queue). Best-effort: a
+  // stale id — the submission was already reviewed away — is a harmless no-op.
+  const rowRefs = useRef(new Map<string, HTMLLIElement>());
+  useEffect(() => {
+    if (!open || !focusId) {
+      return;
+    }
+    rowRefs.current.get(focusId)?.scrollIntoView({ block: "center" });
+  }, [focusId, open, submissions]);
 
   const run = useCallback(
     async (submission: Submission, fn: () => Promise<void>) => {
@@ -145,10 +160,22 @@ export function SubmissionsTray({
               {submissions.map((submission) => {
                 const busy = busyId === submission.id;
 
+                const focused = submission.id === focusId;
+
                 return (
                   <li
-                    className="space-y-2.5 border-b border-border px-4 py-3.5"
+                    className={cn(
+                      "space-y-2.5 border-b border-border px-4 py-3.5",
+                      focused && "bg-primary/5 ring-1 ring-inset ring-primary/40",
+                    )}
                     key={submission.id}
+                    ref={(el) => {
+                      if (el) {
+                        rowRefs.current.set(submission.id, el);
+                      } else {
+                        rowRefs.current.delete(submission.id);
+                      }
+                    }}
                   >
                     <div className="flex items-center gap-2.5">
                       {submission.artworkUrl ? (
@@ -178,6 +205,15 @@ export function SubmissionsTray({
 
                     {submission.note ? (
                       <p className="text-xs text-muted-foreground">“{submission.note}”</p>
+                    ) : undefined}
+
+                    {/* The pre-chew sweep's advisory verdict (the on-box triage cron):
+                        a quiet read to orient the operator, never a decision. Absent
+                        until the sweep visits. */}
+                    {submission.triageVerdict ? (
+                      <p className="text-xs italic text-muted-foreground">
+                        {submission.triageVerdict}
+                      </p>
                     ) : undefined}
 
                     {/* Right-aligned per the placement contract's row-action rule;
