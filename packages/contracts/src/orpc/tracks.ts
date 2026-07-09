@@ -100,7 +100,7 @@ export const getRandomTrack = oc
  * `getSimilarFindings`).
  *
  * The N sonically-nearest findings to the given one — the automatic "more like this"
- * cluster (docs/rfcs/audio-embedding-rfc.md, Phase 1). Loads the target's MuQ audio
+ * cluster (docs/track-lifecycle.md). Loads the target's MuQ audio
  * embedding, cosine-ranks it against every other coordinate-bearing finding's
  * embedding, and returns the top-N (self excluded, similarity order). A public read;
  * the same op backs the `/log` "more like this" row and a future radio "play

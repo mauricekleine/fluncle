@@ -72,7 +72,7 @@ Its full doctrine is **[observation-agent.md](./observation-agent.md)** (the two
 - One track per run.
 - Preview audio comes only from the analysis script's resolver (Deezer/iTunes). Never source audio from YouTube or rip full tracks. No legal preview means no analysis; stop and report (`--status failed`).
 - Archive only the exact official preview used for analysis, through the operator-only archive path. It is not public media and not a playback source.
-- Never invent data. Write only what the audio yielded; respect the script's `null` key (atonal tracks key weakly — better null than wrong). The agent writes analysis only; manual vibe placement is retired — sonic grouping comes from the MuQ embedding ([audio-embedding-rfc.md](../rfcs/audio-embedding-rfc.md)).
+- Never invent data. Write only what the audio yielded; respect the script's `null` key (atonal tracks key weakly — better null than wrong). The agent writes analysis only; manual vibe placement is retired — sonic grouping comes from the MuQ embedding.
 - On-screen video copy passes VOICE.md; every on-screen fact comes from the track's props, which is authoritative. Render only fields the props expose; never invent one.
 - The brand constants are not the agent's to restyle: if a concept fights the grammar, change the concept.
 - The agent's outputs are the written-back metadata, the uploaded video bundle, a **private** social draft, and a run report — nothing public. **Never publish, never attach a sound, never delete.** `track draft` is `SELF_ONLY`/`UPLOAD` by construction; the operator reviews in-app, attaches the official sound, and presses publish — then a human records the outcome with `track social --status published --url …`.

@@ -805,7 +805,7 @@ export const SURFACES: readonly Surface[] = [
     kind: "cron",
     name: "cron.embed",
     operatorNotes:
-      "every 5m. On-box MuQ (torch, ~16s/track), zero LLM tokens. Writes the vector via the agent-tier update_track. Source: docs/agents/hermes/scripts/embed-sweep.* + embed-track.py. See docs/rfcs/audio-embedding-rfc.md.",
+      "every 5m. On-box MuQ (torch, ~16s/track), zero LLM tokens. Writes the vector via the agent-tier update_track. Source: docs/agents/hermes/scripts/embed-sweep.* + embed-track.py. See docs/track-lifecycle.md.",
     probeConfig: { cadenceMs: 5 * MINUTE_MS, cronName: "fluncle-embed", kind: "cron" },
     weights: { status: "hidden" },
   },
@@ -817,7 +817,7 @@ export const SURFACES: readonly Surface[] = [
     kind: "cron",
     name: "cron.capture",
     operatorNotes:
-      "every 5m, run by a rave-02 HOST systemd timer (docs/agents/hermes/capture-timer/) — NOT a gateway cron: a proxied yt-dlp fetch has an unbounded tail that would starve the 5-min enrich/context/note sweeps on the shared serial runner. A NON-BLOCKING side-channel (never gates enrich/embed). Runs yt-dlp through a residential proxy on a per-track sticky session, duration-guards the match, stores the full song in the PRIVATE fluncle-source-audio bucket (S3-direct), and writes back via the agent-tier update_track (with per-finding backoff). yt-dlp + ffprobe are a box deploy prereq. Newest-first so a fresh add jumps the backfill. Source: docs/agents/hermes/scripts/capture-sweep.*. See docs/rfcs/full-audio-rfc.md § Unit 1.",
+      "every 5m, run by a rave-02 HOST systemd timer (docs/agents/hermes/capture-timer/) — NOT a gateway cron: a proxied yt-dlp fetch has an unbounded tail that would starve the 5-min enrich/context/note sweeps on the shared serial runner. A NON-BLOCKING side-channel (never gates enrich/embed). Runs yt-dlp through a residential proxy on a per-track sticky session, duration-guards the match, stores the full song in the PRIVATE fluncle-source-audio bucket (S3-direct), and writes back via the agent-tier update_track (with per-finding backoff). yt-dlp + ffprobe are a box deploy prereq. Newest-first so a fresh add jumps the backfill. Source: docs/agents/hermes/scripts/capture-sweep.*. See docs/track-lifecycle.md.",
     probeConfig: { cadenceMs: 5 * MINUTE_MS, cronName: "fluncle-capture", kind: "cron" },
     weights: { status: "hidden" },
   },

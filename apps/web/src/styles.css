@@ -1591,7 +1591,7 @@ body::before {
 }
 
 /* The "more like this" cluster — the automatic sonic neighbours (MuQ embeddings,
-   docs/rfcs/audio-embedding-rfc.md). Cover-led + quiet: a strip of album covers that
+   docs/track-lifecycle.md). Cover-led + quiet: a strip of album covers that
    WRAPS on the narrow plate rather than forcing a horizontal page scroll. */
 .log-similar {
   display: grid;

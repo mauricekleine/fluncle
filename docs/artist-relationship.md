@@ -1,6 +1,6 @@
 # The artist relationship
 
-Fluncle keeps a canonical **artist entity** (`artists`, keyed on the Spotify artist id) with a `track_artists` many-to-many and an identity graph (`artist_socials`). The full plan is [docs/rfcs/artist-relationship-rfc.md](./rfcs/artist-relationship-rfc.md); the archive gets an artist entity, resolution, the `/artist/<slug>` pages, and the SEO/AEO graph.
+Fluncle keeps a canonical **artist entity** (`artists`, keyed on the Spotify artist id) with a `track_artists` many-to-many and an identity graph (`artist_socials`). The archive gets an artist entity, resolution, the `/artist/<slug>` pages, and the SEO/AEO graph.
 
 This doc covers the **identity graph** — how `artist_socials` is resolved, reviewed, and rendered into the public artist page + `sameAs` JSON-LD. The entity + tables it builds on are Unit 1.
 

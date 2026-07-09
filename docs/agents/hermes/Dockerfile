@@ -55,7 +55,7 @@ RUN mkdir -p /opt/hermes-scripts \
 # ── MuQ audio-embedding toolchain (the `fluncle-embed` cron) ──────────────────
 # The `fluncle-embed` `--no-agent` cron (docs/agents/hermes/scripts/embed-sweep.*)
 # runs MuQ-large on the box to compute a 1024-d audio embedding per finding — the
-# sonic-similarity space that powers "more like this" (docs/rfcs/audio-embedding-rfc.md).
+# sonic-similarity space that powers "more like this" (docs/track-lifecycle.md).
 # The spike's load-bearing lesson: MuQ's torch family (torch + torchaudio +
 # torchvision) must be MATCHED CPU builds, installed together from the pytorch CPU
 # index BEFORE `muq`, on Python 3.11 — so it is a PINNED image layer (never a runtime

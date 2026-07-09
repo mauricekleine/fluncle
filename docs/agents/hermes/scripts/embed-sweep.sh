@@ -15,7 +15,7 @@
 # target (fluncle-hermes-operator skill). This trio (embed-sweep.sh/.ts + embed-track.py) is
 # BAKED into the image at /opt/hermes-scripts/ and auto-updates from main via pin-watch; a
 # rave-02 HOST systemd timer docker-execs it — no docker cp. See ../embed-timer/README.md and
-# docs/rfcs/full-audio-rfc.md § Unit 3.
+# docs/track-lifecycle.md.
 #
 # PRODUCTION PRE-REQS (see ../embed-timer/README.md for the full runbook):
 #   - The MuQ torch layer + baked weights in the image; ffmpeg in the image (the decode path).

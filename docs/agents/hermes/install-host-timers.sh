@@ -2,8 +2,8 @@
 # install-host-timers.sh — install (or refresh) EVERY Fluncle host systemd timer on the
 # rave-02 host FROM THE REPO, so a bare re-provision restores the whole SCHEDULE as code.
 #
-# This is the "schedule" half of the reset boundary (docs/hermes-durable-deploy-rfc.md § Unit
-# E): a reset restores CODE (baked into the image, Unit A) + SCHEDULE (these timer units) +
+# This is the "schedule" half of the reset boundary (docs/agents/hermes-agent.md): a reset
+# restores CODE (baked into the image, Unit A) + SCHEDULE (these timer units) +
 # SECRETS (fluncle-secrets-sync from 1Password). The gateway then holds NO automation crons;
 # the Discord chat agent (`gateway run`) is untouched.
 #

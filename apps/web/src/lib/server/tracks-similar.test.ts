@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getSimilarFindings, type TrackRow } from "./tracks";
 
-// The DB-backed "more like this" reader (docs/rfcs/audio-embedding-rfc.md) — the data
+// The DB-backed "more like this" reader (docs/track-lifecycle.md) — the data
 // source for the public `get_similar_findings` op AND the `/log` row. Drives the real
 // function over a mocked `./db`, proving the ranking/exclusion/hydration the row
 // renders: sonic order, self excluded, malformed vectors dropped, limit honoured, and

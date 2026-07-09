@@ -7,7 +7,7 @@ import {
   rankBySimilarity,
 } from "./embedding";
 
-// The pure core of the MuQ audio-embedding pipeline (docs/rfcs/audio-embedding-rfc.md):
+// The pure core of the MuQ audio-embedding pipeline (docs/track-lifecycle.md):
 // the shape gate the embed step's write-back leans on (coerce/parse) and the cosine
 // ranking the public `get_similar_findings` op + the `/log` "more like this" row read.
 // Fixture vectors only — no DB, no network.

@@ -9,7 +9,7 @@ PR's merge instead of being buried in a squashed commit message.
 Keep it distinct from the two human-owned lists:
 
 - `docs/followups-backlog.csv` — the operator's hand-curated backlog with its own triage schema.
-- `docs/ROADMAP.md` — planning canon.
+- `docs/planning/ROADMAP.md` — the planning backlog (non-canon per AGENTS.md).
 
 The operator triages from _this_ ledger into those when a finding is worth scheduling; the audit
 never writes to them directly.

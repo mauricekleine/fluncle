@@ -81,7 +81,7 @@ describe("boardSteps — Discogs cell", () => {
 // MuQ audio embedding (`embedding_json IS NOT NULL`, surfaced as `hasEmbedding`),
 // `open` (hollow) while it's still in the embed cron's queue. No operator action — the
 // on-box `fluncle-embed` cron advances it. This is the sonic fingerprint that
-// superseded the retired manual vibe-map Tag cell (docs/rfcs/audio-embedding-rfc.md).
+// superseded the retired manual vibe-map Tag cell (docs/track-lifecycle.md).
 function embeddingStep(row: BoardRow) {
   const step = boardSteps(row).find((s) => s.key === "embedding");
 

@@ -35,7 +35,7 @@ export FLUNCLE_BIN="${FLUNCLE_BIN:-/usr/local/bin/fluncle}"
 
 # Source the shared 0600 secrets file (the same single source every other sweep reads)
 # so the R2 credentials for the captured full-song fetch are in this sweep's env (RFC
-# docs/rfcs/full-audio-rfc.md § Unit 2). Match capture-sweep.sh: provider creds are dropped
+# docs/track-lifecycle.md). Match capture-sweep.sh: provider creds are dropped
 # from the cron env by Hermes' blocklist, so the R2 creds can only arrive via this file —
 # they are unrecognized custom vars, so they pass. Absent file → the sweep still enriches
 # on the preview (capture must never gate enrichment).

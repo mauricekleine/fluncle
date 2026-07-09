@@ -10,7 +10,7 @@ The sweep WORK is BAKED at `/opt/hermes-scripts/` — the `.sh`/`.ts` pair (sour
 
 ## Why a host timer
 
-Every automation cron moved off the gateway's single serial runner onto repo-checked-in host timers so the SCHEDULE is code and survives a re-provision (docs/hermes-durable-deploy-rfc.md § Unit E). A 1m poll on the serial gateway runner was especially fragile to a long sweep stealing its slot; a host timer fires on time regardless.
+Every automation cron moved off the gateway's single serial runner onto repo-checked-in host timers so the SCHEDULE is code and survives a re-provision. A 1m poll on the serial gateway runner was especially fragile to a long sweep stealing its slot; a host timer fires on time regardless.
 
 ## Deploy (on rave-02, one time)
 

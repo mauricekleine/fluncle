@@ -14,7 +14,7 @@
 # Diagnostics go to stderr; a per-item decode/inference failure is captured in
 # `errors` (that finding stays queued) and never aborts the batch.
 #
-# The model + pooling are the RFC's decided pipeline (docs/rfcs/full-audio-rfc.md § Unit 3):
+# The model + pooling are the decided pipeline (docs/track-lifecycle.md):
 # `OpenMuQ/MuQ-large-msd-iter`, mean-pool `last_hidden_state` over time → 1024-d, L2-normalize.
 # MuQ wants 24 kHz mono, so we decode each file with ffmpeg (present in the container) to
 # 24 kHz mono float32 PCM — no librosa/torchaudio codec path.

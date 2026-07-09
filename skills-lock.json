@@ -4,7 +4,7 @@
     "agent-orchestration": {
       "source": "packages/skills/agent-orchestration",
       "sourceType": "local",
-      "computedHash": "e95a6c02a3c1ca40f938a4401c6bd17ba38bfb345b9346e52843cc98ae82b62a"
+      "computedHash": "6e5aceeac8aa9ba360a56f443bc32478e5d3863a36134ca735c78d2105cf8c7f"
     },
     "ai-seo": {
       "source": "coreyhaines31/marketingskills",
@@ -23,6 +23,11 @@
       "skillPath": "skills/email-best-practices/SKILL.md",
       "computedHash": "c7218333381fa335b8a912bd55b3bb58b5b567a174f9e1d8b41940ff82f1a6b6"
     },
+    "fluncle-audit-operator": {
+      "source": "packages/skills/fluncle-audit-operator",
+      "sourceType": "local",
+      "computedHash": "a3d6e6a0ff481d20f50ce08334ebeeb5d810dc36a1c6778f6f3175e50d19879c"
+    },
     "fluncle-goal-writer": {
       "source": "packages/skills/fluncle-goal-writer",
       "sourceType": "local",
@@ -31,7 +36,7 @@
     "fluncle-hermes-operator": {
       "source": "packages/skills/fluncle-hermes-operator",
       "sourceType": "local",
-      "computedHash": "ea07ee65a0101e6d6c2546ad0ad89ed0cef40faa66eedbaa498965b9509f7e1f"
+      "computedHash": "d611de0ae4322c0b8fc6210547dbcf01e6eed0f8dc292b6f83d3e511dd89885c"
     },
     "fluncle-key-backfill": {
       "source": "packages/skills/fluncle-key-backfill",
@@ -46,7 +51,7 @@
     "fluncle-mixtapes": {
       "source": "packages/skills/fluncle-mixtapes",
       "sourceType": "local",
-      "computedHash": "644e5e6cfe70b26bbc722bfe96b6dfbc2a774ea77b928dced340b4611dc636eb"
+      "computedHash": "e5d915e9cf528abbd55031c0a42aec8ba75b65c7b67bfcb59d5261037d3621ab"
     },
     "fluncle-operator": {
       "source": "packages/skills/fluncle-operator",
@@ -66,7 +71,7 @@
     "fluncle-smoke": {
       "source": "packages/skills/fluncle-smoke",
       "sourceType": "local",
-      "computedHash": "9680879b9b7380781fa3c040ced857b529fd757a90ece2ba7baad5254afdc8a0"
+      "computedHash": "e9d2de11e42f2fc828762abfbc3433758caff25afdff064059c706384fd72ddb"
     },
     "fluncle-sprites": {
       "source": "packages/skills/fluncle-sprites",
@@ -81,7 +86,7 @@
     "fluncle-track-enrichment": {
       "source": "packages/skills/fluncle-track-enrichment",
       "sourceType": "local",
-      "computedHash": "99ca69abfbc3c9cfad75105a2754084900ea57b23257e19745efac8b79afedfb"
+      "computedHash": "d3c8aa950aff01ab6984165d962feb5139e99b8016c8ea01491544ff7c0c945b"
     },
     "fluncle-video": {
       "source": "packages/skills/fluncle-video",

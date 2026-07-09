@@ -569,7 +569,7 @@ function addAdminCommands(program: Command): void {
   // `--no-agent` cron (it embeds on-box with torch and writes the vector back via
   // `tracks update <id> --embedding-file`), so the CLI surface is the worklist view:
   // `--queue` shows findings with no embedding yet. The box cron reads this to drain
-  // the queue. See docs/rfcs/audio-embedding-rfc.md.
+  // the queue. See docs/track-lifecycle.md.
   adminTracks
     .command("embed")
     .description("Audio-embedding worklist (findings with no MuQ vector yet). Use --queue")

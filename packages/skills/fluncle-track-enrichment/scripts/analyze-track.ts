@@ -12,7 +12,7 @@
 //
 // With `--audio-file <path>` it skips preview resolution and analyzes THAT local file
 // (the captured full song the enrich sweep S3-GETs from the private fluncle-source-audio
-// bucket) — the whole song rather than a 30s preview (RFC docs/rfcs/full-audio-rfc.md § Unit 2).
+// bucket) — the whole song rather than a 30s preview (docs/track-lifecycle.md).
 //
 //   bun analyze-track.ts --artist "Loadstar" --title "Take a Deep Breath" [--isrc GB5KW1701923]
 //   bun analyze-track.ts --artist "Loadstar" --title "Take a Deep Breath" --audio-file /tmp/song.opus
@@ -36,7 +36,7 @@ const isrc = arg("isrc");
 const archiveDir = arg("archive-dir");
 // When set, analyze THIS local file (the captured full song the enrich sweep S3-GETs
 // from the private fluncle-source-audio bucket) instead of resolving a 30s preview —
-// RFC docs/rfcs/full-audio-rfc.md § Unit 2. Everything downstream is source-agnostic.
+// docs/track-lifecycle.md. Everything downstream is source-agnostic.
 const audioFile = arg("audio-file");
 
 const log = (message: string) => console.error(`[analyze] ${message}`);
@@ -227,7 +227,7 @@ type LoadedPreview = {
 // The shared decode tail: ffmpeg reads `inputPath` (a fetched preview OR a captured
 // full song — any container/ext; ffmpeg probes the content, not the name) → mono
 // SAMPLE_RATE 16-bit WAV → PCM Float32. Factored out so the URL preview path and the
-// local `--audio-file` path share ONE decoder (RFC docs/rfcs/full-audio-rfc.md § Unit 2).
+// local `--audio-file` path share ONE decoder (docs/track-lifecycle.md).
 // Exported so a focused test can exercise the seam without the full pipeline.
 export function decodeToSamples(inputPath: string): Float32Array {
   const dir = mkdtempSync(join(tmpdir(), "fluncle-decode-"));
@@ -861,7 +861,7 @@ if (import.meta.main) {
   const analyses: PreviewAnalysis[] = [];
 
   if (audioFile) {
-    // Full-song path (RFC docs/rfcs/full-audio-rfc.md § Unit 2): the enrich sweep S3-GETs
+    // Full-song path (docs/track-lifecycle.md): the enrich sweep S3-GETs
     // the captured source audio to a temp file and passes it here, so we analyze the
     // WHOLE song instead of a 30s preview — skip preview resolution entirely.
     // Everything downstream (spectral / key / BPM / fold) is source-agnostic.

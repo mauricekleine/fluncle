@@ -8,10 +8,14 @@
 // Given an artist + title (the agent gets these from `fluncle track get --json`),
 // it resolves a legal preview clip, decodes it, and emits an analysis JSON on
 // stdout: BPM, musical key (+confidence), and spectral features. The agent then
-// writes the result back with `fluncle admin tracks update`; vibe placement stays
-// with the operator in `/admin/tag`.
+// writes the result back with `fluncle admin tracks update`.
+//
+// With `--audio-file <path>` it skips preview resolution and analyzes THAT local file
+// (the captured full song the enrich sweep S3-GETs from the private fluncle-source-audio
+// bucket) — the whole song rather than a 30s preview (docs/track-lifecycle.md).
 //
 //   bun analyze-track.ts --artist "Loadstar" --title "Take a Deep Breath" [--isrc GB5KW1701923]
+//   bun analyze-track.ts --artist "Loadstar" --title "Take a Deep Breath" --audio-file /tmp/song.opus
 //
 // Output (stdout): a single JSON object. Diagnostics go to stderr.
 
@@ -30,6 +34,10 @@ const artist = arg("artist");
 const title = arg("title");
 const isrc = arg("isrc");
 const archiveDir = arg("archive-dir");
+// When set, analyze THIS local file (the captured full song the enrich sweep S3-GETs
+// from the private fluncle-source-audio bucket) instead of resolving a 30s preview —
+// docs/track-lifecycle.md. Everything downstream is source-agnostic.
+const audioFile = arg("audio-file");
 
 const log = (message: string) => console.error(`[analyze] ${message}`);
 
@@ -216,19 +224,19 @@ type LoadedPreview = {
   samples: Float32Array;
 };
 
-async function loadPreview(previewUrl: string): Promise<LoadedPreview> {
-  const dir = mkdtempSync(join(tmpdir(), "fluncle-analyze-"));
+// The shared decode tail: ffmpeg reads `inputPath` (a fetched preview OR a captured
+// full song — any container/ext; ffmpeg probes the content, not the name) → mono
+// SAMPLE_RATE 16-bit WAV → PCM Float32. Factored out so the URL preview path and the
+// local `--audio-file` path share ONE decoder (docs/track-lifecycle.md).
+// Exported so a focused test can exercise the seam without the full pipeline.
+export function decodeToSamples(inputPath: string): Float32Array {
+  const dir = mkdtempSync(join(tmpdir(), "fluncle-decode-"));
 
   try {
-    const mp3Path = join(dir, "preview.mp3");
-    const wavPath = join(dir, "preview.wav");
-    const response = await fetch(previewUrl);
-    const bytes = Buffer.from(await response.arrayBuffer());
-    writeFileSync(mp3Path, bytes);
-
+    const wavPath = join(dir, "decoded.wav");
     const result = spawnSync(
       "ffmpeg",
-      ["-y", "-i", mp3Path, "-ac", "1", "-ar", String(SAMPLE_RATE), "-f", "wav", wavPath],
+      ["-y", "-i", inputPath, "-ac", "1", "-ar", String(SAMPLE_RATE), "-f", "wav", wavPath],
       { stdio: ["ignore", "ignore", "ignore"] },
     );
 
@@ -236,17 +244,45 @@ async function loadPreview(previewUrl: string): Promise<LoadedPreview> {
       throw new Error("ffmpeg decode failed (is ffmpeg installed and on PATH?)");
     }
 
+    return decodeWav(readFileSync(wavPath));
+  } finally {
+    rmSync(dir, { force: true, recursive: true });
+  }
+}
+
+async function loadPreview(previewUrl: string): Promise<LoadedPreview> {
+  const dir = mkdtempSync(join(tmpdir(), "fluncle-analyze-"));
+
+  try {
+    const srcPath = join(dir, "preview");
+    const response = await fetch(previewUrl);
+    const bytes = Buffer.from(await response.arrayBuffer());
+    writeFileSync(srcPath, bytes);
+
     return {
       bytes,
       mime:
         normalizePreviewMime(response.headers.get("content-type") ?? "") ??
         inferPreviewMime(previewUrl) ??
         "audio/mpeg",
-      samples: decodeWav(readFileSync(wavPath)),
+      samples: decodeToSamples(srcPath),
     };
   } finally {
     rmSync(dir, { force: true, recursive: true });
   }
+}
+
+// Load a LOCAL audio file — the captured full song (`--audio-file`). Mirrors
+// bpm-backfill/scripts/analyze-local.ts: ffmpeg reads the path directly, any format.
+// `bytes`/`mime` are kept so the archive + `previews` output shape is identical to the
+// URL path; mime is inferred from the extension (ffmpeg itself probes the content).
+// Exported so the focused test can exercise the seam.
+export function loadLocalFile(filePath: string): LoadedPreview {
+  return {
+    bytes: readFileSync(filePath),
+    mime: inferFileMime(filePath),
+    samples: decodeToSamples(filePath),
+  };
 }
 
 function normalizePreviewMime(value: string): string | undefined {
@@ -283,6 +319,43 @@ function inferPreviewMime(url: string): string | undefined {
   }
 
   return undefined;
+}
+
+// Infer an audio content-type from a LOCAL file's extension (the `--audio-file`
+// path). Only for the output shape / archive metadata — ffmpeg probes the real
+// container regardless. Covers the yt-dlp `bestaudio` extensions capture produces.
+function inferFileMime(filePath: string): string {
+  const lower = filePath.toLowerCase();
+
+  if (lower.endsWith(".m4a") || lower.endsWith(".mp4")) {
+    return "audio/mp4";
+  }
+
+  if (lower.endsWith(".aac")) {
+    return "audio/aac";
+  }
+
+  if (lower.endsWith(".opus")) {
+    return "audio/opus";
+  }
+
+  if (lower.endsWith(".webm")) {
+    return "audio/webm";
+  }
+
+  if (lower.endsWith(".flac")) {
+    return "audio/flac";
+  }
+
+  if (lower.endsWith(".wav")) {
+    return "audio/wav";
+  }
+
+  if (lower.endsWith(".ogg") || lower.endsWith(".oga")) {
+    return "audio/ogg";
+  }
+
+  return "audio/mpeg";
 }
 
 function previewExtension(mime: string): string {
@@ -777,49 +850,83 @@ type PreviewAnalysis = {
 if (import.meta.main) {
   if (!artist || !title) {
     console.error(
-      'usage: bun analyze-track.ts --artist "<artist>" --title "<title>" [--isrc <isrc>]',
+      'usage: bun analyze-track.ts --artist "<artist>" --title "<title>" [--isrc <isrc>] [--audio-file <path>]',
     );
     process.exit(1);
   }
 
-  log(`resolving previews for ${artist} — ${title}`);
-  const previews = await resolvePreviews();
-
-  if (previews.length === 0) {
-    console.error("[analyze] no preview found — cannot analyze");
-    process.exit(2);
-  }
-
-  log(`found ${previews.length} preview(s): ${previews.map((p) => p.source).join(", ")}`);
-
-  // Analyze every window. One clip may be a beatless build-up while another holds
-  // the drop — so we measure each and keep the most-confident read per field.
+  // Analyze each candidate window, keeping the most-confident read per field. One
+  // preview clip may be a beatless build-up while another holds the drop; a captured
+  // full song is a single whole-track window that is usually the confident read.
   const analyses: PreviewAnalysis[] = [];
 
-  for (const preview of previews) {
+  if (audioFile) {
+    // Full-song path (docs/track-lifecycle.md): the enrich sweep S3-GETs
+    // the captured source audio to a temp file and passes it here, so we analyze the
+    // WHOLE song instead of a 30s preview — skip preview resolution entirely.
+    // Everything downstream (spectral / key / BPM / fold) is source-agnostic.
+    log(`analyzing captured full song ${audioFile}`);
+
     try {
-      const loaded = await loadPreview(preview.url);
+      const loaded = loadLocalFile(audioFile);
       const spec = spectral(loaded.samples);
       const key = estimateKey(spec.chroma);
       const tempo = estimateBpm(loaded.samples);
       log(
-        `${preview.source} (${(loaded.samples.length / SAMPLE_RATE).toFixed(1)}s): bpm ${tempo.bpm ?? "null"} (conf ${tempo.bpmConfidence}), key ${key.key} (conf ${key.confidence})`,
+        `audio-file (${(loaded.samples.length / SAMPLE_RATE).toFixed(1)}s): bpm ${tempo.bpm ?? "null"} (conf ${tempo.bpmConfidence}), key ${key.key} (conf ${key.confidence})`,
       );
       analyses.push({
         bytes: loaded.bytes,
         key,
         mime: loaded.mime,
-        source: preview.source,
+        source: "audio-file",
         spec,
         tempo,
       });
     } catch (error) {
-      log(`${preview.source}: skipped — ${error instanceof Error ? error.message : String(error)}`);
+      console.error(
+        `[analyze] audio-file decode failed — ${error instanceof Error ? error.message : String(error)}`,
+      );
+      process.exit(2);
+    }
+  } else {
+    log(`resolving previews for ${artist} — ${title}`);
+    const previews = await resolvePreviews();
+
+    if (previews.length === 0) {
+      console.error("[analyze] no preview found — cannot analyze");
+      process.exit(2);
+    }
+
+    log(`found ${previews.length} preview(s): ${previews.map((p) => p.source).join(", ")}`);
+
+    for (const preview of previews) {
+      try {
+        const loaded = await loadPreview(preview.url);
+        const spec = spectral(loaded.samples);
+        const key = estimateKey(spec.chroma);
+        const tempo = estimateBpm(loaded.samples);
+        log(
+          `${preview.source} (${(loaded.samples.length / SAMPLE_RATE).toFixed(1)}s): bpm ${tempo.bpm ?? "null"} (conf ${tempo.bpmConfidence}), key ${key.key} (conf ${key.confidence})`,
+        );
+        analyses.push({
+          bytes: loaded.bytes,
+          key,
+          mime: loaded.mime,
+          source: preview.source,
+          spec,
+          tempo,
+        });
+      } catch (error) {
+        log(
+          `${preview.source}: skipped — ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
     }
   }
 
   if (analyses.length === 0) {
-    console.error("[analyze] every preview failed to decode — cannot analyze");
+    console.error("[analyze] nothing decoded — cannot analyze");
     process.exit(2);
   }
 

@@ -10,15 +10,6 @@
             "statusMessage": "Checking protected files"
           }
         ]
-      },
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": ".codex/hooks/remind-main-push.sh"
-          }
-        ]
       }
     ],
     "PostToolUse": [

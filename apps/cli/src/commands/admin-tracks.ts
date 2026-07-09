@@ -165,7 +165,7 @@ export async function enrichQueueCommand(limit: number): Promise<RecentTrack[]> 
 // The EMBED queue: findings with no MuQ audio embedding yet (`hasEmbedding=false`),
 // oldest first — the on-box `fluncle-embed` cron's worklist (each row is a finding to
 // embed on the box, then write back via `tracks update <id> --embedding-file`). See
-// docs/rfcs/audio-embedding-rfc.md.
+// docs/track-lifecycle.md.
 export async function embedQueueCommand(limit: number): Promise<RecentTrack[]> {
   return fetchAdminTracks({ hasEmbedding: false, max: limit, order: "asc" });
 }

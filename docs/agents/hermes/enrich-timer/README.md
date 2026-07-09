@@ -6,7 +6,7 @@ The sweep WORK is BAKED into the image — the `.sh`/`.ts` pair at `/opt/hermes-
 
 ## Why it's a host timer, not a Hermes gateway cron
 
-Every automation cron migrated off the gateway's single serial runner (a ~300s global budget) onto repo-checked-in host systemd timers, so the SCHEDULE is code and survives a re-provision (docs/hermes-durable-deploy-rfc.md § Unit E). Host timers run in parallel, so a slow sweep never starves the latency-sensitive ones; `Persistent=true` catches up a tick missed across a reboot; `journalctl -u fluncle-enrich` is the per-cron log.
+Every automation cron migrated off the gateway's single serial runner (a ~300s global budget) onto repo-checked-in host systemd timers, so the SCHEDULE is code and survives a re-provision. Host timers run in parallel, so a slow sweep never starves the latency-sensitive ones; `Persistent=true` catches up a tick missed across a reboot; `journalctl -u fluncle-enrich` is the per-cron log.
 
 ## The /status marker (why the sweep self-reports)
 

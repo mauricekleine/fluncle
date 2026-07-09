@@ -384,7 +384,7 @@
           drop_from: "",
           tests: "yes",
           notes:
-            "capture-sweep.{sh,ts} run by a rave-02 HOST systemd timer (5m; docs/agents/hermes/capture-timer/ — NOT a gateway cron: a proxied yt-dlp fetch has an unbounded tail that would starve the 5-min sweeps) → yt-dlp via a residential STICKY-session proxy → duration-guard (±3s/±3% of durationMs, else unmatched) → S3-direct PUT to the private fluncle-source-audio bucket at <logId>/<sha>.<ext> → agent-tier update_track (capture_status/source_audio_key); NON-BLOCKING side-channel (never gates enrich/embed); queue = capture_status pending∪NULL + backed-off failed (cooldown + max-failures cap) newest-first (captureQueue filter); on done, clobber-safe enrich re-queue only when BPM null/missing; box deploy (yt-dlp+ffprobe+creds) operator-gated; capture-queue.test.ts + orpc-admin-tracks.test.ts + capture-sweep.test.ts; docs/rfcs/full-audio-rfc.md § Unit 1",
+            "capture-sweep.{sh,ts} run by a rave-02 HOST systemd timer (5m; docs/agents/hermes/capture-timer/ — NOT a gateway cron: a proxied yt-dlp fetch has an unbounded tail that would starve the 5-min sweeps) → yt-dlp via a residential STICKY-session proxy → duration-guard (±3s/±3% of durationMs, else unmatched) → S3-direct PUT to the private fluncle-source-audio bucket at <logId>/<sha>.<ext> → agent-tier update_track (capture_status/source_audio_key); NON-BLOCKING side-channel (never gates enrich/embed); queue = capture_status pending∪NULL + backed-off failed (cooldown + max-failures cap) newest-first (captureQueue filter); on done, clobber-safe enrich re-queue only when BPM null/missing; box deploy (yt-dlp+ffprobe+creds) operator-gated; capture-queue.test.ts + orpc-admin-tracks.test.ts + capture-sweep.test.ts; docs/track-lifecycle.md",
         },
         {
           domain: "intake-enrichment",
@@ -2325,7 +2325,7 @@
           drop_from: "",
           tests: "yes",
           notes:
-            "next-run.test.ts (estimateNextRun/formatCountdown/formatCadence); apps/web/src/lib/next-run.ts + status.tsx CRON_CADENCE_MS reads @fluncle/registry probeConfig.cadenceMs; computed Worker-side (lastSeen+cadence rolled forward past now), ZERO box dependency; the admin sidebar System entry deep-links /status. FOLLOW-UP (accuracy = option b): have fluncle-healthcheck POST the box's real `hermes cron list` next-run for WALL-CLOCK schedules (backup 1am, newsletter Fri 15:00) that a pure-cadence estimate drifts from — needs a box-script change + deploy",
+            "next-run.test.ts (estimateNextRun/formatCountdown/formatCadence); apps/web/src/lib/next-run.ts + status.tsx CRON_CADENCE_MS reads @fluncle/registry probeConfig.cadenceMs; computed Worker-side (lastSeen+cadence rolled forward past now), ZERO box dependency; the admin sidebar System entry deep-links /status. WALL-CLOCK schedules (backup 03:00, newsletter Fri 15:00, the audits) now compute their TRUE next-fire Worker-side from the @fluncle/registry `schedule` field via nextScheduledRun (DST-correct, ZERO box dependency); pure-interval crons keep the cadence estimate",
         },
         {
           domain: "platform-ops",

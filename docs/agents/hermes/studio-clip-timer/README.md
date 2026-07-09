@@ -10,7 +10,7 @@ There are two clip crons in the tree. This one — `fluncle-studio-clip` (`clip-
 
 ## Why a host timer + the /status marker
 
-Every automation cron moved off the gateway's single serial runner onto repo-checked-in host timers so the SCHEDULE is code (docs/hermes-durable-deploy-rfc.md § Unit E). Because a `docker exec` sends stdout to journald instead of the gateway's output dir, the sweep self-writes the marker via the shared [`cron-output.sh`](../scripts/cron-output.sh) helper.
+Every automation cron moved off the gateway's single serial runner onto repo-checked-in host timers so the SCHEDULE is code. Because a `docker exec` sends stdout to journald instead of the gateway's output dir, the sweep self-writes the marker via the shared [`cron-output.sh`](../scripts/cron-output.sh) helper.
 
 ## Deploy (on rave-02, one time)
 

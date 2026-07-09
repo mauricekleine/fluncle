@@ -70,7 +70,7 @@ That's the whole loop: get → analyze → archive → update.
 
 ## Audio embedding (separate, the `fluncle-embed` cron)
 
-The finding's **MuQ audio embedding** — a 1024-d sonic-similarity vector (`embedding_json`) — is **not** part of this analysis loop. It is computed by its own on-box cron (`fluncle-embed`: torch/MuQ over the preview), which writes it back through `fluncle admin tracks update <id> --embedding-file`. It powers the `/log` "more like this" row (`get_similar_findings` cosine-ranks the vectors) and the future browse-by-feel clusters + the game's solar systems. This is what retired the manual vibe-map tagging: audio can't learn the placement, but it groups the sonically-similar cleanly. Build-ready spec + the on-box deploy: `docs/rfcs/audio-embedding-rfc.md` + `docs/agents/hermes/cron/README.md`.
+The finding's **MuQ audio embedding** — a 1024-d sonic-similarity vector (`embedding_json`) — is **not** part of this analysis loop. It is computed by its own on-box cron (`fluncle-embed`: torch/MuQ over the preview), which writes it back through `fluncle admin tracks update <id> --embedding-file`. It powers the `/log` "more like this" row (`get_similar_findings` cosine-ranks the vectors) and the future browse-by-feel clusters + the game's solar systems. This is what retired the manual vibe-map tagging: audio can't learn the placement, but it groups the sonically-similar cleanly. The data model + the on-box deploy: `docs/track-lifecycle.md` + `docs/agents/hermes/cron/README.md`.
 
 ## Video render (separate, requires the kit)
 

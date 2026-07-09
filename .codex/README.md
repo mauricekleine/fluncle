@@ -1,6 +1,6 @@
 # Codex hooks
 
-Codex mirror of the Claude Code automation in `../.claude/`. Same three hooks, adapted to Codex's model (see https://developers.openai.com/codex/hooks.md). Defined in `hooks.json`; scripts in `hooks/`.
+Codex mirror of the Claude Code automation in `../.claude/`. Same two hooks, adapted to Codex's model (see https://developers.openai.com/codex/hooks.md). Defined in `hooks.json`; scripts in `hooks/`.
 
 - **`format-on-edit.sh`** — PostToolUse(`apply_patch`). Formats touched files with `oxfmt`/`gofmt` + `oxlint --fix`. Best-effort; always exits 0.
 - **`guard-protected-files.sh`** — PreToolUse(`apply_patch`). Exit 2 (block) on hand-edits to generated Drizzle migrations under `apps/web/drizzle/` (use `db:generate`) or to `.env`/secret files.

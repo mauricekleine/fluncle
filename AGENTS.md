@@ -38,14 +38,27 @@ Concise rules for working in Fluncle. Use MUST/SHOULD/NEVER to guide decisions.
 - NEVER: Stop at a plan when the user asked for implementation and the implementation is feasible.
 - NEVER: Present a workaround as complete when a known real fix remains.
 
-## Picking the right models for workflows and subagents
+## Picking the right models and effort for workflows and subagents
 
 **Opus 4.8 across the board** — the orchestrator/reviewer AND every sub-agent and workflow stage run on Opus 4.8. Fable 5 is no longer available on the plan, and Sonnet has proven unreliable in practice (it passes its own checks but under-delivers or ships subtle bugs — e.g. a "surfaces" slice that silently omitted its core deliverable). So there is no model-tier tradeoff left to manage: hold the quality bar with Opus 4.8 everywhere.
 
 - Orchestration, delegation, brainstorm, and review — the "decide" and hold-the-overview work — run on Opus 4.8. The [agent-orchestration](./packages/skills/agent-orchestration) skill is driven by Opus 4.8 and offloads execution to Opus 4.8 sub-agents.
 - Do NOT downgrade an execution slice to a cheaper tier to save cost — judge the output, not the price tag; a cheap agent that under-delivers costs more than it saves.
-- Never use Haiku.
 - Mechanics: Opus 4.8 runs via the Agent/Workflow `model` parameter (`opus`).
+
+**Reasoning effort is the token dial — the model tier is fixed, so effort is where you save.** Effort is adaptive: a lower level still thinks hard when the problem genuinely demands it and skips deep thinking on the easy ones, so stepping DOWN on low-stakes work is a Pareto move, not a quality cut. **Unspecified = `high` (the default); step down for cheap/mechanical work, up only for the highest-stakes review.**
+
+| Effort             | Price | Intelligence | When to use                                                                                                                                          |
+| ------------------ | ----- | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `low`              | 2     | 4            | Read-only recon / `Explore` fan-out, pure lookups/classification, deterministic `--no-agent` box sweeps (note/observe)                               |
+| `medium`           | 4     | 6            | Bounded mechanical execution — doc/header rewrites, list/format transforms, mechanical migrations, the naming linter (~25–40% cheaper than `high`)   |
+| `high` _(default)_ | 6     | 8            | Orchestration, decompose/merge judgment, RFC synthesis, canon/taste calls, creative divergence, general review — the judgment work                   |
+| `xhigh`            | 9     | 9            | Adversarial review of prod/auth/SQL/paid-action diffs and the gnarliest RFC synthesis — the one place to raise, where a miss fans out (~2–3× `high`) |
+| `max`              | 10    | 10           | Frontier problems only; never routine (large cost for small quality gains)                                                                           |
+
+_(Price/intelligence are relative 1–10 guides, not measured costs.)_
+
+- Mechanics: unspecified runs at `high`. Sub-agents spawned via the **Agent** tool INHERIT the session's effort — that tool sets each sub-agent's `model` but has no effort knob — as do the `.claude/agents/*.md` reviewer defs. To dial effort PER sub-agent (a fan-out where each slice wants a different level), use the **Workflow** tool's `agent(prompt, {effort})` or headless `claude -p --effort <level>`. The on-box crons expose `OBSERVE_CLAUDE_EFFORT` / `NOTE_CLAUDE_EFFORT` hooks — set them in the box env to lower those sweeps.
 
 ## Before Editing
 
@@ -68,7 +81,7 @@ Concise rules for working in Fluncle. Use MUST/SHOULD/NEVER to guide decisions.
 - Web changes: `bun run --cwd apps/web typecheck`, `bun run --cwd apps/web build`, and `bun run --cwd apps/web lint` when relevant.
 - CLI changes: `bun run --cwd apps/cli typecheck` and focused CLI commands such as `bun run --cwd apps/cli fluncle recent --limit 1 --json` when behavior changes.
 - Raycast changes: `bun run --cwd apps/raycast build` and `bun run --cwd apps/raycast lint`. If lint fails only on Raycast formatting, run `bun run --cwd apps/raycast lint -- --fix` and keep the resulting changes scoped to `apps/raycast`.
-- SSH app changes: `go build -C apps/ssh ./...`, `gofmt -l apps/ssh` (must list nothing), and `go vet -C apps/ssh ./...`.
+- Go app changes (`apps/ssh` the rave terminal, `apps/dns` the DNS server): `go build -C apps/<app> ./...`, `gofmt -l apps/<app>` (must list nothing), and `go vet -C apps/<app> ./...`.
 - Video package changes: `bun run --cwd packages/video typecheck`.
 - NEVER: Use the TypeScript non-null assertion operator (`!`). Narrow with a guard, early return, `??`, or `?.`. Enforced as an error by oxlint (`typescript/no-non-null-assertion`).
 - SHOULD: Run focused checks first, then broader root checks when the change has cross-package or user-facing risk.
@@ -95,6 +108,7 @@ Concise rules for working in Fluncle. Use MUST/SHOULD/NEVER to guide decisions.
 - MUST: Keep Markdown prose paragraphs on single logical lines; do not add hard line breaks mid-sentence or reflow text just to wrap at a fixed column.
 - SHOULD: Prefer deleting, merging, or linking stale docs over adding another parallel explanation.
 - MUST: Treat everything under `docs/planning/` (roadmaps, e.g. `docs/planning/ROADMAP.md`) and `docs/rfcs/`, plus any `docs/*-brief.md`, as non-canonical brainstorms and planning, never specification — these are never listed in the canon list below. Where such a doc deviates from the codebase or from canon (`LORE.md`, `DESIGN.md`, `PRODUCT.md`, `VOICE.md`), the codebase and canon win; translate the idea into Fluncle's terms when picking it up.
+- MUST: PRUNE (delete) an RFC once its work has shipped — a built RFC is removed, never flipped to a "done/Final" status or kept as reference. Shipped work is documented in the code and the canon docs, never in a completed RFC; `docs/rfcs/` (and any `docs/*-rfc.md`) holds only in-flight or not-yet-built plans. Git history preserves a deleted RFC.
 - [README.md](./README.md) - repo overview, package layout, local dev, deployment, CLI, Raycast, and publish flow.
 - [LORE.md](./LORE.md) - the story canon: the narrative loop every surface draws from (a banger is an experience, the video relives it, the crew shares it, the star is a waypoint, the mixtape is a dream), the Galaxy, and the crew. Wins on story; the other three canons defer to it there.
 - [PRODUCT.md](./PRODUCT.md) - product purpose, brand direction, design principles, and accessibility.
@@ -103,6 +117,7 @@ Concise rules for working in Fluncle. Use MUST/SHOULD/NEVER to guide decisions.
 - [docs/local-database.md](./docs/local-database.md) - how databases work across prod, dev, and worktrees: prod/dev both Turso, everyday dev on a per-worktree local libSQL server (`turso dev` + `.dev/local.db`) seeded from `fluncle-dev`, the `dev`/`db:refresh-dev`/`db:pull-prod` scripts, Superset worktree provisioning, and the committed `deploy:cf` migrate step.
 - [docs/track-lifecycle.md](./docs/track-lifecycle.md) - canonical architecture for a track's life: fast synchronous add (Worker) + async agent enrichment (audio analysis, video, R2), the generic admin update path, tag provenance, and the enrichment data model.
 - [docs/admin-shell.md](./docs/admin-shell.md) - the contract for every `/admin` surface: the AdminShell workspace chrome, the placement contract (where each kind of control goes), the flat object nav + attention-queue dashboard, web admin auth (one identity, two carriers; Login with Spotify), and the browser-verification fixtures (`loginAsAdmin`, the shell/queue smokes).
+- [docs/artist-relationship.md](./docs/artist-relationship.md) - the canonical artist entity: the Spotify-keyed `artists` table + `track↔artist` graph, resolution (MusicBrainz + Firecrawl) into `artist_socials`, the `/artist/<slug>` public page + `MusicGroup` schema, and the `/admin/artists` operator queue.
 - [docs/agents/newsletter-agent.md](./docs/agents/newsletter-agent.md) - the weekly newsletter authoring doctrine for the on-box `fluncle-newsletter` Hermes cron (Friday 15:00 Amsterdam): the self-healing discovery window off the last sent edition, the voice rails, the persist-draft-then-`clarify`-Send-button flow (Resend Broadcast, operator-gated send), and its `/api/tracks` contract.
 - [packages/video/README.md](./packages/video/README.md) - Remotion video machinery + the dated, self-contained archive under `src/remotion/tracks/`: the core surface, the archive contract, and the pipeline.
 - [docs/video-variants.md](./docs/video-variants.md) - the two-master video model: a clean square `footage.mp4` source + a portrait baked-text `footage.social.mp4`, with Cloudflare Media Transformations deriving every other orientation/audio variant on the fly; the surface map and the one-time migration.
@@ -126,10 +141,11 @@ Concise rules for working in Fluncle. Use MUST/SHOULD/NEVER to guide decisions.
 ## Architecture
 
 - MUST: Keep `apps/web` as the owner of public and admin API routes, including Spotify, Telegram, Discord, and Turso mutation behavior.
-- MUST: Put public/admin HTTP surfaces on oRPC contract ops by default (`packages/contracts/src/orpc/**`, registered in the `apps/web/src/lib/server/orpc/**` router); `handleOrpc` is mounted ahead of the TanStack router in `server.ts`, so a contract op shadows any file-route at the same method+path. New surfaces go on oRPC. The only `apps/web/src/routes/api/**` file-route carve-outs are: auth/OAuth redirects (Spotify/YouTube/Mixcloud/Discord starts+callbacks, admin login/logout); large-body/streaming/direct-upload routes (multipart uploads, media proxies/presigns); non-JSON emitters (feeds/sitemap/robots/`llms.txt`/`.well-known`/the CLI install script/OG + cover images/the generated OpenAPI+Postman specs); and the `/status`+`/health` resource-reads. The build-fail coverage tests (`orpc-coverage` / `orpc-admin-coverage`) enforce this: any non-carve-out route without a contract fails the build.
+- MUST: Put public/admin HTTP surfaces on oRPC contract ops by default (`packages/contracts/src/orpc/**`, registered in the `apps/web/src/lib/server/orpc/**` router); `handleOrpc` is mounted ahead of the TanStack router in `server.ts`, so a contract op shadows any file-route at the same method+path. New surfaces go on oRPC. The only `apps/web/src/routes/api/**` file-route carve-outs are: auth/OAuth redirects (Spotify/YouTube/Mixcloud/Discord starts+callbacks, admin login/logout); large-body/streaming/direct-upload routes (multipart uploads, media proxies/presigns); non-JSON emitters (feeds/sitemap/robots/`llms.txt`/`.well-known`/the CLI install script/OG + cover images/the generated OpenAPI+Postman specs); and the `/status`+`/health` resource-reads. The build-fail coverage tests enforce this: `orpc-coverage` / `orpc-admin-coverage` (any non-carve-out route without a contract fails the build), `orpc-auth-coverage` (each op carries the right auth tier), and `orpc-naming` (the `verb_noun` convention).
 - MUST: Keep the CLI as a thin HTTP client for public reads/submissions and authenticated admin commands.
 - MUST: Keep Raycast commands calling the `fluncle` CLI rather than reimplementing Spotify, Telegram, Turso, or HTTP API behavior.
 - MUST: Keep publishing authority behind the authenticated admin API.
+- SHOULD: Fluncle's recurring agent work runs as deterministic `--no-agent` sweeps on rave-02 HOST systemd timers (baked to `/opt/hermes-scripts`, scheduled by the `docs/agents/hermes/<job>-timer/` units + `install-host-timers.sh` — NOT the retired Hermes gateway cron scheduler); the box holds only an `agent`-scoped token. Treat these as fixed pollers behind the server boundary, not live agents. See [docs/agents/hermes-agent.md](./docs/agents/hermes-agent.md) and the fluncle-hermes-operator skill (its "add/change a cron" fan-out checklist).
 - SHOULD: Preserve existing server module boundaries under `apps/web/src/lib/server` and API route handlers under `apps/web/src/routes/api`.
 - SHOULD: Name new public surfaces (CLI / API / MCP / SSH) per the cross-surface `verb_noun` convention in [docs/naming-conventions.md](./docs/naming-conventions.md), so one operation reads the same everywhere.
 - MUST: Order options in `createFileRoute(...)({...})` and `createRootRoute({...})` by TanStack's canonical sequence (params → validateSearch → loaderDeps → context → beforeLoad → loader → head → scripts), since each step feeds the next step's type inference.
@@ -180,4 +196,4 @@ bunx --bun shadcn@latest add dialog
 - Applies to skills created via `/skill-creator`, `Skill Creator`, or `$skill-creator`
 - MUST: Put new skills in `packages/skills`
 - MUST: Verify skills with `UV_CACHE_DIR=/tmp/uv-cache uv run --with pyyaml python "${CODEX_HOME:-$HOME/.codex}/skills/.system/skill-creator/scripts/quick_validate.py" packages/skills/<skill-path>`
-- MUST: Install local skills with `npx skills add ./packages/skills/<skill-path> -y -a claude-code -a codex`
+- MUST: Install/refresh local skills with `bun run skills:install` (it runs `npx skills add … -a claude-code -a codex` for every skill sequentially AND normalizes `skills-lock.json` sources from machine-absolute to repo-relative — running the raw `npx skills add` directly bakes a `/Users/…` path into the committed lockfile, a topology leak). `bun run skills:install --dry-run` previews. Re-run it after editing ANY skill: the installed `.agents/skills/**` copy is what actually loads, and it goes stale (and ships stale publicly) until re-synced.
