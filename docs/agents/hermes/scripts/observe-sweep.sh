@@ -33,14 +33,11 @@
 #   - optional DISCORD_ALERT_WEBHOOK for the claude-auth-failed ping (in the same file —
 #     it too is dropped by the runner's curated env).
 #
-# Operator wires it on the devbox (the image already carries bun + the fluncle CLI +
-# claude + the skill; `observe_track` is AGENT tier, so the box's existing agent-scoped
-# token drives it — no operator token needed):
-#
-#   hermes cron create "every 60m" --no-agent --script observe-sweep.sh --deliver local --name fluncle-observation
-#
-# Confirm with `hermes cron list`; per-run output lands in
-# ~/.hermes/cron/output/{job_id}/{timestamp}.md.
+# Scheduled by a repo-checked-in HOST systemd timer (../observation-timer/, installed by
+# ../install-host-timers.sh), NOT a gateway `hermes cron create`. `observe_track` is AGENT
+# tier, so the box's existing agent-scoped token drives it — no operator token needed.
+# Per-run output is a freshness marker the sweep self-writes via cron-output.sh under
+# ~/.hermes/cron/output/fluncle-observation/ (read by the /status prober). See ../cron/README.md.
 set -euo pipefail
 
 # The Hermes cron `--no-agent --script` runner execs this with a minimal PATH that

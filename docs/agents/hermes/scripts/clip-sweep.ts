@@ -4,7 +4,7 @@
 //
 // Version-controlled source; the repo is canonical and the box is a deploy target
 // (fluncle-hermes-operator skill). Invoked by the bash wrapper (clip-sweep.sh) the cron
-// runner execs every ~15m — see that file's header for the `hermes cron create` wire-up
+// runner execs every ~15m — see that file's header for the `host-timer` wire-up
 // and docs/fluncle-studio.md for the full cut design.
 //
 // PURE-TRIGGER (the enrich-sweep shape): the cut is a deterministic ffmpeg job, zero LLM

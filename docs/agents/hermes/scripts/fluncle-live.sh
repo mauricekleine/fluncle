@@ -38,12 +38,10 @@
 # as the other sweeps. TWITCH_CLIENT_SECRET resembles a provider cred, so Hermes
 # hard-blocks it from the cron env — that is why it rides the op-injected file.
 #
-# Operator wires it on the box (image carries bun + curl):
-#   hermes cron create "every 1m" --no-agent --script fluncle-live.sh \
-#     --deliver local --name fluncle-live
-#
-# Confirm with `hermes cron list`; per-run output lands in
-# ~/.hermes/cron/output/{job_id}/{timestamp}.md.
+# Scheduled every 1m by a repo-checked-in HOST systemd timer (../live-timer/, installed by
+# ../install-host-timers.sh), NOT a gateway `hermes cron create`. Per-run output is a
+# freshness marker the sweep self-writes via cron-output.sh under
+# ~/.hermes/cron/output/fluncle-live/ (read by the /status prober). See ../cron/README.md.
 set -euo pipefail
 
 # The Hermes cron `--no-agent --script` runner execs this with a minimal PATH that

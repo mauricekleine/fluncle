@@ -4,7 +4,7 @@
 // LIVE. Version-controlled source; the repo is canonical and the box is a deploy
 // target (fluncle-hermes-operator skill). Invoked by the bash wrapper
 // (enrich-sweep.sh) the cron runner execs every ~5m — see that file's header for
-// the `hermes cron create` wire-up and ../cron/README.md for the full cron model.
+// the `host-timer` wire-up and ../cron/README.md for the full cron model.
 //
 // This is the on-box enrichment path: it does the analysis ON the box (ffmpeg +
 // bun), so there is no Worker-side enrichment trigger. Pure compute, zero LLM

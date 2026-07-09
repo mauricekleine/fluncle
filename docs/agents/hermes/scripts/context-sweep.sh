@@ -17,24 +17,20 @@
 # Worker runs the Firecrawl search + Haiku distill + the quiet `context_note` write.
 # Pure trigger, zero LLM tokens on the box.
 #
-# Operator wires it on the devbox (the image already carries bun + the fluncle CLI;
-# `context_track` is AGENT tier, so the box's existing agent-scoped token drives it —
-# no operator token needed):
-#
-#   hermes cron create "every 60m" --no-agent --script context-sweep.sh --deliver local
-#
-# Confirm with `hermes cron list`; per-run output lands in
-# ~/.hermes/cron/output/{job_id}/{timestamp}.md.
+# Scheduled by a repo-checked-in HOST systemd timer (../context-note-timer/, installed by
+# ../install-host-timers.sh), NOT a gateway `hermes cron create`. `context_track` is AGENT
+# tier, so the box's existing agent-scoped token drives it — no operator token needed.
+# Per-run output is a freshness marker the sweep self-writes via cron-output.sh under
+# ~/.hermes/cron/output/fluncle-context-note/ (read by the /status prober). See ../cron/README.md.
 #
 # THE OCCASIONAL WIDEN PASS (--retry-empty): the routine sweep above EXCLUDES finds the
 # prior pass confirmed empty (`context_status = 'empty'`), so the every-tick cron never
 # re-burns Firecrawl + the distil LLM on a hopeless find. To re-attempt those empties
-# (e.g. monthly, after new web facts may have surfaced), run a SEPARATE, rarely-fired
-# cron that passes the flag through to the orchestrator — NOT the default 60m job:
+# (e.g. monthly, after new web facts may have surfaced), pass the flag through to the
+# orchestrator via `--retry-empty` — run by hand on the box, or a separate rarely-fired
+# host timer (there is no committed widen-pass timer unit), NOT the default 60m job:
 #
-#   hermes cron create "every 720h" --no-agent --script context-sweep.sh --deliver local -- --retry-empty
-#
-# Or one-shot by hand on the box: `RETRY_EMPTY=1 bash context-sweep.sh`. Either way the
+# One-shot by hand on the box: `RETRY_EMPTY=1 bash context-sweep.sh`. Either way the
 # per-finding trigger is identical; only the worklist (step 1) widens.
 set -euo pipefail
 

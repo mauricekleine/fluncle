@@ -30,13 +30,11 @@
 #         cron env, so it MUST come from this file).
 #   - The private bucket must exist (operator step; creating an R2 bucket is free).
 #
-# Operator wires it on the devbox (the image already carries bun; the job needs no
-# fluncle CLI + no agent token — it talks to Turso + R2 directly):
-#
-#   hermes cron create "every 24h" --no-agent --script backup-sweep.sh --deliver local --name fluncle-backup
-#
-# Confirm with `hermes cron list`; per-run output lands in
-# ~/.hermes/cron/output/{job_id}/{timestamp}.md.
+# Scheduled by a repo-checked-in HOST systemd timer (../backup-timer/, installed by
+# ../install-host-timers.sh), NOT a gateway `hermes cron create`. The job needs no fluncle
+# CLI + no agent token — it talks to Turso + R2 directly. Per-run output is a freshness
+# marker the sweep self-writes via cron-output.sh under
+# ~/.hermes/cron/output/fluncle-backup/ (read by the /status prober). See ../cron/README.md.
 set -euo pipefail
 
 # The runner execs this with a minimal PATH that omits /usr/local/bin (the bun symlink)

@@ -12,13 +12,10 @@
 # would be fed to Python. This thin wrapper is the bash entry; all the JSON work
 # lives in the bun orchestrator beside it. Its stdout is the cron's run output.
 #
-# Operator wires it on the devbox (once the image carries ffmpeg + bun and the
-# fluncle-track-enrichment skill is installed under ~/.hermes/skills/):
-#
-#   hermes cron create "every 5m" --no-agent --script enrich-sweep.sh --deliver local
-#
-# Confirm with `hermes cron list`; per-run output lands in
-# ~/.hermes/cron/output/{job_id}/{timestamp}.md.
+# Scheduled by a repo-checked-in HOST systemd timer (../enrich-timer/, installed by
+# ../install-host-timers.sh), NOT a gateway `hermes cron create`. Per-run output is a
+# freshness marker the sweep self-writes via cron-output.sh under
+# ~/.hermes/cron/output/fluncle-enrich/ (read by the /status prober). See ../cron/README.md.
 set -euo pipefail
 
 # The Hermes cron `--no-agent --script` runner execs this with a minimal PATH that

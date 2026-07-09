@@ -5,7 +5,7 @@
 // LIVE. Version-controlled source; the repo is canonical and the box is a deploy
 // target (fluncle-hermes-operator skill). Invoked by the bash wrapper
 // (newsletter-sweep.sh) the cron runner execs Fridays 15:00 Amsterdam — see that
-// file's header for the `hermes cron create` wire-up and ../cron/README.md.
+// file's header for the `host-timer` wire-up and ../cron/README.md.
 //
 // WHY THIS REPLACED THE AGENT LOOP. The newsletter used to be an AGENT cron (a
 // model-driven conversation that authored + persisted + offered the Send button). On

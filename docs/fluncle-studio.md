@@ -143,12 +143,7 @@ Cron scripts deploy by **`docker cp` into the running container**, NOT baked int
    docker cp clip-sweep.ts hermes:/opt/data/scripts/clip-sweep.ts
    ```
 
-3. **Wire the cron** (the agent token already lives in the cron env — no operator token, since the ops are agent tier):
-
-   ```bash
-   hermes cron create "every 15m" --no-agent --script clip-sweep.sh --deliver local --name fluncle-studio-clip
-   hermes cron list   # confirm; per-run output → ~/.hermes/cron/output/{job_id}/{timestamp}.md
-   ```
+3. **Schedule it** (the agent token already lives in the cron env — no operator token, since the ops are agent tier): the sweep ships as the `studio-clip-timer` host systemd timer (`fluncle-studio-clip`), a repo-checked-in `.timer`/`.service` pair installed by [`docs/agents/hermes/install-host-timers.sh`](./agents/hermes/install-host-timers.sh). Per-run output is a freshness marker the sweep self-writes under `~/.hermes/cron/output/fluncle-studio-clip/` (read by the `/status` prober).
 
 The CLI bump (the `admin clips` commands) reaches the box on the next baked-CLI pin bump (the `fluncle-pin-watch` self-deploy), so step 2 only needs to wait for a CLI version that carries `admin clips cut`.
 

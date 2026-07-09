@@ -16,14 +16,11 @@
 # small bounded batch of each source per tick via the `fluncle` CLI, and the Worker
 # carries the per-finding reliability state + Retry-After backoff.
 #
-# Operator wires it on the devbox (the image already carries bun + the fluncle CLI;
-# the backfills are AGENT tier, so the box's existing agent-scoped token drives them
-# — no operator token needed):
-#
-#   hermes cron create "every 30m" --no-agent --script backfill-sweep.sh --deliver local
-#
-# Confirm with `hermes cron list`; per-run output lands in
-# ~/.hermes/cron/output/{job_id}/{timestamp}.md.
+# Scheduled by a repo-checked-in HOST systemd timer (../backfill-timer/, installed by
+# ../install-host-timers.sh), NOT a gateway `hermes cron create`. The backfills are AGENT
+# tier, so the box's existing agent-scoped token drives them — no operator token needed.
+# Per-run output is a freshness marker the sweep self-writes via cron-output.sh under
+# ~/.hermes/cron/output/fluncle-backfill/ (read by the /status prober). See ../cron/README.md.
 set -euo pipefail
 
 # The Hermes cron `--no-agent --script` runner execs this with a minimal PATH that

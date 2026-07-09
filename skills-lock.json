@@ -29,9 +29,9 @@
       "computedHash": "ca57c2cd6ff63e354232d718f6cf1c0bb9aa9c8a3f0a7dba6cbcfdc1884ca7e0"
     },
     "fluncle-hermes-operator": {
-      "source": "packages/skills/fluncle-hermes-operator",
+      "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-hermes-operator",
       "sourceType": "local",
-      "computedHash": "8e41576a1577c5568e852e0d421dc3c369f260fa4017cb5c77b5f1fad515d092"
+      "computedHash": "ea07ee65a0101e6d6c2546ad0ad89ed0cef40faa66eedbaa498965b9509f7e1f"
     },
     "fluncle-key-backfill": {
       "source": "packages/skills/fluncle-key-backfill",

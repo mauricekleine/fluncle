@@ -12,14 +12,11 @@
 # the MB url-rel walk, the Firecrawl /v2/extract gap-fill, and the YouTube
 # channel-ID resolution. Pure trigger, zero LLM tokens on the box.
 #
-# Operator wires it on the devbox (the image already carries bun + the fluncle
-# CLI; `resolve_artist` is AGENT tier, so the box's existing agent-scoped token
-# drives it — no operator token needed):
-#
-#   hermes cron create "every 60m" --no-agent --script artist-sweep.sh --deliver local
-#
-# Confirm with `hermes cron list`; per-run output lands in
-# ~/.hermes/cron/output/{job_id}/{timestamp}.md.
+# Scheduled by a repo-checked-in HOST systemd timer (../artist-sweep-timer/, installed by
+# ../install-host-timers.sh), NOT a gateway `hermes cron create`. `resolve_artist` is AGENT
+# tier, so the box's existing agent-scoped token drives it — no operator token needed.
+# Per-run output is a freshness marker the sweep self-writes via cron-output.sh under
+# ~/.hermes/cron/output/fluncle-artist-sweep/ (read by the /status prober). See ../cron/README.md.
 set -euo pipefail
 
 export PATH="/usr/local/bin:/root/.bun/bin:${PATH:-/usr/bin:/bin}"

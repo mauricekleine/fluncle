@@ -45,7 +45,7 @@ The pipeline board's **Note** cell is an `auto` step that stays **actionable** (
 
 ## The box cron (LIVE)
 
-`fluncle-note` is the on-box `--no-agent` hybrid sweep — deterministic queue + ONE `claude -p` authoring + deterministic delivery — mirroring `fluncle-observation`, and it runs **live on the box every 10 min** (confirmed in the cron roster + the `fluncle-healthcheck` `CRON_SPECS`). Source: [`hermes/scripts/note-sweep.{sh,ts}`](./hermes/scripts/). The full runbook (the token file-source, the auth-fail ping, `BATCH_CAP=1`, the `hermes cron create` command) is in [`hermes/cron/README.md`](./hermes/cron/README.md) § The HYBRID `--no-agent` auto-note cron.
+`fluncle-note` is the on-box `--no-agent` hybrid sweep — deterministic queue + ONE `claude -p` authoring + deterministic delivery — mirroring `fluncle-observation`, and it runs **live on the box every 10 min** (confirmed in the cron roster + the `fluncle-healthcheck` `CRON_SPECS`). Source: [`hermes/scripts/note-sweep.{sh,ts}`](./hermes/scripts/). The full runbook (the token file-source, the auth-fail ping, `BATCH_CAP=1`, the host-timer install (`install-host-timers.sh`)) is in [`hermes/cron/README.md`](./hermes/cron/README.md) § The HYBRID `--no-agent` auto-note cron.
 
 ## Safety rails (inline so they survive even if the skill fails to load)
 

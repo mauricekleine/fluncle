@@ -5,7 +5,7 @@
 // Version-controlled source; the repo is canonical and the box is a deploy target
 // (fluncle-hermes-operator skill). Invoked by the bash wrapper (fluncle-live.sh) the
 // cron runner execs every ~1m — see that file's header for the env keys + the
-// `hermes cron create` wire-up, and ../cron/README.md § The live cron.
+// `host-timer` wire-up, and ../cron/README.md § The live cron.
 //
 // THE TICK (all deterministic — no model time):
 //   1. TOKEN: mint a Twitch client-credentials app token (public Helix reads, no app

@@ -5,7 +5,7 @@
 // LIVE. Version-controlled source; the repo is canonical and the box is a
 // deploy target (fluncle-hermes-operator skill). Invoked by the bash wrapper
 // (backfill-sweep.sh) the cron runner execs on a schedule — see that file's header
-// for the `hermes cron create` wire-up and ../cron/README.md for the cron model.
+// for the `host-timer` wire-up and ../cron/README.md for the cron model.
 //
 // THE WORKER-PACED MODEL. The box holds NO Discogs/Last.fm vendor keys (those live
 // in the Worker). So the backfill API calls happen IN THE WORKER; this box driver

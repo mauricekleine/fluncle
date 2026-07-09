@@ -30,15 +30,12 @@
 # the Worker checks the kill switch first and no-ops the tick when paused. So leaving the
 # cron running is safe; pausing halts every post within one tick, schedule intact.
 #
-# Operator wires it on the devbox (the image already carries curl; the drip is AGENT tier,
-# so the box's existing agent-scoped token drives it — no operator token). Post-first-batch:
-# watch the first automated posts survive on Instagram before trusting the cadence
-# (clip-drip-feed RFC §6); the kill switch is the response if a clip gets struck.
-#
-#   hermes cron create "every 20m" --no-agent --script clip-drip-sweep.sh --deliver local
-#
-# Confirm with `hermes cron list`; per-run output lands in
-# ~/.hermes/cron/output/{job_id}/{timestamp}.md.
+# NOT YET DEPLOYED — there is no live timer for this sweep. When deployed it will ship like
+# every other sweep: a repo-checked-in HOST systemd timer installed by ../install-host-timers.sh
+# (the drip is AGENT tier, so the box's existing agent-scoped token drives it — no operator
+# token). Post-first-batch: watch the first automated posts survive on Instagram before
+# trusting the cadence (clip-drip-feed RFC §6); the kill switch is the response if a clip
+# gets struck.
 set -euo pipefail
 
 # The Hermes cron `--no-agent --script` runner execs this with a minimal PATH that omits

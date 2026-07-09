@@ -39,9 +39,10 @@
 #     so it can only reach this script via a file; BOX_API_KEY rides along.
 #     Written from the configured 1Password items (see the ops runbook note).
 #
-# Operator wires it on the devbox (image carries bun + fluncle + the box CLI):
-#   hermes cron create "every 60m" --no-agent --script render-conductor.sh \
-#     --deliver local --name fluncle-render
+# Scheduled by a repo-checked-in HOST systemd timer (../render-timer/, installed by
+# ../install-host-timers.sh), NOT a gateway `hermes cron create`. Per-run output is a
+# freshness marker the sweep self-writes via cron-output.sh under
+# ~/.hermes/cron/output/fluncle-render/ (read by the /status prober). See ../cron/README.md.
 set -uo pipefail
 
 # --- PATH + absolute bins: the --no-agent runner strips PATH (../cron/README.md

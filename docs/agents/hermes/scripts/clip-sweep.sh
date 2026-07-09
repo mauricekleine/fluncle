@@ -23,13 +23,12 @@
 #     frame (fontconfig + e.g. fonts-dejavu-core, or set CLIP_FONT_FILE to a .ttf path).
 #   - the baked `bun` + `fluncle` CLI (already in the image).
 #
-# Operator wires it on the devbox (`presign_clip_upload`/`finalize_clip_cut` are AGENT
-# tier, so the box's existing agent-scoped token drives them — no operator token needed):
-#
-#   hermes cron create "every 15m" --no-agent --script clip-sweep.sh --deliver local --name fluncle-studio-clip
-#
-# Confirm with `hermes cron list`; per-run output lands in
-# ~/.hermes/cron/output/{job_id}/{timestamp}.md.
+# Scheduled by a repo-checked-in HOST systemd timer (../studio-clip-timer/, installed by
+# ../install-host-timers.sh), NOT a gateway `hermes cron create`. `presign_clip_upload`/
+# `finalize_clip_cut` are AGENT tier, so the box's existing agent-scoped token drives them —
+# no operator token needed. Per-run output is a freshness marker the sweep self-writes via
+# cron-output.sh under ~/.hermes/cron/output/fluncle-studio-clip/ (read by the /status
+# prober). See ../cron/README.md.
 set -euo pipefail
 
 # The Hermes cron `--no-agent --script` runner execs this with a minimal PATH that omits

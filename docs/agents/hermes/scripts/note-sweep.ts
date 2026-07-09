@@ -5,7 +5,7 @@
 // LIVE. Version-controlled source; the repo is canonical and the box is a
 // deploy target (fluncle-hermes-operator skill). Invoked by the bash wrapper
 // (note-sweep.sh) the cron runner execs every ~30m — see that file's header for the
-// `hermes cron create` wire-up and ../cron/README.md for the full cron model.
+// `host-timer` wire-up and ../cron/README.md for the full cron model.
 //
 // THE HYBRID MODEL (the written-note sibling of observe-sweep). Unlike the
 // pure-trigger sweeps (enrich/context/backfill), this one has ONE agentic step in
