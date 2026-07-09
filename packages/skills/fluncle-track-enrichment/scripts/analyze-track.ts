@@ -552,12 +552,23 @@ function estimateKey(chroma: number[]): { confidence: number; key: string } {
 }
 
 // ---------------------------------------------------------------------------
-// BPM (onset-envelope autocorrelation, folded to the D&B band).
+// BPM (onset-envelope tempo comb over the D&B band).
 // ---------------------------------------------------------------------------
 
-const HOP_MS = 50;
-const BPM_WINDOW_S = 12; // analyze the busiest contiguous stretch, not the whole clip
-const BPM_CONFIDENCE_FLOOR = 0.15; // normalized autocorr peak; below this → null
+// The tempo comb runs on a fine ~100 Hz onset envelope (10 ms hop). A 50 ms hop is
+// under-resolved for the 160–185 D&B band: at 174 BPM the beat period is only ~6.9
+// hops, so the autocorrelation at integer lags nearly vanishes and the picker lands on
+// syncopation intervals instead of the beat. The finer hop puts ~34 samples across one
+// beat, which is what lets the comb resolve tempo to the scan granularity.
+const BPM_HOP_MS = 10;
+// onsetRate stays on the ORIGINAL 50 ms hop so features.onsetRate remains
+// distribution-compatible with the archived rows — it is a busy-ness measure, not a
+// tempo, and shifting its hop would silently move every stored number.
+const ONSET_HOP_MS = 50;
+const BPM_WINDOW_S = 20; // score the busiest contiguous stretch — previews open on build-ups
+const BPM_CONFIDENCE_FLOOR = 0.15; // normalized comb score; below this → null (honest out-of-band)
+const BPM_BAND_MIN = 160; // the D&B tempo band; a comb winner outside it is not reliable
+const BPM_BAND_MAX = 185;
 const BASS_CUTOFF_HZ = 150; // one-pole split: isolate the kick from pads/melody
 const MID_CUTOFF_HZ = 2000;
 
@@ -649,18 +660,20 @@ export async function acousticBrainzBpmByIsrc(
   }
 }
 
-function estimateBpm(samples: Float32Array): {
-  bpm: number | null;
-  bpmConfidence: number;
-  onsetRate: number;
-} {
-  const hopSamples = Math.max(1, Math.round((HOP_MS / 1000) * SAMPLE_RATE));
+// Three-band (bass/mid/high) half-wave-rectified onset envelope at a given hop.
+// One-pole filters split the signal (per-hop RMS): the kick lives in the bass band,
+// so a band-summed onset envelope catches the beat even when pads dominate total
+// energy — the trick the video pipeline uses to lock onto beats a full-spectrum
+// envelope misses entirely. `bass` is returned alongside so the BPM window picker can
+// weight it and land on the section that actually carries the kick. `hopSamples` is
+// the ROUNDED integer hop (round(220.5) = 221 at 22050 Hz), returned so the caller can
+// derive the true envelope rate rather than assuming 1000 / hopMs.
+function onsetEnvelope(
+  samples: Float32Array,
+  hopMs: number,
+): { bass: Float32Array; env: Float32Array; hopSamples: number; hops: number } {
+  const hopSamples = Math.max(1, Math.round((hopMs / 1000) * SAMPLE_RATE));
   const hops = Math.floor(samples.length / hopSamples);
-
-  // Split into bass/mid/high via one-pole filters (per-hop RMS). The kick lives
-  // in the bass band, so a band-summed onset envelope catches the beat even when
-  // pads dominate total energy — the trick the video pipeline uses to lock onto
-  // beats that a full-spectrum envelope misses entirely.
   const aBass = lowpassAlpha(BASS_CUTOFF_HZ, SAMPLE_RATE);
   const aMid = lowpassAlpha(MID_CUTOFF_HZ, SAMPLE_RATE);
   let lpBass = 0;
@@ -703,7 +716,15 @@ function estimateBpm(samples: Float32Array): {
       Math.max(0, high[h] - high[h - 1]);
   }
 
-  // Onset rate over the whole clip (busy-ness; jungle reads high).
+  return { bass, env, hopSamples, hops };
+}
+
+// Onset rate over the whole clip (busy-ness; jungle reads high). Kept on the 50 ms hop
+// so features.onsetRate stays distribution-compatible with the archive (see
+// ONSET_HOP_MS): the count of prominent onset peaks per second, threshold = mean +
+// 0.6·std of the envelope.
+function onsetRateOf(samples: Float32Array): number {
+  const { env, hops } = onsetEnvelope(samples, ONSET_HOP_MS);
   let envMean = 0;
 
   for (let h = 0; h < hops; h++) {
@@ -721,12 +742,31 @@ function estimateBpm(samples: Float32Array): {
     }
   }
 
-  const onsetRate = Number((onsets / Math.max(1e-6, (hops * HOP_MS) / 1000)).toFixed(2));
+  return Number((onsets / Math.max(1e-6, (hops * ONSET_HOP_MS) / 1000)).toFixed(2));
+}
+
+// Tempo estimator: a comb over the D&B band scored against the onset envelope's
+// autocorrelation. Where a plain autocorrelation-peak picker at 50 ms lands on
+// syncopation intervals in the 160–185 band, the comb sums each candidate tempo's
+// harmonics, so the true beat and all its multiples reinforce one answer — and a
+// half-time track folds up through its even harmonics. Out-of-band music scores below
+// the confidence floor and returns null rather than a fabricated in-band number.
+// Exported so the focused BPM test can exercise it on decoded synthetic fixtures
+// without resolving previews or hitting the network.
+export function estimateBpm(samples: Float32Array): {
+  bpm: number | null;
+  bpmConfidence: number;
+  onsetRate: number;
+} {
+  const onsetRate = onsetRateOf(samples);
+
+  // The comb runs on the fine 10 ms envelope.
+  const { bass, env, hopSamples, hops } = onsetEnvelope(samples, BPM_HOP_MS);
 
   // Energy window: previews often open on a beatless build-up. Slide a window and
   // score it by onset energy + a bass weight, so it lands on the section that has
   // the kick rather than a busy hi-hat fill or a pad swell.
-  const winHops = Math.min(hops, Math.round((BPM_WINDOW_S * 1000) / HOP_MS));
+  const winHops = Math.min(hops, Math.round((BPM_WINDOW_S * 1000) / BPM_HOP_MS));
   let winStart = 0;
 
   if (hops > winHops) {
@@ -751,21 +791,29 @@ function estimateBpm(samples: Float32Array): {
       bassRun += bass[h] / bassMax;
     }
 
-    let bestScore = onsetRun + 2 * bassRun;
+    let bestWindowScore = onsetRun + 2 * bassRun;
 
     for (let h = winHops; h < hops; h++) {
       onsetRun += (env[h] - env[h - winHops]) / envMax;
       bassRun += (bass[h] - bass[h - winHops]) / bassMax;
       const score = onsetRun + 2 * bassRun;
 
-      if (score > bestScore) {
-        bestScore = score;
+      if (score > bestWindowScore) {
+        bestWindowScore = score;
         winStart = h - winHops + 1;
       }
     }
   }
 
-  const win = env.subarray(winStart, winStart + winHops);
+  // 1-2-1 smoothing before autocorrelation: the fine envelope's onset spikes are only
+  // 1–2 hops wide, and un-smoothed narrow peaks biased the comb high by ~0.4 BPM.
+  const smoothed = new Float32Array(hops);
+
+  for (let h = 0; h < hops; h++) {
+    smoothed[h] = ((env[h - 1] ?? 0) + 2 * env[h] + (env[h + 1] ?? 0)) / 4;
+  }
+
+  const win = smoothed.subarray(winStart, winStart + winHops);
   let winMean = 0;
 
   for (const v of win) {
@@ -775,54 +823,94 @@ function estimateBpm(samples: Float32Array): {
   winMean /= Math.max(1, win.length);
   const centered = Float64Array.from(win, (v) => v - winMean);
 
-  const bpmToLag = (bpm: number) => (60 / bpm) * (1000 / HOP_MS);
-  const lagMin = Math.floor(bpmToLag(190));
-  const lagMax = Math.ceil(bpmToLag(70));
+  // Lag→BPM MUST use the TRUE envelope rate SAMPLE_RATE / hopSamples, not
+  // 1000 / BPM_HOP_MS: hopSamples is rounded (round(220.5) = 221 at 22050 Hz), so an
+  // assumed 100 Hz rate is 0.23% off — a constant +0.40 BPM bias at 174 (measured
+  // before this correction).
+  const envRate = SAMPLE_RATE / hopSamples;
 
-  const autocorr = (lag: number): number => {
+  // Full autocorrelation out to 8 beats at the slowest candidate tempo.
+  const maxLag = Math.min(centered.length - 1, Math.ceil((60 / BPM_BAND_MIN) * envRate * 8) + 2);
+  const ac = new Float64Array(maxLag + 1);
+
+  for (let lag = 0; lag <= maxLag; lag++) {
     let acc = 0;
 
     for (let i = lag; i < centered.length; i++) {
       acc += centered[i] * centered[i - lag];
     }
 
-    return acc;
+    // Unbiased: divide by the overlap count so longer lags aren't tapered down, which
+    // would tilt the comb toward shorter lags (higher BPM).
+    ac[lag] = acc / Math.max(1, centered.length - lag);
+  }
+
+  const energy0 = ac[0]; // zero-lag = total windowed onset energy
+
+  if (energy0 <= 0) {
+    return { bpm: null, bpmConfidence: 0, onsetRate };
+  }
+
+  // Quadratic (3-point) interpolation of the autocorrelation at a fractional lag —
+  // linear interpolation of these narrow peaks biased the comb by +0.4 BPM.
+  const interp = (x: number): number => {
+    const i = Math.round(x);
+
+    if (i < 1 || i + 1 > maxLag) {
+      return 0;
+    }
+
+    const a = ac[i - 1];
+    const b = ac[i];
+    const c = ac[i + 1];
+    const f = x - i; // in [-0.5, 0.5]
+
+    return b + 0.5 * f * (c - a) + 0.5 * f * f * (a - 2 * b + c);
   };
 
-  const energy0 = autocorr(0); // zero-lag = total windowed onset energy
-  let bestLag = lagMin;
+  // Tempo comb: score each candidate BPM by the mean autocorrelation at k×period for
+  // k=1..8. The true beat and all its harmonics reinforce one candidate; a half-time
+  // track (e.g. 87 BPM) folds up because its even harmonics line up with 174. Scan a
+  // little past the band edges so an in-band winner is a genuine local best.
+  let bestBpm = 0;
   let bestScore = -Infinity;
 
-  for (let lag = lagMin; lag <= lagMax && lag < centered.length; lag++) {
-    const score = autocorr(lag) / lag ** 0.5;
+  for (let bpm = BPM_BAND_MIN - 2; bpm <= BPM_BAND_MAX + 2; bpm += 0.02) {
+    const period = (60 / bpm) * envRate;
+    let score = 0;
+    let weights = 0;
+
+    for (let k = 1; k <= 8; k++) {
+      const lag = k * period;
+
+      if (lag > maxLag) {
+        break;
+      }
+
+      score += interp(lag);
+      weights += 1;
+    }
+
+    if (weights === 0) {
+      continue;
+    }
+
+    score /= weights;
 
     if (score > bestScore) {
       bestScore = score;
-      bestLag = lag;
+      bestBpm = bpm;
     }
   }
 
-  // Parabolic sub-hop refinement.
-  let refined = bestLag;
-
-  if (bestLag - 1 >= lagMin && bestLag + 1 < centered.length) {
-    const a = autocorr(bestLag - 1);
-    const b = autocorr(bestLag);
-    const c = autocorr(bestLag + 1);
-    const denom = a - 2 * b + c;
-
-    if (Math.abs(denom) > 1e-9) {
-      refined = bestLag + Math.max(-0.5, Math.min(0.5, (0.5 * (a - c)) / denom));
-    }
-  }
-
-  // Confidence = how strongly the beat period stands out (normalized peak).
-  const confidence = energy0 > 0 ? Math.max(0, autocorr(bestLag) / energy0) : 0;
-  const folded = foldToBand((60 * (1000 / HOP_MS)) / refined);
-  const reliable = folded !== null && confidence >= BPM_CONFIDENCE_FLOOR;
+  // Confidence = how strongly the winning comb stands out (normalized by zero-lag
+  // energy). Out-of-band music scores below the floor → honest null over a fake tempo.
+  const confidence = Math.max(0, bestScore / energy0);
+  const inBand = bestBpm >= BPM_BAND_MIN && bestBpm <= BPM_BAND_MAX;
+  const reliable = inBand && confidence >= BPM_CONFIDENCE_FLOOR;
 
   return {
-    bpm: reliable && folded !== null ? Number(folded.toFixed(2)) : null,
+    bpm: reliable ? Number(bestBpm.toFixed(2)) : null,
     bpmConfidence: Number(confidence.toFixed(3)),
     onsetRate,
   };
