@@ -190,6 +190,13 @@ type BackfillSyncOptions = {
   limit?: string;
 };
 
+type MigratePreviewArchiveOptions = {
+  deletePublic: boolean;
+  execute: boolean;
+  json: boolean;
+  limit?: string;
+};
+
 type ArtistResolveOptions = {
   json: boolean;
   limit?: string;
@@ -1417,6 +1424,35 @@ function addAdminCommands(program: Command): void {
       const { resolveArtistCommand } = await import("./commands/admin-artists");
       await runArtistResolve(artistId, options, resolveArtistCommand);
     });
+
+  // `migrate_*` ops → `admin migrations` group (Convention B). One-off, operator-run
+  // data migrations. REF-05: move the archived 30s previews off the PUBLIC bucket
+  // (a copyright exposure) into the PRIVATE one. DRY-RUN BY DEFAULT — `--execute`
+  // performs the copy; `--delete-public --execute` runs the second phase (removing
+  // the public objects). Never copies and deletes in one pass.
+  const migrations = configureCommand(
+    admin.command("migrations").description("One-off operator data migrations"),
+  );
+
+  migrations.action(() => {
+    migrations.outputHelp();
+  });
+
+  migrations
+    .command("preview-archive")
+    .description("Move archived 30s previews from the public bucket to the private one (REF-05)")
+    .option("--execute", "Actually perform the migration (default is a dry run)", false)
+    .option(
+      "--delete-public",
+      "Phase B: delete the public objects for already-migrated findings (run only after a full copy)",
+      false,
+    )
+    .option("--limit <limit>", "Max findings to process", "50")
+    .option("--json", "Print JSON", false)
+    .action(async (options: MigratePreviewArchiveOptions) => {
+      const { migratePreviewArchiveCommand } = await import("./commands/preview-migration");
+      await runMigratePreviewArchive(options, migratePreviewArchiveCommand);
+    });
 }
 
 async function runTrackPreviewArchive(
@@ -1565,6 +1601,85 @@ async function runTrackNote(
 
   console.log(`Authored the note for ${result.logId}:`);
   console.log(`  ${result.note}`);
+}
+
+// REF-05 — drain the public → private preview-bucket migration in bounded,
+// resumable batches. `--limit` is the per-pass batch size (server-clamped); the CLI
+// loops the returned cursor until the phase's set is drained (nextCursor null),
+// aggregating the per-pass results. Dry-run unless `--execute`; copy phase unless
+// `--delete-public`.
+async function runMigratePreviewArchive(
+  options: MigratePreviewArchiveOptions,
+  migratePreviewArchiveCommand: typeof import("./commands/preview-migration").migratePreviewArchiveCommand,
+): Promise<void> {
+  const limit = options.limit === undefined ? 50 : Number.parseInt(options.limit, 10);
+
+  if (!Number.isInteger(limit) || limit < 1) {
+    throw new Error("Limit must be a positive integer");
+  }
+
+  const dryRun = !options.execute;
+  const deletePublic = options.deletePublic;
+  const copied: Array<{ logId: string; newKey: string; oldKey: string; trackId: string }> = [];
+  const deleted: Array<{ oldKey: string; trackId: string }> = [];
+  const skipped: Array<{ reason: string; trackId: string }> = [];
+  const failed: Array<{ error: string; trackId: string }> = [];
+  let cursor: string | undefined;
+  let remaining = 0;
+
+  // Loop the cursor until the phase is drained. The cursor advances monotonically by
+  // track_id whether or not a row mutates, so the loop always terminates.
+  for (;;) {
+    const result = await migratePreviewArchiveCommand({ cursor, deletePublic, dryRun, limit });
+    copied.push(...result.copied);
+    deleted.push(...result.deleted);
+    skipped.push(...result.skipped);
+    failed.push(...result.failed);
+    remaining = result.remaining;
+
+    if (!options.json) {
+      const phase = deletePublic ? "delete" : "copy";
+      const mode = dryRun ? "would" : "did";
+      console.log(
+        `  …${phase} pass (${mode}): +${result.copiedCount} copied, +${result.deletedCount} deleted, ${result.skippedCount} skipped, ${result.failedCount} failed; ${result.remaining} remaining`,
+      );
+    }
+
+    if (result.nextCursor === null) {
+      break;
+    }
+
+    cursor = result.nextCursor;
+  }
+
+  if (options.json) {
+    printJson({
+      copied,
+      copiedCount: copied.length,
+      deletePublic,
+      deleted,
+      deletedCount: deleted.length,
+      dryRun,
+      failed,
+      failedCount: failed.length,
+      ok: true,
+      remaining,
+      skipped,
+      skippedCount: skipped.length,
+    });
+    return;
+  }
+
+  const done = deletePublic ? deleted.length : copied.length;
+  const noun = deletePublic
+    ? "public object(s) deleted"
+    : "preview(s) copied to the private bucket";
+  const prefix = dryRun ? "DRY RUN — would have: " : "";
+  console.log(`${prefix}${done} ${noun}; ${skipped.length} skipped; ${failed.length} failed.`);
+
+  for (const item of failed) {
+    console.log(`  FAILED ${item.trackId}: ${item.error}`);
+  }
 }
 
 async function runPreviewArchiveBackfill(

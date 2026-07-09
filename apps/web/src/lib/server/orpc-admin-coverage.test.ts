@@ -162,6 +162,10 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // tier (agent-allowed): the box's status cron POSTs a snapshot with its agent token.
   "POST /admin/health": "record_health",
   "POST /admin/lastfm/auth/session": "exchange_lastfm_session",
+  // The REF-05 preview-bucket migration — contract-only oRPC (no TanStack route file;
+  // oRPC owns the path directly). Operator tier: a one-off, destructive-capable data
+  // move (it can delete public R2 objects), dry-run by default.
+  "POST /admin/migrations/preview-archive": "migrate_preview_archive",
   "POST /admin/mixcloud/token": "mint_mixcloud_token",
   // The crew announcement — contract-only oRPC (no TanStack route file; oRPC owns the
   // path directly). Operator tier: it posts a public Telegram crew callout, so the

@@ -62,6 +62,11 @@ const APPROVED_VERBS = new Set<string>([
   "drip",
   "enrich",
   "finalize",
+  // `migrate` (move data between stores as a one-off operator-run migration) — added
+  // deliberately with the REF-05 `migrate_preview_archive` op, which relocates the
+  // archived 30s previews from the public bucket to the private one. Distinct from
+  // `backfill` (fill missing data) — this MOVES existing data + rewrites pointers.
+  "migrate",
   // `note` (auto-author a finding's editorial note) — the written-note sibling of
   // `observe`/`context`, same verb-as-action shape ("note this finding").
   "note",
