@@ -50,8 +50,7 @@ const CRON_ORDER = CRON_SURFACES.map((surface) => surface.name);
 // `probeConfig.cadenceMs` (service id = the cron surface name, e.g. `cron.enrich`).
 // This is the fuel for the INTERVAL crons' next-run estimate: their row shows "next ≈ …"
 // from the cadence + the last probe timestamp, so the operator can see when each fires
-// next — no box round-trip (docs/admin-jobs.csv platform-ops
-// "Surface every cron's last-run and next-run on web-admin"). A cron added to the
+// next — no box round-trip. A cron added to the
 // registry with a cadence surfaces its next-run here automatically; a self-posted
 // automation with no declared cadence (e.g. `self-deploy`) simply shows none.
 const CRON_CADENCE_MS: Record<string, number> = {};

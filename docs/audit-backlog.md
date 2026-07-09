@@ -6,13 +6,12 @@ operating contract in `docs/agents/hermes/scripts/audit/prompts/_preamble.md`). 
 **machine-appended and committed as part of each night's PR**, so a filed finding survives the
 PR's merge instead of being buried in a squashed commit message.
 
-Keep it distinct from the two human-owned lists:
+Keep it distinct from the human-owned list:
 
-- `docs/followups-backlog.csv` — the operator's hand-curated backlog with its own triage schema.
 - `docs/planning/ROADMAP.md` — the planning backlog (non-canon per AGENTS.md).
 
-The operator triages from _this_ ledger into those when a finding is worth scheduling; the audit
-never writes to them directly.
+The operator triages from _this_ ledger into it when a finding is worth scheduling; the audit
+never writes to it directly.
 
 ## How it's maintained
 

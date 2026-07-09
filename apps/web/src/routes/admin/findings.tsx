@@ -386,7 +386,7 @@ function AdminBoardPage() {
   const [contextId, setContextId] = useState<string | undefined>();
   const [observationId, setObservationId] = useState<string | undefined>();
 
-  // The web intake (docs/admin-jobs.csv intake-enrichment): [Add finding] is the
+  // The web intake: [Add finding] is the
   // board's primary header action; the candidates tray sits beside it as a quiet
   // sheet. Both land on the same publish path the CLI uses, so a fresh add appears
   // at the board's top on invalidation with its enrichment cells still open — the

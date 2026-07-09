@@ -48,8 +48,8 @@ without pushing — inspect the diff there. Drop `--dry-run` to open a real PR. 
 `audit-review-sweep.sh --pr <N>`.
 
 **Triage the ledger.** `docs/audit-backlog.md` accumulates the filed (not-auto-fixed) findings,
-newest run on top, deduped. Promote the ones worth scheduling into `docs/followups-backlog.csv` or
-`docs/planning/`; set a row's `status` to `done`/`wontfix` when handled — never silently delete
+newest run on top, deduped. Promote the ones worth scheduling into `docs/planning/ROADMAP.md`;
+set a row's `status` to `done`/`wontfix` when handled — never silently delete
 (status carries the history). A high-impact finding the reviewer held the PR open for is both in the
 ledger and on the open PR.
 

@@ -1,7 +1,6 @@
 // Estimate a scheduled service's NEXT run purely Worker-side, from its declared
 // cadence + its last-seen timestamp — no box round-trip. This is the additive,
-// zero-box-dependency half of cron next-run visibility (docs/admin-jobs.csv
-// platform-ops "Surface every cron's last-run and next-run on web-admin"): /status
+// zero-box-dependency half of cron next-run visibility: /status
 // already shows every cron's last-run FRESHNESS, but next-run existed nowhere except
 // `hermes cron list` on the box.
 //

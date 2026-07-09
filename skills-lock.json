@@ -26,7 +26,7 @@
     "fluncle-audit-operator": {
       "source": "packages/skills/fluncle-audit-operator",
       "sourceType": "local",
-      "computedHash": "a3d6e6a0ff481d20f50ce08334ebeeb5d810dc36a1c6778f6f3175e50d19879c"
+      "computedHash": "a12ae48581fd72815ac23f53b6b2f142884fbf5aa1a9e2e9c86feb07c409e558"
     },
     "fluncle-goal-writer": {
       "source": "packages/skills/fluncle-goal-writer",
