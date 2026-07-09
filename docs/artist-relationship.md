@@ -18,7 +18,11 @@ There is no follow/champion state on the row — the graph is purely who the art
 
 ## Resolution (`resolve_artist`, agent tier)
 
-The box's `fluncle-artist-sweep` cron reads the resolve worklist (`list_unresolved_artists` — artists with `resolved_at IS NULL`) and calls `resolve_artist` per row: a MusicBrainz url-rels walk (→ `status=auto`, trusted) plus a Firecrawl `/v2/extract` gap-fill (→ `status=candidate`, operator-confirm before public). `wikidata` classified during the MB walk is routed to the `wikidataQid` KG anchor on `artists`, not into `socials`.
+The box's `fluncle-artist-sweep` cron reads the resolve worklist (`list_unresolved_artists`) and calls `resolve_artist` per row: a MusicBrainz url-rels walk (→ `status=auto`, trusted) plus a Firecrawl `/v2/extract` gap-fill (→ `status=candidate`, operator-confirm before public). `wikidata` classified during the MB walk is routed to the `wikidataQid` KG anchor on `artists`, not into `socials`.
+
+The MB walk finds the artist's MBID two ways, in order: (1) an **ISRC walk** — ISRC → MB recording → artist-credit MBID (name-matched); (2) an **artist-NAME-search fallback** when the ISRC walk finds nothing (DnB ISRCs are frequently absent from MB's index). The name search disambiguates hard against the artist's stored `spotify_artist_id`: a candidate is accepted only when its MB Spotify url-rel's artist id equals the stored id (exact identity), or — when a candidate carries no Spotify rel to cross-check — on a strong MB `score` (≥ 90) plus an exact normalized name match. A candidate whose Spotify rel is present but differs is a namesake and is rejected: a wrong social link on a public artist page is worse than a missing one. Without this fallback, most artists resolved to zero socials.
+
+The worklist is **self-healing**: `list_unresolved_artists` returns artists with `resolved_at IS NULL` PLUS artists resolved to zero socials whose stamp is older than 30 days, so a transient MB failure (a 503 window, an ISRC gap since closed, a namesake not yet disambiguated) re-tries at most once per window instead of sticking on 0 socials forever. Artists that already have socials are never re-queued. For an IMMEDIATE flush of a freshly-stamped empty backlog (which the 30-day window wouldn't touch yet), the operator runs `bun run apps/web/scripts/requeue-empty-artists.ts --confirm` (dry-run without `--confirm`), which clears `resolved_at` for every artist with zero `artist_socials` rows.
 
 ## The `/admin/artists` review queue (the manual motion)
 
