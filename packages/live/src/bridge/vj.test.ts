@@ -101,16 +101,29 @@ describe("parseTransition", () => {
 });
 
 describe("resolveVjTransitionPort", () => {
-  test("defaults to VJ_TRANSITION_PORT when the env is unset or junk", () => {
+  test("defaults to VJ_TRANSITION_PORT when the env is unset, empty, or junk", () => {
     expect(resolveVjTransitionPort(undefined)).toBe(VJ_TRANSITION_PORT);
     expect(resolveVjTransitionPort("")).toBe(VJ_TRANSITION_PORT);
     expect(resolveVjTransitionPort("not-a-port")).toBe(VJ_TRANSITION_PORT);
     expect(resolveVjTransitionPort("-1")).toBe(VJ_TRANSITION_PORT);
   });
 
-  test("honours a valid override (0 = an ephemeral OS-assigned port)", () => {
+  test("rejects trailing garbage instead of truncating it (parseInt('9000abc') = 9000)", () => {
+    expect(resolveVjTransitionPort("9000abc")).toBe(VJ_TRANSITION_PORT);
+    expect(resolveVjTransitionPort("90.5")).toBe(VJ_TRANSITION_PORT);
+    expect(resolveVjTransitionPort("0x1F90")).toBe(VJ_TRANSITION_PORT);
+  });
+
+  test("rejects an out-of-range port (would explode at bind) and falls back", () => {
+    expect(resolveVjTransitionPort("99999")).toBe(VJ_TRANSITION_PORT);
+    expect(resolveVjTransitionPort("65536")).toBe(VJ_TRANSITION_PORT);
+  });
+
+  test("honours a valid in-range override (0 = an ephemeral OS-assigned port)", () => {
     expect(resolveVjTransitionPort("9100")).toBe(9100);
     expect(resolveVjTransitionPort("0")).toBe(0);
+    expect(resolveVjTransitionPort("65535")).toBe(65535); // the top of the bindable range
+    expect(resolveVjTransitionPort(" 9000 ")).toBe(9000); // surrounding whitespace tolerated
   });
 });
 

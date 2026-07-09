@@ -399,23 +399,32 @@ async function mapLimit<T, R>(items: T[], limit: number, fn: (t: T) => Promise<R
 /**
  * Every finding's logId from the public sitemap — the complete archive index. `/api/tracks`
  * caps its page size, so the sitemap is the enumeration path: match `/log/<logId>` and dedupe.
- * Returns [] on any non-OK / network fault (the caller then serves an empty VJ pool loudly).
+ * THROWS (naming the status / cause) on any non-OK response or network fault — VJ mode has no
+ * fallback pool, so a swallowed failure would boot a dead, visual-less show. `www.fluncle.com`
+ * fronts a Cloudflare rule that 403s crawler-ish user-agents, so this fetch genuinely can fail
+ * in the field; failing fast + loud lets `main().catch` exit non-zero instead. An OK-but-empty
+ * parse (a sitemap with no `/log/` entries) is a distinct, non-throwing case: it returns [].
  */
 export async function fetchAllFindingLogIds(): Promise<string[]> {
+  const url = `${WEB_BASE}/sitemap.xml`;
+  let res: Response;
   try {
-    const res = await fetch(`${WEB_BASE}/sitemap.xml`);
-    if (!res.ok) {
-      return [];
-    }
-    const xml = await res.text();
-    const ids = new Set<string>();
-    for (const m of xml.matchAll(/\/log\/([0-9A-Za-z.]+)/g)) {
-      ids.add(m[1]);
-    }
-    return [...ids];
-  } catch {
-    return [];
+    res = await fetch(url);
+  } catch (cause) {
+    throw new Error(`RANDOM-VJ: sitemap fetch failed (${url})`, { cause });
   }
+  if (!res.ok) {
+    throw new Error(
+      `RANDOM-VJ: sitemap fetch returned ${res.status} ${res.statusText} (${url}) — a Cloudflare ` +
+        `user-agent/rule change can 403 the bridge; VJ mode needs the sitemap to enumerate the archive.`,
+    );
+  }
+  const xml = await res.text();
+  const ids = new Set<string>();
+  for (const m of xml.matchAll(/\/log\/([0-9A-Za-z.]+)/g)) {
+    ids.add(m[1]);
+  }
+  return [...ids];
 }
 
 /**
@@ -424,13 +433,24 @@ export async function fetchAllFindingLogIds(): Promise<string[]> {
  * datagrams, so there is nothing to match and no order to keep. Findings whose composition
  * never rendered still ride as the default-vehicle morph (`enrich` marks them non-replayable).
  * Bounded concurrency (8) keeps the archive-wide boot kind to prod + R2. Expect ~60 findings.
+ * THROWS on a failed sitemap fetch (via `fetchAllFindingLogIds`) OR an empty resolved pool —
+ * VJ mode has no fallback tracklist, so an empty pool must fail loudly (`main().catch` exits
+ * non-zero) rather than boot a visual-less show the operator can't drive.
  */
 export async function buildAllFindingsPlan(): Promise<PlanEntry[]> {
   const logIds = await fetchAllFindingLogIds();
   const members = (await mapLimit(logIds, 8, fetchTrackMember)).filter(
     (m): m is PlanMember => m !== null,
   );
-  return await mapLimit(members, 8, enrich);
+  const plan = await mapLimit(members, 8, enrich);
+  if (plan.length === 0) {
+    throw new Error(
+      `RANDOM-VJ: the archive pool is empty — the sitemap yielded ${logIds.length} logId(s), ` +
+        `${members.length} of which resolved to findings. VJ mode has nothing to show; refusing ` +
+        `to boot a dead show. Check ${WEB_BASE}/sitemap.xml and the public /api/tracks route.`,
+    );
+  }
+  return plan;
 }
 
 /**

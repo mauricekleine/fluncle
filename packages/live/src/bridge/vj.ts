@@ -133,10 +133,19 @@ export function parseTransition(raw: string): VjTransition | null {
   return { deck: msg.deck };
 }
 
-/** Resolve the VJ transition bind port: `FLUNCLE_VJ_TRANSITION_PORT` over the default. */
+/**
+ * Resolve the VJ transition bind port: `FLUNCLE_VJ_TRANSITION_PORT` over the default. The env
+ * value must be a WHOLE valid integer in the bindable range `0..65535` (0 = an ephemeral
+ * OS-assigned port) — trailing garbage (`"9000abc"`, which `parseInt` would silently truncate
+ * to 9000) and out-of-range values (`"99999"`, which would explode at `bind()`) fall back to
+ * the default rather than fail opaquely later. Pure, so the validation table is unit-tested.
+ */
 export function resolveVjTransitionPort(env = process.env.FLUNCLE_VJ_TRANSITION_PORT): number {
-  const parsed = env === undefined ? Number.NaN : Number.parseInt(env, 10);
-  return Number.isInteger(parsed) && parsed >= 0 ? parsed : VJ_TRANSITION_PORT;
+  if (env === undefined || !/^\d+$/.test(env.trim())) {
+    return VJ_TRANSITION_PORT;
+  }
+  const parsed = Number.parseInt(env.trim(), 10);
+  return parsed <= 65535 ? parsed : VJ_TRANSITION_PORT;
 }
 
 /** A running VJ transition listener — the actual bound port + a graceful close. */

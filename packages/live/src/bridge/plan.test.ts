@@ -127,6 +127,17 @@ describe("buildAllFindingsPlan", () => {
   const text = (body: string): Response => new Response(body);
   const notFound = (): Response => new Response("no", { status: 404 });
 
+  // Await a call and return whatever it throws (or null) — bun's `.rejects` matcher reads as a
+  // non-thenable to the type-aware linter, so capture the error directly (as track.test.ts does).
+  const capture = async (run: () => Promise<unknown>): Promise<unknown> => {
+    try {
+      await run();
+      return null;
+    } catch (error) {
+      return error;
+    }
+  };
+
   test("enumerates every /log/<logId> from the sitemap, then enriches each", async () => {
     // A sitemap listing three findings (plus noise that must NOT be scraped as a logId), one
     // of which the public track route can't resolve to a coordinate (skipped, not fabricated).
@@ -174,8 +185,30 @@ describe("buildAllFindingsPlan", () => {
     expect(first?.replay?.replayable).toBe(false); // no composition.tsx on R2
   });
 
-  test("an unreachable sitemap yields an empty pool (never throws)", async () => {
+  test("a non-OK sitemap THROWS — fail fast + loud, never a silent dead show", async () => {
     globalThis.fetch = mock(async (): Promise<Response> => notFound()) as unknown as typeof fetch;
-    expect(await buildAllFindingsPlan()).toEqual([]);
+    const error = await capture(() => buildAllFindingsPlan());
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toMatch(/sitemap fetch returned 404/);
+  });
+
+  test("a thrown fetch (network fault / 403) THROWS, naming the cause", async () => {
+    globalThis.fetch = mock(async (): Promise<Response> => {
+      throw new Error("ECONNREFUSED");
+    }) as unknown as typeof fetch;
+    const error = await capture(() => buildAllFindingsPlan());
+    expect((error as Error).message).toMatch(/sitemap fetch failed/);
+  });
+
+  test("a sitemap with findings but NONE resolving THROWS (empty pool, no dead show)", async () => {
+    // The sitemap lists a finding, but the public track route 404s it → no members → empty pool.
+    globalThis.fetch = mock(async (url: string): Promise<Response> => {
+      if (url.endsWith("/sitemap.xml")) {
+        return text("<url><loc>https://www.fluncle.com/log/019.F.1A</loc></url>");
+      }
+      return notFound();
+    }) as unknown as typeof fetch;
+    const error = await capture(() => buildAllFindingsPlan());
+    expect((error as Error).message).toMatch(/pool is empty/);
   });
 });
