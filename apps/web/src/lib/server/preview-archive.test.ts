@@ -85,11 +85,48 @@ describe("preview archive helpers", () => {
     expect(writes[0]?.sql).not.toContain("updated_at");
   });
 
+  it("does not sweep siblings when the DB write fails (never orphans the live pointer)", async () => {
+    const deletes: string[] = [];
+    const bucket = {
+      delete: async (key: string) => {
+        deletes.push(key);
+      },
+      put: async (key: string) => ({ etag: "etag", httpEtag: '"etag"', key, size: 3 }),
+    };
+    const db = {
+      execute: async () => {
+        throw new Error("db unavailable");
+      },
+    };
+
+    await expect(
+      archivePreviewForTrack(
+        {
+          bucket: bucket as never,
+          bytes: Uint8Array.from([1, 2, 3]).buffer,
+          mime: "audio/mp4",
+          source: "deezer:isrc",
+          track: { logId: "011.6.8K", trackId: "spotify-track" },
+        },
+        db as never,
+      ),
+    ).rejects.toThrow("db unavailable");
+
+    // The sweep runs LAST, after the DB commit — a failed DB write must not delete any
+    // sibling, so the row keeps pointing at an object that still exists.
+    expect(deletes).toEqual([]);
+  });
+
   it("never targets the public fluncle-videos bucket / VIDEOS binding", async () => {
     // fluncle-videos is world-served at found.fluncle.com; the 30s preview archive
     // must land in the PRIVATE fluncle-source-audio bucket. This mirrors the box
     // sweep scripts' "never fluncle-videos" guard (docs/agents/hermes/scripts/*).
     const route = await source("../../routes/api/admin/tracks.$trackId.preview.ts");
+
+    // Assert the call exists first so the guard can't silently degrade if the handler
+    // is renamed/moved (indexOf(-1) + slice would otherwise make the checks vacuous).
+    expect(route).toContain("archivePreviewForTrack({");
+
     const archiveCall = route.slice(route.indexOf("archivePreviewForTrack({"));
 
     expect(archiveCall).toContain("bucket: env.SOURCE_AUDIO");

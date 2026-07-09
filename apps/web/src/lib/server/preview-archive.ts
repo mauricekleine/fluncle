@@ -127,16 +127,6 @@ export async function archivePreviewForTrack(
     httpMetadata: { contentType: mime },
   });
 
-  // Sweep stale siblings: the key no longer carries a content hash, so a same-extension
-  // re-archive overwrites in place, but a changed extension would strand the old
-  // `<logId>/preview.<other-ext>` object. Delete every other-extension sibling for this
-  // finding after the successful put.
-  const staleSiblings = knownPreviewExtensions
-    .filter((ext) => ext !== extension)
-    .map((ext) => `${logId}/preview.${ext}`);
-
-  await Promise.all(staleSiblings.map((siblingKey) => input.bucket.delete(siblingKey)));
-
   // Operator-only archive metadata is internal analysis state. Do not bump
   // updated_at: public sitemap/log lastmod should reflect visible content only.
   await client.execute({
@@ -148,6 +138,18 @@ export async function archivePreviewForTrack(
           preview_archived_at = ?
       where track_id = ?`,
   });
+
+  // Sweep stale siblings LAST — the DB must never point at an object we've deleted.
+  // The key no longer carries a content hash, so a same-extension re-archive overwrites
+  // in place, but a changed extension would strand the old `<logId>/preview.<other-ext>`
+  // object. Deleting only AFTER the DB commit means: a failed put/DB-write leaves the row
+  // pointing at an object that still exists (recoverable), and a failed sweep only leaves
+  // a harmless orphan the next archive cleans up. Never delete the extension we just wrote.
+  const staleSiblings = knownPreviewExtensions
+    .filter((ext) => ext !== extension)
+    .map((ext) => `${logId}/preview.${ext}`);
+
+  await Promise.all(staleSiblings.map((siblingKey) => input.bucket.delete(siblingKey)));
 
   return { archivedAt, key, mime, source };
 }
