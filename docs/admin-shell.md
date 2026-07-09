@@ -2,6 +2,10 @@
 
 The contract for every `/admin` surface. The workspace chrome splits across two levels so it stays mounted as the operator moves between stations. The **persistent shell** — the sidebar (`admin-sidebar.tsx`, the only navigation surface, with its live count query) and the full-viewport content plate (the translucent glass pane over the cosmos) — is mounted **once** in the `/admin` layout route (`apps/web/src/routes/admin/route.tsx`), wrapping the `Outlet`. It never re-mounts on navigation, so the sidebar's count badges never blink out and refetch and the plate's backdrop-blur never re-composites (no background flash). Each guarded page renders only its **header + body** through `AdminShell` (`apps/web/src/components/admin/admin-shell.tsx`) — the fixed header grammar (sidebar trigger, title + optional subtitle, the `headerActions` slot) plus an optional `subheader` and the page body. Login stays a bare centered card outside the shell (the layout bypasses it by path). The layout also owns the two cross-page structural bits the page can't set on a shared frame: it lights the active sidebar entry from the URL (`navKeyForPath`), and it switches the one viewport-height, self-scrolling station (the Studio) into fill mode by path.
 
+## The persona law
+
+**The web admin is the operator's platform · `fluncle admin` is the agents' tool · `fluncle` is the crew's toy.** One persona per surface, and the persona decides where an operation's primary home lives: an operator workflow becomes a button on the web admin, an automation verb lands on the `admin`-tier CLI/API for the box sweeps and agents, and the public `fluncle` CLI stays the crew's. The operator's enemy is tooling fragmentation, so machine-bound jobs centralize into the web admin — a headless poller behind the API does the machine's work; no machine needs a face (the live-show visuals stay the one local ritual). A job reachable from several surfaces still has exactly one primary home under this law; the others are conveniences.
+
 ## The placement contract
 
 One home per kind of control. Put each control in its slot and nowhere else.
