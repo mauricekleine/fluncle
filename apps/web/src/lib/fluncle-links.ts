@@ -18,6 +18,10 @@ export const tiktokUrl = "https://www.tiktok.com/@fluncle";
 
 export const instagramUrl = "https://www.instagram.com/fluncle/";
 
+// Bluesky (AT Protocol) profile (docs/socials/) — @fluncle.bsky.social. Findings
+// auto-post here as link cards (lib/server/bluesky.ts).
+export const blueskyUrl = "https://bsky.app/profile/fluncle.bsky.social";
+
 // The licensed home for the DJ mix (docs/socials/).
 export const mixcloudUrl = "https://www.mixcloud.com/fluncle/";
 

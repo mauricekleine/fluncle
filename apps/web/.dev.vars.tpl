@@ -48,6 +48,12 @@ TELEGRAM_BOT_TOKEN=op://$FLUNCLE_1PASSWORD_ENV_ITEM/TELEGRAM_BOT_TOKEN
 TELEGRAM_CHANNEL_ID=op://$FLUNCLE_1PASSWORD_ENV_ITEM/TELEGRAM_CHANNEL_ID
 DISCORD_WEBHOOK_URL=op://$FLUNCLE_1PASSWORD_ENV_ITEM/DISCORD_WEBHOOK_URL
 
+# Bluesky (AT Protocol) publish side-channel: the handle/identifier + an APP
+# PASSWORD (created in Bluesky settings, not the account password) for
+# @fluncle.bsky.social. Both unset = the whole leg is a no-op.
+BLUESKY_IDENTIFIER=op://$FLUNCLE_1PASSWORD_ENV_ITEM/BLUESKY_IDENTIFIER
+BLUESKY_APP_PASSWORD=op://$FLUNCLE_1PASSWORD_ENV_ITEM/BLUESKY_APP_PASSWORD
+
 VITE_FLUNCLE_SPOTIFY_PLAYLIST_URL=https://open.spotify.com/playlist/1m5LADqpLjiBERdtqrIiL0?si=054d3c6cbcf14a36
 VITE_FLUNCLE_TELEGRAM_URL=https://t.me/fluncle
 

@@ -84,6 +84,12 @@ const envKeys = [
   "TELEGRAM_BOT_TOKEN",
   "TELEGRAM_CHANNEL_ID",
   "DISCORD_WEBHOOK_URL",
+  // Bluesky (AT Protocol) publish side-channel (lib/server/bluesky.ts). The
+  // handle/identifier + an app password (NOT the account password) for
+  // @fluncle.bsky.social. Both read via readOptionalEnv, so the whole leg is a
+  // NO-OP until they're set — a publish is never touched while they're absent.
+  "BLUESKY_IDENTIFIER",
+  "BLUESKY_APP_PASSWORD",
   "TURSO_DATABASE_URL",
   "TURSO_AUTH_TOKEN",
   // Cloudflare cache purge-by-URL (lib/server/edge-cache.ts): when a finding is

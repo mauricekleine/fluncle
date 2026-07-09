@@ -1,5 +1,6 @@
 import { Link, createFileRoute } from "@tanstack/react-router";
 import {
+  blueskyUrl,
   chromeExtensionUrl,
   discogsUrl,
   instagramUrl,
@@ -82,6 +83,7 @@ function aboutHead() {
       telegramUrl,
       tiktokUrl,
       instagramUrl,
+      blueskyUrl,
       youtubeUrl,
       mixcloudUrl,
       soundcloudUrl,

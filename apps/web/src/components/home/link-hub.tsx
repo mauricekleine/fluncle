@@ -1,6 +1,7 @@
 import { RadioIcon } from "@phosphor-icons/react";
 import { Link } from "@tanstack/react-router";
 import {
+  siBluesky,
   siInstagram,
   siMixcloud,
   siSoundcloud,
@@ -18,6 +19,7 @@ import { SubscribeDialog } from "@/components/subscribe-dialog";
 import { Button } from "@fluncle/ui/components/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@fluncle/ui/components/tooltip";
 import {
+  blueskyUrl,
   galaxyUrl,
   instagramUrl,
   mixcloudUrl,
@@ -43,6 +45,7 @@ import {
 // Fluncle off-site, alphabetical (docs/socials/). Spotify stays the Playlist
 // button above, so it isn't duplicated in the icon strip.
 const socialLinks = [
+  { href: blueskyUrl, icon: siBluesky, label: "Fluncle on Bluesky" },
   { href: instagramUrl, icon: siInstagram, label: "Fluncle on Instagram" },
   { href: mixcloudUrl, icon: siMixcloud, label: "Fluncle on Mixcloud" },
   { href: soundcloudUrl, icon: siSoundcloud, label: "Fluncle on SoundCloud" },
