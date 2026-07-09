@@ -91,6 +91,11 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // `get_` prefix so the "holds exactly" check skips it; it lives here for completeness.
   "GET /admin/clips/{clipId}/caption": "get_clip_caption",
   "GET /admin/lastfm/auth/start": "start_lastfm_auth",
+  // The logbook sweep's gap+material read — contract-only oRPC (no TanStack route
+  // file; oRPC owns the path directly). Admin tier (agent-allowed). `list_logbook_gaps`
+  // matches the public `list_` prefix so the "holds exactly" check skips it; it lives
+  // here for completeness (like `list_editions_admin`).
+  "GET /admin/logbook/gaps": "list_logbook_gaps",
   "GET /admin/mixtapes": "list_mixtapes_admin",
   "GET /admin/mixtapes/{mixtapeId}/social": "get_mixtape_social",
   // The newsletter edition list (drafts inclusive) — contract-only oRPC, no TanStack
@@ -116,6 +121,9 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // The operator's clip-drip schedule control — contract-only oRPC. Operator tier:
   // set/override a clip's Instagram drip slot.
   "PATCH /admin/clips/{clipId}/schedule": "set_clip_schedule",
+  // The operator's logbook overwrite/edit — contract-only oRPC (no TanStack route
+  // file). Operator tier: it can replace a cron-authored entry, so the agent 403s.
+  "PATCH /admin/logbook/{sector}": "update_logbook_entry",
   "PATCH /admin/mixtapes/{mixtapeId}": "update_mixtape",
   // The newsletter edition control plane. Contract-only oRPC — no TanStack route
   // files under /api/admin/newsletter
@@ -168,6 +176,10 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // tier (agent-allowed): the box's status cron POSTs a snapshot with its agent token.
   "POST /admin/health": "record_health",
   "POST /admin/lastfm/auth/session": "exchange_lastfm_session",
+  // The logbook nightly author — contract-only oRPC (no TanStack route file; oRPC owns
+  // the path directly, like note_track). Admin tier (agent-allowed): the on-box
+  // `fluncle-logbook` cron drives the fill-empty-only create with its agent token.
+  "POST /admin/logbook/{sector}": "create_logbook_entry",
   // The REF-05 preview-bucket migration — contract-only oRPC (no TanStack route file;
   // oRPC owns the path directly). Operator tier: a one-off, destructive-capable data
   // move (it can delete public R2 objects), dry-run by default.

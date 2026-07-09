@@ -332,6 +332,51 @@ export type EditionDTO = z.infer<typeof EditionDTOSchema>;
 export type EditionsResponse = Ok<{ editions: EditionDTO[] }>;
 export type EditionResponse = Ok<{ edition: EditionDTO }>;
 
+// ── Logbook (Fluncle's Logbook — one travelogue entry per sector-day) ─────────
+
+/**
+ * One Logbook entry as the public `/logbook` index + `/logbook/<sector>` page (and
+ * the admin `create_logbook_entry` / `update_logbook_entry` ops) emit it. `sector`
+ * is the days-since-epoch coordinate (sectorDay()); `body` is markdown with
+ * `[[<logId>]]` figure tokens. Plain TS type (the wire is a flat row); a zod schema
+ * would add nothing the row shape doesn't already pin. `generatedBy` is `agent` for
+ * a cron-authored entry, `operator` once a human has edited it.
+ */
+export type LogbookEntryDTO = {
+  body: string;
+  generatedAt: string;
+  generatedBy: "agent" | "operator";
+  sector: number;
+  title: string;
+};
+
+/** One eligible sector-day the logbook sweep can author — the day + its findings' material. */
+export type LogbookGap = {
+  /** ISO date (UTC midnight) of the sector-day, for the authoring prompt's dateline. */
+  date: string;
+  findings: LogbookGapFinding[];
+  sector: number;
+};
+
+/** A day's finding as the sweep gathers it (admin-tier read — includes the internal fuel). */
+export type LogbookGapFinding = {
+  artists: string[];
+  /** The internal firecrawl-derived facts (never public) — authoring fuel only. */
+  contextNote?: string;
+  logId: string;
+  /** The public editorial note (the `/log` "why"), when present. */
+  note?: string;
+  /** The spoken observation transcript (internal), when present — authoring fuel. */
+  observationScript?: string;
+  /** The finding's poster "photo" URL on found.fluncle.com — the figure token target. */
+  posterUrl: string;
+  title: string;
+};
+
+export type LogbookEntriesResponse = Ok<{ entries: LogbookEntryDTO[] }>;
+export type LogbookEntryResponse = Ok<{ entry: LogbookEntryDTO; skipped?: boolean }>;
+export type LogbookGapsResponse = Ok<{ gaps: LogbookGap[] }>;
+
 // ── Subscription (the operator's private cost ledger, COST-02) ───────────────
 
 /**

@@ -213,6 +213,18 @@ export const SURFACES: readonly Surface[] = [
     weights: { ssh: "secondary", web: "primary" },
   },
   {
+    exposedContent: [
+      "Fluncle's Logbook — the voyage as a first-person travelogue, one entry per sector-day",
+      "/logbook/:sector — one day written up, the findings inlined as photos",
+    ],
+    kind: "web_route",
+    name: "web.logbook",
+    probeConfig: { cadenceMs: PROBE_CADENCE_MS, kind: "http", timeoutMs: PROBE_TIMEOUT_MS },
+    route: "/logbook",
+    url: `${SITE}/logbook`,
+    weights: { ssh: "tertiary", web: "primary" },
+  },
+  {
     exposedContent: ["Fluncle's own DJ mixtapes — each a checkpoint set with an F-marked Log ID"],
     kind: "web_route",
     name: "web.mixtapes",
@@ -859,6 +871,23 @@ export const SURFACES: readonly Surface[] = [
     operatorNotes:
       "every 10m. Hybrid --no-agent; one claude -p authors the line. Never clobbers an operator note.",
     probeConfig: { cadenceMs: 10 * MINUTE_MS, cronName: "fluncle-note", kind: "cron" },
+    weights: { status: "hidden" },
+  },
+  {
+    command: "fluncle admin logbook gaps",
+    exposedContent: [
+      "author the previous day's Logbook travelogue entry, fill-empty-only (hybrid: one claude -p call)",
+    ],
+    kind: "cron",
+    name: "cron.logbook",
+    operatorNotes:
+      "00:40 Amsterdam daily. Hybrid --no-agent; one claude -p writes the day up. Never clobbers an operator entry; the self-healing gap window backfills history oldest-first. Source: docs/agents/hermes/scripts/logbook-sweep.{sh,ts}.",
+    probeConfig: {
+      cadenceMs: 24 * 60 * MINUTE_MS,
+      cronName: "fluncle-logbook",
+      kind: "cron",
+      schedule: { time: "00:40", tz: "Europe/Amsterdam" },
+    },
     weights: { status: "hidden" },
   },
   {

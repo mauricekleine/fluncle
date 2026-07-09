@@ -2,7 +2,13 @@ import { createFileRoute } from "@tanstack/react-router";
 import { artistTitleLine, definitionalSentences } from "../lib/log-prose";
 import { mixtapeSetVideoUrl, spotifyAlbumImageAtSize, trackMedia } from "../lib/media";
 import { mixtapeCoverUrl } from "../lib/mixtapes";
-import { buildSitemapXml, type SitemapArtist, type SitemapLogPage } from "../lib/sitemap";
+import { formatSector } from "../lib/log-id-shared";
+import {
+  buildSitemapXml,
+  type SitemapArtist,
+  type SitemapLogbookEntry,
+  type SitemapLogPage,
+} from "../lib/sitemap";
 import {
   ARTIST_INDEX_MIN_FINDINGS,
   listArtistsWithFindingCounts,
@@ -109,7 +115,7 @@ export const Route = createFileRoute("/sitemap.xml")({
     handlers: {
       GET: async () => {
         const db = await getDb();
-        const [trackResult, mixtapeResult, artistEntries] = await Promise.all([
+        const [trackResult, mixtapeResult, artistEntries, logbookResult] = await Promise.all([
           // lastmod = freshest of (video_squared_at, updated_at, added_at). added_at
           // is NOT NULL, and ISO strings sort lexicographically, so coalescing the
           // nullable two to '' keeps max() honest (scalar max() returns NULL on any
@@ -130,10 +136,22 @@ export const Route = createFileRoute("/sitemap.xml")({
                   order by lastmod desc`,
           }),
           listArtistsWithFindingCounts(),
+          // The logbook travelogue entries — one <loc> per authored sector-day, with
+          // its last (re)generation as lastmod.
+          db.execute({
+            sql: `select sector, generated_at from logbook_entries order by sector desc`,
+          }),
         ]);
 
         const trackPages = typedRows<TrackRow>(trackResult.rows).map(trackPage);
         const mixtapePages = typedRows<MixtapeRow>(mixtapeResult.rows).map(mixtapePage);
+        const logbookPages: SitemapLogbookEntry[] = typedRows<{
+          generated_at: string;
+          sector: number;
+        }>(logbookResult.rows).map((row) => ({
+          lastmod: row.generated_at,
+          sector: formatSector(row.sector),
+        }));
         // Thin-content gate: only artists past ARTIST_INDEX_MIN_FINDINGS enter the
         // sitemap (the thin ones render `noindex, follow`).
         const artistPages: SitemapArtist[] = artistEntries
@@ -143,7 +161,7 @@ export const Route = createFileRoute("/sitemap.xml")({
             lastmod: artist.lastmod,
             slug: artist.slug,
           }));
-        const xml = buildSitemapXml([...trackPages, ...mixtapePages], artistPages);
+        const xml = buildSitemapXml([...trackPages, ...mixtapePages], artistPages, logbookPages);
 
         return new Response(xml, {
           headers: {

@@ -33,6 +33,15 @@ export type SitemapLogPage = {
   video?: SitemapVideo;
 };
 
+// A `/logbook/<sector>` travelogue entry — one per authored sector-day. The route
+// formats the sector to its padded URL form; this just carries the path + lastmod.
+export type SitemapLogbookEntry = {
+  /** ISO date of the entry's last (re)generation. */
+  lastmod?: string;
+  /** The padded sector segment (e.g. "036") — the /logbook/<sector> path. */
+  sector: string;
+};
+
 // A `/artist/<slug>` page — added ONLY for artists past the thin-content gate
 // (≥ ARTIST_INDEX_MIN_FINDINGS coordinate-bearing findings); the thin ones stay
 // out (they render `noindex, follow`). The route filters; this just formats.
@@ -104,14 +113,31 @@ function artistEntry(page: SitemapArtist): string {
   return `  <url>\n    <loc>${loc}</loc>${lastmodTag(page.lastmod)}${image}\n  </url>`;
 }
 
+// A logbook entry: just `<loc>` + optional `<lastmod>` (text-first, no media).
+function logbookEntry(page: SitemapLogbookEntry): string {
+  const loc = `${siteUrl}/logbook/${encodeURIComponent(page.sector)}`;
+
+  return `  <url>\n    <loc>${loc}</loc>${lastmodTag(page.lastmod)}\n  </url>`;
+}
+
 export function buildSitemapXml(
   logPages: SitemapLogPage[],
   artistPages: SitemapArtist[] = [],
+  logbookPages: SitemapLogbookEntry[] = [],
 ): string {
   const latest = [
     ...logPages.map((page) => page.lastmod),
     ...artistPages.map((page) => page.lastmod),
+    ...logbookPages.map((page) => page.lastmod),
   ]
+    .filter((value): value is string => Boolean(value))
+    .sort()
+    .at(-1);
+
+  // The /logbook index's lastmod: the freshest authored entry (same filter-then-sort
+  // shape as `latest`, so the bare sort is over a `string[]`).
+  const logbookLatest = logbookPages
+    .map((page) => page.lastmod)
     .filter((value): value is string => Boolean(value))
     .sort()
     .at(-1);
@@ -119,6 +145,7 @@ export function buildSitemapXml(
   const entries = [
     staticEntry(`${siteUrl}/`, latest),
     staticEntry(`${siteUrl}/log`, latest),
+    staticEntry(`${siteUrl}/logbook`, logbookLatest),
     staticEntry(`${siteUrl}/mixtapes`, latest),
     staticEntry(`${siteUrl}/artists`, latest),
     staticEntry(`${siteUrl}/about`),
@@ -126,6 +153,7 @@ export function buildSitemapXml(
     staticEntry(`${siteUrl}/galaxy`),
     ...logPages.map((page) => findingEntry(page)),
     ...artistPages.map((page) => artistEntry(page)),
+    ...logbookPages.map((page) => logbookEntry(page)),
   ];
 
   return `<?xml version="1.0" encoding="UTF-8"?>
