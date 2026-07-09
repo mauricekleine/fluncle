@@ -51,8 +51,8 @@ function PipelinePage() {
       <h1 className="sr-only">Fluncle's galaxy factory</h1>
       <p className="sr-only">
         A guided map of the machinery Fluncle built for his findings: he hits CMD+F when he hears a
-        banger, his machines pull it apart and get to know it, he sends it out to wherever you are,
-        it waits on every surface, and it launches into the Galaxy as a star, where he dreams in
+        banger, his machines pull it apart and analyze it, he sends it out to wherever you are, it
+        waits on every surface, and it launches into the Galaxy as a star, where he dreams in
         mixtapes. Drag to pan, scroll or use the arrow keys to move, and hold ⌘ while scrolling to
         zoom.
       </p>

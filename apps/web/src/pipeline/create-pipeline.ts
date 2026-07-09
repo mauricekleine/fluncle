@@ -698,7 +698,7 @@ export function createPipeline(container: HTMLElement): { destroy: () => void } 
   lore.style.left = B(16.7) + "px";
   lore.style.top = CY + 150 + "px";
   lore.innerHTML =
-    "Each one is somewhere the trip took me: new, strange, bigger than me. I leave a " +
+    "Somewhere new, strange, bigger than me, every time the trip lands. I leave a " +
     `<span class="star">star</span> where it happened, so the crew can fly out, trace my steps, ` +
     "and collect them. Then I sleep, and the night's findings blend the way dreams do, settling " +
     "into long-term memory. A mix blends tracks the same way, so <b>I dream in mixtapes</b>.";

@@ -48,7 +48,7 @@ const faq: Array<{ answer: string; question: string }> = [
   },
   {
     answer:
-      "Because that is what it is in the fiction. Every finding is a short memory: one track Fluncle heard out there and logged. When he mixes a run of them into one long recording, they blend the way dreams do, arriving in a different order and bleeding together until they settle out of short-term memory into one long-term one. A mix blends tracks the same way a dream blends a day, and DJs play at night, so a mixtape is Fluncle dreaming. It carries a Log ID with an F marker where a finding carries a digit, and it never counts as a find.",
+      "Because it works the way a dream does. Every finding is a short memory: one track Fluncle heard out there and logged. When he mixes a run of them into a long recording, the tracks blend and reorder and bleed together, the way the day's memories do in your sleep, until they settle from short-term memory into long-term. A dream blends a day; a mix blends tracks; and DJs play at night. So the mixtape is him dreaming. It carries a Log ID with an F marker where a finding carries a digit, and it never counts as a find.",
     question: "Why is a mixtape called dreaming?",
   },
   {
@@ -148,8 +148,8 @@ function AboutPage() {
           <p>
             When one hits, I log it, where I was and what it did to me, and send it home. Home is
             every place I keep my findings: this archive, Fluncle's Findings on Spotify, the
-            Telegram feed, a terminal at the deep end. The same finding sits on every one under the
-            same Log ID, so pick whichever you like and you won't miss a thing.
+            Telegram feed, a terminal at the deep end. Same findings, same Log IDs, so take your
+            pick and you won't miss a thing.
           </p>
           <p>
             I go alone, but never just for me. Everything I leave out there, the findings, the logs,
