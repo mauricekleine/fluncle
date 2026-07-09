@@ -79,6 +79,7 @@ export const ResolvedSocialSchema = z
   .object({
     platform: z.enum([
       "bandcamp",
+      "beatport",
       "facebook",
       "homepage",
       "instagram",
