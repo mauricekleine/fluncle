@@ -6,6 +6,7 @@
 import { AbsoluteFill, Sequence, useVideoConfig } from "remotion";
 import { type CalculateMetadataFunction } from "remotion";
 
+import { srtToCaptionLines } from "./captions";
 import { CARD_MS, FPS, msToFrames, TRANSITION_MS } from "./theme";
 import {
   Captions,
@@ -37,7 +38,10 @@ const Layout: React.FC<{ chapter: ExplainerChapter }> = ({ chapter }) => {
   return <ScreenFull screen={screen} />;
 };
 
-const ChapterScene: React.FC<{ chapter: ExplainerChapter }> = ({ chapter }) => {
+const ChapterScene: React.FC<{ chapter: ExplainerChapter; showCaptions: boolean }> = ({
+  chapter,
+  showCaptions,
+}) => {
   const { fps } = useVideoConfig();
   const cardFrames = msToFrames(CARD_MS, fps);
   return (
@@ -46,7 +50,7 @@ const ChapterScene: React.FC<{ chapter: ExplainerChapter }> = ({ chapter }) => {
       {chapter.tag !== undefined ? (
         <SurfaceTag label={chapter.tag.label} sub={chapter.tag.sub} />
       ) : null}
-      <Captions lines={chapter.captions} />
+      {showCaptions ? <Captions lines={chapter.captions} /> : null}
       {chapter.showCard === true ? (
         <Sequence durationInFrames={cardFrames} from={0} name="card">
           <ChapterCard chapter={chapter} />
@@ -59,6 +63,8 @@ const ChapterScene: React.FC<{ chapter: ExplainerChapter }> = ({ chapter }) => {
 export const ExplainerComposition: React.FC<ExplainerProps> = ({ manifest }) => {
   const { fps } = useVideoConfig();
   const transFrames = msToFrames(TRANSITION_MS, fps);
+  const globalCaptions =
+    manifest.captionsSrt !== undefined ? srtToCaptionLines(manifest.captionsSrt) : undefined;
 
   let cursor = 0;
   const scenes = manifest.chapters.map((chapter) => {
@@ -77,7 +83,7 @@ export const ExplainerComposition: React.FC<ExplainerProps> = ({ manifest }) => 
           key={chapter.id}
           name={chapter.title}
         >
-          <ChapterScene chapter={chapter} />
+          <ChapterScene chapter={chapter} showCaptions={globalCaptions === undefined} />
         </Sequence>
       ))}
       {scenes.slice(1).map(({ from }, index) => (
@@ -90,6 +96,7 @@ export const ExplainerComposition: React.FC<ExplainerProps> = ({ manifest }) => 
           <SmearTransition seed={index + 1} />
         </Sequence>
       ))}
+      {globalCaptions !== undefined ? <Captions lines={globalCaptions} /> : null}
     </Frame>
   );
 };

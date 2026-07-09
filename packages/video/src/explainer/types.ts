@@ -63,6 +63,10 @@ export type ExplainerManifest = {
   width: number;
   height: number;
   chapters: ExplainerChapter[];
+  /** The production caption route: the whole VO transcribed to an SRT string
+   *  (whisper or hand-authored). When set, it drives one absolute-timed caption
+   *  track for the entire video and the per-chapter inline captions are ignored. */
+  captionsSrt?: string;
 };
 
 export type ExplainerProps = {

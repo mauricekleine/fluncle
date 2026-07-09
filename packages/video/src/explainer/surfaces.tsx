@@ -21,9 +21,9 @@ const Window: React.FC<{ chrome?: string; children: React.ReactNode; mono?: bool
       boxShadow: "0 40px 120px rgba(0,0,0,0.55)",
       display: "flex",
       flexDirection: "column",
-      height: "82%",
+      height: "100%",
       overflow: "hidden",
-      width: "82%",
+      width: "100%",
     }}
   >
     {chrome !== undefined ? (
@@ -403,7 +403,9 @@ export const MockSurfacePanel: React.FC<{ kind: MockSurface; label?: string }> =
       <Content />
     </AbsoluteFill>
   ) : (
-    <AbsoluteFill style={{ alignItems: "center", justifyContent: "center" }}>
+    <AbsoluteFill
+      style={{ alignItems: "center", justifyContent: "center", padding: "184px 110px 196px" }}
+    >
       <Window chrome={CHROME[kind] ?? ""} mono={kind === "terminal" || kind === "crawler"}>
         <Content />
       </Window>

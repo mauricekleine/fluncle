@@ -27,6 +27,7 @@
     "@fluncle/contracts": "workspace:*",
     "@fluncle/tokens": "workspace:*",
     "@remotion/bundler": "~4.0.481",
+    "@remotion/captions": "~4.0.481",
     "@remotion/cli": "~4.0.481",
     "@remotion/fonts": "~4.0.481",
     "@remotion/renderer": "~4.0.481",

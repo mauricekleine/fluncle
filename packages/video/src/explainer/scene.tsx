@@ -296,18 +296,29 @@ void main() {
   float ang = atan(p.y, p.x);
   float rad = length(p);
   float streak = 0.0;
-  for (int i = 0; i < 4; i++) {
+  for (int i = 0; i < 3; i++) {
     float fi = float(i);
-    float lane = floor(ang * (16.0 + fi * 8.0) + fi * 7.3);
-    float depth = floor(rad * 5.0 - t * (1.0 + fi * 0.6));
+    // Many thin angular lanes -> thin radial RAYS, not thick wedges. depth streaks
+    // each ray along the radius so it reads as a light-year streak.
+    float lane = floor(ang * (130.0 + fi * 44.0) + fi * 7.3);
+    float depth = floor(rad * 6.0 - t * (1.0 + fi * 0.6));
     float s = hash21(vec2(lane, depth + fi * 31.0));
-    streak += smoothstep(0.86, 1.0, s) * (0.35 + 0.65 * speed);
+    // TUNING KNOB: the 0.94 threshold sets how SPARSE the rays are (higher =
+    // fewer, calmer; lower = denser, more of a warp). The trailing 0.6 is the
+    // per-ray brightness. This is the calm default; crank for more punch.
+    streak += smoothstep(0.94, 1.0, s) * (0.3 + 0.6 * speed);
   }
   streak = clamp(streak, 0.0, 1.0);
+  // Fade the streaks out at the very centre so they never converge into a white
+  // bloom, and keep the crest gold (not cream) so the seam stays warm, not
+  // blinding. The chapters show between the streaks: travel, not a gold wipe.
+  streak *= smoothstep(0.03, 0.30, rad);
   vec3 col = mix(u_palette[1], u_palette[2], streak);
-  col = mix(col, u_palette[3], streak * speed * 0.6);
-  float edge = smoothstep(0.0, 0.14, u_progress) * smoothstep(1.0, 0.86, u_progress);
-  gl_FragColor = vec4(dither8(col, uv), streak * edge);
+  float edge = smoothstep(0.0, 0.16, u_progress) * smoothstep(1.0, 0.84, u_progress);
+  float a = streak * edge * 0.85;
+  // The canvas is premultiplied-alpha: scale rgb by alpha so the gaps between the
+  // rays are truly transparent (the chapters show through) instead of full gold.
+  gl_FragColor = vec4(dither8(col, uv) * a, a);
 }
 `;
 
