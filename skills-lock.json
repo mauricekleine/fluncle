@@ -76,7 +76,7 @@
     "fluncle-sprites": {
       "source": "packages/skills/fluncle-sprites",
       "sourceType": "local",
-      "computedHash": "927f279d335c48f90065e55dd4a4d13a480cb68eeffc192ae4c824329b8606d7"
+      "computedHash": "7d371ca64a561480cf0c507e9a0c3762edf881b0d14c91a843dab5569dec9b25"
     },
     "fluncle-surfaces": {
       "source": "packages/skills/fluncle-surfaces",
@@ -96,7 +96,7 @@
     "hetzner-devbox": {
       "source": "packages/skills/hetzner-devbox",
       "sourceType": "local",
-      "computedHash": "89565531f54e661b839d429b4c91f0a27b7f9726a419ad6d8cc652f525fddccc"
+      "computedHash": "8959d3695cec78581ed311f83f54892ac894184a0abdfacab0e90f8dd2400830"
     },
     "postiz": {
       "source": "gitroomhq/postiz-agent",

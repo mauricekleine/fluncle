@@ -144,11 +144,24 @@ After bootstrap, the SSH terminal keeps itself current **credential-free** via `
 
 **One-time operator setup on rave-01** (irreducible steps — an agent cannot run these; they need the box):
 
-1. **Install the Go toolchain** (the one provisioning pre-req; rave-01 is otherwise toolchain-free). Match the `go` version in `apps/ssh/go.mod` — e.g. `sudo apt-get install -y golang-go`, or the official tarball to `/usr/local/go` with `/usr/local/go/bin` on `PATH` for the unit.
+1. **Install the Go toolchain** (the one provisioning pre-req; rave-01 is otherwise toolchain-free). Match the `go` version in `apps/ssh/go.mod` — currently **1.26**, which is newer than the distro `golang-go`, so use the **official tarball**, not apt: `curl -fsSLO "https://go.dev/dl/$(curl -fsSL https://go.dev/VERSION?m=text | head -1).linux-amd64.tar.gz"`, `sudo tar -C /usr/local -xzf go*.linux-amd64.tar.gz`, then symlink it **onto systemd's default PATH** so the unit finds it: `sudo ln -sf /usr/local/go/bin/go /usr/local/bin/go`.
 2. **Drop the script** at its deployed path: `sudo install -D -m 0755 apps/ssh/deploy/fluncle-ssh-freshen.sh /opt/fluncle-ssh-freshen/fluncle-ssh-freshen.sh`.
-3. **(Optional) Place `/etc/fluncle/ssh-freshen.env`** (`0600`) with `DISCORD_ALERT_WEBHOOK` + `FLUNCLE_API_TOKEN` (the same agent-scoped pair the watchdog uses; values in the ops runbook note) for the Discord alert + the `self-deploy-ssh` `/status` row. Skip it and the self-deploy still runs, just without that visibility.
+3. **(Optional, for the Discord alert + `self-deploy-ssh` `/status` row) point `/etc/fluncle/ssh-freshen.env` at the watchdog's env** rather than duplicating the token: `sudo ln -s rave-watchdog.env /etc/fluncle/ssh-freshen.env`. Both units read `DISCORD_ALERT_WEBHOOK` + `FLUNCLE_API_TOKEN` from that one file, so a single token refresh (see [Rotate the agent token](#rotate-the-agent-token)) heals the watchdog **and** the self-deploy posts. Skip the symlink and the self-deploy still runs, just without that visibility.
 4. **Pilot attended:** `sudo /opt/fluncle-ssh-freshen/fluncle-ssh-freshen.sh --force` (clears debt + validates the recipe end to end). `--dry-run` builds + pre-smokes without touching the live service.
 5. **Install + enable the timer:** `sudo install -m 0644 apps/ssh/deploy/fluncle-ssh-freshen.{service,timer} /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl enable --now fluncle-ssh-freshen.timer`.
+
+### Rotate the agent token
+
+rave-01 is the **public-access** edge, so it deliberately holds **no `op` / 1Password service account** — a credential there would put the vault keys on the most-exposed box. The trade-off: its agent token (in `/etc/fluncle/rave-watchdog.env`, read by the watchdog **and**, via the step-3 symlink, the self-deploy) is placed by hand, so an agent-token rotation does **not** auto-reach it and drifts silently (a stale token 401s every `record_health` post — the `onion` and `self-deploy-ssh` `/status` rows go stale).
+
+Close that as the **last step of a rotation** with `scripts/push-agent-token.sh` — it reads the new token with `op` **on the trusted machine** (the Mac or rave-02) and pipes it over SSH into rave-01's env in place. The value travels `op → pipe → box file`: never printed, never on a command line. `op` stays off the edge.
+
+```sh
+OP_AGENT_TOKEN_REF='op://<vault>/FLUNCLE_AGENT_TOKEN/credential' \
+  packages/skills/hetzner-devbox/scripts/push-agent-token.sh
+```
+
+The concrete `op://` ref lives in the private ops runbook note (never committed). The script patches only the `FLUNCLE_API_TOKEN` line (0600 root, every other line preserved), then restarts the watchdog + self-deploy and confirms both `/status` rows post `ok` (pass `--no-verify` to skip that check). Add this line to the agent-token rotation recipe in the ops note.
 
 ### Optional GeoIP Country Codes
 
