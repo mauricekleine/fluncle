@@ -86,7 +86,7 @@ export const serverHandlers: ApiHandlers = {
       }
 
       const archive = await archivePreviewForTrack({
-        bucket: env.VIDEOS,
+        bucket: env.SOURCE_AUDIO,
         bytes: await file.arrayBuffer(),
         mime,
         source,
