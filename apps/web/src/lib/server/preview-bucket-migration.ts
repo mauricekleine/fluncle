@@ -8,49 +8,68 @@
 // This runs Worker-side off the two existing bindings, so it needs NO R2
 // credentials. The core is dependency-injected (the buckets + a libSQL client),
 // so the whole state machine — hash verification, the copy/delete split, dry-run,
-// idempotency — is provable by tests alone against fake buckets + an in-memory DB.
+// idempotency, the prefix sweep — is provable by tests alone against fake buckets
+// + an in-memory DB.
 //
-// TWO EXPLICITLY-SEPARATE PHASES, never in one pass (a copy and a public delete
-// must never ride together — a botched copy would then be an irreversible leak of
-// nothing):
+// THREE modes (`mode`), never overlapping:
 //
-//   PHASE A — COPY (default, `deletePublic: false`). For each finding still on the
-//     legacy `analysis/previews/` prefix: read the public bytes, VERIFY their
-//     sha256 equals the hash the old key embeds (a mismatch is skipped, never
-//     copied), `put` them into the private bucket, READ THEM BACK and re-verify
-//     byte length + sha256, then rewrite `tracks.preview_archive_key` to the new
-//     key. The public object is left in place — Phase B removes it. `updated_at`
-//     is deliberately NOT bumped (the archive writer avoids it; sitemap/log lastmod
-//     tracks visible content only).
+//   "copy" (default) — for each finding still on the legacy `analysis/previews/`
+//     prefix: read the public bytes, VERIFY their sha256 equals the hash the old
+//     key embeds (a mismatch is skipped, never copied), `put` them into the private
+//     bucket, READ THEM BACK and re-verify byte length + sha256, then rewrite
+//     `tracks.preview_archive_key`. The public object is LEFT for the delete sweep.
+//     `updated_at` is deliberately NOT bumped (the archive writer avoids it).
+//     Batched by DB `track_id` cursor.
 //
-//   PHASE B — DELETE the public object (`deletePublic: true`). For each finding now
-//     on the private scheme, CONFIRM the private copy is present first (a missing
-//     private object refuses the delete), reconstruct the old public key from the
-//     private bytes' sha256 (the old key embedded that hash — so the reconstruction
-//     is exact and free), and delete that public object IF it still exists. A
-//     born-private preview (written straight to the private bucket by the new
-//     writer, never public) has no such object and is a no-op.
+//   "delete" — the PUBLIC-PREFIX SWEEP. This is authoritative over the PREFIX, not
+//     over the DB rows: the old archive writer only ever `put`, never deleted a
+//     superseded object, so re-archiving a finding whose bytes differed left the
+//     prior `analysis/previews/<logId>/<oldHash>.<ext>` ORPHANED in the public
+//     bucket, referenced by no row. A row-driven delete cannot see those. So this
+//     mode (a) REFUSES entirely while ANY legacy-prefixed DB row is still uncopied
+//     (finish "copy" first), then (b) `list`s the public bucket under
+//     `analysis/previews/` and deletes EVERY object there — but only after
+//     confirming the finding (`<logId>`) has a PRESENT private copy. An object whose
+//     logId has no private copy is SKIPPED and reported loudly (`private_copy_absent`),
+//     never deleted. Batched by the R2 `list` cursor.
 //
-// DRY-RUN IS THE DEFAULT: it reports the counts + sample keys and touches nothing.
-// BATCHED + RESUMABLE: bounded by `limit`, ordered by `track_id`, returns
-// `nextCursor` + `remaining`. IDEMPOTENT: a copied finding leaves the legacy set
-// (its key no longer matches the prefix) so a re-run never re-copies it; a deleted
-// public object is gone so a re-run's Phase B is a clean no-op.
+//   "verify" — READ-ONLY proof. `list`s `analysis/previews/` and returns the object
+//     count (`remaining`) + a sample of keys (`sampleKeys`). Mutates nothing. This is
+//     the operator's proof the prefix is empty BEFORE and AFTER the CDN purge.
+//
+// DRY-RUN IS THE DEFAULT for "copy"/"delete": reports the counts + sample keys and
+// touches nothing. IDEMPOTENT: a copied finding leaves the legacy set; a deleted
+// object is gone so a re-swept page is a clean no-op.
 
 import { type Client } from "@libsql/client";
 import { sha256Hex } from "./hash";
 
 const LEGACY_PREFIX = "analysis/previews/";
+// Bound as a SQL PARAMETER (never interpolated) — the repo parameterizes its
+// queries, and this keeps the pattern injection-proof by construction.
+const LEGACY_LIKE = `${LEGACY_PREFIX}%`;
 
-// The one method surface the core needs off each binding — narrow STRUCTURAL types
-// (not `Pick<R2Bucket, …>`) so the real `env.VIDEOS`/`env.SOURCE_AUDIO` bindings AND
-// the test fakes both satisfy them: `get` only needs to yield the bytes + size the
-// verification reads, and the write/delete returns are widened to `unknown` so a
-// fake returning `void` is as valid as R2's `Promise<R2Object>`.
+// The audio extensions an archived preview can carry — used to find a finding's
+// private copy when a superseded orphan's extension differs from the current one
+// (a re-resolve from a different source can change the container).
+const PRIVATE_EXTS = ["mp3", "m4a", "aac"] as const;
+
+// R2 `list` returns at most 1000 keys per page; the sweep never asks for more.
+const R2_LIST_MAX = 1000;
+
+export type MigrationMode = "copy" | "delete" | "verify";
+
+// The narrow STRUCTURAL bucket surfaces the core needs (not `Pick<R2Bucket, …>`) so
+// the real `env.VIDEOS`/`env.SOURCE_AUDIO` bindings AND the test fakes both satisfy
+// them: `get` only needs to yield the bytes + size the verification reads, `list`
+// the keys + cursor, and the write/delete returns are widened to `unknown` so a fake
+// returning `void` is as valid as R2's `Promise<R2Object>`.
 type R2GetResult = { arrayBuffer(): Promise<ArrayBuffer>; readonly size: number } | null;
+type R2ListResult = { cursor?: string; objects: Array<{ key: string }>; truncated: boolean };
 type PublicBucket = {
   delete(key: string): Promise<unknown>;
   get(key: string): Promise<R2GetResult>;
+  list(options: { cursor?: string; limit?: number; prefix: string }): Promise<R2ListResult>;
 };
 type PrivateBucket = {
   get(key: string): Promise<R2GetResult>;
@@ -77,31 +96,38 @@ const EXT_CONTENT_TYPE: Record<string, string> = {
 export type PreviewBucketMigrationInput = {
   cursor?: string;
   db: MigrationDb;
-  // Phase select: false (default) copies public → private; true deletes the public
-  // object for already-migrated findings. Never both in one call.
-  deletePublic?: boolean;
   // Report-only when true (the DEFAULT). No `put`, no `delete`, no DB write.
   dryRun?: boolean;
   limit: number;
-  // The PUBLIC bucket the legacy preview lives in (VIDEOS) — read + delete.
+  // Phase select: "copy" (default) public → private; "delete" the public-prefix
+  // sweep; "verify" the read-only prefix count.
+  mode?: MigrationMode;
   publicBucket: PublicBucket;
-  // The PRIVATE bucket the preview moves into (SOURCE_AUDIO) — write + readback.
   privateBucket: PrivateBucket;
 };
 
 export type PreviewBucketMigrationResult = {
+  // Non-null when the phase REFUSED to run (e.g. the delete sweep with legacy rows
+  // still uncopied); the reason string. When set, no listing/mutation happened.
+  blocked: string | null;
   copied: Array<{ logId: string; newKey: string; oldKey: string; trackId: string }>;
   copiedCount: number;
-  deletePublic: boolean;
+  // For "delete": each deleted (or, in dry-run, would-delete) public object. The
+  // `trackId` carries the finding's `logId` here (the sweep is object-driven).
   deleted: Array<{ oldKey: string; trackId: string }>;
   deletedCount: number;
   dryRun: boolean;
   failed: Array<{ error: string; trackId: string }>;
   failedCount: number;
-  // The `track_id` to resume from, or null when this batch drained the phase's set.
+  mode: MigrationMode;
+  // The resume cursor — the DB `track_id` for "copy", the R2 `list` cursor for
+  // "delete" — or null when this phase's set is drained. Always null for "verify".
   nextCursor: string | null;
-  // Findings still awaiting this phase beyond `nextCursor` (0 when drained).
+  // "copy": legacy DB rows still to copy beyond the cursor. "delete"/"verify": the
+  // AUTHORITATIVE count of objects still under `analysis/previews/` (from the LIST).
   remaining: number;
+  // "verify": a sample of the keys still under the prefix (the operator's proof).
+  sampleKeys: string[];
   skipped: Array<{ reason: string; trackId: string }>;
   skippedCount: number;
 };
@@ -159,81 +185,152 @@ function parseLegacyKey(key: string): { ext: string; hash: string } | null {
   return { ext, hash };
 }
 
-/** The extension segment of a private key `<logId>/preview.<ext>`, or null. */
-function extensionOf(key: string): string | null {
-  const dot = key.lastIndexOf(".");
+/**
+ * Parse a PUBLIC object key `analysis/previews/<logId>/<file>.<ext>` into its
+ * `logId` + extension. Unlike `parseLegacyKey` this does NOT require a 64-hex hash:
+ * ANY object under the prefix is a legacy public preview that must not exist, so the
+ * sweep parses it as long as it has a `<logId>/<file>.<ext>` shape.
+ */
+function parsePublicKey(key: string): { ext: string; logId: string } | null {
+  if (!key.startsWith(LEGACY_PREFIX)) {
+    return null;
+  }
 
-  return dot > 0 && dot < key.length - 1 ? key.slice(dot + 1) : null;
+  const rest = key.slice(LEGACY_PREFIX.length);
+  const slash = rest.indexOf("/");
+
+  if (slash <= 0) {
+    return null;
+  }
+
+  const logId = rest.slice(0, slash);
+  const filename = rest.slice(slash + 1);
+  const dot = filename.lastIndexOf(".");
+
+  if (dot <= 0) {
+    return null;
+  }
+
+  const ext = filename.slice(dot + 1);
+
+  if (ext.length === 0) {
+    return null;
+  }
+
+  return { ext, logId };
 }
 
-/** An empty result envelope for the given phase/mode. */
-function emptyResult(deletePublic: boolean, dryRun: boolean): PreviewBucketMigrationResult {
+/** An empty result envelope for the given mode/dry-run. */
+function emptyResult(mode: MigrationMode, dryRun: boolean): PreviewBucketMigrationResult {
   return {
+    blocked: null,
     copied: [],
     copiedCount: 0,
-    deletePublic,
     deleted: [],
     deletedCount: 0,
     dryRun,
     failed: [],
     failedCount: 0,
+    mode,
     nextCursor: null,
     remaining: 0,
+    sampleKeys: [],
     skipped: [],
     skippedCount: 0,
   };
 }
 
-/** Count the rows still matching a `where` clause (with bound args). */
-async function countBeyond(db: MigrationDb, where: string, args: Array<string>): Promise<number> {
+/** Count the legacy-prefixed DB rows (optionally only those beyond a cursor). */
+async function countLegacyRows(db: MigrationDb, afterCursor?: string): Promise<number> {
   const result = await db.execute({
-    args,
-    sql: `select count(*) as n from tracks where ${where}`,
+    args: afterCursor === undefined ? [LEGACY_LIKE] : [LEGACY_LIKE, afterCursor],
+    sql: `select count(*) as n from tracks
+          where preview_archive_key like ?${afterCursor === undefined ? "" : " and track_id > ?"}`,
   });
 
   return Number(result.rows[0]?.n ?? 0);
 }
 
-/** Finalize the pagination fields (nextCursor + remaining) after a batch. */
-async function paginate(
-  db: MigrationDb,
-  result: PreviewBucketMigrationResult,
-  batchSize: number,
-  limit: number,
-  lastTrackId: string | null,
-  where: string,
-): Promise<void> {
-  // A full batch means there may be more; a short batch drained the set. A drained
-  // phase has nothing to resume and nothing remaining.
-  if (batchSize < limit || lastTrackId === null) {
-    result.nextCursor = null;
-    result.remaining = 0;
+/**
+ * Count every object currently under `analysis/previews/` (keys only — no bodies),
+ * paginating the R2 `list` cursor to the end. Cheap (metadata) and authoritative;
+ * used for the `verify` count and the `delete` sweep's post-batch `remaining`. An
+ * optional `sample` collects the first N keys for `verify`'s operator proof.
+ */
+async function countPrefix(
+  publicBucket: PublicBucket,
+  sample?: { max: number },
+): Promise<{ count: number; sampleKeys: string[] }> {
+  let count = 0;
+  const sampleKeys: string[] = [];
+  let cursor: string | undefined;
 
-    return;
+  for (;;) {
+    const page = await publicBucket.list({ cursor, limit: R2_LIST_MAX, prefix: LEGACY_PREFIX });
+    count += page.objects.length;
+
+    if (sample) {
+      for (const object of page.objects) {
+        if (sampleKeys.length < sample.max) {
+          sampleKeys.push(object.key);
+        }
+      }
+    }
+
+    if (!page.truncated || !page.cursor) {
+      break;
+    }
+
+    cursor = page.cursor;
   }
 
-  result.nextCursor = lastTrackId;
-  result.remaining = await countBeyond(db, `${where} and track_id > ?`, [lastTrackId]);
+  return { count, sampleKeys };
 }
 
 /**
- * PHASE A — copy each legacy-prefixed preview from the public bucket into the
- * private bucket (hash-verified both ways), then rewrite its DB key. Leaves the
- * public object for Phase B.
+ * Find a finding's PRESENT private preview copy, tolerant of a container change
+ * between a superseded orphan and the current preview: try the orphan's own
+ * extension first, then the other known audio extensions. Returns the object or null.
+ */
+async function findPrivateCopy(
+  privateBucket: PrivateBucket,
+  logId: string,
+  preferredExt: string,
+): Promise<R2GetResult> {
+  const tried = new Set<string>();
+
+  for (const ext of [preferredExt, ...PRIVATE_EXTS]) {
+    if (tried.has(ext)) {
+      continue;
+    }
+
+    tried.add(ext);
+    const object = await privateBucket.get(`${logId}/preview.${ext}`);
+
+    if (object) {
+      return object;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * "copy" — copy each legacy-prefixed preview from the public bucket into the private
+ * bucket (hash-verified both ways), then rewrite its DB key. Leaves the public
+ * object for the "delete" sweep.
  */
 async function copyPreviews(
   input: PreviewBucketMigrationInput,
 ): Promise<PreviewBucketMigrationResult> {
   const { cursor, db, dryRun = true, limit, privateBucket, publicBucket } = input;
-  const result = emptyResult(false, dryRun);
+  const result = emptyResult("copy", dryRun);
 
-  const where = `preview_archive_key like '${LEGACY_PREFIX}%'`;
-  const selectArgs: Array<string | number> = cursor ? [cursor, limit] : [limit];
   const rows = await db.execute({
-    args: selectArgs,
+    args: cursor === undefined ? [LEGACY_LIKE, limit] : [LEGACY_LIKE, cursor, limit],
     sql: `select track_id, log_id, preview_archive_key, preview_archive_mime
           from tracks
-          where ${where}${cursor ? " and track_id > ?" : ""}
+          where preview_archive_key like ?${cursor === undefined ? "" : " and track_id > ?"}
           order by track_id
           limit ?`,
   });
@@ -326,7 +423,15 @@ async function copyPreviews(
     }
   }
 
-  await paginate(db, result, legacyRows.length, limit, lastTrackId, where);
+  // A full batch means there may be more; a short batch drained the set.
+  if (legacyRows.length < limit || lastTrackId === null) {
+    result.nextCursor = null;
+    result.remaining = 0;
+  } else {
+    result.nextCursor = lastTrackId;
+    result.remaining = await countLegacyRows(db, lastTrackId);
+  }
+
   result.copiedCount = result.copied.length;
   result.skippedCount = result.skipped.length;
   result.failedCount = result.failed.length;
@@ -335,95 +440,72 @@ async function copyPreviews(
 }
 
 /**
- * PHASE B — delete the public object for each already-migrated (private-scheme)
- * finding. Refuses to delete unless the private copy is confirmed present; the old
- * public key is reconstructed from the private bytes' sha256 (the old key embedded
- * that hash), so a born-private preview with no public twin is a clean no-op.
+ * "delete" — the PUBLIC-PREFIX SWEEP. Refuses while any legacy DB row is still
+ * uncopied, then lists one page under `analysis/previews/` and deletes every object
+ * whose finding has a present private copy; an object with no private copy is
+ * skipped + reported (`private_copy_absent`), never deleted. `remaining` is the
+ * authoritative count still under the prefix (from the LIST), NOT a row count.
  */
-async function deletePublicPreviews(
+async function sweepPublicPrefix(
   input: PreviewBucketMigrationInput,
 ): Promise<PreviewBucketMigrationResult> {
   const { cursor, db, dryRun = true, limit, privateBucket, publicBucket } = input;
-  const result = emptyResult(true, dryRun);
+  const result = emptyResult("delete", dryRun);
 
-  // Private-scheme rows only: a non-null key NOT on the legacy prefix, shaped
-  // `<logId>/preview.<ext>`.
-  const where = `preview_archive_key is not null
-      and preview_archive_key not like '${LEGACY_PREFIX}%'
-      and preview_archive_key like '%/preview.%'`;
-  const selectArgs: Array<string | number> = cursor ? [cursor, limit] : [limit];
-  const rows = await db.execute({
-    args: selectArgs,
-    sql: `select track_id, log_id, preview_archive_key
-          from tracks
-          where ${where}${cursor ? " and track_id > ?" : ""}
-          order by track_id
-          limit ?`,
+  // REFUSAL GATE — never delete a public object while any finding is still on the
+  // legacy prefix (its private copy is not yet guaranteed). Finish "copy" first.
+  const legacyRows = await countLegacyRows(db);
+
+  if (legacyRows > 0) {
+    result.blocked = "legacy_rows_uncopied";
+    result.remaining = legacyRows;
+
+    return result;
+  }
+
+  const page = await publicBucket.list({
+    cursor,
+    limit: Math.min(limit, R2_LIST_MAX),
+    prefix: LEGACY_PREFIX,
   });
 
-  const privateRows = rows.rows.map((row) => ({
-    logId: asTextOrNull(row.log_id),
-    newKey: asText(row.preview_archive_key),
-    trackId: asText(row.track_id),
-  }));
+  for (const object of page.objects) {
+    const parsed = parsePublicKey(object.key);
 
-  let lastTrackId: string | null = null;
-
-  for (const row of privateRows) {
-    lastTrackId = row.trackId;
-
-    if (!row.logId) {
-      result.skipped.push({ reason: "no_log_id", trackId: row.trackId });
+    if (!parsed) {
+      result.skipped.push({ reason: "unparseable_public_key", trackId: object.key });
       continue;
     }
 
-    const ext = extensionOf(row.newKey);
+    // The safety gate: delete a public object ONLY when its finding has a present
+    // private copy. A true orphan (a superseded hash) resolves to the finding's
+    // CURRENT private copy, which is the correct "this finding is migrated" signal.
+    const privateCopy = await findPrivateCopy(privateBucket, parsed.logId, parsed.ext);
 
-    if (!ext) {
-      result.skipped.push({ reason: "unparseable_private_key", trackId: row.trackId });
-      continue;
-    }
-
-    // Confirm the private copy is present BEFORE considering a delete — never delete
-    // the public object for a finding whose private copy is missing.
-    const privateObject = await privateBucket.get(row.newKey);
-
-    if (!privateObject) {
-      result.skipped.push({ reason: "private_copy_absent", trackId: row.trackId });
-      continue;
-    }
-
-    // Reconstruct the exact old public key from the private bytes' hash (the old key
-    // embedded it), so we never need to have retained the old key.
-    const privateBytes = await privateObject.arrayBuffer();
-    const hash = await sha256Hex(privateBytes);
-    const oldKey = `${LEGACY_PREFIX}${row.logId}/${hash}.${ext}`;
-
-    const publicObject = await publicBucket.get(oldKey);
-
-    if (!publicObject) {
-      // Born-private (never had a public twin) or already deleted — a clean no-op.
-      result.skipped.push({ reason: "public_already_absent", trackId: row.trackId });
+    if (!privateCopy) {
+      result.skipped.push({ reason: "private_copy_absent", trackId: parsed.logId });
       continue;
     }
 
     if (dryRun) {
-      result.deleted.push({ oldKey, trackId: row.trackId });
+      result.deleted.push({ oldKey: object.key, trackId: parsed.logId });
       continue;
     }
 
     try {
-      await publicBucket.delete(oldKey);
-      result.deleted.push({ oldKey, trackId: row.trackId });
+      await publicBucket.delete(object.key);
+      result.deleted.push({ oldKey: object.key, trackId: parsed.logId });
     } catch (error) {
       result.failed.push({
         error: error instanceof Error ? error.message : String(error),
-        trackId: row.trackId,
+        trackId: parsed.logId,
       });
     }
   }
 
-  await paginate(db, result, privateRows.length, limit, lastTrackId, where);
+  result.nextCursor = page.truncated && page.cursor ? page.cursor : null;
+  // Authoritative remaining: re-count the whole prefix (keys only) after this batch.
+  result.remaining = (await countPrefix(publicBucket)).count;
   result.deletedCount = result.deleted.length;
   result.skippedCount = result.skipped.length;
   result.failedCount = result.failed.length;
@@ -432,11 +514,35 @@ async function deletePublicPreviews(
 }
 
 /**
- * Run one bounded pass of the preview-bucket migration. Copies by default; deletes
- * the public object when `deletePublic` is set. Dry-run (report-only) by default.
+ * "verify" — READ-ONLY proof: count every object still under `analysis/previews/`
+ * and return a sample of keys. Mutates nothing. The operator's before/after proof
+ * around the CDN purge.
+ */
+async function verifyPrefix(
+  input: PreviewBucketMigrationInput,
+): Promise<PreviewBucketMigrationResult> {
+  const result = emptyResult("verify", true);
+  const { count, sampleKeys } = await countPrefix(input.publicBucket, { max: 20 });
+  result.remaining = count;
+  result.sampleKeys = sampleKeys;
+
+  return result;
+}
+
+/**
+ * Run one bounded pass of the preview-bucket migration in the requested `mode`
+ * ("copy" by default). Dry-run (report-only) by default for the mutating modes.
  */
 export async function migratePreviewArchive(
   input: PreviewBucketMigrationInput,
 ): Promise<PreviewBucketMigrationResult> {
-  return input.deletePublic ? deletePublicPreviews(input) : copyPreviews(input);
+  if (input.mode === "verify") {
+    return verifyPrefix(input);
+  }
+
+  if (input.mode === "delete") {
+    return sweepPublicPrefix(input);
+  }
+
+  return copyPreviews(input);
 }

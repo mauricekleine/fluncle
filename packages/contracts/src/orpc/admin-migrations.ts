@@ -4,9 +4,12 @@
 //
 //   - `migrate_preview_archive` — operator tier. Move the archived 30s previews off
 //     the PUBLIC `fluncle-videos` bucket into the PRIVATE `fluncle-source-audio`
-//     bucket (REF-05, the copyright exposure fix). Two explicitly-separate phases:
-//     copy (default) and delete-the-public-object (`deletePublic`). Dry-run is the
-//     DEFAULT; the CLI must pass `dryRun=false` to actually mutate.
+//     bucket (REF-05, the copyright exposure fix). Three modes (`mode`): "copy"
+//     (default, public → private), "delete" (the public-prefix sweep — authoritative
+//     over the `analysis/previews/` prefix, so it also removes orphaned objects no DB
+//     row points at), and "verify" (read-only proof of how many objects remain under
+//     the prefix). Dry-run is the DEFAULT for copy/delete; the CLI passes
+//     `dryRun=false` to mutate.
 //
 // Query-only POST: the params ride the URL, the body is empty. `inputStructure:
 // "detailed"` exposes `query` so the params reach the handler (oRPC's compact mode
@@ -56,10 +59,13 @@ const FailedSchema = z
  * `migratePreviewArchive`).
  *
  * Operator tier. One bounded pass of the public → private preview-bucket migration.
- * `deletePublic` selects the phase (copy by default; delete the public object when
- * set); `dryRun` (DEFAULT true) reports without mutating. Returns `{ ok, dryRun,
- * deletePublic, copied, copiedCount, deleted, deletedCount, skipped, skippedCount,
- * failed, failedCount, nextCursor, remaining }`.
+ * `mode` selects the phase — "copy" (default), "delete" (the public-prefix sweep),
+ * or "verify" (read-only). `dryRun` (DEFAULT true) reports without mutating for
+ * copy/delete. Returns `{ ok, mode, dryRun, blocked, copied, copiedCount, deleted,
+ * deletedCount, skipped, skippedCount, failed, failedCount, sampleKeys, nextCursor,
+ * remaining }`. `blocked` is non-null when the phase refused (e.g. a delete sweep
+ * with legacy rows still uncopied); `remaining` in delete/verify is the authoritative
+ * object count still under `analysis/previews/`; `sampleKeys` is the verify proof.
  */
 export const migratePreviewArchive = oc
   .route({
@@ -74,25 +80,28 @@ export const migratePreviewArchive = oc
     z.object({
       query: z.object({
         cursor: z.string().optional(),
-        deletePublic: z.string().optional(),
         dryRun: z.string().optional(),
         limit: z.string().optional(),
+        // "copy" (default) | "delete" | "verify"; a tolerant string, validated in-handler.
+        mode: z.string().optional(),
       }),
     }),
   )
   .output(
     z.object({
+      blocked: z.string().nullable(),
       copied: z.array(CopiedSchema),
       copiedCount: z.number(),
-      deletePublic: z.boolean(),
       deleted: z.array(DeletedSchema),
       deletedCount: z.number(),
       dryRun: z.boolean(),
       failed: z.array(FailedSchema),
       failedCount: z.number(),
+      mode: z.enum(["copy", "delete", "verify"]),
       nextCursor: z.string().nullable(),
       ok: z.literal(true),
       remaining: z.number(),
+      sampleKeys: z.array(z.string()),
       skipped: z.array(SkippedSchema),
       skippedCount: z.number(),
     }),

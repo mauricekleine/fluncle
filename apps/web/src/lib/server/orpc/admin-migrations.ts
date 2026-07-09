@@ -15,12 +15,23 @@
 
 import { env } from "cloudflare:workers";
 import { getDb } from "../db";
-import { migratePreviewArchive } from "../preview-bucket-migration";
+import { type MigrationMode, migratePreviewArchive } from "../preview-bucket-migration";
 import { adminAuth, operatorGuard } from "../orpc-auth";
 import { apiFault, type Implementer, parseBool, parseLimit } from "./_shared";
 
 const MIGRATE_DEFAULT_LIMIT = 50;
 const MIGRATE_MAX_LIMIT = 500;
+
+// A tolerant mode parse: only the two non-default modes are honored; anything else
+// (including a typo or an absent value) falls to the SAFE default "copy", so a
+// mangled `mode=Delete` can never trigger a destructive sweep by accident.
+function parseMode(value: string | undefined): MigrationMode {
+  if (value === "delete" || value === "verify") {
+    return value;
+  }
+
+  return "copy";
+}
 
 /**
  * Build the `admin-migrations` domain's handlers. The migration logic lives in the
@@ -40,27 +51,29 @@ export function adminMigrationsHandlers(os: Implementer) {
         const result = await migratePreviewArchive({
           cursor: query.cursor ?? undefined,
           db,
-          deletePublic: parseBool(query.deletePublic),
           // Dry-run is the DEFAULT: an absent `dryRun` reports without mutating. Only
           // an explicit `dryRun=false` performs the copy/delete.
           dryRun: query.dryRun === undefined ? true : parseBool(query.dryRun),
           limit: parseLimit(query.limit, MIGRATE_DEFAULT_LIMIT, MIGRATE_MAX_LIMIT),
+          mode: parseMode(query.mode),
           privateBucket: env.SOURCE_AUDIO,
           publicBucket: env.VIDEOS,
         });
 
         return {
+          blocked: result.blocked,
           copied: result.copied,
           copiedCount: result.copiedCount,
-          deletePublic: result.deletePublic,
           deleted: result.deleted,
           deletedCount: result.deletedCount,
           dryRun: result.dryRun,
           failed: result.failed,
           failedCount: result.failedCount,
+          mode: result.mode,
           nextCursor: result.nextCursor,
           ok: true as const,
           remaining: result.remaining,
+          sampleKeys: result.sampleKeys,
           skipped: result.skipped,
           skippedCount: result.skippedCount,
         };

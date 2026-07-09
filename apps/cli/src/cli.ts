@@ -195,6 +195,7 @@ type MigratePreviewArchiveOptions = {
   execute: boolean;
   json: boolean;
   limit?: string;
+  verify: boolean;
 };
 
 type ArtistResolveOptions = {
@@ -1427,9 +1428,12 @@ function addAdminCommands(program: Command): void {
 
   // `migrate_*` ops → `admin migrations` group (Convention B). One-off, operator-run
   // data migrations. REF-05: move the archived 30s previews off the PUBLIC bucket
-  // (a copyright exposure) into the PRIVATE one. DRY-RUN BY DEFAULT — `--execute`
-  // performs the copy; `--delete-public --execute` runs the second phase (removing
-  // the public objects). Never copies and deletes in one pass.
+  // (a copyright exposure) into the PRIVATE one. Three modes, DRY-RUN BY DEFAULT:
+  // (default) copy public → private; `--delete-public` sweeps the whole public
+  // `analysis/previews/` prefix (incl. orphans no DB row points at) — run only after
+  // a full copy; `--verify` is a read-only count of what remains under the prefix
+  // (the operator's proof before/after the CDN purge). `--execute` performs a mutating
+  // mode. Never copies and deletes in one pass.
   const migrations = configureCommand(
     admin.command("migrations").description("One-off operator data migrations"),
   );
@@ -1444,10 +1448,15 @@ function addAdminCommands(program: Command): void {
     .option("--execute", "Actually perform the migration (default is a dry run)", false)
     .option(
       "--delete-public",
-      "Phase B: delete the public objects for already-migrated findings (run only after a full copy)",
+      "Delete phase: sweep the whole public analysis/previews/ prefix (run only after a full copy)",
       false,
     )
-    .option("--limit <limit>", "Max findings to process", "50")
+    .option(
+      "--verify",
+      "Read-only: count the objects still under the public analysis/previews/ prefix",
+      false,
+    )
+    .option("--limit <limit>", "Max findings/objects to process per pass", "50")
     .option("--json", "Print JSON", false)
     .action(async (options: MigratePreviewArchiveOptions) => {
       const { migratePreviewArchiveCommand } = await import("./commands/preview-migration");
@@ -1603,11 +1612,11 @@ async function runTrackNote(
   console.log(`  ${result.note}`);
 }
 
-// REF-05 — drain the public → private preview-bucket migration in bounded,
-// resumable batches. `--limit` is the per-pass batch size (server-clamped); the CLI
-// loops the returned cursor until the phase's set is drained (nextCursor null),
-// aggregating the per-pass results. Dry-run unless `--execute`; copy phase unless
-// `--delete-public`.
+// REF-05 — drive the public → private preview-bucket migration. Three modes:
+// `--verify` (read-only count under the public prefix), `--delete-public` (the
+// prefix sweep), else copy. `--limit` is the per-pass batch; the CLI loops the
+// returned cursor until the phase's set is drained (nextCursor null), aggregating
+// per-pass results. Dry-run unless `--execute` (ignored by the read-only verify).
 async function runMigratePreviewArchive(
   options: MigratePreviewArchiveOptions,
   migratePreviewArchiveCommand: typeof import("./commands/preview-migration").migratePreviewArchiveCommand,
@@ -1618,19 +1627,49 @@ async function runMigratePreviewArchive(
     throw new Error("Limit must be a positive integer");
   }
 
-  const dryRun = !options.execute;
-  const deletePublic = options.deletePublic;
+  // Verify wins over delete (it is read-only and safe); delete wins over the copy
+  // default. `--execute` only matters for the mutating modes.
+  const mode = options.verify ? "verify" : options.deletePublic ? "delete" : "copy";
+  const dryRun = mode === "verify" ? true : !options.execute;
+
+  // Verify is a single read-only pass: no cursor loop, no mutation.
+  if (mode === "verify") {
+    const result = await migratePreviewArchiveCommand({ dryRun: true, limit, mode });
+
+    if (options.json) {
+      printJson({ mode, ok: true, remaining: result.remaining, sampleKeys: result.sampleKeys });
+      return;
+    }
+
+    console.log(`${result.remaining} object(s) remain under the public analysis/previews/ prefix.`);
+
+    for (const key of result.sampleKeys) {
+      console.log(`  ${key}`);
+    }
+
+    return;
+  }
+
   const copied: Array<{ logId: string; newKey: string; oldKey: string; trackId: string }> = [];
   const deleted: Array<{ oldKey: string; trackId: string }> = [];
   const skipped: Array<{ reason: string; trackId: string }> = [];
   const failed: Array<{ error: string; trackId: string }> = [];
   let cursor: string | undefined;
   let remaining = 0;
+  let blocked: string | null = null;
 
-  // Loop the cursor until the phase is drained. The cursor advances monotonically by
-  // track_id whether or not a row mutates, so the loop always terminates.
+  // Loop the cursor until the phase is drained. The cursor advances monotonically
+  // (DB track_id for copy, R2 list cursor for delete), so the loop always terminates.
   for (;;) {
-    const result = await migratePreviewArchiveCommand({ cursor, deletePublic, dryRun, limit });
+    const result = await migratePreviewArchiveCommand({ cursor, dryRun, limit, mode });
+
+    // A refusal (e.g. the delete sweep with legacy rows still uncopied) stops here.
+    if (result.blocked) {
+      blocked = result.blocked;
+      remaining = result.remaining;
+      break;
+    }
+
     copied.push(...result.copied);
     deleted.push(...result.deleted);
     skipped.push(...result.skipped);
@@ -1638,10 +1677,9 @@ async function runMigratePreviewArchive(
     remaining = result.remaining;
 
     if (!options.json) {
-      const phase = deletePublic ? "delete" : "copy";
-      const mode = dryRun ? "would" : "did";
+      const verb = dryRun ? "would" : "did";
       console.log(
-        `  …${phase} pass (${mode}): +${result.copiedCount} copied, +${result.deletedCount} deleted, ${result.skippedCount} skipped, ${result.failedCount} failed; ${result.remaining} remaining`,
+        `  …${mode} pass (${verb}): +${result.copiedCount} copied, +${result.deletedCount} deleted, ${result.skippedCount} skipped, ${result.failedCount} failed; ${result.remaining} remaining`,
       );
     }
 
@@ -1654,14 +1692,15 @@ async function runMigratePreviewArchive(
 
   if (options.json) {
     printJson({
+      blocked,
       copied,
       copiedCount: copied.length,
-      deletePublic,
       deleted,
       deletedCount: deleted.length,
       dryRun,
       failed,
       failedCount: failed.length,
+      mode,
       ok: true,
       remaining,
       skipped,
@@ -1670,12 +1709,24 @@ async function runMigratePreviewArchive(
     return;
   }
 
-  const done = deletePublic ? deleted.length : copied.length;
-  const noun = deletePublic
-    ? "public object(s) deleted"
-    : "preview(s) copied to the private bucket";
+  if (blocked) {
+    console.log(`REFUSED (${blocked}): ${remaining} legacy row(s) still need copying first.`);
+    return;
+  }
+
+  const done = mode === "delete" ? deleted.length : copied.length;
+  const noun =
+    mode === "delete" ? "public object(s) deleted" : "preview(s) copied to the private bucket";
   const prefix = dryRun ? "DRY RUN — would have: " : "";
-  console.log(`${prefix}${done} ${noun}; ${skipped.length} skipped; ${failed.length} failed.`);
+  console.log(
+    `${prefix}${done} ${noun}; ${skipped.length} skipped; ${failed.length} failed; ${remaining} still under the prefix.`,
+  );
+
+  for (const item of skipped) {
+    if (item.reason === "private_copy_absent") {
+      console.log(`  LEFT (no private copy) ${item.trackId}`);
+    }
+  }
 
   for (const item of failed) {
     console.log(`  FAILED ${item.trackId}: ${item.error}`);

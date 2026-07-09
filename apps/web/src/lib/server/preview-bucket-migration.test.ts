@@ -8,15 +8,19 @@ import { migratePreviewArchive } from "./preview-bucket-migration";
 // the REAL migrated schema (the in-memory libSQL harness applies every generated
 // Drizzle migration, so `tracks.preview_archive_*` are byte-identical to prod) and
 // FAKE R2 buckets. Every assertion here is provable offline: no R2, no network, no
-// production. The four load-bearing behaviours the task pins:
-//   - a hash mismatch is SKIPPED, never copied;
-//   - a re-run is idempotent (a migrated row leaves the legacy set);
-//   - dry-run mutates NOTHING (no bucket write, no DB rewrite);
-//   - Phase B REFUSES to delete when the private copy is absent.
+// production. The load-bearing behaviours the task + review pin:
+//   COPY:   a hash mismatch is SKIPPED never copied; dry-run mutates nothing; a
+//           re-run is idempotent (a migrated row leaves the legacy set).
+//   DELETE: the sweep is PREFIX-driven — an orphan with no DB row IS deleted; an
+//           object whose logId has no private copy is SKIPPED not deleted; the
+//           phase REFUSES while any legacy-prefixed row is still uncopied.
+//   VERIFY: read-only — counts the prefix, mutates nothing.
 
-// A minimal in-memory R2 bucket: enough of the `get`/`put`/`delete` surface the
-// migration core uses, returning objects with the `arrayBuffer()` + `size` the
-// read-back verification reads.
+// A minimal in-memory R2 bucket: enough of the `get`/`put`/`delete`/`list` surface
+// the migration core uses. `get` returns objects with the `arrayBuffer()` + `size`
+// the read-back verification reads; `list` paginates keys under a prefix (the cursor
+// is the last key of the page, resumed with `key > cursor` — an opaque, monotonic
+// stand-in for R2's cursor).
 function fakeBucket() {
   const store = new Map<string, { body: ArrayBuffer; contentType?: string }>();
 
@@ -43,12 +47,27 @@ function fakeBucket() {
     keys(): string[] {
       return [...store.keys()];
     },
+    async list(options: { cursor?: string; limit?: number; prefix: string }) {
+      const cursor = options.cursor;
+      const all = [...store.keys()].filter((key) => key.startsWith(options.prefix)).sort();
+      const begin = cursor ? all.findIndex((key) => key > cursor) : 0;
+      const offset = begin === -1 ? all.length : begin;
+      const pageLimit = options.limit ?? 1000;
+      const page = all.slice(offset, offset + pageLimit);
+      const truncated = offset + pageLimit < all.length;
+
+      return {
+        cursor: truncated ? page[page.length - 1] : undefined,
+        objects: page.map((key) => ({ key })),
+        truncated,
+      };
+    },
     async put(
       key: string,
       value: ArrayBuffer,
-      options?: { httpMetadata?: { contentType?: string } },
+      putOptions?: { httpMetadata?: { contentType?: string } },
     ): Promise<void> {
-      store.set(key, { body: value, contentType: options?.httpMetadata?.contentType });
+      store.set(key, { body: value, contentType: putOptions?.httpMetadata?.contentType });
     },
   };
 }
@@ -104,7 +123,20 @@ async function seedLegacy(
   return oldKey;
 }
 
-describe("migratePreviewArchive — copy phase (A)", () => {
+/** Put a public object at an arbitrary legacy key (used to seed ORPHANS). */
+async function putPublicObject(
+  publicBucket: FakeBucket,
+  logId: string,
+  hashOrName: string,
+  ext = "mp3",
+): Promise<string> {
+  const key = `analysis/previews/${logId}/${hashOrName}.${ext}`;
+  await publicBucket.put(key, bytesOf(`bytes-for-${key}`));
+
+  return key;
+}
+
+describe("migratePreviewArchive — copy mode", () => {
   let db: Client;
   let publicBucket: FakeBucket;
   let privateBucket: FakeBucket;
@@ -130,6 +162,7 @@ describe("migratePreviewArchive — copy phase (A)", () => {
       publicBucket,
     });
 
+    expect(result.mode).toBe("copy");
     expect(result.copiedCount).toBe(1);
     expect(result.failedCount).toBe(0);
     expect(result.skippedCount).toBe(0);
@@ -139,11 +172,9 @@ describe("migratePreviewArchive — copy phase (A)", () => {
       trackId: "t1",
     });
 
-    // The private bucket now holds the bytes at the new key…
     expect(privateBucket.has("aaa.1A/preview.mp3")).toBe(true);
-    // …and the DB pointer is rewritten to it.
     expect(await keyOf(db, "t1")).toBe("aaa.1A/preview.mp3");
-    // The public object is LEFT IN PLACE (copy phase never deletes).
+    // Copy mode NEVER deletes — the public object is left for the delete sweep.
     expect(publicBucket.keys()).toHaveLength(1);
   });
 
@@ -161,8 +192,6 @@ describe("migratePreviewArchive — copy phase (A)", () => {
   });
 
   it("SKIPS a hash mismatch — never copies, never rewrites (the corruption guard)", async () => {
-    // Seed a legacy row whose key claims a hash that does NOT match the bytes: put
-    // the wrong bytes at the claimed key.
     const bytes = bytesOf("real-bytes");
     const claimedHash = await sha256Hex(bytesOf("different-bytes"));
     const oldKey = `analysis/previews/ccc.3C/${claimedHash}.mp3`;
@@ -180,7 +209,6 @@ describe("migratePreviewArchive — copy phase (A)", () => {
 
     expect(result.copiedCount).toBe(0);
     expect(result.skipped).toEqual([{ reason: "hash_mismatch", trackId: "t3" }]);
-    // Nothing written to the private bucket, DB key untouched.
     expect(privateBucket.keys()).toHaveLength(0);
     expect(await keyOf(db, "t3")).toBe(oldKey);
   });
@@ -200,11 +228,9 @@ describe("migratePreviewArchive — copy phase (A)", () => {
       publicBucket,
     });
 
-    // It REPORTS the copy it would make…
     expect(result.dryRun).toBe(true);
     expect(result.copiedCount).toBe(1);
     expect(result.copied[0]).toMatchObject({ newKey: "ddd.4D/preview.mp3", trackId: "t4" });
-    // …but changes nothing.
     expect(privateBucket.keys()).toHaveLength(0);
     expect(await keyOf(db, "t4")).toBe(oldKey);
   });
@@ -232,7 +258,6 @@ describe("migratePreviewArchive — copy phase (A)", () => {
     expect(second.skippedCount).toBe(0);
     expect(second.remaining).toBe(0);
     expect(second.nextCursor).toBeNull();
-    // Still exactly one private object; the key is unchanged.
     expect(privateBucket.keys()).toEqual(["eee.5E/preview.mp3"]);
     expect(await keyOf(db, "t5")).toBe("eee.5E/preview.mp3");
   });
@@ -241,7 +266,6 @@ describe("migratePreviewArchive — copy phase (A)", () => {
     const claimedHash = await sha256Hex(bytesOf("gone"));
     await seedTrack(db, { logId: "fff.6F", trackId: "t6" });
     await setArchive(db, "t6", `analysis/previews/fff.6F/${claimedHash}.mp3`);
-    // Intentionally do NOT put the object in the public bucket.
 
     const result = await migratePreviewArchive({
       db,
@@ -256,7 +280,6 @@ describe("migratePreviewArchive — copy phase (A)", () => {
   });
 
   it("batches + resumes: a full batch returns nextCursor + remaining", async () => {
-    // Three legacy rows, ordered by track_id t1<t2<t3; a limit of 2 leaves 1.
     await seedLegacy(db, publicBucket, { body: "b1", logId: "g1.1A", trackId: "t1" });
     await seedLegacy(db, publicBucket, { body: "b2", logId: "g2.1A", trackId: "t2" });
     await seedLegacy(db, publicBucket, { body: "b3", logId: "g3.1A", trackId: "t3" });
@@ -304,7 +327,7 @@ describe("migratePreviewArchive — copy phase (A)", () => {
   });
 });
 
-describe("migratePreviewArchive — delete phase (B)", () => {
+describe("migratePreviewArchive — delete mode (prefix sweep)", () => {
   let db: Client;
   let publicBucket: FakeBucket;
   let privateBucket: FakeBucket;
@@ -315,131 +338,239 @@ describe("migratePreviewArchive — delete phase (B)", () => {
     privateBucket = fakeBucket();
   });
 
-  it("deletes the reconstructed public object once the private copy is confirmed present", async () => {
-    // A finding already migrated: DB key private, bytes in BOTH buckets (public =
-    // the still-leaking original at the hash key it must reconstruct + delete).
+  it("deletes a public object whose finding has a present private copy", async () => {
     const bytes = bytesOf("migrated-bytes");
     const hash = await sha256Hex(bytes);
     const oldKey = `analysis/previews/iii.8H/${hash}.mp3`;
     await seedTrack(db, { logId: "iii.8H", trackId: "t8" });
-    await setArchive(db, "t8", "iii.8H/preview.mp3");
+    await setArchive(db, "t8", "iii.8H/preview.mp3"); // already migrated (private-scheme key)
     await privateBucket.put("iii.8H/preview.mp3", bytes);
     await publicBucket.put(oldKey, bytes);
 
     const result = await migratePreviewArchive({
       db,
-      deletePublic: true,
       dryRun: false,
       limit: 50,
+      mode: "delete",
       privateBucket,
       publicBucket,
     });
 
-    expect(result.deletePublic).toBe(true);
+    expect(result.mode).toBe("delete");
+    expect(result.blocked).toBeNull();
     expect(result.deletedCount).toBe(1);
-    expect(result.deleted[0]).toMatchObject({ oldKey, trackId: "t8" });
-    // The public leak is gone; the private copy stays.
+    expect(result.deleted[0]).toMatchObject({ oldKey, trackId: "iii.8H" });
     expect(publicBucket.has(oldKey)).toBe(false);
     expect(privateBucket.has("iii.8H/preview.mp3")).toBe(true);
-    // The DB key is unchanged — delete phase never touches the pointer.
+    expect(result.remaining).toBe(0);
+    // The DB key is unchanged — the delete sweep never touches the pointer.
     expect(await keyOf(db, "t8")).toBe("iii.8H/preview.mp3");
   });
 
-  it("REFUSES to delete when the private copy is absent (the safety gate)", async () => {
-    const bytes = bytesOf("unsafe");
-    const hash = await sha256Hex(bytes);
-    const oldKey = `analysis/previews/jjj.9J/${hash}.mp3`;
-    await seedTrack(db, { logId: "jjj.9J", trackId: "t9" });
-    await setArchive(db, "t9", "jjj.9J/preview.mp3");
-    // The public object still exists…
-    await publicBucket.put(oldKey, bytes);
-    // …but the private bucket has NOTHING. Deletion must refuse.
+  it("DELETES an ORPHAN with no DB row (the prefix sweep is authoritative)", async () => {
+    // A superseded hash: no `tracks` row points at this object, but the finding IS
+    // migrated (its current private copy is present), so the orphan must be dropped.
+    const orphan = await putPublicObject(publicBucket, "orph.9J", "deadbeef".repeat(8));
+    await privateBucket.put("orph.9J/preview.mp3", bytesOf("current-private"));
 
     const result = await migratePreviewArchive({
-      db,
-      deletePublic: true,
+      db, // empty DB — no rows at all
       dryRun: false,
       limit: 50,
-      privateBucket,
-      publicBucket,
-    });
-
-    expect(result.deletedCount).toBe(0);
-    expect(result.skipped).toEqual([{ reason: "private_copy_absent", trackId: "t9" }]);
-    // The public object is UNTOUCHED (we could not confirm a safe private twin).
-    expect(publicBucket.has(oldKey)).toBe(true);
-  });
-
-  it("DRY-RUN delete reports the target but removes nothing", async () => {
-    const bytes = bytesOf("dry-del");
-    const hash = await sha256Hex(bytes);
-    const oldKey = `analysis/previews/kkk.1K/${hash}.mp3`;
-    await seedTrack(db, { logId: "kkk.1K", trackId: "t10" });
-    await setArchive(db, "t10", "kkk.1K/preview.mp3");
-    await privateBucket.put("kkk.1K/preview.mp3", bytes);
-    await publicBucket.put(oldKey, bytes);
-
-    const result = await migratePreviewArchive({
-      db,
-      deletePublic: true,
-      dryRun: true,
-      limit: 50,
+      mode: "delete",
       privateBucket,
       publicBucket,
     });
 
     expect(result.deletedCount).toBe(1);
-    expect(result.deleted[0]).toMatchObject({ oldKey, trackId: "t10" });
-    // Nothing actually removed.
-    expect(publicBucket.has(oldKey)).toBe(true);
+    expect(result.deleted[0]).toMatchObject({ oldKey: orphan, trackId: "orph.9J" });
+    expect(publicBucket.has(orphan)).toBe(false);
+    expect(result.remaining).toBe(0);
   });
 
-  it("no-ops a born-private preview (private present, no public twin) and is idempotent", async () => {
-    const bytes = bytesOf("born-private");
-    await seedTrack(db, { logId: "lll.2L", trackId: "t11" });
-    await setArchive(db, "t11", "lll.2L/preview.mp3");
-    await privateBucket.put("lll.2L/preview.mp3", bytes);
-    // No public object exists for this finding.
+  it("finds the private copy across a container change (orphan .mp3 → private .m4a)", async () => {
+    const orphan = await putPublicObject(publicBucket, "fmt.1A", "a".repeat(64), "mp3");
+    await privateBucket.put("fmt.1A/preview.m4a", bytesOf("m4a-bytes")); // different ext
 
     const result = await migratePreviewArchive({
       db,
-      deletePublic: true,
       dryRun: false,
       limit: 50,
+      mode: "delete",
+      privateBucket,
+      publicBucket,
+    });
+
+    expect(result.deletedCount).toBe(1);
+    expect(result.deleted[0]).toMatchObject({ oldKey: orphan, trackId: "fmt.1A" });
+    expect(publicBucket.has(orphan)).toBe(false);
+  });
+
+  it("SKIPS (does not delete) an object whose logId has no private copy", async () => {
+    const orphan = await putPublicObject(publicBucket, "nop.2B", "b".repeat(64));
+    // No private copy for nop.2B anywhere.
+
+    const result = await migratePreviewArchive({
+      db,
+      dryRun: false,
+      limit: 50,
+      mode: "delete",
       privateBucket,
       publicBucket,
     });
 
     expect(result.deletedCount).toBe(0);
-    expect(result.skipped).toEqual([{ reason: "public_already_absent", trackId: "t11" }]);
-
-    // A re-run is a clean no-op (idempotent).
-    const again = await migratePreviewArchive({
-      db,
-      deletePublic: true,
-      dryRun: false,
-      limit: 50,
-      privateBucket,
-      publicBucket,
-    });
-    expect(again.deletedCount).toBe(0);
-    expect(again.skippedCount).toBe(1);
+    expect(result.skipped).toEqual([{ reason: "private_copy_absent", trackId: "nop.2B" }]);
+    expect(publicBucket.has(orphan)).toBe(true); // untouched — reported loudly instead
+    expect(result.remaining).toBe(1); // still under the prefix
   });
 
-  it("does not consider legacy-prefixed rows in the delete phase", async () => {
-    // A row still on the legacy prefix belongs to phase A, never phase B.
-    await seedLegacy(db, publicBucket, { body: "still-legacy", logId: "mmm.3M", trackId: "t12" });
+  it("REFUSES to sweep while any legacy-prefixed DB row is still uncopied", async () => {
+    // A finding still on the legacy prefix (not yet copied) blocks the whole phase.
+    await seedLegacy(db, publicBucket, { body: "uncopied", logId: "blk.3C", trackId: "t-blk" });
+    // And an unrelated migrated finding whose orphan would otherwise be swept.
+    const orphan = await putPublicObject(publicBucket, "rdy.4D", "c".repeat(64));
+    await privateBucket.put("rdy.4D/preview.mp3", bytesOf("ready"));
 
     const result = await migratePreviewArchive({
       db,
-      deletePublic: true,
       dryRun: false,
       limit: 50,
+      mode: "delete",
       privateBucket,
       publicBucket,
     });
 
+    expect(result.blocked).toBe("legacy_rows_uncopied");
     expect(result.deletedCount).toBe(0);
-    expect(result.skippedCount).toBe(0);
+    expect(result.remaining).toBe(1); // the one uncopied legacy row
+    // NOTHING was deleted — not even the ready finding's orphan.
+    expect(publicBucket.has(orphan)).toBe(true);
+  });
+
+  it("DRY-RUN delete reports the targets but removes nothing", async () => {
+    const orphan = await putPublicObject(publicBucket, "dry.5E", "d".repeat(64));
+    await privateBucket.put("dry.5E/preview.mp3", bytesOf("present"));
+
+    const result = await migratePreviewArchive({
+      db,
+      dryRun: true,
+      limit: 50,
+      mode: "delete",
+      privateBucket,
+      publicBucket,
+    });
+
+    expect(result.deletedCount).toBe(1);
+    expect(result.deleted[0]).toMatchObject({ oldKey: orphan, trackId: "dry.5E" });
+    expect(publicBucket.has(orphan)).toBe(true); // dry-run: nothing removed
+  });
+
+  it("is idempotent — a second sweep of an emptied prefix deletes nothing", async () => {
+    await putPublicObject(publicBucket, "idem.6F", "e".repeat(64));
+    await privateBucket.put("idem.6F/preview.mp3", bytesOf("present"));
+
+    const first = await migratePreviewArchive({
+      db,
+      dryRun: false,
+      limit: 50,
+      mode: "delete",
+      privateBucket,
+      publicBucket,
+    });
+    expect(first.deletedCount).toBe(1);
+
+    const second = await migratePreviewArchive({
+      db,
+      dryRun: false,
+      limit: 50,
+      mode: "delete",
+      privateBucket,
+      publicBucket,
+    });
+    expect(second.deletedCount).toBe(0);
+    expect(second.remaining).toBe(0);
+    expect(second.nextCursor).toBeNull();
+  });
+
+  it("paginates the prefix sweep by the R2 list cursor", async () => {
+    for (const n of ["1A", "2B", "3C"]) {
+      await putPublicObject(publicBucket, `pg.${n}`, "f".repeat(64));
+      await privateBucket.put(`pg.${n}/preview.mp3`, bytesOf(`p-${n}`));
+    }
+
+    const first = await migratePreviewArchive({
+      db,
+      dryRun: false,
+      limit: 2,
+      mode: "delete",
+      privateBucket,
+      publicBucket,
+    });
+    expect(first.deletedCount).toBe(2);
+    expect(first.nextCursor).not.toBeNull();
+    expect(first.remaining).toBe(1); // one object still under the prefix
+
+    const second = await migratePreviewArchive({
+      cursor: first.nextCursor ?? undefined,
+      db,
+      dryRun: false,
+      limit: 2,
+      mode: "delete",
+      privateBucket,
+      publicBucket,
+    });
+    expect(second.deletedCount).toBe(1);
+    expect(second.nextCursor).toBeNull();
+    expect(second.remaining).toBe(0);
+  });
+});
+
+describe("migratePreviewArchive — verify mode (read-only)", () => {
+  let db: Client;
+  let publicBucket: FakeBucket;
+  let privateBucket: FakeBucket;
+
+  beforeEach(async () => {
+    db = await createIntegrationDb();
+    publicBucket = fakeBucket();
+    privateBucket = fakeBucket();
+  });
+
+  it("counts the objects under the prefix and returns a sample, mutating nothing", async () => {
+    await putPublicObject(publicBucket, "v1.1A", "1".repeat(64));
+    await putPublicObject(publicBucket, "v2.2B", "2".repeat(64));
+    // A non-prefix object must NOT be counted.
+    await publicBucket.put("019.F.1A/set.mp4", bytesOf("a video"));
+
+    const result = await migratePreviewArchive({
+      db,
+      limit: 50,
+      mode: "verify",
+      privateBucket,
+      publicBucket,
+    });
+
+    expect(result.mode).toBe("verify");
+    expect(result.dryRun).toBe(true);
+    expect(result.remaining).toBe(2);
+    expect(result.sampleKeys).toHaveLength(2);
+    expect(result.sampleKeys.every((key) => key.startsWith("analysis/previews/"))).toBe(true);
+    // Nothing mutated: the video + both previews are all still present.
+    expect(publicBucket.keys()).toHaveLength(3);
+    expect(result.deletedCount).toBe(0);
+  });
+
+  it("reports zero for an empty prefix (the operator's post-purge proof)", async () => {
+    const result = await migratePreviewArchive({
+      db,
+      limit: 50,
+      mode: "verify",
+      privateBucket,
+      publicBucket,
+    });
+
+    expect(result.remaining).toBe(0);
+    expect(result.sampleKeys).toEqual([]);
   });
 });
