@@ -126,7 +126,7 @@ void main() {
     float fi = float(i);
     float lane = floor(ang * (16.0 + fi * 8.0) + fi * 7.3);
     float depth = floor(rad * 5.0 - t * (1.0 + fi * 0.6));
-    float s = hash(vec2(lane, depth + fi * 31.0));
+    float s = hash21(vec2(lane, depth + fi * 31.0));
     streak += smoothstep(0.86, 1.0, s) * (0.35 + 0.65 * speed);
   }
   streak = clamp(streak, 0.0, 1.0);
@@ -138,7 +138,10 @@ void main() {
 
   float edge = smoothstep(0.0, 0.14, u_progress) * smoothstep(1.0, 0.86, u_progress);
   float a = streak * edge;
-  gl_FragColor = vec4(dither8(col, uv), a);
+  // The ShaderLayer canvas is premultiplied-alpha: scale rgb by alpha so the gaps
+  // between the streaks are truly transparent (the chapters travel THROUGH) rather
+  // than washing the seam with the palette color.
+  gl_FragColor = vec4(dither8(col, uv) * a, a);
 }
 `;
 
