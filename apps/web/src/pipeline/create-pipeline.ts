@@ -448,9 +448,11 @@ const STYLES = `
 .fpl .hbstat{color:var(--cream-dim);font-size:11px;display:flex;align-items:center;gap:6px;pointer-events:none}
 .fpl .hbstat .dot{width:7px;height:7px;border-radius:50%;background:#63d69a;--pc:#63d69a80;animation:fpl-hbpulse 1.8s ease-out infinite}
 .fpl .card.human{border-top-style:dashed}
-.fpl .listener{position:absolute;width:176px;image-rendering:pixelated;pointer-events:none;
-  filter:drop-shadow(0 8px 16px #0009);animation:fpl-nod .69s linear infinite}
-@keyframes fpl-nod{0%,44%{transform:none}50%,94%{transform:translateY(4px) rotate(-2.5deg)}100%{transform:none}}
+.fpl .listener{position:absolute;width:176px;height:237px;image-rendering:pixelated;pointer-events:none;
+  background-size:400% 100%;background-repeat:no-repeat;filter:drop-shadow(0 8px 16px #0009);
+  animation:fpl-nodframes .69s steps(4) infinite,fpl-bob .69s linear infinite}
+@keyframes fpl-nodframes{to{background-position-x:-704px}}
+@keyframes fpl-bob{0%,100%{transform:none}50%{transform:translateY(2px)}}
 .fpl .wave{position:absolute;border:2px solid var(--gold);border-radius:50%;
   clip-path:inset(-4px -4px -4px 50%);opacity:0;pointer-events:none;animation:fpl-wave 1.38s linear infinite}
 @keyframes fpl-wave{0%{transform:translateX(-16px);opacity:0}30%{opacity:.7}70%{opacity:.4}100%{transform:translateX(14px);opacity:0}}
@@ -693,14 +695,15 @@ export function createPipeline(container: HTMLElement): { destroy: () => void } 
   D.forEach((d) => card({ ...d, col: d.col + 2, dream: true }));
 
   // ── Act 0 · the listener — the pipeline's input: a banger lands, headphones on,
-  // eyes closed, nodding at half-time 174. Sound waves ride in; the oof feeds CMD+F.
+  // eyes closed, nodding at half-time 174. A 4-cell sprite strip (level → dip →
+  // down, eyes squeezed → dip) flips on background-position; the CSS pins the
+  // 704×237 sheet geometry. Sound waves ride in; the oof feeds CMD+F.
   const LX = B(-1.6),
     LW = 176,
-    LTOP = CY - 93;
-  const listener = document.createElement("img");
-  listener.src = SPRITE("listener");
-  listener.alt = "";
+    LTOP = CY - 118;
+  const listener = document.createElement("div");
   listener.className = "listener";
+  listener.style.backgroundImage = `url(${SPRITE("listener-sheet")})`;
   listener.style.left = LX + "px";
   listener.style.top = LTOP + "px";
   world.appendChild(listener);
@@ -716,7 +719,7 @@ export function createPipeline(container: HTMLElement): { destroy: () => void } 
     wv.className = "wave";
     wv.style.width = wv.style.height = size + "px";
     wv.style.left = LX - 34 - size / 2 + "px";
-    wv.style.top = CY - 26 - size / 2 + "px";
+    wv.style.top = CY - 40 - size / 2 + "px";
     wv.style.animationDelay = delay + "s";
     world.appendChild(wv);
   });
