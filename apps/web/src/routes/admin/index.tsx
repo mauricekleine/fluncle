@@ -56,8 +56,8 @@ import { readAttentionSnapshot } from "@/lib/server/attention";
 import { readCaptions } from "@/lib/server/captions";
 import { cn } from "@/lib/utils";
 
-// The operator's `/admin` home — the attention queue (docs/planning/cockpit-roadmap.md,
-// "The queue"). Every action the system needs is a row: cover art, the object
+// The operator's `/admin` home — the attention queue. Every action the system
+// needs is a row: cover art, the object
 // line, its data, and the primary action inline (or a deep-link with the object
 // selected). Two-tier order (deadlines by time-left, then oldest-first), a
 // bounded working set, snooze / won't-do, a single-key loop (j/k + Enter), and a
@@ -128,7 +128,7 @@ export const Route = createFileRoute("/admin/")({
   }),
   beforeLoad: async ({ search }) => {
     // The findings board owned `/admin` before the queue; its ?stage/?mix
-    // deep-links (bookmarks, the helm card) land here and carry straight over.
+    // deep-links (bookmarks) land here and carry straight over.
     if (search.stage !== undefined || search.mix !== undefined) {
       const params = new URLSearchParams();
       if (search.stage !== undefined) {
@@ -1214,8 +1214,8 @@ function RowArt({
 
 // ─── The zero state ───────────────────────────────────────────────────────────
 
-// The one sanctioned motion exception (docs/planning/cockpit-roadmap.md, the design
-// doctrine): the last cover cleared, warmly lit by a single gold bloom, one word,
+// The one sanctioned motion exception: the last cover cleared, warmly lit by a
+// single gold bloom, one word,
 // a 200ms ease-out settle. Reduced motion: static (styles.css, .queue-clear).
 function ZeroState({ coverUrl }: { coverUrl?: string }) {
   return (

@@ -100,8 +100,8 @@ type NavEntry = {
   to: AdminNavPath;
 };
 
-// The landing — the attention queue (docs/planning/cockpit-roadmap.md, "The queue"):
-// every action the system needs as a row; zero rows is the success state.
+// The landing — the attention queue: every action the system needs as a row;
+// zero rows is the success state.
 const HOME_ENTRY: NavEntry = {
   icon: SquaresFourIcon,
   key: "dashboard",

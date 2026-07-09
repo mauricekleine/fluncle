@@ -162,7 +162,7 @@ const html = `<!doctype html>
 <script>
 const JOBS = ${JSON.stringify(jobs)};
 const DOMAINS = ${JSON.stringify(DOMAINS)};
-const MARK = { live: "\\u25CF live", partial: "\\u25D0 partial", desired: "\\u25CB desired" };
+const MARK = { live: "\\u25CF live", partial: "\\u25D0 partial", desired: "\\u25CB desired", retired: "\\u2298 retired" };
 const TESTS = { yes: "\\u25CF yes", partial: "\\u25D0 partial", none: "\\u25CB none" };
 const COLS = [
   ["domain", "Domain"], ["job", "Job"], ["status", "Status"], ["trigger", "Trigger"],
@@ -177,6 +177,7 @@ const strip = [
   ["live", () => JOBS.filter((j) => j.status === "live").length, () => { state.status = state.status === "live" ? "" : "live"; }, () => state.status === "live"],
   ["partial", () => JOBS.filter((j) => j.status === "partial").length, () => { state.status = state.status === "partial" ? "" : "partial"; }, () => state.status === "partial"],
   ["desired", () => JOBS.filter((j) => j.status === "desired").length, () => { state.status = state.status === "desired" ? "" : "desired"; }, () => state.status === "desired"],
+  ["retired", () => JOBS.filter((j) => j.status === "retired").length, () => { state.status = state.status === "retired" ? "" : "retired"; }, () => state.status === "retired"],
   ["tests: none", () => JOBS.filter((j) => j.tests === "none").length, () => { state.tests = state.tests === "none" ? "" : "none"; }, () => state.tests === "none"],
   ["tests: partial", () => JOBS.filter((j) => j.tests === "partial").length, () => { state.tests = state.tests === "partial" ? "" : "partial"; }, () => state.tests === "partial"],
   ["drop candidates", () => JOBS.filter((j) => j.drop_from.trim()).length, () => { state.drop = !state.drop; }, () => state.drop],
