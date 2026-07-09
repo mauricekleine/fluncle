@@ -50,7 +50,8 @@ DISCORD_WEBHOOK_URL=op://$FLUNCLE_1PASSWORD_ENV_ITEM/DISCORD_WEBHOOK_URL
 
 # Bluesky (AT Protocol) publish side-channel: the handle/identifier + an APP
 # PASSWORD (created in Bluesky settings, not the account password) for
-# @fluncle.bsky.social. Both unset = the whole leg is a no-op.
+# @fluncle.com (a leading "@" in the stored identifier is fine — bluesky.ts
+# strips it). Both unset = the whole leg is a no-op.
 BLUESKY_IDENTIFIER=op://$FLUNCLE_1PASSWORD_ENV_ITEM/BLUESKY_IDENTIFIER
 BLUESKY_APP_PASSWORD=op://$FLUNCLE_1PASSWORD_ENV_ITEM/BLUESKY_APP_PASSWORD
 

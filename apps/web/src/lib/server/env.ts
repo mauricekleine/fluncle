@@ -86,8 +86,9 @@ const envKeys = [
   "DISCORD_WEBHOOK_URL",
   // Bluesky (AT Protocol) publish side-channel (lib/server/bluesky.ts). The
   // handle/identifier + an app password (NOT the account password) for
-  // @fluncle.bsky.social. Both read via readOptionalEnv, so the whole leg is a
-  // NO-OP until they're set — a publish is never touched while they're absent.
+  // @fluncle.com (a leading "@" in the stored value is fine — bluesky.ts strips
+  // it). Both read via readOptionalEnv, so the whole leg is a NO-OP until
+  // they're set — a publish is never touched while they're absent.
   "BLUESKY_IDENTIFIER",
   "BLUESKY_APP_PASSWORD",
   "TURSO_DATABASE_URL",

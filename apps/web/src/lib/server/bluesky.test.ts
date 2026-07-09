@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { type TrackMetadata } from "./spotify";
-import { formatBlueskyPost, linkFacet } from "./bluesky";
+import { formatBlueskyPost, linkFacet, normalizeIdentifier } from "./bluesky";
 
-// The Bluesky finding post is built by two pure functions — formatBlueskyPost
-// (the text + external-card fields + the inlined-link facet) and linkFacet (the
-// UTF-8 byte-offset link range). No transport, no env, so these pin the SHAPE +
+// The Bluesky finding post is built by pure functions — formatBlueskyPost
+// (the text + external-card fields + the inlined-link facet), linkFacet (the
+// UTF-8 byte-offset link range), and normalizeIdentifier (the stored-handle →
+// createSession identifier form). No transport, no env, so these pin the SHAPE +
 // the voice (the 🛸 header mirroring Telegram, the note line, the Spotify listen
 // link, no hashtag spam) and the byte-offset correctness the AT Protocol needs.
 // The live crew-facing copy still gets a canon (VOICE.md) review; this guards the
@@ -83,6 +84,20 @@ describe("formatBlueskyPost", () => {
     const bytes = new TextEncoder().encode(post.text);
     const slice = bytes.slice(facet?.index.byteStart, facet?.index.byteEnd);
     expect(new TextDecoder().decode(slice)).toBe("https://open.spotify.com/track/abc123");
+  });
+});
+
+describe("normalizeIdentifier", () => {
+  it("strips the leading @ from the stored handle form", () => {
+    expect(normalizeIdentifier("@fluncle.com")).toBe("fluncle.com");
+  });
+
+  it("passes an already-bare handle through unchanged", () => {
+    expect(normalizeIdentifier("fluncle.com")).toBe("fluncle.com");
+  });
+
+  it("trims surrounding whitespace before checking for the @", () => {
+    expect(normalizeIdentifier(" @fluncle.com ")).toBe("fluncle.com");
   });
 });
 

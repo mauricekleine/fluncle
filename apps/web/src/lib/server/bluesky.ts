@@ -1,6 +1,7 @@
 // Bluesky (AT Protocol) publish side-channel. When a finding publishes, the
-// publish boundary posts it to @fluncle.bsky.social as a link card pointing at
-// the finding's /log page, with the finding's OG card as the card thumbnail.
+// publish boundary posts it to @fluncle.com (the verified custom-domain handle)
+// as a link card pointing at the finding's /log page, with the finding's OG
+// card as the card thumbnail.
 //
 // This mirrors telegram.ts — a single non-platform HTTPS caller kept in
 // `apps/web`, so the Worker stays the one place that talks to a delivery service
@@ -18,8 +19,9 @@ import { logPageUrl, siteUrl } from "../fluncle-links";
 import { readOptionalEnv } from "./env";
 import { type TrackMetadata } from "./spotify";
 
-// bsky.social hosts the @fluncle.bsky.social handle, so its PDS is the XRPC host
-// for the session + the repo writes.
+// The account lives on a Bluesky-hosted PDS (the @fluncle.com handle is a
+// custom domain, not a self-hosted PDS), so bsky.social is the XRPC host for
+// the session + the repo writes.
 const XRPC_BASE = "https://bsky.social/xrpc";
 
 // The default card description when the operator hasn't authored a finding note —
@@ -127,7 +129,17 @@ export function linkFacet(text: string, url: string): Facet | undefined {
   };
 }
 
-// Post a finding to @fluncle.bsky.social as an external link card. No-op when the
+// Normalize the stored identifier for createSession: the operator stores the
+// HANDLE form ("@fluncle.com"), but the AT Protocol identifier is the bare
+// handle/DID with no leading "@" — strip it so the stored value works as-is.
+// Exported for the unit test.
+export function normalizeIdentifier(identifier: string): string {
+  const trimmed = identifier.trim();
+
+  return trimmed.startsWith("@") ? trimmed.slice(1) : trimmed;
+}
+
+// Post a finding to @fluncle.com as an external link card. No-op when the
 // credentials are unset (the whole feature ships dark until provisioned). On a
 // real API failure it throws — mirroring postToTelegram — and the publish call
 // site swallows it so a Bluesky hiccup never fails the publish.
@@ -145,7 +157,7 @@ export async function postToBluesky(
     return;
   }
 
-  const session = await createSession(identifier, appPassword);
+  const session = await createSession(normalizeIdentifier(identifier), appPassword);
   const post = formatBlueskyPost(track, note, logId);
 
   // Best-effort thumb: fetch the finding's OG card and upload it as a blob. A
