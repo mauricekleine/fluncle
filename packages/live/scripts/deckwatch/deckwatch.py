@@ -29,6 +29,7 @@ Usage:
 import argparse
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -38,7 +39,7 @@ import unicodedata
 
 import Quartz
 import Vision
-from Foundation import NSURL
+from Foundation import NSData
 
 # ── Deck-header crop rects ────────────────────────────────────────────────────
 # Normalized (x0, y0, x1, y1), TOP-left origin, as fractions of the captured window image.
@@ -111,12 +112,77 @@ def capture_window(window_id: int, path: str) -> bool:
     return True
 
 
-def load_cgimage(path: str):
-    url = NSURL.fileURLWithPath_(path)
-    src = Quartz.CGImageSourceCreateWithURL(url, None)
+def load_cgimage_from_bytes(data: bytes):
+    """Decode PNG bytes held IN MEMORY into a CGImage.
+
+    Deliberately not `CGImageSourceCreateWithURL`: that yields an image whose pixels are read
+    lazily from the file, so if the file is deleted before crop/OCR forces a decode, every
+    strip comes back empty (a real bug — a temp file deleted before the first decode). Building
+    the source from an in-memory `NSData` makes the image own its bytes; the file can go the
+    instant this returns.
+    """
+    ns = NSData.dataWithBytes_length_(data, len(data))
+    src = Quartz.CGImageSourceCreateWithData(ns, None)
     if src is None:
         return None
     return Quartz.CGImageSourceCreateImageAtIndex(src, 0, None)
+
+
+def load_cgimage(path: str):
+    """Load an on-disk PNG (a committed fixture) by reading it fully into memory first."""
+    try:
+        with open(path, "rb") as f:
+            data = f.read()
+    except OSError:
+        return None
+    return load_cgimage_from_bytes(data)
+
+
+def capture_to_image(window_id: int):
+    """Capture one window, read the PNG into memory, delete the file, return a CGImage.
+
+    Returns (image, "ok") on success, or (None, reason) where reason is one of
+    "capture" (screencapture failed) / "decode" (valid file, undecodable).
+    """
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tf:
+        path = tf.name
+    try:
+        if not capture_window(window_id, path):
+            return None, "capture"
+        with open(path, "rb") as f:
+            data = f.read()
+    finally:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+    img = load_cgimage_from_bytes(data)
+    if img is None:
+        return None, "decode"
+    return img, "ok"
+
+
+def image_is_uniform(cgimg, sample: int = 48) -> bool:
+    """True only when the image genuinely decodes to a SINGLE flat colour.
+
+    This is the honest test for "a blank capture" (the real symptom of denied Screen
+    Recording). We draw a small copy into a bitmap context WE own and inspect the actual
+    pixels — never inferred from absent OCR text (a deck with no track loaded also has no
+    text, and that is not a blank capture).
+    """
+    w = min(int(Quartz.CGImageGetWidth(cgimg)), sample)
+    h = min(int(Quartz.CGImageGetHeight(cgimg)), sample)
+    if w <= 0 or h <= 0:
+        return True
+    cs = Quartz.CGColorSpaceCreateDeviceRGB()
+    buf = bytearray(w * h * 4)
+    ctx = Quartz.CGBitmapContextCreate(
+        buf, w, h, 8, w * 4, cs, Quartz.kCGImageAlphaPremultipliedLast
+    )
+    if ctx is None:
+        return False  # can't prove it's blank — don't claim it is
+    Quartz.CGContextDrawImage(ctx, Quartz.CGRectMake(0, 0, w, h), cgimg)
+    return len(set(bytes(buf))) <= 1
 
 
 def crop(img, rect):
@@ -283,20 +349,17 @@ def read_decks(debug=False):
         print("deckwatch: no Rekordbox window found — is it running?", file=sys.stderr)
         return None, None
 
-    with tempfile.NamedTemporaryFile(suffix=".png", delete=True) as tf:
-        path = tf.name
-        if not capture_window(wid, path):
-            return None, None
-        img = load_cgimage(path)
-
+    img, reason = capture_to_image(wid)
     if img is None:
-        print("deckwatch: could not decode the capture", file=sys.stderr)
+        if reason == "capture":
+            print("deckwatch: screencapture failed (see error above).", file=sys.stderr)
+        else:
+            print("deckwatch: captured a file but could not decode it.", file=sys.stderr)
         return None, None
 
     strips = [crop(img, r) for r in DECK_RECTS]
     hashes = [hashlib.sha1(cgimage_png_bytes(s)).hexdigest() for s in strips]
 
-    # Blank-capture detection: an all-one-color strip means Screen Recording is denied.
     decks = []
     any_text = False
     for i, rect in enumerate(DECK_RECTS):
@@ -309,12 +372,24 @@ def read_decks(debug=False):
             any_text = True
         decks.append(d)
 
+    # Only DIAGNOSE if nothing was read — and say what we actually know, not a false cause.
     if not any_text:
-        print(
-            "deckwatch: no text read from either deck — likely a BLANK capture "
-            "(Screen Recording permission denied to this process).",
-            file=sys.stderr,
-        )
+        if image_is_uniform(img):
+            # A genuinely flat image: this is the real signature of a denied capture.
+            print(
+                "deckwatch: capture decoded to a UNIFORM image (no visible content) — this is "
+                "the signature of denied Screen Recording permission for this process.",
+                file=sys.stderr,
+            )
+        else:
+            # The capture HAS content but the header rects yielded no text. Most often both
+            # decks simply have no track loaded; could also be a layout the fallback missed.
+            print(
+                "deckwatch: capture has content but no deck header text was read — most likely "
+                "both decks have no track loaded (or a non-performance layout the "
+                "self-calibrating fallback did not recognise).",
+                file=sys.stderr,
+            )
     return decks, hashes
 
 
@@ -350,11 +425,7 @@ def run_watch(interval: float, debug=False):
         if wid is None:
             time.sleep(max(interval, 1.0))
             continue
-        with tempfile.NamedTemporaryFile(suffix=".png", delete=True) as tf:
-            if not capture_window(wid, tf.name):
-                time.sleep(interval)
-                continue
-            img = load_cgimage(tf.name)
+        img, _ = capture_to_image(wid)
         if img is None:
             time.sleep(interval)
             continue
