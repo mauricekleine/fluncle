@@ -391,18 +391,22 @@ const STYLES = `
   padding:15px 22px 24px;background:linear-gradient(#090a0bf5,#090a0b00);pointer-events:none}
 .fpl .hint{color:var(--faint);font-size:11px;pointer-events:none}
 .fpl .hint b{color:var(--cream-dim);font-weight:600}
-.fpl .dock{position:absolute;left:50%;bottom:16px;transform:translateX(-50%);z-index:30;display:flex;
-  flex-direction:column;align-items:center;gap:8px;pointer-events:none;max-width:min(92vw,780px)}
+.fpl .dock{position:absolute;left:0;right:0;bottom:16px;z-index:30;display:flex;
+  flex-direction:column;align-items:center;gap:8px;pointer-events:none}
 .fpl .hw{display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:6px 10px;pointer-events:auto;
   background:#10100dcc;border:1px solid var(--line);border-radius:999px;padding:7px 15px;
-  box-shadow:0 6px 18px #0007;-webkit-backdrop-filter:blur(5px);backdrop-filter:blur(5px);cursor:default}
+  max-width:min(92vw,780px);box-shadow:0 6px 18px #0007;
+  -webkit-backdrop-filter:blur(5px);backdrop-filter:blur(5px);cursor:default}
 .fpl .hw-lbl{font-size:9px;letter-spacing:.18em;text-transform:uppercase;color:#8a8070;font-weight:700;margin-right:2px}
 .fpl .legend{display:flex;gap:6px 12px;flex-wrap:wrap;justify-content:center}
 .fpl .legend .k{display:flex;align-items:center;gap:5px;color:var(--cream-dim);font-size:11px}
 .fpl .legend .sw{width:9px;height:9px;border-radius:2px;display:inline-block;flex:none}
 .fpl .legend .name{max-width:0;opacity:0;overflow:hidden;white-space:nowrap;
   transition:max-width .25s ease,opacity .18s ease}
-.fpl .hw:hover .name,.fpl .hw:focus-within .name,.fpl .hw.open .name{max-width:160px;opacity:1}
+.fpl .hw.open .name{max-width:160px;opacity:1}
+@media (hover: hover){
+  .fpl .hw:hover .name,.fpl .hw:focus-within .name{max-width:160px;opacity:1}
+}
 .fpl .stage{position:absolute;inset:0;cursor:grab;touch-action:none}
 .fpl .stage.drag{cursor:grabbing}
 .fpl .world{position:absolute;top:0;left:0;will-change:transform;transform-origin:0 0}
@@ -467,6 +471,22 @@ const STYLES = `
   .fpl .wave{animation:none;opacity:.45;transform:none}
   .fpl .floatk{animation:none;transform:rotate(3deg)}
 }
+.fpl .hint .coarse{display:none}
+@media (pointer: coarse){
+  .fpl .hint .fine{display:none}
+  .fpl .hint .coarse{display:inline}
+  .fpl .zoomctl button{width:44px;height:44px}
+  .fpl .hw{padding:11px 16px}
+}
+@media (max-width: 640px){
+  .fpl .hw{border-radius:16px}
+  .fpl .hw.open .legend{display:grid;grid-template-columns:auto auto;gap:7px 18px;justify-content:center}
+  .fpl .hw.open .name{max-width:none;transition:none}
+  .fpl .dock{bottom:calc(76px + env(safe-area-inset-bottom))}
+  .fpl .zoomctl{bottom:calc(12px + env(safe-area-inset-bottom));right:12px}
+  .fpl .hbstat{display:block;text-align:center;max-width:88vw}
+  .fpl .hbstat .dot{display:inline-block;vertical-align:middle;margin-right:6px}
+}
 .fpl .card.dream{background:#120f16}
 .fpl .kiosk{position:absolute;width:104px;text-align:center;text-decoration:none;color:inherit;cursor:pointer;
   --tint:#e8833a;transition:transform .13s ease}
@@ -490,7 +510,7 @@ const STYLES = `
 
 const CHROME = `
 <header class="top">
-  <div class="hint">drag to pan · <b>⌘-scroll</b> to zoom</div>
+  <div class="hint"><span class="fine">drag to pan · <b>⌘-scroll</b> to zoom</span><span class="coarse">drag to pan · pinch to zoom</span></div>
 </header>
 <div class="stage"><div class="world"><svg class="wires"></svg></div></div>
 <div class="dock">
@@ -878,25 +898,30 @@ export function createPipeline(container: HTMLElement): { destroy: () => void } 
   }
   renderPlaza();
 
-  // ── pan + zoom ──
+  // ── pan + zoom — one pointer pans, two pinch-zoom (the touch path) ──
   let tx = 0,
     ty = 0,
     zoom = 1,
-    dragging = false,
     sx = 0,
     sy = 0,
     bx = 0,
     by = 0,
-    moved = false;
+    moved = false,
+    pinchD = 0,
+    pinchZ = 1,
+    pmx = 0,
+    pmy = 0;
   let downT: EventTarget | null = null;
+  const pts = new Map<number, { x: number; y: number }>();
   const zlabel = q<HTMLElement>(".zlabel");
   function clamp(): void {
     const vw = window.innerWidth,
       vh = window.innerHeight,
       ww = WORLDW * zoom,
       wh = WORLDH * zoom;
-    tx = Math.min(0, Math.max(vw - ww, tx));
-    ty = Math.min(30, Math.max(vh - wh, ty));
+    // a world smaller than the viewport centers instead of pinning to an edge
+    tx = ww < vw ? (vw - ww) / 2 : Math.min(0, Math.max(vw - ww, tx));
+    ty = wh < vh ? Math.max(30, (vh - wh) / 2) : Math.min(30, Math.max(vh - wh, ty));
     world.style.transform = `translate(${tx}px,${ty}px) scale(${zoom})`;
   }
   function renderZoom(): void {
@@ -919,19 +944,54 @@ export function createPipeline(container: HTMLElement): { destroy: () => void } 
   }
   clamp();
   renderZoom();
+  const firstTwo = (): Array<{ x: number; y: number }> => [...pts.values()].slice(0, 2);
   stage.addEventListener("pointerdown", (e) => {
-    dragging = true;
-    moved = false;
-    downT = e.target;
-    stage.classList.add("drag");
-    sx = e.clientX;
-    sy = e.clientY;
-    bx = tx;
-    by = ty;
-    stage.setPointerCapture(e.pointerId);
+    try {
+      stage.setPointerCapture(e.pointerId);
+    } catch {
+      // synthetic/stale pointers can't be captured; tracking them still works
+    }
+    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pts.size === 1) {
+      moved = false;
+      downT = e.target;
+      stage.classList.add("drag");
+      sx = e.clientX;
+      sy = e.clientY;
+      bx = tx;
+      by = ty;
+      return;
+    }
+    if (pts.size === 2) {
+      const [a, b] = firstTwo();
+      if (a && b) {
+        pinchD = Math.hypot(a.x - b.x, a.y - b.y);
+        pinchZ = zoom;
+        pmx = (a.x + b.x) / 2;
+        pmy = (a.y + b.y) / 2;
+        moved = true;
+      }
+    }
   });
   stage.addEventListener("pointermove", (e) => {
-    if (!dragging) {
+    if (!pts.has(e.pointerId)) {
+      return;
+    }
+    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pts.size >= 2) {
+      const [a, b] = firstTwo();
+      if (!a || !b || pinchD <= 0) {
+        return;
+      }
+      // the midpoint drags the world; the finger spread scales it around that point
+      const mx = (a.x + b.x) / 2,
+        my = (a.y + b.y) / 2;
+      tx += mx - pmx;
+      ty += my - pmy;
+      pmx = mx;
+      pmy = my;
+      setZoom(pinchZ * (Math.hypot(a.x - b.x, a.y - b.y) / pinchD), mx, my);
+      clamp();
       return;
     }
     if (Math.abs(e.clientX - sx) + Math.abs(e.clientY - sy) > 6) {
@@ -941,16 +1001,33 @@ export function createPipeline(container: HTMLElement): { destroy: () => void } 
     ty = by + (e.clientY - sy);
     clamp();
   });
-  stage.addEventListener("pointerup", () => {
-    dragging = false;
-    stage.classList.remove("drag");
-    if (!moved && downT instanceof Element) {
-      const a = downT.closest<HTMLAnchorElement>("a.kiosk");
-      if (a) {
-        window.open(a.href, "_blank", "noopener");
+  const endPointer = (e: PointerEvent): void => {
+    pts.delete(e.pointerId);
+    if (pts.size === 1) {
+      // pinch → pan handoff: rebase the drag anchor on the surviving finger
+      const p = [...pts.values()][0];
+      if (p) {
+        sx = p.x;
+        sy = p.y;
+        bx = tx;
+        by = ty;
+      }
+      pinchD = 0;
+      return;
+    }
+    if (pts.size === 0) {
+      stage.classList.remove("drag");
+      pinchD = 0;
+      if (!moved && downT instanceof Element) {
+        const a = downT.closest<HTMLAnchorElement>("a.kiosk");
+        if (a) {
+          window.open(a.href, "_blank", "noopener");
+        }
       }
     }
-  });
+  };
+  stage.addEventListener("pointerup", endPointer);
+  stage.addEventListener("pointercancel", endPointer);
   // a drag that starts on a sprite/kiosk must pan the canvas, never lift the
   // image (or link) into a native HTML drag
   const onDragStart = (e: Event): void => e.preventDefault();
