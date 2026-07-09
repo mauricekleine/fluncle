@@ -423,7 +423,8 @@ const STYLES = `
 .fpl .wires{position:absolute;top:0;left:0;overflow:visible;pointer-events:none}
 .fpl .card{position:absolute;width:188px;min-height:56px;background:var(--panel);border:1px solid var(--line);
   border-top:3px solid var(--m-worker);border-radius:9px;padding:9px 11px;box-shadow:0 6px 18px #0007;
-  display:flex;gap:9px;align-items:flex-start}
+  display:flex;flex-direction:column}
+.fpl .card .main{display:flex;gap:9px;align-items:flex-start}
 .fpl .card .body{flex:1;min-width:0}
 .fpl .card .spr{width:42px;height:42px;flex:none;border-radius:5px;background:#0000002e;display:grid;place-items:center;
   font-size:15px;opacity:.96}
@@ -563,9 +564,12 @@ export function createPipeline(container: HTMLElement): { destroy: () => void } 
     const chips = (s.svc ?? []).map(svcChip).join("");
     const glyph = s.spr ?? "▦";
     const spr = `<img src="${SPRITE(s.img ?? s.id)}" alt="" onerror="this.outerHTML='<span>${glyph}</span>'">`;
+    // the chip row sits BELOW the text+sprite block at full card width, so service
+    // pills lay out horizontally instead of stacking in the narrow text column
     el.innerHTML =
-      `<div class="body"><div class="lb">${s.label}</div><div class="wh">${s.wh}</div>` +
-      `${chips ? `<div class="row">${chips}</div>` : ""}</div><div class="spr">${spr}</div>`;
+      `<div class="main"><div class="body"><div class="lb">${s.label}</div>` +
+      `<div class="wh">${s.wh}</div></div><div class="spr">${spr}</div></div>` +
+      (chips ? `<div class="row">${chips}</div>` : "");
     // the cadence/heartbeat pill lives on its own line, anchored to the card's
     // bottom-right corner — never inline with the service pills
     if (s.cad) {
