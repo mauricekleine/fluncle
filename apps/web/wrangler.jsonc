@@ -50,12 +50,16 @@
   // R2 buckets. VIDEOS (fluncle-videos) holds per-track videos + public analysis
   // artifacts, served world-readable from found.fluncle.com; the Worker owns the
   // bucket (the agent uploads via the admin endpoint and never holds R2 creds).
-  // SOURCE_AUDIO (fluncle-source-audio) holds each finding's captured FULL SONG — a
-  // PRIVATE analysis artifact (no public domain, no r2.dev), read ONLY by the
-  // operator-tier `get_source_audio` endpoint (the M5 live-visuals bridge). The box
-  // capture/enrich/embed sweeps read+write it via a direct-S3 credential, never
-  // through the Worker. The bucket already exists (Unit 1 capture writes to it), so
-  // binding it is deploy-safe.
+  // SOURCE_AUDIO (fluncle-source-audio) holds each finding's PRIVATE analysis audio
+  // (no public domain, no r2.dev): the captured FULL SONG at `<logId>/<sha256>.<ext>`,
+  // and — since REF-05 — the archived 30s PREVIEW beside it at `<logId>/preview.<ext>`
+  // (moved off the world-served VIDEOS bucket, which was a copyright exposure). The
+  // Worker reads it through TWO admin routes — the operator-tier `get_source_audio`
+  // (the M5 live-visuals bridge streams the full song) and the agent-tier
+  // `preview-audio` (the render box reads the archived preview) — and WRITES it (the
+  // preview archive writer + the operator-tier `migrate_preview_archive` op). The box
+  // capture/enrich/embed sweeps additionally read+write it via a direct-S3 credential.
+  // The bucket already exists (Unit 1 capture writes to it), so binding it is deploy-safe.
   "r2_buckets": [
     { "binding": "VIDEOS", "bucket_name": "fluncle-videos" },
     { "binding": "SOURCE_AUDIO", "bucket_name": "fluncle-source-audio" },

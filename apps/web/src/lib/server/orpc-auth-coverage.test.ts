@@ -246,6 +246,10 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // its agent-scoped token to pick the next batch, the list_*_admin precedent.
   list_unresolved_artists: "admin",
   merge_private_galaxy_progress: "private-session",
+  // The REF-05 public → private preview-bucket migration — operator tier: a one-off,
+  // destructive-capable data move (it can delete public R2 objects), so an agent
+  // token 403s. Dry-run by default; the CLI must opt into a real run.
+  migrate_preview_archive: "operator",
   mint_mixcloud_token: "operator",
   mint_youtube_token: "operator",
   // The auto-note authoring step — agent tier (adminAuth only, no operatorGuard), the

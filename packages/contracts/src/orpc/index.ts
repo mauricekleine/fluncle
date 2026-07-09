@@ -27,6 +27,7 @@ import { adminCostsContract } from "./admin-costs";
 import { artistsContract } from "./artists";
 import { adminEditionsContract } from "./admin-editions";
 import { adminHealthContract } from "./admin-health";
+import { adminMigrationsContract } from "./admin-migrations";
 import { adminMixtapesContract } from "./admin-mixtapes";
 import { adminRecordingsContract } from "./admin-recordings";
 import { adminSocialContract } from "./admin-social";
@@ -63,6 +64,7 @@ export {
   ResolvedSocialSchema,
 } from "./admin-artists";
 export { backfillDiscogs, backfillLastfm } from "./admin-backfills";
+export { adminMigrationsContract, migratePreviewArchive } from "./admin-migrations";
 export { type CostEventInput, CostEventInputSchema, recordCost } from "./admin-costs";
 export { recordHealth, ServiceHealthStatusSchema } from "./admin-health";
 export {
@@ -191,6 +193,7 @@ export const contract = {
   ...artistsContract,
   ...adminEditionsContract,
   ...adminHealthContract,
+  ...adminMigrationsContract,
   ...adminMixtapesContract,
   ...adminRecordingsContract,
   ...adminSocialContract,
