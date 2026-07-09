@@ -1,0 +1,90 @@
+name: Skills Sync
+
+# The correctness net for the scoped skills auto-sync (the local .husky/pre-commit
+# step is the fast path). It regenerates the committed skill copies from their
+# canonical sources under packages/skills/** and FAILS if the working tree moved —
+# i.e. .agents/skills/**, .claude/skills/**, or skills-lock.json were out of sync.
+# This holds the guarantee regardless of whether the local hook fired (or was
+# bypassed with --no-verify, or a partial-stage let stale output through).
+#
+# Path-filtered so normal CI stays fast: it only runs when a change touches the skill
+# sources, the generated copies, the lockfile, the install script, or the hook/lint
+# config that drives the sync.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - packages/skills/**
+      - .agents/skills/**
+      - .claude/skills/**
+      - skills-lock.json
+      - scripts/install-skills.ts
+      - .husky/pre-commit
+      - package.json
+      - .github/workflows/skills-sync.yml
+  push:
+    branches: [main]
+    paths:
+      - packages/skills/**
+      - .agents/skills/**
+      - .claude/skills/**
+      - skills-lock.json
+      - scripts/install-skills.ts
+      - .husky/pre-commit
+      - package.json
+      - .github/workflows/skills-sync.yml
+
+concurrency:
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: skills-sync-${{ github.event.pull_request.number || github.ref }}
+
+permissions:
+  contents: read
+
+jobs:
+  drift-guard:
+    name: Committed skill copies in sync
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Cache Bun packages
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            bun-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Regenerate committed skill copies
+        run: bun run skills:install
+
+      - name: Fail on drift
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "::error::Committed skill copies are out of sync with packages/skills/**."
+            echo "::error::Run 'bun run skills:install' locally and commit the result."
+            echo ""
+            echo "Drifted paths (git status --porcelain):"
+            git status --porcelain
+            echo ""
+            echo "Diff summary:"
+            git add -A
+            git diff --cached --stat
+            exit 1
+          fi
+          echo "Committed skill copies are in sync with packages/skills/**."

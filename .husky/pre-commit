@@ -1,1 +1,27 @@
 bunx lint-staged
+
+# Scoped skills auto-sync — keep the committed skill copies in lockstep with their
+# canonical sources under packages/skills/**. `skills:install` is a CODEGEN step: it
+# regenerates files OUTSIDE the staged set (.agents/skills/**, .claude/skills/**,
+# skills-lock.json). We run it as a dedicated step AFTER `lint-staged` — not as a
+# lint-staged glob — because:
+#   1. lint-staged only re-stages the files IT matched; a task that writes OTHER files
+#      leaves the regenerated copies unstaged (silently out of the commit). A plain
+#      `git add` of the three output paths is the reliable way to fold them in.
+#   2. Running after lint-staged keeps the generated copies byte-identical to what
+#      `skills:install` produces — lint-staged never gets a chance to reformat them —
+#      so the CI drift guard (.github/workflows/skills-sync.yml) stays green.
+# It is a no-op (no npx, no cost) unless a packages/skills/** file is actually staged,
+# so a normal commit pays nothing.
+# Caveat: this regenerates from the WORKING TREE, so a partially-staged skill edit can
+# stage output reflecting the unstaged source. The CI drift guard is the correctness
+# net that catches that on the PR (it regenerates from the committed tree and fails on
+# any diff).
+if git diff --cached --name-only | grep -q '^packages/skills/'; then
+  echo "husky: skill source staged — syncing committed skill copies (bun run skills:install)…"
+  bun run skills:install || {
+    echo "husky: skills:install failed — aborting commit. Fix it, or re-commit with --no-verify."
+    exit 1
+  }
+  git add .agents/skills .claude/skills skills-lock.json
+fi

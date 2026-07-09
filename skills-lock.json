@@ -36,7 +36,7 @@
     "fluncle-hermes-operator": {
       "source": "packages/skills/fluncle-hermes-operator",
       "sourceType": "local",
-      "computedHash": "f934dc8afba1841200d061c407315cf38801f98174571e33ba16855c2567b3ae"
+      "computedHash": "eb4f6749a4b60e3697eb78cf52031dce7cc55abdd78abaf3040656ab52e6c08c"
     },
     "fluncle-key-backfill": {
       "source": "packages/skills/fluncle-key-backfill",
@@ -76,7 +76,7 @@
     "fluncle-sprites": {
       "source": "packages/skills/fluncle-sprites",
       "sourceType": "local",
-      "computedHash": "7d371ca64a561480cf0c507e9a0c3762edf881b0d14c91a843dab5569dec9b25"
+      "computedHash": "927f279d335c48f90065e55dd4a4d13a480cb68eeffc192ae4c824329b8606d7"
     },
     "fluncle-surfaces": {
       "source": "packages/skills/fluncle-surfaces",
