@@ -27,7 +27,7 @@ REPO_URL="${PINWATCH_REPO_URL:-https://github.com/mauricekleine/fluncle.git}"
 REPO_DIR="${PINWATCH_REPO_DIR:-/opt/fluncle-build}"
 DOCKERFILE="docs/agents/hermes/Dockerfile"
 LOCK="${PINWATCH_LOCK:-/run/lock/fluncle-pin-watch.lock}"
-KEEP_IMAGES="${PINWATCH_KEEP_IMAGES:-4}"
+KEEP_IMAGES="${PINWATCH_KEEP_IMAGES:-2}"  # running + 1 rollback; each hermes image is ~10GB, so 4 fills the 38GB box
 
 MODE="--if-stale"
 case "${1:-}" in
@@ -207,6 +207,12 @@ if run_container "$NEW_IMAGE" && container_healthy; then
   # prune old fluncle-hermes images, keep the most recent $KEEP_IMAGES (rollback depth)
   docker images "$IMAGE_REPO" --format '{{.Repository}}:{{.Tag}} {{.CreatedAt}}' \
     | sort -rk2 | awk 'NR>'"$KEEP_IMAGES"' {print $1}' | xargs -r docker rmi >/dev/null 2>&1 || true
+  # prune the BUILD CACHE too — the unbounded consumer the image prune above never touches.
+  # A full rebuild (esp. a base-image bump, which busts the cache) writes ~15GB of layer
+  # cache; left uncapped it silently fills the disk and strands the NEXT rebuild with
+  # "no space left on device" (seen 2026-07-09: the box hit 99% mid-base-bump). Keep a small
+  # working set so incremental rebuilds stay fast.
+  docker builder prune -f --keep-storage=3GB >/dev/null 2>&1 || true
   exit 0
 fi
 
