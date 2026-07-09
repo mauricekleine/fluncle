@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "studio": "remotion studio",
+    "tour:studio": "remotion studio src/explainer/explainer-entry.ts",
     "social:preview": "bun src/pipeline/social-preview.ts",
     "detect-beat-pull": "bun src/pipeline/detect-beat-pull.ts",
     "judge:metrics": "bun src/pipeline/analyze-motion.ts",

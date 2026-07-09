@@ -11,6 +11,9 @@ export default {
     files: [
       "src/remotion/cosmos.ts",
       "src/remotion/index.ts",
+      // The Explainer family's isolated registerRoot entry (launched by
+      // `tour:studio`); the rest of src/explainer/* is reached through it.
+      "src/explainer/explainer-entry.ts",
       "src/remotion/color.ts",
       "src/remotion/fonts.ts",
       "src/remotion/hooks/index.ts",
