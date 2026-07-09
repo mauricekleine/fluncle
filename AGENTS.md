@@ -94,8 +94,9 @@ Concise rules for working in Fluncle. Use MUST/SHOULD/NEVER to guide decisions.
 - MUST: Keep `AGENTS.md` principle-level. Put repeatable workflows in scripts, high-risk operator flows in runbooks, and task-specific routing in skills.
 - MUST: Keep Markdown prose paragraphs on single logical lines; do not add hard line breaks mid-sentence or reflow text just to wrap at a fixed column.
 - SHOULD: Prefer deleting, merging, or linking stale docs over adding another parallel explanation.
-- MUST: Treat everything under `docs/planning/` (roadmaps, e.g. `docs/planning/ROADMAP.md`) and `docs/rfcs/`, plus any `docs/*-brief.md`, as non-canonical brainstorms and planning, never specification — these are never listed in the canon list below. Where such a doc deviates from the codebase or from canon (`DESIGN.md`, `PRODUCT.md`, `VOICE.md`), the codebase and canon win; translate the idea into Fluncle's terms when picking it up.
+- MUST: Treat everything under `docs/planning/` (roadmaps, e.g. `docs/planning/ROADMAP.md`) and `docs/rfcs/`, plus any `docs/*-brief.md`, as non-canonical brainstorms and planning, never specification — these are never listed in the canon list below. Where such a doc deviates from the codebase or from canon (`LORE.md`, `DESIGN.md`, `PRODUCT.md`, `VOICE.md`), the codebase and canon win; translate the idea into Fluncle's terms when picking it up.
 - [README.md](./README.md) - repo overview, package layout, local dev, deployment, CLI, Raycast, and publish flow.
+- [LORE.md](./LORE.md) - the story canon: the narrative loop every surface draws from (a banger is an experience, the video relives it, the crew shares it, the star is a waypoint, the mixtape is a dream), the Galaxy, and the crew. Wins on story; the other three canons defer to it there.
 - [PRODUCT.md](./PRODUCT.md) - product purpose, brand direction, design principles, and accessibility.
 - [DESIGN.md](./DESIGN.md) - the visual canon (the Nostalgic Cosmos): palette, typography, elevation, components, named visual rules.
 - [VOICE.md](./VOICE.md) - the language canon: persona, vocabulary, named voice rules, surface registers, and copy mechanics.

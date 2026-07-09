@@ -38,8 +38,18 @@ const faq: Array<{ answer: string; question: string }> = [
   },
   {
     answer:
-      "The Galaxy is everywhere I send my findings: the archive here at fluncle.com, Fluncle's Findings on Spotify, the Telegram channel, the CLI, and the rave terminal at ssh rave.fluncle.com. Every surface carries the same findings under the same Log IDs, so it doesn't matter where you find me, it's all there. There's a game too, at galaxy.fluncle.com, where each finding is a star you can fly to. And for anyone who likes to travel dark, the whole archive mirrors onto Tor — off the grid, still in the Galaxy.",
+      "The Galaxy is everywhere I send my findings: the archive here at fluncle.com, Fluncle's Findings on Spotify, the Telegram channel, the CLI, and the rave terminal at ssh rave.fluncle.com. Every surface carries the same findings under the same Log IDs, so it doesn't matter where you find me, it's all there. There's a game too, at galaxy.fluncle.com, where each finding is a star you can fly to. And for anyone who likes to travel dark, the whole archive mirrors onto Tor, off the grid, still in the Galaxy.",
     question: "What is Fluncle's Galaxy?",
+  },
+  {
+    answer:
+      "Each star is a finding, left as a waypoint at the spot in the Galaxy where Fluncle had the experience that certified it. The game at galaxy.fluncle.com is the crew flying out to trace his footsteps and collect the stars, which are the bangers. The map of stars is the map of where the trip has taken him.",
+    question: "What are the stars in the Galaxy game?",
+  },
+  {
+    answer:
+      "Because that is what it is in the fiction. Every finding is a short memory: one track Fluncle heard out there and logged. When he mixes a run of them into one long recording, they blend the way dreams do, arriving in a different order and bleeding together until they settle out of short-term memory into one long-term one. A mix blends tracks the same way a dream blends a day, and DJs play at night, so a mixtape is Fluncle dreaming. It carries a Log ID with an F marker where a finding carries a digit, and it never counts as a find.",
+    question: "Why is a mixtape called dreaming?",
   },
   {
     answer:
@@ -140,9 +150,22 @@ function AboutPage() {
             to you.
           </p>
           <p>
+            Every banger I log is somewhere the trip took me: something new, strange, bigger than
+            me. The video is me back in it, showing you what I saw and how it hit. And in the game
+            at galaxy.fluncle.com I leave a star where it happened, so you can fly out, trace my
+            steps, and collect them. The map of stars is the map of where I've been.
+          </p>
+          <p>
             Everything I find out there, I send back to you across the Galaxy: the archive you came
             from, the playlist, the Telegram feed, a terminal at the deep end. Same findings on
-            every one, same Log IDs, so pick whichever you like, you won't miss a thing.
+            every one, same Log IDs, so pick whichever you like, you won't miss a thing. I spread it
+            this wide for one reason: a tune that hit me this hard, I want you to have it too.
+          </p>
+          <p>
+            Then some nights I mix. When I sleep the findings blend the way dreams do: they come
+            back in a different order, they bleed together, and by morning they've settled into one
+            long memory. That's a mixtape. A mix blends tracks the same way a dream blends a day, so
+            it's me dreaming out loud, and you're welcome to listen in.
           </p>
           <p>
             Out on the open web a fluncle:// coordinate is a door. Fluncle Lens, a lens for your

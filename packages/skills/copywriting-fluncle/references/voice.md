@@ -149,7 +149,7 @@ Functional labels stay literal per the Garnish Rule: "Submit a track", "Search",
 
 ## 8. How this composes
 
-- Strategy, the visual system, and language are three separate lanes; this file owns language and leads in its lane. (Inside the Fluncle repo those lanes are `PRODUCT.md` and `DESIGN.md`; the essentials a copywriter needs from them are inlined in `SKILL.md`.)
+- Story, strategy, the visual system, and language are four separate lanes; this file owns language and leads in its lane. (Inside the Fluncle repo those lanes are `LORE.md` for the story — the narrative loop every surface draws from — `PRODUCT.md` for strategy, and `DESIGN.md` for the visual system; the essentials a copywriter needs from them are inlined in `SKILL.md`.)
 - The narrative — Fluncle the time-and-space traveler, his findings scattered across the Galaxy, each one carrying a banger, all of it warm and crewed — is load-bearing now, on every surface, not a deep-end easter egg. Where the older "carefully kept playlist" framing and this one disagree, the Galaxy wins.
 - Fluncle's voice inherits a baseline (proof over hype, understated confidence, short lines, no em dashes) and bends it with persona (first-person traveling uncle, not founder), scene vocabulary, the crew's warmth, and the cosmos garnish. Where they disagree (capitalization, persona), this Voice canon wins.
 - The `copywriting-fluncle` skill operationalizes this: it loads this file first and carries the baseline in `references/voice-baseline.md` and channel shapes in `references/social-formats.md`. Everything published on any surface is written as Fluncle.
