@@ -21,6 +21,12 @@ const repoRoot = join(import.meta.dir, "..");
 const skillsDir = join(repoRoot, "packages", "skills");
 const lockPath = join(repoRoot, "skills-lock.json");
 const agents = ["claude-code", "codex"];
+// Pin the `skills` CLI version. The lockfile stores a per-skill `computedHash` the CLI
+// produces, so an unpinned `npx skills` lets CI resolve a newer version than a dev ran
+// locally — a changed hash then makes the skills-sync drift guard (.github/workflows/
+// skills-sync.yml) fail non-deterministically. Pinning makes `skills:install`
+// byte-identical everywhere (local, CI, every agent). Bump deliberately.
+const skillsCli = "skills@1.5.15";
 const dryRun = process.argv.includes("--dry-run");
 const normalizeOnly = process.argv.includes("--normalize-only");
 
@@ -77,7 +83,7 @@ const failures: string[] = [];
 
 for (const [index, name] of skillDirs.entries()) {
   const skillPath = `./${relative(repoRoot, join(skillsDir, name))}`;
-  const args = ["skills", "add", skillPath, "-y", ...agents.flatMap((agent) => ["-a", agent])];
+  const args = [skillsCli, "add", skillPath, "-y", ...agents.flatMap((agent) => ["-a", agent])];
 
   console.log(`[${index + 1}/${skillDirs.length}] npx ${args.join(" ")}`);
   if (dryRun) {
