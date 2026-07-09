@@ -784,19 +784,8 @@ export function createPipeline(container: HTMLElement): { destroy: () => void } 
   DLINKS.forEach(([a, b]) => {
     paths += wirePath(a, b);
   });
-  const axisY = CY + 3.35 * LANEH,
-    AX0 = B(-0.2),
-    AX1 = B(22.5);
-  paths += `<line x1="${AX0}" y1="${axisY}" x2="${AX1}" y2="${axisY}" stroke="#4b4536" stroke-width="1.4"/>`;
-  [2.2, 7, 10.2, 12.9, 18.5].forEach((c) => {
-    paths += `<circle cx="${B(c)}" cy="${axisY}" r="4" fill="none" stroke="#7a6f57" stroke-width="1.4"/>`;
-  });
-  [4.55, 9.35, 11.0, 14.9].forEach((c) => {
-    const ax = B(c);
-    paths += `<path d="M${ax - 6},${axisY - 4} L${ax},${axisY} L${ax - 6},${axisY + 4}" fill="none" stroke="#5a5343" stroke-width="1.4"/>`;
-  });
   wires.innerHTML = paths;
-  wires.setAttribute("width", String(AX1 + 200));
+  wires.setAttribute("width", String(B(22.5) + 200));
   wires.setAttribute("height", "980");
 
   // ── the plaza · every surface (clickable arcade cabinets · 3 flow layouts) ──
