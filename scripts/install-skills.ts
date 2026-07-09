@@ -13,7 +13,7 @@
  *   bun run skills:install            # install all local skills
  *   bun run skills:install --dry-run  # print the commands without running them
  */
-import { readdirSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { readdirSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { spawnSync } from "node:child_process";
 
@@ -65,6 +65,30 @@ if (normalizeOnly) {
   process.exit(0);
 }
 
+/**
+ * Strip run artifacts (Python bytecode, macOS Finder files) from the skill
+ * sources before installing. The skills CLI hashes the whole directory into the
+ * lock's `computedHash`, so a stray gitignored `__pycache__/` left behind by
+ * running a skill script bakes in a hash that CI's clean checkout can never
+ * reproduce — and the skills-sync drift guard fails on every push after.
+ */
+function sweepJunk(dir: string): void {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const p = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (entry.name === "__pycache__") {
+        rmSync(p, { force: true, recursive: true });
+        console.log(`Swept ${relative(repoRoot, p)} (run artifact; breaks the lock hash).`);
+        continue;
+      }
+      sweepJunk(p);
+    } else if (entry.name === ".DS_Store" || entry.name.endsWith(".pyc")) {
+      rmSync(p, { force: true });
+      console.log(`Swept ${relative(repoRoot, p)} (run artifact; breaks the lock hash).`);
+    }
+  }
+}
+
 const skillDirs = readdirSync(skillsDir, { withFileTypes: true })
   .filter((entry) => entry.isDirectory() && existsSync(join(skillsDir, entry.name, "SKILL.md")))
   .map((entry) => entry.name)
@@ -75,6 +99,10 @@ if (skillDirs.length === 0) {
     `No skills found under ${relative(repoRoot, skillsDir)} (expected directories containing a SKILL.md).`,
   );
   process.exit(1);
+}
+
+if (!dryRun) {
+  sweepJunk(skillsDir);
 }
 
 console.log(`Installing ${skillDirs.length} local skill(s) for: ${agents.join(", ")}\n`);
