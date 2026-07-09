@@ -82,6 +82,16 @@ async function fixtureMembers(): Promise<PlanMember[]> {
 // coordinate path is the calibrated default; the handle path is the normal live flow.
 
 /**
+ * The RANDOM-VJ sentinel: `--plan all` (case-insensitive, whitespace-tolerant) is not a
+ * mixtape/handle at all — it asks for the WHOLE archive as an unordered VJ pool. Both the
+ * plan builder (`buildPlan`) and the bridge boot (`serve.ts`) route off this ONE predicate,
+ * so the two never disagree on what counts as VJ mode. Pure, so it is unit-tested directly.
+ */
+export function isAllPlan(ref?: string): boolean {
+  return ref?.trim().toLowerCase() === "all";
+}
+
+/**
  * A Fluncle coordinate (a finding OR a mixtape Log ID) looks like `NNN.G.CC` — three
  * digits, a galaxy char, a two-char cell (e.g. `019.F.1A`, `011.9.8I`). A PLAN handle is a
  * galaxy-vocab slug (e.g. `dark-aurora-roller`) and never matches this shape.
@@ -376,14 +386,64 @@ async function enrich(member: PlanMember): Promise<PlanEntry> {
   return entry;
 }
 
+/** Bounded-concurrency map — keeps the archive-wide VJ boot kind to prod + R2 (no thundering
+ * herd) by running at most `limit` fetches at once, in order. Pure of the fetch specifics. */
+async function mapLimit<T, R>(items: T[], limit: number, fn: (t: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = [];
+  for (let i = 0; i < items.length; i += limit) {
+    out.push(...(await Promise.all(items.slice(i, i + limit).map(fn))));
+  }
+  return out;
+}
+
 /**
- * Build the full enriched plan for a `--plan` value — a MIXTAPE logId (the calibrated
- * default) OR a plan HANDLE (a galaxy slug, the normal live flow). The shape routes the
- * resolver; either way members come from the API (committed fixture fallback) and each is
- * enriched concurrently. This is the /plan payload and the source of the matcher's ordered
- * logId list.
+ * Every finding's logId from the public sitemap — the complete archive index. `/api/tracks`
+ * caps its page size, so the sitemap is the enumeration path: match `/log/<logId>` and dedupe.
+ * Returns [] on any non-OK / network fault (the caller then serves an empty VJ pool loudly).
+ */
+export async function fetchAllFindingLogIds(): Promise<string[]> {
+  try {
+    const res = await fetch(`${WEB_BASE}/sitemap.xml`);
+    if (!res.ok) {
+      return [];
+    }
+    const xml = await res.text();
+    const ids = new Set<string>();
+    for (const m of xml.matchAll(/\/log\/([0-9A-Za-z.]+)/g)) {
+      ids.add(m[1]);
+    }
+    return [...ids];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * The RANDOM-VJ pool (`--plan all`): the WHOLE archive as PlanEntries with NO order — the
+ * bridge's shuffle-bag director (`vj.ts`) picks what shows next, driven by the DJ's transition
+ * datagrams, so there is nothing to match and no order to keep. Findings whose composition
+ * never rendered still ride as the default-vehicle morph (`enrich` marks them non-replayable).
+ * Bounded concurrency (8) keeps the archive-wide boot kind to prod + R2. Expect ~60 findings.
+ */
+export async function buildAllFindingsPlan(): Promise<PlanEntry[]> {
+  const logIds = await fetchAllFindingLogIds();
+  const members = (await mapLimit(logIds, 8, fetchTrackMember)).filter(
+    (m): m is PlanMember => m !== null,
+  );
+  return await mapLimit(members, 8, enrich);
+}
+
+/**
+ * Build the full enriched plan for a `--plan` value — the RANDOM-VJ pool (`all`, the WHOLE
+ * archive, unordered), a MIXTAPE logId (the calibrated default), OR a plan HANDLE (a galaxy
+ * slug, the normal live flow). The shape routes the resolver; the ordered paths take members
+ * from the API (committed fixture fallback) and enrich each concurrently. This is the /plan
+ * payload and the source of the matcher's ordered logId list (empty for the VJ pool).
  */
 export async function buildPlan(planRef = DEFAULT_PLAN_MIXTAPE): Promise<PlanEntry[]> {
+  if (isAllPlan(planRef)) {
+    return await buildAllFindingsPlan();
+  }
   const ref = classifyPlanRef(planRef);
   const requested = ref.kind === "handle" ? `plan handle "${ref.value}"` : `mixtape ${ref.value}`;
   const fetched =

@@ -22,10 +22,16 @@ import {
 } from "../contract";
 import { fingerprintPlan, fingerprintPlanFullSong } from "./fingerprint";
 import { type Fingerprint } from "./matcher";
-import { type AdminAuth, buildPlan, loadAdminAuth } from "./plan";
+import { type AdminAuth, buildPlan, isAllPlan, loadAdminAuth } from "./plan";
 import { REMOTE_HTML } from "./remote";
 import { createShowState } from "./state";
 import { startSupervisor } from "./supervisor";
+import {
+  createShuffleBag,
+  mulberry32,
+  resolveVjTransitionPort,
+  startVjTransitionListener,
+} from "./vj";
 
 /** State-stream cadence (30Hz — the low end of the RFC's 30-60Hz). */
 const BROADCAST_HZ = 30;
@@ -82,6 +88,17 @@ export function shouldFingerprintFullSong(
 /** Build the plan (mixtape logId or plan handle) and fingerprint each planned finding. */
 async function boot(planRef?: string): Promise<Boot> {
   const plan = await buildPlan(planRef);
+  // RANDOM-VJ MODE (`--plan all`): the WHOLE archive as an unordered pool, driven by the
+  // shuffle-bag director's transition datagrams (`vj.ts`) — there is no identity to match, so
+  // skip fingerprinting entirely. Returning `frames: null` for EVERY entry means the matcher
+  // never advances (it only ever advances on a fingerprint hit), so the director owns the
+  // pointer via `goto`. Every OTHER plan ref stays exactly as before (still fingerprints).
+  if (isAllPlan(planRef)) {
+    console.error(
+      `bridge: RANDOM-VJ pool — ${plan.length} findings, no fingerprinting (director shuffles)`,
+    );
+    return { fingerprints: plan.map((p) => ({ frames: null, logId: p.logId })), plan };
+  }
   const logIds = plan.map((p) => p.logId);
   const suffix = planRef ? ` (${planRef})` : "";
   // Tier-A full-song references are GATED (default OFF): fingerprint the full song from
@@ -110,6 +127,26 @@ async function main(): Promise<void> {
   const planRef = parsePlanArg(process.argv.slice(2));
   const { plan, fingerprints } = await boot(planRef);
   const state = createShowState(plan, fingerprints);
+
+  // RANDOM-VJ MODE (`--plan all`): bind the UDP transition channel and let the shuffle-bag
+  // director drive the pointer. Bound ONLY in VJ mode — every other plan ref never opens the
+  // socket. Each valid `{"type":"transition","deck":1|2}` datagram pulls the next unique
+  // finding from the bag and drives the show through the SAME `goto` command path the phone
+  // remote uses. LAN-local by design (bound on all interfaces so the DJ-mixer sender on the
+  // other machine can reach it). The port is injectable via `FLUNCLE_VJ_TRANSITION_PORT`.
+  let vjListener: Awaited<ReturnType<typeof startVjTransitionListener>> | null = null;
+  if (isAllPlan(planRef) && plan.length > 0) {
+    const bag = createShuffleBag(plan.length, mulberry32(Date.now()));
+    vjListener = await startVjTransitionListener({
+      onError: (err) => console.error("bridge: VJ transition socket —", err),
+      onTransition: () => state.ingest({ cmd: "goto", index: bag.next() }, Date.now()),
+      port: resolveVjTransitionPort(),
+    });
+    console.error(
+      `bridge: RANDOM-VJ transition channel on udp/${vjListener.port} (LAN-local) — ` +
+        `shuffle-bag over ${plan.length} findings`,
+    );
+  }
 
   // The set of connected sockets (glass + any phone remotes).
   const sockets = new Set<import("bun").ServerWebSocket<unknown>>();
@@ -195,6 +232,7 @@ async function main(): Promise<void> {
   const shutdown = (): void => {
     clearInterval(interval);
     supervisor.stop();
+    void vjListener?.close();
     void server.stop();
     process.exit(0);
   };

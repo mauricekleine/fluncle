@@ -3,9 +3,16 @@
 // wrong call silently loads the wrong set, so the shape-detection + candidate selection is
 // pure and tested directly (no network / no admin token).
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, mock, test } from "bun:test";
 
-import { classifyPlanRef, isLogId, matchPlanByHandle, parseDotenv } from "./plan.ts";
+import {
+  buildAllFindingsPlan,
+  classifyPlanRef,
+  isAllPlan,
+  isLogId,
+  matchPlanByHandle,
+  parseDotenv,
+} from "./plan.ts";
 
 describe("isLogId", () => {
   test("real Fluncle coordinates match (findings + a mixtape)", () => {
@@ -91,5 +98,84 @@ describe("parseDotenv", () => {
 
   test("a value containing '=' keeps everything after the first '='", () => {
     expect(parseDotenv("K=a=b=c").K).toBe("a=b=c");
+  });
+});
+
+describe("isAllPlan", () => {
+  test("the RANDOM-VJ sentinel matches, case- and whitespace-insensitively", () => {
+    expect(isAllPlan("all")).toBe(true);
+    expect(isAllPlan("ALL")).toBe(true);
+    expect(isAllPlan("  All  ")).toBe(true);
+  });
+
+  test("everything else (a coordinate, a handle, nothing) is not VJ mode", () => {
+    expect(isAllPlan("019.F.1A")).toBe(false);
+    expect(isAllPlan("dark-aurora-roller")).toBe(false);
+    expect(isAllPlan("allnighter")).toBe(false); // not the bare sentinel
+    expect(isAllPlan(undefined)).toBe(false);
+  });
+});
+
+describe("buildAllFindingsPlan", () => {
+  const realFetch = globalThis.fetch;
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  const json = (body: unknown): Response =>
+    new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
+  const text = (body: string): Response => new Response(body);
+  const notFound = (): Response => new Response("no", { status: 404 });
+
+  test("enumerates every /log/<logId> from the sitemap, then enriches each", async () => {
+    // A sitemap listing three findings (plus noise that must NOT be scraped as a logId), one
+    // of which the public track route can't resolve to a coordinate (skipped, not fabricated).
+    const sitemap = [
+      "<urlset>",
+      "<url><loc>https://www.fluncle.com/log/019.F.1A</loc></url>",
+      "<url><loc>https://www.fluncle.com/log/011.9.8I</loc></url>",
+      "<url><loc>https://www.fluncle.com/log/007.8.1B</loc></url>",
+      "<url><loc>https://www.fluncle.com/mixtapes</loc></url>",
+      "</urlset>",
+    ].join("");
+
+    // Every fetch in plan.ts passes a template-literal string URL, so the mock types its
+    // arg as `string` (the whole mock is cast via `unknown` to the wider `fetch` signature).
+    globalThis.fetch = mock(async (url: string): Promise<Response> => {
+      if (url.endsWith("/sitemap.xml")) {
+        return text(sitemap);
+      }
+      if (url.includes("/api/tracks/")) {
+        const id = decodeURIComponent(url.split("/api/tracks/")[1]);
+        // 007.8.1B has no minted coordinate → the route returns a track with no logId → skipped.
+        if (id === "007.8.1B") {
+          return json({ track: { artists: ["Ghost"], title: "unminted" } });
+        }
+        return json({
+          track: { artists: [`Artist ${id}`], durationMs: 1000, logId: id, title: `T ${id}` },
+        });
+      }
+      if (url.endsWith("/props.json")) {
+        return json({ palette: { accent: "#abcdef" }, seed: 7, track: {} });
+      }
+      // scene.json + composition.tsx absent → enrich marks the entry non-replayable.
+      return notFound();
+    }) as unknown as typeof fetch;
+
+    const plan = await buildAllFindingsPlan();
+
+    // Two of the three sitemap findings resolve; the unminted one is dropped, not invented.
+    expect(plan.map((p) => p.logId).sort()).toEqual(["011.9.8I", "019.F.1A"]);
+    const first = plan.find((p) => p.logId === "019.F.1A");
+    expect(first?.title).toBe("T 019.F.1A");
+    expect(first?.artists).toEqual(["Artist 019.F.1A"]);
+    expect(first?.palette?.accent).toBe("#abcdef");
+    expect(first?.seed).toBe(7);
+    expect(first?.replay?.replayable).toBe(false); // no composition.tsx on R2
+  });
+
+  test("an unreachable sitemap yields an empty pool (never throws)", async () => {
+    globalThis.fetch = mock(async (): Promise<Response> => notFound()) as unknown as typeof fetch;
+    expect(await buildAllFindingsPlan()).toEqual([]);
   });
 });
