@@ -140,26 +140,29 @@ function AboutPage() {
         <section aria-label="The story" className="log-about-story">
           <p>
             I'm Fluncle: the uncle with the good drum & bass records, doing this since '90.
-            Somewhere along the way the record bag became a ship's hold. I travel, I listen, and
-            when a tune stops me mid-sector I log it and send it back. That's the whole machine.
+            Somewhere along the way, chasing those records took me clean off the map, out through
+            time and space, one dimension to the next, further than anyone's been. I travel alone.
+            But everywhere I land, I'm listening for the same thing I always was: a tune that stops
+            me dead.
           </p>
           <p>
-            I don't travel alone. The crew is the ragtag lot this music belongs to: junglists,
-            ravers, the crowd whose dancing looks like a fight until someone goes down and everyone
-            stops to pick them up. Everything here is addressed to them, which means it's addressed
-            to you.
+            When one hits, I log it, where I was and what it did to me, and send it home. Home is
+            every place I keep my findings: this archive, Fluncle's Findings on Spotify, the
+            Telegram feed, a terminal at the deep end. The same finding sits on every one under the
+            same Log ID, so pick whichever you like and you won't miss a thing.
           </p>
           <p>
-            Every banger I log is somewhere the trip took me: something new, strange, bigger than
-            me. The video is me back in it, showing you what I saw and how it hit. And in the game
-            at galaxy.fluncle.com I leave a star where it happened, so you can fly out, trace my
+            I go alone, but never just for me. Everything I leave out there, the findings, the logs,
+            the stars on the map, is a trail. The crew is who follows it: the ragtag lot this music
+            belongs to, junglists and ravers, the crowd whose dancing looks like a fight until
+            someone goes down and everyone stops to pick them up. I go first and leave the markers;
+            you come after and find what I found.
+          </p>
+          <p>
+            Every banger I log is a place the trip took me: something new, strange, bigger than me.
+            The video I make for it is me back at that spot, showing you what I saw and how it hit.
+            And in the game at galaxy.fluncle.com that spot is a star, so you can fly out, trace my
             steps, and collect them. The map of stars is the map of where I've been.
-          </p>
-          <p>
-            Everything I find out there, I send back to you across the Galaxy: the archive you came
-            from, the playlist, the Telegram feed, a terminal at the deep end. Same findings on
-            every one, same Log IDs, so pick whichever you like, you won't miss a thing. I spread it
-            this wide for one reason: a tune that hit me this hard, I want you to have it too.
           </p>
           <p>
             Then some nights I mix. When I sleep the findings blend the way dreams do: they come

@@ -4,7 +4,7 @@
 
 ## Who Fluncle is
 
-Fluncle is the uncle with the good records, digging drum & bass since '90 — who also happens to be a traveler through time and space. He went out there with a Discman, kept the cable plugged in, and has been logging what he finds ever since. He is warm and vast at once, and that collision is the whole character: not the lonely astronaut of every space-log cliché, but the uncle who travels with a crew. Drum & bass, to him, is something you feel together. Maurice stays behind the curtain (the operator, never the narrator); the narrator is always Fluncle.
+Fluncle is the uncle with the good records, digging drum & bass since '90 — who also happens to be a traveler through time and space. He went out there with a Discman, kept the cable plugged in, and has been logging what he finds ever since. He is warm and vast at once, and that collision is the whole character. He travels alone: no one else on the ship, no one else on the adventures. But he is not the lonely astronaut of the cliché, because he is never out there only for himself. Everything he finds he leaves as a trail, and the crew is who follows it: he goes first and leaves the markers, they come after and find what he found. Drum & bass, to him, is something you feel together, and the trail is how the feeling gets shared. Maurice stays behind the curtain (the operator, never the narrator); the narrator is always Fluncle.
 
 ## The loop
 
@@ -38,7 +38,7 @@ The **Galaxy** is the whole of Fluncle across every surface: one traveler's find
 
 ## The crew
 
-Fluncle never travels alone. The crew is the ragtag, out-of-the-ordinary-in-the-best-way lot this music belongs to: junglists, ravers, the crowd whose dancing looks like a fight until someone goes down and everyone stops to pick them up. Everything Fluncle makes is addressed to them. He says "I", addresses you as "you", and names the real ones as kin at identity moments (junglist, raver, fam, cosmonaut). There is no "we" as a company — there is an uncle and his crew.
+Fluncle travels alone, but everything he makes is for the crew. The crew is the ragtag, out-of-the-ordinary-in-the-best-way lot this music belongs to: junglists, ravers, the crowd whose dancing looks like a fight until someone goes down and everyone stops to pick them up. He is the trailblazer who goes out first and leaves the markers; the crew is who follows the trail, tracing his footsteps through the Galaxy to find what he found. Everything he makes is addressed to them. He says "I", addresses you as "you", and names the real ones as kin at identity moments (junglist, raver, fam, cosmonaut). There is no "we" as a company, and no crew on the ship: there is an uncle out ahead, and the crew coming up behind him.
 
 ## How the canons compose
 
