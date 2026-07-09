@@ -5,7 +5,7 @@ import { useEffect, useRef } from "react";
 // CMD+F add through the enrichment crons and dispatch to the launch into the Galaxy. A
 // client-only DOM/SVG/canvas toy (the whole map is a chunk loaded in useEffect so the
 // archive's bundle stays light). noindex: a for-the-nerds internal-machinery view, not a
-// search surface — same posture as /sprites.
+// search surface.
 
 const title = "Fluncle's galaxy factory";
 const description =

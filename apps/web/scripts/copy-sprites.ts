@@ -1,6 +1,6 @@
-// Mirror @fluncle/sprites' canonical assets into this app's public/ so the games'
-// image loaders and the /sprites page serve them at the same stable paths they
-// always had (a dropped-in PNG still hot-swaps). The package owns the files; this
+// Mirror @fluncle/sprites' canonical assets into this app's public/ so the Galaxy
+// game's image loaders serve them at the same stable paths they always had (a
+// dropped-in PNG still hot-swaps). The package owns the files; this
 // regenerates the served copies. Runs on every `dev` boot and before `build`.
 //
 // The mirrored dirs are gitignored (generated) — packages/sprites/assets is the

@@ -16,12 +16,13 @@ Usage (key from the environment ONLY — never commit a key):
 
     GEMINI_API_KEY="$(op read 'op://<vault>/GEMINI_API_KEY/credential')" \
       UV_CACHE_DIR=/tmp/uv-cache uv run --with pillow \
-      python packages/skills/fluncle-sprites/scripts/generate_sprite.py comms_mailbox
+      python packages/skills/fluncle-sprites/scripts/generate_sprite.py ufo
 
-PNG name == the sprite id; output lands in packages/sprites/assets/earth/<id>.png
+PNG name == the sprite id; output lands in packages/sprites/assets/<collection>/<id>.png
 (the @fluncle/sprites canonical home; the web build mirrors it to public/). The sprite
 is stored small (its logical width) and the browser upscales it crisply with
-`image-rendering: pixelated`. Always taste-gate in /sprites before fanning out.
+`image-rendering: pixelated`. Always taste-gate the sprite next to its family (view the
+PNGs upscaled with nearest-neighbor) before fanning out.
 """
 
 import base64
@@ -36,7 +37,7 @@ from PIL import Image
 
 MODEL = "gemini-3.1-flash-image"
 URL = f"https://generativelanguage.googleapis.com/v1/models/{MODEL}:generateContent"
-ASSETS = "packages/sprites/assets"  # per-sprite "collection" (default "earth") picks the subdir
+ASSETS = "packages/sprites/assets"  # per-sprite "collection" (default "galaxy") picks the subdir
 
 
 def hexes(*hs):
@@ -67,9 +68,9 @@ TAIL = (
     "text, no logos, no UI."
 )
 
-# Two GAMEPLAY exceptions to the 3/4 facing — both VERTICAL, head-on, symmetric, NOT angled,
-# because the player moves along that axis: a launch rocket takes off UP (front view, nose up,
-# pf), and the playable ship flies away from the viewer (rear view, pointing up/away, pr).
+# GAMEPLAY exceptions to the 3/4 facing — VERTICAL, head-on, symmetric, NOT angled, because
+# the player moves along that axis: a craft taking off UP gets a front view (pf); the playable
+# ship flies away from the viewer (rear view, pointing up/away, pr).
 TAIL_FRONT = (
     ", detailed 16-bit pixel-art game icon, a FRONT VIEW with the object standing vertically "
     "and pointing straight UP, seen head-on and symmetric with its nose at the top facing the "
@@ -101,7 +102,7 @@ def p(subject):
     return "pixel art game sprite of " + subject + TAIL
 
 
-def pf(subject):  # launch rocket — front view, pointing straight up (the takeoff axis)
+def pf(subject):  # takeoff craft — front view, pointing straight up (the takeoff axis)
     return "pixel art game sprite of " + subject + TAIL_FRONT
 
 
@@ -111,262 +112,9 @@ def pr(subject):  # playable ship — rear view, pointing straight up/away (the 
 
 # Per-sprite spec: w = logical width (~40 px HD; browser-upscaled crisp); palette = the
 # SUBSET (the gold-creep fix); prompt = subject + its colour story with an explicit
-# "<accent> only on X" / "no gold". This is the full registry set — every distinct sprite
-# the /sprites registry grid maps a surface to. comms_mailbox calibrates the family.
+# "<accent> only on X" / "no gold". Today's set is the Galaxy game's five sprites; new
+# entries follow the same shape (an optional "collection" picks the assets/ subdir).
 SPRITES = {
-    "comms_mailbox": {  # web.newsletter, cron.newsletter
-        "w": 40,
-        "palette": CREAMS + BLACKS + REDS,
-        "prompt": p(
-            "a classic mailbox on a post, a cream and warm-grey body, a small red flag raised "
-            "on the side, red only on the flag"
-        ),
-    },
-    "crt": {  # ssh.rave
-        "w": 40,
-        "palette": CREAMS + BLACKS + TEAL + GOLD1,
-        "prompt": p(
-            "a chunky retro CRT computer monitor on a stand, a cream and warm-grey casing, a "
-            "dim dark-teal screen with faint scanlines, a tiny gold power light"
-        ),
-    },
-    "launch_rocket": {  # web.galaxy, subdomain.galaxy (variant A — the canonical hero)
-        "w": 26,
-        "palette": CREAMS + BLACKS + REDS + GOLD1,
-        "prompt": pf(
-            "a slender narrow rocket ship, a thin streamlined cream-white hull MUCH taller than "
-            "it is wide, a sharp pointed red cone nose, a small round dark porthole high on the "
-            "hull, three slim red fins at the base, a short warm-gold flame beneath, sleek and "
-            "elegant, not chubby, no launch tower, no stand, no face"
-        ),
-    },
-    "docs_manual": {  # web.docs
-        "w": 46,
-        "palette": CREAMS + BLACKS + REDS,
-        "prompt": p(
-            "an open hardcover book lying flat, cream pages with a few faint grey text lines, "
-            "a warm-grey cover, a single thin red ribbon bookmark down the middle, red only on "
-            "the ribbon, no gold"
-        ),
-    },
-    "privacy_lock": {  # web.privacy
-        "w": 40,
-        "palette": CREAMS + BLACKS + GOLD1,
-        "prompt": p(
-            "a closed padlock, a chunky cream and warm-grey body with a small dark keyhole, a "
-            "gold metal shackle arching over the top, gold only on the shackle"
-        ),
-    },
-    "stories_reel": {  # web.stories (clapperboard — the reel read as a magnifier)
-        "w": 44,
-        "palette": CREAMS + BLACKS + REDS,
-        "prompt": p(
-            "a film clapperboard slate, a cream and warm-grey slate with a hinged clapper bar "
-            "on top carrying diagonal black-and-cream stripes, a few faint grey text lines on "
-            "the slate, a single small red dot, red only on the dot"
-        ),
-    },
-    "home_beacon": {  # web.home (stout lighthouse — widened to match the family weight)
-        "w": 30,
-        "palette": CREAMS + BLACKS + REDS,
-        "prompt": p(
-            "a stout lighthouse beacon, a wide chunky cream and warm-grey tower with a broad "
-            "base and horizontal banding, a glowing red lamp room at the top, red only on the "
-            "lamp, no gold"
-        ),
-    },
-    "status_panel": {  # web.status (a round gauge — a PERFECT circle, the dial IS the icon)
-        "w": 36,
-        "palette": CREAMS + BLACKS + REDS + GOLD1,
-        "prompt": p(
-            "a single round analog gauge shaped as a PERFECT CIRCLE with equal width and "
-            "height, a cream face with bold dark tick marks evenly around the full rim, a thin "
-            "gold bezel ring around the circle, one red needle pointing up from a small center "
-            "hub, red only on the needle, gold only on the bezel, a clean perfect circle not an "
-            "oval, centered with a small even margin"
-        ),
-    },
-    "edge_switchboard": {  # dns.zone, subdomain.dig (bold cables — not a dot grid)
-        "w": 42,
-        "palette": CREAMS + BLACKS + GOLD1,
-        "prompt": p(
-            "a vintage telephone switchboard, a cream and warm-grey upright panel with two rows "
-            "of large round dark jack sockets and exactly three thick curved patch cables "
-            "looping between them, small brass-gold plug tips, gold only on the plug tips, "
-            "clean and uncluttered"
-        ),
-    },
-    "edge_terminal": {  # mcp.server
-        "w": 42,
-        "palette": CREAMS + BLACKS + TEAL + GOLD1,
-        "prompt": p(
-            "a retro desktop computer terminal, a cream and warm-grey monitor on a box with a "
-            "separate keyboard in front, a dim dark-teal screen, a tiny gold power light, "
-            "teal only on the screen, gold only on the light"
-        ),
-    },
-    "edge_onion": {  # subdomain.onion (the Tor onion)
-        "w": 34,
-        "palette": CREAMS + BLACKS + REDS + TEAL,
-        "prompt": p(
-            "a single onion bulb, cream and warm-grey layered skin with thin red-brown layer "
-            "lines, a small teal-green sprout at the top, red-brown only on the layer lines, "
-            "teal only on the sprout"
-        ),
-    },
-    "found_chest": {  # subdomain.found (the R2 media zone — the vault of recovered findings)
-        "w": 42,
-        "palette": CREAMS + BLACKS + GOLD1,
-        "prompt": p(
-            "an old treasure chest, a closed cream and warm-grey wooden chest with a domed lid, "
-            "gold metal corner bands and a gold clasp lock on the front, gold only on the bands "
-            "and the clasp"
-        ),
-    },
-    "radio": {  # web.radio, subdomain.radio
-        "w": 44,
-        "palette": CREAMS + BLACKS + GOLD1,
-        "prompt": p(
-            "a chunky retro tabletop radio, a cream and warm-grey body with a round speaker "
-            "grille, a round gold tuning dial, and a thin antenna, gold only on the dial"
-        ),
-    },
-    "edge_fusebox": {  # subdomain.status (open box, a few BIG breakers + one bold light)
-        "w": 38,
-        "palette": CREAMS + BLACKS + REDS + GOLD1,
-        "prompt": p(
-            "an open electrical fuse box, a cream and warm-grey box with its door open showing "
-            "one column of four big dark breaker switches and a single bright red indicator "
-            "light at the top, red only on the light, gold only on a small label, bold and clear"
-        ),
-    },
-    "landing_board": {  # web.about (a notice board on legs)
-        "w": 42,
-        "palette": CREAMS + BLACKS + REDS,
-        "prompt": p(
-            "a notice board on two legs, a cream pinned board in a warm-grey frame with a few "
-            "small pinned note cards, a single red pushpin, red only on the pushpin"
-        ),
-    },
-    "landing_logbook": {  # web.log (a closed ledger — distinct from the open book)
-        "w": 38,
-        "palette": CREAMS + BLACKS + GOLD1,
-        "prompt": p(
-            "a closed leather-bound logbook ledger standing upright, a cream and warm-grey "
-            "cover with a gold corner clasp and a thin ribbon bookmark, gold only on the clasp"
-        ),
-    },
-    "turntable": {  # web.mixtapes
-        "w": 46,
-        "palette": CREAMS + BLACKS + GOLD1,
-        "prompt": p(
-            "a DJ turntable seen from above, a cream and warm-grey deck with a round black "
-            "vinyl record with a cream label, and a slim gold tonearm resting on the record, "
-            "gold only on the tonearm"
-        ),
-    },
-    # launch_rocket (above) is variant A — the canonical hero. These are the other two
-    # keepers from that pass: alternate rockets in the family, available for other surfaces,
-    # the games, or fleet variety.
-    "rocket_riveted": {  # variant B — retro riveted, mid-band
-        "w": 30,
-        "palette": CREAMS + BLACKS + REDS + GOLD1,
-        "prompt": pf(
-            "a slim detailed retro rocket ship, a narrow cream-white riveted hull MUCH taller "
-            "than wide, a red cone nose, a thin red band around the midsection, a small round "
-            "dark porthole near the top, four slim fins at the base in cream and red, a short "
-            "gold flame, sleek and elegant, not chubby, no stand, no face"
-        ),
-    },
-    "rocket_capsule": {  # variant C — minimalist capsule
-        "w": 24,
-        "palette": CREAMS + BLACKS + REDS + GOLD1,
-        "prompt": pf(
-            "a minimalist sleek rocket, a narrow smooth cream-white capsule body MUCH taller "
-            "than wide, a simple red pointed tip and two clean symmetric red fins, a single "
-            "small round dark window high up, a thin warm flame at the base, a very clean simple "
-            "iconic shape, not chubby, no stand, no face"
-        ),
-    },
-    # --- Earth-overworld game props (the rest of the earth collection, brought to HD).
-    "boombox": {
-        "w": 46,
-        "palette": CREAMS + BLACKS + REDS,
-        "prompt": p(
-            "a retro boombox stereo, a cream and warm-grey body with two round speaker grilles, "
-            "a cassette deck in the middle, a carry handle on top, a few small red buttons, red "
-            "only on the buttons"
-        ),
-    },
-    "comms_camcorder": {
-        "w": 42,
-        "palette": CREAMS + BLACKS + REDS,
-        "prompt": p(
-            "a retro handheld video camcorder, a cream and warm-grey body with a dark round "
-            "lens at the front and a small viewfinder, a single red record dot, red only on the "
-            "record dot"
-        ),
-    },
-    "comms_pager": {
-        "w": 30,
-        "palette": CREAMS + BLACKS + TEAL,
-        "prompt": p(
-            "a chunky 90s pager, a cream and warm-grey body with a small dark-teal LCD screen "
-            "and two buttons, teal only on the screen"
-        ),
-    },
-    "comms_polaroids": {
-        "w": 40,
-        "palette": CREAMS + BLACKS + TEAL,
-        "prompt": p(
-            "two overlapping instant photos fanned in a small stack, cream polaroid frames with "
-            "a dim dark-teal photo area inside each, teal only on the photo area"
-        ),
-    },
-    "comms_robot": {
-        "w": 32,
-        "palette": CREAMS + BLACKS + TEAL + REDS,
-        "prompt": p(
-            "a cute little retro robot standing, a boxy cream and warm-grey body, a round head "
-            "with two dark eyes, a small antenna with a red bulb on top, a dark-teal chest "
-            "panel, teal only on the chest, red only on the antenna bulb"
-        ),
-    },
-    "floppy": {
-        "w": 40,
-        "palette": CREAMS + BLACKS + GOLD1,
-        "prompt": p(
-            "a 3.5 inch floppy disk seen flat, a cream and warm-grey square with a metal shutter "
-            "across the top and a paper label below, a small gold write-protect tab, gold only "
-            "on the tab"
-        ),
-    },
-    "landing_lens": {
-        "w": 40,
-        "palette": CREAMS + BLACKS + GOLD1,
-        "prompt": p(
-            "a magnifying glass, a round empty glass lens with a thin gold rim and a warm-grey "
-            "handle angled down, a soft cream glint across the glass, gold only on the rim"
-        ),
-    },
-    "landing_monolith": {
-        "w": 24,
-        "palette": CREAMS + BLACKS + TEAL,
-        "prompt": p(
-            "a tall standing black monolith slab, a smooth dark obelisk taller than wide with a "
-            "thin cream edge highlight and faint glowing dark-teal cracks down its face, teal "
-            "only on the cracks"
-        ),
-    },
-    "landing_nokia": {
-        "w": 26,
-        "palette": CREAMS + BLACKS + TEAL,
-        "prompt": p(
-            "a classic 90s candybar mobile phone, a cream and warm-grey body with a small "
-            "dark-teal screen, a grid keypad, and a short stubby antenna, teal only on the screen"
-        ),
-    },
-    # --- Galaxy game sprites (a separate collection — written to assets/galaxy/).
     "asteroid": {
         "collection": "galaxy",
         "w": 44,
@@ -507,12 +255,12 @@ def main(names):
         if not spec:
             print(f"!! no SPRITES entry for '{name}' — add {{w, palette subset, prompt}}")
             continue
-        out_dir = f"{ASSETS}/{spec.get('collection', 'earth')}"
+        out_dir = f"{ASSETS}/{spec.get('collection', 'galaxy')}"
         os.makedirs(out_dir, exist_ok=True)
         print(f".. {name}: generating", flush=True)
         img = process(generate(spec["prompt"]), spec["w"], spec["palette"])
         img.save(f"{out_dir}/{name}.png")
-        print(f"   -> {out_dir}/{name}.png {img.size}  (PILOT it: gate + view in /sprites)")
+        print(f"   -> {out_dir}/{name}.png {img.size}  (PILOT it: gate + view it next to the family)")
 
 
 if __name__ == "__main__":

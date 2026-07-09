@@ -61,7 +61,6 @@ coverage/
 # Sprite assets mirrored into the web app's public/ by apps/web/scripts/copy-sprites.ts.
 # Source of truth is the @fluncle/sprites package (packages/sprites/assets); these are
 # generated copies served at stable paths. (galaxy/og.png + amen.mp3 stay tracked.)
-apps/web/public/earth/
 apps/web/public/galaxy/asteroid.png
 apps/web/public/galaxy/earth.png
 apps/web/public/galaxy/roadster.png
