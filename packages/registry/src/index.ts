@@ -65,8 +65,8 @@ export type SurfaceWeight = "primary" | "secondary" | "tertiary" | "hidden";
  *             Ranks the human-web surfaces a visitor browses to (routes, the Galaxy,
  *             radio, the feeds/discovery a curious dev would notice).
  * - `ssh`     the rave terminal menu (ssh rave.fluncle.com) — the keyboard front
- *             door. Ranks what the TUI offers (Enter the Galaxy, Latest, Mixtapes,
- *             Submit, Subscribe, Install CLI, About) and the deep-link one-shots.
+ *             door. Ranks what the TUI offers (Latest, Mixtapes, Submit,
+ *             Subscribe, Install CLI, About) and the deep-link one-shots.
  * - `cli`     the `fluncle` CLI's own command surface — how loudly each verb is
  *             presented in `fluncle --help` / the about screen. Ranks the CLI verbs
  *             against each other (`recent` leads; `admin` is hidden).
@@ -671,7 +671,7 @@ export const SURFACES: readonly Surface[] = [
   {
     command: "ssh rave.fluncle.com",
     exposedContent: [
-      "the rave terminal TUI: Enter the Galaxy, Latest bangers, Mixtape archive, Submit, Subscribe, Install CLI, About",
+      "the rave terminal TUI: Latest bangers, Mixtape archive, Submit, Subscribe, Install CLI, About",
       "deep-register one-shots: `ssh rave.fluncle.com latest|random`",
     ],
     kind: "ssh",
