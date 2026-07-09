@@ -19,7 +19,6 @@ import { Route as PodcastDotxmlRouteImport } from './routes/podcast[.]xml'
 import { Route as PipelineRouteImport } from './routes/pipeline'
 import { Route as GalaxyRouteImport } from './routes/galaxy'
 import { Route as FeedDotjsonRouteImport } from './routes/feed[.]json'
-import { Route as EarthRouteImport } from './routes/earth'
 import { Route as DocsRouteImport } from './routes/docs'
 import { Route as DeviceRouteImport } from './routes/device'
 import { Route as CalendarDoticsRouteImport } from './routes/calendar[.]ics'
@@ -138,11 +137,6 @@ const GalaxyRoute = GalaxyRouteImport.update({
 const FeedDotjsonRoute = FeedDotjsonRouteImport.update({
   id: '/feed.json',
   path: '/feed.json',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const EarthRoute = EarthRouteImport.update({
-  id: '/earth',
-  path: '/earth',
   getParentRoute: () => rootRouteImport,
 } as any)
 const DocsRoute = DocsRouteImport.update({
@@ -522,7 +516,6 @@ export interface FileRoutesByFullPath {
   '/calendar.ics': typeof CalendarDoticsRoute
   '/device': typeof DeviceRoute
   '/docs': typeof DocsRouteWithChildren
-  '/earth': typeof EarthRoute
   '/feed.json': typeof FeedDotjsonRoute
   '/galaxy': typeof GalaxyRoute
   '/pipeline': typeof PipelineRoute
@@ -602,7 +595,6 @@ export interface FileRoutesByTo {
   '/atom.xml': typeof AtomDotxmlRoute
   '/calendar.ics': typeof CalendarDoticsRoute
   '/device': typeof DeviceRoute
-  '/earth': typeof EarthRoute
   '/feed.json': typeof FeedDotjsonRoute
   '/galaxy': typeof GalaxyRoute
   '/pipeline': typeof PipelineRoute
@@ -685,7 +677,6 @@ export interface FileRoutesById {
   '/calendar.ics': typeof CalendarDoticsRoute
   '/device': typeof DeviceRoute
   '/docs': typeof DocsRouteWithChildren
-  '/earth': typeof EarthRoute
   '/feed.json': typeof FeedDotjsonRoute
   '/galaxy': typeof GalaxyRoute
   '/pipeline': typeof PipelineRoute
@@ -769,7 +760,6 @@ export interface FileRouteTypes {
     | '/calendar.ics'
     | '/device'
     | '/docs'
-    | '/earth'
     | '/feed.json'
     | '/galaxy'
     | '/pipeline'
@@ -849,7 +839,6 @@ export interface FileRouteTypes {
     | '/atom.xml'
     | '/calendar.ics'
     | '/device'
-    | '/earth'
     | '/feed.json'
     | '/galaxy'
     | '/pipeline'
@@ -931,7 +920,6 @@ export interface FileRouteTypes {
     | '/calendar.ics'
     | '/device'
     | '/docs'
-    | '/earth'
     | '/feed.json'
     | '/galaxy'
     | '/pipeline'
@@ -1014,7 +1002,6 @@ export interface RootRouteChildren {
   CalendarDoticsRoute: typeof CalendarDoticsRoute
   DeviceRoute: typeof DeviceRoute
   DocsRoute: typeof DocsRouteWithChildren
-  EarthRoute: typeof EarthRoute
   FeedDotjsonRoute: typeof FeedDotjsonRoute
   GalaxyRoute: typeof GalaxyRoute
   PipelineRoute: typeof PipelineRoute
@@ -1141,13 +1128,6 @@ declare module '@tanstack/react-router' {
       path: '/feed.json'
       fullPath: '/feed.json'
       preLoaderRoute: typeof FeedDotjsonRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/earth': {
-      id: '/earth'
-      path: '/earth'
-      fullPath: '/earth'
-      preLoaderRoute: typeof EarthRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/docs': {
@@ -1697,7 +1677,6 @@ const rootRouteChildren: RootRouteChildren = {
   CalendarDoticsRoute: CalendarDoticsRoute,
   DeviceRoute: DeviceRoute,
   DocsRoute: DocsRouteWithChildren,
-  EarthRoute: EarthRoute,
   FeedDotjsonRoute: FeedDotjsonRoute,
   GalaxyRoute: GalaxyRoute,
   PipelineRoute: PipelineRoute,

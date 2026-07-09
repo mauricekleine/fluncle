@@ -1,11 +1,11 @@
-"""Generate the Earth overworld prop sprites via Gemini image-gen, then quantize
+"""Generate the `earth` device sprites via Gemini image-gen, then quantize
 each to a per-prop canon-ramp subset and key out the background.
 
-The bespoke 8-bit device sprites for Fluncle's Earth overworld (the doors into
-each surface). The renderer falls back to the procedural char-grid sprites until
-these PNGs land (apps/web/src/game/earth/*), so this is safe to re-run / iterate,
-and the frames are taste-gated — view them in /earth before shipping. PNG file
-name == the prop id (the renderer loads /earth/<propId>.png).
+The bespoke 8-bit device sprites for Fluncle's `earth` collection — one per
+surface, doubling as the per-surface icon set (`SPRITE_BY_SURFACE` via
+`@fluncle/sprites`) and the `/sprites` gallery. This is safe to re-run /
+iterate, and the frames are taste-gated — view them in `/sprites` before
+shipping. PNG file name == the sprite id.
 
 Usage (reads the key from the environment only — never commit a key):
 
@@ -16,7 +16,7 @@ Usage (reads the key from the environment only — never commit a key):
 Per-prop palette subsets keep gold confined to the door/accent (One Sun Rule,
 ≤~10% of a sprite) and tell each object's colour story. Canon ramp only; no
 green field (the CRT/terminal/onion sprout use the dim canon teal). See
-docs/galaxy-sprites.md + docs/earth-overworld.md.
+docs/galaxy-sprites.md.
 """
 
 import base64
