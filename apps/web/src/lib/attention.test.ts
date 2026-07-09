@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   type AttentionInputs,
   type AttentionItem,
+  attentionBrief,
+  attentionRowPath,
   deadlineReadout,
+  deriveAttentionDigest,
   deriveAttentionItems,
   draftDeadline,
   formatAge,
@@ -462,5 +465,81 @@ describe("primaryFor", () => {
     expect(
       primaryFor(item({ href: "/admin/artists?artist=a1", id: "a", source: "artist-review" }), NOW),
     ).toEqual({ href: "/admin/artists?artist=a1", kind: "open", label: "Review" });
+  });
+});
+
+describe("attentionRowPath", () => {
+  it("opens a row's own href when it carries one", () => {
+    expect(
+      attentionRowPath(item({ href: "/admin/studio/r1", id: "c", source: "attach-cues" })),
+    ).toBe("/admin/studio/r1");
+  });
+
+  it("falls back to the dashboard for the inline publish-loop rows (no href)", () => {
+    expect(attentionRowPath(item({ id: "t", source: "post-tiktok" }))).toBe("/admin");
+    expect(attentionRowPath(item({ id: "d", source: "tiktok-draft" }))).toBe("/admin");
+  });
+});
+
+describe("attentionBrief", () => {
+  it("reads a quiet all-clear when nothing waits", () => {
+    expect(attentionBrief([], NOW)).toBe("All clear. Quiet sector.");
+  });
+
+  it("names the missing distribution leg and spells small counts", () => {
+    const items = [
+      item({ deadlineAt: iso(NOW + HOUR), id: "d1", source: "tiktok-draft" }),
+      item({ deadlineAt: iso(NOW + 2 * HOUR), id: "d2", source: "tiktok-draft" }),
+      item({ id: "m", missing: ["mixcloud"], source: "distribute", title: "Mixtape 12" }),
+    ];
+
+    expect(attentionBrief(items, NOW)).toBe(
+      "Two TikTok drafts to finish, a mixtape waiting on Mixcloud.",
+    );
+  });
+
+  it("walks the sources in priority order (deadline-first)", () => {
+    const items = [
+      item({ href: "/admin/artists?artist=a1", id: "a", source: "artist-review" }),
+      item({ id: "t", source: "post-tiktok" }),
+    ];
+
+    // post-tiktok precedes artist-review in the priority order.
+    expect(attentionBrief(items, NOW)).toBe(
+      "A clip to push to TikTok, an artist's links to review.",
+    );
+  });
+});
+
+describe("deriveAttentionDigest", () => {
+  it("is a quiet all-clear with zero counts and rows when nothing waits", () => {
+    const digest = deriveAttentionDigest([], NOW);
+
+    expect(digest).toEqual({
+      brief: "All clear. Quiet sector.",
+      counts: [],
+      rows: [],
+      total: 0,
+    });
+  });
+
+  it("counts by source, carries the deep-link path, and orders deadline-first", () => {
+    const items = [
+      item({ href: "/admin/artists?artist=a1", id: "a", source: "artist-review" }),
+      item({ deadlineAt: iso(NOW + HOUR), id: "d", logId: "004.7.2I", source: "tiktok-draft" }),
+    ];
+
+    const digest = deriveAttentionDigest(items, NOW);
+
+    // The deadline row leads; each row carries its `/admin/…` path.
+    expect(digest.rows.map((row) => row.source)).toEqual(["tiktok-draft", "artist-review"]);
+    expect(digest.rows[0]?.path).toBe("/admin");
+    expect(digest.rows[0]?.logId).toBe("004.7.2I");
+    expect(digest.rows[1]?.path).toBe("/admin/artists?artist=a1");
+    expect(digest.counts).toEqual([
+      { count: 1, source: "tiktok-draft" },
+      { count: 1, source: "artist-review" },
+    ]);
+    expect(digest.total).toBe(2);
   });
 });

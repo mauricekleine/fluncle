@@ -11,6 +11,7 @@
 // rest age into a backlog behind [Show all].
 
 import { TIKTOK_DRAFT_STALE_MS, trackLabel } from "@fluncle/contracts/util";
+import { type AttentionRow, type AttentionSourceCount } from "@fluncle/contracts";
 
 // ─── The rows ────────────────────────────────────────────────────────────────
 
@@ -465,4 +466,140 @@ export function primaryFor(item: AttentionItem, now: number): PrimaryAction {
         : { kind: "copy-caption", label: "Copy caption" };
     }
   }
+}
+
+// ─── The menu-bar digest (the operator's CLI + Raycast read) ─────────────────
+// The same snapshot the `/admin` dashboard renders, folded into a portable digest
+// so the operator's own tools (`fluncle admin queue`, its Raycast menu-bar sibling)
+// read it without a browser. Pure and clock-injected, like the rest of this model.
+
+/** The priority order the digest counts + the brief walk (deadline/urgent first). */
+const SOURCE_ORDER: AttentionSource[] = [
+  "tiktok-draft",
+  "post-tiktok",
+  "post-youtube",
+  "distribute",
+  "attach-cues",
+  "drip-empty",
+  "artist-review",
+];
+
+/**
+ * Where clicking a row lands the operator. Rows that carry an explicit `href`
+ * (attach-cues, distribute, drip-empty, artist-review) open it; the inline
+ * publish-loop rows (post-tiktok, post-youtube, tiktok-draft) have no href — their
+ * action lives on the dashboard itself, so they open `/admin`.
+ */
+export function attentionRowPath(item: AttentionItem): string {
+  return item.href ?? "/admin";
+}
+
+/** An `AttentionItem` reduced to its wire row (the deep-link path + the meta the menu bar shows). */
+function toAttentionRow(item: AttentionItem): AttentionRow {
+  return {
+    ...(item.deadlineAt ? { deadlineAt: item.deadlineAt } : {}),
+    ...(item.logId ? { logId: item.logId } : {}),
+    path: attentionRowPath(item),
+    source: item.source,
+    title: item.title,
+    ...(item.waiting !== undefined ? { waiting: item.waiting } : {}),
+  };
+}
+
+/** English 2–9 as words (the dispatch's small-count voice: "two drafts to finish"). */
+const SMALL_WORDS = [
+  "zero",
+  "one",
+  "two",
+  "three",
+  "four",
+  "five",
+  "six",
+  "seven",
+  "eight",
+  "nine",
+];
+
+/** A count as the dispatch spells it: 2–9 as a word, everything else as digits. */
+function countWord(n: number): string {
+  return n >= 2 && n <= 9 ? (SMALL_WORDS[n] ?? String(n)) : String(n);
+}
+
+/** One source's phrase in the dispatch, from its waiting rows. */
+function briefPhrase(source: AttentionSource, rows: AttentionItem[]): string {
+  const n = rows.length;
+
+  switch (source) {
+    case "artist-review":
+      return n === 1 ? "an artist's links to review" : `${countWord(n)} artists' links to review`;
+    case "attach-cues":
+      return n === 1 ? "a recording waiting on cues" : `${countWord(n)} recordings waiting on cues`;
+    case "distribute": {
+      if (n !== 1) {
+        return `${countWord(n)} mixtapes to distribute`;
+      }
+      // One mixtape: name the missing leg when it's the only one left ("waiting on Mixcloud").
+      const missing = rows[0]?.missing ?? [];
+      if (missing.length === 1 && missing[0] === "mixcloud") {
+        return "a mixtape waiting on Mixcloud";
+      }
+      if (missing.length === 1 && missing[0] === "youtube") {
+        return "a mixtape waiting on YouTube";
+      }
+      return "a mixtape to distribute";
+    }
+    case "drip-empty":
+      return "the Instagram drip's run dry";
+    case "post-tiktok":
+      return n === 1 ? "a clip to push to TikTok" : `${countWord(n)} clips to push to TikTok`;
+    case "post-youtube":
+      return n === 1 ? "a clip to post to YouTube" : `${countWord(n)} clips to post to YouTube`;
+    case "tiktok-draft":
+      return n === 1 ? "a TikTok draft to finish" : `${countWord(n)} TikTok drafts to finish`;
+  }
+}
+
+/**
+ * The deterministic, Fluncle-voiced morning dispatch — one plain, deadpan line
+ * assembled from the counts (never an LLM). Per-source phrases in priority order,
+ * comma-joined; a clear board reads as a quiet all-clear. Operator-plain per the
+ * admin persona register (functional, warm-by-brevity, no exclamation, no em dash).
+ */
+export function attentionBrief(items: AttentionItem[], _now: number): string {
+  const phrases: string[] = [];
+
+  for (const source of SOURCE_ORDER) {
+    const rows = items.filter((item) => item.source === source);
+    if (rows.length > 0) {
+      phrases.push(briefPhrase(source, rows));
+    }
+  }
+
+  if (phrases.length === 0) {
+    return "All clear. Quiet sector.";
+  }
+
+  const joined = phrases.join(", ");
+  return `${joined.charAt(0).toUpperCase()}${joined.slice(1)}.`;
+}
+
+/** The whole digest: the total, per-source counts, ordered rows, and the dispatch. */
+export function deriveAttentionDigest(
+  items: AttentionItem[],
+  now: number,
+): { brief: string; counts: AttentionSourceCount[]; rows: AttentionRow[]; total: number } {
+  // Order the rows the ratified way (deadline-first, then oldest) with no operator
+  // prefs — the digest carries the raw truth; snooze/won't-do is client-only.
+  const ordered = orderQueue(items, {}, now);
+  const rows = [...ordered.due, ...ordered.backlog].map(toAttentionRow);
+
+  const counts: AttentionSourceCount[] = [];
+  for (const source of SOURCE_ORDER) {
+    const count = items.filter((item) => item.source === source).length;
+    if (count > 0) {
+      counts.push({ count, source });
+    }
+  }
+
+  return { brief: attentionBrief(items, now), counts, rows, total: items.length };
 }

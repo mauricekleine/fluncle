@@ -59,6 +59,21 @@
         "recent",
         "history"
       ]
+    },
+    {
+      "name": "attention-queue",
+      "title": "Attention Queue",
+      "subtitle": "Fluncle",
+      "description": "The /admin attention queue and the day's dispatch, in your menu bar.",
+      "mode": "menu-bar",
+      "interval": "15m",
+      "keywords": [
+        "admin",
+        "queue",
+        "attention",
+        "dispatch",
+        "cockpit"
+      ]
     }
   ],
   "preferences": [

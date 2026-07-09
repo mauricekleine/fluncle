@@ -22,6 +22,8 @@ declare namespace Preferences {
   export type AddTrack = ExtensionPreferences & {}
   /** Preferences accessible in the `recent-tracks` command */
   export type RecentTracks = ExtensionPreferences & {}
+  /** Preferences accessible in the `attention-queue` command */
+  export type AttentionQueue = ExtensionPreferences & {}
 }
 
 declare namespace Arguments {
@@ -31,5 +33,7 @@ declare namespace Arguments {
   export type AddTrack = {}
   /** Arguments passed to the `recent-tracks` command */
   export type RecentTracks = {}
+  /** Arguments passed to the `attention-queue` command */
+  export type AttentionQueue = {}
 }
 

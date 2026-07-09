@@ -1,4 +1,10 @@
-import { type PublishTrackResponse, type ApiFailure, type TrackListItem } from "@fluncle/contracts";
+import {
+  type ApiFailure,
+  type AttentionQueue,
+  type AttentionResponse,
+  type PublishTrackResponse,
+  type TrackListItem,
+} from "@fluncle/contracts";
 import { getPreferenceValues } from "@raycast/api";
 import { execFile } from "node:child_process";
 
@@ -7,6 +13,8 @@ type Preferences = {
 };
 
 export type AddResult = PublishTrackResponse;
+
+export type { AttentionQueue };
 
 export type RecentTrack = Pick<
   TrackListItem,
@@ -55,6 +63,15 @@ export async function getRecentTracks(limit = 20): Promise<RecentTrack[]> {
   const result = await runFluncleJson<RecentResult>(["recent", "--limit", String(limit), "--json"]);
 
   return result.tracks;
+}
+
+// The `/admin` attention queue + the day's dispatch, read through the CLI's admin-tier
+// `admin queue` command (the operator's FLUNCLE_API_TOKEN carries it) — Raycast never
+// talks to the API itself.
+export async function getAttentionQueue(): Promise<AttentionQueue> {
+  const result = await runFluncleJson<AttentionResponse>(["admin", "queue", "--json"]);
+
+  return result.attention;
 }
 
 export function parseSpotifyTrackInput(input: string): string | undefined {

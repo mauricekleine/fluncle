@@ -207,6 +207,11 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // The autonomous render box links its own cut + sets video_url — agent tier
   // (adminAuth only, no operatorGuard); the box's agent token publishes its renders.
   finalize_track_video: "admin",
+  // The `/admin` attention-queue digest read — admin tier (adminAuth only, no
+  // operatorGuard), the list_*_admin precedent: it composes the same admin-tier reads
+  // the snapshot draws from and publishes nothing, so the operator's CLI + Raycast
+  // menu bar (and the box) read it with the agent token.
+  get_attention: "admin",
   // The built clip caption read — admin tier (agent-allowed), the list_clips precedent:
   // a read the clip-card UI + the box can both consume.
   get_clip_caption: "admin",

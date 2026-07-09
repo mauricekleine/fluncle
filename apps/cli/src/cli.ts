@@ -481,6 +481,19 @@ function addAdminCommands(program: Command): void {
       admin.outputHelp();
     });
 
+  // `get_attention` → `admin queue` (Convention B: a bare admin verb for the operator's
+  // own read). The `/admin` attention queue + the day's dispatch, off the Worker — the
+  // same digest the Raycast menu-bar command reads. Distinct from `admin tracks queue`
+  // (the video render queue).
+  admin
+    .command("queue")
+    .description("The attention queue: what's waiting, and the day's dispatch")
+    .option("--json", "Print JSON", false)
+    .action(async (options: JsonOptions) => {
+      const { attentionQueueCommand } = await import("./commands/admin-attention");
+      await runAdminAttention(options, attentionQueueCommand);
+    });
+
   // Convention B: the admin CLI is `group noun-verb` with PLURAL groups. The canonical
   // track group is `tracks`. A verb's worklist is a `--queue` view flag on the verb
   // itself (`tracks enrich --queue`, `tracks observe --queue`, `tracks context
@@ -3008,6 +3021,21 @@ async function runAdminTracksList(
   const noun = tracks.length === 1 ? "finding" : "findings";
   console.log(`${tracks.length} ${noun}${scope}:`);
   console.log(trackRows(tracks).join("\n"));
+}
+
+async function runAdminAttention(
+  options: JsonOptions,
+  attentionQueueCommand: typeof import("./commands/admin-attention").attentionQueueCommand,
+): Promise<void> {
+  const queue = await attentionQueueCommand();
+
+  if (options.json) {
+    printJson({ attention: queue, ok: true });
+    return;
+  }
+
+  const { attentionQueueLines } = await import("./commands/admin-attention");
+  console.log(attentionQueueLines(queue).join("\n"));
 }
 
 async function runAdminQueue(

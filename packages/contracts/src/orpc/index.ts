@@ -22,6 +22,7 @@
 // live route; resources are plural, the op noun stays singular.
 
 import { adminArtistsContract } from "./admin-artists";
+import { adminAttentionContract } from "./admin-attention";
 import { adminBackfillsContract } from "./admin-backfills";
 import { adminCostsContract } from "./admin-costs";
 import { artistsContract } from "./artists";
@@ -63,6 +64,13 @@ export {
   resolveArtist,
   ResolvedSocialSchema,
 } from "./admin-artists";
+export {
+  AttentionQueueSchema,
+  AttentionRowSchema,
+  AttentionSourceCountSchema,
+  AttentionSourceSchema,
+  getAttention,
+} from "./admin-attention";
 export { backfillDiscogs, backfillLastfm } from "./admin-backfills";
 export { adminMigrationsContract, migratePreviewArchive } from "./admin-migrations";
 export { type CostEventInput, CostEventInputSchema, recordCost } from "./admin-costs";
@@ -188,6 +196,7 @@ export {
  */
 export const contract = {
   ...adminArtistsContract,
+  ...adminAttentionContract,
   ...adminBackfillsContract,
   ...adminCostsContract,
   ...artistsContract,
