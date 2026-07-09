@@ -34,3 +34,5 @@ never writes to them directly.
 | ----- | ------ | --- | -------- | ------- | ------------ | ------ | --- |
 
 <!-- The auditor appends rows below this line. Newest run on top. -->
+
+| 2026-07-09 | design | low | `apps/web/src/styles.css:237` | The `.cover-story-badge` (the play badge on the homepage story-ring cover) carries a genuine dark neutral-black drop-shadow for depth — `box-shadow: 0 4px 10px -3px rgb(0 0 0 / 0.6)` — the only dark-elevation shadow in the whole public surface. DESIGN.md §4 (One Pane / Through-the-Glass) bans box-shadows for elevation (depth is translucency over the fixed backdrop), and the neutral black tint leans against the Warm Dark Rule. Its sibling `.cover-story` already uses the gold-glow idiom instead. | Judgment call — a designer may want to keep the drop-shadow as the Instagram-story play-badge affordance. If tightening: swap to the gold-glow bloom idiom (`color-mix(… var(--eclipse-gold) …)`) the `.cover-story` ring already uses, or at minimum warm the shadow tint off pure black. | open | audit/20260709-design |

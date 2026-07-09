@@ -156,7 +156,10 @@ function StepSection({ steps }: { steps: CostInsights["steps"] }) {
                 <p className="text-xs text-muted-foreground tabular-nums">
                   {step.eventCount} {step.eventCount === 1 ? "event" : "events"}
                   {step.unpricedCount > 0 ? (
-                    <span className="text-[#ffd057]"> · {step.unpricedCount} unpriced</span>
+                    <span className="text-[var(--eclipse-glow)]">
+                      {" "}
+                      · {step.unpricedCount} unpriced
+                    </span>
                   ) : null}
                 </p>
               </div>
