@@ -328,7 +328,7 @@ function StatusIndicator({ status }: { status: ServiceHealthStatus | null }) {
 
   if (status === "degraded") {
     return (
-      <Badge className="shrink-0 border-transparent bg-[#ffd057]/15 text-[#ffd057]">
+      <Badge className="shrink-0 border-transparent bg-[var(--eclipse-glow)]/15 text-[var(--eclipse-glow)]">
         {STATUS_LABEL.degraded}
       </Badge>
     );

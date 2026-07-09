@@ -7,9 +7,13 @@ import { Popover, PopoverContent, PopoverTrigger } from "fumadocs-ui/components/
 import { MarkdownCopyButton } from "fumadocs-ui/layouts/docs/page";
 // Chrome glyphs from the app's icon set (@phosphor-icons/react), not lucide —
 // lucide isn't a direct dependency here, and Phosphor already voices every other
-// control. The brand marks (OpenAI/Anthropic/Cursor) stay inline SVG below.
+// control. Brand marks quote the official simple-icons glyph via BrandIcon
+// (DESIGN.md Iconography — never a hand-redraw); only OpenAI stays inline below,
+// as simple-icons delisted it (no siOpenai/siChatgpt in the package).
 import { ArrowSquareOutIcon, CaretDownIcon, FileTextIcon } from "@phosphor-icons/react";
 import { type ReactNode } from "react";
+import { siAnthropic, siCursor } from "simple-icons";
+import { BrandIcon } from "@/components/brand-icon";
 import { cn } from "@/lib/utils";
 
 // The per-page "Copy page / LLM" affordance, on every docs page. Fumadocs 16
@@ -55,22 +59,12 @@ function useOpenItems(markdownUrl: string): OpenItem[] {
     },
     {
       href: `https://claude.ai/new?${new URLSearchParams({ q })}`,
-      icon: (
-        <svg fill="currentColor" role="img" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-          <title>Anthropic</title>
-          <path d="M17.3 3.54h-3.67l6.7 16.92H24Zm-10.61 0L0 20.46h3.74l1.37-3.55h7.01l1.37 3.55h3.74L10.54 3.54Zm-0.37 10.22 2.29-5.95 2.29 5.95Z" />
-        </svg>
-      ),
+      icon: <BrandIcon icon={siAnthropic} />,
       title: "Open in Claude",
     },
     {
       href: `https://cursor.com/link/prompt?${new URLSearchParams({ text: q })}`,
-      icon: (
-        <svg fill="currentColor" role="img" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-          <title>Cursor</title>
-          <path d="M11.503.131 1.891 5.678a.84.84 0 0 0-.42.726v11.188c0 .3.162.575.42.724l9.609 5.55a1 1 0 0 0 .998 0l9.61-5.55a.84.84 0 0 0 .42-.724V6.404a.84.84 0 0 0-.42-.726L12.497.131a1.01 1.01 0 0 0-.996 0M2.657 6.338h18.55c.263 0 .43.287.297.515L12.23 22.918c-.062.107-.229.064-.229-.06V12.335a.59.59 0 0 0-.295-.51l-9.11-5.257c-.109-.063-.064-.23.061-.23" />
-        </svg>
-      ),
+      icon: <BrandIcon icon={siCursor} />,
       title: "Open in Cursor",
     },
   ];

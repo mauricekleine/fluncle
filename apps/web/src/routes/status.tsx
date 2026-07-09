@@ -226,7 +226,7 @@ function StatusIndicator({ status }: { status: ServiceHealthStatus }) {
     // Eclipse Glow as a caution chip (the design system carries no amber badge
     // variant, so the token is applied inline, dark-only by construction).
     return (
-      <Badge className="border-transparent bg-[#ffd057]/15 text-[#ffd057]">
+      <Badge className="border-transparent bg-[var(--eclipse-glow)]/15 text-[var(--eclipse-glow)]">
         {STATUS_LABEL.degraded}
       </Badge>
     );
@@ -305,7 +305,7 @@ function tickClass(status: ServiceHealthStatus | null): string {
     return "bg-destructive";
   }
   if (status === "degraded") {
-    return "bg-[#ffd057]";
+    return "bg-[var(--eclipse-glow)]";
   }
   if (status === "ok") {
     return "bg-muted-foreground/35";
