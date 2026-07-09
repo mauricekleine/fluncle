@@ -2,10 +2,20 @@
 //
 // Resolves an artist's cross-platform social identity into `artist_socials` rows:
 //
-//   1. MusicBrainz (primary): ISRC → MB recording → artist-credit MBID →
-//      /ws/2/artist/<mbid>?inc=url-rels → classify by host. MB url-rels are
-//      human-curated → status="auto" (trusted). Also stamps `artists.mbid` +
-//      `artists.wikidata_qid`.
+//   1. MusicBrainz (primary): a NAME search — /ws/2/artist?query=artist:"<name>" —
+//      cross-referenced against the artist's stored Spotify id. Each top candidate's
+//      /ws/2/artist/<mbid>?inc=url-rels is deep-fetched; the candidate whose Spotify
+//      url-rel id equals ours is the definitive identity match (accepted even over a
+//      higher-scored candidate). A candidate whose Spotify rel DIFFERS is a namesake
+//      and is rejected. Only when NO candidate exposes any Spotify rel to cross-check
+//      do we fall back to a name+score match; otherwise the artist stays unresolved
+//      rather than resolve to a namesake. The matched MBID's url-rels are classified
+//      by host. MB url-rels are human-curated → status="auto" (trusted). Also stamps
+//      `artists.mbid` + `artists.wikidata_qid`.
+//
+//      (ISRC-based MBID lookup was retired: DnB ISRCs are frequently absent from MB's
+//      index and the walk landed on empty/wrong MBIDs, resolving most artists to 0–1
+//      links. Name-search + Spotify cross-reference is the correct, durable identity.)
 //
 //   2. Firecrawl /v2/extract (gap-fill): TikTok + missing YouTube only.
 //      Uses the Worker-held FIRECRAWL_API_KEY. Gap-fill rows → status="candidate".
@@ -80,19 +90,14 @@ export type ArtistSocialPlatform =
 
 // ── MB types ─────────────────────────────────────────────────────────────────
 
-type MbArtistCredit = {
-  artist?: { id?: string; name?: string };
-  name?: string;
-};
-
-type MbRecordingForIsrc = {
+type MbArtistSearchCandidate = {
   id?: string;
-  title?: string;
-  "artist-credit"?: MbArtistCredit[];
+  name?: string;
+  score?: number;
 };
 
-type MbIsrcResponse = {
-  recordings?: MbRecordingForIsrc[];
+type MbArtistSearchResponse = {
+  artists?: MbArtistSearchCandidate[];
   error?: unknown;
 };
 
@@ -438,87 +443,77 @@ function mbNameMatch(mbName: string, artistName: string): boolean {
   return normalize(mbName) === normalize(artistName);
 }
 
-// ── MB artist resolution ──────────────────────────────────────────────────────
-
-type MbResolution = {
-  mbid: string | null;
-  wikidataQid: string | null;
-  socials: ResolvedSocial[];
-  rateLimited: boolean;
-};
+// ── Lucene / Spotify-id helpers (for the name search + cross-reference) ────────
 
 /**
- * Walk ISRC → MB recording → artist-credit → /ws/2/artist/<mbid>?inc=url-rels,
- * classify each url-rel, and return the resolved socials + KG anchors.
- *
- * Tries each ISRC until the artist MBID is found (typically one hit). The MB walk
- * is throttled at 1 req/s (per-isolate serial gate).
+ * Escape the two characters (`\` and `"`) that are special INSIDE a Lucene quoted
+ * phrase, so an artist name can be sent as `artist:"<escaped>"` without breaking the
+ * query or splitting on spaces. The whole phrase is quoted, so term-level specials
+ * (`+ - && || ! ( ) …`) are inert and need no escaping.
  */
-export async function resolveArtistViaMb(
-  artistName: string,
-  isrcs: string[],
-): Promise<MbResolution> {
-  let mbid: string | null = null;
-  let overallRateLimited = false;
+export function luceneEscapePhrase(value: string): string {
+  return value.replace(/[\\"]/g, "\\$&");
+}
 
-  // Walk each ISRC until we find the artist's MBID.
-  for (const isrc of isrcs) {
-    if (mbid) {
-      break;
+/**
+ * Extract the Spotify artist id from an `open.spotify.com/artist/<id>` URL, or null
+ * if the URL isn't a Spotify artist URL. Used to cross-check an MB name-search
+ * candidate's identity against the Fluncle artist's stored `spotify_artist_id`.
+ */
+export function parseSpotifyArtistId(rawUrl: string): string | null {
+  try {
+    const u = new URL(rawUrl);
+
+    if (u.hostname.replace(/^www\./, "") !== "open.spotify.com") {
+      return null;
     }
 
-    const isrcResult = await mbFetch<MbIsrcResponse>(
-      `/isrc/${encodeURIComponent(isrc)}?inc=artist-credits`,
-    );
+    const match = u.pathname.match(/\/artist\/([A-Za-z0-9]+)/);
 
-    if (isrcResult.rateLimited) {
-      overallRateLimited = true;
-      break;
-    }
+    return match?.[1] ?? null;
+  } catch {
+    return null;
+  }
+}
 
-    const isrcData = isrcResult.data;
+/** Find the Spotify artist id among an MB artist's url-rels (null if none present). */
+function spotifyArtistIdFromRelations(relations?: MbUrlRel[]): string | null {
+  for (const relation of relations ?? []) {
+    const resource = relation.url?.resource;
 
-    if (!isrcData || isrcData.error || !Array.isArray(isrcData.recordings)) {
+    if (!resource) {
       continue;
     }
 
-    // Find the artist in the recording's artist-credits by name match.
-    for (const recording of isrcData.recordings) {
-      if (mbid) {
-        break;
-      }
+    const id = parseSpotifyArtistId(resource);
 
-      for (const credit of recording["artist-credit"] ?? []) {
-        const artistId = credit.artist?.id;
-        const mbArtistName = credit.artist?.name ?? credit.name ?? "";
-
-        if (artistId && mbNameMatch(mbArtistName, artistName)) {
-          mbid = artistId;
-          break;
-        }
-      }
+    if (id) {
+      return id;
     }
   }
 
-  if (!mbid) {
-    return { mbid: null, rateLimited: overallRateLimited, socials: [], wikidataQid: null };
-  }
+  return null;
+}
 
-  // Fetch the artist's url-rels from MB.
-  const artistResult = await mbFetch<MbArtistResponse>(
-    `/artist/${encodeURIComponent(mbid)}?inc=url-rels`,
-  );
+// The MB search `score` (0–100) a name-only candidate must clear to be accepted when
+// NO candidate exposed a Spotify url-rel to cross-check against. Paired with an exact
+// name match, this biases hard toward correctness — a wrong social link on a public
+// artist page is worse than a missing one.
+const NAME_SEARCH_SCORE_THRESHOLD = 90;
 
-  if (artistResult.rateLimited) {
-    return { mbid, rateLimited: true, socials: [], wikidataQid: null };
-  }
+// How many name-search hits MB returns, and how many of the top ones we deep-fetch
+// url-rels for (each deep-fetch is 1 req/s under MB's limit). Name search is now the
+// primary — not a fallback — so we examine the full returned set to give the Spotify
+// cross-reference the best chance of finding the identity match.
+const NAME_SEARCH_LIMIT = 5;
+const NAME_SEARCH_MAX_DEEP_FETCH = 5;
 
-  const artistData = artistResult.data;
+// ── URL-rel classification ────────────────────────────────────────────────────
 
-  if (!artistData || artistData.error) {
-    return { mbid, rateLimited: false, socials: [], wikidataQid: null };
-  }
-
+/** Classify an MB artist's url-rels into resolved socials + the Wikidata QID. */
+async function extractSocialsFromArtistData(
+  artistData: MbArtistResponse,
+): Promise<{ socials: ResolvedSocial[]; wikidataQid: string | null }> {
   const socials: ResolvedSocial[] = [];
   let wikidataQid: string | null = null;
 
@@ -558,7 +553,136 @@ export async function resolveArtistViaMb(
     }
   }
 
-  return { mbid, rateLimited: false, socials, wikidataQid };
+  return { socials, wikidataQid };
+}
+
+// ── MB artist resolution (name search + Spotify cross-reference) ───────────────
+
+type MbResolution = {
+  mbid: string | null;
+  wikidataQid: string | null;
+  socials: ResolvedSocial[];
+  rateLimited: boolean;
+};
+
+function emptyResolution(mbid: string | null, rateLimited: boolean): MbResolution {
+  return { mbid, rateLimited, socials: [], wikidataQid: null };
+}
+
+/**
+ * Resolve an artist's socials + KG anchors via MusicBrainz, name-search primary:
+ *
+ *   1. Search MB by artist NAME: /ws/2/artist?query=artist:"<lucene-escaped>".
+ *   2. Deep-fetch each top candidate's `inc=url-rels`.
+ *   3. Definitive match (auto): a candidate whose Spotify url-rel id === the stored
+ *      `spotify_artist_id` is our artist — accept it immediately, even over a
+ *      higher-scored candidate. Identity confirmed.
+ *   4. Namesake reject: a candidate whose Spotify rel is present but DIFFERS is a
+ *      different artist — never accept it.
+ *   5. Soft fallback: only when NO candidate exposed ANY Spotify rel to cross-check
+ *      against, accept the top candidate on a strong MB `score` (≥ threshold) plus an
+ *      exact normalized name match. Otherwise stay unresolved rather than resolve to a
+ *      namesake — the downstream Firecrawl gap-fill / operator review takes it.
+ *
+ * The matched MBID's url-rels are classified into socials. The whole walk is throttled
+ * at 1 req/s (per-isolate serial gate). ISRC-based MBID lookup was retired (see header).
+ */
+export async function resolveArtistViaMb(
+  artistName: string,
+  spotifyArtistId: string | null,
+): Promise<MbResolution> {
+  const trimmedName = artistName.trim();
+
+  if (!trimmedName) {
+    return emptyResolution(null, false);
+  }
+
+  const query = `artist:"${luceneEscapePhrase(trimmedName)}"`;
+  const searchResult = await mbFetch<MbArtistSearchResponse>(
+    `/artist?query=${encodeURIComponent(query)}&limit=${NAME_SEARCH_LIMIT}`,
+  );
+
+  if (searchResult.rateLimited) {
+    return emptyResolution(null, true);
+  }
+
+  const candidates = searchResult.data?.artists;
+
+  if (searchResult.data?.error || !Array.isArray(candidates) || candidates.length === 0) {
+    return emptyResolution(null, false);
+  }
+
+  const deepFetchCount = Math.min(candidates.length, NAME_SEARCH_MAX_DEEP_FETCH);
+
+  // Whether any examined candidate carried a Spotify url-rel at all. If one did and none
+  // matched ours, we're in namesake territory (MB tracks Spotify for this name-space and
+  // our id isn't among the hits) → disable the soft name+score fallback: better a miss.
+  let anyCandidateHadSpotifyRel = false;
+
+  // The best-scored candidate we could examine that had NO Spotify rel — the only kind
+  // eligible for the soft fallback. First (highest-scored) one wins.
+  let fallbackCandidate: MbArtistSearchCandidate | null = null;
+  let fallbackData: MbArtistResponse | null = null;
+
+  for (let i = 0; i < deepFetchCount; i += 1) {
+    const candidate = candidates[i];
+    const candidateId = candidate?.id;
+
+    if (!candidateId) {
+      continue;
+    }
+
+    const artistResult = await mbFetch<MbArtistResponse>(
+      `/artist/${encodeURIComponent(candidateId)}?inc=url-rels`,
+    );
+
+    if (artistResult.rateLimited) {
+      return emptyResolution(null, true);
+    }
+
+    const artistData = artistResult.data;
+
+    if (!artistData || artistData.error) {
+      continue;
+    }
+
+    const candidateSpotifyId = spotifyArtistIdFromRelations(artistData.relations);
+
+    // (3) Definitive identity match — accept immediately, even over a higher score.
+    if (spotifyArtistId && candidateSpotifyId && candidateSpotifyId === spotifyArtistId) {
+      const { socials, wikidataQid } = await extractSocialsFromArtistData(artistData);
+
+      return { mbid: candidateId, rateLimited: false, socials, wikidataQid };
+    }
+
+    // (4) Candidate carries a Spotify rel we could check and it didn't match → namesake.
+    // Record that a cross-check signal existed; never let it become the soft fallback.
+    if (candidateSpotifyId) {
+      anyCandidateHadSpotifyRel = true;
+      continue;
+    }
+
+    // (5) No Spotify rel on this candidate — eligible for the soft name+score fallback.
+    // Keep the first (highest-scored) qualifier; keep looping for a possible (3) match.
+    if (
+      fallbackCandidate === null &&
+      (candidate?.score ?? 0) >= NAME_SEARCH_SCORE_THRESHOLD &&
+      mbNameMatch(candidate?.name ?? "", trimmedName)
+    ) {
+      fallbackCandidate = candidate;
+      fallbackData = artistData;
+    }
+  }
+
+  // No definitive match. Only take the soft fallback when NOTHING gave us a Spotify rel
+  // to cross-check — otherwise a namesake would slip through on name+score alone.
+  if (!anyCandidateHadSpotifyRel && fallbackCandidate?.id && fallbackData) {
+    const { socials, wikidataQid } = await extractSocialsFromArtistData(fallbackData);
+
+    return { mbid: fallbackCandidate.id, rateLimited: false, socials, wikidataQid };
+  }
+
+  return emptyResolution(null, false);
 }
 
 // ── Firecrawl gap-fill ────────────────────────────────────────────────────────
@@ -687,18 +811,15 @@ type ArtistRow = {
   resolved_at: string | null;
 };
 
-type IsrcRow = {
-  isrc: string;
-};
-
 type ExistingSocialRow = {
   platform: string;
 };
 
-/** Fetch an artist + their track ISRCs for the MB walk. */
-async function fetchArtistAndIsrcs(
-  artistId: string,
-): Promise<{ artist: ArtistRow; isrcs: string[] } | null> {
+/**
+ * Fetch an artist for the MB name search. Its `spotify_artist_id` is the identity the
+ * name-search cross-reference matches against; `spotify_url` seeds the Firecrawl gap-fill.
+ */
+async function fetchArtist(artistId: string): Promise<ArtistRow | null> {
   const db = await getDb();
 
   const artistResult = await db.execute({
@@ -707,27 +828,7 @@ async function fetchArtistAndIsrcs(
           from artists where id = ? limit 1`,
   });
 
-  const artist = typedRow<ArtistRow>(artistResult.rows);
-
-  if (!artist) {
-    return null;
-  }
-
-  const isrcResult = await db.execute({
-    args: [artistId],
-    sql: `select distinct t.isrc, t.added_at
-          from track_artists ta
-          join tracks t on t.track_id = ta.track_id
-          where ta.artist_id = ? and t.isrc is not null
-          order by t.added_at asc
-          limit 20`,
-  });
-
-  const isrcs = typedRows<IsrcRow>(isrcResult.rows)
-    .map((r) => r.isrc)
-    .filter((isrc): isrc is string => Boolean(isrc));
-
-  return { artist, isrcs };
+  return typedRow<ArtistRow>(artistResult.rows) ?? null;
 }
 
 /** Fetch the platforms already resolved for an artist (to skip in Firecrawl gap-fill). */
@@ -810,22 +911,21 @@ async function persistResolution(
 
 /**
  * Resolve an artist's cross-platform social identity by artistId. Runs the MB
- * walk then the Firecrawl gap-fill, persists results, and returns a summary.
+ * name search (cross-referenced by Spotify id) then the Firecrawl gap-fill,
+ * persists results, and returns a summary.
  *
  * This is the Worker-side logic behind the `resolve_artist` oRPC op. The box's
  * `fluncle-artist-sweep` cron drives it per unresolved artist via the CLI.
  */
 export async function resolveArtist(artistId: string): Promise<ArtistResolutionResult> {
-  const record = await fetchArtistAndIsrcs(artistId);
+  const artist = await fetchArtist(artistId);
 
-  if (!record) {
+  if (!artist) {
     throw new Error(`Artist not found: ${artistId}`);
   }
 
-  const { artist, isrcs } = record;
-
-  // ── 1. MusicBrainz walk ────────────────────────────────────────────────────
-  const mbResult = await resolveArtistViaMb(artist.name, isrcs);
+  // ── 1. MusicBrainz name search + Spotify-id cross-reference ────────────────
+  const mbResult = await resolveArtistViaMb(artist.name, artist.spotify_artist_id);
 
   // ── 2. Firecrawl gap-fill (TikTok + missing YouTube only) ─────────────────
   const existingPlatforms = await fetchExistingPlatforms(artistId);
@@ -886,9 +986,19 @@ type UnresolvedArtistRow = {
   name: string;
 };
 
+// A finished-but-empty artist (resolved_at stamped, zero socials) is re-queued once
+// its stamp is older than this — so a transient MB failure (a 503 window, a namesake we
+// couldn't yet disambiguate, an artist MB has since gained a Spotify rel for) self-heals
+// on the next sweep instead of sticking on 0 socials forever. Artists that DO have
+// socials are never re-queued; a genuinely social-less artist re-tries at most once per
+// window.
+const STALE_EMPTY_RETRY_DAYS = 30;
+
 /**
- * Fetch a bounded page of artists with `resolved_at IS NULL` — the sweep's
- * worklist. Cursor-paged by artist id (same opaque convention as the backfills).
+ * Fetch a bounded page of artists the sweep should (re)resolve — the worklist.
+ * Includes both the never-resolved (`resolved_at IS NULL`) and the self-healing set:
+ * artists resolved to ZERO socials whose stamp is older than `STALE_EMPTY_RETRY_DAYS`.
+ * Cursor-paged by artist id (same opaque convention as the backfills).
  */
 export async function listUnresolvedArtists(
   limit: number,
@@ -897,14 +1007,27 @@ export async function listUnresolvedArtists(
   const db = await getDb();
   const batchLimit = Math.min(Math.max(1, limit), 50);
 
+  const staleBefore = new Date(
+    Date.now() - STALE_EMPTY_RETRY_DAYS * 24 * 60 * 60 * 1000,
+  ).toISOString();
+
+  // Eligible = never resolved, OR resolved-but-empty and stale (0 socials + old stamp).
+  const eligible = `(
+    resolved_at is null
+    or (
+      resolved_at < ?
+      and id not in (select distinct artist_id from artist_socials)
+    )
+  )`;
+
   const rows = typedRows<UnresolvedArtistRow>(
     (
       await db.execute({
-        args: cursor ? [cursor, batchLimit] : [batchLimit],
+        args: cursor ? [staleBefore, cursor, batchLimit] : [staleBefore, batchLimit],
         sql: cursor
-          ? `select id, name from artists where resolved_at is null and id > ?
+          ? `select id, name from artists where ${eligible} and id > ?
              order by id asc limit ?`
-          : `select id, name from artists where resolved_at is null
+          : `select id, name from artists where ${eligible}
              order by id asc limit ?`,
       })
     ).rows,
