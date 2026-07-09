@@ -36,8 +36,7 @@
     "test": "turbo run test",
     "prepare": "command -v husky > /dev/null 2>&1 && husky || true",
     "typecheck": "turbo run typecheck",
-    "doctor": "npx react-doctor@latest",
-    "jobs:html": "bun scripts/admin-jobs-html.ts"
+    "doctor": "npx react-doctor@latest"
   },
   "devDependencies": {
     "@types/bun": "catalog:",
