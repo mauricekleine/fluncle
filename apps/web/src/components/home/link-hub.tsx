@@ -170,9 +170,14 @@ export function HomeLinkHub() {
           the dev-surface row, and the live status pill. */}
       <div className="mt-auto flex flex-col items-center gap-3 pt-8">
         <SectionHeader>Follow Fluncle</SectionHeader>
+        {/* Nine icons must fit the narrowest columns this row lives in — 280px on
+            desktop (the grid caps the aside at minmax(240px,280px)) and 264px on a
+            320px phone: size-7 buttons at gap-px total 260px, one line everywhere,
+            with flex-wrap as the never-clip fallback below that — 28px stays above
+            the WCAG 2.5.8 24px target minimum. */}
         <nav
           aria-label="Fluncle on other platforms"
-          className="flex items-center justify-center gap-0.5"
+          className="flex flex-wrap items-center justify-center gap-px"
         >
           {socialLinks.map((social) => (
             <Tooltip key={social.label}>
@@ -180,7 +185,7 @@ export function HomeLinkHub() {
                 render={
                   <Button
                     aria-label={social.label}
-                    className="text-muted-foreground size-8"
+                    className="text-muted-foreground size-7"
                     nativeButton={false}
                     render={
                       <a
@@ -195,7 +200,7 @@ export function HomeLinkHub() {
                   />
                 }
               >
-                <BrandIcon className="size-4 md:size-4.5" icon={social.icon} />
+                <BrandIcon className="size-4" icon={social.icon} />
               </TooltipTrigger>
               <TooltipContent>{social.label}</TooltipContent>
             </Tooltip>
