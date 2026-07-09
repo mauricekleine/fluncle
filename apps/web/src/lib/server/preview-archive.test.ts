@@ -1,6 +1,11 @@
+import { readFile } from "node:fs/promises";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { archivePreviewForTrack, buildPreviewArchiveKey } from "./preview-archive";
 import { listTracks } from "./tracks";
+
+async function source(path: string): Promise<string> {
+  return readFile(new URL(path, import.meta.url), "utf8");
+}
 
 const execute = vi.hoisted(() => vi.fn());
 
@@ -15,20 +20,30 @@ describe("preview archive helpers", () => {
     execute.mockReset();
   });
 
-  it("builds a less obvious Log-ID-based operator-only archive path", async () => {
-    const key = await buildPreviewArchiveKey({
-      bytes: Uint8Array.from([1, 2, 3]).buffer,
-      logId: "011.6.8K",
-      mime: "audio/mpeg",
-    });
-
-    expect(key).toMatch(/^analysis\/previews\/011\.6\.8K\/[a-f0-9]{64}\.mp3$/);
+  it("builds a stable per-finding key beside the full song, no content hash", () => {
+    expect(buildPreviewArchiveKey({ logId: "011.6.8K", mime: "audio/mpeg" })).toBe(
+      "011.6.8K/preview.mp3",
+    );
+    // A changed source MIME lands the preview at a different extension under the
+    // same finding folder (the sibling sweep cleans up the previous one on write).
+    expect(buildPreviewArchiveKey({ logId: "011.6.8K", mime: "audio/mp4" })).toBe(
+      "011.6.8K/preview.m4a",
+    );
   });
 
-  it("stores metadata without bumping public updated_at", async () => {
+  it("stores metadata without bumping public updated_at and sweeps stale siblings", async () => {
     const writes: Array<{ args: unknown[]; sql: string }> = [];
+    const puts: string[] = [];
+    const deletes: string[] = [];
     const bucket = {
-      put: async () => ({ etag: "etag", httpEtag: '"etag"', key: "key", size: 3 }),
+      delete: async (key: string) => {
+        deletes.push(key);
+      },
+      put: async (key: string) => {
+        puts.push(key);
+
+        return { etag: "etag", httpEtag: '"etag"', key, size: 3 };
+      },
     };
     const db = {
       execute: async (query: { args: unknown[]; sql: string }) => {
@@ -52,11 +67,33 @@ describe("preview archive helpers", () => {
 
     expect(archive).toMatchObject({
       archivedAt: "2026-06-11T10:00:00.000Z",
+      key: "011.6.8K/preview.mp3",
       mime: "audio/mpeg",
       source: "deezer:isrc",
     });
+    // The preview lands at the stable per-finding key.
+    expect(puts).toEqual(["011.6.8K/preview.mp3"]);
+    // Every other-extension sibling for this finding is deleted — never the one we
+    // just wrote.
+    expect(deletes.sort()).toEqual([
+      "011.6.8K/preview.aac",
+      "011.6.8K/preview.bin",
+      "011.6.8K/preview.m4a",
+    ]);
+    expect(deletes).not.toContain("011.6.8K/preview.mp3");
     expect(writes[0]?.sql).toContain("preview_archive_key");
     expect(writes[0]?.sql).not.toContain("updated_at");
+  });
+
+  it("never targets the public fluncle-videos bucket / VIDEOS binding", async () => {
+    // fluncle-videos is world-served at found.fluncle.com; the 30s preview archive
+    // must land in the PRIVATE fluncle-source-audio bucket. This mirrors the box
+    // sweep scripts' "never fluncle-videos" guard (docs/agents/hermes/scripts/*).
+    const route = await source("../../routes/api/admin/tracks.$trackId.preview.ts");
+    const archiveCall = route.slice(route.indexOf("archivePreviewForTrack({"));
+
+    expect(archiveCall).toContain("bucket: env.SOURCE_AUDIO");
+    expect(archiveCall).not.toContain("env.VIDEOS");
   });
 
   it("rejects archive uploads for tracks without a Log ID", async () => {

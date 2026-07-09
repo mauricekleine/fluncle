@@ -1,5 +1,4 @@
 import { getDb, typedRow } from "./db";
-import { sha256Hex } from "./hash";
 import { ApiError } from "./spotify";
 
 type PreviewArchiveTrack = {
@@ -8,7 +7,7 @@ type PreviewArchiveTrack = {
 };
 
 export type PreviewArchiveInput = {
-  bucket: Pick<R2Bucket, "put">;
+  bucket: Pick<R2Bucket, "delete" | "put">;
   bytes: ArrayBuffer;
   mime: string;
   now?: Date;
@@ -40,6 +39,12 @@ const mimeToExtension: Record<string, string> = {
   "audio/mpeg": "mp3",
   "audio/x-m4a": "m4a",
 };
+
+// Every extension the archive can write. When a re-archive changes the extension
+// (e.g. an mp3 replaced by an m4a), the `<logId>/preview.<ext>` key overwrites in
+// place for the SAME extension but strands the old sibling — so after a successful
+// put we sweep the other-extension siblings for this finding.
+const knownPreviewExtensions = ["aac", "bin", "m4a", "mp3"] as const;
 
 function normalizePreviewMime(value: string): string | undefined {
   const mime = value.split(";")[0]?.trim().toLowerCase();
@@ -73,19 +78,14 @@ function previewExtensionForMime(mime: string): string {
   return mimeToExtension[normalized] ?? "bin";
 }
 
-export async function buildPreviewArchiveKey({
-  bytes,
-  logId,
-  mime,
-}: {
-  bytes: ArrayBuffer;
-  logId: string;
-  mime: string;
-}): Promise<string> {
-  const hash = await sha256Hex(bytes);
+// The archived preview lives beside the finding's full song in the PRIVATE
+// source-audio bucket, at a stable per-finding key. `preview` cannot collide with
+// a full-song filename (a 64-hex sha256), and dropping the content hash means a
+// re-archive overwrites in place instead of orphaning the previous object.
+export function buildPreviewArchiveKey({ logId, mime }: { logId: string; mime: string }): string {
   const extension = previewExtensionForMime(mime);
 
-  return `analysis/previews/${logId}/${hash}.${extension}`;
+  return `${logId}/preview.${extension}`;
 }
 
 export async function archivePreviewForTrack(
@@ -119,12 +119,23 @@ export async function archivePreviewForTrack(
     throw new ApiError("empty_preview", "preview archive upload was empty", 400);
   }
 
-  const key = await buildPreviewArchiveKey({ bytes: input.bytes, logId, mime });
+  const key = buildPreviewArchiveKey({ logId, mime });
+  const extension = previewExtensionForMime(mime);
   const archivedAt = (input.now ?? new Date()).toISOString();
 
   await input.bucket.put(key, input.bytes, {
     httpMetadata: { contentType: mime },
   });
+
+  // Sweep stale siblings: the key no longer carries a content hash, so a same-extension
+  // re-archive overwrites in place, but a changed extension would strand the old
+  // `<logId>/preview.<other-ext>` object. Delete every other-extension sibling for this
+  // finding after the successful put.
+  const staleSiblings = knownPreviewExtensions
+    .filter((ext) => ext !== extension)
+    .map((ext) => `${logId}/preview.${ext}`);
+
+  await Promise.all(staleSiblings.map((siblingKey) => input.bucket.delete(siblingKey)));
 
   // Operator-only archive metadata is internal analysis state. Do not bump
   // updated_at: public sitemap/log lastmod should reflect visible content only.
