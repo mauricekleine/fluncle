@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   __setRateLimitForTests,
   classifyMbUrl,
+  luceneEscapePhrase,
   normalizeProfileUrl,
+  parseSpotifyArtistId,
   resolveArtistViaMb,
   resolveGapViaFirecrawl,
 } from "@/lib/server/artist-resolution";
@@ -34,8 +36,7 @@ function mockFetch(routes: Array<{ match: string; body?: unknown; response?: Res
   return { calls, fetchMock };
 }
 
-const MB_ISRC = "musicbrainz.org/ws/2/isrc/";
-const MB_ARTIST = "musicbrainz.org/ws/2/artist/";
+const MB_ARTIST_SEARCH = "musicbrainz.org/ws/2/artist?query=";
 const FIRECRAWL = "api.firecrawl.dev/v2/extract";
 
 // ── classifyMbUrl ─────────────────────────────────────────────────────────────
@@ -182,9 +183,44 @@ describe("normalizeProfileUrl", () => {
   });
 });
 
-// ── resolveArtistViaMb ────────────────────────────────────────────────────────
+// ── luceneEscapePhrase / parseSpotifyArtistId (pure helpers) ───────────────────
 
-describe("resolveArtistViaMb (MB walk: ISRC → recording → artist MBID → url-rels)", () => {
+describe("luceneEscapePhrase", () => {
+  it("escapes backslash and double-quote (the phrase-internal specials)", () => {
+    expect(luceneEscapePhrase(`Simon "Shy FX"`)).toBe(`Simon \\"Shy FX\\"`);
+    expect(luceneEscapePhrase("A\\B")).toBe("A\\\\B");
+  });
+
+  it("leaves term-level specials untouched (inert inside a quoted phrase)", () => {
+    expect(luceneEscapePhrase("Sub Focus & Wilkinson")).toBe("Sub Focus & Wilkinson");
+    expect(luceneEscapePhrase("Camo + Krooked")).toBe("Camo + Krooked");
+  });
+});
+
+describe("parseSpotifyArtistId", () => {
+  it("extracts the artist id from an open.spotify.com artist URL", () => {
+    expect(parseSpotifyArtistId("https://open.spotify.com/artist/7miXLG9boDOGHJaEelSL7T")).toBe(
+      "7miXLG9boDOGHJaEelSL7T",
+    );
+    expect(
+      parseSpotifyArtistId("https://open.spotify.com/artist/7miXLG9boDOGHJaEelSL7T?si=abc"),
+    ).toBe("7miXLG9boDOGHJaEelSL7T");
+  });
+
+  it("returns null for non-Spotify or non-artist URLs", () => {
+    expect(parseSpotifyArtistId("https://open.spotify.com/track/abc")).toBeNull();
+    expect(parseSpotifyArtistId("https://soundcloud.com/artist")).toBeNull();
+    expect(parseSpotifyArtistId("not-a-url")).toBeNull();
+  });
+});
+
+// ── resolveArtistViaMb (name search primary + Spotify-URL cross-reference) ─────
+
+describe("resolveArtistViaMb (MB name search + Spotify cross-reference)", () => {
+  // The Andromedik / Freaks & Geeks Spotify ids from the validated live examples.
+  const ANDROMEDIK_SPOTIFY_ID = "7miXLG9boDOGHJaEelSL7T";
+  const FREAKS_SPOTIFY_ID = "6Qcn4TflUyLRoA6w44IQSU";
+
   beforeEach(() => {
     process.env.FIRECRAWL_API_KEY = "test-key";
     __setRateLimitForTests(0);
@@ -196,98 +232,307 @@ describe("resolveArtistViaMb (MB walk: ISRC → recording → artist MBID → ur
     delete process.env.FIRECRAWL_API_KEY;
   });
 
-  it("resolves an artist's socials via ISRC → MB recording → artist-credit → url-rels", async () => {
-    mockFetch([
+  it("resolves via name-search, confirmed by an exact Spotify-id identity match", async () => {
+    // Mirrors Andromedik: top hit score 100, 18 url-rels incl. our Spotify id.
+    const { calls } = mockFetch([
       {
-        body: {
-          recordings: [
-            {
-              "artist-credit": [{ artist: { id: "mb-artist-1", name: "Dimension" } }],
-              id: "rec-1",
-              title: "Soldier",
-            },
-          ],
-        },
-        match: MB_ISRC,
+        body: { artists: [{ id: "mb-andromedik", name: "Andromedik", score: 100 }] },
+        match: MB_ARTIST_SEARCH,
       },
       {
         body: {
-          id: "mb-artist-1",
-          name: "Dimension",
+          id: "mb-andromedik",
+          name: "Andromedik",
           relations: [
-            {
-              type: "soundcloud",
-              url: { resource: "https://soundcloud.com/dimensiondnb" },
-            },
-            {
-              type: "social network",
-              url: { resource: "https://www.instagram.com/dimensiondnb" },
-            },
-            {
-              url: { resource: "https://www.wikidata.org/wiki/Q123456" },
-            },
+            { url: { resource: `https://open.spotify.com/artist/${ANDROMEDIK_SPOTIFY_ID}` } },
+            { type: "soundcloud", url: { resource: "https://soundcloud.com/andromedikmusic" } },
+            { url: { resource: "https://www.wikidata.org/wiki/Q123456" } },
           ],
         },
-        match: MB_ARTIST,
+        match: "artist/mb-andromedik",
       },
     ]);
 
-    const result = await resolveArtistViaMb("Dimension", ["GB-ABC-12-00001"]);
+    const result = await resolveArtistViaMb("Andromedik", ANDROMEDIK_SPOTIFY_ID);
 
-    expect(result.mbid).toBe("mb-artist-1");
+    expect(result.mbid).toBe("mb-andromedik");
     expect(result.wikidataQid).toBe("Q123456");
     expect(result.rateLimited).toBe(false);
+    // A confirmed Spotify-id identity → the socials persist as trusted/public.
+    expect(result.mbSocialStatus).toBe("auto");
 
     const platforms = result.socials.map((s) => s.platform);
+    expect(platforms).toContain("spotify");
     expect(platforms).toContain("soundcloud");
-    expect(platforms).toContain("instagram");
 
-    // All MB-sourced socials must be status=auto (via source field).
+    // All MB-sourced socials must report source=musicbrainz (→ status=auto).
     for (const social of result.socials) {
       expect(social.source).toBe("musicbrainz");
     }
+
+    // Name search was the entry point; no ISRC endpoint is ever consulted.
+    expect(calls.some((c) => c.includes("artist?query="))).toBe(true);
+    expect(calls.some((c) => c.includes("/isrc/"))).toBe(false);
   });
 
-  it("returns empty when ISRC lookup finds no matching artist-credit by name", async () => {
-    mockFetch([
+  it("(a) accepts the Spotify-id match even over a HIGHER-scored earlier candidate", async () => {
+    // Mirrors Freaks & Geeks: the top-scored hit is the wrong/empty entry; the
+    // definitive identity is a lower-scored candidate carrying our Spotify id.
+    const { calls } = mockFetch([
       {
         body: {
-          recordings: [
-            {
-              "artist-credit": [{ artist: { id: "mb-other", name: "Totally Different Artist" } }],
-              id: "rec-1",
-              title: "Other Track",
-            },
+          artists: [
+            { id: "mb-wrong", name: "Freaks & Geeks", score: 100 },
+            { id: "mb-real", name: "Freaks & Geeks", score: 98 },
           ],
         },
-        match: MB_ISRC,
+        match: MB_ARTIST_SEARCH,
+      },
+      {
+        // Higher-scored candidate: empty/wrong entry, zero url-rels.
+        body: { id: "mb-wrong", name: "Freaks & Geeks", relations: [] },
+        match: "artist/mb-wrong",
+      },
+      {
+        body: {
+          id: "mb-real",
+          name: "Freaks & Geeks",
+          relations: [
+            { url: { resource: `https://open.spotify.com/artist/${FREAKS_SPOTIFY_ID}` } },
+            { type: "soundcloud", url: { resource: "https://soundcloud.com/freaksandgeeksdnb" } },
+          ],
+        },
+        match: "artist/mb-real",
       },
     ]);
 
-    const result = await resolveArtistViaMb("Dimension", ["GB-XYZ-99-00001"]);
+    const result = await resolveArtistViaMb("Freaks & Geeks", FREAKS_SPOTIFY_ID);
+
+    expect(result.mbid).toBe("mb-real");
+    expect(result.mbSocialStatus).toBe("auto");
+    expect(result.socials.map((s) => s.platform)).toContain("soundcloud");
+    // Both candidates were deep-fetched (the wrong one first, then the match).
+    expect(calls.some((c) => c.includes("artist/mb-wrong"))).toBe(true);
+    expect(calls.some((c) => c.includes("artist/mb-real"))).toBe(true);
+  });
+
+  it("(b) REJECTS a same-named namesake whose Spotify id differs → unresolved", async () => {
+    mockFetch([
+      {
+        body: { artists: [{ id: "mb-namesake", name: "Andromedik", score: 100 }] },
+        match: MB_ARTIST_SEARCH,
+      },
+      {
+        body: {
+          id: "mb-namesake",
+          name: "Andromedik",
+          relations: [
+            { url: { resource: "https://open.spotify.com/artist/SOME_OTHER_ARTIST_ID" } },
+            { url: { resource: "https://soundcloud.com/not-andromedik" } },
+          ],
+        },
+        match: "artist/mb-namesake",
+      },
+    ]);
+
+    const result = await resolveArtistViaMb("Andromedik", ANDROMEDIK_SPOTIFY_ID);
+
+    // Different Spotify id → not our artist. Better a miss than a wrong link.
+    expect(result.mbid).toBeNull();
+    expect(result.socials).toHaveLength(0);
+  });
+
+  it("(Dimension trap) does NOT accept the top-scored namesake — leaves it unresolved", async () => {
+    // The disambiguation trap: the highest-scored hit is the wrong artist (Japanese
+    // jazz group), and the real DnB entry carries a Spotify id that isn't ours. No
+    // candidate exposes OUR Spotify id → unresolved, never the top-scored namesake.
+    mockFetch([
+      {
+        body: {
+          artists: [
+            { id: "mb-jazz", name: "DIMENSION", score: 100 },
+            { id: "mb-other-dnb", name: "Dimension", score: 99 },
+          ],
+        },
+        match: MB_ARTIST_SEARCH,
+      },
+      {
+        // Japanese jazz group — high score, exact name, but a DIFFERENT Spotify id.
+        body: {
+          id: "mb-jazz",
+          name: "DIMENSION",
+          relations: [{ url: { resource: "https://open.spotify.com/artist/JAZZ_GROUP_ID" } }],
+        },
+        match: "artist/mb-jazz",
+      },
+      {
+        body: {
+          id: "mb-other-dnb",
+          name: "Dimension",
+          relations: [{ url: { resource: "https://open.spotify.com/artist/ANOTHER_DNB_ID" } }],
+        },
+        match: "artist/mb-other-dnb",
+      },
+    ]);
+
+    const result = await resolveArtistViaMb("Dimension", "OUR_STORED_DIMENSION_ID");
 
     expect(result.mbid).toBeNull();
     expect(result.socials).toHaveLength(0);
   });
 
-  it("returns empty when no ISRCs are provided", async () => {
+  it("(c) accepts a no-Spotify-rel candidate on a strong score + exact name match", async () => {
+    // No candidate exposes ANY Spotify rel → the soft name+score fallback applies.
+    mockFetch([
+      {
+        body: { artists: [{ id: "mb-nospotify", name: "Andromedik", score: 95 }] },
+        match: MB_ARTIST_SEARCH,
+      },
+      {
+        body: {
+          id: "mb-nospotify",
+          name: "Andromedik",
+          relations: [{ url: { resource: "https://soundcloud.com/andromedikmusic" } }],
+        },
+        match: "artist/mb-nospotify",
+      },
+    ]);
+
+    const result = await resolveArtistViaMb("Andromedik", ANDROMEDIK_SPOTIFY_ID);
+
+    expect(result.mbid).toBe("mb-nospotify");
+    // No identity confirmation → the soft fallback's socials are DOWNGRADED to candidate
+    // (awaits an operator glance; never public until confirmed).
+    expect(result.mbSocialStatus).toBe("candidate");
+    expect(result.socials.map((s) => s.platform)).toContain("soundcloud");
+  });
+
+  it("(c) rejects a no-Spotify-rel candidate when the score is below the threshold", async () => {
+    mockFetch([
+      {
+        body: { artists: [{ id: "mb-weak", name: "Andromedik", score: 50 }] },
+        match: MB_ARTIST_SEARCH,
+      },
+      {
+        body: {
+          id: "mb-weak",
+          name: "Andromedik",
+          relations: [{ url: { resource: "https://soundcloud.com/maybe-not" } }],
+        },
+        match: "artist/mb-weak",
+      },
+    ]);
+
+    const result = await resolveArtistViaMb("Andromedik", ANDROMEDIK_SPOTIFY_ID);
+
+    expect(result.mbid).toBeNull();
+    expect(result.socials).toHaveLength(0);
+  });
+
+  it("(c) rejects a no-Spotify-rel high-score candidate whose name does not match", async () => {
+    mockFetch([
+      {
+        body: { artists: [{ id: "mb-diff", name: "Andromeda", score: 96 }] },
+        match: MB_ARTIST_SEARCH,
+      },
+      {
+        body: {
+          id: "mb-diff",
+          name: "Andromeda",
+          relations: [{ url: { resource: "https://soundcloud.com/andromeda" } }],
+        },
+        match: "artist/mb-diff",
+      },
+    ]);
+
+    const result = await resolveArtistViaMb("Andromedik", ANDROMEDIK_SPOTIFY_ID);
+
+    expect(result.mbid).toBeNull();
+  });
+
+  it("disables the soft fallback once ANY candidate exposed a Spotify rel (namesake guard)", async () => {
+    // First candidate carries a (differing) Spotify rel → a cross-check signal existed
+    // and didn't match ours; a later no-Spotify candidate must NOT slip through on
+    // name+score alone. Result: unresolved.
+    mockFetch([
+      {
+        body: {
+          artists: [
+            { id: "mb-has-spotify", name: "Andromedik", score: 100 },
+            { id: "mb-no-spotify", name: "Andromedik", score: 99 },
+          ],
+        },
+        match: MB_ARTIST_SEARCH,
+      },
+      {
+        body: {
+          id: "mb-has-spotify",
+          name: "Andromedik",
+          relations: [{ url: { resource: "https://open.spotify.com/artist/DIFFERENT_ID" } }],
+        },
+        match: "artist/mb-has-spotify",
+      },
+      {
+        body: {
+          id: "mb-no-spotify",
+          name: "Andromedik",
+          relations: [{ url: { resource: "https://soundcloud.com/andromedikmusic" } }],
+        },
+        match: "artist/mb-no-spotify",
+      },
+    ]);
+
+    const result = await resolveArtistViaMb("Andromedik", ANDROMEDIK_SPOTIFY_ID);
+
+    expect(result.mbid).toBeNull();
+    expect(result.socials).toHaveLength(0);
+  });
+
+  it("makes no MB call and returns unresolved for a blank artist name", async () => {
     const { calls } = mockFetch([]);
-    const result = await resolveArtistViaMb("Dimension", []);
+    const result = await resolveArtistViaMb("   ", ANDROMEDIK_SPOTIFY_ID);
 
     expect(result.mbid).toBeNull();
     expect(result.socials).toHaveLength(0);
     expect(calls).toHaveLength(0);
   });
 
-  it("reports rateLimited=true and stops when MB returns 503", async () => {
+  it("returns unresolved when the name search returns no candidates", async () => {
+    mockFetch([{ body: { artists: [] }, match: MB_ARTIST_SEARCH }]);
+
+    const result = await resolveArtistViaMb("Andromedik", ANDROMEDIK_SPOTIFY_ID);
+
+    expect(result.mbid).toBeNull();
+    expect(result.socials).toHaveLength(0);
+  });
+
+  it("reports rateLimited=true when the name-search request is throttled (503)", async () => {
     mockFetch([
       {
-        match: MB_ISRC,
+        match: MB_ARTIST_SEARCH,
         response: new Response("service unavailable", { status: 503 }),
       },
     ]);
 
-    const result = await resolveArtistViaMb("Dimension", ["GB-ABC-12-00001"]);
+    const result = await resolveArtistViaMb("Andromedik", ANDROMEDIK_SPOTIFY_ID);
+
+    expect(result.rateLimited).toBe(true);
+    expect(result.mbid).toBeNull();
+  });
+
+  it("reports rateLimited=true when a candidate deep-fetch is throttled (503)", async () => {
+    mockFetch([
+      {
+        body: { artists: [{ id: "mb-andromedik", name: "Andromedik", score: 100 }] },
+        match: MB_ARTIST_SEARCH,
+      },
+      {
+        match: "artist/mb-andromedik",
+        response: new Response("service unavailable", { status: 503 }),
+      },
+    ]);
+
+    const result = await resolveArtistViaMb("Andromedik", ANDROMEDIK_SPOTIFY_ID);
 
     expect(result.rateLimited).toBe(true);
     expect(result.mbid).toBeNull();
@@ -296,31 +541,24 @@ describe("resolveArtistViaMb (MB walk: ISRC → recording → artist MBID → ur
   it("deduplicates socials by platform (first url wins)", async () => {
     mockFetch([
       {
-        body: {
-          recordings: [
-            {
-              "artist-credit": [{ artist: { id: "mb-2", name: "Sub Focus" } }],
-              id: "rec-2",
-              title: "Turn It Around",
-            },
-          ],
-        },
-        match: MB_ISRC,
+        body: { artists: [{ id: "mb-sub", name: "Sub Focus", score: 100 }] },
+        match: MB_ARTIST_SEARCH,
       },
       {
         body: {
-          id: "mb-2",
+          id: "mb-sub",
           name: "Sub Focus",
           relations: [
+            { url: { resource: `https://open.spotify.com/artist/${ANDROMEDIK_SPOTIFY_ID}` } },
             { url: { resource: "https://soundcloud.com/sub-focus-1" } },
             { url: { resource: "https://soundcloud.com/sub-focus-2" } },
           ],
         },
-        match: MB_ARTIST,
+        match: "artist/mb-sub",
       },
     ]);
 
-    const result = await resolveArtistViaMb("Sub Focus", ["GB-DEF-13-00002"]);
+    const result = await resolveArtistViaMb("Sub Focus", ANDROMEDIK_SPOTIFY_ID);
 
     const soundcloudSocials = result.socials.filter((s) => s.platform === "soundcloud");
     expect(soundcloudSocials).toHaveLength(1);
@@ -330,34 +568,28 @@ describe("resolveArtistViaMb (MB walk: ISRC → recording → artist MBID → ur
   it("skips url-rels with no resource", async () => {
     mockFetch([
       {
-        body: {
-          recordings: [
-            {
-              "artist-credit": [{ artist: { id: "mb-3", name: "Noisia" } }],
-              id: "rec-3",
-              title: "Machine Gun",
-            },
-          ],
-        },
-        match: MB_ISRC,
+        body: { artists: [{ id: "mb-noisia", name: "Noisia", score: 100 }] },
+        match: MB_ARTIST_SEARCH,
       },
       {
         body: {
-          id: "mb-3",
+          id: "mb-noisia",
           name: "Noisia",
           relations: [
+            { url: { resource: `https://open.spotify.com/artist/${ANDROMEDIK_SPOTIFY_ID}` } },
             { url: {} }, // no resource
             { url: { resource: "https://soundcloud.com/noisia" } },
           ],
         },
-        match: MB_ARTIST,
+        match: "artist/mb-noisia",
       },
     ]);
 
-    const result = await resolveArtistViaMb("Noisia", ["GB-GHI-14-00003"]);
+    const result = await resolveArtistViaMb("Noisia", ANDROMEDIK_SPOTIFY_ID);
 
-    expect(result.socials).toHaveLength(1);
-    expect(result.socials[0]?.platform).toBe("soundcloud");
+    const platforms = result.socials.map((s) => s.platform);
+    expect(platforms).toContain("soundcloud");
+    expect(result.socials.every((s) => Boolean(s.url))).toBe(true);
   });
 });
 
