@@ -28,7 +28,11 @@ const TILE = 540; // the tile renders ~500px wide; 540² is plenty and stays tin
 
 const ids = process.argv.slice(2);
 if (ids.length !== 3) {
-  console.error("Usage: bun run factory:clips <id> <id> <id>  (exactly three findings)");
+  console.error(
+    "Usage: bun run factory:clips <id> <id> <id>  (exactly three findings)\n" +
+      "       prefix an id with @ to force the published master on found.fluncle.com\n" +
+      "       (e.g. @027.9.5H) when the local out/ render is stale.",
+  );
   process.exit(1);
 }
 
@@ -83,10 +87,13 @@ const transcode = (source: string, dest: string) => {
 mkdirSync(PUBLIC, { recursive: true });
 const names: string[] = [];
 for (let i = 0; i < ids.length; i++) {
-  const id = ids[i] ?? "";
+  const raw = ids[i] ?? "";
+  // A leading @ forces the published master (skips any stale local render).
+  const forceRemote = raw.startsWith("@");
+  const id = forceRemote ? raw.slice(1) : raw;
   const letter = LETTERS[i];
   const name = `factory-${letter}.mp4`;
-  const local = localSource(id);
+  const local = forceRemote ? undefined : localSource(id);
   const source = local ?? (await fetchSource(id));
   transcode(source, join(PUBLIC, name));
   names.push(name);
