@@ -258,6 +258,8 @@ describe("resolveArtistViaMb (MB name search + Spotify cross-reference)", () => 
     expect(result.mbid).toBe("mb-andromedik");
     expect(result.wikidataQid).toBe("Q123456");
     expect(result.rateLimited).toBe(false);
+    // A confirmed Spotify-id identity → the socials persist as trusted/public.
+    expect(result.mbSocialStatus).toBe("auto");
 
     const platforms = result.socials.map((s) => s.platform);
     expect(platforms).toContain("spotify");
@@ -307,6 +309,7 @@ describe("resolveArtistViaMb (MB name search + Spotify cross-reference)", () => 
     const result = await resolveArtistViaMb("Freaks & Geeks", FREAKS_SPOTIFY_ID);
 
     expect(result.mbid).toBe("mb-real");
+    expect(result.mbSocialStatus).toBe("auto");
     expect(result.socials.map((s) => s.platform)).toContain("soundcloud");
     // Both candidates were deep-fetched (the wrong one first, then the match).
     expect(calls.some((c) => c.includes("artist/mb-wrong"))).toBe(true);
@@ -398,6 +401,9 @@ describe("resolveArtistViaMb (MB name search + Spotify cross-reference)", () => 
     const result = await resolveArtistViaMb("Andromedik", ANDROMEDIK_SPOTIFY_ID);
 
     expect(result.mbid).toBe("mb-nospotify");
+    // No identity confirmation → the soft fallback's socials are DOWNGRADED to candidate
+    // (awaits an operator glance; never public until confirmed).
+    expect(result.mbSocialStatus).toBe("candidate");
     expect(result.socials.map((s) => s.platform)).toContain("soundcloud");
   });
 

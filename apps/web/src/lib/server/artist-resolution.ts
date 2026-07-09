@@ -563,10 +563,15 @@ type MbResolution = {
   wikidataQid: string | null;
   socials: ResolvedSocial[];
   rateLimited: boolean;
+  // The trust the MB socials persist at: an exact Spotify-id identity match earns "auto"
+  // (public/trusted); the weaker name+score soft fallback is downgraded to "candidate"
+  // (awaits an operator glance before it can surface publicly). Meaningless when there
+  // are no socials — defaults to "candidate", the harmless floor.
+  mbSocialStatus: "auto" | "candidate";
 };
 
 function emptyResolution(mbid: string | null, rateLimited: boolean): MbResolution {
-  return { mbid, rateLimited, socials: [], wikidataQid: null };
+  return { mbSocialStatus: "candidate", mbid, rateLimited, socials: [], wikidataQid: null };
 }
 
 /**
@@ -579,9 +584,11 @@ function emptyResolution(mbid: string | null, rateLimited: boolean): MbResolutio
  *      higher-scored candidate. Identity confirmed.
  *   4. Namesake reject: a candidate whose Spotify rel is present but DIFFERS is a
  *      different artist — never accept it.
- *   5. Soft fallback: only when NO candidate exposed ANY Spotify rel to cross-check
- *      against, accept the top candidate on a strong MB `score` (≥ threshold) plus an
- *      exact normalized name match. Otherwise stay unresolved rather than resolve to a
+ *   5. Soft fallback (candidate): only when NO candidate exposed ANY Spotify rel to
+ *      cross-check against, accept the top candidate on a strong MB `score` (≥ threshold)
+ *      plus an exact normalized name match — but at LOWER trust (`mbSocialStatus`
+ *      "candidate": awaits an operator glance, never public until confirmed), since there
+ *      was no identity confirmation. Otherwise stay unresolved rather than resolve to a
  *      namesake — the downstream Firecrawl gap-fill / operator review takes it.
  *
  * The matched MBID's url-rels are classified into socials. The whole walk is throttled
@@ -649,10 +656,17 @@ export async function resolveArtistViaMb(
     const candidateSpotifyId = spotifyArtistIdFromRelations(artistData.relations);
 
     // (3) Definitive identity match — accept immediately, even over a higher score.
+    // Identity confirmed by the Spotify cross-reference → socials are trusted (auto).
     if (spotifyArtistId && candidateSpotifyId && candidateSpotifyId === spotifyArtistId) {
       const { socials, wikidataQid } = await extractSocialsFromArtistData(artistData);
 
-      return { mbid: candidateId, rateLimited: false, socials, wikidataQid };
+      return {
+        mbSocialStatus: "auto",
+        mbid: candidateId,
+        rateLimited: false,
+        socials,
+        wikidataQid,
+      };
     }
 
     // (4) Candidate carries a Spotify rel we could check and it didn't match → namesake.
@@ -675,11 +689,19 @@ export async function resolveArtistViaMb(
   }
 
   // No definitive match. Only take the soft fallback when NOTHING gave us a Spotify rel
-  // to cross-check — otherwise a namesake would slip through on name+score alone.
+  // to cross-check — otherwise a namesake would slip through on name+score alone. The
+  // fallback is name+score only (no identity confirmation) → its socials persist as
+  // "candidate", never public until an operator confirms them.
   if (!anyCandidateHadSpotifyRel && fallbackCandidate?.id && fallbackData) {
     const { socials, wikidataQid } = await extractSocialsFromArtistData(fallbackData);
 
-    return { mbid: fallbackCandidate.id, rateLimited: false, socials, wikidataQid };
+    return {
+      mbSocialStatus: "candidate",
+      mbid: fallbackCandidate.id,
+      rateLimited: false,
+      socials,
+      wikidataQid,
+    };
   }
 
   return emptyResolution(null, false);
@@ -852,13 +874,19 @@ async function fetchExistingPlatforms(artistId: string): Promise<Set<ArtistSocia
  * Upsert artist_socials rows and stamp artists.mbid / .wikidata_qid / .resolved_at.
  * The upsert strategy: a new source always wins on url (MB is more reliable than
  * Firecrawl; if MB and Firecrawl both have a platform, MB's row already exists and
- * the Firecrawl upsert skips it via the `do nothing` guard — MB already set status=auto).
+ * the Firecrawl upsert skips it via the `do nothing` guard).
+ *
+ * `mbSocialStatus` carries the MB socials' trust: "auto" (public/trusted) for an exact
+ * Spotify-id identity match, "candidate" (awaits an operator glance) for the weaker
+ * name+score soft fallback. The `when status='confirmed' then 'confirmed'` guard still
+ * preserves an operator-confirmed row on re-resolve regardless.
  */
 async function persistResolution(
   artistId: string,
   mbid: string | null,
   wikidataQid: string | null,
   mbSocials: ResolvedSocial[],
+  mbSocialStatus: "auto" | "candidate",
   firecrawlSocials: ResolvedSocial[],
 ): Promise<void> {
   const db = await getDb();
@@ -875,11 +903,21 @@ async function persistResolution(
           where id = ?`,
   });
 
-  // Upsert MB socials (status=auto, trusted).
+  // Upsert MB socials at the resolver-determined trust (auto for a confirmed identity,
+  // candidate for the soft name+score fallback).
   for (const social of mbSocials) {
     const id = randomUUID();
     await db.execute({
-      args: [id, artistId, social.platform, social.url, "musicbrainz", "auto", nowIso, nowIso],
+      args: [
+        id,
+        artistId,
+        social.platform,
+        social.url,
+        "musicbrainz",
+        mbSocialStatus,
+        nowIso,
+        nowIso,
+      ],
       sql: `insert into artist_socials
               (id, artist_id, platform, url, source, status, created_at, updated_at)
             values (?, ?, ?, ?, ?, ?, ?, ?)
@@ -967,6 +1005,7 @@ export async function resolveArtist(artistId: string): Promise<ArtistResolutionR
     mbResult.mbid,
     mbResult.wikidataQid,
     mbResult.socials,
+    mbResult.mbSocialStatus,
     firecrawlSocials,
   );
 
