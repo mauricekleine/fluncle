@@ -185,8 +185,10 @@ const VideoTile: React.FC<{
   const angle = 118 + Math.sin(t * 0.3 + phase) * 30;
   const runtime = 6 + random(`dur-${seed}`) * 5;
   const progress = (t / runtime) % 1;
-  const secs = Math.floor(progress * runtime * 10);
-  const tc = `0:${String(secs).padStart(2, "0")}`;
+  // A plausible running timecode across a per-tile clip length (m:ss, always < 60s).
+  const total = 20 + Math.floor(random(`len-${seed}`) * 39);
+  const elapsed = Math.floor(progress * total);
+  const tc = `${Math.floor(elapsed / 60)}:${String(elapsed % 60).padStart(2, "0")}`;
   return (
     <div
       style={{
