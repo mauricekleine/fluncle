@@ -4,20 +4,20 @@ import { AGENT_TOKEN, OPERATOR_TOKEN, setAdminTokenEnv } from "../../../lib/serv
 // The agent-tier streaming route for a finding's ARCHIVED 30s preview bytes
 // (REF-05 slice 2). Driven straight through its exported `serverHandlers.GET` —
 // the SAME live auth spine (`../../../lib/server/env`: `requireAdmin` → `adminRole`)
-// runs; only the DB metadata read and the two R2 buckets are mocked. The two
-// security-critical properties: the tier is AGENT (the render box's agent token
-// passes; an unauthenticated request 401s), and the transitional dual-bucket read
-// routes a legacy `analysis/previews/…` key to the public VIDEOS bucket and every
-// other key to the private SOURCE_AUDIO bucket.
+// runs; only the DB metadata read and the private R2 bucket are mocked. The
+// security-critical property: the tier is AGENT (the render box's agent token
+// passes; an unauthenticated request 401s). Every archived preview now reads from
+// the PRIVATE `fluncle-source-audio` bucket (binding SOURCE_AUDIO) — REF-05 migrated
+// the legacy public objects off the world-served bucket, so the dual-bucket read is
+// gone and a stale `analysis/previews/…` key simply misses (a `preview_audio_missing`
+// 404), never a public read.
 
-const videosGet = vi.fn();
 const sourceAudioGet = vi.fn();
 const getPreviewArchiveMetadata = vi.fn();
 
 vi.mock("cloudflare:workers", () => ({
   env: {
     SOURCE_AUDIO: { get: (...args: unknown[]) => sourceAudioGet(...args) },
-    VIDEOS: { get: (...args: unknown[]) => videosGet(...args) },
   },
 }));
 
@@ -86,7 +86,6 @@ function callGet(token: string | undefined) {
 beforeAll(setAdminTokenEnv);
 
 beforeEach(() => {
-  videosGet.mockReset();
   sourceAudioGet.mockReset();
   getPreviewArchiveMetadata.mockReset();
 });
@@ -100,21 +99,9 @@ describe("GET /api/admin/tracks/:idOrLogId/preview-audio", () => {
 
     expect(res.status).toBe(200);
     expect(sourceAudioGet).toHaveBeenCalledWith(NEW_KEY);
-    expect(videosGet).not.toHaveBeenCalled();
     expect(res.headers.get("Content-Type")).toBe("audio/mpeg");
     expect(res.headers.get("Cache-Control")).toBe("no-store");
     expect(new Uint8Array(await res.arrayBuffer())).toEqual(BYTES);
-  });
-
-  it("reads a LEGACY analysis/previews key from the public VIDEOS bucket", async () => {
-    getPreviewArchiveMetadata.mockResolvedValue(metadata({ key: LEGACY_KEY }));
-    videosGet.mockResolvedValue(fakeObject());
-
-    const res = await callGet(AGENT_TOKEN);
-
-    expect(res.status).toBe(200);
-    expect(videosGet).toHaveBeenCalledWith(LEGACY_KEY);
-    expect(sourceAudioGet).not.toHaveBeenCalled();
   });
 
   it("also serves the operator token (agent tier accepts operator)", async () => {
@@ -133,7 +120,6 @@ describe("GET /api/admin/tracks/:idOrLogId/preview-audio", () => {
     expect(res.status).toBe(401);
     expect(getPreviewArchiveMetadata).not.toHaveBeenCalled();
     expect(sourceAudioGet).not.toHaveBeenCalled();
-    expect(videosGet).not.toHaveBeenCalled();
   });
 
   it("404s a finding with no archived preview key", async () => {
@@ -166,5 +152,19 @@ describe("GET /api/admin/tracks/:idOrLogId/preview-audio", () => {
 
     expect(res.status).toBe(404);
     expect(body.code).toBe("preview_audio_missing");
+  });
+
+  it("404s a stale legacy analysis/previews key (it simply misses in SOURCE_AUDIO)", async () => {
+    // Post-migration there is no public fallback: a hypothetical leftover legacy key
+    // is looked up in SOURCE_AUDIO only, misses, and returns the standard 404.
+    getPreviewArchiveMetadata.mockResolvedValue(metadata({ key: LEGACY_KEY }));
+    sourceAudioGet.mockResolvedValue(null);
+
+    const res = await callGet(AGENT_TOKEN);
+    const body = (await res.json()) as { code: string };
+
+    expect(res.status).toBe(404);
+    expect(body.code).toBe("preview_audio_missing");
+    expect(sourceAudioGet).toHaveBeenCalledWith(LEGACY_KEY);
   });
 });
