@@ -79,6 +79,7 @@ PROVISION="${PROVISION:-$SCRIPT_DIR/provision-rave-03.sh}"
 # --- config ---
 START_INTERVAL="${START_INTERVAL:-3600}" # min seconds between render STARTS (hourly throttle)
 MAX_RENDER="${MAX_RENDER:-12600}"         # a render past 3.5h is stuck -> force-park (plate-lane authoring runs ~2h+; 2.5h killed nearly-done renders)
+MARKER_SKEW="${MARKER_SKEW:-300}"         # clock-skew grace when checking a done-marker's finish time against this render's start
 DONE_MARKER='${HOME:-/home/user}/conductor-run.done'
 API_URL="${FLUNCLE_API_URL:-https://www.fluncle.com}"
 
@@ -215,8 +216,30 @@ if [ "$state" = "rendering" ]; then
   # Done-marker present -> the detached render finished (it already shipped, or
   # failed). Park the box and return to idle either way; a non-zero render is
   # caught next idle tick (the finding is still queued if ship never ran).
+  #
+  # FRESHNESS GUARD: the box's /home/user persists across stop/resume snapshots, so a
+  # done-marker from a PREVIOUS render can outlive it. render-detached.sh rm's the marker
+  # before forking — but ONLY if its trigger actually ran; a wedged box (box.ascii 5xx on
+  # ssh/scp) silently no-ops the trigger, leaving the OLD marker in place. A bare `test -f`
+  # then reads that stale marker as "finished", parks, and chains to the SAME never-shipped
+  # finding — forever (the 2026-07-09 loop: a 07-08 marker re-picking 039.8.7J every tick).
+  # So trust the marker only when its finish time (`@ <iso>`) is at/after this render's
+  # start (minus clock skew). A stale/undated marker is treated as still-in-flight and the
+  # stuck-guard below force-parks it, rather than a false "finished".
+  marker_fresh=0
+  result='?'
   if "$BOX_BIN" ssh "$boxid" "test -f $DONE_MARKER" >/dev/null 2>&1; then
     result="$("$BOX_BIN" ssh "$boxid" "cat $DONE_MARKER" 2>/dev/null | tr -d '\r\n' || printf '?')"
+    marker_iso="${result#*@ }"; marker_iso="${marker_iso%% *}"
+    marker_epoch="$(date -u -d "$marker_iso" +%s 2>/dev/null || printf 0)"
+    started="$(read_or "$STARTED_FILE" 0)"
+    case "$marker_epoch$started" in
+      *[!0-9]*) : ;; # non-numeric -> leave stale (marker_fresh stays 0)
+      *) [ "$marker_epoch" -gt 0 ] && [ "$marker_epoch" -ge "$((started - MARKER_SKEW))" ] && marker_fresh=1 ;;
+    esac
+    [ "$marker_fresh" = 1 ] || log "stale done-marker ($result) predates render start ($started) — ignoring, treating as in-flight"
+  fi
+  if [ "$marker_fresh" = 1 ]; then
     "$BOX_BIN" stop "$boxid" >/dev/null 2>&1 || true
     printf 'idle' >"$STATE_FILE"
     state=idle
@@ -327,7 +350,24 @@ rm -f "$creds"
 
 # Trigger the DETACHED render (returns immediately; ~85m on the box). The box is
 # NOT stopped here — a later RENDERING tick parks it when the done-marker appears.
-"$BOX_BIN" ssh "$boxid" 'bash ~/render-detached.sh' >/dev/null 2>&1
+# VERIFY THE LAUNCH: render-detached.sh echoes "render-detached: launched" and, before
+# forking, rm's any prior done-marker. A wedged box (box.ascii 5xx on ssh) silently
+# no-ops this trigger; marking 'rendering' anyway would leave the OLD marker to be
+# misread as 'finished' next tick — the stale-marker loop. If the launch line doesn't
+# come back, the box is wedged: delete it + stay idle so a FRESH box provisions next
+# tick, rather than looping on the dead one. (The freshness guard above is the second
+# line of defence; this stops the wedge at the source.)
+trigger_out="$("$BOX_BIN" ssh "$boxid" 'bash ~/render-detached.sh' 2>&1)"
+printf '%s\n' "$trigger_out" >>"$LOG_FILE"
+if ! printf '%s' "$trigger_out" | grep -q 'render-detached: launched'; then
+  log "render trigger did not launch on $boxid (wedged box) — deleting it + staying idle to reprovision"
+  emit "render-conductor: render trigger failed on $boxid — box condemned, reprovision next tick"
+  "$BOX_BIN" stop "$boxid" >/dev/null 2>&1 || true
+  "$BOX_BIN" delete "$boxid" >/dev/null 2>&1 || true
+  : >"$BOXID_FILE"
+  printf 'idle' >"$STATE_FILE"
+  exit 1
+fi
 printf 'rendering' >"$STATE_FILE"
 now >"$STARTED_FILE"
 printf '%s' "$head" >"$RENDER_LOGID_FILE" # the finding this render is spending on (cost scope)
