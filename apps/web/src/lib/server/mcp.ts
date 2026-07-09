@@ -1,24 +1,38 @@
 import { liveSurfaces } from "@fluncle/registry";
-import { siteUrl, twitchUrl } from "../fluncle-links";
+import { logPageUrl, siteUrl, twitchUrl } from "../fluncle-links";
 import { fluncleDescription } from "../identity";
+import { type FeedItem, type MixtapeDTO, mixtapeDisplayTitle } from "../mixtapes";
 import { getLiveState, type LiveState } from "./live";
+import { resolveLogPageTarget } from "./log-resolver";
 import { subscribeToNewsletter } from "./newsletter";
 import { ApiError, searchTrackCandidates } from "./spotify";
 import { getServiceStatuses, type ServiceHealthStatus } from "./status";
 import { createSubmission } from "./submissions";
-import { getRandomTrack, listTracks, toPublicTrackListItem } from "./tracks";
+import { getRandomTrack, listTracks, type TrackListItem, toPublicTrackListItem } from "./tracks";
 
 // A small, stateless Model Context Protocol server: the same drum & bass
-// archive the public API exposes, handed to agents as MCP tools over the
-// Streamable HTTP transport (a single JSON-RPC endpoint at /mcp). No sessions,
-// no Durable Objects — every request is self-contained, so it runs anywhere
-// the Worker does. The tools are a thin layer over the internal functions the
-// /api routes already use, so behaviour (validation, rate limits, the
-// submitter hash) stays identical. The matching MCP Server Card (SEP-2127) is
-// served at /.well-known/mcp/server-card.json for agent discovery.
+// archive the public API exposes, handed to agents over the Streamable HTTP
+// transport (a single JSON-RPC endpoint at /mcp). No sessions, no Durable
+// Objects — every request is self-contained, so it runs anywhere the Worker
+// does. It speaks the full protocol, not just tools:
+//   - TOOLS (tools/list, tools/call): the archive as verbs — list, read one,
+//     pull a random one, check systems, search Spotify, submit, subscribe. A
+//     thin layer over the internal functions the /api routes already use, so
+//     behaviour (validation, rate limits, the submitter hash) stays identical.
+//   - RESOURCES (resources/list, resources/read): the archive as a readable
+//     CORPUS — each finding/mixtape addressable at its coordinate
+//     (fluncle://finding/<logId>, fluncle://mixtape/<logId>), returning only
+//     the PUBLIC record its /log page shows.
+//   - PROMPTS (prompts/list, prompts/get): Fluncle-voiced starting points an
+//     agent can run against the tools + resources above.
+// The matching MCP Server Card (SEP-2127) is served at
+// /.well-known/mcp/server-card.json for agent discovery.
 //
-// The browser-side WebMCP surface (lib/webmcp.ts) mirrors this tool set for
-// agent-driving browsers; keep the two in step when either changes.
+// The browser-side WebMCP surface (lib/webmcp.ts) mirrors this TOOL set for
+// agent-driving browsers; keep the two in step when the tools change. Resources
+// and prompts have no navigator.modelContext primitive, so they are server-MCP
+// only (webmcp.ts documents the asymmetry) — the browser read path is the
+// mirrored get_track tool.
 
 const PROTOCOL_VERSION = "2025-06-18";
 const SUPPORTED_PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26"];
@@ -31,6 +45,9 @@ const MCP_ENDPOINT = `${siteUrl}/mcp`;
 const defaultRecentLimit = 10;
 const maxRecentLimit = 48;
 const minQueryLength = 2;
+// How many recent findings/mixtapes resources/list advertises — the same window
+// as the RSS feed and the markdown homepage, newest first.
+const resourceListLimit = 25;
 
 type JsonRpcId = number | string | null;
 
@@ -84,6 +101,39 @@ const tools: McpTool[] = [
     },
     name: "list_tracks",
     title: "Recent findings",
+  },
+  {
+    description:
+      "Read one finding (or mixtape) in full by its Log ID coordinate or Spotify track id — the same public record its /log page shows: artist, title, Found date, note, BPM, key, links, galaxy, and the recovered observation transcript. The resource form is fluncle://finding/<logId>.",
+    execute: async (args) => {
+      const idOrLogId = asTrimmedString(args.idOrLogId);
+
+      if (!idOrLogId) {
+        throw new ApiError("invalid_query", "A Log ID or Spotify track id is required", 400);
+      }
+
+      const resolved = await readCoordinate(idOrLogId);
+
+      if (!resolved) {
+        throw new ApiError("track_not_found", `No finding found for ${idOrLogId}`, 404);
+      }
+
+      return resolved.kind === "mixtape"
+        ? { mixtape: resolved.record, ok: true }
+        : { ok: true, track: resolved.record };
+    },
+    inputSchema: {
+      properties: {
+        idOrLogId: {
+          description: "A Log ID coordinate (e.g. 012.8.0A) or a Spotify track id / URL.",
+          type: "string",
+        },
+      },
+      required: ["idOrLogId"],
+      type: "object",
+    },
+    name: "get_track",
+    title: "Read one finding",
   },
   {
     description: "Pull one random certified track from Fluncle's archive.",
@@ -229,13 +279,290 @@ tools.push({
   name: "get_recent_tracks",
 });
 
+// ── Resources: the archive as a readable corpus ────────────────────────────
+//
+// Every finding/mixtape with a coordinate is addressable at its own MCP resource
+// URI. resources/list advertises the recent window; resources/read returns the
+// PUBLIC record — deliberately the same fields /log/<id> renders (and, for the
+// observation, the transcript /radio renders), never the private capture key,
+// the internal enrichment/video fields, or the raw vibe coordinates. The typed
+// URIs (fluncle://finding/…, fluncle://mixtape/…) let an agent see the kind
+// before reading; the read also accepts the bare fluncle://<logId> display form.
+
+const RESOURCE_SCHEME = "fluncle://";
+
+type ResolvedRecord =
+  | { kind: "finding"; record: ReturnType<typeof publicFindingRecord> }
+  | { kind: "mixtape"; record: ReturnType<typeof publicMixtapeRecord> };
+
+// Resolve a coordinate (Log ID) or Spotify track id to its public record, reusing
+// the same resolver the /log page uses so the MCP read and the web read never drift.
+async function readCoordinate(idOrLogId: string): Promise<ResolvedRecord | undefined> {
+  const target = await resolveLogPageTarget(idOrLogId);
+
+  if (!target) {
+    return undefined;
+  }
+
+  return target.kind === "mixtape"
+    ? { kind: "mixtape", record: publicMixtapeRecord(target.mixtape) }
+    : { kind: "finding", record: publicFindingRecord(target.track) };
+}
+
+// The resource URI for a coordinated item, typed by kind so an agent reads intent
+// off the URI (fluncle://finding/012.8.0A). Mixtapes carry an F-marked Log ID.
+function resourceUri(kind: "finding" | "mixtape", logId: string | undefined): string | undefined {
+  return logId ? `${RESOURCE_SCHEME}${kind}/${logId}` : undefined;
+}
+
+// Pull the Log ID out of a resource URI. Accepts the typed forms
+// (fluncle://finding/<id>, fluncle://mixtape/<id>) and the bare display form
+// (fluncle://<id>); the kind prefix is advisory since the resolver dispatches on
+// the coordinate itself. Returns undefined for anything not on the fluncle scheme.
+function coordinateFromUri(uri: string): string | undefined {
+  if (!uri.startsWith(RESOURCE_SCHEME)) {
+    return undefined;
+  }
+
+  const path = uri.slice(RESOURCE_SCHEME.length);
+  const typed = /^(?:finding|mixtape)\/(.+)$/.exec(path);
+  const coordinate = (typed?.[1] ?? path).trim();
+
+  return coordinate.length > 0 ? coordinate : undefined;
+}
+
+// The list-descriptor for one coordinated item: name is "Artist — Title" (a
+// mixtape reads "Fluncle — <title>"), description is the note's first line.
+function resourceDescriptor(item: FeedItem): {
+  description?: string;
+  mimeType: string;
+  name: string;
+  uri: string;
+} {
+  const isMixtape = item.type === "mixtape";
+  const uri = resourceUri(isMixtape ? "mixtape" : "finding", item.logId);
+
+  if (!uri) {
+    throw new Error("resourceDescriptor called with an uncoordinated item");
+  }
+
+  const name = isMixtape
+    ? `Fluncle — ${mixtapeDisplayTitle(item.title)}`
+    : `${item.artists.join(", ")} — ${item.title}`;
+  const description = firstLine(item.note);
+
+  return { mimeType: "application/json", name, uri, ...(description ? { description } : {}) };
+}
+
+// A finding's PUBLIC record — only the fields /log/<id> renders (plus the
+// observation transcript, which /radio renders as visible + screen-reader text).
+// toPublicTrackListItem strips the private full-song capture key first; the raw
+// vibe coordinates, enrichment status, and internal video fields are never included.
+function publicFindingRecord(item: TrackListItem) {
+  const track = toPublicTrackListItem(item);
+
+  return compact({
+    album: track.album,
+    artists: track.artists,
+    bpm: track.bpm === undefined ? undefined : Math.round(track.bpm),
+    coordinate: track.logId,
+    durationMs: track.durationMs,
+    found: track.addedAt,
+    galaxy: track.galaxy?.name,
+    isrc: track.isrc,
+    key: track.key,
+    label: track.label,
+    links: compact({
+      log: track.logPageUrl,
+      spotify: track.spotifyUrl,
+      tiktok: track.tiktokUrl,
+      video: track.videoUrl,
+      youtube: track.youtubeUrl,
+    }),
+    note: track.note,
+    observation: observationRecord(track),
+    title: track.title,
+    type: "finding",
+    uri: resourceUri("finding", track.logId),
+  });
+}
+
+// The recovered observation as a public sub-record: the audio URL (the /log audio
+// element source) plus, when aligned, the transcript /radio renders. Absent when
+// the finding has no observation.
+function observationRecord(track: TrackListItem) {
+  if (!track.observationAudioUrl) {
+    return undefined;
+  }
+
+  const transcript = track.observationAlignment?.words
+    .map((word) => word.text)
+    .join(" ")
+    .trim();
+
+  return compact({
+    audioUrl: track.observationAudioUrl,
+    durationMs: track.observationDurationMs,
+    transcript: transcript ? transcript : undefined,
+  });
+}
+
+// A mixtape's PUBLIC record — the fields the /log mixtape plate renders: the
+// checkpoint title, note, runtime, and the ordered tracklist of coordinated members.
+function publicMixtapeRecord(mixtape: MixtapeDTO) {
+  return compact({
+    bangerCount: mixtape.memberCount,
+    by: "Fluncle",
+    coordinate: mixtape.logId,
+    links: compact({
+      log: mixtape.logId ? logPageUrl(mixtape.logId) : undefined,
+      mixcloud: mixtape.externalUrls.mixcloud,
+      soundcloud: mixtape.externalUrls.soundcloud,
+      youtube: mixtape.externalUrls.youtube,
+    }),
+    note: mixtape.note ?? undefined,
+    recorded: mixtape.recordedAt,
+    runtimeMs: mixtape.durationMs,
+    title: mixtapeDisplayTitle(mixtape.title),
+    tracklist: mixtape.members
+      .filter((member) => member.logId)
+      .map((member, index) =>
+        compact({
+          artists: member.artists,
+          coordinate: member.logId,
+          position: index + 1,
+          startMs: member.startMs,
+          title: member.title,
+        }),
+      ),
+    type: "mixtape",
+    uri: resourceUri("mixtape", mixtape.logId),
+  });
+}
+
+// ── Prompts: Fluncle-voiced starting points ────────────────────────────────
+//
+// Each prompt expands to a single user message that tells the agent to work the
+// tools + resources above and answer in Fluncle's voice (the recovered narrator —
+// the warmth lives in what the agent PRODUCES, not in the machine-facing
+// description, VOICE.md narrator rule). Named verb_noun like the tools.
+
+type McpPrompt = {
+  arguments: Array<{ description: string; name: string; required: boolean }>;
+  build: (args: Record<string, unknown>) => string;
+  description: string;
+  name: string;
+  title: string;
+};
+
+const prompts: McpPrompt[] = [
+  {
+    arguments: [
+      {
+        description:
+          'The mood, moment, or feeling to match — e.g. "3am, still driving" or "euphoric".',
+        name: "mood",
+        required: true,
+      },
+    ],
+    build: (args) => {
+      const mood = asTrimmedString(args.mood) || "whatever you're feeling";
+
+      return `A crew member wants a drum & bass tune for this mood: "${mood}".
+
+Dig through Fluncle's archive to answer. Call list_tracks and get_random_track to range over it, read the contenders with get_track (or their fluncle://finding/<coordinate> resources), and lean on each finding's note, BPM, key, and galaxy. Pick the ONE that lands the mood best. Reply in a single warm line, the way Fluncle would text it to the crew: name the artist and title, drop its Log ID coordinate, and say in a breath why it's the one. No lists, no preamble.`;
+    },
+    description: "Match a mood to one finding from the archive, handed over in Fluncle's voice.",
+    name: "recommend_finding",
+    title: "Recommend a finding for a mood",
+  },
+  {
+    arguments: [
+      {
+        description: "How many recent findings to walk (default 5).",
+        name: "count",
+        required: false,
+      },
+    ],
+    build: (args) => {
+      const count = clampPromptCount(args.count);
+
+      return `Walk me through Fluncle's ${count} most recent findings, like a late-night dig.
+
+Call list_tracks with limit ${count} to pull them, then read each one with get_track (or its fluncle://finding/<coordinate> resource). Go newest to oldest. For each, give one warm line in Fluncle's voice — the artist and title, its Log ID coordinate, and the one thing that made it worth logging. Keep the whole thing moving; end on where the night leaves you.`;
+    },
+    description: "Walk the most recent findings, one warm line each, in Fluncle's voice.",
+    name: "walk_recent_night",
+    title: "Walk a recent night's findings",
+  },
+  {
+    arguments: [
+      {
+        description: "A Log ID coordinate, e.g. 012.8.0A or fluncle://012.8.0A.",
+        name: "coordinate",
+        required: true,
+      },
+    ],
+    build: (args) => {
+      const coordinate = asTrimmedString(args.coordinate) || "the one you're pointed at";
+
+      return `Read the Fluncle finding at coordinate ${coordinate} and explain it to someone new.
+
+Fetch it with get_track (or the fluncle://finding/<coordinate> resource). Then, in a few plain sentences in Fluncle's voice: what the tune is (artist, title), when he found it, why it's certified (use the note), and how to read the Log ID itself — the sector counts the days since the 2026-05-30 epoch, the tail is a stable signature of the recording, minted once and never changed. Keep it warm and short.`;
+    },
+    description: "Read the finding at a Log ID coordinate and explain the coordinate.",
+    name: "decode_coordinate",
+    title: "Decode a Log ID",
+  },
+];
+
+// The recent-window count for walk_recent_night: a positive integer, clamped to the
+// recent-list cap, defaulting to five when unset or unparseable.
+function clampPromptCount(value: unknown): number {
+  const parsed = typeof value === "number" ? value : Number.parseInt(asTrimmedString(value), 10);
+
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    return 5;
+  }
+
+  return Math.min(parsed, maxRecentLimit);
+}
+
+// The first non-empty line of a note (the resource description). Undefined when the
+// note is empty or absent, so the descriptor omits the field entirely.
+function firstLine(note: string | undefined): string | undefined {
+  const line = note
+    ?.split("\n")
+    .map((part) => part.trim())
+    .find((part) => part.length > 0);
+
+  return line && line.length > 0 ? line : undefined;
+}
+
+// Drop undefined values (and, at the top level, empty link/tracklist containers)
+// so the served JSON carries only present, public fields.
+function compact<T extends Record<string, unknown>>(record: T): Partial<T> {
+  const entries = Object.entries(record).filter(([, value]) => value !== undefined);
+
+  return Object.fromEntries(entries) as Partial<T>;
+}
+
+// The capabilities this server advertises — tools, resources, and prompts, none
+// of which push list-changed notifications (the archive is polled, not subscribed).
+// Shared by the initialize response and the server card so the two never drift.
+const MCP_CAPABILITIES = {
+  prompts: { listChanged: false },
+  resources: { listChanged: false },
+  tools: { listChanged: false },
+} as const;
+
 // The MCP Server Card (SEP-2127). Carries the canonical shape (top-level name,
 // remotes, capabilities object) plus the looser serverInfo/transport fields
 // some validators still expect, so one document satisfies both readings.
 function serverCard() {
   return {
     $schema: "https://static.modelcontextprotocol.io/schemas/v1/server-card.schema.json",
-    capabilities: { tools: { listChanged: false } },
+    capabilities: MCP_CAPABILITIES,
     description: fluncleDescription,
     icons: [{ mimeType: "image/png", sizes: ["1180x1180"], src: `${siteUrl}/fluncle.png` }],
     name: SERVER_NAME,
@@ -340,9 +667,9 @@ async function dispatch(message: unknown, request: Request): Promise<JsonRpcResp
       const requested = typeof params?.protocolVersion === "string" ? params.protocolVersion : "";
 
       return success(id, {
-        capabilities: { tools: { listChanged: false } },
+        capabilities: MCP_CAPABILITIES,
         instructions:
-          "Fluncle's drum & bass archive as tools: list recent findings, pull a random one, check whether all of Fluncle's systems are operational, search Spotify candidates, submit a track for review, or board the newsletter. A submission is a recommendation, not a publish; Fluncle listens before anything goes out.",
+          "Fluncle's drum & bass archive over MCP. TOOLS: list recent findings, read one in full by coordinate, pull a random one, check whether all of Fluncle's systems are operational, search Spotify candidates, submit a track for review, or board the newsletter. RESOURCES: read the archive as a corpus — each finding/mixtape at fluncle://finding/<logId> or fluncle://mixtape/<logId>, its public record. PROMPTS: Fluncle-voiced starting points (recommend a finding for a mood, walk a recent night, decode a Log ID). A submission is a recommendation, not a publish; Fluncle listens before anything goes out.",
         protocolVersion: requested || PROTOCOL_VERSION,
         serverInfo: { name: SERVER_NAME, title: "Fluncle", version: SERVER_VERSION },
       });
@@ -358,6 +685,58 @@ async function dispatch(message: unknown, request: Request): Promise<JsonRpcResp
           title: tool.title,
         })),
       });
+    case "resources/list": {
+      const page = await listTracks({ includeMixtapes: true, limit: resourceListLimit });
+      const resources = page.tracks
+        .filter((item) => item.logId)
+        .map((item) => resourceDescriptor(item));
+
+      return success(id, { resources });
+    }
+    case "resources/read": {
+      const uri = typeof params?.uri === "string" ? params.uri : "";
+      const coordinate = coordinateFromUri(uri);
+
+      if (!coordinate) {
+        return failure(id, -32602, `Not a Fluncle resource URI: ${uri || "(missing)"}`);
+      }
+
+      const resolved = await readCoordinate(coordinate);
+
+      if (!resolved) {
+        // MCP's resource-not-found code, so a client can tell "no such coordinate"
+        // apart from a malformed request.
+        return failure(id, -32002, `No finding found at ${uri}`);
+      }
+
+      return success(id, {
+        contents: [{ mimeType: "application/json", text: JSON.stringify(resolved.record), uri }],
+      });
+    }
+    case "prompts/list":
+      return success(id, {
+        prompts: prompts.map((prompt) => ({
+          arguments: prompt.arguments,
+          description: prompt.description,
+          name: prompt.name,
+          title: prompt.title,
+        })),
+      });
+    case "prompts/get": {
+      const name = typeof params?.name === "string" ? params.name : "";
+      const prompt = prompts.find((candidate) => candidate.name === name);
+
+      if (!prompt) {
+        return failure(id, -32602, `Unknown prompt: ${name || "(missing)"}`);
+      }
+
+      const args = isObject(params?.arguments) ? params.arguments : {};
+
+      return success(id, {
+        description: prompt.description,
+        messages: [{ content: { text: prompt.build(args), type: "text" }, role: "user" }],
+      });
+    }
     case "tools/call": {
       const name = typeof params?.name === "string" ? params.name : "";
       const tool = tools.find((candidate) => candidate.name === name);

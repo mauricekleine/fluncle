@@ -224,7 +224,7 @@ ${tracks.join("\n")}
 ## For agents
 
 - [OpenAPI spec](${siteUrl}/api/v1/openapi.json): the public API as an OpenAPI 3.1 document
-- [MCP server](${siteUrl}/mcp): the same archive as Model Context Protocol tools (Streamable HTTP, no auth)
+- [MCP server](${siteUrl}/mcp): the archive over Model Context Protocol (Streamable HTTP, no auth) — tools, resources (each finding at fluncle://finding/<logId>), and Fluncle-voiced prompts
 - [MCP server card](${siteUrl}/.well-known/mcp/server-card.json): SEP-2127 discovery card for the MCP endpoint
 - [API catalog](${siteUrl}/.well-known/api-catalog): RFC 9727 linkset
 - [Agent skills](${siteUrl}/.well-known/agent-skills/index.json): the fluncle-api skill, with digest
@@ -382,7 +382,13 @@ Rate limit: 5 submissions per connection per hour. Over that returns 429 with co
 
 ## Model Context Protocol
 
-The same tools are available over MCP (Streamable HTTP, no auth) at \`${siteUrl}/mcp\`: \`list_tracks\`, \`get_random_track\`, \`search_tracks\`, \`submit_track\`, and \`subscribe_newsletter\`. The server card (SEP-2127) is at \`${siteUrl}/.well-known/mcp/server-card.json\`.
+The archive is a full MCP server (Streamable HTTP, no auth) at \`${siteUrl}/mcp\`, not just tools:
+
+- **Tools**: \`list_tracks\`, \`get_track\` (read one finding/mixtape by Log ID coordinate or Spotify id), \`get_random_track\`, \`search_tracks\`, \`submit_track\`, \`subscribe_newsletter\`.
+- **Resources**: read the archive as a corpus — each finding at \`fluncle://finding/<logId>\` and each mixtape at \`fluncle://mixtape/<logId>\`, returning its public record.
+- **Prompts**: Fluncle-voiced starting points — \`recommend_finding\` (a finding for a mood), \`walk_recent_night\`, \`decode_coordinate\`.
+
+The server card (SEP-2127) is at \`${siteUrl}/.well-known/mcp/server-card.json\`.
 
 ## Everything else
 

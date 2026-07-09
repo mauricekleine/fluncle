@@ -89,9 +89,11 @@ All `application/json`; the OpenAPI document at `/api/v1/openapi.json` advertise
 
 ### MCP — the Model Context Protocol server
 
-| Surface      | Route  | Exposes                                                                                                                                                       | Weight  |
-| ------------ | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
-| `mcp.server` | `/mcp` | the archive as MCP tools (Streamable HTTP, no auth): `list_tracks`, `get_random_track`, `get_status`, `search_tracks`, `submit_track`, `subscribe_newsletter` | primary |
+The `/mcp` endpoint speaks the full protocol, not just tools: **tools** (verbs), **resources** (the archive as a readable corpus, one URI per coordinate), and **prompts** (Fluncle-voiced starting points). Streamable HTTP, no auth. Resources and prompts are server-MCP only — `navigator.modelContext` (the browser WebMCP surface, `lib/webmcp.ts`) has no resource/prompt primitive, so it mirrors the tool set alone (the browser read path is the `get_track` tool).
+
+| Surface      | Route  | Exposes                                                                                                                                                                                                                                                                                                                                    | Weight  |
+| ------------ | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------- |
+| `mcp.server` | `/mcp` | **tools**: `list_tracks`, `get_track`, `get_random_track`, `get_status`, `search_tracks`, `submit_track`, `subscribe_newsletter`. **resources**: each finding/mixtape at `fluncle://finding/<logId>` or `fluncle://mixtape/<logId>` (its public `/log` record). **prompts**: `recommend_finding`, `walk_recent_night`, `decode_coordinate` | primary |
 
 ### DNS — the delegated authoritative zone
 
