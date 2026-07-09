@@ -1,0 +1,552 @@
+{
+  "entities": [
+    {
+      "bodyRadius": 30,
+      "id": "roadster:roadster",
+      "kind": "roadster",
+      "radius": 1099.9796015013435,
+      "spin": 5.6,
+      "vOffset": 54,
+      "vx": 0,
+      "vy": 0,
+      "x": -880.8193201681768,
+      "y": 658.8721036267397
+    },
+    {
+      "bodyRadius": 34,
+      "exits": [
+        {
+          "x": 1143.2331562900977,
+          "y": -692.5147425265542
+        },
+        {
+          "x": -471.3209168450135,
+          "y": -1113.0938376178106
+        },
+        {
+          "x": 1041.5759371789443,
+          "y": -821.1827809766603
+        },
+        {
+          "x": -880.1546824001109,
+          "y": -765.0065529555367
+        }
+      ],
+      "id": "blackhole:0",
+      "kind": "blackhole",
+      "radius": 1148.108025596,
+      "vOffset": 0,
+      "vx": 0,
+      "vy": 0,
+      "x": -1025.5818400629666,
+      "y": -516.0755058816538
+    },
+    {
+      "bodyRadius": 15,
+      "id": "asteroid:0:0",
+      "kind": "asteroid",
+      "radius": 1311.199557223715,
+      "spin": 5.97,
+      "vOffset": 115,
+      "vx": -5.896930149995061,
+      "vy": -1.1073458385162371,
+      "x": -516.5416423628762,
+      "y": -1205.167627580798
+    },
+    {
+      "bodyRadius": 20,
+      "id": "asteroid:0:1",
+      "kind": "asteroid",
+      "radius": 1076.199557223715,
+      "spin": 1.76,
+      "vOffset": 80,
+      "vx": 6.728455514745513,
+      "vy": -5.977280852201166,
+      "x": -405.09471863770716,
+      "y": -997.0475193792705
+    },
+    {
+      "bodyRadius": 15,
+      "id": "asteroid:0:2",
+      "kind": "asteroid",
+      "radius": 1301.199557223715,
+      "spin": 5.07,
+      "vOffset": -147,
+      "vx": -4.814223521978837,
+      "vy": 3.5809568386711517,
+      "x": -466.7959672289236,
+      "y": -1214.5870955588182
+    },
+    {
+      "bodyRadius": 12,
+      "id": "asteroid:0:3",
+      "kind": "asteroid",
+      "radius": 1266.199557223715,
+      "spin": 6.26,
+      "vOffset": 18,
+      "vx": -3.266251439092113,
+      "vy": -8.386393833861412,
+      "x": -431.7029130504281,
+      "y": -1190.333530392766
+    },
+    {
+      "bodyRadius": 17,
+      "id": "asteroid:0:4",
+      "kind": "asteroid",
+      "radius": 1083.199557223715,
+      "spin": 5.01,
+      "vOffset": 135,
+      "vx": 0.9469529894218488,
+      "vy": 7.943757299655184,
+      "x": -349.89703354854083,
+      "y": -1025.1308924637788
+    },
+    {
+      "bodyRadius": 12,
+      "id": "asteroid:0:5",
+      "kind": "asteroid",
+      "radius": 1248.199557223715,
+      "spin": 1.36,
+      "vOffset": 100,
+      "vx": -9.433770086346835,
+      "vy": -5.6572061972273575,
+      "x": -380.67977622382114,
+      "y": -1188.7325362030178
+    }
+  ],
+  "frontier": {
+    "setDressing": true,
+    "blackHoles": true,
+    "asteroids": true
+  },
+  "seed": 12345,
+  "snapshots": [
+    {
+      "contacts": [
+        {
+          "bearing": -1.2193267525748812,
+          "bodyRadius": 34,
+          "distance": 1092.3602413082795,
+          "id": "blackhole:0",
+          "influenceRadius": 260,
+          "kind": "blackhole"
+        },
+        {
+          "bearing": -0.45152661780198633,
+          "bodyRadius": 15,
+          "distance": 1183.8062946027287,
+          "id": "asteroid:0:0",
+          "kind": "asteroid"
+        },
+        {
+          "bearing": -0.4415398917891107,
+          "bodyRadius": 20,
+          "distance": 947.9621203098382,
+          "id": "asteroid:0:1",
+          "kind": "asteroid"
+        },
+        {
+          "bearing": -0.40980186123949425,
+          "bodyRadius": 15,
+          "distance": 1171.5954510677834,
+          "id": "asteroid:0:2",
+          "kind": "asteroid"
+        },
+        {
+          "bearing": -0.3899659165945817,
+          "bodyRadius": 12,
+          "distance": 1135.5914451084761,
+          "id": "asteroid:0:3",
+          "kind": "asteroid"
+        },
+        {
+          "bearing": -0.3764527799944821,
+          "bodyRadius": 17,
+          "distance": 951.7797176236706,
+          "id": "asteroid:0:4",
+          "kind": "asteroid"
+        },
+        {
+          "bearing": -0.34820030653171297,
+          "bodyRadius": 12,
+          "distance": 1115.6867949907057,
+          "id": "asteroid:0:5",
+          "kind": "asteroid"
+        }
+      ],
+      "events": [],
+      "label": "boot",
+      "ship": {
+        "fuel": 100,
+        "heading": -1.5707963267948966,
+        "speed": 70,
+        "vx": 0,
+        "vy": 0,
+        "x": 0,
+        "y": -140
+      }
+    },
+    {
+      "contacts": [
+        {
+          "bearing": 0,
+          "bodyRadius": 34,
+          "distance": 120,
+          "id": "blackhole:0",
+          "influenceRadius": 260,
+          "kind": "blackhole"
+        },
+        {
+          "bearing": -0.8309250256128875,
+          "bodyRadius": 15,
+          "distance": 933.0270749074738,
+          "id": "asteroid:0:0",
+          "kind": "asteroid"
+        },
+        {
+          "bearing": -0.5760479874491147,
+          "bodyRadius": 20,
+          "distance": 882.9808915059366,
+          "id": "asteroid:0:1",
+          "kind": "asteroid"
+        },
+        {
+          "bearing": -0.7997192297077214,
+          "bodyRadius": 15,
+          "distance": 973.9962536233868,
+          "id": "asteroid:0:2",
+          "kind": "asteroid"
+        },
+        {
+          "bearing": -0.7568634079937365,
+          "bodyRadius": 12,
+          "distance": 981.9607965953636,
+          "id": "asteroid:0:3",
+          "kind": "asteroid"
+        },
+        {
+          "bearing": -0.5691501123617845,
+          "bodyRadius": 17,
+          "distance": 944.5907568498518,
+          "id": "asteroid:0:4",
+          "kind": "asteroid"
+        },
+        {
+          "bearing": -0.721318196760012,
+          "bodyRadius": 12,
+          "distance": 1018.5983740936074,
+          "id": "asteroid:0:5",
+          "kind": "asteroid"
+        }
+      ],
+      "events": [],
+      "label": "near-blackhole",
+      "ship": {
+        "fuel": 100,
+        "heading": 0,
+        "speed": 70,
+        "vx": 0,
+        "vy": 0,
+        "x": -1145.5818400629666,
+        "y": -516.0755058816538
+      }
+    },
+    {
+      "contacts": [
+        {
+          "bearing": 0,
+          "bodyRadius": 34,
+          "distance": 118.83333333333326,
+          "id": "blackhole:0",
+          "influenceRadius": 260,
+          "kind": "blackhole"
+        },
+        {
+          "bearing": -0.8319405688755839,
+          "bodyRadius": 15,
+          "distance": 932.1883667253811,
+          "id": "asteroid:0:0",
+          "kind": "asteroid"
+        },
+        {
+          "bearing": -0.57679384564443,
+          "bodyRadius": 20,
+          "distance": 882.151053625357,
+          "id": "asteroid:0:1",
+          "kind": "asteroid"
+        },
+        {
+          "bearing": -0.8005954501612728,
+          "bodyRadius": 15,
+          "distance": 973.0848478632531,
+          "id": "asteroid:0:2",
+          "kind": "asteroid"
+        },
+        {
+          "bearing": -0.7578215287782321,
+          "bodyRadius": 12,
+          "distance": 981.1694869022657,
+          "id": "asteroid:0:3",
+          "kind": "asteroid"
+        },
+        {
+          "bearing": -0.5696892520601434,
+          "bodyRadius": 17,
+          "distance": 943.5500857025822,
+          "id": "asteroid:0:4",
+          "kind": "asteroid"
+        },
+        {
+          "bearing": -0.7222468616685684,
+          "bodyRadius": 12,
+          "distance": 1017.6669164279466,
+          "id": "asteroid:0:5",
+          "kind": "asteroid"
+        }
+      ],
+      "events": [],
+      "label": "blackhole-pull",
+      "ship": {
+        "fuel": 99.9675925925926,
+        "heading": 0,
+        "speed": 70,
+        "vx": 1.6704954251588884,
+        "vy": 0,
+        "x": -1144.4151733963,
+        "y": -516.0755058816538
+      }
+    },
+    {
+      "contacts": [
+        {
+          "bearing": 2.3190725095469045,
+          "bodyRadius": 34,
+          "distance": 814.6386066443459,
+          "id": "blackhole:0",
+          "influenceRadius": 260,
+          "kind": "blackhole"
+        },
+        {
+          "bearing": -2.0288869078098593,
+          "bodyRadius": 15,
+          "distance": 102.69913118928694,
+          "id": "asteroid:0:0",
+          "kind": "asteroid"
+        },
+        {
+          "bearing": 1.050010939681153,
+          "bodyRadius": 20,
+          "distance": 133.552278946806,
+          "id": "asteroid:0:1",
+          "kind": "asteroid"
+        },
+        {
+          "bearing": -1.5277696486346126,
+          "bodyRadius": 15,
+          "distance": 101.46780164257044,
+          "id": "asteroid:0:2",
+          "kind": "asteroid"
+        },
+        {
+          "bearing": -1.0994437214983102,
+          "bodyRadius": 12,
+          "distance": 87.00691757589105,
+          "id": "asteroid:0:3",
+          "kind": "asteroid"
+        },
+        {
+          "bearing": 0.6282387089839041,
+          "bodyRadius": 17,
+          "distance": 150.1184849795005,
+          "id": "asteroid:0:4",
+          "kind": "asteroid"
+        },
+        {
+          "bearing": -0.6983537609239491,
+          "bodyRadius": 12,
+          "distance": 117.93508642517097,
+          "id": "asteroid:0:5",
+          "kind": "asteroid"
+        }
+      ],
+      "events": [
+        {
+          "kind": "warped"
+        }
+      ],
+      "label": "blackhole-warp",
+      "ship": {
+        "fuel": 99.93518518518519,
+        "heading": 0,
+        "speed": 70,
+        "vx": 0,
+        "vy": 0,
+        "x": -471.3209168450135,
+        "y": -1113.0938376178106
+      }
+    },
+    {
+      "contacts": [
+        {
+          "bearing": 2.1062569508090467,
+          "bodyRadius": 34,
+          "distance": 801.2814368104086,
+          "id": "blackhole:0",
+          "influenceRadius": 260,
+          "kind": "blackhole"
+        },
+        {
+          "bearing": 0,
+          "bodyRadius": 15,
+          "distance": 100,
+          "id": "asteroid:0:0",
+          "kind": "asteroid"
+        },
+        {
+          "bearing": 0.7760850573601409,
+          "bodyRadius": 20,
+          "distance": 296.87436561181926,
+          "id": "asteroid:0:1",
+          "kind": "asteroid"
+        },
+        {
+          "bearing": -0.061765919387236176,
+          "bodyRadius": 15,
+          "distance": 150.067931099365,
+          "id": "asteroid:0:2",
+          "kind": "asteroid"
+        },
+        {
+          "bearing": 0.0787410121762363,
+          "bodyRadius": 12,
+          "distance": 185.50118885871635,
+          "id": "asteroid:0:3",
+          "kind": "asteroid"
+        },
+        {
+          "bearing": 0.5942626353408879,
+          "bodyRadius": 17,
+          "distance": 322.09161870922634,
+          "id": "asteroid:0:4",
+          "kind": "asteroid"
+        },
+        {
+          "bearing": 0.06896298129869431,
+          "bodyRadius": 12,
+          "distance": 236.30567102481135,
+          "id": "asteroid:0:5",
+          "kind": "asteroid"
+        }
+      ],
+      "events": [],
+      "label": "near-asteroid",
+      "ship": {
+        "fuel": 99.93518518518519,
+        "heading": 0,
+        "speed": 70,
+        "vx": 0,
+        "vy": 0,
+        "x": -616.7382067012095,
+        "y": -1205.2045391087483
+      }
+    }
+  ],
+  "tracks": [
+    {
+      "addedAt": "2026-05-30T00:00:00.000Z",
+      "artists": ["Artist"],
+      "logId": "0.0.1A",
+      "spotifyUrl": "https://open.spotify.com/track/0",
+      "title": "Banger 0",
+      "trackId": "track-0"
+    },
+    {
+      "addedAt": "2026-05-30T00:00:00.000Z",
+      "artists": ["Artist"],
+      "logId": "1.0.1A",
+      "spotifyUrl": "https://open.spotify.com/track/1",
+      "title": "Banger 1",
+      "trackId": "track-1"
+    },
+    {
+      "addedAt": "2026-05-30T00:00:00.000Z",
+      "artists": ["Artist"],
+      "logId": "2.0.1A",
+      "spotifyUrl": "https://open.spotify.com/track/2",
+      "title": "Banger 2",
+      "trackId": "track-2"
+    },
+    {
+      "addedAt": "2026-05-30T00:00:00.000Z",
+      "artists": ["Artist"],
+      "logId": "3.0.1A",
+      "spotifyUrl": "https://open.spotify.com/track/3",
+      "title": "Banger 3",
+      "trackId": "track-3"
+    },
+    {
+      "addedAt": "2026-05-30T00:00:00.000Z",
+      "artists": ["Artist"],
+      "logId": "4.0.1A",
+      "spotifyUrl": "https://open.spotify.com/track/4",
+      "title": "Banger 4",
+      "trackId": "track-4"
+    },
+    {
+      "addedAt": "2026-05-30T00:00:00.000Z",
+      "artists": ["Artist"],
+      "logId": "5.0.1A",
+      "spotifyUrl": "https://open.spotify.com/track/5",
+      "title": "Banger 5",
+      "trackId": "track-5"
+    },
+    {
+      "addedAt": "2026-05-30T00:00:00.000Z",
+      "artists": ["Artist"],
+      "logId": "6.0.1A",
+      "spotifyUrl": "https://open.spotify.com/track/6",
+      "title": "Banger 6",
+      "trackId": "track-6"
+    },
+    {
+      "addedAt": "2026-05-30T00:00:00.000Z",
+      "artists": ["Artist"],
+      "logId": "7.0.1A",
+      "spotifyUrl": "https://open.spotify.com/track/7",
+      "title": "Banger 7",
+      "trackId": "track-7"
+    },
+    {
+      "addedAt": "2026-05-30T00:00:00.000Z",
+      "artists": ["Artist"],
+      "logId": "8.0.1A",
+      "spotifyUrl": "https://open.spotify.com/track/8",
+      "title": "Banger 8",
+      "trackId": "track-8"
+    },
+    {
+      "addedAt": "2026-05-30T00:00:00.000Z",
+      "artists": ["Artist"],
+      "logId": "9.0.1A",
+      "spotifyUrl": "https://open.spotify.com/track/9",
+      "title": "Banger 9",
+      "trackId": "track-9"
+    },
+    {
+      "addedAt": "2026-05-30T00:00:00.000Z",
+      "artists": ["Artist"],
+      "logId": "10.0.1A",
+      "spotifyUrl": "https://open.spotify.com/track/10",
+      "title": "Banger 10",
+      "trackId": "track-10"
+    },
+    {
+      "addedAt": "2026-05-30T00:00:00.000Z",
+      "artists": ["Artist"],
+      "logId": "11.0.1A",
+      "spotifyUrl": "https://open.spotify.com/track/11",
+      "title": "Banger 11",
+      "trackId": "track-11"
+    }
+  ]
+}

@@ -1,8 +1,9 @@
-// Cross-language parity: the SSH (Go) galaxy must place the same stars, run the
-// same sim, and seed the same frontier as this TypeScript authority. The frozen
-// fixtures under apps/ssh/internal/galaxy/testdata/*.json are the shared golden
-// output — both this suite and the Go tests read them and fail on any drift, so
-// the two implementations can never silently diverge.
+// Golden pin for the Galaxy engine: the frozen fixtures under ./testdata/*.json
+// capture the exact placement, sim, and frontier output this TypeScript authority
+// must produce. Any drift in placeStars / the sim / placeFrontier fails the exact
+// compare, so the web Galaxy game can never silently regress. (These fixtures were
+// once the SHARED golden with the retired SSH/Go galaxy; that terminal game is
+// gone, and they now live in apps/web as the sole home of the TS authority.)
 //
 // GEOMETRY NOTE: these fixtures were deliberately regenerated for the voyage
 // SPIRAL layout (placeStars: Earth-centred Archimedean thread, radius strictly
@@ -12,7 +13,7 @@
 // same scripted scenarios against the TS authority UNDER VITEST (V8 — Bun's
 // JavaScriptCore differs by ~1 ULP in Math.sin/cos and would fail the exact
 // compare), writing the recomputed OUTPUT fields back while preserving every
-// INPUT field, then run this suite + `go test ./internal/galaxy/`.
+// INPUT field, then run this suite.
 
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -54,10 +55,7 @@ type PlacementFixture = {
 };
 
 const fixture = JSON.parse(
-  readFileSync(
-    fileURLToPath(new URL("../../../ssh/internal/galaxy/testdata/placement.json", import.meta.url)),
-    "utf8",
-  ),
+  readFileSync(fileURLToPath(new URL("./testdata/placement.json", import.meta.url)), "utf8"),
 ) as PlacementFixture;
 
 type SimFixture = {
@@ -68,10 +66,7 @@ type SimFixture = {
 };
 
 const simFixture = JSON.parse(
-  readFileSync(
-    fileURLToPath(new URL("../../../ssh/internal/galaxy/testdata/sim_stars.json", import.meta.url)),
-    "utf8",
-  ),
+  readFileSync(fileURLToPath(new URL("./testdata/sim_stars.json", import.meta.url)), "utf8"),
 ) as SimFixture;
 
 type FrontierFixture = {
@@ -88,14 +83,12 @@ type FrontierFixture = {
 
 const frontierFixture = JSON.parse(
   readFileSync(
-    fileURLToPath(
-      new URL("../../../ssh/internal/galaxy/testdata/frontier_contacts.json", import.meta.url),
-    ),
+    fileURLToPath(new URL("./testdata/frontier_contacts.json", import.meta.url)),
     "utf8",
   ),
 ) as FrontierFixture;
 
-describe("SSH placement parity fixture", () => {
+describe("Galaxy placement golden fixture", () => {
   it("matches the TypeScript placement authority", () => {
     for (const [input, expected] of Object.entries(fixture.fnv1a)) {
       expect(fnv1a(input)).toBe(expected);
@@ -130,7 +123,7 @@ describe("SSH placement parity fixture", () => {
   });
 });
 
-describe("SSH star-flight sim parity fixture", () => {
+describe("Galaxy star-flight sim golden fixture", () => {
   it("matches the TypeScript sim authority", () => {
     const sim = createSim(placeStars(simFixture.tracks), { seed: simFixture.seed });
     const snapshots: unknown[] = [];
@@ -207,7 +200,7 @@ describe("SSH star-flight sim parity fixture", () => {
   });
 });
 
-describe("SSH frontier contacts parity fixture", () => {
+describe("Galaxy frontier contacts golden fixture", () => {
   it("matches TypeScript frontier placement and scope contacts", () => {
     const stars = placeStars(frontierFixture.tracks);
     const entities = placeFrontier(stars, frontierFixture.frontier, frontierFixture.seed);

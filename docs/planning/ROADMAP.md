@@ -156,7 +156,7 @@ v1 is live at [galaxy.fluncle.com](https://galaxy.fluncle.com) (same Worker, `/g
 - **The bespoke sprite menagerie** beyond the heroes (see Near polish).
 - **Multiplayer — a shared galaxy (idea, 2026-06-24 scribble)** — open the single-pilot universe to the crew: other players' dots on the **radar** in your sector, their trails / recently-flown **tracks**, and a sense of which stars are **popular** (most-visited across everyone) so the catalogue's hotspots show on the map. Each pilot picks a **custom spaceship** from a small palette (the scribble guessed ~5 colours). Ties to **persistence / accounts** (identity + a shared-state layer) and reuses the existing radar. A big social direction — unscoped; capture-for-later, picked up once the single-player frontier is polished.
 
-**SSH version (the flex)** — live at `ssh rave.fluncle.com`: a Go port of the sim (`apps/ssh/internal/galaxy`) kept in lockstep with the JS source by parity tests. Remaining named fast-follows: SSH experience polish, Kitty-input, ambient-crew.
+**SSH version (retired 2026-07-09)** — the Go port of the sim that ran at `ssh rave.fluncle.com` has been dropped: gimmicky rather than playable, and a second surface to carry once the game grows accounts/persistence (which land web-first). The SSH terminal keeps a link out to the web Galaxy; the frozen sim fixtures moved into `apps/web` as golden pins.
 
 **Persistence:** web private accounts sync lifetime Galaxy progress (`me-galaxy.ts` + `game/progress.ts`) without changing active-run cargo; anonymous play stays first-class. The only remainder — cross-surface SSH/CLI login for synced markers — is tracked once under _User accounts → Cross-surface account login_, not duplicated here.
 

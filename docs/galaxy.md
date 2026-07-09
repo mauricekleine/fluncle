@@ -18,7 +18,7 @@ apps/web/src/game/
 apps/web/src/routes/galaxy.tsx   # the route
 ```
 
-The placement and sim are cross-language authorities: the SSH (Go) galaxy replays the frozen fixtures under `apps/ssh/internal/galaxy/testdata/`, and `parity-fixtures.test.ts` fails on any drift. Asset workflow (the canon ramp, the Nano-Banana pass, the procedural-fallback contract) is [docs/galaxy-sprites.md](./galaxy-sprites.md).
+The placement and sim are pinned by frozen golden fixtures under `apps/web/src/game/testdata/`, and `golden-fixtures.test.ts` fails on any drift. (These were once the shared golden with a Go port of the sim that ran in the SSH terminal; that terminal game has been retired, so the fixtures now live in `apps/web` as the sole home of the TypeScript authority.) Asset workflow (the canon ramp, the Nano-Banana pass, the procedural-fallback contract) is [docs/galaxy-sprites.md](./galaxy-sprites.md).
 
 ## The atlas
 
