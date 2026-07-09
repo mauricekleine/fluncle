@@ -90,6 +90,9 @@ run_audit() {
   git config user.email "hey@mauricekleine.com"
   git config commit.gpgsign false
   git config credential.https://github.com.helper "!gh auth git-credential"
+  # `bun install` marks the CLI `bin` entry (apps/cli/src/cli.ts) executable every run; without
+  # this, that stray 100644→100755 mode flip lands in `git add -A` and pollutes every audit PR.
+  git config core.fileMode false
 
   git fetch --quiet origin main || { echo "{\"ok\":false,\"stage\":\"fetch\",\"domain\":\"${DOMAIN}\"}"; return 1; }
   git reset --hard --quiet origin/main
@@ -130,6 +133,25 @@ $(cat "${prompt_file}")"
 
   # 8. The one bounded judgment call. Its chatter → stderr/journald; only our summary hits stdout.
   export CLAUDE_CONFIG_DIR="${CLAUDE_CONFIG_DIR:-/opt/claude}"
+
+  # Mark this fixed workspace path trusted so the repo's own .claude/settings.json — including the
+  # guard-protected-files hook (the mechanical backstop behind the prompt's hard rails) — actually
+  # loads; Claude Code silently ignores settings.json in an untrusted dir. Idempotent + re-applied
+  # every run, so it survives an image rebuild/swap (CLAUDE_CONFIG_DIR is baked). Best-effort: on
+  # any failure the run still has the prompt rails + PAT scope + review gate, so never abort on it.
+  AUDIT_WS="${ws}" "${BUN_BIN}" -e '
+    const fs = require("fs");
+    const f = process.env.CLAUDE_CONFIG_DIR + "/.claude.json";
+    const ws = process.env.AUDIT_WS;
+    try {
+      const j = JSON.parse(fs.readFileSync(f, "utf8"));
+      (j.projects ??= {})[ws] ??= {};
+      j.projects[ws].hasTrustDialogAccepted = true;
+      fs.writeFileSync(f, JSON.stringify(j, null, 2));
+      process.stderr.write("[audit-sweep] workspace marked trusted\n");
+    } catch (e) { process.stderr.write("[audit-sweep] trust-mark skipped: " + e.message + "\n"); }
+  ' || log "trust-mark step failed (continuing; prompt rails + PAT scope + review still gate)"
+
   log "invoking claude -p (opus) for ${DOMAIN}…"
   "$(command -v claude)" -p "${prompt}" \
     --model opus \
