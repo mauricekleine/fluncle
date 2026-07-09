@@ -1,7 +1,7 @@
 // Fluncle's /pipeline — the wide, draggable infographic canvas of a finding's whole
-// life: the synchronous add in the Worker, the async enrichment crons, the human-gated
-// dispatch, the plaza of every surface, and the launch into the Galaxy (with the mixtape
-// dream-tail). A client-only DOM+SVG+canvas toy, mounted into a container the same way
+// life: the instant find, the enrichment factory of background machines, distribution
+// out to the world, every surface it lands on, and the launch into the Galaxy (with the
+// mixtape dream-tail). A client-only DOM+SVG+canvas toy, mounted into a container the same way
 // the Galaxy/Earth games are: `createPipeline(container)` returns a `{ destroy }` handle.
 //
 // It is fully self-contained: it injects its own scoped stylesheet (every selector under
@@ -397,6 +397,7 @@ const STYLES = `
 .fpl .stage{position:absolute;inset:0;cursor:grab;touch-action:none}
 .fpl .stage.drag{cursor:grabbing}
 .fpl .world{position:absolute;top:0;left:0;will-change:transform;transform-origin:0 0}
+.fpl .world>img{max-width:none;height:auto}
 .fpl .zoomctl{position:absolute;right:20px;bottom:18px;z-index:30;display:flex;align-items:center;gap:1px;
   background:#10100dcc;border:1px solid var(--line);border-radius:10px;padding:3px;box-shadow:0 6px 18px #0007;
   -webkit-backdrop-filter:blur(5px);backdrop-filter:blur(5px)}
@@ -455,7 +456,7 @@ const CHROME = `
 <header class="top">
   <div class="brand">
     <h1>/pipeline</h1>
-    <p class="tag">one finding, from the dig to the Galaxy</p>
+    <p class="tag">I dig one up, then send it across the Galaxy</p>
   </div>
   <div class="legend-wrap">
     <span class="legend-lbl">where it runs</span>
@@ -463,7 +464,7 @@ const CHROME = `
   </div>
   <div class="meta">
     <div class="hbstat"><span class="dot"></span>connecting…</div>
-    <div class="hint">drag to pan · plaza <b class="plazatag">boardwalk</b> · press 1·2·3</div>
+    <div class="hint">drag to pan · scroll to move · <b>⌘-scroll</b> to zoom</div>
   </div>
 </header>
 <div class="stage"><div class="world"><svg class="wires"></svg></div></div>
@@ -569,21 +570,21 @@ export function createPipeline(container: HTMLElement): { destroy: () => void } 
     }
   }
 
-  band(B(-0.2), B(4.55), "Act 1 · the find", "synchronous · one request · in the Worker", true);
+  band(B(-0.2), B(4.55), "Act 1 · the find", "I hear it, I log it on the spot", true);
   band(
     B(4.55),
     B(9.35),
-    "Act 2 · enrichment floor",
-    "async · self-healing crons · parallel lanes",
+    "Act 2 · the enrichment factory",
+    "my machines pull it apart and learn it",
     true,
   );
-  band(B(9.35), B(11.0), "Act 3 · dispatch", "human-gated publish", true);
-  band(B(11.0), B(14.9), "the plaza · every surface", "one finding, many faces", true);
+  band(B(9.35), B(11.0), "Act 3 · distribution", "I have the last word before it goes out", true);
+  band(B(11.0), B(14.9), "every surface", "one finding, a different face on each", true);
   band(
     B(14.9),
     B(22.6),
-    "the galaxy · launch",
-    "findings become stars · mixtapes are Fluncle dreaming",
+    "the Galaxy · launch",
+    "each finding a star · a mixtape is me dreaming",
     false,
   );
 
@@ -662,20 +663,20 @@ export function createPipeline(container: HTMLElement): { destroy: () => void } 
   sun.src = SPRITE("sun");
   sun.alt = "";
   sun.style.cssText =
-    `position:absolute;left:${B(21.0)}px;top:${CY - 268}px;width:206px;image-rendering:pixelated;` +
-    `pointer-events:none;filter:drop-shadow(0 0 46px #ffd05733) drop-shadow(0 0 12px #f5b80033)`;
+    `position:absolute;left:${B(17.8)}px;top:118px;width:224px;image-rendering:pixelated;` +
+    `pointer-events:none;filter:drop-shadow(0 0 52px #ffd05740) drop-shadow(0 0 14px #f5b80040)`;
   world.appendChild(sun);
 
   // stations + dream tail
   S.forEach(card);
   D.forEach((d) => card({ ...d, col: d.col + 2, dream: true }));
 
-  // launching-finding rockets — an ascending trail up-right off the galaxy mouth
+  // launching-finding rockets — an ascending trail off the galaxy mouth, climbing toward the sun
   (
     [
-      [15.3, -105, 52],
-      [15.75, -185, 44],
-      [16.2, -265, 38],
+      [15.7, -80, 60],
+      [16.45, -175, 52],
+      [17.2, -262, 44],
     ] as const
   ).forEach(([c, dy, w]) => {
     const im = document.createElement("img");
@@ -749,76 +750,44 @@ export function createPipeline(container: HTMLElement): { destroy: () => void } 
     const my = (y1 + y2) / 2;
     return `<path d="M${x1},${y1} C${x1},${my} ${x2},${my} ${x2},${y2}" fill="none" stroke="#4b4536" stroke-width="1.3"/>`;
   };
-  const fan = (x1: number, y1: number, x2: number, y2: number) => {
-    const mx = (x1 + x2) / 2;
-    return `<path d="M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}" fill="none" stroke="#4b4536" stroke-width="1.2"/>`;
-  };
   const spine = (x1: number, y1: number, x2: number, y2: number) =>
     `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="#ffd05740" stroke-width="2"/>`;
   const gcurve = (x1: number, y1: number, x2: number, y2: number) => {
     const mx = (x1 + x2) / 2;
     return `<path d="M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}" fill="none" stroke="#ffd05740" stroke-width="2"/>`;
   };
-  const PNAME: Record<string, string> = { grid: "grid", rise: "ascent", walk: "boardwalk" };
-  const plazatag = q<HTMLElement>(".plazatag");
-  function renderPlaza(v: string): void {
+  function renderPlaza(): void {
     plaza.innerHTML = "";
     plazaG.innerHTML = "";
     let wire = "";
-    const ey = v === "rise" ? CY - 118 : CY;
     const yt = pos.yt,
       tk = pos.tk;
     if (yt && tk) {
       wire += gcurve(yt.x + yt.w, yt.y, MERGE, CY) + gcurve(tk.x + tk.w, tk.y, MERGE, CY);
     }
-    if (v === "walk" || v === "rise") {
-      const lineY = (x: number) => CY + (ey - CY) * ((x - MERGE) / (GALX - MERGE));
-      const x0 = B(11.3),
-        gapx = 128,
-        off = [-132, 26];
-      K.forEach((k, i) => {
-        const col = i % 6,
-          row = Math.floor(i / 6),
-          x = x0 + col * gapx,
-          kx = x + 52,
-          sy = lineY(kx);
-        const y = sy + (off[row] ?? 0);
-        const a = kioskEl(k);
-        a.style.left = x + "px";
-        a.style.top = y + "px";
-        plaza.appendChild(a);
-        wire += stem(kx, sy, kx, row === 0 ? y + 96 : y + 6);
-      });
-      wire += spine(MERGE, CY, GALX, ey);
-    } else {
-      const hubX = B(11.15),
-        x0 = B(11.65),
-        gx = 118,
-        gy = 118;
-      K.forEach((k, i) => {
-        const col = i % 3,
-          row = Math.floor(i / 3),
-          x = x0 + col * gx,
-          y = CY + (row - 1.5) * gy,
-          kx = x + 52,
-          ky = y + 52;
-        const a = kioskEl(k);
-        a.style.left = x + "px";
-        a.style.top = y + "px";
-        plaza.appendChild(a);
-        wire += fan(hubX, CY, kx, ky);
-      });
-      wire += spine(MERGE, CY, hubX, CY) + spine(hubX, CY, GALX, CY);
-    }
-    wire += gcurve(GALX, ey, B(15.35), CY - 92);
+    const x0 = B(11.3),
+      gapx = 128,
+      off = [-132, 26];
+    K.forEach((k, i) => {
+      const col = i % 6,
+        row = Math.floor(i / 6),
+        x = x0 + col * gapx,
+        kx = x + 52;
+      const y = CY + (off[row] ?? 0);
+      const a = kioskEl(k);
+      a.style.left = x + "px";
+      a.style.top = y + "px";
+      plaza.appendChild(a);
+      wire += stem(kx, CY, kx, row === 0 ? y + 96 : y + 6);
+    });
+    wire += spine(MERGE, CY, GALX, CY);
     const plan = pos.plan;
     if (plan) {
-      wire += gcurve(GALX, ey, plan.x, plan.y);
+      wire += gcurve(GALX, CY, plan.x, plan.y);
     }
     plazaG.innerHTML = wire;
-    plazatag.textContent = PNAME[v] ?? v;
   }
-  renderPlaza("walk");
+  renderPlaza();
 
   // ── pan + zoom ──
   let tx = 0,
@@ -924,15 +893,6 @@ export function createPipeline(container: HTMLElement): { destroy: () => void } 
     if (e.key === "ArrowDown") {
       ty -= s;
     }
-    if (e.key === "1") {
-      renderPlaza("walk");
-    }
-    if (e.key === "2") {
-      renderPlaza("rise");
-    }
-    if (e.key === "3") {
-      renderPlaza("grid");
-    }
     if (e.key === "+" || e.key === "=") {
       setZoom(zoom * 1.15);
     }
@@ -990,7 +950,7 @@ export function createPipeline(container: HTMLElement): { destroy: () => void } 
   };
   function renderHbStat(): void {
     const age = hbSince ? fmtAgo(Math.round((Date.now() - hbSince) / 1000)) : "…";
-    hbstat.innerHTML = `<span class="dot"></span>live · ${hbFresh}/${hbTotal} crons fresh · last report ${age}`;
+    hbstat.innerHTML = `<span class="dot"></span>live · ${hbFresh}/${hbTotal} machines fresh · last report ${age}`;
   }
   async function applyStatus(): Promise<void> {
     try {

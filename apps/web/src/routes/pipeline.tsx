@@ -50,10 +50,11 @@ function PipelinePage() {
     <main className="fixed inset-0 overflow-hidden bg-[#090a0b]">
       <h1 className="sr-only">Fluncle's pipeline</h1>
       <p className="sr-only">
-        The whole journey a banger takes through Fluncle, end to end: the fast add in the Worker,
-        the async enrichment crons, the human-gated dispatch, the plaza of every surface, and the
-        launch into the Galaxy where the mixtapes are Fluncle dreaming. Drag to pan, scroll or use
-        the arrow keys, and press 1, 2, or 3 to reshape the plaza.
+        The whole journey a banger takes through Fluncle, end to end: the instant find, the
+        enrichment factory where background machines pull it apart and learn it, distribution out to
+        the world, every surface it lands on, and the launch into the Galaxy where each finding is a
+        star and a mixtape is Fluncle dreaming. Drag to pan, scroll or use the arrow keys to move,
+        and hold ⌘ while scrolling to zoom.
       </p>
       <div
         aria-label="Fluncle's pipeline"
