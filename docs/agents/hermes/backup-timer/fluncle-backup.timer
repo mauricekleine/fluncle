@@ -1,13 +1,14 @@
 [Unit]
-Description=fluncle-backup timer — trigger the database-backup sweep every 24h on the rave-02 host (not the Hermes gateway)
+Description=fluncle-backup timer — trigger the database-backup sweep nightly at 03:00 Amsterdam on the rave-02 host (not the Hermes gateway)
 
 [Timer]
-# First tick shortly after boot (staggered at 11min), then every 24h — the backup cadence (was
-# `every 24h` on the gateway). Persistent catches up a day the box slept through on the next
-# wake (a durable off-site backup must not silently skip a day). The prune keeps 30 daily / 12
-# monthly, so a caught-up extra run is harmless.
-OnBootSec=11min
-OnUnitActiveSec=24h
+# 03:00 Europe/Amsterdam via the explicit OnCalendar TZ suffix (the host clock is UTC) — a fixed,
+# predictable deep-off-peak nightly slot rather than a rolling 24h interval that drifts across the
+# day. It sits before the 05:00 audit-reviewer (which may merge a migration), so the snapshot
+# predates it. Persistent catches up a night the box slept through on the next wake (a durable
+# off-site backup must not silently skip a day); the prune keeps 30 daily / 12 monthly, so a
+# caught-up extra run is harmless.
+OnCalendar=*-*-* 03:00:00 Europe/Amsterdam
 Persistent=true
 
 [Install]
