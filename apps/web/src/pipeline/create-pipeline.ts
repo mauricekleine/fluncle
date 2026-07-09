@@ -455,8 +455,8 @@ const STYLES = `
 const CHROME = `
 <header class="top">
   <div class="brand">
-    <h1>/pipeline</h1>
-    <p class="tag">I dig one up, then send it across the Galaxy</p>
+    <h1>the galaxy factory</h1>
+    <p class="tag">follow a banger through every machine I built</p>
   </div>
   <div class="legend-wrap">
     <span class="legend-lbl">where it runs</span>
@@ -570,21 +570,27 @@ export function createPipeline(container: HTMLElement): { destroy: () => void } 
     }
   }
 
-  band(B(-0.2), B(4.55), "Act 1 · the find", "I hear it, I log it on the spot", true);
+  band(B(-0.2), B(4.55), "Act 1 · the find", "when I hear a banger, I hit CMD+F and it's in", true);
   band(
     B(4.55),
     B(9.35),
     "Act 2 · the enrichment factory",
-    "my machines pull it apart and learn it",
+    "then my machines pull it apart and get to know it",
     true,
   );
-  band(B(9.35), B(11.0), "Act 3 · distribution", "I have the last word before it goes out", true);
-  band(B(11.0), B(14.9), "every surface", "one finding, a different face on each", true);
+  band(
+    B(9.35),
+    B(11.0),
+    "Act 3 · distribution",
+    "then I send it out to you lot, wherever you are",
+    true,
+  );
+  band(B(11.0), B(14.9), "every surface", "wherever you come looking, the banger's there", true);
   band(
     B(14.9),
     B(22.6),
     "the Galaxy · launch",
-    "each finding a star · a mixtape is me dreaming",
+    "I hang every finding up as a star, and I dream in mixtapes",
     false,
   );
 

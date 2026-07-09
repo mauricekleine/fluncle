@@ -7,9 +7,9 @@ import { useEffect, useRef } from "react";
 // archive's bundle stays light). noindex: a for-the-nerds internal-machinery view, not a
 // search surface — same posture as /earth and /sprites.
 
-const title = "Fluncle's pipeline";
+const title = "Fluncle's galaxy factory";
 const description =
-  "One finding, from the dig to the Galaxy: Fluncle's whole pipeline as a draggable map.";
+  "Follow a banger through every machine Fluncle built, from the first CMD+F to the launch into the Galaxy.";
 
 export const Route = createFileRoute("/pipeline")({
   component: PipelinePage,
@@ -48,13 +48,13 @@ function PipelinePage() {
 
   return (
     <main className="fixed inset-0 overflow-hidden bg-[#090a0b]">
-      <h1 className="sr-only">Fluncle's pipeline</h1>
+      <h1 className="sr-only">Fluncle's galaxy factory</h1>
       <p className="sr-only">
-        The whole journey a banger takes through Fluncle, end to end: the instant find, the
-        enrichment factory where background machines pull it apart and learn it, distribution out to
-        the world, every surface it lands on, and the launch into the Galaxy where each finding is a
-        star and a mixtape is Fluncle dreaming. Drag to pan, scroll or use the arrow keys to move,
-        and hold ⌘ while scrolling to zoom.
+        A guided map of the machinery Fluncle built for his findings: he hits CMD+F when he hears a
+        banger, his machines pull it apart and get to know it, he sends it out to wherever you are,
+        it waits on every surface, and it launches into the Galaxy as a star, where he dreams in
+        mixtapes. Drag to pan, scroll or use the arrow keys to move, and hold ⌘ while scrolling to
+        zoom.
       </p>
       <div
         aria-label="Fluncle's pipeline"
