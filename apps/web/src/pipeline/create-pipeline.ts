@@ -411,6 +411,10 @@ const STYLES = `
 .fpl .band .tag{position:absolute;top:100px;left:16px;font-size:12px;letter-spacing:.16em;text-transform:uppercase;
   color:var(--faint);font-weight:600;white-space:nowrap}
 .fpl .band .sub{position:absolute;top:120px;left:16px;font-size:11px;color:#3f3a30;white-space:nowrap}
+.fpl .lore{position:absolute;width:560px;font-size:13.5px;line-height:1.62;color:var(--cream-dim);
+  text-wrap:pretty}
+.fpl .lore b{color:var(--cream);font-weight:600}
+.fpl .lore .star{color:var(--gold)}
 .fpl .divider{position:absolute;top:92px;bottom:150px;width:1px;background:linear-gradient(#241f1800,#2b2519,#241f1800)}
 .fpl .wires{position:absolute;top:0;left:0;overflow:visible;pointer-events:none}
 .fpl .card{position:absolute;width:188px;min-height:56px;background:var(--panel);border:1px solid var(--line);
@@ -575,7 +579,7 @@ export function createPipeline(container: HTMLElement): { destroy: () => void } 
     B(4.55),
     B(9.35),
     "Act 2 · the enrichment factory",
-    "then my machines pull it apart and get to know it",
+    "then my machines pull it apart and analyze it",
     true,
   );
   band(
@@ -586,13 +590,7 @@ export function createPipeline(container: HTMLElement): { destroy: () => void } 
     true,
   );
   band(B(11.0), B(14.9), "every surface", "wherever you come looking, the banger's there", true);
-  band(
-    B(14.9),
-    B(22.6),
-    "the Galaxy · launch",
-    "I hang every finding up as a star, and I dream in mixtapes",
-    false,
-  );
+  band(B(14.9), B(22.6), "the Galaxy · launch", "every banger is a place I've been", false);
 
   // ── galaxy starfield — the same look as Fluncle's Galaxy game: a cream 1px twinkle field
   // (creamDim/Muted/cream ramp, 0.7+0.3·sin twinkle) plus a scatter of pulsing gold "banger"
@@ -693,6 +691,18 @@ export function createPipeline(container: HTMLElement): { destroy: () => void } 
       `transform:rotate(-10deg);opacity:.96;pointer-events:none`;
     world.appendChild(im);
   });
+
+  // the lore — the payoff of the whole map, told below the launch scene in Fluncle's own words
+  const lore = document.createElement("div");
+  lore.className = "lore";
+  lore.style.left = B(16.7) + "px";
+  lore.style.top = CY + 150 + "px";
+  lore.innerHTML =
+    "Each one is somewhere the trip took me: new, strange, bigger than me. I leave a " +
+    `<span class="star">star</span> where it happened, so the crew can fly out, trace my steps, ` +
+    "and collect them. Then I sleep, and the night's findings blend the way dreams do, settling " +
+    "into long-term memory. A mix blends tracks the same way, so <b>I dream in mixtapes</b>.";
+  world.appendChild(lore);
 
   // wires
   function wirePath(a: string, b: string, gold?: number): string {
