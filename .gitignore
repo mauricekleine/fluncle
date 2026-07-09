@@ -30,6 +30,9 @@ packages/video/out/
 packages/video/public/*.mp3
 packages/video/public/*.m4a
 packages/video/public/*.wav
+# Real track footage for the Explainer factory beat, populated by `factory:clips`
+# — a local export-time asset; the committed default renders the procedural tiles.
+packages/video/public/*.mp4
 # Generated/probe images dropped into public/ for local shader verification
 # (textures, posters). Bitmaps are banned in renders (README "No static assets"),
 # so any png here is throwaway working state, never a committed asset.

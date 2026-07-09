@@ -77,7 +77,9 @@ const chapters: Array<Omit<ExplainerChapter, "id"> & { id?: string }> = [
     durationMs: 55_000,
     layout: "pip",
     number: 3,
-    screen: { kind: "placeholder", label: "3 rendered videos, side by side", mock: "videos" },
+    // The videos surface now plays real rendered track footage (FACTORY_CLIPS),
+    // not a screen capture — no label, so no capture hint.
+    screen: { kind: "placeholder", mock: "videos" },
     showCard: true,
     subtitle: "then my machines pull it apart and analyze it",
     tag: { label: "the factory", sub: "enrichment, autonomous" },

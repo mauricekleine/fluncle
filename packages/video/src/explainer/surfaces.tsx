@@ -3,8 +3,16 @@
 // Nostalgic Cosmos, so the FORMAT is legible before any real footage exists.
 // Everything here is deterministic (random(seed), never Math.random).
 
-import { AbsoluteFill, random, useCurrentFrame, useVideoConfig } from "remotion";
+import {
+  AbsoluteFill,
+  OffthreadVideo,
+  random,
+  staticFile,
+  useCurrentFrame,
+  useVideoConfig,
+} from "remotion";
 
+import { FACTORY_CLIPS } from "./factory-clips";
 import { c, font, SAFE } from "./theme";
 import { type MockSurface } from "./types";
 
@@ -155,21 +163,23 @@ const Lens: React.FC = () => (
   </div>
 );
 
-/** A bespoke-shader video, playing. Each tile drifts on its own phase (no two
- *  the same), with a live waveform + a scrubber so it reads as footage rendering,
- *  not a colored block. This is the marquee "why does it DO that?!" beat. */
-const VideoTile: React.FC<{ tint: string; glow: string; seed: string; w: number; h: number }> = ({
-  tint,
-  glow,
-  seed,
-  w,
-  h,
-}) => {
+/** A rendered track video, playing, inside a player frame (scrubber + timecode).
+ *  With a `src` it plays real footage (Fluncle's own output); without one it
+ *  falls back to a procedural shader tile that drifts on its own phase (no two
+ *  the same). Either way this is the marquee "why does it DO that?!" beat. */
+const VideoTile: React.FC<{
+  tint: string;
+  glow: string;
+  seed: string;
+  w: number;
+  h: number;
+  src?: string;
+}> = ({ tint, glow, seed, w, h, src }) => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
   const t = frame / fps;
   const phase = random(`phase-${seed}`) * Math.PI * 2;
-  // The light source drifts, so the tile looks like a shader evolving in real time.
+  // The light source drifts, so the fallback tile looks like a shader evolving.
   const gx = 50 + Math.sin(t * 0.55 + phase) * 26;
   const gy = 42 + Math.cos(t * 0.47 + phase) * 24;
   const angle = 118 + Math.sin(t * 0.3 + phase) * 30;
@@ -189,50 +199,71 @@ const VideoTile: React.FC<{ tint: string; glow: string; seed: string; w: number;
         width: w,
       }}
     >
-      <AbsoluteFill
-        style={{
-          background: `radial-gradient(120% 120% at ${gx}% ${gy}%, ${glow}, ${tint} 46%, ${c.deepField})`,
-        }}
-      />
-      {/* warp bands — the "shader" texture, drifting on the tile's own angle */}
-      <AbsoluteFill
-        style={{
-          background: `repeating-linear-gradient(${angle}deg, rgba(255,255,255,0.08) 0 2px, transparent 2px 26px)`,
-          mixBlendMode: "soft-light",
-          transform: `translateY(${Math.sin(t + phase) * 12}px)`,
-        }}
-      />
-      {/* live waveform, pinned to the bottom */}
+      {src !== undefined ? (
+        <OffthreadVideo
+          muted
+          src={staticFile(src)}
+          style={{ height: "100%", objectFit: "cover", width: "100%" }}
+        />
+      ) : (
+        <>
+          <AbsoluteFill
+            style={{
+              background: `radial-gradient(120% 120% at ${gx}% ${gy}%, ${glow}, ${tint} 46%, ${c.deepField})`,
+            }}
+          />
+          {/* warp bands — the "shader" texture, drifting on the tile's own angle */}
+          <AbsoluteFill
+            style={{
+              background: `repeating-linear-gradient(${angle}deg, rgba(255,255,255,0.08) 0 2px, transparent 2px 26px)`,
+              mixBlendMode: "soft-light",
+              transform: `translateY(${Math.sin(t + phase) * 12}px)`,
+            }}
+          />
+          {/* live waveform, pinned to the bottom */}
+          <div
+            style={{
+              alignItems: "flex-end",
+              bottom: 74,
+              display: "flex",
+              gap: 4,
+              height: 68,
+              justifyContent: "center",
+              left: 20,
+              position: "absolute",
+              right: 20,
+            }}
+          >
+            {Array.from({ length: 16 }, (_, i) => {
+              const base = 0.22 + random(`w-${seed}-${i}`) * 0.5;
+              const bh = 10 + (base + 0.5 * Math.abs(Math.sin(t * 5 + i * 0.6 + phase))) * 46;
+              return (
+                <div
+                  key={i}
+                  style={{
+                    background: c.starlightCream,
+                    borderRadius: 2,
+                    height: bh,
+                    opacity: 0.9,
+                    width: 5,
+                  }}
+                />
+              );
+            })}
+          </div>
+        </>
+      )}
+      {/* a scrim under the player chrome so the scrubber + timecode read on any footage */}
       <div
         style={{
-          alignItems: "flex-end",
-          bottom: 74,
-          display: "flex",
-          gap: 4,
-          height: 68,
-          justifyContent: "center",
-          left: 20,
+          background: "linear-gradient(transparent, rgba(9,10,11,0.7))",
+          bottom: 0,
+          height: 120,
+          left: 0,
           position: "absolute",
-          right: 20,
+          right: 0,
         }}
-      >
-        {Array.from({ length: 16 }, (_, i) => {
-          const base = 0.22 + random(`w-${seed}-${i}`) * 0.5;
-          const h = 10 + (base + 0.5 * Math.abs(Math.sin(t * 5 + i * 0.6 + phase))) * 46;
-          return (
-            <div
-              key={i}
-              style={{
-                background: c.starlightCream,
-                borderRadius: 2,
-                height: h,
-                opacity: 0.9,
-                width: 5,
-              }}
-            />
-          );
-        })}
-      </div>
+      />
       {/* scrubber + timecode — reads as a video player */}
       <div style={{ bottom: 34, left: 20, position: "absolute", right: 20 }}>
         <div
@@ -278,9 +309,30 @@ const Videos: React.FC = () => {
         justifyContent: "center",
       }}
     >
-      <VideoTile glow={c.eclipseGlow} h={h} seed="a" tint={c.reentryRed} w={w} />
-      <VideoTile glow={c.nebulaViolet} h={h} seed="b" tint={c.tapeBlack} w={w} />
-      <VideoTile glow={c.eclipseGold} h={h} seed="c" tint={c.sleeveBlack} w={w} />
+      <VideoTile
+        glow={c.eclipseGlow}
+        h={h}
+        seed="a"
+        src={FACTORY_CLIPS[0]}
+        tint={c.reentryRed}
+        w={w}
+      />
+      <VideoTile
+        glow={c.nebulaViolet}
+        h={h}
+        seed="b"
+        src={FACTORY_CLIPS[1]}
+        tint={c.tapeBlack}
+        w={w}
+      />
+      <VideoTile
+        glow={c.eclipseGold}
+        h={h}
+        seed="c"
+        src={FACTORY_CLIPS[2]}
+        tint={c.sleeveBlack}
+        w={w}
+      />
     </div>
   );
 };

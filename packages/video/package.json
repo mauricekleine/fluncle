@@ -21,7 +21,8 @@
     "set:render": "bun src/set-video/render-set.ts",
     "ship": "bun src/pipeline/ship.ts",
     "test": "bun test",
-    "typecheck": "tsgo --noEmit"
+    "typecheck": "tsgo --noEmit",
+    "factory:clips": "bun scripts/prep-factory-clips.ts"
   },
   "dependencies": {
     "@fluncle/contracts": "workspace:*",
