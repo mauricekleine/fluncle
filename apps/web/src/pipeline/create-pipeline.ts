@@ -10,7 +10,7 @@
 
 import { LOGOS } from "./logos";
 
-type MachKey = "worker" | "rave02" | "rave03" | "m5" | "m2" | "browser";
+type MachKey = "worker" | "rave02" | "rave03" | "vps01" | "m5" | "m2" | "browser";
 type Kind = "human";
 type Station = {
   id: string;
@@ -33,13 +33,17 @@ type Pos = { x: number; y: number; w: number };
 const SPRITE = (name: string) => `/pipeline/${name}.png`;
 
 const MACH: Record<MachKey, { c: string; label: string }> = {
-  browser: { c: "--m-browser", label: "browser / phone" },
-  m2: { c: "--m-m2", label: "M2 (mixing Mac)" },
-  m5: { c: "--m-m5", label: "M5 (studio Mac)" },
-  rave02: { c: "--m-rave02", label: "rave-02 (Hermes box)" },
-  rave03: { c: "--m-rave03", label: "rave-03 (render box)" },
-  worker: { c: "--m-worker", label: "Cloudflare Worker" },
+  browser: { c: "--m-browser", label: "browser" },
+  m2: { c: "--m-m2", label: "M2 Pro (mixing)" },
+  m5: { c: "--m-m5", label: "M5 Pro (shipping)" },
+  rave02: { c: "--m-rave02", label: "vps-02" },
+  rave03: { c: "--m-rave03", label: "Box" },
+  vps01: { c: "--m-vps01", label: "vps-01" },
+  worker: { c: "--m-worker", label: "Workers" },
 };
+// display order for the hardware legend (vps-01 hosts the SSH terminal, dig, and
+// the onion service — all surfaces, so no station card carries its color yet)
+const LEGEND: MachKey[] = ["browser", "m2", "m5", "vps01", "rave02", "rave03", "worker"];
 
 // service display name → simple-icons/custom slug (for the brand-mark chips)
 const SLUG: Record<string, string> = {
@@ -285,7 +289,7 @@ const K: Kiosk[] = [
   { label: "dig", tint: "#e0897d", url: "https://www.fluncle.com/docs", wh: "DNS TXT" },
   { label: "RSS", tint: "#f38020", url: "https://www.fluncle.com/rss.xml", wh: "feeds" },
   { label: "API", tint: "#d6b24a", url: "https://www.fluncle.com/docs/api", wh: "JSON" },
-  { label: "mobile", tint: "#7bd0c0", url: "https://www.fluncle.com/stories", wh: "Stories" },
+  { label: "onion", tint: "#9a62d0", url: "https://www.fluncle.com/docs", wh: "Tor" },
   {
     label: "Lens",
     tint: "#ff8f6b",
@@ -378,7 +382,7 @@ const SVGNS = "http://www.w3.org/2000/svg";
 const STYLES = `
 .fpl{--bg:#090a0b;--panel:#10100d;--line:#241f18;--cream:#f4ead7;--cream-dim:#b7ab95;--faint:#6e6657;
   --gold:#ffd057;--gold-2:#b88a00;--red:#ff6b57;--m-worker:#e8833a;--m-rave02:#6f9bd6;--m-rave03:#ab7bff;
-  --m-m5:#4fb39a;--m-m2:#e0897d;--m-browser:#9aa0ad;
+  --m-vps01:#63d69a;--m-m5:#4fb39a;--m-m2:#e0897d;--m-browser:#9aa0ad;
   position:absolute;inset:0;color:var(--cream);
   font:13px/1.4 ui-sans-serif,-apple-system,"Segoe UI",system-ui,sans-serif;-webkit-font-smoothing:antialiased}
 .fpl *{box-sizing:border-box}
@@ -460,6 +464,7 @@ const STYLES = `
 @media (prefers-reduced-motion: reduce){
   .fpl .listener{animation:none}
   .fpl .wave{animation:none;opacity:.45;transform:none}
+  .fpl .floatk{animation:none;transform:rotate(3deg)}
 }
 .fpl .card.dream{background:#120f16}
 .fpl .kiosk{position:absolute;width:104px;text-align:center;text-decoration:none;color:inherit;cursor:pointer;
@@ -472,6 +477,14 @@ const STYLES = `
 .fpl .kiosk .lb{font-size:11px;font-weight:600;color:color-mix(in srgb,var(--tint) 66%,var(--cream))}
 .fpl .kiosk .wh{font-size:9.5px;color:var(--faint)}
 .fpl .kiosk:hover .wh{color:var(--cream-dim)}
+.fpl .floatk{position:absolute;width:104px;text-align:center;--tint:#7bd0c0;pointer-events:none;
+  animation:fpl-float 5.4s ease-in-out infinite}
+.fpl .floatk img{width:76px;height:76px;image-rendering:pixelated;display:block;margin:0 auto 2px;
+  filter:drop-shadow(0 0 8px color-mix(in srgb,var(--tint) 55%,transparent)) drop-shadow(0 5px 7px #0009)}
+.fpl .floatk .lb{font-size:11px;font-weight:600;color:color-mix(in srgb,var(--tint) 66%,var(--cream))}
+.fpl .floatk .wh{font-size:9.5px;color:var(--faint);letter-spacing:.04em}
+.fpl .floatk .dangle{position:absolute;left:2px;top:72px;overflow:visible}
+@keyframes fpl-float{0%,100%{transform:translateY(0) rotate(3deg)}50%{transform:translateY(-12px) rotate(-2deg)}}
 `;
 
 const CHROME = `
@@ -847,6 +860,20 @@ export function createPipeline(container: HTMLElement): { destroy: () => void } 
       wire += gcurve(GALX, CY, plan.x, plan.y);
     }
     plazaG.innerHTML = wire;
+
+    // the mobile app — not wired into the plaza yet: a cabinet floating loose
+    // above the row, cable dangling unplugged, coming soon
+    const fm = document.createElement("div");
+    fm.className = "floatk";
+    fm.style.left = B(13.75) + "px";
+    fm.style.top = CY - 330 + "px";
+    fm.innerHTML =
+      `<img src="${SPRITE("kiosk")}" alt="">` +
+      `<svg class="dangle" width="52" height="128" viewBox="0 0 52 128">` +
+      `<path d="M38,4 C38,42 12,54 14,80 C16,102 32,104 30,116" fill="none" stroke="#4b4536" stroke-width="2" stroke-linecap="round"/>` +
+      `<rect x="25" y="115" width="10" height="9" rx="2" fill="#6e6657"/></svg>` +
+      `<div class="lb">mobile</div><div class="wh">coming soon</div>`;
+    plaza.appendChild(fm);
   }
   renderPlaza();
 
@@ -973,7 +1000,7 @@ export function createPipeline(container: HTMLElement): { destroy: () => void } 
   zlabel.addEventListener("click", () => setZoom(1));
 
   // hardware legend — swatches only at rest; hover/focus/tap reveals the machine names
-  q<HTMLDivElement>(".legend").innerHTML = Object.values(MACH)
+  q<HTMLDivElement>(".legend").innerHTML = LEGEND.map((key) => MACH[key])
     .map(
       (m) =>
         `<span class="k"><span class="sw" style="background:var(${m.c})"></span><span class="name">${m.label}</span></span>`,
