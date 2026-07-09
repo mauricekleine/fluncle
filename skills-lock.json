@@ -76,7 +76,7 @@
     "fluncle-sprites": {
       "source": "packages/skills/fluncle-sprites",
       "sourceType": "local",
-      "computedHash": "2f5c94dc1d073dd2ca0106251e1197e6c2ec86c0bcd734f36c2e1a5332576b45"
+      "computedHash": "7ab03ac0bc105a2ff279d724ee95d1851925e73e5466e28d7044962df95a76bb"
     },
     "fluncle-surfaces": {
       "source": "packages/skills/fluncle-surfaces",
