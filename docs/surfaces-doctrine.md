@@ -76,16 +76,17 @@ All `application/json`; the OpenAPI document at `/api/v1/openapi.json` advertise
 
 ### Discovery — machine-/crawler-facing maps
 
-| Surface                     | Route                                  | Format                     | Exposes                                                                             | Weight    |
-| --------------------------- | -------------------------------------- | -------------------------- | ----------------------------------------------------------------------------------- | --------- |
-| `discovery.llms`            | `/llms.txt`                            | `text/markdown`            | the plain-language map of the Galaxy for LLMs                                       | primary   |
-| `discovery.sitemap`         | `/sitemap.xml`                         | `application/xml`          | the XML sitemap of every public page                                                | secondary |
-| `discovery.llms-full`       | `/llms-full.txt`                       | `text/markdown`            | the entire archive in one ingestible markdown document, every finding               | secondary |
-| `discovery.openapi`         | `/api/v1/openapi.json`                 | `application/openapi+json` | the public API as an OpenAPI 3.1 document (admin paths excluded)                    | secondary |
-| `discovery.robots`          | `/robots.txt`                          | `text/plain`               | the crawl policy + Content-Signal (search/AI-input/AI-train all yes) + sitemap link | tertiary  |
-| `discovery.mcp-server-card` | `/.well-known/mcp/server-card.json`    | `application/json`         | the SEP-2127 discovery card for the MCP endpoint                                    | tertiary  |
-| `discovery.api-catalog`     | `/.well-known/api-catalog`             | `application/linkset+json` | the RFC 9727 linkset pointing at the machine-readable surfaces                      | tertiary  |
-| `discovery.agent-skills`    | `/.well-known/agent-skills/index.json` | `application/json`         | the fluncle-api agent skill index (with the SKILL.md digest)                        | tertiary  |
+| Surface                     | Route                                  | Format                     | Exposes                                                                                                                      | Weight    |
+| --------------------------- | -------------------------------------- | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------- | --------- |
+| `discovery.llms`            | `/llms.txt`                            | `text/markdown`            | the plain-language map of the Galaxy for LLMs                                                                                | primary   |
+| `discovery.sitemap`         | `/sitemap.xml`                         | `application/xml`          | the XML sitemap of every public page                                                                                         | secondary |
+| `discovery.llms-full`       | `/llms-full.txt`                       | `text/markdown`            | the entire archive in one ingestible markdown document, every finding                                                        | secondary |
+| `discovery.openapi`         | `/api/v1/openapi.json`                 | `application/openapi+json` | the public API as an OpenAPI 3.1 document (admin paths excluded)                                                             | secondary |
+| `discovery.robots`          | `/robots.txt`                          | `text/plain`               | the crawl policy + Content-Signal (search/AI-input/AI-train all yes) + sitemap link                                          | tertiary  |
+| `discovery.mcp-server-card` | `/.well-known/mcp/server-card.json`    | `application/json`         | the SEP-2127 discovery card for the MCP endpoint                                                                             | tertiary  |
+| `discovery.api-catalog`     | `/.well-known/api-catalog`             | `application/linkset+json` | the RFC 9727 linkset pointing at the machine-readable surfaces                                                               | tertiary  |
+| `discovery.agent-skills`    | `/.well-known/agent-skills/index.json` | `application/json`         | the fluncle-api agent skill index (with the SKILL.md digest)                                                                 | tertiary  |
+| `discovery.oembed`          | `/oembed`                              | `application/json+oembed`  | the oEmbed 1.0 provider — a pasted /log, /mixtapes, or /artist link unfurls as a rich finding card (frames `/embed/<logId>`) | tertiary  |
 
 ### MCP — the Model Context Protocol server
 
@@ -206,6 +207,7 @@ The weight ladder within a context is unchanged — **`primary`** (the loud fron
 | `discovery.mcp-server-card` | tertiary  |           |           |           |
 | `discovery.api-catalog`     | tertiary  |           |           |           |
 | `discovery.agent-skills`    | tertiary  |           |           |           |
+| `discovery.oembed`          | tertiary  |           |           |           |
 | `mcp.server`                | primary   |           |           |           |
 | `dns.zone`                  | tertiary  |           |           | tertiary  |
 | `ssh.rave`                  | primary   | primary   |           | secondary |

@@ -16,7 +16,17 @@ export const Route = createFileRoute("/mixtapes/")({
   component: MixtapesPage,
   loader: () => fetchMixtapes(),
   head: ({ loaderData }: { loaderData?: MixtapeDTO[] }) => ({
-    links: [{ href: `${siteUrl}/mixtapes`, rel: "canonical" }],
+    links: [
+      { href: `${siteUrl}/mixtapes`, rel: "canonical" },
+      // oEmbed discovery: a pasted /mixtapes link unfurls as a `link`-type card
+      // (title + Fluncle cover). See routes/oembed.ts.
+      {
+        href: `${siteUrl}/oembed?url=${encodeURIComponent(`${siteUrl}/mixtapes`)}&format=json`,
+        rel: "alternate",
+        title,
+        type: "application/json+oembed",
+      },
+    ],
     meta: [
       { title },
       { content: description, name: "description" },

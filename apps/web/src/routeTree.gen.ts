@@ -16,6 +16,7 @@ import { Route as RadioRouteImport } from './routes/radio'
 import { Route as PrivacyRouteImport } from './routes/privacy'
 import { Route as PodcastDotxmlRouteImport } from './routes/podcast[.]xml'
 import { Route as PipelineRouteImport } from './routes/pipeline'
+import { Route as OembedRouteImport } from './routes/oembed'
 import { Route as GalaxyRouteImport } from './routes/galaxy'
 import { Route as FeedDotjsonRouteImport } from './routes/feed[.]json'
 import { Route as DocsRouteImport } from './routes/docs'
@@ -37,6 +38,7 @@ import { Route as AdminIndexRouteImport } from './routes/admin/index'
 import { Route as StoriesLogIdRouteImport } from './routes/stories.$logId'
 import { Route as NewsletterNumberRouteImport } from './routes/newsletter.$number'
 import { Route as LogLogIdRouteImport } from './routes/log.$logId'
+import { Route as EmbedLogIdRouteImport } from './routes/embed.$logId'
 import { Route as DocsApiRouteImport } from './routes/docs.api'
 import { Route as DocsSplatRouteImport } from './routes/docs.$'
 import { Route as DocsDotmdSplatRouteImport } from './routes/docs[.]md.$'
@@ -123,6 +125,11 @@ const PodcastDotxmlRoute = PodcastDotxmlRouteImport.update({
 const PipelineRoute = PipelineRouteImport.update({
   id: '/pipeline',
   path: '/pipeline',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const OembedRoute = OembedRouteImport.update({
+  id: '/oembed',
+  path: '/oembed',
   getParentRoute: () => rootRouteImport,
 } as any)
 const GalaxyRoute = GalaxyRouteImport.update({
@@ -229,6 +236,11 @@ const NewsletterNumberRoute = NewsletterNumberRouteImport.update({
 const LogLogIdRoute = LogLogIdRouteImport.update({
   id: '/log/$logId',
   path: '/log/$logId',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const EmbedLogIdRoute = EmbedLogIdRouteImport.update({
+  id: '/embed/$logId',
+  path: '/embed/$logId',
   getParentRoute: () => rootRouteImport,
 } as any)
 const DocsApiRoute = DocsApiRouteImport.update({
@@ -526,6 +538,7 @@ export interface FileRoutesByFullPath {
   '/docs': typeof DocsRouteWithChildren
   '/feed.json': typeof FeedDotjsonRoute
   '/galaxy': typeof GalaxyRoute
+  '/oembed': typeof OembedRoute
   '/pipeline': typeof PipelineRoute
   '/podcast.xml': typeof PodcastDotxmlRoute
   '/privacy': typeof PrivacyRoute
@@ -550,6 +563,7 @@ export interface FileRoutesByFullPath {
   '/docs.md/$': typeof DocsDotmdSplatRoute
   '/docs/$': typeof DocsSplatRoute
   '/docs/api': typeof DocsApiRoute
+  '/embed/$logId': typeof EmbedLogIdRoute
   '/log/$logId': typeof LogLogIdRoute
   '/newsletter/$number': typeof NewsletterNumberRoute
   '/stories/$logId': typeof StoriesLogIdRoute
@@ -606,6 +620,7 @@ export interface FileRoutesByTo {
   '/device': typeof DeviceRoute
   '/feed.json': typeof FeedDotjsonRoute
   '/galaxy': typeof GalaxyRoute
+  '/oembed': typeof OembedRoute
   '/pipeline': typeof PipelineRoute
   '/podcast.xml': typeof PodcastDotxmlRoute
   '/privacy': typeof PrivacyRoute
@@ -630,6 +645,7 @@ export interface FileRoutesByTo {
   '/docs.md/$': typeof DocsDotmdSplatRoute
   '/docs/$': typeof DocsSplatRoute
   '/docs/api': typeof DocsApiRoute
+  '/embed/$logId': typeof EmbedLogIdRoute
   '/log/$logId': typeof LogLogIdRoute
   '/newsletter/$number': typeof NewsletterNumberRoute
   '/stories/$logId': typeof StoriesLogIdRoute
@@ -689,6 +705,7 @@ export interface FileRoutesById {
   '/docs': typeof DocsRouteWithChildren
   '/feed.json': typeof FeedDotjsonRoute
   '/galaxy': typeof GalaxyRoute
+  '/oembed': typeof OembedRoute
   '/pipeline': typeof PipelineRoute
   '/podcast.xml': typeof PodcastDotxmlRoute
   '/privacy': typeof PrivacyRoute
@@ -713,6 +730,7 @@ export interface FileRoutesById {
   '/docs.md/$': typeof DocsDotmdSplatRoute
   '/docs/$': typeof DocsSplatRoute
   '/docs/api': typeof DocsApiRoute
+  '/embed/$logId': typeof EmbedLogIdRoute
   '/log/$logId': typeof LogLogIdRoute
   '/newsletter/$number': typeof NewsletterNumberRoute
   '/stories/$logId': typeof StoriesLogIdRoute
@@ -773,6 +791,7 @@ export interface FileRouteTypes {
     | '/docs'
     | '/feed.json'
     | '/galaxy'
+    | '/oembed'
     | '/pipeline'
     | '/podcast.xml'
     | '/privacy'
@@ -797,6 +816,7 @@ export interface FileRouteTypes {
     | '/docs.md/$'
     | '/docs/$'
     | '/docs/api'
+    | '/embed/$logId'
     | '/log/$logId'
     | '/newsletter/$number'
     | '/stories/$logId'
@@ -853,6 +873,7 @@ export interface FileRouteTypes {
     | '/device'
     | '/feed.json'
     | '/galaxy'
+    | '/oembed'
     | '/pipeline'
     | '/podcast.xml'
     | '/privacy'
@@ -877,6 +898,7 @@ export interface FileRouteTypes {
     | '/docs.md/$'
     | '/docs/$'
     | '/docs/api'
+    | '/embed/$logId'
     | '/log/$logId'
     | '/newsletter/$number'
     | '/stories/$logId'
@@ -935,6 +957,7 @@ export interface FileRouteTypes {
     | '/docs'
     | '/feed.json'
     | '/galaxy'
+    | '/oembed'
     | '/pipeline'
     | '/podcast.xml'
     | '/privacy'
@@ -959,6 +982,7 @@ export interface FileRouteTypes {
     | '/docs.md/$'
     | '/docs/$'
     | '/docs/api'
+    | '/embed/$logId'
     | '/log/$logId'
     | '/newsletter/$number'
     | '/stories/$logId'
@@ -1018,6 +1042,7 @@ export interface RootRouteChildren {
   DocsRoute: typeof DocsRouteWithChildren
   FeedDotjsonRoute: typeof FeedDotjsonRoute
   GalaxyRoute: typeof GalaxyRoute
+  OembedRoute: typeof OembedRoute
   PipelineRoute: typeof PipelineRoute
   PodcastDotxmlRoute: typeof PodcastDotxmlRoute
   PrivacyRoute: typeof PrivacyRoute
@@ -1029,6 +1054,7 @@ export interface RootRouteChildren {
   ArtistSlugRoute: typeof ArtistSlugRoute
   CliLatestDotshRoute: typeof CliLatestDotshRoute
   DocsDotmdSplatRoute: typeof DocsDotmdSplatRoute
+  EmbedLogIdRoute: typeof EmbedLogIdRoute
   LogLogIdRoute: typeof LogLogIdRoute
   NewsletterNumberRoute: typeof NewsletterNumberRoute
   StoriesLogIdRoute: typeof StoriesLogIdRoute
@@ -1122,6 +1148,13 @@ declare module '@tanstack/react-router' {
       path: '/pipeline'
       fullPath: '/pipeline'
       preLoaderRoute: typeof PipelineRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/oembed': {
+      id: '/oembed'
+      path: '/oembed'
+      fullPath: '/oembed'
+      preLoaderRoute: typeof OembedRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/galaxy': {
@@ -1269,6 +1302,13 @@ declare module '@tanstack/react-router' {
       path: '/log/$logId'
       fullPath: '/log/$logId'
       preLoaderRoute: typeof LogLogIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/embed/$logId': {
+      id: '/embed/$logId'
+      path: '/embed/$logId'
+      fullPath: '/embed/$logId'
+      preLoaderRoute: typeof EmbedLogIdRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/docs/api': {
@@ -1701,6 +1741,7 @@ const rootRouteChildren: RootRouteChildren = {
   DocsRoute: DocsRouteWithChildren,
   FeedDotjsonRoute: FeedDotjsonRoute,
   GalaxyRoute: GalaxyRoute,
+  OembedRoute: OembedRoute,
   PipelineRoute: PipelineRoute,
   PodcastDotxmlRoute: PodcastDotxmlRoute,
   PrivacyRoute: PrivacyRoute,
@@ -1712,6 +1753,7 @@ const rootRouteChildren: RootRouteChildren = {
   ArtistSlugRoute: ArtistSlugRoute,
   CliLatestDotshRoute: CliLatestDotshRoute,
   DocsDotmdSplatRoute: DocsDotmdSplatRoute,
+  EmbedLogIdRoute: EmbedLogIdRoute,
   LogLogIdRoute: LogLogIdRoute,
   NewsletterNumberRoute: NewsletterNumberRoute,
   StoriesLogIdRoute: StoriesLogIdRoute,

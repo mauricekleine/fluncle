@@ -635,6 +635,20 @@ export const SURFACES: readonly Surface[] = [
     url: `${SITE}/.well-known/agent-skills/index.json`,
     weights: { web: "tertiary" },
   },
+  {
+    apiFormat: "application/json+oembed",
+    exposedContent: [
+      "the oEmbed 1.0 provider — a pasted /log, /mixtapes, or /artist link unfurls as a rich finding card (Discord/Notion/WordPress/Ghost/…)",
+      "html iframes the self-contained /embed/<logId> card; thumbnail is the finding's OG image",
+    ],
+    kind: "discovery",
+    name: "discovery.oembed",
+    operatorNotes:
+      'GET /oembed?url=<a fluncle.com /log|/mixtapes|/artist URL>&format=json. Discovered via the `<link rel="alternate" type="application/json+oembed">` on the /log, mixtape, and /artist heads. XML → 501 (JSON only). No probeConfig — a bare GET without a valid `url` param is a 404, so there is no fixed URL to health-probe (like web.artist). The `rich` html frames /embed/<logId> (apps/web/src/routes/embed.$logId.ts), a standalone dark card served with a permissive `frame-ancestors *` CSP scoped to that route. Source: apps/web/src/routes/oembed.ts + src/lib/oembed.ts.',
+    route: "/oembed",
+    url: `${SITE}/oembed`,
+    weights: { web: "tertiary" },
+  },
 
   // ── MCP server ────────────────────────────────────────────────────────────
   {
