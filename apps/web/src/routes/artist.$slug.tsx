@@ -236,7 +236,17 @@ function artistHead(loaderData: ArtistPageData | undefined) {
   );
 
   return {
-    links: [{ href: pageUrl, rel: "canonical" }],
+    links: [
+      { href: pageUrl, rel: "canonical" },
+      // oEmbed discovery: a pasted /artist link unfurls as a `link`-type card
+      // (name + cover). See routes/oembed.ts.
+      {
+        href: `${siteUrl}/oembed?url=${encodeURIComponent(pageUrl)}&format=json`,
+        rel: "alternate",
+        title,
+        type: "application/json+oembed",
+      },
+    ],
     meta: [
       { title },
       { content: description, name: "description" },

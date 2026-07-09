@@ -136,7 +136,17 @@ function logHead(loaderData: LogPageData | undefined) {
       : undefined;
 
     return {
-      links: [{ href: pageUrl, rel: "canonical" }],
+      links: [
+        { href: pageUrl, rel: "canonical" },
+        // oEmbed discovery: a consumer that pastes this mixtape's link fetches the
+        // provider (a `rich` card iframing /embed/<logId>). See routes/oembed.ts.
+        {
+          href: `${siteUrl}/oembed?url=${encodeURIComponent(pageUrl)}&format=json`,
+          rel: "alternate",
+          title: `${mixtape.title} · Fluncle`,
+          type: "application/json+oembed",
+        },
+      ],
       meta: [
         { title },
         { content: description, name: "description" },
@@ -203,7 +213,17 @@ function logHead(loaderData: LogPageData | undefined) {
     : undefined;
 
   return {
-    links: [{ href: pageUrl, rel: "canonical" }],
+    links: [
+      { href: pageUrl, rel: "canonical" },
+      // oEmbed discovery: a consumer that pastes this finding's link fetches the
+      // provider (a `rich` card iframing /embed/<logId>). See routes/oembed.ts.
+      {
+        href: `${siteUrl}/oembed?url=${encodeURIComponent(pageUrl)}&format=json`,
+        rel: "alternate",
+        title: `${artistTitleLine(track)} · Fluncle`,
+        type: "application/json+oembed",
+      },
+    ],
     meta: [
       { title },
       { content: description, name: "description" },
