@@ -39,8 +39,8 @@ import {
 // truth for which crons exist + how they're ordered. The healthcheck cron POSTs one
 // `service_status` row per cron (service id = the registry surface name, e.g.
 // `cron.enrich`); this page reads that list back to render every humming system on its
-// own row, grouped under an "Automation" heading. A cron added to the registry surfaces
-// here automatically — no edit to this file.
+// own row, grouped under the "Track automation" / "Ops automation" headings. A cron added
+// to the registry surfaces here automatically (as track automation) — no edit to this file.
 const CRON_SURFACES = cronSurfaces();
 const CRON_ORDER = CRON_SURFACES.map((surface) => surface.name);
 
@@ -73,14 +73,27 @@ for (const surface of CRON_SURFACES) {
   }
 }
 
-// Self-posted automations that belong under the Automation heading but are NOT registry
+// Self-posted automations that belong under the automation headings but are NOT registry
 // crons: `self-deploy` is the box's host systemd timer (pin-watch) reporting its own
 // health via record_health, not a healthcheck-probed Hermes cron — so it never enters
-// the registry cron catalog, yet it is a humming scheduled system like the rest. These
-// LEAD the Automation group (foundational), ahead of the registry crons.
+// the registry cron catalog, yet it is a humming scheduled system like the rest. It is an
+// OPS automation and LEADS that group (foundational), ahead of the ops crons.
 const SELF_POSTED_AUTOMATION_ORDER = ["self-deploy"];
 const AUTOMATION_ORDER = [...SELF_POSTED_AUTOMATION_ORDER, ...CRON_ORDER];
 const AUTOMATION_SERVICE_IDS = new Set(AUTOMATION_ORDER);
+
+// Within the automation group, split by WHAT the cron serves. OPS automation is the box
+// maintaining ITSELF — self-deploy (pin-watch), the off-site backup, the nightly audit +
+// reviewer, and the healthcheck prober. Everything else is TRACK automation: the findings
+// pipeline (analysis, enrichment, videos, notes). Track leads the section (it's the point of
+// the machine), ops follows. A new cron defaults to track unless it is named here.
+const OPS_AUTOMATION_IDS = new Set([
+  "cron.audit",
+  "cron.audit-review",
+  "cron.backup",
+  "cron.healthcheck",
+  "self-deploy",
+]);
 
 // The deliberate, fixed display order for the CORE services (the reachability/health of a
 // running thing, not a scheduled job). They lead the page; the Automation group renders
@@ -414,23 +427,37 @@ function sortByOrder(services: ServiceStatusRow[], order: string[]): ServiceStat
   });
 }
 
-// Split the reported services into the core list and the Automation group, each in its
-// own fixed order. A row joins Automation if it is a registry cron (`cron.*`) OR a
-// self-posted automation (`self-deploy`) — so the two groups never overlap and a brand-new
-// cron lands in Automation automatically. Retired/orphaned ids (e.g. the pre-split
-// `automation` aggregate) are already filtered out upstream at `getServiceStatuses`.
+// Split the reported services into the core list and the two automation groups, each in its
+// own fixed order. A row joins automation if it is a registry cron (`cron.*`) OR a self-posted
+// automation (`self-deploy`); it then falls to `opsCrons` (OPS_AUTOMATION_IDS) or `trackCrons`
+// (everything else). The three lists never overlap, and a brand-new cron lands in track
+// automation automatically. Both cron lists sort by the same AUTOMATION_ORDER, so self-deploy
+// still leads ops and each keeps registry catalog order. Retired/orphaned ids (e.g. the
+// pre-split `automation` aggregate) are already filtered out upstream at `getServiceStatuses`.
 function groupServices(services: ServiceStatusRow[]): {
   core: ServiceStatusRow[];
-  crons: ServiceStatusRow[];
+  opsCrons: ServiceStatusRow[];
+  trackCrons: ServiceStatusRow[];
 } {
   const core: ServiceStatusRow[] = [];
-  const crons: ServiceStatusRow[] = [];
+  const opsCrons: ServiceStatusRow[] = [];
+  const trackCrons: ServiceStatusRow[] = [];
 
   for (const service of services) {
-    (AUTOMATION_SERVICE_IDS.has(service.service) ? crons : core).push(service);
+    if (!AUTOMATION_SERVICE_IDS.has(service.service)) {
+      core.push(service);
+    } else if (OPS_AUTOMATION_IDS.has(service.service)) {
+      opsCrons.push(service);
+    } else {
+      trackCrons.push(service);
+    }
   }
 
-  return { core: sortByOrder(core, SERVICE_ORDER), crons: sortByOrder(crons, AUTOMATION_ORDER) };
+  return {
+    core: sortByOrder(core, SERVICE_ORDER),
+    opsCrons: sortByOrder(opsCrons, AUTOMATION_ORDER),
+    trackCrons: sortByOrder(trackCrons, AUTOMATION_ORDER),
+  };
 }
 
 // The overall headline: down beats degraded beats all-operational.
@@ -554,8 +581,8 @@ function ServiceGroup({
 
 function StatusPage() {
   const { events, now, samples, services } = Route.useLoaderData();
-  const { core, crons } = groupServices(services);
-  const reporting = [...core, ...crons];
+  const { core, opsCrons, trackCrons } = groupServices(services);
+  const reporting = [...core, ...trackCrons, ...opsCrons];
 
   return (
     <main className="log-plate-stage">
@@ -573,7 +600,8 @@ function StatusPage() {
         ) : (
           <div className="space-y-8">
             <ServiceGroup label="Services" now={now} rows={core} samples={samples} />
-            <ServiceGroup label="Automation" now={now} rows={crons} samples={samples} />
+            <ServiceGroup label="Track automation" now={now} rows={trackCrons} samples={samples} />
+            <ServiceGroup label="Ops automation" now={now} rows={opsCrons} samples={samples} />
           </div>
         )}
 
