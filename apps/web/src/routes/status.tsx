@@ -29,11 +29,13 @@ import {
 // at the write (the probe + the `record_health` handler), and this surface simply
 // never reaches for anything else.
 //
-// One derived read on top of the snapshot: each automation row shows a COMPUTED
-// "next ≈ …" — the next expected run, estimated from the cron's registry-declared
-// cadence + its last probe timestamp (see @/lib/next-run + CRON_CADENCE_MS below).
-// Public-safe by construction (cadence is already declared in the public registry),
-// and the operator's window onto "when does each system fire next" without the box.
+// One derived read on top of the snapshot: each automation row shows its next run. A cron
+// with a fixed wall-clock `schedule` in the registry (the 01:00 audit, the Friday newsletter)
+// shows its EXACT next fire, DST and all; an interval cron shows a "next ≈ …" estimate from
+// its declared cadence + last probe timestamp (see @/lib/next-run + CRON_SCHEDULE /
+// CRON_CADENCE_MS below). Public-safe by construction (both schedule and cadence are already
+// declared in the public registry), and the operator's window onto "when does each system
+// fire next" without the box.
 
 // The on-box Hermes crons, in @fluncle/registry catalog order — the single source of
 // truth for which crons exist + how they're ordered. The healthcheck cron POSTs one
@@ -46,9 +48,9 @@ const CRON_ORDER = CRON_SURFACES.map((surface) => surface.name);
 
 // The declared run cadence per cron service id, read straight from the registry's
 // `probeConfig.cadenceMs` (service id = the cron surface name, e.g. `cron.enrich`).
-// This is the fuel for the computed next-run estimate: a cron's row shows "next ≈ …"
-// from its cadence + the last probe timestamp, so the operator can see when each
-// automation will fire next — no box round-trip (docs/admin-jobs.csv platform-ops
+// This is the fuel for the INTERVAL crons' next-run estimate: their row shows "next ≈ …"
+// from the cadence + the last probe timestamp, so the operator can see when each fires
+// next — no box round-trip (docs/admin-jobs.csv platform-ops
 // "Surface every cron's last-run and next-run on web-admin"). A cron added to the
 // registry with a cadence surfaces its next-run here automatically; a self-posted
 // automation with no declared cadence (e.g. `self-deploy`) simply shows none.
@@ -96,8 +98,8 @@ const OPS_AUTOMATION_IDS = new Set([
 ]);
 
 // The deliberate, fixed display order for the CORE services (the reachability/health of a
-// running thing, not a scheduled job). They lead the page; the Automation group renders
-// after them under its own heading. Any service the snapshot reports that isn't named
+// running thing, not a scheduled job). They lead the page; the automation groups render
+// after them under the Track/Ops automation headings. Any service the snapshot reports that isn't named
 // here (and isn't an automation) is appended alphabetically, so a newly-probed service
 // surfaces without a code change.
 const SERVICE_ORDER = ["web", "db", "r2", "dns", "ssh", "onion", "hermes", "render-box"];
