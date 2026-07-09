@@ -36,7 +36,7 @@
     "fluncle-hermes-operator": {
       "source": "packages/skills/fluncle-hermes-operator",
       "sourceType": "local",
-      "computedHash": "d611de0ae4322c0b8fc6210547dbcf01e6eed0f8dc292b6f83d3e511dd89885c"
+      "computedHash": "f934dc8afba1841200d061c407315cf38801f98174571e33ba16855c2567b3ae"
     },
     "fluncle-key-backfill": {
       "source": "packages/skills/fluncle-key-backfill",

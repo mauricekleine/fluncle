@@ -217,22 +217,26 @@ RUN chmod -R a+rX /opt/fonts
 # on). Bump lever: this version line.
 RUN npm install -g @anthropic-ai/claude-code@2.1.205
 
-# The `copywriting-fluncle` skill, baked for Claude Code so the cron's `claude -p`
-# can load the full voice canon. CLAUDE DISCOVERS SKILLS UNDER ITS CONFIG DIR
+# ALL local Fluncle skills, baked for Claude Code so every box `claude -p` discovers
+# them without a per-run `skills:install`: the voice crons load `copywriting-fluncle`
+# (note/observe/newsletter authoring), and the nightly audit + reviewer agents lean on
+# the operator skills (fluncle-hermes-operator, fluncle-surfaces, fluncle-audit-operator,
+# fluncle-maintenance, taste, …). CLAUDE DISCOVERS SKILLS UNDER ITS CONFIG DIR
 # (<CLAUDE_CONFIG_DIR>/skills/<name>/, default ~/.claude/skills/). The `--no-agent`
 # cron runner execs as a NON-root user whose HOME is not knowable at build time, so
 # rather than guess that user's ~/.claude we pin the config dir to a world-readable
-# baked path via CLAUDE_CONFIG_DIR=/opt/claude and drop the skill at
-# /opt/claude/skills/copywriting-fluncle. This makes skill discovery independent of
-# the cron user's identity/HOME and survives every rebuild (baked, not host-mounted).
-# The dir is world-traversable (755) and made writable (1777, sticky) because Claude
-# Code writes session/state files under the config dir at run — the non-root cron user
-# must be able to create them without owning /opt/claude; the skill files themselves
-# stay root-owned + read-only. COPY needs the repo root as the build context (see the
-# header). Update the skill the same way as any image change: edit it in the repo
-# (packages/skills/copywriting-fluncle), rebuild, restart.
+# baked path via CLAUDE_CONFIG_DIR=/opt/claude and drop the whole set at
+# /opt/claude/skills/<name>. This makes skill discovery independent of the cron user's
+# identity/HOME and survives every rebuild (baked, not host-mounted). The dir is
+# world-traversable (755) and made writable (1777, sticky) because Claude Code writes
+# session/state files under the config dir at run — the non-root cron user must be able
+# to create them without owning /opt/claude; the skill files themselves stay root-owned
+# + read-only. The whole tree is small (~1 MB), so baking all of packages/skills is
+# drift-proof — a new skill needs no Dockerfile change. COPY needs the repo root as the
+# build context (see the header). Update a skill the same way as any image change: edit
+# it in the repo (packages/skills/<name>), rebuild, restart.
 ENV CLAUDE_CONFIG_DIR=/opt/claude
-COPY packages/skills/copywriting-fluncle /opt/claude/skills/copywriting-fluncle
+COPY packages/skills /opt/claude/skills
 RUN chmod -R a+rX /opt/claude/skills \
   && chmod 1777 /opt/claude
 

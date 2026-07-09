@@ -86,6 +86,25 @@ run_review() {
 ${runtime_note}"
 
   export CLAUDE_CONFIG_DIR="${CLAUDE_CONFIG_DIR:-/opt/claude}"
+
+  # Mark this workspace trusted so the repo's .claude/settings.json — the guard-protected-files
+  # hook (the mechanical backstop behind the prompt's rails) + the baked project skills — loads;
+  # Claude Code silently ignores an untrusted dir's settings. The auditor marks it at 01:00, but a
+  # container rebuild/swap before this 05:00 run wipes .claude.json, so re-assert it here too.
+  # Idempotent; best-effort — on any failure the prompt rails + PAT scope + human-in-loop still gate.
+  AUDIT_WS="${ws}" "${BUN_BIN}" -e '
+    const fs = require("fs");
+    const f = process.env.CLAUDE_CONFIG_DIR + "/.claude.json";
+    const ws = process.env.AUDIT_WS;
+    try {
+      const j = JSON.parse(fs.readFileSync(f, "utf8"));
+      (j.projects ??= {})[ws] ??= {};
+      j.projects[ws].hasTrustDialogAccepted = true;
+      fs.writeFileSync(f, JSON.stringify(j, null, 2));
+      process.stderr.write("[audit-review] workspace marked trusted\n");
+    } catch (e) { process.stderr.write("[audit-review] trust-mark skipped: " + e.message + "\n"); }
+  ' || log "trust-mark step failed (continuing; prompt rails + PAT scope + review gate still apply)"
+
   log "invoking claude -p (opus) reviewer for PR #${PR_NUM}…"
   "$(command -v claude)" -p "${prompt}" \
     --model opus \
