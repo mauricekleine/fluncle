@@ -84,17 +84,20 @@ So the API is mostly clean REST (method = verb, path = resource), with a recurri
 
 ### 1.3 MCP / WebMCP tools
 
-`apps/web/src/lib/server/mcp.ts` (server) exposes **six** tools; `apps/web/src/lib/webmcp.ts` (browser) exposes **five**. The five below are shared and match each other exactly — the one place cross-surface naming is already coherent. The sixth, `get_status` (the live service-health summary), is **server-only**: a known, intended asymmetry, since the browser MCP has no reason to probe service health.
+`apps/web/src/lib/server/mcp.ts` (server) exposes **seven** tools; `apps/web/src/lib/webmcp.ts` (browser) exposes **six**. The six below are shared and match each other exactly — the one place cross-surface naming is already coherent. The seventh, `get_status` (the live service-health summary), is **server-only**: a known, intended asymmetry, since the browser MCP has no reason to probe service health.
 
 | Tool name              | Title                       | API equivalent                             | CLI equivalent  |
 | ---------------------- | --------------------------- | ------------------------------------------ | --------------- |
 | `list_tracks`          | Recent findings             | `listTracks`                               | `recent`        |
+| `get_track`            | Read one finding            | `getTrack` (`GET /tracks/{idOrLogId}`)     | `tracks get`    |
 | `get_random_track`     | Random finding              | `getRandomTrack`                           | `random`        |
 | `search_tracks`        | Search tracks               | `searchTracks`                             | (no public CLI) |
 | `submit_track`         | Submit a track              | `submitTrack` (`POST /submissions`)        | `submit`        |
 | `subscribe_newsletter` | Subscribe to the newsletter | `subscribeNewsletter` (`POST /newsletter`) | `subscribe`     |
 
 Casing is `snake_case`. `list_tracks` (renamed from `get_recent_tracks`, which under-described the mixtapes-inclusive payload) keeps `get_recent_tracks` as a deprecation alias in `tools/list` for a window.
+
+Beyond tools, the server MCP also serves **resources** (the archive as a corpus — `fluncle://finding/<logId>`, `fluncle://mixtape/<logId>`) and Fluncle-voiced **prompts** (`recommend_finding`, `walk_recent_night`, `decode_coordinate`), named `verb_noun` like the tools. Both are server-MCP only: `navigator.modelContext` has no resource/prompt primitive, so the browser WebMCP surface mirrors the tool set alone.
 
 ### 1.4 SSH (`apps/ssh`)
 
@@ -158,7 +161,7 @@ Tradeoffs. **+** One mental model (REST) for CLI, API, MCP. **+** Mechanical `op
 
 Keep the CLI's verb-first ergonomics for the _public_ surface (it reads like speech: `fluncle submit …`, `fluncle random`), make the _admin_ CLI consistently `group noun-verb`, keep the API as REST, and define the **derivation rule** so MCP and `operationId`s are generated, not hand-named. The canonical registry is `verb_noun`; each surface has a fixed projection:
 
-- **MCP/WebMCP tool** = `verb_noun` (snake_case), verbatim from the registry. (Already true for the 5 shared public tools; the server's 6th tool `get_status` is intentionally server-only.)
+- **MCP/WebMCP tool** = `verb_noun` (snake_case), verbatim from the registry. (Already true for the 6 shared public tools; the server's 7th tool `get_status` is intentionally server-only.) MCP resources and prompts follow the same `verb_noun` habit (`recommend_finding`, `decode_coordinate`).
 - **OpenAPI `operationId`** = `verbNoun` (camelCase) — the same words, re-cased. So `list_tracks` ⇒ `listTracks`, and `submit_track` ⇒ path `POST /submissions` keeps `operationId: submitTrack` (the op name, not the path noun, is canonical — and the mismatch is _documented as intentional_ because the resource and the action noun legitimately differ).
 - **API path** = REST resource; method = verb. **Resources are plural** (`/tracks`, `/submissions`, `/editions`); a **singleton** stays singular (`/me`, `/auth`, and `/newsletter` — there is exactly one newsletter, so its editions are a plural sub-collection nested under it: `GET /newsletter/editions/{number}`). The op _noun_ stays singular (`get_edition`) while the path resource is plural (`/editions`), exactly as `get_track` ⇒ `GET /tracks/{id}`. Non-CRUD actions are a **named action sub-resource**: `POST /{resource}/{id}/{action}` where `{action}` is a single lowercase word from the closed action set (`observe`, `publish`, `draft`, `distribute`, `finalize`). Multi-word actions are avoided — `enrich-sweep` ⇒ `POST /admin/tracks/enrich`, `preview-archive` ⇒ `POST /admin/tracks/{id}/preview`.
 - **Public CLI** = bare verb at root (`submit`, `subscribe`, `random`, `recent`, `open`), because that's the spoken register and the existing contract. Each maps to a registry op via an explicit alias note in the registry (`recent → list_tracks`, `submit → submit_track`).

@@ -1,6 +1,12 @@
 // WebMCP (https://webmachinelearning.github.io/webmcp/): expose the site's
 // key actions as in-page tools for agent-driving browsers. Registration is
 // best-effort; browsers without navigator.modelContext skip it silently.
+//
+// This mirrors the server MCP's TOOL set (lib/server/mcp.ts); keep the two in
+// step when the tools change. The server MCP also speaks resources (the archive
+// as a readable corpus) and prompts (Fluncle-voiced starting points), but
+// navigator.modelContext has no resource/prompt primitive — so the browser read
+// path is the get_track tool below, and resources/prompts stay server-MCP only.
 
 type WebMcpToolResult = {
   content: Array<{ type: "text"; text: string }>;
@@ -70,6 +76,23 @@ const tools: WebMcpTool[] = [
       type: "object",
     },
     name: "list_tracks",
+  },
+  {
+    description:
+      "Read one finding (or mixtape) in full by its Log ID coordinate or Spotify track id — the same public record its /log page shows: artist, title, Found date, note, BPM, key, links, and the recovered observation transcript.",
+    execute: async (input) =>
+      jsonResult(await fetchJson(`/api/tracks/${encodeURIComponent(asString(input.idOrLogId))}`)),
+    inputSchema: {
+      properties: {
+        idOrLogId: {
+          description: "A Log ID coordinate (e.g. 012.8.0A) or a Spotify track id / URL.",
+          type: "string",
+        },
+      },
+      required: ["idOrLogId"],
+      type: "object",
+    },
+    name: "get_track",
   },
   {
     description: "Pull one random certified track from Fluncle's archive.",
