@@ -386,6 +386,7 @@ const STYLES = `
   position:absolute;inset:0;color:var(--cream);
   font:13px/1.4 ui-sans-serif,-apple-system,"Segoe UI",system-ui,sans-serif;-webkit-font-smoothing:antialiased}
 .fpl *{box-sizing:border-box}
+.fpl img,.fpl a{-webkit-user-drag:none;user-select:none}
 .fpl .top{position:absolute;inset:0 0 auto 0;z-index:30;display:flex;justify-content:flex-end;
   padding:15px 22px 24px;background:linear-gradient(#090a0bf5,#090a0b00);pointer-events:none}
 .fpl .hint{color:var(--faint);font-size:11px;pointer-events:none}
@@ -950,6 +951,10 @@ export function createPipeline(container: HTMLElement): { destroy: () => void } 
       }
     }
   });
+  // a drag that starts on a sprite/kiosk must pan the canvas, never lift the
+  // image (or link) into a native HTML drag
+  const onDragStart = (e: Event): void => e.preventDefault();
+  container.addEventListener("dragstart", onDragStart);
   stage.addEventListener(
     "wheel",
     (e) => {
@@ -1082,6 +1087,7 @@ export function createPipeline(container: HTMLElement): { destroy: () => void } 
       window.clearInterval(tickInterval);
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("resize", onResize);
+      container.removeEventListener("dragstart", onDragStart);
       container.classList.remove("fpl");
       container.replaceChildren();
     },
