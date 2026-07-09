@@ -18,6 +18,7 @@ import { Button } from "@fluncle/ui/components/button";
 import { ScrollArea } from "@fluncle/ui/components/scroll-area";
 import { TooltipProvider } from "@fluncle/ui/components/tooltip";
 import {
+  blueskyUrl,
   discogsUrl,
   instagramUrl,
   lastfmUrl,
@@ -127,6 +128,7 @@ export const Route = createFileRoute("/")({
           telegramUrl,
           tiktokUrl,
           instagramUrl,
+          blueskyUrl,
           youtubeUrl,
           mixcloudUrl,
           soundcloudUrl,

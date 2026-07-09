@@ -5,6 +5,7 @@ export type { PublishTrackResult };
 import { logPageUrl } from "../fluncle-links";
 import { formatDuration } from "../format";
 import { parseArtistsJson, upsertTrackArtists } from "./artists";
+import { postToBluesky } from "./bluesky";
 import { getDb, typedRow } from "./db";
 import { enrichFromDeezer, lookupIsrcFromDeezer } from "./deezer";
 import { discogsResolveRelease } from "./discogs";
@@ -288,6 +289,16 @@ No database, Spotify, or Telegram changes were made. Enrichment (label, preview)
   // The duplicate/incomplete_duplicate guards above throw before this hook, so a
   // retry can't re-reach it — no extra gate needed.
   notifyNewFinding(track, logId);
+  // Best-effort: post the finding to Bluesky as a link card (bluesky.ts). Gated on
+  // BLUESKY_IDENTIFIER + BLUESKY_APP_PASSWORD — a NO-OP until configured. Awaited
+  // but wrapped: a Bluesky failure is logged and swallowed, so it can NEVER fail or
+  // delay the publish — nor the Telegram leg, which already ran above. Same
+  // side-channel discipline as the artist upsert / Last.fm love.
+  try {
+    await postToBluesky(track, options.note, logId);
+  } catch (blueskyError) {
+    console.warn("publishTrack: Bluesky post failed (non-fatal)", blueskyError);
+  }
   // Best-effort: ping IndexNow (Bing/Yandex + the shared network) so the fresh
   // log page is crawled within minutes (indexnow.ts). Fire-and-forget via
   // waitUntil; the key is a PUBLIC ownership token, so this needs no operator
