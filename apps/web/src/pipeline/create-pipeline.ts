@@ -11,7 +11,7 @@
 import { LOGOS } from "./logos";
 
 type MachKey = "worker" | "rave02" | "rave03" | "m5" | "m2" | "browser";
-type Kind = "pivot" | "human";
+type Kind = "human";
 type Station = {
   id: string;
   col: number;
@@ -191,7 +191,6 @@ const S: Station[] = [
     col: 5.9,
     cron: "context-note",
     id: "ctx",
-    kind: "pivot",
     label: "Context note",
     lane: 0.35,
     m: "rave02",
@@ -335,6 +334,7 @@ const D: Station[] = [
 
 // [from, to, gold?]
 const LINKS: Array<[string, string, number?]> = [
+  ["ear", "cmdf", 1],
   ["cmdf", "spot", 1],
   ["spot", "logid", 1],
   ["deez", "logid"],
@@ -363,13 +363,13 @@ const DLINKS: Array<[string, string]> = [
   ["setv", "drip"],
 ];
 
-// geometry
+// geometry — PADX leaves two columns of clear space left of col 0 for Act 0 (the listener)
 const COLW = 232,
   LANEH = 122,
   CY = 478,
   CARDW = 188,
   CARDH = 64,
-  PADX = 130;
+  PADX = 594;
 const B = (c: number) => PADX + c * COLW;
 const WORLDW = B(22.9),
   WORLDH = 1000;
@@ -382,18 +382,22 @@ const STYLES = `
   position:absolute;inset:0;color:var(--cream);
   font:13px/1.4 ui-sans-serif,-apple-system,"Segoe UI",system-ui,sans-serif;-webkit-font-smoothing:antialiased}
 .fpl *{box-sizing:border-box}
-.fpl .top{position:absolute;inset:0 0 auto 0;z-index:30;display:flex;gap:30px;align-items:flex-start;
+.fpl .top{position:absolute;inset:0 0 auto 0;z-index:30;display:flex;justify-content:flex-end;
   padding:15px 22px 24px;background:linear-gradient(#090a0bf5,#090a0b00);pointer-events:none}
-.fpl .brand h1{margin:0;font-size:15px;font-weight:700;letter-spacing:-.015em}
-.fpl .brand .tag{margin:3px 0 0;font-size:11px;color:var(--faint)}
-.fpl .legend-wrap{display:flex;flex-direction:column;gap:7px;pointer-events:auto}
-.fpl .legend-lbl{font-size:9px;letter-spacing:.18em;text-transform:uppercase;color:#4f4838;font-weight:700}
-.fpl .legend{display:flex;gap:8px 14px;flex-wrap:wrap;max-width:530px}
-.fpl .legend .k{display:flex;align-items:center;gap:6px;color:var(--cream-dim);font-size:11px}
-.fpl .legend .sw{width:9px;height:9px;border-radius:2px;display:inline-block;flex:none}
-.fpl .meta{margin-left:auto;display:flex;flex-direction:column;align-items:flex-end;gap:6px;text-align:right}
 .fpl .hint{color:var(--faint);font-size:11px;pointer-events:none}
 .fpl .hint b{color:var(--cream-dim);font-weight:600}
+.fpl .dock{position:absolute;left:50%;bottom:16px;transform:translateX(-50%);z-index:30;display:flex;
+  flex-direction:column;align-items:center;gap:8px;pointer-events:none;max-width:min(92vw,780px)}
+.fpl .hw{display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:6px 10px;pointer-events:auto;
+  background:#10100dcc;border:1px solid var(--line);border-radius:999px;padding:7px 15px;
+  box-shadow:0 6px 18px #0007;-webkit-backdrop-filter:blur(5px);backdrop-filter:blur(5px);cursor:default}
+.fpl .hw-lbl{font-size:9px;letter-spacing:.18em;text-transform:uppercase;color:#8a8070;font-weight:700;margin-right:2px}
+.fpl .legend{display:flex;gap:6px 12px;flex-wrap:wrap;justify-content:center}
+.fpl .legend .k{display:flex;align-items:center;gap:5px;color:var(--cream-dim);font-size:11px}
+.fpl .legend .sw{width:9px;height:9px;border-radius:2px;display:inline-block;flex:none}
+.fpl .legend .name{max-width:0;opacity:0;overflow:hidden;white-space:nowrap;
+  transition:max-width .25s ease,opacity .18s ease}
+.fpl .hw:hover .name,.fpl .hw:focus-within .name,.fpl .hw.open .name{max-width:160px;opacity:1}
 .fpl .stage{position:absolute;inset:0;cursor:grab;touch-action:none}
 .fpl .stage.drag{cursor:grabbing}
 .fpl .world{position:absolute;top:0;left:0;will-change:transform;transform-origin:0 0}
@@ -409,10 +413,10 @@ const STYLES = `
 .fpl .zoomctl .zlabel:hover{color:var(--cream-dim);background:transparent}
 .fpl .band{position:absolute;top:0;height:1000px}
 .fpl .band .tag{position:absolute;top:100px;left:16px;font-size:12px;letter-spacing:.16em;text-transform:uppercase;
-  color:var(--faint);font-weight:600;white-space:nowrap}
-.fpl .band .sub{position:absolute;top:120px;left:16px;font-size:11px;color:#3f3a30;white-space:nowrap}
+  color:var(--cream-dim);font-weight:600;white-space:nowrap}
+.fpl .band .sub{position:absolute;top:120px;left:16px;font-size:11px;color:#8a8070;white-space:nowrap}
 .fpl .lore{position:absolute;width:560px;font-size:13.5px;line-height:1.62;color:var(--cream-dim);
-  text-wrap:pretty}
+  text-wrap:pretty;text-align:center}
 .fpl .lore b{color:var(--cream);font-weight:600}
 .fpl .lore .star{color:var(--gold)}
 .fpl .divider{position:absolute;top:92px;bottom:150px;width:1px;background:linear-gradient(#241f1800,#2b2519,#241f1800)}
@@ -431,7 +435,9 @@ const STYLES = `
   color:var(--cream-dim);white-space:nowrap}
 .fpl .chip.svc{background:#ffffff14;color:var(--cream);display:inline-flex;align-items:center;gap:3px}
 .fpl .chip .ico{width:12px;height:12px;opacity:1;flex:none}
-.fpl .chip.cad{background:#00000040;color:var(--faint)}
+.fpl .chip.cad{background:#00000040;color:var(--cream-dim);position:absolute;right:9px;bottom:8px;
+  display:inline-flex;align-items:center}
+.fpl .card.has-cad{padding-bottom:30px}
 @keyframes fpl-hbpulse{0%{box-shadow:0 0 0 0 var(--pc)}70%{box-shadow:0 0 0 5px transparent}100%{box-shadow:0 0 0 0 transparent}}
 .fpl .hb{display:inline-block;width:7px;height:7px;border-radius:50%;background:#4b4536;margin-right:5px;
   vertical-align:middle;position:relative;top:-1px}
@@ -441,8 +447,17 @@ const STYLES = `
 .fpl .hb.down{background:#ff6b57;--pc:#ff6b5799;animation:fpl-hbpulse .9s ease-out infinite}
 .fpl .hbstat{color:var(--cream-dim);font-size:11px;display:flex;align-items:center;gap:6px;pointer-events:none}
 .fpl .hbstat .dot{width:7px;height:7px;border-radius:50%;background:#63d69a;--pc:#63d69a80;animation:fpl-hbpulse 1.8s ease-out infinite}
-.fpl .card.pivot{border:1px solid var(--gold-2);box-shadow:0 0 0 1px #ffd05733,0 6px 22px #0008}
 .fpl .card.human{border-top-style:dashed}
+.fpl .listener{position:absolute;width:176px;image-rendering:pixelated;pointer-events:none;
+  filter:drop-shadow(0 8px 16px #0009);animation:fpl-nod .69s linear infinite}
+@keyframes fpl-nod{0%,44%{transform:none}50%,94%{transform:translateY(4px) rotate(-2.5deg)}100%{transform:none}}
+.fpl .wave{position:absolute;border:2px solid var(--gold);border-radius:50%;
+  clip-path:inset(-4px -4px -4px 50%);opacity:0;pointer-events:none;animation:fpl-wave 1.38s linear infinite}
+@keyframes fpl-wave{0%{transform:translateX(-16px);opacity:0}30%{opacity:.7}70%{opacity:.4}100%{transform:translateX(14px);opacity:0}}
+@media (prefers-reduced-motion: reduce){
+  .fpl .listener{animation:none}
+  .fpl .wave{animation:none;opacity:.45;transform:none}
+}
 .fpl .card.dream{background:#120f16}
 .fpl .kiosk{position:absolute;width:104px;text-align:center;text-decoration:none;color:inherit;cursor:pointer;
   --tint:#e8833a;transition:transform .13s ease}
@@ -458,20 +473,16 @@ const STYLES = `
 
 const CHROME = `
 <header class="top">
-  <div class="brand">
-    <h1>the galaxy factory</h1>
-    <p class="tag">follow a banger through every machine I built</p>
-  </div>
-  <div class="legend-wrap">
-    <span class="legend-lbl">where it runs</span>
-    <div class="legend"></div>
-  </div>
-  <div class="meta">
-    <div class="hbstat"><span class="dot"></span>connecting…</div>
-    <div class="hint">drag to pan · scroll to move · <b>⌘-scroll</b> to zoom</div>
-  </div>
+  <div class="hint">drag to pan · <b>⌘-scroll</b> to zoom</div>
 </header>
 <div class="stage"><div class="world"><svg class="wires"></svg></div></div>
+<div class="dock">
+  <div class="hw" tabindex="0" aria-label="Hardware legend — the machines the factory runs on">
+    <span class="hw-lbl">hardware</span>
+    <div class="legend"></div>
+  </div>
+  <div class="hbstat"><span class="dot"></span>connecting…</div>
+</div>
 <div class="zoomctl">
   <button class="zout" aria-label="Zoom out" title="Zoom out">−</button>
   <button class="zlabel" title="Reset zoom">100%</button>
@@ -541,21 +552,26 @@ export function createPipeline(container: HTMLElement): { destroy: () => void } 
     const el = document.createElement("div");
     el.className =
       "card" +
-      (s.kind === "pivot" ? " pivot" : "") +
       (s.kind === "human" ? " human" : "") +
-      (s.dream ? " dream" : "");
+      (s.dream ? " dream" : "") +
+      (s.cad ? " has-cad" : "");
     el.style.left = x + "px";
     el.style.top = y - CARDH / 2 + "px";
     el.style.borderTopColor = `var(${MACH[s.m].c})`;
-    const cad = s.cad
-      ? `<span class="chip cad">${s.cron ? `<span class="hb" data-cron="${s.cron}"></span>` : ""}${s.cad}</span>`
-      : "";
-    const chips = (s.svc ?? []).map(svcChip).join("") + cad;
+    const chips = (s.svc ?? []).map(svcChip).join("");
     const glyph = s.spr ?? "▦";
     const spr = `<img src="${SPRITE(s.img ?? s.id)}" alt="" onerror="this.outerHTML='<span>${glyph}</span>'">`;
     el.innerHTML =
       `<div class="body"><div class="lb">${s.label}</div><div class="wh">${s.wh}</div>` +
-      `<div class="row">${chips}</div></div><div class="spr">${spr}</div>`;
+      `${chips ? `<div class="row">${chips}</div>` : ""}</div><div class="spr">${spr}</div>`;
+    // the cadence/heartbeat pill lives on its own line, anchored to the card's
+    // bottom-right corner — never inline with the service pills
+    if (s.cad) {
+      el.insertAdjacentHTML(
+        "beforeend",
+        `<span class="chip cad">${s.cron ? `<span class="hb" data-cron="${s.cron}"></span>` : ""}${s.cad}</span>`,
+      );
+    }
     world.appendChild(el);
   }
 
@@ -574,6 +590,7 @@ export function createPipeline(container: HTMLElement): { destroy: () => void } 
     }
   }
 
+  band(B(-2.35), B(-0.2), "Act 0 · the oof", "somewhere a tune catches my body first", true);
   band(B(-0.2), B(4.55), "Act 1 · the find", "when I hear a banger, I hit CMD+F and it's in", true);
   band(
     B(4.55),
@@ -675,6 +692,37 @@ export function createPipeline(container: HTMLElement): { destroy: () => void } 
   S.forEach(card);
   D.forEach((d) => card({ ...d, col: d.col + 2, dream: true }));
 
+  // ── Act 0 · the listener — the pipeline's input: a banger lands, headphones on,
+  // eyes closed, nodding at half-time 174. Sound waves ride in; the oof feeds CMD+F.
+  const LX = B(-1.6),
+    LW = 176,
+    LTOP = CY - 93;
+  const listener = document.createElement("img");
+  listener.src = SPRITE("listener");
+  listener.alt = "";
+  listener.className = "listener";
+  listener.style.left = LX + "px";
+  listener.style.top = LTOP + "px";
+  world.appendChild(listener);
+  // three wavefronts arcing in toward the face, staggered on the nod's clock
+  (
+    [
+      [18, 0],
+      [30, 0.46],
+      [42, 0.92],
+    ] as const
+  ).forEach(([size, delay]) => {
+    const wv = document.createElement("div");
+    wv.className = "wave";
+    wv.style.width = wv.style.height = size + "px";
+    wv.style.left = LX - 34 - size / 2 + "px";
+    wv.style.top = CY - 26 - size / 2 + "px";
+    wv.style.animationDelay = delay + "s";
+    world.appendChild(wv);
+  });
+  // register the listener as a wire endpoint so the oof flows into CMD+F
+  pos.ear = { w: LW, x: LX, y: CY };
+
   // launching-finding rockets — an ascending trail off the galaxy mouth, climbing toward the sun
   (
     [
@@ -692,10 +740,11 @@ export function createPipeline(container: HTMLElement): { destroy: () => void } 
     world.appendChild(im);
   });
 
-  // the lore — the payoff of the whole map, told below the launch scene in Fluncle's own words
+  // the lore — the payoff of the whole map, told below the launch scene in Fluncle's own
+  // words, centered exactly on the sun (left B(17.8) + 112 = the sun's midline; lore is 560 wide)
   const lore = document.createElement("div");
   lore.className = "lore";
-  lore.style.left = B(16.7) + "px";
+  lore.style.left = B(17.8) + 112 - 280 + "px";
   lore.style.top = CY + 150 + "px";
   lore.innerHTML =
     "Somewhere new, strange, bigger than me, every time the trip lands. I leave a " +
@@ -927,13 +976,15 @@ export function createPipeline(container: HTMLElement): { destroy: () => void } 
   q<HTMLButtonElement>(".zout").addEventListener("click", () => setZoom(zoom / 1.2));
   zlabel.addEventListener("click", () => setZoom(1));
 
-  // legend
+  // hardware legend — swatches only at rest; hover/focus/tap reveals the machine names
   q<HTMLDivElement>(".legend").innerHTML = Object.values(MACH)
     .map(
       (m) =>
-        `<span class="k"><span class="sw" style="background:var(${m.c})"></span>${m.label}</span>`,
+        `<span class="k"><span class="sw" style="background:var(${m.c})"></span><span class="name">${m.label}</span></span>`,
     )
     .join("");
+  const hw = q<HTMLDivElement>(".hw");
+  hw.addEventListener("click", () => hw.classList.toggle("open"));
 
   // ── the live cron heartbeat (reads the same-origin /api/status) ──
   const hbstat = q<HTMLDivElement>(".hbstat");
