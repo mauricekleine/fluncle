@@ -11,6 +11,7 @@ const getArtistBySlug = vi.hoisted(() => vi.fn());
 const getPublicArtistSocials = vi.hoisted(() => vi.fn());
 const countArtistFindings = vi.hoisted(() => vi.fn());
 const getFindingsByArtist = vi.hoisted(() => vi.fn());
+const getArtistNeighbours = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/server/artists", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/server/artists")>()),
@@ -22,6 +23,13 @@ vi.mock("@/lib/server/artists", async (importOriginal) => ({
 vi.mock("@/lib/server/tracks", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/server/tracks")>()),
   getFindingsByArtist,
+}));
+
+// The dossier's neighbours are DB-backed; stub them so the resolver stays a pure
+// unit (the ranking itself is covered by artist-dossier.test.ts).
+vi.mock("@/lib/server/artist-dossier", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/server/artist-dossier")>()),
+  getArtistNeighbours,
 }));
 
 const { Route, resolveArtistPageData } = await import("./artist.$slug");
@@ -36,8 +44,10 @@ const ARTIST = {
 };
 
 // A minimal grid finding — only the fields the resolver passes through matter.
-function finding(logId: string) {
-  return { artists: ["Drift"], logId, title: "Untitled", trackId: `t-${logId}` };
+// `addedAt`/`bpm`/`key` feed the dossier signature; a bare finding leaves them
+// undefined, which the signature degrades cleanly on.
+function finding(logId: string, extra: { addedAt?: string; bpm?: number; key?: string } = {}) {
+  return { artists: ["Drift"], logId, title: "Untitled", trackId: `t-${logId}`, ...extra };
 }
 
 function robotsMeta(data: unknown): string | undefined {
@@ -54,7 +64,9 @@ describe("resolveArtistPageData (the artist page indexability gate)", () => {
     getPublicArtistSocials.mockReset();
     countArtistFindings.mockReset();
     getFindingsByArtist.mockReset();
+    getArtistNeighbours.mockReset();
     getPublicArtistSocials.mockResolvedValue([]);
+    getArtistNeighbours.mockResolvedValue([]);
     getArtistBySlug.mockResolvedValue(ARTIST);
   });
 
@@ -108,5 +120,30 @@ describe("resolveArtistPageData (the artist page indexability gate)", () => {
     expect(data).toEqual({ status: "missing" });
     expect(getFindingsByArtist).not.toHaveBeenCalled();
     expect(countArtistFindings).not.toHaveBeenCalled();
+    expect(getArtistNeighbours).not.toHaveBeenCalled();
+  });
+
+  it("assembles the dossier (signature + neighbours) from the findings", async () => {
+    getFindingsByArtist.mockResolvedValue([
+      finding("003.1.1A", { addedAt: "2026-03-10T00:00:00.000Z", bpm: 176, key: "A minor" }),
+      finding("002.1.1A", { addedAt: "2026-02-01T00:00:00.000Z", bpm: 174, key: "F minor" }),
+      finding("001.1.1A", { addedAt: "2026-01-05T00:00:00.000Z", bpm: 172, key: "A minor" }),
+    ]);
+    countArtistFindings.mockResolvedValue(3);
+    getArtistNeighbours.mockResolvedValue([{ name: "Echo", slug: "echo" }]);
+
+    const data = await resolveArtistPageData("drift");
+
+    if (data.status !== "found") {
+      throw new Error("expected the artist to be found");
+    }
+    expect(data.dossier.findingCount).toBe(3);
+    // The earliest finding is when the artist first crossed his path.
+    expect(data.dossier.firstFoundAt).toBe("2026-01-05T00:00:00.000Z");
+    // The tempo band spans the slowest→fastest with the median between them.
+    expect(data.dossier.bpm).toEqual({ max: 176, median: 174, min: 172 });
+    // The key spread is de-duplicated + sorted.
+    expect(data.dossier.keys).toEqual(["A minor", "F minor"]);
+    expect(data.dossier.neighbours).toEqual([{ name: "Echo", slug: "echo" }]);
   });
 });
