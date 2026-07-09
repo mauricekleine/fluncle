@@ -80,14 +80,14 @@ export async function distributeYoutube(
       // ~1h token). Re-mint ONLY the access token and KEEP the same session URI — it
       // stays valid for days — then resume at the offset the session already holds.
       // Re-initiating here would open a fresh 0-byte session and waste the upload.
-      onProgress?.("Access token expired — re-minting and resuming");
+      onProgress?.("Access token expired, re-minting and resuming");
       session = { accessToken: await mintToken(), sessionUri: session.sessionUri };
       offset = await queryOffset(session.sessionUri, session.accessToken, contentLength);
       continue;
     }
 
     // reinit (410/404): the session is gone — open a brand-new one from the start.
-    onProgress?.("Upload session expired — re-initiating");
+    onProgress?.("Upload session expired, re-initiating");
     session = await initiate(mixtapeId, contentLength, contentType);
     offset = 0;
   }

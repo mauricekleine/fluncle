@@ -196,7 +196,7 @@ async function markdownHomeResponse(): Promise<Response> {
 
 > ${fluncleDescription}
 
-One selector, no team, digging drum & bass since '90. Dates mark when each was found: the day Fluncle first heard the tune, not the day it released. The collection is called Fluncle's Findings; the archive holds ${page.totalCount} certified tracks, and new ones land most nights.
+One selector, no team, digging drum & bass since '90. Dates mark when he found it: the day Fluncle first heard the tune, not the day it released. The collection is called Fluncle's Findings; the archive holds ${page.totalCount} certified tracks, and new ones land most nights.
 
 ## Latest findings
 
@@ -206,7 +206,7 @@ ${tracks.join("\n")}
 
 - [Fluncle's Findings on Spotify](${spotifyPlaylistUrl}): the playlist itself
 - [Fluncle on Telegram](${telegramUrl}): one banger per post, most nights
-- [The archive](${siteUrl}/): every certified track with the date it was found
+- [The archive](${siteUrl}/): every certified track with the date Fluncle found it
 
 ## Data
 
@@ -235,7 +235,7 @@ ${tracks.join("\n")}
 
 - [CLI installer](${siteUrl}/cli/latest.sh): curl -fsSL ${siteUrl}/cli/latest.sh | sh, then try fluncle recent
 - [Fluncle Lens](https://chromewebstore.google.com/detail/efkkceaofendabikblfjhoepgejfpakk): a Chrome extension that finds fluncle:// coordinates on any web page and links each to its /log finding
-- The rave terminal: ssh rave.fluncle.com, the deepest room in the Galaxy
+- The rave terminal: ssh rave.fluncle.com, the deep end of the Galaxy
 `;
 
   return new Response(markdown, {
@@ -356,7 +356,7 @@ description: Read and contribute to Fluncle's drum & bass archive over the publi
 
 # Fluncle API
 
-Fluncle discovers and certifies drum & bass bangers, logs each as a finding, and keeps the full archive across the Galaxy, with ${siteUrl} as home base. One selector, no team. Dates mark when each was found: the day Fluncle first heard the tune, not the day it released.
+Fluncle discovers and certifies drum & bass bangers, logs each as a finding, and keeps the full archive across the Galaxy, with ${siteUrl} as home base. One selector, no team. Dates mark when he found it: the day Fluncle first heard the tune, not the day it released.
 
 Base URL: \`${siteUrl}\`. Everything below returns JSON. Errors look like \`{"ok": false, "code": "...", "message": "..."}\`.
 
@@ -390,5 +390,5 @@ The same tools are available over MCP (Streamable HTTP, no auth) at \`${siteUrl}
 - \`GET /llms.txt\`: the plain-language map of the Galaxy.
 - \`GET /api/v1/openapi.json\`: this API as an OpenAPI 3.1 document.
 - \`GET /api/v1/health\`: liveness, \`{"ok": true}\`.
-- \`ssh rave.fluncle.com\`: the rave terminal, the deepest room in the Galaxy. Bring a TTY.
+- \`ssh rave.fluncle.com\`: the rave terminal, the deep end of the Galaxy. Bring a TTY.
 `;

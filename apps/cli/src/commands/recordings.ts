@@ -138,7 +138,7 @@ export async function recordingCreateCommand(options: RecordingCreateOptions = {
       return;
     }
 
-    console.log(`Plan ${recording.id} created — handle "${recording.title}"`);
+    console.log(`Plan ${recording.id} created, handle "${recording.title}"`);
     return;
   }
 
@@ -170,7 +170,7 @@ export async function recordingCreateCommand(options: RecordingCreateOptions = {
     }
   };
 
-  log(`Recording ${recording.id} created — staging the set video…`);
+  log(`Recording ${recording.id} created, staging the set video…`);
 
   const upload = await uploadRenditionMultipart(
     options.video,
@@ -228,7 +228,7 @@ export async function recordingUpdateCommand(
   if (Object.keys(body).length === 0) {
     throw new CliError(
       "no_fields",
-      "Nothing to update — pass --title, --recorded-at, --parent-id, or --tracklist-file",
+      "Nothing to update. Pass --title, --recorded-at, --parent-id, or --tracklist-file",
     );
   }
 

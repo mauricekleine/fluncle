@@ -460,7 +460,7 @@ async function summarizeStatus(): Promise<{
   }));
 
   if (services.length === 0) {
-    return { headline: "No service health has been reported yet.", ok: false, services };
+    return { headline: "No service has reported its health yet.", ok: false, services };
   }
 
   const down = services.filter((service) => service.status === "down");

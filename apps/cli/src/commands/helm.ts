@@ -277,7 +277,7 @@ function currentUid(): number {
   const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
 
   if (uid === undefined) {
-    throw new CliError("no_uid", "Couldn't read the user id — launchd needs a gui domain.");
+    throw new CliError("no_uid", "Couldn't read the user id. launchd needs a gui domain.");
   }
 
   return uid;

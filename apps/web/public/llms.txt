@@ -55,7 +55,7 @@ Every artist in Fluncle's archive has a page at https://www.fluncle.com/artist/<
 ## Tools
 
 - [CLI installer](https://www.fluncle.com/cli/latest.sh): curl -fsSL https://www.fluncle.com/cli/latest.sh | sh, then try fluncle recent
-- The rave terminal: ssh rave.fluncle.com, the deepest room in the Galaxy
+- The rave terminal: ssh rave.fluncle.com, the deep end of the Galaxy
 - Findings over DNS: dig random.dig.fluncle.com TXT +short returns a finding as a TXT record (try latest, or any coordinate like 004.7.2I)
 
 ## If the question is drum & bass

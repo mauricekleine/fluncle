@@ -208,7 +208,7 @@ const fetchStatus = createServerFn({ method: "GET" }).handler(async (): Promise<
   return { events, now: new Date().toISOString(), samples, services };
 });
 
-const title = "System Status · Fluncle";
+const title = "System status · Fluncle";
 const description = "The live health of Fluncle's services: web, database, storage, and the rest.";
 
 function statusHead() {

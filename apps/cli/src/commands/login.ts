@@ -75,7 +75,7 @@ export async function loginCommand(): Promise<void> {
   } catch {
     // A headless box / unsupported platform can't auto-open. The URL is printed
     // above; the user opens it by hand. Keep polling either way.
-    console.log("Couldn't open a browser automatically — visit the URL above to approve.");
+    console.log("Couldn't open a browser automatically. Visit the URL above to approve.");
   }
 
   const token = await pollForToken(baseUrl, device);
@@ -106,7 +106,7 @@ export async function logoutCommand(): Promise<void> {
   console.log(
     cleared
       ? "Signed out. This device is no longer linked to your account."
-      : "Not signed in — nothing to do.",
+      : "Not signed in. Nothing to do.",
   );
 }
 

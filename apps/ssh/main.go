@@ -1674,7 +1674,7 @@ func (m model) renderGalaxyLog() string {
 		logURL := logPageURL(coord)
 		content = append(content, "", readingStyle.Render(terminalLink("Read the log", logURL)))
 		if beam := logQR(logURL); beam != "" {
-			content = append(content, "", labelStyle.Render("Lift the log off the terminal — point a phone at the beam:"), "", beam)
+			content = append(content, "", labelStyle.Render("Lift the log off the terminal, point a phone at the beam:"), "", beam)
 		}
 	}
 	content = append(content, "", labelStyle.Render("The audio didn't survive the trip out here. It's still playing back on Earth."))
@@ -1951,7 +1951,7 @@ func (m model) aboutContent() []string {
 	}
 
 	return []string{
-		readingStyle.Width(wrapWidth).Render("I'm Fluncle. Been digging since '90, only now I do it across the Galaxy — every banger I find gets logged and sent back. This terminal is one of the places it lands."),
+		readingStyle.Width(wrapWidth).Render("I'm Fluncle. Been digging since '90, only now I do it across the Galaxy. I log every banger I find and send it back. This terminal is one of the places it lands."),
 		"",
 		labelStyle.Render("Where to listen"),
 		link("Spotify", spotifyPlaylistURL),
@@ -1966,7 +1966,7 @@ func (m model) aboutContent() []string {
 		labelStyle.Render("The mothership"),
 		link("Web", websiteURL),
 		link("RSS", rssURL),
-		readingStyle.Width(wrapWidth).Render("Newsletter: fresh bangers, every Friday, from Fluncle — board it at the site."),
+		readingStyle.Width(wrapWidth).Render("Newsletter: fresh bangers, every Friday, from Fluncle. Board it at the site."),
 		"",
 		labelStyle.Render("For the nerds"),
 		link("The Galaxy", galaxyURL),

@@ -139,13 +139,13 @@ function DevicePage() {
         ) : phase === "approved" ? (
           <div className="account-stack">
             <p>
-              Done. Your terminal is aboard, {name}. Head back to it — <code>fluncle</code> has the
+              Done. Your terminal is aboard, {name}. Head back to it, <code>fluncle</code> has the
               rest.
             </p>
           </div>
         ) : phase === "denied" ? (
           <div className="account-stack">
-            <p>Turned that one away. Nothing was linked.</p>
+            <p>Turned that one away. Nothing linked.</p>
           </div>
         ) : (
           <form
@@ -181,7 +181,7 @@ function DevicePage() {
                 type="button"
                 variant="ghost"
               >
-                Not me — deny
+                Not me, deny
               </Button>
             </div>
           </form>

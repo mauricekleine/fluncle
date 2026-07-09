@@ -97,7 +97,7 @@ function mixtapePage(row: MixtapeRow): SitemapLogPage {
       contentLoc: mixtapeSetVideoUrl(logId),
       description: row.note?.trim()
         ? row.note.trim()
-        : `Fluncle drum & bass mixtape — ${row.title}.`,
+        : `Fluncle drum & bass mixtape: ${row.title}.`,
       thumbnailLoc: mixtapeCoverUrl(logId, "card"),
       title: row.title,
     },

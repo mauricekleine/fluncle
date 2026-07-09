@@ -51,7 +51,7 @@ export const Route = createFileRoute("/galaxy")({
         property: "og:image:height",
       },
       {
-        content: "Fluncle's Galaxy — every banger out there is a star.",
+        content: "Fluncle's Galaxy: every banger out there is a star.",
         property: "og:image:alt",
       },
       {

@@ -192,7 +192,7 @@ export function checkBundleCompleteness(files: TrackVideoOptions): BundleComplet
   const plateWarnings: string[] = [];
   if (files.plateBackground && !files.plate) {
     plateWarnings.push(
-      "plate.background.png without plate.png — the background is the parallax layer OF a plate; pass --plate (or drop it in the --dir) too",
+      "plate.background.png without plate.png. The background is the parallax layer OF a plate; pass --plate (or drop it in the --dir) too",
     );
   }
   return {
@@ -242,11 +242,11 @@ export async function trackVideoCommand(
   if (completeness.uploadingFootage) {
     if (completeness.missingContract.length > 0) {
       onProgress?.(
-        `warning: --allow-partial — uploading WITHOUT the re-render contract (${completeness.missingContract.join(", ")}); the R2 bundle will NOT be re-renderable`,
+        `warning: --allow-partial, uploading WITHOUT the re-render contract (${completeness.missingContract.join(", ")}); the R2 bundle will NOT be re-renderable`,
       );
     }
     for (const missing of completeness.missingAdvisory) {
-      onProgress?.(`warning: ${missing} missing (provenance/eval only) — shipping without it`);
+      onProgress?.(`warning: ${missing} missing (provenance/eval only), shipping without it`);
     }
   }
   for (const warning of completeness.plateWarnings) {
@@ -313,7 +313,7 @@ export async function trackVideoCommand(
   // render queue (no video_url write) until the real footage ship finalizes.
   if (platesOnly) {
     onProgress?.(
-      `plate pre-upload complete — compose against ${FOUND_BASE}/${presign.logId}/plate.png; finalize is deferred to the footage ship`,
+      `plate pre-upload complete. Compose against ${FOUND_BASE}/${presign.logId}/plate.png; finalize is deferred to the footage ship`,
     );
     return { logId: presign.logId, ok: true, trackId: presign.trackId, urls };
   }

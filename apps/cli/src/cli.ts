@@ -313,7 +313,7 @@ function addListenCommands(program: Command): void {
   program
     .command("artists")
     .description("Browse artists in Fluncle's archive")
-    .argument("[slug]", "Artist slug — omit for the full list")
+    .argument("[slug]", "Artist slug (omit for the full list)")
     .option("--json", "Print JSON", false)
     .action(async (slug: string | undefined, options: JsonOptions) => {
       const { artistsListCommand, artistsGetCommand } = await import("./commands/artists");
@@ -466,7 +466,7 @@ function addHelmCommands(program: Command): void {
   const helm = configureCommand(
     program
       .command("helm", { hidden: true })
-      .description("Fluncle's Helm — the operator's mission control"),
+      .description("Fluncle's Helm, the operator's mission control"),
   );
 
   helm.action(async () => {
@@ -578,7 +578,7 @@ function addAdminCommands(program: Command): void {
   // to drain the queue.
   adminTracks
     .command("enrich")
-    .description("Enrichment worklist (pending, failed, or stuck processing) — use --queue")
+    .description("Enrichment worklist (pending, failed, or stuck processing). Use --queue")
     .option("--queue", "Show the enrichment worklist, oldest first", false)
     .option("--limit <limit>", "Number of findings to show with --queue", "10")
     .option("--json", "Print JSON", false)
@@ -589,7 +589,7 @@ function addAdminCommands(program: Command): void {
       // `observe`/`context` gate their worklist view on `--queue`.
       if (!options.queue) {
         console.error(
-          "`tracks enrich` is a worklist view — enrichment runs on the on-box `fluncle-enrich` cron.\nUse `tracks enrich --queue` to see findings needing (re-)enrichment.",
+          "`tracks enrich` is a worklist view. Enrichment runs on the on-box `fluncle-enrich` cron.\nUse `tracks enrich --queue` to see findings needing (re-)enrichment.",
         );
         process.exitCode = 1;
         return;
@@ -606,7 +606,7 @@ function addAdminCommands(program: Command): void {
   // the queue. See docs/rfcs/audio-embedding-rfc.md.
   adminTracks
     .command("embed")
-    .description("Audio-embedding worklist (findings with no MuQ vector yet) — use --queue")
+    .description("Audio-embedding worklist (findings with no MuQ vector yet). Use --queue")
     .option("--queue", "Show the embedding worklist, oldest first", false)
     .option("--limit <limit>", "Number of findings to show with --queue", "10")
     .option("--json", "Print JSON", false)
@@ -616,7 +616,7 @@ function addAdminCommands(program: Command): void {
       // `--queue` there's nothing to act on; require it, mirroring `enrich`.
       if (!options.queue) {
         console.error(
-          "`tracks embed` is a worklist view — embedding runs on the on-box `fluncle-embed` cron.\nUse `tracks embed --queue` to see findings needing an audio embedding.",
+          "`tracks embed` is a worklist view. Embedding runs on the on-box `fluncle-embed` cron.\nUse `tracks embed --queue` to see findings needing an audio embedding.",
         );
         process.exitCode = 1;
         return;
@@ -635,7 +635,7 @@ function addAdminCommands(program: Command): void {
   // `cron.social-capture`. See docs/agents/hermes/scripts/capture-sweep.*.
   adminTracks
     .command("capture-audio")
-    .description("Full-song capture worklist (findings with no source audio yet) — use --queue")
+    .description("Full-song capture worklist (findings with no source audio yet). Use --queue")
     .option("--queue", "Show the capture worklist, newest first", false)
     .option("--limit <limit>", "Number of findings to show with --queue", "10")
     .option("--json", "Print JSON", false)
@@ -645,7 +645,7 @@ function addAdminCommands(program: Command): void {
       // there's nothing to act on; require it, mirroring `enrich`/`embed`.
       if (!options.queue) {
         console.error(
-          "`tracks capture-audio` is a worklist view — capture runs on the on-box `fluncle-capture` cron.\nUse `tracks capture-audio --queue` to see findings needing a full-song capture.",
+          "`tracks capture-audio` is a worklist view. Capture runs on the on-box `fluncle-capture` cron.\nUse `tracks capture-audio --queue` to see findings needing a full-song capture.",
         );
         process.exitCode = 1;
         return;
@@ -970,7 +970,7 @@ function addAdminCommands(program: Command): void {
   adminMixtapes
     .command("distribute")
     .description(
-      "Push a promoted mixtape to YouTube (video) and Mixcloud (audio). The mixtape must already be promoted (`recordings promote`) — distribute is push-only.",
+      "Push a promoted mixtape to YouTube (video) and Mixcloud (audio). The mixtape must already be promoted (`recordings promote`). Distribute is push-only.",
     )
     .argument("[idOrLogId]")
     .option("--video <file>", "Video file for YouTube")
@@ -1052,7 +1052,7 @@ function addAdminCommands(program: Command): void {
 
   adminClips
     .command("drip-pause")
-    .description("Pause the whole Instagram drip-feed — the kill switch (operator)")
+    .description("Pause the whole Instagram drip-feed, the kill switch (operator)")
     .option("--json", "Print JSON", false)
     .allowExcessArguments()
     .action(async (options: { json: boolean }) => {
@@ -1062,7 +1062,7 @@ function addAdminCommands(program: Command): void {
 
   adminClips
     .command("drip-resume")
-    .description("Resume the Instagram drip-feed — clear the kill switch (operator)")
+    .description("Resume the Instagram drip-feed, clear the kill switch (operator)")
     .option("--json", "Print JSON", false)
     .allowExcessArguments()
     .action(async (options: { json: boolean }) => {
@@ -1225,7 +1225,7 @@ function addAdminCommands(program: Command): void {
   // AGENT token gets a 403, so the cron can't send.
   adminNewsletter
     .command("send")
-    .description("Send an edition — OPERATOR only (Resend broadcast + mint the number)")
+    .description("Send an edition, OPERATOR only (Resend broadcast + mint the number)")
     .argument("[id]")
     .option("--json", "Print JSON", false)
     .allowExcessArguments()
@@ -1252,7 +1252,7 @@ function addAdminCommands(program: Command): void {
   // reopens the self-healing window so its finds re-enter the next edition. --yes guards.
   adminNewsletter
     .command("delete")
-    .description("Delete an edition (draft or sent) — OPERATOR only; reopens the send window")
+    .description("Delete an edition (draft or sent). OPERATOR only; reopens the send window")
     .argument("[id]")
     .option("--yes", "Confirm the delete", false)
     .option("--json", "Print JSON", false)
@@ -1858,7 +1858,7 @@ async function runArtistResolveQueue(
   }
 
   if (result.artists.length === 0) {
-    console.log("Every artist has been resolved. Nothing waiting on the sweep.");
+    console.log("Resolved every artist. Nothing waiting on the sweep.");
     return;
   }
 
@@ -2296,7 +2296,7 @@ async function runTrackRequeueVideo(
 
   console.log(
     result.alreadyClear
-      ? `${result.logId} already had no video — nothing to clear.`
+      ? `${result.logId} already had no video. Nothing to clear.`
       : `Cleared the video for ${result.logId}. It's back on the render queue (and off radio until re-rendered).`,
   );
 }
@@ -2319,7 +2319,7 @@ async function runTrackPurgeVideo(
 
   console.log(
     result.noVideo
-      ? `${result.logId} has no video — nothing to purge.`
+      ? `${result.logId} has no video. Nothing to purge.`
       : `Purging the stale renditions for ${result.logId} from the edge. The next play picks up the fresh render.`,
   );
 }
@@ -2625,7 +2625,7 @@ async function runNewsletterSend(
   console.log(
     number === undefined
       ? `Sent edition ${result.edition.id}.`
-      : `Sent edition #${number} — it's out to the list and in the archive.`,
+      : `Sent edition #${number}. It's out to the list and in the archive.`,
   );
 }
 
@@ -2639,7 +2639,7 @@ async function runNewsletterDelete(
   }
 
   if (!options.yes) {
-    throw new Error("Pass --yes to confirm — this hard-deletes the edition (draft or sent).");
+    throw new Error("Pass --yes to confirm. This hard-deletes the edition (draft or sent).");
   }
 
   const result = await newsletterDeleteCommand(id);

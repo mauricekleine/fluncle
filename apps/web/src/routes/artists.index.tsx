@@ -16,7 +16,7 @@ const fetchArtists = createServerFn({ method: "GET" }).handler(() =>
 
 const title = "Fluncle: the artists";
 const description =
-  "Every artist Fluncle has found and logged in the Galaxy — each one a map of their bangers.";
+  "Every artist Fluncle has found and logged in the Galaxy, mapped by the bangers they made.";
 
 function artistsHead(loaderData: ArtistIndexEntry[] | undefined) {
   const itemList = {

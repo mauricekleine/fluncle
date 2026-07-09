@@ -380,7 +380,7 @@ function SignedInAccount({
         <h2>Link the CLI</h2>
         <p className="account-muted">
           Got the <code>fluncle</code> CLI? Run <code>fluncle login</code> in your terminal to link
-          this device and sync your Galaxy from the command line. You&rsquo;ll be sent back here to
+          this device and sync your Galaxy from the command line. I&rsquo;ll send you back here to
           approve it.
         </p>
       </section>

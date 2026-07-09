@@ -277,7 +277,7 @@ export async function clipCutCommand(
     if (sizeBytes > MAX_CLIP_BYTES) {
       throw new CliError(
         "clip_too_large",
-        `The cut is ${(sizeBytes / 1_000_000).toFixed(1)} MB (> 100 MB Cloudflare MT ceiling) — shorten the window or lower the bitrate cap`,
+        `The cut is ${(sizeBytes / 1_000_000).toFixed(1)} MB (> 100 MB Cloudflare MT ceiling). Shorten the window or lower the bitrate cap`,
       );
     }
 

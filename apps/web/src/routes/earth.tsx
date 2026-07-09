@@ -13,7 +13,7 @@ import { siteUrl, spotifyPlaylistUrl, telegramUrl } from "@/lib/fluncle-links";
 // surfaces read from @fluncle/registry, the rest from custom cards. Walk up,
 // press E, the door opens. The rocket (north) launches the Galaxy.
 
-const title = "Earth — Fluncle";
+const title = "Earth · Fluncle";
 const description = "The ground Fluncle left from. Walk it; every device is a door.";
 
 export const Route = createFileRoute("/earth")({
@@ -73,7 +73,7 @@ function EarthPage() {
 
   return (
     <main className="fixed inset-0 flex flex-col items-center justify-center overflow-hidden bg-[#090a0b]">
-      <h1 className="sr-only">Earth — the Fluncle overworld</h1>
+      <h1 className="sr-only">Earth: the Fluncle overworld</h1>
       <div
         aria-label="The Fluncle overworld"
         className="flex h-full w-full select-none items-center justify-center"

@@ -46,7 +46,7 @@ import { useVideoStallRecovery } from "@/lib/use-video-recovery";
 
 const title = "Fluncle, observing";
 const description =
-  "Drum & bass bangers from another dimension. One continuous run of Fluncle's findings, each one playing under the observation he logged when he got there.";
+  "Drum & bass bangers from another dimension. One continuous run of Fluncle's findings, each playing under the observation he logged when he got there.";
 
 // Fluncle's voice, recovered-log register (copywriting-fluncle, VOICE.md §5):
 // in-fiction, no banned identity words (NEVER broadcast/station/tune in/live —

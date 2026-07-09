@@ -133,7 +133,7 @@ describe("MCP get_status tool", () => {
     const { data } = await callTool("get_status");
 
     expect(data.ok).toBe(false);
-    expect(data.headline).toBe("No service health has been reported yet.");
+    expect(data.headline).toBe("No service has reported its health yet.");
     expect(data.services).toHaveLength(0);
   });
 });

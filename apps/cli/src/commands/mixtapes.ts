@@ -97,7 +97,7 @@ export async function mixtapeDistributeCommand(
   if (!logId) {
     throw new CliError(
       "mixtape_not_promoted",
-      `${mixtapeId} has no coordinate yet — promote its recording first:\n` +
+      `${mixtapeId} has no coordinate yet. Promote its recording first:\n` +
         "  fluncle admin recordings promote <recordingId>",
     );
   }
@@ -117,7 +117,7 @@ export async function mixtapeDistributeCommand(
   if (mixtape.status === "published") {
     onProgress(`Already published (${logId}); re-distributing.`);
   } else {
-    onProgress(`Distributing ${logId} (promoted — coordinate already minted).`);
+    onProgress(`Distributing ${logId} (promoted, coordinate already minted).`);
   }
 
   const results: { platform: string; url: string }[] = [];
@@ -187,7 +187,7 @@ export async function mixtapeResyncCommand(
   if (!mixtape.logId) {
     throw new CliError(
       "mixtape_no_log_id",
-      "The mixtape isn't published yet — distribute it before re-syncing.",
+      "The mixtape isn't published yet. Distribute it before re-syncing.",
     );
   }
 

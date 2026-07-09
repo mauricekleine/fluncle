@@ -126,7 +126,7 @@ function EditionPage() {
                 <a href={logPageUrl(content.mixtapeRef)}>
                   <span className="log-related-coordinate">{content.mixtapeRef}</span>
                   <span className="log-related-line">
-                    One long dream, made from the week's finds.
+                    One long dream I mixed from the week's finds.
                   </span>
                 </a>
               </li>

@@ -186,7 +186,7 @@ export async function putPart(
 
       const backoffMs = 500 * 2 ** (attempt - 1);
       onProgress(
-        `Set video: part ${part.partNumber} dropped — retry ${attempt}/${MAX_PART_ATTEMPTS - 1} in ${backoffMs}ms…`,
+        `Set video: part ${part.partNumber} dropped, retry ${attempt}/${MAX_PART_ATTEMPTS - 1} in ${backoffMs}ms…`,
       );
       await new Promise((resolve) => setTimeout(resolve, backoffMs));
     }

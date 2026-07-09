@@ -46,7 +46,7 @@ export const COPY = {
   description: "Fluncle Lens surfaces the findings hidden across the web.",
 
   /** Popup empty state — quiet, in-fiction, matches the web empty state. */
-  emptyState: "No findings on this page. Quiet sector.",
+  emptyState: "No findings on this page.",
 
   /**
    * Hover card / popup state when the coordinate resolved (the link works) but the

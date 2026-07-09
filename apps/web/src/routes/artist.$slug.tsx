@@ -148,7 +148,7 @@ function artistHead(loaderData: ArtistPageData | undefined) {
   const title = `${name} · Fluncle's Findings`;
   const description =
     findings.length > 0
-      ? `Every ${name} banger Fluncle has found and logged in the Galaxy — ${findings.length} so far, each with a coordinate.`
+      ? `Every ${name} banger Fluncle has found and logged in the Galaxy, ${findings.length} so far, each with a coordinate.`
       : `${name} in Fluncle's Galaxy.`;
   const coverFinding = findings[0];
   const imageUrl =
