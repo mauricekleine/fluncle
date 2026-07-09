@@ -16,6 +16,9 @@
 //        r2          — HEAD ${HEALTHCHECK_R2_PROBE_URL}.
 //        dns         — dig +short ${HEALTHCHECK_DNS_QUERY} (non-empty answer = ok).
 //        ssh         — TCP-connect ${HEALTHCHECK_SSH_HOST}:${HEALTHCHECK_SSH_PORT}.
+//        disk        — `df` the box's root fs (via the /opt/data mount); degraded
+//                      past ~85% full, down past ~93% — catches a filling disk
+//                      before it strands the next pin-watch rebuild.
 //        cron.*      — read ~/.hermes/cron/output/<job>/ per Hermes cron: newest *.md,
 //                      its last line parsed as JSON (`.ok !== false`), AND fresh within
 //                      ~3× the cron's cadence. Emitted as ONE service PER cron (service
@@ -335,6 +338,53 @@ function probeSsh(): Promise<Check> {
     socket.once("timeout", () => finish("down", "tcp timeout"));
     socket.once("error", () => finish("down", "tcp refused"));
   });
+}
+
+// ---------------------------------------------------------------------------
+// PROBE: disk — the agent box's root-filesystem headroom. This prober runs INSIDE
+// the hermes container, whose HOME (/opt/data/home) sits under the /opt/data bind
+// mount from the host's root fs, so `df` there reports the SAME disk the host fills.
+// Each fluncle-hermes image is large and a pin-watch rebuild transiently needs a
+// second one, so a quietly filling disk is the recurring failure that strands the
+// next rebuild with "no space left on device". Surfacing it here catches it BEFORE
+// a rebuild fails: degraded past DISK_DEGRADED_PCT, down past DISK_DOWN_PCT. The
+// message reports the percent used only — never a host, mount, or path (public-safe).
+// A missing/unparsable `df` degrades to ok, never a false alarm. All env-overridable.
+// ---------------------------------------------------------------------------
+
+const DISK_PROBE_PATH = process.env.HEALTHCHECK_DISK_PATH ?? HOME;
+const DISK_DEGRADED_PCT =
+  Number.parseInt(process.env.HEALTHCHECK_DISK_DEGRADED_PCT ?? "", 10) || 85;
+const DISK_DOWN_PCT = Number.parseInt(process.env.HEALTHCHECK_DISK_DOWN_PCT ?? "", 10) || 93;
+
+function probeDisk(): Check {
+  const service = "disk";
+
+  // `df -P -k <path>`: POSIX-portable, one filesystem row after the header; the
+  // "Use%" column carries the integer percentage we key off.
+  const { code, stdout } = runQuiet("df", ["-P", "-k", DISK_PROBE_PATH], PROBE_TIMEOUT_MS);
+
+  if (code !== 0) {
+    return { latencyMs: null, message: msg("df unavailable"), service, status: "ok" };
+  }
+
+  const dataLine = stdout.trim().split("\n").slice(1).pop() ?? "";
+  const percentMatch = dataLine.match(/(\d+)%/);
+  const usedPct = Number.parseInt(percentMatch?.[1] ?? "", 10);
+
+  if (!Number.isFinite(usedPct)) {
+    return { latencyMs: null, message: msg("df unparsable"), service, status: "ok" };
+  }
+
+  if (usedPct >= DISK_DOWN_PCT) {
+    return { latencyMs: null, message: msg(`${usedPct}% full`), service, status: "down" };
+  }
+
+  if (usedPct >= DISK_DEGRADED_PCT) {
+    return { latencyMs: null, message: msg(`${usedPct}% full`), service, status: "degraded" };
+  }
+
+  return { latencyMs: null, message: msg(`${usedPct}% used`), service, status: "ok" };
 }
 
 // ---------------------------------------------------------------------------
@@ -910,6 +960,7 @@ async function main(): Promise<void> {
   // well under the runner's ~120s kill.
   const [web, r2, ssh] = await Promise.all([probeWeb(), probeR2(), probeSsh()]);
   const dns = probeDns();
+  const disk = probeDisk();
   const crons = probeCrons();
   const renderBox = probeRenderBox();
   const hermes = probeHermes();
@@ -922,7 +973,7 @@ async function main(): Promise<void> {
   // (the state map is keyed by service id), so a single cron going down/recovering
   // pings on its own. cron.healthcheck rides alongside the gateway crons even though
   // it's emitted self-evidently.
-  const checks: Check[] = [web, r2, dns, ssh, ...crons, healthcheck, renderBox, hermes];
+  const checks: Check[] = [web, r2, dns, ssh, disk, ...crons, healthcheck, renderBox, hermes];
 
   // Transitions against the prior state map.
   const prev = loadState();

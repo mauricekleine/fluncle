@@ -104,7 +104,7 @@ const OPS_AUTOMATION_IDS = new Set([
 // after them under the Track/Ops automation headings. Any service the snapshot reports that isn't named
 // here (and isn't an automation) is appended alphabetically, so a newly-probed service
 // surfaces without a code change.
-const SERVICE_ORDER = ["web", "db", "r2", "dns", "ssh", "onion", "hermes", "render-box"];
+const SERVICE_ORDER = ["web", "db", "r2", "dns", "ssh", "onion", "hermes", "render-box", "disk"];
 
 // A human label per known service id (falls back to the raw id for an unknown one). The
 // cron labels are keyed by their registry surface name; the fallback strips the `cron.`
@@ -131,6 +131,7 @@ const SERVICE_LABELS: Record<string, string> = {
   "cron.social-capture": "Social links",
   "cron.studio-clip": "Studio clips",
   db: "Database",
+  disk: "Disk headroom",
   dns: "DNS",
   hermes: "Hermes agent",
   onion: "Tor onion",
@@ -164,6 +165,7 @@ const SERVICE_SUBTITLES: Record<string, string> = {
   "cron.social-capture": "the live YouTube and TikTok URLs for each posted video",
   "cron.studio-clip": "cuts set videos into 9:16 clips",
   db: "the archive's persistence",
+  disk: "the agent box's free space",
   dns: "dig.fluncle.com",
   hermes: "the Discord chat agent",
   onion: "the archive over Tor",

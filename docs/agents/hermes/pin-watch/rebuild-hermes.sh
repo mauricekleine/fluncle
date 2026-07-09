@@ -126,6 +126,21 @@ RESTART="$(docker inspect "$CONTAINER" --format '{{.HostConfig.RestartPolicy.Nam
 MOUNT_SRC="$(docker inspect "$CONTAINER" --format '{{range .Mounts}}{{if eq .Destination "/opt/data"}}{{.Source}}{{end}}{{end}}')"
 [ -n "$MOUNT_SRC" ] || die "could not find the /opt/data mount source on the running container"
 
+# ── 3b. PRE-BUILD prune — guarantee headroom BEFORE building the new image ─────
+# The post-swap prune (step 7) only runs on a SUCCESSFUL rebuild, so it never helps
+# the build currently in flight: a full rebuild has to write a SECOND large image
+# (plus fresh layer cache) alongside the running one, and on a tight disk that peak
+# is exactly what strands the next rebuild with "no space left on device" (seen
+# 2026-07-09, mid base-bump, at 99%). So free space up front — drop every
+# fluncle-hermes image EXCEPT the running one ($OLD_IMAGE, kept for rollback) and
+# trim the build cache to a small working set. Doubly safe: the OLD container is
+# still up on $OLD_IMAGE here, so docker refuses to remove it even if the grep
+# missed, and every step is `|| true` so a prune hiccup never aborts the rebuild.
+log "pre-build prune: freeing space (keeping $OLD_IMAGE for rollback)"
+docker images "$IMAGE_REPO" --format '{{.Repository}}:{{.Tag}}' \
+  | grep -vxF "$OLD_IMAGE" | xargs -r docker rmi >/dev/null 2>&1 || true
+docker builder prune -f --keep-storage=3GB >/dev/null 2>&1 || true
+
 # ── 4. build the new image ────────────────────────────────────────────────────
 SHA="$(git -C "$REPO_DIR" rev-parse --short HEAD)"
 NEW_IMAGE="$IMAGE_REPO:v$(date -u +%Y.%m.%d)-$SHA"
