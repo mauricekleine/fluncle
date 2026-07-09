@@ -28,7 +28,6 @@ Crawler and discovery surfaces (all under <https://www.fluncle.com>): `/robots.t
 apps/cli            Bun/TypeScript CLI. Thin client for public reads and admin API calls.
 apps/dns            Go DNS server behind dig.fluncle.com — findings answered over DNS TXT (docs/dig.md).
 apps/extension      Fluncle Lens, an MV3 Chrome extension. Linkifies fluncle:// coordinates on any page.
-apps/helm           Fluncle's Helm, the operator's mission control: a local Bun daemon (:4190) + app window. `fluncle helm` opens it.
 apps/mobile         Expo React Native app (feed-first Stories + push). Thin client of the public API.
 apps/raycast        Raycast extension. Thin client that shells out to the CLI.
 apps/ssh            Go Wish/Bubble Tea SSH terminal behind ssh rave.fluncle.com. Thin client of the public API.
@@ -39,7 +38,7 @@ packages/media      Remotion kit for static image assets (link-preview cards, co
 packages/registry   The typed catalog of every Fluncle surface (@fluncle/registry, the source of truth).
 packages/sprites    Fluncle's pixel-sprite family — one per surface, plus the game props.
 packages/tokens     Shared design tokens (colors, typography, radii, motion) from DESIGN.md.
-packages/ui         Shared @fluncle/ui design system: the Shadcn base + the Nostalgic Cosmos tokens, consumed by apps/web and apps/helm.
+packages/ui         Shared @fluncle/ui design system: the Shadcn base + the Nostalgic Cosmos tokens, consumed by apps/web.
 packages/video      Remotion kit for per-track social videos (the Nostalgic Cosmos).
 ```
 

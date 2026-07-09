@@ -249,7 +249,6 @@ export function createProgram(): Command {
   addMetaCommands(program);
   addTrackCommands(program);
   addAdminCommands(program);
-  addHelmCommands(program);
 
   return program;
 }
@@ -455,39 +454,6 @@ function addTrackCommands(program: Command): void {
     .action(async (idOrLogId: string | undefined, options: JsonOptions) => {
       const { trackGetCommand } = await import("./commands/track");
       await runTrackGet(idOrLogId, options, trackGetCommand);
-    });
-}
-
-// Fluncle's Helm — the operator's mission control (apps/helm). Local
-// orchestration like packages/live's show: `fluncle helm` starts-or-focuses the
-// :4190 daemon + app window; install/uninstall manage the launchd LaunchAgent.
-// Operator-only, so hidden from the public help (like `admin`).
-function addHelmCommands(program: Command): void {
-  const helm = configureCommand(
-    program
-      .command("helm", { hidden: true })
-      .description("Fluncle's Helm, the operator's mission control"),
-  );
-
-  helm.action(async () => {
-    const { helmOpenCommand } = await import("./commands/helm");
-    await helmOpenCommand();
-  });
-
-  helm
-    .command("install")
-    .description("Install the launchd LaunchAgent (the daemon rises at login)")
-    .action(async () => {
-      const { helmInstallCommand } = await import("./commands/helm");
-      await helmInstallCommand();
-    });
-
-  helm
-    .command("uninstall")
-    .description("Remove the LaunchAgent and stand the daemon down")
-    .action(async () => {
-      const { helmUninstallCommand } = await import("./commands/helm");
-      await helmUninstallCommand();
     });
 }
 

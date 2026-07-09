@@ -747,7 +747,7 @@
           domain: "curation-posting",
           order_hint: "110",
           job: "Surface the next finding to post (helm next-to-post card)",
-          status: "live",
+          status: "retired",
           trigger: "cron:helm-poll",
           executor: "system",
           runs_on: "M5;M2",
@@ -755,16 +755,16 @@
           output: "NextToPostCard (caption/cover/asset + adminUrl deep-link)",
           surfaces: "helm",
           primary_surface: "web-admin",
-          drop_from: "helm(frozen)",
+          drop_from: "",
           tests: "yes",
           notes:
-            "pulse/posting-state.ts gatherer + selectNextToPost; VIEW-only, deep-links to web board for the actual push; logic.test.ts covers selection; conservative (never a false row)",
+            "RETIRED: the Helm app was removed (superseded by the web admin attention queue, order-134). Was pulse/posting-state.ts gatherer + selectNextToPost, VIEW-only deep-linking to the web board",
         },
         {
           domain: "curation-posting",
           order_hint: "120",
           job: "Nudge when a dressed finding is unposted ~18h",
-          status: "live",
+          status: "retired",
           trigger: "cron:helm-18h-scheduler",
           executor: "system",
           runs_on: "M5;M2",
@@ -772,10 +772,10 @@
           output: "one macOS osascript notification (deduped 1/day)",
           surfaces: "helm",
           primary_surface: "helm",
-          drop_from: "helm(frozen)",
+          drop_from: "",
           tests: "yes",
           notes:
-            "pulse/scheduler.ts + nudgeTick; FLUNCLE_HELM_NUDGE_HOURS default 18; hourly, windowless under launchd; persisted per-day dedupe; scheduler.test.ts+logic.test.ts",
+            "RETIRED: the Helm app was removed. Was pulse/scheduler.ts + nudgeTick (an ~18h deduped osascript nudge under launchd)",
         },
         {
           domain: "curation-posting",
@@ -807,12 +807,12 @@
           input: "dressed findings with no TikTok post (oldest first)",
           output:
             "the queue's post-tiktok row: the OLDEST dressed finding off TikTok + a waiting-count datum; [Copy caption] + [Mark posted] inline",
-          surfaces: "web-admin;helm",
+          surfaces: "web-admin",
           primary_surface: "web-admin",
-          drop_from: "helm(frozen)",
+          drop_from: "",
           tests: "yes",
           notes:
-            "the /admin queue row (lib/server/attention.ts listUnpostedRows — the board's derivation in SQL; a draft is the deadline row's business); attention.test.ts; helm Pulse still shows its next-to-post card",
+            "the /admin queue row (lib/server/attention.ts listUnpostedRows — the board's derivation in SQL; a draft is the deadline row's business); attention.test.ts",
         },
         {
           domain: "curation-posting",
@@ -825,9 +825,9 @@
           input: "a draft's push time vs the 24h window",
           output:
             "a DEADLINE-tier queue row per pending draft — counting down (`6h left`) then bounced (`bounced 3h` + [Re-push])",
-          surfaces: "web-admin;helm",
+          surfaces: "web-admin",
           primary_surface: "web-admin",
-          drop_from: "helm(frozen)",
+          drop_from: "",
           tests: "yes",
           notes:
             "the /admin queue's deadline tier (draftDeadline off the shared isStaleTikTokDraft window; ordered by time-to-deadline); re-push fires the same draft_track_social op; attention.test.ts; the freshness bug itself was fixed earlier (see the order-136 live row below)",
@@ -854,7 +854,7 @@
           domain: "curation-posting",
           order_hint: "140",
           job: "Port the desk push into a Cockpit posting row",
-          status: "desired",
+          status: "retired",
           trigger: "operator",
           executor: "human",
           runs_on: "M5;M2",
@@ -862,10 +862,10 @@
           output: "[Copy caption][Push TikTok draft][Open post asset][Mark failed] in the Cockpit",
           surfaces: "helm",
           primary_surface: "helm",
-          drop_from: "web-admin;helm(frozen)",
+          drop_from: "",
           tests: "none",
           notes:
-            "cockpit-roadmap.md 'the desk push'; capability LIVE today via push-dialog.tsx; 5-drafts/24h warning; Phase-3 port deletes the web desk counterpart at parity",
+            "RETIRED: the Cockpit (Helm) was removed; the desk push lives on the web admin (push-dialog.tsx, 5-drafts/24h warning)",
         },
         {
           domain: "curation-posting",
@@ -883,13 +883,13 @@
           drop_from: "",
           tests: "none",
           notes:
-            "cockpit-roadmap.md 'the phone finish' — the one admin surface built for the phone, stays on web; TODAY PushDialog serves it responsively; DESIRED adds the title+artist sound-search string (absent today) + cover-save-to-camera-roll",
+            "the one admin surface built for the phone, stays on web; TODAY PushDialog serves it responsively; DESIRED adds the title+artist sound-search string (absent today) + cover-save-to-camera-roll",
         },
         {
           domain: "curation-posting",
           order_hint: "144",
           job: "Daily digest nudge → notification-is-its-action",
-          status: "desired",
+          status: "retired",
           trigger: "cron:helm-daily",
           executor: "system",
           runs_on: "M5;M2;cloudflare",
@@ -898,10 +898,10 @@
             "one daily digest push ('4 waiting, oldest 17d') that opens the Cockpit at the row",
           surfaces: "helm;telegram",
           primary_surface: "helm",
-          drop_from: "helm(frozen)",
+          drop_from: "",
           tests: "none",
           notes:
-            "cockpit-roadmap.md 'one daily digest nudge'; today's 18h osascript nudge (scheduler.ts) is the seed; only true deadlines earn an individual push; future web/telegram",
+            "RETIRED: the Cockpit (Helm) was removed; a future web/telegram digest nudge would be a fresh job",
         },
         {
           domain: "curation-posting",
@@ -1172,7 +1172,7 @@
           drop_from: "",
           tests: "none",
           notes:
-            "cockpit-roadmap.md queue source 'Unreviewed renders' NEEDS NEW STATE; LLM taste judge was dropped; neither column exists today",
+            "the 'Unreviewed renders' queue source NEEDS NEW STATE; LLM taste judge was dropped; neither column exists today",
         },
         {
           domain: "mixtape-lifecycle",
@@ -1218,11 +1218,11 @@
           runs_on: "M2",
           input: "a plan id + master.db",
           output: "Rekordbox playlist (DB write) + XML + Beatport links + m3u8 + checklist",
-          surfaces: "m2-script;helm",
+          surfaces: "m2-script",
           primary_surface: "m2-script",
-          drop_from: "helm(frozen)",
+          drop_from: "",
           tests: "yes",
-          notes: "rekordbox-plan-export.py; helm plan-export spawn; test_plan_export.py",
+          notes: "rekordbox-plan-export.py; test_plan_export.py",
         },
         {
           domain: "mixtape-lifecycle",
@@ -1267,12 +1267,11 @@
           runs_on: "M5",
           input: "a plan id (optional) + the rig",
           output: "the glass on the show display + bridge + phone remote up",
-          surfaces: "helm",
-          primary_surface: "helm",
+          surfaces: "",
+          primary_surface: "",
           drop_from: "",
           tests: "yes",
-          notes:
-            "bun run --cwd packages/live show; helm show-control; show.test.ts + show-control/*.test.ts",
+          notes: "bun run --cwd packages/live show; show.test.ts",
         },
         {
           domain: "mixtape-lifecycle",
@@ -1300,12 +1299,12 @@
           runs_on: "M5",
           input: "the OBS .mov master",
           output: "a coordinate-less recording row + recordings/<id>/set.mp4 on R2",
-          surfaces: "cli-admin;helm;api",
-          primary_surface: "helm",
-          drop_from: "helm(frozen)",
+          surfaces: "cli-admin;api",
+          primary_surface: "cli-admin",
+          drop_from: "",
           tests: "partial",
           notes:
-            "recordings create --video (multipart presign, operator-direct multi-GB); helm upload; mixtape-set-video.test.ts",
+            "recordings create --video (multipart presign, operator-direct multi-GB); mixtape-set-video.test.ts",
         },
         {
           domain: "mixtape-lifecycle",
@@ -1367,12 +1366,11 @@
           runs_on: "M2",
           input: "a Rekordbox session + Fluncle catalogue",
           output: "ordered recording_cues written via replace-cues",
-          surfaces: "m2-script;helm",
+          surfaces: "m2-script",
           primary_surface: "m2-script",
-          drop_from: "helm(frozen)",
+          drop_from: "",
           tests: "yes",
-          notes:
-            "rekordbox-derive-cues.py --apply; helm derive-cues; test_derive_cues.py + helm cues.test.ts",
+          notes: "rekordbox-derive-cues.py --apply; test_derive_cues.py",
         },
         {
           domain: "mixtape-lifecycle",
@@ -1400,12 +1398,11 @@
           runs_on: "M5",
           input: "the ordered cue array",
           output: "recording_cues replaced transactionally",
-          surfaces: "cli-admin;helm;api",
-          primary_surface: "helm",
-          drop_from: "helm(frozen)",
+          surfaces: "cli-admin;api",
+          primary_surface: "cli-admin",
+          drop_from: "",
           tests: "partial",
-          notes:
-            "replace_recording_cues; recordings replace-cues; helm attach; recordings.test.ts + cues.test.ts",
+          notes: "replace_recording_cues; recordings replace-cues; recordings.test.ts",
         },
         {
           domain: "mixtape-lifecycle",
@@ -1434,12 +1431,12 @@
           runs_on: "M5",
           input: "a take recording with cues",
           output: "minted .F. mixtape + <logId>/set.mp4 + setVideoAt + seeded members",
-          surfaces: "web-admin;cli-admin;helm;api",
-          primary_surface: "helm",
-          drop_from: "helm(frozen)",
+          surfaces: "web-admin;cli-admin;api",
+          primary_surface: "web-admin",
+          drop_from: "",
           tests: "yes",
           notes:
-            "promote_recording (idempotent mint-or-reuse); Studio button/CLI/helm; recordings.test.ts (10+ cases)",
+            "promote_recording (idempotent mint-or-reuse); Studio button/CLI; recordings.test.ts (10+ cases)",
         },
         {
           domain: "mixtape-lifecycle",
@@ -1467,9 +1464,9 @@
           runs_on: "M5",
           input: "the mixtape .mp4 master",
           output: "unlisted YouTube video + mixtape_social_posts row",
-          surfaces: "cli-admin;helm",
-          primary_surface: "helm",
-          drop_from: "helm(frozen)",
+          surfaces: "cli-admin",
+          primary_surface: "cli-admin",
+          drop_from: "",
           tests: "partial",
           notes:
             "mixtapes distribute --youtube (multi-GB, operator-direct); resumable; mixtape-youtube.test.ts",
@@ -1484,9 +1481,9 @@
           runs_on: "M5",
           input: "the clean Track-1 .mp3 master",
           output: "public Mixcloud cloudcast + mixtape_social_posts row",
-          surfaces: "cli-admin;helm",
-          primary_surface: "helm",
-          drop_from: "helm(frozen)",
+          surfaces: "cli-admin",
+          primary_surface: "cli-admin",
+          drop_from: "",
           tests: "partial",
           notes:
             "mixtapes distribute --mixcloud; ffmpeg -map 0:a:0 extract; mixtape-mixcloud.test.ts",
@@ -1553,11 +1550,11 @@
           input: "a published mixtape's cues + archived comps",
           output: "one long-form set.mp4 (chapters + travel transitions)",
           surfaces: "",
-          primary_surface: "helm",
+          primary_surface: "web-admin",
           drop_from: "",
           tests: "partial",
           notes:
-            "bun run --cwd packages/video set:render <logId> (local GPU); render-set.test.ts; roadmap wants a Cockpit shelf button (not built)",
+            "bun run --cwd packages/video set:render <logId> (local GPU); render-set.test.ts; a web-admin shelf button is desired (not built)",
         },
         {
           domain: "mixtape-lifecycle",
@@ -1886,7 +1883,7 @@
           domain: "clips-drip",
           order_hint: "130",
           job: "Cut a clip on demand / locally (cut now)",
-          status: "desired",
+          status: "retired",
           trigger: "operator",
           executor: "system",
           runs_on: "M5",
@@ -1894,10 +1891,10 @@
           output: "<clipId>/footage.mp4 in seconds",
           surfaces: "helm",
           primary_surface: "helm",
-          drop_from: "helm(frozen)",
+          drop_from: "",
           tests: "none",
           notes:
-            "cockpit-roadmap.md Studio lane [Create clip] locally; clipCutFfmpegArgs→@fluncle/contracts; kills box clip-sweep ~15m latency",
+            "RETIRED: the Cockpit (Helm) was removed; on-demand local clip-cutting would be a fresh job (clipCutFfmpegArgs→@fluncle/contracts; the box clip-sweep cron cuts clips today)",
         },
         {
           domain: "clips-drip",
@@ -2121,7 +2118,7 @@
           drop_from: "",
           tests: "none",
           notes:
-            "cockpit + memory fluncle-maintenance-bump-half-ci: NO renovate.json committed; Renovate GitHub App unset (pending operator); hermes-pin-drift covers the CLI/claude/bun pins only",
+            "memory fluncle-maintenance-bump-half-ci: NO renovate.json committed; Renovate GitHub App unset (pending operator); hermes-pin-drift covers the CLI/claude/bun pins only",
         },
         {
           domain: "platform-ops",
@@ -2454,18 +2451,18 @@
           order_hint: "136",
           job: "Detect + surface stale TikTok drafts (24h bounce)",
           status: "live",
-          trigger: "event:board-render;cron:helm-poll",
+          trigger: "event:board-render",
           executor: "system",
-          runs_on: "cloudflare;M5;M2",
+          runs_on: "cloudflare",
           input: "a draft's push time (updated_at) vs the 24h window",
           output:
-            "a bounced draft re-opens: a distinct `stale` board cell + re-entry into next-to-post/nudge",
-          surfaces: "web-admin;helm",
+            "a bounced draft re-opens: a distinct `stale` board cell + re-entry into the unposted queue",
+          surfaces: "web-admin",
           primary_surface: "web-admin",
-          drop_from: "helm(frozen)",
+          drop_from: "",
           tests: "yes",
           notes:
-            "SHIPPED: shared isStaleTikTokDraft + TIKTOK_DRAFT_STALE_MS in @fluncle/contracts/util (clock-injected; 24h off updated_at) is the ONE source of the cutoff. A bounced draft re-opens across all 3 readers — board publishStep `stale` cell + track-stage.ts worklist bucketing + helm pulse postFreshness; push dialog offers re-push; tiktokPending drops stale from the 5/24h count. Tests: util.test.ts + board-model.test.ts + track-stage.test.ts + logic.test.ts",
+            "SHIPPED: shared isStaleTikTokDraft + TIKTOK_DRAFT_STALE_MS in @fluncle/contracts/util (clock-injected; 24h off updated_at) is the ONE source of the cutoff. A bounced draft re-opens across both readers — board publishStep `stale` cell + track-stage.ts worklist bucketing; push dialog offers re-push; tiktokPending drops stale from the 5/24h count. Tests: util.test.ts + board-model.test.ts + track-stage.test.ts",
         },
         {
           domain: "platform-ops",
@@ -2494,7 +2491,12 @@
         "clips-drip",
         "platform-ops",
       ];
-      const MARK = { live: "\u25CF live", partial: "\u25D0 partial", desired: "\u25CB desired" };
+      const MARK = {
+        live: "\u25CF live",
+        partial: "\u25D0 partial",
+        desired: "\u25CB desired",
+        retired: "\u2298 retired",
+      };
       const TESTS = { yes: "\u25CF yes", partial: "\u25D0 partial", none: "\u25CB none" };
       const COLS = [
         ["domain", "Domain"],
@@ -2544,6 +2546,14 @@
             state.status = state.status === "desired" ? "" : "desired";
           },
           () => state.status === "desired",
+        ],
+        [
+          "retired",
+          () => JOBS.filter((j) => j.status === "retired").length,
+          () => {
+            state.status = state.status === "retired" ? "" : "retired";
+          },
+          () => state.status === "retired",
         ],
         [
           "tests: none",

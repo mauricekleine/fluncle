@@ -345,8 +345,8 @@ export function mixcloudEditUrl(key: string): string {
 // caps unpublished inbox drafts at 5 per rolling 24h) and the finding must re-enter
 // "needs posting" rather than count as posted forever. This is the ONE place that
 // 24h rule lives: the web board's posted-state derivation (`board-model.ts` +
-// `track-stage.ts`) AND the helm's pulse freshness (`pulse/logic.ts`) all import it,
-// so the honest rule can't drift between the sites that read post state. Pure +
+// `track-stage.ts`) imports it, so the honest rule can't drift between the sites
+// that read post state. Pure +
 // clock-injected (`now` is passed, never read ambiently) so it's provable without
 // waiting 24h.
 
@@ -381,7 +381,7 @@ export function tikTokDraftAgeHours(post: SocialPostStaleInput, now: number): nu
  * Whether a TikTok `draft` has gone STALE — older than 24h off its `updatedAt` (the
  * push/re-push time). A stale draft has almost certainly bounced, so every reader
  * treats it as UNPOSTED, not gone-out. CONSERVATIVE on bad data: an absent or
- * unparseable stamp is NOT stale — the helm never manufactures a false "re-push"
+ * unparseable stamp is NOT stale — no reader ever manufactures a false "re-push"
  * from a read it can't trust. Only a `tiktok` + `draft` row can be stale; every
  * other platform/status returns false.
  */

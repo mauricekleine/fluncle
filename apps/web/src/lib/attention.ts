@@ -1,9 +1,8 @@
-// The attention queue's pure model (docs/planning/cockpit-roadmap.md, "The queue"). Every
-// decision the `/admin` home makes — which rows exist, which tier they ride, what
-// order they land in, what the working set is, what a deadline reads as — lives
-// here as plain functions over plain data with an injected clock, so the queue's
-// mechanics are provable without a database or a browser (the track-stage.ts /
-// helm pulse precedent). The server (lib/server/attention.ts) feeds `derive*` real
+// The attention queue's pure model. Every decision the `/admin` home makes — which
+// rows exist, which tier they ride, what order they land in, what the working set
+// is, what a deadline reads as — lives here as plain functions over plain data with
+// an injected clock, so the queue's mechanics are provable without a database or a
+// browser (the track-stage.ts precedent). The server (lib/server/attention.ts) feeds `derive*` real
 // rows; the route feeds `orderQueue` the operator's snooze/won't-do prefs.
 //
 // The two-tier ordering is ratified: DEADLINE rows (a TikTok inbox draft racing
@@ -38,7 +37,7 @@ export type AttentionItem = {
   /** Stable identity (`source:objectId`) — the snooze/won't-do map keys on it. */
   id: string;
   logId?: string;
-  /** The machine an action is bound to (docs/planning/cockpit-roadmap.md, the machine model). */
+  /** The machine an action is bound to (the machine model). */
   machine?: "M2" | "M5";
   /** Distribution legs still missing on a promoted mixtape. */
   missing?: ("mixcloud" | "youtube")[];
