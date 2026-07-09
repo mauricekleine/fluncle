@@ -96,24 +96,9 @@ const APPROVED_VERBS = new Set<string>([
   "context",
   "deregister",
   "exchange",
-  // `follow` (champion a featured artist — follow them across Spotify + YouTube) — added
-  // deliberately with the artist-relationship `follow_artist_social` op (the /admin/artists
-  // "Follow now"). A genuinely new outward action verb.
-  "follow",
-  // `unfollow` (undo a follow — real API unfollow for Spotify/YouTube, clear the stamp
-  // otherwise) — added deliberately with `unfollow_artist_social`. The exact reverse of
-  // `follow`; the follow/unfollow pair mirrors the platforms' own vocabulary.
-  "unfollow",
-  // `unmute` (clear the don't-champion skip an Undo set) — added deliberately with
-  // `unmute_artist_social`. The reverse of the mute Undo stamps on a Spotify/YouTube row.
-  "unmute",
   "export",
   "initiate",
   "merge",
-  // `mute` (skip an artist social in the auto-follow sweep — the Manage-links "follow
-  // automatically" toggle OFF for a wrong Spotify/YouTube match) — added deliberately with
-  // `mute_artist_social`. The set half of the mute/`unmute` pair (the reverse already exists).
-  "mute",
   "mint",
   "presign",
   // `promote` (turn a captured recording into a full published mixtape — mint-or-reuse a
@@ -125,7 +110,7 @@ const APPROVED_VERBS = new Set<string>([
   "record",
   "register",
   "reject",
-  // `remove` (drop one of an artist's social links inline in the follow queue) — added
+  // `remove` (drop one of an artist's social links inline in the review queue) — added
   // deliberately with the artist-relationship `remove_artist_social` op. The delete-a-
   // sub-row sibling of `add_artist_social`; distinct from `delete` (drop a whole entity).
   "remove",

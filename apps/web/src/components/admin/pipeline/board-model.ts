@@ -13,7 +13,7 @@ import {
 } from "@phosphor-icons/react";
 import { isStaleTikTokDraft, tikTokDraftAgeHours } from "@fluncle/contracts/util";
 import { type ComponentType } from "react";
-import { SpotifyIcon, TiktokIcon, YoutubeIcon } from "@/components/platform-icons";
+import { TiktokIcon, YoutubeIcon } from "@/components/platform-icons";
 import { type BlockedOn, type Stage } from "@/lib/server/track-stage";
 import { type BoardRow } from "@/components/admin/use-publish";
 
@@ -198,13 +198,12 @@ function publishStep(
 export type SocialBreakdownItem = { key: string; label: string; done: boolean; Icon: StepIcon };
 
 /**
- * The per-action breakdown behind the automated-socials cell: the Last.fm love plus each
- * of the finding's artist Spotify/YouTube auto-follow targets. Powers the board cell's
- * Popover (each line an icon + a done/pending check). Kept beside the cell derivation so
- * the two never disagree.
+ * The per-action breakdown behind the automated-socials cell: the Last.fm love. Powers the
+ * board cell's Popover (each line an icon + a done/pending check). Kept beside the cell
+ * derivation so the two never disagree.
  */
 export function automatedSocialsBreakdown(row: BoardRow): SocialBreakdownItem[] {
-  const items: SocialBreakdownItem[] = [
+  return [
     {
       Icon: HeartIcon,
       done: row.lastfmRan,
@@ -216,25 +215,11 @@ export function automatedSocialsBreakdown(row: BoardRow): SocialBreakdownItem[] 
           : "Last.fm — pending",
     },
   ];
-
-  for (const target of row.artistFollows ?? []) {
-    const name = target.platform === "spotify" ? "Spotify" : "YouTube";
-    items.push({
-      Icon: target.platform === "spotify" ? SpotifyIcon : YoutubeIcon,
-      done: target.followed,
-      key: target.platform,
-      label: `${name} — ${target.followed ? "following the artist" : "not followed yet"}`,
-    });
-  }
-
-  return items;
 }
 
-// The automated-socials cell (the repurposed LFM cell): an aggregate of the finding's
-// hands-off "champion the artist" actions — the Last.fm love (workflow-tracker rule:
-// `done` once the backfill RAN) + each artist Spotify/YouTube auto-follow. `done` = all
-// actioned, `open` = none, `partial` = some. Not actionable (the follows are automated);
-// the cell's Popover shows the per-platform breakdown on hover.
+// The automated-socials cell (the repurposed LFM cell): the finding's hands-off Last.fm love
+// (workflow-tracker rule: `done` once the backfill RAN). `done` = actioned, `open` = not yet.
+// Not actionable (the love is automated); the cell's Popover shows the breakdown on hover.
 function socialsStep(
   row: BoardRow,
 ): Pick<BoardStep, "state" | "statusLabel" | "hint" | "actionable" | "gated"> {
@@ -423,8 +408,8 @@ export function runStep(step: BoardStep, row: BoardRow, actions: BoardActions): 
       return;
     case "embedding":
     case "socials":
-      // Read-only presence trackers — the agent (the embed / Last.fm + follow crons)
-      // advances them; the cell is a status mark, not a click target.
+      // Read-only presence trackers — the agent (the embed / Last.fm crons) advances
+      // them; the cell is a status mark, not a click target.
       return;
   }
 }

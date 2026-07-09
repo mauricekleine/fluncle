@@ -42,8 +42,8 @@ const PENDING = "__pending__" as const;
 // every route maps to its canonical converted op; the PENDING sentinel is retained
 // for future admin routes (a new route lands here as PENDING until it converts).
 const ADMIN_ROUTE_OPS: Record<string, string> = {
-  // The `/admin/artists` follow queue's inline remove (Unit 5, Epic B) — contract-only
-  // oRPC (no TanStack route file; oRPC owns the path directly). Operator tier.
+  // The `/admin/artists` review queue's inline remove (Unit 5) — contract-only oRPC
+  // (no TanStack route file; oRPC owns the path directly). Operator tier.
   "DELETE /admin/artists/socials/{socialId}": "remove_artist_social",
   // The Fluncle Studio clip ops: clip CRUD +
   // the hardened post-publish cue backfill. `list_clips` is admin tier
@@ -69,8 +69,8 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // worklist) + `resolve_artist` are agent tier (the box's `fluncle-artist-sweep` cron
   // drives both with its agent-scoped token); `backfill_artists` (Unit 1) is agent tier too.
   "GET /admin/artists": "list_unresolved_artists",
-  // The artist follow queue read (Unit 5, Epic B) — contract-only oRPC (no TanStack
-  // route file). Admin tier (agent-allowed); the operator's follow-queue station reads it.
+  // The artist review queue read (Unit 5) — contract-only oRPC (no TanStack route file).
+  // Admin tier (agent-allowed); the operator's review-queue station reads it.
   // `list_artist_socials` matches the public `list_` prefix so the "holds exactly" check
   // skips it; it lives here for completeness.
   "GET /admin/artists/socials": "list_artist_socials",
@@ -122,15 +122,9 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "PATCH /admin/subscriptions/{id}": "update_subscription",
   "PATCH /admin/tracks/{trackId}": "update_track",
   "PATCH /admin/tracks/{trackId}/social/{platform}": "update_track_social",
-  // The championing motion (Unit 5, Epic B) — all contract-only oRPC (no TanStack route
-  // files; oRPC owns the paths directly). The per-social register/confirm/add are operator
-  // tier (the queue's manual motion).
+  // The identity-graph per-social write (Unit 5) — contract-only oRPC (no TanStack route
+  // file; oRPC owns the path directly). Operator tier (the queue's manual confirm).
   "POST /admin/artists/socials/{socialId}/confirm": "confirm_artist_social",
-  "POST /admin/artists/socials/{socialId}/follow": "record_operator_follow",
-  "POST /admin/artists/socials/{socialId}/follow-now": "follow_artist_social",
-  "POST /admin/artists/socials/{socialId}/mute": "mute_artist_social",
-  "POST /admin/artists/socials/{socialId}/unfollow": "unfollow_artist_social",
-  "POST /admin/artists/socials/{socialId}/unmute": "unmute_artist_social",
   // The artist social-identity resolution (Unit 2.1 of the artist-relationship RFC) —
   // contract-only oRPC (no TanStack route file; oRPC owns the path directly).
   // Agent tier: the box's `fluncle-artist-sweep` cron drives it with its agent token.

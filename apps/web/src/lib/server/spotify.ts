@@ -8,9 +8,8 @@ import { readEnvs } from "./env";
 
 const spotifyAccountsBaseUrl = "https://accounts.spotify.com";
 const spotifyApiBaseUrl = "https://api.spotify.com/v1";
-// user-follow-modify: lets Fluncle follow the artists it features (the artist-relationship
-// epic) with the same grant that manages the playlist. Additive — a re-auth grants it.
-const spotifyScopes = ["playlist-modify-public", "playlist-modify-private", "user-follow-modify"];
+// The publish grant: it manages the Fluncle playlist (add a featured track).
+const spotifyScopes = ["playlist-modify-public", "playlist-modify-private"];
 // Admin web login asks for identity only — never the playlist-write scopes the
 // publish flow uses. The login exchange reads /v1/me and discards the tokens.
 const spotifyLoginScopes = ["user-read-email"];
@@ -282,31 +281,6 @@ export async function addTrackToPlaylist(track: TrackMetadata): Promise<void> {
     },
     method: "POST",
   });
-}
-
-/**
- * Follow one artist on Spotify by Spotify artist id — the championing motion (Epic B
- * of the artist-relationship RFC). Uses the same user grant as the playlist writes;
- * the `user-follow-modify` scope (added to `spotifyScopes`) covers it. IDEMPOTENT:
- * Spotify answers 204 whether or not the artist was already followed, so re-running is
- * harmless. Throws the usual `ApiError`/reconnect signal if the grant is gone.
- */
-export async function followSpotifyArtist(spotifyArtistId: string): Promise<void> {
-  const accessToken = await getSpotifyAccessToken();
-  const params = new URLSearchParams({ ids: spotifyArtistId, type: "artist" });
-
-  await spotifyFetch(`/me/following?${params.toString()}`, accessToken, { method: "PUT" });
-}
-
-/**
- * Reverse `followSpotifyArtist` — `DELETE /me/following?type=artist` (the operator's "Undo").
- * Same `user-follow-modify` scope; idempotent (unfollowing a not-followed artist is a 200 no-op).
- */
-export async function unfollowSpotifyArtist(spotifyArtistId: string): Promise<void> {
-  const accessToken = await getSpotifyAccessToken();
-  const params = new URLSearchParams({ ids: spotifyArtistId, type: "artist" });
-
-  await spotifyFetch(`/me/following?${params.toString()}`, accessToken, { method: "DELETE" });
 }
 
 export class ApiError extends Error {

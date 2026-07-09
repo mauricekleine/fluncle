@@ -11,15 +11,10 @@ import {
   addArtistSocial,
   ArtistSocialNotFoundError,
   confirmArtistSocial,
-  followArtistSocial,
   InvalidArtistSocialError,
   listArtistSocialsQueue,
-  muteArtistSocial,
-  recordOperatorFollow,
   removeArtistSocial,
   reviewArtist,
-  undoArtistSocialFollow,
-  unmuteArtistSocial,
 } from "../artists";
 import { listUnresolvedArtists, resolveArtist } from "../artist-resolution";
 import { backfillArtists } from "../backfill-artists";
@@ -87,8 +82,8 @@ export function adminArtistsHandlers(os: Implementer) {
     }
   });
 
-  // GET /admin/artists/socials — admin tier (agent-allowed read): the follow queue for
-  // the `/admin/artists` station. Returns artists with actionable socials.
+  // GET /admin/artists/socials — admin tier (agent-allowed read): the review queue for
+  // the `/admin/artists` station. Returns artists with unconfirmed socials.
   const listArtistSocialsHandler = os.list_artist_socials
     .use(adminAuth)
     .handler(async ({ input }) => {
@@ -101,60 +96,6 @@ export function adminArtistsHandlers(os: Implementer) {
       }
     });
 
-  // POST /admin/artists/socials/{socialId}/follow — operator tier: register a manual follow.
-  const recordOperatorFollowHandler = os.record_operator_follow
-    .use(adminAuth)
-    .use(operatorGuard)
-    .handler(async ({ input }) => {
-      try {
-        return { ok: true as const, social: await recordOperatorFollow(input.socialId) };
-      } catch (error) {
-        throw toSocialFault(error);
-      }
-    });
-
-  // POST /admin/artists/socials/{socialId}/follow-now — operator tier: perform the REAL
-  // Spotify/YouTube follow on demand (the "Follow now" button), then stamp followed_at.
-  const followArtistSocialHandler = os.follow_artist_social
-    .use(adminAuth)
-    .use(operatorGuard)
-    .handler(async ({ input }) => {
-      try {
-        const { platformWarning, social } = await followArtistSocial(input.socialId);
-
-        return { ok: true as const, platformWarning, social };
-      } catch (error) {
-        throw toSocialFault(error);
-      }
-    });
-
-  // POST /admin/artists/socials/{socialId}/unfollow — operator tier: undo a follow (real API
-  // unfollow for Spotify/YouTube, clear the stamp for the no-API platforms).
-  const unfollowArtistSocialHandler = os.unfollow_artist_social
-    .use(adminAuth)
-    .use(operatorGuard)
-    .handler(async ({ input }) => {
-      try {
-        const { platformWarning, social } = await undoArtistSocialFollow(input.socialId);
-
-        return { ok: true as const, platformWarning, social };
-      } catch (error) {
-        throw toSocialFault(error);
-      }
-    });
-
-  // POST /admin/artists/socials/{socialId}/unmute — operator tier: clear the don't-champion skip.
-  const unmuteArtistSocialHandler = os.unmute_artist_social
-    .use(adminAuth)
-    .use(operatorGuard)
-    .handler(async ({ input }) => {
-      try {
-        return { ok: true as const, social: await unmuteArtistSocial(input.socialId) };
-      } catch (error) {
-        throw toSocialFault(error);
-      }
-    });
-
   // POST /admin/artists/socials/{socialId}/confirm — operator tier: candidate → confirmed.
   const confirmArtistSocialHandler = os.confirm_artist_social
     .use(adminAuth)
@@ -162,19 +103,6 @@ export function adminArtistsHandlers(os: Implementer) {
     .handler(async ({ input }) => {
       try {
         return { ok: true as const, social: await confirmArtistSocial(input.socialId) };
-      } catch (error) {
-        throw toSocialFault(error);
-      }
-    });
-
-  // POST /admin/artists/socials/{socialId}/mute — operator tier: the Manage-links auto-follow
-  // toggle OFF (a wrong Spotify/YouTube match). Bookkeeping-only skip of the sweep.
-  const muteArtistSocialHandler = os.mute_artist_social
-    .use(adminAuth)
-    .use(operatorGuard)
-    .handler(async ({ input }) => {
-      try {
-        return { ok: true as const, social: await muteArtistSocial(input.socialId) };
       } catch (error) {
         throw toSocialFault(error);
       }
@@ -274,15 +202,10 @@ export function adminArtistsHandlers(os: Implementer) {
     add_artist_social: addArtistSocialHandler,
     backfill_artists: backfillArtistsHandler,
     confirm_artist_social: confirmArtistSocialHandler,
-    follow_artist_social: followArtistSocialHandler,
     list_artist_socials: listArtistSocialsHandler,
     list_unresolved_artists: listUnresolvedArtistsHandler,
-    mute_artist_social: muteArtistSocialHandler,
-    record_operator_follow: recordOperatorFollowHandler,
     remove_artist_social: removeArtistSocialHandler,
     resolve_artist: resolveArtistHandler,
     review_artist: reviewArtistHandler,
-    unfollow_artist_social: unfollowArtistSocialHandler,
-    unmute_artist_social: unmuteArtistSocialHandler,
   };
 }

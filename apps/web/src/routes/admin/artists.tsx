@@ -46,7 +46,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@fluncle/ui/components/select";
-import { Switch } from "@fluncle/ui/components/switch";
 import {
   ARTIST_SOCIAL_PLATFORMS,
   type ArtistSocialPlatform,
@@ -62,26 +61,23 @@ import {
 import { cn } from "@/lib/utils";
 
 // The `/admin/artists` overview — the stable MANAGE surface for every artist Fluncle features
-// (Epic B, Unit 5). Not a worklist: an artist never drops off for being resolved, so the
-// operator can browse, search, and edit/add/remove a link any time. Following the admin design
-// doctrine (docs/admin-shell.md — one primary per object, rare actions hidden by default),
-// each artist is a COLLAPSED summary row (name, finding count, link count, a "needs a look"
-// flag) that expands to reveal its links (read-only) and ONE acknowledgment: "Looks good".
+// (Unit 5). Not a worklist: an artist never drops off for being resolved, so the operator can
+// browse, search, and edit/add/remove a link any time. Following the admin design doctrine
+// (docs/admin-shell.md — one primary per object, rare actions hidden by default), each artist
+// is a COLLAPSED summary row (name, finding count, link count, a "needs a look" flag) that
+// expands to reveal its links (read-only) and ONE acknowledgment: "Looks good".
 //
 // The review model (ratified 2026-07-08): "needs a look" means Fluncle FOUND links the operator
-// hasn't seen yet — it does NOT track whether each was followed. Following where you can/care is
-// the operator's out-and-back; whether it happened is an external truth we can't observe (and for
-// some platforms — no Fluncle Facebook — can't even do), so we don't pretend to. "Looks good"
-// (review_artist) stamps the whole list seen; a link discovered LATER re-arms the flag
-// (artistNeedsLook, off reviewedAt vs each link's createdAt). Spotify/YouTube are followed by hand
-// from the queue's "Follow now" and show a quiet read-only "Followed" pill; a wrong match is
-// muted with the Manage-links "follow automatically" toggle. The structural edits — add, remove,
-// mute — live behind the "Manage links" dialog. The WORK surfaces as an /admin attention row
-// (source "artist-review") that deep-links here with ?artist=<id>, auto-expanding that artist.
+// hasn't seen yet. "Looks good" (review_artist) stamps the whole list seen and promotes any
+// surviving candidates onto the public artist page (the trust gate that feeds `sameAs`); a link
+// discovered LATER re-arms the flag (artistNeedsLook, off reviewedAt vs each link's createdAt).
+// The structural edits — add, remove — live behind the "Manage links" dialog. The WORK surfaces
+// as an /admin attention row (source "artist-review") that deep-links here with ?artist=<id>,
+// auto-expanding that artist.
 
 const ARTIST_OVERVIEW_KEY = ["admin", "artists", "overview"] as const;
-// The /admin attention queue's key — a confirm/follow/add here changes an artist-review row,
-// so invalidate it too and the dashboard's count stays honest without waiting on a refetch.
+// The /admin attention queue's key — a confirm/add here changes an artist-review row, so
+// invalidate it too and the dashboard's count stays honest without waiting on a refetch.
 const ATTENTION_KEY = ["admin", "attention"] as const;
 
 const ensureAdmin = createServerFn({ method: "GET" }).handler(async () => {
@@ -99,9 +95,6 @@ const fetchAllArtists = createServerFn({ method: "GET" }).handler(
     return listAllArtistsWithSocials();
   },
 );
-
-// The platforms with a real follow API — the rest are link-only (manual out-and-back).
-const FOLLOWABLE = new Set<ArtistSocialPlatform>(["spotify", "youtube"]);
 
 const PLATFORM_LABELS: Record<ArtistSocialPlatform, string> = {
   bandcamp: "Bandcamp",
@@ -214,20 +207,6 @@ function AdminArtistsPage() {
     onError: (caught) => setError(caught instanceof Error ? caught.message : String(caught)),
     onSuccess: invalidate,
   });
-  // The Manage-links "follow automatically" toggle for a Spotify/YouTube link: OFF mutes it
-  // (skip the auto-follow sweep — a wrong match), ON unmutes it.
-  const muteSocial = useMutation({
-    mutationFn: (socialId: string) =>
-      mutateJson(`/api/admin/artists/socials/${socialId}/mute`, "POST"),
-    onError: (caught) => setError(caught instanceof Error ? caught.message : String(caught)),
-    onSuccess: invalidate,
-  });
-  const unmute = useMutation({
-    mutationFn: (socialId: string) =>
-      mutateJson(`/api/admin/artists/socials/${socialId}/unmute`, "POST"),
-    onError: (caught) => setError(caught instanceof Error ? caught.message : String(caught)),
-    onSuccess: invalidate,
-  });
   const removeSocial = useMutation({
     mutationFn: (socialId: string) =>
       mutateJson(`/api/admin/artists/socials/${socialId}`, "DELETE"),
@@ -252,12 +231,7 @@ function AdminArtistsPage() {
     onSuccess: invalidate,
   });
 
-  const busy =
-    reviewArtist.isPending ||
-    muteSocial.isPending ||
-    unmute.isPending ||
-    removeSocial.isPending ||
-    addSocial.isPending;
+  const busy = reviewArtist.isPending || removeSocial.isPending || addSocial.isPending;
 
   const needle = query.trim().toLowerCase();
   const visible = useMemo(
@@ -331,11 +305,9 @@ function AdminArtistsPage() {
                     onAdd={(platform, url) =>
                       addSocial.mutate({ artistId: artist.id, platform, url })
                     }
-                    onMute={(socialId) => muteSocial.mutate(socialId)}
                     onRemove={(socialId) => removeSocial.mutate(socialId)}
                     onReview={() => reviewArtist.mutate(artist.id)}
                     onToggle={() => toggleExpanded(artist.id)}
-                    onUnmute={(socialId) => unmute.mutate(socialId)}
                     ref={artist.id === focusId ? focusRef : undefined}
                   />
                 ))}
@@ -354,11 +326,9 @@ function ArtistAccordion({
   expanded,
   focused,
   onAdd,
-  onMute,
   onRemove,
   onReview,
   onToggle,
-  onUnmute,
   ref,
 }: {
   artist: ArtistOverviewItem;
@@ -366,11 +336,9 @@ function ArtistAccordion({
   expanded: boolean;
   focused: boolean;
   onAdd: (platform: string, url: string) => void;
-  onMute: (socialId: string) => void;
   onRemove: (socialId: string) => void;
   onReview: () => void;
   onToggle: () => void;
-  onUnmute: (socialId: string) => void;
   ref?: Ref<HTMLElement>;
 }) {
   const headerId = useId();
@@ -436,14 +404,7 @@ function ArtistAccordion({
                 </span>
               )
             ) : null}
-            <ManageLinksDialog
-              artist={artist}
-              busy={busy}
-              onAdd={onAdd}
-              onMute={onMute}
-              onRemove={onRemove}
-              onUnmute={onUnmute}
-            />
+            <ManageLinksDialog artist={artist} busy={busy} onAdd={onAdd} onRemove={onRemove} />
             {artist.spotifyUrl ? (
               <a
                 className="inline-flex shrink-0 items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
@@ -461,14 +422,10 @@ function ArtistAccordion({
   );
 }
 
-// One link in the expanded list — READ-ONLY: the platform, its URL (click through to follow
-// out-and-back), a quiet provenance chip, and, for the auto-follow platforms (Spotify/YouTube),
-// a read-only "Followed" pill once the sweep has followed. No per-link todo: acknowledging the
-// whole list is the operator's one action (Looks good), and following where you can is your own
-// out-and-back, not something we track per link.
+// One link in the expanded list — READ-ONLY: the platform, its URL (click through to the
+// profile), and a quiet provenance chip. No per-link todo: acknowledging the whole list is the
+// operator's one action (Looks good).
 function LinkRow({ social }: { social: ArtistSocial }) {
-  const followable = FOLLOWABLE.has(social.platform);
-  const followed = social.followedAt !== null;
   // Belt-and-suspenders: only emit a clickable href for an http(s) URL. React does NOT sanitize
   // href, so a stored `javascript:`/`data:` URL would be click-to-execute XSS in the admin
   // origin — render it inert instead.
@@ -503,36 +460,22 @@ function LinkRow({ social }: { social: ArtistSocial }) {
           Auto
         </Badge>
       ) : undefined}
-
-      {/* Read-only: Spotify/YouTube ride the auto-follow sweep, so a Followed pill is real,
-          free info here — never an operator todo. */}
-      {followable && followed ? (
-        <Badge className="shrink-0 gap-1" variant="secondary">
-          <CheckCircleIcon aria-hidden="true" className="size-3" weight="fill" />
-          Followed
-        </Badge>
-      ) : undefined}
     </li>
   );
 }
 
 // The structural edits, off the resting surface (doctrine: rare actions hidden by default).
-// Lists every link with a Remove; for the auto-follow platforms (Spotify/YouTube), a "follow
-// automatically" toggle to skip a wrong match in the sweep. Plus the Add-a-platform form.
+// Lists every link with a Remove, plus the Add-a-platform form.
 function ManageLinksDialog({
   artist,
   busy,
   onAdd,
-  onMute,
   onRemove,
-  onUnmute,
 }: {
   artist: ArtistOverviewItem;
   busy: boolean;
   onAdd: (platform: string, url: string) => void;
-  onMute: (socialId: string) => void;
   onRemove: (socialId: string) => void;
-  onUnmute: (socialId: string) => void;
 }) {
   return (
     <Dialog>
@@ -547,51 +490,32 @@ function ManageLinksDialog({
       <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>{artist.name} — links</DialogTitle>
-          <DialogDescription>
-            Add or remove a link. For Spotify and YouTube, turn off auto-follow to skip a wrong
-            match in the follow sweep.
-          </DialogDescription>
+          <DialogDescription>Add or remove a link.</DialogDescription>
         </DialogHeader>
 
         {artist.socials.length > 0 ? (
           <ul className="m-0 flex list-none flex-col divide-y divide-border rounded-md border border-border p-0">
-            {artist.socials.map((social) => {
-              const followable = FOLLOWABLE.has(social.platform);
-              const autoFollow = social.mutedAt === null;
-
-              return (
-                <li className="flex items-center gap-2 px-3 py-2" key={social.id}>
-                  <PlatformLogo
-                    className="size-4 shrink-0 text-muted-foreground"
-                    platform={social.platform}
-                  />
-                  <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
-                    {social.url}
-                  </span>
-                  {followable ? (
-                    <label className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
-                      <Switch
-                        aria-label={`Follow ${PLATFORM_LABELS[social.platform]} automatically`}
-                        checked={autoFollow}
-                        disabled={busy}
-                        onCheckedChange={(next) => (next ? onUnmute(social.id) : onMute(social.id))}
-                      />
-                      Auto-follow
-                    </label>
-                  ) : undefined}
-                  <Button
-                    aria-label={`Remove ${PLATFORM_LABELS[social.platform]}`}
-                    className="text-muted-foreground hover:text-destructive"
-                    disabled={busy}
-                    onClick={() => onRemove(social.id)}
-                    size="icon-sm"
-                    variant="ghost"
-                  >
-                    <TrashIcon aria-hidden="true" className="size-3.5" />
-                  </Button>
-                </li>
-              );
-            })}
+            {artist.socials.map((social) => (
+              <li className="flex items-center gap-2 px-3 py-2" key={social.id}>
+                <PlatformLogo
+                  className="size-4 shrink-0 text-muted-foreground"
+                  platform={social.platform}
+                />
+                <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+                  {social.url}
+                </span>
+                <Button
+                  aria-label={`Remove ${PLATFORM_LABELS[social.platform]}`}
+                  className="text-muted-foreground hover:text-destructive"
+                  disabled={busy}
+                  onClick={() => onRemove(social.id)}
+                  size="icon-sm"
+                  variant="ghost"
+                >
+                  <TrashIcon aria-hidden="true" className="size-3.5" />
+                </Button>
+              </li>
+            ))}
           </ul>
         ) : (
           <p className="text-sm text-muted-foreground">No links yet.</p>

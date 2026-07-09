@@ -1,12 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { extractYoutubeChannelId } from "./youtube";
 
-// `extractYoutubeChannelId` is the PURE, network-free half of
-// `resolveYouTubeChannelId`: it lifts a `UC…` channel id straight out of a
-// `…/channel/UC…` URL and returns `null` for every other shape (a `/user/<name>` or
-// `/@handle` link needs an API lookup; a `/watch` link or junk carries no channel).
-// The capture queue's artist-own-channel trust signal reads it, so an API round-trip
-// per finding is off the table.
+// `extractYoutubeChannelId` is a PURE, network-free lift: it pulls a `UC…` channel id
+// straight out of a `…/channel/UC…` URL and returns `null` for every other shape (a
+// `/user/<name>` or `/@handle` link needs an API lookup; a `/watch` link or junk carries
+// no channel). The capture queue's artist-own-channel trust signal reads it, so an API
+// round-trip per finding is off the table.
 
 describe("extractYoutubeChannelId", () => {
   it("extracts the UC… id from a /channel/UC… URL", () => {
