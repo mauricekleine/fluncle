@@ -18,6 +18,7 @@ const PUBLIC_SOCIAL_ORDER: ArtistSocialPlatform[] = [
   "youtube",
   "soundcloud",
   "bandcamp",
+  "beatport",
   "instagram",
   "tiktok",
   "twitter",

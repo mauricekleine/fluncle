@@ -10,6 +10,7 @@ export type ArtistSocialPlatform =
   | "youtube"
   | "soundcloud"
   | "bandcamp"
+  | "beatport"
   | "instagram"
   | "tiktok"
   | "twitter"
@@ -26,6 +27,7 @@ export const ARTIST_SOCIAL_PLATFORMS: ArtistSocialPlatform[] = [
   "tiktok",
   "mixcloud",
   "bandcamp",
+  "beatport",
   "twitter",
   "facebook",
   "homepage",

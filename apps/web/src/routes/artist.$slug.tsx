@@ -3,6 +3,7 @@ import { Link, createFileRoute, notFound } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import {
   siBandcamp,
+  siBeatport,
   siFacebook,
   siInstagram,
   siMixcloud,
@@ -59,6 +60,7 @@ const SOCIAL_META: Record<
   { path: string; title: string }
 > = {
   bandcamp: siBandcamp,
+  beatport: siBeatport,
   facebook: siFacebook,
   instagram: siInstagram,
   mixcloud: siMixcloud,
@@ -71,6 +73,7 @@ const SOCIAL_META: Record<
 
 const SOCIAL_LABEL: Record<ArtistSocialPlatform, string> = {
   bandcamp: "Bandcamp",
+  beatport: "Beatport",
   facebook: "Facebook",
   homepage: "Website",
   instagram: "Instagram",

@@ -17,8 +17,10 @@
 //      index and the walk landed on empty/wrong MBIDs, resolving most artists to 0–1
 //      links. Name-search + Spotify cross-reference is the correct, durable identity.)
 //
-//   2. Firecrawl /v2/extract (gap-fill): TikTok + missing YouTube only.
-//      Uses the Worker-held FIRECRAWL_API_KEY. Gap-fill rows → status="candidate".
+//   2. Firecrawl /v2/extract (gap-fill): every missing social platform except
+//      homepage (MB covers it and "find the homepage" returns junk) and spotify
+//      (always known — it's the identity key). Uses the Worker-held FIRECRAWL_API_KEY.
+//      Gap-fill rows → status="candidate" (operator-review gated).
 //
 //   3. URL normalization: deep-link → profile root (TikTok/IG @handle), YouTube
 //      @handle → channelId (best-effort via YouTube OAuth), UTM/query stripped.
@@ -84,6 +86,7 @@ export type ArtistSocialPlatform =
   | "instagram"
   | "tiktok"
   | "bandcamp"
+  | "beatport"
   | "twitter"
   | "facebook"
   | "homepage";
@@ -116,10 +119,10 @@ type MbArtistResponse = {
 
 // ── Firecrawl types ───────────────────────────────────────────────────────────
 
-type FirecrawlExtractData = {
-  tiktok?: string;
-  youtube?: string;
-};
+// Firecrawl returns one string URL per requested platform key. The schema is built
+// from FIRECRAWL_TARGETS at call time, so widen `data` to a partial map keyed by any
+// platform — `payload.data?.[platform]` reads each target's URL.
+type FirecrawlExtractData = Partial<Record<ArtistSocialPlatform, string>>;
 
 type FirecrawlExtractResponse = {
   success?: boolean;
@@ -185,6 +188,9 @@ export function classifyMbUrl(
   if (host === "bandcamp.com" || resource.includes(".bandcamp.com")) {
     return "bandcamp";
   }
+  if (host === "beatport.com") {
+    return "beatport";
+  }
   if (host === "twitter.com" || host === "x.com") {
     return "twitter";
   }
@@ -210,7 +216,6 @@ export function classifyMbUrl(
     "genius.com",
     "songkick.com",
     "setlist.fm",
-    "beatport.com",
   ]);
 
   if (AGGREGATORS.has(host)) {
@@ -709,9 +714,36 @@ export async function resolveArtistViaMb(
 
 // ── Firecrawl gap-fill ────────────────────────────────────────────────────────
 
+// The social platforms Firecrawl is allowed to backfill. Deliberately EXCLUDES
+// `homepage` (MB covers it ~11/12 and a "find the homepage" extract returns junk
+// like Wikipedia) and `spotify` (always known — it's the identity key). Everything
+// Firecrawl returns persists as status="candidate" (operator-review gated), so the
+// wider net stays accuracy-safe. The order feeds the schema + prompt render order.
+const FIRECRAWL_TARGETS: ArtistSocialPlatform[] = [
+  "instagram",
+  "tiktok",
+  "youtube",
+  "soundcloud",
+  "bandcamp",
+  "twitter",
+  "facebook",
+  "mixcloud",
+  "beatport",
+];
+
 /**
- * Use Firecrawl /v2/extract to fill in TikTok and/or YouTube socials that MB
- * didn't resolve. Only called when those platforms are genuinely missing.
+ * The human prose label for a platform inside the Firecrawl prompt/schema description.
+ * Only `twitter` renders as "Twitter/X" — the schema property KEY stays the platform
+ * string (`twitter`) so `payload.data.twitter` reads back cleanly.
+ */
+function firecrawlPlatformProse(platform: ArtistSocialPlatform): string {
+  return platform === "twitter" ? "Twitter/X" : platform;
+}
+
+/**
+ * Use Firecrawl /v2/extract to fill in the social platforms MB didn't resolve —
+ * every FIRECRAWL_TARGETS platform that's genuinely missing (homepage + spotify are
+ * never targeted). One /v2/extract call, one schema property per missing target.
  *
  * Returns candidate rows (status will be set to "candidate" at persist time).
  * Best-effort: a Firecrawl failure returns an empty array, never throws.
@@ -722,11 +754,10 @@ export async function resolveGapViaFirecrawl(
   mbid: string | null,
   missingPlatforms: Set<ArtistSocialPlatform>,
 ): Promise<ResolvedSocial[]> {
-  // Only worth calling if TikTok or YouTube are actually missing.
-  const wantTikTok = missingPlatforms.has("tiktok");
-  const wantYoutube = missingPlatforms.has("youtube");
+  // Only the Firecrawl-eligible platforms that are actually missing.
+  const targets = FIRECRAWL_TARGETS.filter((p) => missingPlatforms.has(p));
 
-  if (!wantTikTok && !wantYoutube) {
+  if (targets.length === 0) {
     return [];
   }
 
@@ -747,22 +778,21 @@ export async function resolveGapViaFirecrawl(
   const sourceUrl =
     spotifyUrl ?? `https://musicbrainz.org/artist/${encodeURIComponent(mbid ?? "")}`;
 
-  const platforms: string[] = [];
-  if (wantTikTok) {
-    platforms.push("tiktok");
-  }
-  if (wantYoutube) {
-    platforms.push("youtube");
-  }
-
   const schema = {
     properties: Object.fromEntries(
-      platforms.map((p) => [p, { description: `Official ${p} profile URL`, type: "string" }]),
+      targets.map((p) => [
+        p,
+        { description: `Official ${firecrawlPlatformProse(p)} profile URL`, type: "string" },
+      ]),
     ),
     type: "object",
   };
 
-  const prompt = `Extract the official ${platforms.join(" and ")} profile URL(s) for the music artist "${artistName}". Return only verified official accounts.`;
+  const prompt = `Extract the official ${targets
+    .map(firecrawlPlatformProse)
+    .join(
+      ", ",
+    )} profile URL(s) for the music artist "${artistName}". Return only verified official accounts.`;
 
   let payload: FirecrawlExtractResponse;
 
@@ -803,19 +833,19 @@ export async function resolveGapViaFirecrawl(
 
   const socials: ResolvedSocial[] = [];
 
-  if (wantTikTok && payload.data.tiktok) {
-    const normalized = await normalizeProfileUrl("tiktok", payload.data.tiktok);
+  for (const platform of targets) {
+    const raw = payload.data[platform];
 
-    if (normalized) {
-      socials.push({ platform: "tiktok", source: "firecrawl", url: normalized });
+    if (!raw) {
+      continue;
     }
-  }
 
-  if (wantYoutube && payload.data.youtube) {
-    const normalized = await normalizeProfileUrl("youtube", payload.data.youtube);
+    // normalizeProfileUrl handles every platform (explicit for tiktok/instagram/
+    // youtube/spotify, stripQuery default for the rest incl. beatport).
+    const normalized = await normalizeProfileUrl(platform, raw);
 
     if (normalized) {
-      socials.push({ platform: "youtube", source: "firecrawl", url: normalized });
+      socials.push({ platform, source: "firecrawl", url: normalized });
     }
   }
 
@@ -965,7 +995,7 @@ export async function resolveArtist(artistId: string): Promise<ArtistResolutionR
   // ── 1. MusicBrainz name search + Spotify-id cross-reference ────────────────
   const mbResult = await resolveArtistViaMb(artist.name, artist.spotify_artist_id);
 
-  // ── 2. Firecrawl gap-fill (TikTok + missing YouTube only) ─────────────────
+  // ── 2. Firecrawl gap-fill (every missing social except homepage + spotify) ──
   const existingPlatforms = await fetchExistingPlatforms(artistId);
 
   // Add MB-resolved platforms to the "existing" set so Firecrawl only fills gaps.
@@ -984,12 +1014,12 @@ export async function resolveArtist(artistId: string): Promise<ArtistResolutionR
     };
   }
 
+  // Every Firecrawl-eligible platform not already resolved (by MB or a prior sweep).
   const gapPlatforms = new Set<ArtistSocialPlatform>();
-  if (!existingPlatforms.has("tiktok")) {
-    gapPlatforms.add("tiktok");
-  }
-  if (!existingPlatforms.has("youtube")) {
-    gapPlatforms.add("youtube");
+  for (const platform of FIRECRAWL_TARGETS) {
+    if (!existingPlatforms.has(platform)) {
+      gapPlatforms.add(platform);
+    }
   }
 
   const firecrawlSocials = await resolveGapViaFirecrawl(

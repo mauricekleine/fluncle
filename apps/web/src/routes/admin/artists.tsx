@@ -16,6 +16,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { type Ref, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   siBandcamp,
+  siBeatport,
   siFacebook,
   siInstagram,
   siMixcloud,
@@ -98,6 +99,7 @@ const fetchAllArtists = createServerFn({ method: "GET" }).handler(
 
 const PLATFORM_LABELS: Record<ArtistSocialPlatform, string> = {
   bandcamp: "Bandcamp",
+  beatport: "Beatport",
   facebook: "Facebook",
   homepage: "Homepage",
   instagram: "Instagram",
@@ -127,6 +129,8 @@ function PlatformLogo({
   switch (platform) {
     case "bandcamp":
       return <BrandIcon className={className} icon={siBandcamp} />;
+    case "beatport":
+      return <BrandIcon className={className} icon={siBeatport} />;
     case "facebook":
       return <BrandIcon className={className} icon={siFacebook} />;
     case "instagram":

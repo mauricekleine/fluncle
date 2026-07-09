@@ -10,7 +10,7 @@ This doc covers the **identity graph** — how `artist_socials` is resolved, rev
 
 `artist_socials` is the identity-graph store — one row per `(artist_id, platform)`:
 
-- `platform` — the socials only (`spotify | youtube | soundcloud | instagram | tiktok | mixcloud | bandcamp | twitter | facebook | homepage`). The KG anchors (`mbid`, `wikidata_qid`) live as `artists` columns, not here.
+- `platform` — the socials only (`spotify | youtube | soundcloud | instagram | tiktok | mixcloud | bandcamp | beatport | twitter | facebook | homepage`). Beatport is a link-only store platform (the key DnB store/profile) — it was promoted out of the MB aggregator denylist to a first-class social. The KG anchors (`mbid`, `wikidata_qid`) live as `artists` columns, not here.
 - `status` — `auto` (MusicBrainz/operator, trusted) · `candidate` (Firecrawl-only, awaits a human glance) · `confirmed` (a candidate promoted). Only `auto`/`confirmed` render on the public artist page + `sameAs`.
 - `source` — `musicbrainz | firecrawl | operator`.
 
@@ -18,7 +18,7 @@ There is no follow/champion state on the row — the graph is purely who the art
 
 ## Resolution (`resolve_artist`, agent tier)
 
-The box's `fluncle-artist-sweep` cron reads the resolve worklist (`list_unresolved_artists`) and calls `resolve_artist` per row: a MusicBrainz url-rels walk (→ `status=auto`, trusted) plus a Firecrawl `/v2/extract` gap-fill (→ `status=candidate`, operator-confirm before public). `wikidata` classified during the MB walk is routed to the `wikidataQid` KG anchor on `artists`, not into `socials`.
+The box's `fluncle-artist-sweep` cron reads the resolve worklist (`list_unresolved_artists`) and calls `resolve_artist` per row: a MusicBrainz url-rels walk (→ `status=auto`, trusted) plus a Firecrawl `/v2/extract` gap-fill (→ `status=candidate`, operator-confirm before public). The gap-fill backfills **every missing social platform except `homepage` and `spotify`** (`instagram, tiktok, youtube, soundcloud, bandcamp, twitter, facebook, mixcloud, beatport`) in a single `/v2/extract` call — `homepage` is excluded because MB already covers it and a "find the homepage" extract returns junk (Wikipedia), and `spotify` is always known (it's the identity key). Everything Firecrawl returns lands as `status=candidate`, so the wider net stays behind the operator-review gate. `wikidata` classified during the MB walk is routed to the `wikidataQid` KG anchor on `artists`, not into `socials`.
 
 The MB walk finds the artist's MBID by **name search cross-referenced with the artist's Spotify URL** — the primary resolver: it queries `/ws/2/artist?query=artist:"<name>"`, deep-fetches each top candidate's `inc=url-rels`, and accepts the candidate whose MB Spotify url-rel's artist id equals the artist's stored `spotify_artist_id` (an exact identity match, accepted even over a higher-scored candidate). A candidate whose Spotify rel is present but DIFFERS is a namesake and is rejected. Only when NO candidate exposes any Spotify rel to cross-check does the walk fall back to a strong MB `score` (≥ 90) plus an exact normalized name match; otherwise the artist stays unresolved rather than resolve to a namesake (a wrong social link on a public artist page is worse than a missing one). The earlier ISRC→recording→artist-credit MBID lookup was **retired** — DnB ISRCs are frequently absent from MB's index and the walk landed on empty/wrong MBIDs, so most artists resolved to zero socials.
 

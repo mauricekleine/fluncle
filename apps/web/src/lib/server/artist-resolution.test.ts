@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   __setRateLimitForTests,
+  type ArtistSocialPlatform,
   classifyMbUrl,
   luceneEscapePhrase,
   normalizeProfileUrl,
@@ -71,6 +72,11 @@ describe("classifyMbUrl", () => {
   it("classifies Twitter/X URLs", () => {
     expect(classifyMbUrl("https://twitter.com/artistname")).toBe("twitter");
     expect(classifyMbUrl("https://x.com/artistname")).toBe("twitter");
+  });
+
+  it("classifies Beatport artist URLs (promoted from the aggregator denylist)", () => {
+    expect(classifyMbUrl("https://www.beatport.com/artist/andromedik/12345")).toBe("beatport");
+    expect(classifyMbUrl("https://beatport.com/artist/dimension/6789")).toBe("beatport");
   });
 
   it("classifies Wikidata entity URLs", () => {
@@ -724,5 +730,164 @@ describe("resolveGapViaFirecrawl (Firecrawl /v2/extract gap-fill)", () => {
     const result = await resolveGapViaFirecrawl("Dimension", null, "mb-dim-1", new Set(["tiktok"]));
 
     expect(result).toHaveLength(0);
+  });
+
+  // A body-capturing fetch mock: records the parsed request body sent to Firecrawl so a
+  // test can assert on the schema/prompt, and always answers with the given extract data.
+  // (YouTube URLs are pre-normalized /channel/ URLs so normalizeProfileUrl never re-fetches.)
+  function mockFirecrawlCapture(data: Record<string, string>) {
+    const bodies: Array<Record<string, unknown>> = [];
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit): Promise<Response> => {
+      if (typeof init?.body === "string") {
+        bodies.push(JSON.parse(init.body) as Record<string, unknown>);
+      }
+      return Response.json({ data, success: true });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return { bodies, fetchMock };
+  }
+
+  it("(a) backfills every targeted-AND-missing platform, normalized + source=firecrawl", async () => {
+    mockFirecrawlCapture({
+      bandcamp: "https://andromedik.bandcamp.com",
+      beatport: "https://www.beatport.com/artist/andromedik/12345",
+      instagram: "https://www.instagram.com/andromedik",
+      mixcloud: "https://www.mixcloud.com/andromedik",
+      soundcloud: "https://soundcloud.com/andromedik",
+      tiktok: "https://www.tiktok.com/@andromedik",
+      twitter: "https://twitter.com/andromedik",
+      youtube: "https://www.youtube.com/channel/UCandromedik",
+    });
+
+    const missing = new Set<
+      | "instagram"
+      | "tiktok"
+      | "youtube"
+      | "soundcloud"
+      | "bandcamp"
+      | "twitter"
+      | "mixcloud"
+      | "beatport"
+    >([
+      "instagram",
+      "tiktok",
+      "youtube",
+      "soundcloud",
+      "bandcamp",
+      "twitter",
+      "mixcloud",
+      "beatport",
+    ]);
+
+    const result = await resolveGapViaFirecrawl(
+      "Andromedik",
+      "https://open.spotify.com/artist/abc",
+      null,
+      missing,
+    );
+
+    const platforms = result.map((s) => s.platform).sort();
+    expect(platforms).toEqual([
+      "bandcamp",
+      "beatport",
+      "instagram",
+      "mixcloud",
+      "soundcloud",
+      "tiktok",
+      "twitter",
+      "youtube",
+    ]);
+
+    for (const social of result) {
+      expect(social.source).toBe("firecrawl");
+    }
+
+    // Beatport went through the stripQuery default normalizer (kept as a profile URL).
+    const beatport = result.find((s) => s.platform === "beatport");
+    expect(beatport?.url).toBe("https://www.beatport.com/artist/andromedik/12345");
+  });
+
+  it("(b) does NOT request a platform that is not missing", async () => {
+    const { bodies } = mockFirecrawlCapture({
+      instagram: "https://www.instagram.com/andromedik",
+      // Firecrawl also volunteers a tiktok, but it was NOT requested → ignored.
+      tiktok: "https://www.tiktok.com/@andromedik",
+    });
+
+    const result = await resolveGapViaFirecrawl(
+      "Andromedik",
+      "https://open.spotify.com/artist/abc",
+      null,
+      new Set(["instagram"]),
+    );
+
+    const schema = bodies[0]?.["schema"] as { properties?: Record<string, unknown> } | undefined;
+    expect(Object.keys(schema?.properties ?? {})).toEqual(["instagram"]);
+    expect(bodies[0]?.["prompt"]).not.toContain("tiktok");
+
+    // A non-requested platform Firecrawl returned anyway is not persisted.
+    expect(result.map((s) => s.platform)).toEqual(["instagram"]);
+  });
+
+  it("(c) never puts homepage or spotify in the requested schema (kept out of the target set)", async () => {
+    const { bodies } = mockFirecrawlCapture({});
+
+    // Ask for EVERYTHING, including the two excluded platforms.
+    const missing = new Set<ArtistSocialPlatform>([
+      "spotify",
+      "homepage",
+      "instagram",
+      "tiktok",
+      "youtube",
+      "soundcloud",
+      "bandcamp",
+      "twitter",
+      "facebook",
+      "mixcloud",
+      "beatport",
+    ]);
+
+    await resolveGapViaFirecrawl(
+      "Andromedik",
+      "https://open.spotify.com/artist/abc",
+      null,
+      missing,
+    );
+
+    const schema = bodies[0]?.["schema"] as { properties?: Record<string, unknown> } | undefined;
+    const keys = Object.keys(schema?.properties ?? {});
+    expect(keys).not.toContain("homepage");
+    expect(keys).not.toContain("spotify");
+    // The full target set, homepage + spotify excluded.
+    expect(keys.sort()).toEqual([
+      "bandcamp",
+      "beatport",
+      "facebook",
+      "instagram",
+      "mixcloud",
+      "soundcloud",
+      "tiktok",
+      "twitter",
+      "youtube",
+    ]);
+
+    // Twitter's schema KEY stays `twitter`; only the prose renders "Twitter/X".
+    expect(keys).toContain("twitter");
+    expect(bodies[0]?.["prompt"]).toContain("Twitter/X");
+  });
+
+  it("(d) makes no Firecrawl call when the only 'missing' platforms are non-targets", async () => {
+    const { calls } = mockFetch([]);
+
+    // homepage + spotify are deliberately excluded → targets is empty → no call.
+    const result = await resolveGapViaFirecrawl(
+      "Andromedik",
+      "https://open.spotify.com/artist/abc",
+      null,
+      new Set<ArtistSocialPlatform>(["homepage", "spotify"]),
+    );
+
+    expect(result).toHaveLength(0);
+    expect(calls).toHaveLength(0);
   });
 });
