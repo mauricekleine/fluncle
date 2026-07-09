@@ -14,7 +14,7 @@ import {
 
 import { GLSL, ShaderLayer } from "../remotion/cosmos";
 import { MockSurfacePanel } from "./surfaces";
-import { accentColor, c, font, SAFE } from "./theme";
+import { accentColor, c, font, pipHeight, pipWidth, SAFE } from "./theme";
 import { type ExplainerChapter, type ExplainerClip } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -82,41 +82,49 @@ export const ScreenFull: React.FC<{ screen: ExplainerClip }> = ({ screen }) => (
 );
 
 /** Picture-in-picture: the surface fills, the face sits cornered in a gold-hairline frame. */
-export const Pip: React.FC<{ screen: ExplainerClip; face: ExplainerClip }> = ({ screen, face }) => (
-  <AbsoluteFill>
-    <Clip clip={screen} />
-    <div
-      style={{
-        border: `2px solid ${c.eclipseGold}`,
-        borderRadius: 16,
-        bottom: SAFE,
-        boxShadow: "0 24px 60px rgba(0,0,0,0.6)",
-        height: 300,
-        overflow: "hidden",
-        position: "absolute",
-        right: SAFE,
-        width: 480,
-      }}
-    >
-      <Clip clip={face} radius={14} />
-    </div>
-  </AbsoluteFill>
-);
+export const Pip: React.FC<{ screen: ExplainerClip; face: ExplainerClip }> = ({ screen, face }) => {
+  const { width } = useVideoConfig();
+  return (
+    <AbsoluteFill>
+      <Clip clip={screen} />
+      <div
+        style={{
+          border: `2px solid ${c.eclipseGold}`,
+          borderRadius: 16,
+          bottom: SAFE,
+          boxShadow: "0 24px 60px rgba(0,0,0,0.6)",
+          height: pipHeight(width),
+          overflow: "hidden",
+          position: "absolute",
+          right: SAFE,
+          width: pipWidth(width),
+        }}
+      >
+        <Clip clip={face} radius={14} />
+      </div>
+    </AbsoluteFill>
+  );
+};
 
+/** Split: face beside walkthrough on wide frames, stacked (face over) when tall. */
 export const Split: React.FC<{ screen: ExplainerClip; face: ExplainerClip }> = ({
   screen,
   face,
-}) => (
-  <AbsoluteFill style={{ flexDirection: "row" }}>
-    <div style={{ ...FILL, flex: 1 }}>
-      <Clip clip={face} />
-    </div>
-    <div style={{ background: c.eclipseGold, width: 2 }} />
-    <div style={{ ...FILL, flex: 1 }}>
-      <Clip clip={screen} />
-    </div>
-  </AbsoluteFill>
-);
+}) => {
+  const { height, width } = useVideoConfig();
+  const portrait = height > width;
+  return (
+    <AbsoluteFill style={{ flexDirection: portrait ? "column" : "row" }}>
+      <div style={{ ...FILL, flex: 1 }}>
+        <Clip clip={face} />
+      </div>
+      <div style={{ background: c.eclipseGold, ...(portrait ? { height: 2 } : { width: 2 }) }} />
+      <div style={{ ...FILL, flex: 1 }}>
+        <Clip clip={screen} />
+      </div>
+    </AbsoluteFill>
+  );
+};
 
 // ---------------------------------------------------------------------------
 // Surface tag (top-left) — names what you are looking at
@@ -142,7 +150,17 @@ export const SurfaceTag: React.FC<{ label: string; sub?: string }> = ({ label, s
         transform: `translateX(${x}px)`,
       }}
     >
-      <div style={{ alignItems: "center", display: "flex", gap: 12 }}>
+      {/* A soft dark scrim so the tag holds AA on bright full-bleed surfaces
+          (the videos panel, the galaxy) and stays invisible on the dark ones. */}
+      <div
+        style={{
+          background: "radial-gradient(140% 160% at 0% 0%, rgba(9,10,11,0.66), transparent 72%)",
+          inset: "-24px -80px -20px -40px",
+          pointerEvents: "none",
+          position: "absolute",
+        }}
+      />
+      <div style={{ alignItems: "center", display: "flex", gap: 12, position: "relative" }}>
         <div style={{ background: c.eclipseGold, height: 26, width: 4 }} />
         <span
           style={{
@@ -150,6 +168,7 @@ export const SurfaceTag: React.FC<{ label: string; sub?: string }> = ({ label, s
             fontFamily: font.display,
             fontSize: 34,
             letterSpacing: 1,
+            textShadow: "0 2px 14px rgba(0,0,0,0.55)",
           }}
         >
           {label}
@@ -163,6 +182,8 @@ export const SurfaceTag: React.FC<{ label: string; sub?: string }> = ({ label, s
             fontSize: 22,
             marginLeft: 16,
             marginTop: 6,
+            position: "relative",
+            textShadow: "0 2px 12px rgba(0,0,0,0.6)",
           }}
         >
           {sub}
@@ -176,7 +197,10 @@ export const SurfaceTag: React.FC<{ label: string; sub?: string }> = ({ label, s
 // Captions — burned in for silent autoplay; the active line only
 // ---------------------------------------------------------------------------
 
-export const Captions: React.FC<{ lines: ExplainerChapter["captions"] }> = ({ lines }) => {
+export const Captions: React.FC<{ lines: ExplainerChapter["captions"]; reserveRight?: number }> = ({
+  lines,
+  reserveRight = 0,
+}) => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
   if (lines === undefined) {
@@ -187,15 +211,17 @@ export const Captions: React.FC<{ lines: ExplainerChapter["captions"] }> = ({ li
   if (active === undefined) {
     return null;
   }
+  // The caption is centered in the band LEFT of the picture-in-picture cam:
+  // reserveRight is the cam's footprint, so long lines can never run under it.
   return (
     <div
       style={{
         bottom: SAFE,
         display: "flex",
         justifyContent: "center",
-        left: 0,
+        left: SAFE,
         position: "absolute",
-        width: "100%",
+        right: SAFE + reserveRight,
       }}
     >
       <span
@@ -209,9 +235,10 @@ export const Captions: React.FC<{ lines: ExplainerChapter["captions"] }> = ({ li
           fontSize: 46,
           fontWeight: 600,
           lineHeight: 1.4,
-          maxWidth: 1240,
+          maxWidth: 1080,
           padding: "12px 22px",
           textAlign: "center",
+          textWrap: "balance",
         }}
       >
         {active.text}

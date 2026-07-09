@@ -3,11 +3,11 @@
 // lays a star-warp transition over every seam. calculateMetadata sums the
 // chapter durations so Studio + the render agree on length.
 
-import { AbsoluteFill, Sequence, useVideoConfig } from "remotion";
+import { AbsoluteFill, Sequence, useCurrentFrame, useVideoConfig } from "remotion";
 import { type CalculateMetadataFunction } from "remotion";
 
 import { srtToCaptionLines } from "./captions";
-import { CARD_MS, FPS, msToFrames, TRANSITION_MS } from "./theme";
+import { captionReserveRight, CARD_MS, FPS, msToFrames, TRANSITION_MS } from "./theme";
 import {
   Captions,
   ChapterCard,
@@ -19,7 +19,17 @@ import {
   SurfaceTag,
   TalkingHead,
 } from "./scene";
-import { type ExplainerChapter, type ExplainerClip, type ExplainerProps } from "./types";
+import {
+  type CaptionLine,
+  type ExplainerChapter,
+  type ExplainerClip,
+  type ExplainerProps,
+} from "./types";
+
+// Only the picture-in-picture layout parks a cam bottom-right, so only it makes
+// the captions reserve that gutter. Every other layout keeps captions centered.
+const reserveFor = (layout: ExplainerChapter["layout"], frameWidth: number) =>
+  layout === "pip" ? captionReserveRight(frameWidth) : 0;
 
 const FACE_FALLBACK: ExplainerClip = { kind: "placeholder", mock: "face" };
 
@@ -42,7 +52,7 @@ const ChapterScene: React.FC<{ chapter: ExplainerChapter; showCaptions: boolean 
   chapter,
   showCaptions,
 }) => {
-  const { fps } = useVideoConfig();
+  const { fps, width } = useVideoConfig();
   const cardFrames = msToFrames(CARD_MS, fps);
   return (
     <AbsoluteFill>
@@ -50,13 +60,29 @@ const ChapterScene: React.FC<{ chapter: ExplainerChapter; showCaptions: boolean 
       {chapter.tag !== undefined ? (
         <SurfaceTag label={chapter.tag.label} sub={chapter.tag.sub} />
       ) : null}
-      {showCaptions ? <Captions lines={chapter.captions} /> : null}
+      {showCaptions ? (
+        <Captions lines={chapter.captions} reserveRight={reserveFor(chapter.layout, width)} />
+      ) : null}
       {chapter.showCard === true ? (
         <Sequence durationInFrames={cardFrames} from={0} name="card">
           <ChapterCard chapter={chapter} />
         </Sequence>
       ) : null}
     </AbsoluteFill>
+  );
+};
+
+// The global SRT caption track spans every chapter, so it has to read the
+// active chapter's layout each frame to decide whether to reserve the PiP gutter.
+const GlobalCaptions: React.FC<{
+  lines: CaptionLine[];
+  scenes: Array<{ chapter: ExplainerChapter; durationInFrames: number; from: number }>;
+}> = ({ lines, scenes }) => {
+  const frame = useCurrentFrame();
+  const { width } = useVideoConfig();
+  const active = scenes.find((s) => frame >= s.from && frame < s.from + s.durationInFrames);
+  return (
+    <Captions lines={lines} reserveRight={reserveFor(active?.chapter.layout ?? "screen", width)} />
   );
 };
 
@@ -96,7 +122,9 @@ export const ExplainerComposition: React.FC<ExplainerProps> = ({ manifest }) => 
           <SmearTransition seed={index + 1} />
         </Sequence>
       ))}
-      {globalCaptions !== undefined ? <Captions lines={globalCaptions} /> : null}
+      {globalCaptions !== undefined ? (
+        <GlobalCaptions lines={globalCaptions} scenes={scenes} />
+      ) : null}
     </Frame>
   );
 };

@@ -3,9 +3,9 @@
 // Nostalgic Cosmos, so the FORMAT is legible before any real footage exists.
 // Everything here is deterministic (random(seed), never Math.random).
 
-import { AbsoluteFill, random } from "remotion";
+import { AbsoluteFill, random, useCurrentFrame, useVideoConfig } from "remotion";
 
-import { c, font } from "./theme";
+import { c, font, SAFE } from "./theme";
 import { type MockSurface } from "./types";
 
 const Window: React.FC<{ chrome?: string; children: React.ReactNode; mono?: boolean }> = ({
@@ -46,7 +46,21 @@ const Window: React.FC<{ chrome?: string; children: React.ReactNode; mono?: bool
         <span style={{ marginLeft: 12 }}>{chrome}</span>
       </div>
     ) : null}
-    <div style={{ flex: 1, padding: 36, position: "relative" }}>{children}</div>
+    {/* Content is centered in the pane so short mocks (and letterboxed real
+        captures) sit in the middle of the window, not floating at the top. */}
+    <div
+      style={{
+        display: "flex",
+        flex: 1,
+        flexDirection: "column",
+        justifyContent: "center",
+        minHeight: 0,
+        padding: 44,
+        position: "relative",
+      }}
+    >
+      {children}
+    </div>
   </div>
 );
 
@@ -141,34 +155,135 @@ const Lens: React.FC = () => (
   </div>
 );
 
-const Videos: React.FC = () => (
-  <div
-    style={{
-      alignItems: "center",
-      display: "flex",
-      gap: 28,
-      height: "100%",
-      justifyContent: "center",
-    }}
-  >
-    {[
-      `linear-gradient(150deg, ${c.eclipseGold}, ${c.reentryRed})`,
-      `linear-gradient(150deg, ${c.nebulaViolet}, ${c.deepField})`,
-      `linear-gradient(150deg, ${c.eclipseGlow}, ${c.tapeBlack})`,
-    ].map((bg, i) => (
-      <div
-        key={i}
+/** A bespoke-shader video, playing. Each tile drifts on its own phase (no two
+ *  the same), with a live waveform + a scrubber so it reads as footage rendering,
+ *  not a colored block. This is the marquee "why does it DO that?!" beat. */
+const VideoTile: React.FC<{ tint: string; glow: string; seed: string; w: number; h: number }> = ({
+  tint,
+  glow,
+  seed,
+  w,
+  h,
+}) => {
+  const frame = useCurrentFrame();
+  const { fps } = useVideoConfig();
+  const t = frame / fps;
+  const phase = random(`phase-${seed}`) * Math.PI * 2;
+  // The light source drifts, so the tile looks like a shader evolving in real time.
+  const gx = 50 + Math.sin(t * 0.55 + phase) * 26;
+  const gy = 42 + Math.cos(t * 0.47 + phase) * 24;
+  const angle = 118 + Math.sin(t * 0.3 + phase) * 30;
+  const runtime = 6 + random(`dur-${seed}`) * 5;
+  const progress = (t / runtime) % 1;
+  const secs = Math.floor(progress * runtime * 10);
+  const tc = `0:${String(secs).padStart(2, "0")}`;
+  return (
+    <div
+      style={{
+        border: `1px solid ${c.ruleDark}`,
+        borderRadius: 14,
+        boxShadow: "0 20px 60px rgba(0,0,0,0.5)",
+        height: h,
+        overflow: "hidden",
+        position: "relative",
+        width: w,
+      }}
+    >
+      <AbsoluteFill
         style={{
-          background: bg,
-          borderRadius: 12,
-          boxShadow: "0 20px 60px rgba(0,0,0,0.5)",
-          height: "84%",
-          width: "26%",
+          background: `radial-gradient(120% 120% at ${gx}% ${gy}%, ${glow}, ${tint} 46%, ${c.deepField})`,
         }}
       />
-    ))}
-  </div>
-);
+      {/* warp bands — the "shader" texture, drifting on the tile's own angle */}
+      <AbsoluteFill
+        style={{
+          background: `repeating-linear-gradient(${angle}deg, rgba(255,255,255,0.08) 0 2px, transparent 2px 26px)`,
+          mixBlendMode: "soft-light",
+          transform: `translateY(${Math.sin(t + phase) * 12}px)`,
+        }}
+      />
+      {/* live waveform, pinned to the bottom */}
+      <div
+        style={{
+          alignItems: "flex-end",
+          bottom: 74,
+          display: "flex",
+          gap: 4,
+          height: 68,
+          justifyContent: "center",
+          left: 20,
+          position: "absolute",
+          right: 20,
+        }}
+      >
+        {Array.from({ length: 16 }, (_, i) => {
+          const base = 0.22 + random(`w-${seed}-${i}`) * 0.5;
+          const h = 10 + (base + 0.5 * Math.abs(Math.sin(t * 5 + i * 0.6 + phase))) * 46;
+          return (
+            <div
+              key={i}
+              style={{
+                background: c.starlightCream,
+                borderRadius: 2,
+                height: h,
+                opacity: 0.9,
+                width: 5,
+              }}
+            />
+          );
+        })}
+      </div>
+      {/* scrubber + timecode — reads as a video player */}
+      <div style={{ bottom: 34, left: 20, position: "absolute", right: 20 }}>
+        <div
+          style={{
+            background: "rgba(244,234,215,0.24)",
+            borderRadius: 2,
+            height: 4,
+            width: "100%",
+          }}
+        >
+          <div
+            style={{
+              background: c.eclipseGold,
+              borderRadius: 2,
+              height: 4,
+              width: `${progress * 100}%`,
+            }}
+          />
+        </div>
+        <div
+          style={{ color: c.starlightCream, fontFamily: font.mono, fontSize: 20, marginTop: 12 }}
+        >
+          {tc}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const Videos: React.FC = () => {
+  const { height, width } = useVideoConfig();
+  // Tiles keep a portrait-video aspect off frame WIDTH so three of them read the
+  // same in every orientation (tall thin columns on square/portrait otherwise).
+  const w = width * 0.26;
+  const h = Math.min(w * 1.66, height - 2 * SAFE);
+  return (
+    <div
+      style={{
+        alignItems: "center",
+        display: "flex",
+        gap: width * 0.02,
+        height: "100%",
+        justifyContent: "center",
+      }}
+    >
+      <VideoTile glow={c.eclipseGlow} h={h} seed="a" tint={c.reentryRed} w={w} />
+      <VideoTile glow={c.nebulaViolet} h={h} seed="b" tint={c.tapeBlack} w={w} />
+      <VideoTile glow={c.eclipseGold} h={h} seed="c" tint={c.sleeveBlack} w={w} />
+    </div>
+  );
+};
 
 const Voice: React.FC = () => (
   <div
@@ -356,16 +471,16 @@ const Face: React.FC = () => (
     <div
       style={{
         alignItems: "center",
+        aspectRatio: "1",
         border: `1px solid ${c.ruleDark}`,
         borderRadius: 999,
         color: c.stardust,
         display: "flex",
         fontFamily: font.display,
         fontSize: 40,
-        height: 360,
+        height: "58%",
         justifyContent: "center",
         letterSpacing: 6,
-        width: 360,
       }}
     >
       YOU
@@ -404,7 +519,13 @@ export const MockSurfacePanel: React.FC<{ kind: MockSurface; label?: string }> =
     </AbsoluteFill>
   ) : (
     <AbsoluteFill
-      style={{ alignItems: "center", justifyContent: "center", padding: "184px 110px 196px" }}
+      style={{
+        alignItems: "center",
+        justifyContent: "center",
+        // Proportional to the broadcast-safe margin so the window leaves room for
+        // the surface tag (top) and the caption (bottom) on every aspect ratio.
+        padding: `${SAFE + 96}px ${SAFE + 20}px ${SAFE + 104}px`,
+      }}
     >
       <Window chrome={CHROME[kind] ?? ""} mono={kind === "terminal" || kind === "crawler"}>
         <Content />
@@ -415,20 +536,21 @@ export const MockSurfacePanel: React.FC<{ kind: MockSurface; label?: string }> =
   return (
     <AbsoluteFill style={{ background: c.deepField }}>
       {inner}
+      {/* Build-time hint naming the real capture that lands here; parked top-right,
+          the one corner free of the tag (top-left), caption (bottom) and PiP cam. */}
       {label !== undefined ? (
         <div
           style={{
             border: `1px dashed ${c.ruleDark}`,
             borderRadius: 8,
-            bottom: 40,
             color: c.stardust,
             fontFamily: font.mono,
             fontSize: 20,
-            left: "50%",
             opacity: 0.7,
             padding: "6px 14px",
             position: "absolute",
-            transform: "translateX(-50%)",
+            right: SAFE,
+            top: SAFE,
           }}
         >
           screen capture → {label}

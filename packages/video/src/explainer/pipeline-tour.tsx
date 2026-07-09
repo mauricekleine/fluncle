@@ -136,11 +136,34 @@ const chapters: Array<Omit<ExplainerChapter, "id"> & { id?: string }> = [
   },
 ];
 
+// One set of chapters, three aspect ratios. The layouts reflow off the frame
+// dimensions (responsive PiP, stacked split on tall frames), so the same tour
+// renders landscape for YouTube/X, portrait for the mobile timeline + Reels/
+// Shorts, and square for the in-feed post.
+const resolved: ExplainerChapter[] = chapters.map((chapter, index) => ({
+  ...chapter,
+  id: chapter.id ?? `ch-${index}`,
+}));
+
 export const pipelineTour: ExplainerManifest = {
-  chapters: chapters.map((chapter, index) => ({ ...chapter, id: chapter.id ?? `ch-${index}` })),
+  chapters: resolved,
   fps: FPS,
   height: HEIGHT,
   id: "pipeline-tour",
   title: "The Galaxy Factory",
   width: WIDTH,
+};
+
+export const pipelineTourPortrait: ExplainerManifest = {
+  ...pipelineTour,
+  height: WIDTH, // 1920
+  id: "pipeline-tour-portrait",
+  width: HEIGHT, // 1080 → 1080×1920 (9:16)
+};
+
+export const pipelineTourSquare: ExplainerManifest = {
+  ...pipelineTour,
+  height: HEIGHT, // 1080
+  id: "pipeline-tour-square",
+  width: HEIGHT, // 1080 → 1080×1080 (1:1)
 };
