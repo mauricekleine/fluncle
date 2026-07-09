@@ -13,6 +13,7 @@ const BASE_ROW: TrackRow = {
   added_to_spotify: 0,
   album: null,
   album_image_url: null,
+  analyzed_from: null,
   artists_json: '["Some Artist"]',
   bpm: null,
   duration_ms: 200000,
@@ -110,5 +111,31 @@ describe("sourceAudioKey — admin carries, public strips", () => {
 
     expect(item.sourceAudioKey).toBeUndefined();
     expect(toPublicTrackListItem(item)).toBe(item);
+  });
+});
+
+// Analysis provenance (RFC bpm-key-accuracy): the ADMIN DTO carries analyzedFrom (the capture
+// sweep + the requeue-analysis command read it), but every PUBLIC read strips it — it is
+// internal capture/enrich state, never part of a public DTO. This also covers the case a
+// captured key alone would miss: a preview-analyzed finding with NO source audio still leaks
+// analyzedFrom unless the public mapper strips it independently of sourceAudioKey.
+describe("analyzedFrom — admin carries, public strips", () => {
+  const PREVIEW_ROW: TrackRow = { ...BASE_ROW, analyzed_from: "preview" };
+
+  it("the admin DTO (toTrackListItem) carries analyzedFrom", () => {
+    expect(toTrackListItem(PREVIEW_ROW).analyzedFrom).toBe("preview");
+  });
+
+  it("toPublicTrackListItem strips analyzedFrom even when there is no source audio", () => {
+    const publicItem = toPublicTrackListItem(toTrackListItem(PREVIEW_ROW));
+
+    expect(publicItem.analyzedFrom).toBeUndefined();
+    expect(publicItem.sourceAudioKey).toBeUndefined();
+    // Everything else survives.
+    expect(publicItem.trackId).toBe(PREVIEW_ROW.track_id);
+  });
+
+  it("surfaces a null legacy analyzed_from as undefined", () => {
+    expect(toTrackListItem(BASE_ROW).analyzedFrom).toBeUndefined();
   });
 });

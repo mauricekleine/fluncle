@@ -150,6 +150,34 @@ export function adminTracksHandlers(os: Implementer) {
         update.key = body.key;
       }
 
+      // BPM/key analysis provenance (RFC bpm-key-accuracy) — agent-writable analysis
+      // metadata, like features/embedding, so NOT in OPERATOR_ONLY_FIELDS. Narrow each:
+      // analyzedFrom to the preview|full enum, the sources to non-empty strings, the
+      // confidences to finite numbers, analyzedAt to a non-empty ISO string.
+      if (typeof body.bpmSource === "string" && body.bpmSource.trim()) {
+        update.bpmSource = body.bpmSource;
+      }
+
+      if (typeof body.keySource === "string" && body.keySource.trim()) {
+        update.keySource = body.keySource;
+      }
+
+      if (typeof body.bpmConfidence === "number" && Number.isFinite(body.bpmConfidence)) {
+        update.bpmConfidence = body.bpmConfidence;
+      }
+
+      if (typeof body.keyConfidence === "number" && Number.isFinite(body.keyConfidence)) {
+        update.keyConfidence = body.keyConfidence;
+      }
+
+      if (body.analyzedFrom === "preview" || body.analyzedFrom === "full") {
+        update.analyzedFrom = body.analyzedFrom;
+      }
+
+      if (typeof body.analyzedAt === "string" && body.analyzedAt.trim()) {
+        update.analyzedAt = body.analyzedAt;
+      }
+
       if (typeof body.features === "string") {
         update.features = body.features;
       }

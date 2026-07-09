@@ -33,7 +33,15 @@ import { FeedItemSchema, TrackListItemSchema } from "./_shared";
  * the raw input and reproduces that logic verbatim.
  */
 const UpdateTrackBodySchema = z.looseObject({
+  // BPM/key analysis provenance (RFC bpm-key-accuracy) — agent-writable analysis metadata
+  // like `features`/`embedding`. LOOSE like the rest: the handler narrows each (analyzedFrom
+  // to the preview|full enum, the sources to strings, the confidences to numbers). Internal —
+  // the handler keeps them out of VISIBLE_FIELDS so a provenance write moves no public lastmod.
+  analyzedAt: z.unknown().optional(),
+  analyzedFrom: z.unknown().optional(),
   bpm: z.unknown().optional(),
+  bpmConfidence: z.unknown().optional(),
+  bpmSource: z.unknown().optional(),
   // The full-song capture side-channel state (RFC full-audio, the `fluncle-capture`
   // cron) — all agent-writable analysis fields, like `embedding`. LOOSE like the rest:
   // the handler narrows each (the captureStatus enum, the key/timestamps to strings,
@@ -48,6 +56,8 @@ const UpdateTrackBodySchema = z.looseObject({
   features: z.unknown().optional(),
   isrc: z.unknown().optional(),
   key: z.unknown().optional(),
+  keyConfidence: z.unknown().optional(),
+  keySource: z.unknown().optional(),
   logId: z.unknown().optional(),
   note: z.unknown().optional(),
   sourceAudioAttemptedAt: z.unknown().optional(),

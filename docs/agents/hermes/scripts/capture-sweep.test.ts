@@ -9,13 +9,14 @@
 // the sticky-proxy builder, the duration guard, the key builder, or the candidate ranker.
 import { describe, expect, test } from "bun:test";
 import {
+  bpmIsMissing,
   buildSourceAudioKey,
   buildStickyProxyUrl,
   classifyChannelTrust,
   contentTypeForExt,
   durationAcceptable,
   durationWithinTolerance,
-  needsBpmRederive,
+  needsReenrichAfterCapture,
   normalizeChannelName,
   pickCandidate,
   rankCandidates,
@@ -301,19 +302,39 @@ describe("rankCandidates", () => {
   });
 });
 
-describe("needsBpmRederive", () => {
-  test("re-derives only when the BPM is genuinely missing", () => {
-    expect(needsBpmRederive(null)).toBe(true);
-    expect(needsBpmRederive(undefined)).toBe(true);
-    expect(needsBpmRederive(0)).toBe(true);
-    expect(needsBpmRederive(-5)).toBe(true);
-    expect(needsBpmRederive(Number.NaN)).toBe(true);
+describe("bpmIsMissing", () => {
+  test("true only when the BPM is genuinely missing", () => {
+    expect(bpmIsMissing(null)).toBe(true);
+    expect(bpmIsMissing(undefined)).toBe(true);
+    expect(bpmIsMissing(0)).toBe(true);
+    expect(bpmIsMissing(-5)).toBe(true);
+    expect(bpmIsMissing(Number.NaN)).toBe(true);
   });
 
-  test("NEVER re-derives over a real BPM (incl. a real 160, deliberately not fake)", () => {
-    expect(needsBpmRederive(174)).toBe(false);
-    expect(needsBpmRederive(160)).toBe(false);
-    expect(needsBpmRederive(87.5)).toBe(false);
+  test("false for a real BPM (incl. a real 160, deliberately not fake)", () => {
+    expect(bpmIsMissing(174)).toBe(false);
+    expect(bpmIsMissing(160)).toBe(false);
+    expect(bpmIsMissing(87.5)).toBe(false);
+  });
+});
+
+describe("needsReenrichAfterCapture", () => {
+  test("re-queues when the BPM is missing, whatever the provenance", () => {
+    expect(needsReenrichAfterCapture(null, "full")).toBe(true);
+    expect(needsReenrichAfterCapture(undefined, "preview")).toBe(true);
+    expect(needsReenrichAfterCapture(0, undefined)).toBe(true);
+  });
+
+  test("re-queues a preview-grade (or legacy NULL) row even with a real BPM — closes the race", () => {
+    // The capture just landed; the row was enriched from the 30s preview before it. A real
+    // BPM alone must not stop the re-derive from the full song now on file.
+    expect(needsReenrichAfterCapture(174, "preview")).toBe(true);
+    expect(needsReenrichAfterCapture(160, undefined)).toBe(true);
+  });
+
+  test("does NOT re-queue a full-analyzed row with a real BPM (no needless work)", () => {
+    expect(needsReenrichAfterCapture(174, "full")).toBe(false);
+    expect(needsReenrichAfterCapture(87.5, "full")).toBe(false);
   });
 });
 

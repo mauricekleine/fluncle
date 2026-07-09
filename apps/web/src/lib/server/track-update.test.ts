@@ -64,6 +64,22 @@ describe("updateTrack — the visible-field lastmod bump", () => {
     expect(lastUpdateSql).not.toContain("updated_at = ?");
   });
 
+  it("does NOT bump updated_at for a provenance-only write (internal analysis metadata)", async () => {
+    await updateTrack("track-123", {
+      analyzedAt: "2026-07-10T00:00:00.000Z",
+      analyzedFrom: "full",
+      bpmConfidence: 0.92,
+      bpmSource: "audio-file",
+      keyConfidence: 0.81,
+      keySource: "audio-file",
+    });
+
+    expect(lastUpdateSql).toContain("analyzed_from = ?");
+    expect(lastUpdateSql).toContain("bpm_source = ?");
+    expect(lastUpdateSql).toContain("key_confidence = ?");
+    expect(lastUpdateSql).not.toContain("updated_at = ?");
+  });
+
   it("does NOT bump updated_at for an observation_script-only write (internal transcript)", async () => {
     await updateTrack("track-123", { observationScript: "The name made me pause…" });
 

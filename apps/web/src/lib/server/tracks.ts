@@ -24,6 +24,10 @@ export type TrackRow = {
   added_at: string;
   album: string | null;
   album_image_url: string | null;
+  // Which audio class BPM/key were analyzed from ("full" the captured song | "preview" a 30s
+  // preview | null legacy). Internal analysis provenance — the capture sweep's re-derive
+  // predicate reads it; stripped from every public DTO by `toPublicTrackListItem`.
+  analyzed_from: string | null;
   artists_json: string;
   bpm: number | null;
   duration_ms: number;
@@ -80,7 +84,7 @@ type MixtapeFeedRow = {
 
 // Columns exposed to clients. `features_json` is the enrichment spectral summary,
 // surfaced (parsed) as creative fuel for the video agent.
-const TRACK_SELECT = `tracks.track_id, tracks.spotify_url, tracks.title, tracks.album, tracks.album_image_url, tracks.artists_json,
+const TRACK_SELECT = `tracks.track_id, tracks.spotify_url, tracks.title, tracks.album, tracks.album_image_url, tracks.artists_json, tracks.analyzed_from,
   tracks.bpm, tracks.duration_ms, tracks.enrichment_status, tracks.features_json, tracks.in_release_id, tracks.isrc, tracks.key, tracks.label, tracks.log_id, tracks.popularity,
   tracks.preview_url, tracks.release_date, tracks.source_audio_failures, tracks.source_audio_key, tracks.video_url, tracks.video_squared_at, tracks.video_vehicle, tracks.video_grain, tracks.video_register, tracks.video_model, tracks.video_model_reasoning, tracks.note, tracks.added_at,
   tracks.updated_at, tracks.vibe_x, tracks.vibe_y, tracks.added_to_spotify, tracks.posted_to_telegram,
@@ -190,6 +194,14 @@ export function toTrackListItem(row: TrackRow): TrackListItem {
     addedToSpotify: Boolean(row.added_to_spotify),
     album: row.album ?? undefined,
     albumImageUrl: row.album_image_url ?? undefined,
+    // Analysis provenance (RFC bpm-key-accuracy) — the audio class BPM/key were derived
+    // from. Internal capture/enrich state on the admin-authed DTO; `toPublicTrackListItem`
+    // strips it before any public read. `null` legacy rows surface undefined ("assume
+    // preview-grade"). The capture sweep's re-derive predicate reads it.
+    analyzedFrom:
+      row.analyzed_from === "full" || row.analyzed_from === "preview"
+        ? row.analyzed_from
+        : undefined,
     artists: parseArtistsJson(row.artists_json),
     bpm: row.bpm ?? undefined,
     discogsReleaseUrl: row.in_release_id ? discogsReleaseUrl(row.in_release_id) : undefined,
@@ -246,28 +258,38 @@ export function toTrackListItem(row: TrackRow): TrackListItem {
   };
 }
 
+// Internal admin/agent-only fields stripped from every item bound for a PUBLIC surface.
+//   - `sourceAudioKey` — the R2 key of the CAPTURED copyrighted full song (a content hash)
+//     in the PRIVATE `fluncle-source-audio` bucket; it must NEVER world-serve
+//     (audio-source-policy: the full audio is a private analysis artifact; exposing its key
+//     advertises the archive).
+//   - `analyzedFrom` — BPM/key analysis provenance (RFC bpm-key-accuracy); internal
+//     capture/enrich state, never part of a public DTO.
+// The on-box sweeps read both on the ADMIN path (which deliberately does NOT strip).
+const PRIVATE_TRACK_FIELDS = ["analyzedFrom", "sourceAudioKey"] as const;
+
 /**
- * Strip the private full-song capture key from a track/feed item bound for a PUBLIC
- * surface. `sourceAudioKey` is the R2 key of the CAPTURED copyrighted full song in the
- * PRIVATE `fluncle-source-audio` bucket (a content hash) — admin/agent-tier capture
- * state the on-box sweeps read via `?captureQueue`, and it must NEVER world-serve
- * (audio-source-policy: the full audio is a private analysis artifact; exposing its key
- * advertises the archive). Every PUBLIC read runs its items through this — the oRPC
- * public tracks router (`orpc/tracks.ts`) and the in-process MCP tools (`mcp.ts`); the
- * browser WebMCP surface proxies those same public HTTP reads, so it is covered
- * transitively. The ADMIN read path deliberately does NOT strip — the sweeps need the
- * key. A mixtape (or an un-captured finding) has no key, so it passes through untouched.
+ * Strip the internal admin/agent-only fields (`PRIVATE_TRACK_FIELDS`) from a track/feed item
+ * bound for a PUBLIC surface. Every PUBLIC read runs its items through this — the oRPC public
+ * tracks router (`orpc/tracks.ts`) and the in-process MCP tools (`mcp.ts`); the browser WebMCP
+ * surface proxies those same public HTTP reads, so it is covered transitively. The ADMIN read
+ * path deliberately does NOT strip — the sweeps need these fields. A mixtape (or a finding
+ * carrying none of them) passes through untouched.
  */
 export function toPublicTrackListItem<T extends object>(item: T): T {
-  // `object` (not `{ sourceAudioKey?: string }`): the latter is a WEAK type, so a
-  // FeedItem's mixtape arm — which shares no property with it — would be rejected at the
-  // `list_tracks` map. Read the optional key through a cast instead; a mixtape or an
-  // un-captured finding has none, so it returns untouched.
-  if ((item as { sourceAudioKey?: string }).sourceAudioKey === undefined) {
-    return item;
+  // Read each optional field through a cast (not a `{ …?: string }` param type — that WEAK
+  // type would reject a FeedItem's mixtape arm, which shares no property with it, at the
+  // `list_tracks` map). Only clone when a private field is actually present, so a mixtape or
+  // a finding carrying none of them returns the exact same reference as before.
+  let result = item;
+
+  for (const field of PRIVATE_TRACK_FIELDS) {
+    if ((result as Record<string, unknown>)[field] !== undefined) {
+      result = { ...result, [field]: undefined };
+    }
   }
 
-  return { ...item, sourceAudioKey: undefined };
+  return result;
 }
 
 /** Fetch a single track by its Spotify trackId or its Log ID. */
