@@ -273,6 +273,7 @@ const ADMIN_CARVE_OUT_ROUTE_PREFIXES = ["spotify/auth/", "youtube/auth/", "mixcl
 const ADMIN_CARVE_OUT_ROUTES = new Set([
   "logout", // a 302 redirect (expire the grant cookie, bounce to /admin/login), not RPC JSON.
   "tracks.$trackId.preview", // multipart-file body (formData → File).
+  "tracks.$trackId.preview-audio", // a streaming media proxy: streams the archived 30s preview bytes from R2 (private, or the legacy public bucket), not RPC JSON.
   "tracks.$trackId.silent-clip", // a same-origin download proxy: streams the audio-stripped social cut as an attachment, not RPC JSON.
   "tracks.$trackId.source-audio", // a streaming media proxy: streams the captured full song from the private R2 bucket, not RPC JSON.
 ]);
