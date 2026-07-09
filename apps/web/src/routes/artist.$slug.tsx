@@ -18,10 +18,17 @@ import { StoryNotFoundState } from "@/components/stories/stories-states";
 import { TrackArtwork } from "@/components/track-artwork";
 import { type ArtistSocialPlatform } from "@/lib/artist-socials";
 import { siteUrl } from "@/lib/fluncle-links";
+import { formatDateLong } from "@/lib/format";
 import { jsonLdScript } from "@/lib/json-ld";
 import { artistBreadcrumbsJsonLd, musicGroupJsonLd } from "@/lib/log-schema";
 import { artistTitleLine } from "@/lib/log-prose";
 import { spotifyAlbumImageAtSize } from "@/lib/media";
+import {
+  type ArtistNeighbour,
+  type ArtistSignature,
+  getArtistNeighbours,
+  summarizeArtistSignature,
+} from "@/lib/server/artist-dossier";
 import {
   ARTIST_INDEX_MIN_FINDINGS,
   type ArtistSocialLink,
@@ -31,6 +38,15 @@ import {
 } from "@/lib/server/artists";
 import { getFindingsByArtist, type TrackListItem } from "@/lib/server/tracks";
 
+// The dossier bundled onto the page data: the pure signature (first-found, tempo,
+// keys) plus the "same sector" neighbours. Assembled in the loader so the whole
+// page arrives in one SSR payload (no client round-trip), matching the route's
+// existing loader-only shape.
+type ArtistDossier = ArtistSignature & {
+  findingCount: number;
+  neighbours: ArtistNeighbour[];
+};
+
 // The artist page: a dark, cover-led Instagram-style grid of Fluncle's findings
 // for one artist, under a plate masthead (name + a Fluncle-voice frame + the
 // confirmed socials row). Held to DESIGN.md — a Fluncle cover grid, not a bright
@@ -39,6 +55,7 @@ import { getFindingsByArtist, type TrackListItem } from "@/lib/server/tracks";
 
 type ArtistPageData =
   | {
+      dossier: ArtistDossier;
       findings: TrackListItem[];
       indexable: boolean;
       name: string;
@@ -99,13 +116,26 @@ export async function resolveArtistPageData(slug: string): Promise<ArtistPageDat
     return { status: "missing" };
   }
 
-  const [findings, socials, canonicalFindingCount] = await Promise.all([
+  const [findings, socials, canonicalFindingCount, neighbours] = await Promise.all([
     getFindingsByArtist(artist.id, artist.name),
     getPublicArtistSocials(artist.id),
     countArtistFindings(artist.id),
+    getArtistNeighbours(artist.id),
   ]);
 
+  // The signature is pure over the findings already loaded for the grid (no extra
+  // query); the neighbours came from the corpus-wide embedding pass above.
+  const gridFindings = findings.filter((finding) => finding.logId);
+  const signature = summarizeArtistSignature(
+    gridFindings.map((finding) => ({
+      addedAt: finding.addedAt,
+      bpm: finding.bpm,
+      key: finding.key,
+    })),
+  );
+
   return {
+    dossier: { ...signature, findingCount: gridFindings.length, neighbours },
     findings,
     // Thin-content gate: index only at ≥3 coordinate-bearing findings (counted via
     // the canonical `track_artists` join, the same source as the sitemap + index);
@@ -126,17 +156,47 @@ const fetchArtist = createServerFn({ method: "GET" })
   .handler(({ data: { slug } }): Promise<ArtistPageData> => resolveArtistPageData(slug));
 
 // The first-person voice frame — Fluncle framing HIS relationship to the findings,
-// never a fabricated bio (VOICE.md); active voice, said-not-written.
-function artistVoiceFrame(count: number): string {
-  if (count === 0) {
+// never a fabricated bio (VOICE.md); active voice, said-not-written. When he has a
+// first-found date it opens the dossier the logbook way ("first crossed his path
+// on …"); the bare-count line is the pre-dossier fallback.
+function artistSignatureLine(name: string, dossier: ArtistDossier): string {
+  const { findingCount, firstFoundAt } = dossier;
+
+  if (findingCount === 0) {
     return "Nothing logged from this one yet.";
   }
 
-  if (count === 1) {
-    return "I've found just one of their tunes so far. Play it loud.";
+  if (!firstFoundAt) {
+    return findingCount === 1
+      ? "I've found just one of their tunes so far. Play it loud."
+      : `I've found ${findingCount} of their tunes so far. Have a dig.`;
   }
 
-  return `I've found ${count} of their tunes so far. Have a dig.`;
+  const when = formatDateLong(firstFoundAt);
+
+  if (findingCount === 1) {
+    return `I first crossed ${name}'s path on ${when}. Just the one so far. Play it loud.`;
+  }
+
+  return `I first crossed ${name}'s path on ${when}, and I've logged ${findingCount} of their tunes since. Have a dig.`;
+}
+
+// The tempo field's value — the band plus its median, or a single figure when every
+// finding shares a tempo. Plain, logbook-flavoured; "to" (not a dash) keeps the range
+// clear of the sanctioned Artist — Title em dash (VOICE.md).
+function tempoLine(bpm: ArtistDossier["bpm"]): string | undefined {
+  if (!bpm) {
+    return undefined;
+  }
+
+  const min = Math.round(bpm.min);
+  const max = Math.round(bpm.max);
+
+  if (min === max) {
+    return `${min} BPM`;
+  }
+
+  return `${min} to ${max} BPM, mostly ${Math.round(bpm.median)}`;
 }
 
 function artistHead(loaderData: ArtistPageData | undefined) {
@@ -241,8 +301,9 @@ function ArtistPage() {
     return null;
   }
 
-  const { findings, name, socials } = data;
+  const { dossier, findings, name, socials } = data;
   const grid = findings.filter((finding) => finding.logId);
+  const tempo = tempoLine(dossier.bpm);
 
   return (
     <main className="log-plate-stage">
@@ -250,7 +311,7 @@ function ArtistPage() {
         <header className="log-masthead">
           <p className="log-nameplate">Fluncle's Findings</p>
           <h1 className="log-coordinate log-index-title artist-name">{name}</h1>
-          <p className="log-index-intro">{artistVoiceFrame(grid.length)}</p>
+          <p className="log-index-intro">{artistSignatureLine(name, dossier)}</p>
 
           {socials.length > 0 ? (
             <nav aria-label={`${name} elsewhere`} className="artist-socials">
@@ -260,6 +321,42 @@ function ArtistPage() {
             </nav>
           ) : undefined}
         </header>
+
+        {tempo || dossier.keys.length > 0 ? (
+          <dl className="log-fields artist-signature">
+            {tempo ? (
+              <div className="log-field">
+                <dt>Tempo</dt>
+                <dd>{tempo}</dd>
+              </div>
+            ) : undefined}
+            {dossier.keys.length > 0 ? (
+              <div className="log-field">
+                <dt>{dossier.keys.length === 1 ? "Key" : "Keys"}</dt>
+                <dd>{dossier.keys.join(", ")}</dd>
+              </div>
+            ) : undefined}
+          </dl>
+        ) : undefined}
+
+        {dossier.neighbours.length > 0 ? (
+          <nav aria-label="Artists in the same sector" className="artist-sector">
+            <p className="artist-sector-label">Same sector</p>
+            <ul className="artist-sector-list">
+              {dossier.neighbours.map((neighbour) => (
+                <li key={neighbour.slug}>
+                  <Link
+                    className="artist-sector-link"
+                    params={{ slug: neighbour.slug }}
+                    to="/artist/$slug"
+                  >
+                    {neighbour.name}
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </nav>
+        ) : undefined}
 
         {grid.length === 0 ? (
           <p className="log-index-empty empty-scanlines">Quiet sector.</p>

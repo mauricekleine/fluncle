@@ -1693,6 +1693,54 @@ body::before {
   color: var(--starlight-cream);
 }
 
+/* The dossier's telemetry — the tempo band + key spread, read as the /log
+   logbook fields (quiet dl/dt), sitting under the masthead. */
+.artist-signature {
+  margin-top: 1.2rem;
+}
+
+/* The "same sector" row — links to the sonically-nearest artists (the Fluncle-
+   native similar-artists map). Quiet chips, brightening on hover/focus, keyboard
+   reachable like every other link on the page. */
+.artist-sector {
+  margin-top: 1.2rem;
+}
+
+.artist-sector-label {
+  color: var(--muted-foreground);
+  font-size: 0.76rem;
+  font-weight: 800;
+  margin: 0 0 0.5rem;
+}
+
+.artist-sector-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.artist-sector-link {
+  border: 1px solid var(--border);
+  border-radius: var(--rounded-md);
+  color: var(--muted-foreground);
+  display: inline-flex;
+  font-size: 0.78rem;
+  padding: 0.32rem 0.6rem;
+  text-decoration: none;
+  transition:
+    color 150ms ease-out,
+    border-color 150ms ease-out;
+}
+
+.artist-sector-link:hover,
+.artist-sector-link:focus-visible {
+  border-color: color-mix(in oklch, var(--primary) 42%, transparent);
+  color: var(--starlight-cream);
+}
+
 /* The Instagram-style cover grid of findings (artist page + /artists index):
    square covers, tight gutters, dark and cover-led — a Fluncle grid, not a
    streaming clone. Reuses the .track-artwork treatment on each cover. */
