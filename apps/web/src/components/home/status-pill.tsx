@@ -6,11 +6,12 @@ import { cn } from "@/lib/utils";
 // /api/status once on mount and reflects the live health of Fluncle's services,
 // linking to the full /status dashboard. It is a quiet, best-effort signal — the
 // fetch is fire-and-forget and a failure NEVER surfaces an error, it just rests in
-// a neutral "checking systems" state. ok is a muted "operational" green — a
-// functional signal, deliberately NOT the brand gold: on the home plate the gold
-// is the One Sun (the Galaxy CTA + cover), so a stray gold dot would compete.
-// degraded uses Eclipse Glow amber and down Re-entry Red, mirroring /status; the
-// ping animation is motion-safe so reduce-motion gets a calm dot.
+// a neutral "checking systems" state. ok is a small Eclipse-Gold dot that gently
+// pings — the living heartbeat, matching /status's own "ok" indicator (the
+// Nostalgic Cosmos has no green; a 6px pinging dot reads as a living signal, not
+// wallpaper, well inside the One Sun budget). degraded uses Eclipse Glow amber and
+// down Re-entry Red, mirroring /status; the ping animation is motion-safe so
+// reduce-motion gets a calm dot.
 
 // The /api/status JSON shape (the public, machine-readable sibling of /status).
 // We only read each service's `status`; everything else on the payload is ignored.
@@ -62,9 +63,9 @@ export function pillLabel(state: PillState): string {
   return `${state.count} ${noun} ${verb}`;
 }
 
-// The dot's colour per tone: a muted "operational" green for ok (a functional
-// signal kept off the brand gold so the One Sun stays the Galaxy CTA's), Eclipse
-// Glow for degraded, Re-entry Red for down, a muted dot while loading.
+// The dot's colour per tone: a small Eclipse-Gold dot for ok (the living
+// heartbeat, as on /status — the Nostalgic Cosmos has no green), Eclipse Glow for
+// degraded, Re-entry Red for down, a muted dot while loading.
 function dotClass(tone: PillState["tone"]): string {
   if (tone === "down") {
     return "bg-destructive";
@@ -75,7 +76,7 @@ function dotClass(tone: PillState["tone"]): string {
   }
 
   if (tone === "ok") {
-    return "bg-[oklch(0.71_0.15_145)]";
+    return "bg-primary";
   }
 
   return "bg-muted-foreground/50";
