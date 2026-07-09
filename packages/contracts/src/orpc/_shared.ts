@@ -27,6 +27,12 @@ export const TrackListItemSchema = z
     addedToSpotify: z.boolean(),
     album: z.string().optional(),
     albumImageUrl: z.string().optional(),
+    // Which audio class BPM/key were analyzed from — "full" (the captured full song) or
+    // "preview" (a 30s preview); RFC bpm-key-accuracy. Internal capture/enrich provenance
+    // on the admin-authed DTO — `toPublicTrackListItem` strips it before any public read, so
+    // it is present only on admin reads (the capture sweep + the `requeue-analysis` command
+    // read it to find preview-grade findings). Absent on legacy rows (pre-provenance).
+    analyzedFrom: z.enum(["preview", "full"]).optional(),
     // The artist's own YouTube channel id(s) (`UC…`), gathered from the confirmed
     // `artist_socials` YouTube links of every artist on the finding. Populated ONLY on
     // the admin capture-queue read (`captureQueue=true`) — the full-song capture sweep

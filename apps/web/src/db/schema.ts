@@ -16,6 +16,21 @@ export const tracks = sqliteTable("tracks", {
   addedToSpotifyAt: text("added_to_spotify_at"),
   album: text("album"),
   albumImageUrl: text("album_image_url"),
+  // BPM/key ANALYSIS PROVENANCE (RFC bpm-key-accuracy). The enrichment analyzer already
+  // emits where each value came from + how confident it was; these columns persist that so a
+  // preview-grade estimate is distinguishable from a full-song one, and the capture→enrich
+  // race can be closed (a finding enriched from a 30s preview BEFORE its full song was
+  // captured must be re-derived once the capture lands). All INTERNAL analysis metadata:
+  // like `features_json`/`embedding_json` they are never in a PUBLIC DTO (stripped by
+  // `toPublicTrackListItem`), and writing them never bumps `updated_at` (they move no public
+  // surface — NOT in `track-update.ts` VISIBLE_FIELDS).
+  //   - `analyzedAt`   — ISO timestamp of the analysis write.
+  //   - `analyzedFrom` — which audio class the analysis ran on: "full" (the captured full
+  //     song) or "preview" (a 30s preview). NULL = a legacy row written before this column;
+  //     semantically "unknown, assume preview-grade" (so the capture re-derive treats NULL
+  //     like "preview" — anything that is not confirmed "full" is re-enrichable).
+  analyzedAt: text("analyzed_at"),
+  analyzedFrom: text("analyzed_from", { enum: ["preview", "full"] }),
   artistsJson: text("artists_json").notNull(),
   // Per-finding backfill reliability state for the two Worker-paced catalogue
   // sweeps (Discogs release-id resolve, Last.fm love), one column-set per source.
@@ -53,6 +68,12 @@ export const tracks = sqliteTable("tracks", {
   backfillNoteDoneAt: text("backfill_note_done_at"),
   backfillNoteFailures: integer("backfill_note_failures").notNull().default(0),
   bpm: real("bpm"),
+  // The analyzer's confidence in `bpm` (0..1) and where it came from (analysis
+  // provenance, RFC bpm-key-accuracy). `bpmSource` is the analyzer's `bpmSource`
+  // verbatim ("audio-file" | "deezer:search" | "itunes" | "acousticbrainz" | …). Both
+  // INTERNAL (never in a public DTO, never bump `updated_at`). See `analyzedFrom` above.
+  bpmConfidence: real("bpm_confidence"),
+  bpmSource: text("bpm_source"),
   // The full-song capture side-channel state (RFC full-audio). Models
   // `enrichment_status` exactly — `notNull().default("pending")` is load-bearing:
   // `publishTrack`'s insert never names this column, so the DDL default is what
@@ -104,6 +125,13 @@ export const tracks = sqliteTable("tracks", {
   inReleaseId: integer("in_release_id"),
   isrc: text("isrc"),
   key: text("key"),
+  // The analyzer's confidence in `key` (0..1) and its source (analysis provenance, RFC
+  // bpm-key-accuracy). `keySource` is the analyzer's `keySource` verbatim. `key` is NULL
+  // when confidence fell below the analyzer's floor, so `keyConfidence` records that the
+  // gate ran. Both INTERNAL (never in a public DTO, never bump `updated_at`). See
+  // `analyzedFrom` above.
+  keyConfidence: real("key_confidence"),
+  keySource: text("key_source"),
   label: text("label"),
   logId: text("log_id").unique(),
   note: text("note"),

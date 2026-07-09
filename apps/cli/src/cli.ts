@@ -33,6 +33,14 @@ type AdminQueueOptions = AdminListOptions & {
   hasObservation?: boolean;
 };
 
+// `admin tracks requeue-analysis` — the archive-wide BPM/key provenance repair. Dry-run
+// unless `--apply`; `--limit` caps the archive walk (absent ⇒ the whole archive).
+type AdminRequeueAnalysisOptions = {
+  apply?: boolean;
+  json: boolean;
+  limit?: string;
+};
+
 // `admin tracks list` filters. `--no-key` is Commander's negation of a `key`
 // boolean (default true), so `key === false` means the flag was passed; `--has-key
 // <bool>` is the explicit tri-state form. Absent both ⇒ no key filter (list all).
@@ -91,12 +99,18 @@ type VersionOptions = {
 };
 
 type TrackUpdateOptions = {
+  analyzedAt?: string;
+  analyzedFrom?: string;
   bpm?: string;
+  bpmConfidence?: string;
+  bpmSource?: string;
   embedding?: string;
   embeddingFile?: string;
   features?: string;
   json: boolean;
   key?: string;
+  keyConfidence?: string;
+  keySource?: string;
   note?: string;
   status?: string;
   videoUrl?: string;
@@ -629,6 +643,24 @@ function addAdminCommands(program: Command): void {
       await runAdminCaptureQueue(options, captureQueueCommand);
     });
 
+  // `requeue_analysis` → `admin tracks requeue-analysis` (Convention B; the `requeue` verb is
+  // shared with `requeue_video`). The archive-wide analysis-provenance repair (RFC
+  // bpm-key-accuracy): re-queue every finding whose BPM/key are preview-grade (`analyzedFrom
+  // != full` — NULL legacy rows included) so the on-box `fluncle-enrich` sweep re-derives
+  // them. PURE CLI orchestration over the existing `list_tracks_admin` + `update_track` ops.
+  // DRY-RUN by default; `--apply` flips the statuses. Rows with no captured full song are
+  // reported separately (they re-derive from a preview). Operator-authenticated.
+  adminTracks
+    .command("requeue-analysis")
+    .description("Re-queue findings whose BPM/key are preview-grade (dry-run; --apply to flip)")
+    .option("--apply", "Actually flip statuses (default is a dry-run preview)", false)
+    .option("--limit <limit>", "Cap the archive walk (default: the whole archive)")
+    .option("--json", "Print JSON", false)
+    .action(async (options: AdminRequeueAnalysisOptions) => {
+      const { requeueAnalysisCommand } = await import("./commands/admin-tracks");
+      await runAdminRequeueAnalysis(options, requeueAnalysisCommand);
+    });
+
   adminTracks
     .command("vehicles")
     .description("Recent video vehicles, newest first (the style ledger for diversity)")
@@ -660,12 +692,18 @@ function addAdminCommands(program: Command): void {
     .command("update")
     .description("Certify a track into the archive")
     .argument("[trackId]")
+    .option("--analyzed-at <iso>", "Analysis-write ISO timestamp (BPM/key provenance)")
+    .option("--analyzed-from <class>", "Audio class BPM/key were analyzed from: full or preview")
     .option("--bpm <number>", "Track BPM")
+    .option("--bpm-confidence <number>", "Analyzer confidence in the BPM (0..1)")
+    .option("--bpm-source <source>", "Where the BPM came from (analyzer bpmSource)")
     .option("--embedding <json>", "MuQ audio embedding as a JSON array of 1024 floats")
     .option("--embedding-file <file>", "Read the MuQ embedding JSON array from a file")
     .option("--features <json>", "Audio feature JSON")
     .option("--json", "Print JSON", false)
     .option("--key <key>", "Musical key")
+    .option("--key-confidence <number>", "Analyzer confidence in the key (0..1)")
+    .option("--key-source <source>", "Where the key came from (analyzer keySource)")
     .option("--note <text>", "Operator note")
     .option("--status <status>", "Enrichment status")
     .option("--video-url <url>", "Rendered video URL")
@@ -2384,6 +2422,31 @@ async function runTrackUpdate(
     throw new Error(`Invalid --bpm: ${options.bpm}`);
   }
 
+  // BPM/key analysis provenance (RFC bpm-key-accuracy). The confidences parse to numbers
+  // (fail fast on garbage); analyzedFrom is validated to the two-value enum so a typo can't
+  // silently poison the capture re-derive predicate; the sources + analyzedAt pass through.
+  const bpmConfidence =
+    options.bpmConfidence === undefined ? undefined : Number(options.bpmConfidence);
+
+  if (bpmConfidence !== undefined && !Number.isFinite(bpmConfidence)) {
+    throw new Error(`Invalid --bpm-confidence: ${options.bpmConfidence}`);
+  }
+
+  const keyConfidence =
+    options.keyConfidence === undefined ? undefined : Number(options.keyConfidence);
+
+  if (keyConfidence !== undefined && !Number.isFinite(keyConfidence)) {
+    throw new Error(`Invalid --key-confidence: ${options.keyConfidence}`);
+  }
+
+  if (
+    options.analyzedFrom !== undefined &&
+    options.analyzedFrom !== "full" &&
+    options.analyzedFrom !== "preview"
+  ) {
+    throw new Error(`Invalid --analyzed-from: ${options.analyzedFrom} (expected full or preview)`);
+  }
+
   // The MuQ embedding: read from a file (--embedding-file, the box orchestrator's
   // path — a 1024-float array is large) or inline (--embedding), parse to a number
   // array, and let the server validate the 1024-d shape. An empty string clears it.
@@ -2393,10 +2456,16 @@ async function runTrackUpdate(
   const embedding = parseEmbeddingArg(embeddingRaw);
 
   const result = await trackUpdateCommand(trackId, {
+    analyzedAt: options.analyzedAt,
+    analyzedFrom: options.analyzedFrom,
     bpm,
+    bpmConfidence,
+    bpmSource: options.bpmSource,
     embedding,
     features: options.features,
     key: options.key,
+    keyConfidence,
+    keySource: options.keySource,
     note: options.note,
     status: options.status,
     videoUrl: options.videoUrl,
@@ -3198,6 +3267,95 @@ async function runAdminCaptureQueue(
   console.log(trackRows(tracks).join("\n"));
 }
 
+// The whole-archive walk cap. Absent `--limit` drains the entire archive (the repair is
+// meant to sweep everything); an explicit `--limit` (any positive integer) bounds a
+// pilot/test pass. Distinct from `parseListLimit`'s 1..100 worklist clamp — this walks the
+// cursor chain to the end.
+const REQUEUE_ANALYSIS_ARCHIVE_CAP = 1_000_000;
+
+function parseRequeueAnalysisLimit(value: string | undefined): number {
+  if (value === undefined) {
+    return REQUEUE_ANALYSIS_ARCHIVE_CAP;
+  }
+
+  const limit = Number.parseInt(value, 10);
+
+  if (!Number.isInteger(limit) || limit < 1) {
+    throw new Error("Limit must be a positive integer");
+  }
+
+  return limit;
+}
+
+async function runAdminRequeueAnalysis(
+  options: AdminRequeueAnalysisOptions,
+  requeueAnalysisCommand: typeof import("./commands/admin-tracks").requeueAnalysisCommand,
+): Promise<void> {
+  const max = parseRequeueAnalysisLimit(options.limit);
+  const result = await requeueAnalysisCommand({ apply: options.apply === true, max });
+
+  if (options.json) {
+    printJson({ ok: true, ...result });
+    return;
+  }
+
+  const { coordinate } = await import("./format");
+  const staleCount = result.withSourceAudio.length + result.withoutSourceAudio.length;
+
+  if (staleCount === 0) {
+    console.log("Nothing to re-queue. Every finding's BPM/key was analyzed from full audio.");
+    return;
+  }
+
+  const describe = (row: import("./commands/admin-tracks").RequeueAnalysisRow): string => {
+    const coord = coordinate({ logId: row.logId });
+    const bpm = row.bpm ? `${row.bpm} bpm` : "no bpm";
+    const key = row.key ?? "no key";
+    const from = row.analyzedFrom ?? "legacy/null";
+    return `  ${coord}  ${row.trackId}  ${row.title} — ${bpm}, ${key} (from ${from})`;
+  };
+
+  console.log(
+    `${staleCount} finding${staleCount === 1 ? "" : "s"} with preview-grade BPM/key (scanned ${result.scanned}):`,
+  );
+
+  if (result.withSourceAudio.length > 0) {
+    console.log(
+      `\nCaptured full song on file — re-derives from full audio (${result.withSourceAudio.length}):`,
+    );
+    console.log(result.withSourceAudio.map(describe).join("\n"));
+  }
+
+  if (result.withoutSourceAudio.length > 0) {
+    console.log(
+      `\nNo captured full song — re-derives from the 30s preview, still an upgrade with the fixed estimator (${result.withoutSourceAudio.length}):`,
+    );
+    console.log(result.withoutSourceAudio.map(describe).join("\n"));
+  }
+
+  // The gate: the dry-run diff review. Keys previously written by the operator's Rekordbox
+  // key-backfill carry NO legacy provenance (they predate these columns → analyzedFrom NULL),
+  // so they read as preview-grade here and a re-enrich MAY overwrite them. Eyeball the list.
+  console.log(
+    "\nCaveat: keys backfilled from Rekordbox are indistinguishable from DSP keys (no legacy" +
+      " provenance) and a re-enrichment may overwrite them. This dry-run diff is the gate —" +
+      " review it before applying.",
+  );
+
+  if (!result.applied) {
+    console.log(`\nDry-run — nothing flipped. Re-run with --apply to re-queue all ${staleCount}.`);
+    return;
+  }
+
+  console.log(`\nApplied — re-queued ${result.requeued.length} of ${staleCount}.`);
+
+  if (result.failed.length > 0) {
+    console.log(`${result.failed.length} failed:`);
+    console.log(result.failed.map((entry) => `  ${entry.trackId}: ${entry.error}`).join("\n"));
+    process.exitCode = 1;
+  }
+}
+
 async function runAdminVehicles(
   options: AdminListOptions,
   vehiclesCommand: typeof import("./commands/admin-tracks").vehiclesCommand,
@@ -3517,7 +3675,11 @@ function normalizeCommanderError(error: unknown): unknown {
 }
 
 const stringOptions = new Set([
+  "--analyzed-at",
+  "--analyzed-from",
   "--bpm",
+  "--bpm-confidence",
+  "--bpm-source",
   "--composition",
   "--cover",
   "--dir",
@@ -3532,6 +3694,8 @@ const stringOptions = new Set([
   "--from",
   "--intent",
   "--key",
+  "--key-confidence",
+  "--key-source",
   "--limit",
   "--metrics",
   "--mime",

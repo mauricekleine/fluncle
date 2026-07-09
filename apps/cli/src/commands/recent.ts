@@ -22,6 +22,10 @@ export function mapTrack(track: RecentTrack | RecentMixtape): RecentItem {
     addedToSpotify: track.addedToSpotify,
     album: track.album,
     albumImageUrl: track.albumImageUrl,
+    // Analysis provenance (RFC bpm-key-accuracy). Stripped from every PUBLIC read by
+    // `toPublicTrackListItem`, so on `/api/tracks` it arrives undefined; on the ADMIN path
+    // (`/api/admin/tracks`, e.g. the `requeue-analysis` sweep) it carries the real value.
+    analyzedFrom: track.analyzedFrom,
     artists: track.artists,
     bpm: track.bpm,
     durationMs: track.durationMs,

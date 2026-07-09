@@ -29,21 +29,33 @@ export async function trackGetAdminCommand(idOrLogId: string): Promise<TrackGetA
 }
 
 export type TrackUpdateOptions = {
+  analyzedAt?: string;
+  analyzedFrom?: string;
   bpm?: number;
+  bpmConfidence?: number;
+  bpmSource?: string;
   embedding?: number[];
   features?: string;
   key?: string;
+  keyConfidence?: number;
+  keySource?: string;
   note?: string;
   status?: string;
   videoUrl?: string;
 };
 
 type TrackUpdateBody = {
+  analyzedAt?: string;
+  analyzedFrom?: string;
   bpm?: number;
+  bpmConfidence?: number;
+  bpmSource?: string;
   embedding?: number[];
   enrichmentStatus?: string;
   features?: string;
   key?: string;
+  keyConfidence?: number;
+  keySource?: string;
   note?: string;
   videoUrl?: string;
 };
@@ -479,6 +491,26 @@ export async function trackUpdateCommand(
   }
   if (options.note !== undefined) {
     body.note = options.note;
+  }
+  // BPM/key analysis provenance (RFC bpm-key-accuracy) — internal analysis metadata written
+  // alongside bpm/key by the enrich sweep, kept out of VISIBLE_FIELDS server-side.
+  if (options.bpmSource !== undefined) {
+    body.bpmSource = options.bpmSource;
+  }
+  if (options.bpmConfidence !== undefined) {
+    body.bpmConfidence = options.bpmConfidence;
+  }
+  if (options.keySource !== undefined) {
+    body.keySource = options.keySource;
+  }
+  if (options.keyConfidence !== undefined) {
+    body.keyConfidence = options.keyConfidence;
+  }
+  if (options.analyzedFrom !== undefined) {
+    body.analyzedFrom = options.analyzedFrom;
+  }
+  if (options.analyzedAt !== undefined) {
+    body.analyzedAt = options.analyzedAt;
   }
 
   return adminApiPatch<TrackUpdateResponse>(

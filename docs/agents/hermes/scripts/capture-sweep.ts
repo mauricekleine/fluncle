@@ -18,7 +18,7 @@
 // MIRRORS apps/web/src/lib/server/aws-sigv4.ts (unit-tested there via aws-sigv4.test.ts)
 // exactly like backup-sweep.ts — keep them in step. The pure helpers below
 // (buildStickyProxyUrl / durationWithinTolerance / buildSourceAudioKey / pickCandidate /
-// needsBpmRederive) are exported + unit-tested in capture-sweep.test.ts; `main()` is
+// needsReenrichAfterCapture) are exported + unit-tested in capture-sweep.test.ts; `main()` is
 // guarded behind `import.meta.main` so importing this module for the tests is side-effect
 // free (it does not spawn yt-dlp or touch R2).
 //
@@ -98,6 +98,12 @@ const log = (message: string) => console.error(`[capture-sweep] ${message}`);
 
 /** A finding as the capture queue (`GET /api/admin/tracks?captureQueue=true`) returns it. */
 export type CaptureFinding = {
+  // Which audio class BPM/key were last analyzed from ("full" the captured song | "preview"
+  // a 30s preview). Absent = a legacy row analyzed before the provenance column (treated as
+  // preview-grade). The admin capture-queue DTO surfaces it (RFC bpm-key-accuracy); the
+  // re-enrich predicate reads it to close the capture→enrich race — a finding whose enrich
+  // tick fired BEFORE its capture landed was analyzed from the preview, and this re-queues it.
+  analyzedFrom?: "preview" | "full";
   artists?: string[];
   // The artist's own YouTube channel id(s), once `artist_socials` carries them (populated by
   // the artist-links agent). When a candidate is on one of these it is the artist's OWN
@@ -364,16 +370,27 @@ export function pickCandidate(
   return rankCandidates(candidates, context, options)[0] ?? null;
 }
 
-/**
- * Whether a capture should ALSO re-queue enrichment (clobber-safe): only when the BPM is
- * genuinely missing (null/absent/non-finite/≤0). A REAL bpm is never touched (the cardinal
- * "never overwrite a real value" rail). NOTE: the legacy fake-160 sentinel is deliberately
- * NOT treated as fake here — a real 160 is indistinguishable and common in DnB, and the
- * current preview-enrich path would overwrite it; the `fluncle-bpm-backfill` skill still
- * repairs the rare legacy fake. (Unit 2's full-audio enrichment is itself clobber-safe.)
- */
-export function needsBpmRederive(bpm: number | null | undefined): boolean {
+/** Whether a stored BPM is genuinely missing (null/absent/non-finite/≤0). */
+export function bpmIsMissing(bpm: number | null | undefined): boolean {
   return bpm == null || !Number.isFinite(bpm) || bpm <= 0;
+}
+
+/**
+ * Whether a just-landed capture should ALSO re-queue enrichment (clobber-safe): when the
+ * BPM is genuinely missing, OR the row was NOT analyzed from FULL audio (`analyzedFrom !==
+ * "full"`, which includes a NULL legacy row — treated as preview-grade). This closes the
+ * capture→enrich RACE: capture and enrichment are independent self-healing queues, so a
+ * finding whose enrich tick fired BEFORE its capture landed was analyzed from the 30s
+ * preview, permanently — re-queueing it lets the next enrich tick re-derive BPM/key from the
+ * full song now on file. Enrichment is itself clobber-safe (it re-writes, it doesn't corrupt
+ * a good value), and a preview-grade row re-analyzed from full audio is a strict upgrade.
+ * A REAL bpm on an already-full-analyzed row is left untouched (the predicate is false).
+ */
+export function needsReenrichAfterCapture(
+  bpm: number | null | undefined,
+  analyzedFrom: "preview" | "full" | undefined,
+): boolean {
+  return bpmIsMissing(bpm) || analyzedFrom !== "full";
 }
 
 /** Map a file extension to an audio content-type for the R2 PUT. */
@@ -753,13 +770,14 @@ async function captureFinding(finding: CaptureFinding): Promise<FindingOutcome> 
     await r2Put(key, bytes, contentTypeForExt(downloaded.ext));
 
     // Write back: the key + done + the captured stamp. Clobber-safe enrichment trigger —
-    // only when the BPM is genuinely missing, NEVER over a real value (see needsBpmRederive).
+    // re-queue when the BPM is missing OR the row was analyzed from a preview (not full
+    // audio), closing the capture→enrich race (see needsReenrichAfterCapture).
     const update: Record<string, unknown> = {
       captureStatus: "done",
       sourceAudioCapturedAt: new Date().toISOString(),
       sourceAudioKey: key,
     };
-    if (needsBpmRederive(finding.bpm)) {
+    if (needsReenrichAfterCapture(finding.bpm, finding.analyzedFrom)) {
       update.enrichmentStatus = "pending";
     }
     await patchTrack(trackId, update);

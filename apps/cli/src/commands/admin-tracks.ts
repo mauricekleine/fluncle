@@ -1,5 +1,6 @@
 import { adminApiGet, adminApiPost } from "../api";
 import { mapTrack, type RecentTrack, type TracksResponse } from "./recent";
+import { trackUpdateCommand } from "./track";
 
 // Mirrors the /api/admin/tracks page cap. The order + hasVideo + hasContext +
 // hasObservation + status filters are applied in SQL by listTracks; the CLI just
@@ -178,6 +179,98 @@ export async function embedQueueCommand(limit: number): Promise<RecentTrack[]> {
 // the operator/inspection surface. See docs/agents/hermes/scripts/capture-sweep.*.
 export async function captureQueueCommand(limit: number): Promise<RecentTrack[]> {
   return fetchAdminTracks({ captureQueue: true, max: limit, order: "desc" });
+}
+
+// One stale finding in the analysis-provenance requeue (RFC bpm-key-accuracy): its
+// coordinate, its stored BPM/key, the audio class it was last analyzed from, and whether a
+// captured full song is on file (so a re-derive would upgrade from full audio, not a preview).
+export type RequeueAnalysisRow = {
+  analyzedFrom?: string;
+  bpm?: number;
+  hasSourceAudio: boolean;
+  key?: string;
+  logId?: string;
+  title: string;
+  trackId: string;
+};
+
+export type RequeueAnalysisResult = {
+  // Whether statuses were actually flipped (`--apply`) or this was a dry-run preview.
+  applied: boolean;
+  // Findings whose flip to `enrichment_status = pending` failed (only populated with --apply).
+  failed: Array<{ error: string; trackId: string }>;
+  // trackIds actually re-queued (empty on a dry-run).
+  requeued: string[];
+  // The archive walk cap that bounded this pass (so the caller can warn if it was hit).
+  scanned: number;
+  // Stale findings WITH a captured full song — a re-enrich re-derives from full audio (a
+  // strict upgrade over the preview-grade value).
+  withSourceAudio: RequeueAnalysisRow[];
+  // Stale findings WITHOUT a captured full song — a re-enrich re-derives from the 30s preview
+  // (still an upgrade with the fixed estimator, but called out; capture may land later and
+  // re-queue them again for the full-audio pass).
+  withoutSourceAudio: RequeueAnalysisRow[];
+};
+
+// The archive-wide analysis-provenance repair (RFC bpm-key-accuracy): find every finding
+// whose BPM/key are preview-grade (`analyzedFrom != "full"` — NULL legacy rows included) and
+// re-queue it (`enrichment_status = pending`) so the on-box `fluncle-enrich` sweep re-derives
+// it deterministically. PURE CLI orchestration over the existing admin ops — it walks the
+// `admin tracks list` cursor chain (which surfaces `analyzedFrom`/`sourceAudioKey`) and flips
+// each stale row via the existing `update_track` op; it adds no new API surface.
+//
+// DRY-RUN by default (`apply: false`): it only reports the would-be-requeued set. `apply:
+// true` flips the statuses. Findings without a captured full song are reported SEPARATELY —
+// re-queueing them re-derives from a preview (an upgrade, but not the full-audio pass) — never
+// silently skipped.
+export async function requeueAnalysisCommand(options: {
+  apply: boolean;
+  max: number;
+}): Promise<RequeueAnalysisResult> {
+  const findings = await fetchAdminTracks({ max: options.max, order: "asc" });
+
+  // Stale = not confirmed full-audio: NULL/undefined legacy rows ("assume preview-grade") and
+  // explicit "preview" rows. A finding already analyzed from full audio is left alone.
+  const stale = findings.filter((track) => track.analyzedFrom !== "full");
+
+  const rows: RequeueAnalysisRow[] = stale.map((track) => ({
+    analyzedFrom: track.analyzedFrom,
+    bpm: track.bpm,
+    hasSourceAudio: Boolean(track.sourceAudioKey),
+    key: track.key,
+    logId: track.logId,
+    title: track.title,
+    trackId: track.trackId,
+  }));
+
+  const withSourceAudio = rows.filter((row) => row.hasSourceAudio);
+  const withoutSourceAudio = rows.filter((row) => !row.hasSourceAudio);
+
+  const requeued: string[] = [];
+  const failed: Array<{ error: string; trackId: string }> = [];
+
+  if (options.apply) {
+    for (const row of rows) {
+      try {
+        await trackUpdateCommand(row.trackId, { status: "pending" });
+        requeued.push(row.trackId);
+      } catch (error) {
+        failed.push({
+          error: error instanceof Error ? error.message : String(error),
+          trackId: row.trackId,
+        });
+      }
+    }
+  }
+
+  return {
+    applied: options.apply,
+    failed,
+    requeued,
+    scanned: findings.length,
+    withSourceAudio,
+    withoutSourceAudio,
+  };
 }
 
 // The CONTEXT queue: findings whose factual field notes haven't been gathered yet

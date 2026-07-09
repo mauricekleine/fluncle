@@ -16,7 +16,21 @@ import { resolveLogId } from "./log-id";
 import { ApiError } from "./spotify";
 
 export type TrackUpdate = {
+  /**
+   * BPM/key ANALYSIS PROVENANCE (RFC bpm-key-accuracy) — machine-measured analysis
+   * metadata the AGENT tier may write (like `features`/`embedding`). All INTERNAL, so
+   * NONE is in VISIBLE_FIELDS: writing them moves no public surface and must not bump
+   * updated_at / the sitemap lastmod. `analyzedFrom` = which audio class the analysis ran
+   * on ("full" the captured song | "preview" a 30s preview); it is the field the capture
+   * sweep's re-derive predicate reads. `analyzedAt` is the analysis-write ISO stamp;
+   * `bpmSource`/`keySource` the analyzer's source strings; `bpmConfidence`/`keyConfidence`
+   * its 0..1 confidences. See schema.ts.
+   */
+  analyzedAt?: string;
+  analyzedFrom?: "preview" | "full";
   bpm?: number;
+  bpmConfidence?: number;
+  bpmSource?: string;
   /**
    * The full-song capture side-channel state (RFC full-audio, the `fluncle-capture`
    * cron). All five are machine-measured analysis fields the AGENT tier may write
@@ -55,6 +69,8 @@ export type TrackUpdate = {
   /** One-time backfill into a null isrc slot; rejected when one is already set. */
   isrc?: string;
   key?: string;
+  keyConfidence?: number;
+  keySource?: string;
   /**
    * One-time backfill into a null log_id slot: "auto" derives the coordinate
    * from the found date + isrc (Spotify id fallback), or pass an explicit
@@ -179,6 +195,39 @@ export async function updateTrack(
   if (update.key !== undefined) {
     sets.push("key = ?");
     args.push(update.key);
+  }
+
+  // BPM/key analysis provenance (RFC bpm-key-accuracy). All internal analysis metadata —
+  // NONE is in VISIBLE_FIELDS, so a provenance-only write bumps no public lastmod (mirrors
+  // features/embedding). `analyzedFrom` is the field the capture re-derive predicate reads.
+  if (update.bpmSource !== undefined) {
+    sets.push("bpm_source = ?");
+    args.push(update.bpmSource);
+  }
+
+  if (update.bpmConfidence !== undefined) {
+    sets.push("bpm_confidence = ?");
+    args.push(update.bpmConfidence);
+  }
+
+  if (update.keySource !== undefined) {
+    sets.push("key_source = ?");
+    args.push(update.keySource);
+  }
+
+  if (update.keyConfidence !== undefined) {
+    sets.push("key_confidence = ?");
+    args.push(update.keyConfidence);
+  }
+
+  if (update.analyzedFrom !== undefined) {
+    sets.push("analyzed_from = ?");
+    args.push(update.analyzedFrom);
+  }
+
+  if (update.analyzedAt !== undefined) {
+    sets.push("analyzed_at = ?");
+    args.push(update.analyzedAt);
   }
 
   if (update.videoUrl !== undefined) {
