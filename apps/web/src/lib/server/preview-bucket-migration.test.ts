@@ -44,6 +44,11 @@ function fakeBucket() {
     has(key: string): boolean {
       return store.has(key);
     },
+    async head(key: string) {
+      const entry = store.get(key);
+
+      return entry ? { size: entry.body.byteLength } : null;
+    },
     keys(): string[] {
       return [...store.keys()];
     },
@@ -523,6 +528,87 @@ describe("migratePreviewArchive — delete mode (prefix sweep)", () => {
     expect(second.deletedCount).toBe(1);
     expect(second.nextCursor).toBeNull();
     expect(second.remaining).toBe(0);
+  });
+
+  it("probes private-copy PRESENCE concurrently via head, never a body-reading get", async () => {
+    // Two migrated findings' orphans under the prefix; both have a private copy.
+    await putPublicObject(publicBucket, "cc1.1A", "a".repeat(64));
+    await putPublicObject(publicBucket, "cc2.2B", "b".repeat(64));
+
+    const calls: string[] = [];
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const present = new Set(["cc1.1A/preview.mp3", "cc2.2B/preview.mp3"]);
+
+    // A spy private bucket: `head` records its concurrent in-flight count (it yields a
+    // microtask so overlapping probes are observable); `get` records that it was
+    // called at all — the presence check must NEVER reach for the bytes.
+    const spyPrivate = {
+      get: (_key: string) => {
+        calls.push("get");
+
+        return Promise.resolve(null);
+      },
+      async head(key: string) {
+        calls.push("head");
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        inFlight -= 1;
+
+        return present.has(key) ? { size: 1 } : null;
+      },
+      put: (_key: string, _value: ArrayBuffer) => Promise.resolve(),
+    };
+
+    const result = await migratePreviewArchive({
+      db,
+      dryRun: false,
+      limit: 50,
+      mode: "delete",
+      privateBucket: spyPrivate,
+      publicBucket,
+    });
+
+    expect(result.deletedCount).toBe(2);
+    expect(calls).not.toContain("get"); // presence uses head only, never the body
+    expect(calls.filter((call) => call === "head").length).toBeGreaterThan(1);
+    expect(maxInFlight).toBeGreaterThan(1); // the probes overlapped (ran in parallel)
+  });
+
+  it("keeps results PAGE-ORDERED across the concurrency-chunk boundary", async () => {
+    // More objects than PRESENCE_CONCURRENCY (10), so the sweep runs multiple chunks.
+    // Every other finding has a private copy; the rest are skipped. The deleted/skipped
+    // arrays must come back in page (sorted-key) order regardless of chunking.
+    const total = 25;
+    const expectedDeleted: string[] = [];
+    const expectedSkipped: string[] = [];
+
+    for (let i = 0; i < total; i += 1) {
+      const logId = `p${String(i).padStart(2, "0")}`;
+      const key = await putPublicObject(publicBucket, logId, "a".repeat(64));
+
+      if (i % 2 === 0) {
+        await privateBucket.put(`${logId}/preview.mp3`, bytesOf(`v-${logId}`));
+        expectedDeleted.push(key);
+      } else {
+        expectedSkipped.push(logId);
+      }
+    }
+
+    const result = await migratePreviewArchive({
+      db,
+      dryRun: false,
+      limit: total, // one page holding every object
+      mode: "delete",
+      privateBucket,
+      publicBucket,
+    });
+
+    expect(result.deletedCount).toBe(expectedDeleted.length);
+    expect(result.deleted.map((entry) => entry.oldKey)).toEqual(expectedDeleted);
+    expect(result.skipped.map((entry) => entry.trackId)).toEqual(expectedSkipped);
+    expect(result.remaining).toBe(expectedSkipped.length);
   });
 });
 

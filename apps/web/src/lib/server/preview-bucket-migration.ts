@@ -73,6 +73,10 @@ type PublicBucket = {
 };
 type PrivateBucket = {
   get(key: string): Promise<R2GetResult>;
+  // Metadata-only existence probe (R2 `head` fetches no body). The sweep's presence
+  // check never reads the bytes — it only needs to know a private copy EXISTS — so it
+  // uses `head`, not a full `get`, to keep each probe a single cheap round-trip.
+  head(key: string): Promise<{ readonly size: number } | null>;
   put(
     key: string,
     value: ArrayBuffer,
@@ -287,32 +291,28 @@ async function countPrefix(
   return { count, sampleKeys };
 }
 
+// How many objects' private-copy presence to probe at once. The old sweep did a
+// serial `get` per candidate extension, per object (up to 4 round-trips × every
+// object in a page), which timed the Worker out at the default page size. Probing
+// in bounded-concurrency chunks keeps the fan-out fast without unbounding it.
+const PRESENCE_CONCURRENCY = 10;
+
 /**
- * Find a finding's PRESENT private preview copy, tolerant of a container change
- * between a superseded orphan and the current preview: try the orphan's own
- * extension first, then the other known audio extensions. Returns the object or null.
+ * Whether a finding has a PRESENT private preview copy, tolerant of a container
+ * change between a superseded orphan and the current preview: probe the orphan's own
+ * extension AND the other known audio extensions. Each probe is a metadata-only
+ * `head` (never a body-reading `get`) and they run CONCURRENTLY (`Promise.all`) — the
+ * check only needs truthiness, so it fans the whole unique-extension set out at once.
  */
-async function findPrivateCopy(
+async function hasPrivateCopy(
   privateBucket: PrivateBucket,
   logId: string,
   preferredExt: string,
-): Promise<R2GetResult> {
-  const tried = new Set<string>();
+): Promise<boolean> {
+  const exts = [...new Set([preferredExt, ...PRIVATE_EXTS])];
+  const heads = await Promise.all(exts.map((ext) => privateBucket.head(`${logId}/preview.${ext}`)));
 
-  for (const ext of [preferredExt, ...PRIVATE_EXTS]) {
-    if (tried.has(ext)) {
-      continue;
-    }
-
-    tried.add(ext);
-    const object = await privateBucket.get(`${logId}/preview.${ext}`);
-
-    if (object) {
-      return object;
-    }
-  }
-
-  return null;
+  return heads.some((head) => head !== null);
 }
 
 /**
@@ -469,42 +469,70 @@ async function sweepPublicPrefix(
     prefix: LEGACY_PREFIX,
   });
 
-  for (const object of page.objects) {
-    const parsed = parsePublicKey(object.key);
+  // Parse each object once, then resolve every finding's private-copy PRESENCE in
+  // bounded-concurrency chunks — the safety gate that delete a public object ONLY
+  // when its finding has a present private copy (a true orphan, a superseded hash,
+  // resolves to the finding's CURRENT private copy, the correct "migrated" signal).
+  // A serial probe-per-object here timed the Worker out at the default page size.
+  // The array stays PAGE-ORDERED so `deleted`/`skipped`/`failed` are deterministic.
+  const parsedObjects = page.objects.map((object) => ({
+    key: object.key,
+    parsed: parsePublicKey(object.key),
+  }));
+  const present: boolean[] = Array.from({ length: parsedObjects.length }, () => false);
 
-    if (!parsed) {
-      result.skipped.push({ reason: "unparseable_public_key", trackId: object.key });
+  for (let start = 0; start < parsedObjects.length; start += PRESENCE_CONCURRENCY) {
+    const chunk = parsedObjects.slice(start, start + PRESENCE_CONCURRENCY);
+    const probed = await Promise.all(
+      chunk.map((entry) =>
+        entry.parsed === null
+          ? Promise.resolve(false)
+          : hasPrivateCopy(privateBucket, entry.parsed.logId, entry.parsed.ext),
+      ),
+    );
+
+    for (let index = 0; index < probed.length; index += 1) {
+      present[start + index] = probed[index] ?? false;
+    }
+  }
+
+  for (let index = 0; index < parsedObjects.length; index += 1) {
+    const entry = parsedObjects[index];
+
+    if (!entry) {
       continue;
     }
 
-    // The safety gate: delete a public object ONLY when its finding has a present
-    // private copy. A true orphan (a superseded hash) resolves to the finding's
-    // CURRENT private copy, which is the correct "this finding is migrated" signal.
-    const privateCopy = await findPrivateCopy(privateBucket, parsed.logId, parsed.ext);
+    if (entry.parsed === null) {
+      result.skipped.push({ reason: "unparseable_public_key", trackId: entry.key });
+      continue;
+    }
 
-    if (!privateCopy) {
-      result.skipped.push({ reason: "private_copy_absent", trackId: parsed.logId });
+    if (present[index] !== true) {
+      result.skipped.push({ reason: "private_copy_absent", trackId: entry.parsed.logId });
       continue;
     }
 
     if (dryRun) {
-      result.deleted.push({ oldKey: object.key, trackId: parsed.logId });
+      result.deleted.push({ oldKey: entry.key, trackId: entry.parsed.logId });
       continue;
     }
 
     try {
-      await publicBucket.delete(object.key);
-      result.deleted.push({ oldKey: object.key, trackId: parsed.logId });
+      await publicBucket.delete(entry.key);
+      result.deleted.push({ oldKey: entry.key, trackId: entry.parsed.logId });
     } catch (error) {
       result.failed.push({
         error: error instanceof Error ? error.message : String(error),
-        trackId: parsed.logId,
+        trackId: entry.parsed.logId,
       });
     }
   }
 
   result.nextCursor = page.truncated && page.cursor ? page.cursor : null;
-  // Authoritative remaining: re-count the whole prefix (keys only) after this batch.
+  // Authoritative remaining: re-walk the WHOLE prefix (keys only) via countPrefix
+  // after this batch. Acceptable because the prefix SHRINKS as the sweep deletes, so
+  // the recount converges to 0 across successive batches rather than growing work.
   result.remaining = (await countPrefix(publicBucket)).count;
   result.deletedCount = result.deleted.length;
   result.skippedCount = result.skipped.length;

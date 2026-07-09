@@ -44,15 +44,12 @@ export const serverHandlers: ApiHandlers = {
         );
       }
 
-      // Transitional dual-bucket read. LEGACY objects were archived to the PUBLIC
-      // `fluncle-videos` bucket (binding VIDEOS) under `analysis/previews/<logId>/…`
-      // and are still reachable there; new objects land in the PRIVATE
-      // `fluncle-source-audio` bucket (binding SOURCE_AUDIO). Read from whichever
-      // holds the key. This fallback is TEMPORARY — it is removed once the migration
-      // slice moves the legacy `analysis/previews/…` objects into the private bucket.
-      const isLegacyPublicObject = archive.key.startsWith("analysis/previews/");
-      const bucket = isLegacyPublicObject ? env.VIDEOS : env.SOURCE_AUDIO;
-      const object = await bucket.get(archive.key);
+      // Every archived preview now lives in the PRIVATE `fluncle-source-audio` bucket
+      // (binding SOURCE_AUDIO) at `<logId>/preview.<ext>` — REF-05 migrated the legacy
+      // public `analysis/previews/…` objects off the world-served `fluncle-videos`
+      // bucket and swept the prefix empty. A hypothetical stale `analysis/previews/…`
+      // key simply misses here and falls through to the `preview_audio_missing` 404.
+      const object = await env.SOURCE_AUDIO.get(archive.key);
 
       if (!object) {
         return jsonError(
