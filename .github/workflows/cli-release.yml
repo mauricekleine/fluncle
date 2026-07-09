@@ -98,7 +98,7 @@ jobs:
           FLUNCLE_CLI_VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
-          npm install -g npm@latest # OIDC trusted publishing needs npm >= 11.5.1
+          npm install -g npm@11 # stable 11.x (>= 11.5.1 for OIDC); avoids the broken pre-release npm 12.0.0-pre.2 that @latest pulled (missing sigstore, npm/cli#9722)
           bun run --cwd apps/cli build:npm
           cd apps/cli/dist-npm
           npm publish --provenance --access public
