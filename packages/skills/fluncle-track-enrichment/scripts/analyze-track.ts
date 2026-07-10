@@ -115,7 +115,13 @@ export function versionMatches(findingTitle: string, candidateTitle: string): bo
   return !candidateIsRemix;
 }
 
-async function resolvePreviews(): Promise<Preview[]> {
+// Exported (with an explicit params object) so the ground-truth key eval can resolve
+// the SAME preview windows the production pipeline analyzes. The CLI calls it with the
+// module-level args.
+export async function resolvePreviews(
+  params: { artist?: string; isrc?: string; title?: string } = { artist, isrc, title },
+): Promise<Preview[]> {
+  const { artist: pArtist, isrc: pIsrc, title: pTitle } = params;
   const found: Preview[] = [];
   const push = (source: string, url: string | undefined | null) => {
     if (url && !found.some((p) => p.url === url)) {
@@ -123,12 +129,14 @@ async function resolvePreviews(): Promise<Preview[]> {
     }
   };
 
-  const findingTitle = title ?? "";
+  const findingTitle = pTitle ?? "";
 
   // 1. Deezer by ISRC — the most precise (exact recording).
-  if (isrc) {
+  if (pIsrc) {
     try {
-      const response = await fetch(`https://api.deezer.com/track/isrc:${encodeURIComponent(isrc)}`);
+      const response = await fetch(
+        `https://api.deezer.com/track/isrc:${encodeURIComponent(pIsrc)}`,
+      );
       const track = (await response.json()) as { error?: unknown; preview?: string };
 
       if (!track.error) {
@@ -142,7 +150,7 @@ async function resolvePreviews(): Promise<Preview[]> {
   // 2. Deezer search by artist + title — VERSION-GATED so a remix finding never
   //    pulls in the original's preview alongside the ISRC candidate.
   try {
-    const query = `artist:"${artist}" track:"${title}"`;
+    const query = `artist:"${pArtist}" track:"${pTitle}"`;
     const response = await fetch(`https://api.deezer.com/search?q=${encodeURIComponent(query)}`);
     const body = (await response.json()) as {
       data?: Array<{ artist?: { name?: string }; preview?: string; title?: string }>;
@@ -158,7 +166,7 @@ async function resolvePreviews(): Promise<Preview[]> {
   // 3. iTunes — usually a different window of the song than Deezer. Also version-
   //    gated (artist contains + same version) so it can't seed the wrong recording.
   try {
-    const term = encodeURIComponent(`${artist} ${title}`);
+    const term = encodeURIComponent(`${pArtist} ${pTitle}`);
     const response = await fetch(
       `https://itunes.apple.com/search?term=${term}&media=music&limit=8`,
     );
@@ -168,7 +176,7 @@ async function resolvePreviews(): Promise<Preview[]> {
     const hit = (body.results ?? []).find(
       (item) =>
         item.previewUrl &&
-        normalize(item.artistName ?? "").includes(normalize(artist ?? "")) &&
+        normalize(item.artistName ?? "").includes(normalize(pArtist ?? "")) &&
         versionMatches(findingTitle, item.trackName ?? ""),
     );
     push("itunes", hit?.previewUrl);
@@ -419,12 +427,64 @@ function fft(re: Float64Array, im: Float64Array): void {
 }
 
 // ---------------------------------------------------------------------------
-// Key (Krumhansl-Schmuckler) + spectral features.
+// Spectral features (the archived creative-fuel vector) + key profiles.
 // ---------------------------------------------------------------------------
 
 const NOTES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
-const KS_MAJOR = [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88];
-const KS_MINOR = [6.33, 2.68, 3.52, 5.38, 2.6, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17];
+
+// Key profiles, verbatim from Essentia's `src/algorithms/tonal/key.cpp`
+// (github.com/MTG/essentia, AGPL) — the `krumhansl`, `temperley`, and Faraldo `edma`
+// (electronic-dance-music corpus) tables. EDMA won the Rekordbox ground-truth eval
+// (analyze-track.key-eval.ts): classical K-S profiles are weakest on the relative-key
+// axis, which is DnB's dominant error. Krumhansl/Temperley are kept so the eval can
+// re-measure them. Values not invented — copied from:
+// https://github.com/MTG/essentia/blob/master/src/algorithms/tonal/key.cpp
+type KeyProfiles = { major: number[]; minor: number[] };
+
+const KEY_PROFILE_EDMA: KeyProfiles = {
+  major: [1.0, 0.29, 0.5, 0.4, 0.6, 0.56, 0.32, 0.8, 0.31, 0.45, 0.42, 0.39],
+  minor: [1.0, 0.31, 0.44, 0.58, 0.33, 0.49, 0.29, 0.78, 0.43, 0.29, 0.53, 0.32],
+};
+
+const KEY_PROFILE_KRUMHANSL: KeyProfiles = {
+  major: [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88],
+  minor: [6.33, 2.68, 3.52, 5.38, 2.6, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17],
+};
+
+const KEY_PROFILE_TEMPERLEY: KeyProfiles = {
+  major: [5.0, 2.0, 3.5, 2.0, 4.5, 4.0, 2.0, 4.5, 2.0, 3.5, 1.5, 4.0],
+  minor: [5.0, 2.0, 3.5, 4.5, 2.0, 4.0, 2.0, 4.5, 3.5, 2.0, 1.5, 4.0],
+};
+
+// Faraldo `edmm` — the manually-tweaked EDM profile whose major table is uniform, so
+// it reports (rare, poorly-represented) EDM majors as minor. Kept for the eval; the
+// production estimator instead uses EDMA + a measured `majorBias` minor-prior, which
+// recovers the relative-minor reads without throwing away genuine majors.
+const KEY_PROFILE_EDMM: KeyProfiles = {
+  major: [0.083, 0.083, 0.083, 0.083, 0.083, 0.083, 0.083, 0.083, 0.083, 0.083, 0.083, 0.083],
+  minor: [
+    0.17235348, 0.04, 0.0761009, 0.12, 0.05621498, 0.08527853, 0.0497915, 0.13451001, 0.07458916,
+    0.05003023, 0.09187879, 0.05545106,
+  ],
+};
+
+// The production profile pair, the ground-truth eval winner: EDMA's major table (so a
+// genuinely strong EDM major still registers) with EDMM's manually-tuned minor table
+// (the better minor shape). Paired with KEY_DEFAULTS.majorBias it beat every single
+// profile on the 35-track Rekordbox set — 60% exact, zero relative-key errors.
+const KEY_PROFILE_DEFAULT: KeyProfiles = {
+  major: KEY_PROFILE_EDMA.major,
+  minor: KEY_PROFILE_EDMM.minor,
+};
+
+// Exported so the ground-truth eval can sweep profiles without re-declaring them.
+export const KEY_PROFILES = {
+  default: KEY_PROFILE_DEFAULT,
+  edma: KEY_PROFILE_EDMA,
+  edmm: KEY_PROFILE_EDMM,
+  krumhansl: KEY_PROFILE_KRUMHANSL,
+  temperley: KEY_PROFILE_TEMPERLEY,
+};
 
 function pearson(a: number[], b: number[]): number {
   const n = a.length;
@@ -445,12 +505,14 @@ function pearson(a: number[], b: number[]): number {
 
 type Spectral = {
   centroidHz: number;
-  chroma: number[];
   highRatio: number;
   midFlatness: number;
   subBassRatio: number;
 };
 
+// The archived creative-fuel feature vector. Its 25 s window + linear-magnitude
+// semantics are frozen: the stored rows depend on these EXACT numbers, so the key
+// path was moved to its own whole-track chromagram below rather than widen this.
 function spectral(samples: Float32Array): Spectral {
   const N = 4096;
   const hop = 2048;
@@ -461,7 +523,6 @@ function spectral(samples: Float32Array): Spectral {
   }
 
   const avgMag = new Float64Array(N / 2);
-  const chroma = Array.from({ length: 12 }, () => 0);
   let frames = 0;
   const limit = Math.min(samples.length - N, SAMPLE_RATE * 25);
 
@@ -476,14 +537,7 @@ function spectral(samples: Float32Array): Spectral {
     fft(re, im);
 
     for (let b = 1; b < N / 2; b++) {
-      const mag = Math.hypot(re[b], im[b]);
-      avgMag[b] += mag;
-      const freq = (b * SAMPLE_RATE) / N;
-
-      if (freq >= 55 && freq <= 5000) {
-        const pc = ((Math.round(69 + 12 * Math.log2(freq / 440)) % 12) + 12) % 12;
-        chroma[pc] += mag;
-      }
+      avgMag[b] += Math.hypot(re[b], im[b]);
     }
 
     frames++;
@@ -523,32 +577,327 @@ function spectral(samples: Float32Array): Spectral {
 
   return {
     centroidHz: Math.round(centroidNum / (total || 1)),
-    chroma,
     highRatio: Number((high / (total || 1)).toFixed(3)),
     midFlatness: Number((geo / (arith || 1)).toFixed(3)),
     subBassRatio: Number((subBass / (total || 1)).toFixed(3)),
   };
 }
 
-function estimateKey(chroma: number[]): { confidence: number; key: string } {
-  let best = { confidence: -2, key: "unknown" };
+// The whole-track chromagram key estimator. Tunable so the ground-truth eval can
+// sweep ingredients; the defaults are the config that won that eval.
+type KeyOptions = {
+  compression: "log" | "none" | "sqrt";
+  edgeSkipS: number;
+  harmonicDecay: number;
+  harmonics: number;
+  hopS: number;
+  majorBias: number;
+  maxHz: number;
+  minHz: number;
+  peakThreshold: number;
+  profiles: KeyProfiles;
+  segmentS: number;
+  tuning: boolean;
+};
 
-  for (let r = 0; r < 12; r++) {
-    const maj = KS_MAJOR.map((_, i) => KS_MAJOR[(i - r + 12) % 12]);
-    const min = KS_MINOR.map((_, i) => KS_MINOR[(i - r + 12) % 12]);
-    const cMaj = pearson(chroma, maj);
-    const cMin = pearson(chroma, min);
+const KEY_DEFAULTS: KeyOptions = {
+  compression: "sqrt", // tame the DnB sub-bass so it can't drown the mid thirds
+  edgeSkipS: 3, // skip intro/outro build-ups where the harmony is thin
+  harmonicDecay: 0.6, // HPCP-style decay across the harmonic ladder
+  harmonics: 4, // credit each peak to fundamentals f/h, h=1..4 (de-alias the 5th → III)
+  hopS: 6, // overlapping segments so a section vote has enough members
+  // EDM minor-prior: a note's relative major shares its diatonic set, so the
+  // correlation flips minor DnB to its relative MAJOR on thin margins. DnB is
+  // overwhelmingly minor, so subtract a small penalty from every major correlation —
+  // enough to reclaim the relative-minor reads without unseating a genuinely strong
+  // major. The value is the ground-truth eval winner (analyze-track.key-eval.ts).
+  majorBias: 0.15,
+  maxHz: 3520, // A7 — chroma band ceiling
+  minHz: 110, // A2 — below this is bass energy, not harmony
+  peakThreshold: 0.1, // peaks below 10% of the frame max are noise/percussion
+  profiles: KEY_PROFILE_DEFAULT,
+  segmentS: 12, // ~a phrase; long enough for a stable key, short enough to vote
+  tuning: false, // measured no gain on the eval — off keeps the estimator single-pass
+};
 
-    if (cMaj > best.confidence) {
-      best = { confidence: cMaj, key: `${NOTES[r]} major` };
-    }
+const KEY_FFT = 8192; // 2.7 Hz bins at 22050 Hz — resolves semitones down to A2
+const KEY_HOP = 4096;
+const KEY_HANN = (() => {
+  const w = new Float64Array(KEY_FFT);
 
-    if (cMin > best.confidence) {
-      best = { confidence: cMin, key: `${NOTES[r]} minor` };
+  for (let i = 0; i < KEY_FFT; i++) {
+    w[i] = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / (KEY_FFT - 1));
+  }
+
+  return w;
+})();
+
+function compressMag(m: number, mode: KeyOptions["compression"]): number {
+  if (mode === "log") {
+    return Math.log1p(m);
+  }
+
+  if (mode === "sqrt") {
+    return Math.sqrt(m);
+  }
+
+  return m;
+}
+
+// Spectral peaks of one analysis frame: local magnitude maxima above a per-frame
+// threshold, with parabolic interpolation for a precise peak frequency. Peaks are the
+// percussive-rejection mechanism — a broadband drum hit is noise-like (no sharp
+// maxima), so it never enters the chroma the way raw per-bin magnitude did.
+function framePeaks(
+  samples: Float32Array,
+  start: number,
+  opts: KeyOptions,
+): Array<{ freq: number; mag: number }> {
+  const N = KEY_FFT;
+  const re = new Float64Array(N);
+  const im = new Float64Array(N);
+
+  for (let i = 0; i < N; i++) {
+    re[i] = (samples[start + i] ?? 0) * KEY_HANN[i];
+  }
+
+  fft(re, im);
+
+  const half = N / 2;
+  const mag = new Float64Array(half);
+  let maxMag = 0;
+
+  for (let b = 1; b < half; b++) {
+    const m = Math.hypot(re[b], im[b]);
+    mag[b] = m;
+
+    if (m > maxMag) {
+      maxMag = m;
     }
   }
 
-  return { confidence: Number(best.confidence.toFixed(2)), key: best.key };
+  const peaks: Array<{ freq: number; mag: number }> = [];
+
+  if (maxMag <= 0) {
+    return peaks;
+  }
+
+  const binHz = SAMPLE_RATE / N;
+  const threshold = opts.peakThreshold * maxMag;
+  const loBin = Math.max(2, Math.floor(opts.minHz / binHz));
+  const hiBin = Math.min(half - 2, Math.ceil(opts.maxHz / binHz));
+
+  for (let b = loBin; b <= hiBin; b++) {
+    const m = mag[b];
+
+    if (m < threshold || m < (mag[b - 1] ?? 0) || m < (mag[b + 1] ?? 0)) {
+      continue;
+    }
+
+    const a = mag[b - 1] ?? 0;
+    const c = mag[b + 1] ?? 0;
+    const denom = a - 2 * m + c;
+    const delta = denom !== 0 ? (0.5 * (a - c)) / denom : 0;
+    peaks.push({ freq: (b + delta) * binHz, mag: m });
+  }
+
+  return peaks;
+}
+
+// Global tuning offset (semitone fraction, +sharp) as the circular mean of every
+// peak's deviation from the equal-tempered grid — so a track cut a few cents off
+// concert pitch still bins to the right pitch classes.
+function estimateTuning(samples: Float32Array, lo: number, hi: number, opts: KeyOptions): number {
+  let sx = 0;
+  let sy = 0;
+
+  for (let start = lo; start + KEY_FFT <= hi; start += KEY_HOP) {
+    for (const p of framePeaks(samples, start, opts)) {
+      const midi = 69 + 12 * Math.log2(p.freq / 440);
+      const angle = 2 * Math.PI * (midi - Math.round(midi));
+      const w = Math.sqrt(p.mag);
+      sx += w * Math.cos(angle);
+      sy += w * Math.sin(angle);
+    }
+  }
+
+  return sx === 0 && sy === 0 ? 0 : Math.atan2(sy, sx) / (2 * Math.PI);
+}
+
+// One segment's 12-bin chroma. Each frame's peaks are de-aliased up the harmonic
+// ladder (a peak at f credits fundamentals f/h for h=1..H), which pulls the injected
+// energy of a note's overtones — its fifth (3rd harmonic) and, crucially, its MAJOR
+// THIRD (5th harmonic) — back toward the true root instead of biasing the mode. Each
+// frame is normalized to unit sum before summing, so a loud drop frame does not
+// outvote the rest of the phrase.
+function segmentChroma(
+  samples: Float32Array,
+  from: number,
+  to: number,
+  opts: KeyOptions,
+  tuning: number,
+): number[] {
+  const chroma = Array.from({ length: 12 }, () => 0);
+
+  for (let start = from; start + KEY_FFT <= to; start += KEY_HOP) {
+    const peaks = framePeaks(samples, start, opts);
+
+    if (peaks.length === 0) {
+      continue;
+    }
+
+    const frame = Array.from({ length: 12 }, () => 0);
+
+    for (const p of peaks) {
+      const amp = compressMag(p.mag, opts.compression);
+
+      for (let h = 1; h <= opts.harmonics; h++) {
+        const f0 = p.freq / h;
+
+        if (f0 < opts.minHz || f0 > opts.maxHz) {
+          continue;
+        }
+
+        const midi = 69 + 12 * Math.log2(f0 / 440) - tuning;
+        const pc = ((Math.round(midi) % 12) + 12) % 12;
+        frame[pc] += amp * opts.harmonicDecay ** (h - 1);
+      }
+    }
+
+    let sum = 0;
+
+    for (const v of frame) {
+      sum += v;
+    }
+
+    if (sum > 0) {
+      for (let i = 0; i < 12; i++) {
+        chroma[i] += (frame[i] ?? 0) / sum;
+      }
+    }
+  }
+
+  return chroma;
+}
+
+// A key profile rotated so pitch class `root` is the tonic (matches the legacy K-S
+// rotation: index i draws from profile[(i - root + 12) % 12]).
+function rotateProfile(profile: number[], root: number): number[] {
+  return profile.map((_, i) => profile[(i - root + 12) % 12] ?? 0);
+}
+
+// Best major/minor key for a 12-bin chroma, by Pearson correlation against the 24
+// rotated profiles. `majorBias` is subtracted from every MAJOR correlation (the EDM
+// minor-prior — see KEY_DEFAULTS.majorBias).
+function scoreChroma(
+  chroma: number[],
+  profiles: KeyProfiles,
+  majorBias: number,
+): { corr: number; mode: "major" | "minor"; root: number } {
+  let bestCorr = -2;
+  let bestMode: "major" | "minor" = "major";
+  let bestRoot = 0;
+
+  for (let r = 0; r < 12; r++) {
+    const candidates = [
+      {
+        corr: pearson(chroma, rotateProfile(profiles.major, r)) - majorBias,
+        mode: "major" as const,
+      },
+      { corr: pearson(chroma, rotateProfile(profiles.minor, r)), mode: "minor" as const },
+    ];
+
+    for (const candidate of candidates) {
+      if (candidate.corr > bestCorr) {
+        bestCorr = candidate.corr;
+        bestMode = candidate.mode;
+        bestRoot = r;
+      }
+    }
+  }
+
+  return { corr: bestCorr, mode: bestMode, root: bestRoot };
+}
+
+// Estimate the musical key over the WHOLE track. Segment the audio into overlapping
+// phrase-length windows, build an HPCP-style chroma per segment, pick the key of the
+// summed (global) chroma, and report the fraction of segments that independently agree
+// as the confidence — a vote, not a single fragile correlation. `opts` is a test/eval
+// seam; production uses KEY_DEFAULTS. Output contract stays `{ confidence, key }` with
+// key sharp-spelled `"<Note> major|minor"`.
+export function estimateKey(
+  samples: Float32Array,
+  opts?: Partial<KeyOptions>,
+): { confidence: number; key: string } {
+  const o: KeyOptions = { ...KEY_DEFAULTS, ...opts };
+  const edge = Math.round(o.edgeSkipS * SAMPLE_RATE);
+  const segLen = Math.round(o.segmentS * SAMPLE_RATE);
+  const hop = Math.max(1, Math.round(o.hopS * SAMPLE_RATE));
+
+  // Analysis span: trim the intro/outro, but never trim away everything (short clips).
+  let lo = edge;
+  let hi = samples.length - edge;
+
+  if (hi - lo < KEY_FFT) {
+    lo = 0;
+    hi = samples.length;
+  }
+
+  if (hi - lo < KEY_FFT) {
+    return { confidence: 0, key: "unknown" };
+  }
+
+  const tuning = o.tuning ? estimateTuning(samples, lo, hi, o) : 0;
+
+  // Collect one chroma per overlapping segment.
+  const segments: number[][] = [];
+  const span = hi - lo;
+  const window = Math.min(segLen, span);
+
+  for (let from = lo; from + window <= hi; from += hop) {
+    const to = Math.min(from + window, hi);
+    const chroma = segmentChroma(samples, from, to, o, tuning);
+    let sum = 0;
+
+    for (const v of chroma) {
+      sum += v;
+    }
+
+    if (sum > 0) {
+      segments.push(chroma);
+    }
+
+    if (to >= hi) {
+      break;
+    }
+  }
+
+  if (segments.length === 0) {
+    return { confidence: 0, key: "unknown" };
+  }
+
+  // Global chroma decides the key; segment agreement with it is the confidence.
+  const global = Array.from({ length: 12 }, () => 0);
+
+  for (const chroma of segments) {
+    for (let i = 0; i < 12; i++) {
+      global[i] += chroma[i] ?? 0;
+    }
+  }
+
+  const winner = scoreChroma(global, o.profiles, o.majorBias);
+  const label = `${NOTES[winner.root]} ${winner.mode}`;
+  let agree = 0;
+
+  for (const chroma of segments) {
+    const s = scoreChroma(chroma, o.profiles, o.majorBias);
+
+    if (s.root === winner.root && s.mode === winner.mode) {
+      agree++;
+    }
+  }
+
+  return { confidence: Number((agree / segments.length).toFixed(2)), key: label };
 }
 
 // ---------------------------------------------------------------------------
@@ -920,7 +1269,12 @@ export function estimateBpm(samples: Float32Array): {
 // Run
 // ---------------------------------------------------------------------------
 
-const KEY_CONFIDENCE_FLOOR = 0.6; // below this, the key is unreliable → null
+// Key confidence is now the segment-vote AGREEMENT FRACTION (0..1), not a Pearson
+// correlation. 0.6 = a clear majority of the whole-track segments landed on the same
+// key. On the Rekordbox ground-truth eval this floor nulled exactly the two
+// low-agreement (0.5) reads — both wrong — so precision on non-null outputs rose from
+// 60.0% to 63.6% exact with no correct read lost and a 5.7% null rate.
+const KEY_CONFIDENCE_FLOOR = 0.6; // below this, the vote is too split → honest null
 
 type PreviewAnalysis = {
   bytes: Buffer;
@@ -958,7 +1312,7 @@ if (import.meta.main) {
     try {
       const loaded = loadLocalFile(audioFile);
       const spec = spectral(loaded.samples);
-      const key = estimateKey(spec.chroma);
+      const key = estimateKey(loaded.samples);
       const tempo = estimateBpm(loaded.samples);
       log(
         `audio-file (${(loaded.samples.length / SAMPLE_RATE).toFixed(1)}s): bpm ${tempo.bpm ?? "null"} (conf ${tempo.bpmConfidence}), key ${key.key} (conf ${key.confidence})`,
@@ -992,7 +1346,7 @@ if (import.meta.main) {
       try {
         const loaded = await loadPreview(preview.url);
         const spec = spectral(loaded.samples);
-        const key = estimateKey(spec.chroma);
+        const key = estimateKey(loaded.samples);
         const tempo = estimateBpm(loaded.samples);
         log(
           `${preview.source} (${(loaded.samples.length / SAMPLE_RATE).toFixed(1)}s): bpm ${tempo.bpm ?? "null"} (conf ${tempo.bpmConfidence}), key ${key.key} (conf ${key.confidence})`,
