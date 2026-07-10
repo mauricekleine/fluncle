@@ -189,8 +189,8 @@ export async function countArtistFindings(artistId: string): Promise<number> {
 /**
  * Every artist that has at least one coordinate-bearing finding, with its finding
  * count, a representative cover (the most-recent finding's album art), and the
- * freshest finding date (sitemap lastmod). Ordered by finding count desc, then
- * name — the `/artists` index order; the sitemap filters this to
+ * freshest finding date (sitemap lastmod). Ordered alphabetically by name
+ * (case-insensitive) — the `/artists` index order; the sitemap filters this to
  * `ARTIST_INDEX_MIN_FINDINGS`+ (the thin-content gate).
  */
 export async function listArtistsWithFindingCounts(): Promise<ArtistIndexEntry[]> {
@@ -208,7 +208,7 @@ export async function listArtistsWithFindingCounts(): Promise<ArtistIndexEntry[]
           join track_artists ta on ta.artist_id = a.id
           join tracks t on t.track_id = ta.track_id and t.log_id is not null
           group by a.id
-          order by finding_count desc, a.name asc`,
+          order by a.name collate nocase asc`,
   });
 
   const entries: ArtistIndexEntry[] = [];
