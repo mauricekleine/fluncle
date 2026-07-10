@@ -487,5 +487,9 @@ describe("the stringOptions invariant", () => {
 
     expect(result.stdout).not.toContain("Unknown submissions arguments");
     expect(result.stderr).not.toContain("Unknown submissions arguments");
+    // The second hand-mirror: the subcommand whitelist in the same validator
+    // (it shipped without "triage" too — the sweep found both layers in one night).
+    expect(result.stdout).not.toContain("Unknown submissions command");
+    expect(result.stderr).not.toContain("Unknown submissions command");
   });
 });

@@ -4032,7 +4032,14 @@ function assertParseArgsCompatiblePositionals(args: string[]): void {
       throw new Error(`Missing submission id for: ${third}`);
     }
 
-    if (third && fourth && third !== "review" && third !== "reject" && third !== "approve") {
+    if (
+      third &&
+      fourth &&
+      third !== "review" &&
+      third !== "reject" &&
+      third !== "approve" &&
+      third !== "triage"
+    ) {
       throw new Error(`Unknown submissions command: ${third}`);
     }
   }
