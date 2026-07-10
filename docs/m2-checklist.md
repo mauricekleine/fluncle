@@ -68,7 +68,18 @@ The steps (runs on ANY machine with an operator-authenticated `fluncle` ≥ 0.11
 - [ ] Prune `requeue-non-rekordbox.ts` once the archive is re-keyed — it is a one-time repair.
 - [ ] The two SKILL.md descriptions (`fluncle-rekordbox-sync`, `fluncle-track-enrichment`) were already rewritten to the measured story; if this step changes the numbers materially, update them and **re-run `bun run skills:install`**.
 
-## 7. Report back to the M5 (the cross-machine loop)
+## 7. Historical set tracklists → mixability ground truth
+
+The mixability engine's scoring weights are validated against how Fluncle actually mixes, and today the evidence is ONE set (`019.F.1A`, 16 transitions — the sample that showed his real transitions sit at chance on the Camelot axis). Every historical set in Rekordbox history widens that evidence. The extraction script emits per-track `key` + `bpm` (Rekordbox's whole-song analysis), so a set is self-contained ground truth — its transitions score directly from the emitted values, no archive join needed, non-findings included.
+
+- [ ] Quit Rekordbox fully first — it holds an exclusive lock on `master.db` (§1's pyrekordbox key note applies here too).
+- [ ] List what history holds: `uv run packages/skills/fluncle-mixtapes/scripts/rekordbox-tracklist.py --list` (newest first). Only REAL sets are ground truth — skip soundcheck noodling and single-track sessions; you are the judge of which sessions were actual mixing.
+- [ ] Per real set: `uv run packages/skills/fluncle-mixtapes/scripts/rekordbox-tracklist.py --session <name-substring> --json > apps/web/scripts/__fixtures__/rekordbox-sets/<session-name>.json` (create the dir on first use; kebab-case the filename). That directory is the contract: the M5 session extends the mixability diagnostics to sweep exactly it once the first extracts land.
+- [ ] Eyeball each JSON before committing: the script flags `DUP` rows (re-loads) and cannot distinguish a soundcheck pre-load from a played track — prune the spurious rows by hand; an unpruned pre-load poisons two transitions.
+- [ ] Commit + push the extracts with a one-liner per set: date, row count, how many rows carry a key. Expect near-100% keyed (Rekordbox grades the whole library).
+- [ ] Report the totals in §8: N sets, N transitions total (rows minus one per set). The M5 side then wires the diagnostics sweep and re-runs the weight validation against the widened evidence — that conclusion comes back through git, nothing else for the M2 to do.
+
+## 8. Report back to the M5 (the cross-machine loop)
 
 The M5 session that queued this work reconciles the results. Two channels:
 
