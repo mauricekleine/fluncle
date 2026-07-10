@@ -17,6 +17,7 @@ import { formatAlbumDuration, formatDuration } from "@/lib/format";
 import { spotifyAlbumImageAtSize } from "@/lib/media";
 import { type FeedItem, mixtapeCoverUrl, mixtapeDisplayTitle } from "@/lib/mixtapes";
 import { type Track } from "@/lib/tracks";
+import { cn } from "@/lib/utils";
 
 // The signature component (DESIGN.md): a finding, not just a row. The whole row
 // reads as one link to its log page (a stretched link); the artwork doubles as
@@ -291,13 +292,17 @@ function TrackLinksMenu({ track, trackLine }: { track: Track; trackLine: string 
 
 // Enrichment metadata as quiet chips: tempo and key read as instrument-panel
 // numerals (Oxanium, tabular). Nothing renders until enrichment has produced
-// something to show.
-function TrackChips({
+// something to show. `className` overrides the wrapper spacing so the same chips
+// slot into another row's layout (e.g. the /mix builder) — the chip style is
+// shared, one definition, no drift.
+export function TrackChips({
   bpm,
+  className,
   durationMs,
   musicalKey,
 }: {
   bpm?: number;
+  className?: string;
   durationMs?: number;
   musicalKey?: string;
 }) {
@@ -306,7 +311,7 @@ function TrackChips({
   }
 
   return (
-    <span className="mt-1.5 flex flex-wrap items-center gap-1">
+    <span className={cn("mt-1.5 flex flex-wrap items-center gap-1", className)}>
       {durationMs ? (
         <Badge className="track-chip track-chip-numeric" variant="outline">
           {formatDuration(durationMs)}

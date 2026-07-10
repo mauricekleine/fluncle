@@ -1,7 +1,31 @@
-import { ArrowDownIcon, ArrowUpIcon, LinkSimpleIcon, PlusIcon, XIcon } from "@phosphor-icons/react";
+import {
+  closestCenter,
+  DndContext,
+  type DragEndEvent,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+} from "@dnd-kit/core";
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+import {
+  ArrowDownIcon,
+  ArrowUpIcon,
+  DotsSixVerticalIcon,
+  LinkSimpleIcon,
+  PlusIcon,
+  XIcon,
+} from "@phosphor-icons/react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { useCallback, useMemo, useState } from "react";
+import { type CSSProperties, useCallback, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { type FeedItem, type MixableCandidate, type TrackListItem } from "@fluncle/contracts";
 import { Badge } from "@fluncle/ui/components/badge";
@@ -16,9 +40,15 @@ import {
 } from "@fluncle/ui/components/command";
 import { MixPlayer } from "@/components/mix/mix-player";
 import { TrackArtwork } from "@/components/track-artwork";
+import { TrackChips } from "@/components/track-row";
 import { siteUrl } from "@/lib/fluncle-links";
 import { spotifyAlbumImageAtSize } from "@/lib/media";
 import { mixReasonLabel, serializeSet } from "@/lib/mix-set";
+import { usePrefersReducedMotion } from "@/lib/use-prefers-reduced-motion";
+import { cn } from "@/lib/utils";
+
+/** The finding's stable identity for keys and drag-and-drop: its coordinate, or the trackId. */
+const rowId = (finding: TrackListItem): string => finding.logId ?? finding.trackId;
 
 // Product A's plate (RFC mixability-engine §3): one printed logbook page — the crew
 // taking the decks with Fluncle's findings. NOT a SaaS builder. The design invariants
@@ -32,18 +62,37 @@ const artworkUrl = (finding: TrackListItem): string | undefined =>
 
 // A builder row — the TrackRow grid skeleton (coordinate, 3.25rem artwork, title, a
 // chip row) WITHOUT the stretched navigation link, so Add / remove / reorder can each
-// own their own hit target (§3.0 invariant 3).
+// own their own hit target (§3.0 invariant 3). `leading` mounts a drag handle ahead of
+// the artwork; `rowRef`/`style`/`dragging` let a sortable wrapper drive the <li>.
 function BuilderRow({
   actions,
   chip,
+  dragging = false,
   finding,
+  leading,
+  rowRef,
+  style,
 }: {
   actions?: React.ReactNode;
   chip?: React.ReactNode;
+  dragging?: boolean;
   finding: TrackListItem;
+  leading?: React.ReactNode;
+  rowRef?: (element: HTMLLIElement | null) => void;
+  style?: CSSProperties;
 }) {
+  // The telemetry line — duration, BPM, key as the homepage Track Row's quiet bordered
+  // chips (reused verbatim, one chip definition across the app), with the reason chip
+  // after it. Nothing renders until enrichment has produced a value.
+  const hasTelemetry = Boolean(finding.durationMs || finding.bpm || finding.key);
+
   return (
-    <li className="flex items-center gap-3 px-3 py-2.5">
+    <li
+      className={cn("flex items-center gap-3 px-3 py-2.5", dragging && "relative z-10 bg-muted")}
+      ref={rowRef}
+      style={style}
+    >
+      {leading}
       <div className="min-w-0 flex flex-1 items-center gap-3">
         <TrackArtwork alt="" src={artworkUrl(finding)} />
         <div className="min-w-0 flex-1">
@@ -59,14 +108,66 @@ function BuilderRow({
             </Link>
           ) : null}
           <p className="truncate text-sm font-medium">{finding.title}</p>
-          <div className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-            <span className="truncate">{finding.artists.join(", ")}</span>
-            {chip}
-          </div>
+          <p className="mt-0.5 truncate text-xs text-muted-foreground">
+            {finding.artists.join(", ")}
+          </p>
+          {hasTelemetry || chip ? (
+            <div className="mt-1.5 flex flex-wrap items-center gap-1">
+              <TrackChips
+                bpm={finding.bpm}
+                className="m-0"
+                durationMs={finding.durationMs}
+                musicalKey={finding.key}
+              />
+              {chip}
+            </div>
+          ) : null}
         </div>
       </div>
       {actions ? <div className="flex shrink-0 items-center gap-1">{actions}</div> : null}
     </li>
+  );
+}
+
+// The chain row as a dnd-kit sortable — the drag path (a grab handle) layered over the
+// keyboard up/down buttons (the accessibility path stays). Ported from the /admin/plans
+// tracklist: PointerSensor + KeyboardSensor, the transform/transition style, reduced
+// motion drops the transition at the source.
+function SortableChainRow({
+  actions,
+  finding,
+  reducedMotion,
+}: {
+  actions: React.ReactNode;
+  finding: TrackListItem;
+  reducedMotion: boolean;
+}) {
+  const { attributes, isDragging, listeners, setNodeRef, transform, transition } = useSortable({
+    id: rowId(finding),
+  });
+
+  return (
+    <BuilderRow
+      actions={actions}
+      dragging={isDragging}
+      finding={finding}
+      leading={
+        <button
+          aria-label={`Reorder ${finding.title}`}
+          className="inline-flex size-9 shrink-0 cursor-grab touch-none items-center justify-center rounded-sm text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
+          type="button"
+          {...attributes}
+          {...listeners}
+        >
+          <DotsSixVerticalIcon aria-hidden="true" className="size-4" />
+        </button>
+      }
+      rowRef={setNodeRef}
+      style={{
+        transform: CSS.Transform.toString(transform),
+        transition: reducedMotion ? undefined : transition,
+      }}
+    />
   );
 }
 
@@ -165,6 +266,35 @@ export function MixBuilder({
     [chain, mutate],
   );
 
+  // Drag-to-reorder, additive over the keyboard up/down buttons (the a11y path). Same
+  // sensors + arrayMove as the /admin/plans tracklist; reduced motion drops the sortable
+  // transition.
+  const reducedMotion = usePrefersReducedMotion();
+  const sensors = useSensors(
+    useSensor(PointerSensor),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
+
+  const onDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      const { active, over } = event;
+
+      if (!over || active.id === over.id) {
+        return;
+      }
+
+      const from = chain.findIndex((finding) => rowId(finding) === active.id);
+      const to = chain.findIndex((finding) => rowId(finding) === over.id);
+
+      if (from === -1 || to === -1) {
+        return;
+      }
+
+      mutate(arrayMove(chain, from, to));
+    },
+    [chain, mutate],
+  );
+
   const tail = chainLogIds[chainLogIds.length - 1];
 
   // The rail off the chain's tail, excluding the whole chain server-side (§3.1).
@@ -202,46 +332,60 @@ export function MixBuilder({
       ) : (
         <>
           {/* The chain, a flat plate-field pane on the plate (One Pane). */}
-          <ol className="plate-field m-0 list-none divide-y divide-border rounded-md border border-border p-0">
-            {chain.map((finding, position) => (
-              <BuilderRow
-                actions={
-                  readOnly ? undefined : (
-                    <>
-                      <Button
-                        aria-label="Move up"
-                        disabled={position === 0}
-                        onClick={() => move(position, position - 1)}
-                        size="icon"
-                        variant="ghost"
-                      >
-                        <ArrowUpIcon className="size-4" />
-                      </Button>
-                      <Button
-                        aria-label="Move down"
-                        disabled={position === chain.length - 1}
-                        onClick={() => move(position, position + 1)}
-                        size="icon"
-                        variant="ghost"
-                      >
-                        <ArrowDownIcon className="size-4" />
-                      </Button>
-                      <Button
-                        aria-label={`Take ${finding.title} out of the set`}
-                        onClick={() => finding.logId && remove(finding.logId)}
-                        size="icon"
-                        variant="ghost"
-                      >
-                        <XIcon className="size-4" />
-                      </Button>
-                    </>
-                  )
-                }
-                finding={finding}
-                key={finding.logId ?? finding.trackId}
-              />
-            ))}
-          </ol>
+          {readOnly ? (
+            <ol className="plate-field m-0 list-none divide-y divide-border rounded-md border border-border p-0">
+              {chain.map((finding) => (
+                <BuilderRow finding={finding} key={rowId(finding)} />
+              ))}
+            </ol>
+          ) : (
+            <DndContext collisionDetection={closestCenter} onDragEnd={onDragEnd} sensors={sensors}>
+              <SortableContext
+                items={chain.map((finding) => rowId(finding))}
+                strategy={verticalListSortingStrategy}
+              >
+                <ol className="plate-field m-0 list-none divide-y divide-border rounded-md border border-border p-0">
+                  {chain.map((finding, position) => (
+                    <SortableChainRow
+                      actions={
+                        <>
+                          <Button
+                            aria-label="Move up"
+                            disabled={position === 0}
+                            onClick={() => move(position, position - 1)}
+                            size="icon"
+                            variant="ghost"
+                          >
+                            <ArrowUpIcon className="size-4" />
+                          </Button>
+                          <Button
+                            aria-label="Move down"
+                            disabled={position === chain.length - 1}
+                            onClick={() => move(position, position + 1)}
+                            size="icon"
+                            variant="ghost"
+                          >
+                            <ArrowDownIcon className="size-4" />
+                          </Button>
+                          <Button
+                            aria-label={`Take ${finding.title} out of the set`}
+                            onClick={() => finding.logId && remove(finding.logId)}
+                            size="icon"
+                            variant="ghost"
+                          >
+                            <XIcon className="size-4" />
+                          </Button>
+                        </>
+                      }
+                      finding={finding}
+                      key={rowId(finding)}
+                      reducedMotion={reducedMotion}
+                    />
+                  ))}
+                </ol>
+              </SortableContext>
+            </DndContext>
+          )}
 
           <MixPlayer chain={chain} />
 
@@ -278,7 +422,7 @@ export function MixBuilder({
                   }
                   chip={<Badge variant="secondary">{mixReasonLabel(candidate.reason)}</Badge>}
                   finding={candidate}
-                  key={candidate.logId ?? candidate.trackId}
+                  key={rowId(candidate)}
                 />
               ))}
             </ul>
@@ -314,14 +458,14 @@ function MixPicker({ onPick }: { onPick: (finding: TrackListItem) => void }) {
           <CommandGroup>
             {pool.map((finding) => (
               <CommandItem
-                key={finding.logId ?? finding.trackId}
+                key={rowId(finding)}
                 onSelect={() => onPick(finding)}
                 value={`${finding.artists.join(" ")} ${finding.title} ${finding.logId ?? ""}`}
               >
-                <span className="truncate">
+                <span className="min-w-0 flex-1 truncate">
                   {finding.artists.join(", ")} — {finding.title}
                 </span>
-                <span className="track-log-id ml-auto shrink-0">{finding.logId}</span>
+                <span className="track-log-id shrink-0">{finding.logId}</span>
               </CommandItem>
             ))}
           </CommandGroup>
