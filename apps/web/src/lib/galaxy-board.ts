@@ -23,7 +23,9 @@ export type GalaxyBoard<T extends GalaxyLike> = {
   nameableCount: number;
   /** The unnamed, non-retired galaxies — the naming queue's attention rows. */
   namingQueue: T[];
-  /** The retired tail — kept for provenance, shown quietly and never nameable. */
+  /** The retired tail — only galaxies that were once NAMED (a real place with history).
+   * A never-named retired cluster (a machine handle from a superseded fit or remint)
+   * was never anywhere the operator or the crew knew — it is dropped, not memorialized. */
   retiredGalaxies: T[];
 };
 
@@ -44,7 +46,9 @@ export function partitionGalaxyBoard<T extends GalaxyLike>(galaxies: readonly T[
 
   for (const galaxy of galaxies) {
     if (galaxy.retiredAt) {
-      retiredGalaxies.push(galaxy);
+      if (isNamed(galaxy)) {
+        retiredGalaxies.push(galaxy);
+      }
     } else if (isNamed(galaxy)) {
       namedGalaxies.push(galaxy);
     } else {

@@ -83,7 +83,9 @@ describe("partitionGalaxyBoard", () => {
       galaxy({ retiredAt: "2026-07-10T00:00:00.000Z" }),
     ]);
 
-    expect(board.retiredGalaxies).toHaveLength(1);
+    // A never-named retiree (a machine handle from a superseded fit) is DROPPED from
+    // the board entirely — it was never a place, so there is nothing to memorialize.
+    expect(board.retiredGalaxies).toHaveLength(0);
     expect(board.namingQueue).toHaveLength(0);
     // The retired row is out of the map: one nameable galaxy, and it is named → gate open.
     expect(board.nameableCount).toBe(1);
