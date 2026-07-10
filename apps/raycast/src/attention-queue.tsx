@@ -63,8 +63,8 @@ export default function Command() {
             <MenuBarExtra.Item
               icon={Icon.Stars}
               onAction={() => open(`${SITE}/admin`)}
-              title={queue.brief}
-              tooltip="Open the attention queue"
+              title={compactBrief(queue.brief)}
+              tooltip={queue.brief}
             />
           </MenuBarExtra.Section>
           {queue.counts.map(({ source }) => (
@@ -102,6 +102,20 @@ export default function Command() {
 
 // Quiet when zero (a muted tray icon, no number); a tinted tray once something waits;
 // a warning glyph when the read failed.
+// The dropdown-header dispatch, compacted: the full brief is a whole sentence of
+// phrases and reads hella long as a menu item, so show the first phrase plus a
+// count and keep the full dispatch in the item tooltip. "All clear. Quiet sector."
+// has no comma-joined phrases and passes through untouched.
+function compactBrief(brief: string): string {
+  const phrases = brief.replace(/\.$/, "").split(", ");
+
+  if (phrases.length <= 2) {
+    return brief;
+  }
+
+  return `${phrases[0]}, +${phrases.length - 1} more.`;
+}
+
 function menuBarIcon(total: number, failed: boolean): { source: Icon; tintColor?: Color } {
   if (failed) {
     return { source: Icon.Warning, tintColor: Color.Red };
