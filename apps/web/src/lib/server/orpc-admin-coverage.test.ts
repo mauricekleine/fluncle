@@ -134,13 +134,13 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "GET /admin/tracks/{trackId}": "get_track_admin",
   "GET /admin/tracks/{trackId}/social": "list_track_social",
   "PATCH /admin/clips/{clipId}": "update_clip",
+  // The operator's clip-drip schedule control — contract-only oRPC. Operator tier:
+  // set/override a clip's Instagram drip slot.
+  "PATCH /admin/clips/{clipId}/schedule": "set_clip_schedule",
   // The operator's galaxy naming write (browse-by-feel RFC) — contract-only oRPC (no
   // TanStack route file). OPERATOR tier: naming mints a public URL, so the agent token
   // 403s (the `note`/OPERATOR_ONLY precedent).
   "PATCH /admin/galaxies/{id}": "update_galaxy",
-  // The operator's clip-drip schedule control — contract-only oRPC. Operator tier:
-  // set/override a clip's Instagram drip slot.
-  "PATCH /admin/clips/{clipId}/schedule": "set_clip_schedule",
   // The operator's logbook overwrite/edit — contract-only oRPC (no TanStack route
   // file). Operator tier: it can replace a cron-authored entry, so the agent 403s.
   "PATCH /admin/logbook/{sector}": "update_logbook_entry",

@@ -8,7 +8,10 @@
 
 import { oc } from "@orpc/contract";
 import * as z from "zod";
-import { TrackListItemSchema } from "./_shared";
+// `.js` extension: this module is pulled into the NodeNext typecheckers (Raycast) via
+// the pure-types `../index.ts` re-export, and NodeNext requires explicit extensions on
+// relative imports. Bundler resolvers (web, CLI) resolve it back to the `.ts` source.
+import { TrackListItemSchema } from "./_shared.js";
 
 /**
  * A public galaxy list item — the minimal shape the list and get ops emit. `slug` +

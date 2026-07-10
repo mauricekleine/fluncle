@@ -78,10 +78,10 @@ describe("updateGalaxyMap — server-side identity mint", () => {
 
     expect(mode).toBe("write");
     expect(statements).toHaveLength(1);
-    expect(statements[0].sql).toContain("insert into galaxies");
+    expect(statements[0]?.sql).toContain("insert into galaxies");
     // args: [id, handle, centroid_json, now, now]
-    expect(statements[0].args[0]).toBe(NEW_ID);
-    expect(statements[0].args[1]).toBe(galaxySlug(NEW_ID, 0));
+    expect(statements[0]?.args[0]).toBe(NEW_ID);
+    expect(statements[0]?.args[1]).toBe(galaxySlug(NEW_ID, 0));
   });
 
   it("salts the handle past a collision (galaxySlug attempt 0 taken → attempt 1)", async () => {
@@ -92,8 +92,8 @@ describe("updateGalaxyMap — server-side identity mint", () => {
 
     const [statements] = batch.mock.calls[0] as [Array<{ args: unknown[]; sql: string }>, string];
 
-    expect(statements[0].args[1]).toBe(galaxySlug(NEW_ID, 1));
-    expect(statements[0].args[1]).not.toBe(galaxySlug(NEW_ID, 0));
+    expect(statements[0]?.args[1]).toBe(galaxySlug(NEW_ID, 1));
+    expect(statements[0]?.args[1]).not.toBe(galaxySlug(NEW_ID, 0));
   });
 });
 
@@ -113,9 +113,9 @@ describe("updateGalaxyMap — the batch write shapes", () => {
 
     expect(mode).toBe("write");
     expect(statements).toHaveLength(3);
-    expect(statements[0].sql).toContain("set centroid_json = ?");
-    expect(statements[1].sql).toContain("set retired_at = ?");
-    expect(statements[2].sql).toContain("insert into galaxies");
+    expect(statements[0]?.sql).toContain("set centroid_json = ?");
+    expect(statements[1]?.sql).toContain("set retired_at = ?");
+    expect(statements[2]?.sql).toContain("insert into galaxies");
   });
 
   it("does not open a transaction when there are no clusters", async () => {

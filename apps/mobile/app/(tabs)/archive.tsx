@@ -2,22 +2,35 @@ import { useCallback, useState } from "react";
 import { FlatList, type ListRenderItem, Pressable, Text, View } from "react-native";
 import { useRouter } from "expo-router";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
-import { type Galaxy } from "@fluncle/contracts";
 import { flattenFeed, useFindingsFeed } from "@/api/hooks";
 import { FindingRow } from "@/components/finding-row";
 import { CosmosBackdrop } from "@/components/cosmos-backdrop";
-import { color, font, galaxies } from "@/theme/tokens";
+import { color, font } from "@/theme/tokens";
 
-// The archive (RFC Unit 3): browse + the four-galaxy lens. No search box (a
-// DESIGN.md anti-reference). Phase 0 filters client-side over loaded findings;
-// Phase 1 adds the server-side galaxy= param.
+// The archive (RFC Unit 3): browse + the sonic-galaxy lens (browse-by-feel RFC). No
+// search box (a DESIGN.md anti-reference). The lens is DATA-DRIVEN off the real,
+// operator-named galaxies present in the loaded findings — it filters client-side by
+// galaxy slug (before any galaxy is named, only "All" shows). The full public lens is
+// a later slice.
 export default function ArchiveScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { data, fetchNextPage, hasNextPage, isFetchingNextPage } = useFindingsFeed();
   const all = flattenFeed(data?.pages);
-  const [galaxy, setGalaxy] = useState<Galaxy | null>(null);
-  const shown = galaxy ? all.filter((f) => f.galaxy?.key === galaxy) : all;
+  const [activeSlug, setActiveSlug] = useState<string | null>(null);
+  const shown = activeSlug ? all.filter((f) => f.galaxy?.slug === activeSlug) : all;
+
+  // The distinct named galaxies present in the loaded findings, in first-seen order —
+  // the chip list. Empty until the operator names the map (then only "All" renders).
+  const presentGalaxies: Array<{ name: string; slug: string }> = [];
+  const seenSlugs = new Set<string>();
+  for (const finding of all) {
+    const found = finding.galaxy;
+    if (found && !seenSlugs.has(found.slug)) {
+      seenSlugs.add(found.slug);
+      presentGalaxies.push(found);
+    }
+  }
 
   // Stable renderItem so the list bails out of rebuilding every visible row on
   // each screen redraw; only re-created when the row count (last-row flag) shifts.
@@ -66,13 +79,17 @@ export default function ArchiveScreen() {
             paddingTop: 18,
           }}
         >
-          <GalaxyChip label="All" active={galaxy === null} onPress={() => setGalaxy(null)} />
-          {galaxies.map((g) => (
+          <GalaxyChip
+            label="All"
+            active={activeSlug === null}
+            onPress={() => setActiveSlug(null)}
+          />
+          {presentGalaxies.map((g) => (
             <GalaxyChip
-              key={g.key}
+              key={g.slug}
               label={g.name}
-              active={galaxy === g.key}
-              onPress={() => setGalaxy(g.key)}
+              active={activeSlug === g.slug}
+              onPress={() => setActiveSlug(g.slug)}
             />
           ))}
         </View>
