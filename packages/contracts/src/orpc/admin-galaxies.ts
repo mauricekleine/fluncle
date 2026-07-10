@@ -116,6 +116,11 @@ export const updateGalaxyMap = oc
       clusters: z.array(
         z.object({
           centroid: z.array(z.number()),
+          // Clear the parent's `split_requested_at` in the SAME batch that upserts its
+          // centroid — the agent-tier way the nightly tick CONSUMES a split it just ran
+          // (the operator sets the flag via the OPERATOR-tier `update_galaxy`, which the
+          // box's agent token cannot call; consuming it rides this admin-tier map write).
+          clearSplitRequest: z.boolean().optional(),
           id: z.string().nullable(),
           retire: z.boolean().optional(),
         }),
@@ -124,10 +129,17 @@ export const updateGalaxyMap = oc
   )
   .output(z.object({ galaxies: z.array(GalaxyAdminItemSchema), ok: z.literal(true) }));
 
-/** One embedded finding — the cluster engine's input row. */
+/**
+ * One embedded finding — the cluster engine's input row. `galaxyId` is the finding's
+ * CURRENT sonic-galaxy assignment (null when unplaced): the nightly sweep diffs the
+ * nearest-centroid result against it and writes back ONLY the changed assignments (the
+ * write-order contract's "a handful per night"), so an unchanged corpus never churns
+ * the `/log` edge cache.
+ */
 export const TrackEmbeddingSchema = z
   .object({
     embedding: z.array(z.number()),
+    galaxyId: z.string().nullable(),
     trackId: z.string(),
   })
   .meta({ id: "TrackEmbedding" });

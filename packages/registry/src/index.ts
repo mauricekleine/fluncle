@@ -851,6 +851,18 @@ export const SURFACES: readonly Surface[] = [
     weights: { status: "hidden" },
   },
   {
+    command: "fluncle admin galaxies map",
+    exposedContent: [
+      "nightly assignment of each finding to its nearest sonic galaxy (k-means over the MuQ space)",
+    ],
+    kind: "cron",
+    name: "cron.cluster",
+    operatorNotes:
+      "nightly (02:20 Amsterdam), run by a rave-02 HOST systemd timer (docs/agents/hermes/cluster-timer/). Assignment-ONLY + idempotent (a no-op on an unchanged corpus): assign each finding to its nearest stored centroid, recompute centroids as members' means, retire an emptied galaxy, consume an operator split_requested_at (a k=2 fit). Zero LLM tokens; sub-second CPU. A full k=9 fit is an OPERATOR act (--cold-start / --remint), never scheduled. Source: docs/agents/hermes/scripts/cluster-sweep.* + cluster.py. See docs/agents/cluster-engine.md.",
+    probeConfig: { cadenceMs: 24 * 60 * MINUTE_MS, cronName: "fluncle-cluster", kind: "cron" },
+    weights: { status: "hidden" },
+  },
+  {
     command: "fluncle admin tracks capture-audio --queue",
     exposedContent: [
       "capture each finding's full song once → private R2 (yt-dlp via a residential proxy)",

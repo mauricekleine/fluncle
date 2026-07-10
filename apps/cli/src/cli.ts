@@ -3464,7 +3464,12 @@ async function runGalaxyMapWrite(
   }
 
   const galaxies = await galaxyMapWriteCommand(
-    clusters as Array<{ centroid: number[]; id: string | null; retire?: boolean }>,
+    clusters as Array<{
+      centroid: number[];
+      clearSplitRequest?: boolean;
+      id: string | null;
+      retire?: boolean;
+    }>,
   );
 
   if (options.json) {

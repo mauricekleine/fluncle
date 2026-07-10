@@ -280,7 +280,12 @@ async function getGalaxyAdminById(id: string): Promise<GalaxyAdminItem | undefin
  * then write per-finding assignments that point at real ids.
  */
 export async function updateGalaxyMap(
-  clusters: Array<{ centroid: number[]; id: string | null; retire?: boolean }>,
+  clusters: Array<{
+    centroid: number[];
+    clearSplitRequest?: boolean;
+    id: string | null;
+    retire?: boolean;
+  }>,
 ): Promise<GalaxyAdminItem[]> {
   const db = await getDb();
   const now = new Date().toISOString();
@@ -313,6 +318,17 @@ export async function updateGalaxyMap(
       statements.push({
         args: [now, now, cluster.id],
         sql: "update galaxies set retired_at = ?, updated_at = ? where id = ?",
+      });
+      continue;
+    }
+
+    // Consuming a split: upsert the parent's centroid AND clear its split flag in one
+    // statement, so the next tick never re-runs the same split. Otherwise a plain
+    // centroid upsert (the every-night mean refresh) leaves the flag untouched.
+    if (cluster.clearSplitRequest) {
+      statements.push({
+        args: [centroidJson, now, cluster.id],
+        sql: "update galaxies set centroid_json = ?, split_requested_at = null, updated_at = ? where id = ?",
       });
       continue;
     }
@@ -371,11 +387,15 @@ export async function listTrackEmbeddingsPage(
   args.push(limit + 1);
   const result = await db.execute({
     args,
-    sql: `select track_id, embedding_json from tracks
+    sql: `select track_id, galaxy_id, embedding_json from tracks
           where ${where} order by track_id asc limit ?`,
   });
 
-  const rows = typedRows<{ embedding_json: string; track_id: string }>(result.rows);
+  const rows = typedRows<{
+    embedding_json: string;
+    galaxy_id: string | null;
+    track_id: string;
+  }>(result.rows);
   const hasMore = rows.length > limit;
   const page = hasMore ? rows.slice(0, limit) : rows;
 
@@ -385,7 +405,7 @@ export async function listTrackEmbeddingsPage(
     const embedding = parseCentroid(row.embedding_json);
 
     if (embedding.length > 0) {
-      embeddings.push({ embedding, trackId: row.track_id });
+      embeddings.push({ embedding, galaxyId: row.galaxy_id, trackId: row.track_id });
     }
   }
 

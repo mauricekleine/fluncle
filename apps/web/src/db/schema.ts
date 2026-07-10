@@ -432,6 +432,7 @@ export const costEvents = sqliteTable(
         "lastfm",
         "newsletter",
         "studio-clip",
+        "cluster",
       ],
     }).notNull(),
     // finding id (no declared FK — socialPosts.trackId / user_galaxy_collections

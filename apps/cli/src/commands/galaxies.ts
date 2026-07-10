@@ -72,7 +72,12 @@ export async function galaxyEmbeddingsCommand(options: {
  * file or stdin).
  */
 export async function galaxyMapWriteCommand(
-  clusters: Array<{ centroid: number[]; id: string | null; retire?: boolean }>,
+  clusters: Array<{
+    centroid: number[];
+    clearSplitRequest?: boolean;
+    id: string | null;
+    retire?: boolean;
+  }>,
 ): Promise<GalaxyAdminItem[]> {
   const response = await adminApiPut<GalaxyMapUpdateResponse>("/api/admin/galaxies/map", {
     clusters,

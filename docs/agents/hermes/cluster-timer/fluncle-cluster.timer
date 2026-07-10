@@ -1,0 +1,18 @@
+[Unit]
+Description=fluncle-cluster timer — the nightly sonic-galaxy assignment tick at 02:20 Amsterdam on the rave-02 host (not the Hermes gateway)
+
+[Timer]
+# 02:20 Europe/Amsterdam via the explicit OnCalendar TZ suffix — the host clock is UTC (only
+# the Hermes container is TZ-pinned), so we name the zone here; DST-safe, needs systemd >=252.
+# Sits in the nightly band after the 00:40 logbook + 01:00 audit, and well clear of the
+# every-5m embed cron so the corpus read sees a settled map. The tick is ASSIGNMENT-ONLY
+# (no fit) and idempotent — a no-op on an unchanged corpus — so a nightly cadence is plenty
+# for a browse surface and reinforces the fixed-point discipline. Persistent catches up a
+# tick missed across a box reboot; a late assignment is harmless (it just files tonight's new
+# findings whenever it runs). The COLD-START and --remint fits are OPERATOR acts, never this
+# timer — run by hand (see ../cluster-timer/README.md), never scheduled.
+OnCalendar=*-*-* 02:20:00 Europe/Amsterdam
+Persistent=true
+
+[Install]
+WantedBy=timers.target

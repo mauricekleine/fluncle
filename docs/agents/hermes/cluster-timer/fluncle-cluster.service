@@ -1,0 +1,26 @@
+[Unit]
+Description=fluncle-cluster — rave-02 host trigger for the nightly sonic-galaxy assignment tick (the browse-by-feel cluster engine)
+Documentation=https://github.com/mauricekleine/fluncle/blob/main/docs/agents/hermes/cluster-timer/README.md
+Wants=network-online.target docker.service
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+# Root drives the Docker daemon; `docker exec -u hermes` runs the WORK as the unprivileged
+# hermes user (hermes owns the 0600 secrets file the .sh sources — FLUNCLE_API_TOKEN for the
+# best-effort cost emit; the CLI's own admin auth is the baked config under HOME). The
+# .sh/.ts/.py trio is BAKED at /opt/hermes-scripts/ (Unit A — auto-updates from main via
+# pin-watch); this host unit only TRIGGERS the nightly assignment-only tick, and the sweep
+# self-writes its /status marker (cron-output.sh) so the prober stays honest. The COLD-START
+# and --remint fits are OPERATOR-run by hand (a manual `docker exec … cluster-sweep.sh
+# --cold-start`), never wired here — a full k-means fit must never fire on a schedule.
+ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/cluster-sweep.sh
+# The nightly tick is sub-second CPU (nearest-centroid + mean over ~hundreds of vectors) plus
+# a handful of write round-trips; a split consumption adds one small k=2 fit. Give it ample
+# headroom well past the gateway's ~300s budget so a slow network write never trips it.
+TimeoutStartSec=600
+# Modest hardening for a root docker-driving oneshot.
+NoNewPrivileges=true
+ProtectControlGroups=true
+ProtectKernelTunables=true
+RestrictSUIDSGID=true
