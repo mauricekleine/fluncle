@@ -3,6 +3,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { useCallback } from "react";
 import { type TrackListItem } from "@fluncle/contracts";
 import { MixBuilder } from "@/components/mix/mix-builder";
+import { ShareSetButton } from "@/components/mix/share-set-button";
 import { siteUrl } from "@/lib/fluncle-links";
 import { jsonLdScript } from "@/lib/json-ld";
 import { mixPlaylistJsonLd, parseSetParam, serializeSet } from "@/lib/mix-set";
@@ -94,7 +95,7 @@ export const Route = createFileRoute("/mix")({
 
 function MixPage() {
   const { chain } = Route.useLoaderData();
-  const { view } = Route.useSearch();
+  const { set, view } = Route.useSearch();
   const navigate = useNavigate();
 
   // Sync the ordered chain to `?set=` in place: a replace navigation with the loader
@@ -130,11 +131,14 @@ function MixPage() {
     <main className="min-h-screen overflow-x-hidden p-4 text-foreground sm:p-6 lg:flex lg:flex-col lg:p-8">
       <article className="home-plate mx-auto my-6 w-full max-w-2xl sm:my-8 lg:my-auto">
         <header className="home-masthead">
-          <div>
-            <h1 className="home-nameplate">Chain a set</h1>
-            <p className="home-tagline">
-              My findings, your order. The archive says what mixes clean.
-            </p>
+          <div className="flex items-end justify-between gap-4">
+            <div>
+              <h1 className="home-nameplate">Chain a set</h1>
+              <p className="home-tagline">
+                My findings, your order. The archive says what mixes clean.
+              </p>
+            </div>
+            {view !== "play" && set ? <ShareSetButton serializedSet={set} /> : undefined}
           </div>
         </header>
         <MixBuilder

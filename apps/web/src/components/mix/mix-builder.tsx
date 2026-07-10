@@ -19,14 +19,12 @@ import {
   ArrowDownIcon,
   ArrowUpIcon,
   DotsSixVerticalIcon,
-  LinkSimpleIcon,
   PlusIcon,
   XIcon,
 } from "@phosphor-icons/react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { type CSSProperties, useCallback, useMemo, useState } from "react";
-import { toast } from "sonner";
 import { type FeedItem, type MixableCandidate, type TrackListItem } from "@fluncle/contracts";
 import { Badge } from "@fluncle/ui/components/badge";
 import { Button } from "@fluncle/ui/components/button";
@@ -41,9 +39,8 @@ import {
 import { MixPlayer } from "@/components/mix/mix-player";
 import { TrackArtwork } from "@/components/track-artwork";
 import { TrackChips } from "@/components/track-row";
-import { siteUrl } from "@/lib/fluncle-links";
 import { spotifyAlbumImageAtSize } from "@/lib/media";
-import { mixReasonLabel, serializeSet } from "@/lib/mix-set";
+import { mixReasonLabel } from "@/lib/mix-set";
 import { usePrefersReducedMotion } from "@/lib/use-prefers-reduced-motion";
 import { cn } from "@/lib/utils";
 
@@ -304,27 +301,6 @@ export function MixBuilder({
     queryKey: ["mixable", tail, chainLogIds.length],
   });
 
-  const share = useCallback(async () => {
-    const url = `${siteUrl}/mix?set=${serializeSet(chainLogIds)}&view=play`;
-
-    try {
-      if (typeof navigator !== "undefined" && navigator.share) {
-        await navigator.share({ title: "A Fluncle mix", url });
-      } else {
-        await navigator.clipboard.writeText(url);
-        toast("Set link copied. Send it to the crew.");
-      }
-    } catch {
-      // A cancelled share sheet is not an error; a clipboard failure gets the fallback.
-      try {
-        await navigator.clipboard.writeText(url);
-        toast("Set link copied. Send it to the crew.");
-      } catch {
-        toast("Could not copy the link.");
-      }
-    }
-  }, [chainLogIds]);
-
   return (
     <div className="mx-auto flex w-full max-w-xl flex-col gap-4">
       {chain.length === 0 ? (
@@ -393,12 +369,7 @@ export function MixBuilder({
             <Button className="self-start" onClick={onPromote} variant="default">
               Chain your own set from here
             </Button>
-          ) : (
-            <Button className="self-start" onClick={() => void share()} variant="default">
-              <LinkSimpleIcon className="size-4" />
-              Copy set link
-            </Button>
-          )}
+          ) : undefined}
         </>
       )}
 
