@@ -154,6 +154,7 @@ const S: Station[] = [
     col: 0,
     cron: "triage",
     id: "tri",
+    img: "triage",
     label: "Submission triage",
     lane: 1.5,
     m: "rave02",
@@ -296,6 +297,7 @@ const S: Station[] = [
     col: 10,
     cron: "logbook",
     id: "logbook",
+    img: "logbook",
     label: "Logbook entry",
     // Above the YouTube Short card (lane -0.6): the note → logbook wire arrives from
     // the left mid-column, so the top slot keeps it clear of the render → yt/tk wires.
