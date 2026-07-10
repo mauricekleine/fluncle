@@ -1,43 +1,44 @@
 import { type EditionDTO } from "@fluncle/contracts";
-import { GALAXIES } from "./galaxies";
 
 export type { EditionDTO };
 
 /** A galaxy block as the archive page renders it (the content payload's shape). */
 export type EditionGalaxyBlock = NonNullable<EditionDTO["content"]["galaxies"]>[number];
 
-// The canonical galaxy reading order (the vibe map's quadrants, the same Solar →
-// Nebular → Lunar → Astral the board and the email follow). A block's `galaxy`
-// is a free label the agent wrote, so match it case-insensitively against the
-// known galaxy names; anything off-map (e.g. "Also found") keeps its authored
-// position after the known ones.
-const GALAXY_ORDER = ["Solar", "Nebular", "Lunar", "Astral"] as const;
-
-function galaxyRank(label: string): number {
-  const known = Object.values(GALAXIES).find(
-    (galaxy) => galaxy.name.toLowerCase() === label.trim().toLowerCase(),
+// The canonical galaxy reading order is now the LIVE sonic map (browse-by-feel RFC):
+// the operator-named galaxies in their public list order, passed in by the caller
+// (fetched from `listGalaxyNames`). A block's `galaxy` is a free label the agent
+// wrote, so match it case-insensitively against those live names; anything off-map
+// (e.g. "Also found", or a galaxy renamed since the edition was authored) keeps its
+// authored position after the known ones. Before the first galaxy is named the list
+// is empty and every block is off-map — so authored order is preserved, benign.
+function galaxyRank(label: string, knownGalaxyNames: readonly string[]): number {
+  const index = knownGalaxyNames.findIndex(
+    (name) => name.toLowerCase() === label.trim().toLowerCase(),
   );
 
-  if (!known) {
-    return GALAXY_ORDER.length;
-  }
-
-  const index = GALAXY_ORDER.indexOf(known.name as (typeof GALAXY_ORDER)[number]);
-
-  return index === -1 ? GALAXY_ORDER.length : index;
+  return index === -1 ? knownGalaxyNames.length : index;
 }
 
 /**
- * Order an edition's galaxy blocks for reading — the known galaxies in their
- * canonical sequence, off-map labels trailing in authored order. A stable sort,
- * so two blocks with the same rank keep the order the agent wrote them in. Empty
- * blocks (no findings) are dropped so the page never renders a bare heading.
+ * Order an edition's galaxy blocks for reading — the live named galaxies in their
+ * public list order, off-map labels trailing in authored order. A stable sort, so two
+ * blocks with the same rank keep the order the agent wrote them in. Empty blocks (no
+ * findings) are dropped so the page never renders a bare heading. `knownGalaxyNames`
+ * is the live map (from `listGalaxyNames`); an empty list preserves authored order.
  */
-export function orderedGalaxies(content: EditionDTO["content"]): EditionGalaxyBlock[] {
+export function orderedGalaxies(
+  content: EditionDTO["content"],
+  knownGalaxyNames: readonly string[] = [],
+): EditionGalaxyBlock[] {
   return (content.galaxies ?? [])
     .filter((block) => block.findings.length > 0)
     .map((block, index) => ({ block, index }))
-    .sort((a, b) => galaxyRank(a.block.galaxy) - galaxyRank(b.block.galaxy) || a.index - b.index)
+    .sort(
+      (a, b) =>
+        galaxyRank(a.block.galaxy, knownGalaxyNames) -
+          galaxyRank(b.block.galaxy, knownGalaxyNames) || a.index - b.index,
+    )
     .map(({ block }) => block);
 }
 

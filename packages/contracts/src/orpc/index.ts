@@ -25,7 +25,9 @@ import { adminArtistsContract } from "./admin-artists";
 import { adminAttentionContract } from "./admin-attention";
 import { adminBackfillsContract } from "./admin-backfills";
 import { adminCostsContract } from "./admin-costs";
+import { adminGalaxiesContract } from "./admin-galaxies";
 import { artistsContract } from "./artists";
+import { galaxiesContract } from "./galaxies";
 import { adminEditionsContract } from "./admin-editions";
 import { adminHealthContract } from "./admin-health";
 import { adminLogbookContract } from "./admin-logbook";
@@ -55,6 +57,16 @@ import { tracksContract } from "./tracks";
 // Re-export the per-op contracts so existing importers (and the typed client)
 // keep their entrypoints.
 export { ArtistListItemSchema, artistsContract, getArtist, listArtists } from "./artists";
+export { GalaxyListItemSchema, galaxiesContract, getGalaxy, listGalaxies } from "./galaxies";
+export {
+  adminGalaxiesContract,
+  GalaxyAdminItemSchema,
+  listGalaxiesAdmin,
+  listTrackEmbeddings,
+  TrackEmbeddingSchema,
+  updateGalaxy,
+  updateGalaxyMap,
+} from "./admin-galaxies";
 export {
   addArtistSocial,
   adminArtistsContract,
@@ -202,7 +214,9 @@ export const contract = {
   ...adminAttentionContract,
   ...adminBackfillsContract,
   ...adminCostsContract,
+  ...adminGalaxiesContract,
   ...artistsContract,
+  ...galaxiesContract,
   ...adminEditionsContract,
   ...adminHealthContract,
   ...adminLogbookContract,

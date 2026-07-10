@@ -115,6 +115,15 @@ export const tracks = sqliteTable("tracks", {
   embeddingJson: text("embedding_json"),
   enrichmentStatus: text("enrichment_status").notNull().default("pending"),
   featuresJson: text("features_json"),
+  // The sonic galaxy this finding belongs to — a nullable FK to `galaxies.id`, the
+  // internal-grouping precedent of `embeddingJson`/`vibeX`/`vibeY`. Hard assignment
+  // (one galaxy per finding), written by the on-box `fluncle-cluster` cron via the
+  // agent-tier `update_track` path (assignment-only nightly step). Internal like the
+  // embedding, so writing it moves no public lastmod (kept OUT of `VISIBLE_FIELDS`);
+  // it surfaces on the public DTO only once the galaxy is operator-NAMED. NULL until
+  // the finding is embedded AND assigned. Member counts are derived, never stored.
+  // See docs/rfcs/browse-by-feel.md + docs/track-lifecycle.md.
+  galaxyId: text("galaxy_id"),
   // The Discogs release the finding resolves to (read-only enrichment, best-effort,
   // matched by artist + title since Discogs has no ISRC search). inMasterId is the
   // master that groups a release's versions (Discogs returns it on the search hit);
@@ -1165,6 +1174,33 @@ export const artists = sqliteTable(
   },
   (table) => [index("artists_name_idx").on(table.name)],
 );
+
+// The sonic galaxy — a stable-ID, operator-named cluster over the MuQ embedding
+// space (browse-by-feel RFC). The FIRST time galaxy identity lives in the database:
+// the four vibe-quadrant galaxies were a hardcoded constant (`lib/galaxies.ts`),
+// derived per-track from the dead vibe axes; these are the real, sound-derived map.
+// The structural precedent is `artists` (the slug-addressable public entity), with
+// `artists.spotifyArtistId` as the nullable-`.unique()` precedent — SQLite treats
+// NULLs as distinct in a UNIQUE index, so many unnamed galaxies coexist. `handle` is
+// the permanent machine-minted admin/CLI identity (the plan-handle precedent, via
+// `galaxySlug(id, attempt)`), minted once at birth, never renamed, never public;
+// `name`/`slug` are the operator-authored public identity, NULL until named (an
+// unnamed galaxy is admin-only). `centroidJson` is the 1024-d nightly assignment
+// anchor. `retiredAt` is set when a galaxy empties (row kept, ID never recycled);
+// `splitRequestedAt` is the operator's split trigger the nightly tick consumes.
+// Member counts are DERIVED (`COUNT(*) GROUP BY galaxy_id`), never stored. See
+// docs/rfcs/browse-by-feel.md.
+export const galaxies = sqliteTable("galaxies", {
+  centroidJson: text("centroid_json").notNull(),
+  createdAt: text("created_at").notNull(),
+  handle: text("handle").notNull().unique(),
+  id: text("id").primaryKey(),
+  name: text("name"),
+  retiredAt: text("retired_at"),
+  slug: text("slug").unique(),
+  splitRequestedAt: text("split_requested_at"),
+  updatedAt: text("updated_at").notNull(),
+});
 
 // The many-to-many join between tracks (findings) and their artists. `position` is
 // 1-based and records the original Spotify artist order (first = lead). Composite PK

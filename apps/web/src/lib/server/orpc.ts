@@ -34,7 +34,9 @@ import { adminArtistsHandlers } from "./orpc/admin-artists";
 import { adminAttentionHandlers } from "./orpc/admin-attention";
 import { adminBackfillsHandlers } from "./orpc/admin-backfills";
 import { adminCostsHandlers } from "./orpc/admin-costs";
+import { adminGalaxiesHandlers } from "./orpc/admin-galaxies";
 import { artistsHandlers } from "./orpc/artists";
+import { galaxiesHandlers } from "./orpc/galaxies";
 import { adminEditionsHandlers } from "./orpc/admin-editions";
 import { adminHealthHandlers } from "./orpc/admin-health";
 import { adminLogbookHandlers } from "./orpc/admin-logbook";
@@ -80,7 +82,9 @@ export const router = os.router({
   ...adminAttentionHandlers(os),
   ...adminBackfillsHandlers(os),
   ...adminCostsHandlers(os),
+  ...adminGalaxiesHandlers(os),
   ...artistsHandlers(os),
+  ...galaxiesHandlers(os),
   ...adminEditionsHandlers(os),
   ...adminHealthHandlers(os),
   ...adminLogbookHandlers(os),

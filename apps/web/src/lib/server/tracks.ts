@@ -1,6 +1,5 @@
 import {
   type FeedListPage,
-  type Galaxy,
   type MixableCandidate,
   type MixReason,
   type TrackCursor,
@@ -9,14 +8,18 @@ import {
   type TrackListItem,
 } from "@fluncle/contracts";
 import { logPageUrl } from "../fluncle-links";
-import { GALAXIES, galaxyForVibe } from "../galaxies";
 import { versionedObservationAudioUrl } from "../media";
 import { nextBoundaryEpochMs, type RadioScheduleEntry } from "../radio-schedule";
 import { type FeedItem, type MixtapeMember, rowToMixtape } from "../mixtapes";
 import { parseArtistsJson } from "./artists";
 import { getDb, typedRow, typedRows } from "./db";
 import { discogsReleaseUrl } from "./discogs";
-import { type EmbeddingCandidate, parseEmbedding, rankBySimilarity } from "./embedding";
+import {
+  cosineSimilarity,
+  type EmbeddingCandidate,
+  parseEmbedding,
+  rankBySimilarity,
+} from "./embedding";
 import {
   type MixCandidate,
   orderMixPath,
@@ -43,6 +46,11 @@ export type TrackRow = {
   duration_ms: number;
   enrichment_status: string;
   features_json: string | null;
+  // The finding's sonic galaxy (browse-by-feel RFC), joined by `tracks.galaxy_id`.
+  // `galaxy_name`/`galaxy_slug` are non-null ONLY when the galaxy is operator-NAMED —
+  // an unnamed or unassigned finding reads null on both, and the DTO omits `galaxy`.
+  galaxy_name: string | null;
+  galaxy_slug: string | null;
   in_release_id: number | null;
   isrc: string | null;
   key: string | null;
@@ -99,6 +107,8 @@ const TRACK_SELECT = `tracks.track_id, tracks.spotify_url, tracks.title, tracks.
   tracks.preview_url, tracks.release_date, tracks.source_audio_failures, tracks.source_audio_key, tracks.video_url, tracks.video_squared_at, tracks.video_vehicle, tracks.video_grain, tracks.video_register, tracks.video_model, tracks.video_model_reasoning, tracks.note, tracks.added_at,
   tracks.updated_at, tracks.vibe_x, tracks.vibe_y, tracks.added_to_spotify, tracks.posted_to_telegram,
   tracks.observation_audio_url, tracks.observation_duration_ms, tracks.observation_generated_at, tracks.observation_alignment_json,
+  (select name from galaxies where galaxies.id = tracks.galaxy_id) as galaxy_name,
+  (select slug from galaxies where galaxies.id = tracks.galaxy_id) as galaxy_slug,
   (select url from social_posts
      where track_id = tracks.track_id and platform = 'tiktok' and status = 'published'
        and url is not null
@@ -189,13 +199,16 @@ function parseFeatures(json: string | null): TrackFeatures | undefined {
   }
 }
 
-function galaxyOf(x: number | null, y: number | null): { key: Galaxy; name: string } | undefined {
-  if (x == null || y == null) {
-    return undefined;
-  }
-
-  const key = galaxyForVibe(x, y);
-  return { key, name: GALAXIES[key].name };
+// The finding's sonic galaxy for the public DTO (browse-by-feel RFC): the
+// operator-named cluster read via the `galaxy_id` join. Present ONLY when the galaxy
+// is NAMED (both name + slug frozen) — an unassigned finding, or one in an unnamed
+// galaxy, reads null on both and the DTO omits `galaxy`. Replaces the retired
+// vibe-quadrant derivation (`galaxyOf` over vibe_x/vibe_y).
+function galaxyOf(
+  name: string | null,
+  slug: string | null,
+): { name: string; slug: string } | undefined {
+  return name && slug ? { name, slug } : undefined;
 }
 
 export function toTrackListItem(row: TrackRow): TrackListItem {
@@ -218,7 +231,7 @@ export function toTrackListItem(row: TrackRow): TrackListItem {
     durationMs: row.duration_ms,
     enrichmentStatus: row.enrichment_status,
     features: parseFeatures(row.features_json),
-    galaxy: galaxyOf(row.vibe_x, row.vibe_y),
+    galaxy: galaxyOf(row.galaxy_name, row.galaxy_slug),
     isrc: row.isrc ?? undefined,
     key: row.key ?? undefined,
     label: row.label ?? undefined,
@@ -1030,6 +1043,59 @@ export async function getMixableOrder(
 
 /** A resolvable-input fault the `get_mixable_order` handler maps to a 400. */
 export class MixableOrderError extends Error {}
+
+/**
+ * The findings in one sonic galaxy, ordered by centroid-distance ASCENDING — the core
+ * of the galaxy first (browse-by-feel RFC). Cosine-ranks every member's MuQ embedding
+ * against the galaxy's stored centroid (higher similarity = nearer the core), then
+ * hydrates the requested page in that deterministic order (the order a future radio
+ * consumer needs). A member with no embedding (shouldn't happen — assignment requires
+ * one) sorts last. Backs the public `get_galaxy` op + the `/galaxies/<slug>` lens.
+ * Returns `[]` when the galaxy has no members. The caller (`galaxies-map.ts`)
+ * public-strips the items.
+ */
+export async function getFindingsByGalaxyRanked(
+  galaxyId: string,
+  centroid: number[],
+  limit: number,
+  offset: number,
+): Promise<TrackListItem[]> {
+  if (limit <= 0) {
+    return [];
+  }
+
+  const db = await getDb();
+  const memberResult = await db.execute({
+    args: [galaxyId],
+    sql: `select track_id, embedding_json from tracks
+          where galaxy_id = ? and log_id is not null`,
+  });
+
+  const scored = typedRows<{ embedding_json: string | null; track_id: string }>(memberResult.rows)
+    .map((row) => {
+      const embedding = parseEmbedding(row.embedding_json);
+
+      return {
+        // A member with no embedding sorts last (−Infinity), never crashing the order.
+        score: embedding ? cosineSimilarity(centroid, embedding) : Number.NEGATIVE_INFINITY,
+        trackId: row.track_id,
+      };
+    })
+    .sort((a, b) => b.score - a.score);
+
+  const pageIds = scored.slice(offset, offset + limit).map((entry) => entry.trackId);
+
+  if (pageIds.length === 0) {
+    return [];
+  }
+
+  const byId = await getTracksByIds(pageIds);
+
+  return pageIds.flatMap((id) => {
+    const item = byId[id];
+    return item ? [item] : [];
+  });
+}
 
 /**
  * Which of the given tracks already carry a MuQ audio embedding (`embedding_json IS

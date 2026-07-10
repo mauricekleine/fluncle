@@ -64,6 +64,8 @@ function baseRow(stored: StoredTrack) {
     duration_ms: 180000,
     enrichment_status: "done",
     features_json: null,
+    galaxy_name: "The Liquid Deep",
+    galaxy_slug: "the-liquid-deep",
     in_release_id: null,
     isrc: null,
     key: "F",
@@ -149,7 +151,9 @@ describe("getRandomRadioTrack", () => {
     expect(track?.observationAudioUrl).toContain("observation.mp3?v=");
     // The square signal rides through so the page knows it can centre-crop.
     expect(track?.videoSquaredAt).toBe("2026-06-10T00:00:00.000Z");
-    expect(track?.galaxy).toBeDefined();
+    // The sonic galaxy (browse-by-feel RFC) rides through as { name, slug } from the
+    // galaxy_id join (present because this fixture's galaxy is named).
+    expect(track?.galaxy).toEqual({ name: "The Liquid Deep", slug: "the-liquid-deep" });
   });
 
   it("returns undefined when no finding is eligible", async () => {

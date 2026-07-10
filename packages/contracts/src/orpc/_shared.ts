@@ -46,10 +46,16 @@ export const TrackListItemSchema = z
     durationMs: z.number(),
     enrichmentStatus: z.string(),
     features: TrackFeaturesSchema.optional(),
+    // The sonic galaxy this finding belongs to (browse-by-feel RFC): the operator-named
+    // cluster over the MuQ embedding space, read from `tracks.galaxy_id`. A nullable
+    // `{ name, slug }` — present ONLY when the finding is placed (assigned by the
+    // `fluncle-cluster` cron) AND its galaxy is operator-NAMED. `slug` links to the
+    // `/galaxies/<slug>` lens. Replaces the four fixed vibe-quadrant names (the dead
+    // `{ key, name }` union), which were derived from the retired vibe axes.
     galaxy: z
       .object({
-        key: z.enum(["astral", "lunar", "nebular", "solar"]),
         name: z.string(),
+        slug: z.string(),
       })
       .optional(),
     isrc: z.string().optional(),

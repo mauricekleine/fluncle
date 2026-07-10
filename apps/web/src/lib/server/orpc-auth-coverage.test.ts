@@ -118,6 +118,8 @@ const PUBLIC_UNAUTH_OPS = new Set<string>([
   // Artist reads — public, no auth required (Unit 4 of the artist-relationship RFC).
   "get_artist",
   "get_edition",
+  // Galaxy reads — public, no auth (browse-by-feel RFC).
+  "get_galaxy",
   "get_health",
   "get_radio_now_playing",
   "get_random_radio_track",
@@ -126,6 +128,7 @@ const PUBLIC_UNAUTH_OPS = new Set<string>([
   "get_track",
   "list_artists",
   "list_editions",
+  "list_galaxies",
   // The `/mix` rail read (RFC mixability-engine). Public-unauth at the op (keys/BPMs
   // are already public on every track chip); the `/mix` page's admin gate is a
   // route-level flip (Decision 1), so the op ships at its final public tier now.
@@ -250,6 +253,9 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // precedent. Filterable by mixtapeId/status; serves the editor + the library.
   list_clips: "admin",
   list_editions_admin: "admin",
+  // The full galaxy map read (browse-by-feel RFC) — admin tier (agent-allowed), the
+  // list_*_admin precedent; the `fluncle-cluster` cron reads the prior map + split flags.
+  list_galaxies_admin: "admin",
   // The logbook sweep's self-healing window + material read — admin tier
   // (agent-allowed), the list_editions_admin precedent; the box's `fluncle-logbook`
   // cron reads it to pick the next sector-day to author and gather its findings.
@@ -260,6 +266,9 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   list_recordings: "admin",
   list_submissions: "admin",
   list_subscriptions: "admin",
+  // The embedded corpus read — admin tier (agent-allowed): the cluster engine's input,
+  // driven by the cron's agent token (the list_tracks_admin cursor precedent).
+  list_track_embeddings: "admin",
   list_track_social: "admin",
   list_tracks_admin: "admin",
   // The artist-sweep resolve worklist (artists awaiting social resolution) — agent
@@ -360,6 +369,12 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   unsave_private_finding: "private-session",
   update_clip: "operator",
   update_edition: "admin",
+  // The operator's galaxy naming write (browse-by-feel RFC) — operator tier: naming mints
+  // a public URL (publish-class), so an agent token 403s at operatorGuard.
+  update_galaxy: "operator",
+  // The cluster cron's transactional map write — admin tier (agent-allowed): the Worker
+  // mints new ids + handles; the box's `fluncle-cluster` cron drives it with its agent token.
+  update_galaxy_map: "admin",
   // The operator's logbook overwrite/edit — operator tier: it CAN replace a
   // cron-authored entry (an operator entry always wins) and stamps it sacred, so a
   // valid agent token 403s.

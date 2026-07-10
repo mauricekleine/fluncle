@@ -39,6 +39,8 @@ function trackRow(trackId: string, logId: string, title: string, albumImageUrl: 
     duration_ms: 200000,
     enrichment_status: "done",
     features_json: null,
+    galaxy_name: null,
+    galaxy_slug: null,
     in_release_id: null,
     isrc: null,
     key: null,

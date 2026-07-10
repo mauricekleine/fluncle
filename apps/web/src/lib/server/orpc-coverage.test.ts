@@ -41,6 +41,11 @@ const PUBLIC_ROUTE_OPS: Record<string, string> = {
   // registry. Public reads, no auth required.
   "GET /artists": "list_artists",
   "GET /artists/{slug}": "get_artist",
+  // The galaxies domain — contract-only oRPC (browse-by-feel RFC). No TanStack route
+  // file under /api/v1/galaxies; oRPC serves these straight off the registry. Public
+  // reads, no auth. (The game's `/galaxy` route + galaxy.fluncle.com are unrelated.)
+  "GET /galaxies": "list_galaxies",
+  "GET /galaxies/{slug}": "get_galaxy",
   "GET /health": "get_health",
   "GET /me": "get_current_private_user",
   "GET /me/csrf": "get_private_mutation_token",

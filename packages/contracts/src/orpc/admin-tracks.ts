@@ -54,6 +54,12 @@ const UpdateTrackBodySchema = z.looseObject({
   embedding: z.unknown().optional(),
   enrichmentStatus: z.unknown().optional(),
   features: z.unknown().optional(),
+  // The sonic galaxy assignment (browse-by-feel RFC) — an agent-writable grouping
+  // field the on-box `fluncle-cluster` cron sets (the nightly assignment step), like
+  // `embedding`. LOOSE like the rest: the handler narrows it to a string (the galaxy
+  // id, or "" to clear). Internal — kept out of VISIBLE_FIELDS so an assignment write
+  // moves no public lastmod.
+  galaxyId: z.unknown().optional(),
   isrc: z.unknown().optional(),
   key: z.unknown().optional(),
   keyConfidence: z.unknown().optional(),

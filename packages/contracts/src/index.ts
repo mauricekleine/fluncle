@@ -34,6 +34,8 @@ import {
   type AttentionSourceSchema,
 } from "./orpc/admin-attention.js";
 import { type ServiceHealthStatusSchema } from "./orpc/admin-health.js";
+import { type GalaxyAdminItemSchema, type TrackEmbeddingSchema } from "./orpc/admin-galaxies.js";
+import { type GalaxyListItemSchema } from "./orpc/galaxies.js";
 import { type GalaxyProgressSchema } from "./orpc/me-galaxy.js";
 import {
   type ClipDTOSchema,
@@ -88,6 +90,46 @@ export type ArtistsResponse = Ok<{ artists: ArtistListItem[] }>;
 
 /** `GET /api/v1/artists/:slug` response — one artist by slug. */
 export type ArtistGetResponse = Ok<{ artist: ArtistListItem }>;
+
+// ── Galaxy (the sonic map) ───────────────────────────────────────────────────
+
+/**
+ * A public galaxy list item, as `GET /api/v1/galaxies` and `GET /api/v1/galaxies/:slug`
+ * emit it (browse-by-feel RFC). Inferred from `GalaxyListItemSchema` (./orpc/galaxies.ts)
+ * — the operator-authored public identity (name, slug) + the derived member count.
+ */
+export type GalaxyListItem = z.infer<typeof GalaxyListItemSchema>;
+
+/** `GET /api/v1/galaxies` response — every named, non-retired galaxy. */
+export type GalaxiesResponse = Ok<{ galaxies: GalaxyListItem[] }>;
+
+/** `GET /api/v1/galaxies/:slug` response — one galaxy + its findings (core-first). */
+export type GalaxyResponse = Ok<{ findings: TrackListItem[]; galaxy: GalaxyListItem }>;
+
+/**
+ * One galaxy in the FULL admin shape (`GET /api/admin/galaxies`, the map writes).
+ * Inferred from `GalaxyAdminItemSchema` (./orpc/admin-galaxies.ts) — every column the
+ * naming view + the `fluncle-cluster` cron read (centroid, handle, name/slug, evidence).
+ */
+export type GalaxyAdminItem = z.infer<typeof GalaxyAdminItemSchema>;
+
+/** `GET /api/admin/galaxies` response — the full map (named + unnamed + retired). */
+export type GalaxiesAdminResponse = Ok<{ galaxies: GalaxyAdminItem[] }>;
+
+/** `PATCH /api/admin/galaxies/:id` response — the one updated galaxy. */
+export type GalaxyUpdateResponse = Ok<{ galaxy: GalaxyAdminItem }>;
+
+/** `PUT /api/admin/galaxies/map` response — the full resulting map (with minted ids). */
+export type GalaxyMapUpdateResponse = Ok<{ galaxies: GalaxyAdminItem[] }>;
+
+/** One embedded finding — the cluster engine's input row (`{ trackId, embedding }`). */
+export type TrackEmbedding = z.infer<typeof TrackEmbeddingSchema>;
+
+/** `GET /api/admin/tracks/embeddings` response — a cursor page of the embedded corpus. */
+export type TrackEmbeddingsResponse = Ok<{
+  embeddings: TrackEmbedding[];
+  nextCursor: string | null;
+}>;
 
 // ── Me (the private user tier) ───────────────────────────────────────────────
 

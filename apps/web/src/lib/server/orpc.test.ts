@@ -441,6 +441,8 @@ const PUBLIC_OPERATION_IDS = [
   "getArtist",
   "getCurrentPrivateUser",
   "getEdition",
+  // Galaxy reads — public, no auth (browse-by-feel RFC).
+  "getGalaxy",
   "getHealth",
   "getPrivateAccountExport",
   "getPrivateGalaxyProgress",
@@ -452,6 +454,7 @@ const PUBLIC_OPERATION_IDS = [
   "getTrack",
   "listArtists",
   "listEditions",
+  "listGalaxies",
   "listMixableTracks",
   "listMixtapes",
   "listPrivateSavedFindings",

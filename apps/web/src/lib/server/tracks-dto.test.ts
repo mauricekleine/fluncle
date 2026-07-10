@@ -19,6 +19,8 @@ const BASE_ROW: TrackRow = {
   duration_ms: 200000,
   enrichment_status: "done",
   features_json: null,
+  galaxy_name: null,
+  galaxy_slug: null,
   in_release_id: null,
   isrc: null,
   key: null,
@@ -84,6 +86,33 @@ describe("toTrackListItem — observation audio URL versioning", () => {
     });
 
     expect(item.observationAudioUrl).toBeUndefined();
+  });
+});
+
+// The sonic galaxy DTO field (browse-by-feel RFC): read from the `galaxy_id` join,
+// present as `{ name, slug }` ONLY when the galaxy is operator-named (both name + slug
+// non-null). The four dead vibe-quadrant names no longer feed it.
+describe("galaxy — the named-galaxy DTO field", () => {
+  it("surfaces { name, slug } when the galaxy is named (both columns present)", () => {
+    const item = toTrackListItem({
+      ...BASE_ROW,
+      galaxy_name: "The Liquid Deep",
+      galaxy_slug: "the-liquid-deep",
+    });
+
+    expect(item.galaxy).toEqual({ name: "The Liquid Deep", slug: "the-liquid-deep" });
+  });
+
+  it("omits galaxy when the finding is unassigned (both columns null)", () => {
+    expect(toTrackListItem(BASE_ROW).galaxy).toBeUndefined();
+  });
+
+  it("omits galaxy when the galaxy is assigned but not yet named (slug null)", () => {
+    // An unnamed galaxy is admin-only — its findings carry a galaxy_id but the name/slug
+    // columns read null through the join, so the public DTO shows nothing.
+    const item = toTrackListItem({ ...BASE_ROW, galaxy_name: null, galaxy_slug: null });
+
+    expect(item.galaxy).toBeUndefined();
   });
 });
 

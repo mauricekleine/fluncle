@@ -15,33 +15,44 @@ function content(partial: EditionDTO["content"]): EditionDTO["content"] {
   return partial;
 }
 
+// The section matcher now ranks against the LIVE sonic map (browse-by-feel RFC) —
+// the operator-named galaxies in their public list order, passed in by the caller
+// (fetched from `listGalaxyNames`), not the four dead vibe constants.
 describe("orderedGalaxies", () => {
-  it("orders the known galaxies Solar → Nebular → Lunar → Astral regardless of authored order", () => {
+  // A stand-in live map — the operator-named galaxies in their public list order.
+  const LIVE = ["The Liquid Deep", "The Feral Steppers", "Drifting Aurora"];
+
+  it("orders the known galaxies by the live map order regardless of authored order", () => {
     const ordered = orderedGalaxies(
       content({
         galaxies: [
-          { findings: [{ logId: "001.0.1" }], galaxy: "Astral" },
-          { findings: [{ logId: "002.0.1" }], galaxy: "Lunar" },
-          { findings: [{ logId: "003.0.1" }], galaxy: "Nebular" },
-          { findings: [{ logId: "004.0.1" }], galaxy: "Solar" },
+          { findings: [{ logId: "001.0.1" }], galaxy: "Drifting Aurora" },
+          { findings: [{ logId: "002.0.1" }], galaxy: "The Feral Steppers" },
+          { findings: [{ logId: "003.0.1" }], galaxy: "The Liquid Deep" },
         ],
       }),
+      LIVE,
     );
 
-    expect(ordered.map((block) => block.galaxy)).toEqual(["Solar", "Nebular", "Lunar", "Astral"]);
+    expect(ordered.map((block) => block.galaxy)).toEqual([
+      "The Liquid Deep",
+      "The Feral Steppers",
+      "Drifting Aurora",
+    ]);
   });
 
-  it("matches galaxy labels case-insensitively", () => {
+  it("matches galaxy labels case-insensitively against the live names", () => {
     const ordered = orderedGalaxies(
       content({
         galaxies: [
-          { findings: [{ logId: "001.0.1" }], galaxy: "nebular" },
-          { findings: [{ logId: "002.0.1" }], galaxy: "SOLAR" },
+          { findings: [{ logId: "001.0.1" }], galaxy: "the feral steppers" },
+          { findings: [{ logId: "002.0.1" }], galaxy: "THE LIQUID DEEP" },
         ],
       }),
+      LIVE,
     );
 
-    expect(ordered.map((block) => block.galaxy)).toEqual(["SOLAR", "nebular"]);
+    expect(ordered.map((block) => block.galaxy)).toEqual(["THE LIQUID DEEP", "the feral steppers"]);
   });
 
   it("trails off-map labels in authored order, after the known galaxies", () => {
@@ -49,30 +60,50 @@ describe("orderedGalaxies", () => {
       content({
         galaxies: [
           { findings: [{ logId: "001.0.1" }], galaxy: "Also found" },
-          { findings: [{ logId: "002.0.1" }], galaxy: "Astral" },
+          { findings: [{ logId: "002.0.1" }], galaxy: "Drifting Aurora" },
           { findings: [{ logId: "003.0.1" }], galaxy: "Loose ends" },
         ],
       }),
+      LIVE,
     );
 
-    expect(ordered.map((block) => block.galaxy)).toEqual(["Astral", "Also found", "Loose ends"]);
+    expect(ordered.map((block) => block.galaxy)).toEqual([
+      "Drifting Aurora",
+      "Also found",
+      "Loose ends",
+    ]);
+  });
+
+  it("preserves authored order when the live map is empty (no galaxy named yet)", () => {
+    const ordered = orderedGalaxies(
+      content({
+        galaxies: [
+          { findings: [{ logId: "001.0.1" }], galaxy: "Drifting Aurora" },
+          { findings: [{ logId: "002.0.1" }], galaxy: "The Liquid Deep" },
+        ],
+      }),
+      [],
+    );
+
+    expect(ordered.map((block) => block.galaxy)).toEqual(["Drifting Aurora", "The Liquid Deep"]);
   });
 
   it("drops empty blocks so a bare heading never renders", () => {
     const ordered = orderedGalaxies(
       content({
         galaxies: [
-          { findings: [], galaxy: "Solar" },
-          { findings: [{ logId: "001.0.1" }], galaxy: "Lunar" },
+          { findings: [], galaxy: "The Liquid Deep" },
+          { findings: [{ logId: "001.0.1" }], galaxy: "The Feral Steppers" },
         ],
       }),
+      LIVE,
     );
 
-    expect(ordered.map((block) => block.galaxy)).toEqual(["Lunar"]);
+    expect(ordered.map((block) => block.galaxy)).toEqual(["The Feral Steppers"]);
   });
 
   it("returns an empty list when there are no galaxies", () => {
-    expect(orderedGalaxies(content({}))).toEqual([]);
+    expect(orderedGalaxies(content({}), LIVE)).toEqual([]);
   });
 });
 

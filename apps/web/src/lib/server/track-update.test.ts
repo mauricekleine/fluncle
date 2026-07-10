@@ -87,6 +87,34 @@ describe("updateTrack — the visible-field lastmod bump", () => {
     expect(lastUpdateSql).not.toContain("updated_at = ?");
   });
 
+  it("does NOT bump updated_at for a galaxy assignment (internal grouping, VISIBLE_FIELDS excluded)", async () => {
+    // The browse-by-feel ratified confirmation: a galaxy assignment surfaces only once
+    // the galaxy is operator-named, so writing galaxy_id moves no public lastmod (the
+    // embedding precedent). The built-in purgeLogCache keeps the /log prose fresh.
+    await updateTrack("track-123", { galaxyId: "gal_abc" });
+
+    expect(lastUpdateSql).toContain("galaxy_id = ?");
+    expect(lastUpdateSql).not.toContain("updated_at = ?");
+  });
+
+  it("clears the galaxy assignment to null on an empty string (re-queue path)", async () => {
+    const argsSeen: unknown[] = [];
+    execute.mockImplementation((query: { args?: unknown[]; sql: string }) => {
+      if (query.sql.startsWith("select")) {
+        return Promise.resolve({ rows: [EXISTING] });
+      }
+      lastUpdateSql = query.sql;
+      argsSeen.push(...(query.args ?? []));
+      return Promise.resolve({ rows: [] });
+    });
+
+    await updateTrack("track-123", { galaxyId: "" });
+
+    expect(lastUpdateSql).toContain("galaxy_id = ?");
+    // The first bound arg is the cleared (null) galaxy id, not an empty string.
+    expect(argsSeen[0]).toBeNull();
+  });
+
   it("bumps updated_at for an editorial note write (public copy)", async () => {
     await updateTrack("track-123", { note: "Knees up the second it dropped." });
 
