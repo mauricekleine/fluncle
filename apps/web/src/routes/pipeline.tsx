@@ -47,7 +47,7 @@ function PipelinePage() {
   }, []);
 
   return (
-    <main className="fixed inset-0 overflow-hidden bg-[#090a0b]">
+    <main className="fixed inset-0 overflow-hidden bg-background">
       <h1 className="sr-only">Fluncle's galaxy factory</h1>
       <p className="sr-only">
         A guided map of the machinery Fluncle built for his findings: he hits CMD+F when he hears a
@@ -63,9 +63,9 @@ function PipelinePage() {
         role="application"
       />
       <noscript>
-        <p className="p-6 text-center text-sm" style={{ color: "#b7ab95" }}>
+        <p className="p-6 text-center text-sm text-muted-foreground">
           The map needs JavaScript. The findings are still at{" "}
-          <a href="/" style={{ color: "#f5b800" }}>
+          <a className="text-primary" href="/">
             fluncle.com
           </a>
           .
