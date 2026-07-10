@@ -37,6 +37,21 @@ vi.mock("./tracks", async (importOriginal) => {
   };
 });
 
+// The radio ops gate the finding's galaxy behind the browse-by-feel launch gate
+// (nothing public renders a galaxy until the whole map is named). Mocked so the
+// radio reads never touch Turso; defaults to a fully-named map (galaxy passes
+// through) and a gate test below flips it closed.
+const isGalaxyMapFullyNamed = vi.fn();
+
+vi.mock("./galaxies-map", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./galaxies-map")>();
+
+  return {
+    ...actual,
+    isGalaxyMapFullyNamed: (...args: unknown[]) => isGalaxyMapFullyNamed(...args),
+  };
+});
+
 beforeEach(() => {
   resolveLogPageTarget.mockReset();
   listTracks.mockReset();
@@ -46,6 +61,8 @@ beforeEach(() => {
   getRadioScheduleFingerprint.mockReset();
   getRadioScheduleAnchor.mockReset();
   getTrackByIdOrLogId.mockReset();
+  isGalaxyMapFullyNamed.mockReset();
+  isGalaxyMapFullyNamed.mockResolvedValue(true);
 });
 
 describe("oRPC rails — handleOrpc", () => {
@@ -401,6 +418,50 @@ describe("oRPC public read — GET /radio/now-playing (get_radio_now_playing)", 
 
     const body = (await response?.json()) as { nowPlaying: { nextTrack?: unknown } };
     expect(body.nowPlaying.nextTrack).toBeUndefined();
+  });
+
+  it("strips the galaxy from now-playing until the whole map is named (launch gate)", async () => {
+    const PLACED = { ...CURRENT, galaxy: { name: "Nebular", slug: "nebular" } };
+    getRadioEligibleTracks.mockResolvedValueOnce([
+      { logId: "001.1.1A", observationDurationMs: 20_000, trackId: "track-a" },
+    ]);
+    getRadioScheduleFingerprint.mockResolvedValueOnce("1:g");
+    getRadioScheduleAnchor.mockResolvedValueOnce({ epochMs: Date.now(), version: "1:g" });
+    getTrackByIdOrLogId.mockResolvedValue(PLACED);
+    // The map is only partially named — the gate is closed.
+    isGalaxyMapFullyNamed.mockReset();
+    isGalaxyMapFullyNamed.mockResolvedValue(false);
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(get("https://www.fluncle.com/api/v1/radio/now-playing"));
+
+    expect(response?.status).toBe(200);
+    const body = (await response?.json()) as {
+      nowPlaying: { currentTrack: { galaxy?: unknown; trackId: string } };
+    };
+    // The finding still serves; only its galaxy is dark until the lens ships.
+    expect(body.nowPlaying.currentTrack.trackId).toBe("track-a");
+    expect(body.nowPlaying.currentTrack.galaxy).toBeUndefined();
+  });
+
+  it("carries the galaxy on now-playing once the map is fully named", async () => {
+    const PLACED = { ...CURRENT, galaxy: { name: "Nebular", slug: "nebular" } };
+    getRadioEligibleTracks.mockResolvedValueOnce([
+      { logId: "001.1.1A", observationDurationMs: 20_000, trackId: "track-a" },
+    ]);
+    getRadioScheduleFingerprint.mockResolvedValueOnce("1:h");
+    getRadioScheduleAnchor.mockResolvedValueOnce({ epochMs: Date.now(), version: "1:h" });
+    getTrackByIdOrLogId.mockResolvedValue(PLACED);
+    // Default beforeEach state is fully-named, but pin it for the record.
+    isGalaxyMapFullyNamed.mockResolvedValue(true);
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(get("https://www.fluncle.com/api/v1/radio/now-playing"));
+
+    const body = (await response?.json()) as {
+      nowPlaying: { currentTrack: { galaxy?: { name: string } } };
+    };
+    expect(body.nowPlaying.currentTrack.galaxy?.name).toBe("Nebular");
   });
 });
 

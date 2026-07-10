@@ -386,6 +386,8 @@ const (
 	screenLatest        screen = "latest"
 	screenDetail        screen = "detail"
 	screenArtists       screen = "artists"
+	screenGalaxies      screen = "galaxies"
+	screenGalaxyDetail  screen = "galaxy-detail"
 	screenMixtapes      screen = "mixtapes"
 	screenMixtapeDetail screen = "mixtape-detail"
 	screenSearchInput   screen = "search-input"
@@ -410,11 +412,14 @@ type model struct {
 	selected       int
 	tracks         []track
 	artists        []artist
+	galaxies       []galaxyItem
+	galaxyTracks   []track
 	mixtapes       []mixtape
 	total          int
 	footer         *track
 	results        []searchResult
 	current        *track
+	currentGalaxy  *galaxyItem
 	currentMixtape *mixtape
 	detailBack     screen
 	pending        *searchResult
@@ -454,6 +459,16 @@ type artist struct {
 	Slug         string `json:"slug"`
 	FindingCount int    `json:"findingCount"`
 	SpotifyURL   string `json:"spotifyUrl,omitempty"`
+}
+
+// galaxyItem is one operator-named sonic galaxy off the public /api/v1/galaxies
+// read (browse-by-feel): the display name, its slug, and the derived member count.
+// The launch gate means this list is empty until the operator has named the whole
+// map, so the screen simply shows "no galaxies charted yet" until then.
+type galaxyItem struct {
+	Name        string `json:"name"`
+	Slug        string `json:"slug"`
+	MemberCount int    `json:"memberCount"`
 }
 
 type mixtape struct {
@@ -521,6 +536,19 @@ type tracksMsg struct {
 type artistsMsg struct {
 	artists []artist
 	err     error
+}
+
+type galaxiesMsg struct {
+	galaxies []galaxyItem
+	err      error
+}
+
+// galaxyDetailMsg carries one galaxy plus its findings (core-first), opened when
+// the operator selects a galaxy on the browse screen.
+type galaxyDetailMsg struct {
+	galaxy   galaxyItem
+	findings []track
+	err      error
 }
 
 type mixtapesMsg struct {
@@ -655,6 +683,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.artists = msg.artists
 		m.selected = 0
+	case galaxiesMsg:
+		m.loading = false
+		if msg.err != nil {
+			m.err = msg.err.Error()
+			return m, nil
+		}
+		m.galaxies = msg.galaxies
+		m.selected = 0
+	case galaxyDetailMsg:
+		m.loading = false
+		if msg.err != nil {
+			m.err = msg.err.Error()
+			return m, nil
+		}
+		m.currentGalaxy = &msg.galaxy
+		m.galaxyTracks = msg.findings
+		m.selected = 0
 	case mixtapesMsg:
 		m.loading = false
 		if msg.err != nil {
@@ -778,7 +823,7 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch m.screen {
 	case screenMenu:
 		return m.handleMenuKey(key)
-	case screenLatest, screenSearch, screenArtists, screenMixtapes:
+	case screenLatest, screenSearch, screenArtists, screenGalaxies, screenGalaxyDetail, screenMixtapes:
 		return m.handleListKey(key)
 	case screenAbout:
 		return m.handleAboutKey(key)
@@ -825,6 +870,11 @@ func (m model) handleMenuKey(key string) (tea.Model, tea.Cmd) {
 			m.loading = true
 			m.err = ""
 			return m, m.fetchArtists()
+		case "galaxies":
+			m.screen = screenGalaxies
+			m.loading = true
+			m.err = ""
+			return m, m.fetchGalaxies()
 		case "mixtapes":
 			m.screen = screenMixtapes
 			m.loading = true
@@ -870,10 +920,21 @@ func (m model) handleListKey(key string) (tea.Model, tea.Cmd) {
 		length = len(m.mixtapes)
 	case screenArtists:
 		length = len(m.artists)
+	case screenGalaxies:
+		length = len(m.galaxies)
+	case screenGalaxyDetail:
+		length = len(m.galaxyTracks)
 	}
 
 	switch key {
 	case "q", "esc", "backspace", "b":
+		// A galaxy's findings sit UNDER the galaxies map — backing out returns to
+		// the map, not all the way to the menu (the one nested list screen).
+		if m.screen == screenGalaxyDetail {
+			m.screen = screenGalaxies
+			m.selected = 0
+			return m, nil
+		}
 		m.screen = screenMenu
 		m.selected = 0
 	case "up", "k":
@@ -884,10 +945,25 @@ func (m model) handleListKey(key string) (tea.Model, tea.Cmd) {
 		if length == 0 {
 			return m, nil
 		}
-		if m.screen == screenArtists {
-			// The artist archive is a read-only scan (no per-artist detail
-			// screen in the terminal yet), so Enter is a no-op. Its help line
-			// omits "enter select" to match.
+		if m.screen == screenGalaxies {
+			// Wander INTO a galaxy: open its findings (core-first) on the detail
+			// screen. The public read is the same /api/v1/galaxies/{slug} the CLI
+			// uses; the launch gate 404s an unnamed map, so this only ever opens
+			// a named galaxy.
+			g := m.galaxies[m.selected]
+			m.currentGalaxy = &g
+			m.screen = screenGalaxyDetail
+			m.loading = true
+			m.err = ""
+			m.selected = 0
+			return m, m.fetchGalaxy(g.Slug)
+		}
+		if m.screen == screenGalaxyDetail {
+			// A finding inside a galaxy opens the standard finding detail; backing
+			// out of it returns HERE (detailBack), not to the menu.
+			m.current = &m.galaxyTracks[m.selected]
+			m.detailBack = screenGalaxyDetail
+			m.screen = screenDetail
 			return m, nil
 		}
 		if m.screen == screenSearch {
@@ -1015,6 +1091,10 @@ func (m model) View() tea.View {
 		content = m.renderDetail()
 	case screenArtists:
 		content = m.renderArtists()
+	case screenGalaxies:
+		content = m.renderGalaxies()
+	case screenGalaxyDetail:
+		content = m.renderGalaxyDetail()
 	case screenMixtapes:
 		content = m.renderMixtapes()
 	case screenMixtapeDetail:
@@ -1325,6 +1405,66 @@ func (m model) renderArtists() string {
 	}
 	help := helpLine("↑/↓ j/k move", "q back", "ctrl+c quit")
 	return scaffold("Artist archive", "", content, help)
+}
+
+func (m model) renderGalaxies() string {
+	if m.loading {
+		return statusView("Sonic galaxies", "Charting the map...")
+	}
+	if m.err != "" {
+		return errorView("Sonic galaxies", m.err)
+	}
+	if len(m.galaxies) == 0 {
+		// The launch gate keeps this empty until the whole map is named.
+		return statusView("Sonic galaxies", "No galaxies charted yet. Quiet map tonight.")
+	}
+
+	content := make([]string, 0, len(m.galaxies))
+	for index, g := range m.galaxies {
+		count := fmt.Sprintf("%d finding%s", g.MemberCount, func() string {
+			if g.MemberCount == 1 {
+				return ""
+			}
+			return "s"
+		}())
+		if index == m.selected {
+			label := fmt.Sprintf("%-40s  %s", g.Name, count)
+			content = append(content, selectedStyle.Render("> "+label))
+		} else {
+			name := rowArtistStyle.Render(fmt.Sprintf("%-40s", g.Name))
+			info := labelStyle.Render(count)
+			content = append(content, fmt.Sprintf("  %s  %s", name, info))
+		}
+	}
+	help := helpLine("↑/↓ j/k move", "enter open", "q back", "ctrl+c quit")
+	return scaffold("Sonic galaxies", "", content, help)
+}
+
+func (m model) renderGalaxyDetail() string {
+	name := "Galaxy"
+	if m.currentGalaxy != nil {
+		name = m.currentGalaxy.Name
+	}
+	if m.loading {
+		return statusView(name, "Pulling the galaxy...")
+	}
+	if m.err != "" {
+		return errorView(name, m.err)
+	}
+	if len(m.galaxyTracks) == 0 {
+		return statusView(name, "No findings logged yet. Quiet sector tonight.")
+	}
+
+	content := make([]string, 0, len(m.galaxyTracks))
+	for index, t := range m.galaxyTracks {
+		coord := t.LogID
+		if coord == "" {
+			coord = fmt.Sprintf("#%02d", index+1)
+		}
+		content = append(content, selectableTrackRow(index == m.selected, coord, t.Artists, t.Title))
+	}
+	help := helpLine("↑/↓ j/k move", "enter select", "q back", "ctrl+c quit")
+	return scaffold(name, "", content, help)
 }
 
 func (m model) renderMixtapes() string {
@@ -1871,6 +2011,29 @@ func (m model) fetchArtists() tea.Cmd {
 	}
 }
 
+func (m model) fetchGalaxies() tea.Cmd {
+	return func() tea.Msg {
+		var response struct {
+			Galaxies []galaxyItem `json:"galaxies"`
+			OK       bool         `json:"ok"`
+		}
+		err := m.app.getJSON("/api/v1/galaxies", &response)
+		return galaxiesMsg{galaxies: response.Galaxies, err: err}
+	}
+}
+
+func (m model) fetchGalaxy(slug string) tea.Cmd {
+	return func() tea.Msg {
+		var response struct {
+			Findings []track    `json:"findings"`
+			Galaxy   galaxyItem `json:"galaxy"`
+			OK       bool       `json:"ok"`
+		}
+		err := m.app.getJSON("/api/v1/galaxies/"+url.PathEscape(slug), &response)
+		return galaxyDetailMsg{findings: response.Findings, galaxy: response.Galaxy, err: err}
+	}
+}
+
 func (m model) fetchMixtapes() tea.Cmd {
 	return func() tea.Msg {
 		var response struct {
@@ -2094,6 +2257,7 @@ func menuItems() []menuItem {
 	return []menuItem{
 		{id: "latest", label: "Latest bangers"},
 		{id: "artists", label: "Artist archive"},
+		{id: "galaxies", label: "Sonic galaxies"},
 		{id: "mixtapes", label: "Mixtape archive"},
 		{id: "random", label: "Random banger"},
 		{id: "submit", label: "Submit a track"},

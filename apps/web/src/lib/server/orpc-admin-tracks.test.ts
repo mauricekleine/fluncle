@@ -343,11 +343,9 @@ describe("oRPC update_track (PATCH /admin/tracks/{trackId})", () => {
 
   it.each([
     ["note", { note: "an editorial take" }],
-    ["vibeX", { vibeX: 0.5 }],
     ["videoUrl", { videoUrl: "https://r2/footage.mp4" }],
     ["logId", { logId: "F-0001" }],
     ["isrc", { isrc: "GB-XXX-00-00000" }],
-    ["vibeY", { vibeY: 0.5 }],
   ])("403s the AGENT writing %s, db untouched", async (_field, body) => {
     const { handleOrpc } = await import("./orpc");
     const response = await handleOrpc(patch(AGENT_TOKEN, body));

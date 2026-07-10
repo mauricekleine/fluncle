@@ -62,18 +62,12 @@ import { type VideoArtifact, artifactByField } from "../video-bundle";
 import { type Implementer, parseLimit, requireTrack, toFault } from "./_shared";
 
 // Fields only the operator may write: editorial voice (note), the vehicle/video
-// (videoUrl), the map placement (vibeX/vibeY), and the immutable identity fields
-// (isrc/logId). The agent role is limited to machine-measured analysis (bpm, key,
-// features, enrichmentStatus) — overwritable, internal, no public footprint.
-// Ported verbatim from the live PATCH route.
-const OPERATOR_ONLY_FIELDS: (keyof TrackUpdate)[] = [
-  "isrc",
-  "logId",
-  "note",
-  "vibeX",
-  "vibeY",
-  "videoUrl",
-];
+// (videoUrl), and the immutable identity fields (isrc/logId). The agent role is
+// limited to machine-measured analysis (bpm, key, features, enrichmentStatus) —
+// overwritable, internal, no public footprint. (The retired vibe placement
+// vibeX/vibeY is gone entirely — the sonic galaxy is now the automatic
+// `fluncle-cluster` assignment over the MuQ embedding, not an operator write.)
+const OPERATOR_ONLY_FIELDS: (keyof TrackUpdate)[] = ["isrc", "logId", "note", "videoUrl"];
 
 // The handler input shapes come straight from the contract (the single source of
 // truth): `InferContractRouterInputs<typeof contract>` projects each op's Zod
@@ -238,14 +232,6 @@ export function adminTracksHandlers(os: Implementer) {
       // absent note leaves it untouched. parseEditorialNote throws on too-long.
       if (typeof body.note === "string") {
         update.note = parseEditorialNote(body.note);
-      }
-
-      if (typeof body.vibeX === "number" && Number.isFinite(body.vibeX)) {
-        update.vibeX = body.vibeX;
-      }
-
-      if (typeof body.vibeY === "number" && Number.isFinite(body.vibeY)) {
-        update.vibeY = body.vibeY;
       }
 
       // Straggler repair: one-time backfill of identity fields into null slots

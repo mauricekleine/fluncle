@@ -4,7 +4,9 @@
 // is touched.
 
 import { ORPCError } from "@orpc/server";
+import { type TrackListItem } from "@fluncle/contracts";
 import { resolveRadioSlot, totalLoopDurationMs } from "../../radio-schedule";
+import { isGalaxyMapFullyNamed } from "../galaxies-map";
 import {
   getRadioEligibleTracks,
   getRadioScheduleAnchor,
@@ -22,6 +24,16 @@ import { apiFault, type Implementer } from "./_shared";
  * custom `track_not_found` code/message the random-track read uses, so the rails
  * encoder reproduces the legacy `jsonError` body rather than the generic `not_found`.
  */
+// The public launch gate applies to the radio too (browse-by-feel decision 5): the
+// now-playing meta line renders the finding's galaxy name, so it must stay dark until
+// the operator has NAMED the whole map — a named galaxy leaking here before the lens
+// ships would break the "nothing public renders a galaxy until fully named" rail. When
+// the gate is closed the galaxy is stripped from the payload; the rest of the finding
+// is untouched.
+function gateGalaxy(track: TrackListItem, fullyNamed: boolean): TrackListItem {
+  return fullyNamed ? track : { ...track, galaxy: undefined };
+}
+
 export function radioHandlers(os: Implementer) {
   const getRandomRadioTrackHandler = os.get_random_radio_track.handler(async () => {
     try {
@@ -34,7 +46,7 @@ export function radioHandlers(os: Implementer) {
         });
       }
 
-      return { ok: true, track } as const;
+      return { ok: true, track: gateGalaxy(track, await isGalaxyMapFullyNamed()) } as const;
     } catch (error) {
       if (error instanceof ORPCError) {
         throw error;
@@ -83,13 +95,17 @@ export function radioHandlers(os: Implementer) {
         throw notFound();
       }
 
+      const fullyNamed = await isGalaxyMapFullyNamed();
+
       return {
         nowPlaying: {
-          currentTrack,
+          currentTrack: gateGalaxy(currentTrack, fullyNamed),
           // Omit a self-referential next on a single-finding loop (it's the same
           // finding looping; there is no distinct preload target).
           nextTrack:
-            nextTrack && nextTrack.trackId !== currentTrack.trackId ? nextTrack : undefined,
+            nextTrack && nextTrack.trackId !== currentTrack.trackId
+              ? gateGalaxy(nextTrack, fullyNamed)
+              : undefined,
           offsetMs: slot.offsetMs,
           scheduleVersion: anchor.version,
           serverEpochMs: nowMs,

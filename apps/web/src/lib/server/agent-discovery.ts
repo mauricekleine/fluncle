@@ -1,6 +1,7 @@
 import { siteUrl, spotifyPlaylistUrl, telegramUrl } from "../fluncle-links";
 import { fluncleDescription } from "../identity";
 import { type FeedItem } from "../mixtapes";
+import { isGalaxyMapFullyNamed } from "./galaxies-map";
 import { sha256Hex } from "./hash";
 import { type TrackCursor, type TrackListItem, decodeTrackCursor, listTracks } from "./tracks";
 
@@ -184,6 +185,14 @@ async function skillDigest(): Promise<string> {
 
 async function markdownHomeResponse(): Promise<Response> {
   const page = await listTracks({ includeMixtapes: true, limit: markdownTracksLimit });
+  // The browse-by-feel launch gate (decision 5): the galaxies lens + API stay dark on
+  // every public surface — this map included — until the operator has NAMED the whole
+  // sonic map, so agents are never pointed at a lens that 404s. Once named, the line
+  // lights up here the same moment it does everywhere else.
+  const galaxiesLive = await isGalaxyMapFullyNamed();
+  const galaxiesLine = galaxiesLive
+    ? `\n- [Galaxies API](${siteUrl}/api/v1/galaxies): the archive grouped into operator-named sonic galaxies (clusters over the audio-embedding space), each with its member count, as JSON; /api/v1/galaxies/{slug} for one galaxy's findings core-first. Browse them at ${siteUrl}/galaxies`
+    : "";
   const tracks = page.tracks.map((track) => {
     if (track.type === "mixtape") {
       return `- ${track.title} (${track.logId ?? "draft checkpoint"})`;
@@ -214,7 +223,7 @@ ${tracks.join("\n")}
 - [Tracks API](${siteUrl}/api/v1/tracks): the archive as JSON, cursor-paginated; accepts limit (max 48) and cursor query params
 - [Random track](${siteUrl}/api/v1/tracks/random): one pick from the archive, as JSON
 - [Artists API](${siteUrl}/api/v1/artists): every artist with a published finding, most findings first, as JSON; /api/v1/artists/{slug} for one artist. Each resolves to a page at ${siteUrl}/artist/{slug}: that artist's findings plus their verified identity links (MusicGroup + sameAs)
-- [Mixtapes API](${siteUrl}/api/v1/mixtapes): Fluncle's own DJ mixtapes as JSON, each a checkpoint set with an F-marked Log ID and its tracklist; browse them at ${siteUrl}/mixtapes
+- [Mixtapes API](${siteUrl}/api/v1/mixtapes): Fluncle's own DJ mixtapes as JSON, each a checkpoint set with an F-marked Log ID and its tracklist; browse them at ${siteUrl}/mixtapes${galaxiesLine}
 
 ## Submit
 
@@ -252,7 +261,11 @@ ${tracks.join("\n")}
 // lore plus every finding (coordinate, found date, BPM/key/galaxy, Spotify),
 // so an LLM can read the whole archive in a single fetch. Pure renderer,
 // exported for tests; the response wraps it.
-export function renderLlmsFull(tracks: FeedItem[], totalCount: number): string {
+export function renderLlmsFull(
+  tracks: FeedItem[],
+  totalCount: number,
+  galaxiesLive = false,
+): string {
   const findings = tracks
     .map((track) => (track.type === "mixtape" ? renderMixtape(track) : renderFinding(track)))
     .join("\n");
@@ -279,7 +292,7 @@ ${omitted > 0 ? `\n_${omitted} older findings omitted here; page the rest at ${s
 - The Telegram feed: ${telegramUrl}
 - The JSON API: ${siteUrl}/api/v1/tracks
 - The artists: ${siteUrl}/api/v1/artists
-- The mixtapes: ${siteUrl}/api/v1/mixtapes
+- The mixtapes: ${siteUrl}/api/v1/mixtapes${galaxiesLive ? `\n- The sonic galaxies: ${siteUrl}/api/v1/galaxies` : ""}
 - The MCP server: ${siteUrl}/mcp
 `;
 }
@@ -334,7 +347,16 @@ async function llmsFullResponse(): Promise<Response> {
     cursor = page.nextCursor ? decodeTrackCursor(page.nextCursor) : undefined;
   } while (cursor && all.length < llmsFullMaxFindings);
 
-  const markdown = renderLlmsFull(all, totalCount);
+  // The browse-by-feel launch gate again: until the whole map is named, strip the
+  // galaxy fact from every finding here too (the per-finding "{name} galaxy" line in
+  // renderFinding reads `track.galaxy`), so a named galaxy never leaks before the lens
+  // ships. Post-launch the facts and the "More" pointer light up together.
+  const galaxiesLive = await isGalaxyMapFullyNamed();
+  const tracks = galaxiesLive
+    ? all
+    : all.map((track) => (track.type === "mixtape" ? track : { ...track, galaxy: undefined }));
+
+  const markdown = renderLlmsFull(tracks, totalCount, galaxiesLive);
 
   return new Response(markdown, {
     headers: {

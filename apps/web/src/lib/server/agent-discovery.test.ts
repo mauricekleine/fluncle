@@ -79,6 +79,15 @@ describe("renderLlmsFull", () => {
 
     expect(doc).toContain("29 older findings omitted");
   });
+
+  it("advertises the sonic-galaxies API only once the map is named (launch gate)", () => {
+    // Default (map not yet fully named): the galaxies lens stays out of the map, so
+    // an agent is never pointed at a lens the launch gate 404s.
+    expect(renderLlmsFull([], 0)).not.toContain("/api/v1/galaxies");
+    // Named: the galaxies API joins the "More" pointer list.
+    expect(renderLlmsFull([], 0, true)).toContain("The sonic galaxies: ");
+    expect(renderLlmsFull([], 0, true)).toContain("/api/v1/galaxies");
+  });
 });
 
 describe("appendOnionLocation", () => {

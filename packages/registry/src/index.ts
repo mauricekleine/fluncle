@@ -345,10 +345,10 @@ export const SURFACES: readonly Surface[] = [
     kind: "web_route",
     name: "web.galaxies",
     operatorNotes:
-      "The public sonic-cluster lens (browse-by-feel RFC, Slice 4). Distinct from the game's /galaxy + galaxy.fluncle.com. No probeConfig — the launch gate 404s the index until the operator has NAMED the whole map, so there is no always-200 URL to GET-probe; the api.galaxies op (always 200, empty list pre-launch) is the probe surface. A galaxy below the member floor renders noindex. Slice 5 adds the SSH screen weight + the llms.txt/api-catalog lines.",
+      "The public sonic-cluster lens (browse-by-feel RFC). Distinct from the game's /galaxy + galaxy.fluncle.com. No probeConfig — the launch gate 404s the index until the operator has NAMED the whole map, so there is no always-200 URL to GET-probe; the api.galaxies op (always 200, empty list pre-launch) is the probe surface. A galaxy below the member floor renders noindex. The rave terminal carries a galaxies browse screen (ssh weight), and llms.txt advertises the lens once the map is named.",
     route: "/galaxies",
     url: `${SITE}/galaxies`,
-    weights: { web: "secondary" },
+    weights: { ssh: "secondary", web: "secondary" },
   },
   {
     exposedContent: ["the privacy policy"],
