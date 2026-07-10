@@ -245,16 +245,14 @@ type SpotifyArtistResponse = {
   images?: SpotifyImage[];
 };
 
-type SpotifyArtistsResponse = {
-  artists?: Array<SpotifyArtistResponse | null>;
-};
-
 /**
  * Fetch each artist's largest Spotify profile image, keyed by Spotify artist id.
- * Batched at the API's 50-id ceiling (`/v1/artists?ids=`), so a whole page of
- * artists costs one call. Absent ids (an artist with no image, or unknown to
- * Spotify) simply don't appear in the map. The image is an `i.scdn.co` URL — the
- * same host/precedent as `tracks.album_image_url`, served attribution-by-link.
+ * One `/v1/artists/{id}` call per artist: the batch endpoint (`/v1/artists?ids=`)
+ * returns a bare 403 for this app's tier (verified 2026-07-10 — same token, batch
+ * 403s, single 200s), so per-id is the only allowed path. A failing id (unknown to
+ * Spotify, or a transient error) is skipped, never fatal — absent ids simply don't
+ * appear in the map. The image is an `i.scdn.co` URL — the same host/precedent as
+ * `tracks.album_image_url`, served attribution-by-link.
  */
 export async function fetchArtistImages(spotifyArtistIds: string[]): Promise<Map<string, string>> {
   const ids = [...new Set(spotifyArtistIds.filter((id): id is string => Boolean(id)))];
@@ -266,15 +264,11 @@ export async function fetchArtistImages(spotifyArtistIds: string[]): Promise<Map
 
   const accessToken = await getSpotifyAccessToken();
 
-  for (let i = 0; i < ids.length; i += 50) {
-    const batch = ids.slice(i, i + 50);
-    const response = await spotifyFetch(
-      `/artists?ids=${batch.map((id) => encodeURIComponent(id)).join(",")}`,
-      accessToken,
-    );
-    const data = (await response.json()) as SpotifyArtistsResponse;
+  for (const id of ids) {
+    try {
+      const response = await spotifyFetch(`/artists/${encodeURIComponent(id)}`, accessToken);
+      const artist = (await response.json()) as SpotifyArtistResponse | null;
 
-    for (const artist of data.artists ?? []) {
       if (!artist?.id) {
         continue;
       }
@@ -284,6 +278,8 @@ export async function fetchArtistImages(spotifyArtistIds: string[]): Promise<Map
       if (url) {
         map.set(artist.id, url);
       }
+    } catch (error) {
+      console.warn(`fetchArtistImages: skipping ${id}`, error);
     }
   }
 
