@@ -434,3 +434,58 @@ async function runCli(args: string[]): Promise<{
     stdout,
   };
 }
+
+describe("the stringOptions invariant", () => {
+  // positionalArgs() derives raw positionals by skipping every option in the
+  // `stringOptions` set together with its value. A value-taking option declared
+  // on a command but absent from that set leaks its VALUE into the positionals
+  // and trips the argument validators (`--verdict-file <path>` broke the
+  // fluncle-triage sweep exactly this way). This test scans the CLI source for
+  // every declared value-taking option and fails when one is missing from the
+  // set, so the two can never drift again.
+  test("every declared value-taking option is in stringOptions", async () => {
+    const source = await Bun.file(cliPath).text();
+
+    const declared = new Set<string>();
+    for (const match of source.matchAll(
+      /\.(?:option|requiredOption)\(\s*\n?\s*"(--[a-z][a-z-]*) [<[]/g,
+    )) {
+      const flag = match[1];
+      if (flag !== undefined && flag !== "--env") {
+        declared.add(flag); // --env is special-cased inline in positionalArgs()
+      }
+    }
+
+    const setSource = source.match(/const stringOptions = new Set\(\[(.*?)\]\)/s);
+    expect(setSource?.[1]).toBeDefined();
+    const allowed = new Set(
+      [...(setSource?.[1] ?? "").matchAll(/"(--[a-z-]+)"/g)].map((m) => m[1]),
+    );
+
+    // Sanity: the scan found a realistic surface (guards against a regex rot
+    // that silently matches nothing).
+    expect(declared.size).toBeGreaterThan(30);
+
+    const missing = [...declared].filter((flag) => !allowed.has(flag)).sort();
+    expect(missing).toEqual([]);
+  });
+
+  test("a value option's value never leaks into the positionals (the triage shape)", async () => {
+    // Without --verdict-file in stringOptions this invocation mis-parsed as five
+    // positionals ("Unknown submissions arguments"); with it, the parse succeeds
+    // and the command proceeds (failing later on auth/network, which exits
+    // non-zero but with the triage command's own JSON error, never the parser's).
+    const result = await runCli([
+      "admin",
+      "submissions",
+      "triage",
+      "some-id",
+      "--verdict-file",
+      "/nonexistent-verdict.txt",
+      "--json",
+    ]);
+
+    expect(result.stdout).not.toContain("Unknown submissions arguments");
+    expect(result.stderr).not.toContain("Unknown submissions arguments");
+  });
+});
