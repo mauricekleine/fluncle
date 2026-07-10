@@ -1914,6 +1914,17 @@ body::before {
   width: 2.75rem;
 }
 
+/* The galaxy detail masthead's name — the operator-authored editorial name in the
+   Title register (system sans, extrabold cream), NOT the Oxanium coordinate face the
+   .log-coordinate slot defaults to: One Voice Rule reserves Oxanium for the brand + the
+   numbers, so an editorial name never wears the brand face (the RFC's names-not-Oxanium
+   rail). Keeps the masthead size/weight/cream from .log-coordinate; overrides only the
+   family. Wrap long names rather than overflow the plate. */
+.galaxy-title {
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  overflow-wrap: anywhere;
+}
+
 .galaxy-pane-name {
   color: var(--starlight-cream);
   font-size: 1.05rem;

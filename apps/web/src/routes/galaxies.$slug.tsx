@@ -120,7 +120,7 @@ function GalaxyPage() {
       <article className="log-plate log-index">
         <header className="log-masthead">
           <p className="log-nameplate">Fluncle's Findings</p>
-          <h1 className="log-coordinate log-index-title artist-name">{galaxy.name}</h1>
+          <h1 className="log-coordinate log-index-title galaxy-title">{galaxy.name}</h1>
           <p className="log-index-intro">{galaxyIntroLine(galaxy.memberCount)}</p>
         </header>
 
