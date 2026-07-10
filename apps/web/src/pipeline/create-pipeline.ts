@@ -286,7 +286,9 @@ const S: Station[] = [
     cron: "logbook",
     id: "logbook",
     label: "Logbook entry",
-    lane: 2.0,
+    // Above the YouTube Short card (lane -0.6): the note → logbook wire arrives from
+    // the left mid-column, so the top slot keeps it clear of the render → yt/tk wires.
+    lane: -1.8,
     m: "rave02",
     svc: ["Claude"],
     wh: "the day's travelogue",
