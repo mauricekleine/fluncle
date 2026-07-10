@@ -217,7 +217,11 @@ docker rm "$CONTAINER" >/dev/null 2>&1 || true
 # ── 7. start new + post-swap smoke (the `if` keeps set -e from bare-exiting) ───
 if run_container "$NEW_IMAGE" && container_healthy; then
   log "post-swap smoke passed — deployed $NEW_IMAGE"
-  alert "🚀 pin-watch: deployed $NEW_IMAGE on rave-02 — fluncle $HAVE_FLUNCLE→$WANT_FLUNCLE, claude-code $HAVE_CLAUDE→$WANT_CLAUDE"
+  # Report only the pins that actually moved — an unchanged pin (claude-code X→X) is noise.
+  CHANGES=""
+  [ "$HAVE_FLUNCLE" != "$WANT_FLUNCLE" ] && CHANGES="fluncle $HAVE_FLUNCLE→$WANT_FLUNCLE"
+  [ "$HAVE_CLAUDE" != "$WANT_CLAUDE" ] && CHANGES="${CHANGES:+$CHANGES, }claude-code $HAVE_CLAUDE→$WANT_CLAUDE"
+  alert "🚀 pin-watch: rave-02 updated${CHANGES:+ — $CHANGES}."
   post_health ok "rebuilt to the latest tools"
   # prune old fluncle-hermes images, keep the most recent $KEEP_IMAGES (rollback depth)
   docker images "$IMAGE_REPO" --format '{{.Repository}}:{{.Tag}} {{.CreatedAt}}' \
