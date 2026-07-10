@@ -300,15 +300,41 @@ function ArtistPage() {
           <p className="log-nameplate">Fluncle's Findings</p>
           <h1 className="log-coordinate log-index-title artist-name">{name}</h1>
           <p className="log-index-intro">{artistSignatureLine(name, dossier)}</p>
+        </header>
 
-          {socials.length > 0 ? (
-            <nav aria-label={`${name} elsewhere`} className="artist-socials">
+        {/* The findings lead: the logged tracks are the primary entity in the
+            Galaxy — the artist page frames THEM. Socials and kin follow. */}
+        {grid.length === 0 ? (
+          <p className="log-index-empty empty-scanlines">Quiet sector.</p>
+        ) : (
+          <ul className="artist-grid" aria-label={`Findings featuring ${name}`}>
+            {grid.map((finding) =>
+              finding.logId ? (
+                <li key={finding.trackId}>
+                  <Link params={{ logId: finding.logId }} to="/log/$logId">
+                    <TrackArtwork
+                      alt=""
+                      className="artist-grid-cover"
+                      src={spotifyAlbumImageAtSize(finding.albumImageUrl, "large")}
+                    />
+                    <span className="artist-grid-line">{artistTitleLine(finding)}</span>
+                  </Link>
+                </li>
+              ) : null,
+            )}
+          </ul>
+        )}
+
+        {socials.length > 0 ? (
+          <nav aria-label={`Follow ${name}`} className="artist-follow">
+            <p className="artist-similar-label">Follow {name}</p>
+            <div className="artist-socials">
               {socials.map((social) => (
                 <SocialLink key={social.platform} social={social} />
               ))}
-            </nav>
-          ) : undefined}
-        </header>
+            </div>
+          </nav>
+        ) : undefined}
 
         {dossier.neighbours.length > 0 ? (
           <nav aria-label="Similar artists" className="artist-similar">
@@ -333,27 +359,6 @@ function ArtistPage() {
             </ul>
           </nav>
         ) : undefined}
-
-        {grid.length === 0 ? (
-          <p className="log-index-empty empty-scanlines">Quiet sector.</p>
-        ) : (
-          <ul className="artist-grid" aria-label={`Findings featuring ${name}`}>
-            {grid.map((finding) =>
-              finding.logId ? (
-                <li key={finding.trackId}>
-                  <Link params={{ logId: finding.logId }} to="/log/$logId">
-                    <TrackArtwork
-                      alt=""
-                      className="artist-grid-cover"
-                      src={spotifyAlbumImageAtSize(finding.albumImageUrl, "large")}
-                    />
-                    <span className="artist-grid-line">{artistTitleLine(finding)}</span>
-                  </Link>
-                </li>
-              ) : null,
-            )}
-          </ul>
-        )}
 
         <footer className="log-plate-footer">
           <Link to="/artists">All artists</Link>

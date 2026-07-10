@@ -1700,6 +1700,13 @@ body::before {
   margin-top: 1.2rem;
 }
 
+/* The "Follow <name>" block — the artist's off-site links, after the findings
+   grid (the findings lead; the artist page frames them). Reuses the similar-row
+   label + the socials chip row. */
+.artist-follow {
+  margin-top: 1.2rem;
+}
+
 .artist-similar-label {
   color: var(--muted-foreground);
   font-size: 0.76rem;
