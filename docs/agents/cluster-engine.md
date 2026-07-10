@@ -20,9 +20,9 @@ Each night the tick does ONE bounded step — no clustering fit runs:
 
 A nightly full re-fit — even warm-started — is the one thing this design forbids. sklearn's Lloyd loop can never emit an empty cluster: `_relocate_empty_clusters` moves an emptied centroid to a high-inertia far point (an arbitrary different sonic region), and with equal k the post-hoc label matching is perfect, so the teleported centroid inherits a prior stable id — exactly the bookmark-breaking reshuffle the feature forbids. So a full `KMeans.fit` runs ONLY inside an operator act:
 
-- **Cold start (`--cold-start`, run 1 — a snap, not a ratchet):** one full fit at **k = 9 (ratified)** over the whole corpus. Every cluster gets a server-minted id + handle and enters the naming queue. The map must be empty (else use `--remint`).
+- **Cold start (`--cold-start`, run 1 — a snap, not a ratchet):** one full fit at **k = 4 (operator-held after the k=9 pilot spread the map thin; `FLUNCLE_CLUSTER_K` overrides per fit)** over the whole corpus. Every cluster gets a server-minted id + handle and enters the naming queue. The map must be empty (else use `--remint`).
 - **Split (operator-gated, consumed on the nightly tick):** the operator requests a split in `/admin/galaxies` (`update_galaxy` sets `split_requested_at`; the box's agent token cannot call that OPERATOR-tier op). The next nightly tick **consumes** it (pulled, not pushed): a k=2 fit on that galaxy's members only, the parent keeps its id on the **larger** child, the Worker mints ONE new id + handle for the smaller child, which lands unnamed in the naming queue. The tick clears `split_requested_at` in the same map write so it can never re-fire.
-- **Remint (`--remint`, a deliberate full reset):** never on the cron. A fresh full k=9 fit that retires every old id and re-queues the whole map for naming. Reserved for an embed-model change (a different checkpoint / `EMBEDDING_DIMS` stales every centroid) or a corpus shift too large for splits.
+- **Remint (`--remint`, a deliberate full reset):** never on the cron. A fresh full fit at the held k (4; `FLUNCLE_CLUSTER_K` overrides) that retires every old id and re-queues the whole map for naming. Reserved for an embed-model change (a different checkpoint / `EMBEDDING_DIMS` stales every centroid) or a corpus shift too large for splits.
 
 The fits (+ the split's k=2) go through `cluster.py` (scikit-learn, deterministic: fixed `random_state`, `n_init="auto"`, a pinned thread env). The fit only PRODUCES centroids to seed the map; assignment is always nearest-centroid against the STORED map (with ids), so a minted id never has to be reconciled with a fit index.
 
@@ -61,7 +61,7 @@ The OPERATOR-tier `update_galaxy` (naming / rename / request-split) is NOT one t
 
 ### Operator runbook — the cold-start pilot (de-risks the most)
 
-Before the timer is armed and before any naming, the operator runs the k=9 fit by hand and eyeballs the split with the operator's ear (the RFC's one highest-value de-risking step):
+Before the timer is armed and before any naming, the operator runs the fit by hand (held k = 4) and eyeballs the split with the operator's ear (the RFC's one highest-value de-risking step):
 
 ```bash
 # On rave-02, against the live map (or a dev DB for a dry pilot):

@@ -27,7 +27,7 @@ Zero LLM tokens; sub-second CPU; a few MB peak RAM (no RAM pilot needed, unlike 
 A full k-means fit is an operator act — a warm-started full re-fit can relocate an emptied centroid across the map (sklearn `_relocate_empty_clusters`), the exact bookmark-breaking reshuffle the feature forbids. The timer NEVER fits. The operator runs these by hand on the box:
 
 ```bash
-# COLD START (run 1 — the k=9 fit; the map must be empty). Mints 9 galaxies + handles,
+# COLD START (run 1 — the held-k fit, k = 4; the map must be empty). Mints the galaxies + handles,
 # assigns every finding, then STOP: the operator names the map (Slice 3) before it goes public.
 docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/cluster-sweep.sh --cold-start
 

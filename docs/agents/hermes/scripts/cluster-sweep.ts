@@ -9,7 +9,7 @@
 // target (fluncle-hermes-operator skill). Invoked by the bash wrapper (cluster-sweep.sh) the
 // host timer `docker exec`s once a night — and, for the operator acts, by hand:
 //   bash /opt/hermes-scripts/cluster-sweep.sh                 # the nightly, assignment-only tick
-//   bash /opt/hermes-scripts/cluster-sweep.sh --cold-start    # run 1: the k=9 fit (map must be empty)
+//   bash /opt/hermes-scripts/cluster-sweep.sh --cold-start    # run 1: the k=4 fit (map must be empty; FLUNCLE_CLUSTER_K overrides)
 //   bash /opt/hermes-scripts/cluster-sweep.sh --remint        # deliberate full redraw (retire all, refit)
 //
 // THE SHAPE (docs/agents/cluster-engine.md — the fixed-point-by-construction design):
@@ -48,9 +48,18 @@ import { type BoxCostEvent, emitCost, selfSecondsCost } from "./cost-emit";
 // Config
 // ---------------------------------------------------------------------------
 
-// The ratified cold-start k (RFC decision 4): `clamp(round(sqrt(N/2)), 3, 24)` lands at 9
-// near ~150 findings. A snap, not a ratchet — only an operator cold-start / remint fits k.
-const COLD_START_K = 9;
+// The operator-held fit k. The RFC's formula proposed 9, but the k=9 pilot spread a
+// 60-finding corpus thin (silhouette 0.044, three sliver clusters) and the operator
+// held it at 4 — the four canon galaxies, now data-real. Overridable per fit via
+// FLUNCLE_CLUSTER_K; only an operator cold-start / remint fits k, never the nightly tick.
+const COLD_START_K = readK(process.env.FLUNCLE_CLUSTER_K, 4);
+
+/** Parse an operator-supplied k override, falling back to the held default. */
+function readK(raw: string | undefined, fallback: number): number {
+  const parsed = Number.parseInt(raw ?? "", 10);
+
+  return Number.isInteger(parsed) && parsed >= 2 && parsed <= 24 ? parsed : fallback;
+}
 
 // A galaxy needs at least this many members to be splittable into two coherent children.
 const MIN_SPLIT_MEMBERS = 4;
