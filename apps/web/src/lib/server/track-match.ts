@@ -1,5 +1,5 @@
 // Normalized title+artist track matching — the TS port of the ratified matcher in
-// packages/skills/fluncle-key-backfill/scripts/key_backfill.py (`_fold`,
+// packages/skills/fluncle-rekordbox-sync/scripts/rekordbox_sync.py (`_fold`,
 // `_normalize_artists`, `_split_title`, `match_key`). Used wherever a bare
 // `{ artists, title }` cue must resolve to a Fluncle finding WITHOUT an id (the
 // plan→recording→mixtape backfill, and the legacy `tracklist_json` dual-read in
@@ -149,7 +149,7 @@ export type CatalogueTrack = {
 /**
  * Build a matchKey → trackId index over the findings catalogue. An identity shared
  * by MORE than one finding maps to `null` (ambiguous — never guessed), mirroring
- * key_backfill.py's reconcile discipline.
+ * rekordbox_sync.py's compute_diff discipline.
  */
 export function buildTrackMatchIndex(catalogue: CatalogueTrack[]): Map<string, string | null> {
   const index = new Map<string, string | null>();

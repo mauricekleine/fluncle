@@ -109,10 +109,10 @@ async function fetchAdminTracks(options: {
 }
 
 // A filterable admin listing of findings. Currently the missing-musical-key
-// backlog the Rekordbox key-backfill targets: `hasKey=false` lists findings whose
+// backlog the Rekordbox sync targets: `hasKey=false` lists findings whose
 // stored `key` is null, `hasKey=true` those that already carry one, absent = all.
-// This is what makes the backlog COUNTABLE + TARGETABLE — the backfill script reads
-// `list --no-key --json` as its input query.
+// This is what makes the backlog COUNTABLE + TARGETABLE — the sync script reads
+// `list --all --json` as its input query.
 export async function listCommand(options: {
   hasKey?: boolean;
   limit: number;

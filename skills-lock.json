@@ -38,11 +38,6 @@
       "sourceType": "local",
       "computedHash": "eb4f6749a4b60e3697eb78cf52031dce7cc55abdd78abaf3040656ab52e6c08c"
     },
-    "fluncle-key-backfill": {
-      "source": "packages/skills/fluncle-key-backfill",
-      "sourceType": "local",
-      "computedHash": "83be37f83a4c58d59f7d9798bd48c1eaa409ba951edb0b43d5963f65abbe7cdf"
-    },
     "fluncle-maintenance": {
       "source": "packages/skills/fluncle-maintenance",
       "sourceType": "local",
@@ -51,7 +46,7 @@
     "fluncle-mixtapes": {
       "source": "packages/skills/fluncle-mixtapes",
       "sourceType": "local",
-      "computedHash": "e5d915e9cf528abbd55031c0a42aec8ba75b65c7b67bfcb59d5261037d3621ab"
+      "computedHash": "e40e044c90d27c1cd5917c10d01ce86cd9275ac07c37e305d14e8f4f8d786205"
     },
     "fluncle-operator": {
       "source": "packages/skills/fluncle-operator",
@@ -62,6 +57,11 @@
       "source": "packages/skills/fluncle-publish",
       "sourceType": "local",
       "computedHash": "6dfa5e01b4a0653f88c46b3990b160eca3768e35a3ddd166ac36e36640402a47"
+    },
+    "fluncle-rekordbox-sync": {
+      "source": "packages/skills/fluncle-rekordbox-sync",
+      "sourceType": "local",
+      "computedHash": "ff39f6803526ac8c90b64c25421295ff6c5974727597687d5abccc4a02bfa008"
     },
     "fluncle-rfc-writer": {
       "source": "packages/skills/fluncle-rfc-writer",
@@ -86,7 +86,7 @@
     "fluncle-track-enrichment": {
       "source": "packages/skills/fluncle-track-enrichment",
       "sourceType": "local",
-      "computedHash": "adaabdd0cc1e2705e8fcfbd52df1c499f227fdc10eeaa0a930d5c72c1b99eacf"
+      "computedHash": "407b0bcbf0cb05856a074412eee692c96929a9ff77839a6cb7d5d954d4fa0085"
     },
     "fluncle-video": {
       "source": "packages/skills/fluncle-video",

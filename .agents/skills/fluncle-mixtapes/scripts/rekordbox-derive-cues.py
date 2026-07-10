@@ -6,7 +6,7 @@
 
 Reads the live `master.db` session (ordered by `TrackNo`, plus Key + BPM),
 matches each row to a Fluncle finding by normalized title+artist (the same
-matcher the key-backfill uses), and emits the ordered cue array
+matcher the Rekordbox sync uses), and emits the ordered cue array
 `{findingId?, artistsText, titleText, position}` for `replace-cues`.
 
 Three match buckets — **matched** (exactly 1 finding → `findingId` set),
@@ -66,7 +66,7 @@ from _matching import (  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
-# DB helpers — same pattern as rekordbox-tracklist.py and key_backfill.py.
+# DB helpers — same pattern as rekordbox-tracklist.py and rekordbox_sync.py.
 # ---------------------------------------------------------------------------
 
 

@@ -755,7 +755,7 @@ async function resolveTracklistMembers(
 }
 
 // Resolve each `{ artists, title }` item to a finding's trackId (or null) by
-// normalized title+artist against the full catalogue — the key_backfill matcher
+// normalized title+artist against the full catalogue — the rekordbox_sync matcher
 // discipline (see ./track-match). One catalogue read per call; tracklists are
 // tiny and this path is admin-only.
 async function resolveFindingIdsByText(

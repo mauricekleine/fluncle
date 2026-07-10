@@ -534,7 +534,7 @@ export const listTracksAdmin = oc
       // with no `embedding_json` yet (the `fluncle-embed` cron's worklist). Tri-state
       // tolerant string, parsed + clamped in-handler like `hasVideo`.
       hasEmbedding: z.string().optional(),
-      // `hasKey` powers the Rekordbox key-backfill's queue: `hasKey=false` lists
+      // `hasKey` powers the Rekordbox sync's queue: `hasKey=false` lists
       // findings whose stored musical `key` is null (the missing-key backlog).
       // Tri-state tolerant string, parsed + clamped in-handler like `hasVideo`.
       hasKey: z.string().optional(),

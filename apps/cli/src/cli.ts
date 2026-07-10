@@ -574,7 +574,7 @@ function addAdminCommands(program: Command): void {
   // A filterable listing of findings. Primary use: `--no-key` surfaces the
   // missing-musical-key backlog (findings the DSP left key-null below its
   // confidence floor) so it's countable + targetable — the input query for the
-  // Rekordbox key-backfill (fluncle-key-backfill skill). `--has-key <bool>` is the
+  // Rekordbox key/BPM sync (fluncle-rekordbox-sync skill). `--has-key <bool>` is the
   // explicit tri-state (list only those WITH, or only those WITHOUT, a key).
   adminTracks
     .command("list")
@@ -585,7 +585,7 @@ function addAdminCommands(program: Command): void {
       "Fetch the ENTIRE catalogue, paginating past the 100-row cap (overrides --limit)",
       false,
     )
-    .option("--no-key", "Only findings with NO stored musical key (the key-backfill backlog)")
+    .option("--no-key", "Only findings with NO stored musical key (the Rekordbox-sync backlog)")
     .option("--has-key <bool>", "Filter by key presence: true (has key) or false (missing)")
     .option("--order <order>", "Sort: asc (oldest first) or desc (newest first)", "desc")
     .option("--json", "Print JSON", false)
@@ -3755,7 +3755,7 @@ async function runAdminRequeueAnalysis(
   }
 
   // The gate: the dry-run diff review. Keys previously written by the operator's Rekordbox
-  // key-backfill carry NO legacy provenance (they predate these columns → analyzedFrom NULL),
+  // sync carry NO legacy provenance (they predate these columns → analyzedFrom NULL),
   // so they read as preview-grade here and a re-enrich MAY overwrite them. Eyeball the list.
   console.log(
     "\nCaveat: keys backfilled from Rekordbox are indistinguishable from DSP keys (no legacy" +

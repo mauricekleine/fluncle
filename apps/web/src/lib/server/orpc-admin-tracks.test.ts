@@ -1248,7 +1248,7 @@ describe("oRPC list_tracks_admin (GET /admin/tracks)", () => {
     expect(opts.hasNote).toBe(false);
   });
 
-  it("parses the key-backfill queue filter (hasKey=false)", async () => {
+  it("parses the Rekordbox-sync queue filter (hasKey=false)", async () => {
     listTracks.mockResolvedValueOnce({ totalCount: 0, tracks: [] });
 
     const { handleOrpc } = await import("./orpc");

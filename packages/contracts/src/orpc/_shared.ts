@@ -42,6 +42,12 @@ export const TrackListItemSchema = z
     artistYoutubeChannelIds: z.array(z.string()).optional(),
     artists: z.array(z.string()),
     bpm: z.number().optional(),
+    // Who last set bpm/key — the source-hierarchy provenance (operator > rekordbox > DSP;
+    // apps/web track-update.ts). ADMIN-ONLY on this DTO: `toPublicTrackListItem` strips both
+    // before any public read, so they arrive undefined on `/api/tracks` and are present only
+    // on the admin path. The Rekordbox sync reads them to skip an operator-graded row and to
+    // detect a matching-but-unstamped value that still needs a protective `rekordbox` stamp.
+    bpmSource: z.string().optional(),
     discogsReleaseUrl: z.string().optional(),
     durationMs: z.number(),
     enrichmentStatus: z.string(),
@@ -60,6 +66,8 @@ export const TrackListItemSchema = z
       .optional(),
     isrc: z.string().optional(),
     key: z.string().optional(),
+    // Key provenance — see `bpmSource` above. Admin-only (public-stripped).
+    keySource: z.string().optional(),
     label: z.string().optional(),
     logId: z.string().optional(),
     logPageUrl: z.string().optional(),

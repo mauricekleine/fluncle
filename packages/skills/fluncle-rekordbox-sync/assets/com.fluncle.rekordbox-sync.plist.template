@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  launchd TEMPLATE for the weekly Rekordbox -> Fluncle key/BPM sync (M2 mixing Mac).
+
+  This is a TEMPLATE, not a ready plist: copy it, replace the two placeholders, and
+  load it. NEVER commit a filled-in copy - the concrete paths are machine topology.
+
+    __REPO__  the absolute path to your Fluncle checkout (e.g. /Users/<you>/Projects/fluncle)
+    __LOG__   an absolute path for the run log     (e.g. /Users/<you>/Library/Logs/fluncle-rekordbox-sync.log)
+
+  Setup (see SKILL.md for the full runbook):
+    1. cp this file to ~/Library/LaunchAgents/com.fluncle.rekordbox-sync.plist
+    2. Replace __REPO__ and __LOG__ with real absolute paths (no ~).
+    3. launchctl load -w ~/Library/LaunchAgents/com.fluncle.rekordbox-sync.plist
+
+  It runs `--apply --quiet` weekly (Sunday 12:00 local). The fuse (--max-writes 20)
+  makes an unattended run fail loudly rather than half-apply a blown match; the
+  server hierarchy guard makes an operator-graded value un-clobberable regardless.
+  Quit Rekordbox before the scheduled time - it holds an exclusive lock on master.db.
+-->
+<plist version="1.0">
+  <dict>
+    <key>Label</key>
+    <string>com.fluncle.rekordbox-sync</string>
+
+    <key>ProgramArguments</key>
+    <array>
+      <string>/bin/sh</string>
+      <string>-lc</string>
+      <string>cd "__REPO__" &amp;&amp; exec uv run packages/skills/fluncle-rekordbox-sync/scripts/rekordbox_sync.py --apply --quiet --max-writes 20</string>
+    </array>
+
+    <!-- Weekly: Sunday (0) at 12:00 local. -->
+    <key>StartCalendarInterval</key>
+    <dict>
+      <key>Weekday</key>
+      <integer>0</integer>
+      <key>Hour</key>
+      <integer>12</integer>
+      <key>Minute</key>
+      <integer>0</integer>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>__LOG__</string>
+    <key>StandardErrorPath</key>
+    <string>__LOG__</string>
+
+    <key>RunAtLoad</key>
+    <false/>
+  </dict>
+</plist>

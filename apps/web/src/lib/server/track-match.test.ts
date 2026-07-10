@@ -8,7 +8,7 @@ import {
   splitTitle,
 } from "./track-match";
 
-// The TS port of the key_backfill.py matcher — these cases mirror the Python
+// The TS port of the rekordbox_sync.py matcher — these cases mirror the Python
 // source's documented discipline so the two stay in lockstep.
 
 describe("fold", () => {
