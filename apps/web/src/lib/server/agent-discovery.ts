@@ -213,8 +213,8 @@ ${tracks.join("\n")}
 - [RSS feed](${siteUrl}/rss.xml): the 25 most recent tracks
 - [Tracks API](${siteUrl}/api/v1/tracks): the archive as JSON, cursor-paginated; accepts limit (max 48) and cursor query params
 - [Random track](${siteUrl}/api/v1/tracks/random): one pick from the archive, as JSON
-- [Artists API](${siteUrl}/api/v1/artists): every artist with a published finding, most findings first, as JSON; /api/v1/artists/{slug} for one artist. Each resolves to a page at ${siteUrl}/artist/{slug} — that artist's findings plus their verified identity links (MusicGroup + sameAs)
-- [Mixtapes API](${siteUrl}/api/v1/mixtapes): Fluncle's own DJ mixtapes as JSON — each a checkpoint set with an F-marked Log ID and its tracklist; browse them at ${siteUrl}/mixtapes
+- [Artists API](${siteUrl}/api/v1/artists): every artist with a published finding, most findings first, as JSON; /api/v1/artists/{slug} for one artist. Each resolves to a page at ${siteUrl}/artist/{slug}: that artist's findings plus their verified identity links (MusicGroup + sameAs)
+- [Mixtapes API](${siteUrl}/api/v1/mixtapes): Fluncle's own DJ mixtapes as JSON, each a checkpoint set with an F-marked Log ID and its tracklist; browse them at ${siteUrl}/mixtapes
 
 ## Submit
 
@@ -224,7 +224,7 @@ ${tracks.join("\n")}
 ## For agents
 
 - [OpenAPI spec](${siteUrl}/api/v1/openapi.json): the public API as an OpenAPI 3.1 document
-- [MCP server](${siteUrl}/mcp): the archive over Model Context Protocol (Streamable HTTP, no auth) — tools, resources (each finding at fluncle://finding/<logId>), and Fluncle-voiced prompts
+- [MCP server](${siteUrl}/mcp): the archive over Model Context Protocol (Streamable HTTP, no auth), tools, resources (each finding at fluncle://finding/<logId>), and Fluncle-voiced prompts
 - [MCP server card](${siteUrl}/.well-known/mcp/server-card.json): SEP-2127 discovery card for the MCP endpoint
 - [API catalog](${siteUrl}/.well-known/api-catalog): RFC 9727 linkset
 - [Agent skills](${siteUrl}/.well-known/agent-skills/index.json): the fluncle-api skill, with digest
@@ -385,8 +385,8 @@ Rate limit: 5 submissions per connection per hour. Over that returns 429 with co
 The archive is a full MCP server (Streamable HTTP, no auth) at \`${siteUrl}/mcp\`, not just tools:
 
 - **Tools**: \`list_tracks\`, \`get_track\` (read one finding/mixtape by Log ID coordinate or Spotify id), \`get_random_track\`, \`search_tracks\`, \`submit_track\`, \`subscribe_newsletter\`.
-- **Resources**: read the archive as a corpus — each finding at \`fluncle://finding/<logId>\` and each mixtape at \`fluncle://mixtape/<logId>\`, returning its public record.
-- **Prompts**: Fluncle-voiced starting points — \`recommend_finding\` (a finding for a mood), \`walk_recent_night\`, \`decode_coordinate\`.
+- **Resources**: read the archive as a corpus, each finding at \`fluncle://finding/<logId>\` and each mixtape at \`fluncle://mixtape/<logId>\`, returning its public record.
+- **Prompts**: Fluncle-voiced starting points. \`recommend_finding\` (a finding for a mood), \`walk_recent_night\`, \`decode_coordinate\`.
 
 The server card (SEP-2127) is at \`${siteUrl}/.well-known/mcp/server-card.json\`.
 

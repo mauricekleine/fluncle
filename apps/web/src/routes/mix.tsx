@@ -70,7 +70,7 @@ export const Route = createFileRoute("/mix")({
     const chain = loaderData?.chain ?? [];
     const coords = serializeSet(chain.map((finding) => finding.logId ?? ""));
     const canonical = chain.length > 0 ? `${siteUrl}/mix?set=${coords}` : `${siteUrl}/mix`;
-    const title = "Chain a set — Fluncle";
+    const title = "Chain a set · Fluncle";
     const description = "Take the decks with Fluncle's findings: chain a set that mixes clean.";
 
     return {
