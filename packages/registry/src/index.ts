@@ -338,6 +338,19 @@ export const SURFACES: readonly Surface[] = [
     weights: { ssh: "secondary", web: "secondary" },
   },
   {
+    exposedContent: [
+      "/galaxies — the browse-by-feel lens: the archive grouped into operator-named sonic galaxies (k-means over the MuQ audio embedding space)",
+      "/galaxies/:slug — one galaxy: its findings core-first, plus the adjacent galaxies by sound",
+    ],
+    kind: "web_route",
+    name: "web.galaxies",
+    operatorNotes:
+      "The public sonic-cluster lens (browse-by-feel RFC, Slice 4). Distinct from the game's /galaxy + galaxy.fluncle.com. No probeConfig — the launch gate 404s the index until the operator has NAMED the whole map, so there is no always-200 URL to GET-probe; the api.galaxies op (always 200, empty list pre-launch) is the probe surface. A galaxy below the member floor renders noindex. Slice 5 adds the SSH screen weight + the llms.txt/api-catalog lines.",
+    route: "/galaxies",
+    url: `${SITE}/galaxies`,
+    weights: { web: "secondary" },
+  },
+  {
     exposedContent: ["the privacy policy"],
     kind: "web_route",
     name: "web.privacy",
@@ -468,6 +481,22 @@ export const SURFACES: readonly Surface[] = [
     probeConfig: { cadenceMs: PROBE_CADENCE_MS, kind: "http", timeoutMs: PROBE_TIMEOUT_MS },
     route: "/api/v1/artists",
     url: `${SITE}/api/v1/artists`,
+    weights: { web: "secondary" },
+  },
+  {
+    apiFormat: "application/json",
+    discoveryUrl: `${SITE}/api/v1/openapi.json`,
+    exposedContent: [
+      "every named sonic galaxy with its derived member count, as JSON (empty until the map is fully named)",
+      "/api/v1/galaxies/{slug} — one galaxy + its findings, core-first, paginated",
+    ],
+    kind: "api",
+    name: "api.galaxies",
+    operatorNotes:
+      "The public reads behind the browse-by-feel lens (list_galaxies / get_galaxy). Always 200 — behind the launch gate the list is empty and a slug 404s, so it probes green pre-launch and lights up when the map is fully named.",
+    probeConfig: { cadenceMs: PROBE_CADENCE_MS, kind: "http", timeoutMs: PROBE_TIMEOUT_MS },
+    route: "/api/v1/galaxies",
+    url: `${SITE}/api/v1/galaxies`,
     weights: { web: "secondary" },
   },
   {

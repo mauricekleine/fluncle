@@ -83,6 +83,77 @@ export function musicRecordingJsonLd(
   };
 }
 
+/** One finding in a galaxy's playlist — a MusicRecording reference by its /log URL. */
+export type GalaxyPlaylistFinding = {
+  artists: string[];
+  logId: string;
+  title: string;
+};
+
+/**
+ * A sonic galaxy's JSON-LD (browse-by-feel RFC): a `MusicPlaylist` whose members are
+ * `MusicRecording` references by `/log/<logId>` URL, in the page's core-first order
+ * (`numTracks` is the members shown). The honest shape for "a set of recordings grouped
+ * by sound" — reuses the same `byArtist`/reducer shape as `mixtapeAlbumJsonLd`, so a
+ * galaxy reads to a crawler exactly like a mixtape's tracklist does.
+ */
+export function musicPlaylistJsonLd(
+  galaxy: { name: string; slug: string },
+  findings: GalaxyPlaylistFinding[],
+): Record<string, unknown> {
+  const galaxyUrl = `${siteUrl}/galaxies/${galaxy.slug}`;
+
+  return {
+    "@context": "https://schema.org",
+    "@type": "MusicPlaylist",
+    genre: "Drum and Bass",
+    name: `${galaxy.name} · Fluncle's galaxies`,
+    numTracks: findings.length,
+    track: {
+      "@type": "ItemList",
+      itemListElement: findings.reduce<
+        Array<{
+          "@type": "ListItem";
+          item: {
+            "@type": "MusicRecording";
+            byArtist: Array<{ "@type": "MusicGroup"; name: string }>;
+            name: string;
+            url: string;
+          };
+          position: number;
+        }>
+      >((items, finding) => {
+        items.push({
+          "@type": "ListItem",
+          item: {
+            "@type": "MusicRecording",
+            byArtist: finding.artists.map((name) => ({ "@type": "MusicGroup", name })),
+            name: finding.title,
+            url: logPageUrl(finding.logId),
+          },
+          position: items.length + 1,
+        });
+
+        return items;
+      }, []),
+    },
+    url: galaxyUrl,
+  };
+}
+
+/** Fluncle → Galaxies → the galaxy name, the galaxy page's breadcrumb. */
+export function galaxyBreadcrumbsJsonLd(name: string): Record<string, unknown> {
+  return {
+    "@context": "https://schema.org",
+    "@type": "BreadcrumbList",
+    itemListElement: [
+      { "@type": "ListItem", item: `${siteUrl}/`, name: "Fluncle", position: 1 },
+      { "@type": "ListItem", item: `${siteUrl}/galaxies`, name: "Galaxies", position: 2 },
+      { "@type": "ListItem", name, position: 3 },
+    ],
+  };
+}
+
 /**
  * Normalize a DB timestamp (or a bare date) to a full ISO 8601 datetime WITH a
  * timezone (the trailing `Z` = UTC) for schema.org. Google's VideoObject wants a

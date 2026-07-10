@@ -53,6 +53,14 @@ export type SitemapArtist = {
   slug: string;
 };
 
+// A `/galaxies/<slug>` sonic-galaxy page (browse-by-feel RFC) — added ONLY once the map
+// is fully named (the route feeds an empty list before the launch gate opens) AND the
+// galaxy clears the thin-content floor (≥ GALAXY_INDEX_MIN_FINDINGS members; the thin
+// ones render `noindex, follow`). The route filters; this just formats.
+export type SitemapGalaxy = {
+  slug: string;
+};
+
 // Escape the five XML metacharacters so a Spotify-sourced title/artist or an
 // operator note can't malform the document (a bare `&` invalidates the feed, and
 // Google rejects an invalid video sitemap wholesale).
@@ -120,10 +128,19 @@ function logbookEntry(page: SitemapLogbookEntry): string {
   return `  <url>\n    <loc>${loc}</loc>${lastmodTag(page.lastmod)}\n  </url>`;
 }
 
+// A galaxy entry: just `<loc>` (the lens page has no single freshest media timestamp;
+// its members carry their own lastmod on their /log entries).
+function galaxyEntry(page: SitemapGalaxy): string {
+  const loc = `${siteUrl}/galaxies/${encodeURIComponent(page.slug)}`;
+
+  return `  <url>\n    <loc>${loc}</loc>\n  </url>`;
+}
+
 export function buildSitemapXml(
   logPages: SitemapLogPage[],
   artistPages: SitemapArtist[] = [],
   logbookPages: SitemapLogbookEntry[] = [],
+  galaxyPages: SitemapGalaxy[] = [],
 ): string {
   const latest = [
     ...logPages.map((page) => page.lastmod),
@@ -151,9 +168,13 @@ export function buildSitemapXml(
     staticEntry(`${siteUrl}/about`),
     staticEntry(`${siteUrl}/privacy`),
     staticEntry(`${siteUrl}/galaxy`),
+    // The `/galaxies` lens index — listed only once the launch gate has opened (the
+    // route feeds an empty `galaxyPages` before then, keeping the pre-launch dark state).
+    ...(galaxyPages.length > 0 ? [staticEntry(`${siteUrl}/galaxies`)] : []),
     ...logPages.map((page) => findingEntry(page)),
     ...artistPages.map((page) => artistEntry(page)),
     ...logbookPages.map((page) => logbookEntry(page)),
+    ...galaxyPages.map((page) => galaxyEntry(page)),
   ];
 
   return `<?xml version="1.0" encoding="UTF-8"?>

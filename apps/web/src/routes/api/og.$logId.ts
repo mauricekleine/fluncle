@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { ImageResponse, loadGoogleFont } from "workers-og";
 import { formatDateLong } from "@/lib/format";
-import { GALAXIES, galaxyForVibe } from "@/lib/galaxies";
+import { isGalaxyMapFullyNamed } from "@/lib/server/galaxies-map";
 import { spotifyAlbumImageAtSize, trackMedia } from "@/lib/media";
 import { requireParam } from "@/lib/server/http-errors";
 import { getTrackByIdOrLogId } from "@/lib/server/tracks";
@@ -68,10 +68,11 @@ export const serverHandlers: ApiHandlers = {
       : spotifyAlbumImageAtSize(track.albumImageUrl, "large");
     const background = bgSource ? await fetchImageDataUri(bgSource) : undefined;
 
-    const galaxy =
-      track.vibeX !== undefined && track.vibeY !== undefined
-        ? GALAXIES[galaxyForVibe(track.vibeX, track.vibeY)].name
-        : undefined;
+    // The finding's sonic galaxy (browse-by-feel RFC) rides the card's meta line only
+    // behind the launch gate: the real operator-named galaxy once the WHOLE map is
+    // named, else undefined (the pre-launch dark state, unchanged). Replaces the retired
+    // vibe-quadrant derivation.
+    const galaxy = track.galaxy && (await isGalaxyMapFullyNamed()) ? track.galaxy.name : undefined;
     const meta = [
       `Found ${formatDateLong(track.addedAt)}`,
       track.bpm ? `${Math.round(track.bpm)} BPM` : undefined,

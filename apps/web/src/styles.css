@@ -1654,6 +1654,23 @@ body::before {
   text-decoration: underline;
 }
 
+/* The galaxy clause's link inside the definitional prose (browse-by-feel RFC): the
+   name + " galaxy" links into the /galaxies/<slug> lens. A quiet inline cross-link,
+   the primary hue on hover — the one way into the region from a /log page. */
+.log-galaxy-link {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in oklch, var(--primary) 40%, transparent);
+  text-underline-offset: 0.18em;
+  transition: color 150ms ease-out;
+}
+
+.log-galaxy-link:hover,
+.log-galaxy-link:focus-visible {
+  color: var(--starlight-cream);
+  text-decoration-color: var(--primary);
+}
+
 .artist-name {
   overflow-wrap: anywhere;
 }
@@ -1851,6 +1868,125 @@ body::before {
 .artist-avatar-grid a:hover .artist-grid-line,
 .artist-avatar-grid a:focus-visible .artist-grid-line {
   color: var(--starlight-cream);
+}
+
+/* The /galaxies index (browse-by-feel RFC): each named galaxy as a quiet, cover-led
+   pane you ENTER — a place, never a filter chip (DESIGN.md Don't). A few member covers
+   under the name (Title register: system sans, extrabold cream — the artist-name
+   treatment; One Voice Rule keeps Oxanium off an editorial name) and the count in the
+   Tabular Rule numerals. One Sun holds: the primary hue arrives only on hover/focus. */
+.galaxy-index-grid {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 15rem), 1fr));
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.galaxy-pane {
+  border: 1px solid var(--border);
+  border-radius: var(--rounded-lg);
+  color: var(--stardust);
+  display: grid;
+  gap: 0.6rem;
+  padding: 1rem;
+  text-decoration: none;
+  transition:
+    border-color 150ms ease-out,
+    background-color 150ms ease-out;
+}
+
+.galaxy-pane:hover,
+.galaxy-pane:focus-visible {
+  background-color: color-mix(in oklch, var(--primary) 5%, transparent);
+  border-color: color-mix(in oklch, var(--primary) 42%, transparent);
+}
+
+.galaxy-pane-covers {
+  display: flex;
+  gap: 0.4rem;
+}
+
+/* The small member covers — a representative handful, capped in the loader. The
+   reused .track-artwork carries the border/radius/aspect; fix the tile width. */
+.galaxy-pane-cover {
+  width: 2.75rem;
+}
+
+/* The galaxy detail masthead's name — the operator-authored editorial name in the
+   Title register (system sans, extrabold cream), NOT the Oxanium coordinate face the
+   .log-coordinate slot defaults to: One Voice Rule reserves Oxanium for the brand + the
+   numbers, so an editorial name never wears the brand face (the RFC's names-not-Oxanium
+   rail). Keeps the masthead size/weight/cream from .log-coordinate; overrides only the
+   family. Wrap long names rather than overflow the plate. */
+.galaxy-title {
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  overflow-wrap: anywhere;
+}
+
+.galaxy-pane-name {
+  color: var(--starlight-cream);
+  font-size: 1.05rem;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+}
+
+.galaxy-pane-count {
+  color: var(--muted-foreground);
+  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The adjacent-galaxies strip on a galaxy page — "Close in sound" applied to galaxies
+   themselves (centroid-cosine adjacency). Quiet chips carrying the name + count,
+   brightening on hover/focus, keyboard reachable like every other link. */
+.galaxy-adjacent {
+  margin-top: 1.2rem;
+}
+
+.galaxy-adjacent-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.galaxy-adjacent-link {
+  align-items: baseline;
+  border: 1px solid var(--border);
+  border-radius: var(--rounded-md);
+  color: var(--muted-foreground);
+  display: inline-flex;
+  gap: 0.5rem;
+  padding: 0.4rem 0.7rem;
+  text-decoration: none;
+  transition:
+    color 150ms ease-out,
+    border-color 150ms ease-out;
+}
+
+.galaxy-adjacent-link:hover,
+.galaxy-adjacent-link:focus-visible {
+  border-color: color-mix(in oklch, var(--primary) 42%, transparent);
+  color: var(--starlight-cream);
+}
+
+.galaxy-adjacent-name {
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+.galaxy-adjacent-count {
+  color: var(--muted-foreground);
+  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
 }
 
 .log-neighbors {

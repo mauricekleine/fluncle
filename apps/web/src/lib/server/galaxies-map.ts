@@ -19,6 +19,7 @@ import {
 } from "@fluncle/contracts";
 import { galaxySlug } from "@fluncle/contracts/util/galaxy-slug";
 import { getDb, typedRow, typedRows } from "./db";
+import { cosineSimilarity } from "./embedding";
 import { getFindingsByGalaxyRanked, toPublicTrackListItem } from "./tracks";
 
 // A row from the `galaxies` table (snake_case columns).
@@ -49,6 +50,13 @@ export type GalaxyAdminWithMembers = GalaxyAdminItem & { members: TrackListItem[
 
 const GALAXY_COLUMNS =
   "id, handle, name, slug, centroid_json, retired_at, split_requested_at, created_at, updated_at";
+
+/**
+ * The galaxy thin-content floor (browse-by-feel RFC, mirroring the `/artist` gate): a
+ * named galaxy below this many members renders `noindex, follow` and stays out of the
+ * sitemap. It still resolves (200) and is reachable — just not indexed while thin.
+ */
+export const GALAXY_INDEX_MIN_FINDINGS = 4;
 
 /** Parse a stored centroid (JSON float array); a malformed value degrades to `[]`. */
 function parseCentroid(json: string): number[] {
@@ -198,6 +206,193 @@ export async function getNamedGalaxyBySlug(
     findings: findings.map((finding) => toPublicTrackListItem(finding)),
     galaxy: { memberCount: counts.get(row.id) ?? 0, name: row.name, slug: row.slug },
   };
+}
+
+// ── The public launch gate (browse-by-feel RFC, decision 5 — ratified) ─────────
+//
+// The whole lens ships dark until the operator has named the ENTIRE initial map in
+// one sitting: NOTHING public renders a galaxy until every non-retired galaxy is
+// named. This is a RUNTIME check, not a build flag — so this code can merge while
+// the operator is still naming, and every public surface (the `/galaxies` lens, the
+// `list_galaxies`/`get_galaxy` API + CLI, the sitemap, the `/log` prose clause + the
+// OG card line) lights up the moment the LAST name lands. A partial map — one or more
+// non-retired galaxies still unnamed — reads exactly like the pre-launch dark state.
+// Machine handles never render publicly regardless (they are not a name).
+
+/**
+ * Is the sonic-galaxy map FULLY NAMED — every non-retired galaxy carrying a `name` +
+ * `slug`? The single runtime gate behind every public galaxy surface. False when the
+ * map is empty (nothing to show) or any non-retired galaxy is still unnamed (a partial
+ * map stays dark). Retired galaxies are excluded — an emptied cluster never blocks the
+ * launch. One `COUNT` query.
+ */
+export async function isGalaxyMapFullyNamed(): Promise<boolean> {
+  const db = await getDb();
+  const result = await db.execute(
+    `select
+       count(*) as total,
+       sum(case when name is null or slug is null then 1 else 0 end) as unnamed
+     from galaxies where retired_at is null`,
+  );
+  const row = typedRow<{ total: number; unnamed: number | null }>(result.rows);
+
+  if (!row) {
+    return false;
+  }
+
+  const total = Number(row.total);
+  const unnamed = Number(row.unnamed ?? 0);
+
+  return total > 0 && unnamed === 0;
+}
+
+/**
+ * The PUBLIC named map — `listNamedGalaxies`, but held behind the launch gate: an
+ * empty list until the whole map is named. Backs the public `list_galaxies` op (+ the
+ * CLI) and the sitemap. `listNamedGalaxies` stays the raw reader (the newsletter's
+ * section matcher reads it un-gated via `listGalaxyNames`).
+ */
+export async function listPublicGalaxies(): Promise<GalaxyListItem[]> {
+  return (await isGalaxyMapFullyNamed()) ? listNamedGalaxies() : [];
+}
+
+/**
+ * The PUBLIC by-slug read — `getNamedGalaxyBySlug` behind the launch gate: a
+ * `GalaxyNotFoundError` (→ 404) while the map is only partially named, so no single
+ * galaxy leaks before the whole map ships. Backs the public `get_galaxy` op.
+ */
+export async function getPublicGalaxyBySlug(
+  slug: string,
+  limit: number,
+  offset: number,
+): Promise<{ findings: TrackListItem[]; galaxy: GalaxyListItem }> {
+  if (!(await isGalaxyMapFullyNamed())) {
+    throw new GalaxyNotFoundError(`No galaxy with slug "${slug}"`);
+  }
+
+  return getNamedGalaxyBySlug(slug, limit, offset);
+}
+
+/**
+ * One named galaxy's full lens page (the `/galaxies/<slug>` route loader): the galaxy
+ * itself, its findings (core-first, paginated), and the adjacency strip — the other
+ * named galaxies ranked by centroid cosine ("Close in sound" applied to galaxies
+ * themselves). Returns `null` (→ `notFound()`) when the map is not yet fully named OR
+ * the slug names no named galaxy. The findings are public-stripped.
+ */
+export async function getGalaxyLensPage(
+  slug: string,
+  limit: number,
+  offset: number,
+): Promise<{
+  adjacent: GalaxyListItem[];
+  findings: TrackListItem[];
+  galaxy: GalaxyListItem;
+} | null> {
+  if (!(await isGalaxyMapFullyNamed())) {
+    return null;
+  }
+
+  const named = await loadNamedGalaxyRows();
+  const target = named.rows.find((row) => row.slug === slug);
+
+  if (!target || !target.name || !target.slug) {
+    return null;
+  }
+
+  const targetCentroid = parseCentroid(target.centroid_json);
+  const findings = await getFindingsByGalaxyRanked(target.id, targetCentroid, limit, offset);
+  const adjacent = rankAdjacent(target, targetCentroid, named);
+
+  return {
+    adjacent,
+    findings: findings.map((finding) => toPublicTrackListItem(finding)),
+    galaxy: {
+      memberCount: named.counts.get(target.id) ?? 0,
+      name: target.name,
+      slug: target.slug,
+    },
+  };
+}
+
+/** One galaxy pane on the `/galaxies` index: the public item plus a core-first cover sample. */
+export type GalaxyPane = GalaxyListItem & { covers: string[] };
+
+/**
+ * The `/galaxies` INDEX loader — every named galaxy as a cover-led pane, gated on the
+ * fully-named map (an empty list keeps the index dark pre-launch). Each pane carries a
+ * capped, core-first sample of member cover URLs (`albumImageUrl`) so the index reads
+ * as a map of places, not a list of names. Ordered by member count descending, then
+ * name (the `listNamedGalaxies` order).
+ */
+export async function listGalaxyPanes(coverCap: number): Promise<GalaxyPane[]> {
+  if (!(await isGalaxyMapFullyNamed())) {
+    return [];
+  }
+
+  const named = await loadNamedGalaxyRows();
+  const panes = await Promise.all(
+    named.rows.map(async (row) => {
+      // Named rows are guaranteed name+slug here (loadNamedGalaxyRows filters), but the
+      // column types are nullable — narrow so the pane's fields are non-null strings.
+      const name = row.name;
+      const slug = row.slug;
+
+      if (!name || !slug) {
+        return undefined;
+      }
+
+      const members = await getFindingsByGalaxyRanked(
+        row.id,
+        parseCentroid(row.centroid_json),
+        coverCap,
+        0,
+      );
+
+      return {
+        covers: members.flatMap((member) => (member.albumImageUrl ? [member.albumImageUrl] : [])),
+        memberCount: named.counts.get(row.id) ?? 0,
+        name,
+        slug,
+      };
+    }),
+  );
+
+  return panes
+    .flatMap((pane) => (pane ? [pane] : []))
+    .sort((a, b) => b.memberCount - a.memberCount || a.name.localeCompare(b.name));
+}
+
+/** The named, non-retired galaxy rows + the shared derived-count map (one read each). */
+async function loadNamedGalaxyRows(): Promise<{ counts: Map<string, number>; rows: GalaxyRow[] }> {
+  const db = await getDb();
+  const [result, counts] = await Promise.all([
+    db.execute(
+      `select ${GALAXY_COLUMNS} from galaxies where name is not null and slug is not null and retired_at is null`,
+    ),
+    memberCounts(db),
+  ]);
+
+  return { counts, rows: typedRows<GalaxyRow>(result.rows) };
+}
+
+/** The four nearest OTHER named galaxies by centroid cosine — the adjacency strip. */
+function rankAdjacent(
+  target: GalaxyRow,
+  targetCentroid: number[],
+  named: { counts: Map<string, number>; rows: GalaxyRow[] },
+): GalaxyListItem[] {
+  return named.rows
+    .filter((row) => row.id !== target.id && row.name && row.slug)
+    .map((row) => ({
+      memberCount: named.counts.get(row.id) ?? 0,
+      name: row.name ?? "",
+      score: cosineSimilarity(targetCentroid, parseCentroid(row.centroid_json)),
+      slug: row.slug ?? "",
+    }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 4)
+    .map(({ memberCount, name, slug }) => ({ memberCount, name, slug }));
 }
 
 /**
