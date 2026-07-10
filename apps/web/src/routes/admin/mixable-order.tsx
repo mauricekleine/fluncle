@@ -166,7 +166,10 @@ function MixableOrderPage() {
                       {index === 0 ? (
                         <span>opens</span>
                       ) : stop.flagged ? (
-                        <span className="text-amber-500">sparse join</span>
+                        // A caution, on the palette's caution token (never an
+                        // off-palette amber): the transition was costed at the
+                        // neutral median because a scoring input was missing.
+                        <span className="text-destructive">sparse join</span>
                       ) : (
                         <span>
                           {stop.transitionReason ? mixReasonLabel(stop.transitionReason) : "—"}

@@ -82,7 +82,7 @@ export const serverHandlers: ApiHandlers = {
         <div style="display:flex;align-items:center;">${coverTiles}</div>
         <div style="display:flex;flex-direction:column;">
           <div style="display:flex;color:${COLOR.cream};font-size:56px;font-weight:800;">${countLabel}</div>
-          <div style="display:flex;color:${COLOR.gold};font-size:28px;font-weight:700;margin-top:10px;">His findings, your order.</div>
+          <div style="display:flex;color:${COLOR.gold};font-size:28px;font-weight:700;margin-top:10px;">My findings, your order.</div>
         </div>
       </div>
     `;

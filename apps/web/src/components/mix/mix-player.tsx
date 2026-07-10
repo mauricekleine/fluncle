@@ -115,8 +115,11 @@ export function MixPlayer({ chain }: { chain: TrackListItem[] }) {
     return null;
   }
 
+  // A flat field, not glass: the player mounts ON the /mix plate, and the plate is
+  // the one pane (One Pane Rule) — a solid card surface (no backdrop-blur) so the
+  // sticky strip also holds AA over the list scrolling beneath it.
   return (
-    <div className="sticky bottom-0 z-10 mt-4 rounded-lg border border-border bg-card/95 px-3 py-2.5 backdrop-blur">
+    <div className="sticky bottom-0 z-10 mt-4 rounded-md border border-border bg-card px-3 py-2.5">
       <div aria-hidden="true" className="mb-2 h-0.5 w-full overflow-hidden rounded-full bg-muted">
         <div
           className="h-full origin-left bg-primary/70 transition-transform duration-100 ease-linear motion-reduce:transition-none"
@@ -137,7 +140,9 @@ export function MixPlayer({ chain }: { chain: TrackListItem[] }) {
           <p className="truncate text-sm font-medium">
             {current ? `${current.artists.join(", ")} — ${current.title}` : "—"}
           </p>
-          <p className="truncate font-mono text-[10px] text-muted-foreground tabular-nums">
+          {/* Coordinate + position in the canon numeric face (The Tabular Rule),
+              at the Track Row's size — never mono, never below the numeric floor. */}
+          <p className="track-log-id block truncate">
             {current?.logId} · {index + 1}/{chain.length}
             {reducedMotion ? " · manual" : ""}
           </p>

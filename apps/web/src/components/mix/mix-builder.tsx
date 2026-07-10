@@ -48,8 +48,10 @@ function BuilderRow({
         <TrackArtwork alt="" src={artworkUrl(finding)} />
         <div className="min-w-0 flex-1">
           {finding.logId ? (
+            // The coordinate in the canon numeric face — Oxanium tabular at the Track
+            // Row's size (The Tabular Rule; mono is reserved for machine surfaces).
             <Link
-              className="block truncate font-mono text-[10px] tracking-tight text-muted-foreground tabular-nums hover:text-primary"
+              className="track-log-id track-log-id-link block truncate"
               params={{ logId: finding.logId }}
               to="/log/$logId"
             >
@@ -199,7 +201,8 @@ export function MixBuilder({
         <MixPicker onPick={add} />
       ) : (
         <>
-          <ol className="m-0 list-none divide-y divide-border rounded-lg border border-border p-0">
+          {/* The chain, a flat plate-field pane on the plate (One Pane). */}
+          <ol className="plate-field m-0 list-none divide-y divide-border rounded-md border border-border p-0">
             {chain.map((finding, position) => (
               <BuilderRow
                 actions={
@@ -257,11 +260,10 @@ export function MixBuilder({
 
       {!readOnly && chain.length > 0 ? (
         <section aria-label="What mixes out of this">
-          <h2 className="mb-2 px-1 text-xs font-medium tracking-wide text-muted-foreground uppercase">
-            What keys up next
-          </h2>
+          {/* A small bold label — never uppercase-tracked (a DESIGN.md Don't). */}
+          <h2 className="mb-2 px-1 text-xs font-bold text-muted-foreground">What keys up next</h2>
           {candidates.length > 0 ? (
-            <ul className="m-0 list-none divide-y divide-border rounded-lg border border-border p-0">
+            <ul className="plate-field m-0 list-none divide-y divide-border rounded-md border border-border p-0">
               {candidates.map((candidate) => (
                 <BuilderRow
                   actions={
@@ -282,7 +284,7 @@ export function MixBuilder({
             </ul>
           ) : (
             <p className="px-1 text-sm text-muted-foreground">
-              Nothing keys up cleanly to this one yet. Quiet sector.
+              Nothing keys up cleanly to this one yet. Quiet sector tonight.
             </p>
           )}
         </section>
@@ -319,9 +321,7 @@ function MixPicker({ onPick }: { onPick: (finding: TrackListItem) => void }) {
                 <span className="truncate">
                   {finding.artists.join(", ")} — {finding.title}
                 </span>
-                <span className="ml-auto font-mono text-[10px] text-muted-foreground tabular-nums">
-                  {finding.logId}
-                </span>
+                <span className="track-log-id ml-auto shrink-0">{finding.logId}</span>
               </CommandItem>
             ))}
           </CommandGroup>

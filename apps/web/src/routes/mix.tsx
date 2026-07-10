@@ -122,21 +122,29 @@ function MixPage() {
     });
   }, [navigate]);
 
+  // The page as ONE logbook plate (DESIGN.md §5 — the home-plate grammar): a real
+  // masthead over a dimming, grained plate that holds AA against the sun-bloom (The
+  // Legible Sky Rule), with the chain + rail mounted as flat plate-field panes (One
+  // Pane — the plate is the pane).
   return (
-    <main className="mx-auto w-full max-w-2xl px-4 py-10">
-      <header className="mb-6 text-center">
-        <h1 className="text-lg font-semibold">Chain a set</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          His findings, your order. The archive says what mixes clean.
-        </p>
-      </header>
-      <MixBuilder
-        initialChain={chain}
-        key={view}
-        onPromote={onPromote}
-        onSetChange={onSetChange}
-        readOnly={view === "play"}
-      />
+    <main className="min-h-screen overflow-x-hidden p-4 text-foreground sm:p-6 lg:flex lg:flex-col lg:p-8">
+      <article className="home-plate mx-auto my-6 w-full max-w-2xl sm:my-8 lg:my-auto">
+        <header className="home-masthead">
+          <div>
+            <h1 className="home-nameplate">Chain a set</h1>
+            <p className="home-tagline">
+              My findings, your order. The archive says what mixes clean.
+            </p>
+          </div>
+        </header>
+        <MixBuilder
+          initialChain={chain}
+          key={view}
+          onPromote={onPromote}
+          onSetChange={onSetChange}
+          readOnly={view === "play"}
+        />
+      </article>
     </main>
   );
 }
