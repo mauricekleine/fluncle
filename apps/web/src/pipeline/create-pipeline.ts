@@ -148,6 +148,17 @@ const S: Station[] = [
     svc: ["Last.fm", "IndexNow"],
     wh: "fire-and-forget",
   },
+  {
+    cad: "15m",
+    col: 0,
+    cron: "triage",
+    id: "tri",
+    label: "Submission triage",
+    lane: 1.5,
+    m: "rave02",
+    svc: ["Claude"],
+    wh: "pre-chew the queue",
+  },
 
   // Act 2 · enrichment floor (capture feeds analysis + embedding)
   {
@@ -269,6 +280,17 @@ const S: Station[] = [
     svc: ["Postiz", "TikTok"],
     wh: "inbox → you finish",
   },
+  {
+    cad: "24h",
+    col: 10,
+    cron: "logbook",
+    id: "logbook",
+    label: "Logbook entry",
+    lane: 2.0,
+    m: "rave02",
+    svc: ["Claude"],
+    wh: "the day's travelogue",
+  },
 ];
 
 // the plaza · every surface — each cabinet links to its live home (or the /docs entry
@@ -340,6 +362,7 @@ const D: Station[] = [
 const LINKS: Array<[string, string, number?]> = [
   ["ear", "cmdf", 1],
   ["cmdf", "spot", 1],
+  ["tri", "logid"],
   ["spot", "logid", 1],
   ["deez", "logid"],
   ["disc", "logid"],
@@ -357,6 +380,7 @@ const LINKS: Array<[string, string, number?]> = [
   ["ctx", "rend"],
   ["rend", "yt"],
   ["rend", "tk"],
+  ["note", "logbook"],
 ];
 const DLINKS: Array<[string, string]> = [
   ["plan", "rec"],

@@ -887,6 +887,18 @@ export const SURFACES: readonly Surface[] = [
     weights: { status: "hidden" },
   },
   {
+    command: "fluncle admin submissions triage",
+    exposedContent: [
+      "pre-chew a pending crew submission → an advisory queue verdict, fill-first (hybrid: one claude -p call)",
+    ],
+    kind: "cron",
+    name: "cron.triage",
+    operatorNotes:
+      "every 15m. Hybrid --no-agent; a deterministic archive dedupe + DnB-plausibility heuristic feeds one claude -p phrasing, length-gated. Writes the verdict onto a PENDING submission so it lands in the /admin attention queue already assessed; approve/reject stays operator tier. Source: docs/agents/hermes/scripts/triage-sweep.{sh,ts}.",
+    probeConfig: { cadenceMs: 15 * MINUTE_MS, cronName: "fluncle-triage", kind: "cron" },
+    weights: { status: "hidden" },
+  },
+  {
     command: "fluncle admin logbook gaps",
     exposedContent: [
       "author the previous day's Logbook travelogue entry, fill-empty-only (hybrid: one claude -p call)",
