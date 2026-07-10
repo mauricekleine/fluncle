@@ -61,7 +61,7 @@
     "fluncle-rekordbox-sync": {
       "source": "packages/skills/fluncle-rekordbox-sync",
       "sourceType": "local",
-      "computedHash": "ff39f6803526ac8c90b64c25421295ff6c5974727597687d5abccc4a02bfa008"
+      "computedHash": "d79113a5531fe4b6d7068fcbc5cb29545ca1e0dd08c544b620ac4bbc44022429"
     },
     "fluncle-rfc-writer": {
       "source": "packages/skills/fluncle-rfc-writer",
