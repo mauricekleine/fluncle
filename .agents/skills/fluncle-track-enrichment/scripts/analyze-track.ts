@@ -887,6 +887,15 @@ export function estimateKey(
 
   const winner = scoreChroma(global, o.profiles, o.majorBias);
   const label = `${NOTES[winner.root]} ${winner.mode}`;
+
+  // An agreement VOTE needs voters: a clip too short for at least two overlapping
+  // segments (< ~18 s) would score a meaningless 1/1 = full confidence off a single
+  // segment trivially agreeing with itself. Report the read but at zero confidence,
+  // so the floor nulls it — a 30 s preview still yields 3 segments and a real vote.
+  if (segments.length < 2) {
+    return { confidence: 0, key: label };
+  }
+
   let agree = 0;
 
   for (const chroma of segments) {

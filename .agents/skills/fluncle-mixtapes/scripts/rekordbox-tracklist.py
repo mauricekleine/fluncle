@@ -12,7 +12,10 @@ in, and that lead varies track to track — so it is NOT a usable cue offset. We
 surface it only as a dim reference and otherwise ignore it. Cue offsets, if ever
 wanted, have to come from somewhere else (the operator marking them against the
 final video). This script gives you the reliable part: an ordered, de-duplicated
-`Artist — Title` list to feed the add-to-mixtape flow.
+`Artist — Title` list to feed the add-to-mixtape flow. Each row also carries the
+full-song musical `key` (Rekordbox's confident whole-song analysis, scale text like
+"Am"/"F") and `bpm` — the ground-truth widening lever the mixability diagnostics
+consume for historical sets whose findings left `tracks.key` NULL below the DSP floor.
 
 Two real-world wrinkles it surfaces rather than guesses about:
   - Pre-loads. A track loaded during soundcheck (or cued and never aired) shows up
@@ -94,11 +97,39 @@ def track_label(song) -> str:
     return f"{artist} — {title}"
 
 
+def track_key(song) -> "str | None":
+    """The confident full-song musical key Rekordbox holds, as scale text ("Am", "F").
+
+    `DjmdContent.Key` is a related row whose `ScaleName` is the key label. This is the
+    ground-truth widening lever the mixability diagnostics consume: Rekordbox analyzes
+    the WHOLE song, so it carries a confident key even where Fluncle's DSP left the
+    finding's `key` NULL (below its KEY_CONFIDENCE_FLOOR). Absent ⇒ None.
+    """
+    key = getattr(song.Content, "Key", None)
+    return getattr(key, "ScaleName", None) if key is not None else None
+
+
+def track_bpm(song) -> "float | None":
+    """The full-song tempo (`DjmdContent.BPM`), normalized to a float.
+
+    Rekordbox stores BPM as an integer scaled ×100 (17400 = 174.00 BPM); normalize
+    back to the human float so it lines up with Fluncle's stored `tracks.bpm`. Absent
+    or zero ⇒ None.
+    """
+    raw = getattr(song.Content, "BPM", None)
+    if not raw:
+        return None
+    value = float(raw)
+    return round(value / 100, 2) if value >= 1000 else round(value, 2)
+
+
 def extract(song):
     created = getattr(song, "created_at", None)
     return {
         "track_no": song.TrackNo,
         "label": track_label(song),
+        "key": track_key(song),
+        "bpm": track_bpm(song),
         "load_time": str(created) if created else None,
     }
 
@@ -163,13 +194,17 @@ def main() -> None:
             print(row["label"])
         return
 
-    # Human-readable: play order, a DUP flag for repeats, load time dimmed as reference only.
+    # Human-readable: play order, key + BPM (full-song, Rekordbox-confident), a DUP
+    # flag for repeats, load time dimmed as reference only.
     print(f"Session: {session.Name}  ({len(rows)} rows in load order)\n")
     width = max((len(r["label"]) for r in rows), default=0)
     for i, row in enumerate(rows, 1):
         flag = "  DUP" if row["duplicate"] else ""
         load = f"  (loaded {row['load_time'][11:19]})" if row["load_time"] else ""
-        print(f"{i:>2}. {row['label']:<{width}}{flag}{load}")
+        key = row["key"] or "—"
+        bpm = f"{row['bpm']:g}" if row["bpm"] is not None else "—"
+        meta = f"  [{key:>3} {bpm:>6}]"
+        print(f"{i:>2}. {row['label']:<{width}}{meta}{flag}{load}")
     if any(r["duplicate"] for r in rows):
         print("\nDUP = this track appears more than once (a pre-load or re-load). Prune the spurious row by hand.")
     print("\nLoad times are deck-load times, NOT mix-in cues — reference only. See the script header.")

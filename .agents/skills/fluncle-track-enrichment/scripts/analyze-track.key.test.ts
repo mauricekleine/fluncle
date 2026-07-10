@@ -200,3 +200,13 @@ describe.skipIf(!hasFfmpeg)("estimateKey (whole-track chromagram)", () => {
     expect(key).not.toBe("A# major"); // not the relative major
   });
 });
+
+describe.skipIf(!hasFfmpeg)("estimateKey (segment-vote guard)", () => {
+  test("a clip too short for a real vote reports zero confidence", () => {
+    // 14 s fits only ONE 12 s segment after the edge skip — a single segment
+    // trivially agrees with itself, so without the guard this scored a spurious
+    // confidence of 1.0 (observed on the Rekordbox sampler demo loops).
+    const { confidence } = keyOf("too-short-for-vote", progression(G_MINOR, 14));
+    expect(confidence).toBe(0);
+  });
+});
