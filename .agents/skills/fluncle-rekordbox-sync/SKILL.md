@@ -3,8 +3,11 @@ name: fluncle-rekordbox-sync
 description: >-
   Sync the operator's Rekordbox library — the DJ-graded ground truth for musical
   key and BPM — into Fluncle's archive on a PERIODIC schedule. Rekordbox analyses
-  the whole song and the DJ hand-corrects it, whereas Fluncle's DSP hears only a 30s
-  preview and leaves `tracks.key` NULL below its confidence floor. This skill reads
+  the whole song and the DJ hand-corrects it. Fluncle's DSP now analyses the captured
+  full song too and its BPM agrees with Rekordbox to within ~0.02, but its KEY is the
+  weaker signal: it leaves `tracks.key` NULL below a confidence floor, and mode errors
+  (major vs minor on the right tonic) have been observed. So key is what this sync is
+  really for. This skill reads
   every Rekordbox key + BPM, matches
   each to a finding by normalized title+artist, and writes the graded values back via
   `fluncle admin tracks update --key-source rekordbox` / `--bpm-source rekordbox` so

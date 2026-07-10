@@ -10,8 +10,17 @@ Your pre-flight before you go live behind the decks with visuals: how to wire th
 
 Two machines, each with one job. This is the primary rig; the one-Mac fallback is below and `run show --one-mac` flips it.
 
-- **M2 (the mixing machine):** Rekordbox + the DDJ-FLX4 + Rekordbox REC. Genuinely nothing else — no OBS, no browser. It plays the set and cuts the belt-and-braces WAV master.
-- **M5 (the streaming/recording machine):** the glass (the WebGL runtime), the bridge (plan + fingerprint identity + the watchdog + the phone remote), OBS (the Twitch stream + the `.mov` master), the mic, and the camera(s). `run show` lives here.
+- **M2 (the mixing machine):** Rekordbox + the DDJ-FLX4 + Rekordbox REC. No OBS, no browser. It plays the set and cuts the belt-and-braces WAV master. For an UNORDERED set it also runs two small scripts — `m2-sender` (reads the mixer's MIDI, decides which deck went live) and `deckwatch` (OCRs the deck header for the track's identity). See below.
+- **M5 (the streaming/recording machine):** the glass (the WebGL runtime), the bridge (plan + fingerprint identity + the watchdog + the phone remote, and — in VJ mode — the UDP transition channel the M2 sends to), OBS (the Twitch stream + the `.mov` master), the mic, and the camera(s). `run show` lives here.
+
+### Ordered set vs unordered set
+
+The rig answers "what is playing" two different ways, and which one you use is decided before the show, not during it.
+
+- **An ordered set** follows a plan: the bridge fingerprints each planned finding and a forward-only matcher advances as it recognises the audio. This is `run show`'s default and needs nothing on the M2.
+- **An unordered set** — you play anything, in any order, including tracks that are not findings — cannot be fingerprinted forward-only. Instead the M2's mixer MIDI answers WHEN a transition happened and WHICH deck went live, OCR of the Rekordbox deck header answers WHAT is on it, and the two travel to the bridge in one UDP datagram. The bridge resolves the identity against the archive and shows that finding **on the flip**; when nothing matches (or no identity arrives) it falls back to a random scene from the whole archive rather than guessing. Run the bridge with `--plan all` for this. The full design is [docs/live-deck-identity.md](./live-deck-identity.md); the M2-side setup steps are in [docs/m2-checklist.md](./m2-checklist.md).
+
+The two machines are not on the same LAN subnet — the M-Track carries audio, not network — so the datagram travels over the tailnet, not the LAN.
 
 ## Signal flow (what "wired correctly" looks like)
 

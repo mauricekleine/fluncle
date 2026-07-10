@@ -280,8 +280,8 @@ async function loadPreview(previewUrl: string): Promise<LoadedPreview> {
   }
 }
 
-// Load a LOCAL audio file — the captured full song (`--audio-file`). Mirrors
-// bpm-backfill/scripts/analyze-local.ts: ffmpeg reads the path directly, any format.
+// Load a LOCAL audio file — the captured full song (`--audio-file`). ffmpeg reads
+// the path directly, any format.
 // `bytes`/`mime` are kept so the archive + `previews` output shape is identical to the
 // URL path; mime is inferred from the extension (ffmpeg itself probes the content).
 // Exported so the focused test can exercise the seam.
@@ -954,9 +954,9 @@ function foldToBand(bpm: number): number | null {
   return null;
 }
 
-// AcousticBrainz-by-ISRC fallback — the clean, structured BPM source mirrored from
-// the manual bpm-backfill skill's Step 1 (ISRC → MusicBrainz recording MBID →
-// AcousticBrainz `rhythm.bpm`). Best-effort: any error, 404, missing recording, or
+// AcousticBrainz-by-ISRC fallback — a clean, structured BPM source (ISRC → MusicBrainz
+// recording MBID → AcousticBrainz `rhythm.bpm`), reached only when the DSP itself yields
+// a null BPM. Best-effort: any error, 404, missing recording, or
 // non-numeric field → null, so the caller keeps the analyzer's honest null. The
 // AcousticBrainz BPM is a real measured tempo, so it should octave-fold cleanly
 // into the D&B band; if it can't fold, treat it as a miss (in-band discipline).

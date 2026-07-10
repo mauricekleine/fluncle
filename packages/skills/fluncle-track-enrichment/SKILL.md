@@ -1,6 +1,6 @@
 ---
 name: fluncle-track-enrichment
-description: Enrich a Fluncle track from audio — analyze a preview for BPM, musical key, and a spectral feature vector, then write them back via the fluncle CLI. Use when given a Fluncle track id or log_id to analyze/enrich, when computing key/BPM for a track, or when running the track enrichment agent (locally or on the Hermes box). The feature vector is internal creative fuel (the vibe-placement model it once fed is retired); sonic similarity now comes from the separate MuQ audio-embedding step (the fluncle-embed cron).
+description: Enrich a Fluncle track from audio — analyze the captured full song when it exists (else a 30s preview) for BPM, musical key, and a spectral feature vector, then write them back via the fluncle CLI. Use when given a Fluncle track id or log_id to analyze/enrich, when computing key/BPM for a track, or when running the track enrichment agent (locally or on the Hermes box). The feature vector is internal creative fuel (the vibe-placement model it once fed is retired); sonic similarity now comes from the separate MuQ audio-embedding step (the fluncle-embed cron).
 ---
 
 # Fluncle track enrichment agent
@@ -28,7 +28,7 @@ The analysis script (`scripts/analyze-track.ts`) is **self-contained** — zero 
 
    Keep the `trackId`, `artists`, `title`, and `isrc` from the result. (You write back by `trackId`.)
 
-2. **Analyze the preview.** It downloads legal previews, decodes them, and emits an analysis JSON on stdout. Pass `--archive-dir` when you also need to preserve the exact preview used for the feature vector:
+2. **Analyze the audio.** Prefer the captured full song: pass `--audio-file <path>` and the analyzer decodes that file directly and skips preview resolution entirely. This is what the on-box enrich sweep does whenever a finding has a `source_audio_key`, and it matters — full-song BPM agrees with a DJ-graded Rekordbox grid to within ~0.02, where a 30s preview read low by ~1.5 BPM. With no `--audio-file` it falls back to downloading legal previews. Either way it emits an analysis JSON on stdout. Pass `--archive-dir` when you also need to preserve the exact preview used for the feature vector:
 
    ```
    bun scripts/analyze-track.ts --artist "<artist>" --title "<title>" [--isrc "<isrc>"] --archive-dir /tmp/fluncle-preview

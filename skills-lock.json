@@ -61,7 +61,7 @@
     "fluncle-rekordbox-sync": {
       "source": "packages/skills/fluncle-rekordbox-sync",
       "sourceType": "local",
-      "computedHash": "d79113a5531fe4b6d7068fcbc5cb29545ca1e0dd08c544b620ac4bbc44022429"
+      "computedHash": "3c7c74bdad34f68a199ac571dd247d34f56ea13da6b78af239510e8e0394a263"
     },
     "fluncle-rfc-writer": {
       "source": "packages/skills/fluncle-rfc-writer",
@@ -86,7 +86,7 @@
     "fluncle-track-enrichment": {
       "source": "packages/skills/fluncle-track-enrichment",
       "sourceType": "local",
-      "computedHash": "407b0bcbf0cb05856a074412eee692c96929a9ff77839a6cb7d5d954d4fa0085"
+      "computedHash": "aaa74f6ee56382bff0fb3c38b8e4d300d4221e2c0907b725827d5e674324bc21"
     },
     "fluncle-video": {
       "source": "packages/skills/fluncle-video",
