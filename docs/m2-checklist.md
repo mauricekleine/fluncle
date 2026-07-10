@@ -7,7 +7,7 @@ Non-canonical operator checklist (AGENTS.md, Docs): the steps below were queued 
 The weekly key/BPM sync ships in [packages/skills/fluncle-rekordbox-sync](../packages/skills/fluncle-rekordbox-sync) — its SKILL.md is the full runbook. The short form:
 
 - [ ] `git pull` this repo on the M2.
-- [ ] `brew update && brew upgrade fluncle` — the sync reads `keySource` off `admin tracks list --json`, which the CLI only carries from **0.118.0**. An older CLI makes the dry-run propose ~35 phantom "stamp" writes and trip the max-writes fuse; that symptom means upgrade, not apply.
+- [ ] `brew update && brew upgrade fluncle` — the sync reads `keySource` off `admin tracks list --json`, which the CLI only carries from **0.119.0** (verified: 0.118 silently drops the field). An older CLI makes the dry-run propose ~35 phantom "stamp" writes and trip the max-writes fuse; that symptom means upgrade, not apply.
 - [ ] Confirm the CLI is operator-authenticated (`fluncle recent --limit 1` works).
 - [ ] Manual dry-run first: `uv run --with pyrekordbox python packages/skills/fluncle-rekordbox-sync/scripts/rekordbox_sync.py`. Expected result: **approximately zero proposals** — the archive was hand-synced against the freshly re-analyzed library on 2026-07-10. A big diff means something moved; read it before any `--apply`.
 - [ ] Install the weekly timer: copy `assets/com.fluncle.rekordbox-sync.plist.template` per the SKILL.md (fill the `__REPO__`/`__LOG__` placeholders), then `launchctl load` it.
@@ -46,22 +46,31 @@ These were decided deliberately and are not bugs. They are recorded here because
 - [ ] **`MATCH_THRESHOLD = 0.62` was shipped unvalidated** (see §3). The cost is asymmetric: a miss shows a random scene, which nobody notices; a false positive puts the wrong finding on stream, which everybody does. If a real set produces even one wrong match, raise it — the fallback is designed to absorb the misses.
 - [ ] **The crossfader curve is linear, the FLX4's is a cut curve** (see §2). Symmetric, so the live-deck argmax should be unaffected. Watch one crossfader-led blend and confirm the flip lands where your ears say it should.
 
-## 6. The DSP key experiment — the ground truth only exists on this machine
+## 6. Re-key the non-Rekordbox findings — the last step of the 2026-07-10 accuracy run
 
-Measured 2026-07-10: **BPM is solved.** Every finding is now `analyzedFrom: "full"`, and the two findings with DJ-graded ground truth carry `bpmSource: "audio-file"` (the DSP reading the captured full song, not a Rekordbox write) at 174.02 and 174.00 against Rekordbox's 174.00. The old ~1.5 BPM under-read was purely a 30s-preview artifact. Nobody needs to touch `estimateBpm`.
+State of the world, measured on 2026-07-10, so nobody re-derives or re-litigates it:
 
-**Key is not solved, and the gap is invisible by construction.** Both ground-truth rows carry `keySource: "rekordbox"` — so the correct keys there prove the _sync_ works, not the DSP. Meanwhile **20 findings carry `keySource: "audio-file"`**: DSP-written keys, on exactly the tracks that never matched the Rekordbox library, so nothing has ever checked them. The server-side source hierarchy (operator > rekordbox > DSP) means no Rekordbox value will ever arrive to correct them either. If `estimateKey` still confuses the mode (major vs minor on the right tonic — it demonstrably did on preview audio) then those 20 rows are wrong, every future non-Rekordbox finding will be wrong, and the guard guarantees nobody notices.
+- **BPM is solved by the estimator rebuild (#424), not by full audio alone.** The old 20 Hz-envelope estimator was provably broken on any input (it read the _same previews_ 1.5 low that the rebuilt tempo comb reads exactly right); the rebuilt one agrees with the DJ beatgrids to within ±0.1 on 33/35 ground-truth rows, from previews and full songs alike. Nobody needs to touch `estimateBpm`.
+- **The key estimator was also rebuilt (#430)** — whole-track segmented chroma (the old code silently analyzed only the first 25 seconds, even of captured full audio), harmonic de-aliasing (the minor→major mode-flip mechanism), EDMA/EDMM profiles, segment-vote confidence. Measured against the DJ-graded ground truth: the old estimator 37% exact; the rebuilt one 60% exact on previews and **82.8% precision on published keys from full songs** (38-track local-corpus benchmark), with mode-flips 4→1 and relative-key errors eliminated. `KEY_CONFIDENCE_FLOOR = 0.6` was kept deliberately: 0.8 measures 100% precision but drops coverage to 37%, on a sample too small to certify — re-open only if the labeled corpus ever grows.
+- **The sync's key/BPM write asymmetry (35 vs 2) is by design, not a drop:** the sync proposes BPM only when the stored value is null or off by >0.5, and after the re-derive 33/35 DSP BPMs already matched the beatgrids. Keys were all 35 (22 corrections + 13 protective stamps).
+- **The one thing still stale:** the morning's archive-wide re-derive drained _before_ the box baked #430, so the ~25 findings without a DJ-graded key still carry old-estimator keys (or old honest nulls). This is the gap; the fix is queued, not open-ended.
 
-You cannot answer this from the database: the guard means the DSP's key for a Rekordbox-matched row was never persisted. You must run the analyzer and observe what it _would_ emit. `master.db` is the ground truth and it lives here.
+The steps (runs on ANY machine with an operator-authenticated `fluncle` ≥ 0.119 — here after §1, or on the M5):
 
-- [ ] Pick 15–20 findings that both have captured full audio (`sourceAudioKey` non-null) and exist in the Rekordbox library.
-- [ ] For each, run `analyze-track.ts --audio-file <the captured full song>` and read the emitted `key` / `keyConfidence`. **Write nothing** — this is a measurement, not a backfill.
-- [ ] Compare against `DjmdContent.Key.ScaleName`, scoring **tonic agreement** and **mode agreement** as two separate rates. They fail differently.
-- [ ] High mode agreement → the 20 DSP keys are trustworthy; the preview was the whole problem, exactly as with BPM. Close the thread.
-- [ ] Poor mode agreement → `estimateKey` has a real bug on full audio. Fix it, re-derive the 20 `audio-file` rows, and reconsider whether `KEY_CONFIDENCE_FLOOR = 0.6` is high enough. An honest NULL beats a confident wrong key; the archive already tolerates nulls.
-- [ ] **Then update the docs, whichever way it lands.** `packages/skills/fluncle-rekordbox-sync/SKILL.md`'s description currently justifies the sync on "the DSP's key has observed mode errors" — that claim is either confirmed or retired by this experiment. `packages/skills/fluncle-track-enrichment/SKILL.md` describes the same estimator. Rewrite both to what you measured, then **re-run `bun run skills:install`** — the installed `.agents/skills/**` copy is what actually loads, and it ships publicly stale until you do.
-- [ ] While you have `master.db` open: **35 findings carry `keySource: rekordbox` but only 2 carry `bpmSource: rekordbox`.** The sync claims to write both. Either it deliberately skips BPM when the DSP already holds a value (defensible, and correct given the result above), or ~33 BPM writes are being dropped. Confirm which.
+- [ ] Dry-run: `bun packages/skills/fluncle-track-enrichment/scripts/requeue-non-rekordbox.ts` — expect ~25 targets, every `keySource: rekordbox` row excluded. The script refuses to run on a CLI that predates the `keySource` field.
+- [ ] `--apply`, then let the box's enrich sweep drain it (4 findings per ~5-minute tick ≈ 35 minutes).
+- [ ] Verify: re-run the dry-run — the re-keyed rows now show `keySource: audio-file` with a fresh `analyzedAt`; some old nulls may resolve, others stay honestly null. Expect ~83% of the re-derived keys to be right; that residual is accepted (these are precisely the tracks outside the DJ's crates).
+- [ ] Optional, M2-only: any of the 25 that exist in the library but eluded the strict matcher (e.g. `004.4.8B`) can be checked against `DjmdContent.Key.ScaleName`. Where the DSP and Rekordbox disagree on mode, flag it or hand-set via `fluncle admin tracks update --key` (an operator write stamps `key_source: operator` server-side and is durably protected) — never assume either side is infallible.
+- [ ] Prune `requeue-non-rekordbox.ts` once the archive is re-keyed — it is a one-time repair.
+- [ ] The two SKILL.md descriptions (`fluncle-rekordbox-sync`, `fluncle-track-enrichment`) were already rewritten to the measured story; if this step changes the numbers materially, update them and **re-run `bun run skills:install`**.
+
+## 7. Report back to the M5 (the cross-machine loop)
+
+The M5 session that queued this work reconciles the results. Two channels:
+
+- **Git is the async channel.** Prune finished sections from this file, and where a step produced numbers (transition counts, OCR parse rates, key spot-check disagreements), write them in — a dated one-liner per finding beats "done". Commit and push; the M5 session pulls and reconciles. Anything that turned out to be a code fix goes through the normal flow (small fix → commit on main; larger → worktree PR).
+- **The live-rig validation (§2 + §3) is synchronous and needs both machines.** Coordinate with a session on the M5: it starts the bridge (`bun run --cwd packages/live bridge --plan all`), tails the bridge's transition log, and is the receiver-of-record — for each mixed flip the M2 reports "sent" and the M5 confirms "received, with identity payload X, scene swapped". Score sent vs received and note any datagram that arrived without identity. That pairing is itself the cross-machine communication test.
 
 ---
 
-_Not-M2 leftovers, for whichever machine you read this on: the one-time re-key of the 25 non-Rekordbox findings is still pending on the M5 (the `requeue-non-rb.py` one-liner in the 2026-07-10 session scratchpad), and that session's checkout has a consumed duplicate `autostash` entry safe to `git stash drop`._
+_Not-M2 leftover: the M5 session's checkout has a consumed duplicate `autostash` entry safe to `git stash drop`._
