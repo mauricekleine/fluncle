@@ -183,7 +183,11 @@ describe("oRPC update_track (PATCH /admin/tracks/{trackId})", () => {
       ok: true,
       trackId: TRACK_ID,
     });
-    expect(updateTrack).toHaveBeenCalledWith(TRACK_ID, { bpm: 174, key: "F minor" });
+    expect(updateTrack).toHaveBeenCalledWith(
+      TRACK_ID,
+      { bpm: 174, key: "F minor" },
+      { writer: "operator" },
+    );
   });
 
   it("lets the operator write an operator-only field (note)", async () => {
@@ -193,7 +197,11 @@ describe("oRPC update_track (PATCH /admin/tracks/{trackId})", () => {
     const response = await handleOrpc(patch(OPERATOR_TOKEN, { note: "A tight take." }));
 
     expect(response?.status).toBe(200);
-    expect(updateTrack).toHaveBeenCalledWith(TRACK_ID, { note: "A tight take." });
+    expect(updateTrack).toHaveBeenCalledWith(
+      TRACK_ID,
+      { note: "A tight take." },
+      { writer: "operator" },
+    );
   });
 
   it('clears the note on `note: ""` (the regression — write, don\'t no-op)', async () => {
@@ -203,7 +211,7 @@ describe("oRPC update_track (PATCH /admin/tracks/{trackId})", () => {
     const response = await handleOrpc(patch(OPERATOR_TOKEN, { note: "" }));
 
     expect(response?.status).toBe(200);
-    expect(updateTrack).toHaveBeenCalledWith(TRACK_ID, { note: "" });
+    expect(updateTrack).toHaveBeenCalledWith(TRACK_ID, { note: "" }, { writer: "operator" });
   });
 
   it("422s a note over the budget with the live `note_too_long` code", async () => {
@@ -224,11 +232,15 @@ describe("oRPC update_track (PATCH /admin/tracks/{trackId})", () => {
     );
 
     expect(response?.status).toBe(200);
-    expect(updateTrack).toHaveBeenCalledWith(TRACK_ID, {
-      bpm: 174,
-      enrichmentStatus: "done",
-      key: "F minor",
-    });
+    expect(updateTrack).toHaveBeenCalledWith(
+      TRACK_ID,
+      {
+        bpm: 174,
+        enrichmentStatus: "done",
+        key: "F minor",
+      },
+      { writer: "agent" },
+    );
   });
 
   // ── the full-song capture write-back (RFC full-audio § Unit 1) ────────────
@@ -250,11 +262,15 @@ describe("oRPC update_track (PATCH /admin/tracks/{trackId})", () => {
     expect(response?.status).toBe(200);
     // Capture fields are agent-writable machine analysis — the box cron authenticates
     // with the AGENT token, so they must NOT be in OPERATOR_ONLY_FIELDS (no 403).
-    expect(updateTrack).toHaveBeenCalledWith(TRACK_ID, {
-      captureStatus: "done",
-      sourceAudioCapturedAt: "2026-07-07T12:00:00.000Z",
-      sourceAudioKey: "004.7.2I/abc123.opus",
-    });
+    expect(updateTrack).toHaveBeenCalledWith(
+      TRACK_ID,
+      {
+        captureStatus: "done",
+        sourceAudioCapturedAt: "2026-07-07T12:00:00.000Z",
+        sourceAudioKey: "004.7.2I/abc123.opus",
+      },
+      { writer: "agent" },
+    );
   });
 
   it("lets the AGENT record a capture FAILURE (status + attempt stamp + failure count)", async () => {
@@ -270,11 +286,15 @@ describe("oRPC update_track (PATCH /admin/tracks/{trackId})", () => {
     );
 
     expect(response?.status).toBe(200);
-    expect(updateTrack).toHaveBeenCalledWith(TRACK_ID, {
-      captureStatus: "failed",
-      sourceAudioAttemptedAt: "2026-07-07T12:00:00.000Z",
-      sourceAudioFailures: 2,
-    });
+    expect(updateTrack).toHaveBeenCalledWith(
+      TRACK_ID,
+      {
+        captureStatus: "failed",
+        sourceAudioAttemptedAt: "2026-07-07T12:00:00.000Z",
+        sourceAudioFailures: 2,
+      },
+      { writer: "agent" },
+    );
   });
 
   it("the AGENT may pair a done capture with the clobber-safe enrichment re-queue", async () => {
@@ -292,11 +312,15 @@ describe("oRPC update_track (PATCH /admin/tracks/{trackId})", () => {
     // enrichmentStatus is already an agent-writable analysis field, so the mixed
     // capture + re-queue payload passes the field guard wholesale.
     expect(response?.status).toBe(200);
-    expect(updateTrack).toHaveBeenCalledWith(TRACK_ID, {
-      captureStatus: "done",
-      enrichmentStatus: "pending",
-      sourceAudioKey: "004.7.2I/abc123.opus",
-    });
+    expect(updateTrack).toHaveBeenCalledWith(
+      TRACK_ID,
+      {
+        captureStatus: "done",
+        enrichmentStatus: "pending",
+        sourceAudioKey: "004.7.2I/abc123.opus",
+      },
+      { writer: "agent" },
+    );
   });
 
   it("drops an invalid captureStatus (not one of the 4 enum values) rather than storing it", async () => {
@@ -340,6 +364,29 @@ describe("oRPC update_track (PATCH /admin/tracks/{trackId})", () => {
     expect(response?.status).toBe(403);
     expect(((await readJson(response)) as { code: string }).code).toBe("forbidden");
     expect(updateTrack).not.toHaveBeenCalled();
+  });
+
+  // The provenance guard's tier MUST come from the authenticated context, never the
+  // body: a body claiming `writer: "operator"` cannot let an agent's DSP key clobber a
+  // rekordbox value. The handler threads `context.role`; a stray body field is dropped.
+  it("threads the AUTHENTICATED tier to updateTrack, ignoring a body-supplied writer", async () => {
+    updateTrack.mockResolvedValueOnce({ fields: ["key"], trackId: TRACK_ID });
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      patch(AGENT_TOKEN, { key: "F minor", writer: "operator" } as Record<string, unknown>),
+    );
+
+    expect(response?.status).toBe(200);
+    // The agent token → `{ writer: "agent" }`, and the stray body `writer` never rides
+    // into the update object updateTrack receives.
+    const [, update, options] = updateTrack.mock.calls[0] as [
+      string,
+      Record<string, unknown>,
+      Record<string, unknown>,
+    ];
+    expect(options).toEqual({ writer: "agent" });
+    expect("writer" in update).toBe(false);
   });
 });
 

@@ -195,6 +195,174 @@ describe("updateTrack — isrc immutability and validation (identity guard)", ()
   });
 });
 
+describe("updateTrack — the source hierarchy (operator > rekordbox > DSP)", () => {
+  // Re-mock the SELECT to return a row with the given provenance sources, and capture
+  // the UPDATE's sql + bound args so we can assert exactly which columns/values land.
+  function mockExisting(row: Partial<typeof EXISTING> & Record<string, unknown>) {
+    const argsSeen: unknown[] = [];
+    execute.mockReset();
+    execute.mockImplementation((query: { args?: unknown[]; sql: string }) => {
+      if (query.sql.startsWith("select")) {
+        return Promise.resolve({ rows: [{ ...EXISTING, ...row }] });
+      }
+
+      lastUpdateSql = query.sql;
+      argsSeen.push(...(query.args ?? []));
+
+      return Promise.resolve({ rows: [] });
+    });
+
+    return argsSeen;
+  }
+
+  it("drops an AGENT key write on a rekordbox-sourced row (bpm still applies)", async () => {
+    mockExisting({ bpm_source: "audio-file", key_source: "rekordbox" });
+
+    const result = await updateTrack(
+      "track-123",
+      {
+        bpm: 174,
+        bpmSource: "audio-file",
+        key: "A minor",
+        keyConfidence: 0.4,
+        keySource: "audio-file",
+      },
+      { writer: "agent" },
+    );
+
+    // The key + its provenance are dropped; the bpm write survives untouched.
+    expect(lastUpdateSql).not.toContain("key = ?");
+    expect(lastUpdateSql).not.toContain("key_source = ?");
+    expect(lastUpdateSql).not.toContain("key_confidence = ?");
+    expect(lastUpdateSql).toContain("bpm = ?");
+    expect(lastUpdateSql).toContain("bpm_source = ?");
+    // bpm is a VISIBLE field, so the surviving write still bumps lastmod.
+    expect(lastUpdateSql).toContain("updated_at = ?");
+    expect(result.fields).toContain("bpm");
+    expect(result.fields).not.toContain("key");
+  });
+
+  it("drops an AGENT bpm write on a rekordbox-sourced row (key still applies)", async () => {
+    mockExisting({ bpm_source: "rekordbox", key_source: "audio-file" });
+
+    await updateTrack(
+      "track-123",
+      { bpm: 174, bpmConfidence: 0.5, bpmSource: "audio-file", key: "F minor" },
+      { writer: "agent" },
+    );
+
+    expect(lastUpdateSql).not.toContain("bpm = ?");
+    expect(lastUpdateSql).not.toContain("bpm_source = ?");
+    expect(lastUpdateSql).not.toContain("bpm_confidence = ?");
+    expect(lastUpdateSql).toContain("key = ?");
+  });
+
+  it("also protects an OPERATOR-sourced key from an AGENT write", async () => {
+    mockExisting({ key_source: "operator" });
+
+    await updateTrack(
+      "track-123",
+      { enrichmentStatus: "done", key: "C major", keySource: "audio-file" },
+      { writer: "agent" },
+    );
+
+    expect(lastUpdateSql).not.toContain("key = ?");
+    // Everything else in the same update still applies (the sweep keeps succeeding).
+    expect(lastUpdateSql).toContain("enrichment_status = ?");
+  });
+
+  it("lets an AGENT overwrite a DSP-sourced key (a real upgrade, not a downgrade)", async () => {
+    mockExisting({ bpm_source: "deezer:search", key_source: "audio-file" });
+
+    await updateTrack(
+      "track-123",
+      { bpm: 174, key: "F minor", keySource: "audio-file" },
+      { writer: "agent" },
+    );
+
+    // audio-file / deezer are DSP sources, NOT protected — the agent write lands.
+    expect(lastUpdateSql).toContain("key = ?");
+    expect(lastUpdateSql).toContain("bpm = ?");
+  });
+
+  it("is a silent no-op (not a no_fields error) when the guard empties the update", async () => {
+    mockExisting({ bpm_source: "rekordbox", key_source: "rekordbox" });
+
+    // An agent write carrying ONLY key/bpm provenance onto a fully-protected row: every
+    // field is dropped, so there is nothing left to write — a clean success, no throw.
+    const result = await updateTrack(
+      "track-123",
+      { bpm: 174, key: "A minor", keySource: "audio-file" },
+      { writer: "agent" },
+    );
+
+    expect(result.fields).toEqual([]);
+    // No UPDATE emitted at all.
+    expect(lastUpdateSql).toBe("");
+  });
+
+  it("stamps key_source=operator when the OPERATOR hand-sets a key with no source", async () => {
+    const argsSeen = mockExisting({ key_source: null });
+
+    await updateTrack("track-123", { key: "G minor" }, { writer: "operator" });
+
+    expect(lastUpdateSql).toContain("key = ?");
+    expect(lastUpdateSql).toContain("key_source = ?");
+    // The stamped source value is the literal "operator".
+    expect(argsSeen).toContain("operator");
+  });
+
+  it("stamps bpm_source=operator when the OPERATOR hand-sets a bpm with no source", async () => {
+    const argsSeen = mockExisting({ bpm_source: null });
+
+    await updateTrack("track-123", { bpm: 172 }, { writer: "operator" });
+
+    expect(lastUpdateSql).toContain("bpm_source = ?");
+    expect(argsSeen).toContain("operator");
+  });
+
+  it("keeps an explicit --key-source rekordbox on an OPERATOR write (the backfill)", async () => {
+    const argsSeen = mockExisting({ key_source: null });
+
+    await updateTrack(
+      "track-123",
+      { key: "Bb minor", keySource: "rekordbox" },
+      { writer: "operator" },
+    );
+
+    expect(lastUpdateSql).toContain("key_source = ?");
+    // The operator's explicit source wins over the auto-stamp — rekordbox, not operator.
+    expect(argsSeen).toContain("rekordbox");
+    expect(argsSeen).not.toContain("operator");
+  });
+
+  it("leaves bpm/key untouched when no writer tier is supplied (internal server write)", async () => {
+    mockExisting({ bpm_source: "rekordbox", key_source: "rekordbox" });
+
+    // With no `writer` the provenance guard is inert — a trusted internal write lands.
+    await updateTrack("track-123", { bpm: 174, key: "A minor" });
+
+    expect(lastUpdateSql).toContain("bpm = ?");
+    expect(lastUpdateSql).toContain("key = ?");
+  });
+
+  it("does NOT bump updated_at for a guard-dropped agent provenance write", async () => {
+    mockExisting({ key_source: "rekordbox" });
+
+    // Only key provenance is written and it's dropped; the surviving keyConfidence-less
+    // payload has just analyzedAt (internal), so no visible field → no lastmod bump.
+    await updateTrack(
+      "track-123",
+      { analyzedAt: "2026-07-10T00:00:00.000Z", key: "A minor", keySource: "audio-file" },
+      { writer: "agent" },
+    );
+
+    expect(lastUpdateSql).toContain("analyzed_at = ?");
+    expect(lastUpdateSql).not.toContain("key = ?");
+    expect(lastUpdateSql).not.toContain("updated_at = ?");
+  });
+});
+
 describe("updateTrack — empty-string clears to null (not stored as '')", () => {
   const clearableFields: Array<{ column: string; field: keyof Parameters<typeof updateTrack>[1] }> =
     [
