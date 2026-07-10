@@ -43,6 +43,11 @@ export type TrackRow = {
   analyzed_from: string | null;
   artists_json: string;
   bpm: number | null;
+  // Who last set bpm/key — the source-hierarchy provenance (operator > rekordbox > DSP;
+  // track-update.ts). Admin-only: `toPublicTrackListItem` strips both before any public
+  // read. The Rekordbox sync reads them to skip an operator-graded row and to know
+  // whether a matching value still needs a protective `rekordbox` stamp.
+  bpm_source: string | null;
   duration_ms: number;
   enrichment_status: string;
   features_json: string | null;
@@ -54,6 +59,8 @@ export type TrackRow = {
   in_release_id: number | null;
   isrc: string | null;
   key: string | null;
+  // Who last set the key — see `bpm_source` above. Admin-only (public-stripped).
+  key_source: string | null;
   label: string | null;
   log_id: string | null;
   note: string | null;
@@ -103,7 +110,7 @@ type MixtapeFeedRow = {
 // Columns exposed to clients. `features_json` is the enrichment spectral summary,
 // surfaced (parsed) as creative fuel for the video agent.
 const TRACK_SELECT = `tracks.track_id, tracks.spotify_url, tracks.title, tracks.album, tracks.album_image_url, tracks.artists_json, tracks.analyzed_from,
-  tracks.bpm, tracks.duration_ms, tracks.enrichment_status, tracks.features_json, tracks.in_release_id, tracks.isrc, tracks.key, tracks.label, tracks.log_id, tracks.popularity,
+  tracks.bpm, tracks.bpm_source, tracks.duration_ms, tracks.enrichment_status, tracks.features_json, tracks.in_release_id, tracks.isrc, tracks.key, tracks.key_source, tracks.label, tracks.log_id, tracks.popularity,
   tracks.preview_url, tracks.release_date, tracks.source_audio_failures, tracks.source_audio_key, tracks.video_url, tracks.video_squared_at, tracks.video_vehicle, tracks.video_grain, tracks.video_register, tracks.video_model, tracks.video_model_reasoning, tracks.note, tracks.added_at,
   tracks.updated_at, tracks.vibe_x, tracks.vibe_y, tracks.added_to_spotify, tracks.posted_to_telegram,
   tracks.observation_audio_url, tracks.observation_duration_ms, tracks.observation_generated_at, tracks.observation_alignment_json,
@@ -227,6 +234,10 @@ export function toTrackListItem(row: TrackRow): TrackListItem {
         : undefined,
     artists: parseArtistsJson(row.artists_json),
     bpm: row.bpm ?? undefined,
+    // Source-hierarchy provenance (operator > rekordbox > DSP; track-update.ts). Admin-only
+    // on this DTO — `toPublicTrackListItem` strips both. The Rekordbox sync reads them to
+    // skip an operator-graded row and to detect a matching-but-unstamped value.
+    bpmSource: row.bpm_source ?? undefined,
     discogsReleaseUrl: row.in_release_id ? discogsReleaseUrl(row.in_release_id) : undefined,
     durationMs: row.duration_ms,
     enrichmentStatus: row.enrichment_status,
@@ -234,6 +245,8 @@ export function toTrackListItem(row: TrackRow): TrackListItem {
     galaxy: galaxyOf(row.galaxy_name, row.galaxy_slug),
     isrc: row.isrc ?? undefined,
     key: row.key ?? undefined,
+    // Key provenance — see `bpmSource` above. Admin-only (public-stripped).
+    keySource: row.key_source ?? undefined,
     label: row.label ?? undefined,
     logId: row.log_id ?? undefined,
     logPageUrl: row.log_id ? logPageUrl(row.log_id) : undefined,
@@ -288,8 +301,10 @@ export function toTrackListItem(row: TrackRow): TrackListItem {
 //     advertises the archive).
 //   - `analyzedFrom` — BPM/key analysis provenance (RFC bpm-key-accuracy); internal
 //     capture/enrich state, never part of a public DTO.
-// The on-box sweeps read both on the ADMIN path (which deliberately does NOT strip).
-const PRIVATE_TRACK_FIELDS = ["analyzedFrom", "sourceAudioKey"] as const;
+//   - `bpmSource`/`keySource` — the source-hierarchy provenance (operator > rekordbox > DSP);
+//     internal curation state the Rekordbox sync reads, never part of a public DTO.
+// The on-box sweeps read all of them on the ADMIN path (which deliberately does NOT strip).
+const PRIVATE_TRACK_FIELDS = ["analyzedFrom", "bpmSource", "keySource", "sourceAudioKey"] as const;
 
 /**
  * Strip the internal admin/agent-only fields (`PRIVATE_TRACK_FIELDS`) from a track/feed item
@@ -1213,9 +1228,9 @@ type ListTracksOptions = {
    */
   hasNote?: boolean;
   /**
-   * Musical-key presence (admin only) — the Rekordbox key-backfill's queue.
+   * Musical-key presence (admin only) — the Rekordbox sync's queue.
    * `false` = `key IS NULL` (no stored key yet: the DSP left it null below its
-   * confidence floor — the missing-key backlog the backfill targets); `true` = a
+   * confidence floor — the missing-key backlog the sync targets); `true` = a
    * key is on file. Omitted for public reads. Mirrors `hasVideo`'s tri-state.
    */
   hasKey?: boolean;
@@ -1375,7 +1390,7 @@ export async function listTracks({
     filterClauses.push("video_url is null");
   }
 
-  // The key-backfill queue: `key IS NULL` (no stored musical key — the DSP left it
+  // The Rekordbox-sync queue: `key IS NULL` (no stored musical key — the DSP left it
   // null below its confidence floor). `true` = a key is on file. Mirrors hasVideo.
   if (hasKey === true) {
     filterClauses.push("key is not null");

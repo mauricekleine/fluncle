@@ -151,7 +151,7 @@ describe("auto-note queue — hasContext=true AND hasNote=false", () => {
   });
 });
 
-describe("tracks list — key-backfill backlog filter", () => {
+describe("tracks list — Rekordbox-sync backlog filter", () => {
   beforeEach(() => {
     requestedPaths = [];
   });

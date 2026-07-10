@@ -1,6 +1,6 @@
 """Shared pure matching logic — normalized title + artist identity.
 
-Lifted verbatim from fluncle-key-backfill/scripts/key_backfill.py so both the
+Lifted verbatim from fluncle-rekordbox-sync/scripts/rekordbox_sync.py so both the
 Rekordbox derivation script and the plan-export script share one canonical copy.
 No external dependencies; no I/O.
 

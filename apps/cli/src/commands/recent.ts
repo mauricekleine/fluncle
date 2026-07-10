@@ -28,10 +28,16 @@ export function mapTrack(track: RecentTrack | RecentMixtape): RecentItem {
     analyzedFrom: track.analyzedFrom,
     artists: track.artists,
     bpm: track.bpm,
+    // Source-hierarchy provenance (operator > rekordbox > DSP). Stripped from every PUBLIC
+    // read by `toPublicTrackListItem`, so on `/api/tracks` it arrives undefined; on the ADMIN
+    // path (`/api/admin/tracks`) it carries the real value — the Rekordbox sync reads it from
+    // `admin tracks list --json` to skip operator-graded rows.
+    bpmSource: track.bpmSource,
     durationMs: track.durationMs,
     enrichmentStatus: track.enrichmentStatus,
     isrc: track.isrc,
     key: track.key,
+    keySource: track.keySource,
     label: track.label,
     logId: track.logId,
     note: track.note,

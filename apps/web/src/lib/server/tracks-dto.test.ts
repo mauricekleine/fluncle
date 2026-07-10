@@ -16,6 +16,7 @@ const BASE_ROW: TrackRow = {
   analyzed_from: null,
   artists_json: '["Some Artist"]',
   bpm: null,
+  bpm_source: null,
   duration_ms: 200000,
   enrichment_status: "done",
   features_json: null,
@@ -24,6 +25,7 @@ const BASE_ROW: TrackRow = {
   in_release_id: null,
   isrc: null,
   key: null,
+  key_source: null,
   label: null,
   log_id: "004.7.2I",
   note: null,
@@ -166,5 +168,39 @@ describe("analyzedFrom — admin carries, public strips", () => {
 
   it("surfaces a null legacy analyzed_from as undefined", () => {
     expect(toTrackListItem(BASE_ROW).analyzedFrom).toBeUndefined();
+  });
+});
+
+// Source-hierarchy provenance (operator > rekordbox > DSP): the ADMIN DTO carries
+// bpmSource/keySource (the Rekordbox sync reads them to skip an operator-graded row and to
+// detect a matching-but-unstamped value), but every PUBLIC read strips them — they are
+// internal curation state, never part of a public DTO.
+describe("bpmSource/keySource — admin carries, public strips", () => {
+  const GRADED_ROW: TrackRow = { ...BASE_ROW, bpm_source: "operator", key_source: "rekordbox" };
+
+  it("the admin DTO (toTrackListItem) carries bpmSource + keySource", () => {
+    const item = toTrackListItem(GRADED_ROW);
+
+    expect(item.bpmSource).toBe("operator");
+    expect(item.keySource).toBe("rekordbox");
+  });
+
+  it("toPublicTrackListItem strips both source fields", () => {
+    const publicItem = toPublicTrackListItem(toTrackListItem(GRADED_ROW));
+
+    expect(publicItem.bpmSource).toBeUndefined();
+    expect(publicItem.keySource).toBeUndefined();
+    // Everything else survives — only the private provenance is removed.
+    expect(publicItem.trackId).toBe(GRADED_ROW.track_id);
+    expect(publicItem.title).toBe(GRADED_ROW.title);
+  });
+
+  it("surfaces null legacy source columns as undefined", () => {
+    const item = toTrackListItem(BASE_ROW);
+
+    expect(item.bpmSource).toBeUndefined();
+    expect(item.keySource).toBeUndefined();
+    // An un-graded finding has nothing to strip — same reference back.
+    expect(toPublicTrackListItem(item)).toBe(item);
   });
 });
