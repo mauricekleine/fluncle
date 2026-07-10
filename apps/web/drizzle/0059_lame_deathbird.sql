@@ -1,0 +1,1 @@
+ALTER TABLE `submissions` ADD `triage_verdict` text;
