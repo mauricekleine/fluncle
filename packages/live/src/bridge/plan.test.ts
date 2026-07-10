@@ -10,6 +10,7 @@ import {
   classifyPlanRef,
   isAllPlan,
   isLogId,
+  isMixtapeCoordinate,
   matchPlanByHandle,
   parseDotenv,
 } from "./plan.ts";
@@ -116,6 +117,20 @@ describe("isAllPlan", () => {
   });
 });
 
+describe("isMixtapeCoordinate", () => {
+  test("the `F`-galaxy coordinate is a mixtape; a numeric galaxy is a finding", () => {
+    expect(isMixtapeCoordinate("019.F.1A")).toBe(true); // Fluncle's own mixtape
+    expect(isMixtapeCoordinate("019.1.7X")).toBe(false);
+    expect(isMixtapeCoordinate("011.9.8I")).toBe(false);
+  });
+
+  test("is case- and whitespace-tolerant, and rejects non-coordinates", () => {
+    expect(isMixtapeCoordinate("  019.f.1a ")).toBe(true);
+    expect(isMixtapeCoordinate("dark-aurora-roller")).toBe(false);
+    expect(isMixtapeCoordinate("")).toBe(false);
+  });
+});
+
 describe("buildAllFindingsPlan", () => {
   const realFetch = globalThis.fetch;
   afterEach(() => {
@@ -124,7 +139,6 @@ describe("buildAllFindingsPlan", () => {
 
   const json = (body: unknown): Response =>
     new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
-  const text = (body: string): Response => new Response(body);
   const notFound = (): Response => new Response("no", { status: 404 });
 
   // Await a call and return whatever it throws (or null) — bun's `.rejects` matcher reads as a
@@ -138,58 +152,80 @@ describe("buildAllFindingsPlan", () => {
     }
   };
 
-  test("enumerates every /log/<logId> from the sitemap, then enriches each", async () => {
-    // A sitemap listing three findings (plus noise that must NOT be scraped as a logId), one
-    // of which the public track route can't resolve to a coordinate (skipped, not fabricated).
-    const sitemap = [
-      "<urlset>",
-      "<url><loc>https://www.fluncle.com/log/019.F.1A</loc></url>",
-      "<url><loc>https://www.fluncle.com/log/011.9.8I</loc></url>",
-      "<url><loc>https://www.fluncle.com/log/007.8.1B</loc></url>",
-      "<url><loc>https://www.fluncle.com/mixtapes</loc></url>",
-      "</urlset>",
-    ].join("");
+  type TrackFeedRowBody = { logId: string; title: string; artists: string[]; durationMs: number };
+  type TrackFeedPageBody = { tracks: TrackFeedRowBody[]; nextCursor?: string };
 
-    // Every fetch in plan.ts passes a template-literal string URL, so the mock types its
-    // arg as `string` (the whole mock is cast via `unknown` to the wider `fetch` signature).
-    globalThis.fetch = mock(async (url: string): Promise<Response> => {
-      if (url.endsWith("/sitemap.xml")) {
-        return text(sitemap);
+  /** A mock that serves the paginated feed from a cursor→page map, plus the R2 enrich fetches. */
+  const feedMock = (
+    pages: Record<string, TrackFeedPageBody>,
+  ): ((url: string) => Promise<Response>) => {
+    return async (url: string): Promise<Response> => {
+      const u = new URL(url);
+      if (u.pathname === "/api/tracks") {
+        const cursor = u.searchParams.get("cursor") ?? "";
+        const page = pages[cursor];
+        return page ? json(page) : notFound();
       }
-      if (url.includes("/api/tracks/")) {
-        const id = decodeURIComponent(url.split("/api/tracks/")[1]);
-        // 007.8.1B has no minted coordinate → the route returns a track with no logId → skipped.
-        if (id === "007.8.1B") {
-          return json({ track: { artists: ["Ghost"], title: "unminted" } });
-        }
-        return json({
-          track: { artists: [`Artist ${id}`], durationMs: 1000, logId: id, title: `T ${id}` },
-        });
-      }
-      if (url.endsWith("/props.json")) {
+      if (u.pathname.endsWith("/props.json")) {
         return json({ palette: { accent: "#abcdef" }, seed: 7, track: {} });
       }
       // scene.json + composition.tsx absent → enrich marks the entry non-replayable.
       return notFound();
-    }) as unknown as typeof fetch;
+    };
+  };
+
+  test("drains the feed across pages, excludes the mixtape, and enriches each finding", async () => {
+    // Page 1 (no cursor) carries the `F`-galaxy MIXTAPE + one finding, then points to page 2.
+    globalThis.fetch = mock(
+      feedMock({
+        "": {
+          nextCursor: "cursor==2", // base64-ish, contains `=` → must survive URL-encoding
+          tracks: [
+            { artists: ["Fluncle"], durationMs: 500, logId: "019.F.1A", title: "Mixtape" },
+            { artists: ["A1"], durationMs: 1000, logId: "039.2.2E", title: "T1" },
+          ],
+        },
+        "cursor==2": {
+          tracks: [{ artists: ["A2"], durationMs: 2000, logId: "011.9.8I", title: "T2" }],
+        },
+      }),
+    ) as unknown as typeof fetch;
 
     const plan = await buildAllFindingsPlan();
 
-    // Two of the three sitemap findings resolve; the unminted one is dropped, not invented.
-    expect(plan.map((p) => p.logId).sort()).toEqual(["011.9.8I", "019.F.1A"]);
-    const first = plan.find((p) => p.logId === "019.F.1A");
-    expect(first?.title).toBe("T 019.F.1A");
-    expect(first?.artists).toEqual(["Artist 019.F.1A"]);
-    expect(first?.palette?.accent).toBe("#abcdef");
+    // Both findings ride; the mixtape (019.F.1A) is filtered out of the VJ pool.
+    expect(plan.map((p) => p.logId).sort()).toEqual(["011.9.8I", "039.2.2E"]);
+    const first = plan.find((p) => p.logId === "039.2.2E");
+    expect(first?.title).toBe("T1");
+    expect(first?.artists).toEqual(["A1"]);
+    expect(first?.palette?.accent).toBe("#abcdef"); // enrich still hits found.fluncle.com
     expect(first?.seed).toBe(7);
     expect(first?.replay?.replayable).toBe(false); // no composition.tsx on R2
   });
 
-  test("a non-OK sitemap THROWS — fail fast + loud, never a silent dead show", async () => {
+  test("a repeating cursor bails instead of paging forever", async () => {
+    // The server keeps handing back the same cursor — the safety rail must break the loop.
+    globalThis.fetch = mock(
+      feedMock({
+        "": {
+          nextCursor: "loop",
+          tracks: [{ artists: [], durationMs: 1, logId: "039.2.2E", title: "T" }],
+        },
+        loop: {
+          nextCursor: "loop",
+          tracks: [{ artists: [], durationMs: 1, logId: "007.8.1B", title: "T" }],
+        },
+      }),
+    ) as unknown as typeof fetch;
+    const error = await capture(() => buildAllFindingsPlan());
+    expect((error as Error).message).toMatch(/repeating cursor/);
+  });
+
+  test("a non-OK page THROWS — fail fast + loud, never a silent dead show", async () => {
     globalThis.fetch = mock(async (): Promise<Response> => notFound()) as unknown as typeof fetch;
     const error = await capture(() => buildAllFindingsPlan());
     expect(error).toBeInstanceOf(Error);
-    expect((error as Error).message).toMatch(/sitemap fetch returned 404/);
+    expect((error as Error).message).toMatch(/\/api\/tracks returned 404/);
   });
 
   test("a thrown fetch (network fault / 403) THROWS, naming the cause", async () => {
@@ -197,17 +233,17 @@ describe("buildAllFindingsPlan", () => {
       throw new Error("ECONNREFUSED");
     }) as unknown as typeof fetch;
     const error = await capture(() => buildAllFindingsPlan());
-    expect((error as Error).message).toMatch(/sitemap fetch failed/);
+    expect((error as Error).message).toMatch(/\/api\/tracks fetch failed/);
   });
 
-  test("a sitemap with findings but NONE resolving THROWS (empty pool, no dead show)", async () => {
-    // The sitemap lists a finding, but the public track route 404s it → no members → empty pool.
-    globalThis.fetch = mock(async (url: string): Promise<Response> => {
-      if (url.endsWith("/sitemap.xml")) {
-        return text("<url><loc>https://www.fluncle.com/log/019.F.1A</loc></url>");
-      }
-      return notFound();
-    }) as unknown as typeof fetch;
+  test("a feed of only the mixtape THROWS (empty pool after exclusion, no dead show)", async () => {
+    globalThis.fetch = mock(
+      feedMock({
+        "": {
+          tracks: [{ artists: ["Fluncle"], durationMs: 1, logId: "019.F.1A", title: "Mixtape" }],
+        },
+      }),
+    ) as unknown as typeof fetch;
     const error = await capture(() => buildAllFindingsPlan());
     expect((error as Error).message).toMatch(/pool is empty/);
   });

@@ -100,6 +100,17 @@ export function isLogId(value: string): boolean {
   return /^[0-9]{3}\.[0-9A-Z]\.[0-9A-Z]{2}$/i.test(value.trim());
 }
 
+/**
+ * True when a Log ID is a MIXTAPE coordinate — the galaxy char (the middle `G` of `NNN.G.CC`)
+ * is `F`. Across the whole archive the galaxy chars are `0`–`9` for findings and exactly one
+ * `F` for Fluncle's own mixtape, so this canonical marker (not an artist name or a null
+ * enrichment status) is how the RANDOM-VJ pool excludes the mixtape. Pure + unit-tested.
+ */
+export function isMixtapeCoordinate(logId: string): boolean {
+  const parts = logId.trim().toUpperCase().split(".");
+  return parts.length === 3 && parts[1] === "F";
+}
+
 /** How a `--plan` value resolves: a mixtape/finding coordinate, or a plan handle. */
 export type PlanRef = { kind: "logId"; value: string } | { kind: "handle"; value: string };
 
@@ -396,35 +407,84 @@ async function mapLimit<T, R>(items: T[], limit: number, fn: (t: T) => Promise<R
   return out;
 }
 
+/** One public feed row (`/api/tracks`) — only the fields the VJ pool builds a member from. */
+type TrackFeedRow = { logId?: string; title?: string; artists?: string[]; durationMs?: number };
+/** A page of the public feed: the rows plus the opaque base64 cursor to the next page. */
+type TrackFeedPage = { tracks?: TrackFeedRow[]; nextCursor?: string };
+
+/** Feed page size + the pagination safety rail (the archive drains in ~2 pages of 100). */
+const VJ_FEED_PAGE_LIMIT = 100;
+const VJ_FEED_MAX_PAGES = 20;
+
 /**
- * Every finding's logId from the public sitemap — the complete archive index. `/api/tracks`
- * caps its page size, so the sitemap is the enumeration path: match `/log/<logId>` and dedupe.
- * THROWS (naming the status / cause) on any non-OK response or network fault — VJ mode has no
- * fallback pool, so a swallowed failure would boot a dead, visual-less show. `www.fluncle.com`
- * fronts a Cloudflare rule that 403s crawler-ish user-agents, so this fetch genuinely can fail
- * in the field; failing fast + loud lets `main().catch` exit non-zero instead. An OK-but-empty
- * parse (a sitemap with no `/log/` entries) is a distinct, non-throwing case: it returns [].
+ * Drain the WHOLE public archive from the merged feed (`GET /api/tracks`), following
+ * `nextCursor` page to page. The cursor is opaque base64 (it can contain `=` / `+` / `/`), so
+ * it goes through `URLSearchParams`, which percent-encodes it — a raw `?cursor=` concat would
+ * corrupt it. The feed rows carry the member metadata directly (`logId`/`title`/`artists`/
+ * `durationMs`), so there is no per-id round-trip. Returns EVERY row — findings AND Fluncle's
+ * own mixtape (`totalCount` counts findings, but the rows include the `F`-galaxy mixtape); the
+ * caller filters mixtapes out. THROWS (naming the status / cause) on a thrown fetch or a non-OK
+ * page — VJ mode has no fallback pool, so a swallowed failure would boot a dead, visual-less
+ * show; `www.fluncle.com` fronts a Cloudflare rule that 403s crawler-ish user-agents, so this
+ * genuinely can fail in the field, and failing fast + loud lets `main().catch` exit non-zero. A
+ * pagination safety rail bounds the page count AND bails on a repeated cursor, so a server bug
+ * can never spin the boot forever.
  */
-export async function fetchAllFindingLogIds(): Promise<string[]> {
-  const url = `${WEB_BASE}/sitemap.xml`;
-  let res: Response;
-  try {
-    res = await fetch(url);
-  } catch (cause) {
-    throw new Error(`RANDOM-VJ: sitemap fetch failed (${url})`, { cause });
+export async function fetchAllArchiveRows(): Promise<TrackFeedRow[]> {
+  const rows: TrackFeedRow[] = [];
+  const seenCursors = new Set<string>();
+  let cursor: string | undefined;
+  for (let page = 0; page < VJ_FEED_MAX_PAGES; page++) {
+    const url = new URL(`${WEB_BASE}/api/tracks`);
+    url.searchParams.set("limit", String(VJ_FEED_PAGE_LIMIT));
+    if (cursor !== undefined) {
+      url.searchParams.set("cursor", cursor); // URLSearchParams percent-encodes the base64
+    }
+    let res: Response;
+    try {
+      res = await fetch(url);
+    } catch (cause) {
+      throw new Error(`RANDOM-VJ: /api/tracks fetch failed (page ${page + 1})`, { cause });
+    }
+    if (!res.ok) {
+      throw new Error(
+        `RANDOM-VJ: /api/tracks returned ${res.status} ${res.statusText} (page ${page + 1}) — a ` +
+          `Cloudflare user-agent/rule change can 403 the bridge; VJ mode needs the feed to enumerate the archive.`,
+      );
+    }
+    const body = (await res.json()) as TrackFeedPage;
+    for (const row of body.tracks ?? []) {
+      rows.push(row);
+    }
+    const next = body.nextCursor;
+    if (next === undefined || next === "") {
+      return rows;
+    }
+    if (seenCursors.has(next)) {
+      throw new Error(
+        `RANDOM-VJ: /api/tracks returned a repeating cursor after ${page + 1} page(s) — refusing ` +
+          `to page forever (server bug?).`,
+      );
+    }
+    seenCursors.add(next);
+    cursor = next;
   }
-  if (!res.ok) {
-    throw new Error(
-      `RANDOM-VJ: sitemap fetch returned ${res.status} ${res.statusText} (${url}) — a Cloudflare ` +
-        `user-agent/rule change can 403 the bridge; VJ mode needs the sitemap to enumerate the archive.`,
-    );
+  throw new Error(
+    `RANDOM-VJ: /api/tracks exceeded ${VJ_FEED_MAX_PAGES} pages — refusing to page forever (server bug?).`,
+  );
+}
+
+/** A public feed row → a PlanMember (the fields the enrichment needs); null when it has no logId. */
+function rowToMember(row: TrackFeedRow): PlanMember | null {
+  if (!row.logId) {
+    return null;
   }
-  const xml = await res.text();
-  const ids = new Set<string>();
-  for (const m of xml.matchAll(/\/log\/([0-9A-Za-z.]+)/g)) {
-    ids.add(m[1]);
-  }
-  return [...ids];
+  return {
+    artists: row.artists ?? [],
+    durationMs: row.durationMs,
+    logId: row.logId,
+    title: row.title ?? "",
+  };
 }
 
 /**
@@ -432,22 +492,25 @@ export async function fetchAllFindingLogIds(): Promise<string[]> {
  * bridge's shuffle-bag director (`vj.ts`) picks what shows next, driven by the DJ's transition
  * datagrams, so there is nothing to match and no order to keep. Findings whose composition
  * never rendered still ride as the default-vehicle morph (`enrich` marks them non-replayable).
- * Bounded concurrency (8) keeps the archive-wide boot kind to prod + R2. Expect ~60 findings.
- * THROWS on a failed sitemap fetch (via `fetchAllFindingLogIds`) OR an empty resolved pool —
- * VJ mode has no fallback tracklist, so an empty pool must fail loudly (`main().catch` exits
- * non-zero) rather than boot a visual-less show the operator can't drive.
+ * Sourced from the paginated public feed (`fetchAllArchiveRows`), with **Fluncle's own mixtape
+ * excluded** (`isMixtapeCoordinate` — the pool is the ~60 findings, never the `F`-galaxy set).
+ * The feed rows already carry the member metadata, so only the per-finding `enrich` (which needs
+ * `found.fluncle.com`) hits the network again, at bounded concurrency (8). THROWS on a failed
+ * feed fetch (via `fetchAllArchiveRows`) OR an empty resolved pool — VJ mode has no fallback
+ * tracklist, so an empty pool must fail loudly (`main().catch` exits non-zero) rather than boot
+ * a visual-less show the operator can't drive.
  */
 export async function buildAllFindingsPlan(): Promise<PlanEntry[]> {
-  const logIds = await fetchAllFindingLogIds();
-  const members = (await mapLimit(logIds, 8, fetchTrackMember)).filter(
-    (m): m is PlanMember => m !== null,
-  );
+  const rows = await fetchAllArchiveRows();
+  const members = rows
+    .map(rowToMember)
+    .filter((m): m is PlanMember => m !== null && !isMixtapeCoordinate(m.logId));
   const plan = await mapLimit(members, 8, enrich);
   if (plan.length === 0) {
     throw new Error(
-      `RANDOM-VJ: the archive pool is empty — the sitemap yielded ${logIds.length} logId(s), ` +
-        `${members.length} of which resolved to findings. VJ mode has nothing to show; refusing ` +
-        `to boot a dead show. Check ${WEB_BASE}/sitemap.xml and the public /api/tracks route.`,
+      `RANDOM-VJ: the archive pool is empty — the feed yielded ${rows.length} row(s), ` +
+        `${members.length} of which resolved to non-mixtape findings. VJ mode has nothing to show; ` +
+        `refusing to boot a dead show. Check ${WEB_BASE}/api/tracks.`,
     );
   }
   return plan;
