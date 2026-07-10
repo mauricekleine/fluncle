@@ -111,6 +111,11 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // exactly" check skips it; it lives here for completeness (like `list_artist_socials`).
   "GET /admin/subscriptions": "list_subscriptions",
   "GET /admin/tracks": "list_tracks_admin",
+  // The dream-weaver order proposal (RFC mixability-engine) — contract-only oRPC (no
+  // TanStack route file; oRPC owns the path directly). Admin tier (agent-allowed read).
+  // `get_mixable_order` matches the public `get_` prefix so the "holds exactly" check
+  // skips it; it lives here for completeness (like `get_track_admin`).
+  "GET /admin/tracks/mixable-order": "get_mixable_order",
   // The single-finding admin lookup — contract-only oRPC (no TanStack route file; oRPC
   // owns the path directly, like context_track). Admin tier (agent-allowed read).
   // `get_track_admin` matches the public `get_` prefix so the "holds exactly" check

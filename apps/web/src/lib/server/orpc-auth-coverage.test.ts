@@ -126,6 +126,10 @@ const PUBLIC_UNAUTH_OPS = new Set<string>([
   "get_track",
   "list_artists",
   "list_editions",
+  // The `/mix` rail read (RFC mixability-engine). Public-unauth at the op (keys/BPMs
+  // are already public on every track chip); the `/mix` page's admin gate is a
+  // route-level flip (Decision 1), so the op ships at its final public tier now.
+  "list_mixable_tracks",
   "list_mixtapes",
   "list_stories",
   "list_tracks",
@@ -219,6 +223,10 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // The built clip caption read — admin tier (agent-allowed), the list_clips precedent:
   // a read the clip-card UI + the box can both consume.
   get_clip_caption: "admin",
+  // The dream-weaver's proposed-order read (RFC mixability-engine) — admin tier
+  // (agent-allowed, like get_track_admin): a PURE read that never writes/publishes, so
+  // no operatorGuard. `promote_recording` remains the only way a mixtape exists.
+  get_mixable_order: "admin",
   get_mixtape_social: "admin",
   get_private_account_export: "private-session",
   get_private_galaxy_progress: "private-session",

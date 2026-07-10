@@ -14,6 +14,7 @@ import {
   SquaresFourIcon,
   UsersThreeIcon,
   VinylRecordIcon,
+  WaveTriangleIcon,
 } from "@phosphor-icons/react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
@@ -66,6 +67,7 @@ export type AdminNavCurrent =
   | "costs"
   | "dashboard"
   | "findings"
+  | "mixable-order"
   | "mixtapes"
   | "newsletter"
   | "plans"
@@ -83,6 +85,7 @@ type AdminNavPath =
   | "/admin/clips"
   | "/admin/costs"
   | "/admin/findings"
+  | "/admin/mixable-order"
   | "/admin/mixtapes"
   | "/admin/newsletter"
   | "/admin/plans"
@@ -154,6 +157,12 @@ const OBJECT_SECTIONS: NavSection[] = [
     entries: [
       { icon: ListNumbersIcon, key: "plans", label: "Playlists", to: "/admin/plans" },
       { icon: CassetteTapeIcon, key: "mixtapes", label: "Mixtapes", to: "/admin/mixtapes" },
+      {
+        icon: WaveTriangleIcon,
+        key: "mixable-order",
+        label: "Dream-weaver",
+        to: "/admin/mixable-order",
+      },
     ],
     key: "sets",
     label: "Sets",

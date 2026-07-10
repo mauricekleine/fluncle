@@ -5,6 +5,7 @@
 import { ORPCError } from "@orpc/server";
 import {
   decodeTrackCursor,
+  getMixableTracks,
   getRandomTrack,
   getSimilarFindings,
   listTracks,
@@ -21,6 +22,11 @@ const LIST_MAX_LIMIT = 48;
 // modest ceiling; the op parses the limit tolerantly like the feed's `list_tracks`.
 const SIMILAR_DEFAULT_LIMIT = 6;
 const SIMILAR_MAX_LIMIT = 24;
+
+// `/mix` rail bounds — a fuller default than "more like this" (the crew builds a set
+// off it), still modestly capped; parsed tolerantly like the feed's `list_tracks`.
+const MIXABLE_DEFAULT_LIMIT = 12;
+const MIXABLE_MAX_LIMIT = 32;
 
 /**
  * Normalize a discovery-window bound exactly as the live route's `parseTimestamp`
@@ -137,10 +143,42 @@ export function tracksHandlers(os: Implementer) {
     }
   });
 
+  // `list_mixable_tracks` — the findings that mix cleanly out of the given one (the
+  // `/mix` rail). Ranks the archive by the mixability engine, excludes the already-
+  // chained findings server-side, and returns each candidate with its reason chip and
+  // NO numeric score. The limit parses tolerantly like the feed's. An unknown
+  // coordinate / an all-null target / an empty archive all resolve to `{ findings: [] }`.
+  //
+  // RATE LIMIT: accept-risk, no limiter (Decision 2). One bounded archive scan,
+  // comparable to the existing uncached `get_similar_findings`; the posture is
+  // recorded here and revisited at archive growth. Moot while /mix is admin-gated.
+  const listMixableTracksHandler = os.list_mixable_tracks.handler(async ({ input }) => {
+    try {
+      const limit = parseLimit(input.limit, MIXABLE_DEFAULT_LIMIT, MIXABLE_MAX_LIMIT);
+      const excludeLogIds = (input.exclude ?? "")
+        .split(",")
+        .map((value) => value.trim())
+        .filter(Boolean);
+      const findings = await getMixableTracks(input.idOrLogId, { excludeLogIds, limit });
+
+      // Strip the private capture key from every candidate (reason chip stays).
+      return {
+        findings: findings.map((finding) => ({
+          ...toPublicTrackListItem(finding),
+          reason: finding.reason,
+        })),
+        ok: true,
+      } as const;
+    } catch (error) {
+      throw apiFault(error);
+    }
+  });
+
   return {
     get_random_track: getRandomTrackHandler,
     get_similar_findings: getSimilarFindingsHandler,
     get_track: getTrack,
+    list_mixable_tracks: listMixableTracksHandler,
     list_tracks: listTracksHandler,
   };
 }
