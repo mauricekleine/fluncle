@@ -11,6 +11,13 @@ export const BRIDGE_PORT = 4180;
 export const BRIDGE_WS_PATH = "/state";
 /** The phone remote page the bridge serves (http://<lan-ip>:4180/remote). */
 export const BRIDGE_REMOTE_PATH = "/remote";
+/**
+ * RANDOM-VJ MODE's transition input channel (`--plan all`): the default UDP port the
+ * bridge binds a `node:dgram` listener on, accepting `{"type":"transition","deck":1|2}`
+ * datagrams from the DJ-mixer sender on the other machine. LAN-local by design (bound on
+ * all interfaces so a LAN/VPN peer can reach it). Overridable via `FLUNCLE_VJ_TRANSITION_PORT`.
+ */
+export const VJ_TRANSITION_PORT = 9000;
 
 /** One planned track, enriched at show start (the /plan shape the glass already consumes). */
 export type PlanEntry = {

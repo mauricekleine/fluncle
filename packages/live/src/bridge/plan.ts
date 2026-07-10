@@ -82,12 +82,33 @@ async function fixtureMembers(): Promise<PlanMember[]> {
 // coordinate path is the calibrated default; the handle path is the normal live flow.
 
 /**
+ * The RANDOM-VJ sentinel: `--plan all` (case-insensitive, whitespace-tolerant) is not a
+ * mixtape/handle at all — it asks for the WHOLE archive as an unordered VJ pool. Both the
+ * plan builder (`buildPlan`) and the bridge boot (`serve.ts`) route off this ONE predicate,
+ * so the two never disagree on what counts as VJ mode. Pure, so it is unit-tested directly.
+ */
+export function isAllPlan(ref?: string): boolean {
+  return ref?.trim().toLowerCase() === "all";
+}
+
+/**
  * A Fluncle coordinate (a finding OR a mixtape Log ID) looks like `NNN.G.CC` — three
  * digits, a galaxy char, a two-char cell (e.g. `019.F.1A`, `011.9.8I`). A PLAN handle is a
  * galaxy-vocab slug (e.g. `dark-aurora-roller`) and never matches this shape.
  */
 export function isLogId(value: string): boolean {
   return /^[0-9]{3}\.[0-9A-Z]\.[0-9A-Z]{2}$/i.test(value.trim());
+}
+
+/**
+ * True when a Log ID is a MIXTAPE coordinate — the galaxy char (the middle `G` of `NNN.G.CC`)
+ * is `F`. Across the whole archive the galaxy chars are `0`–`9` for findings and exactly one
+ * `F` for Fluncle's own mixtape, so this canonical marker (not an artist name or a null
+ * enrichment status) is how the RANDOM-VJ pool excludes the mixtape. Pure + unit-tested.
+ */
+export function isMixtapeCoordinate(logId: string): boolean {
+  const parts = logId.trim().toUpperCase().split(".");
+  return parts.length === 3 && parts[1] === "F";
 }
 
 /** How a `--plan` value resolves: a mixtape/finding coordinate, or a plan handle. */
@@ -376,14 +397,136 @@ async function enrich(member: PlanMember): Promise<PlanEntry> {
   return entry;
 }
 
+/** Bounded-concurrency map — keeps the archive-wide VJ boot kind to prod + R2 (no thundering
+ * herd) by running at most `limit` fetches at once, in order. Pure of the fetch specifics. */
+async function mapLimit<T, R>(items: T[], limit: number, fn: (t: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = [];
+  for (let i = 0; i < items.length; i += limit) {
+    out.push(...(await Promise.all(items.slice(i, i + limit).map(fn))));
+  }
+  return out;
+}
+
+/** One public feed row (`/api/tracks`) — only the fields the VJ pool builds a member from. */
+type TrackFeedRow = { logId?: string; title?: string; artists?: string[]; durationMs?: number };
+/** A page of the public feed: the rows plus the opaque base64 cursor to the next page. */
+type TrackFeedPage = { tracks?: TrackFeedRow[]; nextCursor?: string };
+
+/** Feed page size + the pagination safety rail (the archive drains in ~2 pages of 100). */
+const VJ_FEED_PAGE_LIMIT = 100;
+const VJ_FEED_MAX_PAGES = 20;
+
 /**
- * Build the full enriched plan for a `--plan` value — a MIXTAPE logId (the calibrated
- * default) OR a plan HANDLE (a galaxy slug, the normal live flow). The shape routes the
- * resolver; either way members come from the API (committed fixture fallback) and each is
- * enriched concurrently. This is the /plan payload and the source of the matcher's ordered
- * logId list.
+ * Drain the WHOLE public archive from the merged feed (`GET /api/tracks`), following
+ * `nextCursor` page to page. The cursor is opaque base64 (it can contain `=` / `+` / `/`), so
+ * it goes through `URLSearchParams`, which percent-encodes it — a raw `?cursor=` concat would
+ * corrupt it. The feed rows carry the member metadata directly (`logId`/`title`/`artists`/
+ * `durationMs`), so there is no per-id round-trip. Returns EVERY row — findings AND Fluncle's
+ * own mixtape (`totalCount` counts findings, but the rows include the `F`-galaxy mixtape); the
+ * caller filters mixtapes out. THROWS (naming the status / cause) on a thrown fetch or a non-OK
+ * page — VJ mode has no fallback pool, so a swallowed failure would boot a dead, visual-less
+ * show; `www.fluncle.com` fronts a Cloudflare rule that 403s crawler-ish user-agents, so this
+ * genuinely can fail in the field, and failing fast + loud lets `main().catch` exit non-zero. A
+ * pagination safety rail bounds the page count AND bails on a repeated cursor, so a server bug
+ * can never spin the boot forever.
+ */
+export async function fetchAllArchiveRows(): Promise<TrackFeedRow[]> {
+  const rows: TrackFeedRow[] = [];
+  const seenCursors = new Set<string>();
+  let cursor: string | undefined;
+  for (let page = 0; page < VJ_FEED_MAX_PAGES; page++) {
+    const url = new URL(`${WEB_BASE}/api/tracks`);
+    url.searchParams.set("limit", String(VJ_FEED_PAGE_LIMIT));
+    if (cursor !== undefined) {
+      url.searchParams.set("cursor", cursor); // URLSearchParams percent-encodes the base64
+    }
+    let res: Response;
+    try {
+      res = await fetch(url);
+    } catch (cause) {
+      throw new Error(`RANDOM-VJ: /api/tracks fetch failed (page ${page + 1})`, { cause });
+    }
+    if (!res.ok) {
+      throw new Error(
+        `RANDOM-VJ: /api/tracks returned ${res.status} ${res.statusText} (page ${page + 1}) — a ` +
+          `Cloudflare user-agent/rule change can 403 the bridge; VJ mode needs the feed to enumerate the archive.`,
+      );
+    }
+    const body = (await res.json()) as TrackFeedPage;
+    for (const row of body.tracks ?? []) {
+      rows.push(row);
+    }
+    const next = body.nextCursor;
+    if (next === undefined || next === "") {
+      return rows;
+    }
+    if (seenCursors.has(next)) {
+      throw new Error(
+        `RANDOM-VJ: /api/tracks returned a repeating cursor after ${page + 1} page(s) — refusing ` +
+          `to page forever (server bug?).`,
+      );
+    }
+    seenCursors.add(next);
+    cursor = next;
+  }
+  throw new Error(
+    `RANDOM-VJ: /api/tracks exceeded ${VJ_FEED_MAX_PAGES} pages — refusing to page forever (server bug?).`,
+  );
+}
+
+/** A public feed row → a PlanMember (the fields the enrichment needs); null when it has no logId. */
+function rowToMember(row: TrackFeedRow): PlanMember | null {
+  if (!row.logId) {
+    return null;
+  }
+  return {
+    artists: row.artists ?? [],
+    durationMs: row.durationMs,
+    logId: row.logId,
+    title: row.title ?? "",
+  };
+}
+
+/**
+ * The RANDOM-VJ pool (`--plan all`): the WHOLE archive as PlanEntries with NO order — the
+ * bridge's shuffle-bag director (`vj.ts`) picks what shows next, driven by the DJ's transition
+ * datagrams, so there is nothing to match and no order to keep. Findings whose composition
+ * never rendered still ride as the default-vehicle morph (`enrich` marks them non-replayable).
+ * Sourced from the paginated public feed (`fetchAllArchiveRows`), with **Fluncle's own mixtape
+ * excluded** (`isMixtapeCoordinate` — the pool is the ~60 findings, never the `F`-galaxy set).
+ * The feed rows already carry the member metadata, so only the per-finding `enrich` (which needs
+ * `found.fluncle.com`) hits the network again, at bounded concurrency (8). THROWS on a failed
+ * feed fetch (via `fetchAllArchiveRows`) OR an empty resolved pool — VJ mode has no fallback
+ * tracklist, so an empty pool must fail loudly (`main().catch` exits non-zero) rather than boot
+ * a visual-less show the operator can't drive.
+ */
+export async function buildAllFindingsPlan(): Promise<PlanEntry[]> {
+  const rows = await fetchAllArchiveRows();
+  const members = rows
+    .map(rowToMember)
+    .filter((m): m is PlanMember => m !== null && !isMixtapeCoordinate(m.logId));
+  const plan = await mapLimit(members, 8, enrich);
+  if (plan.length === 0) {
+    throw new Error(
+      `RANDOM-VJ: the archive pool is empty — the feed yielded ${rows.length} row(s), ` +
+        `${members.length} of which resolved to non-mixtape findings. VJ mode has nothing to show; ` +
+        `refusing to boot a dead show. Check ${WEB_BASE}/api/tracks.`,
+    );
+  }
+  return plan;
+}
+
+/**
+ * Build the full enriched plan for a `--plan` value — the RANDOM-VJ pool (`all`, the WHOLE
+ * archive, unordered), a MIXTAPE logId (the calibrated default), OR a plan HANDLE (a galaxy
+ * slug, the normal live flow). The shape routes the resolver; the ordered paths take members
+ * from the API (committed fixture fallback) and enrich each concurrently. This is the /plan
+ * payload and the source of the matcher's ordered logId list (empty for the VJ pool).
  */
 export async function buildPlan(planRef = DEFAULT_PLAN_MIXTAPE): Promise<PlanEntry[]> {
+  if (isAllPlan(planRef)) {
+    return await buildAllFindingsPlan();
+  }
   const ref = classifyPlanRef(planRef);
   const requested = ref.kind === "handle" ? `plan handle "${ref.value}"` : `mixtape ${ref.value}`;
   const fetched =

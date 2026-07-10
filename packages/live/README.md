@@ -92,10 +92,11 @@ Markdown table is the only human-maintained mirror — keep it in step by hand.
 
 One stateless-restartable Bun process on `:4180`:
 
-- **`GET /plan`** — the enriched planned tracklist. `--plan` takes a **mixtape logId**
+- **`GET /plan`** — the enriched planned tracklist. `--plan` takes **`all`** (RANDOM-VJ
+  MODE, the WHOLE archive as an unordered pool — see below), a **mixtape logId**
   (`019.F.1A`, the calibrated default) **or a plan HANDLE** (a galaxy slug like
   `dark-aurora-roller` — the normal live flow, since a plan exists before the set is
-  played); the shape routes the resolver (`classifyPlanRef`). A handle resolves through
+  played); the shape routes the resolver (`isAllPlan` first, then `classifyPlanRef`). A handle resolves through
   the admin API (reusing the CLI's stored token) to its ordered plan cues, each mapped to
   a finding, then down the SAME enrichment path: palette + seed (`props.json`) and the
   dream-replay scene (`composition.tsx`, resolved + classified by the glass's
@@ -146,6 +147,21 @@ contract is a monotone, never-wrong-track pointer with the nudge as the safety n
 not a perfect auto-follow. Thresholds are calibrated in the shape-normalized domain —
 re-run the harness after touching `mel.ts` or the gates.
 
+### RANDOM-VJ MODE (`--plan all`, `vj.ts`)
+
+RANDOM-VJ MODE is a **different job** from the plan-scoped matcher. The plan/matcher path answers "has the PENDING planned finding started yet?" — it needs an ordered tracklist and an identity to recognize. RANDOM-VJ MODE answers a set where the DJ plays **anything, in any order, possibly tracks that aren't in the archive at all**: there is nothing to match. We just want an on-brand visual that **changes on each transition**, drawn from the **whole archive**, never repeating within a set.
+
+- **The pool** — `bun run bridge --plan all` builds the pool from `buildAllFindingsPlan` (`plan.ts`): the WHOLE archive drained from the public merged feed (`GET /api/tracks`, cursor-paginated — `fetchAllArchiveRows` follows `nextCursor` through `URLSearchParams` so the base64 cursor survives URL-encoding), then enriched down the SAME `props.json`/`composition.tsx` path the ordered plans use, at bounded concurrency (8). The feed rows already carry the member metadata (`logId`/`title`/`artists`/`durationMs`), so there is no per-id round-trip — only `enrich` re-hits `found.fluncle.com`. **Fluncle's own mixtape is excluded** (`isMixtapeCoordinate` — the `F`-galaxy middle char of `NNN.G.CC`; the feed rows include it but the VJ pool is the ~60 findings only, ~55 replayable, the rest riding the default-vehicle morph). It is served over `/plan` exactly like any other plan, so the glass renders it with no changes. VJ mode has no fallback tracklist, so it **fails fast + loud**: a non-OK / thrown feed fetch (`www.fluncle.com` fronts a Cloudflare rule that 403s crawler-ish user-agents), a repeating/runaway cursor (a pagination safety rail), or an empty resolved pool throws, and the bridge exits non-zero rather than boot a visual-less show.
+- **No fingerprinting** — because there is no identity to match, `boot()` (`serve.ts`) returns `frames: null` for every entry, so the matcher never advances on its own (`channels.matcher` reads `off`). **Every other plan ref still fingerprints and matches exactly as before** — VJ mode is the ONE `isAllPlan` branch.
+- **The director** — a **shuffle-bag** (`createShuffleBag`, pure + seedable): random WITHOUT replacement (every finding shows exactly once before any repeats), reshuffled on exhaust, and never the same finding back-to-back — including across the reshuffle boundary. Seeded per set with `mulberry32(Date.now())`.
+- **The transition channel** — a `node:dgram` UDP listener bound **only** in VJ mode (`startVjTransitionListener`). The DJ-mixer sender on the other machine fires one datagram per mix transition:
+
+  ```json
+  { "type": "transition", "deck": 1 }
+  ```
+
+  Each **valid** datagram pulls the next index from the shuffle bag and drives the show through the SAME `goto` command path the phone remote uses (`state.ingest({ cmd: "goto", index }, …)`). Malformed / non-JSON / wrong-`type` / bad-`deck` datagrams are **ignored silently** (the never-crash rail). The port defaults to `VJ_TRANSITION_PORT` (`9000`), overridable via `FLUNCLE_VJ_TRANSITION_PORT` (set `0` for an ephemeral OS-assigned port). It binds on all interfaces so a **LAN/VPN peer** can reach it — **LAN-local by design**, like the rest of the live rig (no auth; keep it off the open internet). Covered by `vj.test.ts` (the bag guarantees, the parser, and a live ephemeral-socket round-trip).
+
 ### The supervisor (`supervisor.ts`, RFC §3)
 
 The out-of-process watchdog: no render heartbeat for >5s ⇒ relaunch the pinned
@@ -158,7 +174,8 @@ the relaunch seconds.
 `FLUNCLE_PLAN_MIXTAPE` (default `019.F.1A`), `FLUNCLE_WEB_BASE`,
 `FLUNCLE_FOUND_BASE`, `FLUNCLE_CHROMIUM`, `FLUNCLE_GLASS_URL`, `FLUNCLE_FFMPEG`,
 `FLUNCLE_BRIDGE_PORT` (the `:4180` the glass proxies its `/plan` to; default
-`BRIDGE_PORT`). A plan HANDLE additionally reads the admin API base + token from the
+`BRIDGE_PORT`), `FLUNCLE_VJ_TRANSITION_PORT` (RANDOM-VJ MODE's UDP transition port;
+default `VJ_TRANSITION_PORT` = `9000`). A plan HANDLE additionally reads the admin API base + token from the
 env (`FLUNCLE_API_TOKEN` / `FLUNCLE_API_BASE_URL`) or `~/.config/fluncle/.env.production`
 (the CLI's stored credential, read-only).
 

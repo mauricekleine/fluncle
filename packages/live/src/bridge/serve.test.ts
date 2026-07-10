@@ -36,6 +36,11 @@ describe("parsePlanArg", () => {
   test("an unrelated flag is skipped; a later positional id still resolves", () => {
     expect(parsePlanArg(["--one-mac", "019.F.1A"])).toBe("019.F.1A");
   });
+
+  test("the RANDOM-VJ sentinel resolves through both forms (`--plan all` / bare `all`)", () => {
+    expect(parsePlanArg(["--plan", "all"])).toBe("all");
+    expect(parsePlanArg(["all"])).toBe("all");
+  });
 });
 
 describe("shouldFingerprintFullSong", () => {
