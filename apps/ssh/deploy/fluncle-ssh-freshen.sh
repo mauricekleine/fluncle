@@ -142,8 +142,18 @@ fi
 BUILD_OUT="$(mktemp -d "${TMPDIR:-/tmp}/ssh-freshen.XXXXXX")"
 trap 'rm -rf "$BUILD_OUT"' EXIT
 NEW_BIN="$BUILD_OUT/fluncle-ssh"
+# `go build` runs under a ROOT systemd oneshot, which sets no $HOME — so Go cannot derive
+# a module/build cache path and dies with "module cache not found: neither GOMODCACHE nor
+# GOPATH is set", never touching the box. Point Go at an explicit, persistent cache under
+# the state dir (outside the git checkout, so `git reset` never wipes it, and modules are
+# not re-downloaded every tick). Both are needed: GOPATH covers the module cache, GOCACHE
+# the build cache — with $HOME unset, GOCACHE would otherwise resolve under a missing home.
+GO_CACHE_ROOT="${SSHFRESHEN_GO_CACHE:-$STATE_DIR/go}"
+mkdir -p "$GO_CACHE_ROOT/path" "$GO_CACHE_ROOT/build"
 log "building $NEW_BIN from $REPO_DIR/$APP_SRC (commit ${NEW_SHA:0:12})"
-if ! ( cd "$REPO_DIR/$APP_SRC" && CGO_ENABLED=0 go build -o "$NEW_BIN" . ); then
+if ! ( cd "$REPO_DIR/$APP_SRC" \
+    && CGO_ENABLED=0 GOPATH="$GO_CACHE_ROOT/path" GOCACHE="$GO_CACHE_ROOT/build" \
+       go build -o "$NEW_BIN" . ); then
   alert "🛰️ ssh-freshen: BUILD FAILED for ${NEW_SHA:0:12} on rave-01 — box untouched, staying on the current SSH binary"
   post_health degraded "an SSH terminal update failed to build; staying on the current binary"
   die "go build failed"
