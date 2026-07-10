@@ -1157,6 +1157,12 @@ export const artists = sqliteTable(
   {
     createdAt: text("created_at").notNull(),
     id: text("id").primaryKey(),
+    // The artist's canonical avatar — the largest Spotify profile image (an
+    // `i.scdn.co` URL, the same host/precedent as `tracks.album_image_url`).
+    // Filled from the Spotify `/v1/artists` lookup at entity create + by the
+    // image backfill; null until fetched (the render falls back to a monogram
+    // tile). Attribution-by-link matches how album art is already served.
+    imageUrl: text("image_url"),
     mbid: text("mbid"),
     name: text("name").notNull(),
     resolvedAt: text("resolved_at"),

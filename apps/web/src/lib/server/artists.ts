@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { type ArtistSocialPlatform, ARTIST_SOCIAL_PLATFORMS } from "../artist-socials";
 import { getDb, typedRow, typedRows } from "./db";
+import { fetchArtistImages } from "./spotify";
 import { fold } from "./track-match";
 
 // The thin-content gate for artist pages: a `/artist/<slug>` page indexes (and
@@ -10,22 +11,27 @@ import { fold } from "./track-match";
 // sitemap so the gate is defined once (Unit 3, artist-relationship RFC §3).
 export const ARTIST_INDEX_MIN_FINDINGS = 3;
 
-// The socials the public artist page + `sameAs` render, in a stable display order
-// (the identity-anchor platforms first, then the rest). Rows outside this list, or
-// with a `candidate` status, never reach the public page.
-const PUBLIC_SOCIAL_ORDER: ArtistSocialPlatform[] = [
-  "spotify",
-  "youtube",
-  "soundcloud",
-  "bandcamp",
-  "beatport",
-  "instagram",
-  "tiktok",
-  "twitter",
-  "facebook",
-  "mixcloud",
-  "homepage",
-];
+// The platforms allowed onto the public artist page + `sameAs` (any known platform;
+// a row outside this set, or with a `candidate` status, never reaches the page).
+const PUBLIC_SOCIAL_PLATFORMS = new Set<string>(ARTIST_SOCIAL_PLATFORMS);
+
+// The public display order: the artist's own homepage/website FIRST (when one
+// exists), then every other platform alphabetically by key. Homepage leads because
+// it is the artist's canonical front door; the rest read as a plain, predictable
+// A–Z rank rather than a hand-curated hierarchy.
+function compareSocialLinks(left: ArtistSocialLink, right: ArtistSocialLink): number {
+  if (left.platform === right.platform) {
+    return 0;
+  }
+  if (left.platform === "homepage") {
+    return -1;
+  }
+  if (right.platform === "homepage") {
+    return 1;
+  }
+
+  return left.platform.localeCompare(right.platform);
+}
 
 /** The canonical artist identity record the pages + JSON-LD read. */
 export type ArtistRecord = {
@@ -47,6 +53,8 @@ export type ArtistSocialLink = {
 export type ArtistIndexEntry = {
   coverImageUrl: string | undefined;
   findingCount: number;
+  /** The artist's canonical Spotify avatar (null → the index renders a monogram tile). */
+  imageUrl: string | undefined;
   lastmod: string | undefined;
   name: string;
   slug: string;
@@ -109,15 +117,13 @@ export async function getPublicArtistSocials(artistId: string): Promise<ArtistSo
       typeof status === "string" &&
       PUBLIC_SOCIAL_STATUSES.has(status) &&
       url &&
-      (PUBLIC_SOCIAL_ORDER as string[]).includes(platform)
+      PUBLIC_SOCIAL_PLATFORMS.has(platform)
     ) {
       links.push({ platform: platform as ArtistSocialPlatform, url });
     }
   }
 
-  return links.sort(
-    (a, b) => PUBLIC_SOCIAL_ORDER.indexOf(a.platform) - PUBLIC_SOCIAL_ORDER.indexOf(b.platform),
-  );
+  return links.sort(compareSocialLinks);
 }
 
 /**
@@ -190,7 +196,7 @@ export async function countArtistFindings(artistId: string): Promise<number> {
 export async function listArtistsWithFindingCounts(): Promise<ArtistIndexEntry[]> {
   const db = await getDb();
   const result = await db.execute({
-    sql: `select a.name as name, a.slug as slug,
+    sql: `select a.name as name, a.slug as slug, a.image_url as image_url,
                  count(t.track_id) as finding_count,
                  max(t.added_at) as lastmod,
                  (select t2.album_image_url
@@ -217,6 +223,7 @@ export async function listArtistsWithFindingCounts(): Promise<ArtistIndexEntry[]
       entries.push({
         coverImageUrl: optionalText(row["cover_url"]),
         findingCount,
+        imageUrl: optionalText(row["image_url"]),
         lastmod: optionalText(row["lastmod"]),
         name,
         slug,
@@ -482,6 +489,66 @@ export async function upsertTrackArtists(
               position = excluded.position`,
     });
   }
+
+  // Fill the canonical Spotify avatar for any of this track's artists that lacks one
+  // (a freshly-minted artist always does). Best-effort: a Spotify hiccup must never
+  // block the fast synchronous add — the image backfill sweeps up anything missed.
+  try {
+    await fillMissingArtistImages(spotifyArtistIds);
+  } catch (error) {
+    console.warn("upsertTrackArtists: artist image fill failed (non-fatal)", error);
+  }
+}
+
+/**
+ * Fill `artists.image_url` for the given Spotify artist ids that still lack an image.
+ * Only the null-image rows are fetched (one batched Spotify `/v1/artists` call), so a
+ * repeat over already-imaged artists costs a single indexed read and no API call —
+ * the shared idempotent core of the create-time fill and the image backfill. Returns
+ * how many rows were newly filled.
+ */
+export async function fillMissingArtistImages(spotifyArtistIds: string[]): Promise<number> {
+  const ids = [...new Set(spotifyArtistIds.filter((id): id is string => Boolean(id)))];
+
+  if (ids.length === 0) {
+    return 0;
+  }
+
+  const db = await getDb();
+  const placeholders = ids.map(() => "?").join(",");
+  const missing = typedRows<{ id: string; spotify_artist_id: string }>(
+    (
+      await db.execute({
+        args: ids,
+        sql: `select id, spotify_artist_id from artists
+              where spotify_artist_id in (${placeholders}) and image_url is null`,
+      })
+    ).rows,
+  );
+
+  if (missing.length === 0) {
+    return 0;
+  }
+
+  const images = await fetchArtistImages(missing.map((row) => row.spotify_artist_id));
+  const nowIso = new Date().toISOString();
+  let filled = 0;
+
+  for (const row of missing) {
+    const url = images.get(row.spotify_artist_id);
+
+    if (!url) {
+      continue;
+    }
+
+    await db.execute({
+      args: [url, nowIso, row.id],
+      sql: `update artists set image_url = ?, updated_at = ? where id = ? and image_url is null`,
+    });
+    filled += 1;
+  }
+
+  return filled;
 }
 
 // ── The identity graph: artist_socials (Unit 5) ──────────────────────────────

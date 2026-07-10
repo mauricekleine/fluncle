@@ -1693,27 +1693,21 @@ body::before {
   color: var(--starlight-cream);
 }
 
-/* The dossier's telemetry — the tempo band + key spread, read as the /log
-   logbook fields (quiet dl/dt), sitting under the masthead. */
-.artist-signature {
+/* The "similar artists" row — links to the sonically-nearest artists (the Fluncle-
+   native similar-artists map). Quiet chips carrying a small round avatar, brightening
+   on hover/focus, keyboard reachable like every other link on the page. */
+.artist-similar {
   margin-top: 1.2rem;
 }
 
-/* The "same sector" row — links to the sonically-nearest artists (the Fluncle-
-   native similar-artists map). Quiet chips, brightening on hover/focus, keyboard
-   reachable like every other link on the page. */
-.artist-sector {
-  margin-top: 1.2rem;
-}
-
-.artist-sector-label {
+.artist-similar-label {
   color: var(--muted-foreground);
   font-size: 0.76rem;
   font-weight: 800;
   margin: 0 0 0.5rem;
 }
 
-.artist-sector-list {
+.artist-similar-list {
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem;
@@ -1722,23 +1716,51 @@ body::before {
   padding: 0;
 }
 
-.artist-sector-link {
+.artist-similar-link {
+  align-items: center;
   border: 1px solid var(--border);
-  border-radius: var(--rounded-md);
+  border-radius: 9999px;
   color: var(--muted-foreground);
   display: inline-flex;
   font-size: 0.78rem;
-  padding: 0.32rem 0.6rem;
+  gap: 0.45rem;
+  padding: 0.28rem 0.7rem 0.28rem 0.3rem;
   text-decoration: none;
   transition:
     color 150ms ease-out,
     border-color 150ms ease-out;
 }
 
-.artist-sector-link:hover,
-.artist-sector-link:focus-visible {
+.artist-similar-link:hover,
+.artist-similar-link:focus-visible {
   border-color: color-mix(in oklch, var(--primary) 42%, transparent);
   color: var(--starlight-cream);
+}
+
+.artist-similar-avatar {
+  height: 1.5rem;
+  width: 1.5rem;
+}
+
+/* The round artist avatar — a cover-led Spotify image with a monogram fallback
+   tile (image_url null). Shared by the /artists index cards + the similar-artists
+   chips; the size is set by the caller's class. */
+.artist-avatar {
+  aspect-ratio: 1;
+  background: color-mix(in oklch, var(--card) 82%, transparent);
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.artist-avatar-fallback {
+  align-items: center;
+  color: var(--muted-foreground);
+  display: inline-flex;
+  font-weight: 800;
+  justify-content: center;
+  line-height: 1;
+  text-transform: uppercase;
 }
 
 /* The Instagram-style cover grid of findings (artist page + /artists index):
@@ -1786,6 +1808,42 @@ body::before {
 .artist-grid-count {
   color: var(--muted-foreground);
   font-size: 0.68rem;
+}
+
+/* The /artists index — avatar cards: a round artist avatar over the name + finding
+   count, centered, dark and quiet (DESIGN.md — cover-led, not a streaming clone).
+   Shares the finding grid's auto-fill columns; the avatar carries the card. */
+.artist-avatar-grid {
+  display: grid;
+  gap: 1rem 0.7rem;
+  grid-template-columns: repeat(auto-fill, minmax(6.5rem, 1fr));
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.artist-avatar-grid a {
+  align-items: center;
+  color: var(--stardust);
+  display: grid;
+  gap: 0.45rem;
+  justify-items: center;
+  text-align: center;
+  text-decoration: none;
+}
+
+.artist-card-avatar {
+  width: min(6.5rem, 100%);
+}
+
+.artist-avatar-grid a:hover .artist-card-avatar,
+.artist-avatar-grid a:focus-visible .artist-card-avatar {
+  border-color: color-mix(in oklch, var(--primary) 42%, transparent);
+}
+
+.artist-avatar-grid a:hover .artist-grid-line,
+.artist-avatar-grid a:focus-visible .artist-grid-line {
+  color: var(--starlight-cream);
 }
 
 .log-neighbors {

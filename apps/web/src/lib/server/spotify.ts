@@ -240,6 +240,56 @@ export async function fetchTrackMetadata(trackId: string): Promise<TrackMetadata
   };
 }
 
+type SpotifyArtistResponse = {
+  id: string;
+  images?: SpotifyImage[];
+};
+
+type SpotifyArtistsResponse = {
+  artists?: Array<SpotifyArtistResponse | null>;
+};
+
+/**
+ * Fetch each artist's largest Spotify profile image, keyed by Spotify artist id.
+ * Batched at the API's 50-id ceiling (`/v1/artists?ids=`), so a whole page of
+ * artists costs one call. Absent ids (an artist with no image, or unknown to
+ * Spotify) simply don't appear in the map. The image is an `i.scdn.co` URL — the
+ * same host/precedent as `tracks.album_image_url`, served attribution-by-link.
+ */
+export async function fetchArtistImages(spotifyArtistIds: string[]): Promise<Map<string, string>> {
+  const ids = [...new Set(spotifyArtistIds.filter((id): id is string => Boolean(id)))];
+  const map = new Map<string, string>();
+
+  if (ids.length === 0) {
+    return map;
+  }
+
+  const accessToken = await getSpotifyAccessToken();
+
+  for (let i = 0; i < ids.length; i += 50) {
+    const batch = ids.slice(i, i + 50);
+    const response = await spotifyFetch(
+      `/artists?ids=${batch.map((id) => encodeURIComponent(id)).join(",")}`,
+      accessToken,
+    );
+    const data = (await response.json()) as SpotifyArtistsResponse;
+
+    for (const artist of data.artists ?? []) {
+      if (!artist?.id) {
+        continue;
+      }
+
+      const url = selectLargestImageUrl(artist.images);
+
+      if (url) {
+        map.set(artist.id, url);
+      }
+    }
+  }
+
+  return map;
+}
+
 export async function searchTrackCandidates(query: string): Promise<TrackSearchResult[]> {
   const trackId = tryParseSpotifyTrackUrl(query);
 
@@ -304,6 +354,21 @@ function selectAlbumImageUrl(images: SpotifyImage[] | undefined): string | undef
     [...images]
       .sort((left, right) => (left.width ?? 0) - (right.width ?? 0))
       .find((image) => (image.width ?? 0) >= 300)?.url ?? images[0]?.url
+  );
+}
+
+// The widest image Spotify carries — the artist-avatar counterpart to
+// selectAlbumImageUrl (which targets the 300²+ album rendition). Artist images
+// use a different id prefix than album art, so we pick the largest by width
+// rather than a fixed rendition and render it at the source size.
+function selectLargestImageUrl(images: SpotifyImage[] | undefined): string | undefined {
+  if (!images?.length) {
+    return undefined;
+  }
+
+  return (
+    [...images].sort((left, right) => (right.width ?? 0) - (left.width ?? 0))[0]?.url ??
+    images[0]?.url
   );
 }
 

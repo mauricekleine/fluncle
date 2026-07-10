@@ -69,6 +69,57 @@ export const backfillArtists = oc
     }),
   );
 
+/** A failed artist-image row (`{ artistId, error }`). */
+const ArtistImagesBackfillFailedSchema = z
+  .object({
+    artistId: z.string(),
+    error: z.string(),
+  })
+  .meta({ id: "ArtistImagesBackfillFailed" });
+
+/**
+ * `backfill_artist_images` → `POST /admin/backfill/artist-images` (operationId
+ * `backfillArtistImages`).
+ *
+ * Agent tier (`adminAuth`). One bounded, cursor-resumable pass over artists still
+ * missing a Spotify avatar (`image_url IS NULL` and a Spotify id to look up). Each
+ * pass batch-fetches the largest Spotify profile image (one `/v1/artists` call) and
+ * stamps `artists.image_url`. Idempotent + self-draining (an imaged artist drops out
+ * of the queue). Returns `{ ok, dryRun, filled, filledCount, skipped, skippedCount,
+ * failed, failedCount, nextCursor }` — `skipped` = artists Spotify has no image for.
+ */
+export const backfillArtistImages = oc
+  .route({
+    inputStructure: "detailed",
+    method: "POST",
+    operationId: "backfillArtistImages",
+    path: "/admin/backfill/artist-images",
+    summary: "Back-fill artist Spotify avatars (image_url) for existing artists (batched)",
+    tags: ["Admin"],
+  })
+  .input(
+    z.object({
+      query: z.object({
+        cursor: z.string().optional(),
+        dryRun: z.string().optional(),
+        limit: z.string().optional(),
+      }),
+    }),
+  )
+  .output(
+    z.object({
+      dryRun: z.boolean(),
+      failed: z.array(ArtistImagesBackfillFailedSchema),
+      failedCount: z.number(),
+      filled: z.array(z.string()),
+      filledCount: z.number(),
+      nextCursor: z.string().nullable(),
+      ok: z.literal(true),
+      skipped: z.array(z.string()),
+      skippedCount: z.number(),
+    }),
+  );
+
 // The platform + source enums MUST stay in lockstep with the resolver's
 // `ArtistSocialPlatform` + `ResolvedSocial.source` in
 // `apps/web/src/lib/server/artist-resolution.ts` — the resolver is the source of
@@ -282,6 +333,7 @@ export const removeArtistSocial = oc
 /** The `admin-artists` domain's ops, merged into the root contract by `./index.ts`. */
 export const adminArtistsContract = {
   add_artist_social: addArtistSocial,
+  backfill_artist_images: backfillArtistImages,
   backfill_artists: backfillArtists,
   confirm_artist_social: confirmArtistSocial,
   list_artist_socials: listArtistSocials,

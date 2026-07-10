@@ -4,11 +4,11 @@
 // loader is instant — no cron, no stored aggregate):
 //
 //   1. The SIGNATURE — the artist's fingerprint across the findings Fluncle has
-//      logged: when they first crossed his path, the tempo band their tunes roll
-//      in (range + median), and the key spread. Pure, from the findings already
-//      loaded for the grid — no extra query.
-//   2. The NEIGHBOURS ("same sector") — the artists whose findings sit nearest in
-//      MuQ embedding space, ranked by the cosine similarity of artist-level MEAN
+//      logged: when they first crossed his path (the first-found date behind the
+//      voice frame). Pure, from the findings already loaded for the grid — no
+//      extra query.
+//   2. The NEIGHBOURS ("similar artists") — the artists whose findings sit nearest
+//      in MuQ embedding space, ranked by the cosine similarity of artist-level MEAN
 //      embeddings (the mean over each artist's findings' vectors). This is the
 //      same sonic-similarity space that powers the `/log` "close in sound" row
 //      (lib/server/embedding.ts), lifted from finding↔finding to artist↔artist.
@@ -23,28 +23,16 @@ import { type EmbeddingCandidate, parseEmbedding, rankBySimilarity } from "./emb
 /** How many "same sector" neighbours the artist page shows (top-N, self excluded). */
 export const ARTIST_NEIGHBOURS_LIMIT = 4;
 
-/** The tempo band across an artist's findings — the range plus its median. */
-export type ArtistBpmRange = {
-  /** The fastest logged finding's BPM (rounded for display upstream). */
-  max: number;
-  /** The median BPM — the characteristic tempo, not skewed by an outlier. */
-  median: number;
-  /** The slowest logged finding's BPM. */
-  min: number;
-};
-
 /** The pure signature summary derived from an artist's findings. */
 export type ArtistSignature = {
-  /** The tempo band, or undefined when no finding carries a BPM yet. */
-  bpm: ArtistBpmRange | undefined;
   /** The ISO date of the earliest finding — when the artist first crossed his path. */
   firstFoundAt: string | undefined;
-  /** The distinct musical keys across the findings, sorted, for the key-spread field. */
-  keys: string[];
 };
 
-/** A neighbouring artist link — the minimal identity the "same sector" row needs. */
+/** A neighbouring artist link — the minimal identity the "similar artists" row needs. */
 export type ArtistNeighbour = {
+  /** The artist's Spotify avatar (undefined → the chip renders a monogram tile). */
+  imageUrl: string | undefined;
   name: string;
   slug: string;
 };
@@ -52,8 +40,6 @@ export type ArtistNeighbour = {
 /** The findings-shaped input the signature is derived from (a subset of TrackListItem). */
 export type SignatureFinding = {
   addedAt: string;
-  bpm: number | undefined;
-  key: string | undefined;
 };
 
 /**
@@ -89,6 +75,7 @@ export function meanEmbedding(vectors: number[][]): number[] | null {
 /** An artist and every embedding vector across their coordinate-bearing findings. */
 export type ArtistEmbeddingGroup = {
   artistId: string;
+  imageUrl: string | undefined;
   name: string;
   slug: string;
   vectors: number[][];
@@ -124,71 +111,38 @@ export function rankSimilarArtists(
     const mean = meanEmbedding(group.vectors);
 
     if (mean) {
-      candidates.push({ embedding: mean, item: { name: group.name, slug: group.slug } });
+      candidates.push({
+        embedding: mean,
+        item: { imageUrl: group.imageUrl, name: group.name, slug: group.slug },
+      });
     }
   }
 
   return rankBySimilarity(target, candidates, limit);
 }
 
-/** The median of a non-empty numeric list (average of the two middle values when even). */
-function median(sortedAscending: number[]): number {
-  const count = sortedAscending.length;
-  const mid = Math.floor(count / 2);
-
-  if (count % 2 === 1) {
-    return sortedAscending[mid] ?? 0;
-  }
-
-  return ((sortedAscending[mid - 1] ?? 0) + (sortedAscending[mid] ?? 0)) / 2;
-}
-
 /**
- * Derive the pure signature (first-found date, tempo band, key spread) from an
- * artist's findings. Every field degrades independently: a set with no BPMs yields
- * `bpm: undefined`, a set with no keys yields `keys: []`, and an empty set yields
- * all-empty — so a barely-enriched artist still renders a clean, honest dossier.
+ * Derive the pure signature (the first-found date) from an artist's findings — the
+ * earliest `addedAt`, or undefined for an empty set. It degrades cleanly: a
+ * barely-enriched artist still yields an honest signature (the voice frame's
+ * "first crossed his path on …" opener).
  */
 export function summarizeArtistSignature(findings: SignatureFinding[]): ArtistSignature {
   let firstFoundAt: string | undefined;
-  const bpms: number[] = [];
-  const keys = new Set<string>();
 
   for (const finding of findings) {
     if (finding.addedAt && (firstFoundAt === undefined || finding.addedAt < firstFoundAt)) {
       firstFoundAt = finding.addedAt;
     }
-
-    if (typeof finding.bpm === "number" && Number.isFinite(finding.bpm)) {
-      bpms.push(finding.bpm);
-    }
-
-    const key = finding.key?.trim();
-    if (key) {
-      keys.add(key);
-    }
   }
 
-  let bpm: ArtistBpmRange | undefined;
-  if (bpms.length > 0) {
-    const sorted = [...bpms].sort((left, right) => left - right);
-    bpm = {
-      max: sorted[sorted.length - 1] ?? 0,
-      median: median(sorted),
-      min: sorted[0] ?? 0,
-    };
-  }
-
-  return {
-    bpm,
-    firstFoundAt,
-    keys: [...keys].sort((left, right) => left.localeCompare(right)),
-  };
+  return { firstFoundAt };
 }
 
 type NeighbourRow = {
   artist_id: string;
   embedding_json: string;
+  image_url: string | null;
   name: string;
   slug: string;
 };
@@ -212,7 +166,8 @@ export async function getArtistNeighbours(
 
   const db = await getDb();
   const result = await db.execute({
-    sql: `select a.id as artist_id, a.name as name, a.slug as slug, t.embedding_json as embedding_json
+    sql: `select a.id as artist_id, a.name as name, a.slug as slug,
+                 a.image_url as image_url, t.embedding_json as embedding_json
           from artists a
           join track_artists ta on ta.artist_id = a.id
           join tracks t on t.track_id = ta.track_id
@@ -235,6 +190,7 @@ export async function getArtistNeighbours(
     } else {
       groups.set(row.artist_id, {
         artistId: row.artist_id,
+        imageUrl: row.image_url ?? undefined,
         name: row.name,
         slug: row.slug,
         vectors: [embedding],

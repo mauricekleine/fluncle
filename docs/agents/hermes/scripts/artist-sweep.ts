@@ -22,6 +22,12 @@
 //   2. per artist (bounded batch): `fluncle admin artists resolve <id> --json`
 //      → triggers the Worker (MB walk + Firecrawl gap-fill + persist).
 //      Record pass/fail per artist; one failure never aborts the sweep.
+//   3. `fluncle admin backfills artist-images --limit N --json` → one bounded page
+//      of the artist-avatar backfill (fills `artists.image_url` from Spotify for
+//      artists minted before the column). Runs every tick regardless of the resolve
+//      queue, and is best-effort: a pinned box CLI predating the subcommand — or any
+//      failure — is logged and skipped, never aborting the sweep (it self-heals on
+//      the next tick / after the CLI re-bake).
 //
 // stdout: one JSON summary line (the cron run output). Diagnostics → stderr.
 
@@ -33,6 +39,7 @@ import { spawnSync } from "node:child_process";
 
 const BATCH_CAP = 5; // artists resolved per tick (MB is 1 req/s; 5 artists ≈ ~30s)
 const QUEUE_LIMIT = 50;
+const IMAGE_BACKFILL_LIMIT = 50; // one Spotify /v1/artists batch per tick
 
 const FLUNCLE_BIN = process.env.FLUNCLE_BIN ?? "fluncle";
 
@@ -120,6 +127,33 @@ function resolveOne(artist: QueueArtist): Outcome {
 }
 
 // ---------------------------------------------------------------------------
+// Artist-avatar backfill drain (best-effort; never aborts the sweep).
+// ---------------------------------------------------------------------------
+
+function drainArtistImages(): number {
+  try {
+    const result = fluncleJson<{ filledCount?: number; skippedCount?: number }>([
+      "admin",
+      "backfills",
+      "artist-images",
+      "--limit",
+      String(IMAGE_BACKFILL_LIMIT),
+    ]);
+
+    const filled = result.filledCount ?? 0;
+    log(`artist-images: filled ${filled}, ${result.skippedCount ?? 0} without an image`);
+
+    return filled;
+  } catch (error) {
+    // A pinned box CLI predating the subcommand — or any transient failure — must
+    // never fail the sweep; the backfill self-heals next tick / after the re-bake.
+    log(`artist-images drain skipped: ${error instanceof Error ? error.message : String(error)}`);
+
+    return 0;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
@@ -137,12 +171,14 @@ function main(): void {
   const summary = {
     batch: 0,
     failed: 0,
+    imagesFilled: 0,
     noop: 0,
     queueRemaining: queue.length,
     resolved: 0,
   };
 
   if (queue.length === 0) {
+    summary.imagesFilled = drainArtistImages();
     console.log(JSON.stringify({ ok: true, processed: 0, ...summary }));
     return;
   }
@@ -172,6 +208,7 @@ function main(): void {
   }
 
   summary.queueRemaining = Math.max(0, queue.length - summary.resolved - summary.noop);
+  summary.imagesFilled = drainArtistImages();
   const processed = summary.resolved + summary.noop;
 
   console.log(JSON.stringify({ ok: true, processed, ...summary }));

@@ -1,9 +1,8 @@
 import { Link, createFileRoute } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
-import { TrackArtwork } from "@/components/track-artwork";
+import { ArtistAvatar } from "@/components/artist-avatar";
 import { siteUrl } from "@/lib/fluncle-links";
 import { jsonLdScript } from "@/lib/json-ld";
-import { spotifyAlbumImageAtSize } from "@/lib/media";
 import { type ArtistIndexEntry, listArtistsWithFindingCounts } from "@/lib/server/artists";
 
 // The artists index: every artist Fluncle has logged a finding from, cover-led,
@@ -74,14 +73,14 @@ function ArtistsPage() {
         {artists.length === 0 ? (
           <p className="log-index-empty empty-scanlines">No artists logged yet. Quiet sector.</p>
         ) : (
-          <ul className="artist-grid" aria-label="Artists">
+          <ul className="artist-avatar-grid" aria-label="Artists">
             {artists.map((artist) => (
               <li key={artist.slug}>
                 <Link params={{ slug: artist.slug }} to="/artist/$slug">
-                  <TrackArtwork
-                    alt=""
-                    className="artist-grid-cover"
-                    src={spotifyAlbumImageAtSize(artist.coverImageUrl, "large")}
+                  <ArtistAvatar
+                    className="artist-card-avatar"
+                    name={artist.name}
+                    src={artist.imageUrl}
                   />
                   <span className="artist-grid-line">{artist.name}</span>
                   <span className="artist-grid-count">

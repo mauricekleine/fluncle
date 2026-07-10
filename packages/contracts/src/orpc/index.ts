@@ -70,6 +70,7 @@ export {
 export {
   addArtistSocial,
   adminArtistsContract,
+  backfillArtistImages,
   backfillArtists,
   confirmArtistSocial,
   listArtistSocials,
