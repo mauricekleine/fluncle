@@ -134,7 +134,7 @@ async function main(): Promise<void> {
   // finding from the bag and drives the show through the SAME `goto` command path the phone
   // remote uses. LAN-local by design (bound on all interfaces so the DJ-mixer sender on the
   // other machine can reach it). The port is injectable via `FLUNCLE_VJ_TRANSITION_PORT`.
-  // `buildAllFindingsPlan` throws on a failed sitemap fetch OR an empty pool, so reaching here
+  // `buildAllFindingsPlan` throws on a failed archive fetch OR an empty pool, so reaching here
   // in VJ mode guarantees a non-empty plan (createShuffleBag needs size ≥ 1) — no dead show.
   let vjListener: Awaited<ReturnType<typeof startVjTransitionListener>> | null = null;
   if (isAllPlan(planRef)) {
