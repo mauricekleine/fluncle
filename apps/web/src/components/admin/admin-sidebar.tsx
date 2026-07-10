@@ -8,6 +8,7 @@ import {
   type Icon,
   ListNumbersIcon,
   PaperPlaneTiltIcon,
+  PlanetIcon,
   PulseIcon,
   ReceiptIcon,
   SignOutIcon,
@@ -67,6 +68,7 @@ export type AdminNavCurrent =
   | "costs"
   | "dashboard"
   | "findings"
+  | "galaxies"
   | "mixable-order"
   | "mixtapes"
   | "newsletter"
@@ -85,6 +87,7 @@ type AdminNavPath =
   | "/admin/clips"
   | "/admin/costs"
   | "/admin/findings"
+  | "/admin/galaxies"
   | "/admin/mixable-order"
   | "/admin/mixtapes"
   | "/admin/newsletter"
@@ -150,6 +153,7 @@ const OBJECT_SECTIONS: NavSection[] = [
         to: "/admin/renders",
       },
       { icon: UsersThreeIcon, key: "artists", label: "Artists", to: "/admin/artists" },
+      { icon: PlanetIcon, key: "galaxies", label: "Galaxies", to: "/admin/galaxies" },
     ],
     key: "objects",
   },

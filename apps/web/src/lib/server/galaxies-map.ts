@@ -37,6 +37,16 @@ type GalaxyRow = {
 /** A galaxy row with its derived member count, the shape both cron + admin read. */
 export class GalaxyNotFoundError extends Error {}
 
+/**
+ * The naming view's per-galaxy shape (Slice 3): the full admin row plus a capped,
+ * core-first sample of its member findings so the operator can SEE the covers and
+ * AUDITION them (via `/api/preview`) before naming the cluster. `members` are ranked
+ * by centroid-distance ascending (the core of the galaxy first), the same order the
+ * public `get_galaxy` uses; `memberCount` on the admin row stays the true (uncapped)
+ * total.
+ */
+export type GalaxyAdminWithMembers = GalaxyAdminItem & { members: TrackListItem[] };
+
 const GALAXY_COLUMNS =
   "id, handle, name, slug, centroid_json, retired_at, split_requested_at, created_at, updated_at";
 
@@ -99,6 +109,29 @@ export async function listGalaxiesAdmin(): Promise<GalaxyAdminItem[]> {
   ]);
 
   return typedRows<GalaxyRow>(result.rows).map((row) => toAdminItem(row, counts.get(row.id) ?? 0));
+}
+
+/**
+ * The naming view's read (Slice 3): the FULL map (named + unnamed + retired) with each
+ * galaxy's capped, core-first member sample attached. The naming view partitions this
+ * into the naming queue (unnamed), the named map, and the retired tail client-side.
+ * `memberCap` bounds the covers shown per galaxy (the audition needs a representative
+ * handful, not the whole cluster); the row's `memberCount` stays the uncapped total.
+ */
+export async function listGalaxiesAdminWithMembers(
+  memberCap: number,
+): Promise<GalaxyAdminWithMembers[]> {
+  const galaxies = await listGalaxiesAdmin();
+
+  // One ranked read per galaxy (k is ~9, so a bounded fan-out, not an N+1 concern):
+  // core-first, capped, from the offset-0 head. A retired galaxy has no members, so
+  // its ranked read is a cheap empty.
+  return Promise.all(
+    galaxies.map(async (galaxy) => ({
+      ...galaxy,
+      members: await getFindingsByGalaxyRanked(galaxy.id, galaxy.centroid, memberCap, 0),
+    })),
+  );
 }
 
 /**

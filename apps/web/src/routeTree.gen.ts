@@ -56,6 +56,7 @@ import { Route as AdminNewsletterRouteImport } from './routes/admin/newsletter'
 import { Route as AdminMixtapesRouteImport } from './routes/admin/mixtapes'
 import { Route as AdminMixableOrderRouteImport } from './routes/admin/mixable-order'
 import { Route as AdminLoginRouteImport } from './routes/admin/login'
+import { Route as AdminGalaxiesRouteImport } from './routes/admin/galaxies'
 import { Route as AdminFindingsRouteImport } from './routes/admin/findings'
 import { Route as AdminCostsRouteImport } from './routes/admin/costs'
 import { Route as AdminClipsRouteImport } from './routes/admin/clips'
@@ -333,6 +334,11 @@ const AdminLoginRoute = AdminLoginRouteImport.update({
   path: '/login',
   getParentRoute: () => AdminRouteRoute,
 } as any)
+const AdminGalaxiesRoute = AdminGalaxiesRouteImport.update({
+  id: '/galaxies',
+  path: '/galaxies',
+  getParentRoute: () => AdminRouteRoute,
+} as any)
 const AdminFindingsRoute = AdminFindingsRouteImport.update({
   id: '/findings',
   path: '/findings',
@@ -581,6 +587,7 @@ export interface FileRoutesByFullPath {
   '/admin/clips': typeof AdminClipsRoute
   '/admin/costs': typeof AdminCostsRoute
   '/admin/findings': typeof AdminFindingsRoute
+  '/admin/galaxies': typeof AdminGalaxiesRoute
   '/admin/login': typeof AdminLoginRoute
   '/admin/mixable-order': typeof AdminMixableOrderRoute
   '/admin/mixtapes': typeof AdminMixtapesRoute
@@ -668,6 +675,7 @@ export interface FileRoutesByTo {
   '/admin/clips': typeof AdminClipsRoute
   '/admin/costs': typeof AdminCostsRoute
   '/admin/findings': typeof AdminFindingsRoute
+  '/admin/galaxies': typeof AdminGalaxiesRoute
   '/admin/login': typeof AdminLoginRoute
   '/admin/mixable-order': typeof AdminMixableOrderRoute
   '/admin/mixtapes': typeof AdminMixtapesRoute
@@ -758,6 +766,7 @@ export interface FileRoutesById {
   '/admin/clips': typeof AdminClipsRoute
   '/admin/costs': typeof AdminCostsRoute
   '/admin/findings': typeof AdminFindingsRoute
+  '/admin/galaxies': typeof AdminGalaxiesRoute
   '/admin/login': typeof AdminLoginRoute
   '/admin/mixable-order': typeof AdminMixableOrderRoute
   '/admin/mixtapes': typeof AdminMixtapesRoute
@@ -849,6 +858,7 @@ export interface FileRouteTypes {
     | '/admin/clips'
     | '/admin/costs'
     | '/admin/findings'
+    | '/admin/galaxies'
     | '/admin/login'
     | '/admin/mixable-order'
     | '/admin/mixtapes'
@@ -936,6 +946,7 @@ export interface FileRouteTypes {
     | '/admin/clips'
     | '/admin/costs'
     | '/admin/findings'
+    | '/admin/galaxies'
     | '/admin/login'
     | '/admin/mixable-order'
     | '/admin/mixtapes'
@@ -1025,6 +1036,7 @@ export interface FileRouteTypes {
     | '/admin/clips'
     | '/admin/costs'
     | '/admin/findings'
+    | '/admin/galaxies'
     | '/admin/login'
     | '/admin/mixable-order'
     | '/admin/mixtapes'
@@ -1494,6 +1506,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminLoginRouteImport
       parentRoute: typeof AdminRouteRoute
     }
+    '/admin/galaxies': {
+      id: '/admin/galaxies'
+      path: '/galaxies'
+      fullPath: '/admin/galaxies'
+      preLoaderRoute: typeof AdminGalaxiesRouteImport
+      parentRoute: typeof AdminRouteRoute
+    }
     '/admin/findings': {
       id: '/admin/findings'
       path: '/findings'
@@ -1782,6 +1801,7 @@ interface AdminRouteRouteChildren {
   AdminClipsRoute: typeof AdminClipsRoute
   AdminCostsRoute: typeof AdminCostsRoute
   AdminFindingsRoute: typeof AdminFindingsRoute
+  AdminGalaxiesRoute: typeof AdminGalaxiesRoute
   AdminLoginRoute: typeof AdminLoginRoute
   AdminMixableOrderRoute: typeof AdminMixableOrderRoute
   AdminMixtapesRoute: typeof AdminMixtapesRoute
@@ -1799,6 +1819,7 @@ const AdminRouteRouteChildren: AdminRouteRouteChildren = {
   AdminClipsRoute: AdminClipsRoute,
   AdminCostsRoute: AdminCostsRoute,
   AdminFindingsRoute: AdminFindingsRoute,
+  AdminGalaxiesRoute: AdminGalaxiesRoute,
   AdminLoginRoute: AdminLoginRoute,
   AdminMixableOrderRoute: AdminMixableOrderRoute,
   AdminMixtapesRoute: AdminMixtapesRoute,
