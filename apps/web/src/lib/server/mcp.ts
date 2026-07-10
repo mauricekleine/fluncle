@@ -104,7 +104,7 @@ const tools: McpTool[] = [
   },
   {
     description:
-      "Read one finding (or mixtape) in full by its Log ID coordinate or Spotify track id — the same public record its /log page shows: artist, title, Found date, note, BPM, key, links, galaxy, and the recovered observation transcript. The resource form is fluncle://finding/<logId>.",
+      "Read one finding (or mixtape) in full by its Log ID coordinate or Spotify track id. Returns the same public record its /log page shows: artist, title, Found date, note, BPM, key, links, galaxy, and the recovered observation transcript. The resource form is fluncle://finding/<logId>.",
     execute: async (args) => {
       const idOrLogId = asTrimmedString(args.idOrLogId);
 
@@ -275,7 +275,7 @@ if (!listTracksTool) {
 tools.push({
   ...listTracksTool,
   deprecated: true,
-  description: `[Deprecated — use list_tracks] ${listTracksTool.description}`,
+  description: `[Deprecated: use list_tracks] ${listTracksTool.description}`,
   name: "get_recent_tracks",
 });
 
@@ -460,7 +460,7 @@ const prompts: McpPrompt[] = [
     arguments: [
       {
         description:
-          'The mood, moment, or feeling to match — e.g. "3am, still driving" or "euphoric".',
+          'The mood, moment, or feeling to match, e.g. "3am, still driving" or "euphoric".',
         name: "mood",
         required: true,
       },
@@ -489,7 +489,7 @@ Dig through Fluncle's archive to answer. Call list_tracks and get_random_track t
 
       return `Walk me through Fluncle's ${count} most recent findings, like a late-night dig.
 
-Call list_tracks with limit ${count} to pull them, then read each one with get_track (or its fluncle://finding/<coordinate> resource). Go newest to oldest. For each, give one warm line in Fluncle's voice — the artist and title, its Log ID coordinate, and the one thing that made it worth logging. Keep the whole thing moving; end on where the night leaves you.`;
+Call list_tracks with limit ${count} to pull them, then read each one with get_track (or its fluncle://finding/<coordinate> resource). Go newest to oldest. For each, give one warm line in Fluncle's voice: the artist and title, its Log ID coordinate, and the one thing that made it worth logging. Keep the whole thing moving; end on where the night leaves you.`;
     },
     description: "Walk the most recent findings, one warm line each, in Fluncle's voice.",
     name: "walk_recent_night",
@@ -508,7 +508,7 @@ Call list_tracks with limit ${count} to pull them, then read each one with get_t
 
       return `Read the Fluncle finding at coordinate ${coordinate} and explain it to someone new.
 
-Fetch it with get_track (or the fluncle://finding/<coordinate> resource). Then, in a few plain sentences in Fluncle's voice: what the tune is (artist, title), when he found it, why it's certified (use the note), and how to read the Log ID itself — the sector counts the days since the 2026-05-30 epoch, the tail is a stable signature of the recording, minted once and never changed. Keep it warm and short.`;
+Fetch it with get_track (or the fluncle://finding/<coordinate> resource). Then, in a few plain sentences in Fluncle's voice: what the tune is (artist, title), when he found it, why it's certified (use the note), and how to read the Log ID itself: the sector counts the days since the 2026-05-30 epoch, the tail is a stable signature of the recording, minted once and never changed. Keep it warm and short.`;
     },
     description: "Read the finding at a Log ID coordinate and explain the coordinate.",
     name: "decode_coordinate",
@@ -669,7 +669,7 @@ async function dispatch(message: unknown, request: Request): Promise<JsonRpcResp
       return success(id, {
         capabilities: MCP_CAPABILITIES,
         instructions:
-          "Fluncle's drum & bass archive over MCP. TOOLS: list recent findings, read one in full by coordinate, pull a random one, check whether all of Fluncle's systems are operational, search Spotify candidates, submit a track for review, or board the newsletter. RESOURCES: read the archive as a corpus — each finding/mixtape at fluncle://finding/<logId> or fluncle://mixtape/<logId>, its public record. PROMPTS: Fluncle-voiced starting points (recommend a finding for a mood, walk a recent night, decode a Log ID). A submission is a recommendation, not a publish; Fluncle listens before anything goes out.",
+          "Fluncle's drum & bass archive over MCP. TOOLS: list recent findings, read one in full by coordinate, pull a random one, check whether all of Fluncle's systems are operational, search Spotify candidates, submit a track for review, or board the newsletter. RESOURCES: read the archive as a corpus, each finding/mixtape at fluncle://finding/<logId> or fluncle://mixtape/<logId>, its public record. PROMPTS: Fluncle-voiced starting points (recommend a finding for a mood, walk a recent night, decode a Log ID). A submission is a recommendation, not a publish; Fluncle listens before anything goes out.",
         protocolVersion: requested || PROTOCOL_VERSION,
         serverInfo: { name: SERVER_NAME, title: "Fluncle", version: SERVER_VERSION },
       });

@@ -7,7 +7,7 @@ import { siteUrl } from "@/lib/fluncle-links";
 // extension and the site actually do — no invented claims, no embellishment.
 // The "last updated" date is passed in statically (no new Date() at render).
 
-const title = "Privacy — Fluncle";
+const title = "Privacy · Fluncle";
 const description =
   "How Fluncle Lens and fluncle.com handle your data: pages are scanned locally, only a detected coordinate is sent, and nothing about your browsing is collected.";
 

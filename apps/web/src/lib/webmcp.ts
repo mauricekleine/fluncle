@@ -79,7 +79,7 @@ const tools: WebMcpTool[] = [
   },
   {
     description:
-      "Read one finding (or mixtape) in full by its Log ID coordinate or Spotify track id — the same public record its /log page shows: artist, title, Found date, note, BPM, key, links, and the recovered observation transcript.",
+      "Read one finding (or mixtape) in full by its Log ID coordinate or Spotify track id. Returns the same public record its /log page shows: artist, title, Found date, note, BPM, key, links, and the recovered observation transcript.",
     execute: async (input) =>
       jsonResult(await fetchJson(`/api/tracks/${encodeURIComponent(asString(input.idOrLogId))}`)),
     inputSchema: {
@@ -223,7 +223,7 @@ if (!listTracksTool) {
 
 tools.push({
   ...listTracksTool,
-  description: `[Deprecated — use list_tracks] ${listTracksTool.description}`,
+  description: `[Deprecated: use list_tracks] ${listTracksTool.description}`,
   name: "get_recent_tracks",
 });
 

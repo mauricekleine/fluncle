@@ -19,7 +19,7 @@ const fetchLogbook = createServerFn({ method: "GET" }).handler(() =>
 
 const title = "Fluncle's Logbook";
 const description =
-  "Fluncle's Logbook: one first-person entry per sector-day of the voyage — what the day was like, where the trip went, and how each banger landed, with the findings inlined as photos.";
+  "Fluncle's Logbook: one first-person entry per sector-day of the voyage. What the day was like, where the trip went, and how each banger landed, with the findings inlined as photos.";
 
 function logbookIndexHead(entries: LogbookEntryDTO[] | undefined) {
   // A Blog whose blogPost list is the entries — honest structured data mirroring the
@@ -73,7 +73,7 @@ function LogbookIndexPage() {
           <p className="log-nameplate">Fluncle's Logbook</p>
           <h1 className="log-coordinate log-index-title">The logbook</h1>
           <p className="log-index-intro">
-            One entry per sector-day of the voyage — what the day was like, and how each banger
+            One entry per sector-day of the voyage: what the day was like, and how each banger
             landed. {entries.length} logged so far.
           </p>
         </header>

@@ -289,19 +289,19 @@ export function buildTriagePrompt(
 ): string {
   const artists = submission.artists.length ? submission.artists.join(", ") : "unknown";
   const lean = assessment.archived
-    ? "ALREADY LOGGED — the spotify id already maps to a finding in the archive."
+    ? "ALREADY LOGGED: the spotify id already maps to a finding in the archive."
     : assessment.plausibility === "likely"
-      ? "LOOKS LIKE A FIND — the metadata leans drum & bass / Fluncle's lane."
+      ? "LOOKS LIKE A FIND: the metadata leans drum & bass / Fluncle's lane."
       : assessment.plausibility === "unlikely"
-        ? "PROBABLY NOT OUR LANE — the metadata names a non-DnB genre."
-        : "UNCLEAR — the metadata carries no genre tell (most DnB doesn't).";
+        ? "PROBABLY NOT OUR LANE: the metadata names a non-DnB genre."
+        : "UNCLEAR: the metadata carries no genre tell (most DnB doesn't).";
 
   return [
     "You are Fluncle, pre-chewing one crew submission for the operator's review queue.",
-    "Load and apply the `copywriting-fluncle` skill — it is the full voice canon.",
+    "Load and apply the `copywriting-fluncle` skill: it is the full voice canon.",
     "",
     "Write ONE short internal verdict line (a heads-up for the operator, never shown publicly):",
-    "the register is dry, certain, and lands as one of three reads —",
+    "the register is dry, certain, and lands as one of three reads:",
     '  "looks like a find" / "already logged" / "not our lane".',
     "",
     "THE SUBMISSION:",
@@ -309,13 +309,13 @@ export function buildTriagePrompt(
     `  title: ${submission.title}`,
     `  album: ${submission.album ?? "unknown"}`,
     "",
-    "THE DETERMINISTIC ASSESSMENT (ground your verdict in this — never contradict it):",
+    "THE DETERMINISTIC ASSESSMENT (ground your verdict in this, never contradict it):",
     `  lean: ${lean}`,
     `  signals: ${assessment.signals.length ? assessment.signals.join("; ") : "none"}`,
     "",
     "CONSTRAINTS (the server length-gates the line; keep it tight):",
     "  - ONE line, roughly 20 to 140 characters. No second sentence.",
-    "  - Advisory, not a decision: you never approve or reject — you flag.",
+    "  - Advisory, not a decision: you never approve or reject, you flag.",
     "  - Dry confidence. No exclamation marks. No em dashes. Sentence case.",
     "  - If ALREADY LOGGED, say so plainly (the operator will likely reject a dupe).",
     "  - Name the artist only if it sharpens the read; never invent a fact.",

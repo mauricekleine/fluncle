@@ -124,7 +124,7 @@ function MixableOrderPage() {
       <div className="flex flex-col gap-4 p-3 sm:p-4">
         <div className="flex flex-col gap-2">
           <label className="text-xs font-medium text-muted-foreground" htmlFor="mix-pool">
-            The pool — Log IDs, separated by spaces, commas, or new lines (2–64)
+            The pool: Log IDs, separated by spaces, commas, or new lines (2–64)
           </label>
           <Textarea
             id="mix-pool"
@@ -136,7 +136,7 @@ function MixableOrderPage() {
         </div>
         <div className="flex flex-col gap-2">
           <label className="text-xs font-medium text-muted-foreground" htmlFor="mix-seed">
-            Open on (optional) — pin the first track by Log ID
+            Open on (optional): pin the first track by Log ID
           </label>
           <Input
             className="max-w-xs"
@@ -151,7 +151,7 @@ function MixableOrderPage() {
           <section className="flex flex-col gap-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <p className="text-sm text-muted-foreground">
-                A smooth chain, not an energy-shaped set — advisory input for Rekordbox.
+                A smooth chain, not an energy-shaped set. Advisory input for Rekordbox.
               </p>
               <Button onClick={() => void copyTracklist()} variant="outline">
                 Copy tracklist

@@ -70,7 +70,7 @@ function logbookHead(loaderData: LogbookPageData | undefined) {
   const title = `Sector ${sectorLabel} · Fluncle's Logbook`;
   const datePublished = sectorDateISO(entry.sector);
   // A short, honest description: the entry title, the human dateline.
-  const description = `${entry.title} — Fluncle's log for sector ${sectorLabel}, ${formatDateLong(datePublished)}.`;
+  const description = `${entry.title}. Fluncle's log for sector ${sectorLabel}, ${formatDateLong(datePublished)}.`;
 
   // An Article that mirrors the visible entry (headline = title, the coordinate URL,
   // the sector-day as datePublished, the last (re)generation as dateModified, Fluncle
