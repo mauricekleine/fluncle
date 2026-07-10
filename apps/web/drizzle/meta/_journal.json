@@ -428,6 +428,13 @@
       "when": 1783665310311,
       "tag": "0060_third_sprite",
       "breakpoints": true
+    },
+    {
+      "idx": 61,
+      "version": "6",
+      "when": 1783667728843,
+      "tag": "0061_abnormal_firebrand",
+      "breakpoints": true
     }
   ]
 }
