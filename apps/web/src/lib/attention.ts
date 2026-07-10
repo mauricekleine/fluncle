@@ -163,6 +163,11 @@ export function draftDeadline(updatedAt: string): string {
   return new Date(Date.parse(updatedAt) + TIKTOK_DRAFT_STALE_MS).toISOString();
 }
 
+/** The Friday letter's send-by: a day after drafting it reads late. */
+export function newsletterDeadline(draftedAt: string): string {
+  return new Date(Date.parse(draftedAt) + 24 * 60 * 60 * 1000).toISOString();
+}
+
 /**
  * Map the sources' raw rows into queue items. Pure and clock-injected. A clip's two
  * distribution legs (TikTok, YouTube) are SEPARATE todos — each posts differently — so a
@@ -312,6 +317,10 @@ export function deriveAttentionItems(inputs: AttentionInputs, now: number): Atte
   for (const newsletter of inputs.newsletters) {
     items.push({
       anchorAt: newsletter.draftedAt,
+      // The Friday letter wants to go out while it is still Friday-fresh: a day after
+      // drafting it reads late, so the draft rides the DEADLINE tier (top of the queue)
+      // instead of sinking to the bottom of the backlog as its newest item.
+      deadlineAt: newsletterDeadline(newsletter.draftedAt),
       href: "/admin/newsletter",
       id: `newsletter:${newsletter.id}`,
       source: "newsletter",

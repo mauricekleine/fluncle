@@ -384,6 +384,9 @@ describe("deriveAttentionItems", () => {
     expect(items).toHaveLength(1);
     expect(items[0]).toMatchObject({
       anchorAt: iso(NOW - 3 * HOUR),
+      // The send-by deadline (drafted + 24h) puts the letter on the DUE tier — top of
+      // the dashboard — instead of sinking to the bottom as the newest backlog item.
+      deadlineAt: iso(NOW + 21 * HOUR),
       href: "/admin/newsletter",
       id: "newsletter:ed-1",
       source: "newsletter",
