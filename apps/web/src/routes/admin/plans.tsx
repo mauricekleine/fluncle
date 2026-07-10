@@ -41,7 +41,6 @@ import {
   useMemo,
   useRef,
   useState,
-  useSyncExternalStore,
 } from "react";
 import { siBeatport } from "simple-icons";
 import { AdminShell } from "@/components/admin/admin-shell";
@@ -77,6 +76,7 @@ import { isAdminRequest } from "@/lib/server/admin-auth";
 import { listClips } from "@/lib/server/clips";
 import { getRecordingCues, listRecordings } from "@/lib/server/recordings";
 import { getTracksByIds, type TrackListItem } from "@/lib/server/tracks";
+import { usePrefersReducedMotion } from "@/lib/use-prefers-reduced-motion";
 
 // The PLAN editor (RFC plan→recording→mixtape §8, surface 1). A PLAN is a videoless
 // `recordings` row (kind=plan, `r2Key` NULL): the operator lines up the findings for an
@@ -1024,20 +1024,6 @@ function useDebounced<T>(value: T, delayMs: number): T {
     return () => window.clearTimeout(timer);
   }, [value, delayMs]);
   return debounced;
-}
-
-function subscribeReducedMotion(onChange: () => void): () => void {
-  const media = window.matchMedia("(prefers-reduced-motion: reduce)");
-  media.addEventListener("change", onChange);
-  return () => media.removeEventListener("change", onChange);
-}
-
-function usePrefersReducedMotion(): boolean {
-  return useSyncExternalStore(
-    subscribeReducedMotion,
-    () => window.matchMedia("(prefers-reduced-motion: reduce)").matches,
-    () => false,
-  );
 }
 
 // An ISO instant → the `datetime-local` input's value (local wall-clock, minute precision).
