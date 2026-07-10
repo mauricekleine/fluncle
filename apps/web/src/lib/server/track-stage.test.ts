@@ -52,24 +52,10 @@ describe("trackStage — base lifecycle", () => {
     });
   });
 
-  it("enriched (done) but unplaced → `enriched`, needs tagging", () => {
+  it("enriched but no video → `enriched`, needs a video (the old vibe-tagging stage is gone)", () => {
     expect(trackStage({ ...added, enrichmentStatus: "done" })).toEqual({
-      blockedOn: "needs tagging",
+      blockedOn: "needs a video",
       stage: "enriched",
-    });
-  });
-
-  it("tagged (vibe_x/vibe_y set) but no video → `tagged`, needs a video", () => {
-    expect(trackStage({ ...added, enrichmentStatus: "done", vibeX: -0.3, vibeY: 0.5 })).toEqual({
-      blockedOn: "needs a video",
-      stage: "tagged",
-    });
-  });
-
-  it("a zero coordinate still counts as placed (0 is a valid vibe value)", () => {
-    expect(trackStage({ ...added, enrichmentStatus: "done", vibeX: 0, vibeY: 0 })).toEqual({
-      blockedOn: "needs a video",
-      stage: "tagged",
     });
   });
 
@@ -78,8 +64,6 @@ describe("trackStage — base lifecycle", () => {
       trackStage({
         ...added,
         enrichmentStatus: "done",
-        vibeX: 0.2,
-        vibeY: -0.1,
         videoUrl: "https://found.fluncle.com/241.7.3A/footage.mp4",
       }),
     ).toEqual({ blockedOn: "ready for YouTube", stage: "filmed" });
@@ -90,8 +74,6 @@ describe("trackStage — publishing stages", () => {
   const filmed: StageInput = {
     ...added,
     enrichmentStatus: "done",
-    vibeX: 0.2,
-    vibeY: -0.1,
     videoUrl: "https://found.fluncle.com/241.7.3A/footage.mp4",
   };
 
@@ -161,8 +143,8 @@ describe("trackStage — publishing stages", () => {
 });
 
 describe("STAGE_ORDER", () => {
-  it("is the canonical six-stage lifecycle ordering", () => {
-    expect(STAGE_ORDER).toEqual(["added", "enriched", "tagged", "filmed", "youtube", "tiktok"]);
+  it("is the canonical five-stage lifecycle ordering", () => {
+    expect(STAGE_ORDER).toEqual(["added", "enriched", "filmed", "youtube", "tiktok"]);
   });
 
   it("every reachable stage is a member of STAGE_ORDER", () => {
@@ -170,14 +152,12 @@ describe("STAGE_ORDER", () => {
       { ...added, addedToSpotify: false },
       added,
       { ...added, enrichmentStatus: "done" },
-      { ...added, enrichmentStatus: "done", vibeX: 0, vibeY: 0 },
-      { ...added, enrichmentStatus: "done", vibeX: 0, vibeY: 0, videoUrl: "x" },
+      { ...added, enrichmentStatus: "done" },
+      { ...added, enrichmentStatus: "done", videoUrl: "x" },
       {
         ...added,
         enrichmentStatus: "done",
         posts: [post("youtube", "published")],
-        vibeX: 0,
-        vibeY: 0,
         videoUrl: "x",
       },
     ];

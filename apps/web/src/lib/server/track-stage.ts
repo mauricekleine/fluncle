@@ -6,23 +6,24 @@
 //
 // The lifecycle: a finding is ADDED the moment it's on
 // Spotify + Telegram (the fast synchronous add); the async agent ENRICHES it
-// (audio analysis → enrichment_status "done"); the operator TAGS it on the vibe
-// map (vibe_x/vibe_y); the video agent FILMS it (video_url in R2); then it's
-// pushed to YOUTUBE and TIKTOK (social_posts). The stage is the FURTHEST point a
-// finding has reached, and `blockedOn` names the single next action to advance
-// it — which is exactly what the board's worklists ("needs tagging", "needs a
-// video", "ready for YouTube", "ready for TikTok") filter on.
+// (audio analysis → enrichment_status "done"); the video agent FILMS it
+// (video_url in R2); then it's pushed to YOUTUBE and TIKTOK (social_posts). The
+// stage is the FURTHEST point a finding has reached, and `blockedOn` names the
+// single next action to advance it — which is exactly what the board's worklists
+// ("needs a video", "ready for YouTube", "ready for TikTok") filter on. (The old
+// operator vibe-TAGGING stage is gone with the vibe map — galaxy placement is the
+// cluster engine's job now and gates nothing in this pipeline.)
 
 import { isStaleTikTokDraft } from "@fluncle/contracts/util";
 import { type SocialPostItem } from "./social";
 import { type TrackListItem } from "./tracks";
 
 /**
- * The six pipeline stages, in lifecycle order. A finding sits at the furthest
+ * The five pipeline stages, in lifecycle order. A finding sits at the furthest
  * stage it has reached; `STAGE_ORDER` is the canonical ordering for sorting,
  * progress strips, and "is past stage X" comparisons.
  */
-export const STAGE_ORDER = ["added", "enriched", "tagged", "filmed", "youtube", "tiktok"] as const;
+export const STAGE_ORDER = ["added", "enriched", "filmed", "youtube", "tiktok"] as const;
 
 export type Stage = (typeof STAGE_ORDER)[number];
 
@@ -35,7 +36,6 @@ export type Stage = (typeof STAGE_ORDER)[number];
 export type BlockedOn =
   | "add to Spotify + Telegram"
   | "needs enrichment"
-  | "needs tagging"
   | "needs a video"
   | "ready for YouTube"
   | "ready for TikTok"
@@ -49,7 +49,7 @@ export type TrackStage = {
 /** The subset of a finding the stage model reads — keeps the fn easy to unit-test. */
 export type StageInput = Pick<
   TrackListItem,
-  "addedToSpotify" | "postedToTelegram" | "enrichmentStatus" | "vibeX" | "vibeY" | "videoUrl"
+  "addedToSpotify" | "postedToTelegram" | "enrichmentStatus" | "videoUrl"
 > & {
   /** This finding's per-platform social posts (from listSocialPostsForTracks). */
   posts?: SocialPostItem[];
@@ -93,7 +93,6 @@ export function trackStage(track: StageInput, now: number = Date.now()): TrackSt
   }
 
   const enriched = track.enrichmentStatus === "done";
-  const tagged = track.vibeX !== undefined && track.vibeY !== undefined;
   const filmed = Boolean(track.videoUrl);
   const onYouTube = hasPost(track.posts, "youtube", now);
   const onTikTok = hasPost(track.posts, "tiktok", now);
@@ -119,14 +118,9 @@ export function trackStage(track: StageInput, now: number = Date.now()): TrackSt
     return { blockedOn: "ready for YouTube", stage: "filmed" };
   }
 
-  // Tagged but no video yet → the video agent's queue.
-  if (tagged) {
-    return { blockedOn: "needs a video", stage: "tagged" };
-  }
-
-  // Enriched but unplaced → the tagging tool's queue.
+  // Enriched but no video yet → the video agent's queue.
   if (enriched) {
-    return { blockedOn: "needs tagging", stage: "enriched" };
+    return { blockedOn: "needs a video", stage: "enriched" };
   }
 
   // Added, awaiting the async enrichment agent.
