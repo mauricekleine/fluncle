@@ -2432,6 +2432,53 @@ body::before {
   overflow: hidden;
 }
 
+/* The /mix row preview control: a play/pause overlay ON the album artwork. Quiet
+   by default (no second sun — a dark scrim + cream glyph, never gold paint), it
+   surfaces on hover/focus over the row, stays up while its preview is active, and
+   is ALWAYS visible on touch (no hover to reveal it). Reduced motion drops the fade. */
+.preview-art {
+  border-radius: var(--rounded-artwork);
+  display: inline-flex;
+}
+
+.preview-art-btn {
+  align-items: center;
+  background: color-mix(in oklch, var(--tape-black) 55%, transparent);
+  border-radius: inherit;
+  color: var(--starlight-cream);
+  cursor: pointer;
+  display: flex;
+  inset: 0;
+  justify-content: center;
+  opacity: 0;
+  position: absolute;
+  transition: opacity 140ms ease-out;
+}
+
+.preview-art:hover .preview-art-btn,
+.preview-art:focus-within .preview-art-btn,
+.preview-art-btn[aria-pressed="true"] {
+  opacity: 1;
+}
+
+.preview-art-btn:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+/* Touch (no hover): the control can't be revealed on hover, so it stays visible. */
+@media (hover: none) {
+  .preview-art-btn {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .preview-art-btn {
+    transition: none;
+  }
+}
+
 /* De-pilled chips: stamped catalog marks, square-cornered and quiet. */
 .track-chip {
   border-color: color-mix(in oklch, var(--stardust) 32%, transparent);

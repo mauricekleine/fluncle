@@ -2,6 +2,7 @@ import { createFileRoute, redirect, useNavigate } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { useCallback } from "react";
 import { type TrackListItem } from "@fluncle/contracts";
+import { KeyNotationToggle } from "@/components/mix/key-notation-toggle";
 import { MixBuilder } from "@/components/mix/mix-builder";
 import { ShareSetButton } from "@/components/mix/share-set-button";
 import { siteUrl } from "@/lib/fluncle-links";
@@ -130,14 +131,22 @@ function MixPage() {
   return (
     <main className="min-h-screen overflow-x-hidden p-4 text-foreground sm:p-6 lg:flex lg:flex-col lg:p-8">
       <article className="home-plate mx-auto my-6 w-full max-w-2xl sm:my-8 lg:my-auto">
+        {/* The masthead lays its two blocks out as direct flex children (`.home-masthead`
+            is `display:flex; justify-content:space-between`): the text block and the
+            actions group. An earlier extra wrapper `<div>` was a non-stretching flex item,
+            so its right edge — and the button pinned inside it — fell short of the
+            full-width border-bottom rule; laying the actions group out directly lets
+            space-between pin it to the true right edge the rule reaches. */}
         <header className="home-masthead">
-          <div className="flex items-end justify-between gap-4">
-            <div>
-              <h1 className="home-nameplate">Chain a set</h1>
-              <p className="home-tagline">
-                My findings, your order. The archive says what mixes clean.
-              </p>
-            </div>
+          <div>
+            <h1 className="home-nameplate">Chain a set</h1>
+            <p className="home-tagline">
+              Pick a finding to open with, and I rank what mixes in cleanly next by key, tempo, and
+              feel. Reorder the chain, then share it with the crew.
+            </p>
+          </div>
+          <div className="home-masthead-actions">
+            <KeyNotationToggle />
             {view !== "play" && set ? <ShareSetButton serializedSet={set} /> : undefined}
           </div>
         </header>
