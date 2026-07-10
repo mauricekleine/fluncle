@@ -297,7 +297,11 @@ export function adminTracksHandlers(os: Implementer) {
         }
       }
 
-      const result = await updateTrack(trackId, update);
+      // Pass the AUTHENTICATED tier (from the oRPC context, never the body) so
+      // updateTrack can apply the source hierarchy: an agent write never downgrades
+      // a rekordbox/operator-graded bpm/key; an operator's hand-set value is stamped
+      // `operator` and durably protected from later DSP passes.
+      const result = await updateTrack(trackId, update, { writer: context.role });
 
       return { ok: true as const, ...result };
     } catch (error) {

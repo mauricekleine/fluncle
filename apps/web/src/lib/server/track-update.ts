@@ -12,6 +12,7 @@ export type { TrackUpdateResult };
 import { isLogId } from "../log-id";
 import { getDb, typedRow } from "./db";
 import { purgeLogCache } from "./edge-cache";
+import { type AdminRole } from "./env";
 import { resolveLogId } from "./log-id";
 import { ApiError } from "./spotify";
 
@@ -160,25 +161,87 @@ const VISIBLE_FIELDS = new Set<keyof TrackUpdate>([
   "vibeY",
 ]);
 
+// SOURCE HIERARCHY — operator > rekordbox > DSP. An agent (DSP) write NEVER
+// downgrades a value a human or Rekordbox graded. `bpm_source`/`key_source` record
+// who last set each value; the DSP key/BPM estimator is weaker than a DJ-graded
+// Rekordbox key (documented mode/relative-key confusion), so letting an agent-tier
+// enrichment overwrite a `rekordbox`/`operator` value is a REGRESSION, not an
+// upgrade. These are the sources an agent may not clobber.
+const PROTECTED_SOURCES = new Set(["operator", "rekordbox"]);
+
 type ExistingRow = {
   added_at: string;
+  bpm_source: string | null;
   isrc: string | null;
+  key_source: string | null;
   log_id: string | null;
 };
 
 export async function updateTrack(
   trackId: string,
   update: TrackUpdate,
+  // The AUTHENTICATED caller's tier, lifted from the oRPC context by the handler —
+  // NEVER read from the request body. Absent (internal server writes that never
+  // touch bpm/key) leaves the provenance guard inert. `agent` writes are dropped on
+  // a protected row; `operator` writes always win (and stamp their own source).
+  options: { writer?: AdminRole } = {},
 ): Promise<TrackUpdateResult> {
   const db = await getDb();
   const existingResult = await db.execute({
     args: [trackId],
-    sql: `select isrc, log_id, added_at from tracks where track_id = ? limit 1`,
+    sql: `select isrc, log_id, added_at, bpm_source, key_source from tracks where track_id = ? limit 1`,
   });
   const existing = typedRow<ExistingRow>(existingResult.rows);
 
   if (!existing) {
     throw new ApiError("not_found", `No track with id ${trackId}`, 404);
+  }
+
+  // Apply the source hierarchy before building the write (see PROTECTED_SOURCES).
+  // The guard mutates the caller's fresh-per-request `update` object in place: it
+  // either drops an agent's downgrading key/bpm fields, or stamps an operator's
+  // hand-set value with the `operator` source so a later DSP pass can't clobber it.
+  let guardDroppedFields = false;
+
+  if (options.writer === "agent") {
+    // An agent write of key (or its provenance) onto a rekordbox/operator-graded row
+    // is a silent no-op for the KEY: drop key + keySource + keyConfidence, leave the
+    // rest of the same update (bpm, features, status, analyzedFrom…) to apply.
+    const writesKey =
+      update.key !== undefined ||
+      update.keySource !== undefined ||
+      update.keyConfidence !== undefined;
+
+    if (writesKey && existing.key_source && PROTECTED_SOURCES.has(existing.key_source)) {
+      delete update.key;
+      delete update.keySource;
+      delete update.keyConfidence;
+      guardDroppedFields = true;
+    }
+
+    // Symmetric for bpm.
+    const writesBpm =
+      update.bpm !== undefined ||
+      update.bpmSource !== undefined ||
+      update.bpmConfidence !== undefined;
+
+    if (writesBpm && existing.bpm_source && PROTECTED_SOURCES.has(existing.bpm_source)) {
+      delete update.bpm;
+      delete update.bpmSource;
+      delete update.bpmConfidence;
+      guardDroppedFields = true;
+    }
+  } else if (options.writer === "operator") {
+    // The operator always wins. A hand-set key/bpm with NO explicit source is stamped
+    // `operator` server-side, so the value is durably protected from future DSP passes
+    // (an explicit `--key-source rekordbox` on the backfill is left untouched).
+    if (update.key !== undefined && update.keySource === undefined) {
+      update.keySource = "operator";
+    }
+
+    if (update.bpm !== undefined && update.bpmSource === undefined) {
+      update.bpmSource = "operator";
+    }
   }
 
   const sets: string[] = [];
@@ -437,6 +500,14 @@ export async function updateTrack(
   }
 
   if (sets.length === 0) {
+    // The provenance guard dropped every field this write carried (an agent trying to
+    // downgrade a rekordbox/operator-graded row with nothing else in the payload): a
+    // silent no-op success, NOT a no_fields error — the on-box sweeps must keep
+    // succeeding. A genuinely empty update (no guard drop) is still the 400.
+    if (guardDroppedFields) {
+      return { fields: [], trackId };
+    }
+
     throw new ApiError("no_fields", "No updatable fields provided", 400);
   }
 
