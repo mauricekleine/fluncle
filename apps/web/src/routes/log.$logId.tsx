@@ -187,9 +187,15 @@ function logHead(loaderData: LogPageData | undefined) {
   const media = trackMedia(logId);
   const pageUrl = logPageUrl(logId);
   const title = `${logId} · ${artistTitleLine(track)} · Fluncle`;
-  const description = definitionalSentences({ ...track, logId });
+  // galaxy: undefined at each prose/schema spread — the DTO `galaxy` is now the real
+  // `{ name, slug }` (browse-by-feel RFC), but the log-prose/log-schema inputs still
+  // carry the old vibe shape; the /log galaxy swap is Slice 4 (keep those files untouched).
+  const description = definitionalSentences({ ...track, galaxy: undefined, logId });
   const imageUrl = spotifyAlbumImageAtSize(track.albumImageUrl, "large") ?? media.coverUrl;
-  const recording = musicRecordingJsonLd({ ...track, artistSlugs, logId }, imageUrl);
+  const recording = musicRecordingJsonLd(
+    { ...track, artistSlugs, galaxy: undefined, logId },
+    imageUrl,
+  );
   // The social card: the per-finding OG image (the poster frame + treatment),
   // versioned by `updatedAt` so a re-enriched finding re-renders (the /api/og
   // response is immutable + edge-cached). The JSON-LD `image` above stays the
@@ -203,7 +209,7 @@ function logHead(loaderData: LogPageData | undefined) {
   // real timestamp (a fresh square crop counts as the upload moment).
   const videoSchema = track.videoUrl
     ? videoObjectJsonLd(
-        { ...track, logId },
+        { ...track, galaxy: undefined, logId },
         {
           contentUrl: media.videoUrl,
           thumbnailUrl: imageUrl,
@@ -346,7 +352,15 @@ function LogPage() {
               );
             })}
           </p>
-          <p className="log-definition-prose">{definitionalProse({ ...track, logId })}</p>
+          {/*
+            galaxy: undefined — the /log galaxy clause is deferred to Slice 4 (the /log
+            swap, browse-by-feel RFC). The DTO `galaxy` is now the real `{ name, slug }`
+            from `galaxy_id`, but the prose input still carries the old vibe shape; keep
+            log-prose.ts untouched (Slice 4 owns its re-source + `/galaxies/<slug>` link).
+          */}
+          <p className="log-definition-prose">
+            {definitionalProse({ ...track, galaxy: undefined, logId })}
+          </p>
         </section>
 
         <dl className="log-fields">

@@ -107,6 +107,7 @@ type TrackUpdateOptions = {
   embedding?: string;
   embeddingFile?: string;
   features?: string;
+  galaxyId?: string;
   json: boolean;
   key?: string;
   keyConfidence?: string;
@@ -114,6 +115,17 @@ type TrackUpdateOptions = {
   note?: string;
   status?: string;
   videoUrl?: string;
+};
+
+type GalaxyEmbeddingsOptions = {
+  cursor?: string;
+  json: boolean;
+  limit?: string;
+};
+
+type GalaxySetMapOptions = {
+  file: string;
+  json: boolean;
 };
 
 type TrackVideoOptions = {
@@ -339,6 +351,16 @@ function addListenCommands(program: Command): void {
     .action(async (slug: string | undefined, options: JsonOptions) => {
       const { artistsListCommand, artistsGetCommand } = await import("./commands/artists");
       await runArtists(slug, options, { artistsGetCommand, artistsListCommand });
+    });
+
+  program
+    .command("galaxies")
+    .description("Wander Fluncle's sonic galaxies")
+    .argument("[slug]", "Galaxy slug (omit for the full map)")
+    .option("--json", "Print JSON", false)
+    .action(async (slug: string | undefined, options: JsonOptions) => {
+      const { galaxiesListCommand, galaxyGetCommand } = await import("./commands/galaxies");
+      await runGalaxies(slug, options, { galaxiesListCommand, galaxyGetCommand });
     });
 
   program
@@ -730,6 +752,7 @@ function addAdminCommands(program: Command): void {
     .option("--embedding <json>", "MuQ audio embedding as a JSON array of 1024 floats")
     .option("--embedding-file <file>", "Read the MuQ embedding JSON array from a file")
     .option("--features <json>", "Audio feature JSON")
+    .option("--galaxy-id <id>", "Sonic galaxy assignment (empty string clears it)")
     .option("--json", "Print JSON", false)
     .option("--key <key>", "Musical key")
     .option("--key-confidence <number>", "Analyzer confidence in the key (0..1)")
@@ -1493,6 +1516,50 @@ function addAdminCommands(program: Command): void {
   artists.action(() => {
     artists.outputHelp();
   });
+
+  // The sonic galaxy map's admin sweep subcommands (browse-by-feel RFC) — the thin HTTP
+  // client the on-box `fluncle-cluster` cron drives: read the map, read the embedded
+  // corpus (cursor-paged), write the map (the Worker mints ids + handles server-side).
+  const galaxies = configureCommand(
+    admin.command("galaxies").description("Sonic galaxy map (cluster sweep) commands"),
+  );
+
+  galaxies.action(() => {
+    galaxies.outputHelp();
+  });
+
+  galaxies
+    .command("map")
+    .description("Read the full galaxy map (named + unnamed + retired, with centroids)")
+    .option("--json", "Print JSON", false)
+    .action(async (options: JsonOptions) => {
+      const { galaxyMapReadCommand } = await import("./commands/galaxies");
+      await runGalaxyMapRead(options, galaxyMapReadCommand);
+    });
+
+  galaxies
+    .command("embeddings")
+    .description("Read a cursor page of the embedded corpus (the cluster engine's input)")
+    .option("--cursor <cursor>", "Opaque cursor from a prior page's nextCursor")
+    .option("--limit <limit>", "Page size (default 200, clamped to 500)")
+    .option("--json", "Print JSON", false)
+    .action(async (options: GalaxyEmbeddingsOptions) => {
+      const { galaxyEmbeddingsCommand } = await import("./commands/galaxies");
+      await runGalaxyEmbeddings(options, galaxyEmbeddingsCommand);
+    });
+
+  galaxies
+    .command("set-map")
+    .description("Write the galaxy map transactionally (mint new ids, upsert centroids, retire)")
+    .requiredOption(
+      "--file <file>",
+      "Path to the clusters JSON ({ clusters: [...] } or a bare array)",
+    )
+    .option("--json", "Print JSON", false)
+    .action(async (options: GalaxySetMapOptions) => {
+      const { galaxyMapWriteCommand } = await import("./commands/galaxies");
+      await runGalaxyMapWrite(options, galaxyMapWriteCommand);
+    });
 
   const backfill = configureCommand(
     admin.command("backfills").description("Backfill operator-only archives"),
@@ -2626,6 +2693,7 @@ async function runTrackUpdate(
     bpmSource: options.bpmSource,
     embedding,
     features: options.features,
+    galaxyId: options.galaxyId,
     key: options.key,
     keyConfidence,
     keySource: options.keySource,
@@ -3219,6 +3287,120 @@ async function runArtists(
       `${a.name.padEnd(40)} ${String(a.findingCount).padStart(3)} finding${a.findingCount === 1 ? "" : "s"}`,
     );
   }
+}
+
+async function runGalaxies(
+  slug: string | undefined,
+  options: JsonOptions,
+  commands: {
+    galaxiesListCommand: typeof import("./commands/galaxies").galaxiesListCommand;
+    galaxyGetCommand: typeof import("./commands/galaxies").galaxyGetCommand;
+  },
+): Promise<void> {
+  if (slug) {
+    const { findings, galaxy } = await commands.galaxyGetCommand(slug);
+
+    if (options.json) {
+      printJson({ findings, galaxy, ok: true });
+      return;
+    }
+
+    console.log(`${galaxy.name}  (${galaxy.slug})`);
+    console.log(`${galaxy.memberCount} finding${galaxy.memberCount === 1 ? "" : "s"}`);
+
+    for (const finding of findings) {
+      const coordinate = finding.logId ? `${finding.logId}  ` : "";
+      console.log(`  ${coordinate}${finding.artists.join(", ")} — ${finding.title}`);
+    }
+
+    return;
+  }
+
+  const galaxies = await commands.galaxiesListCommand();
+
+  if (options.json) {
+    printJson({ galaxies, ok: true });
+    return;
+  }
+
+  if (galaxies.length === 0) {
+    console.log("No galaxies named yet. Quiet map tonight.");
+    return;
+  }
+
+  for (const galaxy of galaxies) {
+    console.log(
+      `${galaxy.name.padEnd(40)} ${String(galaxy.memberCount).padStart(3)} finding${galaxy.memberCount === 1 ? "" : "s"}`,
+    );
+  }
+}
+
+async function runGalaxyMapRead(
+  options: JsonOptions,
+  galaxyMapReadCommand: typeof import("./commands/galaxies").galaxyMapReadCommand,
+): Promise<void> {
+  const galaxies = await galaxyMapReadCommand();
+
+  if (options.json) {
+    printJson({ galaxies, ok: true });
+    return;
+  }
+
+  if (galaxies.length === 0) {
+    console.log("No galaxies on the map yet.");
+    return;
+  }
+
+  for (const galaxy of galaxies) {
+    const name = galaxy.name ?? "(unnamed)";
+    const retired = galaxy.retiredAt ? " [retired]" : "";
+    console.log(
+      `${galaxy.id}  ${galaxy.handle.padEnd(30)} ${name.padEnd(24)} ${String(galaxy.memberCount).padStart(4)} members${retired}`,
+    );
+  }
+}
+
+async function runGalaxyEmbeddings(
+  options: GalaxyEmbeddingsOptions,
+  galaxyEmbeddingsCommand: typeof import("./commands/galaxies").galaxyEmbeddingsCommand,
+): Promise<void> {
+  const result = await galaxyEmbeddingsCommand({ cursor: options.cursor, limit: options.limit });
+
+  if (options.json) {
+    printJson(result);
+    return;
+  }
+
+  console.log(
+    `${result.embeddings.length} embedding(s)${result.nextCursor ? ` · nextCursor: ${result.nextCursor}` : " · end of corpus"}`,
+  );
+}
+
+async function runGalaxyMapWrite(
+  options: GalaxySetMapOptions,
+  galaxyMapWriteCommand: typeof import("./commands/galaxies").galaxyMapWriteCommand,
+): Promise<void> {
+  const raw = JSON.parse(readFileSync(options.file, "utf8")) as unknown;
+  // Accept either `{ clusters: [...] }` or a bare array of cluster rows.
+  const clusters =
+    Array.isArray(raw) || raw === null ? raw : (raw as { clusters?: unknown }).clusters;
+
+  if (!Array.isArray(clusters)) {
+    throw new Error("Invalid --file: expected { clusters: [...] } or a JSON array of cluster rows");
+  }
+
+  const galaxies = await galaxyMapWriteCommand(
+    clusters as Array<{ centroid: number[]; id: string | null; retire?: boolean }>,
+  );
+
+  if (options.json) {
+    printJson({ galaxies, ok: true });
+    return;
+  }
+
+  console.log(
+    `Wrote ${clusters.length} cluster(s); the map now holds ${galaxies.length} galaxy(ies).`,
+  );
 }
 
 async function runMixtapes(

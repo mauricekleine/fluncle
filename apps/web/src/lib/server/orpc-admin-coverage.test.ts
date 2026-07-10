@@ -90,6 +90,11 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // clip-card UI (Wave 3-B) shows + copies it. `get_clip_caption` matches the public
   // `get_` prefix so the "holds exactly" check skips it; it lives here for completeness.
   "GET /admin/clips/{clipId}/caption": "get_clip_caption",
+  // The sonic galaxy map's admin read (browse-by-feel RFC) — contract-only oRPC (no
+  // TanStack route file; oRPC owns the path directly). `list_galaxies_admin` matches
+  // the public `list_` prefix so the "holds exactly" check skips it; it lives here for
+  // completeness. Admin tier (agent-allowed — the `fluncle-cluster` cron reads it).
+  "GET /admin/galaxies": "list_galaxies_admin",
   "GET /admin/lastfm/auth/start": "start_lastfm_auth",
   // The logbook sweep's gap+material read — contract-only oRPC (no TanStack route
   // file; oRPC owns the path directly). Admin tier (agent-allowed). `list_logbook_gaps`
@@ -111,6 +116,12 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // exactly" check skips it; it lives here for completeness (like `list_artist_socials`).
   "GET /admin/subscriptions": "list_subscriptions",
   "GET /admin/tracks": "list_tracks_admin",
+  // The embedded corpus (browse-by-feel RFC) — contract-only oRPC (no TanStack route
+  // file; oRPC owns the path directly). Admin tier (agent-allowed): the `fluncle-cluster`
+  // cron's input. `list_track_embeddings` matches the public `list_` prefix so the
+  // "holds exactly" check skips it; it lives here for completeness. Static `/embeddings`
+  // beats the `/{trackId}` param in oRPC's matcher (the `/tracks/random` precedent).
+  "GET /admin/tracks/embeddings": "list_track_embeddings",
   // The dream-weaver order proposal (RFC mixability-engine) — contract-only oRPC (no
   // TanStack route file; oRPC owns the path directly). Admin tier (agent-allowed read).
   // `get_mixable_order` matches the public `get_` prefix so the "holds exactly" check
@@ -123,6 +134,10 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "GET /admin/tracks/{trackId}": "get_track_admin",
   "GET /admin/tracks/{trackId}/social": "list_track_social",
   "PATCH /admin/clips/{clipId}": "update_clip",
+  // The operator's galaxy naming write (browse-by-feel RFC) — contract-only oRPC (no
+  // TanStack route file). OPERATOR tier: naming mints a public URL, so the agent token
+  // 403s (the `note`/OPERATOR_ONLY precedent).
+  "PATCH /admin/galaxies/{id}": "update_galaxy",
   // The operator's clip-drip schedule control — contract-only oRPC. Operator tier:
   // set/override a clip's Instagram drip slot.
   "PATCH /admin/clips/{clipId}/schedule": "set_clip_schedule",
@@ -264,6 +279,10 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // The clip drip-feed kill switch — contract-only oRPC (no TanStack route file).
   // Operator tier: pause/resume every future scheduled Instagram post.
   "PUT /admin/clips/drip/state": "set_clip_drip",
+  // The cluster cron's transactional map write (browse-by-feel RFC) — contract-only oRPC
+  // (no TanStack route file). Admin tier (agent-allowed): the Worker mints new galaxy
+  // ids + handles server-side; the box's `fluncle-cluster` cron drives it.
+  "PUT /admin/galaxies/map": "update_galaxy_map",
   // The hardened post-publish cue backfill (Fluncle Studio Unit D, panel M1):
   // re-times an existing minted tracklist's start_ms; operator tier.
   "PUT /admin/mixtapes/{mixtapeId}/cues": "set_mixtape_cues",

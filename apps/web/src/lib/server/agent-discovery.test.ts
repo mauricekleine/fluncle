@@ -50,7 +50,7 @@ describe("renderLlmsFull", () => {
       [
         finding({
           bpm: 172.94,
-          galaxy: { key: "nebular", name: "Nebular" },
+          galaxy: { name: "Nebular", slug: "nebular" },
           key: "F minor",
           logId: "012.8.0A",
         }),

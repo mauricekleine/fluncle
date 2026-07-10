@@ -30,6 +30,7 @@ import { formatDateLong } from "@/lib/format";
 import { isAdminRequest } from "@/lib/server/admin-auth";
 import { editionsLabels } from "@/lib/server/edition-email";
 import { listEditions } from "@/lib/server/editions";
+import { listGalaxyNames } from "@/lib/server/galaxies-map";
 
 // The operator's newsletter front-end (`/admin/newsletter`): the editions list
 // (drafts inclusive), a preview of what each one renders to, and the Send control
@@ -40,7 +41,11 @@ import { listEditions } from "@/lib/server/editions";
 
 // The loader hydrates every finding's logId to its `Artist — Title` label (server-side,
 // one batched read across all editions) and ships the label strings to the client.
-type EditionsLoaderData = { editions: EditionDTO[]; labels: Record<string, string> };
+type EditionsLoaderData = {
+  editions: EditionDTO[];
+  galaxyNames: string[];
+  labels: Record<string, string>;
+};
 
 const EDITIONS_KEY = ["admin", "editions"] as const;
 
@@ -58,8 +63,9 @@ const fetchEditions = createServerFn({ method: "GET" }).handler(
 
     // Drafts inclusive — the operator is here to review and send the unsent ones.
     const editions = await listEditions({ includeDrafts: true });
+    const [labels, galaxyNames] = await Promise.all([editionsLabels(editions), listGalaxyNames()]);
 
-    return { editions, labels: await editionsLabels(editions) };
+    return { editions, galaxyNames, labels };
   },
 );
 
@@ -80,7 +86,7 @@ function AdminNewsletterPage() {
     // Admin convention: focus-refetch ON, so a send made elsewhere lands here.
     refetchOnWindowFocus: true,
   });
-  const { editions, labels } = data;
+  const { editions, galaxyNames, labels } = data;
 
   const draftCount = editions.filter((edition) => edition.status === "draft").length;
   const sentCount = editions.length - draftCount;
@@ -123,6 +129,7 @@ function AdminNewsletterPage() {
                 key={edition.id}
                 edition={edition}
                 expanded={expanded.has(edition.id)}
+                galaxyNames={galaxyNames}
                 labels={labels}
                 onToggle={() => toggle(edition.id)}
                 refresh={() => queryClient.invalidateQueries({ queryKey: EDITIONS_KEY })}
@@ -138,12 +145,14 @@ function AdminNewsletterPage() {
 function EditionRow({
   edition,
   expanded,
+  galaxyNames,
   labels,
   onToggle,
   refresh,
 }: {
   edition: EditionDTO;
   expanded: boolean;
+  galaxyNames: string[];
   labels: Record<string, string>;
   onToggle: () => void;
   refresh: () => Promise<void>;
@@ -187,7 +196,7 @@ function EditionRow({
           className="space-y-4 px-4 pb-4 pt-2 sm:px-5"
           id={bodyId}
         >
-          <EditionPreview content={edition.content} labels={labels} />
+          <EditionPreview content={edition.content} galaxyNames={galaxyNames} labels={labels} />
 
           {isDraft ? (
             <SendControl edition={edition} refresh={refresh} />
@@ -223,12 +232,14 @@ function EditionRow({
 // uses, so the preview matches the back issue.
 function EditionPreview({
   content,
+  galaxyNames,
   labels,
 }: {
   content: EditionDTO["content"];
+  galaxyNames: string[];
   labels: Record<string, string>;
 }) {
-  const galaxies = orderedGalaxies(content);
+  const galaxies = orderedGalaxies(content, galaxyNames);
   const isEmpty = !content.intro?.trim() && galaxies.length === 0 && !content.mixtapeRef?.trim();
 
   if (isEmpty) {

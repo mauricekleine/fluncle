@@ -36,6 +36,7 @@ export type TrackUpdateOptions = {
   bpmSource?: string;
   embedding?: number[];
   features?: string;
+  galaxyId?: string;
   key?: string;
   keyConfidence?: number;
   keySource?: string;
@@ -53,6 +54,7 @@ type TrackUpdateBody = {
   embedding?: number[];
   enrichmentStatus?: string;
   features?: string;
+  galaxyId?: string;
   key?: string;
   keyConfidence?: number;
   keySource?: string;
@@ -488,6 +490,9 @@ export async function trackUpdateCommand(
   }
   if (options.embedding !== undefined) {
     body.embedding = options.embedding;
+  }
+  if (options.galaxyId !== undefined) {
+    body.galaxyId = options.galaxyId;
   }
   if (options.note !== undefined) {
     body.note = options.note;

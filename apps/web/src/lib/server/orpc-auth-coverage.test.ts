@@ -124,6 +124,9 @@ const PUBLIC_UNAUTH_OPS = new Set<string>([
   "get_random_track",
   "get_similar_findings",
   "get_track",
+  // Galaxy reads — public, no auth (browse-by-feel RFC).
+  "get_galaxy",
+  "list_galaxies",
   "list_artists",
   "list_editions",
   // The `/mix` rail read (RFC mixability-engine). Public-unauth at the op (keys/BPMs
@@ -240,6 +243,12 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // the board + CLI + box can all consume.
   get_track_admin: "admin",
   initiate_mixtape_youtube: "operator",
+  // The full galaxy map read (browse-by-feel RFC) — admin tier (agent-allowed), the
+  // list_*_admin precedent; the `fluncle-cluster` cron reads the prior map + split flags.
+  list_galaxies_admin: "admin",
+  // The embedded corpus read — admin tier (agent-allowed): the cluster engine's input,
+  // driven by the cron's agent token (the list_tracks_admin cursor precedent).
+  list_track_embeddings: "admin",
   // The `/admin/artists` review queue read — admin tier (agent-allowed), the list_*_admin
   // precedent; the operator's review-queue station consumes it.
   list_artist_socials: "admin",
@@ -373,6 +382,12 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   update_subscription: "operator",
   update_track: "admin",
   update_track_social: "operator",
+  // The operator's galaxy naming write (browse-by-feel RFC) — operator tier: naming mints
+  // a public URL (publish-class), so an agent token 403s at operatorGuard.
+  update_galaxy: "operator",
+  // The cluster cron's transactional map write — admin tier (agent-allowed): the Worker
+  // mints new ids + handles; the box's `fluncle-cluster` cron drives it with its agent token.
+  update_galaxy_map: "admin",
 };
 
 describe("oRPC auth-tier coverage", () => {

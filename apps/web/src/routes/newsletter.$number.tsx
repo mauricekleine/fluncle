@@ -6,10 +6,17 @@ import { formatDateLong } from "@/lib/format";
 import { jsonLdScript } from "@/lib/json-ld";
 import { editionsLabels } from "@/lib/server/edition-email";
 import { getEditionByNumber } from "@/lib/server/editions";
+import { listGalaxyNames } from "@/lib/server/galaxies-map";
 
 // The loader hydrates each finding's logId to its `Artist — Title` label (server-side,
 // one batched read) and ships the label strings to the client, mirroring the email.
-type EditionLoaderData = { edition: EditionDTO; labels: Record<string, string> };
+// `galaxyNames` is the live sonic map (browse-by-feel RFC), which the section matcher
+// ranks the edition's authored galaxy labels against.
+type EditionLoaderData = {
+  edition: EditionDTO;
+  galaxyNames: string[];
+  labels: Record<string, string>;
+};
 
 // One back issue of the mothership (`/newsletter/<number>`) rendered as a proper
 // web page — the intro, the galaxy-grouped finds (each linking to its permanent
@@ -31,7 +38,9 @@ const fetchEdition = createServerFn({ method: "GET" })
       throw notFound();
     }
 
-    return { edition, labels: await editionsLabels([edition]) };
+    const [labels, galaxyNames] = await Promise.all([editionsLabels([edition]), listGalaxyNames()]);
+
+    return { edition, galaxyNames, labels };
   });
 
 // A typed head() outside the route options — reading loaderData inline makes the
@@ -79,9 +88,9 @@ export const Route = createFileRoute("/newsletter/$number")({
 });
 
 function EditionPage() {
-  const { edition, labels } = Route.useLoaderData();
+  const { edition, galaxyNames, labels } = Route.useLoaderData();
   const { content } = edition;
-  const galaxies = orderedGalaxies(content);
+  const galaxies = orderedGalaxies(content, galaxyNames);
 
   return (
     <main className="log-plate-stage">

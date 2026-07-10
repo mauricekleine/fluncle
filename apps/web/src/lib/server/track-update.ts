@@ -67,6 +67,16 @@ export type TrackUpdate = {
   enrichmentStatus?: "pending" | "processing" | "done" | "failed";
   /** Raw audio feature vector as a JSON string (training data for the classifier). */
   features?: string;
+  /**
+   * The sonic galaxy assignment (browse-by-feel RFC) — the `galaxy_id` FK the on-box
+   * `fluncle-cluster` cron writes each night (the assignment-only step), an internal
+   * grouping field like `embedding`. NOT in VISIBLE_FIELDS: an assignment moves no
+   * public surface (it surfaces only once the galaxy is operator-named), so it must
+   * not bump updated_at / the sitemap lastmod — the built-in `purgeLogCache` still
+   * refreshes the finding's `/log` edge so the galaxy prose lands. Empty string clears
+   * it (re-queue) — null, not "", so `galaxy_id IS NULL` reads it as unassigned.
+   */
+  galaxyId?: string;
   /** One-time backfill into a null isrc slot; rejected when one is already set. */
   isrc?: string;
   key?: string;
@@ -348,6 +358,14 @@ export async function updateTrack(
     // embed queue treats a cleared row as un-embedded (re-embed on the next tick).
     sets.push("embedding_json = ?");
     args.push(update.embedding === "" ? null : update.embedding);
+  }
+
+  if (update.galaxyId !== undefined) {
+    // The nightly cluster assignment (browse-by-feel RFC). Empty string clears it —
+    // null, not "", so `galaxy_id IS NULL` reads a cleared row as unassigned. NOT in
+    // VISIBLE_FIELDS (below), so an assignment write bumps no public lastmod.
+    sets.push("galaxy_id = ?");
+    args.push(update.galaxyId === "" ? null : update.galaxyId);
   }
 
   // The full-song capture side-channel (RFC full-audio). All internal analysis state

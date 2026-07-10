@@ -218,6 +218,14 @@ export function adminTracksHandlers(os: Implementer) {
         update.videoUrl = body.videoUrl;
       }
 
+      // The sonic galaxy assignment (browse-by-feel RFC) — agent-writable, like
+      // embedding, so NOT in OPERATOR_ONLY_FIELDS: the on-box `fluncle-cluster` cron
+      // sets it with the box's agent token. A string sets it (including "" which clears
+      // the assignment); anything else leaves it untouched.
+      if (typeof body.galaxyId === "string") {
+        update.galaxyId = body.galaxyId;
+      }
+
       if (
         body.enrichmentStatus === "pending" ||
         body.enrichmentStatus === "done" ||
