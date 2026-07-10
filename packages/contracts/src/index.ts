@@ -27,6 +27,12 @@
 
 import { type z } from "zod";
 import { type ArtistListItemSchema } from "./orpc/artists.js";
+import {
+  type AttentionQueueSchema,
+  type AttentionRowSchema,
+  type AttentionSourceCountSchema,
+  type AttentionSourceSchema,
+} from "./orpc/admin-attention.js";
 import { type ServiceHealthStatusSchema } from "./orpc/admin-health.js";
 import { type GalaxyProgressSchema } from "./orpc/me-galaxy.js";
 import {
@@ -295,6 +301,23 @@ export type RecordingSetVideoPresignResponse = Ok<{
 }>;
 
 export type MixtapeUpdateResponse = Ok<{ mixtape: MixtapeDTO }>;
+
+// ── Attention (the /admin queue digest) ──────────────────────────────────────
+
+/** One of the attention queue's seven sources. */
+export type AttentionSource = z.infer<typeof AttentionSourceSchema>;
+
+/** One waiting row — the source, the object line, and the `/admin/…` deep-link path. */
+export type AttentionRow = z.infer<typeof AttentionRowSchema>;
+
+/** One source's waiting count (non-zero), in priority order. */
+export type AttentionSourceCount = z.infer<typeof AttentionSourceCountSchema>;
+
+/** The menu-bar digest of the attention snapshot (`get_attention`). */
+export type AttentionQueue = z.infer<typeof AttentionQueueSchema>;
+
+/** `GET /api/admin/attention` response — the queue digest + the day's dispatch. */
+export type AttentionResponse = Ok<{ attention: AttentionQueue }>;
 
 // ── Edition (the newsletter archive) ─────────────────────────────────────────
 

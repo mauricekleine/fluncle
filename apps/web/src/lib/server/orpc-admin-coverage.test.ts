@@ -74,6 +74,12 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // `list_artist_socials` matches the public `list_` prefix so the "holds exactly" check
   // skips it; it lives here for completeness.
   "GET /admin/artists/socials": "list_artist_socials",
+  // The `/admin` attention-queue digest read — contract-only oRPC (no TanStack route
+  // file; oRPC owns the path directly). Admin tier (agent-allowed): the operator's
+  // `fluncle admin queue` CLI + its Raycast menu bar read it. `get_attention` matches
+  // the public `get_` prefix so the "holds exactly" check skips it; it lives here for
+  // completeness (like `get_track_admin`).
+  "GET /admin/attention": "get_attention",
   "GET /admin/clips": "list_clips",
   // Every clip's Instagram drip-feed row (schedule + status) — contract-only oRPC (no
   // TanStack route file). Admin tier (agent-allowed read); the clip library / CLI merge
