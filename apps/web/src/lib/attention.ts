@@ -519,6 +519,7 @@ const SOURCE_ORDER: AttentionSource[] = [
   "distribute",
   "attach-cues",
   "drip-empty",
+  "submission",
   "artist-review",
 ];
 
@@ -592,6 +593,8 @@ function briefPhrase(source: AttentionSource, rows: AttentionItem[]): string {
       return n === 1 ? "a clip to push to TikTok" : `${countWord(n)} clips to push to TikTok`;
     case "post-youtube":
       return n === 1 ? "a clip to post to YouTube" : `${countWord(n)} clips to post to YouTube`;
+    case "submission":
+      return n === 1 ? "a crew submission to hear" : `${countWord(n)} crew submissions to hear`;
     case "tiktok-draft":
       return n === 1 ? "a TikTok draft to finish" : `${countWord(n)} TikTok drafts to finish`;
   }

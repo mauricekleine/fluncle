@@ -26,6 +26,7 @@ const SOURCE_LABELS: Record<AttentionSource, string> = {
   "drip-empty": "clip drip",
   "post-tiktok": "tiktok",
   "post-youtube": "youtube",
+  submission: "submission",
   "tiktok-draft": "tiktok draft",
 };
 

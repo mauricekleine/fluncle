@@ -21,7 +21,7 @@
 import { oc } from "@orpc/contract";
 import * as z from "zod";
 
-/** The queue's seven sources (mirrors `AttentionSource` in apps/web/src/lib/attention.ts). */
+/** The queue's eight sources (mirrors `AttentionSource` in apps/web/src/lib/attention.ts). */
 export const AttentionSourceSchema = z
   .enum([
     "artist-review",
@@ -30,6 +30,7 @@ export const AttentionSourceSchema = z
     "drip-empty",
     "post-tiktok",
     "post-youtube",
+    "submission",
     "tiktok-draft",
   ])
   .meta({ id: "AttentionSource" });

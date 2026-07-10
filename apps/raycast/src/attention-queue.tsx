@@ -22,6 +22,7 @@ const SOURCE_META: Record<Source, { icon: Icon; title: string }> = {
   "drip-empty": { icon: Icon.Image, title: "Clip drip" },
   "post-tiktok": { icon: Icon.Upload, title: "Push to TikTok" },
   "post-youtube": { icon: Icon.Upload, title: "Post to YouTube" },
+  submission: { icon: Icon.Tray, title: "Submissions" },
   "tiktok-draft": { icon: Icon.Clock, title: "TikTok drafts" },
 };
 
