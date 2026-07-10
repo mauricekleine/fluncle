@@ -2655,11 +2655,10 @@ async function runTrackGetAdmin(
   );
 
   // The admin-only state a public list row hides — the reason this read exists over
-  // `fluncle tracks get`: where it sits on the map, whether it's filmed and voiced.
-  const placed = t.galaxy && t.vibeX !== undefined && t.vibeY !== undefined;
-  console.log(
-    `Placement: ${placed && t.galaxy ? `${t.galaxy.name} (${t.vibeX?.toFixed(2)}, ${t.vibeY?.toFixed(2)})` : "unplaced"}`,
-  );
+  // `fluncle tracks get`: which sonic galaxy it landed in, whether it's filmed and
+  // voiced. The galaxy is the `fluncle-cluster` assignment (present once the finding
+  // is placed AND its galaxy is operator-named); the retired vibe coordinates are gone.
+  console.log(`Galaxy: ${t.galaxy ? t.galaxy.name : "unplaced"}`);
   console.log(
     `Video: ${
       t.videoUrl

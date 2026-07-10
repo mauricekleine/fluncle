@@ -138,10 +138,6 @@ export type TrackUpdate = {
   videoGrain?: string;
   /** The video's visual REGISTER (register ledger; surfaced in /api/tracks). */
   videoRegister?: string;
-  /** Vibe-map placement (the admin tagging tool). vibeX = Light↔Dark mood. */
-  vibeX?: number;
-  /** vibeY = Floaty↔Driving energy. Both set together when a track is placed. */
-  vibeY?: number;
 };
 
 // The fields whose write changes a PUBLIC surface, so it should move the
@@ -167,8 +163,6 @@ const VISIBLE_FIELDS = new Set<keyof TrackUpdate>([
   "videoSquaredAt",
   "videoUrl",
   "videoVehicle",
-  "vibeX",
-  "vibeY",
 ]);
 
 // SOURCE HIERARCHY — operator > rekordbox > DSP. An agent (DSP) write NEVER
@@ -440,16 +434,6 @@ export async function updateTrack(
     // "no script yet" for the back-migration's `observation_script IS NULL` pick.
     sets.push("observation_script = ?");
     args.push(update.observationScript === "" ? null : update.observationScript);
-  }
-
-  if (update.vibeX !== undefined) {
-    sets.push("vibe_x = ?");
-    args.push(update.vibeX);
-  }
-
-  if (update.vibeY !== undefined) {
-    sets.push("vibe_y = ?");
-    args.push(update.vibeY);
   }
 
   if (update.isrc !== undefined) {

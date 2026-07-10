@@ -70,8 +70,6 @@ const UpdateTrackBodySchema = z.looseObject({
   sourceAudioCapturedAt: z.unknown().optional(),
   sourceAudioFailures: z.unknown().optional(),
   sourceAudioKey: z.unknown().optional(),
-  vibeX: z.unknown().optional(),
-  vibeY: z.unknown().optional(),
   videoUrl: z.unknown().optional(),
 });
 

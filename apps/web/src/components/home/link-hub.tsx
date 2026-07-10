@@ -82,7 +82,11 @@ function SectionHeader({ children, className = "" }: { children: string; classNa
   );
 }
 
-export function HomeLinkHub() {
+// `galaxiesLive` gates the Galaxies nav link on the browse-by-feel launch gate
+// (decision 5): the /galaxies lens 404s until the operator has NAMED the whole
+// sonic map, so the link only shows once the map is fully named — resolved on the
+// home loader (isGalaxyMapFullyNamed) so the homepage never links a dead lens.
+export function HomeLinkHub({ galaxiesLive = false }: { galaxiesLive?: boolean }) {
   return (
     <div className="mt-3 flex flex-1 flex-col">
       {/* The actions: the gold Galaxy CTA (One Sun), the listen pair (Playlist +
@@ -160,6 +164,14 @@ export function HomeLinkHub() {
         <Link className={linkClassName} to="/mixtapes">
           Mixtapes
         </Link>
+        {galaxiesLive ? (
+          <>
+            <Dot />
+            <Link className={linkClassName} to="/galaxies">
+              Galaxies
+            </Link>
+          </>
+        ) : undefined}
         <Dot />
         <Link className={linkClassName} to="/docs">
           Docs

@@ -37,6 +37,7 @@ import {
 import { fluncleAsciiLogo, fluncleDescription } from "@/lib/identity";
 import { jsonLdScript } from "@/lib/json-ld";
 import { type FeedItem } from "@/lib/mixtapes";
+import { isGalaxyMapFullyNamed } from "@/lib/server/galaxies-map";
 import { getLiveState } from "@/lib/server/live";
 import { listTracks } from "@/lib/server/tracks";
 import { fetchTracks, type TracksResponse } from "@/lib/tracks";
@@ -56,15 +57,19 @@ type HomeSearch = {
 // isn't on the first page (it usually isn't, once newer findings land before
 // their footage does). Same ordering as the stories feed, so it lines up.
 const fetchHomeData = createServerFn({ method: "GET" }).handler(async () => {
-  const [page, latestStory, live] = await Promise.all([
+  const [page, latestStory, live, galaxiesLive] = await Promise.all([
     listTracks({ includeMixtapes: true, limit: pageSize }),
     listTracks({ hasVideo: true, limit: 1 }),
     // The live-set callout, read server-side so the banner SSRs with no flash
     // (staleness already applied). Offline almost always — a quiet, cheap read.
     getLiveState(),
+    // The browse-by-feel launch gate (decision 5): the dev-row Galaxies link stays
+    // dark until the whole sonic map is named, so the homepage never links a lens
+    // that 404s. One cheap COUNT; lights up the moment the last name lands.
+    isGalaxyMapFullyNamed(),
   ]);
 
-  return { ...page, live, newestStoryLogId: latestStory.tracks[0]?.logId };
+  return { ...page, galaxiesLive, live, newestStoryLogId: latestStory.tracks[0]?.logId };
 });
 
 // Route options follow TanStack's create-route-property-order (each step feeds the
@@ -372,7 +377,7 @@ function HomePage() {
               )}
               {/* The link hub: actions, then the quiet links pushed to the
                   bottom of the column. */}
-              <HomeLinkHub />
+              <HomeLinkHub galaxiesLive={initialPage.galaxiesLive} />
             </aside>
 
             <section aria-labelledby="playlist-title" className="flex min-w-0 flex-col lg:min-h-0">

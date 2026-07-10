@@ -72,9 +72,6 @@ export type ApiFailure = {
   message: string;
 };
 
-/** The four vibe-map galaxies (the admin tagging quadrants). The web keeps the runtime `GALAXIES` map + `GalaxyMeta`. */
-export type Galaxy = "astral" | "lunar" | "nebular" | "solar";
-
 // ── Artist ───────────────────────────────────────────────────────────────────
 
 /**
