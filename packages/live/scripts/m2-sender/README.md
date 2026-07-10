@@ -58,10 +58,14 @@ On each committed flip, one UDP datagram of JSON to `FLUNCLE_VJ_HOST:FLUNCLE_VJ_
 `deck` is the human deck number (`1` or `2`). With `--identity-cmd`, the command's JSON stdout is attached additively:
 
 ```json
-{ "type": "transition", "deck": 2, "identity": { "trackId": "…", "title": "…" } }
+{
+  "type": "transition",
+  "deck": 2,
+  "identity": { "title": "…", "artist": "…", "bpm": 173, "key": "5A" }
+}
 ```
 
-If the identity command is absent, fails, times out (5s), or emits non-JSON, the transition is still sent — just without the `identity` key.
+**A `{deck}` placeholder** in `--identity-cmd` is substituted with the live deck number, so the operator passes `--identity-cmd 'deckwatch.py --once --deck {deck}'` and reads only the deck that flipped. The identity is **pre-read the moment a deck becomes the debounce candidate** (before the flip commits) and cached, so the OCR round-trip is off the critical path when the transition is sent. If the pre-read is missing/stale/failed the sender falls back to reading at commit; if that fails too the transition is still sent — just without the `identity` key. **Identity failure never suppresses a transition.**
 
 ## Environment
 
@@ -85,7 +89,7 @@ FLUNCLE_VJ_HOST=<vj-host> FLUNCLE_VJ_PORT=9000 \
 Flags:
 
 - `--port-substr <str>` — substring identifying the controller MIDI port (default `DDJ-FLX4`).
-- `--identity-cmd <cmd>` — optional shell command whose JSON stdout is attached to each transition. Fully decoupled: the sender imports **no** deck/OCR module, so it does not depend on any sibling PR that may own identity capture.
+- `--identity-cmd <cmd>` — optional shell command whose JSON stdout is attached to each transition (a `{deck}` placeholder → the live deck number; pre-read on the debounce candidate and cached). Fully decoupled: the sender imports **no** deck/OCR module, so it treats the command's stdout as opaque JSON.
 
 ## Testing the pure logic
 

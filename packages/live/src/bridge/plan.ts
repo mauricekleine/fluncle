@@ -44,6 +44,10 @@ type PlanMember = {
   logId: string;
   title: string;
   artists: string[];
+  /** Fluncle's stored DSP bpm + scale-text key — carried on the VJ-pool feed rows only, so
+   * the deck-identity resolver can read them as coarse guards (see contract's PlanEntry). */
+  bpm?: number | null;
+  key?: string | null;
   durationMs?: number;
   videoVehicle?: string;
   videoGrain?: string;
@@ -299,7 +303,9 @@ async function fetchMembersByHandle(handle: string): Promise<PlanMember[] | null
 async function enrich(member: PlanMember): Promise<PlanEntry> {
   const entry: PlanEntry = {
     artists: member.artists,
+    bpm: member.bpm,
     durationMs: member.durationMs,
+    key: member.key,
     logId: member.logId,
     title: member.title,
     videoGrain: member.videoGrain,
@@ -407,8 +413,16 @@ async function mapLimit<T, R>(items: T[], limit: number, fn: (t: T) => Promise<R
   return out;
 }
 
-/** One public feed row (`/api/tracks`) — only the fields the VJ pool builds a member from. */
-type TrackFeedRow = { logId?: string; title?: string; artists?: string[]; durationMs?: number };
+/** One public feed row (`/api/tracks`) — only the fields the VJ pool builds a member from.
+ * `bpm`/`key` (Fluncle's DSP bpm + scale-text key) ride along as the resolver's coarse guards. */
+type TrackFeedRow = {
+  logId?: string;
+  title?: string;
+  artists?: string[];
+  durationMs?: number;
+  bpm?: number;
+  key?: string;
+};
 /** A page of the public feed: the rows plus the opaque base64 cursor to the next page. */
 type TrackFeedPage = { tracks?: TrackFeedRow[]; nextCursor?: string };
 
@@ -481,7 +495,9 @@ function rowToMember(row: TrackFeedRow): PlanMember | null {
   }
   return {
     artists: row.artists ?? [],
+    bpm: row.bpm ?? null,
     durationMs: row.durationMs,
+    key: row.key ?? null,
     logId: row.logId,
     title: row.title ?? "",
   };

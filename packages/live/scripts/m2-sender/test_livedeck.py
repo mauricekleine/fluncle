@@ -31,6 +31,7 @@ _spec.loader.exec_module(ld)
 DeckControls = ld.DeckControls
 LiveDeckSelector = ld.LiveDeckSelector
 CROSSFADER_CENTRE = ld.CROSSFADER_CENTRE
+select_cached_identity = ld.select_cached_identity
 
 
 def decks(
@@ -214,3 +215,71 @@ def test_crossfader_slam_swaps_the_live_deck():
     # Crossfader hard right -> Deck 2.
     got = drive(sel, both, 127, start=1.0)
     assert got == [2]
+
+
+# ── the pending accessor (the pre-read trigger) ──────────────────────────────
+
+
+def test_pending_exposes_the_debounce_candidate_before_commit():
+    """A challenger in the debounce window is visible as `pending` BEFORE it commits."""
+    sel = LiveDeckSelector()
+    xf = CROSSFADER_CENTRE
+
+    # Acquire Deck 1 cold.
+    assert sel.update(decks(d1_fader=127, d1_low=127), xf, now=0.0) is None
+    assert sel.pending == 1  # Deck 1 is the debounce candidate...
+    assert sel.update(decks(d1_fader=127, d1_low=127), xf, now=0.3) == 1  # ...then commits
+    assert sel.pending is None  # cleared on commit
+
+    # Now a clean challenger: Deck 2 up, Deck 1 down. It becomes pending, then commits.
+    swap = decks(d1_fader=0, d2_fader=127, d2_low=127)
+    assert sel.update(swap, xf, now=1.0) is None
+    assert sel.pending == 2  # the pre-read fires HERE, off the critical path
+    assert sel.update(swap, xf, now=1.4) == 2
+    assert sel.pending is None
+
+
+def test_pending_clears_when_a_flipflop_challenger_vanishes():
+    """A challenger that disappears inside the debounce clears `pending` (no stale pre-read)."""
+    sel = LiveDeckSelector()
+    xf = CROSSFADER_CENTRE
+    sel.update(decks(d1_fader=127, d1_low=127), xf, now=0.0)
+    sel.update(decks(d1_fader=127, d1_low=127), xf, now=0.3)  # commit Deck 1
+    # Deck 2 challenges (Deck 1 bass killed) -> pending 2.
+    sel.update(decks(d1_fader=127, d1_low=0, d2_fader=127, d2_low=127), xf, now=1.0)
+    assert sel.pending == 2
+    # Deck 1 bass returns before the debounce elapses -> challenger gone, pending cleared.
+    sel.update(decks(d1_fader=127, d1_low=127, d2_fader=127, d2_low=127), xf, now=1.1)
+    assert sel.pending is None
+    assert sel.live == 1
+
+
+# ── select_cached_identity (the pre-read cache, pure) ────────────────────────
+
+
+def test_cached_identity_fresh_hit_is_returned():
+    ident = {"deck": 2, "title": "Strength", "artist": "Technimatic"}
+    cache = {2: (ident, 100.0)}
+    assert select_cached_identity(cache, 2, now=101.0, max_age_s=5.0) is ident
+
+
+def test_cached_identity_miss_returns_none():
+    assert select_cached_identity({}, 1, now=0.0, max_age_s=5.0) is None
+    # A read for a different deck is a miss (each deck caches independently).
+    assert select_cached_identity({2: ({}, 0.0)}, 1, now=0.0, max_age_s=5.0) is None
+
+
+def test_cached_identity_stale_read_falls_back_to_none():
+    cache = {1: ({"title": "old"}, 100.0)}
+    # 6s old with a 5s ceiling -> stale -> None (the caller re-reads at commit).
+    assert select_cached_identity(cache, 1, now=106.0, max_age_s=5.0) is None
+    # Exactly at the boundary is still fresh.
+    assert select_cached_identity(cache, 1, now=105.0, max_age_s=5.0) is not None
+
+
+def test_cached_identity_default_max_age_is_used():
+    ident = {"title": "t"}
+    cache = {1: (ident, 0.0)}
+    # DEFAULT_PREREAD_MAX_AGE_S applies when max_age_s is omitted.
+    assert select_cached_identity(cache, 1, now=ld.DEFAULT_PREREAD_MAX_AGE_S) is ident
+    assert select_cached_identity(cache, 1, now=ld.DEFAULT_PREREAD_MAX_AGE_S + 0.1) is None

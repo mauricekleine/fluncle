@@ -22,6 +22,7 @@ comes back blank, that permission is missing — this script reports it rather t
 
 Usage:
   deckwatch.py --once            # OCR both decks now, print ONE JSON object, exit
+  deckwatch.py --once --deck 2   # OCR now, print ONLY deck 2 as a flat {deck,title,…} object
   deckwatch.py --watch           # emit a JSON line per deck ONLY when its strip changes
   deckwatch.py --once --debug    # include raw OCR lines + timings on stderr
 """
@@ -404,10 +405,22 @@ def deck_payload(index, fields):
 # ── Entry points ────────────────────────────────────────────────────────────────
 
 
-def run_once(debug=False):
+def run_once(debug=False, deck=None):
+    """OCR both decks once and print one JSON object.
+
+    Default (`--once`): the both-decks envelope `{"t":…,"decks":[…]}` (unchanged).
+    With `--deck N`: emit ONLY deck N's fields as a FLAT object
+    `{"deck":N,"title":…,"artist":…,"bpm":…,"key":…}` — the exact shape the transition
+    datagram's `identity` wants, so `sender.py --identity-cmd 'deckwatch.py --once --deck {deck}'`
+    can attach it verbatim.
+    """
     decks, _ = read_decks(debug=debug)
     if decks is None:
         return 1
+    if deck is not None:
+        line = deck_payload(deck - 1, decks[deck - 1])
+        print(json.dumps(line, ensure_ascii=False))
+        return 0
     payload = {"t": int(time.time() * 1000), "decks": [deck_payload(i, d) for i, d in enumerate(decks)]}
     print(json.dumps(payload, ensure_ascii=False))
     return 0
@@ -448,11 +461,18 @@ def main():
     g.add_argument("--once", action="store_true", help="OCR both decks once, print one JSON object")
     g.add_argument("--watch", action="store_true", help="emit a JSON line per deck when it changes")
     ap.add_argument("--interval", type=float, default=0.4, help="--watch poll seconds (default 0.4)")
+    ap.add_argument(
+        "--deck",
+        type=int,
+        choices=(1, 2),
+        default=None,
+        help="with --once, emit ONLY this deck's fields as a flat {deck,title,artist,bpm,key} object",
+    )
     ap.add_argument("--debug", action="store_true", help="raw OCR lines + timings on stderr")
     args = ap.parse_args()
 
     if args.once:
-        return run_once(debug=args.debug)
+        return run_once(debug=args.debug, deck=args.deck)
     try:
         run_watch(args.interval, debug=args.debug)
     except KeyboardInterrupt:

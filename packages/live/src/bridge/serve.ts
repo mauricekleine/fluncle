@@ -21,6 +21,7 @@ import {
   type ShowCommand,
 } from "../contract";
 import { fingerprintPlan, fingerprintPlanFullSong } from "./fingerprint";
+import { type Finding, resolveDeck } from "./identity";
 import { type Fingerprint } from "./matcher";
 import { type AdminAuth, buildPlan, isAllPlan, loadAdminAuth } from "./plan";
 import { REMOTE_HTML } from "./remote";
@@ -30,7 +31,9 @@ import {
   createShuffleBag,
   mulberry32,
   resolveVjTransitionPort,
+  type ShuffleBag,
   startVjTransitionListener,
+  type VjTransition,
 } from "./vj";
 
 /** State-stream cadence (30Hz — the low end of the RFC's 30-60Hz). */
@@ -83,6 +86,54 @@ export function shouldFingerprintFullSong(
   }
   const flag = flagEnv?.trim().toLowerCase();
   return flag === "1" || flag === "true";
+}
+
+/**
+ * The RANDOM-VJ transition decision — the ONE code path that CLOSES the live-visuals loop.
+ * A transition datagram either carries the IDENTITY of the track that just went live or it
+ * doesn't; either way this returns the plan index to `goto`:
+ *
+ *   * identity present + resolves to a finding in the pool → its `index` (the canonical case:
+ *     the wall shows THAT finding). The matched index is `take`n from the bag so a later random
+ *     draw won't re-show it this cycle.
+ *   * no identity, or identity that resolves to nothing (OCR noise, or the DJ played a track
+ *     that simply isn't a finding) → the next shuffle-bag draw (graceful degradation — a
+ *     generic beautiful thing, never the WRONG specific finding).
+ *
+ * Pure (the resolver + bag are injected/deterministic), so the match-vs-fallback decision is
+ * unit-tested against a small fake plan without a socket. `plan` is a `Finding[]` structurally
+ * (`PlanEntry` carries the resolver's `bpm`/`key` guards), so `resolveDeck` aligns its returned
+ * `index` exactly with the plan index `goto` expects.
+ */
+export type VjSelection =
+  | { index: number; via: "match"; logId: string; score: number; reason: string }
+  | { index: number; via: "fallback"; reason: string };
+
+export function selectVjIndex(
+  transition: VjTransition,
+  plan: readonly Finding[],
+  bag: ShuffleBag,
+): VjSelection {
+  const identity = transition.identity;
+  if (!identity) {
+    return { index: bag.next(), reason: "no identity in datagram", via: "fallback" };
+  }
+  const match = resolveDeck(identity, plan as Finding[]);
+  if (!match) {
+    return {
+      index: bag.next(),
+      reason: `no archive match for "${identity.title}" / "${identity.artist}"`,
+      via: "fallback",
+    };
+  }
+  bag.take(match.index);
+  return {
+    index: match.index,
+    logId: plan[match.index]?.logId ?? "?",
+    reason: match.reason,
+    score: match.score,
+    via: "match",
+  };
 }
 
 /** Build the plan (mixtape logId or plan handle) and fingerprint each planned finding. */
@@ -141,7 +192,20 @@ async function main(): Promise<void> {
     const bag = createShuffleBag(plan.length, mulberry32(Date.now()));
     vjListener = await startVjTransitionListener({
       onError: (err) => console.error("bridge: VJ transition socket —", err),
-      onTransition: () => state.ingest({ cmd: "goto", index: bag.next() }, Date.now()),
+      onTransition: (msg) => {
+        const sel = selectVjIndex(msg, plan, bag);
+        if (sel.via === "match") {
+          console.error(
+            `bridge: VJ deck ${msg.deck} → MATCH ${sel.logId} (idx ${sel.index}, ` +
+              `score ${sel.score.toFixed(2)}: ${sel.reason})`,
+          );
+        } else {
+          console.error(
+            `bridge: VJ deck ${msg.deck} → shuffle idx ${sel.index} (fallback: ${sel.reason})`,
+          );
+        }
+        state.ingest({ cmd: "goto", index: sel.index }, Date.now());
+      },
       port: resolveVjTransitionPort(),
     });
     console.error(

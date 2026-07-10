@@ -67,6 +67,34 @@ def clamp(value: float, low: float, high: float) -> float:
     return max(low, min(high, value))
 
 
+#: How long a pre-read identity stays usable (seconds). A candidate becomes the debounce
+#: pending deck ~DEBOUNCE_S before it commits, so a read a few seconds old is still the same
+#: track; past this the sender falls back to reading identity again at commit.
+DEFAULT_PREREAD_MAX_AGE_S = 5.0
+
+
+def select_cached_identity(
+    cache: dict[int, tuple[object, float]],
+    deck: int,
+    now: float,
+    max_age_s: float = DEFAULT_PREREAD_MAX_AGE_S,
+) -> Optional[object]:
+    """Return the pre-read identity for ``deck`` if present AND fresh, else ``None``.
+
+    Pure — no I/O, no clock (``now`` is injected). ``cache`` maps a deck number to
+    ``(identity, read_at_monotonic)``. A missing entry or one older than ``max_age_s`` returns
+    ``None`` so the caller falls back to a commit-time read. Extracted here so the
+    pre-read-vs-fallback decision is unit-tested without a subprocess or a socket.
+    """
+    entry = cache.get(deck)
+    if entry is None:
+        return None
+    identity, read_at = entry
+    if now - read_at > max_age_s:
+        return None
+    return identity
+
+
 @dataclass
 class DeckControls:
     """The mixer control values for a single deck (7-bit MSB, 0..127).
@@ -129,6 +157,15 @@ class LiveDeckSelector:
     def _clear_pending(self) -> None:
         self._pending = None
         self._pending_since = None
+
+    @property
+    def pending(self) -> Optional[int]:
+        """The deck currently in the debounce window — a challenger that has cleared the
+        floor/margin gate but NOT yet committed — or ``None``. The sender reads this after each
+        :meth:`update` to pre-read that deck's identity BEFORE the flip commits, taking the OCR
+        round-trip off the critical path. Read-only view of the internal debounce state.
+        """
+        return self._pending
 
     def scores(self, decks: dict[int, DeckControls], xfader: int) -> dict[int, float]:
         """Audibility score per deck — pure, side-effect free (handy for logs)."""

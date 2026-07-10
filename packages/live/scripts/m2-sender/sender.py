@@ -38,8 +38,10 @@ from typing import Optional
 
 from livedeck import (
     CROSSFADER_CENTRE,
+    DEFAULT_PREREAD_MAX_AGE_S,
     DeckControls,
     LiveDeckSelector,
+    select_cached_identity,
 )
 
 # ── Validated control map (7-bit MSB CC numbers) ───────────────────────────
@@ -95,19 +97,22 @@ def resolve_target() -> tuple[str, int]:
     return host, port
 
 
-def fetch_identity(identity_cmd: Optional[str]) -> Optional[object]:
-    """Run an arbitrary identity command and parse its stdout as JSON.
+def fetch_identity(identity_cmd: Optional[str], deck: int) -> Optional[object]:
+    """Run the identity command for ``deck`` and parse its stdout as JSON.
 
-    Fully decoupled by design: this shells out to whatever command the operator
-    passes and treats its stdout as opaque JSON. It imports NO deck/OCR module —
-    a sibling PR owns that and may not be merged. On any failure we log and drop
-    identity (a transition still goes out; identity is additive).
+    Fully decoupled by design: this shells out to whatever command the operator passes and
+    treats its stdout as opaque JSON. It imports NO deck/OCR module. A ``{deck}`` placeholder
+    in the command is substituted with the live deck number FIRST, so the operator can pass
+    ``--identity-cmd 'deckwatch.py --once --deck {deck}'`` and read only the deck that flipped.
+    On any failure (missing command, timeout, non-zero exit, non-JSON) we log and return
+    ``None`` — a transition still goes out; identity is additive.
     """
     if not identity_cmd:
         return None
+    cmd = identity_cmd.replace("{deck}", str(deck))
     try:
         proc = subprocess.run(
-            identity_cmd,
+            cmd,
             shell=True,
             capture_output=True,
             text=True,
@@ -137,16 +142,21 @@ def send_transition(
     host: str,
     port: int,
     deck: int,
-    identity_cmd: Optional[str],
+    identity: Optional[object],
 ) -> None:
-    """Emit one UDP datagram: {"type":"transition","deck":N[,"identity":…]}."""
+    """Emit one UDP datagram: {"type":"transition","deck":N[,"identity":…]}.
+
+    ``identity`` is already resolved (from the pre-read cache or a commit-time read) — this
+    function does no I/O beyond the socket send, so identity failure can NEVER suppress a
+    transition.
+    """
     packet: dict[str, object] = {"type": "transition", "deck": deck}
-    identity = fetch_identity(identity_cmd)
     if identity is not None:
         packet["identity"] = identity
     payload = json.dumps(packet).encode("utf-8")
     sock.sendto(payload, (host, port))
-    eprint(f"transition -> deck {deck}  ({host}:{port})")
+    tag = "with identity" if identity is not None else "no identity"
+    eprint(f"transition -> deck {deck}  ({host}:{port})  [{tag}]")
 
 
 def open_input(port_substr: str):
@@ -178,6 +188,13 @@ def run(port_substr: str, identity_cmd: Optional[str]) -> None:
     decks = {1: DeckControls(), 2: DeckControls()}
     xfader = CROSSFADER_CENTRE
 
+    # Pre-read cache: deck -> (identity, read_at_monotonic). Filled the moment a deck becomes
+    # the debounce CANDIDATE (before the flip commits), so the OCR round-trip is OFF the
+    # critical path when we send. `preread_for` tracks the deck we already pre-read for the
+    # CURRENT candidacy so we don't re-OCR on every CC message during the debounce window.
+    identity_cache: dict[int, tuple[object, float]] = {}
+    preread_for: Optional[int] = None
+
     inport = open_input(port_substr)
     eprint(f"sending transitions to {host}:{port}")
 
@@ -207,8 +224,30 @@ def run(port_substr: str, identity_cmd: Optional[str]) -> None:
             continue
 
         committed = selector.update(decks, xfader, now=time.monotonic())
+
+        # PRE-READ: a deck just became the debounce candidate — read its identity now (once per
+        # candidacy) and cache it, so it is ready the instant the flip commits. A failed pre-read
+        # (None) is NOT cached, so commit falls back to a fresh read.
+        pending = selector.pending
+        if pending is not None and pending != preread_for:
+            identity = fetch_identity(identity_cmd, pending)
+            if identity is not None:
+                identity_cache[pending] = (identity, time.monotonic())
+            preread_for = pending
+        elif pending is None:
+            preread_for = None
+
         if committed is not None:
-            send_transition(sock, host, port, committed, identity_cmd)
+            # ATTACH ON COMMIT: prefer the fresh pre-read; else read at commit; else send none.
+            # Identity failure must NEVER suppress the transition.
+            identity = select_cached_identity(
+                identity_cache, committed, time.monotonic(), DEFAULT_PREREAD_MAX_AGE_S
+            )
+            if identity is None:
+                identity = fetch_identity(identity_cmd, committed)
+            send_transition(sock, host, port, committed, identity)
+            identity_cache.pop(committed, None)  # consume it; the next candidacy re-reads
+            preread_for = None
 
 
 def main() -> None:
@@ -229,8 +268,10 @@ def main() -> None:
         default=None,
         help=(
             "optional shell command whose JSON stdout is attached to each "
-            "transition packet under 'identity'. Fully decoupled — the sender "
-            "imports no deck/OCR module."
+            "transition packet under 'identity'. A {deck} placeholder is replaced "
+            "with the live deck number, e.g. 'deckwatch.py --once --deck {deck}'. "
+            "Read for the debounce candidate BEFORE the flip and cached, so the read "
+            "is off the critical path. Fully decoupled — the sender imports no deck/OCR module."
         ),
     )
     args = parser.parse_args()
