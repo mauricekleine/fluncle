@@ -97,6 +97,29 @@ export async function approveSubmissionCommand(
   console.log(`Approved ${formatTrackLine(submission)}.`);
 }
 
+// `admin submissions triage <id> --verdict <text>` — write the pre-chew advisory
+// verdict onto a PENDING submission (the `fluncle-triage` box sweep's delivery step).
+// AGENT tier: it moves no approve/reject authority, so the box's agent token drives it.
+export async function triageSubmissionCommand(
+  submissionId: string,
+  verdict: string,
+  options: JsonOptions = {},
+): Promise<void> {
+  const response = await adminApiPost<SubmissionResponse>(
+    `/api/admin/submissions/${encodeURIComponent(submissionId)}/triage`,
+    { verdict },
+  );
+
+  if (options.json) {
+    printJson({ ok: true, submission: response.submission });
+    return;
+  }
+
+  console.log(
+    `Triaged ${formatTrackLine(response.submission)}: ${response.submission.triageVerdict ?? ""}`,
+  );
+}
+
 async function fetchSubmission(submissionId: string): Promise<Submission> {
   const response = await adminApiGet<SubmissionResponse>(
     `/api/admin/submissions/${encodeURIComponent(submissionId)}`,

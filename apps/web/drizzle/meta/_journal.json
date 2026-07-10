@@ -414,6 +414,13 @@
       "when": 1783640055147,
       "tag": "0058_blue_mattie_franklin",
       "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "6",
+      "when": 1783664997739,
+      "tag": "0059_lame_deathbird",
+      "breakpoints": true
     }
   ]
 }

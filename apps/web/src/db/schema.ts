@@ -495,6 +495,12 @@ export const submissions = sqliteTable(
     status: text("status", { enum: ["pending", "approved", "rejected"] }).notNull(),
     submitterHash: text("submitter_hash").notNull(),
     title: text("title").notNull(),
+    // The pre-chew triage verdict — a short one-line "looks like a find / already
+    // logged / not our lane" read the on-box `fluncle-triage` sweep authors for a
+    // pending submission before the operator gets to it. Operator-internal (never
+    // public), advisory only: approve/reject authority never moves. NULL until the
+    // sweep visits (or forever, if the sweep is not installed).
+    triageVerdict: text("triage_verdict"),
     userId: text("user_id"),
   },
   (table) => [

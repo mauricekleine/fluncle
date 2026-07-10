@@ -312,7 +312,7 @@ const fetchSubmissions = createServerFn({ method: "GET" }).handler(
   },
 );
 
-type BoardSearch = { mix: MixFilter; stage: Worklist };
+type BoardSearch = { mix: MixFilter; stage: Worklist; submission?: string };
 
 // Route options follow TanStack's create-route-property-order (each step feeds the
 // next's inferred types), which isn't alphabetical — so sort-keys is off here.
@@ -327,6 +327,10 @@ export const Route = createFileRoute("/admin/findings")({
       typeof search.stage === "string" && WORKLIST_KEYS.has(search.stage as Worklist)
         ? (search.stage as Worklist)
         : "all",
+    // The attention queue's submission-row deep-link (`?submission=<id>`): present ⇒
+    // open the review tray with that candidate focused. A bare `?submission=` (the
+    // pure model's fallback when the row had no id) still opens the tray.
+    ...(typeof search.submission === "string" ? { submission: search.submission } : {}),
   }),
   beforeLoad: async () => {
     await ensureAdmin();
@@ -340,7 +344,11 @@ export const Route = createFileRoute("/admin/findings")({
 
 function AdminBoardPage() {
   const { board: initial } = Route.useLoaderData();
-  const { mix: activeMix, stage: activeWorklist } = Route.useSearch();
+  const {
+    mix: activeMix,
+    stage: activeWorklist,
+    submission: focusSubmissionId,
+  } = Route.useSearch();
   const navigate = Route.useNavigate();
   const queryClient = useQueryClient();
 
@@ -392,7 +400,28 @@ function AdminBoardPage() {
   // at the board's top on invalidation with its enrichment cells still open — the
   // crons fill them in.
   const [addOpen, setAddOpen] = useState(false);
-  const [trayOpen, setTrayOpen] = useState(false);
+  // Seed the tray open from the attention-queue deep-link (`?submission=<id>`) so a
+  // landing straight from the /admin queue row shows the candidate at once.
+  const [trayOpen, setTrayOpen] = useState(() => focusSubmissionId !== undefined);
+
+  // A deep-link that arrives after mount (the operator clicks a queue row in another
+  // tab, or navigates in-app) still opens the tray.
+  useEffect(() => {
+    if (focusSubmissionId !== undefined) {
+      setTrayOpen(true);
+    }
+  }, [focusSubmissionId]);
+
+  // Closing the tray drops the deep-link param so a reload/back doesn't re-open it.
+  const onTrayOpenChange = useCallback(
+    (open: boolean) => {
+      setTrayOpen(open);
+      if (!open && focusSubmissionId !== undefined) {
+        void navigate({ search: (previous) => ({ ...previous, submission: undefined }) });
+      }
+    },
+    [focusSubmissionId, navigate],
+  );
 
   const { data: submissions = [], isFetching: submissionsFetching } = useQuery({
     queryFn: () => fetchSubmissions(),
@@ -889,9 +918,10 @@ function AdminBoardPage() {
       <AddFindingDialog onAdded={onFindingAdded} onOpenChange={setAddOpen} open={addOpen} />
 
       <SubmissionsTray
+        focusId={focusSubmissionId}
         loading={submissionsFetching}
         onChanged={onSubmissionsChanged}
-        onOpenChange={setTrayOpen}
+        onOpenChange={onTrayOpenChange}
         open={trayOpen}
         submissions={submissions}
       />

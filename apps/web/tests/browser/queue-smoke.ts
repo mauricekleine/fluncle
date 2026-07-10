@@ -100,6 +100,7 @@ const QA_IDS = {
   mixtape: "qa-queue-mixtape",
   mixtapeLeg: "qa-queue-mix-yt",
   promoted: "qa-queue-promoted",
+  submission: "qa-queue-submission",
   take: "qa-queue-take",
 } as const;
 
@@ -176,6 +177,17 @@ async function seedQueueRows(db: Client): Promise<void> {
           values (?, ?, 'youtube', 'published', 'https://youtu.be/qa', ?, ?, ?)
           on conflict(mixtape_id, platform) do nothing`,
   });
+  // A pending crew submission — the submission queue source, carrying a pre-chew
+  // triage verdict so the row's advisory line renders.
+  await db.execute({
+    args: [QA_IDS.submission, iso(now - 3 * 3_600_000)],
+    sql: `insert or replace into submissions
+            (id, spotify_track_id, spotify_url, title, artists_json, source, status,
+             created_at, submitter_hash, triage_verdict)
+          values (?, '0000000000000000000000', 'https://open.spotify.com/track/0000000000000000000000',
+             'QA Rolling Submission', '["QA Selector"]', 'web', 'pending', ?, 'qa-hash',
+             'looks like a find — not yet logged')`,
+  });
 }
 
 async function cleanupQueueRows(db: Client): Promise<void> {
@@ -186,6 +198,7 @@ async function cleanupQueueRows(db: Client): Promise<void> {
   await db.execute(`delete from mixtapes where id = '${QA_IDS.mixtape}'`);
   await db.execute(`delete from recording_cues where id = '${QA_IDS.cue}'`);
   await db.execute(`delete from recordings where id in ('${QA_IDS.promoted}', '${QA_IDS.take}')`);
+  await db.execute(`delete from submissions where id = '${QA_IDS.submission}'`);
 }
 
 async function drive(browser: Awaited<ReturnType<typeof launchBrowser>>): Promise<void> {

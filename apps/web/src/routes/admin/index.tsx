@@ -8,6 +8,7 @@ import {
   MicrophoneStageIcon,
   PaperPlaneTiltIcon,
   ProhibitIcon,
+  TrayIcon,
 } from "@phosphor-icons/react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, redirect } from "@tanstack/react-router";
@@ -711,6 +712,7 @@ const SOURCE_ICONS: Record<AttentionSource, ComponentType<{ className?: string }
   "drip-empty": InstagramIcon,
   "post-tiktok": TiktokIcon,
   "post-youtube": YoutubeIcon,
+  submission: TrayIcon,
   "tiktok-draft": TiktokIcon,
 };
 
@@ -723,6 +725,7 @@ const SOURCE_LABELS: Record<AttentionSource, string> = {
   "drip-empty": "Instagram drip",
   "post-tiktok": "TikTok",
   "post-youtube": "YouTube",
+  submission: "Submission",
   "tiktok-draft": "TikTok draft",
 };
 
@@ -892,6 +895,12 @@ function QueueRow({
             );
           })}
         </div>
+        {/* The pre-chew sweep's advisory verdict — a quiet second line under the meta,
+            never competing with the row's primary [Review] action (advisory, not a
+            decision). Only submission rows carry it, and only once the sweep has run. */}
+        {item.verdict ? (
+          <p className="mt-0.5 truncate text-[11px] italic text-muted-foreground">{item.verdict}</p>
+        ) : undefined}
       </div>
 
       <div className="flex items-center gap-1 max-sm:w-full max-sm:justify-end">

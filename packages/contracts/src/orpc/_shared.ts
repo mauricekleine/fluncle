@@ -453,5 +453,8 @@ export const SubmissionSchema = z
     spotifyUrl: z.string(),
     status: z.enum(["approved", "pending", "rejected"]),
     title: z.string(),
+    // The pre-chew triage verdict (the on-box `fluncle-triage` sweep's advisory
+    // one-liner). Operator-internal, absent until the sweep visits.
+    triageVerdict: z.string().optional(),
   })
   .meta({ id: "Submission" });

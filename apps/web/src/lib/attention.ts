@@ -22,6 +22,7 @@ export type AttentionSource =
   | "drip-empty"
   | "post-tiktok"
   | "post-youtube"
+  | "submission"
   | "tiktok-draft";
 
 /** One row of the queue — artwork, the object line, data, and action routing. */
@@ -46,6 +47,8 @@ export type AttentionItem = {
   source: AttentionSource;
   title: string;
   trackId?: string;
+  /** A submission row's pre-chew triage verdict (the sweep's advisory one-liner). */
+  verdict?: string;
   /** How many dressed findings wait behind this one (the post-tiktok row's datum). */
   waiting?: number;
 };
@@ -120,12 +123,26 @@ export type ArtistReviewInput = {
   pending: number;
 };
 
+/** A pending crew submission awaiting the operator's approve/reject in the review tray. */
+export type SubmissionInput = {
+  artUrl?: string;
+  artists: string[];
+  /** The oldest-first anchor (when the crew sent it in). */
+  createdAt: string;
+  /** The submission id — the review-tray deep-link target and the row identity. */
+  id: string;
+  title: string;
+  /** The pre-chew sweep's advisory verdict, when it has visited (else undefined). */
+  triageVerdict?: string;
+};
+
 export type AttentionInputs = {
   artistReviews: ArtistReviewInput[];
   clipPosts: ClipPostInput[];
   clips: ClipInput[];
   mixtapes: MixtapeInput[];
   recordings: RecordingInput[];
+  submissions: SubmissionInput[];
 };
 
 /** When a pushed TikTok draft bounces: `updatedAt` + the shared 24h window. */
@@ -271,6 +288,22 @@ export function deriveAttentionItems(inputs: AttentionInputs, now: number): Atte
       reviewLinks: review.pending,
       source: "artist-review",
       title: review.name,
+    });
+  }
+
+  // Each pending crew submission is one row — a banger someone sent in, waiting on the
+  // operator's approve/reject. Oldest-first, deep-linking to the exact submission in the
+  // review tray (findings board). Its pre-chew triage verdict rides along as the row's
+  // advisory read when the sweep has visited; the decision itself stays operator-only.
+  for (const submission of inputs.submissions) {
+    items.push({
+      anchorAt: submission.createdAt,
+      ...(submission.artUrl ? { artUrl: submission.artUrl } : {}),
+      href: `/admin/findings?submission=${encodeURIComponent(submission.id)}`,
+      id: `submission:${submission.id}`,
+      source: "submission",
+      title: trackLabel(submission.artists, submission.title),
+      ...(submission.triageVerdict ? { verdict: submission.triageVerdict } : {}),
     });
   }
 
@@ -457,6 +490,11 @@ export function primaryFor(item: AttentionItem, now: number): PrimaryAction {
       return { kind: "push", label: "Push draft", platform: "tiktok" };
     case "post-youtube":
       return { kind: "push", label: "Post to YouTube", platform: "youtube" };
+    case "submission":
+      // Approve/reject lives in the review tray (a publish + a discard); the row
+      // deep-links there rather than deciding inline — publishing authority never
+      // moves onto the queue row.
+      return { href: item.href ?? "/admin/findings?submission=", kind: "open", label: "Review" };
     case "tiktok-draft": {
       const bounced = item.deadlineAt !== undefined && Date.parse(item.deadlineAt) <= now;
       // A pushed draft is finished in-app: copy the caption to paste there; re-push if bounced.
