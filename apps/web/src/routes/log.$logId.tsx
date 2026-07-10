@@ -16,8 +16,11 @@ import { jsonLdScript } from "@/lib/json-ld";
 import { isLogPageParam } from "@/lib/log-page-param";
 import {
   artistTitleLine,
-  definitionalProse,
+  definitionalProseSegments,
   definitionalSentences,
+  GALAXY_CLAUSE_LEAD,
+  GALAXY_CLAUSE_TAIL,
+  galaxyClauseLinkText,
   splitLogId,
 } from "@/lib/log-prose";
 import {
@@ -32,12 +35,12 @@ import { mixtapeSetVideoUrl, spotifyAlbumImageAtSize, trackMedia } from "@/lib/m
 import { type MixtapeDTO, mixtapeCoverUrl, mixtapeDisplayTitle } from "@/lib/mixtapes";
 import { resolveLogPageTarget } from "@/lib/server/log-resolver";
 import {
-  getRelatedTracks,
   getSimilarFindings,
   getTrackNeighbors,
   type TrackListItem,
   type TrackNeighbor,
 } from "@/lib/server/tracks";
+import { isGalaxyMapFullyNamed } from "@/lib/server/galaxies-map";
 import { getArtistSlugMap } from "@/lib/server/artists";
 import { fold } from "@/lib/server/track-match";
 import { TrackArtwork } from "@/components/track-artwork";
@@ -54,9 +57,13 @@ type LogPageData =
       // Name → slug for the finding's resolved artists — the artist-name links +
       // the `@id` stamped on the byArtist JSON-LD node (Unit 3).
       artistSlugs: Record<string, string>;
+      // The public launch gate (browse-by-feel RFC): the galaxy clause + its
+      // `/galaxies/<slug>` link render ONLY once the whole map is named. A partial or
+      // unnamed map keeps the clause dark (its pre-launch state), even for a placed
+      // finding whose own galaxy happens to be named.
+      galaxyReady: boolean;
       newer?: TrackNeighbor;
       older?: TrackNeighbor;
-      related: TrackNeighbor[];
       similar: TrackListItem[];
       track: TrackListItem;
     }
@@ -93,14 +100,14 @@ const fetchLogPage = createServerFn({ method: "GET" })
       return { logId: track.logId, status: "moved" };
     }
 
-    const [neighbors, related, similar, artistSlugs] = await Promise.all([
+    const [neighbors, similar, artistSlugs, galaxyReady] = await Promise.all([
       getTrackNeighbors(track),
-      getRelatedTracks(track),
       getSimilarFindings(track.logId),
       getArtistSlugMap(track.trackId),
+      isGalaxyMapFullyNamed(),
     ]);
 
-    return { ...neighbors, artistSlugs, related, similar, status: "found", track };
+    return { ...neighbors, artistSlugs, galaxyReady, similar, status: "found", track };
   });
 
 // Typed helper outside the route options: an inline head() that reads
@@ -182,20 +189,19 @@ function logHead(loaderData: LogPageData | undefined) {
     };
   }
 
-  const { artistSlugs, track } = loaderData;
+  const { artistSlugs, galaxyReady, track } = loaderData;
   const logId = track.logId as string;
   const media = trackMedia(logId);
   const pageUrl = logPageUrl(logId);
   const title = `${logId} · ${artistTitleLine(track)} · Fluncle`;
-  // galaxy: undefined at each prose/schema spread — the DTO `galaxy` is now the real
-  // `{ name, slug }` (browse-by-feel RFC), but the log-prose/log-schema inputs still
-  // carry the old vibe shape; the /log galaxy swap is Slice 4 (keep those files untouched).
-  const description = definitionalSentences({ ...track, galaxy: undefined, logId });
+  // The galaxy clause rides the prose + JSON-LD only behind the launch gate (browse-by-
+  // feel RFC): `galaxy` is the real `{ name, slug }` when the whole map is named, else
+  // undefined (dark, the pre-launch state). definitionalSentences ignores it; the richer
+  // definitionalProse the JSON-LD mirrors weaves it in.
+  const galaxy = galaxyReady ? track.galaxy : undefined;
+  const description = definitionalSentences({ ...track, logId });
   const imageUrl = spotifyAlbumImageAtSize(track.albumImageUrl, "large") ?? media.coverUrl;
-  const recording = musicRecordingJsonLd(
-    { ...track, artistSlugs, galaxy: undefined, logId },
-    imageUrl,
-  );
+  const recording = musicRecordingJsonLd({ ...track, artistSlugs, galaxy, logId }, imageUrl);
   // The social card: the per-finding OG image (the poster frame + treatment),
   // versioned by `updatedAt` so a re-enriched finding re-renders (the /api/og
   // response is immutable + edge-cached). The JSON-LD `image` above stays the
@@ -209,7 +215,7 @@ function logHead(loaderData: LogPageData | undefined) {
   // real timestamp (a fresh square crop counts as the upload moment).
   const videoSchema = track.videoUrl
     ? videoObjectJsonLd(
-        { ...track, galaxy: undefined, logId },
+        { ...track, galaxy, logId },
         {
           contentUrl: media.videoUrl,
           thumbnailUrl: imageUrl,
@@ -310,9 +316,13 @@ function LogPage() {
     return null;
   }
 
-  const { artistSlugs, newer, older, related, similar, track } = data;
+  const { artistSlugs, galaxyReady, newer, older, similar, track } = data;
   const logId = track.logId as string;
   const { sector, tail } = splitLogId(logId);
+  // The galaxy clause links into the lens only behind the launch gate (browse-by-feel
+  // RFC): the real `{ name, slug }` when the whole map is named, else undefined (dark).
+  const galaxy = galaxyReady ? track.galaxy : undefined;
+  const proseSegments = definitionalProseSegments({ ...track, galaxy, logId });
 
   return (
     <main className="log-plate-stage">
@@ -353,13 +363,34 @@ function LogPage() {
             })}
           </p>
           {/*
-            galaxy: undefined — the /log galaxy clause is deferred to Slice 4 (the /log
-            swap, browse-by-feel RFC). The DTO `galaxy` is now the real `{ name, slug }`
-            from `galaxy_id`, but the prose input still carries the old vibe shape; keep
-            log-prose.ts untouched (Slice 4 owns its re-source + `/galaxies/<slug>` link).
+            The definitional prose, rendered from ordered segments so the galaxy clause
+            links its name to `/galaxies/<slug>` (browse-by-feel RFC) while the JSON-LD
+            description reads the same text plain (log-schema's `definitionalProse`, the
+            mirror). Segments join with a single space, matching that string.
           */}
           <p className="log-definition-prose">
-            {definitionalProse({ ...track, galaxy: undefined, logId })}
+            {proseSegments.map((segment, index) => (
+              <Fragment
+                key={segment.kind === "galaxy" ? `galaxy-${segment.slug}` : `text-${index}`}
+              >
+                {index > 0 ? " " : null}
+                {segment.kind === "galaxy" ? (
+                  <>
+                    {GALAXY_CLAUSE_LEAD}
+                    <Link
+                      className="log-galaxy-link"
+                      params={{ slug: segment.slug }}
+                      to="/galaxies/$slug"
+                    >
+                      {galaxyClauseLinkText(segment.name)}
+                    </Link>
+                    {GALAXY_CLAUSE_TAIL}
+                  </>
+                ) : (
+                  segment.text
+                )}
+              </Fragment>
+            ))}
           </p>
         </section>
 
@@ -473,22 +504,12 @@ function LogPage() {
           </section>
         ) : undefined}
 
-        {track.galaxy && related.length > 0 ? (
-          <section aria-label={`More in the ${track.galaxy.name} galaxy`} className="log-related">
-            <h2>More in the {track.galaxy.name} galaxy</h2>
-            <ul className="log-related-list">
-              {related.map((finding) => (
-                <li key={finding.logId}>
-                  <Link params={{ logId: finding.logId }} to="/log/$logId">
-                    <span className="log-related-coordinate">{finding.logId}</span>
-                    <span className="log-related-line">{artistTitleLine(finding)}</span>
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          </section>
-        ) : undefined}
-
+        {/*
+          The old "More in the {galaxy} galaxy" related row is removed (browse-by-feel
+          RFC, Slice 4): its members duplicated "Close in sound" above, and the way into
+          the galaxy now rides the linked prose clause. Register differentiation stays
+          clean — "Close in sound" = these specific tracks; the prose clause = the region.
+        */}
         <nav aria-label="Adjacent findings" className="log-neighbors">
           {newer ? (
             <Link className="log-neighbor" params={{ logId: newer.logId }} to="/log/$logId">

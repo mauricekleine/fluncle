@@ -83,6 +83,26 @@ describe("buildSitemapXml (sitemap enumeration)", () => {
     expect(xml.match(/<loc>/g)).toHaveLength(8 + pages.length + 2);
   });
 
+  it("adds the /galaxies index + a <loc> per galaxy only once the map is named (gated upstream)", () => {
+    // No galaxy pages (the pre-launch dark state): neither /galaxies nor any galaxy loc.
+    const dark = buildSitemapXml(pages, [], [], []);
+    expect(dark).not.toContain(`<loc>${siteUrl}/galaxies</loc>`);
+    expect(dark).not.toContain(`<loc>${siteUrl}/galaxies/`);
+
+    // Named + thin-gated upstream: the index static entry plus one loc per galaxy.
+    const live = buildSitemapXml(
+      pages,
+      [],
+      [],
+      [{ slug: "the-liquid-deep" }, { slug: "weightless-rollers" }],
+    );
+    expect(live).toContain(`<loc>${siteUrl}/galaxies</loc>`);
+    expect(live).toContain(`<loc>${siteUrl}/galaxies/the-liquid-deep</loc>`);
+    expect(live).toContain(`<loc>${siteUrl}/galaxies/weightless-rollers</loc>`);
+    // 8 static + the /galaxies index + 2 findings + 2 galaxies.
+    expect(live.match(/<loc>/g)).toHaveLength(8 + 1 + pages.length + 2);
+  });
+
   it("declares the image + video namespaces on the urlset", () => {
     const xml = buildSitemapXml(pages);
 

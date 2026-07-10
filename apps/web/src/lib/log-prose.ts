@@ -4,7 +4,6 @@
 // contradicts the page gets discounted).
 
 import { formatDateLong } from "./format";
-import { GALAXIES, type Galaxy } from "./galaxies";
 
 /**
  * The editorial note's length budget. A note is SEO/AEO fuel, not a free-text
@@ -19,7 +18,14 @@ export type LogProseInput = {
   artists: string[];
   /** Stored telemetry, woven into the visible prose when present (all optional). */
   bpm?: number;
-  galaxy?: { key: Galaxy; name: string };
+  /**
+   * The finding's sonic galaxy (browse-by-feel RFC): the operator-named cluster over
+   * the MuQ embedding space, read from `tracks.galaxy_id`. Present ONLY when placed AND
+   * named AND the public launch gate is open (the loader passes it through only then);
+   * `slug` links the visible clause to `/galaxies/<slug>`. Replaces the dead
+   * vibe-quadrant `{ key, name }` shape (the four-quarter mood map is retired).
+   */
+  galaxy?: { name: string; slug: string };
   key?: string;
   label?: string;
   logId: string;
@@ -28,6 +34,36 @@ export type LogProseInput = {
   releaseDate?: string;
   title: string;
 };
+
+/**
+ * A definitional-prose segment: plain text, or the galaxy clause carrying the entity so
+ * the VISIBLE render can linkify the galaxy name while the JSON-LD / meta description
+ * read the SAME text plain. The mirror ("schema mirrors the visible prose") holds by
+ * construction — `definitionalProse` is these segments joined, and the visible block
+ * renders the same segments.
+ */
+export type ProseSegment =
+  | { kind: "galaxy"; name: string; slug: string }
+  | { kind: "text"; text: string };
+
+/** The galaxy clause, split so the name (with " galaxy") is a single linkable token. */
+export const GALAXY_CLAUSE_LEAD = "It sits in the ";
+export const GALAXY_CLAUSE_TAIL = ", with the findings that hit the same way.";
+
+/** The galaxy clause's link text — the name plus the noun, the whole phrase links. */
+export function galaxyClauseLinkText(name: string): string {
+  return `${name} galaxy`;
+}
+
+/** The galaxy clause as plain text (the JSON-LD / meta mirror of the visible clause). */
+function galaxyClauseText(name: string): string {
+  return `${GALAXY_CLAUSE_LEAD}${galaxyClauseLinkText(name)}${GALAXY_CLAUSE_TAIL}`;
+}
+
+/** The plain text of one segment — the join unit behind `definitionalProse`. */
+function segmentText(segment: ProseSegment): string {
+  return segment.kind === "galaxy" ? galaxyClauseText(segment.name) : segment.text;
+}
 
 /** Tracklist convention: `Artist — Title` (the one sanctioned em dash). */
 export function artistTitleLine(track: { artists: string[]; title: string }): string {
@@ -47,14 +83,20 @@ export function definitionalSentences(track: LogProseInput): string {
 }
 
 /**
- * The RICHER visible block (and the JSON-LD description, which mirrors it): the
- * definitional line plus whatever stored telemetry the finding carries — tempo,
- * key, label, release year, and its vibe-map galaxy. Every clause is conditional,
- * so an un-enriched or un-tagged finding degrades to the bare definition cleanly.
+ * The RICHER visible block as ordered SEGMENTS (browse-by-feel RFC): the definitional
+ * line plus whatever stored telemetry the finding carries — tempo, key, label, release
+ * year, and its sonic galaxy — then the note and the coordinate closer. Every clause is
+ * conditional, so an un-enriched or unplaced finding degrades to the bare definition
+ * cleanly. The galaxy clause is its own segment carrying the entity, so the visible
+ * render links the name to `/galaxies/<slug>` while the JSON-LD reads the same text
+ * plain. `definitionalProse` is these segments joined — the mirror holds by construction.
  */
-export function definitionalProse(track: LogProseInput): string {
-  const sentences = [
-    `${track.logId} is Fluncle's Log ID for ${artistTitleLine(track)}, a drum & bass banger found ${formatDateLong(track.addedAt)}.`,
+export function definitionalProseSegments(track: LogProseInput): ProseSegment[] {
+  const segments: ProseSegment[] = [
+    {
+      kind: "text",
+      text: `${track.logId} is Fluncle's Log ID for ${artistTitleLine(track)}, a drum & bass banger found ${formatDateLong(track.addedAt)}.`,
+    },
   ];
 
   const tempoKey =
@@ -66,7 +108,10 @@ export function definitionalProse(track: LogProseInput): string {
           ? `in ${track.key}`
           : undefined;
   if (tempoKey) {
-    sentences.push(track.bpm ? `It rolls at ${tempoKey}.` : `It's ${tempoKey}.`);
+    segments.push({
+      kind: "text",
+      text: track.bpm ? `It rolls at ${tempoKey}.` : `It's ${tempoKey}.`,
+    });
   }
 
   const year = track.releaseDate?.slice(0, 4);
@@ -79,14 +124,11 @@ export function definitionalProse(track: LogProseInput): string {
           ? `Released in ${year}.`
           : undefined;
   if (release) {
-    sentences.push(release);
+    segments.push({ kind: "text", text: release });
   }
 
   if (track.galaxy) {
-    const meta = GALAXIES[track.galaxy.key];
-    sentences.push(
-      `It sits in the ${track.galaxy.name} galaxy: the ${meta.energy}, ${meta.mood} quarter of Fluncle's vibe map.`,
-    );
+    segments.push({ kind: "galaxy", name: track.galaxy.name, slug: track.galaxy.slug });
   }
 
   // The editorial note (the human "why") rides here — the one finding-specific
@@ -96,14 +138,23 @@ export function definitionalProse(track: LogProseInput): string {
   const note = track.note?.trim();
   if (note) {
     const sentence = note.charAt(0).toUpperCase() + note.slice(1);
-    sentences.push(/[.!?…]$/.test(sentence) ? sentence : `${sentence}.`);
+    segments.push({ kind: "text", text: /[.!?…]$/.test(sentence) ? sentence : `${sentence}.` });
   }
 
-  sentences.push(
-    `The coordinate fluncle://${track.logId} names this finding on every surface of the Galaxy: the web log, the RSS feed, and the fluncle CLI.`,
-  );
+  segments.push({
+    kind: "text",
+    text: `The coordinate fluncle://${track.logId} names this finding on every surface of the Galaxy: the web log, the RSS feed, and the fluncle CLI.`,
+  });
 
-  return sentences.join(" ");
+  return segments;
+}
+
+/**
+ * The RICHER visible block as one string — the JSON-LD description + the fallback plain
+ * render. Mirrors the visible segments by construction (it IS the segments joined).
+ */
+export function definitionalProse(track: LogProseInput): string {
+  return definitionalProseSegments(track).map(segmentText).join(" ");
 }
 
 /** The coordinate split for the decode block: `004` + `7.2I`. */

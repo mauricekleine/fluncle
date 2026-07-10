@@ -4,8 +4,10 @@ import { definitionalProse } from "./log-prose";
 import {
   artistBreadcrumbsJsonLd,
   breadcrumbsJsonLd,
+  galaxyBreadcrumbsJsonLd,
   mixtapeAlbumJsonLd,
   musicGroupJsonLd,
+  musicPlaylistJsonLd,
   musicRecordingJsonLd,
   videoObjectJsonLd,
 } from "./log-schema";
@@ -103,6 +105,39 @@ describe("musicRecordingJsonLd (the log page schema)", () => {
       { "@id": "https://www.fluncle.com/artist/axwell", "@type": "MusicGroup", name: "ÁXWELL" },
       { "@type": "MusicGroup", name: "1991" },
     ]);
+  });
+});
+
+describe("musicPlaylistJsonLd (the galaxy lens schema)", () => {
+  const jsonLd = musicPlaylistJsonLd({ name: "The Liquid Deep", slug: "the-liquid-deep" }, [
+    { artists: ["Calibre"], logId: "004.7.2I", title: "Mr Majestic" },
+    { artists: ["LSB", "DRS"], logId: "011.6.8K", title: "Missing You" },
+  ]);
+
+  it("is a MusicPlaylist named for the galaxy, with numTracks + the canonical URL", () => {
+    expect(jsonLd["@type"]).toBe("MusicPlaylist");
+    expect(jsonLd.name).toBe("The Liquid Deep · Fluncle's galaxies");
+    expect(jsonLd.numTracks).toBe(2);
+    expect(jsonLd.url).toBe("https://www.fluncle.com/galaxies/the-liquid-deep");
+  });
+
+  it("carries the members as MusicRecording refs by /log URL, in order (core-first)", () => {
+    const track = jsonLd.track as {
+      itemListElement: Array<{ item: { url: string }; position: number }>;
+    };
+
+    expect(track.itemListElement).toHaveLength(2);
+    expect(track.itemListElement[0]?.position).toBe(1);
+    expect(track.itemListElement[0]?.item.url).toBe("https://www.fluncle.com/log/004.7.2I");
+    expect(track.itemListElement[1]?.item.url).toBe("https://www.fluncle.com/log/011.6.8K");
+  });
+
+  it("breadcrumbs Fluncle → Galaxies → the galaxy name", () => {
+    const crumbs = galaxyBreadcrumbsJsonLd("The Liquid Deep").itemListElement as Array<{
+      name: string;
+    }>;
+
+    expect(crumbs.map((c) => c.name)).toEqual(["Fluncle", "Galaxies", "The Liquid Deep"]);
   });
 });
 
