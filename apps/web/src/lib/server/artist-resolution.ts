@@ -1230,16 +1230,19 @@ async function fetchExistingPlatforms(artistId: string): Promise<Set<ArtistSocia
 
 /**
  * Upsert artist_socials rows and stamp artists.mbid / .wikidata_qid / .resolved_at.
- * The upsert strategy: a new source always wins on url (MB is more reliable than
- * Firecrawl; if MB and Firecrawl both have a platform, MB's row already exists and
- * the Firecrawl upsert skips it via the `do nothing` guard).
+ *
+ * OPERATOR ROWS ARE IMMUNE. A re-resolve never overwrites a link the operator owns — one
+ * they ADDED (`source='operator'`) or CONFIRMED (`status='confirmed'`): its url, source,
+ * AND status all stay exactly as the operator left them (the MB upsert's WHERE clause skips
+ * those rows entirely, and the Firecrawl upsert is `do nothing`). Only machine rows
+ * (`auto`/`candidate`) get refreshed — so MB confirming a platform still promotes a
+ * firecrawl `candidate` to `auto`.
  *
  * `mbSocialStatus` carries the MB socials' trust: "auto" (public/trusted) for an exact
  * Spotify-id identity match, "candidate" (awaits an operator glance) for the weaker
- * name+score soft fallback. The `when status='confirmed' then 'confirmed'` guard still
- * preserves an operator-confirmed row on re-resolve regardless.
+ * name+score soft fallback.
  */
-async function persistResolution(
+export async function persistResolution(
   artistId: string,
   mbid: string | null,
   wikidataQid: string | null,
@@ -1262,7 +1265,10 @@ async function persistResolution(
   });
 
   // Upsert MB socials at the resolver-determined trust (auto for a confirmed identity,
-  // candidate for the soft name+score fallback).
+  // candidate for the soft name+score fallback). The WHERE clause makes an OPERATOR-OWNED
+  // row immune: a re-resolve skips (leaves untouched) any row the operator added
+  // (source='operator') or confirmed (status='confirmed') — url, source, and status all
+  // preserved. Only auto/candidate machine rows are refreshed to the fresh MB values.
   for (const social of mbSocials) {
     const id = randomUUID();
     await db.execute({
@@ -1282,11 +1288,10 @@ async function persistResolution(
             on conflict(artist_id, platform) do update set
               url = excluded.url,
               source = excluded.source,
-              status = case
-                when artist_socials.status = 'confirmed' then 'confirmed'
-                else excluded.status
-              end,
-              updated_at = excluded.updated_at`,
+              status = excluded.status,
+              updated_at = excluded.updated_at
+            where artist_socials.source != 'operator'
+              and artist_socials.status != 'confirmed'`,
     });
   }
 
