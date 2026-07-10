@@ -421,6 +421,7 @@ const AUTOMATION_CRONS: CronDef[] = [
   { cadenceMs: 5 * 60_000, match: "capture", service: "cron.capture" },
   { cadenceMs: 5 * 60_000, match: "context-note", service: "cron.context-note" },
   { cadenceMs: 10 * 60_000, match: "note", service: "cron.note" },
+  { cadenceMs: 15 * 60_000, match: "triage", service: "cron.triage" }, // submission pre-chew — every 15m
   { cadenceMs: 60 * 60_000, match: "observation", service: "cron.observation" },
   { cadenceMs: 30 * 60_000, match: "backfill", service: "cron.backfill" },
   { cadenceMs: 60 * 60_000, match: "artist-sweep", service: "cron.artist-sweep" },
