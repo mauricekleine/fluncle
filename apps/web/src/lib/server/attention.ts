@@ -9,6 +9,7 @@ import {
   type AttentionItem,
   type ClipInput,
   deriveAttentionItems,
+  type NewsletterInput,
   type SocialStatus,
   type SubmissionInput,
 } from "../attention";
@@ -109,21 +110,58 @@ async function listSubmissionRows(): Promise<SubmissionInput[]> {
   }));
 }
 
+type EditionDraftRow = {
+  created_at: string;
+  id: string;
+  subject: string | null;
+};
+
+// Every drafted-but-unsent newsletter edition — one queue row each, oldest first, so the
+// Friday sweep's draft (persisted then offered on Discord, but sendable only by the operator)
+// stops waiting invisibly. Scoped to `status = 'draft'` (the trust rule: a sent back-issue is
+// not the operator's business); the pure model deep-links each to /admin/newsletter.
+async function listDraftEditionRows(): Promise<NewsletterInput[]> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: ["draft"],
+    sql: `select id, subject, created_at
+          from editions
+          where status = ?
+          order by created_at asc`,
+  });
+
+  return typedRows<EditionDraftRow>(result.rows).map((row) => ({
+    draftedAt: row.created_at,
+    id: row.id,
+    ...(row.subject ? { subject: row.subject } : {}),
+  }));
+}
+
 /** One pass over the sources + the pulse datum + the zero-state fallback. */
 export async function readAttentionSnapshot(now: number = Date.now()): Promise<AttentionSnapshot> {
-  const [clips, recordings, mixtapes, clipPosts, artistReviews, submissions, renders, newest] =
-    await Promise.all([
-      listClipRows(),
-      listRecordings(),
-      listMixtapes({ includeUnpublished: true }),
-      listClipPosts(),
-      listArtistReviewRows(),
-      listSubmissionRows(),
-      // The render queue's canonical read (`fluncle admin tracks queue`): findings
-      // with context gathered but no video yet.
-      listTracks({ hasContext: true, hasVideo: false, limit: 1 }),
-      listTracks({ limit: 1, order: "desc" }),
-    ]);
+  const [
+    clips,
+    recordings,
+    mixtapes,
+    clipPosts,
+    artistReviews,
+    submissions,
+    newsletters,
+    renders,
+    newest,
+  ] = await Promise.all([
+    listClipRows(),
+    listRecordings(),
+    listMixtapes({ includeUnpublished: true }),
+    listClipPosts(),
+    listArtistReviewRows(),
+    listSubmissionRows(),
+    listDraftEditionRows(),
+    // The render queue's canonical read (`fluncle admin tracks queue`): findings
+    // with context gathered but no video yet.
+    listTracks({ hasContext: true, hasVideo: false, limit: 1 }),
+    listTracks({ limit: 1, order: "desc" }),
+  ]);
 
   const items = deriveAttentionItems(
     {
@@ -146,6 +184,7 @@ export async function readAttentionSnapshot(now: number = Date.now()): Promise<A
         title: mixtape.title,
         ...(mixtape.externalUrls.youtube ? { youtubeUrl: mixtape.externalUrls.youtube } : {}),
       })),
+      newsletters,
       recordings: recordings.map((recording) => ({
         createdAt: recording.createdAt,
         hasVideo: recording.hasVideo,

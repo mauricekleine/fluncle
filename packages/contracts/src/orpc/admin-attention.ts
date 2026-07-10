@@ -21,13 +21,14 @@
 import { oc } from "@orpc/contract";
 import * as z from "zod";
 
-/** The queue's eight sources (mirrors `AttentionSource` in apps/web/src/lib/attention.ts). */
+/** The queue's nine sources (mirrors `AttentionSource` in apps/web/src/lib/attention.ts). */
 export const AttentionSourceSchema = z
   .enum([
     "artist-review",
     "attach-cues",
     "distribute",
     "drip-empty",
+    "newsletter",
     "post-tiktok",
     "post-youtube",
     "submission",

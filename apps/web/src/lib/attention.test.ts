@@ -33,6 +33,7 @@ const EMPTY_INPUTS: AttentionInputs = {
   clipPosts: [{ scheduledFor: iso(NOW + HOUR), status: "scheduled" }],
   clips: [],
   mixtapes: [],
+  newsletters: [],
   recordings: [],
   submissions: [],
 };
@@ -364,6 +365,40 @@ describe("deriveAttentionItems", () => {
     expect(items[0]?.verdict).toBeUndefined();
     expect(items[0]).toMatchObject({ id: "submission:sub-2", source: "submission" });
   });
+
+  it("rows a drafted-but-unsent edition, anchored to its drafted-at, deep-linked to the newsletter page", () => {
+    const items = deriveAttentionItems(
+      {
+        ...EMPTY_INPUTS,
+        newsletters: [
+          {
+            draftedAt: iso(NOW - 3 * HOUR),
+            id: "ed-1",
+            subject: "Six this week, and my body clocked them all",
+          },
+        ],
+      },
+      NOW,
+    );
+
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      anchorAt: iso(NOW - 3 * HOUR),
+      href: "/admin/newsletter",
+      id: "newsletter:ed-1",
+      source: "newsletter",
+      title: "Six this week, and my body clocked them all",
+    });
+  });
+
+  it("falls back to a generic title for a draft with no subject yet", () => {
+    const items = deriveAttentionItems(
+      { ...EMPTY_INPUTS, newsletters: [{ draftedAt: iso(NOW - HOUR), id: "ed-2" }] },
+      NOW,
+    );
+
+    expect(items[0]).toMatchObject({ id: "newsletter:ed-2", title: "Draft edition" });
+  });
 });
 
 describe("orderQueue", () => {
@@ -522,6 +557,12 @@ describe("primaryFor", () => {
       ),
     ).toEqual({ href: "/admin/findings?submission=sub-1", kind: "open", label: "Review" });
   });
+
+  it("routes a newsletter row to the newsletter page (the Send authority stays there)", () => {
+    expect(
+      primaryFor(item({ href: "/admin/newsletter", id: "n", source: "newsletter" }), NOW),
+    ).toEqual({ href: "/admin/newsletter", kind: "open", label: "Review" });
+  });
 });
 
 describe("attentionRowPath", () => {
@@ -563,6 +604,18 @@ describe("attentionBrief", () => {
     // post-tiktok precedes artist-review in the priority order.
     expect(attentionBrief(items, NOW)).toBe(
       "A clip to push to TikTok, an artist's links to review.",
+    );
+  });
+
+  it("phrases a drafted newsletter, slotted after the publish loop and before submissions", () => {
+    const items = [
+      item({ id: "s", source: "submission", title: "Calibre — Mr Right On" }),
+      item({ href: "/admin/newsletter", id: "n", source: "newsletter" }),
+    ];
+
+    // newsletter precedes submission in the priority order.
+    expect(attentionBrief(items, NOW)).toBe(
+      "The Friday letter waiting on your send, a crew submission to hear.",
     );
   });
 });

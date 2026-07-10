@@ -20,6 +20,7 @@ const SOURCE_META: Record<Source, { icon: Icon; title: string }> = {
   "attach-cues": { icon: Icon.BulletPoints, title: "Attach cues" },
   distribute: { icon: Icon.Globe, title: "Distribute" },
   "drip-empty": { icon: Icon.Image, title: "Clip drip" },
+  newsletter: { icon: Icon.Envelope, title: "Newsletter" },
   "post-tiktok": { icon: Icon.Upload, title: "Push to TikTok" },
   "post-youtube": { icon: Icon.Upload, title: "Post to YouTube" },
   submission: { icon: Icon.Tray, title: "Submissions" },

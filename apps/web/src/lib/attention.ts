@@ -21,6 +21,7 @@ export type AttentionSource =
   | "attach-cues"
   | "distribute"
   | "drip-empty"
+  | "newsletter"
   | "post-tiktok"
   | "post-youtube"
   | "submission"
@@ -137,11 +138,22 @@ export type SubmissionInput = {
   triageVerdict?: string;
 };
 
+/** A drafted-but-unsent weekly newsletter edition awaiting the operator's send. */
+export type NewsletterInput = {
+  /** When the Friday sweep authored the draft — the queue's oldest-first anchor. */
+  draftedAt: string;
+  /** The edition uuid — the row identity and the newsletter-page target. */
+  id: string;
+  /** The edition's subject line (the row title); a barely-authored draft may lack one. */
+  subject?: string;
+};
+
 export type AttentionInputs = {
   artistReviews: ArtistReviewInput[];
   clipPosts: ClipPostInput[];
   clips: ClipInput[];
   mixtapes: MixtapeInput[];
+  newsletters: NewsletterInput[];
   recordings: RecordingInput[];
   submissions: SubmissionInput[];
 };
@@ -289,6 +301,21 @@ export function deriveAttentionItems(inputs: AttentionInputs, now: number): Atte
       reviewLinks: review.pending,
       source: "artist-review",
       title: review.name,
+    });
+  }
+
+  // Each drafted-but-unsent newsletter edition is one row — the Friday sweep authored it
+  // and posted the send command to Discord, but the send is operator-only, so until the
+  // operator runs it the draft waits invisibly. Anchored to when it was drafted, deep-linking
+  // to /admin/newsletter where the review + Send control lives (the send authority stays on
+  // that page, never on the queue row). One draft per window in practice.
+  for (const newsletter of inputs.newsletters) {
+    items.push({
+      anchorAt: newsletter.draftedAt,
+      href: "/admin/newsletter",
+      id: `newsletter:${newsletter.id}`,
+      source: "newsletter",
+      title: newsletter.subject ?? "Draft edition",
     });
   }
 
@@ -486,6 +513,11 @@ export function primaryFor(item: AttentionItem, now: number): PrimaryAction {
       return { href: item.href ?? "/admin/plans", kind: "open", label: "Distribute" };
     case "drip-empty":
       return { href: item.href ?? "/admin/clips", kind: "open", label: "Cut clips" };
+    case "newsletter":
+      // Review + Send live on the newsletter page (send_edition is operator-tier); the row
+      // deep-links there rather than sending inline — the send authority never moves onto the
+      // queue row, matching the submission row's approve/reject.
+      return { href: item.href ?? "/admin/newsletter", kind: "open", label: "Review" };
     case "post-tiktok":
       // No TikTok post yet — the first step is pushing the silent inbox draft.
       return { kind: "push", label: "Push draft", platform: "tiktok" };
@@ -519,13 +551,14 @@ const SOURCE_ORDER: AttentionSource[] = [
   "distribute",
   "attach-cues",
   "drip-empty",
+  "newsletter",
   "submission",
   "artist-review",
 ];
 
 /**
  * Where clicking a row lands the operator. Rows that carry an explicit `href`
- * (attach-cues, distribute, drip-empty, artist-review) open it; the inline
+ * (attach-cues, distribute, drip-empty, newsletter, submission, artist-review) open it; the inline
  * publish-loop rows (post-tiktok, post-youtube, tiktok-draft) have no href — their
  * action lives on the dashboard itself, so they open `/admin`.
  */
@@ -589,6 +622,10 @@ function briefPhrase(source: AttentionSource, rows: AttentionItem[]): string {
     }
     case "drip-empty":
       return "the Instagram drip's run dry";
+    case "newsletter":
+      return n === 1
+        ? "the Friday letter waiting on your send"
+        : `${countWord(n)} letters waiting on your send`;
     case "post-tiktok":
       return n === 1 ? "a clip to push to TikTok" : `${countWord(n)} clips to push to TikTok`;
     case "post-youtube":
