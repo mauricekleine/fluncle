@@ -235,6 +235,19 @@ export const SURFACES: readonly Surface[] = [
   },
   {
     exposedContent: [
+      "the mixability set-builder — chain a set from Fluncle's findings that mixes clean, share it as a link",
+    ],
+    kind: "web_route",
+    name: "web.mix",
+    operatorNotes:
+      "ADMIN-GATED at launch (RFC mixability-engine, Decision 1): the full /mix set-builder ships behind admin auth until the archive clears the ~250-finding floor. Registered here as `pending` (dark to every public consumer — the dev-row, llms.txt, the sitemap, /status) so going public is one flip: remove `pending` + set a web weight + announce. The `list_mixable_tracks` API op already ships at its final public tier, so the flip needs no rebuild. No probeConfig — the admin gate 302s a bare GET to /admin/login, which would read as a false 'down'.",
+    pending: true,
+    route: "/mix",
+    url: `${SITE}/mix`,
+    weights: { web: "secondary" },
+  },
+  {
+    exposedContent: [
       "the feed-first Stories surface — full-bleed findings",
       "/stories/:logId — one finding as a Story",
     ],

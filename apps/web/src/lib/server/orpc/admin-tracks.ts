@@ -51,10 +51,13 @@ import {
   type EnrichmentStatusFilter,
   ENRICHMENT_STATUS_FILTERS,
   decodeTrackCursor,
+  getMixableOrder,
   getTrackContextNote,
   listTracks,
+  MixableOrderError,
   searchTracks,
 } from "../tracks";
+import { isLogId } from "../../log-id";
 import { type VideoArtifact, artifactByField } from "../video-bundle";
 import { type Implementer, parseLimit, requireTrack, toFault } from "./_shared";
 
@@ -1041,9 +1044,64 @@ export function adminTracksHandlers(os: Implementer) {
       }
     });
 
+  // GET /admin/tracks/mixable-order — admin tier (`adminAuth` only, agent-allowed like
+  // get_track_admin). A PURE read: it imports only the read path + the pure mixability
+  // core, never a write/publish surface (`promote_recording` remains the only mint).
+  // `ids` is the comma-separated pool (2..64 validated Log IDs; a 65-id / junk request
+  // 400s here — the contract's `ids: string` is validated in-handler like the other
+  // tolerant admin query strings). Orders the pool into a smooth proposed chain.
+  const getMixableOrderHandler = os.get_mixable_order.use(adminAuth).handler(async ({ input }) => {
+    const ids = input.ids
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean);
+
+    if (ids.length < 2 || ids.length > 64) {
+      throw new ORPCError("BAD_REQUEST", {
+        data: { apiCode: "invalid_request", apiMessage: "Provide 2 to 64 Log IDs to order" },
+        message: "Provide 2 to 64 Log IDs to order",
+      });
+    }
+
+    const invalid = ids.filter((id) => !isLogId(id));
+
+    if (invalid.length > 0) {
+      throw new ORPCError("BAD_REQUEST", {
+        data: {
+          apiCode: "invalid_request",
+          apiMessage: `Not a Log ID: ${invalid.join(", ")}`,
+        },
+        message: `Not a Log ID: ${invalid.join(", ")}`,
+      });
+    }
+
+    if (input.seed !== undefined && !isLogId(input.seed)) {
+      throw new ORPCError("BAD_REQUEST", {
+        data: { apiCode: "invalid_request", apiMessage: `Not a Log ID: ${input.seed}` },
+        message: `Not a Log ID: ${input.seed}`,
+      });
+    }
+
+    try {
+      const result = await getMixableOrder(ids, { seedLogId: input.seed });
+
+      return { ...result, ok: true as const };
+    } catch (error) {
+      if (error instanceof MixableOrderError) {
+        throw new ORPCError("BAD_REQUEST", {
+          data: { apiCode: "invalid_request", apiMessage: error.message },
+          message: error.message,
+        });
+      }
+
+      throw toFault(error);
+    }
+  });
+
   return {
     context_track: contextTrackHandler,
     finalize_track_video: finalizeVideoHandler,
+    get_mixable_order: getMixableOrderHandler,
     get_track_admin: getTrackAdminHandler,
     list_tracks_admin: listTracksAdminHandler,
     note_track: noteTrackHandler,

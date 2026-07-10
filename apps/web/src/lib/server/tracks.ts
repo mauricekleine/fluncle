@@ -1,6 +1,8 @@
 import {
   type FeedListPage,
   type Galaxy,
+  type MixableCandidate,
+  type MixReason,
   type TrackCursor,
   type TrackFeatures,
   type TrackListPage,
@@ -15,6 +17,14 @@ import { parseArtistsJson } from "./artists";
 import { getDb, typedRow, typedRows } from "./db";
 import { discogsReleaseUrl } from "./discogs";
 import { type EmbeddingCandidate, parseEmbedding, rankBySimilarity } from "./embedding";
+import {
+  type MixCandidate,
+  orderMixPath,
+  rankMixable,
+  scoreMix,
+  sonicGateOpen,
+  toMixTrack,
+} from "./mixability";
 import { extractYoutubeChannelId } from "./youtube";
 
 export type { FeedListPage, TrackCursor, TrackFeatures, TrackListPage, TrackListItem };
@@ -838,6 +848,188 @@ export async function getSimilarFindings(idOrLogId: string, limit = 6): Promise<
     return item ? [item] : [];
   });
 }
+
+// A candidate/target row for the mixability engine: the four scoring columns + its ids.
+type MixRow = {
+  bpm: number | null;
+  embedding_json: string | null;
+  features_json: string | null;
+  key: string | null;
+  log_id: string | null;
+  track_id: string;
+};
+
+/**
+ * The findings that mix cleanly OUT of the given one, ranked by the mixability engine
+ * (`mixability.ts`) — Product A's rail behind `/mix` and the public
+ * `list_mixable_tracks` op. Same shape as `getSimilarFindings`: one candidate scan
+ * over `log_id IS NOT NULL` rows, self excluded, then the pure core scores + orders +
+ * breaks plateaus by the texture tiebreak. The sonic MuQ term is gated on archive-wide
+ * embedded-pair coverage (`sonicGateOpen`) — dormant at launch, activating with no code
+ * change when the embed cron gets there.
+ *
+ * `excludeLogIds` drops the already-chained findings SERVER-SIDE so a deep chain in a
+ * small archive can't silently empty the rail. Each result carries its `reason` chip
+ * (never a numeric score — §3.0 invariant). Returns `[]` (never throws) for an unknown
+ * coordinate / an all-null target / an empty archive.
+ */
+export async function getMixableTracks(
+  idOrLogId: string,
+  options: { excludeLogIds?: string[]; limit?: number } = {},
+): Promise<MixableCandidate[]> {
+  const limit = options.limit ?? 12;
+
+  if (limit <= 0) {
+    return [];
+  }
+
+  const db = await getDb();
+  const targetResult = await db.execute({
+    args: [idOrLogId, idOrLogId],
+    sql: `select track_id, log_id, key, bpm, embedding_json, features_json from tracks
+          where track_id = ? or log_id = ? limit 1`,
+  });
+  const targetRow = typedRow<MixRow>(targetResult.rows);
+
+  if (!targetRow) {
+    return [];
+  }
+
+  const exclude = [...new Set((options.excludeLogIds ?? []).filter((id) => id.trim()))];
+  const excludeClause =
+    exclude.length > 0 ? `and log_id not in (${exclude.map(() => "?").join(", ")})` : "";
+  const candidateResult = await db.execute({
+    args: [targetRow.track_id, ...exclude],
+    sql: `select track_id, log_id, key, bpm, embedding_json, features_json from tracks
+          where log_id is not null and track_id != ? ${excludeClause}`,
+  });
+
+  const candidateRows = typedRows<MixRow>(candidateResult.rows);
+  const candidates: MixCandidate<string>[] = candidateRows.map((row) => ({
+    item: row.track_id,
+    track: toMixTrack(row),
+  }));
+
+  // The sonic-term gate is a global archive property: count the embedded findings in
+  // play (candidates + the target when embedded) and open the gate only past the floor.
+  const embeddedCount =
+    candidateRows.filter((row) => row.embedding_json !== null).length +
+    (targetRow.embedding_json !== null ? 1 : 0);
+  const gateOpen = sonicGateOpen(embeddedCount);
+
+  const ranked = rankMixable(toMixTrack(targetRow), candidates, limit, { gateOpen });
+
+  if (ranked.length === 0) {
+    return [];
+  }
+
+  const byId = await getTracksByIds(ranked.map((entry) => entry.item));
+
+  return ranked.flatMap((entry) => {
+    const item = byId[entry.item];
+
+    return item ? [{ ...item, reason: entry.reason }] : [];
+  });
+}
+
+/** One ordered stop in a proposed mix (the admin dream-weaver's output row). */
+export type MixOrderStop = {
+  artists: string[];
+  bpm?: number;
+  flagged: boolean;
+  key?: string;
+  logId: string;
+  title: string;
+  transitionReason?: MixReason;
+  transitionScore?: number;
+};
+
+/** The dream-weaver's full result: the ordered stops + total cost + which algorithm ran. */
+export type MixableOrderResult = {
+  algorithm: "held-karp" | "greedy-2opt";
+  order: MixOrderStop[];
+  totalCost: number;
+};
+
+/**
+ * Order a pool of findings (by Log ID) into a smoothness-optimized proposed mix —
+ * Product B's dream-weaver, a PURE admin READ (never writes). Held-Karp exact for
+ * ≤16, greedy + 2-opt to 64. `seedLogId` pins the first stop. Every `transitionScore`
+ * describes the edge INTO its stop (the first stop's is undefined). An unknown Log ID
+ * is a clean fault (the caller lists what didn't resolve), never a silent mis-order.
+ */
+export async function getMixableOrder(
+  logIds: string[],
+  options: { seedLogId?: string } = {},
+): Promise<MixableOrderResult> {
+  const unique = [...new Set(logIds.filter((id) => id.trim()))];
+
+  const db = await getDb();
+  const placeholders = unique.map(() => "?").join(", ");
+  const result = await db.execute({
+    args: unique,
+    sql: `select track_id, log_id, key, bpm, embedding_json, features_json, title, artists_json
+          from tracks where log_id in (${placeholders})`,
+  });
+
+  const rowByLogId = new Map<string, MixRow & { artists_json: string; title: string }>();
+
+  for (const row of typedRows<MixRow & { artists_json: string; title: string }>(result.rows)) {
+    if (row.log_id) {
+      rowByLogId.set(row.log_id, row);
+    }
+  }
+
+  const missing = unique.filter((id) => !rowByLogId.has(id));
+
+  if (missing.length > 0) {
+    throw new MixableOrderError(`No finding for ${missing.join(", ")}`);
+  }
+
+  const ordered = unique.map((id) => {
+    const row = rowByLogId.get(id);
+
+    if (!row) {
+      throw new MixableOrderError(`No finding for ${id}`);
+    }
+
+    return row;
+  });
+
+  const tracks = ordered.map((row) => toMixTrack(row));
+  const embeddedCount = ordered.filter((row) => row.embedding_json !== null).length;
+  const gateOpen = sonicGateOpen(embeddedCount);
+
+  const seedIndex = options.seedLogId !== undefined ? unique.indexOf(options.seedLogId) : -1;
+
+  const path = orderMixPath(tracks, {
+    gateOpen,
+    seedIndex: seedIndex >= 0 ? seedIndex : undefined,
+  });
+
+  const order: MixOrderStop[] = path.order.map((trackIndex, position) => {
+    const row = ordered[trackIndex];
+    const from = position > 0 ? tracks[path.order[position - 1] ?? -1] : undefined;
+    const to = tracks[trackIndex];
+    const edge = from && to ? scoreMix(from, to, { gateOpen }) : undefined;
+
+    return {
+      artists: row ? parseArtistsJson(row.artists_json) : [],
+      bpm: row?.bpm ?? undefined,
+      flagged: position > 0 ? (edge?.score ?? null) === null : false,
+      key: row?.key ?? undefined,
+      logId: row?.log_id ?? "",
+      title: row?.title ?? "",
+      transitionReason: edge?.reason ?? undefined,
+      transitionScore: edge?.score ?? undefined,
+    };
+  });
+
+  return { algorithm: path.algorithm, order, totalCost: path.totalCost };
+}
+
+/** A resolvable-input fault the `get_mixable_order` handler maps to a 400. */
+export class MixableOrderError extends Error {}
 
 /**
  * Which of the given tracks already carry a MuQ audio embedding (`embedding_json IS

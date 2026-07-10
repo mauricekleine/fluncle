@@ -17,6 +17,7 @@ import { Route as PrivacyRouteImport } from './routes/privacy'
 import { Route as PodcastDotxmlRouteImport } from './routes/podcast[.]xml'
 import { Route as PipelineRouteImport } from './routes/pipeline'
 import { Route as OembedRouteImport } from './routes/oembed'
+import { Route as MixRouteImport } from './routes/mix'
 import { Route as GalaxyRouteImport } from './routes/galaxy'
 import { Route as FeedDotjsonRouteImport } from './routes/feed[.]json'
 import { Route as DocsRouteImport } from './routes/docs'
@@ -53,6 +54,7 @@ import { Route as AdminRecordingsRouteImport } from './routes/admin/recordings'
 import { Route as AdminPlansRouteImport } from './routes/admin/plans'
 import { Route as AdminNewsletterRouteImport } from './routes/admin/newsletter'
 import { Route as AdminMixtapesRouteImport } from './routes/admin/mixtapes'
+import { Route as AdminMixableOrderRouteImport } from './routes/admin/mixable-order'
 import { Route as AdminLoginRouteImport } from './routes/admin/login'
 import { Route as AdminFindingsRouteImport } from './routes/admin/findings'
 import { Route as AdminCostsRouteImport } from './routes/admin/costs'
@@ -62,6 +64,7 @@ import { Route as ApiV1StatusRouteImport } from './routes/api/v1/status'
 import { Route as ApiV1PostmanDotjsonRouteImport } from './routes/api/v1/postman[.]json'
 import { Route as ApiV1OpenapiDotjsonRouteImport } from './routes/api/v1/openapi[.]json'
 import { Route as ApiPreviewIdOrLogIdRouteImport } from './routes/api/preview.$idOrLogId'
+import { Route as ApiOgSetRouteImport } from './routes/api/og.set'
 import { Route as ApiOgLogIdRouteImport } from './routes/api/og.$logId'
 import { Route as ApiMixtapeCoverLogIdRouteImport } from './routes/api/mixtape-cover.$logId'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
@@ -132,6 +135,11 @@ const PipelineRoute = PipelineRouteImport.update({
 const OembedRoute = OembedRouteImport.update({
   id: '/oembed',
   path: '/oembed',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const MixRoute = MixRouteImport.update({
+  id: '/mix',
+  path: '/mix',
   getParentRoute: () => rootRouteImport,
 } as any)
 const GalaxyRoute = GalaxyRouteImport.update({
@@ -315,6 +323,11 @@ const AdminMixtapesRoute = AdminMixtapesRouteImport.update({
   path: '/mixtapes',
   getParentRoute: () => AdminRouteRoute,
 } as any)
+const AdminMixableOrderRoute = AdminMixableOrderRouteImport.update({
+  id: '/mixable-order',
+  path: '/mixable-order',
+  getParentRoute: () => AdminRouteRoute,
+} as any)
 const AdminLoginRoute = AdminLoginRouteImport.update({
   id: '/login',
   path: '/login',
@@ -358,6 +371,11 @@ const ApiV1OpenapiDotjsonRoute = ApiV1OpenapiDotjsonRouteImport.update({
 const ApiPreviewIdOrLogIdRoute = ApiPreviewIdOrLogIdRouteImport.update({
   id: '/api/preview/$idOrLogId',
   path: '/api/preview/$idOrLogId',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiOgSetRoute = ApiOgSetRouteImport.update({
+  id: '/api/og/set',
+  path: '/api/og/set',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiOgLogIdRoute = ApiOgLogIdRouteImport.update({
@@ -550,6 +568,7 @@ export interface FileRoutesByFullPath {
   '/docs': typeof DocsRouteWithChildren
   '/feed.json': typeof FeedDotjsonRoute
   '/galaxy': typeof GalaxyRoute
+  '/mix': typeof MixRoute
   '/oembed': typeof OembedRoute
   '/pipeline': typeof PipelineRoute
   '/podcast.xml': typeof PodcastDotxmlRoute
@@ -563,6 +582,7 @@ export interface FileRoutesByFullPath {
   '/admin/costs': typeof AdminCostsRoute
   '/admin/findings': typeof AdminFindingsRoute
   '/admin/login': typeof AdminLoginRoute
+  '/admin/mixable-order': typeof AdminMixableOrderRoute
   '/admin/mixtapes': typeof AdminMixtapesRoute
   '/admin/newsletter': typeof AdminNewsletterRoute
   '/admin/plans': typeof AdminPlansRoute
@@ -593,6 +613,7 @@ export interface FileRoutesByFullPath {
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/mixtape-cover/$logId': typeof ApiMixtapeCoverLogIdRoute
   '/api/og/$logId': typeof ApiOgLogIdRoute
+  '/api/og/set': typeof ApiOgSetRoute
   '/api/preview/$idOrLogId': typeof ApiPreviewIdOrLogIdRoute
   '/api/v1/openapi.json': typeof ApiV1OpenapiDotjsonRoute
   '/api/v1/postman.json': typeof ApiV1PostmanDotjsonRoute
@@ -634,6 +655,7 @@ export interface FileRoutesByTo {
   '/device': typeof DeviceRoute
   '/feed.json': typeof FeedDotjsonRoute
   '/galaxy': typeof GalaxyRoute
+  '/mix': typeof MixRoute
   '/oembed': typeof OembedRoute
   '/pipeline': typeof PipelineRoute
   '/podcast.xml': typeof PodcastDotxmlRoute
@@ -647,6 +669,7 @@ export interface FileRoutesByTo {
   '/admin/costs': typeof AdminCostsRoute
   '/admin/findings': typeof AdminFindingsRoute
   '/admin/login': typeof AdminLoginRoute
+  '/admin/mixable-order': typeof AdminMixableOrderRoute
   '/admin/mixtapes': typeof AdminMixtapesRoute
   '/admin/newsletter': typeof AdminNewsletterRoute
   '/admin/plans': typeof AdminPlansRoute
@@ -677,6 +700,7 @@ export interface FileRoutesByTo {
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/mixtape-cover/$logId': typeof ApiMixtapeCoverLogIdRoute
   '/api/og/$logId': typeof ApiOgLogIdRoute
+  '/api/og/set': typeof ApiOgSetRoute
   '/api/preview/$idOrLogId': typeof ApiPreviewIdOrLogIdRoute
   '/api/v1/openapi.json': typeof ApiV1OpenapiDotjsonRoute
   '/api/v1/postman.json': typeof ApiV1PostmanDotjsonRoute
@@ -721,6 +745,7 @@ export interface FileRoutesById {
   '/docs': typeof DocsRouteWithChildren
   '/feed.json': typeof FeedDotjsonRoute
   '/galaxy': typeof GalaxyRoute
+  '/mix': typeof MixRoute
   '/oembed': typeof OembedRoute
   '/pipeline': typeof PipelineRoute
   '/podcast.xml': typeof PodcastDotxmlRoute
@@ -734,6 +759,7 @@ export interface FileRoutesById {
   '/admin/costs': typeof AdminCostsRoute
   '/admin/findings': typeof AdminFindingsRoute
   '/admin/login': typeof AdminLoginRoute
+  '/admin/mixable-order': typeof AdminMixableOrderRoute
   '/admin/mixtapes': typeof AdminMixtapesRoute
   '/admin/newsletter': typeof AdminNewsletterRoute
   '/admin/plans': typeof AdminPlansRoute
@@ -764,6 +790,7 @@ export interface FileRoutesById {
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/mixtape-cover/$logId': typeof ApiMixtapeCoverLogIdRoute
   '/api/og/$logId': typeof ApiOgLogIdRoute
+  '/api/og/set': typeof ApiOgSetRoute
   '/api/preview/$idOrLogId': typeof ApiPreviewIdOrLogIdRoute
   '/api/v1/openapi.json': typeof ApiV1OpenapiDotjsonRoute
   '/api/v1/postman.json': typeof ApiV1PostmanDotjsonRoute
@@ -809,6 +836,7 @@ export interface FileRouteTypes {
     | '/docs'
     | '/feed.json'
     | '/galaxy'
+    | '/mix'
     | '/oembed'
     | '/pipeline'
     | '/podcast.xml'
@@ -822,6 +850,7 @@ export interface FileRouteTypes {
     | '/admin/costs'
     | '/admin/findings'
     | '/admin/login'
+    | '/admin/mixable-order'
     | '/admin/mixtapes'
     | '/admin/newsletter'
     | '/admin/plans'
@@ -852,6 +881,7 @@ export interface FileRouteTypes {
     | '/api/auth/$'
     | '/api/mixtape-cover/$logId'
     | '/api/og/$logId'
+    | '/api/og/set'
     | '/api/preview/$idOrLogId'
     | '/api/v1/openapi.json'
     | '/api/v1/postman.json'
@@ -893,6 +923,7 @@ export interface FileRouteTypes {
     | '/device'
     | '/feed.json'
     | '/galaxy'
+    | '/mix'
     | '/oembed'
     | '/pipeline'
     | '/podcast.xml'
@@ -906,6 +937,7 @@ export interface FileRouteTypes {
     | '/admin/costs'
     | '/admin/findings'
     | '/admin/login'
+    | '/admin/mixable-order'
     | '/admin/mixtapes'
     | '/admin/newsletter'
     | '/admin/plans'
@@ -936,6 +968,7 @@ export interface FileRouteTypes {
     | '/api/auth/$'
     | '/api/mixtape-cover/$logId'
     | '/api/og/$logId'
+    | '/api/og/set'
     | '/api/preview/$idOrLogId'
     | '/api/v1/openapi.json'
     | '/api/v1/postman.json'
@@ -979,6 +1012,7 @@ export interface FileRouteTypes {
     | '/docs'
     | '/feed.json'
     | '/galaxy'
+    | '/mix'
     | '/oembed'
     | '/pipeline'
     | '/podcast.xml'
@@ -992,6 +1026,7 @@ export interface FileRouteTypes {
     | '/admin/costs'
     | '/admin/findings'
     | '/admin/login'
+    | '/admin/mixable-order'
     | '/admin/mixtapes'
     | '/admin/newsletter'
     | '/admin/plans'
@@ -1022,6 +1057,7 @@ export interface FileRouteTypes {
     | '/api/auth/$'
     | '/api/mixtape-cover/$logId'
     | '/api/og/$logId'
+    | '/api/og/set'
     | '/api/preview/$idOrLogId'
     | '/api/v1/openapi.json'
     | '/api/v1/postman.json'
@@ -1066,6 +1102,7 @@ export interface RootRouteChildren {
   DocsRoute: typeof DocsRouteWithChildren
   FeedDotjsonRoute: typeof FeedDotjsonRoute
   GalaxyRoute: typeof GalaxyRoute
+  MixRoute: typeof MixRoute
   OembedRoute: typeof OembedRoute
   PipelineRoute: typeof PipelineRoute
   PodcastDotxmlRoute: typeof PodcastDotxmlRoute
@@ -1093,6 +1130,7 @@ export interface RootRouteChildren {
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
   ApiMixtapeCoverLogIdRoute: typeof ApiMixtapeCoverLogIdRoute
   ApiOgLogIdRoute: typeof ApiOgLogIdRoute
+  ApiOgSetRoute: typeof ApiOgSetRoute
   ApiPreviewIdOrLogIdRoute: typeof ApiPreviewIdOrLogIdRoute
   ApiV1OpenapiDotjsonRoute: typeof ApiV1OpenapiDotjsonRoute
   ApiV1PostmanDotjsonRoute: typeof ApiV1PostmanDotjsonRoute
@@ -1181,6 +1219,13 @@ declare module '@tanstack/react-router' {
       path: '/oembed'
       fullPath: '/oembed'
       preLoaderRoute: typeof OembedRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/mix': {
+      id: '/mix'
+      path: '/mix'
+      fullPath: '/mix'
+      preLoaderRoute: typeof MixRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/galaxy': {
@@ -1435,6 +1480,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminMixtapesRouteImport
       parentRoute: typeof AdminRouteRoute
     }
+    '/admin/mixable-order': {
+      id: '/admin/mixable-order'
+      path: '/mixable-order'
+      fullPath: '/admin/mixable-order'
+      preLoaderRoute: typeof AdminMixableOrderRouteImport
+      parentRoute: typeof AdminRouteRoute
+    }
     '/admin/login': {
       id: '/admin/login'
       path: '/login'
@@ -1496,6 +1548,13 @@ declare module '@tanstack/react-router' {
       path: '/api/preview/$idOrLogId'
       fullPath: '/api/preview/$idOrLogId'
       preLoaderRoute: typeof ApiPreviewIdOrLogIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/og/set': {
+      id: '/api/og/set'
+      path: '/api/og/set'
+      fullPath: '/api/og/set'
+      preLoaderRoute: typeof ApiOgSetRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/og/$logId': {
@@ -1724,6 +1783,7 @@ interface AdminRouteRouteChildren {
   AdminCostsRoute: typeof AdminCostsRoute
   AdminFindingsRoute: typeof AdminFindingsRoute
   AdminLoginRoute: typeof AdminLoginRoute
+  AdminMixableOrderRoute: typeof AdminMixableOrderRoute
   AdminMixtapesRoute: typeof AdminMixtapesRoute
   AdminNewsletterRoute: typeof AdminNewsletterRoute
   AdminPlansRoute: typeof AdminPlansRoute
@@ -1740,6 +1800,7 @@ const AdminRouteRouteChildren: AdminRouteRouteChildren = {
   AdminCostsRoute: AdminCostsRoute,
   AdminFindingsRoute: AdminFindingsRoute,
   AdminLoginRoute: AdminLoginRoute,
+  AdminMixableOrderRoute: AdminMixableOrderRoute,
   AdminMixtapesRoute: AdminMixtapesRoute,
   AdminNewsletterRoute: AdminNewsletterRoute,
   AdminPlansRoute: AdminPlansRoute,
@@ -1781,6 +1842,7 @@ const rootRouteChildren: RootRouteChildren = {
   DocsRoute: DocsRouteWithChildren,
   FeedDotjsonRoute: FeedDotjsonRoute,
   GalaxyRoute: GalaxyRoute,
+  MixRoute: MixRoute,
   OembedRoute: OembedRoute,
   PipelineRoute: PipelineRoute,
   PodcastDotxmlRoute: PodcastDotxmlRoute,
@@ -1808,6 +1870,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiAuthSplatRoute: ApiAuthSplatRoute,
   ApiMixtapeCoverLogIdRoute: ApiMixtapeCoverLogIdRoute,
   ApiOgLogIdRoute: ApiOgLogIdRoute,
+  ApiOgSetRoute: ApiOgSetRoute,
   ApiPreviewIdOrLogIdRoute: ApiPreviewIdOrLogIdRoute,
   ApiV1OpenapiDotjsonRoute: ApiV1OpenapiDotjsonRoute,
   ApiV1PostmanDotjsonRoute: ApiV1PostmanDotjsonRoute,

@@ -418,3 +418,39 @@ export async function vehiclesCommand(limit: number): Promise<VehicleEntry[]> {
     vehicle: track.videoVehicle,
   }));
 }
+
+// `fluncle admin tracks mixable-order <logId...> [--seed <logId>]` — the dream-weaver
+// (RFC mixability-engine). Orders a pool of findings into a smooth PROPOSED mix the
+// operator copy-pastes into Rekordbox; a pure admin read (it never writes — the mint
+// stays `recordings promote`). The Worker runs Held-Karp exact for ≤16, greedy + 2-opt
+// to 64. A smoothness-optimized chain, NOT an energy-shaped set — stated honestly.
+export type MixOrderStop = {
+  artists: string[];
+  bpm?: number;
+  flagged: boolean;
+  key?: string;
+  logId: string;
+  title: string;
+  transitionReason?: { kind: "key" | "bpm" | "sonic"; relationship: string };
+  transitionScore?: number;
+};
+
+export type MixableOrderResult = {
+  algorithm: "held-karp" | "greedy-2opt";
+  ok: true;
+  order: MixOrderStop[];
+  totalCost: number;
+};
+
+export async function mixableOrderCommand(
+  logIds: string[],
+  seed?: string,
+): Promise<MixableOrderResult> {
+  const params = new URLSearchParams({ ids: logIds.join(",") });
+
+  if (seed) {
+    params.set("seed", seed);
+  }
+
+  return adminApiGet<MixableOrderResult>(`/api/admin/tracks/mixable-order?${params.toString()}`);
+}

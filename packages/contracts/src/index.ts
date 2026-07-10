@@ -43,6 +43,8 @@ import {
   type PublicUserSchema,
   type RadioNowPlayingSchema,
   type RecordingDTOSchema,
+  type MixableCandidateSchema,
+  type MixReasonSchema,
   type RecordingTracklistItemSchema,
   type SocialPostItemSchema,
   type SubmissionSchema,
@@ -135,6 +137,18 @@ export type TrackFeatures = z.infer<typeof TrackFeaturesSchema>;
  * wire. Field docs live on the schema.
  */
 export type TrackListItem = z.infer<typeof TrackListItemSchema>;
+
+/**
+ * Why one finding mixes out of another — a `/mix` candidate's reason chip. Inferred
+ * from `MixReasonSchema` (./orpc/_shared.ts). No numeric score (§3.0 invariant).
+ */
+export type MixReason = z.infer<typeof MixReasonSchema>;
+
+/**
+ * A `/mix` candidate: a finding + its reason chip, in mixability order. Inferred from
+ * `MixableCandidateSchema` (./orpc/_shared.ts).
+ */
+export type MixableCandidate = z.infer<typeof MixableCandidateSchema>;
 
 /** The cursor for feed pagination (base64'd `addedAt` + `trackId`). */
 export type TrackCursor = {

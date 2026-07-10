@@ -67,6 +67,12 @@ const PUBLIC_ROUTE_OPS: Record<string, string> = {
   "GET /tracks": "list_tracks",
   "GET /tracks/random": "get_random_track",
   "GET /tracks/{idOrLogId}": "get_track",
+  // The `/mix` set-builder rail (RFC mixability-engine). Contract-only oRPC — no
+  // TanStack route file under /api/v1/tracks (oRPC serves it straight off the
+  // registry), so it has no route-file basename to enumerate; documented here as part
+  // of the public surface net. Public-unauth at the op; the `/mix` PAGE is admin-gated
+  // at launch (Decision 1), a pure route-level flip to lift.
+  "GET /tracks/{idOrLogId}/mixable": "list_mixable_tracks",
   // The "more like this" sonic-neighbour read (docs/track-lifecycle.md). Contract-only
   // oRPC — no TanStack route file under /api/v1/tracks (oRPC serves it straight off the
   // registry), so it has no route-file basename to enumerate; documented here as part of

@@ -104,6 +104,39 @@ export const TrackListItemSchema = z
   .meta({ id: "TrackListItem" });
 
 /**
+ * Why one finding mixes cleanly out of another — the structured reason a `/mix`
+ * candidate row renders as its chip (the mixability engine, `lib/server/mixability.ts`).
+ * NO numeric score reaches the crew (a SaaS tell + mono-genre compression makes
+ * percentages read broken); the chip is this `{ kind, relationship }` alone. `kind`
+ * is the dominant present sub-score; `relationship` names it — the harmonic labels for
+ * `key`, `tempo_match` for `bpm`, `close_in_sound` for `sonic`.
+ */
+export const MixReasonSchema = z
+  .object({
+    kind: z.enum(["key", "bpm", "sonic"]),
+    relationship: z.enum([
+      "same_key",
+      "relative",
+      "adjacent",
+      "energy",
+      "diagonal",
+      "distant",
+      "tempo_match",
+      "close_in_sound",
+    ]),
+  })
+  .meta({ id: "MixReason" });
+
+/**
+ * A `/mix` candidate: a finding plus its `reason` chip, ordered by the mixability
+ * core (`list_mixable_tracks`). A `TrackListItem` extended with the reason — NO score
+ * field (§3.0 invariant: numbers never reach the crew).
+ */
+export const MixableCandidateSchema = TrackListItemSchema.extend({
+  reason: MixReasonSchema,
+}).meta({ id: "MixableCandidate" });
+
+/**
  * The radio.fluncle.com now-playing slot (`RadioNowPlaying` in ../index.ts; RFC
  * radio-broadcast.md Unit A). The server-authoritative position on the shared loop
  * — `currentTrack` + `offsetMs` is what's playing right now; `nextTrack` the

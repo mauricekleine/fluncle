@@ -701,6 +701,23 @@ function addAdminCommands(program: Command): void {
       await runTrackGetAdmin(idOrLogId, options, trackGetAdminCommand);
     });
 
+  // `get_mixable_order` → `admin tracks mixable-order` (Convention B). The dream-weaver:
+  // order a pool of findings (by Log ID) into a smooth PROPOSED mix to copy-paste into
+  // Rekordbox. A pure admin read — it proposes, never publishes (the mint stays
+  // `recordings promote`). `--seed` pins the first stop. Held-Karp exact for ≤16 stops,
+  // greedy + 2-opt to 64. A smoothness-optimized chain, NOT an energy-shaped set.
+  adminTrack
+    .command("mixable-order")
+    .description("Order findings into a smooth proposed mix (2–64 Log IDs)")
+    .argument("[logIds...]", "The findings to order, by Log ID")
+    .option("--seed <logId>", "Pin the first stop")
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (logIds: string[], options: MixableOrderOptions) => {
+      const { mixableOrderCommand } = await import("./commands/admin-tracks");
+      await runMixableOrder(logIds, options, mixableOrderCommand);
+    });
+
   adminTrack
     .command("update")
     .description("Certify a track into the archive")
@@ -2427,6 +2444,48 @@ async function runTrackGet(
   if (t.logPageUrl) {
     console.log(`Log: ${t.logPageUrl}`);
   }
+}
+
+type MixableOrderOptions = JsonOptions & { seed?: string };
+
+async function runMixableOrder(
+  logIds: string[],
+  options: MixableOrderOptions,
+  mixableOrderCommand: typeof import("./commands/admin-tracks").mixableOrderCommand,
+): Promise<void> {
+  if (logIds.length < 2) {
+    throw new Error(
+      "Give 2 or more Log IDs. Usage: fluncle admin tracks mixable-order <logId...> [--seed <logId>] [--json]",
+    );
+  }
+
+  const result = await mixableOrderCommand(logIds, options.seed);
+
+  if (options.json) {
+    printJson(result);
+    return;
+  }
+
+  console.log(
+    `Proposed mix — a smooth chain (${result.algorithm}), not an energy-shaped set. Copy into Rekordbox as advisory.\n`,
+  );
+
+  result.order.forEach((stop, index) => {
+    const into =
+      index === 0
+        ? "start"
+        : stop.flagged
+          ? "sparse join"
+          : (stop.transitionReason?.relationship.replace(/_/g, " ") ?? "—");
+    const meta = [stop.key, stop.bpm ? `${Math.round(stop.bpm)} bpm` : undefined]
+      .filter(Boolean)
+      .join(" · ");
+
+    console.log(
+      `${String(index + 1).padStart(2)}. ${stop.logId}  ${stop.artists.join(", ")} — ${stop.title}`,
+    );
+    console.log(`    ${[into, meta].filter(Boolean).join("  ·  ")}`);
+  });
 }
 
 async function runTrackGetAdmin(

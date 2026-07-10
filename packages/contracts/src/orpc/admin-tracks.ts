@@ -23,7 +23,7 @@
 
 import { oc } from "@orpc/contract";
 import * as z from "zod";
-import { FeedItemSchema, TrackListItemSchema } from "./_shared";
+import { FeedItemSchema, MixReasonSchema, TrackListItemSchema } from "./_shared";
 
 /**
  * The PATCH /admin/tracks/{trackId} body — the generic admin track update. LOOSE
@@ -586,10 +586,64 @@ export const publishTrack = oc
   )
   .output(PublishTrackResultSchema.extend({ ok: z.literal(true) }));
 
+/**
+ * One ordered stop in a proposed mix — the finding + the transition INTO it (the
+ * `transitionScore`/`transitionReason` describe the edge from the previous stop, so
+ * the first stop's are null). Admin-only, so the raw `transitionScore` is present here
+ * (it never rides a crew-facing surface). `flagged` marks a null-pair transition
+ * (costed at the neutral median, not a musical judgment).
+ */
+const MixOrderStopSchema = z
+  .object({
+    artists: z.array(z.string()),
+    bpm: z.number().optional(),
+    flagged: z.boolean(),
+    key: z.string().optional(),
+    logId: z.string(),
+    title: z.string(),
+    transitionReason: MixReasonSchema.optional(),
+    transitionScore: z.number().optional(),
+  })
+  .meta({ id: "MixOrderStop" });
+
+/**
+ * `get_mixable_order` → `GET /admin/tracks/mixable-order` (operationId
+ * `getMixableOrder`).
+ *
+ * The dream-weaver: order a candidate pool into a SMOOTHNESS-optimized chain
+ * (minimizing total adjacent roughness), NOT an energy-shaped set — a proposed
+ * tracklist the operator copy-pastes into Rekordbox. A PURE admin READ (no writes):
+ * `promote_recording` remains the only way a mixtape exists. Admin tier
+ * (agent-allowed, like `get_track_admin`), GET like all 17 `get_*` ops (64 comma-
+ * joined logIds fit a query param). Held-Karp exact for ≤16, greedy + 2-opt to 64.
+ *
+ * `ids` is a comma-separated Log ID list (2..64; a 65-id request 400s at validation);
+ * `seed` optionally pins the first stop. Output is the ordered stops + the total cost
+ * + which algorithm ran.
+ */
+export const getMixableOrder = oc
+  .route({
+    method: "GET",
+    operationId: "getMixableOrder",
+    path: "/admin/tracks/mixable-order",
+    summary: "Order a pool of findings into a smooth proposed mix (Held-Karp / greedy+2-opt)",
+    tags: ["Admin"],
+  })
+  .input(z.object({ ids: z.string(), seed: z.string().optional() }))
+  .output(
+    z.object({
+      algorithm: z.enum(["held-karp", "greedy-2opt"]),
+      ok: z.literal(true),
+      order: z.array(MixOrderStopSchema),
+      totalCost: z.number(),
+    }),
+  );
+
 /** The `admin-tracks` domain's ops, merged into the root contract by `./index.ts`. */
 export const adminTracksContract = {
   context_track: contextTrack,
   finalize_track_video: finalizeTrackVideo,
+  get_mixable_order: getMixableOrder,
   get_track_admin: getTrackAdmin,
   list_tracks_admin: listTracksAdmin,
   note_track: noteTrack,
