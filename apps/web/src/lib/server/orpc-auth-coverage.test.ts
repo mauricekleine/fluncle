@@ -165,6 +165,9 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // (and is one-shot, marker-guarded), so the agent token 403s.
   announce_mixtape: "operator",
   approve_submission: "operator",
+  // The artist-avatar backfill — agent tier (adminAuth only): internal + reversible
+  // enrichment (fetch each artist's Spotify image), same tier as backfill_artists.
+  backfill_artist_images: "admin",
   // The artist-entity backfill — agent tier (adminAuth only, no operatorGuard):
   // internal + reversible metadata enrichment (no publish), so the box's agent-token
   // `fluncle-artist-backfill` cron drives it without an operator token.

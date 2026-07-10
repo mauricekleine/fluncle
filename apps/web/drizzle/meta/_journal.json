@@ -435,6 +435,13 @@
       "when": 1783667728843,
       "tag": "0061_abnormal_firebrand",
       "breakpoints": true
+    },
+    {
+      "idx": 62,
+      "version": "6",
+      "when": 1783676729522,
+      "tag": "0062_sleepy_pandemic",
+      "breakpoints": true
     }
   ]
 }

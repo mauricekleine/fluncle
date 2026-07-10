@@ -125,12 +125,14 @@ describe("resolveArtistPageData (the artist page indexability gate)", () => {
 
   it("assembles the dossier (signature + neighbours) from the findings", async () => {
     getFindingsByArtist.mockResolvedValue([
-      finding("003.1.1A", { addedAt: "2026-03-10T00:00:00.000Z", bpm: 176, key: "A minor" }),
-      finding("002.1.1A", { addedAt: "2026-02-01T00:00:00.000Z", bpm: 174, key: "F minor" }),
-      finding("001.1.1A", { addedAt: "2026-01-05T00:00:00.000Z", bpm: 172, key: "A minor" }),
+      finding("003.1.1A", { addedAt: "2026-03-10T00:00:00.000Z" }),
+      finding("002.1.1A", { addedAt: "2026-02-01T00:00:00.000Z" }),
+      finding("001.1.1A", { addedAt: "2026-01-05T00:00:00.000Z" }),
     ]);
     countArtistFindings.mockResolvedValue(3);
-    getArtistNeighbours.mockResolvedValue([{ name: "Echo", slug: "echo" }]);
+    getArtistNeighbours.mockResolvedValue([
+      { imageUrl: "https://i.scdn.co/image/echo", name: "Echo", slug: "echo" },
+    ]);
 
     const data = await resolveArtistPageData("drift");
 
@@ -140,10 +142,9 @@ describe("resolveArtistPageData (the artist page indexability gate)", () => {
     expect(data.dossier.findingCount).toBe(3);
     // The earliest finding is when the artist first crossed his path.
     expect(data.dossier.firstFoundAt).toBe("2026-01-05T00:00:00.000Z");
-    // The tempo band spans the slowest→fastest with the median between them.
-    expect(data.dossier.bpm).toEqual({ max: 176, median: 174, min: 172 });
-    // The key spread is de-duplicated + sorted.
-    expect(data.dossier.keys).toEqual(["A minor", "F minor"]);
-    expect(data.dossier.neighbours).toEqual([{ name: "Echo", slug: "echo" }]);
+    // The similar-artists row carries each neighbour's identity + avatar.
+    expect(data.dossier.neighbours).toEqual([
+      { imageUrl: "https://i.scdn.co/image/echo", name: "Echo", slug: "echo" },
+    ]);
   });
 });

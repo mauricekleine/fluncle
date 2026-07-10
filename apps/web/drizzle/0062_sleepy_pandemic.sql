@@ -1,0 +1,1 @@
+ALTER TABLE `artists` ADD `image_url` text;

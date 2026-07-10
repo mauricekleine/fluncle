@@ -13,6 +13,7 @@ import {
   siX,
   siYoutube,
 } from "simple-icons";
+import { ArtistAvatar } from "@/components/artist-avatar";
 import { BrandIcon } from "@/components/brand-icon";
 import { StoryNotFoundState } from "@/components/stories/stories-states";
 import { TrackArtwork } from "@/components/track-artwork";
@@ -127,11 +128,7 @@ export async function resolveArtistPageData(slug: string): Promise<ArtistPageDat
   // query); the neighbours came from the corpus-wide embedding pass above.
   const gridFindings = findings.filter((finding) => finding.logId);
   const signature = summarizeArtistSignature(
-    gridFindings.map((finding) => ({
-      addedAt: finding.addedAt,
-      bpm: finding.bpm,
-      key: finding.key,
-    })),
+    gridFindings.map((finding) => ({ addedAt: finding.addedAt })),
   );
 
   return {
@@ -179,24 +176,6 @@ function artistSignatureLine(name: string, dossier: ArtistDossier): string {
   }
 
   return `I first crossed ${name}'s path on ${when}, and I've logged ${findingCount} of their tunes since. Have a dig.`;
-}
-
-// The tempo field's value — the band plus its median, or a single figure when every
-// finding shares a tempo. Plain, logbook-flavoured; "to" (not a dash) keeps the range
-// clear of the sanctioned Artist — Title em dash (VOICE.md).
-function tempoLine(bpm: ArtistDossier["bpm"]): string | undefined {
-  if (!bpm) {
-    return undefined;
-  }
-
-  const min = Math.round(bpm.min);
-  const max = Math.round(bpm.max);
-
-  if (min === max) {
-    return `${min} BPM`;
-  }
-
-  return `${min} to ${max} BPM, mostly ${Math.round(bpm.median)}`;
 }
 
 function artistHead(loaderData: ArtistPageData | undefined) {
@@ -313,7 +292,6 @@ function ArtistPage() {
 
   const { dossier, findings, name, socials } = data;
   const grid = findings.filter((finding) => finding.logId);
-  const tempo = tempoLine(dossier.bpm);
 
   return (
     <main className="log-plate-stage">
@@ -332,35 +310,23 @@ function ArtistPage() {
           ) : undefined}
         </header>
 
-        {tempo || dossier.keys.length > 0 ? (
-          <dl className="log-fields artist-signature">
-            {tempo ? (
-              <div className="log-field">
-                <dt>Tempo</dt>
-                <dd>{tempo}</dd>
-              </div>
-            ) : undefined}
-            {dossier.keys.length > 0 ? (
-              <div className="log-field">
-                <dt>{dossier.keys.length === 1 ? "Key" : "Keys"}</dt>
-                <dd>{dossier.keys.join(", ")}</dd>
-              </div>
-            ) : undefined}
-          </dl>
-        ) : undefined}
-
         {dossier.neighbours.length > 0 ? (
-          <nav aria-label="Similar artists" className="artist-sector">
-            <p className="artist-sector-label">Similar artists</p>
-            <ul className="artist-sector-list">
+          <nav aria-label="Similar artists" className="artist-similar">
+            <p className="artist-similar-label">Similar artists</p>
+            <ul className="artist-similar-list">
               {dossier.neighbours.map((neighbour) => (
                 <li key={neighbour.slug}>
                   <Link
-                    className="artist-sector-link"
+                    className="artist-similar-link"
                     params={{ slug: neighbour.slug }}
                     to="/artist/$slug"
                   >
-                    {neighbour.name}
+                    <ArtistAvatar
+                      className="artist-similar-avatar"
+                      name={neighbour.name}
+                      src={neighbour.imageUrl}
+                    />
+                    <span>{neighbour.name}</span>
                   </Link>
                 </li>
               ))}

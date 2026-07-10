@@ -17,6 +17,7 @@ import {
   reviewArtist,
 } from "../artists";
 import { listUnresolvedArtists, resolveArtist } from "../artist-resolution";
+import { backfillArtistImages } from "../backfill-artist-images";
 import { backfillArtists } from "../backfill-artists";
 import { adminAuth, operatorGuard } from "../orpc-auth";
 import { ORPCError } from "@orpc/server";
@@ -81,6 +82,36 @@ export function adminArtistsHandlers(os: Implementer) {
       throw apiFault(error);
     }
   });
+
+  // POST /admin/backfill/artist-images — agent tier (`adminAuth`): fetch the largest
+  // Spotify avatar for artists missing one. Internal + reversible enrichment (no
+  // publish), so the box's agent-token cron drives it.
+  const backfillArtistImagesHandler = os.backfill_artist_images
+    .use(adminAuth)
+    .handler(async ({ input }) => {
+      try {
+        const { query } = input;
+        const result = await backfillArtistImages(
+          parseLimit(query.limit, BACKFILL_DEFAULT_LIMIT, BACKFILL_MAX_LIMIT),
+          parseBool(query.dryRun),
+          query.cursor ?? undefined,
+        );
+
+        return {
+          dryRun: result.dryRun,
+          failed: result.failed,
+          failedCount: result.failedCount,
+          filled: result.filled,
+          filledCount: result.filledCount,
+          nextCursor: result.nextCursor,
+          ok: true as const,
+          skipped: result.skipped,
+          skippedCount: result.skippedCount,
+        };
+      } catch (error) {
+        throw apiFault(error);
+      }
+    });
 
   // GET /admin/artists/socials — admin tier (agent-allowed read): the review queue for
   // the `/admin/artists` station. Returns artists with unconfirmed socials.
@@ -200,6 +231,7 @@ export function adminArtistsHandlers(os: Implementer) {
 
   return {
     add_artist_social: addArtistSocialHandler,
+    backfill_artist_images: backfillArtistImagesHandler,
     backfill_artists: backfillArtistsHandler,
     confirm_artist_social: confirmArtistSocialHandler,
     list_artist_socials: listArtistSocialsHandler,

@@ -77,6 +77,43 @@ export type ArtistsBackfillResult = {
   upsertedCount: number;
 };
 
+export type ArtistImagesBackfillResult = {
+  dryRun: boolean;
+  failed: Array<{ artistId: string; error: string }>;
+  failedCount: number;
+  filled: string[];
+  filledCount: number;
+  // The feed cursor to resume from on the next pass, or null when the queue is
+  // drained. Each pass batch-fetches one Spotify `/v1/artists` page, so the CLI
+  // loops this until null.
+  nextCursor: string | null;
+  ok: boolean;
+  // Artists Spotify has no image for — left null (a monogram tile renders), not failed.
+  skipped: string[];
+  skippedCount: number;
+};
+
+// One bounded pass of the artist-avatar backfill via the admin API — the Worker
+// fetches the largest Spotify profile image for artists missing one and stamps
+// `artists.image_url`. Idempotent + self-draining (an imaged artist drops out of the
+// queue). `--dry-run` reports which artists would be filled without touching the DB.
+// Pass the prior pass's `nextCursor` to resume; the CLI loops until it comes back null.
+export async function backfillArtistImagesCommand(
+  limit: number,
+  dryRun: boolean,
+  cursor?: string,
+): Promise<ArtistImagesBackfillResult> {
+  const params = new URLSearchParams({ dryRun: String(dryRun), limit: String(limit) });
+
+  if (cursor) {
+    params.set("cursor", cursor);
+  }
+
+  return adminApiPost<ArtistImagesBackfillResult>(
+    `/api/admin/backfill/artist-images?${params.toString()}`,
+  );
+}
+
 // One bounded pass of the artist-entity backfill via the admin API — the Worker
 // re-fetches each eligible finding's Spotify track metadata and upserts `artists`
 // + `track_artists`. Findings that already have a `track_artists` row are skipped

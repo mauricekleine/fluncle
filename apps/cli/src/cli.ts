@@ -1623,6 +1623,19 @@ function addAdminCommands(program: Command): void {
       await runBackfillArtists(options, backfillArtistsCommand);
     });
 
+  // `backfill_artist_images` → `admin backfills artist-images`. Fills each existing
+  // artist's Spotify avatar (`artists.image_url`) — the ~70 minted before the column.
+  backfill
+    .command("artist-images")
+    .description("Back-fill artist Spotify avatars (image_url) for existing artists")
+    .option("--dry-run", "Report which artists would be filled without touching the DB", false)
+    .option("--limit <limit>", "Max artists to process", "50")
+    .option("--json", "Print JSON", false)
+    .action(async (options: BackfillSyncOptions) => {
+      const { backfillArtistImagesCommand } = await import("./commands/admin-artists");
+      await runBackfillArtistImages(options, backfillArtistImagesCommand);
+    });
+
   // `list_artists` + `resolve_artist` → `admin artists resolve` (Convention B). The
   // on-box `fluncle-artist-sweep` cron drives BOTH modes: `--queue` reads the resolve
   // worklist (artists awaiting resolution), and `resolve <artistId>` triggers the
@@ -2197,6 +2210,67 @@ async function runBackfillArtists(
 
   for (const item of failed) {
     console.log(`  ${item.logId}: ${item.error}`);
+  }
+}
+
+async function runBackfillArtistImages(
+  options: BackfillSyncOptions,
+  backfillArtistImagesCommand: typeof import("./commands/admin-artists").backfillArtistImagesCommand,
+): Promise<void> {
+  const limit = parseListLimit(options.limit);
+  const filled: string[] = [];
+  const failed: Array<{ artistId: string; error: string }> = [];
+  const skipped: string[] = [];
+  let cursor: string | undefined;
+  let dryRun = options.dryRun;
+
+  while (filled.length + failed.length + skipped.length < limit) {
+    const remaining = limit - (filled.length + failed.length + skipped.length);
+    const result = await backfillArtistImagesCommand(remaining, options.dryRun, cursor);
+    dryRun = result.dryRun;
+    filled.push(...result.filled);
+    failed.push(...result.failed);
+    skipped.push(...result.skipped);
+
+    if (!options.json) {
+      const verb = result.dryRun ? "would fill" : "filled";
+      console.log(
+        `  …${verb} ${result.filledCount}; ${result.failedCount} failed; ${result.skippedCount} without an image`,
+      );
+    }
+
+    if (result.nextCursor === null) {
+      break;
+    }
+
+    cursor = result.nextCursor;
+  }
+
+  if (options.json) {
+    printJson({
+      dryRun,
+      failed,
+      failedCount: failed.length,
+      filled,
+      filledCount: filled.length,
+      ok: true,
+      skipped,
+      skippedCount: skipped.length,
+    });
+    return;
+  }
+
+  const verb = dryRun ? "Would fill" : "Filled";
+  console.log(
+    `${verb} ${filled.length} artist avatar(s); ${failed.length} failed; ${skipped.length} without a Spotify image.`,
+  );
+
+  for (const artistId of filled) {
+    console.log(`  ${artistId}`);
+  }
+
+  for (const item of failed) {
+    console.log(`  ${item.artistId}: ${item.error}`);
   }
 }
 
