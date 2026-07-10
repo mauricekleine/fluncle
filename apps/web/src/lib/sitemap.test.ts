@@ -13,6 +13,7 @@ describe("buildSitemapXml (sitemap enumeration)", () => {
 
     expect(xml).toContain("<loc>https://www.fluncle.com/</loc>");
     expect(xml).toContain("<loc>https://www.fluncle.com/log</loc>");
+    expect(xml).toContain("<loc>https://www.fluncle.com/logbook</loc>");
     expect(xml).toContain("<loc>https://www.fluncle.com/mixtapes</loc>");
     expect(xml).toContain("<loc>https://www.fluncle.com/artists</loc>");
     expect(xml).toContain("<loc>https://www.fluncle.com/about</loc>");
@@ -20,7 +21,7 @@ describe("buildSitemapXml (sitemap enumeration)", () => {
     expect(xml).toContain("<loc>https://www.fluncle.com/galaxy</loc>");
     expect(xml).toContain("<loc>https://www.fluncle.com/log/011.6.8K</loc>");
     expect(xml).toContain("<loc>https://www.fluncle.com/log/004.7.2I</loc>");
-    expect(xml.match(/<loc>/g)).toHaveLength(7 + pages.length);
+    expect(xml.match(/<loc>/g)).toHaveLength(8 + pages.length);
   });
 
   it("always includes the /galaxy surface", () => {
@@ -46,7 +47,7 @@ describe("buildSitemapXml (sitemap enumeration)", () => {
     const xml = buildSitemapXml([]);
 
     expect(xml).not.toContain("<lastmod>");
-    expect(xml.match(/<loc>/g)).toHaveLength(7);
+    expect(xml.match(/<loc>/g)).toHaveLength(8);
   });
 
   it("appends a <loc> per artist page (thin-gated upstream) with its cover + lastmod", () => {
@@ -62,8 +63,24 @@ describe("buildSitemapXml (sitemap enumeration)", () => {
     expect(xml).toContain("<loc>https://www.fluncle.com/artist/dimension</loc>");
     expect(xml).toContain("<loc>https://www.fluncle.com/artist/sub-focus</loc>");
     expect(xml).toContain("<image:loc>https://img/dimension.jpg</image:loc>");
-    // 7 static + 2 findings + 2 artists.
-    expect(xml.match(/<loc>/g)).toHaveLength(7 + pages.length + 2);
+    // 8 static + 2 findings + 2 artists.
+    expect(xml.match(/<loc>/g)).toHaveLength(8 + pages.length + 2);
+  });
+
+  it("appends a <loc> per logbook entry with its generated-at lastmod", () => {
+    const xml = buildSitemapXml(
+      pages,
+      [],
+      [{ lastmod: "2026-07-05T00:00:00.000Z", sector: "036" }, { sector: "037" }],
+    );
+
+    expect(xml).toContain("<loc>https://www.fluncle.com/logbook/036</loc>");
+    expect(xml).toContain("<loc>https://www.fluncle.com/logbook/037</loc>");
+    // The /logbook index takes the freshest entry's lastmod.
+    const index = xml.slice(0, xml.indexOf("/logbook/036"));
+    expect(index).toContain("<loc>https://www.fluncle.com/logbook</loc>");
+    // 8 static + 2 findings + 2 logbook entries.
+    expect(xml.match(/<loc>/g)).toHaveLength(8 + pages.length + 2);
   });
 
   it("declares the image + video namespaces on the urlset", () => {

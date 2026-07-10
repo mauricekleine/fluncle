@@ -31,12 +31,14 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as StoriesIndexRouteImport } from './routes/stories.index'
 import { Route as NewsletterIndexRouteImport } from './routes/newsletter.index'
 import { Route as MixtapesIndexRouteImport } from './routes/mixtapes.index'
+import { Route as LogbookIndexRouteImport } from './routes/logbook.index'
 import { Route as LogIndexRouteImport } from './routes/log.index'
 import { Route as DocsIndexRouteImport } from './routes/docs.index'
 import { Route as ArtistsIndexRouteImport } from './routes/artists.index'
 import { Route as AdminIndexRouteImport } from './routes/admin/index'
 import { Route as StoriesLogIdRouteImport } from './routes/stories.$logId'
 import { Route as NewsletterNumberRouteImport } from './routes/newsletter.$number'
+import { Route as LogbookSectorRouteImport } from './routes/logbook.$sector'
 import { Route as LogLogIdRouteImport } from './routes/log.$logId'
 import { Route as EmbedLogIdRouteImport } from './routes/embed.$logId'
 import { Route as DocsApiRouteImport } from './routes/docs.api'
@@ -203,6 +205,11 @@ const MixtapesIndexRoute = MixtapesIndexRouteImport.update({
   path: '/mixtapes/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const LogbookIndexRoute = LogbookIndexRouteImport.update({
+  id: '/logbook/',
+  path: '/logbook/',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const LogIndexRoute = LogIndexRouteImport.update({
   id: '/log/',
   path: '/log/',
@@ -231,6 +238,11 @@ const StoriesLogIdRoute = StoriesLogIdRouteImport.update({
 const NewsletterNumberRoute = NewsletterNumberRouteImport.update({
   id: '/newsletter/$number',
   path: '/newsletter/$number',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const LogbookSectorRoute = LogbookSectorRouteImport.update({
+  id: '/logbook/$sector',
+  path: '/logbook/$sector',
   getParentRoute: () => rootRouteImport,
 } as any)
 const LogLogIdRoute = LogLogIdRouteImport.update({
@@ -565,12 +577,14 @@ export interface FileRoutesByFullPath {
   '/docs/api': typeof DocsApiRoute
   '/embed/$logId': typeof EmbedLogIdRoute
   '/log/$logId': typeof LogLogIdRoute
+  '/logbook/$sector': typeof LogbookSectorRoute
   '/newsletter/$number': typeof NewsletterNumberRoute
   '/stories/$logId': typeof StoriesLogIdRoute
   '/admin/': typeof AdminIndexRoute
   '/artists/': typeof ArtistsIndexRoute
   '/docs/': typeof DocsIndexRoute
   '/log/': typeof LogIndexRoute
+  '/logbook/': typeof LogbookIndexRoute
   '/mixtapes/': typeof MixtapesIndexRoute
   '/newsletter/': typeof NewsletterIndexRoute
   '/stories/': typeof StoriesIndexRoute
@@ -647,12 +661,14 @@ export interface FileRoutesByTo {
   '/docs/api': typeof DocsApiRoute
   '/embed/$logId': typeof EmbedLogIdRoute
   '/log/$logId': typeof LogLogIdRoute
+  '/logbook/$sector': typeof LogbookSectorRoute
   '/newsletter/$number': typeof NewsletterNumberRoute
   '/stories/$logId': typeof StoriesLogIdRoute
   '/admin': typeof AdminIndexRoute
   '/artists': typeof ArtistsIndexRoute
   '/docs': typeof DocsIndexRoute
   '/log': typeof LogIndexRoute
+  '/logbook': typeof LogbookIndexRoute
   '/mixtapes': typeof MixtapesIndexRoute
   '/newsletter': typeof NewsletterIndexRoute
   '/stories': typeof StoriesIndexRoute
@@ -732,12 +748,14 @@ export interface FileRoutesById {
   '/docs/api': typeof DocsApiRoute
   '/embed/$logId': typeof EmbedLogIdRoute
   '/log/$logId': typeof LogLogIdRoute
+  '/logbook/$sector': typeof LogbookSectorRoute
   '/newsletter/$number': typeof NewsletterNumberRoute
   '/stories/$logId': typeof StoriesLogIdRoute
   '/admin/': typeof AdminIndexRoute
   '/artists/': typeof ArtistsIndexRoute
   '/docs/': typeof DocsIndexRoute
   '/log/': typeof LogIndexRoute
+  '/logbook/': typeof LogbookIndexRoute
   '/mixtapes/': typeof MixtapesIndexRoute
   '/newsletter/': typeof NewsletterIndexRoute
   '/stories/': typeof StoriesIndexRoute
@@ -818,12 +836,14 @@ export interface FileRouteTypes {
     | '/docs/api'
     | '/embed/$logId'
     | '/log/$logId'
+    | '/logbook/$sector'
     | '/newsletter/$number'
     | '/stories/$logId'
     | '/admin/'
     | '/artists/'
     | '/docs/'
     | '/log/'
+    | '/logbook/'
     | '/mixtapes/'
     | '/newsletter/'
     | '/stories/'
@@ -900,12 +920,14 @@ export interface FileRouteTypes {
     | '/docs/api'
     | '/embed/$logId'
     | '/log/$logId'
+    | '/logbook/$sector'
     | '/newsletter/$number'
     | '/stories/$logId'
     | '/admin'
     | '/artists'
     | '/docs'
     | '/log'
+    | '/logbook'
     | '/mixtapes'
     | '/newsletter'
     | '/stories'
@@ -984,12 +1006,14 @@ export interface FileRouteTypes {
     | '/docs/api'
     | '/embed/$logId'
     | '/log/$logId'
+    | '/logbook/$sector'
     | '/newsletter/$number'
     | '/stories/$logId'
     | '/admin/'
     | '/artists/'
     | '/docs/'
     | '/log/'
+    | '/logbook/'
     | '/mixtapes/'
     | '/newsletter/'
     | '/stories/'
@@ -1056,10 +1080,12 @@ export interface RootRouteChildren {
   DocsDotmdSplatRoute: typeof DocsDotmdSplatRoute
   EmbedLogIdRoute: typeof EmbedLogIdRoute
   LogLogIdRoute: typeof LogLogIdRoute
+  LogbookSectorRoute: typeof LogbookSectorRoute
   NewsletterNumberRoute: typeof NewsletterNumberRoute
   StoriesLogIdRoute: typeof StoriesLogIdRoute
   ArtistsIndexRoute: typeof ArtistsIndexRoute
   LogIndexRoute: typeof LogIndexRoute
+  LogbookIndexRoute: typeof LogbookIndexRoute
   MixtapesIndexRoute: typeof MixtapesIndexRoute
   NewsletterIndexRoute: typeof NewsletterIndexRoute
   StoriesIndexRoute: typeof StoriesIndexRoute
@@ -1255,6 +1281,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof MixtapesIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/logbook/': {
+      id: '/logbook/'
+      path: '/logbook'
+      fullPath: '/logbook/'
+      preLoaderRoute: typeof LogbookIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/log/': {
       id: '/log/'
       path: '/log'
@@ -1295,6 +1328,13 @@ declare module '@tanstack/react-router' {
       path: '/newsletter/$number'
       fullPath: '/newsletter/$number'
       preLoaderRoute: typeof NewsletterNumberRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/logbook/$sector': {
+      id: '/logbook/$sector'
+      path: '/logbook/$sector'
+      fullPath: '/logbook/$sector'
+      preLoaderRoute: typeof LogbookSectorRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/log/$logId': {
@@ -1755,10 +1795,12 @@ const rootRouteChildren: RootRouteChildren = {
   DocsDotmdSplatRoute: DocsDotmdSplatRoute,
   EmbedLogIdRoute: EmbedLogIdRoute,
   LogLogIdRoute: LogLogIdRoute,
+  LogbookSectorRoute: LogbookSectorRoute,
   NewsletterNumberRoute: NewsletterNumberRoute,
   StoriesLogIdRoute: StoriesLogIdRoute,
   ArtistsIndexRoute: ArtistsIndexRoute,
   LogIndexRoute: LogIndexRoute,
+  LogbookIndexRoute: LogbookIndexRoute,
   MixtapesIndexRoute: MixtapesIndexRoute,
   NewsletterIndexRoute: NewsletterIndexRoute,
   StoriesIndexRoute: StoriesIndexRoute,

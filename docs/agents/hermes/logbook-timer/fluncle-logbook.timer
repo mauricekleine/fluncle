@@ -1,0 +1,15 @@
+[Unit]
+Description=fluncle-logbook timer — author the previous day's logbook entry at 00:40 Amsterdam on the rave-02 host (not the Hermes gateway)
+
+[Timer]
+# 00:40 Europe/Amsterdam via the explicit OnCalendar TZ suffix — the host clock is UTC (only
+# the Hermes container is TZ-pinned), so we name the zone here; DST-safe, needs systemd >=252.
+# Fires shortly AFTER local midnight so the day that just ended is COMPLETE before it is written
+# up (the gap window excludes the in-progress sector-day). One day per tick; the self-healing gap
+# window backfills history oldest-first over successive nights. Persistent catches up a tick
+# missed across a box reboot — a late entry is harmless (fill-empty-only + idempotent).
+OnCalendar=*-*-* 00:40:00 Europe/Amsterdam
+Persistent=true
+
+[Install]
+WantedBy=timers.target

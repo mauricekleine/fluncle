@@ -437,6 +437,7 @@ const AUTOMATION_CRONS: CronDef[] = [
   // probeHealthcheck() below instead.
   { cadenceMs: 7 * 24 * 60 * 60_000, match: "newsletter", service: "cron.newsletter" }, // weekly — a generous floor
   { cadenceMs: 24 * 60 * 60_000, match: "backup", service: "cron.backup" }, // daily DB backup → private R2
+  { cadenceMs: 24 * 60 * 60_000, match: "logbook", service: "cron.logbook" }, // daily Logbook author — a generous floor
   // The two nightly-audit crons: `audit-review` (12 chars) is claimed before `audit` (5) by
   // longest-match-first, and neither is a substring of the other's `fluncle-…` dir header, so
   // each claims its own dir cleanly (same pattern as studio-clip/clip-drip). Both daily.

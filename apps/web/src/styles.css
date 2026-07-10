@@ -1909,6 +1909,92 @@ body::before {
   row-gap: 0.15rem;
 }
 
+/* ── Fluncle's Logbook ─────────────────────────────────────────────────────
+   The travelogue entry page (/logbook/<sector>): the same quiet archival plate
+   as /log, tuned for long-form reading with the day's findings inlined as
+   "photos". Dark-only, cover-led, AA-contrast. */
+.logbook-dateline {
+  color: var(--stardust);
+  font-size: 0.9rem;
+  margin-top: 0.35rem;
+}
+
+.logbook-title {
+  color: var(--starlight-cream);
+  font-size: 1.25rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  line-height: 1.25;
+  margin-top: 0.2rem;
+  overflow-wrap: anywhere;
+}
+
+.logbook-prose {
+  color: var(--starlight-cream);
+  /* A comfortable reading measure inside the plate — long-form, not a data card. */
+  font-size: 1rem;
+  line-height: 1.7;
+}
+
+.logbook-prose > * + * {
+  margin-top: 1rem;
+}
+
+.logbook-prose h2 {
+  color: var(--starlight-cream);
+  font-size: 1.1rem;
+  font-weight: 700;
+  letter-spacing: -0.005em;
+  margin-top: 1.8rem;
+}
+
+.logbook-prose h3 {
+  color: var(--starlight-cream);
+  font-size: 1rem;
+  font-weight: 700;
+  margin-top: 1.4rem;
+}
+
+.logbook-prose p {
+  overflow-wrap: anywhere;
+}
+
+/* A finding's poster inlined as a real photo of Fluncle's day. */
+.logbook-photo {
+  border: 1px solid color-mix(in oklch, var(--border) 72%, transparent);
+  border-radius: 0.6rem;
+  margin: 1.6rem 0;
+  overflow: hidden;
+}
+
+.logbook-photo img {
+  aspect-ratio: 9 / 16;
+  display: block;
+  height: auto;
+  object-fit: cover;
+  width: 100%;
+}
+
+.logbook-photo figcaption {
+  border-top: 1px solid color-mix(in oklch, var(--border) 60%, transparent);
+  color: var(--stardust);
+  font-size: 0.85rem;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  padding: 0.6rem 0.8rem;
+}
+
+.logbook-photo figcaption a {
+  color: var(--stardust);
+  text-decoration: none;
+}
+
+.logbook-photo figcaption a:hover,
+.logbook-photo figcaption a:focus-visible {
+  color: var(--starlight-cream);
+  text-decoration: underline;
+}
+
 .log-index-cover-link {
   display: block;
   flex-shrink: 0;

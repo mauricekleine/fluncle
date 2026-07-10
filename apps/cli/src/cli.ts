@@ -1287,6 +1287,62 @@ function addAdminCommands(program: Command): void {
       await runNewsletterDelete(id, options, newsletterDeleteCommand);
     });
 
+  const adminLogbook = configureCommand(
+    admin.command("logbook").description("Fluncle's Logbook (travelogue) commands"),
+  );
+
+  adminLogbook.action(() => {
+    adminLogbook.outputHelp();
+  });
+
+  // `list_logbook_gaps` → `admin logbook gaps`. The nightly sweep's queue + material:
+  // sector-days with findings but no entry, oldest first, each with its findings'
+  // authoring fuel. Agent-allowed (admin tier).
+  adminLogbook
+    .command("gaps")
+    .description("List sector-days with findings but no logbook entry (the sweep's worklist)")
+    .option("--limit <limit>", "Max gaps to return")
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (options: { json: boolean; limit?: string }) => {
+      const { logbookGapsCommand } = await import("./commands/admin-logbook");
+      await runLogbookGaps(options, logbookGapsCommand);
+    });
+
+  // `create_logbook_entry` → `admin logbook create`. The FILL-EMPTY-ONLY author the
+  // on-box `fluncle-logbook` sweep drives with its agent token. A sector that already
+  // has an entry is a no-op (`skipped: true`) — never a clobber. Agent-allowed (admin tier).
+  adminLogbook
+    .command("create")
+    .description("Author a sector-day's entry (fills an empty sector only)")
+    .argument("[sector]")
+    .option("--title <text>", "The entry title")
+    .option("--body <text>", "The entry body (markdown; [[logId]] figure tokens)")
+    .option("--body-file <file>", "Read the body from a file (the sweep's path)")
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (sector: string | undefined, options: LogbookWriteCliOptions) => {
+      const { logbookCreateCommand } = await import("./commands/admin-logbook");
+      await runLogbookWrite(sector, options, logbookCreateCommand);
+    });
+
+  // `update_logbook_entry` → `admin logbook update`. OPERATOR ONLY — the overwrite/edit
+  // path that CAN replace a cron-authored entry (and stamps it operator-authored, so
+  // the agent create thereafter treats it as sacred). A valid AGENT token gets a 403.
+  adminLogbook
+    .command("update")
+    .description("Create or overwrite a sector-day's entry. OPERATOR only")
+    .argument("[sector]")
+    .option("--title <text>", "The entry title")
+    .option("--body <text>", "The entry body (markdown; [[logId]] figure tokens)")
+    .option("--body-file <file>", "Read the body from a file")
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (sector: string | undefined, options: LogbookWriteCliOptions) => {
+      const { logbookUpdateCommand } = await import("./commands/admin-logbook");
+      await runLogbookWrite(sector, options, logbookUpdateCommand);
+    });
+
   const submissions = configureCommand(
     admin.command("submissions").description("Review listener submissions"),
   );
@@ -2922,6 +2978,67 @@ async function runNewsletterList(
     const subject = edition.subject ?? "(no subject)";
     console.log(`${label}\t${edition.status}\t${edition.id}\t${subject}`);
   }
+}
+
+type LogbookWriteCliOptions = {
+  body?: string;
+  bodyFile?: string;
+  json: boolean;
+  title?: string;
+};
+
+async function runLogbookGaps(
+  options: { json: boolean; limit?: string },
+  logbookGapsCommand: typeof import("./commands/admin-logbook").logbookGapsCommand,
+): Promise<void> {
+  const limit = options.limit === undefined ? undefined : Number.parseInt(options.limit, 10);
+  const gaps = await logbookGapsCommand(
+    limit !== undefined && Number.isFinite(limit) ? limit : undefined,
+  );
+
+  if (options.json) {
+    printJson({ gaps, ok: true });
+    return;
+  }
+
+  if (gaps.length === 0) {
+    console.log("No gaps — every past sector-day with findings has an entry.");
+    return;
+  }
+
+  for (const gap of gaps) {
+    console.log(`sector ${gap.sector}\t${gap.date.slice(0, 10)}\t${gap.findings.length} findings`);
+  }
+}
+
+async function runLogbookWrite(
+  sector: string | undefined,
+  options: LogbookWriteCliOptions,
+  writeCommand:
+    | typeof import("./commands/admin-logbook").logbookCreateCommand
+    | typeof import("./commands/admin-logbook").logbookUpdateCommand,
+): Promise<void> {
+  if (!sector) {
+    throw new Error("Missing sector for the logbook entry");
+  }
+
+  const result = await writeCommand(sector, {
+    body: options.body,
+    bodyFile: options.bodyFile,
+    title: options.title,
+  });
+
+  if (options.json) {
+    printJson(result);
+    return;
+  }
+
+  const skipped = "skipped" in result && result.skipped;
+  console.log(
+    skipped
+      ? `sector ${result.entry.sector}: an entry already stands — no-op (${result.entry.generatedBy})`
+      : `sector ${result.entry.sector}: ${result.entry.title}`,
+  );
 }
 
 async function runAdd(

@@ -1004,6 +1004,44 @@ export const settings = sqliteTable("settings", {
   value: text("value").notNull(),
 });
 
+// Fluncle's Logbook — one first-person travelogue entry per SECTOR-DAY (the
+// canonical days-since-epoch number from sectorDay()). Every day that had at least
+// one finding gets a written log entry, authored nightly by the on-box
+// `fluncle-logbook` sweep (a hybrid `--no-agent` cron: deterministic gap-find +
+// gather, one `claude -p` authoring call, deterministic write-back via the
+// agent-tier `create_logbook_entry` op). The public /logbook + /logbook/<sector>
+// pages render `body` (markdown) with `[[<logId>]]` figure tokens swapped for the
+// findings' poster images (docs/agents/logbook-agent.md).
+//
+// `sector` is the PK: one entry per sector-day, so the agent create is
+// idempotent-by-construction and the fill-empty-only guarantee is a pure insert
+// guard (a row already present ⇒ no-op; the operator override always wins).
+// `generatedBy` records provenance — `agent` for a cron-authored entry, `operator`
+// once a human has edited it (a sacred entry the agent never re-touches). The body
+// is a live PUBLIC Fluncle-voice surface, so it clears the same shared voice gate
+// the written note uses (banned identity words / earthly geography / the Dry Rule /
+// no "we"-as-company), scanned over the prose with the figure tokens stripped.
+export const logbookEntries = sqliteTable("logbook_entries", {
+  // The entry body — markdown prose with `[[<logId>]]` figure tokens on their own
+  // lines (the renderer swaps each for the finding's poster "photo").
+  body: text("body").notNull(),
+  createdAt: text("created_at").notNull(),
+  // When the CURRENT body was authored/last (re)generated (ISO). Drives the public
+  // page's lastmod + the sitemap freshness; distinct from created_at (first write).
+  generatedAt: text("generated_at").notNull(),
+  // Provenance: `agent` = cron-authored, `operator` = human-edited (sacred — the
+  // fill-empty-only agent create never clobbers it). Plain TEXT, the enum narrows.
+  generatedBy: text("generated_by", { enum: ["agent", "operator"] })
+    .notNull()
+    .default("agent"),
+  // The sector-day (days since the 2026-05-30 epoch — sectorDay() in
+  // lib/log-id-shared.ts). The natural key: one entry per day.
+  sector: integer("sector").primaryKey(),
+  // The entry title (e.g. "Sector 036 — a slow drift through the low end").
+  title: text("title").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
 // A RECORDING — a captured DJ set that is NOT (yet) a published mixtape (RFC
 // recording-primitive, Design B; extended by the plan→recording→mixtape RFC's
 // two-table model: a PLAN is just a recording with no video and untimed cues, a

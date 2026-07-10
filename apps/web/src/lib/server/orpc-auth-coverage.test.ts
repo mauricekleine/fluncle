@@ -177,6 +177,10 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // recording-primitive, Design B).
   create_clip: "operator",
   create_edition: "admin",
+  // The logbook nightly author — admin tier (adminAuth only, no operatorGuard), the
+  // note_track/create_edition precedent: the on-box `fluncle-logbook` cron drives the
+  // fill-empty-only create with its agent token. A sector with an entry is a no-op.
+  create_logbook_entry: "admin",
   // The RFC recording-primitive writes — operator tier: create/update/delete a captured
   // set + `promote` (mints a coordinate). The agent token 403s.
   create_recording: "operator",
@@ -238,6 +242,10 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // precedent. Filterable by mixtapeId/status; serves the editor + the library.
   list_clips: "admin",
   list_editions_admin: "admin",
+  // The logbook sweep's self-healing window + material read — admin tier
+  // (agent-allowed), the list_editions_admin precedent; the box's `fluncle-logbook`
+  // cron reads it to pick the next sector-day to author and gather its findings.
+  list_logbook_gaps: "admin",
   list_mixtapes_admin: "admin",
   list_private_saved_findings: "private-session",
   list_private_submissions: "private-session",
@@ -344,6 +352,10 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   unsave_private_finding: "private-session",
   update_clip: "operator",
   update_edition: "admin",
+  // The operator's logbook overwrite/edit — operator tier: it CAN replace a
+  // cron-authored entry (an operator entry always wins) and stamps it sacred, so a
+  // valid agent token 403s.
+  update_logbook_entry: "operator",
   update_mixtape: "operator",
   // The interactive single-cue write (Studio cue rail) — operator tier: it re-times a
   // published set's surface, so the agent token 403s (like set_mixtape_cues).

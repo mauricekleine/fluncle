@@ -24,6 +24,7 @@ Generated from the `SURFACES` catalog. Each row is the registry `name`, its addr
 | ---------------- | ------------- | ------------------------------------------------------------------------------------------------------------- | --------- |
 | `web.home`       | `/`           | the archive — every certified finding, newest first, cover-led                                                | primary   |
 | `web.log`        | `/log`        | the log index + `/log/:logId`, one finding's permanent home (the Log ID resolves here)                        | primary   |
+| `web.logbook`    | `/logbook`    | Fluncle's Logbook — the voyage as a first-person travelogue + `/logbook/:sector`, one sector-day written up   | primary   |
 | `web.mixtapes`   | `/mixtapes`   | Fluncle's own DJ mixtapes — each a checkpoint set with an F-marked Log ID                                     | primary   |
 | `web.galaxy`     | `/galaxy`     | the Galaxy game — the 8-bit fly-to-every-banger arcade front door (also at `galaxy.fluncle.com`)              | primary   |
 | `web.stories`    | `/stories`    | the feed-first Stories surface + `/stories/:logId`, one finding as a Story                                    | secondary |
@@ -136,19 +137,20 @@ Listings on a third-party store, not pages we host. Their uptime is the store's,
 
 Checked by their last-run freshness (not an HTTP hit), so they carry a `cronName` + cadence instead of a URL probe.
 
-| Surface               | Cron job                 | Cadence             | Exposes                                                                                                                              | Weight    |
-| --------------------- | ------------------------ | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | --------- |
-| `cron.newsletter`     | `fluncle-newsletter`     | Fri 15:00 Amsterdam | draft + persist the weekly edition, then offer the operator a Discord Send button (the only full-agent cron; send is operator-gated) | secondary |
-| `cron.enrich`         | `fluncle-enrich`         | every 5m            | BPM / key / spectral analysis on the box, write-back (`--no-agent`, on-box DSP, zero LLM tokens)                                     | hidden    |
-| `cron.context-note`   | `fluncle-context-note`   | every 5m            | Firecrawl facts → distilled `context_note` + a Texture line (Worker-side Haiku, zero on-box tokens)                                  | hidden    |
-| `cron.note`           | `fluncle-note`           | every 10m           | auto-author the editorial `/log` note, fill-empty-only (hybrid: one `claude -p` call; never clobbers an operator note)               | hidden    |
-| `cron.observation`    | `fluncle-observation`    | every 60m           | author the recovered-audio script → Worker Cartesia render (hybrid: one `claude -p` call, Worker voice-gates + renders)              | hidden    |
-| `cron.backfill`       | `fluncle-backfill`       | every 30m           | Discogs id + Last.fm love catalogue repair (`--no-agent`, Worker HTTP, zero LLM tokens)                                              | hidden    |
-| `cron.social-capture` | `fluncle-social-capture` | every 10m           | capture the YouTube/TikTok post URLs Postiz withholds on create → write back (`--no-agent`, Worker HTTP)                             | hidden    |
-| `cron.clip-drip`      | `fluncle-clip-drip`      | every 20m           | post the due, cut clips to Instagram on a jittered ~daily cadence via Postiz (`--no-agent`, Worker HTTP; kill-switch aware)          | hidden    |
-| `cron.render`         | `fluncle-render`         | every 60m           | wake the render box → render + ship one finding's video → park (a conductor; never posts to social)                                  | hidden    |
-| `cron.healthcheck`    | `fluncle-healthcheck`    | every 10m           | probe each service → Discord-ping on a status flip → POST the `/status` snapshot (a rave-02 host systemd timer, not a gateway cron)  | hidden    |
-| `cron.backup`         | `fluncle-backup`         | every 24h           | dump the prod DB → gzip → a PRIVATE R2 bucket (owned off-site backup) + prune to 30 daily / 12 monthly (`--no-agent`, zero tokens)   | secondary |
+| Surface               | Cron job                 | Cadence             | Exposes                                                                                                                                       | Weight    |
+| --------------------- | ------------------------ | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | --------- |
+| `cron.newsletter`     | `fluncle-newsletter`     | Fri 15:00 Amsterdam | draft + persist the weekly edition, then offer the operator a Discord Send button (the only full-agent cron; send is operator-gated)          | secondary |
+| `cron.enrich`         | `fluncle-enrich`         | every 5m            | BPM / key / spectral analysis on the box, write-back (`--no-agent`, on-box DSP, zero LLM tokens)                                              | hidden    |
+| `cron.context-note`   | `fluncle-context-note`   | every 5m            | Firecrawl facts → distilled `context_note` + a Texture line (Worker-side Haiku, zero on-box tokens)                                           | hidden    |
+| `cron.note`           | `fluncle-note`           | every 10m           | auto-author the editorial `/log` note, fill-empty-only (hybrid: one `claude -p` call; never clobbers an operator note)                        | hidden    |
+| `cron.logbook`        | `fluncle-logbook`        | 00:40 Amsterdam     | author the previous day's Logbook travelogue entry, fill-empty-only (hybrid: one `claude -p` call; self-healing gap window backfills history) | hidden    |
+| `cron.observation`    | `fluncle-observation`    | every 60m           | author the recovered-audio script → Worker Cartesia render (hybrid: one `claude -p` call, Worker voice-gates + renders)                       | hidden    |
+| `cron.backfill`       | `fluncle-backfill`       | every 30m           | Discogs id + Last.fm love catalogue repair (`--no-agent`, Worker HTTP, zero LLM tokens)                                                       | hidden    |
+| `cron.social-capture` | `fluncle-social-capture` | every 10m           | capture the YouTube/TikTok post URLs Postiz withholds on create → write back (`--no-agent`, Worker HTTP)                                      | hidden    |
+| `cron.clip-drip`      | `fluncle-clip-drip`      | every 20m           | post the due, cut clips to Instagram on a jittered ~daily cadence via Postiz (`--no-agent`, Worker HTTP; kill-switch aware)                   | hidden    |
+| `cron.render`         | `fluncle-render`         | every 60m           | wake the render box → render + ship one finding's video → park (a conductor; never posts to social)                                           | hidden    |
+| `cron.healthcheck`    | `fluncle-healthcheck`    | every 10m           | probe each service → Discord-ping on a status flip → POST the `/status` snapshot (a rave-02 host systemd timer, not a gateway cron)           | hidden    |
+| `cron.backup`         | `fluncle-backup`         | every 24h           | dump the prod DB → gzip → a PRIVATE R2 bucket (owned off-site backup) + prune to 30 daily / 12 monthly (`--no-agent`, zero tokens)            | secondary |
 
 ## 3. The per-context weight matrix
 
@@ -169,6 +171,7 @@ The weight ladder within a context is unchanged — **`primary`** (the loud fron
 | --------------------------- | --------- | --------- | --------- | --------- |
 | `web.home`                  | primary   |           |           |           |
 | `web.log`                   | primary   | secondary |           |           |
+| `web.logbook`               | primary   | tertiary  |           |           |
 | `web.mixtapes`              | primary   | secondary |           |           |
 | `web.galaxy`                | primary   | secondary |           |           |
 | `web.stories`               | secondary |           |           |           |
