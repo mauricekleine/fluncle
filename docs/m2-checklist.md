@@ -50,23 +50,11 @@ These were decided deliberately and are not bugs. They are recorded here because
 - [ ] **`MATCH_THRESHOLD = 0.62` was shipped unvalidated** (see §3). The cost is asymmetric: a miss shows a random scene, which nobody notices; a false positive puts the wrong finding on stream, which everybody does. If a real set produces even one wrong match, raise it — the fallback is designed to absorb the misses.
 - [ ] **The crossfader curve is linear, the FLX4's is a cut curve** (see §2). Symmetric, so the live-deck argmax should be unaffected. Watch one crossfader-led blend and confirm the flip lands where your ears say it should.
 
-## 6. Re-key the non-Rekordbox findings — the last step of the 2026-07-10 accuracy run
+## 6. Optional key spot-check vs the library
 
-State of the world, measured on 2026-07-10, so nobody re-derives or re-litigates it:
+The 2026-07-10 accuracy run is fully closed: both estimators rebuilt and benchmarked (#424 BPM ±0.1 vs the beatgrids; #430 key at 82.8% full-song precision), the archive re-derived from full audio, the Rekordbox sync applied (35 keys + 2 BPMs), and the final 25-row re-key drained on 2026-07-10 — 17 keys confirmed, **8 corrected** (one mode-flip, seven relative/fourth-shift roots), zero failures, honest nulls kept, the one-time requeue script pruned. What survives as an optional M2-only check:
 
-- **BPM is solved by the estimator rebuild (#424), not by full audio alone.** The old 20 Hz-envelope estimator was provably broken on any input (it read the _same previews_ 1.5 low that the rebuilt tempo comb reads exactly right); the rebuilt one agrees with the DJ beatgrids to within ±0.1 on 33/35 ground-truth rows, from previews and full songs alike. Nobody needs to touch `estimateBpm`.
-- **The key estimator was also rebuilt (#430)** — whole-track segmented chroma (the old code silently analyzed only the first 25 seconds, even of captured full audio), harmonic de-aliasing (the minor→major mode-flip mechanism), EDMA/EDMM profiles, segment-vote confidence. Measured against the DJ-graded ground truth: the old estimator 37% exact; the rebuilt one 60% exact on previews and **82.8% precision on published keys from full songs** (38-track local-corpus benchmark), with mode-flips 4→1 and relative-key errors eliminated. `KEY_CONFIDENCE_FLOOR = 0.6` was kept deliberately: 0.8 measures 100% precision but drops coverage to 37%, on a sample too small to certify — re-open only if the labeled corpus ever grows.
-- **The sync's key/BPM write asymmetry (35 vs 2) is by design, not a drop:** the sync proposes BPM only when the stored value is null or off by >0.5, and after the re-derive 33/35 DSP BPMs already matched the beatgrids. Keys were all 35 (22 corrections + 13 protective stamps).
-- **The one thing still stale:** the morning's archive-wide re-derive drained _before_ the box baked #430, so the ~25 findings without a DJ-graded key still carry old-estimator keys (or old honest nulls). This is the gap; the fix is queued, not open-ended.
-
-The steps (runs on ANY machine with an operator-authenticated `fluncle` ≥ 0.119 — here after §1, or on the M5):
-
-- [ ] Dry-run: `bun packages/skills/fluncle-track-enrichment/scripts/requeue-non-rekordbox.ts` — expect ~25 targets, every `keySource: rekordbox` row excluded. The script refuses to run on a CLI that predates the `keySource` field.
-- [ ] `--apply`, then let the box's enrich sweep drain it (4 findings per ~5-minute tick ≈ 35 minutes).
-- [ ] Verify: re-run the dry-run — the re-keyed rows now show `keySource: audio-file` with a fresh `analyzedAt`; some old nulls may resolve, others stay honestly null. Expect ~83% of the re-derived keys to be right; that residual is accepted (these are precisely the tracks outside the DJ's crates).
-- [ ] Optional, M2-only: any of the 25 that exist in the library but eluded the strict matcher (e.g. `004.4.8B`) can be checked against `DjmdContent.Key.ScaleName`. Where the DSP and Rekordbox disagree on mode, flag it or hand-set via `fluncle admin tracks update --key` (an operator write stamps `key_source: operator` server-side and is durably protected) — never assume either side is infallible.
-- [ ] Prune `requeue-non-rekordbox.ts` once the archive is re-keyed — it is a one-time repair.
-- [ ] The two SKILL.md descriptions (`fluncle-rekordbox-sync`, `fluncle-track-enrichment`) were already rewritten to the measured story; if this step changes the numbers materially, update them and **re-run `bun run skills:install`**.
+- [ ] Any non-DJ-graded finding that exists in the library but eluded the strict matcher (e.g. `004.4.8B`) can be checked against `DjmdContent.Key.ScaleName`. Where the DSP and Rekordbox disagree on mode, flag it or hand-set via `fluncle admin tracks update --key` (an operator write stamps `key_source: operator` server-side and is durably protected) — never assume either side is infallible. The weekly sync (§1) will stamp matcher-reachable rows on its own.
 
 ## 7. Historical set tracklists → mixability ground truth
 
