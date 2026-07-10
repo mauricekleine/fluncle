@@ -5,8 +5,10 @@
 
 import { describe, expect, test } from "bun:test";
 
+import { type PlanEntry } from "../contract";
 import { type AdminAuth } from "./plan";
-import { parsePlanArg, shouldFingerprintFullSong } from "./serve";
+import { parsePlanArg, selectVjIndex, shouldFingerprintFullSong } from "./serve";
+import { type ShuffleBag, type VjTransition } from "./vj";
 
 describe("parsePlanArg", () => {
   test("flag form — `--plan <id>` (the shape run show passes)", () => {
@@ -69,5 +71,104 @@ describe("shouldFingerprintFullSong", () => {
 
   test("neither → preview", () => {
     expect(shouldFingerprintFullSong(null, undefined)).toBe(false);
+  });
+});
+
+describe("selectVjIndex (the closed-loop match-vs-fallback decision)", () => {
+  // A tiny fake plan (structurally Finding[]) — the two live ground-truth findings plus a
+  // decoy, with the ARCHIVE-side bpm/key (which read ~1.5 low vs Rekordbox — the resolver's
+  // guards cope). PlanEntry carries bpm/key, so it's a Finding.
+  const plan: PlanEntry[] = [
+    { artists: ["Some One"], bpm: 140, key: "A minor", logId: "000.1.0A", title: "A Decoy" },
+    { artists: ["Technimatic"], bpm: 172.56, key: "G major", logId: "019.1.7X", title: "Strength" },
+    {
+      artists: ["Netsky"],
+      bpm: 171.09,
+      key: "C minor",
+      logId: "011.1.6E",
+      title: "I See The Future In Your Eyes",
+    },
+  ];
+
+  /** A fake bag that records `next`/`take` so the decision is observed without randomness. */
+  function fakeBag(nextValue: number): {
+    bag: ShuffleBag;
+    calls: { next: number; taken: number[] };
+  } {
+    const calls = { next: 0, taken: [] as number[] };
+    const bag: ShuffleBag = {
+      next: () => {
+        calls.next++;
+        return nextValue;
+      },
+      size: plan.length,
+      take: (i: number) => {
+        calls.taken.push(i);
+        return true;
+      },
+    };
+    return { bag, calls };
+  }
+
+  test("identity that resolves → its plan index, via MATCH, and the index is taken from the bag", () => {
+    const { bag, calls } = fakeBag(0);
+    const msg: VjTransition = {
+      deck: 1,
+      identity: { artist: "Technimatic", bpm: 174, key: "6A", title: "Strength (Original Mix)" },
+    };
+    const sel = selectVjIndex(msg, plan, bag);
+    expect(sel).toEqual({
+      index: 1,
+      logId: "019.1.7X",
+      reason: expect.any(String),
+      score: expect.any(Number),
+      via: "match",
+    });
+    expect(calls.taken).toEqual([1]); // matched index removed from the cycle
+    expect(calls.next).toBe(0); // no random draw on a match
+  });
+
+  test("the deck-2 ground truth resolves to 011.1.6E (truncated OCR title + Camelot key)", () => {
+    const { bag } = fakeBag(0);
+    const msg: VjTransition = {
+      deck: 2,
+      identity: { artist: "Netsky", bpm: 173, key: "5A", title: "I See The Future" },
+    };
+    const sel = selectVjIndex(msg, plan, bag);
+    expect(sel.via).toBe("match");
+    if (sel.via === "match") {
+      expect(sel.logId).toBe("011.1.6E");
+      expect(sel.index).toBe(2);
+    }
+  });
+
+  test("no identity → the next shuffle draw, via FALLBACK (never a match)", () => {
+    const { bag, calls } = fakeBag(2);
+    const sel = selectVjIndex({ deck: 1 }, plan, bag);
+    expect(sel).toEqual({ index: 2, reason: expect.any(String), via: "fallback" });
+    expect(calls.next).toBe(1);
+    expect(calls.taken).toEqual([]);
+  });
+
+  test("identity that resolves to nothing (not a finding) → FALLBACK draw, not the wrong finding", () => {
+    const { bag, calls } = fakeBag(0);
+    const msg: VjTransition = {
+      deck: 2,
+      identity: { artist: "Nobody At All", title: "A Track That Is Not In The Archive" },
+    };
+    const sel = selectVjIndex(msg, plan, bag);
+    expect(sel.via).toBe("fallback");
+    expect(calls.next).toBe(1);
+    expect(calls.taken).toEqual([]);
+  });
+
+  test("a remix of a finding must NOT resolve to the original — FALLBACK, never the wrong finding", () => {
+    const { bag } = fakeBag(0);
+    const msg: VjTransition = {
+      deck: 1,
+      identity: { artist: "Technimatic", title: "Strength (Some Remix)" },
+    };
+    const sel = selectVjIndex(msg, plan, bag);
+    expect(sel.via).toBe("fallback"); // the version-signature gate holds
   });
 });

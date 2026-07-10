@@ -9,9 +9,23 @@ Keeping them orthogonal is the whole design. The MIDI feed knows a deck went liv
 
 This doc owns IDENTITY. The pieces:
 
-- `packages/live/scripts/deckwatch/deckwatch.py` — capture → crop → Vision OCR → `{title, artist, bpm, key}` per deck.
+- `packages/live/scripts/deckwatch/deckwatch.py` — capture → crop → Vision OCR → `{title, artist, bpm, key}` per deck. `--once --deck N` emits ONLY deck N as a flat object — the exact shape the transition datagram's `identity` wants.
+- `packages/live/scripts/m2-sender/sender.py` — the DJ-mixer sender (CHANGE): reads the mixer MIDI, and on a flip attaches the deck's identity (via `--identity-cmd`, a `{deck}` placeholder substituted with the live deck number) to the UDP datagram. It **pre-reads** the identity the moment a deck becomes the debounce candidate and caches it, so the OCR round-trip is off the critical path when the flip commits (fall back to a commit-time read, then to no identity — identity failure never suppresses a transition).
 - `packages/live/src/bridge/identity.ts` — a **pure** resolver (`resolveDeck`) from an OCR'd header to an archive finding, or `null`.
-- `packages/live/src/bridge/identity.test.ts` — the ground-truth decks, the null rail, every OCR gotcha.
+- `packages/live/src/bridge/serve.ts` — `selectVjIndex`: the on-flip fusion. Identity resolves → `goto(match.index)`; else → `goto(bag.next())`.
+- `packages/live/src/bridge/identity.test.ts` / `serve.test.ts` — the ground-truth decks + the null rail; the match-vs-fallback decision.
+
+## Closing the loop — MIDI × OCR, fused on flip
+
+The two orthogonal signals meet in one place, the bridge's VJ transition handler (`selectVjIndex`), so the wall shows **the finding the DJ just brought in** instead of a random one:
+
+1. **CHANGE (the mixing machine).** `sender.py` reads the DDJ-FLX4 MIDI and its pure state machine (`livedeck.py`) decides which deck is audible. The moment a deck becomes the debounce **candidate** — before the flip commits — the sender pre-reads that deck's identity (`deckwatch.py --once --deck {deck}`) and caches it.
+2. **The datagram (over the LAN).** On the committed flip (the **bass swap** — the ratified fusion timing; reading earlier is fine, swapping earlier is forbidden), the sender emits `{"type":"transition","deck":N,"identity":{title,artist,bpm,key}}`. The identity is the cached pre-read (off the critical path); if it's missing/stale/failed the sender reads at commit; if that fails too the transition still goes out with no `identity`.
+3. **IDENTITY → a finding (the bridge).** `selectVjIndex` validates the datagram (a malformed `identity` degrades to "no identity", never rejecting the transition), then:
+   - identity present + `resolveDeck` clears the threshold → `goto(match.index)`; the matched index is `take`n from the shuffle bag so a later random draw won't re-show it this cycle.
+   - no identity, or `resolveDeck` returns `null` (OCR noise, or the DJ played a track that isn't a finding) → `goto(bag.next())`.
+
+The canonical case (a finding the DJ played) and the random case (anything else) are **one code path** — random is the graceful degradation, which is exactly what a non-finding track already produced. The bridge never OCRs anything: it runs on the streaming machine, and the identity is produced on the mixing machine and travels in the datagram.
 
 ## Event-driven, not polling
 

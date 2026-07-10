@@ -43,6 +43,15 @@ export function mulberry32(seed: number): Rng {
 export type ShuffleBag = {
   /** Pull the next index (`0..size-1`), refilling + reshuffling the bag when it exhausts. */
   next(): number;
+  /**
+   * Remove `index` from the CURRENT cycle's remaining draws so it can't come up again before
+   * the reshuffle — called when a canonical identity match drives the show to `index` directly
+   * (bypassing `next()`), so a matched finding isn't then re-shown by a later random draw this
+   * cycle. Returns whether it was removed: `true` when `index` was still pending, `false` when
+   * it was already drawn/taken this cycle (a harmless no-op) or is out of range. Also marks
+   * `index` as the last-shown, so the reshuffle-boundary anti-repeat covers a taken match too.
+   */
+  take(index: number): boolean;
   /** The pool size the bag draws over. */
   readonly size: number;
 };
@@ -101,16 +110,74 @@ export function createShuffleBag(size: number, rng: Rng): ShuffleBag {
     get size(): number {
       return size;
     },
+    take(index: number): boolean {
+      // Fill/reshuffle if the current cycle is exhausted (or never started) — a match can be
+      // the very FIRST transition, before any `next()`, and we still want it out of this cycle.
+      if (cursor >= bag.length) {
+        refill();
+      }
+      // Only the not-yet-drawn tail (`bag[cursor..]`) is still "in the bag" this cycle;
+      // anything before the cursor has already been shown. Splice it out of the tail so a
+      // later `next()` this cycle can't draw it again, and mark it last-shown for the boundary.
+      for (let i = cursor; i < bag.length; i++) {
+        if (bag[i] === index) {
+          bag.splice(i, 1);
+          lastDrawn = index;
+          return true;
+        }
+      }
+      return false;
+    },
   };
 }
 
-/** A parsed VJ transition datagram: which mixer deck the DJ transitioned to. */
-export type VjTransition = { deck: 1 | 2 };
+/**
+ * The optional identity a transition datagram carries — what the DJ has loaded on the deck
+ * that just went live, read by `deckwatch.py` on the mixing machine. Structurally the resolver's
+ * `ObservedDeck` (`identity.ts`), so `serve.ts` hands it straight to `resolveDeck`. `title` +
+ * `artist` are the identity (both required); `bpm`/`key` are the resolver's coarse guards.
+ */
+export type VjIdentity = {
+  title: string;
+  artist: string;
+  bpm?: number;
+  key?: string;
+};
+
+/** A parsed VJ transition datagram: which mixer deck the DJ transitioned to, + optional identity. */
+export type VjTransition = { deck: 1 | 2; identity?: VjIdentity };
+
+/**
+ * Structurally validate a datagram's `identity` field, degrading to `undefined` (never
+ * throwing, never rejecting the transition) on anything malformed. `title` + `artist` MUST both
+ * be strings for the identity to count — they are the match identity. `bpm` must be a finite
+ * number or absent; `key` a string or absent — a malformed guard is simply DROPPED (the resolver
+ * treats guards as optional), so a bad guard never costs a good title+artist read.
+ */
+function parseIdentity(raw: unknown): VjIdentity | undefined {
+  if (typeof raw !== "object" || raw === null) {
+    return undefined;
+  }
+  const obj = raw as { title?: unknown; artist?: unknown; bpm?: unknown; key?: unknown };
+  if (typeof obj.title !== "string" || typeof obj.artist !== "string") {
+    return undefined;
+  }
+  const identity: VjIdentity = { artist: obj.artist, title: obj.title };
+  if (typeof obj.bpm === "number" && Number.isFinite(obj.bpm)) {
+    identity.bpm = obj.bpm;
+  }
+  if (typeof obj.key === "string") {
+    identity.key = obj.key;
+  }
+  return identity;
+}
 
 /**
  * Parse one UDP datagram body into a VjTransition, or `null` when it is not a valid
  * `{"type":"transition","deck":1|2}` message — malformed / non-JSON, the wrong `type`, a
- * missing field, or an out-of-range deck. Pure, total, and never throws, so the listener's
+ * missing field, or an out-of-range deck. An OPTIONAL `identity` object is validated
+ * structurally and attached when well-formed; a missing/malformed one degrades to no identity
+ * WITHOUT rejecting the transition. Pure, total, and never throws, so the listener's
  * never-crash rail is a single guard. Unit-tested directly.
  */
 export function parseTransition(raw: string): VjTransition | null {
@@ -123,14 +190,15 @@ export function parseTransition(raw: string): VjTransition | null {
   if (typeof parsed !== "object" || parsed === null) {
     return null;
   }
-  const msg = parsed as { type?: unknown; deck?: unknown };
+  const msg = parsed as { type?: unknown; deck?: unknown; identity?: unknown };
   if (msg.type !== "transition") {
     return null;
   }
   if (msg.deck !== 1 && msg.deck !== 2) {
     return null;
   }
-  return { deck: msg.deck };
+  const identity = parseIdentity(msg.identity);
+  return identity ? { deck: msg.deck, identity } : { deck: msg.deck };
 }
 
 /**
