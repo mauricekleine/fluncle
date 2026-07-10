@@ -415,6 +415,7 @@ type CronDef = { cadenceMs: number; match: string; service: string };
 const AUTOMATION_CRONS: CronDef[] = [
   { cadenceMs: 5 * 60_000, match: "enrich", service: "cron.enrich" },
   { cadenceMs: 5 * 60_000, match: "embed", service: "cron.embed" },
+  { cadenceMs: 24 * 60 * 60_000, match: "cluster", service: "cron.cluster" }, // nightly sonic-galaxy assignment
   // NB: `social-capture` (a longer match) claims the fluncle-social-capture dir FIRST
   // (claimCronDirs is longest-match-first), so a bare `capture` never mis-claims it —
   // it resolves to the fluncle-capture dir. Keep both entries.

@@ -35,6 +35,7 @@ const CostStep = z.enum([
   "lastfm",
   "newsletter",
   "studio-clip",
+  "cluster",
 ]);
 const CostVendor = z.enum([
   "anthropic",

@@ -43,7 +43,8 @@ export type CostStep =
   | "discogs"
   | "lastfm"
   | "newsletter"
-  | "studio-clip";
+  | "studio-clip"
+  | "cluster";
 export type CostVendor =
   | "anthropic"
   | "openrouter"

@@ -98,6 +98,24 @@ RUN uv python install 3.11.15 \
        "from muq import MuQ; MuQ.from_pretrained('OpenMuQ/MuQ-large-msd-iter')" \
   && chmod -R a+rX "${MUQ_VENV}" "${HF_HOME}" /opt/uv-python
 
+# ── Cluster engine (the `fluncle-cluster` cron) — sklearn + scipy ─────────────
+# The `fluncle-cluster` `--no-agent` cron (docs/agents/hermes/scripts/cluster-sweep.*)
+# groups the archive into sonic galaxies over the SAME MuQ embedding space. The nightly
+# tick is assignment-only pure TS (no python), but the OPERATOR-act k-means fits (cold
+# start / remint) + a split's k=2 fit run in cluster.py via scikit-learn — so sklearn +
+# scipy join the MuQ venv as a THIRD pinned pip step, AFTER the torch trio + muq.
+#
+# THE ORDERING LAW (mirrors the torch trio's): a SEPARATE pip step so this resolve can't
+# perturb the already-baked torch/muq wheels, and numpy is CONSTRAINED to the version muq
+# baked (2.4.4) so pip cannot silently pull a newer numpy under sklearn/scipy and re-trigger
+# the CUDA-torch drag the two-step torch/muq install exists to avoid. Pins are a compatible
+# set for numpy 2.4 on cp311 (scikit-learn needs scipy; both are pure-CPU wheels). This runs
+# on CPU only — no GPU, so no index-url override is needed (the default PyPI wheels are CPU).
+RUN "${MUQ_VENV}/bin/pip" install --no-cache-dir \
+       "numpy==2.4.4" scikit-learn==1.7.2 scipy==1.16.2 \
+  && "${MUQ_VENV}/bin/python" -c "import sklearn, scipy; print(sklearn.__version__, scipy.__version__)" \
+  && chmod -R a+rX "${MUQ_VENV}"
+
 # Bun — pinned to the repo's toolchain (packageManager bun@1.3.14) so the box runs
 # the same interpreter the skill is authored against. The official installer drops
 # the binary in /root/.bun (root's HOME, mode 700). The `--no-agent` cron runner
