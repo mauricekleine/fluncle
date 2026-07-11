@@ -86,7 +86,7 @@
     "fluncle-track-enrichment": {
       "source": "packages/skills/fluncle-track-enrichment",
       "sourceType": "local",
-      "computedHash": "0f4dc2d4f18e4cb630648d1f03f7cfe6f1c95408abcd5f71c58e283dc7fea302"
+      "computedHash": "a58724019cb3b5d77559193bed4c95e4daa2cc0c3b1e19b8565a7188bcc635f9"
     },
     "fluncle-video": {
       "source": "packages/skills/fluncle-video",

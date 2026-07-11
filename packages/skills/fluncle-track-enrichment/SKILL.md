@@ -11,10 +11,10 @@ This is the async half of the track lifecycle (the fast metadata add already hap
 
 ## Requirements
 
-- **`ffmpeg`** on PATH (decodes the preview).
+- **`ffmpeg`** on PATH (decodes the audio — the captured full song, or a preview when there is none).
 - **`bun`** (runs the analysis script).
 - The **`fluncle` CLI** installed and, for the write step, authenticated (`FLUNCLE_API_TOKEN`). Reads (`fluncle track get`) are public.
-- Network access (Deezer/iTunes for the preview; the Fluncle API).
+- Network access (the Fluncle API; Deezer/iTunes only for the preview fallback).
 
 The analysis script (`scripts/analyze-track.ts`) is **self-contained** — zero npm dependencies, no Fluncle imports — so it runs anywhere this skill is installed.
 
@@ -44,7 +44,7 @@ The analysis script (`scripts/analyze-track.ts`) is **self-contained** — zero 
    fluncle admin tracks preview <trackId> --file "<archivePreview.path>" --source "<archivePreview.source>" --mime "<archivePreview.mime>"
    ```
 
-   The Worker writes the bytes to R2 under an operator-only archive path and stores internal metadata. This copy is never linked, downloaded, streamed, or used by `/api/preview`; public playback stays live-only through Deezer/iTunes. Never archive full songs.
+   The Worker writes the bytes under an operator-only archive path in the PRIVATE `fluncle-source-audio` bucket and stores internal metadata. This copy is never linked, downloaded, streamed, or used by `/api/preview`; public playback stays live-only through Deezer/iTunes. This command is preview-only — the **full song** reaches that same private bucket through its own `fluncle-capture` side-channel (captured once for internal analysis, never published), never through here.
 
 4. **Write it back.** Use the analysis output:
 
@@ -65,14 +65,14 @@ That's the whole loop: get → analyze → archive → update.
 
 ## Rules
 
-- **Never invent data.** If no preview resolves, report it and stop — don't guess BPM/key. Set `--status failed` if you want the operator to see it.
+- **Never invent data.** If no audio resolves at all (no captured full song and no preview), report it and stop — don't guess BPM/key. Set `--status failed` if you want the operator to see it.
 - **Archive only the analysis preview.** Store one official 30s preview, the one behind `archivePreview`, for private analysis/model training. It is not a playback source.
 - **Key honesty.** Only write a key the analysis was confident about (the script already gates this; respect the `null`).
 - One track per run.
 
 ## Audio embedding (separate, the `fluncle-embed` cron)
 
-The finding's **MuQ audio embedding** — a 1024-d sonic-similarity vector (`embedding_json`) — is **not** part of this analysis loop. It is computed by its own on-box cron (`fluncle-embed`: torch/MuQ over the preview), which writes it back through `fluncle admin tracks update <id> --embedding-file`. It powers the `/log` "more like this" row (`get_similar_findings` cosine-ranks the vectors) and the operator-named **sonic galaxies** — the browse-by-feel lens at `/galaxies`, assigned nightly by the `fluncle-cluster` cron (k-means over this space into `tracks.galaxy_id`), and later the game rendering those galaxies as spatial regions. This is what retired the manual vibe-map tagging: audio can't learn the placement, but it groups the sonically-similar cleanly. The data model + the on-box deploy: `docs/track-lifecycle.md` + `docs/agents/cluster-engine.md` + `docs/agents/hermes/cron/README.md`.
+The finding's **MuQ audio embedding** — a 1024-d sonic-similarity vector (`embedding_json`) — is **not** part of this analysis loop. It is computed by its own on-box cron (`fluncle-embed`: torch/MuQ over the **captured full song**, S3-GET from the private `fluncle-source-audio` bucket — never the 30s preview, whose blind "quiet piano" vectors are exactly what the switch to full audio killed; a finding with no captured song is skipped, never preview-embedded), which writes it back through `fluncle admin tracks update <id> --embedding-file`. It powers the `/log` "more like this" row (`get_similar_findings` cosine-ranks the vectors) and the operator-named **sonic galaxies** — the browse-by-feel lens at `/galaxies`, assigned nightly by the `fluncle-cluster` cron (k-means over this space into `tracks.galaxy_id`), and later the game rendering those galaxies as spatial regions. This is what retired the manual vibe-map tagging: audio can't learn the placement, but it groups the sonically-similar cleanly. The data model + the on-box deploy: `docs/track-lifecycle.md` + `docs/agents/cluster-engine.md` + `docs/agents/hermes/cron/README.md`.
 
 ## Video render (separate, requires the kit)
 
