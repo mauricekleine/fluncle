@@ -5,4 +5,5 @@ build/**
 **/.output/**
 .turbo/**
 apps/raycast/raycast-env.d.ts
+apps/raycast/src/**
 apps/web/src/routeTree.gen.ts

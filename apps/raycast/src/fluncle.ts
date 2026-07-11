@@ -60,7 +60,12 @@ export async function addTrack(url: string, note?: string): Promise<AddResult> {
 }
 
 export async function getRecentTracks(limit = 20): Promise<RecentTrack[]> {
-  const result = await runFluncleJson<RecentResult>(["recent", "--limit", String(limit), "--json"]);
+  const result = await runFluncleJson<RecentResult>([
+    "recent",
+    "--limit",
+    String(limit),
+    "--json",
+  ]);
 
   return result.tracks;
 }
@@ -69,7 +74,11 @@ export async function getRecentTracks(limit = 20): Promise<RecentTrack[]> {
 // `admin queue` command (the operator's FLUNCLE_API_TOKEN carries it) — Raycast never
 // talks to the API itself.
 export async function getAttentionQueue(): Promise<AttentionQueue> {
-  const result = await runFluncleJson<AttentionResponse>(["admin", "queue", "--json"]);
+  const result = await runFluncleJson<AttentionResponse>([
+    "admin",
+    "queue",
+    "--json",
+  ]);
 
   return result.attention;
 }
@@ -104,7 +113,10 @@ async function runFluncleJson<T>(args: string[]): Promise<T> {
   const output = result.stdout.trim() || result.stderr.trim();
 
   if (!output) {
-    throw new FluncleCommandError("empty_output", "Fluncle did not return any output");
+    throw new FluncleCommandError(
+      "empty_output",
+      "Fluncle did not return any output",
+    );
   }
 
   let parsed: ApiFailure | T;
@@ -122,7 +134,9 @@ async function runFluncleJson<T>(args: string[]): Promise<T> {
   return parsed;
 }
 
-function execFluncle(args: string[]): Promise<{ stdout: string; stderr: string }> {
+function execFluncle(
+  args: string[],
+): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     execFile(
       getFlunclePath(),
@@ -133,7 +147,12 @@ function execFluncle(args: string[]): Promise<{ stdout: string; stderr: string }
       },
       (error, stdout, stderr) => {
         if (error && !stdout.trim()) {
-          reject(new FluncleCommandError("command_failed", stderr.trim() || error.message));
+          reject(
+            new FluncleCommandError(
+              "command_failed",
+              stderr.trim() || error.message,
+            ),
+          );
           return;
         }
 
@@ -144,5 +163,10 @@ function execFluncle(args: string[]): Promise<{ stdout: string; stderr: string }
 }
 
 function isFailure(value: unknown): value is ApiFailure {
-  return typeof value === "object" && value !== null && "ok" in value && value.ok === false;
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "ok" in value &&
+    value.ok === false
+  );
 }

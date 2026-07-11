@@ -70,7 +70,10 @@ export default function Command() {
             />
           </MenuBarExtra.Section>
           {queue.counts.map(({ source }) => (
-            <MenuBarExtra.Section key={source} title={SOURCE_META[source].title}>
+            <MenuBarExtra.Section
+              key={source}
+              title={SOURCE_META[source].title}
+            >
               {queue.rows
                 .filter((row) => row.source === source)
                 .map((row, index) => (
@@ -118,10 +121,15 @@ function compactBrief(brief: string): string {
   return `${phrases[0]}, +${phrases.length - 1} more.`;
 }
 
-function menuBarIcon(total: number, failed: boolean): { source: Icon; tintColor?: Color } {
+function menuBarIcon(
+  total: number,
+  failed: boolean,
+): { source: Icon; tintColor?: Color } {
   if (failed) {
     return { source: Icon.Warning, tintColor: Color.Red };
   }
 
-  return total > 0 ? { source: Icon.Tray, tintColor: Color.Orange } : { source: Icon.Tray };
+  return total > 0
+    ? { source: Icon.Tray, tintColor: Color.Orange }
+    : { source: Icon.Tray };
 }

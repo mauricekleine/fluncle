@@ -76,8 +76,8 @@
   },
   "lint-staged": {
     "*": [
-      "oxlint --fix --no-error-on-unmatched-pattern",
-      "oxfmt --write --no-error-on-unmatched-pattern"
+      "oxlint --fix --ignore-path .prettierignore --no-error-on-unmatched-pattern",
+      "oxfmt --write --ignore-path .prettierignore --no-error-on-unmatched-pattern"
     ]
   },
   "packageManager": "bun@1.3.14",
