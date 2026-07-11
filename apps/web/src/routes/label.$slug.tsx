@@ -1,11 +1,11 @@
 import { Link, createFileRoute, notFound } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import {
-  ArtistChips,
-  FindingsGrid,
-  graphPageTracks,
-  UnlitTracks,
-} from "@/components/graph-sections";
+  CatalogueArtistGroups,
+  CataloguePager,
+  CatalogueSortControl,
+} from "@/components/catalogue-groups";
+import { ArtistChips, FindingsGrid, graphPageTracks } from "@/components/graph-sections";
 import { StoryNotFoundState } from "@/components/stories/stories-states";
 import { siteUrl } from "@/lib/fluncle-links";
 import { firstFoundAt, labelSignatureLine } from "@/lib/graph-prose";
@@ -13,18 +13,30 @@ import { jsonLdScript } from "@/lib/json-ld";
 import { labelBreadcrumbsJsonLd, recordLabelJsonLd } from "@/lib/log-schema";
 import { spotifyAlbumImageAtSize } from "@/lib/media";
 import { type ArtistChip, listArtistsByLabel } from "@/lib/server/artists";
-import { getLabelBySlug, LABEL_INDEX_MIN_TRACKS } from "@/lib/server/labels";
 import {
-  type CatalogueTrackItem,
-  getFindingsByLabel,
-  listCatalogueTracksByLabel,
-  type TrackListItem,
-} from "@/lib/server/tracks";
+  type CatalogueArtistGroup,
+  CataloguePageOutOfRangeError,
+  type CatalogueGroupPage,
+  type CatalogueSort,
+  flattenArtistGroups,
+  listLabelCatalogue,
+  parseCatalogueSort,
+} from "@/lib/server/catalogue-groups";
+import { getLabelBySlug, LABEL_INDEX_MIN_TRACKS } from "@/lib/server/labels";
+import { getFindingsByLabel, type TrackListItem } from "@/lib/server/tracks";
 
-// The label page — one imprint's place in the archive, and the third node of the graph
-// (log ↔ artist ↔ label ↔ album). It mirrors `/artist/<slug>` exactly: a plate masthead
-// over a cover-led grid of findings, the artists as chips, the entity's `@id` graph in
-// JSON-LD, and the same thin-content gate. See docs/label-entity.md.
+// The label page — one label's place in the archive, and the third node of the graph
+// (log ↔ artist ↔ label ↔ album). Findings lead, then the label's crawled catalogue GROUPED
+// BY ARTIST (each artist a collapsing section, its records inside), then the graph JSON-LD and
+// the same thin-content gate. See docs/label-entity.md and docs/album-entity.md.
+//
+// ── WHY GROUPED ────────────────────────────────────────────────────────────────────────
+// A crawled label is a discography, not a list. The pilot pulled 735 tracks off ONE small
+// label; Hospital will be several times that. Rendered flat that is a dump, so the quieter
+// rows are grouped by artist and paginated, and the bound the flat read carried (a 100-row
+// cap after a 4.34 MB page) moves into `catalogue-groups.ts` rather than disappearing: a page
+// of `GRAPH_GROUP_PAGE_SIZE` artist sections, each capped inside, with a crawlable pager for
+// the rest. Nothing is unbounded and nothing is unreachable.
 //
 // It is BLIND to `seed_state`. A label the operator skipped for the crawler renders here
 // exactly as it always did — crawl scope, never storage (lib/server/labels.ts).
@@ -32,73 +44,94 @@ import {
 type LabelPageData =
   | {
       artists: ArtistChip[];
-      /** Uncertified tracks on this label — a capped SLICE (`GRAPH_PAGE_CATALOGUE_LIMIT`). */
-      catalogue: CatalogueTrackItem[];
+      /** The crawled catalogue, grouped by artist — one page of it, plus SQL-counted totals. */
+      catalogue: CatalogueGroupPage<CatalogueArtistGroup>;
       findings: TrackListItem[];
       indexable: boolean;
       name: string;
       slug: string;
+      sort: CatalogueSort;
       status: "found";
     }
   | { status: "missing" };
 
 /**
- * Resolve the label page's data. Extracted from the server fn so the indexability decision
- * is unit-testable (see -label-page.test.ts), the `resolveArtistPageData` precedent.
+ * Resolve the label page's data. Extracted from the server fn so the indexability decision is
+ * unit-testable (see -graph-pages.test.ts), the `resolveArtistPageData` precedent.
  *
  * ── A LABEL EARNS A PAGE ON ITS CONTENT, NOT ON FLUNCLE'S ───────────────────────────────
- * A label the crawler discovered and never certified a thing on still gets a page, and that
- * is deliberate. A label with 700 crawled releases and zero findings is a genuinely useful
- * page — a real record of what that label put out — and refusing to serve it throws away the
- * whole point of having crawled it.
- *
- * The page existing was never the problem. The HOLLOW RENDERING was: the page used to print
- * "Nothing logged off this one yet." as a heading above a wall of Spotify outlinks, which is
- * a doorway page by Google's own definition — a page whose stated subject is a thing that is
- * not on it. The fix is CONDITIONAL SECTIONS (components/graph-sections.tsx): a band with
- * nothing in it renders nothing at all, so a page with no findings never mentions findings,
- * and is then honestly about the tracks it does carry.
+ * A label the crawler discovered and never certified a thing on still gets a page, and that is
+ * deliberate. A label with 700 crawled releases and zero findings is a genuinely useful page —
+ * an honest record of what that label put out — and refusing to serve it throws away the whole
+ * point of having crawled it. The HOLLOW RENDERING was the doorway-page bug, never the page's
+ * existence, and conditional sections (graph-sections.tsx) fixed that at the source.
  *
  * What stops a 2-row stub from being indexed is the thin-content gate below, and it counts
- * TOTAL content rather than findings — see LABEL_INDEX_MIN_TRACKS.
+ * TOTAL content rather than findings — the findings plus the entity's TRUE uncertified total
+ * (`catalogue.totalTracks`, counted in SQL over the whole label, never the rendered page).
  *
  * A slug with no `labels` row at all is still MISSING, and still 404s.
  */
-export async function resolveLabelPageData(slug: string): Promise<LabelPageData> {
+export async function resolveLabelPageData(
+  slug: string,
+  sort: CatalogueSort,
+  page: number,
+): Promise<LabelPageData> {
   const label = await getLabelBySlug(slug);
 
   if (!label) {
     return { status: "missing" };
   }
 
-  const [findings, catalogue, artists] = await Promise.all([
+  let catalogue: CatalogueGroupPage<CatalogueArtistGroup>;
+
+  try {
+    catalogue = await listLabelCatalogue(label.id, sort, page);
+  } catch (error) {
+    // A page past the end of the pager is genuinely not-found, not a 500 — a crawler or a
+    // hand-typed `?page=99` gets an honest 404, never a duplicate of page 1 under a new URL.
+    if (error instanceof CataloguePageOutOfRangeError) {
+      return { status: "missing" };
+    }
+
+    throw error;
+  }
+
+  const [findings, artists] = await Promise.all([
     getFindingsByLabel(label.id),
-    listCatalogueTracksByLabel(label.id),
     listArtistsByLabel(label.id),
   ]);
 
   return {
     artists,
-    catalogue: catalogue.tracks,
+    catalogue,
     findings,
     // Thin-content gate: index only past LABEL_INDEX_MIN_TRACKS RENDERABLE tracks — the
-    // findings PLUS the quieter rows, because both are real content on the page, and a page
-    // is thin or not thin on what it renders, never on who wrote it. Below the floor the
-    // page still serves 200 (deep links, link equity) but is noindex + out of the sitemap;
-    // the sitemap keys off the same sum, so the two can never disagree.
-    //
-    // It counts the entity's TRUE catalogue total, never the rendered slice — a 3,000-row
-    // label and a 100-row one must not read as the same page to the gate.
-    indexable: findings.length + catalogue.total >= LABEL_INDEX_MIN_TRACKS,
+    // findings PLUS the quieter rows, because both are real content on the page, and a page is
+    // thin or not thin on what it renders, never on who wrote it. Below the floor the page
+    // still serves 200 (deep links, link equity) but is noindex + out of the sitemap; the
+    // sitemap keys off the same sum, so the two can never disagree. It counts the entity's TRUE
+    // total, never the rendered page.
+    indexable: findings.length + catalogue.totalTracks >= LABEL_INDEX_MIN_TRACKS,
     name: label.name,
     slug: label.slug,
+    sort,
     status: "found",
   };
 }
 
+// Both params are OPTIONAL, so a plain `<Link to="/label/$slug">` anywhere in the app still
+// type-checks without a `search` prop (the `HomeSearch.story?` precedent). The default page and
+// sort are applied in `loaderDeps`, never here — the URL stays clean (`/label/x`, not
+// `/label/x?sort=name&page=1`) for the canonical, crawlable view.
+type LabelSearch = { page?: number; sort?: CatalogueSort };
+
 const fetchLabel = createServerFn({ method: "GET" })
-  .validator((data: { slug: string }) => data)
-  .handler(({ data: { slug } }): Promise<LabelPageData> => resolveLabelPageData(slug));
+  .validator((data: { page: number; slug: string; sort: CatalogueSort }) => data)
+  .handler(
+    ({ data: { page, slug, sort } }): Promise<LabelPageData> =>
+      resolveLabelPageData(slug, sort, page),
+  );
 
 function labelHead(loaderData: LabelPageData | undefined) {
   if (loaderData?.status !== "found") {
@@ -106,7 +139,14 @@ function labelHead(loaderData: LabelPageData | undefined) {
   }
 
   const { artists, catalogue, findings, indexable, name, slug } = loaderData;
-  const pageUrl = `${siteUrl}/label/${slug}`;
+  // The canonical is SELF-REFERENCING PER PAGE (page 2 is its own page, not a duplicate of page
+  // 1) but SORT-COLLAPSING: it always drops the sort param, so `?sort=recent` and the default
+  // A–Z view of the same page fold to one canonical URL rather than diluting each other. Page 1
+  // stays the bare `/label/<slug>`.
+  const pageUrl =
+    catalogue.page > 1
+      ? `${siteUrl}/label/${slug}?page=${catalogue.page}`
+      : `${siteUrl}/label/${slug}`;
   // The <title>/meta stay honestly-plain third-person (the Narrator rule); the first person
   // lives only in the on-page voice frame.
   const title = `${name} · Fluncle's Findings`;
@@ -141,16 +181,17 @@ function labelHead(loaderData: LabelPageData | undefined) {
       { content: description, name: "twitter:description" },
       { content: imageUrl, name: "twitter:image" },
     ],
-    // JSON-LD goes through `jsonLdScript`, which HTML-escapes the serialized payload before
-    // it reaches the inline <script>, so a `</script>` in a vendor-sourced label or track
-    // name can't break out (stored-XSS sink, security review).
+    // The JSON-LD's track list describes exactly what the page RENDERS — the findings, then the
+    // quieter rows on this page flattened out of their groups (schema that contradicts the page
+    // gets discounted). `jsonLdScript` HTML-escapes the payload, so a `</script>` in a
+    // vendor-sourced label or track name can't break out (stored-XSS sink, security review).
     scripts: [
       jsonLdScript(
         recordLabelJsonLd({
           artists,
           name,
           slug,
-          tracks: graphPageTracks(findings, catalogue),
+          tracks: graphPageTracks(findings, flattenArtistGroups(catalogue.groups)),
         }),
       ),
       jsonLdScript(labelBreadcrumbsJsonLd(name)),
@@ -162,8 +203,17 @@ function labelHead(loaderData: LabelPageData | undefined) {
 // inferred types), which isn't alphabetical — so sort-keys is off here.
 // oxlint-disable-next-line sort-keys
 export const Route = createFileRoute("/label/$slug")({
-  loader: async ({ params }): Promise<LabelPageData> => {
-    const data = await fetchLabel({ data: { slug: params.slug } });
+  validateSearch: (search: Record<string, unknown>): LabelSearch => ({
+    page: pageParam(search["page"]),
+    sort: sortParam(search["sort"]),
+  }),
+  // Defaults land HERE, so the loader always gets a real page + sort while the URL keeps them
+  // implicit. `parseCatalogueSort` folds anything to the default A–Z.
+  loaderDeps: ({ search }) => ({ page: search.page ?? 1, sort: parseCatalogueSort(search.sort) }),
+  loader: async ({ deps, params }): Promise<LabelPageData> => {
+    const data = await fetchLabel({
+      data: { page: deps.page, slug: params.slug, sort: deps.sort },
+    });
 
     if (data.status === "missing") {
       throw notFound();
@@ -176,14 +226,27 @@ export const Route = createFileRoute("/label/$slug")({
   notFoundComponent: StoryNotFoundState,
 });
 
+/** A page param the reader typed: junk or an absent value folds to undefined (default 1). */
+function pageParam(value: unknown): number | undefined {
+  const n = Number(value);
+
+  return Number.isFinite(n) && n >= 1 ? Math.trunc(n) : undefined;
+}
+
+/** A sort param the reader typed: only a known sort survives, so a junk value stays implicit. */
+function sortParam(value: unknown): CatalogueSort | undefined {
+  return value === "name" || value === "recent" ? value : undefined;
+}
+
 function LabelPage() {
   const data = Route.useLoaderData();
+  const navigate = Route.useNavigate();
 
   if (data.status !== "found") {
     return null;
   }
 
-  const { artists, catalogue, findings, name } = data;
+  const { artists, catalogue, findings, name, slug, sort } = data;
   const signature = labelSignatureLine(name, findings.length, firstFoundAt(findings));
 
   return (
@@ -202,8 +265,29 @@ function LabelPage() {
 
         <ArtistChips artists={artists} title={`Artists on ${name}`} />
 
-        {/* The quieter rows: no heading, no noun, nothing at all when empty. */}
-        <UnlitTracks label={`More tracks on ${name}`} tracks={catalogue} />
+        {/* The crawled catalogue, grouped by artist. The sort control rides above it only when
+            there is more than one group to order; the pager below only when there is more than
+            one page. Changing either resets to page 1 — a different order has different pages. */}
+        {catalogue.groups.length > 0 ? (
+          <section aria-label={`Artists released on ${name}`} className="catalogue-section">
+            {catalogue.totalGroups > 1 ? (
+              <CatalogueSortControl
+                label="Sort artists"
+                onChange={(next) => navigate({ search: { sort: next } })}
+                sort={sort}
+              />
+            ) : undefined}
+
+            <CatalogueArtistGroups groups={catalogue.groups} labelName={name} />
+
+            <CataloguePager
+              buildHref={(page) => `/label/${slug}?sort=${sort}&page=${page}`}
+              label={`Artists on ${name}, more pages`}
+              page={catalogue.page}
+              pageCount={catalogue.pageCount}
+            />
+          </section>
+        ) : undefined}
 
         <footer className="log-plate-footer">
           <Link to="/labels">All labels</Link>

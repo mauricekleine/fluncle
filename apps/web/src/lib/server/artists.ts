@@ -424,6 +424,61 @@ async function mintArtistSlug(id: string, name: string): Promise<string> {
   return `${base}-${id.slice(0, 8)}`;
 }
 
+/**
+ * THE LINK STEP — the crawled half of the `track ↔ artist` edge, and the third member of a
+ * family: `album_id` and `label_id` already work exactly this way (docs/album-entity.md).
+ *
+ *   MINT an entity only off a CERTIFIED FINDING, then LINK every track — certified or not —
+ *   whose entity already has a row.
+ *
+ * `upsertTrackArtists` below is the MINT half, and it runs off Spotify artist IDs at publish.
+ * A CRAWLED track has no Spotify anchor when it lands, so it got no `track_artists` row at all,
+ * and its artist was therefore reachable only through the raw `artists_json` names. That was
+ * fine while nothing asked the question — and it stopped being fine the moment `/artist/<slug>`
+ * had to show the rest of an artist's catalogue, because answering THAT through `artists_json`
+ * is a full scan of a table with no bound on its growth (AGENTS.md forbids exactly this).
+ *
+ * So: match a track's credited names against the artists Fluncle has ALREADY certified, and
+ * stamp the edge. The bound survives — an artist Fluncle has never found a banger from still
+ * has no entity, no page, and no row here, precisely as an album he has never touched has none.
+ * What this earns is the artist he HAS certified: their crawled catalogue becomes reachable by
+ * an INDEXED SEEK (`track_artists_artist_id_idx`) at any catalogue size.
+ *
+ * What it deliberately does NOT do is make a catalogue track countable as a finding. Every read
+ * that means "finding" inner-joins `findings … log_id is not null` (`countArtistFindings`,
+ * `listArtists`, `listArtistsByLabel`, the sitemap, the `/artists` index), so a link added here
+ * moves none of them. `artists.test.ts` pins that: the counts are byte-identical before and
+ * after a catalogue link lands.
+ *
+ * Idempotent (the composite PK absorbs a re-run), and bounded per call. `trackIds` scopes it to
+ * a just-written batch — how the crawler calls it, per release, so the edge is live within the
+ * tick rather than only after the next deploy's reconcile.
+ */
+export async function linkTracksToArtistEntities(trackIds?: string[]): Promise<number> {
+  const db = await getDb();
+  const scoped = trackIds && trackIds.length > 0;
+
+  if (trackIds && trackIds.length === 0) {
+    return 0;
+  }
+
+  // `json_each` explodes `artists_json` into one row per credited name; `credit.key` is the
+  // 0-based array index, which is exactly the 1-based `position` the column wants. The name
+  // match is the same case-insensitive fold every other entity uses to relate a raw captured
+  // string to its normalized twin.
+  const result = await db.execute({
+    args: scoped ? trackIds : [],
+    sql: `insert or ignore into track_artists (track_id, artist_id, position)
+          select tracks.track_id, a.id, credit.key + 1
+          from tracks
+          join json_each(tracks.artists_json) credit
+          join artists a on a.name = credit.value collate nocase
+          ${scoped ? `where tracks.track_id in (${trackIds.map(() => "?").join(", ")})` : ""}`,
+  });
+
+  return result.rowsAffected;
+}
+
 // Upsert artists + track_artists for a track that was just inserted. Called at
 // ingest (publish path) and by the backfill. Idempotent: existing artist rows
 // are matched by `spotify_artist_id` and their `name` + `updated_at` are updated

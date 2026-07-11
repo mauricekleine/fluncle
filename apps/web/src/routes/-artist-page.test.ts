@@ -12,6 +12,7 @@ const getPublicArtistSocials = vi.hoisted(() => vi.fn());
 const countArtistFindings = vi.hoisted(() => vi.fn());
 const getFindingsByArtist = vi.hoisted(() => vi.fn());
 const getArtistNeighbours = vi.hoisted(() => vi.fn());
+const listArtistCatalogue = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/server/artists", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/server/artists")>()),
@@ -24,6 +25,16 @@ vi.mock("@/lib/server/tracks", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/server/tracks")>()),
   getFindingsByArtist,
 }));
+
+// The grouped catalogue read is DB-backed; stub it so the resolver stays a pure unit (its
+// grouping + bounds are covered by catalogue-groups.test.ts and the scale integration test).
+vi.mock("@/lib/server/catalogue-groups", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/server/catalogue-groups")>()),
+  listArtistCatalogue,
+}));
+
+/** The empty grouped catalogue every artist has today (the archive is entirely certified). */
+const NO_CATALOGUE = { groups: [], page: 1, pageCount: 1, totalGroups: 0, totalTracks: 0 };
 
 // The dossier's neighbours are DB-backed; stub them so the resolver stays a pure
 // unit (the ranking itself is covered by artist-dossier.test.ts).
@@ -65,8 +76,10 @@ describe("resolveArtistPageData (the artist page indexability gate)", () => {
     countArtistFindings.mockReset();
     getFindingsByArtist.mockReset();
     getArtistNeighbours.mockReset();
+    listArtistCatalogue.mockReset();
     getPublicArtistSocials.mockResolvedValue([]);
     getArtistNeighbours.mockResolvedValue([]);
+    listArtistCatalogue.mockResolvedValue(NO_CATALOGUE);
     getArtistBySlug.mockResolvedValue(ARTIST);
   });
 
@@ -81,7 +94,7 @@ describe("resolveArtistPageData (the artist page indexability gate)", () => {
     // page is below the threshold — noindex + out of the sitemap.
     countArtistFindings.mockResolvedValue(0);
 
-    const data = await resolveArtistPageData("drift");
+    const data = await resolveArtistPageData("drift", "name", 1);
 
     expect(data.status).toBe("found");
     if (data.status !== "found") {
@@ -102,7 +115,7 @@ describe("resolveArtistPageData (the artist page indexability gate)", () => {
     ]);
     countArtistFindings.mockResolvedValue(3);
 
-    const data = await resolveArtistPageData("drift");
+    const data = await resolveArtistPageData("drift", "name", 1);
 
     if (data.status !== "found") {
       throw new Error("expected the artist to be found");
@@ -115,7 +128,7 @@ describe("resolveArtistPageData (the artist page indexability gate)", () => {
   it("reports a missing artist without touching the finding counts", async () => {
     getArtistBySlug.mockResolvedValue(undefined);
 
-    const data = await resolveArtistPageData("nobody");
+    const data = await resolveArtistPageData("nobody", "name", 1);
 
     expect(data).toEqual({ status: "missing" });
     expect(getFindingsByArtist).not.toHaveBeenCalled();
@@ -134,7 +147,7 @@ describe("resolveArtistPageData (the artist page indexability gate)", () => {
       { imageUrl: "https://i.scdn.co/image/echo", name: "Echo", slug: "echo" },
     ]);
 
-    const data = await resolveArtistPageData("drift");
+    const data = await resolveArtistPageData("drift", "name", 1);
 
     if (data.status !== "found") {
       throw new Error("expected the artist to be found");

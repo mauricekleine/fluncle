@@ -28,14 +28,10 @@ import {
   linkTrackToAlbum,
   listAlbumsWithFindingCounts,
 } from "./albums";
+import { flattenArtistGroups, listLabelCatalogue } from "./catalogue-groups";
 import { createIntegrationDb } from "./integration-db";
 import { getLabelBySlug, getLabelForAlbum, listLabelsWithFindingCounts } from "./labels";
-import {
-  getFindingsByAlbum,
-  getFindingsByLabel,
-  listCatalogueTracksByAlbum,
-  listCatalogueTracksByLabel,
-} from "./tracks";
+import { getFindingsByAlbum, getFindingsByLabel, listCatalogueTracksByAlbum } from "./tracks";
 
 let db: Client;
 
@@ -256,17 +252,19 @@ describe("the finding reads vs the anti-join (the safety property)", () => {
     }
 
     const albumCatalogue = await listCatalogueTracksByAlbum(album.id);
-    const labelCatalogue = await listCatalogueTracksByLabel(label.id);
+    const labelCatalogue = await listLabelCatalogue(label.id, "name", 1);
+    const labelTracks = flattenArtistGroups(labelCatalogue.groups);
 
     expect(albumCatalogue.tracks.map((track) => track.trackId)).toEqual(["t2"]);
-    expect(labelCatalogue.tracks.map((track) => track.trackId)).toEqual(["t2"]);
+    expect(labelTracks.map((track) => track.trackId)).toEqual(["t2"]);
     // The total is counted in SQL, not by handing the rows to the isolate to length-check.
     expect(albumCatalogue.total).toBe(1);
-    expect(labelCatalogue.total).toBe(1);
+    expect(labelCatalogue.totalTracks).toBe(1);
     // The type carries no logId at all — the row has nowhere on fluncle.com to link to, so
     // it links OUT. This is what keeps it structurally unable to pose as a finding.
     expect(albumCatalogue.tracks[0]).not.toHaveProperty("logId");
     expect(albumCatalogue.tracks[0]?.spotifyUrl).toContain("open.spotify.com");
+    expect(labelTracks[0]).not.toHaveProperty("logId");
   });
 
   it("counts findings and the quieter rows separately on the index reads", async () => {

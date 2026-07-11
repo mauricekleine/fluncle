@@ -15,6 +15,11 @@ import {
 } from "simple-icons";
 import { ArtistAvatar } from "@/components/artist-avatar";
 import { BrandIcon } from "@/components/brand-icon";
+import {
+  CataloguePager,
+  CatalogueRecords,
+  CatalogueSortControl,
+} from "@/components/catalogue-groups";
 import { GraphLink } from "@/components/graph-link";
 import { StoryNotFoundState } from "@/components/stories/stories-states";
 import { TrackArtwork } from "@/components/track-artwork";
@@ -38,6 +43,14 @@ import {
   getArtistBySlug,
   getPublicArtistSocials,
 } from "@/lib/server/artists";
+import {
+  CataloguePageOutOfRangeError,
+  type CatalogueGroupPage,
+  type CatalogueRecord,
+  type CatalogueSort,
+  listArtistCatalogue,
+  parseCatalogueSort,
+} from "@/lib/server/catalogue-groups";
 import { getFindingsByArtist, type TrackListItem } from "@/lib/server/tracks";
 
 // The dossier bundled onto the page data: the pure signature (first-found, tempo,
@@ -57,12 +70,16 @@ type ArtistDossier = ArtistSignature & {
 
 type ArtistPageData =
   | {
+      // The rest of this artist's catalogue — their crawled tracks grouped into records, one
+      // page of it (`catalogue-groups.ts` owns the bound). Empty until the catalogue lands.
+      catalogue: CatalogueGroupPage<CatalogueRecord>;
       dossier: ArtistDossier;
       findings: TrackListItem[];
       indexable: boolean;
       name: string;
       slug: string;
       socials: ArtistSocialLink[];
+      sort: CatalogueSort;
       status: "found";
       // The identity graph the JSON-LD's sameAs draws on (KG anchors).
       mbid: string | undefined;
@@ -111,11 +128,30 @@ const SOCIAL_LABEL: Record<ArtistSocialPlatform, string> = {
 // gate + JSON-LD key off `countArtistFindings` — the SAME pure `track_artists`
 // join the sitemap + `/artists` index use — so an indexable page is never
 // orphaned from the sitemap/index during the backfill window (RFC §3).
-export async function resolveArtistPageData(slug: string): Promise<ArtistPageData> {
+export async function resolveArtistPageData(
+  slug: string,
+  sort: CatalogueSort,
+  page: number,
+): Promise<ArtistPageData> {
   const artist = await getArtistBySlug(slug);
 
   if (!artist) {
     return { status: "missing" };
+  }
+
+  let catalogue: CatalogueGroupPage<CatalogueRecord>;
+
+  try {
+    catalogue = await listArtistCatalogue(artist.id, sort, page);
+  } catch (error) {
+    // A page past the end of the pager is genuinely not-found, not a 500 — a crawler or a
+    // hand-typed `?page=99` on a 3-page artist gets an honest 404, never an empty page that
+    // duplicates page 1's content under a new URL.
+    if (error instanceof CataloguePageOutOfRangeError) {
+      return { status: "missing" };
+    }
+
+    throw error;
   }
 
   const [findings, socials, canonicalFindingCount, neighbours] = await Promise.all([
@@ -133,16 +169,25 @@ export async function resolveArtistPageData(slug: string): Promise<ArtistPageDat
   );
 
   return {
+    catalogue,
     dossier: { ...signature, findingCount: gridFindings.length, neighbours },
     findings,
     // Thin-content gate: index only at ≥3 coordinate-bearing findings (counted via
     // the canonical `track_artists` join, the same source as the sitemap + index);
     // below that the page still serves 200 but is noindex + out of the sitemap.
+    //
+    // The artist gate keys off FINDINGS, not total content, and that is deliberate rather than a
+    // drift from the label/album gate: an artist entity is minted only off a certified finding
+    // (docs/artist-relationship.md), so an artist page with zero findings does not exist to
+    // begin with — there is no findings-free stub for a total-content gate to catch, the way a
+    // crawler-discovered LABEL has one. Every artist page already clears the "who wrote it"
+    // question by existing at all.
     indexable: canonicalFindingCount >= ARTIST_INDEX_MIN_FINDINGS,
     mbid: artist.mbid,
     name: artist.name,
     slug: artist.slug,
     socials,
+    sort,
     spotifyUrl: artist.spotifyUrl,
     status: "found",
     wikidataQid: artist.wikidataQid,
@@ -150,16 +195,26 @@ export async function resolveArtistPageData(slug: string): Promise<ArtistPageDat
 }
 
 const fetchArtist = createServerFn({ method: "GET" })
-  .validator((data: { slug: string }) => data)
-  .handler(({ data: { slug } }): Promise<ArtistPageData> => resolveArtistPageData(slug));
+  .validator((data: { page: number; slug: string; sort: CatalogueSort }) => data)
+  .handler(
+    ({ data: { page, slug, sort } }): Promise<ArtistPageData> =>
+      resolveArtistPageData(slug, sort, page),
+  );
 
 function artistHead(loaderData: ArtistPageData | undefined) {
   if (loaderData?.status !== "found") {
     return {};
   }
 
-  const { findings, indexable, name, slug, socials, mbid, spotifyUrl, wikidataQid } = loaderData;
-  const pageUrl = `${siteUrl}/artist/${slug}`;
+  const { catalogue, findings, indexable, name, slug, socials, mbid, spotifyUrl, wikidataQid } =
+    loaderData;
+  // Self-referencing PER PAGE, sort-collapsing (the label page carries the long note): page 2
+  // is its own canonical, but the sort param always drops so order-variants of one page fold to
+  // one URL. Page 1 stays the bare `/artist/<slug>`.
+  const pageUrl =
+    catalogue.page > 1
+      ? `${siteUrl}/artist/${slug}?page=${catalogue.page}`
+      : `${siteUrl}/artist/${slug}`;
   // The <title>/meta stay honestly-plain third-person (the Narrator rule); the
   // first person lives only in the on-page voice frame.
   const title = `${name} · Fluncle's Findings`;
@@ -229,8 +284,17 @@ function artistHead(loaderData: ArtistPageData | undefined) {
 // next's inferred types), which isn't alphabetical — so sort-keys is off here.
 // oxlint-disable-next-line sort-keys
 export const Route = createFileRoute("/artist/$slug")({
-  loader: async ({ params }): Promise<ArtistPageData> => {
-    const data = await fetchArtist({ data: { slug: params.slug } });
+  validateSearch: (search: Record<string, unknown>): ArtistSearch => ({
+    page: pageParam(search["page"]),
+    sort: sortParam(search["sort"]),
+  }),
+  // Defaults land HERE, so the loader always gets a real page + sort while the URL keeps them
+  // implicit (a bare `/artist/<slug>` is the canonical, crawlable view).
+  loaderDeps: ({ search }) => ({ page: search.page ?? 1, sort: parseCatalogueSort(search.sort) }),
+  loader: async ({ deps, params }): Promise<ArtistPageData> => {
+    const data = await fetchArtist({
+      data: { page: deps.page, slug: params.slug, sort: deps.sort },
+    });
 
     if (data.status === "missing") {
       throw notFound();
@@ -242,6 +306,22 @@ export const Route = createFileRoute("/artist/$slug")({
   component: ArtistPage,
   notFoundComponent: StoryNotFoundState,
 });
+
+// Both params OPTIONAL, so a plain `<Link to="/artist/$slug">` anywhere still type-checks with
+// no `search` prop (the `HomeSearch.story?` precedent).
+type ArtistSearch = { page?: number; sort?: CatalogueSort };
+
+/** A page param the reader typed: junk or an absent value folds to undefined (default 1). */
+function pageParam(value: unknown): number | undefined {
+  const n = Number(value);
+
+  return Number.isFinite(n) && n >= 1 ? Math.trunc(n) : undefined;
+}
+
+/** A sort param the reader typed: only a known sort survives, so a junk value stays implicit. */
+function sortParam(value: unknown): CatalogueSort | undefined {
+  return value === "name" || value === "recent" ? value : undefined;
+}
 
 function SocialLink({ social }: { social: ArtistSocialLink }) {
   const label = SOCIAL_LABEL[social.platform];
@@ -260,12 +340,13 @@ function SocialLink({ social }: { social: ArtistSocialLink }) {
 
 function ArtistPage() {
   const data = Route.useLoaderData();
+  const navigate = Route.useNavigate();
 
   if (data.status !== "found") {
     return null;
   }
 
-  const { dossier, findings, name, socials } = data;
+  const { catalogue, dossier, findings, name, slug, socials, sort } = data;
   const grid = findings.filter((finding) => finding.logId);
 
   return (
@@ -338,6 +419,31 @@ function ArtistPage() {
               ))}
             </ul>
           </nav>
+        ) : undefined}
+
+        {/* The rest of this artist's catalogue: the crawled tracks Fluncle never certified,
+            grouped into their records, each collapsing to its tracklist. Conditional like every
+            band here — nothing renders until the crawl fills it. The sort control rides above
+            only with more than one record to order; the pager only with more than one page. */}
+        {catalogue.groups.length > 0 ? (
+          <section aria-label={`More from ${name}`} className="catalogue-section">
+            {catalogue.totalGroups > 1 ? (
+              <CatalogueSortControl
+                label="Sort records"
+                onChange={(next) => navigate({ search: { sort: next } })}
+                sort={sort}
+              />
+            ) : undefined}
+
+            <CatalogueRecords artistName={name} records={catalogue.groups} />
+
+            <CataloguePager
+              buildHref={(page) => `/artist/${slug}?sort=${sort}&page=${page}`}
+              label={`More from ${name}, more pages`}
+              page={catalogue.page}
+              pageCount={catalogue.pageCount}
+            />
+          </section>
         ) : undefined}
 
         <footer className="log-plate-footer">

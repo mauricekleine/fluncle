@@ -2099,6 +2099,167 @@ body::before {
   opacity: 0.85;
 }
 
+/* ── THE GROUPED QUIETER ROWS ───────────────────────────────────────────────────────────
+   At catalogue scale the unlit rows are a discography, so they are GROUPED: the artist page by
+   record, the label page by artist then record (components/catalogue-groups.tsx). The register
+   is still the unlit one — the grouping adds STRUCTURE, never light. A group HEADING names a
+   real entity (a record, an artist), so it may be a quiet cream Title; the rows underneath stay
+   exactly as dim as they were, and the only gold on the page remains the focus ring.
+
+   The whole band sits on the same flat pane as the unlit list — no card, no glass (One Pane). */
+.catalogue-section {
+  margin-top: 1.6rem;
+}
+
+/* The sort control: chrome, pushed to the trailing edge, small and quiet. It rides above the
+   groups only when there is more than one to order. */
+.catalogue-sort {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 0.75rem;
+}
+
+.catalogue-sort-trigger {
+  color: var(--stardust);
+  font-size: 0.8rem;
+}
+
+.catalogue-groups {
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+/* One group (an artist on a label page, or a record on an artist page). A hairline Dust Line
+   between groups is the only separator, matching the unlit list's own rule. */
+.catalogue-group {
+  border-bottom: 1px solid color-mix(in oklch, var(--border) 55%, transparent);
+}
+
+/* The disclosure trigger. It fills the row so the whole thing is the hit target (WCAG target
+   size), lays the name / meta / caret out in a line, and heats its ink to cream on hover and
+   focus — never gold. Focus, and only focus, takes the canonical Eclipse ring. */
+.catalogue-group-trigger {
+  align-items: baseline;
+  background: none;
+  border: none;
+  color: var(--starlight-cream);
+  cursor: pointer;
+  display: flex;
+  gap: 0.6rem;
+  padding: 0.7rem 0.5rem;
+  text-align: left;
+  width: 100%;
+}
+
+.catalogue-group-trigger:focus-visible {
+  border-radius: var(--rounded-md);
+  outline: 2px solid var(--eclipse-glow);
+  outline-offset: 2px;
+}
+
+/* The heading names a real entity, so it reads in the Title register — Space Grotesk, cream,
+   never past 700 (its ceiling; the reading-text rule). Not Oxanium: an artist/record name is
+   editorial, and Oxanium speaks only for the brand and the numbers (One Voice Rule). */
+.catalogue-group-name {
+  flex: 1;
+  font-size: 1rem;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+/* The quiet count under a heading — RECORDS, a real entity that may be counted aloud, never the
+   nameless tier the rows belong to. Stardust, small, tabular for the calm-panel numerals. */
+.catalogue-group-meta {
+  color: var(--muted-foreground);
+  flex: none;
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The disclosure caret is the shadcn AccordionTrigger's own built-in icon (a Caret that swaps
+   down↔up on aria-expanded); this band adds none of its own. It sits Stardust-quiet at the
+   trailing edge via the component's `ml-auto`. */
+
+/* The panel. `hiddenUntilFound` keeps its content in the DOM while collapsed (hidden="until-found"
+   — crawlable, find-in-page-able); when open it is simply full height. Height stays robust
+   whether or not the (currently absent) accordion keyframes ever animate it. */
+.catalogue-group-panel {
+  overflow: hidden;
+}
+
+.catalogue-group-panel[data-open] {
+  height: auto;
+  padding: 0 0.5rem 0.6rem;
+}
+
+/* A record sub-section inside an artist group on the label page. */
+.catalogue-record {
+  margin-top: 0.6rem;
+}
+
+.catalogue-record-name {
+  align-items: baseline;
+  color: var(--starlight-cream);
+  display: flex;
+  font-size: 0.9rem;
+  font-weight: 700;
+  gap: 0.5rem;
+  margin: 0 0 0.15rem;
+}
+
+.catalogue-record-name a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.catalogue-record-name a:hover {
+  color: var(--starlight-cream);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+/* The one number in the band — a release year — takes the Tabular Rule's numerals, and stays
+   Stardust so it never competes with the name. */
+.catalogue-year {
+  color: var(--muted-foreground);
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 400;
+}
+
+/* The drill-down link shown when a group hit its render cap: the rest lives on the entity's own
+   page. A quiet link, never gold at rest (One Sun). */
+.catalogue-more {
+  font-size: 0.8rem;
+  margin: 0.1rem 0 0.5rem;
+}
+
+.catalogue-more a {
+  color: var(--stardust);
+  text-underline-offset: 3px;
+}
+
+.catalogue-more a:hover {
+  color: var(--starlight-cream);
+}
+
+/* The pager: real crawlable anchors, centered, with a quiet status line. */
+.catalogue-pager {
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 1.25rem;
+}
+
+.catalogue-pager-status {
+  color: var(--muted-foreground);
+  font-size: 0.76rem;
+  font-variant-numeric: tabular-nums;
+  margin: 0;
+  text-align: center;
+}
+
 /* The /galaxies index (browse-by-feel RFC): each named galaxy as a quiet, cover-led
    pane you ENTER — a place, never a filter chip (DESIGN.md Don't). A few member covers
    under the name (Title register: system sans, extrabold cream — the artist-name

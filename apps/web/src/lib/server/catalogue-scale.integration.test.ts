@@ -70,13 +70,23 @@ async function seedLabel(name: string, slug: string, seedState: string): Promise
   return id;
 }
 
+// A crawled label is a DISCOGRAPHY, so the synthetic one is spread the way a real one is: many
+// artists, each with several records. This is what lets the scale test prove the GROUPING bound
+// rather than the old flat cap — a label of `CRAWLED_ARTISTS` artists over `CRAWLED_ALBUMS`
+// records, grouped by artist and paged, must still render a bounded page.
+const CRAWLED_ARTISTS = 30;
+const CRAWLED_ALBUMS = 80;
+
 /** The exact shape the crawler writes: a `tracks` row, no `findings` row, label_id stamped. */
 async function seedCrawledRows(labelId: string, labelName: string, count: number): Promise<void> {
   const rows = Array.from({ length: count }, (_unused, index) => ({
     args: [
       `mb_${labelId}_${index}`,
       `${labelName} Crawled ${String(index).padStart(4, "0")}`,
-      JSON.stringify(["A Crawled Artist"]),
+      // Spread across artists and records so the grouping has something to group. `A Crawled
+      // Artist NN` and `Crawled Record NN` fold to `CRAWLED_ARTISTS` / `CRAWLED_ALBUMS` buckets.
+      JSON.stringify([`A Crawled Artist ${String(index % CRAWLED_ARTISTS).padStart(2, "0")}`]),
+      `Crawled Record ${String(index % CRAWLED_ALBUMS).padStart(2, "0")}`,
       0,
       labelName,
       labelId,
@@ -84,11 +94,35 @@ async function seedCrawledRows(labelId: string, labelName: string, count: number
       `20${String(10 + (index % 15)).padStart(2, "0")}-01-01`,
     ],
     sql: `insert into tracks
-            (track_id, title, artists_json, duration_ms, label, label_id, spotify_url, release_date)
-          values (?, ?, ?, ?, ?, ?, ?, ?)`,
+            (track_id, title, artists_json, album, duration_ms, label, label_id, spotify_url,
+             release_date)
+          values (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   }));
 
   await db.batch(rows, "write");
+
+  // Link every crawled row to its credited artist entity, exactly as the crawler + the deploy
+  // backfill do (lib/server/artists.ts). The label page's ARTIST grouping reads `artists_json`
+  // directly, but the ARTIST page reads through this indexed edge, so it must exist for the
+  // artist-side bound to be exercised too.
+  const artistNow = "2026-07-01T00:00:00.000Z";
+
+  await db.batch(
+    Array.from({ length: CRAWLED_ARTISTS }, (_unused, index) => {
+      const name = `A Crawled Artist ${String(index).padStart(2, "0")}`;
+
+      return {
+        args: [`art_${labelId}_${index}`, name, `${labelId}-artist-${index}`, artistNow, artistNow],
+        sql: `insert or ignore into artists (id, name, slug, created_at, updated_at)
+              values (?, ?, ?, ?, ?)`,
+      };
+    }),
+    "write",
+  );
+
+  const { backfillArtistLinks } = await import("../../../scripts/backfill-artist-links");
+
+  await backfillArtistLinks(db);
 }
 
 beforeAll(async () => {
@@ -125,63 +159,96 @@ describe("the catalogue at volume", () => {
   });
 });
 
-describe("a graph page's quieter rows are CAPPED, and the total is counted in SQL", () => {
-  it("returns at most GRAPH_PAGE_CATALOGUE_LIMIT rows however crowded the imprint", async () => {
+describe("a label page's quieter rows are GROUPED and BOUNDED, totals counted in SQL", () => {
+  it("renders a bounded page of artist groups however crowded the label", async () => {
     const { getLabelBySlug } = await import("./labels");
-    const { GRAPH_PAGE_CATALOGUE_LIMIT, listCatalogueTracksByLabel } = await import("./tracks");
+    const {
+      flattenArtistGroups,
+      GRAPH_GROUP_PAGE_SIZE,
+      GRAPH_GROUP_ROW_CEILING,
+      listLabelCatalogue,
+    } = await import("./catalogue-groups");
     const label = await getLabelBySlug("hospital-records");
 
     if (!label) {
       throw new Error("label missing");
     }
 
-    const slice = await listCatalogueTracksByLabel(label.id);
+    const page = await listLabelCatalogue(label.id, "name", 1);
 
-    expect(slice.tracks).toHaveLength(GRAPH_PAGE_CATALOGUE_LIMIT);
-    // The honest total still comes back — counted in SQL, never by handing 900 rows to the
-    // isolate to length-check. The thin-content gate keys off THIS, not the rendered slice.
-    expect(slice.total).toBe(CROWDED_LABEL);
+    // GROUPS are capped at a page size; the honest group + track totals come back counted in
+    // SQL, never by handing 900 rows to the isolate to length-check. The thin-content gate keys
+    // off `totalTracks`, and the pager off `totalGroups` — never the rendered page.
+    expect(page.groups.length).toBeLessThanOrEqual(GRAPH_GROUP_PAGE_SIZE);
+    expect(page.totalGroups).toBe(CRAWLED_ARTISTS);
+    expect(page.totalTracks).toBe(CROWDED_LABEL);
+    expect(page.pageCount).toBe(Math.ceil(CRAWLED_ARTISTS / GRAPH_GROUP_PAGE_SIZE));
+
+    // THE ROW CEILING — the number that replaces the flat 100-row cap as the thing standing
+    // between a crawled label and a 4.34 MB dump. No matter how the rows fall, the page renders
+    // at most `pageSize × trackLimit` of them, and every rendered row is a real uncertified
+    // track (no coordinate — it can never pose as a finding).
+    const rendered = flattenArtistGroups(page.groups);
+
+    expect(rendered.length).toBeLessThanOrEqual(GRAPH_GROUP_ROW_CEILING);
+    expect(rendered.every((track) => !("logId" in track))).toBe(true);
   });
 
-  it("takes the NEWEST releases, not an arbitrary alphabetical A–C slice", async () => {
+  it("paginates the groups: page 2 is real, disjoint from page 1, and within the same bound", async () => {
     const { getLabelBySlug } = await import("./labels");
-    const { listCatalogueTracksByLabel } = await import("./tracks");
+    const { GRAPH_GROUP_PAGE_SIZE, listLabelCatalogue } = await import("./catalogue-groups");
     const label = await getLabelBySlug("hospital-records");
 
     if (!label) {
       throw new Error("label missing");
     }
 
-    const releaseDates = await db.execute({
-      args: [label.id],
-      sql: `select max(release_date) as newest from tracks
-            where label_id = ? and track_id like 'mb_%'`,
-    });
-    const { tracks } = await listCatalogueTracksByLabel(label.id);
-    const first = tracks[0];
+    const [one, two] = await Promise.all([
+      listLabelCatalogue(label.id, "name", 1),
+      listLabelCatalogue(label.id, "name", 2),
+    ]);
 
-    if (!first) {
-      throw new Error("no rows");
-    }
+    // A pager, not a cap: nothing is unreachable. Page 2 carries the next artists, disjoint from
+    // page 1, and both are the same bounded page size.
+    expect(two.groups.length).toBeGreaterThan(0);
+    expect(two.groups.length).toBeLessThanOrEqual(GRAPH_GROUP_PAGE_SIZE);
 
-    const firstRow = await db.execute({
-      args: [first.trackId],
-      sql: `select release_date from tracks where track_id = ?`,
-    });
+    const namesOne = new Set(one.groups.map((group) => group.name));
+    const overlap = two.groups.filter((group) => namesOne.has(group.name));
 
-    expect(firstRow.rows[0]?.release_date).toBe(releaseDates.rows[0]?.newest);
+    expect(overlap).toEqual([]);
+    // A–Z is stable: page 1 sorts before page 2.
+    expect(one.groups.at(-1)?.name.localeCompare(two.groups[0]?.name ?? "") ?? 0).toBeLessThan(0);
   });
 
-  it("keeps the page's JSON-LD and markup bounded by the same slice", async () => {
+  it("throws for a page past the end, so it can 404 rather than duplicate page 1", async () => {
+    const { getLabelBySlug } = await import("./labels");
+    const { CataloguePageOutOfRangeError, listLabelCatalogue } = await import("./catalogue-groups");
+    const label = await getLabelBySlug("hospital-records");
+
+    if (!label) {
+      throw new Error("label missing");
+    }
+
+    await expect(listLabelCatalogue(label.id, "name", 999)).rejects.toBeInstanceOf(
+      CataloguePageOutOfRangeError,
+    );
+  });
+
+  it("keeps the page's JSON-LD and markup bounded by the same grouped page", async () => {
     const { resolveLabelPageData } = await import("../../routes/label.$slug");
-    const { GRAPH_PAGE_CATALOGUE_LIMIT } = await import("./tracks");
-    const data = await resolveLabelPageData("hospital-records");
+    const { flattenArtistGroups, GRAPH_GROUP_ROW_CEILING } = await import("./catalogue-groups");
+    const data = await resolveLabelPageData("hospital-records", "name", 1);
 
     if (data.status !== "found") {
       throw new Error("expected the page to resolve");
     }
 
-    expect(data.catalogue.length).toBeLessThanOrEqual(GRAPH_PAGE_CATALOGUE_LIMIT);
+    // The markup, the hydration payload and the JSON-LD's track list are all bounded by this one
+    // flattened array — never 900 rows through the markup three times over (the 4.34 MB bug).
+    expect(flattenArtistGroups(data.catalogue.groups).length).toBeLessThanOrEqual(
+      GRAPH_GROUP_ROW_CEILING,
+    );
     // 900 crawled rows still clear the thin-content floor — the gate saw the TOTAL.
     expect(data.indexable).toBe(true);
   });
@@ -193,7 +260,7 @@ describe("a label earns a page on its content, not on Fluncle's", () => {
 
     // Metalheadz has 400 crawled rows and no finding. It is a page: a real record of what the
     // label put out. It used to 404.
-    const data = await resolveLabelPageData("metalheadz");
+    const data = await resolveLabelPageData("metalheadz", "name", 1);
 
     if (data.status !== "found") {
       throw new Error("a discovered label must have a page");
@@ -202,14 +269,14 @@ describe("a label earns a page on its content, not on Fluncle's", () => {
     // Nothing in the findings band ⇒ FindingsGrid renders nothing at all. No heading, no
     // "Nothing logged off this one yet.", no empty state. That line is what made it a doorway.
     expect(data.findings).toEqual([]);
-    expect(data.catalogue.length).toBeGreaterThan(0);
+    expect(data.catalogue.groups.length).toBeGreaterThan(0);
     // 400 crawled rows clears the renderable floor, so it is a real, indexable page.
     expect(data.indexable).toBe(true);
   });
 
   it("still serves the label Fluncle DID certify on, findings first", async () => {
     const { resolveLabelPageData } = await import("../../routes/label.$slug");
-    const data = await resolveLabelPageData("hospital-records");
+    const data = await resolveLabelPageData("hospital-records", "name", 1);
 
     if (data.status !== "found") {
       throw new Error("expected the page to resolve");
