@@ -48,11 +48,19 @@
 // other note in its galaxy is worse than none.
 //
 // That guardrail is MECHANICAL, not hoped for. The Worker re-reads the same neighbour
-// notes and runs the ECHO GATE (`gateNoteEcho`, apps/web/src/lib/server/note.ts): a
-// lifted phrase or wholesale word overlap is a `note_echoes_neighbours` 422. On that
-// rejection the sweep RE-AUTHORS ONCE, handing the model its own echo back as the thing
-// to avoid. If the second line echoes too, the finding stays note-less and queued —
-// the note is optional, and silence beats a generic line.
+// notes and runs the ECHO GATE (apps/web/src/lib/server/note.ts): a lifted phrase or
+// wholesale word overlap is a `note_echoes_neighbours` 422. On that rejection the sweep
+// RE-AUTHORS ONCE, handing the model its own echo back as the thing to avoid. If the
+// second line echoes too, the finding stays note-less and queued — the note is optional,
+// and silence beats a generic line.
+//
+// A REJECTED NOTE IS HELD, NOT BINNED. The 422 is not the end of the line any more: before
+// it answers, the Worker writes the rejected note to the `note_rejections` ledger with the
+// neighbour it echoed, the lifted phrase, the score, and the thresholds in force, and it
+// raises a row in the operator's /admin attention queue. He reads what the model wrote and
+// rules — keep it, edit it, or bin it. Nothing about THIS script's behaviour changes (the
+// note still isn't stored, the finding stays queued); what changes is that the work it threw
+// away is now visible to the one person who can judge it. See docs/agents/note-agent.md.
 //
 // NOTE_NEIGHBORS=0 turns the layer off (the kill switch, and the A/B control).
 //
@@ -706,7 +714,9 @@ function noteOne(queued: QueueFinding, dryRun = false): NoteResult {
     if (attempt < ECHO_RETRIES) {
       log(`${id}: re-authoring once, routing around the echo`);
     } else {
-      log(`${id}: still echoing its neighbourhood — leaving it note-less (silence beats sameness)`);
+      log(
+        `${id}: still echoing its neighbourhood — left note-less, and HELD for the operator's eye (see /admin)`,
+      );
     }
   }
 

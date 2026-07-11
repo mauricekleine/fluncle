@@ -18,6 +18,7 @@ import { listClipPosts } from "./clip-social";
 import { getDb, typedRows } from "./db";
 import { listLabelReviewRows } from "./labels";
 import { listMixtapes } from "./mixtapes";
+import { listNoteRejectionReviewRows } from "./note-rejections";
 import { listRecordings } from "./recordings";
 import { listTracks } from "./tracks";
 
@@ -149,6 +150,7 @@ export async function readAttentionSnapshot(now: number = Date.now()): Promise<A
     labelReviews,
     submissions,
     newsletters,
+    noteRejections,
     renders,
     newest,
   ] = await Promise.all([
@@ -162,6 +164,11 @@ export async function readAttentionSnapshot(now: number = Date.now()): Promise<A
     listLabelReviewRows(),
     listSubmissionRows(),
     listDraftEditionRows(),
+    // Every auto-note the echo gate held back and nobody has ruled on yet (the trust rule:
+    // a note he has already kept or binned is not his business anymore). The gate refuses
+    // to STORE these — it always did — but it no longer destroys them, so he can read what
+    // the model wrote and decide whether the gate was right.
+    listNoteRejectionReviewRows(),
     // The render queue's canonical read (`fluncle admin tracks queue`): findings
     // with context gathered but no video yet.
     listTracks({ hasContext: true, hasVideo: false, limit: 1 }),
@@ -191,6 +198,7 @@ export async function readAttentionSnapshot(now: number = Date.now()): Promise<A
         ...(mixtape.externalUrls.youtube ? { youtubeUrl: mixtape.externalUrls.youtube } : {}),
       })),
       newsletters,
+      noteRejections,
       recordings: recordings.map((recording) => ({
         createdAt: recording.createdAt,
         hasVideo: recording.hasVideo,

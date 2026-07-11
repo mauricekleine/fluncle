@@ -149,7 +149,9 @@ describe("scoreNoteEcho", () => {
   it("has nothing to echo in an empty neighbourhood (the first note in a region)", () => {
     const echo = scoreNoteEcho("Pure rolling menace, half-step and patient.", []);
 
-    expect(echo).toEqual({ echoes: false, logId: null, overlap: 0, phrase: "" });
+    // `note` (the echoed neighbour's own note) is "" here for the same reason `logId` is
+    // null: there is no neighbour to have echoed.
+    expect(echo).toEqual({ echoes: false, logId: null, note: "", overlap: 0, phrase: "" });
   });
 
   it("reports the WORST neighbour: a lift outranks every bare overlap", () => {
@@ -192,5 +194,55 @@ describe("gateNoteEcho", () => {
 
   it("passes anything when there is no neighbourhood to echo (the layer is optional)", () => {
     expect(gateNoteEcho("Pure rolling menace, half-step and patient.", []).echoes).toBe(false);
+  });
+});
+
+// ── The tunable dials ────────────────────────────────────────────────────────────
+//
+// The thresholds ship as defaults but are operator-tunable at runtime (the `settings`
+// KV — the gate has to be retunable without a deploy, because #502's calibration was a
+// measurement of one 61-note archive rather than a law). The scorer therefore takes them
+// as an argument, and these pin that the dials actually MOVE the verdict — a gate whose
+// thresholds are decorative would be worse than no thresholds at all.
+
+describe("the echo gate's tunable thresholds", () => {
+  const NEIGHBORS = [
+    { logId: "027.2.8R", note: "My shoulders dropped before the break even settled." },
+  ];
+  // Shares the four-word run "my shoulders dropped before" — a lift at the default of 4.
+  const LIFTS_FOUR = "My shoulders dropped before I knew the tune had turned.";
+
+  it("rejects a four-word lift at the default, and lets it pass when the gate is loosened", () => {
+    expect(scoreNoteEcho(LIFTS_FOUR, NEIGHBORS).echoes).toBe(true);
+
+    // Loosen the lift threshold past the run's length: the same note now clears.
+    const loosened = scoreNoteEcho(LIFTS_FOUR, NEIGHBORS, { maxOverlap: 1, minPhraseWords: 9 });
+
+    expect(loosened.echoes).toBe(false);
+  });
+
+  it("tightening the overlap dial catches a note the default lets through", () => {
+    const distinct = "Piano loops into your chest and the vocal keeps you there.";
+
+    expect(scoreNoteEcho(distinct, NEIGHBORS).echoes).toBe(false);
+
+    // A maxOverlap of 0.05 is near the floor — almost any shared content word trips it.
+    // The point is not that this is a sensible setting; it is that the dial BITES.
+    const tightened = scoreNoteEcho("The break settled and my shoulders dropped.", NEIGHBORS, {
+      maxOverlap: 0.05,
+      minPhraseWords: 20,
+    });
+
+    expect(tightened.echoes).toBe(true);
+  });
+
+  it("carries the echoed neighbour's own note, so a rejection can show the PAIR", () => {
+    const echo = scoreNoteEcho(LIFTS_FOUR, NEIGHBORS);
+
+    // The ledger snapshots this: the operator has to read what it echoed, not just be told
+    // that it echoed. A rejection without the other half is an accusation, not evidence.
+    expect(echo.note).toBe("My shoulders dropped before the break even settled.");
+    expect(echo.logId).toBe("027.2.8R");
+    expect(echo.phrase).toBe("my shoulders dropped before");
   });
 });

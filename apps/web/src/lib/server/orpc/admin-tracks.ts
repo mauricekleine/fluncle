@@ -31,7 +31,8 @@ import { FOUND_BASE, trackMedia, videoVersion } from "../../media";
 import { recordNoteAttempt } from "../backfill";
 import { coerceEmbedding, EMBEDDING_DIMS } from "../embedding";
 import { parseEditorialNote } from "../http-errors";
-import { gateNoteEcho, gateNoteText, type NoteNeighbor } from "../note";
+import { gateNoteText, noteEchoError, scoreNoteEcho, type NoteNeighbor } from "../note";
+import { getNoteEchoThresholds, recordNoteRejection } from "../note-rejections";
 import { publishTrack } from "../publish";
 import {
   DEFAULT_CARTESIA_SPEED,
@@ -730,12 +731,14 @@ export function adminTracksHandlers(os: Implementer) {
   // TWO GATES, both server-side (the agent gates as it writes; the Worker re-runs both
   // — the note lands straight on the public /log surface):
   //   1. the VOICE gate (`gateNoteText`) — the banned-word / geography / Dry-Rule scan.
-  //   2. the ECHO gate (`gateNoteEcho`) — the anti-sameness rail on the vibe-neighbour
-  //      layer. The authoring prompt now shows the agent the notes of the finding's
-  //      SONIC NEIGHBOURS so it can hear the region's register; this re-reads those
-  //      same notes and hard-fails a line that lifts from one. The neighbours inform,
-  //      they never template. A rejected note is simply not stored — the note is
-  //      optional and silence beats a generic line.
+  //   2. the ECHO gate (`scoreNoteEcho` + `noteEchoError`) — the anti-sameness rail on
+  //      the vibe-neighbour layer. The authoring prompt now shows the agent the notes of
+  //      the finding's SONIC NEIGHBOURS so it can hear the region's register; this
+  //      re-reads those same notes and hard-fails a line that lifts from one. The
+  //      neighbours inform, they never template. A rejected note is NOT STORED on the
+  //      finding — but it is HELD in the `note_rejections` ledger and raised as a row in
+  //      the operator's attention queue, so he can read what the model wrote and overrule
+  //      the gate. The thresholds are operator-tunable at runtime (the `settings` KV).
   //
   // A CATALOGUE track can never reach either gate: `requireTrack` reads through the
   // `findings ⋈ tracks` join, so an uncertified track is a 404 before a note is even
@@ -799,8 +802,37 @@ export function adminTracksHandlers(os: Implementer) {
       // here with `note_echoes_neighbours`/422, so the vibe-neighbour layer can never
       // quietly flatten a region into one voice. A finding with no embedding yet, or the
       // first note in an empty neighbourhood, has nothing to echo and passes untouched.
+      //
+      // The thresholds are read from the `settings` KV on every run, so the operator can
+      // retune the gate without a deploy (`update_note_gate`).
       const neighbors = await noteNeighbors(track.trackId);
-      const echo = gateNoteEcho(note, neighbors);
+      const thresholds = await getNoteEchoThresholds();
+      const echo = scoreNoteEcho(note, neighbors, thresholds);
+
+      if (echo.echoes) {
+        // THE REJECTION IS HELD, NOT BINNED. The gate still refuses to STORE the line —
+        // that is unchanged, and the finding stays note-less. But the line is written to
+        // the ledger first, with the neighbour it echoed, the phrase, the score, and the
+        // thresholds in force, so the operator can read what the model wrote and rule on
+        // it from the `/admin` attention queue. A gate whose rejections nobody can see is
+        // a gate nobody can supervise.
+        //
+        // A DRY RUN holds nothing (it is a measurement harness — the A/B re-measurement
+        // runs it across the whole archive, and that must not fill the operator's queue
+        // with rows he never has to act on). It reports the echo and stores nothing, which
+        // is exactly its contract.
+        if (!dryRun) {
+          // Best-effort: the ledger must never turn a clean 422 into a 500. Losing one
+          // bounce's evidence is bad; failing the gate open would be worse.
+          try {
+            await recordNoteRejection(track.trackId, note, echo, thresholds);
+          } catch (ledgerError) {
+            console.error("note_track: failed to hold the rejected note", ledgerError);
+          }
+        }
+
+        throw noteEchoError(echo);
+      }
 
       // The dry run stops here: both gates ran, nothing was written, and the caller gets
       // the measured echo back. No `recordNoteAttempt` — no attempt was made.

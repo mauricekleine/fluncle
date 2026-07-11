@@ -27,9 +27,21 @@
 // something ELSE — the cluster INFORMS but never TEMPLATES, and a note that reads
 // like every other note in its galaxy is worse than none. So the rail is MECHANICAL,
 // not hoped for: `gateNoteEcho` re-reads the same neighbour notes the agent saw and
-// hard-fails a note that lifts a phrase from one or overlaps it too far. A rejected
-// note is not stored — the finding simply stays note-less until a better line lands.
-// Silence beats a generic line.
+// hard-fails a note that lifts a phrase from one or overlaps it too far.
+//
+// A REJECTED NOTE IS HELD, NEVER BINNED. The gate refuses to STORE the line on the
+// finding — that part is unchanged, and the finding stays note-less until a better line
+// lands. But the line itself is written to the `note_rejections` ledger with the reason
+// (which neighbour, which phrase, what score, and the thresholds that were in force),
+// and it raises a row in the operator's `/admin` attention queue. He reads what the model
+// wrote and rules: keep it, edit it, or bin it.
+//
+// The distinction is the whole point. "Silence beats a generic line" is a rule about what
+// PUBLISHES; it was never a licence to destroy the model's work without telling anyone.
+// A gate whose rejections nobody can see is a gate nobody can supervise: you cannot tell
+// a good bin from a bad one, and you cannot tell a well-set threshold from a wrong one,
+// because the evidence is gone. The dials are tunable (the `settings` KV) precisely so
+// that evidence can change them — which requires keeping it.
 
 import { NOTE_MAX_LENGTH } from "../log-prose";
 import { scanObservationScript } from "./observation";
@@ -108,10 +120,28 @@ export function gateNoteText(text: unknown): string {
 //
 // Both are cheap, pure, and deterministic — no model in the loop judging its own work.
 
-/** A run of consecutive shared words this long (with a content word in it) is a lift. */
-const ECHO_MIN_PHRASE_WORDS = 4;
-/** Content-word overlap at or above this reads as the same note wearing a new hat. */
-const ECHO_MAX_JACCARD = 0.3;
+/**
+ * The gate's two dials. They are OPERATOR-TUNABLE at runtime (the `settings` KV —
+ * `getNoteEchoThresholds` in note-rejections.ts), because the calibration below is a
+ * measurement of one 61-note archive at one moment, not a law: as the corpus grows, the
+ * honest threshold moves, and finding that out must not require a deploy. These are the
+ * defaults the gate falls back to when the KV is unset.
+ *
+ * Every rejection SNAPSHOTS the values that were in force when it was made, so retuning
+ * these can never rewrite the meaning of a past rejection.
+ */
+export const NOTE_ECHO_DEFAULTS = {
+  /** Content-word overlap at or above this reads as the same note wearing a new hat. */
+  maxOverlap: 0.3,
+  /** A run of consecutive shared words this long (with a content word in it) is a lift. */
+  minPhraseWords: 4,
+} as const;
+
+/** The gate's dials, as read for one gating run (the KV values, or the defaults). */
+export type NoteEchoThresholds = {
+  maxOverlap: number;
+  minPhraseWords: number;
+};
 
 // Function words carry no editorial content, so they are stripped before the overlap
 // is measured (they would otherwise float every pair's Jaccard on "the", "it", "and").
@@ -168,7 +198,7 @@ function contentOverlap(a: string, b: string): number {
  * shorter than the lift threshold or is pure function words (a shared "and I have been"
  * is grammar, not a borrowed image).
  */
-function liftedPhrase(a: string, b: string): string {
+function liftedPhrase(a: string, b: string, minPhraseWords: number): string {
   const left = echoWords(a);
   const right = echoWords(b);
   let best: string[] = [];
@@ -187,7 +217,7 @@ function liftedPhrase(a: string, b: string): string {
     }
   }
 
-  if (best.length < ECHO_MIN_PHRASE_WORDS) {
+  if (best.length < minPhraseWords) {
     return "";
   }
 
@@ -205,6 +235,12 @@ export type NoteEcho = {
   echoes: boolean;
   /** The neighbour it echoes hardest (its Log ID), or null when there is nothing to echo. */
   logId: string | null;
+  /**
+   * That neighbour's note, as it read at scoring time ("" when there is nothing to echo).
+   * Carried so the rejection ledger can snapshot the exact PAIR the gate compared — the
+   * operator has to be able to see WHAT it echoed, not just be told that it did.
+   */
+  note: string;
   /** The content-word overlap with that neighbour (0..1). */
   overlap: number;
   /** The run of words lifted from that neighbour, or "" when none reaches the threshold. */
@@ -222,8 +258,12 @@ export type NoteEcho = {
  * embedding yet, or the first note in a region) scores `{ echoes: false, overlap: 0 }`
  * — nothing to echo, so nothing to gate.
  */
-export function scoreNoteEcho(note: string, neighbors: readonly NoteNeighbor[]): NoteEcho {
-  let worst: NoteEcho = { echoes: false, logId: null, overlap: 0, phrase: "" };
+export function scoreNoteEcho(
+  note: string,
+  neighbors: readonly NoteNeighbor[],
+  thresholds: NoteEchoThresholds = NOTE_ECHO_DEFAULTS,
+): NoteEcho {
+  let worst: NoteEcho = { echoes: false, logId: null, note: "", overlap: 0, phrase: "" };
   // Severity orders the neighbours: ANY lift outranks EVERY bare overlap (a lifted
   // phrase is the harder evidence), longer lifts outrank shorter ones, and among
   // lift-free neighbours the highest overlap wins. Overlap is < 1, so the +1 offset
@@ -237,11 +277,12 @@ export function scoreNoteEcho(note: string, neighbors: readonly NoteNeighbor[]):
       continue;
     }
 
-    const phrase = liftedPhrase(note, neighbor.note);
+    const phrase = liftedPhrase(note, neighbor.note, thresholds.minPhraseWords);
     const overlap = contentOverlap(note, neighbor.note);
     const candidate: NoteEcho = {
-      echoes: phrase.length > 0 || overlap >= ECHO_MAX_JACCARD,
+      echoes: phrase.length > 0 || overlap >= thresholds.maxOverlap,
       logId: neighbor.logId,
+      note: neighbor.note,
       overlap,
       phrase,
     };
@@ -265,20 +306,28 @@ export function scoreNoteEcho(note: string, neighbors: readonly NoteNeighbor[]):
  * must never be templated. A finding whose only available note echoes its neighbours
  * stays note-less; the note is optional, and silence beats a generic line.
  */
-export function gateNoteEcho(note: string, neighbors: readonly NoteNeighbor[]): NoteEcho {
-  const echo = scoreNoteEcho(note, neighbors);
+export function noteEchoError(echo: NoteEcho): ApiError {
+  const detail = echo.phrase
+    ? `it lifts "${echo.phrase}" straight from ${echo.logId}`
+    : `it reuses ${Math.round(echo.overlap * 100)}% of ${echo.logId}'s words`;
+
+  return new ApiError(
+    "note_echoes_neighbours",
+    `The note echoes its sonic neighbourhood: ${detail}. The neighbours inform the note, they never template it — write a line that is this finding's own. It is held for the operator's eye, not thrown away.`,
+    422,
+  );
+}
+
+export function gateNoteEcho(
+  note: string,
+  neighbors: readonly NoteNeighbor[],
+  thresholds: NoteEchoThresholds = NOTE_ECHO_DEFAULTS,
+): NoteEcho {
+  const echo = scoreNoteEcho(note, neighbors, thresholds);
 
   if (!echo.echoes) {
     return echo;
   }
 
-  const detail = echo.phrase
-    ? `it lifts "${echo.phrase}" straight from ${echo.logId}`
-    : `it reuses ${Math.round(echo.overlap * 100)}% of ${echo.logId}'s words`;
-
-  throw new ApiError(
-    "note_echoes_neighbours",
-    `The note echoes its sonic neighbourhood: ${detail}. The neighbours inform the note, they never template it — write a line that is this finding's own, or leave it unwritten.`,
-    422,
-  );
+  throw noteEchoError(echo);
 }

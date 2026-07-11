@@ -26,6 +26,7 @@ const SOURCE_LABELS: Record<AttentionSource, string> = {
   "drip-empty": "clip drip",
   "label-review": "label",
   newsletter: "newsletter",
+  "note-rejected": "held note",
   "post-tiktok": "tiktok",
   "post-youtube": "youtube",
   submission: "submission",

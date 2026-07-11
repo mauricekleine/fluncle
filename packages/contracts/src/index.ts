@@ -48,6 +48,7 @@ import {
 import { type ServiceHealthStatusSchema } from "./orpc/admin-health.js";
 import { type GalaxyAdminItemSchema, type TrackEmbeddingSchema } from "./orpc/admin-galaxies.js";
 import { type LabelAdminItemSchema, type LabelSeedStateSchema } from "./orpc/admin-labels.js";
+import { type NoteGateSchema, type NoteRejectionSchema } from "./orpc/admin-notes.js";
 import { type GalaxyListItemSchema } from "./orpc/galaxies.js";
 import { type GalaxyProgressSchema } from "./orpc/me-galaxy.js";
 import {
@@ -154,6 +155,30 @@ export type LabelsAdminResponse = Ok<{ labels: LabelAdminItem[] }>;
 
 /** `PATCH /api/admin/labels/:id` response — the one ruled label. */
 export type LabelUpdateResponse = Ok<{ label: LabelAdminItem }>;
+
+// ── The auto-note echo gate's ledger (docs/agents/note-agent.md) ─────────────────
+// The gate refuses to STORE an auto-note that echoes a sonic neighbour. It always did,
+// and it still does. What it no longer does is refuse SILENTLY: the line the model wrote
+// is kept here with the reason, and it raises a row in the /admin attention queue, so the
+// operator can read it and rule. A gate whose rejections nobody can see is a gate nobody
+// can supervise — and, crucially, one whose thresholds nobody can ever prove wrong.
+
+/**
+ * The echo gate's two dials, as they currently stand. Operator-tunable at runtime (they
+ * live in the `settings` KV), so a retune is a flip rather than a deploy.
+ */
+export type NoteGate = z.infer<typeof NoteGateSchema>;
+
+/**
+ * One HELD auto-note — a line the echo gate refused to store, kept whole with the neighbour
+ * it echoed, that neighbour's note, the lifted phrase, the score, and the thresholds that
+ * were in force AT REJECTION TIME (snapshotted, so retuning the gate can never rewrite the
+ * meaning of a past rejection).
+ */
+export type NoteRejection = z.infer<typeof NoteRejectionSchema>;
+
+/** `GET /api/v1/admin/note-rejections` response — the held notes + the gate's dials. */
+export type NoteRejectionsResponse = Ok<{ gate: NoteGate; rejections: NoteRejection[] }>;
 
 // ── The catalogue (The Ear — docs/the-ear.md) ────────────────────────────────────
 // A CATALOGUE TRACK is a `tracks` row with NO `findings` row: a track Fluncle knows

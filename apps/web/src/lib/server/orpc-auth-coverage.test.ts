@@ -296,6 +296,10 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // cron reads it to pick the next sector-day to author and gather its findings.
   list_logbook_gaps: "admin",
   list_mixtapes_admin: "admin",
+  // The auto-notes the echo gate held back — admin tier (agent-allowed), the
+  // list_labels_admin precedent. A pure read that publishes nothing; the sweep may want to
+  // see what it has already had rejected, and the `/admin` queue reads it every tick.
+  list_note_rejections: "admin",
   list_private_saved_findings: "private-session",
   list_private_submissions: "private-session",
   list_recordings: "admin",
@@ -381,6 +385,11 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // resolve_artist — the box's agent-token artist-socials resolution (MB + Firecrawl); internal
   // enrichment only, so agent-tier (adminAuth, no operatorGuard) like backfill_artists.
   resolve_artist: "admin",
+  // The operator's ruling on an auto-note the echo gate held back — operator tier:
+  // `accepted` OVERRULES the gate and writes the line onto the finding's public /log page,
+  // which is publish-class (the update_galaxy / update_label precedent), so an agent token
+  // 403s. The agent authors the note; only the operator may overrule its rejection.
+  resolve_note_rejection: "operator",
   // The Mixcloud metadata re-sync — operator tier: it EDITS a LIVE published cloudcast's
   // sections[] (the Mixcloud edit endpoint, server-side with the mixcloud_auth token),
   // so the agent token 403s (the parity twin of resync_mixtape_youtube).
@@ -434,6 +443,11 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // The interactive single-cue write (Studio cue rail) — operator tier: it re-times a
   // published set's surface, so the agent token 403s (like set_mixtape_cues).
   update_mixtape_cue: "operator",
+  // Retuning the auto-note echo gate's thresholds — operator tier: the dials decide what
+  // Fluncle will and will not say about his own archive, so an agent token 403s at
+  // operatorGuard (the update_galaxy precedent). They live in the `settings` KV, so the
+  // retune is a flip rather than a deploy.
+  update_note_gate: "operator",
   update_private_profile: "private-session",
   update_recording: "operator",
   update_subscription: "operator",

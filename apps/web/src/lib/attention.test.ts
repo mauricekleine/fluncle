@@ -35,6 +35,7 @@ const EMPTY_INPUTS: AttentionInputs = {
   labelReviews: [],
   mixtapes: [],
   newsletters: [],
+  noteRejections: [],
   recordings: [],
   submissions: [],
 };
@@ -348,6 +349,70 @@ describe("deriveAttentionItems", () => {
       kind: "open",
       label: "Rule on it",
     });
+  });
+
+  // The echo gate's held notes. The gate still refuses to STORE these — that is unchanged
+  // and deliberate — but it no longer destroys them: each one becomes a row here, so the
+  // operator can read what the model wrote and rule on it. A gate whose rejections nobody
+  // can see is a gate nobody can supervise.
+  it("rows each held auto-note, deep-linked to the finding's note dialog", () => {
+    const items = deriveAttentionItems(
+      {
+        ...EMPTY_INPUTS,
+        noteRejections: [
+          {
+            anchorAt: iso(NOW - 2 * DAY),
+            artists: ["Halogenix"],
+            attempts: 2,
+            id: "rej_1",
+            title: "Blue Nights",
+            trackId: "trk_1",
+          },
+        ],
+      },
+      NOW,
+    );
+
+    expect(items).toHaveLength(1);
+    expect(items[0]).toEqual({
+      anchorAt: iso(NOW - 2 * DAY),
+      attempts: 2,
+      // The note dialog is the ONE place the held note and the neighbour it echoed can be
+      // read side by side, so the row opens it rather than ruling inline.
+      href: "/admin/findings?note=trk_1",
+      id: "note-rejected:rej_1",
+      source: "note-rejected",
+      title: "Halogenix — Blue Nights",
+      trackId: "trk_1",
+    });
+    // A note-less finding is unfinished, not urgent: never a deadline row.
+    expect(items[0]?.deadlineAt).toBeUndefined();
+    expect(primaryFor(items[0] as AttentionItem, NOW)).toEqual({
+      href: "/admin/findings?note=trk_1",
+      kind: "open",
+      label: "Read it",
+    });
+  });
+
+  it("names the echo gate in the dispatch, so a firing gate is never silent", () => {
+    const one = deriveAttentionItems(
+      {
+        ...EMPTY_INPUTS,
+        noteRejections: [
+          {
+            anchorAt: iso(NOW - DAY),
+            artists: ["Halogenix"],
+            attempts: 2,
+            id: "rej_1",
+            title: "Blue Nights",
+            trackId: "trk_1",
+          },
+        ],
+      },
+      NOW,
+    );
+
+    expect(attentionBrief(one, NOW)).toBe("A note the echo gate held back.");
   });
 
   it("speaks the label queue in the dispatch", () => {

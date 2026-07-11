@@ -32,6 +32,7 @@ export type AttentionSource =
   | "drip-empty"
   | "label-review"
   | "newsletter"
+  | "note-rejected"
   | "post-tiktok"
   | "post-youtube"
   | "submission"
@@ -43,6 +44,8 @@ export type AttentionItem = {
   anchorAt: string;
   /** Cover art / mixtape cover; absent ⇒ the glyph tile (a recording has no cover). */
   artUrl?: string;
+  /** Held-note rows: how many times this finding's auto-note has bounced off the echo gate. */
+  attempts?: number;
   /** Present ⇒ the row rides the deadline tier, ordered by time-to-deadline. */
   deadlineAt?: string;
   /** The deep-link target when the primary action navigates. */
@@ -161,6 +164,29 @@ export type SubmissionInput = {
   triageVerdict?: string;
 };
 
+/**
+ * An auto-note the echo gate REFUSED to store, held for the operator's eye.
+ *
+ * The gate rejects a note that lifts a phrase from a sonic neighbour or reuses its words
+ * wholesale — correctly, and it still refuses to store it. But a rejection that nobody can
+ * see is a rejection nobody can supervise: he cannot read what the model wrote, cannot
+ * judge whether it really was worse than nothing, and cannot tell whether the gate's dials
+ * are wrong, because the evidence would be gone. So it becomes a queue row.
+ */
+export type NoteRejectionInput = {
+  /** The latest bounce — the queue's oldest-first anchor. */
+  anchorAt: string;
+  artUrl?: string;
+  artists: string[];
+  /** How many times this finding's note has bounced (a high count = it's stuck). */
+  attempts: number;
+  /** The rejection id — the row identity. */
+  id: string;
+  title: string;
+  /** The finding — the note dialog's deep-link target. */
+  trackId: string;
+};
+
 /** A drafted-but-unsent weekly newsletter edition awaiting the operator's send. */
 export type NewsletterInput = {
   /** When the Friday sweep authored the draft — the queue's oldest-first anchor. */
@@ -178,6 +204,7 @@ export type AttentionInputs = {
   labelReviews: LabelReviewInput[];
   mixtapes: MixtapeInput[];
   newsletters: NewsletterInput[];
+  noteRejections: NoteRejectionInput[];
   recordings: RecordingInput[];
   submissions: SubmissionInput[];
 };
@@ -364,6 +391,26 @@ export function deriveAttentionItems(inputs: AttentionInputs, now: number): Atte
       id: `newsletter:${newsletter.id}`,
       source: "newsletter",
       title: newsletter.subject ?? "Draft edition",
+    });
+  }
+
+  // Each held auto-note is one row — the echo gate wrote a line, judged it too close to a
+  // neighbour's, and refused to store it. It is NOT thrown away: the operator reads what
+  // the model wrote, sees which neighbour it echoed and by how much, and rules — keep it,
+  // edit it, or bin it. Deep-links to the finding's note dialog, where the held note and
+  // the neighbour it echoed sit side by side. One row per finding (the ledger holds one
+  // open rejection each), oldest-first, and never a deadline: a note-less finding is not
+  // urgent, it is just unfinished.
+  for (const rejection of inputs.noteRejections) {
+    items.push({
+      anchorAt: rejection.anchorAt,
+      ...(rejection.artUrl ? { artUrl: rejection.artUrl } : {}),
+      attempts: rejection.attempts,
+      href: `/admin/findings?note=${encodeURIComponent(rejection.trackId)}`,
+      id: `note-rejected:${rejection.id}`,
+      source: "note-rejected",
+      title: trackLabel(rejection.artists, rejection.title),
+      trackId: rejection.trackId,
     });
   }
 
@@ -570,6 +617,13 @@ export function primaryFor(item: AttentionItem, now: number): PrimaryAction {
       // deep-links there rather than sending inline — the send authority never moves onto the
       // queue row, matching the submission row's approve/reject.
       return { href: item.href ?? "/admin/newsletter", kind: "open", label: "Review" };
+    case "note-rejected":
+      // Keep/edit/bin lives in the finding's note dialog, where the held note and the
+      // neighbour it echoed can be read SIDE BY SIDE — which is the whole point, and cannot
+      // be done on a queue row. So the row opens it rather than ruling inline: the same
+      // one-home-per-control move the submission and label rows make. Accepting a held note
+      // publishes a line to /log, and publishing authority never sits on the queue row.
+      return { href: item.href ?? "/admin/findings", kind: "open", label: "Read it" };
     case "post-tiktok":
       // No TikTok post yet — the first step is pushing the silent inbox draft.
       return { kind: "push", label: "Push draft", platform: "tiktok" };
@@ -609,6 +663,11 @@ const SOURCE_ORDER: AttentionSource[] = [
   // The curation rows sit last: a label ruling steers the NEXT crawl, so it is never
   // urgent and never blocks a finding.
   "label-review",
+  // A held auto-note is the least urgent row on the board and deliberately so: the finding
+  // is simply note-less, which is a state it can sit in indefinitely without hurting
+  // anything, and the sweep keeps trying to write a better line regardless. It is here to
+  // be SEEN, not to be chased.
+  "note-rejected",
 ];
 
 /**
@@ -683,6 +742,13 @@ function briefPhrase(source: AttentionSource, rows: AttentionItem[]): string {
       return n === 1
         ? "the Friday letter waiting on your send"
         : `${countWord(n)} letters waiting on your send`;
+    case "note-rejected":
+      // Name the MECHANISM, not just the count. "held back" tells him the gate fired and
+      // that the line still exists; a bare "a note to review" would hide the very thing
+      // this row was built to make visible.
+      return n === 1
+        ? "a note the echo gate held back"
+        : `${countWord(n)} notes the echo gate held back`;
     case "post-tiktok":
       return n === 1 ? "a clip to push to TikTok" : `${countWord(n)} clips to push to TikTok`;
     case "post-youtube":
