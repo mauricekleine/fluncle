@@ -233,3 +233,58 @@ describe("path search (the dream-weaver)", () => {
     ).toThrow(RangeError);
   });
 });
+
+describe("the key floor — a data-poor row can never win the rail (regression)", () => {
+  // Present-term renormalization, unguarded, inverts the ranking: a pair with NO key
+  // and NO bpm but a strong embedding renormalizes over its own 0.35 weight alone and
+  // scores a perfect 1.00, beating a fully-measured, genuinely good match. This shipped
+  // live and floated unkeyed findings to the top of /mix's rail. The floor (a key is
+  // mandatory to be rankable) is what stops it — harmonic compatibility is the whole
+  // premise of the tool, so a pair whose key we don't know is one we can't justify.
+  const identical = Array.from({ length: 8 }, () => 0.35355339059327373); // unit-norm
+
+  it("an unkeyed pair with a perfect embedding is UNRANKABLE, not a perfect score", () => {
+    const result = scoreMix(track({ embedding: identical }), track({ embedding: identical }), {
+      gateOpen: true,
+    });
+
+    expect(result.score).toBeNull();
+    expect(result.flagged).toBe(true);
+  });
+
+  it("a fully-measured good match OUTRANKS the data-poor row", () => {
+    const measured = scoreMix(
+      track({ bpm: 174, embedding: identical, key: "A minor" }),
+      track({ bpm: 174, embedding: identical, key: "A minor" }),
+      { gateOpen: true },
+    );
+    const dataPoor = scoreMix(track({ embedding: identical }), track({ embedding: identical }), {
+      gateOpen: true,
+    });
+
+    expect(measured.score).not.toBeNull();
+    expect(dataPoor.score).toBeNull();
+    // rankMixable drops a null-scored candidate, so the measured row wins by construction.
+    const ranked = rankMixable(
+      track({ bpm: 174, embedding: identical, key: "A minor" }),
+      [
+        { item: "data-poor", track: track({ embedding: identical }) },
+        { item: "measured", track: track({ bpm: 174, embedding: identical, key: "A minor" }) },
+      ],
+      5,
+      { gateOpen: true },
+    );
+
+    expect(ranked.map((row) => row.item)).toEqual(["measured"]);
+  });
+
+  it("a keyed pair with a missing bpm still ranks (the floor is the KEY, not completeness)", () => {
+    const result = scoreMix(
+      track({ embedding: identical, key: "A minor" }),
+      track({ embedding: identical, key: "A minor" }),
+      { gateOpen: true },
+    );
+
+    expect(result.score).not.toBeNull();
+  });
+});

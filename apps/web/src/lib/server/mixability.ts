@@ -411,7 +411,15 @@ export function scoreMix(a: MixTrack, b: MixTrack, options: MixOptions = {}): Mi
     denominator += MIX_WEIGHTS.sonic;
   }
 
-  const score = denominator > 0 ? numerator / denominator : null;
+  // PRESENT-TERM RENORMALIZATION NEEDS A FLOOR. Renormalizing over only the terms a
+  // pair HAS means a data-poor row wins: with no key and no BPM, a strong embedding
+  // renormalizes over its own 0.35 weight alone and scores a perfect 1.00 — beating a
+  // fully-measured, genuinely good match at ~0.82. So the KEY IS MANDATORY to be
+  // rankable: harmonic compatibility is this tool's whole premise, and a pair whose key
+  // we do not know is a pair we cannot justify. Without it the score is null, and
+  // `rankMixable` drops the row rather than floating it to the top of the rail.
+  const rankable = denominator >= MIX_WEIGHTS.key;
+  const score = rankable && denominator > 0 ? numerator / denominator : null;
 
   return {
     bpm: bpmScore,
