@@ -891,7 +891,7 @@ export function createRenderer(container: HTMLElement): Renderer {
     ctx.textAlign = "center";
     ctx.fillStyle = palette.goldBright;
     ctx.font = '8px "Oxanium", "Space Grotesk", ui-sans-serif, system-ui, sans-serif';
-    ctx.fillText(
+    fillTextFromCapTop(
       view.touch ? "Tap anywhere to fly on" : "Press any key to fly on",
       cx,
       height - 10,
@@ -966,7 +966,7 @@ export function createRenderer(container: HTMLElement): Renderer {
 
     ctx.font = '8px "Oxanium", "Space Grotesk", ui-sans-serif, system-ui, sans-serif';
     ctx.fillStyle = palette.creamMuted;
-    ctx.fillText("bangers", 8 + countWidth + 5, 12);
+    fillTextFromCapTop("bangers", 8 + countWidth + 5, 12);
   }
 
   function drawFuel(sim: SimState, nowS: number): void {
@@ -980,7 +980,8 @@ export function createRenderer(container: HTMLElement): Renderer {
 
     ctx.font = '7px "Oxanium", "Space Grotesk", ui-sans-serif, system-ui, sans-serif';
     ctx.fillStyle = palette.creamDim;
-    ctx.fillText("Fuel", x, y - 9);
+    // The label sits ON the gauge: y - 9 is its cap top, two pixels clear of the bar.
+    fillTextFromCapTop("Fuel", x, y - 9);
 
     for (let segment = 0; segment < segments; segment++) {
       const lit = segment < filled;
@@ -1069,13 +1070,13 @@ export function createRenderer(container: HTMLElement): Renderer {
 
     if (locked) {
       ctx.fillStyle = palette.goldBright;
-      ctx.fillText("LOCK", x, y);
+      fillTextFromCapTop("LOCK", x, y);
     } else if (view.carrier && view.carrier.strength > 0) {
       ctx.fillStyle = palette.gold;
-      ctx.fillText(`carrier ${Math.round(view.carrier.strength * 100)}%`, x, y);
+      fillTextFromCapTop(`carrier ${Math.round(view.carrier.strength * 100)}%`, x, y);
     } else {
       ctx.fillStyle = palette.creamDim;
-      ctx.fillText("scanning", x, y);
+      fillTextFromCapTop("scanning", x, y);
     }
   }
 
@@ -1091,7 +1092,7 @@ export function createRenderer(container: HTMLElement): Renderer {
       const lineY = height - 88 - (view.telemetry.length - 1 - index) * 9;
 
       ctx.fillStyle = index === view.telemetry.length - 1 ? palette.creamMuted : palette.creamDim;
-      ctx.fillText(line, width / 2, lineY);
+      fillTextFromCapTop(line, width / 2, lineY);
     }
 
     ctx.textAlign = "left";
@@ -1118,22 +1119,28 @@ export function createRenderer(container: HTMLElement): Renderer {
     ctx.fillStyle = palette.tapeBlack;
     ctx.fillRect(x, y, cardWidth, cardHeight);
 
+    // Every line hangs from its CAP TOP: the offsets below are distances from the
+    // card's top edge, the same idiom as the atlas chip.
     ctx.fillStyle = palette.gold;
     ctx.font = '9px "Oxanium", "Space Grotesk", ui-sans-serif, system-ui, sans-serif';
     ctx.textAlign = "left";
-    ctx.fillText(`fluncle://${card.logId}`, x + 8, y + 7);
+    fillTextFromCapTop(`fluncle://${card.logId}`, x + 8, y + 7);
 
     ctx.fillStyle = palette.cream;
     ctx.font = '700 11px "Space Grotesk", ui-sans-serif, system-ui, sans-serif';
-    ctx.fillText(clip(card.title, cardWidth - 16), x + 8, y + 19);
+    fillTextFromCapTop(clip(card.title, cardWidth - 16), x + 8, y + 19);
 
     ctx.fillStyle = palette.creamMuted;
     ctx.font = '9px "Space Grotesk", ui-sans-serif, system-ui, sans-serif';
-    ctx.fillText(clip(card.artistLine, cardWidth - 16), x + 8, y + 33);
+    fillTextFromCapTop(clip(card.artistLine, cardWidth - 16), x + 8, y + 33);
 
     ctx.fillStyle = card.refuelling ? palette.goldDim : palette.creamDim;
     ctx.font = '8px "Space Grotesk", ui-sans-serif, system-ui, sans-serif';
-    ctx.fillText(card.refuelling ? "Banger logged · refuelling" : "Banger logged", x + 8, y + 45);
+    fillTextFromCapTop(
+      card.refuelling ? "Banger logged · refuelling" : "Banger logged",
+      x + 8,
+      y + 45,
+    );
 
     // The way out to the music itself; pressing it never steers the ship.
     const label = "Open in Spotify";
@@ -1142,7 +1149,7 @@ export function createRenderer(container: HTMLElement): Renderer {
     const linkY = linkOnOwnRow ? y + 57 : y + 45;
 
     ctx.fillStyle = palette.goldBright;
-    ctx.fillText(label, linkX, linkY);
+    fillTextFromCapTop(label, linkX, linkY);
     spotifyRect = { h: 14, w: labelWidth + 12, x: linkX - 6, y: linkY - 3 };
     ctx.globalAlpha = 1;
   }
@@ -1166,16 +1173,21 @@ export function createRenderer(container: HTMLElement): Renderer {
     ctx.fillStyle = palette.cream;
     ctx.font = '10px "Oxanium", "Space Grotesk", ui-sans-serif, system-ui, sans-serif';
     ctx.textAlign = "left";
-    ctx.fillText("◂", 7, height / 2);
+    fillTextFromCapTop("◂", 7, height / 2);
     ctx.textAlign = "right";
-    ctx.fillText("▸", width - 7, height / 2);
+    fillTextFromCapTop("▸", width - 7, height / 2);
     ctx.textAlign = "center";
     ctx.font = '6px "Oxanium", "Space Grotesk", ui-sans-serif, system-ui, sans-serif';
-    ctx.fillText("hold to boost", width / 2, height - 6);
+    fillTextFromCapTop("hold to boost", width / 2, height - 6);
     ctx.globalAlpha = 1;
     ctx.textAlign = "left";
   }
 
+  // The gate is the ONE screen whose type is positioned from the alphabetic
+  // baseline, and deliberately so: it only ever draws before the first HUD frame
+  // (draw() returns early in the gate phase, and the phase never comes back), so
+  // it never inherited the old sticky "top" the rest of the frame was written
+  // against. Its offsets are baselines. Leave them; do not "fix" them to cap-top.
   function drawGate(view: RenderView): void {
     // A quiet starfield behind the plate, drifting just enough to feel alive.
     drawDistantStars(reducedMotion ? 0 : view.nowS * 0.02, Math.round(height * 0.4), view.nowS);
@@ -1290,7 +1302,7 @@ export function createRenderer(container: HTMLElement): Renderer {
       ctx.textAlign = "center";
       ctx.fillStyle = palette.creamMuted;
       ctx.font = '7px "Oxanium", "Space Grotesk", ui-sans-serif, system-ui, sans-serif';
-      ctx.fillText("leaving home", cx, horizon - 30);
+      fillTextFromCapTop("leaving home", cx, horizon - 30);
       ctx.globalAlpha = 1;
       ctx.textAlign = "left";
     }
@@ -1309,9 +1321,9 @@ export function createRenderer(container: HTMLElement): Renderer {
       ctx.textAlign = "center";
       ctx.fillStyle = palette.creamMuted;
       ctx.font = '8px "Oxanium", "Space Grotesk", ui-sans-serif, system-ui, sans-serif';
-      ctx.fillText("Recovered adrift. Towed home.", width / 2, height / 2 - 4);
+      fillTextFromCapTop("Recovered adrift. Towed home.", width / 2, height / 2 - 4);
       ctx.fillStyle = palette.creamDim;
-      ctx.fillText("The log starts over.", width / 2, height / 2 + 8);
+      fillTextFromCapTop("The log starts over.", width / 2, height / 2 + 8);
       ctx.textAlign = "left";
     }
 
@@ -1330,11 +1342,11 @@ export function createRenderer(container: HTMLElement): Renderer {
     ctx.textAlign = "center";
     ctx.fillStyle = palette.gold;
     ctx.font = '800 16px "Oxanium", "Space Grotesk", ui-sans-serif, system-ui, sans-serif';
-    ctx.fillText("Galaxy logged.", cx, 22);
+    fillTextFromCapTop("Galaxy logged.", cx, 22);
 
     ctx.fillStyle = palette.cream;
     ctx.font = '10px "Oxanium", "Space Grotesk", ui-sans-serif, system-ui, sans-serif';
-    ctx.fillText(`${sim.collectedCount}/${sim.stars.length} bangers`, cx, 42);
+    fillTextFromCapTop(`${sim.collectedCount}/${sim.stars.length} bangers`, cx, 42);
 
     // The full log rolls like credits, oldest coordinate first.
     const rollTop = 60;
@@ -1364,12 +1376,14 @@ export function createRenderer(container: HTMLElement): Renderer {
       ctx.fillStyle = palette.goldDim;
       ctx.font = '7px "Oxanium", "Space Grotesk", ui-sans-serif, system-ui, sans-serif';
       ctx.textAlign = "right";
-      ctx.fillText(star.logId, cx - 6, y);
+      // Each row hangs from its cap top, so the roll's first line clears rollTop —
+      // the clip rect starts exactly there and would otherwise slice its caps off.
+      fillTextFromCapTop(star.logId, cx - 6, y);
 
       ctx.fillStyle = palette.creamMuted;
       ctx.font = '7px "Space Grotesk", ui-sans-serif, system-ui, sans-serif';
       ctx.textAlign = "left";
-      ctx.fillText(clip(`${star.artistLine} — ${star.title}`, cx - 16), cx + 2, y);
+      fillTextFromCapTop(clip(`${star.artistLine} — ${star.title}`, cx - 16), cx + 2, y);
     }
 
     ctx.restore();
@@ -1380,7 +1394,11 @@ export function createRenderer(container: HTMLElement): Renderer {
     ctx.textAlign = "center";
     ctx.fillStyle = palette.goldBright;
     ctx.font = '8px "Oxanium", "Space Grotesk", ui-sans-serif, system-ui, sans-serif';
-    ctx.fillText(view.touch ? "Tap to fly again" : "Press enter to fly again", cx, height - 8);
+    fillTextFromCapTop(
+      view.touch ? "Tap to fly again" : "Press enter to fly again",
+      cx,
+      height - 8,
+    );
     ctx.globalAlpha = 1;
     ctx.textAlign = "left";
   }
@@ -1442,11 +1460,11 @@ export function createRenderer(container: HTMLElement): Renderer {
     ctx.textAlign = "center";
     ctx.fillStyle = palette.cream;
     ctx.font = '700 14px "Space Grotesk", ui-sans-serif, system-ui, sans-serif';
-    ctx.fillText("Paused", width / 2, baseY);
+    fillTextFromCapTop("Paused", width / 2, baseY);
 
     ctx.fillStyle = palette.creamMuted;
     ctx.font = '9px "Space Grotesk", ui-sans-serif, system-ui, sans-serif';
-    ctx.fillText("The galaxy will wait.", width / 2, baseY + 18);
+    fillTextFromCapTop("The galaxy will wait.", width / 2, baseY + 18);
 
     let hintY = baseY + 36;
 
@@ -1454,7 +1472,7 @@ export function createRenderer(container: HTMLElement): Renderer {
     if (!view.touch) {
       ctx.fillStyle = palette.creamDim;
       ctx.font = '8px "Space Grotesk", ui-sans-serif, system-ui, sans-serif';
-      ctx.fillText("The atlas is on C.", width / 2, baseY + 32);
+      fillTextFromCapTop("The atlas is on C.", width / 2, baseY + 32);
       hintY = baseY + 48;
     }
 
@@ -1463,7 +1481,7 @@ export function createRenderer(container: HTMLElement): Renderer {
     ctx.globalAlpha = blink;
     ctx.fillStyle = palette.goldBright;
     ctx.font = '8px "Oxanium", "Space Grotesk", ui-sans-serif, system-ui, sans-serif';
-    ctx.fillText(view.touch ? "Tap to fly on" : "Esc to fly on", width / 2, hintY);
+    fillTextFromCapTop(view.touch ? "Tap to fly on" : "Esc to fly on", width / 2, hintY);
     ctx.globalAlpha = 1;
     ctx.textAlign = "left";
   }
