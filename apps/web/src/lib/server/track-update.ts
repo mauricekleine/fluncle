@@ -193,7 +193,10 @@ export async function updateTrack(
   const db = await getDb();
   const existingResult = await db.execute({
     args: [trackId],
-    sql: `select isrc, log_id, added_at, bpm_source, key_source from tracks where track_id = ? limit 1`,
+    sql: `select tracks.isrc, findings.log_id, findings.added_at,
+                 tracks.bpm_source, tracks.key_source
+          from findings join tracks on tracks.track_id = findings.track_id
+          where findings.track_id = ? limit 1`,
   });
   const existing = typedRow<ExistingRow>(existingResult.rows);
 
@@ -248,8 +251,18 @@ export async function updateTrack(
     }
   }
 
+  // TWO SET-LISTS, one per half of the tracks/findings pair (docs/track-lifecycle.md).
+  // `updateTrack` is one logical write across a supertype/subtype pair, so it fans out to
+  // at most two statements: `sets`/`args` collect the columns on `tracks` (the recording —
+  // analysis, embedding, capture, identity), `findingSets`/`findingArgs` the columns on
+  // `findings` (the certification — coordinate, note, video, observation, status). The
+  // allow-list, the guards, and the caller-visible `fields` result are unchanged; only the
+  // routing is new. `updated_at` lives on `findings`, so the lastmod bump always rides the
+  // certification statement.
   const sets: string[] = [];
   const args: Array<number | string | null> = [];
+  const findingSets: string[] = [];
+  const findingArgs: Array<number | string | null> = [];
   // The coordinate whose cached log surfaces this write stales: the existing one,
   // or the freshly-minted one on a one-time backfill (set below).
   let effectiveLogId = existing.log_id;
@@ -300,46 +313,46 @@ export async function updateTrack(
   if (update.videoUrl !== undefined) {
     // Empty string clears the video (the "remove an off-direction video" path) —
     // null, not "", so the `video_url is not null` hasVideo filter drops it.
-    sets.push("video_url = ?");
-    args.push(update.videoUrl === "" ? null : update.videoUrl);
+    findingSets.push("video_url = ?");
+    findingArgs.push(update.videoUrl === "" ? null : update.videoUrl);
   }
 
   if (update.videoVehicle !== undefined) {
-    sets.push("video_vehicle = ?");
-    args.push(update.videoVehicle);
+    findingSets.push("video_vehicle = ?");
+    findingArgs.push(update.videoVehicle);
   }
 
   if (update.videoGrain !== undefined) {
-    sets.push("video_grain = ?");
-    args.push(update.videoGrain);
+    findingSets.push("video_grain = ?");
+    findingArgs.push(update.videoGrain);
   }
 
   if (update.videoRegister !== undefined) {
-    sets.push("video_register = ?");
-    args.push(update.videoRegister);
+    findingSets.push("video_register = ?");
+    findingArgs.push(update.videoRegister);
   }
 
   if (update.videoModel !== undefined) {
-    sets.push("video_model = ?");
-    args.push(update.videoModel);
+    findingSets.push("video_model = ?");
+    findingArgs.push(update.videoModel);
   }
 
   if (update.videoModelReasoning !== undefined) {
-    sets.push("video_model_reasoning = ?");
-    args.push(update.videoModelReasoning);
+    findingSets.push("video_model_reasoning = ?");
+    findingArgs.push(update.videoModelReasoning);
   }
 
   if (update.videoSquaredAt !== undefined) {
     // Empty string clears the signal (back to the legacy single-file layout);
     // any value stamps the two-master layout. null, not "", so a cleared row is
     // treated as un-squared by the `video_squared_at is not null` reads.
-    sets.push("video_squared_at = ?");
-    args.push(update.videoSquaredAt === "" ? null : update.videoSquaredAt);
+    findingSets.push("video_squared_at = ?");
+    findingArgs.push(update.videoSquaredAt === "" ? null : update.videoSquaredAt);
   }
 
   if (update.enrichmentStatus !== undefined) {
-    sets.push("enrichment_status = ?");
-    args.push(update.enrichmentStatus);
+    findingSets.push("enrichment_status = ?");
+    findingArgs.push(update.enrichmentStatus);
   }
 
   if (update.features !== undefined) {
@@ -372,8 +385,8 @@ export async function updateTrack(
     // The nightly cluster assignment (browse-by-feel RFC). Empty string clears it —
     // null, not "", so `galaxy_id IS NULL` reads a cleared row as unassigned. NOT in
     // VISIBLE_FIELDS (below), so an assignment write bumps no public lastmod.
-    sets.push("galaxy_id = ?");
-    args.push(update.galaxyId === "" ? null : update.galaxyId);
+    findingSets.push("galaxy_id = ?");
+    findingArgs.push(update.galaxyId === "" ? null : update.galaxyId);
   }
 
   // The full-song capture side-channel (RFC full-audio). All internal analysis state
@@ -405,49 +418,51 @@ export async function updateTrack(
   }
 
   if (update.note !== undefined) {
-    sets.push("note = ?");
-    args.push(update.note);
+    findingSets.push("note = ?");
+    findingArgs.push(update.note);
   }
 
   if (update.contextNote !== undefined) {
-    sets.push("context_note = ?");
-    args.push(update.contextNote);
+    findingSets.push("context_note = ?");
+    findingArgs.push(update.contextNote);
   }
 
   if (update.contextStatus !== undefined) {
-    sets.push("context_status = ?");
-    args.push(update.contextStatus);
+    findingSets.push("context_status = ?");
+    findingArgs.push(update.contextStatus);
   }
 
   if (update.observationAlignmentJson !== undefined) {
     // Empty string clears it — null, not "", so the backfill's
     // `observation_alignment_json IS NULL` pick treats a cleared row as un-aligned.
-    sets.push("observation_alignment_json = ?");
-    args.push(update.observationAlignmentJson === "" ? null : update.observationAlignmentJson);
+    findingSets.push("observation_alignment_json = ?");
+    findingArgs.push(
+      update.observationAlignmentJson === "" ? null : update.observationAlignmentJson,
+    );
   }
 
   if (update.observationAudioUrl !== undefined) {
     // Empty string clears the observation (re-render path) — null, not "", so the
     // `observation_audio_url is not null` radio-eligibility filter drops it.
-    sets.push("observation_audio_url = ?");
-    args.push(update.observationAudioUrl === "" ? null : update.observationAudioUrl);
+    findingSets.push("observation_audio_url = ?");
+    findingArgs.push(update.observationAudioUrl === "" ? null : update.observationAudioUrl);
   }
 
   if (update.observationDurationMs !== undefined) {
-    sets.push("observation_duration_ms = ?");
-    args.push(update.observationDurationMs);
+    findingSets.push("observation_duration_ms = ?");
+    findingArgs.push(update.observationDurationMs);
   }
 
   if (update.observationGeneratedAt !== undefined) {
-    sets.push("observation_generated_at = ?");
-    args.push(update.observationGeneratedAt);
+    findingSets.push("observation_generated_at = ?");
+    findingArgs.push(update.observationGeneratedAt);
   }
 
   if (update.observationScript !== undefined) {
     // Empty string clears the transcript — null, not "", so a cleared row reads as
     // "no script yet" for the back-migration's `observation_script IS NULL` pick.
-    sets.push("observation_script = ?");
-    args.push(update.observationScript === "" ? null : update.observationScript);
+    findingSets.push("observation_script = ?");
+    findingArgs.push(update.observationScript === "" ? null : update.observationScript);
   }
 
   if (update.isrc !== undefined) {
@@ -483,7 +498,7 @@ export async function updateTrack(
         async (candidate) => {
           const taken = await db.execute({
             args: [candidate],
-            sql: `select 1 from tracks where log_id = ? limit 1`,
+            sql: `select 1 from findings where log_id = ? limit 1`,
           });
 
           return taken.rows.length > 0;
@@ -500,7 +515,7 @@ export async function updateTrack(
 
       const taken = await db.execute({
         args: [update.logId],
-        sql: `select 1 from tracks where log_id = ? limit 1`,
+        sql: `select 1 from findings where log_id = ? limit 1`,
       });
 
       if (taken.rows.length > 0) {
@@ -510,12 +525,12 @@ export async function updateTrack(
       logId = update.logId;
     }
 
-    sets.push("log_id = ?");
-    args.push(logId);
+    findingSets.push("log_id = ?");
+    findingArgs.push(logId);
     effectiveLogId = logId;
   }
 
-  if (sets.length === 0) {
+  if (sets.length === 0 && findingSets.length === 0) {
     // The provenance guard dropped every field this write carried (an agent trying to
     // downgrade a rekordbox/operator-graded row with nothing else in the payload): a
     // silent no-op success, NOT a no_fields error — the on-box sweeps must keep
@@ -536,23 +551,48 @@ export async function updateTrack(
     VISIBLE_FIELDS.has(field),
   );
 
+  // `updated_at` is the CERTIFICATION's lastmod (a catalogue track has no /log page to
+  // stale), so the bump always rides the `findings` statement — even when the visible
+  // field that earned it (`bpm`, `isrc`) lives on `tracks`.
   if (touchesVisible) {
-    sets.push("updated_at = ?");
-    args.push(new Date().toISOString());
+    findingSets.push("updated_at = ?");
+    findingArgs.push(new Date().toISOString());
   }
 
-  args.push(trackId);
-  await db.execute({
-    args,
-    sql: `update tracks set ${sets.join(", ")} where track_id = ?`,
-  });
+  // At most two statements, each fired only when its half actually has columns to write.
+  // They are issued as one libSQL BATCH, so a partial write is impossible: the pair moves
+  // together or not at all (the transactional guarantee the single UPDATE used to give for
+  // free). `write` batches are transactional in libSQL.
+  const statements = [
+    ...(sets.length > 0
+      ? [
+          {
+            args: [...args, trackId],
+            sql: `update tracks set ${sets.join(", ")} where track_id = ?`,
+          },
+        ]
+      : []),
+    ...(findingSets.length > 0
+      ? [
+          {
+            args: [...findingArgs, trackId],
+            sql: `update findings set ${findingSets.join(", ")} where track_id = ?`,
+          },
+        ]
+      : []),
+  ];
+
+  await db.batch(statements, "write");
 
   // The finding changed (enrichment, re-tag, video link, note edit, a backfilled
   // coordinate): drop its cached `/log/<id>` page + the `/log` index so the next
   // request re-renders. Fire-and-forget — never blocks the write.
   purgeLogCache(effectiveLogId);
 
-  return { fields: sets.map((set) => set.split(" ")[0] ?? set), trackId };
+  return {
+    fields: [...sets, ...findingSets].map((set) => set.split(" ")[0] ?? set),
+    trackId,
+  };
 }
 
 // THE FILL-EMPTY-ONLY GUARD, as a DB predicate — the race-safe note write. The
@@ -575,7 +615,7 @@ export async function fillEmptyNote(trackId: string, note: string): Promise<bool
   const db = await getDb();
   const existingResult = await db.execute({
     args: [trackId],
-    sql: `select log_id from tracks where track_id = ? limit 1`,
+    sql: `select log_id from findings where track_id = ? limit 1`,
   });
   const existing = typedRow<{ log_id: string | null }>(existingResult.rows);
 
@@ -585,7 +625,7 @@ export async function fillEmptyNote(trackId: string, note: string): Promise<bool
 
   const result = await db.execute({
     args: [note, new Date().toISOString(), trackId],
-    sql: `update tracks
+    sql: `update findings
             set note = ?, updated_at = ?
           where track_id = ?
             and (note is null or trim(note) = '')`,

@@ -73,15 +73,18 @@ function stubDb(): void {
 function lastSelectSql(): string {
   const call = execute.mock.calls
     .map(([arg]) => arg as { sql: string })
-    .find((arg) => arg.sql.includes("from tracks") && !arg.sql.includes("count(*)"));
+    .find((arg) => arg.sql.includes("join tracks") && !arg.sql.includes("count(*)"));
 
   return call?.sql ?? "";
 }
 
+// The three heavy columns, each named with the half of the tracks/findings pair it
+// lives on: the spectral summary is the RECORDING's; the caption timings and the video's
+// authoring metadata are the CERTIFICATION's.
 const HEAVY_COLUMNS = [
   "tracks.features_json",
-  "tracks.observation_alignment_json",
-  "tracks.video_model_reasoning",
+  "findings.observation_alignment_json",
+  "findings.video_model_reasoning",
 ];
 
 describe("listTracks lean list projection (Finding B4)", () => {
@@ -114,12 +117,12 @@ describe("listTracks lean list projection (Finding B4)", () => {
     // The kept columns and the correlated subqueries survive — a sanity sample that the
     // comma-split derivation didn't mangle the SELECT.
     expect(sql).toContain("tracks.track_id");
-    expect(sql).toContain("tracks.observation_audio_url");
+    expect(sql).toContain("findings.observation_audio_url");
     expect(sql).toContain("as galaxy_name");
     expect(sql).toContain("as youtube_url");
     // No double comma / trailing comma from removing an interior column.
     expect(sql).not.toMatch(/,\s*,/);
-    expect(sql).not.toMatch(/,\s*from tracks/);
+    expect(sql).not.toMatch(/,\s*from findings/);
   });
 
   it("the LEAN read's mapped item omits the three heavy fields", async () => {

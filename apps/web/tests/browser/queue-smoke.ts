@@ -144,7 +144,7 @@ async function seedQueueRows(db: Client): Promise<void> {
   const iso = (ms: number) => new Date(ms).toISOString();
   const candidates = (
     await db.execute(
-      `select track_id from tracks
+      `select track_id from findings
        where video_url is not null and log_id is not null
          and track_id not in (select track_id from social_posts where platform = 'tiktok')
        order by added_at desc limit 2`,

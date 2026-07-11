@@ -176,9 +176,9 @@ export async function countArtistFindings(artistId: string): Promise<number> {
   const result = await db.execute({
     args: [artistId],
     sql: `select count(*) as finding_count
-          from tracks
+          from findings join tracks on tracks.track_id = findings.track_id
           join track_artists on track_artists.track_id = tracks.track_id
-          where track_artists.artist_id = ? and tracks.log_id is not null`,
+          where track_artists.artist_id = ? and findings.log_id is not null`,
   });
 
   const row = result.rows[0] as Record<string, unknown> | undefined;
@@ -201,13 +201,13 @@ export async function listArtistsWithFindingCounts(): Promise<ArtistIndexEntry[]
                  count(t.track_id) as finding_count,
                  max(t.added_at) as lastmod,
                  (select t2.album_image_url
-                    from tracks t2
+                    from (findings join tracks on tracks.track_id = findings.track_id) t2
                     join track_artists ta2 on ta2.track_id = t2.track_id
                     where ta2.artist_id = a.id and t2.log_id is not null
                     order by t2.added_at desc limit 1) as cover_url
           from artists a
           join track_artists ta on ta.artist_id = a.id
-          join tracks t on t.track_id = ta.track_id and t.log_id is not null
+          join (findings join tracks on tracks.track_id = findings.track_id) t on t.track_id = ta.track_id and t.log_id is not null
           group by a.id
           order by a.name collate nocase asc`,
   });
@@ -276,7 +276,7 @@ export async function listArtists(): Promise<ArtistListItem[]> {
             count(ta.track_id) as finding_count
           from artists a
           join track_artists ta on ta.artist_id = a.id
-          join tracks t on t.track_id = ta.track_id and t.log_id is not null
+          join (findings join tracks on tracks.track_id = findings.track_id) t on t.track_id = ta.track_id and t.log_id is not null
           group by a.id
           order by finding_count desc, a.name asc`,
   });
@@ -302,7 +302,7 @@ export async function getArtistListItemBySlug(slug: string): Promise<ArtistListI
             count(ta.track_id) as finding_count
           from artists a
           join track_artists ta on ta.artist_id = a.id
-          join tracks t on t.track_id = ta.track_id and t.log_id is not null
+          join (findings join tracks on tracks.track_id = findings.track_id) t on t.track_id = ta.track_id and t.log_id is not null
           where a.slug = ?
           group by a.id
           limit 1`,
@@ -693,7 +693,7 @@ export async function listAllArtistsWithSocials(): Promise<ArtistOverviewItem[]>
   const result = await db.execute({
     args: [],
     sql: `select a.id as artist_id, a.name, a.slug, a.spotify_url, a.reviewed_at,
-                 (select count(*) from tracks t
+                 (select count(*) from (findings join tracks on tracks.track_id = findings.track_id) t
                     join track_artists ta on ta.track_id = t.track_id
                     where ta.artist_id = a.id and t.log_id is not null) as finding_count,
                  s.id, s.platform, s.url, s.source, s.status, s.created_at

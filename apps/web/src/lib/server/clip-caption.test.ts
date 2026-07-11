@@ -42,7 +42,7 @@ const getRecordingCues = vi.hoisted(() => vi.fn(async () => state.recordingCues)
 const execute = vi.hoisted(() =>
   vi.fn(async (query: { args: unknown[]; sql: string }) => {
     // The finding_id → log_id lookup (published findings only).
-    if (query.sql.includes("from tracks where track_id in")) {
+    if (query.sql.includes("from findings") && query.sql.includes("track_id in")) {
       const rows = (query.args as string[])
         .filter((trackId) => state.logIdByFinding[trackId])
         .map((trackId) => ({ log_id: state.logIdByFinding[trackId], track_id: trackId }));

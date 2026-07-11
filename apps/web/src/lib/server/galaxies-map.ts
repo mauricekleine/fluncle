@@ -93,7 +93,7 @@ function toAdminItem(row: GalaxyRow, memberCount: number): GalaxyAdminItem {
 /** The derived member count per galaxy — `COUNT(*) GROUP BY galaxy_id`, one query. */
 async function memberCounts(db: Awaited<ReturnType<typeof getDb>>): Promise<Map<string, number>> {
   const result = await db.execute(
-    "select galaxy_id, count(*) as c from tracks where galaxy_id is not null group by galaxy_id",
+    "select galaxy_id, count(*) as c from findings where galaxy_id is not null group by galaxy_id",
   );
   const counts = new Map<string, number>();
 
@@ -572,18 +572,19 @@ export async function listTrackEmbeddingsPage(
   const db = await getDb();
   const after = decodeCursor(cursor);
   const args: Array<number | string> = [];
-  let where = "log_id is not null and embedding_json is not null";
+  let where = "findings.log_id is not null and tracks.embedding_json is not null";
 
   if (after) {
-    where += " and track_id > ?";
+    where += " and tracks.track_id > ?";
     args.push(after);
   }
 
   args.push(limit + 1);
   const result = await db.execute({
     args,
-    sql: `select track_id, galaxy_id, embedding_json from tracks
-          where ${where} order by track_id asc limit ?`,
+    sql: `select tracks.track_id, findings.galaxy_id, tracks.embedding_json
+          from findings join tracks on tracks.track_id = findings.track_id
+          where ${where} order by tracks.track_id asc limit ?`,
   });
 
   const rows = typedRows<{

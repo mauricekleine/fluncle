@@ -185,7 +185,7 @@ export async function getArtistNeighbours(
                  a.image_url as image_url, t.embedding_blob as embedding_blob
           from artists a
           join track_artists ta on ta.artist_id = a.id
-          join tracks t on t.track_id = ta.track_id
+          join (findings join tracks on tracks.track_id = findings.track_id) t on t.track_id = ta.track_id
           where t.log_id is not null and t.embedding_blob is not null`,
   });
 

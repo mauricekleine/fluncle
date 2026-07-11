@@ -62,7 +62,9 @@ async function seedMembers(db: Client, galaxyId: string, count: number): Promise
   for (let i = 0; i < count; i += 1) {
     await db.execute({
       args: [`${galaxyId}-t${i}`, galaxyId],
-      sql: `insert into tracks (track_id, galaxy_id) values (?, ?)`,
+      // A galaxy MEMBER is a finding — `galaxy_id` is the certification's, so the
+      // member row lives in `findings` (a catalogue track has no galaxy).
+      sql: `insert into findings (track_id, galaxy_id, added_at) values (?, ?, '2026-07-01')`,
     });
   }
 }
@@ -78,7 +80,14 @@ describe("the galaxy launch gate", () => {
       `create table galaxies (id text primary key, handle text, name text, slug text,
         centroid_json text, retired_at text, split_requested_at text, created_at text, updated_at text)`,
     );
-    await db.execute(`create table tracks (track_id text primary key, galaxy_id text)`);
+    // The tracks/findings pair, minimal: the galaxy lens counts + ranks MEMBERS, and a
+    // member is a certified finding — so `galaxy_id` sits on `findings`, keyed 1:1 to the
+    // `tracks` row it certifies (docs/track-lifecycle.md).
+    await db.execute(`create table tracks (track_id text primary key)`);
+    await db.execute(
+      `create table findings (track_id text primary key, galaxy_id text, added_at text,
+        log_id text)`,
+    );
   });
 
   it("an EMPTY map is not fully named — every public read is dark", async () => {

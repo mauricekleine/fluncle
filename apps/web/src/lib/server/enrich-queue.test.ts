@@ -210,7 +210,7 @@ describe("listTracks hasContext / hasObservation filters (the observation queues
     // No note yet AND never-attempted (NULL, predating the column) ∪ pending ∪ failed
     // — a confirmed `empty` find is excluded so the cron does not re-burn it every tick.
     expect(sql).toContain(
-      "context_note is null and (context_status is null or context_status in ('pending', 'failed'))",
+      "findings.context_note is null and (findings.context_status is null or findings.context_status in ('pending', 'failed'))",
     );
     expect(sql).not.toContain("'empty'");
   });
@@ -219,7 +219,7 @@ describe("listTracks hasContext / hasObservation filters (the observation queues
     await listTracks({ hasContext: false, limit: 50, retryEmptyContext: true });
     const sql = lastListSql();
     expect(sql).toContain(
-      "context_note is null and (context_status is null or context_status in ('pending', 'failed', 'empty'))",
+      "findings.context_note is null and (findings.context_status is null or findings.context_status in ('pending', 'failed', 'empty'))",
     );
   });
 

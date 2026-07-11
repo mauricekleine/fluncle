@@ -104,15 +104,39 @@ type MixtapeFeedRow = {
   youtube_url: string | null;
 };
 
+/**
+ * THE FINDING JOIN — the FROM clause every "this row is a finding" read drives through.
+ *
+ * A finding is the pair `findings ⋈ tracks` (docs/track-lifecycle.md): `tracks` holds the
+ * universal music object, `findings` the certification (the Log ID, the note, the video,
+ * the observation, the found date). The join is INNER, so a catalogue track with no
+ * `findings` row can never leak into a finding surface — that is the whole safety property
+ * of the split, and it is why no read here says a bare `from tracks`.
+ *
+ * `findings` leads because every list/queue predicate and every sort key lives on it
+ * (`findings_added_at_track_id_idx` carries the feed order); `tracks` is reached by its
+ * PRIMARY KEY, so the join costs one b-tree seek per row.
+ *
+ * TODAY the join is behaviour-preserving: every `tracks` row has a `findings` row (the
+ * archive is all certified), so it selects exactly the rows the old monolithic
+ * `from tracks` did. It stops being a no-op the moment the catalogue epic lands
+ * uncertified tracks — which is precisely when a missing join would have become a bug.
+ *
+ * `track_id` is the only column on BOTH tables, so it is the only one that MUST be
+ * qualified; everything else resolves unambiguously. Every column below is qualified
+ * anyway, so a reader can see which half of the pair it comes from.
+ */
+const FINDINGS_FROM = `findings join tracks on tracks.track_id = findings.track_id`;
+
 // Columns exposed to clients. `features_json` is the enrichment spectral summary,
 // surfaced (parsed) as creative fuel for the video agent.
 const TRACK_SELECT = `tracks.track_id, tracks.spotify_url, tracks.title, tracks.album, tracks.album_image_url, tracks.artists_json, tracks.analyzed_at, tracks.analyzed_from,
-  tracks.bpm, tracks.bpm_source, tracks.duration_ms, tracks.enrichment_status, tracks.features_json, tracks.in_release_id, tracks.isrc, tracks.key, tracks.key_source, tracks.label, tracks.log_id, tracks.popularity,
-  tracks.preview_url, tracks.release_date, tracks.source_audio_failures, tracks.source_audio_key, tracks.video_url, tracks.video_squared_at, tracks.video_vehicle, tracks.video_grain, tracks.video_register, tracks.video_model, tracks.video_model_reasoning, tracks.note, tracks.added_at,
-  tracks.updated_at, tracks.added_to_spotify, tracks.posted_to_telegram,
-  tracks.observation_audio_url, tracks.observation_duration_ms, tracks.observation_generated_at, tracks.observation_alignment_json,
-  (select name from galaxies where galaxies.id = tracks.galaxy_id) as galaxy_name,
-  (select slug from galaxies where galaxies.id = tracks.galaxy_id) as galaxy_slug,
+  tracks.bpm, tracks.bpm_source, tracks.duration_ms, findings.enrichment_status, tracks.features_json, tracks.in_release_id, tracks.isrc, tracks.key, tracks.key_source, tracks.label, findings.log_id, tracks.popularity,
+  tracks.preview_url, tracks.release_date, tracks.source_audio_failures, tracks.source_audio_key, findings.video_url, findings.video_squared_at, findings.video_vehicle, findings.video_grain, findings.video_register, findings.video_model, findings.video_model_reasoning, findings.note, findings.added_at,
+  findings.updated_at, findings.added_to_spotify, findings.posted_to_telegram,
+  findings.observation_audio_url, findings.observation_duration_ms, findings.observation_generated_at, findings.observation_alignment_json,
+  (select name from galaxies where galaxies.id = findings.galaxy_id) as galaxy_name,
+  (select slug from galaxies where galaxies.id = findings.galaxy_id) as galaxy_slug,
   (select url from social_posts
      where track_id = tracks.track_id and platform = 'tiktok' and status = 'published'
        and url is not null
@@ -142,11 +166,13 @@ const TRACK_SELECT = `tracks.track_id, tracks.spotify_url, tracks.title, tracks.
 // `LEAN_TRACK_SELECT` is DERIVED from `TRACK_SELECT` (single source of truth, drift-proof —
 // a new column added to `TRACK_SELECT` automatically flows to the lean read too). The split
 // is on `,`; none of the correlated subqueries contain a comma, so each fragment trims to a
-// bare `tracks.<column>` and the omitted three are filtered out exactly.
+// bare `<table>.<column>` and the omitted three are filtered out exactly. The table prefix
+// is part of the key, so it tracks which half of the tracks/findings pair each column
+// lives on (`features_json` is the recording's; the other two are the certification's).
 const LEAN_LIST_OMITTED_COLUMNS = new Set([
   "tracks.features_json",
-  "tracks.observation_alignment_json",
-  "tracks.video_model_reasoning",
+  "findings.observation_alignment_json",
+  "findings.video_model_reasoning",
 ]);
 const LEAN_TRACK_SELECT = TRACK_SELECT.split(",")
   .filter((fragment) => !LEAN_LIST_OMITTED_COLUMNS.has(fragment.trim()))
@@ -399,7 +425,8 @@ export async function getTrackByIdOrLogId(idOrLogId: string): Promise<TrackListI
   const db = await getDb();
   const result = await db.execute({
     args: [idOrLogId, idOrLogId],
-    sql: `select ${TRACK_SELECT} from tracks where track_id = ? or log_id = ? limit 1`,
+    sql: `select ${TRACK_SELECT} from ${FINDINGS_FROM}
+          where tracks.track_id = ? or findings.log_id = ? limit 1`,
   });
   const row = typedRow<TrackRow>(result.rows);
 
@@ -424,7 +451,8 @@ export async function getTracksByLogIds(logIds: string[]): Promise<Record<string
   const placeholders = unique.map(() => "?").join(", ");
   const result = await db.execute({
     args: unique,
-    sql: `select ${TRACK_SELECT} from tracks where log_id in (${placeholders})`,
+    sql: `select ${TRACK_SELECT} from ${FINDINGS_FROM}
+          where findings.log_id in (${placeholders})`,
   });
 
   const byLogId: Record<string, TrackListItem> = {};
@@ -456,7 +484,8 @@ export async function getTracksByIds(trackIds: string[]): Promise<Record<string,
   const placeholders = unique.map(() => "?").join(", ");
   const result = await db.execute({
     args: unique,
-    sql: `select ${TRACK_SELECT} from tracks where track_id in (${placeholders})`,
+    sql: `select ${TRACK_SELECT} from ${FINDINGS_FROM}
+          where tracks.track_id in (${placeholders})`,
   });
 
   const byTrackId: Record<string, TrackListItem> = {};
@@ -484,10 +513,10 @@ export async function getFindingsByArtist(
   const db = await getDb();
   const viaJoin = await db.execute({
     args: [artistId],
-    sql: `select ${TRACK_SELECT} from tracks
+    sql: `select ${TRACK_SELECT} from ${FINDINGS_FROM}
           join track_artists on track_artists.track_id = tracks.track_id
-          where track_artists.artist_id = ? and tracks.log_id is not null
-          order by tracks.added_at desc, tracks.track_id desc`,
+          where track_artists.artist_id = ? and findings.log_id is not null
+          order by findings.added_at desc, tracks.track_id desc`,
   });
 
   const joined = typedRows<TrackRow>(viaJoin.rows);
@@ -501,10 +530,10 @@ export async function getFindingsByArtist(
   const needle = artistName.toLowerCase();
   const viaJson = await db.execute({
     args: [needle],
-    sql: `select ${TRACK_SELECT} from tracks
-          where tracks.log_id is not null
+    sql: `select ${TRACK_SELECT} from ${FINDINGS_FROM}
+          where findings.log_id is not null
             and lower(tracks.artists_json) like '%' || ? || '%'
-          order by tracks.added_at desc, tracks.track_id desc`,
+          order by findings.added_at desc, tracks.track_id desc`,
   });
 
   return typedRows<TrackRow>(viaJson.rows)
@@ -524,7 +553,7 @@ export async function getTrackContextNote(idOrLogId: string): Promise<string | n
   const db = await getDb();
   const result = await db.execute({
     args: [idOrLogId, idOrLogId],
-    sql: `select context_note from tracks where track_id = ? or log_id = ? limit 1`,
+    sql: `select context_note from findings where track_id = ? or log_id = ? limit 1`,
   });
   const row = typedRow<{ context_note: string | null }>(result.rows);
 
@@ -542,7 +571,8 @@ export async function getSourceAudioKey(idOrLogId: string): Promise<string | nul
   const db = await getDb();
   const result = await db.execute({
     args: [idOrLogId, idOrLogId],
-    sql: `select source_audio_key from tracks where track_id = ? or log_id = ? limit 1`,
+    sql: `select tracks.source_audio_key from ${FINDINGS_FROM}
+          where tracks.track_id = ? or findings.log_id = ? limit 1`,
   });
   const row = typedRow<{ source_audio_key: string | null }>(result.rows);
 
@@ -579,12 +609,12 @@ export async function searchTracks(options: {
   const result = await db.execute({
     args: [needle, needle, needle, needle, limit],
     sql: `select ${TRACK_SELECT}
-          from tracks
+          from ${FINDINGS_FROM}
           where lower(tracks.track_id) like '%' || ? || '%'
-             or lower(tracks.log_id) like '%' || ? || '%'
+             or lower(findings.log_id) like '%' || ? || '%'
              or lower(tracks.title) like '%' || ? || '%'
              or lower(tracks.artists_json) like '%' || ? || '%'
-          order by tracks.added_at desc, tracks.track_id desc
+          order by findings.added_at desc, tracks.track_id desc
           limit ?`,
   });
 
@@ -608,9 +638,9 @@ export async function listRecentlyRenderedFindings(limit: number): Promise<Track
   const db = await getDb();
   const result = await db.execute({
     args: [limit],
-    sql: `select ${TRACK_SELECT} from tracks
-          where video_url is not null
-          order by video_squared_at desc, added_at desc, track_id desc
+    sql: `select ${TRACK_SELECT} from ${FINDINGS_FROM}
+          where findings.video_url is not null
+          order by findings.video_squared_at desc, findings.added_at desc, tracks.track_id desc
           limit ?`,
   });
 
@@ -622,7 +652,7 @@ export async function getTracksForMixtape(mixtapeId: string): Promise<MixtapeMem
   const result = await db.execute({
     args: [mixtapeId],
     sql: `select ${TRACK_SELECT}, mt.start_ms as start_ms
-          from tracks
+          from ${FINDINGS_FROM}
           join mixtape_tracks mt on mt.track_id = tracks.track_id and mt.mixtape_id = ?
           order by mt.position asc`,
   });
@@ -637,7 +667,7 @@ export async function getTracksForMixtape(mixtapeId: string): Promise<MixtapeMem
 export async function getRandomTrack(): Promise<TrackListItem | undefined> {
   const db = await getDb();
   const result = await db.execute({
-    sql: `select ${TRACK_SELECT} from tracks order by random() limit 1`,
+    sql: `select ${TRACK_SELECT} from ${FINDINGS_FROM} order by random() limit 1`,
   });
   const row = typedRow<TrackRow>(result.rows);
 
@@ -660,9 +690,9 @@ export async function getRandomTrack(): Promise<TrackListItem | undefined> {
 export async function getRandomRadioTrack(): Promise<TrackListItem | undefined> {
   const db = await getDb();
   const result = await db.execute({
-    sql: `select ${TRACK_SELECT} from tracks
-          where tracks.video_squared_at is not null
-            and tracks.observation_audio_url is not null
+    sql: `select ${TRACK_SELECT} from ${FINDINGS_FROM}
+          where findings.video_squared_at is not null
+            and findings.observation_audio_url is not null
           order by random() limit 1`,
   });
   const row = typedRow<TrackRow>(result.rows);
@@ -689,7 +719,7 @@ export async function getRadioEligibleTracks(): Promise<RadioScheduleEntry[]> {
   const db = await getDb();
   const result = await db.execute({
     sql: `select track_id, log_id, observation_duration_ms
-          from tracks
+          from findings
           where video_squared_at is not null
             and observation_audio_url is not null
             and observation_duration_ms is not null
@@ -721,7 +751,7 @@ export async function getRadioScheduleFingerprint(): Promise<string> {
   const result = await db.execute({
     sql: `select count(*) as count,
                  coalesce(max(observation_generated_at), '') as latest
-          from tracks
+          from findings
           where video_squared_at is not null
             and observation_audio_url is not null
             and observation_duration_ms is not null
@@ -808,17 +838,18 @@ export async function getTrackNeighbors(track: {
   trackId: string;
 }): Promise<{ newer?: TrackNeighbor; older?: TrackNeighbor }> {
   const db = await getDb();
-  const select = `select log_id, title, artists_json from tracks where log_id is not null`;
+  const select = `select findings.log_id, tracks.title, tracks.artists_json
+    from ${FINDINGS_FROM} where findings.log_id is not null`;
   const [newerResult, olderResult] = await Promise.all([
     db.execute({
       args: [track.addedAt, track.addedAt, track.trackId],
-      sql: `${select} and (added_at > ? or (added_at = ? and track_id > ?))
-            order by added_at asc, track_id asc limit 1`,
+      sql: `${select} and (findings.added_at > ? or (findings.added_at = ? and tracks.track_id > ?))
+            order by findings.added_at asc, tracks.track_id asc limit 1`,
     }),
     db.execute({
       args: [track.addedAt, track.addedAt, track.trackId],
-      sql: `${select} and (added_at < ? or (added_at = ? and track_id < ?))
-            order by added_at desc, track_id desc limit 1`,
+      sql: `${select} and (findings.added_at < ? or (findings.added_at = ? and tracks.track_id < ?))
+            order by findings.added_at desc, tracks.track_id desc limit 1`,
     }),
   ]);
   const toNeighbor = (row: NeighborRow | undefined): TrackNeighbor | undefined =>
@@ -878,7 +909,8 @@ export async function getSimilarFindings(idOrLogId: string, limit = 6): Promise<
   const db = await getDb();
   const targetResult = await db.execute({
     args: [idOrLogId, idOrLogId],
-    sql: `select track_id, embedding_json from tracks where track_id = ? or log_id = ? limit 1`,
+    sql: `select tracks.track_id, tracks.embedding_json from ${FINDINGS_FROM}
+          where tracks.track_id = ? or findings.log_id = ? limit 1`,
   });
   const targetRow = typedRow<{ embedding_json: string | null; track_id: string }>(
     targetResult.rows,
@@ -906,8 +938,8 @@ export async function getSimilarFindings(idOrLogId: string, limit = 6): Promise<
     sql: `select track_id, vector_distance_cos(vec, ?) as dist
           from (
             select tracks.track_id as track_id, ${embeddingVectorSql()} as vec
-            from tracks
-            where tracks.log_id is not null and tracks.track_id != ?
+            from ${FINDINGS_FROM}
+            where findings.log_id is not null and tracks.track_id != ?
           )
           where vec is not null
           order by dist asc, track_id asc
@@ -991,8 +1023,10 @@ export async function getMixableTracks(
   const db = await getDb();
   const targetResult = await db.execute({
     args: [idOrLogId, idOrLogId],
-    sql: `select track_id, log_id, key, bpm, embedding_json, features_json from tracks
-          where track_id = ? or log_id = ? limit 1`,
+    sql: `select tracks.track_id, findings.log_id, tracks.key, tracks.bpm,
+                 tracks.embedding_json, tracks.features_json
+          from ${FINDINGS_FROM}
+          where tracks.track_id = ? or findings.log_id = ? limit 1`,
   });
   const targetRow = typedRow<MixRow>(targetResult.rows);
 
@@ -1008,7 +1042,7 @@ export async function getMixableTracks(
 
   const exclude = [...new Set((options.excludeLogIds ?? []).filter((id) => id.trim()))];
   const excludeClause =
-    exclude.length > 0 ? `and log_id not in (${exclude.map(() => "?").join(", ")})` : "";
+    exclude.length > 0 ? `and findings.log_id not in (${exclude.map(() => "?").join(", ")})` : "";
   // Args bind in SQL-TEXT order: the probe's `?` (when there is one) precedes the
   // excluded target and the excluded Log IDs.
   const distanceSql = probe ? `vector_distance_cos(vec, ?)` : `null`;
@@ -1017,13 +1051,13 @@ export async function getMixableTracks(
     sql: `select track_id, log_id, key, bpm, features_json, has_embedding,
                  case when vec is null then null else ${distanceSql} end as sonic_dist
           from (
-            select tracks.track_id as track_id, tracks.log_id as log_id, tracks.key as key,
+            select tracks.track_id as track_id, findings.log_id as log_id, tracks.key as key,
                    tracks.bpm as bpm, tracks.features_json as features_json,
                    (tracks.embedding_blob is not null or tracks.embedding_json is not null)
                      as has_embedding,
                    ${embeddingVectorSql()} as vec
-            from tracks
-            where tracks.log_id is not null and tracks.track_id != ? ${excludeClause}
+            from ${FINDINGS_FROM}
+            where findings.log_id is not null and tracks.track_id != ? ${excludeClause}
           )`,
   });
 
@@ -1094,8 +1128,9 @@ export async function getMixableOrder(
   const placeholders = unique.map(() => "?").join(", ");
   const result = await db.execute({
     args: unique,
-    sql: `select track_id, log_id, key, bpm, embedding_json, features_json, title, artists_json
-          from tracks where log_id in (${placeholders})`,
+    sql: `select tracks.track_id, findings.log_id, tracks.key, tracks.bpm,
+                 tracks.embedding_json, tracks.features_json, tracks.title, tracks.artists_json
+          from ${FINDINGS_FROM} where findings.log_id in (${placeholders})`,
   });
 
   const rowByLogId = new Map<string, MixRow & { artists_json: string; title: string }>();
@@ -1190,8 +1225,8 @@ export async function getFindingsByGalaxyRanked(
     args: [galaxyId, probe, limit, offset],
     sql: `select track_id from (
             select tracks.track_id as track_id, ${embeddingVectorSql()} as vec
-            from tracks
-            where tracks.galaxy_id = ? and tracks.log_id is not null
+            from ${FINDINGS_FROM}
+            where findings.galaxy_id = ? and findings.log_id is not null
           )
           order by (vec is null) asc,
                    case when vec is not null then vector_distance_cos(vec, ?) end asc,
@@ -1485,27 +1520,27 @@ export async function listTracks({
   const filterArgs: string[] = [];
 
   if (since) {
-    filterClauses.push("added_at >= ?");
+    filterClauses.push("findings.added_at >= ?");
     filterArgs.push(since);
   }
 
   if (until) {
-    filterClauses.push("added_at < ?");
+    filterClauses.push("findings.added_at < ?");
     filterArgs.push(until);
   }
 
   if (hasVideo === true) {
-    filterClauses.push("video_url is not null");
+    filterClauses.push("findings.video_url is not null");
   } else if (hasVideo === false) {
-    filterClauses.push("video_url is null");
+    filterClauses.push("findings.video_url is null");
   }
 
   // The Rekordbox-sync queue: `key IS NULL` (no stored musical key — the DSP left it
   // null below its confidence floor). `true` = a key is on file. Mirrors hasVideo.
   if (hasKey === true) {
-    filterClauses.push("key is not null");
+    filterClauses.push("tracks.key is not null");
   } else if (hasKey === false) {
-    filterClauses.push("key is null");
+    filterClauses.push("tracks.key is null");
   }
 
   // The MuQ embed queue (RFC full-audio § Unit 3): `embedding_json IS NULL` AND a
@@ -1515,9 +1550,9 @@ export async function listTracks({
   // out of the queue. `true` = a vector is already on file (a pure presence check — no key
   // gate; an embedded finding is done regardless of how it was captured). Mirrors hasKey.
   if (hasEmbedding === true) {
-    filterClauses.push("embedding_json is not null");
+    filterClauses.push("tracks.embedding_json is not null");
   } else if (hasEmbedding === false) {
-    filterClauses.push("embedding_json is null and source_audio_key is not null");
+    filterClauses.push("tracks.embedding_json is null and tracks.source_audio_key is not null");
   }
 
   // The context queue. `true` = resolved (a note is stored). `false` = the work
@@ -1528,21 +1563,21 @@ export async function listTracks({
   // present, status NULL) out of the queue. `retryEmptyContext` widens it to also
   // re-pick `empty` (the `--retry-empty` escape hatch).
   if (hasContext === true) {
-    filterClauses.push("context_note is not null");
+    filterClauses.push("findings.context_note is not null");
   } else if (hasContext === false) {
     filterClauses.push(
       retryEmptyContext
-        ? "(context_note is null and (context_status is null or context_status in ('pending', 'failed', 'empty')))"
-        : "(context_note is null and (context_status is null or context_status in ('pending', 'failed')))",
+        ? "(findings.context_note is null and (findings.context_status is null or findings.context_status in ('pending', 'failed', 'empty')))"
+        : "(findings.context_note is null and (findings.context_status is null or findings.context_status in ('pending', 'failed')))",
     );
   }
 
   // The observation queue: `observation_audio_url IS NULL` (no spoken
   // observation). Paired with hasContext=true it is the "ready to observe" queue.
   if (hasObservation === true) {
-    filterClauses.push("observation_audio_url is not null");
+    filterClauses.push("findings.observation_audio_url is not null");
   } else if (hasObservation === false) {
-    filterClauses.push("observation_audio_url is null");
+    filterClauses.push("findings.observation_audio_url is null");
   }
 
   // The auto-note queue: `note IS NULL OR note = ''` (no editorial note yet). Paired
@@ -1550,9 +1585,9 @@ export async function listTracks({
   // the context_note fuel but an empty `note`. The empty-string guard matches the
   // fill-empty-only semantics of note_track (a whitespace note is still empty).
   if (hasNote === true) {
-    filterClauses.push("(note is not null and trim(note) != '')");
+    filterClauses.push("(findings.note is not null and trim(findings.note) != '')");
   } else if (hasNote === false) {
-    filterClauses.push("(note is null or trim(note) = '')");
+    filterClauses.push("(findings.note is null or trim(findings.note) = '')");
   }
 
   // The full-song CAPTURE queue: findings still needing a capture. `pending`/NULL are
@@ -1569,7 +1604,7 @@ export async function listTracks({
   if (captureQueue) {
     const captureCooldown = new Date(Date.now() - CAPTURE_FAILED_COOLDOWN_MS).toISOString();
     filterClauses.push(
-      `(log_id is not null and (capture_status is null or capture_status = 'pending' or (capture_status = 'failed' and source_audio_failures < ${CAPTURE_MAX_FAILURES} and (source_audio_attempted_at is null or source_audio_attempted_at < ?))))`,
+      `(findings.log_id is not null and (tracks.capture_status is null or tracks.capture_status = 'pending' or (tracks.capture_status = 'failed' and tracks.source_audio_failures < ${CAPTURE_MAX_FAILURES} and (tracks.source_audio_attempted_at is null or tracks.source_audio_attempted_at < ?))))`,
     );
     filterArgs.push(captureCooldown);
   }
@@ -1582,11 +1617,11 @@ export async function listTracks({
     // (predates the column). Bound arg only; never string-concatenated.
     const staleCutoff = new Date(Date.now() - ENRICH_STALE_PROCESSING_MS).toISOString();
     filterClauses.push(
-      "(enrichment_status in ('pending', 'failed') or (enrichment_status = 'processing' and (updated_at is null or updated_at < ?)))",
+      "(findings.enrichment_status in ('pending', 'failed') or (findings.enrichment_status = 'processing' and (findings.updated_at is null or findings.updated_at < ?)))",
     );
     filterArgs.push(staleCutoff);
   } else if (status) {
-    filterClauses.push("enrichment_status = ?");
+    filterClauses.push("findings.enrichment_status = ?");
     filterArgs.push(status);
   }
 
@@ -1595,8 +1630,15 @@ export async function listTracks({
   const dir = order === "asc" ? "asc" : "desc";
   const cursorComparator =
     dir === "asc"
-      ? "(added_at > ? or (added_at = ? and track_id > ?))"
-      : "(added_at < ? or (added_at = ? and track_id < ?))";
+      ? "(findings.added_at > ? or (findings.added_at = ? and tracks.track_id > ?))"
+      : "(findings.added_at < ? or (findings.added_at = ? and tracks.track_id < ?))";
+  // The mixtape arm of the feed pages by the SAME cursor tuple, but over `mixtapes`
+  // (its id column is `log_id`), so it carries its own comparator rather than a
+  // string-rewrite of the findings one.
+  const mixtapeCursorComparator =
+    dir === "asc"
+      ? "(added_at > ? or (added_at = ? and log_id > ?))"
+      : "(added_at < ? or (added_at = ? and log_id < ?))";
 
   const countWhere = filterClauses.length > 0 ? `where ${filterClauses.join(" and ")}` : "";
   const listClauses = cursor ? [...filterClauses, cursorComparator] : filterClauses;
@@ -1608,20 +1650,27 @@ export async function listTracks({
     db.execute({
       args,
       sql: `select ${trackSelect}
-            from tracks
+            from ${FINDINGS_FROM}
             ${where}
-            order by added_at ${dir}, track_id ${dir}
+            order by findings.added_at ${dir}, tracks.track_id ${dir}
             limit ?`,
     }),
     db.execute({
       args: filterArgs,
-      sql: `select count(*) as total_count from tracks ${countWhere}`,
+      sql: `select count(*) as total_count from ${FINDINGS_FROM} ${countWhere}`,
     }),
   ]);
   const rows = typedRows<TrackRow>(result.rows);
   const feedRows =
     includeMixtapes && !since && !until && hasVideo === undefined && status === undefined
-      ? await listPublishedMixtapeFeedRows(db, cursor, cursorComparator, cursorArgs, dir, limit)
+      ? await listPublishedMixtapeFeedRows(
+          db,
+          cursor,
+          mixtapeCursorComparator,
+          cursorArgs,
+          dir,
+          limit,
+        )
       : undefined;
   const countRows = typedRows<TrackCountRow>(countResult.rows);
   const totalCount = feedFindingsCount(countRows[0]?.total_count, rows.length);
@@ -1704,7 +1753,7 @@ async function listPublishedMixtapeFeedRows(
           where m.status = 'published'
             and m.log_id is not null
             and m.added_at is not null
-            ${cursor ? `and ${cursorComparator.replaceAll("track_id", "log_id")}` : ""}
+            ${cursor ? `and ${cursorComparator}` : ""}
           order by m.added_at ${dir}, m.log_id ${dir}
           limit ?`,
   });
@@ -1824,7 +1873,7 @@ export function mergeFeedPage(
 /**
  * The feed's "Found · N" counter is findings-only by design: mixtapes join the
  * feed stream without inflating the finding count. `listTracks` passes the
- * dedicated `count(*) from tracks` result (and the findings row count as
+ * dedicated `count(*)` over the finding join (and the findings row count as
  * fallback); mixtapes never enter the count. Extracting this as a named helper
  * makes the invariant explicit and testable — a future change that unions
  * mixtapes into the count would have to touch this function and its tests.

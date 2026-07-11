@@ -53,7 +53,7 @@ async function listClipRows(): Promise<ClipInput[]> {
     sql: `select t.track_id, t.title, t.artists_json, t.album_image_url, t.log_id, t.added_at,
                  tk.status as tiktok_status, tk.updated_at as tiktok_updated_at,
                  yt.status as youtube_status
-          from tracks t
+          from (findings join tracks on tracks.track_id = findings.track_id) t
           left join social_posts tk on tk.track_id = t.track_id and tk.platform = 'tiktok'
           left join social_posts yt on yt.track_id = t.track_id and yt.platform = 'youtube'
           where t.video_url is not null

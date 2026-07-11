@@ -25,14 +25,17 @@ const TRACK_ID = "abcdefghij0123456789AB"; // 22 chars, the tracks PK shape
 async function noteOf(trackId: string): Promise<null | string> {
   const result = await db.execute({
     args: [trackId],
-    sql: "select note from tracks where track_id = ?",
+    sql: "select note from findings where track_id = ?",
   });
 
   return (result.rows[0]?.note as null | string) ?? null;
 }
 
 async function setNote(trackId: string, note: null | string): Promise<void> {
-  await db.execute({ args: [note, trackId], sql: "update tracks set note = ? where track_id = ?" });
+  await db.execute({
+    args: [note, trackId],
+    sql: "update findings set note = ? where track_id = ?",
+  });
 }
 
 describe("fillEmptyNote — the atomic fill-empty-only guard", () => {
@@ -82,7 +85,7 @@ describe("fillEmptyNote — the atomic fill-empty-only guard", () => {
     const OLD = "2000-01-01T00:00:00.000Z";
     await db.execute({
       args: [OLD, TRACK_ID],
-      sql: "update tracks set updated_at = ? where track_id = ?",
+      sql: "update findings set updated_at = ? where track_id = ?",
     });
 
     // Fill an empty note → the write bumps updated_at (note is a VISIBLE field).
@@ -91,7 +94,7 @@ describe("fillEmptyNote — the atomic fill-empty-only guard", () => {
 
     const afterFill = await db.execute({
       args: [TRACK_ID],
-      sql: "select updated_at from tracks where track_id = ?",
+      sql: "select updated_at from findings where track_id = ?",
     });
     const bumped = afterFill.rows[0]?.updated_at as string;
     expect(bumped).not.toBe(OLD);
@@ -99,14 +102,14 @@ describe("fillEmptyNote — the atomic fill-empty-only guard", () => {
     // Re-anchor, then a losing fill (note now present) must NOT touch updated_at.
     await db.execute({
       args: [OLD, TRACK_ID],
-      sql: "update tracks set updated_at = ? where track_id = ?",
+      sql: "update findings set updated_at = ? where track_id = ?",
     });
     const lost = await fillEmptyNote(TRACK_ID, "A second agent tick that arrives too late.");
     expect(lost).toBe(false);
 
     const afterLoss = await db.execute({
       args: [TRACK_ID],
-      sql: "select updated_at from tracks where track_id = ?",
+      sql: "select updated_at from findings where track_id = ?",
     });
     expect(afterLoss.rows[0]?.updated_at).toBe(OLD);
   });

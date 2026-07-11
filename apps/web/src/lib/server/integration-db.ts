@@ -79,27 +79,52 @@ type SeedTrack = {
   trackId: string;
 };
 
-/** Inserts a minimal published `tracks` row (only the columns the tests read). */
+/**
+ * Seeds a minimal CERTIFIED finding — the `tracks` row (the recording) AND its
+ * `findings` row (the certification), the pair `publishTrack` mints together. Only the
+ * columns the tests read. To seed an UNCERTIFIED catalogue track (a `tracks` row with no
+ * `findings` row — the shape every finding read must exclude), use `seedCatalogueTrack`.
+ */
 export async function seedTrack(client: Client, track: SeedTrack): Promise<void> {
   const now = new Date().toISOString();
 
+  await seedCatalogueTrack(client, track);
   await client.execute({
     args: [
       track.trackId,
       track.logId,
+      now,
+      track.addedToSpotify ? 1 : 0,
+      track.postedToTelegram ? 1 : 0,
+    ],
+    sql: `insert into findings
+      (track_id, log_id, added_at, added_to_spotify, posted_to_telegram)
+      values (?, ?, ?, ?, ?)`,
+  });
+}
+
+/**
+ * Seeds ONLY the `tracks` half — a catalogue track Fluncle has NOT certified. It carries
+ * no Log ID, no note, no video, no found date, because it has no `findings` row at all.
+ * Every finding surface must be blind to it (that is the point of the split), so this is
+ * the fixture a test uses to prove a read really does join through the certification.
+ */
+export async function seedCatalogueTrack(
+  client: Client,
+  track: Omit<SeedTrack, "addedToSpotify" | "logId" | "postedToTelegram">,
+): Promise<void> {
+  await client.execute({
+    args: [
+      track.trackId,
       track.title ?? "Test Track",
       JSON.stringify(track.artists ?? ["Test Artist"]),
       `spotify:track:${track.trackId}`,
       `https://open.spotify.com/track/${track.trackId}`,
       0,
-      now,
-      track.addedToSpotify ? 1 : 0,
-      track.postedToTelegram ? 1 : 0,
     ],
     sql: `insert into tracks
-      (track_id, log_id, title, artists_json, spotify_uri, spotify_url, duration_ms,
-       added_at, added_to_spotify, posted_to_telegram)
-      values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      (track_id, title, artists_json, spotify_uri, spotify_url, duration_ms)
+      values (?, ?, ?, ?, ?, ?)`,
   });
 }
 

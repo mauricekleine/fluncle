@@ -123,9 +123,11 @@ async function main() {
   const db = await getDb();
 
   const result = await db.execute({
-    sql: `select track_id, log_id, added_at, observation_script, video_url, bpm, embedding_json
-            from tracks
-           where log_id is not null`,
+    sql: `select tracks.track_id, findings.log_id, findings.added_at,
+                 findings.observation_script, findings.video_url, tracks.bpm,
+                 tracks.embedding_json
+            from findings join tracks on tracks.track_id = findings.track_id
+           where findings.log_id is not null`,
   });
 
   const events: CostEventInput[] = [];

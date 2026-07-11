@@ -766,7 +766,9 @@ async function resolveFindingIdsByText(
   }
 
   const db = await getDb();
-  const result = await db.execute({ sql: `select track_id, title, artists_json from tracks` });
+  const result = await db.execute({
+    sql: `select tracks.track_id, tracks.title, tracks.artists_json from findings join tracks on tracks.track_id = findings.track_id`,
+  });
   const index = buildTrackMatchIndex(
     typedRows<{ artists_json: string; title: string; track_id: string }>(result.rows).map(
       (row) => ({

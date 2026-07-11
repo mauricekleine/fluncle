@@ -106,9 +106,9 @@ export async function backfillLabels(client: Client): Promise<LabelsBackfillResu
 
   // ── 1. RECONCILE (every deploy) — a row per distinct tracks.label, folded by slug.
   const distinct = await client.execute({
-    sql: `select label from tracks
-          where label is not null and trim(label) <> ''
-          group by label`,
+    sql: `select tracks.label as label from findings join tracks on tracks.track_id = findings.track_id
+          where tracks.label is not null and trim(tracks.label) <> ''
+          group by tracks.label`,
   });
 
   // First spelling wins per slug. Stable across runs: a row is only ever inserted once.
