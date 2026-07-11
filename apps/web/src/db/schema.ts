@@ -28,246 +28,261 @@ const float32Vector = customType<{ data: Uint8Array; driverData: Uint8Array }>({
   dataType: () => "F32_BLOB(1024)",
 });
 
-export const tracks = sqliteTable("tracks", {
-  addedAt: text("added_at").notNull(),
-  addedToSpotify: integer("added_to_spotify", { mode: "boolean" }).notNull().default(false),
-  addedToSpotifyAt: text("added_to_spotify_at"),
-  album: text("album"),
-  albumImageUrl: text("album_image_url"),
-  // BPM/key ANALYSIS PROVENANCE (RFC bpm-key-accuracy). The enrichment analyzer already
-  // emits where each value came from + how confident it was; these columns persist that so a
-  // preview-grade estimate is distinguishable from a full-song one, and the capture→enrich
-  // race can be closed (a finding enriched from a 30s preview BEFORE its full song was
-  // captured must be re-derived once the capture lands). All INTERNAL analysis metadata:
-  // they are listed in `PRIVATE_TRACK_FIELDS`, so `toPublicTrackListItem` strips them from
-  // every PUBLIC DTO, and writing them never bumps `updated_at` (they move no public
-  // surface — NOT in `track-update.ts` VISIBLE_FIELDS). Internal does NOT mean stripped,
-  // though — the other two internal columns each reach the public boundary differently:
-  // `features_json` IS on the public DTO (parsed onto it as `features` — creative fuel for
-  // the video agent, deliberately surfaced), and `embedding_json` is simply never selected
-  // into a DTO at all. Neither one passes through `toPublicTrackListItem`'s strip list.
-  //   - `analyzedAt`   — ISO timestamp of the analysis write.
-  //   - `analyzedFrom` — which audio class the analysis ran on: "full" (the captured full
-  //     song) or "preview" (a 30s preview). NULL = a legacy row written before this column;
-  //     semantically "unknown, assume preview-grade" (so the capture re-derive treats NULL
-  //     like "preview" — anything that is not confirmed "full" is re-enrichable).
-  analyzedAt: text("analyzed_at"),
-  analyzedFrom: text("analyzed_from", { enum: ["preview", "full"] }),
-  artistsJson: text("artists_json").notNull(),
-  // Per-finding backfill reliability state for the two Worker-paced catalogue
-  // sweeps (Discogs release-id resolve, Last.fm love), one column-set per source.
-  // The sweeps are best-effort side-channels over already-published findings; this
-  // state makes them RESUMABLE and keeps them from re-storming a vendor API:
-  //   - *AttemptedAt — ISO of the last attempt; the sweep skips a finding tried
-  //     within a cooldown window (the window grows with the failure count, so a
-  //     repeatedly-failing finding backs off instead of being retried every tick).
-  //   - *Attempts    — total attempts (diagnostic / unbounded-retry guard).
-  //   - *Failures    — CONSECUTIVE failures (reset to 0 on success); drives the
-  //     exponential backoff window. A done/resolved finding has 0.
-  //   - *DoneAt      — ISO when the source completed for this finding (Discogs:
-  //     ids written; Last.fm: loved). Set ⇒ the sweep skips it forever (idempotent
-  //     no-op). Null until done. All four are null on rows that predate the column.
-  backfillDiscogsAttemptedAt: text("backfill_discogs_attempted_at"),
-  backfillDiscogsAttempts: integer("backfill_discogs_attempts").notNull().default(0),
-  backfillDiscogsDoneAt: text("backfill_discogs_done_at"),
-  backfillDiscogsFailures: integer("backfill_discogs_failures").notNull().default(0),
-  backfillLastfmAttemptedAt: text("backfill_lastfm_attempted_at"),
-  backfillLastfmAttempts: integer("backfill_lastfm_attempts").notNull().default(0),
-  backfillLastfmDoneAt: text("backfill_lastfm_done_at"),
-  backfillLastfmFailures: integer("backfill_lastfm_failures").notNull().default(0),
-  // The auto-note authoring "ran" stamp (the written-note sibling of the observation
-  // pipeline). Unlike Discogs/Last.fm this is NOT a vendor sweep — `note_track`
-  // (agent tier) stamps `backfill_note_attempted_at` on EVERY authoring attempt and
-  // `backfill_note_done_at` only when an empty `note` was actually FILLED. It reuses
-  // the same backfill_* column convention purely so the admin board's "done-when-ran"
-  // semantics and `listBackfillRanForTracks` machinery work for the Note cell exactly
-  // like Discogs/Last.fm: grey/`open` = never run, `done` = the workflow ran (a note
-  // exists). The operator override always wins — the handler fills an EMPTY note only,
-  // never clobbering an operator-written one, so a hand-written note can carry no
-  // attempt stamp and still read `done` off the `note` column itself.
-  backfillNoteAttemptedAt: text("backfill_note_attempted_at"),
-  backfillNoteAttempts: integer("backfill_note_attempts").notNull().default(0),
-  backfillNoteDoneAt: text("backfill_note_done_at"),
-  backfillNoteFailures: integer("backfill_note_failures").notNull().default(0),
-  bpm: real("bpm"),
-  // The analyzer's confidence in `bpm` (0..1) and where it came from (analysis
-  // provenance, RFC bpm-key-accuracy). `bpmSource` is the analyzer's `bpmSource`
-  // verbatim ("audio-file" | "deezer:search" | "itunes" | "acousticbrainz" | …). Both
-  // INTERNAL (never in a public DTO, never bump `updated_at`). See `analyzedFrom` above.
-  bpmConfidence: real("bpm_confidence"),
-  bpmSource: text("bpm_source"),
-  // The full-song capture side-channel state (RFC full-audio). Models
-  // `enrichment_status` exactly — `notNull().default("pending")` is load-bearing:
-  // `publishTrack`'s insert never names this column, so the DDL default is what
-  // lands `'pending'` on a new add AND backfills every existing row to `'pending'`
-  // on migration (which enqueues the whole archive for capture-backfill for free).
-  // Enum: pending (never attempted) → done (key written) | unmatched (no confident
-  // match — terminal) | failed (attempt threw — retriable under backoff).
-  captureStatus: text("capture_status").notNull().default("pending"),
-  // Firecrawl-derived FACTUAL context about the track (label/year/release
-  // context/artist background), gathered during the observe step as CREATIVE
-  // FUEL for the observation script and the video agent. Internal only: never
-  // rendered on /log, never in JSON-LD/RSS/llms.txt, never quotes lyrics. This
-  // is NOT the editorial `note` (the operator's public "why").
-  contextNote: text("context_note"),
-  // The context-fetch reliability marker (mirrors the backfill_* state above). The
-  // `context_track` queue picks `pending` rows (never-attempted); this column lets a
-  // CONFIRMED-EMPTY fetch (`empty`) be distinct from never-attempted, so the cron does
-  // not re-burn Firecrawl + the distil LLM on a hopeless find every tick. States:
-  //   - pending  — never attempted (the default; the queue's pick set).
-  //   - resolved — a distilled (or cleaned-raw fallback) note was stored.
-  //   - empty    — the fetch returned nothing usable; intentionally left blank. The
-  //                queue skips it unless `--retry-empty` widens the pick set.
-  //   - failed   — the attempt threw (vendor down); eligible for a later retry.
-  // Internal only — never surfaced through public DTOs. Rows that predate the column
-  // read NULL and are treated as `pending`.
-  contextStatus: text("context_status", {
-    enum: ["pending", "resolved", "empty", "failed"],
-  }),
-  durationMs: integer("duration_ms").notNull(),
-  // The finding's MuQ audio embedding, in the form the DATABASE can rank: a native
-  // libSQL `F32_BLOB(1024)`. Every similarity read (`get_similar_findings`, the `/mix`
-  // rail, a galaxy's core-first order) ranks with `vector_distance_cos(embedding_blob,
-  // ?)` IN SQL and ships back only the winners — never the vectors. Written alongside
-  // `embedding_json` by the same agent-tier `update_track` path (`vector32(?)` converts
-  // the validated JSON server-side), and backfilled from `embedding_json` on every
-  // deploy (scripts/backfill-embedding-blob.ts). See lib/server/embedding.ts for the
-  // read contract (blob first, guarded JSON fallback) and the raw-blob probe binding.
-  embeddingBlob: float32Vector("embedding_blob"),
-  // The same vector as a JSON array — the ORIGINAL storage form, and still the
-  // source of truth: the blob is derived from it, `list_track_embeddings` (the
-  // `fluncle-cluster` cron's corpus read) reads it, and it is what a backfill can
-  // rebuild a lost blob from. Written by the on-box `fluncle-embed` cron (torch on
-  // rave-02) via the agent-tier `update_track` path; internal analysis fuel like
-  // `features_json`, so writing it moves no public lastmod. NULL until the embed cron
-  // drains it (`embedding_json IS NULL` is the queue). It is 82% of the database at
-  // 100k rows and its removal is the recorded follow-up, once the blob path has run in
-  // production. See docs/track-lifecycle.md.
-  embeddingJson: text("embedding_json"),
-  enrichmentStatus: text("enrichment_status").notNull().default("pending"),
-  featuresJson: text("features_json"),
-  // The sonic galaxy this finding belongs to — a nullable FK to `galaxies.id`, the
-  // internal-grouping precedent of `embeddingJson`. Hard assignment
-  // (one galaxy per finding), written by the on-box `fluncle-cluster` cron via the
-  // agent-tier `update_track` path (assignment-only nightly step). Internal like the
-  // embedding, so writing it moves no public lastmod (kept OUT of `VISIBLE_FIELDS`);
-  // it surfaces on the public DTO only once the galaxy is operator-NAMED. NULL until
-  // the finding is embedded AND assigned. Member counts are derived, never stored.
-  // See docs/rfcs/browse-by-feel.md + docs/track-lifecycle.md.
-  galaxyId: text("galaxy_id"),
-  // The Discogs release the finding resolves to (read-only enrichment, best-effort,
-  // matched by artist + title since Discogs has no ISRC search). inMasterId is the
-  // master that groups a release's versions (Discogs returns it on the search hit);
-  // inReleaseId is the specific release. The `discogs.com/release/{inReleaseId}` URL
-  // is a per-finding `sameAs` for the track (distinct from the artist-level sameAs).
-  // Both null until a confident match writes them on add.
-  inMasterId: integer("in_master_id"),
-  inReleaseId: integer("in_release_id"),
-  isrc: text("isrc"),
-  key: text("key"),
-  // The analyzer's confidence in `key` (0..1) and its source (analysis provenance, RFC
-  // bpm-key-accuracy). `keySource` is the analyzer's `keySource` verbatim. `key` is NULL
-  // when confidence fell below the analyzer's floor, so `keyConfidence` records that the
-  // gate ran. Both INTERNAL (never in a public DTO, never bump `updated_at`). See
-  // `analyzedFrom` above.
-  keyConfidence: real("key_confidence"),
-  keySource: text("key_source"),
-  label: text("label"),
-  logId: text("log_id").unique(),
-  note: text("note"),
-  // Word-level caption timings for the spoken observation, as a JSON string
-  // (`{ source, words: [{ text, startMs, endMs }] }` — see lib/server/observation.ts
-  // `ObservationAlignment`). Drives the synced subtitles on the radio player (and,
-  // later, /log): the current word is highlighted off `audio.currentTime`. Captured
-  // at render time from Cartesia's word timestamps (a retired one-off `/forced-alignment`
-  // backfill seeded older rows). Internal-but-PUBLIC: unlike the script, the
-  // word timings ARE surfaced (the public TrackListItem carries them so the radio
-  // caption render can read them), but they describe an EXISTING artifact, so writing
-  // them does NOT bump updated_at (a backfill must move no public lastmod).
-  observationAlignmentJson: text("observation_alignment_json"),
-  // The audio observation (Fluncle's recovered field observation, spoken).
-  // observationAudioUrl is the R2 read URL for <log-id>/observation.mp3 — set
-  // when the render is uploaded; its presence is the "has observation" flag. The
-  // script (observation.txt) and the structured artifact + render metadata
-  // (observation.json) live by CONVENTION at <log-id>/<name> with no column,
-  // exactly like poster.jpg / cover.jpg (see lib/media.ts).
-  observationAudioUrl: text("observation_audio_url"),
-  observationDurationMs: integer("observation_duration_ms"),
-  observationGeneratedAt: text("observation_generated_at"),
-  // The spoken observation SCRIPT — the voice-gated prose the agent authored and
-  // passed to the observe render. It already lives
-  // in the R2 `observation.json` (field `text`) + `observation.txt`; this column
-  // mirrors it on the row so the admin observation dialog can show the transcript
-  // without an R2 round-trip, and (future) radio.fluncle.com can render line-by-line
-  // subtitles synced over the video. Internal like `context_note`: never on the
-  // public TrackListItem contract — surfaced only through the admin-only board path.
-  observationScript: text("observation_script"),
-  popularity: integer("popularity"),
-  postedToTelegram: integer("posted_to_telegram", { mode: "boolean" }).notNull().default(false),
-  postedToTelegramAt: text("posted_to_telegram_at"),
-  // Operator-only archive path for the one official 30s preview preserved for
-  // private analysis/model training. Never exposed through public DTOs and
-  // never used by /api/preview playback.
-  previewArchiveKey: text("preview_archive_key"),
-  previewArchiveMime: text("preview_archive_mime"),
-  previewArchiveSource: text("preview_archive_source"),
-  previewArchivedAt: text("preview_archived_at"),
-  previewUrl: text("preview_url"),
-  releaseDate: text("release_date"),
-  // ISO of the last full-song capture attempt → the backoff-cooldown anchor (grows
-  // with `source_audio_failures`), mirroring the backfill_* sweeps. Null until tried.
-  sourceAudioAttemptedAt: text("source_audio_attempted_at"),
-  // ISO stamp when the full-song bytes landed in R2. Null until captured.
-  sourceAudioCapturedAt: text("source_audio_captured_at"),
-  // CONSECUTIVE capture failures (reset to 0 on success); drives the backoff window.
-  sourceAudioFailures: integer("source_audio_failures").notNull().default(0),
-  // The R2 key of the captured full song (`<logId>/<sha256>.<ext>` in the private
-  // `fluncle-source-audio` bucket). PRESENCE = captured. Null until then.
-  sourceAudioKey: text("source_audio_key"),
-  spotifyError: text("spotify_error"),
-  spotifyUri: text("spotify_uri").notNull(),
-  spotifyUrl: text("spotify_url").notNull(),
-  telegramError: text("telegram_error"),
-  title: text("title").notNull(),
-  trackId: text("track_id").primaryKey(),
-  // Last content change to the finding's record: every write path (publish,
-  // curation/enrichment update, social-post state) bumps it. Null for rows that
-  // predate the column; readers fall back to added_at (sitemap lastmod).
-  updatedAt: text("updated_at"),
-  // The grain FAMILY of the track's video (e.g. "grainCoarseSilver"). Set when the
-  // video is uploaded; surfaced in /api/tracks beside the vehicle so the next agent
-  // reads recent grain families and diversifies (the grain ledger).
-  videoGrain: text("video_grain"),
-  // The AI model that authored the track's video, in <provider>/<model> notation
-  // (e.g. "anthropic/claude-opus-4-8"). Set when the video is uploaded; surfaced
-  // in /api/tracks alongside the vehicle. Defaults so existing rows backfill.
-  videoModel: text("video_model").default("anthropic/claude-opus-4-8"),
-  // The reasoning/thinking effort the authoring model ran at (e.g. "high",
-  // "medium", "low"). Set when the video is uploaded; surfaced in /api/tracks so
-  // we can compare model × thinking level. Defaults to "high" — the existing
-  // videos were authored at high reasoning, so existing rows backfill.
-  videoModelReasoning: text("video_model_reasoning").default("high"),
-  // The visual REGISTER of the track's video — the composition's mode:
-  // "abstract" | "representational" | "framed". Set when the video is uploaded;
-  // surfaced in /api/tracks alongside the vehicle and grain so the next
-  // (ephemeral) video agent reads recent registers and diversifies (the register
-  // ledger). Null = not recorded (older rows predate the column).
-  videoRegister: text("video_register"),
-  // The two-master video layout signal. NON-NULL once
-  // the SQUARE crop source has been uploaded as footage.mp4 — i.e. this finding's
-  // footage.mp4 is now the clean 1920×1920 master MT crops on the fly, and a baked
-  // portrait footage.social.mp4 rides alongside. NULL = the legacy single-file
-  // layout (footage.mp4 is still the old portrait+text cut); consumers fall back to
-  // today's behavior. Set by the video finalize/upload path, never by the
-  // footage.mp4 → footage.social.mp4 R2 rename migration (that copy alone doesn't
-  // make footage.mp4 square). The presence of the timestamp is the only thing read.
-  videoSquaredAt: text("video_squared_at"),
-  videoUrl: text("video_url"),
-  // The travelling vehicle of the track's video (e.g. "voronoi cellular",
-  // "caustic web"). Set when the video is uploaded; surfaced in /api/tracks so
-  // the next (ephemeral) video agent can read recent vehicles and diversify.
-  videoVehicle: text("video_vehicle"),
-});
+export const tracks = sqliteTable(
+  "tracks",
+  {
+    addedAt: text("added_at").notNull(),
+    addedToSpotify: integer("added_to_spotify", { mode: "boolean" }).notNull().default(false),
+    addedToSpotifyAt: text("added_to_spotify_at"),
+    album: text("album"),
+    albumImageUrl: text("album_image_url"),
+    // BPM/key ANALYSIS PROVENANCE (RFC bpm-key-accuracy). The enrichment analyzer already
+    // emits where each value came from + how confident it was; these columns persist that so a
+    // preview-grade estimate is distinguishable from a full-song one, and the capture→enrich
+    // race can be closed (a finding enriched from a 30s preview BEFORE its full song was
+    // captured must be re-derived once the capture lands). All INTERNAL analysis metadata:
+    // they are listed in `PRIVATE_TRACK_FIELDS`, so `toPublicTrackListItem` strips them from
+    // every PUBLIC DTO, and writing them never bumps `updated_at` (they move no public
+    // surface — NOT in `track-update.ts` VISIBLE_FIELDS). Internal does NOT mean stripped,
+    // though — the other two internal columns each reach the public boundary differently:
+    // `features_json` IS on the public DTO (parsed onto it as `features` — creative fuel for
+    // the video agent, deliberately surfaced), and `embedding_json` is simply never selected
+    // into a DTO at all. Neither one passes through `toPublicTrackListItem`'s strip list.
+    //   - `analyzedAt`   — ISO timestamp of the analysis write.
+    //   - `analyzedFrom` — which audio class the analysis ran on: "full" (the captured full
+    //     song) or "preview" (a 30s preview). NULL = a legacy row written before this column;
+    //     semantically "unknown, assume preview-grade" (so the capture re-derive treats NULL
+    //     like "preview" — anything that is not confirmed "full" is re-enrichable).
+    analyzedAt: text("analyzed_at"),
+    analyzedFrom: text("analyzed_from", { enum: ["preview", "full"] }),
+    artistsJson: text("artists_json").notNull(),
+    // Per-finding backfill reliability state for the two Worker-paced catalogue
+    // sweeps (Discogs release-id resolve, Last.fm love), one column-set per source.
+    // The sweeps are best-effort side-channels over already-published findings; this
+    // state makes them RESUMABLE and keeps them from re-storming a vendor API:
+    //   - *AttemptedAt — ISO of the last attempt; the sweep skips a finding tried
+    //     within a cooldown window (the window grows with the failure count, so a
+    //     repeatedly-failing finding backs off instead of being retried every tick).
+    //   - *Attempts    — total attempts (diagnostic / unbounded-retry guard).
+    //   - *Failures    — CONSECUTIVE failures (reset to 0 on success); drives the
+    //     exponential backoff window. A done/resolved finding has 0.
+    //   - *DoneAt      — ISO when the source completed for this finding (Discogs:
+    //     ids written; Last.fm: loved). Set ⇒ the sweep skips it forever (idempotent
+    //     no-op). Null until done. All four are null on rows that predate the column.
+    backfillDiscogsAttemptedAt: text("backfill_discogs_attempted_at"),
+    backfillDiscogsAttempts: integer("backfill_discogs_attempts").notNull().default(0),
+    backfillDiscogsDoneAt: text("backfill_discogs_done_at"),
+    backfillDiscogsFailures: integer("backfill_discogs_failures").notNull().default(0),
+    backfillLastfmAttemptedAt: text("backfill_lastfm_attempted_at"),
+    backfillLastfmAttempts: integer("backfill_lastfm_attempts").notNull().default(0),
+    backfillLastfmDoneAt: text("backfill_lastfm_done_at"),
+    backfillLastfmFailures: integer("backfill_lastfm_failures").notNull().default(0),
+    // The auto-note authoring "ran" stamp (the written-note sibling of the observation
+    // pipeline). Unlike Discogs/Last.fm this is NOT a vendor sweep — `note_track`
+    // (agent tier) stamps `backfill_note_attempted_at` on EVERY authoring attempt and
+    // `backfill_note_done_at` only when an empty `note` was actually FILLED. It reuses
+    // the same backfill_* column convention purely so the admin board's "done-when-ran"
+    // semantics and `listBackfillRanForTracks` machinery work for the Note cell exactly
+    // like Discogs/Last.fm: grey/`open` = never run, `done` = the workflow ran (a note
+    // exists). The operator override always wins — the handler fills an EMPTY note only,
+    // never clobbering an operator-written one, so a hand-written note can carry no
+    // attempt stamp and still read `done` off the `note` column itself.
+    backfillNoteAttemptedAt: text("backfill_note_attempted_at"),
+    backfillNoteAttempts: integer("backfill_note_attempts").notNull().default(0),
+    backfillNoteDoneAt: text("backfill_note_done_at"),
+    backfillNoteFailures: integer("backfill_note_failures").notNull().default(0),
+    bpm: real("bpm"),
+    // The analyzer's confidence in `bpm` (0..1) and where it came from (analysis
+    // provenance, RFC bpm-key-accuracy). `bpmSource` is the analyzer's `bpmSource`
+    // verbatim ("audio-file" | "deezer:search" | "itunes" | "acousticbrainz" | …). Both
+    // INTERNAL (never in a public DTO, never bump `updated_at`). See `analyzedFrom` above.
+    bpmConfidence: real("bpm_confidence"),
+    bpmSource: text("bpm_source"),
+    // The full-song capture side-channel state (RFC full-audio). Models
+    // `enrichment_status` exactly — `notNull().default("pending")` is load-bearing:
+    // `publishTrack`'s insert never names this column, so the DDL default is what
+    // lands `'pending'` on a new add AND backfills every existing row to `'pending'`
+    // on migration (which enqueues the whole archive for capture-backfill for free).
+    // Enum: pending (never attempted) → done (key written) | unmatched (no confident
+    // match — terminal) | failed (attempt threw — retriable under backoff).
+    captureStatus: text("capture_status").notNull().default("pending"),
+    // Firecrawl-derived FACTUAL context about the track (label/year/release
+    // context/artist background), gathered during the observe step as CREATIVE
+    // FUEL for the observation script and the video agent. Internal only: never
+    // rendered on /log, never in JSON-LD/RSS/llms.txt, never quotes lyrics. This
+    // is NOT the editorial `note` (the operator's public "why").
+    contextNote: text("context_note"),
+    // The context-fetch reliability marker (mirrors the backfill_* state above). The
+    // `context_track` queue picks `pending` rows (never-attempted); this column lets a
+    // CONFIRMED-EMPTY fetch (`empty`) be distinct from never-attempted, so the cron does
+    // not re-burn Firecrawl + the distil LLM on a hopeless find every tick. States:
+    //   - pending  — never attempted (the default; the queue's pick set).
+    //   - resolved — a distilled (or cleaned-raw fallback) note was stored.
+    //   - empty    — the fetch returned nothing usable; intentionally left blank. The
+    //                queue skips it unless `--retry-empty` widens the pick set.
+    //   - failed   — the attempt threw (vendor down); eligible for a later retry.
+    // Internal only — never surfaced through public DTOs. Rows that predate the column
+    // read NULL and are treated as `pending`.
+    contextStatus: text("context_status", {
+      enum: ["pending", "resolved", "empty", "failed"],
+    }),
+    durationMs: integer("duration_ms").notNull(),
+    // The finding's MuQ audio embedding, in the form the DATABASE can rank: a native
+    // libSQL `F32_BLOB(1024)`. Every similarity read (`get_similar_findings`, the `/mix`
+    // rail, a galaxy's core-first order) ranks with `vector_distance_cos(embedding_blob,
+    // ?)` IN SQL and ships back only the winners — never the vectors. Written alongside
+    // `embedding_json` by the same agent-tier `update_track` path (`vector32(?)` converts
+    // the validated JSON server-side), and backfilled from `embedding_json` on every
+    // deploy (scripts/backfill-embedding-blob.ts). See lib/server/embedding.ts for the
+    // read contract (blob first, guarded JSON fallback) and the raw-blob probe binding.
+    embeddingBlob: float32Vector("embedding_blob"),
+    // The same vector as a JSON array — the ORIGINAL storage form, and still the
+    // source of truth: the blob is derived from it, `list_track_embeddings` (the
+    // `fluncle-cluster` cron's corpus read) reads it, and it is what a backfill can
+    // rebuild a lost blob from. Written by the on-box `fluncle-embed` cron (torch on
+    // rave-02) via the agent-tier `update_track` path; internal analysis fuel like
+    // `features_json`, so writing it moves no public lastmod. NULL until the embed cron
+    // drains it (`embedding_json IS NULL` is the queue). It is 82% of the database at
+    // 100k rows and its removal is the recorded follow-up, once the blob path has run in
+    // production. See docs/track-lifecycle.md.
+    embeddingJson: text("embedding_json"),
+    enrichmentStatus: text("enrichment_status").notNull().default("pending"),
+    featuresJson: text("features_json"),
+    // The sonic galaxy this finding belongs to — a nullable FK to `galaxies.id`, the
+    // internal-grouping precedent of `embeddingJson`. Hard assignment
+    // (one galaxy per finding), written by the on-box `fluncle-cluster` cron via the
+    // agent-tier `update_track` path (assignment-only nightly step). Internal like the
+    // embedding, so writing it moves no public lastmod (kept OUT of `VISIBLE_FIELDS`);
+    // it surfaces on the public DTO only once the galaxy is operator-NAMED. NULL until
+    // the finding is embedded AND assigned. Member counts are derived, never stored.
+    // See docs/rfcs/browse-by-feel.md + docs/track-lifecycle.md.
+    galaxyId: text("galaxy_id"),
+    // The Discogs release the finding resolves to (read-only enrichment, best-effort,
+    // matched by artist + title since Discogs has no ISRC search). inMasterId is the
+    // master that groups a release's versions (Discogs returns it on the search hit);
+    // inReleaseId is the specific release. The `discogs.com/release/{inReleaseId}` URL
+    // is a per-finding `sameAs` for the track (distinct from the artist-level sameAs).
+    // Both null until a confident match writes them on add.
+    inMasterId: integer("in_master_id"),
+    inReleaseId: integer("in_release_id"),
+    isrc: text("isrc"),
+    key: text("key"),
+    // The analyzer's confidence in `key` (0..1) and its source (analysis provenance, RFC
+    // bpm-key-accuracy). `keySource` is the analyzer's `keySource` verbatim. `key` is NULL
+    // when confidence fell below the analyzer's floor, so `keyConfidence` records that the
+    // gate ran. Both INTERNAL (never in a public DTO, never bump `updated_at`). See
+    // `analyzedFrom` above.
+    keyConfidence: real("key_confidence"),
+    keySource: text("key_source"),
+    label: text("label"),
+    logId: text("log_id").unique(),
+    note: text("note"),
+    // Word-level caption timings for the spoken observation, as a JSON string
+    // (`{ source, words: [{ text, startMs, endMs }] }` — see lib/server/observation.ts
+    // `ObservationAlignment`). Drives the synced subtitles on the radio player (and,
+    // later, /log): the current word is highlighted off `audio.currentTime`. Captured
+    // at render time from Cartesia's word timestamps (a retired one-off `/forced-alignment`
+    // backfill seeded older rows). Internal-but-PUBLIC: unlike the script, the
+    // word timings ARE surfaced (the public TrackListItem carries them so the radio
+    // caption render can read them), but they describe an EXISTING artifact, so writing
+    // them does NOT bump updated_at (a backfill must move no public lastmod).
+    observationAlignmentJson: text("observation_alignment_json"),
+    // The audio observation (Fluncle's recovered field observation, spoken).
+    // observationAudioUrl is the R2 read URL for <log-id>/observation.mp3 — set
+    // when the render is uploaded; its presence is the "has observation" flag. The
+    // script (observation.txt) and the structured artifact + render metadata
+    // (observation.json) live by CONVENTION at <log-id>/<name> with no column,
+    // exactly like poster.jpg / cover.jpg (see lib/media.ts).
+    observationAudioUrl: text("observation_audio_url"),
+    observationDurationMs: integer("observation_duration_ms"),
+    observationGeneratedAt: text("observation_generated_at"),
+    // The spoken observation SCRIPT — the voice-gated prose the agent authored and
+    // passed to the observe render. It already lives
+    // in the R2 `observation.json` (field `text`) + `observation.txt`; this column
+    // mirrors it on the row so the admin observation dialog can show the transcript
+    // without an R2 round-trip, and (future) radio.fluncle.com can render line-by-line
+    // subtitles synced over the video. Internal like `context_note`: never on the
+    // public TrackListItem contract — surfaced only through the admin-only board path.
+    observationScript: text("observation_script"),
+    popularity: integer("popularity"),
+    postedToTelegram: integer("posted_to_telegram", { mode: "boolean" }).notNull().default(false),
+    postedToTelegramAt: text("posted_to_telegram_at"),
+    // Operator-only archive path for the one official 30s preview preserved for
+    // private analysis/model training. Never exposed through public DTOs and
+    // never used by /api/preview playback.
+    previewArchiveKey: text("preview_archive_key"),
+    previewArchiveMime: text("preview_archive_mime"),
+    previewArchiveSource: text("preview_archive_source"),
+    previewArchivedAt: text("preview_archived_at"),
+    previewUrl: text("preview_url"),
+    releaseDate: text("release_date"),
+    // ISO of the last full-song capture attempt → the backoff-cooldown anchor (grows
+    // with `source_audio_failures`), mirroring the backfill_* sweeps. Null until tried.
+    sourceAudioAttemptedAt: text("source_audio_attempted_at"),
+    // ISO stamp when the full-song bytes landed in R2. Null until captured.
+    sourceAudioCapturedAt: text("source_audio_captured_at"),
+    // CONSECUTIVE capture failures (reset to 0 on success); drives the backoff window.
+    sourceAudioFailures: integer("source_audio_failures").notNull().default(0),
+    // The R2 key of the captured full song (`<logId>/<sha256>.<ext>` in the private
+    // `fluncle-source-audio` bucket). PRESENCE = captured. Null until then.
+    sourceAudioKey: text("source_audio_key"),
+    spotifyError: text("spotify_error"),
+    spotifyUri: text("spotify_uri").notNull(),
+    spotifyUrl: text("spotify_url").notNull(),
+    telegramError: text("telegram_error"),
+    title: text("title").notNull(),
+    trackId: text("track_id").primaryKey(),
+    // Last content change to the finding's record: every write path (publish,
+    // curation/enrichment update, social-post state) bumps it. Null for rows that
+    // predate the column; readers fall back to added_at (sitemap lastmod).
+    updatedAt: text("updated_at"),
+    // The grain FAMILY of the track's video (e.g. "grainCoarseSilver"). Set when the
+    // video is uploaded; surfaced in /api/tracks beside the vehicle so the next agent
+    // reads recent grain families and diversifies (the grain ledger).
+    videoGrain: text("video_grain"),
+    // The AI model that authored the track's video, in <provider>/<model> notation
+    // (e.g. "anthropic/claude-opus-4-8"). Set when the video is uploaded; surfaced
+    // in /api/tracks alongside the vehicle. Defaults so existing rows backfill.
+    videoModel: text("video_model").default("anthropic/claude-opus-4-8"),
+    // The reasoning/thinking effort the authoring model ran at (e.g. "high",
+    // "medium", "low"). Set when the video is uploaded; surfaced in /api/tracks so
+    // we can compare model × thinking level. Defaults to "high" — the existing
+    // videos were authored at high reasoning, so existing rows backfill.
+    videoModelReasoning: text("video_model_reasoning").default("high"),
+    // The visual REGISTER of the track's video — the composition's mode:
+    // "abstract" | "representational" | "framed". Set when the video is uploaded;
+    // surfaced in /api/tracks alongside the vehicle and grain so the next
+    // (ephemeral) video agent reads recent registers and diversifies (the register
+    // ledger). Null = not recorded (older rows predate the column).
+    videoRegister: text("video_register"),
+    // The two-master video layout signal. NON-NULL once
+    // the SQUARE crop source has been uploaded as footage.mp4 — i.e. this finding's
+    // footage.mp4 is now the clean 1920×1920 master MT crops on the fly, and a baked
+    // portrait footage.social.mp4 rides alongside. NULL = the legacy single-file
+    // layout (footage.mp4 is still the old portrait+text cut); consumers fall back to
+    // today's behavior. Set by the video finalize/upload path, never by the
+    // footage.mp4 → footage.social.mp4 R2 rename migration (that copy alone doesn't
+    // make footage.mp4 square). The presence of the timestamp is the only thing read.
+    videoSquaredAt: text("video_squared_at"),
+    videoUrl: text("video_url"),
+    // The travelling vehicle of the track's video (e.g. "voronoi cellular",
+    // "caustic web"). Set when the video is uploaded; surfaced in /api/tracks so
+    // the next (ephemeral) video agent can read recent vehicles and diversify.
+    videoVehicle: text("video_vehicle"),
+  },
+  (table) => [
+    // The feed/cursor order every list surface pages by (listTracks:
+    // `order by added_at, track_id` + the keyset cursor comparator).
+    index("tracks_added_at_track_id_idx").on(table.addedAt, table.trackId),
+    // The galaxy lens + the ratified vector-scan btree pre-filter
+    // (tracks.ts:806 documents the shape; :1131 is the predicate).
+    index("tracks_galaxy_id_idx").on(table.galaxyId),
+    // Radio/video eligibility (`where video_url is not null`, tracks.ts:549).
+    index("tracks_video_url_idx").on(table.videoUrl),
+    // Enrichment queue filters (tracks.ts:1202-1294).
+    index("tracks_enrichment_status_idx").on(table.enrichmentStatus),
+  ],
+);
 
 // The radio.fluncle.com shared-schedule anchor (RFC radio-broadcast.md, Unit A).
 // ONE row (PK = service = "radio") holding the wall-clock `epoch` the modulo
