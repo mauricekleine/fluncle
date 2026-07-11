@@ -412,12 +412,272 @@ describe("fluncle CLI parsing and JSON output", () => {
   });
 });
 
-async function runCli(args: string[]): Promise<{
+describe("sweep commands surface partial failure", () => {
+  // A batch/sweep command that collected per-item failures must NOT report
+  // `ok: true` + exit 0 — the on-box crons run these unattended with `--json` and
+  // gate on exactly those two signals, so a green partial failure silently loses
+  // the failed items. `printSweepJson` defines the semantics once: `ok` is true
+  // only when nothing failed, any failure sets exit code 1, and `failedCount`
+  // stays in the payload. These tests drive the real CLI subprocess against a
+  // stub admin API (FLUNCLE_API_BASE_URL) so exit code + stdout JSON are the
+  // actual contract automation sees.
+
+  const oneFinding = {
+    analyzedFrom: "preview",
+    artists: ["Test Artist"],
+    bpm: 174,
+    key: "8A",
+    logId: "001.1.AA",
+    sourceAudioKey: null,
+    title: "Test Banger",
+    trackId: "t1",
+    type: "track",
+  };
+
+  test("requeue-analysis --json dry-run with nothing failed keeps ok:true and exit 0", async () => {
+    await withStubApi(
+      (req, url) => {
+        if (req.method === "GET" && url.pathname === "/api/admin/tracks") {
+          return Response.json({ totalCount: 1, tracks: [oneFinding] });
+        }
+
+        return Response.json(
+          { code: "not_found", message: url.pathname, ok: false },
+          { status: 404 },
+        );
+      },
+      async (baseUrl) => {
+        const result = await runCli(["admin", "tracks", "requeue-analysis", "--json"], {
+          FLUNCLE_API_BASE_URL: baseUrl,
+          FLUNCLE_API_TOKEN: "test-token",
+        });
+
+        expect(result.exitCode).toBe(0);
+        const payload = JSON.parse(result.stdout) as Record<string, unknown>;
+        expect(payload.ok).toBe(true);
+        expect(payload.failedCount).toBe(0);
+        expect(payload.applied).toBe(false);
+        expect(payload.scanned).toBe(1);
+      },
+    );
+  });
+
+  test("requeue-analysis --apply --json with a failed flip reports ok:false, failedCount, exit 1", async () => {
+    await withStubApi(
+      (req, url) => {
+        if (req.method === "GET" && url.pathname === "/api/admin/tracks") {
+          return Response.json({ totalCount: 1, tracks: [oneFinding] });
+        }
+
+        if (req.method === "PATCH" && url.pathname === "/api/admin/tracks/t1") {
+          return Response.json(
+            { code: "boom", message: "update exploded", ok: false },
+            { status: 500 },
+          );
+        }
+
+        return Response.json(
+          { code: "not_found", message: url.pathname, ok: false },
+          { status: 404 },
+        );
+      },
+      async (baseUrl) => {
+        const result = await runCli(["admin", "tracks", "requeue-analysis", "--apply", "--json"], {
+          FLUNCLE_API_BASE_URL: baseUrl,
+          FLUNCLE_API_TOKEN: "test-token",
+        });
+
+        expect(result.exitCode).toBe(1);
+        const payload = JSON.parse(result.stdout) as Record<string, unknown>;
+        expect(payload.ok).toBe(false);
+        expect(payload.failedCount).toBe(1);
+        // The full failed array survives in the payload so automation can see WHICH
+        // items were lost, not just that some were.
+        expect(payload.failed).toEqual([{ error: "update exploded", trackId: "t1" }]);
+        expect(payload.applied).toBe(true);
+      },
+    );
+  });
+
+  test("requeue-analysis --apply non-JSON with a failed flip still exits 1 (regression pin)", async () => {
+    await withStubApi(
+      (req, url) => {
+        if (req.method === "GET" && url.pathname === "/api/admin/tracks") {
+          return Response.json({ totalCount: 1, tracks: [oneFinding] });
+        }
+
+        if (req.method === "PATCH" && url.pathname === "/api/admin/tracks/t1") {
+          return Response.json(
+            { code: "boom", message: "update exploded", ok: false },
+            { status: 500 },
+          );
+        }
+
+        return Response.json(
+          { code: "not_found", message: url.pathname, ok: false },
+          { status: 404 },
+        );
+      },
+      async (baseUrl) => {
+        const result = await runCli(["admin", "tracks", "requeue-analysis", "--apply"], {
+          FLUNCLE_API_BASE_URL: baseUrl,
+          FLUNCLE_API_TOKEN: "test-token",
+        });
+
+        expect(result.exitCode).toBe(1);
+        expect(result.stdout).toContain("1 failed:");
+        expect(result.stdout).toContain("t1: update exploded");
+      },
+    );
+  });
+
+  test("backfills lastfm --json with a failed love reports ok:false, failedCount, exit 1", async () => {
+    await withStubApi(
+      (req, url) => {
+        if (req.method === "POST" && url.pathname === "/api/admin/backfill/lastfm") {
+          return Response.json({
+            dryRun: false,
+            failed: [{ error: "vendor 500", logId: "001.1.AA" }],
+            failedCount: 1,
+            loved: ["002.2.BB"],
+            lovedCount: 1,
+            nextCursor: null,
+            ok: true,
+            rateLimited: false,
+            skipped: [],
+            skippedCount: 0,
+          });
+        }
+
+        return Response.json(
+          { code: "not_found", message: url.pathname, ok: false },
+          { status: 404 },
+        );
+      },
+      async (baseUrl) => {
+        const result = await runCli(["admin", "backfills", "lastfm", "--json"], {
+          FLUNCLE_API_BASE_URL: baseUrl,
+          FLUNCLE_API_TOKEN: "test-token",
+        });
+
+        expect(result.exitCode).toBe(1);
+        const payload = JSON.parse(result.stdout) as Record<string, unknown>;
+        expect(payload.ok).toBe(false);
+        expect(payload.failedCount).toBe(1);
+        expect(payload.failed).toEqual([{ error: "vendor 500", logId: "001.1.AA" }]);
+        // The successes of the same batch survive alongside the failures.
+        expect(payload.loved).toEqual(["002.2.BB"]);
+        expect(payload.lovedCount).toBe(1);
+      },
+    );
+  });
+
+  test("backfills lastfm --json with nothing failed keeps ok:true and exit 0", async () => {
+    await withStubApi(
+      (req, url) => {
+        if (req.method === "POST" && url.pathname === "/api/admin/backfill/lastfm") {
+          return Response.json({
+            dryRun: false,
+            failed: [],
+            failedCount: 0,
+            loved: ["002.2.BB"],
+            lovedCount: 1,
+            nextCursor: null,
+            ok: true,
+            rateLimited: false,
+            skipped: [],
+            skippedCount: 0,
+          });
+        }
+
+        return Response.json(
+          { code: "not_found", message: url.pathname, ok: false },
+          { status: 404 },
+        );
+      },
+      async (baseUrl) => {
+        const result = await runCli(["admin", "backfills", "lastfm", "--json"], {
+          FLUNCLE_API_BASE_URL: baseUrl,
+          FLUNCLE_API_TOKEN: "test-token",
+        });
+
+        expect(result.exitCode).toBe(0);
+        const payload = JSON.parse(result.stdout) as Record<string, unknown>;
+        expect(payload.ok).toBe(true);
+        expect(payload.failedCount).toBe(0);
+        expect(payload.loved).toEqual(["002.2.BB"]);
+      },
+    );
+  });
+
+  test("backfills artist-images --json with a failed fill reports ok:false, failedCount, exit 1", async () => {
+    await withStubApi(
+      (req, url) => {
+        if (req.method === "POST" && url.pathname === "/api/admin/backfill/artist-images") {
+          return Response.json({
+            dryRun: false,
+            failed: [{ artistId: "a1", error: "spotify 500" }],
+            failedCount: 1,
+            filled: ["a2"],
+            filledCount: 1,
+            nextCursor: null,
+            skipped: [],
+            skippedCount: 0,
+          });
+        }
+
+        return Response.json(
+          { code: "not_found", message: url.pathname, ok: false },
+          { status: 404 },
+        );
+      },
+      async (baseUrl) => {
+        const result = await runCli(["admin", "backfills", "artist-images", "--json"], {
+          FLUNCLE_API_BASE_URL: baseUrl,
+          FLUNCLE_API_TOKEN: "test-token",
+        });
+
+        expect(result.exitCode).toBe(1);
+        const payload = JSON.parse(result.stdout) as Record<string, unknown>;
+        expect(payload.ok).toBe(false);
+        expect(payload.failedCount).toBe(1);
+        expect(payload.failed).toEqual([{ artistId: "a1", error: "spotify 500" }]);
+        expect(payload.filled).toEqual(["a2"]);
+      },
+    );
+  });
+});
+
+// Serve a stub admin API on an ephemeral port for one test body. The CLI
+// subprocess is pointed at it via FLUNCLE_API_BASE_URL (process env beats the
+// dotenv profile file, so no operator config can leak in).
+async function withStubApi(
+  handler: (req: Request, url: URL) => Response,
+  fn: (baseUrl: string) => Promise<void>,
+): Promise<void> {
+  const server = Bun.serve({
+    fetch: (req) => handler(req, new URL(req.url)),
+    hostname: "127.0.0.1",
+    port: 0,
+  });
+
+  try {
+    await fn(`http://127.0.0.1:${server.port}`);
+  } finally {
+    await server.stop(true);
+  }
+}
+
+async function runCli(
+  args: string[],
+  env?: Record<string, string>,
+): Promise<{
   exitCode: number;
   stderr: string;
   stdout: string;
 }> {
   const proc = Bun.spawn([process.execPath, cliPath, ...args], {
+    env: env ? { ...process.env, ...env } : undefined,
     stderr: "pipe",
     stdout: "pipe",
   });

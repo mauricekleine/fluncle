@@ -1852,6 +1852,19 @@ async function runTrackNote(
 }
 
 // REF-05 — drive the public → private preview-bucket migration. Three modes:
+// Report a sweep result that may carry per-item failures. Partial failure is NOT
+// success: `ok` is true only when nothing failed, and any failure sets exit code 1
+// so an unattended cron surfaces it instead of silently losing the failed items.
+// `failedCount` stays in the payload so automation can distinguish "all failed"
+// from "some failed" without re-deriving it.
+function printSweepJson(payload: Record<string, unknown>, failedCount: number): void {
+  printJson({ ...payload, failedCount, ok: failedCount === 0 });
+
+  if (failedCount > 0) {
+    process.exitCode = 1;
+  }
+}
+
 // `--verify` (read-only count under the public prefix), `--delete-public` (the
 // prefix sweep), else copy. `--limit` is the per-pass batch; the CLI loops the
 // returned cursor until the phase's set is drained (nextCursor null), aggregating
@@ -1930,21 +1943,22 @@ async function runMigratePreviewArchive(
   }
 
   if (options.json) {
-    printJson({
-      blocked,
-      copied,
-      copiedCount: copied.length,
-      deleted,
-      deletedCount: deleted.length,
-      dryRun,
-      failed,
-      failedCount: failed.length,
-      mode,
-      ok: true,
-      remaining,
-      skipped,
-      skippedCount: skipped.length,
-    });
+    printSweepJson(
+      {
+        blocked,
+        copied,
+        copiedCount: copied.length,
+        deleted,
+        deletedCount: deleted.length,
+        dryRun,
+        failed,
+        mode,
+        remaining,
+        skipped,
+        skippedCount: skipped.length,
+      },
+      failed.length,
+    );
     return;
   }
 
@@ -1970,6 +1984,10 @@ async function runMigratePreviewArchive(
   for (const item of failed) {
     console.log(`  FAILED ${item.trackId}: ${item.error}`);
   }
+
+  if (failed.length > 0) {
+    process.exitCode = 1;
+  }
 }
 
 async function runPreviewArchiveBackfill(
@@ -1988,7 +2006,7 @@ async function runPreviewArchiveBackfill(
   });
 
   if (options.json) {
-    printJson({ ok: true, ...result });
+    printSweepJson({ ...result }, result.failed.length);
     return;
   }
 
@@ -1998,6 +2016,10 @@ async function runPreviewArchiveBackfill(
 
   for (const item of result.archived) {
     console.log(`  ${item.logId}: ${item.source}`);
+  }
+
+  if (result.failed.length > 0) {
+    process.exitCode = 1;
   }
 }
 
@@ -2052,17 +2074,18 @@ async function runBackfillLastfm(
   }
 
   if (options.json) {
-    printJson({
-      dryRun,
-      failed,
-      failedCount: failed.length,
-      loved,
-      lovedCount: loved.length,
-      ok: true,
-      rateLimited: throttled,
-      skipped,
-      skippedCount: skipped.length,
-    });
+    printSweepJson(
+      {
+        dryRun,
+        failed,
+        loved,
+        lovedCount: loved.length,
+        rateLimited: throttled,
+        skipped,
+        skippedCount: skipped.length,
+      },
+      failed.length,
+    );
     return;
   }
 
@@ -2077,6 +2100,10 @@ async function runBackfillLastfm(
 
   for (const item of failed) {
     console.log(`  ${item.logId}: ${item.error}`);
+  }
+
+  if (failed.length > 0) {
+    process.exitCode = 1;
   }
 }
 
@@ -2186,16 +2213,17 @@ async function runBackfillArtists(
   }
 
   if (options.json) {
-    printJson({
-      dryRun,
-      failed,
-      failedCount: failed.length,
-      ok: true,
-      skipped,
-      skippedCount: skipped.length,
-      upserted,
-      upsertedCount: upserted.length,
-    });
+    printSweepJson(
+      {
+        dryRun,
+        failed,
+        skipped,
+        skippedCount: skipped.length,
+        upserted,
+        upsertedCount: upserted.length,
+      },
+      failed.length,
+    );
     return;
   }
 
@@ -2210,6 +2238,10 @@ async function runBackfillArtists(
 
   for (const item of failed) {
     console.log(`  ${item.logId}: ${item.error}`);
+  }
+
+  if (failed.length > 0) {
+    process.exitCode = 1;
   }
 }
 
@@ -2247,16 +2279,17 @@ async function runBackfillArtistImages(
   }
 
   if (options.json) {
-    printJson({
-      dryRun,
-      failed,
-      failedCount: failed.length,
-      filled,
-      filledCount: filled.length,
-      ok: true,
-      skipped,
-      skippedCount: skipped.length,
-    });
+    printSweepJson(
+      {
+        dryRun,
+        failed,
+        filled,
+        filledCount: filled.length,
+        skipped,
+        skippedCount: skipped.length,
+      },
+      failed.length,
+    );
     return;
   }
 
@@ -2271,6 +2304,10 @@ async function runBackfillArtistImages(
 
   for (const item of failed) {
     console.log(`  ${item.artistId}: ${item.error}`);
+  }
+
+  if (failed.length > 0) {
+    process.exitCode = 1;
   }
 }
 
@@ -3794,7 +3831,7 @@ async function runAdminRequeueAnalysis(
   const result = await requeueAnalysisCommand({ apply: options.apply === true, max });
 
   if (options.json) {
-    printJson({ ok: true, ...result });
+    printSweepJson({ ...result }, result.failed.length);
     return;
   }
 
