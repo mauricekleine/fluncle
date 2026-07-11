@@ -61,6 +61,7 @@ import {
   toFtsMatch,
   tokenize,
 } from "../search-query";
+import { labelLogoUrl } from "../media";
 import { getDb, typedRow, typedRows } from "./db";
 import { embeddingVectorSql, parseEmbedding, toVectorProbe } from "./embedding";
 import { translateQuery } from "./search-llm";
@@ -209,8 +210,12 @@ async function ftsSearch(match: string, limit: number): Promise<SearchHit[]> {
 // (`docs/album-entity.md` is the shape they share; the LABEL and ALBUM pages did not exist
 // when search shipped, which is why those two used to come back as a bare filter chip.)
 
-/** A row from any of the three entity tables — one projection, three sources. */
-type EntityRow = { image_url: string | null; name: string; slug: string };
+/**
+ * A row from any of the three entity tables — one projection, three sources. `logo_key` is the
+ * LABEL's own logo R2 key (labels only; null/absent for artists + albums), which — resolved to a
+ * URL — leads over the cover so a label reads as its real logo, not a borrowed sleeve.
+ */
+type EntityRow = { image_url: string | null; logo_key?: string | null; name: string; slug: string };
 
 /** How many jump targets one kind may offer beside the rows. */
 const ENTITY_LIMIT = 3;
@@ -228,6 +233,8 @@ const ENTITY_LIMIT = 3;
  * past (`crawl.ts`), so without it search would offer a destination that is an empty page. The
  * picture is that same freshest finding's cover art — the one `labels.ts` / `albums.ts` already
  * put on the `/labels` and `/albums` index rows, so a label reads here exactly as it reads there.
+ * A LABEL additionally carries its own logo (`labels.image_key`); the mapper leads with it over
+ * the cover, so the search row shows the real logo when the sweep has resolved one.
  */
 function entitySql(kind: SearchEntity["kind"], predicate: string): string {
   if (kind === "artist") {
@@ -239,8 +246,10 @@ function entitySql(kind: SearchEntity["kind"], predicate: string): string {
 
   const table = kind === "album" ? "albums" : "labels";
   const pointer = kind === "album" ? "album_id" : "label_id";
+  // Labels carry their own logo; albums don't (the pointer to the label owns that image).
+  const logoSelect = kind === "label" ? "labels.image_key as logo_key," : "";
 
-  return `select ${table}.name as name, ${table}.slug as slug,
+  return `select ${table}.name as name, ${table}.slug as slug, ${logoSelect}
             (select t.album_image_url
                from tracks t join findings f on f.track_id = t.track_id
                where t.${pointer} = ${table}.id and f.log_id is not null
@@ -280,7 +289,9 @@ async function matchEntities(
   });
 
   return typedRows<EntityRow>(result.rows).map((row) => ({
-    imageUrl: row.image_url ?? undefined,
+    // A label leads with its own logo; anything without one (album/artist, or a label the sweep
+    // hasn't resolved) falls back to the freshest cover exactly as before.
+    imageUrl: labelLogoUrl(row.logo_key) ?? row.image_url ?? undefined,
     kind,
     name: row.name,
     slug: row.slug,

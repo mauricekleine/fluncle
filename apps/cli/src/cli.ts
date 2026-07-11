@@ -2059,6 +2059,19 @@ function addAdminCommands(program: Command): void {
       await runBackfillArtistImages(options, backfillArtistImagesCommand);
     });
 
+  // `backfill_label_images` → `admin backfills label-images`. Gives each label its OWN logo
+  // (resolved Discogs → Wikidata, downloaded once into R2) instead of a borrowed album cover.
+  backfill
+    .command("label-images")
+    .description("Resolve label logos (Discogs → Wikidata) into R2 for existing labels")
+    .option("--dry-run", "Report the eligible worklist without any vendor call or write", false)
+    .option("--limit <limit>", "Max labels to process", "50")
+    .option("--json", "Print JSON", false)
+    .action(async (options: BackfillSyncOptions) => {
+      const { backfillLabelImagesCommand } = await import("./commands/admin-labels");
+      await runBackfillLabelImages(options, backfillLabelImagesCommand);
+    });
+
   // `list_artists` + `resolve_artist` → `admin artists resolve` (Convention B). The
   // on-box `fluncle-artist-sweep` cron drives BOTH modes: `--queue` reads the resolve
   // worklist (artists awaiting resolution), and `resolve <artistId>` triggers the
@@ -2882,6 +2895,87 @@ async function runBackfillArtistImages(
 
   for (const item of failed) {
     console.log(`  ${item.artistId}: ${item.error}`);
+  }
+
+  if (failed.length > 0) {
+    process.exitCode = 1;
+  }
+}
+
+async function runBackfillLabelImages(
+  options: BackfillSyncOptions,
+  backfillLabelImagesCommand: typeof import("./commands/admin-labels").backfillLabelImagesCommand,
+): Promise<void> {
+  const limit = parseListLimit(options.limit);
+  const resolved: string[] = [];
+  const none: string[] = [];
+  const failed: Array<{ error: string; slug: string }> = [];
+  let cursor: string | undefined;
+  let dryRun = options.dryRun;
+  let throttled = false;
+
+  // The cap is on labels actually HANDLED (resolved + none + failed); the loop drains cursors
+  // until the cap is met, the worklist is exhausted (nextCursor null), or a vendor throttles.
+  while (resolved.length + none.length + failed.length < limit) {
+    const remaining = limit - (resolved.length + none.length + failed.length);
+    const result = await backfillLabelImagesCommand(remaining, options.dryRun, cursor);
+    dryRun = result.dryRun;
+    resolved.push(...result.resolved);
+    none.push(...result.none);
+    failed.push(...result.failed);
+
+    if (!options.json) {
+      const verb = result.dryRun ? "would resolve" : "resolved";
+      console.log(
+        `  …${verb} ${result.resolvedCount}; ${result.noneCount} without an image; ${result.failedCount} failed`,
+      );
+    }
+
+    if (result.rateLimited) {
+      // Vendor circuit breaker tripped (MB/Discogs throttling). Stop looping the cursor — the
+      // next tick resumes from a fresh rate-limit window.
+      throttled = true;
+      break;
+    }
+
+    if (result.nextCursor === null) {
+      break;
+    }
+
+    cursor = result.nextCursor;
+  }
+
+  if (options.json) {
+    printJson({
+      dryRun,
+      failed,
+      failedCount: failed.length,
+      none,
+      noneCount: none.length,
+      ok: true,
+      rateLimited: throttled,
+      resolved,
+      resolvedCount: resolved.length,
+    });
+
+    if (failed.length > 0) {
+      process.exitCode = 1;
+    }
+
+    return;
+  }
+
+  const verb = dryRun ? "Would resolve" : "Resolved";
+  console.log(
+    `${verb} ${resolved.length} label logo(s); ${none.length} without an image; ${failed.length} failed.`,
+  );
+
+  for (const slug of resolved) {
+    console.log(`  ${slug}`);
+  }
+
+  for (const item of failed) {
+    console.log(`  ${item.slug}: ${item.error}`);
   }
 
   if (failed.length > 0) {

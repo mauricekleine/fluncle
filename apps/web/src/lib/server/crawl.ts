@@ -61,6 +61,7 @@
 import { linkTracksToArtistEntities } from "./artists";
 import { getDb, typedRows } from "./db";
 import { parseDiscogsUrl } from "./discogs";
+import { setLabelMbLabelId } from "./label-images";
 import { ensureLabel, labelSlug, listLabels } from "./labels";
 import { logEvent } from "./log";
 import { mbFetch } from "./musicbrainz";
@@ -695,6 +696,13 @@ async function expandSeedLabel(node: FrontierRow): Promise<Expansion> {
       next: { cursor: 0, note: "no exact MusicBrainz label match", state: "skipped" },
     };
   }
+
+  // Persist the MBID the walk already resolved — the label-image sweep reads it to skip its own
+  // MB search (and it is the label's durable KG anchor). Non-clobbering + best-effort: it never
+  // fights the sweep and a failure here must not derail the crawl. See label-images.ts.
+  await setLabelMbLabelId(label.slug, match.id).catch((error) => {
+    logEvent("warn", "crawl.persist-mb-label-id-failed", { error, slug: label.slug });
+  });
 
   const enqueued = await enqueue({
     externalId: match.id,

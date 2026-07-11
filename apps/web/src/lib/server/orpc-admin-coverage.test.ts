@@ -211,6 +211,7 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "POST /admin/backfill/artist-images": "backfill_artist_images",
   "POST /admin/backfill/artists": "backfill_artists",
   "POST /admin/backfill/discogs": "backfill_discogs",
+  "POST /admin/backfill/label-images": "backfill_label_images",
   "POST /admin/backfill/lastfm": "backfill_lastfm",
   // The catalogue crawler's bounded pass — contract-only oRPC (no TanStack route file).
   // ADMIN tier (agent-allowed): the on-box `fluncle-crawl` sweep drives it with the agent

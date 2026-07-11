@@ -48,6 +48,8 @@ type LabelPageData =
       catalogue: CatalogueGroupPage<CatalogueArtistGroup>;
       findings: TrackListItem[];
       indexable: boolean;
+      /** The label's OWN logo (resolved Discogs/Wikidata image on R2), or undefined. */
+      logoImageUrl: string | undefined;
       name: string;
       slug: string;
       sort: CatalogueSort;
@@ -138,7 +140,7 @@ function labelHead(loaderData: LabelPageData | undefined) {
     return {};
   }
 
-  const { artists, catalogue, findings, indexable, name, slug } = loaderData;
+  const { artists, catalogue, findings, indexable, logoImageUrl, name, slug } = loaderData;
   // The canonical is SELF-REFERENCING PER PAGE (page 2 is its own page, not a duplicate of page
   // 1) but SORT-COLLAPSING: it always drops the sort param, so `?sort=recent` and the default
   // A–Z view of the same page fold to one canonical URL rather than diluting each other. Page 1
@@ -147,6 +149,7 @@ function labelHead(loaderData: LabelPageData | undefined) {
     catalogue.page > 1
       ? `${siteUrl}/label/${slug}?page=${catalogue.page}`
       : `${siteUrl}/label/${slug}`;
+  const pageUrl = `${siteUrl}/label/${slug}`;
   // The <title>/meta stay honestly-plain third-person (the Narrator rule); the first person
   // lives only in the on-page voice frame.
   const title = `${name} · Fluncle's Findings`;
@@ -158,8 +161,11 @@ function labelHead(loaderData: LabelPageData | undefined) {
     findings.length > 0
       ? `Every banger Fluncle has found on ${name} and logged in the Galaxy, ${findings.length} so far, each with a coordinate.`
       : `The records released on ${name}, charted in Fluncle's Galaxy.`;
+  // The label's representative image, up the same ladder every surface uses: its OWN logo first,
+  // then the freshest finding's cover, then the site cover as the final floor.
   const coverFinding = findings[0];
   const imageUrl =
+    logoImageUrl ??
     (coverFinding ? spotifyAlbumImageAtSize(coverFinding.albumImageUrl, "large") : undefined) ??
     `${siteUrl}/fluncle-cover.png`;
 

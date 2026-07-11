@@ -22,6 +22,7 @@
 import { randomUUID } from "node:crypto";
 import { type LabelAdminItem, type LabelSeedState } from "@fluncle/contracts";
 import { slugify } from "@fluncle/contracts/util/galaxy-slug";
+import { labelLogoUrl } from "../media";
 import { getDb, typedRows } from "./db";
 
 // The thin-content gate for label pages: a `/label/<slug>` page indexes (and enters the
@@ -171,6 +172,11 @@ export async function linkTrackToLabel(
 /** The canonical label identity record the public page + JSON-LD read. */
 export type LabelRecord = {
   id: string;
+  /**
+   * The label's OWN logo (its resolved Discogs/Wikidata image on R2), or undefined when it has
+   * none yet — the caller then falls back to the freshest finding's cover. See label-images.ts.
+   */
+  logoImageUrl: string | undefined;
   name: string;
   slug: string;
 };
@@ -185,9 +191,11 @@ export type LabelIndexEntry = {
    * lands.
    */
   catalogueCount: number;
-  /** The label's cover — its freshest finding's Spotify album art. */
+  /** The label's cover — its freshest finding's Spotify album art (the fallback for the logo). */
   coverImageUrl: string | undefined;
   findingCount: number;
+  /** The label's OWN logo (its resolved Discogs/Wikidata image on R2), or undefined. */
+  logoImageUrl: string | undefined;
   /** ISO of the label's freshest finding — the sitemap `lastmod`. */
   lastmod: string | undefined;
   name: string;
@@ -199,12 +207,14 @@ export async function getLabelBySlug(slug: string): Promise<LabelRecord | undefi
   const db = await getDb();
   const result = await db.execute({
     args: [slug],
-    sql: `select ${LABEL_COLUMNS} from labels where slug = ? limit 1`,
+    sql: `select ${LABEL_COLUMNS}, image_key from labels where slug = ? limit 1`,
   });
 
-  const row = typedRows<LabelRow>(result.rows)[0];
+  const row = typedRows<LabelRow & { image_key: string | null }>(result.rows)[0];
 
-  return row ? { id: row.id, name: row.name, slug: row.slug } : undefined;
+  return row
+    ? { id: row.id, logoImageUrl: labelLogoUrl(row.image_key), name: row.name, slug: row.slug }
+    : undefined;
 }
 
 /**
@@ -241,7 +251,9 @@ export async function getLabelForAlbum(albumId: string): Promise<LabelRecord | u
 
   const row = typedRows<{ id: string; name: string; slug: string }>(result.rows)[0];
 
-  return row ? { id: row.id, name: row.name, slug: row.slug } : undefined;
+  // The album → label edge closes the graph in JSON-LD (recordLabel) — a name/slug pointer,
+  // never an image — so the logo is deliberately left undefined here.
+  return row ? { id: row.id, logoImageUrl: undefined, name: row.name, slug: row.slug } : undefined;
 }
 
 /**
@@ -257,7 +269,7 @@ export async function getLabelForAlbum(albumId: string): Promise<LabelRecord | u
 export async function listLabelsWithFindingCounts(): Promise<LabelIndexEntry[]> {
   const db = await getDb();
   const result = await db.execute({
-    sql: `select labels.name as name, labels.slug as slug,
+    sql: `select labels.name as name, labels.slug as slug, labels.image_key as image_key,
                  count(*) as finding_count,
                  (select count(*) from tracks t3
                     left join findings f3 on f3.track_id = t3.track_id
@@ -279,6 +291,7 @@ export async function listLabelsWithFindingCounts(): Promise<LabelIndexEntry[]> 
     catalogue_count: number;
     cover_url: string | null;
     finding_count: number;
+    image_key: string | null;
     lastmod: string | null;
     name: string;
     slug: string;
@@ -287,6 +300,7 @@ export async function listLabelsWithFindingCounts(): Promise<LabelIndexEntry[]> 
     coverImageUrl: row.cover_url ?? undefined,
     findingCount: Number(row.finding_count),
     lastmod: row.lastmod ?? undefined,
+    logoImageUrl: labelLogoUrl(row.image_key),
     name: row.name,
     slug: row.slug,
   }));

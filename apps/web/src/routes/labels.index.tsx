@@ -88,7 +88,9 @@ function LabelsPage() {
                   <TrackArtwork
                     alt=""
                     className="artist-grid-cover"
-                    src={spotifyAlbumImageAtSize(label.coverImageUrl, "large")}
+                    src={
+                      label.logoImageUrl ?? spotifyAlbumImageAtSize(label.coverImageUrl, "large")
+                    }
                   />
                   <span className="artist-grid-line">{label.name}</span>
                   <span className="artist-grid-count">{findingsCount(label.findingCount)}</span>

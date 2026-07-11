@@ -93,7 +93,7 @@ export {
   AttentionSourceSchema,
   getAttention,
 } from "./admin-attention";
-export { backfillDiscogs, backfillLastfm } from "./admin-backfills";
+export { backfillDiscogs, backfillLabelImages, backfillLastfm } from "./admin-backfills";
 export {
   adminCatalogueContract,
   CapturePriorityReasonSchema,
