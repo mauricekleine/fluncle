@@ -24,22 +24,32 @@ export const sampleCurve = (curve: EnergySample[], timeMs: number): number => {
     return last.energy;
   }
 
-  // Linear scan is fine: curves are short (one sample per ~frame at most) and
-  // a render walks frames forward, so this stays cheap and branch-predictable.
-  for (let i = 1; i < curve.length; i++) {
-    const next = curve[i];
-    if (timeMs <= next.timeMs) {
-      const prev = curve[i - 1];
-      const span = next.timeMs - prev.timeMs;
-      if (span <= 0) {
-        return next.energy;
-      }
-      const t = (timeMs - prev.timeMs) / span;
-      return prev.energy + (next.energy - prev.energy) * t;
+  // Binary search for the bracketing segment. `sampleCurve` is called ~12× per
+  // band per frame (smoothCurveAtFrame's lookback walk) across ~13 bands, and the
+  // curve holds one sample per frame — so on an hour-long set render a linear scan
+  // would trend O(N²). lower_bound: find the leftmost index `hi` in [1, len-1] with
+  // curve[hi].timeMs >= timeMs (the clamp guards above already proved one exists,
+  // and that curve[0].timeMs < timeMs so the answer is never 0). With duplicate
+  // timeMs values this lands on the FIRST match, identical to the old forward scan.
+  let lo = 1;
+  let hi = curve.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (curve[mid].timeMs >= timeMs) {
+      hi = mid;
+    } else {
+      lo = mid + 1;
     }
   }
 
-  return last.energy;
+  const next = curve[lo];
+  const prev = curve[lo - 1];
+  const span = next.timeMs - prev.timeMs;
+  if (span <= 0) {
+    return next.energy;
+  }
+  const t = (timeMs - prev.timeMs) / span;
+  return prev.energy + (next.energy - prev.energy) * t;
 };
 
 /**

@@ -1,6 +1,6 @@
 // Bundle + render a registered composition to an mp4 via Remotion SSR.
 
-import { existsSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, readdirSync, rmSync, statSync } from "node:fs";
 import path from "node:path";
 
 import { bundle } from "@remotion/bundler";
@@ -28,6 +28,11 @@ const BUNDLE_CACHE_ROOT = path.resolve(import.meta.dirname, "../../.cache/remoti
 // cache-hit marker (a directory that exists but never finished bundling —
 // e.g. a killed process — will not have it, so the next call re-bundles).
 const BUNDLE_MARKER_FILE = "index.html";
+// A cache dir is only prunable once its mtime is older than this. 6h is far above
+// any single bundle+render (minutes) yet short enough that abandoned dirs don't
+// accumulate — the guard that stops a prune from deleting a CONCURRENT render's
+// still-writing bundle (the repo runs 3–4 renders at once).
+const PRUNE_STALE_MS = 6 * 60 * 60 * 1000;
 
 export type RenderResult = {
   outputPath: string;
@@ -68,11 +73,29 @@ async function resolveBundle(): Promise<string> {
 
   // Prune stale hash dirs (best-effort) so an active edit loop doesn't grow
   // the cache unboundedly — only the current hash's bundle is worth keeping.
+  // BUT the repo runs 3–4 concurrent renders (AGENTS.md), and a second process
+  // with a DIFFERENT input hash is mid-bundle in its own dir here — deleting it
+  // would corrupt a live render. So prune only dirs that look STALE: skip any
+  // whose mtime is within PRUNE_STALE_MS. A bundle() writes files continuously
+  // while running, so an in-flight dir always has a fresh mtime; the threshold
+  // sits comfortably above any single bundle+render wall time (minutes) so an
+  // active peer is never in the crosshairs, while genuinely abandoned dirs
+  // (killed process, old input tree) still get reclaimed on the next miss.
   try {
+    const now = Date.now();
     for (const name of readdirSync(BUNDLE_CACHE_ROOT)) {
-      if (name !== hash) {
-        rmSync(path.join(BUNDLE_CACHE_ROOT, name), { force: true, recursive: true });
+      if (name === hash) {
+        continue;
       }
+      const dir = path.join(BUNDLE_CACHE_ROOT, name);
+      try {
+        if (now - statSync(dir).mtimeMs < PRUNE_STALE_MS) {
+          continue; // recently touched — possibly a concurrent render's live bundle
+        }
+      } catch {
+        continue; // vanished under us (a peer's own prune) — leave it be
+      }
+      rmSync(dir, { force: true, recursive: true });
     }
   } catch {
     // BUNDLE_CACHE_ROOT not created yet, or a race with another process —

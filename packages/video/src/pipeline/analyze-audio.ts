@@ -53,8 +53,9 @@ const BPM_SEARCH_MAX = 200;
 const HALF_TIME_MIN = 70;
 const HALF_TIME_MAX = 100;
 
-/** Minimal PCM WAV (s16le or f32) reader. Returns mono float samples. */
-function decodeWav(buf: Buffer): DecodedWav {
+/** Minimal PCM WAV (s16le or f32) reader. Returns mono float samples.
+ *  Exported for the truncation unit test. */
+export function decodeWav(buf: Buffer): DecodedWav {
   if (buf.toString("ascii", 0, 4) !== "RIFF" || buf.toString("ascii", 8, 12) !== "WAVE") {
     throw new Error("analyzeAudio: not a RIFF/WAVE file");
   }
@@ -85,6 +86,19 @@ function decodeWav(buf: Buffer): DecodedWav {
 
   if (dataOffset < 0) {
     throw new Error("analyzeAudio: no data chunk in wav");
+  }
+
+  // Trust the buffer, not the header. A truncated download leaves a data-chunk
+  // header that still declares the ORIGINAL size, so the sample loop below would
+  // readInt16LE/readFloatLE past the end of `buf` and throw an opaque RangeError.
+  // Bound the length to what actually follows the data offset (floor 0), and when
+  // the header over-declares, fail with a named diagnosis the enrichment cron can
+  // log instead of a bare stack trace.
+  const availableBytes = Math.max(0, buf.length - dataOffset);
+  if (dataLength > availableBytes) {
+    throw new Error(
+      `analyzeAudio: truncated wav — the data chunk header declares ${dataLength} bytes but only ${availableBytes} follow the data offset`,
+    );
   }
 
   const frameCount = Math.floor(dataLength / ((bitsPerSample / 8) * numChannels));
