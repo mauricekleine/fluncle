@@ -30,6 +30,7 @@ import { artistsContract } from "./artists";
 import { galaxiesContract } from "./galaxies";
 import { adminEditionsContract } from "./admin-editions";
 import { adminHealthContract } from "./admin-health";
+import { adminLabelsContract } from "./admin-labels";
 import { adminLogbookContract } from "./admin-logbook";
 import { adminMigrationsContract } from "./admin-migrations";
 import { adminMixtapesContract } from "./admin-mixtapes";
@@ -86,6 +87,13 @@ export {
   getAttention,
 } from "./admin-attention";
 export { backfillDiscogs, backfillLastfm } from "./admin-backfills";
+export {
+  adminLabelsContract,
+  LabelAdminItemSchema,
+  LabelSeedStateSchema,
+  listLabelsAdmin,
+  updateLabel,
+} from "./admin-labels";
 export { adminMigrationsContract, migratePreviewArchive } from "./admin-migrations";
 export { type CostEventInput, CostEventInputSchema, recordCost } from "./admin-costs";
 export { recordHealth, ServiceHealthStatusSchema } from "./admin-health";
@@ -220,6 +228,7 @@ export const contract = {
   ...galaxiesContract,
   ...adminEditionsContract,
   ...adminHealthContract,
+  ...adminLabelsContract,
   ...adminLogbookContract,
   ...adminMigrationsContract,
   ...adminMixtapesContract,

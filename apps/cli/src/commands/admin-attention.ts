@@ -24,6 +24,7 @@ const SOURCE_LABELS: Record<AttentionSource, string> = {
   "attach-cues": "cues",
   distribute: "distribute",
   "drip-empty": "clip drip",
+  "label-review": "label",
   newsletter: "newsletter",
   "post-tiktok": "tiktok",
   "post-youtube": "youtube",

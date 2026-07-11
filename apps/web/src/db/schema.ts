@@ -1293,6 +1293,50 @@ export const artistSocials = sqliteTable(
   ],
 );
 
+// The record LABEL — a first-class entity, and the operator's CRAWL-SEED control.
+//
+// `tracks.label` stays what it has always been: the raw captured string Deezer
+// handed back on the add. This table is its normalized twin, related by `slug`
+// (`slugify(tracks.label) = labels.slug`), so `Pilot.` and `Pilot` fold into one
+// label without a destructive rewrite of the findings. Every label appearing on a
+// finding gets a row automatically (the publish path upserts it; the deploy-time
+// reconcile is the self-healing backstop).
+//
+// ── `seed_state` IS CRAWL SCOPE, NEVER STORAGE ──────────────────────────────────
+// This column answers exactly one question: MAY THE FUTURE CATALOGUE CRAWLER SEED
+// FROM THIS LABEL? Nothing else. It is the operator's explicit ruling, and it must
+// stay that way in every reader:
+//   - `enabled`    — the next crawl may seed from this label.
+//   - `disabled`   — the next crawl may NOT. It removes the label from the NEXT
+//                    crawl's seed set and touches NOTHING already stored: no
+//                    deletion, no hiding, no retroactive effect on tracks, on
+//                    findings, or on anything a previous crawl already brought in.
+//                    A disabled label's findings keep rendering exactly as before.
+//   - `undecided`  — the operator has not ruled yet. A brand-new label enters HERE
+//                    (the DDL default): never silently crawled, never silently
+//                    dropped. It surfaces as an `/admin` attention row until ruled.
+// "What we crawl FROM" and "what we KEEP" are separate concepts. Never join this
+// column to a read that decides what is shown, kept, or deleted.
+//
+// `ruled_at` is the OPERATOR's stamp — set only by the operator-tier `update_label`
+// write. NULL means no human has ruled this label, which is what lets the one-time
+// D7 bootstrap (scripts/backfill-labels.ts) seed a state without ever clobbering an
+// operator's decision. `slug` is the identity + the join key. Nothing consumes the
+// enabled set yet (the crawler does not exist); `list_labels_admin?seedState=enabled`
+// is where it will read it. See docs/label-entity.md.
+export const labels = sqliteTable("labels", {
+  createdAt: text("created_at").notNull(),
+  id: text("id").primaryKey(),
+  // The display name — the first raw `tracks.label` spelling seen for this slug.
+  name: text("name").notNull(),
+  ruledAt: text("ruled_at"),
+  seedState: text("seed_state", { enum: ["enabled", "disabled", "undecided"] })
+    .notNull()
+    .default("undecided"),
+  slug: text("slug").notNull().unique(),
+  updatedAt: text("updated_at").notNull(),
+});
+
 // A newsletter EDITION — the weekly dispatch from the mothership, now persisted so
 // every Friday letter has a permanent home.
 // Modeled on the `mixtapes` table SHAPE (own table + counter + a draft→sent

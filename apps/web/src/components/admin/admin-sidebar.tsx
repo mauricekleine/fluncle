@@ -13,6 +13,7 @@ import {
   ReceiptIcon,
   SignOutIcon,
   SquaresFourIcon,
+  TagIcon,
   UsersThreeIcon,
   VinylRecordIcon,
   WaveTriangleIcon,
@@ -69,6 +70,7 @@ export type AdminNavCurrent =
   | "dashboard"
   | "findings"
   | "galaxies"
+  | "labels"
   | "mixable-order"
   | "mixtapes"
   | "newsletter"
@@ -88,6 +90,7 @@ type AdminNavPath =
   | "/admin/costs"
   | "/admin/findings"
   | "/admin/galaxies"
+  | "/admin/labels"
   | "/admin/mixable-order"
   | "/admin/mixtapes"
   | "/admin/newsletter"
@@ -152,6 +155,7 @@ const OBJECT_SECTIONS: NavSection[] = [
         to: "/admin/renders",
       },
       { icon: UsersThreeIcon, key: "artists", label: "Artists", to: "/admin/artists" },
+      { icon: TagIcon, key: "labels", label: "Labels", to: "/admin/labels" },
       { icon: PlanetIcon, key: "galaxies", label: "Galaxies", to: "/admin/galaxies" },
     ],
     key: "objects",

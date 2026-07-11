@@ -11,6 +11,7 @@ import { enrichFromDeezer, lookupIsrcFromDeezer } from "./deezer";
 import { discogsResolveRelease } from "./discogs";
 import { purgeLogCache } from "./edge-cache";
 import { submitFindingToIndexNow } from "./indexnow";
+import { ensureLabel } from "./labels";
 import { lastfmLove } from "./lastfm";
 import { resolveLogId } from "./log-id";
 import { notifyNewFinding } from "./push";
@@ -210,6 +211,17 @@ No database, Spotify, or Telegram changes were made. Enrichment (label, preview)
     await upsertTrackArtists(track.trackId, track.artists, track.spotifyArtistIds);
   } catch (artistError) {
     console.warn("publishTrack: artist entity upsert failed (non-fatal)", artistError);
+  }
+
+  // Best-effort: mint the label entity for the label Deezer just handed back. A brand-new
+  // label enters `undecided` — never silently crawled, never silently dropped — and lands
+  // in the operator's attention queue as a label to rule on. Purely additive: it writes
+  // one `labels` row and touches nothing else, so a failure never blocks the publish (the
+  // deploy-time reconcile in scripts/backfill-labels.ts backstops it).
+  try {
+    await ensureLabel(deezer.label);
+  } catch (labelError) {
+    console.warn("publishTrack: label entity upsert failed (non-fatal)", labelError);
   }
 
   try {

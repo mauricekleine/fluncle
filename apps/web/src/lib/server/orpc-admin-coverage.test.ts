@@ -95,6 +95,12 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // the public `list_` prefix so the "holds exactly" check skips it; it lives here for
   // completeness. Admin tier (agent-allowed — the `fluncle-cluster` cron reads it).
   "GET /admin/galaxies": "list_galaxies_admin",
+  // The label entity + the operator's crawl-seed control — contract-only oRPC (no TanStack
+  // route file; oRPC owns the path directly). Admin tier (agent-allowed read): the future
+  // catalogue crawler reads its seed set here (`?seedState=enabled`). `list_labels_admin`
+  // matches the public `list_` prefix so the "holds exactly" check skips it; it lives here
+  // for completeness (like `list_galaxies_admin`).
+  "GET /admin/labels": "list_labels_admin",
   "GET /admin/lastfm/auth/start": "start_lastfm_auth",
   // The logbook sweep's gap+material read — contract-only oRPC (no TanStack route
   // file; oRPC owns the path directly). Admin tier (agent-allowed). `list_logbook_gaps`
@@ -141,6 +147,10 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // TanStack route file). OPERATOR tier: naming mints a public URL, so the agent token
   // 403s (the `note`/OPERATOR_ONLY precedent).
   "PATCH /admin/galaxies/{id}": "update_galaxy",
+  // The operator's ruling on a label's crawl-seed state — contract-only oRPC (no TanStack
+  // route file). OPERATOR tier: it steers what Fluncle crawls next (an editorial act), so
+  // the agent token 403s. It changes no stored data — crawl scope, never storage.
+  "PATCH /admin/labels/{id}": "update_label",
   // The operator's logbook overwrite/edit — contract-only oRPC (no TanStack route
   // file). Operator tier: it can replace a cron-authored entry, so the agent 403s.
   "PATCH /admin/logbook/{sector}": "update_logbook_entry",

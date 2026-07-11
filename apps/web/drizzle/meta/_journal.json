@@ -456,6 +456,13 @@
       "when": 1783766282035,
       "tag": "0064_cooing_wasp",
       "breakpoints": true
+    },
+    {
+      "idx": 65,
+      "version": "6",
+      "when": 1783768516296,
+      "tag": "0065_flimsy_deathstrike",
+      "breakpoints": true
     }
   ]
 }
