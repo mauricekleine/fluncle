@@ -235,6 +235,53 @@ export async function listArtistsWithFindingCounts(): Promise<ArtistIndexEntry[]
   return entries;
 }
 
+/** An artist chip on a graph page (the label's roster, the album's credits). */
+export type ArtistChip = {
+  imageUrl: string | undefined;
+  name: string;
+  slug: string;
+};
+
+/**
+ * Every artist Fluncle has a coordinate-bearing finding from ON one label / ON one album —
+ * the artist row that cross-links a graph page back into the artist half of the graph.
+ * Alphabetical; an artist appears once however many findings they have here.
+ *
+ * `column` is a CONSTANT from the call sites below (never user input); the id is bound.
+ */
+async function listArtistsByEntity(
+  column: "tracks.album_id" | "tracks.label_id",
+  entityId: string,
+): Promise<ArtistChip[]> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [entityId],
+    sql: `select distinct a.name as name, a.slug as slug, a.image_url as image_url
+          from artists a
+          join track_artists ta on ta.artist_id = a.id
+          join tracks on tracks.track_id = ta.track_id
+          join findings on findings.track_id = tracks.track_id
+          where ${column} = ? and findings.log_id is not null
+          order by a.name collate nocase asc`,
+  });
+
+  return typedRows<{ image_url: string | null; name: string; slug: string }>(result.rows).map(
+    (row) => ({
+      imageUrl: optionalText(row.image_url),
+      name: row.name,
+      slug: row.slug,
+    }),
+  );
+}
+
+export async function listArtistsByLabel(labelId: string): Promise<ArtistChip[]> {
+  return listArtistsByEntity("tracks.label_id", labelId);
+}
+
+export async function listArtistsByAlbum(albumId: string): Promise<ArtistChip[]> {
+  return listArtistsByEntity("tracks.album_id", albumId);
+}
+
 /** A public artist list item — the `list_artists` / `get_artist` API shape. */
 export type ArtistListItem = {
   findingCount: number;

@@ -73,9 +73,60 @@ export type LabelsBackfillResult = {
   bootstrapped: boolean;
   disabled: number;
   enabled: number;
+  /** Tracks whose `label_id` pointer this run stamped (step 1b). */
+  linked: number;
   minted: number;
   undecided: number;
 };
+
+/**
+ * Stamp `tracks.label_id` on every track that carries a label string, has no pointer yet,
+ * and has a `labels` row to point at — the indexed edge the public `/label/<slug>` page
+ * reads by (schema.ts). Shared shape with `backfill-albums.ts`.
+ *
+ * The fold happens here in TS (SQLite has no `slugify`), but what it folds is the UNLINKED
+ * set — drained through `tracks_label_id_idx`, and empty on a steady-state deploy — never
+ * the whole catalogue. This is the self-healing path by which a track written by ANY writer
+ * that does not know the column exists (an admin update, a future catalogue crawler) is
+ * linked into the graph.
+ */
+export async function linkTracksToLabels(client: Client): Promise<number> {
+  const unlinked = await client.execute({
+    sql: `select label from tracks
+          where label_id is null and label is not null and trim(label) <> ''
+          group by label`,
+  });
+
+  let linked = 0;
+
+  for (const row of unlinked.rows) {
+    const raw = asText(row.label).trim();
+    const slug = slugify(raw);
+
+    if (slug === "") {
+      continue;
+    }
+
+    const found = await client.execute({
+      args: [slug],
+      sql: `select id from labels where slug = ? limit 1`,
+    });
+    const labelId = found.rows[0]?.id;
+
+    if (typeof labelId !== "string") {
+      continue;
+    }
+
+    const updated = await client.execute({
+      args: [labelId, raw],
+      sql: `update tracks set label_id = ? where label_id is null and trim(label) = ?`,
+    });
+
+    linked += updated.rowsAffected;
+  }
+
+  return linked;
+}
 
 /** Coerce a libSQL scalar cell to text — these columns are TEXT, always strings. */
 function asText(value: unknown): string {
@@ -100,6 +151,7 @@ export async function backfillLabels(client: Client): Promise<LabelsBackfillResu
     bootstrapped: false,
     disabled: 0,
     enabled: 0,
+    linked: 0,
     minted: 0,
     undecided: 0,
   };
@@ -133,6 +185,10 @@ export async function backfillLabels(client: Client): Promise<LabelsBackfillResu
 
     result.minted += inserted.rowsAffected;
   }
+
+  // ── 1b. LINK (every deploy) — the `tracks.label_id` pointer for every track whose label
+  // now has a row. Runs AFTER the mint, so a label minted this very run is pointed at.
+  result.linked = await linkTracksToLabels(client);
 
   // ── 2. THE BOOTSTRAP (once, ever) — D7's starting ruling over the labels already in
   // the archive. Gated on the settings marker, so a label minted AFTER this deploy enters
@@ -212,7 +268,7 @@ async function main(): Promise<void> {
   const result = await backfillLabels(client);
 
   console.log(
-    `labels backfill: ${result.minted} minted · ${result.enabled} enabled, ` +
+    `labels backfill: ${result.minted} minted · ${result.linked} linked · ${result.enabled} enabled, ` +
       `${result.disabled} skipped, ${result.undecided} undecided` +
       `${result.bootstrapped ? " (D7 bootstrap applied)" : ""}.`,
   );

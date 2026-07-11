@@ -542,6 +542,111 @@ export async function getFindingsByArtist(
 }
 
 /**
+ * Every coordinate-bearing finding on one label / one album, newest-first — the cover grid
+ * that LEADS each graph page. Reads through the `tracks.label_id` / `tracks.album_id`
+ * pointer (an indexed seek, never a fold over the catalogue; see schema.ts) and drives
+ * from `FINDINGS_FROM`, so it can only ever return findings.
+ */
+export async function getFindingsByLabel(labelId: string): Promise<TrackListItem[]> {
+  return findingsByEntity("tracks.label_id", labelId);
+}
+
+export async function getFindingsByAlbum(albumId: string): Promise<TrackListItem[]> {
+  return findingsByEntity("tracks.album_id", albumId);
+}
+
+// The shared body of the two above. `column` is a CONSTANT from this module (never user
+// input) — the value is always bound.
+async function findingsByEntity(
+  column: "tracks.album_id" | "tracks.label_id",
+  entityId: string,
+): Promise<TrackListItem[]> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [entityId],
+    sql: `select ${TRACK_SELECT} from ${FINDINGS_FROM}
+          where ${column} = ? and findings.log_id is not null
+          order by findings.added_at desc, tracks.track_id desc`,
+  });
+
+  return typedRows<TrackRow>(result.rows).map(toTrackListItem);
+}
+
+/**
+ * A track Fluncle KNOWS OF but has never certified — a `tracks` row with no `findings`
+ * row. The other half of a graph page: the rest of the record, the rest of the imprint.
+ *
+ * ── THE ANTI-JOIN, AND WHY IT IS THE ONE READ THAT DOES NOT USE `FINDINGS_FROM` ────────
+ * Every other read in this module drives through the inner finding join, which is what
+ * makes it structurally impossible to mistake a catalogue track for a finding. This read
+ * wants exactly the complement — `left join findings … where findings.track_id is null` —
+ * so it states that inversion explicitly, and its return type is a DIFFERENT type
+ * (`CatalogueTrackItem`) that carries NO `logId`, NO note, NO video, NO coordinate. There
+ * is nothing on it a finding surface could render, so a row from here cannot leak into one
+ * by accident; the type system is doing the same job the inner join does elsewhere.
+ *
+ * The pages render these rows UNLIT (DESIGN.md): quieter, uncoordinated, and linking OUT
+ * (a track with no Log ID has no page of its own to link to). They are never introduced,
+ * never named, never counted aloud — a finding is the only named object in Fluncle's
+ * world.
+ *
+ * TODAY IT RETURNS NOTHING. Every `tracks` row is certified, so the anti-join is empty by
+ * construction until the catalogue lands. The pages degrade to nothing rather than to a
+ * dangling heading.
+ */
+export type CatalogueTrackItem = {
+  albumImageUrl: string | undefined;
+  artists: string[];
+  /** Null when the track has no Spotify presence at all (a catalogue-only resolve). */
+  spotifyUrl: string | undefined;
+  title: string;
+  trackId: string;
+};
+
+type CatalogueTrackRow = {
+  album_image_url: string | null;
+  artists_json: string;
+  spotify_url: string | null;
+  title: string;
+  track_id: string;
+};
+
+export async function listCatalogueTracksByLabel(labelId: string): Promise<CatalogueTrackItem[]> {
+  return catalogueTracksByEntity("tracks.label_id", labelId);
+}
+
+export async function listCatalogueTracksByAlbum(albumId: string): Promise<CatalogueTrackItem[]> {
+  return catalogueTracksByEntity("tracks.album_id", albumId);
+}
+
+// `column` is a CONSTANT from this module (never user input); the value is always bound.
+// The predicate is an indexed seek on the entity pointer (`tracks_{album,label}_id_idx`),
+// so this stays a seek as the catalogue grows — the reason the pointer columns exist.
+async function catalogueTracksByEntity(
+  column: "tracks.album_id" | "tracks.label_id",
+  entityId: string,
+): Promise<CatalogueTrackItem[]> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [entityId],
+    sql: `select tracks.track_id, tracks.title, tracks.artists_json, tracks.album_image_url,
+                 tracks.spotify_url
+          from tracks
+          left join findings on findings.track_id = tracks.track_id
+          where ${column} = ? and findings.track_id is null
+          order by tracks.title collate nocase asc`,
+  });
+
+  return typedRows<CatalogueTrackRow>(result.rows).map((row) => ({
+    albumImageUrl: row.album_image_url ?? undefined,
+    artists: parseArtistsJson(row.artists_json),
+    spotifyUrl: row.spotify_url ?? undefined,
+    title: row.title,
+    trackId: row.track_id,
+  }));
+}
+
+/**
  * Read the INTERNAL `context_note` for a track (the Firecrawl-derived facts).
  * `context_note` is deliberately OUTSIDE `TRACK_SELECT` (internal-only fuel,
  * never surfaced through `toTrackListItem`), so the observe steps read it

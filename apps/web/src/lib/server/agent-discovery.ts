@@ -224,6 +224,8 @@ ${tracks.join("\n")}
 - [Random track](${siteUrl}/api/v1/tracks/random): one pick from the archive, as JSON
 - [Artists API](${siteUrl}/api/v1/artists): every artist with a published finding, most findings first, as JSON; /api/v1/artists/{slug} for one artist. Each resolves to a page at ${siteUrl}/artist/{slug}: that artist's findings plus their verified identity links (MusicGroup + sameAs)
 - [Mixtapes API](${siteUrl}/api/v1/mixtapes): Fluncle's own DJ mixtapes as JSON, each a checkpoint set with an F-marked Log ID and its tracklist; browse them at ${siteUrl}/mixtapes${galaxiesLine}
+- [The labels](${siteUrl}/labels): every record label Fluncle has found a banger on. Each resolves to a page at ${siteUrl}/label/{slug}: that label's findings, the artists on it, and the rest of its catalogue
+- [The albums](${siteUrl}/albums): every record Fluncle has found a banger on. Each resolves to a page at ${siteUrl}/album/{slug}: that record's findings, its artists, and the label it came out on
 
 ## Submit
 
@@ -292,6 +294,8 @@ ${omitted > 0 ? `\n_${omitted} older findings omitted here; page the rest at ${s
 - The Telegram feed: ${telegramUrl}
 - The JSON API: ${siteUrl}/api/v1/tracks
 - The artists: ${siteUrl}/api/v1/artists
+- The labels: ${siteUrl}/labels
+- The albums: ${siteUrl}/albums
 - The mixtapes: ${siteUrl}/api/v1/mixtapes${galaxiesLive ? `\n- The sonic galaxies: ${siteUrl}/api/v1/galaxies` : ""}
 - The MCP server: ${siteUrl}/mcp
 `;

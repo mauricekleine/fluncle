@@ -5,6 +5,7 @@
 
 import {
   CassetteTapeIcon,
+  VinylRecordIcon,
   EnvelopeSimpleIcon,
   FadersIcon,
   type IconWeight,
@@ -40,6 +41,7 @@ type PhosphorIcon = (props: { className?: string; weight?: IconWeight }) => Reac
 // lives in the social map below, so it is intentionally absent here.
 const phosphorById: Record<string, PhosphorIcon> = {
   about: InfoIcon,
+  albums: VinylRecordIcon,
   artists: UsersThreeIcon,
   galaxies: PlanetIcon,
   labels: TagIcon,

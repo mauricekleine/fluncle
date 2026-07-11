@@ -8,9 +8,9 @@
 // model without pulling in the whole component tree — and lets a crawler-facing
 // footer be built from it deterministically.
 //
-// Fluncle is a GRAPH archive: the log is the trunk (findings ↔ artists ↔ galaxies ↔
-// the logbook, with LABEL pages landing soon). This model is that trunk in nav form;
-// the in-page cross-links (the /log prose galaxy + artist links) are the branches.
+// Fluncle is a GRAPH archive: the log is the trunk (findings ↔ artists ↔ labels ↔ albums
+// ↔ galaxies ↔ the logbook). This model is that trunk in nav form; the in-page cross-links
+// (the /log prose galaxy + artist links, the album → label uplink) are the branches.
 //
 // The architecture is the LOGBOOK COLOPHON (ratified): a minimal top bar carrying
 // only the wordmark + a per-page breadcrumb, with the whole nav weight banked in a
@@ -52,9 +52,10 @@ export type NavItem = {
   /** A one-line gloss for the roomy surfaces (the drawer, the colophon). Fluncle voice. */
   blurb?: string;
   /**
-   * Not yet shipped (LABEL pages). Kept in the model so the slot is designed and a
-   * single `enabled: true` lights it up the day the route lands — never rendered as
-   * a live link meanwhile (no 404s in the nav).
+   * Designed but not yet shipped. Kept in the model so the slot exists and deleting this
+   * one flag lights it up the day the route lands — never rendered as a live link
+   * meanwhile (no 404s in the nav). Nothing carries it today: the Labels slot it was
+   * introduced for went live with the graph surfaces, alongside Albums.
    */
   future?: boolean;
   /**
@@ -129,11 +130,17 @@ const exploreItems: NavItem[] = [
   },
   {
     blurb: "The imprints behind the bangers.",
-    future: true,
     id: "labels",
     kind: "route",
     label: "Labels",
     to: "/labels",
+  },
+  {
+    blurb: "The records I pulled them off.",
+    id: "albums",
+    kind: "route",
+    label: "Albums",
+    to: "/albums",
   },
   {
     adminOnly: true,
