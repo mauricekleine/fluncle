@@ -23,6 +23,7 @@
     "@orpc/contract": "catalog:",
     "@orpc/openapi-client": "catalog:",
     "@orpc/tanstack-query": "catalog:",
+    "@react-native-async-storage/async-storage": "2.2.0",
     "@shopify/flash-list": "2.0.2",
     "@shopify/react-native-skia": "2.6.2",
     "@tanstack/react-query": "catalog:",
