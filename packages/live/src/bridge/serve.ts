@@ -136,6 +136,60 @@ export function selectVjIndex(
   };
 }
 
+/**
+ * Structurally validate one raw WS message into a ShowCommand, or `null` when it is not a
+ * well-formed command — a non-object, an unknown `cmd`, or a required field of the wrong
+ * type / a non-finite number. This is the WS half of the bridge's never-crash rail, the
+ * sibling of vj.ts's `parseTransition` on the UDP side: the socket carries arbitrary bytes,
+ * so a malformed frame is DROPPED here, never cast blindly and fed to the state machine.
+ * SEMANTIC ranges — the intensity clamp, the mel-frame length + per-bin finiteness — are the
+ * state machine's job (`state.ts` owns the dials + the matcher feed); this gate only proves
+ * the SHAPE so `state.ingest` can trust the discriminant and field types. Pure, total, and
+ * never throws — cheap enough for the 10Hz mel hot path (a discriminant switch + typeof).
+ */
+export function parseCommand(raw: unknown): ShowCommand | null {
+  if (typeof raw !== "object" || raw === null) {
+    return null;
+  }
+  const msg = raw as {
+    cmd?: unknown;
+    frame?: unknown;
+    index?: unknown;
+    on?: unknown;
+    renderFrame?: unknown;
+    t?: unknown;
+    value?: unknown;
+  };
+  switch (msg.cmd) {
+    case "advance":
+      return { cmd: "advance" };
+    case "rewind":
+      return { cmd: "rewind" };
+    case "goto":
+      return typeof msg.index === "number" && Number.isFinite(msg.index)
+        ? { cmd: "goto", index: msg.index }
+        : null;
+    case "blackout":
+      return typeof msg.on === "boolean" ? { cmd: "blackout", on: msg.on } : null;
+    case "intensity":
+      return typeof msg.value === "number" && Number.isFinite(msg.value)
+        ? { cmd: "intensity", value: msg.value }
+        : null;
+    case "heartbeat":
+      return typeof msg.renderFrame === "number" && Number.isFinite(msg.renderFrame)
+        ? { cmd: "heartbeat", renderFrame: msg.renderFrame }
+        : null;
+    case "mel":
+      // The frame's length + per-bin finiteness are enforced by state.ts (the matcher feed);
+      // here it need only be a numeric-array shape with a finite timestamp.
+      return typeof msg.t === "number" && Number.isFinite(msg.t) && Array.isArray(msg.frame)
+        ? { cmd: "mel", frame: msg.frame as number[], t: msg.t }
+        : null;
+    default:
+      return null;
+  }
+}
+
 /** Build the plan (mixtape logId or plan handle) and fingerprint each planned finding. */
 async function boot(planRef?: string): Promise<Boot> {
   const plan = await buildPlan(planRef);
@@ -267,13 +321,23 @@ async function main(): Promise<void> {
         sockets.delete(ws);
       },
       message(_ws, raw) {
-        let cmd: ShowCommand;
+        // The never-crash rail (mirrors vj.ts's UDP listener): parse, structurally validate,
+        // then ingest inside a guard so a malformed frame is dropped and NEVER fatal.
+        let parsed: unknown;
         try {
-          cmd = JSON.parse(String(raw)) as ShowCommand;
+          parsed = JSON.parse(String(raw));
         } catch {
           return;
         }
-        state.ingest(cmd, Date.now());
+        const cmd = parseCommand(parsed);
+        if (cmd === null) {
+          return;
+        }
+        try {
+          state.ingest(cmd, Date.now());
+        } catch (err) {
+          console.error("bridge: WS ingest —", err);
+        }
       },
       open(ws) {
         sockets.add(ws);

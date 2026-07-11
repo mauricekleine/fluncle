@@ -13,6 +13,44 @@ import { shapeNormalize } from "./mel";
 const AUDIO_STALE_MS = 1_500;
 const AUDIO_SILENT_MS = 5_000;
 
+/**
+ * The operator-dial intensity range the bridge accepts. Both clients that emit `intensity`
+ * bound it: the glass keyboard (the reactive INPUT-drive headroom, floor 0.4 / ceiling 1.6 —
+ * `glass/client/main.ts`) and the phone remote (0.4..1.3 — `bridge/remote.ts`). The wire
+ * carries an unvalidated number rebroadcast to every socket at 30Hz and multiplied into the
+ * glass's drive, so a stray NaN / negative / huge value must never reach the stream: clamp a
+ * finite value to the widest legitimate range (the glass's [0.4, 1.6]) and reject a non-finite
+ * one. Source of the range: `packages/live/src/glass/client/main.ts` (the `intensity` handler).
+ */
+const INTENSITY_MIN = 0.4;
+const INTENSITY_MAX = 1.6;
+
+const clamp = (v: number, lo: number, hi: number): number => Math.min(Math.max(v, lo), hi);
+
+/**
+ * Coerce a wire `mel` frame into exactly MEL_BINS finite numbers, or `null` when it cannot be
+ * trusted — not an array, shorter than MEL_BINS, or carrying a non-finite bin. A short frame
+ * would leave the matcher's cosine reading `undefined` past its length (→ NaN, poisoning the
+ * broadcast match confidence at 30Hz); a NaN/Infinity bin would do the same. Dropping such a
+ * frame — never fed to the matcher, never marking the audio channel live — is the state-side
+ * half of the WS never-crash rail. A longer frame keeps its first MEL_BINS bins (the contract
+ * shape), mirroring the old `.slice(0, MEL_BINS)`.
+ */
+function toMelFrame(frame: unknown): Float32Array | null {
+  if (!Array.isArray(frame) || frame.length < MEL_BINS) {
+    return null;
+  }
+  const out = new Float32Array(MEL_BINS);
+  for (let i = 0; i < MEL_BINS; i++) {
+    const v: unknown = frame[i];
+    if (typeof v !== "number" || !Number.isFinite(v)) {
+      return null;
+    }
+    out[i] = v;
+  }
+  return out;
+}
+
 export type ShowStateMachine = ReturnType<typeof createShowState>;
 
 export function createShowState(
@@ -36,12 +74,19 @@ export function createShowState(
   function ingest(cmd: ShowCommand, tMs: number): void {
     switch (cmd.cmd) {
       case "mel": {
+        // Coerce + validate the frame FIRST: a malformed frame (missing, short, or carrying a
+        // non-finite bin) is dropped without marking the audio channel live — it is not audio,
+        // and it would otherwise feed NaN into the cosine match. The WS boundary already
+        // shape-checks the command; this is the state-side belt on the matcher feed.
+        const raw = toMelFrame(cmd.frame);
+        if (raw === null) {
+          break;
+        }
         lastMelMs = tMs;
         // Read magnitude BEFORE normalizing (the pre-arm energy proxy), then
         // SHAPE-normalize (mean-subtract + L2) for the cosine match — the same
         // normalization the server-side fingerprints get, so the wire's raw
         // log-mel and the previews compare content, not analyzer tilt.
-        const raw = Float32Array.from(cmd.frame.slice(0, MEL_BINS));
         let energy = 0;
         for (let i = 0; i < raw.length; i++) {
           energy += raw[i];
@@ -62,17 +107,29 @@ export function createShowState(
         matcher.rewind(tMs);
         break;
       case "goto":
-        matcher.goto(cmd.index, tMs);
+        // A non-finite index would break the matcher's Math.min/max clamp (→ NaN pointer);
+        // drop it. A finite index is clamped to the plan inside matcher.goto.
+        if (Number.isFinite(cmd.index)) {
+          matcher.goto(cmd.index, tMs);
+        }
         break;
       case "blackout":
         blackout = cmd.on;
         break;
       case "intensity":
-        intensity = cmd.value;
+        // Clamp a finite dial to the legal range; reject a non-finite one (keep the last good
+        // value) so a garbage number never rebroadcasts at 30Hz and drives the glass.
+        if (Number.isFinite(cmd.value)) {
+          intensity = clamp(cmd.value, INTENSITY_MIN, INTENSITY_MAX);
+        }
         break;
       case "heartbeat":
-        lastHeartbeatMs = tMs;
-        lastHeartbeatFrame = cmd.renderFrame;
+        // Guard the watchdog feed: a non-finite frame counter is ignored so the supervisor's
+        // heartbeat age stays trustworthy.
+        if (Number.isFinite(cmd.renderFrame)) {
+          lastHeartbeatMs = tMs;
+          lastHeartbeatFrame = cmd.renderFrame;
+        }
         break;
     }
   }
