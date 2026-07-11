@@ -187,6 +187,19 @@ func parseBootCommand(args []string) bootCommand {
 // looksLikeLogID is the on-sight test for a Log ID coordinate: the XXX.Y.ZZ
 // shape (three dot-separated parts, alphanumerics only). The middle slot may be
 // the literal F marker of a mixtape; the resolver decides finding vs mixtape.
+//
+// DELIBERATELY LOOSER than the canonical grammar (@fluncle/contracts/log-id —
+// mirrored in TS on the web/extension surfaces; Go can't import it). This is a
+// hand-typed-command PRE-FILTER, not a validator: it only classifies an SSH arg as
+// "route this to the coordinate resolver" vs "unknown". So it accepts case
+// variations (`241.7.3a` — someone typing at a prompt shouldn't have to shift the
+// mark) and any alphanumeric part length; the server-side resolver then does the
+// authoritative canonical lookup and returns "not found" for anything malformed. A
+// tighter filter here would turn a lightly-mistyped coordinate into the menu instead
+// of an honest "no such coordinate", so the looseness is the intended UX. It only
+// rejects what is unmistakably NOT a coordinate: the wrong part count, an empty part,
+// or a non-alphanumeric character (which the scheme, spaces, or `$` would carry).
+// TestLooksLikeLogID pins exactly what it accepts beyond the canonical grammar.
 func looksLikeLogID(s string) bool {
 	parts := strings.Split(s, ".")
 	if len(parts) != 3 {

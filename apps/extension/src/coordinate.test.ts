@@ -1,6 +1,25 @@
 import { describe, expect, test } from "bun:test";
 
-import { digCommand, findCoordinates, safeHref, sshCommand, webUrl } from "./coordinate";
+import { COORDINATE_PATTERN as CANONICAL_COORDINATE_PATTERN } from "@fluncle/contracts/log-id";
+
+import {
+  COORDINATE_PATTERN,
+  digCommand,
+  findCoordinates,
+  safeHref,
+  sshCommand,
+  webUrl,
+} from "./coordinate";
+
+describe("canonical grammar drift tripwire", () => {
+  // The Lens runtime bundle ships zero workspace deps, so it keeps a local COPY of the
+  // `fluncle://` scheme pattern rather than importing the shared one. This test (never
+  // bundled) pins the copy to its canonical home — a divergence fails here loudly.
+  test("the local scanner is byte-identical to @fluncle/contracts/log-id", () => {
+    expect(COORDINATE_PATTERN.source).toBe(CANONICAL_COORDINATE_PATTERN.source);
+    expect(COORDINATE_PATTERN.flags).toBe(CANONICAL_COORDINATE_PATTERN.flags);
+  });
+});
 
 describe("findCoordinates", () => {
   test("pulls a single coordinate, scheme and all", () => {

@@ -10,6 +10,7 @@ import assert from "node:assert/strict";
 
 import {
   isStaleTikTokDraft,
+  r2PublicUrl,
   resolveClipTracks,
   TIKTOK_DRAFT_STALE_MS,
   tikTokDraftAgeHours,
@@ -142,3 +143,30 @@ console.log("resolveClipTracks logId carry-through: OK");
 }
 
 console.log("isStaleTikTokDraft / tikTokDraftAgeHours: OK");
+
+// r2PublicUrl — the shared key→URL builder (web `recordingSetVideoUrl` + the CLI clip cut).
+{
+  const base = "https://found.fluncle.com";
+
+  // A no-op on every real key today: slashes stay separators, URL-safe segments unchanged.
+  assert.equal(
+    r2PublicUrl(base, "recordings/1e0b3f/set.mp4"),
+    "https://found.fluncle.com/recordings/1e0b3f/set.mp4",
+    "an un-promoted recording key passes through unchanged",
+  );
+  assert.equal(
+    r2PublicUrl(base, "241.7.3A/set.mp4"),
+    "https://found.fluncle.com/241.7.3A/set.mp4",
+    "a promoted dot-safe Log ID key passes through unchanged",
+  );
+
+  // The safe superset: a reserved char inside a segment is escaped, but the `/`
+  // separators are preserved (a whole-key encodeURIComponent would escape them).
+  assert.equal(
+    r2PublicUrl(base, "a b/c#d/set.mp4"),
+    "https://found.fluncle.com/a%20b/c%23d/set.mp4",
+    "reserved characters inside a segment are percent-encoded, slashes preserved",
+  );
+}
+
+console.log("r2PublicUrl: OK");

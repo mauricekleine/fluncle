@@ -232,6 +232,24 @@ export function trackLabel(artists: string[], title: string): string {
 }
 
 /**
+ * The public read URL for a stored R2 object from its key: the bucket base joined to the
+ * key with each PATH SEGMENT percent-encoded and the `/` separators preserved. Per-segment
+ * encoding is the safe superset — a space or reserved character inside a segment is escaped
+ * so the URL resolves, while a slash stays a path separator (a whole-key `encodeURIComponent`
+ * would escape the separators; a bare `${base}/${key}` join leaves unsafe characters raw, so
+ * the same key could resolve from one caller and 404 from the other). Every real key today
+ * is already URL-safe (`recordings/<uuid>/set.mp4` while un-promoted, `<log-id>/set.mp4`
+ * after — see `recordingR2Key`), so the encoding is a NO-OP on current data; it only guards
+ * a future key that carries a reserved character. The ONE place both the web media helpers
+ * and the CLI clip cut build a key's public URL, so they can't disagree.
+ */
+export function r2PublicUrl(base: string, key: string): string {
+  const path = key.split("/").map(encodeURIComponent).join("/");
+
+  return `${base}/${path}`;
+}
+
+/**
  * Resolve which track(s) play in a clip window `[inMs, outMs)` from a mixtape's
  * cued members. Each cued member owns the half-open interval `[startMs, nextStartMs)`;
  * the last cued member runs to `setDurationMs`. Returns the members (in play order)

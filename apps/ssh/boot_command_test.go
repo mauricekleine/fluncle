@@ -38,19 +38,50 @@ func TestParseBootCommand(t *testing.T) {
 	}
 }
 
-// looksLikeLogID accepts the XXX.Y.ZZ shape (alphanumerics, three parts) and the
-// F-marked mixtape middle slot; it rejects everything else.
+// looksLikeLogID is a DELIBERATELY LOOSE hand-typed pre-filter, not the canonical
+// grammar (@fluncle/contracts/log-id `LOG_ID_TEST_VECTORS`). This test pins exactly
+// what it accepts BEYOND that grammar — so the looseness is intentional and pinned,
+// not an accident. It routes an SSH arg to the coordinate resolver, which does the
+// authoritative lookup; anything malformed comes back "not found" from the server.
 func TestLooksLikeLogID(t *testing.T) {
-	good := []string{"004.7.2I", "019.F.1A", "241.7.3A", "1.2.3"}
-	for _, s := range good {
+	// Canonical-valid coordinates (the contracts fixture's validFindings + validMixtapes):
+	// accepted, same as the strict grammar.
+	canonical := []string{
+		"004.7.2I", "241.7.3A", "018.8.9J", "1024.7.3I", // validFindings
+		"019.F.1A", "019.F.1F", "1024.F.2C", // validMixtapes
+	}
+	for _, s := range canonical {
 		if !looksLikeLogID(s) {
-			t.Errorf("looksLikeLogID(%q) = false, want true", s)
+			t.Errorf("looksLikeLogID(%q) = false, want true (canonical coordinate)", s)
 		}
 	}
-	bad := []string{"", "latest", "004.7", "004.7.2.1", "004..2I", "004.7.2 I", "fluncle://004.7.2I"}
-	for _, s := range bad {
+
+	// Accepted BEYOND the canonical grammar — the intended looseness. The strict TS
+	// guards reject each of these, but the pre-filter lets them through to the resolver:
+	//   - lowercase: a prompt-typed mark shouldn't have to be shifted; the resolver normalizes.
+	//   - the contracts fixture's `malformed` set: every one is still three alphanumeric
+	//     parts, so it reads as coordinate-shaped here — the resolver returns "not found".
+	//   - `1.2.3`: any alphanumeric part length passes (no 3/4-digit sector rule here).
+	looserAccept := []string{
+		"241.7.3a", "019.f.1a", // lowercase
+		"04.7.2I", "10240.7.3I", "019.G.1A", "019.F.1Z", "007.12.3I", "7.0.0Z", // fixture: malformed
+		"1.2.3",
+	}
+	for _, s := range looserAccept {
+		if !looksLikeLogID(s) {
+			t.Errorf("looksLikeLogID(%q) = false, want true (accepted by the loose pre-filter)", s)
+		}
+	}
+
+	// Genuinely NOT coordinate-shaped: the wrong part count, an empty part, a
+	// non-alphanumeric char (a space, the `fluncle://` scheme's `:` and `/`, or `$`).
+	notACoord := []string{
+		"", "latest", "004.7", "004.7.2.1", "004..2I", "004.7.2 I",
+		"fluncle://004.7.2I", "004.7.2$",
+	}
+	for _, s := range notACoord {
 		if looksLikeLogID(s) {
-			t.Errorf("looksLikeLogID(%q) = true, want false", s)
+			t.Errorf("looksLikeLogID(%q) = true, want false (not coordinate-shaped)", s)
 		}
 	}
 }

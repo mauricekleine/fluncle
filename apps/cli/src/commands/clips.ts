@@ -35,6 +35,7 @@ import {
   type ClipsResponse,
   type ClipDTO,
 } from "@fluncle/contracts";
+import { r2PublicUrl } from "@fluncle/contracts/util";
 import { randomUUID } from "node:crypto";
 import { rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -234,7 +235,9 @@ async function resolveClipSource(clip: ClipDTO): Promise<ClipSource> {
   }
 
   return {
-    setUrl: `${FOUND_BASE}/${recording.r2Key.split("/").map(encodeURIComponent).join("/")}`,
+    // The shared per-segment R2 URL builder — byte-identical to the web
+    // `recordingSetVideoUrl`, so the cut reads the exact object the Studio surfaces do.
+    setUrl: r2PublicUrl(FOUND_BASE, recording.r2Key),
   };
 }
 
