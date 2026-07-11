@@ -1,7 +1,7 @@
 import { AbsoluteFill, random } from "remotion";
 import { colors } from "@fluncle/tokens";
 
-import { OXANIUM_STACK } from "./fonts";
+import { OXANIUM_STACK, SPACE_GROTESK_STACK } from "./fonts";
 
 // <GalaxyOg> — the Open Graph / link-preview card for the /galaxy route.
 //
@@ -19,7 +19,10 @@ import { OXANIUM_STACK } from "./fonts";
 //     a film-grain wash and faint horizontal scanlines cover the whole card.
 //   - One Voice — "FLUNCLE'S GALAXY" is the brand mark, so it is set in Oxanium
 //     ALL-CAPS (VOICE.md sanctions caps for brand-mark plates). The tagline is
-//     running copy in sentence case, set in Starlight Cream.
+//     running copy in sentence case, so it is Space Grotesk, the body face, in
+//     Starlight Cream — Oxanium speaks only for the brand and the numbers, never
+//     for a sentence. Both faces carry the One Box metric overrides (./fonts), so
+//     the mark and the tagline sit on one optical centre line.
 //
 // Determinism: the starfield is seeded via Remotion's random(), never
 // Math.random(), so the still renders identically every time.
@@ -176,7 +179,7 @@ export const GalaxyOg: React.FC = () => {
         <div
           style={{
             color: colors.starlightCream,
-            fontFamily: "ui-sans-serif, system-ui, sans-serif",
+            fontFamily: SPACE_GROTESK_STACK,
             fontSize: 30,
             fontWeight: 400,
             letterSpacing: "0.01em",
