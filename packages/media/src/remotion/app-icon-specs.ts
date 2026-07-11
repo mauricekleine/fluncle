@@ -26,6 +26,31 @@ export type AppIconSpec = {
 export const APP_ICON_SIZE = 1024;
 
 export const APP_ICON_SPECS: readonly AppIconSpec[] = [
+  // ── The live candidates: the existing brand mark, the drifting traveler
+  // (operator ruling — the icon is the canonical figure, not an invented mark;
+  // the figure is scaled to ~72% of icon height so it reads at 60px). ──
+  {
+    id: "AppIconTraveler",
+    rationale:
+      "The drifting traveler on plain Deep Field — the canonical mark, nothing else, its baked rim light the only sun.",
+    slug: "e-traveler-deepfield",
+    variant: "traveler",
+  },
+  {
+    id: "AppIconTravelerStars",
+    rationale:
+      "The traveler over the quiet starfield — the fluncle-small.jpg avatar vibe with the figure sized to read at 60px.",
+    slug: "f-traveler-starfield",
+    variant: "traveler-stars",
+  },
+  {
+    id: "AppIconTravelerGlow",
+    rationale:
+      "The traveler with a faint warm eclipse glow behind — the figure's gold rim light picking up a halo that serves it.",
+    slug: "g-traveler-eclipse",
+    variant: "traveler-glow",
+  },
+  // ── Exploration: the four invented marks, kept for reference. ──
   {
     id: "AppIconEclipse",
     rationale:

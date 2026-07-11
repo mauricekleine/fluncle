@@ -1,4 +1,4 @@
-import { AbsoluteFill, random } from "remotion";
+import { AbsoluteFill, Img, random, staticFile } from "remotion";
 import { colors } from "@fluncle/tokens";
 
 import { OXANIUM_STACK } from "./fonts";
@@ -9,8 +9,18 @@ import { OXANIUM_STACK } from "./fonts";
 // parametrized by `variant` so one composition renders every candidate. The icon
 // must read as THE Fluncle mark at ~60px on a phone grid, so each variant is a
 // SIMPLE, warm-dark form with gold placed only where it earns it (The One Sun
-// Rule). This is a TASTE deliverable: four variants along genuinely DIFFERENT
-// axes, for the operator to choose one.
+// Rule). This is a TASTE deliverable for the operator to choose one from.
+//
+// TWO FAMILIES OF VARIANTS. The operator ruled that the icon should be the
+// EXISTING brand mark — the drifting traveler (public/fluncle-cosmonaut.png,
+// Maurice's founding figure, the same transparent cut as
+// apps/web/public/fluncle-transparant.png and the site/socials avatar's
+// fluncle-small.jpg). The `traveler*` variants are therefore the live
+// candidates: the figure composited onto three canon backgrounds, SCALED UP so
+// it reads as a figure at 60px (in the raw cut the figure fills only ~41% of the
+// canvas height — exactly why fluncle-small.jpg is unusable as-is: the figure is
+// a speck). The four invented marks (eclipse/stamp/cover/diamond) stay as
+// exploration.
 //
 // ICON CRAFT (why the numbers are what they are):
 //   - Design to the FULL SQUARE. iOS applies its own superellipse ("squircle")
@@ -38,15 +48,21 @@ import { OXANIUM_STACK } from "./fonts";
 // Remotion's random(), never Math.random(), so every candidate renders
 // identically each time. Dimensions live on the <Still> in root.tsx (1024×1024).
 
-/** The four candidate axes. One composition renders all of them by `variant`. */
+/** The candidate axes. One composition renders all of them by `variant`. */
 export type AppIconVariant =
-  /** The burning eclipse mark alone on Deep Field — the pure identity orb. */
+  /** The drifting traveler on plain Deep Field — the mark, nothing else. */
+  | "traveler"
+  /** The traveler over the quiet starfield — the fluncle-small.jpg avatar vibe. */
+  | "traveler-stars"
+  /** The traveler with a faint warm eclipse glow behind — the rim light haloed. */
+  | "traveler-glow"
+  /** Exploration: the burning eclipse mark alone on Deep Field. */
   | "eclipse"
-  /** A single Oxanium `F` as a certification stamp, in the plate's printed frame. */
+  /** Exploration: a single Oxanium `F` stamp, in the plate's printed frame. */
   | "stamp"
-  /** The founding cover distilled: eclipse high over a tower skyline, relic grain. */
+  /** Exploration: the founding cover distilled — eclipse over a tower skyline. */
   | "cover"
-  /** The banger-diamond star motif ("every banger out there is a star"). */
+  /** Exploration: the banger-diamond star motif. */
   | "diamond";
 
 export type AppIconProps = {
@@ -241,6 +257,109 @@ const EclipseOrb: React.FC<{ cx: number; cy: number; size: number }> = ({ cx, cy
       }}
     />
   </div>
+);
+
+// ── The traveler figure ───────────────────────────────────────────────────────
+// The canonical mark: the drifting traveler cut (public/fluncle-cosmonaut.png,
+// byte-identical to apps/web/public/fluncle-transparant.png). The cut is a
+// 1180² transparent canvas with LARGE margins — the figure's measured alpha
+// bounding box (threshold α>8) is only 398×488 px, centred at (604, 607), i.e.
+// ~41% of the canvas height and slightly off canvas-centre. So the component
+// scales from the FIGURE's box, not the canvas, and re-centres on the figure:
+// at the default 72% target the 1180 canvas renders at ~1783 px, putting the
+// figure at ~737 px tall × ~601 px wide (59% of frame width) — big enough to
+// read as a figure at 60px, and still inside the superellipse safe zone.
+const FIGURE_CANVAS = 1180;
+const FIGURE_BOX = { height: 488, left: 405, top: 363, width: 398 } as const;
+
+/**
+ * The traveler, scaled so the FIGURE (not the canvas) fills `heightFrac` of the
+ * 1024 icon height, with the figure's bounding-box centre on the icon centre.
+ */
+const Traveler: React.FC<{ heightFrac: number }> = ({ heightFrac }) => {
+  const scale = (1024 * heightFrac) / FIGURE_BOX.height;
+  const size = FIGURE_CANVAS * scale;
+  const figureCx = FIGURE_BOX.left + FIGURE_BOX.width / 2;
+  const figureCy = FIGURE_BOX.top + FIGURE_BOX.height / 2;
+
+  return (
+    <Img
+      src={staticFile("fluncle-cosmonaut.png")}
+      style={{
+        height: size,
+        left: 512 - figureCx * scale,
+        position: "absolute",
+        top: 512 - figureCy * scale,
+        width: size,
+      }}
+    />
+  );
+};
+
+// The ratified figure size for the icon candidates: 72% of icon height (the
+// middle of the 65–80% legibility band the redirection asked for).
+const TRAVELER_HEIGHT_FRAC = 0.72;
+
+// ── Variant E: the traveler on plain Deep Field ───────────────────────────────
+// The mark and nothing else: the figure's own baked gold/red rim light is the
+// One Sun, on the undecorated warm near-black ground. Near-silent grain — the
+// electric mark, its pop protected.
+const TravelerVariant: React.FC = () => (
+  <>
+    <WarmGround sunY={50} />
+    <Traveler heightFrac={TRAVELER_HEIGHT_FRAC} />
+    <Grain id="icon-traveler-grain" opacity={0.09} seed={5} />
+  </>
+);
+
+// ── Variant F: the traveler over the quiet starfield ─────────────────────────
+// The fluncle-small.jpg avatar vibe, but with the figure sized to read: a sparse
+// low-brightness field with the odd brighter punctuation star (so a hint of the
+// field survives the 60px downscale instead of turning to noise). The stars are
+// Starlight Cream and dim — the figure's rim light stays the only sun.
+const TravelerStarsVariant: React.FC = () => {
+  const stars: Star[] = [];
+
+  for (let index = 0; index < 90; index += 1) {
+    const roll = random(`traveler-stars-r-${index}`);
+
+    stars.push({
+      bright: (roll > 0.9 ? 0.55 : 0.16) + random(`traveler-stars-b-${index}`) * 0.3,
+      size: (roll > 0.9 ? 3.4 : 1.6) + random(`traveler-stars-s-${index}`) * 1.6,
+      x: random(`traveler-stars-x-${index}`) * 100,
+      y: random(`traveler-stars-y-${index}`) * 100,
+    });
+  }
+
+  return (
+    <>
+      <WarmGround sunY={50} />
+      <Starfield stars={stars} />
+      <Traveler heightFrac={TRAVELER_HEIGHT_FRAC} />
+      <Grain id="icon-traveler-stars-grain" opacity={0.09} seed={6} />
+    </>
+  );
+};
+
+// ── Variant G: the traveler with a faint eclipse glow ─────────────────────────
+// The figure's baked gold/orange rim light picks up a halo: one faint warm
+// radial glow (Eclipse Gold cooling into a breath of Re-entry Red) seated
+// behind the figure. The glow SERVES the figure — it is kept dim enough that
+// the rim light stays the brightest thing in frame (One Sun, The Ignition
+// Rule: gold placed like light, the figure lit rather than decorated).
+const TravelerGlowVariant: React.FC = () => (
+  <>
+    <WarmGround sunY={44} />
+    {/* The halo — centred just above the figure's centre, where the head's
+        burning-gold rim is hottest, so the glow reads as the figure's own. */}
+    <AbsoluteFill
+      style={{
+        background: `radial-gradient(42% 42% at 50% 44%, ${colors.eclipseGlow}30 0%, ${colors.eclipseGold}1f 34%, ${colors.reentryRed}0d 58%, transparent 76%)`,
+      }}
+    />
+    <Traveler heightFrac={TRAVELER_HEIGHT_FRAC} />
+    <Grain id="icon-traveler-glow-grain" opacity={0.09} seed={4} />
+  </>
 );
 
 // ── Variant A: the burning eclipse mark alone ────────────────────────────────
@@ -534,6 +653,9 @@ const VARIANTS: Record<AppIconVariant, React.FC> = {
   diamond: DiamondVariant,
   eclipse: EclipseVariant,
   stamp: StampVariant,
+  traveler: TravelerVariant,
+  "traveler-glow": TravelerGlowVariant,
+  "traveler-stars": TravelerStarsVariant,
 };
 
 export const AppIcon: React.FC<AppIconProps> = ({ variant }) => {
