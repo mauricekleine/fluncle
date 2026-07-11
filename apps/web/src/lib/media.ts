@@ -327,10 +327,13 @@ const CROP_GEOMETRY: Record<CropOrientation, { nativeWidth: number; ratio: numbe
  * valid for a finding under the two-master layout (its `footage.mp4` is the clean
  * square) — callers gate on `videoSquaredAt`.
  *
- * `width` snaps the crop to a resolution-ladder rung (Stories sizes the crop to
- * the measured pane, not the native 1080/1920); height follows the orientation's
- * aspect so the crop stays exactly portrait/landscape. Defaults to the native
- * width, so the fixed-resolution caller (/log) reads the same URL as before.
+ * `width` snaps the crop to a resolution-ladder rung: the DOM surfaces size the
+ * crop to the measured pane rather than the native 1080/1920 (Stories to the
+ * full-screen reel, /log to its `min(100%, 19rem)` plate pane — a phone there
+ * wants ~720, never 1080), and the stall watchdog steps that rung DOWN when a
+ * load wedges. Height follows the orientation's aspect, so the crop stays exactly
+ * portrait/landscape at any rung. Defaults to the native width for the genuinely
+ * full-bleed caller (radio).
  */
 export function videoCrop(
   logId: string,
@@ -512,9 +515,10 @@ export function videoPurgeUrls(
   urls.add(media.coverUrl); // cover.jpg (the profile-grid identity card)
 
   if (squared) {
-    // Two-master crops: every orientation × every ladder width (Stories sizes the
-    // crop to the measured pane; /log + radio use the native width). Plus the
-    // silent (audio=false) crop radio loops, and the opening-frame crop poster.
+    // Two-master crops: every orientation × every ladder width (Stories and /log
+    // both size the crop to the measured pane, and a stall steps that rung down;
+    // radio's full-bleed head uses the native width). Plus the silent
+    // (audio=false) crop radio loops, and the opening-frame crop poster.
     for (const orientation of ["landscape", "portrait"] as const) {
       for (const width of PURGE_RENDITION_WIDTHS) {
         urls.add(videoCrop(logId, orientation, width, false, version));
@@ -523,7 +527,8 @@ export function videoPurgeUrls(
       }
 
       // The native-width crops (no explicit width → the orientation's native): the
-      // fixed-resolution /log + radio-head requests, distinct cache keys from the
+      // fixed-resolution radio-head requests (and any legacy /log rendition still
+      // cached from before it sized to its pane), distinct cache keys from the
       // ladder rungs above.
       urls.add(videoCrop(logId, orientation, undefined, false, version));
       urls.add(videoCrop(logId, orientation, undefined, true, version));

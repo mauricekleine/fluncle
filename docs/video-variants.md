@@ -42,11 +42,13 @@ This makes `render.json` self-describing: a future clean re-render from source i
 
 All from the square `footage.mp4` master unless noted. URL construction lives in `apps/web/src/lib/media.ts` (the existing resolution-ladder + poster deriver extends to these); option strings:
 
-- **Landscape clean** (`/log` desktop, radio desktop): `fit=cover,width=1920,height=1080`
-- **Portrait clean** (`/log` mobile, radio mobile): `fit=cover,width=1080,height=1920`
+- **Landscape clean** (radio desktop, and `/log` desktop at its pane's rung): `fit=cover,width=1920,height=1080`
+- **Portrait clean** (radio mobile, and `/log` mobile at its pane's rung): `fit=cover,width=1080,height=1920`
 - **Audio-stripped** (TikTok, from `footage.social.mp4`): `mode=video,audio=false,width=1080` (bare `audio=false` collapses the output to ~202px and TikTok rejects it — the `mode=video,width=1080` is required, not decorative)
 - **Resolution ladder** (any surface): `width=360|480|720|1080`
 - **Poster frame**: `mode=frame,time=<t>`
+
+The native widths above are the crop's ceiling, not what every surface asks for. The DOM surfaces measure the pane they actually paint into and request the ladder rung that covers it (`useResponsiveWidth`): Stories sizes its full-screen reel, and `/log` sizes its `min(100%, 19rem)` plate pane — so a phone on `/log` fetches a 720-wide crop, not the native 1080×1920. Only radio's genuinely full-bleed head takes the native width. When a load WEDGES, the stall watchdog steps that rung one rung DOWN the same ladder (`stepDownRenditionWidth`) rather than falling back to the raw master: a stall is a bytes problem, and the master is the heaviest object in the bundle. The master fallback stays where it is correct — a transform that cannot be derived answers with an HTTP error, which the `<video>`'s one-shot `onError` catches.
 
 Cost is negligible: MT bills $0.50 per 1,000 monthly **unique** transformation operations with 5,000 free per month, so with `Cache Everything` + a long TTL on the MT URLs, each unique crop is one billed op per month and we likely never leave the free tier.
 

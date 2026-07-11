@@ -12,13 +12,21 @@
 // Returns `undefined` until the element is measured AND on the server, so the
 // caller can hold the raw master for SSR/first paint and swap to the rendition
 // once a real width is known (no layout-shift, no guessing on the server).
+//
+// The ladder is also the recovery path: when a load WEDGES (the stall watchdog),
+// the caller steps the requested rung DOWN with `stepDownRenditionWidth` — fewer
+// bytes for a link that could not carry the last request. Same ladder, one
+// mechanism, walked in both directions.
 
 import { type RefObject, useEffect, useState } from "react";
 import { type RenditionWidth } from "./media";
 
 // Ascending; `pickRenditionWidth` snaps up to the first rung that covers the
 // measured device width (and clamps to the widest = the master's own width).
-const RENDITION_LADDER: readonly RenditionWidth[] = [360, 480, 720, 1080];
+export const RENDITION_LADDER: readonly RenditionWidth[] = [360, 480, 720, 1080];
+
+/** The lightest rung: the floor a stall step-down (`stepDownRenditionWidth`) walks to. */
+export const SMALLEST_RENDITION_WIDTH: RenditionWidth = 360;
 
 // Beyond 2× the extra resolution is invisible at arm's length but doubles the
 // bytes; cap the multiplier so a 3× phone tops out at the 720 rung, not 1080.
@@ -35,6 +43,31 @@ function pickRenditionWidth(deviceWidth: number): RenditionWidth {
   // The ladder is a non-empty const, so the last rung always exists; the
   // widest rung (1080) is the safe fallback if that invariant ever changes.
   return RENDITION_LADDER[RENDITION_LADDER.length - 1] ?? 1080;
+}
+
+/**
+ * Walk `steps` rungs DOWN the ladder from `width`, clamped at the lightest rung.
+ *
+ * The pane-sized rung is the right FIRST request, but a link too thin to carry it
+ * stalls — and a stall is a bytes problem, so the answer is fewer bytes, not more.
+ * The stall watchdog steps the requested rendition down a rung per wedge (720 →
+ * 480 → 360) instead of bailing UP to the raw master, which is strictly heavier
+ * than any rendition and cannot help a starved connection. A slightly soft clip
+ * that plays beats a crisp one that never starts.
+ *
+ * Pure and total: 0 steps is the identity, and stepping past the floor pins to it
+ * (`SMALLEST_RENDITION_WIDTH`), so a caller can count wedges without bounds-checking.
+ */
+export function stepDownRenditionWidth(width: RenditionWidth, steps: number): RenditionWidth {
+  const index = RENDITION_LADDER.indexOf(width);
+
+  if (index < 0) {
+    return width;
+  }
+
+  const target = Math.max(0, index - Math.max(0, Math.trunc(steps)));
+
+  return RENDITION_LADDER[target] ?? SMALLEST_RENDITION_WIDTH;
 }
 
 /**
