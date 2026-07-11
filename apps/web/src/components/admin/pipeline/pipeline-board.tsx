@@ -27,11 +27,13 @@ import {
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@fluncle/ui/components/hover-card";
 import { cn } from "@/lib/utils";
 
-// The pipeline board — the operator's `/admin` home. The whole pipeline as a
+// The pipeline board — the body of `/admin/findings`, the Findings station (the
+// `/admin` home is the Dashboard: the attention queue). The whole pipeline as a
 // pattern: every cell is one state glyph, no label, columns grouped under
 // Agents | Yours (an agent does it vs your hands), the finding column pinned while
-// the grid scrolls. Scan a column for "everything still needing a tag", a row for
-// one finding's progress. Pipeline order is rough, not fixed — steps run in
+// the grid scrolls. Scan a column for every finding still missing that one step (no
+// clip rendered, nothing pushed to TikTok), a row for one finding's progress.
+// Pipeline order is rough, not fixed — steps run in
 // parallel, fail, and retry — so each cell stands alone and reads by SHAPE (round =
 // agent, square = yours) and FILL (open → in-flight → done); see step-node.
 //

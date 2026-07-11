@@ -33,7 +33,7 @@ function AdminLoginPage() {
       <Card className="w-full max-w-sm" size="sm">
         <CardHeader>
           <CardTitle>Fluncle admin</CardTitle>
-          <CardDescription>Sign in to tag tracks.</CardDescription>
+          <CardDescription>Sign in to run the pipeline.</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-3">
           {error === "denied" ? (
