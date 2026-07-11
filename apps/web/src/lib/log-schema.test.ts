@@ -92,6 +92,54 @@ describe("musicRecordingJsonLd (the log page schema)", () => {
     ]);
   });
 
+  it("carries measured tempo + key as a recordingOf MusicComposition when both are present", () => {
+    const measured = musicRecordingJsonLd(
+      { ...track, bpm: 174.3, key: "F minor" },
+      "https://img/cover.jpg",
+    );
+
+    // Tempo has no native schema.org property → additionalProperty PropertyValue,
+    // rounded to match the visible BPM. Key rides the native `musicalKey` (Text).
+    expect(measured.recordingOf).toEqual({
+      "@type": "MusicComposition",
+      additionalProperty: {
+        "@type": "PropertyValue",
+        name: "tempo",
+        unitText: "BPM",
+        value: 174,
+      },
+      musicalKey: "F minor",
+      name: track.title,
+    });
+  });
+
+  it("emits tempo only when the key is below the confidence floor (bpm present, key NULL)", () => {
+    const tempoOnly = musicRecordingJsonLd({ ...track, bpm: 172 }, "https://img/cover.jpg");
+    const composition = tempoOnly.recordingOf as Record<string, unknown>;
+
+    expect(composition.additionalProperty).toEqual({
+      "@type": "PropertyValue",
+      name: "tempo",
+      unitText: "BPM",
+      value: 172,
+    });
+    // A NULL key is below the DSP floor — say nothing, never a guessed value.
+    expect(composition).not.toHaveProperty("musicalKey");
+  });
+
+  it("emits key only when the tempo is absent (key present, bpm NULL)", () => {
+    const keyOnly = musicRecordingJsonLd({ ...track, key: "A minor" }, "https://img/cover.jpg");
+    const composition = keyOnly.recordingOf as Record<string, unknown>;
+
+    expect(composition.musicalKey).toBe("A minor");
+    expect(composition).not.toHaveProperty("additionalProperty");
+  });
+
+  it("omits recordingOf entirely when the finding carries neither tempo nor key", () => {
+    // The base fixture has no bpm/key — the un-enriched finding says nothing.
+    expect(jsonLd).not.toHaveProperty("recordingOf");
+  });
+
   it("stamps @id on a case/accent-variant display name (folded match, not exact)", () => {
     // The slug map is keyed by the folded canonical name; the finding's display
     // name drifted (accent + casing). An exact-name lookup would silently drop the
