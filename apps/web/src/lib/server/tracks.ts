@@ -132,7 +132,7 @@ type MixtapeFeedRow = {
  * qualified; everything else resolves unambiguously. Every column below is qualified
  * anyway, so a reader can see which half of the pair it comes from.
  */
-const FINDINGS_FROM = `findings join tracks on tracks.track_id = findings.track_id`;
+export const FINDINGS_FROM = `findings join tracks on tracks.track_id = findings.track_id`;
 
 // Columns exposed to clients. `features_json` is the enrichment spectral summary,
 // surfaced (parsed) as creative fuel for the video agent.

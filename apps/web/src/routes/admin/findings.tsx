@@ -56,7 +56,12 @@ import { listSocialPostsForTracks } from "@/lib/server/social";
 import { getSpotifyAuthStatus, type SpotifyAuthStatus } from "@/lib/server/spotify";
 import { listPendingSubmissions, type Submission } from "@/lib/server/submissions";
 import { type BlockedOn, trackStage } from "@/lib/server/track-stage";
-import { decodeTrackCursor, listEmbeddingPresenceForTracks, listTracks } from "@/lib/server/tracks";
+import {
+  decodeTrackCursor,
+  getTrackByIdOrLogId,
+  listEmbeddingPresenceForTracks,
+  listTracks,
+} from "@/lib/server/tracks";
 import { cn } from "@/lib/utils";
 
 // The findings board — the per-finding pipeline station at `/admin/findings`
@@ -86,6 +91,8 @@ const BOARD_KEY = ["admin", "posts", "board"] as const;
 const SPOTIFY_STATUS_KEY = ["admin", "spotify", "status"] as const;
 // The pending-submissions cache for the candidates tray (and its header badge).
 const SUBMISSIONS_KEY = ["admin", "submissions"] as const;
+// One dressed board row, for a deep-linked finding beyond the loaded pages.
+const BOARD_ROW_KEY = ["admin", "board-row"] as const;
 // The plan targets for the "Add to a plan" sheet.
 const PLAN_TARGETS_KEY = ["admin", "plans", "targets"] as const;
 // The lazily-read context_note for the Context cell's view dialog, keyed by trackId.
@@ -214,6 +221,64 @@ const fetchBoard = createServerFn({ method: "GET" })
     };
   });
 
+// ONE dressed board row, for a finding the board's loaded pages may not contain.
+//
+// The board is cursor-paginated newest-first, so a deep-link can point at a finding that is
+// simply not in `rows` yet — and the attention queue's held-note row deep-links to an
+// ARBITRARY finding (the one whose auto-note the echo gate held), which is very often an
+// older one. Without this the dialog would silently fail to open for exactly the findings
+// the queue most wants the operator to look at. Lazily fetched, only when the deep-linked
+// finding is missing from the loaded pages.
+const fetchBoardRow = createServerFn({ method: "GET" })
+  .validator((data: { trackId: string }) => data)
+  .handler(async ({ data }): Promise<BoardRow | null> => {
+    if (!(await isAdminRequest())) {
+      throw redirect({ to: "/admin/login" });
+    }
+
+    const track = await getTrackByIdOrLogId(data.trackId);
+
+    if (!track) {
+      return null;
+    }
+
+    const ids = [track.trackId];
+    const [
+      posts,
+      mixtapes,
+      plans,
+      contextNotes,
+      embeddings,
+      discogsRan,
+      lastfmRan,
+      lastfmLoved,
+      noteRan,
+    ] = await Promise.all([
+      listSocialPostsForTracks(ids),
+      listMixtapeMembershipsForTracks(ids),
+      listPlanMembershipsForTracks(ids),
+      listContextNotePresenceForTracks(ids),
+      listEmbeddingPresenceForTracks(ids),
+      listBackfillRanForTracks(ids, "discogs"),
+      listBackfillRanForTracks(ids, "lastfm"),
+      listLastfmLovedForTracks(ids),
+      listBackfillRanForTracks(ids, "note"),
+    ]);
+
+    return {
+      ...track,
+      discogsRan: discogsRan.has(track.trackId),
+      hasContextNote: contextNotes.has(track.trackId),
+      hasEmbedding: embeddings.has(track.trackId),
+      lastfmLoved: lastfmLoved.has(track.trackId),
+      lastfmRan: lastfmRan.has(track.trackId),
+      mixtapes: mixtapes[track.trackId] ?? [],
+      noteRan: noteRan.has(track.trackId),
+      plans: plans[track.trackId] ?? [],
+      posts: posts[track.trackId] ?? [],
+    };
+  });
+
 // The plans the board's "Add to a plan" sheet can pencil findings into — every
 // plan with its CURRENT cues in the `replace_recording_cues` body shape, so the
 // dialog's append replays them untouched (non-finding snapshot rows and marked
@@ -332,7 +397,7 @@ const fetchPublishAdvance = createServerFn({ method: "GET" }).handler(
   },
 );
 
-type BoardSearch = { mix: MixFilter; stage: Worklist; submission?: string };
+type BoardSearch = { mix: MixFilter; note?: string; stage: Worklist; submission?: string };
 
 const ADVANCE_KEY = ["admin", "publish-advance"] as const;
 
@@ -349,6 +414,11 @@ export const Route = createFileRoute("/admin/findings")({
       typeof search.stage === "string" && WORKLIST_KEYS.has(search.stage as Worklist)
         ? (search.stage as Worklist)
         : "all",
+    // The attention queue's HELD-NOTE deep-link (`?note=<trackId>`): present ⇒ open that
+    // finding's note dialog, where the echo gate's held note and the neighbour it echoed sit
+    // side by side and the operator rules on it. The queue row cannot rule inline — reading
+    // the two notes against each other is the whole act.
+    ...(typeof search.note === "string" ? { note: search.note } : {}),
     // The attention queue's submission-row deep-link (`?submission=<id>`): present ⇒
     // open the review tray with that candidate focused. A bare `?submission=` (the
     // pure model's fallback when the row had no id) still opens the tray.
@@ -369,6 +439,7 @@ function AdminBoardPage() {
   const { advance: initialAdvance, board: initial } = Route.useLoaderData();
   const {
     mix: activeMix,
+    note: focusNoteTrackId,
     stage: activeWorklist,
     submission: focusSubmissionId,
   } = Route.useSearch();
@@ -450,7 +521,9 @@ function AdminBoardPage() {
   const [copiedId, setCopiedId] = useState<string | undefined>();
   const [enrichBusy, setEnrichBusy] = useState(false);
   const [enrichError, setEnrichError] = useState<string | undefined>();
-  const [noteId, setNoteId] = useState<string | undefined>();
+  // Seeded from the attention queue's held-note deep-link (`?note=<trackId>`), so landing
+  // straight from the queue row opens the note dialog on that finding with its held note in it.
+  const [noteId, setNoteId] = useState<string | undefined>(() => focusNoteTrackId);
   const [noteSaving, setNoteSaving] = useState(false);
   const [noteError, setNoteError] = useState<string | undefined>();
   // The two audio-observation view cells (Context · Observation). View-only for now
@@ -477,6 +550,30 @@ function AdminBoardPage() {
       setTrayOpen(true);
     }
   }, [focusSubmissionId]);
+
+  // The same for the held-note deep-link — an in-app navigation from the queue row must open
+  // the note dialog, not just change the URL.
+  useEffect(() => {
+    if (focusNoteTrackId !== undefined) {
+      setNoteId(focusNoteTrackId);
+    }
+  }, [focusNoteTrackId]);
+
+  // Closing the note dialog drops the deep-link param so a reload/back doesn't re-open it.
+  const onNoteOpenChange = useCallback(
+    (open: boolean) => {
+      if (open) {
+        return;
+      }
+
+      setNoteId(undefined);
+
+      if (focusNoteTrackId !== undefined) {
+        void navigate({ search: (previous) => ({ ...previous, note: undefined }) });
+      }
+    },
+    [focusNoteTrackId, navigate],
+  );
 
   // Closing the tray drops the deep-link param so a reload/back doesn't re-open it.
   const onTrayOpenChange = useCallback(
@@ -510,7 +607,17 @@ function AdminBoardPage() {
     [rows],
   );
   const enrichRow = rowFor(enrichId);
-  const noteRow = rowFor(noteId);
+  const boardNoteRow = rowFor(noteId);
+  // The deep-linked finding may sit beyond the board's loaded pages (the held-note queue row
+  // points at an arbitrary, often older, finding). Fetch that one row when it's missing, so
+  // the dialog opens for every finding the queue can send us to — not just the recent ones.
+  const { data: fetchedNoteRow } = useQuery({
+    enabled: noteId !== undefined && boardNoteRow === undefined,
+    queryFn: () => fetchBoardRow({ data: { trackId: noteId as string } }),
+    queryKey: [...BOARD_ROW_KEY, noteId],
+    staleTime: Number.POSITIVE_INFINITY,
+  });
+  const noteRow = boardNoteRow ?? fetchedNoteRow ?? undefined;
   const contextRow = rowFor(contextId);
   const observationRow = rowFor(observationId);
   const pushRow = rowFor(push?.trackId);
@@ -1013,7 +1120,7 @@ function AdminBoardPage() {
       <NoteDialog
         error={noteError}
         hasNext={noteRow ? nextVisibleTrackId(noteRow.trackId) !== undefined : false}
-        onOpenChange={(open) => !open && setNoteId(undefined)}
+        onOpenChange={onNoteOpenChange}
         onSave={(note) => void saveNote(note)}
         onSaveAndNext={(note) => void saveNote(note, true)}
         row={noteRow ?? null}

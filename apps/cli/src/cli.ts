@@ -1734,6 +1734,44 @@ function addAdminCommands(program: Command): void {
       await runGalaxyMapWrite(options, galaxyMapWriteCommand);
     });
 
+  // THE ECHO GATE'S LEDGER — the auto-notes the gate refused to store, kept rather than
+  // binned (docs/agents/note-agent.md). The gate is unchanged and still strict; what changed
+  // is that its rejections are now READABLE, so the operator can tell a good rejection from a
+  // badly-tuned one. `held` reads them; `gate` reads or retunes the dials (a `settings` KV
+  // flip the next sweep tick picks up — never a deploy). Ruling on a held note (keep it / bin
+  // it) is OPERATOR-tier and lives on the web admin, per the persona law.
+  const notes = configureCommand(
+    admin.command("notes").description("The auto-note echo gate: held notes + its dials"),
+  );
+
+  notes.action(() => {
+    notes.outputHelp();
+  });
+
+  notes
+    .command("held")
+    .description("The auto-notes the echo gate held back (and why)")
+    .option("--settled", "Read the ones already ruled on instead (the retune evidence)", false)
+    .option("--json", "Print JSON", false)
+    .action(async (options: NoteHeldOptions) => {
+      const { noteHeldCommand } = await import("./commands/admin-notes");
+      await runNoteHeld(options, noteHeldCommand);
+    });
+
+  notes
+    .command("gate")
+    .description("Read or retune the echo gate's thresholds (a flip, not a deploy)")
+    .option("--min-phrase-words <n>", "A shared run this long is a lift (2-20; default 4)")
+    .option(
+      "--max-overlap <x>",
+      "Content-word overlap at/above this is an echo (0.05-1; default 0.3)",
+    )
+    .option("--json", "Print JSON", false)
+    .action(async (options: NoteGateOptions) => {
+      const { noteGateCommand } = await import("./commands/admin-notes");
+      await runNoteGate(options, noteGateCommand);
+    });
+
   // THE CATALOGUE — every track the archive knows and Fluncle never certified (a `tracks`
   // row with no `findings` row). Two halves, four commands:
   //
@@ -4052,6 +4090,77 @@ async function runCatalogueList(
   }
 }
 
+type NoteHeldOptions = JsonOptions & { settled?: boolean };
+type NoteGateOptions = JsonOptions & { maxOverlap?: string; minPhraseWords?: string };
+
+// The held notes as a deadpan board (the CLI register). Each one prints the line the model
+// wrote, the neighbour it echoed, and the score NEXT TO the threshold it was judged against —
+// a score with no threshold beside it is a number, not evidence.
+async function runNoteHeld(
+  options: NoteHeldOptions,
+  noteHeldCommand: typeof import("./commands/admin-notes").noteHeldCommand,
+): Promise<void> {
+  const { gate, rejections } = await noteHeldCommand({ settled: options.settled === true });
+
+  if (options.json) {
+    printJson({ gate, ok: true, rejections });
+    return;
+  }
+
+  if (rejections.length === 0) {
+    console.log(
+      options.settled ? "Nothing ruled on yet." : "Nothing held back. The gate is quiet.",
+    );
+    return;
+  }
+
+  console.log(
+    `The gate sits at ${gate.minPhraseWords} lifted words / ${Math.round(gate.maxOverlap * 100)}% overlap.`,
+  );
+
+  for (const held of rejections) {
+    const ruled = held.resolution ? ` [${held.resolution}]` : "";
+    const bounced = held.attempts > 1 ? ` (bounced ${held.attempts}x)` : "";
+    console.log("");
+    console.log(`${held.logId ?? held.trackId}  ${held.title}${bounced}${ruled}`);
+    console.log(`  wrote:  ${held.note}`);
+    if (held.phrase) {
+      console.log(`  lifted: "${held.phrase}" from ${held.neighborLogId ?? "a neighbour"}`);
+    } else {
+      console.log(
+        `  reuses: ${Math.round(held.overlap * 100)}% of ${held.neighborLogId ?? "a neighbour"}'s words`,
+      );
+    }
+    console.log(
+      `  judged at: ${held.minPhraseWords} words / ${Math.round(held.maxOverlap * 100)}%`,
+    );
+  }
+}
+
+// Read or retune the gate. A bare `gate` reports; a dial sets it.
+async function runNoteGate(
+  options: NoteGateOptions,
+  noteGateCommand: typeof import("./commands/admin-notes").noteGateCommand,
+): Promise<void> {
+  const minPhraseWords =
+    options.minPhraseWords === undefined ? undefined : Number(options.minPhraseWords);
+  const maxOverlap = options.maxOverlap === undefined ? undefined : Number(options.maxOverlap);
+
+  const gate = await noteGateCommand({
+    ...(maxOverlap === undefined ? {} : { maxOverlap }),
+    ...(minPhraseWords === undefined ? {} : { minPhraseWords }),
+  });
+
+  if (options.json) {
+    printJson({ gate, ok: true });
+    return;
+  }
+
+  console.log(
+    `The echo gate: a lift is ${gate.minPhraseWords}+ shared words; an echo is ${Math.round(gate.maxOverlap * 100)}%+ of a neighbour's words.`,
+  );
+}
+
 async function runGalaxyMapRead(
   options: JsonOptions,
   galaxyMapReadCommand: typeof import("./commands/galaxies").galaxyMapReadCommand,
@@ -4930,8 +5039,10 @@ const stringOptions = new Set([
   "--lens",
   "--limit",
   "--max-hop",
+  "--max-overlap",
   "--metrics",
   "--mime",
+  "--min-phrase-words",
   "--model",
   "--note",
   "--order",
@@ -4948,9 +5059,9 @@ const stringOptions = new Set([
   "--render",
   "--scene",
   "--scheduled-for",
+  "--scope",
   "--script",
   "--script-file",
-  "--scope",
   "--seed",
   "--soundcloud-url",
   "--source",

@@ -22,7 +22,7 @@ import { oc } from "@orpc/contract";
 import * as z from "zod";
 
 /**
- * The queue's ten sources (mirrors `AttentionSource` in apps/web/src/lib/attention.ts).
+ * The queue's eleven sources (mirrors `AttentionSource` in apps/web/src/lib/attention.ts).
  * EXHAUSTIVE and alphabetically sorted: this enum, the `AttentionSource` union, and every
  * exhaustive map over it (the dashboard's icons + labels, the CLI's labels, the Raycast
  * menu bar's meta, the priority order, the brief's phrases) must move together.
@@ -35,6 +35,7 @@ export const AttentionSourceSchema = z
     "drip-empty",
     "label-review",
     "newsletter",
+    "note-rejected",
     "post-tiktok",
     "post-youtube",
     "submission",

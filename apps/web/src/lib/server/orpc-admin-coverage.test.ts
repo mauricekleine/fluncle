@@ -126,6 +126,11 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // route file (oRPC serves it off the registry). Admin tier (agent-allowed): the
   // Friday cron reads it from a fresh session to find an unsent draft + the window.
   "GET /admin/newsletter/editions": "list_editions_admin",
+  // The echo gate's ledger — the auto-notes it refused to store, kept with the reason so
+  // the operator can read them and rule. Contract-only oRPC (no TanStack route file).
+  // Admin tier (agent-allowed read). `list_note_rejections` matches the public `list_`
+  // prefix so the "holds exactly" check skips it; it lives here for completeness.
+  "GET /admin/note-rejections": "list_note_rejections",
   "GET /admin/recordings": "list_recordings",
   "GET /admin/recordings/{recordingId}": "get_recording",
   "GET /admin/submissions": "list_submissions",
@@ -174,6 +179,10 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // they live here to satisfy the "registry holds EXACTLY this map's ops" check.
   // create/update are admin tier (agent-allowed drafting); send is operator-only.
   "PATCH /admin/newsletter/editions/{id}": "update_edition",
+  // Retuning the auto-note echo gate — contract-only oRPC (no TanStack route file).
+  // OPERATOR tier: the dials decide what Fluncle will and won't say about his archive, so
+  // the agent token 403s. They live in the `settings` KV — a flip, not a deploy.
+  "PATCH /admin/note-gate": "update_note_gate",
   "PATCH /admin/recordings/{recordingId}": "update_recording",
   // The cost-ledger edit (COST-02) — contract-only oRPC (no TanStack route file). Operator tier.
   "PATCH /admin/subscriptions/{id}": "update_subscription",
@@ -261,6 +270,12 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "POST /admin/mixtapes/{mixtapeId}/youtube/resync": "resync_mixtape_youtube",
   "POST /admin/newsletter/editions": "create_edition",
   "POST /admin/newsletter/editions/{id}/send": "send_edition",
+  // The operator's ruling on a held auto-note — contract-only oRPC (no TanStack route
+  // file). OPERATOR tier: `accepted` overrules the echo gate and writes the line onto the
+  // finding's public /log page (publish-class), so the agent token 403s. The write takes
+  // the same atomic fill-empty-only predicate as the agent's — it can never clobber an
+  // operator note.
+  "POST /admin/note-rejections/{id}/resolve": "resolve_note_rejection",
   // The push receipts sweep is a contract-only admin op (no TanStack route file —
   // the whole devices domain is contract-first oRPC), so it has no file-enumeration
   // entry; it lives here only to satisfy the "registry holds EXACTLY this map's

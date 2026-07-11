@@ -1293,6 +1293,93 @@ export const settings = sqliteTable("settings", {
   value: text("value").notNull(),
 });
 
+// THE ECHO GATE'S LEDGER — every auto-note the echo gate REFUSED to store, kept.
+//
+// The auto-note is authored with the notes of the finding's sonic neighbours in the
+// prompt, and `gateNoteEcho` (lib/server/note.ts) hard-fails a line that lifts a phrase
+// from one or reuses its words wholesale. That gate is doing real work and stays exactly
+// as strict as it was. What it must NOT do is work in the DARK: a pipeline that throws
+// the model's output away without telling anyone is a pipeline nobody can supervise —
+// the operator cannot read what was binned, cannot judge whether it was actually worse
+// than nothing, and cannot see whether the THRESHOLDS are wrong, because the evidence is
+// gone. So a rejection is no longer a deletion; it is a row here, and a row in the
+// operator's `/admin` attention queue.
+//
+// ONE OPEN ROW PER FINDING (the partial unique index below). The sweep re-authors once
+// per tick and the finding stays in the note queue forever while it is note-less, so an
+// append-only row-per-attempt would let a single stubbornly-echoing finding write
+// hundreds of rows a day. Instead a re-rejection UPDATES the open row — freshest note,
+// `attempts` incremented — so the ledger is bounded by the ARCHIVE, not by the cron's
+// tick rate, and the finding raises exactly one queue row. Resolved rows (accepted /
+// discarded) are kept forever: they are the evidence trail behind any future retune.
+//
+// The thresholds IN FORCE at the moment of rejection are snapshotted onto the row
+// (`min_phrase_words` / `max_overlap`). They are operator-tunable at runtime through the
+// `settings` KV, so without the snapshot a retune would silently rewrite the meaning of
+// every historical rejection ("why was this 0.31 note binned? the gate says 0.40").
+//
+// A CATALOGUE track can never appear here: the only writer is the `note_track` handler,
+// which drives through `requireTrack`'s `findings ⋈ tracks` join and 404s an uncertified
+// track long before a note is gated. See docs/agents/note-agent.md.
+export const noteRejections = sqliteTable(
+  "note_rejections",
+  {
+    // How many times this finding's auto-note has bounced off the gate while THIS
+    // rejection stayed open (the sweep's re-author makes 2 a normal tick). A high count
+    // is the signal that the region is exhausted or the gate is too tight.
+    attempts: integer("attempts").notNull().default(1),
+    // The FIRST time this finding's note was held — and it never moves, even though the row
+    // is updated in place on a re-bounce. It is the attention queue's oldest-first anchor,
+    // and that is exactly why it must not track the latest bounce: the sweep re-authors this
+    // finding every tick while it stays note-less, so an anchor that moved with each bounce
+    // would reset the row's age forever and it could NEVER age into the operator's working
+    // set. The row that needs his eye most is the one that keeps failing; anchoring on the
+    // last failure would bury it the hardest.
+    createdAt: text("created_at").notNull(),
+    id: text("id").primaryKey(),
+    // The overlap threshold in force when this note was rejected (the `settings` value,
+    // else the built-in default) — snapshotted so a later retune cannot rewrite history.
+    maxOverlap: real("max_overlap").notNull(),
+    // The lifted-phrase threshold in force when this note was rejected.
+    minPhraseWords: integer("min_phrase_words").notNull(),
+    // The neighbour it echoed hardest — the finding whose note the gate matched it against.
+    neighborLogId: text("neighbor_log_id"),
+    // A SNAPSHOT of the neighbour's note as it read at rejection time. Stored rather than
+    // joined because the neighbour's own note can be edited or replaced later, and the
+    // operator must be able to read the exact PAIR the gate compared.
+    neighborNote: text("neighbor_note"),
+    // THE EVIDENCE: the note the model actually wrote. The whole point of this table —
+    // the operator reads this and decides for himself whether the gate was right.
+    note: text("note").notNull(),
+    // The measured content-word Jaccard against that neighbour (0..1).
+    overlap: real("overlap").notNull(),
+    // The run of words lifted from the neighbour; '' when the rejection was overlap-only.
+    phrase: text("phrase").notNull().default(""),
+    // The operator's ruling. NULL = still open (it raises a queue row). `accepted` = he
+    // read it, judged it good, and it was written to the finding (through the same
+    // fill-empty-only path the agent uses). `discarded` = the gate was right.
+    resolution: text("resolution", { enum: ["accepted", "discarded"] }),
+    resolvedAt: text("resolved_at"),
+    // The finding whose note was rejected (no declared FK — the socialPosts.trackId /
+    // cost_events.trackId precedent).
+    trackId: text("track_id").notNull(),
+    // The LATEST bounce — this one DOES move with `note`/`attempts` on every re-hold. It is
+    // the diagnostic ("when did it last try"), never the queue's anchor (see `createdAt`).
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    // ONE open rejection per finding — the bound that keeps a stubbornly-echoing finding
+    // from flooding the ledger, and keeps the attention queue to one row per finding.
+    // PARTIAL, so a finding may accumulate any number of RESOLVED rejections over its
+    // life (the retune evidence) while only ever holding one open.
+    uniqueIndex("note_rejections_open_track_idx")
+      .on(table.trackId)
+      .where(sql`${table.resolvedAt} is null`),
+    // The queue read: "every rejection still waiting on the operator's eye", oldest first.
+    index("note_rejections_open_idx").on(table.resolvedAt, table.createdAt),
+  ],
+);
+
 // Fluncle's Logbook — one first-person travelogue entry per SECTOR-DAY (the
 // canonical days-since-epoch number from sectorDay()). Every day that had at least
 // one finding gets a written log entry, authored nightly by the on-box

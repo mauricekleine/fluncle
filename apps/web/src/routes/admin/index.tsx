@@ -9,6 +9,7 @@ import {
   MicrophoneStageIcon,
   PaperPlaneTiltIcon,
   ProhibitIcon,
+  QuotesIcon,
   TagIcon,
   TrayIcon,
 } from "@phosphor-icons/react";
@@ -714,6 +715,7 @@ const SOURCE_ICONS: Record<AttentionSource, ComponentType<{ className?: string }
   "drip-empty": InstagramIcon,
   "label-review": TagIcon,
   newsletter: EnvelopeSimpleIcon,
+  "note-rejected": QuotesIcon,
   "post-tiktok": TiktokIcon,
   "post-youtube": YoutubeIcon,
   submission: TrayIcon,
@@ -729,6 +731,7 @@ const SOURCE_LABELS: Record<AttentionSource, string> = {
   "drip-empty": "Instagram drip",
   "label-review": "Label",
   newsletter: "Newsletter",
+  "note-rejected": "Held note",
   "post-tiktok": "TikTok",
   "post-youtube": "YouTube",
   submission: "Submission",

@@ -1,5 +1,6 @@
 import { ArrowRightIcon, CircleNotchIcon, PauseIcon, PlayIcon } from "@phosphor-icons/react";
 import { useState } from "react";
+import { HeldNotePanel } from "@/components/admin/held-note-panel";
 import { type BoardRow } from "@/components/admin/use-publish";
 import { Button } from "@fluncle/ui/components/button";
 import {
@@ -62,6 +63,13 @@ function NoteDialogBody({
           schema. Optional.
         </DialogDescription>
       </DialogHeader>
+
+      {/* The echo gate's held note, when there is one. It sits ABOVE the textarea because it
+          is the reason he opened this dialog: the queue row sent him here to read a line the
+          model wrote and the gate refused to store. "Edit it" drops that line into the
+          textarea below, which is the common ruling — the model is usually right except for
+          the one clause it borrowed. */}
+      <HeldNotePanel onUseAsDraft={setNote} trackId={row.trackId} />
 
       <Textarea
         autoFocus
