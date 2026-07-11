@@ -7,7 +7,7 @@ import { describe, expect, test } from "bun:test";
 
 import { type PlanEntry } from "../contract";
 import { type AdminAuth } from "./plan";
-import { parsePlanArg, selectVjIndex, shouldFingerprintFullSong } from "./serve";
+import { parseCommand, parsePlanArg, selectVjIndex, shouldFingerprintFullSong } from "./serve";
 import { type ShuffleBag, type VjTransition } from "./vj";
 
 describe("parsePlanArg", () => {
@@ -42,6 +42,65 @@ describe("parsePlanArg", () => {
   test("the RANDOM-VJ sentinel resolves through both forms (`--plan all` / bare `all`)", () => {
     expect(parsePlanArg(["--plan", "all"])).toBe("all");
     expect(parsePlanArg(["all"])).toBe("all");
+  });
+});
+
+describe("parseCommand (the WS never-crash rail)", () => {
+  // The socket carries arbitrary bytes, so every command is shape-checked before it reaches the
+  // state machine — the sibling of vj.ts's parseTransition on the WS side. A malformed frame
+  // yields null (dropped), never a blind cast fed to the matcher.
+  test("passes the no-payload commands through", () => {
+    expect(parseCommand({ cmd: "advance" })).toEqual({ cmd: "advance" });
+    expect(parseCommand({ cmd: "rewind" })).toEqual({ cmd: "rewind" });
+  });
+
+  test("goto requires a finite numeric index", () => {
+    expect(parseCommand({ cmd: "goto", index: 3 })).toEqual({ cmd: "goto", index: 3 });
+    expect(parseCommand({ cmd: "goto" })).toBeNull();
+    expect(parseCommand({ cmd: "goto", index: "3" })).toBeNull();
+    expect(parseCommand({ cmd: "goto", index: Number.NaN })).toBeNull();
+  });
+
+  test("blackout requires a boolean", () => {
+    expect(parseCommand({ cmd: "blackout", on: true })).toEqual({ cmd: "blackout", on: true });
+    expect(parseCommand({ cmd: "blackout", on: "yes" })).toBeNull();
+    expect(parseCommand({ cmd: "blackout" })).toBeNull();
+  });
+
+  test("intensity requires a finite number", () => {
+    expect(parseCommand({ cmd: "intensity", value: 1.2 })).toEqual({
+      cmd: "intensity",
+      value: 1.2,
+    });
+    expect(parseCommand({ cmd: "intensity", value: Number.POSITIVE_INFINITY })).toBeNull();
+    expect(parseCommand({ cmd: "intensity" })).toBeNull();
+  });
+
+  test("heartbeat requires a finite renderFrame", () => {
+    expect(parseCommand({ cmd: "heartbeat", renderFrame: 7 })).toEqual({
+      cmd: "heartbeat",
+      renderFrame: 7,
+    });
+    expect(parseCommand({ cmd: "heartbeat", renderFrame: Number.NaN })).toBeNull();
+  });
+
+  test("mel requires a finite timestamp and an array frame (length is state.ts's job)", () => {
+    expect(parseCommand({ cmd: "mel", frame: [1, 2, 3], t: 0 })).toEqual({
+      cmd: "mel",
+      frame: [1, 2, 3],
+      t: 0,
+    });
+    expect(parseCommand({ cmd: "mel", t: 0 })).toBeNull(); // no frame → dropped
+    expect(parseCommand({ cmd: "mel", frame: [1, 2, 3] })).toBeNull(); // no timestamp
+    expect(parseCommand({ cmd: "mel", frame: "not-an-array", t: 0 })).toBeNull();
+  });
+
+  test("non-objects and unknown commands are dropped", () => {
+    expect(parseCommand(null)).toBeNull();
+    expect(parseCommand(42)).toBeNull();
+    expect(parseCommand("advance")).toBeNull();
+    expect(parseCommand({ cmd: "explode" })).toBeNull();
+    expect(parseCommand({})).toBeNull();
   });
 });
 
