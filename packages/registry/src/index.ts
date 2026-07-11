@@ -203,7 +203,8 @@ export const SURFACES: readonly Surface[] = [
   {
     exposedContent: [
       "the log index — every finding's coordinate page",
-      "/log/:logId — one finding's permanent home (the Log ID resolves here)",
+      "/log/:logId — one object's permanent home (the Log ID resolves here)",
+      "the three kinds the coordinate resolves to: a finding, an F-marked mixtape, an L-marked letter",
     ],
     kind: "web_route",
     name: "web.log",
@@ -269,8 +270,9 @@ export const SURFACES: readonly Surface[] = [
   },
   {
     exposedContent: [
-      "the newsletter archive — every sent edition",
-      "/newsletter/:number — one past edition rendered on the web",
+      "the back issues — every letter Fluncle has sent the crew",
+      "each letter's own page is its coordinate, /log/:logId (the L-marked Log ID)",
+      "/newsletter/:number — the old address, 301s to the letter's coordinate",
     ],
     kind: "web_route",
     name: "web.newsletter",

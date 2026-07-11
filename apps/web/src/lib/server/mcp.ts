@@ -3,7 +3,7 @@ import { logPageUrl, siteUrl, twitchUrl } from "../fluncle-links";
 import { fluncleDescription } from "../identity";
 import { type FeedItem, type MixtapeDTO, mixtapeDisplayTitle } from "../mixtapes";
 import { getLiveState, type LiveState } from "./live";
-import { resolveLogPageTarget } from "./log-resolver";
+import { resolveMusicTarget } from "./log-resolver";
 import { subscribeToNewsletter } from "./newsletter";
 import { ApiError, searchTrackCandidates } from "./spotify";
 import { getServiceStatuses, type ServiceHealthStatus } from "./status";
@@ -295,10 +295,10 @@ type ResolvedRecord =
   | { kind: "finding"; record: ReturnType<typeof publicFindingRecord> }
   | { kind: "mixtape"; record: ReturnType<typeof publicMixtapeRecord> };
 
-// Resolve a coordinate (Log ID) or Spotify track id to its public record, reusing
-// the same resolver the /log page uses so the MCP read and the web read never drift.
+// Resolve a coordinate (Log ID) or Spotify track id to its public MUSIC record, reusing
+// the same music resolver the /log page reads through, so MCP and the web never drift.
 async function readCoordinate(idOrLogId: string): Promise<ResolvedRecord | undefined> {
-  const target = await resolveLogPageTarget(idOrLogId);
+  const target = await resolveMusicTarget(idOrLogId);
 
   if (!target) {
     return undefined;

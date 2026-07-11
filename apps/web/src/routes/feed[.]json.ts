@@ -1,60 +1,16 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { parseArtistsJson } from "../lib/server/artists";
-import { getDb, typedRows } from "../lib/server/db";
+import { listFeedEntries } from "../lib/server/feed";
 
-type TrackRow = {
-  artists_json: string;
-  item_type: "finding" | "mixtape";
-  note: string | null;
-  added_at: string;
-  spotify_url: string | null;
-  title: string;
-  track_id: string;
-};
+// The JSON feed: the three kinds on the spine in one chronological list (see
+// lib/server/feed.ts). A mixtape and a letter each carry their kind as a tag; a
+// finding, the default, carries none.
 
 export const Route = createFileRoute("/feed.json")({
   server: {
     handlers: {
       GET: async () => {
-        const db = await getDb();
-        const result = await db.execute({
-          args: [25],
-          sql: `select * from (
-            select
-              'finding' as item_type,
-              tracks.track_id,
-              tracks.spotify_url,
-              tracks.title,
-              tracks.artists_json,
-              findings.note,
-              findings.added_at
-            from findings join tracks on tracks.track_id = findings.track_id
-            union all
-            select
-              'mixtape' as item_type,
-              log_id as track_id,
-              null as spotify_url,
-              title,
-              '["Fluncle"]' as artists_json,
-              note,
-              added_at
-            from mixtapes
-            where status = 'published' and log_id is not null and added_at is not null
-          )
-            order by added_at desc, track_id desc
-            limit ?`,
-        });
-        const rows = typedRows<TrackRow>(result.rows);
-        const items = rows.map((row) => {
-          const artists = parseArtistsJson(row.artists_json);
-          const title =
-            row.item_type === "mixtape" ? row.title : `${artists.join(", ")} - ${row.title}`;
-          const contentText = row.note?.trim() ? `${title}\n\n${row.note.trim()}` : title;
-          const url =
-            row.item_type === "mixtape"
-              ? `https://www.fluncle.com/log/${encodeURIComponent(row.track_id)}`
-              : (row.spotify_url as string);
-
+        const entries = await listFeedEntries(25);
+        const items = entries.map((entry) => {
           const item: {
             content_text: string;
             date_published: string;
@@ -63,15 +19,17 @@ export const Route = createFileRoute("/feed.json")({
             title: string;
             url: string;
           } = {
-            content_text: contentText,
-            date_published: new Date(row.added_at).toISOString(),
-            id: row.track_id,
-            title,
-            url,
+            content_text: entry.summary,
+            date_published: new Date(entry.addedAt).toISOString(),
+            id: entry.guid,
+            title: entry.title,
+            url: entry.link,
           };
-          if (row.item_type === "mixtape") {
-            item.tags = ["mixtape"];
+
+          if (entry.kind !== "finding") {
+            item.tags = [entry.kind];
           }
+
           return item;
         });
 

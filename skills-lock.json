@@ -15,7 +15,7 @@
     "copywriting-fluncle": {
       "source": "packages/skills/copywriting-fluncle",
       "sourceType": "local",
-      "computedHash": "3a107d17c8ac06c183986ec4c8defba42c0cfea04b87657f0cb954f3e2cce614"
+      "computedHash": "3ab47740bdf6a80132da8998b45a803c9f016189097102431f2a59ce6ea9e839"
     },
     "email-best-practices": {
       "source": "resend/resend-skills",
@@ -46,7 +46,7 @@
     "fluncle-mixtapes": {
       "source": "packages/skills/fluncle-mixtapes",
       "sourceType": "local",
-      "computedHash": "e40e044c90d27c1cd5917c10d01ce86cd9275ac07c37e305d14e8f4f8d786205"
+      "computedHash": "629f06da32e20ff2ac94ad056691011b8f4d86ad9b0641e34bcf1631e8bc0c88"
     },
     "fluncle-operator": {
       "source": "packages/skills/fluncle-operator",

@@ -1,7 +1,7 @@
 import { Link, createFileRoute } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { type EditionDTO, editionFindingCount, editionIntroSnippet } from "@/lib/editions";
-import { siteUrl } from "@/lib/fluncle-links";
+import { logPageUrl, siteUrl } from "@/lib/fluncle-links";
 import { formatDateLong } from "@/lib/format";
 import { jsonLdScript } from "@/lib/json-ld";
 import { listEditions } from "@/lib/server/editions";
@@ -39,12 +39,13 @@ export const Route = createFileRoute("/newsletter/")({
         "@context": "https://schema.org",
         "@type": "ItemList",
         itemListElement: loaderData
-          ?.filter((edition) => edition.number !== undefined)
+          ?.filter((edition) => edition.logId !== undefined)
           .map((edition, index) => ({
             "@type": "ListItem",
-            name: edition.subject ?? `Edition #${edition.number}`,
+            name: edition.subject ?? `Letter No. ${edition.number}`,
             position: index + 1,
-            url: `${siteUrl}/newsletter/${edition.number}`,
+            // The letter's own page — its coordinate, the one canonical URL.
+            url: logPageUrl(edition.logId ?? ""),
           })),
         name: "The mothership: Fluncle's back issues",
         url: `${siteUrl}/newsletter`,
@@ -77,25 +78,25 @@ function NewsletterArchivePage() {
             {editions.map((edition) => {
               const snippet = editionIntroSnippet(edition.content);
               const count = editionFindingCount(edition.content);
+              // A sent letter always carries its coordinate (derived from the number +
+              // send date the send froze). It is the row's id AND its link — the letter
+              // lives at `/log/<coordinate>` like every other object on the spine.
+              const logId = edition.logId;
+
+              if (!logId) {
+                return null;
+              }
 
               return (
                 <li
                   className="log-index-row log-index-row--entry log-index-row--edition"
                   key={edition.id}
                 >
-                  <Link
-                    className="log-index-id"
-                    params={{ number: String(edition.number) }}
-                    to="/newsletter/$number"
-                  >
-                    #{edition.number}
+                  <Link className="log-index-id" params={{ logId }} to="/log/$logId">
+                    {logId}
                   </Link>
-                  <Link
-                    className="log-index-line"
-                    params={{ number: String(edition.number) }}
-                    to="/newsletter/$number"
-                  >
-                    {edition.subject ?? `Edition #${edition.number}`}
+                  <Link className="log-index-line" params={{ logId }} to="/log/$logId">
+                    {edition.subject ?? `Letter No. ${edition.number}`}
                   </Link>
                   <span className="log-index-date">
                     {edition.sentAt ? formatDateLong(edition.sentAt) : null}

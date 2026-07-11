@@ -37,6 +37,8 @@ A mixtape gets a real Log ID in the same `XXX.Y.ZZ` family as a finding, disting
 
 So the first mixtape minted as **`019.F.1A`**.
 
+The same mechanism now carries a **second** marked sibling: a sent newsletter edition — **the letter** — takes the literal `L` in that slot (`023.L.1A`), with the edition number as its `<digit><letter>` mark. Same move, one grammar, three disjoint markers (a digit / `F` / `L`); see `docs/agents/newsletter-agent.md` → _The letter's coordinate_. A new marked object copies this pattern rather than inventing another.
+
 What this scheme buys:
 
 - The number keeps the exact finding mark shape (`<digit><letter>`), so a mixtape coordinate reads as on-format and quiet; only the middle `F` distinguishes it on sight.

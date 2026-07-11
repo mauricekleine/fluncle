@@ -186,7 +186,8 @@ func parseBootCommand(args []string) bootCommand {
 
 // looksLikeLogID is the on-sight test for a Log ID coordinate: the XXX.Y.ZZ
 // shape (three dot-separated parts, alphanumerics only). The middle slot may be
-// the literal F marker of a mixtape; the resolver decides finding vs mixtape.
+// the literal F marker of a mixtape or the L marker of a letter (a sent newsletter
+// edition); the resolver decides which kind of object it names.
 //
 // DELIBERATELY LOOSER than the canonical grammar (@fluncle/contracts/log-id —
 // mirrored in TS on the web/extension surfaces; Go can't import it). This is a

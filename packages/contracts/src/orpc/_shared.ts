@@ -320,9 +320,11 @@ export const EditionContentSchema = z
 
 /**
  * An edition as the `/newsletter` archive surface + `/api/v1/newsletter/editions`
- * emit it (`EditionDTO` in ../index.ts). NOT a collectible: a plain integer
- * `number` (minted on send, absent on a draft), no Log ID, no coordinate. The
- * `content` is the structured payload above.
+ * emit it (`EditionDTO` in ../index.ts). A sent edition is spine-native: it carries a
+ * plain integer `number` (minted on send) AND the `L`-marked `logId` coordinate
+ * derived from it (`023.L.1A` — the letter; see apps/web/src/lib/edition-log-id.ts),
+ * which resolves at `/log/<logId>`. A DRAFT carries neither — it hasn't gone out, so
+ * it isn't on the spine. The `content` is the structured payload above.
  */
 export const EditionDTOSchema = z
   .object({
@@ -330,6 +332,8 @@ export const EditionDTOSchema = z
     content: EditionContentSchema,
     createdAt: z.string().optional(),
     id: z.string(),
+    /** The `L`-marked coordinate — present only on a sent edition. */
+    logId: z.string().optional(),
     number: z.number().optional(),
     sentAt: z.string().optional(),
     status: z.enum(["draft", "sent"]),
