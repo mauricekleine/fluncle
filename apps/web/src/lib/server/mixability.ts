@@ -18,13 +18,16 @@
 //   Within-set successor rank — mean true-next rank ≈5.2 vs ~4.75 random (no signal).
 //   Coverage — 16/17 keyed, 17/17 features, 1/17 embedded (the sonic term dormant).
 //
-// THE SIGNAL REALITY (prod snapshot, 56 findings; re-measure at build time): `key`
-// 50/56 and discriminative; `bpm` 53/56 but near-constant in the folded 170–175 band
-// (tiebreak-grade); `embedding_json` 3/56 (the sonic term is DORMANT — gated off until
-// the embed cron clears the floor); `features_json` 56/56 (the dense texture
-// tiebreak). Slice 1 is therefore a harmonic next-track finder with a texture
-// tiebreak; the sonic term ships wired + gated, activating with zero code change the
-// day coverage clears `MIN_EMBEDDED_PAIRS`.
+// THE SIGNAL REALITY. As of 2026-07-11 the embed cron has DRAINED: all 60 findings
+// carry an `embedding_json` vector (every one is assigned to a sonic galaxy, which is
+// impossible without one), so `sonicGateOpen(60)` → 1770 pairs ≥ MIN_EMBEDDED_PAIRS
+// and THE SONIC TERM IS LIVE. It activated with zero code change, exactly as designed.
+// The other signals: `key` ~50/60 and discriminative; `bpm` ~53/60 but near-constant in
+// the folded 170–175 band (tiebreak-grade); `features_json` 60/60 (the dense texture
+// tiebreak, which now backs up the sonic term inside key plateaus rather than standing
+// in for it). Re-measure at build time rather than trusting this comment — an earlier
+// snapshot of it (3/56 embedded, "dormant") outlived its truth by a day and misled a
+// downstream RFC into planning around a dead engine.
 
 import { type Camelot, parseKey, toCamelot } from "../key-camelot";
 import { cosineSimilarity, parseEmbedding } from "./embedding";
