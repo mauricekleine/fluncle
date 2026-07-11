@@ -75,3 +75,25 @@ export function useFinding(idOrLogId: string) {
 export function useRegisterDevice() {
   return useMutation(orpc.register_device.mutationOptions());
 }
+
+/**
+ * Spotify candidate search for the submit flow — the `search_tracks` op
+ * (GET /api/v1/search?q=…). Driven imperatively (a Search button, not type-ahead)
+ * so the operator's shared Spotify token isn't burned on every keystroke; the
+ * server rate-limits it regardless. `.mutate({ q })` returns `{ ok, results }`.
+ */
+export function useTrackSearch() {
+  return useMutation(orpc.search_tracks.mutationOptions());
+}
+
+/**
+ * Submit a picked candidate as a finding for review — the public anonymous-write
+ * `submit_track` op (POST /api/v1/submissions), the same contract the web submit
+ * dialog posts. No auth: a submission is a message in a bottle, and the server owns
+ * its status (validation, the hourly rate limit, triage). `.mutate(SubmissionBody)`
+ * resolves to `{ ok: true, submission }`; faults carry the server `{ status, data }`
+ * the screen maps to its honest result states.
+ */
+export function useSubmitTrack() {
+  return useMutation(orpc.submit_track.mutationOptions());
+}

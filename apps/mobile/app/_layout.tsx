@@ -39,6 +39,7 @@ export default function RootLayout() {
             <Stack.Screen name="(tabs)" />
             <Stack.Screen name="log/[id]" options={{ presentation: "modal" }} />
             <Stack.Screen name="notifications" options={{ presentation: "modal" }} />
+            <Stack.Screen name="submit" options={{ presentation: "modal" }} />
           </Stack>
         </QueryClientProvider>
       </SafeAreaProvider>
