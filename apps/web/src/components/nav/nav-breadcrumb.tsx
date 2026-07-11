@@ -136,7 +136,12 @@ export function NavBreadcrumb({
             ) : (
               // The tail is the page you are on, so the emphasis lands here and never
               // on the hub behind it: the coordinate is the subject, not "Log".
-              <span aria-current="page">{crumb.label}</span>
+              // The class carries the styling, NOT the aria-current attribute: TanStack
+              // marks the hub Link aria-current too (a finding IS under /log), so an
+              // attribute selector would truncate "Log" as well and clip its descender.
+              <span aria-current="page" className="nav-breadcrumb-tail">
+                {crumb.label}
+              </span>
             )}
           </li>
         ))}

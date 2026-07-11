@@ -3525,13 +3525,23 @@ body::before {
 }
 
 /* The tail is the page you are on — the emphasis lands here, never on the hub behind
-   it. It truncates rather than wraps, so a long artist name can't push the bar tall. */
-.nav-breadcrumb [aria-current="page"] {
+   it. It truncates rather than wraps, so a long artist name can't push the bar tall.
+   Selected by CLASS, not [aria-current]: TanStack marks the hub Link current too (a
+   finding IS under /log), so the attribute would truncate "Log" as well.
+
+   The padding/negative-margin pair is what keeps a descender alive. `text-box` ends the
+   box at the BASELINE, so a 'g' hangs outside it — and `overflow: hidden` would shear
+   it off. The padding re-opens that room inside the clip box; the equal negative margin
+   cancels it again for layout, so the margin box (what the flex centring measures) is
+   unchanged. Room to draw, no room taken. */
+.nav-breadcrumb-tail {
   color: var(--starlight-cream);
   font-variant-numeric: tabular-nums;
   font-weight: 700;
+  margin-bottom: -0.28em;
   min-width: 0;
   overflow: hidden;
+  padding-bottom: 0.28em;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
