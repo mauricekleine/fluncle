@@ -143,11 +143,19 @@
     U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F,
     U+A720-A7FF;
 }
+/* Monaspace Krypton is normalised too — the One Box Rule says EVERY self-hosted face,
+   and mono is the worst offender of the three: a 1.00em box around a 0.73em cap height,
+   so its cap band sits 0.0825em below its own box centre. It does sit inline with the
+   body face (the colophon's machinery row beside the status pill, inline code in the
+   docs), so an un-normalised mono drifts against everything around it. */
 @font-face {
   font-family: "Monaspace Krypton";
   font-style: normal;
   font-weight: 400;
   font-display: swap;
+  ascent-override: 99%;
+  descent-override: 26%;
+  line-gap-override: 0%;
   src: url("/fonts/monaspace-krypton-400.woff2") format("woff2");
 }
 
@@ -156,6 +164,9 @@
   font-style: normal;
   font-weight: 700;
   font-display: swap;
+  ascent-override: 99%;
+  descent-override: 26%;
+  line-gap-override: 0%;
   src: url("/fonts/monaspace-krypton-700.woff2") format("woff2");
 }
 
