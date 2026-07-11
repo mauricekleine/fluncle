@@ -30,6 +30,7 @@ import { Link } from "@tanstack/react-router";
 import { siSpotify } from "simple-icons";
 import { ArtistAvatar } from "@/components/artist-avatar";
 import { BrandIcon } from "@/components/brand-icon";
+import { GraphLink } from "@/components/graph-link";
 import { TrackArtwork } from "@/components/track-artwork";
 import { artistTitleLine } from "@/lib/log-prose";
 import { spotifyAlbumImageAtSize } from "@/lib/media";
@@ -101,7 +102,14 @@ export function FindingsGrid({
   );
 }
 
-/** The artist band: chips back into `/artist/<slug>` — the graph's cross-link. */
+/**
+ * The artist band: chips back into `/artist/<slug>` — the graph's cross-link.
+ *
+ * The chip is a `GraphLink` in its `chip` skin: the same component, the same route, and the
+ * same hover card as an artist named in a sentence, but without the dotted underline (a chip is
+ * not a word in a sentence — the tile already draws the affordance, and its own hover state
+ * does the heating). One system, two skins.
+ */
 export function ArtistChips({ artists, title }: { artists: ArtistChip[]; title: string }) {
   if (artists.length === 0) {
     return undefined;
@@ -113,14 +121,19 @@ export function ArtistChips({ artists, title }: { artists: ArtistChip[]; title: 
       <ul className="artist-similar-list">
         {artists.map((artist) => (
           <li key={artist.slug}>
-            <Link className="artist-similar-link" params={{ slug: artist.slug }} to="/artist/$slug">
+            <GraphLink
+              className="artist-similar-link"
+              kind="artist"
+              slug={artist.slug}
+              variant="chip"
+            >
               <ArtistAvatar
                 className="artist-similar-avatar"
                 name={artist.name}
                 src={artist.imageUrl}
               />
               <span>{artist.name}</span>
-            </Link>
+            </GraphLink>
           </li>
         ))}
       </ul>

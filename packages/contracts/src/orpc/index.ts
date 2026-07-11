@@ -29,6 +29,7 @@ import { adminCostsContract } from "./admin-costs";
 import { adminGalaxiesContract } from "./admin-galaxies";
 import { artistsContract } from "./artists";
 import { galaxiesContract } from "./galaxies";
+import { graphContract } from "./graph";
 import { adminEditionsContract } from "./admin-editions";
 import { adminHealthContract } from "./admin-health";
 import { adminLabelsContract } from "./admin-labels";
@@ -60,6 +61,7 @@ import { tracksContract } from "./tracks";
 // keep their entrypoints.
 export { ArtistListItemSchema, artistsContract, getArtist, listArtists } from "./artists";
 export { GalaxyListItemSchema, galaxiesContract, getGalaxy, listGalaxies } from "./galaxies";
+export { getGraphPreview, GraphEntityKindSchema, graphContract, GraphPreviewSchema } from "./graph";
 export {
   adminGalaxiesContract,
   GalaxyAdminItemSchema,
@@ -260,6 +262,7 @@ export const contract = {
   ...adminGalaxiesContract,
   ...artistsContract,
   ...galaxiesContract,
+  ...graphContract,
   ...adminEditionsContract,
   ...adminHealthContract,
   ...adminLabelsContract,

@@ -28,6 +28,12 @@ export type LogProseInput = {
   galaxy?: { name: string; slug: string };
   key?: string;
   label?: string;
+  /**
+   * The `/label/<slug>` the imprint has, when the label entity exists (`tracks.label_id`).
+   * Present → the release clause names the label as a GRAPH LINK; absent → the same clause
+   * reads as plain text. The JSON-LD / meta mirror reads it plain either way.
+   */
+  labelSlug?: string;
   logId: string;
   /** The editorial "why" — woven into the prose (and thus JSON-LD) when present. */
   note?: string;
@@ -44,11 +50,19 @@ export type LogProseInput = {
  */
 export type ProseSegment =
   | { kind: "galaxy"; name: string; slug: string }
+  | { kind: "label"; name: string; slug: string; tail: string }
   | { kind: "text"; text: string };
 
 /** The galaxy clause, split so the name (with " galaxy") is a single linkable token. */
 export const GALAXY_CLAUSE_LEAD = "It sits in the ";
 export const GALAXY_CLAUSE_TAIL = ", with the findings that hit the same way.";
+
+/**
+ * The release clause's lead, split so the imprint's NAME is a single linkable token — the
+ * galaxy clause's trick, applied to the label. The clause's tail varies (" in 2016." or just
+ * "."), so it rides on the segment rather than a constant.
+ */
+export const LABEL_CLAUSE_LEAD = "Released on ";
 
 /** The galaxy clause's link text — the name plus the noun, the whole phrase links. */
 export function galaxyClauseLinkText(name: string): string {
@@ -60,9 +74,22 @@ function galaxyClauseText(name: string): string {
   return `${GALAXY_CLAUSE_LEAD}${galaxyClauseLinkText(name)}${GALAXY_CLAUSE_TAIL}`;
 }
 
+/** The release clause as plain text (the JSON-LD / meta mirror of the visible clause). */
+function labelClauseText(name: string, tail: string): string {
+  return `${LABEL_CLAUSE_LEAD}${name}${tail}`;
+}
+
 /** The plain text of one segment — the join unit behind `definitionalProse`. */
 function segmentText(segment: ProseSegment): string {
-  return segment.kind === "galaxy" ? galaxyClauseText(segment.name) : segment.text;
+  if (segment.kind === "galaxy") {
+    return galaxyClauseText(segment.name);
+  }
+
+  if (segment.kind === "label") {
+    return labelClauseText(segment.name, segment.tail);
+  }
+
+  return segment.text;
 }
 
 /** Tracklist convention: `Artist — Title` (the one sanctioned em dash). */
@@ -114,17 +141,31 @@ export function definitionalProseSegments(track: LogProseInput): ProseSegment[] 
     });
   }
 
+  // The release clause. When the imprint has a `/label/<slug>` page, its NAME is its own
+  // segment so the visible render can linkify it (the galaxy clause's mechanism, applied to
+  // the label) while the JSON-LD / meta description read the same sentence plain. A label with
+  // no entity page — and a bare year — stay flat text: there is nowhere honest to send you.
   const year = track.releaseDate?.slice(0, 4);
-  const release =
-    track.label && year
-      ? `Released on ${track.label} in ${year}.`
-      : track.label
-        ? `Released on ${track.label}.`
-        : year
-          ? `Released in ${year}.`
-          : undefined;
-  if (release) {
-    segments.push({ kind: "text", text: release });
+  if (track.label && track.labelSlug) {
+    segments.push({
+      kind: "label",
+      name: track.label,
+      slug: track.labelSlug,
+      tail: year ? ` in ${year}.` : ".",
+    });
+  } else {
+    const release =
+      track.label && year
+        ? `Released on ${track.label} in ${year}.`
+        : track.label
+          ? `Released on ${track.label}.`
+          : year
+            ? `Released in ${year}.`
+            : undefined;
+
+    if (release) {
+      segments.push({ kind: "text", text: release });
+    }
   }
 
   if (track.galaxy) {

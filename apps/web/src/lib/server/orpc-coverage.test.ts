@@ -46,6 +46,10 @@ const PUBLIC_ROUTE_OPS: Record<string, string> = {
   // reads, no auth. (The game's `/galaxy` route + galaxy.fluncle.com are unrelated.)
   "GET /galaxies": "list_galaxies",
   "GET /galaxies/{slug}": "get_galaxy",
+  // The graph domain — the GraphLink hover card's one read. Contract-only oRPC, public,
+  // no auth. Lazy per-entity (fetched on card open, cached by `(kind, slug)`), which is
+  // why one op serves every graph link in the app without an N+1.
+  "GET /graph/{kind}/{slug}": "get_graph_preview",
   "GET /health": "get_health",
   "GET /me": "get_current_private_user",
   "GET /me/csrf": "get_private_mutation_token",

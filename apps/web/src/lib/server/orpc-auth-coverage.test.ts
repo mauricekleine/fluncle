@@ -120,6 +120,10 @@ const PUBLIC_UNAUTH_OPS = new Set<string>([
   "get_edition",
   // Galaxy reads — public, no auth (browse-by-feel RFC).
   "get_galaxy",
+  // The GraphLink hover card's preview read — public, no auth. It carries the same facts
+  // the entity's own public page already prints (its opening line, its finding count, a
+  // few covers), so it exposes nothing the page does not.
+  "get_graph_preview",
   "get_health",
   "get_radio_now_playing",
   "get_random_radio_track",

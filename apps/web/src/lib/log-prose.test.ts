@@ -3,6 +3,7 @@ import {
   definitionalProse,
   definitionalProseSegments,
   GALAXY_CLAUSE_LEAD,
+  LABEL_CLAUSE_LEAD,
   galaxyClauseLinkText,
   type LogProseInput,
 } from "./log-prose";
@@ -63,11 +64,19 @@ describe("definitionalProse — the galaxy clause", () => {
       note: "peak-time roller",
     };
     const joined = definitionalProseSegments(input)
-      .map((segment) =>
-        segment.kind === "galaxy"
-          ? `${GALAXY_CLAUSE_LEAD}${galaxyClauseLinkText(segment.name)}, with the findings that hit the same way.`
-          : segment.text,
-      )
+      .map((segment) => {
+        if (segment.kind === "galaxy") {
+          return `${GALAXY_CLAUSE_LEAD}${galaxyClauseLinkText(segment.name)}, with the findings that hit the same way.`;
+        }
+
+        // The release clause is a LINKABLE segment too when the imprint has an entity page
+        // (the graph-link system) — same mirror rule: the JSON-LD reads it plain.
+        if (segment.kind === "label") {
+          return `${LABEL_CLAUSE_LEAD}${segment.name}${segment.tail}`;
+        }
+
+        return segment.text;
+      })
       .join(" ");
 
     expect(definitionalProse(input)).toBe(joined);

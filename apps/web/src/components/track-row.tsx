@@ -3,6 +3,7 @@ import { Link } from "@tanstack/react-router";
 import { useCallback } from "react";
 import { siMixcloud, siSoundcloud, siSpotify, siTiktok, siYoutube } from "simple-icons";
 import { BrandIcon } from "@/components/brand-icon";
+import { GraphLink } from "@/components/graph-link";
 import { TrackArtwork } from "@/components/track-artwork";
 import { Badge } from "@fluncle/ui/components/badge";
 import {
@@ -82,11 +83,6 @@ export function TrackRow({ track, trackNumber }: { track: FeedItem; trackNumber:
   // of the surfaces. The record label, with the release year, reads beneath.
   const trackLine = `${track.artists.join(", ")} — ${track.title}`;
   const releaseYear = track.releaseDate?.slice(0, 4);
-  const labelLine = track.label
-    ? releaseYear
-      ? `${track.label} (${releaseYear})`
-      : track.label
-    : undefined;
 
   return (
     <li className="track-row">
@@ -162,7 +158,24 @@ export function TrackRow({ track, trackNumber }: { track: FeedItem; trackNumber:
             </span>
           </a>
         )}
-        {labelLine ? <span className="track-label block truncate">{labelLine}</span> : null}
+        {/* The imprint line. The row's own link is STRETCHED (a `::after` over the whole row),
+            so the label sits above it — the same escape the artwork and the links menu already
+            make. The name is a graph link when the imprint has a page; the year beside it is
+            never part of the link (it names no entity). The artist names on the title line
+            above stay plain text on purpose: that line lives INSIDE the row's log link, and a
+            link inside a link is not a thing — the row's job is to open the finding. */}
+        {track.label ? (
+          <span className="track-label block truncate">
+            {track.labelSlug ? (
+              <GraphLink kind="label" slug={track.labelSlug}>
+                {track.label}
+              </GraphLink>
+            ) : (
+              track.label
+            )}
+            {releaseYear ? ` (${releaseYear})` : ""}
+          </span>
+        ) : null}
         <TrackChips bpm={track.bpm} durationMs={track.durationMs} musicalKey={track.key} />
       </span>
 
