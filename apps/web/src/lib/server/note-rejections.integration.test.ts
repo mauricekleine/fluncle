@@ -55,6 +55,27 @@ describe("the echo gate's ledger", () => {
     await seedTrack(db, { logId: "004.7.2I", trackId: TRACK_ID });
   });
 
+  // The partial unique index is LOAD-BEARING — it is the thing that bounds the ledger by
+  // the ARCHIVE rather than by the cron's tick rate, and the `on conflict (track_id) where
+  // resolved_at is null` upsert cannot work without it. `db:generate` has twice emitted a
+  // migration in this repo that created a table's indexes and then dropped them again in
+  // the blanket index-rebuild an ALTER triggers, never recreating them — so assert the
+  // index EXISTS in the migrated schema rather than trusting the generator.
+  it("carries the partial unique index that bounds it (it survives the migration chain)", async () => {
+    const result = await db.execute(
+      `select sql from sqlite_master
+       where type = 'index' and name = 'note_rejections_open_track_idx'`,
+    );
+    const ddl = result.rows[0]?.sql;
+    const sql = typeof ddl === "string" ? ddl : "";
+
+    expect(sql).toContain("UNIQUE INDEX");
+    // The PARTIAL predicate is the whole point: one OPEN rejection per finding, while a
+    // finding may accumulate any number of RESOLVED ones over its life (the retune evidence).
+    expect(sql.toLowerCase()).toContain("where");
+    expect(sql.toLowerCase()).toContain("resolved_at");
+  });
+
   it("HOLDS a rejected note — the line, the neighbour, the phrase, the score, the dials", async () => {
     const { listNoteRejections, recordNoteRejection } = await import("./note-rejections");
 
