@@ -5,6 +5,7 @@
 
 import { contract } from "@fluncle/contracts/orpc";
 import { type implement, ORPCError } from "@orpc/server";
+import { logEvent } from "../log";
 import { type OrpcContext } from "../orpc-auth";
 import { type TrackListItem, getTrackByIdOrLogId } from "../tracks";
 import { ApiError } from "../spotify";
@@ -89,7 +90,7 @@ export function apiFault(error: unknown): ORPCError<string, ApiFaultData> {
 
   // An unexpected fault: the raw detail (driver/upstream internals) belongs in
   // the server log, never on the wire to an unauthenticated caller.
-  console.error("apiFault:", error);
+  logEvent("error", "api.unexpected-fault", { error });
 
   return new ORPCError("INTERNAL_SERVER_ERROR", {
     data: { apiCode: "error", apiMessage: "Internal error" },

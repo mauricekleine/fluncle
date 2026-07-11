@@ -26,9 +26,15 @@ describe("apiFault — the oRPC catch converter", () => {
     expect(isApiFaultData(data)).toBe(true);
     expect(data).toEqual({ apiCode: "error", apiMessage: "Internal error" });
     expect(JSON.stringify(fault)).not.toContain("secret-internal-detail");
-    // The raw detail was logged server-side (the error object, stack included).
+    // The raw detail was logged server-side — one structured JSON line carrying the
+    // serialized error (message + stack) under the `api.unexpected-fault` event.
     expect(errSpy).toHaveBeenCalledTimes(1);
-    expect(errSpy.mock.calls[0]?.[1]).toBeInstanceOf(Error);
+    const logged = JSON.parse(errSpy.mock.calls[0]?.[0] as string) as {
+      error: { message: string; stack: string };
+      event: string;
+    };
+    expect(logged.event).toBe("api.unexpected-fault");
+    expect(logged.error.message).toBe("secret-internal-detail");
   });
 
   it("passes a deliberate ApiError through unchanged (the client contract)", () => {

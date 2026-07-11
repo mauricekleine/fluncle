@@ -1,5 +1,6 @@
 import { NOTE_MAX_LENGTH } from "../log-prose";
 import { jsonError } from "./env";
+import { logEvent } from "./log";
 import { ApiError } from "./spotify";
 
 export function apiErrorResponse(error: unknown): Response {
@@ -8,7 +9,7 @@ export function apiErrorResponse(error: unknown): Response {
   }
 
   // An unexpected fault: log the raw detail server-side, answer generically.
-  console.error("apiErrorResponse:", error);
+  logEvent("error", "api.unexpected-fault", { error });
   return jsonError(500, "error", "Internal error");
 }
 

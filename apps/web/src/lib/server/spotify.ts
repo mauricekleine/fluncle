@@ -5,6 +5,7 @@ export type { TrackSearchResult };
 import { parseSpotifyTrackId } from "../spotify-track-id";
 import { getDb, typedRow } from "./db";
 import { readEnvs } from "./env";
+import { logEvent } from "./log";
 
 const spotifyAccountsBaseUrl = "https://accounts.spotify.com";
 const spotifyApiBaseUrl = "https://api.spotify.com/v1";
@@ -279,7 +280,7 @@ export async function fetchArtistImages(spotifyArtistIds: string[]): Promise<Map
         map.set(artist.id, url);
       }
     } catch (error) {
-      console.warn(`fetchArtistImages: skipping ${id}`, error);
+      logEvent("warn", "spotify.artist-image-skipped", { artistId: id, error });
     }
   }
 

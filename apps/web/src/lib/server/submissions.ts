@@ -7,6 +7,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { parseArtistsJson } from "./artists";
 import { getDb, typedRow, typedRows } from "./db";
 import { readOptionalEnv } from "./env";
+import { logEvent } from "./log";
 import { getPublicSession } from "./public-auth";
 import { assertRateLimit } from "./rate-limit";
 import { ApiError, fetchTrackMetadata, parseSpotifyTrackUrl } from "./spotify";
@@ -129,7 +130,7 @@ export async function createSubmission(
   try {
     await notifyDiscord(submission);
   } catch (error) {
-    console.warn("Discord submission notification failed", error);
+    logEvent("warn", "submissions.discord-notify-failed", { error, submissionId: submission.id });
   }
 
   return submission;

@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { type ApiHandlers, aliasHandlers } from "../../../-alias";
 import { grantCookie, isAllowedSpotifyUser, signGrant } from "../../../../../lib/server/admin-auth";
 import { jsonError, verifyState } from "../../../../../lib/server/env";
+import { logEvent } from "../../../../../lib/server/log";
 import { exchangeCodeForToken, fetchSpotifyProfile } from "../../../../../lib/server/spotify";
 
 export const serverHandlers: ApiHandlers = {
@@ -57,7 +58,7 @@ export const serverHandlers: ApiHandlers = {
       // The raw token-exchange detail belongs in the server log, not on the wire
       // to this unauthenticated callback; the board keys its reconnect banner on
       // the code, so keep that and answer with plain operator-facing copy.
-      console.error("spotify auth callback:", authError);
+      logEvent("error", "spotify.auth-callback-failed", { error: authError });
       return jsonError(
         400,
         "spotify_auth_failed",

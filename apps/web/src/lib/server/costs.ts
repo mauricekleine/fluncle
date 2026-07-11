@@ -20,6 +20,7 @@ import { type CostEventInput } from "@fluncle/contracts/orpc";
 import { parseArtistsJson } from "./artists";
 import { priceFromRates } from "./cost-rates";
 import { getDb } from "./db";
+import { logEvent } from "./log";
 
 /**
  * The finding attribution a Worker-local capture site threads to its vendor call
@@ -138,7 +139,7 @@ export async function captureCostEvents(events: CostEventInput[]): Promise<void>
   } catch (error) {
     // A missing table during a deploy window, a Turso blip — the ledger is an
     // enhancement, so a write failure here must never surface to the caller.
-    console.error("captureCostEvents: cost-ledger write failed (non-critical)", error);
+    logEvent("error", "costs.ledger-write-failed", { error });
   }
 }
 

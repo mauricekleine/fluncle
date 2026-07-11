@@ -38,6 +38,7 @@
 import { randomUUID } from "node:crypto";
 import { getDb, typedRow, typedRows } from "./db";
 import { readOptionalEnv } from "./env";
+import { logEvent } from "./log";
 import { getYouTubeAccessToken } from "./youtube";
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -533,7 +534,12 @@ async function mbFetch<T>(path: string): Promise<{ data: T | null; rateLimited: 
 
       if (response.status === 503 && attempt < 2) {
         const retryAfter = Number(response.headers.get("Retry-After")) || 2;
-        console.warn(`[mb-artist] 503 for ${path} — retry ${attempt + 1}/2 after ${retryAfter}s`);
+        logEvent("warn", "mb-artist.retry", {
+          attempt: attempt + 1,
+          path,
+          retryAfterSeconds: retryAfter,
+          status: 503,
+        });
         await delay(rateLimitIntervalMs === 0 ? 0 : retryAfter * 1000);
         continue;
       }
@@ -543,7 +549,11 @@ async function mbFetch<T>(path: string): Promise<{ data: T | null; rateLimited: 
       }
 
       if (!response.ok) {
-        console.warn(`[mb-artist] ${response.status} ${response.statusText} for ${path}`);
+        logEvent("warn", "mb-artist.request-failed", {
+          path,
+          status: response.status,
+          statusText: response.statusText,
+        });
         return { data: null, rateLimited: false };
       }
 
@@ -914,16 +924,13 @@ async function firecrawlPost<T>(url: string, body: unknown, apiKey: string): Pro
     });
 
     if (!response.ok) {
-      console.warn(`[artist-resolution] Firecrawl ${url} → ${response.status}`);
+      logEvent("warn", "artist-resolution.firecrawl-failed", { status: response.status, url });
       return null;
     }
 
     return (await response.json()) as T;
   } catch (err) {
-    console.warn(
-      `[artist-resolution] Firecrawl ${url} error:`,
-      err instanceof Error ? err.message : String(err),
-    );
+    logEvent("warn", "artist-resolution.firecrawl-error", { error: err, url });
     return null;
   } finally {
     clearTimeout(timer);

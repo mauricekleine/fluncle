@@ -13,6 +13,7 @@ import { purgeLogCache } from "./edge-cache";
 import { submitFindingToIndexNow } from "./indexnow";
 import { ensureLabel } from "./labels";
 import { lastfmLove } from "./lastfm";
+import { logEvent } from "./log";
 import { resolveLogId } from "./log-id";
 import { notifyNewFinding } from "./push";
 import { formatError, withRetries } from "./retry";
@@ -210,7 +211,11 @@ No database, Spotify, or Telegram changes were made. Enrichment (label, preview)
   try {
     await upsertTrackArtists(track.trackId, track.artists, track.spotifyArtistIds);
   } catch (artistError) {
-    console.warn("publishTrack: artist entity upsert failed (non-fatal)", artistError);
+    logEvent("warn", "publish.artist-upsert-failed", {
+      error: artistError,
+      logId,
+      trackId: track.trackId,
+    });
   }
 
   // Best-effort: mint the label entity for the label Deezer just handed back. A brand-new
@@ -221,7 +226,11 @@ No database, Spotify, or Telegram changes were made. Enrichment (label, preview)
   try {
     await ensureLabel(deezer.label);
   } catch (labelError) {
-    console.warn("publishTrack: label entity upsert failed (non-fatal)", labelError);
+    logEvent("warn", "publish.label-upsert-failed", {
+      error: labelError,
+      logId,
+      trackId: track.trackId,
+    });
   }
 
   try {
@@ -310,7 +319,11 @@ No database, Spotify, or Telegram changes were made. Enrichment (label, preview)
   try {
     await postToBluesky(track, options.note, logId);
   } catch (blueskyError) {
-    console.warn("publishTrack: Bluesky post failed (non-fatal)", blueskyError);
+    logEvent("warn", "publish.bluesky-post-failed", {
+      error: blueskyError,
+      logId,
+      trackId: track.trackId,
+    });
   }
   // Best-effort: ping IndexNow (Bing/Yandex + the shared network) so the fresh
   // log page is crawled within minutes (indexnow.ts). Fire-and-forget via

@@ -18,6 +18,7 @@
 
 import { createHash } from "node:crypto";
 import { readEnvs, readOptionalEnv } from "./env";
+import { logEvent } from "./log";
 
 const API_ROOT = "https://ws.audioscrobbler.com/2.0/";
 // Last.fm wants an identifiable User-Agent on every call (same discipline as the
@@ -181,7 +182,7 @@ export async function lastfmLove(artist: string, track: string): Promise<LastfmL
     // Side-channel: log and continue. Loving is idempotent, so a later retry/
     // backfill is harmless; the add must never fail on a Last.fm miss.
     const message = error instanceof Error ? error.message : String(error);
-    console.error(`Last.fm love failed for "${artist} — ${track}": ${message}`);
+    logEvent("error", "lastfm.love-failed", { artist, error, track });
 
     if (error instanceof LastfmRateLimitError) {
       return { error: message, ok: false, rateLimited: true, retryAfterMs: error.retryAfterMs };

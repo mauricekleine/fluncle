@@ -1,6 +1,7 @@
 import { env, waitUntil } from "cloudflare:workers";
 import { videoPurgeUrls } from "../media";
 import { clipPurgeUrls } from "../studio-clips";
+import { logEvent } from "./log";
 
 // Per-URL Cloudflare cache purge for a re-rendered finding's video.
 //
@@ -100,9 +101,7 @@ async function purgeFiles(label: string, files: string[]): Promise<void> {
   const token = readPurgeBinding("CF_CACHE_PURGE_TOKEN");
 
   if (!zoneId || !token) {
-    console.warn(
-      `[purgeVideoCache] CF_CACHE_PURGE_ZONE_ID / CF_CACHE_PURGE_TOKEN not set; skipping edge purge for ${label}. Provision the zone-scoped Cache-Purge token to evict stale renditions on re-render.`,
-    );
+    logEvent("warn", "video-cache.purge-skipped-no-token", { label });
 
     return;
   }
@@ -130,12 +129,14 @@ async function purgeFiles(label: string, files: string[]): Promise<void> {
       );
 
       if (!response.ok) {
-        console.warn(
-          `[purgeVideoCache] purge_cache returned ${response.status} for ${label} (${chunk.length} urls)`,
-        );
+        logEvent("warn", "video-cache.purge-request-failed", {
+          label,
+          status: response.status,
+          urlCount: chunk.length,
+        });
       }
     } catch (error) {
-      console.warn(`[purgeVideoCache] purge_cache failed for ${label}:`, error);
+      logEvent("warn", "video-cache.purge-error", { error, label });
     }
   }
 }

@@ -15,6 +15,7 @@
 
 import { randomUUID } from "node:crypto";
 import { getDb, typedRows } from "./db";
+import { logEvent } from "./log";
 
 /** The three-state health enum, shared with the `@fluncle/contracts` snapshot schema. */
 export type ServiceHealthStatus = "ok" | "degraded" | "down";
@@ -235,7 +236,7 @@ export async function recordHealthSnapshot(at: string, checks: HealthCheckInput[
                   )`,
       });
     } catch (error) {
-      console.error("recordHealthSnapshot: sample-ledger write failed (non-critical)", error);
+      logEvent("error", "status.health-snapshot-write-failed", { error });
     }
   }
 
