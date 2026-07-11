@@ -259,6 +259,32 @@ describe("mapTrack — faithful sourceAudioKey passthrough", () => {
     expect((mapped as TrackListItem).analyzedAt).toBe("2026-07-10T06:39:51.632Z");
     expect((mapped as TrackListItem).analyzedFrom).toBe("full");
   });
+
+  // THE STRUCTURAL GUARD. The two tests above are one-off patches for a hole that reopened
+  // twice: mapTrack used to re-copy fields from a hand-maintained whitelist, so every new
+  // server field was silently dropped until a consumer broke. mapTrack is now a PASSTHROUGH,
+  // and this test enforces it — it fails if anyone reintroduces a field-by-field rebuild,
+  // no matter WHICH field they forget. Add nothing to mapTrack and this stays green.
+  test("loses NO field — passthrough, not a whitelist (fails if a re-projection returns)", () => {
+    const rich: Record<string, unknown> = {
+      ...finding("track_rich", "007.2.2"),
+      analyzedAt: "2026-07-10T06:39:51.632Z",
+      analyzedFrom: "full",
+      bpmSource: "audio-file",
+      discogsReleaseUrl: "https://discogs.example/1",
+      keySource: "rekordbox",
+      logPageUrl: "https://www.fluncle.com/log/007.2.2",
+      sourceAudioKey: "007.2.2/cafebabe.m4a",
+      updatedAt: "2026-07-10T07:00:00.000Z",
+      youtubeUrl: "https://youtu.be/abc",
+    };
+    const mapped = mapTrack(rich as unknown as TrackListItem) as unknown as Record<string, unknown>;
+
+    expect(Object.keys(mapped).sort()).toEqual(Object.keys(rich).sort());
+    for (const key of Object.keys(rich)) {
+      expect(mapped[key]).toEqual(rich[key]);
+    }
+  });
 });
 
 describe("tracks list — --all paginates the full catalogue", () => {

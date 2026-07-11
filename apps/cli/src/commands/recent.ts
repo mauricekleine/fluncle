@@ -12,58 +12,17 @@ export type { TracksResponse };
 // the requested count is honoured rather than silently clipped at one page.
 const pageSize = 48;
 
+// The API row IS the shape the CLI emits — this is a PASSTHROUGH by design, never a
+// re-projection. The server already owns the whole projection: it sets the `type`
+// discriminator (`toTrackListItem`) and enforces the public/private boundary
+// (`toPublicTrackListItem` strips PRIVATE_TRACK_FIELDS before any public read). A second,
+// hand-maintained field whitelist here could only ever LOSE data, and twice it did —
+// it dropped `sourceAudioKey` (the embed sweep then skipped every finding as
+// `no_source_audio`) and `analyzedAt` (every `admin tracks list --json` row reported the
+// analysis timestamp as absent while the DB held it). NEVER re-copy fields field-by-field:
+// add nothing here and a new server field reaches every CLI consumer for free.
 export function mapTrack(track: RecentTrack | RecentMixtape): RecentItem {
-  if (track.type === "mixtape") {
-    return track;
-  }
-
-  return {
-    addedAt: track.addedAt,
-    addedToSpotify: track.addedToSpotify,
-    album: track.album,
-    albumImageUrl: track.albumImageUrl,
-    // Analysis provenance (RFC bpm-key-accuracy). Stripped from every PUBLIC read by
-    // `toPublicTrackListItem`, so on `/api/tracks` these arrive undefined; on the ADMIN path
-    // (`/api/admin/tracks`, e.g. the `requeue-analysis` sweep) they carry the real value.
-    // `analyzedAt` is the analysis-write timestamp — the freshness companion to `analyzedFrom`;
-    // it must be copied here too or `admin tracks list --json` silently drops it.
-    analyzedAt: track.analyzedAt,
-    analyzedFrom: track.analyzedFrom,
-    artists: track.artists,
-    bpm: track.bpm,
-    // Source-hierarchy provenance (operator > rekordbox > DSP). Stripped from every PUBLIC
-    // read by `toPublicTrackListItem`, so on `/api/tracks` it arrives undefined; on the ADMIN
-    // path (`/api/admin/tracks`) it carries the real value — the Rekordbox sync reads it from
-    // `admin tracks list --json` to skip operator-graded rows.
-    bpmSource: track.bpmSource,
-    durationMs: track.durationMs,
-    enrichmentStatus: track.enrichmentStatus,
-    isrc: track.isrc,
-    key: track.key,
-    keySource: track.keySource,
-    label: track.label,
-    logId: track.logId,
-    note: track.note,
-    popularity: track.popularity,
-    postedToTelegram: track.postedToTelegram,
-    previewUrl: track.previewUrl,
-    releaseDate: track.releaseDate,
-    // The private full-song capture key. The server already strips it from every PUBLIC read
-    // (`toPublicTrackListItem`), so on the public `/api/tracks` path it arrives undefined and
-    // JSON.stringify omits it — `fluncle recent` stays clean. The ADMIN path (`/api/admin/tracks`,
-    // e.g. `embed --queue`) does NOT strip, so the on-box embed sweep gets the real key here.
-    sourceAudioKey: track.sourceAudioKey,
-    spotifyUrl: track.spotifyUrl,
-    title: track.title,
-    trackId: track.trackId,
-    type: "finding",
-    videoGrain: track.videoGrain,
-    videoModel: track.videoModel,
-    videoModelReasoning: track.videoModelReasoning,
-    videoRegister: track.videoRegister,
-    videoUrl: track.videoUrl,
-    videoVehicle: track.videoVehicle,
-  };
+  return track;
 }
 
 export type RecentPage = {
