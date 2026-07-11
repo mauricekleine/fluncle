@@ -188,9 +188,7 @@ The remaining, still-**deferred** parts of the arc are the account-touching and 
 
 ### Fluncle mobile — built and dark; submissions before launch
 
-The Expo companion app (`apps/mobile`) is built and maintained — the feed, per-finding views, and the server side of push are fully wired (`push_tokens`/`push_receipts`, `notifyNewFinding`/`notifyNewMixtape` already fire) — but it ships nowhere: **launch is deliberately parked on the €100/yr Apple Developer fee** (ruled 2026-07-11: a brand/reach flex with no ROI; the app store listing adds only marginal SEO/AEO — the real value is push as Fluncle's ONLY outbound channel, plus the fun of Fluncle in the App Store). Revisit when the fee feels earned. Until then, one build item makes the app worth shipping the day the trigger is pulled:
-
-- [ ] **Track submissions from the app.** A submit screen on the existing public anonymous-submission op (the web submit flow is the precedent — same contract, same server-side rate limits and dedupe; the app just posts and renders the accepted/duplicate/rate-limited states honestly). Turns the app from a mirror into a funnel — a friend submits, the find gets logged, the finding fans out — and at least one crew member would use it for that alone. When picked up: `apps/mobile` only, follow `src/api/hooks.ts` conventions, copy in the crew register (VOICE.md).
+The Expo companion app (`apps/mobile`) is built and maintained — the feed, per-finding views, and the server side of push are fully wired (`push_tokens`/`push_receipts`, `notifyNewFinding`/`notifyNewMixtape` already fire) — but it ships nowhere: **launch is deliberately parked on the €100/yr Apple Developer fee** (ruled 2026-07-11: a brand/reach flex with no ROI; the app store listing adds only marginal SEO/AEO — the real value is push as Fluncle's ONLY outbound channel, plus the fun of Fluncle in the App Store). Revisit when the fee feels earned.
 
 When launch does happen, stage it like Fluncle Lens: a `pending` registry entry, the store release, flip pending, light up the surface fan-out in one reviewed pass.
 

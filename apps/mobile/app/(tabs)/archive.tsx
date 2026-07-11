@@ -55,19 +55,10 @@ export default function ArchiveScreen() {
           <Text style={[font.display, { color: color.starlightCream, fontSize: 22 }]}>
             The archive
           </Text>
-          <Pressable
-            onPress={() => router.push("/notifications")}
-            hitSlop={8}
-            style={{
-              borderColor: color.dustLine,
-              borderRadius: 8,
-              borderWidth: 1,
-              paddingHorizontal: 12,
-              paddingVertical: 6,
-            }}
-          >
-            <Text style={[font.label, { color: color.stardust }]}>Pings</Text>
-          </Pressable>
+          <View style={{ alignItems: "center", flexDirection: "row", gap: 8 }}>
+            <HeaderPill label="Put me on" onPress={() => router.push("/submit")} />
+            <HeaderPill label="Pings" onPress={() => router.push("/notifications")} />
+          </View>
         </View>
         <View
           style={{
@@ -112,6 +103,26 @@ export default function ArchiveScreen() {
         />
       </SafeAreaView>
     </View>
+  );
+}
+
+// A header action pill (the quiet outline the notifications entry used). Two now
+// sit in the archive header: "Put me on" (submit a track) and "Pings" (push consent).
+function HeaderPill({ label, onPress }: { label: string; onPress: () => void }) {
+  return (
+    <Pressable
+      onPress={onPress}
+      hitSlop={8}
+      style={{
+        borderColor: color.dustLine,
+        borderRadius: 8,
+        borderWidth: 1,
+        paddingHorizontal: 12,
+        paddingVertical: 6,
+      }}
+    >
+      <Text style={[font.label, { color: color.stardust }]}>{label}</Text>
+    </Pressable>
   );
 }
 
