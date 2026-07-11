@@ -528,6 +528,7 @@ async function main(argv: string[]): Promise<void> {
   }
   copyFileSync(squareSrc, paths.footage);
 
+  let posterMissing = false;
   log("poster.jpg (~80% in)");
   const durProbe = spawnSync("ffprobe", [
     "-v",
@@ -539,7 +540,13 @@ async function main(argv: string[]): Promise<void> {
     paths.footage,
   ]);
   const duration = Number.parseFloat(durProbe.stdout.toString().trim()) || 20;
-  spawnSync(
+  // Capture stderr so a failing render is a DIAGNOSIS, not silence. poster.jpg is
+  // not in the re-render contract (it's a derived thumbnail the diversity/calibrate
+  // gates read from the public host), so — like cover.jpg, intent.json, and scene.json
+  // below — a failure WARNS and is surfaced in the ship summary rather than failing
+  // the ship. Previously this ran with stdio all-ignored and no status check, so a
+  // silent ffmpeg failure shipped a posterless bundle that read as "ready".
+  const posterResult = spawnSync(
     "ffmpeg",
     [
       "-y",
@@ -553,8 +560,16 @@ async function main(argv: string[]): Promise<void> {
       "3",
       paths.poster,
     ],
-    { stdio: ["ignore", "ignore", "ignore"] },
+    { stdio: ["ignore", "ignore", "pipe"] },
   );
+  if (posterResult.status !== 0 || !existsSync(paths.poster)) {
+    const stderr = posterResult.stderr?.toString().trim();
+    const reason = posterResult.error
+      ? posterResult.error.message
+      : `ffmpeg exited ${posterResult.status ?? "unknown"}${stderr ? `\n${stderr.slice(-1000)}` : ""}`;
+    log(`WARNING: poster.jpg render FAILED — the bundle ships without a poster. ${reason}`);
+    posterMissing = true;
+  }
 
   log("note.txt");
   // Prefer the stored release_date (from track get); fall back to Deezer for any
@@ -788,6 +803,11 @@ async function main(argv: string[]): Promise<void> {
     }
   }
 
+  if (posterMissing) {
+    console.error(
+      `[ship] NOTE: poster.jpg is MISSING from out/${track.logId}/ — its render failed (see the WARNING above). The bundle is otherwise complete; re-run ship or render the poster before the diversity/calibrate gates need it.`,
+    );
+  }
   console.error(`\n[ship] bundle ready → out/${track.logId}/`);
   console.error(
     `[ship] upload with: fluncle admin track video ${track.logId} --dir packages/video/out/${track.logId}\n`,
