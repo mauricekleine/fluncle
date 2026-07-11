@@ -4443,10 +4443,12 @@ body::before {
   text-transform: uppercase;
 }
 
+/* The pre-arrival line. Stardust at 0.7 measured 4.52:1 on the card's ground — it PASSED AA,
+   but by 0.02, which is not a margin, it is a rounding error. At 0.8 it reads 5.5:1. */
 .graph-card-loading {
   color: var(--stardust);
   font-size: 0.82rem;
-  opacity: 0.7;
+  opacity: 0.8;
 }
 
 /* The card must not animate in for a reader who asked for no motion: it appears, it does not
