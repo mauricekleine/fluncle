@@ -2,6 +2,7 @@ import { type ReactNode } from "react";
 import { Linking, Pressable, ScrollView, Text, View } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { Ionicons } from "@expo/vector-icons";
 import { Image } from "expo-image";
 import { useFinding } from "@/api/hooks";
 import { CosmosBackdrop } from "@/components/cosmos-backdrop";
@@ -51,13 +52,18 @@ export default function LogScreen() {
     <View style={{ flex: 1 }}>
       <CosmosBackdrop />
       <SafeAreaView style={{ flex: 1 }}>
+        {/* One shared dismiss for all three branches (finding / mixtape / not-found):
+            a quiet right-aligned X — stardust at rest, no gold (a dismiss is not a sun).
+            Icon-only chrome carries the Chrome Rule's literal in its a11y label. The
+            padding + hitSlop lift the effective target past the 44pt floor. */}
         <Pressable
+          accessibilityLabel="Close"
           accessibilityRole="button"
-          hitSlop={8}
+          hitSlop={{ bottom: 10, left: 10, right: 10, top: 10 }}
           onPress={() => router.back()}
-          style={{ padding: 16 }}
+          style={{ alignSelf: "flex-end", padding: 16 }}
         >
-          <Text style={[font.label, { color: color.stardust }]}>Close</Text>
+          <Ionicons name="close" size={26} color={color.stardust} />
         </Pressable>
         {finding ? (
           // The reachable bottom owns the one action (thumb-zone); the cover stays
