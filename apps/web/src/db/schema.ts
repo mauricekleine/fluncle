@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import {
   check,
+  customType,
   index,
   integer,
   primaryKey,
@@ -9,6 +10,23 @@ import {
   text,
   uniqueIndex,
 } from "drizzle-orm/sqlite-core";
+
+/**
+ * libSQL's native fixed-width float32 vector column — `F32_BLOB(1024)`, the storage
+ * form `vector32()` produces and `vector_distance_cos()` ranks IN SQL. 4,096 B/row
+ * against the 21,804 B a 1024-d vector costs as a JSON array (measured on the prod
+ * snapshot), and, far more importantly, it is the ONLY form the database can rank
+ * without shipping every vector into the Worker isolate.
+ *
+ * `1024` must track `EMBEDDING_DIMS` (lib/server/embedding.ts) — inlined rather than
+ * imported so this schema stays a leaf module for drizzle-kit.
+ *
+ * The driver reads a blob cell back as an `ArrayBuffer` (NOT a `Uint8Array`) — see
+ * `readEmbeddingBlob` in lib/server/embedding.ts, the one place that decodes one.
+ */
+const float32Vector = customType<{ data: Uint8Array; driverData: Uint8Array }>({
+  dataType: () => "F32_BLOB(1024)",
+});
 
 export const tracks = sqliteTable("tracks", {
   addedAt: text("added_at").notNull(),
@@ -103,15 +121,24 @@ export const tracks = sqliteTable("tracks", {
     enum: ["pending", "resolved", "empty", "failed"],
   }),
   durationMs: integer("duration_ms").notNull(),
-  // The finding's MuQ audio embedding — a 1024-d float vector (mean-pooled over
-  // `MuQ-large-msd-iter`'s `last_hidden_state`, L2-normalized), stored as a JSON
-  // array. Written by the on-box `fluncle-embed` cron (torch on rave-02) via the
-  // agent-tier `update_track` path; internal analysis fuel like `features_json`, so
-  // writing it moves no public lastmod. It is the sonic-similarity space: the public
-  // `get_similar_findings` op cosine-ranks these vectors to power the "more like this"
-  // row on `/log` (and, later, browse-by-feel clusters + the game's solar systems).
-  // NULL until the embed cron drains it (`embedding_json IS NULL` is the queue). See
-  // docs/track-lifecycle.md.
+  // The finding's MuQ audio embedding, in the form the DATABASE can rank: a native
+  // libSQL `F32_BLOB(1024)`. Every similarity read (`get_similar_findings`, the `/mix`
+  // rail, a galaxy's core-first order) ranks with `vector_distance_cos(embedding_blob,
+  // ?)` IN SQL and ships back only the winners — never the vectors. Written alongside
+  // `embedding_json` by the same agent-tier `update_track` path (`vector32(?)` converts
+  // the validated JSON server-side), and backfilled from `embedding_json` on every
+  // deploy (scripts/backfill-embedding-blob.ts). See lib/server/embedding.ts for the
+  // read contract (blob first, guarded JSON fallback) and the raw-blob probe binding.
+  embeddingBlob: float32Vector("embedding_blob"),
+  // The same vector as a JSON array — the ORIGINAL storage form, and still the
+  // source of truth: the blob is derived from it, `list_track_embeddings` (the
+  // `fluncle-cluster` cron's corpus read) reads it, and it is what a backfill can
+  // rebuild a lost blob from. Written by the on-box `fluncle-embed` cron (torch on
+  // rave-02) via the agent-tier `update_track` path; internal analysis fuel like
+  // `features_json`, so writing it moves no public lastmod. NULL until the embed cron
+  // drains it (`embedding_json IS NULL` is the queue). It is 82% of the database at
+  // 100k rows and its removal is the recorded follow-up, once the blob path has run in
+  // production. See docs/track-lifecycle.md.
   embeddingJson: text("embedding_json"),
   enrichmentStatus: text("enrichment_status").notNull().default("pending"),
   featuresJson: text("features_json"),

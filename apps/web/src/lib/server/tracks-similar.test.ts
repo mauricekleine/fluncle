@@ -1,13 +1,26 @@
+import { type Client } from "@libsql/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { getSimilarFindings, type TrackRow } from "./tracks";
+import { backfillEmbeddingBlob } from "../../../scripts/backfill-embedding-blob";
+import { cosineSimilarity, EMBEDDING_DIMS, parseEmbedding, rankBySimilarity } from "./embedding";
+import { createIntegrationDb, seedTrack } from "./integration-db";
+import { getSimilarFindings } from "./tracks";
 
-// The DB-backed "more like this" reader (docs/track-lifecycle.md) — the data
-// source for the public `get_similar_findings` op AND the `/log` row. Drives the real
-// function over a mocked `./db`, proving the ranking/exclusion/hydration the row
-// renders: sonic order, self excluded, malformed vectors dropped, limit honoured, and
-// the graceful empty cases (unknown finding / not-yet-embedded).
+// The DB-backed "more like this" reader (docs/track-lifecycle.md) — the data source for
+// the public `get_similar_findings` op AND the `/log` row.
+//
+// THIS SUITE RUNS AGAINST REAL libSQL, not a mocked `execute`. It has to: the ranking now
+// happens IN SQL (`vector_distance_cos` over an `F32_BLOB(1024)`, the probe bound as raw
+// bytes — lib/server/embedding.ts), so a hand-rolled mock would only ever be testing the
+// mock. The in-memory client applies the real generated migrations, and the real libSQL
+// vector functions are what answer.
+//
+// THE PIN (the last test) is the one that matters most: over a 40-finding pseudo-random
+// corpus it asserts the SQL ranking returns the SAME findings in the SAME order as the
+// OLD in-isolate path (`parseEmbedding` + `cosineSimilarity` + `rankBySimilarity`, still
+// exported and used here as the reference implementation). Same results, 21 KB/row less.
 
 const execute = vi.hoisted(() => vi.fn());
+let db: Client;
 
 vi.mock("./db", () => ({
   getDb: async () => ({ execute }),
@@ -15,142 +28,157 @@ vi.mock("./db", () => ({
   typedRows: <T extends object>(rows: T[]) => rows,
 }));
 
-type EmbRow = { embedding_json: string | null; track_id: string };
-
 /** A 1024-d vector pointing in the (a, b) direction (the rest zero) — a valid MuQ shape. */
-function embJson(a: number, b: number): string {
-  const vector = Array.from({ length: 1024 }, () => 0);
-  vector[0] = a;
-  vector[1] = b;
+function vector(a: number, b: number): number[] {
+  const values = Array.from({ length: EMBEDDING_DIMS }, () => 0);
+  values[0] = a;
+  values[1] = b;
 
-  return JSON.stringify(vector);
+  return values;
 }
 
-/** A minimal-but-valid `TrackRow` for the hydrate query (only the row's fields set). */
-function trackRow(trackId: string, logId: string, title: string, albumImageUrl: string): TrackRow {
-  return {
-    added_at: "2026-07-06T09:00:00.000Z",
-    added_to_spotify: 0,
-    album: null,
-    album_image_url: albumImageUrl,
-    analyzed_at: null,
-    analyzed_from: null,
-    artists_json: '["Artist X"]',
-    bpm: null,
-    bpm_source: null,
-    duration_ms: 200000,
-    enrichment_status: "done",
-    features_json: null,
-    galaxy_name: null,
-    galaxy_slug: null,
-    in_release_id: null,
-    isrc: null,
-    key: null,
-    key_source: null,
-    label: null,
-    log_id: logId,
-    note: null,
-    observation_alignment_json: null,
-    observation_audio_url: null,
-    observation_duration_ms: null,
-    observation_generated_at: null,
-    popularity: null,
-    posted_to_telegram: 0,
-    preview_url: null,
-    release_date: null,
-    source_audio_failures: 0,
-    source_audio_key: null,
-    spotify_url: `https://open.spotify.com/track/${trackId}`,
-    tiktok_url: null,
-    title,
-    track_id: trackId,
-    updated_at: null,
-    video_grain: null,
-    video_model: null,
-    video_model_reasoning: null,
-    video_register: null,
-    video_squared_at: null,
-    video_url: null,
-    video_vehicle: null,
-    youtube_url: null,
-  };
+/**
+ * A deterministic pseudo-random unit-ish vector — the pin's corpus. Real MuQ vectors are
+ * dense and L2-normalized; a corpus of axis-aligned toys would let a broken ranking pass.
+ */
+function pseudoVector(seed: number): number[] {
+  let state = seed * 2654435761;
+  const values: number[] = [];
+
+  for (let index = 0; index < EMBEDDING_DIMS; index += 1) {
+    state = (state * 1103515245 + 12345) & 0x7fffffff;
+    values.push(state / 0x3fffffff - 1);
+  }
+
+  const norm = Math.sqrt(values.reduce((sum, value) => sum + value * value, 0));
+
+  return values.map((value) => value / norm);
 }
 
-function setupDb(opts: {
-  stored: EmbRow[];
-  target?: EmbRow;
-  tracks: Record<string, TrackRow>;
-}): void {
-  execute.mockImplementation(async (query: { args?: unknown[]; sql: string }) => {
-    const { sql } = query;
-
-    // 1. Target lookup by trackId OR logId.
-    if (sql.includes("track_id = ? or log_id = ?")) {
-      return { rows: opts.target ? [opts.target] : [] };
-    }
-
-    // 2. Candidate scan — honours the `track_id != ?` self-exclusion the real SQL carries.
-    if (sql.includes("embedding_json is not null and track_id !=")) {
-      const selfId = query.args?.[0];
-      return { rows: opts.stored.filter((row) => row.track_id !== selfId) };
-    }
-
-    // 3. Hydrate the ranked winners.
-    if (sql.includes("track_id in (")) {
-      const ids = (query.args ?? []) as string[];
-      return { rows: ids.flatMap((id) => (opts.tracks[id] ? [opts.tracks[id]] : [])) };
-    }
-
-    return { rows: [] };
-  });
-}
-
-const SELF: EmbRow = { embedding_json: embJson(1, 0), track_id: "t_self" };
-
-const IDENTICAL = trackRow("t_ident", "004.1.1A", "Identical", "https://img/ident.jpg");
-const DIAGONAL = trackRow("t_diag", "004.2.2B", "Diagonal", "https://img/diag.jpg");
-const ORTHOGONAL = trackRow("t_orth", "004.3.3C", "Orthogonal", "https://img/orth.jpg");
-
-// A full stored candidate set (as the candidate scan sees it): self (excluded by SQL),
-// three real neighbours in decreasing similarity to `t_self`, and one MALFORMED vector
-// that passes `IS NOT NULL` but fails the 1024-d parse gate (must be dropped).
-const STORED: EmbRow[] = [
-  SELF,
-  { embedding_json: embJson(1, 0), track_id: "t_ident" }, // cosine 1
-  { embedding_json: embJson(1, 1), track_id: "t_diag" }, // cosine ~0.707
-  { embedding_json: embJson(0, 1), track_id: "t_orth" }, // cosine 0
-  { embedding_json: "[1,2,3]", track_id: "t_bad" }, // wrong length → dropped on parse
-];
-
-const TRACKS: Record<string, TrackRow> = {
-  t_diag: DIAGONAL,
-  t_ident: IDENTICAL,
-  t_orth: ORTHOGONAL,
+type Seed = {
+  /** Written to `embedding_json` verbatim — a raw string so a MALFORMED vector can be seeded. */
+  embeddingJson?: string | null;
+  logId: string | null;
+  title?: string;
+  trackId: string;
 };
 
-beforeEach(() => {
+async function seed(rows: Seed[]): Promise<void> {
+  for (const row of rows) {
+    await seedTrack(db, {
+      logId: row.logId ?? null,
+      title: row.title ?? "Test Track",
+      trackId: row.trackId,
+    });
+    await db.execute({
+      args: [row.embeddingJson ?? null, `https://img/${row.trackId}.jpg`, row.trackId],
+      sql: `update tracks set embedding_json = ?, album_image_url = ? where track_id = ?`,
+    });
+  }
+}
+
+/** A libSQL text cell, narrowed (the driver types every cell as a union). */
+function textCell(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
+}
+
+/** The reference ranking: the OLD in-isolate path, kept as the pin's oracle. */
+async function rankInIsolate(targetId: string, limit: number): Promise<string[]> {
+  const rows = await db.execute({
+    args: [targetId],
+    sql: `select track_id, embedding_json from tracks
+          where log_id is not null and embedding_json is not null and track_id != ?`,
+  });
+  const target = await db.execute({
+    args: [targetId],
+    sql: `select embedding_json from tracks where track_id = ?`,
+  });
+  const targetVector = parseEmbedding(textCell(target.rows[0]?.embedding_json));
+
+  if (!targetVector) {
+    return [];
+  }
+
+  const candidates = rows.rows.flatMap((row) => {
+    const embedding = parseEmbedding(textCell(row.embedding_json));
+    const trackId = textCell(row.track_id);
+
+    return embedding && trackId ? [{ embedding, item: trackId }] : [];
+  });
+
+  return rankBySimilarity(targetVector, candidates, limit);
+}
+
+beforeEach(async () => {
+  db = await createIntegrationDb();
   execute.mockReset();
+  // `getDb()` hands the REAL in-memory client's `execute` to the code under test.
+  execute.mockImplementation((query: unknown) => db.execute(query as never));
 });
 
 describe("getSimilarFindings", () => {
+  // Self (the target), three neighbours in decreasing similarity, and three vectors that
+  // are stored but UNREADABLE — each of which would make `vector32()` throw if it ever
+  // reached it, which is what `embeddingVectorSql`'s guard exists to prevent.
+  const CORPUS: Seed[] = [
+    { embeddingJson: JSON.stringify(vector(1, 0)), logId: "004.0.0A", trackId: "t_self" },
+    {
+      embeddingJson: JSON.stringify(vector(1, 0)),
+      logId: "004.1.1A",
+      title: "Identical",
+      trackId: "t_ident",
+    },
+    {
+      embeddingJson: JSON.stringify(vector(1, 1)),
+      logId: "004.2.2B",
+      title: "Diagonal",
+      trackId: "t_diag",
+    },
+    {
+      embeddingJson: JSON.stringify(vector(0, 1)),
+      logId: "004.3.3C",
+      title: "Orthogonal",
+      trackId: "t_orth",
+    },
+    { embeddingJson: "[1,2,3]", logId: "004.4.4D", trackId: "t_short" }, // wrong width
+    { embeddingJson: "not json at all", logId: "004.5.5E", trackId: "t_garbage" }, // unparseable
+    {
+      // Right width, WRONG element type — the one that `json_valid` + a length check alone
+      // would wave through, and that `vector32()` throws on.
+      embeddingJson: JSON.stringify(Array.from({ length: EMBEDDING_DIMS }, () => "x")),
+      logId: "004.6.6F",
+      trackId: "t_strings",
+    },
+  ];
+
   it("returns the coordinate-bearing neighbours in descending sonic similarity", async () => {
-    setupDb({ stored: STORED, target: SELF, tracks: TRACKS });
+    await seed(CORPUS);
+    await backfillEmbeddingBlob(db);
 
     const findings = await getSimilarFindings("t_self");
 
-    // Order: identical (1) > diagonal (~0.707) > orthogonal (0). `t_bad` is dropped
-    // (malformed), and `t_self` never appears (the self-exclusion predicate).
+    // identical (cos 1) > diagonal (~0.707) > orthogonal (0). The three unreadable rows are
+    // dropped, and `t_self` never appears (the self-exclusion predicate).
+    expect(findings.map((finding) => finding.trackId)).toEqual(["t_ident", "t_diag", "t_orth"]);
+  });
+
+  it("resolves the target by Log ID as well as by track id", async () => {
+    await seed(CORPUS);
+    await backfillEmbeddingBlob(db);
+
+    const findings = await getSimilarFindings("004.0.0A");
+
     expect(findings.map((finding) => finding.trackId)).toEqual(["t_ident", "t_diag", "t_orth"]);
   });
 
   it("maps each neighbour to the row's display fields (cover, coordinate, identity)", async () => {
-    setupDb({ stored: STORED, target: SELF, tracks: TRACKS });
+    await seed(CORPUS);
+    await backfillEmbeddingBlob(db);
 
     const [first] = await getSimilarFindings("t_self");
 
     expect(first).toMatchObject({
-      albumImageUrl: "https://img/ident.jpg",
-      artists: ["Artist X"],
+      albumImageUrl: "https://img/t_ident.jpg",
       logId: "004.1.1A",
       title: "Identical",
       trackId: "t_ident",
@@ -158,39 +186,106 @@ describe("getSimilarFindings", () => {
   });
 
   it("honours the limit (the top-N)", async () => {
-    setupDb({ stored: STORED, target: SELF, tracks: TRACKS });
+    await seed(CORPUS);
+    await backfillEmbeddingBlob(db);
 
     const findings = await getSimilarFindings("t_self", 2);
 
     expect(findings.map((finding) => finding.trackId)).toEqual(["t_ident", "t_diag"]);
   });
 
+  it("ranks a finding the backfill has not reached yet, from its JSON", async () => {
+    // The zero-downtime case: a row embedded by the PREVIOUS Worker between the deploy's
+    // backfill and its cutover has `embedding_json` but no blob. It must still rank.
+    await seed(CORPUS);
+    await backfillEmbeddingBlob(db);
+    await db.execute(`update tracks set embedding_blob = null where track_id = 't_diag'`);
+
+    const findings = await getSimilarFindings("t_self");
+
+    expect(findings.map((finding) => finding.trackId)).toEqual(["t_ident", "t_diag", "t_orth"]);
+  });
+
+  it("survives an unreadable stored vector rather than throwing", async () => {
+    // Nothing is backfilled, so EVERY row takes the JSON arm — including the three that
+    // would make `vector32()` throw and abort the whole query.
+    await seed(CORPUS);
+
+    const findings = await getSimilarFindings("t_self");
+
+    expect(findings.map((finding) => finding.trackId)).toEqual(["t_ident", "t_diag", "t_orth"]);
+  });
+
+  it("excludes a finding with no coordinate (nothing to link to)", async () => {
+    await seed([
+      ...CORPUS,
+      { embeddingJson: JSON.stringify(vector(1, 0)), logId: null, trackId: "t_uncharted" },
+    ]);
+    await backfillEmbeddingBlob(db);
+
+    const findings = await getSimilarFindings("t_self");
+
+    expect(findings.map((finding) => finding.trackId)).not.toContain("t_uncharted");
+  });
+
   it("returns [] for a non-positive limit without touching the DB", async () => {
-    setupDb({ stored: STORED, target: SELF, tracks: TRACKS });
+    await seed(CORPUS);
+    execute.mockClear();
 
     expect(await getSimilarFindings("t_self", 0)).toEqual([]);
     expect(execute).not.toHaveBeenCalled();
   });
 
   it("returns [] for an unknown finding", async () => {
-    setupDb({ stored: STORED, target: undefined, tracks: TRACKS });
+    await seed(CORPUS);
 
     expect(await getSimilarFindings("nope")).toEqual([]);
   });
 
   it("returns [] when the finding has no embedding yet (the embed cron hasn't drained it)", async () => {
-    setupDb({
-      stored: STORED,
-      target: { embedding_json: null, track_id: "t_self" },
-      tracks: TRACKS,
-    });
+    await seed([{ embeddingJson: null, logId: "004.9.9Z", trackId: "t_bare" }, ...CORPUS]);
+    await backfillEmbeddingBlob(db);
+
+    expect(await getSimilarFindings("t_bare")).toEqual([]);
+  });
+
+  it("returns [] when nothing else is embedded", async () => {
+    await seed([
+      { embeddingJson: JSON.stringify(vector(1, 0)), logId: "004.0.0A", trackId: "t_self" },
+      { embeddingJson: null, logId: "004.1.1A", trackId: "t_other" },
+    ]);
+    await backfillEmbeddingBlob(db);
 
     expect(await getSimilarFindings("t_self")).toEqual([]);
   });
 
-  it("returns [] when nothing else is embedded", async () => {
-    setupDb({ stored: [SELF], target: SELF, tracks: TRACKS });
+  // ── THE PIN ────────────────────────────────────────────────────────────────
+  it("returns exactly what the old in-isolate ranking returned (same findings, same order)", async () => {
+    const corpus: Seed[] = Array.from({ length: 40 }, (_, index) => ({
+      embeddingJson: JSON.stringify(pseudoVector(index + 1)),
+      logId: `00${index % 9}.${index}.1A`,
+      trackId: `t_${String(index).padStart(2, "0")}`,
+    }));
 
-    expect(await getSimilarFindings("t_self")).toEqual([]);
+    await seed(corpus);
+    await backfillEmbeddingBlob(db);
+
+    for (const limit of [1, 6, 12]) {
+      const fromSql = (await getSimilarFindings("t_00", limit)).map((finding) => finding.trackId);
+      const fromIsolate = await rankInIsolate("t_00", limit);
+
+      expect(fromSql).toEqual(fromIsolate);
+      expect(fromSql).toHaveLength(limit);
+    }
+
+    // …and the ordering it produces is a genuine descending-cosine order, not an accident
+    // of insertion (the guard against a silently-empty or reversed SQL ranking).
+    const target = pseudoVector(1);
+    const ranked = await getSimilarFindings("t_00", 6);
+    const cosines = ranked.map((finding) =>
+      cosineSimilarity(target, pseudoVector(Number(finding.trackId.slice(2)) + 1)),
+    );
+
+    expect(cosines).toEqual([...cosines].sort((a, b) => b - a));
   });
 });

@@ -72,7 +72,8 @@ export async function seedUser(client: Client, user: SeedUser): Promise<void> {
 type SeedTrack = {
   addedToSpotify?: boolean;
   artists?: string[];
-  logId: string;
+  /** NULL seeds an UNCHARTED finding (no coordinate) — the rows the public reads exclude. */
+  logId: null | string;
   postedToTelegram?: boolean;
   title?: string;
   trackId: string;
