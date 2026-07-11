@@ -312,6 +312,17 @@ export function adminTracksHandlers(os: Implementer) {
         update.sourceAudioFailures = body.sourceAudioFailures;
       }
 
+      // The capture BYTE meter (the budget's byte cap reads it — lib/server/capture-budget.ts).
+      // A non-integer or negative size is not a measurement, so it is dropped rather than
+      // stored: a corrupt byte count would silently mis-state the spend the operator reads.
+      if (
+        typeof body.sourceAudioBytes === "number" &&
+        Number.isInteger(body.sourceAudioBytes) &&
+        body.sourceAudioBytes >= 0
+      ) {
+        update.sourceAudioBytes = body.sourceAudioBytes;
+      }
+
       // The agent role may only touch analysis fields. Reject (not silently drop)
       // an attempt at an operator-only field — a 403 the gate can voice. The role
       // is read from the oRPC context (lifted by `adminAuth`), not re-derived.

@@ -83,6 +83,67 @@ The two lenses are **disjoint by construction**: scoring a track clears its `cap
 
 This repo does **not** build the capture itself — the acquisition layer lives in the private companion repo (the-archive RFC, D6). The Ear ships the queue and the priority signal; the layer that acts on them reads `capture_priority` and works down.
 
+## The capture budget — the brake
+
+The ladder above decides **what** the metered GB buy. It has nothing to say about **how much**, and at catalogue scale that gap is the one that costs real money.
+
+The bounds the capture sweep shipped with were tuned for **findings**: the operator logs ~15 a week, so a batch of 4 every 5 minutes describes a queue that is empty almost all the time, and the bound never binds. The crawler changes what those same numbers mean. It writes uncertified rows by the thousand, and a queue drains whatever it is given: **4 × 288 ticks ≈ 1,150 songs ≈ ~9 GB of metered proxy traffic per day, indefinitely, with nothing in the system that would ever say stop.** The operator has ruled that he does not want to capture everything, and the reason is the bill. Until the budget, nothing enforced that ruling.
+
+So the catalogue half of the capture queue carries a **budget** and a **brake**, three rows on the shared `settings` KV — the same store the auto-advance kill switch and the clip drip's switch ride, deliberately not a third mechanism. All three are changeable **in one flip, with no deploy**, from `/admin/catalogue` or `fluncle admin capture`. A spend you can only stop by shipping a build is a spend you cannot stop.
+
+| key                              | what it holds                                                                       |
+| -------------------------------- | ----------------------------------------------------------------------------------- |
+| `catalogue_capture_paused`       | the **kill switch**. Default-deny: only the literal string `"false"` means running. |
+| `catalogue_capture_daily_tracks` | the rolling-24h **count** cap (default **50**).                                     |
+| `catalogue_capture_daily_bytes`  | the rolling-24h **byte** cap (default **1 GiB**).                                   |
+
+### It ships OFF, and that is the whole point
+
+The switch is **default-deny**, the exact inversion `publish-advance.ts` ships: an unset key, an empty database, a fresh deploy, a preview branch, a restored backup, a value nobody recognises — every one of them reads as **PAUSED**. The machine can spend money on a residential proxy only because an operator deliberately wrote `false` into that row, and anything that loses the row falls back to spending **nothing** rather than to spending everything. Catalogue capture is real money against a budget nobody has chosen yet, so it stays dark until he chooses one.
+
+Findings are untouched by all of it. Every read the budget makes is scoped to the catalogue half (`tracks` with no `findings` row), so a certified finding's capture can neither consume the budget nor be stopped by it. **The archive is never starved by the telescope.**
+
+### Why BOTH a count cap and a byte cap — and the honest limit in the byte one
+
+Bytes are what he is billed for. Count is what the queue knows **before** it spends anything. Neither alone is enough, because of one hard ordering fact:
+
+> **A file's size is knowable only AFTER it has been downloaded.** The queue holds metadata, not media; there is no content-length to consult at queue time. So a byte cap **cannot** be a pre-download guarantee, and anything claiming otherwise has moved the check to a place where the money is already gone.
+
+The two caps therefore do different jobs, and the split is deliberate:
+
+- The **count cap is the enforceable one.** It is checked before a single byte moves, and it is exact: the queue hands out N rows a day and not one more. This is the guarantee.
+- The **byte cap is a backstop**, enforced _between_ batches off what already landed. It catches what the count cap structurally cannot see — a day of unusually fat files blowing through the GB the count was chosen against. It **can overshoot, and the overshoot is bounded**: at most one batch (`BATCH_CAP`, 4) × the largest file, because the gate is read once at the top of a tick and the tick then runs to the end of its batch. Tens of MB against a GB budget. That is the honest guarantee, stated rather than dressed up as a hard cap.
+
+The count ledger counts **attempts**, not successes: a failed download still pulled bytes through the proxy, and an unmatched one still paid for a search, so a ledger that counted only successes would let a day of failures spend real money against a meter reading zero. The byte ledger sums only what **landed** — a failure's partial transfer is genuinely unknowable from the server, and is under-counted rather than guessed at.
+
+### The brake lives at the QUEUE, not in the sweep
+
+`listTrackWork(kind: "capture")` is the **only door** a catalogue row can reach a metered download through (`list_tracks_admin`'s queue filters drive through the finding join and are structurally blind to a catalogue row). So the budget is consulted there, in `track-work.ts`, before the worklist is even selected — which means **every client obeys it**: the box sweep, the CLI, and the next sweep nobody has written yet. A brake inside the baked box script would be re-bakeable, bypassable, and one `curl` away from irrelevant.
+
+When the budget is shut, the capture worklist **narrows to the findings**; it never returns empty while a finding still needs its audio. And it gates **capture alone** — bytes already bought are free to analyse and embed, the same reasoning that scopes the label veto to capture ([docs/gpu-batch-embed.md](./gpu-batch-embed.md)).
+
+The three properties are proven, not asserted, in `track-work.integration.test.ts`: the budget **stops** the sweep when spent, the kill switch stops it in **one flip** and is default-deny, and a **certified finding still captures** when the catalogue budget is gone.
+
+### What the operator sees
+
+The `capture` lens on `/admin/catalogue` carries the spend, next to the tracks the money would be spent **on** — a metered thing he cannot see is a thing he cannot control:
+
+- the switch, and what it currently means;
+- **bought (24h)**: N tracks of the cap, with a bar;
+- **downloaded**: X.XX GB of the cap, with a bar;
+- **left in the window**, or _why_ it is shut (paused by him, or the cap is spent).
+
+```bash
+fluncle admin capture budget            # what it spent, what is left
+fluncle admin capture pause             # the kill switch (operator)
+fluncle admin capture resume            # let it spend again, up to the budget
+fluncle admin capture set --tracks 100 --gb 2
+```
+
+### Note: the sweep does not read the catalogue queue yet
+
+The `fluncle-capture` sweep today reads the **findings-only** admin queue (`captureQueue=true`) and cannot see a catalogue row at all — so catalogue capture is not merely paused, it is not yet wired. `list_track_work` is the catalogue-aware queue, and **that** is the one this budget gates. Migrating the sweep onto it is the switch that turns catalogue capture on; it now lands behind a default-deny brake, so the migration is safe and inert until the operator opens the budget deliberately.
+
 ## The surface
 
 `/admin/catalogue`, one AdminShell station under Findings/Artists/Labels/Galaxies in the sidebar ([docs/admin-shell.md](./admin-shell.md)). Two lenses in the subheader strip, deep-linked through `?lens=` so a pasted URL restores the view:
@@ -124,6 +185,15 @@ fluncle admin catalogue list --lens capture       # what to capture next
 - `apps/web/src/lib/server/catalogue.ts` — the sweep, the ladder, and the two reads.
 - `apps/web/src/lib/server/catalogue.integration.test.ts` — **the ranking proof** (real vectors, real SQL, the centroid case).
 - `apps/web/src/lib/server/catalogue.test.ts` — the pure ladder + the staleness fingerprint.
-- `apps/web/src/routes/admin/catalogue.tsx` — the station.
-- `packages/contracts/src/orpc/admin-catalogue.ts` + `apps/web/src/lib/server/orpc/admin-catalogue.ts` — the two ops.
+- `apps/web/src/routes/admin/catalogue.tsx` — the station (and the capture-budget card).
+- `packages/contracts/src/orpc/admin-catalogue.ts` + `apps/web/src/lib/server/orpc/admin-catalogue.ts` — the ops.
 - `apps/cli/src/commands/admin-catalogue.ts` — the thin HTTP client.
+
+The capture budget (the brake):
+
+- `apps/web/src/lib/server/capture-budget.ts` — the switch, the caps, the rolling-24h ledger, the verdict.
+- `apps/web/src/lib/server/capture-budget.test.ts` — the pure decision core (default-deny, the `>=` cap edge, the malformed-value fallback).
+- `apps/web/src/lib/server/capture-budget.integration.test.ts` — the ledger's SQL: catalogue-only, attempts-not-successes, the rolling window.
+- `apps/web/src/lib/server/track-work.ts` — **where the brake is applied** (the queue narrows to the findings when the budget is shut).
+- `apps/web/src/lib/server/track-work.integration.test.ts` — **the three proofs**.
+- `apps/cli/src/commands/capture.ts` — `fluncle admin capture`.

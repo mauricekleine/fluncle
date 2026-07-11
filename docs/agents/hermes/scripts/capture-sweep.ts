@@ -14,6 +14,27 @@
 // the host timer `docker exec`s on a schedule — see that file's header for the wire-up and
 // ../capture-timer/README.md for the operator runbook.
 //
+// ── THIS SWEEP HAS NO BUDGET OF ITS OWN, AND THAT IS DELIBERATE ──────────────────────
+// Capture is the one thing Fluncle does that bills per unit of work, so it has a BUDGET and a
+// KILL SWITCH — and both live on the SERVER, in the queue, not here (the capture budget:
+// apps/web/src/lib/server/capture-budget.ts, enforced in track-work.ts's `listTrackWork`).
+//
+// A brake in this file would be the wrong brake. This script is BAKED onto the box, so
+// changing it is a re-bake rather than a flip; and it is only one client of the queue — the
+// CLI is another, and the next sweep nobody has written yet is a third. Putting the brake at
+// the queue means every client obeys it, and the operator stops the spend with one settings
+// flip and no deploy. So this sweep's only budget duty is to be an HONEST METER: it stamps
+// `sourceAudioAttemptedAt` on EVERY terminal outcome (done | unmatched | failed — each one was
+// a billed proxy request) and `sourceAudioBytes` on a success, which is the only place a
+// file's real size is ever knowable. The server does the deciding; this reports the spending.
+//
+// NOTE ON THE QUEUE IT READS TODAY: `captureQueue=true` (the FINDINGS-only admin list), so
+// this sweep captures certified findings and cannot see a catalogue row at all. The
+// catalogue-aware queue is `list_track_work` (docs/gpu-batch-embed.md) — and THAT is the one
+// the budget gates. Migrating this sweep onto it is what turns catalogue capture on; it lands
+// behind a default-DENY brake, so the migration is safe and inert until the operator opens the
+// budget deliberately.
+//
 // SELF-CONTAINED by necessity: box scripts can't import the workspace. The S3 signer
 // MIRRORS apps/web/src/lib/server/aws-sigv4.ts (unit-tested there via aws-sigv4.test.ts)
 // exactly like backup-sweep.ts — keep them in step. The pure helpers below
@@ -716,7 +737,14 @@ async function captureFinding(finding: CaptureFinding): Promise<FindingOutcome> 
     });
 
     if (ranked.length === 0) {
-      await patchTrack(trackId, { captureStatus: "unmatched" });
+      // `sourceAudioAttemptedAt` on an UNMATCHED too: it was a billed proxy request (a search),
+      // and the capture budget's ledger counts attempts rather than successes — a day of
+      // unmatched rows still spends money, and a meter that could not see that would read zero
+      // while the bill climbed. See apps/web/src/lib/server/capture-budget.ts.
+      await patchTrack(trackId, {
+        captureStatus: "unmatched",
+        sourceAudioAttemptedAt: new Date().toISOString(),
+      });
       return "unmatched";
     }
 
@@ -759,7 +787,12 @@ async function captureFinding(finding: CaptureFinding): Promise<FindingOutcome> 
     // trust tier so a trusted padded upload isn't rejected here after passing the pick.
     const realDurationSec = probeDurationSec(downloaded.path);
     if (!durationAcceptable(realDurationSec, finding.durationMs, chosen.trust)) {
-      await patchTrack(trackId, { captureStatus: "unmatched" });
+      // Unmatched AFTER a download — the most expensive miss there is (the bytes were pulled
+      // through the metered proxy and then thrown away). It absolutely counts as an attempt.
+      await patchTrack(trackId, {
+        captureStatus: "unmatched",
+        sourceAudioAttemptedAt: new Date().toISOString(),
+      });
       return "unmatched";
     }
 
@@ -769,12 +802,22 @@ async function captureFinding(finding: CaptureFinding): Promise<FindingOutcome> 
 
     await r2Put(key, bytes, contentTypeForExt(downloaded.ext));
 
-    // Write back: the key + done + the captured stamp. Clobber-safe enrichment trigger —
-    // re-queue when the BPM is missing OR the row was analyzed from a preview (not full
-    // audio), closing the capture→enrich race (see needsReenrichAfterCapture).
+    // Write back: the key + done + the captured stamp + THE METER. Clobber-safe enrichment
+    // trigger — re-queue when the BPM is missing OR the row was analyzed from a preview (not
+    // full audio), closing the capture→enrich race (see needsReenrichAfterCapture).
+    //
+    // `sourceAudioBytes` is what the operator is actually billed for, and it is knowable only
+    // HERE — the queue holds metadata, not media, so there is no size to consult before the
+    // download. It is the whole reason the capture budget's byte cap is a between-batches
+    // backstop rather than a pre-flight guarantee. `sourceAudioAttemptedAt` is stamped on the
+    // success too (not only on failure): the budget's rolling-24h ledger is a range seek on
+    // that column, so a success that did not stamp it would be a download the meter never saw.
+    const now = new Date().toISOString();
     const update: Record<string, unknown> = {
       captureStatus: "done",
-      sourceAudioCapturedAt: new Date().toISOString(),
+      sourceAudioAttemptedAt: now,
+      sourceAudioBytes: bytes.byteLength,
+      sourceAudioCapturedAt: now,
       sourceAudioKey: key,
     };
     if (needsReenrichAfterCapture(finding.bpm, finding.analyzedFrom)) {
