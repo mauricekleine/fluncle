@@ -79,7 +79,10 @@ function NewsletterArchivePage() {
               const count = editionFindingCount(edition.content);
 
               return (
-                <li className="log-index-row log-index-row--entry" key={edition.id}>
+                <li
+                  className="log-index-row log-index-row--entry log-index-row--edition"
+                  key={edition.id}
+                >
                   <Link
                     className="log-index-id"
                     params={{ number: String(edition.number) }}

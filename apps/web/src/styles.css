@@ -2131,8 +2131,15 @@ body::before {
   align-items: center;
   column-gap: 0.9rem;
   display: grid;
-  grid-template-columns: 5rem minmax(0, 1fr);
+  grid-template-columns: var(--index-track, 5rem) minmax(0, 1fr);
   row-gap: 0.15rem;
+}
+
+/* Each list sets the width its OWN index needs. There is no single right value: /log
+   carries an 8-character coordinate, /logbook a 3-digit sector, /newsletter a "#1".
+   One width for all three strands the short ones out in the middle of the row. */
+.log-index-list--sectors {
+  --index-track: 2.75rem;
 }
 
 /* ── Fluncle's Logbook ─────────────────────────────────────────────────────
@@ -2308,7 +2315,7 @@ body::before {
      coordinate track stays FIXED (see above) so the titles line up down the page. */
   .log-index-row--entry {
     align-items: center;
-    grid-template-columns: 5rem minmax(0, 1fr) max-content;
+    grid-template-columns: var(--index-track, 5rem) minmax(0, 1fr) max-content;
   }
 
   .log-index-date {
@@ -2322,16 +2329,51 @@ body::before {
 /* The intro preview under each archive row — a quiet second line, spanning the
    whole row so it sits under the #NN / subject / date header rather than in an
    implicit fourth column. */
+/* An edition row is NOT a finding row, and it stopped reading like one.
+
+   It reuses the row grid, but its index is "#1", not an 8-character coordinate — so it
+   takes a narrow index track of its own instead of inheriting the coordinate column's
+   5rem, which left the subject stranded out in the middle of the row.
+
+   And it is TWO lines, not one: a subject and its preview. So it aligns to the TOP (a
+   centred row would push the index and the date down against the preview), and the
+   preview sits in the SUBJECT's column — indented to the same edge, so the two lines
+   read as one entry hanging off "#1", rather than as a stray line of prose running back
+   under the number. */
+.log-index-row--edition {
+  --index-track: 2.5rem;
+
+  align-items: start;
+  row-gap: 0.35rem;
+}
+
+@media (min-width: 640px) {
+  .log-index-row--edition {
+    grid-template-columns: var(--index-track) minmax(0, 1fr) max-content;
+  }
+}
+
 .log-newsletter-snippet {
   color: var(--stardust);
   font-size: 0.85rem;
-  grid-column: 1 / -1;
+  /* Column 2, row 2: under the subject, never under the number. */
+  grid-column: 2;
+  grid-row: 2;
   line-height: 1.5;
-  margin: 0.1rem 0 0;
-  /* Keep the preview to one tidy line so the list stays scannable. */
+  margin: 0;
+  /* Keep the preview to one tidy line so the list stays scannable. It CLIPS, so it
+     carries `ink-room` below — without it the cap-trim shears its descenders off. */
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+@media (min-width: 640px) {
+  /* The date lives in column 3 of the header line, so the preview can run the full
+     width beneath the subject AND the date without colliding with it. */
+  .log-newsletter-snippet {
+    grid-column: 2 / -1;
+  }
 }
 
 /* A back issue's lead paragraph — the uncle's opening line, set as readable
@@ -3562,7 +3604,8 @@ body::before {
 
    RULE: trim + overflow:hidden ⇒ this. Never one without the other. */
 .nav-breadcrumb-tail,
-.log-index-line {
+.log-index-line,
+.log-newsletter-snippet {
   margin-block: -0.3em;
   padding-block: 0.3em;
 }

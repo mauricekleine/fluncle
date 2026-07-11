@@ -83,7 +83,7 @@ function LogbookIndexPage() {
             No entries written yet. Quiet sector tonight.
           </p>
         ) : (
-          <ol className="log-index-list">
+          <ol className="log-index-list log-index-list--sectors">
             {entries.map((entry) => (
               <li className="log-index-row log-index-row--entry" key={entry.sector}>
                 <Link
