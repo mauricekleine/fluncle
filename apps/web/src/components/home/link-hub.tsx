@@ -148,7 +148,9 @@ export function HomeLinkHub({ galaxiesLive = false }: { galaxiesLive?: boolean }
       </div>
 
       {/* The site links sit directly under Join the Crew — About · Logs · Mixtapes ·
-          Docs. Radio left this row (it's a Listen-pair button now). */}
+          Galaxies. Radio left this row (it's a Listen-pair button now), and Docs left
+          it too: the colophon carries Docs, and the developer row right below already
+          points at the machinery. */}
       <nav
         aria-label="More from Fluncle"
         className="mt-4 flex items-center justify-center gap-3 text-sm"
@@ -172,10 +174,6 @@ export function HomeLinkHub({ galaxiesLive = false }: { galaxiesLive?: boolean }
             </Link>
           </>
         ) : undefined}
-        <Dot />
-        <Link className={linkClassName} to="/docs">
-          Docs
-        </Link>
       </nav>
 
       {/* The quiet sections sink to the bottom of the column (mt-auto): the socials,

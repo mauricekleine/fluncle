@@ -28,20 +28,20 @@ typography:
     letterSpacing: "-0.02em"
     fontVariation: "tabular-nums"
   title:
-    fontFamily: "ui-sans-serif, system-ui, sans-serif"
+    fontFamily: "Space Grotesk, ui-sans-serif, system-ui, sans-serif"
     fontSize: "1.02rem"
-    fontWeight: 800
+    fontWeight: 700
     lineHeight: 1.18
     letterSpacing: "-0.01em"
   body:
-    fontFamily: "ui-sans-serif, system-ui, sans-serif"
+    fontFamily: "Space Grotesk, ui-sans-serif, system-ui, sans-serif"
     fontSize: "0.9rem"
     fontWeight: 400
     lineHeight: 1.25
   label:
-    fontFamily: "ui-sans-serif, system-ui, sans-serif"
+    fontFamily: "Space Grotesk, ui-sans-serif, system-ui, sans-serif"
     fontSize: "0.76rem"
-    fontWeight: 800
+    fontWeight: 700
   mono:
     fontFamily: "Monaspace Krypton, ui-monospace, SF Mono, Menlo, monospace"
     fontSize: "0.82rem"
@@ -114,7 +114,7 @@ This system explicitly rejects SaaS dashboards, bright streaming-app clones, gen
 - Dark-only; the cover-art starfield shows through every surface
 - One light source: Eclipse Gold for the primary action, focus, and identity
 - Glass as doctrine, not decoration; depth from translucency, never shadows
-- Oxanium speaks for the brand (numerals, marks); the system sans does the reading
+- Oxanium speaks for the brand (numerals, marks); Space Grotesk does the reading
 - Floaty and tactile: hovers lift gently, presses land
 - Lossy by design: grain and compression are narrative texture, not noise (The Light-Years Rule)
 
@@ -158,19 +158,21 @@ A night-sky palette lit by one sun: warm blacks, sleeve-paper cream, and a singl
 
 ## 3. Typography
 
-**Display Font:** Oxanium (with ui-sans-serif, system-ui fallback), weights 400–800
-**Body Font:** System sans stack (Tailwind default ui-sans-serif)
+**Display Font:** Oxanium (SIL OFL, self-hosted; with ui-sans-serif, system-ui fallback), weights 200–800
+**Body Font:** Space Grotesk (SIL OFL, self-hosted; with ui-sans-serif, system-ui fallback), weights 300–700 — 700 is its ceiling, so no body-face role may ask for 800
 **Mono Font:** Monaspace Krypton (GitHub Next's mechanical mono, SIL OFL, self-hosted; with ui-monospace, SF Mono fallback), weights 400 + 700
 
-**Character:** Oxanium is the voice of the artifact: a squared, techy face that reads like the printing on a Discman, used for the wordmark, track numerals, and brand moments. The body runs on the quiet system sans so the music metadata reads instantly. Monaspace Krypton is the machine's own voice on the terminal surfaces (the "for the nerds" faceplate, the CLI/SSH dialogs): a mechanical mono that signals "real tool" without shouting. The pairing is "machine label + plain reading + terminal", not a typographic performance.
+**Character:** Oxanium is the voice of the artifact: a squared, techy face that reads like the printing on a Discman, used for the wordmark, track numerals, and brand moments. Space Grotesk carries the reading: a geometric grotesque with just enough oddness in its details to sound like Fluncle rather than like a settings screen, while still disappearing when you are scanning metadata. Monaspace Krypton is the machine's own voice on the terminal surfaces (the "for the nerds" faceplate, the CLI/SSH dialogs): a mechanical mono that signals "real tool" without shouting. The pairing is "machine label + plain reading + terminal", not a typographic performance.
+
+**All three faces are SELF-HOSTED, and that is a rule, not an implementation detail.** Riding the system stack meant the body face — and therefore every mixed-font alignment on the page — was a different typeface with different metrics on macOS, Windows and Android. Three renderings, only one of which we had ever looked at.
 
 ### Hierarchy
 
 - **Display** (800, ad hoc sizes, -0.02em): Oxanium, reserved for brand marks and the plate mastheads. The one sanctioned large on-page heading is a masthead nameplate (a brand-mark plate: the stamped FLUNCLE'S FINDINGS lockup on the home plate, the coordinate on a log plate); body headings stay quiet, and the cover art remains the hero image.
 - **Numeric** (400, 0.98rem, -0.02em, tabular-nums): Oxanium track indices (#01, #02). Always tabular.
-- **Title** (800, 1.02rem, 1.18, -0.01em): Track titles. Extrabold cream against the dark; the loudest text on the page.
+- **Title** (700, 1.02rem, 1.18, -0.01em): Track titles. Bold cream against the dark; the loudest text on the page. 700 is Space Grotesk's heaviest cut — a rule asking for 800 would silently clamp here, so the canon asks for what the face can actually give.
 - **Body** (400, 0.9rem, 1.25): Artist lines, descriptions, form text in Stardust or Starlight Cream.
-- **Label** (800, 0.76rem): Column headers and form labels. Bold and small, never uppercase-tracked.
+- **Label** (700, 0.76rem): Column headers and form labels. Bold and small, never uppercase-tracked.
 - **Mono** (400/700, 0.82rem, 1.5): Monaspace Krypton, reserved for the terminal surfaces: the "for the nerds" faceplate legend (700) and its items, the CLI install command, and command examples. The machine's own voice, quoted verbatim.
 
 ### Named Rules
@@ -178,6 +180,16 @@ A night-sky palette lit by one sun: warm blacks, sleeve-paper cream, and a singl
 **The One Voice Rule.** Oxanium speaks only for the brand and the numbers, and mono speaks only for the machine (literal commands and code). If body copy or a paragraph is set in either, it's a mistake.
 
 **The Tabular Rule.** Every number that sits in a column (indices, dates) is tabular-nums. Numbers that jitter on update break the instrument-panel calm.
+
+**The Canon Travels Rule.** These three faces are the brand on EVERY surface that renders text, not just the web app — the Remotion videos, the OG cards, the mixtape covers, the live glass, the extension. A rendered artifact that falls back to the system sans is off-brand in the place the brand is most visible: the video is what lands on TikTok, and the OG card is what lands in a link preview. Because a render environment has no system fonts to inherit and no stylesheet to cascade from, each one must EMBED the faces itself — and must carry the One Box Rule's metric overrides with them, or the type drifts out of alignment exactly where it cannot be inspected. (This rule exists because the brand HAD drifted: the video set its coordinate in Oxanium and its title in whatever sans the renderer happened to have.)
+
+The exemptions are the surfaces we do not control the type on, and they are the only ones: a TTY (the SSH terminal has no fonts), Raycast's own chrome, an HTML email (clients will not load a webfont — those fall back to the system stack by necessity), and baked bitmap lettering inside a sprite.
+
+**The One Box Rule.** Every self-hosted face is normalised at `@font-face` — via `ascent-override` / `descent-override` — to the SAME 1.25em metric box, cut so that `ascent − descent` equals that face's cap height. This puts each face's cap band exactly on its own box centre, which is what makes a plain `align-items: center` optically centre text of mixed faces and mixed sizes: a coordinate beside a title beside a date, all landing on one centre line, at any size, on any platform.
+
+Without it, the fonts disagree. Oxanium ships a 1.00em box around a 0.69em cap height, so its cap band sits 0.055em BELOW its own box centre — it throws its own text off-centre before anything is set beside it. Centring the boxes then visibly fails to centre the text, and the only alternatives are `text-box-trim` (which cuts the box to the cap line, so descenders and round-glyph overshoot fall outside it and any `overflow: hidden` shears them) or per-element pixel nudges. Fix the font, not the elements.
+
+When adding or updating a face: read its real `hhea`/`OS/2` tables (fontTools, not the renderer), confirm `USE_TYPO_METRICS` is set so Windows reads the same box as macOS, recompute the overrides for the 1.25em box, and check the deepest descender still fits inside the overridden descent.
 
 ## 4. Elevation
 

@@ -1,8 +1,17 @@
 /// <reference types="vite/client" />
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { HeadContent, Outlet, Scripts, createRootRoute } from "@tanstack/react-router";
+import {
+  HeadContent,
+  Outlet,
+  Scripts,
+  createRootRoute,
+  useLoaderData,
+} from "@tanstack/react-router";
+import { createServerFn } from "@tanstack/react-start";
 import { type ReactNode, useState } from "react";
+import { PublicChrome } from "@/components/nav/public-chrome";
+import { isGalaxyMapFullyNamed } from "@/lib/server/galaxies-map";
 import { siteUrl } from "../lib/fluncle-links";
 import { fluncleMetaDescription } from "../lib/identity";
 import appCss from "../styles.css?url";
@@ -13,10 +22,27 @@ const title = "Fluncle: drum & bass bangers from another dimension";
 const description = fluncleMetaDescription;
 const coverUrl = `${siteUrl}/fluncle-cover.png`;
 
+// The nav's Galaxies gate, resolved on the SERVER. `/galaxies` 404s until the whole
+// sonic map is named, so the nav must not link it before then — but the check has to
+// happen server-side, or the link never lands in the SSR HTML and a crawler (which
+// is the whole point of banking the nav in a footer) never sees the map at all.
+const fetchGalaxiesLive = createServerFn({ method: "GET" }).handler(() => isGalaxyMapFullyNamed());
+
+// oxlint-disable-next-line sort-keys -- TanStack's canonical option order (loader
+// feeds the next step's inference); see AGENTS.md.
 export const Route = createRootRoute({
   component: RootLayout,
   head: () => ({
     links: [
+      // The body face. Preloaded ahead of the display face because it now sets nearly
+      // every line of text on the page; a late swap would reflow the lot.
+      {
+        as: "font",
+        crossOrigin: "anonymous",
+        href: "/fonts/space-grotesk-latin.woff2",
+        rel: "preload",
+        type: "font/woff2",
+      },
       {
         as: "font",
         crossOrigin: "anonymous",
@@ -155,6 +181,7 @@ export const Route = createRootRoute({
       },
     ],
   }),
+  loader: async () => ({ galaxiesLive: await fetchGalaxiesLive() }),
 });
 
 function RootLayout(): ReactNode {
@@ -162,6 +189,7 @@ function RootLayout(): ReactNode {
   // re-renders). Admin boards read through it so they refetch on window focus —
   // handy when the operator tabs back from TikTok/YouTube.
   const [queryClient] = useState(() => new QueryClient());
+  const { galaxiesLive } = useLoaderData({ from: Route.id });
 
   return (
     <html lang="en">
@@ -173,7 +201,12 @@ function RootLayout(): ReactNode {
             ignition; breath gated to no-preference in CSS). */}
         <div aria-hidden="true" className="sun-bloom" />
         <QueryClientProvider client={queryClient}>
-          <Outlet />
+          {/* The single mount point for the public navigation (the logbook colophon):
+              the wordmark + breadcrumb top bar, and the liner-notes footer that
+              carries the whole nav. Skips /admin + the full-bleed surfaces. */}
+          <PublicChrome galaxiesLive={galaxiesLive}>
+            <Outlet />
+          </PublicChrome>
         </QueryClientProvider>
         <Scripts />
       </body>

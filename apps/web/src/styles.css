@@ -63,11 +63,29 @@
 }
 
 /* Oxanium variable font (SIL OFL), self-hosted; one file covers weights 200-800. */
+/* THE METRIC OVERRIDES ARE LOAD-BEARING — do not drop them when updating the font.
+   Oxanium ships a freakishly tight 1.00em metric box (ascent .79 / descent .21) around a
+   .69em cap height. That means its cap band sits 0.055em BELOW its own box centre — so
+   `align-items: center` centres the box and leaves the visible text off-centre, against
+   anything set beside it. It is the single worst offender of any font we tested.
+
+   ascent-override/descent-override re-cut the box so that (ascent − descent) == the cap
+   height, which puts the cap band exactly ON the box centre. Same trick on Space Grotesk
+   below, to the SAME 1.25em box. With both fonts normalised, plain `align-items: center`
+   optically centres mixed-font, mixed-size text — every row, every size, every platform.
+   No text-box-trim, no per-element nudges, no clipping traps.
+
+   Verified against the real font tables (fontTools, not the renderer): both faces set
+   USE_TYPO_METRICS, so Windows reads the same box macOS does, and every descender still
+   lands inside the overridden descent (Oxanium .207em vs .280em; Grotesk .200em vs .275em). */
 @font-face {
   font-family: "Oxanium";
   font-style: normal;
   font-weight: 200 800;
   font-display: swap;
+  ascent-override: 97%;
+  descent-override: 28%;
+  line-gap-override: 0%;
   src: url("/fonts/oxanium-latin.woff2") format("woff2");
   unicode-range:
     U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329,
@@ -79,6 +97,9 @@
   font-style: normal;
   font-weight: 200 800;
   font-display: swap;
+  ascent-override: 97%;
+  descent-override: 28%;
+  line-gap-override: 0%;
   src: url("/fonts/oxanium-latin-ext.woff2") format("woff2");
   unicode-range:
     U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329,
@@ -90,11 +111,51 @@
    that voices the terminal surfaces ("for the nerds", the CLI/SSH dialogs).
    Latin subset, two static weights — Regular for commands, Bold for the
    faceplate legend. */
+/* Space Grotesk — the BODY face (DESIGN.md). Self-hosted deliberately: we previously
+   shipped no body font at all and rode the system stack, which meant the type metrics
+   (and therefore every mixed-font alignment) were different on macOS, Windows and
+   Android — three renderings, one of which we had ever actually looked at. Normalised to
+   the same 1.25em box as Oxanium above, so the two sit on one optical centre line. */
+@font-face {
+  font-family: "Space Grotesk";
+  font-style: normal;
+  font-weight: 300 700;
+  font-display: swap;
+  ascent-override: 97.5%;
+  descent-override: 27.5%;
+  line-gap-override: 0%;
+  src: url("/fonts/space-grotesk-latin.woff2") format("woff2");
+  unicode-range:
+    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329,
+    U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "Space Grotesk";
+  font-style: normal;
+  font-weight: 300 700;
+  font-display: swap;
+  ascent-override: 97.5%;
+  descent-override: 27.5%;
+  line-gap-override: 0%;
+  src: url("/fonts/space-grotesk-latin-ext.woff2") format("woff2");
+  unicode-range:
+    U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329,
+    U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F,
+    U+A720-A7FF;
+}
+/* Monaspace Krypton is normalised too — the One Box Rule says EVERY self-hosted face,
+   and mono is the worst offender of the three: a 1.00em box around a 0.73em cap height,
+   so its cap band sits 0.0825em below its own box centre. It does sit inline with the
+   body face (the colophon's machinery row beside the status pill, inline code in the
+   docs), so an un-normalised mono drifts against everything around it. */
 @font-face {
   font-family: "Monaspace Krypton";
   font-style: normal;
   font-weight: 400;
   font-display: swap;
+  ascent-override: 99%;
+  descent-override: 26%;
+  line-gap-override: 0%;
   src: url("/fonts/monaspace-krypton-400.woff2") format("woff2");
 }
 
@@ -103,6 +164,9 @@
   font-style: normal;
   font-weight: 700;
   font-display: swap;
+  ascent-override: 99%;
+  descent-override: 26%;
+  line-gap-override: 0%;
   src: url("/fonts/monaspace-krypton-700.woff2") format("woff2");
 }
 
@@ -112,6 +176,16 @@
    noise tile (inline SVG, zero network) is --grain-tile. */
 :root {
   --grain-tile: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* No rubber-band. The top bar is sticky and the colophon sits on the bottom edge, so
+   an elastic overscroll peels them off the viewport and flashes bare canvas above and
+   below — for the length of the bounce the page looks broken. Killing the bounce welds
+   the chrome to the edges; the dark ground is the belt-and-braces, so even a browser
+   that ignores `overscroll-behavior` has nothing bright to reveal. */
+html {
+  background-color: var(--sleeve-black);
+  overscroll-behavior-y: none;
 }
 
 body::before {
@@ -1914,14 +1988,15 @@ body::before {
   width: 2.75rem;
 }
 
-/* The galaxy detail masthead's name — the operator-authored editorial name in the
-   Title register (system sans, extrabold cream), NOT the Oxanium coordinate face the
-   .log-coordinate slot defaults to: One Voice Rule reserves Oxanium for the brand + the
-   numbers, so an editorial name never wears the brand face (the RFC's names-not-Oxanium
-   rail). Keeps the masthead size/weight/cream from .log-coordinate; overrides only the
-   family. Wrap long names rather than overflow the plate. */
+/* The galaxy detail masthead's name. It KEEPS the Oxanium masthead face it inherits from
+   .log-coordinate: a galaxy page's masthead is a plate masthead, and DESIGN.md gives
+   every one of those to Oxanium (The log, Back issues, Mixtapes are all set in it).
+
+   This used to override the family to the body face, citing the One Voice Rule and a
+   "names-not-Oxanium" rail from the galaxies RFC — which made galaxies the ONLY masthead
+   on the site wearing the body face. An RFC is subordinate to canon. Only the wrap
+   survives, so a long name breaks rather than overflowing the plate. */
 .galaxy-title {
-  font-family: ui-sans-serif, system-ui, sans-serif;
   overflow-wrap: anywhere;
 }
 
@@ -2101,13 +2176,27 @@ body::before {
 /* The /log row has three direct children (Log ID, title line, date) rather than
    the mixtape row's cover + body grid, so it lays them out itself: the title
    line absorbs the slack and ellipsizes (min-width:0 below), the date stays
-   whole at the row's end. On a narrow screen the date wraps under the line. */
+   whole at the row's end. On a narrow screen the date wraps under the line.
+
+   The coordinate column is a FIXED width, never `max-content`. Each row is its own
+   grid, so `max-content` sizes that column to THAT row's coordinate — and Oxanium is
+   proportional (a 'I' is narrow, a 'K' wide), so every row's title started at a
+   different x and the column read as ragged. A fixed track makes the archive a real
+   column. 5rem clears a 9-character coordinate, so it still holds when the sector
+   passes 999. */
 .log-index-row--entry {
-  align-items: baseline;
+  align-items: center;
   column-gap: 0.9rem;
   display: grid;
-  grid-template-columns: max-content minmax(0, 1fr);
+  grid-template-columns: var(--index-track, 5rem) minmax(0, 1fr);
   row-gap: 0.15rem;
+}
+
+/* Each list sets the width its OWN index needs. There is no single right value: /log
+   carries an 8-character coordinate, /logbook a 3-digit sector, /newsletter a "#1".
+   One width for all three strands the short ones out in the middle of the row. */
+.log-index-list--sectors {
+  --index-track: 2.75rem;
 }
 
 /* ── Fluncle's Logbook ─────────────────────────────────────────────────────
@@ -2279,10 +2368,11 @@ body::before {
   }
 
   /* /log entry rows: the row itself gains a third, intrinsic column so the date
-     sits inline at the row's end; the content column still ellipsizes. */
+     sits inline at the row's end; the content column still ellipsizes. The
+     coordinate track stays FIXED (see above) so the titles line up down the page. */
   .log-index-row--entry {
     align-items: center;
-    grid-template-columns: max-content minmax(0, 1fr) max-content;
+    grid-template-columns: var(--index-track, 5rem) minmax(0, 1fr) max-content;
   }
 
   .log-index-date {
@@ -2296,16 +2386,50 @@ body::before {
 /* The intro preview under each archive row — a quiet second line, spanning the
    whole row so it sits under the #NN / subject / date header rather than in an
    implicit fourth column. */
+/* An edition row is NOT a finding row, and it stopped reading like one.
+
+   It reuses the row grid, but its index is "#1", not an 8-character coordinate — so it
+   takes a narrow index track of its own instead of inheriting the coordinate column's
+   5rem, which left the subject stranded out in the middle of the row.
+
+   And it is TWO lines, not one: a subject and its preview. So it aligns to the TOP (a
+   centred row would push the index and the date down against the preview), and the
+   preview sits in the SUBJECT's column — indented to the same edge, so the two lines
+   read as one entry hanging off "#1", rather than as a stray line of prose running back
+   under the number. */
+.log-index-row--edition {
+  --index-track: 2.5rem;
+
+  align-items: start;
+  row-gap: 0.35rem;
+}
+
+@media (min-width: 640px) {
+  .log-index-row--edition {
+    grid-template-columns: var(--index-track) minmax(0, 1fr) max-content;
+  }
+}
+
 .log-newsletter-snippet {
   color: var(--stardust);
   font-size: 0.85rem;
-  grid-column: 1 / -1;
+  /* Column 2, row 2: under the subject, never under the number. */
+  grid-column: 2;
+  grid-row: 2;
   line-height: 1.5;
-  margin: 0.1rem 0 0;
+  margin: 0;
   /* Keep the preview to one tidy line so the list stays scannable. */
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+@media (min-width: 640px) {
+  /* The date lives in column 3 of the header line, so the preview can run the full
+     width beneath the subject AND the date without colliding with it. */
+  .log-newsletter-snippet {
+    grid-column: 2 / -1;
+  }
 }
 
 /* A back issue's lead paragraph — the uncle's opening line, set as readable
@@ -3251,6 +3375,9 @@ body::before {
 }
 
 @theme {
+  /* The body voice. Without this, Tailwind falls back to its default system stack — which
+     is a DIFFERENT typeface (and different metrics) on every operating system. */
+  --font-sans: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
   --font-display: "Oxanium", ui-sans-serif, system-ui, sans-serif;
   /* The terminal voice: every "for the nerds" / CLI surface speaks in this
      stack. Monaspace Krypton (GitHub Next's mechanical mono) leads, system
@@ -3346,5 +3473,431 @@ body::before {
 @media (prefers-reduced-motion: reduce) {
   .queue-clear {
     animation: none;
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Public navigation chrome — the LOGBOOK COLOPHON.
+   A minimal top bar (wordmark + the page's breadcrumb, inline) over a liner-notes
+   footer that carries the whole nav. The cover stays the hero; the crawl graph
+   still gets its links. Dark, warm, One-Sun gold; panes over the cosmos
+   (Through-the-Glass). All motion is color-first and reduced-motion safe.
+   ───────────────────────────────────────────────────────────────────────────── */
+
+.nav-shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 100dvh;
+}
+
+.nav-content {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* The wordmark — the brand voice (Oxanium caps), heats toward gold on hover. In the
+   top bar it doubles as the FIRST BREADCRUMB: FLUNCLE › Log › 038.6.1J.
+   The negative right margin cancels the TRAILING letter-space after the final E:
+   letter-spacing pads every glyph including the last, so the box extends ~2.4px past
+   the E and the caret after it sits visibly further away than the next one. */
+.nav-wordmark {
+  color: var(--starlight-cream);
+  flex: none;
+  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-size: 1.05rem;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  margin-right: -0.14em;
+  text-transform: uppercase;
+  transition: color 150ms ease-out;
+}
+
+.nav-wordmark:hover {
+  color: var(--eclipse-glow);
+}
+
+/* An item link: quiet cream that heats + washes on hover. The horizontal padding is
+   load-bearing — without it the hover wash crops flush to the glyphs and reads as a
+   highlighter smear rather than a target. */
+.nav-item {
+  align-items: center;
+  border-radius: var(--radius-md, 0.5rem);
+  color: var(--muted-foreground);
+  display: inline-flex;
+  font-size: 0.9rem;
+  font-weight: 600;
+  gap: 0.45rem;
+  padding: 0.35rem 0.55rem;
+  transition:
+    color 150ms ease-out,
+    background-color 150ms ease-out;
+  white-space: nowrap;
+}
+
+.nav-item:hover,
+.nav-item:focus-visible {
+  background: var(--gold-veil, color-mix(in oklch, var(--eclipse-gold) 10%, transparent));
+  color: var(--eclipse-glow);
+  outline: none;
+}
+
+.nav-item[data-status="active"] {
+  color: var(--starlight-cream);
+}
+
+.nav-item--soon {
+  color: color-mix(in oklch, var(--muted-foreground) 70%, transparent);
+  cursor: default;
+}
+
+.nav-soon-tag {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 0.05rem 0.35rem;
+  text-transform: uppercase;
+}
+
+/* ── The top bar: wordmark + breadcrumb, one line ──────────────────────────── */
+.nav-topbar {
+  backdrop-filter: blur(14px) saturate(125%);
+  background: color-mix(in oklch, var(--sleeve-black) 68%, transparent);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 30;
+}
+
+/* Plain optical centring — and it Just Works now, because BOTH fonts are normalised to
+   one metric box at the @font-face (see the ascent-override block at the top of this
+   file). Their cap bands sit exactly on their box centres, so centring the boxes centres
+   the ink, at any size, in any mix. This used to need text-box-trim and a per-element
+   "ink-room" rule to stop the trim shearing descenders; fixing the FONTS instead deleted
+   all of it. */
+.nav-topbar-inner {
+  align-items: center;
+  display: flex;
+  gap: 0.5rem;
+  margin: 0 auto;
+  max-width: 80rem;
+  min-width: 0;
+  padding: 0.85rem 1rem;
+}
+
+/* ── Breadcrumb (inline with the wordmark, every page but home) ─────────────── */
+.nav-breadcrumb {
+  min-width: 0;
+}
+
+.nav-breadcrumb ol {
+  align-items: center;
+  color: var(--muted-foreground);
+  display: flex;
+  font-size: 0.82rem;
+  gap: 0.5rem;
+  list-style: none;
+  margin: 0;
+  min-width: 0;
+  padding: 0;
+}
+
+/* Each crumb carries its own leading separator, so the trail hangs off the wordmark
+   without the wordmark having to know a breadcrumb exists. The li gap and the ol gap
+   are EQUAL, so the caret sits the same distance from the text on both sides — an
+   asymmetric pair here is what made the trail look hand-kerned. */
+.nav-breadcrumb li {
+  align-items: center;
+  display: flex;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.nav-breadcrumb a {
+  color: var(--muted-foreground);
+  font-weight: 600;
+  transition: color 150ms ease-out;
+}
+
+.nav-breadcrumb a:hover {
+  color: var(--eclipse-glow);
+}
+
+/* The tail is the page you are on — the emphasis lands here, never on the hub behind
+   it. It truncates rather than wraps, so a long artist name can't push the bar tall.
+   Selected by CLASS, not [aria-current]: TanStack marks the hub Link current too (a
+   finding IS under /log), so the attribute selector would truncate "Log" as well. */
+.nav-breadcrumb-tail {
+  color: var(--starlight-cream);
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The Phosphor caret. Sized in em so it tracks the crumb text, and flex:none so it never
+   gets squeezed when a long tail truncates beside it. */
+.nav-breadcrumb-sep {
+  color: color-mix(in oklch, var(--muted-foreground) 55%, transparent);
+  flex: none;
+  height: 0.8em;
+  width: 0.8em;
+}
+
+/* ── The colophon (the crawl backbone) ─────────────────────────────────────── */
+/* A DARKER ground than the page plate: at the page's own value it read as more page
+   rather than as a distinct object. This is the sleeve the liner notes print on. */
+.nav-footer {
+  background: color-mix(in oklch, var(--sleeve-black) 92%, transparent);
+  border-top: 1px solid var(--border);
+  margin-top: 3rem;
+  overflow: hidden;
+  position: relative;
+}
+
+.nav-footer::before {
+  background: var(--grain-tile) repeat;
+  background-size: 160px;
+  content: "";
+  inset: 0;
+  mix-blend-mode: overlay;
+  opacity: 0.35;
+  pointer-events: none;
+  position: absolute;
+}
+
+.nav-footer-inner,
+.nav-footer-followrow,
+.nav-footer-machinery {
+  margin: 0 auto;
+  max-width: 80rem;
+  padding-left: 1.25rem;
+  padding-right: 1.25rem;
+  position: relative;
+}
+
+.nav-footer-inner {
+  display: grid;
+  gap: 1.75rem 2.5rem;
+  grid-template-columns: 1fr;
+  padding-top: 2.25rem;
+}
+
+@media (min-width: 720px) {
+  .nav-footer-inner {
+    grid-template-columns: minmax(0, 1.2fr) minmax(0, 2fr);
+  }
+}
+
+.nav-footer-tagline {
+  color: var(--stardust);
+  font-size: 0.85rem;
+  line-height: 1.4;
+  margin-top: 0.6rem;
+  max-width: 26ch;
+}
+
+/* Mobile: the three columns stack two-up rather than squeezing to a 3-wide crush. */
+.nav-footer-cols {
+  display: grid;
+  gap: 1.5rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+@media (min-width: 560px) {
+  .nav-footer-cols {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+.nav-footer-heading {
+  color: var(--stardust);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  margin-bottom: 0.65rem;
+  text-transform: uppercase;
+}
+
+.nav-footer-col ul {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* The hover wash needs horizontal room; a flush-cropped wash reads as a smear. The
+   -0.5rem margin pulls the padded box back into optical alignment with the heading. */
+.nav-footer-link {
+  align-items: center;
+  border-radius: var(--radius-md, 0.5rem);
+  color: var(--muted-foreground);
+  display: inline-flex;
+  font-size: 0.88rem;
+  font-weight: 600;
+  gap: 0.45rem;
+  margin-left: -0.5rem;
+  padding: 0.25rem 0.5rem;
+  transition:
+    color 150ms ease-out,
+    background-color 150ms ease-out;
+}
+
+.nav-footer-link:hover,
+.nav-footer-link:focus-visible {
+  background: var(--gold-veil, color-mix(in oklch, var(--eclipse-gold) 10%, transparent));
+  color: var(--eclipse-glow);
+  outline: none;
+}
+
+.nav-footer-link[data-status="active"] {
+  color: var(--starlight-cream);
+}
+
+/* Submit a track is a dialog trigger, not a link — strip the button chrome so it
+   sits in the column as one of its siblings. */
+.nav-footer-action {
+  background: none;
+  border: 0;
+  cursor: pointer;
+  font-family: inherit;
+  text-align: left;
+}
+
+/* Both closing bands are CENTERED COLUMNS: the label (or nothing) sits on its own
+   line above its marks, so each reads as one block rather than as a label with a tail
+   trailing off to the right. Same shape on desktop and mobile — no breakpoint. */
+.nav-footer-followrow,
+.nav-footer-machinery {
+  align-items: center;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.nav-footer-followrow {
+  border-top: 1px solid var(--border);
+  margin-top: 2rem;
+  padding-bottom: 1.25rem;
+  padding-top: 1.25rem;
+}
+
+/* The machinery closes the plate: the terminal surfaces, then the live status pill on
+   its own line beneath them. No label — CLI / DIG / GIT / MCP / SSH announce
+   themselves — and no rule between the two lines; the line break is the separation. */
+.nav-footer-machinery {
+  border-top: 1px solid var(--border);
+  padding-bottom: 1.5rem;
+  padding-top: 1.25rem;
+}
+
+.nav-footer-rowlabel {
+  color: var(--stardust);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.nav-follow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.1rem;
+  justify-content: center;
+}
+
+.nav-follow-link {
+  align-items: center;
+  border-radius: var(--radius-md, 0.5rem);
+  color: var(--muted-foreground);
+  display: inline-flex;
+  height: 1.85rem;
+  justify-content: center;
+  transition:
+    color 150ms ease-out,
+    background-color 150ms ease-out;
+  width: 1.85rem;
+}
+
+.nav-follow-link:hover,
+.nav-follow-link:focus-visible {
+  background: var(--gold-veil, color-mix(in oklch, var(--eclipse-gold) 10%, transparent));
+  color: var(--eclipse-glow);
+  outline: none;
+}
+
+.nav-nerds {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  justify-content: center;
+}
+
+.nav-nerd-link {
+  border-radius: var(--radius-md, 0.5rem);
+  color: var(--muted-foreground);
+  font-family: "Monaspace Krypton", ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 0.78rem;
+  padding: 0.2rem 0.4rem;
+  transition:
+    color 150ms ease-out,
+    background-color 150ms ease-out;
+}
+
+.nav-nerd-link:hover,
+.nav-nerd-link:focus-visible {
+  background: var(--gold-veil, color-mix(in oklch, var(--eclipse-gold) 10%, transparent));
+  color: var(--eclipse-glow);
+  outline: none;
+}
+
+/* The plate grammar: crop marks + register cross, as on every Fluncle plate. */
+.nav-footer-cross {
+  background:
+    linear-gradient(var(--stardust), var(--stardust)) center / 1px 0.7rem no-repeat,
+    linear-gradient(var(--stardust), var(--stardust)) center / 0.7rem 1px no-repeat;
+  height: 0.7rem;
+  left: 50%;
+  opacity: 0.5;
+  position: absolute;
+  top: 0.5rem;
+  transform: translateX(-50%);
+  width: 0.7rem;
+}
+
+.nav-footer-bracket {
+  --crop: color-mix(in oklch, var(--stardust) 55%, transparent);
+  height: 0.9rem;
+  position: absolute;
+  width: 0.9rem;
+}
+
+.nav-footer-bracket--tl {
+  border-left: 1px solid var(--crop);
+  border-top: 1px solid var(--crop);
+  left: 0.5rem;
+  top: 0.5rem;
+}
+
+.nav-footer-bracket--br {
+  border-bottom: 1px solid var(--crop);
+  border-right: 1px solid var(--crop);
+  bottom: 0.5rem;
+  right: 0.5rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nav-wordmark,
+  .nav-item,
+  .nav-breadcrumb a,
+  .nav-footer-link,
+  .nav-follow-link,
+  .nav-nerd-link {
+    transition: none;
   }
 }

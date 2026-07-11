@@ -33,11 +33,11 @@ export type ColorValue = (typeof colors)[ColorToken];
 
 /**
  * Type roles from DESIGN.md. Oxanium speaks for the brand (display, numeric);
- * the system sans does the reading (title, body, label); mono is the machine.
+ * Space Grotesk does the reading (title, body, label); mono is the machine.
  */
 export const typography = {
   body: {
-    fontFamily: "ui-sans-serif, system-ui, sans-serif",
+    fontFamily: "Space Grotesk, ui-sans-serif, system-ui, sans-serif",
     fontSize: "0.9rem",
     fontWeight: 400,
     lineHeight: 1.25,
@@ -48,12 +48,12 @@ export const typography = {
     letterSpacing: "-0.02em",
   },
   label: {
-    fontFamily: "ui-sans-serif, system-ui, sans-serif",
+    fontFamily: "Space Grotesk, ui-sans-serif, system-ui, sans-serif",
     fontSize: "0.76rem",
     fontWeight: 800,
   },
   mono: {
-    fontFamily: "ui-monospace, SF Mono, Menlo, monospace",
+    fontFamily: "Monaspace Krypton, ui-monospace, SF Mono, Menlo, monospace",
     fontSize: "0.82rem",
     fontWeight: 400,
     lineHeight: 1.5,
@@ -66,7 +66,7 @@ export const typography = {
     letterSpacing: "-0.02em",
   },
   title: {
-    fontFamily: "ui-sans-serif, system-ui, sans-serif",
+    fontFamily: "Space Grotesk, ui-sans-serif, system-ui, sans-serif",
     fontSize: "1.02rem",
     fontWeight: 800,
     letterSpacing: "-0.01em",
