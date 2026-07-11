@@ -95,6 +95,10 @@ export {
   CatalogueMatchSchema,
   CatalogueSummarySchema,
   CatalogueTrackItemSchema,
+  crawlCatalogue,
+  CrawlPassSchema,
+  CrawlStatusSchema,
+  getCrawlStatus,
   listCatalogueTracks,
   rankCatalogue,
 } from "./admin-catalogue";

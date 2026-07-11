@@ -409,6 +409,8 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(adminHelp.stdout).toContain("tracks");
     expect(adminHelp.stdout).toContain("submissions");
     expect(adminHelp.stdout).toContain("backfills");
+    // The catalogue crawler's group (`crawl_catalogue` + `get_crawl_status`).
+    expect(adminHelp.stdout).toContain("catalogue");
   });
 });
 

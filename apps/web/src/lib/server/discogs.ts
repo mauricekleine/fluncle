@@ -27,13 +27,19 @@
 
 import { readOptionalEnv } from "./env";
 import { logEvent } from "./log";
+import {
+  MB_USER_AGENT,
+  mbFetch as mbFetchShared,
+  setMusicbrainzRateLimitForTests,
+} from "./musicbrainz";
 
 const DISCOGS_API_ROOT = "https://api.discogs.com";
-const MUSICBRAINZ_API_ROOT = "https://musicbrainz.org/ws/2";
 // Discogs AND MusicBrainz both REJECT/limit generic User-Agents — an identifiable
 // one with contact info is mandatory (Discogs developer docs + MB rate-limit docs,
-// 2026-06-20). Same discipline as the Last.fm / Deezer lookups.
-const USER_AGENT = "Fluncle/1.0 (+https://www.fluncle.com)";
+// 2026-06-20). Same discipline as the Last.fm / Deezer lookups. The MB half of that
+// rule (and the 1 req/s gate, and the Retry-After handling) now lives in
+// ./musicbrainz.ts, the ONE MB client every caller shares.
+const USER_AGENT = MB_USER_AGENT;
 
 // The auto-store bar. >= this score (or a title-confirmed MusicBrainz relation)
 // stores the id; anything below stores NOTHING. Tuned so a confident exact match
@@ -49,17 +55,20 @@ const MAX_CANDIDATES = 4;
 // fans out into several calls (search variants + per-candidate release fetches; the
 // ISRC lookup + per-release + per-release-group detail), so pacing only BETWEEN
 // findings bursts straight past the ceiling and earns a wall of 429/503. Serialize
-// every call to a service through its own gate, spaced by this floor.
+// every call to a service through its own gate, spaced by this floor. The MB gate is
+// the shared one in ./musicbrainz.ts; this one is the Discogs gate.
 // The pacing floor. Mutable only via the test seam below, so the resolver's unit
 // tests run instantly instead of incurring real multi-second waits.
 let rateLimitIntervalMs = 1100;
 
 /**
  * Test seam: set the pacing floor (and, at 0, the retry backoff) to run the
- * resolver without real timers. Production never calls this.
+ * resolver without real timers — for BOTH gates this resolver drives (Discogs's own,
+ * and the shared MusicBrainz one). Production never calls this.
  */
 export function __setRateLimitForTests(ms: number): void {
   rateLimitIntervalMs = ms;
+  setMusicbrainzRateLimitForTests(ms);
 }
 
 function delay(ms: number): Promise<void> {
@@ -86,7 +95,6 @@ function makeRateLimiter() {
 }
 
 const throttleDiscogs = makeRateLimiter();
-const throttleMb = makeRateLimiter();
 
 export type DiscogsEnrichment = {
   masterId?: number;
@@ -212,8 +220,14 @@ function yearOf(value: string | undefined): number | undefined {
   return match ? Number(match[1]) : undefined;
 }
 
-/** Pull the Discogs `release` / `master` id out of any discogs.com URL. */
-function parseDiscogsUrl(url: string): { kind: "master" | "release"; id: number } | undefined {
+/**
+ * Pull the Discogs `release` / `master` id out of any discogs.com URL. Exported for the
+ * catalogue crawler, which reaches the Discogs release graph the same way this resolver
+ * does — through MusicBrainz's curated `url-rels`, not through the Discogs API.
+ */
+export function parseDiscogsUrl(
+  url: string,
+): { kind: "master" | "release"; id: number } | undefined {
   const match = url.match(/discogs\.com\/(?:[a-z-]+\/)?(release|master)\/(\d+)/i);
 
   if (match?.[1] === undefined || match[2] === undefined) {
@@ -254,49 +268,19 @@ type MbIsrcLookup = {
 type MbReleaseLookup = MbRelease & { error?: unknown };
 type MbReleaseGroupLookup = MbRelease & { error?: unknown };
 
-function mbFetch<T>(path: string, signal?: RateLimitSignal): Promise<T | undefined> {
-  const separator = path.includes("?") ? "&" : "?";
-  const url = `${MUSICBRAINZ_API_ROOT}${path}${separator}fmt=json`;
+/**
+ * The shared MB client (./musicbrainz.ts), adapted to this module's `RateLimitSignal`
+ * convention: an exhausted 503 flips the caller-owned flag so `discogsResolveRelease`
+ * can report "unresolved because throttled" rather than "unresolved because no match".
+ */
+async function mbFetch<T>(path: string, signal?: RateLimitSignal): Promise<T | undefined> {
+  const { data, rateLimited } = await mbFetchShared<T>(path);
 
-  return throttleMb(async () => {
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      const response = await fetch(url, { headers: { "User-Agent": USER_AGENT } });
+  if (rateLimited && signal) {
+    signal.hit = true;
+  }
 
-      // 503 is MB's "slow down"; honour Retry-After and try again within this slot.
-      if (response.status === 503 && attempt < 2) {
-        const retryAfter = Number(response.headers.get("Retry-After")) || 2;
-        logEvent("warn", "musicbrainz.retry", {
-          attempt: attempt + 1,
-          path,
-          retryAfterSeconds: retryAfter,
-          status: 503,
-        });
-        await delay(rateLimitIntervalMs === 0 ? 0 : retryAfter * 1000);
-        continue;
-      }
-
-      // Retries exhausted on a 503 → the vendor is actively throttling; flag it so
-      // the backfill backs off rather than re-storming next tick.
-      if (response.status === 503 && signal) {
-        signal.hit = true;
-      }
-
-      if (!response.ok) {
-        // Surface the status — a swallowed 400 (bad inc) or 403 (bad User-Agent) is
-        // otherwise indistinguishable from a genuine no-match. Visible in `wrangler tail`.
-        logEvent("warn", "musicbrainz.request-failed", {
-          path,
-          status: response.status,
-          statusText: response.statusText,
-        });
-        return undefined;
-      }
-
-      return (await response.json()) as T;
-    }
-
-    return undefined;
-  });
+  return data ?? undefined;
 }
 
 /** First curated Discogs relation in a relations array, parsed to ids. */

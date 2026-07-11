@@ -195,6 +195,13 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // a Firecrawl-sourced link onto the public artist page.
   confirm_artist_social: "operator",
   context_track: "admin",
+  // The catalogue crawler — admin tier (adminAuth only, no operatorGuard): it acquires
+  // METADATA and nothing else. It publishes nothing, certifies nothing (a crawled row has
+  // no `findings` row, so no coordinate, no note, no video, no public surface), and
+  // captures no audio. So the on-box `fluncle-crawl` sweep drives it with its agent token,
+  // the `backfill_discogs` precedent. The act that decides what MAY be crawled — ruling on
+  // a label — stays operator tier (`update_label`).
+  crawl_catalogue: "admin",
   // The Fluncle Studio clip writes — operator tier: the agent never cuts/mints/prunes
   // clips, so an agent token 403s. `create_clip` is now recording-scoped (RFC
   // recording-primitive, Design B).
@@ -242,6 +249,9 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // The built clip caption read — admin tier (agent-allowed), the list_clips precedent:
   // a read the clip-card UI + the box can both consume.
   get_clip_caption: "admin",
+  // The crawl frontier's state — admin tier: the read half of `crawl_catalogue`, driven
+  // by the same on-box sweep (and by the operator, to see where the walk got to).
+  get_crawl_status: "admin",
   // The dream-weaver's proposed-order read (RFC mixability-engine) — admin tier
   // (agent-allowed, like get_track_admin): a PURE read that never writes/publishes, so
   // no operatorGuard. `promote_recording` remains the only way a mixtape exists.

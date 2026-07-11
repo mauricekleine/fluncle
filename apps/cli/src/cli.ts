@@ -234,6 +234,13 @@ type BackfillSyncOptions = {
   limit?: string;
 };
 
+type CrawlOptions = {
+  dryRun: boolean;
+  json: boolean;
+  limit?: string;
+  maxHop?: string;
+};
+
 type MigratePreviewArchiveOptions = {
   deletePublic: boolean;
   execute: boolean;
@@ -1642,12 +1649,23 @@ function addAdminCommands(program: Command): void {
       await runGalaxyMapWrite(options, galaxyMapWriteCommand);
     });
 
-  // THE EAR (docs/the-ear.md) — the catalogue: every track the archive knows and Fluncle never
-  // certified, ranked by how close it sits to something he did. `rank` is the precompute sweep
-  // a periodic `--no-agent` cron drives; `list` reads the ranking back. The CLI holds no
-  // ranking logic — all of the vector arithmetic happens in SQL inside the Worker.
+  // THE CATALOGUE — every track the archive knows and Fluncle never certified (a `tracks`
+  // row with no `findings` row). Two halves, four commands:
+  //
+  //   THE CRAWLER (docs/catalogue-crawler.md) — what makes the rows exist. `crawl` walks the
+  //   MusicBrainz release graph outward from the labels the OPERATOR enabled, one bounded,
+  //   resumable pass per invocation; `status` reads the crawl frontier back. It certifies
+  //   nothing — a crawled track has no Log ID, no note, no video, no public surface.
+  //
+  //   THE EAR (docs/the-ear.md) — what makes the pile useful. `rank` is the precompute sweep
+  //   a periodic `--no-agent` cron drives; `list` reads the ranking back.
+  //
+  // The CLI holds no crawl and no ranking logic — the walk and all of the vector arithmetic
+  // happen inside the Worker. This is a pacer, not an engine.
   const catalogue = configureCommand(
-    admin.command("catalogue").description("The catalogue (uncertified tracks) + its ranking"),
+    admin
+      .command("catalogue")
+      .description("The catalogue (uncertified tracks): the crawler + its ranking"),
   );
 
   catalogue.action(() => {
@@ -1673,6 +1691,27 @@ function addAdminCommands(program: Command): void {
     .action(async (options: CatalogueListOptions) => {
       const { catalogueListCommand } = await import("./commands/admin-catalogue");
       await runCatalogueList(options, catalogueListCommand);
+    });
+
+  catalogue
+    .command("crawl")
+    .description("Run one bounded, resumable pass of the catalogue crawler")
+    .option("--dry-run", "Report the seed plan and write nothing at all", false)
+    .option("--limit <limit>", "Frontier nodes to expand this pass", "10")
+    .option("--max-hop <maxHop>", "Graph distance from a seed label (0-3)", "2")
+    .option("--json", "Print JSON", false)
+    .action(async (options: CrawlOptions) => {
+      const { crawlCatalogueCommand } = await import("./commands/admin-catalogue");
+      await runCrawlCatalogue(options, crawlCatalogueCommand);
+    });
+
+  catalogue
+    .command("status")
+    .description("The crawl frontier's state, the catalogue's size, and the seed set")
+    .option("--json", "Print JSON", false)
+    .action(async (options: JsonOptions) => {
+      const { crawlStatusCommand } = await import("./commands/admin-catalogue");
+      await runCrawlStatus(options, crawlStatusCommand);
     });
 
   const backfill = configureCommand(
@@ -2219,6 +2258,81 @@ async function runBackfillLastfm(
   if (failed.length > 0) {
     process.exitCode = 1;
   }
+}
+
+// ONE bounded crawl pass. Deliberately NOT a loop: the crawl is a marathon paced by a
+// cron, not a sprint paced by a CLI, and every scrap of its state is durable — so "run
+// again" and "resume" are the same command. (`--limit` sizes the pass; the sweep sets the
+// cadence.) A pass that stops on the rate-limit breaker exits 1 so the cron sees it.
+async function runCrawlCatalogue(
+  options: CrawlOptions,
+  crawlCatalogueCommand: typeof import("./commands/admin-catalogue").crawlCatalogueCommand,
+): Promise<void> {
+  const limit = parseListLimit(options.limit);
+  const maxHop = Number.parseInt(options.maxHop ?? "2", 10);
+  const result = await crawlCatalogueCommand(
+    limit,
+    Number.isInteger(maxHop) && maxHop >= 0 ? maxHop : 2,
+    options.dryRun,
+  );
+
+  if (options.json) {
+    printJson(result);
+  } else if (result.dryRun) {
+    console.log(
+      `Dry run: would seed ${result.seeded} enabled label(s); ${result.frontierPending} node(s) pending. Nothing written.`,
+    );
+  } else {
+    console.log(
+      `Expanded ${result.expanded} node(s) at hop ≤ ${result.maxHop}: ` +
+        `${result.tracksFound} track(s) found, ${result.tracksWritten} written, ${result.tracksSkipped} already held.`,
+    );
+    console.log(
+      `  +${result.seeded} seed(s), +${result.nodesEnqueued} node(s) enqueued, ${result.frontierPending} pending, ${result.failed} failed.`,
+    );
+    console.log(`  ${result.anchorsFilled} Spotify anchor(s) filled.`);
+
+    if (result.labelsDiscovered.length > 0) {
+      console.log(
+        `  New labels to rule on: ${result.labelsDiscovered.join(", ")} (they are NOT crawled until enabled).`,
+      );
+    }
+
+    if (result.rateLimited) {
+      console.log("  MusicBrainz throttled the pass. Stopped clean; the next tick resumes.");
+    }
+  }
+
+  if (result.rateLimited) {
+    process.exitCode = 1;
+  }
+}
+
+async function runCrawlStatus(
+  options: JsonOptions,
+  crawlStatusCommand: typeof import("./commands/admin-catalogue").crawlStatusCommand,
+): Promise<void> {
+  const result = await crawlStatusCommand();
+
+  if (options.json) {
+    printJson(result);
+
+    return;
+  }
+
+  const { frontier, frontierByKind } = result;
+
+  console.log(
+    `Catalogue: ${result.catalogueTracks} uncertified track(s); ${result.anchorsPending} awaiting a Spotify anchor.`,
+  );
+  console.log(
+    `Frontier: ${frontier.pending} pending, ${frontier.done} done, ${frontier.failed} failed, ${frontier.skipped} skipped` +
+      ` (${frontierByKind.label} label, ${frontierByKind.artist} artist, ${frontierByKind.release} release).`,
+  );
+  console.log(
+    `Seeds (${result.seedLabels.length}): ${result.seedLabels.join(", ") || "none enabled"}.`,
+  );
+  console.log(`Awaiting your ruling: ${result.labelsUndecided} label(s).`);
 }
 
 async function runBackfillDiscogs(
@@ -4546,6 +4660,7 @@ const stringOptions = new Set([
   "--kind",
   "--lens",
   "--limit",
+  "--max-hop",
   "--metrics",
   "--mime",
   "--model",

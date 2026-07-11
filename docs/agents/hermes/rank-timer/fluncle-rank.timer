@@ -1,0 +1,19 @@
+[Unit]
+Description=fluncle-rank timer — re-rank the stale catalogue every 30m on the rave-02 host (not the Hermes gateway)
+
+[Timer]
+# First tick shortly after boot (staggered at 11min, off the other sweeps' minutes), then
+# every 30m. It trails the crawl (10m) rather than racing it: ranking a row is cheap and
+# self-healing, and there is no point re-ranking a table that is still being written into.
+#
+# The sweep DRAINS (it loops while `remaining > 0`, up to a tick budget), so a crawl that
+# just landed 700 rows is fully ranked by the next tick, not 70 minutes later. On an
+# unchanged archive the tick is one cheap scoped COUNT and a no-op — which is what lets the
+# cadence be relaxed without the ranking ever going stale for long. Persistent catches up a
+# tick missed across a reboot.
+OnBootSec=11min
+OnUnitActiveSec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

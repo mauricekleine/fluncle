@@ -1,0 +1,18 @@
+[Unit]
+Description=fluncle-crawl timer — advance the catalogue crawl by one bounded pass every 10m on the rave-02 host (not the Hermes gateway)
+
+[Timer]
+# First tick shortly after boot (staggered at 7min, off the other sweeps' minutes), then
+# every 10m. The CADENCE is the crawl's real throttle, not the batch size: a crawl is a
+# marathon the schedule finishes, and MusicBrainz's ~1 req/s ceiling means there is no
+# prize for hurrying. ~10 nodes/tick × 6 ticks/hour ≈ 1,400 nodes/day — the neighbourhood
+# of a seed label in a day or two, politely, with the vendor's rate budget never strained.
+#
+# The frontier is the durable worklist, so a tick that finds it drained is a cheap no-op
+# and a tick missed across a reboot costs one node, not one crawl. Persistent catches up.
+OnBootSec=7min
+OnUnitActiveSec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

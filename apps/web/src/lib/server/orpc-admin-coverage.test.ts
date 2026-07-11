@@ -85,6 +85,10 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // matches the public `list_` prefix so the "holds exactly" check skips it, and it lives here
   // for completeness (like `list_labels_admin`).
   "GET /admin/catalogue": "list_catalogue_tracks",
+  // THE CRAWLER (docs/catalogue-crawler.md) — the frontier's state. Contract-only oRPC (no
+  // TanStack route file). Admin tier (agent-allowed): the on-box `fluncle-crawl` sweep reads
+  // it with its agent token, and so does the operator.
+  "GET /admin/catalogue/crawl": "get_crawl_status",
   "GET /admin/clips": "list_clips",
   // Every clip's Instagram drip-feed row (schedule + status) — contract-only oRPC (no
   // TanStack route file). Admin tier (agent-allowed read); the clip library / CLI merge
@@ -187,6 +191,12 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "POST /admin/backfill/artists": "backfill_artists",
   "POST /admin/backfill/discogs": "backfill_discogs",
   "POST /admin/backfill/lastfm": "backfill_lastfm",
+  // The catalogue crawler's bounded pass — contract-only oRPC (no TanStack route file).
+  // ADMIN tier (agent-allowed): the on-box `fluncle-crawl` sweep drives it with the agent
+  // token. It certifies nothing (no `findings` row) and captures no audio, so it needs no
+  // operator gate; RULING on a seed label — what may be crawled at all — is `update_label`,
+  // and that stays operator tier.
+  "POST /admin/catalogue/crawl": "crawl_catalogue",
   // The clip drip-feed tick — contract-only oRPC (no TanStack route file). ADMIN tier
   // (agent-allowed): the on-box `fluncle-clip-drip` cron triggers it with the agent token
   // (the box holds no Postiz key; the Worker owns it). Kill-switch aware, bounded, idempotent.
