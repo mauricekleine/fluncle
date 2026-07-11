@@ -286,6 +286,31 @@ Every agentic sweep (the auto-note, the observation script, the Logbook entry, t
 - **The voice gates stay.** A prompt the operator can edit live is not a licence to bypass the gate that keeps Fluncle sounding like Fluncle.
 - **Prompt provenance on the artifact.** If a note was drafted under prompt v7, that should be recoverable — otherwise "the notes got worse last week" is an unanswerable question.
 
+## ChatDnB — chat with Fluncle (idea, 2026-07-11)
+
+**The name is the whole reason this exists, and it is worth it.** ChatGPT. A hard `G` sounds like a `D`. A `T` sounds like a `B`. **ChatDnB.** It is a pun that lands in about a second and a half, and once you have heard it you cannot un-hear it.
+
+**And here is the part that turns a joke into a product: every piece is already built.** Fluncle ships a **public MCP server** — a real, agent-facing interface to the archive, already registered in `@fluncle/registry`, already documented at `/docs/mcp`. ChatDnB is a **chat surface over an MCP we already serve to other people's agents.** The hard part was done months ago for a different reason.
+
+What it would be: a chat where you talk to **Fluncle himself** — the traveller-uncle, in his own voice (`VOICE.md`, the `copywriting-fluncle` skill) — and he answers **out of the archive**, not out of a model's memory. The MCP tools are the hands:
+
+- _"What have you found on Hospital Records?"_ → the label graph.
+- _"Play me something that sounds like Nine Clouds."_ → the **sonic search** (`soundsLike` → the MuQ embedding → `vector_distance_cos`). **No other DnB chat can do this**, because no one else has the archive embedded.
+- _"Build me a set at 174 in F minor."_ → the **mixability engine** (key 0.5 · sonic 0.35 · bpm 0.15, Camelot-harmonic).
+- _"What is 004.7.2I?"_ → the coordinate resolves, because coordinates are the whole point.
+
+**The rails that make it Fluncle rather than a chatbot:**
+
+- **He answers from the archive or he does not answer.** The one thing that would kill it is Fluncle hallucinating a banger he never found. The MCP is not a garnish on a general model, it is the **only source of truth** — the same discipline the search's LLM tier already has (the model emits FILTERS, never rows, so it _cannot_ invent a track). **Grounding is the product.**
+- **He never speaks about an uncertified track** (ratified canon). The catalogue is a utility layer with no narrative voice.
+- **The voice gate applies.** Whatever ships under Fluncle's name is bounded by canon — and this is him _talking_, which is the most exposed his voice ever gets.
+
+**Where it lives:** `chatdnb.com` redirects to an unrelated site, so it is taken. `chat.fluncle.com` or `/chat` works fine; the pun survives the URL. (And a subdomain keeps it inside the Galaxy rather than orphaning it.)
+
+**Open questions worth a real design pass:** which model drives it (the FluncleLLM voice fine-tune below is an obvious future consumer, but a well-prompted frontier model with a hard MCP-only grounding rule is the honest v1); how a chat surface stays _quiet_ and cover-led rather than becoming a SaaS chat window (`PRODUCT.md` bans the streaming-app clone by name); rate-limiting and abuse for an anonymous public LLM surface; and whether it is a public front door or a crew toy first.
+
+Unnecessarily fun — which, per the audio-embeddings entry, is exactly the point.
+
 ## The Fluncle models — the voice, the eye, the ear (idea, 2026-07-11)
 
 One arc, three probes. Fluncle already generates — notes, observations, logbook entries, shader videos, sprites, covers — but always by **constraining a stranger**: a general model held in line by a prompt, a skill, and a voice gate. The question this arc asks is what changes when the model has **only ever known Fluncle**.
