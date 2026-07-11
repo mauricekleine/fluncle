@@ -266,7 +266,7 @@ export async function getCostInsights(
                                    then ce.estimated_usd else 0 end), 0) as cash_usd,
                  count(*) as event_count
             from cost_events ce
-            left join tracks t on t.track_id = ce.track_id
+            left join (findings join tracks on tracks.track_id = findings.track_id) t on t.track_id = ce.track_id
            where ce.occurred_at >= ?
              and ce.track_id is not null
            group by ce.track_id

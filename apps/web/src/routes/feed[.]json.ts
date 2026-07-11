@@ -22,13 +22,13 @@ export const Route = createFileRoute("/feed.json")({
           sql: `select * from (
             select
               'finding' as item_type,
-              track_id,
-              spotify_url,
-              title,
-              artists_json,
-              note,
-              added_at
-            from tracks
+              tracks.track_id,
+              tracks.spotify_url,
+              tracks.title,
+              tracks.artists_json,
+              findings.note,
+              findings.added_at
+            from findings join tracks on tracks.track_id = findings.track_id
             union all
             select
               'mixtape' as item_type,

@@ -229,11 +229,15 @@ describe("listTracks captureQueue (the full-song capture queue)", () => {
     )?.[0] as { args: unknown[]; sql: string };
 
     // pending/NULL always eligible; failed gated on the cap + the cooldown; coord required.
-    expect(listCall.sql).toContain("log_id is not null");
-    expect(listCall.sql).toContain("capture_status is null or capture_status = 'pending'");
-    expect(listCall.sql).toContain(`source_audio_failures < ${CAPTURE_MAX_FAILURES}`);
+    // The queue straddles the pair: the coordinate gate is the CERTIFICATION's, the
+    // capture state the RECORDING's — so each predicate names the half it reads.
+    expect(listCall.sql).toContain("findings.log_id is not null");
     expect(listCall.sql).toContain(
-      "source_audio_attempted_at is null or source_audio_attempted_at < ?",
+      "tracks.capture_status is null or tracks.capture_status = 'pending'",
+    );
+    expect(listCall.sql).toContain(`tracks.source_audio_failures < ${CAPTURE_MAX_FAILURES}`);
+    expect(listCall.sql).toContain(
+      "tracks.source_audio_attempted_at is null or tracks.source_audio_attempted_at < ?",
     );
     // The cutoff is BOUND (now − cooldown), never string-concatenated into the SQL.
     const expectedCutoff = new Date(NOW - CAPTURE_FAILED_COOLDOWN_MS).toISOString();
@@ -250,7 +254,7 @@ describe("listTracks captureQueue (the full-song capture queue)", () => {
     expect(ids).toContain("t-failed-ready");
     // Newest-first: the just-added pending finding leads.
     expect(ids).toEqual(["t-new-pending", "t-null", "t-failed-ready"]);
-    expect(lastListSql()).toContain("order by added_at desc, track_id desc");
+    expect(lastListSql()).toContain("order by findings.added_at desc, tracks.track_id desc");
   });
 
   it("EXCLUDES terminal, cooling, capped, and coordinate-less findings", async () => {

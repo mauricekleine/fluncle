@@ -41,7 +41,8 @@ async function logIdsForFindings(trackIds: string[]): Promise<Map<string, string
   const placeholders = trackIds.map(() => "?").join(", ");
   const result = await db.execute({
     args: trackIds,
-    sql: `select track_id, log_id from tracks where track_id in (${placeholders}) and log_id is not null`,
+    sql: `select track_id, log_id from findings
+          where track_id in (${placeholders}) and log_id is not null`,
   });
 
   for (const row of typedRows<{ log_id: string; track_id: string }>(result.rows)) {

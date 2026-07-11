@@ -182,10 +182,11 @@ export async function getPreviewArchiveMetadata(
   const db = await getDb();
   const result = await db.execute({
     args: [idOrLogId, idOrLogId],
-    sql: `select track_id, log_id, preview_archive_key, preview_archive_source,
-            preview_archive_mime, preview_archived_at
-          from tracks
-          where track_id = ? or log_id = ?
+    sql: `select tracks.track_id, findings.log_id, tracks.preview_archive_key,
+            tracks.preview_archive_source, tracks.preview_archive_mime,
+            tracks.preview_archived_at
+          from findings join tracks on tracks.track_id = findings.track_id
+          where tracks.track_id = ? or findings.log_id = ?
           limit 1`,
   });
   const row = typedRow<ArchiveRow>(result.rows);

@@ -218,7 +218,7 @@ export async function approveSubmission(id: string): Promise<Submission> {
   const publishedResult = await db.execute({
     args: [submission.spotifyTrackId],
     sql: `select track_id, added_to_spotify, posted_to_telegram
-      from tracks
+      from findings
       where track_id = ?
       limit 1`,
   });

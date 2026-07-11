@@ -11,7 +11,16 @@ import { updateTrack } from "./track-update";
 const execute = vi.hoisted(() => vi.fn());
 
 vi.mock("./db", () => ({
-  getDb: async () => ({ execute }),
+  // `updateTrack` fans ONE logical write out across the tracks/findings pair, issued as a
+  // single libSQL BATCH (at most two statements: the recording's columns, then the
+  // certification's). The mock replays each statement through the same `execute` spy the
+  // tests already assert on, so a batched write is observed exactly like the old single
+  // UPDATE — one call per statement, in order, with its bound args.
+  getDb: async () => ({
+    batch: (statements: { args?: unknown[]; sql: string }[]) =>
+      Promise.all(statements.map((statement) => execute(statement))),
+    execute,
+  }),
   typedRow: <T extends object>(rows: T[]) => rows[0],
   typedRows: <T extends object>(rows: T[]) => rows,
 }));
@@ -32,7 +41,7 @@ beforeEach(() => {
       return Promise.resolve({ rows: [EXISTING] });
     }
 
-    lastUpdateSql = query.sql;
+    lastUpdateSql += query.sql;
 
     return Promise.resolve({ rows: [] });
   });
@@ -103,7 +112,7 @@ describe("updateTrack — the visible-field lastmod bump", () => {
       if (query.sql.startsWith("select")) {
         return Promise.resolve({ rows: [EXISTING] });
       }
-      lastUpdateSql = query.sql;
+      lastUpdateSql += query.sql;
       argsSeen.push(...(query.args ?? []));
       return Promise.resolve({ rows: [] });
     });
@@ -128,7 +137,7 @@ describe("updateTrack — the visible-field lastmod bump", () => {
       if (query.sql.startsWith("select")) {
         return Promise.resolve({ rows: [EXISTING] });
       }
-      lastUpdateSql = query.sql;
+      lastUpdateSql += query.sql;
       argsSeen.push(...(query.args ?? []));
       return Promise.resolve({ rows: [] });
     });
@@ -187,7 +196,7 @@ describe("updateTrack — isrc immutability and validation (identity guard)", ()
         return Promise.resolve({ rows: [{ ...EXISTING, isrc: null }] });
       }
 
-      lastUpdateSql = query.sql;
+      lastUpdateSql += query.sql;
 
       return Promise.resolve({ rows: [] });
     });
@@ -208,7 +217,7 @@ describe("updateTrack — isrc immutability and validation (identity guard)", ()
         return Promise.resolve({ rows: [{ ...EXISTING, isrc: null }] });
       }
 
-      lastUpdateSql = query.sql;
+      lastUpdateSql += query.sql;
       argsSeen.push(...(query.args ?? []));
 
       return Promise.resolve({ rows: [] });
@@ -234,7 +243,7 @@ describe("updateTrack — the source hierarchy (operator > rekordbox > DSP)", ()
         return Promise.resolve({ rows: [{ ...EXISTING, ...row }] });
       }
 
-      lastUpdateSql = query.sql;
+      lastUpdateSql += query.sql;
       argsSeen.push(...(query.args ?? []));
 
       return Promise.resolve({ rows: [] });
@@ -409,7 +418,7 @@ describe("updateTrack — empty-string clears to null (not stored as '')", () =>
           return Promise.resolve({ rows: [EXISTING] });
         }
 
-        lastUpdateSql = query.sql;
+        lastUpdateSql += query.sql;
         argsSeen.push(...(query.args ?? []));
 
         return Promise.resolve({ rows: [] });

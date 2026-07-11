@@ -125,10 +125,12 @@ export const Route = createFileRoute("/sitemap.xml")({
             // NULL arg) and a just-squared video lifts the finding's lastmod.
             db.execute({
               sql: `select log_id, title, artists_json, note, bpm, album_image_url, video_url,
-                         added_at,
-                         max(coalesce(video_squared_at, ''), coalesce(updated_at, ''), added_at) as lastmod
-                  from tracks
-                  where log_id is not null
+                         findings.added_at,
+                         max(coalesce(findings.video_squared_at, ''),
+                             coalesce(findings.updated_at, ''),
+                             findings.added_at) as lastmod
+                  from findings join tracks on tracks.track_id = findings.track_id
+                  where findings.log_id is not null
                   order by lastmod desc`,
             }),
             db.execute({

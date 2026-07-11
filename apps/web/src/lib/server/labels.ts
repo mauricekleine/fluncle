@@ -78,10 +78,10 @@ async function findingCountsBySlug(): Promise<Map<string, number>> {
   const db = await getDb();
   const result = await db.execute({
     args: [],
-    sql: `select label, count(*) as n
-          from tracks
-          where label is not null and trim(label) <> ''
-          group by label`,
+    sql: `select tracks.label as label, count(*) as n
+          from findings join tracks on tracks.track_id = findings.track_id
+          where tracks.label is not null and trim(tracks.label) <> ''
+          group by tracks.label`,
   });
 
   const counts = new Map<string, number>();
@@ -126,20 +126,27 @@ export async function ensureLabel(raw: string | null | undefined): Promise<void>
 }
 
 /**
- * The deterministic reconcile: a `labels` row for every distinct `tracks.label`.
- * The self-healing backstop behind `ensureLabel` (a publish whose best-effort
- * upsert threw, a label written by a direct admin update, a row that predates the
- * table). Idempotent — an existing label is left completely alone. Returns how many
- * rows it minted. Driven by `scripts/backfill-labels.ts` on every deploy.
+ * The deterministic reconcile: a `labels` row for every distinct label carried by a
+ * CERTIFIED finding. The self-healing backstop behind `ensureLabel` (a publish whose
+ * best-effort upsert threw, a label written by a direct admin update, a row that
+ * predates the table). Idempotent — an existing label is left completely alone. Returns
+ * how many rows it minted. Driven by `scripts/backfill-labels.ts` on every deploy.
+ *
+ * It seeds from the finding join, NOT from a bare `tracks` scan, and that is deliberate:
+ * a label earns a row — and a slot in the operator's `label-review` attention queue —
+ * because Fluncle FOUND something on it. Minting off the raw catalogue would flood that
+ * queue with the label of every track Fluncle has merely heard of, the moment the
+ * catalogue epic lands. Same predicate as `findingCountsBySlug`, so the mint and the
+ * count can never disagree.
  */
 export async function reconcileLabels(): Promise<number> {
   const db = await getDb();
   const result = await db.execute({
     args: [],
-    sql: `select label, count(*) as n
-          from tracks
-          where label is not null and trim(label) <> ''
-          group by label`,
+    sql: `select tracks.label as label, count(*) as n
+          from findings join tracks on tracks.track_id = findings.track_id
+          where tracks.label is not null and trim(tracks.label) <> ''
+          group by tracks.label`,
   });
 
   // First spelling wins per slug — stable across runs because the row is only ever

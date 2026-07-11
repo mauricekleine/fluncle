@@ -202,8 +202,9 @@ export async function getSectorFindings(
   const db = await getDb();
   const result = await db.execute({
     args: [new Date(startMs).toISOString(), new Date(endMs).toISOString()],
-    sql: `select log_id, title, artists_json from tracks
-          where log_id is not null and added_at >= ? and added_at < ?`,
+    sql: `select findings.log_id, tracks.title, tracks.artists_json from findings join tracks on tracks.track_id = findings.track_id
+          where findings.log_id is not null
+            and findings.added_at >= ? and findings.added_at < ?`,
   });
 
   const map: Record<string, { artists: string[]; title: string }> = {};
@@ -320,7 +321,7 @@ export async function listLogbookGaps({ limit = 5 }: { limit?: number } = {}): P
 
   // Which sector-days HAVE a published finding, and which already have an entry.
   const [findingsResult, entriesResult] = await Promise.all([
-    db.execute({ sql: `select added_at from tracks where log_id is not null` }),
+    db.execute({ sql: `select added_at from findings where log_id is not null` }),
     db.execute({ sql: `select sector from logbook_entries` }),
   ]);
 
@@ -363,10 +364,12 @@ async function gatherSectorMaterial(sector: number): Promise<LogbookGap["finding
   const db = await getDb();
   const result = await db.execute({
     args: [new Date(startMs).toISOString(), new Date(endMs).toISOString()],
-    sql: `select log_id, title, artists_json, note, context_note, observation_script, added_at
-          from tracks
-          where log_id is not null and added_at >= ? and added_at < ?
-          order by added_at asc`,
+    sql: `select findings.log_id, tracks.title, tracks.artists_json, findings.note,
+                 findings.context_note, findings.observation_script, findings.added_at
+          from findings join tracks on tracks.track_id = findings.track_id
+          where findings.log_id is not null
+            and findings.added_at >= ? and findings.added_at < ?
+          order by findings.added_at asc`,
   });
 
   return typedRows<GapFindingRow>(result.rows).map((row) => ({

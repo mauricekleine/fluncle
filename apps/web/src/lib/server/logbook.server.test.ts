@@ -169,7 +169,7 @@ describe("listLogbookGaps — the self-healing window", () => {
     setRoutes([
       {
         // The findings-per-day scan (no added_at range → the day list).
-        match: /select added_at from tracks where log_id is not null$/,
+        match: /select added_at from findings where log_id is not null$/,
         rows: () => [
           { added_at: "2026-05-31T10:00:00.000Z" }, // sector 1
           { added_at: "2026-06-01T10:00:00.000Z" }, // sector 2 (has an entry)
@@ -179,7 +179,7 @@ describe("listLogbookGaps — the self-healing window", () => {
       { match: /select sector from logbook_entries/, rows: () => [{ sector: 2 }] },
       {
         // The per-sector material gather (ranged) — one finding each.
-        match: /from tracks where log_id is not null and added_at >= \?/,
+        match: /where findings\.log_id is not null\s+and findings\.added_at >= \?/,
         rows: (args) => {
           const start = String(args[0]);
 

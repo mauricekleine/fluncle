@@ -147,7 +147,7 @@ async function readReliability(trackId: string, source: BackfillSource): Promise
     sql: `select ${p}_attempted_at as attempted_at,
         ${p}_failures as failures,
         ${p}_done_at as done_at
-      from tracks
+      from findings
       where track_id = ?
       limit 1`,
   });
@@ -180,7 +180,7 @@ export async function listLastfmLovedForTracks(trackIds: string[]): Promise<Set<
   const placeholders = trackIds.map(() => "?").join(", ");
   const result = await db.execute({
     args: trackIds,
-    sql: `select track_id from tracks
+    sql: `select track_id from findings
           where track_id in (${placeholders})
             and backfill_lastfm_done_at is not null`,
   });
@@ -212,7 +212,7 @@ export async function listBackfillRanForTracks(
   const placeholders = trackIds.map(() => "?").join(", ");
   const result = await db.execute({
     args: trackIds,
-    sql: `select track_id from tracks
+    sql: `select track_id from findings
           where track_id in (${placeholders})
             and ${p}_attempted_at is not null`,
   });
@@ -284,7 +284,7 @@ async function recordAttempt(
 
   await db.execute({
     args,
-    sql: `update tracks
+    sql: `update findings
       set ${p}_attempted_at = ?,
         ${p}_attempts = ${p}_attempts + 1,
         ${doneClause}
@@ -598,14 +598,27 @@ async function setDiscogsIds(
 ): Promise<void> {
   const db = await getDb();
 
-  await db.execute({
-    args: [releaseId, masterId ?? null, new Date().toISOString(), trackId],
-    sql: `update tracks
-      set in_release_id = ?,
-        in_master_id = ?,
-        updated_at = ?
-      where track_id = ?`,
-  });
+  // The resolve straddles the pair: the Discogs ids are CATALOGUE IDENTITY (they
+  // describe the recording, so they live on `tracks` and would be just as true of an
+  // uncertified track), while `updated_at` is the FINDING's public lastmod — the
+  // `discogs.com/release/{id}` sameAs the write puts on /log is what moves. One batch,
+  // so the id and the lastmod that advertises it can never diverge.
+  await db.batch(
+    [
+      {
+        args: [releaseId, masterId ?? null, trackId],
+        sql: `update tracks
+          set in_release_id = ?,
+            in_master_id = ?
+          where track_id = ?`,
+      },
+      {
+        args: [new Date().toISOString(), trackId],
+        sql: `update findings set updated_at = ? where track_id = ?`,
+      },
+    ],
+    "write",
+  );
 }
 
 // One pass never handles more than MAX_BATCH eligible findings, so a single

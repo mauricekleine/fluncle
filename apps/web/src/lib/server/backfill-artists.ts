@@ -65,14 +65,14 @@ export async function backfillArtists(
         args: cursor ? [cursor, batchLimit] : [batchLimit],
         sql: cursor
           ? `select t.track_id, t.log_id
-             from tracks t
+             from (findings join tracks on tracks.track_id = findings.track_id) t
              left join track_artists ta on ta.track_id = t.track_id
              where ta.track_id is null
                and t.track_id > ?
              order by t.track_id asc
              limit ?`
           : `select t.track_id, t.log_id
-             from tracks t
+             from (findings join tracks on tracks.track_id = findings.track_id) t
              left join track_artists ta on ta.track_id = t.track_id
              where ta.track_id is null
              order by t.track_id asc

@@ -248,8 +248,10 @@ function emptyResult(mode: MigrationMode, dryRun: boolean): PreviewBucketMigrati
 async function countLegacyRows(db: MigrationDb, afterCursor?: string): Promise<number> {
   const result = await db.execute({
     args: afterCursor === undefined ? [LEGACY_LIKE] : [LEGACY_LIKE, afterCursor],
-    sql: `select count(*) as n from tracks
-          where preview_archive_key like ?${afterCursor === undefined ? "" : " and track_id > ?"}`,
+    sql: `select count(*) as n from findings join tracks on tracks.track_id = findings.track_id
+          where tracks.preview_archive_key like ?${
+            afterCursor === undefined ? "" : " and tracks.track_id > ?"
+          }`,
   });
 
   return Number(result.rows[0]?.n ?? 0);
@@ -328,10 +330,13 @@ async function copyPreviews(
 
   const rows = await db.execute({
     args: cursor === undefined ? [LEGACY_LIKE, limit] : [LEGACY_LIKE, cursor, limit],
-    sql: `select track_id, log_id, preview_archive_key, preview_archive_mime
-          from tracks
-          where preview_archive_key like ?${cursor === undefined ? "" : " and track_id > ?"}
-          order by track_id
+    sql: `select tracks.track_id, findings.log_id, tracks.preview_archive_key,
+                 tracks.preview_archive_mime
+          from findings join tracks on tracks.track_id = findings.track_id
+          where tracks.preview_archive_key like ?${
+            cursor === undefined ? "" : " and tracks.track_id > ?"
+          }
+          order by tracks.track_id
           limit ?`,
   });
 

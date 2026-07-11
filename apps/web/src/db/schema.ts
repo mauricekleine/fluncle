@@ -28,12 +28,33 @@ const float32Vector = customType<{ data: Uint8Array; driverData: Uint8Array }>({
   dataType: () => "F32_BLOB(1024)",
 });
 
+/**
+ * THE UNIVERSAL MUSIC OBJECT — every track Fluncle knows about, certified or not.
+ *
+ * `tracks` is the SUPERTYPE half of the supertype/subtype pair it forms with `findings`
+ * (below). It carries only what is true of a RECORDING, independent of whether Fluncle
+ * ever certified it: identity (`track_id`, `isrc`, the Spotify ids, the Discogs release
+ * ids — with room for `mbid` later), the release metadata, the AUDIO ANALYSIS (bpm/key +
+ * provenance, the spectral feature vector), the MuQ EMBEDDING, and the private full-song
+ * capture side-channel. All of it is derivable from the recording itself.
+ *
+ * What it deliberately does NOT carry is everything that means "Fluncle logged this" —
+ * the Log ID coordinate, the note, the video, the observation, the found date, the
+ * publish state. Those live on `findings`, keyed 1:1 by `track_id`. That split is a
+ * SAFETY PROPERTY, not tidiness: because `log_id` exists only on `findings`, any query
+ * that wants a coordinate MUST join, so it structurally cannot mistake a raw catalogue
+ * track for a certified finding. Do not denormalise a certification field back onto this
+ * table — it would dissolve the guarantee.
+ *
+ * TODAY every `tracks` row has a `findings` row (the archive is all certified), so the
+ * inner join every finding-read performs is behaviour-preserving. Catalogue-only tracks
+ * (from MusicBrainz/Discogs, with no Spotify presence — hence the NULLABLE `spotify_uri`
+ * / `spotify_url`) arrive with the catalogue epic; `track_id` stays the opaque PK and
+ * will simply be minted rather than borrowed from Spotify. See docs/track-lifecycle.md.
+ */
 export const tracks = sqliteTable(
   "tracks",
   {
-    addedAt: text("added_at").notNull(),
-    addedToSpotify: integer("added_to_spotify", { mode: "boolean" }).notNull().default(false),
-    addedToSpotifyAt: text("added_to_spotify_at"),
     album: text("album"),
     albumImageUrl: text("album_image_url"),
     // BPM/key ANALYSIS PROVENANCE (RFC bpm-key-accuracy). The enrichment analyzer already
@@ -42,12 +63,13 @@ export const tracks = sqliteTable(
     // race can be closed (a finding enriched from a 30s preview BEFORE its full song was
     // captured must be re-derived once the capture lands). All INTERNAL analysis metadata:
     // they are listed in `PRIVATE_TRACK_FIELDS`, so `toPublicTrackListItem` strips them from
-    // every PUBLIC DTO, and writing them never bumps `updated_at` (they move no public
-    // surface — NOT in `track-update.ts` VISIBLE_FIELDS). Internal does NOT mean stripped,
-    // though — the other two internal columns each reach the public boundary differently:
-    // `features_json` IS on the public DTO (parsed onto it as `features` — creative fuel for
-    // the video agent, deliberately surfaced), and `embedding_json` is simply never selected
-    // into a DTO at all. Neither one passes through `toPublicTrackListItem`'s strip list.
+    // every PUBLIC DTO, and writing them never bumps `findings.updated_at` (they move no
+    // public surface — NOT in `track-update.ts` VISIBLE_FIELDS). Internal does NOT mean
+    // stripped, though — the other two internal columns each reach the public boundary
+    // differently: `features_json` IS on the public DTO (parsed onto it as `features` —
+    // creative fuel for the video agent, deliberately surfaced), and `embedding_json` is
+    // simply never selected into a DTO at all. Neither passes through
+    // `toPublicTrackListItem`'s strip list.
     //   - `analyzedAt`   — ISO timestamp of the analysis write.
     //   - `analyzedFrom` — which audio class the analysis ran on: "full" (the captured full
     //     song) or "preview" (a 30s preview). NULL = a legacy row written before this column;
@@ -56,6 +78,133 @@ export const tracks = sqliteTable(
     analyzedAt: text("analyzed_at"),
     analyzedFrom: text("analyzed_from", { enum: ["preview", "full"] }),
     artistsJson: text("artists_json").notNull(),
+    bpm: real("bpm"),
+    // The analyzer's confidence in `bpm` (0..1) and where it came from (analysis
+    // provenance, RFC bpm-key-accuracy). `bpmSource` is the analyzer's `bpmSource`
+    // verbatim ("audio-file" | "deezer:search" | "itunes" | "acousticbrainz" | …). Both
+    // INTERNAL (never in a public DTO, never bump `updated_at`). See `analyzedFrom` above.
+    bpmConfidence: real("bpm_confidence"),
+    bpmSource: text("bpm_source"),
+    // The full-song capture side-channel state (RFC full-audio). Models
+    // `enrichment_status` exactly — `notNull().default("pending")` is load-bearing:
+    // `publishTrack`'s insert never names this column, so the DDL default is what
+    // lands `'pending'` on a new add AND backfills every existing row to `'pending'`
+    // on migration (which enqueues the whole archive for capture-backfill for free).
+    // Enum: pending (never attempted) → done (key written) | unmatched (no confident
+    // match — terminal) | failed (attempt threw — retriable under backoff).
+    captureStatus: text("capture_status").notNull().default("pending"),
+    durationMs: integer("duration_ms").notNull(),
+    // The finding's MuQ audio embedding, in the form the DATABASE can rank: a native
+    // libSQL `F32_BLOB(1024)`. Every similarity read (`get_similar_findings`, the `/mix`
+    // rail, a galaxy's core-first order) ranks with `vector_distance_cos(embedding_blob,
+    // ?)` IN SQL and ships back only the winners — never the vectors. Written alongside
+    // `embedding_json` by the same agent-tier `update_track` path (`vector32(?)` converts
+    // the validated JSON server-side), and backfilled from `embedding_json` on every
+    // deploy (scripts/backfill-embedding-blob.ts). See lib/server/embedding.ts for the
+    // read contract (blob first, guarded JSON fallback) and the raw-blob probe binding.
+    embeddingBlob: float32Vector("embedding_blob"),
+    // The same vector as a JSON array — the ORIGINAL storage form, and still the
+    // source of truth: the blob is derived from it, `list_track_embeddings` (the
+    // `fluncle-cluster` cron's corpus read) reads it, and it is what a backfill can
+    // rebuild a lost blob from. Written by the on-box `fluncle-embed` cron (torch on
+    // rave-02) via the agent-tier `update_track` path; internal analysis fuel like
+    // `features_json`, so writing it moves no public lastmod. NULL until the embed cron
+    // drains it (`embedding_json IS NULL` is the queue). It is 82% of the database at
+    // 100k rows and its removal is the recorded follow-up, once the blob path has run in
+    // production. See docs/track-lifecycle.md.
+    embeddingJson: text("embedding_json"),
+    featuresJson: text("features_json"),
+    // The Discogs release the finding resolves to (read-only enrichment, best-effort,
+    // matched by artist + title since Discogs has no ISRC search). inMasterId is the
+    // master that groups a release's versions (Discogs returns it on the search hit);
+    // inReleaseId is the specific release. The `discogs.com/release/{inReleaseId}` URL
+    // is a per-finding `sameAs` for the track (distinct from the artist-level sameAs).
+    // Both null until a confident match writes them on add.
+    inMasterId: integer("in_master_id"),
+    inReleaseId: integer("in_release_id"),
+    isrc: text("isrc"),
+    key: text("key"),
+    // The analyzer's confidence in `key` (0..1) and its source (analysis provenance, RFC
+    // bpm-key-accuracy). `keySource` is the analyzer's `keySource` verbatim. `key` is NULL
+    // when confidence fell below the analyzer's floor, so `keyConfidence` records that the
+    // gate ran. Both INTERNAL (never in a public DTO, never bump `updated_at`). See
+    // `analyzedFrom` above.
+    keyConfidence: real("key_confidence"),
+    keySource: text("key_source"),
+    label: text("label"),
+    popularity: integer("popularity"),
+    // Operator-only archive path for the one official 30s preview preserved for
+    // private analysis/model training. Never exposed through public DTOs and
+    // never used by /api/preview playback.
+    previewArchiveKey: text("preview_archive_key"),
+    previewArchiveMime: text("preview_archive_mime"),
+    previewArchiveSource: text("preview_archive_source"),
+    previewArchivedAt: text("preview_archived_at"),
+    previewUrl: text("preview_url"),
+    releaseDate: text("release_date"),
+    // ISO of the last full-song capture attempt → the backoff-cooldown anchor (grows
+    // with `source_audio_failures`), mirroring the backfill_* sweeps. Null until tried.
+    sourceAudioAttemptedAt: text("source_audio_attempted_at"),
+    // ISO stamp when the full-song bytes landed in R2. Null until captured.
+    sourceAudioCapturedAt: text("source_audio_captured_at"),
+    // CONSECUTIVE capture failures (reset to 0 on success); drives the backoff window.
+    sourceAudioFailures: integer("source_audio_failures").notNull().default(0),
+    // The R2 key of the captured full song (`<logId>/<sha256>.<ext>` in the private
+    // `fluncle-source-audio` bucket). PRESENCE = captured. Null until then.
+    sourceAudioKey: text("source_audio_key"),
+    // NULLABLE (they were NOT NULL until the tracks/findings split): a catalogue track
+    // resolved from MusicBrainz/Discogs may have no Spotify presence at all. `track_id`
+    // stays the opaque PK — today it happens to be the Spotify id; a catalogue-only track
+    // gets a minted one. Everything keyed on `track_id` (track_artists, mixtape_tracks,
+    // social_posts, user_saved_findings, user_galaxy_collections) is unaffected.
+    spotifyUri: text("spotify_uri"),
+    spotifyUrl: text("spotify_url"),
+    title: text("title").notNull(),
+    trackId: text("track_id").primaryKey(),
+  },
+  // No index on `tracks` today: every list/queue/feed order and predicate lives on the
+  // CERTIFICATION half (added_at, log_id, video_url, enrichment_status, galaxy_id), so
+  // the four former `tracks_*` indexes moved wholesale to `findings` below. A finding read
+  // drives from `findings` and joins `tracks` by its PRIMARY KEY. When catalogue-only
+  // tracks arrive and gain their own scan shapes, index them here then.
+);
+
+/**
+ * THE CERTIFICATION LAYER — present ONLY for a track Fluncle certified.
+ *
+ * The SUBTYPE half of the pair: 1:1 with `tracks`, sharing its primary key
+ * (`track_id`), and carrying everything that means "Fluncle logged this" — the Log ID
+ * coordinate, the editorial note, the video, the spoken observation, the found date, the
+ * enrichment/publish state, and the per-source backfill bookkeeping. A row here IS the
+ * finding; a `tracks` row with no `findings` row is a catalogue track Fluncle has not
+ * certified.
+ *
+ * WHY IT IS ITS OWN TABLE. A track is a track; certification is a RELATIONSHIP Fluncle
+ * has with it. Keeping `log_id` here — and nowhere else — means every query that wants a
+ * coordinate has to join, so it structurally cannot mistake a raw catalogue track for a
+ * certified finding. That is the whole point of the split, and it is why nothing here may
+ * be denormalised back onto `tracks`.
+ *
+ * `log_id` is NULLABLE (not the PK): a certified straggler can exist for a moment before
+ * its coordinate is minted (the one-time `logId: "auto"` backfill in track-update.ts), and
+ * a `/log` surface skips a coordinate-less finding. So "is a finding" = a `findings` row;
+ * "has a coordinate" = `findings.log_id IS NOT NULL` — the same two-step every surface
+ * already performed, now honest about it.
+ *
+ * `track_id` is the PK and a logical foreign key to `tracks.track_id`, declared without a
+ * SQL FK constraint — matching every other relation in this schema (`social_posts`,
+ * `mixtape_tracks`, `tracks.galaxy_id`, `mixtape_clips.recording_id` … "this schema
+ * declares none"). See docs/track-lifecycle.md.
+ */
+export const findings = sqliteTable(
+  "findings",
+  {
+    // The FOUND date — when Fluncle certified this track. The feed's sort key and the
+    // sitemap's lastmod floor. It belongs to the certification, not the recording: a
+    // catalogue track has a release date (on `tracks`), never a found date.
+    addedAt: text("added_at").notNull(),
+    addedToSpotify: integer("added_to_spotify", { mode: "boolean" }).notNull().default(false),
+    addedToSpotifyAt: text("added_to_spotify_at"),
     // Per-finding backfill reliability state for the two Worker-paced catalogue
     // sweeps (Discogs release-id resolve, Last.fm love), one column-set per source.
     // The sweeps are best-effort side-channels over already-published findings; this
@@ -69,6 +218,8 @@ export const tracks = sqliteTable(
     //   - *DoneAt      — ISO when the source completed for this finding (Discogs:
     //     ids written; Last.fm: loved). Set ⇒ the sweep skips it forever (idempotent
     //     no-op). Null until done. All four are null on rows that predate the column.
+    // The Discogs sweep's OUTPUT (`in_release_id`/`in_master_id`) is catalogue identity
+    // and lives on `tracks`; only the per-finding sweep BOOKKEEPING lives here.
     backfillDiscogsAttemptedAt: text("backfill_discogs_attempted_at"),
     backfillDiscogsAttempts: integer("backfill_discogs_attempts").notNull().default(0),
     backfillDiscogsDoneAt: text("backfill_discogs_done_at"),
@@ -91,21 +242,6 @@ export const tracks = sqliteTable(
     backfillNoteAttempts: integer("backfill_note_attempts").notNull().default(0),
     backfillNoteDoneAt: text("backfill_note_done_at"),
     backfillNoteFailures: integer("backfill_note_failures").notNull().default(0),
-    bpm: real("bpm"),
-    // The analyzer's confidence in `bpm` (0..1) and where it came from (analysis
-    // provenance, RFC bpm-key-accuracy). `bpmSource` is the analyzer's `bpmSource`
-    // verbatim ("audio-file" | "deezer:search" | "itunes" | "acousticbrainz" | …). Both
-    // INTERNAL (never in a public DTO, never bump `updated_at`). See `analyzedFrom` above.
-    bpmConfidence: real("bpm_confidence"),
-    bpmSource: text("bpm_source"),
-    // The full-song capture side-channel state (RFC full-audio). Models
-    // `enrichment_status` exactly — `notNull().default("pending")` is load-bearing:
-    // `publishTrack`'s insert never names this column, so the DDL default is what
-    // lands `'pending'` on a new add AND backfills every existing row to `'pending'`
-    // on migration (which enqueues the whole archive for capture-backfill for free).
-    // Enum: pending (never attempted) → done (key written) | unmatched (no confident
-    // match — terminal) | failed (attempt threw — retriable under backoff).
-    captureStatus: text("capture_status").notNull().default("pending"),
     // Firecrawl-derived FACTUAL context about the track (label/year/release
     // context/artist background), gathered during the observe step as CREATIVE
     // FUEL for the observation script and the video agent. Internal only: never
@@ -126,55 +262,22 @@ export const tracks = sqliteTable(
     contextStatus: text("context_status", {
       enum: ["pending", "resolved", "empty", "failed"],
     }),
-    durationMs: integer("duration_ms").notNull(),
-    // The finding's MuQ audio embedding, in the form the DATABASE can rank: a native
-    // libSQL `F32_BLOB(1024)`. Every similarity read (`get_similar_findings`, the `/mix`
-    // rail, a galaxy's core-first order) ranks with `vector_distance_cos(embedding_blob,
-    // ?)` IN SQL and ships back only the winners — never the vectors. Written alongside
-    // `embedding_json` by the same agent-tier `update_track` path (`vector32(?)` converts
-    // the validated JSON server-side), and backfilled from `embedding_json` on every
-    // deploy (scripts/backfill-embedding-blob.ts). See lib/server/embedding.ts for the
-    // read contract (blob first, guarded JSON fallback) and the raw-blob probe binding.
-    embeddingBlob: float32Vector("embedding_blob"),
-    // The same vector as a JSON array — the ORIGINAL storage form, and still the
-    // source of truth: the blob is derived from it, `list_track_embeddings` (the
-    // `fluncle-cluster` cron's corpus read) reads it, and it is what a backfill can
-    // rebuild a lost blob from. Written by the on-box `fluncle-embed` cron (torch on
-    // rave-02) via the agent-tier `update_track` path; internal analysis fuel like
-    // `features_json`, so writing it moves no public lastmod. NULL until the embed cron
-    // drains it (`embedding_json IS NULL` is the queue). It is 82% of the database at
-    // 100k rows and its removal is the recorded follow-up, once the blob path has run in
-    // production. See docs/track-lifecycle.md.
-    embeddingJson: text("embedding_json"),
     enrichmentStatus: text("enrichment_status").notNull().default("pending"),
-    featuresJson: text("features_json"),
-    // The sonic galaxy this finding belongs to — a nullable FK to `galaxies.id`, the
-    // internal-grouping precedent of `embeddingJson`. Hard assignment
-    // (one galaxy per finding), written by the on-box `fluncle-cluster` cron via the
-    // agent-tier `update_track` path (assignment-only nightly step). Internal like the
-    // embedding, so writing it moves no public lastmod (kept OUT of `VISIBLE_FIELDS`);
-    // it surfaces on the public DTO only once the galaxy is operator-NAMED. NULL until
-    // the finding is embedded AND assigned. Member counts are derived, never stored.
-    // See docs/rfcs/browse-by-feel.md + docs/track-lifecycle.md.
+    // The sonic galaxy this finding belongs to — a nullable logical FK to `galaxies.id`,
+    // the internal-grouping precedent of `embedding_json`. Hard assignment (one galaxy
+    // per finding), written by the on-box `fluncle-cluster` cron via the agent-tier
+    // `update_track` path (assignment-only nightly step). Internal like the embedding, so
+    // writing it moves no public lastmod (kept OUT of `VISIBLE_FIELDS`); it surfaces on
+    // the public DTO only once the galaxy is operator-NAMED. NULL until the finding is
+    // embedded AND assigned. Member counts are derived, never stored. A galaxy is a
+    // property of the CERTIFIED archive (the browse-by-feel map is a map of findings), so
+    // it sits here even though the vector it is derived from lives on `tracks`.
+    // See docs/agents/cluster-engine.md + docs/track-lifecycle.md.
     galaxyId: text("galaxy_id"),
-    // The Discogs release the finding resolves to (read-only enrichment, best-effort,
-    // matched by artist + title since Discogs has no ISRC search). inMasterId is the
-    // master that groups a release's versions (Discogs returns it on the search hit);
-    // inReleaseId is the specific release. The `discogs.com/release/{inReleaseId}` URL
-    // is a per-finding `sameAs` for the track (distinct from the artist-level sameAs).
-    // Both null until a confident match writes them on add.
-    inMasterId: integer("in_master_id"),
-    inReleaseId: integer("in_release_id"),
-    isrc: text("isrc"),
-    key: text("key"),
-    // The analyzer's confidence in `key` (0..1) and its source (analysis provenance, RFC
-    // bpm-key-accuracy). `keySource` is the analyzer's `keySource` verbatim. `key` is NULL
-    // when confidence fell below the analyzer's floor, so `keyConfidence` records that the
-    // gate ran. Both INTERNAL (never in a public DTO, never bump `updated_at`). See
-    // `analyzedFrom` above.
-    keyConfidence: real("key_confidence"),
-    keySource: text("key_source"),
-    label: text("label"),
+    // THE COORDINATE — the permanent Galaxy waypoint (`fluncle://<id>`), and the reason
+    // this table exists. It lives HERE and nowhere else, so a query cannot reach a Log ID
+    // without joining through the certification. NULL only for a straggler awaiting its
+    // one-time backfill.
     logId: text("log_id").unique(),
     note: text("note"),
     // Word-level caption timings for the spoken observation, as a JSON string
@@ -204,33 +307,13 @@ export const tracks = sqliteTable(
     // subtitles synced over the video. Internal like `context_note`: never on the
     // public TrackListItem contract — surfaced only through the admin-only board path.
     observationScript: text("observation_script"),
-    popularity: integer("popularity"),
     postedToTelegram: integer("posted_to_telegram", { mode: "boolean" }).notNull().default(false),
     postedToTelegramAt: text("posted_to_telegram_at"),
-    // Operator-only archive path for the one official 30s preview preserved for
-    // private analysis/model training. Never exposed through public DTOs and
-    // never used by /api/preview playback.
-    previewArchiveKey: text("preview_archive_key"),
-    previewArchiveMime: text("preview_archive_mime"),
-    previewArchiveSource: text("preview_archive_source"),
-    previewArchivedAt: text("preview_archived_at"),
-    previewUrl: text("preview_url"),
-    releaseDate: text("release_date"),
-    // ISO of the last full-song capture attempt → the backoff-cooldown anchor (grows
-    // with `source_audio_failures`), mirroring the backfill_* sweeps. Null until tried.
-    sourceAudioAttemptedAt: text("source_audio_attempted_at"),
-    // ISO stamp when the full-song bytes landed in R2. Null until captured.
-    sourceAudioCapturedAt: text("source_audio_captured_at"),
-    // CONSECUTIVE capture failures (reset to 0 on success); drives the backoff window.
-    sourceAudioFailures: integer("source_audio_failures").notNull().default(0),
-    // The R2 key of the captured full song (`<logId>/<sha256>.<ext>` in the private
-    // `fluncle-source-audio` bucket). PRESENCE = captured. Null until then.
-    sourceAudioKey: text("source_audio_key"),
     spotifyError: text("spotify_error"),
-    spotifyUri: text("spotify_uri").notNull(),
-    spotifyUrl: text("spotify_url").notNull(),
     telegramError: text("telegram_error"),
-    title: text("title").notNull(),
+    // The logical FK to `tracks.track_id` AND this table's primary key — the 1:1 that
+    // makes `findings` a subtype rather than a child collection. No SQL FK constraint,
+    // matching the rest of this schema.
     trackId: text("track_id").primaryKey(),
     // Last content change to the finding's record: every write path (publish,
     // curation/enrichment update, social-post state) bumps it. Null for rows that
@@ -272,15 +355,16 @@ export const tracks = sqliteTable(
   },
   (table) => [
     // The feed/cursor order every list surface pages by (listTracks:
-    // `order by added_at, track_id` + the keyset cursor comparator).
-    index("tracks_added_at_track_id_idx").on(table.addedAt, table.trackId),
-    // The galaxy lens + the ratified vector-scan btree pre-filter
-    // (tracks.ts:806 documents the shape; :1131 is the predicate).
-    index("tracks_galaxy_id_idx").on(table.galaxyId),
-    // Radio/video eligibility (`where video_url is not null`, tracks.ts:549).
-    index("tracks_video_url_idx").on(table.videoUrl),
-    // Enrichment queue filters (tracks.ts:1202-1294).
-    index("tracks_enrichment_status_idx").on(table.enrichmentStatus),
+    // `order by added_at, track_id` + the keyset cursor comparator). It drives from
+    // `findings` and joins `tracks` by PK, so this index carries the whole feed.
+    index("findings_added_at_track_id_idx").on(table.addedAt, table.trackId),
+    // The galaxy lens + the ratified vector-scan btree pre-filter (tracks.ts documents
+    // the shape; `getFindingsByGalaxyRanked` is the predicate).
+    index("findings_galaxy_id_idx").on(table.galaxyId),
+    // Radio/video eligibility (`where video_url is not null`).
+    index("findings_video_url_idx").on(table.videoUrl),
+    // Enrichment queue filters (listTracks' `status` filter).
+    index("findings_enrichment_status_idx").on(table.enrichmentStatus),
   ],
 );
 

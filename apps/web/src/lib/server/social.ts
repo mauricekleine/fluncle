@@ -241,7 +241,7 @@ async function touchTrack(trackId: string, now: string): Promise<void> {
 
   await db.execute({
     args: [now, trackId],
-    sql: `update tracks set updated_at = ? where track_id = ?`,
+    sql: `update findings set updated_at = ? where track_id = ?`,
   });
 }
 

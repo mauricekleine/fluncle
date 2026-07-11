@@ -32,12 +32,19 @@ let db: Client;
 
 /** A finding carrying a raw label string — the only way a label enters the archive. */
 async function seedFinding(trackId: string, label: null | string): Promise<void> {
+  // The label is the RECORDING's; the coordinate + found date are the CERTIFICATION's.
+  // Both halves, because `listLabels` counts FINDINGS on a label (it joins through).
   await db.execute({
-    args: [trackId, `00${trackId}`, "Tune", '["Artist"]', label, "2026-07-01T00:00:00.000Z"],
+    args: [trackId, "Tune", '["Artist"]', label],
     sql: `insert into tracks
-            (track_id, log_id, title, artists_json, spotify_uri, spotify_url, duration_ms,
-             label, added_at, added_to_spotify, posted_to_telegram)
-          values (?, ?, ?, ?, 'uri', 'url', 0, ?, ?, 0, 0)`,
+            (track_id, title, artists_json, spotify_uri, spotify_url, duration_ms, label)
+          values (?, ?, ?, 'uri', 'url', 0, ?)`,
+  });
+  await db.execute({
+    args: [trackId, `00${trackId}`, "2026-07-01T00:00:00.000Z"],
+    sql: `insert into findings
+            (track_id, log_id, added_at, added_to_spotify, posted_to_telegram)
+          values (?, ?, ?, 0, 0)`,
   });
 }
 

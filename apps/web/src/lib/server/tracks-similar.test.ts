@@ -86,8 +86,11 @@ function textCell(value: unknown): string | null {
 async function rankInIsolate(targetId: string, limit: number): Promise<string[]> {
   const rows = await db.execute({
     args: [targetId],
-    sql: `select track_id, embedding_json from tracks
-          where log_id is not null and embedding_json is not null and track_id != ?`,
+    sql: `select tracks.track_id, tracks.embedding_json
+          from findings join tracks on tracks.track_id = findings.track_id
+          where findings.log_id is not null
+            and tracks.embedding_json is not null
+            and tracks.track_id != ?`,
   });
   const target = await db.execute({
     args: [targetId],

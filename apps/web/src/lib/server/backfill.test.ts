@@ -38,7 +38,16 @@ const execute = vi.fn(async ({ args, sql }: { args: unknown[]; sql: string }) =>
   return { rows: [] };
 });
 
-vi.mock("./db", () => ({ getDb: async () => ({ execute }) }));
+vi.mock("./db", () => ({
+  // The Discogs resolve writes across the tracks/findings pair (the release ids are the
+  // recording's catalogue identity; the lastmod bump is the finding's) as one batch —
+  // replayed through the same `execute` spy, one call per statement.
+  getDb: async () => ({
+    batch: (statements: { args: unknown[]; sql: string }[]) =>
+      Promise.all(statements.map((statement) => execute(statement))),
+    execute,
+  }),
+}));
 vi.mock("./tracks", async () => {
   const actual = await vi.importActual<typeof import("./tracks")>("./tracks");
 

@@ -47,9 +47,10 @@ export async function publishTrack(
   const trackId = parseSpotifyTrackUrl(spotifyUrl);
   const existingResult = await db.execute({
     args: [trackId],
-    sql: `select track_id, title, artists_json, added_to_spotify, posted_to_telegram
-      from tracks
-      where track_id = ?
+    sql: `select tracks.track_id, tracks.title, tracks.artists_json,
+             findings.added_to_spotify, findings.posted_to_telegram
+      from findings join tracks on tracks.track_id = findings.track_id
+      where findings.track_id = ?
       limit 1`,
   });
   const existing = typedRow<TrackRow>(existingResult.rows);
@@ -95,7 +96,7 @@ ${existing.posted_to_telegram ? "Posted to Telegram" : "Not posted to Telegram"}
     async (candidate) => {
       const taken = await db.execute({
         args: [candidate],
-        sql: `select 1 from tracks where log_id = ? limit 1`,
+        sql: `select 1 from findings where log_id = ? limit 1`,
       });
 
       return taken.rows.length > 0;
@@ -154,54 +155,63 @@ No database, Spotify, or Telegram changes were made. Enrichment (label, preview)
     title: track.title,
   });
 
-  await db.execute({
-    args: [
-      track.trackId,
-      track.spotifyUrl,
-      track.spotifyUri,
-      track.title,
-      JSON.stringify(track.artists),
-      track.album ?? null,
-      track.albumImageUrl ?? null,
-      track.releaseDate ?? null,
-      track.durationMs,
-      track.isrc ?? null,
-      deezer.label ?? null,
-      logId,
-      track.popularity ?? null,
-      deezer.previewUrl ?? null,
-      discogs.releaseId ?? null,
-      discogs.masterId ?? null,
-      options.note ?? null,
-      nowIso,
-      nowIso,
-      0,
-      0,
+  await db.batch(
+    [
+      {
+        args: [
+          track.trackId,
+          track.spotifyUrl,
+          track.spotifyUri,
+          track.title,
+          JSON.stringify(track.artists),
+          track.album ?? null,
+          track.albumImageUrl ?? null,
+          track.releaseDate ?? null,
+          track.durationMs,
+          track.isrc ?? null,
+          deezer.label ?? null,
+          track.popularity ?? null,
+          deezer.previewUrl ?? null,
+          discogs.releaseId ?? null,
+          discogs.masterId ?? null,
+        ],
+        // The RECORDING half — everything true of the track itself.
+        sql: `insert into tracks (
+            track_id,
+            spotify_url,
+            spotify_uri,
+            title,
+            artists_json,
+            album,
+            album_image_url,
+            release_date,
+            duration_ms,
+            isrc,
+            label,
+            popularity,
+            preview_url,
+            in_release_id,
+            in_master_id
+          ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      },
+      {
+        args: [track.trackId, logId, options.note ?? null, nowIso, nowIso, 0, 0],
+        // The CERTIFICATION half — the coordinate, the note, the found date, the publish
+        // state. `enrichment_status` takes its DDL default (`pending`), which is what
+        // enqueues the fresh find for the enrich sweep (docs/track-lifecycle.md).
+        sql: `insert into findings (
+            track_id,
+            log_id,
+            note,
+            added_at,
+            updated_at,
+            added_to_spotify,
+            posted_to_telegram
+          ) values (?, ?, ?, ?, ?, ?, ?)`,
+      },
     ],
-    sql: `insert into tracks (
-        track_id,
-        spotify_url,
-        spotify_uri,
-        title,
-        artists_json,
-        album,
-        album_image_url,
-        release_date,
-        duration_ms,
-        isrc,
-        label,
-        log_id,
-        popularity,
-        preview_url,
-        in_release_id,
-        in_master_id,
-        note,
-        added_at,
-        updated_at,
-        added_to_spotify,
-        posted_to_telegram
-      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  });
+    "write",
+  );
 
   // Best-effort: populate the artist entity tables (artists + track_artists) so
   // the identity graph is ready for the resolution sweep. Uses the artist IDs
@@ -239,7 +249,7 @@ No database, Spotify, or Telegram changes were made. Enrichment (label, preview)
     const message = formatError(error);
     await db.execute({
       args: [message, new Date().toISOString(), track.trackId],
-      sql: `update tracks set spotify_error = ?, updated_at = ? where track_id = ?`,
+      sql: `update findings set spotify_error = ?, updated_at = ? where track_id = ?`,
     });
 
     // An expired Spotify authorization is an actionable "reconnect", not a generic
@@ -254,7 +264,7 @@ No database, Spotify, or Telegram changes were made. Enrichment (label, preview)
   try {
     await db.execute({
       args: [new Date().toISOString(), new Date().toISOString(), track.trackId],
-      sql: `update tracks
+      sql: `update findings
         set added_to_spotify = 1,
           added_to_spotify_at = ?,
           spotify_error = null,
@@ -274,7 +284,7 @@ No database, Spotify, or Telegram changes were made. Enrichment (label, preview)
     const message = formatError(error);
     await db.execute({
       args: [message, new Date().toISOString(), track.trackId],
-      sql: `update tracks set telegram_error = ?, updated_at = ? where track_id = ?`,
+      sql: `update findings set telegram_error = ?, updated_at = ? where track_id = ?`,
     });
 
     throw new ApiError("telegram_failed", `Spotify succeeded, but Telegram failed.\n${message}`);
@@ -283,7 +293,7 @@ No database, Spotify, or Telegram changes were made. Enrichment (label, preview)
   try {
     await db.execute({
       args: [new Date().toISOString(), new Date().toISOString(), track.trackId],
-      sql: `update tracks
+      sql: `update findings
         set posted_to_telegram = 1,
           posted_to_telegram_at = ?,
           telegram_error = null,

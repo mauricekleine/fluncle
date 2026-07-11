@@ -317,7 +317,7 @@ export async function listSavedFindings(
     args: [user.id],
     sql: `select s.track_id, s.log_id, s.saved_at, s.note, t.title, t.artists_json
       from user_saved_findings s
-      join tracks t on t.track_id = s.track_id
+      join (findings join tracks on tracks.track_id = findings.track_id) t on t.track_id = s.track_id
       where s.user_id = ?
       order by s.saved_at desc`,
   });
@@ -684,7 +684,8 @@ async function findTrackByTrackOrLog(trackIdOrLogId: string): Promise<TrackRefRo
     await getDb()
   ).execute({
     args: [value, value],
-    sql: `select track_id, log_id from tracks where track_id = ? or log_id = ? limit 1`,
+    sql: `select tracks.track_id, findings.log_id from findings join tracks on tracks.track_id = findings.track_id
+      where tracks.track_id = ? or findings.log_id = ? limit 1`,
   });
 
   return typedRow<TrackRefRow>(result.rows);

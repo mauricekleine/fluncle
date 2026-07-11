@@ -22,7 +22,7 @@ export async function listContextNotePresenceForTracks(trackIds: string[]): Prom
   const placeholders = trackIds.map(() => "?").join(", ");
   const result = await db.execute({
     args: trackIds,
-    sql: `select track_id from tracks
+    sql: `select track_id from findings
           where track_id in (${placeholders})
             and context_note is not null and trim(context_note) <> ''`,
   });
@@ -39,7 +39,7 @@ export async function getContextNote(trackId: string): Promise<string> {
   const db = await getDb();
   const result = await db.execute({
     args: [trackId],
-    sql: `select context_note from tracks where track_id = ? limit 1`,
+    sql: `select context_note from findings where track_id = ? limit 1`,
   });
 
   const row = typedRows<{ context_note: string | null }>(result.rows)[0];
@@ -59,7 +59,7 @@ export async function getObservationScript(trackId: string): Promise<string> {
   const db = await getDb();
   const result = await db.execute({
     args: [trackId],
-    sql: `select observation_script from tracks where track_id = ? limit 1`,
+    sql: `select observation_script from findings where track_id = ? limit 1`,
   });
 
   const row = typedRows<{ observation_script: string | null }>(result.rows)[0];

@@ -70,12 +70,15 @@ async function seed(rows: MixSeed[]): Promise<void> {
         row.embedding ? JSON.stringify(row.embedding) : null,
         // A distinct, deterministic texture vector per finding (the plateau tiebreak).
         JSON.stringify({ centroidHz: 1000 + index, highRatio: index / 100, onsetRate: index }),
-        row.galaxyId ?? null,
         row.trackId,
       ],
       sql: `update tracks
-            set key = ?, bpm = ?, embedding_json = ?, features_json = ?, galaxy_id = ?
+            set key = ?, bpm = ?, embedding_json = ?, features_json = ?
             where track_id = ?`,
+    });
+    await db.execute({
+      args: [row.galaxyId ?? null, row.trackId],
+      sql: `update findings set galaxy_id = ? where track_id = ?`,
     });
   }
 }
