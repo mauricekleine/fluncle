@@ -63,9 +63,32 @@ async function selectedTitle(page: Page): Promise<string> {
   ).trim();
 }
 
-async function rowTitles(page: Page): Promise<string[]> {
-  const titles = await queueRows(page).locator("span.font-bold").allTextContents();
-  return titles.map((title) => title.trim());
+// A row's identity in the DOM: its source label (the first sr-only span, from
+// SOURCE_LABELS — "YouTube", "TikTok draft", "Mixtape", …) plus its title. A title
+// ALONE is not an identity: one finding raises several rows (its YouTube-post row
+// and its seeded TikTok-draft row carry the same title), so snoozing one leaves the
+// sibling — and a title-only check reads that sibling as "still here" and fails a
+// working snooze. Keyed on (source, title), the snoozed row is unambiguous.
+async function rowIdentity(row: Locator): Promise<string> {
+  const title = ((await row.locator("span.font-bold").first().textContent()) ?? "").trim();
+  const source = ((await row.locator("span.sr-only").first().textContent()) ?? "").trim();
+  return `${source} · ${title}`;
+}
+
+async function selectedRowId(page: Page): Promise<string> {
+  return rowIdentity(
+    page.locator('ul[aria-label="Attention queue"] > li[class*="bg-primary/10"]').first(),
+  );
+}
+
+async function rowIds(page: Page): Promise<string[]> {
+  const rows = queueRows(page);
+  const count = await rows.count();
+  const ids: string[] = [];
+  for (let index = 0; index < count; index++) {
+    ids.push(await rowIdentity(rows.nth(index)));
+  }
+  return ids;
 }
 
 // Past-hydration gate. The DEFAULT selection (row 0) is server-rendered, so the
@@ -242,19 +265,21 @@ async function drive(browser: Awaited<ReturnType<typeof launchBrowser>>): Promis
   const clipboard = await page.evaluate(() => navigator.clipboard.readText().catch(() => ""));
   expect(clipboard.length > 0, "the caption reached the clipboard");
 
-  // Snooze the selected row (s → the +3h slot): its title leaves the active list
+  // Snooze the selected row (s → the +3h slot): that ROW leaves the active list
   // (the working set refills behind it, so counts stay put — identities move).
-  const toSnooze = await selectedTitle(page);
+  // Keyed on (source, title): the same finding also raises a sibling row with the
+  // same title, so a title-only check would read the sibling as "still here".
+  const toSnooze = await selectedRowId(page);
   await page.keyboard.press("s");
   await page.getByRole("button", { name: "+3h" }).click();
   await page.waitForTimeout(500);
-  expect(!(await rowTitles(page)).includes(toSnooze), `snoozed row left the list (${toSnooze})`);
+  expect(!(await rowIds(page)).includes(toSnooze), `snoozed row left the list (${toSnooze})`);
 
   // Won't-do the selected row (x) — permanent, with the Undo toast.
-  const toDismiss = await selectedTitle(page);
+  const toDismiss = await selectedRowId(page);
   await page.keyboard.press("x");
   await page.waitForTimeout(500);
-  expect(!(await rowTitles(page)).includes(toDismiss), `won't-do row left the list (${toDismiss})`);
+  expect(!(await rowIds(page)).includes(toDismiss), `won't-do row left the list (${toDismiss})`);
   expect((await page.getByRole("button", { name: "Undo" }).count()) > 0, "won't-do offered Undo");
 
   // [Show all] reveals the backlog + the snoozed and dismissed rows.
@@ -285,11 +310,22 @@ async function drive(browser: Awaited<ReturnType<typeof launchBrowser>>): Promis
   await page.screenshot({ fullPage: true, path: join(OUT_DIR, "queue-zero.png") });
 
   // ── The legacy board deep-links survive ────────────────────────────────────
+  // `/admin` owned the findings board before the queue, so its old ?stage/?mix
+  // bookmarks redirect to the board at /admin/findings. The `needs-tagging` stage
+  // retired with vibe-tagging, so the board validates that legacy value back to
+  // `all` (the mix filter carries over) — the point is a legacy link lands somewhere
+  // sane, not that a dead stage survives.
   await page.goto(`${BASE_URL}/admin?stage=needs-tagging&mix=open`);
   await page.waitForLoadState("networkidle");
+  await page
+    .waitForURL(
+      (url) => url.pathname === "/admin/findings" && url.searchParams.get("stage") === "all",
+      { timeout: 10_000 },
+    )
+    .catch(() => undefined);
   expect(
     page.url().includes("/admin/findings") &&
-      page.url().includes("stage=needs-tagging") &&
+      page.url().includes("stage=all") &&
       page.url().includes("mix=open"),
     `?stage/?mix redirect to the board (${page.url()})`,
   );

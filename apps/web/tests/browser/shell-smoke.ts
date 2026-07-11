@@ -18,15 +18,26 @@ const BASE_URL = process.env.BASE_URL ?? "http://127.0.0.1:3000";
 const OUT_DIR = process.env.OUT_DIR ?? "/tmp/admin-shell-smoke";
 
 // Every sidebar entry, by its accessible link name, with the page title (the
-// plate h1) its target renders. System leaves the shell for the public /status.
+// plate h1) its target renders — kept in the sidebar's own order (admin-sidebar.tsx:
+// the flat entry + the Sets / Studio / Ops groups). System leaves the shell for the
+// public /status and is driven separately below. Plans was renamed "Playlists" and
+// grouped under Sets (#370, 507ebfda); Recordings + Clips split into the Studio
+// group (#373, 53754d00).
 const ENTRIES: { expectH1: string; name: string; path: string }[] = [
   { expectH1: "Dashboard", name: "Dashboard", path: "/admin" },
   { expectH1: "Findings", name: "Findings", path: "/admin/findings" },
-  { expectH1: "Plans", name: "Plans", path: "/admin/plans" },
-  { expectH1: "Clip library", name: "Recordings", path: "/admin/clips" },
-  { expectH1: "Plans", name: "Mixtapes", path: "/admin/plans" },
+  { expectH1: "Renders", name: "Renders", path: "/admin/renders" },
+  { expectH1: "Artists", name: "Artists", path: "/admin/artists" },
+  { expectH1: "Labels", name: "Labels", path: "/admin/labels" },
+  { expectH1: "Galaxies", name: "Galaxies", path: "/admin/galaxies" },
+  { expectH1: "Playlists", name: "Playlists", path: "/admin/plans" },
+  { expectH1: "Mixtapes", name: "Mixtapes", path: "/admin/mixtapes" },
+  { expectH1: "Dream-weaver", name: "Dream-weaver", path: "/admin/mixable-order" },
+  { expectH1: "Recordings", name: "Recordings", path: "/admin/recordings" },
   { expectH1: "Clip library", name: "Clips", path: "/admin/clips" },
   { expectH1: "Newsletter", name: "Newsletter", path: "/admin/newsletter" },
+  { expectH1: "Costs", name: "Costs", path: "/admin/costs" },
+  { expectH1: "Usage & cost", name: "Usage & cost", path: "/admin/usage" },
 ];
 
 const failures: string[] = [];
@@ -88,9 +99,19 @@ function navLink(page: Page, name: string) {
   return page.getByRole("link", { name: new RegExp(`^${name}( \\(\\d+\\))?$`) }).first();
 }
 
+// Wait for the plate h1 to SETTLE on the expected title before asserting. A
+// client-side nav swaps the h1 only once the target route's loader resolves, so
+// reading it eagerly races the page we came from ("Dashboard") — wait for an h1
+// carrying the title, then assert whatever stuck (a genuinely broken route times
+// out here and is reported, not silently passed).
 async function expectTitle(page: Page, h1: string, label: string): Promise<void> {
-  const heading = page.locator("h1").first();
-  const text = (await heading.textContent())?.trim() ?? "";
+  await page
+    .locator("h1", { hasText: h1 })
+    .first()
+    .waitFor({ state: "visible", timeout: 15_000 })
+    .catch(() => undefined);
+
+  const text = (await page.locator("h1").first().textContent())?.trim() ?? "";
 
   if (!text.startsWith(h1)) {
     failures.push(`[${label}] expected h1 "${h1}", saw "${text}"`);
@@ -114,6 +135,10 @@ const browser = await launchBrowser();
 
   for (const entry of ENTRIES) {
     await page.goto(`${BASE_URL}/admin`, { waitUntil: "networkidle" });
+    // Let the board settle (its loader resolved once its h1 paints) before
+    // clicking away — otherwise the click aborts the in-flight server fn and
+    // TanStack wedges on the old match.
+    await expectTitle(page, "Dashboard", `desktop ${entry.name} (home)`);
     await navLink(page, entry.name).click();
     await waitForPath(page, entry.path);
     await expectTitle(page, entry.expectH1, `desktop ${entry.name}`);
@@ -128,9 +153,13 @@ const browser = await launchBrowser();
   await waitForPath(page, "/status");
   await page.screenshot({ path: join(OUT_DIR, "system-desktop.png") });
 
-  // The board's deep-linked filters keep working (migration discipline).
+  // The board's legacy deep-links keep working (migration discipline): `/admin`
+  // owned the findings board before the queue, so its old ?stage/?mix links now
+  // redirect to the board at /admin/findings. (The retired needs-tagging stage
+  // validates back to `all` there — see queue-smoke.ts.)
   await page.goto(`${BASE_URL}/admin?stage=needs-tagging&mix=open`, { waitUntil: "networkidle" });
-  await expectTitle(page, "Dashboard", "desktop deep-link");
+  await waitForPath(page, "/admin/findings");
+  await expectTitle(page, "Findings", "desktop deep-link");
   await page.screenshot({ path: join(OUT_DIR, "deep-link-desktop.png") });
 
   await context.close();
@@ -146,10 +175,10 @@ const browser = await launchBrowser();
   await expectTitle(page, "Dashboard", "mobile /admin");
   await page.screenshot({ path: join(OUT_DIR, "dashboard-mobile.png") });
 
-  // Open the sheet, walk to Plans through it. Wait out the sheet's enter
+  // Open the sheet, walk to Playlists through it. Wait out the sheet's enter
   // transition (opacity + slide) so the shot shows the settled surface.
   await page.getByRole("button", { name: "Toggle Sidebar" }).first().click();
-  await navLink(page, "Plans").waitFor();
+  await navLink(page, "Playlists").waitFor();
   await page.waitForFunction(
     () => {
       const sheet = document.querySelector('[data-mobile="true"]');
@@ -160,9 +189,9 @@ const browser = await launchBrowser();
   );
   await page.waitForTimeout(250);
   await page.screenshot({ path: join(OUT_DIR, "sheet-mobile.png") });
-  await navLink(page, "Plans").click();
+  await navLink(page, "Playlists").click();
   await waitForPath(page, "/admin/plans");
-  await expectTitle(page, "Plans", "mobile Plans");
+  await expectTitle(page, "Playlists", "mobile Playlists");
   await page.screenshot({ path: join(OUT_DIR, "plans-mobile.png") });
 
   await context.close();
