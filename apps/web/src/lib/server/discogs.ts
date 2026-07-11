@@ -769,3 +769,125 @@ export async function discogsResolveRelease(
 export function discogsReleaseUrl(releaseId: number): string {
   return `https://www.discogs.com/release/${releaseId}`;
 }
+
+// ───────────────────────────── label logo (the label entity's own image) ─────────────────────
+//
+// Labels are FIRST-CLASS on Discogs: `GET /labels/{id}` returns an `images[]` array with the
+// real logo. The label-images resolve sweep (label-images.ts) reaches that id the same way
+// this resolver reaches releases — through MusicBrainz's curated `url-rels`, not through the
+// Discogs API — then downloads the logo ONCE and stores it in our own R2. Discogs image
+// requests need the authed token and an identifiable UA and MUST NOT be hotlinked (their ToS
+// forbids it), which is exactly why this lives here on the one authed Discogs client.
+
+/**
+ * Pull the Discogs `label` id out of any discogs.com label URL — the label sibling of
+ * `parseDiscogsUrl` (which parses release/master). Used by the label-images sweep to read a
+ * label's Discogs id off the MusicBrainz label entity's curated Discogs relation.
+ */
+export function parseDiscogsLabelUrl(url: string): number | undefined {
+  const match = url.match(/discogs\.com\/(?:[a-z-]+\/)?label\/(\d+)/i);
+
+  return match?.[1] === undefined ? undefined : Number(match[1]);
+}
+
+type DiscogsImage = {
+  type?: string; // "primary" | "secondary"
+  uri?: string; // the full-size image URL (on i.discogs.com)
+};
+
+type DiscogsLabelDetail = {
+  id?: number;
+  name?: string;
+  images?: DiscogsImage[];
+};
+
+/** A downloaded label logo — the bytes to store in R2 plus its content type. */
+export type DiscogsLabelImage = { bytes: ArrayBuffer; mime: string };
+
+// A real label logo is tens-to-hundreds of KB; anything past this is not a logo worth storing
+// (and the ceiling protects the 128 MB Worker isolate from a pathological image).
+const MAX_LABEL_IMAGE_BYTES = 5_000_000;
+
+/** The primary image URI (else the first) from a Discogs label's `images[]`. */
+function pickLabelImageUri(images: DiscogsImage[] | undefined): string | undefined {
+  if (!images || images.length === 0) {
+    return undefined;
+  }
+
+  const primary = images.find((image) => image.type === "primary");
+
+  return (primary ?? images[0])?.uri;
+}
+
+/**
+ * Fetch a Discogs label's primary logo image bytes: `GET /labels/{id}` for the image URI, then
+ * the image itself — BOTH authed (`Authorization: Discogs token=…`) and BOTH on the shared
+ * Discogs rate-limit gate, so this shares the resolver's one honest budget. Returns the bytes +
+ * mime, or `image` undefined when the label has no image (or it isn't an image / is too large),
+ * plus `rateLimited` when Discogs threw a 429 so the sweep backs off rather than storms. NEVER
+ * throws — same side-channel discipline as `discogsResolveRelease`.
+ */
+export async function fetchDiscogsLabelImage(
+  discogsLabelId: number,
+  token: string,
+): Promise<{ image?: DiscogsLabelImage; rateLimited: boolean }> {
+  const signal: RateLimitSignal = { hit: false };
+
+  try {
+    const detail = await discogsFetch<DiscogsLabelDetail>(
+      `/labels/${discogsLabelId}`,
+      token,
+      signal,
+    );
+    const uri = pickLabelImageUri(detail?.images);
+
+    if (!uri || signal.hit) {
+      return { rateLimited: signal.hit };
+    }
+
+    // The image host (i.discogs.com) requires the token + an identifiable UA — it is NOT
+    // hotlinkable, which is the whole reason we download + re-host. Throttled on the same gate.
+    const image = await throttleDiscogs(async () => {
+      const response = await fetch(uri, {
+        headers: { Authorization: `Discogs token=${token}`, "User-Agent": USER_AGENT },
+      });
+
+      if (response.status === 429) {
+        signal.hit = true;
+
+        return undefined;
+      }
+
+      if (!response.ok) {
+        logEvent("warn", "discogs.label-image-failed", {
+          discogsLabelId,
+          status: response.status,
+        });
+
+        return undefined;
+      }
+
+      const contentType = response.headers.get("content-type") ?? "";
+
+      if (!contentType.startsWith("image/")) {
+        logEvent("warn", "discogs.label-image-not-image", { contentType, discogsLabelId });
+
+        return undefined;
+      }
+
+      const bytes = await response.arrayBuffer();
+
+      if (bytes.byteLength === 0 || bytes.byteLength > MAX_LABEL_IMAGE_BYTES) {
+        return undefined;
+      }
+
+      return { bytes, mime: contentType.split(";")[0]?.trim() || "image/jpeg" };
+    });
+
+    return { image, rateLimited: signal.hit };
+  } catch (error) {
+    logEvent("error", "discogs.label-image-error", { discogsLabelId, error });
+
+    return { rateLimited: signal.hit };
+  }
+}

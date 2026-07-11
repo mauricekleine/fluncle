@@ -13,7 +13,9 @@
 // the handlers read `input.query.*` and apply the SAME parse/clamp logic the live
 // `parseLimit`/`parseBool` did (a tolerant string → number/bool, never a 400).
 
+import { env } from "cloudflare:workers";
 import { backfillDiscogsIds, backfillLastfmLoves } from "../backfill";
+import { resolveLabelImages } from "../label-images";
 import { adminAuth } from "../orpc-auth";
 import { apiFault, type Implementer, parseBool, parseLimit } from "./_shared";
 
@@ -83,8 +85,42 @@ export function adminBackfillsHandlers(os: Implementer) {
     }
   });
 
+  // POST /admin/backfill/label-images — agent tier (`adminAuth`): resolves a label's OWN logo
+  // (Discogs → Wikidata) into R2, no publish, so the box's agent-token cron drives it. The
+  // world-served bucket is `env.VIDEOS` (behind found.fluncle.com) — the one the observation /
+  // video artifacts already write to.
+  const backfillLabelImagesHandler = os.backfill_label_images
+    .use(adminAuth)
+    .handler(async ({ input }) => {
+      try {
+        const { query } = input;
+        const result = await resolveLabelImages(
+          env.VIDEOS,
+          parseLimit(query.limit, BACKFILL_DEFAULT_LIMIT, BACKFILL_MAX_LIMIT),
+          parseBool(query.dryRun),
+          query.cursor ?? undefined,
+        );
+
+        return {
+          dryRun: result.dryRun,
+          failed: result.failed,
+          failedCount: result.failedCount,
+          nextCursor: result.nextCursor,
+          none: result.none,
+          noneCount: result.noneCount,
+          ok: true as const,
+          rateLimited: result.rateLimited,
+          resolved: result.resolved,
+          resolvedCount: result.resolvedCount,
+        };
+      } catch (error) {
+        throw apiFault(error);
+      }
+    });
+
   return {
     backfill_discogs: backfillDiscogsHandler,
+    backfill_label_images: backfillLabelImagesHandler,
     backfill_lastfm: backfillLastfmHandler,
   };
 }

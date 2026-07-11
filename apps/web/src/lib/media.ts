@@ -14,6 +14,21 @@ import { r2PublicUrl } from "@fluncle/contracts/util";
 
 export const FOUND_BASE = "https://found.fluncle.com";
 
+/**
+ * A LABEL's own logo on R2 (`labels/<slug>.<ext>`), by the stored `labels.image_key`.
+ * The label-images resolve sweep downloads the logo (Discogs → Wikidata) once and puts it
+ * in the world-served bucket, so this is a plain object URL like every other found asset —
+ * never a Discogs hotlink. Returns undefined when the label has no own image (the surface
+ * then falls back to its freshest finding's album cover). See docs/label-entity.md.
+ */
+export function labelLogoUrl(imageKey: string | null | undefined): string | undefined {
+  if (!imageKey) {
+    return undefined;
+  }
+
+  return r2PublicUrl(FOUND_BASE, imageKey);
+}
+
 /** The mixtape's episode audio on R2 (the podcast enclosure), by its Log ID. */
 export function mixtapeAudioUrl(logId: string): string {
   return `${FOUND_BASE}/${encodeURIComponent(logId)}/mixtape.m4a`;

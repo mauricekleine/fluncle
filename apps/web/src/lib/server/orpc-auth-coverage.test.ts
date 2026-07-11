@@ -193,6 +193,10 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // `fluncle-artist-backfill` cron drives it without an operator token.
   backfill_artists: "admin",
   backfill_discogs: "admin",
+  // The label-logo resolve sweep — agent tier (adminAuth only): it resolves a label's OWN image
+  // (Discogs → Wikidata) into R2, publishes nothing, so the box's agent-token cron drives it,
+  // the `backfill_discogs` precedent.
+  backfill_label_images: "admin",
   backfill_lastfm: "admin",
   // The capture sweep is agent-allowed (admin tier): it only fills the public URL
   // Postiz withheld on create + links the analytics release-id — it publishes nothing.

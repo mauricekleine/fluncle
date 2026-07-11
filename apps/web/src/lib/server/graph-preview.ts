@@ -33,15 +33,23 @@ export class GraphEntityNotFoundError extends Error {}
 /** How many covers the card shows. Four fills its row without turning it into a grid. */
 const PREVIEW_COVER_CAP = 4;
 
-/** The findings' covers, freshest first, capped — the card's visual proof. */
-function coversOf(findings: TrackListItem[]): string[] {
-  return findings
-    .flatMap((finding) => {
-      const cover = spotifyAlbumImageAtSize(finding.albumImageUrl, "small");
+/**
+ * The findings' covers, freshest first, capped — the card's visual proof. A `leadCover` (a
+ * label's own logo) takes the front slot when present, so a label's card leads with its real
+ * logo and fills the rest with finding covers (deduped against the lead).
+ */
+function coversOf(findings: TrackListItem[], leadCover?: string): string[] {
+  const covers = findings.flatMap((finding) => {
+    const cover = spotifyAlbumImageAtSize(finding.albumImageUrl, "small");
 
-      return cover ? [cover] : [];
-    })
-    .slice(0, PREVIEW_COVER_CAP);
+    return cover ? [cover] : [];
+  });
+
+  const ordered = leadCover
+    ? [leadCover, ...covers.filter((cover) => cover !== leadCover)]
+    : covers;
+
+  return ordered.slice(0, PREVIEW_COVER_CAP);
 }
 
 /** The earliest `addedAt` across the findings — the date the signature lines open on. */
@@ -89,7 +97,9 @@ export async function getGraphPreview(kind: GraphEntityKind, slug: string): Prom
   const findings = entity.findings.filter((finding) => finding.logId);
 
   return {
-    covers: coversOf(findings),
+    // A label leads with its own logo (when the sweep has resolved one); artists/albums have no
+    // lead cover, so their cards read exactly as before.
+    covers: coversOf(findings, entity.leadCover),
     findingCount: findings.length,
     kind,
     line: graphSignatureLine(kind, entity.name, findings.length, firstFoundAt(findings)),
@@ -98,11 +108,16 @@ export async function getGraphPreview(kind: GraphEntityKind, slug: string): Prom
   };
 }
 
-/** The by-slug read for the three findings-counted entities. */
+/**
+ * The by-slug read for the three findings-counted entities. `leadCover` is the label's own logo
+ * (labels only) — the front slot of the hover card's covers, so a label leads with its real image.
+ */
 async function resolveEntity(
   kind: Exclude<GraphEntityKind, "galaxy">,
   slug: string,
-): Promise<{ findings: TrackListItem[]; name: string; slug: string } | undefined> {
+): Promise<
+  { findings: TrackListItem[]; leadCover?: string; name: string; slug: string } | undefined
+> {
   if (kind === "artist") {
     const artist = await getArtistBySlug(slug);
 
@@ -126,6 +141,11 @@ async function resolveEntity(
   const label = await getLabelBySlug(slug);
 
   return label
-    ? { findings: await getFindingsByLabel(label.id), name: label.name, slug: label.slug }
+    ? {
+        findings: await getFindingsByLabel(label.id),
+        leadCover: label.logoImageUrl,
+        name: label.name,
+        slug: label.slug,
+      }
     : undefined;
 }

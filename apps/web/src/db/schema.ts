@@ -1771,9 +1771,49 @@ export const artistSocials = sqliteTable(
 // operator's decision. `slug` is the identity + the join key. Nothing consumes the
 // enabled set yet (the crawler does not exist); `list_labels_admin?seedState=enabled`
 // is where it will read it. See docs/label-entity.md.
+// ── THE LABEL'S OWN IMAGE (its real logo, not a borrowed album cover) ───────────
+// A label surface (the /labels cards, the /label/<slug> page, search, the hover
+// card) used to show the freshest finding's album art as the label's picture — an
+// arbitrary sleeve for every label whose cover doesn't happen to carry the logo.
+// These columns give a label its OWN image, resolved from Discogs (labels are
+// first-class there and `GET /labels/{id}` returns a real logo), with a Wikidata
+// P154 fallback and the freshest-cover as the floor. The identity is walked once
+// (MusicBrainz label search → its curated Discogs/Wikidata url-rels), the image is
+// downloaded ONCE and stored in our own R2 (never hotlinked — Discogs' ToS forbids
+// it and image requests need the authed token), and the resolve state keeps a
+// failure from being retried forever. See docs/label-entity.md + label-images.ts.
+//   - `mb_label_id` / `discogs_label_id` — the resolved external identity. The
+//     crawler already resolves the MB id at walk time and now persists it here;
+//     the resolve sweep backfills the rest (and the labels the crawler never walks).
+//   - `image_key` — the R2 object key of the stored logo (served from
+//     found.fluncle.com via `labelLogoUrl`). NULL = no own image, fall to the cover.
+//   - `image_state` — the resolve lifecycle: `pending` (needs a pass; the DDL
+//     default, so every existing + future label enters the worklist), `resolved`
+//     (has a logo), `none` (checked, no image anywhere — terminal, floors to cover).
+//   - `image_attempted_at` / `image_failures` — the reliability pair (the shipped
+//     backfill convention): a transient failure backs off and is retried; a
+//     persistent one gives up (→ `none`), so the sweep never storms a vendor.
 export const labels = sqliteTable("labels", {
   createdAt: text("created_at").notNull(),
+  // The Discogs label id (from the MB label's curated Discogs url-rel) — the source
+  // of the logo image. NULL until the resolve sweep walks it (or MB carried no link).
+  discogsLabelId: integer("discogs_label_id"),
   id: text("id").primaryKey(),
+  // The last time the image resolve sweep attempted this label (reliability/backoff).
+  imageAttemptedAt: text("image_attempted_at"),
+  // Consecutive resolve failures — drives the backoff and the give-up cap (→ `none`).
+  imageFailures: integer("image_failures").notNull().default(0),
+  // The R2 object key of the stored logo (e.g. `labels/<slug>.jpg`), served from
+  // found.fluncle.com. NULL = no own image; the surface falls back to the cover.
+  imageKey: text("image_key"),
+  // The image resolve lifecycle (see the header). `pending` is the DDL default so
+  // every label — existing and future — enters the worklist automatically.
+  imageState: text("image_state", { enum: ["pending", "resolved", "none"] })
+    .notNull()
+    .default("pending"),
+  // The MusicBrainz label MBID — the identity the crawler resolves at walk time and
+  // the sweep walks for the label's curated Discogs + Wikidata url-rels.
+  mbLabelId: text("mb_label_id"),
   // The display name — the first raw `tracks.label` spelling seen for this slug.
   name: text("name").notNull(),
   ruledAt: text("ruled_at"),

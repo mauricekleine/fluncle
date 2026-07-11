@@ -134,8 +134,67 @@ export const backfillLastfm = oc
     }),
   );
 
+/** A failed label-image row (`{ error, slug }`). */
+const LabelImagesBackfillFailedSchema = z
+  .object({
+    error: z.string(),
+    slug: z.string(),
+  })
+  .meta({ id: "LabelImagesBackfillFailed" });
+
+/**
+ * `backfill_label_images` → `POST /admin/backfill/label-images` (operationId
+ * `backfillLabelImages`).
+ *
+ * Agent tier (`adminAuth`): internal + reversible metadata enrichment (it resolves a label's
+ * OWN logo and stores it in R2 — no publish), so the box's agent-token cron drives it. One
+ * bounded, reliability-gated pass over the `labels` worklist: each label's identity is walked
+ * (MusicBrainz label search → its curated Discogs/Wikidata url-rels) and its logo downloaded once
+ * into our own bucket, up the ladder Discogs → Wikidata → none (the freshest-cover floor).
+ * Returns `{ ok, dryRun, resolved, resolvedCount, none, noneCount, failed, failedCount,
+ * nextCursor, rateLimited }` — `none` is the labels with no own image anywhere (floored to the
+ * cover), `rateLimited` STOPS the loop on a vendor throttle.
+ */
+export const backfillLabelImages = oc
+  .route({
+    inputStructure: "detailed",
+    method: "POST",
+    operationId: "backfillLabelImages",
+    path: "/admin/backfill/label-images",
+    summary: "Resolve label logos (Discogs → Wikidata) into R2 for existing labels (batched)",
+    tags: ["Admin"],
+  })
+  .input(
+    z.object({
+      query: z.object({
+        cursor: z.string().optional(),
+        dryRun: z.string().optional(),
+        limit: z.string().optional(),
+      }),
+    }),
+  )
+  .output(
+    z.object({
+      dryRun: z.boolean(),
+      failed: z.array(LabelImagesBackfillFailedSchema),
+      failedCount: z.number(),
+      nextCursor: z.string().nullable(),
+      // Labels with no own image anywhere (Discogs + Wikidata both empty) — floored to the
+      // freshest finding's cover, terminal so they never re-resolve.
+      none: z.array(z.string()),
+      noneCount: z.number(),
+      ok: z.literal(true),
+      // True when the pass STOPPED on a vendor rate-limit circuit breaker — the CLI stops
+      // looping the cursor and the next tick resumes with a fresh window.
+      rateLimited: z.boolean(),
+      resolved: z.array(z.string()),
+      resolvedCount: z.number(),
+    }),
+  );
+
 /** The `admin-backfills` domain's ops, merged into the root contract by `./index.ts`. */
 export const adminBackfillsContract = {
   backfill_discogs: backfillDiscogs,
+  backfill_label_images: backfillLabelImages,
   backfill_lastfm: backfillLastfm,
 };

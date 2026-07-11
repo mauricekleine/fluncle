@@ -3,6 +3,8 @@ import {
   __setRateLimitForTests,
   discogsReleaseUrl,
   discogsResolveRelease,
+  fetchDiscogsLabelImage,
+  parseDiscogsLabelUrl,
 } from "@/lib/server/discogs";
 
 describe("discogsReleaseUrl", () => {
@@ -361,5 +363,86 @@ describe("discogsResolveRelease (scored cascade + tracklist gate)", () => {
     // across the other query variants.
     expect(await discogsResolveRelease("IYRE", "Glowing Embers")).toEqual({ rateLimited: true });
     expect(calls.filter((url) => url.includes(DISCOGS_SEARCH))).toHaveLength(1);
+  });
+});
+
+describe("parseDiscogsLabelUrl", () => {
+  it("parses a Discogs label id from a label URL (with or without the slug tail)", () => {
+    expect(parseDiscogsLabelUrl("https://www.discogs.com/label/1111-Hospital-Records")).toBe(1111);
+    expect(parseDiscogsLabelUrl("https://www.discogs.com/label/2222")).toBe(2222);
+  });
+
+  it("returns undefined for a release/master URL or an unrelated string", () => {
+    expect(parseDiscogsLabelUrl("https://www.discogs.com/release/12345")).toBeUndefined();
+    expect(parseDiscogsLabelUrl("https://www.discogs.com/master/999")).toBeUndefined();
+    expect(parseDiscogsLabelUrl("https://example.com/label/1")).toBeUndefined();
+  });
+});
+
+describe("fetchDiscogsLabelImage (the label logo download)", () => {
+  beforeEach(() => {
+    __setRateLimitForTests(0);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    __setRateLimitForTests(1100);
+  });
+
+  it("fetches the label's primary image and downloads its bytes (authed, never hotlinked)", async () => {
+    const { calls } = mockFetch([
+      {
+        body: {
+          id: 1111,
+          images: [
+            { type: "secondary", uri: "https://i.discogs.com/secondary.jpg" },
+            { type: "primary", uri: "https://i.discogs.com/primary.jpg" },
+          ],
+        },
+        match: "api.discogs.com/labels/1111",
+      },
+      {
+        match: "i.discogs.com/primary.jpg",
+        response: new Response(new ArrayBuffer(64), {
+          headers: { "content-type": "image/jpeg" },
+          status: 200,
+        }),
+      },
+    ]);
+
+    const result = await fetchDiscogsLabelImage(1111, "test-token");
+
+    expect(result.rateLimited).toBe(false);
+    expect(result.image?.mime).toBe("image/jpeg");
+    expect(result.image?.bytes.byteLength).toBe(64);
+    // The primary image (not the first) was chosen, and its bytes downloaded directly.
+    expect(calls.some((url) => url.includes("i.discogs.com/primary.jpg"))).toBe(true);
+  });
+
+  it("returns no image when the label carries none", async () => {
+    mockFetch([{ body: { id: 1111, images: [] }, match: "api.discogs.com/labels/1111" }]);
+
+    const result = await fetchDiscogsLabelImage(1111, "test-token");
+
+    expect(result.image).toBeUndefined();
+    expect(result.rateLimited).toBe(false);
+  });
+
+  it("reports rateLimited when the image download 429s", async () => {
+    mockFetch([
+      {
+        body: { id: 1111, images: [{ type: "primary", uri: "https://i.discogs.com/primary.jpg" }] },
+        match: "api.discogs.com/labels/1111",
+      },
+      {
+        match: "i.discogs.com/primary.jpg",
+        response: new Response("rate limited", { status: 429 }),
+      },
+    ]);
+
+    const result = await fetchDiscogsLabelImage(1111, "test-token");
+
+    expect(result.image).toBeUndefined();
+    expect(result.rateLimited).toBe(true);
   });
 });

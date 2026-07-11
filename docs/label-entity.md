@@ -85,6 +85,39 @@ One consequence worth naming, because the two lists now differ: **`/labels` is n
 
 The crawl also bounds the `label-review` queue: `listLabelReviewRows` hands the attention queue a WORKING SET (`LABEL_REVIEW_QUEUE_LIMIT`, oldest-first), because a wide crawl proposes hundreds of labels and an uncapped source would drown the other five in the `/admin` cockpit, in its SSR payload, and in `fluncle admin queue`. `/admin/labels` remains the station where the full list is ruled on.
 
+## The label's own image (its real logo, not a borrowed cover)
+
+Every label surface — the `/labels` index cards, the `/label/<slug>` page (its OG/social image), the search entity row, the graph hover card — used to show **the freshest finding's album cover** as the label's picture. For most labels that is an arbitrary sleeve; only a label whose cover happens to carry its logo (Anjunabeats) read right. The fix gives a label its **OWN image**, and it is stored on the `labels` row:
+
+| Column                                  | What it is                                                                                                          |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `mb_label_id`                           | The MusicBrainz label MBID — the identity anchor. The crawler already resolves it at walk time and now persists it. |
+| `discogs_label_id`                      | The Discogs label id (off the MB label's curated Discogs url-rel) — the source of the logo image.                   |
+| `image_key`                             | The R2 object key of the stored logo (`labels/<slug>.<ext>`), served world-readable from `found.fluncle.com`.       |
+| `image_state`                           | The resolve lifecycle: `pending` (the DDL default — every label enters the worklist), `resolved`, `none`.           |
+| `image_attempted_at` / `image_failures` | The reliability pair (the shipped `backfill_*` convention): transient failures back off; a persistent one gives up. |
+
+**Discogs is the source.** Labels are first-class on Discogs and `GET /labels/{id}` returns an `images[]` array with the real logo. The identity is reached the way `discogs.ts` already reaches releases — through **MusicBrainz's curated `url-rels`**, never through Discogs search — so the resolve walks: the label name → its MBID (`/label?query=`, exact-fold match, the crawler's `fold`) → `/label/<mbid>?inc=url-rels` → the Discogs (and Wikidata) relation. The logo is **downloaded once and stored in our own R2** (`env.VIDEOS`, behind `found.fluncle.com`) — Discogs is **never hotlinked**: their ToS forbids it and image requests need the authed token.
+
+**The fallback ladder** (explicit, tested in `label-images.test.ts`):
+
+1. **Discogs label image** — the primary source (`discogs.ts::fetchDiscogsLabelImage`, both calls authed + on the shared Discogs rate-limit gate).
+2. **Wikidata P154 (logo image)** — off the MB label's Wikidata url-rel, via Commons `Special:FilePath`. The second rung: cheap, because the QID is already in the url-rels walked for Discogs.
+3. **The floor** — no image anywhere: `image_state='none'`, and every surface keeps rendering **exactly what it renders today** (the freshest finding's cover). A tiny artist-run label with no Discogs/Wikidata image degrades gracefully, never to an empty card.
+
+**The resolve sweep** (`label-images.ts::resolveLabelImages`) is a bounded, idempotent, **Worker-paced** pass — the shipped `fluncle-backfill` discipline: the box holds no vendor keys, so the MusicBrainz walk + the authed Discogs fetches happen in the Worker and the box `--no-agent` cron drives one small batch per tick (`MAX_BATCH` labels). MusicBrainz is the shared 1 req/s client; Discogs is the shared authed gate; both report `rateLimited` and the sweep **circuit-breaks** on it (stops the pass, retries next tick with a fresh window). A `resolved`/`none` label is terminal and skipped forever; a transient failure backs off on a cooldown; a persistent one gives up (→ `none`) so it is never retried forever. **Idempotent by construction** — a second run over a fully-resolved archive fetches nothing.
+
+**The surfaces read one ladder.** Each label read resolves `image_key` → a URL via `media.ts::labelLogoUrl` and leads with it over the cover:
+
+- `/labels` cards — `listLabelsWithFindingCounts` returns `logoImageUrl`; the card renders `logoImageUrl ?? cover`.
+- `/label/<slug>` — `getLabelBySlug` returns `logoImageUrl`; the page's OG/social image is `logo ?? freshest cover ?? site cover`.
+- Search — the label entity row leads with `labels.image_key`'s URL over the cover subquery (`search.ts`).
+- Hover card — a label's covers lead with its logo (`graph-preview.ts`).
+
+**Wiring.** `backfill_label_images` → `POST /admin/backfill/label-images` (agent tier — internal, reversible, no publish; the `backfill_discogs` precedent), driven by `fluncle admin backfills label-images` (bounded + cursor-looping, `--dry-run` previews the worklist). Like the other agent sweeps, the box cron is operator-gated; the repo half ships here.
+
+A label logo is a **trademark shown to identify the label** — nominative use, the same posture as album art; it never implies endorsement.
+
 ## Follow-ups
 
 - **The alias map** — `spiration music` is a truncation of _Inspiration Music_; `1991` is a label named like a year. No normalizer gets these right. A committed alias map (fold + edit-distance proposes, the operator confirms) is the eventual answer, and it now covers **both** entities: the album entity inherits the same class of collision (two records that share a name fold into one page). See [docs/album-entity.md](./album-entity.md#the-known-limit-two-records-one-name).
