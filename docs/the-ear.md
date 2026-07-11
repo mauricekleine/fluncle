@@ -142,7 +142,7 @@ fluncle admin capture set --tracks 100 --gb 2
 
 ### Note: the sweep does not read the catalogue queue yet
 
-The `fluncle-capture` sweep today reads the **findings-only** admin queue (`captureQueue=true`) and cannot see a catalogue row at all — so catalogue capture is not merely paused, it is not yet wired. `list_track_work` is the catalogue-aware queue, and **that** is the one this budget gates. Migrating the sweep onto it is the switch that turns catalogue capture on; it now lands behind a default-deny brake, so the migration is safe and inert until the operator opens the budget deliberately.
+The `fluncle-capture` sweep reads the catalogue-aware `list_track_work` queue (`kind=capture&scope=all`) — the one this budget gates. So catalogue capture is now **wired**, and it sits behind the brake: with the budget shut (its default-deny state) the queue narrows the sweep to the findings, so it captures certified findings exactly as it always did and cannot see a catalogue row at all. The single remaining act is the operator's — resume the budget (`fluncle admin capture resume`, or the `/admin/catalogue` control), and the catalogue half lights up on the next tick, up to the count/byte caps, with no deploy or box re-bake. Until then the wiring is inert.
 
 ## The surface
 

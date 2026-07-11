@@ -71,7 +71,11 @@
 import { isCatalogueCaptureOpen } from "./capture-budget";
 import { parseArtistsJson } from "./artists";
 import { getDb, typedRows } from "./db";
-import { CAPTURE_FAILED_COOLDOWN_MS, CAPTURE_MAX_FAILURES } from "./tracks";
+import {
+  CAPTURE_FAILED_COOLDOWN_MS,
+  CAPTURE_MAX_FAILURES,
+  readArtistYoutubeChannelIdsByTrack,
+} from "./tracks";
 
 /**
  * Which stage of the audio pipeline a worklist is for. The three are strictly sequential
@@ -93,15 +97,41 @@ export type TrackWorkKind = "analyze" | "capture" | "embed";
 export type TrackWorkScope = "all" | "catalogue" | "findings";
 
 /**
- * One row of work. It carries the track's identity and the two facts a sweep needs to act
- * — the captured-audio key and whether the track is certified — and NOTHING else.
+ * One row of work. It carries the track's identity and the facts a sweep needs to act — the
+ * captured-audio key, whether the track is certified, and (for the `capture` worklist only)
+ * the trust + re-derive signals the download step reads.
  *
  * `certified` is on the DTO on purpose: it is what tells a sweep it must NOT write a
- * certification field (a `--status`, a note, a video) on this row. `logId` is null exactly
- * when `certified` is false, because the coordinate lives on the certification.
+ * certification field (a `--status`, a note, a video, an `enrichment_status`) on this row.
+ * `logId` is null exactly when `certified` is false, because the coordinate lives on the
+ * certification.
+ *
+ * The four `capture`-only fields (`bpm`, `analyzedFrom`, `sourceAudioFailures`,
+ * `artistYoutubeChannelIds`) are what the finding-only capture queue (`captureQueue=true`,
+ * tracks.ts) surfaced before this worklist replaced it — carried here so the migrated sweep's
+ * per-finding behaviour (trust classification, failure-count accumulation, the capture→enrich
+ * re-derive) is byte-identical to what it did on the old queue. They are ABSENT for
+ * `analyze`/`embed`, which read those columns off the row directly and never needed them here.
  */
 export type TrackWorkItem = {
+  /**
+   * Which audio class BPM/key were last analyzed from — CAPTURE-only, so the sweep can
+   * decide whether a just-landed capture must re-derive from the full song. Absent for
+   * `analyze`/`embed` (they read it off the row directly) and for a never-analyzed track.
+   */
+  analyzedFrom?: "full" | "preview";
+  /**
+   * The artist's own YouTube channel id(s) — CAPTURE-only, the sweep's strongest download
+   * trust signal (a candidate on the artist's OWN channel is the artist's upload). Attached
+   * only for the `capture` worklist, and only when non-empty (never surfaced as `[]`).
+   */
+  artistYoutubeChannelIds?: string[];
   artists: string[];
+  /**
+   * The stored BPM — CAPTURE-only, read alongside `analyzedFrom` for the re-derive predicate.
+   * Absent for other kinds and when genuinely missing (null/≤0).
+   */
+  bpm?: number;
   /** The Ear's pre-audio ladder tier, or null on a finding / an unranked catalogue row. */
   capturePriority: number | null;
   /** True when a `findings` row exists — the certification rail's flag, in the DTO. */
@@ -111,6 +141,12 @@ export type TrackWorkItem = {
   label: null | string;
   /** Null for every catalogue track: the coordinate lives on `findings`. */
   logId: null | string;
+  /**
+   * The consecutive full-song capture failures — CAPTURE-only, read so the sweep's failure
+   * bump ACCUMULATES (the queue's failure-cap backoff depends on it). Absent for other kinds
+   * and when zero, matching the finding-only capture DTO's convention.
+   */
+  sourceAudioFailures?: number;
   /** The private-R2 key of the captured full song. Presence = there is audio to work on. */
   sourceAudioKey: null | string;
   title: string;
@@ -118,20 +154,24 @@ export type TrackWorkItem = {
 };
 
 type WorkRow = {
+  analyzed_from: null | string;
   artists_json: string;
+  bpm: null | number;
   capture_priority: null | number;
   certified: number;
   duration_ms: number;
   isrc: null | string;
   label: null | string;
   log_id: null | string;
+  source_audio_failures: null | number;
   source_audio_key: null | string;
   title: string;
   track_id: string;
 };
 
 const WORK_SELECT = `t.track_id, t.title, t.artists_json, t.isrc, t.label, t.duration_ms,
-  t.source_audio_key, t.capture_priority, f.log_id as log_id,
+  t.source_audio_key, t.capture_priority, t.bpm, t.analyzed_from, t.source_audio_failures,
+  f.log_id as log_id,
   (f.track_id is not null) as certified`;
 
 /**
@@ -266,7 +306,7 @@ export async function listTrackWork(options: {
           limit ?`,
   });
 
-  return typedRows<WorkRow>(result.rows).map((row) => ({
+  const items: TrackWorkItem[] = typedRows<WorkRow>(result.rows).map((row) => ({
     artists: parseArtistsJson(row.artists_json),
     capturePriority: row.capture_priority === null ? null : Number(row.capture_priority),
     certified: Number(row.certified) === 1,
@@ -277,7 +317,48 @@ export async function listTrackWork(options: {
     sourceAudioKey: row.source_audio_key,
     title: row.title,
     trackId: row.track_id,
+    // The four CAPTURE-only trust/re-derive signals. Attached for the `capture` worklist
+    // ONLY, so `analyze`/`embed` DTOs stay exactly as they were (byte-identical for those
+    // sweeps). Each follows the finding-only capture DTO's omit-when-empty convention — a
+    // missing BPM, a NULL provenance, a zero failure count and an empty channel set are all
+    // OMITTED rather than surfaced — so the shape the sweep parses is unchanged by the migration.
+    ...(kind === "capture"
+      ? {
+          analyzedFrom:
+            row.analyzed_from === "full" || row.analyzed_from === "preview"
+              ? row.analyzed_from
+              : undefined,
+          bpm:
+            row.bpm !== null && Number.isFinite(Number(row.bpm)) && Number(row.bpm) > 0
+              ? Number(row.bpm)
+              : undefined,
+          sourceAudioFailures:
+            row.source_audio_failures !== null && Number(row.source_audio_failures) > 0
+              ? Number(row.source_audio_failures)
+              : undefined,
+        }
+      : {}),
   }));
+
+  // The artist-own-channel trust signal is a SEPARATE batched read (a correlated subquery on
+  // the main select would bloat every DTO), and it is CAPTURE-only — the same field, off the
+  // same reader, the finding-only capture queue attaches (tracks.ts), so the two cannot drift.
+  if (kind === "capture" && items.length > 0) {
+    const byTrack = await readArtistYoutubeChannelIdsByTrack(
+      db,
+      items.map((item) => item.trackId),
+    );
+
+    for (const item of items) {
+      const channelIds = byTrack.get(item.trackId);
+
+      if (channelIds && channelIds.length > 0) {
+        item.artistYoutubeChannelIds = channelIds;
+      }
+    }
+  }
+
+  return items;
 }
 
 /**

@@ -2072,29 +2072,28 @@ export function groupArtistYoutubeChannelIds(
 }
 
 /**
- * Attach `artistYoutubeChannelIds` to the capture-queue items IN PLACE — a SINGLE
- * batched read of every listed finding's artists' YouTube socials, so the shared
- * `TRACK_SELECT`/`toTrackListItem` path (every other consumer) stays free of a
- * correlated subquery that would bloat every DTO. The full-song capture sweep reads
- * this field as its strongest trust tier: a candidate on the artist's OWN channel is
- * the artist's own upload. Bound params only — the track ids are never interpolated.
- * `status` does not gate (any known artist YouTube link is a valid own-channel signal
- * for capture). A finding whose artists have no `/channel/UC…` link keeps the field
- * UNDEFINED — an empty set is omitted, never surfaced as `[]`.
+ * Read every listed track's artists' YouTube `UC…` channel ids in ONE batched query,
+ * grouped by `track_id` — the capture queue's artist-own-channel trust signal. Kept off
+ * the shared `TRACK_SELECT`/`toTrackListItem` path (every other consumer) so a correlated
+ * subquery does not bloat every DTO. Bound params only — the track ids are never
+ * interpolated. `status` does not gate (any known artist YouTube link is a valid
+ * own-channel signal for capture). A track whose artists have no `/channel/UC…` link is
+ * simply absent from the returned map — an empty set is omitted, never surfaced as `[]`.
+ *
+ * Shared by the finding-only capture queue (`attachArtistYoutubeChannelIds` below) and the
+ * catalogue-aware `list_track_work` capture worklist (track-work.ts), so the two cannot drift.
  */
-async function attachArtistYoutubeChannelIds(
+export async function readArtistYoutubeChannelIdsByTrack(
   db: Awaited<ReturnType<typeof getDb>>,
-  items: TrackListItem[],
-): Promise<void> {
-  const trackIds = items.map((item) => item.trackId);
-
+  trackIds: readonly string[],
+): Promise<Map<string, string[]>> {
   if (trackIds.length === 0) {
-    return;
+    return new Map();
   }
 
   const placeholders = trackIds.map(() => "?").join(", ");
   const result = await db.execute({
-    args: trackIds,
+    args: [...trackIds],
     sql: `select track_artists.track_id as track_id, artist_socials.url as url
           from artist_socials
           join track_artists on track_artists.artist_id = artist_socials.artist_id
@@ -2102,8 +2101,21 @@ async function attachArtistYoutubeChannelIds(
             and track_artists.track_id in (${placeholders})`,
   });
 
-  const byTrack = groupArtistYoutubeChannelIds(
-    typedRows<{ track_id: string; url: string }>(result.rows),
+  return groupArtistYoutubeChannelIds(typedRows<{ track_id: string; url: string }>(result.rows));
+}
+
+/**
+ * Attach `artistYoutubeChannelIds` to the capture-queue items IN PLACE, off the shared
+ * batched read above. The full-song capture sweep reads this field as its strongest trust
+ * tier: a candidate on the artist's OWN channel is the artist's own upload.
+ */
+async function attachArtistYoutubeChannelIds(
+  db: Awaited<ReturnType<typeof getDb>>,
+  items: TrackListItem[],
+): Promise<void> {
+  const byTrack = await readArtistYoutubeChannelIdsByTrack(
+    db,
+    items.map((item) => item.trackId),
   );
 
   for (const item of items) {
