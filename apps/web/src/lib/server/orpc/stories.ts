@@ -26,7 +26,7 @@ export function storiesHandlers(os: Implementer) {
       const limit = parseLimit(input.limit, LIST_DEFAULT_LIMIT, LIST_MAX_LIMIT);
       const cursor = decodeTrackCursor(input.cursor ?? null);
 
-      return await listTracks({ cursor, hasVideo: true, limit });
+      return await listTracks({ cursor, hasVideo: true, lean: true, limit });
     } catch (error) {
       throw apiFault(error);
     }

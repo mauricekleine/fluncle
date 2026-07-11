@@ -198,6 +198,7 @@ describe("oRPC public read — GET /stories (list_stories)", () => {
     expect(listTracks).toHaveBeenCalledWith({
       cursor: undefined,
       hasVideo: true,
+      lean: true,
       limit: 16,
     });
   });
@@ -214,6 +215,7 @@ describe("oRPC public read — GET /stories (list_stories)", () => {
     expect(listTracks).toHaveBeenCalledWith({
       cursor: { addedAt: "2026-01-01T00:00:00.000Z", trackId: "abc" },
       hasVideo: true,
+      lean: true,
       limit: 48,
     });
   });
@@ -227,6 +229,7 @@ describe("oRPC public read — GET /stories (list_stories)", () => {
     expect(listTracks).toHaveBeenCalledWith({
       cursor: undefined,
       hasVideo: true,
+      lean: true,
       limit: 16,
     });
   });

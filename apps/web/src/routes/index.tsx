@@ -58,8 +58,8 @@ type HomeSearch = {
 // their footage does). Same ordering as the stories feed, so it lines up.
 const fetchHomeData = createServerFn({ method: "GET" }).handler(async () => {
   const [page, latestStory, live, galaxiesLive] = await Promise.all([
-    listTracks({ includeMixtapes: true, limit: pageSize }),
-    listTracks({ hasVideo: true, limit: 1 }),
+    listTracks({ includeMixtapes: true, lean: true, limit: pageSize }),
+    listTracks({ hasVideo: true, lean: true, limit: 1 }),
     // The live-set callout, read server-side so the banner SSRs with no flash
     // (staleness already applied). Offline almost always — a quiet, cheap read.
     getLiveState(),
