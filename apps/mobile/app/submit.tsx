@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
+  AccessibilityInfo,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -11,6 +12,7 @@ import {
 } from "react-native";
 import { useRouter } from "expo-router";
 import { Image } from "expo-image";
+import { Ionicons } from "@expo/vector-icons";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { type TrackSearchResult } from "@fluncle/contracts";
 import { useSubmitTrack, useTrackSearch } from "@/api/hooks";
@@ -28,12 +30,22 @@ import { color, font, radius } from "@/theme/tokens";
 // for global actions, next to Notifications). The honest result-state mapping is the pure,
 // tested @/lib/submit-fault.
 
+// Chrome converged with the web dialog (apps/web submit-track-dialog): the results
+// heading, the note/contact labels, and the empty-query answer read identically
+// across surfaces. Placeholder is a DELIBERATE divergence — the web's full-URL
+// example truncates mid-URL in a 390px input, so the app keeps its shorter form.
+const RESULTS_HEADING = "Select a match";
+const SHORT_QUERY_HINT = "Enter a Spotify URL or track search.";
+const SEARCH_FAILED_LINE = "Couldn't run that search. Give it another go in a sec.";
+const NO_MATCHES_LINE = "Nothing came back for that. Try the artist and the title.";
+
 export default function SubmitScreen() {
   const router = useRouter();
   const search = useTrackSearch();
   const submit = useSubmitTrack();
 
   const [query, setQuery] = useState("");
+  const [shortQueryHint, setShortQueryHint] = useState(false);
   const [selected, setSelected] = useState<TrackSearchResult | undefined>(undefined);
   const [note, setNote] = useState("");
   const [contact, setContact] = useState("");
@@ -42,13 +54,40 @@ export default function SubmitScreen() {
   const searchFailed = search.isError;
   const noMatches = search.isSuccess && results.length === 0;
 
+  // One live announcement for the transient result-states so VoiceOver/TalkBack speak
+  // them as they mount. Android reads the `accessibilityLiveRegion="polite"` nodes
+  // below on its own; iOS has no live-region prop, so announce imperatively when the
+  // spoken line changes. `submit.isError` wins — once a send has been attempted it is
+  // the most recent event over a still-visible result list.
+  const announcement = submit.isError
+    ? submitOutcomeCopy[classifySubmit(submit.error)]
+    : shortQueryHint
+      ? SHORT_QUERY_HINT
+      : searchFailed
+        ? SEARCH_FAILED_LINE
+        : noMatches
+          ? NO_MATCHES_LINE
+          : results.length > 0
+            ? RESULTS_HEADING
+            : undefined;
+
+  useEffect(() => {
+    if (Platform.OS === "ios" && announcement !== undefined) {
+      AccessibilityInfo.announceForAccessibility(announcement);
+    }
+  }, [announcement]);
+
   function runSearch() {
     const trimmed = query.trim();
 
+    // A too-short query ANSWERS (the web's model) rather than a silent no-op: the
+    // Search control stays live and the empty-query line lands in the result slot.
     if (trimmed.length < 2) {
+      setShortQueryHint(true);
       return;
     }
 
+    setShortQueryHint(false);
     setSelected(undefined);
     submit.reset();
     search.mutate({ q: trimmed });
@@ -101,6 +140,20 @@ export default function SubmitScreen() {
           behavior={Platform.OS === "ios" ? "padding" : undefined}
           style={{ flex: 1 }}
         >
+          {/* The modal dismisses by swipe; this fixed top-right control (Chrome Rule)
+              keeps that dismissal discoverable and gives an explicit target for
+              VoiceOver/TalkBack, never buried at the scroll tail. */}
+          <View style={styles.topBar}>
+            <Pressable
+              accessibilityLabel="Cancel"
+              accessibilityRole="button"
+              hitSlop={8}
+              onPress={() => router.back()}
+              style={styles.cancel}
+            >
+              <Text style={[font.label, { color: color.stardust }]}>Cancel</Text>
+            </Pressable>
+          </View>
           <ScrollView
             contentContainerStyle={{ gap: 16, padding: 20 }}
             keyboardShouldPersistTaps="handled"
@@ -117,8 +170,10 @@ export default function SubmitScreen() {
                 Search or Spotify URL
               </Text>
               <TextInput
+                accessibilityLabel="Search or Spotify URL"
                 autoCapitalize="none"
                 autoCorrect={false}
+                autoFocus
                 onChangeText={setQuery}
                 onSubmitEditing={runSearch}
                 placeholder="Camo & Crooked, or a Spotify link"
@@ -129,28 +184,47 @@ export default function SubmitScreen() {
                 value={query}
               />
               <HeatButton
+                disabled={search.isPending}
+                icon={
+                  search.isPending ? undefined : (
+                    <Ionicons color={color.starlightCream} name="search" size={16} />
+                  )
+                }
                 label={search.isPending ? "Searching…" : "Search"}
                 onPress={runSearch}
                 variant="outline"
-                disabled={search.isPending || query.trim().length < 2}
               />
             </View>
 
+            {shortQueryHint ? (
+              <Text accessibilityLiveRegion="polite" style={[font.body, { color: color.stardust }]}>
+                {SHORT_QUERY_HINT}
+              </Text>
+            ) : null}
+
             {searchFailed ? (
-              <Text style={[font.body, { color: color.reentryRed }]}>
-                Couldn&apos;t run that search. Give it another go in a sec.
+              <Text
+                accessibilityLiveRegion="polite"
+                style={[font.body, { color: color.reentryRed }]}
+              >
+                {SEARCH_FAILED_LINE}
               </Text>
             ) : null}
 
             {noMatches ? (
-              <Text style={[font.body, { color: color.stardust }]}>
-                Nothing came back for that. Try the artist and the title.
+              <Text accessibilityLiveRegion="polite" style={[font.body, { color: color.stardust }]}>
+                {NO_MATCHES_LINE}
               </Text>
             ) : null}
 
             {results.length > 0 ? (
               <View style={{ gap: 10 }}>
-                <Text style={[font.label, { color: color.starlightCream }]}>Pick the match</Text>
+                <Text
+                  accessibilityLiveRegion="polite"
+                  style={[font.label, { color: color.starlightCream }]}
+                >
+                  {RESULTS_HEADING}
+                </Text>
                 {results.map((result) => (
                   <CandidateRow
                     key={result.id}
@@ -165,8 +239,9 @@ export default function SubmitScreen() {
             {selected ? (
               <View style={{ gap: 16 }}>
                 <View style={{ gap: 8 }}>
-                  <Text style={[font.label, { color: color.starlightCream }]}>Note (optional)</Text>
+                  <Text style={[font.label, { color: color.starlightCream }]}>Note</Text>
                   <TextInput
+                    accessibilityLabel="Note"
                     maxLength={500}
                     multiline
                     onChangeText={setNote}
@@ -178,10 +253,9 @@ export default function SubmitScreen() {
                   />
                 </View>
                 <View style={{ gap: 8 }}>
-                  <Text style={[font.label, { color: color.starlightCream }]}>
-                    Contact (optional)
-                  </Text>
+                  <Text style={[font.label, { color: color.starlightCream }]}>Contact</Text>
                   <TextInput
+                    accessibilityLabel="Contact"
                     autoCapitalize="none"
                     autoCorrect={false}
                     maxLength={120}
@@ -202,18 +276,13 @@ export default function SubmitScreen() {
             ) : null}
 
             {submit.isError ? (
-              <Text style={[font.body, { color: color.reentryRed }]}>
+              <Text
+                accessibilityLiveRegion="polite"
+                style={[font.body, { color: color.reentryRed }]}
+              >
                 {submitOutcomeCopy[classifySubmit(submit.error)]}
               </Text>
             ) : null}
-
-            <Pressable
-              accessibilityRole="button"
-              onPress={() => router.back()}
-              style={{ alignItems: "center", paddingVertical: 10 }}
-            >
-              <Text style={[font.label, { color: color.stardust }]}>Not now</Text>
-            </Pressable>
           </ScrollView>
         </KeyboardAvoidingView>
       </SafeAreaView>
@@ -269,6 +338,7 @@ function CandidateRow({
 }
 
 const styles = StyleSheet.create({
+  cancel: { justifyContent: "center", minHeight: 44, paddingHorizontal: 8 },
   candidateAlbum: { color: color.stardust, fontSize: 13 },
   candidateArt: {
     borderColor: color.dustLine,
@@ -290,6 +360,7 @@ const styles = StyleSheet.create({
   },
   candidateSelected: { backgroundColor: color.goldVeil, borderColor: color.eclipseGold },
   candidateTitle: { color: color.starlightCream, fontSize: 15 },
+  topBar: { alignItems: "flex-end", paddingHorizontal: 20, paddingTop: 8 },
 });
 
 const inputStyle = {
