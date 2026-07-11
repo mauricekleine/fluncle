@@ -69,7 +69,7 @@ type Outcome = "resolved" | "noop" | "failed" | "rateLimited";
 // Shell helper
 // ---------------------------------------------------------------------------
 
-function fluncleJson<T>(args: string[]): T {
+export function fluncleJson<T>(args: string[]): T {
   const result = spawnSync(FLUNCLE_BIN, [...args, "--json"], {
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
@@ -82,15 +82,41 @@ function fluncleJson<T>(args: string[]): T {
   const code = result.status ?? 1;
   const stdout = result.stdout ?? "";
 
-  if (code !== 0) {
-    throw new Error(`fluncle ${args.join(" ")} exited ${code}: ${(result.stderr ?? "").trim()}`);
-  }
+  // Parse-first: a sweep command with per-item failures exits 1 but still prints
+  // its full JSON summary (`ok: false` + the counts). That partial summary must be
+  // RECORDED, not discarded as a crash. A non-zero exit only throws when stdout
+  // carries no parseable JSON (a true spawn/crash failure) or when the JSON is the
+  // CLI's own error payload (a failed command, not a partial batch).
+  let parsed: unknown;
 
   try {
-    return JSON.parse(stdout) as T;
+    parsed = JSON.parse(stdout);
   } catch {
+    if (code !== 0) {
+      throw new Error(`fluncle ${args.join(" ")} exited ${code}: ${(result.stderr ?? "").trim()}`);
+    }
+
     throw new Error(`fluncle ${args.join(" ")} did not return JSON: ${stdout.slice(0, 200)}`);
   }
+
+  if (code !== 0 && isCliErrorPayload(parsed)) {
+    throw new Error(`fluncle ${args.join(" ")} failed (${parsed.code}): ${parsed.message}`);
+  }
+
+  return parsed as T;
+}
+
+// The CLI's own failure payload (`{ code, message, ok: false }` — validation, auth,
+// or network errors). Distinguishable from a sweep summary, which never carries a
+// `code`/`message` pair and keeps its per-source counts alongside `ok`.
+function isCliErrorPayload(value: unknown): value is { code: string; message: string } {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { ok?: unknown }).ok === false &&
+    typeof (value as { code?: unknown }).code === "string" &&
+    typeof (value as { message?: unknown }).message === "string"
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -132,16 +158,25 @@ function resolveOne(artist: QueueArtist): Outcome {
 
 function drainArtistImages(): number {
   try {
-    const result = fluncleJson<{ filledCount?: number; skippedCount?: number }>([
-      "admin",
-      "backfills",
-      "artist-images",
-      "--limit",
-      String(IMAGE_BACKFILL_LIMIT),
-    ]);
+    const result = fluncleJson<{
+      failedCount?: number;
+      filledCount?: number;
+      ok?: boolean;
+      skippedCount?: number;
+    }>(["admin", "backfills", "artist-images", "--limit", String(IMAGE_BACKFILL_LIMIT)]);
 
     const filled = result.filledCount ?? 0;
-    log(`artist-images: filled ${filled}, ${result.skippedCount ?? 0} without an image`);
+
+    if (result.ok === false) {
+      // A partial-failure batch (`ok: false`, exit 1): keep the honest counts —
+      // some filled, some failed — instead of mislabeling the tick as a skipped
+      // drain. The failed artists stay queued and self-heal next tick.
+      log(
+        `artist-images: partial — filled ${filled}, ${result.failedCount ?? 0} failed, ${result.skippedCount ?? 0} without an image`,
+      );
+    } else {
+      log(`artist-images: filled ${filled}, ${result.skippedCount ?? 0} without an image`);
+    }
 
     return filled;
   } catch (error) {
@@ -214,4 +249,8 @@ function main(): void {
   console.log(JSON.stringify({ ok: true, processed, ...summary }));
 }
 
-main();
+// The cron runs this file directly; the guard keeps importing `fluncleJson` for
+// the tests (artist-sweep.test.ts) side-effect free.
+if (import.meta.main) {
+  main();
+}

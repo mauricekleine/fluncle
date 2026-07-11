@@ -72,7 +72,7 @@ type LastfmSummary = {
 // Shell helper — synchronous, fail-loud where it matters.
 // ---------------------------------------------------------------------------
 
-function fluncleJson<T>(args: string[]): T {
+export function fluncleJson<T>(args: string[]): T {
   const result = spawnSync(FLUNCLE_BIN, [...args, "--json"], {
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
@@ -85,15 +85,42 @@ function fluncleJson<T>(args: string[]): T {
   const code = result.status ?? 1;
   const stdout = result.stdout ?? "";
 
-  if (code !== 0) {
-    throw new Error(`fluncle ${args.join(" ")} exited ${code}: ${(result.stderr ?? "").trim()}`);
-  }
+  // Parse-first: a sweep command with per-item failures exits 1 but still prints
+  // its full JSON summary (`ok: false` + the counts). That partial summary must be
+  // RECORDED, not discarded as a crash — the loved/failed counts both survive. A
+  // non-zero exit only throws when stdout carries no parseable JSON (a true
+  // spawn/crash failure) or when the JSON is the CLI's own error payload (a failed
+  // command, not a partial batch).
+  let parsed: unknown;
 
   try {
-    return JSON.parse(stdout) as T;
+    parsed = JSON.parse(stdout);
   } catch {
+    if (code !== 0) {
+      throw new Error(`fluncle ${args.join(" ")} exited ${code}: ${(result.stderr ?? "").trim()}`);
+    }
+
     throw new Error(`fluncle ${args.join(" ")} did not return JSON: ${stdout.slice(0, 200)}`);
   }
+
+  if (code !== 0 && isCliErrorPayload(parsed)) {
+    throw new Error(`fluncle ${args.join(" ")} failed (${parsed.code}): ${parsed.message}`);
+  }
+
+  return parsed as T;
+}
+
+// The CLI's own failure payload (`{ code, message, ok: false }` — validation, auth,
+// or network errors). Distinguishable from a sweep summary, which never carries a
+// `code`/`message` pair and keeps its per-source counts alongside `ok`.
+function isCliErrorPayload(value: unknown): value is { code: string; message: string } {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { ok?: unknown }).ok === false &&
+    typeof (value as { code?: unknown }).code === "string" &&
+    typeof (value as { message?: unknown }).message === "string"
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -133,6 +160,13 @@ function main(): void {
     summary.lastfm.failed = lastfm.failedCount ?? 0;
     summary.lastfm.skipped = lastfm.skippedCount ?? 0;
     summary.lastfm.throttled = lastfm.rateLimited ?? false;
+
+    if (lastfm.ok === false) {
+      // A partial-failure batch (`ok: false`, exit 1): the counts above are the
+      // honest summary — some loved, some failed — distinct from the catch below,
+      // which is the whole source erroring with no batch summary at all.
+      log(`lastfm backfill partial: ${summary.lastfm.failed} item(s) failed this tick`);
+    }
   } catch (error) {
     summary.lastfm.error = error instanceof Error ? error.message : String(error);
     log(`lastfm backfill failed: ${summary.lastfm.error}`);
@@ -141,4 +175,8 @@ function main(): void {
   console.log(JSON.stringify(summary));
 }
 
-main();
+// The cron runs this file directly; the guard keeps importing `fluncleJson` for
+// the tests (backfill-sweep.test.ts) side-effect free.
+if (import.meta.main) {
+  main();
+}
