@@ -82,7 +82,7 @@ The grouping now comes for free from the **audio embedding** (`embedding_json`),
 
 ## Phase 3 — Publish (per-platform)
 
-Once a track has a video in R2, it can go to social platforms — **never auto-posted to a public feed without a human gate.** Everything goes through **Postiz** (one integration that speaks TikTok / Instagram / YouTube), so the Worker holds a single `POSTIZ_API_KEY` instead of per-platform OAuth.
+Once a track has a video in R2, it can go to social platforms — but **a push is not one thing: what it DOES differs per platform, and the table below is the contract.** TikTok lands a private (`SELF_ONLY`) inbox draft the operator finishes in-app (the official sound attaches only there). **YouTube Shorts is a DIRECT PUBLIC UPLOAD on the push** — no draft, no staging, no human gate between the command and the public feed. Instagram is manual-only for a finding. So: a YouTube push IS publishing. Everything goes through **Postiz** (one integration that speaks TikTok / Instagram / YouTube), so the Worker holds a single `POSTIZ_API_KEY` instead of per-platform OAuth.
 
 The deciding question per platform is: **can the API carry the caption, the cover, and the audio?** A platform needs the manual inbox/draft hand-off **only when it can't** — which makes TikTok the exception, not the template. If direct post carries all three, we push directly (or schedule) and skip the draft entirely.
 

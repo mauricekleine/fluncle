@@ -27,7 +27,12 @@ from PIL import Image
 API_KEY = os.environ["GEMINI_API_KEY"]
 MODEL = "gemini-3.1-flash-image"
 URL = f"https://generativelanguage.googleapis.com/v1/models/{MODEL}:generateContent"
-OUT = "apps/web/public/galaxy"
+# The SOURCE OF TRUTH for sprites — NOT `apps/web/public/galaxy`, which is a GENERATED mirror:
+# `apps/web/scripts/copy-sprites.ts` overwrites it on every `dev` boot and pre-`build`, and
+# .gitignore ignores the PNGs there. Writing to the mirror means your freshly-generated sprite
+# is silently destroyed by the next build and never committed. Write to the package instead;
+# the mirror is produced from it.
+OUT = "packages/sprites/assets/galaxy"
 
 
 def hexes(*hs):
