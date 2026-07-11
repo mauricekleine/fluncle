@@ -70,6 +70,17 @@ describe("/podcast.xml audio-presence guard", () => {
     globalThis.fetch = realFetch;
   });
 
+  it("answers with the feed Cache-Control so a repeat poll is CDN-served", async () => {
+    listMixtapes.mockResolvedValue([]);
+    stubFetch(() => headResponse(null, false));
+
+    const response = await getHandler()({});
+
+    expect(response.headers.get("Cache-Control")).toBe(
+      "public, max-age=300, s-maxage=3600, stale-while-revalidate=86400",
+    );
+  });
+
   it("drops a mixtape whose audio object is missing (failed HEAD)", async () => {
     listMixtapes.mockResolvedValue([mixtape({ logId: "020.F.1A" })]);
     stubFetch(() => headResponse(null, false));

@@ -47,6 +47,18 @@ import spaceGrotesk700 from "./fonts/space-grotesk-700.ttf?inline";
 export const BRAND = "'Oxanium'";
 export const BODY = "'Space Grotesk'";
 
+/**
+ * The `Cache-Control` every Satori render answers with, passed to `ImageResponse` via its
+ * `headers` option. The cards are expensive (a WASM raster + a base64-inlined background
+ * fetch) and change rarely, so the CDN holds them long — but NOT `immutable`: the log and
+ * mixtape pages point at a `?v=<updatedAt>` URL, while a bare (unversioned) hit serves
+ * "latest", and workers-og's own default header is `immutable, max-age=31536000`, which
+ * would freeze that unversioned URL for a year. A week of s-maxage on a versioned URL is
+ * effectively immutable anyway.
+ */
+export const OG_CACHE_CONTROL =
+  "public, max-age=86400, s-maxage=604800, stale-while-revalidate=604800";
+
 /** A font buffer in the shape workers-og's `ImageResponse` wants. */
 export type OgFont = {
   data: ArrayBuffer;

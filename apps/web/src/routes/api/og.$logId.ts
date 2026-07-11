@@ -4,7 +4,7 @@ import { formatDateLong } from "@/lib/format";
 import { isGalaxyMapFullyNamed } from "@/lib/server/galaxies-map";
 import { spotifyAlbumImageAtSize, trackMedia } from "@/lib/media";
 import { requireParam } from "@/lib/server/http-errors";
-import { BODY, BRAND, cardFonts, satoriText } from "@/lib/server/satori-render";
+import { BODY, BRAND, OG_CACHE_CONTROL, cardFonts, satoriText } from "@/lib/server/satori-render";
 import { getTrackByIdOrLogId } from "@/lib/server/tracks";
 import { type ApiHandlers, aliasHandlers } from "./-alias";
 
@@ -14,8 +14,9 @@ import { type ApiHandlers, aliasHandlers } from "./-alias";
 // inlined as a data-URI (Satori doesn't fetch remote <img>); the Fluncle
 // treatment sits over it — the FLUNCLE'S FINDINGS lockup, the gold Log ID, the
 // Artist — Title headline, and the Found/telemetry line. The log page points
-// og:image here, versioned by `?v=<updatedAt>` so a re-enriched finding re-renders
-// (the response itself is immutable + edge-cached, so it renders once per version).
+// og:image here, versioned by `?v=<updatedAt>` so a re-enriched finding re-renders.
+// The response carries a long `Cache-Control` (OG_CACHE_CONTROL) so the CDN answers a
+// repeat unfurl for free — NOT `immutable`, since a bare (unversioned) hit serves latest.
 //
 // TYPE: the card is split by role, not set in one face (DESIGN.md §3). Oxanium speaks
 // for the brand and the numbers — the lockup and the `fluncle://` coordinate (a coordinate
@@ -24,7 +25,7 @@ import { type ApiHandlers, aliasHandlers } from "./-alias";
 // numerals; a whole paragraph in Oxanium is a One Voice Rule break. The container therefore
 // defaults to the BODY face and the brand marks opt IN, so an unmarked element reads as
 // prose rather than silently inheriting the display face. Both faces carry the One Box Rule
-// baked into their tables (lib/server/og-fonts.ts).
+// baked into their tables (lib/server/satori-render.ts).
 
 const WIDTH = 1200;
 const HEIGHT = 630;
@@ -117,6 +118,7 @@ export const serverHandlers: ApiHandlers = {
 
     return new ImageResponse(html, {
       fonts: cardFonts(),
+      headers: { "Cache-Control": OG_CACHE_CONTROL },
       height: HEIGHT,
       width: WIDTH,
     });

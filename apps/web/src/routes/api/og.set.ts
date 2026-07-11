@@ -2,7 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { ImageResponse } from "workers-og";
 import { spotifyAlbumImageAtSize } from "@/lib/media";
 import { parseSetParam } from "@/lib/mix-set";
-import { BODY, BRAND, cardFonts, satoriText } from "@/lib/server/satori-render";
+import { BODY, BRAND, OG_CACHE_CONTROL, cardFonts, satoriText } from "@/lib/server/satori-render";
 import { getTracksByLogIds } from "@/lib/server/tracks";
 import { type ApiHandlers, aliasHandlers } from "./-alias";
 
@@ -14,7 +14,7 @@ import { type ApiHandlers, aliasHandlers } from "./-alias";
 // workers-og (Satori + resvg WASM). Satori doesn't fetch remote <img>, so each cover
 // is inlined as a data-URI.
 //
-// TYPE: same role split as the per-finding card (DESIGN.md §3, lib/server/og-fonts.ts).
+// TYPE: same role split as the per-finding card (DESIGN.md §3, lib/server/satori-render.ts).
 // The "A FLUNCLE MIX" lockup is a brand mark → Oxanium. The count line and the tagline are
 // reading text → Space Grotesk, which is also the container default.
 
@@ -91,6 +91,7 @@ export const serverHandlers: ApiHandlers = {
 
     return new ImageResponse(html, {
       fonts: cardFonts(),
+      headers: { "Cache-Control": OG_CACHE_CONTROL },
       height: HEIGHT,
       width: WIDTH,
     });

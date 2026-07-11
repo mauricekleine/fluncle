@@ -204,7 +204,8 @@ function logHead(loaderData: LogPageData | undefined) {
   const recording = musicRecordingJsonLd({ ...track, artistSlugs, galaxy, logId }, imageUrl);
   // The social card: the per-finding OG image (the poster frame + treatment),
   // versioned by `updatedAt` so a re-enriched finding re-renders (the /api/og
-  // response is immutable + edge-cached). The JSON-LD `image` above stays the
+  // response is CDN-cached long but not immutable — OG_CACHE_CONTROL in
+  // lib/server/satori-render.ts). The JSON-LD `image` above stays the
   // square album cover — the right shape for a MusicRecording.
   const ogVersion = track.updatedAt ? Date.parse(track.updatedAt) : Number.NaN;
   const ogQuery = Number.isFinite(ogVersion) ? `?v=${ogVersion}` : "";

@@ -13,8 +13,9 @@ import { renderMixtapeCover, resolveCoverSize } from "@/lib/server/mixtape-cover
 //
 // `?size=` picks the aspect: square (Mixcloud/SoundCloud + the /log coverImageUrl),
 // og (the /log link-preview), or wide (the YouTube thumbnail). The mixtape's
-// coverImageUrl points here, versioned by `?v=<updatedAt>` so an edit re-renders
-// while each version stays immutable + edge-cached.
+// coverImageUrl points here, versioned by `?v=<updatedAt>` so an edit re-renders;
+// the render carries a long `Cache-Control` (OG_CACHE_CONTROL) so the CDN answers a
+// repeat hit for free — NOT `immutable`, since a bare (unversioned) hit serves latest.
 
 export const serverHandlers: ApiHandlers = {
   GET: async ({ request, params }) => {
