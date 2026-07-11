@@ -259,6 +259,10 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // The full galaxy map read (browse-by-feel RFC) — admin tier (agent-allowed), the
   // list_*_admin precedent; the `fluncle-cluster` cron reads the prior map + split flags.
   list_galaxies_admin: "admin",
+  // Every label with its crawl-seed state — admin tier (agent-allowed), the
+  // list_galaxies_admin precedent: `?seedState=enabled` is the seed-set read the future
+  // catalogue crawler makes with its agent token. A pure read; it publishes nothing.
+  list_labels_admin: "admin",
   // The logbook sweep's self-healing window + material read — admin tier
   // (agent-allowed), the list_editions_admin precedent; the box's `fluncle-logbook`
   // cron reads it to pick the next sector-day to author and gather its findings.
@@ -378,6 +382,10 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // The cluster cron's transactional map write — admin tier (agent-allowed): the Worker
   // mints new ids + handles; the box's `fluncle-cluster` cron drives it with its agent token.
   update_galaxy_map: "admin",
+  // The operator's ruling on a label's crawl-seed state — operator tier: it steers what
+  // Fluncle crawls NEXT (an editorial act, like naming a galaxy), so an agent token 403s
+  // at operatorGuard. It changes no stored data — crawl scope, never storage.
+  update_label: "operator",
   // The operator's logbook overwrite/edit — operator tier: it CAN replace a
   // cron-authored entry (an operator entry always wins) and stamps it sacred, so a
   // valid agent token 403s.

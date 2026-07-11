@@ -32,6 +32,7 @@ const EMPTY_INPUTS: AttentionInputs = {
   artistReviews: [],
   clipPosts: [{ scheduledFor: iso(NOW + HOUR), status: "scheduled" }],
   clips: [],
+  labelReviews: [],
   mixtapes: [],
   newsletters: [],
   recordings: [],
@@ -318,6 +319,59 @@ describe("deriveAttentionItems", () => {
       source: "artist-review",
       title: "Aktive",
     });
+  });
+
+  it("rows each unruled label, deep-linked to /admin/labels, never on the deadline tier", () => {
+    const items = deriveAttentionItems(
+      {
+        ...EMPTY_INPUTS,
+        labelReviews: [
+          { anchorAt: iso(NOW - 3 * DAY), labelId: "lbl_1", name: "spiration music" },
+          { anchorAt: iso(NOW - DAY), labelId: "lbl_2", name: "UKF" },
+        ],
+      },
+      NOW,
+    );
+
+    expect(items).toHaveLength(2);
+    expect(items[0]).toEqual({
+      anchorAt: iso(NOW - 3 * DAY),
+      href: "/admin/labels",
+      id: "label-review:lbl_1",
+      source: "label-review",
+      title: "spiration music",
+    });
+    // A ruling steers the NEXT crawl, so it is never urgent: no deadline, no bounce clock.
+    expect(items[0]?.deadlineAt).toBeUndefined();
+    expect(primaryFor(items[0] as AttentionItem, NOW)).toEqual({
+      href: "/admin/labels",
+      kind: "open",
+      label: "Rule on it",
+    });
+  });
+
+  it("speaks the label queue in the dispatch", () => {
+    const one = deriveAttentionItems(
+      {
+        ...EMPTY_INPUTS,
+        labelReviews: [{ anchorAt: iso(NOW - DAY), labelId: "lbl_1", name: "UKF" }],
+      },
+      NOW,
+    );
+    expect(attentionBrief(one, NOW)).toBe("A new label to rule on.");
+
+    const three = deriveAttentionItems(
+      {
+        ...EMPTY_INPUTS,
+        labelReviews: [
+          { anchorAt: iso(NOW - DAY), labelId: "lbl_1", name: "UKF" },
+          { anchorAt: iso(NOW - DAY), labelId: "lbl_2", name: "Chelou" },
+          { anchorAt: iso(NOW - DAY), labelId: "lbl_3", name: "spiration music" },
+        ],
+      },
+      NOW,
+    );
+    expect(attentionBrief(three, NOW)).toBe("Three new labels to rule on.");
   });
 
   it("rows each pending submission oldest-first, deep-linked to the exact review-tray candidate", () => {

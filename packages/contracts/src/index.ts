@@ -35,6 +35,7 @@ import {
 } from "./orpc/admin-attention.js";
 import { type ServiceHealthStatusSchema } from "./orpc/admin-health.js";
 import { type GalaxyAdminItemSchema, type TrackEmbeddingSchema } from "./orpc/admin-galaxies.js";
+import { type LabelAdminItemSchema, type LabelSeedStateSchema } from "./orpc/admin-labels.js";
 import { type GalaxyListItemSchema } from "./orpc/galaxies.js";
 import { type GalaxyProgressSchema } from "./orpc/me-galaxy.js";
 import {
@@ -118,6 +119,29 @@ export type GalaxyUpdateResponse = Ok<{ galaxy: GalaxyAdminItem }>;
 
 /** `PUT /api/admin/galaxies/map` response — the full resulting map (with minted ids). */
 export type GalaxyMapUpdateResponse = Ok<{ galaxies: GalaxyAdminItem[] }>;
+
+// ── Labels (the entity + the operator's crawl-seed control) ──────────────────
+
+/**
+ * A label's crawl-seed state — CRAWL SCOPE, NEVER STORAGE. It says whether the future
+ * catalogue crawler may seed from this label, and nothing else: `disabled` removes the
+ * label from the NEXT crawl's seeds and touches nothing already stored. A brand-new
+ * label enters `undecided` (never silently crawled, never silently dropped).
+ */
+export type LabelSeedState = z.infer<typeof LabelSeedStateSchema>;
+
+/**
+ * One label in the admin shape (`GET /api/admin/labels`). Inferred from
+ * `LabelAdminItemSchema` (./orpc/admin-labels.ts). `slug` is the identity + the join key
+ * back to the raw `tracks.label` string; `findingCount` is derived, never stored.
+ */
+export type LabelAdminItem = z.infer<typeof LabelAdminItemSchema>;
+
+/** `GET /api/admin/labels` response — every label (optionally one seed state). */
+export type LabelsAdminResponse = Ok<{ labels: LabelAdminItem[] }>;
+
+/** `PATCH /api/admin/labels/:id` response — the one ruled label. */
+export type LabelUpdateResponse = Ok<{ label: LabelAdminItem }>;
 
 /** One embedded finding — the cluster engine's input row (`{ trackId, embedding }`). */
 export type TrackEmbedding = z.infer<typeof TrackEmbeddingSchema>;

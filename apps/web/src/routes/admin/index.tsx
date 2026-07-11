@@ -9,6 +9,7 @@ import {
   MicrophoneStageIcon,
   PaperPlaneTiltIcon,
   ProhibitIcon,
+  TagIcon,
   TrayIcon,
 } from "@phosphor-icons/react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -711,6 +712,7 @@ const SOURCE_ICONS: Record<AttentionSource, ComponentType<{ className?: string }
   "attach-cues": FilmSlateIcon,
   distribute: CassetteTapeIcon,
   "drip-empty": InstagramIcon,
+  "label-review": TagIcon,
   newsletter: EnvelopeSimpleIcon,
   "post-tiktok": TiktokIcon,
   "post-youtube": YoutubeIcon,
@@ -725,6 +727,7 @@ const SOURCE_LABELS: Record<AttentionSource, string> = {
   "attach-cues": "Recording",
   distribute: "Mixtape",
   "drip-empty": "Instagram drip",
+  "label-review": "Label",
   newsletter: "Newsletter",
   "post-tiktok": "TikTok",
   "post-youtube": "YouTube",

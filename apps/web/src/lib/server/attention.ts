@@ -16,6 +16,7 @@ import {
 import { listArtistReviewRows, parseArtistsJson } from "./artists";
 import { listClipPosts } from "./clip-social";
 import { getDb, typedRows } from "./db";
+import { listLabelReviewRows } from "./labels";
 import { listMixtapes } from "./mixtapes";
 import { listRecordings } from "./recordings";
 import { listTracks } from "./tracks";
@@ -145,6 +146,7 @@ export async function readAttentionSnapshot(now: number = Date.now()): Promise<A
     mixtapes,
     clipPosts,
     artistReviews,
+    labelReviews,
     submissions,
     newsletters,
     renders,
@@ -155,6 +157,9 @@ export async function readAttentionSnapshot(now: number = Date.now()): Promise<A
     listMixtapes({ includeUnpublished: true }),
     listClipPosts(),
     listArtistReviewRows(),
+    // Every label still awaiting the operator's ruling (the trust rule: a ruled label is
+    // not the operator's business anymore). Ruling is crawl scope, never storage.
+    listLabelReviewRows(),
     listSubmissionRows(),
     listDraftEditionRows(),
     // The render queue's canonical read (`fluncle admin tracks queue`): findings
@@ -171,6 +176,7 @@ export async function readAttentionSnapshot(now: number = Date.now()): Promise<A
         status: post.status,
       })),
       clips,
+      labelReviews,
       mixtapes: mixtapes.map((mixtape) => ({
         ...((mixtape.addedAt ?? mixtape.createdAt)
           ? { anchorAt: mixtape.addedAt ?? mixtape.createdAt }

@@ -15,12 +15,22 @@ import { type AttentionRow, type AttentionSourceCount } from "@fluncle/contracts
 
 // ─── The rows ────────────────────────────────────────────────────────────────
 
-/** The queue sources (the roadmap's data-honesty-verified EXISTS set). */
+/**
+ * The queue sources (the roadmap's data-honesty-verified EXISTS set).
+ *
+ * EXHAUSTIVE, and alphabetically sorted. It is mirrored by `AttentionSourceSchema` in
+ * packages/contracts/src/orpc/admin-attention.ts and switched/mapped over in five more
+ * places — `SOURCE_ORDER` + `primaryFor` + `briefPhrase` below, `SOURCE_ICONS` +
+ * `SOURCE_LABELS` in routes/admin/index.tsx, `SOURCE_LABELS` in the CLI's
+ * admin-attention.ts, and `SOURCE_META` in the Raycast menu bar. Adding a source means
+ * ALL of them, or the build breaks.
+ */
 export type AttentionSource =
   | "artist-review"
   | "attach-cues"
   | "distribute"
   | "drip-empty"
+  | "label-review"
   | "newsletter"
   | "post-tiktok"
   | "post-youtube"
@@ -125,6 +135,19 @@ export type ArtistReviewInput = {
   pending: number;
 };
 
+/**
+ * A label nobody has ruled on yet — a banger landed on an imprint Fluncle has never
+ * seen, so the operator has to say whether the next crawl may seed from it. Ruling is
+ * CRAWL SCOPE ONLY: it never touches the finding that surfaced the label, or anything
+ * else already stored.
+ */
+export type LabelReviewInput = {
+  /** When the label first landed in the archive — the queue's oldest-first anchor. */
+  anchorAt: string;
+  labelId: string;
+  name: string;
+};
+
 /** A pending crew submission awaiting the operator's approve/reject in the review tray. */
 export type SubmissionInput = {
   artUrl?: string;
@@ -152,6 +175,7 @@ export type AttentionInputs = {
   artistReviews: ArtistReviewInput[];
   clipPosts: ClipPostInput[];
   clips: ClipInput[];
+  labelReviews: LabelReviewInput[];
   mixtapes: MixtapeInput[];
   newsletters: NewsletterInput[];
   recordings: RecordingInput[];
@@ -305,6 +329,21 @@ export function deriveAttentionItems(inputs: AttentionInputs, now: number): Atte
       id: `artist-review:${review.artistId}`,
       reviewLinks: review.pending,
       source: "artist-review",
+      title: review.name,
+    });
+  }
+
+  // Each unruled label is one row — a finding landed on an imprint nobody has ruled on,
+  // so the next crawl doesn't know whether it may seed from it. Oldest-first, deep-linking
+  // to /admin/labels where the three-state control lives. The ruling is CRAWL SCOPE ONLY:
+  // it changes what the NEXT crawl seeds from and touches nothing already stored, so this
+  // row is never urgent and never carries a deadline.
+  for (const review of inputs.labelReviews) {
+    items.push({
+      anchorAt: review.anchorAt,
+      href: "/admin/labels",
+      id: `label-review:${review.labelId}`,
+      source: "label-review",
       title: review.name,
     });
   }
@@ -522,6 +561,10 @@ export function primaryFor(item: AttentionItem, now: number): PrimaryAction {
       return { href: item.href ?? "/admin/plans", kind: "open", label: "Distribute" };
     case "drip-empty":
       return { href: item.href ?? "/admin/clips", kind: "open", label: "Cut clips" };
+    case "label-review":
+      // The three-state ruling lives on /admin/labels; the row deep-links there rather
+      // than ruling inline (one home per control, like the artist review row).
+      return { href: item.href ?? "/admin/labels", kind: "open", label: "Rule on it" };
     case "newsletter":
       // Review + Send live on the newsletter page (send_edition is operator-tier); the row
       // deep-links there rather than sending inline — the send authority never moves onto the
@@ -563,12 +606,15 @@ const SOURCE_ORDER: AttentionSource[] = [
   "newsletter",
   "submission",
   "artist-review",
+  // The curation rows sit last: a label ruling steers the NEXT crawl, so it is never
+  // urgent and never blocks a finding.
+  "label-review",
 ];
 
 /**
  * Where clicking a row lands the operator. Rows that carry an explicit `href`
- * (attach-cues, distribute, drip-empty, newsletter, submission, artist-review) open it; the inline
- * publish-loop rows (post-tiktok, post-youtube, tiktok-draft) have no href — their
+ * (attach-cues, distribute, drip-empty, label-review, newsletter, submission, artist-review) open
+ * it; the inline publish-loop rows (post-tiktok, post-youtube, tiktok-draft) have no href — their
  * action lives on the dashboard itself, so they open `/admin`.
  */
 export function attentionRowPath(item: AttentionItem): string {
@@ -631,6 +677,8 @@ function briefPhrase(source: AttentionSource, rows: AttentionItem[]): string {
     }
     case "drip-empty":
       return "the Instagram drip's run dry";
+    case "label-review":
+      return n === 1 ? "a new label to rule on" : `${countWord(n)} new labels to rule on`;
     case "newsletter":
       return n === 1
         ? "the Friday letter waiting on your send"
