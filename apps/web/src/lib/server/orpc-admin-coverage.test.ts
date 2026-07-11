@@ -85,6 +85,10 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // matches the public `list_` prefix so the "holds exactly" check skips it, and it lives here
   // for completeness (like `list_labels_admin`).
   "GET /admin/catalogue": "list_catalogue_tracks",
+  // THE CAPTURE BUDGET (docs/the-ear.md § The capture budget) — the spend readout behind the
+  // brake on metered per-GB audio capture. Contract-only oRPC (no TanStack route file). Admin
+  // tier (agent-allowed READ): seeing what a budget has left spends nothing.
+  "GET /admin/catalogue/capture-budget": "get_capture_budget",
   // THE CRAWLER (docs/catalogue-crawler.md) — the frontier's state. Contract-only oRPC (no
   // TanStack route file). Admin tier (agent-allowed): the on-box `fluncle-crawl` sweep reads
   // it with its agent token, and so does the operator.
@@ -325,6 +329,11 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // state with its agent token each minute.
   "POST /admin/twitch/live": "record_live_state",
   "POST /admin/youtube/token": "mint_youtube_token",
+  // The catalogue capture budget + its kill switch — contract-only oRPC (no TanStack route
+  // file). OPERATOR tier: it decides how much of the operator's money a metered residential
+  // proxy may spend, so the box's agent token 403s on it (an agent may not raise its own
+  // budget). The read half is `get_capture_budget`, above.
+  "PUT /admin/catalogue/capture-budget": "set_capture_budget",
   // The clip drip-feed kill switch — contract-only oRPC (no TanStack route file).
   // Operator tier: pause/resume every future scheduled Instagram post.
   "PUT /admin/clips/drip/state": "set_clip_drip",

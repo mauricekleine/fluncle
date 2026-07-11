@@ -60,7 +60,25 @@ type SearchHit = {
   trackId: string;
 };
 
-type SearchEntity = { imageUrl?: string; kind: "artist"; name: string; slug: string };
+type EntityKind = "album" | "artist" | "label";
+
+type SearchEntity = { imageUrl?: string; kind: EntityKind; name: string; slug: string };
+
+/**
+ * The three graph nodes that HAVE a page, in the order they render — and the order a reader
+ * means, because a name is most often a person. Each gets the identical row: the picture, the
+ * name, the arrow. An artist is the precedent and a label and an album are not a lesser
+ * citizen of it; the only thing `kind` decides is which page the arrow goes to.
+ *
+ * The heading names the KIND, which it is allowed to do because all three are named objects in
+ * Fluncle's world — unlike the uncertified tracks below, which have no name and get no heading
+ * (the Unlit Rule, above).
+ */
+const ENTITY_GROUPS = [
+  { heading: "Artists", kind: "artist" },
+  { heading: "Labels", kind: "label" },
+  { heading: "Albums", kind: "album" },
+] as const satisfies readonly { heading: string; kind: EntityKind }[];
 
 type SearchFilters = {
   album?: string;
@@ -165,6 +183,46 @@ function TrackRow({
 }
 
 /**
+ * One entity row — an artist, a label, or an album. The FIRST-CLASS destination: the thing the
+ * reader searched for, offered as somewhere to go, above the tracks it also brought back.
+ *
+ * The three are ONE row on purpose. A label is not a chip and an album is not a filter; each is
+ * a page in the graph (`docs/album-entity.md`), and a search that hands you a list of tracks
+ * while withholding the record they came off is answering a smaller question than you asked.
+ *
+ * The picture is the artist's portrait, or — where there is no portrait — the entity's cover
+ * art (its freshest finding's sleeve, the same one `/labels` and `/albums` print). Failing
+ * both, the same Dust-Veil square a coverless track gets. Never a gold placeholder.
+ */
+function EntityRow({
+  entity,
+  onPick,
+}: {
+  entity: SearchEntity;
+  onPick: (entity: SearchEntity) => void;
+}): ReactNode {
+  return (
+    <CommandItem
+      className="search-row"
+      onSelect={() => onPick(entity)}
+      value={`${entity.kind}-${entity.slug}`}
+    >
+      {entity.imageUrl ? (
+        <img alt="" className="search-cover" loading="lazy" src={entity.imageUrl} />
+      ) : (
+        <span aria-hidden="true" className="search-cover search-cover--empty" />
+      )}
+      <span className="search-row-text">
+        <span className="search-row-title">{entity.name}</span>
+      </span>
+      <CommandShortcut className="search-row-tail">
+        <ArrowRightIcon aria-hidden="true" className="search-jump-icon" />
+      </CommandShortcut>
+    </CommandItem>
+  );
+}
+
+/**
  * What the model understood, echoed back. Not decoration: it is the only way a reader can see
  * that "in A minor" became a key filter and correct it when it did not. A search that quietly
  * reinterprets you is a search you cannot trust.
@@ -244,6 +302,12 @@ function SearchDialog({
       void navigate({ to: to as never });
     },
     [close, navigate],
+  );
+
+  /** An entity goes to its page. `kind` is the only thing that picks the route. */
+  const pickEntity = useCallback(
+    (entity: SearchEntity) => goTo(`/${entity.kind}/${entity.slug}`),
+    [goTo],
   );
 
   /** A finding goes to its coordinate. A track with no coordinate goes OUT, to Spotify. */
@@ -335,36 +399,31 @@ function SearchDialog({
 
         {/* There is no synthetic "Go to /artist/netsky" row anywhere in here, deliberately. A
             resolved coordinate comes back as the FINDING (cover, title, coordinate) and a
-            resolved artist as the ARTIST — the thing, never a rendering of the URL you are
-            about to visit. Each is first in the list, so Enter lands exactly where the
-            redirect would have taken you. */}
+            resolved artist, label, or album as the ENTITY — the thing, never a rendering of the
+            URL you are about to visit. Each is first in the list, so Enter lands exactly where
+            the redirect would have taken you. */}
         <CommandList>
           {nothing ? <CommandEmpty>{emptyCopy}</CommandEmpty> : undefined}
 
-          {data.entities.length > 0 ? (
-            <CommandGroup heading="Artists">
-              {data.entities.map((entity) => (
-                <CommandItem
-                  className="search-row"
-                  key={entity.slug}
-                  onSelect={() => goTo(`/artist/${entity.slug}`)}
-                  value={`artist-${entity.slug}`}
-                >
-                  {entity.imageUrl ? (
-                    <img alt="" className="search-cover" loading="lazy" src={entity.imageUrl} />
-                  ) : (
-                    <span aria-hidden="true" className="search-cover search-cover--empty" />
-                  )}
-                  <span className="search-row-text">
-                    <span className="search-row-title">{entity.name}</span>
-                  </span>
-                  <CommandShortcut className="search-row-tail">
-                    <ArrowRightIcon aria-hidden="true" className="search-jump-icon" />
-                  </CommandShortcut>
-                </CommandItem>
-              ))}
-            </CommandGroup>
-          ) : undefined}
+          {ENTITY_GROUPS.map((group) => {
+            const entities = data.entities.filter((entity) => entity.kind === group.kind);
+
+            if (entities.length === 0) {
+              return undefined;
+            }
+
+            return (
+              <CommandGroup heading={group.heading} key={group.kind}>
+                {entities.map((entity) => (
+                  <EntityRow
+                    entity={entity}
+                    key={`${entity.kind}-${entity.slug}`}
+                    onPick={pickEntity}
+                  />
+                ))}
+              </CommandGroup>
+            );
+          })}
 
           {/* NO HEADING over the tracks — deliberately. A heading would have to name what it
               headed, and the uncertified tier has no name. Findings lead; the rest follows in

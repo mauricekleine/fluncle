@@ -19,9 +19,19 @@
 //     certification, and never a finding — so it is a machine job like `update_galaxy_map`,
 //     not an editorial act like `update_galaxy`.
 //
-// EVERY op here is agent-allowed, and that is not an oversight: none of them can certify
-// anything. The one act that steers the catalogue — RULING on a seed label, which decides what
-// may be crawled at all — is `update_label`, and it stays OPERATOR tier.
+//   THE CAPTURE BUDGET (docs/the-ear.md § The capture budget) — the brake on what the two
+//   above lead to. The crawler is free (it moves metadata) and the Ear is free (it moves
+//   vectors), but the audio CAPTURE those rows queue up for is metered: a residential proxy
+//   bills per GB, and the queue drains whatever it is given.
+//   - `get_capture_budget` — admin tier (agent-allowed read): the spend readout.
+//   - `set_capture_budget` — OPERATOR tier: the caps and the kill switch. The one op in this
+//     domain an agent may never call — a machine does not get to raise its own budget.
+//
+// Every op here EXCEPT `set_capture_budget` is agent-allowed, and that is not an oversight:
+// none of them can certify anything, and none of them spends money. The two acts that steer
+// the catalogue are the exceptions — RULING on a seed label (`update_label`, which decides
+// what may be crawled at all) and SETTING the capture budget (which decides what may be
+// bought) — and both stay OPERATOR tier.
 //
 // ── WHY THE TIER IS INTERNAL-ONLY ────────────────────────────────────────────────────
 // The catalogue tier has NO PUBLIC NAME (the-archive RFC, D4): it is never labelled,
@@ -302,10 +312,96 @@ export const getCrawlStatus = oc
   .input(z.object({}))
   .output(CrawlStatusSchema.extend({ ok: z.literal(true) }));
 
+// ─────────────────────────────────────────────────────────────────────────────
+// THE CAPTURE BUDGET — the brake on what the two above cost. docs/the-ear.md.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The capture budget's whole readout: the kill switch, the two caps, what the catalogue has
+ * actually spent in the rolling 24h, and the verdict the capture queue obeys.
+ *
+ * `spend.tracks` counts ATTEMPTS (done + unmatched + failed) — every one of them was a billed
+ * proxy request, and a budget that only counted successes would let a day of failures spend
+ * real money against a meter reading zero. `spend.bytes` sums only what LANDED: a failed
+ * download's partial transfer is genuinely unknowable from the server, so it is under-counted
+ * rather than guessed at.
+ */
+export const CaptureBudgetStateSchema = z
+  .object({
+    budget: z.object({ dailyBytes: z.number(), dailyTracks: z.number() }),
+    /** Null exactly when `open`. `paused` (the kill switch) wins over either cap. */
+    closedReason: z.enum(["bytes_spent", "paused", "tracks_spent"]).nullable(),
+    /** True ⇒ the capture queue may hand out catalogue rows right now. */
+    open: z.boolean(),
+    paused: z.boolean(),
+    remainingBytes: z.number(),
+    remainingTracks: z.number(),
+    spend: z.object({ bytes: z.number(), tracks: z.number() }),
+    windowHours: z.number(),
+  })
+  .meta({ id: "CaptureBudgetState" });
+
+/**
+ * `get_capture_budget` → `GET /admin/catalogue/capture-budget` (operationId
+ * `getCaptureBudget`).
+ *
+ * Admin tier (agent-allowed READ, the `get_crawl_status` precedent) — the spend readout.
+ * A metered thing the operator cannot see is a thing he cannot control, so this is what
+ * `/admin/catalogue` and `fluncle admin capture budget` render: what it captured in the last
+ * 24h, how many GB that was, and how much budget is left.
+ *
+ * It is the SAME code path the capture queue's brake consults, deliberately — a budget
+ * display that can disagree with the budget is worse than no display at all.
+ */
+export const getCaptureBudget = oc
+  .route({
+    method: "GET",
+    operationId: "getCaptureBudget",
+    path: "/admin/catalogue/capture-budget",
+    summary: "The catalogue capture budget: the switch, the caps, the 24h spend, what is left",
+    tags: ["Admin"],
+  })
+  .input(z.object({}))
+  .output(CaptureBudgetStateSchema.extend({ ok: z.literal(true) }));
+
+/**
+ * `set_capture_budget` → `PUT /admin/catalogue/capture-budget` (operationId
+ * `setCaptureBudget`).
+ *
+ * OPERATOR tier — the `set_publish_advance` shape, on the same `settings` KV. This is the one
+ * op in the domain the agent may never touch, and the reason is that every other op here is
+ * free: the crawler moves metadata and the Ear moves vectors, while THIS decides how much of
+ * the operator's money a residential proxy may spend on his behalf. A machine does not get to
+ * raise its own budget.
+ *
+ * Every field is optional, so one call is either a flip of the switch, a change to a cap, or
+ * both. `paused: true` is the KILL SWITCH and stops the spend on the next queue read, with no
+ * deploy. Both caps are non-negative integers; `0` is legal and means "capture nothing", which
+ * is a different statement from paused (the cap can be raised back without touching the switch).
+ */
+export const setCaptureBudget = oc
+  .route({
+    method: "PUT",
+    operationId: "setCaptureBudget",
+    path: "/admin/catalogue/capture-budget",
+    summary: "Set the catalogue capture budget / flip its kill switch (operator)",
+    tags: ["Admin"],
+  })
+  .input(
+    z.object({
+      dailyBytes: z.number().int().min(0).optional(),
+      dailyTracks: z.number().int().min(0).optional(),
+      paused: z.boolean().optional(),
+    }),
+  )
+  .output(CaptureBudgetStateSchema.extend({ ok: z.literal(true) }));
+
 /** The `admin-catalogue` domain's ops, merged into the root contract by `./index.ts`. */
 export const adminCatalogueContract = {
   crawl_catalogue: crawlCatalogue,
+  get_capture_budget: getCaptureBudget,
   get_crawl_status: getCrawlStatus,
   list_catalogue_tracks: listCatalogueTracks,
   rank_catalogue: rankCatalogue,
+  set_capture_budget: setCaptureBudget,
 };

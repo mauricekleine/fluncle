@@ -75,7 +75,13 @@ The server layer lives in `apps/web/src/lib/server/labels.ts`.
 
 `/label/<slug>` (and the `/labels` index) shipped with the album entity, and its shape is documented once, in [docs/album-entity.md](./album-entity.md#the-public-surfaces): findings first, the artists as chips, the unnamed quieter rows beneath them, an `Organization` JSON-LD node whose `@id` is the page URL, and the renderable-track thin-content gate.
 
-The one thing worth restating here: **the public page is blind to `seed_state`.** A label the operator skipped for the crawler renders exactly as it always did, and its findings keep counting. Crawl scope, never storage — no read behind the page knows the column exists.
+Two things worth restating here, because both are about this entity specifically.
+
+**The public page is blind to `seed_state`.** A label the operator skipped for the crawler renders exactly as it always did, and its findings keep counting. Crawl scope, never storage — no read behind the page knows the column exists.
+
+**A label with no finding has no public page.** It 404s. This is the label's read-side payment of the album's write-side rule — _an entity earns a public page because Fluncle FOUND something on it_ — and the label cannot pay it on the write side, because the crawler MUST mint a row for every imprint it discovers: that `undecided` row is the ruling queue. So the row exists, the operator rules on it, and the public sees nothing until a finding lands. The rule and the measurement behind it are in [album-entity.md](./album-entity.md#the-catalogue-deepens-a-page--it-never-creates-one): **the catalogue deepens a page, it never creates one.**
+
+That also bounds the `label-review` queue: `listLabelReviewRows` hands the attention queue a WORKING SET (`LABEL_REVIEW_QUEUE_LIMIT`, oldest-first), because a wide crawl proposes hundreds of imprints and an uncapped source would drown the other five in the `/admin` cockpit, in its SSR payload, and in `fluncle admin queue`. `/admin/labels` remains the station where the full list is ruled on.
 
 ## Follow-ups
 

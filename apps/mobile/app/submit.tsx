@@ -25,7 +25,7 @@ import { color, font, radius } from "@/theme/tokens";
 // `submit_track` contract the web posts; the server owns validation, the hourly
 // rate limit, and status (a submission is a message in a bottle — no drafts, no
 // history view). Presented as a modal off the archive header (the app's one place
-// for global actions, next to Pings). The honest result-state mapping is the pure,
+// for global actions, next to Notifications). The honest result-state mapping is the pure,
 // tested @/lib/submit-fault.
 
 export default function SubmitScreen() {
@@ -106,16 +106,15 @@ export default function SubmitScreen() {
             keyboardShouldPersistTaps="handled"
           >
             <Text style={[font.display, { color: color.starlightCream, fontSize: 26 }]}>
-              Put me on to something
+              Submit a track
             </Text>
             <Text style={[font.body, { color: color.stardust }]}>
-              Heard a banger out there the rest of us missed? Search it up, pick the match, and send
-              it my way.
+              Search Spotify, pick the match, and send it for review.
             </Text>
 
             <View style={{ gap: 8 }}>
               <Text style={[font.label, { color: color.starlightCream }]}>
-                Track or Spotify link
+                Search or Spotify URL
               </Text>
               <TextInput
                 autoCapitalize="none"
@@ -195,7 +194,7 @@ export default function SubmitScreen() {
                   />
                 </View>
                 <HeatButton
-                  label={submit.isPending ? "Sending…" : "Send it my way"}
+                  label={submit.isPending ? "Sending…" : "Send for review"}
                   onPress={sendSelected}
                   disabled={submit.isPending}
                 />

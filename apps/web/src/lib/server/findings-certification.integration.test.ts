@@ -2,6 +2,7 @@ import { type Client } from "@libsql/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createIntegrationDb, seedCatalogueTrack, seedTrack } from "./integration-db";
+import { renderSitemap } from "./sitemap-test-kit";
 
 // THE SAFETY PROPERTY OF THE tracks/findings SPLIT, proven against the REAL schema.
 //
@@ -415,12 +416,15 @@ describe("a CRAWLED track never reaches a public surface", () => {
     expect(xml).not.toContain("A Crawled Track");
   });
 
-  it("is absent from the sitemap (the real /sitemap.xml handler)", async () => {
-    const { Route } = await import("../../routes/sitemap[.]xml");
-    const handlers = Route.options.server?.handlers as
-      | { GET: (ctx: unknown) => Promise<Response> }
-      | undefined;
-    const xml = await (await handlers?.GET({}))?.text();
+  it("is absent from the sitemap (the real handlers — the index AND every child)", async () => {
+    // The index carries no <url> of its own — it points at children. So the certification rail
+    // has to hold in the CHILDREN, and that is where it is asserted: every shard the index
+    // advertises is fetched and searched.
+    const { indexXml, shards, xml } = await renderSitemap();
+
+    expect(indexXml).toContain("<sitemapindex");
+    expect(shards).toContain("pages-1.xml");
+    expect(shards).toContain("findings-1.xml");
 
     expect(xml).toContain("/log/004.7.2I");
     expect(xml).not.toContain(CRAWLED_ID);

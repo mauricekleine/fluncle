@@ -48,7 +48,27 @@
 // bytes are already bought, analysing and embedding them is free, and a vector is how the
 // Ear gets to disagree with the ladder. So `analyze`/`embed` carry no veto — the vetoed
 // row simply sorts last there, exactly as the-ear.md says.
+//
+// ── AND THE ORDER IS NOT THE WHOLE BUDGET (./capture-budget.ts) ──────────────────────
+// The ladder above decides WHAT the metered GB buy. It has nothing to say about HOW MUCH,
+// and at catalogue scale that is the gap that costs money: the crawler writes uncertified
+// rows by the thousand and this queue drains whatever it is given (4 a tick × 288 ticks ≈
+// 1,150 songs ≈ ~9 GB of proxy traffic a day, forever). So the capture worklist consults
+// the CAPTURE BUDGET — a kill switch plus a rolling-24h count/byte cap on the `settings`
+// KV — and NARROWS ITSELF TO THE FINDINGS when that budget is shut.
+//
+// THE BRAKE LIVES HERE, at the queue, and not in the sweep that downloads. That is the
+// whole design decision. This function is the ONLY door a catalogue row can reach a metered
+// download through (`list_tracks_admin`'s queue filters drive through the FINDING JOIN and
+// are structurally blind to a catalogue row — see the header above), so a brake here binds
+// EVERY client: the box sweep, the CLI, a future sweep nobody has written. A brake in the
+// box script would be re-bakeable, bypassable, and one `curl` away from irrelevant.
+//
+// It narrows, it never empties: `scope: "all"` with a shut budget returns the FINDINGS, in
+// their usual order. A certified finding's capture is a handful a week, it is not the spend,
+// and the archive is never starved by the speculative half.
 
+import { isCatalogueCaptureOpen } from "./capture-budget";
 import { parseArtistsJson } from "./artists";
 import { getDb, typedRows } from "./db";
 import { CAPTURE_FAILED_COOLDOWN_MS, CAPTURE_MAX_FAILURES } from "./tracks";
@@ -217,6 +237,23 @@ export async function listTrackWork(options: {
 }): Promise<TrackWorkItem[]> {
   const { kind, limit = 50, scope = "all" } = options;
   const page = Math.min(Math.max(1, Math.trunc(limit)), MAX_WORK_LIMIT);
+
+  // THE BRAKE. Only `capture` spends money, so only `capture` is gated — `analyze` and
+  // `embed` read bytes that are already bought and are free (the same reason the label veto
+  // is scoped to capture alone). The budget is consulted BEFORE the queue is read, so a shut
+  // budget is not a filter applied to a page of candidates: those rows are never selected.
+  const catalogueShut = kind === "capture" ? !(await isCatalogueCaptureOpen()) : false;
+
+  // A caller that asked for the catalogue explicitly gets an honest empty queue, with no
+  // database round-trip at all — the answer is already known.
+  if (catalogueShut && scope === "catalogue") {
+    return [];
+  }
+
+  // …and a caller that asked for BOTH halves (the sweeps' default) gets the findings. The
+  // narrowing is the whole safety property: the brake stops the catalogue, never the archive.
+  const effectiveScope: TrackWorkScope = catalogueShut ? "findings" : scope;
+
   const kindWhere = kindClause(kind);
   const db = await getDb();
   const result = await db.execute({
@@ -224,7 +261,7 @@ export async function listTrackWork(options: {
     sql: `select ${WORK_SELECT}
           from tracks t
           left join findings f on f.track_id = t.track_id
-          where ${scopeClause(scope)} and ${kindWhere.sql}
+          where ${scopeClause(effectiveScope)} and ${kindWhere.sql}
           ${WORK_ORDER}
           limit ?`,
   });

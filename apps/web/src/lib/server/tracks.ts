@@ -590,9 +590,24 @@ async function findingsByEntity(
  * never named, never counted aloud — a finding is the only named object in Fluncle's
  * world.
  *
- * TODAY IT RETURNS NOTHING. Every `tracks` row is certified, so the anti-join is empty by
- * construction until the catalogue lands. The pages degrade to nothing rather than to a
- * dangling heading.
+ * ── AND WHY IT IS CAPPED ───────────────────────────────────────────────────────────────
+ * The seek is indexed (`tracks_{album,label}_id_idx`), so the SCAN is bounded however big
+ * the catalogue gets. The RESULT SET is not — and that is the distinction that bites. One
+ * crawled imprint is thousands of rows: measured on a 10,800-row synthetic catalogue,
+ * `/label/hospital-records` served **4.34 MB of HTML** — 3,000 rows through the SSR markup,
+ * again through the hydration payload, and a third time as `MusicRecording` nodes in the
+ * JSON-LD. An indexed seek that returns 3,000 rows is still 3,000 rows.
+ *
+ * So the page takes a SLICE, capped at {@link GRAPH_PAGE_CATALOGUE_LIMIT}, and the TOTAL is
+ * counted in SQL (`count(*) over ()`) and returned as a scalar — never by handing the rows
+ * to the isolate to length-check (AGENTS.md: rank and aggregate in SQL). The thin-content
+ * gate keys off the total; the page renders the slice.
+ *
+ * The slice is NEWEST-FIRST, not alphabetical: truncating an A–Z list at 100 leaves a label
+ * page that stops at "C", which is an arbitrary page. Truncating by release date leaves
+ * "the most recent releases on this imprint", which is a real one — and it refreshes as the
+ * crawl brings new releases in. On an album (a dozen tracks, one release date) the tiebreak
+ * makes it the alphabetical list it always was.
  */
 export type CatalogueTrackItem = {
   albumImageUrl: string | undefined;
@@ -603,47 +618,74 @@ export type CatalogueTrackItem = {
   trackId: string;
 };
 
+/**
+ * The most quieter rows a graph page will ever render. A cap the page can survive, not a
+ * cap the DATA respects — the entity's true count still drives the thin-content gate.
+ */
+export const GRAPH_PAGE_CATALOGUE_LIMIT = 100;
+
+/** A page's worth of quieter rows, plus how many the entity carries in total. */
+export type CatalogueSlice = {
+  /** At most {@link GRAPH_PAGE_CATALOGUE_LIMIT} rows — what the page renders. */
+  tracks: CatalogueTrackItem[];
+  /** Every uncertified track on the entity, counted in SQL. Drives the thin-content gate. */
+  total: number;
+};
+
 type CatalogueTrackRow = {
   album_image_url: string | null;
   artists_json: string;
   spotify_url: string | null;
   title: string;
+  total: number;
   track_id: string;
 };
 
-export async function listCatalogueTracksByLabel(labelId: string): Promise<CatalogueTrackItem[]> {
+export async function listCatalogueTracksByLabel(labelId: string): Promise<CatalogueSlice> {
   return catalogueTracksByEntity("tracks.label_id", labelId);
 }
 
-export async function listCatalogueTracksByAlbum(albumId: string): Promise<CatalogueTrackItem[]> {
+export async function listCatalogueTracksByAlbum(albumId: string): Promise<CatalogueSlice> {
   return catalogueTracksByEntity("tracks.album_id", albumId);
 }
 
 // `column` is a CONSTANT from this module (never user input); the value is always bound.
-// The predicate is an indexed seek on the entity pointer (`tracks_{album,label}_id_idx`),
-// so this stays a seek as the catalogue grows — the reason the pointer columns exist.
+//
+// `count(*) over ()` is evaluated over the WHOLE filtered set — SQLite applies `limit` last —
+// so one round trip brings back the capped slice AND the honest total, and the rows past the
+// cap never cross the wire.
+//
+// `release_date is null` leads the sort because SQLite orders NULL as the smallest value, so
+// a bare `release_date desc` would float every undated row to the top of the page.
 async function catalogueTracksByEntity(
   column: "tracks.album_id" | "tracks.label_id",
   entityId: string,
-): Promise<CatalogueTrackItem[]> {
+): Promise<CatalogueSlice> {
   const db = await getDb();
   const result = await db.execute({
-    args: [entityId],
+    args: [entityId, GRAPH_PAGE_CATALOGUE_LIMIT],
     sql: `select tracks.track_id, tracks.title, tracks.artists_json, tracks.album_image_url,
-                 tracks.spotify_url
+                 tracks.spotify_url, count(*) over () as total
           from tracks
           left join findings on findings.track_id = tracks.track_id
           where ${column} = ? and findings.track_id is null
-          order by tracks.title collate nocase asc`,
+          order by tracks.release_date is null asc, tracks.release_date desc,
+                   tracks.title collate nocase asc
+          limit ?`,
   });
 
-  return typedRows<CatalogueTrackRow>(result.rows).map((row) => ({
-    albumImageUrl: row.album_image_url ?? undefined,
-    artists: parseArtistsJson(row.artists_json),
-    spotifyUrl: row.spotify_url ?? undefined,
-    title: row.title,
-    trackId: row.track_id,
-  }));
+  const rows = typedRows<CatalogueTrackRow>(result.rows);
+
+  return {
+    total: Number(rows[0]?.total ?? 0),
+    tracks: rows.map((row) => ({
+      albumImageUrl: row.album_image_url ?? undefined,
+      artists: parseArtistsJson(row.artists_json),
+      spotifyUrl: row.spotify_url ?? undefined,
+      title: row.title,
+      trackId: row.track_id,
+    })),
+  };
 }
 
 /**

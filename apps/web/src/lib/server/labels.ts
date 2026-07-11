@@ -208,10 +208,21 @@ export async function getLabelBySlug(slug: string): Promise<LabelRecord | undefi
 }
 
 /**
- * The label an album came out on — the album → label edge of the graph, resolved through
- * the tracks that carry both pointers. An album's tracks can in principle disagree (a
- * compilation, a re-press); the MOST COMMON label wins, which is the honest answer and a
- * stable one. Undefined when no track on the album carries a label.
+ * The label an album came out on — the album → label edge of the graph, and the one place the
+ * graph CLOSES (it is stamped into the `MusicAlbum` JSON-LD as `albumRelease.recordLabel`).
+ * An album's tracks can in principle disagree (a compilation, a re-press); the MOST COMMON
+ * label wins, which is the honest answer and a stable one. Undefined when no finding on the
+ * album carries a label.
+ *
+ * Only CERTIFIED tracks vote, and the second reason is the load-bearing one:
+ *
+ * - The honest one: this edge says "the imprint Fluncle's finding came out on". A crawled row
+ *   that merely shares a release is not evidence about that. Let the whole catalogue vote and
+ *   a compilation's thirty crawled rows outvote the one finding the page is ABOUT.
+ * - The structural one: a label with zero findings has no public page (`resolveLabelPageData`
+ *   404s it). An uncertified vote could therefore WIN, and the album page would render a link
+ *   — and an `@id` in its schema.org graph — pointing at a 404. Findings-only makes that
+ *   unreachable rather than unlikely.
  */
 export async function getLabelForAlbum(albumId: string): Promise<LabelRecord | undefined> {
   const db = await getDb();
@@ -220,7 +231,8 @@ export async function getLabelForAlbum(albumId: string): Promise<LabelRecord | u
     sql: `select labels.id, labels.name, labels.slug, count(*) as n
           from tracks
           join labels on labels.id = tracks.label_id
-          where tracks.album_id = ?
+          join findings on findings.track_id = tracks.track_id
+          where tracks.album_id = ? and findings.log_id is not null
           group by labels.id
           order by n desc, labels.name collate nocase asc
           limit 1`,
@@ -398,19 +410,37 @@ export async function updateLabelSeedState(
 export type LabelReviewRow = { anchorAt: string; labelId: string; name: string };
 
 /**
- * The attention-queue source: every label still awaiting the operator's ruling.
- * Oldest-first (the queue's anchor is when the label first landed in the archive),
- * so a banger on an unseen label surfaces a cockpit row instead of quietly sitting
- * in a state nobody chose.
+ * The most unruled labels the attention queue will ever carry.
+ *
+ * The queue used to take ALL of them, which was right when a new label arrived only on a
+ * publish — tens of rows, ever. The crawler changed the arithmetic: every imprint the walk
+ * discovers mints an `undecided` row (that row IS the ruling queue — docs/catalogue-crawler.md,
+ * "the widening loop"), so a wide crawl over 27 seed labels proposes HUNDREDS. Uncapped, that
+ * is hundreds of `AttentionItem`s in the `/admin` SSR payload, in the react-query cache, and
+ * printed one-per-line by `fluncle admin queue` and the Raycast menu bar — a cockpit you
+ * cannot read is a cockpit that is off.
+ *
+ * So the queue takes a WORKING SET, oldest-first, and `/admin/labels` stays the station where
+ * the full list is ruled on. Capping the queue never hides a label from the operator; it stops
+ * one source from drowning the other five.
+ */
+export const LABEL_REVIEW_QUEUE_LIMIT = 25;
+
+/**
+ * The attention-queue source: the oldest labels still awaiting the operator's ruling, capped
+ * at {@link LABEL_REVIEW_QUEUE_LIMIT}. Oldest-first (the queue's anchor is when the label
+ * first landed in the archive), so a banger on an unseen label surfaces a cockpit row instead
+ * of quietly sitting in a state nobody chose.
  */
 export async function listLabelReviewRows(): Promise<LabelReviewRow[]> {
   const db = await getDb();
   const result = await db.execute({
-    args: ["undecided"],
+    args: ["undecided", LABEL_REVIEW_QUEUE_LIMIT],
     sql: `select id, name, created_at
           from labels
           where seed_state = ?
-          order by created_at asc`,
+          order by created_at asc
+          limit ?`,
   });
 
   return typedRows<{ created_at: string; id: string; name: string }>(result.rows).map((row) => ({

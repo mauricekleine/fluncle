@@ -5,7 +5,7 @@ import { createIntegrationDb, seedCatalogueTrack, seedTrack } from "./integratio
 
 // THE PIPELINE'S WORK QUEUES, PROVEN — against the REAL schema, on a real libSQL engine.
 //
-// Two claims are on trial here, and both are claims the previous code got WRONG:
+// Three claims are on trial here, and the first two are claims the previous code got WRONG:
 //
 //   1. A CATALOGUE TRACK IS WORKABLE. The three sweeps used to read their worklists off
 //      `listTracks`, which drives through the FINDING JOIN — so a `tracks` row with no
@@ -20,7 +20,16 @@ import { createIntegrationDb, seedCatalogueTrack, seedTrack } from "./integratio
 //      queue")` is the case that a "sort it last" implementation cannot pass, because a
 //      queue drains and last eventually arrives.
 //
-// The ordering is done by SQL, so only a real engine can prove it. Mocks cannot.
+//   3. …AND THE ORDER IS NOT THE WHOLE BUDGET. The order decides WHAT the metered GB buy; it
+//      has nothing to say about HOW MUCH, and at catalogue scale that gap is the one that
+//      costs real money. The CAPTURE BUDGET (./capture-budget.ts) is the how-much, and the
+//      final describe block proves the three properties it has to have: the budget STOPS the
+//      sweep when it is spent, the kill switch stops it in ONE flip and is default-deny, and
+//      a CERTIFIED finding still captures normally when the catalogue budget is gone.
+//
+// The ordering and the gating are done in SQL, so only a real engine can prove them. Mocks
+// cannot. NO AUDIO IS DOWNLOADED ANYWHERE IN THIS SUITE — the queue is the thing under test,
+// and the queue is the thing that decides whether a download ever happens.
 
 let db: Client;
 
@@ -29,6 +38,39 @@ vi.mock("./db", async (importOriginal) => {
 
   return { ...actual, getDb: () => Promise.resolve(db) };
 });
+
+/**
+ * Open the catalogue capture budget — the ONE flip.
+ *
+ * Almost every catalogue-capture case below has to call this first, and that is not a test
+ * inconvenience: it is the shipped default asserting itself. The feature is DEFAULT-DENY, so
+ * an untouched database (a fresh deploy, a preview branch, this test file before its first
+ * line runs) hands out NO catalogue capture work at all.
+ */
+async function openCaptureBudget(): Promise<void> {
+  const { setCatalogueCapturePaused } = await import("./capture-budget");
+
+  await setCatalogueCapturePaused(false);
+}
+
+/** Simulate N catalogue captures inside the rolling window — the spend, without the spending. */
+async function spendCatalogueCaptures(count: number, bytesEach = 1_000_000): Promise<void> {
+  const at = new Date().toISOString();
+
+  for (let index = 0; index < count; index += 1) {
+    const trackId = `spent${String(index).padStart(17, "0")}`;
+
+    await seedCatalogueTrack(db, { trackId });
+    await db.execute({
+      args: [at, at, bytesEach, trackId],
+      sql: `update tracks
+            set capture_status = 'done', source_audio_key = 'k/x.webm',
+                source_audio_attempted_at = ?, source_audio_captured_at = ?,
+                source_audio_bytes = ?
+            where track_id = ?`,
+    });
+  }
+}
 
 /** Give a track captured audio (and, optionally, an existing analysis / vector). */
 async function withAudio(
@@ -143,6 +185,8 @@ describe("listTrackWork — the order is the budget", () => {
   it("drains in capture_priority order, NOT insertion or alphabetical order", async () => {
     const { listTrackWork } = await import("./track-work");
 
+    await openCaptureBudget();
+
     // Seeded in ASCENDING id order and with priorities that DISAGREE with it, so a queue
     // that drained by insertion order (or by id, or by title) would return them backwards.
     await seedCatalogueTrack(db, { title: "Aaa Nothing", trackId: "cat1000000000000000000" });
@@ -169,6 +213,8 @@ describe("listTrackWork — the order is the budget", () => {
   it("never hands a VETOED label to the capture queue — the money is never spent", async () => {
     const { listTrackWork } = await import("./track-work");
     const { rankCatalogue } = await import("./catalogue");
+
+    await openCaptureBudget();
 
     // The real shape that caught this: every one of the operator's disabled labels CARRIES a
     // finding (each arrived on a single crossover remix). So the `label` rung fires on them,
@@ -254,6 +300,8 @@ describe("listTrackWork — the order is the budget", () => {
   it("keeps an UNRANKED catalogue row out of the capture queue — rank first, then spend", async () => {
     const { listTrackWork } = await import("./track-work");
 
+    await openCaptureBudget();
+
     await seedCatalogueTrack(db, { trackId: "cat1000000000000000000" });
     // No `capture_priority`: the Ear's sweep has not looked at it. Capturing it now would BE
     // draining the queue in insertion order — the exact failure the priority exists to stop.
@@ -322,5 +370,138 @@ describe("listTrackWork — the wire", () => {
     await withAudio("cat1000000000000000000", { embedding: true });
 
     expect(await listTrackWork({ kind: "embed" })).toEqual([]);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────────────────
+// THE BRAKE. Three properties, and the whole feature is worthless without all three.
+//
+// The brake lives HERE, at the queue, rather than in the sweep that downloads — and these
+// cases are why that matters. `listTrackWork` is the only door a catalogue row can reach a
+// metered download through, so a brake on this function binds EVERY client: the box sweep,
+// the CLI, a future sweep nobody has written yet. A brake inside the box script would be
+// re-bakeable, bypassable, and one `curl` away from irrelevant.
+// ─────────────────────────────────────────────────────────────────────────────────────────
+describe("listTrackWork — the capture budget stops the money", () => {
+  it("PROOF 1 — the budget STOPS the sweep once it is spent", async () => {
+    const { listTrackWork } = await import("./track-work");
+    const { setCatalogueCaptureBudget } = await import("./capture-budget");
+
+    await openCaptureBudget();
+    await setCatalogueCaptureBudget({ dailyBytes: 1024 * 1024 * 1024, dailyTracks: 3 });
+
+    await seedCatalogueTrack(db, { trackId: "cat1000000000000000000" });
+    await withPriority("cat1000000000000000000", 3);
+
+    // Budget intact: the queue hands the track over, and the sweep would buy its audio.
+    expect((await listTrackWork({ kind: "capture", scope: "catalogue" })).length).toBe(1);
+
+    // Now spend the day's 3. Nothing else changes — the track is still ranked, still
+    // non-vetoed, still top of the ladder, still the very next thing the money should buy.
+    await spendCatalogueCaptures(3);
+
+    // And the queue is EMPTY. Not reordered, not deferred — empty. The sweep reads an empty
+    // batch and downloads nothing, which is the only mechanism that actually stops a bill.
+    expect(await listTrackWork({ kind: "capture", scope: "catalogue" })).toEqual([]);
+  });
+
+  it("PROOF 1b — the BYTE cap stops it too, with count to spare", async () => {
+    const { listTrackWork } = await import("./track-work");
+    const { setCatalogueCaptureBudget } = await import("./capture-budget");
+
+    await openCaptureBudget();
+    await setCatalogueCaptureBudget({ dailyBytes: 10_000_000, dailyTracks: 500 });
+
+    await seedCatalogueTrack(db, { trackId: "cat1000000000000000000" });
+    await withPriority("cat1000000000000000000", 3);
+
+    // Two fat files: 2 of 500 tracks (the count cap is nowhere near), 10 MB of 10 MB. The
+    // count cap cannot see this — a file's size is knowable only AFTER it is downloaded —
+    // and the byte cap is exactly the backstop for it.
+    await spendCatalogueCaptures(2, 5_000_000);
+
+    expect(await listTrackWork({ kind: "capture", scope: "catalogue" })).toEqual([]);
+  });
+
+  it("PROOF 2 — the kill switch stops it in ONE flip, and is DEFAULT-DENY", async () => {
+    const { listTrackWork } = await import("./track-work");
+    const { setCatalogueCapturePaused } = await import("./capture-budget");
+
+    await seedCatalogueTrack(db, { trackId: "cat1000000000000000000" });
+    await withPriority("cat1000000000000000000", 3);
+
+    // DEFAULT-DENY, and this is the assertion the whole "ships OFF" decision rests on: NOTHING
+    // has been configured. No settings row exists. This is what a fresh deploy, a preview
+    // branch, a restored backup, and a dropped `settings` table all look like — and every one
+    // of them must hand out zero metered work rather than draining the catalogue.
+    expect(await listTrackWork({ kind: "capture", scope: "catalogue" })).toEqual([]);
+
+    // ONE flip opens it. No deploy, no rebuild, no box re-bake.
+    await setCatalogueCapturePaused(false);
+    expect((await listTrackWork({ kind: "capture", scope: "catalogue" })).length).toBe(1);
+
+    // ONE flip shuts it again — effective on the very next queue read, with a full budget
+    // still unspent underneath. That is the 3am property: the operator sees the bill climbing
+    // and stops it in one move, without shipping anything.
+    await setCatalogueCapturePaused(true);
+    expect(await listTrackWork({ kind: "capture", scope: "catalogue" })).toEqual([]);
+  });
+
+  it("PROOF 3 — a CERTIFIED finding still captures when the catalogue budget is gone", async () => {
+    const { listTrackWork } = await import("./track-work");
+    const { setCatalogueCaptureBudget } = await import("./capture-budget");
+
+    await openCaptureBudget();
+    await setCatalogueCaptureBudget({ dailyBytes: 1, dailyTracks: 0 });
+
+    await seedTrack(db, {
+      logId: "004.7.2I",
+      title: "A Real Banger",
+      trackId: "aaaaaaaaaaaaaaaaaaaaaa",
+    });
+    await seedCatalogueTrack(db, { trackId: "cat1000000000000000000" });
+    await withPriority("cat1000000000000000000", 3);
+
+    // THE ARCHIVE IS NEVER STARVED BY THE TELESCOPE. The catalogue budget is at zero — the
+    // hardest possible shut — and the finding is handed over anyway, in its usual order. His
+    // capture is a handful a week, it was never the spend, and it is not this budget's business.
+    const work = await listTrackWork({ kind: "capture" });
+
+    expect(work.map((item) => item.trackId)).toEqual(["aaaaaaaaaaaaaaaaaaaaaa"]);
+    expect(work[0]?.certified).toBe(true);
+
+    // The brake NARROWS the queue to the findings; it never empties it. A `scope: "findings"`
+    // read is not gated at all — the budget cannot even see that half.
+    expect((await listTrackWork({ kind: "capture", scope: "findings" })).length).toBe(1);
+  });
+
+  it("PROOF 3b — and the same holds under the KILL SWITCH, not just a spent cap", async () => {
+    const { listTrackWork } = await import("./track-work");
+
+    // Nothing configured ⇒ paused (default-deny). The finding must still capture: shipping the
+    // catalogue half dark must be invisible to the pipeline that was already running.
+    await seedTrack(db, { logId: "004.7.2I", trackId: "aaaaaaaaaaaaaaaaaaaaaa" });
+    await seedCatalogueTrack(db, { trackId: "cat1000000000000000000" });
+    await withPriority("cat1000000000000000000", 3);
+
+    expect((await listTrackWork({ kind: "capture" })).map((item) => item.trackId)).toEqual([
+      "aaaaaaaaaaaaaaaaaaaaaa",
+    ]);
+  });
+
+  it("gates CAPTURE alone — bytes already bought are free to analyse and embed", async () => {
+    const { listTrackWork } = await import("./track-work");
+
+    // The budget is shut (default-deny, nothing configured). A catalogue track whose audio is
+    // ALREADY on file cost its money long ago; measuring it now spends nothing, and its vector
+    // is how The Ear gets to disagree with the ladder. Gating analyse/embed on a CAPTURE budget
+    // would be throwing away bytes he has already paid for — the same reasoning that scopes the
+    // label veto to capture alone.
+    await seedCatalogueTrack(db, { trackId: "cat1000000000000000000" });
+    await withAudio("cat1000000000000000000");
+
+    expect((await listTrackWork({ kind: "analyze" })).length).toBe(1);
+    expect((await listTrackWork({ kind: "embed" })).length).toBe(1);
+    expect(await listTrackWork({ kind: "capture", scope: "catalogue" })).toEqual([]);
   });
 });

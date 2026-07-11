@@ -70,6 +70,7 @@ const UpdateTrackBodySchema = z.looseObject({
   logId: z.unknown().optional(),
   note: z.unknown().optional(),
   sourceAudioAttemptedAt: z.unknown().optional(),
+  sourceAudioBytes: z.unknown().optional(),
   sourceAudioCapturedAt: z.unknown().optional(),
   sourceAudioFailures: z.unknown().optional(),
   sourceAudioKey: z.unknown().optional(),

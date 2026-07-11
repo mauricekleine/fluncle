@@ -38,7 +38,7 @@ export default function NotificationsScreen() {
       <CosmosBackdrop />
       <SafeAreaView style={{ flex: 1, gap: 16, padding: 20 }}>
         <Text style={[font.display, { color: color.starlightCream, fontSize: 26 }]}>
-          Pings from the Galaxy
+          Notifications
         </Text>
         <Text style={[font.body, { color: color.stardust }]}>
           Get a quiet nudge when Fluncle logs a new banger, and when he surfaces from a dream with a
@@ -61,7 +61,7 @@ export default function NotificationsScreen() {
           </Text>
         ) : (
           <HeatButton
-            label={state === "working" ? "Tuning in…" : "Enable pings"}
+            label={state === "working" ? "Tuning in…" : "Enable notifications"}
             onPress={enable}
             disabled={state === "working"}
           />

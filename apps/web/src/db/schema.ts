@@ -214,9 +214,21 @@ export const tracks = sqliteTable(
     previewArchivedAt: text("preview_archived_at"),
     previewUrl: text("preview_url"),
     releaseDate: text("release_date"),
-    // ISO of the last full-song capture attempt → the backoff-cooldown anchor (grows
-    // with `source_audio_failures`), mirroring the backfill_* sweeps. Null until tried.
+    // ISO of the last full-song capture ATTEMPT — stamped on EVERY terminal outcome
+    // (done | unmatched | failed), because every one of them is a metered proxy request
+    // that was billed. Two readers, and the second is why it is stamped on success too:
+    //   - the backoff-cooldown anchor (grows with `source_audio_failures`), which only
+    //     ever looks at `capture_status = 'failed'` rows, so the wider stamp is inert there;
+    //   - the CAPTURE BUDGET's rolling-24h ledger (./capture-budget.ts) — "how many
+    //     downloads did the catalogue buy today" is a range seek on THIS column, which is
+    //     only true if a success stamps it as well as a failure.
+    // Null until tried.
     sourceAudioAttemptedAt: text("source_audio_attempted_at"),
+    // The SIZE of the captured full song in bytes — the meter behind the capture budget's
+    // byte cap. Written by the capture sweep alongside the key; null on a legacy row
+    // captured before the meter existed (the ledger coalesces those to 0, so an old
+    // capture cannot silently inflate today's spend). See ./capture-budget.ts.
+    sourceAudioBytes: integer("source_audio_bytes"),
     // ISO stamp when the full-song bytes landed in R2. Null until captured.
     sourceAudioCapturedAt: text("source_audio_captured_at"),
     // CONSECUTIVE capture failures (reset to 0 on success); drives the backoff window.
@@ -256,6 +268,15 @@ export const tracks = sqliteTable(
   //   - `nearest_finding_score` — the Ear's rank: "closest to a finding, not yet logged."
   //   - `capture_priority`      — the capture queue's rank: who gets captured next.
   //
+  // The CAPTURE BUDGET's rolling-24h ledger (./capture-budget.ts) asks one question of this
+  // table — "what did the catalogue spend in the last 24h?" — and it must stay a SEEK, because
+  // it is read on every capture-queue tick and every /admin/catalogue load, against the one
+  // table the crawler grows without bound. It is a range predicate on the attempt stamp, so:
+  //   - `source_audio_attempted_at` — the ledger's window. NULLs sort first in an ASC index,
+  //     so a `>= cutoff` seek skips every never-attempted row (which is nearly all of them)
+  //     and reads only the window — and the window is itself bounded by the budget the ledger
+  //     is enforcing. The cost of the brake cannot grow with the catalogue.
+  //
   // The CRAWLER's two write-side reads (docs/catalogue-crawler.md). The Ear ranks what
   // exists and the graph pages render it; the crawler is what makes the rows exist, and its
   // two hot predicates are properties of the RECORDING rather than of the certification.
@@ -266,6 +287,7 @@ export const tracks = sqliteTable(
     index("tracks_label_id_idx").on(table.labelId),
     index("tracks_nearest_finding_score_idx").on(table.nearestFindingScore),
     index("tracks_capture_priority_idx").on(table.capturePriority),
+    index("tracks_source_audio_attempted_at_idx").on(table.sourceAudioAttemptedAt),
     // The crawler's idempotence check — "do we already hold this ISRC?" — before minting a
     // row. A predicate on `tracks.isrc` over a table designed to grow to five figures, so
     // it is indexed. NOT unique: an ISRC is not guaranteed distinct across the archive's

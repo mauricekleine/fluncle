@@ -8,10 +8,10 @@
 //
 //   1. A COORDINATE (`004.7.2I`, `fluncle://004.7.2I`). A regex and one indexed lookup.
 //      This is a jump, not a search — it resolves to the `/log` page or to nothing.
-//   2. An EXACT ENTITY (an artist / label / album named in full). One indexed lookup. An
-//      artist has a page, so it is a jump; a label or an album has none yet, so it becomes
-//      the filter it obviously is (every track on that label) rather than a dead link.
-//   3. A BARE TOKEN (`netsky`). FTS5 (bm25) + an artist prefix match. ~114 ms at 100k rows,
+//   2. An EXACT ENTITY (an artist / label / album named in full). One indexed lookup. All
+//      three have a page (`/artist/<slug>`, `/label/<slug>`, `/album/<slug>`), so all three
+//      are a jump — one shape, one affordance, no second pattern.
+//   3. A BARE TOKEN (`netsky`). FTS5 (bm25) + an entity prefix match. ~114 ms at 100k rows,
 //      measured on hosted Turso in the scale spike.
 //   3½. A SONIC PHRASE (`tracks that sound like Nine Clouds`). A regex, not a model — see the
 //      sonic tier below for why the headline query is the LAST one that should depend on a
@@ -51,6 +51,7 @@
 // rule. "Finding" stays the only named object in Fluncle's world.
 
 import { type SearchEntity, type SearchFilters, type SearchHit } from "@fluncle/contracts/orpc";
+import { slugify } from "@fluncle/contracts/util/galaxy-slug";
 import { parseKey } from "../key-camelot";
 import {
   isBareToken,
@@ -197,12 +198,75 @@ async function ftsSearch(match: string, limit: number): Promise<SearchHit[]> {
   return typedRows<SearchRow>(result.rows).map(toHit);
 }
 
+// ── The entities — the three graph nodes that have a page ────────────────────────────
+//
+// An artist, a label, and an album are ONE affordance, so they are one code path: the thing
+// you searched for, offered as a destination, above the rows it also brought back. Each has a
+// slug-keyed page (`/artist/<slug>`, `/label/<slug>`, `/album/<slug>`), each has a picture (a
+// portrait, or the freshest finding's cover art standing in for one), and `kind` decides the
+// route. There is deliberately no second pattern for the two that arrived later.
+//
+// (`docs/album-entity.md` is the shape they share; the LABEL and ALBUM pages did not exist
+// when search shipped, which is why those two used to come back as a bare filter chip.)
+
+/** A row from any of the three entity tables — one projection, three sources. */
+type EntityRow = { image_url: string | null; name: string; slug: string };
+
+/** How many jump targets one kind may offer beside the rows. */
+const ENTITY_LIMIT = 3;
+
 /**
- * Artists whose name the query PREFIXES — the jump targets above the rows. Cheap (an indexed
- * prefix range on a 67-row table today), and the affordance that makes a search box feel like
- * navigation: type `net`, see Netsky, press enter, land on the artist page.
+ * The read for one entity kind, with `predicate` closing over `lower(name)`.
+ *
+ * `kind` is a closed union and `predicate` is one of two literals below — nothing a stranger
+ * typed is ever interpolated here; the needle and the limit are BIND ARGS, as everywhere else
+ * in this file.
+ *
+ * An ARTIST is listed whatever it carries: the table is minted off the artist graph and every
+ * row has a page. A LABEL or an ALBUM must have at least one CERTIFIED finding on it, and that
+ * guard is load-bearing: the catalogue crawler mints a `labels` row for every imprint it walks
+ * past (`crawl.ts`), so without it search would offer a destination that is an empty page. The
+ * picture is that same freshest finding's cover art — the one `labels.ts` / `albums.ts` already
+ * put on the `/labels` and `/albums` index rows, so a label reads here exactly as it reads there.
  */
-async function matchArtists(query: string, limit = 3): Promise<SearchEntity[]> {
+function entitySql(kind: SearchEntity["kind"], predicate: string): string {
+  if (kind === "artist") {
+    return `select name, slug, image_url from artists
+            where lower(name) ${predicate}
+            order by length(name) asc, name asc
+            limit ?`;
+  }
+
+  const table = kind === "album" ? "albums" : "labels";
+  const pointer = kind === "album" ? "album_id" : "label_id";
+
+  return `select ${table}.name as name, ${table}.slug as slug,
+            (select t.album_image_url
+               from tracks t join findings f on f.track_id = t.track_id
+               where t.${pointer} = ${table}.id and f.log_id is not null
+               order by f.added_at desc limit 1) as image_url
+          from ${table}
+          where lower(${table}.name) ${predicate}
+            and exists (select 1 from tracks t2 join findings f2 on f2.track_id = t2.track_id
+                        where t2.${pointer} = ${table}.id and f2.log_id is not null)
+          order by length(${table}.name) asc, ${table}.name asc
+          limit ?`;
+}
+
+/**
+ * Entities of one kind whose name the query EXACTLY names, or PREFIXES.
+ *
+ * The prefix mode is the affordance that makes a search box feel like navigation: type `net`,
+ * see Netsky; type `hospi`, see Hospital Records. Cheap either way — all three tables are
+ * bounded by the ARCHIVE (an album and a label are minted only off a certified finding), not by
+ * the catalogue, so this stays tens-to-hundreds of rows however deep the catalogue gets.
+ */
+async function matchEntities(
+  kind: SearchEntity["kind"],
+  query: string,
+  mode: "exact" | "prefix",
+  limit = ENTITY_LIMIT,
+): Promise<SearchEntity[]> {
   const needle = query.trim().toLowerCase();
 
   if (needle.length === 0) {
@@ -212,35 +276,52 @@ async function matchArtists(query: string, limit = 3): Promise<SearchEntity[]> {
   const db = await getDb();
   const result = await db.execute({
     args: [needle, limit],
-    sql: `select name, slug, image_url from artists
-          where lower(name) like ? || '%'
-          order by length(name) asc, name asc
-          limit ?`,
+    sql: entitySql(kind, mode === "exact" ? "= ?" : "like ? || '%'"),
   });
 
-  return typedRows<{ image_url: string | null; name: string; slug: string }>(result.rows).map(
-    (row) => ({
-      imageUrl: row.image_url ?? undefined,
-      kind: "artist" as const,
-      name: row.name,
-      slug: row.slug,
-    }),
-  );
+  return typedRows<EntityRow>(result.rows).map((row) => ({
+    imageUrl: row.image_url ?? undefined,
+    kind,
+    name: row.name,
+    slug: row.slug,
+  }));
+}
+
+/**
+ * Every jump target a bare token prefixes — artists, then labels, then albums. The order is
+ * the order they render in, and it is the order a reader means: a name is most often a person.
+ */
+async function prefixEntities(query: string): Promise<SearchEntity[]> {
+  const [artists, labels, albums] = await Promise.all([
+    matchEntities("artist", query, "prefix"),
+    matchEntities("label", query, "prefix"),
+    matchEntities("album", query, "prefix"),
+  ]);
+
+  return [...artists, ...labels, ...albums];
+}
+
+/** The page an entity IS. The one place a kind becomes a route. */
+function entityRedirect(entity: SearchEntity): string {
+  return `/${entity.kind}/${entity.slug}`;
 }
 
 // ── Tier 2 · the exact entity ────────────────────────────────────────────────────────
 
 /**
  * Does the query NAME an entity, in full? An exact (case-insensitive) hit on an artist, a
- * label, or an album.
+ * label, or an album — the three graph nodes with a page.
  *
- * The artist carries a REDIRECT — `/artist/<slug>` exists, so Enter goes to the page. It
- * carries the artist's TRACKS underneath it too: a jump the reader did not want is a dead end
- * if it is all they were offered, and the rows cost one query they were going to want anyway.
+ * It comes back as an ENTITY carrying a REDIRECT, never as a synthetic "go to /label/hospital-
+ * records" row: a reader should see the thing, not a rendering of the URL they are about to
+ * visit. And it carries the entity's TRACKS underneath it, because a jump the reader did not
+ * want is a dead end if it is all they were offered — and the rows cost one query they were
+ * going to want anyway.
  *
- * The label and the album become FILTERS instead of redirects: their pages are the next thing
- * to land (roadmap: "the graph surfaces"), and until they exist a redirect would be a 404. The
- * day they ship, this is the one function that flips.
+ * THE FALLBACK is what is left of the world before the graph pages shipped: a label or an
+ * album with no entity row — a crawler-minted imprint with nothing certified on it, an album
+ * string that folds to no `albums` row — has no page, so a redirect would be a 404. It becomes
+ * the filter it obviously is (every track on that label) instead of a dead link.
  */
 async function resolveEntity(query: string): Promise<SearchResult | null> {
   const needle = query.trim().toLowerCase();
@@ -249,34 +330,32 @@ async function resolveEntity(query: string): Promise<SearchResult | null> {
     return null;
   }
 
-  const db = await getDb();
-  const artist = typedRow<{ name: string; slug: string }>(
-    (
-      await db.execute({
-        args: [needle],
-        sql: `select name, slug from artists where lower(name) = ? limit 1`,
-      })
-    ).rows,
-  );
+  const [artists, labels, albums] = await Promise.all([
+    matchEntities("artist", needle, "exact", 1),
+    matchEntities("label", needle, "exact", 1),
+    matchEntities("album", needle, "exact", 1),
+  ]);
+  const entity = artists[0] ?? labels[0] ?? albums[0];
 
-  if (artist) {
-    const [{ results }, entities] = await Promise.all([
-      runFilters({ artist: artist.name }, DEFAULT_LIMIT),
-      matchArtists(artist.name, 1),
-    ]);
+  if (entity) {
+    const filters: SearchFilters =
+      entity.kind === "artist"
+        ? { artist: entity.name }
+        : entity.kind === "label"
+          ? { label: entity.name }
+          : { album: entity.name };
+    const { results } = await runFilters(filters, DEFAULT_LIMIT);
 
-    // The artist rides back as an ENTITY (the named jump target, with their portrait), not as
-    // a synthetic "go to /artist/netsky" row. A reader should see the artist, never the URL.
-    // It is first in the list, so Enter still lands on their page.
     return {
       degraded: false,
-      entities,
+      entities: [entity],
       kind: "entity",
-      redirect: `/artist/${artist.slug}`,
+      redirect: entityRedirect(entity),
       results,
     };
   }
 
+  const db = await getDb();
   const label = typedRow<{ name: string }>(
     (
       await db.execute({
@@ -294,19 +373,33 @@ async function resolveEntity(query: string): Promise<SearchResult | null> {
     };
   }
 
-  const album = typedRow<{ album: string }>(
-    (
-      await db.execute({
-        args: [needle],
-        sql: `select album from tracks where lower(album) = ? limit 1`,
-      })
-    ).rows,
-  );
+  // The album probe seeks the `albums` ENTITY by its unique slug, never `lower(tracks.album)`.
+  // That equality was unindexable, so on a MISS — which is most queries, since most queries
+  // are not an album title — it scanned every row of `tracks`, on the hot path of the search
+  // box, growing 1:1 with the catalogue. The entity is slug-keyed and bounded by the archive:
+  // one index seek, at any catalogue size.
+  //
+  // It also resolves MORE, not less: the slug fold is punctuation-insensitive, so "Wormhole"
+  // and "wormhole." now ask the same question. What it stops resolving as an ENTITY is an
+  // album Fluncle has never certified anything on — which has no `albums` row and therefore no
+  // page to jump to, so calling it an entity was the lie. Its tracks are still found, by the
+  // FTS tier below, which indexes `tracks.album` for exactly this.
+  const albumSlug = slugify(needle);
+  const album = albumSlug
+    ? typedRow<{ name: string }>(
+        (
+          await db.execute({
+            args: [albumSlug],
+            sql: `select name from albums where slug = ? limit 1`,
+          })
+        ).rows,
+      )
+    : undefined;
 
   if (album) {
     return {
-      ...(await runFilters({ album: album.album }, DEFAULT_LIMIT)),
-      filters: { album: album.album },
+      ...(await runFilters({ album: album.name }, DEFAULT_LIMIT)),
+      filters: { album: album.name },
       kind: "entity",
     };
   }
@@ -612,12 +705,12 @@ export async function searchArchive(options: { q: string; limit?: number }): Pro
     return entity;
   }
 
-  // ── 3 · A bare token. FTS5 + the artist prefix jump.
+  // ── 3 · A bare token. FTS5 + the entity prefix jump (artist, label, album).
   if (isBareToken(q)) {
     const match = toFtsMatch(q);
     const [results, entities] = await Promise.all([
       match ? ftsSearch(match, limit) : Promise.resolve([]),
-      matchArtists(q),
+      prefixEntities(q),
     ]);
 
     return { degraded: false, entities, kind: "token", results };
@@ -678,8 +771,8 @@ export async function searchArchive(options: { q: string; limit?: number }): Pro
   const match = toFtsMatch(q, "or");
   const [results, entities] = await Promise.all([
     match ? ftsSearch(match, limit) : Promise.resolve([]),
-    // The first token is the one worth prefixing an artist against ("andromedik tracks …").
-    matchArtists(tokenize(q)[0] ?? ""),
+    // The first token is the one worth prefixing an entity against ("andromedik tracks …").
+    prefixEntities(tokenize(q)[0] ?? ""),
   ]);
 
   return { degraded: filters === null, entities, kind: "token", results };

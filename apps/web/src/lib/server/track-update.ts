@@ -114,6 +114,12 @@ export type TrackUpdate = {
   observationScript?: string;
   /** ISO of the last full-song capture attempt (backoff-cooldown anchor). See captureStatus. */
   sourceAudioAttemptedAt?: string;
+  /**
+   * The captured song's SIZE in bytes — the meter behind the capture budget's byte cap
+   * (./capture-budget.ts). A measurement of the acquisition, written by the capture sweep
+   * alongside the key, and internal like the rest of the capture side-channel.
+   */
+  sourceAudioBytes?: number;
   /** ISO stamp when the full-song bytes landed in R2. See captureStatus. */
   sourceAudioCapturedAt?: string;
   /** Consecutive capture failures (drives the backoff window). See captureStatus. */
@@ -489,6 +495,11 @@ export async function updateTrack(
   if (update.sourceAudioFailures !== undefined) {
     sets.push("source_audio_failures = ?");
     args.push(update.sourceAudioFailures);
+  }
+
+  if (update.sourceAudioBytes !== undefined) {
+    sets.push("source_audio_bytes = ?");
+    args.push(update.sourceAudioBytes);
   }
 
   if (update.note !== undefined) {

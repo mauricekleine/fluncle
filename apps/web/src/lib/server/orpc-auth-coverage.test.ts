@@ -246,6 +246,11 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // the snapshot draws from and publishes nothing, so the operator's CLI + Raycast
   // menu bar (and the box) read it with the agent token.
   get_attention: "admin",
+  // The capture budget's spend readout — admin tier (agent-allowed READ), the
+  // `get_crawl_status` precedent. Reading what a metered budget has left spends nothing and
+  // publishes nothing, and a sweep is entitled to know why the capture queue went quiet.
+  // Its WRITE sibling (`set_capture_budget`) is operator-only — see below.
+  get_capture_budget: "admin",
   // The built clip caption read — admin tier (agent-allowed), the list_clips precedent:
   // a read the clip-card UI + the box can both consume.
   get_clip_caption: "admin",
@@ -402,6 +407,12 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   review_artist: "operator",
   save_private_finding: "private-session",
   send_edition: "operator",
+  // The catalogue capture budget + its kill switch — operator tier, like `set_clip_drip`
+  // and `set_publish_advance`. It is the ONE operator-tier op in the `admin-catalogue`
+  // domain, and deliberately so: every other op there is free (the crawler moves metadata,
+  // the Ear moves vectors), while this one decides how much of the operator's money a
+  // metered residential proxy may spend. An agent does not get to raise its own budget.
+  set_capture_budget: "operator",
   // The clip drip-feed kill switch — operator tier: pausing/resuming the whole drip is
   // the operator's control, not the box's (the box only ticks the drip).
   set_clip_drip: "operator",

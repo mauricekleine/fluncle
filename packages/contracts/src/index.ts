@@ -34,6 +34,7 @@ import {
   type AttentionSourceSchema,
 } from "./orpc/admin-attention.js";
 import {
+  type CaptureBudgetStateSchema,
   type CapturePriorityReasonSchema,
   type CatalogueLensSchema,
   type CatalogueMatchSchema,
@@ -202,6 +203,16 @@ export type CatalogueSummary = z.infer<typeof CatalogueSummarySchema>;
 
 /** `GET /api/admin/catalogue` response — one lens's page, plus the summary. */
 export type CatalogueResponse = Ok<{ summary: CatalogueSummary; tracks: CatalogueTrackItem[] }>;
+
+/**
+ * The capture budget's readout — the kill switch, the two rolling-24h caps, the spend against
+ * them, and the verdict the capture queue obeys. The brake on the only thing in Fluncle that
+ * bills per unit of work (docs/the-ear.md § The capture budget).
+ */
+export type CaptureBudgetState = z.infer<typeof CaptureBudgetStateSchema>;
+
+/** `GET`/`PUT /api/admin/catalogue/capture-budget` response — the full state, either way. */
+export type CaptureBudgetResponse = Ok<CaptureBudgetState>;
 
 // ── The audio pipeline's work queues (docs/gpu-batch-embed.md) ───────────────────
 // capture → analyze → embed, over `tracks` rather than `findings`: BPM, key, features,

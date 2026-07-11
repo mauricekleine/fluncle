@@ -6,15 +6,26 @@ A feed carries sixty findings. It cannot carry an archive. Search is the surface
 
 A query is resolved by trying tiers **in order**, stopping at the first that answers. The order is a performance decision and a safety decision at once.
 
-| #   | Tier              | Example                              | What answers it                                             | Costs                              |
-| --- | ----------------- | ------------------------------------ | ----------------------------------------------------------- | ---------------------------------- |
-| 1   | **Coordinate**    | `004.7.2I`, `fluncle://004.7.2I`     | A regex + one indexed lookup                                | —                                  |
-| 2   | **Exact entity**  | `Netsky`, `Hospital Records`         | One indexed lookup on `artists` / `labels` / `tracks.album` | —                                  |
-| 3   | **Bare token**    | `netsky`                             | FTS5 (bm25) + an artist prefix match                        | ~114 ms at 100k (measured, hosted) |
-| 3½  | **Sonic phrase**  | `tracks that sound like Nine Clouds` | A regex → the anchor's MuQ vector → `vector_distance_cos`   | one vector scan                    |
-| 4   | **Anything else** | `Andromedik tracks in A minor`       | A small LLM emits `SearchFilters`; **SQL** retrieves        | one model call, 3s deadline        |
+| #   | Tier              | Example                              | What answers it                                           | Costs                              |
+| --- | ----------------- | ------------------------------------ | --------------------------------------------------------- | ---------------------------------- |
+| 1   | **Coordinate**    | `004.7.2I`, `fluncle://004.7.2I`     | A regex + one indexed lookup                              | —                                  |
+| 2   | **Exact entity**  | `Netsky`, `Hospital Records`         | One indexed lookup on `artists` / `labels` / `albums`     | —                                  |
+| 3   | **Bare token**    | `netsky`                             | FTS5 (bm25) + an entity prefix match                      | ~114 ms at 100k (measured, hosted) |
+| 3½  | **Sonic phrase**  | `tracks that sound like Nine Clouds` | A regex → the anchor's MuQ vector → `vector_distance_cos` | one vector scan                    |
+| 4   | **Anything else** | `Andromedik tracks in A minor`       | A small LLM emits `SearchFilters`; **SQL** retrieves      | one model call, 3s deadline        |
 
 **Tiers 1–3½ are most of what anyone types, and none of them costs a model call.** That is the point of the ordering: the LLM is never on the hot path of a common query.
+
+### An artist, a label, and an album are one affordance
+
+Tier 2 and tier 3 both hand back **entities** — jump targets that sit above the rows. There are three kinds and they are deliberately **one row, one shape, one code path**: the picture, the name, the arrow, and a page to land on (`/artist/<slug>`, `/label/<slug>`, `/album/<slug>` — the graph pages in [docs/album-entity.md](./album-entity.md)). `kind` decides the route and nothing else. Search a label and you are offered the label, with its tracks under it; the same is true of a record, and of a person.
+
+It was not always so. Search shipped before the label and album pages did, so those two came back as a bare `label: …` filter chip — the one thing the reader actually searched for, withheld, because a redirect would have been a 404. That is gone; the chip row now belongs to the model's filters alone (tier 4), which is what it was always for.
+
+Two rails hold:
+
+- **A label or an album is offered only with a certified finding on it.** The [catalogue crawler](./catalogue-crawler.md) mints a `labels` row for every imprint it walks past, and a page with nothing certified on it is a destination that is an empty room. Those decline the jump and fall back to being the filter they always were — never a dead link. (An `albums` row is minted only off a finding by construction, so its guard is a belt-and-braces twin of the label's.)
+- **The entity tables are archive-sized, not catalogue-sized** — an album and a label earn a row only off a certified finding — so the prefix match stays a cheap read however deep the catalogue gets.
 
 ### The model emits filters, never rows
 

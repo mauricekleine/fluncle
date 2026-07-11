@@ -1,9 +1,13 @@
 // The colophon — the site's whole navigation, banked at the bottom like a record
 // sleeve's liner notes. This is the crawl backbone: any deep page is within two hops
-// of every index (log ↔ artists ↔ galaxies ↔ logbook ↔ mixtapes ↔ labels-soon), which
-// is where a footer earns its SEO keep. The plate grammar (crop-mark brackets +
+// of every index (log ↔ artists ↔ galaxies ↔ logbook ↔ mixtapes ↔ labels ↔ albums),
+// which is where a footer earns its SEO keep. The plate grammar (crop-mark brackets +
 // register cross + grain) dresses it; a darker ground than the page plate is what
 // makes it read as a distinct object rather than as more page.
+//
+// The columns come from the nav model, headings and all — including the fork between
+// THE TRAIL (what Fluncle did) and THE CRATES (what he found it among). Add a link
+// there, not here.
 
 import { Link } from "@tanstack/react-router";
 import { type ReactNode } from "react";

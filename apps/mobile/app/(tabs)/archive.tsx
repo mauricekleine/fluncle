@@ -56,8 +56,7 @@ export default function ArchiveScreen() {
             The archive
           </Text>
           <View style={{ alignItems: "center", flexDirection: "row", gap: 8 }}>
-            <HeaderPill label="Put me on" onPress={() => router.push("/submit")} />
-            <HeaderPill label="Pings" onPress={() => router.push("/notifications")} />
+            <HeaderPill label="Submit a track" onPress={() => router.push("/submit")} />
           </View>
         </View>
         <View
@@ -107,7 +106,9 @@ export default function ArchiveScreen() {
 }
 
 // A header action pill (the quiet outline the notifications entry used). Two now
-// sit in the archive header: "Put me on" (submit a track) and "Pings" (push consent).
+// sits in the archive header: "Submit a track" (the ratified functional label; the Chrome Rule
+// keeps controls literal). The push-consent screen at /notifications is reached contextually,
+// not from permanent chrome — its test pill was removed 2026-07-11.
 function HeaderPill({ label, onPress }: { label: string; onPress: () => void }) {
   return (
     <Pressable

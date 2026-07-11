@@ -1,221 +1,282 @@
 import { describe, expect, it } from "vitest";
 import { siteUrl } from "./fluncle-links";
-import { buildSitemapXml } from "./sitemap";
+import {
+  buildSitemapIndexXml,
+  buildSitemapShardXml,
+  EMPTY_SITEMAP_BAGS,
+  parseShard,
+  shardCount,
+  shardPath,
+  type SitemapBags,
+  SITEMAP_MAX_URLS,
+} from "./sitemap";
 
-describe("buildSitemapXml (sitemap enumeration)", () => {
-  // The always-listed hubs: /, /log, /logbook, /mixtapes, /artists, /labels, /albums,
-  // /about, /privacy, /galaxy. (/galaxies is gated on the map being named.)
-  const STATIC_SURFACES = 10;
+function bags(overrides: Partial<SitemapBags> = {}): SitemapBags {
+  return { ...EMPTY_SITEMAP_BAGS, ...overrides };
+}
 
-  const pages = [
-    { lastmod: "2026-06-10T14:57:38.786Z", logId: "011.6.8K" },
-    { lastmod: "2026-06-03T10:00:00.000Z", logId: "004.7.2I" },
-  ];
+const LOGS = [
+  { lastmod: "2026-06-10T14:57:38.786Z", logId: "011.6.8K" },
+  { lastmod: "2026-06-03T10:00:00.000Z", logId: "004.7.2I" },
+];
 
-  it("enumerates one <loc> per log page plus the static surfaces", () => {
-    const xml = buildSitemapXml(pages);
+describe("the sitemap index", () => {
+  it("carries no <url> of its own — only <sitemap> children", () => {
+    const xml = buildSitemapIndexXml(bags({ logs: LOGS }));
 
-    expect(xml).toContain("<loc>https://www.fluncle.com/</loc>");
-    expect(xml).toContain("<loc>https://www.fluncle.com/log</loc>");
-    expect(xml).toContain("<loc>https://www.fluncle.com/logbook</loc>");
-    expect(xml).toContain("<loc>https://www.fluncle.com/mixtapes</loc>");
-    expect(xml).toContain("<loc>https://www.fluncle.com/artists</loc>");
-    expect(xml).toContain("<loc>https://www.fluncle.com/about</loc>");
-    expect(xml).toContain("<loc>https://www.fluncle.com/privacy</loc>");
-    expect(xml).toContain("<loc>https://www.fluncle.com/galaxy</loc>");
-    expect(xml).toContain("<loc>https://www.fluncle.com/log/011.6.8K</loc>");
-    expect(xml).toContain("<loc>https://www.fluncle.com/log/004.7.2I</loc>");
-    expect(xml.match(/<loc>/g)).toHaveLength(STATIC_SURFACES + pages.length);
+    expect(xml).toContain("<sitemapindex");
+    expect(xml).not.toContain("<url>");
+    expect(xml).not.toContain("<urlset");
   });
 
-  it("always includes the /galaxy surface", () => {
-    expect(buildSitemapXml(pages)).toContain(`<loc>${siteUrl}/galaxy</loc>`);
-    expect(buildSitemapXml([])).toContain(`<loc>${siteUrl}/galaxy</loc>`);
+  it("lists the hubs child and the findings child", () => {
+    const xml = buildSitemapIndexXml(bags({ logs: LOGS }));
+
+    expect(xml).toContain(`<loc>${siteUrl}/sitemap/pages-1.xml</loc>`);
+    expect(xml).toContain(`<loc>${siteUrl}/sitemap/findings-1.xml</loc>`);
+  });
+
+  it("omits a child for a kind with nothing in it", () => {
+    // An empty <urlset> tells a crawler the URLs were REMOVED; a missing sitemap says nothing.
+    const xml = buildSitemapIndexXml(bags({ logs: LOGS }));
+
+    expect(xml).not.toContain("logbook-1.xml");
+    expect(xml).not.toContain("graph-1.xml");
+  });
+
+  it("always lists the hubs child, even on an empty archive", () => {
+    expect(buildSitemapIndexXml(EMPTY_SITEMAP_BAGS)).toContain("pages-1.xml");
+  });
+
+  it("dates each child from its own freshest entry, never a build stamp", () => {
+    const xml = buildSitemapIndexXml(bags({ logs: LOGS }));
+
+    expect(xml.slice(xml.indexOf("findings-1.xml"))).toContain(
+      "<lastmod>2026-06-10T14:57:38.786Z</lastmod>",
+    );
+  });
+
+  it("grows a SECOND child rather than breaching Google's 50,000-URL limit", () => {
+    const many = Array.from({ length: SITEMAP_MAX_URLS + 1 }, (_unused, index) => ({
+      lastmod: "2026-06-10T14:57:38.786Z",
+      logId: `0${index}.6.8K`,
+    }));
+    const xml = buildSitemapIndexXml(bags({ logs: many }));
+
+    expect(shardCount("findings", bags({ logs: many }))).toBe(2);
+    expect(xml).toContain("findings-1.xml");
+    expect(xml).toContain("findings-2.xml");
+  });
+});
+
+describe("a child sitemap", () => {
+  it("puts the static hubs in `pages`", () => {
+    const xml = buildSitemapShardXml("pages", 1, bags({ logs: LOGS })) ?? "";
+
+    for (const hub of ["/", "/log", "/logbook", "/mixtapes", "/artists", "/labels", "/albums"]) {
+      expect(xml).toContain(`<loc>${siteUrl}${hub}</loc>`);
+    }
+
+    expect(xml).toContain(`<loc>${siteUrl}/about</loc>`);
+    expect(xml).toContain(`<loc>${siteUrl}/privacy</loc>`);
+    expect(xml).toContain(`<loc>${siteUrl}/galaxy</loc>`);
+    // 10 hubs; /galaxies is gated on the map being named.
+    expect(xml.match(/<loc>/g)).toHaveLength(10);
+  });
+
+  it("puts one <loc> per /log page in `findings`, and nothing else", () => {
+    const xml = buildSitemapShardXml("findings", 1, bags({ logs: LOGS })) ?? "";
+
+    expect(xml).toContain(`<loc>${siteUrl}/log/011.6.8K</loc>`);
+    expect(xml).toContain(`<loc>${siteUrl}/log/004.7.2I</loc>`);
+    expect(xml.match(/<loc>/g)).toHaveLength(2);
   });
 
   it("uses the per-finding lastmod, never a build stamp", () => {
-    const xml = buildSitemapXml(pages);
-    const entry = xml.slice(xml.indexOf("004.7.2I"));
+    const xml = buildSitemapShardXml("findings", 1, bags({ logs: LOGS })) ?? "";
 
-    expect(entry).toContain("<lastmod>2026-06-03T10:00:00.000Z</lastmod>");
+    expect(xml.slice(xml.indexOf("004.7.2I"))).toContain(
+      "<lastmod>2026-06-03T10:00:00.000Z</lastmod>",
+    );
   });
 
-  it("gives the home and index the newest finding's lastmod", () => {
-    const xml = buildSitemapXml(pages);
-    const home = xml.slice(0, xml.indexOf("/log<"));
+  it("gives the hubs the newest finding's lastmod", () => {
+    const xml = buildSitemapShardXml("pages", 1, bags({ logs: LOGS })) ?? "";
 
-    expect(home).toContain("<lastmod>2026-06-10T14:57:38.786Z</lastmod>");
+    expect(xml.slice(0, xml.indexOf("/log<"))).toContain(
+      "<lastmod>2026-06-10T14:57:38.786Z</lastmod>",
+    );
   });
 
   it("omits lastmod entirely when there is nothing honest to say", () => {
-    const xml = buildSitemapXml([]);
-
-    expect(xml).not.toContain("<lastmod>");
-    expect(xml.match(/<loc>/g)).toHaveLength(STATIC_SURFACES);
+    expect(buildSitemapShardXml("pages", 1, EMPTY_SITEMAP_BAGS)).not.toContain("<lastmod>");
   });
 
-  it("appends a <loc> per artist page (thin-gated upstream) with its cover + lastmod", () => {
-    const xml = buildSitemapXml(pages, [
-      {
-        imageLoc: "https://img/dimension.jpg",
-        lastmod: "2026-06-09T00:00:00.000Z",
-        slug: "dimension",
-      },
-      { slug: "sub-focus" },
-    ]);
+  it("collects artists, labels, albums and galaxies into `graph`", () => {
+    const xml =
+      buildSitemapShardXml(
+        "graph",
+        1,
+        bags({
+          albums: [{ slug: "wormhole" }],
+          artists: [{ imageLoc: "https://img/dimension.jpg", slug: "dimension" }],
+          galaxies: [{ slug: "deep-roller" }],
+          labels: [{ slug: "medschool" }],
+        }),
+      ) ?? "";
 
-    expect(xml).toContain("<loc>https://www.fluncle.com/artist/dimension</loc>");
-    expect(xml).toContain("<loc>https://www.fluncle.com/artist/sub-focus</loc>");
+    expect(xml).toContain(`<loc>${siteUrl}/artist/dimension</loc>`);
+    expect(xml).toContain(`<loc>${siteUrl}/label/medschool</loc>`);
+    expect(xml).toContain(`<loc>${siteUrl}/album/wormhole</loc>`);
+    expect(xml).toContain(`<loc>${siteUrl}/galaxies/deep-roller</loc>`);
     expect(xml).toContain("<image:loc>https://img/dimension.jpg</image:loc>");
-    // The static surfaces + 2 findings + 2 artists.
-    expect(xml.match(/<loc>/g)).toHaveLength(STATIC_SURFACES + pages.length + 2);
+    expect(xml.match(/<loc>/g)).toHaveLength(4);
   });
 
-  it("appends a <loc> per logbook entry with its generated-at lastmod", () => {
-    const xml = buildSitemapXml(
-      pages,
-      [],
-      [{ lastmod: "2026-07-05T00:00:00.000Z", sector: "036" }, { sector: "037" }],
-    );
+  it("lists the /galaxies hub only once the map is named", () => {
+    const dark = buildSitemapShardXml("pages", 1, EMPTY_SITEMAP_BAGS) ?? "";
+    const lit =
+      buildSitemapShardXml("pages", 1, bags({ galaxies: [{ slug: "deep-roller" }] })) ?? "";
 
-    expect(xml).toContain("<loc>https://www.fluncle.com/logbook/036</loc>");
-    expect(xml).toContain("<loc>https://www.fluncle.com/logbook/037</loc>");
-    // The /logbook index takes the freshest entry's lastmod.
-    const index = xml.slice(0, xml.indexOf("/logbook/036"));
-    expect(index).toContain("<loc>https://www.fluncle.com/logbook</loc>");
-    // The static surfaces + 2 findings + 2 logbook entries.
-    expect(xml.match(/<loc>/g)).toHaveLength(STATIC_SURFACES + pages.length + 2);
-  });
-
-  it("adds the /galaxies index + a <loc> per galaxy only once the map is named (gated upstream)", () => {
-    // No galaxy pages (the pre-launch dark state): neither /galaxies nor any galaxy loc.
-    const dark = buildSitemapXml(pages, [], [], []);
     expect(dark).not.toContain(`<loc>${siteUrl}/galaxies</loc>`);
-    expect(dark).not.toContain(`<loc>${siteUrl}/galaxies/`);
+    expect(lit).toContain(`<loc>${siteUrl}/galaxies</loc>`);
+  });
 
-    // Named + thin-gated upstream: the index static entry plus one loc per galaxy.
-    const live = buildSitemapXml(
-      pages,
-      [],
-      [],
-      [{ slug: "the-liquid-deep" }, { slug: "weightless-rollers" }],
-    );
-    expect(live).toContain(`<loc>${siteUrl}/galaxies</loc>`);
-    expect(live).toContain(`<loc>${siteUrl}/galaxies/the-liquid-deep</loc>`);
-    expect(live).toContain(`<loc>${siteUrl}/galaxies/weightless-rollers</loc>`);
-    // The static surfaces + the /galaxies index + 2 findings + 2 galaxies.
-    expect(live.match(/<loc>/g)).toHaveLength(STATIC_SURFACES + 1 + pages.length + 2);
+  it("puts one <loc> per authored sector-day in `logbook`", () => {
+    const xml =
+      buildSitemapShardXml(
+        "logbook",
+        1,
+        bags({ logbook: [{ lastmod: "2026-07-04T02:11:00.000Z", sector: "036" }] }),
+      ) ?? "";
+
+    expect(xml).toContain(`<loc>${siteUrl}/logbook/036</loc>`);
+    expect(xml).toContain("<lastmod>2026-07-04T02:11:00.000Z</lastmod>");
   });
 
   it("declares the image + video namespaces on the urlset", () => {
-    const xml = buildSitemapXml(pages);
+    const xml = buildSitemapShardXml("findings", 1, bags({ logs: LOGS })) ?? "";
 
     expect(xml).toContain('xmlns:image="http://www.google.com/schemas/sitemap-image/1.1"');
     expect(xml).toContain('xmlns:video="http://www.google.com/schemas/sitemap-video/1.1"');
   });
 
   it("emits an <image:image> cover per finding that carries one", () => {
-    const xml = buildSitemapXml([
-      {
-        imageLoc: "https://found.fluncle.com/011.6.8K/cover.jpg",
-        lastmod: "2026-06-10T14:57:38.786Z",
-        logId: "011.6.8K",
-      },
-    ]);
+    const xml =
+      buildSitemapShardXml(
+        "findings",
+        1,
+        bags({
+          logs: [
+            {
+              imageLoc: "https://i.scdn.co/image/abc",
+              lastmod: "2026-06-10T14:57:38.786Z",
+              logId: "011.6.8K",
+            },
+          ],
+        }),
+      ) ?? "";
 
-    expect(xml).toContain(
-      "<image:image>\n      <image:loc>https://found.fluncle.com/011.6.8K/cover.jpg</image:loc>\n    </image:image>",
-    );
+    expect(xml).toContain("<image:image>");
+    expect(xml).toContain("<image:loc>https://i.scdn.co/image/abc</image:loc>");
   });
 
-  it("emits a well-formed <video:video> block for a finding with footage", () => {
-    const xml = buildSitemapXml([
-      {
-        imageLoc: "https://found.fluncle.com/011.6.8K/cover.jpg",
-        lastmod: "2026-06-10T14:57:38.786Z",
-        logId: "011.6.8K",
-        video: {
-          contentLoc: "https://found.fluncle.com/011.6.8K/footage.mp4",
-          description: "A rolling 174 BPM banger.",
-          thumbnailLoc: "https://found.fluncle.com/011.6.8K/cover.jpg",
-          title: "Artist — Title",
-        },
-      },
-    ]);
+  it("emits a <video:video> block in Google's required field order", () => {
+    const xml =
+      buildSitemapShardXml(
+        "findings",
+        1,
+        bags({
+          logs: [
+            {
+              lastmod: "2026-06-10T14:57:38.786Z",
+              logId: "011.6.8K",
+              video: {
+                contentLoc: "https://media.fluncle.com/011.6.8K/footage.mp4",
+                description: "A roller.",
+                thumbnailLoc: "https://media.fluncle.com/011.6.8K/cover.jpg",
+                title: "Dimension — Wormhole",
+              },
+            },
+          ],
+        }),
+      ) ?? "";
 
-    // Google's required field order: thumbnail_loc, title, description, content_loc.
-    const block = xml.slice(xml.indexOf("<video:video>"), xml.indexOf("</video:video>"));
-    const order = [
-      block.indexOf("<video:thumbnail_loc>"),
-      block.indexOf("<video:title>"),
-      block.indexOf("<video:description>"),
-      block.indexOf("<video:content_loc>"),
-    ];
-
-    expect(order).toEqual([...order].sort((a, b) => a - b));
-    expect(order.every((index) => index >= 0)).toBe(true);
-    expect(xml).toContain(
-      "<video:content_loc>https://found.fluncle.com/011.6.8K/footage.mp4</video:content_loc>",
-    );
+    expect(xml.indexOf("<video:thumbnail_loc>")).toBeLessThan(xml.indexOf("<video:title>"));
+    expect(xml.indexOf("<video:title>")).toBeLessThan(xml.indexOf("<video:description>"));
+    expect(xml.indexOf("<video:description>")).toBeLessThan(xml.indexOf("<video:content_loc>"));
   });
 
-  it("XML-escapes the video title and description (no unescaped & or <)", () => {
-    const xml = buildSitemapXml([
-      {
-        lastmod: "2026-06-10T14:57:38.786Z",
-        logId: "011.6.8K",
-        video: {
-          contentLoc: "https://found.fluncle.com/011.6.8K/footage.mp4",
-          description: 'Tom & Jerry <vibes> with a "quote".',
-          thumbnailLoc: "https://found.fluncle.com/011.6.8K/cover.jpg",
-          title: "A & B — <Title>",
-        },
-      },
-    ]);
+  it("XML-escapes the video title and description", () => {
+    const xml =
+      buildSitemapShardXml(
+        "findings",
+        1,
+        bags({
+          logs: [
+            {
+              lastmod: "2026-06-10T14:57:38.786Z",
+              logId: "011.6.8K",
+              video: {
+                contentLoc: "https://media.fluncle.com/011.6.8K/footage.mp4",
+                description: "A <banger> & a half",
+                thumbnailLoc: "https://media.fluncle.com/011.6.8K/cover.jpg",
+                title: "Culture Shock & Sub Focus",
+              },
+            },
+          ],
+        }),
+      ) ?? "";
 
-    expect(xml).toContain("<video:title>A &amp; B — &lt;Title&gt;</video:title>");
-    expect(xml).toContain(
-      "<video:description>Tom &amp; Jerry &lt;vibes&gt; with a &quot;quote&quot;.</video:description>",
-    );
-    // No raw metacharacter survives inside the escaped fields.
-    expect(xml).not.toContain("A & B");
-    expect(xml).not.toContain("<Title>");
+    expect(xml).toContain("<video:title>Culture Shock &amp; Sub Focus</video:title>");
+    expect(xml).toContain("<video:description>A &lt;banger&gt; &amp; a half</video:description>");
+    expect(xml).not.toMatch(/&(?!amp;|lt;|gt;|quot;|apos;)/);
   });
 
-  it("omits image + video for a plain page (a mixtape)", () => {
-    const xml = buildSitemapXml([{ lastmod: "2026-06-10T14:57:38.786Z", logId: "006.F.01" }]);
+  it("omits image + video for a plain page (a mixtape with no set video)", () => {
+    const xml =
+      buildSitemapShardXml(
+        "findings",
+        1,
+        bags({ logs: [{ lastmod: "2026-06-10T14:57:38.786Z", logId: "019.F.1A" }] }),
+      ) ?? "";
 
     expect(xml).not.toContain("<image:image>");
     expect(xml).not.toContain("<video:video>");
-    expect(xml).toContain("<loc>https://www.fluncle.com/log/006.F.01</loc>");
-  });
-  it("appends a <loc> per graph page (labels + albums) with its cover, and lists their hubs", () => {
-    const xml = buildSitemapXml([], [], [], [], {
-      albums: [{ imageLoc: "https://i.scdn.co/image/album", slug: "wormhole" }],
-      labels: [
-        {
-          imageLoc: "https://i.scdn.co/image/cover",
-          lastmod: "2026-07-01T00:00:00.000Z",
-          slug: "hospital-records",
-        },
-      ],
-    });
-
-    expect(xml).toContain("<loc>https://www.fluncle.com/label/hospital-records</loc>");
-    expect(xml).toContain("<loc>https://www.fluncle.com/album/wormhole</loc>");
-    expect(xml).toContain("<image:loc>https://i.scdn.co/image/cover</image:loc>");
   });
 
-  it("keeps the thin DETAIL pages out while still listing their hubs", () => {
-    // The gate runs upstream (the route filters), so a run with no admitted entity pages is
-    // exactly what a thin archive produces — today every album in the archive is a single,
-    // so NO album detail page clears the floor. The hub is still a real page (its content is
-    // the whole list), so it is listed unconditionally, like /artists.
-    const xml = buildSitemapXml([{ lastmod: "2026-06-10T14:57:38.786Z", logId: "006.F.01" }]);
+  it("404s (undefined) a page past the end rather than serving an empty urlset", () => {
+    expect(buildSitemapShardXml("findings", 2, bags({ logs: LOGS }))).toBeUndefined();
+    expect(buildSitemapShardXml("logbook", 1, EMPTY_SITEMAP_BAGS)).toBeUndefined();
+  });
 
-    expect(xml).toContain("<loc>https://www.fluncle.com/labels</loc>");
-    expect(xml).toContain("<loc>https://www.fluncle.com/albums</loc>");
-    expect(xml).not.toContain("/label/");
-    expect(xml).not.toContain("/album/");
+  it("caps a child at SITEMAP_MAX_URLS and spills the rest into the next", () => {
+    const many = Array.from({ length: SITEMAP_MAX_URLS + 3 }, (_unused, index) => ({
+      lastmod: "2026-06-10T14:57:38.786Z",
+      logId: `0${index}.6.8K`,
+    }));
+
+    expect(buildSitemapShardXml("findings", 1, bags({ logs: many }))?.match(/<loc>/g)).toHaveLength(
+      SITEMAP_MAX_URLS,
+    );
+    expect(buildSitemapShardXml("findings", 2, bags({ logs: many }))?.match(/<loc>/g)).toHaveLength(
+      3,
+    );
+  });
+});
+
+describe("shard paths", () => {
+  it("round-trips a path through parseShard", () => {
+    expect(shardPath("findings", 2)).toBe("/sitemap/findings-2.xml");
+    expect(parseShard("findings-2.xml")).toEqual({ kind: "findings", page: 2 });
+  });
+
+  it("rejects anything that is not a known kind + a 1-indexed page", () => {
+    expect(parseShard("nonsense-1.xml")).toBeUndefined();
+    expect(parseShard("findings.xml")).toBeUndefined();
+    expect(parseShard("findings-0.xml")).toBeUndefined();
+    expect(parseShard("findings-x.xml")).toBeUndefined();
+    expect(parseShard("findings-1")).toBeUndefined();
+    expect(parseShard("../../etc/passwd")).toBeUndefined();
   });
 });
