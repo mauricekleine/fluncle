@@ -114,6 +114,16 @@
   --grain-tile: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
 }
 
+/* No rubber-band. The top bar is sticky and the colophon sits on the bottom edge, so
+   an elastic overscroll peels them off the viewport and flashes bare canvas above and
+   below — for the length of the bounce the page looks broken. Killing the bounce welds
+   the chrome to the edges; the dark ground is the belt-and-braces, so even a browser
+   that ignores `overscroll-behavior` has nothing bright to reveal. */
+html {
+  background-color: var(--sleeve-black);
+  overscroll-behavior-y: none;
+}
+
 body::before {
   background:
     var(--grain-tile) repeat,
@@ -2086,8 +2096,12 @@ body::before {
   padding: 0;
 }
 
+/* BASELINE, not center — same reason as the top bar. The coordinate (14.7px Oxanium),
+   the title (16px Geist) and the date (12.8px) are three different type sizes; centering
+   their BOXES puts their baselines at three different heights, and the row reads as
+   drifting. One baseline is what makes them read as one line. */
 .log-index-row {
-  align-items: center;
+  align-items: baseline;
   border-bottom: 1px solid color-mix(in oklch, var(--border) 72%, transparent);
   display: flex;
   gap: 0.9rem;
@@ -3369,7 +3383,10 @@ body::before {
 }
 
 /* The wordmark — the brand voice (Oxanium caps), heats toward gold on hover. In the
-   top bar it doubles as the FIRST BREADCRUMB: FLUNCLE › Log › 038.6.1J. */
+   top bar it doubles as the FIRST BREADCRUMB: FLUNCLE › Log › 038.6.1J.
+   The negative right margin cancels the TRAILING letter-space after the final E:
+   letter-spacing pads every glyph including the last, so the box extends ~2.4px past
+   the E and the caret after it sits visibly further away than the next one. */
 .nav-wordmark {
   color: var(--starlight-cream);
   flex: none;
@@ -3377,6 +3394,7 @@ body::before {
   font-size: 1.05rem;
   font-weight: 800;
   letter-spacing: 0.14em;
+  margin-right: -0.14em;
   text-transform: uppercase;
   transition: color 150ms ease-out;
 }
@@ -3439,14 +3457,18 @@ body::before {
   z-index: 30;
 }
 
+/* BASELINE, not center. The wordmark is 16.8px Oxanium caps and the crumbs are 13px
+   Geist — box-centering two different type sizes leaves their baselines at different
+   heights, which is exactly what reads as "not vertically centered". Sitting them on
+   one baseline is what makes them read as one line of text. */
 .nav-topbar-inner {
-  align-items: center;
+  align-items: baseline;
   display: flex;
   gap: 0.5rem;
   margin: 0 auto;
   max-width: 80rem;
   min-width: 0;
-  padding: 0.6rem 1rem;
+  padding: 0.75rem 1rem;
 }
 
 /* ── Breadcrumb (inline with the wordmark, every page but home) ─────────────── */
@@ -3455,10 +3477,11 @@ body::before {
 }
 
 .nav-breadcrumb ol {
-  align-items: center;
+  align-items: baseline;
   color: var(--muted-foreground);
   display: flex;
   font-size: 0.82rem;
+  gap: 0.5rem;
   list-style: none;
   margin: 0;
   min-width: 0;
@@ -3466,11 +3489,13 @@ body::before {
 }
 
 /* Each crumb carries its own leading separator, so the trail hangs off the wordmark
-   without the wordmark having to know a breadcrumb exists. */
+   without the wordmark having to know a breadcrumb exists. The li gap and the ol gap
+   are EQUAL, so the caret sits the same distance from the text on both sides — an
+   asymmetric pair here is what made the trail look hand-kerned. */
 .nav-breadcrumb li {
-  align-items: center;
+  align-items: baseline;
   display: flex;
-  gap: 0.4rem;
+  gap: 0.5rem;
   min-width: 0;
 }
 
@@ -3498,7 +3523,6 @@ body::before {
 
 .nav-breadcrumb-sep {
   color: color-mix(in oklch, var(--muted-foreground) 55%, transparent);
-  padding-left: 0.2rem;
 }
 
 /* ── The colophon (the crawl backbone) ─────────────────────────────────────── */
@@ -3525,7 +3549,7 @@ body::before {
 
 .nav-footer-inner,
 .nav-footer-followrow,
-.nav-footer-nerdrow {
+.nav-footer-machinery {
   margin: 0 auto;
   max-width: 80rem;
   padding-left: 1.25rem;
@@ -3623,28 +3647,31 @@ body::before {
   text-align: left;
 }
 
+/* Both closing bands are CENTERED COLUMNS: the label (or nothing) sits on its own
+   line above its marks, so each reads as one block rather than as a label with a tail
+   trailing off to the right. Same shape on desktop and mobile — no breakpoint. */
 .nav-footer-followrow,
-.nav-footer-nerdrow {
+.nav-footer-machinery {
   align-items: center;
   display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem 0.75rem;
+  flex-direction: column;
+  gap: 0.75rem;
 }
 
 .nav-footer-followrow {
   border-top: 1px solid var(--border);
   margin-top: 2rem;
-  padding-bottom: 1rem;
+  padding-bottom: 1.25rem;
   padding-top: 1.25rem;
 }
 
-/* The machinery band closes the plate, centered — the terminal surfaces and the live
-   status pill together, since the pill IS the /status link. */
-.nav-footer-nerdrow {
+/* The machinery closes the plate: the terminal surfaces, then the live status pill on
+   its own line beneath them. No label — CLI / DIG / GIT / MCP / SSH announce
+   themselves — and no rule between the two lines; the line break is the separation. */
+.nav-footer-machinery {
   border-top: 1px solid var(--border);
-  justify-content: center;
   padding-bottom: 1.5rem;
-  padding-top: 1rem;
+  padding-top: 1.25rem;
 }
 
 .nav-footer-rowlabel {
@@ -3659,6 +3686,7 @@ body::before {
   display: flex;
   flex-wrap: wrap;
   gap: 0.1rem;
+  justify-content: center;
 }
 
 .nav-follow-link {
@@ -3685,6 +3713,7 @@ body::before {
   display: flex;
   flex-wrap: wrap;
   gap: 0.25rem;
+  justify-content: center;
 }
 
 .nav-nerd-link {

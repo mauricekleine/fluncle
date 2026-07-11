@@ -9,7 +9,7 @@ import { Link } from "@tanstack/react-router";
 import { type ReactNode } from "react";
 import { HomeStatusPill } from "@/components/home/status-pill";
 import { navIcon } from "@/components/nav/nav-icons";
-import { NavActionItem, NavItemLink } from "@/components/nav/nav-links";
+import { NavItemLink } from "@/components/nav/nav-links";
 import {
   navFollow,
   navNerds,
@@ -25,7 +25,9 @@ function FooterColumn({
   galaxiesLive: boolean;
   section: NavSection;
 }): ReactNode {
-  const items = renderableItems(section, galaxiesLive);
+  // Navigable pages only. The colophon is the crawl graph, so a dialog CTA (Submit a
+  // track) has no place in it — it lives on the home page, where the ask belongs.
+  const items = renderableItems(section, galaxiesLive).filter((item) => item.kind !== "action");
 
   return (
     <nav aria-label={section.label} className="nav-footer-col">
@@ -33,13 +35,7 @@ function FooterColumn({
       <ul>
         {items.map((item) => (
           <li key={item.id}>
-            {/* A dialog CTA (Submit a track) renders as its trigger, never as dead
-                footer text — on a deep page the colophon is the ONLY way to reach it. */}
-            {item.kind === "action" ? (
-              <NavActionItem className="nav-footer-link nav-footer-action" item={item} />
-            ) : (
-              <NavItemLink className="nav-footer-link" item={item} showIcon={false} />
-            )}
+            <NavItemLink className="nav-footer-link" item={item} showIcon={false} />
           </li>
         ))}
       </ul>
@@ -69,6 +65,8 @@ export function NavFooter({ galaxiesLive }: { galaxiesLive: boolean }): ReactNod
         </div>
       </div>
 
+      {/* Centered, label stacked over the marks — the row reads as one block rather
+          than as a label with a tail. */}
       <div className="nav-footer-followrow">
         <span className="nav-footer-rowlabel">Follow Fluncle</span>
         <nav aria-label="Fluncle on other platforms" className="nav-follow">
@@ -87,11 +85,10 @@ export function NavFooter({ galaxiesLive }: { galaxiesLive: boolean }): ReactNod
         </nav>
       </div>
 
-      {/* The terminal surfaces + the live status pill close the plate, centered: one
-          quiet band for the people who read the machinery. The pill IS the link to
-          /status, so /status never gets a second one beside it. */}
-      <div className="nav-footer-nerdrow">
-        <span className="nav-footer-rowlabel">For the nerds</span>
+      {/* The terminal surfaces close the plate, with the live status pill on its own
+          line beneath them. No label: CLI / DIG / GIT / MCP / SSH announce themselves.
+          The pill IS the link to /status, so /status never gets a second one. */}
+      <div className="nav-footer-machinery">
         <nav aria-label="Developer surfaces" className="nav-nerds">
           {navNerds.map((nerd) =>
             nerd.kind === "external" ? (
