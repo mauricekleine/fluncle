@@ -54,8 +54,9 @@ import { TrackArtwork } from "@/components/track-artwork";
 // The measured BPM/key values link to the "how Fluncle measures" methodology on
 // /about — every finding's tempo + key is first-party DSP over the captured full
 // song, graded by the operator's Rekordbox (the measurement moat). This slug is
-// the anchor of that FAQ entry; about.tsx derives the same slug from the question.
-const MEASURED_FAQ_ANCHOR = "how-does-fluncle-measure-bpm-and-key";
+// the anchor of that FAQ entry; about.tsx derives the same slug from the question,
+// and a test in -about-schema.test.ts pins the two together (exported for it).
+export const MEASURED_FAQ_ANCHOR = "how-does-fluncle-measure-bpm-and-key";
 
 type LogPageData =
   | {
@@ -415,7 +416,12 @@ function LogPage() {
           {track.bpm ? (
             <div className="log-field">
               <dt>
-                <Link className="log-galaxy-link" hash={MEASURED_FAQ_ANCHOR} to="/about">
+                <Link
+                  aria-label="How Fluncle measures BPM"
+                  className="log-galaxy-link"
+                  hash={MEASURED_FAQ_ANCHOR}
+                  to="/about"
+                >
                   BPM
                 </Link>
               </dt>
@@ -425,7 +431,12 @@ function LogPage() {
           {track.key ? (
             <div className="log-field">
               <dt>
-                <Link className="log-galaxy-link" hash={MEASURED_FAQ_ANCHOR} to="/about">
+                <Link
+                  aria-label="How Fluncle measures key"
+                  className="log-galaxy-link"
+                  hash={MEASURED_FAQ_ANCHOR}
+                  to="/about"
+                >
                   Key
                 </Link>
               </dt>
