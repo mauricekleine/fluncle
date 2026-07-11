@@ -73,9 +73,11 @@ export default function ArchiveScreen() {
     <View style={{ flex: 1 }}>
       <CosmosBackdrop />
       <SafeAreaView style={{ flex: 1 }} edges={["top"]}>
-        {/* Header + lens ride an opaque warm-dark pane so the list scrolls BENEATH
-            chrome, never a raw cut over the cosmos (The Legible Sky Rule / H2). */}
-        <View style={styles.pane}>
+        {/* Header + lens sit transparently on the cosmos gradient so it flows unbroken
+            from the top of the screen down through the list — no separate pane band
+            (the operator's ruling). The header is a flex block above the list (not an
+            overlay), so rows still rest below the chips; nothing scrolls under it. */}
+        <View>
           <View style={styles.header}>
             <Text style={[font.display, { color: color.starlightCream, fontSize: 22 }]}>
               The archive
@@ -258,11 +260,6 @@ const styles = {
     paddingTop: 8,
   },
   listContent: { paddingBottom: 20, paddingTop: 6 },
-  pane: {
-    backgroundColor: color.deepField,
-    borderBottomColor: color.dustLine,
-    borderBottomWidth: 1,
-  },
   retryButton: {
     borderColor: color.dustLine,
     borderRadius: 8,

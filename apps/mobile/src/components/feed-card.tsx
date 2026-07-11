@@ -22,7 +22,6 @@ import Animated, {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { Image } from "expo-image";
-import { LinearGradient } from "expo-linear-gradient";
 import { useVideoPlayer, VideoView } from "expo-video";
 import { useAudioPlayer, useAudioPlayerStatus } from "expo-audio";
 import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
@@ -38,31 +37,26 @@ import { color, font } from "@/theme/tokens";
 // the scrolling content, not overlays absolutely positioned inside a full-bleed card,
 // so the caption + rail have to clear the bar themselves. ~49pt is the standard
 // UITabBar height, which the floating bar rides above the home-indicator safe area
-// (`insets.bottom`); the per-element +24/+28 is breathing room above it. Documented
-// constant, not a measured API — the operator verifies the exact clearance in the
-// simulator after merge.
+// (`insets.bottom`); a small per-element pad lifts the caption/rail just clear of it.
+// Documented constant, not a measured API — the operator verifies the exact clearance
+// in the simulator after merge.
 export const NATIVE_TAB_BAR_HEIGHT = 49;
 
-// The legibility scrim (DESIGN.md — The Legible Sky Rule: text never sits on the raw
-// backdrop; where a bright cover breaks contrast the pane gets more opaque, not the
-// text dimmer). A warm near-black (r>g>b, never pure black) composited over the cover.
-// The multi-stop ramp + the height below are tuned so every overlay glyph clears WCAG
-// AA (4.5:1) against a PURE WHITE cover — worst case the stardust caption line (~6.5:1)
-// and the topmost gold rail label (~5.2:1). See the PR body for the full contrast math.
-const SCRIM_RGB = "11, 8, 5";
-const scrim = (alpha: number): string => `rgba(${SCRIM_RGB}, ${alpha})`;
-// Rises tall enough (above the tab-bar floor) that even the topmost rail item lands in
-// the ramp; transparent at the top so the cover breathes above the caption.
-const SCRIM_RISE = 440;
-const SCRIM_COLORS: readonly [string, string, ...string[]] = [
-  scrim(0),
-  scrim(0.35),
-  scrim(0.75),
-  scrim(0.85),
-  scrim(0.92),
-  scrim(0.96),
-];
-const SCRIM_LOCATIONS: readonly [number, number, ...number[]] = [0, 0.14, 0.3, 0.55, 0.8, 1];
+// OPERATOR RULING 2026-07-11: no scrim pane. The earlier AA-worst-case fix laid a
+// multi-stop warm-dark gradient over the lower screen; on lighter footage it read as a
+// clearly visible dark opaque box (TikTok doesn't do it either). So the footage stays
+// UNVEILED — no gradient — and legibility rides firm per-glyph shadows instead (the
+// TikTok-style treatment: a wide, warm-dark, high-alpha text shadow on every overlay
+// glyph; see `TEXT_SHADOW` below). The tradeoff is accepted by the operator: against a
+// pure-white cover the thin caption strokes can dip under the WCAG AA 4.5:1 target, and
+// that worst case is taken knowingly for footage-first parity over an occluding box.
+const TEXT_SHADOW = {
+  // Warm near-black (r>g>b, never pure black — DESIGN.md), wide + strong so a light
+  // glyph reads on light footage without a pane behind it.
+  textShadowColor: "rgba(9, 6, 3, 0.92)",
+  textShadowOffset: { height: 1, width: 0 },
+  textShadowRadius: 10,
+} as const;
 
 type Props = {
   finding: TrackListItem;
@@ -82,7 +76,7 @@ export const FeedCard = memo(function FeedCard({ finding, active, soundOn, onTog
   const reduced = useReducedMotion();
   // The floor every bottom overlay sits above: the home-indicator inset plus the
   // floating tab bar (H3 — the caption/date and the bottom rail control used to hide
-  // under it). The scrim rises from the true screen bottom, so it spans this too.
+  // under it).
   const bottomFloor = insets.bottom + NATIVE_TAB_BAR_HEIGHT;
   // Stabilize the resolved media so effects can depend on the object itself (not
   // computed `media.kind`/`media.previewUrl` member reads) and only re-run when the
@@ -106,7 +100,10 @@ export const FeedCard = memo(function FeedCard({ finding, active, soundOn, onTog
   const observing = active && observationStatus.playing;
   // Stable rail labels + a11y hints (the Chrome Rule); the icon/gold tint carry state.
   const observationControl = observationRail(observing);
-  const soundControl = soundRail(soundOn);
+  // The observation and the card's sound are mutually exclusive: while the observation
+  // plays, the Sound control renders its muted state (never gold), and the audio effect
+  // below keeps the card track silent. When it ends, `soundOn` restores the card's sound.
+  const soundControl = soundRail(soundOn, observing);
 
   // Only the visible card plays; sound follows the global toggle. While the
   // observation plays it owns the one sound source — keep the card media silent.
@@ -216,21 +213,8 @@ export const FeedCard = memo(function FeedCard({ finding, active, soundOn, onTog
         </Animated.View>
       )}
 
-      {/* Legibility scrim (The Legible Sky Rule): a multi-stop warm-dark gradient tall
-          enough that every overlay glyph — up to the topmost rail item — clears AA
-          against a pure-white cover. Rises from the true screen bottom over the tab bar. */}
-      <LinearGradient
-        pointerEvents="none"
-        colors={SCRIM_COLORS}
-        locations={SCRIM_LOCATIONS}
-        style={{
-          bottom: 0,
-          height: bottomFloor + SCRIM_RISE,
-          left: 0,
-          position: "absolute",
-          right: 0,
-        }}
-      />
+      {/* No scrim pane (operator ruling 2026-07-11 — it read as a dark box on light
+          footage). The footage stays unveiled; per-glyph shadows carry legibility. */}
 
       {/* Right action rail (TikTok-style). Each control keeps ONE stable label (the
           Chrome Rule); the icon + the gold tint carry state, never the word. Icons stay
@@ -245,7 +229,7 @@ export const FeedCard = memo(function FeedCard({ finding, active, soundOn, onTog
                 name={observing ? "headset" : "headset-outline"}
                 size={28}
                 color={observing ? color.eclipseGold : color.starlightCream}
-                style={styles.icon}
+                style={[styles.icon, styles.observationNudge]}
               />
             }
             label={observationControl.label}
@@ -280,9 +264,9 @@ export const FeedCard = memo(function FeedCard({ finding, active, soundOn, onTog
           accessibilityLabel={soundControl.accessibilityLabel}
           icon={
             <Ionicons
-              name={soundOn ? "volume-high" : "volume-mute"}
+              name={soundControl.active ? "volume-high" : "volume-mute"}
               size={29}
-              color={soundOn ? color.eclipseGold : color.starlightCream}
+              color={soundControl.active ? color.eclipseGold : color.starlightCream}
               style={styles.icon}
             />
           }
@@ -292,21 +276,33 @@ export const FeedCard = memo(function FeedCard({ finding, active, soundOn, onTog
         />
       </View>
 
-      {/* Bottom caption (narrowed to clear the rail, lifted to clear the tab bar). The
-          title leads (PRODUCT.md — artist + title first); the gold coordinate sits below
-          it at reduced prominence, still the identity mark but no longer out-shouting. */}
-      <View style={{ bottom: bottomFloor + 24, gap: 8, left: 16, position: "absolute", right: 96 }}>
-        <Text style={[font.title, { color: color.starlightCream }]} numberOfLines={2}>
+      {/* Bottom caption (narrowed to clear the rail, sitting tight above the tab pill —
+          operator ruling: it floated too far above the bar). The title leads (PRODUCT.md
+          — artist + title first); the gold coordinate sits below it at reduced prominence,
+          still the identity mark but no longer out-shouting. Every glyph carries the firm
+          per-glyph shadow (no scrim pane) so it reads on light footage. */}
+      <View style={{ bottom: bottomFloor + 10, gap: 8, left: 16, position: "absolute", right: 96 }}>
+        <Text
+          style={[font.title, styles.captionShadow, { color: color.starlightCream }]}
+          numberOfLines={2}
+        >
           {finding.artists.join(", ")} — {finding.title}
         </Text>
         {finding.note ? (
-          <Text style={[font.body, { color: color.stardust }]} numberOfLines={3}>
+          <Text
+            style={[font.body, styles.captionShadow, { color: color.stardust }]}
+            numberOfLines={3}
+          >
             {finding.note}
           </Text>
         ) : null}
         <View style={styles.captionMeta}>
-          {finding.logId ? <Text style={[font.numeric, styles.logId]}>{finding.logId}</Text> : null}
-          <Text style={[font.body, { color: color.stardust }]}>{foundLabel(finding.addedAt)}</Text>
+          {finding.logId ? (
+            <Text style={[font.numeric, styles.captionShadow, styles.logId]}>{finding.logId}</Text>
+          ) : null}
+          <Text style={[font.body, styles.captionShadow, { color: color.stardust }]}>
+            {foundLabel(finding.addedAt)}
+          </Text>
         </View>
       </View>
     </View>
@@ -350,12 +346,19 @@ const styles = StyleSheet.create({
   // The gold coordinate, demoted below the title: the identity gold (not the brighter
   // Eclipse Glow) at a size under the title's, so it reads as a mark, not a headline.
   captionMeta: { alignItems: "baseline", flexDirection: "row", gap: 8 },
-  icon: {
-    textShadowColor: "rgba(0, 0, 0, 0.55)",
-    textShadowOffset: { height: 1, width: 0 },
-    textShadowRadius: 6,
-  },
+  // The firm per-glyph shadow that replaces the scrim pane (operator ruling): with no
+  // gradient behind it, every caption glyph carries this warm-dark halo so it reads on
+  // light footage. The rail icons + labels share it too.
+  captionShadow: TEXT_SHADOW,
+  icon: TEXT_SHADOW,
   logId: { color: color.eclipseGold, fontSize: 13 },
+  // The four rail items already share one wrapper (RailAction + the 36×36 centered
+  // `railIcon`), so this is not a structural leftover — it's the glyph itself. The
+  // Ionicons headset advance box centers, but the mic boom hanging off the left earcup
+  // pulls the visible artwork's centroid left of the rail axis (the same optical drift
+  // spotify corrects below). Nudge it back onto the axis. Magnitude is an optical
+  // estimate; the operator fine-tunes the sign/amount in-sim after merge.
+  observationNudge: { transform: [{ translateX: 2 }] },
   rail: { alignItems: "center", gap: 16, position: "absolute", right: 6 },
   railIcon: { alignItems: "center", height: 36, justifyContent: "center", width: 36 },
   // Wide enough for the longest stable label ("Observation") on one line.
@@ -364,9 +367,7 @@ const styles = StyleSheet.create({
     color: color.starlightCream,
     fontSize: 11,
     textAlign: "center",
-    textShadowColor: "rgba(0, 0, 0, 0.55)",
-    textShadowOffset: { height: 1, width: 0 },
-    textShadowRadius: 6,
+    ...TEXT_SHADOW,
   },
   railLabelActive: { color: color.eclipseGold },
   railPressed: { opacity: 0.6 },

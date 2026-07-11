@@ -68,6 +68,12 @@ function finding(overrides: Partial<TrackListItem>): TrackListItem {
       false,
       "the master is raw, not an MT transform",
     );
+    // The feed plays the CLEAN square master ONLY — never `footage.social.mp4`, the
+    // baked-text cut (else the native overlay double-prints). "Never social" is a
+    // compile-time guarantee (the builder hard-codes footage.mp4); this pins it so a
+    // future social fallback can't slip onto this surface unnoticed.
+    assertEqual(media.videoUrl.includes("social"), false, "the feed never plays the social cut");
+    assertEqual(media.posterUrl.includes("social"), false, "the poster is off the clean master");
   }
 }
 
