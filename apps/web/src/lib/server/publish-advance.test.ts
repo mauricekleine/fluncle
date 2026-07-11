@@ -261,11 +261,21 @@ describe("bundleGaps (the server-side bundle_incomplete guard)", () => {
 });
 
 describe("the bounds", () => {
-  it("advances ONE finding per tick and caps the rolling day", () => {
+  it("advances ONE finding per tick and caps the rolling day at TWO findings", () => {
     // A public publish is not batched: one shot per tick, so a bug gets caught rather than
-    // fanned out. The daily cap is the backstop if a gate ever breaks.
+    // fanned out.
     expect(ADVANCE_PER_TICK_CAP).toBe(1);
-    expect(ADVANCE_DAILY_PUSH_CAP).toBe(6);
-    expect(ADVANCE_SETTLE_MS).toBe(15 * 60 * 1000);
+
+    // The operator's ruling: no more than TWO findings a day on the channel. The cap counts
+    // PUSHES and a finding costs two (YouTube + TikTok), so the number that means "2 findings"
+    // is 4. This test exists because the units are the trap: the previous 6 read as a generous
+    // backstop and was really 3 findings a day.
+    expect(ADVANCE_DAILY_PUSH_CAP).toBe(4);
+    expect(ADVANCE_DAILY_PUSH_CAP / 2).toBe(2); // findings per day — the unit that matters
+
+    // Six hours is the operator's window to catch a bad render and requeue it before the
+    // machine can put it on a public channel. It was 15 minutes, which is not a window a
+    // human is inside.
+    expect(ADVANCE_SETTLE_MS).toBe(6 * 60 * 60 * 1000);
   });
 });

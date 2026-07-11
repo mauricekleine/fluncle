@@ -66,19 +66,23 @@ export const DAY_MS = 24 * HOUR_MS;
  * auto-advance will never have touched it. It also gives Cloudflare's Media
  * Transformations, which the TikTok cut is derived through, time to warm.
  */
-export const ADVANCE_SETTLE_MS = 15 * MINUTE_MS;
+export const ADVANCE_SETTLE_MS = 6 * HOUR_MS;
 
 /** Findings advanced per tick. ONE. A public publish is not something to batch: a bug
  *  gets one shot per tick to be caught, never a burst. */
 export const ADVANCE_PER_TICK_CAP = 1;
 
 /**
- * The rolling-24h backstop: at most this many pushes (across both platforms, hand-pushed
- * ones included) may be created in a day. A finding costs two (YouTube + TikTok), so this
- * is ~3 findings/day — comfortably above the render conductor's real output (~1–4/day)
- * and far below anything that could dump the archive onto the feed if a gate broke.
+ * The rolling-24h backstop: at most this many PUSHES (across both platforms, hand-pushed
+ * ones included) may be created in a day.
+ *
+ * A finding costs TWO pushes (YouTube + TikTok), so read this as **2 findings a day** —
+ * the operator's ruling, and the unit that matters: he is capping how often Fluncle posts,
+ * not how many HTTP calls it makes. The distinction bit once already: 6 pushes reads as a
+ * generous backstop and is really 3 findings a day, which is more than he wants on the
+ * channel.
  */
-export const ADVANCE_DAILY_PUSH_CAP = 6;
+export const ADVANCE_DAILY_PUSH_CAP = 4;
 
 /**
  * TikTok caps UNPUBLISHED inbox drafts at 5 per rolling 24h and bounces the 6th
