@@ -35,6 +35,10 @@
         "typescript": "catalog:",
       },
     },
+    "apps/dns": {
+      "name": "@fluncle/dns",
+      "version": "0.1.0",
+    },
     "apps/extension": {
       "name": "@fluncle/extension",
       "version": "0.1.0",
@@ -705,6 +709,8 @@
     "@fluncle/cli": ["@fluncle/cli@workspace:apps/cli"],
 
     "@fluncle/contracts": ["@fluncle/contracts@workspace:packages/contracts"],
+
+    "@fluncle/dns": ["@fluncle/dns@workspace:apps/dns"],
 
     "@fluncle/extension": ["@fluncle/extension@workspace:apps/extension"],
 
