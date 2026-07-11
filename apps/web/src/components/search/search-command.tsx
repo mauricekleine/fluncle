@@ -15,8 +15,11 @@
 // (the Gold Veil), because Eclipse Gold is the CERTIFICATION light. A track Fluncle never
 // certified catches the Dust Veil instead — the cold light of a thing seen from a distance —
 // carries no coordinate, and links OUT to Spotify, because there is no `/log` page to go to.
-// It is never labelled, never introduced, and never given a noun: there is no heading over
-// those rows and no badge on them. "Finding" stays the only named object in Fluncle's world.
+// It is never labelled, never introduced, and never given a noun of its own: no badge on those
+// rows, and no heading that names the TIER. "Finding" stays the only named object in Fluncle's
+// world. The rows do sit under a "Tracks" heading, and that costs the rule nothing: `tracks` is
+// the universal music object and a finding is a certification laid on top of one, so the word is
+// true of every row under it and singles out none of them. It names the shape, not the tier.
 // The focus ring stays Eclipse Gold on every row either way — focus is an accessibility
 // affordance, not a claim about the music.
 
@@ -70,9 +73,10 @@ type SearchEntity = { imageUrl?: string; kind: EntityKind; name: string; slug: s
  * name, the arrow. An artist is the precedent and a label and an album are not a lesser
  * citizen of it; the only thing `kind` decides is which page the arrow goes to.
  *
- * The heading names the KIND, which it is allowed to do because all three are named objects in
- * Fluncle's world — unlike the uncertified tracks below, which have no name and get no heading
- * (the Unlit Rule, above).
+ * Every group in the list — these three and the tracks below — is a `CommandGroup`, and that is
+ * a LAYOUT invariant as much as a semantic one: the group carries `p-1`, so a row rendered
+ * loose in the `CommandList` sits 4px to the left of a row inside a group. One rail for the
+ * whole list means one container for every row in it.
  */
 const ENTITY_GROUPS = [
   { heading: "Artists", kind: "artist" },
@@ -425,12 +429,21 @@ function SearchDialog({
             );
           })}
 
-          {/* NO HEADING over the tracks — deliberately. A heading would have to name what it
-              headed, and the uncertified tier has no name. Findings lead; the rest follows in
-              the unlit register, and the difference speaks for itself. */}
-          {data.results.map((hit) => (
-            <TrackRow hit={hit} key={hit.trackId} onPick={pick} />
-          ))}
+          {/* "Tracks" — the heading names the SUPERSET, which is the only thing it is allowed
+              to do. `tracks` is the universal music object and `findings` is a certification
+              laid on top of it, so every row under here is a track whether Fluncle certified it
+              or not. That is what makes the heading honest over a mixed list: it says what the
+              rows ARE, never which tier they came from. "Findings" would be a lie the moment an
+              uncertified row appears, and anything reaching for the second kind would NAME the
+              unnamed tier. The difference between the two stays where the Unlit Rule puts it —
+              in the register, not in a label. */}
+          {data.results.length > 0 ? (
+            <CommandGroup heading="Tracks">
+              {data.results.map((hit) => (
+                <TrackRow hit={hit} key={hit.trackId} onPick={pick} />
+              ))}
+            </CommandGroup>
+          ) : undefined}
         </CommandList>
       </Command>
     </CommandDialog>
