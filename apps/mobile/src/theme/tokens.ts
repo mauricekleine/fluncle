@@ -40,6 +40,9 @@ export const color = {
   stardust: raw.stardust,
   starlightCream: raw.starlightCream,
   tapeBlack: raw.tapeBlack,
+  // Translucent Tape Black at 30% — DESIGN.md's Outline-button fill (the web canon
+  // bakes it as #1716114d). Derived from the canonical tapeBlack so it can't drift.
+  tapeBlackFill: toRgba(`${raw.tapeBlack}4d`),
 } as const;
 
 export const radius = {
