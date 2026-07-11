@@ -1,10 +1,16 @@
 # Galaxy game — sprite & audio assets
 
-How the bespoke 8-bit assets for **Fluncle's Galaxy** (`apps/web/src/game/*`, served from `apps/web/public/galaxy/`) are made. The game is canon-first (DESIGN.md, the Nostalgic Cosmos); every asset arrives quantized to the canon ramp, and the renderer always has a procedural fallback so a missing asset never breaks the game.
+How the bespoke 8-bit assets for **Fluncle's Galaxy** (`apps/web/src/game/*`, served at `/galaxy/*`) are made. The game is canon-first (DESIGN.md, the Nostalgic Cosmos); every asset arrives quantized to the canon ramp, and the renderer always has a procedural fallback so a missing asset never breaks the game.
+
+## Where the sprites live (read this before editing one)
+
+**The source of truth is `packages/sprites/assets/galaxy/` — the `@fluncle/sprites` package.** `apps/web/public/galaxy/*.png` is a **generated mirror**: `apps/web/scripts/copy-sprites.ts` copies the package's assets into `public/` on every `dev` boot and before every `build`, and those five sprite PNGs (`ship` / `earth` / `roadster` / `ufo` / `asteroid`) are **gitignored**. Edit or regenerate a sprite in `public/galaxy/` and your work is untracked and overwritten on the next build — always write to `packages/sprites/assets/galaxy/`, then mirror it with `bun apps/web/scripts/copy-sprites.ts`.
+
+The two non-sprite assets in `public/galaxy/` — `og.png` and `amen.mp3` — are **not** mirrored and stay tracked in git; edit those in place.
 
 ## The fallback contract
 
-Every sprite the renderer draws has two sources, in order: a curated PNG in `apps/web/public/galaxy/`, and a procedural fallback in `apps/web/src/game/sprites.ts`. `render.ts` loads each PNG into an `Image()` and draws it once `onload` fires; until then (or if the file 404s) the procedural sprite draws. This means you can ship, swap, or regenerate any PNG at any time with zero code change — drop the file in `public/galaxy/` and it takes over on next load.
+Every sprite the renderer draws has two sources, in order: the curated PNG served at `/galaxy/<name>.png` (mirrored from the package, above), and a procedural fallback in `apps/web/src/game/sprites.ts`. `render.ts` loads each PNG into an `Image()` and draws it once `onload` fires; until then (or if the file 404s) the procedural sprite draws. This means you can ship, swap, or regenerate any PNG at any time with zero code change — drop the file into `packages/sprites/assets/galaxy/`, mirror it, and it takes over on next load.
 
 The black hole is intentionally **procedural only** (a void with a cool lensing rim that shimmers); it has no PNG.
 
@@ -40,18 +46,14 @@ The hero ship and Earth were made with Gemini image generation ("Nano Banana") a
 1. **Provide the key from your secrets manager.** Export `GEMINI_API_KEY` into the environment before running (read it from your password manager / secrets store; never commit a key or paste it into a file). In an interactive terminal that means signing in to the secrets CLI first, then exporting the value for the session.
 2. **Prompt per sprite.** Use a tight prompt: small 8-bit / NES-era **pixel art**, **transparent background**, the subject and POV from the roster above, the exact canon hex colors, no text, no drop shadow, no film grain, a single warm light source (no second gold). Example (Roadster): _"16×9 pixel-art sprite of a sleek derelict sports car tumbling in space, seen at a slight angle, transparent background, cream body (#f4ead7/#b7ab95) with a thin re-entry-red (#ff6b57) accent stripe and dark wheels, NES palette, no text, no shadow, no grain."_
 3. **Post-process to the grid.** Downscale to the target px, snap every pixel to the nearest canon-ramp color, and make the background fully transparent. Keep it crisp (nearest-neighbour, no anti-aliasing) — the renderer upscales with `image-rendering: pixelated`.
-4. **Drop it in** `apps/web/public/galaxy/<name>.png` and reload; the PNG takes over from the procedural fallback automatically.
+4. **Drop it in** `packages/sprites/assets/galaxy/<name>.png` (the source of truth — never `public/galaxy/`, which is the generated mirror), mirror it with `bun apps/web/scripts/copy-sprites.ts`, and reload; the PNG takes over from the procedural fallback automatically.
 5. **View the frames before shipping.** These are taste-gated — look at them in a driven browser past hydration (do they move and feel _placed_, not pasted?), not just in code review.
 
-This workflow is scripted at `packages/media/scripts/generate-galaxy-sprites.py` (it reads the key from the environment only, prompts on a flat magenta background it keys out, fits to target, and quantizes each sprite to its per-kind canon subset). Run it with the key exported from your secrets manager:
+The current scripted pipeline is the **`fluncle-sprites` skill's** `packages/skills/fluncle-sprites/scripts/generate_sprite.py` — the system-wide sprite doctrine (the fixed rails, the per-sprite palette subset, the deterministic key → crop → resize → quantize → outline post-step), and it writes straight to `packages/sprites/assets/<collection>/<id>.png`, the source of truth. Use it; see [packages/skills/fluncle-sprites/SKILL.md](../packages/skills/fluncle-sprites/SKILL.md) for the rails and the run command.
 
-```bash
-GEMINI_API_KEY="$(op read 'op://<your-vault>/GEMINI_API_KEY/password')" \
-  UV_CACHE_DIR=/tmp/uv-cache uv run --with pillow \
-  python packages/media/scripts/generate-galaxy-sprites.py [roadster ufo asteroid]
-```
+An older script, `packages/media/scripts/generate-galaxy-sprites.py`, still exists (same generate → key → fit → quantize idea) but **writes into `apps/web/public/galaxy/` — the generated mirror**, so anything it produces is untracked and gets overwritten on the next build. If you run it, move its output into `packages/sprites/assets/galaxy/` before doing anything else.
 
-The committed `roadster.png` / `ufo.png` / `asteroid.png` are a first pass from this script; regenerate or hand-touch any of them, then view in a driven browser before calling them done.
+The current `roadster.png` / `ufo.png` / `asteroid.png` are a first pass; regenerate or hand-touch any of them, then view in a driven browser before calling them done.
 
 ## Audio: the amen intro
 

@@ -31,7 +31,7 @@
     "fluncle-goal-writer": {
       "source": "packages/skills/fluncle-goal-writer",
       "sourceType": "local",
-      "computedHash": "ca57c2cd6ff63e354232d718f6cf1c0bb9aa9c8a3f0a7dba6cbcfdc1884ca7e0"
+      "computedHash": "0887ae3e5237dd5cb51cc5994c130d3a94fd504113f650937ee8493197900fea"
     },
     "fluncle-hermes-operator": {
       "source": "packages/skills/fluncle-hermes-operator",
