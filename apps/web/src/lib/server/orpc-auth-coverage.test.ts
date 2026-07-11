@@ -290,6 +290,9 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // driven by the cron's agent token (the list_tracks_admin cursor precedent).
   list_track_embeddings: "admin",
   list_track_social: "admin",
+  // `list_track_work` — the audio pipeline's worklist (capture/analyze/embed). A READ of
+  // machine state, drained by the box's agent-token sweeps, exactly like list_tracks_admin.
+  list_track_work: "admin",
   list_tracks_admin: "admin",
   // The artist-sweep resolve worklist (artists awaiting social resolution) — agent
   // tier (adminAuth only): a read the box's `fluncle-artist-sweep` cron drives with

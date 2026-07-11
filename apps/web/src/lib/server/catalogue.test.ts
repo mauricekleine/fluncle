@@ -67,7 +67,7 @@ describe("capturePriorityFor — the pre-audio capture ladder", () => {
     // finding — each arrived on one crossover remix — so the `label` rung fires on every one
     // of them. Without the veto, the metered per-GB capture budget goes on trance.
     expect(capturePriorityFor({ artists: ["Nobody"], label: "Anjunabeats" }, archive)).toEqual({
-      priority: 0,
+      priority: -1,
       reason: { kind: "skipped-label", name: "Anjunabeats" },
     });
   });
@@ -76,7 +76,7 @@ describe("capturePriorityFor — the pre-audio capture ladder", () => {
     // A DnB artist Fluncle has logged, doing a remix on a label he says is not his lane. The
     // artist signal is the strongest one there is, and the ruling still wins: he TOLD us.
     expect(capturePriorityFor({ artists: ["Krakota"], label: "Anjunabeats" }, archive)).toEqual({
-      priority: 0,
+      priority: -1,
       reason: { kind: "skipped-label", name: "Anjunabeats" },
     });
   });
@@ -88,6 +88,24 @@ describe("capturePriorityFor — the pre-audio capture ladder", () => {
     const { reason } = capturePriorityFor({ artists: ["Krakota"], label: "Anjunabeats" }, archive);
 
     expect(reason.name).toBe("Anjunabeats");
+  });
+
+  it("gives the veto its OWN tier, strictly below `none` — so SQL can enforce it", () => {
+    // The veto and "nothing ties this to the archive" are DIFFERENT claims: one says
+    // "capture this last", the other says "never spend a metered per-GB byte on this". They
+    // first shipped collapsed into the same stored 0, which left the capture work queue
+    // (track-work.ts) unable to tell them apart — a veto that only sorts last is not a veto,
+    // because the queue drains and last eventually arrives. Its own tier is what turns it
+    // into the predicate `capture_priority >= 0`.
+    const vetoed = capturePriorityFor({ artists: ["Krakota"], label: "Anjunabeats" }, archive);
+    const unknown = capturePriorityFor(
+      { artists: ["Nobody"], label: "Some Unknown Label" },
+      archive,
+    );
+
+    expect(vetoed.priority).toBe(-1);
+    expect(unknown.priority).toBe(0);
+    expect(vetoed.priority).toBeLessThan(unknown.priority);
   });
 
   it("never lets a blank or all-punctuation label climb a rung", () => {

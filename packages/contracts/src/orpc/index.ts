@@ -169,10 +169,14 @@ export {
   finalizeTrackVideo,
   getTrackAdmin,
   listTracksAdmin,
+  listTrackWork,
   observeTrack,
   presignTrackVideoUploads,
   publishTrack,
   requeueVideo,
+  TrackWorkItemSchema,
+  TrackWorkKindSchema,
+  TrackWorkScopeSchema,
   updateTrack,
 } from "./admin-tracks";
 export { getHealth } from "./health";

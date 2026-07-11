@@ -368,9 +368,13 @@ describe("the capture queue — the pre-audio priority ladder", () => {
     expect((await rankingOf("cat-seed")).capture_priority).toBe(1);
     // 0 — nothing ties it to the archive.
     expect((await rankingOf("cat-none")).capture_priority).toBe(0);
-    // 0 — VETOED. Its label carries a finding AND its artist is on a finding, and the operator
+    // −1 — VETOED. Its label carries a finding AND its artist is on a finding, and the operator
     // still said "not our lane". His ruling beats both signals; the row stays, ranked last.
-    expect((await rankingOf("cat-vetoed")).capture_priority).toBe(0);
+    //
+    // The veto has its OWN tier, strictly below `none`, and that is what makes it enforceable:
+    // the capture WORK QUEUE (track-work.ts) excludes it with `capture_priority >= 0`. Sharing
+    // `none`'s 0 would leave it merely sorted last — and a queue drains, so last arrives.
+    expect((await rankingOf("cat-vetoed")).capture_priority).toBe(-1);
   });
 
   it("keeps the two lenses disjoint — a track with audio leaves the capture queue", async () => {

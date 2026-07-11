@@ -27,8 +27,13 @@
 #         capture writes with).
 #       R2_ACCOUNT_ID — the (non-secret) Cloudflare account id (also in wrangler.jsonc).
 #       optional: FLUNCLE_SOURCE_AUDIO_R2_BUCKET (default fluncle-source-audio).
-#     The `fluncle` CLI's own admin auth (the embed queue read + the vector write-back) is the
-#     box's baked config under HOME — unchanged from the gateway-cron era.
+#       FLUNCLE_API_TOKEN — the box's AGENT-scoped token. NOW REQUIRED: the queue read moved to
+#         direct HTTP (`GET /api/admin/tracks/work?kind=embed`), because the CATALOGUE-aware
+#         worklist is a NEW op and the box's `fluncle` CLI is a PINNED release — reading it
+#         through the CLI would gate this sweep behind a pin bump. Same trick capture-sweep.sh
+#         already uses. It is already in this secrets file (capture + the cost emit read it).
+#     The `fluncle` CLI's own admin auth still carries the vector WRITE-BACK (`tracks update
+#     --embedding-file`, an existing command) — the box's baked config under HOME, unchanged.
 set -euo pipefail
 
 # The docker-exec / runner context hands this a minimal PATH that omits /usr/local/bin (the

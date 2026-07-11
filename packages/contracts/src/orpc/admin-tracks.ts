@@ -23,7 +23,10 @@
 
 import { oc } from "@orpc/contract";
 import * as z from "zod";
-import { FeedItemSchema, MixReasonSchema, TrackListItemSchema } from "./_shared";
+// `./_shared.js` (not `./_shared`): `index.ts` now re-exports this module's TrackWork types,
+// which pulls it into the node16-resolution consumers' graph (apps/raycast) — where an
+// extensionless relative import is an error. Same reason `galaxies.ts` carries the extension.
+import { FeedItemSchema, MixReasonSchema, TrackListItemSchema } from "./_shared.js";
 
 /**
  * The PATCH /admin/tracks/{trackId} body — the generic admin track update. LOOSE
@@ -565,6 +568,76 @@ export const listTracksAdmin = oc
     ]),
   );
 
+// ── The audio pipeline's work queues (docs/gpu-batch-embed.md, docs/the-ear.md) ──────
+
+/** Which stage of the audio pipeline a worklist is for: capture → analyze → embed. */
+export const TrackWorkKindSchema = z.enum(["analyze", "capture", "embed"]).meta({
+  id: "TrackWorkKind",
+});
+
+/** Which half of the archive a worklist covers: certified findings, the catalogue, or both. */
+export const TrackWorkScopeSchema = z.enum(["all", "catalogue", "findings"]).meta({
+  id: "TrackWorkScope",
+});
+
+/**
+ * One row of pipeline work.
+ *
+ * `certified` is on the DTO deliberately: it is what tells a sweep it must NOT write a
+ * certification field back onto this row (no `--status`, no note, no video). `logId` is null
+ * exactly when `certified` is false, because the coordinate lives on the certification.
+ */
+export const TrackWorkItemSchema = z
+  .object({
+    artists: z.array(z.string()),
+    capturePriority: z.number().nullable(),
+    certified: z.boolean(),
+    durationMs: z.number(),
+    isrc: z.string().nullable(),
+    label: z.string().nullable(),
+    logId: z.string().nullable(),
+    sourceAudioKey: z.string().nullable(),
+    title: z.string(),
+    trackId: z.string(),
+  })
+  .meta({ id: "TrackWorkItem" });
+
+/**
+ * `list_track_work` → `GET /admin/tracks/work` (operationId `listTrackWork`).
+ *
+ * Admin tier (agent-allowed read) — the worklist for one stage of the audio pipeline, in the
+ * order the metered capture budget should be spent.
+ *
+ * THIS IS THE CATALOGUE-AWARE QUEUE. `list_tracks_admin`'s three queue filters (`captureQueue`,
+ * `hasEmbedding=false`, `status=queue`) all drive through the FINDING JOIN, so they are blind
+ * to a catalogue track by construction — which is correct for a feed and fatal for a pipeline:
+ * analysis and embedding are measurements of a RECORDING and apply to any track with captured
+ * audio, certified or not. This op reads `tracks` (outer-joined to the certification) and
+ * serves all three stages.
+ *
+ * THE ORDER IS THE BUDGET. Audio capture bills per GB, so the drain order decides what the
+ * money buys: certified work first (Fluncle already said yes to a finding), then
+ * `capture_priority` DESC — the Ear's pre-audio ladder — then newest-first, then the id. Never
+ * insertion order. A label the operator RULED OUT is tier −1 and is excluded from the `capture`
+ * worklist outright: a veto that only sorts last is not a veto, because the queue drains.
+ */
+export const listTrackWork = oc
+  .route({
+    method: "GET",
+    operationId: "listTrackWork",
+    path: "/admin/tracks/work",
+    summary: "The audio pipeline's worklist for one stage, in capture-priority order",
+    tags: ["Admin"],
+  })
+  .input(
+    z.object({
+      kind: TrackWorkKindSchema,
+      limit: z.coerce.number().int().min(1).max(200).default(50),
+      scope: TrackWorkScopeSchema.default("all"),
+    }),
+  )
+  .output(z.object({ ok: z.literal(true), tracks: z.array(TrackWorkItemSchema) }));
+
 /**
  * `publish_track` → `POST /admin/tracks` (operationId `publishTrack`).
  *
@@ -649,6 +722,7 @@ export const adminTracksContract = {
   finalize_track_video: finalizeTrackVideo,
   get_mixable_order: getMixableOrder,
   get_track_admin: getTrackAdmin,
+  list_track_work: listTrackWork,
   list_tracks_admin: listTracksAdmin,
   note_track: noteTrack,
   observe_track: observeTrack,

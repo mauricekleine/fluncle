@@ -33,6 +33,25 @@
 # are baked into the Hermes image as a pinned layer; the MuQ weights are baked too (or an HF
 # cache), so `from_pretrained` resolves offline. See the Dockerfile MuQ layer +
 # docs/agents/hermes/embed-timer/README.md.
+#
+# ── THE GPU PATH (docs/gpu-batch-embed.md) ────────────────────────────────────────────────
+# The same script runs the on-box CPU sweep (one track a tick) AND the operator-fired GPU
+# BATCH (hundreds of tracks in one pass, on a rented RunPod pod). It is ONE script on purpose:
+# the decode → window → pool → L2-normalize pipeline IS the embedding contract, and a second
+# copy of it on a different device is how two vectors of the "same" track silently stop being
+# comparable. The device and the batch width are the only knobs:
+#
+#   MUQ_DEVICE       — "cuda" | "cpu" | "auto" (default). `auto` takes CUDA when torch sees it.
+#   MUQ_WINDOW_BATCH — how many ~30s windows ride ONE forward. Default 1 (the CPU box, where a
+#                      single window already costs ~2.85 GB of RAM). On a GPU this is the whole
+#                      speed-up: the windows of a song are INDEPENDENT (each is mean-pooled on
+#                      its own before the cross-window mean), so they stack into one [B, samples]
+#                      forward with no change of meaning whatsoever — the arithmetic below is
+#                      identical, only the number of kernel launches differs.
+#
+# THE OUTPUT IS BIT-COMPATIBLE ACROSS DEVICES up to float noise: same windows, same per-window
+# mean, same cross-window mean, same L2 normalize. A CPU-embedded track and a GPU-embedded one
+# sit in the same space, which is what lets the batch backfill an archive the sweep started.
 
 import json
 import os
@@ -43,6 +62,11 @@ import sys
 SAMPLE_RATE = 24000
 EMBEDDING_DIMS = 1024
 MODEL_ID = os.environ.get("MUQ_MODEL", "OpenMuQ/MuQ-large-msd-iter")
+
+# The device + the window batch width — the ONLY difference between the CPU sweep and the GPU
+# batch. Both default to the box's behaviour, so the on-box path is untouched.
+DEVICE_PREF = os.environ.get("MUQ_DEVICE", "auto").strip().lower()
+WINDOW_BATCH = max(1, int(os.environ.get("MUQ_WINDOW_BATCH", "1")))
 
 # Windowing (bounds peak RAM to a single window's forward):
 #   WINDOW_SECONDS — the length of audio fed to ONE MuQ forward. ~30s matches the memory the
@@ -93,46 +117,83 @@ def decode_audio(path: str):
     return audio
 
 
-def embed_windows(muq, torch, np, audio) -> list:
-    """Window the full song into non-overlapping ~30s chunks, MuQ-forward each SEQUENTIALLY,
-    mean-pool each over time, then mean-pool across windows → one L2-normalized 1024-d vector.
+def cut_windows(np, audio) -> list:
+    """Slice the decoded song into the non-overlapping ~30s windows the model sees.
 
-    Peak RAM is bounded by a SINGLE window's forward: each window's activation tensors are
-    freed (`del` + the loop moving on) before the next forward, and only the running 1024-d sum
-    (tiny) is carried between windows — never the whole song's hidden states."""
+    Pure numpy, no torch — so the windowing (the thing that decides what the vector MEANS) is
+    identical on every device, and the only thing the device changes is how many of these ride
+    one forward."""
     total = int(audio.shape[0])
-
-    pooled_sum = None  # running sum of per-window 1024-d vectors
-    windows = 0
+    windows = []
 
     for start in range(0, total, HOP_SAMPLES):
         window = audio[start:start + WINDOW_SAMPLES]
 
         # Drop a short trailing remainder once we already have a full window (a few-second
         # forward is noise under equal-weight pooling). A whole song shorter than one window
-        # still yields one window here (windows == 0), so it is never dropped.
-        if window.shape[0] < MIN_TAIL_SAMPLES and windows > 0:
+        # still yields one window here, so it is never dropped.
+        if window.shape[0] < MIN_TAIL_SAMPLES and windows:
             break
 
-        wavs = torch.from_numpy(window).unsqueeze(0)  # [1, window_samples]
+        windows.append(window)
+
+    return windows
+
+
+def embed_windows(muq, torch, np, audio, device) -> list:
+    """Window the full song into non-overlapping ~30s chunks, MuQ-forward them, mean-pool each
+    over time, then mean-pool across windows → one L2-normalized 1024-d vector.
+
+    WINDOW_BATCH windows ride ONE forward. At the default of 1 this is the original sequential
+    loop, and peak RAM is bounded by a single ~30s window's activations (each batch's tensors
+    are freed before the next) — the property the 8 GB box depends on. On a GPU, raising it is
+    the whole speed-up: the windows are INDEPENDENT (each is mean-pooled over its own time axis
+    before the cross-window mean), so batching them changes the number of kernel launches and
+    NOTHING about the arithmetic. Short final windows are zero-PADDED to stack, and each
+    window's mean is taken over its OWN true length — the padding is never averaged in, so a
+    batched run and a sequential run agree.
+    """
+    windows = cut_windows(np, audio)
+
+    if not windows:
+        raise ValueError("no embeddable windows")
+
+    pooled_sum = None  # running sum of per-window 1024-d vectors
+
+    for start in range(0, len(windows), WINDOW_BATCH):
+        chunk = windows[start:start + WINDOW_BATCH]
+        lengths = [int(window.shape[0]) for window in chunk]
+        width = max(lengths)
+
+        # Zero-pad to a rectangle so the chunk stacks. Only the LAST window of a song is ever
+        # short, so this is at most one padded row per song.
+        padded = np.zeros((len(chunk), width), dtype=np.float32)
+
+        for index, window in enumerate(chunk):
+            padded[index, :lengths[index]] = window
+
+        wavs = torch.from_numpy(padded).to(device)  # [batch, window_samples]
 
         with torch.inference_mode():
             output = muq(wavs, output_hidden_states=True)
 
-        # last_hidden_state: [1, time, 1024] → mean over THIS window's time → [1024].
-        pooled = output.last_hidden_state.mean(dim=1).squeeze(0).to(torch.float32)
-        pooled_sum = pooled.clone() if pooled_sum is None else pooled_sum + pooled
-        windows += 1
+        # last_hidden_state: [batch, time, 1024]. Mean over each window's OWN time span: the
+        # model's time axis is a fixed ratio of the sample axis, so a window that filled
+        # `lengths[i] / width` of the padded row filled that same fraction of the frames.
+        hidden = output.last_hidden_state.to(torch.float32)
+        frames = int(hidden.shape[1])
 
-        # Free the window's activation tensors before the next forward so peak RAM stays
-        # bounded by a single ~30s window, never the whole song.
-        del output, pooled, wavs
+        for index, length in enumerate(lengths):
+            used = max(1, min(frames, round(frames * length / width)))
+            pooled = hidden[index, :used, :].mean(dim=0)
+            pooled_sum = pooled.clone() if pooled_sum is None else pooled_sum + pooled
 
-    if pooled_sum is None or windows == 0:
-        raise ValueError("no embeddable windows")
+        # Free the chunk's activation tensors before the next forward so peak memory stays
+        # bounded by ONE batch, never the whole song.
+        del output, hidden, wavs
 
     # Mean-pool across windows, then L2-normalize the single 1024-d result.
-    mean_pooled = pooled_sum / windows
+    mean_pooled = pooled_sum / len(windows)
     normalized = torch.nn.functional.normalize(mean_pooled, p=2, dim=0)
     vector = normalized.to(torch.float32).cpu().tolist()
 
@@ -162,9 +223,16 @@ def main() -> int:
     # Use every core the box grants (CPX32 = 4) for CPU inference.
     torch.set_num_threads(max(1, os.cpu_count() or 1))
 
-    log(f"loading {MODEL_ID}")
+    # The device. `auto` (the default) takes CUDA when torch can see it and CPU otherwise, so
+    # the SAME command is right on the box and on a rented GPU pod; `MUQ_DEVICE` forces either.
+    if DEVICE_PREF == "cuda" or (DEVICE_PREF == "auto" and torch.cuda.is_available()):
+        device = torch.device("cuda")
+    else:
+        device = torch.device("cpu")
+
+    log(f"loading {MODEL_ID} on {device} (window batch {WINDOW_BATCH})")
     muq = MuQ.from_pretrained(MODEL_ID)
-    muq = muq.eval()
+    muq = muq.to(device).eval()
 
     results = []
     errors = []
@@ -179,7 +247,7 @@ def main() -> int:
 
         try:
             audio = decode_audio(path)
-            vector = embed_windows(muq, torch, np, audio)
+            vector = embed_windows(muq, torch, np, audio, device)
             results.append({"embedding": vector, "id": track_id})
             log(f"{track_id}: embedded ({len(vector)}-d)")
         except Exception as error:  # noqa: BLE001 — one bad item must not kill the batch
