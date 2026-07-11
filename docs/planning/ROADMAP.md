@@ -36,18 +36,6 @@ The homepage's left column stuffs everything (playlist/radio/newsletter/submit, 
 
 The decision is shaped by what comes next: with a catalogue, "Artists" means thousands rather than 67, and **search stops being optional — it becomes the primary navigation**. Variant D is the only one whose IA survives that; B best protects the cover-led feel. That tension is the call. The operator has notes; they land here.
 
-### Artist championing — Spotify auto-follow blocked by Development mode
-
-The artist-relationship epic shipped: the canonical artist entity, the public artist pages, the `/admin/artists` station (the "Yours" follow queue with confirm / add-remove-platform / Follow-now / Undo / mute), and — until 2026-07-08 — an on-box `fluncle-artist-follow` auto-follow sweep. Manual register + YouTube follow worked; **Spotify auto-follow never did.** Spotify's artist-follow endpoint (`PUT /me/following?type=artist`, `user-follow-modify`) 403s for our app, and it's provably not our side: with the exact same token, a `playlist-modify-public` write returns 200 while the artist-follow 403s — so it's neither scope, account allow-list, nor Premium (verified 2026-07-07, after a full remove-app + re-auth and even a Premium upgrade). It's the **Development-mode endpoint gate**; the only lift is Extended Quota Mode, which since 2025-05-15 is **org-only** (≥250k MAU, a registered business entity) and unavailable to Fluncle.
-
-**Update (2026-07-08): the auto-follow cron was removed entirely.** The YouTube-only `follow_artist` sweep, its `fluncle-artist-follow` box timer, and the `cron.artist-follow` registry / `/status` surface were all scrubbed — too flaky to earn their keep (most batched follows failed on quota / dev-mode gates). Championing is now manual-only via the `/admin/artists` queue (identity + Follow-now / Undo); `cron.artist-sweep` resolution is untouched.
-
-Open:
-
-- [ ] **Remove the operator Follow-now / Undo too (Spotify + YouTube).** The manual per-row platform-follow path (`follow_artist_social` / `unfollow_artist_social` / `record_operator_follow`) doesn't add anything right now — Spotify 403s under Development mode and the YouTube upside is marginal — so wind the championing motion down to **identity-only**: keep the artist entity, the public pages, `cron.artist-sweep` resolution, and the queue's confirm / add-remove-platform / mute / review, but drop the actual platform following (auto is already gone; manual is next). Reverse it only if the Spotify gate lifts (below).
-
-Down the line: **revisit if the gate lifts** — Spotify reopening broader Web API access to dev-mode apps, or a Fluncle business entity ever qualifying for Extended Quota. Low priority; nothing depends on it.
-
 ### Hermes automation — follow-ups
 
 The per-finding pipeline runs entirely as `--no-agent` jobs on the Hermes box (enrich, context-note, note, observation, backfill, render, social-capture, studio-clip, newsletter, plus the host healthcheck timer); the source of truth is the sweep sources in `docs/agents/hermes/scripts/` + the per-job units in `docs/agents/hermes/*-timer/`, managed on the devbox via the **fluncle-hermes-operator** skill. As of the **2026-07-08 durable-deploy activation** these all run as **repo host systemd timers** reading the baked `/opt/hermes-scripts` path (the Hermes gateway cron runner is retired). Operating doc + roles: [docs/agents/hermes-agent.md](../agents/hermes-agent.md). Ongoing operation is a verify pass per job, not build work. Two follow-ups stay separate from the cron wiring:

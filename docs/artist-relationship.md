@@ -4,7 +4,7 @@ Fluncle keeps a canonical **artist entity** (`artists`, keyed on the Spotify art
 
 This doc covers the **identity graph** — how `artist_socials` is resolved, reviewed, and rendered into the public artist page + `sameAs` JSON-LD. The entity + tables it builds on are Unit 1.
 
-> **The follow/champion motion was retired (2026-07-09).** Fluncle-the-account no longer follows the artists it features. The Spotify `user-follow-modify` write, the YouTube subscribe, the on-box `cron.artist-follow` sweep, the `followed_at`/`muted_at` state, and the follow/unfollow/mute/unmute ops were all removed — Spotify would not approve the app's artist-follow endpoint and the YouTube follows were too flaky to keep. What remains is the identity graph below: resolve → review → confirm → the public page.
+> **The relationship is identity-only.** Fluncle knows who an artist is and links out to them; Fluncle-the-account does not _follow_ them. The follow/champion motion was retired in two steps — the auto-follow cron (2026-07-08), then the operator's manual Follow-now / Undo (2026-07-09) — and what remains is the identity graph below: resolve → review → confirm → the public page. The `cron.artist-sweep` resolution was never part of the follow strand and is untouched. See [Why there is no follow](#why-there-is-no-follow).
 
 ## The data model
 
@@ -35,7 +35,7 @@ Each artist carries a canonical avatar in `artists.image_url` — the largest Sp
 
 Render: the `/artists` index is avatar cards (round Spotify image over name + finding count) and the artist page's "Similar artists" chips carry a small round avatar, both via `ArtistAvatar` — a graceful monogram tile (first letter) stands in when `image_url` is null. The image is decorative (empty `alt`, the name is adjacent); WCAG-AA, keyboard-reachable, reduced-motion-safe.
 
-## The `/admin/artists` review queue (the manual motion)
+## The `/admin/artists` review queue (the operator motion)
 
 `/admin/artists` is the stable MANAGE surface for every artist Fluncle features — one card per artist, name-sorted. The **review model** (ratified 2026-07-08): "needs a look" means Fluncle FOUND links the operator hasn't seen yet. **"Looks good"** (`review_artist`) stamps the whole list seen AND promotes any surviving `candidate` links to `confirmed` (reviewing the list IS the trust gate that lets a link onto the public page + `sameAs`); a link discovered LATER re-arms the flag (`artistNeedsLook`, off `reviewed_at` vs each link's `created_at`). Add/remove a platform inline behind the **Manage links** dialog: a Shadcn `Select` (the platform logo next to `SelectValue`) + a URL `Input` → `add_artist_social` / `remove_artist_social` (an operator-entered link lands `source=operator`, `status=confirmed`). The WORK surfaces as an `/admin` attention row (source `artist-review`) that deep-links here with `?artist=<id>`, auto-expanding that artist.
 
@@ -54,3 +54,16 @@ The findings board's old **LFM** cell is repurposed into an **automated-socials*
 | `review_artist`         | operator                   | `POST /admin/artists/{artistId}/review`          |
 
 All are enforced by the build-fail coverage tests (`orpc-admin-coverage` / `orpc-auth-coverage`) and the `orpc-naming` verb set. The server layer lives in `apps/web/src/lib/server/artists.ts` (queue + CRUD + review); resolution in `artist-resolution.ts`.
+
+## Why there is no follow
+
+Fluncle once championed the artists it featured — following them back on Spotify and YouTube, first as an on-box auto-sweep, then as a per-row operator tap. Both are gone. This section is the record, so the decision is not relitigated.
+
+**Spotify was never possible.** Its artist-follow endpoint (`PUT /me/following?type=artist`, scope `user-follow-modify`) 403s for the app, and it is provably not our side: with the exact same token a `playlist-modify-public` write returns 200 while the artist-follow 403s — so it is neither scope, nor account allow-list, nor Premium (verified 2026-07-07, after a full remove-app + re-auth and even a Premium upgrade). It is the **Development-mode endpoint gate**. The only lift is Extended Quota Mode, which since 2025-05-15 is **org-only** (≥250k MAU, a registered business entity) and unreachable for Fluncle.
+
+**YouTube worked, but not well enough to keep.** With Spotify gated, YouTube was the sole working platform, and its batched follows mostly failed on quota — a flaky sweep buying a marginal upside. So the motion was wound down rather than propped up:
+
+- **2026-07-08 — the auto half.** The YouTube-only `follow_artist` sweep, its `fluncle-artist-follow` box timer, and the `cron.artist-follow` registry / `/status` surface. A `RETIRED_SERVICE_IDS` tombstone in `apps/web/src/lib/server/status.ts` still suppresses the stale `service_status` row the box's old image keeps upserting; it goes when that row is dropped.
+- **2026-07-09 — the manual half.** The operator Follow-now / Undo, the `follow_artist_social` / `unfollow_artist_social` / `record_operator_follow` ops, the Spotify `user-follow-modify` scope, the YouTube subscribe helpers, and the `followed_at` / `muted_at` columns. **`mute` went with them** — muting meant "don't follow this platform", so once nothing followed, it had nothing left to mean.
+
+Reverse this only if the gate lifts — Spotify reopening broader Web API access to dev-mode apps, or a Fluncle business entity qualifying for Extended Quota. Nothing depends on it.
