@@ -91,6 +91,20 @@ TAIL_REAR = (
     "no UI."
 )
 
+# CELESTIAL exception to the 3/4 facing — a radially SYMMETRIC body (a black hole, an accretion
+# ring) has no front to pin, and 3/4 squashes a circle into an ellipse: the centered orb is the
+# cover art's own motif (DESIGN.md), so it stays a true circle, seen face-on. The one light still
+# comes from the upper-left; only the camera changes.
+TAIL_FACE = (
+    ", detailed 16-bit pixel-art game icon, a FACE-ON VIEW seen straight down the axis — a "
+    "perfectly ROUND, radially symmetric disc filling the frame as a true circle, NOT tilted into "
+    "an ellipse and NOT rotated to three-quarter — a single centered object, no scene, no ground, "
+    "no stars, cel-shaded volume in a few clear value steps with strong dark edges, one soft light "
+    "from the UPPER-LEFT, on a solid flat pure magenta #FF00FF background. Sharp clean pixels, no "
+    "blurry anti-aliasing, no gradient banding, no dither, no drop shadow, no text, no logos, no "
+    "UI."
+)
+
 # Resolution is the make-or-read lever: ~16 px starves the form, ~40 px lets the outline +
 # shading land (the reference HD-pixel-art look). ADD_OUTLINE dilates the silhouette by 1 px
 # in the shared darkest warm-black — the crisp contour every reference sprite carries.
@@ -108,6 +122,10 @@ def pf(subject):  # takeoff craft — front view, pointing straight up (the take
 
 def pr(subject):  # playable ship — rear view, pointing straight up/away (the player's POV)
     return "pixel art game sprite of " + subject + TAIL_REAR
+
+
+def pc(subject):  # celestial body — face-on, a true circle (a black hole, a ring)
+    return "pixel art game sprite of " + subject + TAIL_FACE
 
 
 # Per-sprite spec: w = logical width (~40 px HD; browser-upscaled crisp); palette = the
@@ -161,6 +179,49 @@ SPRITES = {
         "prompt": p(
             "a classic flying saucer UFO, a cream and warm-grey metallic disc with a domed glass "
             "top and a row of small dark-teal lights underneath, teal only on the lights"
+        ),
+    },
+    # ── the `void` collection: the black hole at the empty coordinate (the /404 page) ──
+    # The one place the "dominant cream mass" rule inverts on purpose: a black hole IS the
+    # absence of light, so its body is the darkest black in the ramp and the form is carried
+    # by the RING of light around it. Value contrast still does the work — the ring is the
+    # popping mass, the void is the hole it frames. Each entry gets its OWN brief (parallel
+    # generation converges on one attractor otherwise).
+    "event-horizon": {
+        "collection": "void",
+        "w": 48,
+        "palette": BLACKS + CREAMS + GOLD1,
+        "prompt": pc(
+            "a black hole seen head-on: a perfectly round, pitch-black void disc with absolutely "
+            "nothing inside it, hugged by a thin bright rim of light bent around its edge — the "
+            "rim is crisp cream-white, brightest as one hot gold arc on the upper-left where the "
+            "light piles up, fading to warm grey at the lower-right; the whole inside of the "
+            "circle is flat empty black, gold only on that single upper-left arc of the rim"
+        ),
+    },
+    "accretion": {
+        "collection": "void",
+        "w": 72,
+        "palette": CREAMS + BLACKS + GOLD1 + REDS,
+        "prompt": pc(
+            "the accretion ring of a black hole and nothing else: a flat circular RING of glowing "
+            "dust seen face-on, with a big wide EMPTY HOLE punched through the middle so the flat "
+            "magenta background shows straight through the centre of the ring — the ring itself is "
+            "clumpy streaks of cream and warm-grey dust swirling around, with a hot gold inner "
+            "edge and a few small red-hot flecks caught in it, gold only on the inner edge, red "
+            "only on a few flecks, and the centre of the ring is pure empty magenta background"
+        ),
+    },
+    "discman": {
+        "collection": "void",
+        "w": 42,
+        "palette": CREAMS + BLACKS + GOLD1,
+        "prompt": p(
+            "a portable CD player (a discman) tumbling loose through space, a cream and warm-grey "
+            "rounded-square case with a raised circular lid and a small dark window on the front, "
+            "one small round gold play button on the lid, gold only on the play button; a single "
+            "thin dark headphone cable coils out from one corner in a clean curved loop like a "
+            "drawn line, no blobby mass, no gold and no red on the cable"
         ),
     },
 }

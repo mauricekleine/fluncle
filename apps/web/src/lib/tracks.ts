@@ -31,6 +31,27 @@ export async function fetchTracks({
   return (await response.json()) as TracksResponse;
 }
 
+type RandomTrackResponse = { ok: true; track: TrackListItem };
+
+/**
+ * One certified finding, picked at random by the server (`get_random_track`). The
+ * 404 page's "throw you somewhere real" action: fetch a fresh coordinate on every
+ * click, then navigate to its `/log/<logId>`. Returns undefined when the archive is
+ * empty (the endpoint 404s) or the picked finding has no coordinate yet, so the
+ * caller can fall back to the archive index rather than a dead link.
+ */
+export async function fetchRandomFindingLogId(): Promise<string | undefined> {
+  const response = await fetch("/api/v1/tracks/random");
+
+  if (!response.ok) {
+    return undefined;
+  }
+
+  const data = (await response.json()) as RandomTrackResponse;
+
+  return data.track.logId || undefined;
+}
+
 type RadioNowPlayingResponse = {
   nowPlaying: RadioNowPlaying;
   ok: true;

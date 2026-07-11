@@ -10,6 +10,7 @@ import {
 } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { type ReactNode, useState } from "react";
+import { NotFoundBlackHole } from "@/components/not-found-black-hole";
 import { PublicChrome } from "@/components/nav/public-chrome";
 import { isGalaxyMapFullyNamed } from "@/lib/server/galaxies-map";
 import { siteUrl } from "../lib/fluncle-links";
@@ -182,6 +183,12 @@ export const Route = createRootRoute({
     ],
   }),
   loader: async () => ({ galaxiesLive: await fetchGalaxiesLive() }),
+  // The site-wide 404: the empty coordinate as a black hole (a finding Fluncle went
+  // looking for and found nothing where it should be). Catches every unmatched URL and
+  // any bubbled `notFound()` without a route-local state; the router serves it at a real
+  // HTTP 404. Entity routes keep their own `notFoundComponent` (the /log, /artist, …
+  // "no finding at that coordinate" states) — this is the fallback beneath them.
+  notFoundComponent: NotFoundBlackHole,
 });
 
 function RootLayout(): ReactNode {
