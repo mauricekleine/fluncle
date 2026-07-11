@@ -52,14 +52,21 @@ export const radius = {
   sm: size(rawRadii.sm),
 } as const;
 
-// Oxanium speaks for the brand + numerals; the system sans does the reading.
+// Oxanium speaks for the brand + numerals; Space Grotesk does the reading
+// (DESIGN.md: "Oxanium speaks for the brand (numerals, marks); Space Grotesk does
+// the reading"). RN synthesizes NO weights — each weight is its own family name, so
+// the reading roles name their exact cut. 700 is Space Grotesk's ceiling: title and
+// label ask for 700, never 800 (a system-font 800 was fine when it synthesized; the
+// real face has no 800, so 700 IS its heaviest — DESIGN.md's Title rule). No
+// fontWeight is set on a custom-family role: the family name carries the weight,
+// matching display/numeric above.
 // NOTE (RFC Unit 0): fontVariant:['tabular-nums'] is a no-op on custom fonts on
 // iOS (expo/expo#20048) — the Tabular Rule's real fix is a tnum-baked Oxanium
 // subset. Until then, Android gets tabular figures; iOS falls back to default.
 export const font = {
   body: {
+    fontFamily: "SpaceGrotesk_400Regular",
     fontSize: size(typography.body.fontSize),
-    fontWeight: "400",
     lineHeight: size(typography.body.fontSize) * typography.body.lineHeight,
   } satisfies TextStyle,
   display: {
@@ -67,8 +74,8 @@ export const font = {
     letterSpacing: parseFloat(typography.display.letterSpacing) * REM,
   } satisfies TextStyle,
   label: {
+    fontFamily: "SpaceGrotesk_700Bold",
     fontSize: size(typography.label.fontSize),
-    fontWeight: "800",
   } satisfies TextStyle,
   numeric: {
     fontFamily: "Oxanium_400Regular",
@@ -77,8 +84,8 @@ export const font = {
     letterSpacing: parseFloat(typography.numeric.letterSpacing) * REM,
   } satisfies TextStyle,
   title: {
+    fontFamily: "SpaceGrotesk_700Bold",
     fontSize: size(typography.title.fontSize),
-    fontWeight: "800",
     letterSpacing: parseFloat(typography.title.letterSpacing) * REM,
     lineHeight: size(typography.title.fontSize) * typography.title.lineHeight,
   } satisfies TextStyle,
