@@ -43,7 +43,6 @@ const SEGMENTS: Record<string, { index?: string; label: string }> = {
   logbook: { label: "Logbook" },
   mixtapes: { label: "Mixtapes" },
   newsletter: { label: "Newsletter" },
-  pipeline: { label: "Pipeline" },
   privacy: { label: "Privacy" },
   status: { label: "Status" },
   stories: { label: "Stories" },
