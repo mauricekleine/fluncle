@@ -45,6 +45,12 @@ packages/video      Remotion kit for per-track social videos (the Nostalgic Cosm
 The deployed web app owns the Spotify, Telegram, Turso, and Resend secrets. Every API route is served canonically under `/api/v1/*`, with the bare `/api/*` path kept as a permanent back-compat alias (a shared handler mounted at both paths, not a redirect, so POST bodies survive). Public reads are served by `/api/v1/tracks` (with `since`/`until` discovery windows), `/api/v1/tracks/random`, and `/rss.xml`. Newsletter signups post to `/api/v1/newsletter`, which the web app relays to Resend. The mobile app registers for push via `/api/v1/devices` (`register_device` / `deregister_device`); the web app then relays a notification to the Expo Push Service when a finding or mixtape publishes — best-effort and a no-op until `EXPO_ACCESS_TOKEN` is set, like the Telegram/Last.fm side-channels. Admin mutations are served by authenticated `/api/v1/admin/*` routes. Raycast must keep calling `fluncle`.
 Listener submissions are accepted through public `/api/v1/search` and `/api/v1/submissions` routes, then reviewed through authenticated admin submission routes. Approval still publishes only through the existing admin add flow. Optional web accounts are private overlays on the same Log ID spine: signed-in listeners can sync Galaxy lifetime progress, save findings, see their own submissions, export data, and delete the account without changing anonymous Fluncle.
 
+## Private Companion
+
+Some operator-only material is deliberately not in this repo — exact runtime recipes, the concrete secret/topology map, local-dev support, and work that is not part of the product. It lives in a private companion repo, `fluncle-labs`.
+
+**This repo is self-contained:** nothing here needs the companion to build, run, test, or deploy. The split is about what should be world-readable, not about hiding a dependency. If you have access, its README states the boundary; if you do not, nothing here requires it.
+
 ## License
 
 Project source code and documentation are licensed under the [Apache License 2.0](./LICENSE), with attribution notices in [NOTICE](./NOTICE).

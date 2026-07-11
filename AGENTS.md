@@ -13,9 +13,17 @@ Concise rules for working in Fluncle. Use MUST/SHOULD/NEVER to guide decisions.
 
 - This repository is **open source and public** (`github.com/mauricekleine/fluncle`). Everything committed is world-readable forever, git history included — write every file for that audience.
 - NEVER commit secret VALUES (tokens, keys, passwords). gitleaks guards this in CI; never rely on it alone.
-- NEVER commit the secret-management MAP either: concrete `op://<vault>/<item>` 1Password paths, hostnames, IPs, ports, internal URLs, tailnet names, webhook URLs, or local `/Users/...` paths. They are references rather than secrets, but they hand out the topology. Use a PLACEHOLDER (`op://$FLUNCLE_1PASSWORD_ENV_ITEM/<field>` as in `apps/web/.dev.vars.tpl`, or `op://<vault>/<item>/<field>`); concrete names live in the private "Fluncle — Ops Runbook" 1Password note. A working-tree grep in CI (`.github/workflows/gitleaks.yml`) backstops the `op://` case.
+- NEVER commit the secret-management MAP either: concrete `op://<vault>/<item>` 1Password paths, hostnames, IPs, ports, internal URLs, tailnet names, webhook URLs, or local `/Users/...` paths. They are references rather than secrets, but they hand out the topology. Use a PLACEHOLDER (`op://$FLUNCLE_1PASSWORD_ENV_ITEM/<field>` as in `apps/web/.dev.vars.tpl`, or `op://<vault>/<item>/<field>`); the concrete map lives in the private companion repo (see _Private companion_ below). A working-tree grep in CI (`.github/workflows/gitleaks.yml`) backstops the `op://` case.
 - Public runtime IDENTIFIERS are fine (the R2 account id, the IndexNow token — both allowlisted in `.gitleaks.toml`): they grant nothing without the matching secret.
-- Keep committed docs and skills at the architecture/procedure level; secret-bearing operator commands stay in the Ops Runbook note + the relevant operator skill.
+- Keep committed docs and skills at the architecture/procedure level; secret-bearing operator commands stay in the private companion repo + the relevant operator skill.
+
+## Private companion
+
+- Some material is **operator-only and deliberately not in this repo**: exact runtime recipes, the concrete secret/topology map, local-dev support, and work that is not part of the product. It lives in a **private companion repo, `fluncle-labs`** (`~/Projects/fluncle-labs` on an operator machine; `gh repo view mauricekleine/fluncle-labs` if you have access).
+- **This repo is self-contained.** Nothing here needs the companion to build, run, test, or deploy — the split is about what should be world-readable, not about hiding a dependency.
+- **If you have access:** look there before asking the operator for an exact recipe, a vault path, or a hostname — it is where that detail lives, and it is version-controlled. Its README states the boundary rule.
+- **If you do not have access:** nothing in this repo requires it. Do not attempt to reconstruct its contents here, and do not move material from it into this repo — the boundary is deliberate. Ask the operator.
+- **Adding something new?** Ask the boundary question: _would I be happy for a stranger, a competitor, or a lawyer to read this?_ If no, it belongs in the companion, not here.
 
 ## Which machine am I on?
 
