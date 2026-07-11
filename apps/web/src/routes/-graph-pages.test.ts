@@ -115,15 +115,39 @@ describe("the label page", () => {
     expect(data).toMatchObject({ indexable: false, status: "found" });
   });
 
-  it("404s a label with no findings, however many crawled rows hang off it", async () => {
-    // The catalogue DEEPENS a page, it never CREATES one. A label the crawler discovered has
-    // a `labels` row (that row IS the ruling queue) and can carry hundreds of crawled tracks —
-    // and no page, because Fluncle has never certified a thing on it. Without this, a wide
-    // crawl publishes one indexable doorway page per discovered imprint.
+  it("SERVES a label with no findings — a discography is a page", async () => {
+    // THE REVERSAL. A label the crawler discovered carries a `labels` row (that row IS the
+    // operator's ruling queue) and can carry hundreds of crawled releases. That is a real,
+    // useful page — an honest record of what the label put out — and it indexes. It used to
+    // 404 on the rule "the catalogue deepens a page, it never creates one".
+    //
+    // What made the old page a DOORWAY was never its existence; it was the HOLLOW RENDERING
+    // — a "Nothing logged off this one yet." heading sitting above a wall of Spotify
+    // outlinks. Conditional sections fix that at the source: no findings, no findings
+    // section, no apology (graph-sections.tsx). The page is then about what it actually has.
     getFindingsByLabel.mockResolvedValue([]);
     listCatalogueTracksByLabel.mockResolvedValue(catalogue(400, 100));
 
-    expect(await resolveLabelPageData("metalheadz")).toEqual({ status: "missing" });
+    const data = await resolveLabelPageData("metalheadz");
+
+    expect(data).toMatchObject({ indexable: true, status: "found" });
+    // Nothing reaches the findings band, so nothing renders there — and the slice stays
+    // capped, which is the thing #505 got right and this must not regress.
+    expect(data.status === "found" && data.findings).toEqual([]);
+    expect(data.status === "found" && data.catalogue).toHaveLength(100);
+  });
+
+  it("keeps a 2-row discovered label OUT of the index (thin is still thin)", async () => {
+    // The floor does the job the 404 rule overreached at. Two crawled rows and nothing else
+    // is a stub: it still serves 200 (deep links, link equity), it is just `noindex, follow`
+    // and absent from the sitemap. This is the case the operator drew the line at.
+    getFindingsByLabel.mockResolvedValue([]);
+    listCatalogueTracksByLabel.mockResolvedValue(catalogue(2));
+
+    expect(await resolveLabelPageData("two-row-label")).toMatchObject({
+      indexable: false,
+      status: "found",
+    });
   });
 
   it("gates on the entity's TRUE catalogue total, never the rendered slice", async () => {
@@ -170,11 +194,18 @@ describe("the album page", () => {
     expect(await resolveAlbumPageData("nope")).toEqual({ status: "missing" });
   });
 
-  it("404s an album with no findings — the same rule the label page carries", async () => {
+  it("SERVES an album with no findings — the same rule the label page carries", async () => {
+    // A tracklist is a page. Unreachable today (an `albums` row is minted only off a certified
+    // finding), but the two graph pages hold the same rule so neither drifts when the
+    // crawler's write paths widen.
     getFindingsByAlbum.mockResolvedValue([]);
     listCatalogueTracksByAlbum.mockResolvedValue(catalogue(12));
 
-    expect(await resolveAlbumPageData("wormhole")).toEqual({ status: "missing" });
+    expect(await resolveAlbumPageData("wormhole")).toMatchObject({
+      findings: [],
+      indexable: true,
+      status: "found",
+    });
   });
 
   it("stays out of the index below the renderable-track floor", async () => {

@@ -2,7 +2,7 @@ import { Link, createFileRoute } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { type EditionDTO, editionFindingCount, editionIntroSnippet } from "@/lib/editions";
 import { siteUrl } from "@/lib/fluncle-links";
-import { formatDateLong } from "@/lib/format";
+import { findingsCount, formatDateLong } from "@/lib/format";
 import { jsonLdScript } from "@/lib/json-ld";
 import { listEditions } from "@/lib/server/editions";
 
@@ -103,9 +103,7 @@ function NewsletterArchivePage() {
                   {snippet ? (
                     <p className="log-newsletter-snippet">{snippet}</p>
                   ) : count > 0 ? (
-                    <p className="log-newsletter-snippet">
-                      {count} {count === 1 ? "finding" : "findings"} logged.
-                    </p>
+                    <p className="log-newsletter-snippet">{findingsCount(count)} logged.</p>
                   ) : null}
                 </li>
               );

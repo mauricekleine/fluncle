@@ -3,6 +3,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { StoryNotFoundState } from "@/components/stories/stories-states";
 import { TrackArtwork } from "@/components/track-artwork";
 import { siteUrl } from "@/lib/fluncle-links";
+import { findingsCount } from "@/lib/format";
 import { jsonLdScript } from "@/lib/json-ld";
 import { spotifyAlbumImageAtSize } from "@/lib/media";
 import { type GalaxyPane, listGalaxyPanes } from "@/lib/server/galaxies-map";
@@ -105,9 +106,7 @@ function GalaxiesPage() {
                   </span>
                 ) : null}
                 <span className="galaxy-pane-name">{galaxy.name}</span>
-                <span className="galaxy-pane-count">
-                  {galaxy.memberCount} {galaxy.memberCount === 1 ? "finding" : "findings"}
-                </span>
+                <span className="galaxy-pane-count">{findingsCount(galaxy.memberCount)}</span>
               </Link>
             </li>
           ))}

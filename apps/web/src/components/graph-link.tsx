@@ -34,6 +34,7 @@ import { HoverCard, HoverCardContent, HoverCardTrigger } from "@fluncle/ui/compo
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { type ComponentPropsWithoutRef, type ReactNode, useState } from "react";
+import { findingsCount } from "@/lib/format";
 import { type GraphEntityKind, type GraphPreview } from "@/lib/graph-prose";
 import { cn } from "@/lib/utils";
 
@@ -46,12 +47,18 @@ import { cn } from "@/lib/utils";
 const OPEN_DELAY_MS = 450;
 const CLOSE_DELAY_MS = 200;
 
-/** How the card's text names each kind — the count line's noun. */
+/**
+ * How the card's count line names each kind — "3 findings on this label".
+ *
+ * The label used to read "off this imprint", and "imprint" is out of the vocabulary: it is
+ * trade-press English, not something the uncle says out loud (lib/graph-prose.ts). It is a
+ * label, and he says so.
+ */
 const COUNT_NOUN: Record<GraphEntityKind, string> = {
-  album: "off this record",
+  album: "on this record",
   artist: "from this one",
   galaxy: "out here",
-  label: "off this imprint",
+  label: "on this label",
 };
 
 async function fetchPreview(kind: GraphEntityKind, slug: string): Promise<GraphPreview> {
@@ -124,10 +131,12 @@ function PreviewBody({
           ))}
         </span>
       ) : undefined}
-      <p className="graph-card-line">{line}</p>
+      {/* No findings ⇒ the page prints no opening line, so neither does the card. It carries
+          the page's sentence or it carries none; it never writes one of its own. */}
+      {line ? <p className="graph-card-line">{line}</p> : undefined}
       {findingCount > 0 ? (
         <p className="graph-card-count">
-          {findingCount} {findingCount === 1 ? "finding" : "findings"} {COUNT_NOUN[kind]}
+          {findingsCount(findingCount)} {COUNT_NOUN[kind]}
         </p>
       ) : undefined}
     </>

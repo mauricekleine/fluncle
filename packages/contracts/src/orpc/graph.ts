@@ -43,7 +43,14 @@ export const GraphPreviewSchema = z
     covers: z.array(z.string()),
     findingCount: z.number(),
     kind: GraphEntityKindSchema,
-    line: z.string(),
+    /**
+     * Optional, and the absence is meaningful: an entity Fluncle has never found anything on
+     * has no opening line, because he has nothing to say about it. The page prints none there
+     * either — a card that filled the gap would be inventing a sentence, and an entity page
+     * that apologised for the half it does not have is what made a crawled label read as a
+     * doorway page (docs/album-entity.md).
+     */
+    line: z.string().optional(),
     name: z.string(),
     slug: z.string(),
   })

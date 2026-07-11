@@ -46,25 +46,23 @@ type LabelPageData =
  * Resolve the label page's data. Extracted from the server fn so the indexability decision
  * is unit-testable (see -label-page.test.ts), the `resolveArtistPageData` precedent.
  *
- * ── A LABEL WITH NO FINDING HAS NO PAGE ────────────────────────────────────────────────
- * The album entity is minted ONLY off a certified finding, and album-entity.md gives the
- * reason in one line: an entity earns a public page because Fluncle FOUND something on it.
- * A LABEL row cannot honour that as a WRITE rule — the crawler has to mint one for every
- * imprint it discovers, because the `undecided` row IS the operator's ruling queue
- * (catalogue-crawler.md, "the widening loop"). So the label pays the same rule on the READ
- * side instead: a label carrying zero findings resolves as MISSING, and `/label/<slug>`
- * 404s.
+ * ── A LABEL EARNS A PAGE ON ITS CONTENT, NOT ON FLUNCLE'S ───────────────────────────────
+ * A label the crawler discovered and never certified a thing on still gets a page, and that
+ * is deliberate. A label with 700 crawled releases and zero findings is a genuinely useful
+ * page — a real record of what that label put out — and refusing to serve it throws away the
+ * whole point of having crawled it.
  *
- * Without it, a wide crawl publishes one indexable page per discovered imprint whose entire
- * content is a wall of Spotify outlinks under the line "Nothing logged off this one yet."
- * That is a doorway page by Google's own definition, and it shipped at scale: measured on a
- * 10,800-row synthetic catalogue, EIGHT such pages were live, indexable, and — because
- * `listLabelsWithFindingCounts` inner-joins `findings` — absent from the sitemap, breaking
- * the invariant album-entity.md states outright ("an indexable page is never orphaned from
- * it").
+ * The page existing was never the problem. The HOLLOW RENDERING was: the page used to print
+ * "Nothing logged off this one yet." as a heading above a wall of Spotify outlinks, which is
+ * a doorway page by Google's own definition — a page whose stated subject is a thing that is
+ * not on it. The fix is CONDITIONAL SECTIONS (components/graph-sections.tsx): a band with
+ * nothing in it renders nothing at all, so a page with no findings never mentions findings,
+ * and is then honestly about the tracks it does carry.
  *
- * The rule that falls out is the one worth naming: **the catalogue DEEPENS a page, it never
- * CREATES one.**
+ * What stops a 2-row stub from being indexed is the thin-content gate below, and it counts
+ * TOTAL content rather than findings — see LABEL_INDEX_MIN_TRACKS.
+ *
+ * A slug with no `labels` row at all is still MISSING, and still 404s.
  */
 export async function resolveLabelPageData(slug: string): Promise<LabelPageData> {
   const label = await getLabelBySlug(slug);
@@ -79,22 +77,18 @@ export async function resolveLabelPageData(slug: string): Promise<LabelPageData>
     listArtistsByLabel(label.id),
   ]);
 
-  // Zero findings = no page, however many crawled rows hang off the imprint.
-  if (findings.length === 0) {
-    return { status: "missing" };
-  }
-
   return {
     artists,
     catalogue: catalogue.tracks,
     findings,
     // Thin-content gate: index only past LABEL_INDEX_MIN_TRACKS RENDERABLE tracks — the
-    // findings plus the quieter rows, because both are real content on the page. Below it
-    // the page still serves 200 but is noindex + out of the sitemap (the
-    // ARTIST_INDEX_MIN_FINDINGS precedent; the sitemap keys off the same numbers).
+    // findings PLUS the quieter rows, because both are real content on the page, and a page
+    // is thin or not thin on what it renders, never on who wrote it. Below the floor the
+    // page still serves 200 (deep links, link equity) but is noindex + out of the sitemap;
+    // the sitemap keys off the same sum, so the two can never disagree.
     //
     // It counts the entity's TRUE catalogue total, never the rendered slice — a 3,000-row
-    // imprint and a 100-row one must not read as the same page to the gate.
+    // label and a 100-row one must not read as the same page to the gate.
     indexable: findings.length + catalogue.total >= LABEL_INDEX_MIN_TRACKS,
     name: label.name,
     slug: label.slug,
@@ -116,10 +110,14 @@ function labelHead(loaderData: LabelPageData | undefined) {
   // The <title>/meta stay honestly-plain third-person (the Narrator rule); the first person
   // lives only in the on-page voice frame.
   const title = `${name} · Fluncle's Findings`;
+  // It describes the page it is actually on: with findings, the findings; without, the records
+  // this label put out. It never claims findings a page does not have, and it never names the
+  // tier the quieter rows belong to (that tier has no public name — docs/album-entity.md), so
+  // "catalogue" cannot leak into a SERP snippet.
   const description =
     findings.length > 0
       ? `Every banger Fluncle has found on ${name} and logged in the Galaxy, ${findings.length} so far, each with a coordinate.`
-      : `${name} in Fluncle's Galaxy.`;
+      : `The records released on ${name}, charted in Fluncle's Galaxy.`;
   const coverFinding = findings[0];
   const imageUrl =
     (coverFinding ? spotifyAlbumImageAtSize(coverFinding.albumImageUrl, "large") : undefined) ??
@@ -186,6 +184,7 @@ function LabelPage() {
   }
 
   const { artists, catalogue, findings, name } = data;
+  const signature = labelSignatureLine(name, findings.length, firstFoundAt(findings));
 
   return (
     <main className="log-plate-stage">
@@ -193,12 +192,12 @@ function LabelPage() {
         <header className="log-masthead">
           <p className="log-nameplate">Fluncle's Findings</p>
           <h1 className="log-coordinate log-index-title artist-name">{name}</h1>
-          <p className="log-index-intro">
-            {labelSignatureLine(name, findings.length, firstFoundAt(findings))}
-          </p>
+          {/* No findings, no line. The masthead is just the name (lib/graph-prose.ts). */}
+          {signature ? <p className="log-index-intro">{signature}</p> : undefined}
         </header>
 
-        {/* The findings lead. Always. */}
+        {/* Every band below is conditional: an empty one renders nothing at all, so this page
+            is only ever about what it actually carries (components/graph-sections.tsx). */}
         <FindingsGrid findings={findings} label={`Findings on ${name}`} />
 
         <ArtistChips artists={artists} title={`Artists on ${name}`} />

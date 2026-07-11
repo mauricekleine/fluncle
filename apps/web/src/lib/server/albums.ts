@@ -20,6 +20,7 @@
 import { randomUUID } from "node:crypto";
 import { slugify } from "@fluncle/contracts/util/galaxy-slug";
 import { getDb, typedRows } from "./db";
+import { type EntitySitemapRow } from "./labels";
 
 // The thin-content gate for album pages: an `/album/<slug>` page indexes (and enters the
 // sitemap) only with this many RENDERABLE tracks or more — its findings plus the quieter
@@ -197,6 +198,44 @@ export async function listAlbumsWithFindingCounts(): Promise<AlbumIndexEntry[]> 
     findingCount: Number(row.finding_count),
     lastmod: row.lastmod ?? undefined,
     name: row.name,
+    slug: row.slug,
+  }));
+}
+
+/**
+ * Every ALBUM whose page clears the thin-content floor — findings or no findings. The exact
+ * twin of `listLabelSitemapRows`, and that function carries the reasoning: the `/albums` hub
+ * is Fluncle's editorial list (findings-joined), while the SITEMAP must carry every page that
+ * exists and may be indexed, or an indexable page ends up orphaned from it.
+ *
+ * The floor is applied in SQL (`having`), never in the isolate.
+ */
+export async function listAlbumSitemapRows(minTracks: number): Promise<EntitySitemapRow[]> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [minTracks],
+    sql: `select albums.slug as slug,
+                 max(findings.added_at) as lastmod,
+                 (select t2.album_image_url
+                    from findings f2 join tracks t2 on t2.track_id = f2.track_id
+                    where t2.album_id = albums.id and f2.log_id is not null
+                    order by f2.added_at desc limit 1) as cover_url
+          from albums
+          join tracks on tracks.album_id = albums.id
+          left join findings on findings.track_id = tracks.track_id
+          group by albums.id
+          having sum(case when findings.log_id is not null then 1 else 0 end)
+               + sum(case when findings.track_id is null then 1 else 0 end) >= ?
+          order by albums.slug asc`,
+  });
+
+  return typedRows<{
+    cover_url: string | null;
+    lastmod: string | null;
+    slug: string;
+  }>(result.rows).map((row) => ({
+    coverImageUrl: row.cover_url ?? undefined,
+    lastmod: row.lastmod ?? undefined,
     slug: row.slug,
   }));
 }
