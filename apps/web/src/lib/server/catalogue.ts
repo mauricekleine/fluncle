@@ -324,12 +324,16 @@ export async function rankCatalogue(limit = RANK_BATCH_SIZE): Promise<RankCatalo
   const candidates = typedRows<CandidateRow>(candidateResult.rows);
 
   if (candidates.length === 0) {
+    // `remaining` is COUNTED, never assumed to be zero. An empty batch normally does mean a
+    // drained catalogue — but not if `limit` was 0, and a cron that trusts an assumed 0 would
+    // stop calling while rows were still stale. The count is one cheap scoped COUNT, paid only
+    // on an already-idle tick.
     return {
       corpus,
       embeddedFindings,
       findings,
       prioritized: 0,
-      remaining: 0,
+      remaining: await countStale(corpus),
       scored: 0,
     };
   }

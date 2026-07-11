@@ -285,6 +285,20 @@ describe("the sweep — batching, staleness, and self-healing", () => {
     expect(third.remaining).toBe(0);
   });
 
+  it("COUNTS what is left rather than assuming zero — a limit of 0 must not report 'drained'", async () => {
+    const { rankCatalogue } = await import("./catalogue");
+
+    await seedFinding("finding-a", { vector: axis(0) });
+    await seedCatalogue("cat-a", { vector: blend(axis(0), axis(1), 0.2) });
+
+    // An empty BATCH is not an empty BACKLOG. A cron that trusted an assumed `remaining: 0`
+    // here would stop calling while the row was still stale.
+    const summary = await rankCatalogue(0);
+
+    expect(summary.scored).toBe(0);
+    expect(summary.remaining).toBe(1);
+  });
+
   it("stamps a row it cannot score, so a hopeless row is never re-picked forever", async () => {
     const { rankCatalogue } = await import("./catalogue");
 
