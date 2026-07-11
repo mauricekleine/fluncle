@@ -23,11 +23,18 @@ export function observationRail(observing: boolean): RailControl {
   };
 }
 
-/** The card's global sound toggle. */
-export function soundRail(soundOn: boolean): RailControl {
+/**
+ * The card's global sound toggle. While the observation plays it owns the one sound
+ * source (the operator's ruling: the observation note wins — the two are never audible
+ * at once), so the control reads muted (never gold) for the duration. The toggle still
+ * governs the card's own audio PREFERENCE (`soundOn`), which is why the visible state is
+ * suppressed but the a11y verb keeps describing the persistent toggle: press it during
+ * an observation and your preference is set, it just takes effect once the note ends.
+ */
+export function soundRail(soundOn: boolean, observing = false): RailControl {
   return {
     accessibilityLabel: soundOn ? "Turn sound off" : "Turn sound on",
-    active: soundOn,
+    active: soundOn && !observing,
     label: "Sound",
   };
 }

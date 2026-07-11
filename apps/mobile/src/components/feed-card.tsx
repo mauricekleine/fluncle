@@ -106,7 +106,10 @@ export const FeedCard = memo(function FeedCard({ finding, active, soundOn, onTog
   const observing = active && observationStatus.playing;
   // Stable rail labels + a11y hints (the Chrome Rule); the icon/gold tint carry state.
   const observationControl = observationRail(observing);
-  const soundControl = soundRail(soundOn);
+  // The observation and the card's sound are mutually exclusive: while the observation
+  // plays, the Sound control renders its muted state (never gold), and the audio effect
+  // below keeps the card track silent. When it ends, `soundOn` restores the card's sound.
+  const soundControl = soundRail(soundOn, observing);
 
   // Only the visible card plays; sound follows the global toggle. While the
   // observation plays it owns the one sound source — keep the card media silent.
@@ -280,9 +283,9 @@ export const FeedCard = memo(function FeedCard({ finding, active, soundOn, onTog
           accessibilityLabel={soundControl.accessibilityLabel}
           icon={
             <Ionicons
-              name={soundOn ? "volume-high" : "volume-mute"}
+              name={soundControl.active ? "volume-high" : "volume-mute"}
               size={29}
-              color={soundOn ? color.eclipseGold : color.starlightCream}
+              color={soundControl.active ? color.eclipseGold : color.starlightCream}
               style={styles.icon}
             />
           }

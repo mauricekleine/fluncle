@@ -50,3 +50,19 @@ assertEqual(
 );
 assertEqual(soundRail(false).accessibilityLabel, "Turn sound on", "sound a11y off");
 assertEqual(soundRail(true).accessibilityLabel, "Turn sound off", "sound a11y on");
+
+// 5. Observation and Sound are mutually exclusive (the operator's ruling: the
+//    observation note wins). While an observation plays, the Sound control reads muted —
+//    never gold — regardless of the underlying `soundOn` preference.
+assertEqual(soundRail(true, true).active, false, "sound suppressed while observing");
+assertEqual(soundRail(false, true).active, false, "sound stays muted while observing");
+assertEqual(soundRail(true, false).active, true, "sound active when not observing");
+// The label stays the one stable literal (the Chrome Rule) through the suppression.
+assertEqual(soundRail(true, true).label, "Sound", "sound label stable while observing");
+// The a11y verb keeps describing the persistent toggle, not the momentary suppression:
+// pressing it sets the preference that takes effect once the observation ends.
+assertEqual(
+  soundRail(true, true).accessibilityLabel,
+  "Turn sound off",
+  "sound a11y verb follows the preference, not the observation",
+);
