@@ -117,6 +117,13 @@ type TrackUpdateOptions = {
   videoUrl?: string;
 };
 
+type TrackWorkOptions = {
+  json: boolean;
+  kind: string;
+  limit?: string;
+  scope?: string;
+};
+
 type CatalogueListOptions = {
   json: boolean;
   lens?: string;
@@ -687,6 +694,27 @@ function addAdminCommands(program: Command): void {
 
       const { captureQueueCommand } = await import("./commands/admin-tracks");
       await runAdminCaptureQueue(options, captureQueueCommand);
+    });
+
+  // `list_track_work` → `admin tracks work` (Convention B). THE CATALOGUE-AWARE worklist,
+  // and the one the three sweeps actually drain. The `enrich`/`embed`/`capture-audio` views
+  // above read `list_tracks_admin`, which joins through the certification and is therefore
+  // blind to a CATALOGUE track — right for a feed, fatal for a pipeline, since BPM/key/the
+  // MuQ vector are measurements of a RECORDING and apply to any track with captured audio.
+  //
+  // Rows come back in the order the METERED capture budget should be spent: certified first,
+  // then the Ear's `capture_priority` ladder, then newest-first. A ruled-out label is vetoed
+  // out of the `capture` worklist. See docs/gpu-batch-embed.md + docs/the-ear.md.
+  adminTracks
+    .command("work")
+    .description("The audio pipeline's worklist for one stage, in capture-priority order")
+    .requiredOption("--kind <kind>", "Pipeline stage: analyze | capture | embed")
+    .option("--scope <scope>", "Which half of the archive: all | catalogue | findings", "all")
+    .option("--limit <limit>", "Rows to show", "10")
+    .option("--json", "Print JSON", false)
+    .action(async (options: TrackWorkOptions) => {
+      const { trackWorkCommand } = await import("./commands/admin-tracks");
+      await runAdminTrackWork(options, trackWorkCommand);
     });
 
   // `requeue_analysis` → `admin tracks requeue-analysis` (Convention B; the `requeue` verb is
@@ -4008,6 +4036,57 @@ async function runAdminCaptureQueue(
   console.log(trackRows(tracks).join("\n"));
 }
 
+const TRACK_WORK_KINDS = new Set(["analyze", "capture", "embed"]);
+const TRACK_WORK_SCOPES = new Set(["all", "catalogue", "findings"]);
+
+// The catalogue-aware pipeline worklist. Renders each row with the two things the queue's
+// ORDER turns on: whether the track is certified, and its capture-priority rung. An
+// uncertified row has no coordinate to print — it has no finding — so it shows its trackId.
+async function runAdminTrackWork(
+  options: TrackWorkOptions,
+  trackWorkCommand: typeof import("./commands/admin-tracks").trackWorkCommand,
+): Promise<void> {
+  const kind = options.kind?.trim().toLowerCase() ?? "";
+  const scope = options.scope?.trim().toLowerCase() ?? "all";
+
+  if (!TRACK_WORK_KINDS.has(kind)) {
+    console.error(`--kind must be one of: analyze, capture, embed (got "${options.kind}")`);
+    process.exitCode = 1;
+    return;
+  }
+
+  if (!TRACK_WORK_SCOPES.has(scope)) {
+    console.error(`--scope must be one of: all, catalogue, findings (got "${options.scope}")`);
+    process.exitCode = 1;
+    return;
+  }
+
+  const tracks = await trackWorkCommand({
+    kind: kind as "analyze" | "capture" | "embed",
+    limit: parseListLimit(options.limit),
+    scope: scope as "all" | "catalogue" | "findings",
+  });
+
+  if (options.json) {
+    printJson({ ok: true, tracks });
+    return;
+  }
+
+  if (tracks.length === 0) {
+    console.log(`Nothing to ${kind}. The ${scope} queue is drained.`);
+    return;
+  }
+
+  const noun = tracks.length === 1 ? "track" : "tracks";
+  console.log(`${tracks.length} ${noun} to ${kind} (${scope}), in drain order:`);
+
+  for (const track of tracks) {
+    const who = track.logId ?? `${track.trackId} · catalogue`;
+    const rung = track.capturePriority === null ? "" : ` · p${track.capturePriority}`;
+    console.log(`  ${who}${rung} — ${track.artists.join(", ")} — ${track.title}`);
+  }
+}
+
 // The whole-archive walk cap. Absent `--limit` drains the entire archive (the repair is
 // meant to sweep everything); an explicit `--limit` (any positive integer) bounds a
 // pilot/test pass. Distinct from `parseListLimit`'s 1..100 worklist clamp — this walks the
@@ -4487,6 +4566,7 @@ const stringOptions = new Set([
   "--scheduled-for",
   "--script",
   "--script-file",
+  "--scope",
   "--seed",
   "--soundcloud-url",
   "--source",

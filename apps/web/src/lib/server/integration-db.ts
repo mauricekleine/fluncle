@@ -72,6 +72,9 @@ export async function seedUser(client: Client, user: SeedUser): Promise<void> {
 type SeedTrack = {
   addedToSpotify?: boolean;
   artists?: string[];
+  durationMs?: number;
+  /** The raw release label — the capture ladder's `label`/`seed-label`/veto rungs read it. */
+  label?: null | string;
   /** NULL seeds an UNCHARTED finding (no coordinate) — the rows the public reads exclude. */
   logId: null | string;
   postedToTelegram?: boolean;
@@ -120,11 +123,12 @@ export async function seedCatalogueTrack(
       JSON.stringify(track.artists ?? ["Test Artist"]),
       `spotify:track:${track.trackId}`,
       `https://open.spotify.com/track/${track.trackId}`,
-      0,
+      track.durationMs ?? 0,
+      track.label ?? null,
     ],
     sql: `insert into tracks
-      (track_id, title, artists_json, spotify_uri, spotify_url, duration_ms)
-      values (?, ?, ?, ?, ?, ?)`,
+      (track_id, title, artists_json, spotify_uri, spotify_url, duration_ms, label)
+      values (?, ?, ?, ?, ?, ?, ?)`,
   });
 }
 

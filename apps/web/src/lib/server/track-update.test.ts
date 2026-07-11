@@ -25,8 +25,13 @@ vi.mock("./db", () => ({
   typedRows: <T extends object>(rows: T[]) => rows,
 }));
 
+// A CERTIFIED finding: the resolve query outer-joins `findings`, so `certified` is the flag
+// that says a `findings` row exists. Every case in this file is about a finding; the
+// UNCERTIFIED (catalogue) half of `updateTrack` — the certification rail — is proven against
+// the real schema in findings-certification.integration.test.ts, where a mock could not.
 const EXISTING = {
   added_at: "2026-06-01T00:00:00.000Z",
+  certified: 1,
   isrc: "GB1234567890",
   log_id: "004.7.2I",
 };

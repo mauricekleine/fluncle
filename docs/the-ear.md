@@ -63,7 +63,7 @@ A catalogue track has **no vector until its audio has been captured**, and captu
 
 | tier | rung            | the claim                                                                                                                                        |
 | ---- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| ✗    | `skipped-label` | **the veto, checked first.** Its label is one the operator ruled out. Tier 0, whatever else is true of the track.                                |
+| ✗    | `skipped-label` | **the veto, checked first.** Its label is one the operator ruled out. Tier **−1**, whatever else is true of the track.                           |
 | 3    | `artist`        | an artist on it is **already on a finding**. His ear has said yes to this artist — the strongest signal there is.                                |
 | 2    | `label`         | its label already carries a finding. A DnB label is a curator; a label he has found on is a crate he digs in.                                    |
 | 1    | `seed-label`    | its label is one he rules the crawler may seed from ([docs/label-entity.md](./label-entity.md)), nothing certified on it yet. In-lane, unproven. |
@@ -76,6 +76,10 @@ And it does **not** breach the crawl-scope-never-storage rule. A ruling governs 
 `capturePriorityFor` is **pure**, and it is the ladder's single authority: the sweep calls it to _write_ the tier, and the surface calls it to _explain_ the tier. They cannot drift, because they are the same function. Label matching goes through `labelSlug` — the same fold that makes `Pilot.` and `Pilot` one label everywhere else.
 
 The two lenses are **disjoint by construction**: scoring a track clears its `capture_priority` (it has audio, so capturing it again is the one thing the queue must never ask for), and the capture lens is exactly "catalogue, no score yet".
+
+**The veto has its own tier, and that is what makes it enforceable.** It first shipped sharing `none`'s 0, which left it invisible to SQL — the capture _work queue_ could not tell "capture this last" from "never spend a metered per-GB byte on this", so the veto could only ever be a sort. And a sort is not a veto: the queue drains, and last arrives. At **−1** it is a predicate (`capture_priority >= 0`), and every display property above survives untouched — the row keeps its place in the capture lens, still sorts last, still carries its honest reason line. Ordered last, kept anyway, and never bought.
+
+`capture_priority` is what the **work queues** ([docs/gpu-batch-embed.md](./gpu-batch-embed.md)) actually drain on: `list_track_work` serves capture, analysis, and embedding off `tracks`, ordered certified-first and then by this ladder. The veto is scoped to **capture** alone — a ruling governs what Fluncle _acquires_, not what he may _measure_, so a vetoed track whose bytes are already on file is still analysed and embedded (and its vector is how The Ear gets to disagree with the ladder).
 
 This repo does **not** build the capture itself — the acquisition layer lives in the private companion repo (the-archive RFC, D6). The Ear ships the queue and the priority signal; the layer that acts on them reads `capture_priority` and works down.
 

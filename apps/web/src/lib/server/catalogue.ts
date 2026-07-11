@@ -65,13 +65,26 @@ export type CapturePriorityReason = {
   name: string | null;
 };
 
-/** The numeric tier for each rung — the stored `tracks.capture_priority`, high = capture sooner. */
+/**
+ * The numeric tier for each rung — the stored `tracks.capture_priority`, high = capture sooner.
+ *
+ * THE VETO GETS ITS OWN TIER (−1), and that is load-bearing rather than cosmetic. It first
+ * shipped collapsed into `none`'s 0, which made it invisible to SQL: the capture WORK QUEUE
+ * (track-work.ts) could not tell "nothing ties this to the archive, so capture it last" from
+ * "the operator ruled this label out, so never spend a metered per-GB byte on it". A veto that
+ * only sorts last is not a veto — the queue drains, and last eventually arrives.
+ *
+ * With its own tier the queue enforces it as a predicate (`capture_priority >= 0`), while every
+ * DISPLAY property the-ear.md promises survives untouched: the row keeps its place in the
+ * capture lens (`capture_priority is not null`), still sorts last under `order by … desc`, and
+ * still carries its honest reason line. Ordered last, kept anyway — and never bought.
+ */
 const CAPTURE_TIER: Record<CapturePriorityReason["kind"], number> = {
   artist: 3,
   label: 2,
   none: 0,
   "seed-label": 1,
-  "skipped-label": 0,
+  "skipped-label": -1,
 };
 
 /** The archive's cheap identity sets — bounded by the FINDING count, never the catalogue. */

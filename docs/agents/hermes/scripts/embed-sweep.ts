@@ -15,24 +15,37 @@
 // enrich-sweep writes bpm/key/features.
 //
 // SOURCE = the CAPTURED FULL SONG, not the 30s preview. The embed queue gates server-side on
-// `source_audio_key IS NOT NULL AND embedding_json IS NULL`, and the admin DTO carries the
-// `sourceAudioKey` — unstripped for admin callers (public reads run it through
-// `toPublicTrackListItem` and lose it), then passed through faithfully by the CLI's `mapTrack`
-// so it reaches this sweep. A queued finding therefore always has a captured full song in the
-// PRIVATE `fluncle-source-audio` R2 bucket. We deliberately do NOT embed previews (the blind
-// "quiet piano" vectors are the thing this whole effort kills), so a finding with no
-// `sourceAudioKey` is skipped, never preview-fetched. The S3 GET mirrors capture-sweep.ts's
-// signer (which mirrors apps/web/src/lib/server/aws-sigv4.ts) — keep them in step.
+// `source_audio_key IS NOT NULL AND embedding_json IS NULL`, so a queued track always has a
+// captured full song in the PRIVATE `fluncle-source-audio` R2 bucket. We deliberately do NOT
+// embed previews (the blind "quiet piano" vectors are the thing this whole effort kills), so a
+// track with no `sourceAudioKey` is skipped, never preview-fetched. The S3 GET mirrors
+// capture-sweep.ts's signer (which mirrors apps/web/src/lib/server/aws-sigv4.ts) — keep them
+// in step.
 //
-// The loop is idempotent by construction (an embedded finding is already out of the
+// THE QUEUE IS CATALOGUE-AWARE (docs/gpu-batch-embed.md). It reads `list_track_work`, NOT the
+// old `admin tracks embed --queue`: that one went through `list_tracks_admin`, which drives
+// through the FINDING JOIN, so it was structurally blind to a CATALOGUE track (a `tracks` row
+// with no `findings` row). A catalogue track could therefore never be embedded — and The Ear
+// ranks the catalogue BY its embedding, so the feature had nothing to rank. Embedding is a
+// measurement of a RECORDING; it applies to any track with captured audio, certified or not.
+//
+// The read is DIRECT HTTP rather than the baked CLI, deliberately: the box's `fluncle` binary
+// is a PINNED release, so a queue read through a NEW CLI command would need a pin bump before
+// this sweep could run. The WRITE-BACK stays on the CLI (`tracks update --embedding-file` is an
+// existing command, unchanged), so this sweep ships without touching the pin. Same trick
+// capture-sweep.ts already uses for its queue read.
+//
+// The loop is idempotent by construction (an embedded track is already out of the
 // `embedding_json IS NULL` queue; re-running never double-writes), a fast no-op when the
 // queue is empty:
 //
-//   1. `fluncle admin tracks embed --queue --json`   → the worklist.
-//   2. S3-GET each finding's captured full song (`source_audio_key`) → a temp file; build a manifest.
+//   1. GET /api/admin/tracks/work?kind=embed          → the worklist, in drain order.
+//   2. S3-GET each track's captured full song (`sourceAudioKey`) → a temp file; build a manifest.
 //   3. ONE `python3 embed-track.py` call over the batch → {results, errors}
 //      (the MuQ model load is amortized; embed-track.py WINDOWS the long audio to bound RAM).
 //   4. per result: `fluncle admin tracks update <trackId> --embedding-file <tmp>`.
+//      NO `--status` is ever passed: `enrichment_status` is a CERTIFICATION column, and the
+//      server 409s an uncertified write of one (the certification rail, track-update.ts).
 //
 // The pure helpers below (chooseEmbedSource / sourceAudioExt) are exported + unit-tested in
 // embed-sweep.test.ts; `main()` is guarded behind `import.meta.main` so importing this module
@@ -59,6 +72,11 @@ const QUEUE_LIMIT = 50; // hard ceiling on the queue read (we only act on BATCH_
 
 const FLUNCLE_BIN = process.env.FLUNCLE_BIN ?? "fluncle";
 const PYTHON_BIN = process.env.PYTHON_BIN ?? "python3";
+
+// The queue read goes over direct HTTP (see the header): the box CLI is a PINNED release, so
+// a new command would gate this sweep behind a pin bump. The write-back still uses the CLI.
+const API_BASE_URL = process.env.FLUNCLE_API_BASE_URL ?? "https://www.fluncle.com";
+const API_TOKEN = process.env.FLUNCLE_API_TOKEN ?? "";
 // The MuQ inference script — baked beside this orchestrator (/opt/hermes-scripts/).
 const EMBED_SCRIPT =
   process.env.FLUNCLE_EMBED_SCRIPT ?? new URL("embed-track.py", import.meta.url).pathname;
@@ -78,13 +96,16 @@ const log = (message: string) => console.error(`[embed-sweep] ${message}`);
 // ---------------------------------------------------------------------------
 
 export type QueueFinding = {
-  logId?: string;
-  // The R2 key for the captured full song (`<logId>/<sha256>.<ext>`), surfaced on the ADMIN
-  // embed queue DTO (unstripped for admin callers; the CLI's `mapTrack` passes it through,
-  // while public reads strip it). PRESENCE means captured; the queue is key-gated, so this is
-  // populated for every real row — but we still skip defensively when it is absent (never
-  // fall back to the preview).
-  sourceAudioKey?: string;
+  // True when a `findings` row exists. FALSE for a catalogue track — and the sweep must then
+  // never write a certification field back (no `--status`); the server would 409 it anyway
+  // (the certification rail), but the sweep does not even try.
+  certified?: boolean;
+  // Null for a catalogue track: the coordinate lives on the certification.
+  logId?: null | string;
+  // The R2 key for the captured full song, surfaced on the work-queue DTO. PRESENCE means
+  // captured; the queue is key-gated, so this is populated for every real row — but we still
+  // skip defensively when it is absent (never fall back to the preview).
+  sourceAudioKey?: null | string;
   trackId?: string;
 };
 
@@ -289,6 +310,29 @@ async function r2Get(key: string): Promise<Uint8Array> {
   return new Uint8Array(await res.arrayBuffer());
 }
 
+// ── The work queue (direct HTTP — pin-independent, not the baked CLI) ────────
+//
+// `kind=embed` is "captured audio on file, no MuQ vector yet", over `tracks` rather than
+// `findings` — so it covers a CATALOGUE track exactly as it covers a finding. `scope=all`
+// with the server's drain order (certified first, then the Ear's capture-priority ladder)
+// means the catalogue can never starve the findings' backlog.
+
+async function fetchEmbedQueue(): Promise<QueueFinding[]> {
+  const url = `${API_BASE_URL}/api/admin/tracks/work?kind=embed&scope=all&limit=${QUEUE_LIMIT}`;
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${API_TOKEN}` },
+    signal: AbortSignal.timeout(30_000),
+  });
+
+  if (!res.ok) {
+    throw new Error(`embed queue read failed (${res.status}): ${(await res.text()).slice(0, 200)}`);
+  }
+
+  const body = (await res.json()) as { tracks?: QueueFinding[] };
+
+  return Array.isArray(body.tracks) ? body.tracks : [];
+}
+
 // ---------------------------------------------------------------------------
 // Main — drain a bounded batch off the queue.
 // ---------------------------------------------------------------------------
@@ -300,16 +344,13 @@ async function main(): Promise<void> {
     return;
   }
 
-  // `embed --queue --json` returns `{ ok: true, tracks: [...] }`, not a bare array.
-  const response = fluncleJson<{ tracks?: QueueFinding[] }>([
-    "admin",
-    "tracks",
-    "embed",
-    "--queue",
-    "--limit",
-    String(QUEUE_LIMIT),
-  ]);
-  const queue = response.tracks ?? [];
+  if (!API_TOKEN) {
+    console.log(JSON.stringify({ ok: false, reason: "missing_api_token" }));
+    process.exitCode = 1;
+    return;
+  }
+
+  const queue = await fetchEmbedQueue();
 
   const summary = {
     done: 0,

@@ -1,3 +1,4 @@
+import { type TrackWorkItem } from "@fluncle/contracts";
 import { adminApiGet, adminApiPost } from "../api";
 import { mapTrack, type RecentTrack, type TracksResponse } from "./recent";
 import { trackUpdateCommand } from "./track";
@@ -179,6 +180,39 @@ export async function embedQueueCommand(limit: number): Promise<RecentTrack[]> {
 // the operator/inspection surface. See docs/agents/hermes/scripts/capture-sweep.*.
 export async function captureQueueCommand(limit: number): Promise<RecentTrack[]> {
   return fetchAdminTracks({ captureQueue: true, max: limit, order: "desc" });
+}
+
+// ── The CATALOGUE-AWARE pipeline worklist (`list_track_work`) ────────────────────────
+//
+// The three queues above all read `list_tracks_admin`, which drives through the FINDING
+// JOIN — so every one of them is blind to a CATALOGUE track (a `tracks` row with no
+// `findings` row). That is right for a feed and wrong for a pipeline: BPM, key, features
+// and the MuQ vector are measurements of a RECORDING, so they apply to any track with
+// captured audio, certified or not (docs/gpu-batch-embed.md).
+//
+// `list_track_work` is the queue that sees both halves, and it hands them back in the
+// order the METERED capture budget should be spent: certified first, then the Ear's
+// pre-audio `capture_priority` ladder, then newest-first. A ruled-out label is vetoed out
+// of the `capture` worklist entirely. The three sweeps read it; this is the CLI mirror
+// (the CLI holds no queue logic of its own).
+export type TrackWorkKind = "analyze" | "capture" | "embed";
+export type TrackWorkScope = "all" | "catalogue" | "findings";
+
+export async function trackWorkCommand(options: {
+  kind: TrackWorkKind;
+  limit: number;
+  scope: TrackWorkScope;
+}): Promise<TrackWorkItem[]> {
+  const params = new URLSearchParams({
+    kind: options.kind,
+    limit: String(Math.min(Math.max(1, options.limit), 200)),
+    scope: options.scope,
+  });
+  const response = await adminApiGet<{ tracks: TrackWorkItem[] }>(
+    `/api/admin/tracks/work?${params.toString()}`,
+  );
+
+  return response.tracks ?? [];
 }
 
 // One stale finding in the analysis-provenance requeue (RFC bpm-key-accuracy): its

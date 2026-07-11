@@ -46,6 +46,7 @@ import {
 import { adminAuth, operatorGuard } from "../orpc-auth";
 import { VIDEOS_BUCKET, presignUploads } from "../r2-presign";
 import { fillEmptyNote, type TrackUpdate, updateTrack } from "../track-update";
+import { listTrackWork } from "../track-work";
 import { purgeVideoCache } from "../video-cache";
 import {
   type EnrichmentStatusFilter,
@@ -353,6 +354,26 @@ export function adminTracksHandlers(os: Implementer) {
         retryEmptyContext: parseTriStateBool(input.retryEmptyContext) === true,
         status: parseEnrichmentStatus(input.status),
       });
+    } catch (error) {
+      throw toFault(error);
+    }
+  });
+
+  // GET /admin/tracks/work — admin tier (agent-allowed read). THE CATALOGUE-AWARE PIPELINE
+  // QUEUE. `list_tracks_admin`'s queue filters all drive through the finding join, so they
+  // are structurally blind to a catalogue track; analysis and embedding are measurements of
+  // a RECORDING and apply to any track with captured audio, certified or not. This reads
+  // `tracks` outer-joined to the certification, and hands the rows back in the order the
+  // metered capture budget should be spent (docs/gpu-batch-embed.md, docs/the-ear.md).
+  const listTrackWorkHandler = os.list_track_work.use(adminAuth).handler(async ({ input }) => {
+    try {
+      const tracks = await listTrackWork({
+        kind: input.kind,
+        limit: input.limit,
+        scope: input.scope,
+      });
+
+      return { ok: true, tracks } as const;
     } catch (error) {
       throw toFault(error);
     }
@@ -1122,6 +1143,7 @@ export function adminTracksHandlers(os: Implementer) {
     finalize_track_video: finalizeVideoHandler,
     get_mixable_order: getMixableOrderHandler,
     get_track_admin: getTrackAdminHandler,
+    list_track_work: listTrackWorkHandler,
     list_tracks_admin: listTracksAdminHandler,
     note_track: noteTrackHandler,
     observe_track: observeTrackHandler,
