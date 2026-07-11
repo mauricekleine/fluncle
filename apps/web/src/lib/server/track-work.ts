@@ -279,3 +279,49 @@ export async function listTrackWork(options: {
     trackId: row.track_id,
   }));
 }
+
+/**
+ * HOW BIG IS THE BACKLOG — the whole queue, not the page.
+ *
+ * `listTrackWork` is capped at 200 rows, so `tracks.length` from a page read answers "how many
+ * did I get", never "how much is left". At catalogue scale those are different numbers by three
+ * orders of magnitude, and the one the OPERATOR needs is the second: it is what decides whether
+ * the GPU batch (docs/gpu-batch-embed.md) rents another hour, and how many. A batch that reports
+ * "done" off a short final page while 8,000 rows are still queued is simply lying to him.
+ *
+ * So this is the same predicate, the same scope, the same brake — counted rather than paged.
+ * The ORDER BY is dropped (a count does not care) and no column crosses the wire but the number.
+ *
+ * It is OPT-IN at every caller (`count=true` on `list_track_work`), because the 5-minute box
+ * sweeps do not need it and should not pay for it. The `embed` predicate is backed by a partial
+ * index (`tracks_embed_queue_idx`) that covers exactly the un-embedded rows, so THAT count reads
+ * the backlog rather than the archive; `capture`/`analyze` have no such index and their counts
+ * scan, which is why nothing on a hot path asks for one.
+ */
+export async function countTrackWork(options: {
+  kind: TrackWorkKind;
+  scope?: TrackWorkScope;
+}): Promise<number> {
+  const { kind, scope = "all" } = options;
+
+  // The same brake, in the same order as the page read — a shut budget must not be able to
+  // report a backlog the queue would refuse to hand out.
+  const catalogueShut = kind === "capture" ? !(await isCatalogueCaptureOpen()) : false;
+
+  if (catalogueShut && scope === "catalogue") {
+    return 0;
+  }
+
+  const effectiveScope: TrackWorkScope = catalogueShut ? "findings" : scope;
+  const kindWhere = kindClause(kind);
+  const db = await getDb();
+  const result = await db.execute({
+    args: kindWhere.args,
+    sql: `select count(*) as queued
+          from tracks t
+          left join findings f on f.track_id = t.track_id
+          where ${scopeClause(effectiveScope)} and ${kindWhere.sql}`,
+  });
+
+  return Number(typedRows<{ queued: number }>(result.rows)[0]?.queued ?? 0);
+}

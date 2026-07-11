@@ -198,21 +198,36 @@ export async function captureQueueCommand(limit: number): Promise<RecentTrack[]>
 export type TrackWorkKind = "analyze" | "capture" | "embed";
 export type TrackWorkScope = "all" | "catalogue" | "findings";
 
+export type TrackWorkPage = {
+  /** The WHOLE backlog for this kind+scope — only when `--count` was asked for. */
+  queued?: number;
+  /** The page, capped at 200 by the server. Never "how much is left". */
+  tracks: TrackWorkItem[];
+};
+
 export async function trackWorkCommand(options: {
+  count?: boolean;
   kind: TrackWorkKind;
   limit: number;
   scope: TrackWorkScope;
-}): Promise<TrackWorkItem[]> {
+}): Promise<TrackWorkPage> {
   const params = new URLSearchParams({
     kind: options.kind,
     limit: String(Math.min(Math.max(1, options.limit), 200)),
     scope: options.scope,
   });
-  const response = await adminApiGet<{ tracks: TrackWorkItem[] }>(
-    `/api/admin/tracks/work?${params.toString()}`,
-  );
 
-  return response.tracks ?? [];
+  // `--count` asks for the backlog SIZE alongside the page. Opt-in: a page read is capped at
+  // 200 rows, so counting rows in the page answers "how many did I get", never "how much is
+  // left" — and at catalogue scale those differ by orders of magnitude. Emitted only when set,
+  // so the box sweeps' queue reads stay byte-identical (and never pay for the count).
+  if (options.count) {
+    params.set("count", "true");
+  }
+
+  const response = await adminApiGet<TrackWorkPage>(`/api/admin/tracks/work?${params.toString()}`);
+
+  return { queued: response.queued, tracks: response.tracks ?? [] };
 }
 
 // One stale finding in the analysis-provenance requeue (RFC bpm-key-accuracy): its

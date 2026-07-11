@@ -46,7 +46,7 @@ import {
 import { adminAuth, operatorGuard } from "../orpc-auth";
 import { VIDEOS_BUCKET, presignUploads } from "../r2-presign";
 import { fillEmptyNote, type TrackUpdate, updateTrack } from "../track-update";
-import { listTrackWork } from "../track-work";
+import { countTrackWork, listTrackWork } from "../track-work";
 import { purgeVideoCache } from "../video-cache";
 import {
   type EnrichmentStatusFilter,
@@ -419,7 +419,16 @@ export function adminTracksHandlers(os: Implementer) {
         scope: input.scope,
       });
 
-      return { ok: true, tracks } as const;
+      // `count=true` → the size of the WHOLE backlog, not the page. Opt-in: a page read is
+      // capped at 200 rows, so `tracks.length` cannot answer "how much is left", and that is
+      // the number the GPU batch reports at the end (rent another hour, or not). The counts the
+      // 5-minute box sweeps never ask for are the ones they never pay for.
+      const queued =
+        input.count === "true"
+          ? await countTrackWork({ kind: input.kind, scope: input.scope })
+          : undefined;
+
+      return { ok: true, queued, tracks } as const;
     } catch (error) {
       throw toFault(error);
     }
