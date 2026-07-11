@@ -2371,8 +2371,9 @@ body::before {
 }
 
 /* Each list sets the width its OWN index needs. There is no single right value: /log
-   carries an 8-character coordinate, /logbook a 3-digit sector, /newsletter a "#1".
-   One width for all three strands the short ones out in the middle of the row. */
+   and /newsletter both carry an 8-character coordinate (the default 5rem track), while
+   /logbook carries a 3-digit sector. One width for all of them would strand the short
+   one out in the middle of the row. */
 .log-index-list--sectors {
   --index-track: 2.75rem;
 }
@@ -2575,8 +2576,13 @@ body::before {
    preview sits in the SUBJECT's column — indented to the same edge, so the two lines
    read as one entry hanging off "#1", rather than as a stray line of prose running back
    under the number. */
+/* A back issue's row. Its index is now the letter's COORDINATE (`041.L.1A`), not a
+   `#1`, so it takes the same 5rem index track the /log coordinates do — the narrower
+   track the number needed ran the coordinate straight into the subject. Set, never
+   dropped: the ≥640px rule below reads `var(--index-track)` with no fallback, so an
+   unset variable would invalidate the whole grid. */
 .log-index-row--edition {
-  --index-track: 2.5rem;
+  --index-track: 5rem;
 
   align-items: start;
   row-gap: 0.35rem;
@@ -2662,13 +2668,21 @@ body::before {
   min-width: 0;
 }
 
-/* The "Happy raving, Fluncle" sign-off — the letter's close, set apart and
-   quiet. */
-.log-newsletter-signoff {
-  color: var(--muted-foreground);
-  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
-  font-size: 0.95rem;
-  letter-spacing: -0.01em;
+/* The letter's furniture on its /log plate: "Ahoy cosmonauts," opening it and
+   "Happy raving, / Fluncle" closing it. Both are the letter SPEAKING, not a brand
+   mark or a numeral, so they stay in the reading face (DESIGN.md §3 — Oxanium is
+   for mastheads and coordinates; Space Grotesk carries everything read as prose). */
+.log-letter-salutation {
+  color: var(--starlight-cream);
+  font-size: 1rem;
+  line-height: 1.6;
+  margin: 0;
+}
+
+.log-letter-signoff {
+  color: var(--stardust);
+  font-size: 1rem;
+  line-height: 1.6;
   margin: 0;
 }
 

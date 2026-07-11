@@ -1,3 +1,4 @@
+import { type EditionDTO } from "./editions";
 import { logPageUrl, siteUrl } from "./fluncle-links";
 import { formatIsoDuration } from "./format";
 import { artistTitleLine, definitionalProse, type LogProseInput } from "./log-prose";
@@ -314,6 +315,54 @@ export function mixtapeAlbumJsonLd(mixtape: MixtapeDTO): Record<string, unknown>
       }, []),
     },
     url: logPageUrl(logId),
+  };
+}
+
+/**
+ * A sent edition's JSON-LD: a `PublicationIssue` of the `Periodical` the letters are —
+ * the honest type for a numbered issue, the way the mixtape's is `MusicAlbum` /
+ * `DJMixAlbum` rather than a `MusicRecording`. So a crawler or an answer engine reads a
+ * letter as a letter, never as a track.
+ *
+ * `mentions` is the AEO play: every finding the letter names, as a `MusicRecording`
+ * pointing at its own `/log` page — the same breadcrumb-back-into-the-archive move the
+ * mixtape's tracklist makes. `labels` carries the hydrated `Artist — Title` per logId.
+ */
+export function editionIssueJsonLd(
+  edition: EditionDTO,
+  labels: Record<string, string>,
+): Record<string, unknown> {
+  const logId = edition.logId ?? "";
+  const pageUrl = logPageUrl(logId);
+  const findingIds = (edition.content.galaxies ?? []).flatMap((block) =>
+    block.findings.map((finding) => finding.logId),
+  );
+
+  return {
+    "@context": "https://schema.org",
+    "@type": "PublicationIssue",
+    author: { "@id": `${siteUrl}/about`, "@type": "Person", name: "Fluncle" },
+    datePublished: edition.sentAt,
+    description: edition.content.intro,
+    headline: edition.subject ?? `Letter No. ${edition.number}`,
+    identifier: [
+      { "@type": "PropertyValue", propertyID: "fluncle-log-id", value: logId },
+      { "@type": "PropertyValue", propertyID: "fluncle-log-id", value: `fluncle://${logId}` },
+    ],
+    isPartOf: {
+      "@id": `${siteUrl}/newsletter`,
+      "@type": "Periodical",
+      name: "Fluncle's Findings",
+      publisher: { "@id": `${siteUrl}/about`, "@type": "Person", name: "Fluncle" },
+    },
+    issueNumber: edition.number,
+    mentions: findingIds.map((findingId) => ({
+      "@type": "MusicRecording",
+      name: labels[findingId] ?? findingId,
+      url: logPageUrl(findingId),
+    })),
+    name: edition.subject ?? `Letter No. ${edition.number}`,
+    url: pageUrl,
   };
 }
 

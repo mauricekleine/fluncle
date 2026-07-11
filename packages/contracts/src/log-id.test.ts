@@ -6,9 +6,15 @@
 
 import assert from "node:assert/strict";
 
-import { COORDINATE_PATTERN, isLogId, isMixtapeLogId, LOG_ID_TEST_VECTORS } from "./log-id";
+import {
+  COORDINATE_PATTERN,
+  isEditionLogId,
+  isLogId,
+  isMixtapeLogId,
+  LOG_ID_TEST_VECTORS,
+} from "./log-id";
 
-const { lowercase, malformed, validFindings, validMixtapes } = LOG_ID_TEST_VECTORS;
+const { lowercase, malformed, validEditions, validFindings, validMixtapes } = LOG_ID_TEST_VECTORS;
 
 // The scheme scanner is a stateful global regex; scan with a fresh non-global clone so
 // `lastIndex` never leaks between assertions. Returns the bare captured id, or null.
@@ -16,32 +22,52 @@ function scan(id: string): string | null {
   return `fluncle://${id}`.match(new RegExp(COORDINATE_PATTERN.source, "i"))?.[1] ?? null;
 }
 
-// Finding coordinates: a finding, not a mixtape, and the scanner pulls it back whole.
+// THE RAIL: exactly one of the three guards may claim any coordinate. The /log
+// resolver branches on these, so an id two guards accept would serve a visitor the
+// wrong KIND of object — a finding shown as a letter, a letter shown as a mixtape.
+// The marker slot (digit / `F` / `L`) is what keeps them disjoint; assert it holds.
+function assertExactlyOneKind(id: string, expected: "edition" | "finding" | "mixtape" | "none") {
+  const claimed = [
+    isLogId(id) ? "finding" : undefined,
+    isMixtapeLogId(id) ? "mixtape" : undefined,
+    isEditionLogId(id) ? "edition" : undefined,
+  ].filter((kind) => kind !== undefined);
+
+  assert.deepEqual(
+    claimed,
+    expected === "none" ? [] : [expected],
+    `${id} is claimed by exactly the ${expected} guard`,
+  );
+}
+
+// Finding coordinates: a finding and nothing else, and the scanner pulls it back whole.
 for (const id of validFindings) {
-  assert.equal(isLogId(id), true, `${id} is a finding`);
-  assert.equal(isMixtapeLogId(id), false, `${id} is not a mixtape`);
+  assertExactlyOneKind(id, "finding");
   assert.equal(scan(id), id, `${id} scans`);
 }
 
-// Mixtape coordinates: a mixtape, not a finding, and it scans.
+// Mixtape coordinates: a mixtape and nothing else, and it scans.
 for (const id of validMixtapes) {
-  assert.equal(isMixtapeLogId(id), true, `${id} is a mixtape`);
-  assert.equal(isLogId(id), false, `${id} is not a finding`);
+  assertExactlyOneKind(id, "mixtape");
+  assert.equal(scan(id), id, `${id} scans`);
+}
+
+// Edition coordinates (the `.L.` letter): an edition and nothing else, and it scans.
+for (const id of validEditions) {
+  assertExactlyOneKind(id, "edition");
   assert.equal(scan(id), id, `${id} scans`);
 }
 
 // Lowercase: the bare guards are case-SENSITIVE (canonical stored casing), but the
 // scanner is case-insensitive by design and still finds it.
 for (const id of lowercase) {
-  assert.equal(isLogId(id), false, `${id} fails the case-sensitive finding guard`);
-  assert.equal(isMixtapeLogId(id), false, `${id} fails the case-sensitive mixtape guard`);
+  assertExactlyOneKind(id, "none");
   assert.equal(scan(id), id, `${id} is still found by the case-insensitive scanner`);
 }
 
 // Malformed: rejected by every surface — the bare guards and the scanner alike.
 for (const id of malformed) {
-  assert.equal(isLogId(id), false, `${id} is not a finding`);
-  assert.equal(isMixtapeLogId(id), false, `${id} is not a mixtape`);
+  assertExactlyOneKind(id, "none");
   assert.equal(scan(id), null, `${id} does not scan`);
 }
 

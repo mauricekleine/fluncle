@@ -5,12 +5,13 @@
 
 /**
  * Matches a `fluncle://` coordinate anywhere in a run of text: a 3-or-4-digit sector
- * (it widens to four around 2029-02-22), a dot, then either a track's
- * `digit.digit-letter` (`\d\.\d[A-Z]`) or a mixtape's `F.digit-letter-A-through-F`
- * (`F\.\d[A-F]`). The mark is exactly two characters — a digit then a single letter —
- * so the pattern rejects the malformed run-ons the old `[0-9A-Z]+` over-matched.
- * Case-insensitive and global so a single text node can carry several. The capture
- * group is the bare Log ID (no scheme).
+ * (it widens to four around 2029-02-22), a dot, then a track's `digit.digit-letter`
+ * (`\d\.\d[A-Z]`), a mixtape's `F.digit-letter-A-through-F` (`F\.\d[A-F]`), or an
+ * edition's `L.digit-letter` (`L\.\d[A-Z]` — the letter Fluncle posts home). The mark
+ * is exactly two characters — a digit then a single letter — so the pattern rejects
+ * the malformed run-ons the old `[0-9A-Z]+` over-matched. Case-insensitive and global
+ * so a single text node can carry several. The capture group is the bare Log ID (no
+ * scheme).
  *
  * The literal `fluncle://` prefix anchors the front; a negative lookahead for
  * `[0-9A-Z]` marks the end so the final segment can't run on into a longer word. A
@@ -24,7 +25,8 @@
  * drift-tripwire test (coordinate.test.ts) asserts this source string equals the
  * canonical one, so the two can never diverge silently.
  */
-export const COORDINATE_PATTERN = /fluncle:\/\/(\d{3,4}\.(?:\d\.\d[A-Z]|F\.\d[A-F]))(?![0-9A-Z])/gi;
+export const COORDINATE_PATTERN =
+  /fluncle:\/\/(\d{3,4}\.(?:\d\.\d[A-Z]|F\.\d[A-F]|L\.\d[A-Z]))(?![0-9A-Z])/gi;
 
 /** A coordinate found in the page: the text exactly as written, plus its bare Log ID. */
 export type Coordinate = {

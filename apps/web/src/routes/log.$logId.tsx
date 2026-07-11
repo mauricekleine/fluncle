@@ -6,11 +6,13 @@ import { siMixcloud, siSoundcloud, siSpotify, siTiktok, siYoutube } from "simple
 import { VideoBehindTheScenes } from "@/components/behind-the-scenes";
 import { BrandIcon } from "@/components/brand-icon";
 import { LogFootage } from "@/components/log/log-footage";
+import { LogLetter } from "@/components/log/log-letter";
 import { LogObservation } from "@/components/log/log-observation";
 import { MixtapeVideoPlayer } from "@/components/mixtape-video-player";
 import { SaveFindingButton } from "@/components/save-finding-button";
 import { StoryNotFoundState } from "@/components/stories/stories-states";
 import { Button } from "@fluncle/ui/components/button";
+import { type EditionDTO } from "@/lib/editions";
 import { siteUrl } from "@/lib/fluncle-links";
 import { formatAlbumDuration, formatDateLong, formatDuration } from "@/lib/format";
 import { jsonLdScript } from "@/lib/json-ld";
@@ -26,6 +28,7 @@ import {
 } from "@/lib/log-prose";
 import {
   breadcrumbsJsonLd,
+  editionIssueJsonLd,
   logPageUrl,
   mixtapeAlbumJsonLd,
   mixtapeVideoObjectJsonLd,
@@ -34,6 +37,8 @@ import {
 } from "@/lib/log-schema";
 import { mixtapeSetVideoUrl, spotifyAlbumImageAtSize, trackMedia } from "@/lib/media";
 import { type MixtapeDTO, mixtapeCoverUrl, mixtapeDisplayTitle } from "@/lib/mixtapes";
+import { editionsLabels } from "@/lib/server/edition-email";
+import { listGalaxyNames } from "@/lib/server/galaxies-map";
 import { resolveLogPageTarget } from "@/lib/server/log-resolver";
 import {
   getSimilarFindings,
@@ -60,6 +65,15 @@ import { TrackArtwork } from "@/components/track-artwork";
 export const MEASURED_FAQ_ANCHOR = "how-does-fluncle-measure-bpm-and-key";
 
 type LogPageData =
+  | {
+      // A sent newsletter edition at its `L`-marked coordinate: the letter, rendered
+      // from the persisted payload it was mailed from. `labels` hydrates each finding
+      // ref to `Artist — Title`; `galaxyNames` is the live map its blocks sort against.
+      edition: EditionDTO;
+      galaxyNames: string[];
+      labels: Record<string, string>;
+      status: "found-edition";
+    }
   | {
       status: "found";
       // Name → slug for the finding's resolved artists — the artist-name links +
@@ -97,6 +111,15 @@ const fetchLogPage = createServerFn({ method: "GET" })
       return { mixtape: target.mixtape, status: "found-mixtape" };
     }
 
+    if (target.kind === "edition") {
+      const [labels, galaxyNames] = await Promise.all([
+        editionsLabels([target.edition]),
+        listGalaxyNames(),
+      ]);
+
+      return { edition: target.edition, galaxyNames, labels, status: "found-edition" };
+    }
+
     const { track } = target;
 
     if (!track.logId) {
@@ -122,8 +145,44 @@ const fetchLogPage = createServerFn({ method: "GET" })
 // loaderData makes the route's own type inference circular (same pattern as
 // the old stories route).
 function logHead(loaderData: LogPageData | undefined) {
-  if (loaderData?.status !== "found" && loaderData?.status !== "found-mixtape") {
+  if (
+    loaderData?.status !== "found" &&
+    loaderData?.status !== "found-mixtape" &&
+    loaderData?.status !== "found-edition"
+  ) {
     return {};
+  }
+
+  if (loaderData.status === "found-edition") {
+    const { edition } = loaderData;
+    const logId = edition.logId ?? "";
+    const pageUrl = logPageUrl(logId);
+    const title = `${logId} · ${edition.subject ?? `Letter No. ${edition.number}`} · Fluncle`;
+    const description =
+      edition.content.intro?.trim() ??
+      "A letter Fluncle sent the crew: the week's findings, and why they landed.";
+
+    return {
+      links: [{ href: pageUrl, rel: "canonical" }],
+      meta: [
+        { title },
+        { content: description, name: "description" },
+        { content: title, property: "og:title" },
+        { content: description, property: "og:description" },
+        { content: `${siteUrl}/fluncle-cover.png`, property: "og:image" },
+        { content: pageUrl, property: "og:url" },
+        { content: "article", property: "og:type" },
+        { content: "summary_large_image", name: "twitter:card" },
+        { content: title, name: "twitter:title" },
+        { content: description, name: "twitter:description" },
+      ],
+      // Escaped by `jsonLdScript` before it reaches the inline <script>, so an
+      // agent-authored subject/intro/why can't break out (stored-XSS sink).
+      scripts: [
+        jsonLdScript(editionIssueJsonLd(edition, loaderData.labels)),
+        jsonLdScript(breadcrumbsJsonLd(logId)),
+      ],
+    };
   }
 
   if (loaderData.status === "found-mixtape") {
@@ -320,6 +379,12 @@ function LogPage() {
   if (data.status !== "found") {
     if (data.status === "found-mixtape") {
       return <MixtapeLogPage mixtape={data.mixtape} />;
+    }
+
+    if (data.status === "found-edition") {
+      return (
+        <LogLetter edition={data.edition} galaxyNames={data.galaxyNames} labels={data.labels} />
+      );
     }
 
     return null;

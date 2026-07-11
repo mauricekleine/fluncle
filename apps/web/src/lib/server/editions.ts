@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { type EditionDTO } from "@fluncle/contracts";
+import { editionNumberFromLogId } from "../edition-log-id";
 import { rowToEdition } from "../editions";
 import { captureCostEvents, costEventId } from "./costs";
 import { getDb, typedRow, typedRows } from "./db";
@@ -322,6 +323,27 @@ export async function listEditions({
   });
 
   return typedRows<EditionRow>(result.rows).map((row) => rowToEdition(row));
+}
+
+/**
+ * A single sent edition by its `L`-marked COORDINATE (the `/log/<023.L.1A>` read).
+ *
+ * The mark carries the edition number, so this reads the number out of it, loads THAT
+ * edition, and only returns it when the edition's own derived coordinate matches the
+ * one asked for. That re-derivation is the guard: a well-shaped coordinate with the
+ * wrong sector (`999.L.1A`) names no edition and 404s, rather than quietly serving
+ * edition #1 under a coordinate that isn't its own.
+ */
+export async function getEditionByLogId(logId: string): Promise<EditionDTO | undefined> {
+  const number = editionNumberFromLogId(logId);
+
+  if (number === undefined) {
+    return undefined;
+  }
+
+  const edition = await getEditionByNumber(number);
+
+  return edition?.logId === logId ? edition : undefined;
 }
 
 /** A single sent edition by its integer number (the public `/newsletter/<id>` read). */
