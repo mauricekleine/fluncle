@@ -302,11 +302,11 @@ The full-audio discipline is **correct for the certified 60**, where quality is 
 | R2 storage         | ~$7.50/mo + 500 GB                               | ~0                                                              |
 | Legal posture      | the D6 gray area                                 | **clean**                                                       |
 
-**This single change would dissolve D1 (compute), D6 (legal), the entire private-acquisition seam, and most of §5.5.** It is the two-tier asymmetry this RFC already believes in — applied to the embedding, the one place the draft forgot to apply it.
+> ⛔ **SUPERSEDED BY THE OPERATOR'S RULING (2026-07-11) — see D1 in §13. Preview-grade embedding is REJECTED on quality grounds and is not to be re-proposed.** The reasoning below is preserved only as the record of an argument that was heard and rejected: a 30s preview is often all intro, so its vector describes the intro rather than the track, and half the catalogue would carry garbage. Full audio or no embedding at all.
 
 **It costs one cheap spike, and it is the FIRST spike to run:** _do preview-grade MuQ vectors retrieve the same neighbours as full-song ones?_ Test on findings that have both. **Accept if median cosine(full, preview) ≥ 0.9 and top-10 k-NN overlap ≥ 0.8.**
 
-> **The operator ratified full-audio acquisition and accepted the gray area. This RFC does not overturn that — it puts a cheaper, legal, 10×-faster path on the table and asks him to look at it before spending the money and the risk.** (D1)
+> **RESOLVED: the operator considered the cheaper path and REJECTED it (2026-07-11). Full audio is the ratified source for all analysis and embedding. See D1 in §13.**
 
 ### 5.2 Discovery: a dump join, not a crawl
 
@@ -352,7 +352,7 @@ Plus a **sanity sample**: every 1,000 promotions, 20 random rows to `/admin` for
 
 > **The contract:** a captured full song appears in the **private R2 bucket** under a key; the row's capture state records the outcome; **analysis and embed consume that key and never know or care how the bytes were obtained.** The catalogue's only job is to create rows in the pending state — the private layer's queue then fills itself.
 
-`analyze-track.ts --audio-file <path>` and `embed-sweep.ts`'s source chooser are **already entirely source-agnostic.** Nothing about how the bytes are obtained belongs in this repo. _(And if D1 chooses preview-grade embedding, this seam is not needed for the catalogue at all.)_
+`analyze-track.ts --audio-file <path>` and `embed-sweep.ts`'s source chooser are **already entirely source-agnostic.** Nothing about how the bytes are obtained belongs in this repo. **This seam is REQUIRED — D1 ratified full audio, so the private acquisition layer is load-bearing, not optional.**
 
 ### 5.4 No obtainable audio is a PRODUCT STATE, not an error
 
@@ -624,12 +624,12 @@ The adversarial panel struck down **six** claims in my draft. Recorded so the re
 
 ## 13. Decisions needed BEFORE handoff
 
-1. **[D1 — THE BIG ONE] Preview-grade or full-song embedding for the catalogue?** Preview-grade **dissolves the compute problem (~10×), the ~500 GB of R2, the private-acquisition dependency, and the legal gray area** — at the cost of a coarser vector. **Run the cheap spike first** (cosine ≥ 0.9, k-NN overlap ≥ 0.8 on findings that have both). _The operator ratified full audio; this asks him to look at a cheaper, legal path before spending the money and the risk._
+1. ~~**[D1 — THE BIG ONE] Preview-grade or full-song embedding?**~~ **CLOSED — RATIFIED FULL AUDIO (operator, 2026-07-11). Do not re-open.** The operator's ruling, verbatim in substance: a 30s preview is frequently 30 seconds of intro — piano, pads, no drums — so BPM reads wrong, key reads wrong, and the clip carries _no information about what the track actually is_. Embedding that describes an intro, not a roller. At archive scale it yields "at most 50% of the archive with decent valuable information, and the rest is garbage" — and a poisoned embedding space destroys the one asset the entire direction rests on. **This is exactly why the project moved to full-audio capture in the first place; preview-grade is a regression, not a fallback.** The legal posture is settled and is not an agent's to re-argue: the audio is **never shared with anyone, anywhere, ever** — privately gated, analysis-only, acquisition in a private repo / box-only. **If a track's full audio is genuinely unobtainable, the honest outcome is that it gets NO embedding — never a preview-grade one.** (Every "preview-grade dissolves this" aside elsewhere in this document is superseded by this ruling.)
 2. **[D2 — ONE-WAY DOOR] The embedding model.** MuQ-large defines the vector space, `get_similar_findings`, and every galaxy centroid. **Re-embedding 100k later is another full burst plus a galaxy reset.** Decide **before** the run. **And Unit 0 must first prove MuQ is even the right space** (§2).
 3. **[D3] The real target number.** Discogs holds **~41k deduped DnB+jungle masters**, so **100k ≈ the entire recorded DnB universe**, and its usable (previewable, in-band, embeddable) subset is plausibly **10–30k**. **100k is a hypothesis about embedding density, not a goal.** Recommend committing to **10k first** (§6) and letting the find-rate decide.
 4. **[D4] The public name.** "The archive" is **taken** (it means the findings). Confirm **"the catalogue"** — and note it is the _astronomer's_ word (Messier, NGC, Gaia: catalogues of objects **observed from a distance and never visited**), which is exactly right. **Recommend renaming this file to `the-catalogue.md`** and dropping the "THE ARCHIVE" codename — a codename that collides with the term of art is a landmine. Pick one spelling (`catalogue`) and lint it.
 5. **[D5] Ratify the two canon amendments** (§7): LORE.md's unvisited sky, and DESIGN.md's Unlit Rule.
-6. **[D6] Legal posture.** Confirm acquisition stays private-repo/box-only and that this public RFC's silence is the intended boundary. **Note D1 may moot this entirely.** Also ratify: **Discogs styles (CC0) for the gate; MB core (CC0) for identity; never `mbdump-derived` (non-commercial); never Beatport (its ToS bars ML/AI use outright).**
+6. **[D6] Legal posture — CONFIRMED (2026-07-11).** Acquisition stays private-repo / box-only, and this public RFC's silence on it is the intended boundary. The audio is never shared, served, or exposed — privately gated, analysis-only. **D1 does not moot this: full audio is ratified, so the private seam is required.** Also ratify: **Discogs styles (CC0) for the gate; MB core (CC0) for identity; never `mbdump-derived` (non-commercial); never Beatport (its ToS bars ML/AI use outright).**
 7. **[D7] The 39-label operator tick** — ~8 of the current labels are **not DnB** (Anjunabeats, Armada, Axtone…). Five minutes of work; it gates the whole crawl's quality.
 8. **[D8] Paid infrastructure** (~$30–80 GPU burst; ~$7.50/mo R2) — per AGENTS.md, needs an explicit yes. _(D1's preview path may remove the GPU line entirely.)_
 
