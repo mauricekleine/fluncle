@@ -39,11 +39,11 @@ import { randomUUID } from "node:crypto";
 import { getDb, typedRow, typedRows } from "./db";
 import { readOptionalEnv } from "./env";
 import { logEvent } from "./log";
+import { mbFetch, setMusicbrainzRateLimitForTests } from "./musicbrainz";
 import { getYouTubeAccessToken } from "./youtube";
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
-const MUSICBRAINZ_API_ROOT = "https://musicbrainz.org/ws/2";
 // Firecrawl gap-fill endpoints. /v2/extract was RETIRED: it's async (the code never
 // polled the returned job id → it read `data` off the initial POST, which is always
 // empty → the gap-fill was a silent no-op for every artist) AND it only reads the seed
@@ -55,40 +55,17 @@ const FIRECRAWL_SEARCH_URL = "https://api.firecrawl.dev/v2/search";
 // A hard per-call ceiling so a slow/hung hub scrape can't stall the resolve (a real
 // homepage can be very slow; best-effort → abort and move on).
 const FIRECRAWL_TIMEOUT_MS = 45_000;
-const USER_AGENT = "Fluncle/1.0 (+https://www.fluncle.com)";
-
 const YOUTUBE_CHANNELS_API = "https://www.googleapis.com/youtube/v3/channels?part=id&maxResults=1";
 
 // ── Rate limiter ─────────────────────────────────────────────────────────────
-// Same pattern as discogs.ts — serialize MB calls at 1 req/s per Worker isolate.
-// Module-level so concurrent calls within one request share the gate.
-
-let rateLimitIntervalMs = 1100;
+// The MB gate lives in ./musicbrainz.ts — the ONE client every MB caller in the
+// Worker shares (this resolver, the Discogs bridge, the catalogue crawler), so they
+// share one honest 1 req/s budget instead of keeping three and tripling the real rate.
 
 /** Test seam: set the pacing floor to run without real timers. */
 export function __setRateLimitForTests(ms: number): void {
-  rateLimitIntervalMs = ms;
+  setMusicbrainzRateLimitForTests(ms);
 }
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function makeRateLimiter() {
-  let tail: Promise<unknown> = Promise.resolve();
-
-  return <T>(call: () => Promise<T>): Promise<T> => {
-    const result = tail.then(call, call);
-    tail = result.then(
-      () => delay(rateLimitIntervalMs),
-      () => delay(rateLimitIntervalMs),
-    );
-
-    return result;
-  };
-}
-
-const throttleMb = makeRateLimiter();
 
 // ── Platform type ─────────────────────────────────────────────────────────────
 
@@ -517,52 +494,8 @@ export async function normalizeProfileUrl(
 }
 
 // ── MB fetch helper ────────────────────────────────────────────────────────────
-
-async function mbFetch<T>(path: string): Promise<{ data: T | null; rateLimited: boolean }> {
-  const separator = path.includes("?") ? "&" : "?";
-  const url = `${MUSICBRAINZ_API_ROOT}${path}${separator}fmt=json`;
-
-  return throttleMb(async () => {
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      let response: Response;
-
-      try {
-        response = await fetch(url, { headers: { "User-Agent": USER_AGENT } });
-      } catch {
-        return { data: null, rateLimited: false };
-      }
-
-      if (response.status === 503 && attempt < 2) {
-        const retryAfter = Number(response.headers.get("Retry-After")) || 2;
-        logEvent("warn", "mb-artist.retry", {
-          attempt: attempt + 1,
-          path,
-          retryAfterSeconds: retryAfter,
-          status: 503,
-        });
-        await delay(rateLimitIntervalMs === 0 ? 0 : retryAfter * 1000);
-        continue;
-      }
-
-      if (response.status === 503) {
-        return { data: null, rateLimited: true };
-      }
-
-      if (!response.ok) {
-        logEvent("warn", "mb-artist.request-failed", {
-          path,
-          status: response.status,
-          statusText: response.statusText,
-        });
-        return { data: null, rateLimited: false };
-      }
-
-      return { data: (await response.json()) as T, rateLimited: false };
-    }
-
-    return { data: null, rateLimited: false };
-  });
-}
+// `mbFetch` is the shared client (./musicbrainz.ts): 1 req/s, an identifiable
+// User-Agent, Retry-After honoured on a 503, and `rateLimited` reported honestly.
 
 // ── MB name similarity (lightweight match, not casefold-full) ─────────────────
 

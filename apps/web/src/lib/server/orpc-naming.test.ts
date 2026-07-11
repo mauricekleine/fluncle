@@ -111,6 +111,12 @@ const APPROVED_VERBS = new Set<string>([
   // op. The operator's one-tap trust gate; distinct from `update` (edit a field).
   "confirm",
   "context",
+  // `crawl` (walk the MusicBrainz release graph outward from the operator's enabled seed
+  // labels and write catalogue rows into `tracks`) — added deliberately with the
+  // `crawl_catalogue` op. A genuinely new action: neither `backfill` (fill missing data on
+  // rows we already hold) nor `resolve` (fix a known entity's external identity) names the
+  // act of DISCOVERING tracks the archive has never heard of. It certifies nothing.
+  "crawl",
   "deregister",
   "exchange",
   "export",

@@ -360,3 +360,103 @@ describe("the certification rail — a catalogue track is measured, never spoken
     expect(result.fields).toEqual(expect.arrayContaining(["bpm", "note", "video_vehicle"]));
   });
 });
+
+// ── THE CRAWLER'S RAIL ────────────────────────────────────────────────────────
+//
+// The catalogue crawler is the first thing that writes uncertified tracks IN BULK
+// (docs/catalogue-crawler.md), so the split stops being a design property and starts
+// being a promise to the public: `llms.txt` asserts, truthfully, that "every track in the
+// archive is one he found, listened to, and certified." One crawled row leaking into a
+// feed makes that sentence a lie.
+//
+// The cases above prove the SERVER READS are blind to it. These prove the PUBLIC EMITTERS
+// are — by running the real route handlers, over the real schema, against a row the real
+// crawler wrote. Not a re-implementation of their SQL: the handlers themselves.
+
+describe("a CRAWLED track never reaches a public surface", () => {
+  const CRAWLED_ID = "mb_9f2b1c44-0000-4000-8000-abcdefabcdef";
+
+  beforeEach(async () => {
+    // The exact insert `crawl.ts` performs: metadata only, no `findings` row, every
+    // queue column left at its DDL default.
+    await db.execute({
+      args: [CRAWLED_ID],
+      sql: `insert into tracks (track_id, title, artists_json, duration_ms, label, isrc)
+            values (?, 'A Crawled Track', '["Etherwood"]', 261901, 'Med School', 'GBCJY1300173')`,
+    });
+  });
+
+  it("has no findings row — the crawler cannot certify, because it has no ears", async () => {
+    const row = await db.execute({
+      args: [CRAWLED_ID],
+      sql: "select count(*) as n from findings where track_id = ?",
+    });
+
+    expect(Number(row.rows[0]?.n)).toBe(0);
+  });
+
+  it("is absent from /log — there is no coordinate to land on", async () => {
+    const { getTrackByIdOrLogId, listTracks } = await import("./tracks");
+
+    // The /log index is `listTracks`; a /log/<logId> page resolves through the same join.
+    const feed = await listTracks({ limit: 50 });
+    expect(feed.tracks.map((track) => track.trackId)).not.toContain(CRAWLED_ID);
+    await expect(getTrackByIdOrLogId(CRAWLED_ID)).resolves.toBeUndefined();
+  });
+
+  it("is absent from the RSS feed (the real /rss.xml handler)", async () => {
+    const { Route } = await import("../../routes/rss[.]xml");
+    const handlers = Route.options.server?.handlers as
+      | { GET: (ctx: unknown) => Promise<Response> }
+      | undefined;
+    const xml = await (await handlers?.GET({}))?.text();
+
+    expect(xml).toContain("A Certified Track");
+    expect(xml).not.toContain("A Crawled Track");
+  });
+
+  it("is absent from the sitemap (the real /sitemap.xml handler)", async () => {
+    const { Route } = await import("../../routes/sitemap[.]xml");
+    const handlers = Route.options.server?.handlers as
+      | { GET: (ctx: unknown) => Promise<Response> }
+      | undefined;
+    const xml = await (await handlers?.GET({}))?.text();
+
+    expect(xml).toContain("/log/004.7.2I");
+    expect(xml).not.toContain(CRAWLED_ID);
+    // No Log ID exists for it, so there is no URL a crawler could even be pointed at.
+    expect(xml).not.toContain("A Crawled Track");
+  });
+
+  it("is absent from the Galaxy game's star field", async () => {
+    const { listTracks } = await import("./tracks");
+
+    // The game (src/game/game.ts) pages `fetchTracks` → `/api/v1/tracks` → `listTracks`,
+    // and places a star per finding with a Log ID. A crawled track has neither, so it can
+    // never be a waypoint: you cannot fly to a place Fluncle never stood.
+    const page = await listTracks({ limit: 50 });
+
+    expect(page.tracks.every((track) => track.logId)).toBe(true);
+    expect(page.tracks.map((track) => track.trackId)).not.toContain(CRAWLED_ID);
+  });
+
+  it("is nobody's work item — it cannot enter the capture or enrichment queue", async () => {
+    const { listTracks } = await import("./tracks");
+
+    // `capture_status` sits on `tracks`, so the crawled row DOES carry a 'pending' — and
+    // that is exactly why the queue's predicate is `findings.log_id is not null`. Without
+    // the join, a 10k-row crawl would enqueue 10k capture jobs on the first tick, and the
+    // first sign would be the invoice.
+    const crawled = await db.execute({
+      args: [CRAWLED_ID],
+      sql: "select capture_status from tracks where track_id = ?",
+    });
+    expect(crawled.rows[0]?.capture_status).toBe("pending");
+
+    const capture = await listTracks({ captureQueue: true, limit: 50 });
+    expect(capture.tracks.map((track) => track.trackId)).not.toContain(CRAWLED_ID);
+
+    const enrich = await listTracks({ limit: 50, status: "queue" });
+    expect(enrich.tracks.map((track) => track.trackId)).not.toContain(CRAWLED_ID);
+  });
+});

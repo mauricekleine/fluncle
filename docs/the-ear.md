@@ -117,7 +117,7 @@ fluncle admin catalogue list --lens capture       # what to capture next
 
 **The catalogue is empty today.** The crawler that fills it is a separate unit; until it lands, `/admin/catalogue` renders its truthful empty state and the sweep is a no-op. Everything downstream of a catalogue row — the ranking, the two lenses, the ladder — is built, tested against real vectors on a real libSQL engine, and waiting.
 
-**The periodic cron lands with the crawler.** A timer that ranks an empty table would be a `/status` row that means nothing; the crawler is what creates rows, so the crawler's PR is where `rank_catalogue` gets its schedule (the `fluncle-cluster` timer is the pattern to copy). Until then the sweep runs from the **Re-rank** button and the CLI, both of which are the same op.
+**The periodic cron landed with the crawler**, exactly as this section asked: a timer that ranks an empty table would be a `/status` row that means nothing, and [the crawler](./catalogue-crawler.md) is what creates rows. It is now the on-box **`fluncle-rank`** sweep — every 30m, trailing the crawl's 10m, draining the stale set rather than taking one bite of it ([docs/agents/hermes/rank-timer/](./agents/hermes/rank-timer/README.md); box activation is operator-gated). The **Re-rank** button and the CLI remain the same op, for when the operator wants it now.
 
 ## Files
 

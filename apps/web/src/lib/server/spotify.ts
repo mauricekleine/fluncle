@@ -313,6 +313,77 @@ export async function searchTrackCandidates(query: string): Promise<TrackSearchR
   }));
 }
 
+/** What the catalogue crawler wants from Spotify, and all it wants: the anchor. */
+export type SpotifyIsrcMatch = {
+  albumImageUrl?: string;
+  spotifyUri: string;
+  spotifyUrl: string;
+  trackId: string;
+};
+
+/**
+ * One ISRC lookup's outcome. `rateLimited` is the load-bearing half: without it, "Spotify
+ * is throttling us" and "this track is not on Spotify" are the same answer, and a caller
+ * would keep hammering a 429 wall for every remaining track. Measured live during the
+ * pilot crawl — a sustained by-ISRC sweep DOES earn a 429 — which is exactly why the
+ * signal exists and why `fillSpotifyAnchors` trips a breaker on it.
+ */
+export type SpotifyIsrcLookup = { match?: SpotifyIsrcMatch; rateLimited: boolean };
+
+/**
+ * Find a track's Spotify presence BY ISRC — the one job Spotify still does well, and now
+ * the only one the catalogue asks of it.
+ *
+ * Spotify's February-2026 lockdown removed the batch track-fetch endpoint, capped
+ * `/search` at 10 results, and stripped `genres`/`popularity`/`label` from the payloads.
+ * So it cannot be the catalogue's identity spine or its traversal — MusicBrainz is both
+ * (docs/catalogue-crawler.md). What survives is the `isrc:` search filter, which is an
+ * exact key lookup: given the ISRC MusicBrainz already holds, it returns the Spotify id
+ * for that exact recording, or nothing.
+ *
+ * `tracks.spotify_uri` / `spotify_url` are NULLABLE precisely so "nothing" is a valid,
+ * unremarkable answer — a crawled track with no Spotify presence is still a real track.
+ * Best-effort by construction: it never throws, so a Spotify outage (or an un-authorized
+ * environment) degrades the caller to "no anchor written", never to a failure.
+ */
+export async function findSpotifyTrackByIsrc(isrc: string): Promise<SpotifyIsrcLookup> {
+  const clean = isrc.trim();
+
+  if (!clean) {
+    return { rateLimited: false };
+  }
+
+  try {
+    const accessToken = await getSpotifyAccessToken();
+    const params = new URLSearchParams({ limit: "1", q: `isrc:${clean}`, type: "track" });
+    const response = await spotifyFetch(`/search?${params.toString()}`, accessToken);
+    const data = (await response.json()) as SpotifySearchResponse;
+    const track = data.tracks?.items?.[0];
+
+    if (!track?.id) {
+      return { rateLimited: false };
+    }
+
+    return {
+      match: {
+        albumImageUrl: selectAlbumImageUrl(track.album?.images),
+        spotifyUri: `spotify:track:${track.id}`,
+        spotifyUrl: track.external_urls?.spotify ?? `https://open.spotify.com/track/${track.id}`,
+        trackId: track.id,
+      },
+      rateLimited: false,
+    };
+  } catch (error) {
+    logEvent("warn", "spotify.isrc-lookup-failed", { error, isrc: clean });
+
+    // `spotifyFetch` throws an ApiError whose message carries the upstream status. A 429
+    // means the vendor is throttling, not that the track is absent — the caller must stop.
+    const rateLimited = error instanceof Error && error.message.includes("429");
+
+    return { rateLimited };
+  }
+}
+
 export async function addTrackToPlaylist(track: TrackMetadata): Promise<void> {
   const [env, accessToken] = await Promise.all([
     readEnvs(["SPOTIFY_PLAYLIST_ID"]),

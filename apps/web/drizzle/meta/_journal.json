@@ -498,6 +498,13 @@
       "when": 1783789222686,
       "tag": "0070_chief_boom_boom",
       "breakpoints": true
+    },
+    {
+      "idx": 71,
+      "version": "6",
+      "when": 1783791210583,
+      "tag": "0071_colorful_captain_flint",
+      "breakpoints": true
     }
   ]
 }

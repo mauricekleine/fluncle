@@ -1,13 +1,20 @@
-// The `fluncle admin catalogue` commands — THE EAR's thin HTTP client (docs/the-ear.md).
+// The `fluncle admin catalogue` commands — the catalogue's thin HTTP client.
 //
-// A CATALOGUE TRACK is a track the archive knows and Fluncle never certified. Two verbs, both
-// admin tier (agent-allowed), both a thin wrapper over the oRPC ops — the CLI holds no ranking
-// logic, because all of the arithmetic happens in SQL inside the Worker:
+// A CATALOGUE TRACK is a track the archive knows and Fluncle never certified. Four verbs, all
+// admin tier (agent-allowed), all a thin wrapper over the oRPC ops — the CLI holds no crawl and
+// no ranking logic, because the walk and all of the vector arithmetic happen inside the Worker.
+// It is a pacer, not an engine: the Worker owns the vendor budget and the durable state.
 //
-//   - `rank`  — one tick of the precompute sweep (`rank_catalogue`). This is the command the
+//   THE EAR (docs/the-ear.md) — what makes the pile useful:
+//   - `rank`   — one tick of the precompute sweep (`rank_catalogue`). This is the command the
 //     periodic `--no-agent` cron drives with the box's agent token: it prints one JSON summary
 //     line, and `remaining > 0` means run it again.
-//   - `list`  — the ranked catalogue (`list_catalogue_tracks`), through one of the two lenses.
+//   - `list`   — the ranked catalogue (`list_catalogue_tracks`), through one of the two lenses.
+//
+//   THE CRAWLER (docs/catalogue-crawler.md) — what makes the rows exist:
+//   - `crawl`  — one bounded, resumable pass of the MusicBrainz walk (`crawl_catalogue`). Also
+//     cron-driven; the frontier is the worklist, so "run again" and "resume" are the same call.
+//   - `status` — the crawl frontier's state (`get_crawl_status`).
 
 import { type CatalogueResponse, type CatalogueTrackItem } from "@fluncle/contracts";
 import { adminApiGet, adminApiPost } from "../api";
@@ -62,4 +69,67 @@ export async function catalogueListCommand(options: {
   }
 
   return adminApiGet<CatalogueResponse>(`/api/admin/catalogue?${params.toString()}`);
+}
+
+// ── The crawler (`crawl_catalogue` / `get_crawl_status`) ─────────────────────
+//
+// The Worker holds the vendor budget, does the MusicBrainz walk, and owns the durable
+// frontier. The CLI just PACES it — one bounded pass per invocation — which is what lets
+// the on-box `fluncle-crawl` sweep drive the whole crawl with an agent token and no keys.
+
+/** One bounded crawl pass's real numbers (the `crawl_catalogue` envelope). */
+export type CrawlPassResult = {
+  // Spotify anchors filled onto existing catalogue rows — a separate, bounded step from
+  // the walk (its queue is derived, so a throttled pass loses nothing).
+  anchorsFilled: number;
+  dryRun: boolean;
+  expanded: number;
+  failed: number;
+  frontierPending: number;
+  labelsDiscovered: string[];
+  maxHop: number;
+  nodesEnqueued: number;
+  ok: boolean;
+  // True when MusicBrainz actively throttled us and the pass stopped on its circuit
+  // breaker. The driver must NOT loop: the next tick resumes from durable state.
+  rateLimited: boolean;
+  seeded: number;
+  tracksFound: number;
+  tracksSkipped: number;
+  tracksWritten: number;
+};
+
+/** The frontier at rest (the `get_crawl_status` envelope). */
+export type CrawlStatusResult = {
+  anchorsPending: number;
+  catalogueTracks: number;
+  frontier: { done: number; failed: number; pending: number; skipped: number };
+  frontierByKind: { artist: number; label: number; release: number };
+  labelsUndecided: number;
+  ok: boolean;
+  seedLabels: string[];
+};
+
+/**
+ * Run ONE bounded crawl pass: seed from the operator's enabled labels, expand `limit`
+ * frontier nodes breadth-first, write the catalogue rows found, stop. Resumable — the
+ * next call continues the walk from where this one left it.
+ */
+export async function crawlCatalogueCommand(
+  limit: number,
+  maxHop: number,
+  dryRun: boolean,
+): Promise<CrawlPassResult> {
+  const params = new URLSearchParams({ limit: String(limit), maxHop: String(maxHop) });
+
+  if (dryRun) {
+    params.set("dryRun", "true");
+  }
+
+  return adminApiPost<CrawlPassResult>(`/api/admin/catalogue/crawl?${params.toString()}`);
+}
+
+/** Read the crawl frontier's state, the catalogue's size, and the seed set. */
+export async function crawlStatusCommand(): Promise<CrawlStatusResult> {
+  return adminApiGet<CrawlStatusResult>("/api/admin/catalogue/crawl");
 }

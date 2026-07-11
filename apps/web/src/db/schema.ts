@@ -241,7 +241,7 @@ export const tracks = sqliteTable(
   //
   // Everything indexed HERE is a CATALOGUE-half scan shape — a read that drives from
   // `tracks` (the table the catalogue grows), not from `findings`, and therefore must stay
-  // a seek rather than a scan as it does.
+  // a seek rather than a scan as it does. Three PRs index this table for three jobs:
   //
   // The GRAPH pages read `tracks` BY ENTITY: every track on this album / this label,
   // certified or not (the public `/album/<slug>` + `/label/<slug>` pages, docs/album-entity.md).
@@ -255,11 +255,32 @@ export const tracks = sqliteTable(
   // on a finding (the sweep anti-joins `findings`), so both hold catalogue rows only.
   //   - `nearest_finding_score` — the Ear's rank: "closest to a finding, not yet logged."
   //   - `capture_priority`      — the capture queue's rank: who gets captured next.
+  //
+  // The CRAWLER's two write-side reads (docs/catalogue-crawler.md). The Ear ranks what
+  // exists and the graph pages render it; the crawler is what makes the rows exist, and its
+  // two hot predicates are properties of the RECORDING rather than of the certification.
+  //   - `isrc`                — the idempotence check, before minting a row.
+  //   - the partial anchor idx — the derived Spotify-anchor worklist.
   (table) => [
     index("tracks_album_id_idx").on(table.albumId),
     index("tracks_label_id_idx").on(table.labelId),
     index("tracks_nearest_finding_score_idx").on(table.nearestFindingScore),
     index("tracks_capture_priority_idx").on(table.capturePriority),
+    // The crawler's idempotence check — "do we already hold this ISRC?" — before minting a
+    // row. A predicate on `tracks.isrc` over a table designed to grow to five figures, so
+    // it is indexed. NOT unique: an ISRC is not guaranteed distinct across the archive's
+    // history, and a unique index would turn a vendor's duplicate ISRC into a failed
+    // migration; the crawler dedupes by READING this index, never by trusting a constraint.
+    index("tracks_isrc_idx").on(table.isrc),
+    // The Spotify-anchor queue, and a PARTIAL index because the queue is DERIVED rather
+    // than bookkept: "which catalogue rows have an ISRC but no Spotify id yet" is the
+    // whole worklist, so an anchor a rate-limited pass missed is simply picked up by the
+    // next one, with no state to remember. The partial predicate keeps this index tiny and
+    // — the nice part — SHRINKING as the anchors fill, instead of growing with the table.
+    // See `fillSpotifyAnchors` in lib/server/crawl.ts.
+    index("tracks_anchor_queue_idx")
+      .on(table.isrc)
+      .where(sql`${table.spotifyUri} is null and ${table.isrc} is not null`),
   ],
 );
 
@@ -1562,6 +1583,85 @@ export const albums = sqliteTable("albums", {
   slug: text("slug").notNull().unique(),
   updatedAt: text("updated_at").notNull(),
 });
+
+// THE CRAWL FRONTIER — the catalogue crawler's durable, resumable work queue.
+//
+// The crawler walks the MusicBrainz release graph outward from the labels the operator
+// ENABLED (`labels.seed_state`), writing catalogue rows into `tracks` and never a
+// `findings` row. It runs as a bounded, polite, `--no-agent` sweep: one tick expands a
+// handful of nodes at ~1 req/s and stops. So the walk's whole state has to live HERE,
+// not in a process — a tick that dies mid-label must be resumed by the next one, not
+// restarted. See docs/catalogue-crawler.md.
+//
+// ── ONE ROW = ONE NODE OF THE GRAPH, AND ONE UNIT OF WORK ──────────────────────
+//   - `label`   — hop 0. Two flavours, and the pair is what makes label resolution
+//                 itself resumable: the SEED (`source: 'fluncle'`, `external_id` = the
+//                 `labels.slug` the operator enabled) expands into the MB entity
+//                 (`source: 'musicbrainz'`, `external_id` = the MB label MBID), which
+//                 expands into its releases.
+//   - `release` — expands into the tracks it carries (the write) + the artists on them.
+//   - `artist`  — expands into that artist's OTHER releases.
+//
+// ── `hop` IS THE BOUNDARY GATE ─────────────────────────────────────────────────
+// The operator drew the lane when he ruled on the labels; the crawler simply does not
+// leave the neighbourhood. It is graph DISTANCE from an enabled label, never a genre
+// guess (no MusicBrainz/Discogs tag inference — that ruling is ratified):
+//   hop 0 = a release ON an enabled label · hop 1 = an artist on such a release
+//   hop 2 = a release that artist ALSO appears on · then STOP (a configurable limit).
+// A node at `hop > maxHop` is never enqueued, so the walk terminates by construction.
+//
+// ── RELIABILITY: the shipped `backfill_*` convention, verbatim ─────────────────
+// `attempted_at` / `attempts` / `failures` / `done_at` mean exactly what they mean on
+// `findings` (see the backfill columns there): a FAILED node backs off exponentially on
+// its consecutive-failure count and is retried by a later tick; past MAX_FAILURES it
+// stays `failed` and is never picked again. `cursor` is the browse OFFSET a paginated
+// node (a label's or an artist's release list) has consumed — a node with more pages
+// stays `pending` with an advanced cursor, so a 900-release label drains across ticks
+// instead of blowing one. `parent_id` records the edge that discovered the node, so a
+// bad subtree is traceable (and prunable); `label_slug` carries the enabled seed the
+// whole subtree descends from.
+//
+// `id` is DETERMINISTIC — `<source>:<kind>:<external_id>` — which is what makes the
+// crawl idempotent at the graph level: re-discovering a node the walk already holds is
+// an `on conflict do nothing`, not a second traversal of the same subtree.
+export const crawlFrontier = sqliteTable(
+  "crawl_frontier",
+  {
+    attemptedAt: text("attempted_at"),
+    attempts: integer("attempts").notNull().default(0),
+    createdAt: text("created_at").notNull(),
+    // The browse offset already consumed (paginated `label` / `artist` nodes only).
+    cursor: integer("cursor").notNull().default(0),
+    doneAt: text("done_at"),
+    // The MB entity's MBID — or, for a seed `label` node, the operator's `labels.slug`.
+    externalId: text("external_id").notNull(),
+    failures: integer("failures").notNull().default(0),
+    hop: integer("hop").notNull(),
+    id: text("id").primaryKey(),
+    kind: text("kind", { enum: ["artist", "label", "release"] }).notNull(),
+    // The enabled seed label this node's subtree descends from (provenance + pruning).
+    labelSlug: text("label_slug"),
+    // Why a node was skipped or how it last failed — the crawl's honest audit trail.
+    note: text("note"),
+    parentId: text("parent_id"),
+    source: text("source", { enum: ["fluncle", "musicbrainz"] }).notNull(),
+    // pending → done (expanded) | failed (retriable under backoff, terminal past
+    // MAX_FAILURES) | skipped (deterministically un-expandable — e.g. no MB label
+    // matches the operator's spelling; recorded rather than retried forever).
+    state: text("state", { enum: ["done", "failed", "pending", "skipped"] })
+      .notNull()
+      .default("pending"),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    // The pick: `where state in (…) order by hop, created_at, id` — breadth-first and
+    // deterministic, so two runs over the same graph expand the same nodes in the same
+    // order. Leading with `state` keeps a drained frontier's tick a cheap no-op.
+    index("crawl_frontier_pick_idx").on(table.state, table.hop, table.createdAt, table.id),
+    // The per-seed status read (and the subtree prune, when one is needed).
+    index("crawl_frontier_label_idx").on(table.labelSlug),
+  ],
+);
 
 // A newsletter EDITION — the weekly dispatch from the mothership, now persisted so
 // every Friday letter has a permanent home.

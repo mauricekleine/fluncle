@@ -1,0 +1,22 @@
+[Unit]
+Description=fluncle-rank — rave-02 host trigger for The Ear's catalogue-ranking sweep
+Documentation=https://github.com/mauricekleine/fluncle/blob/main/docs/agents/hermes/rank-timer/README.md
+Wants=network-online.target docker.service
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+# Root drives the Docker daemon; `docker exec -u hermes` runs the WORK as the unprivileged
+# hermes user. The .sh/.ts pair is BAKED at /opt/hermes-scripts/ (auto-updates from main via
+# pin-watch); this host unit only TRIGGERS it, and the sweep self-writes its /status marker
+# (cron-output.sh). NO new secret: `rank_catalogue` is AGENT tier, so the box's existing
+# agent-scoped token drives it.
+ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/rank-sweep.sh
+# A PURE trigger — zero LLM tokens. The work is SQL inside the Worker; the tick drains up to
+# FLUNCLE_RANK_MAX_CALLS batches and stops, so it is bounded even right after a big crawl.
+TimeoutStartSec=300
+# Modest hardening for a root docker-driving oneshot.
+NoNewPrivileges=true
+ProtectControlGroups=true
+ProtectKernelTunables=true
+RestrictSUIDSGID=true

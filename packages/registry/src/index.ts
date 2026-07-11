@@ -938,6 +938,30 @@ export const SURFACES: readonly Surface[] = [
     weights: { status: "hidden" },
   },
   {
+    command: "fluncle admin catalogue crawl",
+    exposedContent: [
+      "walk the MusicBrainz release graph outward from the operator's enabled seed labels → uncertified catalogue rows",
+    ],
+    kind: "cron",
+    name: "cron.crawl",
+    operatorNotes:
+      "every 10m, run by a rave-02 HOST systemd timer (docs/agents/hermes/crawl-timer/). METADATA ONLY — it writes a `tracks` row with no `findings` row, so it certifies nothing (no Log ID, no note, no video, no public surface) and it captures no audio. Worker-paced (the box holds no MusicBrainz budget): one bounded pass per tick over the durable `crawl_frontier`, so a crawl is a marathon the SCHEDULE finishes and a reboot mid-label costs one node, not one crawl. The boundary gate is the operator's seed-label allowlist + graph distance (hop 0-2), never genre inference; a label the walk discovers enters `undecided` and is NOT crawled until he rules on it. Zero LLM tokens. Source: docs/agents/hermes/scripts/crawl-sweep.*. See docs/catalogue-crawler.md.",
+    probeConfig: { cadenceMs: 10 * MINUTE_MS, cronName: "fluncle-crawl", kind: "cron" },
+    weights: { status: "hidden" },
+  },
+  {
+    command: "fluncle admin catalogue rank",
+    exposedContent: [
+      "score each stale catalogue track against every embedded finding → its nearest finding + capture priority",
+    ],
+    kind: "cron",
+    name: "cron.rank",
+    operatorNotes:
+      "every 30m, run by a rave-02 HOST systemd timer (docs/agents/hermes/rank-timer/). THE EAR's schedule, and it lands with the crawler on purpose: a timer ranking an empty table would be a /status row that means nothing, and the crawler is what creates rows. All the vector arithmetic runs in SQL inside the Worker; the sweep DRAINS (it loops while `remaining > 0` up to a tick budget), so a crawl that just landed 700 rows is ranked by the next tick. Self-healing: staleness is a fingerprint of the finding corpus, so logging or embedding a finding re-ranks the catalogue with no invalidation call. Writes DERIVED columns on catalogue rows only — it cannot certify. Zero LLM tokens. Source: docs/agents/hermes/scripts/rank-sweep.*. See docs/the-ear.md.",
+    probeConfig: { cadenceMs: 30 * MINUTE_MS, cronName: "fluncle-rank", kind: "cron" },
+    weights: { status: "hidden" },
+  },
+  {
     command: "fluncle admin tracks capture-audio --queue",
     exposedContent: [
       "capture each finding's full song once → private R2 (yt-dlp via a residential proxy)",
