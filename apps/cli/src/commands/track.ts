@@ -16,6 +16,25 @@ export async function trackGetCommand(idOrLogId: string): Promise<TrackGetResult
   return publicApiGet<TrackGetResult>(`/api/tracks/${encodeURIComponent(idOrLogId)}`);
 }
 
+// `get_similar_findings` → `fluncle tracks similar <id|logId>` (Convention B). The
+// finding's SONIC neighbours — the MuQ-embedding nearest neighbours the `/log` "more
+// like this" row shows, ranked in SQL. A public read, and the auto-note's second fuel:
+// the note sweep reads this to learn what the region of the archive around a finding
+// already sounds like (docs/agents/note-agent.md). Each neighbour carries its own
+// editorial note, which is the part the sweep is after.
+export type TrackSimilarResult = { findings: TrackListItem[]; ok: true };
+
+export async function trackSimilarCommand(
+  idOrLogId: string,
+  limit?: number,
+): Promise<TrackSimilarResult> {
+  const query = limit === undefined ? "" : `?limit=${encodeURIComponent(String(limit))}`;
+
+  return publicApiGet<TrackSimilarResult>(
+    `/api/tracks/${encodeURIComponent(idOrLogId)}/similar${query}`,
+  );
+}
+
 // `fluncle admin tracks get <id|logId>` — the ADMIN single-finding lookup. Fetches
 // ONE finding with its FULL admin fields (the vibe coords, the video ledger, the
 // observation, the editorial note) — the authoritative by-coordinate read, so a
@@ -692,16 +711,35 @@ export async function trackContextCommand(
 // clobbered (the call returns `skipped: true`). The CLI stays a thin relay; the
 // caller reads the authored note from --script-file (or passes it inline).
 export type TrackNoteOptions = {
+  /** Run BOTH gates and report the verdict, storing nothing (the pre-check / A-B harness). */
+  dryRun?: boolean;
   /** The voice-gated editorial note (read from --script-file by the caller, or inline). */
   note: string;
 };
 
 type NoteBody = {
+  dryRun?: boolean;
   note: string;
 };
 
+/** How hard a note echoes its sonic neighbourhood (the anti-sameness rail's reading). */
+export type TrackNoteEcho = {
+  /** The neighbour it echoes hardest, or null when there was nothing to echo. */
+  logId: string | null;
+  /** Content-word overlap with that neighbour (0..1). */
+  overlap: number;
+  /** The run of words lifted from it, or "" when nothing reached the lift threshold. */
+  phrase: string;
+};
+
 export type TrackNoteResult = {
+  /** True on a --dry-run: the gates ran, nothing was stored. */
+  dryRun?: boolean;
+  /** The measured echo against the finding's sonic neighbours. */
+  echo?: TrackNoteEcho;
   logId: string;
+  /** The Log IDs the note was gated against (--dry-run only). */
+  neighbors?: string[];
   note: string;
   ok: true;
   /** True when a note already existed and the fill-empty-only guard refused to clobber it. */
@@ -714,6 +752,10 @@ export async function trackNoteCommand(
   options: TrackNoteOptions,
 ): Promise<TrackNoteResult> {
   const body: NoteBody = { note: options.note };
+
+  if (options.dryRun) {
+    body.dryRun = true;
+  }
 
   return adminApiPost<TrackNoteResult>(
     `/api/admin/tracks/${encodeURIComponent(idOrLogId)}/note`,

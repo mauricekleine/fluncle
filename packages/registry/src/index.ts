@@ -856,6 +856,15 @@ export const SURFACES: readonly Surface[] = [
     weights: { cli: "tertiary" },
   },
   {
+    command: "fluncle tracks similar",
+    exposedContent: [
+      "the findings that sound nearest to one (the sonic neighbourhood, off the MuQ audio embedding), each with its note",
+    ],
+    kind: "cli",
+    name: "cli.tracks-similar",
+    weights: { cli: "tertiary" },
+  },
+  {
     command: "fluncle about",
     exposedContent: ["Fluncle, and where to find him"],
     kind: "cli",

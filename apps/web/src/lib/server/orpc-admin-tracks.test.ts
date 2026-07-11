@@ -20,6 +20,7 @@ import { AGENT_TOKEN, OPERATOR_TOKEN, readJson, setAdminTokenEnv } from "./orpc-
 const updateTrack = vi.fn();
 const fillEmptyNote = vi.fn();
 const getTrackByIdOrLogId = vi.fn();
+const getSimilarFindings = vi.fn();
 const getTrackContextNote = vi.fn();
 const put = vi.fn();
 const renderObservationCartesia = vi.fn();
@@ -50,6 +51,7 @@ vi.mock("./tracks", async (importOriginal) => {
 
   return {
     ...actual,
+    getSimilarFindings: (...args: unknown[]) => getSimilarFindings(...args),
     getTrackByIdOrLogId: (id: string) => getTrackByIdOrLogId(id),
     getTrackContextNote: (id: string) => getTrackContextNote(id),
     listTracks: (...args: unknown[]) => listTracks(...args),
@@ -117,6 +119,10 @@ beforeEach(() => {
   updateTrack.mockReset();
   fillEmptyNote.mockReset();
   getTrackByIdOrLogId.mockReset();
+  // The default sonic neighbourhood is EMPTY: the echo gate then has nothing to measure
+  // against, so every pre-existing note_track test keeps its exact old behaviour. The
+  // echo-gate tests below stock it deliberately.
+  getSimilarFindings.mockReset().mockResolvedValue([]);
   getTrackContextNote.mockReset().mockResolvedValue(null);
   put.mockReset();
   fetchTrackContext.mockReset();
@@ -919,6 +925,190 @@ describe("oRPC note_track (POST /admin/tracks/{trackId}/note)", () => {
     expect(response?.status).toBe(404);
     expect(((await readJson(response)) as { code: string }).code).toBe("not_found");
     expect(updateTrack).not.toHaveBeenCalled();
+  });
+
+  // THE UNCERTIFIED RAIL: Fluncle does not speak about a track he has not certified.
+  // A CATALOGUE track is a `tracks` row with NO `findings` row, and every finding read
+  // drives through the `findings ⋈ tracks` inner join (`getTrackByIdOrLogId`), so it
+  // resolves to nothing — the note request dies at 404 before a word is even gated.
+  // There is no path from the catalogue to a note.
+  it("404s a CATALOGUE track — an uncertified track can NEVER be given a note", async () => {
+    // The finding join returns nothing for a track with no `findings` row.
+    getTrackByIdOrLogId.mockResolvedValueOnce(undefined);
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(post("/note", AGENT_TOKEN, { note: GOOD_NOTE }));
+
+    expect(response?.status).toBe(404);
+    expect(fillEmptyNote).not.toHaveBeenCalled();
+    expect(updateTrack).not.toHaveBeenCalled();
+  });
+
+  // ── The ECHO gate — the anti-sameness rail on the vibe-neighbour layer ──────────
+  //
+  // The auto-note is authored with the notes of the finding's SONIC NEIGHBOURS in the
+  // prompt (so it can hear the region's register). The Worker re-reads those same notes
+  // and rejects a line that lifts from one: the cluster informs, it never templates.
+  // A rejected note is NOT stored — the note is optional, and silence beats a line that
+  // reads like every other note in its galaxy.
+  describe("the echo gate (the vibe-neighbour layer's guardrail)", () => {
+    const NEIGHBORS = [
+      {
+        logId: "027.2.8R",
+        note: "My shoulders dropped before the break even settled; Eternity earns it.",
+        trackId: "neighbor-1",
+      },
+      {
+        logId: "012.2.4L",
+        note: "Liquid roller with nocturnal depth; I have been rewinding this Krakota banger since 2018.",
+        trackId: "neighbor-2",
+      },
+    ];
+
+    it("422s `note_echoes_neighbours` when the note lifts a phrase from a neighbour", async () => {
+      getTrackByIdOrLogId.mockResolvedValueOnce(TRACK);
+      getSimilarFindings.mockResolvedValueOnce(NEIGHBORS);
+
+      const { handleOrpc } = await import("./orpc");
+      const response = await handleOrpc(
+        post("/note", AGENT_TOKEN, {
+          note: "My shoulders dropped before I caught the title; that is Calibre doing what Calibre does.",
+        }),
+      );
+
+      expect(response?.status).toBe(422);
+      const data = (await readJson(response)) as { code: string; message: string };
+      expect(data.code).toBe("note_echoes_neighbours");
+      // The message names the neighbour it echoed, so the sweep can re-author around it.
+      expect(data.message).toContain("027.2.8R");
+      // NOTHING was stored: an echoing note leaves the finding note-less.
+      expect(fillEmptyNote).not.toHaveBeenCalled();
+      expect(updateTrack).not.toHaveBeenCalled();
+    });
+
+    it("stores a note that says something the neighbourhood does not", async () => {
+      getTrackByIdOrLogId.mockResolvedValueOnce(TRACK);
+      getSimilarFindings.mockResolvedValueOnce(NEIGHBORS);
+      fillEmptyNote.mockResolvedValueOnce(true);
+
+      const note = "Piano loops into your chest and the vocal keeps you pinned there.";
+      const { handleOrpc } = await import("./orpc");
+      const response = await handleOrpc(post("/note", AGENT_TOKEN, { note }));
+
+      expect(response?.status).toBe(200);
+      expect(fillEmptyNote).toHaveBeenCalledWith(TRACK_ID, note);
+      // The measured echo rides back on the response — sameness is observable, not assumed.
+      const data = (await readJson(response)) as { echo: { phrase: string } };
+      expect(data.echo.phrase).toBe("");
+    });
+
+    it("gates against the SAME neighbours the agent was shown (the six nearest)", async () => {
+      getTrackByIdOrLogId.mockResolvedValueOnce(TRACK);
+      getSimilarFindings.mockResolvedValueOnce([]);
+      fillEmptyNote.mockResolvedValueOnce(true);
+
+      const { handleOrpc } = await import("./orpc");
+      await handleOrpc(post("/note", AGENT_TOKEN, { note: GOOD_NOTE }));
+
+      expect(getSimilarFindings).toHaveBeenCalledWith(TRACK_ID, 6);
+    });
+
+    it("passes untouched when the finding has no neighbourhood yet (no embedding)", async () => {
+      getTrackByIdOrLogId.mockResolvedValueOnce(TRACK);
+      getSimilarFindings.mockResolvedValueOnce([]); // un-embedded → nothing to echo
+      fillEmptyNote.mockResolvedValueOnce(true);
+
+      const { handleOrpc } = await import("./orpc");
+      const response = await handleOrpc(post("/note", AGENT_TOKEN, { note: GOOD_NOTE }));
+
+      expect(response?.status).toBe(200);
+      expect(fillEmptyNote).toHaveBeenCalledWith(TRACK_ID, GOOD_NOTE);
+    });
+
+    it("ignores a note-less neighbour (nothing to learn from, nothing to echo)", async () => {
+      getTrackByIdOrLogId.mockResolvedValueOnce(TRACK);
+      getSimilarFindings.mockResolvedValueOnce([{ logId: "011.1.3X", trackId: "neighbor-3" }]);
+      fillEmptyNote.mockResolvedValueOnce(true);
+
+      const { handleOrpc } = await import("./orpc");
+      const response = await handleOrpc(post("/note", AGENT_TOKEN, { note: GOOD_NOTE }));
+
+      expect(response?.status).toBe(200);
+      expect(fillEmptyNote).toHaveBeenCalledWith(TRACK_ID, GOOD_NOTE);
+    });
+  });
+
+  // ── The dry run — both gates, no write (the pre-check + the A/B harness) ────────
+  describe("--dry-run", () => {
+    it("runs BOTH gates and stores NOTHING", async () => {
+      getTrackByIdOrLogId.mockResolvedValueOnce(TRACK);
+      getSimilarFindings.mockResolvedValueOnce([
+        { logId: "027.2.8R", note: "A neighbour's note.", trackId: "neighbor-1" },
+      ]);
+
+      const { handleOrpc } = await import("./orpc");
+      const response = await handleOrpc(
+        post("/note", AGENT_TOKEN, { dryRun: true, note: GOOD_NOTE }),
+      );
+
+      expect(response?.status).toBe(200);
+      const data = (await readJson(response)) as {
+        dryRun: boolean;
+        echo: { overlap: number };
+        neighbors: string[];
+        note: string;
+      };
+      expect(data.dryRun).toBe(true);
+      expect(data.note).toBe(GOOD_NOTE);
+      expect(data.neighbors).toEqual(["027.2.8R"]);
+      // NOTHING was written, and no attempt was stamped — the run left no trace.
+      expect(fillEmptyNote).not.toHaveBeenCalled();
+      expect(updateTrack).not.toHaveBeenCalled();
+      expect(recordNoteAttempt).not.toHaveBeenCalled();
+    });
+
+    it("still 422s an echoing note (the gates are the point of the dry run)", async () => {
+      getTrackByIdOrLogId.mockResolvedValueOnce(TRACK);
+      getSimilarFindings.mockResolvedValueOnce([
+        {
+          logId: "027.2.8R",
+          note: "My shoulders dropped before the break even settled; Eternity earns it.",
+          trackId: "neighbor-1",
+        },
+      ]);
+
+      const { handleOrpc } = await import("./orpc");
+      const response = await handleOrpc(
+        post("/note", AGENT_TOKEN, {
+          dryRun: true,
+          note: "My shoulders dropped before I caught the title; that is Calibre all over.",
+        }),
+      );
+
+      expect(response?.status).toBe(422);
+      expect(((await readJson(response)) as { code: string }).code).toBe("note_echoes_neighbours");
+    });
+
+    // The dry run evaluates a line against an ALREADY-NOTED finding (that is how the
+    // layer is measured against the live archive) — and still writes nothing, so the
+    // fill-empty-only guarantee is untouched by it.
+    it("evaluates an already-noted finding without touching its note", async () => {
+      getTrackByIdOrLogId.mockResolvedValueOnce({ ...TRACK, note: "The operator's own note." });
+      getSimilarFindings.mockResolvedValueOnce([]);
+
+      const { handleOrpc } = await import("./orpc");
+      const response = await handleOrpc(
+        post("/note", AGENT_TOKEN, { dryRun: true, note: GOOD_NOTE }),
+      );
+
+      expect(response?.status).toBe(200);
+      const data = (await readJson(response)) as { dryRun: boolean; note: string; skipped?: true };
+      expect(data.dryRun).toBe(true);
+      expect(data.note).toBe(GOOD_NOTE);
+      expect(data.skipped).toBeUndefined();
+      expect(fillEmptyNote).not.toHaveBeenCalled();
+      expect(updateTrack).not.toHaveBeenCalled();
+    });
   });
 });
 

@@ -107,11 +107,27 @@ const ContextTrackBodySchema = z.looseObject({
 /**
  * The note body (POST /admin/tracks/{trackId}/note). LOOSE: the live handler
  * voice-GATES the authored `note` itself (emitting `no_note`/`note_too_short`/
- * `note_too_long`/`voice_gate`) and enforces the fill-empty-only guard, so the
- * contract stays permissive to keep those codes byte-for-byte.
+ * `note_too_long`/`voice_gate`/`note_echoes_neighbours`) and enforces the
+ * fill-empty-only guard, so the contract stays permissive to keep those codes
+ * byte-for-byte. `dryRun` runs both gates and reports the verdict WITHOUT storing
+ * anything (the sweep's pre-check and the neighbour layer's measurement harness).
  */
 const NoteTrackBodySchema = z.looseObject({
+  dryRun: z.unknown().optional(),
   note: z.unknown().optional(),
+});
+
+/**
+ * The measured ECHO of a note against its sonic neighbourhood — the anti-sameness
+ * rail's reading, returned on every note call (dry or real) so the sameness of the
+ * corpus is observable, not assumed. `phrase` is the run of words lifted from the
+ * `logId` neighbour ("" when none reaches the lift threshold); `overlap` is the
+ * content-word Jaccard with it (0 when there was nothing to compare against).
+ */
+const NoteEchoSchema = z.object({
+  logId: z.string().nullable(),
+  overlap: z.number(),
+  phrase: z.string(),
 });
 
 /**
@@ -274,8 +290,18 @@ export const contextTrack = oc
  * (`skipped: true`); the agent NEVER clobbers an existing note. The operator override
  * always wins, enforced server-side. Every authoring attempt stamps the
  * `backfill_note_*` "ran" state (board done-when-ran semantics); a fill also stamps
- * `backfill_note_done_at`. Codes: `not_found`/404, `no_log_id`/400, `no_note`/400,
- * `note_too_short`/422, `note_too_long`/422, `voice_gate`/422.
+ * `backfill_note_done_at`.
+ *
+ * TWO GATES: the VOICE gate (as above) and the ECHO gate — the anti-sameness rail on
+ * the vibe-neighbour layer. The note is authored with the notes of the finding's SONIC
+ * NEIGHBOURS in the prompt (the MuQ nearest neighbours, `get_similar_findings`); the
+ * Worker re-reads those same notes and hard-fails a line that lifts a phrase from one
+ * or reuses its words wholesale (`note_echoes_neighbours`). The neighbourhood informs
+ * the note; it never templates it. A rejected note is not stored — the note is optional
+ * and silence beats a line that reads like every other note in its region.
+ *
+ * Codes: `not_found`/404, `no_log_id`/400, `no_note`/400, `note_too_short`/422,
+ * `note_too_long`/422, `voice_gate`/422, `note_echoes_neighbours`/422.
  */
 export const noteTrack = oc
   .route({
@@ -288,7 +314,14 @@ export const noteTrack = oc
   .input(NoteTrackBodySchema.extend({ trackId: z.string() }))
   .output(
     z.object({
+      // `true` when `dryRun` was set: both gates ran, NOTHING was stored.
+      dryRun: z.literal(true).optional(),
+      // The measured echo against the sonic neighbourhood (absent only on a skipped
+      // no-op, where no candidate note was gated).
+      echo: NoteEchoSchema.optional(),
       logId: z.string(),
+      // The Log IDs of the neighbours the note was gated against (dry run only).
+      neighbors: z.array(z.string()).optional(),
       note: z.string(),
       ok: z.literal(true),
       // `true` when a note already existed and the call was a no-op (the

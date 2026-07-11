@@ -17,12 +17,14 @@
 //   2. per finding (bounded batch, BATCH_CAP small — authoring spends subscription
 //      quota):
 //      a. GATHER (deterministic): `fluncle tracks get <id> --json` → the finding's
-//         identity metadata (artists, title, label, release year, galaxy), AND
+//         identity metadata (artists, title, label, release year, galaxy, BPM, key),
 //         `fluncle admin tracks context <id> --json` → the stored `context_note` (the
-//         firecrawl facts the context sweep distilled). The note is the PRIMARY
-//         authoring fuel — `admin tracks context` returns it (`skipped: true`, no
-//         re-fetch) for a finding that already has one, which every queue item does
-//         (`hasContext=true`). A blank/unreadable note degrades to identity-only.
+//         firecrawl facts the context sweep distilled), AND `fluncle tracks similar
+//         <id> --json` → the finding's SONIC NEIGHBOURHOOD (the vibe-neighbour layer,
+//         below). The context note is the PRIMARY authoring fuel — `admin tracks
+//         context` returns it (`skipped: true`, no re-fetch) for a finding that already
+//         has one, which every queue item does (`hasContext=true`). A blank/unreadable
+//         note degrades to identity-only.
 //      b. AUTHOR (the ONE agentic step): build the authoring prompt (the voice/format
 //         doctrine for a one-line editorial note, with the finding's data interpolated
 //         inline) and run `claude -p` — Claude Code, SUBSCRIPTION auth, NOT OpenRouter
@@ -31,11 +33,32 @@
 //         the note.
 //      c. DELIVER (deterministic): write the note to a temp file, then
 //         `fluncle admin tracks note <id> --script-file <tmp> --json` → the Worker
-//         RE-SCANS (the voice gate) and FILLS AN EMPTY NOTE ONLY. The SCRIPT posts it,
-//         never claude. A `skipped:true` (an operator note already on file) is a clean
-//         no-op — the operator override always wins. A gate 403/422 → log which
-//         finding failed, skip it (stays queued), continue. The temp file is cleaned
-//         up either way.
+//         RE-SCANS (the voice gate AND the echo gate) and FILLS AN EMPTY NOTE ONLY. The
+//         SCRIPT posts it, never claude. A `skipped:true` (an operator note already on
+//         file) is a clean no-op — the operator override always wins. A gate 403/422 →
+//         log which finding failed, skip it (stays queued), continue. The temp file is
+//         cleaned up either way.
+//
+// THE VIBE-NEIGHBOUR LAYER (and its guardrail). The prompt carries the notes of the
+// finding's nearest neighbours in EMBEDDING space — the MuQ audio embedding, which
+// captures how a track FEELS rather than how it measures (a feature-twin can land in a
+// different galaxy by feel, and its note would carry the wrong vibe). They go in as
+// what the region ALREADY SOUNDS LIKE, and every one of them is a move that is now
+// SPENT: the cluster INFORMS, it never TEMPLATES, because a note that reads like every
+// other note in its galaxy is worse than none.
+//
+// That guardrail is MECHANICAL, not hoped for. The Worker re-reads the same neighbour
+// notes and runs the ECHO GATE (`gateNoteEcho`, apps/web/src/lib/server/note.ts): a
+// lifted phrase or wholesale word overlap is a `note_echoes_neighbours` 422. On that
+// rejection the sweep RE-AUTHORS ONCE, handing the model its own echo back as the thing
+// to avoid. If the second line echoes too, the finding stays note-less and queued —
+// the note is optional, and silence beats a generic line.
+//
+// NOTE_NEIGHBORS=0 turns the layer off (the kill switch, and the A/B control).
+//
+// THE DRY RUN (`--dry-run <id…>`): author for the named findings, run both gates via
+// `admin tracks note --dry-run`, print the notes + their measured echo, write NOTHING.
+// It is the harness the layer was measured with, and it stays the way to re-measure it.
 //
 // AUTH-FAILURE PING. If `claude -p` fails with an AUTH error (a re-auth/login
 // signature in its output, distinct from a normal model hiccup), we STOP the batch
@@ -65,8 +88,25 @@ import { type BoxCostEvent, emitCost, parseAuthoringSpend } from "./cost-emit";
 const BATCH_CAP = 1;
 const QUEUE_LIMIT = 50; // hard ceiling on the queue read (we only act on BATCH_CAP)
 
+// The sonic neighbourhood the note is authored against. Six is the same window the
+// /log "more like this" row shows — wide enough to describe a region, tight enough that
+// every one of them genuinely sounds like the finding. The Worker's echo gate reads the
+// SAME six (one definition of "the neighbourhood" on both sides of the wire).
+const NEIGHBOR_LIMIT = 6;
+
+// The re-author budget when the Worker's echo gate rejects a note for echoing its
+// neighbourhood. ONE retry: the second attempt is handed the echo it made, so it knows
+// exactly which move is spent. A second echo means the model has nothing fresh for this
+// finding — leave it note-less (silence beats a generic line) and let the next tick try
+// with a cold context.
+const ECHO_RETRIES = 1;
+
 const FLUNCLE_BIN = process.env.FLUNCLE_BIN ?? "fluncle";
 const CLAUDE_BIN = process.env.CLAUDE_BIN ?? "claude";
+
+// The vibe-neighbour layer's kill switch (and the A/B control): NOTE_NEIGHBORS=0 authors
+// from the context note + identity alone, exactly as the sweep did before the layer.
+const NEIGHBORS_ENABLED = process.env.NOTE_NEIGHBORS !== "0";
 
 // The authoring model. Env-configurable; default the spike-proven Sonnet alias.
 const NOTE_CLAUDE_MODEL = process.env.NOTE_CLAUDE_MODEL ?? "claude-sonnet-4-6";
@@ -90,7 +130,9 @@ type QueueFinding = {
 // grounds the note in. Every field optional — we narrow before use.
 type Finding = {
   artists?: string[];
+  bpm?: number;
   galaxy?: { key?: string; name?: string };
+  key?: string;
   label?: string;
   logId?: string;
   note?: string;
@@ -98,6 +140,18 @@ type Finding = {
   title?: string;
   trackId?: string;
 };
+
+// One member of the finding's sonic neighbourhood: a nearby finding and the note that
+// already stands on it. The identity is what the note must NOT sound like.
+export type Neighbor = {
+  artists: string[];
+  logId: string;
+  note: string;
+  title: string;
+};
+
+// `tracks similar --json` → the MuQ nearest neighbours (each a full TrackListItem).
+type SimilarResponse = { findings?: Finding[] };
 
 // A `track get` can resolve to a finding OR a mixtape; we only ever queue findings.
 type TrackGetResponse = { mixtape?: unknown; track?: Finding };
@@ -120,7 +174,11 @@ type ClaudeEnvelope = {
   usage?: ClaudeUsage;
 };
 
-type Outcome = "noted" | "alreadyNoted" | "gateSkipped" | "skipped";
+type Outcome = "noted" | "alreadyNoted" | "gateSkipped" | "echoSkipped" | "skipped";
+
+// What the Worker made of a delivered note. `echoed` carries the phrase the echo gate
+// caught, so the re-author pass can hand the model its own echo back.
+type Delivery = { echoedPhrase?: string; outcome: Outcome };
 
 // The authored note plus its MEASURED authoring spend (the COST-01 §5 `note` row):
 // the total_cost_usd the CLI computed, the model, and the token count. `usd` is null
@@ -215,12 +273,19 @@ function looksLikeAuthFailure(text: string): boolean {
 // cosmos trim, the bodily reaction, the Selector's turn to the crew — in ONE LINE.
 // ---------------------------------------------------------------------------
 
-function buildAuthoringPrompt(finding: Finding, contextNote: string): string {
+export function buildAuthoringPrompt(
+  finding: Finding,
+  contextNote: string,
+  neighbors: Neighbor[] = [],
+  echoedPhrase?: string,
+): string {
   const artists = finding.artists?.length ? finding.artists.join(", ") : "unknown";
   const title = finding.title ?? "unknown";
   const label = finding.label ?? "unknown";
   const year = finding.releaseDate ? finding.releaseDate.slice(0, 4) : "unknown";
   const galaxy = finding.galaxy?.name ?? "unplaced";
+  const bpm = typeof finding.bpm === "number" ? `${Math.round(finding.bpm)}` : "unknown";
+  const key = finding.key ?? "unknown";
 
   // The stored context note (the firecrawl facts the context sweep distilled) is the
   // PRIMARY fuel — it carries release context, scene, and label history the bare
@@ -238,6 +303,45 @@ function buildAuthoringPrompt(finding: Finding, contextNote: string): string {
         "",
       ];
 
+  // THE VIBE-NEIGHBOUR LAYER. These are the notes already standing on the findings that
+  // sound nearest to this one. They are here for TWO reasons, and the second one is the
+  // load-bearing half:
+  //
+  //   1. calibration — they are the register of this region of the archive, written in
+  //      Fluncle's own hand. Hear how he talks about music that feels like this.
+  //   2. EXCLUSION — every image, verb, and closing turn in them is now SPENT. A note
+  //      that could be swapped with one of them says nothing about THIS finding, and a
+  //      region of the archive that all reads the same is worth less than a region where
+  //      half the findings say nothing at all.
+  //
+  // The Worker enforces (2) mechanically: it re-reads these same notes and rejects a
+  // line that lifts a phrase from one of them. So this is not a style suggestion.
+  const neighborBlock =
+    neighbors.length > 0
+      ? [
+          "THE SONIC NEIGHBOURHOOD (the findings that sound nearest to this one, and the notes already standing on them):",
+          ...neighbors.map(
+            (neighbor) =>
+              `  - ${neighbor.artists.join(", ")} — ${neighbor.title}: "${neighbor.note}"`,
+          ),
+          "",
+          "READ THEM TWICE, THEN USE THEM AS A LIST OF WHAT IS ALREADY TAKEN.",
+          "  - They tell you the REGISTER of this corner of the archive: how certain, how dry, how bodily.",
+          "  - Every image, verb, body part, and closing move in them is SPENT. Do not reuse one. Not the shoulders, not the rewind, not the phrasing, not the sentence shape.",
+          "  - The server REJECTS a note that lifts a run of words from any of them, and it rejects one that just reshuffles their words. A rejected note is not stored at all.",
+          "  - If your line could be swapped with one of these and nobody would notice, it is the wrong line. Say what is true of THIS record and nothing else.",
+          "",
+        ]
+      : [];
+
+  // The re-author pass: the model's own echo, handed back as the thing to route around.
+  const echoBlock = echoedPhrase
+    ? [
+        `YOUR LAST ATTEMPT WAS REJECTED: it echoed a neighbour ("${echoedPhrase}"). That move is spent. Come at this record from somewhere else entirely — a different sense, a different moment in the track, a different reason it stayed with you.`,
+        "",
+      ]
+    : [];
+
   return [
     "You are Fluncle, writing the WRITTEN editorial note for one finding — the line that shows on its /log page.",
     "Load and apply the `copywriting-fluncle` skill — it is the full voice canon; let it govern the voice.",
@@ -245,6 +349,7 @@ function buildAuthoringPrompt(finding: Finding, contextNote: string): string {
     "This is the finding-note register: Fluncle's dry, confident 'why this is here', as if texting the crew.",
     "Ground every claim in the facts below. Never invent a track, artist, date, Log ID, label, or stat.",
     "",
+    ...echoBlock,
     ...noteBlock,
     "THE FINDING (identity):",
     `  artists: ${artists}`,
@@ -252,7 +357,10 @@ function buildAuthoringPrompt(finding: Finding, contextNote: string): string {
     `  label: ${label}`,
     `  year: ${year}`,
     `  galaxy: ${galaxy}`,
+    `  bpm: ${bpm}`,
+    `  key: ${key}`,
     "",
+    ...neighborBlock,
     "FORMAT + VOICE CONSTRAINTS (the server voice-gate re-scans and will reject a violation):",
     "  - ONE sentence. Short: aim for roughly 50 to 140 characters, never past the 280 cap. A semicolon is fine; a second sentence is not.",
     "  - Lead with the feel and your verdict: the sound, why it stays with you, not a file card.",
@@ -273,8 +381,13 @@ function buildAuthoringPrompt(finding: Finding, contextNote: string): string {
 // other failure (leave the finding queued); returns the note string on success.
 // ---------------------------------------------------------------------------
 
-function authorNote(finding: Finding, contextNote: string): AuthoredNote | null {
-  const prompt = buildAuthoringPrompt(finding, contextNote);
+function authorNote(
+  finding: Finding,
+  contextNote: string,
+  neighbors: Neighbor[],
+  echoedPhrase?: string,
+): AuthoredNote | null {
+  const prompt = buildAuthoringPrompt(finding, contextNote, neighbors, echoedPhrase);
   const args = [
     "-p",
     "--model",
@@ -351,7 +464,7 @@ function authorNote(finding: Finding, contextNote: string): AuthoredNote | null 
 // a future author pass.
 // ---------------------------------------------------------------------------
 
-function deliverNote(id: string, note: string): Outcome {
+function deliverNote(id: string, note: string, dryRun = false): Delivery {
   const dir = mkdtempSync(join(tmpdir(), "note-sweep-"));
   const notePath = join(dir, "note.txt");
 
@@ -365,11 +478,28 @@ function deliverNote(id: string, note: string): Outcome {
       id,
       "--script-file",
       notePath,
+      ...(dryRun ? ["--dry-run"] : []),
       "--json",
     ]);
 
     if (code !== 0) {
-      const detail = `${stdout}\n${stderr}`.toLowerCase();
+      const combined = `${stdout}\n${stderr}`;
+      const detail = combined.toLowerCase();
+
+      // The ECHO gate: the note read like its sonic neighbours, so the Worker refused
+      // to store it. Distinct from the voice gate because it is RECOVERABLE — the model
+      // gets one more pass, told exactly which move it spent.
+      if (detail.includes("note_echoes_neighbours")) {
+        const echoedPhrase = readEchoedPhrase(combined);
+
+        log(
+          `${id}: the echo gate rejected the note${
+            echoedPhrase ? ` (it lifted "${echoedPhrase}")` : ""
+          }`,
+        );
+
+        return { echoedPhrase, outcome: "echoSkipped" };
+      }
 
       // The voice gate / length bounds reject with a 403/422 + a signature. Treat
       // that as a skip (the finding stays queued), not a hard error.
@@ -383,12 +513,12 @@ function deliverNote(id: string, note: string): Outcome {
       ) {
         log(`${id}: voice gate / length rejected the note — skipping (stays queued)`);
 
-        return "gateSkipped";
+        return { outcome: "gateSkipped" };
       }
 
       log(`${id}: note exited ${code}: ${stderr.trim().slice(-200)}`);
 
-      return "skipped";
+      return { outcome: "skipped" };
     }
 
     // The fill-empty-only guard returns `skipped:true` when an operator note already
@@ -399,17 +529,73 @@ function deliverNote(id: string, note: string): Outcome {
       if (parsed.skipped) {
         log(`${id}: a note is already on file — operator note stands, no-op`);
 
-        return "alreadyNoted";
+        return { outcome: "alreadyNoted" };
       }
     } catch {
       // Non-JSON success is unexpected but harmless; treat as a fill.
     }
 
-    log(`${id}: note authored`);
+    log(`${id}: note ${dryRun ? "cleared both gates (dry run, nothing stored)" : "authored"}`);
 
-    return "noted";
+    return { outcome: "noted" };
   } finally {
     rmSync(dir, { force: true, recursive: true });
+  }
+}
+
+/**
+ * Pull the lifted phrase out of the Worker's `note_echoes_neighbours` message (it
+ * quotes it: `it lifts "…" straight from 012.1.0A`), so the re-author pass can name the
+ * spent move back to the model. Best-effort — a miss just means a less pointed retry.
+ */
+export function readEchoedPhrase(output: string): string | undefined {
+  // The quotes arrive raw from a human-readable error and BACKSLASH-ESCAPED from a JSON
+  // one (`--json` prints the error envelope), so tolerate both.
+  const match = /it lifts \\?"([^"\\]+)\\?"/.exec(output);
+
+  return match?.[1];
+}
+
+// ---------------------------------------------------------------------------
+// The SONIC NEIGHBOURHOOD — the vibe-neighbour layer's fuel. `tracks similar` is the
+// public read over the MuQ embedding (an exact cosine scan, ranked in SQL); the Worker's
+// echo gate reads the same neighbours, so the note is judged against exactly the notes
+// it was shown. Best-effort: a finding with no embedding yet, or one whose neighbours
+// carry no notes, comes back empty and the note is authored (and gated) as it was before
+// the layer existed. NOTE_NEIGHBORS=0 turns it off outright.
+// ---------------------------------------------------------------------------
+
+function readNeighbors(id: string): Neighbor[] {
+  if (!NEIGHBORS_ENABLED) {
+    return [];
+  }
+
+  try {
+    const result = fluncleJson<SimilarResponse>([
+      "tracks",
+      "similar",
+      id,
+      "--limit",
+      String(NEIGHBOR_LIMIT),
+    ]);
+
+    return (result.findings ?? []).flatMap((finding) => {
+      const note = finding.note?.trim();
+
+      // Only a NOTED neighbour teaches anything: an un-noted one has no register to
+      // read and no move to spend.
+      return note && finding.logId && finding.title
+        ? [{ artists: finding.artists ?? [], logId: finding.logId, note, title: finding.title }]
+        : [];
+    });
+  } catch (error) {
+    log(
+      `${id}: could not read the sonic neighbourhood (${
+        error instanceof Error ? error.message : String(error)
+      }) — authoring without it`,
+    );
+
+    return [];
   }
 }
 
@@ -446,7 +632,7 @@ function readContextNote(id: string): string {
 // authored AND delivered (so a no-op / gate-skip / failure never records spend).
 type NoteResult = { cost: BoxCostEvent | null; outcome: Outcome };
 
-function noteOne(queued: QueueFinding): NoteResult {
+function noteOne(queued: QueueFinding, dryRun = false): NoteResult {
   const id = queued.trackId ?? queued.logId;
 
   if (!id) {
@@ -469,8 +655,10 @@ function noteOne(queued: QueueFinding): NoteResult {
 
   // The fill-empty-only guard lives server-side (the Worker is authoritative), but a
   // belt-and-suspenders client check avoids spending a `claude -p` authoring on a
-  // finding that already carries a note (a race between the queue read and now).
-  if (finding.note?.trim()) {
+  // finding that already carries a note (a race between the queue read and now). A DRY
+  // RUN skips it: it stores nothing, so an already-noted finding is a legitimate
+  // subject (that is how the layer is measured against the live archive).
+  if (!dryRun && finding.note?.trim()) {
     log(`${id}: a note is already on file — skipping the authoring spend`);
 
     return { cost: null, outcome: "alreadyNoted" };
@@ -480,23 +668,57 @@ function noteOne(queued: QueueFinding): NoteResult {
   // facts the context sweep produced). Best-effort: degrades to identity-only.
   const contextNote = readContextNote(id);
 
-  // (c) Author the note (the one agentic step). Throws ClaudeAuthError to abort the
-  // whole batch; returns null to leave THIS finding queued.
-  const authored = authorNote(finding, contextNote);
+  // (c) Read the SONIC NEIGHBOURHOOD — the notes already standing on the findings that
+  // sound nearest to this one (the vibe-neighbour layer). The register to hear, and the
+  // moves that are spent. Empty when the finding has no embedding, or NOTE_NEIGHBORS=0.
+  const neighbors = readNeighbors(id);
 
-  if (!authored) {
-    return { cost: null, outcome: "skipped" };
+  if (neighbors.length > 0) {
+    log(`${id}: ${neighbors.length} noted neighbour(s) in the sonic neighbourhood`);
   }
 
-  // (d) Deliver: the CLI posts it; the Worker re-scans + fills-empty-only + stores.
-  const outcome = deliverNote(id, authored.note);
+  // (d) Author → deliver, with ONE re-author if the Worker's echo gate says the line
+  // reads like its neighbours. The retry is handed the phrase it echoed, so the second
+  // pass knows exactly which move is spent. Two echoes and we stop: the finding stays
+  // note-less and queued, because a note that reads like every other note in its region
+  // is worth less than no note at all.
+  let authored: AuthoredNote | null = null;
+  let delivery: Delivery = { outcome: "skipped" };
+  let echoedPhrase: string | undefined;
+
+  for (let attempt = 0; attempt <= ECHO_RETRIES; attempt += 1) {
+    // Throws ClaudeAuthError to abort the whole batch; returns null to leave THIS
+    // finding queued.
+    authored = authorNote(finding, contextNote, neighbors, echoedPhrase);
+
+    if (!authored) {
+      return { cost: null, outcome: "skipped" };
+    }
+
+    delivery = deliverNote(id, authored.note, dryRun);
+
+    if (delivery.outcome !== "echoSkipped") {
+      break;
+    }
+
+    echoedPhrase = delivery.echoedPhrase;
+
+    if (attempt < ECHO_RETRIES) {
+      log(`${id}: re-authoring once, routing around the echo`);
+    } else {
+      log(`${id}: still echoing its neighbourhood — leaving it note-less (silence beats sameness)`);
+    }
+  }
+
+  const outcome = delivery.outcome;
 
   // (e) Record the authoring spend ONLY when the note actually landed (`noted`). A
   // gate-skip / operator-note no-op / failure spent the tokens too, but attributing a
   // "note" cost to a finding that has no note would misread — the ledger tracks
-  // DELIVERED work. The token spend on a rejected author is accepted lossiness.
+  // DELIVERED work. The token spend on a rejected author is accepted lossiness. A DRY
+  // RUN delivers nothing, so it records nothing.
   const cost: BoxCostEvent | null =
-    outcome === "noted"
+    outcome === "noted" && !dryRun && authored
       ? {
           costBasis: "subsidized",
           logId: finding.logId ?? null,
@@ -511,6 +733,17 @@ function noteOne(queued: QueueFinding): NoteResult {
           vendor: "anthropic",
         }
       : null;
+
+  // The dry run's whole product is the LINE — print it where the operator can read it,
+  // next to the neighbourhood it was written against.
+  if (dryRun && authored) {
+    console.error(
+      `\n── ${finding.logId ?? id} — ${finding.artists?.join(", ")} — ${finding.title}`,
+    );
+    console.error(`   neighbours: ${neighbors.map((n) => n.logId).join(", ") || "(none)"}`);
+    console.error(`   NOTE: ${authored.note}`);
+    console.error(`   verdict: ${outcome}\n`);
+  }
 
   return { cost, outcome };
 }
@@ -559,6 +792,35 @@ function pingClaudeAuthFailure(detail: string): void {
 // ---------------------------------------------------------------------------
 
 async function main(): Promise<void> {
+  // `--dry-run <id…>` — the measurement harness. Author for the named findings, run both
+  // gates, print the lines, store NOTHING. Pair it with NOTE_NEIGHBORS=0 for the control
+  // arm: same findings, same fuel, no neighbourhood. That is how the layer was measured
+  // (and how to re-measure it when the corpus grows).
+  const argv = process.argv.slice(2);
+  const dryRunIds = argv.includes("--dry-run") ? argv.filter((arg) => !arg.startsWith("-")) : [];
+
+  if (dryRunIds.length > 0) {
+    log(
+      `DRY RUN over ${dryRunIds.length} finding(s), neighbours ${NEIGHBORS_ENABLED ? "ON" : "OFF"} — nothing will be stored`,
+    );
+
+    const outcomes: Record<string, string> = {};
+
+    for (const id of dryRunIds) {
+      try {
+        const { outcome } = noteOne({ logId: id }, true);
+        outcomes[id] = outcome;
+      } catch (error) {
+        outcomes[id] = "failed";
+        log(`error on ${id}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+
+    console.log(JSON.stringify({ dryRun: true, neighbors: NEIGHBORS_ENABLED, ok: true, outcomes }));
+
+    return;
+  }
+
   // `note --queue --json` returns `{ ok: true, tracks: [...] }`, not a bare array.
   const response = fluncleJson<{ tracks?: QueueFinding[] }>([
     "admin",
@@ -572,6 +834,9 @@ async function main(): Promise<void> {
 
   const summary = {
     alreadyNoted: 0,
+    // The note echoed its sonic neighbourhood twice over and was left unwritten — the
+    // anti-sameness rail firing. A finding here stays queued for a later, colder pass.
+    echoSkipped: 0,
     failed: 0,
     gateSkipped: 0,
     noted: 0,
@@ -602,6 +867,8 @@ async function main(): Promise<void> {
         summary.alreadyNoted += 1;
       } else if (outcome === "gateSkipped") {
         summary.gateSkipped += 1;
+      } else if (outcome === "echoSkipped") {
+        summary.echoSkipped += 1;
       } else {
         summary.failed += 1;
       }
@@ -644,8 +911,12 @@ async function main(): Promise<void> {
   await emitCost(costs);
 }
 
-main().catch((error) => {
-  log(`fatal: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`);
-  console.log(JSON.stringify({ ok: false, reason: "sweep_error" }));
-  process.exit(1);
-});
+// `import.meta.main` so the pure helpers (the authoring prompt, the echo-phrase reader)
+// can be imported by the unit test without the sweep firing (the enrich-sweep pattern).
+if (import.meta.main) {
+  main().catch((error) => {
+    log(`fatal: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`);
+    console.log(JSON.stringify({ ok: false, reason: "sweep_error" }));
+    process.exit(1);
+  });
+}
