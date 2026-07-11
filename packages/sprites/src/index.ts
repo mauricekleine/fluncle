@@ -8,12 +8,17 @@
 //
 // One family, one source of truth, many consumers (web, CLI, OG cards, …).
 
-/** The sprite sets. Today only the Galaxy game's sprites remain. */
-export type SpriteCollection = "galaxy";
+/**
+ * The sprite sets. `galaxy` is the game's set; `void` is the black hole at the empty
+ * coordinate (the /404 page — a finding Fluncle went looking for and found nothing
+ * where it should be). Same family, one shared perspective/light/palette.
+ */
+export type SpriteCollection = "galaxy" | "void";
 
 /** Every sprite id, by collection (the file at `assets/<collection>/<id>.png`). */
 export const SPRITES = {
   galaxy: ["asteroid", "earth", "roadster", "ship", "ufo"],
+  void: ["accretion", "discman", "event-horizon"],
 } as const satisfies Record<SpriteCollection, readonly string[]>;
 
 /** A sprite reference — a collection + an id within it. */
