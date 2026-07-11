@@ -3,6 +3,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { HeadContent, Outlet, Scripts, createRootRoute } from "@tanstack/react-router";
 import { type ReactNode, useState } from "react";
+import { PublicChrome } from "@/components/nav/public-chrome";
 import { siteUrl } from "../lib/fluncle-links";
 import { fluncleMetaDescription } from "../lib/identity";
 import appCss from "../styles.css?url";
@@ -173,7 +174,12 @@ function RootLayout(): ReactNode {
             ignition; breath gated to no-preference in CSS). */}
         <div aria-hidden="true" className="sun-bloom" />
         <QueryClientProvider client={queryClient}>
-          <Outlet />
+          {/* The single mount point for the public navigation: it selects the
+              operator's variant, skips /admin + full-bleed surfaces, and renders the
+              dev-only variation picker (dead in prod). */}
+          <PublicChrome>
+            <Outlet />
+          </PublicChrome>
         </QueryClientProvider>
         <Scripts />
       </body>

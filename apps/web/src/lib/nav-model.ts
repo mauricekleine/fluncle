@@ -1,0 +1,253 @@
+// The one shared navigation model — the single source of truth every public-nav
+// variant reads, so the four variants differ in ARCHITECTURE (where the nav lives:
+// a top strip, a bottom colophon, a left spine, an on-demand drawer) and never in
+// their link list. Add a surface here once; all four pick it up (the same
+// registry-driven discipline as @fluncle/registry, scoped to the human nav).
+//
+// PURE DATA on purpose (no React, no icons, no I/O): the icon mapping lives in the
+// rendering layer (components/nav/nav-icons.tsx), the socials keep their brand marks
+// there too. Keeping this a plain `.ts` module lets the completeness test read the
+// model without pulling in the whole component tree — and lets a crawler-facing
+// footer be built from it deterministically.
+//
+// Fluncle is a GRAPH archive: the log is the trunk (findings ↔ artists ↔ galaxies ↔
+// the logbook, with LABEL pages landing soon). This model is that trunk in nav form;
+// the in-page cross-links (the /log prose galaxy + artist links) are the branches.
+
+import {
+  galaxyUrl,
+  radioUrl,
+  repoUrl,
+  spotifyPlaylistUrl,
+  blueskyUrl,
+  instagramUrl,
+  mixcloudUrl,
+  soundcloudUrl,
+  telegramUrl,
+  tiktokUrl,
+  twitchUrl,
+  xUrl,
+  youtubeUrl,
+} from "./fluncle-links";
+
+/** A dialog-backed call to action (rendered by the variant, not a hyperlink). */
+export type NavAction = "submit" | "subscribe";
+
+/**
+ * One navigable target. Three kinds so a variant can render each honestly:
+ * - `route`    an internal TanStack `<Link>` (a real same-origin `<a href>`), the
+ *              crawl path between indexes;
+ * - `external` an off-site `<a target="_blank" rel="noreferrer">` (Spotify, radio,
+ *              the socials, the repo);
+ * - `action`   a dialog CTA (submit a track, subscribe) — no destination URL.
+ */
+export type NavItem = {
+  /** Stable id: React keys, the icon map, and the completeness test all key off it. */
+  id: string;
+  /** The link label — sentence case, never uppercase-tracked (DESIGN.md typography). */
+  label: string;
+  /** A one-line gloss for the roomy surfaces (the drawer, the colophon). Fluncle voice. */
+  blurb?: string;
+  /**
+   * Not yet shipped (LABEL pages). Kept in the model so the slot is designed and a
+   * single `enabled: true` lights it up the day the route lands — never rendered as
+   * a live link meanwhile (no 404s in the nav).
+   */
+  future?: boolean;
+  /**
+   * Operator-only (the /mix set-builder is admin-gated). Present for completeness,
+   * skipped by every PUBLIC variant via `publicItems()`.
+   */
+  adminOnly?: boolean;
+  /**
+   * Gated on a runtime signal resolved client-side (`/galaxies` 404s until the whole
+   * sonic map is named). The variant hides it until the gate opens — self-healing.
+   */
+  gate?: "galaxies";
+} & (
+  | { kind: "route"; to: string; params?: Record<string, string> }
+  | { kind: "external"; href: string }
+  | { kind: "action"; action: NavAction }
+);
+
+/** A titled group of items (Explore / Listen / Crew). */
+export type NavSection = {
+  id: "explore" | "listen" | "crew";
+  label: string;
+  items: NavItem[];
+};
+
+/** An off-site profile in the "Follow Fluncle" row (icon supplied by the renderer). */
+export type NavSocial = { id: string; label: string; href: string };
+
+/** A terminal-voiced developer surface in the "For the nerds" row. */
+export type NavNerd =
+  | { id: string; label: string; kind: "docs"; splat: string }
+  | { id: string; label: string; kind: "external"; href: string };
+
+// ── Explore ─────────────────────────────────────────────────────────────────────
+// The certified graph: the log and everything cross-linked off it.
+const exploreItems: NavItem[] = [
+  {
+    blurb: "Every finding, one coordinate each.",
+    id: "log",
+    kind: "route",
+    label: "Log",
+    to: "/log",
+  },
+  {
+    blurb: "Everyone I've found a banger from.",
+    id: "artists",
+    kind: "route",
+    label: "Artists",
+    to: "/artists",
+  },
+  {
+    blurb: "The archive, grouped by how it hits.",
+    gate: "galaxies",
+    id: "galaxies",
+    kind: "route",
+    label: "Galaxies",
+    to: "/galaxies",
+  },
+  {
+    blurb: "The voyage, one entry per sector-day.",
+    id: "logbook",
+    kind: "route",
+    label: "Logbook",
+    to: "/logbook",
+  },
+  {
+    blurb: "Long sets. Me, dreaming.",
+    id: "mixtapes",
+    kind: "route",
+    label: "Mixtapes",
+    to: "/mixtapes",
+  },
+  {
+    blurb: "The imprints behind the bangers.",
+    future: true,
+    id: "labels",
+    kind: "route",
+    label: "Labels",
+    to: "/labels",
+  },
+  {
+    adminOnly: true,
+    blurb: "Chain your own set.",
+    id: "mix",
+    kind: "route",
+    label: "Mix",
+    to: "/mix",
+  },
+];
+
+// ── Listen ──────────────────────────────────────────────────────────────────────
+const listenItems: NavItem[] = [
+  {
+    blurb: "The findings on Spotify.",
+    href: spotifyPlaylistUrl,
+    id: "playlist",
+    kind: "external",
+    label: "Playlist",
+  },
+  {
+    blurb: "One synchronized run of the log.",
+    href: radioUrl,
+    id: "radio",
+    kind: "external",
+    label: "Radio",
+  },
+];
+
+// ── Crew ────────────────────────────────────────────────────────────────────────
+const crewItems: NavItem[] = [
+  {
+    blurb: "What a Log ID is, and who's logging.",
+    id: "about",
+    kind: "route",
+    label: "About",
+    to: "/about",
+  },
+  {
+    blurb: "The week's findings, in your inbox.",
+    id: "newsletter",
+    kind: "route",
+    label: "Newsletter",
+    to: "/newsletter",
+  },
+  {
+    action: "submit",
+    blurb: "Heard something? Send it my way.",
+    id: "submit",
+    kind: "action",
+    label: "Submit a track",
+  },
+];
+
+export const navSections: NavSection[] = [
+  { id: "explore", items: exploreItems, label: "Explore" },
+  { id: "listen", items: listenItems, label: "Listen" },
+  { id: "crew", items: crewItems, label: "Crew" },
+];
+
+// Fluncle off-site, alphabetical (docs/socials/). Spotify is the Playlist link in
+// Listen, so it stays out of the icon strip to avoid a duplicate.
+export const navFollow: NavSocial[] = [
+  { href: blueskyUrl, id: "bluesky", label: "Fluncle on Bluesky" },
+  { href: instagramUrl, id: "instagram", label: "Fluncle on Instagram" },
+  { href: mixcloudUrl, id: "mixcloud", label: "Fluncle on Mixcloud" },
+  { href: soundcloudUrl, id: "soundcloud", label: "Fluncle on SoundCloud" },
+  { href: telegramUrl, id: "telegram", label: "Fluncle on Telegram" },
+  { href: tiktokUrl, id: "tiktok", label: "Fluncle on TikTok" },
+  { href: twitchUrl, id: "twitch", label: "Fluncle on Twitch" },
+  { href: xUrl, id: "x", label: "DM me on X" },
+  { href: youtubeUrl, id: "youtube", label: "Fluncle on YouTube" },
+];
+
+// The terminal surfaces (DESIGN.md mono voice): the CLI/DIG/MCP/SSH docs pages plus
+// the open-source repo. Docs pages route through the /docs/$ splat.
+export const navNerds: NavNerd[] = [
+  { id: "cli", kind: "docs", label: "CLI", splat: "cli" },
+  { id: "dig", kind: "docs", label: "DIG", splat: "dig" },
+  { href: repoUrl, id: "git", kind: "external", label: "GIT" },
+  { id: "mcp", kind: "docs", label: "MCP", splat: "mcp" },
+  { id: "ssh", kind: "docs", label: "SSH", splat: "ssh" },
+];
+
+// The two identity CTAs reused across the variant headers. `galaxy` is the ONE gold
+// sun (DESIGN.md One Sun); `joinCrew` is the conventional sign-up slot.
+export const navPrimaryCta = {
+  galaxy: { href: galaxyUrl, id: "galaxy", label: "Enter Fluncle's Galaxy" },
+  joinCrew: { id: "join-crew", label: "Join the crew", to: "/account" },
+} as const;
+
+/** The docs index — linked from the footer so `/docs` is never an orphan. */
+export const navDocsHome = { id: "docs", label: "Docs", to: "/docs" } as const;
+
+/**
+ * The public subset of a section's items: drops the admin-only ones (the /mix
+ * builder). Future items are KEPT here (a variant renders them as a disabled
+ * "soon" slot); the galaxies gate is applied by the renderer, which has the
+ * runtime signal.
+ */
+export function publicItems(section: NavSection): NavItem[] {
+  return section.items.filter((item) => !item.adminOnly);
+}
+
+/**
+ * The items a PUBLIC variant should actually render for a section: drops admin-only
+ * items, and drops the galaxies-gated item until its runtime gate opens. Future
+ * items are kept (rendered as a disabled "soon" slot).
+ */
+export function renderableItems(section: NavSection, galaxiesLive: boolean): NavItem[] {
+  return publicItems(section).filter((item) => item.gate !== "galaxies" || galaxiesLive);
+}
+
+/** Every internal route path the model points at (for the completeness test). */
+export function navRoutePaths(): string[] {
+  return navSections
+    .flatMap((section) => section.items)
+    .flatMap((item) => (item.kind === "route" ? [item.to] : []))
+    .concat(navPrimaryCta.joinCrew.to, navDocsHome.to);
+}
