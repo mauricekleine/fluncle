@@ -46,13 +46,16 @@ type AlbumPageData =
 
 /**
  * Resolve the album page's data. Extracted from the server fn so the indexability decision
- * is unit-testable (see -album-page.test.ts), the `resolveArtistPageData` precedent.
+ * is unit-testable (see -graph-pages.test.ts), the `resolveArtistPageData` precedent.
  *
- * The zero-finding guard is the same one `/label/<slug>` carries, and it says the same
- * thing: **the catalogue DEEPENS a page, it never CREATES one.** An `albums` row is already
- * minted only off a certified finding, so today it can only fire if a finding was later
- * removed — but the rule belongs on both graph pages, stated once and tested, rather than
- * held implicitly by a write path a future writer could widen.
+ * A record earns a page on its CONTENT, exactly as a label does (`/label/<slug>` carries the
+ * long version of this note): a tracklist is a real page whether or not Fluncle has certified
+ * anything off it, and what keeps a stub out of the index is the thin-content gate below,
+ * counting TOTAL renderable tracks. An `albums` row is minted only off a certified finding
+ * today, so a findings-free record page is currently unreachable — but the two graph pages
+ * hold the same rule, so neither drifts when the crawler's write paths widen.
+ *
+ * A slug with no `albums` row at all is still MISSING, and still 404s.
  */
 export async function resolveAlbumPageData(slug: string): Promise<AlbumPageData> {
   const album = await getAlbumBySlug(slug);
@@ -68,20 +71,17 @@ export async function resolveAlbumPageData(slug: string): Promise<AlbumPageData>
     getLabelForAlbum(album.id),
   ]);
 
-  if (findings.length === 0) {
-    return { status: "missing" };
-  }
-
   return {
     artists,
     catalogue: catalogue.tracks,
     // The record's cover is its freshest finding's album art — never invented, never
-    // re-hosted (the `i.scdn.co` attribution-by-link precedent).
+    // re-hosted (the `i.scdn.co` attribution-by-link precedent). A record with no finding
+    // has no cover of its own to show, and shows none.
     coverImageUrl: findings[0]?.albumImageUrl,
     findings,
     // Thin-content gate: index only past ALBUM_INDEX_MIN_TRACKS RENDERABLE tracks — the
-    // findings plus the quieter rows, because both are real content on the page. The
-    // sitemap keys off the same numbers (the entity's TRUE catalogue total, never the
+    // findings PLUS the quieter rows, because both are real content on the page. The
+    // sitemap keys off the same sum (the entity's TRUE catalogue total, never the
     // rendered slice), so an indexable page is never orphaned from it.
     indexable: findings.length + catalogue.total >= ALBUM_INDEX_MIN_TRACKS,
     label,
@@ -104,10 +104,13 @@ function albumHead(loaderData: AlbumPageData | undefined) {
   const pageUrl = `${siteUrl}/album/${slug}`;
   // Honestly-plain third-person for the machine-facing strings (the Narrator rule).
   const title = `${name} · Fluncle's Findings`;
+  // It describes the page it is actually on, and never claims findings a page does not have.
+  // It also never names the tier the quieter rows belong to — that tier has no public name
+  // (docs/album-entity.md), so "catalogue" cannot leak into a SERP snippet.
   const description =
     findings.length > 0
       ? `Every banger Fluncle has found on ${name} and logged in the Galaxy, ${findings.length} so far, each with a coordinate.`
-      : `${name} in Fluncle's Galaxy.`;
+      : `The tracks on ${name}, charted in Fluncle's Galaxy.`;
   const imageUrl =
     spotifyAlbumImageAtSize(coverImageUrl, "large") ?? `${siteUrl}/fluncle-cover.png`;
 
@@ -169,6 +172,7 @@ function AlbumPage() {
   }
 
   const { artists, catalogue, findings, label, name } = data;
+  const signature = albumSignatureLine(name, findings.length, firstFoundAt(findings));
 
   return (
     <main className="log-plate-stage">
@@ -176,10 +180,9 @@ function AlbumPage() {
         <header className="log-masthead">
           <p className="log-nameplate">Fluncle's Findings</p>
           <h1 className="log-coordinate log-index-title artist-name">{name}</h1>
-          <p className="log-index-intro">
-            {albumSignatureLine(name, findings.length, firstFoundAt(findings))}
-          </p>
-          {/* The album → label edge, the one link the label page has no twin for. The imprint's
+          {/* No findings, no line. The masthead is just the name (lib/graph-prose.ts). */}
+          {signature ? <p className="log-index-intro">{signature}</p> : undefined}
+          {/* The album → label edge, the one link the label page has no twin for. The label's
               NAME is the graph link; the "On" that introduces it is not part of the entity. */}
           {label ? (
             <p className="graph-uplink">
@@ -191,7 +194,8 @@ function AlbumPage() {
           ) : undefined}
         </header>
 
-        {/* The findings lead. Always. */}
+        {/* Every band below is conditional: an empty one renders nothing at all, so this page
+            is only ever about what it actually carries (components/graph-sections.tsx). */}
         <FindingsGrid findings={findings} label={`Findings on ${name}`} />
 
         <ArtistChips artists={artists} title={`Artists on ${name}`} />

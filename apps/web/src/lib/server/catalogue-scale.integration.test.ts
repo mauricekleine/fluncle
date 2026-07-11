@@ -17,14 +17,28 @@ import { renderSitemap } from "./sitemap-test-kit";
 //      — 3,000 rows through the markup, again through the hydration payload, and a third time
 //      as JSON-LD. An indexed seek that returns 3,000 rows is still 3,000 rows.
 //
-//   2. A label the CRAWLER discovered — `undecided`, zero findings, hundreds of crawled rows
-//      hanging off it — got a live, INDEXABLE `/label/<slug>` page whose entire content was a
-//      wall of Spotify outlinks under "Nothing logged off this one yet." Eight of them were
-//      live in that same run, and none was in the sitemap (the sitemap inner-joins findings),
-//      breaking the invariant album-entity.md states outright.
+//   2. A label the CRAWLER discovered — zero findings, hundreds of crawled rows hanging off
+//      it — got a live, indexable `/label/<slug>` page whose entire content was a wall of
+//      Spotify outlinks under the heading "Nothing logged off this one yet." That is a
+//      doorway page: a page whose stated subject is a thing that is not on it.
 //
-// The rule that falls out, and the one this file exists to defend:
-// **the catalogue DEEPENS a page, it never CREATES one.**
+// ── THE FIX FOR (2) IS NOT A 404 ────────────────────────────────────────────────────────
+// It first shipped as one ("zero findings ⇒ the page 404s"), and that was too blunt. A label
+// with 700 crawled releases and no finding is a genuinely useful page — an honest record of
+// what that label put out — and throwing it away discards the whole point of having crawled
+// it. The page existing was never the problem. The HOLLOW RENDERING was.
+//
+// So the page stays and the hollow rendering goes: every band on a graph page is CONDITIONAL
+// (graph-sections.tsx), so a page with no findings never mentions findings, has no heading
+// over an empty band, and apologises for nothing. It is then simply about the tracks it has.
+//
+// What keeps a STUB out of the index is the thin-content gate, and it counts TOTAL renderable
+// tracks — findings plus the quieter rows — because a page is thin or not thin on what it
+// RENDERS, never on who wrote it. Two crawled rows: thin, `noindex`, no sitemap slot. Nine
+// hundred: a page, and the sitemap carries it.
+//
+// The rail that never moved, and the one this file still exists to defend: a crawled TRACK is
+// never a finding and never earns a `/log` URL, however many of them there are.
 //
 // It runs on the in-memory libSQL database built from the generated migrations, so the schema
 // under test is byte-identical to production. (Volume, never TIMING: AGENTS.md is explicit
@@ -173,13 +187,24 @@ describe("a graph page's quieter rows are CAPPED, and the total is counted in SQ
   });
 });
 
-describe("the catalogue DEEPENS a page — it never CREATES one", () => {
-  it("404s a label the crawler discovered but Fluncle never certified anything on", async () => {
+describe("a label earns a page on its content, not on Fluncle's", () => {
+  it("SERVES the label the crawler discovered, with no findings band and no apology", async () => {
     const { resolveLabelPageData } = await import("../../routes/label.$slug");
 
-    // Metalheadz has 400 crawled rows and a live `labels` row. It has no finding, so it has
-    // no page — however much content a crawler hung off it.
-    await expect(resolveLabelPageData("metalheadz")).resolves.toEqual({ status: "missing" });
+    // Metalheadz has 400 crawled rows and no finding. It is a page: a real record of what the
+    // label put out. It used to 404.
+    const data = await resolveLabelPageData("metalheadz");
+
+    if (data.status !== "found") {
+      throw new Error("a discovered label must have a page");
+    }
+
+    // Nothing in the findings band ⇒ FindingsGrid renders nothing at all. No heading, no
+    // "Nothing logged off this one yet.", no empty state. That line is what made it a doorway.
+    expect(data.findings).toEqual([]);
+    expect(data.catalogue.length).toBeGreaterThan(0);
+    // 400 crawled rows clears the renderable floor, so it is a real, indexable page.
+    expect(data.indexable).toBe(true);
   });
 
   it("still serves the label Fluncle DID certify on, findings first", async () => {
@@ -193,7 +218,11 @@ describe("the catalogue DEEPENS a page — it never CREATES one", () => {
     expect(data.findings.map((finding) => finding.logId)).toEqual(["004.7.2I"]);
   });
 
-  it("keeps the zero-finding label out of the /labels index too", async () => {
+  it("keeps the zero-finding label out of the /labels HUB — that list is Fluncle's own", async () => {
+    // The hub and the sitemap answer different questions, and this is the seam. `/labels` says
+    // "every label I've pulled a banger off", so a label he has certified nothing on is not on
+    // it and would be a lie if it were. The SITEMAP is the machine's complete map of pages that
+    // exist, and it DOES carry Metalheadz (asserted below). Narrower hub, complete sitemap.
     const { listLabelsWithFindingCounts } = await import("./labels");
     const entries = await listLabelsWithFindingCounts();
 
@@ -203,26 +232,36 @@ describe("the catalogue DEEPENS a page — it never CREATES one", () => {
 });
 
 describe("the sitemap at catalogue volume", () => {
-  it("adds exactly ZERO <loc>s for 1,300 crawled rows", async () => {
+  it("gives 1,300 crawled TRACKS exactly ZERO URLs of their own", async () => {
+    // THE RAIL, and it never moved: a crawled track is not a finding, has no coordinate, and
+    // never earns a `/log` URL. The catalogue can grow without bound and the finding count in
+    // the sitemap does not move. What the crawl DOES earn is a page for the ENTITY the tracks
+    // hang off — which is the next test, and the deliberate reversal.
     const { xml } = await renderSitemap();
     const locs = xml.match(/<loc>/g) ?? [];
 
-    // 10 hubs + 1 finding + 1 label page (Hospital: 1 finding + 900 quieter rows clears the
-    // renderable floor). Not one of the 1,300 crawled tracks earns a URL.
+    // 10 hubs + 1 finding + 2 label pages (Hospital: 1 finding + 900 rows; Metalheadz: 400
+    // rows, no finding — both clear the renderable floor). Not one crawled TRACK earns a URL.
     expect(xml).toContain("/log/004.7.2I");
     expect(xml).toContain("/label/hospital-records");
     expect(xml).not.toContain("Crawled");
     expect(xml).not.toContain("mb_lbl_");
-    expect(locs).toHaveLength(12);
+    expect(locs).toHaveLength(13);
   });
 
-  it("never lists the discovered label — the page 404s, so the sitemap must not point at it", async () => {
-    // The invariant album-entity.md states: an indexable page is never orphaned from the
-    // sitemap. Its contrapositive is this one — the sitemap never points at a page that is not
-    // there. Both halves now hold at catalogue scale.
+  it("LISTS the discovered label — the page exists, so the sitemap must point at it", async () => {
+    // The invariant album-entity.md states, in both directions: an indexable page is never
+    // orphaned from the sitemap, and the sitemap never points at a page that is not there.
+    // Metalheadz now HAS a page (400 crawled rows, past the floor), so the first half of the
+    // invariant now obliges the sitemap to carry it. It previously (correctly, for the rule of
+    // the day) asserted the exact opposite.
+    //
+    // This is the assertion that would have caught the orphaning if the 404 had been dropped
+    // without touching the sitemap: the page's own `indexable` and the sitemap's membership
+    // are computed from the same floor, and they must agree.
     const { xml } = await renderSitemap();
 
-    expect(xml).not.toContain("/label/metalheadz");
+    expect(xml).toContain("/label/metalheadz");
   });
 
   it("stays a sitemap INDEX — the URLs live in children, so it cannot breach 50,000", async () => {

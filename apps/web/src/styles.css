@@ -3877,14 +3877,6 @@ body::before {
   max-width: 34rem;
 }
 
-/* The group headings (Artists / Labels / Albums / Tracks) are the Label role: DESIGN.md §3 sets
-   a column header at 700, and the shared Shadcn command primitive ships `font-medium` (500).
-   Corrected here rather than in the primitive, so the admin surfaces that use the same
-   component keep their own weight. Never uppercase-tracked, per the same rule. */
-.search-dialog [cmdk-group-heading] {
-  font-weight: 700;
-}
-
 /* The four example queries — the empty state, and the whole tutorial. Pills, because a pill
    reads as "press me" without shouting, and because four of them fit a line and a half
    without becoming a menu. */
@@ -4175,13 +4167,15 @@ body::before {
   }
 }
 
+/* Sentence case, as authored. VOICE.md reserves ALL CAPS for cover-art brand marks (the
+   "RAVE TERMINAL" plate) and asks for sentence case in every heading and label — and a
+   colophon heading is a door you walk through, not a brand plate. Tracked caps also fought
+   the copy: "TRAVEL ALONG" reads as a sign, "Travel along" reads as the uncle saying it. */
 .nav-footer-heading {
   color: var(--stardust);
-  font-size: 0.72rem;
-  font-weight: 800;
-  letter-spacing: 0.08em;
+  font-size: 0.78rem;
+  font-weight: 700;
   margin-bottom: 0.65rem;
-  text-transform: uppercase;
 }
 
 .nav-footer-col ul {
@@ -4258,12 +4252,12 @@ body::before {
   padding-top: 1.25rem;
 }
 
+/* The sibling of .nav-footer-heading ("Follow Fluncle", "For the nerds") — same register,
+   same sentence case, so the colophon reads as one voice rather than half of it shouting. */
 .nav-footer-rowlabel {
   color: var(--stardust);
-  font-size: 0.72rem;
-  font-weight: 800;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  font-size: 0.78rem;
+  font-weight: 700;
 }
 
 .nav-follow {

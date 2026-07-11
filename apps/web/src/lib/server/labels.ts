@@ -214,15 +214,16 @@ export async function getLabelBySlug(slug: string): Promise<LabelRecord | undefi
  * label wins, which is the honest answer and a stable one. Undefined when no finding on the
  * album carries a label.
  *
- * Only CERTIFIED tracks vote, and the second reason is the load-bearing one:
+ * Only CERTIFIED tracks vote, and it is now the HONEST reason carrying this alone: this edge
+ * says "the label Fluncle's finding came out on", and a crawled row that merely shares a
+ * release is not evidence about that. Let the whole catalogue vote and a compilation's thirty
+ * crawled rows outvote the one finding the page is ABOUT.
  *
- * - The honest one: this edge says "the imprint Fluncle's finding came out on". A crawled row
- *   that merely shares a release is not evidence about that. Let the whole catalogue vote and
- *   a compilation's thirty crawled rows outvote the one finding the page is ABOUT.
- * - The structural one: a label with zero findings has no public page (`resolveLabelPageData`
- *   404s it). An uncertified vote could therefore WIN, and the album page would render a link
- *   — and an `@id` in its schema.org graph — pointing at a 404. Findings-only makes that
- *   unreachable rather than unlikely.
+ * It used to have a second, structural reason — a zero-finding label 404'd, so an uncertified
+ * winner would point the link (and an `@id` in the schema.org graph) at a page that was not
+ * there. That reason is GONE: a label earns a page on its content now, so an uncertified
+ * winner would resolve fine. The findings-only vote stays anyway, because it was always the
+ * better answer on the merits; it just no longer has a safety net under it.
  */
 export async function getLabelForAlbum(albumId: string): Promise<LabelRecord | undefined> {
   const db = await getDb();
@@ -287,6 +288,71 @@ export async function listLabelsWithFindingCounts(): Promise<LabelIndexEntry[]> 
     findingCount: Number(row.finding_count),
     lastmod: row.lastmod ?? undefined,
     name: row.name,
+    slug: row.slug,
+  }));
+}
+
+/** A sitemap candidate: an entity whose page clears the thin-content floor. */
+export type EntitySitemapRow = {
+  coverImageUrl: string | undefined;
+  /** Freshest finding date on the entity, or undefined when it carries none. */
+  lastmod: string | undefined;
+  slug: string;
+};
+
+/**
+ * Every LABEL whose page clears the thin-content floor — findings or no findings.
+ *
+ * ── WHY THIS IS NOT `listLabelsWithFindingCounts` ───────────────────────────────────────
+ * That read is the `/labels` HUB: Fluncle's own editorial list of the labels he has pulled a
+ * banger off, so it drives from the findings join and a label he never certified on is
+ * rightly absent. The SITEMAP asks a different question — "what pages exist and may be
+ * indexed?" — and since a label page now exists on crawled content alone, answering it with
+ * the hub's read would orphan every one of those pages from the sitemap. That orphaning is
+ * precisely the invariant album-entity.md states ("an indexable page is never orphaned from
+ * it"), so the two reads have to differ.
+ *
+ * ── THE FLOOR IS APPLIED IN SQL ─────────────────────────────────────────────────────────
+ * `having` it, not filtering it in the isolate: a wide crawl mints a `labels` row per imprint
+ * it walks past and most will sit on one or two rows, so filtering in TypeScript would drag
+ * every one of those stubs across the wire to throw them away (AGENTS.md — never rank or
+ * filter a growing table in the Worker). `minTracks` is the caller's constant, so the gate
+ * has exactly one definition and the page and the sitemap cannot drift apart.
+ *
+ * The counts are conditional aggregates over ONE pass (`left join findings`), which is
+ * strictly less work than the hub read it replaces here: that one did the same grouped scan
+ * AND two correlated subqueries per row.
+ */
+export async function listLabelSitemapRows(minTracks: number): Promise<EntitySitemapRow[]> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [minTracks],
+    // A finding counts only when it is coordinate-bearing (`log_id is not null`), because
+    // that is exactly what the page renders in the grid; a catalogue row is the anti-join's
+    // complement. Their sum is the RENDERABLE track count the page's `indexable` keys off,
+    // so the two agree by construction.
+    sql: `select labels.slug as slug,
+                 max(findings.added_at) as lastmod,
+                 (select t2.album_image_url
+                    from findings f2 join tracks t2 on t2.track_id = f2.track_id
+                    where t2.label_id = labels.id and f2.log_id is not null
+                    order by f2.added_at desc limit 1) as cover_url
+          from labels
+          join tracks on tracks.label_id = labels.id
+          left join findings on findings.track_id = tracks.track_id
+          group by labels.id
+          having sum(case when findings.log_id is not null then 1 else 0 end)
+               + sum(case when findings.track_id is null then 1 else 0 end) >= ?
+          order by labels.slug asc`,
+  });
+
+  return typedRows<{
+    cover_url: string | null;
+    lastmod: string | null;
+    slug: string;
+  }>(result.rows).map((row) => ({
+    coverImageUrl: row.cover_url ?? undefined,
+    lastmod: row.lastmod ?? undefined,
     slug: row.slug,
   }));
 }

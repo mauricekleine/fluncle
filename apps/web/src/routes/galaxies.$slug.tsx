@@ -5,6 +5,7 @@ import { galaxyIntroLine } from "@/lib/graph-prose";
 import { StoryNotFoundState } from "@/components/stories/stories-states";
 import { TrackArtwork } from "@/components/track-artwork";
 import { siteUrl } from "@/lib/fluncle-links";
+import { findingsCount } from "@/lib/format";
 import { jsonLdScript } from "@/lib/json-ld";
 import { galaxyBreadcrumbsJsonLd, musicPlaylistJsonLd } from "@/lib/log-schema";
 import { artistTitleLine } from "@/lib/log-prose";
@@ -155,7 +156,7 @@ function GalaxyPage() {
                   >
                     <span className="galaxy-adjacent-name">{neighbour.name}</span>
                     <span className="galaxy-adjacent-count">
-                      {neighbour.memberCount} {neighbour.memberCount === 1 ? "finding" : "findings"}
+                      {findingsCount(neighbour.memberCount)}
                     </span>
                   </GraphLink>
                 </li>

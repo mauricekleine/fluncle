@@ -52,6 +52,7 @@ import {
   type ArtistSocialPlatform,
   isHttpUrl,
 } from "@/lib/artist-socials";
+import { findingsCount } from "@/lib/format";
 import { isAdminRequest } from "@/lib/server/admin-auth";
 import {
   artistNeedsLook,
@@ -374,8 +375,8 @@ function ArtistAccordion({
           </Badge>
         ) : null}
         <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
-          {artist.findingCount} finding{artist.findingCount === 1 ? "" : "s"} ·{" "}
-          {artist.socials.length} link{artist.socials.length === 1 ? "" : "s"}
+          {findingsCount(artist.findingCount)} · {artist.socials.length} link
+          {artist.socials.length === 1 ? "" : "s"}
         </span>
       </button>
 

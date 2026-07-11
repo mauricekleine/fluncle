@@ -42,6 +42,19 @@ export function formatDurationField(durationMs?: number | null): string {
   return durationMs ? formatDuration(durationMs) : "";
 }
 
+/**
+ * "1 finding" / "12 findings" — the ONE place the noun is pluralized.
+ *
+ * A finding is the only named object in Fluncle's world, so its count is printed on half the
+ * surfaces in the app (the label/album/artist cards, the galaxy cards, the admin rows), and
+ * every one of them used to inline its own `count === 1 ? … : …`. That is a bug per copy of
+ * the ternary waiting to happen, and one of them shipped ("1 findings"). Counting is not a
+ * per-surface decision; it is arithmetic. Route every count string through here.
+ */
+export function findingsCount(count: number): string {
+  return `${count} ${count === 1 ? "finding" : "findings"}`;
+}
+
 export function formatIsoDuration(durationMs: number): string {
   // schema.org duration (ISO-8601), e.g. "PT3M37S".
   const totalSeconds = Math.round(durationMs / 1000);

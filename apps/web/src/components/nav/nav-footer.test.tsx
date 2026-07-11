@@ -83,7 +83,7 @@ describe("NavFooter SSR anchors", () => {
     expect(html).toContain("<footer");
     // The two browse groups are separately labelled landmarks — the fork is in the DOM,
     // not just in the ink (what he DID vs what he found it AMONG).
-    expect(html).toContain('aria-label="The trail"');
-    expect(html).toContain('aria-label="The crates"');
+    expect(html).toContain('aria-label="Travel along"');
+    expect(html).toContain('aria-label="Browse"');
   });
 });

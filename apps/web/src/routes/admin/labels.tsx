@@ -19,6 +19,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@fluncle/ui/components/dropdown-menu";
+import { findingsCount } from "@/lib/format";
 import { isAdminRequest } from "@/lib/server/admin-auth";
 import { listLabels } from "@/lib/server/labels";
 
@@ -183,10 +184,6 @@ function Section({
 }
 
 /** The finding count, spoken the way the rest of the admin speaks a count. */
-function findingsMeta(count: number): string {
-  return `${count} finding${count === 1 ? "" : "s"}`;
-}
-
 function LabelRow({ label }: { label: LabelAdminItem }) {
   const queryClient = useQueryClient();
   const [error, setError] = useState<string | undefined>();
@@ -205,7 +202,7 @@ function LabelRow({ label }: { label: LabelAdminItem }) {
       trailing={
         <>
           <span className="text-xs text-muted-foreground tabular-nums">
-            {findingsMeta(label.findingCount)}
+            {findingsCount(label.findingCount)}
           </span>
           {rule.isPending ? (
             <CircleNotchIcon

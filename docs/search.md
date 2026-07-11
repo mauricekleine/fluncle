@@ -66,11 +66,7 @@ All three are from [docs/local-database.md](./local-database.md), all three are 
 
 A track with no `findings` row comes back with `certified: false`, **no coordinate**, and a Spotify URL. It renders in DESIGN.md's **Unlit Rule** register: no gold, no coordinate, the Dust Veil on hover, and a link OUT (there is no `/log` page for a track Fluncle has not been to).
 
-**It is never named.** No badge on those rows, no noun of its own, and no heading that names the tier. It is not a concept the reader is asked to learn. _"Finding" stays the only named object in Fluncle's world._
-
-The results do sit under a single **`Tracks`** heading, and that is the honest way to head a mixed list rather than an exception to the rule. `tracks` is the universal music object and `findings` is a certification laid on top of one — so the word is true of every row beneath it, certified or not, and singles out none of them. It names the SHAPE of the rows, never the tier they came from. `Findings` over that list would be a false certification claim the moment an uncertified row appeared under it. The graph pages get no heading at all, and that is the same rule rather than a different one: their uncertified block is homogeneous, so any word over it would be the tier's name ([docs/album-entity.md](./album-entity.md); the ratified test lives in DESIGN.md's Unlit Rule).
-
-Separately, every row in the dialog sits in a `CommandGroup` — and that is a LAYOUT invariant, not a copy one. The group carries the padding (`p-1`), so a row rendered loose in the `CommandList` sits 4px left of a row inside a group; the track rows once were, and the list read as broken. One rail means one container for every row, heading or no heading.
+**It is never named.** No heading over those rows, no badge on them, no noun anywhere. The tier is not a concept the reader is asked to learn. _"Finding" stays the only named object in Fluncle's world._
 
 The one place certified-first is **not** applied is the sonic ranking, and that is arithmetic rather than taste: `bm25` is corpus-relative (scores across a 60-row and a 41k-row corpus are not on one scale, so a blended text ranking would be meaningless), while a cosine distance is a property of two vectors and nothing else. Sound can be ranked honestly across both tiers; text cannot.
 
