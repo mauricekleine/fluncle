@@ -1,5 +1,7 @@
 import { Link, createFileRoute, notFound } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
+import { GraphLink } from "@/components/graph-link";
+import { galaxyIntroLine } from "@/lib/graph-prose";
 import { StoryNotFoundState } from "@/components/stories/stories-states";
 import { TrackArtwork } from "@/components/track-artwork";
 import { siteUrl } from "@/lib/fluncle-links";
@@ -34,16 +36,6 @@ const fetchGalaxy = createServerFn({ method: "GET" })
     ({ data: { slug } }): Promise<GalaxyPageData | null> =>
       getGalaxyLensPage(slug, GALAXY_PAGE_LIMIT, 0),
   );
-
-// The galaxy's one-line feel (the Garnish Rule — a real relation with cosmos trim,
-// never a genre claim): what the region IS, said not written, no k-means jargon.
-function galaxyIntroLine(count: number): string {
-  if (count === 1) {
-    return "One finding out here so far, and everything near it in sound.";
-  }
-
-  return `${count} findings that hit the same way, core of the galaxy first.`;
-}
 
 function galaxyHead(loaderData: GalaxyPageData | null | undefined) {
   if (!loaderData) {
@@ -153,16 +145,19 @@ function GalaxyPage() {
             <ul className="galaxy-adjacent-list">
               {adjacent.map((neighbour) => (
                 <li key={neighbour.slug}>
-                  <Link
+                  {/* The same graph link, chip skin — the adjacent region previews before you
+                      travel to it. */}
+                  <GraphLink
                     className="galaxy-adjacent-link"
-                    params={{ slug: neighbour.slug }}
-                    to="/galaxies/$slug"
+                    kind="galaxy"
+                    slug={neighbour.slug}
+                    variant="chip"
                   >
                     <span className="galaxy-adjacent-name">{neighbour.name}</span>
                     <span className="galaxy-adjacent-count">
                       {neighbour.memberCount} {neighbour.memberCount === 1 ? "finding" : "findings"}
                     </span>
-                  </Link>
+                  </GraphLink>
                 </li>
               ))}
             </ul>

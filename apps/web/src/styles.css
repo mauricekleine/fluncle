@@ -1791,22 +1791,6 @@ body::before {
   color: var(--starlight-cream);
 }
 
-/* The artist name links under a finding's title (the /log page) + the artist
-   page's own name. Subtle by default, cream on hover — a quiet cross-link. */
-.log-artist-link {
-  color: inherit;
-  text-decoration: none;
-  text-decoration-color: color-mix(in oklch, var(--primary) 40%, transparent);
-  text-underline-offset: 0.18em;
-  transition: color 150ms ease-out;
-}
-
-.log-artist-link:hover,
-.log-artist-link:focus-visible {
-  color: var(--starlight-cream);
-  text-decoration: underline;
-}
-
 /* The galaxy clause's link inside the definitional prose (browse-by-feel RFC): the
    name + " galaxy" links into the /galaxies/<slug> lens. A quiet inline cross-link,
    the primary hue on hover — the one way into the region from a /log page. */
@@ -2030,16 +2014,6 @@ body::before {
   color: var(--muted-foreground);
   font-size: 0.82rem;
   margin-top: 0.5rem;
-}
-
-.graph-uplink a {
-  color: var(--stardust);
-  text-decoration: none;
-}
-
-.graph-uplink a:hover,
-.graph-uplink a:focus-visible {
-  color: var(--starlight-cream);
 }
 
 /* ── THE UNLIT REGISTER ────────────────────────────────────────────────────────────────
@@ -4377,4 +4351,123 @@ body::before {
   .nav-nerd-link {
     transition: none;
   }
+}
+
+/* ── THE GRAPH LINK (DESIGN.md, "Graph Link") ─────────────────────────────────────────
+   One style for every entity Fluncle names — artist, label, album, galaxy — wherever the
+   name is read.
+
+   AT REST it is Starlight Cream under a DOTTED underline: legible as a link, quiet as text.
+   It is deliberately NOT gold. Eclipse Gold is the One Sun (the primary action, the focus
+   ring, identity) and a /log page already spends its budget on the Listen CTA, the
+   coordinate, and the galaxy clause; gold-at-rest graph links would make the page a field of
+   suns and the real CTA would stop leading.
+
+   ON HOVER/FOCUS it HEATS to Eclipse Glow and the underline goes SOLID — The Ignition Rule:
+   gold is placed like light, and interaction heats it. Never a dim.
+
+   Contrast (WCAG AA, on the warm-dark plate): Starlight Cream #f4ead7 and Eclipse Glow
+   #ffd057 both clear 4.5:1 comfortably on Deep Field / Tape Black, so BOTH states are legible
+   ink, not decoration. */
+.graph-link {
+  color: var(--starlight-cream);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in oklch, var(--starlight-cream) 45%, transparent);
+  text-decoration-style: dotted;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.2em;
+  transition:
+    color 150ms ease-out,
+    text-decoration-color 150ms ease-out;
+}
+
+.graph-link:hover,
+.graph-link:focus-visible {
+  color: var(--eclipse-glow);
+  text-decoration-color: var(--eclipse-glow);
+  text-decoration-style: solid;
+}
+
+/* The chip skin: the same link and the same card, worn by a host that already draws the
+   affordance (an avatar chip, an adjacent-galaxy tile). No underline — a chip is not a word in
+   a sentence — and the host's own hover state does the heating. */
+.graph-link--chip {
+  color: inherit;
+  text-decoration: none;
+}
+
+/* The card. A quiet plate over the cosmos: the entity's own opening line, a few covers, the
+   count. It carries NO gold at all — it is a preview, not an action, and it must not spend the
+   One Sun budget just by existing. */
+.graph-card {
+  background: color-mix(in oklch, var(--tape-black) 94%, transparent);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--dust-line);
+  gap: 0.5rem;
+  max-width: 20rem;
+  width: 18rem;
+}
+
+.graph-card-name {
+  color: var(--starlight-cream);
+  font-size: 0.9rem;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.graph-card-covers {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.graph-card-cover {
+  border: 1px solid var(--dust-line);
+  border-radius: 4px;
+  height: 2.5rem;
+  object-fit: cover;
+  width: 2.5rem;
+}
+
+.graph-card-line {
+  color: var(--stardust);
+  font-size: 0.82rem;
+  line-height: 1.4;
+  text-wrap: pretty;
+}
+
+.graph-card-count {
+  color: var(--stardust);
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  opacity: 0.75;
+  text-transform: uppercase;
+}
+
+.graph-card-loading {
+  color: var(--stardust);
+  font-size: 0.82rem;
+  opacity: 0.7;
+}
+
+/* The card must not animate in for a reader who asked for no motion: it appears, it does not
+   arrive. The colour-only transition on the link itself is kept (a colour change is not
+   motion), matching how the rest of the app degrades. */
+@media (prefers-reduced-motion: reduce) {
+  .graph-card {
+    animation: none !important;
+    transition: none !important;
+  }
+
+  .graph-link {
+    transition: none;
+  }
+}
+
+/* The feed row's link is STRETCHED (a `::after` over the whole row), which paints in the
+   positioned layer and would otherwise swallow the imprint's graph link beneath it. Lift the
+   link out — the same escape `.track-play` and `.track-actions` already make. The row still
+   opens the finding everywhere else; only the imprint's own name goes to the imprint. */
+.track-label .graph-link {
+  position: relative;
+  z-index: 1;
 }

@@ -27,6 +27,12 @@ export const TrackListItemSchema = z
     addedToSpotify: z.boolean(),
     album: z.string().optional(),
     albumImageUrl: z.string().optional(),
+    // The `/album/<slug>` page this finding's record has, read through the `tracks.album_id`
+    // pointer — so it is present ONLY when the album entity really exists (an album is minted
+    // off a certified finding). This is what turns the album NAME into a graph link: a
+    // `GraphLink` renders with the page, server-side, with no lookup of its own. Its absence
+    // is the honest "there is nowhere to send you", and the name stays plain text.
+    albumSlug: z.string().optional(),
     // ISO timestamp of the last analysis write (bpm/key/features); RFC bpm-key-accuracy.
     // Written on every successful analysis; ADMIN-ONLY like the sources — `toPublicTrackListItem`
     // strips it before any public read. Read-only observability: the freshness companion to
@@ -75,6 +81,10 @@ export const TrackListItemSchema = z
     // Key provenance — see `bpmSource` above. Admin-only (public-stripped).
     keySource: z.string().optional(),
     label: z.string().optional(),
+    // The `/label/<slug>` page this finding's imprint has — the `tracks.label_id` twin of
+    // `albumSlug` above, and the same contract: present only when the label entity exists,
+    // so a graph link never points at a 404.
+    labelSlug: z.string().optional(),
     logId: z.string().optional(),
     logPageUrl: z.string().optional(),
     note: z.string().optional(),

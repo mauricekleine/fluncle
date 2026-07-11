@@ -8,7 +8,7 @@ import {
 } from "@/components/graph-sections";
 import { StoryNotFoundState } from "@/components/stories/stories-states";
 import { siteUrl } from "@/lib/fluncle-links";
-import { formatDateLong } from "@/lib/format";
+import { firstFoundAt, labelSignatureLine } from "@/lib/graph-prose";
 import { jsonLdScript } from "@/lib/json-ld";
 import { labelBreadcrumbsJsonLd, recordLabelJsonLd } from "@/lib/log-schema";
 import { spotifyAlbumImageAtSize } from "@/lib/media";
@@ -106,38 +106,6 @@ const fetchLabel = createServerFn({ method: "GET" })
   .validator((data: { slug: string }) => data)
   .handler(({ data: { slug } }): Promise<LabelPageData> => resolveLabelPageData(slug));
 
-/**
- * The first-person voice frame — Fluncle framing HIS relationship to the imprint, never a
- * fabricated bio (VOICE.md). It counts FINDINGS only: the quieter rows below are never
- * introduced, never named, and never counted aloud.
- */
-function labelSignatureLine(name: string, findings: TrackListItem[]): string {
-  const dated = findings
-    .map((finding) => finding.addedAt)
-    .filter((addedAt): addedAt is string => Boolean(addedAt))
-    .sort();
-  const firstFoundAt = dated[0];
-  const count = findings.length;
-
-  if (count === 0) {
-    return "Nothing logged off this one yet.";
-  }
-
-  if (!firstFoundAt) {
-    return count === 1
-      ? "One tune off this imprint so far. Play it loud."
-      : `${count} tunes off this imprint so far. Have a dig.`;
-  }
-
-  const when = formatDateLong(firstFoundAt);
-
-  if (count === 1) {
-    return `I pulled my first tune off ${name} on ${when}. Just the one so far. Play it loud.`;
-  }
-
-  return `I pulled my first tune off ${name} on ${when}, and I've logged ${count} off the imprint since. Have a dig.`;
-}
-
 function labelHead(loaderData: LabelPageData | undefined) {
   if (loaderData?.status !== "found") {
     return {};
@@ -225,7 +193,9 @@ function LabelPage() {
         <header className="log-masthead">
           <p className="log-nameplate">Fluncle's Findings</p>
           <h1 className="log-coordinate log-index-title artist-name">{name}</h1>
-          <p className="log-index-intro">{labelSignatureLine(name, findings)}</p>
+          <p className="log-index-intro">
+            {labelSignatureLine(name, findings.length, firstFoundAt(findings))}
+          </p>
         </header>
 
         {/* The findings lead. Always. */}

@@ -508,6 +508,9 @@ const PUBLIC_OPERATION_IDS = [
   "getEdition",
   // Galaxy reads — public, no auth (browse-by-feel RFC).
   "getGalaxy",
+  // The GraphLink hover card's preview read — public, no auth (it carries only what the
+  // entity's own public page already prints).
+  "getGraphPreview",
   "getHealth",
   "getPrivateAccountExport",
   "getPrivateGalaxyProgress",

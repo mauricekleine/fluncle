@@ -15,6 +15,7 @@ import { siteUrl } from "@/lib/fluncle-links";
 import { formatAlbumDuration, formatDateLong, formatDuration } from "@/lib/format";
 import { jsonLdScript } from "@/lib/json-ld";
 import { isLogPageParam } from "@/lib/log-page-param";
+import { GraphLink } from "@/components/graph-link";
 import {
   artistTitleLine,
   definitionalProseSegments,
@@ -22,6 +23,7 @@ import {
   GALAXY_CLAUSE_LEAD,
   GALAXY_CLAUSE_TAIL,
   galaxyClauseLinkText,
+  LABEL_CLAUSE_LEAD,
   splitLogId,
 } from "@/lib/log-prose";
 import {
@@ -362,10 +364,12 @@ function LogPage() {
               return (
                 <Fragment key={artist}>
                   {index > 0 ? ", " : null}
+                  {/* Every artist Fluncle has resolved is a graph link. One without an entity
+                      row yet reads as plain text — there is nowhere honest to send you. */}
                   {slug ? (
-                    <Link className="log-artist-link" params={{ slug }} to="/artist/$slug">
+                    <GraphLink kind="artist" slug={slug}>
                       {artist}
-                    </Link>
+                    </GraphLink>
                   ) : (
                     artist
                   )}
@@ -382,20 +386,24 @@ function LogPage() {
           <p className="log-definition-prose">
             {proseSegments.map((segment, index) => (
               <Fragment
-                key={segment.kind === "galaxy" ? `galaxy-${segment.slug}` : `text-${index}`}
+                key={segment.kind === "text" ? `text-${index}` : `${segment.kind}-${segment.slug}`}
               >
                 {index > 0 ? " " : null}
                 {segment.kind === "galaxy" ? (
                   <>
                     {GALAXY_CLAUSE_LEAD}
-                    <Link
-                      className="log-galaxy-link"
-                      params={{ slug: segment.slug }}
-                      to="/galaxies/$slug"
-                    >
+                    <GraphLink kind="galaxy" slug={segment.slug}>
                       {galaxyClauseLinkText(segment.name)}
-                    </Link>
+                    </GraphLink>
                     {GALAXY_CLAUSE_TAIL}
+                  </>
+                ) : segment.kind === "label" ? (
+                  <>
+                    {LABEL_CLAUSE_LEAD}
+                    <GraphLink kind="label" slug={segment.slug}>
+                      {segment.name}
+                    </GraphLink>
+                    {segment.tail}
                   </>
                 ) : (
                   segment.text
@@ -446,16 +454,37 @@ function LogPage() {
               <dd>{track.key}</dd>
             </div>
           ) : undefined}
+          {/* The graph, made walkable. The record and the imprint are entities with pages of
+              their own, and until now they were dead text on the one page that names them
+              both. Each links when its entity row exists (`albumSlug` / `labelSlug` ride in on
+              the same SELECT that loaded the finding — no lookup here); a name with no page
+              behind it stays plain text rather than pointing at a 404. */}
           {track.album ? (
             <div className="log-field">
               <dt>Album</dt>
-              <dd>{track.album}</dd>
+              <dd>
+                {track.albumSlug ? (
+                  <GraphLink kind="album" slug={track.albumSlug}>
+                    {track.album}
+                  </GraphLink>
+                ) : (
+                  track.album
+                )}
+              </dd>
             </div>
           ) : undefined}
           {track.label ? (
             <div className="log-field">
               <dt>Label</dt>
-              <dd>{track.label}</dd>
+              <dd>
+                {track.labelSlug ? (
+                  <GraphLink kind="label" slug={track.labelSlug}>
+                    {track.label}
+                  </GraphLink>
+                ) : (
+                  track.label
+                )}
+              </dd>
             </div>
           ) : undefined}
           {track.isrc ? (

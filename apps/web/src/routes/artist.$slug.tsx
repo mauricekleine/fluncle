@@ -15,11 +15,12 @@ import {
 } from "simple-icons";
 import { ArtistAvatar } from "@/components/artist-avatar";
 import { BrandIcon } from "@/components/brand-icon";
+import { GraphLink } from "@/components/graph-link";
 import { StoryNotFoundState } from "@/components/stories/stories-states";
 import { TrackArtwork } from "@/components/track-artwork";
 import { type ArtistSocialPlatform } from "@/lib/artist-socials";
 import { siteUrl } from "@/lib/fluncle-links";
-import { formatDateLong } from "@/lib/format";
+import { artistSignatureLine } from "@/lib/graph-prose";
 import { jsonLdScript } from "@/lib/json-ld";
 import { artistBreadcrumbsJsonLd, musicGroupJsonLd } from "@/lib/log-schema";
 import { artistTitleLine } from "@/lib/log-prose";
@@ -152,32 +153,6 @@ const fetchArtist = createServerFn({ method: "GET" })
   .validator((data: { slug: string }) => data)
   .handler(({ data: { slug } }): Promise<ArtistPageData> => resolveArtistPageData(slug));
 
-// The first-person voice frame — Fluncle framing HIS relationship to the findings,
-// never a fabricated bio (VOICE.md); active voice, said-not-written. When he has a
-// first-found date it opens the dossier the logbook way ("first crossed his path
-// on …"); the bare-count line is the pre-dossier fallback.
-function artistSignatureLine(name: string, dossier: ArtistDossier): string {
-  const { findingCount, firstFoundAt } = dossier;
-
-  if (findingCount === 0) {
-    return "Nothing logged from this one yet.";
-  }
-
-  if (!firstFoundAt) {
-    return findingCount === 1
-      ? "I've found just one of their tunes so far. Play it loud."
-      : `I've found ${findingCount} of their tunes so far. Have a dig.`;
-  }
-
-  const when = formatDateLong(firstFoundAt);
-
-  if (findingCount === 1) {
-    return `I first crossed ${name}'s path on ${when}. Just the one so far. Play it loud.`;
-  }
-
-  return `I first crossed ${name}'s path on ${when}, and I've logged ${findingCount} of their tunes since. Have a dig.`;
-}
-
 function artistHead(loaderData: ArtistPageData | undefined) {
   if (loaderData?.status !== "found") {
     return {};
@@ -299,7 +274,9 @@ function ArtistPage() {
         <header className="log-masthead">
           <p className="log-nameplate">Fluncle's Findings</p>
           <h1 className="log-coordinate log-index-title artist-name">{name}</h1>
-          <p className="log-index-intro">{artistSignatureLine(name, dossier)}</p>
+          <p className="log-index-intro">
+            {artistSignatureLine(name, dossier.findingCount, dossier.firstFoundAt)}
+          </p>
         </header>
 
         {/* The findings lead: the logged tracks are the primary entity in the
@@ -342,10 +319,13 @@ function ArtistPage() {
             <ul className="artist-similar-list">
               {dossier.neighbours.map((neighbour) => (
                 <li key={neighbour.slug}>
-                  <Link
+                  {/* The same graph link as everywhere else, in its chip skin — hovering a kin
+                      artist previews them before you commit to the click. */}
+                  <GraphLink
                     className="artist-similar-link"
-                    params={{ slug: neighbour.slug }}
-                    to="/artist/$slug"
+                    kind="artist"
+                    slug={neighbour.slug}
+                    variant="chip"
                   >
                     <ArtistAvatar
                       className="artist-similar-avatar"
@@ -353,7 +333,7 @@ function ArtistPage() {
                       src={neighbour.imageUrl}
                     />
                     <span>{neighbour.name}</span>
-                  </Link>
+                  </GraphLink>
                 </li>
               ))}
             </ul>

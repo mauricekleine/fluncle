@@ -6,9 +6,10 @@ import {
   graphPageTracks,
   UnlitTracks,
 } from "@/components/graph-sections";
+import { GraphLink } from "@/components/graph-link";
 import { StoryNotFoundState } from "@/components/stories/stories-states";
 import { siteUrl } from "@/lib/fluncle-links";
-import { formatDateLong } from "@/lib/format";
+import { albumSignatureLine, firstFoundAt } from "@/lib/graph-prose";
 import { jsonLdScript } from "@/lib/json-ld";
 import { albumBreadcrumbsJsonLd, musicAlbumJsonLd } from "@/lib/log-schema";
 import { spotifyAlbumImageAtSize } from "@/lib/media";
@@ -94,37 +95,6 @@ const fetchAlbum = createServerFn({ method: "GET" })
   .validator((data: { slug: string }) => data)
   .handler(({ data: { slug } }): Promise<AlbumPageData> => resolveAlbumPageData(slug));
 
-/**
- * The first-person voice frame — Fluncle framing HIS relationship to the record. It counts
- * FINDINGS only: the quieter rows below are never introduced, never named, never counted.
- */
-function albumSignatureLine(name: string, findings: TrackListItem[]): string {
-  const dated = findings
-    .map((finding) => finding.addedAt)
-    .filter((addedAt): addedAt is string => Boolean(addedAt))
-    .sort();
-  const firstFoundAt = dated[0];
-  const count = findings.length;
-
-  if (count === 0) {
-    return "Nothing logged off this one yet.";
-  }
-
-  if (!firstFoundAt) {
-    return count === 1
-      ? "One tune off this record so far. Play it loud."
-      : `${count} tunes off this record so far. Have a dig.`;
-  }
-
-  const when = formatDateLong(firstFoundAt);
-
-  if (count === 1) {
-    return `I pulled my first tune off ${name} on ${when}. Just the one so far. Play it loud.`;
-  }
-
-  return `I pulled my first tune off ${name} on ${when}, and I've logged ${count} off it since. Have a dig.`;
-}
-
 function albumHead(loaderData: AlbumPageData | undefined) {
   if (loaderData?.status !== "found") {
     return {};
@@ -206,13 +176,17 @@ function AlbumPage() {
         <header className="log-masthead">
           <p className="log-nameplate">Fluncle's Findings</p>
           <h1 className="log-coordinate log-index-title artist-name">{name}</h1>
-          <p className="log-index-intro">{albumSignatureLine(name, findings)}</p>
-          {/* The album → label edge, the one link the label page has no twin for. */}
+          <p className="log-index-intro">
+            {albumSignatureLine(name, findings.length, firstFoundAt(findings))}
+          </p>
+          {/* The album → label edge, the one link the label page has no twin for. The imprint's
+              NAME is the graph link; the "On" that introduces it is not part of the entity. */}
           {label ? (
             <p className="graph-uplink">
-              <Link params={{ slug: label.slug }} to="/label/$slug">
-                On {label.name}
-              </Link>
+              On{" "}
+              <GraphLink kind="label" slug={label.slug}>
+                {label.name}
+              </GraphLink>
             </p>
           ) : undefined}
         </header>
