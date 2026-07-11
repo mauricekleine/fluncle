@@ -17,6 +17,7 @@
 // The Worker owns the Postiz key; the agent/CLI never sees it.
 
 import { readEnv, readOptionalEnv } from "./env";
+import { logEvent } from "./log";
 import { ApiError } from "./spotify";
 
 const DEFAULT_BASE = "https://api.postiz.com/public/v1";
@@ -225,7 +226,7 @@ export async function getDatedPosts(): Promise<PostizListPost[]> {
 
   // Log the raw body for observability — so the operator can inspect exactly what
   // Postiz returns for each platform (and so we can tighten the resolver from it).
-  console.warn(`postiz: GET /posts${query} raw body:`, JSON.stringify(raw));
+  logEvent("warn", "postiz.posts-raw-body", { query, raw });
 
   const posts = isRecord(raw) && Array.isArray(raw.posts) ? (raw.posts as unknown[]) : [];
 
@@ -268,7 +269,7 @@ export async function getMissingContent(
 
   // Log the FULL raw body so the operator can inspect exactly what Postiz returns
   // for the TikTok path (and so we can tighten the permalink builder from real data).
-  console.warn(`postiz: /posts/${postId}/missing raw body:`, JSON.stringify(raw));
+  logEvent("warn", "postiz.missing-raw-body", { postId, raw });
 
   const items = Array.isArray(raw) ? (raw as Array<{ id?: unknown; url?: unknown }>) : [];
 
@@ -501,7 +502,7 @@ export async function postizSetReleaseId(postId: string, releaseId: string): Pro
   });
 
   if (!response.ok) {
-    console.warn(`postiz: release-id link failed for ${postId} (${response.status})`);
+    logEvent("warn", "postiz.release-link-failed", { postId, status: response.status });
   }
 }
 

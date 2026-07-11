@@ -35,6 +35,7 @@ import {
   upsertClipPost,
 } from "../clip-social";
 import { createClip, deleteClip, getClip, listClips, markClipCutDone, updateClip } from "../clips";
+import { logEvent } from "../log";
 import { postizSetReleaseId, pushInstagramReel, resolveSocialUrl } from "../postiz";
 import { clipDownloadUrls } from "../../studio-clips";
 import { youtubeDescription } from "../../mixtape-chapters";
@@ -92,7 +93,7 @@ async function captureDripPermalinks(): Promise<number> {
       await postizSetReleaseId(row.postizId, resolved.nativeId);
       captured += 1;
     } catch (error) {
-      console.warn(`drip_clips: failed to capture the IG permalink for clip ${row.clipId}`, error);
+      logEvent("warn", "drip-clips.ig-permalink-capture-failed", { clipId: row.clipId, error });
     }
   }
 
@@ -347,10 +348,11 @@ export function adminMixtapesHandlers(os: Implementer) {
         });
 
         await trySetThumbnail(mixtape.logId, videoId).catch((error) => {
-          console.warn(
-            `[mixtape ${input.mixtapeId}] YouTube thumbnail set failed (non-fatal):`,
-            error instanceof Error ? error.message : String(error),
-          );
+          logEvent("warn", "mixtape.youtube-thumbnail-set-failed", {
+            error,
+            logId: mixtape.logId,
+            mixtapeId: input.mixtapeId,
+          });
         });
 
         return { mixtape, ok: true as const, platform: "youtube" };
@@ -747,7 +749,7 @@ export function adminMixtapesHandlers(os: Implementer) {
           await setClipPostStatus(item.clipId, "posted", { postizId: postId });
           posted += 1;
         } catch (error) {
-          console.warn(`drip_clips: failed to post clip ${item.clipId} to Instagram`, error);
+          logEvent("warn", "drip-clips.instagram-post-failed", { clipId: item.clipId, error });
           await setClipPostStatus(item.clipId, "failed");
           failed += 1;
         }

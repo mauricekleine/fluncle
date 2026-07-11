@@ -12,6 +12,7 @@ import { type ClipDTO } from "@fluncle/contracts/orpc";
 import { buildClipCaption } from "./clip-caption";
 import { nextDripSlot, upsertClipPost } from "./clip-social";
 import { getDb, typedRow, typedRows } from "./db";
+import { logEvent } from "./log";
 import { getRecording } from "./recordings";
 import { ApiError } from "./spotify";
 
@@ -175,7 +176,7 @@ export async function createClip(recordingId: string, input: ClipInput): Promise
       scheduledFor: await nextDripSlot(),
     });
   } catch (error) {
-    console.warn(`createClip: failed to auto-queue clip ${id} onto the drip-feed`, error);
+    logEvent("warn", "clips.auto-queue-failed", { clipId: id, error });
   }
 
   return rowToClip(await getClipRow(id));

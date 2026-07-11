@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { type ArtistSocialPlatform, ARTIST_SOCIAL_PLATFORMS } from "../artist-socials";
 import { getDb, typedRow, typedRows } from "./db";
+import { logEvent } from "./log";
 import { fetchArtistImages } from "./spotify";
 import { fold } from "./track-match";
 
@@ -319,7 +320,7 @@ export function parseArtistsJson(value: string): string[] {
       return artists.filter((artist): artist is string => typeof artist === "string");
     }
   } catch (error) {
-    console.warn("parseArtistsJson: malformed artists_json column", error);
+    logEvent("warn", "artists.parse-artists-json-failed", { error });
     return [];
   }
 
@@ -496,7 +497,7 @@ export async function upsertTrackArtists(
   try {
     await fillMissingArtistImages(spotifyArtistIds);
   } catch (error) {
-    console.warn("upsertTrackArtists: artist image fill failed (non-fatal)", error);
+    logEvent("warn", "artists.image-fill-failed", { error, trackId });
   }
 }
 

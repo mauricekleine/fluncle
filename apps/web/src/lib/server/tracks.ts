@@ -15,6 +15,7 @@ import { parseArtistsJson } from "./artists";
 import { getDb, typedRow, typedRows } from "./db";
 import { discogsReleaseUrl } from "./discogs";
 import { cosineFromDistance, embeddingVectorSql, parseEmbedding, toVectorProbe } from "./embedding";
+import { logEvent } from "./log";
 import {
   type MixCandidate,
   orderMixPath,
@@ -206,7 +207,7 @@ function parseObservationAlignment(
 
     return words.length > 0 ? { words } : undefined;
   } catch (error) {
-    console.warn("parseObservationAlignment: malformed observation_alignment_json column", error);
+    logEvent("warn", "tracks.parse-observation-alignment-failed", { error });
     return undefined;
   }
 }
@@ -227,7 +228,7 @@ function parseFeatures(json: string | null): TrackFeatures | undefined {
     };
     return Object.values(features).some((v) => v !== undefined) ? features : undefined;
   } catch (error) {
-    console.warn("parseFeatures: malformed features_json column", error);
+    logEvent("warn", "tracks.parse-features-failed", { error });
     return undefined;
   }
 }

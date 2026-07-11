@@ -26,6 +26,7 @@
 // the add — same side-channel discipline as enrichFromDeezer / lastfmLove.
 
 import { readOptionalEnv } from "./env";
+import { logEvent } from "./log";
 
 const DISCOGS_API_ROOT = "https://api.discogs.com";
 const MUSICBRAINZ_API_ROOT = "https://musicbrainz.org/ws/2";
@@ -264,7 +265,12 @@ function mbFetch<T>(path: string, signal?: RateLimitSignal): Promise<T | undefin
       // 503 is MB's "slow down"; honour Retry-After and try again within this slot.
       if (response.status === 503 && attempt < 2) {
         const retryAfter = Number(response.headers.get("Retry-After")) || 2;
-        console.warn(`[musicbrainz] 503 for ${path} — retry ${attempt + 1}/2 after ${retryAfter}s`);
+        logEvent("warn", "musicbrainz.retry", {
+          attempt: attempt + 1,
+          path,
+          retryAfterSeconds: retryAfter,
+          status: 503,
+        });
         await delay(rateLimitIntervalMs === 0 ? 0 : retryAfter * 1000);
         continue;
       }
@@ -278,7 +284,11 @@ function mbFetch<T>(path: string, signal?: RateLimitSignal): Promise<T | undefin
       if (!response.ok) {
         // Surface the status — a swallowed 400 (bad inc) or 403 (bad User-Agent) is
         // otherwise indistinguishable from a genuine no-match. Visible in `wrangler tail`.
-        console.warn(`[musicbrainz] ${response.status} ${response.statusText} for ${path}`);
+        logEvent("warn", "musicbrainz.request-failed", {
+          path,
+          status: response.status,
+          statusText: response.statusText,
+        });
         return undefined;
       }
 
@@ -485,7 +495,11 @@ function discogsFetch<T>(
         // Surface the status — a swallowed 401 (bad/expired token) or an exhausted 429
         // looks exactly like a no-match downstream, so a wrong prod token reads as a
         // clean "0 resolved". Visible in `wrangler tail`.
-        console.warn(`[discogs] ${response.status} ${response.statusText} for ${path}`);
+        logEvent("warn", "discogs.request-failed", {
+          path,
+          status: response.status,
+          statusText: response.statusText,
+        });
         return undefined;
       }
 
@@ -761,11 +775,7 @@ export async function discogsResolveRelease(
   } catch (error) {
     // Side-channel: log and continue. Read-only, so a later backfill is harmless;
     // the add must never fail on a Discogs/MB miss.
-    console.error(
-      `Discogs resolve failed for "${cleanArtist} — ${cleanTitle}": ${
-        error instanceof Error ? error.message : String(error)
-      }`,
-    );
+    logEvent("error", "discogs.resolve-failed", { artist: cleanArtist, error, title: cleanTitle });
 
     return signal.hit ? { rateLimited: true } : {};
   }

@@ -19,6 +19,7 @@
 
 import { twitchUrl } from "../fluncle-links";
 import { getDb, typedRow } from "./db";
+import { logEvent } from "./log";
 import { pinChatMessage, postLiveToTelegram, unpinChatMessage } from "./telegram";
 
 // The single `live_state` row's PK — one channel, one row.
@@ -89,7 +90,7 @@ export async function getLiveState(): Promise<LiveState> {
 
     return { on: true, startedAt: row.started_at, title: row.title, url: twitchUrl };
   } catch (error) {
-    console.error("getLiveState: read failed (treating as offline)", error);
+    logEvent("error", "live.state-read-failed", { error });
     return OFFLINE;
   }
 }
@@ -133,18 +134,18 @@ export async function setLiveState(input: SetLiveInput): Promise<void> {
           await pinChatMessage(messageId);
         } catch (pinError) {
           // A missing pin right degrades to a plain ping — never blocks go-live.
-          console.error("setLiveState: pin failed (callout sent unpinned)", pinError);
+          logEvent("error", "live.callout-pin-failed", { error: pinError });
         }
       }
     } catch (error) {
-      console.error("setLiveState: live callout post failed (best-effort)", error);
+      logEvent("error", "live.callout-post-failed", { error });
     }
   } else if (wasLive && !input.live) {
     if (tgMessageId !== null) {
       try {
         await unpinChatMessage(tgMessageId);
       } catch (error) {
-        console.error("setLiveState: unpin failed (best-effort)", error);
+        logEvent("error", "live.callout-unpin-failed", { error });
       }
     }
 

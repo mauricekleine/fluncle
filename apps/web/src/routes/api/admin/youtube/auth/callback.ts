@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { type ApiHandlers, aliasHandlers } from "../../../-alias";
 import { jsonError, verifyState } from "../../../../../lib/server/env";
+import { logEvent } from "../../../../../lib/server/log";
 import { exchangeCodeForYouTubeToken } from "../../../../../lib/server/youtube";
 
 // Google redirects here after the consent screen. We verify the signed state
@@ -39,7 +40,7 @@ export const serverHandlers: ApiHandlers = {
     } catch (authError) {
       // Raw token-exchange detail goes to the server log, not the wire to this
       // unauthenticated callback; keep the code the board keys on, answer plainly.
-      console.error("youtube auth callback:", authError);
+      logEvent("error", "youtube.auth-callback-failed", { error: authError });
       return jsonError(
         400,
         "youtube_auth_failed",
