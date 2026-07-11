@@ -17,9 +17,8 @@
 // carries no coordinate, and links OUT to Spotify, because there is no `/log` page to go to.
 // It is never labelled, never introduced, and never given a noun of its own: no badge on those
 // rows, and no heading that names the TIER. "Finding" stays the only named object in Fluncle's
-// world. The rows do sit under a "Tracks" heading, and that costs the rule nothing: `tracks` is
-// the universal music object and a finding is a certification laid on top of one, so the word is
-// true of every row under it and singles out none of them. It names the shape, not the tier.
+// world. The rows DO sit under a "Tracks" heading, which names the superset rather than either
+// tier — the ratified test is in DESIGN.md's Unlit Rule, the reasoning in docs/search.md.
 // The focus ring stays Eclipse Gold on every row either way — focus is an accessibility
 // affordance, not a claim about the music.
 
@@ -429,14 +428,8 @@ function SearchDialog({
             );
           })}
 
-          {/* "Tracks" — the heading names the SUPERSET, which is the only thing it is allowed
-              to do. `tracks` is the universal music object and `findings` is a certification
-              laid on top of it, so every row under here is a track whether Fluncle certified it
-              or not. That is what makes the heading honest over a mixed list: it says what the
-              rows ARE, never which tier they came from. "Findings" would be a lie the moment an
-              uncertified row appears, and anything reaching for the second kind would NAME the
-              unnamed tier. The difference between the two stays where the Unlit Rule puts it —
-              in the register, not in a label. */}
+          {/* "Tracks" names the SUPERSET — true of every row under it, certified or not, and
+              singling out neither. See the file header and DESIGN.md's Unlit Rule. */}
           {data.results.length > 0 ? (
             <CommandGroup heading="Tracks">
               {data.results.map((hit) => (

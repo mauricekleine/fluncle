@@ -3877,6 +3877,14 @@ body::before {
   max-width: 34rem;
 }
 
+/* The group headings (Artists / Labels / Albums / Tracks) are the Label role: DESIGN.md §3 sets
+   a column header at 700, and the shared Shadcn command primitive ships `font-medium` (500).
+   Corrected here rather than in the primitive, so the admin surfaces that use the same
+   component keep their own weight. Never uppercase-tracked, per the same rule. */
+.search-dialog [cmdk-group-heading] {
+  font-weight: 700;
+}
+
 /* The four example queries — the empty state, and the whole tutorial. Pills, because a pill
    reads as "press me" without shouting, and because four of them fit a line and a half
    without becoming a menu. */

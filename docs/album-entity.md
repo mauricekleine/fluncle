@@ -63,6 +63,10 @@ Beneath them sit the **quieter rows**: tracks Fluncle knows of but has never cer
 
 > **The tier has no public name.** It is never introduced, never named, never given a noun, and never counted aloud. There is no heading above those rows and there must never be one. "Finding" remains the only named object in Fluncle's world, and the word "catalogue" never appears in public copy.
 
+The prohibition is on naming the **tier**, and here that means no heading at all: the block on a graph page is **homogeneous** — every row in it is uncertified — so any heading over it would be the tier's name by construction, whatever word it used. That is why the rule reads absolutely on this surface, and it still does.
+
+Search is the one surface where the rule reads differently, and for a structural reason rather than a softer one: its list is **mixed**, ranking findings and uncertified rows together, so a heading there can name the **superset** without naming either kind (`Tracks` — the universal music object, of which a finding is a certification). The same instinct already lives on this page in the `aria-label` below: it names the tracks, never the tier. See [DESIGN.md](../DESIGN.md)'s Unlit Rule for the ratified test.
+
 Visually they are held apart by the **unlit register** (DESIGN.md): no cover and no coordinate (they have none), Stardust ink, a hairline rule as the only separator, and **no gold at rest or on hover** — so a hovered unlit row can never be mistaken for a focused one, and the One Sun budget survives a list that could run to dozens of rows. Focus, and only focus, is loud: the canonical Eclipse-Glow ring. A row links **out** to Spotify (a track with no Log ID has no page here to link to); one with no streaming presence at all renders as plain, unlinked text.
 
 An **empty set renders nothing at all** — not an empty state, not a heading with no rows. Today that is every page (the archive is entirely certified), so the band is simply dark until the catalogue lands.
