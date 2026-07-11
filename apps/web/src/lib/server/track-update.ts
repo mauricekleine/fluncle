@@ -554,3 +554,50 @@ export async function updateTrack(
 
   return { fields: sets.map((set) => set.split(" ")[0] ?? set), trackId };
 }
+
+// THE FILL-EMPTY-ONLY GUARD, as a DB predicate — the race-safe note write. The
+// auto-note agent's cardinal safety guarantee is that it NEVER overwrites an
+// existing note ("the operator override always wins"). `updateTrack`'s note write
+// is unconditional (correct for the operator, who may always overwrite); this is
+// the AGENT-tier fill, where the guard must hold. The `and (note is null or
+// trim(note) = '')` predicate lives in the SQL, not in JS, so an operator note
+// written via `updateTrack` — or a second agent tick — that lands between the
+// handler's read and this write can never lose the race and be clobbered: the
+// loser matches no row and writes nothing. Mirrors the house pattern (submissions'
+// `where … and status = 'pending'` claim, logbook's `on conflict … do nothing`).
+//
+// `note` is a VISIBLE field (it renders on the public `/log` page), so a fill bumps
+// `updated_at` (the sitemap/log lastmod) in the SAME statement — atomically, so the
+// bump happens iff the row was written. The edge-cache purge is likewise gated on a
+// real write: a lost race wrote nothing, so there is nothing to refresh. The caller
+// (the `note_track` handler) has already voice-gated + length-validated the note.
+export async function fillEmptyNote(trackId: string, note: string): Promise<boolean> {
+  const db = await getDb();
+  const existingResult = await db.execute({
+    args: [trackId],
+    sql: `select log_id from tracks where track_id = ? limit 1`,
+  });
+  const existing = typedRow<{ log_id: string | null }>(existingResult.rows);
+
+  if (!existing) {
+    throw new ApiError("not_found", `No track with id ${trackId}`, 404);
+  }
+
+  const result = await db.execute({
+    args: [note, new Date().toISOString(), trackId],
+    sql: `update tracks
+            set note = ?, updated_at = ?
+          where track_id = ?
+            and (note is null or trim(note) = '')`,
+  });
+
+  const filled = result.rowsAffected > 0;
+
+  if (filled) {
+    // Only when the fill actually wrote: refresh the finding's cached `/log` page so
+    // the new note surfaces. A lost race changed nothing, so it must NOT purge.
+    purgeLogCache(existing.log_id);
+  }
+
+  return filled;
+}

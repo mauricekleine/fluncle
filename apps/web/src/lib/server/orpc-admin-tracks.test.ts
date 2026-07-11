@@ -18,6 +18,7 @@ import { AGENT_TOKEN, OPERATOR_TOKEN, readJson, setAdminTokenEnv } from "./orpc-
 //     non-admin a 401, the operator passes.
 
 const updateTrack = vi.fn();
+const fillEmptyNote = vi.fn();
 const getTrackByIdOrLogId = vi.fn();
 const getTrackContextNote = vi.fn();
 const put = vi.fn();
@@ -34,6 +35,7 @@ vi.mock("cloudflare:workers", () => ({
 }));
 
 vi.mock("./track-update", () => ({
+  fillEmptyNote: (...args: unknown[]) => fillEmptyNote(...args),
   updateTrack: (...args: unknown[]) => updateTrack(...args),
 }));
 
@@ -113,6 +115,7 @@ beforeAll(setAdminTokenEnv);
 
 beforeEach(() => {
   updateTrack.mockReset();
+  fillEmptyNote.mockReset();
   getTrackByIdOrLogId.mockReset();
   getTrackContextNote.mockReset().mockResolvedValue(null);
   put.mockReset();
@@ -756,7 +759,7 @@ describe("oRPC note_track (POST /admin/tracks/{trackId}/note)", () => {
 
   it("lets the AGENT author + store the note on an EMPTY-note finding", async () => {
     getTrackByIdOrLogId.mockResolvedValueOnce(TRACK); // TRACK has no `note` → empty
-    updateTrack.mockResolvedValueOnce({ fields: ["note"], trackId: TRACK_ID });
+    fillEmptyNote.mockResolvedValueOnce(true); // the atomic fill won the (uncontested) race
 
     const { handleOrpc } = await import("./orpc");
     const response = await handleOrpc(post("/note", AGENT_TOKEN, { note: GOOD_NOTE }));
@@ -766,9 +769,33 @@ describe("oRPC note_track (POST /admin/tracks/{trackId}/note)", () => {
     expect(data.ok).toBe(true);
     expect(data.skipped).toBeUndefined();
     expect(data.note).toBe(GOOD_NOTE);
-    expect(updateTrack).toHaveBeenCalledWith(TRACK_ID, { note: GOOD_NOTE });
+    // The DB-predicate fill, not an unconditional updateTrack write.
+    expect(fillEmptyNote).toHaveBeenCalledWith(TRACK_ID, GOOD_NOTE);
+    expect(updateTrack).not.toHaveBeenCalled();
     // A fill stamps the "ran" state as done (filled = true).
     expect(recordNoteAttempt).toHaveBeenCalledWith(TRACK_ID, true);
+  });
+
+  // THE RACE IS CLOSED AT THE DB: a note lands between the handler's read and its
+  // write, so the fast-path guard passed but the atomic fill matches no row. The
+  // handler must report skipped and echo the WINNING note — never clobber.
+  it("reports skipped when the atomic fill loses the race (a note landed after the read)", async () => {
+    // Read sees an empty note (fast-path passes) …
+    getTrackByIdOrLogId.mockResolvedValueOnce(TRACK);
+    // … the DB predicate refuses the write (rowsAffected 0) …
+    fillEmptyNote.mockResolvedValueOnce(false);
+    // … and the re-read returns the winner that raced in.
+    getTrackByIdOrLogId.mockResolvedValueOnce({ ...TRACK, note: "The note that won the race." });
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(post("/note", AGENT_TOKEN, { note: GOOD_NOTE }));
+
+    expect(response?.status).toBe(200);
+    const data = (await readJson(response)) as { note: string; ok: boolean; skipped?: boolean };
+    expect(data.skipped).toBe(true);
+    expect(data.note).toBe("The note that won the race.");
+    // The loser stamped "ran" but did NOT fill.
+    expect(recordNoteAttempt).toHaveBeenCalledWith(TRACK_ID, false);
   });
 
   // THE CARDINAL SAFETY GUARANTEE: an operator-written note is NEVER clobbered.
@@ -798,13 +825,13 @@ describe("oRPC note_track (POST /admin/tracks/{trackId}/note)", () => {
     // toTrackListItem trims a whitespace note to undefined, so the guard sees it as
     // empty and the fill proceeds — the same empty-string semantics the queue uses.
     getTrackByIdOrLogId.mockResolvedValueOnce({ ...TRACK, note: undefined });
-    updateTrack.mockResolvedValueOnce({ fields: ["note"], trackId: TRACK_ID });
+    fillEmptyNote.mockResolvedValueOnce(true);
 
     const { handleOrpc } = await import("./orpc");
     const response = await handleOrpc(post("/note", AGENT_TOKEN, { note: GOOD_NOTE }));
 
     expect(response?.status).toBe(200);
-    expect(updateTrack).toHaveBeenCalledWith(TRACK_ID, { note: GOOD_NOTE });
+    expect(fillEmptyNote).toHaveBeenCalledWith(TRACK_ID, GOOD_NOTE);
   });
 
   it("422s a note with a banned identity word before storing (the voice gate)", async () => {
