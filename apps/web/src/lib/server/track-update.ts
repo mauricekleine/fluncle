@@ -97,6 +97,13 @@ export type TrackUpdate = {
   logId?: string;
   note?: string;
   /**
+   * PROVENANCE — the `note_author` prompt version that wrote `note` (0 = the registry's
+   * baked default, N = override N). Set explicitly by the authoring path; when `note` is
+   * written WITHOUT it, the version is cleared to NULL, because an operator-typed note was
+   * written by no prompt. See lib/server/prompts.ts + docs/agents/prompt-registry.md.
+   */
+  notePromptVersion?: number | null;
+  /**
    * Word-level caption timings for the spoken observation, as a JSON string
    * (`ObservationAlignment` from lib/server/observation.ts). Drives the synced radio
    * subtitles. Empty string clears it. NOT in VISIBLE_FIELDS: it describes an EXISTING
@@ -221,6 +228,7 @@ const CERTIFICATION_FIELDS = new Set<keyof TrackUpdate>([
   "galaxyId",
   "logId",
   "note",
+  "notePromptVersion",
   "observationAlignmentJson",
   "observationAudioUrl",
   "observationDurationMs",
@@ -517,14 +525,41 @@ export async function updateTrack(
     args.push(update.sourceAudioBytes);
   }
 
+  // THE PROVENANCE INVARIANT: a `*_prompt_version` column always describes the text
+  // CURRENTLY in its row, or it is NULL. So rewriting the text through this generic path
+  // (the operator typing a note by hand, an admin correction) CLEARS the version in the
+  // same statement — otherwise the row would keep citing the prompt that wrote the note it
+  // just replaced, which is worse than citing nothing: it is a confident wrong answer to
+  // the one question the column exists to answer.
+  //
+  // A caller that KNOWS the provenance (the `note_track` / `observe_track` / `context_track`
+  // paths, which author through a registry prompt) passes the version explicitly and it wins.
+  // See lib/server/prompts.ts + docs/agents/prompt-registry.md.
   if (update.note !== undefined) {
     findingSets.push("note = ?");
     findingArgs.push(update.note);
+
+    if (update.notePromptVersion === undefined) {
+      findingSets.push("note_prompt_version = ?");
+      findingArgs.push(null);
+    }
+  }
+
+  if (update.notePromptVersion !== undefined) {
+    findingSets.push("note_prompt_version = ?");
+    findingArgs.push(update.notePromptVersion);
   }
 
   if (update.contextNote !== undefined) {
     findingSets.push("context_note = ?");
     findingArgs.push(update.contextNote);
+
+    // Same invariant as `note` above: a context note rewritten without a stated provenance
+    // was written by no registry prompt, so the version must go with it.
+    if (update.contextPromptVersion === undefined) {
+      findingSets.push("context_prompt_version = ?");
+      findingArgs.push(null);
+    }
   }
 
   if (update.contextPromptVersion !== undefined) {
@@ -566,6 +601,13 @@ export async function updateTrack(
   if (update.observationPromptVersion !== undefined) {
     findingSets.push("observation_prompt_version = ?");
     findingArgs.push(update.observationPromptVersion);
+  }
+
+  // Same invariant: an observation script rewritten with no stated provenance clears the
+  // version rather than keeping one that describes the script it replaced.
+  if (update.observationScript !== undefined && update.observationPromptVersion === undefined) {
+    findingSets.push("observation_prompt_version = ?");
+    findingArgs.push(null);
   }
 
   if (update.observationScript !== undefined) {
