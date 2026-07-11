@@ -45,7 +45,7 @@ import {
 } from "../observation";
 import { adminAuth, operatorGuard } from "../orpc-auth";
 import { VIDEOS_BUCKET, presignUploads } from "../r2-presign";
-import { type TrackUpdate, updateTrack } from "../track-update";
+import { fillEmptyNote, type TrackUpdate, updateTrack } from "../track-update";
 import { purgeVideoCache } from "../video-cache";
 import {
   type EnrichmentStatusFilter,
@@ -688,12 +688,15 @@ export function adminTracksHandlers(os: Implementer) {
         });
       }
 
-      // THE FILL-EMPTY-ONLY GUARD (the cardinal safety guarantee). `track.note` is
+      // FAST-PATH short-circuit for the fill-empty-only guarantee. `track.note` is
       // `undefined` only when the stored note is empty/whitespace (toTrackListItem
-      // trims it); any non-empty note — operator-written or previously auto-authored
-      // — short-circuits to a no-op. The agent NEVER overwrites an existing note. We
-      // still stamp the "ran" state (the workflow ran; it correctly found nothing to
-      // do) so the board doesn't keep re-queuing a hand-noted finding.
+      // trims it); a note already present here short-circuits to a no-op, which saves
+      // a voice-gate run + a write. This is an OPTIMISATION, not the guarantee: the
+      // cardinal guard — the agent NEVER overwrites an existing note — is now enforced
+      // atomically at the DB by `fillEmptyNote`'s `and (note is null or trim(note) =
+      // '')` predicate below, so a note that lands AFTER this read still can't be
+      // clobbered. We still stamp the "ran" state (the workflow ran; it correctly
+      // found nothing to do) so the board doesn't keep re-queuing a hand-noted finding.
       if (track.note?.trim()) {
         await recordNoteAttempt(track.trackId, false);
 
@@ -711,10 +714,32 @@ export function adminTracksHandlers(os: Implementer) {
       // — the note lands straight on the public /log surface).
       const note = gateNoteText(body.note);
 
-      // Fill the empty note. `parseEditorialNote` re-validates the length against the
-      // public budget on the same path an operator note takes; the gate already
-      // checked it, so this is the byte-identical store, not a second source of truth.
-      await updateTrack(track.trackId, { note: parseEditorialNote(note) });
+      // Fill the empty note ATOMICALLY. The fill-empty-only guard is now a DB
+      // predicate inside `fillEmptyNote` (`and (note is null or trim(note) = '')`),
+      // not the check-then-act above — so an operator note (or a concurrent agent
+      // tick) that landed between our read and this write can NEVER be clobbered: the
+      // loser matches no row and reports `skipped`. `parseEditorialNote` re-validates
+      // the length against the public budget on the same path an operator note takes
+      // (it returns `undefined` only for a non-string input, which `gateNoteText`
+      // has already ruled out — the `?? note` narrows the type without an assertion).
+      const filled = await fillEmptyNote(track.trackId, parseEditorialNote(note) ?? note);
+
+      if (!filled) {
+        // Lost the race: a note landed between our read and this write. The guard held
+        // at the DB, so we wrote nothing — re-read the winner and report skipped,
+        // never clobber. `track.logId` is the immutable coordinate (guarded above).
+        await recordNoteAttempt(track.trackId, false);
+        const current = await requireTrack(idOrLogId);
+
+        return {
+          logId: track.logId,
+          note: current.note ?? note,
+          ok: true as const,
+          skipped: true as const,
+          trackId: track.trackId,
+        };
+      }
+
       await recordNoteAttempt(track.trackId, true);
 
       return {
