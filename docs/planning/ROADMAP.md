@@ -255,6 +255,37 @@ The arc, in the order it wants to be built:
 
 **Open decisions gating the crawl** (RFC §13): the real target size (Discogs holds only ~41k _deduped_ DnB masters — 100k is larger than the recorded genre), the public name for the tier ("the archive" already means the findings), two canon amendments, and — five minutes of operator time that determines the crawl's entire quality — **~8 of the 39 seed labels are not DnB** (Anjunabeats, Armada, Axtone).
 
+## Homogenisation — the next big slice (2026-07-11)
+
+**The observation that names it:** Fluncle's generated artifacts drift toward a mean. It has now been seen independently in two places, which is what makes it a property rather than a pair of bugs.
+
+- **The notes.** Measured, not guessed: the word "shoulders" appears in **15 of 61** live notes; "I've been rewinding it since" is lifted verbatim between two. The un-layered auto-note reproduced a standing GLXY note almost word for word. (The vibe-neighbour layer + echo gate is the first counter-measure — it works by handing the model the neighbourhood's moves as **spent**, and it measurably _reduced_ within-region overlap, 0.041 → 0.015.)
+- **The videos.** They are far better than they were, but the models still skew to the same vehicles. The video work already learned the general law and wrote it down: **parallel generation converges on a shared attractor, so diversity has to be DESIGNED IN, not hoped for** (assign each agent a distinct structural family at launch; prescriptive mid-flight coaching increases convergence rather than fixing it).
+
+**Why it matters more than it looks.** Fluncle's whole claim is that a human with taste went out, dug, and came back with something. An archive whose every artifact rhymes with its neighbours reads as machine-made — which is exactly the thing the persona cannot afford. Sameness is not an aesthetic nit here; it is a credibility leak.
+
+**The shape of the slice (unscoped — wants a real design pass):**
+
+- **Measure it first, everywhere.** The note work shipped `scoreNoteEcho` + a `--dry-run` harness, so the claim stays falsifiable. Every generated artifact family (notes, observations, logbook entries, videos, covers, sprites) wants an equivalent: a cheap, honest diversity metric, run on the real corpus, that tells us whether we are getting worse. **An anti-sameness effort with no metric is folklore.**
+- **Spend the moves.** The mechanism that worked for the notes generalises: show the generator what its neighbours already did, and require it to find what is true of _this_ one and nothing else.
+- **Design the diversity in.** Per the video law: assign the family/angle up front rather than asking for variety.
+- **The long-term drift risk, stated honestly.** The "spent moves" mechanism pushes each new artifact away from what came before. At 61 notes that is a fix. At 300 it could push the voice off its own centre. **Re-measure as the corpus grows** — the harness makes that one command.
+
+**It composes with prompts-in-the-database (below): fighting sameness is an iterative, taste-driven loop — change a prompt, read ten outputs, change it again — and a loop that needs a redeploy per iteration is a loop nobody runs.**
+
+## Prompt management — the `claude -p` prompts belong in the database (idea, 2026-07-11)
+
+Every agentic sweep (the auto-note, the observation script, the Logbook entry, the triage verdict, the context-note distil) carries its prompt as a **string in the repo**. Tuning one means a code change, a review, a deploy, and a box rebake. That is a heavy loop for a thing whose whole nature is iterative — and it is the loop we will be running constantly once we take the homogenisation slice seriously.
+
+**The shape:** prompts live in the database, versioned; the sweeps read them; the operator edits them from `/admin` and the CLI without a deploy.
+
+**The traps, because a prompt IS code:**
+
+- **A bad live edit silently degrades every artifact it touches** until a human notices. So: versioning, a visible diff, and a one-action rollback are not polish, they are the feature.
+- **A sweep must NEVER break because a prompt row is missing.** The repo keeps a baked-in default; the DB row overrides it. A failed read falls back and logs, it does not throw.
+- **The voice gates stay.** A prompt the operator can edit live is not a licence to bypass the gate that keeps Fluncle sounding like Fluncle.
+- **Prompt provenance on the artifact.** If a note was drafted under prompt v7, that should be recoverable — otherwise "the notes got worse last week" is an unanswerable question.
+
 ## The Fluncle models — the voice, the eye, the ear (idea, 2026-07-11)
 
 One arc, three probes. Fluncle already generates — notes, observations, logbook entries, shader videos, sprites, covers — but always by **constraining a stranger**: a general model held in line by a prompt, a skill, and a voice gate. The question this arc asks is what changes when the model has **only ever known Fluncle**.
