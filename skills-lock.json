@@ -98,6 +98,12 @@
       "sourceType": "local",
       "computedHash": "8959d3695cec78581ed311f83f54892ac894184a0abdfacab0e90f8dd2400830"
     },
+    "improve": {
+      "source": "shadcn/improve",
+      "sourceType": "github",
+      "skillPath": "skills/improve/SKILL.md",
+      "computedHash": "39a9358732dcff385e9e4d3e60b4547856f834e54a58b35e455aa9bd49928c13"
+    },
     "postiz": {
       "source": "gitroomhq/postiz-agent",
       "sourceType": "github",
