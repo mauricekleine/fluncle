@@ -182,3 +182,74 @@ test("accumulateCurveAtFrame: deterministic + frame-pure (same frame → same va
   const b = accumulateCurveAtFrame(dropCurve, 90, FPS, 0, 0.9);
   expect(a).toBe(b);
 });
+
+// ---------------------------------------------------------------------------
+// sampleCurve: binary search === the old forward linear scan (frame-stability)
+// ---------------------------------------------------------------------------
+
+// The ORACLE: the exact pre-optimization linear-scan implementation of sampleCurve.
+// The binary-search version MUST match it bit-for-bit or renders would shift.
+const sampleCurveLinearOracle = (curve: EnergySample[], timeMs: number): number => {
+  if (curve.length === 0) {
+    return 0;
+  }
+  const first = curve[0];
+  if (timeMs <= first.timeMs) {
+    return first.energy;
+  }
+  const last = curve[curve.length - 1];
+  if (timeMs >= last.timeMs) {
+    return last.energy;
+  }
+  for (let i = 1; i < curve.length; i++) {
+    const next = curve[i];
+    if (timeMs <= next.timeMs) {
+      const prev = curve[i - 1];
+      const span = next.timeMs - prev.timeMs;
+      if (span <= 0) {
+        return next.energy;
+      }
+      const t = (timeMs - prev.timeMs) / span;
+      return prev.energy + (next.energy - prev.energy) * t;
+    }
+  }
+  return last.energy;
+};
+
+// A tiny deterministic PRNG so the fuzz corpus is reproducible (no test flake).
+const makeRng = (seed: number): (() => number) => {
+  let s = seed >>> 0;
+  return () => {
+    s = (s * 1664525 + 1013904223) >>> 0;
+    return s / 0x100000000;
+  };
+};
+
+test("sampleCurve: binary search is bit-identical to the linear-scan oracle (randomized)", () => {
+  const rng = makeRng(0xc0ffee);
+  for (let trial = 0; trial < 400; trial++) {
+    // Build a time-sorted curve of random length, occasionally injecting DUPLICATE
+    // timeMs values (zero-span segments) since those are the tie-breaking edge case.
+    const len = 1 + Math.floor(rng() * 40);
+    const curve: EnergySample[] = [];
+    let t = Math.floor(rng() * 50);
+    for (let i = 0; i < len; i++) {
+      curve.push({ energy: rng() * 2 - 0.5, timeMs: t });
+      // ~25% of the time keep the same timeMs (duplicate); else advance by 0..30ms.
+      t += rng() < 0.25 ? 0 : Math.floor(rng() * 30);
+    }
+    const lastMs = curve[curve.length - 1].timeMs;
+    // Probe well outside the range on both ends AND densely inside it, plus every
+    // exact sample time (the boundary values the two branches must agree on).
+    const probes: number[] = [-1000, -1, lastMs + 1, lastMs + 1000];
+    for (const s of curve) {
+      probes.push(s.timeMs);
+    }
+    for (let q = 0; q < 60; q++) {
+      probes.push(rng() * (lastMs + 20) - 10);
+    }
+    for (const timeMs of probes) {
+      expect(sampleCurve(curve, timeMs)).toBe(sampleCurveLinearOracle(curve, timeMs));
+    }
+  }
+});
