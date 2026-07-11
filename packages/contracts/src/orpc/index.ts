@@ -92,15 +92,18 @@ export {
   adminCatalogueContract,
   CapturePriorityReasonSchema,
   CatalogueLensSchema,
+  CaptureBudgetStateSchema,
   CatalogueMatchSchema,
   CatalogueSummarySchema,
   CatalogueTrackItemSchema,
   crawlCatalogue,
   CrawlPassSchema,
   CrawlStatusSchema,
+  getCaptureBudget,
   getCrawlStatus,
   listCatalogueTracks,
   rankCatalogue,
+  setCaptureBudget,
 } from "./admin-catalogue";
 export {
   adminLabelsContract,

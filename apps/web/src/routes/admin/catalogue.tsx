@@ -8,7 +8,11 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, redirect, useNavigate } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { type ReactNode } from "react";
-import { type CapturePriorityReason, type CatalogueLens } from "@fluncle/contracts";
+import {
+  type CaptureBudgetState,
+  type CapturePriorityReason,
+  type CatalogueLens,
+} from "@fluncle/contracts";
 import { AdminShell } from "@/components/admin/admin-shell";
 import { ObjectGlyph, ObjectLead, ObjectList, ObjectRow } from "@/components/admin/object-row";
 import { Badge } from "@fluncle/ui/components/badge";
@@ -21,7 +25,11 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@fluncle/ui/components/empty";
+import { Label } from "@fluncle/ui/components/label";
+import { Progress } from "@fluncle/ui/components/progress";
+import { Switch } from "@fluncle/ui/components/switch";
 import { isAdminRequest } from "@/lib/server/admin-auth";
+import { getCatalogueCaptureState } from "@/lib/server/capture-budget";
 import {
   type CatalogueSummary,
   type CatalogueTrackItem,
@@ -60,7 +68,11 @@ import { spotifyAlbumImageAtSize } from "@/lib/media";
 
 const CATALOGUE_KEY = ["admin", "catalogue"] as const;
 
-type CataloguePayload = { summary: CatalogueSummary; tracks: CatalogueTrackItem[] };
+type CataloguePayload = {
+  budget: CaptureBudgetState;
+  summary: CatalogueSummary;
+  tracks: CatalogueTrackItem[];
+};
 
 type CatalogueSearch = { lens: CatalogueLens };
 
@@ -77,12 +89,15 @@ const fetchCatalogue = createServerFn({ method: "GET" })
       throw redirect({ to: "/admin/login" });
     }
 
-    const [tracks, summary] = await Promise.all([
+    const [tracks, summary, budget] = await Promise.all([
       listCatalogueTracks(lens, 50),
       getCatalogueSummary(),
+      // The spend, read through the SAME function the capture queue's brake obeys — so what he
+      // sees here and what the machine does cannot drift.
+      getCatalogueCaptureState(),
     ]);
 
-    return { summary, tracks };
+    return { budget, summary, tracks };
   });
 
 // oxlint-disable-next-line sort-keys
@@ -119,7 +134,15 @@ function AdminCataloguePage() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: CATALOGUE_KEY }),
   });
 
-  const { summary, tracks } = data;
+  // THE KILL SWITCH. It reads back the server's recomputed state rather than assuming the flip
+  // landed, because this is the control he reaches for when the bill is climbing — the one
+  // place a hopeful optimistic update would be a lie.
+  const setPaused = useMutation({
+    mutationFn: (paused: boolean) => putCaptureBudget({ paused }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: CATALOGUE_KEY }),
+  });
+
+  const { budget, summary, tracks } = data;
 
   return (
     <AdminShell
@@ -167,6 +190,17 @@ function AdminCataloguePage() {
             ? "Tracks nobody logged, ranked by how close each one sits to its nearest finding. Every row names the finding it matched — that claim is the whole list. Nothing here has a coordinate, and none of it is a finding until Fluncle says so."
             : "None of these has been heard yet — no audio, so no vector, so nothing to rank. Capture is metered, so they are ordered by what their metadata is worth: an artist already in the archive beats a label already in the archive beats a label the crawler may dig from. A label you ruled out sinks to the bottom, whoever is on it."}
         </p>
+
+        {/* THE SPEND, on the capture lens. It lives here and not on a settings page because
+            this is the list of tracks the money would be spent ON — the cost belongs next to
+            the thing being bought, where he is already looking when he decides. */}
+        {lens === "capture" ? (
+          <CaptureBudgetCard
+            budget={budget}
+            onToggle={(paused) => setPaused.mutate(paused)}
+            pending={setPaused.isPending}
+          />
+        ) : null}
 
         {tracks.length === 0 ? (
           <EmptyCatalogue lens={lens} summary={summary} />
@@ -417,6 +451,127 @@ function CatalogueCover({ cover }: { cover: string | null }) {
   );
 }
 
+const GB = 1024 * 1024 * 1024;
+
+/** GB to two places — the unit the proxy invoices in. A raw byte count is not a cost. */
+function formatGb(bytes: number): string {
+  return `${(bytes / GB).toFixed(2)} GB`;
+}
+
+/** How much of a cap is used, 0–100, clamped (an overshoot pins at full rather than overflowing). */
+function usedPercent(spent: number, cap: number): number {
+  if (cap <= 0) {
+    return 100;
+  }
+
+  return Math.min(100, Math.round((spent / cap) * 100));
+}
+
+/**
+ * THE CAPTURE BUDGET CARD — the spend, made visible, next to the thing being bought.
+ *
+ * Capture is the only thing Fluncle does that bills per unit of work: a residential proxy
+ * charges per GB, and the queue below is a list of tracks it would spend that money on. A
+ * metered thing the operator cannot SEE is a thing he cannot control, so this card answers the
+ * three questions he would otherwise have to go and dig for — what did it buy in the last 24h,
+ * how many GB was that, and how much is left — and puts the kill switch in the same glance.
+ *
+ * The findings line is not a footnote. It is the promise that stopping the catalogue never
+ * stops the archive: pausing here changes nothing about a banger he actually logged.
+ */
+function CaptureBudgetCard({
+  budget,
+  onToggle,
+  pending,
+}: {
+  budget: CaptureBudgetState;
+  onToggle: (paused: boolean) => void;
+  pending: boolean;
+}) {
+  const stopped = !budget.open;
+  const capReached =
+    budget.closedReason === "bytes_spent" || budget.closedReason === "tracks_spent";
+
+  return (
+    <div className="space-y-4 rounded-lg border border-border bg-card p-4">
+      <div className="flex items-start gap-3">
+        <Switch
+          aria-label="Let the catalogue spend on audio capture"
+          checked={!budget.paused}
+          disabled={pending}
+          id="catalogue-capture-switch"
+          onCheckedChange={(next) => onToggle(!next)}
+        />
+        <div className="min-w-0 flex-1 space-y-0.5">
+          <Label htmlFor="catalogue-capture-switch">Buy audio for the catalogue</Label>
+          <p className="text-sm text-muted-foreground">
+            {budget.paused
+              ? "Stopped. Nothing down here is costing you anything. Your findings still capture as normal."
+              : capReached
+                ? "Running, but the last 24h is spent. It picks up again as the window rolls."
+                : "Running. It buys the top of the queue below, up to the budget, and stops."}
+          </p>
+        </div>
+      </div>
+
+      <dl className="grid grid-cols-2 gap-4 sm:grid-cols-3">
+        <Meter
+          detail={`of ${budget.budget.dailyTracks}`}
+          label={`Bought (${budget.windowHours}h)`}
+          percent={usedPercent(budget.spend.tracks, budget.budget.dailyTracks)}
+          value={`${budget.spend.tracks} ${budget.spend.tracks === 1 ? "track" : "tracks"}`}
+        />
+        <Meter
+          detail={`of ${formatGb(budget.budget.dailyBytes)}`}
+          label="Downloaded"
+          percent={usedPercent(budget.spend.bytes, budget.budget.dailyBytes)}
+          value={formatGb(budget.spend.bytes)}
+        />
+        <div className="col-span-2 sm:col-span-1">
+          <dt className="text-xs text-muted-foreground">Left in the window</dt>
+          <dd className="mt-1 text-sm font-medium tabular-nums">
+            {stopped ? (
+              <span className="text-muted-foreground">
+                {budget.paused ? "Stopped by you" : "Spent"}
+              </span>
+            ) : (
+              <>
+                {budget.remainingTracks} {budget.remainingTracks === 1 ? "track" : "tracks"} ·{" "}
+                {formatGb(budget.remainingBytes)}
+              </>
+            )}
+          </dd>
+        </div>
+      </dl>
+    </div>
+  );
+}
+
+/** One cap, as a number and a bar. The bar is what makes "nearly spent" readable at a glance. */
+function Meter({
+  detail,
+  label,
+  percent,
+  value,
+}: {
+  detail: string;
+  label: string;
+  percent: number;
+  value: string;
+}) {
+  return (
+    <div>
+      <dt className="text-xs text-muted-foreground">{label}</dt>
+      <dd className="mt-1 space-y-1.5">
+        <span className="block text-sm font-medium tabular-nums">
+          {value} <span className="font-normal text-muted-foreground">{detail}</span>
+        </span>
+        <Progress aria-label={`${label}: ${value} ${detail}`} value={percent} />
+      </dd>
+    </div>
+  );
+}
+
 // One tick of the agent-tier `rank_catalogue` sweep (POST /admin/catalogue/rank). The browser
 // carries the admin grant cookie; the fetch mirrors the labels/galaxies calls.
 async function postRank(): Promise<void> {
@@ -424,6 +579,23 @@ async function postRank(): Promise<void> {
     body: JSON.stringify({}),
     headers: { "Content-Type": "application/json" },
     method: "POST",
+  });
+
+  if (!response.ok) {
+    throw new Error(await readError(response));
+  }
+}
+
+/** The operator-tier kill switch / cap write (PUT /admin/catalogue/capture-budget). */
+async function putCaptureBudget(input: {
+  dailyBytes?: number;
+  dailyTracks?: number;
+  paused?: boolean;
+}): Promise<void> {
+  const response = await fetch("/api/v1/admin/catalogue/capture-budget", {
+    body: JSON.stringify(input),
+    headers: { "Content-Type": "application/json" },
+    method: "PUT",
   });
 
   if (!response.ok) {

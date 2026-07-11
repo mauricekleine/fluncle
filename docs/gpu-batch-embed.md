@@ -47,6 +47,12 @@ A label the operator ruled out is now **tier −1** — its own tier, strictly b
 
 It is scoped to **capture alone**, deliberately. A ruling governs what Fluncle _acquires_ ([docs/label-entity.md](./label-entity.md) — a capture **is** an acquisition), not what he may measure. If the bytes are already on file, analysing and embedding them is free, and the resulting vector is how The Ear gets to _disagree_ with the ladder.
 
+### …and the order is not the whole budget
+
+The order decides **what** the metered GB buy. It says nothing about **how much** — and a queue drains whatever it is given, so at catalogue scale that gap is ~1,150 songs (~9 GB) a day, forever. The **capture budget** ([docs/the-ear.md](./the-ear.md) § The capture budget) is the how-much: a default-deny kill switch plus a rolling-24h count/byte cap on the `settings` KV, consulted by `listTrackWork` **before** the `capture` worklist is selected.
+
+It is applied here, at the queue, because this function is the only door a catalogue row can reach a metered download through — so every client obeys it. When the budget is shut the capture worklist **narrows to the findings**, never to nothing: the archive is not starved by the telescope. And like the veto, it gates **capture alone** — bytes already bought are free to analyse and embed.
+
 ## The certification rail
 
 One rule, and it is canon: **Fluncle does not speak about a track he has not been to.**

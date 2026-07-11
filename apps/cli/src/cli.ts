@@ -1194,6 +1194,59 @@ function addAdminCommands(program: Command): void {
       await runPublishAdvancePause(false, options, publishAdvancePauseCommand);
     });
 
+  // THE CAPTURE BUDGET — the brake on the metered per-GB audio capture (docs/the-ear.md).
+  // `budget` is the spend readout (agent-allowed); `pause` / `resume` / `set` are the
+  // OPERATOR's controls over how much of his money the machine may spend. One flip, no deploy.
+  const adminCapture = configureCommand(
+    admin.command("capture").description("The metered audio-capture budget and its kill switch"),
+  );
+
+  adminCapture.action(() => {
+    adminCapture.outputHelp();
+  });
+
+  adminCapture
+    .command("budget")
+    .description("What catalogue capture spent in the last 24h, and how much budget is left")
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (options: { json: boolean }) => {
+      const { captureBudgetCommand } = await import("./commands/capture");
+      await runCaptureBudget(options, captureBudgetCommand);
+    });
+
+  adminCapture
+    .command("pause")
+    .description("Stop all catalogue audio capture — the kill switch (operator)")
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (options: { json: boolean }) => {
+      const { setCaptureBudgetCommand } = await import("./commands/capture");
+      await runSetCaptureBudget({ paused: true }, options, setCaptureBudgetCommand);
+    });
+
+  adminCapture
+    .command("resume")
+    .description("Let catalogue audio capture spend again, up to its budget (operator)")
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (options: { json: boolean }) => {
+      const { setCaptureBudgetCommand } = await import("./commands/capture");
+      await runSetCaptureBudget({ paused: false }, options, setCaptureBudgetCommand);
+    });
+
+  adminCapture
+    .command("set")
+    .description("Set the rolling-24h capture caps (operator)")
+    .option("--tracks <n>", "Max catalogue downloads per rolling 24h")
+    .option("--gb <n>", "Max GB downloaded per rolling 24h")
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (options: { gb?: string; json: boolean; tracks?: string }) => {
+      const { setCaptureBudgetCommand } = await import("./commands/capture");
+      await runSetCaptureCaps(options, setCaptureBudgetCommand);
+    });
+
   // Fluncle Studio clips. `list` is the agent-allowed read;
   // `cut` is the box's footage cut — the `fluncle-studio-clip` cron
   // calls `admin clips cut <clipId>` per pending clip (presign + ffmpeg + ship +
@@ -3415,6 +3468,123 @@ async function runPublishAdvance(
   }
 }
 
+// ── The capture budget (the metered per-GB spend) ────────────────────────────────────
+
+const GB = 1024 * 1024 * 1024;
+
+/** Bytes as GB, to two places — the unit he is billed in, never a raw byte count. */
+function formatGb(bytes: number): string {
+  return `${(bytes / GB).toFixed(2)} GB`;
+}
+
+/**
+ * The readout, in one block. It always says the same four things — the state, what it spent,
+ * what is left, and WHY it is shut when it is — because a metered thing you cannot see is a
+ * thing you cannot control.
+ */
+function printCaptureBudget(state: import("@fluncle/contracts").CaptureBudgetState): void {
+  const reason =
+    state.closedReason === "paused"
+      ? "paused — you stopped it"
+      : state.closedReason === "tracks_spent"
+        ? "the daily track cap is spent"
+        : state.closedReason === "bytes_spent"
+          ? "the daily GB cap is spent"
+          : "";
+
+  console.log(
+    state.open
+      ? "Catalogue capture is RUNNING — it may buy audio, up to the budget below."
+      : `Catalogue capture is STOPPED (${reason}). Findings still capture as normal.`,
+  );
+  console.log(
+    `  Last ${state.windowHours}h:  ${state.spend.tracks} ${
+      state.spend.tracks === 1 ? "track" : "tracks"
+    } · ${formatGb(state.spend.bytes)}`,
+  );
+  console.log(
+    `  Budget:    ${state.budget.dailyTracks} tracks · ${formatGb(state.budget.dailyBytes)} per ${state.windowHours}h`,
+  );
+  console.log(
+    `  Left:      ${state.remainingTracks} ${
+      state.remainingTracks === 1 ? "track" : "tracks"
+    } · ${formatGb(state.remainingBytes)}`,
+  );
+}
+
+async function runCaptureBudget(
+  options: { json: boolean },
+  captureBudgetCommand: typeof import("./commands/capture").captureBudgetCommand,
+): Promise<void> {
+  const state = await captureBudgetCommand();
+
+  if (options.json) {
+    printJson(state);
+    return;
+  }
+
+  printCaptureBudget(state);
+}
+
+async function runSetCaptureBudget(
+  input: { dailyBytes?: number; dailyTracks?: number; paused?: boolean },
+  options: { json: boolean },
+  setCaptureBudgetCommand: typeof import("./commands/capture").setCaptureBudgetCommand,
+): Promise<void> {
+  const state = await setCaptureBudgetCommand(input);
+
+  if (options.json) {
+    printJson(state);
+    return;
+  }
+
+  printCaptureBudget(state);
+}
+
+/**
+ * `--tracks` / `--gb` → the two caps. A malformed value is a hard EXIT, never a silent
+ * fallback: on every other command a bad flag is an annoyance, and here it would be a budget
+ * the operator believes he set and did not.
+ */
+async function runSetCaptureCaps(
+  options: { gb?: string; json: boolean; tracks?: string },
+  setCaptureBudgetCommand: typeof import("./commands/capture").setCaptureBudgetCommand,
+): Promise<void> {
+  const input: { dailyBytes?: number; dailyTracks?: number } = {};
+
+  if (options.tracks !== undefined) {
+    const tracks = Number(options.tracks);
+
+    if (!Number.isInteger(tracks) || tracks < 0) {
+      console.error("--tracks must be a whole number of tracks (0 or more).");
+      process.exitCode = 1;
+      return;
+    }
+
+    input.dailyTracks = tracks;
+  }
+
+  if (options.gb !== undefined) {
+    const gb = Number(options.gb);
+
+    if (!Number.isFinite(gb) || gb < 0) {
+      console.error("--gb must be a number of gigabytes (0 or more).");
+      process.exitCode = 1;
+      return;
+    }
+
+    input.dailyBytes = Math.round(gb * GB);
+  }
+
+  if (input.dailyTracks === undefined && input.dailyBytes === undefined) {
+    console.error("Nothing to set — pass --tracks and/or --gb.");
+    process.exitCode = 1;
+    return;
+  }
+
+  await runSetCaptureBudget(input, options, setCaptureBudgetCommand);
+}
+
 async function runPublishAdvancePause(
   paused: boolean,
   options: { json: boolean },
@@ -4737,6 +4907,7 @@ const stringOptions = new Set([
   "--footage-social",
   "--from",
   "--galaxy-id",
+  "--gb",
   "--has-key",
   "--intent",
   "--key",
@@ -4775,6 +4946,7 @@ const stringOptions = new Set([
   "--title",
   "--token",
   "--tracklist-file",
+  "--tracks",
   "--url",
   "--verdict",
   "--verdict-file",

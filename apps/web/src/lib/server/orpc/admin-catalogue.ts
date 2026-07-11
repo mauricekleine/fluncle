@@ -11,7 +11,12 @@
 //   - `rank_catalogue` — one tick of the precompute sweep, the job a periodic `--no-agent`
 //     cron drives with the box's agent token.
 //
-// WHY EVERY OP HERE IS AGENT-ALLOWED AND NOT OPERATOR-TIER. None of them can certify.
+//   THE CAPTURE BUDGET (../capture-budget.ts) — the brake on what the two above lead to:
+//   - `get_capture_budget` — the spend readout (agent-allowed read).
+//   - `set_capture_budget` — the caps + the kill switch. OPERATOR tier, the one op here that
+//     is: the crawler and the Ear are free, and this one spends money.
+//
+// WHY EVERY OTHER OP HERE IS AGENT-ALLOWED AND NOT OPERATOR-TIER. None of them can certify.
 // The sweep writes only DERIVED ranking columns, and only on CATALOGUE rows (`tracks` with
 // no `findings` row); the crawler writes new catalogue rows and captures no audio. Neither
 // can mint a coordinate, write a note, or touch a finding — the columns for that do not
@@ -25,12 +30,17 @@
 // `input.query.*` and applies the same tolerant parse/clamp the backfills do.
 
 import {
+  getCatalogueCaptureState,
+  setCatalogueCaptureBudget,
+  setCatalogueCapturePaused,
+} from "../capture-budget";
+import {
   listCatalogueTracks as listCatalogue,
   getCatalogueSummary,
   rankCatalogue,
 } from "../catalogue";
 import { crawlCatalogue, DEFAULT_MAX_HOP, getCrawlStatus, MAX_HOP_CEILING } from "../crawl";
-import { adminAuth } from "../orpc-auth";
+import { adminAuth, operatorGuard } from "../orpc-auth";
 import { apiFault, type Implementer, parseBool, parseLimit } from "./_shared";
 
 // One crawl tick expands this many frontier nodes. Each node is ~1 MusicBrainz request paced
@@ -106,10 +116,53 @@ export function adminCatalogueHandlers(os: Implementer) {
     }
   });
 
+  // GET /admin/catalogue/capture-budget — the spend readout. Admin tier (agent-allowed READ,
+  // the `get_crawl_status` precedent): reading what a budget has left publishes nothing and
+  // spends nothing, and the box's sweeps are entitled to know why the queue went quiet.
+  const getCaptureBudgetHandler = os.get_capture_budget.use(adminAuth).handler(async () => {
+    try {
+      return { ...(await getCatalogueCaptureState()), ok: true as const };
+    } catch (error) {
+      throw apiFault(error);
+    }
+  });
+
+  // PUT /admin/catalogue/capture-budget — OPERATOR tier, and the only op in this domain that
+  // is. Every other one is free (the crawler moves metadata, the Ear moves vectors); this one
+  // decides how much of the operator's money a metered proxy may spend. An agent does not get
+  // to raise its own budget — the `set_publish_advance` shape, on the same `settings` KV.
+  //
+  // It returns the FULL state rather than an echo of the input, so one call both writes and
+  // reads back: the operator (or the CLI) sees the new verdict — open or shut, and why —
+  // computed by the same code path the capture queue obeys.
+  const setCaptureBudgetHandler = os.set_capture_budget
+    .use(adminAuth)
+    .use(operatorGuard)
+    .handler(async ({ input }) => {
+      try {
+        if (input.paused !== undefined) {
+          await setCatalogueCapturePaused(input.paused);
+        }
+
+        if (input.dailyBytes !== undefined || input.dailyTracks !== undefined) {
+          await setCatalogueCaptureBudget({
+            dailyBytes: input.dailyBytes,
+            dailyTracks: input.dailyTracks,
+          });
+        }
+
+        return { ...(await getCatalogueCaptureState()), ok: true as const };
+      } catch (error) {
+        throw apiFault(error);
+      }
+    });
+
   return {
     crawl_catalogue: crawlCatalogueHandler,
+    get_capture_budget: getCaptureBudgetHandler,
     get_crawl_status: getCrawlStatusHandler,
     list_catalogue_tracks: listCatalogueTracksHandler,
     rank_catalogue: rankCatalogueHandler,
+    set_capture_budget: setCaptureBudgetHandler,
   };
 }
