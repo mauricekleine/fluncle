@@ -15,8 +15,10 @@
 // (the Gold Veil), because Eclipse Gold is the CERTIFICATION light. A track Fluncle never
 // certified catches the Dust Veil instead — the cold light of a thing seen from a distance —
 // carries no coordinate, and links OUT to Spotify, because there is no `/log` page to go to.
-// It is never labelled, never introduced, and never given a noun: there is no heading over
-// those rows and no badge on them. "Finding" stays the only named object in Fluncle's world.
+// It is never labelled, never introduced, and never given a noun of its own: no badge on those
+// rows, and no heading that names the TIER. "Finding" stays the only named object in Fluncle's
+// world. The rows DO sit under a "Tracks" heading, which names the superset rather than either
+// tier — the ratified test is in DESIGN.md's Unlit Rule, the reasoning in docs/search.md.
 // The focus ring stays Eclipse Gold on every row either way — focus is an accessibility
 // affordance, not a claim about the music.
 
@@ -70,9 +72,10 @@ type SearchEntity = { imageUrl?: string; kind: EntityKind; name: string; slug: s
  * name, the arrow. An artist is the precedent and a label and an album are not a lesser
  * citizen of it; the only thing `kind` decides is which page the arrow goes to.
  *
- * The heading names the KIND, which it is allowed to do because all three are named objects in
- * Fluncle's world — unlike the uncertified tracks below, which have no name and get no heading
- * (the Unlit Rule, above).
+ * Every group in the list — these three and the tracks below — is a `CommandGroup`, and that is
+ * a LAYOUT invariant as much as a semantic one: the group carries `p-1`, so a row rendered
+ * loose in the `CommandList` sits 4px to the left of a row inside a group. One rail for the
+ * whole list means one container for every row in it.
  */
 const ENTITY_GROUPS = [
   { heading: "Artists", kind: "artist" },
@@ -425,12 +428,15 @@ function SearchDialog({
             );
           })}
 
-          {/* NO HEADING over the tracks — deliberately. A heading would have to name what it
-              headed, and the uncertified tier has no name. Findings lead; the rest follows in
-              the unlit register, and the difference speaks for itself. */}
-          {data.results.map((hit) => (
-            <TrackRow hit={hit} key={hit.trackId} onPick={pick} />
-          ))}
+          {/* "Tracks" names the SUPERSET — true of every row under it, certified or not, and
+              singling out neither. See the file header and DESIGN.md's Unlit Rule. */}
+          {data.results.length > 0 ? (
+            <CommandGroup heading="Tracks">
+              {data.results.map((hit) => (
+                <TrackRow hit={hit} key={hit.trackId} onPick={pick} />
+              ))}
+            </CommandGroup>
+          ) : undefined}
         </CommandList>
       </Command>
     </CommandDialog>
