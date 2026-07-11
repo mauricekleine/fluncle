@@ -24,6 +24,7 @@
     "r2:cors": "wrangler r2 bucket cors set fluncle-videos --file r2-cors.json",
     "smoke:browser": "bun run smoke:shell && bun run smoke:queue && bun run smoke:touch",
     "smoke:queue": "SEED=1 bun tests/browser/queue-smoke.ts",
+    "smoke:routine": "bun run scripts/smoke-routine.ts",
     "smoke:shell": "bun tests/browser/shell-smoke.ts",
     "smoke:touch": "bun tests/browser/admin-touch-smoke.ts",
     "typecheck": "tsgo --noEmit",
