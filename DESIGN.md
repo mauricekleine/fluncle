@@ -28,18 +28,18 @@ typography:
     letterSpacing: "-0.02em"
     fontVariation: "tabular-nums"
   title:
-    fontFamily: "ui-sans-serif, system-ui, sans-serif"
+    fontFamily: "Space Grotesk, ui-sans-serif, system-ui, sans-serif"
     fontSize: "1.02rem"
     fontWeight: 800
     lineHeight: 1.18
     letterSpacing: "-0.01em"
   body:
-    fontFamily: "ui-sans-serif, system-ui, sans-serif"
+    fontFamily: "Space Grotesk, ui-sans-serif, system-ui, sans-serif"
     fontSize: "0.9rem"
     fontWeight: 400
     lineHeight: 1.25
   label:
-    fontFamily: "ui-sans-serif, system-ui, sans-serif"
+    fontFamily: "Space Grotesk, ui-sans-serif, system-ui, sans-serif"
     fontSize: "0.76rem"
     fontWeight: 800
   mono:
@@ -158,11 +158,13 @@ A night-sky palette lit by one sun: warm blacks, sleeve-paper cream, and a singl
 
 ## 3. Typography
 
-**Display Font:** Oxanium (with ui-sans-serif, system-ui fallback), weights 400–800
-**Body Font:** System sans stack (Tailwind default ui-sans-serif)
+**Display Font:** Oxanium (SIL OFL, self-hosted; with ui-sans-serif, system-ui fallback), weights 200–800
+**Body Font:** Space Grotesk (SIL OFL, self-hosted; with ui-sans-serif, system-ui fallback), weights 300–700
 **Mono Font:** Monaspace Krypton (GitHub Next's mechanical mono, SIL OFL, self-hosted; with ui-monospace, SF Mono fallback), weights 400 + 700
 
-**Character:** Oxanium is the voice of the artifact: a squared, techy face that reads like the printing on a Discman, used for the wordmark, track numerals, and brand moments. The body runs on the quiet system sans so the music metadata reads instantly. Monaspace Krypton is the machine's own voice on the terminal surfaces (the "for the nerds" faceplate, the CLI/SSH dialogs): a mechanical mono that signals "real tool" without shouting. The pairing is "machine label + plain reading + terminal", not a typographic performance.
+**Character:** Oxanium is the voice of the artifact: a squared, techy face that reads like the printing on a Discman, used for the wordmark, track numerals, and brand moments. Space Grotesk carries the reading: a geometric grotesque with just enough oddness in its details to sound like Fluncle rather than like a settings screen, while still disappearing when you are scanning metadata. Monaspace Krypton is the machine's own voice on the terminal surfaces (the "for the nerds" faceplate, the CLI/SSH dialogs): a mechanical mono that signals "real tool" without shouting. The pairing is "machine label + plain reading + terminal", not a typographic performance.
+
+**All three faces are SELF-HOSTED, and that is a rule, not an implementation detail.** Riding the system stack meant the body face — and therefore every mixed-font alignment on the page — was a different typeface with different metrics on macOS, Windows and Android. Three renderings, only one of which we had ever looked at.
 
 ### Hierarchy
 
@@ -178,6 +180,12 @@ A night-sky palette lit by one sun: warm blacks, sleeve-paper cream, and a singl
 **The One Voice Rule.** Oxanium speaks only for the brand and the numbers, and mono speaks only for the machine (literal commands and code). If body copy or a paragraph is set in either, it's a mistake.
 
 **The Tabular Rule.** Every number that sits in a column (indices, dates) is tabular-nums. Numbers that jitter on update break the instrument-panel calm.
+
+**The One Box Rule.** Every self-hosted face is normalised at `@font-face` — via `ascent-override` / `descent-override` — to the SAME 1.25em metric box, cut so that `ascent − descent` equals that face's cap height. This puts each face's cap band exactly on its own box centre, which is what makes a plain `align-items: center` optically centre text of mixed faces and mixed sizes: a coordinate beside a title beside a date, all landing on one centre line, at any size, on any platform.
+
+Without it, the fonts disagree. Oxanium ships a 1.00em box around a 0.69em cap height, so its cap band sits 0.055em BELOW its own box centre — it throws its own text off-centre before anything is set beside it. Centring the boxes then visibly fails to centre the text, and the only alternatives are `text-box-trim` (which cuts the box to the cap line, so descenders and round-glyph overshoot fall outside it and any `overflow: hidden` shears them) or per-element pixel nudges. Fix the font, not the elements.
+
+When adding or updating a face: read its real `hhea`/`OS/2` tables (fontTools, not the renderer), confirm `USE_TYPO_METRICS` is set so Windows reads the same box as macOS, recompute the overrides for the 1.25em box, and check the deepest descender still fits inside the overridden descent.
 
 ## 4. Elevation
 

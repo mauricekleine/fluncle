@@ -34,6 +34,15 @@ export const Route = createRootRoute({
   component: RootLayout,
   head: () => ({
     links: [
+      // The body face. Preloaded ahead of the display face because it now sets nearly
+      // every line of text on the page; a late swap would reflow the lot.
+      {
+        as: "font",
+        crossOrigin: "anonymous",
+        href: "/fonts/space-grotesk-latin.woff2",
+        rel: "preload",
+        type: "font/woff2",
+      },
       {
         as: "font",
         crossOrigin: "anonymous",
