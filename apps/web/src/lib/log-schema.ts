@@ -52,10 +52,52 @@ function byArtistNode(
     : { "@type": "MusicGroup", name };
 }
 
+/**
+ * The finding's MEASURED tempo + key, modelled as the composition this recording is
+ * of (`recordingOf` → `MusicComposition`, both native schema.org). Fluncle measures
+ * both first-party — DSP over the captured full song, graded by the operator's
+ * Rekordbox — so with Spotify's audio-features API dead (Nov 2024) this is the live,
+ * citable source for a track's tempo and key.
+ *
+ * - KEY rides `musicalKey`, the property schema.org defines specifically for this on
+ *   MusicComposition (range Text, "The key, mode, or scale this composition uses").
+ * - TEMPO has NO native schema.org property anywhere, so it rides an
+ *   `additionalProperty` `PropertyValue` (name "tempo", unitText "BPM") — schema.org's
+ *   sanctioned slot for "a characteristic for which there is no matching property".
+ *
+ * Emitted per-value: tempo ONLY when `bpm` is present, key ONLY when `key` is present.
+ * A NULL key is below the DSP confidence floor — say nothing, never a guessed value.
+ * The whole node is omitted when the finding carries neither. Additive to the
+ * MusicRecording — it does not alter the recording's own Rich-Results shape.
+ */
+function measuredCompositionNode(track: LogSchemaInput): Record<string, unknown> | undefined {
+  if (!track.bpm && !track.key) {
+    return undefined;
+  }
+
+  return {
+    "@type": "MusicComposition",
+    ...(track.bpm
+      ? {
+          additionalProperty: {
+            "@type": "PropertyValue",
+            name: "tempo",
+            unitText: "BPM",
+            value: Math.round(track.bpm),
+          },
+        }
+      : {}),
+    ...(track.key ? { musicalKey: track.key } : {}),
+    name: track.title,
+  };
+}
+
 export function musicRecordingJsonLd(
   track: LogSchemaInput,
   imageUrl: string,
 ): Record<string, unknown> {
+  const recordingOf = measuredCompositionNode(track);
+
   return {
     "@context": "https://schema.org",
     "@type": "MusicRecording",
@@ -74,6 +116,7 @@ export function musicRecordingJsonLd(
     ...(track.isrc ? { isrcCode: track.isrc } : {}),
     ...(track.album ? { inAlbum: { "@type": "MusicAlbum", name: track.album } } : {}),
     name: track.title,
+    ...(recordingOf ? { recordingOf } : {}),
     sameAs: [
       track.spotifyUrl,
       ...(track.tiktokUrl ? [track.tiktokUrl] : []),

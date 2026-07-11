@@ -50,7 +50,7 @@ describe("/about schema", () => {
       | undefined;
 
     expect(faq).toBeDefined();
-    expect(faq?.mainEntity).toHaveLength(7);
+    expect(faq?.mainEntity).toHaveLength(8);
     expect(faq?.mainEntity.map((entry) => entry.name)).toEqual([
       "Who is Fluncle?",
       "What is Fluncle's Galaxy?",
@@ -59,6 +59,7 @@ describe("/about schema", () => {
       "What does a Log ID like 004.7.2I mean?",
       "What is fluncle://?",
       "How are tracks chosen?",
+      "How does Fluncle measure BPM and key?",
     ]);
 
     for (const entry of faq?.mainEntity ?? []) {
