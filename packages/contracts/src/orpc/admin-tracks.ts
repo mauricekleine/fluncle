@@ -654,6 +654,12 @@ export const TrackWorkItemSchema = z
  * `capture_priority` DESC — the Ear's pre-audio ladder — then newest-first, then the id. Never
  * insertion order. A label the operator RULED OUT is tier −1 and is excluded from the `capture`
  * worklist outright: a veto that only sorts last is not a veto, because the queue drains.
+ *
+ * `count=true` adds `queued` — the size of the WHOLE backlog for this kind+scope, not the page.
+ * The page is capped at 200, so `tracks.length` can never answer "how much is left", and at
+ * catalogue scale that is the only number the operator actually wants: it is what tells the GPU
+ * batch whether to rent another hour. Tolerant string ("true"; anything else is false), and
+ * OPT-IN because the 5-minute box sweeps do not need it and should not pay for the count.
  */
 export const listTrackWork = oc
   .route({
@@ -665,12 +671,20 @@ export const listTrackWork = oc
   })
   .input(
     z.object({
+      count: z.string().optional(),
       kind: TrackWorkKindSchema,
       limit: z.coerce.number().int().min(1).max(200).default(50),
       scope: TrackWorkScopeSchema.default("all"),
     }),
   )
-  .output(z.object({ ok: z.literal(true), tracks: z.array(TrackWorkItemSchema) }));
+  .output(
+    z.object({
+      ok: z.literal(true),
+      /** The whole backlog for this kind+scope. Present only when `count=true` was asked for. */
+      queued: z.number().optional(),
+      tracks: z.array(TrackWorkItemSchema),
+    }),
+  );
 
 /**
  * `publish_track` → `POST /admin/tracks` (operationId `publishTrack`).

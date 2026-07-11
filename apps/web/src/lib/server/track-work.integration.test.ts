@@ -505,3 +505,67 @@ describe("listTrackWork — the capture budget stops the money", () => {
     expect(await listTrackWork({ kind: "capture", scope: "catalogue" })).toEqual([]);
   });
 });
+
+describe("countTrackWork — how big is the backlog, not how big is the page", () => {
+  it("counts the WHOLE queue, past the page ceiling a read is capped at", async () => {
+    const { countTrackWork, listTrackWork } = await import("./track-work");
+
+    // A page read is capped at 200 rows, so `tracks.length` answers "how many did I get" and
+    // never "how much is left". The GPU batch (docs/gpu-batch-embed.md) reports the second number
+    // at the end of a run, and the operator rents his next hour off it — a run that says "done"
+    // while thousands are still queued is simply lying to him. This is that number.
+    for (let index = 0; index < 12; index += 1) {
+      const trackId = `cat${String(index).padStart(19, "0")}`;
+
+      await seedCatalogueTrack(db, { trackId });
+      await withAudio(trackId);
+    }
+
+    expect((await listTrackWork({ kind: "embed", limit: 5 })).length).toBe(5);
+    expect(await countTrackWork({ kind: "embed" })).toBe(12);
+  });
+
+  it("counts the same predicate the page selects — an embedded track leaves both", async () => {
+    const { countTrackWork } = await import("./track-work");
+
+    await seedCatalogueTrack(db, { trackId: "cat1000000000000000000" });
+    await withAudio("cat1000000000000000000");
+    await seedCatalogueTrack(db, { trackId: "cat2000000000000000000" });
+    await withAudio("cat2000000000000000000", { embedding: true });
+
+    // The vector is the whole state machine: the embedded one is out of the queue, and out of
+    // the count. That equivalence is what makes the batch resumable with nothing checkpointed.
+    expect(await countTrackWork({ kind: "embed" })).toBe(1);
+  });
+
+  it("honours the scope, so a run over one half reports that half's backlog", async () => {
+    const { countTrackWork } = await import("./track-work");
+
+    await seedTrack(db, { logId: "004.7.2I", trackId: "aaaaaaaaaaaaaaaaaaaaaa" });
+    await withAudio("aaaaaaaaaaaaaaaaaaaaaa");
+    await seedCatalogueTrack(db, { trackId: "cat1000000000000000000" });
+    await withAudio("cat1000000000000000000");
+
+    expect(await countTrackWork({ kind: "embed" })).toBe(2);
+    expect(await countTrackWork({ kind: "embed", scope: "findings" })).toBe(1);
+    expect(await countTrackWork({ kind: "embed", scope: "catalogue" })).toBe(1);
+  });
+
+  it("applies the SAME capture brake as the queue — it cannot advertise work the queue refuses", async () => {
+    const { countTrackWork } = await import("./track-work");
+
+    // The budget is shut (default-deny). A count that reported the catalogue backlog anyway
+    // would be reporting rows `listTrackWork` will not hand out — a queue and a count that
+    // disagree are worse than no count.
+    await seedTrack(db, { logId: "004.7.2I", trackId: "aaaaaaaaaaaaaaaaaaaaaa" });
+    await seedCatalogueTrack(db, { trackId: "cat1000000000000000000" });
+    await withPriority("cat1000000000000000000", 3);
+
+    expect(await countTrackWork({ kind: "capture", scope: "catalogue" })).toBe(0);
+    expect(await countTrackWork({ kind: "capture" })).toBe(1); // narrowed to the findings
+
+    await openCaptureBudget();
+
+    expect(await countTrackWork({ kind: "capture" })).toBe(2);
+  });
+});

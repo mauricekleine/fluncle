@@ -1,0 +1,1 @@
+CREATE INDEX `tracks_embed_queue_idx` ON `tracks` (`track_id`) WHERE "tracks"."source_audio_key" is not null and "tracks"."embedding_json" is null;
