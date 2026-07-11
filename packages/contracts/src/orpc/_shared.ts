@@ -110,8 +110,6 @@ export const TrackListItemSchema = z
     trackId: z.string(),
     type: z.literal("finding").optional(),
     updatedAt: z.string().optional(),
-    vibeX: z.number().optional(),
-    vibeY: z.number().optional(),
     videoGrain: z.string().optional(),
     videoModel: z.string().optional(),
     videoModelReasoning: z.string().optional(),

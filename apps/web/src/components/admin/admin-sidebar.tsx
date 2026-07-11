@@ -139,7 +139,6 @@ const OBJECT_SECTIONS: NavSection[] = [
   {
     entries: [
       {
-        count: "untagged",
         icon: VinylRecordIcon,
         key: "findings",
         label: "Findings",
@@ -240,12 +239,12 @@ export function navKeyForPath(pathname: string): AdminNavCurrent {
   return prefixed?.key ?? "dashboard";
 }
 
-// The two live counts with a cheap, honest server read TODAY (one scoped COUNT
-// each): the tagging backlog (the operator's one manual gate — the board's
-// "Needs tagging" worklist) and the render backlog (enriched findings still
-// waiting on the box's video render). Unposted-to-TikTok has no cheap global
-// read yet (posts join per-page); it arrives with the Wave-1 queue.
-type NavCounts = { renderQueue: number; untagged: number };
+// The live count with a cheap, honest server read TODAY (one scoped COUNT): the
+// render backlog (enriched findings still waiting on the box's video render). The
+// old "needs tagging" badge is gone with manual vibe-tagging — a finding's placement
+// is now the sonic galaxy the cluster cron assigns, not an operator gate.
+// Unposted-to-TikTok has no cheap global read yet (posts join per-page).
+type NavCounts = { renderQueue: number };
 
 const NAV_COUNTS_KEY = ["admin", "nav", "counts"] as const;
 
@@ -260,18 +259,15 @@ const fetchNavCounts = createServerFn({ method: "GET" }).handler(
 
     // The render queue uses the box's own canonical read (`fluncle admin
     // tracks queue`): findings with context but no video yet.
-    const [untagged, renders] = await Promise.all([
-      listTracks({ limit: 1, placement: "unplaced" }),
-      listTracks({ hasContext: true, hasVideo: false, limit: 1 }),
-    ]);
+    const renders = await listTracks({ hasContext: true, hasVideo: false, limit: 1 });
 
-    return { renderQueue: renders.totalCount, untagged: untagged.totalCount };
+    return { renderQueue: renders.totalCount };
   },
 );
 
 export function AdminSidebar({ current }: { current: AdminNavCurrent }) {
-  // Fetched lazily on mount, then focus-refetched — tabbing back after a tagging
-  // or render run brings the badges back honest without a reload.
+  // Fetched lazily on mount, then focus-refetched — tabbing back after a render
+  // run brings the badge back honest without a reload.
   const { data: counts } = useQuery({
     queryFn: () => fetchNavCounts(),
     queryKey: NAV_COUNTS_KEY,

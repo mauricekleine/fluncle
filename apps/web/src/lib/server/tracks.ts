@@ -89,8 +89,6 @@ export type TrackRow = {
   video_squared_at: string | null;
   video_url: string | null;
   video_vehicle: string | null;
-  vibe_x: number | null;
-  vibe_y: number | null;
   added_to_spotify: number;
   posted_to_telegram: number;
 };
@@ -115,7 +113,7 @@ type MixtapeFeedRow = {
 const TRACK_SELECT = `tracks.track_id, tracks.spotify_url, tracks.title, tracks.album, tracks.album_image_url, tracks.artists_json, tracks.analyzed_at, tracks.analyzed_from,
   tracks.bpm, tracks.bpm_source, tracks.duration_ms, tracks.enrichment_status, tracks.features_json, tracks.in_release_id, tracks.isrc, tracks.key, tracks.key_source, tracks.label, tracks.log_id, tracks.popularity,
   tracks.preview_url, tracks.release_date, tracks.source_audio_failures, tracks.source_audio_key, tracks.video_url, tracks.video_squared_at, tracks.video_vehicle, tracks.video_grain, tracks.video_register, tracks.video_model, tracks.video_model_reasoning, tracks.note, tracks.added_at,
-  tracks.updated_at, tracks.vibe_x, tracks.vibe_y, tracks.added_to_spotify, tracks.posted_to_telegram,
+  tracks.updated_at, tracks.added_to_spotify, tracks.posted_to_telegram,
   tracks.observation_audio_url, tracks.observation_duration_ms, tracks.observation_generated_at, tracks.observation_alignment_json,
   (select name from galaxies where galaxies.id = tracks.galaxy_id) as galaxy_name,
   (select slug from galaxies where galaxies.id = tracks.galaxy_id) as galaxy_slug,
@@ -213,7 +211,7 @@ function parseFeatures(json: string | null): TrackFeatures | undefined {
 // operator-named cluster read via the `galaxy_id` join. Present ONLY when the galaxy
 // is NAMED (both name + slug frozen) — an unassigned finding, or one in an unnamed
 // galaxy, reads null on both and the DTO omits `galaxy`. Replaces the retired
-// vibe-quadrant derivation (`galaxyOf` over vibe_x/vibe_y).
+// vibe-quadrant derivation.
 function galaxyOf(
   name: string | null,
   slug: string | null,
@@ -285,8 +283,6 @@ export function toTrackListItem(row: TrackRow): TrackListItem {
     trackId: row.track_id,
     type: "finding",
     updatedAt: row.updated_at ?? undefined,
-    vibeX: row.vibe_x ?? undefined,
-    vibeY: row.vibe_y ?? undefined,
     videoGrain: row.video_grain ?? undefined,
     videoModel: row.video_model ?? undefined,
     videoModelReasoning: row.video_model_reasoning ?? undefined,
@@ -778,11 +774,11 @@ export async function getTrackNeighbors(track: {
   };
 }
 
-// The old `getRelatedTracks` (vibe-quadrant "more in this galaxy" adjacency over
-// vibe_x/vibe_y) is retired with its /log row (browse-by-feel RFC, Slice 4): the sonic
+// The old `getRelatedTracks` (vibe-quadrant "more in this galaxy" adjacency) is retired with its /log row (browse-by-feel RFC, Slice 4): the sonic
 // galaxy lens (`/galaxies/<slug>`, reached from the linked prose clause) is the real
 // topical adjacency now, and "Close in sound" (`getSimilarFindings`) already covers the
-// per-finding neighbourhood. The vibe columns stay as archived history (Slice 5).
+// per-finding neighbourhood. The vibe columns themselves are dropped — nothing read or
+// wrote them, and the stale coordinates were still leaking into the observe/note prompts.
 
 type EmbeddingRow = {
   embedding_json: string;
@@ -1227,12 +1223,6 @@ type ListTracksOptions = {
    */
   order?: "asc" | "desc";
   /**
-   * Admin tagging cursor: "unplaced" = not yet dropped on the vibe map (needs
-   * review); "placed" = the operator has assigned a vibe coordinate. Drives the
-   * tagging queue and its toggle. Omitted for public reads.
-   */
-  placement?: "placed" | "unplaced";
-  /**
    * Widen the `hasContext=false` context queue to also re-pick CONFIRMED-EMPTY
    * finds (`context_status = 'empty'`) — the `--retry-empty` escape hatch for when
    * a query/source fix means a previously-hopeless find might now resolve. No
@@ -1342,7 +1332,6 @@ export async function listTracks({
   includeMixtapes = false,
   limit,
   order = "desc",
-  placement,
   retryEmptyContext = false,
   since,
   status,
@@ -1447,12 +1436,6 @@ export async function listTracks({
     filterArgs.push(captureCooldown);
   }
 
-  if (placement === "unplaced") {
-    filterClauses.push("vibe_x is null");
-  } else if (placement === "placed") {
-    filterClauses.push("vibe_x is not null");
-  }
-
   if (status === "queue") {
     // The self-healing enrich-queue: pending ∪ failed ∪ STALE processing. A
     // `processing` row counts as stuck once it's older than the staleness
@@ -1499,12 +1482,7 @@ export async function listTracks({
   ]);
   const rows = typedRows<TrackRow>(result.rows);
   const feedRows =
-    includeMixtapes &&
-    !since &&
-    !until &&
-    hasVideo === undefined &&
-    placement === undefined &&
-    status === undefined
+    includeMixtapes && !since && !until && hasVideo === undefined && status === undefined
       ? await listPublishedMixtapeFeedRows(db, cursor, cursorComparator, cursorArgs, dir, limit)
       : undefined;
   const countRows = typedRows<TrackCountRow>(countResult.rows);

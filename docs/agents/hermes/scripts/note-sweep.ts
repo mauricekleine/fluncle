@@ -17,7 +17,7 @@
 //   2. per finding (bounded batch, BATCH_CAP small — authoring spends subscription
 //      quota):
 //      a. GATHER (deterministic): `fluncle tracks get <id> --json` → the finding's
-//         identity metadata (artists, title, label, release year, galaxy, vibe), AND
+//         identity metadata (artists, title, label, release year, galaxy), AND
 //         `fluncle admin tracks context <id> --json` → the stored `context_note` (the
 //         firecrawl facts the context sweep distilled). The note is the PRIMARY
 //         authoring fuel — `admin tracks context` returns it (`skipped: true`, no
@@ -97,8 +97,6 @@ type Finding = {
   releaseDate?: string;
   title?: string;
   trackId?: string;
-  vibeX?: number;
-  vibeY?: number;
 };
 
 // A `track get` can resolve to a finding OR a mixtape; we only ever queue findings.
@@ -223,10 +221,6 @@ function buildAuthoringPrompt(finding: Finding, contextNote: string): string {
   const label = finding.label ?? "unknown";
   const year = finding.releaseDate ? finding.releaseDate.slice(0, 4) : "unknown";
   const galaxy = finding.galaxy?.name ?? "unplaced";
-  const vibe =
-    finding.vibeX !== undefined && finding.vibeY !== undefined
-      ? `x=${finding.vibeX}, y=${finding.vibeY}`
-      : "unplaced";
 
   // The stored context note (the firecrawl facts the context sweep distilled) is the
   // PRIMARY fuel — it carries release context, scene, and label history the bare
@@ -258,7 +252,6 @@ function buildAuthoringPrompt(finding: Finding, contextNote: string): string {
     `  label: ${label}`,
     `  year: ${year}`,
     `  galaxy: ${galaxy}`,
-    `  vibe coordinates: ${vibe}`,
     "",
     "FORMAT + VOICE CONSTRAINTS (the server voice-gate re-scans and will reject a violation):",
     "  - ONE sentence. Short: aim for roughly 50 to 140 characters, never past the 280 cap. A semicolon is fine; a second sentence is not.",
@@ -463,7 +456,7 @@ function noteOne(queued: QueueFinding): NoteResult {
   }
 
   // (a) Gather the finding's identity metadata. `track get` is the SINGULAR public
-  // read; it returns the raw finding (galaxy + vibe intact). A mixtape arm can't
+  // read; it returns the raw finding (galaxy intact). A mixtape arm can't
   // appear here (the queue is findings), but guard anyway.
   const response = fluncleJson<TrackGetResponse>(["tracks", "get", id]);
   const finding = response.track;

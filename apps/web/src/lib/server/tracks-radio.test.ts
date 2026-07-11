@@ -81,8 +81,6 @@ function baseRow(stored: StoredTrack) {
     spotify_url: `https://open.spotify.com/track/${stored.track_id}`,
     tiktok_url: null,
     updated_at: null,
-    vibe_x: 0.4,
-    vibe_y: -0.2,
     video_grain: null,
     video_model: null,
     video_model_reasoning: null,

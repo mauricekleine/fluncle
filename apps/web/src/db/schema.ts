@@ -116,7 +116,7 @@ export const tracks = sqliteTable("tracks", {
   enrichmentStatus: text("enrichment_status").notNull().default("pending"),
   featuresJson: text("features_json"),
   // The sonic galaxy this finding belongs to — a nullable FK to `galaxies.id`, the
-  // internal-grouping precedent of `embeddingJson`/`vibeX`/`vibeY`. Hard assignment
+  // internal-grouping precedent of `embeddingJson`. Hard assignment
   // (one galaxy per finding), written by the on-box `fluncle-cluster` cron via the
   // agent-tier `update_track` path (assignment-only nightly step). Internal like the
   // embedding, so writing it moves no public lastmod (kept OUT of `VISIBLE_FIELDS`);
@@ -203,13 +203,6 @@ export const tracks = sqliteTable("tracks", {
   // curation/enrichment update, social-post state) bumps it. Null for rows that
   // predate the column; readers fall back to added_at (sitemap lastmod).
   updatedAt: text("updated_at"),
-  // The finding's place in vibe-space (the admin tagging map):
-  // vibeX = Light(-1)↔Dark(+1) mood, vibeY =
-  // Floaty(-1)↔Driving(+1) energy, each roughly -1..1. The quadrant is the
-  // finding's galaxy (Solar/Nebular/Lunar/Deep). Null = not yet placed; the
-  // operator drops it on the map. Replaces sub-genre tags as the grouping.
-  vibeX: real("vibe_x"),
-  vibeY: real("vibe_y"),
   // The grain FAMILY of the track's video (e.g. "grainCoarseSilver"). Set when the
   // video is uploaded; surfaced in /api/tracks beside the vehicle so the next agent
   // reads recent grain families and diversifies (the grain ledger).
