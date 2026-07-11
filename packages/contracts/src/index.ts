@@ -52,6 +52,7 @@ import { type LabelAdminItemSchema, type LabelSeedStateSchema } from "./orpc/adm
 import { type NoteGateSchema, type NoteRejectionSchema } from "./orpc/admin-notes.js";
 import { type GalaxyListItemSchema } from "./orpc/galaxies.js";
 import { type GalaxyProgressSchema } from "./orpc/me-galaxy.js";
+import { type MixArtistSchema } from "./orpc/mix.js";
 import {
   type ClipDTOSchema,
   type EditionDTOSchema,
@@ -60,8 +61,9 @@ import {
   type PublicUserSchema,
   type RadioNowPlayingSchema,
   type RecordingDTOSchema,
-  type MixableCandidateSchema,
+  type MixCandidateSchema,
   type MixReasonSchema,
+  type MixTrackSchema,
   type RecordingTracklistItemSchema,
   type SocialPostItemSchema,
   type SubmissionSchema,
@@ -297,10 +299,22 @@ export type TrackListItem = z.infer<typeof TrackListItemSchema>;
 export type MixReason = z.infer<typeof MixReasonSchema>;
 
 /**
- * A `/mix` candidate: a finding + its reason chip, in mixability order. Inferred from
- * `MixableCandidateSchema` (./orpc/_shared.ts).
+ * One track as `/mix` renders it — certified (a finding, with its coordinate) or not.
+ * Inferred from `MixTrackSchema` (./orpc/_shared.ts).
  */
-export type MixableCandidate = z.infer<typeof MixableCandidateSchema>;
+export type MixTrack = z.infer<typeof MixTrackSchema>;
+
+/**
+ * A `/mix` candidate: a track + its reason chip, in rail order. Inferred from
+ * `MixCandidateSchema` (./orpc/_shared.ts).
+ */
+export type MixCandidate = z.infer<typeof MixCandidateSchema>;
+
+/**
+ * An artist a mix can be seeded from — the taste picker's row. Inferred from
+ * `MixArtistSchema` (./orpc/mix.ts).
+ */
+export type MixArtist = z.infer<typeof MixArtistSchema>;
 
 /** The cursor for feed pagination (base64'd `addedAt` + `trackId`). */
 export type TrackCursor = {

@@ -1,7 +1,9 @@
 import {
   type FeedListPage,
-  type MixableCandidate,
+  type MixArtist,
+  type MixCandidate as MixCandidateDTO,
   type MixReason,
+  type MixTrack as MixTrackDTO,
   type TrackCursor,
   type TrackFeatures,
   type TrackListPage,
@@ -14,16 +16,32 @@ import { type FeedItem, type MixtapeMember, rowToMixtape } from "../mixtapes";
 import { parseArtistsJson } from "./artists";
 import { getDb, typedRow, typedRows } from "./db";
 import { discogsReleaseUrl } from "./discogs";
-import { cosineFromDistance, embeddingVectorSql, parseEmbedding, toVectorProbe } from "./embedding";
-import { logEvent } from "./log";
 import {
-  type MixCandidate,
+  cosineFromDistance,
+  embeddingVectorSql,
+  parseEmbedding,
+  readEmbeddingBlob,
+  toVectorProbe,
+} from "./embedding";
+import { logEvent } from "./log";
+import { isLogId } from "../log-id";
+import {
+  applyTaste,
+  type MixCandidate as RankCandidate,
+  type MixChainDepth,
+  mixChainDepth,
+  namedMoveClasses,
   orderMixPath,
   rankMixable,
+  RAIL_DEPTH,
   scoreMix,
+  shortlistMixable,
   sonicGateOpen,
+  TASTE_SHORTLIST,
+  tasteSubScore,
   toMixTrack,
 } from "./mixability";
+import { type Camelot, keyToCamelotCode, parseKey, toCamelot } from "../key-camelot";
 import { extractYoutubeChannelId } from "./youtube";
 
 export type { FeedListPage, TrackCursor, TrackFeatures, TrackListPage, TrackListItem };
@@ -1124,6 +1142,60 @@ export async function getSimilarFindings(idOrLogId: string, limit = 6): Promise<
   });
 }
 
+// ── `/mix`: the catalogue-aware rail ─────────────────────────────────────────
+//
+// THE JOIN IS A LEFT JOIN, and that one word is most of this feature. Every other read in
+// this file drives through `FINDINGS_FROM` (an INNER join), because every other surface is
+// about findings — the things Fluncle has been to. `/mix` is the first surface that is
+// about the MUSIC: a track is mixable if it has a key and a vector, and whether Fluncle
+// ever certified it has no bearing on whether it beatmatches. So the rail scans
+// `MIX_FROM`, and an uncertified track competes on exactly the same terms as a finding.
+//
+// That is what makes the tool get BETTER as the archive grows rather than merely bigger,
+// and it is the whole reason the catalogue is worth crawling.
+const MIX_FROM = `tracks left join findings on findings.track_id = tracks.track_id`;
+
+// The columns `MixTrackSchema` needs — deliberately tiny. A `/mix` row is a small honest
+// shape (title, artists, cover, the two chips, and whether it is certified), not a
+// `TrackListItem`: there is no note, no video, no galaxy here to leak into the unlit
+// register, because they are not selected. `log_id` is the ONLY certification signal, and
+// both `certified` and `logId` are read off it, so they cannot disagree.
+const MIX_TRACK_SELECT = `tracks.track_id, tracks.title, tracks.artists_json, tracks.album_image_url,
+  tracks.spotify_url, tracks.duration_ms, tracks.bpm, tracks.key, findings.log_id`;
+
+type MixTrackRow = {
+  album_image_url: string | null;
+  artists_json: string;
+  bpm: number | null;
+  duration_ms: number;
+  key: string | null;
+  log_id: string | null;
+  spotify_url: string;
+  title: string;
+  track_id: string;
+};
+
+/**
+ * A `MIX_FROM` row → the wire DTO. THE UNLIT RULE, in three lines: `certified` is
+ * `Boolean(log_id)` and `logId` is `log_id ?? undefined`, so a row without a coordinate is
+ * uncertified and an uncertified row has no coordinate — one column, one truth, no way for
+ * a caller to construct a catalogue row that shows a Log ID. The tier is never named.
+ */
+function toMixTrackDTO(row: MixTrackRow): MixTrackDTO {
+  return {
+    albumImageUrl: row.album_image_url ?? undefined,
+    artists: parseArtistsJson(row.artists_json),
+    bpm: row.bpm ?? undefined,
+    certified: Boolean(row.log_id),
+    durationMs: row.duration_ms,
+    key: row.key ?? undefined,
+    logId: row.log_id ?? undefined,
+    spotifyUrl: row.spotify_url,
+    title: row.title,
+    trackId: row.track_id,
+  };
+}
+
 // A candidate/target row for the mixability engine: the four scoring columns + its ids.
 type MixRow = {
   bpm: number | null;
@@ -1135,7 +1207,7 @@ type MixRow = {
 };
 
 // A `/mix` CANDIDATE row. The vector itself never crosses the wire: the database
-// reports only whether the finding HAS one (`has_embedding`, feeding the coverage gate)
+// reports only whether the track HAS one (`has_embedding`, feeding the coverage gate)
 // and its cosine DISTANCE to the target (`sonic_dist` — null when either side has no
 // vector), which `cosineFromDistance` turns back into the cosine the engine scores.
 type MixCandidateRow = Omit<MixRow, "embedding_json"> & {
@@ -1143,40 +1215,229 @@ type MixCandidateRow = Omit<MixRow, "embedding_json"> & {
   sonic_dist: number | null;
 };
 
+// ── The depth gate ───────────────────────────────────────────────────────────
+
+// The gate is a property of the whole archive, so it is the same answer for every reader,
+// and it moves only when a track is keyed. Memoized per isolate for a minute: `/mix` asks
+// on every load, and the honest cost of a cache miss is one index-only `group by`.
+const DEPTH_TTL_MS = 60_000;
+let depthCache: { at: number; value: MixChainDepth } | null = null;
+
 /**
- * The findings that mix cleanly OUT of the given one, ranked by the mixability engine
- * (`mixability.ts`) — Product A's rail behind `/mix` and the public
- * `list_mixable_tracks` op. One candidate scan over `log_id IS NOT NULL` rows, self
- * excluded, then the pure core scores + orders + breaks plateaus by the texture
- * tiebreak. The sonic MuQ term is gated on archive-wide embedded-pair coverage
- * (`sonicGateOpen`).
+ * Measure whether the archive is deep enough for `/mix` to be worth opening to a stranger
+ * (`mixChainDepth` — the median track's named-move neighbourhood against a floor of one of
+ * Fluncle's own sets plus a full rail).
  *
- * THE VECTORS STAY IN THE DATABASE. The candidate scan used to select every row's
- * `embedding_json` — 21 KB per candidate — and cosine them in the isolate, the same
- * dead shape `getSimilarFindings` carried (it hit `turso dev`'s 10 MiB cap at ~460
- * embedded findings; docs/rfcs/turso-scale-spike.md). Now the SQL computes the cosine
- * to the target with `vector_distance_cos` (probe bound as a RAW BLOB — embedding.ts,
- * `toVectorProbe`) and each candidate row carries back a single number. The score is
- * unchanged: the same cosine goes into the same calibration.
+ * ONE `group by key` over `tracks_key_idx` — 24-ish distinct values, answered from the
+ * index without touching the table. Every keyed track counts, certified or not: a catalogue
+ * track is rankable the moment it has a key, so it is depth, which is exactly the claim the
+ * gate exists to test.
+ */
+export async function getMixChainDepth(): Promise<MixChainDepth> {
+  const now = Date.now();
+
+  if (depthCache && now - depthCache.at < DEPTH_TTL_MS) {
+    return depthCache.value;
+  }
+
+  const db = await getDb();
+  const result = await db.execute(
+    `select key, count(*) as count from tracks where key is not null group by key`,
+  );
+  const rows = typedRows<{ count: number; key: string | null }>(result.rows);
+  const value = mixChainDepth(rows);
+
+  depthCache = { at: now, value };
+
+  return value;
+}
+
+// ── The candidate pre-filter ─────────────────────────────────────────────────
+
+/**
+ * The archive's stored key SPELLINGS that sit a named harmonic move from `from` — the
+ * `key in (…)` pre-filter's argument list.
  *
- * The scan itself is still every coordinate-bearing row, because the engine RANKS
- * rather than filters — a distant-key, out-of-band candidate still scores, and still
- * surfaces when the archive is too sparse to offer better. Narrowing the scan with a
- * camelot/BPM pre-filter (207 ms at 100k) would drop such candidates and CHANGE the
- * rail's results; that is a scoring decision for the engine's owner, not a performance
- * fix, and it is not made here. Without the vectors the rows are ~250 B, so the scan
- * is now bounded by the archive's small columns rather than by 21 KB vectors.
+ * It reads the archive's own spellings rather than generating them, and that is the point:
+ * `tracks.key` is scale text written by several hands (the DSP writes sharps, Rekordbox may
+ * not, an operator may type a flat), and a hand-built reverse map would silently drop every
+ * spelling it failed to predict. Folding the DISTINCT keys the archive actually holds
+ * through the same tolerant `parseKey` the engine uses cannot drift from it. The distinct
+ * list is 24-ish rows off `tracks_key_idx`, and it is the same read the depth gate makes.
  *
- * `excludeLogIds` drops the already-chained findings SERVER-SIDE so a deep chain in a
- * small archive can't silently empty the rail. Each result carries its `reason` chip
- * (never a numeric score — §3.0 invariant). Returns `[]` (never throws) for an unknown
- * coordinate / an all-null target / an empty archive.
+ * THIS IS A SCORING DECISION, not a performance fix, and it is made deliberately. The old
+ * scan ranked EVERY keyed row and let distant keys surface when the archive was too sparse
+ * to offer better. The rail no longer does that: a `distant` pair is not a move a DJ makes
+ * on purpose, and the rail's promise — everything on it mixes clean — is worth more than a
+ * full-looking list. The gate is what makes it safe: it opens only once the median track has
+ * a named move to 29 others, so the neighbourhood the rail serves is exactly the
+ * neighbourhood the gate measured. One definition of "what can follow this", used by both.
+ */
+async function namedMoveKeys(from: Camelot): Promise<string[]> {
+  const db = await getDb();
+  const result = await db.execute(`select distinct key from tracks where key is not null`);
+  const wanted = new Set(namedMoveClasses(from).map(({ letter, number }) => `${number}${letter}`));
+
+  return typedRows<{ key: string | null }>(result.rows).flatMap((row) => {
+    const code = keyToCamelotCode(row.key);
+
+    return row.key && code && wanted.has(code) ? [row.key] : [];
+  });
+}
+
+/** The Camelot position of a scale-text key, or null when it is absent/unparseable. */
+function camelotOfKey(key: string | null): Camelot | null {
+  const parsed = parseKey(key);
+
+  return parsed ? toCamelot(parsed) : null;
+}
+
+// ── Taste (the seed) ─────────────────────────────────────────────────────────
+
+/** At most this many tracks per seeded artist become probes (see `getTasteProbes`). */
+const PROBES_PER_ARTIST = 3;
+/** The hard cap on the probe set, whatever the seed's size (see `getTasteProbes`). */
+const MAX_TASTE_PROBES = 24;
+
+/**
+ * The seed, as vectors: up to {@link PROBES_PER_ARTIST} embedded tracks per seeded artist,
+ * capped at {@link MAX_TASTE_PROBES} overall.
+ *
+ * CAPPED, because taste is max-similarity and max-similarity costs a distance per (candidate
+ * × probe). Uncapped, a reader who seeds an artist with 200 catalogue tracks turns the rail
+ * into a cross join. Capped, the whole taste stage is `probes × TASTE_SHORTLIST` ≈ 7k
+ * distance ops inside the database — less than one tick of The Ear's sweep.
+ *
+ * The cap does NOT collapse the seed's shape, which is the thing that would have broken it.
+ * Three tracks per artist keeps every artist the reader named represented by their own
+ * vectors, so max-sim still lets each of them win on their own ground (`tasteSubScore`); a
+ * per-artist MEAN would have been the centroid this design exists to refuse, at artist
+ * granularity. Certified tracks are preferred as probes — they are the ones whose audio
+ * Fluncle has actually captured and analysed end to end — then the most popular.
+ */
+async function getTasteProbes(artistSlugs: string[]): Promise<Uint8Array[]> {
+  const slugs = [...new Set(artistSlugs.map((slug) => slug.trim()).filter(Boolean))];
+
+  if (slugs.length === 0) {
+    return [];
+  }
+
+  const db = await getDb();
+  const placeholders = slugs.map(() => "?").join(", ");
+
+  // One query, one row per (artist, track) — ranked inside SQL, so only the survivors cross
+  // the wire. The vectors DO come back here (they are the probes; they must), but there are
+  // at most `MAX_TASTE_PROBES` of them, which is the whole reason for the cap.
+  const result = await db.execute({
+    args: slugs,
+    sql: `select vec from (
+            select ${embeddingVectorSql()} as vec,
+                   row_number() over (
+                     partition by artists.id
+                     order by (findings.track_id is not null) desc, tracks.popularity desc
+                   ) as rank
+            from artists
+            join track_artists on track_artists.artist_id = artists.id
+            join tracks on tracks.track_id = track_artists.track_id
+            left join findings on findings.track_id = tracks.track_id
+            where artists.slug in (${placeholders})
+              and tracks.key is not null
+              and (tracks.embedding_blob is not null or tracks.embedding_json is not null)
+          )
+          where rank <= ${PROBES_PER_ARTIST} and vec is not null
+          limit ${MAX_TASTE_PROBES}`,
+  });
+
+  return result.rows.flatMap((row) => {
+    const vector = readEmbeddingBlob((row as unknown as { vec: unknown }).vec);
+
+    return vector ? [toVectorProbe(vector)] : [];
+  });
+}
+
+/**
+ * Each shortlisted track's TASTE cosine — its similarity to the NEAREST probe (`min` over the
+ * cosine DISTANCES is the max over the similarities). Ranked in SQL: the shortlist's vectors
+ * never enter the isolate, only one number per row comes back.
+ *
+ * One `union all` branch per probe over a shortlist CTE, so each probe binds ONCE as a raw
+ * float32 blob — never as text (the 14× hosted cliff; embedding.ts). Bounded by construction:
+ * ≤ `MAX_TASTE_PROBES × TASTE_SHORTLIST` distances.
+ */
+async function getTasteCosines(
+  trackIds: string[],
+  probes: Uint8Array[],
+): Promise<Map<string, number>> {
+  if (trackIds.length === 0 || probes.length === 0) {
+    return new Map();
+  }
+
+  const db = await getDb();
+  const ids = trackIds.map(() => "?").join(", ");
+  const branches = probes
+    .map(() => `select track_id, vector_distance_cos(vec, ?) as dist from shortlist`)
+    .join(" union all ");
+
+  const result = await db.execute({
+    // SQL-TEXT order: the shortlist's ids bind inside the CTE, then one probe per branch.
+    args: [...trackIds, ...probes],
+    sql: `with shortlist as (
+            select track_id, ${embeddingVectorSql()} as vec
+            from tracks
+            where track_id in (${ids}) and (embedding_blob is not null or embedding_json is not null)
+          )
+          select track_id, min(dist) as dist
+          from (${branches})
+          where dist is not null
+          group by track_id`,
+  });
+
+  const byTrackId = new Map<string, number>();
+
+  for (const row of typedRows<{ dist: number | null; track_id: string }>(result.rows)) {
+    const cos = cosineFromDistance(row.dist);
+
+    if (cos !== null) {
+      byTrackId.set(row.track_id, cos);
+    }
+  }
+
+  return byTrackId;
+}
+
+/**
+ * The tracks that mix cleanly OUT of the given one, ranked by the mixability engine
+ * (`mixability.ts`) — the rail behind `/mix` and the public `list_mixable_tracks` op.
+ *
+ * CANDIDATES ARE THE WHOLE ARCHIVE (`MIX_FROM`, a LEFT join), not just the findings: the key
+ * is the engine's mandatory floor, so any keyed track is rankable, and a catalogue track
+ * competes for the rail on the same terms as a certified one. Each result carries its
+ * `certified` bit for the REGISTER it renders in (DESIGN.md's Unlit Rule) and nothing more —
+ * the tier is never named on the wire, never labelled on the page.
+ *
+ * THE VECTORS STAY IN THE DATABASE. The scan computes each candidate's cosine to the target
+ * with `vector_distance_cos` (the probe bound as a RAW BLOB — embedding.ts, `toVectorProbe`)
+ * and each row carries back a single number, rather than 21 KB of vector per candidate. It is
+ * pre-filtered by `key in (…)` to the ~8 Camelot classes a NAMED harmonic move can reach
+ * (`namedMoveKeys` — read its comment; that is a scoring decision, argued there), which is the
+ * ratified "btree pre-filter ahead of an exact vector scan" shape and the only reason this
+ * survives a five-figure catalogue.
+ *
+ * TASTE, when `artistSlugs` is seeded: the engine shortlists the `TASTE_SHORTLIST` cleanest
+ * mixes, SQL scores each one's similarity to the nearest seeded artist's track, and the rail
+ * is re-ranked by mixability × taste (`railScore`). Everything on the rail still mixes clean —
+ * taste only chooses among the clean ones.
+ *
+ * `exclude` drops the already-chained tracks SERVER-SIDE (Log IDs and/or Spotify track ids,
+ * mixed freely — a chain now holds both kinds) so a deep chain can't silently empty the rail.
+ * Each result carries its `reason` chip, never a numeric score (§3.0 invariant). Returns `[]`
+ * (never throws) for an unknown coordinate, a target with no key, or an empty archive.
  */
 export async function getMixableTracks(
   idOrLogId: string,
-  options: { excludeLogIds?: string[]; limit?: number } = {},
-): Promise<MixableCandidate[]> {
-  const limit = options.limit ?? 12;
+  options: { artistSlugs?: string[]; exclude?: string[]; limit?: number } = {},
+): Promise<MixCandidateDTO[]> {
+  const limit = options.limit ?? RAIL_DEPTH;
 
   if (limit <= 0) {
     return [];
@@ -1187,7 +1448,7 @@ export async function getMixableTracks(
     args: [idOrLogId, idOrLogId],
     sql: `select tracks.track_id, findings.log_id, tracks.key, tracks.bpm,
                  tracks.embedding_json, tracks.features_json
-          from ${FINDINGS_FROM}
+          from ${MIX_FROM}
           where tracks.track_id = ? or findings.log_id = ? limit 1`,
   });
   const targetRow = typedRow<MixRow>(targetResult.rows);
@@ -1196,20 +1457,55 @@ export async function getMixableTracks(
     return [];
   }
 
+  // The key is the engine's floor (`scoreMix`: a pair whose key we do not know is a pair we
+  // cannot justify), so a target with no key has no rail — and no pre-filter either.
+  const targetCamelot = camelotOfKey(targetRow.key);
+
+  if (!targetCamelot) {
+    return [];
+  }
+
+  const keys = await namedMoveKeys(targetCamelot);
+
+  if (keys.length === 0) {
+    return [];
+  }
+
   // The target's vector becomes the probe. When it has none, every pair's sonic term is
-  // null anyway (the old code reached the same place through `sonicSubScore(null, …)`),
-  // so the scan skips the distance work entirely.
+  // null anyway, so the scan skips the distance work entirely.
   const targetEmbedding = parseEmbedding(targetRow.embedding_json);
   const probe = targetEmbedding ? toVectorProbe(targetEmbedding) : null;
 
-  const exclude = [...new Set((options.excludeLogIds ?? []).filter((id) => id.trim()))];
-  const excludeClause =
-    exclude.length > 0 ? `and findings.log_id not in (${exclude.map(() => "?").join(", ")})` : "";
-  // Args bind in SQL-TEXT order: the probe's `?` (when there is one) precedes the
-  // excluded target and the excluded Log IDs.
+  // A chain holds findings AND catalogue tracks, so an exclusion may arrive as either kind
+  // of token. Split them and exclude on both columns.
+  const excluded = [...new Set((options.exclude ?? []).map((id) => id.trim()).filter(Boolean))];
+  const excludedLogIds = excluded.filter((id) => isLogId(id));
+  const excludedTrackIds = excluded.filter((id) => !isLogId(id));
+
+  const keyClause = keys.map(() => "?").join(", ");
+  const logIdClause =
+    excludedLogIds.length > 0
+      ? `and (findings.log_id is null or findings.log_id not in (${excludedLogIds.map(() => "?").join(", ")}))`
+      : "";
+  const trackIdClause =
+    excludedTrackIds.length > 0
+      ? `and tracks.track_id not in (${excludedTrackIds.map(() => "?").join(", ")})`
+      : "";
+
   const distanceSql = probe ? `vector_distance_cos(vec, ?)` : `null`;
   const candidateResult = await db.execute({
-    args: probe ? [probe, targetRow.track_id, ...exclude] : [targetRow.track_id, ...exclude],
+    // SQL-TEXT order decides the bind order, and the probe's `?` is in the OUTER select —
+    // which is textually BEFORE the inner subquery — so the probe binds FIRST, then the
+    // inner WHERE's keys, target, and exclusions in the order they appear. (Getting this
+    // backwards binds a key string into `vector_distance_cos`, a SQLITE_ERROR hosted and a
+    // silent wrong answer locally.)
+    args: [
+      ...(probe ? [probe] : []),
+      ...keys,
+      targetRow.track_id,
+      ...excludedLogIds,
+      ...excludedTrackIds,
+    ],
     sql: `select track_id, log_id, key, bpm, features_json, has_embedding,
                  case when vec is null then null else ${distanceSql} end as sonic_dist
           from (
@@ -1218,13 +1514,14 @@ export async function getMixableTracks(
                    (tracks.embedding_blob is not null or tracks.embedding_json is not null)
                      as has_embedding,
                    ${embeddingVectorSql()} as vec
-            from ${FINDINGS_FROM}
-            where findings.log_id is not null and tracks.track_id != ? ${excludeClause}
+            from ${MIX_FROM}
+            where tracks.key in (${keyClause})
+              and tracks.track_id != ? ${logIdClause} ${trackIdClause}
           )`,
   });
 
   const candidateRows = typedRows<MixCandidateRow>(candidateResult.rows);
-  const candidates: MixCandidate<string>[] = candidateRows.map((row) => ({
+  const candidates: RankCandidate<string>[] = candidateRows.map((row) => ({
     item: row.track_id,
     // The database already answered the sonic question for this pair; `null` here means
     // "no comparable vector", exactly as a null embedding meant before.
@@ -1232,26 +1529,208 @@ export async function getMixableTracks(
     track: toMixTrack({ ...row, embedding_json: null }),
   }));
 
-  // The sonic-term gate is a global archive property: count the embedded findings in
-  // play (candidates + the target when embedded) and open the gate only past the floor.
+  // The sonic-term gate is a global archive property: count the embedded tracks in play
+  // (candidates + the target when embedded) and open the gate only past the floor.
   const embeddedCount =
     candidateRows.filter((row) => Boolean(row.has_embedding)).length +
     (targetRow.embedding_json !== null ? 1 : 0);
   const gateOpen = sonicGateOpen(embeddedCount);
+  const target = toMixTrack(targetRow);
 
-  const ranked = rankMixable(toMixTrack(targetRow), candidates, limit, { gateOpen });
+  const probes = await getTasteProbes(options.artistSlugs ?? []);
+
+  // Un-seeded: rank straight to the rail. Seeded: shortlist the cleanest mixes, score each
+  // one's taste in SQL, and re-rank by mixability × taste.
+  const ranked =
+    probes.length === 0
+      ? rankMixable(target, candidates, limit, { gateOpen })
+      : await (async () => {
+          const shortlist = shortlistMixable(target, candidates, TASTE_SHORTLIST, { gateOpen });
+          const cosines = await getTasteCosines(
+            shortlist.map((entry) => entry.item),
+            probes,
+          );
+
+          return applyTaste(
+            shortlist,
+            (trackId) => tasteSubScore(cosines.get(trackId) ?? null),
+            limit,
+          );
+        })();
 
   if (ranked.length === 0) {
     return [];
   }
 
-  const byId = await getTracksByIds(ranked.map((entry) => entry.item));
+  const byId = await getMixTracksByIds(ranked.map((entry) => entry.item));
 
   return ranked.flatMap((entry) => {
     const item = byId[entry.item];
 
     return item ? [{ ...item, reason: entry.reason }] : [];
   });
+}
+
+// ── The `/mix` hydrates ──────────────────────────────────────────────────────
+
+/** Hydrate `/mix` rows by `track_id`, keyed for O(1) lookup. Certified or not. */
+async function getMixTracksByIds(trackIds: string[]): Promise<Record<string, MixTrackDTO>> {
+  const unique = [...new Set(trackIds.filter((id) => id.trim()))];
+
+  if (unique.length === 0) {
+    return {};
+  }
+
+  const db = await getDb();
+  const result = await db.execute({
+    args: unique,
+    sql: `select ${MIX_TRACK_SELECT} from ${MIX_FROM}
+          where tracks.track_id in (${unique.map(() => "?").join(", ")})`,
+  });
+
+  const byTrackId: Record<string, MixTrackDTO> = {};
+
+  for (const row of typedRows<MixTrackRow>(result.rows)) {
+    byTrackId[row.track_id] = toMixTrackDTO(row);
+  }
+
+  return byTrackId;
+}
+
+/**
+ * Hydrate a `?set=` chain from its tokens, IN ORDER. A token is a finding's Log ID or — for a
+ * track Fluncle never certified, which has no coordinate to name it by — its Spotify track id.
+ * One query for both kinds; a token that resolves to nothing drops silently (a set link
+ * outlives the archive it was built from, and a vanished row should thin the chain, not 500
+ * the page).
+ */
+export async function getMixTracksByTokens(tokens: string[]): Promise<MixTrackDTO[]> {
+  const unique = [...new Set(tokens.map((token) => token.trim()).filter(Boolean))];
+
+  if (unique.length === 0) {
+    return [];
+  }
+
+  const logIds = unique.filter((token) => isLogId(token));
+  const trackIds = unique.filter((token) => !isLogId(token));
+  const clauses: string[] = [];
+
+  if (logIds.length > 0) {
+    clauses.push(`findings.log_id in (${logIds.map(() => "?").join(", ")})`);
+  }
+  if (trackIds.length > 0) {
+    clauses.push(`tracks.track_id in (${trackIds.map(() => "?").join(", ")})`);
+  }
+
+  const db = await getDb();
+  const result = await db.execute({
+    args: [...logIds, ...trackIds],
+    sql: `select ${MIX_TRACK_SELECT} from ${MIX_FROM} where ${clauses.join(" or ")}`,
+  });
+
+  const byToken = new Map<string, MixTrackDTO>();
+
+  for (const row of typedRows<MixTrackRow>(result.rows)) {
+    const item = toMixTrackDTO(row);
+
+    byToken.set(row.track_id, item);
+
+    if (row.log_id) {
+      byToken.set(row.log_id, item);
+    }
+  }
+
+  // The URL is the order (a set is a sequence), so walk the tokens, not the result rows.
+  return unique.flatMap((token) => {
+    const item = byToken.get(token);
+
+    return item ? [item] : [];
+  });
+}
+
+// ── Taste-seeding: the artists, and what to open with ────────────────────────
+
+/**
+ * The artists a mix can be seeded from — every artist with at least one RANKABLE track (a key
+ * and a vector), most-represented first, optionally filtered by name. The taste picker's grid.
+ *
+ * `trackCount` counts rankable tracks and NOT findings, because that is the honest measure of
+ * what seeding this artist can actually do: an artist with 40 catalogue tracks Fluncle can
+ * place is a better seed than one with a single certified finding, and the picker must not
+ * pretend otherwise. See `list_mixable_artists` for why this is not `listArtists`.
+ */
+export async function listMixableArtists(
+  options: { limit?: number; q?: string } = {},
+): Promise<MixArtist[]> {
+  const limit = Math.min(Math.max(options.limit ?? 60, 1), 200);
+  const q = options.q?.trim() ?? "";
+  const db = await getDb();
+
+  const result = await db.execute({
+    args: q ? [`%${q}%`, limit] : [limit],
+    sql: `select artists.name as name, artists.slug as slug, artists.image_url as image_url,
+                 count(*) as track_count
+          from artists
+          join track_artists on track_artists.artist_id = artists.id
+          join tracks on tracks.track_id = track_artists.track_id
+          where tracks.key is not null
+            and (tracks.embedding_blob is not null or tracks.embedding_json is not null)
+            ${q ? "and artists.name like ? collate nocase" : ""}
+          group by artists.id
+          order by track_count desc, artists.name asc
+          limit ?`,
+  });
+
+  return typedRows<{
+    image_url: string | null;
+    name: string;
+    slug: string;
+    track_count: number;
+  }>(result.rows).map((row) => ({
+    imageUrl: row.image_url ?? undefined,
+    name: row.name,
+    slug: row.slug,
+    trackCount: row.track_count,
+  }));
+}
+
+/**
+ * What to open a set with, given the seeded artists: their OWN rankable tracks, certified
+ * first. See `list_mix_openers` for why this is the artists' tracks rather than a taste-ranked
+ * sweep of the archive (exact beats inferred, and a stranger can VERIFY this list at a glance).
+ *
+ * Certified first is not a ranking of quality — it is a ranking of AFFORDANCE: a finding has
+ * somewhere to send you (`/log`), and putting the rows that can show you around at the top of a
+ * stranger's very first list is how they discover there is a Fluncle here at all. Within each
+ * register, the most popular. Uncertified rows below them carry no label and no heading; the
+ * list is a mixed one, and its heading names the SUPERSET (the Unlit Rule).
+ */
+export async function getMixOpeners(
+  artistSlugs: string[],
+  options: { limit?: number } = {},
+): Promise<MixTrackDTO[]> {
+  const slugs = [...new Set(artistSlugs.map((slug) => slug.trim()).filter(Boolean))];
+  const limit = Math.min(Math.max(options.limit ?? 24, 1), 60);
+
+  if (slugs.length === 0) {
+    return [];
+  }
+
+  const db = await getDb();
+  const result = await db.execute({
+    args: [...slugs, limit],
+    sql: `select distinct ${MIX_TRACK_SELECT}
+          from ${MIX_FROM}
+          join track_artists on track_artists.track_id = tracks.track_id
+          join artists on artists.id = track_artists.artist_id
+          where artists.slug in (${slugs.map(() => "?").join(", ")})
+            and tracks.key is not null
+            and (tracks.embedding_blob is not null or tracks.embedding_json is not null)
+          order by (findings.log_id is not null) desc, tracks.popularity desc
+          limit ?`,
+  });
+
+  return typedRows<MixTrackRow>(result.rows).map(toMixTrackDTO);
 }
 
 /** One ordered stop in a proposed mix (the admin dream-weaver's output row). */

@@ -1,18 +1,29 @@
 import { describe, expect, it } from "vitest";
 import {
+  applyTaste,
   bpmSubScore,
   featureDistance,
+  isNamedMove,
+  type MixScored,
   type MixTrack,
+  MIX_PUBLIC_FLOOR,
   MIX_WEIGHTS,
+  mixChainDepth,
+  namedMoveClasses,
   orderMixPath,
   PATH_MAX,
   parseFeatureVector,
+  railScore,
+  RAIL_DEPTH,
   rankMixable,
   scoreMix,
+  SET_FLOOR,
   sonicGateOpen,
   sonicSubScore,
+  tasteSubScore,
   transitionsAlong,
 } from "./mixability";
+import { parseKey, toCamelot } from "../key-camelot";
 
 function track(input: Partial<MixTrack>): MixTrack {
   return {
@@ -286,5 +297,150 @@ describe("the key floor — a data-poor row can never win the rail (regression)"
     );
 
     expect(result.score).not.toBeNull();
+  });
+});
+
+describe("named moves (the harmonic adjacency the rail pre-filters on)", () => {
+  const camelot = (key: string) => {
+    const parsed = parseKey(key);
+
+    if (!parsed) {
+      throw new Error(`unparseable test key: ${key}`);
+    }
+
+    return toCamelot(parsed);
+  };
+
+  it("names same-key, relative, adjacent, diagonal, and energy as moves", () => {
+    const a = camelot("A minor"); // 8A
+
+    expect(isNamedMove(a, camelot("A minor"))).toBe(true); // same
+    expect(isNamedMove(a, camelot("C major"))).toBe(true); // relative (8B)
+    expect(isNamedMove(a, camelot("E minor"))).toBe(true); // adjacent (9A)
+    expect(isNamedMove(a, camelot("G major"))).toBe(true); // diagonal (9B)
+    expect(isNamedMove(a, camelot("G minor"))).toBe(true); // energy (6A)
+  });
+
+  it("rejects a distant key (a tritone is not a move a DJ makes)", () => {
+    // 8A ↔ 2A is a tritone on the number ring — the furthest same-letter move.
+    expect(isNamedMove(camelot("A minor"), camelot("D# minor"))).toBe(false);
+  });
+
+  it("reaches exactly 8 of the 24 Camelot classes (itself + 7 named moves)", () => {
+    const classes = namedMoveClasses(camelot("A minor"));
+
+    expect(classes).toHaveLength(8);
+    // No duplicates, and each really is a named move.
+    const codes = new Set(classes.map(({ letter, number }) => `${number}${letter}`));
+    expect(codes.size).toBe(8);
+    expect(classes.every((to) => isNamedMove(camelot("A minor"), to))).toBe(true);
+  });
+});
+
+describe("the depth gate (mixChainDepth)", () => {
+  it("is closed on an empty archive, and rankable is 0", () => {
+    const depth = mixChainDepth([]);
+
+    expect(depth).toEqual({ median: 0, open: false, rankable: 0 });
+  });
+
+  it("counts only parseable keys as rankable", () => {
+    const depth = mixChainDepth([
+      { count: 5, key: "A minor" },
+      { count: 3, key: "not a key" },
+      { count: 2, key: null },
+    ]);
+
+    expect(depth.rankable).toBe(5);
+  });
+
+  it("folds enharmonic spellings onto one Camelot class before measuring", () => {
+    // A# minor and Bb minor are the same class (3A). The neighbourhood of a single class is
+    // itself minus one, so both spellings collapse to one class of count 4 → median 3.
+    const depth = mixChainDepth([
+      { count: 2, key: "A# minor" },
+      { count: 2, key: "Bb minor" },
+    ]);
+
+    expect(depth.rankable).toBe(4);
+    expect(depth.median).toBe(3); // 4 in the class, minus self
+  });
+
+  it("opens once the median track can reach the floor by a named move", () => {
+    // 40 tracks per class across the 12 minor classes: every class's named-move neighbourhood
+    // is large, so the median clears the floor and the gate opens.
+    const histogram = Array.from({ length: 12 }, (_, index) => ({
+      count: 40,
+      key: `${["A", "A#", "B", "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#"][index]} minor`,
+    }));
+    const depth = mixChainDepth(histogram);
+
+    expect(depth.open).toBe(true);
+    expect(depth.median).toBeGreaterThanOrEqual(MIX_PUBLIC_FLOOR);
+  });
+
+  it("stays closed when the archive is deep in count but thin in the median neighbourhood", () => {
+    // 200 tracks, but all in ONE key: the neighbourhood of that class is 199, huge — so that
+    // is NOT the failing case. The failing case is a lone class no move reaches: two classes
+    // a tritone apart, each with a handful, so the median neighbourhood is tiny.
+    const depth = mixChainDepth([
+      { count: 8, key: "A minor" }, // 8A
+      { count: 8, key: "D# minor" }, // 2A — a tritone from 8A, no named move between them
+    ]);
+
+    // Each class reaches only itself: neighbourhood = count - 1 = 7 < the floor.
+    expect(depth.median).toBe(7);
+    expect(depth.open).toBe(false);
+  });
+
+  it("the floor is one of Fluncle's own sets plus a full rail (not a picked number)", () => {
+    expect(MIX_PUBLIC_FLOOR).toBe(SET_FLOOR + RAIL_DEPTH);
+  });
+});
+
+describe("taste (the seed combiner)", () => {
+  it("is null for a candidate with no vector to compare", () => {
+    expect(tasteSubScore(null)).toBeNull();
+  });
+
+  it("calibrates a cosine onto [0,1] the same way the sonic term does", () => {
+    // A cosine at the calibration ceiling scores ~1, at the floor ~0.
+    expect(tasteSubScore(0.95)).toBeCloseTo(1, 5);
+    expect(tasteSubScore(0.5)).toBeCloseTo(0, 5);
+  });
+
+  it("railScore degrades to plain mixability when taste is absent", () => {
+    expect(railScore(0.8, null)).toBe(0.8);
+  });
+
+  it("railScore is a product, so a hated track cannot outrank a loved clean mix", () => {
+    // A spotless mix (0.95) of something you'd never play (taste 0.1) must lose to a good mix
+    // (0.7) of something you love (taste 0.9). A SUM would invert this.
+    expect(railScore(0.95, 0.1)).toBeLessThan(railScore(0.7, 0.9));
+  });
+});
+
+describe("applyTaste (re-ranking a shortlist by mixability × taste)", () => {
+  const shortlist: MixScored<string>[] = [
+    { item: "clean-but-off-lane", reason: { kind: "key", relationship: "same_key" }, score: 0.95 },
+    { item: "good-and-on-lane", reason: { kind: "key", relationship: "adjacent" }, score: 0.7 },
+  ];
+
+  it("promotes the on-lane candidate above the cleaner off-lane one", () => {
+    const ranked = applyTaste(shortlist, (item) => (item === "good-and-on-lane" ? 0.95 : 0.5), 2);
+
+    expect(ranked.map((row) => row.item)).toEqual(["good-and-on-lane", "clean-but-off-lane"]);
+  });
+
+  it("keeps a candidate with no taste measurement on its mixability rank (never punished)", () => {
+    // Both null taste → railScore falls back to mixability, so the cleaner mix leads.
+    const ranked = applyTaste(shortlist, () => null, 2);
+
+    expect(ranked[0]?.item).toBe("clean-but-off-lane");
+  });
+
+  it("cuts to the limit and returns nothing for a non-positive limit", () => {
+    expect(applyTaste(shortlist, () => 0.9, 1)).toHaveLength(1);
+    expect(applyTaste(shortlist, () => 0.9, 0)).toEqual([]);
   });
 });

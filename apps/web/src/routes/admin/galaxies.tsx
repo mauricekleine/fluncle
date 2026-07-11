@@ -150,7 +150,7 @@ function AdminGalaxiesPage() {
           plate's backdrop-blur to the viewport and shows whichever member cover the
           operator is auditioning. The whole audition rides the one preview singleton, so
           starting a cover stops the last one. */}
-      <MixPreviewBar findings={allMembers} notation={notation} />
+      <MixPreviewBar notation={notation} tracks={allMembers} />
     </AdminShell>
   );
 }

@@ -3,7 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { backfillEmbeddingBlob } from "../../../scripts/backfill-embedding-blob";
 import { cosineSimilarity, EMBEDDING_DIMS, readEmbeddingBlob } from "./embedding";
 import { createIntegrationDb, seedTrack } from "./integration-db";
-import { rankMixable, sonicGateOpen, toMixTrack } from "./mixability";
+import { parseKey, toCamelot } from "../key-camelot";
+import { isNamedMove, rankMixable, sonicGateOpen, toMixTrack } from "./mixability";
 import { getFindingsByGalaxyRanked, getMixableTracks } from "./tracks";
 
 // The other two readers that used to pull every vector into the isolate, now ranked IN SQL
@@ -62,7 +63,11 @@ function corpus(): MixSeed[] {
 
 async function seed(rows: MixSeed[]): Promise<void> {
   for (const [index, row] of rows.entries()) {
-    await seedTrack(db, { logId: `00${index % 9}.${index}.1A`, trackId: row.trackId });
+    // A VALID finding coordinate per `isLogId` (`\d{3,4}\.\d\.\d[A-Z]`): a unique 3-digit
+    // sector, a single-digit middle, a digit+letter tail. The rail now routes an exclusion
+    // token by `isLogId` (a chain holds catalogue tracks too, keyed by Spotify id), so a
+    // malformed fixture coordinate would misroute as a track id and silently not exclude.
+    await seedTrack(db, { logId: `${100 + index}.${index % 10}.1A`, trackId: row.trackId });
     await db.execute({
       args: [
         row.key,
@@ -83,14 +88,24 @@ async function seed(rows: MixSeed[]): Promise<void> {
   }
 }
 
-/** The reference ranking for `/mix`: the OLD path, scoring from vectors held in memory. */
+/**
+ * The reference ranking for `/mix`: score from vectors held in memory, over the SAME
+ * candidate pool the SQL path scans. That pool is now the NAMED-MOVE neighbourhood, not the
+ * whole archive — `getMixableTracks` pre-filters `key in (…)` to the ~8 Camelot classes a
+ * named harmonic move can reach (a distant-key pair is not a move a DJ makes, and the depth
+ * gate guarantees the neighbourhood is deep enough to fill the rail). So the reference
+ * applies the same filter before ranking; the pin is still "the SQL cosine equals the JS
+ * cosine, in the same order", which is what this test exists to prove.
+ */
 function rankInIsolate(rows: MixSeed[], targetId: string, limit: number): string[] {
   const target = rows.find((row) => row.trackId === targetId);
+  const targetKey = target ? parseKey(target.key) : null;
 
-  if (!target) {
+  if (!target || !targetKey) {
     return [];
   }
 
+  const targetCamelot = toCamelot(targetKey);
   const toRow = (row: MixSeed) => ({
     bpm: row.bpm,
     embedding_json: row.embedding ? JSON.stringify(row.embedding) : null,
@@ -102,7 +117,15 @@ function rankInIsolate(rows: MixSeed[], targetId: string, limit: number): string
     key: row.key,
   });
   const candidates = rows
-    .filter((row) => row.trackId !== targetId)
+    .filter((row) => {
+      if (row.trackId === targetId) {
+        return false;
+      }
+
+      const parsed = parseKey(row.key);
+
+      return parsed ? isNamedMove(targetCamelot, toCamelot(parsed)) : false;
+    })
     .map((row) => ({ item: row.trackId, track: toMixTrack(toRow(row)) }));
   const embedded = rows.filter((row) => row.embedding !== null).length;
 
@@ -161,13 +184,13 @@ describe("getMixableTracks", () => {
     expect(fromSql).toEqual(rankInIsolate(rows, "t_00", 12));
   });
 
-  it("drops the excluded Log IDs server-side", async () => {
+  it("drops the excluded tracks server-side", async () => {
     await seed(corpus());
     await backfillEmbeddingBlob(db);
 
     const [first] = await getMixableTracks("t_00", { limit: 1 });
     const excluded = await getMixableTracks("t_00", {
-      excludeLogIds: [first?.logId ?? ""],
+      exclude: [first?.logId ?? ""],
       limit: 1,
     });
 

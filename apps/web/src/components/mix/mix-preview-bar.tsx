@@ -1,7 +1,7 @@
 import { PauseIcon, PlayIcon } from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { type TrackListItem } from "@fluncle/contracts";
+
 import { Button } from "@fluncle/ui/components/button";
 import { TrackArtwork } from "@/components/track-artwork";
 import { formatDuration } from "@/lib/format";
@@ -22,12 +22,28 @@ import { stopPreview, usePreviewControls, usePreviewProgress } from "@/lib/previ
 
 const clock = (seconds: number): string => formatDuration(Math.max(0, Math.round(seconds)) * 1000);
 
+/**
+ * Exactly what the bar READS, and nothing more — so both its consumers can hand it their own
+ * row type without a cast: `/mix`'s `MixTrack` and `/admin/galaxies`' `TrackListItem`. The
+ * preview relay is keyed by `logId`, so an uncertified row (no coordinate) can never be the
+ * active one, which is why `logId` is optional here rather than absent.
+ */
+type PreviewRow = {
+  albumImageUrl?: string;
+  artists: string[];
+  bpm?: number;
+  key?: string;
+  logId?: string;
+  title: string;
+};
+
 export function MixPreviewBar({
-  findings,
   notation,
+  tracks,
 }: {
-  findings: TrackListItem[];
   notation: KeyNotation;
+  /** Every row that could be previewing right now (chain ∪ rail). Only certified rows can. */
+  tracks: PreviewRow[];
 }) {
   const [mounted, setMounted] = useState(false);
 
@@ -36,9 +52,7 @@ export function MixPreviewBar({
   const { activeTrackId, pauseResume, status } = usePreviewControls();
   const { currentTime, duration } = usePreviewProgress();
 
-  const active = activeTrackId
-    ? findings.find((finding) => finding.logId === activeTrackId)
-    : undefined;
+  const active = activeTrackId ? tracks.find((track) => track.logId === activeTrackId) : undefined;
 
   // The active preview left the set (its row was removed): stop it so audio never
   // outlives its bar.
