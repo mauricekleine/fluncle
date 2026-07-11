@@ -58,6 +58,7 @@
 //
 // See docs/catalogue-crawler.md.
 
+import { linkTracksToArtistEntities } from "./artists";
 import { getDb, typedRows } from "./db";
 import { parseDiscogsUrl } from "./discogs";
 import { ensureLabel, labelSlug, listLabels } from "./labels";
@@ -863,6 +864,15 @@ async function expandRelease(node: FrontierRow, maxHop: number): Promise<Expansi
   if (labelName) {
     await linkTracksToLabel(writtenIds, labelName);
   }
+
+  // The other indexed edge these rows need, stamped in the same breath as `label_id` and for
+  // the same reason: `/artist/<slug>` shows the rest of an artist's catalogue, and it can only
+  // find these rows by an indexed seek on `track_artists`. Purely additive and best-effort —
+  // it links a crawled track to an artist Fluncle has ALREADY certified, mints nothing, and
+  // makes nothing here countable as a finding (lib/server/artists.ts). A track credited to
+  // nobody he has found stays unlinked, exactly as it stays unlinked from an album he never
+  // touched. The deploy-time reconcile is the backstop; this makes the edge live per tick.
+  await linkTracksToArtistEntities(writtenIds);
 
   // The outward edge: the artists on this release, one hop further out. Past the limit
   // nothing is enqueued, which is what makes the walk terminate.
