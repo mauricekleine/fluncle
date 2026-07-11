@@ -97,18 +97,18 @@ describe("oRPC public read — GET /mixtapes (list_mixtapes)", () => {
     expect(await readJson(response)).toEqual({ mixtapes: [], ok: true });
   });
 
-  it("500s an unexpected fault as { code: 'error', message, ok: false }", async () => {
+  it("500s an unexpected fault generically — the raw detail never reaches the wire", async () => {
     listMixtapes.mockRejectedValueOnce(new Error("turso fell over"));
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
     const { handleOrpc } = await import("./orpc");
     const response = await handleOrpc(get("https://www.fluncle.com/api/v1/mixtapes"));
 
     expect(response?.status).toBe(500);
-    expect(await readJson(response)).toEqual({
-      code: "error",
-      message: "turso fell over",
-      ok: false,
-    });
+    const body = await readJson(response);
+    expect(body).toEqual({ code: "error", message: "Internal error", ok: false });
+    expect(JSON.stringify(body)).not.toContain("turso fell over");
+    errSpy.mockRestore();
   });
 });
 

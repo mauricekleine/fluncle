@@ -54,10 +54,14 @@ export const serverHandlers: ApiHandlers = {
         status: 302,
       });
     } catch (authError) {
+      // The raw token-exchange detail belongs in the server log, not on the wire
+      // to this unauthenticated callback; the board keys its reconnect banner on
+      // the code, so keep that and answer with plain operator-facing copy.
+      console.error("spotify auth callback:", authError);
       return jsonError(
         400,
         "spotify_auth_failed",
-        authError instanceof Error ? authError.message : String(authError),
+        "Spotify authorization failed — retry from the board.",
       );
     }
   },

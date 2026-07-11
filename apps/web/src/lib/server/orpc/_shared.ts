@@ -68,21 +68,33 @@ export function isApiFaultData(data: unknown): data is ApiFaultData {
 
 /**
  * Convert an unexpected (non-`ORPCError`) fault into an `ORPCError` whose status,
- * code, and message match the legacy `apiErrorResponse` (http-errors.ts): an
- * `ApiError` keeps its own status/code/message; anything else is a 500 with code
- * `error`. The legacy `{ code, message }` ride along in `data` so the rails
- * encoder reproduces the exact `jsonError` body. Shared so every converted
- * handler's catch can `throw apiFault(error)` for one wire-compatible 500 path.
+ * code, and message match the legacy `apiErrorResponse` (http-errors.ts). The
+ * branch splits by intent: a deliberate `ApiError` keeps its own status/code/
+ * message (a client contract the CLI renders to the operator), with the legacy
+ * `{ code, message }` riding along in `data` so the rails encoder reproduces the
+ * exact `jsonError` body. Anything else is an *unexpected* fault — its raw detail
+ * (driver/upstream internals) goes to the server log and the wire gets a generic
+ * 500 (`error` / "Internal error"), never the raw message to an unauthenticated
+ * caller. Shared so every converted handler's catch can `throw apiFault(error)`
+ * for one wire-compatible 500 path.
  */
 export function apiFault(error: unknown): ORPCError<string, ApiFaultData> {
-  const apiCode = error instanceof ApiError ? error.code : "error";
-  const apiMessage = error instanceof Error ? error.message : String(error);
-  const status = error instanceof ApiError ? error.status : 500;
+  if (error instanceof ApiError) {
+    return new ORPCError("INTERNAL_SERVER_ERROR", {
+      data: { apiCode: error.code, apiMessage: error.message },
+      message: error.message,
+      status: error.status,
+    });
+  }
+
+  // An unexpected fault: the raw detail (driver/upstream internals) belongs in
+  // the server log, never on the wire to an unauthenticated caller.
+  console.error("apiFault:", error);
 
   return new ORPCError("INTERNAL_SERVER_ERROR", {
-    data: { apiCode, apiMessage },
-    message: apiMessage,
-    status,
+    data: { apiCode: "error", apiMessage: "Internal error" },
+    message: "Internal error",
+    status: 500,
   });
 }
 

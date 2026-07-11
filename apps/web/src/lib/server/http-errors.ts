@@ -7,7 +7,9 @@ export function apiErrorResponse(error: unknown): Response {
     return jsonError(error.status, error.code, error.message);
   }
 
-  return jsonError(500, "error", error instanceof Error ? error.message : String(error));
+  // An unexpected fault: log the raw detail server-side, answer generically.
+  console.error("apiErrorResponse:", error);
+  return jsonError(500, "error", "Internal error");
 }
 
 /** The canonical 404 for a track lookup by id or Log ID. */
