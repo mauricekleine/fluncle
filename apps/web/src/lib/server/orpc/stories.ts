@@ -3,7 +3,7 @@
 // future wave adds an op here and one spread line in the root — no other
 // domain's file is touched.
 
-import { decodeTrackCursor, listTracks } from "../tracks";
+import { decodeTrackCursor, listTracks, toPublicTrackListItem } from "../tracks";
 import { apiFault, type Implementer, parseLimit } from "./_shared";
 
 // Feed page-size bounds, ported verbatim from the live /api/stories route.
@@ -26,7 +26,13 @@ export function storiesHandlers(os: Implementer) {
       const limit = parseLimit(input.limit, LIST_DEFAULT_LIMIT, LIST_MAX_LIMIT);
       const cursor = decodeTrackCursor(input.cursor ?? null);
 
-      return await listTracks({ cursor, hasVideo: true, lean: true, limit });
+      const page = await listTracks({ cursor, hasVideo: true, lean: true, limit });
+
+      // Strip the private capture key (and the internal provenance fields) from every
+      // item before it world-serves — the same public-strip the `list_tracks` feed runs
+      // (orpc/tracks.ts). The lean projection still populates `sourceAudioKey`, so without
+      // this the private R2 key of the captured full song would ship on this public feed.
+      return { ...page, tracks: page.tracks.map(toPublicTrackListItem) };
     } catch (error) {
       throw apiFault(error);
     }

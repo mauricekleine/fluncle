@@ -29,10 +29,12 @@ const coverUrl = `${siteUrl}/fluncle-cover.png`;
 // is the whole point of banking the nav in a footer) never sees the map at all.
 const fetchGalaxiesLive = createServerFn({ method: "GET" }).handler(() => isGalaxyMapFullyNamed());
 
-// oxlint-disable-next-line sort-keys -- TanStack's canonical option order (loader
-// feeds the next step's inference); see AGENTS.md.
+// TanStack's canonical option order (loader feeds the next step's inference),
+// which isn't alphabetical — so sort-keys is off here. See AGENTS.md.
+// oxlint-disable-next-line sort-keys
 export const Route = createRootRoute({
   component: RootLayout,
+  loader: async () => ({ galaxiesLive: await fetchGalaxiesLive() }),
   head: () => ({
     links: [
       // The body face. Preloaded ahead of the display face because it now sets nearly
@@ -182,7 +184,6 @@ export const Route = createRootRoute({
       },
     ],
   }),
-  loader: async () => ({ galaxiesLive: await fetchGalaxiesLive() }),
   // The site-wide 404: the empty coordinate as a black hole (a finding Fluncle went
   // looking for and found nothing where it should be). Catches every unmatched URL and
   // any bubbled `notFound()` without a route-local state; the router serves it at a real

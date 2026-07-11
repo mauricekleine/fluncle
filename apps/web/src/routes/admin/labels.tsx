@@ -74,6 +74,7 @@ function AdminLabelsPage() {
     initialData: initial,
     queryFn: () => fetchLabels(),
     queryKey: LABELS_KEY,
+    refetchOnWindowFocus: true,
   });
 
   const board = useMemo(
