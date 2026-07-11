@@ -12,6 +12,7 @@
 //
 // Rendered on every page EXCEPT home, where the trail would be a single dead crumb.
 
+import { CaretRightIcon } from "@phosphor-icons/react";
 import { Link } from "@tanstack/react-router";
 import { type ReactNode } from "react";
 import { siteUrl } from "@/lib/fluncle-links";
@@ -128,9 +129,10 @@ export function NavBreadcrumb({
       <ol>
         {crumbs.map((crumb) => (
           <li key={crumb.label}>
-            <span aria-hidden="true" className="nav-breadcrumb-sep">
-              ›
-            </span>
+            {/* The Phosphor caret, not a "›" character: a text separator is at the mercy
+                of whatever face it lands in (it changed shape when the body font did), and
+                DESIGN.md draws every interface icon from Phosphor. */}
+            <CaretRightIcon aria-hidden="true" className="nav-breadcrumb-sep" weight="bold" />
             {crumb.to ? (
               <Link to={crumb.to as never}>{crumb.label}</Link>
             ) : (

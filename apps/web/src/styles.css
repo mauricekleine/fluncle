@@ -1977,14 +1977,15 @@ body::before {
   width: 2.75rem;
 }
 
-/* The galaxy detail masthead's name — the operator-authored editorial name in the
-   Title register (system sans, extrabold cream), NOT the Oxanium coordinate face the
-   .log-coordinate slot defaults to: One Voice Rule reserves Oxanium for the brand + the
-   numbers, so an editorial name never wears the brand face (the RFC's names-not-Oxanium
-   rail). Keeps the masthead size/weight/cream from .log-coordinate; overrides only the
-   family. Wrap long names rather than overflow the plate. */
+/* The galaxy detail masthead's name. It KEEPS the Oxanium masthead face it inherits from
+   .log-coordinate: a galaxy page's masthead is a plate masthead, and DESIGN.md gives
+   every one of those to Oxanium (The log, Back issues, Mixtapes are all set in it).
+
+   This used to override the family to the body face, citing the One Voice Rule and a
+   "names-not-Oxanium" rail from the galaxies RFC — which made galaxies the ONLY masthead
+   on the site wearing the body face. An RFC is subordinate to canon. Only the wrap
+   survives, so a long name breaks rather than overflowing the plate. */
 .galaxy-title {
-  font-family: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
   overflow-wrap: anywhere;
 }
 
@@ -3626,8 +3627,13 @@ body::before {
   white-space: nowrap;
 }
 
+/* The Phosphor caret. Sized in em so it tracks the crumb text, and flex:none so it never
+   gets squeezed when a long tail truncates beside it. */
 .nav-breadcrumb-sep {
   color: color-mix(in oklch, var(--muted-foreground) 55%, transparent);
+  flex: none;
+  height: 0.8em;
+  width: 0.8em;
 }
 
 /* ── The colophon (the crawl backbone) ─────────────────────────────────────── */
