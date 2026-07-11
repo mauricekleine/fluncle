@@ -429,7 +429,7 @@ function LogPage() {
               <dt>
                 <Link
                   aria-label="How Fluncle measures BPM"
-                  className="log-galaxy-link"
+                  className="log-method-link"
                   hash={MEASURED_FAQ_ANCHOR}
                   to="/about"
                 >
@@ -444,7 +444,7 @@ function LogPage() {
               <dt>
                 <Link
                   aria-label="How Fluncle measures key"
-                  className="log-galaxy-link"
+                  className="log-method-link"
                   hash={MEASURED_FAQ_ANCHOR}
                   to="/about"
                 >

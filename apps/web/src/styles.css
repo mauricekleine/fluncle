@@ -1791,10 +1791,13 @@ body::before {
   color: var(--starlight-cream);
 }
 
-/* The galaxy clause's link inside the definitional prose (browse-by-feel RFC): the
-   name + " galaxy" links into the /galaxies/<slug> lens. A quiet inline cross-link,
-   the primary hue on hover — the one way into the region from a /log page. */
-.log-galaxy-link {
+/* The METHODOLOGY link: the /log page's BPM and Key terms link to the "how Fluncle measures"
+   FAQ on /about. A quiet inline cross-link, the primary hue on hover.
+
+   It is NOT an entity link and must not become one. It used to also carry the galaxy clause,
+   which is now a `GraphLink` like every other entity Fluncle names — do not grow a bespoke
+   entity link off this class; use `GraphLink`. */
+.log-method-link {
   color: inherit;
   text-decoration: underline;
   text-decoration-color: color-mix(in oklch, var(--primary) 40%, transparent);
@@ -1802,8 +1805,8 @@ body::before {
   transition: color 150ms ease-out;
 }
 
-.log-galaxy-link:hover,
-.log-galaxy-link:focus-visible {
+.log-method-link:hover,
+.log-method-link:focus-visible {
   color: var(--starlight-cream);
   text-decoration-color: var(--primary);
 }
@@ -4360,19 +4363,24 @@ body::before {
    AT REST it is Starlight Cream under a DOTTED underline: legible as a link, quiet as text.
    It is deliberately NOT gold. Eclipse Gold is the One Sun (the primary action, the focus
    ring, identity) and a /log page already spends its budget on the Listen CTA, the
-   coordinate, and the galaxy clause; gold-at-rest graph links would make the page a field of
+   coordinate, and the FOUND stamp; gold-at-rest graph links would make the page a field of
    suns and the real CTA would stop leading.
 
    ON HOVER/FOCUS it HEATS to Eclipse Glow and the underline goes SOLID — The Ignition Rule:
    gold is placed like light, and interaction heats it. Never a dim.
 
-   Contrast (WCAG AA, on the warm-dark plate): Starlight Cream #f4ead7 and Eclipse Glow
-   #ffd057 both clear 4.5:1 comfortably on Deep Field / Tape Black, so BOTH states are legible
-   ink, not decoration. */
+   THE INK IS THE HOST'S WHEN THE HOST HAS ONE. Cream is the ink of a name in READING text.
+   Two hosts already own their register and must keep it — a chip (`--chip`) and the feed
+   row's Stardust imprint line (below). There the underline is the whole affordance and the
+   heat is unchanged; only the resting colour defers. Hence `:not(.graph-link--chip)` on the
+   colour rules: a chip must never fight the tile it sits in (its host heats its own border,
+   and two gold events on one chip is one too many).
+
+   Contrast (WCAG AA, measured on the card's ground and the warm-dark plate): Starlight Cream
+   #f4ead7 reads 15.2:1 and Eclipse Glow #ffd057 reads 12.4:1. Both states are legible ink. */
 .graph-link {
-  color: var(--starlight-cream);
   text-decoration: underline;
-  text-decoration-color: color-mix(in oklch, var(--starlight-cream) 45%, transparent);
+  text-decoration-color: color-mix(in oklch, currentcolor 45%, transparent);
   text-decoration-style: dotted;
   text-decoration-thickness: 1px;
   text-underline-offset: 0.2em;
@@ -4381,38 +4389,60 @@ body::before {
     text-decoration-color 150ms ease-out;
 }
 
-.graph-link:hover,
-.graph-link:focus-visible {
+.graph-link:not(.graph-link--chip) {
+  color: var(--starlight-cream);
+}
+
+.graph-link:not(.graph-link--chip):hover,
+.graph-link:not(.graph-link--chip):focus-visible {
   color: var(--eclipse-glow);
   text-decoration-color: var(--eclipse-glow);
   text-decoration-style: solid;
 }
 
+/* The focus ring is explicit, not a UA fallback — the house pattern for an inline link
+   (`.unlit-link:focus-visible`). Focus stays Eclipse Gold on every interactive element,
+   because focus is an accessibility affordance, not a claim about the music. */
+.graph-link:focus-visible {
+  border-radius: 2px;
+  outline: 2px solid var(--eclipse-glow);
+  outline-offset: 2px;
+}
+
 /* The chip skin: the same link and the same card, worn by a host that already draws the
-   affordance (an avatar chip, an adjacent-galaxy tile). No underline — a chip is not a word in
-   a sentence — and the host's own hover state does the heating. */
+   affordance (an avatar chip, an adjacent-galaxy tile). No underline — a chip is not a word
+   in a sentence — and NO ink and NO heat of its own: the host owns both. */
 .graph-link--chip {
-  color: inherit;
   text-decoration: none;
 }
 
-/* The card. A quiet plate over the cosmos: the entity's own opening line, a few covers, the
-   count. It carries NO gold at all — it is a preview, not an action, and it must not spend the
-   One Sun budget just by existing. */
+/* The card. A printed card on the plate: the entity's own opening line, a few covers, the
+   count.
+
+   It is OPAQUE and it has NO SHADOW and NO BLUR, and all three are canon, not taste. Glass
+   does not stack on glass (One Pane), and a surface with a drop shadow is prohibited outright
+   (Through-the-Glass) — so the card kills the `shadow-md` its Shadcn popup ships with and
+   sits as ink on paper rather than a third pane over the plate. Fully opaque also means the
+   contrast below is exact: nothing of the cosmos, and none of the sun-bloom, is behind this
+   text (The Legible Sky Rule).
+
+   It carries NO gold at all — it is a preview, not an action, and it must not spend the One
+   Sun budget just by existing. */
 .graph-card {
-  background: color-mix(in oklch, var(--tape-black) 94%, transparent);
-  backdrop-filter: blur(12px);
+  background: var(--tape-black);
   border: 1px solid var(--dust-line);
+  box-shadow: none;
   gap: 0.5rem;
   max-width: 20rem;
   width: 18rem;
 }
 
+/* Title (DESIGN.md §3): 1.02rem / 700 / 1.18. */
 .graph-card-name {
   color: var(--starlight-cream);
-  font-size: 0.9rem;
+  font-size: 1.02rem;
   font-weight: 700;
-  line-height: 1.25;
+  line-height: 1.18;
 }
 
 .graph-card-covers {
@@ -4435,20 +4465,20 @@ body::before {
   text-wrap: pretty;
 }
 
+/* The count and the pre-arrival line take Stardust STRAIGHT — no `opacity`. Stardust already
+   IS the canon's muted ink; dimming it invents an ink below the palette's floor, and both
+   lines were sitting within a rounding error of the 4.5:1 AA gate because of it. Unmodified,
+   they read 8.0:1. And no uppercase, no tracking: labels are bold and small, never tracked-out
+   eyebrows (DESIGN.md §3/§6), and Fluncle's copy is sentence case (VOICE.md §6) — this line
+   is a sentence, not a legend. */
 .graph-card-count {
   color: var(--stardust);
   font-size: 0.72rem;
-  letter-spacing: 0.04em;
-  opacity: 0.75;
-  text-transform: uppercase;
 }
 
-/* The pre-arrival line. Stardust at 0.7 measured 4.52:1 on the card's ground — it PASSED AA,
-   but by 0.02, which is not a margin, it is a rounding error. At 0.8 it reads 5.5:1. */
 .graph-card-loading {
   color: var(--stardust);
   font-size: 0.82rem;
-  opacity: 0.8;
 }
 
 /* The card must not animate in for a reader who asked for no motion: it appears, it does not
@@ -4465,11 +4495,25 @@ body::before {
   }
 }
 
-/* The feed row's link is STRETCHED (a `::after` over the whole row), which paints in the
-   positioned layer and would otherwise swallow the imprint's graph link beneath it. Lift the
-   link out — the same escape `.track-play` and `.track-actions` already make. The row still
-   opens the finding everywhere else; only the imprint's own name goes to the imprint. */
+/* The feed row's imprint line. Two things are happening here, both load-bearing.
+
+   1. The row's own link is STRETCHED (a `::after` over the whole row), which paints in the
+      positioned layer and would otherwise swallow the imprint's graph link beneath it. Lift
+      the link out — the same escape `.track-play` and `.track-actions` already make. The row
+      still opens the finding everywhere else; only the imprint's own name goes to the imprint.
+
+   2. The INK stays the row's. DESIGN.md §5 names the Track Row's label-and-year line as
+      Stardust, under the extrabold Artist — Title line; a cream imprint would invert that
+      hierarchy and pull the eye off the music. So the link inherits the host's muted ink at
+      rest (the dotted underline is the whole affordance here) and still heats to Eclipse Glow
+      on hover — the Ignition Rule intact, the row's register intact. */
 .track-label .graph-link {
+  color: inherit;
   position: relative;
   z-index: 1;
+}
+
+.track-label .graph-link:hover,
+.track-label .graph-link:focus-visible {
+  color: var(--eclipse-glow);
 }

@@ -48,7 +48,7 @@ const CLOSE_DELAY_MS = 200;
 
 /** How the card's text names each kind — the count line's noun. */
 const COUNT_NOUN: Record<GraphEntityKind, string> = {
-  album: "on this record",
+  album: "off this record",
   artist: "from this one",
   galaxy: "out here",
   label: "off this imprint",
@@ -107,9 +107,9 @@ function PreviewBody({
 }): ReactNode {
   if (!preview) {
     // The pre-arrival state. Deliberately NOT a spinner or a shimmer of fake rows: the card is
-    // a courtesy, and a loading skeleton for a courtesy is noise. One quiet line, then the
-    // real thing.
-    return <p className="graph-card-loading">Reading the log…</p>;
+    // a courtesy, and a loading skeleton for a courtesy is noise. One quiet line — Fluncle
+    // doing the verb, and naming no object he cannot yet see — then the real thing.
+    return <p className="graph-card-loading">Digging that out…</p>;
   }
 
   const { covers, findingCount, line, name } = preview;
