@@ -82,3 +82,31 @@ export function resolveCardMedia(f: TrackListItem): CardMedia {
     previewUrl: f.previewUrl ? previewProxy(id) : undefined,
   };
 }
+
+/**
+ * The cover-led artwork for the radio's now-playing card. Radio is audio-only on this
+ * surface — the ONLY sound is the spoken observation (never the commercial track), so
+ * the finding's album art is the hero rather than the video (which the web plays silent
+ * under the same observation). Prefer the album cover; fall back to the clean square
+ * master's poster frame when a finding has a render but the cover is somehow absent.
+ * Both are found.fluncle.com/CDN reads — no full-length audio ever streams here.
+ */
+export function radioArtworkUrl(f: TrackListItem): string | undefined {
+  if (f.albumImageUrl) {
+    return f.albumImageUrl;
+  }
+
+  return f.logId && f.videoSquaredAt ? videoPoster(f.logId, f.videoSquaredAt) : undefined;
+}
+
+/** The mixtape cover renditions the on-the-fly cover endpoint serves (mirrors apps/web/src/lib/mixtapes.ts). */
+export type MixtapeCoverSize = "card" | "og" | "square" | "thumb" | "wide";
+
+/**
+ * The cover URL for a published mixtape, rendered on the fly by the web cover endpoint
+ * (Satori over the baked Deep-Field background). Keep the `?v=` version in step with
+ * apps/web/src/lib/mixtapes.ts `COVER_VERSION` so a re-bake busts both surfaces' caches.
+ */
+export function mixtapeCoverUrl(logId: string, size: MixtapeCoverSize = "square"): string {
+  return `${API_BASE}/api/mixtape-cover/${encodeURIComponent(logId)}?size=${size}&v=2`;
+}

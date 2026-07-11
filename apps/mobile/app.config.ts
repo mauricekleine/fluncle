@@ -45,6 +45,20 @@ const config: ExpoConfig = {
     "expo-router",
     ["expo-splash-screen", { backgroundColor: DEEP_FIELD, resizeMode: "contain" }],
     ["expo-video", { supportsBackgroundPlayback: false, supportsPictureInPicture: false }],
+    // The Radio surface keeps the spoken observation playing past a lock / backgrounding.
+    // This plugin adds iOS `UIBackgroundModes: ["audio"]` and the Android media-playback
+    // foreground service + permissions. Recording is disabled (Radio never records), so
+    // no microphone permission or RECORD_AUDIO is requested. NOTE: this is a NATIVE
+    // config change — it needs a rebuild (`expo run:ios` / a new EAS build), NOT a reload.
+    [
+      "expo-audio",
+      {
+        enableBackgroundPlayback: true,
+        enableBackgroundRecording: false,
+        microphonePermission: false,
+        recordAudioAndroid: false,
+      },
+    ],
   ],
   scheme: "fluncle",
   slug: "fluncle",
