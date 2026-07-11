@@ -21,8 +21,16 @@ export * from "./hooks";
 // Journey machinery (ShaderLayer + GLSL, the narrative clock) and CloseCard
 export * from "./journey";
 
-// Typography font loader
-export { OXANIUM, OXANIUM_STACK, loadOxanium } from "./fonts";
+// Typography: the three canon faces, embedded (DESIGN.md §3, The Canon Travels Rule)
+export {
+  loadFonts,
+  MONASPACE,
+  MONO_STACK,
+  OXANIUM,
+  OXANIUM_STACK,
+  SPACE_GROTESK,
+  SPACE_GROTESK_STACK,
+} from "./fonts";
 
 // Palette + color helpers
 export { paletteMix, type PaletteMixOptions } from "./palette-mix";

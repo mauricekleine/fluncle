@@ -1,6 +1,6 @@
 import { useCurrentFrame, useVideoConfig } from "remotion";
 import { colors } from "@fluncle/tokens";
-import { OXANIUM_STACK } from "../fonts";
+import { OXANIUM_STACK, SPACE_GROTESK_STACK } from "../fonts";
 import { withAlpha } from "../color";
 import { type CosmosTrack } from "../types";
 
@@ -107,9 +107,14 @@ const formatDiscovered = (iso: string): string => {
  * Typography primitive for the four sanctioned roles, with a gentle float.
  *
  * Brand rules baked in (DESIGN.md + VOICE.md):
- * - Oxanium speaks for the brand and numbers: brandMark uses Oxanium 800, meta
- *   uses Oxanium tabular-nums for the date. trackLine + body read in the system
- *   sans (The One Voice Rule).
+ * - The One Voice Rule: Oxanium speaks for the brand and the numbers (brandMark
+ *   at 800; meta and logId tabular), and Space Grotesk carries the reading
+ *   (trackLine, body). Both faces are EMBEDDED — a rendered frame has no system
+ *   stack to fall back to (The Canon Travels Rule), and both carry the One Box
+ *   Rule metrics, so a coordinate sits on the same optical centre line as the
+ *   title beside it.
+ * - Space Grotesk tops out at 700; trackLine asks for 700, never 800 (an 800
+ *   request would clamp silently).
  * - trackLine renders `Artist — Title` with an em dash, the ONLY sanctioned em
  *   dash in the system. Multiple artists join with ", ".
  * - meta renders the "Found Jun 4" found date, tabular (The Found Rule).
@@ -174,9 +179,10 @@ export const FloatingType: React.FC<FloatingTypeProps> = ({
     const line = artists && title ? `${artists} — ${title}` : artists || title;
     glyph = {
       color: color ?? colors.starlightCream,
-      fontFamily: "ui-sans-serif, system-ui, sans-serif",
+      fontFamily: SPACE_GROTESK_STACK,
       fontSize: size,
-      fontWeight: 800,
+      // 700 is Space Grotesk's heaviest cut; asking for 800 clamps silently.
+      fontWeight: 700,
       letterSpacing: "-0.01em",
       lineHeight: 1.18,
     };
@@ -214,7 +220,7 @@ export const FloatingType: React.FC<FloatingTypeProps> = ({
     size = fontSize ?? 24;
     glyph = {
       color: color ?? colors.stardust,
-      fontFamily: "ui-sans-serif, system-ui, sans-serif",
+      fontFamily: SPACE_GROTESK_STACK,
       fontSize: size,
       fontWeight: 400,
       lineHeight: 1.25,

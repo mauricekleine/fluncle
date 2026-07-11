@@ -1,9 +1,10 @@
 // Shared constants + tokens for the Explainer family. Colors come from
-// @fluncle/tokens (the DESIGN.md mirror); Oxanium loads on import of fonts.ts.
+// @fluncle/tokens (the DESIGN.md mirror); the three canon faces embed themselves
+// on import of fonts.ts.
 
 import { colors } from "@fluncle/tokens";
 
-import { OXANIUM_STACK } from "../remotion/fonts";
+import { MONO_STACK, OXANIUM_STACK, SPACE_GROTESK_STACK } from "../remotion/fonts";
 
 import { type ChapterAccent } from "./types";
 
@@ -30,11 +31,23 @@ export const pipHeight = (frameWidth: number) => Math.round(pipWidth(frameWidth)
 /** How much horizontal room a bottom-right PiP steals from a centered caption. */
 export const captionReserveRight = (frameWidth: number) => SAFE + pipWidth(frameWidth) + PIP_GAP;
 
+// The three canon roles (DESIGN.md §3). `display` is the brand voice: marks,
+// mastheads, and every numeral/coordinate/date. `body` carries all reading text,
+// titles and labels (max weight 700 — its axis stops there). `mono` is the
+// machine's own voice and speaks ONLY on terminal surfaces: literal commands,
+// code, ASCII terminal output.
 export const font = {
-  body: "ui-sans-serif, system-ui, sans-serif",
+  body: SPACE_GROTESK_STACK,
   display: OXANIUM_STACK,
-  mono: "ui-monospace, SF Mono, Menlo, monospace",
+  mono: MONO_STACK,
 };
+
+/** A coordinate is the brand's numeral, everywhere it appears — Oxanium, tabular
+ *  (DESIGN.md's Tabular Rule), even inside a `fluncle://` URI. Spread this. */
+export const coordType = {
+  fontFamily: OXANIUM_STACK,
+  fontVariantNumeric: "tabular-nums",
+} as const;
 
 // Re-export tokens under a short alias so component code stays terse.
 export const c = colors;

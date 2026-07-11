@@ -56,7 +56,7 @@ const chapters: Array<Omit<ExplainerChapter, "id"> & { id?: string }> = [
     screen: { kind: "placeholder", label: "fluncle.com/log/004.7.2I", mock: "log" },
     showCard: true,
     subtitle: "a permanent coordinate in the Galaxy",
-    tag: { label: "a finding", sub: "fluncle://004.7.2I" },
+    tag: { label: "a finding", sub: "fluncle://004.7.2I", subFace: "coordinate" },
     title: "what a finding is",
   },
   {
@@ -106,7 +106,7 @@ const chapters: Array<Omit<ExplainerChapter, "id"> & { id?: string }> = [
     screen: { kind: "placeholder", label: "ssh rave.fluncle.com", mock: "terminal" },
     showCard: true,
     subtitle: "wherever you come looking, the banger's there",
-    tag: { label: "the rave terminal", sub: "ssh rave.fluncle.com" },
+    tag: { label: "the rave terminal", sub: "ssh rave.fluncle.com", subFace: "command" },
     title: "everywhere at once",
   },
   {

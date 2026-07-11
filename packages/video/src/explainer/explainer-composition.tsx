@@ -59,7 +59,7 @@ const ChapterScene: React.FC<{ chapter: ExplainerChapter; showCaptions: boolean 
     <AbsoluteFill>
       <Layout chapter={chapter} />
       {chapter.tag !== undefined ? (
-        <SurfaceTag label={chapter.tag.label} sub={chapter.tag.sub} />
+        <SurfaceTag label={chapter.tag.label} sub={chapter.tag.sub} subFace={chapter.tag.subFace} />
       ) : null}
       {showCaptions ? (
         <Captions lines={chapter.captions} reserveRight={reserveFor(chapter.layout, width)} />

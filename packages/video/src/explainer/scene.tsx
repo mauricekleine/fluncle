@@ -14,8 +14,8 @@ import {
 
 import { GLSL, ShaderLayer } from "../remotion/cosmos";
 import { MockSurfacePanel } from "./surfaces";
-import { accentColor, c, font, pipHeight, pipWidth, SAFE } from "./theme";
-import { type ExplainerChapter, type ExplainerClip } from "./types";
+import { accentColor, c, coordType, font, pipHeight, pipWidth, SAFE } from "./theme";
+import { type ExplainerChapter, type ExplainerClip, type TagSubFace } from "./types";
 
 // ---------------------------------------------------------------------------
 // The stage — deep-field ground, a live grain wash, a vignette to seat the eye
@@ -130,7 +130,24 @@ export const Split: React.FC<{ screen: ExplainerClip; face: ExplainerClip }> = (
 // Surface tag (top-left) — names what you are looking at
 // ---------------------------------------------------------------------------
 
-export const SurfaceTag: React.FC<{ label: string; sub?: string }> = ({ label, sub }) => {
+/** The sub-line's face, per DESIGN.md §3: mono is the machine's voice and speaks
+ *  only for a literal command; a coordinate is the brand's numeral (Oxanium,
+ *  tabular); everything else simply reads. */
+const subGlyph = (face: TagSubFace = "prose"): React.CSSProperties => {
+  if (face === "command") {
+    return { fontFamily: font.mono };
+  }
+  if (face === "coordinate") {
+    return { ...coordType };
+  }
+  return { fontFamily: font.body };
+};
+
+export const SurfaceTag: React.FC<{ label: string; sub?: string; subFace?: TagSubFace }> = ({
+  label,
+  sub,
+  subFace,
+}) => {
   const frame = useCurrentFrame();
   const x = interpolate(frame, [0, 12], [-40, 0], {
     extrapolateLeft: "clamp",
@@ -162,11 +179,14 @@ export const SurfaceTag: React.FC<{ label: string; sub?: string }> = ({ label, s
       />
       <div style={{ alignItems: "center", display: "flex", gap: 12, position: "relative" }}>
         <div style={{ background: c.eclipseGold, height: 26, width: 4 }} />
+        {/* A section label ("the archive", "a finding"), not a brand mark: the
+            body face at its 700 ceiling. */}
         <span
           style={{
             color: c.starlightCream,
-            fontFamily: font.display,
+            fontFamily: font.body,
             fontSize: 34,
+            fontWeight: 700,
             letterSpacing: 1,
             textShadow: "0 2px 14px rgba(0,0,0,0.55)",
           }}
@@ -177,8 +197,8 @@ export const SurfaceTag: React.FC<{ label: string; sub?: string }> = ({ label, s
       {sub !== undefined ? (
         <div
           style={{
+            ...subGlyph(subFace),
             color: c.stardust,
-            fontFamily: font.mono,
             fontSize: 22,
             marginLeft: 16,
             marginTop: 6,
@@ -274,11 +294,12 @@ export const ChapterCard: React.FC<{ chapter: ExplainerChapter }> = ({ chapter }
       }}
     >
       <div style={{ transform: `translateY(${rise}px)` }}>
+        {/* The act kicker is a numeral: Oxanium tabular (The Tabular Rule). */}
         {chapter.number !== undefined ? (
           <div
             style={{
+              ...coordType,
               color: accent,
-              fontFamily: font.mono,
               fontSize: 30,
               letterSpacing: 6,
               marginBottom: 18,
