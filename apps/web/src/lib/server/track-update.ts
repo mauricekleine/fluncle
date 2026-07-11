@@ -173,9 +173,53 @@ const VISIBLE_FIELDS = new Set<keyof TrackUpdate>([
 // upgrade. These are the sources an agent may not clobber.
 const PROTECTED_SOURCES = new Set(["operator", "rekordbox"]);
 
+// ── THE CERTIFICATION RAIL ───────────────────────────────────────────────────
+//
+// Every field here writes a `findings` column — the CERTIFICATION half of the pair
+// (docs/track-lifecycle.md). A CATALOGUE track (a `tracks` row with NO `findings`
+// row — docs/the-ear.md) has no such row, so none of them is writable on one, and
+// this set is the enforcement point for the rule that decides it.
+//
+// THE RULE: analysis is a measurement, certification is a claim. BPM, key, features,
+// the MuQ vector and the captured audio are true of the RECORDING and say nothing —
+// so they apply to any track, certified or not, and the audio pipeline (track-work.ts)
+// happily works a catalogue row. But everything Fluncle SAYS — the note, the context
+// note, the spoken observation, the video, the galaxy, the publish state, and the
+// coordinate itself — is a claim about a track he has BEEN to. **Fluncle does not
+// speak about an uncertified track** (ratified canon), and a catalogue track must
+// never acquire a note, an observation, a video, or a publish by accident.
+//
+// Why it is enforced HERE rather than left to the SQL: `update findings … where
+// track_id = ?` on a catalogue track simply matches zero rows. It would SUCCEED,
+// silently, reporting the fields as written — the worst possible failure. So an
+// uncertified write of any of these is a loud 409 (`uncertified`), and this path
+// never INSERTs a `findings` row: certifying a track is `publish_track`'s job alone.
+const CERTIFICATION_FIELDS = new Set<keyof TrackUpdate>([
+  "contextNote",
+  "contextStatus",
+  "enrichmentStatus",
+  "galaxyId",
+  "logId",
+  "note",
+  "observationAlignmentJson",
+  "observationAudioUrl",
+  "observationDurationMs",
+  "observationGeneratedAt",
+  "observationScript",
+  "videoGrain",
+  "videoModel",
+  "videoModelReasoning",
+  "videoRegister",
+  "videoSquaredAt",
+  "videoUrl",
+  "videoVehicle",
+]);
+
 type ExistingRow = {
-  added_at: string;
+  added_at: string | null;
   bpm_source: string | null;
+  // 1 when a `findings` row exists — i.e. the track is a FINDING, not a catalogue row.
+  certified: number;
   isrc: string | null;
   key_source: string | null;
   log_id: string | null;
@@ -191,17 +235,47 @@ export async function updateTrack(
   options: { writer?: AdminRole } = {},
 ): Promise<TrackUpdateResult> {
   const db = await getDb();
+  // Resolve from `tracks` with an OUTER join onto the certification, NOT through the
+  // finding join. The audio pipeline must be able to write bpm/key/features/the vector
+  // onto a CATALOGUE track (track-work.ts) — under the old inner join every such write
+  // 404'd, which is the other half of the bug the split left behind. `certified` carries
+  // the answer forward so the rail below can reject a certification field on a row that
+  // has nowhere to put it.
   const existingResult = await db.execute({
     args: [trackId],
-    sql: `select tracks.isrc, findings.log_id, findings.added_at,
-                 tracks.bpm_source, tracks.key_source
-          from findings join tracks on tracks.track_id = findings.track_id
-          where findings.track_id = ? limit 1`,
+    sql: `select tracks.isrc, tracks.bpm_source, tracks.key_source,
+                 findings.log_id, findings.added_at,
+                 (findings.track_id is not null) as certified
+          from tracks
+          left join findings on findings.track_id = tracks.track_id
+          where tracks.track_id = ? limit 1`,
   });
   const existing = typedRow<ExistingRow>(existingResult.rows);
 
   if (!existing) {
     throw new ApiError("not_found", `No track with id ${trackId}`, 404);
+  }
+
+  // THE CERTIFICATION RAIL (see CERTIFICATION_FIELDS). A catalogue track may be measured
+  // — never spoken about. Rejected LOUDLY, because the SQL would have failed silently:
+  // `update findings … where track_id = ?` on a row with no finding matches zero rows and
+  // reports success.
+  const certified = Number(existing.certified) === 1;
+
+  if (!certified) {
+    const refused = (Object.keys(update) as Array<keyof TrackUpdate>)
+      .filter((field) => CERTIFICATION_FIELDS.has(field))
+      .sort();
+
+    if (refused.length > 0) {
+      throw new ApiError(
+        "uncertified",
+        `${trackId} is a catalogue track (no finding), so it cannot take the certification field${
+          refused.length > 1 ? "s" : ""
+        } ${refused.join(", ")}. Analysis fields (bpm, key, features, embedding, capture) are allowed; certifying a track is publish_track's job.`,
+        409,
+      );
+    }
   }
 
   // Apply the source hierarchy before building the write (see PROTECTED_SOURCES).
@@ -485,13 +559,22 @@ export async function updateTrack(
 
     let logId: string;
 
+    // `logId` is a CERTIFICATION field, so the rail already 409'd an uncertified track and
+    // a `findings` row is guaranteed here — which means `added_at` is non-null. Narrowed
+    // with a guard rather than an assertion (the repo bans `!`); it is unreachable.
+    const foundAt = existing.added_at;
+
+    if (!foundAt) {
+      throw new ApiError("not_found", `No finding for track ${trackId}`, 404);
+    }
+
     if (update.logId === "auto") {
       // Backfill the coordinate the add flow would have minted: found date +
       // the recording's identity (the just-provided isrc wins over the stored
       // one, Spotify id as last resort).
       logId = await resolveLogId(
         {
-          foundAt: existing.added_at,
+          foundAt,
           isrc: update.isrc?.trim() || existing.isrc,
           trackId,
         },
@@ -553,8 +636,10 @@ export async function updateTrack(
 
   // `updated_at` is the CERTIFICATION's lastmod (a catalogue track has no /log page to
   // stale), so the bump always rides the `findings` statement — even when the visible
-  // field that earned it (`bpm`, `isrc`) lives on `tracks`.
-  if (touchesVisible) {
+  // field that earned it (`bpm`, `isrc`) lives on `tracks`. Which is exactly why an
+  // UNCERTIFIED track never bumps: it has no `findings` row to bump, and no public
+  // surface that could have gone stale. Its `bpm` write is a measurement, not news.
+  if (touchesVisible && certified) {
     findingSets.push("updated_at = ?");
     findingArgs.push(new Date().toISOString());
   }

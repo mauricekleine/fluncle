@@ -56,7 +56,7 @@
     "fluncle-publish": {
       "source": "packages/skills/fluncle-publish",
       "sourceType": "local",
-      "computedHash": "6dfa5e01b4a0653f88c46b3990b160eca3768e35a3ddd166ac36e36640402a47"
+      "computedHash": "e5c0eb02f92245526acd6d29b74dc1073f43861f3d0cc3c4797c86cf491e0b8f"
     },
     "fluncle-rekordbox-sync": {
       "source": "packages/skills/fluncle-rekordbox-sync",
@@ -97,6 +97,12 @@
       "source": "packages/skills/hetzner-devbox",
       "sourceType": "local",
       "computedHash": "8959d3695cec78581ed311f83f54892ac894184a0abdfacab0e90f8dd2400830"
+    },
+    "improve": {
+      "source": "shadcn/improve",
+      "sourceType": "github",
+      "skillPath": "skills/improve/SKILL.md",
+      "computedHash": "39a9358732dcff385e9e4d3e60b4547856f834e54a58b35e455aa9bd49928c13"
     },
     "postiz": {
       "source": "gitroomhq/postiz-agent",

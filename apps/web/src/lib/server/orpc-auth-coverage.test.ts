@@ -136,6 +136,11 @@ const PUBLIC_UNAUTH_OPS = new Set<string>([
   "list_mixtapes",
   "list_stories",
   "list_tracks",
+  // Fluncle's own archive search — the public read behind the CMD+K dialog and, at
+  // catalogue scale, the primary navigation. Anonymous by design (it searches material that
+  // is already public on every /log page); the LLM tier it can reach is bounded by the same
+  // shared rate limiter `search_tracks` uses.
+  "search_archive",
   "search_tracks",
   // Anonymous public writes, each guarded in-handler (rate limit / review queue),
   // not by an auth tier — intentionally open to non-signed-in callers.
@@ -161,6 +166,14 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // The `/admin/artists` follow queue's inline add (Unit 5, Epic B) — operator tier: an
   // operator-entered social lands confirmed + public at once.
   add_artist_social: "operator",
+  // The render → publish AUTO-ADVANCE tick — ADMIN tier (adminAuth only, no
+  // operatorGuard): the on-box `fluncle-publish-advance` cron drives it with the agent
+  // token (the `drip_clips` / `capture_post_urls` precedent — the Worker owns the Postiz
+  // key, the box only triggers). This is the op that lets the machine make a PUBLIC
+  // YouTube push; the gate for that moved off the request tier onto the kill switch +
+  // the readiness gates (see ../publish-advance.ts). `draft_track_social` still 403s an
+  // agent-tier YouTube push, so nothing ELSE gained that power.
+  advance_publish_queue: "admin",
   // The crew announcement — operator tier: it posts a public Telegram crew callout
   // (and is one-shot, marker-guarded), so the agent token 403s.
   announce_mixtape: "operator",
@@ -282,6 +295,9 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // driven by the cron's agent token (the list_tracks_admin cursor precedent).
   list_track_embeddings: "admin",
   list_track_social: "admin",
+  // `list_track_work` — the audio pipeline's worklist (capture/analyze/embed). A READ of
+  // machine state, drained by the box's agent-token sweeps, exactly like list_tracks_admin.
+  list_track_work: "admin",
   list_tracks_admin: "admin",
   // The artist-sweep resolve worklist (artists awaiting social resolution) — agent
   // tier (adminAuth only): a read the box's `fluncle-artist-sweep` cron drives with
@@ -378,6 +394,9 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // The hardened post-publish cue backfill — operator tier: it rewrites a published
   // set's surface, so the agent token 403s.
   set_mixtape_cues: "operator",
+  // The auto-advance kill switch — operator tier, like `set_clip_drip`: pausing/resuming
+  // the whole auto-publish is the operator's control, never the box's.
+  set_publish_advance: "operator",
   start_lastfm_auth: "operator",
   sweep_push_receipts: "admin",
   // The pre-chew triage verdict write — agent tier (adminAuth only, no operatorGuard),

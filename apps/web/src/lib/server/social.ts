@@ -6,7 +6,7 @@ import { type SocialPostItem, type SocialStatusUpdate } from "@fluncle/contracts
 
 export type { SocialPostItem, SocialStatusUpdate };
 
-import { getDb, typedRows } from "./db";
+import { getDb, typedRow, typedRows } from "./db";
 
 type SocialPostRow = {
   created_at: string;
@@ -103,6 +103,75 @@ export async function upsertPost(
   });
 
   await touchTrack(trackId, now);
+}
+
+/**
+ * CLAIM a finding's platform slot before pushing it — the auto-advance's
+ * double-publish guard (./publish-advance.ts). An `insert … on conflict do nothing`
+ * against the `(track_id, platform)` unique index: exactly ONE writer can create the
+ * row, so two overlapping advance ticks that both selected the same finding race here
+ * and only the winner gets `true`. The loser skips without touching the network — the
+ * claim is taken BEFORE any call to Postiz, so a public upload can only ever happen
+ * behind a won claim.
+ *
+ * The claim row is written `failed` ON PURPOSE — assume the push failed until it is
+ * PROVEN to have succeeded. If the Worker dies mid-push (or Postiz errors), the row is
+ * already in its honest end state: `failed`, visible on the board and still in the
+ * attention queue as an unposted leg, and never auto-retried (the advance only ever
+ * picks findings with NO row for the platform — it fails CLOSED). A successful push
+ * immediately overwrites it via `upsertPost` with the real status + Postiz id.
+ *
+ * Returns false when a row already existed (another tick won it, or the finding was
+ * pushed manually) — the caller must then leave that finding alone.
+ */
+export async function claimPost(trackId: string, platform: string): Promise<boolean> {
+  const now = new Date().toISOString();
+  const db = await getDb();
+
+  const result = await db.execute({
+    args: [crypto.randomUUID(), trackId, platform, now, now],
+    sql: `insert into social_posts (id, track_id, platform, status, created_at, updated_at)
+          values (?, ?, ?, 'failed', ?, ?)
+          on conflict(track_id, platform) do nothing`,
+  });
+
+  return result.rowsAffected > 0;
+}
+
+/**
+ * How many posts were PUSHED across the auto-advance's platforms since `sinceIso` — the
+ * rolling-window read its daily backstop cap is checked against. Counts every row
+ * created in the window (auto-advanced or hand-pushed alike): the cap exists to bound
+ * how much of the archive can hit the public feed in a day, and a manual push spends
+ * from the same budget.
+ */
+export async function countPushesSince(sinceIso: string): Promise<number> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [sinceIso],
+    sql: `select count(*) as n from social_posts
+          where platform in ('youtube', 'tiktok') and created_at >= ?`,
+  });
+
+  return typedRow<{ n: number }>(result.rows)?.n ?? 0;
+}
+
+/**
+ * How many TikTok inbox drafts are currently unfinished (`status = 'draft'`) — TikTok
+ * caps UNPUBLISHED inbox drafts at 5 per rolling 24h and bounces the 6th
+ * asynchronously (so a push "succeeds" and then silently vanishes). The auto-advance
+ * holds TikTok back once the inbox is at the cap, rather than burning a push on a
+ * draft TikTok will drop.
+ */
+export async function countTikTokInboxDrafts(): Promise<number> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [],
+    sql: `select count(*) as n from social_posts
+          where platform = 'tiktok' and status = 'draft'`,
+  });
+
+  return typedRow<{ n: number }>(result.rows)?.n ?? 0;
 }
 
 /**

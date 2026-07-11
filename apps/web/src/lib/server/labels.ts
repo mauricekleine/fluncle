@@ -24,6 +24,15 @@ import { type LabelAdminItem, type LabelSeedState } from "@fluncle/contracts";
 import { slugify } from "@fluncle/contracts/util/galaxy-slug";
 import { getDb, typedRows } from "./db";
 
+// The thin-content gate for label pages: a `/label/<slug>` page indexes (and enters the
+// sitemap) only with this many RENDERABLE tracks or more — its findings plus the quieter
+// rows beneath them, because both are real content on the page. Below it the page still
+// serves 200 (deep links + link equity) but is `noindex, follow` and stays out of the
+// sitemap. Same value and same job as `ARTIST_INDEX_MIN_FINDINGS`; see
+// `ALBUM_INDEX_MIN_TRACKS` for why the count is over renderable tracks rather than
+// findings alone.
+export const LABEL_INDEX_MIN_TRACKS = 3;
+
 /** A row from the `labels` table (snake_case columns). */
 type LabelRow = {
   created_at: string;
@@ -98,8 +107,8 @@ async function findingCountsBySlug(): Promise<Map<string, number>> {
 }
 
 /**
- * Ensure a `labels` row exists for one raw label string. A brand-new label enters
- * as `undecided` (the DDL default) — never silently crawled, never silently
+ * Ensure a `labels` row exists for one raw label string, and return its id. A brand-new
+ * label enters as `undecided` (the DDL default) — never silently crawled, never silently
  * dropped — and lands in the operator's attention queue as a label to rule on.
  *
  * Idempotent and NON-CLOBBERING: an existing row keeps its `seed_state`, its
@@ -107,11 +116,11 @@ async function findingCountsBySlug(): Promise<Map<string, number>> {
  * all-punctuation label mints nothing. Called best-effort from the publish path, so
  * a failure here must never block an add — the deploy-time reconcile backstops it.
  */
-export async function ensureLabel(raw: string | null | undefined): Promise<void> {
+export async function ensureLabel(raw: string | null | undefined): Promise<string | undefined> {
   const slug = labelSlug(raw);
 
   if (!slug || typeof raw !== "string") {
-    return;
+    return undefined;
   }
 
   const db = await getDb();
@@ -123,6 +132,151 @@ export async function ensureLabel(raw: string | null | undefined): Promise<void>
           values (?, ?, ?, ?, ?)
           on conflict (slug) do nothing`,
   });
+
+  const result = await db.execute({
+    args: [slug],
+    sql: `select id from labels where slug = ? limit 1`,
+  });
+
+  return typedRows<{ id: string }>(result.rows)[0]?.id;
+}
+
+/**
+ * The publish path's one call: mint the label entity for the label Deezer handed back, and
+ * stamp the track's `label_id` pointer at it — the indexed edge the public `/label/<slug>`
+ * page reads by (schema.ts, `tracks.label_id`). Best-effort and purely additive; the
+ * deploy-time reconcile backstops a failure.
+ *
+ * This writes a POINTER, never a ruling: it can mint an `undecided` label, and it can
+ * never move a `seed_state`.
+ */
+export async function linkTrackToLabel(
+  trackId: string,
+  raw: string | null | undefined,
+): Promise<void> {
+  const labelId = await ensureLabel(raw);
+
+  if (!labelId) {
+    return;
+  }
+
+  const db = await getDb();
+
+  await db.execute({
+    args: [labelId, trackId],
+    sql: `update tracks set label_id = ? where track_id = ?`,
+  });
+}
+
+/** The canonical label identity record the public page + JSON-LD read. */
+export type LabelRecord = {
+  id: string;
+  name: string;
+  slug: string;
+};
+
+/** A row in the `/labels` index + a thin-gated sitemap candidate. */
+export type LabelIndexEntry = {
+  /**
+   * Uncertified tracks linked to this label — the quieter rows the page will render. It is
+   * NOT shown in the index (the tier has no public name and is never counted aloud); it
+   * exists so the SITEMAP can apply the same renderable-track gate the PAGE applies, and an
+   * indexable page is therefore never orphaned from the sitemap. Zero until the catalogue
+   * lands.
+   */
+  catalogueCount: number;
+  /** The label's cover — its freshest finding's Spotify album art. */
+  coverImageUrl: string | undefined;
+  findingCount: number;
+  /** ISO of the label's freshest finding — the sitemap `lastmod`. */
+  lastmod: string | undefined;
+  name: string;
+  slug: string;
+};
+
+/** Resolve one label by its public slug (undefined = no such label). */
+export async function getLabelBySlug(slug: string): Promise<LabelRecord | undefined> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [slug],
+    sql: `select ${LABEL_COLUMNS} from labels where slug = ? limit 1`,
+  });
+
+  const row = typedRows<LabelRow>(result.rows)[0];
+
+  return row ? { id: row.id, name: row.name, slug: row.slug } : undefined;
+}
+
+/**
+ * The label an album came out on — the album → label edge of the graph, resolved through
+ * the tracks that carry both pointers. An album's tracks can in principle disagree (a
+ * compilation, a re-press); the MOST COMMON label wins, which is the honest answer and a
+ * stable one. Undefined when no track on the album carries a label.
+ */
+export async function getLabelForAlbum(albumId: string): Promise<LabelRecord | undefined> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [albumId],
+    sql: `select labels.id, labels.name, labels.slug, count(*) as n
+          from tracks
+          join labels on labels.id = tracks.label_id
+          where tracks.album_id = ?
+          group by labels.id
+          order by n desc, labels.name collate nocase asc
+          limit 1`,
+  });
+
+  const row = typedRows<{ id: string; name: string; slug: string }>(result.rows)[0];
+
+  return row ? { id: row.id, name: row.name, slug: row.slug } : undefined;
+}
+
+/**
+ * Every label with at least one coordinate-bearing finding, with its finding count, its
+ * cover (the freshest finding's album art), and that finding's date (the sitemap
+ * `lastmod`). Alphabetical by name — the `/labels` index order.
+ *
+ * The PUBLIC index read, and it is deliberately blind to `seed_state`: a skipped label's
+ * findings render exactly as they always did (crawl scope, never storage — the rule at the
+ * top of this file). It drives from the findings join, so it is bounded by the archive
+ * rather than by the catalogue. The sitemap filters it further by the thin-content gate.
+ */
+export async function listLabelsWithFindingCounts(): Promise<LabelIndexEntry[]> {
+  const db = await getDb();
+  const result = await db.execute({
+    sql: `select labels.name as name, labels.slug as slug,
+                 count(*) as finding_count,
+                 (select count(*) from tracks t3
+                    left join findings f3 on f3.track_id = t3.track_id
+                    where t3.label_id = labels.id and f3.track_id is null) as catalogue_count,
+                 max(findings.added_at) as lastmod,
+                 (select t2.album_image_url
+                    from findings f2 join tracks t2 on t2.track_id = f2.track_id
+                    where t2.label_id = labels.id and f2.log_id is not null
+                    order by f2.added_at desc limit 1) as cover_url
+          from labels
+          join tracks on tracks.label_id = labels.id
+          join findings on findings.track_id = tracks.track_id
+          where findings.log_id is not null
+          group by labels.id
+          order by labels.name collate nocase asc`,
+  });
+
+  return typedRows<{
+    catalogue_count: number;
+    cover_url: string | null;
+    finding_count: number;
+    lastmod: string | null;
+    name: string;
+    slug: string;
+  }>(result.rows).map((row) => ({
+    catalogueCount: Number(row.catalogue_count),
+    coverImageUrl: row.cover_url ?? undefined,
+    findingCount: Number(row.finding_count),
+    lastmod: row.lastmod ?? undefined,
+    name: row.name,
+    slug: row.slug,
+  }));
 }
 
 /**

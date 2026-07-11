@@ -53,6 +53,18 @@ export type SitemapArtist = {
   slug: string;
 };
 
+// A `/label/<slug>` or `/album/<slug>` graph page — added ONLY past the thin-content gate
+// (≥ LABEL_INDEX_MIN_TRACKS / ALBUM_INDEX_MIN_TRACKS renderable tracks: the findings plus the
+// quieter uncertified rows, which are real content on the page too). The thin ones stay out
+// and render `noindex, follow`. The route filters; this just formats.
+export type SitemapEntity = {
+  /** Cover art for the Google Images `<image:image>` extension. */
+  imageLoc?: string;
+  /** ISO date of the entity's freshest finding. */
+  lastmod?: string;
+  slug: string;
+};
+
 // A `/galaxies/<slug>` sonic-galaxy page (browse-by-feel RFC) — added ONLY once the map
 // is fully named (the route feeds an empty list before the launch gate opens) AND the
 // galaxy clears the thin-content floor (≥ GALAXY_INDEX_MIN_FINDINGS members; the thin
@@ -121,6 +133,15 @@ function artistEntry(page: SitemapArtist): string {
   return `  <url>\n    <loc>${loc}</loc>${lastmodTag(page.lastmod)}${image}\n  </url>`;
 }
 
+// A label/album entry: `<loc>` + optional `<lastmod>` + optional cover `<image:image>` —
+// the artist entry's shape, under a different path segment.
+function entityEntry(segment: "album" | "label", page: SitemapEntity): string {
+  const loc = `${siteUrl}/${segment}/${encodeURIComponent(page.slug)}`;
+  const image = page.imageLoc ? imageTag(page.imageLoc) : "";
+
+  return `  <url>\n    <loc>${loc}</loc>${lastmodTag(page.lastmod)}${image}\n  </url>`;
+}
+
 // A logbook entry: just `<loc>` + optional `<lastmod>` (text-first, no media).
 function logbookEntry(page: SitemapLogbookEntry): string {
   const loc = `${siteUrl}/logbook/${encodeURIComponent(page.sector)}`;
@@ -141,11 +162,18 @@ export function buildSitemapXml(
   artistPages: SitemapArtist[] = [],
   logbookPages: SitemapLogbookEntry[] = [],
   galaxyPages: SitemapGalaxy[] = [],
+  // The graph pages (labels + albums) arrive as ONE named bag rather than two more
+  // positionals — the list of trailing `[]`s at the call site was already at its limit.
+  entities: { albums?: SitemapEntity[]; labels?: SitemapEntity[] } = {},
 ): string {
+  const labelPages = entities.labels ?? [];
+  const albumPages = entities.albums ?? [];
   const latest = [
     ...logPages.map((page) => page.lastmod),
     ...artistPages.map((page) => page.lastmod),
     ...logbookPages.map((page) => page.lastmod),
+    ...labelPages.map((page) => page.lastmod),
+    ...albumPages.map((page) => page.lastmod),
   ]
     .filter((value): value is string => Boolean(value))
     .sort()
@@ -165,6 +193,12 @@ export function buildSitemapXml(
     staticEntry(`${siteUrl}/logbook`, logbookLatest),
     staticEntry(`${siteUrl}/mixtapes`, latest),
     staticEntry(`${siteUrl}/artists`, latest),
+    // The graph HUBS are listed unconditionally, exactly like /artists: a hub is a real page
+    // whose content is the whole list, so the per-page thin-content gate below (which can,
+    // legitimately, admit no DETAIL pages at all — today every album in the archive is a
+    // single) says nothing about whether the hub itself is worth indexing. It is.
+    staticEntry(`${siteUrl}/labels`, latest),
+    staticEntry(`${siteUrl}/albums`, latest),
     staticEntry(`${siteUrl}/about`),
     staticEntry(`${siteUrl}/privacy`),
     staticEntry(`${siteUrl}/galaxy`),
@@ -173,6 +207,8 @@ export function buildSitemapXml(
     ...(galaxyPages.length > 0 ? [staticEntry(`${siteUrl}/galaxies`)] : []),
     ...logPages.map((page) => findingEntry(page)),
     ...artistPages.map((page) => artistEntry(page)),
+    ...labelPages.map((page) => entityEntry("label", page)),
+    ...albumPages.map((page) => entityEntry("album", page)),
     ...logbookPages.map((page) => logbookEntry(page)),
     ...galaxyPages.map((page) => galaxyEntry(page)),
   ];

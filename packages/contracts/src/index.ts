@@ -40,6 +40,11 @@ import {
   type CatalogueSummarySchema,
   type CatalogueTrackItemSchema,
 } from "./orpc/admin-catalogue.js";
+import {
+  type TrackWorkItemSchema,
+  type TrackWorkKindSchema,
+  type TrackWorkScopeSchema,
+} from "./orpc/admin-tracks.js";
 import { type ServiceHealthStatusSchema } from "./orpc/admin-health.js";
 import { type GalaxyAdminItemSchema, type TrackEmbeddingSchema } from "./orpc/admin-galaxies.js";
 import { type LabelAdminItemSchema, type LabelSeedStateSchema } from "./orpc/admin-labels.js";
@@ -172,6 +177,24 @@ export type CatalogueSummary = z.infer<typeof CatalogueSummarySchema>;
 
 /** `GET /api/admin/catalogue` response — one lens's page, plus the summary. */
 export type CatalogueResponse = Ok<{ summary: CatalogueSummary; tracks: CatalogueTrackItem[] }>;
+
+// ── The audio pipeline's work queues (docs/gpu-batch-embed.md) ───────────────────
+// capture → analyze → embed, over `tracks` rather than `findings`: BPM, key, features,
+// the MuQ vector and the captured audio are all true of the RECORDING, so their queues
+// cover a catalogue track exactly as they cover a finding. What Fluncle SAYS about a
+// track (the note, the observation, the video, the publish) stays findings-only.
+
+/** Which stage of the audio pipeline a worklist is for. */
+export type TrackWorkKind = z.infer<typeof TrackWorkKindSchema>;
+
+/** Which half of the archive a worklist covers. */
+export type TrackWorkScope = z.infer<typeof TrackWorkScopeSchema>;
+
+/** One row of pipeline work. `certified` is the rail's flag: false = never write a note. */
+export type TrackWorkItem = z.infer<typeof TrackWorkItemSchema>;
+
+/** `GET /api/admin/tracks/work` response — one stage's worklist, in drain order. */
+export type TrackWorkResponse = Ok<{ tracks: TrackWorkItem[] }>;
 
 /** One embedded finding — the cluster engine's input row (`{ trackId, embedding }`). */
 export type TrackEmbedding = z.infer<typeof TrackEmbeddingSchema>;
@@ -595,6 +618,39 @@ export type SocialStatusUpdate = {
   status: "failed" | "published" | "scheduled";
   url?: string;
 };
+
+/** One platform the render → publish auto-advance actually pushed this tick. */
+export type PublishAdvancePush = {
+  externalId: string;
+  logId: string;
+  platform: string;
+  status: string;
+  trackId: string;
+};
+
+/** One platform the auto-advance HELD BACK this tick, and why — so a stuck advance says
+ *  so out loud instead of looking like an empty queue. */
+export type PublishAdvanceHeld = {
+  /** The bundle files still missing (only on `bundle_incomplete`). */
+  missing?: string[];
+  platform: string;
+  reason: string;
+  trackId: string;
+};
+
+/** `POST /api/admin/social/publish/advance` response: one bounded tick of the render →
+ *  publish auto-advance. `paused: true` ⇒ the kill switch was on and nothing was pushed. */
+export type PublishAdvanceResponse = Ok<{
+  candidates: number;
+  failed: Array<{ platform: string; trackId: string }>;
+  held: PublishAdvanceHeld[];
+  paused: boolean;
+  pushed: PublishAdvancePush[];
+}>;
+
+/** `PUT /api/admin/social/publish/advance/state` response: the resulting paused state
+ *  (the auto-advance's kill switch). */
+export type PublishAdvanceStateResponse = Ok<{ paused: boolean }>;
 
 /** `/api/admin/tracks/:id/social` response. */
 export type TrackSocialShowResponse = Ok<{ posts: SocialPostItem[]; trackId: string }>;

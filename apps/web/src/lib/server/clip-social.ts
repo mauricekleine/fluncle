@@ -9,9 +9,11 @@
 //
 // The kill switch rides the lean `settings` KV table (a single `clip_drip_paused` key),
 // so pausing halts every future post while the schedule stays intact. `getSetting`/
-// `setSetting` are the reusable KV primitives underneath.
+// `setSetting` (./settings.ts) are the reusable KV primitives underneath — the same pair
+// the render → publish auto-advance's switch rides.
 
 import { getDb, typedRow, typedRows } from "./db";
+import { getSetting, setSetting } from "./settings";
 
 // Instagram is the only drip platform today (the enum leaves room to grow).
 export const CLIP_DRIP_PLATFORM = "instagram" as const;
@@ -335,28 +337,7 @@ export async function deleteClipPost(clipId: string): Promise<void> {
   });
 }
 
-// --- The lean global-flag KV (`settings`) ------------------------------------------
-
-/** Read a global flag from the `settings` KV, or undefined if unset. */
-export async function getSetting(key: string): Promise<string | undefined> {
-  const db = await getDb();
-  const result = await db.execute({
-    args: [key],
-    sql: `select value from settings where key = ? limit 1`,
-  });
-
-  return typedRow<{ value: string }>(result.rows)?.value;
-}
-
-/** Upsert a global flag into the `settings` KV. */
-export async function setSetting(key: string, value: string): Promise<void> {
-  const db = await getDb();
-  await db.execute({
-    args: [key, value, value],
-    sql: `insert into settings (key, value) values (?, ?)
-          on conflict(key) do update set value = ?`,
-  });
-}
+// --- The kill switch (on the shared `settings` KV — see ./settings.ts) ---------------
 
 /** Whether the clip drip-feed is paused (the kill switch). Unset ⇒ not paused. */
 export async function isDripPaused(): Promise<boolean> {

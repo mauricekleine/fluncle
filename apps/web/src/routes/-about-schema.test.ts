@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { fluncleDescription } from "@/lib/identity";
-import { Route as AboutRoute } from "./about";
+import { faqAnchor, Route as AboutRoute } from "./about";
+import { MEASURED_FAQ_ANCHOR } from "./log.$logId";
 
 // The entity surface: MusicGroup + FAQPage, mirroring the visible prose.
 
@@ -50,7 +51,7 @@ describe("/about schema", () => {
       | undefined;
 
     expect(faq).toBeDefined();
-    expect(faq?.mainEntity).toHaveLength(7);
+    expect(faq?.mainEntity).toHaveLength(8);
     expect(faq?.mainEntity.map((entry) => entry.name)).toEqual([
       "Who is Fluncle?",
       "What is Fluncle's Galaxy?",
@@ -59,12 +60,19 @@ describe("/about schema", () => {
       "What does a Log ID like 004.7.2I mean?",
       "What is fluncle://?",
       "How are tracks chosen?",
+      "How does Fluncle measure BPM and key?",
     ]);
 
     for (const entry of faq?.mainEntity ?? []) {
       expect(entry.acceptedAnswer.text.length).toBeGreaterThan(80);
       expect(entry.acceptedAnswer.text).not.toContain("!");
     }
+  });
+
+  it("keeps the measurement question's anchor in step with the /log BPM/key link", () => {
+    // The cross-file contract: /log's BPM/Key labels link to this anchor on /about.
+    // A reword of the question would silently regenerate the id and no-op the link.
+    expect(faqAnchor("How does Fluncle measure BPM and key?")).toBe(MEASURED_FAQ_ANCHOR);
   });
 
   it("self-canonicalizes", () => {

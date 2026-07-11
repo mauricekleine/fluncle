@@ -12,6 +12,7 @@ import { Link, useRouterState } from "@tanstack/react-router";
 import { type ReactNode } from "react";
 import { NavBreadcrumb } from "@/components/nav/nav-breadcrumb";
 import { NavFooter } from "@/components/nav/nav-footer";
+import { SearchTrigger } from "@/components/search/search-command";
 
 // Surfaces that render WITHOUT the public chrome:
 // - /admin: its own AdminShell workspace chrome (never touched here).
@@ -52,6 +53,10 @@ export function PublicChrome({
             FLUNCLE
           </Link>
           <NavBreadcrumb pathname={pathname} />
+          {/* The one control in the bar, banked to the far end so it never crowds the trail.
+              It also mounts the ⌘K listener, which is why it lives in the chrome and not on a
+              page: search has to be one keystroke away from every public surface. */}
+          <SearchTrigger />
         </div>
       </header>
 

@@ -68,6 +68,10 @@ const PUBLIC_ROUTE_OPS: Record<string, string> = {
   "GET /radio/now-playing": "get_radio_now_playing",
   "GET /radio/random": "get_random_radio_track",
   "GET /search": "search_tracks",
+  // Fluncle's OWN search — the archive, not Spotify (lib/server/search.ts). Contract-only
+  // oRPC (no TanStack route file under /api/v1/search), so it has no route-file basename to
+  // enumerate; documented here as part of the public surface net.
+  "GET /search/archive": "search_archive",
   "GET /stories": "list_stories",
   "GET /tracks": "list_tracks",
   "GET /tracks/random": "get_random_track",

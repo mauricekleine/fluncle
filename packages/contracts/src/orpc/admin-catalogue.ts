@@ -36,10 +36,14 @@ export const CatalogueLensSchema = z.enum(["capture", "ear"]).meta({ id: "Catalo
  * one), `seed-label` (its label is one the operator seeds from), `none`.
  *
  * `skipped-label` is the VETO, and it outranks all of them: its label is one the operator ruled
- * OUT ("not our lane"), so the track sinks to tier 0 whatever else is true of it. It is not
+ * OUT ("not our lane"), so the track sinks to tier −1 whatever else is true of it. It is not
  * decoration — every one of the 8 disabled labels in the archive CARRIES a finding (each
  * arrived on a single crossover remix), so without the veto the `label` rung fires on all of
  * them and the metered capture budget goes on trance.
+ *
+ * Its OWN tier (−1, strictly below `none`) is what makes it enforceable rather than merely
+ * decorative: the capture work queue excludes it in SQL (`capture_priority >= 0`). A veto that
+ * only sorts last is not a veto — the queue drains, and last arrives (docs/gpu-batch-embed.md).
  */
 export const CapturePriorityReasonSchema = z
   .object({

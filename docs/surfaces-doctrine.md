@@ -34,6 +34,8 @@ Generated from the `SURFACES` catalog. Each row is the registry `name`, its addr
 | `web.status`     | `/status`     | the public service-health dashboard — uptime per service, recent events                                                                           | secondary |
 | `web.radio`      | `/radio`      | the cycling observation station — Fluncle's spoken field observations on a loop (also at `radio.fluncle.com`)                                     | secondary |
 | `web.artist`     | `/artist`     | `/artist/:slug` — one artist's page: every published finding from that artist, plus their identity links                                          | secondary |
+| `web.labels`     | `/labels`     | every label Fluncle has found a banger on + `/label/:slug` — one imprint: its findings, its artists, the rest of its catalogue                    | secondary |
+| `web.albums`     | `/albums`     | every record Fluncle has found a banger on + `/album/:slug` — one record: its findings, its artists, and the label it came out on                 | secondary |
 | `web.galaxies`   | `/galaxies`   | the browse-by-feel lens — the archive grouped into operator-named sonic galaxies + `/galaxies/:slug`; dark until the operator names the whole map | secondary |
 | `web.privacy`    | `/privacy`    | the privacy policy                                                                                                                                | tertiary  |
 
@@ -61,6 +63,7 @@ All `application/json`; the OpenAPI document at `/api/v1/openapi.json` advertise
 | `api.artists`           | `/api/v1/artists`           | every artist with at least one published finding, finding-count ordered, plus `/api/v1/artists/{slug}`                                       | secondary |
 | `api.galaxies`          | `/api/v1/galaxies`          | every named sonic galaxy + member count as JSON, plus `/api/v1/galaxies/{slug}` for one galaxy's findings (empty/404 behind the launch gate) | secondary |
 | `api.search`            | `/api/v1/search`            | Spotify search candidates for submitting a track                                                                                             | secondary |
+| `api.search.archive`    | `/api/v1/search/archive`    | search the archive — a coordinate, an entity name, a bare word (FTS5), a natural-language query, or a sonic one ("sounds like …")            | primary   |
 | `api.submissions`       | `/api/v1/submissions`       | submit a track for review (POST)                                                                                                             | secondary |
 | `api.newsletter`        | `/api/v1/newsletter`        | subscribe to the newsletter (POST); the editions archive                                                                                     | secondary |
 | `api.stories`           | `/api/v1/stories`           | the Stories payload as JSON                                                                                                                  | tertiary  |
@@ -200,6 +203,7 @@ The weight ladder within a context is unchanged — **`primary`** (the loud fron
 | `api.artists`               | secondary |           |           |           |
 | `api.galaxies`              | secondary |           |           |           |
 | `api.search`                | secondary |           |           |           |
+| `api.search.archive`        | primary   |           |           |           |
 | `api.submissions`           | secondary |           |           |           |
 | `api.newsletter`            | secondary |           |           |           |
 | `api.stories`               | tertiary  |           |           |           |

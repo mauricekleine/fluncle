@@ -1,0 +1,494 @@
+// The search resolver against a REAL libSQL database — the migrations, the FTS5 index and
+// its triggers, and `vector_distance_cos` over real `F32_BLOB` vectors. Nothing here is
+// mocked except the network (there is no network: the LLM tier is stubbed).
+//
+// It exists because three of this feature's load-bearing pieces are SQL, not TypeScript, and
+// a mocked-DB test would happily pass while every one of them was broken:
+//
+//   - the FTS5 DDL + the three sync triggers (they must apply on the same engine the deploy
+//     applies them on — and if they fail here, `deploy:gate` fails and prod is blocked, which
+//     is exactly the guard we want);
+//   - the LEFT JOIN that lets an uncertified track be FOUND while never being certified;
+//   - the vector scan, with the probe bound as a raw BLOB.
+//
+// THE CATALOGUE IS EMPTY IN PRODUCTION TODAY (the crawler is being built in parallel), so the
+// uncertified rows here are SYNTHETIC — and that is the whole point of seeding them: the code
+// path that renders an unlit row and links it OUT to Spotify must not ship untested just
+// because there is nothing in the archive to exercise it yet.
+
+import { type Client } from "@libsql/client";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createIntegrationDb } from "./integration-db";
+import { searchArchive } from "./search";
+
+// The LLM tier is a network call. Stubbed here so each test states EXACTLY what the model
+// returned — including "nothing", which is the degradation the spec demands be proven.
+const translateQuery = vi.hoisted(() => vi.fn<(q: string) => Promise<unknown>>());
+
+vi.mock("./search-llm", () => ({ translateQuery }));
+
+// The one live database, swapped in fresh for each test. `getDb` closes over it, so the REAL
+// query functions run REAL SQL against the REAL migrated schema.
+let db: Client;
+
+vi.mock("./db", async () => {
+  const actual = await vi.importActual<typeof import("./db")>("./db");
+
+  return { ...actual, getDb: async () => db };
+});
+
+// ── Fixtures ─────────────────────────────────────────────────────────────────────────
+
+const DIMS = 1024;
+
+/**
+ * A unit vector at `angle` radians in the (0,1) plane of the MuQ space. Cosine similarity
+ * between two of them is exactly `cos(a − b)`, so the expected neighbour ORDER is arithmetic
+ * rather than a guess — which is what makes the vector assertions below real assertions.
+ */
+function angleVector(angle: number): Float32Array {
+  const vector = new Float32Array(DIMS);
+
+  vector[0] = Math.cos(angle);
+  vector[1] = Math.sin(angle);
+
+  return vector;
+}
+
+type Fixture = {
+  album?: string;
+  angle?: number;
+  artists: string[];
+  bpm?: number;
+  key?: string;
+  label?: string;
+  /** A `findings` row is minted when this is set — i.e. this track is a CERTIFIED finding. */
+  logId?: string;
+  releaseDate?: string;
+  title: string;
+  trackId: string;
+};
+
+async function seed(client: Client, track: Fixture): Promise<void> {
+  const embedding = track.angle === undefined ? null : angleVector(track.angle);
+
+  await client.execute({
+    args: [
+      track.trackId,
+      track.title,
+      JSON.stringify(track.artists),
+      track.album ?? null,
+      track.label ?? null,
+      track.key ?? null,
+      track.bpm ?? null,
+      track.releaseDate ?? null,
+      `https://open.spotify.com/track/${track.trackId}`,
+      180_000,
+      embedding ? JSON.stringify([...embedding]) : null,
+      embedding ? new Uint8Array(embedding.buffer) : null,
+    ],
+    sql: `insert into tracks
+      (track_id, title, artists_json, album, label, key, bpm, release_date, spotify_url,
+       duration_ms, embedding_json, embedding_blob)
+      values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  });
+
+  if (track.logId !== undefined) {
+    await client.execute({
+      args: [track.trackId, track.logId, "2026-07-01T00:00:00.000Z"],
+      sql: `insert into findings (track_id, log_id, added_at) values (?, ?, ?)`,
+    });
+  }
+}
+
+beforeEach(async () => {
+  db = await createIntegrationDb();
+  translateQuery.mockReset();
+  translateQuery.mockResolvedValue(null);
+
+  // Three certified findings — their angles fix the sonic order around the 1991 anchor
+  // (0.0): Netsky at 0.1 is nearest, the uncertified track at 0.3 next, Andromedik at 1.2
+  // furthest.
+  await seed(db, {
+    angle: 0.1,
+    artists: ["Netsky", "Bev Lee Harling"],
+    bpm: 175.5,
+    key: "A minor",
+    label: "Hospital Records",
+    logId: "012.4.4D",
+    releaseDate: "2020-05-01",
+    title: "Let's Leave Tomorrow",
+    trackId: "certified-netsky",
+  });
+  await seed(db, {
+    angle: 0,
+    artists: ["1991"],
+    bpm: 174,
+    key: "F minor",
+    label: "1991",
+    logId: "024.7.2R",
+    releaseDate: "2022-01-01",
+    title: "Nine Clouds",
+    trackId: "certified-1991",
+  });
+  await seed(db, {
+    angle: 1.2,
+    artists: ["Andromedik", "Lexurus"],
+    bpm: 174,
+    key: "B minor",
+    label: "Andromedik",
+    logId: "038.8.7K",
+    releaseDate: "2026-04-24",
+    title: "Take Me Away - Lexurus Remix",
+    trackId: "certified-andromedik",
+  });
+
+  // …and one UNCERTIFIED track. A `tracks` row with no `findings` row: a light Fluncle's
+  // instruments measured from a distance and never went to. It has no coordinate, so search
+  // must find it and the client must link it OUT.
+  await seed(db, {
+    angle: 0.3,
+    artists: ["Netsky"],
+    bpm: 172,
+    key: "A minor",
+    label: "Hospital Records",
+    releaseDate: "2019-03-03",
+    title: "Rio",
+    trackId: "uncertified-netsky",
+  });
+
+  await db.execute({
+    args: [],
+    sql: `insert into artists (id, name, slug, created_at, updated_at)
+          values ('a1', 'Netsky', 'netsky', '2026-07-01', '2026-07-01')`,
+  });
+  await db.execute({
+    args: [],
+    sql: `insert into labels (id, name, slug, created_at, updated_at)
+          values ('l1', 'Hospital Records', 'hospital-records', '2026-07-01', '2026-07-01')`,
+  });
+});
+
+afterEach(() => {
+  db.close();
+});
+
+// ── The index itself ─────────────────────────────────────────────────────────────────
+
+describe("the FTS5 index", () => {
+  it("is populated by the insert trigger — the app never writes to it", async () => {
+    const rows = await db.execute("select count(*) as n from tracks_fts");
+
+    expect(Number(rows.rows[0]?.n)).toBe(4);
+  });
+
+  it("follows a title change through the update trigger", async () => {
+    await db.execute({
+      args: ["certified-1991"],
+      sql: `update tracks set title = 'Ten Clouds' where track_id = ?`,
+    });
+
+    const stale = await searchArchive({ q: "nine" });
+    const fresh = await searchArchive({ q: "ten" });
+
+    expect(stale.results).toHaveLength(0);
+    expect(fresh.results.map((hit) => hit.trackId)).toEqual(["certified-1991"]);
+  });
+
+  it("drops a row through the delete trigger", async () => {
+    await db.execute({ args: ["certified-1991"], sql: `delete from tracks where track_id = ?` });
+
+    expect((await searchArchive({ q: "clouds" })).results).toHaveLength(0);
+  });
+});
+
+// ── Tier 1 · the coordinate ──────────────────────────────────────────────────────────
+
+describe("tier 1 — a coordinate", () => {
+  it("resolves straight to the finding's page, with no candidate scan", async () => {
+    const result = await searchArchive({ q: "024.7.2R" });
+
+    expect(result.kind).toBe("coordinate");
+    expect(result.redirect).toBe("/log/024.7.2R");
+    expect(translateQuery).not.toHaveBeenCalled();
+  });
+
+  it("hands back the FINDING it named, not a rendering of the URL", async () => {
+    const result = await searchArchive({ q: "024.7.2R" });
+
+    expect(result.results.map((hit) => hit.title)).toEqual(["Nine Clouds"]);
+    expect(result.results[0]?.certified).toBe(true);
+  });
+
+  it("accepts the fluncle:// form", async () => {
+    expect((await searchArchive({ q: "fluncle://024.7.2R" })).redirect).toBe("/log/024.7.2R");
+  });
+
+  it("returns an honest nothing for a coordinate that names no finding", async () => {
+    const result = await searchArchive({ q: "999.9.9Z" });
+
+    expect(result.kind).toBe("coordinate");
+    expect(result.redirect).toBeUndefined();
+    expect(result.results).toHaveLength(0);
+  });
+});
+
+// ── Tier 2 · the exact entity ────────────────────────────────────────────────────────
+
+describe("tier 2 — an exact entity name", () => {
+  it("jumps to the artist page, offers the artist, and lists their tracks under it", async () => {
+    const result = await searchArchive({ q: "Netsky" });
+
+    expect(result.kind).toBe("entity");
+    expect(result.redirect).toBe("/artist/netsky");
+    expect(result.entities).toEqual([{ kind: "artist", name: "Netsky", slug: "netsky" }]);
+    expect(result.results.map((hit) => hit.trackId)).toEqual([
+      "certified-netsky",
+      "uncertified-netsky",
+    ]);
+    expect(translateQuery).not.toHaveBeenCalled();
+  });
+
+  it("turns a label into the filter it obviously is (a label has no page — yet)", async () => {
+    const result = await searchArchive({ q: "hospital records" });
+
+    expect(result.kind).toBe("entity");
+    expect(result.redirect).toBeUndefined();
+    expect(result.filters).toEqual({ label: "Hospital Records" });
+    expect(result.results.map((hit) => hit.trackId)).toEqual([
+      "certified-netsky",
+      "uncertified-netsky",
+    ]);
+  });
+});
+
+// ── Tier 3 · the bare token ──────────────────────────────────────────────────────────
+
+describe("tier 3 — a bare token", () => {
+  it("finds by title through FTS5, without reaching the model", async () => {
+    const result = await searchArchive({ q: "clouds" });
+
+    expect(result.kind).toBe("token");
+    expect(result.results.map((hit) => hit.trackId)).toEqual(["certified-1991"]);
+    expect(translateQuery).not.toHaveBeenCalled();
+  });
+
+  it("prefix-matches mid-word, which is what makes it a type-ahead", async () => {
+    const result = await searchArchive({ q: "andro" });
+
+    expect(result.results.map((hit) => hit.trackId)).toEqual(["certified-andromedik"]);
+    expect(result.entities).toEqual([]);
+  });
+
+  it("offers the artist as a jump target beside the rows", async () => {
+    // "netsky" is an EXACT artist name, so tier 2 claims it; "nets" is not, so it falls to
+    // tier 3 — which is where the prefix jump lives.
+    const result = await searchArchive({ q: "nets" });
+
+    expect(result.kind).toBe("token");
+    expect(result.entities).toEqual([{ kind: "artist", name: "Netsky", slug: "netsky" }]);
+  });
+});
+
+// ── The catalogue rule ───────────────────────────────────────────────────────────────
+
+describe("the catalogue rule — findings are named, the rest is not", () => {
+  it("finds an uncertified track, gives it NO coordinate, and links it OUT", async () => {
+    const result = await searchArchive({ q: "rio" });
+    const hit = result.results[0];
+
+    expect(hit?.trackId).toBe("uncertified-netsky");
+    expect(hit?.certified).toBe(false);
+    expect(hit?.logId).toBeUndefined();
+    expect(hit?.spotifyUrl).toBe("https://open.spotify.com/track/uncertified-netsky");
+  });
+
+  it("puts certified rows first — bm25 is corpus-relative, so the tiers cannot be blended", async () => {
+    const result = await searchArchive({ q: "netsky" });
+
+    // Tier 2 claims the exact name and redirects; the label filter shows the ordering.
+    const byLabel = await searchArchive({ q: "Hospital Records" });
+
+    expect(byLabel.results.map((hit) => hit.certified)).toEqual([true, false]);
+    expect(result.redirect).toBe("/artist/netsky");
+  });
+
+  it("never leaks a coordinate onto a track Fluncle did not certify", async () => {
+    const result = await searchArchive({ q: "Hospital Records" });
+
+    for (const hit of result.results) {
+      expect(hit.certified).toBe(hit.logId !== undefined);
+    }
+  });
+});
+
+// ── Tier 4 · the filters ─────────────────────────────────────────────────────────────
+
+describe("tier 4 — language becomes filters, and SQL does the retrieval", () => {
+  it("executes an artist + key filter", async () => {
+    translateQuery.mockResolvedValue({ artist: "Netsky", key: "A minor" });
+
+    const result = await searchArchive({ q: "Netsky tracks in A minor" });
+
+    expect(result.kind).toBe("filters");
+    expect(result.filters).toEqual({ artist: "Netsky", key: "A minor" });
+    expect(result.results.map((hit) => hit.trackId)).toEqual([
+      "certified-netsky",
+      "uncertified-netsky",
+    ]);
+  });
+
+  it("asks one question of Bb minor and A# minor (the enharmonic fold)", async () => {
+    await db.execute({
+      args: ["certified-andromedik"],
+      sql: `update tracks set key = 'A# minor' where track_id = ?`,
+    });
+    translateQuery.mockResolvedValue({ key: "Bb minor" });
+
+    const result = await searchArchive({ q: "anything in Bb minor" });
+
+    expect(result.results.map((hit) => hit.trackId)).toEqual(["certified-andromedik"]);
+  });
+
+  it("executes a BPM range", async () => {
+    translateQuery.mockResolvedValue({ bpmMax: 173, bpmMin: 170 });
+
+    const result = await searchArchive({ q: "tracks between 170 and 173 bpm" });
+
+    expect(result.results.map((hit) => hit.trackId)).toEqual(["uncertified-netsky"]);
+  });
+
+  it("executes a year bound", async () => {
+    translateQuery.mockResolvedValue({ yearMin: 2025 });
+
+    const result = await searchArchive({ q: "anything from 2025 onwards" });
+
+    expect(result.results.map((hit) => hit.trackId)).toEqual(["certified-andromedik"]);
+  });
+
+  it("returns an HONEST empty when real columns simply do not match", async () => {
+    // The archive's one Andromedik track is in B minor. The right answer is "nothing", not a
+    // consolation prize of fuzzy text hits.
+    translateQuery.mockResolvedValue({ artist: "Andromedik", key: "A minor" });
+
+    const result = await searchArchive({ q: "Andromedik tracks in A minor" });
+
+    expect(result.kind).toBe("filters");
+    expect(result.results).toEqual([]);
+    expect(result.degraded).toBe(false);
+  });
+});
+
+// ── The sonic tier ───────────────────────────────────────────────────────────────────
+
+describe("the sonic tier — anchored on a real track, ranked in SQL", () => {
+  it("answers a sonic phrase WITHOUT a model — the headline query has no vendor dependency", async () => {
+    const result = await searchArchive({ q: "tracks that sound like Nine Clouds" });
+
+    expect(result.kind).toBe("sonic");
+    expect(translateQuery).not.toHaveBeenCalled();
+    expect(result.anchor?.trackId).toBe("certified-1991");
+    expect(result.anchor?.logId).toBe("024.7.2R");
+    // The anchor itself is excluded; the nearest vector leads, the distant one trails.
+    expect(result.results.map((hit) => hit.trackId)).toEqual([
+      "certified-netsky",
+      "uncertified-netsky",
+      "certified-andromedik",
+    ]);
+  });
+
+  it("reads every ordinary phrasing of the same question", async () => {
+    for (const query of [
+      "sounds like Nine Clouds",
+      "similar to Nine Clouds",
+      "songs that sound like Nine Clouds",
+      "like Nine Clouds",
+    ]) {
+      const result = await searchArchive({ q: query });
+
+      expect(result.kind, query).toBe("sonic");
+      expect(result.anchor?.trackId, query).toBe("certified-1991");
+    }
+  });
+
+  it("still takes the model's `soundsLike` for a phrasing the regex cannot see", async () => {
+    translateQuery.mockResolvedValue({ soundsLike: "Nine Clouds" });
+
+    const result = await searchArchive({ q: "give me more of that Nine Clouds energy" });
+
+    expect(result.kind).toBe("sonic");
+    expect(translateQuery).toHaveBeenCalled();
+    expect(result.anchor?.trackId).toBe("certified-1991");
+  });
+
+  it("reaches uncertified tracks too — the depth behind the findings is the point", async () => {
+    const result = await searchArchive({ q: "sounds like Nine Clouds" });
+
+    expect(result.results.some((hit) => !hit.certified)).toBe(true);
+  });
+
+  // The COMPOUND query is where the model earns its place on this tier: the reference is only
+  // half the question, and the other half becomes the btree pre-filter in FRONT of the vector
+  // scan (100k: 1,883 ms → 207 ms, measured). The regex declines it on purpose.
+  it("hands a compound query to the model, and turns its filters into the btree pre-filter", async () => {
+    translateQuery.mockResolvedValue({ label: "Hospital Records", soundsLike: "Nine Clouds" });
+
+    const result = await searchArchive({ q: "sounds like Nine Clouds but on Hospital Records" });
+
+    expect(translateQuery).toHaveBeenCalled();
+    expect(result.kind).toBe("sonic");
+    expect(result.results.map((hit) => hit.trackId)).toEqual([
+      "certified-netsky",
+      "uncertified-netsky",
+    ]);
+  });
+
+  it("DECLINES rather than inventing a vibe when the reference names no real track", async () => {
+    translateQuery.mockResolvedValue({ soundsLike: "A Track That Does Not Exist" });
+
+    const result = await searchArchive({ q: "sounds like A Track That Does Not Exist" });
+
+    expect(result.kind).not.toBe("sonic");
+    expect(result.anchor).toBeUndefined();
+  });
+});
+
+// ── THE DEGRADATION ──────────────────────────────────────────────────────────────────
+
+describe("the LLM is down — search degrades, it never breaks", () => {
+  it("falls back to full text when the model cannot be reached", async () => {
+    // What `translateQuery` returns when the key is missing, the vendor 500s, or the 3s
+    // deadline blows: null. Every failure mode collapses to this one answer.
+    translateQuery.mockResolvedValue(null);
+
+    const result = await searchArchive({ q: "Andromedik tracks in A minor" });
+
+    expect(result.degraded).toBe(true);
+    expect(result.kind).toBe("token");
+    // bm25 ranks by rarity: "andromedik" is the one distinctive word in that sentence, so it
+    // carries the query. A worse answer than the filters would have given — and a far better
+    // one than an empty page.
+    expect(result.results[0]?.trackId).toBe("certified-andromedik");
+  });
+
+  // The sonic tier is DELIBERATELY not among the casualties: it is a regex, so a vendor
+  // outage cannot take the one feature nobody else has offline.
+  it("keeps SONIC search fully working with the model down", async () => {
+    translateQuery.mockResolvedValue(null);
+
+    const result = await searchArchive({ q: "tracks that sound like Nine Clouds" });
+
+    expect(result.kind).toBe("sonic");
+    expect(result.degraded).toBe(false);
+    expect(result.anchor?.trackId).toBe("certified-1991");
+  });
+
+  it("keeps every deterministic tier working with no model at all", async () => {
+    translateQuery.mockRejectedValue(new Error("vendor is on fire"));
+
+    expect((await searchArchive({ q: "024.7.2R" })).redirect).toBe("/log/024.7.2R");
+    expect((await searchArchive({ q: "Netsky" })).redirect).toBe("/artist/netsky");
+    expect((await searchArchive({ q: "clouds" })).results).toHaveLength(1);
+    expect((await searchArchive({ q: "sounds like Nine Clouds" })).kind).toBe("sonic");
+  });
+});

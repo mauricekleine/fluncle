@@ -11,7 +11,8 @@ import { enrichFromDeezer, lookupIsrcFromDeezer } from "./deezer";
 import { discogsResolveRelease } from "./discogs";
 import { purgeLogCache } from "./edge-cache";
 import { submitFindingToIndexNow } from "./indexnow";
-import { ensureLabel } from "./labels";
+import { linkTrackToAlbum } from "./albums";
+import { linkTrackToLabel } from "./labels";
 import { lastfmLove } from "./lastfm";
 import { logEvent } from "./log";
 import { resolveLogId } from "./log-id";
@@ -228,15 +229,23 @@ No database, Spotify, or Telegram changes were made. Enrichment (label, preview)
     });
   }
 
-  // Best-effort: mint the label entity for the label Deezer just handed back. A brand-new
-  // label enters `undecided` — never silently crawled, never silently dropped — and lands
-  // in the operator's attention queue as a label to rule on. Purely additive: it writes
-  // one `labels` row and touches nothing else, so a failure never blocks the publish (the
-  // deploy-time reconcile in scripts/backfill-labels.ts backstops it).
+  // Best-effort: mint the graph entities this track hangs off — its LABEL (the one Deezer
+  // just handed back) and its ALBUM — and stamp the track's `label_id` / `album_id` pointers
+  // at them, which is the indexed edge the public /label/<slug> + /album/<slug> pages read
+  // by. A brand-new label enters `undecided` — never silently crawled, never silently
+  // dropped — and lands in the operator's attention queue as a label to rule on; an album
+  // carries no ruling at all (docs/album-entity.md).
+  //
+  // Purely additive: two entity rows and two pointers, nothing else touched — so a failure
+  // never blocks the publish (the deploy-time reconciles in scripts/backfill-labels.ts +
+  // scripts/backfill-albums.ts back both of them up).
   try {
-    await ensureLabel(deezer.label);
+    await Promise.all([
+      linkTrackToLabel(track.trackId, deezer.label),
+      linkTrackToAlbum(track.trackId, track.album),
+    ]);
   } catch (labelError) {
-    logEvent("warn", "publish.label-upsert-failed", {
+    logEvent("warn", "publish.graph-entity-upsert-failed", {
       error: labelError,
       logId,
       trackId: track.trackId,

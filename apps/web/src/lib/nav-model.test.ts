@@ -20,6 +20,8 @@ describe("nav model completeness", () => {
     for (const expected of [
       "/log",
       "/artists",
+      "/labels",
+      "/albums",
       "/galaxies",
       "/logbook",
       "/mixtapes",
@@ -55,11 +57,22 @@ describe("nav model completeness", () => {
     expect(publicItems(explore).some((item) => item.id === "mix")).toBe(false);
   });
 
-  it("keeps a designed-but-unshipped Labels slot flagged future (never a live link)", () => {
+  it("renders the graph surfaces as live links (the Labels slot shipped)", () => {
     const explore = navSections.find((section) => section.id === "explore");
     const labels = explore?.items.find((item) => item.id === "labels");
+    const albums = explore?.items.find((item) => item.id === "albums");
 
-    expect(labels?.future).toBe(true);
+    // The `future` flag exists for a designed-but-unshipped slot; the Labels slot it was
+    // introduced for is now a real route, and Albums landed with it. Neither may carry it —
+    // a future item renders as a disabled "soon" slot, which would now be a lie.
+    expect(labels?.future).toBeUndefined();
+    expect(albums?.future).toBeUndefined();
+    expect(renderableItems(explore ?? { id: "explore", items: [], label: "" }, true)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "labels", to: "/labels" }),
+        expect.objectContaining({ id: "albums", to: "/albums" }),
+      ]),
+    );
   });
 
   it("hides the galaxies lens until its runtime gate opens", () => {

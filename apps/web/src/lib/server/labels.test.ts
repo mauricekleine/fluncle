@@ -282,13 +282,31 @@ describe("the D7 bootstrap (scripts/backfill-labels.ts)", () => {
     expect(await seedStateOf("anjunabeats")).toBe("enabled");
   });
 
-  it("leaves every track untouched (the bootstrap writes labels, and only labels)", async () => {
+  it("writes the label_id graph pointer and NOTHING else on a track", async () => {
     await seedFinding("t1", "Anjunabeats");
     const before = await db.execute(`select * from tracks order by track_id`);
 
     await backfillLabels(db);
 
     const after = await db.execute(`select * from tracks order by track_id`);
-    expect(after.rows).toEqual(before.rows);
+
+    // The backfill stamps ONE column on `tracks`: `label_id`, the indexed edge the public
+    // /label/<slug> page reads by (schema.ts). It is a POINTER, never a ruling — it says
+    // where this track sits in the graph, and nothing about what the crawler may seed from.
+    // Every other column, including the raw `label` audit string, comes out byte-identical.
+    const strip = (rows: typeof before.rows) =>
+      rows.map((row) => {
+        const { label_id: _labelId, ...rest } = row as Record<string, unknown>;
+
+        return rest;
+      });
+
+    expect(strip(after.rows)).toEqual(strip(before.rows));
+    expect(before.rows[0]?.label_id).toBeNull();
+    expect(after.rows[0]?.label_id).toEqual(expect.stringMatching(/^lbl_/));
   });
+
+  // The guarantee the whole design rests on is one line up (`updateLabelSeedState` → the
+  // tracks table byte-identical, line ~178). The backfill's pointer write does not touch it:
+  // a RULING still changes nothing that is stored.
 });

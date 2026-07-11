@@ -56,6 +56,26 @@ export const tracks = sqliteTable(
   "tracks",
   {
     album: text("album"),
+    // The GRAPH POINTER to the normalized `albums` entity (`albums.id`), the twin of
+    // `labelId` below. `album` stays the raw captured string forever (the audit trail
+    // and the re-normalization input); this is an ADDITION, never a replacement — the
+    // pattern `docs/label-entity.md` recorded as the follow-up when the entity landed.
+    //
+    // WHY IT EXISTS. Slug-folding `album`/`label` in TS is fine over the FINDINGS join
+    // (bounded by how many tracks Fluncle certified — a `GROUP BY` of tens of rows), and
+    // that is all the entity needed while it was admin-only. The PUBLIC page asks a
+    // different question — "every track on this album, including the ones Fluncle never
+    // certified" — and answering that by folding the whole catalogue in the isolate is
+    // exactly the shape AGENTS.md forbids (never rank/scan a growing table in the
+    // Worker). An indexed equality on the entity id is a seek, at any catalogue size.
+    //
+    // NULL means "not linked yet": either the track carries no album/label string, or its
+    // string folds to a slug no entity row exists for. An entity row is minted ONLY off a
+    // certified finding (see `reconcileAlbums`/`reconcileLabels`), so an uncertified
+    // catalogue track on an album Fluncle has never found anything on stays unlinked — and
+    // therefore invisible — by design. The publish path stamps this on the add; the
+    // deploy-time backfill is the self-healing backstop for every other write path.
+    albumId: text("album_id"),
     albumImageUrl: text("album_image_url"),
     // BPM/key ANALYSIS PROVENANCE (RFC bpm-key-accuracy). The enrichment analyzer already
     // emits where each value came from + how confident it was; these columns persist that so a
@@ -177,6 +197,9 @@ export const tracks = sqliteTable(
     keyConfidence: real("key_confidence"),
     keySource: text("key_source"),
     label: text("label"),
+    // The GRAPH POINTER to the normalized `labels` entity (`labels.id`) — the twin of
+    // `albumId` above; see its comment for why the pointer exists and what NULL means.
+    labelId: text("label_id"),
     // The Ear's two ranking outputs. See the block comment on `capture_priority` above —
     // these three columns are one unit and are written only by the `rank_catalogue` sweep.
     nearestFindingScore: real("nearest_finding_score"),
@@ -216,15 +239,25 @@ export const tracks = sqliteTable(
   // `tracks_*` indexes moved wholesale to `findings` below; a finding read drives from
   // `findings` and joins `tracks` by its PRIMARY KEY.
   //
-  // These two are the CATALOGUE half's scan shapes — The Ear's two ordered reads, and the
-  // whole reason its request path does no vector math (docs/the-ear.md). Both walk their
-  // index DESC and stop at the page's LIMIT, so the cost is the page, not the corpus.
+  // Everything indexed HERE is a CATALOGUE-half scan shape — a read that drives from
+  // `tracks` (the table the catalogue grows), not from `findings`, and therefore must stay
+  // a seek rather than a scan as it does.
+  //
+  // The GRAPH pages read `tracks` BY ENTITY: every track on this album / this label,
+  // certified or not (the public `/album/<slug>` + `/label/<slug>` pages, docs/album-entity.md).
+  // Both pointers also serve the deploy backfill's `… _id is null` drain.
+  //   - `album_id` / `label_id` — the entity a track hangs off.
+  //
+  // The EAR's two ordered reads are the whole reason its request path does no vector math
+  // (docs/the-ear.md). Both walk their index DESC and stop at the page's LIMIT, so the cost
+  // is the page, not the corpus. NULLs sort first in an ASC index, so a DESC walk hits the
+  // ranked rows first and never pays for the unranked tail. Neither column is ever non-null
+  // on a finding (the sweep anti-joins `findings`), so both hold catalogue rows only.
   //   - `nearest_finding_score` — the Ear's rank: "closest to a finding, not yet logged."
   //   - `capture_priority`      — the capture queue's rank: who gets captured next.
-  // NULLs sort first in an ASC index, so a DESC walk hits the ranked rows first and never
-  // pays for the unranked tail. Neither column is ever non-null on a finding (the sweep
-  // anti-joins `findings`), so both indexes hold catalogue rows only.
   (table) => [
+    index("tracks_album_id_idx").on(table.albumId),
+    index("tracks_label_id_idx").on(table.labelId),
     index("tracks_nearest_finding_score_idx").on(table.nearestFindingScore),
     index("tracks_capture_priority_idx").on(table.capturePriority),
   ],
@@ -617,6 +650,10 @@ export const costEvents = sqliteTable(
         "newsletter",
         "studio-clip",
         "cluster",
+        // The only step that is not per-finding pipeline work: the search resolver's
+        // language→filters LLM call (lib/server/search-llm.ts). It carries no log_id/
+        // track_id (a search is not about one track), which the ledger already allows.
+        "search",
       ],
     }).notNull(),
     // finding id (no declared FK — socialPosts.trackId / user_galaxy_collections
@@ -1493,6 +1530,35 @@ export const labels = sqliteTable("labels", {
   seedState: text("seed_state", { enum: ["enabled", "disabled", "undecided"] })
     .notNull()
     .default("undecided"),
+  slug: text("slug").notNull().unique(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+// The ALBUM — the fourth node of the graph (log ↔ artist ↔ label ↔ album), and the
+// structural twin of `labels` above: `tracks.album` stays the raw captured string
+// forever, this table is its normalized twin related by `slug`
+// (`slugify(tracks.album) = albums.slug`), and `tracks.album_id` is the indexed pointer
+// the public page reads by. Everything true of `labels` is true here, minus the seed
+// control: an album is not a crawl seed, so it carries NO `seed_state` and NO `ruled_at`.
+// There is nothing for an operator to rule on — which is why there is no `/admin/albums`.
+//
+// A row is minted ONLY off a CERTIFIED finding (`reconcileAlbums`, and the publish path's
+// `ensureAlbum`), never off a bare `tracks` scan — the same discipline `reconcileLabels`
+// records: an album earns an entity, a page, and a sitemap slot because Fluncle FOUND
+// something on it. That is also what keeps the album index bounded by the archive rather
+// than by the catalogue. An uncertified catalogue track whose album has a row LINKS to it
+// (that is the "other songs on this album" half of the page); one whose album has no row
+// stays unlinked and invisible.
+//
+// The known limit, inherited from the slug identity: two different albums that share a
+// name fold into one row (`labels`' `Pilot.`/`Pilot` fold, run the other way). The
+// disambiguation answer is the alias map docs/label-entity.md already records as the
+// eventual fix for both entities; it is not a normalizer's job. See docs/album-entity.md.
+export const albums = sqliteTable("albums", {
+  createdAt: text("created_at").notNull(),
+  id: text("id").primaryKey(),
+  // The display name — the first raw `tracks.album` spelling seen for this slug.
+  name: text("name").notNull(),
   slug: text("slug").notNull().unique(),
   updatedAt: text("updated_at").notNull(),
 });

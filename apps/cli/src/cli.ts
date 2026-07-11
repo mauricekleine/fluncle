@@ -117,6 +117,13 @@ type TrackUpdateOptions = {
   videoUrl?: string;
 };
 
+type TrackWorkOptions = {
+  json: boolean;
+  kind: string;
+  limit?: string;
+  scope?: string;
+};
+
 type CatalogueListOptions = {
   json: boolean;
   lens?: string;
@@ -689,6 +696,27 @@ function addAdminCommands(program: Command): void {
       await runAdminCaptureQueue(options, captureQueueCommand);
     });
 
+  // `list_track_work` → `admin tracks work` (Convention B). THE CATALOGUE-AWARE worklist,
+  // and the one the three sweeps actually drain. The `enrich`/`embed`/`capture-audio` views
+  // above read `list_tracks_admin`, which joins through the certification and is therefore
+  // blind to a CATALOGUE track — right for a feed, fatal for a pipeline, since BPM/key/the
+  // MuQ vector are measurements of a RECORDING and apply to any track with captured audio.
+  //
+  // Rows come back in the order the METERED capture budget should be spent: certified first,
+  // then the Ear's `capture_priority` ladder, then newest-first. A ruled-out label is vetoed
+  // out of the `capture` worklist. See docs/gpu-batch-embed.md + docs/the-ear.md.
+  adminTracks
+    .command("work")
+    .description("The audio pipeline's worklist for one stage, in capture-priority order")
+    .requiredOption("--kind <kind>", "Pipeline stage: analyze | capture | embed")
+    .option("--scope <scope>", "Which half of the archive: all | catalogue | findings", "all")
+    .option("--limit <limit>", "Rows to show", "10")
+    .option("--json", "Print JSON", false)
+    .action(async (options: TrackWorkOptions) => {
+      const { trackWorkCommand } = await import("./commands/admin-tracks");
+      await runAdminTrackWork(options, trackWorkCommand);
+    });
+
   // `requeue_analysis` → `admin tracks requeue-analysis` (Convention B; the `requeue` verb is
   // shared with `requeue_video`). The archive-wide analysis-provenance repair (RFC
   // bpm-key-accuracy): re-queue every finding whose BPM/key are preview-grade (`analyzedFrom
@@ -1088,6 +1116,48 @@ function addAdminCommands(program: Command): void {
     .action(async (idOrLogId: string | undefined, options: MixtapeResyncOptions) => {
       const { mixtapeResyncCommand } = await import("./commands/mixtapes");
       await runMixtapeResync(idOrLogId, options, mixtapeResyncCommand);
+    });
+
+  // The render → publish auto-advance. `advance` is the tick the on-box
+  // `fluncle-publish-advance` cron drives (admin tier — the box's agent token); `pause` /
+  // `resume` are the operator's KILL SWITCH over every future auto-publish, one flip, no
+  // deploy. (`admin tracks publish` is a different thing entirely — that ADDS a finding.)
+  const adminPublish = configureCommand(
+    admin.command("publish").description("Render → publish auto-advance commands"),
+  );
+
+  adminPublish.action(() => {
+    adminPublish.outputHelp();
+  });
+
+  adminPublish
+    .command("advance")
+    .description("Run one tick of the render → publish auto-advance (kill-switch aware)")
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (options: { json: boolean }) => {
+      const { publishAdvanceCommand } = await import("./commands/publish");
+      await runPublishAdvance(options, publishAdvanceCommand);
+    });
+
+  adminPublish
+    .command("pause")
+    .description("Pause the render → publish auto-advance, the kill switch (operator)")
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (options: { json: boolean }) => {
+      const { publishAdvancePauseCommand } = await import("./commands/publish");
+      await runPublishAdvancePause(true, options, publishAdvancePauseCommand);
+    });
+
+  adminPublish
+    .command("resume")
+    .description("Resume the render → publish auto-advance, clear the kill switch (operator)")
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (options: { json: boolean }) => {
+      const { publishAdvancePauseCommand } = await import("./commands/publish");
+      await runPublishAdvancePause(false, options, publishAdvancePauseCommand);
     });
 
   // Fluncle Studio clips. `list` is the agent-allowed read;
@@ -3111,6 +3181,58 @@ async function runClipsDripPause(
   console.log(result ? "The drip-feed is paused." : "The drip-feed is running.");
 }
 
+async function runPublishAdvance(
+  options: { json: boolean },
+  publishAdvanceCommand: typeof import("./commands/publish").publishAdvanceCommand,
+): Promise<void> {
+  const result = await publishAdvanceCommand();
+
+  if (options.json) {
+    printJson(result);
+    return;
+  }
+
+  if (result.paused) {
+    console.log("Auto-advance is paused — nothing pushed.");
+    return;
+  }
+
+  if (result.pushed.length === 0 && result.held.length === 0 && result.failed.length === 0) {
+    console.log("Nothing ready to advance.");
+    return;
+  }
+
+  for (const push of result.pushed) {
+    console.log(`Pushed ${push.logId} to ${push.platform} (${push.status}).`);
+  }
+
+  for (const held of result.held) {
+    const detail = held.missing?.length ? ` (${held.missing.join(", ")})` : "";
+    console.log(`Held ${held.platform} for ${held.trackId}: ${held.reason}${detail}.`);
+  }
+
+  for (const failure of result.failed) {
+    console.log(`Failed ${failure.platform} for ${failure.trackId} — left for the operator.`);
+  }
+}
+
+async function runPublishAdvancePause(
+  paused: boolean,
+  options: { json: boolean },
+  publishAdvancePauseCommand: typeof import("./commands/publish").publishAdvancePauseCommand,
+): Promise<void> {
+  const result = await publishAdvancePauseCommand(paused);
+
+  if (options.json) {
+    printJson({ ok: true, paused: result });
+    return;
+  }
+
+  console.log(
+    result ? "The publish auto-advance is paused." : "The publish auto-advance is running.",
+  );
+}
+
 async function runMixtapeGet(
   idOrLogId: string | undefined,
   options: { json: boolean },
@@ -3914,6 +4036,57 @@ async function runAdminCaptureQueue(
   console.log(trackRows(tracks).join("\n"));
 }
 
+const TRACK_WORK_KINDS = new Set(["analyze", "capture", "embed"]);
+const TRACK_WORK_SCOPES = new Set(["all", "catalogue", "findings"]);
+
+// The catalogue-aware pipeline worklist. Renders each row with the two things the queue's
+// ORDER turns on: whether the track is certified, and its capture-priority rung. An
+// uncertified row has no coordinate to print — it has no finding — so it shows its trackId.
+async function runAdminTrackWork(
+  options: TrackWorkOptions,
+  trackWorkCommand: typeof import("./commands/admin-tracks").trackWorkCommand,
+): Promise<void> {
+  const kind = options.kind?.trim().toLowerCase() ?? "";
+  const scope = options.scope?.trim().toLowerCase() ?? "all";
+
+  if (!TRACK_WORK_KINDS.has(kind)) {
+    console.error(`--kind must be one of: analyze, capture, embed (got "${options.kind}")`);
+    process.exitCode = 1;
+    return;
+  }
+
+  if (!TRACK_WORK_SCOPES.has(scope)) {
+    console.error(`--scope must be one of: all, catalogue, findings (got "${options.scope}")`);
+    process.exitCode = 1;
+    return;
+  }
+
+  const tracks = await trackWorkCommand({
+    kind: kind as "analyze" | "capture" | "embed",
+    limit: parseListLimit(options.limit),
+    scope: scope as "all" | "catalogue" | "findings",
+  });
+
+  if (options.json) {
+    printJson({ ok: true, tracks });
+    return;
+  }
+
+  if (tracks.length === 0) {
+    console.log(`Nothing to ${kind}. The ${scope} queue is drained.`);
+    return;
+  }
+
+  const noun = tracks.length === 1 ? "track" : "tracks";
+  console.log(`${tracks.length} ${noun} to ${kind} (${scope}), in drain order:`);
+
+  for (const track of tracks) {
+    const who = track.logId ?? `${track.trackId} · catalogue`;
+    const rung = track.capturePriority === null ? "" : ` · p${track.capturePriority}`;
+    console.log(`  ${who}${rung} — ${track.artists.join(", ")} — ${track.title}`);
+  }
+}
+
 // The whole-archive walk cap. Absent `--limit` drains the entire archive (the repair is
 // meant to sweep everything); an explicit `--limit` (any positive integer) bounds a
 // pilot/test pass. Distinct from `parseListLimit`'s 1..100 worklist clamp — this walks the
@@ -4393,6 +4566,7 @@ const stringOptions = new Set([
   "--scheduled-for",
   "--script",
   "--script-file",
+  "--scope",
   "--seed",
   "--soundcloud-url",
   "--source",

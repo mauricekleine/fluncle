@@ -145,10 +145,103 @@ export const capturePostUrls = oc
     }),
   );
 
+/**
+ * `advance_publish_queue` → `POST /admin/social/publish/advance` (operationId
+ * `advancePublishQueue`).
+ *
+ * ADMIN tier (`adminAuth`, NOT `operatorGuard`): the on-box `fluncle-publish-advance` cron
+ * drives it with its AGENT token — the `drip_clips` / `capture_post_urls` precedent (the
+ * box holds no Postiz key, so it only TRIGGERS the Worker, which owns the key). One
+ * bounded, idempotent tick of the render → publish auto-advance: the kill switch first (a
+ * paused tick pushes nothing), then at most `ADVANCE_PER_TICK_CAP` READY findings are
+ * pushed — YouTube as the hands-off public Short, TikTok as the inbox draft the operator
+ * finishes in-app.
+ *
+ * Note the tier inversion this deliberately carries: `draft_track_social` refuses a
+ * YouTube push from the agent role (a direct public upload was operator-only). The
+ * auto-advance IS the decision to let the machine make that push — so the gate moves off
+ * the request tier and onto the kill switch + the readiness gates, exactly as the clip
+ * drip-feed moved Instagram posting behind `clip_drip_paused`. Nothing else may push
+ * YouTube as the agent: the tier stays on `draft_track_social`.
+ *
+ * Empty body (`{}`).
+ */
+export const advancePublishQueue = oc
+  .route({
+    method: "POST",
+    operationId: "advancePublishQueue",
+    path: "/admin/social/publish/advance",
+    summary: "Advance freshly-rendered findings into the publish push (kill-switch aware)",
+    tags: ["Admin"],
+  })
+  .input(z.looseObject({}))
+  .output(
+    z.object({
+      /** Findings inspected this tick (after the per-tick cap). */
+      candidates: z.number(),
+      /** Pushes that errored — the row is left `failed` for the operator, never retried. */
+      failed: z.array(
+        z.object({
+          platform: z.enum(["tiktok", "youtube"]),
+          trackId: z.string(),
+        }),
+      ),
+      /** Platforms held back, and why — a stuck advance says so out loud. */
+      held: z.array(
+        z.object({
+          missing: z.array(z.string()).optional(),
+          platform: z.enum(["tiktok", "youtube"]),
+          reason: z.enum([
+            "bundle_incomplete",
+            "daily_cap",
+            "no_caption",
+            "tiktok_inbox_full",
+            "youtube_url_pending",
+          ]),
+          trackId: z.string(),
+        }),
+      ),
+      ok: z.literal(true),
+      /** The kill switch was on — nothing was pushed. */
+      paused: z.boolean(),
+      /** The pushes that actually went out. */
+      pushed: z.array(
+        z.object({
+          externalId: z.string(),
+          logId: z.string(),
+          platform: z.enum(["tiktok", "youtube"]),
+          status: z.enum(["draft", "published"]),
+          trackId: z.string(),
+        }),
+      ),
+    }),
+  );
+
+/**
+ * `set_publish_advance` → `PUT /admin/social/publish/advance/state` (operationId
+ * `setPublishAdvance`).
+ *
+ * OPERATOR tier — the auto-advance's KILL SWITCH (the `set_clip_drip` shape, on the same
+ * `settings` KV). Pausing halts every future auto-publish within one tick, changing
+ * nothing else about a finding; resuming continues it. The agent may never touch it.
+ */
+export const setPublishAdvance = oc
+  .route({
+    method: "PUT",
+    operationId: "setPublishAdvance",
+    path: "/admin/social/publish/advance/state",
+    summary: "Pause / resume the render → publish auto-advance (the kill switch)",
+    tags: ["Admin"],
+  })
+  .input(z.object({ paused: z.boolean() }))
+  .output(z.object({ ok: z.literal(true), paused: z.boolean() }));
+
 /** The `admin-social` domain's ops, merged into the root contract by `./index.ts`. */
 export const adminSocialContract = {
+  advance_publish_queue: advancePublishQueue,
   capture_post_urls: capturePostUrls,
   draft_track_social: draftTrackSocial,
   list_track_social: listTrackSocial,
+  set_publish_advance: setPublishAdvance,
   update_track_social: updateTrackSocial,
 };

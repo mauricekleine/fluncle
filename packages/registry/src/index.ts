@@ -338,6 +338,36 @@ export const SURFACES: readonly Surface[] = [
     weights: { ssh: "secondary", web: "secondary" },
   },
   {
+    discoveryUrl: `${SITE}/llms.txt`,
+    exposedContent: [
+      "/labels — every record label Fluncle has found a banger on",
+      "/label/:slug — one label: its findings, the artists on it, and the rest of its catalogue",
+    ],
+    kind: "web_route",
+    name: "web.labels",
+    operatorNotes:
+      "The label half of the graph (log ↔ artist ↔ label ↔ album). The INDEX is probeable (always 200); the slug page is not, so the probe targets /labels. A label below the renderable-track floor renders noindex + stays out of the sitemap (the ARTIST_INDEX_MIN_FINDINGS precedent). The page is BLIND to the label's crawl seed_state — that is crawl scope, never storage (docs/label-entity.md); the operator's ruling station is /admin/labels.",
+    probeConfig: { cadenceMs: PROBE_CADENCE_MS, kind: "http", timeoutMs: PROBE_TIMEOUT_MS },
+    route: "/labels",
+    url: `${SITE}/labels`,
+    weights: { web: "secondary" },
+  },
+  {
+    discoveryUrl: `${SITE}/llms.txt`,
+    exposedContent: [
+      "/albums — every record Fluncle has found a banger on",
+      "/album/:slug — one record: its findings, its artists, its label, and the rest of its tracklist",
+    ],
+    kind: "web_route",
+    name: "web.albums",
+    operatorNotes:
+      "The album half of the graph, and the node that closes it: the album page carries the album → label edge (a link, plus `albumRelease.recordLabel` in its MusicAlbum JSON-LD). The INDEX is probeable (always 200); the slug page is not. Bounded by the archive, not the catalogue — an album earns a page by carrying a finding (docs/album-entity.md).",
+    probeConfig: { cadenceMs: PROBE_CADENCE_MS, kind: "http", timeoutMs: PROBE_TIMEOUT_MS },
+    route: "/albums",
+    url: `${SITE}/albums`,
+    weights: { web: "secondary" },
+  },
+  {
     exposedContent: [
       "/galaxies — the browse-by-feel lens: the archive grouped into operator-named sonic galaxies (k-means over the MuQ audio embedding space)",
       "/galaxies/:slug — one galaxy: its findings core-first, plus the adjacent galaxies by sound",
@@ -508,6 +538,22 @@ export const SURFACES: readonly Surface[] = [
     route: "/api/v1/search",
     url: `${SITE}/api/v1/search`,
     weights: { web: "secondary" },
+  },
+  {
+    apiFormat: "application/json",
+    discoveryUrl: `${SITE}/api/v1/openapi.json`,
+    exposedContent: [
+      "search Fluncle's archive: a coordinate (004.7.2I), an artist/label/album name, a bare word (FTS5), or a natural-language query",
+      "sonic search — 'tracks that sound like <a real track>', ranked by MuQ embedding distance",
+    ],
+    kind: "api",
+    name: "api.search.archive",
+    operatorNotes:
+      "The public read behind the ⌘K dialog (search_archive), and the primary navigation once the archive is deep. Four resolution tiers; only the fourth reaches an LLM (OpenRouter, 3s deadline) and it emits FILTERS, never rows. With no OPENROUTER_API_KEY it degrades to full-text and still answers — so it probes green unprovisioned.",
+    probeConfig: { cadenceMs: PROBE_CADENCE_MS, kind: "http", timeoutMs: PROBE_TIMEOUT_MS },
+    route: "/api/v1/search/archive",
+    url: `${SITE}/api/v1/search/archive?q=netsky`,
+    weights: { web: "primary" },
   },
   {
     apiFormat: "application/json",
@@ -1021,6 +1067,18 @@ export const SURFACES: readonly Surface[] = [
     operatorNotes:
       "every 20m. Pure HTTP trigger, zero LLM tokens. Admin tier (needs the Worker's Postiz key, which the box never sees — the box only triggers; the `finalize_clip_cut` / `record_health` precedent). The Worker checks the global kill switch FIRST (paused → no-op), then posts due clips bounded by a per-tick cap AND a rolling-24h IG cap. Every clip auto-enters the schedule at a jittered ~23-25h after the queue tail. The operator pauses/resumes with `fluncle admin clips drip-pause` / `drip-resume`. Source: docs/agents/hermes/scripts/clip-drip-sweep.sh. Probed on /status as cron.clip-drip.",
     probeConfig: { cadenceMs: 20 * MINUTE_MS, cronName: "fluncle-clip-drip", kind: "cron" },
+    weights: { status: "hidden" },
+  },
+  {
+    command: "fluncle admin publish pause",
+    exposedContent: [
+      "advance one freshly-rendered finding into the publish push — YouTube Short + TikTok inbox draft (--no-agent, Worker HTTP)",
+    ],
+    kind: "cron",
+    name: "cron.publish-advance",
+    operatorNotes:
+      "every 30m. Pure HTTP trigger, zero LLM tokens. The last autonomy gap: render finishes → this pushes, with no operator beat between. Admin tier (needs the Worker's Postiz key, which the box never sees — the box only triggers; the `drip_clips` / `capture_post_urls` precedent). SHIPS DARK: the Worker's kill switch is DEFAULT-DENY (only an explicit `false` in the `publish_advance_paused` setting runs it), so the timer ticks and posts nothing until `fluncle admin publish resume`. The Worker reads the switch FIRST, then advances at most ONE ready finding — both masters finalized, 15m settled, the whole bundle served on R2, the (track, platform) row CLAIMED atomically before any Postiz call, a rolling-24h cap of 6 pushes. A failed push is left `failed` for the operator and never auto-retried. Source: docs/agents/hermes/scripts/publish-advance-sweep.sh. Probed on /status as cron.publish-advance.",
+    probeConfig: { cadenceMs: 30 * MINUTE_MS, cronName: "fluncle-publish-advance", kind: "cron" },
     weights: { status: "hidden" },
   },
   {

@@ -491,6 +491,13 @@
       "when": 1783785807380,
       "tag": "0069_left_unicorn",
       "breakpoints": true
+    },
+    {
+      "idx": 70,
+      "version": "6",
+      "when": 1783789222686,
+      "tag": "0070_chief_boom_boom",
+      "breakpoints": true
     }
   ]
 }

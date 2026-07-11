@@ -1,0 +1,22 @@
+[Unit]
+Description=fluncle-publish-advance — rave-02 host trigger for the render → publish auto-advance sweep
+Documentation=https://github.com/mauricekleine/fluncle/blob/main/docs/agents/hermes/publish-advance-timer/README.md
+Wants=network-online.target docker.service
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+# Root drives the Docker daemon; `docker exec -u hermes` runs the WORK as the unprivileged
+# hermes user. The lone .sh is BAKED at /opt/hermes-scripts/ (Unit A — auto-updates from main
+# via pin-watch); this host unit only TRIGGERS it, and the sweep self-writes its /status
+# marker (cron-output.sh) so the prober stays honest.
+ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/publish-advance-sweep.sh
+# One `curl --max-time 30` POST that triggers the Worker to advance at most ONE ready
+# finding into the publish push. The Worker no-ops instantly while the kill switch is on
+# (which is the default), and on an empty/unready queue.
+TimeoutStartSec=120
+# Modest hardening for a root docker-driving oneshot.
+NoNewPrivileges=true
+ProtectControlGroups=true
+ProtectKernelTunables=true
+RestrictSUIDSGID=true

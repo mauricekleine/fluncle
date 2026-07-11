@@ -34,14 +34,17 @@ import { Route as NewsletterIndexRouteImport } from './routes/newsletter.index'
 import { Route as MixtapesIndexRouteImport } from './routes/mixtapes.index'
 import { Route as LogbookIndexRouteImport } from './routes/logbook.index'
 import { Route as LogIndexRouteImport } from './routes/log.index'
+import { Route as LabelsIndexRouteImport } from './routes/labels.index'
 import { Route as GalaxiesIndexRouteImport } from './routes/galaxies.index'
 import { Route as DocsIndexRouteImport } from './routes/docs.index'
 import { Route as ArtistsIndexRouteImport } from './routes/artists.index'
+import { Route as AlbumsIndexRouteImport } from './routes/albums.index'
 import { Route as AdminIndexRouteImport } from './routes/admin/index'
 import { Route as StoriesLogIdRouteImport } from './routes/stories.$logId'
 import { Route as NewsletterNumberRouteImport } from './routes/newsletter.$number'
 import { Route as LogbookSectorRouteImport } from './routes/logbook.$sector'
 import { Route as LogLogIdRouteImport } from './routes/log.$logId'
+import { Route as LabelSlugRouteImport } from './routes/label.$slug'
 import { Route as GalaxiesSlugRouteImport } from './routes/galaxies.$slug'
 import { Route as EmbedLogIdRouteImport } from './routes/embed.$logId'
 import { Route as DocsApiRouteImport } from './routes/docs.api'
@@ -50,6 +53,7 @@ import { Route as DocsDotmdSplatRouteImport } from './routes/docs[.]md.$'
 import { Route as CliLatestDotshRouteImport } from './routes/cli/latest[.]sh'
 import { Route as ArtistSlugRouteImport } from './routes/artist.$slug'
 import { Route as ApiStatusRouteImport } from './routes/api/status'
+import { Route as AlbumSlugRouteImport } from './routes/album.$slug'
 import { Route as AdminUsageRouteImport } from './routes/admin/usage'
 import { Route as AdminRendersRouteImport } from './routes/admin/renders'
 import { Route as AdminRecordingsRouteImport } from './routes/admin/recordings'
@@ -228,6 +232,11 @@ const LogIndexRoute = LogIndexRouteImport.update({
   path: '/log/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const LabelsIndexRoute = LabelsIndexRouteImport.update({
+  id: '/labels/',
+  path: '/labels/',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const GalaxiesIndexRoute = GalaxiesIndexRouteImport.update({
   id: '/galaxies/',
   path: '/galaxies/',
@@ -241,6 +250,11 @@ const DocsIndexRoute = DocsIndexRouteImport.update({
 const ArtistsIndexRoute = ArtistsIndexRouteImport.update({
   id: '/artists/',
   path: '/artists/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AlbumsIndexRoute = AlbumsIndexRouteImport.update({
+  id: '/albums/',
+  path: '/albums/',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AdminIndexRoute = AdminIndexRouteImport.update({
@@ -266,6 +280,11 @@ const LogbookSectorRoute = LogbookSectorRouteImport.update({
 const LogLogIdRoute = LogLogIdRouteImport.update({
   id: '/log/$logId',
   path: '/log/$logId',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const LabelSlugRoute = LabelSlugRouteImport.update({
+  id: '/label/$slug',
+  path: '/label/$slug',
   getParentRoute: () => rootRouteImport,
 } as any)
 const GalaxiesSlugRoute = GalaxiesSlugRouteImport.update({
@@ -306,6 +325,11 @@ const ArtistSlugRoute = ArtistSlugRouteImport.update({
 const ApiStatusRoute = ApiStatusRouteImport.update({
   id: '/api/status',
   path: '/api/status',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AlbumSlugRoute = AlbumSlugRouteImport.update({
+  id: '/album/$slug',
+  path: '/album/$slug',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AdminUsageRoute = AdminUsageRouteImport.update({
@@ -622,6 +646,7 @@ export interface FileRoutesByFullPath {
   '/admin/recordings': typeof AdminRecordingsRoute
   '/admin/renders': typeof AdminRendersRoute
   '/admin/usage': typeof AdminUsageRoute
+  '/album/$slug': typeof AlbumSlugRoute
   '/api/status': typeof ApiStatusRoute
   '/artist/$slug': typeof ArtistSlugRoute
   '/cli/latest.sh': typeof CliLatestDotshRoute
@@ -630,14 +655,17 @@ export interface FileRoutesByFullPath {
   '/docs/api': typeof DocsApiRoute
   '/embed/$logId': typeof EmbedLogIdRoute
   '/galaxies/$slug': typeof GalaxiesSlugRoute
+  '/label/$slug': typeof LabelSlugRoute
   '/log/$logId': typeof LogLogIdRoute
   '/logbook/$sector': typeof LogbookSectorRoute
   '/newsletter/$number': typeof NewsletterNumberRoute
   '/stories/$logId': typeof StoriesLogIdRoute
   '/admin/': typeof AdminIndexRoute
+  '/albums/': typeof AlbumsIndexRoute
   '/artists/': typeof ArtistsIndexRoute
   '/docs/': typeof DocsIndexRoute
   '/galaxies/': typeof GalaxiesIndexRoute
+  '/labels/': typeof LabelsIndexRoute
   '/log/': typeof LogIndexRoute
   '/logbook/': typeof LogbookIndexRoute
   '/mixtapes/': typeof MixtapesIndexRoute
@@ -714,6 +742,7 @@ export interface FileRoutesByTo {
   '/admin/recordings': typeof AdminRecordingsRoute
   '/admin/renders': typeof AdminRendersRoute
   '/admin/usage': typeof AdminUsageRoute
+  '/album/$slug': typeof AlbumSlugRoute
   '/api/status': typeof ApiStatusRoute
   '/artist/$slug': typeof ArtistSlugRoute
   '/cli/latest.sh': typeof CliLatestDotshRoute
@@ -722,14 +751,17 @@ export interface FileRoutesByTo {
   '/docs/api': typeof DocsApiRoute
   '/embed/$logId': typeof EmbedLogIdRoute
   '/galaxies/$slug': typeof GalaxiesSlugRoute
+  '/label/$slug': typeof LabelSlugRoute
   '/log/$logId': typeof LogLogIdRoute
   '/logbook/$sector': typeof LogbookSectorRoute
   '/newsletter/$number': typeof NewsletterNumberRoute
   '/stories/$logId': typeof StoriesLogIdRoute
   '/admin': typeof AdminIndexRoute
+  '/albums': typeof AlbumsIndexRoute
   '/artists': typeof ArtistsIndexRoute
   '/docs': typeof DocsIndexRoute
   '/galaxies': typeof GalaxiesIndexRoute
+  '/labels': typeof LabelsIndexRoute
   '/log': typeof LogIndexRoute
   '/logbook': typeof LogbookIndexRoute
   '/mixtapes': typeof MixtapesIndexRoute
@@ -809,6 +841,7 @@ export interface FileRoutesById {
   '/admin/recordings': typeof AdminRecordingsRoute
   '/admin/renders': typeof AdminRendersRoute
   '/admin/usage': typeof AdminUsageRoute
+  '/album/$slug': typeof AlbumSlugRoute
   '/api/status': typeof ApiStatusRoute
   '/artist/$slug': typeof ArtistSlugRoute
   '/cli/latest.sh': typeof CliLatestDotshRoute
@@ -817,14 +850,17 @@ export interface FileRoutesById {
   '/docs/api': typeof DocsApiRoute
   '/embed/$logId': typeof EmbedLogIdRoute
   '/galaxies/$slug': typeof GalaxiesSlugRoute
+  '/label/$slug': typeof LabelSlugRoute
   '/log/$logId': typeof LogLogIdRoute
   '/logbook/$sector': typeof LogbookSectorRoute
   '/newsletter/$number': typeof NewsletterNumberRoute
   '/stories/$logId': typeof StoriesLogIdRoute
   '/admin/': typeof AdminIndexRoute
+  '/albums/': typeof AlbumsIndexRoute
   '/artists/': typeof ArtistsIndexRoute
   '/docs/': typeof DocsIndexRoute
   '/galaxies/': typeof GalaxiesIndexRoute
+  '/labels/': typeof LabelsIndexRoute
   '/log/': typeof LogIndexRoute
   '/logbook/': typeof LogbookIndexRoute
   '/mixtapes/': typeof MixtapesIndexRoute
@@ -905,6 +941,7 @@ export interface FileRouteTypes {
     | '/admin/recordings'
     | '/admin/renders'
     | '/admin/usage'
+    | '/album/$slug'
     | '/api/status'
     | '/artist/$slug'
     | '/cli/latest.sh'
@@ -913,14 +950,17 @@ export interface FileRouteTypes {
     | '/docs/api'
     | '/embed/$logId'
     | '/galaxies/$slug'
+    | '/label/$slug'
     | '/log/$logId'
     | '/logbook/$sector'
     | '/newsletter/$number'
     | '/stories/$logId'
     | '/admin/'
+    | '/albums/'
     | '/artists/'
     | '/docs/'
     | '/galaxies/'
+    | '/labels/'
     | '/log/'
     | '/logbook/'
     | '/mixtapes/'
@@ -997,6 +1037,7 @@ export interface FileRouteTypes {
     | '/admin/recordings'
     | '/admin/renders'
     | '/admin/usage'
+    | '/album/$slug'
     | '/api/status'
     | '/artist/$slug'
     | '/cli/latest.sh'
@@ -1005,14 +1046,17 @@ export interface FileRouteTypes {
     | '/docs/api'
     | '/embed/$logId'
     | '/galaxies/$slug'
+    | '/label/$slug'
     | '/log/$logId'
     | '/logbook/$sector'
     | '/newsletter/$number'
     | '/stories/$logId'
     | '/admin'
+    | '/albums'
     | '/artists'
     | '/docs'
     | '/galaxies'
+    | '/labels'
     | '/log'
     | '/logbook'
     | '/mixtapes'
@@ -1091,6 +1135,7 @@ export interface FileRouteTypes {
     | '/admin/recordings'
     | '/admin/renders'
     | '/admin/usage'
+    | '/album/$slug'
     | '/api/status'
     | '/artist/$slug'
     | '/cli/latest.sh'
@@ -1099,14 +1144,17 @@ export interface FileRouteTypes {
     | '/docs/api'
     | '/embed/$logId'
     | '/galaxies/$slug'
+    | '/label/$slug'
     | '/log/$logId'
     | '/logbook/$sector'
     | '/newsletter/$number'
     | '/stories/$logId'
     | '/admin/'
+    | '/albums/'
     | '/artists/'
     | '/docs/'
     | '/galaxies/'
+    | '/labels/'
     | '/log/'
     | '/logbook/'
     | '/mixtapes/'
@@ -1171,18 +1219,22 @@ export interface RootRouteChildren {
   RssDotxmlRoute: typeof RssDotxmlRoute
   SitemapDotxmlRoute: typeof SitemapDotxmlRoute
   StatusRoute: typeof StatusRoute
+  AlbumSlugRoute: typeof AlbumSlugRoute
   ApiStatusRoute: typeof ApiStatusRoute
   ArtistSlugRoute: typeof ArtistSlugRoute
   CliLatestDotshRoute: typeof CliLatestDotshRoute
   DocsDotmdSplatRoute: typeof DocsDotmdSplatRoute
   EmbedLogIdRoute: typeof EmbedLogIdRoute
   GalaxiesSlugRoute: typeof GalaxiesSlugRoute
+  LabelSlugRoute: typeof LabelSlugRoute
   LogLogIdRoute: typeof LogLogIdRoute
   LogbookSectorRoute: typeof LogbookSectorRoute
   NewsletterNumberRoute: typeof NewsletterNumberRoute
   StoriesLogIdRoute: typeof StoriesLogIdRoute
+  AlbumsIndexRoute: typeof AlbumsIndexRoute
   ArtistsIndexRoute: typeof ArtistsIndexRoute
   GalaxiesIndexRoute: typeof GalaxiesIndexRoute
+  LabelsIndexRoute: typeof LabelsIndexRoute
   LogIndexRoute: typeof LogIndexRoute
   LogbookIndexRoute: typeof LogbookIndexRoute
   MixtapesIndexRoute: typeof MixtapesIndexRoute
@@ -1402,6 +1454,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LogIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/labels/': {
+      id: '/labels/'
+      path: '/labels'
+      fullPath: '/labels/'
+      preLoaderRoute: typeof LabelsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/galaxies/': {
       id: '/galaxies/'
       path: '/galaxies'
@@ -1421,6 +1480,13 @@ declare module '@tanstack/react-router' {
       path: '/artists'
       fullPath: '/artists/'
       preLoaderRoute: typeof ArtistsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/albums/': {
+      id: '/albums/'
+      path: '/albums'
+      fullPath: '/albums/'
+      preLoaderRoute: typeof AlbumsIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin/': {
@@ -1456,6 +1522,13 @@ declare module '@tanstack/react-router' {
       path: '/log/$logId'
       fullPath: '/log/$logId'
       preLoaderRoute: typeof LogLogIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/label/$slug': {
+      id: '/label/$slug'
+      path: '/label/$slug'
+      fullPath: '/label/$slug'
+      preLoaderRoute: typeof LabelSlugRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/galaxies/$slug': {
@@ -1512,6 +1585,13 @@ declare module '@tanstack/react-router' {
       path: '/api/status'
       fullPath: '/api/status'
       preLoaderRoute: typeof ApiStatusRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/album/$slug': {
+      id: '/album/$slug'
+      path: '/album/$slug'
+      fullPath: '/album/$slug'
+      preLoaderRoute: typeof AlbumSlugRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin/usage': {
@@ -1954,18 +2034,22 @@ const rootRouteChildren: RootRouteChildren = {
   RssDotxmlRoute: RssDotxmlRoute,
   SitemapDotxmlRoute: SitemapDotxmlRoute,
   StatusRoute: StatusRoute,
+  AlbumSlugRoute: AlbumSlugRoute,
   ApiStatusRoute: ApiStatusRoute,
   ArtistSlugRoute: ArtistSlugRoute,
   CliLatestDotshRoute: CliLatestDotshRoute,
   DocsDotmdSplatRoute: DocsDotmdSplatRoute,
   EmbedLogIdRoute: EmbedLogIdRoute,
   GalaxiesSlugRoute: GalaxiesSlugRoute,
+  LabelSlugRoute: LabelSlugRoute,
   LogLogIdRoute: LogLogIdRoute,
   LogbookSectorRoute: LogbookSectorRoute,
   NewsletterNumberRoute: NewsletterNumberRoute,
   StoriesLogIdRoute: StoriesLogIdRoute,
+  AlbumsIndexRoute: AlbumsIndexRoute,
   ArtistsIndexRoute: ArtistsIndexRoute,
   GalaxiesIndexRoute: GalaxiesIndexRoute,
+  LabelsIndexRoute: LabelsIndexRoute,
   LogIndexRoute: LogIndexRoute,
   LogbookIndexRoute: LogbookIndexRoute,
   MixtapesIndexRoute: MixtapesIndexRoute,

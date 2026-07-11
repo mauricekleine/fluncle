@@ -85,9 +85,17 @@ A run that dies mid-step leaves the marker un-advanced, so the next tick re-atte
 
 The **enrichment** step is the worked example: its queue is every finding `pending` ∪ `failed` ∪ **stale `processing`** (a `processing` row whose `updated_at` is older than `ENRICH_STALE_PROCESSING_MS`, 30 min, or has none) — a `status: "queue"` filter on `listTracks`, surfaced by `fluncle admin tracks enrich --queue`. The on-box `fluncle-enrich` cron (a `--no-agent` job on Hermes, every 5 min) reads that queue directly, analyzes each finding on-box (`ffmpeg` + `bun`), and writes the result back via `fluncle admin tracks update` — no Worker re-fire. A new find lands at the schema default `enrichment_status = "pending"` (queue-eligible), so the cron picks it up on its next tick with no on-add push; the operator's board affordance re-queues a finding by PATCHing its status back to `pending`. (Distinct from the _video render_ backlog queue.)
 
-**The dependency DAG.** From `add`, five steps run independently, in parallel — **audio analysis**, the **audio embedding** (MuQ), **Discogs** resolve, **Last.fm** love, and the **context note** (Firecrawl facts). Two steps wait on a prerequisite, expressed in their query: **video** waits on audio analysis (`enrichment_status = done`), and the **observation** waits on the **context note** (which is now its own step, distinct from the observation that consumes it). Manual vibe placement (the `/admin/tag` tool) was **retired** (the route is removed) — audio can't learn the map, so the grouping it fed moved to the automatic embedding clusters; the editorial `note` stays operator-owned (the auto-note only ever fills an empty one); Phase 3 publish stays operator-gated.
+**The dependency DAG.** From `add`, five steps run independently, in parallel — **audio analysis**, the **audio embedding** (MuQ), **Discogs** resolve, **Last.fm** love, and the **context note** (Firecrawl facts). Two steps wait on a prerequisite, expressed in their query: **video** waits on audio analysis (`enrichment_status = done`), and the **observation** waits on the **context note** (which is now its own step, distinct from the observation that consumes it). Manual vibe placement (the `/admin/tag` tool) was **retired** (the route is removed) — audio can't learn the map, so the grouping it fed moved to the automatic embedding clusters; the editorial `note` stays operator-owned (the auto-note only ever fills an empty one); Phase 3 publish is now AUTO-ADVANCED behind an operator kill switch (see _The render → publish auto-advance_).
 
 **Who runs what — the agent runtime (Hermes).** The agent runtime is the self-hosted **Hermes agent**: the cloud orchestrator (running `claude-sonnet-4.6`), which drains every queue via the `fluncle` CLI and either calls a Worker endpoint that does the work server-side or runs the light compute itself. Hermes is home for **everything** — the deterministic vendor steps (Last.fm, Discogs, context-note Firecrawl, all Worker-side), **the spoken observation** (Sonnet authors the recovered-audio script from the context note; the Worker renders it with Cartesia), and the light **audio analysis** (`ffmpeg` + JS DSP, live on Hermes as the on-box `fluncle-enrich` `--no-agent` cron — the image carries `ffmpeg` + `bun`). **Video render** (headless Chromium + WebGL) is too heavy for the Hermes box itself (2 vCPU / 4 GB), so it is the one step Hermes does not run in-process — instead the `fluncle-render` `--no-agent` cron **conducts** it (live 2026-06-24): it wakes a separate scale-to-zero box.ascii render box, which renders + ships one queued finding via a remote `claude -p`, then parks the box. This replaced the old Mac-bound desktop routine — renders no longer depend on the operator's laptop being open. Hermes holds no vendor key and no operator power (the agent ceiling: reversible / internal / no public footprint); publish-class stays operator-only. Each step writes back through the generic admin update path, then feeds whatever step's query it now satisfies. The Hermes orchestration (crons, role tiers) lives in [docs/agents/hermes-agent.md](./agents/hermes-agent.md) + the cron roster at [docs/agents/hermes/cron/](./agents/hermes/cron/).
+
+## The pipeline is not finding-shaped — the catalogue works too
+
+The queues above are described as finding queues, and for the steps Fluncle SPEAKS with (the context note, the auto-note, the observation, the video, the publish) that is exactly right: they read `list_tracks_admin`, which joins through the certification, so they structurally cannot reach a track Fluncle has not been to. **Fluncle does not speak about an uncertified track**, and the join is what guarantees it.
+
+But the three AUDIO steps — capture, analysis, embedding — are **measurements of a recording**, not claims about it, and every column they write lives on `tracks`. They apply to any track with captured audio, certified or not, and they must: a **catalogue track** (a `tracks` row with no `findings` row — [docs/the-ear.md](./the-ear.md)) is ranked by its embedding, so a catalogue track that cannot be embedded is one The Ear cannot hear. Their worklists therefore come from a different query, `list_track_work`, which reads `tracks` outer-joined to the certification and drains in the order the metered capture budget should be spent.
+
+The write-back is the same `update_track` path below, with one gate: an uncertified track takes every analysis field and 409s every certification field. See **[docs/gpu-batch-embed.md](./gpu-batch-embed.md)** for the queues, the drain order, the certification rail, and the GPU batch embed that makes the catalogue tractable at scale.
 
 ## The update path
 
@@ -133,19 +141,40 @@ fluncle admin tracks social <track_id|log_id> --platform tiktok --status publish
 
 `POST /api/admin/tracks/:id/social/:platform/draft` is the single push endpoint, branching by platform (`tiktok`, `youtube`): both push the portrait baked-text social cut — under the two-master layout (`video_squared_at` set) that is `footage.social.mp4` (TikTok as an `audio=false` Media Transformation URL so the operator attaches the licensed sound in-app; YouTube as-is). A legacy finding (no signal yet) still pushes its `footage.mp4` (the old portrait+text cut) and `footage-silent.mp4`, so un-migrated tracks are unaffected. TikTok lands in the app inbox (status `draft`); YouTube uploads as a Short with the track title + `cover.jpg` thumbnail, directly and publicly (status `published`). (The `draft` verb in the path is TikTok-shaped; for YouTube the same call publishes.) Postiz doesn't return the public post URL on create, so the operator fills it (or marks `failed`) afterward via `PATCH …/social/:platform`, or from the `/admin` board. This is **not** part of the enrichment workflow — it's a separate capability (the `fluncle-publish` skill); the Hermes runtime chains enrich → video → publish across its queues, but they're distinct steps.
 
+### The render → publish auto-advance (the last autonomy gap)
+
+Every other step of a finding's life runs on its own; publishing used to need an operator beat — the render conductor finished a video, and then a human tapped Push. **The auto-advance closes that gap.** A freshly-rendered, READY finding advances into the push by itself: `advance_publish_queue` (`POST /api/admin/social/publish/advance`), one bounded tick every 30m from the on-box `fluncle-publish-advance` cron, which pushes the YouTube Short (hands-off — a direct public upload, nothing left for a human) and the TikTok inbox draft (which the operator still finishes in-app; the licensed sound attaches only there, a platform limit, not ours). So Phase 3 is now automatic on YouTube end-to-end, and automatic-up-to-the-app on TikTok. The `draft` push above stays exactly as it was — the operator's manual tap, and the fallback whenever the advance holds a finding back.
+
+**This automates a PUBLIC publish, so it is built around four properties** (`apps/web/src/lib/server/publish-advance.ts`; proved in `publish-advance.test.ts` + `orpc-publish-advance.test.ts`):
+
+- **Never twice.** The advance only picks a finding with **no `social_posts` row** for that platform, and it **claims** that row atomically (`insert … on conflict do nothing` against the `(track, platform)` unique index) **before any call to Postiz**. Two overlapping ticks race on the index; the loser skips. Idempotence is against persisted state, never a timing assumption.
+- **Never half-rendered.** **READY** is: `log_id` set; `video_url` set (the render finalized); **`video_squared_at` set** — the two-master signal, so the portrait `footage.social.mp4` both platforms push actually exists (a legacy footage-only finding is never auto-advanced); the render has **settled 15 minutes** (the operator's window to requeue a bad render before it can go public); the whole publishable bundle — both masters **plus the `composition.tsx`/`props.json`/`render.json` re-render contract — is SERVED on R2** (a HEAD per object: the server-side mirror of the CLI's `bundle_incomplete` guard, which the `--allow-partial` escape hatch can otherwise bypass); and the caption is non-empty.
+- **A kill switch, one flip, no deploy.** `publish_advance_paused` on the shared `settings` KV — the same store the clip drip-feed's switch rides. It is **default-deny**: only the explicit string `"false"` means running, so an unset key, an empty database, or a lost row all read as PAUSED. The tick reads it first and no-ops while paused. Flip it from the `/admin/findings` header or `fluncle admin publish pause` / `resume`.
+- **Fail closed, visibly.** A failed push leaves the claim row `failed` and is **never auto-retried** — the finding keeps its `post-youtube`/`post-tiktok` row in the `/admin` attention queue, so a broken auto-publisher degrades into the manual flow rather than silently doing nothing. A stalled tick shows as `cron.publish-advance` on `/status`.
+
+Bounded on top of all that: **one finding per tick**, a rolling-24h cap of **6 pushes**, at most **one YouTube push pending its URL** at a time (the manual path's 409, honoured here as a skip), and TikTok held once its inbox holds **5 unfinished drafts** (TikTok bounces the 6th).
+
+```
+fluncle admin publish advance      # run one tick by hand (admin tier — the cron's own call)
+fluncle admin publish pause        # the kill switch (operator)
+fluncle admin publish resume       # let the machine publish again (operator)
+```
+
 ## Per-platform publication (`social_posts`)
 
 Publication state is **per platform**, separate from the track's own pipeline (which tops out at "video in R2"). One row per `(track, platform)`:
 
-| Field                   | Notes                                                       |
-| ----------------------- | ----------------------------------------------------------- |
-| `platform`              | `tiktok`, `youtube` (Instagram is manual, not tracked here) |
-| `status`                | `draft` → `scheduled` \| `published` (or `failed`)          |
-| `external_id`           | the Postiz post id (for later reconciliation)               |
-| `url`                   | the public post URL — set by the operator when published    |
-| `scheduled_for`, `*_at` | timing                                                      |
+| Field                   | Notes                                                        |
+| ----------------------- | ------------------------------------------------------------ |
+| `platform`              | `tiktok`, `youtube` (Instagram is manual, not tracked here)  |
+| `status`                | `draft` → `scheduled` \| `published` (or `failed`)           |
+| `external_id`           | the Postiz post id (for later reconciliation)                |
+| `url`                   | the public post URL — captured automatically, or set by hand |
+| `scheduled_for`, `*_at` | timing                                                       |
 
 `status` reflects the per-platform flow: a TikTok inbox push sits at `draft` (not yet public — the operator finishes it in-app); a YouTube push posts directly, landing straight at `published` (with no `url` until the operator records the public link).
+
+A `failed` row is also what the AUTO-ADVANCE's **claim** writes before it pushes — assume the push failed until it is proven to have succeeded, so a Worker that dies mid-push leaves the row in its honest end state. A successful push immediately overwrites it with the real status + Postiz id; a genuine failure leaves it `failed`, where the advance will never touch it again (it only ever picks a platform with NO row) and the operator owns the retry.
 
 There is no per-track "published" flag — a track's reach is the union of its `social_posts`. Telegram stays its own auto-post boolean on `findings` (a different, no-review model) for now.
 

@@ -23,6 +23,32 @@
 //             --features '<json>' --status done`     — `--key` only when non-null;
 //         no preview (analyze exit 2) → `--status failed`.
 //
+// ── THE SECOND ARM: THE CATALOGUE (docs/gpu-batch-embed.md) ─────────────────
+//
+// The queue above is `status=queue`, which lives on `findings.enrichment_status` and is read
+// through the FINDING JOIN — so it is structurally blind to a CATALOGUE track (a `tracks` row
+// with no `findings` row). That is correct and it stays: it is the certification's own
+// state machine, it is capture-INDEPENDENT (it will analyse a preview when no full song
+// exists), and none of that translates to an uncertified row.
+//
+// But ANALYSIS ITSELF does. BPM, key and the spectral features are measurements of a
+// RECORDING — they live on `tracks` — so a catalogue track with captured audio is analysable,
+// and must be, or it will never carry the numbers the archive reasons with. So this sweep
+// grows a SECOND, additive arm, disjoint from the first by construction (`scope=catalogue`):
+//
+//   3. GET /api/admin/tracks/work?kind=analyze&scope=catalogue → tracks with captured audio
+//      whose stored analysis did not come from it. DATA-derived, not status-derived: there is
+//      no `enrichment_status` on a catalogue row to drive a queue with.
+//   4. per track: S3-GET the captured song → analyze → `tracks update <id> --bpm … --key …
+//      --features … --analyzed-from full`. **NO `--status`**: `enrichment_status` is a
+//      CERTIFICATION column and the server 409s an uncertified write of one (the certification
+//      rail, track-update.ts). Fluncle measures the track; he does not speak about it.
+//
+// The catalogue arm is FULL-AUDIO ONLY — no preview fallback. The finding arm has one because
+// a certified finding must get its numbers somehow; a catalogue track has no such claim on us,
+// and a preview-grade vector/BPM is exactly the garbage the full-audio ruling exists to keep
+// out of the archive.
+//
 // stdout: one JSON summary line (the cron run output). Diagnostics → stderr.
 
 import { spawnSync } from "node:child_process";
@@ -39,6 +65,17 @@ import { type BoxCostEvent, emitCost, selfSecondsCost } from "./cost-emit";
 
 const BATCH_CAP = 4; // findings analyzed per tick (sane small cap, 3–5 band)
 const QUEUE_LIMIT = 50; // hard ceiling on the queue read (we only act on BATCH_CAP)
+
+// The catalogue arm's own cap, spent only AFTER the findings arm has taken what it needs — a
+// speculative row never delays a certified one. Small, because a full-song analysis is
+// seconds-scale and the tick shares a 5-minute cadence with the rest of the sweep fleet.
+const CATALOGUE_BATCH_CAP = 2;
+
+// The queue read for the catalogue arm goes over DIRECT HTTP, not the baked CLI: the box's
+// `fluncle` binary is a PINNED release, so a read through a new CLI command would gate this
+// sweep behind a pin bump. The write-back is the EXISTING `tracks update` command, unchanged.
+const API_BASE_URL = process.env.FLUNCLE_API_BASE_URL ?? "https://www.fluncle.com";
+const API_TOKEN = process.env.FLUNCLE_API_TOKEN ?? "";
 
 // On the box: the BAKED enrichment skill at /opt/hermes-skills (Unit A — the skill rides
 // the image and auto-updates from main via pin-watch; no hand-cp'd /opt/data/skills copy).
@@ -446,6 +483,160 @@ async function enrichOne(finding: QueueFinding): Promise<EnrichResult> {
 }
 
 // ---------------------------------------------------------------------------
+// THE CATALOGUE ARM — analyse an uncertified track from its captured full song.
+// ---------------------------------------------------------------------------
+
+/** One row of the catalogue analyze worklist (`list_track_work`). */
+type CatalogueWorkItem = {
+  artists?: string[];
+  certified?: boolean;
+  isrc?: null | string;
+  sourceAudioKey?: null | string;
+  title?: string;
+  trackId?: string;
+};
+
+/**
+ * The catalogue analyze worklist: tracks with captured audio whose stored analysis did not
+ * come from it. `scope=catalogue` makes it DISJOINT from the findings queue above, so no
+ * track is ever worked twice in a tick.
+ */
+async function fetchCatalogueAnalyzeQueue(): Promise<CatalogueWorkItem[]> {
+  const url = `${API_BASE_URL}/api/admin/tracks/work?kind=analyze&scope=catalogue&limit=${QUEUE_LIMIT}`;
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${API_TOKEN}` },
+    signal: AbortSignal.timeout(30_000),
+  });
+
+  if (!res.ok) {
+    throw new Error(
+      `catalogue analyze queue read failed (${res.status}): ${(await res.text()).slice(0, 200)}`,
+    );
+  }
+
+  const body = (await res.json()) as { tracks?: CatalogueWorkItem[] };
+
+  return Array.isArray(body.tracks) ? body.tracks : [];
+}
+
+/**
+ * Analyse ONE catalogue track from its captured full song, and write the measurements back.
+ *
+ * Three things differ from `enrichOne`, all of them consequences of the track being
+ * uncertified:
+ *
+ *   · NO `tracks get` re-read. That is a PUBLIC read and it resolves through the finding join,
+ *     so it 404s on a catalogue track. The work-queue payload is the source of truth here.
+ *   · NO PREVIEW FALLBACK. The queue is key-gated; a missing/broken key leaves the row queued
+ *     for a later tick rather than reaching for a 30s preview (a preview-grade BPM/key is the
+ *     garbage the full-audio ruling exists to keep out).
+ *   · NO `--status`. `enrichment_status` is a CERTIFICATION column; the server 409s an
+ *     uncertified write of one. Fluncle measures this track. He does not speak about it.
+ */
+async function analyzeCatalogueOne(item: CatalogueWorkItem): Promise<EnrichResult> {
+  const trackId = item.trackId;
+  const artist = item.artists?.[0];
+  const title = item.title;
+  const sourceAudioKey = item.sourceAudioKey;
+
+  if (!trackId || !artist || !title) {
+    log("catalogue item without a trackId/artist/title — skipping");
+
+    return { cost: null, outcome: "skipped" };
+  }
+
+  if (!sourceAudioKey) {
+    // The queue is key-gated upstream, so this is defensive. Never a preview fallback.
+    log(`${trackId}: catalogue row with no source_audio_key — leaving queued`);
+
+    return { cost: null, outcome: "skipped" };
+  }
+
+  const audioTmpDir = mkdtempSync(join(tmpdir(), "fluncle-enrich-cat-"));
+
+  try {
+    const audioFilePath = join(audioTmpDir, `source.${extFromKey(sourceAudioKey)}`);
+    writeFileSync(audioFilePath, await r2Get(sourceAudioKey));
+
+    const analyzeStart = Date.now();
+    const analysis = run(
+      BUN_BIN,
+      buildAnalyzeArgs(ANALYZE_SCRIPT, {
+        artist,
+        audioFilePath,
+        isrc: item.isrc ?? undefined,
+        title,
+      }),
+    );
+    const cost = selfSecondsCost({
+      logId: null,
+      occurredAt: new Date().toISOString(),
+      seconds: (Date.now() - analyzeStart) / 1000,
+      step: "enrich",
+      trackId,
+    });
+
+    if (analysis.code !== 0) {
+      // Including exit 2 (nothing decoded). There is no `enrichment_status` to mark `failed`
+      // on a catalogue row, so a bad analysis simply leaves it queued; if the captured bytes
+      // are genuinely undecodable it will retry, cheaply, and the capture side owns that.
+      log(`${trackId}: analyze-track exited ${analysis.code} — leaving queued`);
+
+      return { cost, outcome: "skipped" };
+    }
+
+    let parsed: AnalyzeOutput;
+
+    try {
+      parsed = JSON.parse(analysis.stdout) as AnalyzeOutput;
+    } catch {
+      log(`${trackId}: analyze-track did not return JSON — leaving queued`);
+
+      return { cost, outcome: "skipped" };
+    }
+
+    const updateArgs = ["admin", "tracks", "update", trackId];
+
+    if (parsed.bpm !== null && parsed.bpm !== undefined) {
+      updateArgs.push("--bpm", String(parsed.bpm));
+
+      if (parsed.bpmSource) {
+        updateArgs.push("--bpm-source", parsed.bpmSource);
+      }
+
+      if (parsed.bpmConfidence !== null && parsed.bpmConfidence !== undefined) {
+        updateArgs.push("--bpm-confidence", String(parsed.bpmConfidence));
+      }
+    }
+
+    if (parsed.key !== null && parsed.key !== undefined) {
+      updateArgs.push("--key", parsed.key);
+
+      if (parsed.keySource) {
+        updateArgs.push("--key-source", parsed.keySource);
+      }
+
+      if (parsed.keyConfidence !== null && parsed.keyConfidence !== undefined) {
+        updateArgs.push("--key-confidence", String(parsed.keyConfidence));
+      }
+    }
+
+    updateArgs.push("--features", JSON.stringify(parsed.features ?? {}));
+    // `analyzed_from = full` is what takes the row OUT of the analyze queue — it is the
+    // queue's own done-marker, standing in for the `enrichment_status` a catalogue row lacks.
+    updateArgs.push("--analyzed-from", "full");
+    updateArgs.push("--analyzed-at", new Date().toISOString());
+
+    fluncleJson(updateArgs);
+    log(`${trackId}: catalogue done (bpm ${parsed.bpm ?? "null"}, key ${parsed.key ?? "null"})`);
+
+    return { cost, outcome: "done" };
+  } finally {
+    rmSync(audioTmpDir, { force: true, recursive: true });
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Main — drain a bounded batch off the queue.
 // ---------------------------------------------------------------------------
 
@@ -461,18 +652,23 @@ async function main(): Promise<void> {
   ]);
   const queue = response.tracks ?? [];
 
-  const summary = { batch: 0, done: 0, failed: 0, queued: queue.length, skipped: 0 };
-
-  if (queue.length === 0) {
-    console.log(JSON.stringify({ ok: true, ...summary }));
-
-    return; // fast no-op
-  }
+  const summary = {
+    batch: 0,
+    catalogueDone: 0,
+    catalogueQueued: 0,
+    done: 0,
+    failed: 0,
+    queued: queue.length,
+    skipped: 0,
+  };
 
   // The tick's self-seconds rows, POSTed once at the end (best-effort, after the
   // write-backs are already durable — a dropped POST only understates the ledger).
   const costs: BoxCostEvent[] = [];
 
+  // ── ARM 1: the certified findings. Untouched — status-driven, capture-independent,
+  // preview-capable. It gets the batch budget FIRST: a speculative catalogue row never
+  // delays a track Fluncle has already said yes to.
   for (const finding of queue.slice(0, BATCH_CAP)) {
     summary.batch += 1;
 
@@ -493,6 +689,44 @@ async function main(): Promise<void> {
           error instanceof Error ? error.message : String(error)
         }`,
       );
+    }
+  }
+
+  // ── ARM 2: the catalogue. Additive and disjoint (`scope=catalogue`), so nothing above is
+  // re-worked. Analysis is a measurement of a RECORDING, so an uncertified track with captured
+  // audio is analysable — and must be, or the archive never learns its BPM or key. A failure
+  // here must never take the findings arm's summary down with it: the whole arm is wrapped.
+  if (API_TOKEN) {
+    try {
+      const catalogueQueue = await fetchCatalogueAnalyzeQueue();
+      summary.catalogueQueued = catalogueQueue.length;
+
+      for (const item of catalogueQueue.slice(0, CATALOGUE_BATCH_CAP)) {
+        try {
+          const { cost, outcome } = await analyzeCatalogueOne(item);
+
+          if (cost) {
+            costs.push(cost);
+          }
+
+          if (outcome === "done") {
+            summary.catalogueDone += 1;
+          } else {
+            summary.skipped += 1;
+          }
+        } catch (error) {
+          summary.skipped += 1;
+          log(
+            `error on catalogue ${item.trackId ?? "?"}: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        }
+      }
+    } catch (error) {
+      // The catalogue arm is best-effort. A queue read that fails (an older Worker without the
+      // op, a transient 5xx) must not fail the tick — the findings arm already did its work.
+      log(`catalogue arm skipped: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 

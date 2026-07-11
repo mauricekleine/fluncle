@@ -6,15 +6,18 @@ import { formatSector } from "../lib/log-id-shared";
 import {
   buildSitemapXml,
   type SitemapArtist,
+  type SitemapEntity,
   type SitemapGalaxy,
   type SitemapLogbookEntry,
   type SitemapLogPage,
 } from "../lib/sitemap";
+import { ALBUM_INDEX_MIN_TRACKS, listAlbumsWithFindingCounts } from "../lib/server/albums";
 import {
   ARTIST_INDEX_MIN_FINDINGS,
   listArtistsWithFindingCounts,
   parseArtistsJson,
 } from "../lib/server/artists";
+import { LABEL_INDEX_MIN_TRACKS, listLabelsWithFindingCounts } from "../lib/server/labels";
 import { GALAXY_INDEX_MIN_FINDINGS, listPublicGalaxies } from "../lib/server/galaxies-map";
 import { getDb, typedRows } from "../lib/server/db";
 
@@ -117,14 +120,21 @@ export const Route = createFileRoute("/sitemap.xml")({
     handlers: {
       GET: async () => {
         const db = await getDb();
-        const [trackResult, mixtapeResult, artistEntries, logbookResult, galaxyEntries] =
-          await Promise.all([
-            // lastmod = freshest of (video_squared_at, updated_at, added_at). added_at
-            // is NOT NULL, and ISO strings sort lexicographically, so coalescing the
-            // nullable two to '' keeps max() honest (scalar max() returns NULL on any
-            // NULL arg) and a just-squared video lifts the finding's lastmod.
-            db.execute({
-              sql: `select log_id, title, artists_json, note, bpm, album_image_url, video_url,
+        const [
+          trackResult,
+          mixtapeResult,
+          artistEntries,
+          logbookResult,
+          galaxyEntries,
+          labelEntries,
+          albumEntries,
+        ] = await Promise.all([
+          // lastmod = freshest of (video_squared_at, updated_at, added_at). added_at
+          // is NOT NULL, and ISO strings sort lexicographically, so coalescing the
+          // nullable two to '' keeps max() honest (scalar max() returns NULL on any
+          // NULL arg) and a just-squared video lifts the finding's lastmod.
+          db.execute({
+            sql: `select log_id, title, artists_json, note, bpm, album_image_url, video_url,
                          findings.added_at,
                          max(coalesce(findings.video_squared_at, ''),
                              coalesce(findings.updated_at, ''),
@@ -132,24 +142,28 @@ export const Route = createFileRoute("/sitemap.xml")({
                   from findings join tracks on tracks.track_id = findings.track_id
                   where findings.log_id is not null
                   order by lastmod desc`,
-            }),
-            db.execute({
-              sql: `select log_id, title, note, set_video_at,
+          }),
+          db.execute({
+            sql: `select log_id, title, note, set_video_at,
                          max(coalesce(set_video_at, ''), coalesce(updated_at, ''), added_at) as lastmod
                   from mixtapes
                   where status = 'published' and log_id is not null and added_at is not null
                   order by lastmod desc`,
-            }),
-            listArtistsWithFindingCounts(),
-            // The logbook travelogue entries — one <loc> per authored sector-day, with
-            // its last (re)generation as lastmod.
-            db.execute({
-              sql: `select sector, generated_at from logbook_entries order by sector desc`,
-            }),
-            // The named sonic galaxies — empty until the launch gate opens (browse-by-
-            // feel RFC), so no galaxy <loc> leaks before the whole map is named.
-            listPublicGalaxies(),
-          ]);
+          }),
+          listArtistsWithFindingCounts(),
+          // The logbook travelogue entries — one <loc> per authored sector-day, with
+          // its last (re)generation as lastmod.
+          db.execute({
+            sql: `select sector, generated_at from logbook_entries order by sector desc`,
+          }),
+          // The named sonic galaxies — empty until the launch gate opens (browse-by-
+          // feel RFC), so no galaxy <loc> leaks before the whole map is named.
+          listPublicGalaxies(),
+          // The graph pages. Both lists are bounded by the ARCHIVE (an entity earns a row
+          // by carrying a finding), never by the catalogue.
+          listLabelsWithFindingCounts(),
+          listAlbumsWithFindingCounts(),
+        ]);
 
         const trackPages = typedRows<TrackRow>(trackResult.rows).map(trackPage);
         const mixtapePages = typedRows<MixtapeRow>(mixtapeResult.rows).map(mixtapePage);
@@ -175,11 +189,30 @@ export const Route = createFileRoute("/sitemap.xml")({
         const galaxyPages: SitemapGalaxy[] = galaxyEntries
           .filter((galaxy) => galaxy.memberCount >= GALAXY_INDEX_MIN_FINDINGS)
           .map((galaxy) => ({ slug: galaxy.slug }));
+        // Thin-content gate, labels + albums: the page indexes past N RENDERABLE tracks —
+        // findings PLUS the quieter uncertified rows, because both are content on the page.
+        // The SAME sum the route's `indexable` keys off, so a page that says "index me" is
+        // always in the sitemap, and one that says `noindex` never is.
+        const labelPages: SitemapEntity[] = labelEntries
+          .filter((label) => label.findingCount + label.catalogueCount >= LABEL_INDEX_MIN_TRACKS)
+          .map((label) => ({
+            imageLoc: spotifyAlbumImageAtSize(label.coverImageUrl, "large"),
+            lastmod: label.lastmod,
+            slug: label.slug,
+          }));
+        const albumPages: SitemapEntity[] = albumEntries
+          .filter((album) => album.findingCount + album.catalogueCount >= ALBUM_INDEX_MIN_TRACKS)
+          .map((album) => ({
+            imageLoc: spotifyAlbumImageAtSize(album.coverImageUrl, "large"),
+            lastmod: album.lastmod,
+            slug: album.slug,
+          }));
         const xml = buildSitemapXml(
           [...trackPages, ...mixtapePages],
           artistPages,
           logbookPages,
           galaxyPages,
+          { albums: albumPages, labels: labelPages },
         );
 
         return new Response(xml, {

@@ -67,7 +67,25 @@ const faq: Array<{ answer: string; question: string }> = [
       "By ear, one at a time. There is no committee and no algorithm: Fluncle plays a tune, and if it moves the room it gets a coordinate. It is drum & bass at heart, rollers to jungle to neurofunk. Tracks arrive from his own digging and from crew submissions; anyone can submit one from the homepage, and he gives every submission a listen before anything publishes.",
     question: "How are tracks chosen?",
   },
+  {
+    answer:
+      "I measure them myself, I don't copy them from anywhere. The machine listens to the full song I brought back, start to finish, not a thirty-second preview that's often nothing but intro, and reads the tempo and the key straight off that audio. When it can't be sure of a key, it leaves that blank rather than guess at one. And any tune I've beat-gridded in Rekordbox myself, my own reading outranks the machine's.",
+    question: "How does Fluncle measure BPM and key?",
+  },
 ];
+
+/**
+ * A crew-question's stable anchor slug, so each FAQ entry is deep-linkable. The /log
+ * page's measured BPM/key line links to the measurement question by this slug
+ * (log.$logId.tsx keeps the same string; the contract is pinned by a test in
+ * -about-schema.test.ts). Deterministic from the question text. Exported for that test.
+ */
+export function faqAnchor(question: string): string {
+  return question
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");
+}
 
 function aboutHead() {
   const pageUrl = `${siteUrl}/about`;
@@ -240,7 +258,7 @@ function AboutPage() {
         <section aria-label="Questions" className="log-about-faq">
           <h2>Crew questions</h2>
           {faq.map((entry) => (
-            <div className="log-about-question" key={entry.question}>
+            <div className="log-about-question" id={faqAnchor(entry.question)} key={entry.question}>
               <h3>{entry.question}</h3>
               <p>{entry.answer}</p>
             </div>

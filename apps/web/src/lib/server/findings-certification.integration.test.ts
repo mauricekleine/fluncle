@@ -149,3 +149,214 @@ describe("the tracks/findings split — an uncertified catalogue track is not a 
     expect((await listTracks({ limit: 50 })).tracks).toEqual([]);
   });
 });
+
+// ── THE CERTIFICATION RAIL: measured, never spoken about ─────────────────────────────
+//
+// The split gives the catalogue a NEW capability and a NEW danger, and they are the same
+// write path. The capability: analysis and embedding are measurements of a RECORDING —
+// BPM, key, features, the MuQ vector all live on `tracks` — so they must work on an
+// uncertified track, or The Ear has nothing to rank. The danger: `update_track` is ONE
+// generic endpoint, and the fields that make Fluncle SPEAK (the note, the context note,
+// the observation, the video, the galaxy, the coordinate) go through the very same call.
+//
+// **Fluncle does not speak about a track he has not been to** (ratified canon). So an
+// uncertified track must take every analysis field and REFUSE every certification field.
+//
+// And refuse LOUDLY. `update findings … where track_id = ?` on a row with no finding
+// matches zero rows — it SUCCEEDS, silently, reporting the fields as written. That is the
+// worst available failure, and it is why the rail is a 409 in `updateTrack` rather than a
+// hopeful WHERE clause.
+describe("the certification rail — a catalogue track is measured, never spoken about", () => {
+  const analysisOf = async (trackId: string) => {
+    const result = await db.execute({
+      args: [trackId],
+      sql: `select bpm, key, features_json, analyzed_from,
+                   embedding_json is not null as has_vector, source_audio_key
+            from tracks where track_id = ?`,
+    });
+
+    return result.rows[0];
+  };
+
+  it("CAN be analysed — bpm, key, features and the provenance all land on the tracks row", async () => {
+    const { updateTrack } = await import("./track-update");
+
+    const result = await updateTrack(
+      CATALOGUE_ID,
+      {
+        analyzedFrom: "full",
+        bpm: 174,
+        bpmSource: "dsp",
+        features: JSON.stringify({ centroidHz: 2100 }),
+        key: "9A",
+        keySource: "dsp",
+      },
+      { writer: "agent" },
+    );
+
+    expect(result.trackId).toBe(CATALOGUE_ID);
+
+    const row = await analysisOf(CATALOGUE_ID);
+    expect(Number(row?.bpm)).toBe(174);
+    expect(row?.key).toBe("9A");
+    expect(row?.analyzed_from).toBe("full");
+    expect(row?.features_json).toBe(JSON.stringify({ centroidHz: 2100 }));
+  });
+
+  it("CAN be embedded — the dual write lands the vector the Ear ranks against", async () => {
+    const { updateTrack } = await import("./track-update");
+
+    const vector = JSON.stringify(Array.from({ length: 1024 }, () => 0.03125));
+    await updateTrack(CATALOGUE_ID, { embedding: vector }, { writer: "agent" });
+
+    // Both forms: the JSON (the source of truth) and the F32_BLOB the database ranks in SQL.
+    // Without this write the row has no vector, and a row with no vector is invisible to The
+    // Ear — which is precisely what the pre-split queues guaranteed.
+    const row = await db.execute({
+      args: [CATALOGUE_ID],
+      sql: `select embedding_json is not null as j, embedding_blob is not null as b
+            from tracks where track_id = ?`,
+    });
+    expect(Number(row.rows[0]?.j)).toBe(1);
+    expect(Number(row.rows[0]?.b)).toBe(1);
+  });
+
+  it("CAN take the capture side-channel — the bytes are a property of the recording", async () => {
+    const { updateTrack } = await import("./track-update");
+
+    await updateTrack(
+      CATALOGUE_ID,
+      { captureStatus: "done", sourceAudioKey: `${CATALOGUE_ID}/abc.webm` },
+      { writer: "agent" },
+    );
+
+    expect((await analysisOf(CATALOGUE_ID))?.source_audio_key).toBe(`${CATALOGUE_ID}/abc.webm`);
+  });
+
+  it("CANNOT get a NOTE — Fluncle does not write about a track he has not been to", async () => {
+    const { updateTrack } = await import("./track-update");
+
+    await expect(
+      updateTrack(CATALOGUE_ID, { note: "A monster of a roller." }, { writer: "operator" }),
+    ).rejects.toMatchObject({ code: "uncertified", status: 409 });
+
+    // Not even the operator, and not even by the fill-empty-only auto-note path.
+    const { fillEmptyNote } = await import("./track-update");
+    await expect(fillEmptyNote(CATALOGUE_ID, "An auto-authored note.")).rejects.toMatchObject({
+      status: 404,
+    });
+  });
+
+  it("CANNOT get an OBSERVATION — no spoken word about an uncertified track", async () => {
+    const { updateTrack } = await import("./track-update");
+
+    await expect(
+      updateTrack(
+        CATALOGUE_ID,
+        {
+          observationAudioUrl: "https://example.invalid/observation.mp3",
+          observationDurationMs: 12_000,
+          observationGeneratedAt: NOW,
+          observationScript: "Recovered audio, fragmentary.",
+        },
+        { writer: "agent" },
+      ),
+    ).rejects.toMatchObject({ code: "uncertified", status: 409 });
+  });
+
+  it("CANNOT get a VIDEO — the render is a certification artifact", async () => {
+    const { updateTrack } = await import("./track-update");
+
+    await expect(
+      updateTrack(
+        CATALOGUE_ID,
+        { videoUrl: "https://example.invalid/footage.mp4", videoVehicle: "submarine" },
+        { writer: "operator" },
+      ),
+    ).rejects.toMatchObject({ code: "uncertified", status: 409 });
+  });
+
+  it("CANNOT be PUBLISHED — `requireTrack`, the guard on every publish + video op, is blind to it", async () => {
+    const { requireTrack } = await import("./orpc/_shared");
+
+    // `requireTrack` is the shared resolver behind the social-publish ops (admin-social) and
+    // the video control-plane (finalize / requeue / purge). It goes through
+    // `getTrackByIdOrLogId`, which drives the FINDING JOIN — so a catalogue track is a 404
+    // there and no publish or video op can so much as name it. The read join and the write
+    // rail enforce the same rule from two directions.
+    await expect(requireTrack(FINDING_ID)).resolves.toMatchObject({ logId: "004.7.2I" });
+    await expect(requireTrack(CATALOGUE_ID)).rejects.toMatchObject({ status: 404 });
+
+    // And nothing has ever been posted for it.
+    const { listSocialPosts } = await import("./social");
+    expect(await listSocialPosts(CATALOGUE_ID)).toEqual([]);
+  });
+
+  it("CANNOT get a context note, a galaxy, an enrichment status, or a COORDINATE", async () => {
+    const { updateTrack } = await import("./track-update");
+
+    // Each of these writes a `findings` column. On a catalogue row the SQL would match zero
+    // rows and report success — so each is rejected by name, not left to the WHERE clause.
+    const forbidden = [
+      { contextNote: "Facts from the web." },
+      { contextStatus: "resolved" as const },
+      { enrichmentStatus: "done" as const },
+      { galaxyId: "g1" },
+      { logId: "auto" },
+    ];
+
+    for (const update of forbidden) {
+      await expect(updateTrack(CATALOGUE_ID, update, { writer: "operator" })).rejects.toMatchObject(
+        { code: "uncertified", status: 409 },
+      );
+    }
+  });
+
+  it("names the refused field, and never half-applies the write", async () => {
+    const { updateTrack } = await import("./track-update");
+
+    // A mixed payload — a legal measurement AND an illegal claim — is rejected WHOLE. The
+    // bpm must not land: a partial success on a certification write is how a catalogue track
+    // would quietly acquire half a finding.
+    await expect(
+      updateTrack(CATALOGUE_ID, { bpm: 174, note: "Sneaking a note in." }, { writer: "operator" }),
+    ).rejects.toMatchObject({ code: "uncertified", message: expect.stringContaining("note") });
+
+    expect((await analysisOf(CATALOGUE_ID))?.bpm).toBeNull();
+  });
+
+  it("never INSERTs a findings row — certifying a track is publish_track's job alone", async () => {
+    const { updateTrack } = await import("./track-update");
+
+    await updateTrack(CATALOGUE_ID, { bpm: 174 }, { writer: "agent" });
+
+    const findings = await db.execute("select count(*) as n from findings");
+    expect(Number(findings.rows[0]?.n)).toBe(1); // still only the one real finding
+  });
+
+  it("never bumps a lastmod it does not have — an analysis write is not news", async () => {
+    const { updateTrack } = await import("./track-update");
+
+    // `bpm` is in VISIBLE_FIELDS, so on a FINDING it moves `updated_at` (the sitemap/log
+    // lastmod). A catalogue track has no /log page to stale and no `findings` row to bump.
+    await updateTrack(CATALOGUE_ID, { bpm: 174 }, { writer: "agent" });
+
+    const findings = await db.execute({
+      args: [CATALOGUE_ID],
+      sql: `select count(*) as n from findings where track_id = ?`,
+    });
+    expect(Number(findings.rows[0]?.n)).toBe(0);
+  });
+
+  it("still lets a FINDING take every one of those fields — the rail gates on certification, not on the field", async () => {
+    const { updateTrack } = await import("./track-update");
+
+    const result = await updateTrack(
+      FINDING_ID,
+      { bpm: 174, note: "A monster of a roller.", videoVehicle: "submarine" },
+      { writer: "operator" },
+    );
+
+    expect(result.fields).toEqual(expect.arrayContaining(["bpm", "note", "video_vehicle"]));
+  });
+});

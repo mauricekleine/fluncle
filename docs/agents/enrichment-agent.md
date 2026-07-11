@@ -67,6 +67,12 @@ fluncle admin tracks observe <track_id|log_id> --script-file observation.txt
 
 Its full doctrine is **[observation-agent.md](./observation-agent.md)** (the two artifacts, the voice gate, the safety rails — facts only, no lyrics, no commercial track audio). `observe` is auto-allowed but spends a paid render per call, so de-dupe per Log ID. The Worker owns the firecrawl + Cartesia secrets; the agent holds only its admin token.
 
+## The catalogue (uncertified tracks)
+
+Analysis and embedding are **measurements of a recording**, so they run on any track with captured audio — including a **catalogue track** (a `tracks` row with no `findings` row, [docs/the-ear.md](../the-ear.md)). The `fluncle-enrich` sweep has a second, additive arm for exactly that (`list_track_work --kind analyze --scope catalogue`), and `fluncle-embed` reads a catalogue-aware queue.
+
+**Everything else on this page stays findings-only.** The context note, the auto-note, the observation, the video, the publish — all of them are things Fluncle SAYS, and Fluncle does not speak about a track he has not been to. The server enforces it: `update_track` on an uncertified track accepts bpm/key/features/embedding/capture and returns **409 `uncertified`** for a note, an observation, a video, a galaxy, an enrichment status, or a coordinate. Never try to route around it — the 409 is the rail working. See [docs/gpu-batch-embed.md](../gpu-batch-embed.md).
+
 ## Safety rails (inline so they survive even if the skill fails to load)
 
 - One track per run.

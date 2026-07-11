@@ -1,0 +1,16 @@
+[Unit]
+Description=fluncle-publish-advance timer — tick the render → publish auto-advance every 30m on the rave-02 host
+
+[Timer]
+# First tick shortly after boot (staggered at 9min, off the other sweeps' minutes), then
+# every 30m. The render conductor starts at most one render an hour, so a 30m advance tick
+# always has a fresh finding waiting well before the next render lands — and the Worker's
+# 15m SETTLE window means a render that just finished is never grabbed by the very next tick.
+# Persistent catches up a tick missed across a box reboot: the advance is idempotent (a
+# claimed platform never re-fires), so a deferred tick simply picks the finding up late.
+OnBootSec=9min
+OnUnitActiveSec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
