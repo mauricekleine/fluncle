@@ -13,6 +13,7 @@ const BASE_ROW: TrackRow = {
   added_to_spotify: 0,
   album: null,
   album_image_url: null,
+  analyzed_at: null,
   analyzed_from: null,
   artists_json: '["Some Artist"]',
   bpm: null,
@@ -168,6 +169,29 @@ describe("analyzedFrom — admin carries, public strips", () => {
 
   it("surfaces a null legacy analyzed_from as undefined", () => {
     expect(toTrackListItem(BASE_ROW).analyzedFrom).toBeUndefined();
+  });
+});
+
+// analyzedAt (RFC bpm-key-accuracy): the freshness companion to analyzedFrom/keySource — the
+// admin DTO carries it so a reader can tell WHEN a key was (re-)derived, but every public read
+// strips it, since exposing analysis freshness advertises internal curation state.
+describe("analyzedAt — admin carries, public strips", () => {
+  const STAMPED_ROW: TrackRow = { ...BASE_ROW, analyzed_at: "2026-07-10T14:02:00.000Z" };
+
+  it("the admin DTO (toTrackListItem) carries analyzedAt", () => {
+    expect(toTrackListItem(STAMPED_ROW).analyzedAt).toBe("2026-07-10T14:02:00.000Z");
+  });
+
+  it("toPublicTrackListItem strips analyzedAt", () => {
+    const publicItem = toPublicTrackListItem(toTrackListItem(STAMPED_ROW));
+
+    expect(publicItem.analyzedAt).toBeUndefined();
+    // Everything else survives.
+    expect(publicItem.trackId).toBe(STAMPED_ROW.track_id);
+  });
+
+  it("surfaces a null legacy analyzed_at as undefined", () => {
+    expect(toTrackListItem(BASE_ROW).analyzedAt).toBeUndefined();
   });
 });
 

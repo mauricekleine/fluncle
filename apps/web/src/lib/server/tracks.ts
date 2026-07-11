@@ -37,6 +37,9 @@ export type TrackRow = {
   added_at: string;
   album: string | null;
   album_image_url: string | null;
+  // ISO timestamp of the last analysis write (bpm/key/features). Admin-only observability —
+  // stripped from every public DTO by `toPublicTrackListItem`; no sweep predicate reads it.
+  analyzed_at: string | null;
   // Which audio class BPM/key were analyzed from ("full" the captured song | "preview" a 30s
   // preview | null legacy). Internal analysis provenance — the capture sweep's re-derive
   // predicate reads it; stripped from every public DTO by `toPublicTrackListItem`.
@@ -109,7 +112,7 @@ type MixtapeFeedRow = {
 
 // Columns exposed to clients. `features_json` is the enrichment spectral summary,
 // surfaced (parsed) as creative fuel for the video agent.
-const TRACK_SELECT = `tracks.track_id, tracks.spotify_url, tracks.title, tracks.album, tracks.album_image_url, tracks.artists_json, tracks.analyzed_from,
+const TRACK_SELECT = `tracks.track_id, tracks.spotify_url, tracks.title, tracks.album, tracks.album_image_url, tracks.artists_json, tracks.analyzed_at, tracks.analyzed_from,
   tracks.bpm, tracks.bpm_source, tracks.duration_ms, tracks.enrichment_status, tracks.features_json, tracks.in_release_id, tracks.isrc, tracks.key, tracks.key_source, tracks.label, tracks.log_id, tracks.popularity,
   tracks.preview_url, tracks.release_date, tracks.source_audio_failures, tracks.source_audio_key, tracks.video_url, tracks.video_squared_at, tracks.video_vehicle, tracks.video_grain, tracks.video_register, tracks.video_model, tracks.video_model_reasoning, tracks.note, tracks.added_at,
   tracks.updated_at, tracks.vibe_x, tracks.vibe_y, tracks.added_to_spotify, tracks.posted_to_telegram,
@@ -228,6 +231,7 @@ export function toTrackListItem(row: TrackRow): TrackListItem {
     // from. Internal capture/enrich state on the admin-authed DTO; `toPublicTrackListItem`
     // strips it before any public read. `null` legacy rows surface undefined ("assume
     // preview-grade"). The capture sweep's re-derive predicate reads it.
+    analyzedAt: row.analyzed_at ?? undefined,
     analyzedFrom:
       row.analyzed_from === "full" || row.analyzed_from === "preview"
         ? row.analyzed_from
@@ -304,7 +308,13 @@ export function toTrackListItem(row: TrackRow): TrackListItem {
 //   - `bpmSource`/`keySource` — the source-hierarchy provenance (operator > rekordbox > DSP);
 //     internal curation state the Rekordbox sync reads, never part of a public DTO.
 // The on-box sweeps read all of them on the ADMIN path (which deliberately does NOT strip).
-const PRIVATE_TRACK_FIELDS = ["analyzedFrom", "bpmSource", "keySource", "sourceAudioKey"] as const;
+const PRIVATE_TRACK_FIELDS = [
+  "analyzedAt",
+  "analyzedFrom",
+  "bpmSource",
+  "keySource",
+  "sourceAudioKey",
+] as const;
 
 /**
  * Strip the internal admin/agent-only fields (`PRIVATE_TRACK_FIELDS`) from a track/feed item

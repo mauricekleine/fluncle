@@ -33,6 +33,7 @@ function trackRow(trackId: string, logId: string, title: string, albumImageUrl: 
     added_to_spotify: 0,
     album: null,
     album_image_url: albumImageUrl,
+    analyzed_at: null,
     analyzed_from: null,
     artists_json: '["Artist X"]',
     bpm: null,

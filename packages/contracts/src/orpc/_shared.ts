@@ -27,6 +27,12 @@ export const TrackListItemSchema = z
     addedToSpotify: z.boolean(),
     album: z.string().optional(),
     albumImageUrl: z.string().optional(),
+    // ISO timestamp of the last analysis write (bpm/key/features); RFC bpm-key-accuracy.
+    // Written on every successful analysis; ADMIN-ONLY like the sources — `toPublicTrackListItem`
+    // strips it before any public read. Read-only observability: the freshness companion to
+    // `analyzedFrom`/`keySource`, so a reader can tell WHEN a key was (re-)derived, not just by
+    // whom. No sweep predicate keys on it. Absent on legacy rows (pre-provenance).
+    analyzedAt: z.string().optional(),
     // Which audio class BPM/key were analyzed from — "full" (the captured full song) or
     // "preview" (a 30s preview); RFC bpm-key-accuracy. Internal capture/enrich provenance
     // on the admin-authed DTO — `toPublicTrackListItem` strips it before any public read, so
