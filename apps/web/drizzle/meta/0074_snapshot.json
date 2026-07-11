@@ -1,8 +1,8 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "eb57bd28-af78-4d50-9175-c47a880b668c",
-  "prevId": "7b44c268-01f0-4989-b8ed-17269026d5ba",
+  "id": "ac877382-f566-4913-a00f-1b0bfc3639f2",
+  "prevId": "eb57bd28-af78-4d50-9175-c47a880b668c",
   "tables": {
     "account": {
       "name": "account",
@@ -1949,6 +1949,128 @@
         "mixtapes_recording_id_idx": {
           "name": "mixtapes_recording_id_idx",
           "columns": ["recording_id"],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "note_rejections": {
+      "name": "note_rejections",
+      "columns": {
+        "attempts": {
+          "name": "attempts",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 1
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "max_overlap": {
+          "name": "max_overlap",
+          "type": "real",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "min_phrase_words": {
+          "name": "min_phrase_words",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "neighbor_log_id": {
+          "name": "neighbor_log_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "neighbor_note": {
+          "name": "neighbor_note",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "note": {
+          "name": "note",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "overlap": {
+          "name": "overlap",
+          "type": "real",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "phrase": {
+          "name": "phrase",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "''"
+        },
+        "resolution": {
+          "name": "resolution",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "resolved_at": {
+          "name": "resolved_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "track_id": {
+          "name": "track_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "note_rejections_open_track_idx": {
+          "name": "note_rejections_open_track_idx",
+          "columns": ["track_id"],
+          "isUnique": true,
+          "where": "\"note_rejections\".\"resolved_at\" is null"
+        },
+        "note_rejections_open_idx": {
+          "name": "note_rejections_open_idx",
+          "columns": ["resolved_at", "created_at"],
           "isUnique": false
         }
       },

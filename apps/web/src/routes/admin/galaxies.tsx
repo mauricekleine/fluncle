@@ -39,6 +39,7 @@ import { partitionGalaxyBoard } from "@/lib/galaxy-board";
 import { useKeyNotation } from "@/lib/key-notation";
 import { spotifyAlbumImageAtSize } from "@/lib/media";
 import { usePreviewControls } from "@/lib/preview-player";
+import { findingsCount } from "@/lib/format";
 import { isAdminRequest } from "@/lib/server/admin-auth";
 import {
   type GalaxyAdminWithMembers,
@@ -254,7 +255,7 @@ function GalaxyCard({ galaxy }: { galaxy: GalaxyAdminWithMembers }) {
             <p className="track-log-id truncate">{galaxy.handle}</p>
           )}
           <p className="mt-1 text-xs text-muted-foreground tabular-nums">
-            {galaxy.memberCount} finding{galaxy.memberCount === 1 ? "" : "s"}
+            {findingsCount(galaxy.memberCount)}
             {galaxy.silhouette !== null ? ` · coherence ${galaxy.silhouette.toFixed(2)}` : ""}
             {retired ? " · retired" : ""}
           </p>

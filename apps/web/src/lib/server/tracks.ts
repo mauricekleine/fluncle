@@ -33,6 +33,10 @@ export type TrackRow = {
   added_at: string;
   album: string | null;
   album_image_url: string | null;
+  // The graph pointers, joined by `tracks.album_id` / `tracks.label_id` (see `label_slug`
+  // below). Non-null only when the entity row exists — which is what lets a `GraphLink`
+  // render server-side, with the page, and never point at a 404.
+  album_slug: string | null;
   // ISO timestamp of the last analysis write (bpm/key/features). Admin-only observability —
   // stripped from every public DTO by `toPublicTrackListItem`; no sweep predicate reads it.
   analyzed_at: string | null;
@@ -61,6 +65,8 @@ export type TrackRow = {
   // Who last set the key — see `bpm_source` above. Admin-only (public-stripped).
   key_source: string | null;
   label: string | null;
+  // The `/label/<slug>` this finding's imprint has — the `album_slug` twin. See above.
+  label_slug: string | null;
   log_id: string | null;
   note: string | null;
   observation_alignment_json: string | null;
@@ -137,6 +143,8 @@ const TRACK_SELECT = `tracks.track_id, tracks.spotify_url, tracks.title, tracks.
   findings.observation_audio_url, findings.observation_duration_ms, findings.observation_generated_at, findings.observation_alignment_json,
   (select name from galaxies where galaxies.id = findings.galaxy_id) as galaxy_name,
   (select slug from galaxies where galaxies.id = findings.galaxy_id) as galaxy_slug,
+  (select slug from albums where albums.id = tracks.album_id) as album_slug,
+  (select slug from labels where labels.id = tracks.label_id) as label_slug,
   (select url from social_posts
      where track_id = tracks.track_id and platform = 'tiktok' and status = 'published'
        and url is not null
@@ -299,6 +307,12 @@ export function toLeanTrackListItem(row: LeanTrackRow): LeanTrackListItem {
     addedToSpotify: Boolean(row.added_to_spotify),
     album: row.album ?? undefined,
     albumImageUrl: row.album_image_url ?? undefined,
+    // The graph pointers — the `/album/<slug>` + `/label/<slug>` pages this finding belongs
+    // to, resolved in the SAME select that loaded the track. This is what makes the GraphLink
+    // system free at the point of use: every surface that renders a finding already holds the
+    // slug it needs to link its album and its imprint, so there is no per-link lookup and no
+    // N+1 (the hover CARD is the only lazy part; see lib/server/graph-preview.ts).
+    albumSlug: row.album_slug ?? undefined,
     // Analysis provenance (RFC bpm-key-accuracy) — the audio class BPM/key were derived
     // from. Internal capture/enrich state on the admin-authed DTO; `toPublicTrackListItem`
     // strips it before any public read. `null` legacy rows surface undefined ("assume
@@ -323,6 +337,7 @@ export function toLeanTrackListItem(row: LeanTrackRow): LeanTrackListItem {
     // Key provenance — see `bpmSource` above. Admin-only (public-stripped).
     keySource: row.key_source ?? undefined,
     label: row.label ?? undefined,
+    labelSlug: row.label_slug ?? undefined,
     logId: row.log_id ?? undefined,
     logPageUrl: row.log_id ? logPageUrl(row.log_id) : undefined,
     note: row.note?.trim() ? row.note : undefined,

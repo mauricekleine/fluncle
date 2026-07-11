@@ -1,4 +1,5 @@
 import { siteUrl, spotifyPlaylistUrl, telegramUrl } from "../fluncle-links";
+import { findingsCount } from "../format";
 import { fluncleDescription } from "../identity";
 import { type FeedItem } from "../mixtapes";
 import { isGalaxyMapFullyNamed } from "./galaxies-map";
@@ -332,7 +333,7 @@ function renderFinding(track: TrackListItem): string {
 function renderMixtape(track: Extract<FeedItem, { type: "mixtape" }>): string {
   const coordinate = track.logId ? `fluncle://${track.logId}` : "uncoordinated";
   const facts = [
-    `${track.memberCount} ${track.memberCount === 1 ? "finding" : "findings"}`,
+    findingsCount(track.memberCount),
     track.externalUrls.mixcloud ?? track.externalUrls.youtube ?? track.externalUrls.soundcloud,
   ].filter(Boolean);
 

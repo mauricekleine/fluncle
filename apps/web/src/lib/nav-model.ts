@@ -14,9 +14,15 @@
 //
 // And the trunk forks, which is why the browse sections are TWO and not one. There is what
 // Fluncle DID out there — the log, the logbook, the galaxies, the mixtapes: his own objects,
-// the markers he left for the crew (THE TRAIL). And there is what he found it AMONG — the
-// artists, the albums, the labels: the music's own taxonomy, the stuff printed on the sleeve
-// (THE CRATES). A flat list of both reads as a sitemap; the fork reads as a story.
+// the markers he left behind him, and you can TRAVEL ALONG them. And there is what he found
+// it AMONG — the artists, the albums, the labels: the music's own taxonomy, the stuff printed
+// on the sleeve, and you BROWSE it. A flat list of both reads as a sitemap; the fork reads as
+// a story.
+//
+// The four headings are one plain word or phrase each — Travel along / Browse / Listen / Crew
+// — and that is the register, not a coincidence. They were "The trail" and "The crates", two
+// abstract nouns that named nothing a reader could act on and neither of which is canon; a
+// heading in the colophon is a door, so it says what you do when you walk through it.
 //
 // The architecture is the LOGBOOK COLOPHON (ratified): a minimal top bar carrying
 // only the wordmark + a per-page breadcrumb, with the whole nav weight banked in a
@@ -80,9 +86,9 @@ export type NavItem = {
   | { kind: "action"; action: NavAction }
 );
 
-/** A titled group of items (The trail / The crates / Listen / Crew). */
+/** A titled group of items (Travel along / Browse / Listen / Crew). */
 export type NavSection = {
-  id: "crates" | "crew" | "listen" | "trail";
+  id: "browse" | "crew" | "listen" | "travel";
   label: string;
   items: NavItem[];
 };
@@ -95,13 +101,14 @@ export type NavNerd =
   | { id: string; label: string; kind: "docs"; splat: string }
   | { id: string; label: string; kind: "external"; href: string };
 
-// ── The trail ───────────────────────────────────────────────────────────────────
+// ── Travel along ────────────────────────────────────────────────────────────────
 // What Fluncle DID out there, and the markers he left behind him: every finding he
 // logged, the voyage he wrote up, the map of how it all sounds, the nights he dreamt
 // back. LORE.md is the licence for the heading — "everything he finds he leaves as a
-// trail, and the crew is who follows it" — and these four routes ARE that trail. They
-// exist because he went; nothing here would be here if he had stayed home.
-const trailItems: NavItem[] = [
+// trail, and the crew is who follows it" — so the heading is the INVITATION to follow
+// it, in his own voice, rather than the abstract noun for it. They exist because he
+// went; nothing here would be here if he had stayed home.
+const travelItems: NavItem[] = [
   {
     blurb: "Every finding, one coordinate each.",
     id: "log",
@@ -141,16 +148,14 @@ const trailItems: NavItem[] = [
   },
 ];
 
-// ── The crates ──────────────────────────────────────────────────────────────────
+// ── Browse ──────────────────────────────────────────────────────────────────────
 // What he found it AMONG: the people who made the bangers, the records they came off,
-// the imprints that pressed them. Not Fluncle's objects — the music's own, the stuff
-// printed on the sleeve, the taxonomy of a record shop. He digs through it; the trail
-// above is what he pulled out.
+// the labels that pressed them. Not Fluncle's objects — the music's own, the stuff
+// printed on the sleeve. He digs through it; the section above is what he pulled out.
 //
-// The heading is scene-native and deliberately NOT the internal word for this tier
-// (that word never appears in public copy — docs/album-entity.md). A crate is where the
-// records live before anyone finds them, which is exactly what these three indexes are.
-const crateItems: NavItem[] = [
+// The heading names the ACT, not the shelf, and it is deliberately NOT the internal
+// word for this tier — that word never appears in public copy (docs/album-entity.md).
+const browseItems: NavItem[] = [
   {
     blurb: "Everyone I've found a banger from.",
     id: "artists",
@@ -166,7 +171,7 @@ const crateItems: NavItem[] = [
     to: "/albums",
   },
   {
-    blurb: "The imprints behind the bangers.",
+    blurb: "The labels behind the bangers.",
     id: "labels",
     kind: "route",
     label: "Labels",
@@ -225,10 +230,10 @@ const crewItems: NavItem[] = [
 ];
 
 // The order is the story: what he did, what he found it among, how to hear it, who it is
-// for. The trail leads because the findings are the product.
+// for. The voyage leads because the findings are the product.
 export const navSections: NavSection[] = [
-  { id: "trail", items: trailItems, label: "The trail" },
-  { id: "crates", items: crateItems, label: "The crates" },
+  { id: "travel", items: travelItems, label: "Travel along" },
+  { id: "browse", items: browseItems, label: "Browse" },
   { id: "listen", items: listenItems, label: "Listen" },
   { id: "crew", items: crewItems, label: "Crew" },
 ];

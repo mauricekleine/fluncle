@@ -118,6 +118,7 @@ type TrackUpdateOptions = {
 };
 
 type TrackWorkOptions = {
+  count?: boolean;
   json: boolean;
   kind: string;
   limit?: string;
@@ -740,6 +741,10 @@ function addAdminCommands(program: Command): void {
     .requiredOption("--kind <kind>", "Pipeline stage: analyze | capture | embed")
     .option("--scope <scope>", "Which half of the archive: all | catalogue | findings", "all")
     .option("--limit <limit>", "Rows to show", "10")
+    // The page is capped at 200, so counting its rows answers "how many did I get" and never
+    // "how much is left". `--count` asks the server for the whole backlog — the number that
+    // sizes a GPU-batch rental (docs/gpu-batch-embed.md).
+    .option("--count", "Also report the size of the whole backlog, not just this page", false)
     .option("--json", "Print JSON", false)
     .action(async (options: TrackWorkOptions) => {
       const { trackWorkCommand } = await import("./commands/admin-tracks");
@@ -4539,14 +4544,15 @@ async function runAdminTrackWork(
     return;
   }
 
-  const tracks = await trackWorkCommand({
+  const { queued, tracks } = await trackWorkCommand({
+    count: options.count,
     kind: kind as "analyze" | "capture" | "embed",
     limit: parseListLimit(options.limit),
     scope: scope as "all" | "catalogue" | "findings",
   });
 
   if (options.json) {
-    printJson({ ok: true, tracks });
+    printJson({ ok: true, queued, tracks });
     return;
   }
 
@@ -4556,7 +4562,14 @@ async function runAdminTrackWork(
   }
 
   const noun = tracks.length === 1 ? "track" : "tracks";
-  console.log(`${tracks.length} ${noun} to ${kind} (${scope}), in drain order:`);
+  // With `--count`, lead with the BACKLOG and say the page is a page — the two numbers are
+  // different questions and only one of them sizes a GPU rental.
+  const head =
+    queued === undefined
+      ? `${tracks.length} ${noun} to ${kind} (${scope}), in drain order:`
+      : `${queued} queued to ${kind} (${scope}) — showing the first ${tracks.length}, in drain order:`;
+
+  console.log(head);
 
   for (const track of tracks) {
     const who = track.logId ?? `${track.trackId} · catalogue`;

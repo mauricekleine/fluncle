@@ -247,6 +247,33 @@ Pagination lives inside the list, never below the shell: a quiet load-more row (
 
 A **mixtape** — a recovered DJ set, Fluncle dreaming (PRODUCT.md; the [fluncle-mixtapes skill](./packages/skills/fluncle-mixtapes)) — renders as a quiet variant of the Track Row, not a new component. Same grid skeleton: the Oxanium tabular **Log ID** column (its middle slot is the literal `F`, never a digit — the only tell, and the mark keeps the finding's `<digit><letter>` shape), the artwork tile, the `1fr` content block, the caret. But it reads as a **checkpoint, not a finding**: its own mixtape cover, and a title block of the mixtape name over a Stardust line carrying the member count and run time (`12 findings · 58 min`) in place of the BPM/key/tags chip row. It stands apart without shouting — the ground is a darker, more transparent pane that lets more of the cosmos starfield show through than a finding row does (deeper out, a still point), held to the Warm Dark and Legible Sky rules, with no second sun and no louder gold. It sits flat on the plate with no glass of its own (One Pane), and it does not count toward the rotated FOUND stamp. Hover/focus matches the Track Row (Gold Veil wash, the Log ID heats to Eclipse Glow, the caret drifts 2px); the whole row links to the mixtape's `/log/<id>` compilation page.
 
+### Graph Link (signature component)
+
+The archive is a **graph** — log ↔ artist ↔ label ↔ album ↔ galaxy — and every node has a page. So wherever a surface NAMES one of those nodes, the name is a Graph Link: one component (`@/components/graph-link`), one style, one behaviour, everywhere. Never a bespoke link per surface. An entity name left as plain text on a reading surface is a bug.
+
+**At rest** it is Starlight Cream under a **dotted** underline: legible as a link, quiet as text. **On hover/focus** it heats to **Eclipse Glow** and the underline goes **solid**.
+
+**The ink is the host's when the host has one.** Cream is the ink of a name in _reading_ text. Two hosts already own their register and keep it: a **chip**, and the **Track Row's Stardust imprint line** (a cream imprint there would invert the row's hierarchy and pull the eye off the music). On those, only the resting colour defers — the dotted underline is the whole affordance, and the heat is unchanged.
+
+**It is not gold at rest, and this is load-bearing.** Eclipse Gold is the One Sun — the primary action, the focus ring, identity — capped at roughly 10% of any screen. A `/log` page already spends its gold on the Listen CTA, the coordinate, and the FOUND stamp. Graph links that were gold at rest would turn the page into a field of suns and the actual CTA would stop leading. Cream-at-rest → gold-on-hover is **The Ignition Rule** applied to a link: gold is placed like light, and interaction HEATS it. The budget survives and the link still announces itself. Both states clear WCAG AA on the warm blacks, so neither is decoration.
+
+**The card** is a printed card on the plate, not a third pane over it: **Tape Black, fully opaque, a Dust Line hairline, no blur and no shadow.** All three are canon, not taste — glass does not stack on glass (**One Pane**), a surface with a drop shadow is prohibited outright (**Through-the-Glass**, so it kills the `shadow-md` its Shadcn popup ships with), and being opaque means nothing of the cosmos or the sun-bloom sits behind its text, so its contrast is exact (**The Legible Sky Rule**). It is therefore _not_ one of The Plate's two sanctioned floaters — it is ink on paper.
+
+Hovering or focusing a graph link reveals it — a Shadcn `HoverCard` on a deliberate **~450ms delay** (Wikipedia's hover intent — a cursor crossing a paragraph must never fire one). It carries the entity page's **OWN opening line** — the same first-person sentence the page's masthead prints, from the same function (`lib/graph-prose.ts`) — plus a few finding covers and the finding count. It **invents no sentence** and it is the sole source of nothing: everything in it also lives one click away, on the page. The card carries **no gold at all** — it is a preview, not an action, and must not spend the One Sun budget just by existing.
+
+- **Keyboard:** focus opens the card, Escape closes it, Enter follows the link. The card is never focus-trapped and never in the tab order — a reader tabbing through a paragraph is never detained by a preview.
+- **Touch:** the card does not open. A tap is a navigation, full stop.
+- **Reduced motion:** the card appears without the fade/zoom. It arrives; it does not animate.
+- **Data:** the LINK is free (the slug rides in on the same read that loaded the finding, so links render server-side with the page). Only the CARD is lazy — fetched on open, cached per entity, so every link naming the same imprint shares one request.
+
+**Two skins, one component.** `inline` is the canonical one above (a name inside reading text). `chip` is the same link, the same route and the same card worn by a host that already draws its own affordance (an avatar chip, an adjacent-galaxy tile): no underline, because a chip is not a word in a sentence, and the host's hover state does the heating. There is never a second component.
+
+**Where it does not go**, and these are rules, not oversights:
+
+- **Inside a link.** The `Artist — Title` caption on a cover tile, a feed row's title line, a "Close in sound" row — each of those already sits inside a link to the finding, and a link inside a link is not a thing. There, the name is a **caption**, not a mention: the tile's job is to open the finding.
+- **Inside a listbox.** The search palette's rows are `role="option"`; a nested interactive control breaks the listbox contract. The palette already IS entity navigation.
+- **Inside a player.** Stories and the radio are the cinematic register — a transport, not a page. Both bind Escape and the arrow keys to playback, and a preview card has no business fighting them.
+
 ### CLI Command
 
 Literal terminal content in a quiet box: mono text (0.82rem) on Tape Black with a Dust Line border (0.5rem radius). Long commands scroll horizontally behind a thin Dust Line scrollbar (`scrollbar-width: thin; scrollbar-color` themed), never a native white one. A copy action (outline icon button) sits beside the install command; the check-mark confirmation flashes Eclipse Gold.

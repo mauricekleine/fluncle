@@ -2,17 +2,24 @@ import { Link, createFileRoute } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { TrackArtwork } from "@/components/track-artwork";
 import { siteUrl } from "@/lib/fluncle-links";
+import { findingsCount } from "@/lib/format";
 import { jsonLdScript } from "@/lib/json-ld";
 import { spotifyAlbumImageAtSize } from "@/lib/media";
 import { type LabelIndexEntry, listLabelsWithFindingCounts } from "@/lib/server/labels";
 
-// The labels index: every imprint Fluncle has logged a finding off, cover-led, each linking
-// to its `/label/<slug>` page — the internal-link hub that keeps the label pages from being
-// orphans (the `/artists` index precedent).
+// The labels index: every label Fluncle has logged a finding off, cover-led, each linking to
+// its `/label/<slug>` page — the internal-link hub that keeps those pages from being orphans
+// (the `/artists` index precedent).
 //
-// It lists a label because Fluncle FOUND something on it, never because the crawler may
-// seed from it: `seed_state` is crawl scope, never storage, and no read on this page knows
-// it exists.
+// It lists a label because Fluncle FOUND something on it, never because the crawler may seed
+// from it: `seed_state` is crawl scope, never storage, and no read on this page knows it
+// exists.
+//
+// This hub is deliberately NARROWER than the sitemap. A label page exists on crawled content
+// alone, but this list is Fluncle's own — "every label I've pulled a banger off" — so a label
+// he has certified nothing on is not on it, and would be a lie if it were. The sitemap is the
+// machine's complete map and carries those pages (`listLabelSitemapRows`); this is the
+// editorial one.
 
 const fetchLabels = createServerFn({ method: "GET" }).handler(() => listLabelsWithFindingCounts());
 
@@ -67,7 +74,7 @@ function LabelsPage() {
           <p className="log-nameplate">Fluncle's Findings</p>
           <h1 className="log-coordinate log-index-title">Labels</h1>
           <p className="log-index-intro">
-            Every imprint I've pulled a banger off. {labels.length} logged so far.
+            Every label I've pulled a banger off. {labels.length} logged so far.
           </p>
         </header>
 
@@ -84,9 +91,7 @@ function LabelsPage() {
                     src={spotifyAlbumImageAtSize(label.coverImageUrl, "large")}
                   />
                   <span className="artist-grid-line">{label.name}</span>
-                  <span className="artist-grid-count">
-                    {label.findingCount} {label.findingCount === 1 ? "finding" : "findings"}
-                  </span>
+                  <span className="artist-grid-count">{findingsCount(label.findingCount)}</span>
                 </Link>
               </li>
             ))}

@@ -7,16 +7,21 @@
 # is an OPERATOR act from first to last: the operator rents the pod, runs this, and destroys it.
 # Nothing in this repo can start one.
 #
+# THE RUN IS BOUNDED BY THE CLOCK. You rent an HOUR, not a batch — so `--minutes` is the flag that
+# matters, and the run keeps pulling pages until the queue is dry or the budget is spent. Match it
+# to the block you rented, MINUS a margin: one minute past an hour boundary buys a whole second
+# hour. 55 (the default) for a one-hour rental; 115 for two.
+#
 # It is idempotent and safe to re-run: an embedded track leaves the `embedding_json IS NULL`
 # queue, so a second pass simply picks up whatever the first did not finish. A reclaimed spot
-# pod costs you the batch in flight and nothing else.
+# pod costs you the page in flight and nothing else.
 #
 # Run ON THE POD, from RunPod's PyTorch template (CUDA + torch already present):
 #
 #     curl -fsSL https://raw.githubusercontent.com/mauricekleine/fluncle/main/docs/agents/hermes/scripts/embed-batch.sh \
-#       | bash -s -- --limit 200
+#       | bash -s -- --minutes 55
 #
-# Every argument is forwarded to the orchestrator (--limit / --scope / --dry-run).
+# Every argument is forwarded to the orchestrator (--minutes / --limit / --scope / --dry-run).
 #
 # SECRETS come from the environment — set them on the pod before running (RunPod's env editor,
 # or an `export` in the pod's shell). NEVER bake them into an image, and never into this file:
@@ -29,6 +34,7 @@
 #   optional: FLUNCLE_API_BASE_URL (default https://www.fluncle.com)
 #             MUQ_WINDOW_BATCH    (default 8 here — raise until VRAM complains, then step back)
 #             FLUNCLE_EMBED_DOWNLOAD_CONCURRENCY (default 6 — raise if the GPU idles on downloads)
+#             FLUNCLE_EMBED_RUN_MINUTES (the `--minutes` default, 55)
 set -euo pipefail
 
 REPO_URL="${FLUNCLE_REPO_URL:-https://github.com/mauricekleine/fluncle.git}"
@@ -85,4 +91,5 @@ print("MuQ weights cached")
 PY
 
 echo "==> batch (device=${MUQ_DEVICE}, window batch=${MUQ_WINDOW_BATCH})"
+echo "    the run is bounded by the CLOCK — pass --minutes to match the block you rented"
 exec bun "${WORKDIR}/docs/agents/hermes/scripts/embed-batch.ts" "$@"

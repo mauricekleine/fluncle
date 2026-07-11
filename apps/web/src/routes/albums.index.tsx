@@ -2,6 +2,7 @@ import { Link, createFileRoute } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { TrackArtwork } from "@/components/track-artwork";
 import { siteUrl } from "@/lib/fluncle-links";
+import { findingsCount } from "@/lib/format";
 import { jsonLdScript } from "@/lib/json-ld";
 import { spotifyAlbumImageAtSize } from "@/lib/media";
 import { type AlbumIndexEntry, listAlbumsWithFindingCounts } from "@/lib/server/albums";
@@ -80,9 +81,7 @@ function AlbumsPage() {
                     src={spotifyAlbumImageAtSize(album.coverImageUrl, "large")}
                   />
                   <span className="artist-grid-line">{album.name}</span>
-                  <span className="artist-grid-count">
-                    {album.findingCount} {album.findingCount === 1 ? "finding" : "findings"}
-                  </span>
+                  <span className="artist-grid-count">{findingsCount(album.findingCount)}</span>
                 </Link>
               </li>
             ))}

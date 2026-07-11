@@ -36,7 +36,7 @@ Two write paths, both idempotent, and both seeded **only from certified findings
 
 That an entity is minted **only off a finding** is the load-bearing rule, and it does two jobs:
 
-- **It bounds the indexes.** An album earns an entity, a public page, and a sitemap slot because Fluncle FOUND something on it. Minting off a raw `tracks` scan would mint a row for every record Fluncle has merely heard of the moment the catalogue lands, and `/albums` would swell from an archive-sized list to a catalogue-sized one.
+- **It bounds the `albums` TABLE.** Minting off a raw `tracks` scan would mint a row for every record Fluncle has merely heard of the moment the catalogue lands, and `/albums` would swell from an archive-sized list to a catalogue-sized one. (This bounds the ROW, and therefore — for albums, today — the page. It is not a rule about pages: a page's right to exist is settled by its content, below. The LABEL table has no such bound, because the crawler must mint a `labels` row for every label it discovers — that `undecided` row is the operator's ruling queue — which is exactly why discovered labels get pages and discovered albums do not yet.)
 - **It decides what the quieter rows can contain.** An uncertified track on a record Fluncle found a banger on gets linked, so it appears on that record's page. One on a record he never touched stays unlinked, and is therefore invisible everywhere.
 
 The **link** step is also the self-healing path by which a track written by any writer that knows nothing of these columns — an admin update, the future catalogue crawler — is folded into the graph on the next deploy.
@@ -45,15 +45,21 @@ The **link** step is also the self-healing path by which a track written by any 
 
 **`/album/<slug>`** and **`/albums`** (with **`/label/<slug>`** and **`/labels`**) mirror `/artist/<slug>` exactly: a plate masthead, a cover-led grid of findings, the artists as chips, an `@id`-bearing JSON-LD entity, and the same thin-content gate. The album page carries one edge the label page has no twin for: **the album → label uplink**, rendered as a link and stamped into the `MusicAlbum` JSON-LD as `albumRelease.recordLabel`, pointing at the label page's `Organization` `@id`. That is where the graph closes.
 
-### The catalogue DEEPENS a page — it never CREATES one
+### An entity earns a page on its CONTENT, not on Fluncle's
 
-This is the rule that keeps the graph pages honest once a crawler is filling `tracks`, and it has two halves.
+A graph page exists as soon as the entity does. A label the crawler discovered and Fluncle has certified nothing on **still has a `/label/<slug>` page**, and a label with 700 crawled releases and zero findings is a genuinely useful one — an honest record of what that label put out. Refusing to serve it throws away the entire point of having crawled it.
 
-**A page needs a finding.** An entity carrying zero findings resolves as MISSING and `/label/<slug>` (or `/album/<slug>`) **404s**, however many crawled rows hang off it. The album already obeyed this as a WRITE rule — an `albums` row is minted only off a certified finding. A LABEL row cannot: the crawler has to mint one for every imprint it discovers, because the `undecided` row **is** the operator's ruling queue ([the widening loop](./catalogue-crawler.md)). So the label pays the same rule on the READ side instead, and both pages state it, and both are tested (`catalogue-scale.integration.test.ts`).
+This reverses the rule that shipped first ("zero findings ⇒ the page 404s"). That rule was aimed at a real bug and hit the wrong target. Measured against a 10,800-row synthetic catalogue, **eight discovered-label pages were live and indexable**, and each one was a wall of Spotify outlinks under the heading _"Nothing logged off this one yet."_ That is a doorway page by Google's own definition — but what makes it one is the **hollow rendering**, not the page's existence. A page whose stated subject is a thing that is not on it is a doorway; a page that is honestly about the tracks it carries is a page.
 
-Without it, a wide crawl publishes one indexable page per discovered imprint whose entire content is a wall of Spotify outlinks under the line _"Nothing logged off this one yet."_ That is a doorway page by Google's own definition. It shipped: measured against a 10,800-row synthetic catalogue, **eight such pages were live and indexable**, and — because the sitemap's entity lists inner-join `findings` — **none was in the sitemap**, breaking the invariant this doc states below. Now the invariant holds in both directions: an indexable page is never orphaned from the sitemap, and **the sitemap never points at a page that is not there.**
+**So the page stays, and the hollow rendering goes.** Every band on a graph page is **conditional**: it renders only when it has content, and renders _nothing_ — no heading, no empty state, no apology — when it does not. No findings ⇒ no findings section, and no "nothing logged yet" line in the masthead either. The page is then simply about what it has. The rule, and it is the load-bearing one:
 
-**The rows are capped.** A page renders at most `GRAPH_PAGE_CATALOGUE_LIMIT` (100) quieter rows — the newest releases by date, not an arbitrary alphabetical slice — while the entity's TRUE total is counted in SQL (`count(*) over ()`) and is what the thin-content gate below keys off. The seek was always indexed, so the SCAN was always bounded; the RESULT SET was not, and that is the distinction that bit. On the same 10,800-row catalogue, `/label/hospital-records` served **4.34 MB of HTML** — 3,000 rows through the markup, again through the hydration payload, and a third time as `MusicRecording` nodes in the JSON-LD. Capped, the same page is **222 KB**.
+> **A section renders only when it has content. A heading over an empty band is how a real page turns into a doorway page.**
+
+What keeps a **stub** out of the index is the thin-content gate below, and it counts **total** renderable tracks, never findings — because a page is thin or not thin on what it _renders_, never on who wrote it.
+
+**The rows are still capped.** A page renders at most `GRAPH_PAGE_CATALOGUE_LIMIT` (100) quieter rows — the newest releases by date, not an arbitrary alphabetical slice — while the entity's TRUE total is counted in SQL (`count(*) over ()`) and is what the thin-content gate keys off. The seek was always indexed, so the SCAN was always bounded; the RESULT SET was not, and that is the distinction that bit. On the same 10,800-row catalogue, `/label/hospital-records` served **4.34 MB of HTML** — 3,000 rows through the markup, again through the hydration payload, and a third time as `MusicRecording` nodes in the JSON-LD. Capped, the same page is **222 KB**.
+
+**And the crawled TRACK still earns nothing.** The rail that did not move: a `tracks` row with no `findings` row is not a finding, has no coordinate, and never gets a `/log` URL. The catalogue can grow without bound and the number of findings in the sitemap does not move. What a crawl now earns is a page for the **entity** its tracks hang off — never a page for a track.
 
 ### The findings lead, and the rest has no name
 
@@ -65,19 +71,32 @@ Beneath them sit the **quieter rows**: tracks Fluncle knows of but has never cer
 
 Visually they are held apart by the **unlit register** (DESIGN.md): no cover and no coordinate (they have none), Stardust ink, a hairline rule as the only separator, and **no gold at rest or on hover** — so a hovered unlit row can never be mistaken for a focused one, and the One Sun budget survives a list that could run to dozens of rows. Focus, and only focus, is loud: the canonical Eclipse-Glow ring. A row links **out** to Spotify (a track with no Log ID has no page here to link to); one with no streaming presence at all renders as plain, unlinked text.
 
-An **empty set renders nothing at all** — not an empty state, not a heading with no rows. Today that is every page (the archive is entirely certified), so the band is simply dark until the catalogue lands.
+An **empty set renders nothing at all** — not an empty state, not a heading with no rows. That is true of **every** band on the page, not just this one (see _An entity earns a page on its content_ above): the findings grid, the artist chips, and the quieter rows all return nothing when they are empty, and the masthead drops its voice line when there is no finding to speak about. It is what lets one component set serve both a page Fluncle has certified ten bangers off and a page the crawler discovered, without either apologising for the half it does not have.
 
 Accessibility gets an `aria-label` on the list (`More tracks on <entity>`), because an unlabelled list of links is an accessibility failure. It names the **tracks**, never the tier.
 
 ### The thin-content gate
 
-A page indexes (and enters the sitemap) only past **`ALBUM_INDEX_MIN_TRACKS` / `LABEL_INDEX_MIN_TRACKS` = 3 renderable tracks** — its findings **plus** the quieter rows, because both are real content on the page. Below it the page still serves 200 (deep links, link equity) but is `noindex, follow` and stays out of the sitemap. The sitemap filters on the same sum, so an indexable page is never orphaned from it.
+A page indexes (and enters the sitemap) only past **`ALBUM_INDEX_MIN_TRACKS` / `LABEL_INDEX_MIN_TRACKS` = 3 renderable tracks** — its findings **plus** the quieter rows, because both are real content on the page. Below it the page still serves 200 (deep links, link equity) but is `noindex, follow` and stays out of the sitemap.
 
-The gate counts the entity's **true** catalogue total, never the rendered 100-row slice — a 3,000-row imprint and a 100-row one must not read as the same page to it.
+**It counts TOTAL content, never findings.** That is the whole point: it is the one gate, and it is the gate that replaced the 404. A label with two crawled rows and nothing else is a stub and stays out of the index; a label with 900 is a page and goes in. Neither answer depends on whether Fluncle has certified anything, because _the crawler's rows are content too_.
 
-The threshold is `ARTIST_INDEX_MIN_FINDINGS`'s value; what differs is WHAT is counted, and that is deliberate: **an album Fluncle found one banger on is a thin page today and a genuine tracklist page once the rest of the record is there.** Today every album in the archive is a single, so no album detail page clears the floor — the gate is working, not broken. The hubs (`/albums`, `/labels`) are listed unconditionally, like `/artists`: a hub's content is the whole list, so the per-page gate says nothing about it.
+The gate counts the entity's **true** catalogue total, never the rendered 100-row slice — a 3,000-row label and a 100-row one must not read as the same page to it.
 
-**So what IS a label with 1 finding and 700 catalogue tracks?** A real page, and it indexes. The floor it has to clear is not "3 tracks" — it is **1 finding**, which is what the 404 above enforces. Past that floor the catalogue is context, exactly as a discography table is context on a Wikipedia article: the page has an original coordinate, an original note, a cover, and Fluncle's own voice frame, and the quieter rows deepen it. Below that floor there is no page at all. The renderable-track sum stays as the SECOND gate — it is what lets a record fill out from single to tracklist — but it can no longer, on its own, conjure a page out of a crawl.
+**Why the floor is 3, and not higher.** Three is low for a _catalogue-only_ page, and it is tempting to raise it — but the floor is shared with pages that carry real findings, and raising it would demote them. `/label/medschool` has 3 findings today: three coordinates, three notes, three covers, Fluncle's voice frame. That is unambiguously a page, and any floor above 3 silently `noindex`es it. Weighting a finding heavier than a crawled row would let both bars rise, but that reintroduces "who wrote it" into a gate whose entire job is to ask "what is on it" — so the floor stays 3 and stays honest. If a harder bar for catalogue-only pages is ever wanted, it is a _weighted_ gate and a deliberate decision, not a bump to this constant.
+
+The threshold matches `ARTIST_INDEX_MIN_FINDINGS`'s value; what differs is WHAT is counted, and that is deliberate: **an album Fluncle found one banger on is a thin page today and a genuine tracklist page once the rest of the record is there.** Today every album in the archive is a single, so no album detail page clears the floor — the gate is working, not broken. The hubs (`/albums`, `/labels`) are listed unconditionally, like `/artists`: a hub's content is the whole list, so the per-page gate says nothing about it.
+
+### The sitemap carries every page; the hub carries Fluncle's
+
+The two lists answer different questions, and once a page can exist on crawled content alone they stop being the same list.
+
+- **The hubs** (`/labels`, `/albums`) are **Fluncle's own** — _"every label I've pulled a banger off"_ — so they drive from the findings join (`listLabelsWithFindingCounts`). A label he has certified nothing on is absent, and would be a lie if it were there.
+- **The sitemap** is the machine's **complete** map of pages that exist and may be indexed, so it drives from a different read (`listLabelSitemapRows` / `listAlbumSitemapRows`) that left-joins findings and applies the thin-content floor **in SQL**. A crawler-discovered label past the floor is in it.
+
+The floor is applied in SQL rather than in the isolate on purpose: a wide crawl mints a `labels` row per label it walks past and most will sit on one or two rows, so filtering in TypeScript would drag every stub across the wire to throw it away (AGENTS.md — never rank or filter a growing table in the Worker).
+
+Both halves of the invariant hold, and the same constant computes both sides: **an indexable page is never orphaned from the sitemap, and the sitemap never points at a page that is not there.**
 
 ## The known limit: two records, one name
 

@@ -2,6 +2,7 @@ import { Link, createFileRoute } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { ArtistAvatar } from "@/components/artist-avatar";
 import { siteUrl } from "@/lib/fluncle-links";
+import { findingsCount } from "@/lib/format";
 import { jsonLdScript } from "@/lib/json-ld";
 import { type ArtistIndexEntry, listArtistsWithFindingCounts } from "@/lib/server/artists";
 
@@ -83,9 +84,7 @@ function ArtistsPage() {
                     src={artist.imageUrl}
                   />
                   <span className="artist-grid-line">{artist.name}</span>
-                  <span className="artist-grid-count">
-                    {artist.findingCount} {artist.findingCount === 1 ? "finding" : "findings"}
-                  </span>
+                  <span className="artist-grid-count">{findingsCount(artist.findingCount)}</span>
                 </Link>
               </li>
             ))}

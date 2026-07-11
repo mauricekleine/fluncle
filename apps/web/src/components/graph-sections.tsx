@@ -7,6 +7,19 @@
 //   2. The artists, as chips back into the artist half of the graph.
 //   3. The quieter rows.
 //
+// ── EVERY BAND IS CONDITIONAL ───────────────────────────────────────────────────────
+// A band with nothing in it renders NOTHING — no heading, no empty state, no apology.
+// All three components return `undefined` on an empty set, and that is the load-bearing
+// rule of this file, not a nicety.
+//
+// The page is then ABOUT what it actually has. A label the crawler discovered carries no
+// findings and a wall of tracks, so it renders as a wall of tracks and says nothing about
+// findings; a label Fluncle has certified ten bangers off leads with ten covers. Neither
+// page apologises for the half it does not have, because a heading over an empty band is
+// how a real page turns into a doorway page: "Nothing logged off this one yet." above a
+// list of outlinks tells a crawler the page's subject is a thing that is not there. Delete
+// the band and the same page is honest.
+//
 // ── THE QUIETER ROWS (DESIGN.md, the unlit register) ────────────────────────────────
 // A track Fluncle knows of but has never certified. It renders UNLIT, and three rules
 // hold it there:
@@ -30,6 +43,7 @@ import { Link } from "@tanstack/react-router";
 import { siSpotify } from "simple-icons";
 import { ArtistAvatar } from "@/components/artist-avatar";
 import { BrandIcon } from "@/components/brand-icon";
+import { GraphLink } from "@/components/graph-link";
 import { TrackArtwork } from "@/components/track-artwork";
 import { artistTitleLine } from "@/lib/log-prose";
 import { spotifyAlbumImageAtSize } from "@/lib/media";
@@ -64,8 +78,13 @@ export function graphPageTracks(
 
 /**
  * The findings band: the cover grid that LEADS every graph page. Only coordinate-bearing
- * findings render (the grid is a grid of log links); an entity with none shows the quiet
- * empty line instead.
+ * findings render (the grid is a grid of log links).
+ *
+ * An entity with none renders NOTHING here — no grid, no heading, no empty state. It used
+ * to print "Quiet sector." and that line is exactly what made a crawler-discovered label
+ * read as a doorway page: an apology for the absent half, sitting above the half that is
+ * actually there. A page with no findings is not a broken findings page; it is a page about
+ * something else.
  */
 export function FindingsGrid({
   findings,
@@ -78,7 +97,7 @@ export function FindingsGrid({
   const grid = findings.filter((finding) => finding.logId);
 
   if (grid.length === 0) {
-    return <p className="log-index-empty empty-scanlines">Quiet sector.</p>;
+    return undefined;
   }
 
   return (
@@ -101,7 +120,14 @@ export function FindingsGrid({
   );
 }
 
-/** The artist band: chips back into `/artist/<slug>` — the graph's cross-link. */
+/**
+ * The artist band: chips back into `/artist/<slug>` — the graph's cross-link.
+ *
+ * The chip is a `GraphLink` in its `chip` skin: the same component, the same route, and the
+ * same hover card as an artist named in a sentence, but without the dotted underline (a chip is
+ * not a word in a sentence — the tile already draws the affordance, and its own hover state
+ * does the heating). One system, two skins.
+ */
 export function ArtistChips({ artists, title }: { artists: ArtistChip[]; title: string }) {
   if (artists.length === 0) {
     return undefined;
@@ -113,14 +139,19 @@ export function ArtistChips({ artists, title }: { artists: ArtistChip[]; title: 
       <ul className="artist-similar-list">
         {artists.map((artist) => (
           <li key={artist.slug}>
-            <Link className="artist-similar-link" params={{ slug: artist.slug }} to="/artist/$slug">
+            <GraphLink
+              className="artist-similar-link"
+              kind="artist"
+              slug={artist.slug}
+              variant="chip"
+            >
               <ArtistAvatar
                 className="artist-similar-avatar"
                 name={artist.name}
                 src={artist.imageUrl}
               />
               <span>{artist.name}</span>
-            </Link>
+            </GraphLink>
           </li>
         ))}
       </ul>

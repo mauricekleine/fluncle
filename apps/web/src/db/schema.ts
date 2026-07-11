@@ -303,6 +303,21 @@ export const tracks = sqliteTable(
     index("tracks_anchor_queue_idx")
       .on(table.isrc)
       .where(sql`${table.spotifyUri} is null and ${table.isrc} is not null`),
+    // The MuQ EMBED queue — "audio on file, no vector yet" (track-work.ts, `kind: "embed"`).
+    // PARTIAL, for the same reason the anchor queue is: the worklist is DERIVED, and the
+    // predicate matches a shrinking slice of a growing table, so the index shrinks as the
+    // backlog drains instead of growing with the archive.
+    //
+    // It earns its keep twice. `embedding_json` is a ~20 KB JSON vector, so a `tracks` row
+    // carrying one SPILLS to overflow pages: a full scan of the table to find the un-embedded
+    // rows costs (roughly) a page per embedded row — the exact shape AGENTS.md warns about, and
+    // it is paid on every 5-minute box tick and on every page of the GPU batch. Driving that
+    // predicate off this index reads only the backlog. And it is what makes `countTrackWork`
+    // affordable: the honest "how many are still queued" the batch reports is an index count,
+    // not an archive scan.
+    index("tracks_embed_queue_idx")
+      .on(table.trackId)
+      .where(sql`${table.sourceAudioKey} is not null and ${table.embeddingJson} is null`),
   ],
 );
 
