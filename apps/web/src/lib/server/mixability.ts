@@ -202,6 +202,21 @@ function clamp01(value: number): number {
 }
 
 /**
+ * The sonic sub-score from an ALREADY-COMPUTED cosine, in [0,1], or `null` when the
+ * cosine is absent OR the coverage gate is closed. The `/mix` rail's candidate scan
+ * gets its cosine from the DATABASE (`vector_distance_cos`, converted by
+ * `cosineFromDistance`) rather than by pulling 21 KB of vector per candidate into the
+ * isolate — the calibration below is the same either way, which is the point.
+ */
+export function sonicSubScoreFromCosine(cos: number | null, gateOpen: boolean): number | null {
+  if (!gateOpen || cos === null) {
+    return null;
+  }
+
+  return clamp01((cos - SONIC_CALIBRATION.lo) / (SONIC_CALIBRATION.hi - SONIC_CALIBRATION.lo));
+}
+
+/**
  * The sonic sub-score for two MuQ embeddings under the fixed affine calibration, in
  * [0,1], or `null` when either embedding is absent OR the coverage gate is closed
  * (`gateOpen === false`). Aesthetic continuity (liquid vs neuro at the same 8A/174) —
@@ -213,13 +228,7 @@ export function sonicSubScore(
   b: number[] | null,
   gateOpen: boolean,
 ): number | null {
-  if (!gateOpen || !a || !b) {
-    return null;
-  }
-
-  const cos = cosineSimilarity(a, b);
-
-  return clamp01((cos - SONIC_CALIBRATION.lo) / (SONIC_CALIBRATION.hi - SONIC_CALIBRATION.lo));
+  return sonicSubScoreFromCosine(a && b ? cosineSimilarity(a, b) : null, gateOpen);
 }
 
 // ── The texture tiebreak (`features_json`) ───────────────────────────────────
@@ -318,8 +327,18 @@ export type MixPairResult = {
   sonic: number | null;
 };
 
-/** Options for a scoring pass. `gateOpen` lifts the sonic term (default closed). */
-export type MixOptions = { gateOpen?: boolean };
+/**
+ * Options for a scoring pass. `gateOpen` lifts the sonic term (default closed).
+ *
+ * `sonicCos` is the cosine between THE TWO TRACKS BEING SCORED, already computed —
+ * the `/mix` rail's candidate scan has the database compute it (`vector_distance_cos`
+ * against the target, one exact scan) instead of shipping every candidate's 21 KB
+ * vector into the isolate. Supplied, it is used verbatim; omitted (`undefined`), the
+ * cosine comes from the two `MixTrack.embedding`s as before. It is a PER-CALL option
+ * precisely so it cannot be smuggled onto a `MixTrack` and silently mis-score the
+ * pairwise path search, whose N² cosines are all different pairs.
+ */
+export type MixOptions = { gateOpen?: boolean; sonicCos?: number | null };
 
 function camelotOf(key: string | null): Camelot | null {
   const parsed = parseKey(key);
@@ -393,7 +412,12 @@ export function scoreMix(a: MixTrack, b: MixTrack, options: MixOptions = {}): Mi
   const bpm = bpmSubScore(a.bpm, b.bpm);
   const bpmScore = bpm.score;
 
-  const sonicScore = sonicSubScore(a.embedding, b.embedding, gateOpen);
+  // The cosine either came from the database (the `/mix` candidate scan) or is computed
+  // here from the two vectors — same number, same calibration, same score.
+  const sonicScore =
+    options.sonicCos === undefined
+      ? sonicSubScore(a.embedding, b.embedding, gateOpen)
+      : sonicSubScoreFromCosine(options.sonicCos, gateOpen);
 
   let numerator = 0;
   let denominator = 0;
@@ -433,8 +457,13 @@ export function scoreMix(a: MixTrack, b: MixTrack, options: MixOptions = {}): Mi
 
 // ── Ranking (Product A) ──────────────────────────────────────────────────────
 
-/** A ranking candidate: an opaque item paired with its mixability inputs. */
-export type MixCandidate<T> = { item: T; track: MixTrack };
+/**
+ * A ranking candidate: an opaque item paired with its mixability inputs, and
+ * optionally the cosine to the TARGET already computed by the database (see
+ * `MixOptions.sonicCos`). When `sonicCos` is set, `track.embedding` is not needed —
+ * which is exactly how the `/mix` rail avoids loading the corpus's vectors.
+ */
+export type MixCandidate<T> = { item: T; sonicCos?: number | null; track: MixTrack };
 
 /**
  * Rank `candidates` by descending mixability to `target`, breaking equal-score
@@ -454,7 +483,11 @@ export function rankMixable<T>(
   }
 
   const scored = candidates.flatMap((candidate, index) => {
-    const result = scoreMix(target, candidate.track, options);
+    const result = scoreMix(
+      target,
+      candidate.track,
+      candidate.sonicCos === undefined ? options : { ...options, sonicCos: candidate.sonicCos },
+    );
 
     if (result.score === null || result.reason === null) {
       return [];

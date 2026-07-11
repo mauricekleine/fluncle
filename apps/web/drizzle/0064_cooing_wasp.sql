@@ -1,0 +1,1 @@
+ALTER TABLE `tracks` ADD `embedding_blob` F32_BLOB(1024);

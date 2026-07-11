@@ -18,7 +18,7 @@
 // so they unit-test directly with fixture vectors (artist-dossier.test.ts).
 
 import { getDb, typedRows } from "./db";
-import { type EmbeddingCandidate, parseEmbedding, rankBySimilarity } from "./embedding";
+import { type EmbeddingCandidate, readEmbeddingBlob, rankBySimilarity } from "./embedding";
 
 /** How many "same sector" neighbours the artist page shows (top-N, self excluded). */
 export const ARTIST_NEIGHBOURS_LIMIT = 4;
@@ -141,7 +141,7 @@ export function summarizeArtistSignature(findings: SignatureFinding[]): ArtistSi
 
 type NeighbourRow = {
   artist_id: string;
-  embedding_json: string;
+  embedding_blob: unknown;
   image_url: string | null;
   name: string;
   slug: string;
@@ -149,12 +149,27 @@ type NeighbourRow = {
 
 /**
  * The artist page's "same sector" neighbours — the DB-backed side of the dossier.
- * Loads every (artist, finding-embedding) pair for coordinate-bearing, embedded
- * findings, groups the vectors per artist, and cosine-ranks the artist-level means
- * against the target's. Only artists with ≥1 embedded finding participate, so the
- * result is `[]` for an artist whose findings aren't embedded yet (the `fluncle-embed`
- * cron hasn't drained them) — the block simply doesn't render. One query for the
- * whole corpus; the grouping + ranking is pure (`rankSimilarArtists`).
+ * Loads every (artist, finding-vector) pair for coordinate-bearing, embedded findings,
+ * groups the vectors per artist, and cosine-ranks the artist-level means against the
+ * target's. Only artists with ≥1 embedded finding participate, so the result is `[]` for
+ * an artist whose findings aren't embedded yet (the `fluncle-embed` cron hasn't drained
+ * them) — the block simply doesn't render. One query for the whole corpus; the grouping
+ * + ranking is pure (`rankSimilarArtists`).
+ *
+ * THIS ONE STILL READS THE VECTORS, and it is the only similarity path that does. An
+ * artist-level MEAN cannot be expressed as a single probe against a btree-narrowed scan
+ * — libSQL has no vector aggregate — so ranking it in SQL would need a STORED artist
+ * centroid (a new derived artifact, with a freshness cascade every time a finding is
+ * re-embedded or an artist link changes). That is a design change, not a scale fix, and
+ * it is deliberately not made here.
+ *
+ * What IS done: the vectors come back as `F32_BLOB`s (4,096 B) rather than JSON text
+ * (21,804 B) — 5.4x less. The wall that matters (`turso dev`'s 10 MiB response cap,
+ * which this query hit at ~460 embedded findings exactly as `getSimilarFindings` did)
+ * moves out to ~2,400, and the isolate's heap at 100k drops from ~689 MB to ~130 MB.
+ * The ranking is bit-identical: `embedding_blob` holds the same float32s the JSON
+ * printed. The stored-centroid design is the recorded follow-up before the archive
+ * reaches the low thousands.
  */
 export async function getArtistNeighbours(
   artistId: string,
@@ -167,17 +182,18 @@ export async function getArtistNeighbours(
   const db = await getDb();
   const result = await db.execute({
     sql: `select a.id as artist_id, a.name as name, a.slug as slug,
-                 a.image_url as image_url, t.embedding_json as embedding_json
+                 a.image_url as image_url, t.embedding_blob as embedding_blob
           from artists a
           join track_artists ta on ta.artist_id = a.id
           join tracks t on t.track_id = ta.track_id
-          where t.log_id is not null and t.embedding_json is not null`,
+          where t.log_id is not null and t.embedding_blob is not null`,
   });
 
   const groups = new Map<string, ArtistEmbeddingGroup>();
 
   for (const row of typedRows<NeighbourRow>(result.rows)) {
-    const embedding = parseEmbedding(row.embedding_json);
+    // The driver hands a blob back as an ArrayBuffer, not a Uint8Array (embedding.ts).
+    const embedding = readEmbeddingBlob(row.embedding_blob);
 
     if (!embedding) {
       continue;

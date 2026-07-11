@@ -348,10 +348,24 @@ export async function updateTrack(
   }
 
   if (update.embedding !== undefined) {
-    // Empty string clears the vector — null, not "", so the `embedding_json IS NULL`
-    // embed queue treats a cleared row as un-embedded (re-embed on the next tick).
-    sets.push("embedding_json = ?");
-    args.push(update.embedding === "" ? null : update.embedding);
+    // THE DUAL WRITE. The vector lands in BOTH forms, in one statement: the JSON array
+    // (the source of truth) and the native `F32_BLOB(1024)` the similarity reads rank
+    // against in SQL (`vector32()` converts it server-side, so the Worker never encodes
+    // a vector). Writing only the JSON would make a finding invisible to "more like
+    // this" until the next deploy's backfill caught it.
+    //
+    // Empty string CLEARS both — null, not "", so the `embedding_json IS NULL` embed
+    // queue treats a cleared row as un-embedded (re-embed on the next tick), and no
+    // orphan blob outlives the vector it came from. `vector32(NULL)` throws, hence the
+    // two arms rather than one clever expression. The handler has already validated the
+    // 1024-d shape (`coerceEmbedding`), so `vector32()` cannot see garbage here.
+    if (update.embedding === "") {
+      sets.push("embedding_json = ?", "embedding_blob = ?");
+      args.push(null, null);
+    } else {
+      sets.push("embedding_json = ?", "embedding_blob = vector32(?)");
+      args.push(update.embedding, update.embedding);
+    }
   }
 
   if (update.galaxyId !== undefined) {

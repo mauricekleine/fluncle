@@ -1,10 +1,35 @@
-// The audio-embedding vector math — the pure core of the MuQ similarity pipeline
-// (docs/track-lifecycle.md). The box's `fluncle-embed` cron produces a 1024-d
-// MuQ vector per finding and stores it (as a JSON array) in `tracks.embedding_json`
-// via the agent-tier `update_track` path; the public `get_similar_findings` op
-// cosine-ranks those vectors to power the "more like this" `/log` row. All of that
-// leans on the four pure functions here, kept side-effect-free so they are unit
-// tested directly with fixture vectors (no DB, no network).
+// The audio-embedding vector core — the pure math AND the SQL contract of the MuQ
+// similarity pipeline (docs/track-lifecycle.md). The box's `fluncle-embed` cron
+// produces a 1024-d MuQ vector per finding and the agent-tier `update_track` path
+// stores it TWICE: as a JSON array in `tracks.embedding_json` (the source of truth)
+// and as a native libSQL `F32_BLOB(1024)` in `tracks.embedding_blob` (the form the
+// DATABASE can rank). Everything downstream — `get_similar_findings`, the `/mix` rail,
+// a galaxy's core-first order — ranks IN SQL against the blob.
+//
+// WHY THE RANKING MOVED INTO SQL. It used to pull every row's `embedding_json` into
+// the isolate and cosine-rank there. That path is dead (measured, docs/rfcs/
+// turso-scale-spike.md): a 1024-d vector is 21,804 B as JSON, so the unpaginated
+// candidate scan hit `turso dev`'s 10 MiB response cap at 460 embedded findings (row
+// 460 threw RESPONSE_TOO_LARGE — a THIS-YEAR wall, not a 100k one), and on hosted
+// Turso — which has no cap — it would simply have kept growing into the Worker's
+// 128 MB isolate (2,067 MiB transferred / 689 MB of JS heap at 100k). The exact scan
+// in SQL returns the winners only: ~2.5 KB, one round trip, 100% recall.
+//
+// THE THREE RULES THAT MAKE IT WORK, all measured:
+//   1. Rank with `vector_distance_cos` in SQL, never in the isolate.
+//   2. BIND THE PROBE AS A RAW BLOB (`toVectorProbe`), never as a JSON string. A text
+//      probe makes the database re-parse 21 KB of JSON once per row: 26,700 ms vs
+//      1,883 ms at 100k on hosted. The cliff DOES NOT REPRODUCE LOCALLY (sqld: 175 ms
+//      either way), so dev will never warn you about it.
+//   3. NEVER `CREATE INDEX … libsql_vector_idx` on a populated table. On hosted it
+//      failed with `database is locked` and wedged the database's WRITE path for 20+
+//      minutes; locally it silently builds an EMPTY index. The exact scan (plus a
+//      btree pre-filter where the query allows one) is the ratified shape — there is
+//      no ANN index here, by decision.
+//
+// The pure functions stay side-effect-free so they are unit tested with fixture
+// vectors (no DB, no network); `readEmbeddingBlob`/`toVectorProbe` are the only
+// bridge to the wire format.
 
 /**
  * The MuQ-large embedding width. `MuQ-large-msd-iter`'s `last_hidden_state`,
@@ -95,11 +120,14 @@ export type EmbeddingCandidate<T> = {
 
 /**
  * Rank `candidates` by descending cosine similarity to `target` and return the top
- * `limit` items. Brute-force (O(n·d)) — instant at the catalogue's scale (dozens →
- * low thousands); libSQL's native `vector_top_k` is the escape hatch past ~10k (the
- * RFC's §2b note). Deterministic: ties break toward the earlier candidate (a stable
- * sort), so a fixed candidate order yields a fixed result. A non-positive `limit`
- * returns nothing.
+ * `limit` items. Brute-force (O(n·d)) over vectors ALREADY IN MEMORY — which is why
+ * no DB read path calls it anymore: getting the vectors here is the thing that does
+ * not scale (see the module header), not the arithmetic. It survives for the bounded
+ * in-memory rankings — the artist-dossier means and the galaxy-adjacency strip, whose
+ * inputs are a handful of vectors, not the corpus.
+ *
+ * Deterministic: ties break toward the earlier candidate (a stable sort), so a fixed
+ * candidate order yields a fixed result. A non-positive `limit` returns nothing.
  */
 export function rankBySimilarity<T>(
   target: number[],
@@ -119,4 +147,80 @@ export function rankBySimilarity<T>(
     .sort((left, right) => right.score - left.score || left.index - right.index)
     .slice(0, limit)
     .map((scored) => scored.item);
+}
+
+// ── The SQL contract (the blob path) ─────────────────────────────────────────
+
+/**
+ * Bind a probe vector for `vector_distance_cos(…, ?)` as a RAW float32 BLOB — the
+ * single most load-bearing detail in this file (module header, rule 2). The same
+ * query with the same probe expressed as a JSON string costs 26,700 ms at 100k on
+ * hosted Turso against 1,883 ms for these bytes, because `vector32()` re-parses the
+ * text once per scanned row. Local sqld shows NO difference (175 ms either way), so
+ * nothing in dev will ever catch a regression here — only this comment will.
+ */
+export function toVectorProbe(vector: number[]): Uint8Array {
+  return new Uint8Array(Float32Array.from(vector).buffer);
+}
+
+/**
+ * Decode an `F32_BLOB` cell back into a vector, or `null` when it is absent/malformed.
+ *
+ * THE DRIVER QUIRK: `@libsql/client` hands a blob cell back as an **`ArrayBuffer`**,
+ * not a `Uint8Array` — so a `instanceof Uint8Array` check silently drops every row.
+ * Both are accepted here. A byte length that is not a whole number of float32s, or
+ * that does not match {@link EMBEDDING_DIMS}, is rejected like a malformed JSON vector.
+ */
+export function readEmbeddingBlob(cell: unknown): number[] | null {
+  const buffer =
+    cell instanceof ArrayBuffer
+      ? cell
+      : ArrayBuffer.isView(cell)
+        ? cell.buffer.slice(cell.byteOffset, cell.byteOffset + cell.byteLength)
+        : null;
+
+  if (!buffer || buffer.byteLength !== EMBEDDING_DIMS * Float32Array.BYTES_PER_ELEMENT) {
+    return null;
+  }
+
+  return Array.from(new Float32Array(buffer));
+}
+
+/**
+ * The SQL expression yielding a finding's rankable vector: the blob when it has one,
+ * else the JSON parsed on the fly — the zero-downtime read contract while
+ * `embedding_json` remains the source of truth (a row embedded by the previous
+ * Worker between the deploy's backfill and its cutover has no blob yet).
+ *
+ * THE GUARD IS NOT OPTIONAL. `vector32()` THROWS on anything it cannot read — a NULL,
+ * a malformed string, a wrong-width array, an array of strings — and one bad row would
+ * take down the whole query, where the old JS path merely skipped it (`parseEmbedding`
+ * → null). So the JSON arm is admitted only when it is valid JSON, of exactly
+ * {@link EMBEDDING_DIMS} elements, every one of them a number. `CASE` short-circuits,
+ * so a backfilled row (the steady state) never pays for any of that.
+ *
+ * `alias` is the table alias the columns hang off — a fixed literal at every call
+ * site, never user input.
+ */
+export function embeddingVectorSql(alias = "tracks"): string {
+  return `case
+    when ${alias}.embedding_blob is not null then ${alias}.embedding_blob
+    when ${alias}.embedding_json is not null
+         and json_valid(${alias}.embedding_json)
+         and json_array_length(${alias}.embedding_json) = ${EMBEDDING_DIMS}
+         and not exists (
+           select 1 from json_each(${alias}.embedding_json) je
+           where je.type not in ('integer', 'real')
+         )
+      then vector32(${alias}.embedding_json)
+  end`;
+}
+
+/**
+ * Cosine SIMILARITY from libSQL's cosine DISTANCE (`vector_distance_cos` returns
+ * `1 − cos`), so a SQL-ranked row lands on the same scale as {@link cosineSimilarity}.
+ * A non-numeric cell (no vector) is `null`.
+ */
+export function cosineFromDistance(distance: unknown): number | null {
+  return typeof distance === "number" && Number.isFinite(distance) ? 1 - distance : null;
 }

@@ -14,12 +14,7 @@ import { type FeedItem, type MixtapeMember, rowToMixtape } from "../mixtapes";
 import { parseArtistsJson } from "./artists";
 import { getDb, typedRow, typedRows } from "./db";
 import { discogsReleaseUrl } from "./discogs";
-import {
-  cosineSimilarity,
-  type EmbeddingCandidate,
-  parseEmbedding,
-  rankBySimilarity,
-} from "./embedding";
+import { cosineFromDistance, embeddingVectorSql, parseEmbedding, toVectorProbe } from "./embedding";
 import {
   type MixCandidate,
   orderMixPath,
@@ -780,25 +775,37 @@ export async function getTrackNeighbors(track: {
 // per-finding neighbourhood. The vibe columns themselves are dropped — nothing read or
 // wrote them, and the stale coordinates were still leaking into the observe/note prompts.
 
-type EmbeddingRow = {
-  embedding_json: string;
-  track_id: string;
-};
-
 /**
  * The N sonically-nearest findings to a given one — the automatic "more like this"
- * cluster (docs/track-lifecycle.md). Loads the target's MuQ embedding,
- * cosine-ranks it against every OTHER coordinate-bearing finding's embedding, and
- * hydrates the winners in similarity order. Powers the `/log` "more like this" row and
- * the public `get_similar_findings` op; a future "play something like this" radio hook
- * reads the same function.
+ * cluster (docs/track-lifecycle.md). Loads the target's MuQ embedding, has the DATABASE
+ * cosine-rank it against every OTHER coordinate-bearing finding's vector, and hydrates
+ * the winners in similarity order. Powers the `/log` "more like this" row and the public
+ * `get_similar_findings` op; a future "play something like this" radio hook reads the
+ * same function.
  *
- * Returns `[]` (never throws) when the finding is unknown, has no embedding yet
- * (`embedding_json IS NULL` — the embed cron hasn't drained it), or nothing else is
- * embedded. Brute-force cosine over the whole embedded set is instant at the
- * catalogue's scale (dozens → low thousands); libSQL `vector_top_k` is the escape
- * hatch past ~10k. Only coordinate-bearing candidates (`log_id IS NOT NULL`) are
- * considered — every result links to a `/log` page — and the target is excluded.
+ * THE RANKING IS AN EXACT SCAN IN SQL — `order by vector_distance_cos(vector, ?) limit N`
+ * with the probe bound as a RAW BLOB (`toVectorProbe`; see embedding.ts for why the
+ * binding is the whole ballgame). It returns the ~6 winners, never the corpus: 100%
+ * recall, one round trip, ~2.5 KB. The old shape — every `embedding_json` into the
+ * isolate, cosine there — hard-failed `turso dev`'s 10 MiB response cap at 460 embedded
+ * findings and was on course to OOM the 128 MB Worker isolate in prod (docs/rfcs/
+ * turso-scale-spike.md). No ANN index: `libsql_vector_idx` wedged hosted Turso's write
+ * path in the spike and is not to be used.
+ *
+ * Returns `[]` (never throws) when the finding is unknown, has no embedding yet (the
+ * embed cron hasn't drained it), or nothing else is embedded. A malformed stored vector
+ * is skipped, not fatal (`embeddingVectorSql`'s guard). Only coordinate-bearing
+ * candidates (`log_id IS NOT NULL`) are considered — every result links to a `/log`
+ * page — and the target is excluded.
+ *
+ * Ordering is deterministic: distance ascending, `track_id` ascending as the tiebreak.
+ *
+ * SCALE NOTE. The scan is unfiltered by design — "close in sound" is a GLOBAL nearest-
+ * neighbour question, and the archive is one corpus. That costs ~1.9 s at 100k on
+ * hosted (linear in N: 175 ms at 10k). The lever, when the archive gets there, is a
+ * btree pre-filter before the scan — `where galaxy_id = ?` takes it to 274 ms — but it
+ * would confine the row to the finding's own galaxy, which CHANGES what comes back. That
+ * is a product call, not a performance one, and it is not made here.
  */
 export async function getSimilarFindings(idOrLogId: string, limit = 6): Promise<TrackListItem[]> {
   if (limit <= 0) {
@@ -824,23 +831,27 @@ export async function getSimilarFindings(idOrLogId: string, limit = 6): Promise<
     return [];
   }
 
-  const candidateResult = await db.execute({
-    args: [targetRow.track_id],
-    sql: `select track_id, embedding_json from tracks
-          where log_id is not null and embedding_json is not null and track_id != ?`,
+  // The probe rides as raw f32 bytes, NOT as a JSON string — a 14x cliff on hosted that
+  // does not reproduce locally (embedding.ts, `toVectorProbe`).
+  const probe = toVectorProbe(target);
+  // Args bind in SQL-TEXT order, and the probe's `?` is written before the subquery's:
+  // probe, then the excluded target, then the limit. `where vec is not null` filters the
+  // un-embedded/malformed rows BEFORE `vector_distance_cos` ever sees them (it throws on
+  // a NULL rather than returning one).
+  const rankedResult = await db.execute({
+    args: [probe, targetRow.track_id, limit],
+    sql: `select track_id, vector_distance_cos(vec, ?) as dist
+          from (
+            select tracks.track_id as track_id, ${embeddingVectorSql()} as vec
+            from tracks
+            where tracks.log_id is not null and tracks.track_id != ?
+          )
+          where vec is not null
+          order by dist asc, track_id asc
+          limit ?`,
   });
 
-  const candidates: EmbeddingCandidate<string>[] = [];
-
-  for (const row of typedRows<EmbeddingRow>(candidateResult.rows)) {
-    const embedding = parseEmbedding(row.embedding_json);
-
-    if (embedding) {
-      candidates.push({ embedding, item: row.track_id });
-    }
-  }
-
-  const topIds = rankBySimilarity(target, candidates, limit);
+  const topIds = typedRows<{ track_id: string }>(rankedResult.rows).map((row) => row.track_id);
 
   if (topIds.length === 0) {
     return [];
@@ -866,14 +877,38 @@ type MixRow = {
   track_id: string;
 };
 
+// A `/mix` CANDIDATE row. The vector itself never crosses the wire: the database
+// reports only whether the finding HAS one (`has_embedding`, feeding the coverage gate)
+// and its cosine DISTANCE to the target (`sonic_dist` — null when either side has no
+// vector), which `cosineFromDistance` turns back into the cosine the engine scores.
+type MixCandidateRow = Omit<MixRow, "embedding_json"> & {
+  has_embedding: number | null;
+  sonic_dist: number | null;
+};
+
 /**
  * The findings that mix cleanly OUT of the given one, ranked by the mixability engine
  * (`mixability.ts`) — Product A's rail behind `/mix` and the public
- * `list_mixable_tracks` op. Same shape as `getSimilarFindings`: one candidate scan
- * over `log_id IS NOT NULL` rows, self excluded, then the pure core scores + orders +
- * breaks plateaus by the texture tiebreak. The sonic MuQ term is gated on archive-wide
- * embedded-pair coverage (`sonicGateOpen`) — dormant at launch, activating with no code
- * change when the embed cron gets there.
+ * `list_mixable_tracks` op. One candidate scan over `log_id IS NOT NULL` rows, self
+ * excluded, then the pure core scores + orders + breaks plateaus by the texture
+ * tiebreak. The sonic MuQ term is gated on archive-wide embedded-pair coverage
+ * (`sonicGateOpen`).
+ *
+ * THE VECTORS STAY IN THE DATABASE. The candidate scan used to select every row's
+ * `embedding_json` — 21 KB per candidate — and cosine them in the isolate, the same
+ * dead shape `getSimilarFindings` carried (it hit `turso dev`'s 10 MiB cap at ~460
+ * embedded findings; docs/rfcs/turso-scale-spike.md). Now the SQL computes the cosine
+ * to the target with `vector_distance_cos` (probe bound as a RAW BLOB — embedding.ts,
+ * `toVectorProbe`) and each candidate row carries back a single number. The score is
+ * unchanged: the same cosine goes into the same calibration.
+ *
+ * The scan itself is still every coordinate-bearing row, because the engine RANKS
+ * rather than filters — a distant-key, out-of-band candidate still scores, and still
+ * surfaces when the archive is too sparse to offer better. Narrowing the scan with a
+ * camelot/BPM pre-filter (207 ms at 100k) would drop such candidates and CHANGE the
+ * rail's results; that is a scoring decision for the engine's owner, not a performance
+ * fix, and it is not made here. Without the vectors the rows are ~250 B, so the scan
+ * is now bounded by the archive's small columns rather than by 21 KB vectors.
  *
  * `excludeLogIds` drops the already-chained findings SERVER-SIDE so a deep chain in a
  * small archive can't silently empty the rail. Each result carries its `reason` chip
@@ -902,25 +937,46 @@ export async function getMixableTracks(
     return [];
   }
 
+  // The target's vector becomes the probe. When it has none, every pair's sonic term is
+  // null anyway (the old code reached the same place through `sonicSubScore(null, …)`),
+  // so the scan skips the distance work entirely.
+  const targetEmbedding = parseEmbedding(targetRow.embedding_json);
+  const probe = targetEmbedding ? toVectorProbe(targetEmbedding) : null;
+
   const exclude = [...new Set((options.excludeLogIds ?? []).filter((id) => id.trim()))];
   const excludeClause =
     exclude.length > 0 ? `and log_id not in (${exclude.map(() => "?").join(", ")})` : "";
+  // Args bind in SQL-TEXT order: the probe's `?` (when there is one) precedes the
+  // excluded target and the excluded Log IDs.
+  const distanceSql = probe ? `vector_distance_cos(vec, ?)` : `null`;
   const candidateResult = await db.execute({
-    args: [targetRow.track_id, ...exclude],
-    sql: `select track_id, log_id, key, bpm, embedding_json, features_json from tracks
-          where log_id is not null and track_id != ? ${excludeClause}`,
+    args: probe ? [probe, targetRow.track_id, ...exclude] : [targetRow.track_id, ...exclude],
+    sql: `select track_id, log_id, key, bpm, features_json, has_embedding,
+                 case when vec is null then null else ${distanceSql} end as sonic_dist
+          from (
+            select tracks.track_id as track_id, tracks.log_id as log_id, tracks.key as key,
+                   tracks.bpm as bpm, tracks.features_json as features_json,
+                   (tracks.embedding_blob is not null or tracks.embedding_json is not null)
+                     as has_embedding,
+                   ${embeddingVectorSql()} as vec
+            from tracks
+            where tracks.log_id is not null and tracks.track_id != ? ${excludeClause}
+          )`,
   });
 
-  const candidateRows = typedRows<MixRow>(candidateResult.rows);
+  const candidateRows = typedRows<MixCandidateRow>(candidateResult.rows);
   const candidates: MixCandidate<string>[] = candidateRows.map((row) => ({
     item: row.track_id,
-    track: toMixTrack(row),
+    // The database already answered the sonic question for this pair; `null` here means
+    // "no comparable vector", exactly as a null embedding meant before.
+    sonicCos: probe ? cosineFromDistance(row.sonic_dist) : null,
+    track: toMixTrack({ ...row, embedding_json: null }),
   }));
 
   // The sonic-term gate is a global archive property: count the embedded findings in
   // play (candidates + the target when embedded) and open the gate only past the floor.
   const embeddedCount =
-    candidateRows.filter((row) => row.embedding_json !== null).length +
+    candidateRows.filter((row) => Boolean(row.has_embedding)).length +
     (targetRow.embedding_json !== null ? 1 : 0);
   const gateOpen = sonicGateOpen(embeddedCount);
 
@@ -1040,13 +1096,17 @@ export class MixableOrderError extends Error {}
 
 /**
  * The findings in one sonic galaxy, ordered by centroid-distance ASCENDING — the core
- * of the galaxy first (browse-by-feel RFC). Cosine-ranks every member's MuQ embedding
- * against the galaxy's stored centroid (higher similarity = nearer the core), then
- * hydrates the requested page in that deterministic order (the order a future radio
- * consumer needs). A member with no embedding (shouldn't happen — assignment requires
- * one) sorts last. Backs the public `get_galaxy` op + the `/galaxies/<slug>` lens.
- * Returns `[]` when the galaxy has no members. The caller (`galaxies-map.ts`)
- * public-strips the items.
+ * of the galaxy first (browse-by-feel RFC). The DATABASE cosine-ranks every member's
+ * MuQ vector against the galaxy's stored centroid and returns just the requested page,
+ * in that deterministic order (the order a future radio consumer needs). Backs the
+ * public `get_galaxy` op + the `/galaxies/<slug>` lens. Returns `[]` when the galaxy has
+ * no members. The caller (`galaxies-map.ts`) public-strips the items.
+ *
+ * This is the spike's PRE-FILTERED shape, and the cheapest of the three: the `galaxy_id`
+ * btree narrows the scan to one cluster's members before a single vector is touched
+ * (274 ms at 100k on hosted, against ~1.9 s unfiltered). Paging happens in SQL, so the
+ * isolate never holds more than a page. A member with no readable vector (shouldn't
+ * happen — assignment requires one) sorts LAST, as it did when it scored −Infinity.
  */
 export async function getFindingsByGalaxyRanked(
   galaxyId: string,
@@ -1059,25 +1119,24 @@ export async function getFindingsByGalaxyRanked(
   }
 
   const db = await getDb();
-  const memberResult = await db.execute({
-    args: [galaxyId],
-    sql: `select track_id, embedding_json from tracks
-          where galaxy_id = ? and log_id is not null`,
+  // Args in SQL-TEXT order: the subquery's galaxy id is written before the ORDER BY's
+  // probe, so it binds first. The `case` around the distance is what keeps
+  // `vector_distance_cos` from ever seeing a NULL (it throws on one).
+  const probe = toVectorProbe(centroid);
+  const pageResult = await db.execute({
+    args: [galaxyId, probe, limit, offset],
+    sql: `select track_id from (
+            select tracks.track_id as track_id, ${embeddingVectorSql()} as vec
+            from tracks
+            where tracks.galaxy_id = ? and tracks.log_id is not null
+          )
+          order by (vec is null) asc,
+                   case when vec is not null then vector_distance_cos(vec, ?) end asc,
+                   track_id asc
+          limit ? offset ?`,
   });
 
-  const scored = typedRows<{ embedding_json: string | null; track_id: string }>(memberResult.rows)
-    .map((row) => {
-      const embedding = parseEmbedding(row.embedding_json);
-
-      return {
-        // A member with no embedding sorts last (−Infinity), never crashing the order.
-        score: embedding ? cosineSimilarity(centroid, embedding) : Number.NEGATIVE_INFINITY,
-        trackId: row.track_id,
-      };
-    })
-    .sort((a, b) => b.score - a.score);
-
-  const pageIds = scored.slice(offset, offset + limit).map((entry) => entry.trackId);
+  const pageIds = typedRows<{ track_id: string }>(pageResult.rows).map((row) => row.track_id);
 
   if (pageIds.length === 0) {
     return [];
