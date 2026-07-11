@@ -58,6 +58,19 @@ const TEXT_SHADOW = {
   textShadowRadius: 10,
 } as const;
 
+// OPERATOR RULING 2026-07-11 (device pass): the firm TEXT_SHADOW above is right for the
+// thin text strokes (caption + rail labels), but on an Ionicons/MaterialCommunityIcons
+// glyph — a large, solid, font-rendered shape — a radius-10, 0.92-alpha shadow smears
+// into a dark blotchy backdrop behind every icon, very visible on light footage. Icons
+// carry a far tighter halo instead: a small radius at low alpha, enough to hold the
+// glyph's edge against a light cover without reading as a pane. The labels underneath
+// keep the firm shadow and do the real legibility work.
+const ICON_SHADOW = {
+  textShadowColor: "rgba(9, 6, 3, 0.55)",
+  textShadowOffset: { height: 1, width: 0 },
+  textShadowRadius: 3,
+} as const;
+
 type Props = {
   finding: TrackListItem;
   active: boolean;
@@ -78,6 +91,11 @@ export const FeedCard = memo(function FeedCard({ finding, active, soundOn, onTog
   // floating tab bar (H3 — the caption/date and the bottom rail control used to hide
   // under it).
   const bottomFloor = insets.bottom + NATIVE_TAB_BAR_HEIGHT;
+  // INVARIANT: the rail and the caption share a bottom line. Both bottom overlays anchor
+  // their bottom edge here (tab-bar floor + a little tightened air), so the rail's last
+  // label ("Sound") bottom-aligns with the caption's last line (the coordinate + Found
+  // row) — one line, not two staggered ones (operator device pass).
+  const bottomLine = bottomFloor + 10;
   // Stabilize the resolved media so effects can depend on the object itself (not
   // computed `media.kind`/`media.previewUrl` member reads) and only re-run when the
   // finding actually changes.
@@ -217,9 +235,12 @@ export const FeedCard = memo(function FeedCard({ finding, active, soundOn, onTog
           footage). The footage stays unveiled; per-glyph shadows carry legibility. */}
 
       {/* Right action rail (TikTok-style). Each control keeps ONE stable label (the
-          Chrome Rule); the icon + the gold tint carry state, never the word. Icons stay
-          legible via a drop shadow; gold marks the active state (Ignition). */}
-      <View style={[styles.rail, { bottom: bottomFloor + 28 }]}>
+          Chrome Rule); the icon + the gold tint carry state, never the word. Every glyph
+          renders inside a fixed 36×36 centered box (styles.railIcon) so all four advance
+          boxes center on the rail axis identically, regardless of the glyph's internal
+          artwork — no per-glyph nudges. Icons carry the tight ICON_SHADOW halo; gold
+          marks the active state (Ignition). */}
+      <View style={[styles.rail, { bottom: bottomLine }]}>
         {observationUrl ? (
           <RailAction
             accessibilityLabel={observationControl.accessibilityLabel}
@@ -229,7 +250,7 @@ export const FeedCard = memo(function FeedCard({ finding, active, soundOn, onTog
                 name={observing ? "headset" : "headset-outline"}
                 size={28}
                 color={observing ? color.eclipseGold : color.starlightCream}
-                style={[styles.icon, styles.observationNudge]}
+                style={styles.icon}
               />
             }
             label={observationControl.label}
@@ -242,7 +263,7 @@ export const FeedCard = memo(function FeedCard({ finding, active, soundOn, onTog
               name="spotify"
               size={30}
               color={color.starlightCream}
-              style={[styles.icon, styles.spotifyNudge]}
+              style={styles.icon}
             />
           }
           label="Spotify"
@@ -281,7 +302,7 @@ export const FeedCard = memo(function FeedCard({ finding, active, soundOn, onTog
           — artist + title first); the gold coordinate sits below it at reduced prominence,
           still the identity mark but no longer out-shouting. Every glyph carries the firm
           per-glyph shadow (no scrim pane) so it reads on light footage. */}
-      <View style={{ bottom: bottomFloor + 10, gap: 8, left: 16, position: "absolute", right: 96 }}>
+      <View style={{ bottom: bottomLine, gap: 8, left: 16, position: "absolute", right: 96 }}>
         <Text
           style={[font.title, styles.captionShadow, { color: color.starlightCream }]}
           numberOfLines={2}
@@ -348,17 +369,16 @@ const styles = StyleSheet.create({
   captionMeta: { alignItems: "baseline", flexDirection: "row", gap: 8 },
   // The firm per-glyph shadow that replaces the scrim pane (operator ruling): with no
   // gradient behind it, every caption glyph carries this warm-dark halo so it reads on
-  // light footage. The rail icons + labels share it too.
+  // light footage. The rail labels share it; the rail icons use the tighter ICON_SHADOW
+  // (the firm one smeared into a dark blotch behind the solid glyphs — device pass).
   captionShadow: TEXT_SHADOW,
-  icon: TEXT_SHADOW,
+  // Rail glyphs: the tight halo, not the firm text shadow (see ICON_SHADOW). Every icon
+  // renders inside the fixed 36×36 `railIcon` box, so its advance box centers on the rail
+  // axis on its own — no per-glyph translateX estimates. If a glyph whose artwork is
+  // optically off-center (the headset's mic boom) still reads off after true container
+  // centering, the operator judges it on-device rather than re-introducing a nudge.
+  icon: ICON_SHADOW,
   logId: { color: color.eclipseGold, fontSize: 13 },
-  // The four rail items already share one wrapper (RailAction + the 36×36 centered
-  // `railIcon`), so this is not a structural leftover — it's the glyph itself. The
-  // Ionicons headset advance box centers, but the mic boom hanging off the left earcup
-  // pulls the visible artwork's centroid left of the rail axis (the same optical drift
-  // spotify corrects below). Nudge it back onto the axis. Magnitude is an optical
-  // estimate; the operator fine-tunes the sign/amount in-sim after merge.
-  observationNudge: { transform: [{ translateX: 2 }] },
   rail: { alignItems: "center", gap: 16, position: "absolute", right: 6 },
   railIcon: { alignItems: "center", height: 36, justifyContent: "center", width: 36 },
   // Wide enough for the longest stable label ("Observation") on one line.
@@ -371,7 +391,4 @@ const styles = StyleSheet.create({
   },
   railLabelActive: { color: color.eclipseGold },
   railPressed: { opacity: 0.6 },
-  // The spotify brand mark's three waves sit optically left of the circle's true
-  // center (true of the glyph in any icon font), so nudge it onto the rail axis.
-  spotifyNudge: { transform: [{ translateX: 4 }] },
 });
