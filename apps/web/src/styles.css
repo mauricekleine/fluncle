@@ -4177,7 +4177,7 @@ body::before {
   max-width: 26ch;
 }
 
-/* Mobile: the three columns stack two-up rather than squeezing to a 3-wide crush. */
+/* Mobile: the four columns stack two-up rather than squeezing to a 4-wide crush. */
 .nav-footer-cols {
   display: grid;
   gap: 1.5rem;
@@ -4186,7 +4186,7 @@ body::before {
 
 @media (min-width: 560px) {
   .nav-footer-cols {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 }
 
