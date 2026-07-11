@@ -117,6 +117,12 @@ const envKeys = [
   // distil model; absent, it defaults to `anthropic/claude-haiku-4.5`.
   "OPENROUTER_API_KEY",
   "OPENROUTER_CONTEXT_MODEL",
+  // The same key drives search's fourth tier — the model that turns a natural-language query
+  // into a filter object (lib/server/search-llm.ts). OPENROUTER_SEARCH_MODEL is the OPTIONAL,
+  // non-secret override for THAT model (default `anthropic/claude-haiku-4.5`), kept separate
+  // from the distil's so the two can be tuned independently: one is a summariser, the other a
+  // parser. Unprovisioned, search degrades to full text and keeps working.
+  "OPENROUTER_SEARCH_MODEL",
 ] as const;
 
 export type EnvKey = (typeof envKeys)[number];

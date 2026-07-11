@@ -3746,6 +3746,305 @@ body::before {
   width: 0.8em;
 }
 
+/* ── Search: the trigger in the bar ────────────────────────────────────────── */
+/* The only control in the colophon top bar, and it earns its place by asking for almost
+   nothing: a glyph, a word, and the shortcut it answers to. Banked to the far end (margin-
+   left: auto) so it sits on the opposite side from the trail and competes with nothing. It
+   is a quiet control, so it heats like one — the Gold Veil on hover, the Ignition Rule's
+   "a control never dims when you reach for it". */
+.search-trigger {
+  align-items: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md, 0.5rem);
+  color: var(--muted-foreground);
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 0.82rem;
+  font-weight: 600;
+  gap: 0.4rem;
+  margin-left: auto;
+  padding: 0.3rem 0.5rem;
+  transition:
+    color 150ms ease-out,
+    background-color 150ms ease-out,
+    border-color 150ms ease-out;
+  white-space: nowrap;
+}
+
+.search-trigger:hover,
+.search-trigger:focus-visible {
+  background: var(--gold-veil);
+  border-color: color-mix(in oklch, var(--eclipse-gold) 30%, transparent);
+  color: var(--eclipse-glow);
+}
+
+.search-trigger-icon {
+  flex: none;
+  height: 1rem;
+  width: 1rem;
+}
+
+/* The word is a courtesy on a wide screen and noise on a narrow one; the glyph carries the
+   affordance on its own, and the button keeps its accessible name either way. */
+.search-trigger-label {
+  display: none;
+}
+
+/* The shortcut hint. A hint, not a control: it never gets its own contrast budget, and it
+   disappears entirely where the shortcut is unlikely to exist (a touch screen). */
+.search-trigger-kbd {
+  border: 1px solid var(--dust-line);
+  border-radius: 0.3rem;
+  color: color-mix(in oklch, var(--muted-foreground) 80%, transparent);
+  display: none;
+  font-family: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+  font-size: 0.68rem;
+  font-weight: 600;
+  padding: 0.05rem 0.3rem;
+}
+
+@media (min-width: 40rem) {
+  .search-trigger-label {
+    display: inline;
+  }
+}
+
+@media (min-width: 40rem) and (pointer: fine) {
+  .search-trigger-kbd {
+    display: inline;
+  }
+}
+
+/* ── Search: the dialog ────────────────────────────────────────────────────── */
+.search-dialog {
+  max-width: 34rem;
+}
+
+/* The four example queries — the empty state, and the whole tutorial. Pills, because a pill
+   reads as "press me" without shouting, and because four of them fit a line and a half
+   without becoming a menu. */
+.search-examples {
+  border-bottom: 1px solid var(--dust-line);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  padding: 0.75rem;
+}
+
+.search-example {
+  align-items: center;
+  background: color-mix(in oklch, var(--dust-veil) 60%, transparent);
+  border: 1px solid var(--dust-line);
+  border-radius: 999px;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 0.78rem;
+  font-weight: 600;
+  gap: 0.35rem;
+  padding: 0.28rem 0.6rem;
+  transition:
+    color 150ms ease-out,
+    background-color 150ms ease-out,
+    border-color 150ms ease-out;
+}
+
+.search-example:hover,
+.search-example:focus-visible {
+  background: var(--gold-veil);
+  border-color: color-mix(in oklch, var(--eclipse-gold) 35%, transparent);
+  color: var(--eclipse-glow);
+}
+
+.search-example-icon {
+  flex: none;
+  height: 0.85rem;
+  width: 0.85rem;
+}
+
+/* A quiet line above the results: what the sonic tier anchored on, or the admission that the
+   language tier could not run. Never an alert, never a colour — this is a caption. */
+.search-note {
+  align-items: center;
+  border-bottom: 1px solid var(--dust-line);
+  color: var(--muted-foreground);
+  display: flex;
+  font-size: 0.78rem;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0.55rem 0.75rem;
+}
+
+.search-note strong {
+  color: var(--starlight-cream);
+  font-weight: 700;
+}
+
+.search-note--degraded {
+  color: color-mix(in oklch, var(--muted-foreground) 85%, transparent);
+  font-style: italic;
+}
+
+.search-note-icon {
+  flex: none;
+  height: 0.9rem;
+  width: 0.9rem;
+}
+
+/* What the model understood, echoed back. Dust, never gold: a filter is a reading of the
+   query, not a finding. */
+.search-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  padding: 0.5rem 0.75rem;
+}
+
+.search-chip {
+  background: var(--dust-veil);
+  border: 1px solid var(--dust-line);
+  border-radius: 0.35rem;
+  color: var(--muted-foreground);
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 0.12rem 0.4rem;
+}
+
+/* ── Search: a row, and THE UNLIT RULE ─────────────────────────────────────── */
+/* A finding is LIT. Eclipse Gold is the certification light, so a certified row heats to the
+   Gold Veil on hover and carries its coordinate in Oxanium — the brand's numeral face, and
+   the one place a number is allowed to look like a coordinate. */
+.search-row {
+  align-items: center;
+  display: flex;
+  gap: 0.65rem;
+  padding: 0.45rem 0.5rem;
+}
+
+.search-cover {
+  border: 1px solid var(--dust-line);
+  border-radius: 0.25rem;
+  flex: none;
+  height: 2.25rem;
+  object-fit: cover;
+  width: 2.25rem;
+}
+
+.search-cover--empty {
+  background: var(--dust-veil);
+  display: block;
+}
+
+.search-row-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.search-row-title {
+  color: var(--starlight-cream);
+  font-size: 0.88rem;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.search-row-artists {
+  color: var(--muted-foreground);
+  font-size: 0.76rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The trailing slot — whatever the row's register puts there. */
+.search-row-tail {
+  align-items: center;
+  display: flex;
+  flex: none;
+  letter-spacing: normal;
+}
+
+/* The coordinate. Oxanium (DESIGN.md §3: brand marks and numerals), tabular, and gold —
+   because it IS the certification. */
+.search-row-coordinate {
+  color: var(--eclipse-gold);
+  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+/* A certified row heats — the Gold Veil, the Ignition Rule. Selection and hover are the same
+   state here, because a Command list is driven by the keyboard as often as the mouse. */
+.search-row[data-selected="true"]:not(.search-row--unlit),
+.search-row:hover:not(.search-row--unlit) {
+  background: var(--gold-veil);
+}
+
+.search-row[data-selected="true"]:not(.search-row--unlit) .search-row-title,
+.search-row:hover:not(.search-row--unlit) .search-row-title {
+  color: var(--eclipse-glow);
+}
+
+/* The arrow on an artist row — this row LEAVES the dialog for a page, where a track row
+   opens a finding. Gold, because an artist page is Fluncle's own. */
+.search-jump-icon {
+  color: var(--eclipse-gold);
+  flex: none;
+  height: 1rem;
+  width: 1rem;
+}
+
+/* THE UNLIT RULE (DESIGN.md). A row Fluncle never certified is never lit by the certification
+   light: no gold coordinate, no Gold Veil hover, no gold heat. It catches the DUST VEIL
+   instead — the cold light of a thing seen from a distance — and it links OUT, because it has
+   no coordinate to link to. It carries no label and no badge: the register IS the statement,
+   and the tier is never given a noun.
+
+   The ONE exception is the focus ring, which stays Eclipse Gold on every row: focus is an
+   accessibility affordance, not a claim about the music. The ring is the Command primitive's
+   own, so nothing here touches it. */
+.search-row--unlit .search-row-title {
+  color: var(--stardust);
+  font-weight: 500;
+}
+
+.search-row--unlit .search-cover {
+  filter: saturate(0.55) brightness(0.8);
+  opacity: 0.75;
+}
+
+.search-row--unlit[data-selected="true"],
+.search-row--unlit:hover {
+  background: var(--dust-veil);
+}
+
+.search-row--unlit[data-selected="true"] .search-row-title,
+.search-row--unlit:hover .search-row-title {
+  color: var(--starlight-cream);
+}
+
+/* The way out. A Spotify mark, because that is genuinely where the row goes — there is no
+   /log page for a track Fluncle has not been to. */
+.search-row-out {
+  color: var(--muted-foreground);
+  flex: none;
+  height: 1rem;
+  width: 1rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .search-trigger,
+  .search-example {
+    transition: none;
+  }
+}
+
 /* ── The colophon (the crawl backbone) ─────────────────────────────────────── */
 /* A DARKER ground than the page plate: at the page's own value it read as more page
    rather than as a distinct object. This is the sleeve the liner notes print on. */
