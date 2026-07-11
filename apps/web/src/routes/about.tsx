@@ -69,7 +69,7 @@ const faq: Array<{ answer: string; question: string }> = [
   },
   {
     answer:
-      "I measure them myself, I don't copy them from anywhere. The analysis runs on the captured full song, start to finish, not a thirty-second preview that's often nothing but intro. It reads the tempo and the key straight off that audio. When it can't be sure of a key, it leaves that blank rather than guess at one. And any tune I've beat-gridded in Rekordbox myself, my own reading outranks the machine's.",
+      "I measure them myself, I don't copy them from anywhere. The machine listens to the full song I brought back, start to finish, not a thirty-second preview that's often nothing but intro, and reads the tempo and the key straight off that audio. When it can't be sure of a key, it leaves that blank rather than guess at one. And any tune I've beat-gridded in Rekordbox myself, my own reading outranks the machine's.",
     question: "How does Fluncle measure BPM and key?",
   },
 ];
@@ -77,9 +77,10 @@ const faq: Array<{ answer: string; question: string }> = [
 /**
  * A crew-question's stable anchor slug, so each FAQ entry is deep-linkable. The /log
  * page's measured BPM/key line links to the measurement question by this slug
- * (log.$logId.tsx keeps the same string). Deterministic from the question text.
+ * (log.$logId.tsx keeps the same string; the contract is pinned by a test in
+ * -about-schema.test.ts). Deterministic from the question text. Exported for that test.
  */
-function faqAnchor(question: string): string {
+export function faqAnchor(question: string): string {
   return question
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
