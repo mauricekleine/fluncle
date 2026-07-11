@@ -137,6 +137,10 @@ export function createRenderer(container: HTMLElement): Renderer {
   const ctx = maybeCtx;
 
   ctx.imageSmoothingEnabled = false;
+  // Pin the baseline. It is sticky canvas state, and the old code set "top" in one
+  // draw and let every following draw inherit it — which is why converting one call
+  // site silently moved the one below it.
+  ctx.textBaseline = "alphabetic";
 
   const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   const shipSprite = makeShipSprite();
@@ -1582,7 +1586,7 @@ export function createRenderer(container: HTMLElement): Renderer {
     ctx.textAlign = "left";
     ctx.font = '7px "Oxanium", "Space Grotesk", ui-sans-serif, system-ui, sans-serif';
     ctx.fillStyle = palette.creamMuted;
-    ctx.fillText(atlasCaption(stars), 8, height - 12);
+    fillTextFromCapTop(atlasCaption(stars), 8, height - 12);
 
     const blink = reducedMotion ? 1 : 0.5 + 0.5 * Math.sin(view.nowS * 3);
 
@@ -1590,7 +1594,7 @@ export function createRenderer(container: HTMLElement): Renderer {
     ctx.textAlign = "right";
     ctx.fillStyle = palette.goldBright;
     ctx.font = '7px "Oxanium", "Space Grotesk", ui-sans-serif, system-ui, sans-serif';
-    ctx.fillText("C to fly on", width - 8, height - 12);
+    fillTextFromCapTop("C to fly on", width - 8, height - 12);
     ctx.globalAlpha = 1;
     ctx.textAlign = "left";
   }
@@ -1683,7 +1687,7 @@ export function createRenderer(container: HTMLElement): Renderer {
     fillTextFromCapTop(coordinate, chipX + 6, chipY + 4);
     ctx.fillStyle = palette.cream;
     ctx.font = '8px "Space Grotesk", ui-sans-serif, system-ui, sans-serif';
-    ctx.fillText(clip(detail, chipWidth - 12), chipX + 6, chipY + 15);
+    fillTextFromCapTop(clip(detail, chipWidth - 12), chipX + 6, chipY + 15);
   }
 
   resize(container.clientWidth || window.innerWidth, container.clientHeight || window.innerHeight);
