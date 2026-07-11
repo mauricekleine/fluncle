@@ -7,6 +7,9 @@ import { Image } from "expo-image";
 import { useFinding } from "@/api/hooks";
 import { CosmosBackdrop } from "@/components/cosmos-backdrop";
 import { HeatButton } from "@/components/heat-button";
+import { SaveButton } from "@/components/save-button";
+import { type SavableFinding } from "@/lib/saved-store";
+import { useSavedFindings } from "@/lib/saved";
 import { color, font, radius } from "@/theme/tokens";
 
 // The finding screen + deep-link target (RFC Unit 3). Coordinates are uppercased
@@ -26,6 +29,26 @@ export default function LogScreen() {
   const router = useRouter();
   const { data: resolution, isLoading } = useFinding((id ?? "").toUpperCase());
   const finding = resolution?.kind === "finding" ? resolution.finding : undefined;
+
+  // Device-local saves (the ungated variant): the bookmark stores a snapshot of the
+  // finding so the Saved view renders it even if the archive later moves. Only a
+  // finding can be saved — a mixtape lives on the web, and a dead coordinate is nothing
+  // to hold onto.
+  const { isSaved, toggle } = useSavedFindings();
+  const savable: SavableFinding | undefined = finding
+    ? {
+        albumImageUrl: finding.albumImageUrl,
+        artists: finding.artists,
+        bpm: finding.bpm,
+        galaxyName: finding.galaxy?.name,
+        key: finding.key,
+        logId: finding.logId,
+        spotifyUrl: finding.spotifyUrl,
+        title: finding.title,
+        trackId: finding.trackId,
+      }
+    : undefined;
+  const saved = savable ? isSaved(savable) : false;
 
   // The archive row's meta idiom (finding-row.tsx): a quiet middot-joined line,
   // each segment present only when the finding carries it (key can be null — then
@@ -52,19 +75,29 @@ export default function LogScreen() {
     <View style={{ flex: 1 }}>
       <CosmosBackdrop />
       <SafeAreaView style={{ flex: 1 }}>
-        {/* One shared dismiss for all three branches (finding / mixtape / not-found):
-            a quiet right-aligned X — stardust at rest, no gold (a dismiss is not a sun).
-            Icon-only chrome carries the Chrome Rule's literal in its a11y label. The
-            padding + hitSlop lift the effective target past the 44pt floor. */}
-        <Pressable
-          accessibilityLabel="Close"
-          accessibilityRole="button"
-          hitSlop={{ bottom: 10, left: 10, right: 10, top: 10 }}
-          onPress={() => router.back()}
-          style={{ alignSelf: "flex-end", padding: 16 }}
+        {/* The top chrome: the save toggle on the left (only where there is a finding
+            to hold onto), the shared dismiss on the right. The X is a quiet stardust
+            X — no gold (a dismiss is not a sun); the bookmark is the one control here
+            that lights gold, when saved. Both carry their literal in an a11y label
+            (the Chrome Rule); padding + hitSlop lift each target past the 44pt floor. */}
+        <View
+          style={{
+            alignItems: "center",
+            flexDirection: "row",
+            justifyContent: savable ? "space-between" : "flex-end",
+          }}
         >
-          <Ionicons name="close" size={26} color={color.stardust} />
-        </Pressable>
+          {savable ? <SaveButton saved={saved} onPress={() => toggle(savable)} /> : null}
+          <Pressable
+            accessibilityLabel="Close"
+            accessibilityRole="button"
+            hitSlop={{ bottom: 10, left: 10, right: 10, top: 10 }}
+            onPress={() => router.back()}
+            style={{ padding: 16 }}
+          >
+            <Ionicons name="close" size={26} color={color.stardust} />
+          </Pressable>
+        </View>
         {finding ? (
           // The reachable bottom owns the one action (thumb-zone); the cover stays
           // the hero and the meta carries the middle (cover-led, One Sun).
