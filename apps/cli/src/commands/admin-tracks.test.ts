@@ -244,6 +244,21 @@ describe("mapTrack — faithful sourceAudioKey passthrough", () => {
 
     expect((mapped as TrackListItem).sourceAudioKey).toBeUndefined();
   });
+
+  test("preserves analyzedAt — the same whitelist-drop class that hid the analysis timestamp", () => {
+    // mapTrack's field whitelist carried analyzedFrom but forgot analyzedAt, so `admin tracks
+    // list --json` silently reported it as absent on EVERY row while the DB and the single-track
+    // GET carried the real value. The admin path must pass both provenance fields through.
+    const stamped: TrackListItem = {
+      ...finding("track_stamped", "006.1.1"),
+      analyzedAt: "2026-07-10T06:39:51.632Z",
+      analyzedFrom: "full",
+    };
+    const mapped = mapTrack(stamped);
+
+    expect((mapped as TrackListItem).analyzedAt).toBe("2026-07-10T06:39:51.632Z");
+    expect((mapped as TrackListItem).analyzedFrom).toBe("full");
+  });
 });
 
 describe("tracks list — --all paginates the full catalogue", () => {

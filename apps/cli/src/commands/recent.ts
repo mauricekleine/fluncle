@@ -23,8 +23,11 @@ export function mapTrack(track: RecentTrack | RecentMixtape): RecentItem {
     album: track.album,
     albumImageUrl: track.albumImageUrl,
     // Analysis provenance (RFC bpm-key-accuracy). Stripped from every PUBLIC read by
-    // `toPublicTrackListItem`, so on `/api/tracks` it arrives undefined; on the ADMIN path
-    // (`/api/admin/tracks`, e.g. the `requeue-analysis` sweep) it carries the real value.
+    // `toPublicTrackListItem`, so on `/api/tracks` these arrive undefined; on the ADMIN path
+    // (`/api/admin/tracks`, e.g. the `requeue-analysis` sweep) they carry the real value.
+    // `analyzedAt` is the analysis-write timestamp — the freshness companion to `analyzedFrom`;
+    // it must be copied here too or `admin tracks list --json` silently drops it.
+    analyzedAt: track.analyzedAt,
     analyzedFrom: track.analyzedFrom,
     artists: track.artists,
     bpm: track.bpm,
