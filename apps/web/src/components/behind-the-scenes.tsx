@@ -4,7 +4,6 @@ import { Button } from "@fluncle/ui/components/button";
 import {
   Sheet,
   SheetContent,
-  SheetDescription,
   SheetHeader,
   SheetTitle,
   SheetTrigger,
@@ -21,15 +20,13 @@ import { type Track } from "@/lib/tracks";
 
 // The reusable shell. Placement is the caller's job (a behind-the-scenes trigger
 // belongs in a different spot on every surface), so this carries no layout of its
-// own — just the trigger, the right-hand sheet, and the title/description idiom.
+// own — just the trigger, the right-hand sheet, and the title idiom.
 export function BehindTheScenes({
   children,
-  description,
   label,
   title,
 }: {
   children: ReactNode;
-  description?: string;
   label: string;
   title: string;
 }) {
@@ -43,14 +40,20 @@ export function BehindTheScenes({
         The slide honours prefers-reduced-motion (DESIGN "reduced-motion" rail) —
         the sheet still opens, it just stops sliding. Base-ui keeps focus trap +
         Escape + restore regardless.
+
+        Chrome, scoped to this usage (the shared generated sheet also serves admin
+        surfaces; aligning it globally is a separate follow-up): `shadow-none` drops
+        the generated `shadow-lg` (drop shadows are banned on the public surface —
+        DESIGN §4, Through-the-Glass) and the Dialog's `ring-1 ring-foreground/10`
+        edges it instead; `.behind-the-scenes-sheet` (styles.css) swaps the opaque
+        `bg-popover` for the log plate's glass recipe.
       */}
       <SheetContent
-        className="gap-0 overflow-y-auto motion-reduce:transition-none motion-reduce:duration-0"
+        className="behind-the-scenes-sheet gap-0 overflow-y-auto shadow-none ring-1 ring-foreground/10 motion-reduce:transition-none motion-reduce:duration-0"
         side="right"
       >
         <SheetHeader className="border-b border-border">
           <SheetTitle>{title}</SheetTitle>
-          {description ? <SheetDescription>{description}</SheetDescription> : undefined}
         </SheetHeader>
         {children}
       </SheetContent>
@@ -58,41 +61,44 @@ export function BehindTheScenes({
   );
 }
 
+// Grain-family words that carry their own casing — initialisms (VHS, IGN) and the
+// one proper noun (Bayer). Everything else reads lowercase.
+const GRAIN_WORD_CASING: Record<string, string> = {
+  bayer: "Bayer",
+  ign: "IGN",
+  vhs: "VHS",
+};
+
 // The grain family is stored as a camelCase token (e.g. "grainCoarseSilver"); the
-// drawer speaks plainly, so drop the "grain" prefix and space the words out.
-// (Exported for focused unit tests.)
+// drawer speaks plainly, so drop the "grain" prefix and space the words out,
+// keeping known initialisms in their own casing ("grainVhsScanline" → "VHS
+// scanline"). (Exported for focused unit tests.)
 export function humanizeGrain(grain: string): string {
   return grain
     .replace(/^grain/, "")
-    .replace(/([a-z])([A-Z])/g, "$1 $2")
-    .trim()
-    .toLowerCase();
+    .split(/(?<=[a-z])(?=[A-Z])|(?=[A-Z][a-z])/)
+    .filter(Boolean)
+    .map((word) => {
+      const lower = word.toLowerCase();
+
+      return GRAIN_WORD_CASING[lower] ?? lower;
+    })
+    .join(" ")
+    .trim();
 }
 
-// Known authoring models get a proper name; anything else degrades to the slug
-// after the provider prefix so a new model still reads cleanly, never "anthropic/…".
-const MODEL_NAMES: Record<string, string> = {
-  "anthropic/claude-opus-4-8": "Claude Opus 4.8",
-};
+// The machine telemetry line: the RAW stored model identifier plus the reasoning
+// effort it ran at, quoted verbatim and mono-set (One Voice Rule — mono speaks only
+// for the machine; prettifying this into a byline is what the voice review caught).
+// (Exported for focused unit tests.)
+export function modelTelemetry(track: Track): string | undefined {
+  if (!track.videoModel) {
+    return undefined;
+  }
 
-// (exported for focused unit tests)
-export function humanizeModel(model: string): string {
-  return MODEL_NAMES[model] ?? model.split("/").at(-1) ?? model;
-}
-
-// The authoring model's thinking effort — the dial it ran at, not a rationale.
-const EFFORT_LABELS: Record<string, string> = {
-  high: "high reasoning",
-  low: "low reasoning",
-  max: "max reasoning",
-  medium: "medium reasoning",
-  xhigh: "extra-high reasoning",
-};
-
-// (exported for focused unit tests) Maps a stored effort level to its label, falling
-// back to "<value> reasoning" so an unknown dial still reads cleanly.
-export function effortLabel(effort: string): string {
-  return EFFORT_LABELS[effort] ?? `${effort} reasoning`;
+  return track.videoModelReasoning
+    ? `${track.videoModel} · effort ${track.videoModelReasoning}`
+    : track.videoModel;
 }
 
 /**
@@ -114,53 +120,50 @@ export function VideoBehindTheScenes({ track }: { track: Track }) {
 
   const posterUrl = track.logId ? trackMedia(track.logId).posterUrl : undefined;
   const grain = track.videoGrain ? humanizeGrain(track.videoGrain) : undefined;
-  const model = track.videoModel ? humanizeModel(track.videoModel) : undefined;
-  const effort = track.videoModelReasoning ? effortLabel(track.videoModelReasoning) : undefined;
+  const telemetry = modelTelemetry(track);
 
   return (
     <div className="log-behind-scenes">
-      <BehindTheScenes
-        description="Here's how this one's video came together."
-        label="How I made it"
-        title="How I made it"
-      >
+      <BehindTheScenes label="How I made it" title="How I made it">
         <div className="log-behind-body">
           <p className="log-behind-lede">
-            Every finding travels back with its own video — one moving piece, made for this track
-            and nothing else. I hand the tune to a model and it composes the whole thing from the
-            sound up. Here's what it reached for on this one.
+            Every finding travels back with its own footage: one moving piece, made for this tune
+            and nothing else. I built a machine that listens to the track and composes the whole
+            thing from the sound up. Here's what it reached for on this one.
           </p>
 
           {posterUrl ? (
-            <img alt="" className="log-behind-frame" loading="lazy" src={posterUrl} />
+            <img
+              alt="The poster frame of this finding's video"
+              className="log-behind-frame"
+              loading="lazy"
+              src={posterUrl}
+            />
           ) : undefined}
 
-          <dl className="log-fields">
+          <dl className="log-behind-fields">
             {track.videoVehicle ? (
-              <div className="log-field">
+              <div className="log-behind-field">
                 <dt>Vehicle</dt>
                 <dd>{track.videoVehicle}</dd>
               </div>
             ) : undefined}
             {grain ? (
-              <div className="log-field">
+              <div className="log-behind-field">
                 <dt>Grain</dt>
                 <dd>{grain}</dd>
               </div>
             ) : undefined}
             {track.videoRegister ? (
-              <div className="log-field">
+              <div className="log-behind-field">
                 <dt>Register</dt>
                 <dd>{track.videoRegister}</dd>
               </div>
             ) : undefined}
-            {model ? (
-              <div className="log-field">
-                <dt>Composed by</dt>
-                <dd>
-                  {model}
-                  {effort ? <span className="log-behind-effort"> · {effort}</span> : undefined}
-                </dd>
+            {telemetry ? (
+              <div className="log-behind-field">
+                <dt>Model</dt>
+                <dd className="log-behind-telemetry">{telemetry}</dd>
               </div>
             ) : undefined}
           </dl>

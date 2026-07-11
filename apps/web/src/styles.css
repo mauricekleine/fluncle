@@ -1038,8 +1038,25 @@ body::before {
   margin-top: -1.2rem;
 }
 
+/* The behind-the-scenes sheet is a pane of glass over the cosmos, same recipe as
+   the log plate it slides over (Through-the-Glass, DESIGN §4) — the exemplar is
+   .log-plate above: a near-opaque warm-dark fallback, thinned to 48% where
+   backdrop-filter can do the elevation work. Unlayered, so it wins over the
+   generated sheet's layered `bg-popover`. */
+.behind-the-scenes-sheet {
+  background: color-mix(in oklch, var(--card) 86%, transparent);
+}
+
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .behind-the-scenes-sheet {
+    -webkit-backdrop-filter: blur(18px) saturate(125%);
+    backdrop-filter: blur(18px) saturate(125%);
+    background: color-mix(in oklch, var(--card) 48%, transparent);
+  }
+}
+
 /* Inside the drawer: the spoken walkthrough (the builder's tour), the composition
-   frame, then the choices as a plate-style field grid (.log-fields, reused). */
+   frame, then the choices as a single-column field stack. */
 .log-behind-body {
   display: grid;
   gap: 1.4rem;
@@ -1049,7 +1066,7 @@ body::before {
 .log-behind-lede {
   color: var(--stardust);
   font-size: 0.92rem;
-  line-height: 1.6;
+  line-height: 1.4;
   margin: 0;
 }
 
@@ -1061,8 +1078,34 @@ body::before {
   width: 100%;
 }
 
-.log-behind-effort {
+/* One field per row, label over value, each pair wrapping as a unit — the drawer
+   is a narrow pane, and a multi-column grid squeezed "representational" into
+   mid-word breaks. A value wraps at word boundaries only (no overflow-wrap:
+   anywhere here, unlike the plate's .log-field dd): a value must never break
+   mid-word. */
+.log-behind-fields {
+  display: grid;
+  gap: 0.9rem;
+  margin: 0;
+}
+
+.log-behind-field dt {
   color: var(--muted-foreground);
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.log-behind-field dd {
+  color: var(--starlight-cream);
+  font-size: 0.95rem;
+  margin: 0;
+}
+
+/* The machine telemetry line (the raw model id + effort), mono-set: mono speaks
+   only for the machine (One Voice Rule), same face as .cli-inline. */
+.log-behind-field dd.log-behind-telemetry {
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
 }
 
 .log-observation {

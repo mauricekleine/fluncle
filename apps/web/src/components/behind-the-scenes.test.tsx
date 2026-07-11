@@ -2,10 +2,9 @@ import { renderToString } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { type Track } from "@/lib/tracks";
 import {
-  effortLabel,
   hasVideoBehindTheScenes,
   humanizeGrain,
-  humanizeModel,
+  modelTelemetry,
   VideoBehindTheScenes,
 } from "./behind-the-scenes";
 
@@ -43,18 +42,22 @@ describe("hasVideoBehindTheScenes", () => {
 describe("copy transforms", () => {
   it("humanizes a grain family token into plain words", () => {
     expect(humanizeGrain("grainCoarseSilver")).toBe("coarse silver");
-    expect(humanizeGrain("grainVhsScanline")).toBe("vhs scanline");
+    expect(humanizeGrain("grainChemicalDye")).toBe("chemical dye");
+    expect(humanizeGrain("grainHalftone")).toBe("halftone");
   });
 
-  it("names a known model and degrades an unknown one to its slug", () => {
-    expect(humanizeModel("anthropic/claude-opus-4-8")).toBe("Claude Opus 4.8");
-    expect(humanizeModel("openai/gpt-5")).toBe("gpt-5");
+  it("keeps a known initialism in its own casing", () => {
+    expect(humanizeGrain("grainVhsScanline")).toBe("VHS scanline");
   });
 
-  it("labels the effort dial, falling back for an unknown level", () => {
-    expect(effortLabel("high")).toBe("high reasoning");
-    expect(effortLabel("medium")).toBe("medium reasoning");
-    expect(effortLabel("ludicrous")).toBe("ludicrous reasoning");
+  it("quotes the model telemetry verbatim — raw stored id plus effort, never a byline", () => {
+    expect(modelTelemetry(FULL)).toBe("anthropic/claude-opus-4-8 · effort high");
+    // No stored effort: the raw model id alone.
+    expect(modelTelemetry(track({ ...FULL, videoModelReasoning: undefined }))).toBe(
+      "anthropic/claude-opus-4-8",
+    );
+    // No stored model: no telemetry row at all.
+    expect(modelTelemetry(track({ ...FULL, videoModel: undefined }))).toBeUndefined();
   });
 });
 
