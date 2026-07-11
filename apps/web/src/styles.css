@@ -2096,12 +2096,16 @@ body::before {
   padding: 0;
 }
 
-/* BASELINE, not center — same reason as the top bar. The coordinate (14.7px Oxanium),
-   the title (16px Geist) and the date (12.8px) are three different type sizes; centering
-   their BOXES puts their baselines at three different heights, and the row reads as
-   drifting. One baseline is what makes them read as one line. */
+/* Optically centred, same mechanism as the top bar: the coordinate is Oxanium and the
+   title/date are Geist, so their metric boxes carry different dead space and centring
+   the BOXES leaves the ink drifting. Trim each to its cap→baseline band first, then
+   centre. */
+.log-index-row > * {
+  text-box: trim-both cap alphabetic;
+}
+
 .log-index-row {
-  align-items: baseline;
+  align-items: center;
   border-bottom: 1px solid color-mix(in oklch, var(--border) 72%, transparent);
   display: flex;
   gap: 0.9rem;
@@ -3457,18 +3461,29 @@ body::before {
   z-index: 30;
 }
 
-/* BASELINE, not center. The wordmark is 16.8px Oxanium caps and the crumbs are 13px
-   Geist — box-centering two different type sizes leaves their baselines at different
-   heights, which is exactly what reads as "not vertically centered". Sitting them on
-   one baseline is what makes them read as one line of text. */
+/* OPTICAL centering, via text-box trim.
+   The bar mixes 16.8px Oxanium caps (the wordmark) with 13px Geist (the crumbs). Two
+   typefaces have different ascent/descent metrics, so their line boxes carry different
+   amounts of dead space above and below the glyphs. `align-items: center` therefore
+   centres the METRIC BOXES and leaves the ink off-centre; `baseline` is worse still,
+   because a shared baseline drops the smaller face to the bottom of the caps band.
+   `text-box: trim-both cap alphabetic` cuts each box down to its cap-height→baseline
+   band — the ink itself — so centring those boxes centres what the eye actually sees.
+   Chrome/Safari honour it; Firefox ignores it and falls back to metric-box centring,
+   which is simply today's behaviour. Progressive, never broken. */
 .nav-topbar-inner {
-  align-items: baseline;
+  align-items: center;
   display: flex;
   gap: 0.5rem;
   margin: 0 auto;
   max-width: 80rem;
   min-width: 0;
-  padding: 0.75rem 1rem;
+  padding: 0.85rem 1rem;
+}
+
+.nav-topbar-inner .nav-wordmark,
+.nav-breadcrumb li > * {
+  text-box: trim-both cap alphabetic;
 }
 
 /* ── Breadcrumb (inline with the wordmark, every page but home) ─────────────── */
@@ -3477,7 +3492,7 @@ body::before {
 }
 
 .nav-breadcrumb ol {
-  align-items: baseline;
+  align-items: center;
   color: var(--muted-foreground);
   display: flex;
   font-size: 0.82rem;
@@ -3493,7 +3508,7 @@ body::before {
    are EQUAL, so the caret sits the same distance from the text on both sides — an
    asymmetric pair here is what made the trail look hand-kerned. */
 .nav-breadcrumb li {
-  align-items: baseline;
+  align-items: center;
   display: flex;
   gap: 0.5rem;
   min-width: 0;
