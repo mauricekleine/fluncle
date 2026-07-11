@@ -30,6 +30,12 @@ const listTracks = vi.fn();
 const searchTracks = vi.fn();
 const publishTrack = vi.fn();
 const recordNoteAttempt = vi.fn();
+// The echo gate's ledger. This suite fakes every DB read, so the ledger's own SQL is
+// mocked here and proven for real in note-rejections.integration.test.ts (against the
+// generated schema). What matters at THIS layer is the contract between the handler and
+// the ledger: the gate must HOLD a rejected note before it 422s, never bin it.
+const recordNoteRejection = vi.fn();
+const getNoteEchoThresholds = vi.fn();
 
 vi.mock("cloudflare:workers", () => ({
   env: { VIDEOS: { put: (...args: unknown[]) => put(...args) } },
@@ -42,6 +48,11 @@ vi.mock("./track-update", () => ({
 
 vi.mock("./backfill", () => ({
   recordNoteAttempt: (...args: unknown[]) => recordNoteAttempt(...args),
+}));
+
+vi.mock("./note-rejections", () => ({
+  getNoteEchoThresholds: (...args: unknown[]) => getNoteEchoThresholds(...args),
+  recordNoteRejection: (...args: unknown[]) => recordNoteRejection(...args),
 }));
 
 vi.mock("./tracks", async (importOriginal) => {
@@ -116,6 +127,12 @@ const LIST_ITEM = {
 beforeAll(setAdminTokenEnv);
 
 beforeEach(() => {
+  recordNoteRejection.mockReset();
+  recordNoteRejection.mockResolvedValue(undefined);
+  getNoteEchoThresholds.mockReset();
+  // The gate's calibrated defaults — the dials are operator-tunable at runtime, so the
+  // handler reads them per run rather than importing constants.
+  getNoteEchoThresholds.mockResolvedValue({ maxOverlap: 0.3, minPhraseWords: 4 });
   updateTrack.mockReset();
   fillEmptyNote.mockReset();
   getTrackByIdOrLogId.mockReset();
@@ -981,9 +998,66 @@ describe("oRPC note_track (POST /admin/tracks/{trackId}/note)", () => {
       expect(data.code).toBe("note_echoes_neighbours");
       // The message names the neighbour it echoed, so the sweep can re-author around it.
       expect(data.message).toContain("027.2.8R");
-      // NOTHING was stored: an echoing note leaves the finding note-less.
+      // NOTHING was stored on the finding: an echoing note leaves it note-less. That part
+      // of the gate is unchanged and must stay that way.
       expect(fillEmptyNote).not.toHaveBeenCalled();
       expect(updateTrack).not.toHaveBeenCalled();
+
+      // But it was HELD, not binned — and this is the whole point. The gate refuses to
+      // PUBLISH the line; it does not get to destroy the evidence of its own decision. A
+      // rejection nobody can read is a rejection nobody can supervise: the operator could
+      // not judge whether the gate was right, nor whether its thresholds are wrong.
+      expect(recordNoteRejection).toHaveBeenCalledTimes(1);
+      const [trackId, held, echo, thresholds] = recordNoteRejection.mock.calls[0] ?? [];
+      expect(trackId).toBe(TRACK_ID);
+      expect(held).toContain("My shoulders dropped before");
+      // The reason rides along with it: which neighbour, which phrase, and the dials that
+      // were in force at that moment (snapshotted, so a later retune cannot rewrite it).
+      expect(echo).toMatchObject({
+        echoes: true,
+        logId: "027.2.8R",
+        phrase: "my shoulders dropped before",
+      });
+      expect(thresholds).toEqual({ maxOverlap: 0.3, minPhraseWords: 4 });
+    });
+
+    it("a DRY RUN holds nothing — it is a measurement harness, not a queue-filler", async () => {
+      getTrackByIdOrLogId.mockResolvedValueOnce(TRACK);
+      getSimilarFindings.mockResolvedValueOnce(NEIGHBORS);
+
+      const { handleOrpc } = await import("./orpc");
+      const response = await handleOrpc(
+        post("/note", AGENT_TOKEN, {
+          dryRun: true,
+          note: "My shoulders dropped before I caught the title; that is Calibre doing what Calibre does.",
+        }),
+      );
+
+      // It still REPORTS the verdict — an echo is a 422 whether or not you meant to store
+      // it, and that is what the dry run exists to tell you.
+      expect(response?.status).toBe(422);
+      // But it holds NOTHING. The dry run is the A/B measurement harness (it is run across
+      // the whole archive to re-measure the neighbour layer), so a rejection it observes
+      // must never land in the operator's queue as a row he is being asked to act on.
+      expect(recordNoteRejection).not.toHaveBeenCalled();
+      expect(fillEmptyNote).not.toHaveBeenCalled();
+    });
+
+    it("a note that CLEARS the gate holds nothing (the ledger only records refusals)", async () => {
+      getTrackByIdOrLogId.mockResolvedValueOnce(TRACK);
+      getSimilarFindings.mockResolvedValueOnce(NEIGHBORS);
+      fillEmptyNote.mockResolvedValueOnce(true);
+
+      const { handleOrpc } = await import("./orpc");
+      const response = await handleOrpc(
+        post("/note", AGENT_TOKEN, {
+          note: "Piano loops into your chest and the vocal keeps you pinned there.",
+        }),
+      );
+
+      expect(response?.status).toBe(200);
+      expect(fillEmptyNote).toHaveBeenCalled();
+      expect(recordNoteRejection).not.toHaveBeenCalled();
     });
 
     it("stores a note that says something the neighbourhood does not", async () => {
