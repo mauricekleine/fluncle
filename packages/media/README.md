@@ -16,6 +16,12 @@ The **safe-area contract**: platforms crop a banner differently across devices, 
 
 `bun run render:socials` writes the claimed accounts (`render: true`) to `docs/socials/banners/` — drop each straight into the platform's profile uploader. The current set: YouTube channel banner (2048×1152 PNG) and Mixcloud cover (2048×512 PNG). SoundCloud (2480×520) and X (1500×500) are wired in with `render: false` — previewable in Studio, written once those accounts exist. The Spotify playlist cover is the founding cover art, **not** generated here. The spec table + the brand asset map live in [docs/socials/README.md](../../docs/socials/README.md).
 
+## App-icon candidates
+
+`src/remotion/app-icon.tsx` is the mobile app icon (`apps/mobile`) — one `<AppIcon>` composition rendered at the 1024² master size, parametrized by `variant` so it renders every candidate. The candidate set lives in `src/remotion/app-icon-specs.ts` (id + slug + variant + rationale), shared by the registry (`root.tsx`) and the render script. The four axes: **eclipse** (the burning eclipse mark alone), **stamp** (a single Oxanium `F` on the plate frame), **cover** (the founding cover distilled — eclipse over a tower skyline), **diamond** (the banger-diamond star motif). Every variant fills an opaque Deep Field ground (iOS rejects alpha), bakes **no** rounded corners (iOS/Android apply their own mask), and keeps load-bearing content inside a central safe zone.
+
+`bun run render:app-icons` renders each candidate to `out/app-icon/icon-<slug>.png` — `out/` is gitignored, so these are **throwaway working stills** for the operator to pick from, not committed assets. Once a variant is chosen it gets wired into `apps/mobile` (icon + Android adaptive foreground + splash); until then nothing here touches the app config.
+
 ## Conventions (mirrors `@fluncle/video`)
 
 - **Code-generated, deterministic.** Everything on screen is generated from code — CSS, SVG, transforms — so a render is reproducible from source alone. The bitmap exceptions are the fonts (Oxanium + Space Grotesk woff2 under `public/fonts`, byte-identical to the `apps/web` copies) and the cosmonaut cutout (`public/fluncle-cosmonaut.png`, Maurice's founding artwork — the one image we composite rather than re-draw). No `Math.random()` and no wall-clock time inside a composition; seed any procedural layer via Remotion's `random()`.
@@ -28,8 +34,9 @@ The **safe-area contract**: platforms crop a banner differently across devices, 
 Run from `packages/media` (or with `bun run --cwd packages/media …`). Use **bun**, never npm/pnpm/yarn.
 
 ```bash
-bun run render:og        # bundles, selects GalaxyOg, renders apps/web/public/galaxy/og.png at 1200×630
-bun run render:socials   # renders the claimed social banners/covers into docs/socials/banners/
+bun run render:og          # bundles, selects GalaxyOg, renders apps/web/public/galaxy/og.png at 1200×630
+bun run render:app-icons   # renders the mobile app-icon candidates (1024²) into out/app-icon/ (gitignored)
+bun run render:socials     # renders the claimed social banners/covers into docs/socials/banners/
 bun run studio      # Remotion Studio — live scrub the asset while editing
 bun run typecheck   # tsgo --noEmit, the quality check for any change here
 ```

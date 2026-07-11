@@ -4,6 +4,8 @@
 
 import { Still } from "remotion";
 
+import { AppIcon } from "./app-icon";
+import { APP_ICON_SIZE, APP_ICON_SPECS } from "./app-icon-specs";
 import { CosmosBanner } from "./cosmos-banner";
 import { GalaxyOg } from "./galaxy-og";
 import { MixtapeCover } from "./mixtape-cover";
@@ -16,6 +18,21 @@ export const RemotionRoot: React.FC = () => {
       {/* The Open Graph / link-preview card for the /galaxy route (1200×630),
           rendered to apps/web/public/galaxy/og.png by `bun run render:og`. */}
       <Still component={GalaxyOg} height={630} id="GalaxyOg" width={1200} />
+
+      {/* App-icon candidates for apps/mobile — one <AppIcon> variant per
+          candidate at the 1024² master size (app-icon-specs.ts). A TASTE
+          deliverable: `bun run render:app-icons` writes them to out/app-icon/
+          for the operator to pick one, which then gets wired into the app. */}
+      {APP_ICON_SPECS.map((spec) => (
+        <Still
+          component={AppIcon}
+          defaultProps={{ variant: spec.variant }}
+          height={APP_ICON_SIZE}
+          id={spec.id}
+          key={spec.id}
+          width={APP_ICON_SIZE}
+        />
+      ))}
 
       {/* Social profile banners / covers — one CosmosBanner per platform, sized
           and safe-area'd from socials-specs.ts. `bun run render:socials` writes
