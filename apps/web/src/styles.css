@@ -2099,7 +2099,7 @@ body::before {
 /* Optically centred, same mechanism as the top bar: the coordinate is Oxanium and the
    title/date are Geist, so their metric boxes carry different dead space and centring
    the BOXES leaves the ink drifting. Trim each to its cap→baseline band first, then
-   centre. */
+   centre. The title also CLIPS (it ellipsizes), so it needs `ink-room` — see below. */
 .log-index-row > * {
   text-box: trim-both cap alphabetic;
 }
@@ -2119,12 +2119,19 @@ body::before {
 /* The /log row has three direct children (Log ID, title line, date) rather than
    the mixtape row's cover + body grid, so it lays them out itself: the title
    line absorbs the slack and ellipsizes (min-width:0 below), the date stays
-   whole at the row's end. On a narrow screen the date wraps under the line. */
+   whole at the row's end. On a narrow screen the date wraps under the line.
+
+   The coordinate column is a FIXED width, never `max-content`. Each row is its own
+   grid, so `max-content` sizes that column to THAT row's coordinate — and Oxanium is
+   proportional (a 'I' is narrow, a 'K' wide), so every row's title started at a
+   different x and the column read as ragged. A fixed track makes the archive a real
+   column. 5rem clears a 9-character coordinate, so it still holds when the sector
+   passes 999. */
 .log-index-row--entry {
-  align-items: baseline;
+  align-items: center;
   column-gap: 0.9rem;
   display: grid;
-  grid-template-columns: max-content minmax(0, 1fr);
+  grid-template-columns: 5rem minmax(0, 1fr);
   row-gap: 0.15rem;
 }
 
@@ -2297,10 +2304,11 @@ body::before {
   }
 
   /* /log entry rows: the row itself gains a third, intrinsic column so the date
-     sits inline at the row's end; the content column still ellipsizes. */
+     sits inline at the row's end; the content column still ellipsizes. The
+     coordinate track stays FIXED (see above) so the titles line up down the page. */
   .log-index-row--entry {
     align-items: center;
-    grid-template-columns: max-content minmax(0, 1fr) max-content;
+    grid-template-columns: 5rem minmax(0, 1fr) max-content;
   }
 
   .log-index-date {
@@ -3529,21 +3537,34 @@ body::before {
    Selected by CLASS, not [aria-current]: TanStack marks the hub Link current too (a
    finding IS under /log), so the attribute would truncate "Log" as well.
 
-   The padding/negative-margin pair is what keeps a descender alive. `text-box` ends the
-   box at the BASELINE, so a 'g' hangs outside it — and `overflow: hidden` would shear
-   it off. The padding re-opens that room inside the clip box; the equal negative margin
-   cancels it again for layout, so the margin box (what the flex centring measures) is
-   unchanged. Room to draw, no room taken. */
+   It also carries `ink-room` (below), because it clips. */
 .nav-breadcrumb-tail {
   color: var(--starlight-cream);
   font-variant-numeric: tabular-nums;
   font-weight: 700;
-  margin-bottom: -0.28em;
   min-width: 0;
   overflow: hidden;
-  padding-bottom: 0.28em;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* ── ink-room: the rule every text-box-trimmed element that CLIPS must carry ──
+   `text-box: trim-both cap alphabetic` cuts the box to the cap line and the baseline —
+   but real type PAINTS OUTSIDE BOTH EDGES. Below the baseline: descenders (g, y, p) and
+   the comma's tail. Above the cap line: the overshoot on round glyphs (0, 3, 9, O, C, S),
+   which are drawn a hair tall so they look optically level with flat ones. An element
+   that also sets `overflow: hidden` (to ellipsize) clips at its padding box, so it
+   SHEARS those — turning a comma into a period and a 'g' into an 'a'.
+
+   The padding re-opens that room inside the clip box; the equal negative margin cancels
+   it for layout, so the margin box the flex/grid centring measures is unchanged. Room to
+   draw, no room taken. BOTH edges: fixing one just moves which glyphs get shaved.
+
+   RULE: trim + overflow:hidden ⇒ this. Never one without the other. */
+.nav-breadcrumb-tail,
+.log-index-line {
+  margin-block: -0.3em;
+  padding-block: 0.3em;
 }
 
 .nav-breadcrumb-sep {
