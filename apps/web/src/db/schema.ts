@@ -39,9 +39,13 @@ export const tracks = sqliteTable("tracks", {
   // preview-grade estimate is distinguishable from a full-song one, and the capture→enrich
   // race can be closed (a finding enriched from a 30s preview BEFORE its full song was
   // captured must be re-derived once the capture lands). All INTERNAL analysis metadata:
-  // like `features_json`/`embedding_json` they are never in a PUBLIC DTO (stripped by
-  // `toPublicTrackListItem`), and writing them never bumps `updated_at` (they move no public
-  // surface — NOT in `track-update.ts` VISIBLE_FIELDS).
+  // they are listed in `PRIVATE_TRACK_FIELDS`, so `toPublicTrackListItem` strips them from
+  // every PUBLIC DTO, and writing them never bumps `updated_at` (they move no public
+  // surface — NOT in `track-update.ts` VISIBLE_FIELDS). Internal does NOT mean stripped,
+  // though — the other two internal columns each reach the public boundary differently:
+  // `features_json` IS on the public DTO (parsed onto it as `features` — creative fuel for
+  // the video agent, deliberately surfaced), and `embedding_json` is simply never selected
+  // into a DTO at all. Neither one passes through `toPublicTrackListItem`'s strip list.
   //   - `analyzedAt`   — ISO timestamp of the analysis write.
   //   - `analyzedFrom` — which audio class the analysis ran on: "full" (the captured full
   //     song) or "preview" (a 30s preview). NULL = a legacy row written before this column;

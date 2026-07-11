@@ -118,11 +118,15 @@ export type BoardProps = {
 // Within agents the order reads as the pipeline settles: the catalogue links
 // (Last.fm, Discogs), then the per-finding chain Enrich → Embeddings → Context →
 // Note → Observation → Video. Embeddings sits right after Enrich — both are on-box
-// analysis crons over the same preview audio (Enrich derives BPM/key/features; the
-// MuQ embed captures the sonic fingerprint that now supersedes the manual vibe map).
-// NOTE sits among the agents in anticipation of auto-drafted notes (the _Auto-drafted
-// finding notes_ slice); until that lands it is still operator-written, but it lives
-// among the agents it will join. Within your hands: the social pushes, then the mixtape.
+// analysis crons over the CAPTURED FULL SONG (Enrich derives BPM/key/features, falling
+// back to the 30s preview only when no capture has landed; the embed has no preview path
+// at all). Enrich's features are internal creative fuel for the video agent; the MuQ
+// embed is the sonic fingerprint the nightly `fluncle-cluster` sweep groups a finding's
+// galaxy from. The manual vibe map both once served is retired — the coordinates and the
+// tagging tool are gone.
+// NOTE sits among the agents because the `fluncle-note` cron authors it (fill-empty-only,
+// so an operator note is never clobbered); it stays clickable so you can still write or
+// override one. Within your hands: the social pushes, then the mixtape.
 const STEP_DEFS: { key: StepKey; kind: StepKind; label: string; Icon: StepIcon }[] = [
   { Icon: BroadcastIcon, key: "socials", kind: "auto", label: "Auto socials" },
   { Icon: VinylRecordIcon, key: "discogs", kind: "auto", label: "Discogs" },
@@ -292,10 +296,11 @@ export function boardSteps(row: BoardRow, now: number = Date.now()): BoardStep[]
     },
     embedding: {
       // A read-only presence tracker, like Last.fm/Discogs — no operator action. The
-      // on-box `fluncle-embed` cron drains the `embedding_json IS NULL` queue and
-      // stamps a MuQ vector; `done` (filled) once the finding carries one, grey while
-      // it's still in the queue. This is the sonic fingerprint that supersedes the
-      // manual vibe map — see docs/track-lifecycle.md.
+      // on-box `fluncle-embed` cron drains the `embedding_json IS NULL` queue over the
+      // captured full song and stamps a MuQ vector; `done` (filled) once the finding
+      // carries one, grey while it's still in the queue. This is the sonic fingerprint
+      // a finding's galaxy is clustered from, in place of the retired manual vibe map
+      // — see docs/track-lifecycle.md.
       actionable: false,
       gated: false,
       hint: row.hasEmbedding

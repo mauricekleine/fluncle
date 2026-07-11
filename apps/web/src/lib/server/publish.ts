@@ -129,8 +129,9 @@ No database, Spotify, or Telegram changes were made. Enrichment (label, preview)
 
   // Sync enrichment: HTTP-only and best-effort (label + preview from Deezer), so
   // a miss never blocks the publish. The heavy, audio-derived fields (bpm, key,
-  // video) are filled later by the async enrichment agent; the vibe placement is
-  // set by an admin in the tagging tool.
+  // video) are filled later by the async enrichment agent; the finding's galaxy is
+  // assigned later still by the nightly `fluncle-cluster` sweep, k-means over the MuQ
+  // embedding (the manual tagging tool that once placed it by hand is retired).
   const deezer = await enrichFromDeezer(track.isrc);
 
   // Read-only Discogs release-ID enrichment (best-effort, alongside the Deezer
