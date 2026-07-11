@@ -657,7 +657,10 @@ function MixSearchPicker({ onPick }: { onPick: (track: MixTrack) => void }) {
                 onSelect={() => onPick(track)}
                 value={rowId(track)}
               >
-                <span className="min-w-0 flex-1 truncate">
+                {/* `.search-row-title` so the unlit register dims the row to stardust at
+                    rest, matching the certified/uncertified split everywhere else (search,
+                    the openers, the rail) rather than leaving a full-cream title. */}
+                <span className="search-row-title min-w-0 flex-1 truncate">
                   {track.artists.join(", ")} — {track.title}
                 </span>
                 {track.certified && track.logId ? (

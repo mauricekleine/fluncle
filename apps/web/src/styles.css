@@ -4588,8 +4588,13 @@ body::before {
   white-space: nowrap;
 }
 
+/* The check is CREAM, not gold. The Gold Veil fill + the eclipse-glow name already carry the
+   selected state (and `aria-pressed` carries it for AT), so a solid gold check on top is a
+   third gold cue per tile — and with up to MAX_TASTE_ARTISTS selected at once, a field of them
+   crowds the One Sun budget and dilutes the "Find an opener" primary. Cream keeps the tick
+   legible without adding another sun. */
 .taste-artist-check {
-  color: var(--eclipse-gold);
+  color: var(--starlight-cream);
   flex: none;
   height: 0.9rem;
   width: 0.9rem;
