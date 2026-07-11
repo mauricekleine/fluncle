@@ -10,6 +10,8 @@
 // a stored object — surfaces derive it via an `audio=false` Media Transformation
 // (videoCrop silent / videoAudioStripped), so `footage-silent.mp4` is retired.
 
+import { r2PublicUrl } from "@fluncle/contracts/util";
+
 export const FOUND_BASE = "https://found.fluncle.com";
 
 /** The mixtape's episode audio on R2 (the podcast enclosure), by its Log ID. */
@@ -33,12 +35,13 @@ export function mixtapeSetVideoUrl(logId: string): string {
  * while un-promoted, `<log-id>/set.mp4` after promote). Unlike a mixtape's set video,
  * a recording owns its key, so the Studio reaches for `r2Key` directly rather than
  * deriving from a coordinate. Served as a bare range-streamed, faststart object (the
- * same ~1.5GB rendition, NOT a Media Transformation). The key's own slashes are the
- * path (never `encodeURIComponent`'d — that would escape the separators); its segments
- * (a UUID or a dot-safe Log ID) are already URL-safe.
+ * same ~1.5GB rendition, NOT a Media Transformation). Built via the shared `r2PublicUrl`
+ * (per-segment encoding — the key's own slashes stay path separators) so the URL matches
+ * the CLI clip cut's byte-for-byte; every real key's segments (a UUID or a dot-safe Log
+ * ID) are already URL-safe, so the encoding is a no-op today.
  */
 export function recordingSetVideoUrl(r2Key: string): string {
-  return `${FOUND_BASE}/${r2Key}`;
+  return r2PublicUrl(FOUND_BASE, r2Key);
 }
 
 /**
