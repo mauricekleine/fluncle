@@ -424,8 +424,8 @@ async function normalizeYouTubeUrl(rawUrl: string): Promise<string | null> {
  * URL can't be reduced to a profile page (e.g. a TikTok video URL with no handle).
  */
 // Reject any non-http(s) URL — a scraped `javascript:`/`data:` value must never become a
-// social row (stored-XSS defense at ingestion; the championing unit's operator confirm +
-// render guards are the second layer).
+// social row (stored-XSS defense at ingestion; the operator confirm + render guards are
+// the second layer).
 function isHttpScheme(raw: string): boolean {
   try {
     const { protocol } = new URL(raw.trim());
