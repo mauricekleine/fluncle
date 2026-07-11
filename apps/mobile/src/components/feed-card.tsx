@@ -245,7 +245,7 @@ export const FeedCard = memo(function FeedCard({ finding, active, soundOn, onTog
                 name={observing ? "headset" : "headset-outline"}
                 size={28}
                 color={observing ? color.eclipseGold : color.starlightCream}
-                style={styles.icon}
+                style={[styles.icon, styles.observationNudge]}
               />
             }
             label={observationControl.label}
@@ -370,6 +370,13 @@ const styles = StyleSheet.create({
   },
   railLabelActive: { color: color.eclipseGold },
   railPressed: { opacity: 0.6 },
+  // The four rail items already share one wrapper (RailAction + the 36×36 centered
+  // `railIcon`), so this is not a structural leftover — it's the glyph itself. The
+  // Ionicons headset advance box centers, but the mic boom hanging off the left earcup
+  // pulls the visible artwork's centroid left of the rail axis (the same optical drift
+  // spotify corrects below). Nudge it back onto the axis. Magnitude is an optical
+  // estimate; the operator fine-tunes the sign/amount in-sim after merge.
+  observationNudge: { transform: [{ translateX: 2 }] },
   // The spotify brand mark's three waves sit optically left of the circle's true
   // center (true of the glyph in any icon font), so nudge it onto the rail axis.
   spotifyNudge: { transform: [{ translateX: 4 }] },
