@@ -1,0 +1,1 @@
+CREATE INDEX `tracks_key_idx` ON `tracks` (`key`);

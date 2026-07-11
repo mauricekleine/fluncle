@@ -533,6 +533,13 @@
       "when": 1783802177307,
       "tag": "0075_romantic_cobalt_man",
       "breakpoints": true
+    },
+    {
+      "idx": 76,
+      "version": "6",
+      "when": 1783804763603,
+      "tag": "0076_parched_talisman",
+      "breakpoints": true
     }
   ]
 }
