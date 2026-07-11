@@ -87,3 +87,7 @@ Two traps live in that file's header: FTS5's `MATCH` is a **query language** (a 
 ## Operating it
 
 Tier 4 needs `OPENROUTER_API_KEY` — **already a production Worker secret** (the context-note distil uses it), so tier 4 is live on deploy with no new secret to set. `OPENROUTER_SEARCH_MODEL` optionally overrides the model (default `anthropic/claude-haiku-4.5`); it is kept separate from `OPENROUTER_CONTEXT_MODEL` because one is a summariser and the other a parser. Its spend lands in the COST-01 ledger under the `search` step.
+
+## The filter prompt is operator-tunable
+
+The LLM tier's system prompt is the `search_filter` entry in the **prompt registry** ([docs/agents/prompt-registry.md](./agents/prompt-registry.md)), so it can be retuned from `/admin/prompts` with no deploy. It is the SAFEST of the seven to make editable, for the same reason the tier is safe at all: its output is Zod-validated and the model is never on the hot path, so a bad edit degrades search to the full-text tier rather than corrupting a result. The resolve falls back to the repo's baked default whenever the prompt store cannot be read, which leaves the degradation contract exactly as it was.

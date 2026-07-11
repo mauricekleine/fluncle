@@ -106,7 +106,17 @@ export const createLogbookEntry = oc
     summary: "Author a sector-day's logbook entry (fills an empty sector only)",
     tags: ["Admin"],
   })
-  .input(z.looseObject({ sector: z.string() }))
+  .input(
+    z.looseObject({
+      // PROVENANCE — the prompt-registry version this entry was authored under (0 = the
+      // baked default, N = override N). The on-box `fluncle-logbook` sweep sends it;
+      // omitted when the sweep fell back to its inlined prompt, so the column stays NULL.
+      // The OPERATOR overwrite (`update_logbook_entry`) takes no version: no prompt wrote
+      // a hand-typed entry. See docs/agents/prompt-registry.md.
+      promptVersion: z.number().int().min(0).optional(),
+      sector: z.string(),
+    }),
+  )
   .output(LogbookEntryEnvelope);
 
 /**

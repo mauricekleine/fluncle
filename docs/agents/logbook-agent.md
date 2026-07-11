@@ -78,3 +78,9 @@ The `claude -p` step authors through the `copywriting-fluncle` skill; the prompt
 - Fill an EMPTY sector ONLY — never overwrite an operator- or already-authored entry (enforced server-side by the PK insert).
 - The entry carries **facts grounded in the day's findings** — never quote or closely paraphrase lyrics, never invent a claim or a coordinate.
 - The entry is **public** the moment it lands on `/logbook` — the voice gate is a hard ship requirement, not a nicety.
+
+## The prompt lives in the DATABASE, not in the image
+
+The authoring prompt is the `logbook_entry` entry in the **prompt registry** ([docs/agents/prompt-registry.md](./prompt-registry.md)). The sweep fetches it over the AGENT-tier `get_prompt` each tick, so the operator retunes it from `/admin/prompts` or the `fluncle admin prompts` CLI with **no deploy and no box rebake**.
+
+The repo still keeps the baked default (`buildAuthoringPrompt` in `logbook-sweep.ts`), and a failed fetch falls back to it and logs — a prompt store that blinks can never stop the sweep. Every entry records the version that drafted it in `logbook_entries.prompt_version` (`0` = the repo's default, `N` = override N, `NULL` = the baked fallback wrote it).

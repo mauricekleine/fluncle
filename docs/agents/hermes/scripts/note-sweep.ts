@@ -82,6 +82,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type BoxCostEvent, emitCost, parseAuthoringSpend } from "./cost-emit";
+import { resolveSweepPrompt } from "./prompt-fetch";
 
 // ---------------------------------------------------------------------------
 // Config — a SMALL bounded batch: each note burns claude subscription quota, so
@@ -194,6 +195,12 @@ type Delivery = { echoedPhrase?: string; outcome: Outcome };
 type AuthoredNote = {
   model: string;
   note: string;
+  // PROVENANCE — the prompt version this note was authored under: N = the operator's
+  // live override, 0 = the registry's baked default, NULL = the registry was unreachable
+  // and the inlined `buildAuthoringPrompt` below wrote it. Rides out to the Worker on
+  // `--prompt-version` and lands on `findings.note_prompt_version`, which is what makes
+  // "the notes got worse last week" a question with an answer.
+  promptVersion: number | null;
   tokens: number;
   usd: number | null;
 };
@@ -384,18 +391,71 @@ export function buildAuthoringPrompt(
 }
 
 // ---------------------------------------------------------------------------
-// Author one note via `claude -p` (subscription auth, read-only tools). Throws
-// ClaudeAuthError on an auth/quota failure (abort the batch); returns null on any
-// other failure (leave the finding queued); returns the note string on success.
+// THE PROMPT VARIABLES — the facts `buildAuthoringPrompt` used to interpolate in TS,
+// handed to the REGISTRY template instead. The prose all lives in the template now (so
+// the operator can tune every rail, including the anti-sameness ones), and the sweep
+// supplies only the data.
+//
+// `noContextNote` is the inverse flag the template's `{{#if noContextNote}}` arm reads:
+// the renderer has no `else`, on purpose (two constructs, nothing more), so a
+// two-armed branch is expressed as two flags. `neighbours` arrives pre-joined — the
+// renderer has no loops either, and a list is just a string.
 // ---------------------------------------------------------------------------
 
-function authorNote(
+function promptVariables(
   finding: Finding,
   contextNote: string,
   neighbors: Neighbor[],
   echoedPhrase?: string,
-): AuthoredNote | null {
-  const prompt = buildAuthoringPrompt(finding, contextNote, neighbors, echoedPhrase);
+): Record<string, string | undefined> {
+  return {
+    artists: finding.artists?.length ? finding.artists.join(", ") : "unknown",
+    bpm: typeof finding.bpm === "number" ? `${Math.round(finding.bpm)}` : "unknown",
+    contextNote,
+    echoedPhrase,
+    galaxy: finding.galaxy?.name ?? "unplaced",
+    key: finding.key ?? "unknown",
+    label: finding.label ?? "unknown",
+    neighbours: neighbors
+      .map(
+        (neighbor) => `  - ${neighbor.artists.join(", ")} — ${neighbor.title}: "${neighbor.note}"`,
+      )
+      .join("\n"),
+    noContextNote: contextNote ? "" : "yes",
+    title: finding.title ?? "unknown",
+    year: finding.releaseDate ? finding.releaseDate.slice(0, 4) : "unknown",
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Author one note via `claude -p` (subscription auth, read-only tools). Throws
+// ClaudeAuthError on an auth/quota failure (abort the batch); returns null on any
+// other failure (leave the finding queued); returns the note + its provenance on success.
+//
+// THE PROMPT comes from the REGISTRY over the agent-tier API (`get_prompt`), so the
+// operator can retune it from /admin with no deploy and no rebake — which matters most
+// for THIS prompt, whose neighbour block is the front line against every note in a galaxy
+// reading the same. If that fetch fails for any reason, `resolveSweepPrompt` falls back to
+// `buildAuthoringPrompt` below and the sweep authors EXACTLY as it did before the registry
+// existed. A prompt store that blinks must never be able to stop the pipeline.
+// ---------------------------------------------------------------------------
+
+async function authorNote(
+  finding: Finding,
+  contextNote: string,
+  neighbors: Neighbor[],
+  echoedPhrase?: string,
+): Promise<AuthoredNote | null> {
+  const { prompt, promptVersion } = await resolveSweepPrompt({
+    fallback: () => buildAuthoringPrompt(finding, contextNote, neighbors, echoedPhrase),
+    slug: "note_author",
+    variables: promptVariables(finding, contextNote, neighbors, echoedPhrase),
+  });
+
+  if (promptVersion === null) {
+    log("the prompt registry was unreachable — authoring from the baked-in default");
+  }
+
   const args = [
     "-p",
     "--model",
@@ -461,7 +521,7 @@ function authorNote(
   // The measured authoring spend (shared parse — the CLI's own total_cost_usd is
   // authoritative, the token count is the informational quantity, the model comes off
   // modelUsage else the one we asked for).
-  return { note, ...parseAuthoringSpend(envelope, NOTE_CLAUDE_MODEL) };
+  return { note, promptVersion, ...parseAuthoringSpend(envelope, NOTE_CLAUDE_MODEL) };
 }
 
 // ---------------------------------------------------------------------------
@@ -472,7 +532,12 @@ function authorNote(
 // a future author pass.
 // ---------------------------------------------------------------------------
 
-function deliverNote(id: string, note: string, dryRun = false): Delivery {
+function deliverNote(
+  id: string,
+  note: string,
+  promptVersion: number | null,
+  dryRun = false,
+): Delivery {
   const dir = mkdtempSync(join(tmpdir(), "note-sweep-"));
   const notePath = join(dir, "note.txt");
 
@@ -486,6 +551,10 @@ function deliverNote(id: string, note: string, dryRun = false): Delivery {
       id,
       "--script-file",
       notePath,
+      // PROVENANCE. Omitted entirely when the registry was unreachable, so the column
+      // stays NULL and the artifact is honest about having been written by the baked-in
+      // fallback rather than by a version it never saw.
+      ...(promptVersion === null ? [] : ["--prompt-version", String(promptVersion)]),
       ...(dryRun ? ["--dry-run"] : []),
       "--json",
     ]);
@@ -640,7 +709,7 @@ function readContextNote(id: string): string {
 // authored AND delivered (so a no-op / gate-skip / failure never records spend).
 type NoteResult = { cost: BoxCostEvent | null; outcome: Outcome };
 
-function noteOne(queued: QueueFinding, dryRun = false): NoteResult {
+async function noteOne(queued: QueueFinding, dryRun = false): Promise<NoteResult> {
   const id = queued.trackId ?? queued.logId;
 
   if (!id) {
@@ -697,13 +766,13 @@ function noteOne(queued: QueueFinding, dryRun = false): NoteResult {
   for (let attempt = 0; attempt <= ECHO_RETRIES; attempt += 1) {
     // Throws ClaudeAuthError to abort the whole batch; returns null to leave THIS
     // finding queued.
-    authored = authorNote(finding, contextNote, neighbors, echoedPhrase);
+    authored = await authorNote(finding, contextNote, neighbors, echoedPhrase);
 
     if (!authored) {
       return { cost: null, outcome: "skipped" };
     }
 
-    delivery = deliverNote(id, authored.note, dryRun);
+    delivery = deliverNote(id, authored.note, authored.promptVersion, dryRun);
 
     if (delivery.outcome !== "echoSkipped") {
       break;
@@ -752,6 +821,15 @@ function noteOne(queued: QueueFinding, dryRun = false): NoteResult {
     );
     console.error(`   neighbours: ${neighbors.map((n) => n.logId).join(", ") || "(none)"}`);
     console.error(`   NOTE: ${authored.note}`);
+    console.error(
+      `   prompt: ${
+        authored.promptVersion === null
+          ? "the baked-in default (the registry was unreachable)"
+          : authored.promptVersion === 0
+            ? "the registry default (v0)"
+            : `override v${authored.promptVersion}`
+      }`,
+    );
     console.error(`   verdict: ${outcome}\n`);
   }
 
@@ -818,7 +896,7 @@ async function main(): Promise<void> {
 
     for (const id of dryRunIds) {
       try {
-        const { outcome } = noteOne({ logId: id }, true);
+        const { outcome } = await noteOne({ logId: id }, true);
         outcomes[id] = outcome;
       } catch (error) {
         outcomes[id] = "failed";
@@ -865,7 +943,7 @@ async function main(): Promise<void> {
 
   for (const queued of queue.slice(0, BATCH_CAP)) {
     try {
-      const { cost, outcome } = noteOne(queued);
+      const { cost, outcome } = await noteOne(queued);
 
       if (cost) {
         costs.push(cost);

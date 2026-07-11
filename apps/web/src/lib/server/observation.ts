@@ -22,6 +22,7 @@ import lamejs from "@breezystack/lamejs";
 import { priceOpenRouterTokens } from "./cost-rates";
 import { captureCostEvents, type CostCaptureContext, costEventId } from "./costs";
 import { readEnv, readOptionalEnv } from "./env";
+import { PROMPT_REGISTRY, resolvePrompt } from "./prompts";
 import { ApiError } from "./spotify";
 
 // ── The script + render artifacts (R2 `observation.json` shape) ──────────────
@@ -311,6 +312,14 @@ export type ContextFetchStatus = "resolved" | "empty" | "failed";
 export type ContextFetchResult = {
   contextNote: string;
   distilled: boolean;
+  /**
+   * PROVENANCE — the `context_distil` prompt version that produced this note (0 = the
+   * repo's baked default, N = operator override N), or NULL when no prompt produced it
+   * at all (the raw-snippet fallback, an empty fetch, a vendor failure). Persisted to
+   * `findings.context_prompt_version` so a thin or drifting context note can always be
+   * traced back to the wording that drafted it. See lib/server/prompts.ts.
+   */
+  promptVersion: number | null;
   sources: string[];
   status: ContextFetchStatus;
 };
@@ -349,27 +358,13 @@ const OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions";
 // Env-configurable model; falls back to a small, cheap, factual default.
 const DEFAULT_CONTEXT_DISTIL_MODEL = "anthropic/claude-haiku-4.5";
 
-// The distil prompt — drafted as a tunable constant so the maintainer can iterate
-// on it without touching the fetch plumbing. The note is INTERNAL creative fuel
-// for the observation script + video agent: factual, dry, grounded, no public
-// surface. EVERY claim must trace to a provided snippet (no fabrication), no
-// lyrics, and it drops the search-result junk (view counts, durations, prices,
-// foreign-language fragments). It ends with one line of sensory/scene pointers the
-// observation can lean on (texture, not facts).
-export const CONTEXT_DISTIL_SYSTEM_PROMPT = [
-  "You distil raw web-search snippets about a single drum-and-bass track into a short, internal research note.",
-  "The note is private creative fuel for a later writing step — it is never published.",
-  "",
-  "Rules:",
-  "- Write 1–2 short paragraphs, factual and dry, in plain Wikipedia-style prose.",
-  "- Ground EVERY claim in the provided snippets. Never invent, guess, or extrapolate a fact that is not in the snippets.",
-  "- If the snippets disagree or are thin, say less — a shorter, certain note beats a padded, shaky one.",
-  "- Drop all search-result junk: view counts, play counts, durations, prices, store/streaming boilerplate, and untranslated foreign-language fragments.",
-  "- Never quote or paraphrase lyrics.",
-  "- Prefer label, release year, artist background, and how the track sits in its scene.",
-  "- After the prose, add exactly one final line beginning 'Texture: ' giving 3–6 comma-separated sensory/scene/mood pointers (not facts) the writer can lean on (e.g. 'rolling, nocturnal, half-step menace, rain-on-glass').",
-  "- Output only the note. No headings, no preamble, no bullet lists, no source list.",
-].join("\n");
+// The distil prompt now lives in the PROMPT REGISTRY (./prompts.ts), so it is tunable
+// from /admin with no deploy — the note is INTERNAL creative fuel for the observation
+// script, the auto-note, and the video agent, and its shape is the thing we iterate on
+// most. This alias is the registry's BAKED DEFAULT: the body that runs when no operator
+// override is on file, and the floor `resolvePrompt` falls back to if the read fails.
+// It is re-exported (rather than re-declared) so there is exactly one copy of the text.
+export const CONTEXT_DISTIL_SYSTEM_PROMPT = PROMPT_REGISTRY.context_distil.defaultBody;
 
 type OpenRouterChatResponse = {
   choices?: { message?: { content?: string } }[];
@@ -383,10 +378,22 @@ type OpenRouterChatResponse = {
 };
 
 /**
+ * What a successful distil produced: the note, and the PROMPT VERSION that produced it
+ * (0 = the repo's baked default was live, N = operator override N). The version rides
+ * out to `findings.context_prompt_version` so a note can always be traced back to the
+ * wording that drafted it — see lib/server/prompts.ts.
+ */
+export type DistilledContext = { note: string; promptVersion: number };
+
+/**
  * Distil the raw Firecrawl snippets into a clean context note via OpenRouter.
- * Returns the distilled text, or null on any failure (caller falls back to the
- * cleaned raw note — a distil failure must never block the render). The model is
- * read from `OPENROUTER_CONTEXT_MODEL`, defaulting to `anthropic/claude-haiku-4.5`.
+ * Returns the distilled text + its prompt version, or null on any failure (caller falls
+ * back to the cleaned raw note — a distil failure must never block the render). The model
+ * is read from `OPENROUTER_CONTEXT_MODEL`, defaulting to `anthropic/claude-haiku-4.5`.
+ *
+ * The system prompt comes from the registry (`context_distil`), so it is tunable from
+ * /admin with no deploy. `resolvePrompt` cannot throw and falls back to the baked default,
+ * so this call site is exactly as robust as it was when the prompt was a const.
  */
 export async function distilContextNote(
   input: {
@@ -395,7 +402,7 @@ export async function distilContextNote(
     sources: string[];
   },
   capture?: CostCaptureContext,
-): Promise<string | null> {
+): Promise<DistilledContext | null> {
   if (input.snippets.length === 0) {
     return null;
   }
@@ -407,6 +414,11 @@ export async function distilContextNote(
   }
 
   const model = (await readOptionalEnv("OPENROUTER_CONTEXT_MODEL")) ?? DEFAULT_CONTEXT_DISTIL_MODEL;
+
+  // The system prompt, resolved from the registry: the operator's override if one is on
+  // file, else the baked default (`CONTEXT_DISTIL_SYSTEM_PROMPT`). Total by contract — it
+  // cannot throw and it always returns a runnable body.
+  const prompt = await resolvePrompt("context_distil");
 
   // The user turn carries the search query, the raw snippets, and the source URLs
   // as DATA — labelled clearly so the model treats them as material to summarise,
@@ -425,7 +437,7 @@ export async function distilContextNote(
     const response = await fetch(OPENROUTER_CHAT_URL, {
       body: JSON.stringify({
         messages: [
-          { content: CONTEXT_DISTIL_SYSTEM_PROMPT, role: "system" },
+          { content: prompt.body, role: "system" },
           { content: userContent, role: "user" },
         ],
         model,
@@ -496,7 +508,7 @@ export async function distilContextNote(
 
     const content = payload.choices?.[0]?.message?.content?.trim();
 
-    return content ? content.slice(0, 2000) : null;
+    return content ? { note: content.slice(0, 2000), promptVersion: prompt.version } : null;
   } catch {
     return null;
   }
@@ -532,7 +544,13 @@ export async function fetchTrackContext(
     });
 
     if (!response.ok) {
-      return { contextNote: "", distilled: false, sources: [], status: "failed" };
+      return {
+        contextNote: "",
+        distilled: false,
+        promptVersion: null,
+        sources: [],
+        status: "failed",
+      };
     }
 
     // Cost capture (COST-01, Path A — `cash`): one Firecrawl search fired. Priced
@@ -563,7 +581,13 @@ export async function fetchTrackContext(
 
     payload = (await response.json()) as { data?: { web?: FirecrawlResult[] } };
   } catch {
-    return { contextNote: "", distilled: false, sources: [], status: "failed" };
+    return {
+      contextNote: "",
+      distilled: false,
+      promptVersion: null,
+      sources: [],
+      status: "failed",
+    };
   }
 
   const web = payload?.data?.web ?? [];
@@ -590,17 +614,24 @@ export async function fetchTrackContext(
   if (snippets.length === 0) {
     // A confirmed-empty fetch — distinct from a vendor failure. The queue marks it
     // `empty` so it is not re-burned every tick (only `--retry-empty` re-picks it).
-    return { contextNote: "", distilled: false, sources, status: "empty" };
+    return { contextNote: "", distilled: false, promptVersion: null, sources, status: "empty" };
   }
 
   // Distil the raw snippets into a clean note. A distil failure (unprovisioned key,
   // vendor down, empty completion) falls back to the cleaned raw snippets — never
-  // blocking the render.
+  // blocking the render. A fallback note was written by NO prompt, so its provenance is
+  // null rather than a version it did not run under.
   const distilled = await distilContextNote({ query, snippets, sources }, capture);
   const rawNote = snippets.join("\n").slice(0, 2000);
-  const contextNote = distilled ?? rawNote;
+  const contextNote = distilled?.note ?? rawNote;
 
-  return { contextNote, distilled: distilled !== null, sources, status: "resolved" };
+  return {
+    contextNote,
+    distilled: distilled !== null,
+    promptVersion: distilled?.promptVersion ?? null,
+    sources,
+    status: "resolved",
+  };
 }
 
 // ── Render artifact + shared helpers ─────────────────────────────────────────

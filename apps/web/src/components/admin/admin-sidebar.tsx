@@ -1,5 +1,6 @@
 import {
   CassetteTapeIcon,
+  ChatTeardropTextIcon,
   CurrencyDollarIcon,
   FilmReelIcon,
   FilmSlateIcon,
@@ -61,7 +62,8 @@ import { listTracks } from "@/lib/server/tracks";
 // per-set workstation is the Studio (`/admin/studio/$recordingId`), opened from a
 // Recordings row. `/admin/mixtapes` (the minted-mixtape index + distribution
 // links) → mixtapes; `/admin/costs` (the operator's private cost ledger) → costs;
-// System is the live service map at /status.
+// `/admin/prompts` (the prompt registry — every prompt Fluncle feeds a model,
+// versioned and rollback-able) → prompts. System is the live service map at /status.
 
 /** A sidebar entry's key. A page passes the entry it OWNS as `current`. */
 export type AdminNavCurrent =
@@ -77,6 +79,7 @@ export type AdminNavCurrent =
   | "mixtapes"
   | "newsletter"
   | "plans"
+  | "prompts"
   | "recordings"
   | "renders"
   | "system"
@@ -98,6 +101,7 @@ type AdminNavPath =
   | "/admin/mixtapes"
   | "/admin/newsletter"
   | "/admin/plans"
+  | "/admin/prompts"
   | "/admin/recordings"
   | "/admin/renders"
   | "/admin/usage"
@@ -212,20 +216,31 @@ const OBJECT_SECTIONS: NavSection[] = [
   },
 ];
 
-// The machine itself: the live service map. The render backlog badge moved to the
-// Renders entry (its dedicated page); System stays the deep-link to /status.
-const SYSTEM_ENTRY: NavEntry = {
-  icon: PulseIcon,
-  key: "system",
-  label: "System",
-  to: "/status",
-};
+// The machine itself, pinned to the foot of the rail: what Fluncle SAYS (the prompt
+// registry — machine config, not an object in the pipeline) and what he IS (the live
+// service map). The render backlog badge moved to the Renders entry (its dedicated
+// page); System stays the deep-link to /status. Neither carries a count: a prompt has
+// no backlog, and /status is a health read, not a queue.
+const SYSTEM_ENTRIES: NavEntry[] = [
+  {
+    icon: ChatTeardropTextIcon,
+    key: "prompts",
+    label: "Prompts",
+    to: "/admin/prompts",
+  },
+  {
+    icon: PulseIcon,
+    key: "system",
+    label: "System",
+    to: "/status",
+  },
+];
 
 // Every entry, flat — the lookup table behind navKeyForPath.
 const ALL_ENTRIES: NavEntry[] = [
   HOME_ENTRY,
   ...OBJECT_SECTIONS.flatMap((section) => section.entries),
-  SYSTEM_ENTRY,
+  ...SYSTEM_ENTRIES,
 ];
 
 // Which nav entry a pathname belongs to. The shell is mounted ONCE in the /admin
@@ -358,9 +373,12 @@ export function AdminSidebar({ current }: { current: AdminNavCurrent }) {
               </SidebarGroupContent>
             </SidebarGroup>
           ))}
+          {/* The System cluster, pinned to the foot: Prompts (what he says) then System
+              (what he is). Unlabelled — the group would repeat the word its own /status
+              entry already carries. */}
           <SidebarGroup className="mt-auto">
             <SidebarGroupContent>
-              <SidebarMenu>{renderEntry(SYSTEM_ENTRY)}</SidebarMenu>
+              <SidebarMenu>{SYSTEM_ENTRIES.map(renderEntry)}</SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>
         </nav>

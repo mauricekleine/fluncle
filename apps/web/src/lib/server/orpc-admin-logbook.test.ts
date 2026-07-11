@@ -82,8 +82,11 @@ describe("oRPC create_logbook_entry (POST /admin/logbook/{sector})", () => {
     expect(response?.status).toBe(200);
     expect(await readJson(response)).toEqual({ entry: ENTRY, ok: true });
     // The padded "036" param is parsed to the number 36.
+    // `promptVersion: null` — this call sent no `--prompt-version`, so the entry's
+    // provenance is NULL: no registry prompt authored it (docs/agents/prompt-registry.md).
     expect(createLogbookEntry).toHaveBeenCalledWith(36, {
       body: ENTRY.body,
+      promptVersion: null,
       title: ENTRY.title,
     });
   });

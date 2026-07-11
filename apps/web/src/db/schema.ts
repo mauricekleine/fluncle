@@ -400,6 +400,13 @@ export const findings = sqliteTable(
     // rendered on /log, never in JSON-LD/RSS/llms.txt, never quotes lyrics. This
     // is NOT the editorial `note` (the operator's public "why").
     contextNote: text("context_note"),
+    // PROVENANCE — the `context_distil` prompt version this note was distilled under
+    // (docs/agents/prompt-registry.md). NULL means the prompt was not resolved from the
+    // registry at all: either the row predates the registry, or the resolve fell back to
+    // the module's baked-in default. A number is the `prompt_versions.version` that was
+    // live at authoring time; `0` is the registry default (no operator override on file).
+    // Without this column "the context notes got worse last week" is unanswerable.
+    contextPromptVersion: integer("context_prompt_version"),
     // The context-fetch reliability marker (mirrors the backfill_* state above). The
     // `context_track` queue picks `pending` rows (never-attempted); this column lets a
     // CONFIRMED-EMPTY fetch (`empty`) be distinct from never-attempted, so the cron does
@@ -432,6 +439,10 @@ export const findings = sqliteTable(
     // one-time backfill.
     logId: text("log_id").unique(),
     note: text("note"),
+    // PROVENANCE — the `note_author` prompt version this editorial note was drafted
+    // under. Same contract as `context_prompt_version` above. An OPERATOR-typed note
+    // leaves it NULL (no prompt produced it), which is itself the honest reading.
+    notePromptVersion: integer("note_prompt_version"),
     // Word-level caption timings for the spoken observation, as a JSON string
     // (`{ source, words: [{ text, startMs, endMs }] }` — see lib/server/observation.ts
     // `ObservationAlignment`). Drives the synced subtitles on the radio player (and,
@@ -451,6 +462,9 @@ export const findings = sqliteTable(
     observationAudioUrl: text("observation_audio_url"),
     observationDurationMs: integer("observation_duration_ms"),
     observationGeneratedAt: text("observation_generated_at"),
+    // PROVENANCE — the `observation_script` prompt version this spoken script was
+    // authored under. Same contract as `context_prompt_version` above.
+    observationPromptVersion: integer("observation_prompt_version"),
     // The spoken observation SCRIPT — the voice-gated prose the agent authored and
     // passed to the observe render. It already lives
     // in the R2 `observation.json` (field `text`) + `observation.txt`; this column
@@ -784,6 +798,11 @@ export const submissions = sqliteTable(
     status: text("status", { enum: ["pending", "approved", "rejected"] }).notNull(),
     submitterHash: text("submitter_hash").notNull(),
     title: text("title").notNull(),
+    // PROVENANCE — the `triage_verdict` prompt version the verdict below was phrased
+    // under (docs/agents/prompt-registry.md). NULL when the sweep fell back to its
+    // baked-in default (or never visited); `0` is the registry default; a number is the
+    // live `prompt_versions.version`.
+    triagePromptVersion: integer("triage_prompt_version"),
     // The pre-chew triage verdict — a short one-line "looks like a find / already
     // logged / not our lane" read the on-box `fluncle-triage` sweep authors for a
     // pending submission before the operator gets to it. Operator-internal (never
@@ -1380,6 +1399,68 @@ export const noteRejections = sqliteTable(
   ],
 );
 
+// THE PROMPT HISTORY — the append-only override store behind the prompt registry
+// (docs/agents/prompt-registry.md). Every prompt Fluncle feeds a model at runtime has
+// a BAKED-IN DEFAULT in the repo (the registry, lib/server/prompts.ts); a row here
+// OVERRIDES that default, so the operator can tune a prompt from /admin or the CLI
+// with no deploy and no box rebake — which is the whole point, because a prompt is an
+// iterative object and shipping a code change to reword one line is a heavy loop.
+//
+// WHY ITS OWN TABLE AND NOT THE `settings` KV ABOVE. The KV is the right home for a
+// SCALAR whose only history is "what is it now" (a kill switch, a budget). A prompt is
+// none of that: it is a versioned DOCUMENT. A bad edit silently degrades every artifact
+// it touches until a human notices, so the operator must be able to see WHAT changed,
+// WHEN, and put it back — and an artifact must be able to record which version drafted
+// it (the `*_prompt_version` columns). A single mutable `value` cell can carry neither
+// the history nor the version integer the provenance columns point at. So: one row per
+// EDIT, never an update.
+//
+// APPEND-ONLY, and that is load-bearing. A row is never mutated and never deleted; the
+// ACTIVE prompt for a slug is simply its highest `version`. That makes every operation
+// a forward move with an audit trail:
+//   - edit     → insert version N+1
+//   - ROLL BACK to version K → insert version N+1 carrying version K's body
+//   - reset    → insert version N+1 carrying the repo's baked-in default body
+// A rollback is therefore just an edit whose body came from history — one operator
+// action, no destructive path, and the thing you rolled back FROM stays readable.
+//
+// `slug` is the registry key (`note_author`, `observation_script`, …), never free text:
+// an unknown slug is rejected at the API boundary, so this table cannot accumulate
+// orphan prompts for sweeps that do not exist. No row for a slug ⇒ the baked default is
+// live, and a sweep runs perfectly well having never read this table at all.
+export const promptVersions = sqliteTable(
+  "prompt_versions",
+  {
+    // The full prompt template. `{{variable}}` placeholders and `{{#if variable}}…
+    // {{/if}}` blocks are substituted at authoring time by `renderPrompt`
+    // (lib/server/prompts.ts); every other character is passed to the model verbatim.
+    body: text("body").notNull(),
+    createdAt: text("created_at").notNull(),
+    // Who made the edit. `operator` for a /admin or CLI edit (the only path today);
+    // `agent` is reserved so a future self-tuning pass is legible as such in the
+    // history rather than indistinguishable from a human's hand.
+    createdBy: text("created_by", { enum: ["operator", "agent"] })
+      .notNull()
+      .default("operator"),
+    id: text("id").primaryKey(),
+    // The operator's WHY, shown beside the version in the history ("shortened the
+    // neighbour block", "rolled back to v3"). Optional but strongly encouraged — it is
+    // what makes the history readable a month later.
+    note: text("note"),
+    // The registry key. Validated against the registry before insert.
+    slug: text("slug").notNull(),
+    // Monotonic per slug, starting at 1 (version `0` is reserved, in the provenance
+    // columns and nowhere else, to mean "the repo's baked-in default was live").
+    version: integer("version").notNull(),
+  },
+  (table) => [
+    // The active-prompt read is `where slug = ? order by version desc limit 1`, which
+    // this index serves from its leftmost column; it also enforces the one-body-per-
+    // (slug, version) invariant that makes the version integer a stable citation.
+    uniqueIndex("prompt_versions_slug_version_idx").on(table.slug, table.version),
+  ],
+);
+
 // Fluncle's Logbook — one first-person travelogue entry per SECTOR-DAY (the
 // canonical days-since-epoch number from sectorDay()). Every day that had at least
 // one finding gets a written log entry, authored nightly by the on-box
@@ -1410,6 +1491,12 @@ export const logbookEntries = sqliteTable("logbook_entries", {
   generatedBy: text("generated_by", { enum: ["agent", "operator"] })
     .notNull()
     .default("agent"),
+  // PROVENANCE — the `logbook_entry` prompt version this entry was authored under
+  // (docs/agents/prompt-registry.md). NULL for an operator-written entry or an agent
+  // fallback to the baked-in default; `0` is the registry default; a number is the live
+  // `prompt_versions.version`. Pairs with `generated_by`: that says WHO wrote it, this
+  // says under WHICH prompt.
+  promptVersion: integer("prompt_version"),
   // The sector-day (days since the 2026-05-30 epoch — sectorDay() in
   // lib/log-id-shared.ts). The natural key: one entry per day.
   sector: integer("sector").primaryKey(),
@@ -1807,6 +1894,11 @@ export const editions = sqliteTable("editions", {
   // The sequential edition number — minted on send (`max(number)+1`), null while a
   // draft. A plain integer never exhausts (no cap-54 like the mixtape spine).
   number: integer("number").unique(),
+  // PROVENANCE — the `newsletter_edition` prompt version this edition was authored
+  // under (docs/agents/prompt-registry.md). NULL for an operator-written draft or an
+  // agent fallback to the baked-in default; `0` is the registry default; a number is
+  // the live `prompt_versions.version`.
+  promptVersion: integer("prompt_version"),
   // Provenance of the send so a re-send is idempotent and the archive records how
   // it went out. "resend" + the Resend broadcast id.
   sendExternalId: text("send_external_id"),

@@ -75,10 +75,14 @@ describe("createLogbookEntry — the fill-empty-only guarantee", () => {
       {
         match: /insert into logbook_entries/,
         rows: (args) => {
+          // args: sector, title, body, generated_by, PROMPT_VERSION, generated_at,
+          // created_at, updated_at. `prompt_version` (args[4]) is the provenance stamp —
+          // which prompt-registry version authored the entry (docs/agents/prompt-registry.md).
           inserted.push({
             body: args[2],
-            generated_at: args[4],
+            generated_at: args[5],
             generated_by: args[3],
+            prompt_version: args[4],
             sector: args[0],
             title: args[1],
           });
@@ -100,6 +104,9 @@ describe("createLogbookEntry — the fill-empty-only guarantee", () => {
     expect(result.skipped).toBe(false);
     expect(result.entry.generatedBy).toBe("agent");
     expect(result.entry.sector).toBe(36);
+    // No prompt version was supplied, so the provenance column stays NULL — the honest
+    // record that no registry prompt wrote this entry.
+    expect(inserted[0]?.prompt_version).toBeNull();
     // The figure token survives into storage (the renderer needs it).
     expect(result.entry.body).toContain("[[036.7.2I]]");
   });

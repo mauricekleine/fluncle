@@ -58,6 +58,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type BoxCostEvent, emitCost, parseAuthoringSpend } from "./cost-emit";
+import { resolveSweepPrompt } from "./prompt-fetch";
 
 // ---------------------------------------------------------------------------
 // Config
@@ -140,6 +141,11 @@ type Authored = { content?: AuthoredContent; subject?: string };
 // never $0). The newsletter is a non-finding, so its ledger row is `global`-scoped.
 type AuthoredEdition = Authored & {
   model: string;
+  // PROVENANCE — the prompt version this edition was authored under: N = the operator's
+  // live override, 0 = the registry's baked default, NULL = the registry was unreachable
+  // and the inlined `buildAuthoringPrompt` wrote it. Rides out to the Worker on
+  // `--prompt-version` when the draft is persisted.
+  promptVersion: number | null;
   tokens: number;
   usd: number | null;
 };
@@ -306,17 +312,55 @@ function fetchMixtapes(since: string, until: string): Mixtape[] {
 // gate-relevant rules so the output is safe.
 // ---------------------------------------------------------------------------
 
-function buildAuthoringPrompt(findings: Finding[], mixtapes: Mixtape[]): string {
-  const findingLines = findings.map((f) => {
+// The week's material, as the model reads it: one line per finding/mixtape, each
+// carrying its logId and the note that is the PRIMARY fuel for its `why`. Shared by BOTH
+// prompt paths — the registry template takes each list PRE-JOINED as one string variable
+// (the renderer has no loops), and the baked-in fallback splices the same lines inline.
+// One definition, so the two cannot drift.
+
+function findingBlock(findings: Finding[]): string {
+  const lines = findings.map((f) => {
     const note = f.note?.trim() ? f.note.trim() : "(no note — OMIT the why for this finding)";
 
     return `- logId=${f.logId ?? "?"} | note: ${note}`;
   });
 
-  const mixtapeLines = mixtapes.map(
+  return lines.length ? lines.join("\n") : "(none)";
+}
+
+function mixtapeBlock(mixtapes: Mixtape[]): string {
+  const lines = mixtapes.map(
     (m) => `- logId=${m.logId ?? "?"} | note: ${m.note?.trim() || "(no note)"}`,
   );
 
+  return lines.length ? lines.join("\n") : "(none)";
+}
+
+// ---------------------------------------------------------------------------
+// THE PROMPT VARIABLES — the facts `buildAuthoringPrompt` used to interpolate in TS,
+// handed to the REGISTRY template instead. The prose (the JSON shape, the voice rails,
+// the single-list rule) all lives in the template now, and the sweep supplies only the
+// data. These names MUST match the `variables` array of the `newsletter_edition` registry
+// entry exactly, or the template renders holes.
+// ---------------------------------------------------------------------------
+
+function promptVariables(
+  findings: Finding[],
+  mixtapes: Mixtape[],
+): Record<string, string | undefined> {
+  return {
+    findingCount: String(findings.length),
+    findings: findingBlock(findings),
+    mixtapeCount: String(mixtapes.length),
+    mixtapes: mixtapeBlock(mixtapes),
+  };
+}
+
+// THIS IS THE FLOOR, NOT DEAD CODE. The live prompt comes from the registry over the API
+// (see `authorEdition`); this builder is what runs when that fetch fails for ANY reason.
+// Keep it in lockstep with the `newsletter_edition` default body in
+// apps/web/src/lib/server/prompts.ts.
+export function buildAuthoringPrompt(findings: Finding[], mixtapes: Mixtape[]): string {
   return [
     "You are Fluncle, authoring this week's newsletter edition — the uncle with the good records, writing a letter to the people on his list.",
     "Load and apply the `copywriting-fluncle` skill BEFORE you write a word — it is the full voice canon (Email register) and governs every line. Let it win over anything restated here.",
@@ -341,10 +385,10 @@ function buildAuthoringPrompt(findings: Finding[], mixtapes: Mixtape[]): string 
     "VOICE (copywriting-fluncle is canon and overrides this): the Email register, a letter from a bruv; first person 'I', never 'we'; no exclamation marks; if a sentence reads written rather than said out loud to a mate, rewrite it. The 'Ahoy cosmonauts,' open and the 'Happy raving,' / 'Fluncle' close are added by the render — do NOT put them in `intro`.",
     "",
     `THIS WEEK'S FINDINGS (${findings.length}, newest-first):`,
-    findingLines.length ? findingLines.join("\n") : "(none)",
+    findingBlock(findings),
     "",
     `THIS WEEK'S MIXTAPES (${mixtapes.length}):`,
-    mixtapeLines.length ? mixtapeLines.join("\n") : "(none)",
+    mixtapeBlock(mixtapes),
     "",
     "Output ONLY the JSON object.",
   ].join("\n");
@@ -372,10 +416,28 @@ function countFindings(content: { galaxies?: Array<{ findings?: unknown[] }> }):
  * Author the edition via one `claude -p` call (subscription auth, read-only tools).
  * Throws ClaudeAuthError on an auth/quota failure; returns null on any other failure
  * or a result that fails validation (so we never persist junk); returns {subject,
- * content} on success.
+ * content} + the prompt's provenance on success.
+ *
+ * THE PROMPT comes from the REGISTRY over the agent-tier API (`get_prompt`), so the
+ * operator can retune the Email register — and the JSON shape — from /admin with no
+ * deploy and no rebake. If that fetch fails for any reason, `resolveSweepPrompt` falls
+ * back to `buildAuthoringPrompt` above and the sweep authors EXACTLY as it did before
+ * the registry existed. A prompt store that blinks must never cost a Friday.
  */
-function authorEdition(findings: Finding[], mixtapes: Mixtape[]): AuthoredEdition | null {
-  const prompt = buildAuthoringPrompt(findings, mixtapes);
+async function authorEdition(
+  findings: Finding[],
+  mixtapes: Mixtape[],
+): Promise<AuthoredEdition | null> {
+  const { prompt, promptVersion } = await resolveSweepPrompt({
+    fallback: () => buildAuthoringPrompt(findings, mixtapes),
+    slug: "newsletter_edition",
+    variables: promptVariables(findings, mixtapes),
+  });
+
+  if (promptVersion === null) {
+    log("the prompt registry was unreachable — authoring from the baked-in default");
+  }
+
   // READ-ONLY tools so the authoring loads + applies the baked `copywriting-fluncle`
   // skill (the canonical voice — never inlined/forked). The skill read pushes a run to
   // ~2m12s, so the cron's script_timeout_seconds is raised to 300 in config.yaml (the
@@ -462,14 +524,24 @@ function authorEdition(findings: Finding[], mixtapes: Mixtape[]): AuthoredEditio
   // The measured authoring spend (shared parse — the CLI's own total_cost_usd is
   // authoritative, the token count is the informational quantity, the model comes off
   // modelUsage else the one we asked for).
-  return { content, subject, ...parseAuthoringSpend(envelope, NEWSLETTER_CLAUDE_MODEL) };
+  return {
+    content,
+    promptVersion,
+    subject,
+    ...parseAuthoringSpend(envelope, NEWSLETTER_CLAUDE_MODEL),
+  };
 }
 
 // ---------------------------------------------------------------------------
 // Persist (deterministic): write content to a temp file, draft via the CLI.
 // ---------------------------------------------------------------------------
 
-function persistDraft(authored: Authored, since: string, until: string): string | null {
+function persistDraft(
+  authored: Authored,
+  since: string,
+  until: string,
+  promptVersion: number | null,
+): string | null {
   const dir = mkdtempSync(join(tmpdir(), "newsletter-sweep-"));
   const contentPath = join(dir, "content.json");
 
@@ -488,6 +560,10 @@ function persistDraft(authored: Authored, since: string, until: string): string 
       since,
       "--window-until",
       until,
+      // PROVENANCE. Omitted entirely when the registry was unreachable, so the column
+      // stays NULL and the edition is honest about having been written by the baked-in
+      // fallback rather than by a version it never saw.
+      ...(promptVersion === null ? [] : ["--prompt-version", String(promptVersion)]),
       "--json",
     ]);
 
@@ -627,7 +703,7 @@ async function main(): Promise<void> {
   let authored: AuthoredEdition | null;
 
   try {
-    authored = authorEdition(findings, mixtapes);
+    authored = await authorEdition(findings, mixtapes);
   } catch (error) {
     if (error instanceof ClaudeAuthError) {
       pingClaudeAuthFailure(error.message);
@@ -660,7 +736,7 @@ async function main(): Promise<void> {
   }
 
   // 6. PERSIST
-  const id = persistDraft(authored, since, until);
+  const id = persistDraft(authored, since, until, authored.promptVersion);
 
   if (!id) {
     log("persist failed — no draft this run");
@@ -668,7 +744,15 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  log(`drafted edition ${id} (${finds} finds + ${mixes} mixtapes) — send pending`);
+  log(
+    `drafted edition ${id} (${finds} finds + ${mixes} mixtapes) — send pending; prompt ${
+      authored.promptVersion === null
+        ? "the baked-in default (the registry was unreachable)"
+        : authored.promptVersion === 0
+          ? "the registry default (v0)"
+          : `override v${authored.promptVersion}`
+    }`,
+  );
 
   // 7. OFFER — stdout (→ the host-timer /status marker + journald) AND a direct self-POST to
   // the ops-alert Discord webhook (no gateway --deliver discord under a host timer); the
@@ -697,8 +781,12 @@ async function main(): Promise<void> {
   await emitCost([cost]);
 }
 
-main().catch((error) => {
-  log(`fatal: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`);
-  console.error(JSON.stringify({ ok: false, reason: "sweep_error" }));
-  process.exit(1);
-});
+// `import.meta.main` so the pure helper (the fallback authoring prompt) can be imported
+// by a unit test without the sweep firing (the note-sweep / triage-sweep pattern).
+if (import.meta.main) {
+  main().catch((error) => {
+    log(`fatal: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`);
+    console.error(JSON.stringify({ ok: false, reason: "sweep_error" }));
+    process.exit(1);
+  });
+}

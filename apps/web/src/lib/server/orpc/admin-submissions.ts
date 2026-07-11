@@ -82,7 +82,12 @@ export function adminSubmissionsHandlers(os: Implementer) {
   // authority stays operator tier and untouched.
   const triageSubmissionHandler = os.triage_submission.use(adminAuth).handler(async ({ input }) => {
     try {
-      const submission = await triageSubmission(input.submissionId, input.verdict);
+      const submission = await triageSubmission(
+        input.submissionId,
+        input.verdict,
+        // PROVENANCE — the prompt version the sweep phrased this verdict under.
+        typeof input.promptVersion === "number" ? input.promptVersion : null,
+      );
 
       return { ok: true as const, submission };
     } catch (error) {

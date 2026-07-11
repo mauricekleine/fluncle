@@ -50,6 +50,13 @@ export type TrackUpdate = {
    */
   contextNote?: string;
   /**
+   * PROVENANCE — the `context_distil` prompt version that produced `contextNote`
+   * (0 = the registry's baked default, N = override N; NULL when no prompt produced it,
+   * i.e. the raw-snippet fallback). Internal like `contextNote`, so writing it moves no
+   * public lastmod. See lib/server/prompts.ts + docs/agents/prompt-registry.md.
+   */
+  contextPromptVersion?: number | null;
+  /**
    * The context-fetch reliability marker (the `context_track` queue's resume state).
    * Internal only — never surfaced through public DTOs, and (like contextNote)
    * writing it does NOT bump updated_at. See schema.ts `contextStatus`.
@@ -90,6 +97,13 @@ export type TrackUpdate = {
   logId?: string;
   note?: string;
   /**
+   * PROVENANCE — the `note_author` prompt version that wrote `note` (0 = the registry's
+   * baked default, N = override N). Set explicitly by the authoring path; when `note` is
+   * written WITHOUT it, the version is cleared to NULL, because an operator-typed note was
+   * written by no prompt. See lib/server/prompts.ts + docs/agents/prompt-registry.md.
+   */
+  notePromptVersion?: number | null;
+  /**
    * Word-level caption timings for the spoken observation, as a JSON string
    * (`ObservationAlignment` from lib/server/observation.ts). Drives the synced radio
    * subtitles. Empty string clears it. NOT in VISIBLE_FIELDS: it describes an EXISTING
@@ -111,6 +125,12 @@ export type TrackUpdate = {
    * render the sibling `observationAudioUrl` already bumps lastmod, and the one-off
    * back-migration writes it standalone (must move no public surface).
    */
+  /**
+   * PROVENANCE — the `observation_script` prompt version this script was authored under
+   * (0 = the registry's baked default, N = override N; NULL when the sweep fell back to
+   * its baked-in prompt). See lib/server/prompts.ts + docs/agents/prompt-registry.md.
+   */
+  observationPromptVersion?: number | null;
   observationScript?: string;
   /** ISO of the last full-song capture attempt (backoff-cooldown anchor). See captureStatus. */
   sourceAudioAttemptedAt?: string;
@@ -202,15 +222,18 @@ const PROTECTED_SOURCES = new Set(["operator", "rekordbox"]);
 // never INSERTs a `findings` row: certifying a track is `publish_track`'s job alone.
 const CERTIFICATION_FIELDS = new Set<keyof TrackUpdate>([
   "contextNote",
+  "contextPromptVersion",
   "contextStatus",
   "enrichmentStatus",
   "galaxyId",
   "logId",
   "note",
+  "notePromptVersion",
   "observationAlignmentJson",
   "observationAudioUrl",
   "observationDurationMs",
   "observationGeneratedAt",
+  "observationPromptVersion",
   "observationScript",
   "videoGrain",
   "videoModel",
@@ -502,14 +525,46 @@ export async function updateTrack(
     args.push(update.sourceAudioBytes);
   }
 
+  // THE PROVENANCE INVARIANT: a `*_prompt_version` column always describes the text
+  // CURRENTLY in its row, or it is NULL. So rewriting the text through this generic path
+  // (the operator typing a note by hand, an admin correction) CLEARS the version in the
+  // same statement — otherwise the row would keep citing the prompt that wrote the note it
+  // just replaced, which is worse than citing nothing: it is a confident wrong answer to
+  // the one question the column exists to answer.
+  //
+  // A caller that KNOWS the provenance (the `note_track` / `observe_track` / `context_track`
+  // paths, which author through a registry prompt) passes the version explicitly and it wins.
+  // See lib/server/prompts.ts + docs/agents/prompt-registry.md.
   if (update.note !== undefined) {
     findingSets.push("note = ?");
     findingArgs.push(update.note);
+
+    if (update.notePromptVersion === undefined) {
+      findingSets.push("note_prompt_version = ?");
+      findingArgs.push(null);
+    }
+  }
+
+  if (update.notePromptVersion !== undefined) {
+    findingSets.push("note_prompt_version = ?");
+    findingArgs.push(update.notePromptVersion);
   }
 
   if (update.contextNote !== undefined) {
     findingSets.push("context_note = ?");
     findingArgs.push(update.contextNote);
+
+    // Same invariant as `note` above: a context note rewritten without a stated provenance
+    // was written by no registry prompt, so the version must go with it.
+    if (update.contextPromptVersion === undefined) {
+      findingSets.push("context_prompt_version = ?");
+      findingArgs.push(null);
+    }
+  }
+
+  if (update.contextPromptVersion !== undefined) {
+    findingSets.push("context_prompt_version = ?");
+    findingArgs.push(update.contextPromptVersion);
   }
 
   if (update.contextStatus !== undefined) {
@@ -541,6 +596,18 @@ export async function updateTrack(
   if (update.observationGeneratedAt !== undefined) {
     findingSets.push("observation_generated_at = ?");
     findingArgs.push(update.observationGeneratedAt);
+  }
+
+  if (update.observationPromptVersion !== undefined) {
+    findingSets.push("observation_prompt_version = ?");
+    findingArgs.push(update.observationPromptVersion);
+  }
+
+  // Same invariant: an observation script rewritten with no stated provenance clears the
+  // version rather than keeping one that describes the script it replaced.
+  if (update.observationScript !== undefined && update.observationPromptVersion === undefined) {
+    findingSets.push("observation_prompt_version = ?");
+    findingArgs.push(null);
   }
 
   if (update.observationScript !== undefined) {
@@ -707,7 +774,11 @@ export async function updateTrack(
 // bump happens iff the row was written. The edge-cache purge is likewise gated on a
 // real write: a lost race wrote nothing, so there is nothing to refresh. The caller
 // (the `note_track` handler) has already voice-gated + length-validated the note.
-export async function fillEmptyNote(trackId: string, note: string): Promise<boolean> {
+export async function fillEmptyNote(
+  trackId: string,
+  note: string,
+  promptVersion?: number | null,
+): Promise<boolean> {
   const db = await getDb();
   const existingResult = await db.execute({
     args: [trackId],
@@ -719,10 +790,15 @@ export async function fillEmptyNote(trackId: string, note: string): Promise<bool
     throw new ApiError("not_found", `No track with id ${trackId}`, 404);
   }
 
+  // The note and its PROVENANCE land in the SAME atomic statement, so the version can
+  // never describe a different note than the one it wrote (docs/agents/prompt-registry.md).
+  // `promptVersion` is undefined for an operator-typed note and null when the sweep fell
+  // back to its baked-in prompt — both store NULL, which reads as "no registry prompt
+  // wrote this".
   const result = await db.execute({
-    args: [note, new Date().toISOString(), trackId],
+    args: [note, promptVersion ?? null, new Date().toISOString(), trackId],
     sql: `update findings
-            set note = ?, updated_at = ?
+            set note = ?, note_prompt_version = ?, updated_at = ?
           where track_id = ?
             and (note is null or trim(note) = '')`,
   });

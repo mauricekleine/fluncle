@@ -70,3 +70,9 @@ The `"Ahoy cosmonauts,"` open and `"Happy raving," / "Fluncle"` close are added 
 - **The send is operator-only by design.** Your agent token gets a 403 on `admin newsletter send`. Do not work around it; post the `fluncle admin newsletter send <id>` command and let the operator run it.
 - **Every fact comes from the API response or a source-linked tidbit.** The uncle never makes things up; the music is impressive enough. Never invent a track, artist, date, Log ID, or stat.
 - **One draft per window, updated not duplicated.** Re-running finds the existing unsent draft and re-offers it rather than authoring a second one.
+
+## The prompt lives in the DATABASE, not in the image
+
+The authoring prompt is the `newsletter_edition` entry in the **prompt registry** ([docs/agents/prompt-registry.md](./prompt-registry.md)). The sweep fetches it over the AGENT-tier `get_prompt` each tick, so the operator retunes it from `/admin/prompts` or the `fluncle admin prompts` CLI with **no deploy and no box rebake**.
+
+The repo still keeps the baked default (`buildAuthoringPrompt` in `newsletter-sweep.ts`), and a failed fetch falls back to it and logs — a prompt store that blinks can never stop the sweep. Every edition records the version that drafted it in `editions.prompt_version` (`0` = the repo's default, `N` = override N, `NULL` = the baked fallback wrote it).

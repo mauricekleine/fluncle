@@ -602,6 +602,12 @@ export type TrackObserveOptions = {
   durationTargetSec?: number;
   /** Re-render even if an observation already exists (voice re-tune / fix a render). */
   force?: boolean;
+  /**
+   * PROVENANCE — the prompt-registry version this script was authored under (0 = the
+   * baked default, N = override N). The on-box sweep passes it; omit it for an
+   * operator-written script. See docs/agents/prompt-registry.md.
+   */
+  promptVersion?: number;
   /** The spoken script (read from --script-file by the caller, or passed inline). */
   script: string;
   voiceId?: string;
@@ -612,6 +618,7 @@ type ObserveBody = {
   durationMs?: number;
   durationTargetSec?: number;
   force?: boolean;
+  promptVersion?: number;
   script: string;
   voiceId?: string;
 };
@@ -642,6 +649,9 @@ export async function trackObserveCommand(
   }
   if (options.durationTargetSec !== undefined) {
     body.durationTargetSec = options.durationTargetSec;
+  }
+  if (typeof options.promptVersion === "number") {
+    body.promptVersion = options.promptVersion;
   }
   if (options.contextNote !== undefined) {
     body.contextNote = options.contextNote;
@@ -715,10 +725,18 @@ export type TrackNoteOptions = {
   dryRun?: boolean;
   /** The voice-gated editorial note (read from --script-file by the caller, or inline). */
   note: string;
+  /**
+   * PROVENANCE — the prompt-registry version this note was authored under (0 = the
+   * baked default, N = override N). The on-box sweep passes it; omit it for an
+   * operator-typed note, whose provenance is honestly NULL — no prompt wrote it.
+   * See docs/agents/prompt-registry.md.
+   */
+  promptVersion?: number;
 };
 
 type NoteBody = {
   dryRun?: boolean;
+  promptVersion?: number;
   note: string;
 };
 
@@ -755,6 +773,10 @@ export async function trackNoteCommand(
 
   if (options.dryRun) {
     body.dryRun = true;
+  }
+
+  if (typeof options.promptVersion === "number") {
+    body.promptVersion = options.promptVersion;
   }
 
   return adminApiPost<TrackNoteResult>(

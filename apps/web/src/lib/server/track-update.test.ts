@@ -437,3 +437,68 @@ describe("updateTrack — empty-string clears to null (not stored as '')", () =>
     });
   }
 });
+
+// ---------------------------------------------------------------------------
+// THE PROVENANCE INVARIANT (docs/agents/prompt-registry.md).
+//
+// A `*_prompt_version` column always describes the text CURRENTLY in its row, or it is
+// NULL. It must never be left pointing at the prompt that wrote the text it just replaced
+// — that is worse than pointing at nothing, because it is a confident WRONG answer to the
+// one question the column exists to answer ("which prompt drafted this?").
+//
+// The scenario that makes this bite: the auto-note sweep writes a note under prompt v7,
+// the operator reads it, hates it, and types their own over the top through the generic
+// `update_track` path. If the version stayed at 7, the archive would claim v7 wrote a line
+// v7 has never seen.
+// ---------------------------------------------------------------------------
+
+describe("updateTrack — the prompt-provenance invariant", () => {
+  it("CLEARS note_prompt_version when the note is rewritten with no stated provenance", async () => {
+    // The operator typing over an auto-note. No prompt wrote this line, so no prompt may
+    // be credited with it.
+    await updateTrack("track-123", { note: "My own words, thanks." });
+
+    expect(lastUpdateSql).toContain("note = ?");
+    expect(lastUpdateSql).toContain("note_prompt_version = ?");
+
+    const update = execute.mock.calls
+      .map((call) => call[0] as { args: unknown[]; sql: string })
+      .find((query) => query.sql.includes("note = ?"));
+
+    expect(update?.args).toContain(null);
+  });
+
+  it("KEEPS the stated version when the authoring path supplies one", async () => {
+    await updateTrack("track-123", { note: "Authored under v7.", notePromptVersion: 7 });
+
+    const update = execute.mock.calls
+      .map((call) => call[0] as { args: unknown[]; sql: string })
+      .find((query) => query.sql.includes("note_prompt_version = ?"));
+
+    expect(update?.args).toContain(7);
+    // And it is written EXACTLY once — never once as the stated value and again as null.
+    expect(lastUpdateSql.match(/note_prompt_version = \?/g)).toHaveLength(1);
+  });
+
+  it("CLEARS context_prompt_version when the context note is rewritten bare", async () => {
+    await updateTrack("track-123", { contextNote: "Hand-corrected facts." });
+
+    expect(lastUpdateSql).toContain("context_prompt_version = ?");
+    expect(lastUpdateSql.match(/context_prompt_version = \?/g)).toHaveLength(1);
+  });
+
+  it("CLEARS observation_prompt_version when the script is rewritten bare", async () => {
+    await updateTrack("track-123", { observationScript: "A hand-written script." });
+
+    expect(lastUpdateSql).toContain("observation_prompt_version = ?");
+    expect(lastUpdateSql.match(/observation_prompt_version = \?/g)).toHaveLength(1);
+  });
+
+  it("does not touch a version column when its text is not being written", async () => {
+    await updateTrack("track-123", { bpm: 174 });
+
+    expect(lastUpdateSql).not.toContain("note_prompt_version");
+    expect(lastUpdateSql).not.toContain("context_prompt_version");
+    expect(lastUpdateSql).not.toContain("observation_prompt_version");
+  });
+});

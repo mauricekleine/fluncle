@@ -90,6 +90,10 @@ const ObserveTrackBodySchema = z.looseObject({
   // Re-render an existing observation instead of no-op'ing on it (operator-driven
   // voice re-tunes / fixing a degenerate render). Default behaviour stays idempotent.
   force: z.unknown().optional(),
+  // PROVENANCE — the prompt-registry version this spoken script was authored under
+  // (0 = the baked default, N = override N). The on-box sweep sends it; omitted when the
+  // sweep fell back to its inlined prompt. See docs/agents/prompt-registry.md.
+  promptVersion: z.number().int().min(0).optional(),
   script: z.unknown().optional(),
   voiceId: z.unknown().optional(),
 });
@@ -116,6 +120,11 @@ const ContextTrackBodySchema = z.looseObject({
 const NoteTrackBodySchema = z.looseObject({
   dryRun: z.unknown().optional(),
   note: z.unknown().optional(),
+  // PROVENANCE — the prompt version the note was authored under (0 = the registry's
+  // baked default, N = operator override N). The on-box sweep sends it; an operator
+  // typing a note by hand sends nothing and the column stays NULL, which is the honest
+  // reading (no prompt wrote it). See docs/agents/prompt-registry.md.
+  promptVersion: z.number().int().min(0).optional(),
 });
 
 /**

@@ -105,6 +105,12 @@ The note is a live, **public**, **written** Fluncle voice surface — it lands s
 
 The pipeline board's **Note** cell is an `auto` step that stays **actionable** (the operator can still hand-write). It reads `done` when a note exists (auto-authored OR operator-typed); `noteRan` (the `backfill_note_attempted_at` stamp) refines the grey state so a finding the cron visited but couldn't fill reads "Checked — no note" rather than a bare "Note" — exactly the done-when-ran pattern Discogs/Last.fm use, keyed off the same `listBackfillRanForTracks` machinery.
 
+## The prompt lives in the DATABASE, not in the image
+
+The authoring prompt above is the `note_author` entry in the **prompt registry** ([docs/agents/prompt-registry.md](./prompt-registry.md)). The sweep fetches it over the AGENT-tier `get_prompt` each tick, so the operator can retune it from `/admin/prompts` or the CLI with **no deploy and no box rebake** — which matters most for THIS prompt, because the neighbour block is the front line against every note in a galaxy reading the same, and it is going to get tuned a lot.
+
+The repo still keeps the baked default (`buildAuthoringPrompt` in `note-sweep.ts`), and a failed fetch falls back to it and logs. A prompt store that blinks can never stop the sweep. Every note records the version that drafted it in `findings.note_prompt_version` (`0` = the repo's default, `N` = override N, `NULL` = the baked fallback wrote it, or an operator typed it), so "the notes got worse last week" has an answer.
+
 ## The box cron (LIVE)
 
 `fluncle-note` is the on-box `--no-agent` hybrid sweep — deterministic queue + ONE `claude -p` authoring + deterministic delivery — mirroring `fluncle-observation`, and it runs **live on the box every 10 min** (confirmed in the cron roster + the `fluncle-healthcheck` `CRON_SPECS`). Source: [`hermes/scripts/note-sweep.{sh,ts}`](./hermes/scripts/). The full runbook (the token file-source, the auth-fail ping, `BATCH_CAP=1`, the host-timer install (`install-host-timers.sh`)) is in [`hermes/cron/README.md`](./hermes/cron/README.md) § The HYBRID `--no-agent` auto-note cron.

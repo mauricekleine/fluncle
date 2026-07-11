@@ -27,6 +27,7 @@ import { adminBackfillsContract } from "./admin-backfills";
 import { adminCatalogueContract } from "./admin-catalogue";
 import { adminCostsContract } from "./admin-costs";
 import { adminGalaxiesContract } from "./admin-galaxies";
+import { adminPromptsContract } from "./admin-prompts";
 import { artistsContract } from "./artists";
 import { galaxiesContract } from "./galaxies";
 import { graphContract } from "./graph";
@@ -126,6 +127,15 @@ export {
 } from "./admin-notes";
 export { type CostEventInput, CostEventInputSchema, recordCost } from "./admin-costs";
 export { recordHealth, ServiceHealthStatusSchema } from "./admin-health";
+export {
+  adminPromptsContract,
+  getPrompt,
+  listPrompts,
+  PromptSlugSchema,
+  PromptSourceSchema,
+  PromptSurfaceSchema,
+  updatePrompt,
+} from "./admin-prompts";
 export { createLogbookEntry, listLogbookGaps, updateLogbookEntry } from "./admin-logbook";
 export {
   createEdition,
@@ -269,6 +279,7 @@ export const contract = {
   ...adminCatalogueContract,
   ...adminCostsContract,
   ...adminGalaxiesContract,
+  ...adminPromptsContract,
   ...artistsContract,
   ...galaxiesContract,
   ...graphContract,
