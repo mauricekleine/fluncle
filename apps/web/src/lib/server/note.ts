@@ -19,6 +19,17 @@
 // word banned in the heard surface is banned in the read one too. Only the LENGTH
 // bound differs: a note is a short editorial line (the public `NOTE_MAX_LENGTH`
 // 280-char budget), not a 20–45s read.
+//
+// THE SECOND GATE — the ECHO gate (the anti-sameness rail). The auto-note is now
+// authored with its finding's SONIC NEIGHBOURS' notes in the prompt (the
+// vibe-neighbour layer). That is the feature's whole risk: neighbour notes are there
+// to show the model what this REGION of the archive already sounds like so it writes
+// something ELSE — the cluster INFORMS but never TEMPLATES, and a note that reads
+// like every other note in its galaxy is worse than none. So the rail is MECHANICAL,
+// not hoped for: `gateNoteEcho` re-reads the same neighbour notes the agent saw and
+// hard-fails a note that lifts a phrase from one or overlaps it too far. A rejected
+// note is not stored — the finding simply stays note-less until a better line lands.
+// Silence beats a generic line.
 
 import { NOTE_MAX_LENGTH } from "../log-prose";
 import { scanObservationScript } from "./observation";
@@ -74,4 +85,200 @@ export function gateNoteText(text: unknown): string {
   }
 
   return trimmed;
+}
+
+// ── The echo gate — the anti-sameness rail on the vibe-neighbour layer ────────────
+//
+// Two signals, measured against the notes of the finding's SONIC NEIGHBOURS (the
+// exact notes the authoring prompt showed the model). Both thresholds were calibrated
+// against the live 61-note archive (see the PR): the corpus's own worst offender lifts
+// a 6-token run from a neighbour, its mean max-neighbour overlap is 0.10, and nothing
+// in it reaches 0.30 overlap. So the gate bites on the genuine echoes and lets an
+// honestly-different line through.
+//
+//   1. A LIFTED PHRASE — the longest run of consecutive words the candidate shares
+//      with a neighbour. Four words carrying at least one content word ("my shoulders
+//      dropped before", "I've been rewinding it since") is a borrowed move, not a
+//      coincidence. This is the signal that actually catches the failure mode: the
+//      voice has a small stock of bodily images, and paraphrase-by-neighbour reuses
+//      the phrasing verbatim.
+//   2. WHOLESALE OVERLAP — the Jaccard overlap of content words. It catches the
+//      rewrite that dodges the n-gram by reordering ("the liquid dropped my shoulders"
+//      vs "my shoulders still follow") but says the same thing with the same words.
+//
+// Both are cheap, pure, and deterministic — no model in the loop judging its own work.
+
+/** A run of consecutive shared words this long (with a content word in it) is a lift. */
+const ECHO_MIN_PHRASE_WORDS = 4;
+/** Content-word overlap at or above this reads as the same note wearing a new hat. */
+const ECHO_MAX_JACCARD = 0.3;
+
+// Function words carry no editorial content, so they are stripped before the overlap
+// is measured (they would otherwise float every pair's Jaccard on "the", "it", "and").
+// They are KEPT for the phrase run — "my shoulders dropped before" is a lifted move
+// precisely because of its shape, function words and all.
+const ECHO_STOPWORDS = new Set(
+  (
+    "a an the and or but of to in on at it its is was be been this that these those " +
+    "i my me you your he she they them we our us with without for from as into onto " +
+    "over under before after then than so very just still yet even more most much " +
+    "many had have has do does did doing done got get gets not no nor if when while " +
+    "where how what who which one ones another other any every each both there here " +
+    "now s t re ve ll d m"
+  ).split(" "),
+);
+
+/** Normalize a note to a word stream: lowercase, punctuation dropped, apostrophes split. */
+function echoWords(text: string): string[] {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+}
+
+/** The content words of a note — the words that carry the editorial claim. */
+function echoContentWords(text: string): string[] {
+  return echoWords(text).filter((word) => !ECHO_STOPWORDS.has(word) && word.length > 2);
+}
+
+/** Content-word Jaccard overlap of two notes (0 = disjoint, 1 = the same words). */
+function contentOverlap(a: string, b: string): number {
+  const left = new Set(echoContentWords(a));
+  const right = new Set(echoContentWords(b));
+
+  if (left.size === 0 || right.size === 0) {
+    return 0;
+  }
+
+  let shared = 0;
+
+  for (const word of left) {
+    if (right.has(word)) {
+      shared += 1;
+    }
+  }
+
+  return shared / new Set([...left, ...right]).size;
+}
+
+/**
+ * The longest run of consecutive words two notes share, or "" when the longest run is
+ * shorter than the lift threshold or is pure function words (a shared "and I have been"
+ * is grammar, not a borrowed image).
+ */
+function liftedPhrase(a: string, b: string): string {
+  const left = echoWords(a);
+  const right = echoWords(b);
+  let best: string[] = [];
+
+  for (let i = 0; i < left.length; i += 1) {
+    for (let j = 0; j < right.length; j += 1) {
+      let run = 0;
+
+      while (i + run < left.length && j + run < right.length && left[i + run] === right[j + run]) {
+        run += 1;
+      }
+
+      if (run > best.length) {
+        best = left.slice(i, i + run);
+      }
+    }
+  }
+
+  if (best.length < ECHO_MIN_PHRASE_WORDS) {
+    return "";
+  }
+
+  const carriesContent = best.some((word) => !ECHO_STOPWORDS.has(word) && word.length > 2);
+
+  return carriesContent ? best.join(" ") : "";
+}
+
+/** One neighbour note the candidate is measured against (the notes the agent was shown). */
+export type NoteNeighbor = { logId: string; note: string };
+
+/** The worst echo a candidate note makes against its neighbourhood. */
+export type NoteEcho = {
+  /** True when the candidate crosses either threshold — it must not be stored. */
+  echoes: boolean;
+  /** The neighbour it echoes hardest (its Log ID), or null when there is nothing to echo. */
+  logId: string | null;
+  /** The content-word overlap with that neighbour (0..1). */
+  overlap: number;
+  /** The run of words lifted from that neighbour, or "" when none reaches the threshold. */
+  phrase: string;
+};
+
+/**
+ * Score a candidate note against the notes of its sonic neighbours — the mechanical
+ * anti-sameness measurement behind the echo gate. Pure and deterministic; the same
+ * function the sweep's report and the Worker's gate both read, so "how same is it"
+ * has exactly one definition.
+ *
+ * Reports the WORST neighbour: the one with a lifted phrase (longest wins) or, absent
+ * any lift, the highest content overlap. An empty neighbourhood (a finding with no
+ * embedding yet, or the first note in a region) scores `{ echoes: false, overlap: 0 }`
+ * — nothing to echo, so nothing to gate.
+ */
+export function scoreNoteEcho(note: string, neighbors: readonly NoteNeighbor[]): NoteEcho {
+  let worst: NoteEcho = { echoes: false, logId: null, overlap: 0, phrase: "" };
+  // Severity orders the neighbours: ANY lift outranks EVERY bare overlap (a lifted
+  // phrase is the harder evidence), longer lifts outrank shorter ones, and among
+  // lift-free neighbours the highest overlap wins. Overlap is < 1, so the +1 offset
+  // keeps the two bands from ever crossing.
+  const severity = (echo: NoteEcho) =>
+    echo.phrase ? 1 + echo.phrase.split(" ").length : echo.overlap;
+  let worstSeverity = -1;
+
+  for (const neighbor of neighbors) {
+    if (!neighbor.note.trim()) {
+      continue;
+    }
+
+    const phrase = liftedPhrase(note, neighbor.note);
+    const overlap = contentOverlap(note, neighbor.note);
+    const candidate: NoteEcho = {
+      echoes: phrase.length > 0 || overlap >= ECHO_MAX_JACCARD,
+      logId: neighbor.logId,
+      overlap,
+      phrase,
+    };
+
+    if (severity(candidate) > worstSeverity) {
+      worstSeverity = severity(candidate);
+      worst = candidate;
+    }
+  }
+
+  return worst;
+}
+
+/**
+ * Voice-gate's sibling: hard-fail an agent-authored note that ECHOES its sonic
+ * neighbourhood, throwing a clean ApiError the handler turns into a 422. The message
+ * names the neighbour and the lifted phrase, so the sweep can re-author against it.
+ *
+ * The rail this enforces (docs/agents/note-agent.md): the neighbour notes INFORM the
+ * authoring — they show the region's register and the moves already spent — but they
+ * must never be templated. A finding whose only available note echoes its neighbours
+ * stays note-less; the note is optional, and silence beats a generic line.
+ */
+export function gateNoteEcho(note: string, neighbors: readonly NoteNeighbor[]): NoteEcho {
+  const echo = scoreNoteEcho(note, neighbors);
+
+  if (!echo.echoes) {
+    return echo;
+  }
+
+  const detail = echo.phrase
+    ? `it lifts "${echo.phrase}" straight from ${echo.logId}`
+    : `it reuses ${Math.round(echo.overlap * 100)}% of ${echo.logId}'s words`;
+
+  throw new ApiError(
+    "note_echoes_neighbours",
+    `The note echoes its sonic neighbourhood: ${detail}. The neighbours inform the note, they never template it — write a line that is this finding's own, or leave it unwritten.`,
+    422,
+  );
 }

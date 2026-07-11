@@ -215,11 +215,17 @@ type TrackContextOptions = {
 };
 
 type TrackNoteOptions = {
+  dryRun?: boolean;
   json: boolean;
   limit?: string;
   queue?: boolean;
   script?: string;
   scriptFile?: string;
+};
+
+type TrackSimilarOptions = {
+  json: boolean;
+  limit?: string;
 };
 
 type PreviewArchiveBackfillOptions = {
@@ -523,6 +529,22 @@ function addTrackCommands(program: Command): void {
     .action(async (idOrLogId: string | undefined, options: JsonOptions) => {
       const { trackGetCommand } = await import("./commands/track");
       await runTrackGet(idOrLogId, options, trackGetCommand);
+    });
+
+  // `get_similar_findings` → `tracks similar` (Convention B). The finding's sonic
+  // neighbours, off the MuQ embedding — the same "more like this" cluster the /log page
+  // shows, with each neighbour's editorial note. The auto-note sweep reads this to hear
+  // the region of the archive a finding lands in before it writes about it.
+  tracks
+    .command("similar")
+    .description("The findings that sound nearest to one (the sonic neighbourhood)")
+    .argument("[idOrLogId]")
+    .option("--limit <limit>", "Number of neighbours to show", "6")
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (idOrLogId: string | undefined, options: TrackSimilarOptions) => {
+      const { trackSimilarCommand } = await import("./commands/track");
+      await runTrackSimilar(idOrLogId, options, trackSimilarCommand);
     });
 }
 
@@ -1016,6 +1038,11 @@ function addAdminCommands(program: Command): void {
     .option("--limit <limit>", "Number of findings to show with --queue", "10")
     .option("--script <text>", "The voice-gated editorial note")
     .option("--script-file <file>", "Read the editorial note from a file")
+    .option(
+      "--dry-run",
+      "Run the voice + echo gates and report the verdict without storing anything",
+      false,
+    )
     .option("--json", "Print JSON", false)
     .allowExcessArguments()
     .action(async (idOrLogId: string | undefined, options: TrackNoteOptions) => {
@@ -1984,11 +2011,14 @@ async function runTrackNote(
 
   if (!idOrLogId || !note || !note.trim()) {
     throw new Error(
-      "Usage: fluncle admin tracks note <track_id|log_id> (--script <text> | --script-file <file>) [--json]",
+      "Usage: fluncle admin tracks note <track_id|log_id> (--script <text> | --script-file <file>) [--dry-run] [--json]",
     );
   }
 
-  const result = await trackNoteCommand(idOrLogId, { note: note.trim() });
+  const result = await trackNoteCommand(idOrLogId, {
+    dryRun: options.dryRun,
+    note: note.trim(),
+  });
 
   if (options.json) {
     printJson(result);
@@ -2000,8 +2030,63 @@ async function runTrackNote(
     return;
   }
 
+  // The dry run stores nothing — it reports what the two gates made of the line, so the
+  // operator can read the echo before the note goes anywhere near /log.
+  if (result.dryRun) {
+    console.log(`Both gates passed for ${result.logId}. Nothing was stored (dry run).`);
+    console.log(`  ${result.note}`);
+
+    if (result.echo?.logId) {
+      const reading = result.echo.phrase
+        ? `lifts "${result.echo.phrase}" from ${result.echo.logId}`
+        : `${Math.round(result.echo.overlap * 100)}% word overlap with ${result.echo.logId}`;
+      console.log(`  echo: ${reading}`);
+    }
+
+    return;
+  }
+
   console.log(`Authored the note for ${result.logId}:`);
   console.log(`  ${result.note}`);
+}
+
+// `fluncle tracks similar <id|logId>` — the sonic neighbourhood off the MuQ embedding.
+// Each row carries the neighbour's own editorial note, which is what the auto-note
+// sweep reads: the region's register, and the moves already spent in it.
+async function runTrackSimilar(
+  idOrLogId: string | undefined,
+  options: TrackSimilarOptions,
+  trackSimilarCommand: typeof import("./commands/track").trackSimilarCommand,
+): Promise<void> {
+  if (!idOrLogId) {
+    throw new Error(
+      "Missing id. Usage: fluncle tracks similar <track_id|log_id> [--limit <n>] [--json]",
+    );
+  }
+
+  const limit = options.limit ? Number.parseInt(options.limit, 10) : undefined;
+  const result = await trackSimilarCommand(
+    idOrLogId,
+    limit !== undefined && Number.isFinite(limit) ? limit : undefined,
+  );
+
+  if (options.json) {
+    printJson(result);
+    return;
+  }
+
+  if (result.findings.length === 0) {
+    console.log("Nothing sounds near this one yet. It may still be waiting on its embedding.");
+    return;
+  }
+
+  for (const finding of result.findings) {
+    console.log(`${finding.logId ?? "—"}  ${finding.artists.join(", ")} — ${finding.title}`);
+
+    if (finding.note) {
+      console.log(`  ${finding.note}`);
+    }
+  }
 }
 
 // REF-05 — drive the public → private preview-bucket migration. Three modes:

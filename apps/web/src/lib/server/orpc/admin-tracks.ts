@@ -31,7 +31,7 @@ import { FOUND_BASE, trackMedia, videoVersion } from "../../media";
 import { recordNoteAttempt } from "../backfill";
 import { coerceEmbedding, EMBEDDING_DIMS } from "../embedding";
 import { parseEditorialNote } from "../http-errors";
-import { gateNoteText } from "../note";
+import { gateNoteEcho, gateNoteText, type NoteNeighbor } from "../note";
 import { publishTrack } from "../publish";
 import {
   DEFAULT_CARTESIA_SPEED,
@@ -53,6 +53,7 @@ import {
   ENRICHMENT_STATUS_FILTERS,
   decodeTrackCursor,
   getMixableOrder,
+  getSimilarFindings,
   getTrackContextNote,
   listTracks,
   MixableOrderError,
@@ -84,6 +85,40 @@ type NoteBody = AdminTrackInputs["note_track"];
 // Admin board list page-size bounds, ported verbatim from the live GET route.
 const ADMIN_LIST_DEFAULT_LIMIT = 16;
 const ADMIN_LIST_MAX_LIMIT = 48;
+
+// ── The vibe neighbourhood (the auto-note's second fuel) ──────────────────────────
+//
+// How many sonic neighbours the note reads. Six is the same window the `/log` "more
+// like this" row shows: wide enough to describe a region of the archive, tight enough
+// that every one of them genuinely sounds like the finding. The neighbours come from
+// the MuQ audio EMBEDDING (`get_similar_findings` — an exact cosine scan in SQL, the
+// probe bound as a raw blob), never from `features_json`: the note encodes a
+// subjective read of how a finding FEELS, and two tracks can measure nearly identical
+// yet sit nowhere near each other by feel. The embedding is the space the note's
+// neighbours live in.
+const NOTE_NEIGHBOR_LIMIT = 6;
+
+/**
+ * The notes of a finding's sonic neighbours — the fuel the auto-note is authored
+ * against AND the corpus its echo gate measures it against (one read, one definition
+ * of "the neighbourhood", so the gate can never judge against notes the agent never
+ * saw). Only NOTED neighbours count: an un-noted one teaches nothing and cannot be
+ * echoed. Every candidate is a certified finding (`getSimilarFindings` drives through
+ * the findings join), so a catalogue track can never enter the neighbourhood.
+ *
+ * Best-effort by design: a finding with no embedding yet, or one whose neighbours are
+ * all note-less, comes back `[]` — the note is then authored (and gated) exactly as it
+ * was before the layer existed.
+ */
+async function noteNeighbors(trackId: string): Promise<NoteNeighbor[]> {
+  const findings = await getSimilarFindings(trackId, NOTE_NEIGHBOR_LIMIT);
+
+  return findings.flatMap((finding) =>
+    finding.logId && finding.note?.trim()
+      ? [{ logId: finding.logId, note: finding.note.trim() }]
+      : [],
+  );
+}
 
 // Tri-state boolean query params ("true"/"false"/absent → true/false/undefined),
 // ported verbatim from the live `hasVideo` route. `hasContext`/`hasObservation`/
@@ -691,10 +726,29 @@ export function adminTracksHandlers(os: Implementer) {
   // CARDINAL SAFETY: fills an EMPTY note ONLY — a finding with a note already
   // (operator-written OR previously auto-authored) is a no-op (`skipped: true`); the
   // operator override always wins, enforced here, server-side.
+  //
+  // TWO GATES, both server-side (the agent gates as it writes; the Worker re-runs both
+  // — the note lands straight on the public /log surface):
+  //   1. the VOICE gate (`gateNoteText`) — the banned-word / geography / Dry-Rule scan.
+  //   2. the ECHO gate (`gateNoteEcho`) — the anti-sameness rail on the vibe-neighbour
+  //      layer. The authoring prompt now shows the agent the notes of the finding's
+  //      SONIC NEIGHBOURS so it can hear the region's register; this re-reads those
+  //      same notes and hard-fails a line that lifts from one. The neighbours inform,
+  //      they never template. A rejected note is simply not stored — the note is
+  //      optional and silence beats a generic line.
+  //
+  // A CATALOGUE track can never reach either gate: `requireTrack` reads through the
+  // `findings ⋈ tracks` join, so an uncertified track is a 404 before a note is even
+  // parsed. Fluncle does not speak about a track he has not certified.
   const noteTrackHandler = os.note_track.use(adminAuth).handler(async ({ input }) => {
     try {
       const body: NoteBody = input;
       const idOrLogId = body.trackId;
+      // `dryRun` authors nothing and stores nothing: it runs BOTH gates and reports the
+      // verdict + the measured echo. It is how the sweep pre-checks a line before
+      // spending a write, and how the neighbour layer is A/B-measured without touching
+      // the archive.
+      const dryRun = body.dryRun === true;
       const track = await requireTrack(idOrLogId);
 
       if (!track.logId) {
@@ -718,7 +772,11 @@ export function adminTracksHandlers(os: Implementer) {
       // '')` predicate below, so a note that lands AFTER this read still can't be
       // clobbered. We still stamp the "ran" state (the workflow ran; it correctly
       // found nothing to do) so the board doesn't keep re-queuing a hand-noted finding.
-      if (track.note?.trim()) {
+      //
+      // A DRY RUN skips the short-circuit (it stores nothing, so there is nothing to
+      // protect) — that is what lets the operator hold a candidate line up against an
+      // already-noted finding's neighbourhood and read the verdict.
+      if (!dryRun && track.note?.trim()) {
         await recordNoteAttempt(track.trackId, false);
 
         return {
@@ -734,6 +792,29 @@ export function adminTracksHandlers(os: Implementer) {
       // writes; the Worker re-scans and hard-fails any violation before it is stored
       // — the note lands straight on the public /log surface).
       const note = gateNoteText(body.note);
+
+      // Echo-gate it against the finding's sonic neighbourhood — the SAME notes the
+      // authoring prompt showed the agent (`get_similar_findings`, the MuQ nearest
+      // neighbours, ranked in SQL). A lifted phrase or wholesale word overlap hard-fails
+      // here with `note_echoes_neighbours`/422, so the vibe-neighbour layer can never
+      // quietly flatten a region into one voice. A finding with no embedding yet, or the
+      // first note in an empty neighbourhood, has nothing to echo and passes untouched.
+      const neighbors = await noteNeighbors(track.trackId);
+      const echo = gateNoteEcho(note, neighbors);
+
+      // The dry run stops here: both gates ran, nothing was written, and the caller gets
+      // the measured echo back. No `recordNoteAttempt` — no attempt was made.
+      if (dryRun) {
+        return {
+          dryRun: true as const,
+          echo: { logId: echo.logId, overlap: echo.overlap, phrase: echo.phrase },
+          logId: track.logId,
+          neighbors: neighbors.map((neighbor) => neighbor.logId),
+          note,
+          ok: true as const,
+          trackId: track.trackId,
+        };
+      }
 
       // Fill the empty note ATOMICALLY. The fill-empty-only guard is now a DB
       // predicate inside `fillEmptyNote` (`and (note is null or trim(note) = '')`),
@@ -764,6 +845,7 @@ export function adminTracksHandlers(os: Implementer) {
       await recordNoteAttempt(track.trackId, true);
 
       return {
+        echo: { logId: echo.logId, overlap: echo.overlap, phrase: echo.phrase },
         logId: track.logId,
         note,
         ok: true as const,
