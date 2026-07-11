@@ -379,7 +379,9 @@ function toSearchResult(track: TrackMetadata): TrackSearchResult {
   };
 }
 
-async function getSpotifyAccessToken(): Promise<string> {
+// Read the single spotify_auth row. Shared by the token acquire path and the
+// invalid_grant re-read guard so both see the row through the same query.
+async function readSpotifyAuthRow(): Promise<SpotifyAuthRow | undefined> {
   const db = await getDb();
   const result = await db.execute({
     args: ["spotify"],
@@ -388,7 +390,12 @@ async function getSpotifyAccessToken(): Promise<string> {
       where service = ?
       limit 1`,
   });
-  const auth = typedRow<SpotifyAuthRow>(result.rows);
+
+  return typedRow<SpotifyAuthRow>(result.rows);
+}
+
+async function getSpotifyAccessToken(): Promise<string> {
+  const auth = await readSpotifyAuthRow();
 
   if (!auth) {
     throw new ApiError("spotify_not_authenticated", "Spotify is not authenticated", 400);
@@ -412,9 +419,27 @@ async function getSpotifyAccessToken(): Promise<string> {
     // A six-month-old refresh token ages out (Spotify, from 2026-07-20) or is
     // revoked: the token endpoint answers 400 invalid_grant. Spotify's guidance
     // is to discard the dead token rather than retry it, then send the operator
-    // back through sign-in. We drop the row and surface a reconnect signal; the
-    // next /admin focus reads "disconnected" and shows Reconnect Spotify.
+    // back through sign-in.
     if (error instanceof SpotifyTokenError && error.spotifyError === "invalid_grant") {
+      // Guard the shared row against a concurrent-refresh race. When Spotify
+      // hands out single-use refresh tokens, two operator actions (search +
+      // publish) that both find the token expired each fire a refresh with the
+      // same token; the winner rotates it and the LOSER's now-consumed token
+      // comes back invalid_grant — even though the connection is healthy. So
+      // re-read the row before nuking it: if the stored refresh token no longer
+      // matches the one we just failed with, a concurrent refresh already won,
+      // so return its fresh access token instead of clearing. (When Spotify does
+      // NOT rotate, a healthy refresh never yields invalid_grant, so the row is
+      // unchanged and we fall through to the genuine-death path below.)
+      const current = await readSpotifyAuthRow();
+
+      if (current && current.refresh_token !== auth.refresh_token) {
+        return current.access_token;
+      }
+
+      // The row still carries the token we failed with (or is already gone): the
+      // grant is genuinely dead. Drop the row and surface a reconnect signal; the
+      // next /admin focus reads "disconnected" and shows Reconnect Spotify.
       await clearSpotifyAuth();
 
       throw new ApiError(
