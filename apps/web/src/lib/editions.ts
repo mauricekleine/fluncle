@@ -1,5 +1,4 @@
 import { type EditionDTO } from "@fluncle/contracts";
-import { editionLogId } from "./edition-log-id";
 
 export type { EditionDTO };
 
@@ -107,25 +106,15 @@ function parseContent(contentJson: string): EditionDTO["content"] {
   return {};
 }
 
-/**
- * Map a DB row to the public `EditionDTO` — the single mapping every read uses, and
- * the ONE place the edition's coordinate is derived. A sent edition's `sent_at` +
- * `number` are frozen, so `editionLogId` is a pure, stable function of them (no
- * column, no backfill); a draft has neither and gets no `logId`.
- */
+/** Map a DB row to the public `EditionDTO` — the single mapping every read uses. */
 export function rowToEdition(row: EditionRowLike): EditionDTO {
-  const number = row.number ?? undefined;
-  const sentAt = row.sent_at ?? undefined;
-  const logId = editionLogId(sentAt, number);
-
   return {
     addedAt: row.added_at ?? undefined,
     content: parseContent(row.content_json),
     createdAt: row.created_at ?? undefined,
     id: row.id,
-    logId: logId === "" ? undefined : logId,
-    number,
-    sentAt,
+    number: row.number ?? undefined,
+    sentAt: row.sent_at ?? undefined,
     status: row.status ?? "draft",
     subject: row.subject?.trim() ? row.subject : undefined,
     updatedAt: row.updated_at ?? undefined,

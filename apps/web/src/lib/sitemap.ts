@@ -254,11 +254,6 @@ function kindEntries(kind: SitemapKind, bags: SitemapBags): string[] {
         staticEntry(`${siteUrl}/log`, latest),
         staticEntry(`${siteUrl}/logbook`, logbookLatest),
         staticEntry(`${siteUrl}/mixtapes`, latest),
-        // The letters' front door: the back-issue archive. It was missing from the sitemap
-        // entirely until the letter shipped. Each sent LETTER itself is a `/log/<coordinate>`
-        // page and rides in the `findings` kind with the findings and the mixtapes — the three
-        // share that route, and the marker slot (a digit, `F`, or `L`) is what tells them apart.
-        staticEntry(`${siteUrl}/newsletter`, latest),
         staticEntry(`${siteUrl}/artists`, latest),
         // The graph HUBS are listed unconditionally, exactly like /artists: a hub is a real
         // page whose content is the whole list, so the per-page thin-content gate (which can,

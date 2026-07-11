@@ -2,8 +2,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createEdition,
   deleteEdition,
-  getEditionById,
-  getEditionByLogId,
   getEditionByNumber,
   listEditions,
   sendEdition,
@@ -257,46 +255,5 @@ describe("reads — sent-only", () => {
     const editions = await listEditions();
     expect(editions).toHaveLength(1);
     expect(editions[0]?.status).toBe("sent");
-  });
-});
-
-// The spine read: a sent letter carries the `L`-marked coordinate derived from the two
-// facts the send froze (its number + its send date), and `/log/<coordinate>` resolves
-// through it. A draft has neither, so it has no coordinate and no page.
-describe("the letter's coordinate", () => {
-  beforeEach(() => {
-    execute.mockClear();
-  });
-
-  it("derives the coordinate on a sent edition and withholds it from a draft", async () => {
-    seedDraft({ number: 1, sent_at: "2026-06-26T13:00:00.000Z", status: "sent" });
-    await expect(getEditionByNumber(1)).resolves.toMatchObject({ logId: "027.L.1A" });
-
-    seedDraft({ number: null, status: "draft" });
-    const draft = await getEditionById("edition-id", { includeDrafts: true });
-    expect(draft.logId).toBeUndefined();
-  });
-
-  it("resolves a letter by its coordinate", async () => {
-    seedDraft({ number: 1, sent_at: "2026-06-26T13:00:00.000Z", status: "sent" });
-
-    await expect(getEditionByLogId("027.L.1A")).resolves.toMatchObject({ number: 1 });
-  });
-
-  // THE RAIL: a well-shaped coordinate that is NOT this letter's own must resolve to
-  // nothing, so /log 404s instead of serving a visitor the wrong letter under a
-  // coordinate that was never minted. The re-derivation is what catches it: the mark
-  // says "letter #1", but the sector says a day this letter was not sent on.
-  it("refuses a coordinate whose sector is not the one the letter was sent in", async () => {
-    seedDraft({ number: 1, sent_at: "2026-06-26T13:00:00.000Z", status: "sent" });
-
-    await expect(getEditionByLogId("999.L.1A")).resolves.toBeUndefined();
-  });
-
-  it("resolves nothing for a coordinate that is not a letter", async () => {
-    seedDraft({ number: 1, sent_at: "2026-06-26T13:00:00.000Z", status: "sent" });
-
-    await expect(getEditionByLogId("004.7.2I")).resolves.toBeUndefined();
-    await expect(getEditionByLogId("019.F.1A")).resolves.toBeUndefined();
   });
 });

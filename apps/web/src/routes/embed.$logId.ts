@@ -5,7 +5,7 @@ import { artistTitleLine } from "@/lib/log-prose";
 import { spotifyAlbumImageAtSize, trackMedia } from "@/lib/media";
 import { mixtapeCoverUrl, mixtapeDisplayTitle } from "@/lib/mixtapes";
 import { requireParam } from "@/lib/server/http-errors";
-import { resolveMusicTarget } from "@/lib/server/log-resolver";
+import { resolveLogPageTarget } from "@/lib/server/log-resolver";
 
 // The self-contained finding card that the oEmbed `rich` payload frames. A pasted
 // fluncle.com link unfurls (in Notion / WordPress / Ghost / …) as this <iframe>:
@@ -127,7 +127,7 @@ export const Route = createFileRoute("/embed/$logId")({
     handlers: {
       GET: async ({ params }) => {
         const logId = requireParam(params.logId, "logId");
-        const resolved = await resolveMusicTarget(logId);
+        const resolved = await resolveLogPageTarget(logId);
 
         if (!resolved) {
           return new Response("Not found", { status: 404 });

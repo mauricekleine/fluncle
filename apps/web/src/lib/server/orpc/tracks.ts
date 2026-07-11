@@ -11,7 +11,7 @@ import {
   listTracks,
   toPublicTrackListItem,
 } from "../tracks";
-import { resolveMusicTarget } from "../log-resolver";
+import { resolveLogPageTarget } from "../log-resolver";
 import { apiFault, type Implementer, parseLimit } from "./_shared";
 
 // Feed page-size bounds, ported verbatim from the live /api/tracks route.
@@ -55,7 +55,7 @@ export function tracksHandlers(os: Implementer) {
   // absent, else the `{ ok: true } & ({ track } | { mixtape })` envelope.
   const getTrack = os.get_track.handler(async ({ input }) => {
     try {
-      const target = await resolveMusicTarget(input.idOrLogId);
+      const target = await resolveLogPageTarget(input.idOrLogId);
 
       if (!target) {
         throw new ORPCError("NOT_FOUND", { message: `No finding for "${input.idOrLogId}"` });

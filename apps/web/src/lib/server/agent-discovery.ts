@@ -224,7 +224,6 @@ ${tracks.join("\n")}
 - [Random track](${siteUrl}/api/v1/tracks/random): one pick from the archive, as JSON
 - [Artists API](${siteUrl}/api/v1/artists): every artist with a published finding, most findings first, as JSON; /api/v1/artists/{slug} for one artist. Each resolves to a page at ${siteUrl}/artist/{slug}: that artist's findings plus their verified identity links (MusicGroup + sameAs)
 - [Mixtapes API](${siteUrl}/api/v1/mixtapes): Fluncle's own DJ mixtapes as JSON, each a checkpoint set with an F-marked Log ID and its tracklist; browse them at ${siteUrl}/mixtapes${galaxiesLine}
-- [The letters](${siteUrl}/newsletter): the weekly letter Fluncle writes the crew. Every sent letter is an object on the same spine, with an L-marked Log ID and its own page at ${siteUrl}/log/{coordinate}: that week's findings, and why each one landed
 - [The labels](${siteUrl}/labels): every record label Fluncle has found a banger on. Each resolves to a page at ${siteUrl}/label/{slug}: that label's findings, the artists on it, and the rest of its catalogue
 - [The albums](${siteUrl}/albums): every record Fluncle has found a banger on. Each resolves to a page at ${siteUrl}/album/{slug}: that record's findings, its artists, and the label it came out on
 
@@ -284,8 +283,6 @@ Fluncle is a single drum & bass selector, not a team: drum & bass end to end, ro
 
 Every finding has a permanent coordinate, a Log ID, written sector.orbit.mark, for example 004.7.2I, full form fluncle://004.7.2I. The sector counts the days from the epoch (2026-05-30) to the day Fluncle found the tune; the tail is a stable signature derived from the recording itself. Each one is minted once, never reassigned, and resolves to a log page at ${siteUrl}/log/<id>.
 
-Two siblings share the same spine, marked in the middle slot where a finding carries a digit. An F is one of Fluncle's own DJ mixtapes (019.F.1A), and an L is a letter he sent the crew (023.L.1A, the weekly edition at ${siteUrl}/newsletter). Both resolve at ${siteUrl}/log/<id> like a finding does, and neither is a track.
-
 ## The findings (${totalCount})
 
 ${findings}
@@ -300,7 +297,6 @@ ${omitted > 0 ? `\n_${omitted} older findings omitted here; page the rest at ${s
 - The labels: ${siteUrl}/labels
 - The albums: ${siteUrl}/albums
 - The mixtapes: ${siteUrl}/api/v1/mixtapes${galaxiesLive ? `\n- The sonic galaxies: ${siteUrl}/api/v1/galaxies` : ""}
-- The letters: ${siteUrl}/newsletter
 - The MCP server: ${siteUrl}/mcp
 `;
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isEditionLogId, isLogId, isMixtapeLogId } from "./log-id";
+import { isLogId, isMixtapeLogId } from "./log-id";
 import { isLogPageParam } from "./log-page-param";
 
 // The /log/$logId shape guard: the route's beforeLoad 404s anything this
@@ -27,26 +27,6 @@ describe("isLogPageParam (the /log param guard)", () => {
     expect(isLogPageParam("019.F.1A")).toBe(true);
     expect(isMixtapeLogId("019.1.1A")).toBe(false);
     expect(isLogId("019.F.1A")).toBe(false);
-  });
-
-  it("accepts an edition coordinate with the L marker", () => {
-    expect(isEditionLogId("020.L.1A")).toBe(true);
-    expect(isLogPageParam("020.L.1A")).toBe(true);
-    expect(isEditionLogId("020.1.1A")).toBe(false);
-    expect(isLogId("020.L.1A")).toBe(false);
-    expect(isMixtapeLogId("020.L.1A")).toBe(false);
-  });
-
-  it("keeps the three kinds disjoint — no coordinate is claimed twice", () => {
-    for (const [logId, kind] of [
-      ["004.7.2I", "finding"],
-      ["019.F.1A", "mixtape"],
-      ["020.L.1A", "edition"],
-    ] as const) {
-      expect(isLogId(logId)).toBe(kind === "finding");
-      expect(isMixtapeLogId(logId)).toBe(kind === "mixtape");
-      expect(isEditionLogId(logId)).toBe(kind === "edition");
-    }
   });
 
   it("rejects garbage, paths, and the scheme-prefixed form", () => {

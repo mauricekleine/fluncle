@@ -44,12 +44,11 @@ func TestParseBootCommand(t *testing.T) {
 // not an accident. It routes an SSH arg to the coordinate resolver, which does the
 // authoritative lookup; anything malformed comes back "not found" from the server.
 func TestLooksLikeLogID(t *testing.T) {
-	// Canonical-valid coordinates (the contracts fixture's validFindings + validMixtapes
-	// + validEditions): accepted, same as the strict grammar.
+	// Canonical-valid coordinates (the contracts fixture's validFindings + validMixtapes):
+	// accepted, same as the strict grammar.
 	canonical := []string{
 		"004.7.2I", "241.7.3A", "018.8.9J", "1024.7.3I", // validFindings
 		"019.F.1A", "019.F.1F", "1024.F.2C", // validMixtapes
-		"023.L.1A", "030.L.1Z", "1024.L.9Z", // validEditions
 	}
 	for _, s := range canonical {
 		if !looksLikeLogID(s) {
@@ -64,8 +63,8 @@ func TestLooksLikeLogID(t *testing.T) {
 	//     parts, so it reads as coordinate-shaped here — the resolver returns "not found".
 	//   - `1.2.3`: any alphanumeric part length passes (no 3/4-digit sector rule here).
 	looserAccept := []string{
-		"241.7.3a", "019.f.1a", "023.l.1a", // lowercase
-		"04.7.2I", "10240.7.3I", "019.G.1A", "019.F.1Z", "023.L.AA", "007.12.3I", "7.0.0Z", // fixture: malformed
+		"241.7.3a", "019.f.1a", // lowercase
+		"04.7.2I", "10240.7.3I", "019.G.1A", "019.F.1Z", "007.12.3I", "7.0.0Z", // fixture: malformed
 		"1.2.3",
 	}
 	for _, s := range looserAccept {

@@ -8,7 +8,7 @@ Fluncle is the uncle with the good records, digging drum & bass since '90 — wh
 
 ## The loop
 
-The whole narrative is one cycle, and every surface is a station on it. A banger is found, lived, shared, marked, dreamt at the end of the night, and written home at the end of the week. Hold the loop in mind and each surface explains itself.
+The whole narrative is one cycle, and every surface is a station on it. A banger is found, lived, shared, marked, and — at the end of the night — dreamt. Hold the loop in mind and each surface explains itself.
 
 ### A banger is an experience
 
@@ -31,12 +31,6 @@ In the Galaxy game (`galaxy.fluncle.com`), each finding is a **star** — a wayp
 At the end of the night Fluncle sleeps, and the day's findings blend together the way dreams do: they arrive in a different order, they bleed into each other, they mix. By morning they have settled out of short-term memory into one long-term memory. That processed, blended memory is a **mixtape**.
 
 The medium is the meaning, twice over. A mix _blends_ tracks the same way a dream blends the day's memories — the reorder, the overlap, the seams dissolving — so a mixtape is the truest possible form for a dream. And DJs play at night, when people dream, so the nighttime parallel lands on its own. Structurally a mixtape is a **checkpoint**: the epilogue that closes a chapter before the next begins. It carries findings but is never itself a find (it does not touch the found count), and its Log ID carries the literal `F` marker where a finding carries a digit. To an outsider it is just another mixtape; to the crew, a glimpse into Fluncle's subconscious. See the [fluncle-mixtapes skill](./packages/skills/fluncle-mixtapes) for the object model and the publish flow.
-
-### The letter is what he sends back
-
-A finding is a marker left at a place. A mixtape is him dreaming. The **letter** is the one thing he _addresses_: once a week he writes down what the week held and posts it back down the trail to the people on his list. He goes out ahead and the crew comes up behind him, so the letter is how the trail talks — the finds, and why each one got him.
-
-It is a first-class object on the spine, and it is not a find (it does not touch the found count) and not a track. Where a finding's Log ID carries a digit in the middle slot and a mixtape's carries the literal `F`, a letter's carries the literal **`L`** — the letter, quiet and learnable, the same one tell. Its `/log` page is the letter as it went out, kept: the salutation, his opening, the finds, the sign-off. The copy sent to the crew and the copy kept in the log are the same letter — which is why the archive can hold it without it becoming an email in a box. See [docs/agents/newsletter-agent.md](./docs/agents/newsletter-agent.md) for how one is written.
 
 ## The Galaxy
 

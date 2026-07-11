@@ -1,30 +1,69 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { escapeXml } from "../lib/feed-xml";
-import { listFeedEntries } from "../lib/server/feed";
+import { parseArtistsJson } from "../lib/server/artists";
+import { getDb, typedRows } from "../lib/server/db";
 
-// The RSS feed: the three kinds on the spine in one chronological list (see
-// lib/server/feed.ts). A mixtape and a letter each carry an `object-type` category, so
-// the feed is honest about what an item is; a finding, the default, carries none.
+type TrackRow = {
+  artists_json: string;
+  item_type: "finding" | "mixtape";
+  note: string | null;
+  added_at: string;
+  spotify_url: string | null;
+  title: string;
+  track_id: string;
+};
 
 export const Route = createFileRoute("/rss.xml")({
   server: {
     handlers: {
       GET: async () => {
-        const entries = await listFeedEntries(25);
-        const newestDate = entries[0]?.addedAt;
-        const items = entries.map((entry) => {
-          const category =
-            entry.kind === "finding"
-              ? ""
-              : `<category domain="https://www.fluncle.com/ns/object-type">${entry.kind}</category>`;
+        const db = await getDb();
+        const result = await db.execute({
+          args: [25],
+          sql: `select * from (
+            select
+              'finding' as item_type,
+              tracks.track_id,
+              tracks.spotify_url,
+              tracks.title,
+              tracks.artists_json,
+              findings.note,
+              findings.added_at
+            from findings join tracks on tracks.track_id = findings.track_id
+            union all
+            select
+              'mixtape' as item_type,
+              log_id as track_id,
+              null as spotify_url,
+              title,
+              '["Fluncle"]' as artists_json,
+              note,
+              added_at
+            from mixtapes
+            where status = 'published' and log_id is not null and added_at is not null
+          )
+            order by added_at desc, track_id desc
+            limit ?`,
+        });
+        const rows = typedRows<TrackRow>(result.rows);
+        const newestDate = rows[0]?.added_at;
+        const items = rows.map((row) => {
+          const artists = parseArtistsJson(row.artists_json);
+          const title =
+            row.item_type === "mixtape" ? row.title : `${artists.join(", ")} - ${row.title}`;
+          const description = row.note?.trim() ? `${title}\n\n${row.note.trim()}` : title;
+          const link =
+            row.item_type === "mixtape"
+              ? `https://www.fluncle.com/log/${encodeURIComponent(row.track_id)}`
+              : (row.spotify_url as string);
 
           return `<item>
-  <title>${escapeXml(entry.title)}</title>
-  <link>${escapeXml(entry.link)}</link>
-  <guid isPermaLink="false">${escapeXml(entry.guid)}</guid>
-  <pubDate>${new Date(entry.addedAt).toUTCString()}</pubDate>
-  ${category}
-  <description>${escapeXml(entry.summary)}</description>
+  <title>${escapeXml(title)}</title>
+  <link>${escapeXml(link)}</link>
+  <guid isPermaLink="false">${escapeXml(row.track_id)}</guid>
+  <pubDate>${new Date(row.added_at).toUTCString()}</pubDate>
+  ${row.item_type === "mixtape" ? '<category domain="https://www.fluncle.com/ns/object-type">mixtape</category>' : ""}
+  <description>${escapeXml(description)}</description>
 </item>`;
         });
         const xml = `<?xml version="1.0" encoding="UTF-8"?>

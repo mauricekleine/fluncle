@@ -10,7 +10,7 @@ import {
   parseOembedTarget,
 } from "@/lib/oembed";
 import { getArtistBySlug } from "@/lib/server/artists";
-import { resolveMusicTarget } from "@/lib/server/log-resolver";
+import { resolveLogPageTarget } from "@/lib/server/log-resolver";
 import { getFindingsByArtist } from "@/lib/server/tracks";
 
 // The oEmbed 1.0 provider endpoint (https://oembed.com). A consumer that found a
@@ -69,7 +69,7 @@ async function resolveOembed(
   maxheight: number | undefined,
 ): Promise<OembedResponse | undefined> {
   if (target.kind === "log") {
-    const resolved = await resolveMusicTarget(target.logId);
+    const resolved = await resolveLogPageTarget(target.logId);
 
     if (!resolved) {
       return undefined;

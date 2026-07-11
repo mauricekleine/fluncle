@@ -17,7 +17,7 @@ vi.mock("./status", () => ({
 }));
 
 vi.mock("./log-resolver", () => ({
-  resolveMusicTarget: resolveTarget,
+  resolveLogPageTarget: resolveTarget,
 }));
 
 vi.mock("./tracks", async (importOriginal) => ({
@@ -31,7 +31,7 @@ const { handleMcp } = await import("./mcp");
 const resolveTargetMock = resolveTarget;
 const recentTracksMock = listTracksMock;
 
-// A minimal public finding, the shape resolveMusicTarget hands back for a track.
+// A minimal public finding, the shape resolveLogPageTarget hands back for a track.
 function findingFixture(overrides: Partial<TrackListItem> = {}): TrackListItem {
   return {
     addedAt: "2026-06-15T20:00:00.000Z",
@@ -53,7 +53,7 @@ function findingFixture(overrides: Partial<TrackListItem> = {}): TrackListItem {
   };
 }
 
-// A minimal published mixtape, the shape resolveMusicTarget hands back for the F form.
+// A minimal published mixtape, the shape resolveLogPageTarget hands back for the F form.
 function mixtapeFixture(overrides: Partial<MixtapeDTO> = {}): MixtapeDTO {
   return {
     externalUrls: { mixcloud: "https://www.mixcloud.com/fluncle/set" },

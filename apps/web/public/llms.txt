@@ -10,10 +10,6 @@ The collection is called Fluncle's Findings. New tracks land most nights.
 
 Fluncle also logs his own DJ mixtapes. A mixtape is a checkpoint: one long set made from existing findings, with its own Log ID and its own /log page. It is not a finding and does not increase the found count. Mixtape coordinates use the same sector.mark shape, but the middle slot is the literal F, for example 019.F.1A. A finding has a digit there; a mixtape has F.
 
-## Letters
-
-Fluncle also writes the crew a letter every Friday: the week's findings, and why each one landed. A sent letter is an object on the same spine, with its own Log ID and its own /log page. It is not a finding and does not increase the found count, and it is not a track. Letter coordinates use the same sector.mark shape, but the middle slot is the literal L, for example 023.L.1A — a finding has a digit there, a mixtape has F, a letter has L. Read them at https://www.fluncle.com/newsletter.
-
 ## Reading a Log ID
 
 Every finding has a permanent coordinate, a Log ID, written sector.orbit.mark — for example 004.7.2I, full form fluncle://004.7.2I. The sector counts the days from the epoch (2026-05-30) to the day Fluncle found the tune; the tail is a stable signature derived from the recording itself. Each one is minted once, never reassigned, and resolves to a log page at https://www.fluncle.com/log/004.7.2I. So a code like 004.7.2I is a single finding in Fluncle's Findings.
@@ -25,7 +21,6 @@ Every finding has a permanent coordinate, a Log ID, written sector.orbit.mark �
 - [The archive](https://www.fluncle.com/): every certified track with the date Fluncle found it
 - [The log](https://www.fluncle.com/log): every finding's coordinate page, one per Log ID (e.g. https://www.fluncle.com/log/004.7.2I)
 - [Mixtapes](https://www.fluncle.com/mixtapes): Fluncle's own DJ mixtapes, each a checkpoint with a Log ID such as https://www.fluncle.com/log/019.F.1A
-- [The back issues](https://www.fluncle.com/newsletter): every letter Fluncle has sent the crew, each with a Log ID such as https://www.fluncle.com/log/023.L.1A
 - [About Fluncle](https://www.fluncle.com/about): who Fluncle is, what the Galaxy is, and how to read a Log ID like fluncle://004.7.2I
 
 ## Artists
@@ -37,7 +32,7 @@ Every artist in Fluncle's archive has a page at https://www.fluncle.com/artist/<
 
 ## Data
 
-- [RSS feed](https://www.fluncle.com/rss.xml): the 25 most recent findings, mixtapes, and letters (each non-finding item carries an object-type category)
+- [RSS feed](https://www.fluncle.com/rss.xml): the 25 most recent findings and mixtapes
 - [Tracks API](https://www.fluncle.com/api/v1/tracks): the archive as JSON, cursor-paginated; accepts limit (max 48) and cursor query params
 - [Mixtapes API](https://www.fluncle.com/api/v1/mixtapes): published mixtapes as JSON
 - [Random track](https://www.fluncle.com/api/v1/tracks/random): one pick from the archive, as JSON

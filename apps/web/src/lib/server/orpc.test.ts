@@ -1,14 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { get, MIXTAPE, readJson, TRACK } from "./orpc-test-kit";
 
-// The proof route + the rails seam. `resolveMusicTarget` is mocked — the
+// The proof route + the rails seam. `resolveLogPageTarget` is mocked — the
 // handler's job is to shape the contract response and the 404, not to touch
 // Turso. These assertions pin the behavior the live /api/tracks/{idOrLogId}
 // route had, now served by oRPC.
-const resolveMusicTarget = vi.fn();
+const resolveLogPageTarget = vi.fn();
 
 vi.mock("./log-resolver", () => ({
-  resolveMusicTarget: (...args: unknown[]) => resolveMusicTarget(...args),
+  resolveLogPageTarget: (...args: unknown[]) => resolveLogPageTarget(...args),
 }));
 
 // The tracks server module backs the `list_tracks` + `get_random_track` reads.
@@ -53,7 +53,7 @@ vi.mock("./galaxies-map", async (importOriginal) => {
 });
 
 beforeEach(() => {
-  resolveMusicTarget.mockReset();
+  resolveLogPageTarget.mockReset();
   listTracks.mockReset();
   getRandomTrack.mockReset();
   getRandomRadioTrack.mockReset();
@@ -70,7 +70,7 @@ describe("oRPC rails — handleOrpc", () => {
     const { handleOrpc } = await import("./orpc");
 
     expect(await handleOrpc(get("https://www.fluncle.com/log"))).toBeNull();
-    expect(resolveMusicTarget).not.toHaveBeenCalled();
+    expect(resolveLogPageTarget).not.toHaveBeenCalled();
   });
 
   it("falls through (null) for an /api route with no contract yet", async () => {
@@ -84,7 +84,7 @@ describe("oRPC rails — handleOrpc", () => {
 
 describe("oRPC proof route — GET /tracks/{idOrLogId} (get_track)", () => {
   it("serves a finding as { ok: true, track } on the canonical /api/v1 mount", async () => {
-    resolveMusicTarget.mockResolvedValueOnce({ kind: "track", track: TRACK });
+    resolveLogPageTarget.mockResolvedValueOnce({ kind: "track", track: TRACK });
 
     const { handleOrpc } = await import("./orpc");
     const response = await handleOrpc(get("https://www.fluncle.com/api/v1/tracks/abc"));
@@ -92,11 +92,11 @@ describe("oRPC proof route — GET /tracks/{idOrLogId} (get_track)", () => {
     expect(response).not.toBeNull();
     expect(response?.status).toBe(200);
     expect(await readJson(response)).toEqual({ ok: true, track: TRACK });
-    expect(resolveMusicTarget).toHaveBeenCalledWith("abc");
+    expect(resolveLogPageTarget).toHaveBeenCalledWith("abc");
   });
 
   it("serves the same handler on the bare /api alias", async () => {
-    resolveMusicTarget.mockResolvedValueOnce({ kind: "track", track: TRACK });
+    resolveLogPageTarget.mockResolvedValueOnce({ kind: "track", track: TRACK });
 
     const { handleOrpc } = await import("./orpc");
     const response = await handleOrpc(get("https://www.fluncle.com/api/tracks/abc"));
@@ -106,7 +106,7 @@ describe("oRPC proof route — GET /tracks/{idOrLogId} (get_track)", () => {
   });
 
   it("serves a mixtape arm as { ok: true, mixtape }", async () => {
-    resolveMusicTarget.mockResolvedValueOnce({ kind: "mixtape", mixtape: MIXTAPE });
+    resolveLogPageTarget.mockResolvedValueOnce({ kind: "mixtape", mixtape: MIXTAPE });
 
     const { handleOrpc } = await import("./orpc");
     const response = await handleOrpc(get("https://www.fluncle.com/api/v1/tracks/001.F.1A"));
@@ -116,7 +116,7 @@ describe("oRPC proof route — GET /tracks/{idOrLogId} (get_track)", () => {
   });
 
   it("404s when nothing resolves — body parity with the legacy jsonError shape", async () => {
-    resolveMusicTarget.mockResolvedValueOnce(undefined);
+    resolveLogPageTarget.mockResolvedValueOnce(undefined);
 
     const { handleOrpc } = await import("./orpc");
     const response = await handleOrpc(get("https://www.fluncle.com/api/v1/tracks/nope"));
@@ -132,7 +132,7 @@ describe("oRPC proof route — GET /tracks/{idOrLogId} (get_track)", () => {
   });
 
   it("500s an unexpected fault generically — the raw detail never reaches the wire", async () => {
-    resolveMusicTarget.mockRejectedValueOnce(new Error("turso fell over"));
+    resolveLogPageTarget.mockRejectedValueOnce(new Error("turso fell over"));
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
     const { handleOrpc } = await import("./orpc");

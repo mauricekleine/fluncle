@@ -20,24 +20,24 @@ Generated from the `SURFACES` catalog. Each row is the registry `name`, its addr
 
 ### Web routes — pages on `www.fluncle.com`
 
-| Surface          | Route         | Exposes                                                                                                                                                       | Weight    |
-| ---------------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------- |
-| `web.home`       | `/`           | the archive — every certified finding, newest first, cover-led                                                                                                | primary   |
-| `web.log`        | `/log`        | the log index + `/log/:logId`, one object's permanent home (the Log ID resolves here — a finding, an `F`-marked mixtape, or an `L`-marked letter)             | primary   |
-| `web.logbook`    | `/logbook`    | Fluncle's Logbook — the voyage as a first-person travelogue + `/logbook/:sector`, one sector-day written up                                                   | primary   |
-| `web.mixtapes`   | `/mixtapes`   | Fluncle's own DJ mixtapes — each a checkpoint set with an F-marked Log ID                                                                                     | primary   |
-| `web.galaxy`     | `/galaxy`     | the Galaxy game — the 8-bit fly-to-every-banger arcade front door (also at `galaxy.fluncle.com`)                                                              | primary   |
-| `web.stories`    | `/stories`    | the feed-first Stories surface + `/stories/:logId`, one finding as a Story                                                                                    | secondary |
-| `web.about`      | `/about`      | who Fluncle is, what the Galaxy is, how to read a Log ID                                                                                                      | secondary |
-| `web.newsletter` | `/newsletter` | the back issues — every letter Fluncle has sent the crew; each letter's page is its `L`-marked coordinate at `/log/:logId` (`/newsletter/:number` 301s there) | secondary |
-| `web.docs`       | `/docs`       | the Fumadocs developer docs + `/docs/api`, the embedded Scalar API reference                                                                                  | secondary |
-| `web.status`     | `/status`     | the public service-health dashboard — uptime per service, recent events                                                                                       | secondary |
-| `web.radio`      | `/radio`      | the cycling observation station — Fluncle's spoken field observations on a loop (also at `radio.fluncle.com`)                                                 | secondary |
-| `web.artist`     | `/artist`     | `/artist/:slug` — one artist's page: every published finding from that artist, plus their identity links                                                      | secondary |
-| `web.labels`     | `/labels`     | every label Fluncle has found a banger on + `/label/:slug` — one imprint: its findings, its artists, the rest of its catalogue                                | secondary |
-| `web.albums`     | `/albums`     | every record Fluncle has found a banger on + `/album/:slug` — one record: its findings, its artists, and the label it came out on                             | secondary |
-| `web.galaxies`   | `/galaxies`   | the browse-by-feel lens — the archive grouped into operator-named sonic galaxies + `/galaxies/:slug`; dark until the operator names the whole map             | secondary |
-| `web.privacy`    | `/privacy`    | the privacy policy                                                                                                                                            | tertiary  |
+| Surface          | Route         | Exposes                                                                                                                                           | Weight    |
+| ---------------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | --------- |
+| `web.home`       | `/`           | the archive — every certified finding, newest first, cover-led                                                                                    | primary   |
+| `web.log`        | `/log`        | the log index + `/log/:logId`, one finding's permanent home (the Log ID resolves here)                                                            | primary   |
+| `web.logbook`    | `/logbook`    | Fluncle's Logbook — the voyage as a first-person travelogue + `/logbook/:sector`, one sector-day written up                                       | primary   |
+| `web.mixtapes`   | `/mixtapes`   | Fluncle's own DJ mixtapes — each a checkpoint set with an F-marked Log ID                                                                         | primary   |
+| `web.galaxy`     | `/galaxy`     | the Galaxy game — the 8-bit fly-to-every-banger arcade front door (also at `galaxy.fluncle.com`)                                                  | primary   |
+| `web.stories`    | `/stories`    | the feed-first Stories surface + `/stories/:logId`, one finding as a Story                                                                        | secondary |
+| `web.about`      | `/about`      | who Fluncle is, what the Galaxy is, how to read a Log ID                                                                                          | secondary |
+| `web.newsletter` | `/newsletter` | the newsletter archive + `/newsletter/:number`, one past edition on the web                                                                       | secondary |
+| `web.docs`       | `/docs`       | the Fumadocs developer docs + `/docs/api`, the embedded Scalar API reference                                                                      | secondary |
+| `web.status`     | `/status`     | the public service-health dashboard — uptime per service, recent events                                                                           | secondary |
+| `web.radio`      | `/radio`      | the cycling observation station — Fluncle's spoken field observations on a loop (also at `radio.fluncle.com`)                                     | secondary |
+| `web.artist`     | `/artist`     | `/artist/:slug` — one artist's page: every published finding from that artist, plus their identity links                                          | secondary |
+| `web.labels`     | `/labels`     | every label Fluncle has found a banger on + `/label/:slug` — one imprint: its findings, its artists, the rest of its catalogue                    | secondary |
+| `web.albums`     | `/albums`     | every record Fluncle has found a banger on + `/album/:slug` — one record: its findings, its artists, and the label it came out on                 | secondary |
+| `web.galaxies`   | `/galaxies`   | the browse-by-feel lens — the archive grouped into operator-named sonic galaxies + `/galaxies/:slug`; dark until the operator names the whole map | secondary |
+| `web.privacy`    | `/privacy`    | the privacy policy                                                                                                                                | tertiary  |
 
 ### Subdomains — sibling hosts on the same Worker
 

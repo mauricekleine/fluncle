@@ -29,7 +29,6 @@ import {
   type SitemapLogPage,
 } from "../sitemap";
 import { ALBUM_INDEX_MIN_TRACKS, listAlbumsWithFindingCounts } from "./albums";
-import { listEditions } from "./editions";
 import {
   ARTIST_INDEX_MIN_FINDINGS,
   listArtistsWithFindingCounts,
@@ -138,7 +137,6 @@ export async function collectSitemapBags(): Promise<SitemapBags> {
     artistEntries,
     logbookResult,
     galaxyEntries,
-    editionEntries,
     labelEntries,
     albumEntries,
   ] = await Promise.all([
@@ -172,27 +170,12 @@ export async function collectSitemapBags(): Promise<SitemapBags> {
     // The named sonic galaxies — empty until the launch gate opens (browse-by-
     // feel RFC), so no galaxy <loc> leaks before the whole map is named.
     listPublicGalaxies(),
-    // The letters: every SENT edition, each at its own `L`-marked coordinate. A draft has
-    // no coordinate and no page, so it cannot leak into the sitemap.
-    listEditions(),
     // The graph pages. Both lists are bounded by the ARCHIVE (an entity earns a row
     // by carrying a finding), never by the catalogue.
     listLabelsWithFindingCounts(),
     listAlbumsWithFindingCounts(),
   ]);
 
-  // A sent letter has a derived `L`-marked coordinate; a DRAFT has neither, so the guard
-  // below is what keeps an unsent letter out of the sitemap entirely.
-  const editionPages: SitemapLogPage[] = editionEntries.reduce<SitemapLogPage[]>(
-    (pages, edition) => {
-      if (edition.logId && edition.sentAt) {
-        pages.push({ lastmod: edition.sentAt, logId: edition.logId });
-      }
-
-      return pages;
-    },
-    [],
-  );
   const logbook: SitemapLogbookEntry[] = typedRows<{
     generated_at: string;
     sector: number;
@@ -245,12 +228,6 @@ export async function collectSitemapBags(): Promise<SitemapBags> {
     logs: [
       ...typedRows<TrackRow>(trackResult.rows).map(trackPage),
       ...typedRows<MixtapeRow>(mixtapeResult.rows).map(mixtapePage),
-      // A LETTER is a plain <loc>: no cover, no video, just the text and the findings it
-      // links to. Its lastmod is the day it went out, because a sent letter is frozen.
-      // It rides in the same kind as the findings and the mixtapes because it shares their
-      // route — `/log/<coordinate>` — and the marker slot (a digit, `F`, or `L`) is the
-      // only thing that tells the three apart.
-      ...editionPages,
     ],
   };
 }
