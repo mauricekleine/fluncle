@@ -131,19 +131,19 @@ describe("oRPC proof route — GET /tracks/{idOrLogId} (get_track)", () => {
     });
   });
 
-  it("500s an unexpected fault as { code: 'error', message, ok: false }", async () => {
+  it("500s an unexpected fault generically — the raw detail never reaches the wire", async () => {
     resolveLogPageTarget.mockRejectedValueOnce(new Error("turso fell over"));
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
     const { handleOrpc } = await import("./orpc");
     const response = await handleOrpc(get("https://www.fluncle.com/api/v1/tracks/abc"));
 
     expect(response?.status).toBe(500);
-    // Parity with apiErrorResponse's generic arm → jsonError(500, "error", message).
-    expect(await readJson(response)).toEqual({
-      code: "error",
-      message: "turso fell over",
-      ok: false,
-    });
+    // The unexpected-fault arm answers generically → jsonError(500, "error", "Internal error").
+    const body = await readJson(response);
+    expect(body).toEqual({ code: "error", message: "Internal error", ok: false });
+    expect(JSON.stringify(body)).not.toContain("turso fell over");
+    errSpy.mockRestore();
   });
 });
 

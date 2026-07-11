@@ -39,10 +39,13 @@ export const serverHandlers: ApiHandlers = {
         status: 302,
       });
     } catch (authError) {
+      // Raw token-exchange detail goes to the server log, not the wire to this
+      // unauthenticated callback; keep the code the board keys on, answer plainly.
+      console.error("mixcloud auth callback:", authError);
       return jsonError(
         400,
         "mixcloud_auth_failed",
-        authError instanceof Error ? authError.message : String(authError),
+        "Mixcloud authorization failed — retry from the board.",
       );
     }
   },
