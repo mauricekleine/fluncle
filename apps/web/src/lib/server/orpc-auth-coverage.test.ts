@@ -249,6 +249,11 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // The `/admin/artists` review queue read — admin tier (agent-allowed), the list_*_admin
   // precedent; the operator's review-queue station consumes it.
   list_artist_socials: "admin",
+  // The ranked catalogue read (The Ear) — admin tier (agent-allowed), the
+  // list_labels_admin precedent. An ordered walk of the columns the rank_catalogue
+  // sweep precomputed; it returns catalogue rows only (no finding, no coordinate) and
+  // publishes nothing.
+  list_catalogue_tracks: "admin",
   // Every clip's IG drip row — admin tier (agent-allowed read), the list_*_admin
   // precedent; the CLI / library merge it onto the clips.
   list_clip_posts: "admin",
@@ -318,6 +323,12 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // of requeue_video) — operator-only (adminAuth + operatorGuard); the box agent
   // never acts on live videos, so an agent token 403s.
   purge_video: "operator",
+  // One tick of The Ear's precompute sweep — agent tier (adminAuth only, no
+  // operatorGuard), the update_galaxy_map precedent: it writes only DERIVED ranking
+  // columns, and only on CATALOGUE rows (a `tracks` row with no `findings` row). It
+  // cannot mint a coordinate, write a note, or certify anything — those columns do not
+  // exist on the rows it can reach — so the box's agent token drives it.
+  rank_catalogue: "admin",
   // The append-only cost ledger's write (COST-01) — agent tier (adminAuth only, no
   // operatorGuard), the record_health precedent; the box's sweeps POST their cost
   // rows with the agent token, and it writes only the internal cost_events ledger

@@ -92,7 +92,52 @@ export const tracks = sqliteTable(
     // on migration (which enqueues the whole archive for capture-backfill for free).
     // Enum: pending (never attempted) → done (key written) | unmatched (no confident
     // match — terminal) | failed (attempt threw — retriable under backoff).
+    // ── THE EAR: the precomputed catalogue ranking (docs/the-ear.md) ─────────────
+    // Five columns, written ONLY by the `rank_catalogue` sweep, and meaningful ONLY on a
+    // CATALOGUE track (a `tracks` row with no `findings` row). They stay NULL on a
+    // certified finding — the sweep anti-joins `findings` and never touches one — so a
+    // non-null `nearest_finding_score` is itself a catalogue marker.
+    //
+    // WHY PRECOMPUTED. Ranking the catalogue against the findings at request time is a
+    // CROSS JOIN: 10k catalogue rows × 60 findings = 600k 1024-d cosine ops per page
+    // load. The sweep does that arithmetic once, in SQL, and stores the answer; `/admin/
+    // catalogue` then reads and sorts an indexed column — no vector math on the request
+    // path at all. Same shape as the cluster engine's assignment sweep
+    // (docs/agents/cluster-engine.md): a periodic job precomputes, the surface reads.
+    //
+    // `capture_priority` — 0..3, the PRE-AUDIO proximity tier, and the capture queue's
+    //   sort key. Audio capture is metered, so it cannot be run on everything: this is
+    //   how the queue decides who gets captured (and therefore embedded, and therefore
+    //   rankable) first. It exists because of a real chicken-and-egg — a track has no
+    //   vector until its audio is captured, so the vector cannot be what prioritises the
+    //   capture. The tiers are the cheap metadata signals that CAN: 3 = an artist on this
+    //   track is already on a finding, 2 = its label already carries a finding, 1 = its
+    //   label is one the operator seeds from, 0 = nothing ties it to the archive.
+    // `nearest_finding_score` — cosine similarity (1 − `vector_distance_cos`, so higher
+    //   is nearer) to the single NEAREST finding. NOT the distance to a centroid: the
+    //   operator's taste is multi-modal (the k=4 galaxy fit proved it), and a mean vector
+    //   is a place none of his taste actually lives. NULL until this row has a vector.
+    // `nearest_finding_track_id` — WHICH finding it matched. This is the row's WHY, and
+    //   it is not decoration: a bare score is not a reason, and a telescope you cannot
+    //   interrogate is one you stop trusting.
+    // `catalogue_rank_corpus` — the fingerprint of the finding corpus the two values above
+    //   were computed against, `"<findings>:<embedded findings>"`. It is the staleness
+    //   predicate and it makes the sweep self-healing: log a finding (or embed one) and
+    //   the fingerprint moves, so every catalogue row disagrees with it and re-ranks on
+    //   the next ticks. NULL = never ranked (the fresh-crawl queue).
+    // `catalogue_ranked_at` — ISO of that ranking. Freshness, for the operator and the
+    //   sweep's own summary; never a predicate.
+    capturePriority: integer("capture_priority"),
+    // The full-song capture side-channel state (RFC full-audio). Models
+    // `enrichment_status` exactly — `notNull().default("pending")` is load-bearing:
+    // `publishTrack`'s insert never names this column, so the DDL default is what
+    // lands `'pending'` on a new add AND backfills every existing row to `'pending'`
+    // on migration (which enqueues the whole archive for capture-backfill for free).
+    // Enum: pending (never attempted) → done (key written) | unmatched (no confident
+    // match — terminal) | failed (attempt threw — retriable under backoff).
     captureStatus: text("capture_status").notNull().default("pending"),
+    catalogueRankCorpus: text("catalogue_rank_corpus"),
+    catalogueRankedAt: text("catalogue_ranked_at"),
     durationMs: integer("duration_ms").notNull(),
     // The finding's MuQ audio embedding, in the form the DATABASE can rank: a native
     // libSQL `F32_BLOB(1024)`. Every similarity read (`get_similar_findings`, the `/mix`
@@ -132,6 +177,10 @@ export const tracks = sqliteTable(
     keyConfidence: real("key_confidence"),
     keySource: text("key_source"),
     label: text("label"),
+    // The Ear's two ranking outputs. See the block comment on `capture_priority` above —
+    // these three columns are one unit and are written only by the `rank_catalogue` sweep.
+    nearestFindingScore: real("nearest_finding_score"),
+    nearestFindingTrackId: text("nearest_finding_track_id"),
     popularity: integer("popularity"),
     // Operator-only archive path for the one official 30s preview preserved for
     // private analysis/model training. Never exposed through public DTOs and
@@ -162,11 +211,23 @@ export const tracks = sqliteTable(
     title: text("title").notNull(),
     trackId: text("track_id").primaryKey(),
   },
-  // No index on `tracks` today: every list/queue/feed order and predicate lives on the
-  // CERTIFICATION half (added_at, log_id, video_url, enrichment_status, galaxy_id), so
-  // the four former `tracks_*` indexes moved wholesale to `findings` below. A finding read
-  // drives from `findings` and joins `tracks` by its PRIMARY KEY. When catalogue-only
-  // tracks arrive and gain their own scan shapes, index them here then.
+  // Every list/queue/feed order and predicate for a FINDING lives on the certification
+  // half (added_at, log_id, video_url, enrichment_status, galaxy_id), so the four former
+  // `tracks_*` indexes moved wholesale to `findings` below; a finding read drives from
+  // `findings` and joins `tracks` by its PRIMARY KEY.
+  //
+  // These two are the CATALOGUE half's scan shapes — The Ear's two ordered reads, and the
+  // whole reason its request path does no vector math (docs/the-ear.md). Both walk their
+  // index DESC and stop at the page's LIMIT, so the cost is the page, not the corpus.
+  //   - `nearest_finding_score` — the Ear's rank: "closest to a finding, not yet logged."
+  //   - `capture_priority`      — the capture queue's rank: who gets captured next.
+  // NULLs sort first in an ASC index, so a DESC walk hits the ranked rows first and never
+  // pays for the unranked tail. Neither column is ever non-null on a finding (the sweep
+  // anti-joins `findings`), so both indexes hold catalogue rows only.
+  (table) => [
+    index("tracks_nearest_finding_score_idx").on(table.nearestFindingScore),
+    index("tracks_capture_priority_idx").on(table.capturePriority),
+  ],
 );
 
 /**

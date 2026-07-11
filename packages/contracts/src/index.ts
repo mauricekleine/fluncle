@@ -33,6 +33,13 @@ import {
   type AttentionSourceCountSchema,
   type AttentionSourceSchema,
 } from "./orpc/admin-attention.js";
+import {
+  type CapturePriorityReasonSchema,
+  type CatalogueLensSchema,
+  type CatalogueMatchSchema,
+  type CatalogueSummarySchema,
+  type CatalogueTrackItemSchema,
+} from "./orpc/admin-catalogue.js";
 import { type ServiceHealthStatusSchema } from "./orpc/admin-health.js";
 import { type GalaxyAdminItemSchema, type TrackEmbeddingSchema } from "./orpc/admin-galaxies.js";
 import { type LabelAdminItemSchema, type LabelSeedStateSchema } from "./orpc/admin-labels.js";
@@ -142,6 +149,29 @@ export type LabelsAdminResponse = Ok<{ labels: LabelAdminItem[] }>;
 
 /** `PATCH /api/admin/labels/:id` response — the one ruled label. */
 export type LabelUpdateResponse = Ok<{ label: LabelAdminItem }>;
+
+// ── The catalogue (The Ear — docs/the-ear.md) ────────────────────────────────────
+// A CATALOGUE TRACK is a `tracks` row with NO `findings` row: a track Fluncle knows
+// about and has not certified. Nothing here carries a certification field — no Log ID,
+// no note, no video — because those live on `findings`, and these rows have none.
+
+/** Which question `/admin/catalogue` asks: the telescope (`ear`) or the capture queue. */
+export type CatalogueLens = z.infer<typeof CatalogueLensSchema>;
+
+/** Why a not-yet-captured track sits where it does in the capture queue. */
+export type CapturePriorityReason = z.infer<typeof CapturePriorityReasonSchema>;
+
+/** The finding a catalogue row matched — the row's WHY, hydrated. */
+export type CatalogueMatch = z.infer<typeof CatalogueMatchSchema>;
+
+/** One catalogue track, ranked. Inferred from `CatalogueTrackItemSchema`. */
+export type CatalogueTrackItem = z.infer<typeof CatalogueTrackItemSchema>;
+
+/** The catalogue's shape in four scoped counts. */
+export type CatalogueSummary = z.infer<typeof CatalogueSummarySchema>;
+
+/** `GET /api/admin/catalogue` response — one lens's page, plus the summary. */
+export type CatalogueResponse = Ok<{ summary: CatalogueSummary; tracks: CatalogueTrackItem[] }>;
 
 /** One embedded finding — the cluster engine's input row (`{ trackId, embedding }`). */
 export type TrackEmbedding = z.infer<typeof TrackEmbeddingSchema>;

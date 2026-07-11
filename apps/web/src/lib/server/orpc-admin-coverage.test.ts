@@ -80,6 +80,11 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // the public `get_` prefix so the "holds exactly" check skips it; it lives here for
   // completeness (like `get_track_admin`).
   "GET /admin/attention": "get_attention",
+  // THE EAR (docs/the-ear.md) — the ranked catalogue. Contract-only oRPC (no TanStack route
+  // file; oRPC owns the path directly). Admin tier (agent-allowed); `list_catalogue_tracks`
+  // matches the public `list_` prefix so the "holds exactly" check skips it, and it lives here
+  // for completeness (like `list_labels_admin`).
+  "GET /admin/catalogue": "list_catalogue_tracks",
   "GET /admin/clips": "list_clips",
   // Every clip's Instagram drip-feed row (schedule + status) — contract-only oRPC (no
   // TanStack route file). Admin tier (agent-allowed read); the clip library / CLI merge
@@ -185,6 +190,10 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // The clip drip-feed tick — contract-only oRPC (no TanStack route file). ADMIN tier
   // (agent-allowed): the on-box `fluncle-clip-drip` cron triggers it with the agent token
   // (the box holds no Postiz key; the Worker owns it). Kill-switch aware, bounded, idempotent.
+  // One tick of The Ear's precompute sweep — contract-only oRPC. Agent tier: it writes only
+  // DERIVED ranking columns on CATALOGUE rows (a `tracks` row with no `findings` row), so it
+  // cannot mint a coordinate or certify anything.
+  "POST /admin/catalogue/rank": "rank_catalogue",
   "POST /admin/clips/drip": "drip_clips",
   // The batch-schedule op (the set_clip_schedule sibling) — contract-only oRPC (no TanStack
   // route file). Operator tier: chain a whole selection onto the jittered drip queue in one

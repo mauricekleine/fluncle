@@ -117,6 +117,17 @@ type TrackUpdateOptions = {
   videoUrl?: string;
 };
 
+type CatalogueListOptions = {
+  json: boolean;
+  lens?: string;
+  limit?: string;
+};
+
+type CatalogueRankOptions = {
+  json: boolean;
+  limit?: string;
+};
+
 type GalaxyEmbeddingsOptions = {
   cursor?: string;
   json: boolean;
@@ -1559,6 +1570,39 @@ function addAdminCommands(program: Command): void {
     .action(async (options: GalaxySetMapOptions) => {
       const { galaxyMapWriteCommand } = await import("./commands/galaxies");
       await runGalaxyMapWrite(options, galaxyMapWriteCommand);
+    });
+
+  // THE EAR (docs/the-ear.md) — the catalogue: every track the archive knows and Fluncle never
+  // certified, ranked by how close it sits to something he did. `rank` is the precompute sweep
+  // a periodic `--no-agent` cron drives; `list` reads the ranking back. The CLI holds no
+  // ranking logic — all of the vector arithmetic happens in SQL inside the Worker.
+  const catalogue = configureCommand(
+    admin.command("catalogue").description("The catalogue (uncertified tracks) + its ranking"),
+  );
+
+  catalogue.action(() => {
+    catalogue.outputHelp();
+  });
+
+  catalogue
+    .command("rank")
+    .description("Run one tick of the ranking sweep (nearest finding + capture priority)")
+    .option("--limit <limit>", "Candidates per tick (default 250)")
+    .option("--json", "Print JSON", false)
+    .action(async (options: CatalogueRankOptions) => {
+      const { catalogueRankCommand } = await import("./commands/admin-catalogue");
+      await runCatalogueRank(options, catalogueRankCommand);
+    });
+
+  catalogue
+    .command("list")
+    .description("The ranked catalogue: closest to a finding (ear), or next to capture")
+    .option("--lens <lens>", "ear (default) or capture", "ear")
+    .option("--limit <limit>", "Rows (default 50, max 200)")
+    .option("--json", "Print JSON", false)
+    .action(async (options: CatalogueListOptions) => {
+      const { catalogueListCommand } = await import("./commands/admin-catalogue");
+      await runCatalogueList(options, catalogueListCommand);
     });
 
   const backfill = configureCommand(
@@ -3445,6 +3489,73 @@ async function runGalaxies(
   }
 }
 
+async function runCatalogueRank(
+  options: CatalogueRankOptions,
+  catalogueRankCommand: typeof import("./commands/admin-catalogue").catalogueRankCommand,
+): Promise<void> {
+  const summary = await catalogueRankCommand({ limit: options.limit });
+
+  if (options.json) {
+    printJson({ ok: true, summary });
+    return;
+  }
+
+  console.log(
+    `Ranked ${summary.scored} against ${summary.embeddedFindings} embedded findings; prioritized ${summary.prioritized} for capture. ${summary.remaining} still stale.`,
+  );
+}
+
+async function runCatalogueList(
+  options: CatalogueListOptions,
+  catalogueListCommand: typeof import("./commands/admin-catalogue").catalogueListCommand,
+): Promise<void> {
+  const { summary, tracks } = await catalogueListCommand({
+    lens: options.lens,
+    limit: options.limit,
+  });
+
+  if (options.json) {
+    printJson({ ok: true, summary, tracks });
+    return;
+  }
+
+  if (tracks.length === 0) {
+    console.log("Nothing out there yet.");
+    return;
+  }
+
+  for (const track of tracks) {
+    const identity = `${track.artists.join(", ")} — ${track.title}`;
+
+    if (options.lens === "capture") {
+      // The WHY, on a catalogue row that has never been heard: what ties it to the archive.
+      const reason = track.captureReason;
+      const why =
+        reason?.kind === "artist"
+          ? `${reason.name} is already in the archive`
+          : reason?.kind === "label"
+            ? `${reason.name} already carries a finding`
+            : reason?.kind === "seed-label"
+              ? `${reason.name} is a label the crawler digs from`
+              : reason?.kind === "skipped-label"
+                ? `${reason.name} is not your lane — ranked last, kept anyway`
+                : "nothing ties it to the archive yet";
+
+      console.log(`${String(track.capturePriority ?? 0)}  ${identity.padEnd(52)} ${why}`);
+      continue;
+    }
+
+    // The WHY on a ranked row: never a bare score. It names the finding it matched.
+    const match = track.nearestFinding;
+    const score = track.nearestFindingScore?.toFixed(2) ?? "—";
+    const why = match
+      ? `closest to ${match.logId ? `${match.logId} ` : ""}${match.artists.join(", ")} — ${match.title}`
+      : "nothing to compare it to yet";
+
+    console.log(`${score}  ${identity.padEnd(52)} ${why}`);
+  }
+}
+
 async function runGalaxyMapRead(
   options: JsonOptions,
   galaxyMapReadCommand: typeof import("./commands/galaxies").galaxyMapReadCommand,
@@ -4260,6 +4371,7 @@ const stringOptions = new Set([
   "--key-confidence",
   "--key-source",
   "--kind",
+  "--lens",
   "--limit",
   "--metrics",
   "--mime",
