@@ -1,26 +1,42 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   FlatList,
+  Linking,
   type ListRenderItem,
   Pressable,
   RefreshControl,
   ScrollView,
   Text,
+  TextInput,
   View,
 } from "react-native";
 import { useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { flattenFeed, useFindingsFeed } from "@/api/hooks";
+import { Ionicons } from "@expo/vector-icons";
+import { type SearchHit } from "@fluncle/contracts/orpc";
+import { flattenFeed, useArchiveSearch, useFindingsFeed } from "@/api/hooks";
 import { FindingRow, FindingRowSkeleton } from "@/components/finding-row";
+import { ArchiveRow } from "@/components/archive-row";
+import { EntityRow } from "@/components/entity-row";
 import { CosmosBackdrop } from "@/components/cosmos-backdrop";
 import { archiveView } from "@/lib/archive-state";
+import { type SavedFinding } from "@/lib/saved-store";
+import { useSavedFindings } from "@/lib/saved";
+import { partitionEntities, searchView } from "@/lib/search-state";
 import { color, font } from "@/theme/tokens";
 
-// The archive (RFC Unit 3): browse + the sonic-galaxy lens (browse-by-feel RFC). No
-// search box (a DESIGN.md anti-reference). The lens is DATA-DRIVEN off the real,
-// operator-named galaxies present in the loaded findings — it filters client-side by
-// galaxy slug (before any galaxy is named, only "All" shows). The full public lens is
-// a later slice.
+// The archive (RFC Unit 3): browse + the sonic-galaxy lens (browse-by-feel RFC) +
+// SEARCH (the catalogue sprint's public `search_archive` op) + a device-local Saved
+// view. The lens is DATA-DRIVEN off the real, operator-named galaxies present in the
+// loaded findings — it filters client-side by galaxy slug (before any galaxy is named,
+// only "All" shows). Search is a quiet magnifier in the header, mirroring the web
+// palette's stance: the quietest surface doesn't get a permanent form field, it gets a
+// glyph that opens one. Searching REPLACES the browse list; closing it restores the
+// lens exactly where it was.
+
+/** What the browse list is filtered to when NOT searching. */
+type Browse = { kind: "all" } | { kind: "galaxy"; slug: string } | { kind: "saved" };
+
 export default function ArchiveScreen() {
   const router = useRouter();
   const {
@@ -34,7 +50,22 @@ export default function ArchiveScreen() {
     refetch,
   } = useFindingsFeed();
   const all = flattenFeed(data?.pages);
-  const [activeSlug, setActiveSlug] = useState<string | null>(null);
+
+  const [browse, setBrowse] = useState<Browse>({ kind: "all" });
+  const [searching, setSearching] = useState(false);
+  const [query, setQuery] = useState("");
+  const [debounced, setDebounced] = useState("");
+
+  // A keystroke is not a query. The debounce (matching the web palette) keeps a typed
+  // word from firing a round trip per character on its way to being one.
+  useEffect(() => {
+    const timer = setTimeout(() => setDebounced(query.trim()), 180);
+    return () => clearTimeout(timer);
+  }, [query]);
+
+  const saved = useSavedFindings();
+
+  const activeSlug = browse.kind === "galaxy" ? browse.slug : null;
   const shown = activeSlug ? all.filter((f) => f.galaxy?.slug === activeSlug) : all;
 
   // The distinct named galaxies present in the loaded findings, in first-seen order —
@@ -67,6 +98,31 @@ export default function ArchiveScreen() {
     [shown.length],
   );
 
+  const renderSaved = useCallback<ListRenderItem<SavedFinding>>(
+    ({ index, item }) => (
+      <ArchiveRow
+        accessibilityLabel={`Open the log page for ${item.artists.join(", ")} — ${item.title}`}
+        albumImageUrl={item.albumImageUrl}
+        artists={item.artists}
+        bpm={item.bpm}
+        certified
+        galaxyName={item.galaxyName}
+        isLast={index === saved.list.length - 1}
+        logId={item.logId}
+        musicalKey={item.key}
+        onPress={() => router.push(`/log/${item.logId ?? item.trackId}`)}
+        title={item.title}
+      />
+    ),
+    [router, saved.list.length],
+  );
+
+  const closeSearch = useCallback(() => {
+    setSearching(false);
+    setQuery("");
+    setDebounced("");
+  }, []);
+
   const view = archiveView({ count: shown.length, isError, isPending });
 
   return (
@@ -78,38 +134,54 @@ export default function ArchiveScreen() {
             (the operator's ruling). The header is a flex block above the list (not an
             overlay), so rows still rest below the chips; nothing scrolls under it. */}
         <View>
-          <View style={styles.header}>
-            <Text style={[font.display, { color: color.starlightCream, fontSize: 22 }]}>
-              The archive
-            </Text>
-            <View style={{ alignItems: "center", flexDirection: "row", gap: 8 }}>
-              <HeaderPill label="Submit a track" onPress={() => router.push("/submit")} />
-            </View>
-          </View>
-          {/* One horizontal line forever — the lens never wraps to a second row (P5). */}
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentInsetAdjustmentBehavior="never"
-            contentContainerStyle={styles.chipRow}
-          >
-            <GalaxyChip
-              label="All"
-              active={activeSlug === null}
-              onPress={() => setActiveSlug(null)}
-            />
-            {presentGalaxies.map((g) => (
-              <GalaxyChip
-                key={g.slug}
-                label={g.name}
-                active={activeSlug === g.slug}
-                onPress={() => setActiveSlug(g.slug)}
-              />
-            ))}
-          </ScrollView>
+          {searching ? (
+            <SearchField query={query} onChangeQuery={setQuery} onClose={closeSearch} />
+          ) : (
+            <>
+              <View style={styles.header}>
+                <Text style={[font.display, { color: color.starlightCream, fontSize: 22 }]}>
+                  The archive
+                </Text>
+                <View style={{ alignItems: "center", flexDirection: "row", gap: 8 }}>
+                  <SearchIconButton onPress={() => setSearching(true)} />
+                  <HeaderPill label="Submit a track" onPress={() => router.push("/submit")} />
+                </View>
+              </View>
+              {/* One horizontal line forever — the lens never wraps to a second row (P5). */}
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentInsetAdjustmentBehavior="never"
+                contentContainerStyle={styles.chipRow}
+              >
+                <GalaxyChip
+                  label="All"
+                  active={browse.kind === "all"}
+                  onPress={() => setBrowse({ kind: "all" })}
+                />
+                <GalaxyChip
+                  label="Saved"
+                  active={browse.kind === "saved"}
+                  onPress={() => setBrowse({ kind: "saved" })}
+                />
+                {presentGalaxies.map((g) => (
+                  <GalaxyChip
+                    key={g.slug}
+                    label={g.name}
+                    active={activeSlug === g.slug}
+                    onPress={() => setBrowse({ kind: "galaxy", slug: g.slug })}
+                  />
+                ))}
+              </ScrollView>
+            </>
+          )}
         </View>
 
-        {view === "loading" ? (
+        {searching ? (
+          <SearchResults query={debounced} onPickHit={(hit) => pickHit(hit, router)} />
+        ) : browse.kind === "saved" ? (
+          <SavedList list={saved.list} ready={saved.ready} renderItem={renderSaved} />
+        ) : view === "loading" ? (
           <LoadingRows count={7} />
         ) : view === "error" ? (
           <ArchiveError onRetry={() => void refetch()} />
@@ -158,6 +230,146 @@ export default function ArchiveScreen() {
   );
 }
 
+// A certified finding taps through to its coordinate (the detail modal). A track
+// Fluncle never certified has no /log page, so it links OUT to Spotify — the Unlit
+// Rule the search rows already render.
+function pickHit(hit: SearchHit, router: ReturnType<typeof useRouter>): void {
+  if (hit.certified && hit.logId) {
+    router.push(`/log/${hit.logId}`);
+    return;
+  }
+  if (hit.spotifyUrl) {
+    void Linking.openURL(hit.spotifyUrl);
+  }
+}
+
+// The search pane: one `search_archive` op behind a debounced query, rendered in the
+// archive row idiom. Entities (artist/label/album) are jump targets grouped by kind and
+// opened on the web (the app has no such page); tracks follow in the certified/unlit
+// register. Empty/error states are honest and voiced; the two notes (sonic anchor,
+// degraded fallback) mirror the web palette's ratified lines.
+function SearchResults({
+  onPickHit,
+  query,
+}: {
+  onPickHit: (hit: SearchHit) => void;
+  query: string;
+}) {
+  const { data, isError, isFetching } = useArchiveSearch(query);
+  const results = data?.results ?? [];
+  const entities = data?.entities ?? [];
+  const hasResults = results.length > 0 || entities.length > 0;
+  const state = searchView({ hasResults, isError, isFetching, query });
+  const groups = partitionEntities(entities);
+
+  if (state === "idle" || state === "tooShort") {
+    return <View style={{ flex: 1 }} />;
+  }
+  if (state === "loading") {
+    return <LoadingRows count={6} />;
+  }
+  if (state === "error") {
+    return (
+      <View style={styles.errorState}>
+        <Text style={[font.body, styles.errorText]}>
+          Search didn&apos;t run. Check your connection.
+        </Text>
+      </View>
+    );
+  }
+  if (state === "empty") {
+    return (
+      <Text style={[font.body, styles.emptyText]}>
+        {data?.kind === "coordinate" ? "No finding at that coordinate." : "Nothing out here."}
+      </Text>
+    );
+  }
+
+  return (
+    <ScrollView
+      contentInsetAdjustmentBehavior="automatic"
+      contentContainerStyle={styles.listContent}
+      keyboardShouldPersistTaps="handled"
+      keyboardDismissMode="on-drag"
+    >
+      {data?.anchor ? (
+        <Text style={[font.body, styles.note]}>
+          Near {data.anchor.title}
+          {data.anchor.artists.length > 0 ? ` — ${data.anchor.artists.join(", ")}` : ""}
+        </Text>
+      ) : null}
+      {data?.degraded ? (
+        <Text style={[font.body, styles.note]}>
+          Reading by name only right now — showing the closest words.
+        </Text>
+      ) : null}
+      {groups.map((group) => (
+        <View key={group.kind}>
+          <Text style={[font.label, styles.groupHeading]}>{group.heading}</Text>
+          {group.entities.map((entity, index) => (
+            <EntityRow
+              key={`${entity.kind}-${entity.slug}`}
+              entity={entity}
+              isLast={index === group.entities.length - 1}
+            />
+          ))}
+        </View>
+      ))}
+      {results.map((hit, index) => (
+        <ArchiveRow
+          key={hit.trackId}
+          accessibilityLabel={
+            hit.certified && hit.logId
+              ? `Open the log page for ${hit.artists.join(", ")} — ${hit.title}`
+              : `Open ${hit.artists.join(", ")} — ${hit.title} on Spotify`
+          }
+          albumImageUrl={hit.albumImageUrl}
+          artists={hit.artists}
+          bpm={hit.bpm}
+          certified={hit.certified}
+          galaxyName={hit.galaxy}
+          isLast={index === results.length - 1}
+          logId={hit.logId}
+          musicalKey={hit.key}
+          onPress={() => onPickHit(hit)}
+          title={hit.title}
+        />
+      ))}
+    </ScrollView>
+  );
+}
+
+// The device-local Saved view. Rows render from the stored snapshot, so a saved
+// finding shows even if the archive later moves — and a coordinate that no longer
+// resolves lands on the detail screen's honest "Finding not found." when tapped.
+function SavedList({
+  list,
+  ready,
+  renderItem,
+}: {
+  list: SavedFinding[];
+  ready: boolean;
+  renderItem: ListRenderItem<SavedFinding>;
+}) {
+  if (!ready) {
+    return <LoadingRows count={4} />;
+  }
+  return (
+    <FlatList
+      data={list}
+      keyExtractor={(f) => f.logId ?? f.trackId}
+      renderItem={renderItem}
+      contentInsetAdjustmentBehavior="automatic"
+      contentContainerStyle={styles.listContent}
+      ListEmptyComponent={
+        <Text style={[font.body, styles.emptyText]}>
+          Nothing saved yet. Tap the bookmark on a finding to keep it here.
+        </Text>
+      }
+    />
+  );
+}
+
 // The loading state (B2) and the drain state (P4): a quiet column of placeholder rows —
 // artwork square + two text bars in the Dust Veil tone, no spinner.
 function LoadingRows({ count }: { count: number }) {
@@ -176,7 +388,7 @@ function ArchiveError({ onRetry }: { onRetry: () => void }) {
   return (
     <View style={styles.errorState}>
       <Text style={[font.body, styles.errorText]}>
-        The archive didn't load. Check your connection.
+        The archive didn&apos;t load. Check your connection.
       </Text>
       <Pressable
         accessibilityRole="button"
@@ -191,10 +403,50 @@ function ArchiveError({ onRetry }: { onRetry: () => void }) {
   );
 }
 
-// A header action pill (the quiet outline the notifications entry used). Two now
-// sits in the archive header: "Submit a track" (the ratified functional label; the Chrome Rule
-// keeps controls literal). The push-consent screen at /notifications is reached contextually,
-// not from permanent chrome — its test pill was removed 2026-07-11.
+// The search field that replaces the header title while searching: a bordered outline
+// input carrying the ratified web placeholder, and a quiet X to close (which restores
+// the browse list). Icon-only chrome carries its literal in the a11y label.
+function SearchField({
+  onChangeQuery,
+  onClose,
+  query,
+}: {
+  onChangeQuery: (next: string) => void;
+  onClose: () => void;
+  query: string;
+}) {
+  return (
+    <View style={styles.searchRow}>
+      <View style={styles.searchField}>
+        <Ionicons name="search" size={16} color={color.stardust} />
+        <TextInput
+          accessibilityLabel="Search the archive"
+          autoCapitalize="none"
+          autoCorrect={false}
+          autoFocus
+          onChangeText={onChangeQuery}
+          placeholder="A name, a coordinate, or the sound of it…"
+          placeholderTextColor={color.stardust}
+          returnKeyType="search"
+          style={styles.searchInput}
+          value={query}
+        />
+      </View>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Close search"
+        hitSlop={{ bottom: 10, left: 10, right: 10, top: 10 }}
+        onPress={onClose}
+        style={{ padding: 4 }}
+      >
+        <Ionicons name="close" size={24} color={color.stardust} />
+      </Pressable>
+    </View>
+  );
+}
+
+// A header action pill (the quiet outline the notifications entry used): "Submit a
+// track" (the ratified functional label; the Chrome Rule keeps controls literal).
 function HeaderPill({ label, onPress }: { label: string; onPress: () => void }) {
   return (
     <Pressable
@@ -214,13 +466,29 @@ function HeaderPill({ label, onPress }: { label: string; onPress: () => void }) 
   );
 }
 
+// The quiet magnifier that opens search — a glyph, not a field, in the quietest
+// surface (the web palette's stance). The padding + hitSlop lift it past the 44pt floor.
+function SearchIconButton({ onPress }: { onPress: () => void }) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel="Search the archive"
+      hitSlop={{ bottom: 10, left: 10, right: 10, top: 10 }}
+      onPress={onPress}
+      style={{ padding: 6 }}
+    >
+      <Ionicons name="search" size={20} color={color.stardust} />
+    </Pressable>
+  );
+}
+
 function GalaxyChip({
-  label,
   active,
+  label,
   onPress,
 }: {
-  label: string;
   active: boolean;
+  label: string;
   onPress: () => void;
 }) {
   return (
@@ -252,6 +520,12 @@ const styles = {
   emptyText: { color: color.stardust, padding: 16 },
   errorState: { alignItems: "center", gap: 16, paddingHorizontal: 16, paddingTop: 40 },
   errorText: { color: color.stardust, textAlign: "center" },
+  groupHeading: {
+    color: color.stardust,
+    paddingBottom: 4,
+    paddingHorizontal: 16,
+    paddingTop: 14,
+  },
   header: {
     alignItems: "center",
     flexDirection: "row",
@@ -260,11 +534,37 @@ const styles = {
     paddingTop: 8,
   },
   listContent: { paddingBottom: 20, paddingTop: 6 },
+  note: { color: color.stardust, paddingHorizontal: 16, paddingTop: 12 },
   retryButton: {
     borderColor: color.dustLine,
     borderRadius: 8,
     borderWidth: 1,
     paddingHorizontal: 16,
     paddingVertical: 8,
+  },
+  searchField: {
+    alignItems: "center",
+    backgroundColor: color.tapeBlackFill,
+    borderColor: color.dustLine,
+    borderRadius: 8,
+    borderWidth: 1,
+    flex: 1,
+    flexDirection: "row",
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  searchInput: {
+    color: color.starlightCream,
+    flex: 1,
+    fontFamily: font.body.fontFamily,
+    padding: 0,
+  },
+  searchRow: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingTop: 8,
   },
 } as const;

@@ -67,6 +67,28 @@ export function useFinding(idOrLogId: string) {
 }
 
 /**
+ * Search Fluncle's archive — the public `search_archive` op (GET /search/archive),
+ * the same contract the web ⌘K palette reads. One op resolves a coordinate, an exact
+ * entity, a full-text token, or a natural-language sentence (and a sonic "sounds
+ * like"); the client only renders what comes back. Passing `undefined` (or a query
+ * below the 2-char floor `search-state.ts` enforces) keeps the query disabled so a
+ * keystroke never fires a round trip — the screen debounces and hands the settled
+ * value here. The archive doesn't change while you look away, so results stay fresh
+ * for a minute.
+ */
+export function useArchiveSearch(query: string | undefined) {
+  const trimmed = query?.trim() ?? "";
+  return useQuery(
+    orpc.search_archive.queryOptions({
+      enabled: trimmed.length >= 2,
+      input: { q: trimmed },
+      refetchOnWindowFocus: false,
+      staleTime: 60_000,
+    }),
+  );
+}
+
+/**
  * Register this device's Expo push token for new-finding / new-mixtape pushes —
  * the live `register_device` op (POST /api/v1/devices), an idempotent upsert. The
  * token comes from the consent flow (src/push/notifications.ts); the actual send
