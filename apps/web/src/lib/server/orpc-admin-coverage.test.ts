@@ -131,6 +131,14 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // Admin tier (agent-allowed read). `list_note_rejections` matches the public `list_`
   // prefix so the "holds exactly" check skips it; it lives here for completeness.
   "GET /admin/note-rejections": "list_note_rejections",
+  // The prompt registry (docs/agents/prompt-registry.md) — contract-only oRPC (no
+  // TanStack route file; oRPC owns the paths directly). `GET /admin/prompts/{slug}` is
+  // the AGENT-tier per-tick resolve the on-box sweeps live on — the box runs a pinned CLI
+  // and a baked image, so the API is the ONLY way a prompt reaches it without a rebake.
+  // `list_prompts` (OPERATOR) matches the public `list_` prefix so the "holds exactly"
+  // check skips it; it lives here for completeness.
+  "GET /admin/prompts": "list_prompts",
+  "GET /admin/prompts/{slug}": "get_prompt",
   "GET /admin/recordings": "list_recordings",
   "GET /admin/recordings/{recordingId}": "get_recording",
   "GET /admin/submissions": "list_submissions",
@@ -280,6 +288,9 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // the whole devices domain is contract-first oRPC), so it has no file-enumeration
   // entry; it lives here only to satisfy the "registry holds EXACTLY this map's
   // ops" check. An EXTERNAL cron calls it (TanStack has no `scheduled()`).
+  // Appending a prompt version — an edit, a rollback, or a reset (they are one op, because
+  // the history is append-only). OPERATOR tier: a prompt IS code, so an agent token 403s.
+  "POST /admin/prompts/{slug}": "update_prompt",
   "POST /admin/push/receipts/sweep": "sweep_push_receipts",
   "POST /admin/recordings": "create_recording",
   // create_clip is now recording-scoped (RFC recording-primitive, Design B): the legacy

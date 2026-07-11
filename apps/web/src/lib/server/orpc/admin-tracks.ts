@@ -620,6 +620,10 @@ export function adminTracksHandlers(os: Implementer) {
         observationAudioUrl: media.observationAudioUrl,
         observationDurationMs: durationMs,
         observationGeneratedAt: generatedAt,
+        // PROVENANCE — the prompt version the sweep authored this script under, written
+        // in the same statement as the script itself.
+        observationPromptVersion:
+          typeof body.promptVersion === "number" ? body.promptVersion : null,
         observationScript: script,
         // A freshly-fetched-here note also marks `context_status = 'resolved'` so the
         // context queue (status-aware) treats this finding as done, mirroring the
@@ -709,6 +713,10 @@ export function adminTracksHandlers(os: Implementer) {
       if (fetched.status === "resolved" && fetched.contextNote.trim()) {
         await updateTrack(track.trackId, {
           contextNote: fetched.contextNote,
+          // PROVENANCE, written in the same statement as the note it describes: the
+          // `context_distil` version that distilled it, or NULL when the distil failed
+          // and the cleaned raw snippets were stored instead (no prompt wrote those).
+          contextPromptVersion: fetched.promptVersion,
           contextStatus: "resolved",
         });
       } else if (refresh && existing?.trim()) {
@@ -876,7 +884,11 @@ export function adminTracksHandlers(os: Implementer) {
       // the length against the public budget on the same path an operator note takes
       // (it returns `undefined` only for a non-string input, which `gateNoteText`
       // has already ruled out — the `?? note` narrows the type without an assertion).
-      const filled = await fillEmptyNote(track.trackId, parseEditorialNote(note) ?? note);
+      const filled = await fillEmptyNote(
+        track.trackId,
+        parseEditorialNote(note) ?? note,
+        body.promptVersion,
+      );
 
       if (!filled) {
         // Lost the race: a note landed between our read and this write. The guard held

@@ -47,6 +47,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { resolveSweepPrompt } from "./prompt-fetch";
 
 // One day per tick: a single long-form authoring pass sits comfortably inside the
 // timer budget; the gap list drains across ticks (oldest first), so history
@@ -162,18 +163,16 @@ function looksLikeAuthFailure(text: string): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// The authoring prompt — the logbook voice rails + the day's findings inline. The
-// model loads the `copywriting-fluncle` skill for the full voice canon; we restate
-// only the hard, gate-enforced constraints + the token contract so the output is
-// gate-safe and the figures land.
+// The day's material — one block per finding, each carrying its `[[logId]]` figure
+// token and whatever the archive already knows about it (the public note, the internal
+// context facts, Fluncle's own spoken take). Shared by BOTH prompt paths: the registry
+// template takes it pre-joined as the `{{findings}}` variable (the renderer has no
+// loops, so a list is just a string), and the baked-in fallback splices the same lines
+// inline. One definition, so the two paths cannot drift.
 // ---------------------------------------------------------------------------
 
-function buildAuthoringPrompt(gap: Gap): string {
-  const sector = gap.sector ?? 0;
-  const date = gap.date ? gap.date.slice(0, 10) : "unknown";
-  const findings = gap.findings ?? [];
-
-  const findingBlocks = findings.flatMap((finding, index) => {
+function buildFindingBlocks(findings: GapFinding[]): string[] {
+  return findings.flatMap((finding, index) => {
     const artists = finding.artists?.length ? finding.artists.join(", ") : "unknown";
     const lines = [
       `FINDING ${index + 1}:`,
@@ -203,6 +202,40 @@ function buildAuthoringPrompt(gap: Gap): string {
 
     return lines;
   });
+}
+
+// ---------------------------------------------------------------------------
+// THE PROMPT VARIABLES — the facts the builder below used to interpolate in TS, handed
+// to the REGISTRY template instead. The prose all lives in the template now (so the
+// operator can tune every rail, including the figure-token contract), and the sweep
+// supplies only the data. These names MUST match the `variables` array of the
+// `logbook_entry` registry entry exactly, or the template renders holes.
+// ---------------------------------------------------------------------------
+
+function promptVariables(gap: Gap): Record<string, string | undefined> {
+  return {
+    date: gap.date ? gap.date.slice(0, 10) : "unknown",
+    findings: buildFindingBlocks(gap.findings ?? []).join("\n"),
+    sector: String(gap.sector ?? 0),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// The authoring prompt — the logbook voice rails + the day's findings inline. The
+// model loads the `copywriting-fluncle` skill for the full voice canon; we restate
+// only the hard, gate-enforced constraints + the token contract so the output is
+// gate-safe and the figures land.
+//
+// THIS IS THE FLOOR, NOT DEAD CODE. The live prompt comes from the registry over the
+// API (see `authorEntry`); this builder is what runs when that fetch fails for ANY
+// reason. Keep it in lockstep with the `logbook_entry` default body in
+// apps/web/src/lib/server/prompts.ts.
+// ---------------------------------------------------------------------------
+
+export function buildAuthoringPrompt(gap: Gap): string {
+  const sector = gap.sector ?? 0;
+  const date = gap.date ? gap.date.slice(0, 10) : "unknown";
+  const findingBlocks = buildFindingBlocks(gap.findings ?? []);
 
   return [
     "You are Fluncle, writing your LOGBOOK entry for ONE day of the voyage — a first-person traveler's journal.",
@@ -234,11 +267,32 @@ function buildAuthoringPrompt(gap: Gap): string {
 // ---------------------------------------------------------------------------
 // Author one day via `claude -p`. Throws ClaudeAuthError on an auth/quota failure
 // (abort the batch); returns null on any other failure (leave the day queued);
-// returns the parsed { title, body } on success.
+// returns the parsed { title, body } + the prompt's provenance on success.
+//
+// THE PROMPT comes from the REGISTRY over the agent-tier API (`get_prompt`), so the
+// operator can retune the travelogue voice from /admin with no deploy and no rebake. If
+// that fetch fails for any reason, `resolveSweepPrompt` falls back to
+// `buildAuthoringPrompt` above and the sweep authors EXACTLY as it did before the
+// registry existed. A prompt store that blinks must never be able to stop the pipeline.
 // ---------------------------------------------------------------------------
 
-function authorEntry(gap: Gap): { body: string; title: string } | null {
-  const prompt = buildAuthoringPrompt(gap);
+// PROVENANCE — the prompt version this entry was authored under: N = the operator's
+// live override, 0 = the registry's baked default, NULL = the registry was unreachable
+// and the inlined `buildAuthoringPrompt` wrote it. Rides out to the Worker on
+// `--prompt-version`.
+type AuthoredEntry = { body: string; promptVersion: number | null; title: string };
+
+async function authorEntry(gap: Gap): Promise<AuthoredEntry | null> {
+  const { prompt, promptVersion } = await resolveSweepPrompt({
+    fallback: () => buildAuthoringPrompt(gap),
+    slug: "logbook_entry",
+    variables: promptVariables(gap),
+  });
+
+  if (promptVersion === null) {
+    log("the prompt registry was unreachable — authoring from the baked-in default");
+  }
+
   const args = [
     "-p",
     "--model",
@@ -299,7 +353,9 @@ function authorEntry(gap: Gap): { body: string; title: string } | null {
     return null;
   }
 
-  return parseAuthoredEntry(result);
+  const parsed = parseAuthoredEntry(result);
+
+  return parsed ? { ...parsed, promptVersion } : null;
 }
 
 // Parse the `TITLE: …` first line + body. A missing TITLE line degrades to null
@@ -331,7 +387,12 @@ function parseAuthoredEntry(text: string): { body: string; title: string } | nul
 // voice-gates + fills-empty-only + stores), clean up.
 // ---------------------------------------------------------------------------
 
-function deliverEntry(sector: number, title: string, body: string): Outcome {
+function deliverEntry(
+  sector: number,
+  title: string,
+  body: string,
+  promptVersion: number | null,
+): Outcome {
   const dir = mkdtempSync(join(tmpdir(), "logbook-sweep-"));
   const bodyPath = join(dir, "entry.md");
 
@@ -347,6 +408,10 @@ function deliverEntry(sector: number, title: string, body: string): Outcome {
       title,
       "--body-file",
       bodyPath,
+      // PROVENANCE. Omitted entirely when the registry was unreachable, so the column
+      // stays NULL and the entry is honest about having been written by the baked-in
+      // fallback rather than by a version it never saw.
+      ...(promptVersion === null ? [] : ["--prompt-version", String(promptVersion)]),
       "--json",
     ]);
 
@@ -399,7 +464,7 @@ function deliverEntry(sector: number, title: string, body: string): Outcome {
 // Per-day: author → deliver.
 // ---------------------------------------------------------------------------
 
-function authorOne(gap: Gap): Outcome {
+async function authorOne(gap: Gap): Promise<Outcome> {
   const sector = gap.sector;
 
   if (typeof sector !== "number" || !gap.findings?.length) {
@@ -408,13 +473,13 @@ function authorOne(gap: Gap): Outcome {
     return "skipped";
   }
 
-  const authored = authorEntry(gap);
+  const authored = await authorEntry(gap);
 
   if (!authored) {
     return "skipped";
   }
 
-  return deliverEntry(sector, authored.title, authored.body);
+  return deliverEntry(sector, authored.title, authored.body, authored.promptVersion);
 }
 
 // ---------------------------------------------------------------------------
@@ -459,7 +524,7 @@ function pingClaudeAuthFailure(detail: string): void {
 // Main — drain a bounded batch off the gap list (oldest first).
 // ---------------------------------------------------------------------------
 
-function main(): void {
+async function main(): Promise<void> {
   const response = fluncleJson<{ gaps?: Gap[] }>([
     "admin",
     "logbook",
@@ -485,7 +550,7 @@ function main(): void {
 
   for (const gap of gaps.slice(0, BATCH_CAP)) {
     try {
-      const outcome = authorOne(gap);
+      const outcome = await authorOne(gap);
 
       if (outcome === "authored") {
         summary.authored += 1;
@@ -518,10 +583,12 @@ function main(): void {
   console.log(JSON.stringify({ ok: true, ...summary }));
 }
 
-try {
-  main();
-} catch (error) {
-  log(`fatal: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`);
-  console.log(JSON.stringify({ ok: false, reason: "sweep_error" }));
-  process.exit(1);
+// `import.meta.main` so the pure helper (the fallback authoring prompt) can be imported
+// by a unit test without the sweep firing (the note-sweep / triage-sweep pattern).
+if (import.meta.main) {
+  main().catch((error) => {
+    log(`fatal: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`);
+    console.log(JSON.stringify({ ok: false, reason: "sweep_error" }));
+    process.exit(1);
+  });
 }

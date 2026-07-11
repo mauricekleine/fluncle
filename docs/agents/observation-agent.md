@@ -65,3 +65,9 @@ Writing alignment does **not** bump `updated_at` (it describes an existing artif
 - `OPENROUTER_API_KEY` — secret, drives the context-note distil pass. Read via `readOptionalEnv`: unset ⇒ the distil degrades gracefully to the cleaned raw snippets (never blocks a render).
 - `OPENROUTER_CONTEXT_MODEL` — OPTIONAL non-secret var overriding the distil model; absent, defaults to `anthropic/claude-haiku-4.5`.
 - R2 (`R2_*`) — already present.
+
+## The prompt lives in the DATABASE, not in the image
+
+The authoring prompt is the `observation_script` entry in the **prompt registry** ([docs/agents/prompt-registry.md](./prompt-registry.md)). The sweep fetches it over the AGENT-tier `get_prompt` each tick, so the operator retunes it from `/admin/prompts` or the `fluncle admin prompts` CLI with **no deploy and no box rebake**.
+
+The repo still keeps the baked default (`buildAuthoringPrompt` in `observe-sweep.ts`), and a failed fetch falls back to it and logs — a prompt store that blinks can never stop the sweep. Every observation records the version that drafted it in `findings.observation_prompt_version` (`0` = the repo's default, `N` = override N, `NULL` = the baked fallback wrote it).

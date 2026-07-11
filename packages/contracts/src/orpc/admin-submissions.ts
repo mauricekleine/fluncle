@@ -20,6 +20,11 @@ import { SubmissionSchema } from "./_shared";
  * `verdict_too_long`), so the contract stays permissive to keep those codes exact.
  */
 const TriageSubmissionBodySchema = z.looseObject({
+  // PROVENANCE — the prompt-registry version this verdict was phrased under (0 = the
+  // baked default, N = override N). The on-box `fluncle-triage` sweep sends it; omitted
+  // when the sweep fell back to its inlined prompt, so the column stays NULL.
+  // See docs/agents/prompt-registry.md.
+  promptVersion: z.number().int().min(0).optional(),
   verdict: z.unknown().optional(),
 });
 

@@ -177,9 +177,12 @@ describe("oRPC triage_submission (POST .../triage)", () => {
 
     expect(response?.status).toBe(200);
     expect(await readJson(response)).toEqual({ ok: true, submission: triaged });
+    // The third arg is the PROVENANCE stamp — which prompt-registry version phrased the
+    // verdict. This call sent none, so it is null (docs/agents/prompt-registry.md).
     expect(triageSubmission).toHaveBeenCalledWith(
       SUBMISSION_ID,
       "looks like a find — not yet logged",
+      null,
     );
   });
 });

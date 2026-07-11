@@ -470,6 +470,9 @@ describe("oRPC observe_track (POST /admin/tracks/{trackId}/observe)", () => {
       observationAudioUrl: "https://found.fluncle.com/004.7.2I/observation.mp3",
       observationDurationMs: 28000,
       observationGeneratedAt: expect.any(String),
+      // The PROVENANCE stamp: null here, because this call sent no `--prompt-version`
+      // (docs/agents/prompt-registry.md).
+      observationPromptVersion: null,
       observationScript: GOOD_SCRIPT,
     });
   });
@@ -793,7 +796,7 @@ describe("oRPC note_track (POST /admin/tracks/{trackId}/note)", () => {
     expect(data.skipped).toBeUndefined();
     expect(data.note).toBe(GOOD_NOTE);
     // The DB-predicate fill, not an unconditional updateTrack write.
-    expect(fillEmptyNote).toHaveBeenCalledWith(TRACK_ID, GOOD_NOTE);
+    expect(fillEmptyNote).toHaveBeenCalledWith(TRACK_ID, GOOD_NOTE, undefined);
     expect(updateTrack).not.toHaveBeenCalled();
     // A fill stamps the "ran" state as done (filled = true).
     expect(recordNoteAttempt).toHaveBeenCalledWith(TRACK_ID, true);
@@ -854,7 +857,7 @@ describe("oRPC note_track (POST /admin/tracks/{trackId}/note)", () => {
     const response = await handleOrpc(post("/note", AGENT_TOKEN, { note: GOOD_NOTE }));
 
     expect(response?.status).toBe(200);
-    expect(fillEmptyNote).toHaveBeenCalledWith(TRACK_ID, GOOD_NOTE);
+    expect(fillEmptyNote).toHaveBeenCalledWith(TRACK_ID, GOOD_NOTE, undefined);
   });
 
   it("422s a note with a banned identity word before storing (the voice gate)", async () => {
@@ -1070,7 +1073,7 @@ describe("oRPC note_track (POST /admin/tracks/{trackId}/note)", () => {
       const response = await handleOrpc(post("/note", AGENT_TOKEN, { note }));
 
       expect(response?.status).toBe(200);
-      expect(fillEmptyNote).toHaveBeenCalledWith(TRACK_ID, note);
+      expect(fillEmptyNote).toHaveBeenCalledWith(TRACK_ID, note, undefined);
       // The measured echo rides back on the response — sameness is observable, not assumed.
       const data = (await readJson(response)) as { echo: { phrase: string } };
       expect(data.echo.phrase).toBe("");
@@ -1096,7 +1099,7 @@ describe("oRPC note_track (POST /admin/tracks/{trackId}/note)", () => {
       const response = await handleOrpc(post("/note", AGENT_TOKEN, { note: GOOD_NOTE }));
 
       expect(response?.status).toBe(200);
-      expect(fillEmptyNote).toHaveBeenCalledWith(TRACK_ID, GOOD_NOTE);
+      expect(fillEmptyNote).toHaveBeenCalledWith(TRACK_ID, GOOD_NOTE, undefined);
     });
 
     it("ignores a note-less neighbour (nothing to learn from, nothing to echo)", async () => {
@@ -1108,7 +1111,7 @@ describe("oRPC note_track (POST /admin/tracks/{trackId}/note)", () => {
       const response = await handleOrpc(post("/note", AGENT_TOKEN, { note: GOOD_NOTE }));
 
       expect(response?.status).toBe(200);
-      expect(fillEmptyNote).toHaveBeenCalledWith(TRACK_ID, GOOD_NOTE);
+      expect(fillEmptyNote).toHaveBeenCalledWith(TRACK_ID, GOOD_NOTE, undefined);
     });
   });
 

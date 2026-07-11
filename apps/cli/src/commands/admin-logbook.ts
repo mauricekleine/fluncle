@@ -26,6 +26,13 @@ export async function logbookGapsCommand(limit?: number): Promise<LogbookGap[]> 
 export type LogbookWriteOptions = {
   body?: string;
   bodyFile?: string;
+  /**
+   * PROVENANCE — the prompt-registry version the `fluncle-logbook` sweep authored this
+   * entry under (0 = the baked default, N = override N). Sent only by the agent CREATE;
+   * the operator overwrite ignores it, because no prompt wrote a hand-typed entry.
+   * See docs/agents/prompt-registry.md.
+   */
+  promptVersion?: number;
   title?: string;
 };
 
@@ -68,6 +75,9 @@ export async function logbookCreateCommand(
 ): Promise<LogbookEntryResponse> {
   return adminApiPost<LogbookEntryResponse>(`/api/admin/logbook/${encodeURIComponent(sector)}`, {
     body: resolveBody(options),
+    // PROVENANCE — omitted when the sweep fell back to its baked-in prompt, so the column
+    // stays NULL (docs/agents/prompt-registry.md).
+    ...(typeof options.promptVersion === "number" ? { promptVersion: options.promptVersion } : {}),
     title: requireTitle(options),
   });
 }

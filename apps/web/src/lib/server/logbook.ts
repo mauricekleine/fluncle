@@ -220,7 +220,17 @@ export async function getSectorFindings(
 
 // ── Writes ────────────────────────────────────────────────────────────────────
 
-export type LogbookInput = { body?: unknown; title?: unknown };
+export type LogbookInput = {
+  body?: unknown;
+  /**
+   * PROVENANCE — the `logbook_entry` prompt version this entry was authored under
+   * (0 = the registry's baked default, N = override N). The on-box sweep sends it; the
+   * OPERATOR overwrite path ignores it, because no prompt wrote a hand-typed entry.
+   * See docs/agents/prompt-registry.md.
+   */
+  promptVersion?: number | null;
+  title?: unknown;
+};
 
 /**
  * Author a sector's entry — the FILL-EMPTY-ONLY create (agent tier). A sector that
@@ -246,11 +256,15 @@ export async function createLogbookEntry(
 
   // The PK insert is the race-safe guard: a concurrent create loses on the conflict
   // rather than double-writing (DO NOTHING), and we re-read to return the winner.
+  // The entry and its PROVENANCE land in the SAME insert — the prompt version that
+  // authored it (NULL when the sweep fell back to its baked-in prompt). The OPERATOR
+  // overwrite below deliberately writes no version: no prompt wrote a hand-typed entry,
+  // and `generated_by = 'operator'` already says who did.
   await db.execute({
-    args: [sector, title, body, "agent", now, now, now],
+    args: [sector, title, body, "agent", input.promptVersion ?? null, now, now, now],
     sql: `insert into logbook_entries
-            (sector, title, body, generated_by, generated_at, created_at, updated_at)
-          values (?, ?, ?, ?, ?, ?, ?)
+            (sector, title, body, generated_by, prompt_version, generated_at, created_at, updated_at)
+          values (?, ?, ?, ?, ?, ?, ?, ?)
           on conflict(sector) do nothing`,
   });
 

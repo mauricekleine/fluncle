@@ -276,7 +276,11 @@ export function gateTriageVerdict(text: unknown): string {
  * authority. Unlike the auto-note's fill-empty-only guard, the sweep MAY refresh its own
  * prior verdict (it re-reads the archive each tick), so a re-triage overwrites.
  */
-export async function triageSubmission(id: string, verdict: unknown): Promise<Submission> {
+export async function triageSubmission(
+  id: string,
+  verdict: unknown,
+  promptVersion?: number | null,
+): Promise<Submission> {
   const gated = gateTriageVerdict(verdict);
   const submission = await getSubmission(id);
 
@@ -285,10 +289,13 @@ export async function triageSubmission(id: string, verdict: unknown): Promise<Su
   }
 
   const db = await getDb();
+  // The verdict and its PROVENANCE land in the SAME statement, so the version can never
+  // describe a verdict other than the one it wrote. NULL when the sweep fell back to its
+  // baked-in prompt (docs/agents/prompt-registry.md).
   const result = await db.execute({
-    args: [gated, id, "pending"],
+    args: [gated, promptVersion ?? null, id, "pending"],
     sql: `update submissions
-      set triage_verdict = ?
+      set triage_verdict = ?, triage_prompt_version = ?
       where id = ?
         and status = ?`,
   });

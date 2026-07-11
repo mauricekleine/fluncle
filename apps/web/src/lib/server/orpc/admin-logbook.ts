@@ -39,6 +39,8 @@ export function adminLogbookHandlers(os: Implementer) {
         const sector = requireSector(input.sector);
         const { entry, skipped } = await createLogbookEntry(sector, {
           body: input.body,
+          // PROVENANCE — the prompt version the sweep authored this entry under.
+          promptVersion: typeof input.promptVersion === "number" ? input.promptVersion : null,
           title: input.title,
         });
 

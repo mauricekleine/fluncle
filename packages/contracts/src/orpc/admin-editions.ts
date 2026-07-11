@@ -54,7 +54,15 @@ export const createEdition = oc
     summary: "Create a newsletter edition (draft)",
     tags: ["Admin"],
   })
-  .input(z.looseObject({}))
+  .input(
+    z.looseObject({
+      // PROVENANCE — the prompt-registry version this edition was authored under (0 = the
+      // baked default, N = override N). The on-box `fluncle-newsletter` sweep sends it;
+      // omitted when it fell back to its inlined prompt, so the column stays NULL.
+      // See docs/agents/prompt-registry.md.
+      promptVersion: z.number().int().min(0).optional(),
+    }),
+  )
   .output(EditionEnvelope);
 
 /**

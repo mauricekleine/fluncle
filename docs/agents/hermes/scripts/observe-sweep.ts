@@ -48,6 +48,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type BoxCostEvent, emitCost, parseAuthoringSpend } from "./cost-emit";
+import { resolveSweepPrompt } from "./prompt-fetch";
 
 // ---------------------------------------------------------------------------
 // Config — a SMALL bounded batch: each observation burns Cartesia credits AND
@@ -124,6 +125,12 @@ type Outcome = "rendered" | "gateSkipped" | "skipped";
 // never $0).
 type AuthoredScript = {
   model: string;
+  // PROVENANCE — the prompt version this observation was authored under: N = the
+  // operator's live override, 0 = the registry's baked default, NULL = the registry was
+  // unreachable and the inlined `buildAuthoringPrompt` below wrote it. Rides out to the
+  // Worker on `--prompt-version`, so an observation authored during an outage is legible
+  // as such forever rather than credited to a version that never saw it.
+  promptVersion: number | null;
   script: string;
   tokens: number;
   usd: number | null;
@@ -205,9 +212,15 @@ function looksLikeAuthFailure(text: string): boolean {
 // cron's jobs.json prompt, with this finding's facts interpolated inline. The
 // model loads the `copywriting-fluncle` skill for the full voice canon; we only
 // restate the hard, gate-enforced constraints here so the output is gate-safe.
+//
+// THIS IS THE FLOOR, NOT DEAD CODE. The live prompt comes from the registry over the
+// API (see `authorScript`); this builder is what runs when that fetch fails for ANY
+// reason, and it is what makes "the prompt store is down" a boring event instead of a
+// stopped pipeline. Keep it in lockstep with the `observation_script` default body in
+// apps/web/src/lib/server/prompts.ts.
 // ---------------------------------------------------------------------------
 
-function buildAuthoringPrompt(finding: Finding, contextNote: string): string {
+export function buildAuthoringPrompt(finding: Finding, contextNote: string): string {
   const artists = finding.artists?.length ? finding.artists.join(", ") : "unknown";
   const title = finding.title ?? "unknown";
   const label = finding.label ?? "unknown";
@@ -257,13 +270,55 @@ function buildAuthoringPrompt(finding: Finding, contextNote: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// Author one script via `claude -p` (subscription auth, read-only tools). Throws
-// ClaudeAuthError on an auth/quota failure (abort the batch); returns null on any
-// other failure (leave the finding queued); returns the script string on success.
+// THE PROMPT VARIABLES — the facts `buildAuthoringPrompt` used to interpolate in TS,
+// handed to the REGISTRY template instead. The prose all lives in the template now (so
+// the operator can tune every rail), and the sweep supplies only the data.
+//
+// `noContextNote` is the inverse flag the template's `{{#if noContextNote}}` arm reads:
+// the renderer has no `else`, on purpose (two constructs, nothing more), so a two-armed
+// branch is expressed as two flags. These names MUST match the `variables` array of the
+// `observation_script` registry entry exactly, or the template renders holes.
 // ---------------------------------------------------------------------------
 
-function authorScript(finding: Finding, contextNote: string): AuthoredScript | null {
-  const prompt = buildAuthoringPrompt(finding, contextNote);
+function promptVariables(
+  finding: Finding,
+  contextNote: string,
+): Record<string, string | undefined> {
+  return {
+    artists: finding.artists?.length ? finding.artists.join(", ") : "unknown",
+    contextNote,
+    galaxy: finding.galaxy?.name ?? "unplaced",
+    label: finding.label ?? "unknown",
+    noContextNote: contextNote ? "" : "yes",
+    title: finding.title ?? "unknown",
+    year: finding.releaseDate ? finding.releaseDate.slice(0, 4) : "unknown",
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Author one script via `claude -p` (subscription auth, read-only tools). Throws
+// ClaudeAuthError on an auth/quota failure (abort the batch); returns null on any
+// other failure (leave the finding queued); returns the script + its provenance on
+// success.
+//
+// THE PROMPT comes from the REGISTRY over the agent-tier API (`get_prompt`), so the
+// operator can retune the spoken voice from /admin with no deploy and no rebake. If that
+// fetch fails for any reason, `resolveSweepPrompt` falls back to `buildAuthoringPrompt`
+// above and the sweep authors EXACTLY as it did before the registry existed. A prompt
+// store that blinks must never be able to stop the pipeline.
+// ---------------------------------------------------------------------------
+
+async function authorScript(finding: Finding, contextNote: string): Promise<AuthoredScript | null> {
+  const { prompt, promptVersion } = await resolveSweepPrompt({
+    fallback: () => buildAuthoringPrompt(finding, contextNote),
+    slug: "observation_script",
+    variables: promptVariables(finding, contextNote),
+  });
+
+  if (promptVersion === null) {
+    log("the prompt registry was unreachable — authoring from the baked-in default");
+  }
+
   const args = [
     "-p",
     "--model",
@@ -329,7 +384,7 @@ function authorScript(finding: Finding, contextNote: string): AuthoredScript | n
   // The measured authoring spend (shared parse — the CLI's own total_cost_usd is
   // authoritative, the token count is the informational quantity, the model comes off
   // modelUsage else the one we asked for).
-  return { script, ...parseAuthoringSpend(envelope, OBSERVE_CLAUDE_MODEL) };
+  return { promptVersion, script, ...parseAuthoringSpend(envelope, OBSERVE_CLAUDE_MODEL) };
 }
 
 // ---------------------------------------------------------------------------
@@ -338,7 +393,7 @@ function authorScript(finding: Finding, contextNote: string): AuthoredScript | n
 // `gateSkipped` outcome — the finding stays queued for a future author pass.
 // ---------------------------------------------------------------------------
 
-function deliverScript(id: string, script: string): Outcome {
+function deliverScript(id: string, script: string, promptVersion: number | null): Outcome {
   const dir = mkdtempSync(join(tmpdir(), "observe-sweep-"));
   const scriptPath = join(dir, "observation.txt");
 
@@ -352,6 +407,10 @@ function deliverScript(id: string, script: string): Outcome {
       id,
       "--script-file",
       scriptPath,
+      // PROVENANCE. Omitted entirely when the registry was unreachable, so the column
+      // stays NULL and the artifact is honest about having been written by the baked-in
+      // fallback rather than by a version it never saw.
+      ...(promptVersion === null ? [] : ["--prompt-version", String(promptVersion)]),
       "--json",
     ]);
 
@@ -417,7 +476,7 @@ function readContextNote(id: string): string {
 // actually authored AND rendered (so a gate-skip / failure never records spend).
 type ObserveResult = { cost: BoxCostEvent | null; outcome: Outcome };
 
-function observeOne(queued: QueueFinding): ObserveResult {
+async function observeOne(queued: QueueFinding): Promise<ObserveResult> {
   const id = queued.trackId ?? queued.logId;
 
   if (!id) {
@@ -444,14 +503,14 @@ function observeOne(queued: QueueFinding): ObserveResult {
 
   // (c) Author the script (the one agentic step). Throws ClaudeAuthError to abort
   // the whole batch; returns null to leave THIS finding queued.
-  const authored = authorScript(finding, contextNote);
+  const authored = await authorScript(finding, contextNote);
 
   if (!authored) {
     return { cost: null, outcome: "skipped" };
   }
 
   // (d) Deliver: the CLI posts it; the Worker re-scans + renders + stores.
-  const outcome = deliverScript(id, authored.script);
+  const outcome = deliverScript(id, authored.script, authored.promptVersion);
 
   // (e) Record the authoring spend ONLY when the observation actually rendered. A
   // gate-skip / failure spent the tokens too, but attributing an "observe" cost to a
@@ -546,7 +605,7 @@ async function main(): Promise<void> {
 
   for (const queued of queue.slice(0, BATCH_CAP)) {
     try {
-      const { cost, outcome } = observeOne(queued);
+      const { cost, outcome } = await observeOne(queued);
 
       if (cost) {
         costs.push(cost);
@@ -598,8 +657,12 @@ async function main(): Promise<void> {
   await emitCost(costs);
 }
 
-main().catch((error) => {
-  log(`fatal: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`);
-  console.log(JSON.stringify({ ok: false, reason: "sweep_error" }));
-  process.exit(1);
-});
+// `import.meta.main` so the pure helper (the fallback authoring prompt) can be imported
+// by a unit test without the sweep firing (the note-sweep / triage-sweep pattern).
+if (import.meta.main) {
+  main().catch((error) => {
+    log(`fatal: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`);
+    console.log(JSON.stringify({ ok: false, reason: "sweep_error" }));
+    process.exit(1);
+  });
+}

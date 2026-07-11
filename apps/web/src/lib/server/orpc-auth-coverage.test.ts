@@ -271,6 +271,13 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   get_private_mutation_token: "private-session",
   // The recording reads — admin tier (agent-allowed): the box's clip-cut cron resolves a
   // clip's recording (r2Key + tracklist + promoted logId) via `get_recording`.
+  // The prompt registry's per-tick resolve — AGENT tier (adminAuth only, no
+  // operatorGuard), the record_cost/context_track precedent. This is THE read that lets a
+  // prompt live in the database at all: the box runs a pinned CLI and a baked image, so
+  // it can only reach a prompt over the API, with the agent token it already holds. It is
+  // a pure read of an internal template (it publishes nothing), and it cannot fail — an
+  // un-overridden slug resolves to the repo's baked default.
+  get_prompt: "admin",
   get_recording: "admin",
   get_submission: "admin",
   // The single-finding admin lookup — admin tier (agent-allowed read), the
@@ -311,6 +318,11 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   list_note_rejections: "admin",
   list_private_saved_findings: "private-session",
   list_private_submissions: "private-session",
+  // The prompt registry's operator read — OPERATOR tier. It returns every prompt's full
+  // edit history, and it is the surface the operator edits Fluncle's voice from; editing
+  // what Fluncle SAYS is publish-class, so an agent token 403s. Its agent-tier sibling
+  // `get_prompt` is the lean per-tick read the box actually needs.
+  list_prompts: "operator",
   list_recordings: "admin",
   list_submissions: "admin",
   list_subscriptions: "admin",
@@ -464,6 +476,10 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // retune is a flip rather than a deploy.
   update_note_gate: "operator",
   update_private_profile: "private-session",
+  // Appending a prompt version (an edit, a rollback, or a reset) — OPERATOR tier. A
+  // prompt IS code: a bad edit silently degrades every artifact it touches. An agent
+  // token 403s, so no automation can rewrite the words Fluncle speaks in.
+  update_prompt: "operator",
   update_recording: "operator",
   update_subscription: "operator",
   update_track: "admin",

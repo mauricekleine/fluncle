@@ -50,6 +50,13 @@ export type TrackUpdate = {
    */
   contextNote?: string;
   /**
+   * PROVENANCE — the `context_distil` prompt version that produced `contextNote`
+   * (0 = the registry's baked default, N = override N; NULL when no prompt produced it,
+   * i.e. the raw-snippet fallback). Internal like `contextNote`, so writing it moves no
+   * public lastmod. See lib/server/prompts.ts + docs/agents/prompt-registry.md.
+   */
+  contextPromptVersion?: number | null;
+  /**
    * The context-fetch reliability marker (the `context_track` queue's resume state).
    * Internal only — never surfaced through public DTOs, and (like contextNote)
    * writing it does NOT bump updated_at. See schema.ts `contextStatus`.
@@ -111,6 +118,12 @@ export type TrackUpdate = {
    * render the sibling `observationAudioUrl` already bumps lastmod, and the one-off
    * back-migration writes it standalone (must move no public surface).
    */
+  /**
+   * PROVENANCE — the `observation_script` prompt version this script was authored under
+   * (0 = the registry's baked default, N = override N; NULL when the sweep fell back to
+   * its baked-in prompt). See lib/server/prompts.ts + docs/agents/prompt-registry.md.
+   */
+  observationPromptVersion?: number | null;
   observationScript?: string;
   /** ISO of the last full-song capture attempt (backoff-cooldown anchor). See captureStatus. */
   sourceAudioAttemptedAt?: string;
@@ -202,6 +215,7 @@ const PROTECTED_SOURCES = new Set(["operator", "rekordbox"]);
 // never INSERTs a `findings` row: certifying a track is `publish_track`'s job alone.
 const CERTIFICATION_FIELDS = new Set<keyof TrackUpdate>([
   "contextNote",
+  "contextPromptVersion",
   "contextStatus",
   "enrichmentStatus",
   "galaxyId",
@@ -211,6 +225,7 @@ const CERTIFICATION_FIELDS = new Set<keyof TrackUpdate>([
   "observationAudioUrl",
   "observationDurationMs",
   "observationGeneratedAt",
+  "observationPromptVersion",
   "observationScript",
   "videoGrain",
   "videoModel",
@@ -512,6 +527,11 @@ export async function updateTrack(
     findingArgs.push(update.contextNote);
   }
 
+  if (update.contextPromptVersion !== undefined) {
+    findingSets.push("context_prompt_version = ?");
+    findingArgs.push(update.contextPromptVersion);
+  }
+
   if (update.contextStatus !== undefined) {
     findingSets.push("context_status = ?");
     findingArgs.push(update.contextStatus);
@@ -541,6 +561,11 @@ export async function updateTrack(
   if (update.observationGeneratedAt !== undefined) {
     findingSets.push("observation_generated_at = ?");
     findingArgs.push(update.observationGeneratedAt);
+  }
+
+  if (update.observationPromptVersion !== undefined) {
+    findingSets.push("observation_prompt_version = ?");
+    findingArgs.push(update.observationPromptVersion);
   }
 
   if (update.observationScript !== undefined) {
@@ -707,7 +732,11 @@ export async function updateTrack(
 // bump happens iff the row was written. The edge-cache purge is likewise gated on a
 // real write: a lost race wrote nothing, so there is nothing to refresh. The caller
 // (the `note_track` handler) has already voice-gated + length-validated the note.
-export async function fillEmptyNote(trackId: string, note: string): Promise<boolean> {
+export async function fillEmptyNote(
+  trackId: string,
+  note: string,
+  promptVersion?: number | null,
+): Promise<boolean> {
   const db = await getDb();
   const existingResult = await db.execute({
     args: [trackId],
@@ -719,10 +748,15 @@ export async function fillEmptyNote(trackId: string, note: string): Promise<bool
     throw new ApiError("not_found", `No track with id ${trackId}`, 404);
   }
 
+  // The note and its PROVENANCE land in the SAME atomic statement, so the version can
+  // never describe a different note than the one it wrote (docs/agents/prompt-registry.md).
+  // `promptVersion` is undefined for an operator-typed note and null when the sweep fell
+  // back to its baked-in prompt — both store NULL, which reads as "no registry prompt
+  // wrote this".
   const result = await db.execute({
-    args: [note, new Date().toISOString(), trackId],
+    args: [note, promptVersion ?? null, new Date().toISOString(), trackId],
     sql: `update findings
-            set note = ?, updated_at = ?
+            set note = ?, note_prompt_version = ?, updated_at = ?
           where track_id = ?
             and (note is null or trim(note) = '')`,
   });

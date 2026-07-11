@@ -50,3 +50,9 @@ A pending submission is one row in the `/admin` attention queue (source `submiss
 - Write onto a **pending** submission only (a reviewed one is a 409, enforced server-side).
 - The verdict is grounded in the deterministic dedupe + plausibility read — never invent a fact about the track.
 - One submission per `claude -p` call (BATCH_CAP=3 per tick); the pending queue is the durable worklist.
+
+## The prompt lives in the DATABASE, not in the image
+
+The authoring prompt is the `triage_verdict` entry in the **prompt registry** ([docs/agents/prompt-registry.md](./prompt-registry.md)). The sweep fetches it over the AGENT-tier `get_prompt` each tick, so the operator retunes it from `/admin/prompts` or the `fluncle admin prompts` CLI with **no deploy and no box rebake**.
+
+The repo still keeps the baked default (`buildTriagePrompt` in `triage-sweep.ts`), and a failed fetch falls back to it and logs — a prompt store that blinks can never stop the sweep. Every verdict records the version that drafted it in `submissions.triage_prompt_version` (`0` = the repo's default, `N` = override N, `NULL` = the baked fallback wrote it).

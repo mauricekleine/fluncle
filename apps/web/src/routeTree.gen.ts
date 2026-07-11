@@ -58,6 +58,7 @@ import { Route as AlbumSlugRouteImport } from './routes/album.$slug'
 import { Route as AdminUsageRouteImport } from './routes/admin/usage'
 import { Route as AdminRendersRouteImport } from './routes/admin/renders'
 import { Route as AdminRecordingsRouteImport } from './routes/admin/recordings'
+import { Route as AdminPromptsRouteImport } from './routes/admin/prompts'
 import { Route as AdminPlansRouteImport } from './routes/admin/plans'
 import { Route as AdminNewsletterRouteImport } from './routes/admin/newsletter'
 import { Route as AdminMixtapesRouteImport } from './routes/admin/mixtapes'
@@ -351,6 +352,11 @@ const AdminRendersRoute = AdminRendersRouteImport.update({
 const AdminRecordingsRoute = AdminRecordingsRouteImport.update({
   id: '/recordings',
   path: '/recordings',
+  getParentRoute: () => AdminRouteRoute,
+} as any)
+const AdminPromptsRoute = AdminPromptsRouteImport.update({
+  id: '/prompts',
+  path: '/prompts',
   getParentRoute: () => AdminRouteRoute,
 } as any)
 const AdminPlansRoute = AdminPlansRouteImport.update({
@@ -649,6 +655,7 @@ export interface FileRoutesByFullPath {
   '/admin/mixtapes': typeof AdminMixtapesRoute
   '/admin/newsletter': typeof AdminNewsletterRoute
   '/admin/plans': typeof AdminPlansRoute
+  '/admin/prompts': typeof AdminPromptsRoute
   '/admin/recordings': typeof AdminRecordingsRoute
   '/admin/renders': typeof AdminRendersRoute
   '/admin/usage': typeof AdminUsageRoute
@@ -746,6 +753,7 @@ export interface FileRoutesByTo {
   '/admin/mixtapes': typeof AdminMixtapesRoute
   '/admin/newsletter': typeof AdminNewsletterRoute
   '/admin/plans': typeof AdminPlansRoute
+  '/admin/prompts': typeof AdminPromptsRoute
   '/admin/recordings': typeof AdminRecordingsRoute
   '/admin/renders': typeof AdminRendersRoute
   '/admin/usage': typeof AdminUsageRoute
@@ -846,6 +854,7 @@ export interface FileRoutesById {
   '/admin/mixtapes': typeof AdminMixtapesRoute
   '/admin/newsletter': typeof AdminNewsletterRoute
   '/admin/plans': typeof AdminPlansRoute
+  '/admin/prompts': typeof AdminPromptsRoute
   '/admin/recordings': typeof AdminRecordingsRoute
   '/admin/renders': typeof AdminRendersRoute
   '/admin/usage': typeof AdminUsageRoute
@@ -947,6 +956,7 @@ export interface FileRouteTypes {
     | '/admin/mixtapes'
     | '/admin/newsletter'
     | '/admin/plans'
+    | '/admin/prompts'
     | '/admin/recordings'
     | '/admin/renders'
     | '/admin/usage'
@@ -1044,6 +1054,7 @@ export interface FileRouteTypes {
     | '/admin/mixtapes'
     | '/admin/newsletter'
     | '/admin/plans'
+    | '/admin/prompts'
     | '/admin/recordings'
     | '/admin/renders'
     | '/admin/usage'
@@ -1143,6 +1154,7 @@ export interface FileRouteTypes {
     | '/admin/mixtapes'
     | '/admin/newsletter'
     | '/admin/plans'
+    | '/admin/prompts'
     | '/admin/recordings'
     | '/admin/renders'
     | '/admin/usage'
@@ -1635,6 +1647,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminRecordingsRouteImport
       parentRoute: typeof AdminRouteRoute
     }
+    '/admin/prompts': {
+      id: '/admin/prompts'
+      path: '/prompts'
+      fullPath: '/admin/prompts'
+      preLoaderRoute: typeof AdminPromptsRouteImport
+      parentRoute: typeof AdminRouteRoute
+    }
     '/admin/plans': {
       id: '/admin/plans'
       path: '/plans'
@@ -1987,6 +2006,7 @@ interface AdminRouteRouteChildren {
   AdminMixtapesRoute: typeof AdminMixtapesRoute
   AdminNewsletterRoute: typeof AdminNewsletterRoute
   AdminPlansRoute: typeof AdminPlansRoute
+  AdminPromptsRoute: typeof AdminPromptsRoute
   AdminRecordingsRoute: typeof AdminRecordingsRoute
   AdminRendersRoute: typeof AdminRendersRoute
   AdminUsageRoute: typeof AdminUsageRoute
@@ -2007,6 +2027,7 @@ const AdminRouteRouteChildren: AdminRouteRouteChildren = {
   AdminMixtapesRoute: AdminMixtapesRoute,
   AdminNewsletterRoute: AdminNewsletterRoute,
   AdminPlansRoute: AdminPlansRoute,
+  AdminPromptsRoute: AdminPromptsRoute,
   AdminRecordingsRoute: AdminRecordingsRoute,
   AdminRendersRoute: AdminRendersRoute,
   AdminUsageRoute: AdminUsageRoute,

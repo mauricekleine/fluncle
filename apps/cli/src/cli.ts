@@ -200,6 +200,7 @@ type TrackObserveOptions = {
   force?: boolean;
   json: boolean;
   limit?: string;
+  promptVersion?: string;
   queue?: boolean;
   script?: string;
   scriptFile?: string;
@@ -219,6 +220,7 @@ type TrackNoteOptions = {
   dryRun?: boolean;
   json: boolean;
   limit?: string;
+  promptVersion?: string;
   queue?: boolean;
   script?: string;
   scriptFile?: string;
@@ -288,9 +290,16 @@ type MixtapeResyncOptions = {
 type NewsletterDraftOptions = {
   contentFile?: string;
   json: boolean;
+  /** PROVENANCE — parsed from `--prompt-version`; only the DRAFT (create) carries one. */
+  promptVersion?: number;
   subject?: string;
   windowSince?: string;
   windowUntil?: string;
+};
+
+/** The raw commander shape for the draft: `--prompt-version` arrives as a string. */
+type NewsletterDraftCliOptions = Omit<NewsletterDraftOptions, "promptVersion"> & {
+  promptVersion?: string;
 };
 
 export function createProgram(): Command {
@@ -974,6 +983,10 @@ function addAdminCommands(program: Command): void {
     .option("--duration-target-sec <sec>", "Target observation length in seconds (20–45)")
     .option("--context-note <text>", "Pre-fetched factual context (else the Worker firecrawls)")
     .option(
+      "--prompt-version <n>",
+      "The prompt-registry version that authored this (the sweep sends it; it is the artifact's provenance)",
+    )
+    .option(
       "--force",
       "Re-render even if an observation already exists (voice re-tune / fix)",
       false,
@@ -1043,6 +1056,10 @@ function addAdminCommands(program: Command): void {
     .option("--limit <limit>", "Number of findings to show with --queue", "10")
     .option("--script <text>", "The voice-gated editorial note")
     .option("--script-file <file>", "Read the editorial note from a file")
+    .option(
+      "--prompt-version <n>",
+      "The prompt-registry version that authored the note (the sweep sends this; it is the note's provenance)",
+    )
     .option(
       "--dry-run",
       "Run the voice + echo gates and report the verdict without storing anything",
@@ -1434,11 +1451,18 @@ function addAdminCommands(program: Command): void {
     .option("--subject <text>", "Email subject line")
     .option("--window-since <date>", "Discovery-window start (ISO)")
     .option("--window-until <date>", "Discovery-window end (ISO)")
+    .option(
+      "--prompt-version <n>",
+      "The prompt-registry version that authored this (the sweep sends it; it is the edition's provenance)",
+    )
     .option("--json", "Print JSON", false)
     .allowExcessArguments()
-    .action(async (options: NewsletterDraftOptions) => {
+    .action(async (options: NewsletterDraftCliOptions) => {
       const { newsletterDraftCommand } = await import("./commands/newsletter");
-      await runNewsletterDraft(options, newsletterDraftCommand);
+      await runNewsletterDraft(
+        { ...options, promptVersion: parsePromptVersion(options.promptVersion) },
+        newsletterDraftCommand,
+      );
     });
 
   // `update_edition` → `admin newsletter update`. Edit a draft's payload/subject/
@@ -1532,6 +1556,10 @@ function addAdminCommands(program: Command): void {
     .option("--title <text>", "The entry title")
     .option("--body <text>", "The entry body (markdown; [[logId]] figure tokens)")
     .option("--body-file <file>", "Read the body from a file (the sweep's path)")
+    .option(
+      "--prompt-version <n>",
+      "The prompt-registry version that authored this (the sweep sends it; it is the artifact's provenance)",
+    )
     .option("--json", "Print JSON", false)
     .allowExcessArguments()
     .action(async (sector: string | undefined, options: LogbookWriteCliOptions) => {
@@ -1554,6 +1582,113 @@ function addAdminCommands(program: Command): void {
     .action(async (sector: string | undefined, options: LogbookWriteCliOptions) => {
       const { logbookUpdateCommand } = await import("./commands/admin-logbook");
       await runLogbookWrite(sector, options, logbookUpdateCommand);
+    });
+
+  // THE PROMPT REGISTRY — what Fluncle tells the models, in the database, versioned, and
+  // editable with no deploy. The API is two reads and ONE write (`list_prompts`,
+  // `get_prompt`, `update_prompt`); `history`, `diff`, `rollback`, and `reset` add no verb
+  // to it — they are client-side compositions over the same calls, which is what an
+  // append-only history buys. A rollback is an update whose body came from the history; a
+  // reset is an update whose body came from the repo. Nothing rewinds and nothing is
+  // deleted, so both are themselves undoable.
+  const adminPrompts = configureCommand(
+    admin.command("prompts").description("The prompt registry: what Fluncle tells the models"),
+  );
+
+  adminPrompts.action(() => {
+    adminPrompts.outputHelp();
+  });
+
+  // `list_prompts` → `admin prompts list`. OPERATOR tier. The whole station in one read.
+  adminPrompts
+    .command("list")
+    .description("Every prompt: where it runs, and whether the repo default or an edit is live")
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (options: JsonOptions) => {
+      const { promptsListCommand } = await import("./commands/admin-prompts");
+      await runPromptsList(options, promptsListCommand);
+    });
+
+  // `get_prompt` → `admin prompts get`. The lean resolve the on-box sweeps make each tick:
+  // the body running right now, its version, and where it came from. Agent-allowed.
+  adminPrompts
+    .command("get")
+    .description("The body running right now, with its version and source")
+    .argument("[slug]")
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (slug: string | undefined, options: JsonOptions) => {
+      const { promptGetCommand } = await import("./commands/admin-prompts");
+      await runPromptGet(slug, options, promptGetCommand);
+    });
+
+  // Every version of a prompt, newest first — the answer to "the notes got worse last week,
+  // what changed?". Composed off `list_prompts`; no verb of its own.
+  adminPrompts
+    .command("history")
+    .description("Every version of a prompt, newest first: when, who, and the why")
+    .argument("[slug]")
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (slug: string | undefined, options: JsonOptions) => {
+      const { promptDetailCommand } = await import("./commands/admin-prompts");
+      await runPromptHistory(slug, options, promptDetailCommand);
+    });
+
+  // The live body against the repo's baked default, or against any stored version.
+  adminPrompts
+    .command("diff")
+    .description("Line diff: the live body against the repo default, or against a version")
+    .argument("[slug]")
+    .option("--against <version>", "A version (3, or v3) or the word default", "default")
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (slug: string | undefined, options: PromptDiffCliOptions) => {
+      const { parseAgainst, promptDiffCommand } = await import("./commands/admin-prompts");
+      await runPromptDiff(slug, options, { parseAgainst, promptDiffCommand });
+    });
+
+  // `update_prompt` → `admin prompts update`. OPERATOR only (an agent token 403s: editing
+  // what Fluncle says is publish-class). Appends a version; nothing is overwritten.
+  adminPrompts
+    .command("update")
+    .description("Append an edited body as a new version. OPERATOR only")
+    .argument("[slug]")
+    .option("--body-file <file>", "Read the new prompt body from a file")
+    .option("--note <text>", 'The why, for the history ("shortened the neighbour block")')
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (slug: string | undefined, options: PromptUpdateCliOptions) => {
+      const { promptUpdateCommand } = await import("./commands/admin-prompts");
+      await runPromptUpdate(slug, options, promptUpdateCommand);
+    });
+
+  // The safety net, half one: put version N's body back. It is re-APPENDED, never rewound,
+  // so the rollback is itself rollback-able. OPERATOR only.
+  adminPrompts
+    .command("rollback")
+    .description("Put an old version's body back, as a new version. OPERATOR only")
+    .argument("[slug]")
+    .argument("[version]")
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (slug: string | undefined, version: string | undefined, options: JsonOptions) => {
+      const { parseVersion, promptRollbackCommand } = await import("./commands/admin-prompts");
+      await runPromptRollback(slug, version, options, { parseVersion, promptRollbackCommand });
+    });
+
+  // The safety net, half two: put the repo's baked default back — the body every failure
+  // path already falls back to, restored on purpose. OPERATOR only.
+  adminPrompts
+    .command("reset")
+    .description("Put the repo's baked default back, as a new version. OPERATOR only")
+    .argument("[slug]")
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (slug: string | undefined, options: JsonOptions) => {
+      const { promptResetCommand } = await import("./commands/admin-prompts");
+      await runPromptReset(slug, options, promptResetCommand);
     });
 
   const submissions = configureCommand(
@@ -1617,11 +1752,20 @@ function addAdminCommands(program: Command): void {
     .argument("[submissionId]")
     .option("--verdict <text>", "The triage verdict one-liner")
     .option("--verdict-file <file>", "Read the verdict from a file")
+    .option(
+      "--prompt-version <n>",
+      "The prompt-registry version that authored this (the sweep sends it; it is the artifact's provenance)",
+    )
     .option("--json", "Print JSON", false)
     .action(
       async (
         submissionId: string | undefined,
-        options: { json?: boolean; verdict?: string; verdictFile?: string },
+        options: {
+          json?: boolean;
+          promptVersion?: string;
+          verdict?: string;
+          verdictFile?: string;
+        },
       ) => {
         if (!submissionId) {
           throw new Error("Missing submission id for: triage");
@@ -1638,7 +1782,10 @@ function addAdminCommands(program: Command): void {
         }
 
         const { triageSubmissionCommand } = await import("./commands/submissions");
-        await triageSubmissionCommand(submissionId, verdict, { json: options.json });
+        await triageSubmissionCommand(submissionId, verdict, {
+          json: options.json,
+          promptVersion: parsePromptVersion(options.promptVersion),
+        });
       },
     );
 
@@ -2044,6 +2191,7 @@ async function runTrackObserve(
     durationMs,
     durationTargetSec,
     force: options.force,
+    promptVersion: parsePromptVersion(options.promptVersion),
     script: script.trim(),
     voiceId: options.voiceId,
   });
@@ -2098,6 +2246,26 @@ async function runTrackContext(
   }
 }
 
+/**
+ * The PROVENANCE stamp (`--prompt-version`): which prompt-registry version authored the
+ * artifact being written (0 = the repo's baked default, N = operator override N). The
+ * on-box sweeps pass it; an operator writing by hand does not, and the column stays NULL
+ * — which is the honest record, because no prompt wrote it.
+ *
+ * A malformed value is DROPPED rather than guessed at. A wrong version is worse than no
+ * version: it points the operator at prose that did not write this artifact, which is
+ * exactly the question the column exists to answer. See docs/agents/prompt-registry.md.
+ */
+function parsePromptVersion(raw: string | undefined): number | undefined {
+  if (raw === undefined) {
+    return undefined;
+  }
+
+  const parsed = Number(raw);
+
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
 async function runTrackNote(
   idOrLogId: string | undefined,
   options: TrackNoteOptions,
@@ -2114,6 +2282,7 @@ async function runTrackNote(
   const result = await trackNoteCommand(idOrLogId, {
     dryRun: options.dryRun,
     note: note.trim(),
+    promptVersion: parsePromptVersion(options.promptVersion),
   });
 
   if (options.json) {
@@ -3799,6 +3968,8 @@ type LogbookWriteCliOptions = {
   body?: string;
   bodyFile?: string;
   json: boolean;
+  /** PROVENANCE — set by the `fluncle-logbook` sweep; the operator overwrite ignores it. */
+  promptVersion?: string;
   title?: string;
 };
 
@@ -3840,6 +4011,9 @@ async function runLogbookWrite(
   const result = await writeCommand(sector, {
     body: options.body,
     bodyFile: options.bodyFile,
+    // Only the agent CREATE carries a prompt version; the operator overwrite drops it on
+    // the floor server-side (no prompt wrote a hand-typed entry).
+    promptVersion: parsePromptVersion(options.promptVersion),
     title: options.title,
   });
 
@@ -3853,6 +4027,199 @@ async function runLogbookWrite(
     skipped
       ? `sector ${result.entry.sector}: an entry already stands — no-op (${result.entry.generatedBy})`
       : `sector ${result.entry.sector}: ${result.entry.title}`,
+  );
+}
+
+// ── The prompt registry (`admin prompts`) ───────────────────────────────────
+
+type PromptDiffCliOptions = JsonOptions & { against?: string };
+type PromptUpdateCliOptions = JsonOptions & { bodyFile?: string; note?: string };
+
+/** Every command in the group takes a slug; a bare one prints the registry instead. */
+function requirePromptSlug(slug: string | undefined): string {
+  if (!slug) {
+    throw new Error("Missing prompt slug. `fluncle admin prompts list` names them all.");
+  }
+
+  return slug;
+}
+
+async function runPromptsList(
+  options: JsonOptions,
+  promptsListCommand: typeof import("./commands/admin-prompts").promptsListCommand,
+): Promise<void> {
+  const prompts = await promptsListCommand();
+
+  if (options.json) {
+    printJson({ ok: true, prompts });
+    return;
+  }
+
+  const { promptRows } = await import("./commands/admin-prompts");
+
+  for (const row of promptRows(prompts)) {
+    console.log(row);
+  }
+}
+
+async function runPromptGet(
+  slug: string | undefined,
+  options: JsonOptions,
+  promptGetCommand: typeof import("./commands/admin-prompts").promptGetCommand,
+): Promise<void> {
+  const resolved = await promptGetCommand(requirePromptSlug(slug));
+
+  if (options.json) {
+    printJson(resolved);
+    return;
+  }
+
+  const live =
+    resolved.source === "override"
+      ? `v${resolved.version}, an operator edit`
+      : "the repo's baked default (v0)";
+
+  console.log(`${resolved.slug}: ${live}`);
+  console.log("");
+  console.log(resolved.body);
+}
+
+async function runPromptHistory(
+  slug: string | undefined,
+  options: JsonOptions,
+  promptDetailCommand: typeof import("./commands/admin-prompts").promptDetailCommand,
+): Promise<void> {
+  const detail = await promptDetailCommand(requirePromptSlug(slug));
+
+  if (options.json) {
+    printJson({
+      activeVersion: detail.activeVersion,
+      ok: true,
+      slug: detail.slug,
+      source: detail.source,
+      versions: detail.versions,
+    });
+    return;
+  }
+
+  if (detail.versions.length === 0) {
+    console.log(`${detail.slug}: never edited. The repo's baked default is what runs.`);
+    return;
+  }
+
+  const { historyRows } = await import("./commands/admin-prompts");
+
+  for (const row of historyRows(detail.versions)) {
+    console.log(row);
+  }
+}
+
+async function runPromptDiff(
+  slug: string | undefined,
+  options: PromptDiffCliOptions,
+  commands: {
+    parseAgainst: typeof import("./commands/admin-prompts").parseAgainst;
+    promptDiffCommand: typeof import("./commands/admin-prompts").promptDiffCommand;
+  },
+): Promise<void> {
+  const against = commands.parseAgainst(options.against);
+  const result = await commands.promptDiffCommand(requirePromptSlug(slug), against);
+
+  if (options.json) {
+    printJson({ ok: true, ...result });
+    return;
+  }
+
+  const live =
+    result.live.source === "override" ? `v${result.live.version}` : "the repo's baked default";
+
+  if (result.added === 0 && result.removed === 0) {
+    console.log(`${result.slug}: ${live} and ${result.against.label} are the same body.`);
+    return;
+  }
+
+  const { renderDiff } = await import("./commands/admin-prompts");
+
+  console.log(`${result.slug}: ${result.against.label} (-) against ${live} (+)`);
+
+  for (const line of renderDiff(result.lines)) {
+    console.log(line);
+  }
+
+  console.log(`${result.added} added, ${result.removed} removed.`);
+}
+
+async function runPromptUpdate(
+  slug: string | undefined,
+  options: PromptUpdateCliOptions,
+  promptUpdateCommand: typeof import("./commands/admin-prompts").promptUpdateCommand,
+): Promise<void> {
+  const result = await promptUpdateCommand(requirePromptSlug(slug), {
+    bodyFile: options.bodyFile,
+    note: options.note,
+  });
+
+  if (options.json) {
+    printJson({ ok: true, ...result });
+    return;
+  }
+
+  console.log(`${result.slug}: v${result.version} is live. Nothing to deploy.`);
+}
+
+async function runPromptRollback(
+  slug: string | undefined,
+  version: string | undefined,
+  options: JsonOptions,
+  commands: {
+    parseVersion: typeof import("./commands/admin-prompts").parseVersion;
+    promptRollbackCommand: typeof import("./commands/admin-prompts").promptRollbackCommand;
+  },
+): Promise<void> {
+  const promptSlug = requirePromptSlug(slug);
+
+  if (!version) {
+    throw new Error(
+      `Missing version. \`fluncle admin prompts history ${promptSlug}\` lists what you can go back to.`,
+    );
+  }
+
+  const parsed = commands.parseVersion(version);
+
+  if (parsed === undefined) {
+    throw new Error(`A version reads as 3 or v3. Got "${version}".`);
+  }
+
+  const result = await commands.promptRollbackCommand(promptSlug, parsed);
+
+  if (options.json) {
+    printJson({ ok: true, ...result });
+    return;
+  }
+
+  console.log(
+    result.skipped
+      ? `${result.slug}: v${result.from} is already the body running. Nothing appended.`
+      : `${result.slug}: back on v${result.from}'s body, live as v${result.version}.`,
+  );
+}
+
+async function runPromptReset(
+  slug: string | undefined,
+  options: JsonOptions,
+  promptResetCommand: typeof import("./commands/admin-prompts").promptResetCommand,
+): Promise<void> {
+  const result = await promptResetCommand(requirePromptSlug(slug));
+
+  if (options.json) {
+    printJson({ ok: true, ...result });
+    return;
+  }
+
+  console.log(
+    result.skipped
+      ? `${result.slug}: already running the repo's baked default. Nothing appended.`
+      : `${result.slug}: back on the repo's baked default, live as v${result.version}.`,
   );
 }
 
@@ -5000,6 +5367,7 @@ function normalizeCommanderError(error: unknown): unknown {
 // cli.test.ts scans the source and build-fails when a declared `<value>` option
 // is absent from this set — add every new value-taking option here.
 const stringOptions = new Set([
+  "--against",
   "--analyzed-at",
   "--analyzed-from",
   "--at",
@@ -5051,6 +5419,9 @@ const stringOptions = new Set([
   "--plate-background",
   "--platform",
   "--poster",
+  // The PROVENANCE stamp the on-box sweeps pass on every authored artifact — which
+  // prompt-registry version wrote it (docs/agents/prompt-registry.md).
+  "--prompt-version",
   "--props",
   "--query",
   "--reasoning",

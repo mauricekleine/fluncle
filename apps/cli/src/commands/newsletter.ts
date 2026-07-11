@@ -19,6 +19,12 @@ export type EditionListItem = EditionsResponse["editions"][number];
 export type NewsletterDraftOptions = {
   contentFile?: string;
   json: boolean;
+  /**
+   * PROVENANCE — the prompt-registry version the `fluncle-newsletter` sweep authored this
+   * edition under (0 = the baked default, N = override N). Set on the DRAFT (create) only:
+   * a later edit does not change who drafted it. See docs/agents/prompt-registry.md.
+   */
+  promptVersion?: number;
   subject?: string;
   windowSince?: string;
   windowUntil?: string;
@@ -40,6 +46,12 @@ function buildBody(
       "missing_content",
       "A draft needs the structured content payload via --content-file <edition.json>",
     );
+  }
+
+  // PROVENANCE — only on the CREATE, and only when the sweep actually ran a registry
+  // prompt (omitted ⇒ the column stays NULL, the honest record).
+  if (requireContent && typeof options.promptVersion === "number") {
+    body.promptVersion = options.promptVersion;
   }
 
   if (options.subject !== undefined) {

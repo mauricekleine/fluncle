@@ -44,6 +44,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { resolveSweepPrompt } from "./prompt-fetch";
 
 // ---------------------------------------------------------------------------
 // Config — a SMALL bounded batch: each verdict burns claude subscription quota, so
@@ -283,18 +284,57 @@ function looksLikeAuthFailure(text: string): boolean {
 // as one of three verdicts: "looks like a find", "already logged", or "not our lane".
 // ---------------------------------------------------------------------------
 
+// The deterministic assessment, rendered as the one line the model must not contradict.
+// Shared by BOTH prompt paths (the registry template's `{{lean}}` variable and the
+// baked-in fallback below), so the two cannot drift.
+function leanLine(assessment: SubmissionAssessment): string {
+  if (assessment.archived) {
+    return "ALREADY LOGGED: the spotify id already maps to a finding in the archive.";
+  }
+
+  if (assessment.plausibility === "likely") {
+    return "LOOKS LIKE A FIND: the metadata leans drum & bass / Fluncle's lane.";
+  }
+
+  if (assessment.plausibility === "unlikely") {
+    return "PROBABLY NOT OUR LANE: the metadata names a non-DnB genre.";
+  }
+
+  return "UNCLEAR: the metadata carries no genre tell (most DnB doesn't).";
+}
+
+// ---------------------------------------------------------------------------
+// THE PROMPT VARIABLES — the facts `buildTriagePrompt` used to interpolate in TS, handed
+// to the REGISTRY template instead. The prose all lives in the template now (so the
+// operator can tune the verdict register), and the sweep supplies only the data. The
+// signals arrive PRE-JOINED as one string (the renderer has no loops). These names MUST
+// match the `variables` array of the `triage_verdict` registry entry exactly, or the
+// template renders holes.
+// ---------------------------------------------------------------------------
+
+function promptVariables(
+  submission: { album?: string; artists: string[]; title: string },
+  assessment: SubmissionAssessment,
+): Record<string, string | undefined> {
+  return {
+    album: submission.album ?? "unknown",
+    artists: submission.artists.length ? submission.artists.join(", ") : "unknown",
+    lean: leanLine(assessment),
+    signals: assessment.signals.length ? assessment.signals.join("; ") : "none",
+    title: submission.title,
+  };
+}
+
+// THIS IS THE FLOOR, NOT DEAD CODE. The live prompt comes from the registry over the API
+// (see `authorVerdict`); this builder is what runs when that fetch fails for ANY reason.
+// Keep it in lockstep with the `triage_verdict` default body in
+// apps/web/src/lib/server/prompts.ts.
 export function buildTriagePrompt(
   submission: { album?: string; artists: string[]; title: string },
   assessment: SubmissionAssessment,
 ): string {
   const artists = submission.artists.length ? submission.artists.join(", ") : "unknown";
-  const lean = assessment.archived
-    ? "ALREADY LOGGED: the spotify id already maps to a finding in the archive."
-    : assessment.plausibility === "likely"
-      ? "LOOKS LIKE A FIND: the metadata leans drum & bass / Fluncle's lane."
-      : assessment.plausibility === "unlikely"
-        ? "PROBABLY NOT OUR LANE: the metadata names a non-DnB genre."
-        : "UNCLEAR: the metadata carries no genre tell (most DnB doesn't).";
+  const lean = leanLine(assessment);
 
   return [
     "You are Fluncle, pre-chewing one crew submission for the operator's review queue.",
@@ -327,14 +367,35 @@ export function buildTriagePrompt(
 // ---------------------------------------------------------------------------
 // Author one verdict via `claude -p` (subscription auth, read-only tools). Throws
 // ClaudeAuthError on an auth/quota failure (abort the batch); returns null on any other
-// failure (leave the submission un-triaged); returns the verdict string on success.
+// failure (leave the submission un-triaged); returns the verdict + its provenance on
+// success.
+//
+// THE PROMPT comes from the REGISTRY over the agent-tier API (`get_prompt`), so the
+// operator can retune the verdict register from /admin with no deploy and no rebake. If
+// that fetch fails for any reason, `resolveSweepPrompt` falls back to `buildTriagePrompt`
+// above and the sweep authors EXACTLY as it did before the registry existed. A prompt
+// store that blinks must never be able to stop the pipeline.
 // ---------------------------------------------------------------------------
 
-function authorVerdict(
+// PROVENANCE — the prompt version this verdict was authored under: N = the operator's
+// live override, 0 = the registry's baked default, NULL = the registry was unreachable
+// and the inlined `buildTriagePrompt` wrote it. Rides out on `--prompt-version`.
+type AuthoredVerdict = { promptVersion: number | null; verdict: string };
+
+async function authorVerdict(
   submission: { album?: string; artists: string[]; title: string },
   assessment: SubmissionAssessment,
-): string | null {
-  const prompt = buildTriagePrompt(submission, assessment);
+): Promise<AuthoredVerdict | null> {
+  const { prompt, promptVersion } = await resolveSweepPrompt({
+    fallback: () => buildTriagePrompt(submission, assessment),
+    slug: "triage_verdict",
+    variables: promptVariables(submission, assessment),
+  });
+
+  if (promptVersion === null) {
+    log("the prompt registry was unreachable — authoring from the baked-in default");
+  }
+
   const args = [
     "-p",
     "--model",
@@ -395,7 +456,7 @@ function authorVerdict(
     return null;
   }
 
-  return verdict;
+  return { promptVersion, verdict };
 }
 
 // ---------------------------------------------------------------------------
@@ -426,7 +487,7 @@ function isArchived(spotifyTrackId: string): boolean {
 // (400/422) is a `gateSkipped`; a 409 (already reviewed) is a `skipped` no-op.
 // ---------------------------------------------------------------------------
 
-function deliverVerdict(id: string, verdict: string): Outcome {
+function deliverVerdict(id: string, verdict: string, promptVersion: number | null): Outcome {
   const dir = mkdtempSync(join(tmpdir(), "triage-sweep-"));
   const verdictPath = join(dir, "verdict.txt");
 
@@ -440,6 +501,10 @@ function deliverVerdict(id: string, verdict: string): Outcome {
       id,
       "--verdict-file",
       verdictPath,
+      // PROVENANCE. Omitted entirely when the registry was unreachable, so the column
+      // stays NULL and the verdict is honest about having been written by the baked-in
+      // fallback rather than by a version it never saw.
+      ...(promptVersion === null ? [] : ["--prompt-version", String(promptVersion)]),
       "--json",
     ]);
 
@@ -483,7 +548,7 @@ function deliverVerdict(id: string, verdict: string): Outcome {
 // Per-submission: dedupe → assess → author → deliver.
 // ---------------------------------------------------------------------------
 
-function triageOne(submission: PendingSubmission): Outcome {
+async function triageOne(submission: PendingSubmission): Promise<Outcome> {
   const id = submission.id;
   const spotifyTrackId = submission.spotifyTrackId;
 
@@ -506,7 +571,7 @@ function triageOne(submission: PendingSubmission): Outcome {
 
   // (c) AUTHOR the one-line verdict (the one agentic step). Throws ClaudeAuthError to
   // abort the whole batch; returns null to leave THIS submission un-triaged.
-  const verdict = authorVerdict(
+  const authored = await authorVerdict(
     {
       ...(submission.album ? { album: submission.album } : {}),
       artists: submission.artists,
@@ -515,12 +580,12 @@ function triageOne(submission: PendingSubmission): Outcome {
     assessment,
   );
 
-  if (!verdict) {
+  if (!authored) {
     return "skipped";
   }
 
   // (d) DELIVER: the CLI posts it; the Worker length-gates + stores onto the pending row.
-  return deliverVerdict(id, verdict);
+  return deliverVerdict(id, authored.verdict, authored.promptVersion);
 }
 
 // ---------------------------------------------------------------------------
@@ -566,7 +631,7 @@ function pingClaudeAuthFailure(detail: string): void {
 // Main — drain a bounded batch off the un-triaged pending submissions.
 // ---------------------------------------------------------------------------
 
-function main(): void {
+async function main(): Promise<void> {
   // `admin submissions --json` returns `{ ok: true, submissions: [...] }`.
   const response = fluncleJson<SubmissionsResponse>(["admin", "submissions"]);
   const pending = (response.submissions ?? []).slice(0, QUEUE_LIMIT);
@@ -589,7 +654,7 @@ function main(): void {
 
   for (const submission of queue.slice(0, BATCH_CAP)) {
     try {
-      const outcome = triageOne(submission);
+      const outcome = await triageOne(submission);
 
       if (outcome === "triaged") {
         summary.triaged += 1;
@@ -630,11 +695,9 @@ function main(): void {
 // `import.meta.main` guards the entrypoint so the test can import the pure helpers
 // (assessSubmission, buildTriagePrompt) without spawning fluncle/claude.
 if (import.meta.main) {
-  try {
-    main();
-  } catch (error) {
+  main().catch((error) => {
     log(`fatal: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`);
     console.log(JSON.stringify({ ok: false, reason: "sweep_error" }));
     process.exit(1);
-  }
+  });
 }

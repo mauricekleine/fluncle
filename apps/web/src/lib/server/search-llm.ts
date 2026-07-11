@@ -29,6 +29,7 @@ import { type SearchFilters, SearchFiltersSchema } from "@fluncle/contracts/orpc
 import { priceOpenRouterTokens } from "./cost-rates";
 import { captureCostEvents, costEventId } from "./costs";
 import { readOptionalEnv } from "./env";
+import { PROMPT_REGISTRY, resolvePrompt } from "./prompts";
 
 const OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions";
 
@@ -58,30 +59,7 @@ const SEARCH_LLM_TIMEOUT_MS = 3_000;
  * Drum & bass lives at 165–180 BPM, so "fast"/"slow" are not absolute words here; the prompt
  * refuses to guess a number the user did not give.
  */
-export const SEARCH_FILTER_SYSTEM_PROMPT = [
-  "You translate a music search query into a JSON filter object. You are a parser, not a librarian.",
-  "",
-  "Return ONLY a JSON object with any of these keys (omit a key the query does not mention):",
-  "  artist    string  — an artist/producer name, copied VERBATIM from the query",
-  "  label     string  — a record label, copied VERBATIM",
-  "  album     string  — an album/EP/release title, copied VERBATIM",
-  '  key       string  — a musical key as "<note> <major|minor>", e.g. "A minor", "F# major"',
-  "  bpmMin    number  — a lower BPM bound",
-  "  bpmMax    number  — an upper BPM bound",
-  "  yearMin   number  — a lower release-year bound",
-  "  yearMax   number  — an upper release-year bound",
-  '  soundsLike string — a TRACK REFERENCE the user wants sonic neighbours of ("sounds like X", "similar to X")',
-  "  text      string  — any remaining words that are none of the above",
-  "",
-  "Rules:",
-  "- NEVER invent, correct, complete, or substitute a name. Copy what the user wrote, exactly.",
-  "- NEVER name a track that the user did not name. You do not know what is in this archive, and you are not being asked.",
-  '- "in A minor" → key. "at 174" / "around 174 bpm" → bpmMin and bpmMax spanning it. "under 172" → bpmMax. "from 2019" → yearMin and yearMax = 2019.',
-  '- This is drum & bass (165–180 BPM). Do NOT turn a vague word like "fast", "slow", "heavy" or "liquid" into a number — leave it in `text`.',
-  '- "sounds like <X>", "similar to <X>", "like <X> but ..." → soundsLike: "<X>". Anything else in the query still fills the other keys.',
-  '- If the query names nothing you can map, return {"text": "<the query>"}.',
-  "- Output the JSON object and nothing else. No prose, no markdown fence.",
-].join("\n");
+export const SEARCH_FILTER_SYSTEM_PROMPT = PROMPT_REGISTRY.search_filter.defaultBody;
 
 type OpenRouterChatResponse = {
   choices?: { message?: { content?: string } }[];
@@ -140,11 +118,17 @@ export async function translateQuery(query: string): Promise<SearchFilters | nul
 
   const model = (await readOptionalEnv("OPENROUTER_SEARCH_MODEL")) ?? DEFAULT_SEARCH_MODEL;
 
+  // The system prompt, resolved from the registry: the operator's override if one is on
+  // file, else the baked default above. `resolvePrompt` cannot throw and falls back to
+  // that default, so the degradation contract below is untouched — search still answers
+  // when the prompt store, like the model, is unavailable.
+  const prompt = await resolvePrompt("search_filter");
+
   try {
     const response = await fetch(OPENROUTER_CHAT_URL, {
       body: JSON.stringify({
         messages: [
-          { content: SEARCH_FILTER_SYSTEM_PROMPT, role: "system" },
+          { content: prompt.body, role: "system" },
           { content: query, role: "user" },
         ],
         model,

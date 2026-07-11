@@ -1,5 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+// The distil resolves its system prompt from the registry (./prompts.ts), which reads the
+// `prompt_versions` table. This suite drives a mocked global `fetch`, and an unmocked
+// libSQL client would try to reach the database THROUGH it — so stub the db to the cold
+// state (no override on file). The distil then runs on the registry's baked default at
+// version 0, which is exactly what production does before anyone edits a prompt.
+vi.mock("./db", () => ({
+  getDb: async () => ({ execute: async () => ({ rows: [] }) }),
+  typedRow: <T extends object>(rows: T[]) => rows[0],
+  typedRows: <T extends object>(rows: T[]) => rows,
+}));
+
 import {
   CONTEXT_DISTIL_SYSTEM_PROMPT,
   OBSERVATION_TAIL_PAD_MS,
@@ -220,7 +231,13 @@ describe("distilContextNote", () => {
       sources: ["https://discogs.com/release/123"],
     });
 
-    expect(note).toBe("Mr Right On is a 2017 Calibre track.");
+    // The distil now returns the note PLUS the prompt version that produced it (the
+    // provenance that lands on `findings.context_prompt_version`). With no override row
+    // on file — and, in this suite, no reachable database at all — it resolves to the
+    // registry's baked default, version 0. That fallback is the point: the distil runs
+    // exactly as it did when the prompt was a const.
+    expect(note?.note).toBe("Mr Right On is a 2017 Calibre track.");
+    expect(note?.promptVersion).toBe(0);
     const url = calls[0];
     expect(url).toContain(OPENROUTER_MATCH);
 

@@ -40,6 +40,14 @@ const EDITION_SELECT = `select
 
 export type EditionInput = {
   contentJson?: unknown;
+  /**
+   * PROVENANCE — the `newsletter_edition` prompt version this draft was authored under
+   * (0 = the registry's baked default, N = override N; NULL when the sweep fell back to
+   * its baked-in prompt, or when an operator wrote the draft by hand). Set on CREATE
+   * only: a later edit does not change who drafted it.
+   * See docs/agents/prompt-registry.md.
+   */
+  promptVersion?: number | null;
   subject?: unknown;
   windowSince?: unknown;
   windowUntil?: unknown;
@@ -94,21 +102,25 @@ export async function createEdition(input: EditionInput): Promise<EditionDTO> {
   const id = randomUUID();
   const db = await getDb();
 
+  // The edition and its PROVENANCE land in the same insert — the prompt version that
+  // authored it, or NULL when no registry prompt did (the sweep's baked-in fallback, or
+  // an operator-written draft).
   await db.execute({
     args: [
       id,
       "draft",
       fields.subject ?? null,
       fields.contentJson,
+      input.promptVersion ?? null,
       fields.windowSince ?? null,
       fields.windowUntil ?? null,
       now,
       now,
     ],
     sql: `insert into editions (
-        id, status, subject, content_json,
+        id, status, subject, content_json, prompt_version,
         window_since, window_until, created_at, updated_at
-      ) values (?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   });
 
   return getEditionById(id, { includeDrafts: true });

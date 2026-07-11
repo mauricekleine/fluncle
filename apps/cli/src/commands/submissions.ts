@@ -103,11 +103,18 @@ export async function approveSubmissionCommand(
 export async function triageSubmissionCommand(
   submissionId: string,
   verdict: string,
-  options: JsonOptions = {},
+  options: JsonOptions & { promptVersion?: number } = {},
 ): Promise<void> {
   const response = await adminApiPost<SubmissionResponse>(
     `/api/admin/submissions/${encodeURIComponent(submissionId)}/triage`,
-    { verdict },
+    {
+      // PROVENANCE — omitted when the sweep fell back to its baked-in prompt, so the
+      // column stays NULL (docs/agents/prompt-registry.md).
+      ...(typeof options.promptVersion === "number"
+        ? { promptVersion: options.promptVersion }
+        : {}),
+      verdict,
+    },
   );
 
   if (options.json) {
