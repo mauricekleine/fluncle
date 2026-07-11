@@ -83,12 +83,3 @@ export const font = {
     lineHeight: size(typography.title.fontSize) * typography.title.lineHeight,
   } satisfies TextStyle,
 } as const;
-
-// The four galaxies (canon: @fluncle/contracts Galaxy union). Display names +
-// the gold-tinted accent each gets in the archive lens.
-export const galaxies = [
-  { key: "astral", name: "Astral" },
-  { key: "lunar", name: "Lunar" },
-  { key: "nebular", name: "Nebular" },
-  { key: "solar", name: "Solar" },
-] as const;
