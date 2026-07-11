@@ -3350,9 +3350,10 @@ body::before {
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────
-   Public navigation chrome (the four-variant exploration).
-   ONE navModel, four architectures: A masthead strip · B logbook colophon ·
-   C left rail · D chart drawer. Dark, warm, One-Sun gold; panes over the cosmos
+   Public navigation chrome — the LOGBOOK COLOPHON.
+   A minimal top bar (wordmark + the page's breadcrumb, inline) over a liner-notes
+   footer that carries the whole nav. The cover stays the hero; the crawl graph
+   still gets its links. Dark, warm, One-Sun gold; panes over the cosmos
    (Through-the-Glass). All motion is color-first and reduced-motion safe.
    ───────────────────────────────────────────────────────────────────────────── */
 
@@ -3367,9 +3368,11 @@ body::before {
   min-width: 0;
 }
 
-/* The wordmark — the brand voice (Oxanium caps), heats toward gold on hover. */
+/* The wordmark — the brand voice (Oxanium caps), heats toward gold on hover. In the
+   top bar it doubles as the FIRST BREADCRUMB: FLUNCLE › Log › 038.6.1J. */
 .nav-wordmark {
   color: var(--starlight-cream);
+  flex: none;
   font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
   font-size: 1.05rem;
   font-weight: 800;
@@ -3382,7 +3385,9 @@ body::before {
   color: var(--eclipse-glow);
 }
 
-/* An item link: icon + label, quiet cream that heats + washes on hover/active. */
+/* An item link: quiet cream that heats + washes on hover. The horizontal padding is
+   load-bearing — without it the hover wash crops flush to the glyphs and reads as a
+   highlighter smear rather than a target. */
 .nav-item {
   align-items: center;
   border-radius: var(--radius-md, 0.5rem);
@@ -3424,57 +3429,7 @@ body::before {
   text-transform: uppercase;
 }
 
-/* Identity CTAs. The Galaxy button is the one sun; keep the others quiet. */
-.nav-actions {
-  align-items: center;
-  display: flex;
-  gap: 0.5rem;
-}
-
-/* ── A: masthead strip ─────────────────────────────────────────────────────── */
-.nav-masthead {
-  backdrop-filter: blur(14px) saturate(125%);
-  background: color-mix(in oklch, var(--sleeve-black) 70%, transparent);
-  border-bottom: 1px solid var(--border);
-  position: sticky;
-  top: 0;
-  z-index: 30;
-}
-
-.nav-masthead-inner {
-  align-items: center;
-  display: flex;
-  gap: 1rem 1.5rem;
-  margin: 0 auto;
-  max-width: 80rem;
-  padding: 0.6rem 1rem;
-}
-
-.nav-masthead-explore {
-  display: none;
-  flex: 1 1 auto;
-  gap: 0.15rem;
-  justify-content: center;
-  min-width: 0;
-}
-
-@media (min-width: 900px) {
-  .nav-masthead-explore {
-    display: flex;
-  }
-}
-
-.nav-masthead .nav-actions {
-  margin-left: auto;
-}
-
-@media (max-width: 899px) {
-  .nav-masthead-inner .nav-actions-label {
-    display: none;
-  }
-}
-
-/* ── B / D: minimal top bar ────────────────────────────────────────────────── */
+/* ── The top bar: wordmark + breadcrumb, one line ──────────────────────────── */
 .nav-topbar {
   backdrop-filter: blur(14px) saturate(125%);
   background: color-mix(in oklch, var(--sleeve-black) 68%, transparent);
@@ -3484,50 +3439,39 @@ body::before {
   z-index: 30;
 }
 
-.nav-topbar--minimal {
-  background: color-mix(in oklch, var(--sleeve-black) 55%, transparent);
-}
-
 .nav-topbar-inner {
   align-items: center;
   display: flex;
-  justify-content: space-between;
+  gap: 0.5rem;
   margin: 0 auto;
   max-width: 80rem;
+  min-width: 0;
   padding: 0.6rem 1rem;
 }
 
-.nav-jump-index {
-  align-items: center;
-  color: var(--muted-foreground);
-  display: inline-flex;
-  font-size: 0.82rem;
-  font-weight: 600;
-  gap: 0.35rem;
-  transition: color 150ms ease-out;
-}
-
-.nav-jump-index:hover {
-  color: var(--eclipse-glow);
-}
-
-/* ── Breadcrumb (honest hierarchies only) ──────────────────────────────────── */
+/* ── Breadcrumb (inline with the wordmark, every page but home) ─────────────── */
 .nav-breadcrumb {
-  margin: 0 auto;
-  max-width: 80rem;
-  padding: 0.85rem 1.25rem 0;
+  min-width: 0;
 }
 
 .nav-breadcrumb ol {
   align-items: center;
   color: var(--muted-foreground);
   display: flex;
-  flex-wrap: wrap;
-  font-size: 0.8rem;
-  gap: 0.4rem;
+  font-size: 0.82rem;
   list-style: none;
   margin: 0;
+  min-width: 0;
   padding: 0;
+}
+
+/* Each crumb carries its own leading separator, so the trail hangs off the wordmark
+   without the wordmark having to know a breadcrumb exists. */
+.nav-breadcrumb li {
+  align-items: center;
+  display: flex;
+  gap: 0.4rem;
+  min-width: 0;
 }
 
 .nav-breadcrumb a {
@@ -3540,30 +3484,53 @@ body::before {
   color: var(--eclipse-glow);
 }
 
+/* The tail is the page you are on — the emphasis lands here, never on the hub behind
+   it. It truncates rather than wraps, so a long artist name can't push the bar tall. */
 .nav-breadcrumb [aria-current="page"] {
   color: var(--starlight-cream);
   font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .nav-breadcrumb-sep {
   color: color-mix(in oklch, var(--muted-foreground) 55%, transparent);
+  padding-left: 0.2rem;
 }
 
-/* ── Shared footer (the crawl backbone) ────────────────────────────────────── */
+/* ── The colophon (the crawl backbone) ─────────────────────────────────────── */
+/* A DARKER ground than the page plate: at the page's own value it read as more page
+   rather than as a distinct object. This is the sleeve the liner notes print on. */
 .nav-footer {
-  background: color-mix(in oklch, var(--sleeve-black) 55%, transparent);
+  background: color-mix(in oklch, var(--sleeve-black) 92%, transparent);
   border-top: 1px solid var(--border);
   margin-top: 3rem;
+  overflow: hidden;
   position: relative;
 }
 
+.nav-footer::before {
+  background: var(--grain-tile) repeat;
+  background-size: 160px;
+  content: "";
+  inset: 0;
+  mix-blend-mode: overlay;
+  opacity: 0.35;
+  pointer-events: none;
+  position: absolute;
+}
+
 .nav-footer-inner,
-.nav-footer-rows,
-.nav-footer-legal {
+.nav-footer-followrow,
+.nav-footer-nerdrow {
   margin: 0 auto;
   max-width: 80rem;
   padding-left: 1.25rem;
   padding-right: 1.25rem;
+  position: relative;
 }
 
 .nav-footer-inner {
@@ -3587,10 +3554,17 @@ body::before {
   max-width: 26ch;
 }
 
+/* Mobile: the three columns stack two-up rather than squeezing to a 3-wide crush. */
 .nav-footer-cols {
   display: grid;
   gap: 1.5rem;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+@media (min-width: 560px) {
+  .nav-footer-cols {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
 }
 
 .nav-footer-heading {
@@ -3611,41 +3585,66 @@ body::before {
   padding: 0;
 }
 
+/* The hover wash needs horizontal room; a flush-cropped wash reads as a smear. The
+   -0.5rem margin pulls the padded box back into optical alignment with the heading. */
 .nav-footer-link {
+  align-items: center;
   border-radius: var(--radius-md, 0.5rem);
   color: var(--muted-foreground);
   display: inline-flex;
   font-size: 0.88rem;
   font-weight: 600;
-  padding: 0.2rem 0;
-  transition: color 150ms ease-out;
+  gap: 0.45rem;
+  margin-left: -0.5rem;
+  padding: 0.25rem 0.5rem;
+  transition:
+    color 150ms ease-out,
+    background-color 150ms ease-out;
 }
 
 .nav-footer-link:hover,
 .nav-footer-link:focus-visible {
+  background: var(--gold-veil, color-mix(in oklch, var(--eclipse-gold) 10%, transparent));
   color: var(--eclipse-glow);
   outline: none;
 }
 
-.nav-footer-rows {
-  align-items: center;
-  border-top: 1px solid var(--border);
-  display: flex;
-  flex-wrap: wrap;
-  gap: 1rem 2rem;
-  justify-content: space-between;
-  margin-top: 2rem;
-  padding-bottom: 1.25rem;
-  padding-top: 1.25rem;
+.nav-footer-link[data-status="active"] {
+  color: var(--starlight-cream);
+}
+
+/* Submit a track is a dialog trigger, not a link — strip the button chrome so it
+   sits in the column as one of its siblings. */
+.nav-footer-action {
+  background: none;
+  border: 0;
+  cursor: pointer;
+  font-family: inherit;
+  text-align: left;
 }
 
 .nav-footer-followrow,
-.nav-footer-nerdrow,
-.nav-quietrow {
+.nav-footer-nerdrow {
   align-items: center;
   display: flex;
   flex-wrap: wrap;
-  gap: 0.4rem 0.75rem;
+  gap: 0.5rem 0.75rem;
+}
+
+.nav-footer-followrow {
+  border-top: 1px solid var(--border);
+  margin-top: 2rem;
+  padding-bottom: 1rem;
+  padding-top: 1.25rem;
+}
+
+/* The machinery band closes the plate, centered — the terminal surfaces and the live
+   status pill together, since the pill IS the /status link. */
+.nav-footer-nerdrow {
+  border-top: 1px solid var(--border);
+  justify-content: center;
+  padding-bottom: 1.5rem;
+  padding-top: 1rem;
 }
 
 .nav-footer-rowlabel {
@@ -3685,50 +3684,28 @@ body::before {
 .nav-nerds {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.85rem;
+  gap: 0.25rem;
 }
 
 .nav-nerd-link {
+  border-radius: var(--radius-md, 0.5rem);
   color: var(--muted-foreground);
   font-family: "Monaspace Krypton", ui-monospace, "SF Mono", Menlo, monospace;
   font-size: 0.78rem;
-  transition: color 150ms ease-out;
+  padding: 0.2rem 0.4rem;
+  transition:
+    color 150ms ease-out,
+    background-color 150ms ease-out;
 }
 
 .nav-nerd-link:hover,
 .nav-nerd-link:focus-visible {
+  background: var(--gold-veil, color-mix(in oklch, var(--eclipse-gold) 10%, transparent));
   color: var(--eclipse-glow);
   outline: none;
 }
 
-.nav-footer-legal {
-  align-items: center;
-  border-top: 1px solid var(--border);
-  color: var(--muted-foreground);
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem 1.25rem;
-  padding-bottom: 1.5rem;
-  padding-top: 1rem;
-}
-
-/* B: the colophon dresses the footer in the plate grammar. */
-.nav-footer--colophon {
-  background: color-mix(in oklch, var(--sleeve-black) 62%, transparent);
-  overflow: hidden;
-}
-
-.nav-footer--colophon::before {
-  background: var(--grain-tile) repeat;
-  background-size: 160px;
-  content: "";
-  inset: 0;
-  mix-blend-mode: overlay;
-  opacity: 0.35;
-  pointer-events: none;
-  position: absolute;
-}
-
+/* The plate grammar: crop marks + register cross, as on every Fluncle plate. */
 .nav-footer-cross {
   background:
     linear-gradient(var(--stardust), var(--stardust)) center / 1px 0.7rem no-repeat,
@@ -3763,174 +3740,9 @@ body::before {
   right: 0.5rem;
 }
 
-/* ── C: left rail ──────────────────────────────────────────────────────────── */
-/* Mobile: the rail collapses to a slim top header with a scrollable Explore row. */
-.nav-railtop {
-  backdrop-filter: blur(14px) saturate(125%);
-  background: color-mix(in oklch, var(--sleeve-black) 70%, transparent);
-  border-bottom: 1px solid var(--border);
-  position: sticky;
-  top: 0;
-  z-index: 30;
-}
-
-.nav-railtop-inner {
-  align-items: center;
-  display: flex;
-  gap: 1rem;
-  justify-content: space-between;
-  padding: 0.6rem 1rem;
-}
-
-.nav-railtop-explore {
-  display: flex;
-  gap: 0.1rem;
-  overflow-x: auto;
-  padding: 0 0.6rem 0.5rem;
-  scrollbar-width: thin;
-}
-
-.nav-rail {
-  display: none;
-}
-
-.nav-railtop-inner .nav-actions-label {
-  display: none;
-}
-
-@media (min-width: 1024px) {
-  .nav-shell--rail {
-    display: grid;
-    grid-template-columns: 15.5rem minmax(0, 1fr);
-    align-items: start;
-  }
-
-  .nav-railtop {
-    display: none;
-  }
-
-  .nav-rail {
-    border-right: 1px solid var(--border);
-    display: flex;
-    flex-direction: column;
-    gap: 1.5rem;
-    grid-column: 1;
-    grid-row: 1;
-    height: 100dvh;
-    overflow-y: auto;
-    padding: 1.25rem 1rem;
-    position: sticky;
-    top: 0;
-  }
-
-  .nav-rail-content {
-    grid-column: 2;
-    grid-row: 1;
-    min-width: 0;
-  }
-}
-
-.nav-rail-top {
-  display: flex;
-  flex-direction: column;
-  gap: 1rem;
-}
-
-.nav-rail-top .nav-actions {
-  flex-wrap: wrap;
-}
-
-.nav-rail-sections {
-  display: flex;
-  flex-direction: column;
-  gap: 1.25rem;
-}
-
-.nav-rail-group {
-  display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
-}
-
-.nav-rail-grouplabel {
-  color: var(--stardust);
-  font-size: 0.68rem;
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.nav-rail-nav,
-.nav-drawer-nav {
-  display: flex;
-  flex-direction: column;
-  gap: 0.1rem;
-}
-
-.nav-rail-bottom {
-  border-top: 1px solid var(--border);
-  margin-top: auto;
-  padding-top: 1.25rem;
-}
-
-.nav-quietrows {
-  display: flex;
-  flex-direction: column;
-  gap: 0.85rem;
-}
-
-.nav-quietrow {
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 0.4rem;
-}
-
-/* ── D: chart drawer ───────────────────────────────────────────────────────── */
-.nav-drawer {
-  gap: 0;
-  width: min(22rem, 92vw) !important;
-  max-width: min(22rem, 92vw) !important;
-}
-
-.nav-drawer-body {
-  display: flex;
-  flex-direction: column;
-  gap: 1.5rem;
-  overflow-y: auto;
-  padding: 0 1.25rem 1.5rem;
-}
-
-/* The three CTAs don't fit the drawer's 22rem on one line — let them wrap. */
-.nav-drawer-body .nav-actions {
-  flex-wrap: wrap;
-}
-
-.nav-search {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg, 0.625rem);
-}
-
-.nav-drawer-sections {
-  display: flex;
-  flex-direction: column;
-  gap: 1.25rem;
-}
-
-.nav-drawer-group {
-  display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
-}
-
-/* NOTE: the dev-only variation picker's styles are COLOCATED in
-   components/nav/variant-picker.tsx (an inline <style>), not here — so the whole
-   picker (markup + logic + CSS) is dead-code-eliminated from the prod bundle along
-   with the component. */
-
 @media (prefers-reduced-motion: reduce) {
   .nav-wordmark,
   .nav-item,
-  .nav-jump-index,
   .nav-breadcrumb a,
   .nav-footer-link,
   .nav-follow-link,

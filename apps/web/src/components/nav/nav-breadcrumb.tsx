@@ -1,53 +1,111 @@
-// Breadcrumbs for the honest hierarchies of the graph — a leaf page sitting under a
-// known index (a finding under /log, an artist under /artists, a galaxy under
-// /galaxies, a sector under /logbook, an edition under /newsletter). Emits BOTH the
-// visible crawlable trail (real `<a>` back to the index — a ≤2-hop path from any
-// leaf to its index) AND a JSON-LD BreadcrumbList, so the graph's shape is legible
-// to humans and search engines alike. Nothing renders on flat pages (home, indexes).
+// The breadcrumb — and, in the colophon architecture, the ONLY nav in the top bar.
+// It sits inline with the wordmark, so the trail reads FLUNCLE › Log › 038.6.1J and
+// the wordmark IS the home crumb (no redundant "Home" link).
+//
+// WHY THIS CARRIES SEO WEIGHT. With the nav banked in the footer, the site-wide links
+// are boilerplate — and Google discounts boilerplate links when distributing internal
+// authority. The breadcrumb is the antidote: it is DIFFERENT on every page, so it
+// reads as a contextual link to the hub rather than chrome. That is the same signal a
+// header nav would have carried, without the visual weight. The JSON-LD
+// BreadcrumbList alongside it is what puts the trail (rather than a raw URL) in the
+// search snippet.
+//
+// Rendered on every page EXCEPT home, where the trail would be a single dead crumb.
 
 import { Link } from "@tanstack/react-router";
 import { type ReactNode } from "react";
 import { siteUrl } from "@/lib/fluncle-links";
 import { serializeJsonLd } from "@/lib/json-ld";
 
-// First path segment → the index it hangs under. Only these leaves get a trail; a
-// segment absent here (or a flat/index path) renders nothing.
-const CRUMB_PARENTS: Record<string, { label: string; to: string }> = {
-  artist: { label: "Artists", to: "/artists" },
-  galaxies: { label: "Galaxies", to: "/galaxies" },
-  log: { label: "Log", to: "/log" },
-  logbook: { label: "Logbook", to: "/logbook" },
-  newsletter: { label: "Newsletter", to: "/newsletter" },
+/**
+ * The first path segment → how it reads, and the index its leaves hang under.
+ *
+ * `index` is set only when a leaf's hub lives at a DIFFERENT path than the segment
+ * (an artist page is `/artist/<slug>` but its hub is `/artists`). Everywhere else the
+ * segment is its own hub (`/log/<id>` → `/log`), so `index` stays undefined.
+ *
+ * A segment absent from this map renders NO trail — an unmapped page shows nothing
+ * rather than something wrong.
+ */
+const SEGMENTS: Record<string, { index?: string; label: string }> = {
+  about: { label: "About" },
+  account: { label: "Join the crew" },
+  artist: { index: "/artists", label: "Artists" },
+  artists: { label: "Artists" },
+  docs: { label: "Docs" },
+  galaxies: { label: "Galaxies" },
+  log: { label: "Log" },
+  logbook: { label: "Logbook" },
+  mixtapes: { label: "Mixtapes" },
+  newsletter: { label: "Newsletter" },
+  pipeline: { label: "Pipeline" },
+  privacy: { label: "Privacy" },
+  status: { label: "Status" },
+  stories: { label: "Stories" },
 };
 
-type Crumb = { label: string; parent: { label: string; to: string }; pathname: string };
+/** One rendered crumb. No `to` ⇒ it is the current page (the bold tail). */
+export type Crumb = { label: string; to?: string };
 
-/** Resolve the breadcrumb for a pathname, or null when there is no honest trail. */
-export function resolveCrumb(pathname: string): Crumb | null {
-  const segments = pathname.split("/").filter(Boolean);
-
-  // Exactly a two-level leaf: /<index>/<leaf>. Deeper or shallower paths don't map.
-  if (segments.length !== 2) {
-    return null;
+/**
+ * A leaf slug read as a human label. A coordinate or a sector number is already the
+ * shape we want ("038.6.1J", "038"); a hyphenated slug gets title-cased so a raw URL
+ * never leaks into the chrome. A page whose real title differs from its slug (an
+ * artist's "Nu:Tone" vs `nu-tone`) passes `leafLabel` explicitly and skips this.
+ */
+function humanizeSlug(slug: string): string {
+  if (/^[\d.]+[\dA-Za-z.]*$/.test(slug)) {
+    return slug;
   }
 
-  const parent = CRUMB_PARENTS[segments[0] ?? ""];
-
-  if (!parent) {
-    return null;
-  }
-
-  const raw = decodeURIComponent(segments[1] ?? "");
-  // A numeric newsletter edition reads as "#3", not "3".
-  const label = segments[0] === "newsletter" && /^\d+$/.test(raw) ? `#${raw}` : raw;
-
-  return { label, parent, pathname };
+  return slug
+    .split("-")
+    .map((word) => (word ? `${word.charAt(0).toUpperCase()}${word.slice(1)}` : word))
+    .join(" ");
 }
 
-export function NavBreadcrumb({ pathname }: { pathname: string }): ReactNode {
-  const crumb = resolveCrumb(pathname);
+/**
+ * A pathname → its trail, WITHOUT the wordmark root crumb (the top bar renders that
+ * itself). Home, and any unmapped segment, yields an empty trail.
+ */
+export function resolveCrumbs(pathname: string, leafLabel?: string): Crumb[] {
+  const segments = pathname.split("/").filter(Boolean);
+  const root = segments[0];
 
-  if (!crumb) {
+  if (!root) {
+    return [];
+  }
+
+  const known = SEGMENTS[root];
+
+  if (!known) {
+    return [];
+  }
+
+  // An index page (/log, /artists) IS the tail: one crumb, unlinked.
+  if (segments.length === 1) {
+    return [{ label: known.label }];
+  }
+
+  const raw = decodeURIComponent(segments.slice(1).join("/"));
+  const numbered = root === "newsletter" && /^\d+$/.test(raw);
+
+  return [
+    { label: known.label, to: known.index ?? `/${root}` },
+    { label: leafLabel ?? (numbered ? `#${raw}` : humanizeSlug(raw)) },
+  ];
+}
+
+export function NavBreadcrumb({
+  leafLabel,
+  pathname,
+}: {
+  leafLabel?: string;
+  pathname: string;
+}): ReactNode {
+  const crumbs = resolveCrumbs(pathname, leafLabel);
+
+  if (crumbs.length === 0) {
     return undefined;
   }
 
@@ -55,35 +113,33 @@ export function NavBreadcrumb({ pathname }: { pathname: string }): ReactNode {
     "@context": "https://schema.org",
     "@type": "BreadcrumbList",
     itemListElement: [
-      { "@type": "ListItem", item: `${siteUrl}/`, name: "Home", position: 1 },
-      {
+      { "@type": "ListItem", item: `${siteUrl}/`, name: "Fluncle", position: 1 },
+      ...crumbs.map((crumb, index) => ({
         "@type": "ListItem",
-        item: `${siteUrl}${crumb.parent.to}`,
-        name: crumb.parent.label,
-        position: 2,
-      },
-      { "@type": "ListItem", name: crumb.label, position: 3 },
+        name: crumb.label,
+        position: index + 2,
+        ...(crumb.to ? { item: `${siteUrl}${crumb.to}` } : {}),
+      })),
     ],
   };
 
   return (
     <nav aria-label="Breadcrumb" className="nav-breadcrumb">
       <ol>
-        <li>
-          <Link to="/">Home</Link>
-        </li>
-        <li aria-hidden="true" className="nav-breadcrumb-sep">
-          ›
-        </li>
-        <li>
-          <Link to={crumb.parent.to as never}>{crumb.parent.label}</Link>
-        </li>
-        <li aria-hidden="true" className="nav-breadcrumb-sep">
-          ›
-        </li>
-        <li>
-          <span aria-current="page">{crumb.label}</span>
-        </li>
+        {crumbs.map((crumb) => (
+          <li key={crumb.label}>
+            <span aria-hidden="true" className="nav-breadcrumb-sep">
+              ›
+            </span>
+            {crumb.to ? (
+              <Link to={crumb.to as never}>{crumb.label}</Link>
+            ) : (
+              // The tail is the page you are on, so the emphasis lands here and never
+              // on the hub behind it: the coordinate is the subject, not "Log".
+              <span aria-current="page">{crumb.label}</span>
+            )}
+          </li>
+        ))}
       </ol>
       {/* JSON-LD through serializeJsonLd (HTML-escaped) so a `</script>` in a
           Spotify-sourced slug can't break out of the inline block (stored-XSS sink). */}

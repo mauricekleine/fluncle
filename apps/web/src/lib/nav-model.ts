@@ -1,7 +1,5 @@
-// The one shared navigation model — the single source of truth every public-nav
-// variant reads, so the four variants differ in ARCHITECTURE (where the nav lives:
-// a top strip, a bottom colophon, a left spine, an on-demand drawer) and never in
-// their link list. Add a surface here once; all four pick it up (the same
+// The one shared navigation model — the single source of truth the public nav reads.
+// Add a surface here once and it lights up wherever the nav renders (the same
 // registry-driven discipline as @fluncle/registry, scoped to the human nav).
 //
 // PURE DATA on purpose (no React, no icons, no I/O): the icon mapping lives in the
@@ -13,6 +11,11 @@
 // Fluncle is a GRAPH archive: the log is the trunk (findings ↔ artists ↔ galaxies ↔
 // the logbook, with LABEL pages landing soon). This model is that trunk in nav form;
 // the in-page cross-links (the /log prose galaxy + artist links) are the branches.
+//
+// The architecture is the LOGBOOK COLOPHON (ratified): a minimal top bar carrying
+// only the wordmark + a per-page breadcrumb, with the whole nav weight banked in a
+// liner-notes footer. The cover stays the hero; the crawl graph still gets its
+// links. See the breadcrumb component for why that is not an SEO cost.
 
 import {
   galaxyUrl,
@@ -177,6 +180,13 @@ const crewItems: NavItem[] = [
     to: "/newsletter",
   },
   {
+    blurb: "How the machinery works, if you're curious.",
+    id: "docs",
+    kind: "route",
+    label: "Docs",
+    to: "/docs",
+  },
+  {
     action: "submit",
     blurb: "Heard something? Send it my way.",
     id: "submit",
@@ -215,15 +225,13 @@ export const navNerds: NavNerd[] = [
   { id: "ssh", kind: "docs", label: "SSH", splat: "ssh" },
 ];
 
-// The two identity CTAs reused across the variant headers. `galaxy` is the ONE gold
-// sun (DESIGN.md One Sun); `joinCrew` is the conventional sign-up slot.
+// The two identity CTAs. Both live on the HOME page (the Galaxy gold button is the
+// ONE sun — DESIGN.md One Sun — and never belongs in the quiet colophon); kept here
+// so the model still owns every route the nav can reach, for the completeness test.
 export const navPrimaryCta = {
   galaxy: { href: galaxyUrl, id: "galaxy", label: "Enter Fluncle's Galaxy" },
   joinCrew: { id: "join-crew", label: "Join the crew", to: "/account" },
 } as const;
-
-/** The docs index — linked from the footer so `/docs` is never an orphan. */
-export const navDocsHome = { id: "docs", label: "Docs", to: "/docs" } as const;
 
 /**
  * The public subset of a section's items: drops the admin-only ones (the /mix
@@ -249,5 +257,5 @@ export function navRoutePaths(): string[] {
   return navSections
     .flatMap((section) => section.items)
     .flatMap((item) => (item.kind === "route" ? [item.to] : []))
-    .concat(navPrimaryCta.joinCrew.to, navDocsHome.to);
+    .concat(navPrimaryCta.joinCrew.to);
 }
