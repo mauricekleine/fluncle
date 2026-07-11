@@ -9,15 +9,39 @@
       "packages/*"
     ],
     "catalog": {
+      "@base-ui/react": "~1.6.0",
       "@libsql/client": "~0.17.4",
+      "@orpc/client": "1.14.6",
+      "@orpc/contract": "1.14.6",
+      "@orpc/openapi": "1.14.6",
+      "@orpc/openapi-client": "1.14.6",
+      "@orpc/server": "1.14.6",
+      "@orpc/tanstack-query": "1.14.6",
+      "@orpc/zod": "1.14.6",
+      "@phosphor-icons/react": "~2.1.10",
+      "@remotion/bundler": "~4.0.481",
+      "@remotion/captions": "~4.0.481",
+      "@remotion/cli": "~4.0.481",
+      "@remotion/fonts": "~4.0.481",
+      "@remotion/renderer": "~4.0.481",
+      "@tanstack/react-query": "~5.101.0",
       "@types/bun": "~1.3.14",
       "@types/node": "~24.13.2",
+      "@types/react": "~19.2.17",
+      "@types/react-dom": "~19.2.3",
       "@typescript/native-preview": "~7.0.0-dev.20260618.1",
+      "class-variance-authority": "~0.7.1",
+      "cmdk": "~1.1.1",
+      "cnfast": "~0.0.8",
       "commander": "~15.0.0",
       "dotenv": "~17.4.2",
       "drizzle-kit": "~0.31.10",
       "drizzle-orm": "~0.45.2",
-      "typescript": "~6.0.3"
+      "react-dom": "~19.2.7",
+      "remotion": "~4.0.481",
+      "sonner": "~2.0.7",
+      "typescript": "~6.0.3",
+      "zod": "4.4.3"
     }
   },
   "type": "module",
@@ -52,8 +76,8 @@
   },
   "lint-staged": {
     "*": [
-      "oxlint --fix --no-error-on-unmatched-pattern",
-      "oxfmt --write --no-error-on-unmatched-pattern"
+      "oxlint --fix --ignore-path .prettierignore --no-error-on-unmatched-pattern",
+      "oxfmt --write --ignore-path .prettierignore --no-error-on-unmatched-pattern"
     ]
   },
   "packageManager": "bun@1.3.14",

@@ -17,25 +17,41 @@ const TRACK_ID = "4cOdK2wGLETKBW3PvgPWqT"; // a real 22-char base62 Spotify id
 // Accepted: the spotify:track:<22> URI, returned verbatim.
 {
   const uri = `spotify:track:${TRACK_ID}`;
-  assert.equal(parseSpotifyTrackInput(uri), uri, "spotify:track:<22> URI is accepted verbatim");
+  assert.equal(
+    parseSpotifyTrackInput(uri),
+    uri,
+    "spotify:track:<22> URI is accepted verbatim",
+  );
 }
 
 // Accepted: the open.spotify.com /track/<22> URL, returned verbatim.
 {
   const url = `https://open.spotify.com/track/${TRACK_ID}`;
-  assert.equal(parseSpotifyTrackInput(url), url, "open.spotify.com /track/<22> URL is accepted");
+  assert.equal(
+    parseSpotifyTrackInput(url),
+    url,
+    "open.spotify.com /track/<22> URL is accepted",
+  );
 }
 
 // Surrounding whitespace is trimmed before matching.
 {
   const uri = `spotify:track:${TRACK_ID}`;
-  assert.equal(parseSpotifyTrackInput(`  ${uri}\n`), uri, "leading/trailing whitespace is trimmed");
+  assert.equal(
+    parseSpotifyTrackInput(`  ${uri}\n`),
+    uri,
+    "leading/trailing whitespace is trimmed",
+  );
 }
 
 // A /track/ URL with query params is still accepted (returned as the trimmed input).
 {
   const url = `https://open.spotify.com/track/${TRACK_ID}?si=abcdef`;
-  assert.equal(parseSpotifyTrackInput(url), url, "a /track/ URL with a query is accepted");
+  assert.equal(
+    parseSpotifyTrackInput(url),
+    url,
+    "a /track/ URL with a query is accepted",
+  );
 }
 
 // Rejected: the wrong host.
@@ -97,9 +113,21 @@ const TRACK_ID = "4cOdK2wGLETKBW3PvgPWqT"; // a real 22-char base62 Spotify id
 
 // Rejected: non-URL junk and empties.
 {
-  assert.equal(parseSpotifyTrackInput("not a url at all"), undefined, "free-text junk is rejected");
-  assert.equal(parseSpotifyTrackInput(""), undefined, "an empty string is rejected");
-  assert.equal(parseSpotifyTrackInput("https://"), undefined, "a bare scheme is rejected");
+  assert.equal(
+    parseSpotifyTrackInput("not a url at all"),
+    undefined,
+    "free-text junk is rejected",
+  );
+  assert.equal(
+    parseSpotifyTrackInput(""),
+    undefined,
+    "an empty string is rejected",
+  );
+  assert.equal(
+    parseSpotifyTrackInput("https://"),
+    undefined,
+    "a bare scheme is rejected",
+  );
 }
 
 console.log(

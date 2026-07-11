@@ -17,8 +17,8 @@
     "typecheck": "tsgo --noEmit"
   },
   "dependencies": {
-    "@orpc/contract": "1.14.6",
-    "zod": "4.4.3"
+    "@orpc/contract": "catalog:",
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@types/node": "catalog:",

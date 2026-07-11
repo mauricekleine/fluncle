@@ -1,4 +1,12 @@
-import { Action, ActionPanel, Icon, Image, List, showToast, Toast } from "@raycast/api";
+import {
+  Action,
+  ActionPanel,
+  Icon,
+  Image,
+  List,
+  showToast,
+  Toast,
+} from "@raycast/api";
 import { useEffect, useState } from "react";
 import { getRecentTracks, type RecentTrack } from "./fluncle";
 
@@ -38,7 +46,10 @@ export default function Command() {
           title={`${track.artists.join(", ")} — ${track.title}`}
           subtitle={track.note}
           accessories={[
-            { text: formatDate(track.addedAt), tooltip: `Found ${formatDate(track.addedAt)}` },
+            {
+              text: formatDate(track.addedAt),
+              tooltip: `Found ${formatDate(track.addedAt)}`,
+            },
           ]}
           actions={<TrackActions track={track} />}
         />
@@ -67,7 +78,10 @@ function TrackActions({ track }: { track: RecentTrack }) {
         application="Spotify"
       />
       <Action.OpenInBrowser title="Open in Browser" url={track.spotifyUrl} />
-      <Action.CopyToClipboard title="Copy Spotify URL" content={track.spotifyUrl} />
+      <Action.CopyToClipboard
+        title="Copy Spotify URL"
+        content={track.spotifyUrl}
+      />
     </ActionPanel>
   );
 }

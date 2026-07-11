@@ -1,4 +1,11 @@
-import { Action, ActionPanel, Clipboard, Form, showToast, Toast } from "@raycast/api";
+import {
+  Action,
+  ActionPanel,
+  Clipboard,
+  Form,
+  showToast,
+  Toast,
+} from "@raycast/api";
 import { useEffect, useState } from "react";
 import { addTrack, parseSpotifyTrackInput } from "./fluncle";
 
