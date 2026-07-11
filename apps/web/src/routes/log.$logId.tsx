@@ -3,6 +3,7 @@ import { Fragment } from "react";
 import { Link, createFileRoute, notFound, redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { siMixcloud, siSoundcloud, siSpotify, siTiktok, siYoutube } from "simple-icons";
+import { VideoBehindTheScenes } from "@/components/behind-the-scenes";
 import { BrandIcon } from "@/components/brand-icon";
 import { LogFootage } from "@/components/log/log-footage";
 import { LogObservation } from "@/components/log/log-observation";
@@ -342,6 +343,8 @@ function LogPage() {
         </header>
 
         <LogFootage track={track} />
+
+        <VideoBehindTheScenes track={track} />
 
         {track.observationAudioUrl ? (
           <LogObservation
