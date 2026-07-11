@@ -3,6 +3,10 @@ import { siteUrl } from "./fluncle-links";
 import { buildSitemapXml } from "./sitemap";
 
 describe("buildSitemapXml (sitemap enumeration)", () => {
+  // The always-listed hubs: /, /log, /logbook, /mixtapes, /artists, /labels, /albums,
+  // /about, /privacy, /galaxy. (/galaxies is gated on the map being named.)
+  const STATIC_SURFACES = 10;
+
   const pages = [
     { lastmod: "2026-06-10T14:57:38.786Z", logId: "011.6.8K" },
     { lastmod: "2026-06-03T10:00:00.000Z", logId: "004.7.2I" },
@@ -21,7 +25,7 @@ describe("buildSitemapXml (sitemap enumeration)", () => {
     expect(xml).toContain("<loc>https://www.fluncle.com/galaxy</loc>");
     expect(xml).toContain("<loc>https://www.fluncle.com/log/011.6.8K</loc>");
     expect(xml).toContain("<loc>https://www.fluncle.com/log/004.7.2I</loc>");
-    expect(xml.match(/<loc>/g)).toHaveLength(8 + pages.length);
+    expect(xml.match(/<loc>/g)).toHaveLength(STATIC_SURFACES + pages.length);
   });
 
   it("always includes the /galaxy surface", () => {
@@ -47,7 +51,7 @@ describe("buildSitemapXml (sitemap enumeration)", () => {
     const xml = buildSitemapXml([]);
 
     expect(xml).not.toContain("<lastmod>");
-    expect(xml.match(/<loc>/g)).toHaveLength(8);
+    expect(xml.match(/<loc>/g)).toHaveLength(STATIC_SURFACES);
   });
 
   it("appends a <loc> per artist page (thin-gated upstream) with its cover + lastmod", () => {
@@ -63,8 +67,8 @@ describe("buildSitemapXml (sitemap enumeration)", () => {
     expect(xml).toContain("<loc>https://www.fluncle.com/artist/dimension</loc>");
     expect(xml).toContain("<loc>https://www.fluncle.com/artist/sub-focus</loc>");
     expect(xml).toContain("<image:loc>https://img/dimension.jpg</image:loc>");
-    // 8 static + 2 findings + 2 artists.
-    expect(xml.match(/<loc>/g)).toHaveLength(8 + pages.length + 2);
+    // The static surfaces + 2 findings + 2 artists.
+    expect(xml.match(/<loc>/g)).toHaveLength(STATIC_SURFACES + pages.length + 2);
   });
 
   it("appends a <loc> per logbook entry with its generated-at lastmod", () => {
@@ -79,8 +83,8 @@ describe("buildSitemapXml (sitemap enumeration)", () => {
     // The /logbook index takes the freshest entry's lastmod.
     const index = xml.slice(0, xml.indexOf("/logbook/036"));
     expect(index).toContain("<loc>https://www.fluncle.com/logbook</loc>");
-    // 8 static + 2 findings + 2 logbook entries.
-    expect(xml.match(/<loc>/g)).toHaveLength(8 + pages.length + 2);
+    // The static surfaces + 2 findings + 2 logbook entries.
+    expect(xml.match(/<loc>/g)).toHaveLength(STATIC_SURFACES + pages.length + 2);
   });
 
   it("adds the /galaxies index + a <loc> per galaxy only once the map is named (gated upstream)", () => {
@@ -99,8 +103,8 @@ describe("buildSitemapXml (sitemap enumeration)", () => {
     expect(live).toContain(`<loc>${siteUrl}/galaxies</loc>`);
     expect(live).toContain(`<loc>${siteUrl}/galaxies/the-liquid-deep</loc>`);
     expect(live).toContain(`<loc>${siteUrl}/galaxies/weightless-rollers</loc>`);
-    // 8 static + the /galaxies index + 2 findings + 2 galaxies.
-    expect(live.match(/<loc>/g)).toHaveLength(8 + 1 + pages.length + 2);
+    // The static surfaces + the /galaxies index + 2 findings + 2 galaxies.
+    expect(live.match(/<loc>/g)).toHaveLength(STATIC_SURFACES + 1 + pages.length + 2);
   });
 
   it("declares the image + video namespaces on the urlset", () => {
@@ -184,5 +188,34 @@ describe("buildSitemapXml (sitemap enumeration)", () => {
     expect(xml).not.toContain("<image:image>");
     expect(xml).not.toContain("<video:video>");
     expect(xml).toContain("<loc>https://www.fluncle.com/log/006.F.01</loc>");
+  });
+  it("appends a <loc> per graph page (labels + albums) with its cover, and lists their hubs", () => {
+    const xml = buildSitemapXml([], [], [], [], {
+      albums: [{ imageLoc: "https://i.scdn.co/image/album", slug: "wormhole" }],
+      labels: [
+        {
+          imageLoc: "https://i.scdn.co/image/cover",
+          lastmod: "2026-07-01T00:00:00.000Z",
+          slug: "hospital-records",
+        },
+      ],
+    });
+
+    expect(xml).toContain("<loc>https://www.fluncle.com/label/hospital-records</loc>");
+    expect(xml).toContain("<loc>https://www.fluncle.com/album/wormhole</loc>");
+    expect(xml).toContain("<image:loc>https://i.scdn.co/image/cover</image:loc>");
+  });
+
+  it("keeps the thin DETAIL pages out while still listing their hubs", () => {
+    // The gate runs upstream (the route filters), so a run with no admitted entity pages is
+    // exactly what a thin archive produces — today every album in the archive is a single,
+    // so NO album detail page clears the floor. The hub is still a real page (its content is
+    // the whole list), so it is listed unconditionally, like /artists.
+    const xml = buildSitemapXml([{ lastmod: "2026-06-10T14:57:38.786Z", logId: "006.F.01" }]);
+
+    expect(xml).toContain("<loc>https://www.fluncle.com/labels</loc>");
+    expect(xml).toContain("<loc>https://www.fluncle.com/albums</loc>");
+    expect(xml).not.toContain("/label/");
+    expect(xml).not.toContain("/album/");
   });
 });

@@ -338,6 +338,36 @@ export const SURFACES: readonly Surface[] = [
     weights: { ssh: "secondary", web: "secondary" },
   },
   {
+    discoveryUrl: `${SITE}/llms.txt`,
+    exposedContent: [
+      "/labels — every record label Fluncle has found a banger on",
+      "/label/:slug — one label: its findings, the artists on it, and the rest of its catalogue",
+    ],
+    kind: "web_route",
+    name: "web.labels",
+    operatorNotes:
+      "The label half of the graph (log ↔ artist ↔ label ↔ album). The INDEX is probeable (always 200); the slug page is not, so the probe targets /labels. A label below the renderable-track floor renders noindex + stays out of the sitemap (the ARTIST_INDEX_MIN_FINDINGS precedent). The page is BLIND to the label's crawl seed_state — that is crawl scope, never storage (docs/label-entity.md); the operator's ruling station is /admin/labels.",
+    probeConfig: { cadenceMs: PROBE_CADENCE_MS, kind: "http", timeoutMs: PROBE_TIMEOUT_MS },
+    route: "/labels",
+    url: `${SITE}/labels`,
+    weights: { web: "secondary" },
+  },
+  {
+    discoveryUrl: `${SITE}/llms.txt`,
+    exposedContent: [
+      "/albums — every record Fluncle has found a banger on",
+      "/album/:slug — one record: its findings, its artists, its label, and the rest of its tracklist",
+    ],
+    kind: "web_route",
+    name: "web.albums",
+    operatorNotes:
+      "The album half of the graph, and the node that closes it: the album page carries the album → label edge (a link, plus `albumRelease.recordLabel` in its MusicAlbum JSON-LD). The INDEX is probeable (always 200); the slug page is not. Bounded by the archive, not the catalogue — an album earns a page by carrying a finding (docs/album-entity.md).",
+    probeConfig: { cadenceMs: PROBE_CADENCE_MS, kind: "http", timeoutMs: PROBE_TIMEOUT_MS },
+    route: "/albums",
+    url: `${SITE}/albums`,
+    weights: { web: "secondary" },
+  },
+  {
     exposedContent: [
       "/galaxies — the browse-by-feel lens: the archive grouped into operator-named sonic galaxies (k-means over the MuQ audio embedding space)",
       "/galaxies/:slug — one galaxy: its findings core-first, plus the adjacent galaxies by sound",

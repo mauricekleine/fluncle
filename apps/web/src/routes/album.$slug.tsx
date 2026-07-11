@@ -1,0 +1,224 @@
+import { Link, createFileRoute, notFound } from "@tanstack/react-router";
+import { createServerFn } from "@tanstack/react-start";
+import {
+  ArtistChips,
+  FindingsGrid,
+  graphPageTracks,
+  UnlitTracks,
+} from "@/components/graph-sections";
+import { StoryNotFoundState } from "@/components/stories/stories-states";
+import { siteUrl } from "@/lib/fluncle-links";
+import { formatDateLong } from "@/lib/format";
+import { jsonLdScript } from "@/lib/json-ld";
+import { albumBreadcrumbsJsonLd, musicAlbumJsonLd } from "@/lib/log-schema";
+import { spotifyAlbumImageAtSize } from "@/lib/media";
+import { ALBUM_INDEX_MIN_TRACKS, getAlbumBySlug } from "@/lib/server/albums";
+import { type ArtistChip, listArtistsByAlbum } from "@/lib/server/artists";
+import { getLabelForAlbum, type LabelRecord } from "@/lib/server/labels";
+import {
+  type CatalogueTrackItem,
+  getFindingsByAlbum,
+  listCatalogueTracksByAlbum,
+  type TrackListItem,
+} from "@/lib/server/tracks";
+
+// The album page — one record's place in the archive, and the fourth node of the graph
+// (log ↔ artist ↔ label ↔ album). The twin of `/label/<slug>`, plus one edge the label page
+// has no use for: the album's LABEL, rendered as a link and stamped into the JSON-LD as
+// `albumRelease.recordLabel` pointing at that label page's Organization `@id`. That edge is
+// where the graph closes. See docs/album-entity.md.
+
+type AlbumPageData =
+  | {
+      artists: ArtistChip[];
+      /** Uncertified tracks on this album. Empty until the catalogue lands. */
+      catalogue: CatalogueTrackItem[];
+      coverImageUrl: string | undefined;
+      findings: TrackListItem[];
+      indexable: boolean;
+      label: LabelRecord | undefined;
+      name: string;
+      slug: string;
+      status: "found";
+    }
+  | { status: "missing" };
+
+/**
+ * Resolve the album page's data. Extracted from the server fn so the indexability decision
+ * is unit-testable (see -album-page.test.ts), the `resolveArtistPageData` precedent.
+ */
+export async function resolveAlbumPageData(slug: string): Promise<AlbumPageData> {
+  const album = await getAlbumBySlug(slug);
+
+  if (!album) {
+    return { status: "missing" };
+  }
+
+  const [findings, catalogue, artists, label] = await Promise.all([
+    getFindingsByAlbum(album.id),
+    listCatalogueTracksByAlbum(album.id),
+    listArtistsByAlbum(album.id),
+    getLabelForAlbum(album.id),
+  ]);
+
+  return {
+    artists,
+    catalogue,
+    // The record's cover is its freshest finding's album art — never invented, never
+    // re-hosted (the `i.scdn.co` attribution-by-link precedent).
+    coverImageUrl: findings[0]?.albumImageUrl,
+    findings,
+    // Thin-content gate: index only past ALBUM_INDEX_MIN_TRACKS RENDERABLE tracks — the
+    // findings plus the quieter rows, because both are real content on the page. The
+    // sitemap keys off the same numbers, so an indexable page is never orphaned from it.
+    indexable: findings.length + catalogue.length >= ALBUM_INDEX_MIN_TRACKS,
+    label,
+    name: album.name,
+    slug: album.slug,
+    status: "found",
+  };
+}
+
+const fetchAlbum = createServerFn({ method: "GET" })
+  .validator((data: { slug: string }) => data)
+  .handler(({ data: { slug } }): Promise<AlbumPageData> => resolveAlbumPageData(slug));
+
+/**
+ * The first-person voice frame — Fluncle framing HIS relationship to the record. It counts
+ * FINDINGS only: the quieter rows below are never introduced, never named, never counted.
+ */
+function albumSignatureLine(name: string, findings: TrackListItem[]): string {
+  const dated = findings
+    .map((finding) => finding.addedAt)
+    .filter((addedAt): addedAt is string => Boolean(addedAt))
+    .sort();
+  const firstFoundAt = dated[0];
+  const count = findings.length;
+
+  if (count === 0) {
+    return "Nothing logged off this one yet.";
+  }
+
+  if (!firstFoundAt) {
+    return count === 1
+      ? "One tune off this record so far. Play it loud."
+      : `${count} tunes off this record so far. Have a dig.`;
+  }
+
+  const when = formatDateLong(firstFoundAt);
+
+  if (count === 1) {
+    return `I pulled my first tune off ${name} on ${when}. Just the one so far. Play it loud.`;
+  }
+
+  return `I pulled my first tune off ${name} on ${when}, and I've logged ${count} off it since. Have a dig.`;
+}
+
+function albumHead(loaderData: AlbumPageData | undefined) {
+  if (loaderData?.status !== "found") {
+    return {};
+  }
+
+  const { artists, catalogue, coverImageUrl, findings, indexable, label, name, slug } = loaderData;
+  const pageUrl = `${siteUrl}/album/${slug}`;
+  // Honestly-plain third-person for the machine-facing strings (the Narrator rule).
+  const title = `${name} · Fluncle's Findings`;
+  const description =
+    findings.length > 0
+      ? `Every banger Fluncle has found on ${name} and logged in the Galaxy, ${findings.length} so far, each with a coordinate.`
+      : `${name} in Fluncle's Galaxy.`;
+  const imageUrl =
+    spotifyAlbumImageAtSize(coverImageUrl, "large") ?? `${siteUrl}/fluncle-cover.png`;
+
+  return {
+    links: [{ href: pageUrl, rel: "canonical" }],
+    meta: [
+      { title },
+      { content: description, name: "description" },
+      ...(indexable ? [] : [{ content: "noindex, follow", name: "robots" }]),
+      { content: title, property: "og:title" },
+      { content: description, property: "og:description" },
+      { content: imageUrl, property: "og:image" },
+      { content: pageUrl, property: "og:url" },
+      { content: "music.album", property: "og:type" },
+      { content: "summary_large_image", name: "twitter:card" },
+      { content: title, name: "twitter:title" },
+      { content: description, name: "twitter:description" },
+      { content: imageUrl, name: "twitter:image" },
+    ],
+    scripts: [
+      jsonLdScript(
+        musicAlbumJsonLd({
+          artists,
+          imageUrl: spotifyAlbumImageAtSize(coverImageUrl, "large"),
+          label: label ? { name: label.name, slug: label.slug } : undefined,
+          name,
+          slug,
+          tracks: graphPageTracks(findings, catalogue),
+        }),
+      ),
+      jsonLdScript(albumBreadcrumbsJsonLd(name)),
+    ],
+  };
+}
+
+// Route options follow TanStack's create-route-property-order (each step feeds the next's
+// inferred types), which isn't alphabetical — so sort-keys is off here.
+// oxlint-disable-next-line sort-keys
+export const Route = createFileRoute("/album/$slug")({
+  loader: async ({ params }): Promise<AlbumPageData> => {
+    const data = await fetchAlbum({ data: { slug: params.slug } });
+
+    if (data.status === "missing") {
+      throw notFound();
+    }
+
+    return data;
+  },
+  head: ({ loaderData }: { loaderData?: AlbumPageData }) => albumHead(loaderData),
+  component: AlbumPage,
+  notFoundComponent: StoryNotFoundState,
+});
+
+function AlbumPage() {
+  const data = Route.useLoaderData();
+
+  if (data.status !== "found") {
+    return null;
+  }
+
+  const { artists, catalogue, findings, label, name } = data;
+
+  return (
+    <main className="log-plate-stage">
+      <article className="log-plate log-index">
+        <header className="log-masthead">
+          <p className="log-nameplate">Fluncle's Findings</p>
+          <h1 className="log-coordinate log-index-title artist-name">{name}</h1>
+          <p className="log-index-intro">{albumSignatureLine(name, findings)}</p>
+          {/* The album → label edge, the one link the label page has no twin for. */}
+          {label ? (
+            <p className="graph-uplink">
+              <Link params={{ slug: label.slug }} to="/label/$slug">
+                On {label.name}
+              </Link>
+            </p>
+          ) : undefined}
+        </header>
+
+        {/* The findings lead. Always. */}
+        <FindingsGrid findings={findings} label={`Findings on ${name}`} />
+
+        <ArtistChips artists={artists} title={`Artists on ${name}`} />
+
+        {/* The quieter rows: no heading, no noun, nothing at all when empty. */}
+        <UnlitTracks label={`More tracks on ${name}`} tracks={catalogue} />
+
+        <footer className="log-plate-footer">
+          <Link to="/albums">All albums</Link>
+          <Link to="/">Back to the archive</Link>
+        </footer>
+      </article>
+    </main>
+  );
+}

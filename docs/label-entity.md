@@ -1,6 +1,8 @@
 # The label entity
 
-Fluncle keeps a canonical **label entity** (`labels`, keyed on the slug), and hangs one operator control off it: **which labels the future catalogue crawler may seed from.** The entity's public half (`/label/<slug>` pages) is not built yet; the control surface is.
+Fluncle keeps a canonical **label entity** (`labels`, keyed on the slug), and hangs one operator control off it: **which labels the future catalogue crawler may seed from.** Both halves now exist: the public `/label/<slug>` + `/labels` pages, and the operator's control surface.
+
+The label is the third node of the graph the archive is becoming — **log ↔ artist ↔ label ↔ album**. Its structural twin, the album, is documented in [docs/album-entity.md](./album-entity.md), which also carries what the two share: the graph pointer on `tracks`, the mint-only-off-a-finding rule, the public page's shape, the unnamed quieter rows, and the thin-content gate. Read that doc for the page; this one owns the crawl-seed ruling.
 
 ## The data model
 
@@ -10,7 +12,7 @@ Fluncle keeps a canonical **label entity** (`labels`, keyed on the slug), and ha
 slugify(tracks.label) = labels.slug
 ```
 
-That fold is what makes `Pilot.` and `Pilot` one label without a destructive rewrite of the findings. There is **no FK on `tracks`** and no `label_id` column — deliberately, for now (see _Follow-ups_).
+That fold is what makes `Pilot.` and `Pilot` one label without a destructive rewrite of the findings. `tracks` also carries an indexed **`label_id` pointer** at the row — added with the public pages, which read by it (a seek, never a fold over the catalogue). It is an addition, not a replacement: `tracks.label` stays the raw captured string forever. See [docs/album-entity.md](./album-entity.md#the-graph-pointer-tracksalbum_id--trackslabel_id).
 
 | Column       | What it is                                                                                               |
 | ------------ | -------------------------------------------------------------------------------------------------------- |
@@ -69,8 +71,12 @@ It is a **one-time data step, not runtime logic** — nothing in the Worker read
 
 The server layer lives in `apps/web/src/lib/server/labels.ts`.
 
+## The public page
+
+`/label/<slug>` (and the `/labels` index) shipped with the album entity, and its shape is documented once, in [docs/album-entity.md](./album-entity.md#the-public-surfaces): findings first, the artists as chips, the unnamed quieter rows beneath them, an `Organization` JSON-LD node whose `@id` is the page URL, and the renderable-track thin-content gate.
+
+The one thing worth restating here: **the public page is blind to `seed_state`.** A label the operator skipped for the crawler renders exactly as it always did, and its findings keep counting. Crawl scope, never storage — no read behind the page knows the column exists.
+
 ## Follow-ups
 
-- **The public `/label/<slug>` pages** — the entity is here; the pages are not.
-- **`tracks.label_id`** — relating by slug is deliberate for now: a destructive FK migration on `tracks` is a separate, riskier change and was kept out of the entity's landing. `tracks.label` stays the raw captured string regardless (it is the audit trail); the FK would be an addition, not a replacement.
-- **The alias map** — `spiration music` is a truncation of _Inspiration Music_; `1991` is a label named like a year. No normalizer gets these right. A committed alias map (fold + edit-distance proposes, the operator confirms) is the eventual answer, and it belongs with the public pages.
+- **The alias map** — `spiration music` is a truncation of _Inspiration Music_; `1991` is a label named like a year. No normalizer gets these right. A committed alias map (fold + edit-distance proposes, the operator confirms) is the eventual answer, and it now covers **both** entities: the album entity inherits the same class of collision (two records that share a name fold into one page). See [docs/album-entity.md](./album-entity.md#the-known-limit-two-records-one-name).

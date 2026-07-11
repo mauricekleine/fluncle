@@ -34,6 +34,8 @@ Generated from the `SURFACES` catalog. Each row is the registry `name`, its addr
 | `web.status`     | `/status`     | the public service-health dashboard — uptime per service, recent events                                                                           | secondary |
 | `web.radio`      | `/radio`      | the cycling observation station — Fluncle's spoken field observations on a loop (also at `radio.fluncle.com`)                                     | secondary |
 | `web.artist`     | `/artist`     | `/artist/:slug` — one artist's page: every published finding from that artist, plus their identity links                                          | secondary |
+| `web.labels`     | `/labels`     | every label Fluncle has found a banger on + `/label/:slug` — one imprint: its findings, its artists, the rest of its catalogue                    | secondary |
+| `web.albums`     | `/albums`     | every record Fluncle has found a banger on + `/album/:slug` — one record: its findings, its artists, and the label it came out on                 | secondary |
 | `web.galaxies`   | `/galaxies`   | the browse-by-feel lens — the archive grouped into operator-named sonic galaxies + `/galaxies/:slug`; dark until the operator names the whole map | secondary |
 | `web.privacy`    | `/privacy`    | the privacy policy                                                                                                                                | tertiary  |
 

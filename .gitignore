@@ -83,3 +83,6 @@ docs/1password-audit.local.md
 # Nightly audit working dir (transient: report.md, verdict.json, seo-data.json).
 # The DURABLE findings record is the committed docs/audit-backlog.md ledger.
 .audit/
+
+# /improve advisor session artifacts — deliberately local-only (operator ruling 2026-07-11)
+/plans/

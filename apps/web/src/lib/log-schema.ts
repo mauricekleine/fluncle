@@ -390,3 +390,189 @@ export function artistBreadcrumbsJsonLd(name: string): Record<string, unknown> {
     ],
   };
 }
+
+// ── The graph pages: labels + albums ────────────────────────────────────────────────
+//
+// The two nodes that complete `log ↔ artist ↔ label ↔ album`. Their JSON-LD follows the
+// artist page's shape — an `@id`-bearing entity node whose `@id` IS the page URL, so a
+// crawler reconciles every mention of the entity across the site to one thing — and their
+// track lists carry BOTH halves of the page: the findings (which link to their `/log`
+// coordinate) and the quieter rows (which have no Fluncle page and carry their off-site
+// URL instead, or none at all).
+//
+// That is honest structured data — these really are tracks on this record / this imprint —
+// and it never claims a certification that does not exist: only a finding gets a
+// `fluncle.com/log/...` url. Schema that contradicts the page gets discounted; schema that
+// matches it is what puts the page in an AI answer.
+
+/** The `<siteUrl>/label/<slug>` node id. */
+export function labelPageUrl(slug: string): string {
+  return `${siteUrl}/label/${slug}`;
+}
+
+/** The `<siteUrl>/album/<slug>` node id. */
+export function albumPageUrl(slug: string): string {
+  return `${siteUrl}/album/${slug}`;
+}
+
+/** One track on a graph page: a finding (with a Log ID) or a quieter uncertified row. */
+export type GraphPageTrack = {
+  artists: string[];
+  /** Present ⇒ a finding: the item's `url` is its `/log` page. */
+  logId?: string;
+  /** The off-site URL for a track with no Fluncle page. Absent ⇒ the item carries no url. */
+  spotifyUrl?: string;
+  title: string;
+};
+
+// A track list as schema.org `ItemList` of `MusicRecording`s. A finding resolves to its
+// `/log/<id>` page; an uncertified row resolves to its off-site URL, or to no url at all
+// (a catalogue-only track may have no Spotify presence). `artistSlugs` stamps each credited
+// artist's `@id` where the entity is known — the same cross-page anchor `/log` and
+// `/artist` already carry.
+function trackItemList(
+  tracks: GraphPageTrack[],
+  artistSlugs: Record<string, string>,
+): Record<string, unknown> {
+  return {
+    "@type": "ItemList",
+    itemListElement: tracks.map((track, index) => {
+      const url = track.logId ? logPageUrl(track.logId) : track.spotifyUrl;
+
+      return {
+        "@type": "ListItem",
+        item: {
+          "@type": "MusicRecording",
+          byArtist: track.artists.map((name) => byArtistNode(name, artistSlugs)),
+          name: track.title,
+          ...(url ? { url } : {}),
+        },
+        position: index + 1,
+      };
+    }),
+  };
+}
+
+/** The label/album page's artist entities, folded for `byArtistNode`'s lookup. */
+function foldArtistSlugs(artists: { name: string; slug: string }[]): Record<string, string> {
+  const slugs: Record<string, string> = {};
+
+  for (const artist of artists) {
+    slugs[fold(artist.name)] = artist.slug;
+  }
+
+  return slugs;
+}
+
+/** The label page's identity + the page's contents. */
+export type RecordLabelInput = {
+  artists: { name: string; slug: string }[];
+  name: string;
+  slug: string;
+  tracks: GraphPageTrack[];
+};
+
+/**
+ * The label page's JSON-LD: a `CollectionPage` ABOUT an `Organization` (schema.org has no
+ * record-label type; a label is an organization, never a `MusicGroup` — it is not a band),
+ * carrying the page's tracks as its `mainEntity` list. The Organization's `@id` is the
+ * page URL, so the `recordLabel` node an album page emits points straight back here.
+ */
+export function recordLabelJsonLd(label: RecordLabelInput): Record<string, unknown> {
+  const pageUrl = labelPageUrl(label.slug);
+
+  return {
+    "@context": "https://schema.org",
+    "@id": pageUrl,
+    "@type": "CollectionPage",
+    about: {
+      "@id": `${pageUrl}#organization`,
+      "@type": "Organization",
+      name: label.name,
+      url: pageUrl,
+    },
+    mainEntity: trackItemList(label.tracks, foldArtistSlugs(label.artists)),
+    name: label.name,
+    url: pageUrl,
+  };
+}
+
+/** The album page's identity + the page's contents. */
+export type MusicAlbumInput = {
+  artists: { name: string; slug: string }[];
+  imageUrl?: string;
+  /** The album's label, when one of its tracks carried one — the album → label graph edge. */
+  label?: { name: string; slug: string };
+  name: string;
+  releaseDate?: string;
+  slug: string;
+  tracks: GraphPageTrack[];
+};
+
+/**
+ * The album page's JSON-LD: a real `MusicAlbum` — `byArtist` (the credited entities),
+ * `track` (the ItemList), and, where the album's label is known, an `albumRelease` →
+ * `MusicRelease.recordLabel` pointing at the label page's Organization `@id`. That last
+ * edge is the whole reason both pages exist in one PR: the graph closes.
+ */
+export function musicAlbumJsonLd(album: MusicAlbumInput): Record<string, unknown> {
+  const pageUrl = albumPageUrl(album.slug);
+  const labelUrl = album.label ? labelPageUrl(album.label.slug) : undefined;
+
+  return {
+    "@context": "https://schema.org",
+    "@id": pageUrl,
+    "@type": "MusicAlbum",
+    ...(album.label && labelUrl
+      ? {
+          albumRelease: {
+            "@type": "MusicRelease",
+            name: album.name,
+            recordLabel: {
+              "@id": `${labelUrl}#organization`,
+              "@type": "Organization",
+              name: album.label.name,
+              url: labelUrl,
+            },
+          },
+        }
+      : {}),
+    byArtist: album.artists.map((artist) => ({
+      "@id": artistPageUrl(artist.slug),
+      "@type": "MusicGroup",
+      name: artist.name,
+    })),
+    genre: "Drum and Bass",
+    ...(album.imageUrl ? { image: album.imageUrl } : {}),
+    name: album.name,
+    ...(album.releaseDate ? { datePublished: album.releaseDate } : {}),
+    track: trackItemList(album.tracks, foldArtistSlugs(album.artists)),
+    url: pageUrl,
+  };
+}
+
+/** Fluncle → Labels → the label name. */
+export function labelBreadcrumbsJsonLd(name: string): Record<string, unknown> {
+  return {
+    "@context": "https://schema.org",
+    "@type": "BreadcrumbList",
+    itemListElement: [
+      { "@type": "ListItem", item: `${siteUrl}/`, name: "Fluncle", position: 1 },
+      { "@type": "ListItem", item: `${siteUrl}/labels`, name: "Labels", position: 2 },
+      { "@type": "ListItem", name, position: 3 },
+    ],
+  };
+}
+
+/** Fluncle → Albums → the album name. */
+export function albumBreadcrumbsJsonLd(name: string): Record<string, unknown> {
+  return {
+    "@context": "https://schema.org",
+    "@type": "BreadcrumbList",
+    itemListElement: [
+      { "@type": "ListItem", item: `${siteUrl}/`, name: "Fluncle", position: 1 },
+      { "@type": "ListItem", item: `${siteUrl}/albums`, name: "Albums", position: 2 },
+      { "@type": "ListItem", name, position: 3 },
+    ],
+  };
+}
