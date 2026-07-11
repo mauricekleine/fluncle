@@ -1,3 +1,4 @@
+import { FINDING_LOG_ID_PATTERN } from "@fluncle/contracts/log-id";
 import { type FrontierEntity, type GameTrack, type Star, type Vec2 } from "./types";
 import { fnv1a, sectorDay } from "../lib/log-id-shared";
 
@@ -35,8 +36,6 @@ const SPIRAL_PITCH = ARM_GAP / (Math.PI * 2);
 /** Minimum arc distance between consecutive findings along the thread (orbits + audio apart). */
 const MIN_ARC_SPACING = 700;
 
-const LOG_ID_PATTERN = /^(\d+)\.\d\.\d[A-Z]$/;
-
 // A tiny seeded PRNG (mulberry32). The galaxy's POSITIONS stay deterministic
 // off fnv1a (every run is the same map), but a few frontier choices — which of
 // a black hole's candidate slots is live this run — want per-run variety
@@ -61,10 +60,17 @@ function seedOf(track: GameTrack): string {
 }
 
 function sectorOf(track: GameTrack): number {
-  const match = track.logId?.match(LOG_ID_PATTERN);
+  const logId = track.logId;
 
-  if (match?.[1] !== undefined) {
-    return Number.parseInt(match[1], 10);
+  // FINDINGS ONLY. Mixtape coordinates (`NNN.F.xx`) are deliberately NOT placed in
+  // the game — operator ruling 2026-07-11: the voyage thread is the findings' spiral
+  // and stays findings-only (a mixtape checkpoint body at its sector is a separate,
+  // unbuilt idea — see ROADMAP). A mixtape's `F` middle slot fails the finding
+  // pattern, so it falls through to the found-date sector below exactly as a
+  // pre-Log-ID straggler does — never onto the thread.
+  if (logId && FINDING_LOG_ID_PATTERN.test(logId)) {
+    // The sector is the coordinate's leading digits (`241.7.3A` → 241).
+    return Number.parseInt(logId, 10);
   }
 
   // Stragglers without a coordinate (pre-Log-ID rows) derive their sector the

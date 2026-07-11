@@ -43,6 +43,7 @@
       "name": "@fluncle/extension",
       "version": "0.1.0",
       "devDependencies": {
+        "@fluncle/contracts": "workspace:*",
         "@types/bun": "catalog:",
         "@types/chrome": "~0.1.43",
         "@typescript/native-preview": "catalog:",
