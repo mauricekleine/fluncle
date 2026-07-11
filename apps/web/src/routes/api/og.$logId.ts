@@ -1,9 +1,10 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { ImageResponse, loadGoogleFont } from "workers-og";
+import { ImageResponse } from "workers-og";
 import { formatDateLong } from "@/lib/format";
 import { isGalaxyMapFullyNamed } from "@/lib/server/galaxies-map";
 import { spotifyAlbumImageAtSize, trackMedia } from "@/lib/media";
 import { requireParam } from "@/lib/server/http-errors";
+import { BODY, BRAND, cardFonts, satoriText } from "@/lib/server/satori-render";
 import { getTrackByIdOrLogId } from "@/lib/server/tracks";
 import { type ApiHandlers, aliasHandlers } from "./-alias";
 
@@ -15,6 +16,15 @@ import { type ApiHandlers, aliasHandlers } from "./-alias";
 // Artist — Title headline, and the Found/telemetry line. The log page points
 // og:image here, versioned by `?v=<updatedAt>` so a re-enriched finding re-renders
 // (the response itself is immutable + edge-cached, so it renders once per version).
+//
+// TYPE: the card is split by role, not set in one face (DESIGN.md §3). Oxanium speaks
+// for the brand and the numbers — the lockup and the `fluncle://` coordinate (a coordinate
+// is ALWAYS Oxanium, even inside a URI). Space Grotesk does the reading — the title, the
+// artist line, and the Found/telemetry line, which is a body line that happens to contain
+// numerals; a whole paragraph in Oxanium is a One Voice Rule break. The container therefore
+// defaults to the BODY face and the brand marks opt IN, so an unmarked element reads as
+// prose rather than silently inheriting the display face. Both faces carry the One Box Rule
+// baked into their tables (lib/server/og-fonts.ts).
 
 const WIDTH = 1200;
 const HEIGHT = 630;
@@ -27,9 +37,6 @@ const COLOR = {
   gold: "#f5b800",
   stardust: "#b7ab95",
 } as const;
-
-const escapeHtml = (value: string): string =>
-  value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
 // Fetch an image and inline it as a base64 data-URI (nodejs_compat gives us
 // Buffer). Returns undefined on any failure so the card degrades to the bare
@@ -85,11 +92,11 @@ export const serverHandlers: ApiHandlers = {
     // The card deviates from the list convention's `Artist — Title`: at
     // display size, title-led over two lines (matching the /log page's own
     // hierarchy) reads far better, especially for long remix titles.
-    const title = escapeHtml(track.title);
-    const artist = escapeHtml(track.artists.join(", "));
+    const title = satoriText(track.title);
+    const artist = satoriText(track.artists.join(", "));
 
     const html = `
-          <div style="position:relative;display:flex;width:${WIDTH}px;height:${HEIGHT}px;background:${COLOR.bg};font-family:'Oxanium';overflow:hidden;">
+          <div style="position:relative;display:flex;width:${WIDTH}px;height:${HEIGHT}px;background:${COLOR.bg};font-family:${BODY};overflow:hidden;">
             ${
               background
                 ? `<img src="${background}" width="${WIDTH}" height="${HEIGHT}" style="position:absolute;top:0;left:0;width:${WIDTH}px;height:${HEIGHT}px;object-fit:cover;" />`
@@ -97,27 +104,19 @@ export const serverHandlers: ApiHandlers = {
             }
             <div style="position:absolute;top:0;left:0;display:flex;width:${WIDTH}px;height:${HEIGHT}px;background:linear-gradient(105deg, rgba(9,10,11,0.94) 0%, rgba(9,10,11,0.82) 44%, rgba(9,10,11,0.30) 100%);"></div>
             <div style="position:relative;display:flex;flex-direction:column;justify-content:space-between;width:${WIDTH}px;height:${HEIGHT}px;padding:64px;">
-              <div style="display:flex;color:${COLOR.stardust};font-size:26px;font-weight:600;letter-spacing:5px;text-transform:uppercase;">Fluncle's Findings</div>
+              <div style="display:flex;font-family:${BRAND};color:${COLOR.stardust};font-size:26px;font-weight:800;letter-spacing:5px;text-transform:uppercase;">Fluncle's Findings</div>
               <div style="display:flex;flex-direction:column;">
-                <div style="display:flex;color:${COLOR.gold};font-size:30px;font-weight:800;letter-spacing:1px;">fluncle://${logId}</div>
-                <div style="display:flex;color:${COLOR.cream};font-size:62px;font-weight:800;line-height:1.04;margin-top:14px;max-width:1040px;">${title}</div>
-                <div style="display:flex;color:${COLOR.stardust};font-size:34px;font-weight:500;margin-top:14px;">${artist}</div>
+                <div style="display:flex;font-family:${BRAND};color:${COLOR.gold};font-size:30px;font-weight:800;letter-spacing:1px;">fluncle://${satoriText(logId)}</div>
+                <div style="display:flex;color:${COLOR.cream};font-size:62px;font-weight:700;line-height:1.04;margin-top:14px;max-width:1040px;">${title}</div>
+                <div style="display:flex;color:${COLOR.stardust};font-size:34px;font-weight:400;margin-top:14px;">${artist}</div>
               </div>
-              <div style="display:flex;color:${COLOR.stardust};font-size:26px;font-weight:500;">${escapeHtml(meta)}</div>
+              <div style="display:flex;color:${COLOR.stardust};font-size:26px;font-weight:400;">${satoriText(meta)}</div>
             </div>
           </div>
         `;
 
-    const [oxaniumBold, oxaniumMedium] = await Promise.all([
-      loadGoogleFont({ family: "Oxanium", weight: 800 }),
-      loadGoogleFont({ family: "Oxanium", weight: 500 }),
-    ]);
-
     return new ImageResponse(html, {
-      fonts: [
-        { data: oxaniumBold, name: "Oxanium", style: "normal", weight: 800 },
-        { data: oxaniumMedium, name: "Oxanium", style: "normal", weight: 500 },
-      ],
+      fonts: cardFonts(),
       height: HEIGHT,
       width: WIDTH,
     });
