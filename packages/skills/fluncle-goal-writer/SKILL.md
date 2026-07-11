@@ -62,7 +62,7 @@ Stop and ask:
    - Remove analysis, rationale, and history from the final prompt unless it changes scope.
 
 5. Validate before responding.
-   - Save or pipe the draft through `packages/skills/goal-writer/scripts/check_goal_prompt.py`.
+   - Save or pipe the draft through `packages/skills/fluncle-goal-writer/scripts/check_goal_prompt.py`.
    - If it fails length or required-section checks, shorten and rerun.
    - Final output must be only the `/goal` prompt unless the user explicitly asked to write it to a file.
 
@@ -82,11 +82,11 @@ Stop and ask:
 Run:
 
 ```sh
-python packages/skills/goal-writer/scripts/check_goal_prompt.py /tmp/goal.txt
+python packages/skills/fluncle-goal-writer/scripts/check_goal_prompt.py /tmp/goal.txt
 ```
 
 Or pipe:
 
 ```sh
-printf '%s' "$GOAL_PROMPT" | python packages/skills/goal-writer/scripts/check_goal_prompt.py -
+printf '%s' "$GOAL_PROMPT" | python packages/skills/fluncle-goal-writer/scripts/check_goal_prompt.py -
 ```
