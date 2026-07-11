@@ -83,3 +83,42 @@ The Cloudflare **Deploy command** is `bun run --cwd apps/web deploy:cf` (build s
 - `apps/web/scripts/db-pull-prod.ts` — dump production to `.dev/seed.sql` over libSQL HTTP, with prod creds read from 1Password at run time (no `turso` CLI login, no creds in `.dev.vars`).
 - `apps/web/.dev.vars.tpl` — committed 1Password reference template for local Worker secrets.
 - `apps/web/.dev/` — local database + snapshot (gitignored).
+
+## Local is not production — never trust `turso dev` for a performance claim
+
+**Measured 2026-07-11** against both a local `turso dev` (sqld 0.24.31) and a scratch hosted Turso Cloud DB (server 2026.7.7), through `@libsql/client/web` — the exact HTTP driver the Worker uses. The two diverge on precisely the behaviours that decide whether a query survives the archive growing, and **the local one is misleading in the dangerous direction**: it makes slow code look fast and broken code look fine.
+
+This is not a "local is a bit different" caveat. A developer can benchmark a change locally, see clean numbers, and ship a query that takes **27 seconds** in production. Treat every local performance number as meaningless.
+
+### The three traps
+
+**1. The probe-binding cliff — bind a query vector as a raw BLOB, never as text.**
+
+| Path (100k rows, one round trip)    | Hosted p50    | Local (sqld) |
+| ----------------------------------- | ------------- | ------------ |
+| exact scan, probe bound as **text** | **26,700 ms** | 175 ms       |
+| exact scan, probe bound as **blob** | **1,883 ms**  | 175 ms       |
+
+A **14× cliff on hosted that does not exist locally.** The text version benchmarks identically in dev and is a catastrophe in prod. This single detail is the difference between a working vector search and an unusable one.
+
+**2. `libsql_vector_idx` is a foot-gun — never build one on a populated table.**
+
+- **Hosted:** `CREATE INDEX … libsql_vector_idx` against existing rows failed with `database is locked` and **wedged the database's write path for over 20 minutes.** On the production DB that is an outage.
+- **Local:** the same statement **silently builds an EMPTY index.** The shadow table has 0 rows, `vector_top_k` returns nothing, and **no error is raised** — so the feature appears to work and quietly returns garbage.
+- Index-first inserts collapse to **0.5 rows/s and degrading** (vs 217 rows/s without the index), and the only build-tractable config (`float1bit`) drops recall@20 to **21.6%** on clustered data — it returns the wrong neighbours four times out of five.
+
+**The ratified shape is the boring one:** an exact `vector_distance_cos` scan with a **btree pre-filter** before it. Filtering by galaxy (11k candidates) or camelot+BPM (8.3k) takes 100k from 1,883 ms to **274 ms / 207 ms** — one round trip, no ANN index, nothing that can wedge the system of record.
+
+**3. The response cap fails loudly in dev and silently in prod.**
+
+`turso dev` enforces a **10 MiB response cap**; hosted does not. So a query that pulls a large column into the isolate to rank it in JS will **throw in local dev** (at ~460 rows of 21.8 KB embeddings) while in production it just keeps growing — toward **OOMing the 128 MB Worker isolate**, with no error until it dies. That is backwards from a safe failure mode, and it is exactly how `getSimilarFindings` shipped a latent time bomb. **Rank in SQL; never pull a growing column into the isolate.**
+
+### The rule
+
+**Any query that scans a table which grows with the archive must be proven against hosted Turso before it is claimed to scale** — spin up a scratch Turso Cloud DB, load realistic volume, measure through `@libsql/client/web`, destroy it. Never `fluncle` or `fluncle-dev`. Local dev remains the right tool for correctness, schema, and everyday work; it is simply not evidence about performance.
+
+### Also worth knowing
+
+- Storing a 1024-d vector as JSON text costs **21.8 KB/row**; as `F32_BLOB(1024)` it is ~4 KB. At 100k that is **2,474 MB vs 440 MB — the JSON column alone would be 82% of the database.**
+- Reading an `F32_BLOB` back through the driver yields an **`ArrayBuffer`**, not a `Uint8Array`. Handle it.
+- Bulk writes are fine: **348 rows/s** on hosted with reads holding at 355 ms p50 during the burst. Writes were never the problem.
