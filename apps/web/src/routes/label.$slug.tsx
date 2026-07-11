@@ -115,6 +115,7 @@ export async function resolveLabelPageData(
     // sitemap keys off the same sum, so the two can never disagree. It counts the entity's TRUE
     // total, never the rendered page.
     indexable: findings.length + catalogue.totalTracks >= LABEL_INDEX_MIN_TRACKS,
+    logoImageUrl: label.logoImageUrl,
     name: label.name,
     slug: label.slug,
     sort,
@@ -149,7 +150,6 @@ function labelHead(loaderData: LabelPageData | undefined) {
     catalogue.page > 1
       ? `${siteUrl}/label/${slug}?page=${catalogue.page}`
       : `${siteUrl}/label/${slug}`;
-  const pageUrl = `${siteUrl}/label/${slug}`;
   // The <title>/meta stay honestly-plain third-person (the Narrator rule); the first person
   // lives only in the on-page voice frame.
   const title = `${name} · Fluncle's Findings`;
