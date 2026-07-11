@@ -184,7 +184,7 @@ async function skillDigest(): Promise<string> {
 }
 
 async function markdownHomeResponse(): Promise<Response> {
-  const page = await listTracks({ includeMixtapes: true, limit: markdownTracksLimit });
+  const page = await listTracks({ includeMixtapes: true, lean: true, limit: markdownTracksLimit });
   // The browse-by-feel launch gate (decision 5): the galaxies lens + API stay dark on
   // every public surface — this map included — until the operator has NAMED the whole
   // sonic map, so agents are never pointed at a lens that 404s. Once named, the line
@@ -341,7 +341,12 @@ async function llmsFullResponse(): Promise<Response> {
   let totalCount = 0;
 
   do {
-    const page = await listTracks({ cursor, includeMixtapes: true, limit: llmsFullPageSize });
+    const page = await listTracks({
+      cursor,
+      includeMixtapes: true,
+      lean: true,
+      limit: llmsFullPageSize,
+    });
     totalCount = page.totalCount;
     all.push(...page.tracks);
     cursor = page.nextCursor ? decodeTrackCursor(page.nextCursor) : undefined;

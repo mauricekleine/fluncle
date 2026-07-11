@@ -89,6 +89,11 @@ export function tracksHandlers(os: Implementer) {
       const page = await listTracks({
         cursor,
         includeMixtapes: since === undefined && until === undefined,
+        // The public feed reads the lean list projection (Finding B4): no list surface
+        // renders the heavy caption/feature/reasoning fields, and they stay optional on
+        // the `list_tracks` contract, so their absence here is additive (get_track still
+        // serves the fat single-finding shape for anyone who needs them).
+        lean: true,
         limit,
         since,
         until,

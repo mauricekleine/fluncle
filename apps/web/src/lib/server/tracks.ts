@@ -121,6 +121,36 @@ const TRACK_SELECT = `tracks.track_id, tracks.spotify_url, tracks.title, tracks.
        and url is not null
      order by published_at desc limit 1) as youtube_url`;
 
+// ── The lean LIST projection (Finding B4) ──
+//
+// Every PUBLIC list surface (the homepage feed, /log index, Stories, llms.txt paging,
+// the public `list_tracks`/`list_stories` ops) renders a handful of per-row fields but
+// used to over-fetch three HEAVY ones that none of them read: `observation_alignment_json`
+// (the spoken observation's word-timing arrays — big), `features_json` (the spectral
+// summary), and `video_model_reasoning`. Shipping them on every list row bloats the SSR
+// HTML and the hydrated react-query cache, and it grows with the archive.
+//
+// The consumer audit (see tracks-dto.test.ts + the PR body) proved the only readers of
+// these three are on NON-list paths that keep the fat shape: `observationAlignment` →
+// radio (its own `getRandomRadioTrack`/`getRadioEligibleTracks` path) + the MCP transcript;
+// `features` → the single-track `get_track` read (the video pipeline's fuel) + the admin
+// board's enrich dialog + the mixability engine's own query; `videoModelReasoning` → the
+// admin/CLI update write-paths. So the lean projection is safe for the list surfaces and
+// the fat `TRACK_SELECT`/`toTrackListItem` stays the default for admin/MCP/single-track.
+//
+// `LEAN_TRACK_SELECT` is DERIVED from `TRACK_SELECT` (single source of truth, drift-proof —
+// a new column added to `TRACK_SELECT` automatically flows to the lean read too). The split
+// is on `,`; none of the correlated subqueries contain a comma, so each fragment trims to a
+// bare `tracks.<column>` and the omitted three are filtered out exactly.
+const LEAN_LIST_OMITTED_COLUMNS = new Set([
+  "tracks.features_json",
+  "tracks.observation_alignment_json",
+  "tracks.video_model_reasoning",
+]);
+const LEAN_TRACK_SELECT = TRACK_SELECT.split(",")
+  .filter((fragment) => !LEAN_LIST_OMITTED_COLUMNS.has(fragment.trim()))
+  .join(",");
+
 /** A finite number, or undefined — for tolerant parsing of stored feature JSON. */
 function finiteOrUndefined(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
@@ -214,7 +244,29 @@ function galaxyOf(
   return name && slug ? { name, slug } : undefined;
 }
 
-export function toTrackListItem(row: TrackRow): TrackListItem {
+// The three heavy per-row fields the lean list projection omits — the DTO mirror of
+// `LEAN_LIST_OMITTED_COLUMNS`. A `LeanTrackListItem` is assignable to `TrackListItem`
+// (all three are OPTIONAL on the contract), so a lean item flows into any
+// `TrackListItem[]`/`FeedItem[]` unchanged; it simply carries these three undefined.
+export type LeanTrackListItem = Omit<
+  TrackListItem,
+  "features" | "observationAlignment" | "videoModelReasoning"
+>;
+
+// A lean DB row — a `TrackRow` without the three heavy columns `LEAN_TRACK_SELECT` drops.
+// `TrackRow` is assignable to it, so `toLeanTrackListItem` also accepts a full (fat) row.
+type LeanTrackRow = Omit<
+  TrackRow,
+  "features_json" | "observation_alignment_json" | "video_model_reasoning"
+>;
+
+/**
+ * The lean list DTO (Finding B4): every `TrackListItem` field EXCEPT the three heavy ones
+ * (`features`, `observationAlignment`, `videoModelReasoning`). Backs the public list
+ * surfaces, which never read those three. `toTrackListItem` delegates here and adds the
+ * three back — one field-mapping definition, no duplication.
+ */
+export function toLeanTrackListItem(row: LeanTrackRow): LeanTrackListItem {
   return {
     addedAt: row.added_at,
     addedToSpotify: Boolean(row.added_to_spotify),
@@ -238,7 +290,6 @@ export function toTrackListItem(row: TrackRow): TrackListItem {
     discogsReleaseUrl: row.in_release_id ? discogsReleaseUrl(row.in_release_id) : undefined,
     durationMs: row.duration_ms,
     enrichmentStatus: row.enrichment_status,
-    features: parseFeatures(row.features_json),
     galaxy: galaxyOf(row.galaxy_name, row.galaxy_slug),
     isrc: row.isrc ?? undefined,
     key: row.key ?? undefined,
@@ -248,7 +299,6 @@ export function toTrackListItem(row: TrackRow): TrackListItem {
     logId: row.log_id ?? undefined,
     logPageUrl: row.log_id ? logPageUrl(row.log_id) : undefined,
     note: row.note?.trim() ? row.note : undefined,
-    observationAlignment: parseObservationAlignment(row.observation_alignment_json),
     // Version the playback URL by the render timestamp so a re-`observe`
     // (which overwrites observation.mp3 in place) re-keys the edge cache — the
     // bare URL alone HITs stale until its max-age TTL. The bare URL stays in the
@@ -280,12 +330,24 @@ export function toTrackListItem(row: TrackRow): TrackListItem {
     updatedAt: row.updated_at ?? undefined,
     videoGrain: row.video_grain ?? undefined,
     videoModel: row.video_model ?? undefined,
-    videoModelReasoning: row.video_model_reasoning ?? undefined,
     videoRegister: row.video_register ?? undefined,
     videoSquaredAt: row.video_squared_at ?? undefined,
     videoUrl: row.video_url ?? undefined,
     videoVehicle: row.video_vehicle ?? undefined,
     youtubeUrl: row.youtube_url ?? undefined,
+  };
+}
+
+/**
+ * The full (fat) list DTO: the lean base plus the three heavy fields the admin/MCP/
+ * single-track reads need. The default projection for every non-public-list consumer.
+ */
+export function toTrackListItem(row: TrackRow): TrackListItem {
+  return {
+    ...toLeanTrackListItem(row),
+    features: parseFeatures(row.features_json),
+    observationAlignment: parseObservationAlignment(row.observation_alignment_json),
+    videoModelReasoning: row.video_model_reasoning ?? undefined,
   };
 }
 
@@ -1275,6 +1337,15 @@ type ListTracksOptions = {
   /** Only findings with a rendered video — the Stories feed's filter. */
   hasVideo?: boolean;
   includeMixtapes?: boolean;
+  /**
+   * Read the LEAN list projection (Finding B4) — drop the three heavy per-row fields
+   * (`features`, `observationAlignment`, `videoModelReasoning`) that no PUBLIC list
+   * surface renders. Set on the public list ops + the SSR feed loaders; omitted (fat)
+   * for the admin board, the queue sweeps, and MCP, which read those fields. Additive:
+   * a lean item is still a `TrackListItem` (the three are optional), just carrying them
+   * undefined.
+   */
+  lean?: boolean;
   limit: number;
   /**
    * Found-order direction. "desc" (newest-first) is the public default; the
@@ -1389,6 +1460,7 @@ export async function listTracks({
   hasObservation,
   hasVideo,
   includeMixtapes = false,
+  lean = false,
   limit,
   order = "desc",
   retryEmptyContext = false,
@@ -1397,6 +1469,12 @@ export async function listTracks({
   until,
 }: ListTracksOptions): Promise<FeedListPage | TrackListPage> {
   const db = await getDb();
+
+  // The lean list projection (Finding B4): the public list surfaces read a narrower
+  // SELECT (no heavy caption/feature/reasoning columns) and map with the lean mapper.
+  // A lean item is assignable to `TrackListItem`, so the merge/return types are unchanged.
+  const trackSelect = lean ? LEAN_TRACK_SELECT : TRACK_SELECT;
+  const mapRow: (row: TrackRow) => TrackListItem = lean ? toLeanTrackListItem : toTrackListItem;
 
   // Discovery-window and video filters; totalCount is scoped to the same
   // filters so a windowed caller (the newsletter agent) or the Stories feed
@@ -1528,7 +1606,7 @@ export async function listTracks({
   const [result, countResult] = await Promise.all([
     db.execute({
       args,
-      sql: `select ${TRACK_SELECT}
+      sql: `select ${trackSelect}
             from tracks
             ${where}
             order by added_at ${dir}, track_id ${dir}
@@ -1553,7 +1631,7 @@ export async function listTracks({
       hasMore,
       nextCursor: nextRawCursor,
     } = mergeFeedPage(
-      rows.map(toTrackListItem),
+      rows.map(mapRow),
       feedRows.map((row) => rowToMixtape(row)),
       dir,
       limit,
@@ -1568,7 +1646,7 @@ export async function listTracks({
   const visibleRows = rows.slice(0, limit);
   const hasMore = rows.length > limit;
   const lastVisibleRow = visibleRows.at(-1);
-  const tracks = visibleRows.map(toTrackListItem);
+  const tracks = visibleRows.map(mapRow);
 
   // The capture queue's artist-own-channel trust signal: attach each finding's
   // artists' YouTube channel ids in ONE batched read (never through TRACK_SELECT — that

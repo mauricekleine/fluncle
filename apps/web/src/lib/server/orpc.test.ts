@@ -193,6 +193,7 @@ describe("oRPC public read — GET /tracks (list_tracks)", () => {
     expect(listTracks).toHaveBeenCalledWith({
       cursor: undefined,
       includeMixtapes: true,
+      lean: true,
       limit: 16,
       since: undefined,
       until: undefined,
@@ -211,6 +212,7 @@ describe("oRPC public read — GET /tracks (list_tracks)", () => {
     expect(listTracks).toHaveBeenCalledWith({
       cursor: { addedAt: "2026-01-01T00:00:00.000Z", trackId: "abc" },
       includeMixtapes: true,
+      lean: true,
       limit: 48,
       since: undefined,
       until: undefined,
@@ -228,6 +230,7 @@ describe("oRPC public read — GET /tracks (list_tracks)", () => {
     expect(listTracks).toHaveBeenCalledWith({
       cursor: undefined,
       includeMixtapes: false,
+      lean: true,
       limit: 16,
       since: "2026-01-01T00:00:00.000Z",
       until: "2026-02-01T00:00:00.000Z",
@@ -243,6 +246,7 @@ describe("oRPC public read — GET /tracks (list_tracks)", () => {
     expect(listTracks).toHaveBeenCalledWith({
       cursor: undefined,
       includeMixtapes: true,
+      lean: true,
       limit: 16,
       since: undefined,
       until: undefined,

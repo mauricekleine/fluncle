@@ -6,5 +6,5 @@ import { listTracks } from "@/lib/server/tracks";
 const storiesPageSize = 48;
 
 export const fetchStories = createServerFn({ method: "GET" }).handler(() =>
-  listTracks({ hasVideo: true, limit: storiesPageSize }),
+  listTracks({ hasVideo: true, lean: true, limit: storiesPageSize }),
 );

@@ -1,7 +1,7 @@
 import { basename } from "node:path";
+import { type TrackListItem, type TracksResponse } from "@fluncle/contracts";
 import { baseTitleMatches, stripVersionSuffix, versionMatches } from "@fluncle/contracts/util";
 import { adminApiGet, adminApiPostForm, publicApiGet } from "../api";
-import { type RecentTrack } from "./recent";
 
 // Accept a fuzzy search hit as "the same recording" only when its duration agrees
 // with the finding within a few seconds — the same discipline apps/web's
@@ -26,16 +26,11 @@ type PreviewArchiveStatus = {
   trackId: string;
 };
 
-type Track = Pick<
-  RecentTrack,
-  "artists" | "durationMs" | "isrc" | "logId" | "previewUrl" | "title" | "trackId"
->;
-
-type TracksResponse = {
-  nextCursor?: string;
-  totalCount: number;
-  tracks: Track[];
-};
+// The `/api/tracks` feed items this command works over — a finding (`TrackListItem`),
+// imported from the contract so the shape can't drift from the wire (Finding B20). The
+// backfill loop skips the feed's mixtape arm (`type === "mixtape"`), which carries no
+// preview, so every item it resolves is a finding.
+type Track = TrackListItem;
 
 type ResolvedPreview = {
   bytes: ArrayBuffer;
@@ -95,6 +90,12 @@ export async function previewArchiveBackfillCommand(
     for (const track of page.tracks) {
       if (result.archived.length >= (options.limit ?? Number.POSITIVE_INFINITY)) {
         break;
+      }
+
+      // The public feed interleaves published mixtapes; they carry no preview, so skip
+      // them and narrow `track` to a finding (`TrackListItem`) for the rest of the loop.
+      if (track.type === "mixtape") {
+        continue;
       }
 
       if (!track.logId) {

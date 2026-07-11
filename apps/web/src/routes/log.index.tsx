@@ -15,7 +15,7 @@ import { listTracks, type TrackListPage } from "@/lib/server/tracks";
 const logIndexLimit = 500;
 
 const fetchLog = createServerFn({ method: "GET" }).handler(() =>
-  listTracks({ limit: logIndexLimit }),
+  listTracks({ lean: true, limit: logIndexLimit }),
 );
 
 const title = "Fluncle: the log";

@@ -1,5 +1,11 @@
+import { TrackListItemSchema } from "@fluncle/contracts/orpc";
 import { describe, expect, it } from "vitest";
-import { type TrackRow, toPublicTrackListItem, toTrackListItem } from "./tracks";
+import {
+  type TrackRow,
+  toLeanTrackListItem,
+  toPublicTrackListItem,
+  toTrackListItem,
+} from "./tracks";
 
 // The served (mapped) observation audio URL must be versioned by
 // observation_generated_at, so a re-`observe` — which overwrites
@@ -224,5 +230,60 @@ describe("bpmSource/keySource — admin carries, public strips", () => {
     expect(item.keySource).toBeUndefined();
     // An un-graded finding has nothing to strip — same reference back.
     expect(toPublicTrackListItem(item)).toBe(item);
+  });
+});
+
+// ── The schema → projection → contract round-trip guard (Finding B20) ──
+//
+// Adding a `tracks` column takes a lockstep edit across THREE files: db/schema.ts (the
+// column), this module's `toTrackListItem` (the DTO field), and the contract's
+// `TrackListItemSchema` (the wire shape). Miss the projection or the contract and the
+// column silently never reaches the API — with nothing to catch it. These build-fail
+// tests catch it: they compare the KEY SET the fat/lean mappers emit against the contract
+// schema's keys and fail with a message naming which side to update.
+describe("track projection ↔ contract round-trip (Finding B20)", () => {
+  // The fat mapper always assigns every key (some to `undefined`), so `Object.keys`
+  // yields the full key set regardless of the sample row's values.
+  const fatKeys = new Set(Object.keys(toTrackListItem(BASE_ROW)));
+  const leanKeys = new Set(Object.keys(toLeanTrackListItem(BASE_ROW)));
+  const schemaKeys = new Set(Object.keys(TrackListItemSchema.shape));
+
+  // `artistYoutubeChannelIds` is on the contract but NOT the shared mapper — it is
+  // attached out-of-band (`attachArtistYoutubeChannelIds`) ONLY on the admin capture-queue
+  // read, so the mapper legitimately never sets it. Every other schema key must be mapped.
+  const SCHEMA_ONLY_KEYS = new Set(["artistYoutubeChannelIds"]);
+
+  // The three heavy fields the lean list projection (Finding B4) deliberately omits.
+  const LEAN_OMITTED_KEYS = new Set(["features", "observationAlignment", "videoModelReasoning"]);
+
+  it("the fat DTO (toTrackListItem) maps exactly the contract's list-item keys", () => {
+    // In schema but not emitted by the mapper ⇒ add the field to `toTrackListItem`.
+    const missingFromDto = [...schemaKeys].filter(
+      (key) => !SCHEMA_ONLY_KEYS.has(key) && !fatKeys.has(key),
+    );
+    // Emitted by the mapper but not on the schema ⇒ add the field to `TrackListItemSchema`.
+    const missingFromContract = [...fatKeys].filter((key) => !schemaKeys.has(key));
+
+    expect({ missingFromContract, missingFromDto }).toEqual({
+      missingFromContract: [],
+      missingFromDto: [],
+    });
+  });
+
+  it("the lean DTO (toLeanTrackListItem) drops exactly the heavy fields, nothing else", () => {
+    const expectedLeanKeys = new Set([...fatKeys].filter((key) => !LEAN_OMITTED_KEYS.has(key)));
+
+    // Anything the lean mapper dropped beyond the three heavy fields ⇒ a lean surface would
+    // silently lose it. Anything it kept that should be heavy ⇒ the lean projection leaked.
+    const droppedBeyondHeavy = [...fatKeys].filter(
+      (key) => !LEAN_OMITTED_KEYS.has(key) && !leanKeys.has(key),
+    );
+    const leakedHeavy = [...LEAN_OMITTED_KEYS].filter((key) => leanKeys.has(key));
+
+    expect({ droppedBeyondHeavy, leakedHeavy }).toEqual({
+      droppedBeyondHeavy: [],
+      leakedHeavy: [],
+    });
+    expect(leanKeys).toEqual(expectedLeanKeys);
   });
 });
