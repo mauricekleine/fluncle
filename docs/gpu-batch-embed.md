@@ -182,4 +182,4 @@ fluncle admin catalogue rank --limit 250 --json   # repeat while `remaining > 0`
 - `apps/web/src/lib/server/findings-certification.integration.test.ts` — the rail proofs.
 - `docs/agents/hermes/scripts/embed-batch.ts` + `embed-batch.sh` — the GPU batch and its pod bootstrap.
 - `docs/agents/hermes/scripts/embed-track.py` — the one inference script, CPU and GPU.
-- `docs/agents/hermes/scripts/embed-sweep.ts` / `enrich-sweep.ts` — the on-box sweeps, now catalogue-aware.
+- `docs/agents/hermes/scripts/embed-sweep.ts` / `enrich-sweep.ts` / `capture-sweep.ts` — the on-box sweeps, all three catalogue-aware: each reads `list_track_work` for its stage. `capture-sweep.ts` reads `kind=capture&scope=all`, so the budget's brake gates it at the queue; with the brake paused it sees only findings, byte-for-byte as before it was wired.

@@ -627,18 +627,30 @@ export const TrackWorkScopeSchema = z.enum(["all", "catalogue", "findings"]).met
  * One row of pipeline work.
  *
  * `certified` is on the DTO deliberately: it is what tells a sweep it must NOT write a
- * certification field back onto this row (no `--status`, no note, no video). `logId` is null
- * exactly when `certified` is false, because the coordinate lives on the certification.
+ * certification field back onto this row (no `--status`, no note, no video, no
+ * `enrichment_status`). `logId` is null exactly when `certified` is false, because the
+ * coordinate lives on the certification.
+ *
+ * The four optional `capture`-only fields (`bpm`, `analyzedFrom`, `sourceAudioFailures`,
+ * `artistYoutubeChannelIds`) are the trust + re-derive signals the `fluncle-capture` sweep
+ * reads: the artist-own-channel trust tier, the failure-count backoff, and the capture→enrich
+ * re-derive predicate. They ride ONLY the `capture` worklist (absent for `analyze`/`embed`) and
+ * are omitted when empty, so the migrated sweep parses the exact shape the finding-only capture
+ * queue used to hand it.
  */
 export const TrackWorkItemSchema = z
   .object({
+    analyzedFrom: z.enum(["full", "preview"]).optional(),
+    artistYoutubeChannelIds: z.array(z.string()).optional(),
     artists: z.array(z.string()),
+    bpm: z.number().optional(),
     capturePriority: z.number().nullable(),
     certified: z.boolean(),
     durationMs: z.number(),
     isrc: z.string().nullable(),
     label: z.string().nullable(),
     logId: z.string().nullable(),
+    sourceAudioFailures: z.number().optional(),
     sourceAudioKey: z.string().nullable(),
     title: z.string(),
     trackId: z.string(),

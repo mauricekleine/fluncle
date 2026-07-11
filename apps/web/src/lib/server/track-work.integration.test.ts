@@ -100,6 +100,42 @@ async function withPriority(trackId: string, priority: number): Promise<void> {
   });
 }
 
+/** Stamp the capture sweep's re-derive signals onto a track (bpm / provenance / failure count). */
+async function withCaptureSignals(
+  trackId: string,
+  fields: { analyzedFrom?: "full" | "preview"; bpm?: number; failures?: number },
+): Promise<void> {
+  await db.execute({
+    args: [fields.bpm ?? null, fields.analyzedFrom ?? null, fields.failures ?? 0, trackId],
+    sql: `update tracks
+          set bpm = ?, analyzed_from = ?, source_audio_failures = ?
+          where track_id = ?`,
+  });
+}
+
+/** Link a track to an artist who carries a YouTube `/channel/UC…` social — the trust signal. */
+async function withArtistYoutubeChannel(trackId: string, channelId: string): Promise<void> {
+  const artistId = `art-${trackId.slice(0, 8)}`;
+  const at = "2026-07-01T00:00:00.000Z";
+
+  await db.execute({
+    args: [artistId, `Artist ${artistId}`, `artist-${artistId}`, at, at],
+    sql: `insert into artists (id, name, slug, created_at, updated_at)
+          values (?, ?, ?, ?, ?)
+          on conflict (id) do nothing`,
+  });
+  await db.execute({
+    args: [trackId, artistId],
+    sql: `insert into track_artists (track_id, artist_id, position) values (?, ?, 0)`,
+  });
+  await db.execute({
+    args: [`soc-${artistId}`, artistId, `https://www.youtube.com/channel/${channelId}`, at, at],
+    sql: `insert into artist_socials
+            (id, artist_id, platform, source, status, url, created_at, updated_at)
+          values (?, ?, 'youtube', 'operator', 'confirmed', ?, ?, ?)`,
+  });
+}
+
 async function seedDisabledLabel(name: string, slug: string): Promise<void> {
   await db.execute({
     args: [`lbl-${slug}`, name, slug],
@@ -361,6 +397,68 @@ describe("listTrackWork — the wire", () => {
       title: "See For Miles",
       trackId: "cat1000000000000000000",
     });
+  });
+
+  it("carries the CAPTURE sweep's trust + re-derive signals — and ONLY on the capture worklist", async () => {
+    const { listTrackWork } = await import("./track-work");
+
+    // The migration off the finding-only `captureQueue=true` queue MUST keep the sweep's
+    // per-finding behaviour byte-identical, and that behaviour reads four fields the generic
+    // work DTO did not carry: the artist-own-channel trust tier, the failure-count backoff, and
+    // the bpm/provenance that drive the capture→enrich re-derive. This proves the capture
+    // worklist surfaces all four.
+    await seedTrack(db, {
+      artists: ["Some Artist"],
+      label: "Hospital",
+      logId: "004.7.2I",
+      title: "A Finding Needing Capture",
+      trackId: "aaaaaaaaaaaaaaaaaaaaaa",
+    });
+    await withCaptureSignals("aaaaaaaaaaaaaaaaaaaaaa", {
+      analyzedFrom: "preview",
+      bpm: 174,
+      failures: 2,
+    });
+    await withArtistYoutubeChannel("aaaaaaaaaaaaaaaaaaaaaa", "UCr8ocLOaApCXWLjL7vdsgw");
+
+    const [capture] = await listTrackWork({ kind: "capture" });
+
+    expect(capture?.analyzedFrom).toBe("preview");
+    expect(capture?.bpm).toBe(174);
+    expect(capture?.sourceAudioFailures).toBe(2);
+    expect(capture?.artistYoutubeChannelIds).toEqual(["UCr8ocLOaApCXWLjL7vdsgw"]);
+
+    // …and those same four fields must NOT leak onto the analyze/embed DTOs — the embed/enrich
+    // sweeps never read them, so their wire stays exactly as it was (the `— the wire` test above
+    // asserts the full embed shape). We give the track audio so it appears on those worklists.
+    await withAudio("aaaaaaaaaaaaaaaaaaaaaa", { analyzedFrom: "preview" });
+
+    for (const kind of ["analyze", "embed"] as const) {
+      const [item] = await listTrackWork({ kind });
+
+      expect(item?.trackId).toBe("aaaaaaaaaaaaaaaaaaaaaa");
+      expect(item?.bpm).toBeUndefined();
+      expect(item?.analyzedFrom).toBeUndefined();
+      expect(item?.sourceAudioFailures).toBeUndefined();
+      expect(item?.artistYoutubeChannelIds).toBeUndefined();
+    }
+  });
+
+  it("omits the capture signals when they are empty (a missing bpm / zero failures / no channel)", async () => {
+    const { listTrackWork } = await import("./track-work");
+
+    // The omit-when-empty convention is what keeps the parsed shape stable: a finding with no
+    // bpm, no prior failures and no artist YouTube link carries NONE of the four fields, exactly
+    // as the finding-only capture DTO behaved.
+    await seedTrack(db, { logId: "004.7.2I", trackId: "aaaaaaaaaaaaaaaaaaaaaa" });
+
+    const [capture] = await listTrackWork({ kind: "capture" });
+
+    expect(capture?.trackId).toBe("aaaaaaaaaaaaaaaaaaaaaa");
+    expect(capture?.bpm).toBeUndefined();
+    expect(capture?.analyzedFrom).toBeUndefined();
+    expect(capture?.sourceAudioFailures).toBeUndefined();
+    expect(capture?.artistYoutubeChannelIds).toBeUndefined();
   });
 
   it("drops an embedded track from the embed queue (idempotent by construction)", async () => {

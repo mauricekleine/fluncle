@@ -20,6 +20,7 @@ import {
   normalizeChannelName,
   pickCandidate,
   rankCandidates,
+  shouldReenrichAfterCapture,
 } from "./capture-sweep";
 
 describe("buildStickyProxyUrl", () => {
@@ -335,6 +336,39 @@ describe("needsReenrichAfterCapture", () => {
   test("does NOT re-queue a full-analyzed row with a real BPM (no needless work)", () => {
     expect(needsReenrichAfterCapture(174, "full")).toBe(false);
     expect(needsReenrichAfterCapture(87.5, "full")).toBe(false);
+  });
+});
+
+describe("shouldReenrichAfterCapture — the certification gate on the re-derive", () => {
+  test("a CERTIFIED finding behaves exactly like needsReenrichAfterCapture (today's behaviour)", () => {
+    // With the brake paused every queued row is a finding, so this is the ONLY path that runs —
+    // and it must be byte-identical to the old predicate for every input.
+    for (const [bpm, from] of [
+      [null, "full"],
+      [undefined, "preview"],
+      [0, undefined],
+      [174, "preview"],
+      [160, undefined],
+      [174, "full"],
+      [87.5, "full"],
+    ] as const) {
+      expect(shouldReenrichAfterCapture(true, bpm, from)).toBe(
+        needsReenrichAfterCapture(bpm, from),
+      );
+    }
+  });
+
+  test("an UNCERTIFIED (catalogue) row is NEVER re-queued — enrichment_status is a certification field", () => {
+    // Even the inputs that would re-queue a finding must not, for a catalogue row: writing
+    // `enrichmentStatus` on an uncertified track is a 409 (the certification rail), and its
+    // enrichment is not a thing that exists.
+    expect(shouldReenrichAfterCapture(false, null, "preview")).toBe(false);
+    expect(shouldReenrichAfterCapture(false, undefined, undefined)).toBe(false);
+    expect(shouldReenrichAfterCapture(false, 174, "full")).toBe(false);
+  });
+
+  test("an ABSENT certified flag is treated as not-certified (a malformed row writes nothing)", () => {
+    expect(shouldReenrichAfterCapture(undefined, null, "preview")).toBe(false);
   });
 });
 

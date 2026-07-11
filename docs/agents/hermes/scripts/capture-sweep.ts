@@ -28,12 +28,30 @@
 // a billed proxy request) and `sourceAudioBytes` on a success, which is the only place a
 // file's real size is ever knowable. The server does the deciding; this reports the spending.
 //
-// NOTE ON THE QUEUE IT READS TODAY: `captureQueue=true` (the FINDINGS-only admin list), so
-// this sweep captures certified findings and cannot see a catalogue row at all. The
-// catalogue-aware queue is `list_track_work` (docs/gpu-batch-embed.md) — and THAT is the one
-// the budget gates. Migrating this sweep onto it is what turns catalogue capture on; it lands
-// behind a default-DENY brake, so the migration is safe and inert until the operator opens the
-// budget deliberately.
+// THE QUEUE IT READS: `list_track_work?kind=capture&scope=all` (docs/gpu-batch-embed.md), the
+// CATALOGUE-AWARE worklist — NOT the old findings-only `captureQueue=true` admin list, which
+// drove through the FINDING JOIN and so was structurally blind to a catalogue row. `kind=capture`
+// serves both halves in the order the metered budget should be spent: certified findings FIRST
+// (the archive can never be starved), then `capture_priority` DESC (the Ear's ladder —
+// logged-artist > label-with-a-finding > enabled-seed-label; an operator-DISABLED label is
+// tier −1 and excluded by SQL predicate, never bought). Same URL trick embed-sweep.ts uses: a
+// DIRECT HTTP read (pin-independent), the WRITE-BACK still on the PATCH path below.
+//
+// THE BRAKE IS AT THE QUEUE, NOT HERE (apps/web/src/lib/server/{track-work,capture-budget}.ts).
+// `list_track_work` consults the catalogue capture budget BEFORE it selects the worklist, and
+// when that budget is shut — its DEFAULT-DENY state, the shipped default — it NARROWS the
+// capture scope to the findings, never to empty. So with the brake paused this sweep sees EXACTLY
+// the findings it saw on the old queue, in newest-first order, and behaves byte-for-byte as it
+// did; the catalogue half lights up only once the operator opens the budget deliberately (one
+// `settings` flip, no re-bake). This sweep never re-implements the brake; a brake in a baked box
+// script would be re-bakeable, bypassable, and one `curl` away from irrelevant.
+//
+// CERTIFICATION RAIL (docs/gpu-batch-embed.md). A catalogue row is a MEASUREMENT target: the
+// capture side-channel columns (captureStatus, sourceAudio*) are accepted on it, but a
+// certification field is not. So the capture→enrich re-derive (`enrichmentStatus = 'pending'`)
+// is written for CERTIFIED findings ONLY — `enrichment_status` lives on the certification, and
+// the server would 409 an uncertified write of one. When the brake is paused every row is a
+// finding, so this gate changes nothing about today's behaviour.
 //
 // SELF-CONTAINED by necessity: box scripts can't import the workspace. The S3 signer
 // MIRRORS apps/web/src/lib/server/aws-sigv4.ts (unit-tested there via aws-sigv4.test.ts)
@@ -117,21 +135,25 @@ const log = (message: string) => console.error(`[capture-sweep] ${message}`);
 
 // ── Pure helpers (exported for capture-sweep.test.ts) ─────────────────────────
 
-/** A finding as the capture queue (`GET /api/admin/tracks?captureQueue=true`) returns it. */
+/** A row as the capture worklist (`GET /api/admin/tracks/work?kind=capture`) returns it. */
 export type CaptureFinding = {
   // Which audio class BPM/key were last analyzed from ("full" the captured song | "preview"
   // a 30s preview). Absent = a legacy row analyzed before the provenance column (treated as
-  // preview-grade). The admin capture-queue DTO surfaces it (RFC bpm-key-accuracy); the
-  // re-enrich predicate reads it to close the capture→enrich race — a finding whose enrich
-  // tick fired BEFORE its capture landed was analyzed from the preview, and this re-queues it.
+  // preview-grade). The capture worklist surfaces it (RFC bpm-key-accuracy); the re-enrich
+  // predicate reads it to close the capture→enrich race — a finding whose enrich tick fired
+  // BEFORE its capture landed was analyzed from the preview, and this re-queues it.
   analyzedFrom?: "preview" | "full";
   artists?: string[];
-  // The artist's own YouTube channel id(s), once `artist_socials` carries them (populated by
-  // the artist-links agent). When a candidate is on one of these it is the artist's OWN
-  // upload → the strongest trust signal. Absent today → the label/allowlist signals carry
-  // the trust classification until the queue DTO surfaces it (a clean fast-follow).
+  // The artist's own YouTube channel id(s), from `artist_socials` (attached by the capture
+  // worklist server-side). When a candidate is on one of these it is the artist's OWN upload →
+  // the strongest trust signal. Absent when the artists have no `/channel/UC…` link, in which
+  // case the label/allowlist signals carry the trust classification.
   artistYoutubeChannelIds?: string[];
   bpm?: number | null;
+  // True when a `findings` row exists — the certification rail's flag. FALSE for a catalogue
+  // track (visible only once the operator opens the budget). The re-derive write-back gates on
+  // it: `enrichment_status` is a certification column and the server 409s an uncertified write.
+  certified?: boolean;
   durationMs?: number;
   // The release label (already on the admin list DTO). A YouTube candidate whose channel
   // name equals the label is almost certainly the correct upload — it lets the duration
@@ -414,6 +436,27 @@ export function needsReenrichAfterCapture(
   return bpmIsMissing(bpm) || analyzedFrom !== "full";
 }
 
+/**
+ * Whether a just-landed capture should re-queue enrichment, gated by CERTIFICATION. Re-queueing
+ * writes `enrichmentStatus = "pending"`, and `enrichment_status` is a CERTIFICATION column: the
+ * server accepts it only on a certified finding and 409s an uncertified (catalogue) write of one
+ * (the certification rail, docs/gpu-batch-embed.md). So an uncertified row is NEVER re-queued
+ * here — its enrichment is not a thing that exists. A certified finding falls through to
+ * `needsReenrichAfterCapture`, unchanged. With the capture brake paused every row is a finding,
+ * so this gate is a no-op against today's behaviour and only matters once the catalogue lights up.
+ *
+ * `certified === undefined` is treated as NOT certified: the worklist DTO always carries the
+ * flag, so an absent value is a malformed row, and the safe reading of "is this a finding?" when
+ * unsure is no — never write a certification field on a row you cannot confirm is certified.
+ */
+export function shouldReenrichAfterCapture(
+  certified: boolean | undefined,
+  bpm: number | null | undefined,
+  analyzedFrom: "preview" | "full" | undefined,
+): boolean {
+  return certified === true && needsReenrichAfterCapture(bpm, analyzedFrom);
+}
+
 /** Map a file extension to an audio content-type for the R2 PUT. */
 export function contentTypeForExt(ext: string): string {
   const cleanExt = ext.replace(/^\./, "").toLowerCase();
@@ -550,7 +593,13 @@ async function r2Put(key: string, body: Uint8Array, contentType: string): Promis
 // ── Admin API (direct HTTP — pin-independent, not the baked CLI) ──────────────
 
 async function fetchCaptureQueue(): Promise<CaptureFinding[]> {
-  const url = `${API_BASE_URL}/api/admin/tracks?captureQueue=true&order=desc&limit=${QUEUE_LIMIT}`;
+  // The CATALOGUE-AWARE worklist (docs/gpu-batch-embed.md), NOT the old findings-only
+  // `captureQueue=true` admin list. `kind=capture&scope=all` serves both halves in the
+  // metered-budget drain order (certified first, then the Ear's capture-priority ladder);
+  // the budget's brake — consulted server-side BEFORE the worklist is selected — narrows the
+  // scope to the findings while it is shut (its default), so a paused brake reads exactly the
+  // findings the old queue did. No `order` param: this queue's order is fixed by the budget.
+  const url = `${API_BASE_URL}/api/admin/tracks/work?kind=capture&scope=all&limit=${QUEUE_LIMIT}`;
   const res = await fetch(url, {
     headers: { Authorization: `Bearer ${API_TOKEN}` },
     signal: AbortSignal.timeout(30_000),
@@ -803,8 +852,9 @@ async function captureFinding(finding: CaptureFinding): Promise<FindingOutcome> 
     await r2Put(key, bytes, contentTypeForExt(downloaded.ext));
 
     // Write back: the key + done + the captured stamp + THE METER. Clobber-safe enrichment
-    // trigger — re-queue when the BPM is missing OR the row was analyzed from a preview (not
-    // full audio), closing the capture→enrich race (see needsReenrichAfterCapture).
+    // trigger — for a CERTIFIED finding, re-queue when the BPM is missing OR the row was analyzed
+    // from a preview (not full audio), closing the capture→enrich race (see
+    // shouldReenrichAfterCapture; a catalogue row has no enrichment to re-queue and is skipped).
     //
     // `sourceAudioBytes` is what the operator is actually billed for, and it is knowable only
     // HERE — the queue holds metadata, not media, so there is no size to consult before the
@@ -820,7 +870,7 @@ async function captureFinding(finding: CaptureFinding): Promise<FindingOutcome> 
       sourceAudioCapturedAt: now,
       sourceAudioKey: key,
     };
-    if (needsReenrichAfterCapture(finding.bpm, finding.analyzedFrom)) {
+    if (shouldReenrichAfterCapture(finding.certified, finding.bpm, finding.analyzedFrom)) {
       update.enrichmentStatus = "pending";
     }
     await patchTrack(trackId, update);
