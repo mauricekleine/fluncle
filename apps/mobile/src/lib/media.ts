@@ -7,8 +7,18 @@ import { API_BASE, FOUND_BASE } from "@/config";
 
 const MT = `${FOUND_BASE}/cdn-cgi/media`;
 
-function master(logId: string, file: "footage.mp4" | "footage.social.mp4") {
-  return `${FOUND_BASE}/${logId}/${file}`;
+// The feed plays the CLEAN square master ONLY — never `footage.social.mp4`, the
+// portrait cut with baked "Found …"/coordinate/title text (that cut is a web-Stories /
+// YouTube / TikTok asset; the app draws its own overlay, so baked text would
+// double-print). This helper hard-codes the clean master's filename so no call site —
+// including any onError fallback — can reach the social cut: "never social" is a
+// compile-time guarantee, not a convention. Under the two-master model (videoSquaredAt
+// set) `footage.mp4` IS the clean 1920² square; if a feed video ever shows baked text,
+// that finding's stored `footage.mp4` itself carries text (a stamped-but-not-truly-
+// squared master, or a square re-render that skipped hideOverlay) — a per-finding DATA
+// fix at the source, never a URL the app can correct.
+function cleanMaster(logId: string) {
+  return `${FOUND_BASE}/${logId}/footage.mp4`;
 }
 
 /**
@@ -21,12 +31,12 @@ function master(logId: string, file: "footage.mp4" | "footage.social.mp4") {
 function videoPoster(logId: string, videoSquaredAt: string) {
   const epoch = Date.parse(videoSquaredAt);
   const version = Number.isNaN(epoch) ? 1 : epoch;
-  return `${MT}/mode=frame,time=0s,format=jpg/${master(logId, "footage.mp4")}?v=${version}`;
+  return `${MT}/mode=frame,time=0s,format=jpg/${cleanMaster(logId)}?v=${version}`;
 }
 
 /** The raw clean master (onError fallback target — MT can cold-fail / >100MB). */
 function videoMaster(logId: string) {
-  return master(logId, "footage.mp4");
+  return cleanMaster(logId);
 }
 
 /** The 30s preview proxy (live relay; expiring previewUrl tokens aren't used directly). */
