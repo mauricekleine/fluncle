@@ -659,13 +659,28 @@ export const SURFACES: readonly Surface[] = [
   // ── Discovery (machine-/crawler-facing maps) ──────────────────────────────
   {
     apiFormat: "application/xml",
-    exposedContent: ["the XML sitemap of every public page"],
+    exposedContent: ["the XML sitemap index of every public page"],
     kind: "discovery",
     name: "discovery.sitemap",
+    operatorNotes:
+      "A sitemap INDEX, not a flat urlset: the URLs live in children at /sitemap/<kind>-<n>.xml (pages/findings/graph/logbook), each auto-paged under Google's 50,000-URL ceiling so a breach cannot happen rather than merely not having happened yet. robots.txt still names this one URL — a crawler discovers the children from here. Splitting by kind is also the diagnostic: Search Console reports coverage PER sitemap.",
     probeConfig: { cadenceMs: PROBE_CADENCE_MS, kind: "http", timeoutMs: PROBE_TIMEOUT_MS },
     route: "/sitemap.xml",
     url: `${SITE}/sitemap.xml`,
     weights: { web: "secondary" },
+  },
+  {
+    apiFormat: "application/xml",
+    exposedContent: ["one child sitemap: the pages / findings / graph / logbook URLs, auto-paged"],
+    kind: "discovery",
+    name: "discovery.sitemap-shard",
+    // The probe targets a child that always exists: `pages-1` is the static hubs, which are
+    // never empty. A kind with no rows is simply not listed in the index (and 404s here),
+    // which would read as a false "down".
+    probeConfig: { cadenceMs: PROBE_CADENCE_MS, kind: "http", timeoutMs: PROBE_TIMEOUT_MS },
+    route: "/sitemap/$shard",
+    url: `${SITE}/sitemap/pages-1.xml`,
+    weights: {},
   },
   {
     apiFormat: "text/plain",

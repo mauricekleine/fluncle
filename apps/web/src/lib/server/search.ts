@@ -51,6 +51,7 @@
 // rule. "Finding" stays the only named object in Fluncle's world.
 
 import { type SearchEntity, type SearchFilters, type SearchHit } from "@fluncle/contracts/orpc";
+import { slugify } from "@fluncle/contracts/util/galaxy-slug";
 import { parseKey } from "../key-camelot";
 import {
   isBareToken,
@@ -294,19 +295,33 @@ async function resolveEntity(query: string): Promise<SearchResult | null> {
     };
   }
 
-  const album = typedRow<{ album: string }>(
-    (
-      await db.execute({
-        args: [needle],
-        sql: `select album from tracks where lower(album) = ? limit 1`,
-      })
-    ).rows,
-  );
+  // The album probe seeks the `albums` ENTITY by its unique slug, never `lower(tracks.album)`.
+  // That equality was unindexable, so on a MISS — which is most queries, since most queries
+  // are not an album title — it scanned every row of `tracks`, on the hot path of the search
+  // box, growing 1:1 with the catalogue. The entity is slug-keyed and bounded by the archive:
+  // one index seek, at any catalogue size.
+  //
+  // It also resolves MORE, not less: the slug fold is punctuation-insensitive, so "Wormhole"
+  // and "wormhole." now ask the same question. What it stops resolving as an ENTITY is an
+  // album Fluncle has never certified anything on — which has no `albums` row and therefore no
+  // page to jump to, so calling it an entity was the lie. Its tracks are still found, by the
+  // FTS tier below, which indexes `tracks.album` for exactly this.
+  const albumSlug = slugify(needle);
+  const album = albumSlug
+    ? typedRow<{ name: string }>(
+        (
+          await db.execute({
+            args: [albumSlug],
+            sql: `select name from albums where slug = ? limit 1`,
+          })
+        ).rows,
+      )
+    : undefined;
 
   if (album) {
     return {
-      ...(await runFilters({ album: album.album }, DEFAULT_LIMIT)),
-      filters: { album: album.album },
+      ...(await runFilters({ album: album.name }, DEFAULT_LIMIT)),
+      filters: { album: album.name },
       kind: "entity",
     };
   }

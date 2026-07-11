@@ -66,16 +66,26 @@ function findings(count: number) {
   }));
 }
 
-/** N uncertified rows — no logId, ever. */
-function catalogue(count: number) {
-  return Array.from({ length: count }, (_value, index) => ({
-    albumImageUrl: undefined,
-    artists: ["Nu:Tone"],
-    spotifyUrl: "https://open.spotify.com/track/x",
-    title: `Deep cut ${index}`,
-    trackId: `c${index}`,
-  }));
+/**
+ * A slice of uncertified rows — no logId, ever. `total` is the entity's TRUE count, which the
+ * SQL counts and the gate keys off; `rendered` is how many the page actually got (capped at
+ * `GRAPH_PAGE_CATALOGUE_LIMIT`). They are the same number until an imprint gets crowded, and
+ * the whole point of the pair is that they may then differ.
+ */
+function catalogue(total: number, rendered = total) {
+  return {
+    total,
+    tracks: Array.from({ length: rendered }, (_value, index) => ({
+      albumImageUrl: undefined,
+      artists: ["Nu:Tone"],
+      spotifyUrl: "https://open.spotify.com/track/x",
+      title: `Deep cut ${index}`,
+      trackId: `c${index}`,
+    })),
+  };
 }
+
+const NO_CATALOGUE = { total: 0, tracks: [] };
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -86,8 +96,8 @@ beforeEach(() => {
   listArtistsByAlbum.mockResolvedValue([]);
   getFindingsByLabel.mockResolvedValue([]);
   getFindingsByAlbum.mockResolvedValue([]);
-  listCatalogueTracksByLabel.mockResolvedValue([]);
-  listCatalogueTracksByAlbum.mockResolvedValue([]);
+  listCatalogueTracksByLabel.mockResolvedValue(NO_CATALOGUE);
+  listCatalogueTracksByAlbum.mockResolvedValue(NO_CATALOGUE);
 });
 
 describe("the label page", () => {
@@ -103,6 +113,30 @@ describe("the label page", () => {
     const data = await resolveLabelPageData("hospital-records");
 
     expect(data).toMatchObject({ indexable: false, status: "found" });
+  });
+
+  it("404s a label with no findings, however many crawled rows hang off it", async () => {
+    // The catalogue DEEPENS a page, it never CREATES one. A label the crawler discovered has
+    // a `labels` row (that row IS the ruling queue) and can carry hundreds of crawled tracks —
+    // and no page, because Fluncle has never certified a thing on it. Without this, a wide
+    // crawl publishes one indexable doorway page per discovered imprint.
+    getFindingsByLabel.mockResolvedValue([]);
+    listCatalogueTracksByLabel.mockResolvedValue(catalogue(400, 100));
+
+    expect(await resolveLabelPageData("metalheadz")).toEqual({ status: "missing" });
+  });
+
+  it("gates on the entity's TRUE catalogue total, never the rendered slice", async () => {
+    // A 3,000-row imprint and a 100-row one must not read as the same page to the gate.
+    getFindingsByLabel.mockResolvedValue(findings(1));
+    listCatalogueTracksByLabel.mockResolvedValue(catalogue(3000, 100));
+
+    const data = await resolveLabelPageData("hospital-records");
+
+    expect(data).toMatchObject({ indexable: true });
+    // ...and the PAGE only ever carries the slice — the markup, the hydration payload and the
+    // JSON-LD are all bounded by this one array.
+    expect(data.status === "found" && data.catalogue).toHaveLength(100);
   });
 
   it("indexes at the floor, on findings alone", async () => {
@@ -134,6 +168,13 @@ describe("the album page", () => {
     getAlbumBySlug.mockResolvedValue(undefined);
 
     expect(await resolveAlbumPageData("nope")).toEqual({ status: "missing" });
+  });
+
+  it("404s an album with no findings — the same rule the label page carries", async () => {
+    getFindingsByAlbum.mockResolvedValue([]);
+    listCatalogueTracksByAlbum.mockResolvedValue(catalogue(12));
+
+    expect(await resolveAlbumPageData("wormhole")).toEqual({ status: "missing" });
   });
 
   it("stays out of the index below the renderable-track floor", async () => {

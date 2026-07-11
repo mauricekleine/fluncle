@@ -32,7 +32,7 @@ import {
 type LabelPageData =
   | {
       artists: ArtistChip[];
-      /** Uncertified tracks on this label. Empty until the catalogue lands. */
+      /** Uncertified tracks on this label — a capped SLICE (`GRAPH_PAGE_CATALOGUE_LIMIT`). */
       catalogue: CatalogueTrackItem[];
       findings: TrackListItem[];
       indexable: boolean;
@@ -45,6 +45,26 @@ type LabelPageData =
 /**
  * Resolve the label page's data. Extracted from the server fn so the indexability decision
  * is unit-testable (see -label-page.test.ts), the `resolveArtistPageData` precedent.
+ *
+ * ── A LABEL WITH NO FINDING HAS NO PAGE ────────────────────────────────────────────────
+ * The album entity is minted ONLY off a certified finding, and album-entity.md gives the
+ * reason in one line: an entity earns a public page because Fluncle FOUND something on it.
+ * A LABEL row cannot honour that as a WRITE rule — the crawler has to mint one for every
+ * imprint it discovers, because the `undecided` row IS the operator's ruling queue
+ * (catalogue-crawler.md, "the widening loop"). So the label pays the same rule on the READ
+ * side instead: a label carrying zero findings resolves as MISSING, and `/label/<slug>`
+ * 404s.
+ *
+ * Without it, a wide crawl publishes one indexable page per discovered imprint whose entire
+ * content is a wall of Spotify outlinks under the line "Nothing logged off this one yet."
+ * That is a doorway page by Google's own definition, and it shipped at scale: measured on a
+ * 10,800-row synthetic catalogue, EIGHT such pages were live, indexable, and — because
+ * `listLabelsWithFindingCounts` inner-joins `findings` — absent from the sitemap, breaking
+ * the invariant album-entity.md states outright ("an indexable page is never orphaned from
+ * it").
+ *
+ * The rule that falls out is the one worth naming: **the catalogue DEEPENS a page, it never
+ * CREATES one.**
  */
 export async function resolveLabelPageData(slug: string): Promise<LabelPageData> {
   const label = await getLabelBySlug(slug);
@@ -59,15 +79,23 @@ export async function resolveLabelPageData(slug: string): Promise<LabelPageData>
     listArtistsByLabel(label.id),
   ]);
 
+  // Zero findings = no page, however many crawled rows hang off the imprint.
+  if (findings.length === 0) {
+    return { status: "missing" };
+  }
+
   return {
     artists,
-    catalogue,
+    catalogue: catalogue.tracks,
     findings,
     // Thin-content gate: index only past LABEL_INDEX_MIN_TRACKS RENDERABLE tracks — the
     // findings plus the quieter rows, because both are real content on the page. Below it
     // the page still serves 200 but is noindex + out of the sitemap (the
     // ARTIST_INDEX_MIN_FINDINGS precedent; the sitemap keys off the same numbers).
-    indexable: findings.length + catalogue.length >= LABEL_INDEX_MIN_TRACKS,
+    //
+    // It counts the entity's TRUE catalogue total, never the rendered slice — a 3,000-row
+    // imprint and a 100-row one must not read as the same page to the gate.
+    indexable: findings.length + catalogue.total >= LABEL_INDEX_MIN_TRACKS,
     name: label.name,
     slug: label.slug,
     status: "found",

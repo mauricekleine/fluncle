@@ -41,6 +41,7 @@ import { Route as ArtistsIndexRouteImport } from './routes/artists.index'
 import { Route as AlbumsIndexRouteImport } from './routes/albums.index'
 import { Route as AdminIndexRouteImport } from './routes/admin/index'
 import { Route as StoriesLogIdRouteImport } from './routes/stories.$logId'
+import { Route as SitemapShardRouteImport } from './routes/sitemap.$shard'
 import { Route as NewsletterNumberRouteImport } from './routes/newsletter.$number'
 import { Route as LogbookSectorRouteImport } from './routes/logbook.$sector'
 import { Route as LogLogIdRouteImport } from './routes/log.$logId'
@@ -265,6 +266,11 @@ const AdminIndexRoute = AdminIndexRouteImport.update({
 const StoriesLogIdRoute = StoriesLogIdRouteImport.update({
   id: '/stories/$logId',
   path: '/stories/$logId',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SitemapShardRoute = SitemapShardRouteImport.update({
+  id: '/sitemap/$shard',
+  path: '/sitemap/$shard',
   getParentRoute: () => rootRouteImport,
 } as any)
 const NewsletterNumberRoute = NewsletterNumberRouteImport.update({
@@ -659,6 +665,7 @@ export interface FileRoutesByFullPath {
   '/log/$logId': typeof LogLogIdRoute
   '/logbook/$sector': typeof LogbookSectorRoute
   '/newsletter/$number': typeof NewsletterNumberRoute
+  '/sitemap/$shard': typeof SitemapShardRoute
   '/stories/$logId': typeof StoriesLogIdRoute
   '/admin/': typeof AdminIndexRoute
   '/albums/': typeof AlbumsIndexRoute
@@ -755,6 +762,7 @@ export interface FileRoutesByTo {
   '/log/$logId': typeof LogLogIdRoute
   '/logbook/$sector': typeof LogbookSectorRoute
   '/newsletter/$number': typeof NewsletterNumberRoute
+  '/sitemap/$shard': typeof SitemapShardRoute
   '/stories/$logId': typeof StoriesLogIdRoute
   '/admin': typeof AdminIndexRoute
   '/albums': typeof AlbumsIndexRoute
@@ -854,6 +862,7 @@ export interface FileRoutesById {
   '/log/$logId': typeof LogLogIdRoute
   '/logbook/$sector': typeof LogbookSectorRoute
   '/newsletter/$number': typeof NewsletterNumberRoute
+  '/sitemap/$shard': typeof SitemapShardRoute
   '/stories/$logId': typeof StoriesLogIdRoute
   '/admin/': typeof AdminIndexRoute
   '/albums/': typeof AlbumsIndexRoute
@@ -954,6 +963,7 @@ export interface FileRouteTypes {
     | '/log/$logId'
     | '/logbook/$sector'
     | '/newsletter/$number'
+    | '/sitemap/$shard'
     | '/stories/$logId'
     | '/admin/'
     | '/albums/'
@@ -1050,6 +1060,7 @@ export interface FileRouteTypes {
     | '/log/$logId'
     | '/logbook/$sector'
     | '/newsletter/$number'
+    | '/sitemap/$shard'
     | '/stories/$logId'
     | '/admin'
     | '/albums'
@@ -1148,6 +1159,7 @@ export interface FileRouteTypes {
     | '/log/$logId'
     | '/logbook/$sector'
     | '/newsletter/$number'
+    | '/sitemap/$shard'
     | '/stories/$logId'
     | '/admin/'
     | '/albums/'
@@ -1230,6 +1242,7 @@ export interface RootRouteChildren {
   LogLogIdRoute: typeof LogLogIdRoute
   LogbookSectorRoute: typeof LogbookSectorRoute
   NewsletterNumberRoute: typeof NewsletterNumberRoute
+  SitemapShardRoute: typeof SitemapShardRoute
   StoriesLogIdRoute: typeof StoriesLogIdRoute
   AlbumsIndexRoute: typeof AlbumsIndexRoute
   ArtistsIndexRoute: typeof ArtistsIndexRoute
@@ -1501,6 +1514,13 @@ declare module '@tanstack/react-router' {
       path: '/stories/$logId'
       fullPath: '/stories/$logId'
       preLoaderRoute: typeof StoriesLogIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/sitemap/$shard': {
+      id: '/sitemap/$shard'
+      path: '/sitemap/$shard'
+      fullPath: '/sitemap/$shard'
+      preLoaderRoute: typeof SitemapShardRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/newsletter/$number': {
@@ -2045,6 +2065,7 @@ const rootRouteChildren: RootRouteChildren = {
   LogLogIdRoute: LogLogIdRoute,
   LogbookSectorRoute: LogbookSectorRoute,
   NewsletterNumberRoute: NewsletterNumberRoute,
+  SitemapShardRoute: SitemapShardRoute,
   StoriesLogIdRoute: StoriesLogIdRoute,
   AlbumsIndexRoute: AlbumsIndexRoute,
   ArtistsIndexRoute: ArtistsIndexRoute,
