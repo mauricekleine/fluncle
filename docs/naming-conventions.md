@@ -230,7 +230,7 @@ So the convention's job at the boundary is narrow: make every _machine_ name der
 
 When you add a public operation — a CLI command, an API route, an MCP tool, an SSH deep link, or an admin action — name it once, then derive:
 
-1. **Pick the canonical op:** `verb_noun`, where `verb` is in the closed set (`list`, `get`, `search`, `submit`, `subscribe`, `create`, `update`, `delete`, `publish`, or a named non-CRUD action like `enrich`/`observe`/`draft`/`distribute`/`finalize`/`requeue`/`purge`/`capture`/`resync`/`resolve`/`migrate`) and `noun` is the singular machine noun (`track`, `mixtape`, `submission`, `newsletter`, `preview`, `post`). Add it to the registry.
+1. **Pick the canonical op:** `verb_noun`, where `verb` is in the closed set (`list`, `get`, `search`, `submit`, `subscribe`, `create`, `update`, `delete`, `publish`, or a named non-CRUD action like `enrich`/`observe`/`draft`/`distribute`/`finalize`/`requeue`/`purge`/`capture`/`resync`/`resolve`/`migrate`/`rank`) and `noun` is the singular machine noun (`track`, `mixtape`, `submission`, `newsletter`, `preview`, `post`). Add it to the registry.
 2. **Derive the names, don't invent them:**
    - MCP/WebMCP tool = the op verbatim, `snake_case` (`enrich_track`). Mirror server `mcp.ts` and browser `webmcp.ts` together.
    - OpenAPI `operationId` = the op, `camelCase` (`enrichTrack`).

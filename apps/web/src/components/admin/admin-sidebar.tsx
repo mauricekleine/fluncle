@@ -14,6 +14,7 @@ import {
   SignOutIcon,
   SquaresFourIcon,
   TagIcon,
+  BinocularsIcon,
   UsersThreeIcon,
   VinylRecordIcon,
   WaveTriangleIcon,
@@ -65,6 +66,7 @@ import { listTracks } from "@/lib/server/tracks";
 /** A sidebar entry's key. A page passes the entry it OWNS as `current`. */
 export type AdminNavCurrent =
   | "artists"
+  | "catalogue"
   | "clips"
   | "costs"
   | "dashboard"
@@ -86,6 +88,7 @@ export type AdminNavCurrent =
 type AdminNavPath =
   | "/admin"
   | "/admin/artists"
+  | "/admin/catalogue"
   | "/admin/clips"
   | "/admin/costs"
   | "/admin/findings"
@@ -156,6 +159,12 @@ const OBJECT_SECTIONS: NavSection[] = [
       },
       { icon: UsersThreeIcon, key: "artists", label: "Artists", to: "/admin/artists" },
       { icon: TagIcon, key: "labels", label: "Labels", to: "/admin/labels" },
+      // The Ear: every track the archive knows and Fluncle never logged, ranked by how close
+      // it sits to something he did (docs/the-ear.md). It sits with the finding-adjacent
+      // objects because that is what it is FOR — the thing a row here becomes is a finding.
+      // No count badge: the honest number is "how many are worth your time", and a COUNT
+      // cannot answer that. A telescope with a backlog badge is a conveyor belt.
+      { icon: BinocularsIcon, key: "catalogue", label: "Catalogue", to: "/admin/catalogue" },
       { icon: PlanetIcon, key: "galaxies", label: "Galaxies", to: "/admin/galaxies" },
     ],
     key: "objects",

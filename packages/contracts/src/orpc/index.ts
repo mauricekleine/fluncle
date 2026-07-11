@@ -24,6 +24,7 @@
 import { adminArtistsContract } from "./admin-artists";
 import { adminAttentionContract } from "./admin-attention";
 import { adminBackfillsContract } from "./admin-backfills";
+import { adminCatalogueContract } from "./admin-catalogue";
 import { adminCostsContract } from "./admin-costs";
 import { adminGalaxiesContract } from "./admin-galaxies";
 import { artistsContract } from "./artists";
@@ -87,6 +88,16 @@ export {
   getAttention,
 } from "./admin-attention";
 export { backfillDiscogs, backfillLastfm } from "./admin-backfills";
+export {
+  adminCatalogueContract,
+  CapturePriorityReasonSchema,
+  CatalogueLensSchema,
+  CatalogueMatchSchema,
+  CatalogueSummarySchema,
+  CatalogueTrackItemSchema,
+  listCatalogueTracks,
+  rankCatalogue,
+} from "./admin-catalogue";
 export {
   adminLabelsContract,
   LabelAdminItemSchema,
@@ -222,6 +233,7 @@ export const contract = {
   ...adminArtistsContract,
   ...adminAttentionContract,
   ...adminBackfillsContract,
+  ...adminCatalogueContract,
   ...adminCostsContract,
   ...adminGalaxiesContract,
   ...artistsContract,

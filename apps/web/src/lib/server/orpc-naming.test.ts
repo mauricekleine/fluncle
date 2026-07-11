@@ -76,6 +76,12 @@ const APPROVED_VERBS = new Set<string>([
   // The sibling of `requeue` on the video lifecycle:
   // `requeue_video` clears the render gates, `purge_video` clears the edge cache.
   "purge",
+  // `rank` (precompute each catalogue track's nearest finding + its capture priority) —
+  // added deliberately with The Ear's `rank_catalogue` sweep. Distinct from every verb
+  // already here: it neither fills missing data (`backfill`) nor moves it (`migrate`) nor
+  // measures it (`enrich`) — it ORDERS an existing corpus against Fluncle's taste, and the
+  // ordering IS the product.
+  "rank",
   "render",
   // `requeue` (put a finding's video back on the render queue) — ratified into the
   // action set with the `requeue_video` re-render command.

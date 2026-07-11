@@ -63,6 +63,7 @@ import { Route as AdminGalaxiesRouteImport } from './routes/admin/galaxies'
 import { Route as AdminFindingsRouteImport } from './routes/admin/findings'
 import { Route as AdminCostsRouteImport } from './routes/admin/costs'
 import { Route as AdminClipsRouteImport } from './routes/admin/clips'
+import { Route as AdminCatalogueRouteImport } from './routes/admin/catalogue'
 import { Route as AdminArtistsRouteImport } from './routes/admin/artists'
 import { Route as ApiV1StatusRouteImport } from './routes/api/v1/status'
 import { Route as ApiV1PostmanDotjsonRouteImport } from './routes/api/v1/postman[.]json'
@@ -372,6 +373,11 @@ const AdminClipsRoute = AdminClipsRouteImport.update({
   path: '/clips',
   getParentRoute: () => AdminRouteRoute,
 } as any)
+const AdminCatalogueRoute = AdminCatalogueRouteImport.update({
+  id: '/catalogue',
+  path: '/catalogue',
+  getParentRoute: () => AdminRouteRoute,
+} as any)
 const AdminArtistsRoute = AdminArtistsRouteImport.update({
   id: '/artists',
   path: '/artists',
@@ -602,6 +608,7 @@ export interface FileRoutesByFullPath {
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/status': typeof StatusRoute
   '/admin/artists': typeof AdminArtistsRoute
+  '/admin/catalogue': typeof AdminCatalogueRoute
   '/admin/clips': typeof AdminClipsRoute
   '/admin/costs': typeof AdminCostsRoute
   '/admin/findings': typeof AdminFindingsRoute
@@ -693,6 +700,7 @@ export interface FileRoutesByTo {
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/status': typeof StatusRoute
   '/admin/artists': typeof AdminArtistsRoute
+  '/admin/catalogue': typeof AdminCatalogueRoute
   '/admin/clips': typeof AdminClipsRoute
   '/admin/costs': typeof AdminCostsRoute
   '/admin/findings': typeof AdminFindingsRoute
@@ -787,6 +795,7 @@ export interface FileRoutesById {
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/status': typeof StatusRoute
   '/admin/artists': typeof AdminArtistsRoute
+  '/admin/catalogue': typeof AdminCatalogueRoute
   '/admin/clips': typeof AdminClipsRoute
   '/admin/costs': typeof AdminCostsRoute
   '/admin/findings': typeof AdminFindingsRoute
@@ -882,6 +891,7 @@ export interface FileRouteTypes {
     | '/sitemap.xml'
     | '/status'
     | '/admin/artists'
+    | '/admin/catalogue'
     | '/admin/clips'
     | '/admin/costs'
     | '/admin/findings'
@@ -973,6 +983,7 @@ export interface FileRouteTypes {
     | '/sitemap.xml'
     | '/status'
     | '/admin/artists'
+    | '/admin/catalogue'
     | '/admin/clips'
     | '/admin/costs'
     | '/admin/findings'
@@ -1066,6 +1077,7 @@ export interface FileRouteTypes {
     | '/sitemap.xml'
     | '/status'
     | '/admin/artists'
+    | '/admin/catalogue'
     | '/admin/clips'
     | '/admin/costs'
     | '/admin/findings'
@@ -1593,6 +1605,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminClipsRouteImport
       parentRoute: typeof AdminRouteRoute
     }
+    '/admin/catalogue': {
+      id: '/admin/catalogue'
+      path: '/catalogue'
+      fullPath: '/admin/catalogue'
+      preLoaderRoute: typeof AdminCatalogueRouteImport
+      parentRoute: typeof AdminRouteRoute
+    }
     '/admin/artists': {
       id: '/admin/artists'
       path: '/artists'
@@ -1857,6 +1876,7 @@ declare module '@tanstack/react-router' {
 
 interface AdminRouteRouteChildren {
   AdminArtistsRoute: typeof AdminArtistsRoute
+  AdminCatalogueRoute: typeof AdminCatalogueRoute
   AdminClipsRoute: typeof AdminClipsRoute
   AdminCostsRoute: typeof AdminCostsRoute
   AdminFindingsRoute: typeof AdminFindingsRoute
@@ -1876,6 +1896,7 @@ interface AdminRouteRouteChildren {
 
 const AdminRouteRouteChildren: AdminRouteRouteChildren = {
   AdminArtistsRoute: AdminArtistsRoute,
+  AdminCatalogueRoute: AdminCatalogueRoute,
   AdminClipsRoute: AdminClipsRoute,
   AdminCostsRoute: AdminCostsRoute,
   AdminFindingsRoute: AdminFindingsRoute,

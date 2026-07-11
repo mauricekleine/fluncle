@@ -33,6 +33,7 @@ import { isApiFaultData } from "./orpc/_shared";
 import { adminArtistsHandlers } from "./orpc/admin-artists";
 import { adminAttentionHandlers } from "./orpc/admin-attention";
 import { adminBackfillsHandlers } from "./orpc/admin-backfills";
+import { adminCatalogueHandlers } from "./orpc/admin-catalogue";
 import { adminCostsHandlers } from "./orpc/admin-costs";
 import { adminGalaxiesHandlers } from "./orpc/admin-galaxies";
 import { artistsHandlers } from "./orpc/artists";
@@ -82,6 +83,7 @@ export const router = os.router({
   ...adminArtistsHandlers(os),
   ...adminAttentionHandlers(os),
   ...adminBackfillsHandlers(os),
+  ...adminCatalogueHandlers(os),
   ...adminCostsHandlers(os),
   ...adminGalaxiesHandlers(os),
   ...artistsHandlers(os),
