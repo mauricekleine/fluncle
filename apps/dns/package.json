@@ -1,0 +1,12 @@
+{
+  "name": "@fluncle/dns",
+  "version": "0.1.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "scripts": {
+    "build": "go build -o dist/fluncle-dns .",
+    "format": "gofmt -w .",
+    "lint": "go test ./...",
+    "typecheck": "go test ./..."
+  }
+}

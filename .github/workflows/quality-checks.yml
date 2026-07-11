@@ -39,7 +39,9 @@ jobs:
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: apps/ssh/go.mod
-          cache-dependency-path: apps/ssh/go.sum
+          cache-dependency-path: |
+            apps/ssh/go.sum
+            apps/dns/go.sum
 
       - name: Cache Bun packages
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
@@ -75,3 +77,15 @@ jobs:
 
       - name: Check Go formatting (apps/ssh)
         run: test -z "$(gofmt -l apps/ssh)"
+
+      - name: Build Go (apps/dns)
+        run: go build -C apps/dns ./...
+
+      - name: Vet Go (apps/dns)
+        run: go vet -C apps/dns ./...
+
+      - name: Test Go (apps/dns)
+        run: go test -C apps/dns ./...
+
+      - name: Check Go formatting (apps/dns)
+        run: test -z "$(gofmt -l apps/dns)"
