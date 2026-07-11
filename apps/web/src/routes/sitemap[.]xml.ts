@@ -182,6 +182,9 @@ export const Route = createFileRoute("/sitemap.xml")({
 
         return new Response(xml, {
           headers: {
+            // The crawl cadence tolerates more staleness than the feeds: a longer
+            // CDN hold, with SWR keeping every repeat crawl free during a refresh.
+            "Cache-Control": "public, max-age=3600, s-maxage=21600, stale-while-revalidate=86400",
             "Content-Type": "application/xml; charset=utf-8",
           },
         });

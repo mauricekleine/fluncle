@@ -12,7 +12,12 @@ export const Route = createFileRoute("/8337c1b41068549f248bf56f1fc465df.txt")({
     handlers: {
       GET: () =>
         new Response(INDEXNOW_KEY, {
-          headers: { "Content-Type": "text/plain; charset=utf-8" },
+          headers: {
+            // A public, effectively-permanent ownership token — let IndexNow's
+            // verifier and the CDN cache it; SWR keeps every re-verify free.
+            "Cache-Control": "public, max-age=300, s-maxage=3600, stale-while-revalidate=86400",
+            "Content-Type": "text/plain; charset=utf-8",
+          },
         }),
     },
   },

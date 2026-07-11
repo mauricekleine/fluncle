@@ -85,6 +85,9 @@ ${entries.join("\n")}
 
         return new Response(xml, {
           headers: {
+            // Readers get a short max-age; the CDN holds s-maxage; SWR keeps
+            // every repeat poll free while a background refresh runs.
+            "Cache-Control": "public, max-age=300, s-maxage=3600, stale-while-revalidate=86400",
             "Content-Type": "application/atom+xml; charset=utf-8",
           },
         });

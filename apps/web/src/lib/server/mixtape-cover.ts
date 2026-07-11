@@ -1,7 +1,7 @@
 import { ImageResponse } from "workers-og";
 import { FOUND_BASE } from "@/lib/media";
 import { getMixtapeForRender } from "@/lib/server/mixtapes";
-import { BRAND, brandFonts, satoriText } from "@/lib/server/satori-render";
+import { BRAND, OG_CACHE_CONTROL, brandFonts, satoriText } from "@/lib/server/satori-render";
 
 // The on-the-fly mixtape cover render, shared by the public cover route
 // (api/mixtape-cover.$logId.ts) and the YouTube finalize (which sets it as the
@@ -12,7 +12,7 @@ import { BRAND, brandFonts, satoriText } from "@/lib/server/satori-render";
 // TYPE: the cover carries only brand marks — `MIXTAPE #N` and the Log ID coordinate — so
 // it is Oxanium throughout, and legitimately so (DESIGN.md §3: Oxanium speaks for the brand
 // and the numbers). No body face is registered here: there is no reading text to set. The
-// One Box Rule is baked into the cuts (lib/server/og-fonts.ts).
+// One Box Rule is baked into the cuts (lib/server/satori-render.ts).
 
 const BG_BASE = `${FOUND_BASE}/mixtape`;
 
@@ -108,6 +108,7 @@ export async function renderMixtapeCover(
 
   return new ImageResponse(html, {
     fonts: brandFonts(),
+    headers: { "Cache-Control": OG_CACHE_CONTROL },
     height,
     width,
   });
