@@ -226,10 +226,34 @@ export function createRenderer(container: HTMLElement): Renderer {
   let spotifyRect: HitRect | undefined;
   let volumeRect: HitRect | undefined;
 
-  // Oxanium is preloaded by the document; nudge the canvas-visible faces so
-  // the first painted frame doesn't fall back to the system sans.
+  // Warm every canvas-visible face, or the first painted frames fall back and the
+  // pixel grid visibly jumps when the real face lands.
   document.fonts?.load('800 22px "Oxanium"').catch(() => undefined);
   document.fonts?.load('400 10px "Oxanium"').catch(() => undefined);
+  document.fonts?.load('700 11px "Space Grotesk"').catch(() => undefined);
+  document.fonts?.load('400 9px "Space Grotesk"').catch(() => undefined);
+
+  /**
+   * Draw text hanging from its CAP TOP, not from the canvas "top" baseline.
+   *
+   * Canvas `textBaseline = "top"` is measured from the font's ASCENT — and our
+   * @font-face metric overrides deliberately move the ascent (DESIGN.md's One Box
+   * Rule). So anything positioned off "top" silently shifts whenever a face is
+   * re-normalised: normalising Oxanium moved its ascent from .79em to .97em and
+   * dropped this HUD 4px at 22px, on a 270px-tall canvas.
+   *
+   * Measuring the cap height instead makes the placement independent of the font's
+   * metric box, so it survives the next normalisation too.
+   */
+  function fillTextFromCapTop(text: string, x: number, capTopY: number): void {
+    const previous = ctx.textBaseline;
+
+    ctx.textBaseline = "alphabetic";
+    // 'H' rather than the string itself: a string of digits, or one with no
+    // ascenders, would otherwise measure a different height and hop.
+    ctx.fillText(text, x, capTopY + ctx.measureText("H").actualBoundingBoxAscent);
+    ctx.textBaseline = previous;
+  }
 
   function earthSprite(size: number): HTMLCanvasElement {
     const rounded = Math.max(8, Math.min(150, Math.round(size / 2) * 2));
@@ -862,7 +886,7 @@ export function createRenderer(container: HTMLElement): Renderer {
     ctx.globalAlpha = blink;
     ctx.textAlign = "center";
     ctx.fillStyle = palette.goldBright;
-    ctx.font = '8px "Oxanium", monospace';
+    ctx.font = '8px "Oxanium", "Space Grotesk", ui-sans-serif, system-ui, sans-serif';
     ctx.fillText(
       view.touch ? "Tap anywhere to fly on" : "Press any key to fly on",
       cx,
@@ -926,18 +950,17 @@ export function createRenderer(container: HTMLElement): Renderer {
   }
 
   function drawTally(sim: SimState): void {
-    ctx.font = '800 14px "Oxanium", monospace';
+    ctx.font = '800 14px "Oxanium", "Space Grotesk", ui-sans-serif, system-ui, sans-serif';
     ctx.fillStyle = palette.cream;
     ctx.textAlign = "left";
-    ctx.textBaseline = "top";
 
     const count = `${sim.collectedCount}/${sim.stars.length}`;
 
-    ctx.fillText(count, 8, 7);
+    fillTextFromCapTop(count, 8, 7);
 
     const countWidth = ctx.measureText(count).width;
 
-    ctx.font = '8px "Oxanium", monospace';
+    ctx.font = '8px "Oxanium", "Space Grotesk", ui-sans-serif, system-ui, sans-serif';
     ctx.fillStyle = palette.creamMuted;
     ctx.fillText("bangers", 8 + countWidth + 5, 12);
   }
@@ -951,7 +974,7 @@ export function createRenderer(container: HTMLElement): Renderer {
     const low = fraction <= 0.25;
     const blink = low && !reducedMotion && Math.sin(nowS * 7) > 0;
 
-    ctx.font = '7px "Oxanium", monospace';
+    ctx.font = '7px "Oxanium", "Space Grotesk", ui-sans-serif, system-ui, sans-serif';
     ctx.fillStyle = palette.creamDim;
     ctx.fillText("Fuel", x, y - 9);
 
@@ -1034,7 +1057,7 @@ export function createRenderer(container: HTMLElement): Renderer {
     const x = width - 66;
     const y = height - 9;
 
-    ctx.font = '8px "Oxanium", monospace';
+    ctx.font = '8px "Oxanium", "Space Grotesk", ui-sans-serif, system-ui, sans-serif';
     ctx.textAlign = "left";
 
     const { sim } = view;
@@ -1053,7 +1076,7 @@ export function createRenderer(container: HTMLElement): Renderer {
   }
 
   function drawTelemetry(view: RenderView): void {
-    ctx.font = "8px ui-sans-serif, system-ui, sans-serif";
+    ctx.font = '8px "Space Grotesk", ui-sans-serif, system-ui, sans-serif';
     ctx.textAlign = "center";
 
     for (let index = 0; index < view.telemetry.length; index++) {
@@ -1092,20 +1115,20 @@ export function createRenderer(container: HTMLElement): Renderer {
     ctx.fillRect(x, y, cardWidth, cardHeight);
 
     ctx.fillStyle = palette.gold;
-    ctx.font = '9px "Oxanium", monospace';
+    ctx.font = '9px "Oxanium", "Space Grotesk", ui-sans-serif, system-ui, sans-serif';
     ctx.textAlign = "left";
     ctx.fillText(`fluncle://${card.logId}`, x + 8, y + 7);
 
     ctx.fillStyle = palette.cream;
-    ctx.font = "800 11px ui-sans-serif, system-ui, sans-serif";
+    ctx.font = '700 11px "Space Grotesk", ui-sans-serif, system-ui, sans-serif';
     ctx.fillText(clip(card.title, cardWidth - 16), x + 8, y + 19);
 
     ctx.fillStyle = palette.creamMuted;
-    ctx.font = "9px ui-sans-serif, system-ui, sans-serif";
+    ctx.font = '9px "Space Grotesk", ui-sans-serif, system-ui, sans-serif';
     ctx.fillText(clip(card.artistLine, cardWidth - 16), x + 8, y + 33);
 
     ctx.fillStyle = card.refuelling ? palette.goldDim : palette.creamDim;
-    ctx.font = "8px ui-sans-serif, system-ui, sans-serif";
+    ctx.font = '8px "Space Grotesk", ui-sans-serif, system-ui, sans-serif';
     ctx.fillText(card.refuelling ? "Banger logged · refuelling" : "Banger logged", x + 8, y + 45);
 
     // The way out to the music itself; pressing it never steers the ship.
@@ -1137,13 +1160,13 @@ export function createRenderer(container: HTMLElement): Renderer {
   function drawTouchHints(): void {
     ctx.globalAlpha = 0.18;
     ctx.fillStyle = palette.cream;
-    ctx.font = '10px "Oxanium", monospace';
+    ctx.font = '10px "Oxanium", "Space Grotesk", ui-sans-serif, system-ui, sans-serif';
     ctx.textAlign = "left";
     ctx.fillText("◂", 7, height / 2);
     ctx.textAlign = "right";
     ctx.fillText("▸", width - 7, height / 2);
     ctx.textAlign = "center";
-    ctx.font = '6px "Oxanium", monospace';
+    ctx.font = '6px "Oxanium", "Space Grotesk", ui-sans-serif, system-ui, sans-serif';
     ctx.fillText("hold to boost", width / 2, height - 6);
     ctx.globalAlpha = 1;
     ctx.textAlign = "left";
@@ -1161,17 +1184,17 @@ export function createRenderer(container: HTMLElement): Renderer {
 
     ctx.textAlign = "center";
     ctx.fillStyle = palette.gold;
-    ctx.font = '800 21px "Oxanium", monospace';
+    ctx.font = '800 21px "Oxanium", "Space Grotesk", ui-sans-serif, system-ui, sans-serif';
     ctx.fillText("FLUNCLE'S GALAXY", cx, orbY + 32);
 
     ctx.fillStyle = palette.cream;
-    ctx.font = "9px ui-sans-serif, system-ui, sans-serif";
+    ctx.font = '9px "Space Grotesk", ui-sans-serif, system-ui, sans-serif';
     ctx.fillText("Every banger out there is a star.", cx, orbY + 58);
 
     // Same face and size as the subtitle (the sans renders cleanly at this
     // grid; 8px Oxanium doesn't); the muted ink keeps the hierarchy.
     ctx.fillStyle = palette.creamMuted;
-    ctx.font = "9px ui-sans-serif, system-ui, sans-serif";
+    ctx.font = '9px "Space Grotesk", ui-sans-serif, system-ui, sans-serif';
 
     const steerLine = view.touch
       ? "Touch sides to steer · hold centre to boost"
@@ -1203,7 +1226,7 @@ export function createRenderer(container: HTMLElement): Renderer {
 
     ctx.globalAlpha = blink;
     ctx.fillStyle = palette.goldBright;
-    ctx.font = '8px "Oxanium", monospace';
+    ctx.font = '8px "Oxanium", "Space Grotesk", ui-sans-serif, system-ui, sans-serif';
     ctx.fillText(
       view.touch ? "Tap to launch" : "Press any key to launch",
       cx,
@@ -1216,7 +1239,7 @@ export function createRenderer(container: HTMLElement): Renderer {
 
     if (status) {
       ctx.fillStyle = palette.creamDim;
-      ctx.font = '7px "Oxanium", monospace';
+      ctx.font = '7px "Oxanium", "Space Grotesk", ui-sans-serif, system-ui, sans-serif';
       ctx.fillText(status, cx, height - 12);
     }
 
@@ -1262,7 +1285,7 @@ export function createRenderer(container: HTMLElement): Renderer {
       ctx.globalAlpha = 1 - t * 2;
       ctx.textAlign = "center";
       ctx.fillStyle = palette.creamMuted;
-      ctx.font = '7px "Oxanium", monospace';
+      ctx.font = '7px "Oxanium", "Space Grotesk", ui-sans-serif, system-ui, sans-serif';
       ctx.fillText("leaving home", cx, horizon - 30);
       ctx.globalAlpha = 1;
       ctx.textAlign = "left";
@@ -1281,7 +1304,7 @@ export function createRenderer(container: HTMLElement): Renderer {
     if (alpha > 0.8) {
       ctx.textAlign = "center";
       ctx.fillStyle = palette.creamMuted;
-      ctx.font = '8px "Oxanium", monospace';
+      ctx.font = '8px "Oxanium", "Space Grotesk", ui-sans-serif, system-ui, sans-serif';
       ctx.fillText("Recovered adrift. Towed home.", width / 2, height / 2 - 4);
       ctx.fillStyle = palette.creamDim;
       ctx.fillText("The log starts over.", width / 2, height / 2 + 8);
@@ -1302,11 +1325,11 @@ export function createRenderer(container: HTMLElement): Renderer {
 
     ctx.textAlign = "center";
     ctx.fillStyle = palette.gold;
-    ctx.font = '800 16px "Oxanium", monospace';
+    ctx.font = '800 16px "Oxanium", "Space Grotesk", ui-sans-serif, system-ui, sans-serif';
     ctx.fillText("Galaxy logged.", cx, 22);
 
     ctx.fillStyle = palette.cream;
-    ctx.font = '10px "Oxanium", monospace';
+    ctx.font = '10px "Oxanium", "Space Grotesk", ui-sans-serif, system-ui, sans-serif';
     ctx.fillText(`${sim.collectedCount}/${sim.stars.length} bangers`, cx, 42);
 
     // The full log rolls like credits, oldest coordinate first.
@@ -1335,12 +1358,12 @@ export function createRenderer(container: HTMLElement): Renderer {
       }
 
       ctx.fillStyle = palette.goldDim;
-      ctx.font = '7px "Oxanium", monospace';
+      ctx.font = '7px "Oxanium", "Space Grotesk", ui-sans-serif, system-ui, sans-serif';
       ctx.textAlign = "right";
       ctx.fillText(star.logId, cx - 6, y);
 
       ctx.fillStyle = palette.creamMuted;
-      ctx.font = "7px ui-sans-serif, system-ui, sans-serif";
+      ctx.font = '7px "Space Grotesk", ui-sans-serif, system-ui, sans-serif';
       ctx.textAlign = "left";
       ctx.fillText(clip(`${star.artistLine} — ${star.title}`, cx - 16), cx + 2, y);
     }
@@ -1352,7 +1375,7 @@ export function createRenderer(container: HTMLElement): Renderer {
     ctx.globalAlpha = blink;
     ctx.textAlign = "center";
     ctx.fillStyle = palette.goldBright;
-    ctx.font = '8px "Oxanium", monospace';
+    ctx.font = '8px "Oxanium", "Space Grotesk", ui-sans-serif, system-ui, sans-serif';
     ctx.fillText(view.touch ? "Tap to fly again" : "Press enter to fly again", cx, height - 8);
     ctx.globalAlpha = 1;
     ctx.textAlign = "left";
@@ -1414,11 +1437,11 @@ export function createRenderer(container: HTMLElement): Renderer {
 
     ctx.textAlign = "center";
     ctx.fillStyle = palette.cream;
-    ctx.font = "800 14px ui-sans-serif, system-ui, sans-serif";
+    ctx.font = '700 14px "Space Grotesk", ui-sans-serif, system-ui, sans-serif';
     ctx.fillText("Paused", width / 2, baseY);
 
     ctx.fillStyle = palette.creamMuted;
-    ctx.font = "9px ui-sans-serif, system-ui, sans-serif";
+    ctx.font = '9px "Space Grotesk", ui-sans-serif, system-ui, sans-serif';
     ctx.fillText("The galaxy will wait.", width / 2, baseY + 18);
 
     let hintY = baseY + 36;
@@ -1426,7 +1449,7 @@ export function createRenderer(container: HTMLElement): Renderer {
     // Keyboard players get the chart reminder; touch has no atlas key.
     if (!view.touch) {
       ctx.fillStyle = palette.creamDim;
-      ctx.font = "8px ui-sans-serif, system-ui, sans-serif";
+      ctx.font = '8px "Space Grotesk", ui-sans-serif, system-ui, sans-serif';
       ctx.fillText("The atlas is on C.", width / 2, baseY + 32);
       hintY = baseY + 48;
     }
@@ -1435,7 +1458,7 @@ export function createRenderer(container: HTMLElement): Renderer {
 
     ctx.globalAlpha = blink;
     ctx.fillStyle = palette.goldBright;
-    ctx.font = '8px "Oxanium", monospace';
+    ctx.font = '8px "Oxanium", "Space Grotesk", ui-sans-serif, system-ui, sans-serif';
     ctx.fillText(view.touch ? "Tap to fly on" : "Esc to fly on", width / 2, hintY);
     ctx.globalAlpha = 1;
     ctx.textAlign = "left";
@@ -1552,13 +1575,12 @@ export function createRenderer(container: HTMLElement): Renderer {
 
     // The frame text: title, the growth caption, the way back.
     ctx.textAlign = "center";
-    ctx.textBaseline = "top";
     ctx.fillStyle = palette.cream;
-    ctx.font = '800 12px "Oxanium", monospace';
-    ctx.fillText("THE ATLAS", cx, 5);
+    ctx.font = '800 12px "Oxanium", "Space Grotesk", ui-sans-serif, system-ui, sans-serif';
+    fillTextFromCapTop("THE ATLAS", cx, 5);
 
     ctx.textAlign = "left";
-    ctx.font = '7px "Oxanium", monospace';
+    ctx.font = '7px "Oxanium", "Space Grotesk", ui-sans-serif, system-ui, sans-serif';
     ctx.fillStyle = palette.creamMuted;
     ctx.fillText(atlasCaption(stars), 8, height - 12);
 
@@ -1567,7 +1589,7 @@ export function createRenderer(container: HTMLElement): Renderer {
     ctx.globalAlpha = blink;
     ctx.textAlign = "right";
     ctx.fillStyle = palette.goldBright;
-    ctx.font = '7px "Oxanium", monospace';
+    ctx.font = '7px "Oxanium", "Space Grotesk", ui-sans-serif, system-ui, sans-serif';
     ctx.fillText("C to fly on", width - 8, height - 12);
     ctx.globalAlpha = 1;
     ctx.textAlign = "left";
@@ -1633,11 +1655,11 @@ export function createRenderer(container: HTMLElement): Renderer {
     const coordinate = `fluncle://${star.logId}`;
     const detail = `${star.artistLine} — ${star.title}`;
 
-    ctx.font = '9px "Oxanium", monospace';
+    ctx.font = '9px "Oxanium", "Space Grotesk", ui-sans-serif, system-ui, sans-serif';
 
     const coordinateWidth = ctx.measureText(coordinate).width;
 
-    ctx.font = "8px ui-sans-serif, system-ui, sans-serif";
+    ctx.font = '8px "Space Grotesk", ui-sans-serif, system-ui, sans-serif';
 
     const detailWidth = Math.min(ctx.measureText(detail).width, 170);
     const chipWidth = Math.round(Math.max(coordinateWidth, detailWidth)) + 12;
@@ -1656,12 +1678,11 @@ export function createRenderer(container: HTMLElement): Renderer {
     ctx.globalAlpha = 1;
 
     ctx.textAlign = "left";
-    ctx.textBaseline = "top";
     ctx.fillStyle = palette.gold;
-    ctx.font = '9px "Oxanium", monospace';
-    ctx.fillText(coordinate, chipX + 6, chipY + 4);
+    ctx.font = '9px "Oxanium", "Space Grotesk", ui-sans-serif, system-ui, sans-serif';
+    fillTextFromCapTop(coordinate, chipX + 6, chipY + 4);
     ctx.fillStyle = palette.cream;
-    ctx.font = "8px ui-sans-serif, system-ui, sans-serif";
+    ctx.font = '8px "Space Grotesk", ui-sans-serif, system-ui, sans-serif';
     ctx.fillText(clip(detail, chipWidth - 12), chipX + 6, chipY + 15);
   }
 
