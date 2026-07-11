@@ -529,6 +529,7 @@ const PUBLIC_OPERATION_IDS = [
   "mergePrivateGalaxyProgress",
   "registerDevice",
   "savePrivateFinding",
+  "searchArchive",
   "searchTracks",
   "submitTrack",
   "subscribeNewsletter",

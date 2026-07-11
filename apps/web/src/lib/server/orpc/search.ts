@@ -5,6 +5,7 @@
 
 import { ORPCError } from "@orpc/server";
 import { assertRateLimit } from "../rate-limit";
+import { searchArchive } from "../search";
 import { searchTrackCandidates, type TrackSearchResult } from "../spotify";
 import { apiFault, type Implementer } from "./_shared";
 
@@ -100,5 +101,33 @@ export function searchHandlers(os: Implementer) {
     }
   });
 
-  return { search_tracks: searchTracksHandler };
+  // `search_archive` — Fluncle's own search (lib/server/search.ts). Unlike `search_tracks`
+  // it burns no vendor token on a common query: three of its four tiers are pure database
+  // reads. The fourth can reach an LLM, so it carries the SAME shared limiter — a script
+  // grinding natural-language queries would be spending real money, and the limiter is what
+  // makes that bounded. A short query returns the empty envelope rather than a 400: this
+  // one is typed into a live dialog, so "not enough to go on yet" is a normal state, not an
+  // error.
+  const searchArchiveHandler = os.search_archive.handler(async ({ context, input }) => {
+    const query = input.q.trim();
+
+    if (query.length < MIN_QUERY_LENGTH) {
+      return { degraded: false, entities: [], kind: "empty", ok: true, results: [] } as const;
+    }
+
+    try {
+      await assertRateLimit({
+        action: "search_archive",
+        limit: SEARCH_LIMIT,
+        request: context.request,
+        windowMs: SEARCH_WINDOW_MS,
+      });
+
+      return { ok: true, ...(await searchArchive({ limit: input.limit, q: query })) } as const;
+    } catch (error) {
+      throw apiFault(error);
+    }
+  });
+
+  return { search_archive: searchArchiveHandler, search_tracks: searchTracksHandler };
 }

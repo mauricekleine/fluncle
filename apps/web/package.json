@@ -8,7 +8,7 @@
     "build": "bun run scripts/copy-sprites.ts && NODE_OPTIONS=--max-old-space-size=6144 vite build",
     "db:backfill": "bun run scripts/backfill-plan-recording-mixtape.ts && bun run scripts/backfill-embedding-blob.ts && bun run scripts/backfill-labels.ts && bun run scripts/backfill-albums.ts",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "drizzle-kit migrate",
+    "db:migrate": "drizzle-kit migrate && bun run scripts/ensure-search-index.ts",
     "db:pull-prod": "bun run scripts/db-pull-prod.ts",
     "db:refresh-dev": "bun run scripts/db-refresh.ts",
     "db:restore-drill": "bun run scripts/restore-drill.ts",

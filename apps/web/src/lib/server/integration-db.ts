@@ -13,6 +13,7 @@ import { type Client, createClient } from "@libsql/client";
 import { drizzle } from "drizzle-orm/libsql";
 import { migrate } from "drizzle-orm/libsql/migrator";
 import { fileURLToPath } from "node:url";
+import { ensureSearchIndex } from "../../db/search-index";
 
 const migrationsFolder = fileURLToPath(new URL("../../../drizzle", import.meta.url));
 
@@ -20,11 +21,17 @@ const migrationsFolder = fileURLToPath(new URL("../../../drizzle", import.meta.u
  * A fresh in-memory libSQL database with every generated Drizzle migration
  * applied. Each call is an isolated `:memory:` database (no cross-test leakage),
  * so a test can `beforeEach(async () => { db = await createIntegrationDb(); })`.
+ *
+ * The FTS5 search index is built here too, by the SAME `ensureSearchIndex` the deploy and
+ * every local dev boot run (`db:migrate`, see `src/db/search-index.ts`). It is not a
+ * migration — it is a derived artifact — so this is where a test picks it up, and it means
+ * the DDL under test is byte-identical to production's, exactly like the migrations are.
  */
 export async function createIntegrationDb(): Promise<Client> {
   const client = createClient({ url: ":memory:" });
 
   await migrate(drizzle(client), { migrationsFolder });
+  await ensureSearchIndex(client);
 
   return client;
 }

@@ -198,7 +198,18 @@ export { listPrivateSavedFindings, savePrivateFinding, unsavePrivateFinding } fr
 export { listMixtapes } from "./mixtapes";
 export { type NewsletterBody, subscribeNewsletter } from "./newsletter";
 export { getRadioNowPlaying, getRandomRadioTrack } from "./radio";
-export { searchTracks } from "./search";
+export {
+  searchArchive,
+  type SearchEntity,
+  SearchEntitySchema,
+  type SearchFilters,
+  SearchFiltersSchema,
+  type SearchHit,
+  SearchHitSchema,
+  type SearchKind,
+  SearchKindSchema,
+  searchTracks,
+} from "./search";
 export { listStories } from "./stories";
 export { type SubmissionBody, submitTrack } from "./submissions";
 export { getRandomTrack, getSimilarFindings, getTrack, listTracks } from "./tracks";

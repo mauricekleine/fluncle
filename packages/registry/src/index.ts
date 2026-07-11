@@ -542,6 +542,22 @@ export const SURFACES: readonly Surface[] = [
   {
     apiFormat: "application/json",
     discoveryUrl: `${SITE}/api/v1/openapi.json`,
+    exposedContent: [
+      "search Fluncle's archive: a coordinate (004.7.2I), an artist/label/album name, a bare word (FTS5), or a natural-language query",
+      "sonic search — 'tracks that sound like <a real track>', ranked by MuQ embedding distance",
+    ],
+    kind: "api",
+    name: "api.search.archive",
+    operatorNotes:
+      "The public read behind the ⌘K dialog (search_archive), and the primary navigation once the archive is deep. Four resolution tiers; only the fourth reaches an LLM (OpenRouter, 3s deadline) and it emits FILTERS, never rows. With no OPENROUTER_API_KEY it degrades to full-text and still answers — so it probes green unprovisioned.",
+    probeConfig: { cadenceMs: PROBE_CADENCE_MS, kind: "http", timeoutMs: PROBE_TIMEOUT_MS },
+    route: "/api/v1/search/archive",
+    url: `${SITE}/api/v1/search/archive?q=netsky`,
+    weights: { web: "primary" },
+  },
+  {
+    apiFormat: "application/json",
+    discoveryUrl: `${SITE}/api/v1/openapi.json`,
     exposedContent: ["submit a track for review (POST)"],
     kind: "api",
     name: "api.submissions",

@@ -650,6 +650,10 @@ export const costEvents = sqliteTable(
         "newsletter",
         "studio-clip",
         "cluster",
+        // The only step that is not per-finding pipeline work: the search resolver's
+        // language→filters LLM call (lib/server/search-llm.ts). It carries no log_id/
+        // track_id (a search is not about one track), which the ledger already allows.
+        "search",
       ],
     }).notNull(),
     // finding id (no declared FK — socialPosts.trackId / user_galaxy_collections

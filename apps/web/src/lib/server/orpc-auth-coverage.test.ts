@@ -136,6 +136,11 @@ const PUBLIC_UNAUTH_OPS = new Set<string>([
   "list_mixtapes",
   "list_stories",
   "list_tracks",
+  // Fluncle's own archive search — the public read behind the CMD+K dialog and, at
+  // catalogue scale, the primary navigation. Anonymous by design (it searches material that
+  // is already public on every /log page); the LLM tier it can reach is bounded by the same
+  // shared rate limiter `search_tracks` uses.
+  "search_archive",
   "search_tracks",
   // Anonymous public writes, each guarded in-handler (rate limit / review queue),
   // not by an auth tier — intentionally open to non-signed-in callers.
