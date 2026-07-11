@@ -228,9 +228,7 @@ The Friday newsletter ([docs/agents/newsletter-agent.md](../agents/newsletter-ag
 
 - **Confirm the Friday cadence** on a real tick — the cron is live, so this is a monitoring item: watch one real Friday 15:00 Amsterdam run to confirm it fires, authors only on a non-empty window, and re-offers an unsent draft rather than double-authoring.
 - **Galaxy grouping in the archive.** The archive groups editions by galaxy (Solar → Nebular → Lunar → Astral, the `editions.ts orderedGalaxies` helper) — but with manual vibe-tagging retired, that grouping now depends on the **audio-embedding clusters** (Phase 2 of _Audio embeddings_); until those land, a finding has no galaxy and falls to "Also found." (An archive-only concern — the letter copy no longer groups.)
-- **A newsletter edition NEVER gets a Log ID. Ruled 2026-07-11, and the roadmap item that proposed it was WRONG.** This doc previously asked for an edition to be "spine-native like a mixtape — a marked Log ID, a `/log/<id>` edition page". It was built, and the operator killed it on sight: **there is no canonical value in minting a coordinate for an email.** A Log ID is the coordinate of a _finding_ — a banger Fluncle went out and certified. A mixtape earns its `F` because it IS the findings, dreamed. An edition is a _report about_ findings; giving it a coordinate cheapens the one object the whole archive is built on. The scarcity of the coordinate is the point.
-  **The lesson, recorded because it cost a revert:** `AGENTS.md` says everything under `docs/planning/` is a non-canonical brainstorm, never a specification, and that canon (LORE / DESIGN / PRODUCT / VOICE) wins wherever a planning doc deviates. That rule existed precisely for this, and it was not applied — the roadmap item was treated as a spec.
-  What an edition may still get, if it earns it: a nicer `/newsletter/<n>` page rendered from the persisted payload. **No coordinate. No `/log/<id>`. No spine.**
+
 - **Confirm the Firecrawl scene-`tidbits` populate** on a real tick — they came back empty on an early run (the email renders fine without them, but they're the extra scene color).
 
 ### Audio embeddings — automatic sonic similarity + clusters
@@ -575,7 +573,7 @@ The Friday newsletter ([docs/agents/newsletter-agent.md](../agents/newsletter-ag
 
 - **Confirm the Friday cadence** on a real tick — the cron is live, so this is a monitoring item: watch one real Friday 15:00 Amsterdam run to confirm it fires, authors only on a non-empty window, and re-offers an unsent draft rather than double-authoring.
 - **Galaxy grouping in the archive.** The archive groups editions by galaxy (Solar → Nebular → Lunar → Astral, the `editions.ts orderedGalaxies` helper) — but with manual vibe-tagging retired, that grouping now depends on the **audio-embedding clusters** (Phase 2 of _Audio embeddings_); until those land, a finding has no galaxy and falls to "Also found." (An archive-only concern — the letter copy no longer groups.)
-- **Spine-native edition page (the deeper remainder).** Make an edition **spine-native like a mixtape** — a marked Log ID, a `/log/<id>` edition page, and quiet feed / RSS inclusion — so an edition is a finding-shaped object in the Galaxy, not just an archived email. The persisted payload is the clean source to render it from.
+
 - **Confirm the Firecrawl scene-`tidbits` populate** on a real tick — they came back empty on an early run (the email renders fine without them, but they're the extra scene color).
 
 ### Audio embeddings — automatic sonic similarity + clusters
