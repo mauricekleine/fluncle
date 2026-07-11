@@ -156,13 +156,46 @@ export const MixReasonSchema = z
   .meta({ id: "MixReason" });
 
 /**
- * A `/mix` candidate: a finding plus its `reason` chip, ordered by the mixability
- * core (`list_mixable_tracks`). A `TrackListItem` extended with the reason — NO score
- * field (§3.0 invariant: numbers never reach the crew).
+ * One track as `/mix` renders it — a chain row, a candidate, an opener.
+ *
+ * A DELIBERATELY SMALL SHAPE, and not a `TrackListItem`. `/mix` is the first surface where
+ * a row may be a track Fluncle never certified (`certified: false` — it exists in the
+ * archive, it has a key and a vector, it mixes), and DESIGN.md's Unlit Rule says such a row
+ * carries no coordinate, no note, no video, no galaxy. Serving it a DTO with all of those
+ * fields would leave "does a catalogue row ever show a Log ID?" as a question about every
+ * consumer's discipline. This shape makes it a question about the TYPE: there is no `note`,
+ * no `videoUrl`, no `galaxy` here to leak, and `logId` is present if and only if `certified`
+ * is true (`toMixTrack` reads both off the same `findings.log_id`, so they cannot disagree).
+ *
+ * The tier is never NAMED — `certified` is a boolean and not a label. The client uses it to
+ * pick a REGISTER (lit, with its coordinate → `/log`; or unlit, linking out to Spotify), and
+ * nothing else. No badge, no noun, no heading over a homogeneous block of them.
  */
-export const MixableCandidateSchema = TrackListItemSchema.extend({
+export const MixTrackSchema = z
+  .object({
+    albumImageUrl: z.string().optional(),
+    artists: z.array(z.string()),
+    bpm: z.number().optional(),
+    /** True ⇔ Fluncle certified this track — i.e. it is a finding, and has a coordinate. */
+    certified: z.boolean(),
+    durationMs: z.number(),
+    key: z.string().optional(),
+    /** The permanent coordinate. Present ⇔ `certified` (the Unlit Rule, structurally). */
+    logId: z.string().optional(),
+    spotifyUrl: z.string(),
+    title: z.string(),
+    trackId: z.string(),
+  })
+  .meta({ id: "MixTrack" });
+
+/**
+ * A `/mix` candidate: a {@link MixTrackSchema} plus its `reason` chip, ordered by the
+ * mixability core (`list_mixable_tracks`). NO score field (§3.0 invariant: numbers never
+ * reach the crew — the chip is the whole explanation).
+ */
+export const MixCandidateSchema = MixTrackSchema.extend({
   reason: MixReasonSchema,
-}).meta({ id: "MixableCandidate" });
+}).meta({ id: "MixCandidate" });
 
 /**
  * The radio.fluncle.com now-playing slot (`RadioNowPlaying` in ../index.ts; RFC

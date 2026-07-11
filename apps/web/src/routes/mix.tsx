@@ -1,79 +1,95 @@
 import { createFileRoute, redirect, useNavigate } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
-import { useCallback } from "react";
-import { type TrackListItem } from "@fluncle/contracts";
+import { useCallback, useMemo } from "react";
+import { type MixTrack } from "@fluncle/contracts";
 import { KeyNotationToggle } from "@/components/mix/key-notation-toggle";
 import { MixBuilder } from "@/components/mix/mix-builder";
 import { ShareSetButton } from "@/components/mix/share-set-button";
 import { siteUrl } from "@/lib/fluncle-links";
 import { jsonLdScript } from "@/lib/json-ld";
-import { mixPlaylistJsonLd, parseSetParam, serializeSet } from "@/lib/mix-set";
+import {
+  mixPlaylistJsonLd,
+  parseSetParam,
+  parseTasteParam,
+  serializeSet,
+  serializeTaste,
+} from "@/lib/mix-set";
 import { isAdminRequest } from "@/lib/server/admin-auth";
-import { getTracksByLogIds } from "@/lib/server/tracks";
+import { getMixChainDepth, getMixTracksByTokens } from "@/lib/server/tracks";
 
-// `/mix` — Product A: the set-builder plate (RFC mixability-engine). ADMIN-GATED at
-// launch (Decision 1): the full surface is built, but a route-level admin gate keeps
-// it operator-only while the archive grows to the ~250-finding floor; going public is
-// lifting this gate + the registry weight + an announcement (the `list_mixable_tracks`
-// op already ships at its final public tier, so no rebuild). Copy PENDING the morning
-// review (Decision 5) — this PR is HELD for canon + copy.
+// `/mix` — the set-builder, and the one surface built for a stranger rather than for the
+// crew. A free drum & bass mixing tool: name a few artists you like, pick something to open
+// with, and the engine ranks what mixes in clean after it. No account, no sign-up; the set
+// and the taste behind it live in the URL (`?set=` + `?taste=`), so a set is its link.
+//
+// ── THE GATE ────────────────────────────────────────────────────────────────────────────
+// It used to be admin-only behind a ~250-FINDING FLOOR: a number nobody could defend,
+// standing in for the real question ("is there enough here to chain a set?"). That question
+// is now asked directly, of the archive, on every load — `getMixChainDepth` measures whether
+// the MEDIAN track can reach one of Fluncle's own sets' worth of tracks (17) plus a full rail
+// (12) by a NAMED harmonic move. Neither number is invented; see `MIX_PUBLIC_FLOOR`.
+//
+// So the gate is self-lifting. There is no flag to remember to flip and no deploy to time: as
+// the catalogue crawler lands keyed tracks, the median track's neighbourhood grows, and the
+// day it crosses the floor `/mix` opens to the world on its own. Which is exactly the
+// roadmap's claim — the catalogue IS depth — made executable instead of asserted.
+//
+// While it is CLOSED the tool is real but private: the operator still gets in (he needs to
+// dogfood the thing he is filling the archive for), and a stranger is sent home rather than
+// shown a beautiful mixing tool with sixty tracks in it, which would undersell the whole idea.
 
-// Cold-load hydration ONLY: resolve the `?set=` coordinates to ordered findings in one
-// query (the loader re-orders the unordered `getTracksByLogIds` Record to the URL;
-// vanished coordinates drop silently). Chain edits after mount are client state — the
-// URL syncs via a masked replace navigation, and `shouldReload: false` keeps this from
-// re-running on every reorder.
-const hydrateMixSet = createServerFn({ method: "GET" })
-  .validator((data: { logIds: string[] }) => data)
-  .handler(async ({ data }): Promise<TrackListItem[]> => {
-    if (!(await isAdminRequest())) {
-      throw redirect({ to: "/admin/login" });
+/** The route's server-side verdict: may this reader use the tool, and is the set hydrated? */
+type MixLoaderData = { chain: MixTrack[] };
+
+// One server call: the gate, then the chain. The gate is checked SERVER-SIDE and before any
+// hydration, so a closed gate never renders a row — and never leaks the archive's shape to
+// someone it is not open to.
+//
+// THE LOADER DEPENDS ON `set` ALONE, never on `taste`. Taste is CLIENT state: the builder
+// reads the live `?taste=` search param and fetches openers/rail off it, so a taste change
+// must not re-run this loader (it would blank `useLoaderData` mid-navigation and, with the
+// gate re-checked, flicker the whole page). The loader's only job is to gate the reader and
+// hydrate a shared `?set=` link on a cold load.
+const loadMix = createServerFn({ method: "GET" })
+  .validator((data: { set: string }) => data)
+  .handler(async ({ data }): Promise<MixLoaderData> => {
+    const [depth, admin] = await Promise.all([getMixChainDepth(), isAdminRequest()]);
+
+    if (!depth.open && !admin) {
+      // Home, not the login page: a stranger who lands on a URL the archive cannot yet honour
+      // is a reader, not a locked-out operator, and the archive is what he came for anyway.
+      throw redirect({ to: "/" });
     }
 
-    if (data.logIds.length === 0) {
-      return [];
-    }
+    const tokens = parseSetParam(data.set);
 
-    const byLogId = await getTracksByLogIds(data.logIds);
-
-    return data.logIds.flatMap((logId) => {
-      const finding = byLogId[logId];
-
-      return finding ? [finding] : [];
-    });
+    return { chain: tokens.length > 0 ? await getMixTracksByTokens(tokens) : [] };
   });
 
-const ensureAdmin = createServerFn({ method: "GET" }).handler(async () => {
-  if (!(await isAdminRequest())) {
-    throw redirect({ to: "/admin/login" });
-  }
-});
+type MixSearch = { set: string; taste: string; view: "build" | "play" };
 
-type MixSearch = { set: string; view: "build" | "play" };
-type MixLoaderData = { chain: TrackListItem[] };
-
-// TanStack canonical option order (validateSearch → loaderDeps → beforeLoad → loader →
-// head → component), each step feeding the next step's type inference; the disable
-// keeps `eslint/sort-keys` off THIS definition (it would alphabetize + break inference).
+// TanStack canonical option order (validateSearch → loaderDeps → loader → head → component),
+// each step feeding the next step's type inference; the disable keeps `eslint/sort-keys` off
+// THIS definition (it would alphabetize + break inference).
 // oxlint-disable-next-line sort-keys
 export const Route = createFileRoute("/mix")({
   validateSearch: (search: Record<string, unknown>): MixSearch => ({
     set: typeof search.set === "string" ? search.set : "",
+    taste: typeof search.taste === "string" ? search.taste : "",
     view: search.view === "play" ? "play" : "build",
   }),
   loaderDeps: ({ search }: { search: MixSearch }) => ({ set: search.set }),
-  beforeLoad: () => ensureAdmin(),
-  loader: async ({ deps }: { deps: { set: string } }): Promise<MixLoaderData> => {
-    const logIds = parseSetParam(deps.set);
-
-    return { chain: await hydrateMixSet({ data: { logIds } }) };
-  },
+  loader: async ({ deps }: { deps: { set: string } }): Promise<MixLoaderData> =>
+    loadMix({ data: deps }),
   head: ({ loaderData }: { loaderData?: MixLoaderData }) => {
     const chain = loaderData?.chain ?? [];
-    const coords = serializeSet(chain.map((finding) => finding.logId ?? ""));
+    const coords = serializeSet(chain.map((track) => track.logId ?? track.trackId));
     const canonical = chain.length > 0 ? `${siteUrl}/mix?set=${coords}` : `${siteUrl}/mix`;
     const title = "Chain a set · Fluncle";
-    const description = "Take the decks with Fluncle's findings: chain a set that mixes clean.";
+    // Machine-facing, so honestly-plain third person (VOICE.md, Narrator): what the tool is
+    // and what it does, in the words a stranger would search for.
+    const description =
+      "A free drum & bass mixing tool. Name the artists you like, and Fluncle ranks what mixes in clean next by key, tempo, and feel.";
 
     return {
       links: [{ href: canonical, rel: "canonical" }],
@@ -96,18 +112,35 @@ export const Route = createFileRoute("/mix")({
 
 function MixPage() {
   const { chain } = Route.useLoaderData();
-  const { set, view } = Route.useSearch();
+  const { set, taste: tasteParam, view } = Route.useSearch();
   const navigate = useNavigate();
 
-  // Sync the ordered chain to `?set=` in place: a replace navigation with the loader
-  // held (shouldReload: false), so a reorder click never re-fetches. Masked so a raw
-  // replaceState can't wipe TanStack's routing state.
+  // Taste is the LIVE search param, parsed on the client (pure + client-safe), not loader
+  // data — so seeding tilts the rail with no loader round-trip and no page flicker. Memoized
+  // so the array keeps a stable identity while `?taste=` is unchanged.
+  const taste = useMemo(() => parseTasteParam(tasteParam), [tasteParam]);
+
+  // Sync the chain to `?set=` in place: a replace navigation with the loader held
+  // (shouldReload: false), so a reorder click never re-fetches. Masked so a raw replaceState
+  // can't wipe TanStack's routing state.
   const onSetChange = useCallback(
-    (logIds: string[]) => {
+    (tokens: string[]) => {
       void navigate({
         replace: true,
         resetScroll: false,
-        search: (prev: MixSearch) => ({ ...prev, set: serializeSet(logIds) }),
+        search: (prev: MixSearch) => ({ ...prev, set: serializeSet(tokens) }),
+        to: "/mix",
+      });
+    },
+    [navigate],
+  );
+
+  const onTasteChange = useCallback(
+    (slugs: string[]) => {
+      void navigate({
+        replace: true,
+        resetScroll: false,
+        search: (prev: MixSearch) => ({ ...prev, taste: serializeTaste(slugs) }),
         to: "/mix",
       });
     },
@@ -124,30 +157,25 @@ function MixPage() {
     });
   }, [navigate]);
 
-  // The page as ONE logbook plate (DESIGN.md §5 — the home-plate grammar): a real
-  // masthead over a dimming, grained plate that holds AA against the sun-bloom (The
-  // Legible Sky Rule), with the chain + rail mounted as flat plate-field panes (One
-  // Pane — the plate is the pane).
+  // The page as ONE logbook plate (DESIGN.md §5 — the home-plate grammar): a real masthead
+  // over a dimming, grained plate that holds AA against the sun-bloom (The Legible Sky Rule),
+  // with the chain + rail mounted as flat plate-field panes (One Pane — the plate is the pane).
   return (
     <main className="min-h-screen overflow-x-hidden p-4 text-foreground sm:p-6 lg:flex lg:flex-col lg:p-8">
       <article className="home-plate mx-auto my-6 w-full max-w-2xl sm:my-8 lg:my-auto">
-        {/* The masthead lays its two blocks out as direct flex children (`.home-masthead`
-            is `display:flex; justify-content:space-between`): the text block and the
-            actions group. An earlier extra wrapper `<div>` was a non-stretching flex item,
-            so its right edge — and the button pinned inside it — fell short of the
-            full-width border-bottom rule; laying the actions group out directly lets
-            space-between pin it to the true right edge the rule reaches. */}
         <header className="home-masthead">
           <div>
             <h1 className="home-nameplate">Chain a set</h1>
             <p className="home-tagline">
-              Pick a finding to open with, and I rank what mixes in cleanly next by key, tempo, and
-              feel. Reorder the chain, then share it with the crew.
+              Name a few artists you like. I rank what mixes in clean next, by key, tempo, and feel.
+              Chain a set, then share it with the crew.
             </p>
           </div>
           <div className="home-masthead-actions">
             <KeyNotationToggle />
-            {view !== "play" && set ? <ShareSetButton serializedSet={set} /> : undefined}
+            {view !== "play" && set ? (
+              <ShareSetButton serializedSet={set} serializedTaste={tasteParam} />
+            ) : undefined}
           </div>
         </header>
         <MixBuilder
@@ -155,8 +183,22 @@ function MixPage() {
           key={view}
           onPromote={onPromote}
           onSetChange={onSetChange}
+          onTasteChange={onTasteChange}
           readOnly={view === "play"}
+          taste={taste}
         />
+        {/* THE CONVERSION MOMENT. A stranger came for a free mixing tool and is now three
+            tracks deep in an archive they have never heard of. This is the one line that
+            tells them whose archive it is, and why it gets better the longer they stay. It
+            sits at the FOOT of the plate, after the tool has already proved itself — an
+            invitation earned, not a banner served. */}
+        <footer className="mix-colophon">
+          <p>
+            I'm Fluncle. I dig drum &amp; bass out of the far sectors and log every banger I bring
+            back. This runs on that logbook, and it gets sharper every time I find another one.
+          </p>
+          <a href="/">See the findings</a>
+        </footer>
       </article>
     </main>
   );

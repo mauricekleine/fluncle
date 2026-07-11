@@ -6,7 +6,7 @@ import { oc } from "@orpc/contract";
 import * as z from "zod";
 import {
   FeedItemSchema,
-  MixableCandidateSchema,
+  MixCandidateSchema,
   MixtapeDTOSchema,
   TrackListItemSchema,
 } from "./_shared";
@@ -132,29 +132,40 @@ export const getSimilarFindings = oc
  * `list_mixable_tracks` → `GET /tracks/{idOrLogId}/mixable` (operationId
  * `listMixableTracks`).
  *
- * The findings that mix cleanly OUT of the given one, ranked by the mixability engine
+ * The tracks that mix cleanly OUT of the given one, ranked by the mixability engine
  * (`lib/server/mixability.ts`) — a harmonic next-track finder with a dense texture
- * tiebreak (the sonic MuQ term is wired but gated off until embedding coverage clears
- * the floor). The crew-facing rail behind `/mix`. Modeled on `get_similar_findings`:
- * one archive scan over coordinate-bearing findings, self excluded, mixability order,
- * NO numeric score in the payload (§3.0 invariant — only the `reason` chip).
+ * tiebreak and a live MuQ sonic term. The rail behind `/mix`.
+ *
+ * CANDIDATES ARE THE WHOLE ARCHIVE, not just the findings. Any track with a key is
+ * rankable (the key is the engine's mandatory floor), so a track Fluncle has never
+ * certified competes for the rail on exactly the same terms as one he has — which is what
+ * makes the tool get BETTER as the archive grows rather than merely bigger. Each row says
+ * which it is with `certified`, and nothing else: the uncertified tier has no public name
+ * (DESIGN.md's Unlit Rule), so the flag picks a visual register and never a label. A row
+ * with `certified: false` has no `logId` and cannot be given one — see `MixTrackSchema`.
+ *
+ * `taste` is the SEED: a comma-separated list of artist slugs (`list_mixable_artists`).
+ * Present, the rail is ordered by mixability × taste rather than mixability alone — every
+ * candidate still mixes clean, and the ones that sound like the artists you named come
+ * first. Taste is max-similarity to the NEAREST seeded artist's track, never a centroid
+ * (`tasteSubScore`). Absent or unresolvable, the rail is the plain mixability order.
  *
  * `limit` is a tolerant optional string (default 12, clamped to 32), parsed in-handler
  * so a bad value degrades rather than 400-ing (mirrors `get_similar_findings`).
- * `exclude` is a comma-separated Log ID list — the already-chained findings, excluded
- * SERVER-SIDE so a deep chain in a small archive can't silently empty the rail.
+ * `exclude` is a comma-separated list of the already-chained tracks — Log IDs or Spotify
+ * track ids, mixed freely, because a chain now holds both kinds. Excluded SERVER-SIDE so
+ * a deep chain can't silently empty the rail.
  *
- * Public-unauth AT THE OP (keys/BPMs are already public on every track chip), so the
- * `/mix` PAGE's admin gate is a pure route-level flip to lift at launch (Decision 1).
- * An unknown coordinate / a finding scored on nothing / an empty archive all yield
- * `{ ok: true, findings: [] }` — a quiet empty rail, never a fault.
+ * Public-unauth (keys/BPMs are already public on every track chip). An unknown coordinate
+ * / a target scored on nothing / an empty archive all yield `{ ok: true, findings: [] }` —
+ * a quiet empty rail, never a fault.
  */
 export const listMixableTracks = oc
   .route({
     method: "GET",
     operationId: "listMixableTracks",
     path: "/tracks/{idOrLogId}/mixable",
-    summary: "List the findings that mix cleanly out of one (by Spotify trackId or Log ID)",
+    summary: "List the tracks that mix cleanly out of one (by Spotify trackId or Log ID)",
     tags: ["Tracks"],
   })
   .input(
@@ -162,9 +173,10 @@ export const listMixableTracks = oc
       exclude: z.string().optional(),
       idOrLogId: z.string(),
       limit: z.string().optional(),
+      taste: z.string().optional(),
     }),
   )
-  .output(z.object({ findings: z.array(MixableCandidateSchema), ok: z.literal(true) }));
+  .output(z.object({ findings: z.array(MixCandidateSchema), ok: z.literal(true) }));
 
 /** The `tracks` domain's ops, merged into the root contract by `./index.ts`. */
 export const tracksContract = {

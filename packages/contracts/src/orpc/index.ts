@@ -51,6 +51,7 @@ import { healthContract } from "./health";
 import { meContract } from "./me";
 import { meGalaxyContract } from "./me-galaxy";
 import { meSavedContract } from "./me-saved";
+import { mixContract } from "./mix";
 import { mixtapesContract } from "./mixtapes";
 import { newsletterContract } from "./newsletter";
 import { radioContract } from "./radio";
@@ -62,6 +63,7 @@ import { tracksContract } from "./tracks";
 // Re-export the per-op contracts so existing importers (and the typed client)
 // keep their entrypoints.
 export { ArtistListItemSchema, artistsContract, getArtist, listArtists } from "./artists";
+export { listMixableArtists, listMixOpeners, MixArtistSchema, mixContract } from "./mix";
 export { GalaxyListItemSchema, galaxiesContract, getGalaxy, listGalaxies } from "./galaxies";
 export { getGraphPreview, GraphEntityKindSchema, graphContract, GraphPreviewSchema } from "./graph";
 export {
@@ -303,6 +305,7 @@ export const contract = {
   ...meContract,
   ...meGalaxyContract,
   ...meSavedContract,
+  ...mixContract,
   ...mixtapesContract,
   ...newsletterContract,
   ...radioContract,

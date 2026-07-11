@@ -133,9 +133,12 @@ const PUBLIC_UNAUTH_OPS = new Set<string>([
   "list_artists",
   "list_editions",
   "list_galaxies",
-  // The `/mix` rail read (RFC mixability-engine). Public-unauth at the op (keys/BPMs
-  // are already public on every track chip); the `/mix` page's admin gate is a
-  // route-level flip (Decision 1), so the op ships at its final public tier now.
+  // The `/mix` rail read + the two taste-seed reads. All public-unauth: `/mix` is a free
+  // tool a stranger uses with no account, and it exposes only what is already public on
+  // every track chip (keys, BPMs, artist names). The `/mix` page's own gate is a live
+  // archive-depth measurement, not auth.
+  "list_mix_openers",
+  "list_mixable_artists",
   "list_mixable_tracks",
   "list_mixtapes",
   "list_stories",

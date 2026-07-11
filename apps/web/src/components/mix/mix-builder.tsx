@@ -19,7 +19,7 @@ import { DotsSixVerticalIcon, PauseIcon, PlayIcon, PlusIcon, XIcon } from "@phos
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { type CSSProperties, useCallback, useMemo, useState } from "react";
-import { type FeedItem, type MixableCandidate, type TrackListItem } from "@fluncle/contracts";
+import { type MixCandidate, type MixTrack } from "@fluncle/contracts";
 import { Badge } from "@fluncle/ui/components/badge";
 import { Button } from "@fluncle/ui/components/button";
 import {
@@ -31,34 +31,44 @@ import {
   CommandList,
 } from "@fluncle/ui/components/command";
 import { MixPreviewBar } from "@/components/mix/mix-preview-bar";
+import { TastePicker } from "@/components/mix/taste-picker";
+import { SpotifyIcon } from "@/components/platform-icons";
 import { TrackArtwork } from "@/components/track-artwork";
 import { TrackChips } from "@/components/track-row";
 import { formatKey, type KeyNotation, useKeyNotation } from "@/lib/key-notation";
 import { spotifyAlbumImageAtSize } from "@/lib/media";
-import { mixReasonLabel } from "@/lib/mix-set";
+import { mixReasonLabel, serializeTaste, setToken } from "@/lib/mix-set";
 import { usePreviewControls } from "@/lib/preview-player";
 import { usePrefersReducedMotion } from "@/lib/use-prefers-reduced-motion";
 import { cn } from "@/lib/utils";
 
-/** The finding's stable identity for keys and drag-and-drop: its coordinate, or the trackId. */
-const rowId = (finding: TrackListItem): string => finding.logId ?? finding.trackId;
+// The `/mix` plate: one printed logbook page — a stranger taking the decks with Fluncle's
+// archive. NOT a SaaS builder. The design invariants are gates: exactly ONE gold primary
+// (Copy set link); no numeric score ever reaches the crew (only the reason chip); a builder-
+// row variant (not TrackRow's stretched link); reorder by keyboard through the drag handle.
+//
+// THE UNLIT RULE (DESIGN.md) LIVES ON EVERY ROW HERE. A row is a track Fluncle certified (a
+// finding: it carries its coordinate, it lights gold, it previews, and it links to `/log`) or
+// one he never did (it carries no coordinate, catches the cold Dust Veil, and links OUT to
+// Spotify, because there is nowhere else to send you). The difference is the REGISTER and
+// never a word: no badge, no label, no noun, and no heading naming the tier. Every heading
+// over a mixed list names the SUPERSET ("Tracks"), which is true of every row under it.
+//
+// A catalogue row cannot leak a coordinate even by accident: `MixTrack` has no `logId` unless
+// it is certified (see MixTrackSchema), so the lit register is unreachable without one.
 
-// Product A's plate (RFC mixability-engine §3): one printed logbook page — the crew
-// taking the decks with Fluncle's findings. NOT a SaaS builder. The design invariants
-// (§3.0) are gates: exactly ONE gold primary (Copy set link); no numeric score ever
-// reaches the crew (only the reason chip); a builder-row variant (not TrackRow's
-// stretched link); reorder via keyboard up/down (no drag dependency). Copy PENDING the
-// morning review (Decision 5).
+/** A track's stable identity for React keys and drag-and-drop — its `?set=` token. */
+const rowId = (track: MixTrack): string => setToken(track);
 
-const artworkUrl = (finding: TrackListItem): string | undefined =>
-  spotifyAlbumImageAtSize(finding.albumImageUrl, "small");
+const artworkUrl = (track: MixTrack): string | undefined =>
+  spotifyAlbumImageAtSize(track.albumImageUrl, "small");
 
-// The album artwork doubles as the row's preview control (§3.3.4): a play/pause
-// overlay that previews THIS finding via the shared `/api/preview/<logId>` relay —
-// on chain rows AND candidate rows alike. One shared <audio>, so starting a row's
-// preview stops the previous one; the overlay is hover/focus-visible on pointers and
-// always visible on touch (`.preview-art-btn` CSS). Reduced motion drops its fade.
-function PreviewArtwork({ finding, logId }: { finding: TrackListItem; logId: string }) {
+// The album artwork doubles as a preview control on a CERTIFIED row: a play/pause overlay
+// that previews via the shared `/api/preview/<logId>` relay. An uncertified row has no
+// coordinate, so it has no relay and no preview — its artwork is a plain, dimmed square, and
+// the way to hear it is the Spotify link. That silence is not a limitation to apologise for;
+// it is the same statement the register already makes.
+function PreviewArtwork({ logId, track }: { logId: string; track: MixTrack }) {
   const { activeTrackId, pauseResume, start, status } = usePreviewControls();
   const isCurrent = activeTrackId === logId;
   const isPlaying = isCurrent && (status === "playing" || status === "loading");
@@ -73,9 +83,9 @@ function PreviewArtwork({ finding, logId }: { finding: TrackListItem; logId: str
 
   return (
     <span className="preview-art relative shrink-0">
-      <TrackArtwork alt="" src={artworkUrl(finding)} />
+      <TrackArtwork alt="" src={artworkUrl(track)} />
       <button
-        aria-label={isPlaying ? "Pause" : `Play the preview of ${finding.title}`}
+        aria-label={isPlaying ? "Pause" : `Play the preview of ${track.title}`}
         aria-pressed={isCurrent}
         className="preview-art-btn"
         onClick={onClick}
@@ -91,112 +101,120 @@ function PreviewArtwork({ finding, logId }: { finding: TrackListItem; logId: str
   );
 }
 
-// A builder row — the TrackRow grid skeleton (coordinate, 3.25rem artwork, title, a
-// chip row) WITHOUT the stretched navigation link, so Add / remove / reorder can each
-// own their own hit target (§3.0 invariant 3). `leading` mounts a drag handle ahead of
-// the artwork; `rowRef`/`style`/`dragging` let a sortable wrapper drive the <li>.
+// A builder row — the TrackRow grid skeleton WITHOUT the stretched navigation link, so Add /
+// remove / reorder each own their own hit target. `leading` mounts a drag handle ahead of the
+// artwork; `rowRef`/`style`/`dragging` let a sortable wrapper drive the <li>.
 function BuilderRow({
   actions,
   chip,
   dragging = false,
-  finding,
   leading,
   notation,
   rowRef,
   style,
+  track,
 }: {
   actions?: React.ReactNode;
   chip?: React.ReactNode;
   dragging?: boolean;
-  finding: TrackListItem;
   leading?: React.ReactNode;
   notation: KeyNotation;
   rowRef?: (element: HTMLLIElement | null) => void;
   style?: CSSProperties;
+  track: MixTrack;
 }) {
-  // The telemetry line — duration, BPM, key as the homepage Track Row's quiet bordered
-  // chips (reused verbatim, one chip definition across the app), with the reason chip
-  // after it. Nothing renders until enrichment has produced a value.
-  const hasTelemetry = Boolean(finding.durationMs || finding.bpm || finding.key);
+  const hasTelemetry = Boolean(track.durationMs || track.bpm || track.key);
+  const logId = track.certified ? track.logId : undefined;
 
   return (
     <li
-      className={cn("flex items-center gap-3 px-3 py-2.5", dragging && "relative z-10 bg-muted")}
+      className={cn(
+        "mix-row flex items-center gap-3 px-3 py-2.5",
+        !track.certified && "mix-row--unlit",
+        dragging && "relative z-10 bg-muted",
+      )}
       ref={rowRef}
       style={style}
     >
       {leading}
       <div className="min-w-0 flex flex-1 items-center gap-3">
-        {finding.logId ? (
-          <PreviewArtwork finding={finding} logId={finding.logId} />
+        {logId ? (
+          <PreviewArtwork logId={logId} track={track} />
         ) : (
-          <TrackArtwork alt="" src={artworkUrl(finding)} />
+          <TrackArtwork alt="" src={artworkUrl(track)} />
         )}
         <div className="min-w-0 flex-1">
-          {finding.logId ? (
-            // The coordinate in the canon numeric face — Oxanium tabular at the Track
-            // Row's size (The Tabular Rule; mono is reserved for machine surfaces).
+          {logId ? (
+            // The coordinate, in the canon numeric face (Oxanium tabular) and lit gold —
+            // because it IS the certification. An unlit row has none, and gets none.
             <Link
               className="track-log-id track-log-id-link block truncate"
-              params={{ logId: finding.logId }}
+              params={{ logId }}
               to="/log/$logId"
             >
-              {finding.logId}
+              {logId}
             </Link>
           ) : null}
-          <p className="truncate text-sm font-medium">{finding.title}</p>
+          <p className="mix-row-title truncate text-sm font-medium">{track.title}</p>
           <p className="mt-0.5 truncate text-xs text-muted-foreground">
-            {finding.artists.join(", ")}
+            {track.artists.join(", ")}
           </p>
           {hasTelemetry || chip ? (
             <div className="mt-1.5 flex flex-wrap items-center gap-1">
               <TrackChips
-                bpm={finding.bpm}
+                bpm={track.bpm}
                 className="m-0"
-                durationMs={finding.durationMs}
-                musicalKey={formatKey(finding.key, notation)}
+                durationMs={track.durationMs}
+                musicalKey={formatKey(track.key, notation)}
               />
               {chip}
             </div>
           ) : null}
         </div>
       </div>
+      {/* The way out, on an unlit row only: there is no /log page for a track Fluncle has
+          not been to, so the row leaves for the one place it can be heard. */}
+      {!track.certified ? (
+        <a
+          aria-label={`Open ${track.title} on Spotify`}
+          className="mix-row-out"
+          href={track.spotifyUrl}
+          rel="noreferrer"
+          target="_blank"
+        >
+          <SpotifyIcon aria-hidden="true" className="size-4" />
+        </a>
+      ) : null}
       {actions ? <div className="flex shrink-0 items-center gap-1">{actions}</div> : null}
     </li>
   );
 }
 
-// The chain row as a dnd-kit sortable — the drag path (a grab handle) layered over the
-// keyboard up/down buttons (the accessibility path stays). Ported from the /admin/plans
-// tracklist: PointerSensor + KeyboardSensor, the transform/transition style, reduced
-// motion drops the transition at the source.
+// The chain row as a dnd-kit sortable — the drag path (a grab handle) that is ALSO the
+// keyboard path (KeyboardSensor + sortableKeyboardCoordinates): Space/Enter picks a focused
+// handle up, Arrow Up/Down move it, and dnd-kit's live region narrates each step.
 function SortableChainRow({
   actions,
-  finding,
   notation,
   reducedMotion,
+  track,
 }: {
   actions: React.ReactNode;
-  finding: TrackListItem;
   notation: KeyNotation;
   reducedMotion: boolean;
+  track: MixTrack;
 }) {
   const { attributes, isDragging, listeners, setNodeRef, transform, transition } = useSortable({
-    id: rowId(finding),
+    id: rowId(track),
   });
 
   return (
     <BuilderRow
       actions={actions}
       dragging={isDragging}
-      finding={finding}
       leading={
-        // The drag handle is the keyboard reorder path: a real focusable <button>
-        // carrying dnd-kit's KeyboardSensor listeners. Space/Enter picks the row up,
-        // Arrow Up/Down move it (sortableKeyboardCoordinates), Space/Enter drops, Esc
-        // cancels — and dnd-kit's live-region announcements (below) narrate each step.
         <button
-          aria-label={`Reorder ${finding.title}`}
+          aria-label={`Reorder ${track.title}`}
           className="inline-flex size-9 shrink-0 cursor-grab touch-none items-center justify-center rounded-sm text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
           type="button"
           {...attributes}
@@ -211,110 +229,152 @@ function SortableChainRow({
         transform: CSS.Transform.toString(transform),
         transition: reducedMotion ? undefined : transition,
       }}
+      track={track}
     />
   );
 }
 
-async function fetchMixable(tailLogId: string, exclude: string[]): Promise<MixableCandidate[]> {
+async function fetchMixable(
+  tailToken: string,
+  exclude: string[],
+  taste: string[],
+): Promise<MixCandidate[]> {
   const params = new URLSearchParams({ limit: "12" });
 
   if (exclude.length > 0) {
     params.set("exclude", exclude.join(","));
   }
+  if (taste.length > 0) {
+    params.set("taste", serializeTaste(taste));
+  }
 
   const response = await fetch(
-    `/api/v1/tracks/${encodeURIComponent(tailLogId)}/mixable?${params.toString()}`,
+    `/api/v1/tracks/${encodeURIComponent(tailToken)}/mixable?${params.toString()}`,
   );
 
   if (!response.ok) {
     return [];
   }
 
-  const body = (await response.json()) as { findings?: MixableCandidate[] };
+  const body = (await response.json()) as { findings?: MixCandidate[] };
 
   return body.findings ?? [];
 }
 
-async function fetchFindingPool(): Promise<TrackListItem[]> {
-  const response = await fetch("/api/v1/tracks?limit=48");
+async function fetchOpeners(taste: string[]): Promise<MixTrack[]> {
+  if (taste.length === 0) {
+    return [];
+  }
+
+  const params = new URLSearchParams({ limit: "24", taste: serializeTaste(taste) });
+  const response = await fetch(`/api/v1/mix/openers?${params.toString()}`);
 
   if (!response.ok) {
     return [];
   }
 
-  const body = (await response.json()) as { tracks?: FeedItem[] };
+  const body = (await response.json()) as { tracks?: MixTrack[] };
 
-  return (body.tracks ?? []).filter(
-    (item): item is TrackListItem => item.type !== "mixtape" && Boolean(item.logId),
-  );
+  return body.tracks ?? [];
+}
+
+async function searchMixTracks(q: string): Promise<MixTrack[]> {
+  const response = await fetch(`/api/v1/search/archive?q=${encodeURIComponent(q)}&limit=24`);
+
+  if (!response.ok) {
+    return [];
+  }
+
+  const body = (await response.json()) as {
+    results?: {
+      albumImageUrl?: string;
+      artists: string[];
+      certified: boolean;
+      logId?: string;
+      spotifyUrl: string;
+      title: string;
+      trackId: string;
+    }[];
+  };
+
+  // Search returns its own hit shape; the pieces a chain row needs are the same, and the two
+  // durations/keys it lacks arrive with the rail once the chain has a tail.
+  return (body.results ?? []).map((hit) => ({
+    albumImageUrl: hit.albumImageUrl,
+    artists: hit.artists,
+    certified: hit.certified,
+    durationMs: 0,
+    logId: hit.certified ? hit.logId : undefined,
+    spotifyUrl: hit.spotifyUrl,
+    title: hit.title,
+    trackId: hit.trackId,
+  }));
 }
 
 export function MixBuilder({
   initialChain,
   onPromote,
   onSetChange,
+  onTasteChange,
   readOnly,
+  taste,
 }: {
-  initialChain: TrackListItem[];
+  initialChain: MixTrack[];
   /** Read-only → editable ("Chain your own set from here"). */
   onPromote: () => void;
-  /** Sync the ordered chain to the `?set=` URL (masked replace, no loader rerun). */
-  onSetChange: (logIds: string[]) => void;
+  /** Sync the ordered chain to `?set=` (masked replace, no loader rerun). */
+  onSetChange: (tokens: string[]) => void;
+  /** Sync the taste seed to `?taste=`. */
+  onTasteChange: (slugs: string[]) => void;
   readOnly: boolean;
+  /** The seeded artist slugs, from `?taste=`. */
+  taste: string[];
 }) {
-  const [chain, setChain] = useState<TrackListItem[]>(initialChain);
+  const [chain, setChain] = useState<MixTrack[]>(initialChain);
+  // "I don't want to seed, just let me search" — a session-local escape from the picker.
+  const [skippedSeeding, setSkippedSeeding] = useState(false);
+  // Re-opening the picker on a live seed ("Change artists").
+  const [reseeding, setReseeding] = useState(false);
 
-  const chainLogIds = useMemo(
-    () => chain.map((finding) => finding.logId).filter((id): id is string => Boolean(id)),
-    [chain],
-  );
+  const chainTokens = useMemo(() => chain.map(setToken), [chain]);
 
   const mutate = useCallback(
-    (next: TrackListItem[]) => {
+    (next: MixTrack[]) => {
       setChain(next);
-      onSetChange(next.map((finding) => finding.logId).filter((id): id is string => Boolean(id)));
+      onSetChange(next.map(setToken));
     },
     [onSetChange],
   );
 
   const add = useCallback(
-    (finding: TrackListItem) => {
-      if (chain.some((existing) => existing.logId === finding.logId)) {
+    (track: MixTrack) => {
+      if (chain.some((existing) => setToken(existing) === setToken(track))) {
         return;
       }
 
-      mutate([...chain, finding]);
+      mutate([...chain, track]);
     },
     [chain, mutate],
   );
 
   const remove = useCallback(
-    (logId: string) => mutate(chain.filter((finding) => finding.logId !== logId)),
+    (token: string) => mutate(chain.filter((track) => setToken(track) !== token)),
     [chain, mutate],
   );
 
   const { notation } = useKeyNotation();
-
-  // Drag-to-reorder is the ONLY reorder path (the per-row up/down buttons were retired).
-  // The keyboard path is the drag handle itself: dnd-kit's KeyboardSensor +
-  // sortableKeyboardCoordinates make Space/Enter pick up a focused handle and Arrow
-  // Up/Down move it, with the live-region `announcements` below narrating each step.
-  // Same sensors + arrayMove as the /admin/plans tracklist; reduced motion drops the
-  // sortable transition.
   const reducedMotion = usePrefersReducedMotion();
   const sensors = useSensors(
     useSensor(PointerSensor),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
 
-  // Position-aware screen-reader narration for the keyboard drag (dnd-kit reads these
-  // out of a polite live region). `titleOf`/`positionOf` resolve the dragged/over row
-  // from its sortable id so the announcement names the finding and its 1-based slot.
+  // Position-aware screen-reader narration for the keyboard drag (dnd-kit reads these out of
+  // a polite live region).
   const announcements = useMemo(() => {
     const titleOf = (id: string | number) =>
-      chain.find((finding) => rowId(finding) === id)?.title ?? "the track";
-    const positionOf = (id: string | number) =>
-      chain.findIndex((finding) => rowId(finding) === id) + 1;
+      chain.find((track) => rowId(track) === id)?.title ?? "the track";
+    const positionOf = (id: string | number) => chain.findIndex((track) => rowId(track) === id) + 1;
 
     return {
       onDragCancel: ({ active }: { active: { id: string | number } }) =>
@@ -352,8 +412,8 @@ export function MixBuilder({
         return;
       }
 
-      const from = chain.findIndex((finding) => rowId(finding) === active.id);
-      const to = chain.findIndex((finding) => rowId(finding) === over.id);
+      const from = chain.findIndex((track) => rowId(track) === active.id);
+      const to = chain.findIndex((track) => rowId(track) === over.id);
 
       if (from === -1 || to === -1) {
         return;
@@ -364,37 +424,58 @@ export function MixBuilder({
     [chain, mutate],
   );
 
-  const tail = chainLogIds[chainLogIds.length - 1];
+  const tail = chainTokens[chainTokens.length - 1];
 
-  // The rail off the chain's tail, excluding the whole chain server-side (§3.1).
+  // The rail off the chain's tail, excluding the whole chain server-side, tilted by taste.
   const { data: candidates = [] } = useQuery({
     enabled: !readOnly && Boolean(tail),
-    queryFn: () => (tail ? fetchMixable(tail, chainLogIds) : Promise.resolve([])),
-    queryKey: ["mixable", tail, chainLogIds.length],
+    queryFn: () => (tail ? fetchMixable(tail, chainTokens, taste) : Promise.resolve([])),
+    queryKey: ["mixable", tail, chainTokens.length, serializeTaste(taste)],
   });
 
-  // Every previewable row (chain ∪ candidates) is a lookup source for the bottom bar,
-  // which resolves the singleton's active id back to a finding for its metadata.
-  const previewFindings = useMemo<TrackListItem[]>(
-    () => [...chain, ...candidates],
-    [chain, candidates],
+  // Every previewable row (chain ∪ candidates) is a lookup source for the bottom bar.
+  const previewTracks = useMemo<MixTrack[]>(() => [...chain, ...candidates], [chain, candidates]);
+  const { activeTrackId } = usePreviewControls();
+
+  const seedTaste = useCallback(
+    (slugs: string[]) => {
+      onTasteChange(slugs);
+      setReseeding(false);
+    },
+    [onTasteChange],
   );
 
-  // While a preview is mounted, the fixed bar overlays the viewport bottom. Reserve
-  // matching space at the foot of the plate so it never covers the last row.
-  const { activeTrackId } = usePreviewControls();
+  const showPicker =
+    !readOnly && chain.length === 0 && (reseeding || (!taste.length && !skippedSeeding));
 
   return (
     <div className="mx-auto flex w-full max-w-xl flex-col gap-4">
-      {chain.length === 0 ? (
-        <MixPicker onPick={add} />
-      ) : (
+      {showPicker ? (
+        <TastePicker
+          onSeed={seedTaste}
+          onSkip={() => {
+            setSkippedSeeding(true);
+            setReseeding(false);
+          }}
+          seeded={taste}
+        />
+      ) : null}
+
+      {!showPicker && !readOnly && chain.length === 0 ? (
+        taste.length > 0 ? (
+          <MixOpeners onChangeArtists={() => setReseeding(true)} onPick={add} taste={taste} />
+        ) : (
+          <MixSearchPicker onPick={add} />
+        )
+      ) : null}
+
+      {chain.length > 0 ? (
         <>
           {/* The chain, a flat plate-field pane on the plate (One Pane). */}
           {readOnly ? (
             <ol className="plate-field m-0 list-none divide-y divide-border rounded-md border border-border p-0">
-              {chain.map((finding) => (
-                <BuilderRow finding={finding} key={rowId(finding)} notation={notation} />
+              {chain.map((track) => (
+                <BuilderRow key={rowId(track)} notation={notation} track={track} />
               ))}
             </ol>
           ) : (
@@ -405,26 +486,26 @@ export function MixBuilder({
               sensors={sensors}
             >
               <SortableContext
-                items={chain.map((finding) => rowId(finding))}
+                items={chain.map((track) => rowId(track))}
                 strategy={verticalListSortingStrategy}
               >
                 <ol className="plate-field m-0 list-none divide-y divide-border rounded-md border border-border p-0">
-                  {chain.map((finding) => (
+                  {chain.map((track) => (
                     <SortableChainRow
                       actions={
                         <Button
-                          aria-label={`Take ${finding.title} out of the set`}
-                          onClick={() => finding.logId && remove(finding.logId)}
+                          aria-label={`Take ${track.title} out of the set`}
+                          onClick={() => remove(setToken(track))}
                           size="icon"
                           variant="ghost"
                         >
                           <XIcon className="size-4" />
                         </Button>
                       }
-                      finding={finding}
-                      key={rowId(finding)}
+                      key={rowId(track)}
                       notation={notation}
                       reducedMotion={reducedMotion}
+                      track={track}
                     />
                   ))}
                 </ol>
@@ -438,11 +519,13 @@ export function MixBuilder({
             </Button>
           ) : undefined}
         </>
-      )}
+      ) : null}
 
       {!readOnly && chain.length > 0 ? (
         <section aria-label="Tracks ranked to mix in next">
-          {/* A small bold label — never uppercase-tracked (a DESIGN.md Don't). */}
+          {/* A small bold label — never uppercase-tracked (a DESIGN.md Don't). The heading
+              names what the list DOES, not what its rows are, so it stays true over a list
+              that mixes certified rows with ones Fluncle has never been to. */}
           <h2 className="mb-2 px-1 text-xs font-bold text-muted-foreground">
             What mixes in next, ranked
           </h2>
@@ -461,9 +544,9 @@ export function MixBuilder({
                     </Button>
                   }
                   chip={<Badge variant="secondary">{mixReasonLabel(candidate.reason)}</Badge>}
-                  finding={candidate}
                   key={rowId(candidate)}
                   notation={notation}
+                  track={candidate}
                 />
               ))}
             </ul>
@@ -478,40 +561,113 @@ export function MixBuilder({
       {/* Keep the last row clear of the fixed preview bar while it's mounted. */}
       {activeTrackId ? <div aria-hidden="true" className="h-20" /> : null}
 
-      <MixPreviewBar findings={previewFindings} notation={notation} />
+      <MixPreviewBar notation={notation} tracks={previewTracks} />
     </div>
   );
 }
 
-// The cold-start picker — a command-combobox over the recent findings (§3.3.1). Pick
-// one to seed the chain; the rail takes over from there.
-function MixPicker({ onPick }: { onPick: (finding: TrackListItem) => void }) {
-  const { data: pool = [] } = useQuery({
-    queryFn: fetchFindingPool,
-    queryKey: ["mix-pool"],
+// What to open with, once the reader has named the artists they like: those artists' own
+// tracks, certified first. The heading names the ACTION, never the tier of the rows under it.
+function MixOpeners({
+  onChangeArtists,
+  onPick,
+  taste,
+}: {
+  onChangeArtists: () => void;
+  onPick: (track: MixTrack) => void;
+  taste: string[];
+}) {
+  const { notation } = useKeyNotation();
+  const { data: openers = [], isPending } = useQuery({
+    queryFn: () => fetchOpeners(taste),
+    queryKey: ["mix-openers", serializeTaste(taste)],
     staleTime: 60_000,
+  });
+
+  return (
+    <section aria-label="Tracks to open the set with" className="flex flex-col gap-3">
+      <div className="flex flex-wrap items-end justify-between gap-2">
+        <div>
+          <h2 className="text-sm font-bold">Open with</h2>
+          <p className="mt-0.5 text-sm text-muted-foreground">
+            Tracks by the artists you named. Pick one and I rank what mixes in after it.
+          </p>
+        </div>
+        <Button className="px-0" onClick={onChangeArtists} variant="link">
+          Change artists
+        </Button>
+      </div>
+
+      {openers.length > 0 ? (
+        <ul className="plate-field m-0 list-none divide-y divide-border rounded-md border border-border p-0">
+          {openers.map((track) => (
+            <BuilderRow
+              actions={
+                <Button
+                  aria-label={`Open the set with ${track.title}`}
+                  onClick={() => onPick(track)}
+                  size="icon"
+                  variant="ghost"
+                >
+                  <PlusIcon className="size-4" />
+                </Button>
+              }
+              key={rowId(track)}
+              notation={notation}
+              track={track}
+            />
+          ))}
+        </ul>
+      ) : isPending ? null : (
+        <p className="px-1 text-sm text-muted-foreground">
+          I have nothing on those artists I can place yet. Pick another few, or search for a track
+          yourself.
+        </p>
+      )}
+    </section>
+  );
+}
+
+// The un-seeded cold start: search the archive for something to open with. The placeholder
+// and the empty state say "track", the superset noun — the list mixes findings with rows
+// Fluncle has never been to, and naming either tier over it would be a false claim.
+function MixSearchPicker({ onPick }: { onPick: (track: MixTrack) => void }) {
+  const [q, setQ] = useState("");
+  const { data: results = [] } = useQuery({
+    enabled: q.trim().length > 1,
+    queryFn: () => searchMixTracks(q),
+    queryKey: ["mix-search", q],
+    staleTime: 30_000,
   });
 
   return (
     <div className="flex flex-col gap-3">
       <p className="text-sm text-muted-foreground">
-        Pick the finding you want to open with. From there I rank what mixes in cleanly next.
+        Find a track to open with. From there I rank what mixes in clean next.
       </p>
-      <Command className="rounded-lg border border-border">
-        <CommandInput placeholder="Search the findings…" />
+      <Command className="rounded-lg border border-border" shouldFilter={false}>
+        <CommandInput onValueChange={setQ} placeholder="Search tracks" value={q} />
         <CommandList>
-          <CommandEmpty>No finding by that name.</CommandEmpty>
+          {q.trim().length > 1 ? <CommandEmpty>Nothing by that name out here.</CommandEmpty> : null}
           <CommandGroup>
-            {pool.map((finding) => (
+            {results.map((track) => (
               <CommandItem
-                key={rowId(finding)}
-                onSelect={() => onPick(finding)}
-                value={`${finding.artists.join(" ")} ${finding.title} ${finding.logId ?? ""}`}
+                className={cn("search-row", !track.certified && "search-row--unlit")}
+                key={rowId(track)}
+                onSelect={() => onPick(track)}
+                value={rowId(track)}
               >
-                <span className="min-w-0 flex-1 truncate">
-                  {finding.artists.join(", ")} — {finding.title}
+                {/* `.search-row-title` so the unlit register dims the row to stardust at
+                    rest, matching the certified/uncertified split everywhere else (search,
+                    the openers, the rail) rather than leaving a full-cream title. */}
+                <span className="search-row-title min-w-0 flex-1 truncate">
+                  {track.artists.join(", ")} — {track.title}
                 </span>
-                <span className="track-log-id shrink-0">{finding.logId}</span>
+                {track.certified && track.logId ? (
+                  <span className="search-row-coordinate shrink-0">{track.logId}</span>
+                ) : (
+                  <SpotifyIcon aria-hidden="true" className="search-row-out" />
+                )}
               </CommandItem>
             ))}
           </CommandGroup>

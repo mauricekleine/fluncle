@@ -148,32 +148,41 @@ export function tracksHandlers(os: Implementer) {
     }
   });
 
-  // `list_mixable_tracks` — the findings that mix cleanly out of the given one (the
-  // `/mix` rail). Ranks the archive by the mixability engine, excludes the already-
-  // chained findings server-side, and returns each candidate with its reason chip and
-  // NO numeric score. The limit parses tolerantly like the feed's. An unknown
-  // coordinate / an all-null target / an empty archive all resolve to `{ findings: [] }`.
+  // `list_mixable_tracks` — the tracks that mix cleanly out of the given one (the `/mix`
+  // rail). Ranks the WHOLE archive by the mixability engine (a catalogue track is rankable
+  // the moment it has a key, so it competes with the findings on the same terms), excludes
+  // the already-chained tracks server-side, and returns each candidate with its reason chip,
+  // its `certified` register bit, and NO numeric score. The limit parses tolerantly like the
+  // feed's. An unknown coordinate / a keyless target / an empty archive all resolve to
+  // `{ findings: [] }`.
   //
-  // RATE LIMIT: accept-risk, no limiter (Decision 2). One bounded archive scan,
-  // comparable to the existing uncached `get_similar_findings`; the posture is
-  // recorded here and revisited at archive growth. Moot while /mix is admin-gated.
+  // `taste` is the seed: a comma-separated artist-slug list, which re-ranks the rail by
+  // mixability × taste. Absent, the rail is the plain mixability order.
+  //
+  // NOTHING TO STRIP. The payload is `MixTrackSchema`, which carries no private field to
+  // leak (no `sourceAudioKey`, no provenance) — and no finding-only field to leak into the
+  // unlit register either. The old `toPublicTrackListItem` pass is gone with the fat DTO it
+  // was cleaning up after.
+  //
+  // RATE LIMIT: accept-risk, no limiter (Decision 2). One key-pre-filtered archive scan,
+  // comparable to the existing uncached `get_similar_findings`. Revisit at archive growth —
+  // this is now a PUBLIC page's hot path rather than an admin-gated one.
   const listMixableTracksHandler = os.list_mixable_tracks.handler(async ({ input }) => {
     try {
       const limit = parseLimit(input.limit, MIXABLE_DEFAULT_LIMIT, MIXABLE_MAX_LIMIT);
-      const excludeLogIds = (input.exclude ?? "")
-        .split(",")
-        .map((value) => value.trim())
-        .filter(Boolean);
-      const findings = await getMixableTracks(input.idOrLogId, { excludeLogIds, limit });
+      const splitList = (raw: string | undefined) =>
+        (raw ?? "")
+          .split(",")
+          .map((value) => value.trim())
+          .filter(Boolean);
 
-      // Strip the private capture key from every candidate (reason chip stays).
-      return {
-        findings: findings.map((finding) => ({
-          ...toPublicTrackListItem(finding),
-          reason: finding.reason,
-        })),
-        ok: true,
-      } as const;
+      const findings = await getMixableTracks(input.idOrLogId, {
+        artistSlugs: splitList(input.taste),
+        exclude: splitList(input.exclude),
+        limit,
+      });
+
+      return { findings, ok: true } as const;
     } catch (error) {
       throw apiFault(error);
     }

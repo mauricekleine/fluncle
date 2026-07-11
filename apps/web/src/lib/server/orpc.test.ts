@@ -523,6 +523,8 @@ const PUBLIC_OPERATION_IDS = [
   "listArtists",
   "listEditions",
   "listGalaxies",
+  "listMixOpeners",
+  "listMixableArtists",
   "listMixableTracks",
   "listMixtapes",
   "listPrivateSavedFindings",

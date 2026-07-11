@@ -235,12 +235,12 @@ export const SURFACES: readonly Surface[] = [
   },
   {
     exposedContent: [
-      "the mixability set-builder — chain a set from Fluncle's findings that mixes clean, share it as a link",
+      "the free mixing tool — name artists you like, and Fluncle ranks what mixes in clean next from the whole archive; chain a set and share it as a link",
     ],
     kind: "web_route",
     name: "web.mix",
     operatorNotes:
-      "ADMIN-GATED at launch (RFC mixability-engine, Decision 1): the full /mix set-builder ships behind admin auth until the archive clears the ~250-finding floor. Registered here as `pending` (dark to every public consumer — the dev-row, llms.txt, the sitemap, /status) so going public is one flip: remove `pending` + set a web weight + announce. The `list_mixable_tracks` API op already ships at its final public tier, so the flip needs no rebuild. No probeConfig — the admin gate 302s a bare GET to /admin/login, which would read as a false 'down'.",
+      "PUBLIC-CAPABLE, gated by a SELF-LIFTING DEPTH MEASUREMENT (not admin auth). The old ~250-finding / admin gate is gone: `/mix` now measures the live archive on every load (`getMixChainDepth` — can the median track reach a full set + rail by a named harmonic move?) and opens to the world on its own the day the catalogue lands enough keyed depth. Until then a stranger is redirected home and the operator still gets in to dogfood. This entry stays `pending` (dark to the dev-row, llms.txt, the sitemap, /status) ONLY so we do not advertise a URL that still redirects — the flip is: confirm the depth gate has opened in prod, remove `pending`, announce. The web weight is pre-set, so the flip needs no other change. No probeConfig — a closed gate 302s a bare GET, which would read as a false 'down'.",
     pending: true,
     route: "/mix",
     url: `${SITE}/mix`,

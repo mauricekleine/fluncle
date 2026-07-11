@@ -143,6 +143,159 @@ export function keyRelationship(a: Camelot, b: Camelot): KeyRelationship {
   return "distant";
 }
 
+/**
+ * Is the move between two Camelot positions one the wheel gives a NAME to — same key,
+ * relative, adjacent, diagonal, energy? Everything else is `distant`: playable, but not a
+ * move a DJ makes on purpose.
+ *
+ * This is the archive's harmonic ADJACENCY, and it is load-bearing twice over. It bounds
+ * the candidate scan (`getMixableTracks` pre-filters `key in (…)` to the classes a named
+ * move can reach — the btree pre-filter ahead of the exact vector scan) and it defines the
+ * neighbourhood the depth gate measures (`mixChainDepth`). Both need ONE answer to "which
+ * tracks could plausibly follow this one", and this is it.
+ */
+export function isNamedMove(a: Camelot, b: Camelot): boolean {
+  return keyRelationship(a, b) !== "distant";
+}
+
+/**
+ * Every Camelot class reachable from `from` by a named move — itself, its relative, the two
+ * adjacent, the two diagonal, the two energy: 8 of the 24. The SQL pre-filter's source of
+ * truth (a class the wheel cannot name a move to can never rank, so it is never scanned).
+ */
+export function namedMoveClasses(from: Camelot): Camelot[] {
+  const out: Camelot[] = [];
+
+  for (const letter of ["A", "B"] as const) {
+    for (let number = 1; number <= 12; number += 1) {
+      const to: Camelot = { letter, number };
+
+      if (isNamedMove(from, to)) {
+        out.push(to);
+      }
+    }
+  }
+
+  return out;
+}
+
+// ── The depth gate (is the archive deep enough to chain a set?) ──────────────
+
+/**
+ * How long a set IS, taken from the archive rather than picked: Fluncle's own published
+ * mixtape runs 17 tracks. It is the only artifact in the product that answers "what counts
+ * as a set", so it is what the gate holds the archive to. A mix of 2 tracks is not a set.
+ */
+export const SET_FLOOR = 17;
+
+/**
+ * How deep the rail is — the number of next-track candidates `/mix` offers at each step
+ * (`list_mixable_tracks`' default limit, which imports this rather than re-declaring it, so
+ * the gate and the rail cannot drift apart).
+ */
+export const RAIL_DEPTH = 12;
+
+/**
+ * THE GATE. The old floor was a finding COUNT (~250) — a proxy for "is there enough depth
+ * to chain a set", and a number nobody could defend. This replaces it with the thing the
+ * proxy was standing in for, measured directly against what the tool can actually do:
+ *
+ *   From the median track, can you chain a whole set and still be CHOOSING at the last
+ *   transition, rather than accepting the only move left?
+ *
+ * A set is {@link SET_FLOOR} tracks; choosing means a full rail of {@link RAIL_DEPTH} at the
+ * end of it. So the median track must sit within a NAMED HARMONIC MOVE of at least
+ * `SET_FLOOR + RAIL_DEPTH` other rankable tracks. Neither number is invented: one is the
+ * length of Fluncle's own set, the other is the rail this tool already ships.
+ *
+ * The gate is self-lifting — it is a measurement of the live archive, not a flag anybody has
+ * to remember to flip. The catalogue is what dissolves it (a catalogue track is rankable the
+ * moment it has a key), which is precisely the roadmap's claim that a catalogue IS depth.
+ */
+export const MIX_PUBLIC_FLOOR = SET_FLOOR + RAIL_DEPTH;
+
+/** What the depth gate measured, and whether it opened. The `/mix` route's whole verdict. */
+export type MixChainDepth = {
+  /** The count-weighted median named-move neighbourhood over the archive's rankable tracks. */
+  median: number;
+  /** True ⇔ `median >= MIX_PUBLIC_FLOOR`: the archive can carry a set from the middle of it. */
+  open: boolean;
+  /** How many rankable (keyed) tracks the archive holds — the denominator, for the operator. */
+  rankable: number;
+};
+
+/**
+ * Measure the archive's chain depth from its KEY HISTOGRAM — `[{ key: "A minor", count: 7 }]`
+ * — and decide the gate. One `group by key` over 24-ish distinct values answers it, so the
+ * page pays an index read rather than a scan (see `tracks_key_idx`).
+ *
+ * For each rankable track: how many OTHER rankable tracks are a named move away. The median
+ * over all of them is the archive's depth. The median, not the mean, because the mean is
+ * flattered by the crowded keys — the question is what a TYPICAL starting point can do, and
+ * half the archive does at least this well.
+ *
+ * An unparseable key is not rankable and is not counted (`scoreMix` would drop it anyway),
+ * so the histogram may be fed the raw column verbatim.
+ */
+export function mixChainDepth(histogram: { count: number; key: string | null }[]): MixChainDepth {
+  // Fold the raw spellings onto the wheel: 24 classes, however the archive spells them.
+  const classes = new Map<string, { camelot: Camelot; count: number }>();
+
+  for (const { count, key } of histogram) {
+    const camelot = camelotOf(key);
+
+    if (!camelot || count <= 0) {
+      continue;
+    }
+
+    const code = `${camelot.number}${camelot.letter}`;
+    const existing = classes.get(code);
+
+    if (existing) {
+      existing.count += count;
+    } else {
+      classes.set(code, { camelot, count });
+    }
+  }
+
+  const entries = [...classes.values()];
+  const rankable = entries.reduce((sum, entry) => sum + entry.count, 0);
+
+  if (rankable === 0) {
+    return { median: 0, open: false, rankable: 0 };
+  }
+
+  // Every track in a class has the SAME neighbourhood size, so the per-track list is the
+  // class's neighbourhood repeated `count` times — no need to materialize a row per track.
+  const neighbourhoods: { count: number; size: number }[] = entries.map((entry) => {
+    const reachable = entries.reduce(
+      (sum, other) => (isNamedMove(entry.camelot, other.camelot) ? sum + other.count : sum),
+      0,
+    );
+
+    // `reachable` counts the track itself (its own class is always a named move from itself).
+    return { count: entry.count, size: reachable - 1 };
+  });
+
+  neighbourhoods.sort((left, right) => left.size - right.size);
+
+  // The count-weighted median: walk the sorted sizes until half the archive is behind us.
+  const half = Math.floor(rankable / 2);
+  let seen = 0;
+  let median = 0;
+
+  for (const { count, size } of neighbourhoods) {
+    seen += count;
+    median = size;
+
+    if (seen > half) {
+      break;
+    }
+  }
+
+  return { median, open: median >= MIX_PUBLIC_FLOOR, rankable };
+}
+
 // ── The BPM sub-score (band-contract percent delta) ──────────────────────────
 
 /**
@@ -201,6 +354,11 @@ function clamp01(value: number): number {
   return Math.min(1, Math.max(0, value));
 }
 
+/** The fixed affine calibration: a MuQ cosine → a [0,1] score. One curve, every consumer. */
+function calibrateCosine(cos: number): number {
+  return clamp01((cos - SONIC_CALIBRATION.lo) / (SONIC_CALIBRATION.hi - SONIC_CALIBRATION.lo));
+}
+
 /**
  * The sonic sub-score from an ALREADY-COMPUTED cosine, in [0,1], or `null` when the
  * cosine is absent OR the coverage gate is closed. The `/mix` rail's candidate scan
@@ -213,7 +371,50 @@ export function sonicSubScoreFromCosine(cos: number | null, gateOpen: boolean): 
     return null;
   }
 
-  return clamp01((cos - SONIC_CALIBRATION.lo) / (SONIC_CALIBRATION.hi - SONIC_CALIBRATION.lo));
+  return calibrateCosine(cos);
+}
+
+// ── Taste (the seed) ─────────────────────────────────────────────────────────
+
+/**
+ * A candidate's TASTE score: how close it sits to the nearest track by an artist the reader
+ * picked. Same MuQ space and same calibration as the sonic term — it is the same question
+ * ("how close do these two sound?") asked against a different anchor.
+ *
+ * MAX-SIMILARITY, NEVER A CENTROID, and the seed makes the argument harder than The Ear's,
+ * not softer. The Ear ruled against a centroid because the operator's taste turned out to be
+ * multi-modal (the k=4 galaxy fit found four regions he could name by ear, and their mean is
+ * a place none of his taste lives). A hand-picked seed is multi-modal BY CONSTRUCTION: the
+ * reader was asked for 5–10 artists precisely because one is not enough to describe them, and
+ * the mean of a liquid roller and a neuro stepper is a vector that sounds like neither — it
+ * would rank the tracks nearest that phantom ABOVE a dead ringer for any artist they actually
+ * named. Max-sim lets each seed win on its own tracks. Naming more artists then only ever
+ * ADDS reachable ground, which is the only behaviour a "pick the ones you like" control can
+ * honestly promise.
+ *
+ * `null` when the candidate has no vector, or when nothing was seeded.
+ */
+export function tasteSubScore(cos: number | null): number | null {
+  return cos === null ? null : calibrateCosine(cos);
+}
+
+/**
+ * The RAIL score — what actually orders `/mix` once a taste seed is present: the product of
+ * how cleanly a candidate mixes and how much it sounds like you.
+ *
+ * A PRODUCT, so both have to be true. Mixability is LOCAL (it is a fact about the pair — does
+ * this beatmatch, does this key up), taste is GLOBAL (it is a fact about the reader). A sum
+ * would let a spotless mix of something you would never play outrank a good mix of something
+ * you love; a product will not. It is also parameter-free — there is no weight to pick, no
+ * new constant to defend, and it degrades to plain mixability the instant taste is absent
+ * (`null`), which is exactly the un-seeded rail this replaces.
+ *
+ * And it anchors the chain. The sonic sub-score already pulls the rail toward the LAST track,
+ * so a long chain drifts wherever the tail wandered; taste pulls it back toward the reader at
+ * every step. Local cleanliness, global lane.
+ */
+export function railScore(mix: number, taste: number | null): number {
+  return taste === null ? mix : mix * taste;
 }
 
 /**
@@ -465,19 +666,37 @@ export function scoreMix(a: MixTrack, b: MixTrack, options: MixOptions = {}): Mi
  */
 export type MixCandidate<T> = { item: T; sonicCos?: number | null; track: MixTrack };
 
+/** A ranked candidate, score still attached — the internal shape taste re-ranks over. */
+export type MixScored<T> = { item: T; reason: MixReason; score: number };
+
+/**
+ * How many of the cleanest mixes taste is allowed to choose among (`RAIL_DEPTH × 25`).
+ *
+ * Taste re-ranks a SHORTLIST rather than the whole archive, and that is a deliberate bound,
+ * not a shortcut. Scoring taste means a `vector_distance_cos` per (candidate × seed probe):
+ * over a five-figure catalogue with a dozen probes that is the cross join The Ear exists to
+ * avoid — "it does not get slow, it dies". Over 300 it is a few thousand distance ops inside
+ * the database, which is nothing.
+ *
+ * It also keeps the tool's promise intact. The rail's claim is that EVERYTHING on it mixes
+ * clean; taste decides which of the clean ones you see first, and can never reach outside
+ * them to offer you something you would like but could not play.
+ */
+export const TASTE_SHORTLIST = RAIL_DEPTH * 25;
+
 /**
  * Rank `candidates` by descending mixability to `target`, breaking equal-score
  * plateaus by ASCENDING feature-vector distance (the texture tiebreak), then by index
  * (stable). Candidates whose combined score is `null` (no scorable term) are dropped —
- * the rail never shows a pair it cannot justify. Returns the top `limit` items with
- * each item's reason chip. A non-positive `limit` returns nothing.
+ * the rail never shows a pair it cannot justify. Returns the top `limit` scored items.
+ * A non-positive `limit` returns nothing.
  */
-export function rankMixable<T>(
+export function shortlistMixable<T>(
   target: MixTrack,
   candidates: MixCandidate<T>[],
   limit: number,
   options: MixOptions = {},
-): { item: T; reason: MixReason }[] {
+): MixScored<T>[] {
   if (limit <= 0) {
     return [];
   }
@@ -511,7 +730,50 @@ export function rankMixable<T>(
       left.index - right.index,
   );
 
-  return scored.slice(0, limit).map(({ item, reason }) => ({ item, reason }));
+  return scored.slice(0, limit).map(({ item, reason, score }) => ({ item, reason, score }));
+}
+
+/**
+ * Rank `candidates` by descending mixability to `target`, dropping the score. The un-seeded
+ * rail, and the operator's path search — every consumer that has no taste to apply.
+ */
+export function rankMixable<T>(
+  target: MixTrack,
+  candidates: MixCandidate<T>[],
+  limit: number,
+  options: MixOptions = {},
+): { item: T; reason: MixReason }[] {
+  return shortlistMixable(target, candidates, limit, options).map(({ item, reason }) => ({
+    item,
+    reason,
+  }));
+}
+
+/**
+ * Re-rank a mixability shortlist by {@link railScore} — mixability × taste — and cut it to
+ * `limit`. `tasteOf` returns a candidate's taste sub-score, or `null` when it has no vector
+ * to compare (an un-embedded row keeps its mixability rank rather than being punished for a
+ * missing measurement — the same "never 0 for absent data" rule the sub-scores follow).
+ * Ties fall back to the shortlist's own order, so this is stable and deterministic.
+ */
+export function applyTaste<T>(
+  shortlist: MixScored<T>[],
+  tasteOf: (item: T) => number | null,
+  limit: number,
+): { item: T; reason: MixReason }[] {
+  if (limit <= 0) {
+    return [];
+  }
+
+  const rescored = shortlist.map((entry, index) => ({
+    entry,
+    index,
+    rail: railScore(entry.score, tasteOf(entry.item)),
+  }));
+
+  rescored.sort((left, right) => right.rail - left.rail || left.index - right.index);
+
+  return rescored.slice(0, limit).map(({ entry }) => ({ item: entry.item, reason: entry.reason }));
 }
 
 // ── Path search (Product B) ──────────────────────────────────────────────────

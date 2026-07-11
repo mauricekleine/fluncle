@@ -318,6 +318,24 @@ export const tracks = sqliteTable(
     index("tracks_embed_queue_idx")
       .on(table.trackId)
       .where(sql`${table.sourceAudioKey} is not null and ${table.embeddingJson} is null`),
+    // The MIXABILITY pre-filter, and the one index `/mix` cannot be public without.
+    //
+    // The key is MANDATORY to be rankable (`scoreMix`'s floor: a pair whose key we do not
+    // know is a pair we cannot justify), so a keyed row is exactly a mixable row — which
+    // makes this the ratified "btree pre-filter ahead of an exact vector scan" shape from
+    // docs/local-database.md, not a nice-to-have. It carries two reads:
+    //
+    //   - The candidate scan (`getMixableTracks`). The rail only ever wants the ~8 Camelot
+    //     classes a named harmonic move can reach, so the scan is `key in (…)` — an index
+    //     range, roughly a third of the archive, instead of a full scan whose every
+    //     embedded row spills to overflow pages (the `embedding_json` trap above).
+    //   - The key histogram (`getMixChainDepth`). A `group by key` over 24-ish distinct
+    //     values, which this index answers WITHOUT touching the table at all.
+    //
+    // Both run on a public page load once the depth gate opens, over a table designed to
+    // grow to five figures and beyond. Unindexed, `/mix` is a full archive scan per
+    // keystroke of a chain.
+    index("tracks_key_idx").on(table.key),
   ],
 );
 
