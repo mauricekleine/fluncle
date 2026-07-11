@@ -111,6 +111,7 @@ export default function ArchiveScreen() {
 function HeaderPill({ label, onPress }: { label: string; onPress: () => void }) {
   return (
     <Pressable
+      accessibilityRole="button"
       onPress={onPress}
       hitSlop={8}
       style={{

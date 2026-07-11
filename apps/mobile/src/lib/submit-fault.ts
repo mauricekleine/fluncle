@@ -74,5 +74,5 @@ export const submitOutcomeCopy: Record<SubmitOutcome, string> = {
   failed: "That one didn't make it back to me. Give it another go in a moment.",
   offline: "Couldn't reach the Galaxy just then. Check your connection and try again.",
   rate_limited:
-    "Easy, cosmonaut. That's a fair few in a short stretch. Give it an hour, then send the next one.",
+    "Easy, fam. That's a fair few in a short stretch. Give it an hour, then send the next one.",
 };

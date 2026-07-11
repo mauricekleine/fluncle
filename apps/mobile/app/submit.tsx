@@ -4,6 +4,7 @@ import {
   Platform,
   Pressable,
   ScrollView,
+  StyleSheet,
   Text,
   TextInput,
   View,
@@ -208,6 +209,7 @@ export default function SubmitScreen() {
             ) : null}
 
             <Pressable
+              accessibilityRole="button"
               onPress={() => router.back()}
               style={{ alignItems: "center", paddingVertical: 10 }}
             >
@@ -231,47 +233,65 @@ function CandidateRow({
   result: TrackSearchResult;
   selected: boolean;
 }) {
+  // The row layout lives on a plain inner View with a STATIC StyleSheet style,
+  // mirroring finding-row.tsx: a Pressable style FUNCTION dropped flexDirection
+  // under NativeWind in this app, so the Pressable stays layout-free and only the
+  // heat/selection wash rides the pressed/selected conditionals.
   return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityState={{ selected }}
-      onPress={onPress}
-      style={({ pressed }) => ({
-        alignItems: "center",
-        backgroundColor: selected || pressed ? color.goldVeil : "transparent",
-        borderColor: selected ? color.eclipseGold : color.dustLine,
-        borderRadius: radius.md,
-        borderWidth: 1,
-        flexDirection: "row",
-        gap: 12,
-        padding: 10,
-      })}
-    >
-      <Image
-        source={result.artworkUrl}
-        style={{
-          borderColor: color.dustLine,
-          borderRadius: radius.artwork,
-          borderWidth: 1,
-          height: 48,
-          width: 48,
-        }}
-        contentFit="cover"
-        transition={200}
-      />
-      <View style={{ flex: 1, gap: 3 }}>
-        <Text style={[font.title, { color: color.starlightCream, fontSize: 15 }]} numberOfLines={2}>
-          {result.artists.join(", ")} — {result.title}
-        </Text>
-        {result.album ? (
-          <Text style={[font.body, { color: color.stardust, fontSize: 13 }]} numberOfLines={1}>
-            {result.album}
-          </Text>
-        ) : null}
-      </View>
+    <Pressable accessibilityRole="button" accessibilityState={{ selected }} onPress={onPress}>
+      {({ pressed }) => (
+        <View
+          style={[
+            styles.candidateRow,
+            selected ? styles.candidateSelected : null,
+            pressed && !selected ? styles.candidatePressed : null,
+          ]}
+        >
+          <Image
+            source={result.artworkUrl}
+            style={styles.candidateArt}
+            contentFit="cover"
+            transition={200}
+          />
+          <View style={styles.candidateContent}>
+            <Text style={[font.title, styles.candidateTitle]} numberOfLines={2}>
+              {result.artists.join(", ")} — {result.title}
+            </Text>
+            {result.album ? (
+              <Text style={[font.body, styles.candidateAlbum]} numberOfLines={1}>
+                {result.album}
+              </Text>
+            ) : null}
+          </View>
+        </View>
+      )}
     </Pressable>
   );
 }
+
+const styles = StyleSheet.create({
+  candidateAlbum: { color: color.stardust, fontSize: 13 },
+  candidateArt: {
+    borderColor: color.dustLine,
+    borderRadius: radius.artwork,
+    borderWidth: 1,
+    height: 48,
+    width: 48,
+  },
+  candidateContent: { flex: 1, gap: 3 },
+  candidatePressed: { backgroundColor: color.goldVeil },
+  candidateRow: {
+    alignItems: "center",
+    borderColor: color.dustLine,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    flexDirection: "row",
+    gap: 12,
+    padding: 10,
+  },
+  candidateSelected: { backgroundColor: color.goldVeil, borderColor: color.eclipseGold },
+  candidateTitle: { color: color.starlightCream, fontSize: 15 },
+});
 
 const inputStyle = {
   backgroundColor: color.sleeveBlack,

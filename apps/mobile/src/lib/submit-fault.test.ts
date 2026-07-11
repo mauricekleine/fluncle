@@ -80,3 +80,11 @@ for (const outcome of ["already_logged", "failed", "offline", "rate_limited"] as
   assertEqual(copy.length > 0, true, `${outcome} has copy`);
   assertEqual(copy.includes("!"), false, `${outcome} copy has no exclamation mark`);
 }
+
+// 7. The rate-limit line is the reviewer-ratified string, byte-exact ("fam", not a
+//    second "cosmonaut" — kinship-term scarcity; the success screen already carries one).
+assertEqual(
+  submitOutcomeCopy.rate_limited,
+  "Easy, fam. That's a fair few in a short stretch. Give it an hour, then send the next one.",
+  "rate_limited copy is the ratified string",
+);
