@@ -36,7 +36,9 @@ The draft's headline claim was **"the engine is dead right now, at n=60"**, read
 
 The catalogue's job is to make the **embedding space dense**. With 3 vectors, MuQ similarity is nothing. With 10k+ it becomes a real retrieval space, and the sonic term turns on.
 
-But the panel found the sharper truth. **Fluncle's binding constraint is not "the archive is small." It is "Maurice can only find ~60 bangers a year, by hand, one at a time."** A catalogue with embeddings, ranked _"closest to your findings, not yet logged,"_ is **a discovery engine for the operator** — it makes the _findings_ pipeline faster, and the findings are the entire equity. That version needs no public `/mix`, no taste-seeding, no SEO surfaces, and **no 100k**.
+But the panel found the sharper truth — **though it got the premise badly wrong, and the correction sharpens it further.** The draft asserted "Maurice can only find ~60 bangers a year, by hand." **FALSE (operator, 2026-07-11): the 60 findings are from the past FOUR WEEKS.** He is finding at roughly 15/week, not 60/year — a 13× error, and it inverts the argument. Volume is _not_ the constraint; he is not starved for tracks.
+
+So what IS the catalogue's value to the operator? **Not "find more" — "find better, and see what you are missing."** At 15/week the dig is fast but necessarily _shallow and recency-biased_: it surfaces what the algorithms and the feeds put in front of him, which means whole regions of the genre — older releases, small labels, the long tail — are simply never seen. A catalogue with embeddings, ranked _"closest to your findings, not yet logged,"_ is **a telescope, not a conveyor belt**: it points at the tracks that sit near what he already loves but never crossed his path. That version needs no public `/mix`, no taste-seeding, no SEO surfaces, and **no 100k**. It also compounds: at 15 findings/week the taste corpus itself is growing fast, so the ranking gets sharper every week.
 
 So the catalogue has two customers, and they arrive in order:
 
