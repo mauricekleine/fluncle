@@ -85,7 +85,8 @@ All `application/json`; the OpenAPI document at `/api/v1/openapi.json` advertise
 | Surface                     | Route                                  | Format                     | Exposes                                                                                                                      | Weight    |
 | --------------------------- | -------------------------------------- | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------- | --------- |
 | `discovery.llms`            | `/llms.txt`                            | `text/markdown`            | the plain-language map of the Galaxy for LLMs                                                                                | primary   |
-| `discovery.sitemap`         | `/sitemap.xml`                         | `application/xml`          | the XML sitemap of every public page                                                                                         | secondary |
+| `discovery.sitemap`         | `/sitemap.xml`                         | `application/xml`          | the XML sitemap index of every public page                                                                                   | secondary |
+| `discovery.sitemap-shard`   | `/sitemap/$shard`                      | `application/xml`          | one child sitemap: the pages / findings / graph / logbook URLs, auto-paged                                                   | —         |
 | `discovery.llms-full`       | `/llms-full.txt`                       | `text/markdown`            | the entire archive in one ingestible markdown document, every finding                                                        | secondary |
 | `discovery.openapi`         | `/api/v1/openapi.json`                 | `application/openapi+json` | the public API as an OpenAPI 3.1 document (admin paths excluded)                                                             | secondary |
 | `discovery.robots`          | `/robots.txt`                          | `text/plain`               | the crawl policy + Content-Signal (search/AI-input/AI-train all yes) + sitemap link                                          | tertiary  |
@@ -216,6 +217,7 @@ The weight ladder within a context is unchanged — **`primary`** (the loud fron
 | `feed.calendar`             | tertiary  |           |           |           |
 | `discovery.llms`            | primary   |           |           |           |
 | `discovery.sitemap`         | secondary |           |           |           |
+| `discovery.sitemap-shard`   |           |           |           |           |
 | `discovery.llms-full`       | secondary |           |           |           |
 | `discovery.openapi`         | secondary |           |           |           |
 | `discovery.robots`          | tertiary  |           |           |           |

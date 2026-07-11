@@ -1,15 +1,39 @@
 import { siteUrl } from "./fluncle-links";
 
-// The sitemap document, pure: the route feeds it rows; lastmod is REAL
-// (per-finding freshest of video_squared_at / updated_at / added_at from the
-// query), never a build stamp — entries without a known date simply omit the tag.
+// The sitemap documents, pure: the routes feed these rows; lastmod is REAL (per-finding
+// freshest of video_squared_at / updated_at / added_at from the query), never a build stamp —
+// entries without a known date simply omit the tag.
 //
-// A finding that carries a rendered video also gets a Google video-sitemap
-// `<video:video>` block (thumbnail/title/description/content_loc), and every
-// finding gets an `<image:image>` (cover art) for Google Images — so the archive
-// surfaces its videos and its covers to the right crawlers, not just a plain
-// `<loc>`. A malformed video block gets the WHOLE sitemap rejected, so every
-// text field is XML-escaped and the field order follows Google's spec exactly.
+// ── WHY IT IS A SITEMAP INDEX ───────────────────────────────────────────────────────────
+// Google rejects a sitemap wholesale past 50,000 URLs or 50 MB uncompressed — a breach is not
+// partially honoured, the document is DROPPED. One flat `<urlset>` therefore carries a cliff
+// it cannot see itself approaching, and "we are nowhere near it" is a claim that expires.
+//
+// So `/sitemap.xml` is a `<sitemapindex>` and the URLs live in children, each child a KIND
+// (`pages` / `findings` / `graph` / `logbook`) and each kind AUTO-PAGED at
+// {@link SITEMAP_MAX_URLS}. The breach stops being something to watch and becomes something
+// that cannot happen: a kind that outgrows a child grows a second child instead.
+//
+// Splitting by kind is also the diagnostic. Search Console reports coverage PER SITEMAP, so
+// "graph: 41 submitted, 3 indexed" is a sentence you can read — which is exactly the question
+// worth asking of a graph that grows with a crawler.
+//
+// A finding that carries a rendered video also gets a Google video-sitemap `<video:video>`
+// block (thumbnail/title/description/content_loc), and every finding gets an `<image:image>`
+// (cover art) for Google Images — so the archive surfaces its videos and its covers to the
+// right crawlers, not just a plain `<loc>`. A malformed video block gets the WHOLE sitemap
+// rejected, so every text field is XML-escaped and the field order follows Google's spec.
+
+/**
+ * The per-child URL ceiling. Google's hard limit is 50,000; this sits under it with room, so
+ * a child never lands on the boundary and a miscount is a cheap extra file, not a rejection.
+ */
+export const SITEMAP_MAX_URLS = 45_000;
+
+/** The four kinds, and the order the index lists them in. */
+export const SITEMAP_KINDS = ["pages", "findings", "graph", "logbook"] as const;
+
+export type SitemapKind = (typeof SITEMAP_KINDS)[number];
 
 /** A finding's rendered video, for the `<video:video>` sitemap extension. */
 export type SitemapVideo = {
@@ -71,6 +95,30 @@ export type SitemapEntity = {
 // ones render `noindex, follow`). The route filters; this just formats.
 export type SitemapGalaxy = {
   slug: string;
+};
+
+/**
+ * Everything the sitemap knows, gathered once. Both routes read the same bags — the index to
+ * count and date its children, a child to slice its own page — so a URL the index promises is
+ * always a URL the child serves.
+ */
+export type SitemapBags = {
+  albums: SitemapEntity[];
+  artists: SitemapArtist[];
+  galaxies: SitemapGalaxy[];
+  labels: SitemapEntity[];
+  logbook: SitemapLogbookEntry[];
+  /** The `/log/<coordinate>` pages: findings AND published mixtapes. */
+  logs: SitemapLogPage[];
+};
+
+export const EMPTY_SITEMAP_BAGS: SitemapBags = {
+  albums: [],
+  artists: [],
+  galaxies: [],
+  labels: [],
+  logbook: [],
+  logs: [],
 };
 
 // Escape the five XML metacharacters so a Spotify-sourced title/artist or an
@@ -157,64 +205,159 @@ function galaxyEntry(page: SitemapGalaxy): string {
   return `  <url>\n    <loc>${loc}</loc>\n  </url>`;
 }
 
-export function buildSitemapXml(
-  logPages: SitemapLogPage[],
-  artistPages: SitemapArtist[] = [],
-  logbookPages: SitemapLogbookEntry[] = [],
-  galaxyPages: SitemapGalaxy[] = [],
-  // The graph pages (labels + albums) arrive as ONE named bag rather than two more
-  // positionals — the list of trailing `[]`s at the call site was already at its limit.
-  entities: { albums?: SitemapEntity[]; labels?: SitemapEntity[] } = {},
-): string {
-  const labelPages = entities.labels ?? [];
-  const albumPages = entities.albums ?? [];
-  const latest = [
-    ...logPages.map((page) => page.lastmod),
-    ...artistPages.map((page) => page.lastmod),
-    ...logbookPages.map((page) => page.lastmod),
-    ...labelPages.map((page) => page.lastmod),
-    ...albumPages.map((page) => page.lastmod),
-  ]
+/** The freshest ISO date in a bag of maybe-dated pages, or undefined when nothing is dated. */
+function freshest(dates: (string | undefined)[]): string | undefined {
+  return dates
     .filter((value): value is string => Boolean(value))
     .sort()
     .at(-1);
+}
 
-  // The /logbook index's lastmod: the freshest authored entry (same filter-then-sort
-  // shape as `latest`, so the bare sort is over a `string[]`).
-  const logbookLatest = logbookPages
-    .map((page) => page.lastmod)
-    .filter((value): value is string => Boolean(value))
-    .sort()
-    .at(-1);
+function bagLastmod(bags: SitemapBags): string | undefined {
+  return freshest([
+    ...bags.logs.map((page) => page.lastmod),
+    ...bags.artists.map((page) => page.lastmod),
+    ...bags.logbook.map((page) => page.lastmod),
+    ...bags.labels.map((page) => page.lastmod),
+    ...bags.albums.map((page) => page.lastmod),
+  ]);
+}
 
-  const entries = [
-    staticEntry(`${siteUrl}/`, latest),
-    staticEntry(`${siteUrl}/log`, latest),
-    staticEntry(`${siteUrl}/logbook`, logbookLatest),
-    staticEntry(`${siteUrl}/mixtapes`, latest),
-    staticEntry(`${siteUrl}/artists`, latest),
-    // The graph HUBS are listed unconditionally, exactly like /artists: a hub is a real page
-    // whose content is the whole list, so the per-page thin-content gate below (which can,
-    // legitimately, admit no DETAIL pages at all — today every album in the archive is a
-    // single) says nothing about whether the hub itself is worth indexing. It is.
-    staticEntry(`${siteUrl}/labels`, latest),
-    staticEntry(`${siteUrl}/albums`, latest),
-    staticEntry(`${siteUrl}/about`),
-    staticEntry(`${siteUrl}/privacy`),
-    staticEntry(`${siteUrl}/galaxy`),
-    // The `/galaxies` lens index — listed only once the launch gate has opened (the
-    // route feeds an empty `galaxyPages` before then, keeping the pre-launch dark state).
-    ...(galaxyPages.length > 0 ? [staticEntry(`${siteUrl}/galaxies`)] : []),
-    ...logPages.map((page) => findingEntry(page)),
-    ...artistPages.map((page) => artistEntry(page)),
-    ...labelPages.map((page) => entityEntry("label", page)),
-    ...albumPages.map((page) => entityEntry("album", page)),
-    ...logbookPages.map((page) => logbookEntry(page)),
-    ...galaxyPages.map((page) => galaxyEntry(page)),
-  ];
+/**
+ * Every `<url>` of one kind, in order. The single source of what a kind CONTAINS — the index
+ * counts these to size its children and a child slices these to serve one, so the two can
+ * never disagree about what exists.
+ */
+function kindEntries(kind: SitemapKind, bags: SitemapBags): string[] {
+  switch (kind) {
+    case "findings":
+      return bags.logs.map((page) => findingEntry(page));
+
+    case "graph":
+      return [
+        ...bags.artists.map((page) => artistEntry(page)),
+        ...bags.labels.map((page) => entityEntry("label", page)),
+        ...bags.albums.map((page) => entityEntry("album", page)),
+        ...bags.galaxies.map((page) => galaxyEntry(page)),
+      ];
+
+    case "logbook":
+      return bags.logbook.map((page) => logbookEntry(page));
+
+    case "pages": {
+      const latest = bagLastmod(bags);
+      // The /logbook index's lastmod: the freshest authored entry.
+      const logbookLatest = freshest(bags.logbook.map((page) => page.lastmod));
+
+      return [
+        staticEntry(`${siteUrl}/`, latest),
+        staticEntry(`${siteUrl}/log`, latest),
+        staticEntry(`${siteUrl}/logbook`, logbookLatest),
+        staticEntry(`${siteUrl}/mixtapes`, latest),
+        staticEntry(`${siteUrl}/artists`, latest),
+        // The graph HUBS are listed unconditionally, exactly like /artists: a hub is a real
+        // page whose content is the whole list, so the per-page thin-content gate (which can,
+        // legitimately, admit no DETAIL pages at all) says nothing about whether the hub
+        // itself is worth indexing. It is.
+        staticEntry(`${siteUrl}/labels`, latest),
+        staticEntry(`${siteUrl}/albums`, latest),
+        staticEntry(`${siteUrl}/about`),
+        staticEntry(`${siteUrl}/privacy`),
+        staticEntry(`${siteUrl}/galaxy`),
+        // The `/galaxies` lens index — listed only once the launch gate has opened (the route
+        // feeds an empty `galaxies` bag before then, keeping the pre-launch dark state).
+        ...(bags.galaxies.length > 0 ? [staticEntry(`${siteUrl}/galaxies`)] : []),
+      ];
+    }
+  }
+}
+
+/** The freshest lastmod inside one kind — a child sitemap's `<lastmod>` in the index. */
+function kindLastmod(kind: SitemapKind, bags: SitemapBags): string | undefined {
+  switch (kind) {
+    case "findings":
+      return freshest(bags.logs.map((page) => page.lastmod));
+
+    case "graph":
+      return freshest([
+        ...bags.artists.map((page) => page.lastmod),
+        ...bags.labels.map((page) => page.lastmod),
+        ...bags.albums.map((page) => page.lastmod),
+      ]);
+
+    case "logbook":
+      return freshest(bags.logbook.map((page) => page.lastmod));
+
+    case "pages":
+      return bagLastmod(bags);
+  }
+}
+
+/** How many children one kind needs. Always ≥ 1 for `pages` (the hubs are never empty). */
+export function shardCount(kind: SitemapKind, bags: SitemapBags): number {
+  return Math.ceil(kindEntries(kind, bags).length / SITEMAP_MAX_URLS);
+}
+
+/** The path of one child, 1-indexed: `/sitemap/findings-1.xml`. */
+export function shardPath(kind: SitemapKind, page: number): string {
+  return `/sitemap/${kind}-${page}.xml`;
+}
+
+/**
+ * Parse the `$shard` route param — the WHOLE segment, `.xml` and all — back to its kind and
+ * page. Anything else is undefined, which the route turns into a 404: the param is a stranger's
+ * string, so the allowlist of four kinds is the validator.
+ */
+export function parseShard(shard: string): { kind: SitemapKind; page: number } | undefined {
+  const match = /^([a-z]+)-(\d+)\.xml$/.exec(shard);
+  const kind = SITEMAP_KINDS.find((candidate) => candidate === match?.[1]);
+  const page = Number(match?.[2] ?? 0);
+
+  return kind && Number.isSafeInteger(page) && page >= 1 ? { kind, page } : undefined;
+}
+
+const URLSET_OPEN =
+  '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:image="http://www.google.com/schemas/sitemap-image/1.1" xmlns:video="http://www.google.com/schemas/sitemap-video/1.1">';
+
+/**
+ * One child sitemap: the `page`-th slice of `kind`, capped at {@link SITEMAP_MAX_URLS}.
+ * Returns undefined for a page past the end, which the route turns into a 404 — an empty
+ * `<urlset>` would tell a crawler the URLs had been REMOVED.
+ */
+export function buildSitemapShardXml(
+  kind: SitemapKind,
+  page: number,
+  bags: SitemapBags,
+): string | undefined {
+  const entries = kindEntries(kind, bags).slice(
+    (page - 1) * SITEMAP_MAX_URLS,
+    page * SITEMAP_MAX_URLS,
+  );
+
+  if (entries.length === 0) {
+    return undefined;
+  }
+
+  return `<?xml version="1.0" encoding="UTF-8"?>\n${URLSET_OPEN}\n${entries.join("\n")}\n</urlset>`;
+}
+
+/**
+ * `/sitemap.xml` — the index. Lists every child that actually has URLs, so an archive with no
+ * logbook advertises no logbook sitemap rather than an empty one.
+ */
+export function buildSitemapIndexXml(bags: SitemapBags): string {
+  const children = SITEMAP_KINDS.flatMap((kind) => {
+    const lastmod = kindLastmod(kind, bags);
+
+    return Array.from({ length: shardCount(kind, bags) }, (_unused, index) => {
+      const loc = `${siteUrl}${shardPath(kind, index + 1)}`;
+
+      return `  <sitemap>\n    <loc>${loc}</loc>${lastmodTag(lastmod)}\n  </sitemap>`;
+    });
+  });
 
   return `<?xml version="1.0" encoding="UTF-8"?>
-<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:image="http://www.google.com/schemas/sitemap-image/1.1" xmlns:video="http://www.google.com/schemas/sitemap-video/1.1">
-${entries.join("\n")}
-</urlset>`;
+<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+${children.join("\n")}
+</sitemapindex>`;
 }

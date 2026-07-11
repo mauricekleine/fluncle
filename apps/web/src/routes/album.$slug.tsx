@@ -46,6 +46,12 @@ type AlbumPageData =
 /**
  * Resolve the album page's data. Extracted from the server fn so the indexability decision
  * is unit-testable (see -album-page.test.ts), the `resolveArtistPageData` precedent.
+ *
+ * The zero-finding guard is the same one `/label/<slug>` carries, and it says the same
+ * thing: **the catalogue DEEPENS a page, it never CREATES one.** An `albums` row is already
+ * minted only off a certified finding, so today it can only fire if a finding was later
+ * removed — but the rule belongs on both graph pages, stated once and tested, rather than
+ * held implicitly by a write path a future writer could widen.
  */
 export async function resolveAlbumPageData(slug: string): Promise<AlbumPageData> {
   const album = await getAlbumBySlug(slug);
@@ -61,17 +67,22 @@ export async function resolveAlbumPageData(slug: string): Promise<AlbumPageData>
     getLabelForAlbum(album.id),
   ]);
 
+  if (findings.length === 0) {
+    return { status: "missing" };
+  }
+
   return {
     artists,
-    catalogue,
+    catalogue: catalogue.tracks,
     // The record's cover is its freshest finding's album art — never invented, never
     // re-hosted (the `i.scdn.co` attribution-by-link precedent).
     coverImageUrl: findings[0]?.albumImageUrl,
     findings,
     // Thin-content gate: index only past ALBUM_INDEX_MIN_TRACKS RENDERABLE tracks — the
     // findings plus the quieter rows, because both are real content on the page. The
-    // sitemap keys off the same numbers, so an indexable page is never orphaned from it.
-    indexable: findings.length + catalogue.length >= ALBUM_INDEX_MIN_TRACKS,
+    // sitemap keys off the same numbers (the entity's TRUE catalogue total, never the
+    // rendered slice), so an indexable page is never orphaned from it.
+    indexable: findings.length + catalogue.total >= ALBUM_INDEX_MIN_TRACKS,
     label,
     name: album.name,
     slug: album.slug,
