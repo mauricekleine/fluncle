@@ -18,7 +18,9 @@
 
 import { type Client } from "@libsql/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { linkTrackToAlbum } from "./albums";
 import { createIntegrationDb } from "./integration-db";
+import { linkTrackToLabel } from "./labels";
 import { searchArchive } from "./search";
 
 // The LLM tier is a network call. Stubbed here so each test states EXACTLY what the model
@@ -99,6 +101,14 @@ async function seed(client: Client, track: Fixture): Promise<void> {
       sql: `insert into findings (track_id, log_id, added_at) values (?, ?, ?)`,
     });
   }
+
+  // The GRAPH POINTERS, written by the REAL publish-path functions rather than by a hand-
+  // rolled insert — so the `labels` / `albums` rows and the `tracks.label_id` / `album_id`
+  // edges this fixture stands on are exactly the ones production writes. The entity tier
+  // reads THROUGH those pointers; a fixture that only set the raw strings would let a broken
+  // join pass.
+  await linkTrackToLabel(track.trackId, track.label);
+  await linkTrackToAlbum(track.trackId, track.album);
 }
 
 beforeEach(async () => {
@@ -110,6 +120,7 @@ beforeEach(async () => {
   // (0.0): Netsky at 0.1 is nearest, the uncertified track at 0.3 next, Andromedik at 1.2
   // furthest.
   await seed(db, {
+    album: "Second Nature",
     angle: 0.1,
     artists: ["Netsky", "Bev Lee Harling"],
     bpm: 175.5,
@@ -121,6 +132,7 @@ beforeEach(async () => {
     trackId: "certified-netsky",
   });
   await seed(db, {
+    album: "Chapter One",
     angle: 0,
     artists: ["1991"],
     bpm: 174,
@@ -132,6 +144,7 @@ beforeEach(async () => {
     trackId: "certified-1991",
   });
   await seed(db, {
+    album: "Take Me Away (Remixes)",
     angle: 1.2,
     artists: ["Andromedik", "Lexurus"],
     bpm: 174,
@@ -145,8 +158,11 @@ beforeEach(async () => {
 
   // …and one UNCERTIFIED track. A `tracks` row with no `findings` row: a light Fluncle's
   // instruments measured from a distance and never went to. It has no coordinate, so search
-  // must find it and the client must link it OUT.
+  // must find it and the client must link it OUT. It sits on a label AND a record Fluncle
+  // HAS certified something on, so both entities carry it — which is the whole reason the
+  // graph pages exist.
   await seed(db, {
+    album: "Second Nature",
     angle: 0.3,
     artists: ["Netsky"],
     bpm: 172,
@@ -161,11 +177,6 @@ beforeEach(async () => {
     args: [],
     sql: `insert into artists (id, name, slug, created_at, updated_at)
           values ('a1', 'Netsky', 'netsky', '2026-07-01', '2026-07-01')`,
-  });
-  await db.execute({
-    args: [],
-    sql: `insert into labels (id, name, slug, created_at, updated_at)
-          values ('l1', 'Hospital Records', 'hospital-records', '2026-07-01', '2026-07-01')`,
   });
 });
 
@@ -235,6 +246,10 @@ describe("tier 1 — a coordinate", () => {
 
 // ── Tier 2 · the exact entity ────────────────────────────────────────────────────────
 
+// An artist, a label, and an album are ONE affordance — the thing you searched for, offered as
+// a destination, with its tracks under it. The label and the album used to come back as a bare
+// filter chip (their pages did not exist when search shipped); they are first-class here now,
+// and these three tests are the same test three times ON PURPOSE.
 describe("tier 2 — an exact entity name", () => {
   it("jumps to the artist page, offers the artist, and lists their tracks under it", async () => {
     const result = await searchArchive({ q: "Netsky" });
@@ -249,16 +264,55 @@ describe("tier 2 — an exact entity name", () => {
     expect(translateQuery).not.toHaveBeenCalled();
   });
 
-  it("turns a label into the filter it obviously is (a label has no page — yet)", async () => {
+  it("jumps to the label page, offers the label, and lists its tracks under it", async () => {
     const result = await searchArchive({ q: "hospital records" });
 
     expect(result.kind).toBe("entity");
-    expect(result.redirect).toBeUndefined();
-    expect(result.filters).toEqual({ label: "Hospital Records" });
+    expect(result.redirect).toBe("/label/hospital-records");
+    expect(result.entities).toEqual([
+      { kind: "label", name: "Hospital Records", slug: "hospital-records" },
+    ]);
+    // No filter chip: the entity IS the answer, exactly as it is for the artist.
+    expect(result.filters).toBeUndefined();
     expect(result.results.map((hit) => hit.trackId)).toEqual([
       "certified-netsky",
       "uncertified-netsky",
     ]);
+    expect(translateQuery).not.toHaveBeenCalled();
+  });
+
+  it("jumps to the album page, offers the album, and lists its tracks under it", async () => {
+    const result = await searchArchive({ q: "second nature" });
+
+    expect(result.kind).toBe("entity");
+    expect(result.redirect).toBe("/album/second-nature");
+    expect(result.entities).toEqual([
+      { kind: "album", name: "Second Nature", slug: "second-nature" },
+    ]);
+    expect(result.filters).toBeUndefined();
+    expect(result.results.map((hit) => hit.trackId)).toEqual([
+      "certified-netsky",
+      "uncertified-netsky",
+    ]);
+    expect(translateQuery).not.toHaveBeenCalled();
+  });
+
+  // The guard that keeps search from offering an empty page: the catalogue crawler mints a
+  // `labels` row for every imprint it walks past, and one Fluncle has certified NOTHING on has
+  // nothing to show. It stays the filter it always was — never a dead link.
+  it("declines to jump to a label with no certified finding on it", async () => {
+    await db.execute({
+      args: [],
+      sql: `insert into labels (id, name, slug, created_at, updated_at)
+            values ('l-crawled', 'Crawled Imprint', 'crawled-imprint', '2026-07-01', '2026-07-01')`,
+    });
+
+    const result = await searchArchive({ q: "Crawled Imprint" });
+
+    expect(result.kind).toBe("entity");
+    expect(result.redirect).toBeUndefined();
+    expect(result.entities).toEqual([]);
+    expect(result.filters).toEqual({ label: "Crawled Imprint" });
   });
 });
 
@@ -277,7 +331,6 @@ describe("tier 3 — a bare token", () => {
     const result = await searchArchive({ q: "andro" });
 
     expect(result.results.map((hit) => hit.trackId)).toEqual(["certified-andromedik"]);
-    expect(result.entities).toEqual([]);
   });
 
   it("offers the artist as a jump target beside the rows", async () => {
@@ -287,6 +340,28 @@ describe("tier 3 — a bare token", () => {
 
     expect(result.kind).toBe("token");
     expect(result.entities).toEqual([{ kind: "artist", name: "Netsky", slug: "netsky" }]);
+  });
+
+  it("offers the label and the album as jump targets too — one affordance, three kinds", async () => {
+    expect((await searchArchive({ q: "hospi" })).entities).toEqual([
+      { kind: "label", name: "Hospital Records", slug: "hospital-records" },
+    ]);
+    expect((await searchArchive({ q: "second" })).entities).toEqual([
+      { kind: "album", name: "Second Nature", slug: "second-nature" },
+    ]);
+  });
+
+  it("orders the jump targets artist → label → album (a name is most often a person)", async () => {
+    // "andro" prefixes the Andromedik LABEL (the artist's own imprint); "net" prefixes the
+    // Netsky artist. Ask for both at once and the artist leads.
+    const andro = await searchArchive({ q: "andro" });
+
+    expect(andro.entities.map((entity) => entity.kind)).toEqual(["label"]);
+    expect(andro.entities[0]?.slug).toBe("andromedik");
+
+    const nets = await searchArchive({ q: "net" });
+
+    expect(nets.entities[0]?.kind).toBe("artist");
   });
 });
 

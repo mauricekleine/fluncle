@@ -18,6 +18,8 @@ import { NavFooter } from "./nav-footer";
 const INTERNAL_PATHS = [
   "/log",
   "/artists",
+  "/albums",
+  "/labels",
   "/galaxies",
   "/logbook",
   "/mixtapes",
@@ -55,7 +57,16 @@ describe("NavFooter SSR anchors", () => {
   });
 
   it("renders real <a href> anchors for every internal index", () => {
-    for (const path of ["/log", "/artists", "/galaxies", "/logbook", "/mixtapes", "/about"]) {
+    for (const path of [
+      "/log",
+      "/logbook",
+      "/galaxies",
+      "/mixtapes",
+      "/artists",
+      "/albums",
+      "/labels",
+      "/about",
+    ]) {
       expect(html).toContain(`href="${path}"`);
     }
   });
@@ -70,6 +81,9 @@ describe("NavFooter SSR anchors", () => {
     expect(html).toContain('rel="noreferrer"');
     // A real <footer> landmark and labelled navs (crawlable structure).
     expect(html).toContain("<footer");
-    expect(html).toContain('aria-label="Explore"');
+    // The two browse groups are separately labelled landmarks — the fork is in the DOM,
+    // not just in the ink (what he DID vs what he found it AMONG).
+    expect(html).toContain('aria-label="The trail"');
+    expect(html).toContain('aria-label="The crates"');
   });
 });

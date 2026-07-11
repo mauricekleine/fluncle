@@ -88,11 +88,19 @@ export const SearchHitSchema = z
   })
   .meta({ id: "SearchHit" });
 
-/** An entity a query named or prefixed — a jump target, not a result row. */
+/**
+ * An entity a query named or prefixed — a jump target, not a result row.
+ *
+ * The three nodes of the graph that have a PAGE: an artist (`/artist/<slug>`), a label
+ * (`/label/<slug>`), an album (`/album/<slug>`). They are one shape because they are one
+ * affordance: the thing you searched for, offered as a destination, with its cover or its
+ * portrait. `kind` decides the route and nothing else. (The log is the fourth node, and it
+ * needs no entity row — a coordinate resolves straight to its finding.)
+ */
 export const SearchEntitySchema = z
   .object({
     imageUrl: z.string().optional(),
-    kind: z.literal("artist"),
+    kind: z.enum(["album", "artist", "label"]),
     name: z.string(),
     slug: z.string(),
   })
