@@ -64,3 +64,27 @@ VITE_FLUNCLE_TELEGRAM_URL=https://t.me/fluncle
 R2_ACCESS_KEY_ID=op://$FLUNCLE_1PASSWORD_ENV_ITEM/R2_ACCESS_KEY_ID
 R2_SECRET_ACCESS_KEY=op://$FLUNCLE_1PASSWORD_ENV_ITEM/R2_SECRET_ACCESS_KEY
 R2_ACCOUNT_ID=0651fd3b33d9e0b2fe72a5f13e5cf65d
+
+# Optional side-channels -- each no-ops when absent (readOptionalEnv in
+# src/lib/server/env.ts), so local dev works unprovisioned. Uncomment a block
+# and fill it from 1Password to exercise that leg.
+# Resend -- the newsletter's send-of-record.
+# RESEND_API_KEY=op://$FLUNCLE_1PASSWORD_ENV_ITEM/RESEND_API_KEY
+# RESEND_SEGMENT_ID=op://$FLUNCLE_1PASSWORD_ENV_ITEM/RESEND_SEGMENT_ID
+# RESEND_FROM=op://$FLUNCLE_1PASSWORD_ENV_ITEM/RESEND_FROM
+# Last.fm love-on-add (no-ops until LASTFM_SESSION_KEY is set).
+# LASTFM_API_KEY=op://$FLUNCLE_1PASSWORD_ENV_ITEM/LASTFM_API_KEY
+# LASTFM_SHARED_SECRET=op://$FLUNCLE_1PASSWORD_ENV_ITEM/LASTFM_SHARED_SECRET
+# LASTFM_SESSION_KEY=op://$FLUNCLE_1PASSWORD_ENV_ITEM/LASTFM_SESSION_KEY
+# Discogs read-only release-ID enrichment.
+# DISCOGS_USER_TOKEN=op://$FLUNCLE_1PASSWORD_ENV_ITEM/DISCOGS_USER_TOKEN
+# Cloudflare cache purge-by-URL (falls back to local eviction when absent).
+# CF_CACHE_PURGE_ZONE_ID=op://$FLUNCLE_1PASSWORD_ENV_ITEM/CF_CACHE_PURGE_ZONE_ID
+# CF_CACHE_PURGE_TOKEN=op://$FLUNCLE_1PASSWORD_ENV_ITEM/CF_CACHE_PURGE_TOKEN
+# Expo push notifications for the mobile app.
+# EXPO_ACCESS_TOKEN=op://$FLUNCLE_1PASSWORD_ENV_ITEM/EXPO_ACCESS_TOKEN
+# OpenRouter context_note distil (falls back to raw snippets when absent).
+# OPENROUTER_API_KEY=op://$FLUNCLE_1PASSWORD_ENV_ITEM/OPENROUTER_API_KEY
+# OPENROUTER_CONTEXT_MODEL=op://$FLUNCLE_1PASSWORD_ENV_ITEM/OPENROUTER_CONTEXT_MODEL
+# Hermes box agent Bearer -- the agent-role admin token (absent = operator-only).
+# FLUNCLE_AGENT_TOKEN=op://$FLUNCLE_1PASSWORD_ENV_ITEM/FLUNCLE_AGENT_TOKEN
