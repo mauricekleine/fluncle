@@ -16,9 +16,11 @@ import { SearchTrigger } from "@/components/search/search-command";
 
 // Surfaces that render WITHOUT the public chrome:
 // - /admin: its own AdminShell workspace chrome (never touched here).
-// - /radio, /galaxy: full-bleed immersive experiences (the player, the game canvas).
+// - /radio, /galaxy, /pipeline: full-bleed immersive experiences (the player, the game
+//   canvas, the draggable machinery map). Each is a fixed inset-0 viewport that owns its
+//   own chrome (its own bottom status bar), so a mounted colophon only overlaps it.
 // - /device, /cli: bare auth / install flows.
-const CHROMELESS_PREFIXES = ["/admin", "/radio", "/galaxy", "/device", "/cli"];
+const CHROMELESS_PREFIXES = ["/admin", "/radio", "/galaxy", "/pipeline", "/device", "/cli"];
 
 function isChromeless(pathname: string): boolean {
   return CHROMELESS_PREFIXES.some(
