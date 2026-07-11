@@ -32,9 +32,26 @@
 import { ORPCError } from "@orpc/server";
 import { trackMedia, videoAudioStripped, videoVersion } from "../../media";
 import { readCaptions } from "../captions";
+import { logEvent } from "../log";
 import { adminAuth, operatorGuard } from "../orpc-auth";
 import { postizSetReleaseId, pushTikTokDraft, pushYouTubeShort, resolveSocialUrl } from "../postiz";
 import {
+  ADVANCE_DAILY_PUSH_CAP,
+  ADVANCE_PER_TICK_CAP,
+  type AdvanceHeld,
+  type AdvancePlatform,
+  type AdvancePush,
+  advanceCandidates,
+  bundleGaps,
+  DAY_MS,
+  isPublishAdvancePaused,
+  setPublishAdvancePaused,
+  TIKTOK_INBOX_DRAFT_CAP,
+} from "../publish-advance";
+import {
+  claimPost,
+  countPushesSince,
+  countTikTokInboxDrafts,
   hasPostAwaitingUrl,
   isUrlClaimedByOtherTrack,
   listPostsAwaitingUrl,
@@ -49,6 +66,68 @@ import { parseLimit, requireTrack, type Implementer, toFault } from "./_shared";
 // Ported verbatim from the live draft route. TikTok is the SELF_ONLY inbox draft
 // (agent-allowed); YouTube is the direct PUBLIC upload (operator only).
 const SUPPORTED = new Set(["tiktok", "youtube"]);
+
+/** The minimum a push needs to know about a finding — shared by the operator's manual
+ *  `draft_track_social` and the `advance_publish_queue` tick, so the two can never drift
+ *  on WHICH cut goes to WHICH platform. */
+type PushTarget = {
+  logId: string;
+  title: string;
+  trackId: string;
+  /** Set ⇒ the two-master layout: the portrait baked-text `footage.social.mp4` exists. */
+  videoSquaredAt?: string;
+};
+
+/**
+ * Push one finding's video to one platform. The PLAYABLE portrait cut both platforms
+ * push: under the two-master layout (videoSquaredAt set) that is the baked-text
+ * `footage.social.mp4` — `footage.mp4` is the clean square crop source. A legacy finding
+ * (no signal) keeps pushing `footage.mp4`. TikTok takes it audio-stripped (the licensed
+ * sound attaches in-app) and lands as a SELF_ONLY inbox `draft`; YouTube takes it as-is
+ * and lands `published` — a direct PUBLIC upload.
+ */
+async function pushToPlatform(
+  target: PushTarget,
+  platform: AdvancePlatform,
+  caption: string,
+): Promise<{ postId: string; status: "draft" | "published" }> {
+  const media = trackMedia(target.logId);
+  const social = target.videoSquaredAt ? media.socialVideoUrl : media.videoUrl;
+
+  if (platform === "tiktok") {
+    const silent = target.videoSquaredAt
+      ? videoAudioStripped(social, videoVersion(target.videoSquaredAt))
+      : social.replace(/footage\.mp4$/, "footage-silent.mp4");
+    const { postId } = await pushTikTokDraft({ caption, videoUrl: silent });
+
+    return { postId, status: "draft" };
+  }
+
+  const { postId } = await pushYouTubeShort({
+    description: caption,
+    title: target.title,
+    videoUrl: social,
+  });
+
+  return { postId, status: "published" };
+}
+
+/**
+ * Auto-record the live YouTube URL after a push. Postiz returns only its own postId on
+ * create, so read the post back from the dated `/posts` list (the publish is async). Once
+ * PUBLISHED, Postiz auto-populates `releaseURL` — the real watch URL — on the post;
+ * `resolveSocialUrl` returns it VERBATIM. Store it on the row and link the Postiz
+ * release-id (the videoId) for analytics. Best-effort: on a miss the url stays null and
+ * the capture sweep (or the operator's manual "Update URL") is the fallback.
+ */
+async function linkYouTubeUrl(trackId: string, postId: string): Promise<void> {
+  const resolved = await resolveSocialUrl(postId, "youtube");
+
+  if (resolved) {
+    await recordPostUrl(trackId, "youtube", resolved.url);
+    await postizSetReleaseId(postId, resolved.nativeId);
+  }
+}
 
 /**
  * Build the `admin-social` domain's handlers. Each reuses the live route logic
@@ -204,50 +283,28 @@ export function adminSocialHandlers(os: Implementer) {
           });
         }
 
-        // The PLAYABLE portrait cut both platforms push:
-        // under the two-master layout (videoSquaredAt set) that is the baked-text
-        // footage.social.mp4 — footage.mp4 is the clean square crop source. A
-        // legacy finding (no signal) keeps pushing footage.mp4.
-        const media = trackMedia(track.logId);
-        const social = track.videoSquaredAt ? media.socialVideoUrl : media.videoUrl;
         const captions = await readCaptions([track.logId]);
         const caption = captions[track.logId] ?? "";
 
-        let postId: string;
-        let status: "draft" | "published";
-
-        if (platform === "tiktok") {
-          const silent = track.videoSquaredAt
-            ? videoAudioStripped(social, videoVersion(track.videoSquaredAt))
-            : social.replace(/footage\.mp4$/, "footage-silent.mp4");
-          ({ postId } = await pushTikTokDraft({ caption, videoUrl: silent }));
-          status = "draft";
-        } else {
-          ({ postId } = await pushYouTubeShort({
-            description: caption,
+        // The same push the auto-advance makes — one code path, so the manual tap and the
+        // machine can never disagree about which cut goes to which platform.
+        const { postId, status } = await pushToPlatform(
+          {
+            logId: track.logId,
             title: track.title,
-            videoUrl: social,
-          }));
-          status = "published";
-        }
+            trackId: track.trackId,
+            ...(track.videoSquaredAt ? { videoSquaredAt: track.videoSquaredAt } : {}),
+          },
+          platform === "tiktok" ? "tiktok" : "youtube",
+          caption,
+        );
 
         await upsertPost(track.trackId, platform, status, postId);
 
-        // Auto-record the live YouTube URL: Postiz returns only its own postId on
-        // create, so read the post back from the dated `/posts` list (the publish
-        // is async). Once PUBLISHED, Postiz auto-populates `releaseURL` — the real
-        // watch URL — on the post; `resolveSocialUrl` returns it VERBATIM. Store it
-        // on the row — surfaced via `list_track_social` — and link the Postiz
-        // release-id (the videoId) for analytics. A side-effect, not part of the
-        // draft envelope. Best-effort: on a miss the url stays null and the capture
-        // sweep (or the operator's manual "Update URL") is the fallback.
+        // Auto-record the live YouTube URL (a side-effect, not part of the draft
+        // envelope) — see `linkYouTubeUrl`.
         if (platform === "youtube") {
-          const resolved = await resolveSocialUrl(postId, platform);
-
-          if (resolved) {
-            await recordPostUrl(track.trackId, platform, resolved.url);
-            await postizSetReleaseId(postId, resolved.nativeId);
-          }
+          await linkYouTubeUrl(track.trackId, postId);
         }
 
         return {
@@ -336,10 +393,177 @@ export function adminSocialHandlers(os: Implementer) {
     }
   });
 
+  // POST /admin/social/publish/advance — ADMIN tier (the on-box `fluncle-publish-advance`
+  // cron drives it with the agent token; the box holds no Postiz key, it only triggers —
+  // the `drip_clips` / `capture_post_urls` precedent). ONE bounded, idempotent tick of the
+  // render → publish auto-advance.
+  //
+  // The order below IS the safety argument, and it is the order for a reason:
+  //
+  //   (a) The KILL SWITCH first. A paused tick reads nothing and pushes nothing. One
+  //       operator flip (from /admin/findings or `fluncle admin tracks publish-pause`)
+  //       stops every future auto-publish inside one tick, no deploy.
+  //   (b) The READY set (`advanceCandidates`) — video finalized with BOTH masters, past
+  //       the settle window, and NO `social_posts` row for the platform. A platform that
+  //       already has a row (pushed / published / `failed`) is never touched again: that
+  //       is the never-twice rule AND the fail-closed rule in one predicate.
+  //   (c) The rolling-24h push budget — a backstop, so a broken gate cannot dump the
+  //       archive onto the feed.
+  //   (d) The BUNDLE gate — the whole publishable bundle must be SERVED on R2 and the
+  //       caption non-empty. The server-side mirror of the CLI's `bundle_incomplete`
+  //       guard: a half-rendered finding is never advanced.
+  //   (e) The per-platform gates — one YouTube push may be pending its URL at a time (the
+  //       manual path's 409, honoured here as a skip), and TikTok's inbox holds at most 5
+  //       unfinished drafts before it starts bouncing them.
+  //   (f) The CLAIM (`claimPost`) — atomic, and BEFORE any call to Postiz. Two overlapping
+  //       ticks race on the (track, platform) unique index; only the winner pushes.
+  //   (g) The push. On an error the claim row is ALREADY `failed` (that is what a claim
+  //       writes), so the finding stays in the operator's attention queue as an unposted
+  //       leg and is never auto-retried.
+  const advancePublishQueueHandler = os.advance_publish_queue.use(adminAuth).handler(async () => {
+    try {
+      // (a) The kill switch.
+      if (await isPublishAdvancePaused()) {
+        return {
+          candidates: 0,
+          failed: [],
+          held: [],
+          ok: true as const,
+          paused: true,
+          pushed: [],
+        };
+      }
+
+      const now = Date.now();
+
+      // (b) The READY set, oldest render first.
+      const candidates = await advanceCandidates({ limit: ADVANCE_PER_TICK_CAP, nowMs: now });
+
+      // (c) The rolling-24h backstop (hand-pushed rows spend from the same budget).
+      const recent = await countPushesSince(new Date(now - DAY_MS).toISOString());
+      let budget = Math.max(0, ADVANCE_DAILY_PUSH_CAP - recent);
+
+      const pushed: AdvancePush[] = [];
+      const held: AdvanceHeld[] = [];
+      const failed: Array<{ platform: AdvancePlatform; trackId: string }> = [];
+      const hold = (
+        platform: AdvancePlatform,
+        reason: AdvanceHeld["reason"],
+        trackId: string,
+        missing?: string[],
+      ) => held.push({ platform, reason, trackId, ...(missing ? { missing } : {}) });
+
+      for (const candidate of candidates) {
+        // (d) The bundle gate — never advance a half-rendered finding.
+        const missing = await bundleGaps(candidate.logId);
+
+        if (missing.length > 0) {
+          for (const platform of candidate.pending) {
+            hold(platform, "bundle_incomplete", candidate.trackId, missing);
+          }
+
+          continue;
+        }
+
+        const captions = await readCaptions([candidate.logId]);
+        const caption = captions[candidate.logId] ?? "";
+
+        if (!caption) {
+          for (const platform of candidate.pending) {
+            hold(platform, "no_caption", candidate.trackId);
+          }
+
+          continue;
+        }
+
+        for (const platform of candidate.pending) {
+          if (budget <= 0) {
+            hold(platform, "daily_cap", candidate.trackId);
+            continue;
+          }
+
+          // (e) The per-platform gates.
+          if (platform === "youtube" && (await hasPostAwaitingUrl("youtube"))) {
+            hold(platform, "youtube_url_pending", candidate.trackId);
+            continue;
+          }
+
+          if (platform === "tiktok" && (await countTikTokInboxDrafts()) >= TIKTOK_INBOX_DRAFT_CAP) {
+            hold(platform, "tiktok_inbox_full", candidate.trackId);
+            continue;
+          }
+
+          // (f) The CLAIM — atomic, before any network call. A tick that loses the race
+          // (another tick claimed it first) simply moves on; it never double-pushes.
+          if (!(await claimPost(candidate.trackId, platform))) {
+            continue;
+          }
+
+          budget -= 1;
+
+          // (g) The push. The claim row is already `failed`, so an error here needs no
+          // write — it just stops, visibly, and the operator owns the retry.
+          try {
+            const { postId, status } = await pushToPlatform(candidate, platform, caption);
+
+            await upsertPost(candidate.trackId, platform, status, postId);
+
+            if (platform === "youtube") {
+              await linkYouTubeUrl(candidate.trackId, postId);
+            }
+
+            pushed.push({
+              externalId: postId,
+              logId: candidate.logId,
+              platform,
+              status,
+              trackId: candidate.trackId,
+            });
+          } catch (error) {
+            logEvent("warn", "publish-advance.push-failed", {
+              error,
+              logId: candidate.logId,
+              platform,
+            });
+            failed.push({ platform, trackId: candidate.trackId });
+          }
+        }
+      }
+
+      return {
+        candidates: candidates.length,
+        failed,
+        held,
+        ok: true as const,
+        paused: false,
+        pushed,
+      };
+    } catch (error) {
+      throw toFault(error);
+    }
+  });
+
+  // PUT /admin/social/publish/advance/state — OPERATOR tier. The kill switch (the
+  // `set_clip_drip` shape, on the same `settings` KV). The agent may never flip it.
+  const setPublishAdvanceHandler = os.set_publish_advance
+    .use(adminAuth)
+    .use(operatorGuard)
+    .handler(async ({ input }) => {
+      try {
+        await setPublishAdvancePaused(input.paused);
+
+        return { ok: true as const, paused: input.paused };
+      } catch (error) {
+        throw toFault(error);
+      }
+    });
+
   return {
+    advance_publish_queue: advancePublishQueueHandler,
     capture_post_urls: capturePostUrlsHandler,
     draft_track_social: draftTrackSocialHandler,
     list_track_social: listTrackSocialHandler,
+    set_publish_advance: setPublishAdvanceHandler,
     update_track_social: updateTrackSocialHandler,
   };
 }

@@ -45,6 +45,12 @@ const APPROVED_VERBS = new Set<string>([
   "subscribe",
   "update",
   // The convention's named non-CRUD action set.
+  // `advance` (move a finding one step further along the pipeline it is already in —
+  // render → publish) — added deliberately with the `advance_publish_queue` auto-advance
+  // tick. Not `publish` (that names the one-shot act, and the tick may push nothing) and
+  // not `drip` (that is the clip-feed's paced, jittered cadence). This names the CHAINING:
+  // the step that stops a finished stage from waiting on a human tap.
+  "advance",
   "authorize",
   "backfill",
   // `resolve` — resolve an artist's social profiles from MB + Firecrawl (the artist-relationship epic).

@@ -56,7 +56,7 @@
     "fluncle-publish": {
       "source": "packages/skills/fluncle-publish",
       "sourceType": "local",
-      "computedHash": "6dfa5e01b4a0653f88c46b3990b160eca3768e35a3ddd166ac36e36640402a47"
+      "computedHash": "e5c0eb02f92245526acd6d29b74dc1073f43861f3d0cc3c4797c86cf491e0b8f"
     },
     "fluncle-rekordbox-sync": {
       "source": "packages/skills/fluncle-rekordbox-sync",

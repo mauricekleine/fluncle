@@ -596,6 +596,39 @@ export type SocialStatusUpdate = {
   url?: string;
 };
 
+/** One platform the render → publish auto-advance actually pushed this tick. */
+export type PublishAdvancePush = {
+  externalId: string;
+  logId: string;
+  platform: string;
+  status: string;
+  trackId: string;
+};
+
+/** One platform the auto-advance HELD BACK this tick, and why — so a stuck advance says
+ *  so out loud instead of looking like an empty queue. */
+export type PublishAdvanceHeld = {
+  /** The bundle files still missing (only on `bundle_incomplete`). */
+  missing?: string[];
+  platform: string;
+  reason: string;
+  trackId: string;
+};
+
+/** `POST /api/admin/social/publish/advance` response: one bounded tick of the render →
+ *  publish auto-advance. `paused: true` ⇒ the kill switch was on and nothing was pushed. */
+export type PublishAdvanceResponse = Ok<{
+  candidates: number;
+  failed: Array<{ platform: string; trackId: string }>;
+  held: PublishAdvanceHeld[];
+  paused: boolean;
+  pushed: PublishAdvancePush[];
+}>;
+
+/** `PUT /api/admin/social/publish/advance/state` response: the resulting paused state
+ *  (the auto-advance's kill switch). */
+export type PublishAdvanceStateResponse = Ok<{ paused: boolean }>;
+
 /** `/api/admin/tracks/:id/social` response. */
 export type TrackSocialShowResponse = Ok<{ posts: SocialPostItem[]; trackId: string }>;
 

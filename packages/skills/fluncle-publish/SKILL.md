@@ -5,7 +5,7 @@ description: Publish a Fluncle track's video to social platforms and track per-p
 
 # Fluncle social publishing
 
-You take a track that already has a rendered video in R2 and push it to social platforms, then track where it went and its state on each platform. **Nothing reaches a public feed without a human gate** — but how that gate works is per-platform.
+You take a track that already has a rendered video in R2 and push it to social platforms, then track where it went and its state on each platform. There are two ways that happens now: the operator's push (this skill's workflows below) and — since the render → publish **auto-advance** landed — the machine's, on its own. Read _The auto-advance_ before you assume a human is between a render and a public feed.
 
 This is the **publish** step of the track lifecycle, after enrichment ([[fluncle-track-enrichment]]) and video creation (the `fluncle-video` skill, which renders + ships the bundle to R2). Per-platform state lives in `social_posts`; the generic track pipeline tops out at "video in R2" (`video_url`).
 
@@ -69,6 +69,16 @@ fluncle admin tracks draft <track_id|log_id> --platform youtube     # uploads a 
 - **The push is the publish.** The operator's run/click is the only gate — there's no review stage, so push only when the video is final. Postiz doesn't return the public URL on create, so the row lands at `published` with no `url`; record the real link later with `… social … --platform youtube --url <url>`.
 - **Content ID is expected.** A short clip with the master usually gets _claimed_ (the rights holder monetizes it, we don't) rather than blocked — that's accepted; the goal is reach, not revenue. (`unlisted`/`private` is in the schema if a review gate is ever wanted — change `type` in `pushYouTubeShort`.)
 
+## The auto-advance — the machine can now push, and the gate moved
+
+The **render → publish auto-advance** (`docs/track-lifecycle.md` § _The render → publish auto-advance_) closes the last gap in the pipeline: an on-box cron ticks `advance_publish_queue` every 30m, and a freshly-rendered READY finding is pushed **without an operator tap** — the YouTube Short goes public, the TikTok inbox draft lands. The human gate did not disappear; it **moved**, from a per-push tap to a single global switch plus a set of readiness gates:
+
+- **The kill switch** — `fluncle admin publish pause` / `resume`, or the toggle in the `/admin/findings` header. **Default-deny:** only an explicit `false` in the `publish_advance_paused` setting means running, so an unset flag reads as PAUSED. One flip, effective within one tick, no deploy.
+- **The readiness gates (Worker-side, not yours to reimplement)** — a finding is only advanced when it has a coordinate, a finalized render with BOTH masters (`video_squared_at`), 15 minutes of settle, its whole publishable bundle served on R2 (the server-side mirror of the CLI's `bundle_incomplete` guard), and a non-empty caption.
+- **Never twice** — the advance claims the `(track, platform)` row atomically before any Postiz call, and it only ever picks a platform with **no row at all**. A `failed` push is therefore **never auto-retried**: the finding keeps its row in the `/admin` attention queue and the operator owns the retry (the manual workflows below are exactly that retry).
+
+**What this means for you as an agent:** the auto-advance is a Worker op driven by a box cron, not something you fire. Do not add a second path that pushes YouTube on the agent's behalf — `draft_track_social` still 403s an agent-tier YouTube push, and that is deliberate. If a finding is not going out, read the tick's `held` reasons (`fluncle admin publish advance --json`) rather than pushing around the gate.
+
 ## Instagram — manual for FINDINGS; automated for set CLIPS
 
 Don't push a **finding's** video to Instagram from the CLI/board. Baking a single copyrighted master into a Reel gets muted/removed on our business/creator account, and IG's licensed audio is app-only (and locked for business), so there's no legitimate automated path for a finding. Any Instagram presence for a finding is a hand-made post in the IG app.
@@ -83,9 +93,9 @@ Don't push a **finding's** video to Instagram from the CLI/board. Baking a singl
 
 ## Rules
 
-- **Never public without a human gate.** Only the TikTok push is safe for an agent to fire on its own — it lands in the private inbox (`SELF_ONLY`) and a human still finishes and publishes it in-app. **A YouTube push goes straight to a public feed**, so it's an operator action (the run/click is the approval), never an autonomous agent post.
+- **Never public without a gate — and the gate is now the switch, not a tap.** A **YouTube push goes straight to a public feed.** From the CLI/board it is an operator action (the run/click is the approval) and `draft_track_social` 403s an agent-tier YouTube push — that guard stays. The ONE sanctioned autonomous path is the auto-advance (above), where the approval is the operator's kill switch plus the readiness gates. Never build a second one. The TikTok push is safe for an agent either way — it lands in the private inbox (`SELF_ONLY`) and a human still finishes it in-app.
 - **Video first.** No `video_url` → refuse; render + ship it before publishing.
 - **Right cut per platform.** Both push the portrait `footage.social.mp4`: TikTok gets it silenced via an `audio=false` MT (sound added in-app); YouTube gets it with its own audio. (`footage.mp4` is the clean square crop source, never a feed cut.)
-- **One post per (track, platform).** Re-running the push refreshes the existing record, not a duplicate.
+- **One post per (track, platform).** Re-running the push refreshes the existing record, not a duplicate. (The auto-advance leans on the same unique index for its atomic claim — that row is the double-publish guard.)
 - **Never invent a published URL.** Only set `--url` to the real post URL after the post is actually public.
 - The caption is whatever `note.txt` holds (produced by the `fluncle-video` skill, in Fluncle's voice). You don't rewrite it here.

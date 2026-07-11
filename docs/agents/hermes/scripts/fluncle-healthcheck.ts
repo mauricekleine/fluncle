@@ -433,6 +433,12 @@ const AUTOMATION_CRONS: CronDef[] = [
   { cadenceMs: 15 * 60_000, match: "studio-clip", service: "cron.studio-clip" },
   { cadenceMs: 20 * 60_000, match: "clip-drip", service: "cron.clip-drip" },
   { cadenceMs: 60 * 60_000, match: "render", service: "cron.render" },
+  // The render → publish auto-advance — every 30m. It is the LAST link of the chain, so a
+  // silent stop is exactly the failure worth seeing: a stalled tick lands here as `lagging`
+  // on /status. (A tick that RUNS but pushes nothing is honest and stays `fresh-ok` — the
+  // kill switch or an unready queue; the findings themselves stay in the /admin attention
+  // queue, which is where a HELD finding is visible.)
+  { cadenceMs: 30 * 60_000, match: "publish-advance", service: "cron.publish-advance" },
   // NB: cron.healthcheck is NOT here — this prober IS that cron, now run by a host
   // systemd timer (../healthcheck-timer/), so it has no gateway output dir to read and
   // a self-read would be circular. Its /status row is emitted self-evidently by
