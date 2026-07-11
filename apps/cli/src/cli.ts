@@ -1090,6 +1090,48 @@ function addAdminCommands(program: Command): void {
       await runMixtapeResync(idOrLogId, options, mixtapeResyncCommand);
     });
 
+  // The render → publish auto-advance. `advance` is the tick the on-box
+  // `fluncle-publish-advance` cron drives (admin tier — the box's agent token); `pause` /
+  // `resume` are the operator's KILL SWITCH over every future auto-publish, one flip, no
+  // deploy. (`admin tracks publish` is a different thing entirely — that ADDS a finding.)
+  const adminPublish = configureCommand(
+    admin.command("publish").description("Render → publish auto-advance commands"),
+  );
+
+  adminPublish.action(() => {
+    adminPublish.outputHelp();
+  });
+
+  adminPublish
+    .command("advance")
+    .description("Run one tick of the render → publish auto-advance (kill-switch aware)")
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (options: { json: boolean }) => {
+      const { publishAdvanceCommand } = await import("./commands/publish");
+      await runPublishAdvance(options, publishAdvanceCommand);
+    });
+
+  adminPublish
+    .command("pause")
+    .description("Pause the render → publish auto-advance, the kill switch (operator)")
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (options: { json: boolean }) => {
+      const { publishAdvancePauseCommand } = await import("./commands/publish");
+      await runPublishAdvancePause(true, options, publishAdvancePauseCommand);
+    });
+
+  adminPublish
+    .command("resume")
+    .description("Resume the render → publish auto-advance, clear the kill switch (operator)")
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (options: { json: boolean }) => {
+      const { publishAdvancePauseCommand } = await import("./commands/publish");
+      await runPublishAdvancePause(false, options, publishAdvancePauseCommand);
+    });
+
   // Fluncle Studio clips. `list` is the agent-allowed read;
   // `cut` is the box's footage cut — the `fluncle-studio-clip` cron
   // calls `admin clips cut <clipId>` per pending clip (presign + ffmpeg + ship +
@@ -3109,6 +3151,58 @@ async function runClipsDripPause(
   }
 
   console.log(result ? "The drip-feed is paused." : "The drip-feed is running.");
+}
+
+async function runPublishAdvance(
+  options: { json: boolean },
+  publishAdvanceCommand: typeof import("./commands/publish").publishAdvanceCommand,
+): Promise<void> {
+  const result = await publishAdvanceCommand();
+
+  if (options.json) {
+    printJson(result);
+    return;
+  }
+
+  if (result.paused) {
+    console.log("Auto-advance is paused — nothing pushed.");
+    return;
+  }
+
+  if (result.pushed.length === 0 && result.held.length === 0 && result.failed.length === 0) {
+    console.log("Nothing ready to advance.");
+    return;
+  }
+
+  for (const push of result.pushed) {
+    console.log(`Pushed ${push.logId} to ${push.platform} (${push.status}).`);
+  }
+
+  for (const held of result.held) {
+    const detail = held.missing?.length ? ` (${held.missing.join(", ")})` : "";
+    console.log(`Held ${held.platform} for ${held.trackId}: ${held.reason}${detail}.`);
+  }
+
+  for (const failure of result.failed) {
+    console.log(`Failed ${failure.platform} for ${failure.trackId} — left for the operator.`);
+  }
+}
+
+async function runPublishAdvancePause(
+  paused: boolean,
+  options: { json: boolean },
+  publishAdvancePauseCommand: typeof import("./commands/publish").publishAdvancePauseCommand,
+): Promise<void> {
+  const result = await publishAdvancePauseCommand(paused);
+
+  if (options.json) {
+    printJson({ ok: true, paused: result });
+    return;
+  }
+
+  console.log(
+    result ? "The publish auto-advance is paused." : "The publish auto-advance is running.",
+  );
 }
 
 async function runMixtapeGet(

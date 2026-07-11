@@ -3,6 +3,7 @@ import { isStaleTikTokDraft } from "@fluncle/contracts/util";
 import {
   type InfiniteData,
   useInfiniteQuery,
+  useMutation,
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
@@ -34,6 +35,8 @@ import { Badge } from "@fluncle/ui/components/badge";
 import { Button } from "@fluncle/ui/components/button";
 import { Dialog, DialogContent } from "@fluncle/ui/components/dialog";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@fluncle/ui/components/empty";
+import { Label } from "@fluncle/ui/components/label";
+import { Switch } from "@fluncle/ui/components/switch";
 import { isAdminRequest } from "@/lib/server/admin-auth";
 import { listBackfillRanForTracks, listLastfmLovedForTracks } from "@/lib/server/backfill";
 import { readCaptions } from "@/lib/server/captions";
@@ -48,6 +51,7 @@ import {
   listPlanMembershipsForTracks,
   listRecordings,
 } from "@/lib/server/recordings";
+import { isPublishAdvancePaused } from "@/lib/server/publish-advance";
 import { listSocialPostsForTracks } from "@/lib/server/social";
 import { getSpotifyAuthStatus, type SpotifyAuthStatus } from "@/lib/server/spotify";
 import { listPendingSubmissions, type Submission } from "@/lib/server/submissions";
@@ -312,7 +316,25 @@ const fetchSubmissions = createServerFn({ method: "GET" }).handler(
   },
 );
 
+// The render → publish auto-advance's KILL SWITCH state — the one control that decides
+// whether a freshly-rendered finding publishes itself (a hands-off public YouTube Short +
+// a TikTok inbox draft) or waits for the operator's tap on the board below. It belongs
+// HERE, above the board it governs: this page is where publishing is worked, and the
+// switch has to be findable in the one second it matters. Default-deny server-side
+// (lib/server/publish-advance.ts), so an unset flag reads as paused.
+const fetchPublishAdvance = createServerFn({ method: "GET" }).handler(
+  async (): Promise<{ paused: boolean }> => {
+    if (!(await isAdminRequest())) {
+      throw redirect({ to: "/admin/login" });
+    }
+
+    return { paused: await isPublishAdvancePaused() };
+  },
+);
+
 type BoardSearch = { mix: MixFilter; stage: Worklist; submission?: string };
+
+const ADVANCE_KEY = ["admin", "publish-advance"] as const;
 
 // Route options follow TanStack's create-route-property-order (each step feeds the
 // next's inferred types), which isn't alphabetical — so sort-keys is off here.
@@ -337,13 +359,14 @@ export const Route = createFileRoute("/admin/findings")({
   },
   loader: async () => {
     const board = await fetchBoard({ data: {} });
-    return { board };
+    const advance = await fetchPublishAdvance();
+    return { advance, board };
   },
   component: AdminBoardPage,
 });
 
 function AdminBoardPage() {
-  const { board: initial } = Route.useLoaderData();
+  const { advance: initialAdvance, board: initial } = Route.useLoaderData();
   const {
     mix: activeMix,
     stage: activeWorklist,
@@ -374,6 +397,49 @@ function AdminBoardPage() {
   const rows = useMemo(() => data?.pages.flatMap((page) => page.tracks) ?? [], [data]);
 
   const { busy, error, pushDraft, setError, setStatus } = usePublish(BOARD_KEY);
+
+  // The auto-advance kill switch, seeded from the loader and focus-refetched like the
+  // board — so a flip made from the CLI (or the box) shows up when the operator tabs back.
+  const { data: advance } = useQuery({
+    initialData: initialAdvance,
+    queryFn: () => fetchPublishAdvance(),
+    queryKey: ADVANCE_KEY,
+    refetchOnWindowFocus: true,
+  });
+
+  // Flipping it is optimistic — the Switch tracks the operator's intent instantly, rolls
+  // back on error, and re-reads on settle. Operator tier server-side; the agent can tick
+  // the advance but can never turn it on.
+  const setAdvancePaused = useMutation<void, Error, boolean, { previous?: { paused: boolean } }>({
+    mutationFn: async (paused: boolean) => {
+      const response = await fetch("/api/admin/social/publish/advance/state", {
+        body: JSON.stringify({ paused }),
+        credentials: "same-origin",
+        headers: { "content-type": "application/json" },
+        method: "PUT",
+      });
+
+      if (!response.ok) {
+        const body = (await response.json().catch(() => ({}))) as { message?: string };
+        throw new Error(body.message ?? `Flip failed (${response.status})`);
+      }
+    },
+    onError: (caught, _paused, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(ADVANCE_KEY, context.previous);
+      }
+
+      setError(caught.message);
+    },
+    onMutate: async (paused) => {
+      await queryClient.cancelQueries({ queryKey: ADVANCE_KEY });
+      const previous = queryClient.getQueryData<{ paused: boolean }>(ADVANCE_KEY);
+      queryClient.setQueryData(ADVANCE_KEY, { paused });
+
+      return { previous };
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ADVANCE_KEY }),
+  });
 
   // Dialogs are keyed by identity (not a row snapshot) so they always render the
   // LIVE row — right after a push the cache patches, the row updates, and the open
@@ -896,6 +962,16 @@ function AdminBoardPage() {
         </Empty>
       ) : (
         <>
+          {/* The kill switch over everything the Publish column does on its own. One flip
+              stops (or starts) every future auto-publish — no deploy, effective within one
+              box tick. */}
+          <div className="border-b border-border p-3 sm:p-4">
+            <AutoPublishSwitch
+              onToggle={(paused) => setAdvancePaused.mutate(paused)}
+              paused={advance.paused}
+              pending={setAdvancePaused.isPending}
+            />
+          </div>
           <PipelineBoard actions={actions} entries={entries} />
           {hasNextPage ? (
             <div className="border-t border-border p-3 text-center sm:p-4" ref={sentinelRef}>
@@ -1071,5 +1147,43 @@ function FilterPill({
         {count}
       </Badge>
     </Button>
+  );
+}
+
+// The render → publish AUTO-ADVANCE switch — the last autonomy gap, as one control.
+//
+// Live, a finding that finishes rendering publishes itself: a public YouTube Short (nothing
+// left for a human) and a TikTok inbox draft (which the operator still finishes in-app — the
+// licensed sound attaches only there). Paused, every rendered finding waits for the Push tap
+// on the board below, exactly as it always did. It sits above that board because this is the
+// page where publishing is worked, and a kill switch has to be findable in the one second it
+// matters.
+function AutoPublishSwitch({
+  onToggle,
+  paused,
+  pending,
+}: {
+  onToggle: (paused: boolean) => void;
+  paused: boolean;
+  pending: boolean;
+}) {
+  return (
+    <div className="flex items-start gap-3 rounded-lg border border-border bg-card p-4">
+      <Switch
+        aria-label="Auto-publish a finding once it is rendered"
+        checked={!paused}
+        disabled={pending}
+        id="publish-advance-switch"
+        onCheckedChange={(next) => onToggle(!next)}
+      />
+      <div className="min-w-0 space-y-0.5">
+        <Label htmlFor="publish-advance-switch">Auto-publish rendered findings</Label>
+        <p className="text-sm text-muted-foreground">
+          {paused
+            ? "Paused. A rendered finding waits here for your push."
+            : "Live. A rendered finding goes out on its own — the Short posts, the TikTok draft lands in the app for you to finish."}
+        </p>
+      </div>
+    </div>
   );
 }

@@ -1054,6 +1054,18 @@ export const SURFACES: readonly Surface[] = [
     weights: { status: "hidden" },
   },
   {
+    command: "fluncle admin publish pause",
+    exposedContent: [
+      "advance one freshly-rendered finding into the publish push — YouTube Short + TikTok inbox draft (--no-agent, Worker HTTP)",
+    ],
+    kind: "cron",
+    name: "cron.publish-advance",
+    operatorNotes:
+      "every 30m. Pure HTTP trigger, zero LLM tokens. The last autonomy gap: render finishes → this pushes, with no operator beat between. Admin tier (needs the Worker's Postiz key, which the box never sees — the box only triggers; the `drip_clips` / `capture_post_urls` precedent). SHIPS DARK: the Worker's kill switch is DEFAULT-DENY (only an explicit `false` in the `publish_advance_paused` setting runs it), so the timer ticks and posts nothing until `fluncle admin publish resume`. The Worker reads the switch FIRST, then advances at most ONE ready finding — both masters finalized, 15m settled, the whole bundle served on R2, the (track, platform) row CLAIMED atomically before any Postiz call, a rolling-24h cap of 6 pushes. A failed push is left `failed` for the operator and never auto-retried. Source: docs/agents/hermes/scripts/publish-advance-sweep.sh. Probed on /status as cron.publish-advance.",
+    probeConfig: { cadenceMs: 30 * MINUTE_MS, cronName: "fluncle-publish-advance", kind: "cron" },
+    weights: { status: "hidden" },
+  },
+  {
     command: "fluncle admin tracks queue",
     exposedContent: [
       "wake the rave-03 render box → render + ship one finding's video → park (conductor)",

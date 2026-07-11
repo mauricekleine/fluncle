@@ -263,6 +263,10 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // post URLs Postiz withholds on create. Admin tier — the on-box capture cron drives
   // it; it only fills the public url and links the analytics release-id.
   "POST /admin/social/posts/capture": "capture_post_urls",
+  // The render → publish auto-advance tick — contract-only oRPC (no TanStack route file).
+  // Admin tier (agent-allowed): the on-box `fluncle-publish-advance` cron triggers it and
+  // the Worker (which holds the Postiz key) does the push.
+  "POST /admin/social/publish/advance": "advance_publish_queue",
   "POST /admin/submissions/{submissionId}/approve": "approve_submission",
   "POST /admin/submissions/{submissionId}/reject": "reject_submission",
   // triage_submission (the pre-chew verdict write) is contract-only oRPC — no TanStack
@@ -317,6 +321,9 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // oRPC (no TanStack route file; oRPC owns the path directly). Operator tier: the
   // Wave-3 Rekordbox derivation script PUTs the ordered, finding-resolved cues here.
   "PUT /admin/recordings/{recordingId}/cues": "replace_recording_cues",
+  // The render → publish auto-advance KILL SWITCH — contract-only oRPC (no TanStack route
+  // file). Operator tier: pause/resume every future auto-publish, no deploy.
+  "PUT /admin/social/publish/advance/state": "set_publish_advance",
 };
 
 // Routes that stay on TanStack by design (carve-outs), keyed by their TanStack
