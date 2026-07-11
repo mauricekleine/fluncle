@@ -1029,6 +1029,42 @@ body::before {
   right: 0.7rem;
 }
 
+/* The behind-the-scenes trigger: a quiet ghost control tucked up under the footage
+   it explains — a for-the-curious detail, never front-of-house. Pulled toward the
+   video (the plate gap is a full 1.9rem) and left-aligned so it reads as a small
+   aside, not a wide clickable bar. */
+.log-behind-scenes {
+  justify-self: start;
+  margin-top: -1.2rem;
+}
+
+/* Inside the drawer: the spoken walkthrough (the builder's tour), the composition
+   frame, then the choices as a plate-style field grid (.log-fields, reused). */
+.log-behind-body {
+  display: grid;
+  gap: 1.4rem;
+  padding: 1.1rem 1rem 1.6rem;
+}
+
+.log-behind-lede {
+  color: var(--stardust);
+  font-size: 0.92rem;
+  line-height: 1.6;
+  margin: 0;
+}
+
+.log-behind-frame {
+  border: 1px solid var(--border);
+  border-radius: var(--rounded-md);
+  display: block;
+  height: auto;
+  width: 100%;
+}
+
+.log-behind-effort {
+  color: var(--muted-foreground);
+}
+
 .log-observation {
   align-items: center;
   background: var(--sleeve-black);
