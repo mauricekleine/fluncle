@@ -191,6 +191,8 @@ Without it, the fonts disagree. Oxanium ships a 1.00em box around a 0.69em cap h
 
 When adding or updating a face: read its real `hhea`/`OS/2` tables (fontTools, not the renderer), confirm `USE_TYPO_METRICS` is set so Windows reads the same box as macOS, recompute the overrides for the 1.25em box, and check the deepest descender still fits inside the overridden descent.
 
+**Where there is no `@font-face`, bake the box into the font.** Satori — the renderer behind the OG cards and the mixtape cover — has no `@font-face` and no stylesheet; it reads each font's own `hhea`/`OS/2` tables, so the CSS overrides above cannot reach it. The remedy is the rule's own ("fix the font, not the elements"): `apps/web/scripts/cut-satori-fonts.py` cuts static, latin-subset TTFs from the upstream variable fonts with the SAME ratified metrics patched INTO the tables, and the Worker bundles those bytes. Satori also synthesizes nothing — one buffer per weight, and a weight the markup asks for but nobody registered snaps silently to the nearest face. Registering exactly the weights the markup uses is therefore part of embedding a face, not a detail.
+
 ## 4. Elevation
 
 Depth in this system comes from translucency, not shadows: every raised surface is a pane of glass over the cosmos. The playlist shell and cover frame use `backdrop-filter: blur() saturate(125%)` over the fixed cover-art backdrop, so what shows through the surface IS the elevation cue. Edges are defined by 1px Dust Line borders. Box-shadows are effectively banned (the sole exception is the hairline `shadow-xs` baked into the outline button); focus is a ring, hover is a veil, depth is the sky behind the glass.

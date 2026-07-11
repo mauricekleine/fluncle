@@ -1,7 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { ImageResponse, loadGoogleFont } from "workers-og";
+import { ImageResponse } from "workers-og";
 import { spotifyAlbumImageAtSize } from "@/lib/media";
 import { parseSetParam } from "@/lib/mix-set";
+import { BODY, BRAND, cardFonts, satoriText } from "@/lib/server/satori-render";
 import { getTracksByLogIds } from "@/lib/server/tracks";
 import { type ApiHandlers, aliasHandlers } from "./-alias";
 
@@ -12,6 +13,10 @@ import { type ApiHandlers, aliasHandlers } from "./-alias";
 // visual system as the per-finding card (`og.$logId.ts`). Rendered on the edge with
 // workers-og (Satori + resvg WASM). Satori doesn't fetch remote <img>, so each cover
 // is inlined as a data-URI.
+//
+// TYPE: same role split as the per-finding card (DESIGN.md §3, lib/server/og-fonts.ts).
+// The "A FLUNCLE MIX" lockup is a brand mark → Oxanium. The count line and the tagline are
+// reading text → Space Grotesk, which is also the container default.
 
 const WIDTH = 1200;
 const HEIGHT = 630;
@@ -22,9 +27,6 @@ const COLOR = {
   gold: "#f5b800",
   stardust: "#b7ab95",
 } as const;
-
-const escapeHtml = (value: string): string =>
-  value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
 async function fetchImageDataUri(url: string): Promise<string | undefined> {
   try {
@@ -72,31 +74,23 @@ export const serverHandlers: ApiHandlers = {
       .join("");
 
     const count = chain.length;
-    const countLabel = escapeHtml(
+    const countLabel = satoriText(
       count === 0 ? "Chain a set" : `${count} ${count === 1 ? "banger" : "bangers"}, mixed clean`,
     );
 
     const html = `
-      <div style="position:relative;display:flex;flex-direction:column;justify-content:space-between;width:${WIDTH}px;height:${HEIGHT}px;background:${COLOR.bg};font-family:'Oxanium';padding:64px;overflow:hidden;">
-        <div style="display:flex;color:${COLOR.stardust};font-size:26px;font-weight:600;letter-spacing:5px;text-transform:uppercase;">A Fluncle mix</div>
+      <div style="position:relative;display:flex;flex-direction:column;justify-content:space-between;width:${WIDTH}px;height:${HEIGHT}px;background:${COLOR.bg};font-family:${BODY};padding:64px;overflow:hidden;">
+        <div style="display:flex;font-family:${BRAND};color:${COLOR.stardust};font-size:26px;font-weight:800;letter-spacing:5px;text-transform:uppercase;">A Fluncle mix</div>
         <div style="display:flex;align-items:center;">${coverTiles}</div>
         <div style="display:flex;flex-direction:column;">
-          <div style="display:flex;color:${COLOR.cream};font-size:56px;font-weight:800;">${countLabel}</div>
+          <div style="display:flex;color:${COLOR.cream};font-size:56px;font-weight:700;">${countLabel}</div>
           <div style="display:flex;color:${COLOR.gold};font-size:28px;font-weight:700;margin-top:10px;">My findings, your order.</div>
         </div>
       </div>
     `;
 
-    const [oxaniumBold, oxaniumMedium] = await Promise.all([
-      loadGoogleFont({ family: "Oxanium", weight: 800 }),
-      loadGoogleFont({ family: "Oxanium", weight: 500 }),
-    ]);
-
     return new ImageResponse(html, {
-      fonts: [
-        { data: oxaniumBold, name: "Oxanium", style: "normal", weight: 800 },
-        { data: oxaniumMedium, name: "Oxanium", style: "normal", weight: 500 },
-      ],
+      fonts: cardFonts(),
       height: HEIGHT,
       width: WIDTH,
     });
