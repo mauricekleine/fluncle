@@ -80,11 +80,49 @@ const SERVICE_CHECK_SAMPLES_KEEP = 90;
 const RETIRED_SERVICE_IDS = new Set(["automation", "cron.artist-follow"]);
 
 /**
+ * How long a cron may report "no runs yet" before that stops meaning "freshly rebuilt box"
+ * and starts meaning "this was never deployed". The box healthcheck emits no-runs-yet as `ok`
+ * on purpose — a box that just rebuilt hasn't ticked, and that is not a fault. But the grace
+ * was UNBOUNDED, so a cron registered in `@fluncle/registry` but never installed on the box
+ * sat permanently GREEN: `cron.clip-drip` reported ok/"no runs yet" for days while rave-02 had
+ * no timer and no script for it. A monitor that reassures you about a job that does not exist
+ * is worse than no monitor. After this window, say so.
+ */
+const NO_RUNS_GRACE_MS = 24 * 60 * 60 * 1000;
+
+/** The box healthcheck's no-data note (fluncle-healthcheck.ts emits it as ok). */
+const NO_RUNS_MESSAGE = /no runs yet/i;
+
+/**
+ * A cron that has reported "no runs yet" since before the grace window has not been ticking —
+ * it has never run at all. Report that honestly instead of a green row.
+ */
+function honestNoRuns(row: ServiceStatusRow, now: number): ServiceStatusRow {
+  if (row.status !== "ok" || !NO_RUNS_MESSAGE.test(row.message ?? "")) {
+    return row;
+  }
+
+  const since = Date.parse(row.since);
+
+  if (Number.isNaN(since) || now - since <= NO_RUNS_GRACE_MS) {
+    return row;
+  }
+
+  return {
+    ...row,
+    message: "never run — the cron is registered but appears not to be deployed",
+    status: "degraded",
+  };
+}
+
+/**
  * Every CURRENT `service_status` row, newest-checked first — the page's service grid.
  * Retired/orphaned ids (`RETIRED_SERVICE_IDS`) are filtered out at this shared read so
- * a stale row never surfaces on any consumer (page, /api/status, CLI, MCP).
+ * a stale row never surfaces on any consumer (page, /api/status, CLI, MCP) — and a cron
+ * stuck on "no runs yet" past the grace window is downgraded here too, for the same reason:
+ * one read, so every consumer tells the same truth.
  */
-export async function getServiceStatuses(): Promise<ServiceStatusRow[]> {
+export async function getServiceStatuses(now = Date.now()): Promise<ServiceStatusRow[]> {
   const db = await getDb();
   const result = await db.execute(
     `select service, status, message, latency_ms, checked_at, since
@@ -92,9 +130,9 @@ export async function getServiceStatuses(): Promise<ServiceStatusRow[]> {
        order by checked_at desc`,
   );
 
-  return typedRows<ServiceStatusRow>(result.rows).filter(
-    (row) => !RETIRED_SERVICE_IDS.has(row.service),
-  );
+  return typedRows<ServiceStatusRow>(result.rows)
+    .filter((row) => !RETIRED_SERVICE_IDS.has(row.service))
+    .map((row) => honestNoRuns(row, now));
 }
 
 /** The most-recent `limit` transition rows, newest first — the page's events feed. */

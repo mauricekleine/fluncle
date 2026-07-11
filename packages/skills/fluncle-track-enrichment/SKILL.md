@@ -28,7 +28,9 @@ The analysis script (`scripts/analyze-track.ts`) is **self-contained** — zero 
 
    Keep the `trackId`, `artists`, `title`, and `isrc` from the result. (You write back by `trackId`.)
 
-2. **Analyze the audio.** Prefer the captured full song: pass `--audio-file <path>` and the analyzer decodes that file directly and skips preview resolution entirely. This is what the on-box enrich sweep does whenever a finding has a `source_audio_key`, and it matters — full-song BPM agrees with a DJ-graded Rekordbox grid to within ~0.02, where a 30s preview read low by ~1.5 BPM. With no `--audio-file` it falls back to downloading legal previews. Either way it emits an analysis JSON on stdout. Pass `--archive-dir` when you also need to preserve the exact preview used for the feature vector:
+2. **Analyze the audio.** Prefer the captured full song: pass `--audio-file <path>` and the analyzer decodes that file directly and skips preview resolution entirely. This is what the on-box enrich sweep does whenever a finding has a `source_audio_key`, and it matters — full-song BPM agrees with a DJ-graded Rekordbox grid to within ~0.02, where a 30s preview read low by ~1.5 BPM. With no `--audio-file` it falls back to downloading legal previews. Either way it emits an analysis JSON on stdout.
+
+   `--archive-dir` belongs to the PREVIEW path ONLY — it preserves the exact 30s preview the feature vector was computed from. It is a no-op with `--audio-file` (announced, not silent): the preview archive takes 30s previews and never a full song, and a captured song is already stored durably in private R2 under `source_audio_key`. So there is nothing to preserve:
 
    ```
    bun scripts/analyze-track.ts --artist "<artist>" --title "<title>" [--isrc "<isrc>"] --archive-dir /tmp/fluncle-preview
@@ -36,7 +38,7 @@ The analysis script (`scripts/analyze-track.ts`) is **self-contained** — zero 
 
    The output: `{ archivePreview, bpm, bpmConfidence, key, keyConfidence, features, previews }`. It resolves **multiple** previews (Deezer + iTunes are often different 30s windows of the song) and keeps the most-confident read per field. The exported `archivePreview` is exactly the preview used for the feature vector; it is an operator-only archive path input for private analysis/model training, not public playback media. Both `bpm` and `key` are `null` when confidence is low — better null than wrong (e.g. a beatless build-up preview, or an atonal track). `features` is the raw spectral vector.
 
-3. **Archive the analysis preview.** If `archivePreview` is present, store that one official 30s preview through the admin API:
+3. **Archive the analysis preview.** ONLY on the preview path — `archivePreview` is absent when you analyzed a full song, and the server rejects an oversized body outright (`preview_too_large`). When it IS present, store that one official 30s preview through the admin API:
 
    ```
    fluncle admin tracks preview <trackId> --file "<archivePreview.path>" --source "<archivePreview.source>" --mime "<archivePreview.mime>"

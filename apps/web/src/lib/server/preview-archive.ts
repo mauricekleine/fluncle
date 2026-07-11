@@ -78,6 +78,13 @@ function previewExtensionForMime(mime: string): string {
   return mimeToExtension[normalized] ?? "bin";
 }
 
+/**
+ * The ceiling for a preview-archive body. A 30s clip at a generous 320kbps is ~1.2MB; a full
+ * song is 5-10MB+. 3MB cleanly separates them, so this rejects a full song without ever
+ * rejecting a legitimate high-bitrate preview.
+ */
+const PREVIEW_MAX_BYTES = 3_000_000;
+
 // The archived preview lives beside the finding's full song in the PRIVATE
 // source-audio bucket, at a stable per-finding key. `preview` cannot collide with
 // a full-song filename (a 64-hex sha256), and dropping the content hash means a
@@ -117,6 +124,21 @@ export async function archivePreviewForTrack(
 
   if (input.bytes.byteLength === 0) {
     throw new ApiError("empty_preview", "preview archive upload was empty", 400);
+  }
+
+  // ENFORCE the rail rather than merely documenting it: this slot holds ONE official 30s
+  // preview, never a full song (audio-source policy — captured full audio is internal-only
+  // and lives in the private source-audio bucket under `source_audio_key`). A full song is
+  // an order of magnitude larger than any 30s clip: at a generous 320kbps a 30s preview is
+  // ~1.2MB, so anything past PREVIEW_MAX_BYTES is not a preview. Reject loudly — the analyzer
+  // that fed this was pointed at the wrong audio, and a silently-archived full song is
+  // indistinguishable from a real preview once it lands.
+  if (input.bytes.byteLength > PREVIEW_MAX_BYTES) {
+    throw new ApiError(
+      "preview_too_large",
+      `preview archive is ${(input.bytes.byteLength / 1_000_000).toFixed(1)}MB — the slot takes a 30s preview (max ${PREVIEW_MAX_BYTES / 1_000_000}MB), never a full song. Captured full audio belongs in the private source-audio bucket, not here.`,
+      400,
+    );
   }
 
   const key = buildPreviewArchiveKey({ logId, mime });

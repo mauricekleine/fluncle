@@ -68,3 +68,49 @@ describe("getServiceStatuses retired-row filter", () => {
     expect(services.map((service) => service.service)).toEqual(["web", "db", "hermes"]);
   });
 });
+
+// A cron that has NEVER run must not sit green forever. The box healthcheck emits
+// "no runs yet" as `ok` on purpose (a freshly-rebuilt box has not ticked, and that is not a
+// fault) — but the grace was UNBOUNDED, so `cron.clip-drip`, registered in the registry but
+// never installed on rave-02, reported ok/"no runs yet" for days. A monitor that reassures
+// you about a job that does not exist is worse than no monitor.
+describe("getServiceStatuses — a cron stuck on 'no runs yet' stops being green", () => {
+  const NOW = Date.parse("2026-07-11T00:00:00.000Z");
+
+  function noRuns(service: string, since: string): ServiceStatusRow {
+    return { ...row(service), message: "no runs yet", since, status: "ok" };
+  }
+
+  beforeEach(() => {
+    execute.mockReset();
+  });
+
+  it("keeps a fresh no-runs-yet green (a box that just rebuilt has not ticked)", async () => {
+    // 1h ago — well inside the grace window.
+    execute.mockResolvedValue({ rows: [noRuns("cron.enrich", "2026-07-10T23:00:00.000Z")] });
+
+    const [service] = await getServiceStatuses(NOW);
+
+    expect(service?.status).toBe("ok");
+    expect(service?.message).toBe("no runs yet");
+  });
+
+  it("degrades a no-runs-yet that has persisted past the grace window (never deployed)", async () => {
+    // 4 days of "no runs yet" is not a fresh box — the cron was never installed.
+    execute.mockResolvedValue({ rows: [noRuns("cron.clip-drip", "2026-07-07T00:00:00.000Z")] });
+
+    const [service] = await getServiceStatuses(NOW);
+
+    expect(service?.status).toBe("degraded");
+    expect(service?.message).toMatch(/never run/i);
+  });
+
+  it("leaves a healthy running cron untouched", async () => {
+    execute.mockResolvedValue({ rows: [{ ...row("cron.enrich"), message: "fresh" }] });
+
+    const [service] = await getServiceStatuses(NOW);
+
+    expect(service?.status).toBe("ok");
+    expect(service?.message).toBe("fresh");
+  });
+});

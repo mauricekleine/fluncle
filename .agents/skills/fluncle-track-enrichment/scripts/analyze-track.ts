@@ -1419,7 +1419,18 @@ if (import.meta.main) {
       }
     | undefined;
 
-  if (archiveDir) {
+  // The preview archive holds ONE official 30s preview per finding — never a full song
+  // (the skill's hard rail, and the audio-source policy: captured full audio lives only in
+  // the private source-audio bucket under `source_audio_key`). `--archive-dir` therefore
+  // applies to the PREVIEW-resolution path only. On `--audio-file` the analyzed bytes ARE
+  // the captured song, so emitting `archivePreview` here would hand the caller a whole track
+  // named `preview.<ext>` — which the skill then tells them to upload into the preview slot.
+  // Refuse: there is nothing to preserve (the song is already durably in R2), so this is a
+  // no-op, announced rather than silent.
+  if (archiveDir && audioFile) {
+    log("archive-dir ignored: analyzing the captured full song (--audio-file) — the preview");
+    log("archive takes 30s previews only, and the full song is already stored in private R2");
+  } else if (archiveDir) {
     mkdirSync(archiveDir, { recursive: true });
     const path = join(archiveDir, `preview.${previewExtension(primary.mime)}`);
     writeFileSync(path, primary.bytes);

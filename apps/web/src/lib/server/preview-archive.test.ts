@@ -117,6 +117,43 @@ describe("preview archive helpers", () => {
     expect(deletes).toEqual([]);
   });
 
+  // THE RAIL, ENFORCED. The slot holds ONE official 30s preview, never a full song
+  // (audio-source policy: captured full audio is internal-only, in the private source-audio
+  // bucket). analyze-track's `--archive-dir` used to be source-blind, so running it with
+  // `--audio-file` emitted the WHOLE captured song as `preview.<ext>` — and the skill told
+  // you to upload exactly that. The analyzer now refuses, and the server refuses too: a body
+  // an order of magnitude past any 30s clip is not a preview, whatever the caller claims.
+  it("rejects a full song — a body too large to be a 30s preview never reaches R2", async () => {
+    const puts: string[] = [];
+    const bucket = {
+      delete: async () => undefined,
+      put: async (key: string) => {
+        puts.push(key);
+      },
+    };
+    const db = { execute: async () => ({ rows: [] }) };
+
+    // ~6MB — a real song. A 30s preview at a generous 320kbps is ~1.2MB.
+    const fullSong = new Uint8Array(6_000_000).buffer;
+
+    await expect(
+      archivePreviewForTrack(
+        {
+          bucket: bucket as never,
+          bytes: fullSong,
+          mime: "audio/mp4",
+          source: "audio-file",
+          track: { logId: "011.6.8K", trackId: "spotify-track" },
+        },
+        db as never,
+      ),
+    ).rejects.toThrow(/preview/i);
+
+    // Nothing was written: the rail rejects BEFORE the put, so no full song lands in R2
+    // wearing a preview's name.
+    expect(puts).toEqual([]);
+  });
+
   it("never targets the public fluncle-videos bucket / VIDEOS binding", async () => {
     // fluncle-videos is world-served at found.fluncle.com; the 30s preview archive
     // must land in the PRIVATE fluncle-source-audio bucket. This mirrors the box
