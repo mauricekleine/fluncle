@@ -15,7 +15,7 @@ import {
 
 import { ExplainerContext } from "./explainer-context";
 import { FACTORY_CLIPS } from "./factory-clips";
-import { c, font, SAFE } from "./theme";
+import { c, coordType, font, SAFE } from "./theme";
 import { type MockSurface } from "./types";
 
 const Window: React.FC<{ chrome?: string; children: React.ReactNode; mono?: boolean }> = ({
@@ -88,8 +88,10 @@ const Row: React.FC<{ left: string; right?: string; dim?: boolean }> = ({ left, 
     }}
   >
     <span>{left}</span>
+    {/* The right slot is the finding's coordinate: the brand's numeral, so
+        Oxanium tabular — never mono, which speaks only for the machine. */}
     {right !== undefined ? (
-      <span style={{ color: c.eclipseGold, fontFamily: font.mono, fontSize: 26 }}>{right}</span>
+      <span style={{ ...coordType, color: c.eclipseGold, fontSize: 26 }}>{right}</span>
     ) : null}
   </div>
 );
@@ -126,16 +128,26 @@ const Log: React.FC = () => (
       }}
     />
     <div style={{ display: "flex", flexDirection: "column", justifyContent: "center" }}>
-      <div style={{ color: c.starlightCream, fontFamily: font.display, fontSize: 46 }}>
+      {/* The title reads — Space Grotesk 700, the loudest text on the surface. */}
+      <div
+        style={{
+          color: c.starlightCream,
+          fontFamily: font.body,
+          fontSize: 46,
+          fontWeight: 700,
+        }}
+      >
         Skantia — Nemesis
       </div>
-      <div style={{ color: c.stardust, fontFamily: font.body, fontSize: 28, marginTop: 10 }}>
+      {/* The Found date is a numeral: Oxanium tabular (The Tabular Rule). */}
+      <div style={{ ...coordType, color: c.stardust, fontSize: 28, marginTop: 10 }}>
         Found Jun 3, 2026
       </div>
-      <div style={{ color: c.eclipseGold, fontFamily: font.mono, fontSize: 40, marginTop: 24 }}>
+      <div style={{ ...coordType, color: c.eclipseGold, fontSize: 40, marginTop: 24 }}>
         004.7.2I
       </div>
-      <div style={{ color: c.nebulaViolet, fontFamily: font.mono, fontSize: 26, marginTop: 8 }}>
+      {/* Still a coordinate, URI scheme or not. */}
+      <div style={{ ...coordType, color: c.nebulaViolet, fontSize: 26, marginTop: 8 }}>
         fluncle://004.7.2I
       </div>
     </div>
@@ -149,11 +161,11 @@ const Lens: React.FC = () => (
       finding logged as{" "}
       <span
         style={{
+          ...coordType,
           background: c.goldVeil,
           border: `1px solid ${c.eclipseGold}`,
           borderRadius: 8,
           color: c.eclipseGold,
-          fontFamily: font.mono,
           padding: "4px 12px",
         }}
       >
@@ -287,9 +299,9 @@ const VideoTile: React.FC<{
             }}
           />
         </div>
-        <div
-          style={{ color: c.starlightCream, fontFamily: font.mono, fontSize: 20, marginTop: 12 }}
-        >
+        {/* A timecode is a numeral, not machine text: Oxanium tabular so the
+            digits never jitter as it counts. */}
+        <div style={{ ...coordType, color: c.starlightCream, fontSize: 20, marginTop: 12 }}>
           {tc}
         </div>
       </div>
@@ -435,8 +447,8 @@ const Galaxy: React.FC = () => (
     />
     <div
       style={{
+        ...coordType,
         color: c.eclipseGold,
-        fontFamily: font.mono,
         fontSize: 24,
         left: "63%",
         position: "absolute",
@@ -462,10 +474,13 @@ const Crawler: React.FC = () => (
 const Mixtape: React.FC = () => (
   <div>
     <div style={{ alignItems: "center", display: "flex", justifyContent: "space-between" }}>
-      <div style={{ color: c.starlightCream, fontFamily: font.display, fontSize: 40 }}>
+      {/* The mixtape's name is a title, not a brand mark: Space Grotesk 700. */}
+      <div
+        style={{ color: c.starlightCream, fontFamily: font.body, fontSize: 40, fontWeight: 700 }}
+      >
         Fluncle dreaming №1
       </div>
-      <div style={{ color: c.nebulaViolet, fontFamily: font.mono, fontSize: 34 }}>000.F.1A</div>
+      <div style={{ ...coordType, color: c.nebulaViolet, fontSize: 34 }}>000.F.1A</div>
     </div>
     <div
       style={{
@@ -484,7 +499,10 @@ const Mixtape: React.FC = () => (
 const Repo: React.FC = () => (
   <div style={{ color: c.starlightCream, fontFamily: font.mono, fontSize: 30, lineHeight: 1.8 }}>
     <div style={{ color: c.eclipseGold }}>github.com/mauricekleine/fluncle</div>
-    <div style={{ color: c.stardust }}>open source · all of it · public forever</div>
+    {/* Prose reads in the body face even on a mono surface (The One Voice Rule). */}
+    <div style={{ color: c.stardust, fontFamily: font.body }}>
+      open source · all of it · public forever
+    </div>
     <div style={{ marginTop: 22 }}>
       <span style={{ color: c.eclipseGold }}>↳</span> fluncle.com/pipeline
     </div>

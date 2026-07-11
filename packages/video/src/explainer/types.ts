@@ -36,6 +36,12 @@ export type CaptionLine = { text: string; fromMs: number; toMs: number };
 
 export type ChapterAccent = "gold" | "violet" | "red";
 
+/** Which canon face a SurfaceTag's sub-line reads in. Default "prose". */
+export type TagSubFace =
+  | "command" // a literal command you could type: mono, the machine's voice
+  | "coordinate" // a Log ID, bare or `fluncle://`-prefixed: Oxanium, tabular
+  | "prose"; // everything else: Space Grotesk
+
 export type ExplainerChapter = {
   id: string;
   /** Chapter number for the card kicker; omit on the cold open + close. */
@@ -48,8 +54,15 @@ export type ExplainerChapter = {
   screen?: ExplainerClip;
   /** The talking-head clip (talking-head, pip, split). */
   face?: ExplainerClip;
-  /** A label tag for the surface on screen ("ssh rave.fluncle.com"). */
-  tag?: { label: string; sub?: string };
+  /**
+   * A label tag for the surface on screen ("ssh rave.fluncle.com"). The sub-line
+   * carries MIXED content across chapters, and DESIGN.md §3 gives each kind its
+   * own face, so the tag declares which one it is: a literal command is machine
+   * text (mono), a coordinate is the brand's numeral (Oxanium tabular — even
+   * inside a `fluncle://` URI), and anything else simply reads (Space Grotesk,
+   * the default).
+   */
+  tag?: { label: string; sub?: string; subFace?: TagSubFace };
   captions?: CaptionLine[];
   /** Flash the chapter card at the start of the chapter. */
   showCard?: boolean;

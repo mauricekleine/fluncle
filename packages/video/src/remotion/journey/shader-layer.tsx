@@ -10,6 +10,7 @@ import {
   useVideoConfig,
 } from "remotion";
 import { hexToRgb } from "../color";
+import { MONO_STACK } from "../fonts";
 import { useAudioReactivity, type AudioReactivityOptions } from "../hooks/use-audio-reactivity";
 import { type CosmosPalette, type EnergySample } from "../types";
 import {
@@ -586,7 +587,8 @@ const useTextureImages = (textures: Record<string, string> | undefined): LoadedT
 const ERROR_STYLE: React.CSSProperties = {
   backgroundColor: colors.deepField,
   color: colors.reentryRed,
-  fontFamily: "ui-monospace, SF Mono, Menlo, monospace",
+  // Machine text — a shader compile log, quoted verbatim (DESIGN.md's mono role).
+  fontFamily: MONO_STACK,
   fontSize: 22,
   lineHeight: 1.4,
   padding: 48,
