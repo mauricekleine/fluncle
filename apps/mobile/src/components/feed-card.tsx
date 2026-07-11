@@ -28,8 +28,41 @@ import { useAudioPlayer, useAudioPlayerStatus } from "expo-audio";
 import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
 import { type TrackListItem } from "@fluncle/contracts";
 import { resolveCardMedia } from "@/lib/media";
+import { observationRail, soundRail } from "@/lib/feed-rail";
 import { useBackgroundPause } from "@/audio/session";
 import { color, font } from "@/theme/tokens";
+
+// The floating iOS 26 tab bar's clearance. expo-router NativeTabs renders a real
+// native UITabBar and — unlike React Navigation's JS tab bar — exposes NO height hook
+// (only `usePlacement`, for bottom accessories). Its automatic content insets adjust
+// the scrolling content, not overlays absolutely positioned inside a full-bleed card,
+// so the caption + rail have to clear the bar themselves. ~49pt is the standard
+// UITabBar height, which the floating bar rides above the home-indicator safe area
+// (`insets.bottom`); the per-element +24/+28 is breathing room above it. Documented
+// constant, not a measured API — the operator verifies the exact clearance in the
+// simulator after merge.
+export const NATIVE_TAB_BAR_HEIGHT = 49;
+
+// The legibility scrim (DESIGN.md — The Legible Sky Rule: text never sits on the raw
+// backdrop; where a bright cover breaks contrast the pane gets more opaque, not the
+// text dimmer). A warm near-black (r>g>b, never pure black) composited over the cover.
+// The multi-stop ramp + the height below are tuned so every overlay glyph clears WCAG
+// AA (4.5:1) against a PURE WHITE cover — worst case the stardust caption line (~6.5:1)
+// and the topmost gold rail label (~5.2:1). See the PR body for the full contrast math.
+const SCRIM_RGB = "11, 8, 5";
+const scrim = (alpha: number): string => `rgba(${SCRIM_RGB}, ${alpha})`;
+// Rises tall enough (above the tab-bar floor) that even the topmost rail item lands in
+// the ramp; transparent at the top so the cover breathes above the caption.
+const SCRIM_RISE = 440;
+const SCRIM_COLORS: readonly [string, string, ...string[]] = [
+  scrim(0),
+  scrim(0.35),
+  scrim(0.75),
+  scrim(0.85),
+  scrim(0.92),
+  scrim(0.96),
+];
+const SCRIM_LOCATIONS: readonly [number, number, ...number[]] = [0, 0.14, 0.3, 0.55, 0.8, 1];
 
 type Props = {
   finding: TrackListItem;
@@ -47,6 +80,10 @@ export const FeedCard = memo(function FeedCard({ finding, active, soundOn, onTog
   const { height } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const reduced = useReducedMotion();
+  // The floor every bottom overlay sits above: the home-indicator inset plus the
+  // floating tab bar (H3 — the caption/date and the bottom rail control used to hide
+  // under it). The scrim rises from the true screen bottom, so it spans this too.
+  const bottomFloor = insets.bottom + NATIVE_TAB_BAR_HEIGHT;
   // Stabilize the resolved media so effects can depend on the object itself (not
   // computed `media.kind`/`media.previewUrl` member reads) and only re-run when the
   // finding actually changes.
@@ -67,6 +104,9 @@ export const FeedCard = memo(function FeedCard({ finding, active, soundOn, onTog
   const observation = useAudioPlayer(observationUrl);
   const observationStatus = useAudioPlayerStatus(observation);
   const observing = active && observationStatus.playing;
+  // Stable rail labels + a11y hints (the Chrome Rule); the icon/gold tint carry state.
+  const observationControl = observationRail(observing);
+  const soundControl = soundRail(soundOn);
 
   // Only the visible card plays; sound follows the global toggle. While the
   // observation plays it owns the one sound source — keep the card media silent.
@@ -176,29 +216,39 @@ export const FeedCard = memo(function FeedCard({ finding, active, soundOn, onTog
         </Animated.View>
       )}
 
-      {/* legibility scrim (Legible Sky Rule): a gradient, transparent → warm dark. */}
+      {/* Legibility scrim (The Legible Sky Rule): a multi-stop warm-dark gradient tall
+          enough that every overlay glyph — up to the topmost rail item — clears AA
+          against a pure-white cover. Rises from the true screen bottom over the tab bar. */}
       <LinearGradient
         pointerEvents="none"
-        colors={["transparent", "rgba(9, 10, 11, 0.9)"]}
-        style={{ bottom: 0, height: height * 0.6, left: 0, position: "absolute", right: 0 }}
+        colors={SCRIM_COLORS}
+        locations={SCRIM_LOCATIONS}
+        style={{
+          bottom: 0,
+          height: bottomFloor + SCRIM_RISE,
+          left: 0,
+          position: "absolute",
+          right: 0,
+        }}
       />
 
-      {/* Right action rail (TikTok-style). Icons stay legible on any background via
-          a drop shadow; gold marks the active sound state (Ignition). */}
-      <View style={[styles.rail, { bottom: insets.bottom + 28 }]}>
+      {/* Right action rail (TikTok-style). Each control keeps ONE stable label (the
+          Chrome Rule); the icon + the gold tint carry state, never the word. Icons stay
+          legible via a drop shadow; gold marks the active state (Ignition). */}
+      <View style={[styles.rail, { bottom: bottomFloor + 28 }]}>
         {observationUrl ? (
           <RailAction
-            accessibilityLabel={observing ? "Stop the observation" : "Hear Fluncle's note"}
-            active={observing}
+            accessibilityLabel={observationControl.accessibilityLabel}
+            active={observationControl.active}
             icon={
               <Ionicons
-                name={observing ? "chatbubble-ellipses" : "chatbubble-ellipses-outline"}
+                name={observing ? "headset" : "headset-outline"}
                 size={28}
                 color={observing ? color.eclipseGold : color.starlightCream}
                 style={styles.icon}
               />
             }
-            label={observing ? "Playing" : "Note"}
+            label={observationControl.label}
             onPress={toggleObservation}
           />
         ) : null}
@@ -227,6 +277,7 @@ export const FeedCard = memo(function FeedCard({ finding, active, soundOn, onTog
           onPress={() => Share.share({ url: finding.logPageUrl ?? finding.spotifyUrl })}
         />
         <RailAction
+          accessibilityLabel={soundControl.accessibilityLabel}
           icon={
             <Ionicons
               name={soundOn ? "volume-high" : "volume-mute"}
@@ -235,19 +286,16 @@ export const FeedCard = memo(function FeedCard({ finding, active, soundOn, onTog
               style={styles.icon}
             />
           }
-          active={soundOn}
-          label={soundOn ? "Sound" : "Muted"}
+          active={soundControl.active}
+          label={soundControl.label}
           onPress={onToggleSound}
         />
       </View>
 
-      {/* Bottom caption (narrowed to clear the rail). */}
-      <View
-        style={{ bottom: insets.bottom + 24, gap: 8, left: 16, position: "absolute", right: 84 }}
-      >
-        {finding.logId ? (
-          <Text style={[font.numeric, { color: color.eclipseGlow }]}>{finding.logId}</Text>
-        ) : null}
+      {/* Bottom caption (narrowed to clear the rail, lifted to clear the tab bar). The
+          title leads (PRODUCT.md — artist + title first); the gold coordinate sits below
+          it at reduced prominence, still the identity mark but no longer out-shouting. */}
+      <View style={{ bottom: bottomFloor + 24, gap: 8, left: 16, position: "absolute", right: 96 }}>
         <Text style={[font.title, { color: color.starlightCream }]} numberOfLines={2}>
           {finding.artists.join(", ")} — {finding.title}
         </Text>
@@ -256,7 +304,10 @@ export const FeedCard = memo(function FeedCard({ finding, active, soundOn, onTog
             {finding.note}
           </Text>
         ) : null}
-        <Text style={[font.body, { color: color.stardust }]}>{foundLabel(finding.addedAt)}</Text>
+        <View style={styles.captionMeta}>
+          {finding.logId ? <Text style={[font.numeric, styles.logId]}>{finding.logId}</Text> : null}
+          <Text style={[font.body, { color: color.stardust }]}>{foundLabel(finding.addedAt)}</Text>
+        </View>
       </View>
     </View>
   );
@@ -296,14 +347,19 @@ function RailAction({
 }
 
 const styles = StyleSheet.create({
+  // The gold coordinate, demoted below the title: the identity gold (not the brighter
+  // Eclipse Glow) at a size under the title's, so it reads as a mark, not a headline.
+  captionMeta: { alignItems: "baseline", flexDirection: "row", gap: 8 },
   icon: {
     textShadowColor: "rgba(0, 0, 0, 0.55)",
     textShadowOffset: { height: 1, width: 0 },
     textShadowRadius: 6,
   },
+  logId: { color: color.eclipseGold, fontSize: 13 },
   rail: { alignItems: "center", gap: 16, position: "absolute", right: 6 },
   railIcon: { alignItems: "center", height: 36, justifyContent: "center", width: 36 },
-  railItem: { alignItems: "center", gap: 3, width: 60 },
+  // Wide enough for the longest stable label ("Observation") on one line.
+  railItem: { alignItems: "center", gap: 3, width: 80 },
   railLabel: {
     color: color.starlightCream,
     fontSize: 11,
