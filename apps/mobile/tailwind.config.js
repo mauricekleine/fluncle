@@ -39,9 +39,15 @@ module.exports = {
         "starlight-cream": "#f4ead7",
         "tape-black": "#171611",
       },
+      // Oxanium for the brand (display) + numerals (numeric); Space Grotesk is the
+      // reading face (body/title/label). RN synthesizes no weights, so each cut is a
+      // distinct family — title/label ask for 700 (Space Grotesk's ceiling), never 800.
       fontFamily: {
+        body: ["SpaceGrotesk_400Regular"],
         display: ["Oxanium_800ExtraBold"],
+        label: ["SpaceGrotesk_700Bold"],
         numeric: ["Oxanium_400Regular"],
+        title: ["SpaceGrotesk_700Bold"],
       },
     },
   },

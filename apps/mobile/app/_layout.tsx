@@ -8,13 +8,22 @@ import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Oxanium_400Regular, Oxanium_800ExtraBold, useFonts } from "@expo-google-fonts/oxanium";
+import { SpaceGrotesk_400Regular, SpaceGrotesk_700Bold } from "@expo-google-fonts/space-grotesk";
 import { configureAudioSession } from "@/audio/session";
 import { useNotificationObserver } from "@/push/use-notification-observer";
 import { color } from "@/theme/tokens";
 
 export default function RootLayout() {
   const [client] = useState(() => new QueryClient());
-  const [fontsLoaded] = useFonts({ Oxanium_400Regular, Oxanium_800ExtraBold });
+  // One gate for every face: Oxanium (brand + numerals) and Space Grotesk (the
+  // reading face — body/title/label). `if (!fontsLoaded) return null` below holds
+  // the tree until all four cuts are in, so there is no flash of system font.
+  const [fontsLoaded] = useFonts({
+    Oxanium_400Regular,
+    Oxanium_800ExtraBold,
+    SpaceGrotesk_400Regular,
+    SpaceGrotesk_700Bold,
+  });
 
   useEffect(() => {
     configureAudioSession();
