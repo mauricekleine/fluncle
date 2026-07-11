@@ -43,6 +43,17 @@ The per-finding pipeline runs entirely as `--no-agent` jobs on the Hermes box (e
 - **✅ 2026-07-08 — old gateway world torn down (done, brought forward from the 07-09 soak).** All paused gateway crons are deleted — the 13 migrated jobs **plus** a 14th, a stale/paused `fluncle-embed` cron the migration list had missed — so the gateway cron subsystem is now genuinely empty (0 active, 0 paused). The vestigial `/opt/data/scripts` (34 files, every one a stale twin of the baked `/opt/hermes-scripts`) was pruned. **`/opt/data/skills` was deliberately KEPT**: despite the RFC's "prune `/opt/data/{scripts,skills}`" note, that dir is not deploy cruft — it is the Hermes **gateway agent's** live curator-managed skill library (`.curator_state`, `.curator_backups/`, `.bundled_manifest`, plus `apple/`, `autonomous-ai-agents/`, `computer-use/` skills with no baked twin). The enrich sweep reads the analyzer from the baked `/opt/hermes-skills` path, so the `/opt/data/skills` copy of `analyze-track.ts` is a dormant duplicate the curator owns, not something to delete. Post-teardown smokes green (enrich CLI `{ ok: true }`, baked `analyze-track.ts` + `embed-track.py` + `yt-dlp 2026.07.04` resolvable).
 - **Non-root-in-container (defense-in-depth, low priority).** Run the agent as a non-root user with the token out of its readable env. Now that the token is `agent`-scoped this no longer guards the publish boundary — it only protects the agent's own surface and the token value from a fully-compromised agent, plus hardens against a container escape. Worth doing before any wider/public allow-list; not a blocker for the current private/trusted setup.
 
+### The acquisition boundary — `capture-sweep.ts` is in the wrong repo (parked 2026-07-11)
+
+`docs/agents/hermes/scripts/capture-sweep.ts` is the **audio acquisition layer**, and it sits in this **public** repo — directly against the rule AGENTS.md and the `fluncle-labs` README both state: _"The public repo describes what it does **with** the bytes. It never describes, scripts, or links how they arrived."_ It is not silent; the script is world-readable.
+
+**Parked deliberately, not forgotten.** Moving it is not a `git mv`: the Hermes box bakes its scripts **from this repo**, so relocating the sweep means giving **rave-02 read access to a private repo** (a deploy key or a fine-grained token, plus the bake pipeline learning a second source). That is real infra work and it is not the 24h sprint's job.
+
+Two honest notes for whoever picks this up:
+
+- **Git history is forever.** The script is already public, so moving it does not undo the exposure — it only stops adding to it. That is still worth doing, but do not mistake it for erasure.
+- **If we decide the current posture is fine, amend the RULE.** A boundary the codebase openly contradicts is worse than no boundary: it teaches every future agent that the rule is decorative.
+
 ### Secret & token hygiene — deferred 1Password/R2 follow-ups
 
 The 2026-07-07 1Password naming/vault audit closed its duplicate-deletes and stale-item retires; three deferred items remain. None are overnight-autonomous — each touches live secret bootstrap and needs `op` plus careful sequencing (concrete item/field names live in the private Ops Runbook note, never here).
