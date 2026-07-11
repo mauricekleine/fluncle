@@ -342,11 +342,11 @@ function HomePage() {
               <Button
                 className="crew-glow"
                 nativeButton={false}
-                render={<Link aria-label="Join the Crew" to="/account" />}
+                render={<Link aria-label="Join the crew" to="/account" />}
                 variant="outline"
               >
                 <UsersThreeIcon aria-hidden="true" weight="bold" />
-                Join the Crew
+                Join the crew
               </Button>
             </div>
           </header>

@@ -378,7 +378,7 @@ description: Read and contribute to Fluncle's drum & bass archive over the publi
 
 # Fluncle API
 
-Fluncle discovers and certifies drum & bass bangers, logs each as a finding, and keeps the full archive across the Galaxy, with ${siteUrl} as home base. One selector, no team. Dates mark when he found it: the day Fluncle first heard the tune, not the day it released.
+${fluncleDescription} One selector, no team. Dates mark when he found it: the day Fluncle first heard the tune, not the day it released.
 
 Base URL: \`${siteUrl}\`. Everything below returns JSON. Errors look like \`{"ok": false, "code": "...", "message": "..."}\`.
 
