@@ -568,6 +568,7 @@ type GeneratedSpec = {
 const PUBLIC_OPERATION_IDS = [
   "collectPrivateGalaxyLog",
   "deletePrivateAccount",
+  "deletePrivateSavedSet",
   "deregisterDevice",
   "exportPrivateAccountData",
   // Artist reads — public, no auth required (Unit 4 of the artist-relationship RFC).
@@ -596,18 +597,21 @@ const PUBLIC_OPERATION_IDS = [
   "listMixableTracks",
   "listMixtapes",
   "listPrivateSavedFindings",
+  "listPrivateSavedSets",
   "listPrivateSubmissions",
   "listStories",
   "listTracks",
   "mergePrivateGalaxyProgress",
   "registerDevice",
   "savePrivateFinding",
+  "savePrivateSet",
   "searchArchive",
   "searchTracks",
   "submitTrack",
   "subscribeNewsletter",
   "unsavePrivateFinding",
   "updatePrivateProfile",
+  "updatePrivateSavedSet",
 ];
 
 function collectOperationIds(spec: GeneratedSpec): {

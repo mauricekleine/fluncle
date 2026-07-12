@@ -41,11 +41,21 @@ type Submission = {
   title: string;
 };
 
+type SavedSet = {
+  createdAt: string;
+  id: string;
+  name: string;
+  setTokens: string;
+  taste?: string;
+  updatedAt: string;
+};
+
 type AccountState = {
   csrfToken: string;
   me: Me | undefined;
   progress: Progress | undefined;
   saved: SavedFinding[];
+  sets: SavedSet[];
   submissions: Submission[];
 };
 
@@ -56,6 +66,7 @@ type AccountAction =
       me: Me;
       progress: Progress;
       saved: SavedFinding[];
+      sets: SavedSet[];
       submissions: Submission[];
       type: "loaded";
     };
@@ -65,6 +76,7 @@ const initialAccountState: AccountState = {
   me: undefined,
   progress: undefined,
   saved: [],
+  sets: [],
   submissions: [],
 };
 
@@ -78,6 +90,7 @@ function accountReducer(state: AccountState, action: AccountAction): AccountStat
         me: action.me,
         progress: action.progress,
         saved: action.saved,
+        sets: action.sets,
         submissions: action.submissions,
       };
     default:
@@ -101,7 +114,7 @@ export const Route = createFileRoute("/account")({
 });
 
 function AccountPage() {
-  const [{ csrfToken, me, progress, saved, submissions }, dispatch] = useReducer(
+  const [{ csrfToken, me, progress, saved, sets, submissions }, dispatch] = useReducer(
     accountReducer,
     initialAccountState,
   );
@@ -116,22 +129,27 @@ function AccountPage() {
       return;
     }
 
-    const [progressResponse, savedResponse, submissionsResponse, csrfResponse] = await Promise.all([
-      fetch("/api/me/galaxy-progress").then((res) => res.json() as Promise<Progress>),
-      fetch("/api/me/saved-findings").then(
-        (res) => res.json() as Promise<{ savedFindings?: SavedFinding[] }>,
-      ),
-      fetch("/api/me/submissions").then(
-        (res) => res.json() as Promise<{ submissions?: Submission[] }>,
-      ),
-      fetch("/api/me/csrf").then((res) => res.json() as Promise<{ csrfToken?: string }>),
-    ]);
+    const [progressResponse, savedResponse, setsResponse, submissionsResponse, csrfResponse] =
+      await Promise.all([
+        fetch("/api/me/galaxy-progress").then((res) => res.json() as Promise<Progress>),
+        fetch("/api/me/saved-findings").then(
+          (res) => res.json() as Promise<{ savedFindings?: SavedFinding[] }>,
+        ),
+        fetch("/api/me/saved-sets").then(
+          (res) => res.json() as Promise<{ savedSets?: SavedSet[] }>,
+        ),
+        fetch("/api/me/submissions").then(
+          (res) => res.json() as Promise<{ submissions?: Submission[] }>,
+        ),
+        fetch("/api/me/csrf").then((res) => res.json() as Promise<{ csrfToken?: string }>),
+      ]);
 
     dispatch({
       csrfToken: csrfResponse.csrfToken ?? "",
       me: nextMe,
       progress: progressResponse as Progress,
       saved: (savedResponse.savedFindings ?? []) as SavedFinding[],
+      sets: (setsResponse.savedSets ?? []) as SavedSet[],
       submissions: (submissionsResponse.submissions ?? []) as Submission[],
       type: "loaded",
     });
@@ -170,6 +188,7 @@ function AccountPage() {
             saved={saved}
             csrfToken={csrfToken}
             setMessage={setMessage}
+            sets={sets}
             submissions={submissions}
             user={me.user}
           />
@@ -274,6 +293,7 @@ function SignedInAccount({
   refresh,
   saved,
   setMessage,
+  sets,
   submissions,
   user,
 }: {
@@ -284,6 +304,7 @@ function SignedInAccount({
   refresh: () => Promise<void>;
   saved: SavedFinding[];
   setMessage: (message: string) => void;
+  sets: SavedSet[];
   submissions: Submission[];
   user: NonNullable<Me["user"]>;
 }) {
@@ -366,6 +387,21 @@ function SignedInAccount({
       </section>
 
       <section className="account-section">
+        <h2>Saved sets</h2>
+        <ListEmpty items={sets} empty="No saved sets yet. Chain one on /mix and save it here.">
+          {sets.map((set) => (
+            <SavedSetRow
+              csrfToken={csrfToken}
+              key={set.id}
+              refresh={refresh}
+              set={set}
+              setMessage={setMessage}
+            />
+          ))}
+        </ListEmpty>
+      </section>
+
+      <section className="account-section">
         <h2>Your submissions</h2>
         <ListEmpty items={submissions} empty="No submissions from this account yet.">
           {submissions.map((submission) => (
@@ -404,9 +440,9 @@ function SignedInAccount({
       <section className="account-section">
         <h2>Export and deletion</h2>
         <p className="account-muted">
-          Export includes private progress, saved findings, and signed-in submissions. Deletion
-          removes private progress and saves, revokes sessions, and unlinks submissions from this
-          account.
+          Export includes private progress, saved findings, saved sets, and signed-in submissions.
+          Deletion removes private progress, saves, and sets, revokes sessions, and unlinks
+          submissions from this account.
         </p>
         <div className="account-row">
           <Button type="button" variant="outline" onClick={() => void exportData()}>
@@ -425,6 +461,92 @@ function SignedInAccount({
       </section>
       {message ? <p className="account-muted">{message}</p> : null}
     </div>
+  );
+}
+
+// One saved set: open it back on /mix (the stored tokens + taste handed straight to
+// the route's loader — no new hydration path), rename it, or delete it. Rename +
+// delete are plain CSRF fetches then a refresh, the page's established mutation shape.
+function SavedSetRow({
+  csrfToken,
+  refresh,
+  set,
+  setMessage,
+}: {
+  csrfToken: string;
+  refresh: () => Promise<void>;
+  set: SavedSet;
+  setMessage: (message: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(set.name);
+
+  async function rename(event: React.FormEvent) {
+    event.preventDefault();
+    const response = await fetch(`/api/me/saved-sets/${set.id}`, {
+      body: JSON.stringify({ name }),
+      headers: { "Content-Type": "application/json", "x-fluncle-csrf": csrfToken },
+      method: "PATCH",
+    });
+
+    setEditing(false);
+    setMessage(response.ok ? "Set renamed." : "Could not rename that set.");
+    await refresh();
+  }
+
+  async function remove() {
+    const response = await fetch(`/api/me/saved-sets/${set.id}`, {
+      headers: { "Content-Type": "application/json", "x-fluncle-csrf": csrfToken },
+      method: "DELETE",
+    });
+
+    setMessage(response.ok ? "Set removed." : "Could not remove that set.");
+    await refresh();
+  }
+
+  if (editing) {
+    return (
+      <li>
+        <form className="account-row" onSubmit={(event) => void rename(event)}>
+          <Input
+            aria-label="Set name"
+            onChange={(event) => setName(event.target.value)}
+            value={name}
+          />
+          <Button size="sm" type="submit" variant="outline">
+            Save
+          </Button>
+          <Button
+            onClick={() => {
+              setName(set.name);
+              setEditing(false);
+            }}
+            size="sm"
+            type="button"
+            variant="ghost"
+          >
+            Cancel
+          </Button>
+        </form>
+      </li>
+    );
+  }
+
+  return (
+    <li>
+      <Link
+        search={{ set: set.setTokens, taste: set.taste ?? "", view: "build" as const }}
+        to="/mix"
+      >
+        {set.name}
+      </Link>{" "}
+      <Button onClick={() => setEditing(true)} size="sm" type="button" variant="ghost">
+        Rename
+      </Button>
+      <Button onClick={() => void remove()} size="sm" type="button" variant="ghost">
+        Delete
+      </Button>
+    </li>
   );
 }
 

@@ -4,6 +4,7 @@ import { useCallback, useMemo } from "react";
 import { type MixTrack } from "@fluncle/contracts";
 import { KeyNotationToggle } from "@/components/mix/key-notation-toggle";
 import { MixBuilder } from "@/components/mix/mix-builder";
+import { SaveSetButton } from "@/components/mix/save-set-button";
 import { ShareSetButton } from "@/components/mix/share-set-button";
 import { siteUrl } from "@/lib/fluncle-links";
 import { jsonLdScript } from "@/lib/json-ld";
@@ -174,7 +175,13 @@ function MixPage() {
           <div className="home-masthead-actions">
             <KeyNotationToggle />
             {view !== "play" && set ? (
-              <ShareSetButton serializedSet={set} serializedTaste={tasteParam} />
+              <>
+                {/* Save (quiet outline) sits BEFORE Copy set link (the gold primary),
+                    so the terminal, gold action reads last. A signed-out visitor sees
+                    only Copy — SaveSetButton renders nothing without a session. */}
+                <SaveSetButton serializedSet={set} serializedTaste={tasteParam} />
+                <ShareSetButton serializedSet={set} serializedTaste={tasteParam} />
+              </>
             ) : undefined}
           </div>
         </header>

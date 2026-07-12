@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { type InValue } from "@libsql/client/web";
+import { parseSetParam, parseTasteParam, serializeSet, serializeTaste } from "../mix-set";
 import { parseArtistsJson } from "./artists";
 import { getDb, typedRow, typedRows } from "./db";
 import { jsonError } from "./env";
@@ -44,6 +45,19 @@ type SavedRow = {
   saved_at: string;
   title: string;
   track_id: string;
+};
+
+type SavedSetRow = {
+  created_at: string;
+  id: string;
+  name: string;
+  set_tokens: string;
+  taste: string | null;
+  updated_at: string;
+};
+
+type SetTitleRow = {
+  title: string;
 };
 
 type SubmissionRow = {
@@ -106,6 +120,21 @@ export type SavedFindingItem = {
   savedAt: string;
   title: string;
   trackId: string;
+};
+
+/**
+ * One saved `/mix` set as the list returns it (`listSavedSets`). `setTokens` is the
+ * serialized `?set=` chain and `taste` the serialized `?taste=` seed — stored and
+ * echoed verbatim, so the account page opens a set by handing them straight back to
+ * `/mix`'s loader, no new hydration path.
+ */
+export type SavedSetItem = {
+  createdAt: string;
+  id: string;
+  name: string;
+  setTokens: string;
+  taste?: string;
+  updatedAt: string;
 };
 
 /** One submission as the signed-in user sees it (`listUserSubmissions`). */
@@ -405,6 +434,218 @@ export async function deleteSavedFinding(
   return { ok: true };
 }
 
+// The most characters a saved set's name carries (the user renames it on /account).
+const MAX_SET_NAME = 120;
+
+/**
+ * Derive a default name for a set the user saved without one — "the first track ·
+ * the date". Resolves the first token's title against the archive (certified by Log
+ * ID, or an uncertified catalogue row by track id); a token we've never seen (a raw
+ * Spotify id) leaves the plain fallback. Cheap single-row lookup, only on save.
+ */
+async function defaultSetName(tokens: string[]): Promise<string> {
+  const date = new Date().toISOString().slice(0, 10);
+  const first = tokens[0];
+
+  if (first) {
+    const result = await (
+      await getDb()
+    ).execute({
+      args: [first, first],
+      sql: `select tracks.title from tracks
+        left join findings on findings.track_id = tracks.track_id
+        where tracks.track_id = ? or findings.log_id = ? limit 1`,
+    });
+    const title = typedRow<SetTitleRow>(result.rows)?.title;
+
+    if (title) {
+      return `${title} · ${date}`.slice(0, MAX_SET_NAME);
+    }
+  }
+
+  return `A set · ${date}`;
+}
+
+/** A user-supplied name, trimmed + capped, or the derived default when it's blank. */
+async function resolveSetName(raw: unknown, tokens: string[]): Promise<string> {
+  const trimmed = typeof raw === "string" ? raw.trim() : "";
+
+  return trimmed ? trimmed.slice(0, MAX_SET_NAME) : defaultSetName(tokens);
+}
+
+/** The signed-in user's saved `/mix` sets, most-recently-touched first. */
+export async function listSavedSets(
+  user: PublicUser,
+): Promise<{ ok: true; savedSets: SavedSetItem[] }> {
+  const result = await (
+    await getDb()
+  ).execute({
+    args: [user.id],
+    sql: `select id, name, set_tokens, taste, created_at, updated_at
+      from user_saved_sets
+      where user_id = ?
+      order by updated_at desc`,
+  });
+
+  return {
+    ok: true,
+    savedSets: typedRows<SavedSetRow>(result.rows).map(rowToItem),
+  };
+}
+
+/**
+ * Save a chained set for the user. The body carries the SAME serialized `?set=` +
+ * `?taste=` strings the `/mix` route uses; they're re-parsed through the shared
+ * codec (junk dropped, capped, order kept) and re-serialized, so what's stored
+ * round-trips back through the same loader. An empty chain is a 400 — there's
+ * nothing to save yet.
+ */
+export async function saveSet(
+  user: PublicUser,
+  body: unknown,
+): Promise<Response | { ok: true; savedSet: SavedSetItem }> {
+  if (!isRecord(body)) {
+    return jsonError(400, "invalid_request", "Invalid set");
+  }
+
+  const tokens = parseSetParam(typeof body.set === "string" ? body.set : "");
+
+  if (tokens.length === 0) {
+    return jsonError(400, "empty_set", "There's no set to save yet");
+  }
+
+  const tasteSlugs = parseTasteParam(typeof body.taste === "string" ? body.taste : "");
+  const name = await resolveSetName(body.name, tokens);
+  const setTokens = serializeSet(tokens);
+  const taste = tasteSlugs.length > 0 ? serializeTaste(tasteSlugs) : null;
+  const now = new Date().toISOString();
+  const id = randomUUID();
+
+  await (
+    await getDb()
+  ).execute({
+    args: [id, user.id, name, setTokens, taste, now, now],
+    sql: `insert into user_saved_sets
+      (id, user_id, name, set_tokens, taste, created_at, updated_at)
+      values (?, ?, ?, ?, ?, ?, ?)`,
+  });
+
+  return {
+    ok: true,
+    savedSet: rowToItem({
+      created_at: now,
+      id,
+      name,
+      set_tokens: setTokens,
+      taste,
+      updated_at: now,
+    }),
+  };
+}
+
+/**
+ * Rename a saved set and/or overwrite its chain — both scoped to the owner. The
+ * row is fetched by `(id, user_id)` first, so another user's set is invisible (a
+ * 404, never a silent no-op): that is the ownership guard. A `set` in the body
+ * overwrites the chain AND its taste seed together (a chain and the lane it was
+ * built in travel as one); a blank `name` keeps the existing one.
+ */
+export async function updateSavedSet(
+  user: PublicUser,
+  id: string,
+  body: unknown,
+): Promise<Response | { ok: true; savedSet: SavedSetItem }> {
+  if (!isRecord(body)) {
+    return jsonError(400, "invalid_request", "Invalid set");
+  }
+
+  const existing = await (
+    await getDb()
+  ).execute({
+    args: [id, user.id],
+    sql: `select id, name, set_tokens, taste, created_at, updated_at
+      from user_saved_sets where id = ? and user_id = ? limit 1`,
+  });
+  const current = typedRow<SavedSetRow>(existing.rows);
+
+  if (!current) {
+    return jsonError(404, "set_not_found", "No set to update");
+  }
+
+  let setTokens = current.set_tokens;
+  let taste = current.taste;
+
+  if (typeof body.set === "string") {
+    const tokens = parseSetParam(body.set);
+
+    if (tokens.length === 0) {
+      return jsonError(400, "empty_set", "There's no set to save yet");
+    }
+
+    const tasteSlugs = parseTasteParam(typeof body.taste === "string" ? body.taste : "");
+
+    setTokens = serializeSet(tokens);
+    taste = tasteSlugs.length > 0 ? serializeTaste(tasteSlugs) : null;
+  }
+
+  const name =
+    typeof body.name === "string" && body.name.trim()
+      ? body.name.trim().slice(0, MAX_SET_NAME)
+      : current.name;
+  const now = new Date().toISOString();
+
+  await (
+    await getDb()
+  ).execute({
+    args: [name, setTokens, taste, now, id, user.id],
+    sql: `update user_saved_sets
+      set name = ?, set_tokens = ?, taste = ?, updated_at = ?
+      where id = ? and user_id = ?`,
+  });
+
+  return {
+    ok: true,
+    savedSet: rowToItem({
+      created_at: current.created_at,
+      id,
+      name,
+      set_tokens: setTokens,
+      taste,
+      updated_at: now,
+    }),
+  };
+}
+
+/** Remove a saved set — scoped to the owner (another user's id is a 404). */
+export async function deleteSavedSet(
+  user: PublicUser,
+  id: string,
+): Promise<Response | { ok: true }> {
+  const result = await (
+    await getDb()
+  ).execute({
+    args: [user.id, id],
+    sql: `delete from user_saved_sets where user_id = ? and id = ?`,
+  });
+
+  if ((result.rowsAffected ?? 0) === 0) {
+    return jsonError(404, "set_not_found", "No set to remove");
+  }
+
+  return { ok: true };
+}
+
+function rowToItem(row: SavedSetRow): SavedSetItem {
+  return {
+    createdAt: row.created_at,
+    id: row.id,
+    name: row.name,
+    setTokens: row.set_tokens,
+    taste: row.taste ?? undefined,
+    updatedAt: row.updated_at,
+  };
+}
+
 export async function listUserSubmissions(
   user: PublicUser,
 ): Promise<{ ok: true; submissions: PrivateSubmissionItem[] }> {
@@ -445,6 +686,7 @@ export async function exportAccountData(user: PublicUser): Promise<{
     privacyNotes: string[];
     progress: GalaxyProgressResult;
     savedFindings: SavedFindingItem[];
+    savedSets: SavedSetItem[];
     submissions: PrivateSubmissionItem[];
   };
   ok: true;
@@ -452,9 +694,10 @@ export async function exportAccountData(user: PublicUser): Promise<{
   const requestedAt = new Date().toISOString();
   const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
   const exportId = randomUUID();
-  const [progress, saved, submissions] = await Promise.all([
+  const [progress, saved, sets, submissions] = await Promise.all([
     getGalaxyProgress(user),
     listSavedFindings(user),
+    listSavedSets(user),
     listUserSubmissions(user),
   ]);
 
@@ -478,6 +721,7 @@ export async function exportAccountData(user: PublicUser): Promise<{
       ],
       progress,
       savedFindings: saved.savedFindings,
+      savedSets: sets.savedSets,
       submissions: submissions.submissions,
     },
     ok: true,
@@ -533,6 +777,7 @@ export async function deleteAccount(user: PublicUser): Promise<{
     credentials: string;
     galaxyProgress: string;
     savedFindings: string;
+    savedSets: string;
     sessions: string;
     submissions: string;
     user: string;
@@ -551,6 +796,7 @@ export async function deleteAccount(user: PublicUser): Promise<{
     credentials: "deleted",
     galaxyProgress: "deleted",
     savedFindings: "deleted",
+    savedSets: "deleted",
     sessions: "revoked",
     submissions: "anonymized",
     user: "marked_deleted",
@@ -587,6 +833,10 @@ export function accountDeletionStatements({
     {
       args: [userId],
       sql: `delete from user_saved_findings where user_id = ?`,
+    },
+    {
+      args: [userId],
+      sql: `delete from user_saved_sets where user_id = ?`,
     },
     {
       args: [userId],
