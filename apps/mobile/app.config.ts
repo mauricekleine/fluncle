@@ -63,6 +63,12 @@ const config: ExpoConfig = {
   scheme: "fluncle",
   slug: "fluncle",
   userInterfaceStyle: "dark",
+  extra: {
+    eas: {
+      // The EAS project id minted by `eas init` (a public identifier, not a secret).
+      projectId: "4db7808b-9463-4411-af2a-d0d2c5af72e9",
+    },
+  },
   version: "0.1.0",
 };
 
