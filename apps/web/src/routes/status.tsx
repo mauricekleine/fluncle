@@ -114,13 +114,13 @@ const SERVICE_LABELS: Record<string, string> = {
   "cron.artist-sweep": "Artist resolution",
   "cron.audit": "Nightly audit",
   "cron.audit-review": "Audit reviewer",
-  "cron.backfill": "Catalogue backfill",
+  "cron.backfill": "Metadata backfill",
   "cron.backup": "Database backup",
   "cron.capture": "Full-song capture",
   "cron.clip-drip": "Clip drip-feed",
   "cron.cluster": "Sonic galaxies",
   "cron.context-note": "Context notes",
-  "cron.crawl": "Catalogue crawler",
+  "cron.crawl": "Track crawler",
   "cron.embed": "Audio embeddings",
   "cron.enrich": "Audio enrichment",
   "cron.healthcheck": "Healthcheck prober",
@@ -130,7 +130,7 @@ const SERVICE_LABELS: Record<string, string> = {
   "cron.note": "Editorial notes",
   "cron.observation": "Audio observations",
   "cron.publish-advance": "Publish advance",
-  "cron.rank": "Catalogue ranking",
+  "cron.rank": "Track ranking",
   // Two DIFFERENT render signals (not the agent twice): `cron.render` is the
   // conductor cron's last-run freshness; `render-box` is the scale-to-zero box's
   // reachability. The labels make the distinction obvious.
@@ -174,7 +174,7 @@ const SERVICE_SUBTITLES: Record<string, string> = {
   "cron.note": "writes each finding's editorial note",
   "cron.observation": "Fluncle's spoken field observations",
   "cron.publish-advance": "advances the publish queue on his own clock",
-  "cron.rank": "ranks the catalogue by nearness to the archive",
+  "cron.rank": "ranks unvisited tracks by nearness to the archive",
   "cron.render": "the conductor's last run",
   "cron.social-capture": "the live YouTube and TikTok URLs for each posted video",
   "cron.studio-clip": "cuts set videos into 9:16 clips",
