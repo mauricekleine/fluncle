@@ -1,0 +1,19 @@
+[Unit]
+Description=fluncle-label-images timer — resolve one bounded batch of pending label logos every 60m on the rave-02 host (not the Hermes gateway)
+
+[Timer]
+# First tick shortly after boot (staggered at 8min, off the other sweeps' minutes), then every
+# 60m. The catalogue crawl mints only tens of new `pending` labels a day, and Discogs is
+# rate-limited 1 req/s (the CLI circuit-breaks on a throttle), so there is no prize for hurrying:
+# an hourly cadence drains the worklist with room to spare. A tick that finds every label already
+# resolved/none is a cheap no-op.
+#
+# The `labels` worklist is the durable state (per-label `image_state`/`image_attempted_at`/
+# `image_failures`), so a tick missed across a reboot costs nothing — Persistent catches it up and
+# the next tick resumes from the top; the cooldown re-skips the labels already attempted.
+OnBootSec=8min
+OnUnitActiveSec=60min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -107,6 +107,8 @@ Every label surface — the `/labels` index cards, the `/label/<slug>` page (its
 
 **The resolve sweep** (`label-images.ts::resolveLabelImages`) is a bounded, idempotent, **Worker-paced** pass — the shipped `fluncle-backfill` discipline: the box holds no vendor keys, so the MusicBrainz walk + the authed Discogs fetches happen in the Worker and the box `--no-agent` cron drives one small batch per tick (`MAX_BATCH` labels). MusicBrainz is the shared 1 req/s client; Discogs is the shared authed gate; both report `rateLimited` and the sweep **circuit-breaks** on it (stops the pass, retries next tick with a fresh window). A `resolved`/`none` label is terminal and skipped forever; a transient failure backs off on a cooldown; a persistent one gives up (→ `none`) so it is never retried forever. **Idempotent by construction** — a second run over a fully-resolved archive fetches nothing.
 
+**The durable path (`fluncle-label-images`).** The catalogue crawler mints new labels every few minutes, each landing at `image_state='pending'` — so the resolve sweep must be a RECURRING poller, not a one-shot backfill. The **`fluncle-label-images`** host timer (rave-02, hourly — [docs/agents/hermes/label-images-timer/](./agents/hermes/label-images-timer/README.md)) drives one bounded batch per tick via the same `fluncle admin backfills label-images` op, so a freshly-minted label gets its logo within the hour instead of sitting `pending` forever. The crawl makes labels exist; this sweep gives each a logo — the same loop the crawler and The Ear's ranking form. Hourly is plenty: the crawl mints only tens of labels/day and Discogs' 1 req/s ceiling means there is no prize for hurrying; a tick over a drained worklist is a cheap no-op. It is registered as `cron.label-images` in `@fluncle/registry` + the healthcheck prober's `CRON_SPECS`, so it appears on `/status` on its first tick. Like the other agent sweeps the box enable is operator-gated; the repo half (scripts + timer + this doc) ships here.
+
 **The surfaces read one ladder.** Each label read resolves `image_key` → a URL via `media.ts::labelLogoUrl` and leads with it over the cover:
 
 - `/labels` cards — `listLabelsWithFindingCounts` returns `logoImageUrl`; the card renders `logoImageUrl ?? cover`.
@@ -114,7 +116,7 @@ Every label surface — the `/labels` index cards, the `/label/<slug>` page (its
 - Search — the label entity row leads with `labels.image_key`'s URL over the cover subquery (`search.ts`).
 - Hover card — a label's covers lead with its logo (`graph-preview.ts`).
 
-**Wiring.** `backfill_label_images` → `POST /admin/backfill/label-images` (agent tier — internal, reversible, no publish; the `backfill_discogs` precedent), driven by `fluncle admin backfills label-images` (bounded + cursor-looping, `--dry-run` previews the worklist). Like the other agent sweeps, the box cron is operator-gated; the repo half ships here.
+**Wiring.** `backfill_label_images` → `POST /admin/backfill/label-images` (agent tier — internal, reversible, no publish; the `backfill_discogs` precedent), driven by `fluncle admin backfills label-images` (bounded + cursor-looping, `--dry-run` previews the worklist) both as the operator one-shot and as the recurring `fluncle-label-images` cron above.
 
 A label logo is a **trademark shown to identify the label** — nominative use, the same posture as album art; it never implies endorsement.
 
