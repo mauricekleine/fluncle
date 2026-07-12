@@ -15,8 +15,11 @@
 // (the Gold Veil), because Eclipse Gold is the CERTIFICATION light. A track Fluncle never
 // certified catches the Dust Veil instead — the cold light of a thing seen from a distance —
 // carries no coordinate, and links OUT to Spotify, because there is no `/log` page to go to.
-// It is never labelled, never introduced, and never given a noun: there is no heading over
-// those rows and no badge on them. "Finding" stays the only named object in Fluncle's world.
+// The uncertified TIER is never named: no badge, no introduction, no noun of its own. In a
+// mixed list a heading may name the SUPERSET ("Tracks" — true of every row under it, the
+// mix-builder precedent), and the findings group carries the archive's own name ("Fluncle's
+// Findings") because a finding IS a named object. When the unlit rows are all there is, they
+// stand bare — a heading over the only content would exist just to name the tier.
 // The focus ring stays Eclipse Gold on every row either way — focus is an accessibility
 // affordance, not a claim about the music.
 
@@ -330,6 +333,14 @@ function SearchDialog({
   const showExamples = query.trim().length === 0;
   const nothing = enabled && !isFetching && data.results.length === 0 && data.entities.length === 0;
 
+  // The two registers, partitioned once. The server already ranks certified first; the split
+  // here is what lets each block carry its own heading (or, for a bare unlit list, none).
+  const findings = useMemo(() => data.results.filter((hit) => hit.certified), [data.results]);
+  const unlit = useMemo(() => data.results.filter((hit) => !hit.certified), [data.results]);
+  // "Tracks" earns its place only when something named renders above it — then it is doing
+  // contrastive work and names the superset. Alone, it would exist just to name the tier.
+  const headUnlit = findings.length > 0 || data.entities.length > 0;
+
   const emptyCopy = useMemo(() => {
     if (data.kind === "coordinate") {
       return "No finding at that coordinate.";
@@ -425,12 +436,30 @@ function SearchDialog({
             );
           })}
 
-          {/* NO HEADING over the tracks — deliberately. A heading would have to name what it
-              headed, and the uncertified tier has no name. Findings lead; the rest follows in
-              the unlit register, and the difference speaks for itself. */}
-          {data.results.map((hit) => (
-            <TrackRow hit={hit} key={hit.trackId} onPick={pick} />
-          ))}
+          {/* The findings lead under the archive's own name — a finding is a named object, so
+              its heading is allowed. */}
+          {findings.length > 0 ? (
+            <CommandGroup heading="Fluncle’s Findings">
+              {findings.map((hit) => (
+                <TrackRow hit={hit} key={hit.trackId} onPick={pick} />
+              ))}
+            </CommandGroup>
+          ) : undefined}
+
+          {/* The unlit rows follow. "Tracks" names the SUPERSET, never the tier (the Unlit
+              Rule; the mix-builder precedent) — and only when a named group renders above it.
+              A bare unlit list stays unheaded: the register is the only claim made about it. */}
+          {unlit.length > 0 ? (
+            headUnlit ? (
+              <CommandGroup heading="Tracks">
+                {unlit.map((hit) => (
+                  <TrackRow hit={hit} key={hit.trackId} onPick={pick} />
+                ))}
+              </CommandGroup>
+            ) : (
+              unlit.map((hit) => <TrackRow hit={hit} key={hit.trackId} onPick={pick} />)
+            )
+          ) : undefined}
         </CommandList>
       </Command>
     </CommandDialog>
