@@ -36,6 +36,7 @@ import {
   setCatalogueCapturePaused,
 } from "../capture-budget";
 import {
+  clearWrongAudio,
   listCatalogueTracks as listCatalogue,
   getCatalogueSummary,
   rankCatalogue,
@@ -91,6 +92,21 @@ export function adminCatalogueHandlers(os: Implementer) {
       throw apiFault(error);
     }
   });
+
+  // POST /admin/catalogue/wrong-audio/clear — OPERATOR tier. Overrule the wrong-audio quarantine
+  // on one row (docs/the-ear.md § Wrong audio): an agent does not get to reverse the machine's own
+  // wrong-audio verdict, the same reasoning that keeps `update_label` and `set_capture_budget`
+  // operator-tier. Idempotent: `cleared: false` when the row was not actually quarantined.
+  const clearWrongAudioHandler = os.clear_wrong_audio
+    .use(adminAuth)
+    .use(operatorGuard)
+    .handler(async ({ input }) => {
+      try {
+        return { cleared: await clearWrongAudio(input.trackId), ok: true } as const;
+      } catch (error) {
+        throw apiFault(error);
+      }
+    });
 
   // POST /admin/catalogue/crawl — one bounded, resumable pass of the crawl.
   const crawlCatalogueHandler = os.crawl_catalogue.use(adminAuth).handler(async ({ input }) => {
@@ -174,6 +190,7 @@ export function adminCatalogueHandlers(os: Implementer) {
     });
 
   return {
+    clear_wrong_audio: clearWrongAudioHandler,
     crawl_catalogue: crawlCatalogueHandler,
     get_capture_budget: getCaptureBudgetHandler,
     get_crawl_status: getCrawlStatusHandler,

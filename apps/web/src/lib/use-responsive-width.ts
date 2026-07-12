@@ -10,8 +10,9 @@
 // blurrier rendition than the pane needs.
 //
 // Returns `undefined` until the element is measured AND on the server, so the
-// caller can hold the raw master for SSR/first paint and swap to the rendition
-// once a real width is known (no layout-shift, no guessing on the server).
+// caller can hold NO source at all for SSR/first paint — the poster holds the
+// pane — and attach the rendition once a real width is known (never a
+// speculative master request that gets aborted a tick later).
 //
 // The ladder is also the recovery path: when a load WEDGES (the stall watchdog),
 // the caller steps the requested rung DOWN with `stepDownRenditionWidth` — fewer
@@ -73,8 +74,9 @@ export function stepDownRenditionWidth(width: RenditionWidth, steps: number): Re
 /**
  * Observe `ref`'s rendered width and return the rendition rung it needs.
  *
- * `undefined` until measured (and always on the server), so callers keep the
- * raw master for first paint and swap to the rendition once a width is known.
+ * `undefined` until measured (and always on the server), so callers attach no
+ * source for first paint (the poster holds the pane) and swap in the rendition
+ * once a width is known.
  */
 export function useResponsiveWidth(ref: RefObject<HTMLElement | null>): RenditionWidth | undefined {
   const [width, setWidth] = useState<RenditionWidth | undefined>(undefined);

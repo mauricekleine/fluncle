@@ -166,6 +166,11 @@ export type CaptureFinding = {
   // The prior consecutive-failure count (the admin list DTO surfaces it when non-zero),
   // read so the failure bump ACCUMULATES — the queue's failure-cap backoff depends on it.
   sourceAudioFailures?: number;
+  // The R2 key of the row's PRIOR capture (`<root>/<sha256>.<ext>`). Normally absent on a capture
+  // worklist row (nothing captured yet), but a WRONG-AUDIO re-capture (docs/the-ear.md § Wrong
+  // audio) KEEPS it: its embedded sha256 is the memory that lets this sweep refuse to re-download
+  // the identical bad bytes. Present ⇒ reject any candidate whose bytes hash to that sha256.
+  sourceAudioKey?: string;
   title?: string;
   trackId: string;
 };
@@ -234,6 +239,24 @@ export function buildSourceAudioKey(keyRoot: string, sha256Hex: string, ext: str
   const cleanExt = ext.replace(/^\./, "").toLowerCase();
 
   return `${keyRoot}/${sha256Hex}.${cleanExt}`;
+}
+
+/**
+ * The sha256 embedded in a source-audio R2 key (`<root>/<sha256>.<ext>`), lowercased, or null if
+ * the basename is not a 64-hex-char digest. The inverse of `buildSourceAudioKey`'s hash slot — it
+ * is how a WRONG-AUDIO re-capture recovers the bad hash from the row's kept key (docs/the-ear.md
+ * § Wrong audio) with NO new vendor data, then refuses a re-download whose bytes hash identical.
+ */
+export function extractSourceAudioSha256(key: string | undefined): null | string {
+  if (!key) {
+    return null;
+  }
+
+  const base = key.split("/").pop() ?? "";
+  const dot = base.indexOf(".");
+  const hash = (dot >= 0 ? base.slice(0, dot) : base).toLowerCase();
+
+  return /^[0-9a-f]{64}$/.test(hash) ? hash : null;
 }
 
 // Title markers that signal a WRONG version (a same-length remix/edit slips the duration
@@ -816,25 +839,51 @@ async function captureFinding(finding: CaptureFinding): Promise<FindingOutcome> 
       return "unmatched";
     }
 
+    // The bad-audio memory: on a WRONG-AUDIO re-capture the row kept its prior key, whose sha256
+    // is the exact bytes The Ear flagged as wrong (docs/the-ear.md § Wrong audio). Reject any
+    // candidate that hashes to it, so the re-capture cannot re-download the same mistaken master
+    // and is forced to find a DIFFERENT upload — or, if none exists, land honestly `unmatched`.
+    const rejectHash = extractSourceAudioSha256(finding.sourceAudioKey);
+
     // Walk the ranked candidates: download the best one, but fall through a DRM-locked or
-    // bot-walled hit to the next-ranked candidate (a different upload of the same track is
-    // usually pullable). On a 403 surviving the sticky session, retry once with the
-    // tv/web_safari player clients first. A non-recoverable error aborts (→ `failed`).
+    // bot-walled hit — OR the known wrong audio — to the next-ranked candidate (a different upload
+    // of the same track is usually pullable). On a 403 surviving the sticky session, retry once
+    // with the tv/web_safari player clients first. A non-recoverable error aborts (→ `failed`).
     let downloaded: { ext: string; path: string } | undefined;
     let chosen: { candidate: YtCandidate; trust: TrustTier } | undefined;
+    let bytes: Uint8Array | undefined;
+    let digest: string | undefined;
     let lastError: unknown;
+    let rejectedKnownBad = false;
     for (const candidate of ranked.slice(0, DOWNLOAD_ATTEMPTS)) {
       try {
+        let file: { ext: string; path: string };
         try {
-          downloaded = runYtDownload(proxyUrl, candidate.candidate.id, dir, false);
+          file = runYtDownload(proxyUrl, candidate.candidate.id, dir, false);
         } catch (error) {
           if ((error as { is403?: boolean }).is403) {
-            downloaded = runYtDownload(proxyUrl, candidate.candidate.id, dir, true);
+            file = runYtDownload(proxyUrl, candidate.candidate.id, dir, true);
           } else {
             throw error;
           }
         }
+
+        const fileBytes = new Uint8Array(readFileSync(file.path));
+        const fileDigest = createHash("sha256").update(fileBytes).digest("hex");
+
+        if (rejectHash && fileDigest === rejectHash) {
+          // The identical bytes already flagged as wrong audio. Skip this upload, clear the file
+          // so the next iteration's read cannot pick it up, and try the next candidate.
+          log(`candidate ${candidate.candidate.id} is the known wrong audio — trying next`);
+          rmSync(file.path, { force: true });
+          rejectedKnownBad = true;
+          continue;
+        }
+
+        downloaded = file;
         chosen = candidate;
+        bytes = fileBytes;
+        digest = fileDigest;
         break;
       } catch (error) {
         lastError = error;
@@ -846,7 +895,19 @@ async function captureFinding(finding: CaptureFinding): Promise<FindingOutcome> 
       }
     }
 
-    if (!downloaded || !chosen) {
+    if (!downloaded || !chosen || !bytes || !digest) {
+      // Every downloadable candidate was the known wrong audio → a wrong-audio dead end: the only
+      // uploads that match are the mistaken master, so there is no right audio to find. Land it
+      // `unmatched` (terminal — the capture queue never re-burns it), which also lifts it out of
+      // the re-capture loop that would otherwise re-download the same bad bytes every tick.
+      if (rejectedKnownBad && !lastError) {
+        await patchTrack(trackId, {
+          captureStatus: "unmatched",
+          sourceAudioAttemptedAt: new Date().toISOString(),
+        });
+        return "unmatched";
+      }
+
       throw lastError ?? new Error("no downloadable candidate");
     }
 
@@ -864,8 +925,6 @@ async function captureFinding(finding: CaptureFinding): Promise<FindingOutcome> 
       return "unmatched";
     }
 
-    const bytes = new Uint8Array(readFileSync(downloaded.path));
-    const digest = createHash("sha256").update(bytes).digest("hex");
     const key = buildSourceAudioKey(keyRoot, digest, downloaded.ext);
 
     await r2Put(key, bytes, contentTypeForExt(downloaded.ext));

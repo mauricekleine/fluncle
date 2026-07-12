@@ -52,6 +52,7 @@ import { parseArtistsJson } from "./artists";
 import { getDb, typedRows } from "./db";
 import { embeddingVectorSql } from "./embedding";
 import { labelSlug } from "./labels";
+import { matchKey } from "./track-match";
 
 // ── The pre-audio capture ladder ─────────────────────────────────────────────────────
 
@@ -125,6 +126,49 @@ export const DUPLICATE_CAPTURE_TIER = -2;
  * bit-identical masters, lower it to also catch alternate masters of the same performance.
  */
 export const DUPLICATE_SIMILARITY = 0.995;
+
+/**
+ * The cosine-similarity threshold at or above which a SCORED catalogue row is adjudicated rather
+ * than merely labelled — a DISTINCT, higher line than `DUPLICATE_SIMILARITY` (docs/the-ear.md
+ * § Wrong audio). The difference is the whole point:
+ *
+ *   - `DUPLICATE_SIMILARITY` (0.995) — the SAME-TITLE display band [0.995, 0.9995). A remaster,
+ *     a radio edit, an alternate master: a genuinely close-but-different recording of a track
+ *     Fluncle already logged. It is honestly LABELLED "already in the archive" and left alone —
+ *     the audio is real and it is correctly this row's audio.
+ *   - `WRONG_AUDIO_QUARANTINE` (0.9995) — the CROSS-TITLE cliff. MuQ cosine at six-plus nines is
+ *     not "similar songs", it is the SAME MASTER. So a row scoring here against a finding with a
+ *     DIFFERENT title is almost certainly WRONG AUDIO: the capture sweep matched the artist's
+ *     already-logged hit instead of the track the row names (the Flowidus "Find Your Love"
+ *     carrying "Shelter"'s audio, caught in the 2026-07-12 capture audit). That row is vetoed,
+ *     quarantined, and re-captured — never allowed to float to the top of the ear lens as a fake
+ *     perfect find. A same-title near-1.0 is instead a TRUE duplicate (the crawler re-found a
+ *     logged track, correct audio and all) and routes to the pre-audio duplicate handling.
+ *
+ * The discriminator is a folded title+artist `matchKey` (track-match.ts) between the row and the
+ * finding it scored against: EQUAL ⇒ true duplicate, DIFFERENT ⇒ wrong audio. Both live above
+ * `DUPLICATE_SIMILARITY`, so the display band below is untouched.
+ */
+export const WRONG_AUDIO_QUARANTINE = 0.9995;
+
+/**
+ * The `capture_status` a quarantined row carries — a wrong-audio capture awaiting re-download
+ * (docs/the-ear.md § Wrong audio). It is a re-capture TRIGGER in the capture work queue
+ * (track-work.ts) and a GUARD the embed/analyze queues honour (they must not re-embed the bad
+ * bytes still on file). Not a `TrackUpdate.captureStatus` the sweep writes — the `rank_catalogue`
+ * sweep stamps it directly, the same way it writes the other derived ranking columns.
+ */
+export const WRONG_AUDIO_STATUS = "wrong-audio";
+
+/**
+ * The `capture_status` the OPERATOR force-clear stamps (`clearWrongAudio`) — "I disagree, this
+ * capture is fine, stop re-capturing it". It is a STICKY override: the `rank_catalogue` sweep
+ * never re-quarantines a `quarantine-cleared` row even when it scores back into the wrong-audio
+ * band, so the operator's ruling wins exactly like an operator note wins over the auto-note. The
+ * embed queue re-embeds its kept audio, and the row then ranks normally (reading as a duplicate
+ * if it genuinely matches, or a discovery if it does not).
+ */
+export const QUARANTINE_CLEARED = "quarantine-cleared";
 
 /** The archive's cheap identity sets — bounded by the FINDING count, never the catalogue. */
 export type ArchiveAffinity = {
@@ -228,11 +272,16 @@ export function capturePriorityFor(
  * The other half is the ROW side: a catalogue track that gains its OWN vector (captured →
  * embedded) moves neither number, so the fingerprint alone would leave it ranked forever on
  * the pre-audio ladder — 58 freshly-embedded tracks sat invisible to The Ear the first time
- * this happened. The discriminator is `capture_priority`: the vectored scoring path ALWAYS
- * nulls it (scored or malformed alike), and only the pre-audio ladder sets it. So
- * `has_vector AND capture_priority IS NOT NULL` reads precisely as "ranked before its vector
- * arrived" and joins the stale predicate — one tick re-scores it, the write nulls the tier,
- * and it leaves the set (no loop, even for a malformed vector).
+ * this happened. The discriminator is `capture_priority`: the vectored scoring path nulls it for
+ * an ordinary find, and only the pre-audio ladder sets a NON-NEGATIVE tier. So
+ * `has_vector AND capture_priority IS NOT NULL AND capture_priority >= 0` reads precisely as
+ * "ranked before its vector arrived" and joins the stale predicate — one tick re-scores it, the
+ * write nulls the tier, and it leaves the set (no loop, even for a malformed vector).
+ *
+ * The `>= 0` clause carves out the one case where the scoring path DELIBERATELY leaves a negative
+ * tier on a vectored row: a −2 TRUE DUPLICATE (docs/the-ear.md § Wrong audio). That is a decision,
+ * not a pre-audio leftover, so it must NOT read as stale — and it never arises organically (a
+ * negative pre-audio tier is excluded from capture, so it never gains a vector on its own).
  *
  * The fingerprint is compared with `<>`, never `<`, so a DELETED finding (the count goes
  * down) is caught exactly like an added one.
@@ -253,6 +302,12 @@ export type RankCatalogueSummary = {
   findings: number;
   /** Catalogue rows given a `capture_priority` (they have no audio yet). */
   prioritized: number;
+  /**
+   * Catalogue rows QUARANTINED this tick — a scored row whose near-1.0 cross-title match to a
+   * finding means the capture landed the WRONG audio (docs/the-ear.md § Wrong audio). It is
+   * vetoed from the ear lens, re-queued for capture, and never counted as a `scored` find.
+   */
+  quarantined: number;
   /** Catalogue rows still carrying a stale/absent fingerprint after this tick. */
   remaining: number;
   /** Catalogue rows given a `nearest_finding_score` (they have a vector). */
@@ -264,13 +319,38 @@ export const RANK_BATCH_SIZE = 250;
 
 type CandidateRow = {
   artists_json: string;
+  capture_status: string | null;
   has_vector: number;
   isrc: string | null;
   label: string | null;
+  title: string;
   track_id: string;
 };
 
 type WinnerRow = { cid: string; dist: number; fid: string };
+
+/**
+ * The pre-audio capture tier a row would sit at if it had no vector — the ISRC-duplicate check,
+ * then the metadata ladder. Shared by the unvectored branch (its normal job) and the wrong-audio
+ * QUARANTINE (which rewinds a vectored row to pre-audio and needs to know where it lands: back on
+ * the capture ladder, or vetoed off it). Pure over the two finding-bounded corpora.
+ */
+function preAudioPriority(
+  candidate: { artists_json: string; isrc: null | string; label: null | string },
+  archive: ArchiveAffinity,
+  findingIsrcs: Map<string, string>,
+): { duplicateOf: null | string; priority: number } {
+  const dupKey = normalizeIsrc(candidate.isrc);
+  const duplicateOf = dupKey ? (findingIsrcs.get(dupKey) ?? null) : null;
+  const priority = duplicateOf
+    ? DUPLICATE_CAPTURE_TIER
+    : capturePriorityFor(
+        { artists: parseArtistsJson(candidate.artists_json), label: candidate.label },
+        archive,
+      ).priority;
+
+  return { duplicateOf, priority };
+}
 
 /**
  * Read the archive's affinity sets. Bounded by the FINDING count (tens of rows today,
@@ -375,6 +455,34 @@ async function readFindingIsrcs(): Promise<Map<string, string>> {
 }
 
 /**
+ * The archive's TITLE+ARTIST identity map — finding `track_id` → its folded `matchKey`
+ * (track-match.ts). This is the wrong-audio discriminator's corpus (docs/the-ear.md § Wrong
+ * audio): when a catalogue row scores ≥ `WRONG_AUDIO_QUARANTINE` against a finding, the sweep
+ * compares the row's own `matchKey` to the finding's — EQUAL is a true duplicate (same recording,
+ * correct audio), DIFFERENT is wrong audio (the capture grabbed the artist's other, already-logged
+ * track). Read only on a tick that actually has a near-1.0 row, so it stays off the common path.
+ * Bounded by the FINDING count, like every affinity read.
+ */
+async function readFindingIdentities(): Promise<Map<string, string>> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [],
+    sql: `select findings.track_id as track_id, tracks.title as title, tracks.artists_json as artists_json
+          from findings join tracks on tracks.track_id = findings.track_id`,
+  });
+
+  const byTrack = new Map<string, string>();
+
+  for (const row of typedRows<{ artists_json: string; title: string; track_id: string }>(
+    result.rows,
+  )) {
+    byTrack.set(row.track_id, matchKey(parseArtistsJson(row.artists_json), row.title));
+  }
+
+  return byTrack;
+}
+
+/**
  * ONE TICK of the ranking sweep — the whole of The Ear's arithmetic, and the only writer of
  * the five `tracks` ranking columns.
  *
@@ -416,22 +524,30 @@ export async function rankCatalogue(limit = RANK_BATCH_SIZE): Promise<RankCatalo
   const corpus = rankCorpus(findings, embeddedFindings);
 
   // The stale catalogue rows: fingerprint drift (the corpus moved) OR a vector that arrived
-  // after the row was last ranked (it still carries the pre-audio tier the scoring path
-  // always clears — see the rankCorpus doc). `has_vector` evaluates the read contract (blob
-  // first, guarded JSON fallback) as a BOOLEAN in SQL — no vector ever crosses the wire.
+  // after the row was last ranked (it still carries a NON-NEGATIVE pre-audio tier the scoring
+  // path always clears — see the rankCorpus doc). The `capture_priority >= 0` clause is what
+  // lets the scoring path DELIBERATELY stamp a vectored row with a negative tier (a −2 true
+  // duplicate, docs/the-ear.md § Wrong audio) without that stamp reading as "ranked before its
+  // vector arrived" — a negative tier is a decision, not a leftover, so it is not re-picked.
+  // `has_vector` evaluates the read contract (blob first, guarded JSON fallback) as a BOOLEAN in
+  // SQL — no vector ever crosses the wire.
   const candidateResult = await db.execute({
     args: [corpus, Math.max(0, limit)],
     sql: `select ct.track_id as track_id,
+                 ct.title as title,
                  ct.artists_json as artists_json,
                  ct.label as label,
                  ct.isrc as isrc,
+                 ct.capture_status as capture_status,
                  (${embeddingVectorSql("ct")} is not null) as has_vector
           from tracks ct
           left join findings cf on cf.track_id = ct.track_id
           where cf.track_id is null
             and (ct.catalogue_rank_corpus is null
                  or ct.catalogue_rank_corpus <> ?
-                 or (${embeddingVectorSql("ct")} is not null and ct.capture_priority is not null))
+                 or (${embeddingVectorSql("ct")} is not null
+                     and ct.capture_priority is not null
+                     and ct.capture_priority >= 0))
           order by ct.track_id asc
           limit ?`,
   });
@@ -447,6 +563,7 @@ export async function rankCatalogue(limit = RANK_BATCH_SIZE): Promise<RankCatalo
       embeddedFindings,
       findings,
       prioritized: 0,
+      quarantined: 0,
       remaining: await countStale(corpus),
       scored: 0,
     };
@@ -499,12 +616,115 @@ export async function rankCatalogue(limit = RANK_BATCH_SIZE): Promise<RankCatalo
     }
   }
 
+  // ── The corpora the write half needs ───────────────────────────────────────────────
+  // The pre-audio ladder (affinity + ISRC map) is needed whenever an UNVECTORED row exists, and
+  // ALSO when a vectored row has to be QUARANTINED (rewound to the pre-audio ladder). The
+  // title+artist identity map is needed only to ADJUDICATE a near-1.0 vectored row — the common
+  // tick has none, so all three finding-bounded reads stay off the hot path until a row earns them.
+  const nearWrongAudio = vectored.filter((row) => {
+    const winner = winners.get(row.track_id);
+
+    return (
+      row.capture_status !== QUARANTINE_CLEARED &&
+      winner !== undefined &&
+      1 - Number(winner.dist) >= WRONG_AUDIO_QUARANTINE
+    );
+  });
+  const needsPreAudio = unvectored.length > 0 || nearWrongAudio.length > 0;
+  const [archive, findingIsrcs, findingIdentities] = await Promise.all([
+    needsPreAudio ? readArchiveAffinity() : undefined,
+    needsPreAudio ? readFindingIsrcs() : undefined,
+    nearWrongAudio.length > 0 ? readFindingIdentities() : undefined,
+  ]);
+
+  // ── The scored half, now with the wrong-audio veto (docs/the-ear.md § Wrong audio) ──
+  let quarantined = 0;
+
   for (const candidate of vectored) {
     const winner = winners.get(candidate.track_id);
     // `vector_distance_cos` returns 1 − cos, so the similarity is 1 − distance: higher is
     // nearer, and the column sorts DESC. A candidate with no winner (nothing embedded yet, or
     // a malformed stored vector) is stamped with a null score rather than left stale.
     const score = winner ? 1 - Number(winner.dist) : null;
+
+    // THE ADJUDICATION. A cosine of six-plus nines is the SAME MASTER, not a similar track. So a
+    // near-1.0 row is one of two things, and the folded title+artist `matchKey` tells them apart:
+    if (
+      winner &&
+      score !== null &&
+      score >= WRONG_AUDIO_QUARANTINE &&
+      candidate.capture_status !== QUARANTINE_CLEARED &&
+      findingIdentities
+    ) {
+      const rowKey = matchKey(parseArtistsJson(candidate.artists_json), candidate.title);
+      const findingKey = findingIdentities.get(winner.fid);
+
+      if (findingKey !== undefined && findingKey === rowKey) {
+        // SAME TITLE → a TRUE DUPLICATE. The crawler re-found a track already logged, with the
+        // RIGHT audio — worthless to buy but not wrong. Route it to the #545 duplicate handling:
+        // name the finding on `duplicate_of_track_id` and stamp the −2 tier (excluded from the
+        // capture queue by the existing `capture_priority >= 0` predicate). It KEEPS its vector
+        // and score, so it stays on the ear lens reading "already in the archive". The −2 on a
+        // vectored row is deliberate, so the staleness predicate's `capture_priority >= 0` clause
+        // leaves it stable — no re-pick loop.
+        writes.push({
+          args: [
+            score,
+            winner.fid,
+            DUPLICATE_CAPTURE_TIER,
+            winner.fid,
+            corpus,
+            now,
+            candidate.track_id,
+          ],
+          sql: `update tracks
+                set nearest_finding_score = ?,
+                    nearest_finding_track_id = ?,
+                    capture_priority = ?,
+                    duplicate_of_track_id = ?,
+                    catalogue_rank_corpus = ?,
+                    catalogue_ranked_at = ?
+                where track_id = ?`,
+        });
+        continue;
+      }
+
+      // DIFFERENT TITLE → WRONG AUDIO. The capture matched the artist's already-logged hit, so
+      // this vector is a lie about what the row is. QUARANTINE: drop the poisoned vector + score
+      // (a catalogue row is never anyone's nearest-finding candidate, so nulling it poisons no
+      // other ranking), remember the collided finding as the WHY, and re-derive the pre-audio
+      // tier so it re-enters the capture queue for a fresh download. `source_audio_key` is KEPT
+      // on the row: its embedded sha256 is the memory the capture sweep uses to refuse an
+      // identical re-download (docs/the-ear.md § Wrong audio). `capture_status = 'wrong-audio'`
+      // is the re-capture trigger AND the embed/analyze guard (track-work.ts).
+      const preAudio = archive
+        ? preAudioPriority(candidate, archive, findingIsrcs ?? new Map<string, string>())
+        : { duplicateOf: null, priority: 0 };
+      quarantined += 1;
+      writes.push({
+        args: [
+          WRONG_AUDIO_STATUS,
+          winner.fid,
+          preAudio.priority,
+          preAudio.duplicateOf,
+          corpus,
+          now,
+          candidate.track_id,
+        ],
+        sql: `update tracks
+              set capture_status = ?,
+                  embedding_json = null,
+                  embedding_blob = null,
+                  nearest_finding_score = null,
+                  nearest_finding_track_id = ?,
+                  capture_priority = ?,
+                  duplicate_of_track_id = ?,
+                  catalogue_rank_corpus = ?,
+                  catalogue_ranked_at = ?
+              where track_id = ?`,
+      });
+      continue;
+    }
 
     writes.push({
       args: [
@@ -531,28 +751,20 @@ export async function rankCatalogue(limit = RANK_BATCH_SIZE): Promise<RankCatalo
 
   // ── The capture half: the pre-audio ladder, in TS, over tiny strings ───────────────
   // No audio, no vector, nothing to rank in SQL. The inputs are a name array and a label —
-  // bytes, not vectors — so the one authority for the ladder (`capturePriorityFor`) runs here
-  // and the surface re-runs the same function to explain the same answer.
-  if (unvectored.length > 0) {
-    // Both corpora are FINDING-bounded, and both are needed here: the affinity sets feed the
-    // pure metadata ladder, the ISRC map catches a row that is literally the same recording as
-    // a finding Fluncle already owns (docs/the-ear.md § Duplicates).
-    const [archive, findingIsrcs] = await Promise.all([readArchiveAffinity(), readFindingIsrcs()]);
-
+  // bytes, not vectors — so the one authority for the ladder (`capturePriorityFor`, via
+  // `preAudioPriority`) runs here and the surface re-runs the same function to explain the answer.
+  if (unvectored.length > 0 && archive) {
     for (const candidate of unvectored) {
       // THE DUPLICATE CHECK, before the ladder. An exact ISRC match to a certified finding means
       // buying this row's audio buys something already on file — the money the crawler's real
       // "Infinity" duplicate would have spent. It is the −2 veto tier (excluded by the capture
       // queue's `capture_priority >= 0` predicate, no new mechanism), and the finding it matched
       // is stored so the board can name it. NULL clears a stale marker when the finding is gone.
-      const dupKey = normalizeIsrc(candidate.isrc);
-      const duplicateOf = dupKey ? (findingIsrcs.get(dupKey) ?? null) : null;
-      const priority = duplicateOf
-        ? DUPLICATE_CAPTURE_TIER
-        : capturePriorityFor(
-            { artists: parseArtistsJson(candidate.artists_json), label: candidate.label },
-            archive,
-          ).priority;
+      const { duplicateOf, priority } = preAudioPriority(
+        candidate,
+        archive,
+        findingIsrcs ?? new Map<string, string>(),
+      );
 
       writes.push({
         args: [priority, duplicateOf, corpus, now, candidate.track_id],
@@ -577,8 +789,10 @@ export async function rankCatalogue(limit = RANK_BATCH_SIZE): Promise<RankCatalo
     embeddedFindings,
     findings,
     prioritized: unvectored.length,
+    quarantined,
     remaining: await countStale(corpus),
-    scored: vectored.length,
+    // A quarantined row was scored, then vetoed — it is no longer a `scored` find.
+    scored: vectored.length - quarantined,
   };
 }
 
@@ -593,7 +807,9 @@ async function countStale(corpus: string): Promise<number> {
           where cf.track_id is null
             and (ct.catalogue_rank_corpus is null
                  or ct.catalogue_rank_corpus <> ?
-                 or (${embeddingVectorSql("ct")} is not null and ct.capture_priority is not null))`,
+                 or (${embeddingVectorSql("ct")} is not null
+                     and ct.capture_priority is not null
+                     and ct.capture_priority >= 0))`,
   });
 
   return Number(typedRows<{ n: number }>(result.rows)[0]?.n ?? 0);
@@ -601,8 +817,17 @@ async function countStale(corpus: string): Promise<number> {
 
 // ── The reads ────────────────────────────────────────────────────────────────────────
 
-/** Which question the page is asking of the catalogue. */
-export type CatalogueLens = "capture" | "ear";
+/**
+ * Which question the page is asking of the catalogue.
+ *
+ *   - `ear`        — closest to a finding (the telescope).
+ *   - `capture`    — next to capture (the pre-audio ladder).
+ *   - `quarantine` — the WRONG-AUDIO holding pen (docs/the-ear.md § Wrong audio): rows whose
+ *     capture landed the wrong master, vetoed from the ear lens and re-queued for a fresh
+ *     download. Its own quiet section so a bad capture never silently vanishes, each row carrying
+ *     the honest reason and a force-clear the operator can use to overrule it.
+ */
+export type CatalogueLens = "capture" | "ear" | "quarantine";
 
 /** The finding a catalogue row matched — the WHY, hydrated. */
 export type CatalogueMatch = {
@@ -646,6 +871,11 @@ export type CatalogueSummary = {
   awaitingCapture: number;
   /** Catalogue rows the sweep has not reached yet (or that went stale). */
   awaitingRank: number;
+  /**
+   * Catalogue rows QUARANTINED as wrong audio (docs/the-ear.md § Wrong audio) — awaiting a
+   * fresh capture, held in their own lens rather than mixed into the capture queue.
+   */
+  quarantined: number;
   /** Catalogue rows carrying a `nearest_finding_score` — what The Ear can actually hear. */
   ranked: number;
   /** Every `tracks` row with no `findings` row. */
@@ -656,12 +886,14 @@ export type CatalogueSummary = {
 export async function getCatalogueSummary(): Promise<CatalogueSummary> {
   const db = await getDb();
   const result = await db.execute({
-    args: [],
+    args: [WRONG_AUDIO_STATUS, WRONG_AUDIO_STATUS],
     sql: `select
             count(*) as total,
             sum(case when ct.nearest_finding_score is not null then 1 else 0 end) as ranked,
             sum(case when ct.nearest_finding_score is null
-                      and ct.capture_priority is not null then 1 else 0 end) as awaiting_capture,
+                      and ct.capture_priority is not null
+                      and ct.capture_status <> ? then 1 else 0 end) as awaiting_capture,
+            sum(case when ct.capture_status = ? then 1 else 0 end) as quarantined,
             sum(case when ct.catalogue_rank_corpus is null then 1 else 0 end) as awaiting_rank
           from tracks ct
           left join findings cf on cf.track_id = ct.track_id
@@ -670,6 +902,7 @@ export async function getCatalogueSummary(): Promise<CatalogueSummary> {
   const row = typedRows<{
     awaiting_capture: number | null;
     awaiting_rank: number | null;
+    quarantined: number | null;
     ranked: number | null;
     total: number | null;
   }>(result.rows)[0];
@@ -677,6 +910,7 @@ export async function getCatalogueSummary(): Promise<CatalogueSummary> {
   return {
     awaitingCapture: Number(row?.awaiting_capture ?? 0),
     awaitingRank: Number(row?.awaiting_rank ?? 0),
+    quarantined: Number(row?.quarantined ?? 0),
     ranked: Number(row?.ranked ?? 0),
     total: Number(row?.total ?? 0),
   };
@@ -734,36 +968,58 @@ export async function listCatalogueTracks(
 ): Promise<CatalogueTrackItem[]> {
   const page = Math.min(Math.max(1, limit), 200);
   const db = await getDb();
-  const result = await db.execute({
-    args: [page],
-    sql:
-      lens === "ear"
-        ? `select ${CATALOGUE_SELECT}
-           from tracks ct
-           left join findings cf on cf.track_id = ct.track_id
-           where cf.track_id is null and ct.nearest_finding_score is not null
-           order by ct.nearest_finding_score desc, ct.track_id asc
-           limit ?`
-        : `select ${CATALOGUE_SELECT}
-           from tracks ct
-           left join findings cf on cf.track_id = ct.track_id
-           where cf.track_id is null
-             and ct.nearest_finding_score is null
-             and ct.capture_priority is not null
-           order by ct.capture_priority desc, ct.track_id asc
-           limit ?`,
-  });
+  const query =
+    lens === "ear"
+      ? {
+          args: [page],
+          sql: `select ${CATALOGUE_SELECT}
+                from tracks ct
+                left join findings cf on cf.track_id = ct.track_id
+                where cf.track_id is null and ct.nearest_finding_score is not null
+                order by ct.nearest_finding_score desc, ct.track_id asc
+                limit ?`,
+        }
+      : lens === "quarantine"
+        ? {
+            // The WRONG-AUDIO holding pen (docs/the-ear.md § Wrong audio): every row a capture
+            // poisoned, newest first, carrying the finding it wrongly matched as its WHY.
+            args: [WRONG_AUDIO_STATUS, page],
+            sql: `select ${CATALOGUE_SELECT}
+                  from tracks ct
+                  left join findings cf on cf.track_id = ct.track_id
+                  where cf.track_id is null and ct.capture_status = ?
+                  order by ct.catalogue_ranked_at desc, ct.track_id asc
+                  limit ?`,
+          }
+        : {
+            // The capture queue EXCLUDES the quarantined rows — they are a re-capture, held in
+            // their own lens, not part of the cold pre-audio queue.
+            args: [WRONG_AUDIO_STATUS, page],
+            sql: `select ${CATALOGUE_SELECT}
+                  from tracks ct
+                  left join findings cf on cf.track_id = ct.track_id
+                  where cf.track_id is null
+                    and ct.nearest_finding_score is null
+                    and ct.capture_priority is not null
+                    and ct.capture_status <> ?
+                  order by ct.capture_priority desc, ct.track_id asc
+                  limit ?`,
+          };
+  const result = await db.execute(query);
   const rows = typedRows<CatalogueRow>(result.rows);
 
   if (rows.length === 0) {
     return [];
   }
 
-  // The findings this page names — ONE batched read, whichever lens. The `ear` lens hydrates the
-  // nearest finding (the WHY, and the duplicate when the score is near-1.0); the `capture` lens
-  // hydrates the finding a pre-audio ISRC match flagged as a duplicate (docs/the-ear.md).
+  // The findings this page names — ONE batched read, whichever lens. The `ear` and `quarantine`
+  // lenses hydrate the nearest finding (the WHY — a match, or the collision that poisoned the
+  // capture); the `capture` lens hydrates the finding a pre-audio ISRC match flagged as a
+  // duplicate (docs/the-ear.md).
   const matches = await hydrateMatches(
-    rows.map((row) => (lens === "ear" ? row.nearest_finding_track_id : row.duplicate_of_track_id)),
+    rows.map((row) =>
+      lens === "capture" ? row.duplicate_of_track_id : row.nearest_finding_track_id,
+    ),
   );
   const archive = lens === "capture" ? await readArchiveAffinity() : undefined;
 
@@ -836,4 +1092,30 @@ async function hydrateMatches(findingIds: (string | null)[]): Promise<Map<string
       },
     ]),
   );
+}
+
+/**
+ * THE OPERATOR FORCE-CLEAR (`clear_wrong_audio`) — "I disagree, this capture is fine, stop
+ * re-capturing it" (docs/the-ear.md § Wrong audio). It flips a quarantined row's `capture_status`
+ * from `wrong-audio` to `quarantine-cleared`, a STICKY override the `rank_catalogue` sweep never
+ * re-quarantines: the operator's ruling wins exactly like his note wins over the auto-note.
+ *
+ * The row's kept audio re-embeds on the next `embed` tick (the guard is `<> 'wrong-audio'`, which
+ * `quarantine-cleared` passes) and then re-ranks normally — reading as a duplicate if it genuinely
+ * matches the finding, or a discovery if it does not. It is a no-op success on a row that is not
+ * actually quarantined (a double-click, a race), and only ever touches a CATALOGUE row — a finding
+ * has no quarantine state. Returns whether a row was flipped, so the caller can report honestly.
+ */
+export async function clearWrongAudio(trackId: string): Promise<boolean> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [QUARANTINE_CLEARED, trackId, WRONG_AUDIO_STATUS],
+    sql: `update tracks
+          set capture_status = ?
+          where track_id = ?
+            and capture_status = ?
+            and not exists (select 1 from findings where findings.track_id = tracks.track_id)`,
+  });
+
+  return result.rowsAffected > 0;
 }

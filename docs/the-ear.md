@@ -100,6 +100,32 @@ Both surface the **same honest register**: the row stays visible (ordered last o
 
 **It stays self-healing.** The pre-audio marker rides the same fingerprint staleness as everything else: `duplicate_of_track_id` is re-written every time a row is re-ranked, so it clears on its own when the finding it matched is deleted (the corpus fingerprint moves, the row goes stale, the next tick re-ranks it and finds no match). A stamped duplicate is not re-picked — no loop — and the scoring path nulls the marker along with `capture_priority`, keeping the two lenses disjoint.
 
+## Wrong audio — the capture that lied
+
+The Duplicates section above handles a row that is honestly the same recording as a finding. This section handles the row that only _looks_ like one because the wrong bytes got captured — a distinct failure, caught on real data (the 2026-07-12 capture audit).
+
+**The defect.** A catalogue track poorly represented on YouTube gets the WRONG audio: the search returns the same artist's popular, already-logged hit; the duration guard passes on a length coincidence; and the embed then produces a vector at cosine ≥ 0.9996 to an existing finding. The row is not a duplicate of that finding — it is a _different_ track carrying that finding's audio. Left alone it does the worst thing a discovery surface can do: it floats to the very **top** of the ear lens as a fake perfect find (Flowidus "Find Your Love" ranked 1.0000000 against the finding "Shelter" — because it _was_ Shelter's audio).
+
+**The line that separates it from an honest duplicate is the TITLE.** MuQ cosine at six-plus nines is the same master, so a near-1.0 score means one of exactly two things, and the folded title+artist `matchKey` (the same matcher the Rekordbox sync uses) tells them apart against the finding it scored against:
+
+- **Same title → a true duplicate.** The crawler re-found a logged track, with the _right_ audio. It routes to the Duplicates handling above — `duplicate_of_track_id` + tier −2, keeping its vector and its "already in the archive" line. Never re-captured (the audio is correct), never a discovery.
+- **Different title → wrong audio.** The capture grabbed the artist's other track. It is **quarantined**.
+
+**The threshold is its own constant.** `WRONG_AUDIO_QUARANTINE` (0.9995) is deliberately distinct from `DUPLICATE_SIMILARITY` (0.995): the band `[0.995, 0.9995)` is where an alternate master (a remaster, a radio edit) honestly lands and is _labelled_ a duplicate, display-only; the cliff at 0.9995 is where "similar" is no longer possible and the row is _adjudicated_.
+
+**Quarantine rewinds the row to before its audio arrived.** In one write the sweep drops the poisoned vector (a catalogue row is never anyone's nearest-finding candidate, so nulling it poisons no other ranking), nulls the score so it leaves the ear lens, re-derives the pre-audio ladder tier so it re-enters the capture queue for a fresh download, and stamps `capture_status = 'wrong-audio'`. The collided finding stays on `nearest_finding_track_id` as the WHY the quarantine lens reads. The one thing it **keeps** is `source_audio_key` — the bad bytes' sha256 is embedded in it, and that is the memory that stops the re-capture from re-downloading the identical mistaken master (no new vendor data, and a stronger check than a stored video id). The capture sweep rejects any candidate whose bytes hash to it and walks to the next; if the only matches are the bad master, it lands `unmatched` rather than looping.
+
+**The state machine, all on `capture_status` (no migration — it is a text column):**
+
+| state                | what it means                                                        | queues                                                                                                           |
+| -------------------- | -------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `wrong-audio`        | quarantined, awaiting a fresh capture                                | a re-capture TRIGGER in the capture queue; EXCLUDED from embed + analyze (the key still points at the bad bytes) |
+| `quarantine-cleared` | the operator's `clear_wrong_audio` override — "this capture is fine" | terminal for capture; embed re-embeds its kept audio so it re-ranks                                              |
+
+**Convergence is preserved, and it needed one refinement.** The row-half staleness discriminator gained a `capture_priority >= 0` clause: a vectored row carrying a NON-negative tier is "ranked before its vector arrived" and re-ranks, but a _negative_ tier (the −2 true duplicate) is a deliberate decision the scoring path made, so it is left stable — no re-pick loop. A quarantined row has no vector, so it is stable the moment it is stamped. A `quarantine-cleared` row is never re-quarantined even at a near-1.0 score, so the operator's override wins exactly like his note wins over the auto-note.
+
+**The operator sees all of it.** Quarantined rows get their **own quiet lens** on `/admin/catalogue` (`?lens=quarantine`), shown only when there is something in it, each naming the finding its audio came back as and carrying a **Keep it** button — the operator's override (`clear_wrong_audio`, operator tier: an agent does not get to reverse the machine's verdict on its own output). A bad capture never silently vanishes.
+
 ## The capture budget — the brake
 
 The ladder above decides **what** the metered GB buy. It has nothing to say about **how much**, and at catalogue scale that gap is the one that costs real money.
@@ -178,17 +204,20 @@ The header carries **Re-rank**, one tick of the sweep by hand. The sweep is a pe
 
 Both `adminAuth` (operator **or** agent), registered in the contract as `admin-catalogue`:
 
-- **`list_catalogue_tracks`** → `GET /admin/catalogue?lens=&limit=` — the ranked read + the summary.
+- **`list_catalogue_tracks`** → `GET /admin/catalogue?lens=&limit=` — the ranked read + the summary. `lens` is `ear` | `capture` | `quarantine`.
 - **`rank_catalogue`** → `POST /admin/catalogue/rank?limit=` — one tick of the sweep. `remaining > 0` means run it again.
+- **`clear_wrong_audio`** → `POST /admin/catalogue/wrong-audio/clear` — the operator's override on the wrong-audio quarantine (§ Wrong audio). **OPERATOR tier**, unlike the two above: an agent does not get to reverse the machine's verdict on its own output.
 
 `rank_catalogue` is **agent-allowed, not operator-tier** (the `update_galaxy_map` precedent): it writes only _derived_ ranking columns, and only on catalogue rows. It cannot mint a coordinate, write a note, or certify anything — those columns do not exist on the rows it can reach.
 
-The CLI mirrors both, and holds no ranking logic of its own:
+The CLI mirrors them, and holds no ranking logic of its own:
 
 ```bash
-fluncle admin catalogue rank --limit 250 --json   # one tick — the sweep a cron drives
-fluncle admin catalogue list --lens ear           # the telescope
-fluncle admin catalogue list --lens capture       # what to capture next
+fluncle admin catalogue rank --limit 250 --json    # one tick — the sweep a cron drives
+fluncle admin catalogue list --lens ear            # the telescope
+fluncle admin catalogue list --lens capture        # what to capture next
+fluncle admin catalogue list --lens quarantine     # the wrong-audio holding pen
+fluncle admin catalogue clear-wrong-audio <id>     # keep a capture the sweep flagged (operator)
 ```
 
 ## Where it stands

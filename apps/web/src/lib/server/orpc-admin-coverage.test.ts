@@ -237,6 +237,9 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // DERIVED ranking columns on CATALOGUE rows (a `tracks` row with no `findings` row), so it
   // cannot mint a coordinate or certify anything.
   "POST /admin/catalogue/rank": "rank_catalogue",
+  // The wrong-audio quarantine override — contract-only oRPC. OPERATOR tier: overruling The Ear's
+  // wrong-audio verdict on its own output is not an agent's call (docs/the-ear.md § Wrong audio).
+  "POST /admin/catalogue/wrong-audio/clear": "clear_wrong_audio",
   "POST /admin/clips/drip": "drip_clips",
   // The batch-schedule op (the set_clip_schedule sibling) — contract-only oRPC (no TanStack
   // route file). Operator tier: chain a whole selection onto the jittered drip queue in one

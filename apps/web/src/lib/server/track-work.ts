@@ -206,9 +206,10 @@ export function scopeClause(scope: TrackWorkScope): string {
  * The kind's WHERE fragment plus its bound args.
  *
  * `capture` — the acquisition worklist: no audio yet, and the capture state machine says
- *   it is still worth trying (`pending`/NULL always; a `failed` row only past the cooldown
- *   and below the failure cap; a terminal `done`/`unmatched` never re-burned). Then the two
- *   halves diverge, because acquisition needs different things of each:
+ *   it is still worth trying (`pending`/NULL always; a `wrong-audio` row awaiting re-capture;
+ *   a `failed` row only past the cooldown and below the failure cap; a terminal
+ *   `done`/`unmatched`/`quarantine-cleared` never re-burned). Then the two halves diverge,
+ *   because acquisition needs different things of each:
  *     · a FINDING needs a coordinate — the R2 key is `<logId>/<sha256>.<ext>`, so a
  *       coordinate-less straggler is not capturable.
  *     · a CATALOGUE track needs a RANKED, NON-VETOED tier. `capture_priority is not null`
@@ -216,15 +217,24 @@ export function scopeClause(scope: TrackWorkScope): string {
  *       draining the queue in insertion order, which is the exact failure this queue
  *       exists to prevent. `>= 0` is the veto (see the module header).
  *
+ *   `wrong-audio` (docs/the-ear.md § Wrong audio) is a re-capture TRIGGER: The Ear caught a
+ *   capture that landed the wrong master, rewound the row to the pre-audio ladder, and kept its
+ *   old `source_audio_key` so the sweep can refuse the identical bad bytes. Its restored
+ *   `capture_priority >= 0` puts it back in line for a fresh download.
+ *
  * `analyze` — the full-audio analysis worklist: audio on file, and the stored analysis did
  *   not come from it (`analyzed_from <> 'full'`, or nothing analysed at all). This is
  *   DATA-derived, not status-derived: a catalogue track has no `enrichment_status` (that
  *   column is a certification concern), so the queue reads the columns that actually say
- *   whether the work is done.
+ *   whether the work is done. A `wrong-audio` row is EXCLUDED — its key still points at the bad
+ *   bytes, which must not be measured until a fresh capture overwrites them.
  *
  * `embed` — the MuQ worklist: audio on file, no vector. The captured full song is the only
  *   admissible source (a 30s preview yields a garbage vector — ratified), so the key gate
- *   is the point, not a convenience.
+ *   is the point, not a convenience. A `wrong-audio` row is EXCLUDED for the same reason: the
+ *   quarantine nulled its vector, but its key still points at the bad bytes — re-embedding them
+ *   would just re-poison the ranking. A `quarantine-cleared` row (the operator's override) is
+ *   allowed through, so its kept audio re-embeds and re-ranks.
  */
 export function kindClause(kind: TrackWorkKind): { args: string[]; sql: string } {
   if (kind === "capture") {
@@ -233,9 +243,10 @@ export function kindClause(kind: TrackWorkKind): { args: string[]; sql: string }
     return {
       args: [cooldown],
       // CAPTURE_MAX_FAILURES is a trusted module int (interpolated, like listTracks does);
-      // the cooldown is BOUND.
+      // the cooldown is BOUND. `wrong-audio` is a re-capture trigger (docs/the-ear.md).
       sql: `(t.capture_status is null
              or t.capture_status = 'pending'
+             or t.capture_status = 'wrong-audio'
              or (t.capture_status = 'failed'
                  and t.source_audio_failures < ${CAPTURE_MAX_FAILURES}
                  and (t.source_audio_attempted_at is null or t.source_audio_attempted_at < ?)))
@@ -249,14 +260,21 @@ export function kindClause(kind: TrackWorkKind): { args: string[]; sql: string }
   if (kind === "analyze") {
     return {
       args: [],
+      // The `wrong-audio` guard: the key still points at the poisoned bytes until a fresh
+      // capture overwrites it, so they must not be re-measured (docs/the-ear.md § Wrong audio).
       sql: `t.source_audio_key is not null
+            and t.capture_status <> 'wrong-audio'
             and (t.analyzed_at is null or t.analyzed_from is null or t.analyzed_from <> 'full')`,
     };
   }
 
   return {
     args: [],
-    sql: `t.source_audio_key is not null and t.embedding_json is null`,
+    // The `wrong-audio` guard: the quarantine nulled the vector but kept the bad key, so this
+    // row must NOT re-embed the poisoned bytes (docs/the-ear.md § Wrong audio).
+    sql: `t.source_audio_key is not null
+          and t.embedding_json is null
+          and t.capture_status <> 'wrong-audio'`,
   };
 }
 

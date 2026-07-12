@@ -106,7 +106,8 @@ export const Route = createFileRoute("/admin/catalogue")({
   // The lens is view state, so it deep-links (the placement contract): a pasted URL restores
   // the view, and a reload keeps it.
   validateSearch: (search: Record<string, unknown>): CatalogueSearch => ({
-    lens: search.lens === "capture" ? "capture" : "ear",
+    lens:
+      search.lens === "capture" ? "capture" : search.lens === "quarantine" ? "quarantine" : "ear",
   }),
   loaderDeps: ({ search }) => ({ lens: search.lens }),
   beforeLoad: () => ensureAdmin(),
@@ -143,6 +144,14 @@ function AdminCataloguePage() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: CATALOGUE_KEY }),
   });
 
+  // THE WRONG-AUDIO OVERRIDE. The operator disagrees with a quarantine — "this capture is fine".
+  // It flips the row to `quarantine-cleared` (a sticky state the sweep never re-quarantines) and
+  // re-reads, so the list reflects the server's verdict rather than an optimistic guess.
+  const clearAudio = useMutation({
+    mutationFn: (trackId: string) => postClearWrongAudio(trackId),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: CATALOGUE_KEY }),
+  });
+
   const { budget, summary, tracks } = data;
 
   return (
@@ -175,6 +184,17 @@ function AdminCataloguePage() {
             label="Next to capture"
             onClick={() => void navigate({ search: { lens: "capture" } })}
           />
+          {/* The wrong-audio holding pen — a QUIET pill, shown only when there is something in
+              it (or the operator is looking at it), so a clean catalogue never advertises a
+              section that is empty. */}
+          {summary.quarantined > 0 || lens === "quarantine" ? (
+            <LensPill
+              active={lens === "quarantine"}
+              count={summary.quarantined}
+              label="Wrong audio"
+              onClick={() => void navigate({ search: { lens: "quarantine" } })}
+            />
+          ) : null}
           {rank.isError ? (
             <span className="ml-2 text-xs text-destructive" role="alert">
               {rank.error instanceof Error ? rank.error.message : "The re-rank failed."}
@@ -189,7 +209,9 @@ function AdminCataloguePage() {
         <p className="max-w-2xl text-sm text-muted-foreground">
           {lens === "ear"
             ? "Tracks nobody logged, ranked by how close each one sits to its nearest finding. Every row names the finding it matched — that claim is the whole list. Nothing here has a coordinate, and none of it is a finding until Fluncle says so."
-            : "None of these has been heard yet — no audio, so no vector, so nothing to rank. Capture is metered, so they are ordered by what their metadata is worth: an artist already in the archive beats a label already in the archive beats a label the crawler may dig from. A label you ruled out sinks to the bottom, whoever is on it."}
+            : lens === "quarantine"
+              ? "The capture for each of these landed the wrong track — its audio came back near-identical to a finding under a different title, so it was the artist's already-logged hit, not the track named here. They are held out of the ranking and queued for a fresh download. If a capture is actually fine, keep it and it rejoins the ranking."
+              : "None of these has been heard yet — no audio, so no vector, so nothing to rank. Capture is metered, so they are ordered by what their metadata is worth: an artist already in the archive beats a label already in the archive beats a label the crawler may dig from. A label you ruled out sinks to the bottom, whoever is on it."}
         </p>
 
         {/* THE SPEND, on the capture lens. It lives here and not on a settings page because
@@ -208,7 +230,13 @@ function AdminCataloguePage() {
         ) : (
           <ObjectList>
             {tracks.map((track) => (
-              <CatalogueRow key={track.trackId} lens={lens} track={track} />
+              <CatalogueRow
+                clearing={clearAudio.isPending && clearAudio.variables === track.trackId}
+                key={track.trackId}
+                lens={lens}
+                onClear={() => clearAudio.mutate(track.trackId)}
+                track={track}
+              />
             ))}
           </ObjectList>
         )}
@@ -244,6 +272,26 @@ function summaryLine(summary: CatalogueSummary): string {
 // the catalogue holds nothing. Three different nothings, and they mean different things, so
 // the page says which one it is instead of showing one shrug for all three.
 function EmptyCatalogue({ lens, summary }: { lens: CatalogueLens; summary: CatalogueSummary }) {
+  // The quarantine lens is clean when nothing is quarantined — the GOOD state, said plainly and
+  // independent of whether the catalogue is empty (a bad capture is a per-row event, not a
+  // catalogue-wide one).
+  if (lens === "quarantine") {
+    return (
+      <Empty>
+        <EmptyHeader>
+          <EmptyMedia variant="icon">
+            <BinocularsIcon aria-hidden="true" weight="thin" />
+          </EmptyMedia>
+          <EmptyTitle>No wrong-audio captures</EmptyTitle>
+          <EmptyDescription>
+            Every capture matched the track it was for. When one comes back as the artist&apos;s
+            other, already-logged tune instead, it lands here to be re-captured.
+          </EmptyDescription>
+        </EmptyHeader>
+      </Empty>
+    );
+  }
+
   const nothingAtAll = summary.total === 0;
   const title = nothingAtAll
     ? "Nothing out there yet"
@@ -298,7 +346,17 @@ function LensPill({
   );
 }
 
-function CatalogueRow({ lens, track }: { lens: CatalogueLens; track: CatalogueTrackItem }) {
+function CatalogueRow({
+  clearing,
+  lens,
+  onClear,
+  track,
+}: {
+  clearing: boolean;
+  lens: CatalogueLens;
+  onClear: () => void;
+  track: CatalogueTrackItem;
+}) {
   return (
     <ObjectRow
       trailing={
@@ -307,7 +365,11 @@ function CatalogueRow({ lens, track }: { lens: CatalogueLens; track: CatalogueTr
               as "already in the archive" rather than a discovery — the honest register on both
               lenses. On capture it REPLACES the ladder chip (a duplicate is never bought, so the
               rung is moot); on ear the score stays too, because the ~1.0 IS the tell. */}
-          {track.duplicateOf ? (
+          {lens === "quarantine" ? (
+            <Badge className="whitespace-nowrap" variant="outline">
+              Wrong audio
+            </Badge>
+          ) : track.duplicateOf ? (
             <Badge className="whitespace-nowrap" variant="outline">
               Already logged
             </Badge>
@@ -323,6 +385,21 @@ function CatalogueRow({ lens, track }: { lens: CatalogueLens; track: CatalogueTr
             >
               {formatScore(track.nearestFindingScore)}
             </span>
+          ) : null}
+          {/* THE OVERRIDE. On the quarantine lens the operator can overrule a wrong-audio verdict
+              — "keep it, this capture is fine" — and the row rejoins the ranking. Named plainly
+              ("Keep it"), not dressed up: it is a literal control, not chrome. */}
+          {lens === "quarantine" ? (
+            <Button disabled={clearing} onClick={onClear} size="sm" variant="outline">
+              {clearing ? (
+                <CircleNotchIcon
+                  aria-hidden="true"
+                  className="motion-safe:animate-spin"
+                  weight="bold"
+                />
+              ) : null}
+              Keep it
+            </Button>
           ) : null}
           {track.spotifyUrl ? (
             // The one thing the operator came here to do: HEAR it. There is no in-app preview
@@ -375,6 +452,16 @@ function CatalogueRow({ lens, track }: { lens: CatalogueLens; track: CatalogueTr
 
 /** The row's reason for being where it is, in one line. */
 function Why({ lens, track }: { lens: CatalogueLens; track: CatalogueTrackItem }): ReactNode {
+  // The wrong-audio WHY names the finding the capture was mistaken FOR — the evidence that this
+  // row's audio was the artist's other, already-logged track, not the track named here.
+  if (lens === "quarantine") {
+    return track.nearestFinding ? (
+      <MatchLine lead="Its audio came back as" match={track.nearestFinding} />
+    ) : (
+      "Its audio matched a track already in the archive."
+    );
+  }
+
   // The duplicate WHY wins on both lenses: "you already logged this one." It NAMES the finding
   // (coordinate, artists, title) — the same evidence line the nearest-finding WHY carries.
   if (track.duplicateOf) {
@@ -598,6 +685,20 @@ function Meter({
 async function postRank(): Promise<void> {
   const response = await fetch("/api/v1/admin/catalogue/rank", {
     body: JSON.stringify({}),
+    headers: { "Content-Type": "application/json" },
+    method: "POST",
+  });
+
+  if (!response.ok) {
+    throw new Error(await readError(response));
+  }
+}
+
+// The operator-tier wrong-audio override (POST /admin/catalogue/wrong-audio/clear). Flips one
+// quarantined row to `quarantine-cleared`, the sticky state the sweep never re-quarantines.
+async function postClearWrongAudio(trackId: string): Promise<void> {
+  const response = await fetch("/api/v1/admin/catalogue/wrong-audio/clear", {
+    body: JSON.stringify({ trackId }),
     headers: { "Content-Type": "application/json" },
     method: "POST",
   });

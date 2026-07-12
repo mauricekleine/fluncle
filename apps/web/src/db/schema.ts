@@ -187,6 +187,14 @@ export const tracks = sqliteTable(
     // on migration (which enqueues the whole archive for capture-backfill for free).
     // Enum: pending (never attempted) → done (key written) | unmatched (no confident
     // match — terminal) | failed (attempt threw — retriable under backoff).
+    // Two more states carry the WRONG-AUDIO quarantine (docs/the-ear.md § Wrong audio),
+    // written by the `rank_catalogue` sweep on a CATALOGUE row, never on a finding:
+    //   - wrong-audio: the capture landed the wrong master (a near-1.0 cross-title match to a
+    //     finding). The vector + score are nulled and the row re-queues for a fresh download; the
+    //     bad `source_audio_key` is KEPT so the capture sweep can refuse the identical bytes. It
+    //     is a re-capture trigger in the capture queue and a guard the embed/analyze queues honour.
+    //   - quarantine-cleared: the operator's `clear_wrong_audio` override — "this capture is fine".
+    //     A sticky state the sweep never re-quarantines; its kept audio re-embeds and re-ranks.
     captureStatus: text("capture_status").notNull().default("pending"),
     catalogueRankCorpus: text("catalogue_rank_corpus"),
     catalogueRankedAt: text("catalogue_ranked_at"),

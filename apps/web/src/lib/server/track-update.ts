@@ -37,12 +37,24 @@ export type TrackUpdate = {
    * cron). All five are machine-measured analysis fields the AGENT tier may write
    * (like `enrichmentStatus`/`embedding`) — internal, so NONE is in VISIBLE_FIELDS: a
    * capture write moves no public surface and must not bump updated_at / the sitemap
-   * lastmod. `captureStatus` is the enum (pending|done|unmatched|failed);
+   * lastmod. `captureStatus` is the enum (pending|done|unmatched|failed, plus the two
+   * wrong-audio states below);
    * `sourceAudioKey` is the R2 key of the captured song (presence = captured);
    * `sourceAudioCapturedAt`/`sourceAudioAttemptedAt` are ISO stamps; `sourceAudioFailures`
    * is the consecutive-failure count driving the backoff window. See schema.ts.
+   *
+   * `wrong-audio` / `quarantine-cleared` are the wrong-audio quarantine states
+   * (docs/the-ear.md § Wrong audio). They are written by the `rank_catalogue` sweep and the
+   * `clear_wrong_audio` op DIRECTLY (not typically through this generic path), but they belong
+   * to the same `capture_status` column, so the enum carries them for completeness.
    */
-  captureStatus?: "pending" | "done" | "unmatched" | "failed";
+  captureStatus?:
+    | "done"
+    | "failed"
+    | "pending"
+    | "quarantine-cleared"
+    | "unmatched"
+    | "wrong-audio";
   /**
    * Firecrawl-derived FACTUAL context (creative fuel for the observation script
    * + video agent). Internal only — never on /log, never in JSON-LD/RSS. Writing

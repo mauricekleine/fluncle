@@ -539,10 +539,16 @@ export function adminTracksHandlers(os: Implementer) {
       } else if (storedContextNote?.trim()) {
         contextNote = storedContextNote.trim().slice(0, 2000);
       } else {
-        const fetched = await fetchTrackContext(buildContextQuery(track), {
-          logId: track.logId,
-          trackId: track.trackId,
-        });
+        const fetched = await fetchTrackContext(
+          buildContextQuery(track),
+          {
+            logId: track.logId,
+            trackId: track.trackId,
+          },
+          // Apple editorial notes as extra fuel when the finding carries an ISRC (RFC U5);
+          // behind the echo gate inside fetchTrackContext.
+          { isrc: track.isrc },
+        );
         contextNote = fetched.contextNote;
         freshlyFetched = Boolean(fetched.contextNote);
       }
@@ -698,10 +704,16 @@ export function adminTracksHandlers(os: Implementer) {
         typeof input.query === "string" && input.query.trim()
           ? input.query.trim()
           : buildContextQuery(track);
-      const fetched = await fetchTrackContext(query, {
-        logId: track.logId,
-        trackId: track.trackId,
-      });
+      const fetched = await fetchTrackContext(
+        query,
+        {
+          logId: track.logId,
+          trackId: track.trackId,
+        },
+        // Apple editorial notes as extra fuel when the finding carries an ISRC (RFC U5);
+        // folded into the same untrusted snippets and held behind the mechanical echo gate.
+        { isrc: track.isrc },
+      );
 
       // Persist the reliability marker alongside the note. The `context_status`
       // column makes a confirmed-empty fetch (`empty`) distinct from never-attempted

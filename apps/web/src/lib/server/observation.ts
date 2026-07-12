@@ -19,9 +19,18 @@
 // the ~0.35 MB mp3 fits in memory.
 
 import lamejs from "@breezystack/lamejs";
+import {
+  type AppleAuthOutcome,
+  areAppleCallsAllowed,
+  isAppleCallBudgetAvailable,
+  recordAppleAuthOutcome,
+  recordAppleCall,
+} from "./apple-breaker";
+import { appleCatalogLookupByIsrc } from "./apple-music";
 import { priceOpenRouterTokens } from "./cost-rates";
 import { captureCostEvents, type CostCaptureContext, costEventId } from "./costs";
 import { readEnv, readOptionalEnv } from "./env";
+import { logEvent } from "./log";
 import { PROMPT_REGISTRY, resolvePrompt } from "./prompts";
 import { ApiError } from "./spotify";
 
@@ -514,11 +523,181 @@ export async function distilContextNote(
   }
 }
 
+// ── Apple editorial notes: bonus facts fuel behind a mechanical echo gate (RFC U5) ───
+//
+// Apple's canonical-album objects carry EDITORIAL NOTES — a paragraph of label/press copy.
+// When a track carries an ISRC and MusicKit is provisioned (and the cross-cutting breaker +
+// call meter allow), `fetchTrackContext` folds those notes into the SAME untrusted-snippets
+// array the Firecrawl results ride, as extra fuel the distil summarises into facts. Nothing
+// is persisted — the notes are fetched at context-build time only — and Apple's song URL
+// joins the provenance `sources`.
+//
+// The catch the panel flagged: editorial copy is Apple's WORDS, and a distil told to
+// "summarise, never quote" is still prompt-trust, not a guarantee. So the echo defence is
+// MECHANICAL — after the note is authored, an n-gram gate REJECTS it whole if any contiguous
+// run of `APPLE_ECHO_MIN_SPAN_TOKENS` words appears verbatim from an Apple source. Fill-empty-
+// only already makes empty the honest floor (the `context_track` handler leaves the finding
+// as it was), so a rejected note costs nothing but the fuel.
+
+/** The snippet label marking Apple editorial copy as untrusted source text for the distil. */
+export const APPLE_EDITORIAL_SNIPPET_LABEL =
+  "Apple Music editorial copy (untrusted source text — summarise into facts, never quote)";
+
+/**
+ * The verbatim-span threshold, in WORDS: a contiguous run of this many tokens shared between
+ * the authored note and an Apple editorial source is a lifted quote and rejects the note. Seven
+ * is long enough that an incidental shared phrase ("a drum and bass producer from the") does not
+ * trip it, short enough that a real lifted sentence cannot slip under it.
+ */
+export const APPLE_ECHO_MIN_SPAN_TOKENS = 7;
+
+/**
+ * Strip Apple's editorial HTML to plain prose: the notes carry `<i>`/`<b>`/`<br/>` and the odd
+ * HTML entity. Drop every tag span, decode the handful of entities Apple emits, collapse
+ * whitespace. Exported for the gate tests.
+ */
+export function stripEditorialHtml(html: string): string {
+  return html
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&apos;|&#0*39;|&#x0*27;/gi, "'")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** Normalise prose to a lowercased word stream (punctuation dropped) — the gate's token unit. */
+function echoTokens(text: string): string[] {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+}
+
+/**
+ * The longest run of CONTIGUOUS tokens shared between two strings, measured in tokens. The
+ * mechanical measure the echo gate thresholds on — the same run-finder shape as note.ts's
+ * `liftedPhrase`, but keyed on span LENGTH (a lifted quote is a quote regardless of which
+ * content words it carries). Pure and deterministic.
+ */
+export function longestVerbatimTokenSpan(a: string, b: string): number {
+  const left = echoTokens(a);
+  const right = echoTokens(b);
+  let best = 0;
+
+  for (let i = 0; i < left.length; i += 1) {
+    for (let j = 0; j < right.length; j += 1) {
+      let run = 0;
+
+      while (i + run < left.length && j + run < right.length && left[i + run] === right[j + run]) {
+        run += 1;
+      }
+
+      if (run > best) {
+        best = run;
+      }
+    }
+  }
+
+  return best;
+}
+
+/**
+ * Does the authored note lift a verbatim span of at least `minSpan` tokens from ANY Apple
+ * editorial source? True ⇒ the note echoes Apple and must be rejected to the honest empty floor.
+ * An empty note or an empty source set never echoes. Pure — the whole gate decision, no I/O.
+ */
+export function noteEchoesAppleEditorial(
+  note: string,
+  appleSources: readonly string[],
+  minSpan: number = APPLE_ECHO_MIN_SPAN_TOKENS,
+): boolean {
+  if (!note.trim()) {
+    return false;
+  }
+
+  return appleSources.some((source) => longestVerbatimTokenSpan(note, source) >= minSpan);
+}
+
+/** The stripped Apple editorial fuel for one track: the source texts (for the gate) + song URL. */
+type AppleEditorialFuel = { sourceUrl?: string; texts: string[] };
+
+/**
+ * Fetch a track's Apple editorial notes as distil fuel — the single-ISRC oracle path (U0), so
+ * the canonical album's `editorialNotes` ride with it. Returns EMPTY fuel (a silent no-op) when:
+ * there is no ISRC, MusicKit is unprovisioned, the cross-cutting breaker is tripped, or the shared
+ * call meter is spent this window. When it does call, it RECORDS the call into the meter and its
+ * auth outcome into the breaker — exactly as a sweep does — so U5's live fuel shares one honest
+ * budget with U1's drain and U4's preview rung. Never throws (the oracle maps every failure to an
+ * outcome).
+ */
+async function fetchAppleEditorial(isrc: string): Promise<AppleEditorialFuel> {
+  const clean = isrc.trim();
+
+  if (!clean) {
+    return { texts: [] };
+  }
+
+  // The breaker (a suspended token darkens every Apple surface at once) and the shared meter
+  // (U1's drain must not invisibly collide with this live call) both gate BEFORE the call fires.
+  if (!(await areAppleCallsAllowed()) || !(await isAppleCallBudgetAvailable())) {
+    return { texts: [] };
+  }
+
+  const outcome = await appleCatalogLookupByIsrc(clean);
+
+  if (!outcome.configured) {
+    // Unprovisioned — no call was actually made; touch neither meter nor breaker.
+    return { texts: [] };
+  }
+
+  // A real call happened: fold it into the shared budget and feed its auth outcome to the breaker
+  // (a 401/403 streak trips it; a 2xx clears it; a 429/throw is the other regime, left untouched).
+  const authOutcome: AppleAuthOutcome = outcome.ok
+    ? "ok"
+    : outcome.authFailed
+      ? "auth_failure"
+      : "other";
+
+  await recordAppleCall();
+  await recordAppleAuthOutcome(authOutcome);
+
+  if (!outcome.ok || !outcome.bundle) {
+    return { texts: [] };
+  }
+
+  const album = outcome.bundle.canonicalAlbum;
+  const texts: string[] = [];
+
+  for (const raw of [album?.editorialNotesStandard, album?.editorialNotesShort]) {
+    if (typeof raw === "string" && raw.trim()) {
+      const stripped = stripEditorialHtml(raw);
+
+      if (stripped) {
+        texts.push(stripped);
+      }
+    }
+  }
+
+  return { sourceUrl: outcome.bundle.songUrl, texts };
+}
+
 /**
  * Firecrawl search for the track's factual context (label/year/release/artist
  * background), then DISTIL the raw snippets through a small LLM (OpenRouter) into a
  * clean note. Returns the note, its `status` (mirrors `context_status`), and the
  * source URLs (provenance — kept off the DB, stored in observation.json).
+ *
+ * When `apple.isrc` is present (and MusicKit is provisioned + the breaker/meter allow),
+ * Apple's editorial notes are folded in as extra untrusted fuel and the AUTHORED note is
+ * run through the mechanical echo gate — any ≥`APPLE_ECHO_MIN_SPAN_TOKENS`-token verbatim
+ * span from an Apple source rejects the note to the empty floor (RFC U5). No behaviour
+ * changes when no ISRC/MusicKit is on hand: the Apple leg is a pure enrichment.
  *
  * Best-effort throughout: a Firecrawl error returns `status: "failed"`; no usable
  * snippets returns `status: "empty"`; a distil failure falls back to the cleaned
@@ -528,6 +707,7 @@ export async function distilContextNote(
 export async function fetchTrackContext(
   query: string,
   capture?: CostCaptureContext,
+  apple?: { isrc?: string | null },
 ): Promise<ContextFetchResult> {
   const apiKey = await readEnv("FIRECRAWL_API_KEY");
 
@@ -611,6 +791,20 @@ export async function fetchTrackContext(
     }
   }
 
+  // Fold Apple's editorial notes into the SAME untrusted snippets (RFC U5): bonus fuel when
+  // MusicKit is provisioned + the ISRC resolves + the breaker/meter allow, otherwise empty. The
+  // raw source texts are kept separately (`appleFuel.texts`) for the echo gate — the label prefix
+  // would never appear in an authored note, so the gate must compare against the unlabeled copy.
+  const appleFuel = apple?.isrc ? await fetchAppleEditorial(apple.isrc) : { texts: [] };
+
+  for (const text of appleFuel.texts) {
+    snippets.push(`${APPLE_EDITORIAL_SNIPPET_LABEL}: ${text}`);
+  }
+
+  if (appleFuel.sourceUrl) {
+    sources.push(appleFuel.sourceUrl);
+  }
+
   if (snippets.length === 0) {
     // A confirmed-empty fetch — distinct from a vendor failure. The queue marks it
     // `empty` so it is not re-burned every tick (only `--retry-empty` re-picks it).
@@ -624,6 +818,21 @@ export async function fetchTrackContext(
   const distilled = await distilContextNote({ query, snippets, sources }, capture);
   const rawNote = snippets.join("\n").slice(0, 2000);
   const contextNote = distilled?.note ?? rawNote;
+
+  // THE MECHANICAL ECHO GATE (RFC U5, panel-mandated): a distil told to summarise Apple's
+  // editorial copy might still lift a sentence verbatim, and prompt-trust is not a guarantee. If
+  // the authored note repeats any ≥APPLE_ECHO_MIN_SPAN_TOKENS-token run from an Apple source,
+  // reject it WHOLE to the honest empty floor — fill-empty-only leaves the finding as it was. This
+  // runs on every note that had Apple fuel; the raw-snippet fallback, which quotes Apple verbatim
+  // by construction, is rejected here too (a raw Apple dump must never become the note).
+  if (appleFuel.texts.length > 0 && noteEchoesAppleEditorial(contextNote, appleFuel.texts)) {
+    logEvent("warn", "context.apple-echo-rejected", {
+      logId: capture?.logId,
+      trackId: capture?.trackId,
+    });
+
+    return { contextNote: "", distilled: false, promptVersion: null, sources, status: "empty" };
+  }
 
   return {
     contextNote,

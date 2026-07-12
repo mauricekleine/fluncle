@@ -11,16 +11,41 @@ vi.mock("./db", () => ({
   typedRows: <T extends object>(rows: T[]) => rows,
 }));
 
+// The Apple editorial leg (RFC U5): the oracle read + the cross-cutting breaker/meter are
+// mocked so the gate-integration tests can drive Apple fuel + the breaker's allow/deny without a
+// live token or the settings KV. The breaker/meter themselves are proven in apple-breaker.test.ts;
+// what matters here is the CONTRACT — fetchTrackContext folds Apple in, meters the call, and runs
+// the n-gram gate on the authored note.
+const appleCatalogLookupByIsrc = vi.fn();
+const recordAppleCall = vi.fn();
+const recordAppleAuthOutcome = vi.fn();
+const appleGate = { budget: true, calls: true };
+
+vi.mock("./apple-music", () => ({
+  appleCatalogLookupByIsrc: (isrc: string) => appleCatalogLookupByIsrc(isrc),
+}));
+
+vi.mock("./apple-breaker", () => ({
+  areAppleCallsAllowed: async () => appleGate.calls,
+  isAppleCallBudgetAvailable: async () => appleGate.budget,
+  recordAppleAuthOutcome: (...args: unknown[]) => recordAppleAuthOutcome(...args),
+  recordAppleCall: (...args: unknown[]) => recordAppleCall(...args),
+}));
+
 import {
+  APPLE_EDITORIAL_SNIPPET_LABEL,
   CONTEXT_DISTIL_SYSTEM_PROMPT,
   OBSERVATION_TAIL_PAD_MS,
   buildContextQuery,
   distilContextNote,
   fetchTrackContext,
   gateObservationScript,
+  longestVerbatimTokenSpan,
+  noteEchoesAppleEditorial,
   observationDurationFromAlignment,
   sanitizeForCartesia,
   scanObservationScript,
+  stripEditorialHtml,
   wordsFromCartesia,
 } from "./observation";
 
@@ -425,5 +450,239 @@ describe("wordsFromCartesia", () => {
 
   it("returns null for empty input", () => {
     expect(wordsFromCartesia([], [], [])).toBeNull();
+  });
+});
+
+// ── The Apple editorial echo gate (RFC U5) ───────────────────────────────────────────────────
+// The mechanical, panel-mandated defence: a distil told to "summarise, never quote" Apple's
+// editorial copy is prompt-trust, not a guarantee, so the gate REJECTS any authored note that
+// lifts a contiguous ≥7-token span verbatim from an Apple source. The pure functions first, then
+// the end-to-end fold + gate through fetchTrackContext.
+
+describe("stripEditorialHtml", () => {
+  it("drops tag spans and decodes the entities Apple emits", () => {
+    expect(stripEditorialHtml("A <i>rolling</i> roller &amp; a <br/> stepper &#39;97")).toBe(
+      "A rolling roller & a stepper '97",
+    );
+  });
+});
+
+describe("longestVerbatimTokenSpan", () => {
+  it("counts the longest contiguous shared token run, punctuation-insensitively", () => {
+    const note = "It is a warm, rolling roller from the label, apparently.";
+    const source = "They called it a warm rolling roller from the label of the year.";
+    // "a warm rolling roller from the label" = 7 contiguous tokens.
+    expect(longestVerbatimTokenSpan(note, source)).toBe(7);
+  });
+
+  it("is 0 when nothing contiguous is shared", () => {
+    expect(longestVerbatimTokenSpan("wholly different words here", "nothing at all alike")).toBe(0);
+  });
+});
+
+describe("noteEchoesAppleEditorial (the n-gram gate)", () => {
+  const SOURCE = "This tune is a warm rolling roller from the label that defined the sound.";
+
+  it("REJECTS a note that lifts a verbatim ≥7-token span", () => {
+    const echo = "Fluncle says it is a warm rolling roller from the label, basically.";
+    expect(noteEchoesAppleEditorial(echo, [SOURCE])).toBe(true);
+  });
+
+  it("PASSES a clean paraphrase that shares no long span", () => {
+    const paraphrase =
+      "A warm roller with a rolling groove, put out by a label that shaped the era.";
+    expect(noteEchoesAppleEditorial(paraphrase, [SOURCE])).toBe(false);
+  });
+
+  it("boundary: exactly 7 tokens rejects, 6 passes", () => {
+    const seven = "warm rolling roller from the label that"; // 7 contiguous tokens of SOURCE
+    const six = "warm rolling roller from the label"; // 6
+    expect(noteEchoesAppleEditorial(seven, [SOURCE])).toBe(true);
+    expect(noteEchoesAppleEditorial(six, [SOURCE])).toBe(false);
+  });
+
+  it("an empty note or an empty source set never echoes", () => {
+    expect(noteEchoesAppleEditorial("", [SOURCE])).toBe(false);
+    expect(noteEchoesAppleEditorial("anything at all here", [])).toBe(false);
+  });
+});
+
+describe("fetchTrackContext (Apple editorial fuel + the echo gate)", () => {
+  const ORIGINAL_FIRECRAWL = process.env.FIRECRAWL_API_KEY;
+  const ORIGINAL_OPENROUTER = process.env.OPENROUTER_API_KEY;
+
+  const appleOk = (notes: { short?: string; standard?: string }) => ({
+    bundle: {
+      canonicalAlbum: {
+        editorialNotesShort: notes.short,
+        editorialNotesStandard: notes.standard,
+        id: "album-1",
+      },
+      songId: "song-1",
+      songUrl: "https://music.apple.com/us/album/x?i=1",
+    },
+    configured: true as const,
+    ok: true as const,
+  });
+
+  beforeEach(() => {
+    process.env.FIRECRAWL_API_KEY = "test-firecrawl-key";
+    process.env.OPENROUTER_API_KEY = "test-openrouter-key";
+    delete process.env.OPENROUTER_CONTEXT_MODEL;
+    appleGate.budget = true;
+    appleGate.calls = true;
+    appleCatalogLookupByIsrc.mockReset();
+    recordAppleCall.mockReset();
+    recordAppleAuthOutcome.mockReset();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    process.env.FIRECRAWL_API_KEY = ORIGINAL_FIRECRAWL;
+    process.env.OPENROUTER_API_KEY = ORIGINAL_OPENROUTER;
+  });
+
+  it("folds Apple editorial notes into the distil, keeps the song URL as a source, meters the call", async () => {
+    appleCatalogLookupByIsrc.mockResolvedValue(
+      appleOk({ standard: "An amen-driven roller Apple loves." }),
+    );
+    const { bodies, calls } = mockFetch([
+      { body: SOUPY_FIRECRAWL, match: FIRECRAWL_MATCH },
+      {
+        body: { choices: [{ message: { content: "A warm 2017 roller with an amen backbone." } }] },
+        match: OPENROUTER_MATCH,
+      },
+    ]);
+
+    const result = await fetchTrackContext(
+      "Calibre Mr Right On",
+      { trackId: "t1" },
+      {
+        isrc: "GB1234567890",
+      },
+    );
+
+    expect(result.status).toBe("resolved");
+    expect(result.contextNote).toContain("amen backbone");
+    // Apple's song URL joins the provenance sources.
+    expect(result.sources).toContain("https://music.apple.com/us/album/x?i=1");
+    // The Apple copy rode into the distil's user turn as LABELLED untrusted data.
+    const orUrl = calls.find((u) => u.includes(OPENROUTER_MATCH)) ?? "";
+    const sent = bodies[orUrl] as { messages: { content: string }[] };
+    expect(sent.messages[1]?.content).toContain(APPLE_EDITORIAL_SNIPPET_LABEL);
+    expect(sent.messages[1]?.content).toContain("amen-driven roller Apple loves");
+    // One real call → metered + its auth outcome fed to the breaker.
+    expect(recordAppleCall).toHaveBeenCalledTimes(1);
+    expect(recordAppleAuthOutcome).toHaveBeenCalledWith("ok");
+  });
+
+  it("REJECTS the note to the empty floor when the distil echoes Apple verbatim", async () => {
+    appleCatalogLookupByIsrc.mockResolvedValue(
+      appleOk({ standard: "A rolling amen roller that defined the Signature sound of the year." }),
+    );
+    mockFetch([
+      { body: SOUPY_FIRECRAWL, match: FIRECRAWL_MATCH },
+      {
+        body: {
+          choices: [
+            {
+              message: {
+                // Lifts a verbatim ≥7-token span straight from Apple's copy.
+                content:
+                  "Fluncle reckons it is a rolling amen roller that defined the Signature sound, basically.",
+              },
+            },
+          ],
+        },
+        match: OPENROUTER_MATCH,
+      },
+    ]);
+
+    const result = await fetchTrackContext("Calibre", { trackId: "t1" }, { isrc: "GB1234567890" });
+
+    // The honest empty floor — fill-empty-only leaves the finding as it was.
+    expect(result.status).toBe("empty");
+    expect(result.contextNote).toBe("");
+    expect(result.distilled).toBe(false);
+  });
+
+  it("resolves on Apple fuel alone when Firecrawl returns nothing (fold precedes the empty gate)", async () => {
+    appleCatalogLookupByIsrc.mockResolvedValue(
+      appleOk({ standard: "An underground amen roller." }),
+    );
+    mockFetch([
+      { body: { data: { web: [] } }, match: FIRECRAWL_MATCH },
+      {
+        body: {
+          choices: [{ message: { content: "A paraphrased underground roller with amen breaks." } }],
+        },
+        match: OPENROUTER_MATCH,
+      },
+    ]);
+
+    const result = await fetchTrackContext("x", { trackId: "t1" }, { isrc: "GB1234567890" });
+
+    expect(result.status).toBe("resolved");
+    expect(result.sources).toContain("https://music.apple.com/us/album/x?i=1");
+  });
+
+  it("short-circuits Apple when the breaker is tripped — no oracle call, no fuel", async () => {
+    appleGate.calls = false;
+    appleCatalogLookupByIsrc.mockResolvedValue(appleOk({ standard: "should never be read" }));
+    mockFetch([
+      { body: SOUPY_FIRECRAWL, match: FIRECRAWL_MATCH },
+      {
+        body: { choices: [{ message: { content: "A clean firecrawl-only note." } }] },
+        match: OPENROUTER_MATCH,
+      },
+    ]);
+
+    const result = await fetchTrackContext("Calibre", { trackId: "t1" }, { isrc: "GB1234567890" });
+
+    expect(appleCatalogLookupByIsrc).not.toHaveBeenCalled();
+    expect(recordAppleCall).not.toHaveBeenCalled();
+    expect(result.status).toBe("resolved");
+  });
+
+  it("no-ops without recording when MusicKit is unconfigured", async () => {
+    appleCatalogLookupByIsrc.mockResolvedValue({ configured: false });
+    mockFetch([
+      { body: SOUPY_FIRECRAWL, match: FIRECRAWL_MATCH },
+      {
+        body: { choices: [{ message: { content: "A clean note." } }] },
+        match: OPENROUTER_MATCH,
+      },
+    ]);
+
+    const result = await fetchTrackContext("Calibre", { trackId: "t1" }, { isrc: "GB123" });
+
+    expect(appleCatalogLookupByIsrc).toHaveBeenCalledTimes(1);
+    expect(recordAppleCall).not.toHaveBeenCalled();
+    expect(recordAppleAuthOutcome).not.toHaveBeenCalled();
+    expect(result.status).toBe("resolved");
+  });
+
+  it("feeds an auth_failure outcome to the breaker on a 401/403 oracle result", async () => {
+    appleCatalogLookupByIsrc.mockResolvedValue({
+      authFailed: true,
+      configured: true as const,
+      error: "Apple Music request failed: 403 Forbidden",
+      ok: false as const,
+      rateLimited: false,
+    });
+    mockFetch([
+      { body: SOUPY_FIRECRAWL, match: FIRECRAWL_MATCH },
+      {
+        body: { choices: [{ message: { content: "A clean firecrawl-only note." } }] },
+        match: OPENROUTER_MATCH,
+      },
+    ]);
+
+    const result = await fetchTrackContext("Calibre", { trackId: "t1" }, { isrc: "GB123" });
+
+    expect(recordAppleCall).toHaveBeenCalledTimes(1);
+    expect(recordAppleAuthOutcome).toHaveBeenCalledWith("auth_failure");
+    // A failed Apple leg never blocks the Firecrawl-derived note.
+    expect(result.status).toBe("resolved");
   });
 });

@@ -13,7 +13,11 @@ import {
   videoVersion,
 } from "@/lib/media";
 import { type Track } from "@/lib/tracks";
-import { useResponsiveWidth } from "@/lib/use-responsive-width";
+import {
+  SMALLEST_RENDITION_WIDTH,
+  stepDownRenditionWidth,
+  useResponsiveWidth,
+} from "@/lib/use-responsive-width";
 import { useVideoStallRecovery } from "@/lib/use-video-recovery";
 
 // One story: the footage (clip + poster) with a bottom scrim for legible meta
@@ -59,43 +63,86 @@ export function StoryView({
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
   // Play a same-zone Media Transformations rendition sized to the pane, not the
-  // 1080-wide master, once the pane is measured (undefined on the server / first
-  // paint, where we hold the master). A one-shot onError drops back to the raw
-  // master, so a straggler above Cloudflare's 100MB source ceiling — or any edge
-  // error — still plays. Squared findings request a clean portrait centre-crop
-  // off the square master at the same ladder width; legacy findings a plain
-  // width-ladder rendition off the portrait footage.mp4.
-  const renditionWidth = useResponsiveWidth(videoRef);
+  // 1080-wide master, once the pane is measured. Squared findings request a clean
+  // portrait centre-crop off the square master at the ladder width; legacy
+  // findings a plain width-ladder rendition off the portrait footage.mp4.
+  const paneWidth = useResponsiveWidth(videoRef);
+  // Wedge counter: each stall the watchdog reports steps the requested rendition
+  // one rung DOWN the ladder (see `recoverStuck`), so a link too thin for the
+  // pane-sized rung is offered a lighter one instead of a heavier one.
+  const [stallDownshifts, setStallDownshifts] = useState(0);
+  const renditionWidth = paneWidth ? stepDownRenditionWidth(paneWidth, stallDownshifts) : undefined;
   const [renditionFailed, setRenditionFailed] = useState(false);
+
+  // When a rendition is coming there is NO source until the pane is measured —
+  // the master is never the speculative first request. Holding it for the first
+  // paint (as this surface used to) opened a range request on the heaviest object
+  // we have and aborted it a tick later when the measurement landed: head-of-line
+  // bytes a phone pays for and never sees, spent on the reel it just opened. The
+  // poster holds the frame for that tick, which is what a poster is for. The
+  // master remains the source in the two cases it is genuinely the right one: a
+  // finding with no Log ID (no rendition can be derived — the master is the only
+  // playable), and `renditionFailed` — a transform the edge cannot make (a >100MB
+  // straggler, or any transform error). Those answer with an HTTP error, so the
+  // one-shot `onError` below catches them. A STALL is not that case (see below).
   const videoUrl =
-    masterVideoUrl && track.logId && renditionWidth && !renditionFailed
-      ? squared
-        ? videoCrop(track.logId, "portrait", renditionWidth, false, version)
-        : videoRendition(track.logId, { version, width: renditionWidth })
+    masterVideoUrl && track.logId
+      ? renditionFailed
+        ? masterVideoUrl
+        : renditionWidth
+          ? squared
+            ? videoCrop(track.logId, "portrait", renditionWidth, false, version)
+            : videoRendition(track.logId, { version, width: renditionWidth })
+          : undefined
       : masterVideoUrl;
-  const onMaster = !videoUrl || videoUrl === masterVideoUrl;
+  const onMaster = videoUrl === masterVideoUrl;
+
+  // One re-arm per element, spent only once the ladder has bottomed out — so a
+  // dead source cannot loop `load()` forever (a `load()` fires `loadstart`, which
+  // resets the watchdog's own attempt budget, so the cap has to live here).
+  const rearmed = useRef(false);
 
   // The stall watchdog catches a STUCK load — a rendition that fires `stalled`/
   // `waiting` (or never advances `readyState`) but no `error`, so the one-shot
-  // `onError` below never runs and the clip would hang on its poster. First wedge
-  // retries the same source (a cold-MISS often warms on a re-load); a wedge while
-  // already on the master falls all the way back so playback still recovers.
+  // `onError` below never runs and the clip would hang on its poster.
+  //
+  // It does NOT bail to the raw master. A stall means the bytes are not arriving:
+  // either the link is too thin for what we asked for, or the edge is still cold-
+  // transcoding. The master is the HEAVIEST object we have — swapping a wedged
+  // rendition for it makes a constrained link strictly worse, and the full-screen
+  // reel is where the viewer is actively WAITING on the clip. So a wedge steps
+  // DOWN the ladder (1080 → 720 → 480 → 360): fewer bytes, a distinct cache key
+  // that may already be warm, and a soft story that plays beats a crisp one that
+  // never starts. At the bottom rung there is nothing lighter left to ask for, so
+  // we re-arm the load once — a cold MISS usually warms on the retry — and then
+  // stand down, leaving the poster to hold the frame (the player's progress clock
+  // already gates on the clip being playable, so it does not run over a freeze).
+  //
+  // The master fallback survives where it is actually correct: a transform that
+  // genuinely cannot be derived answers with an HTTP error, the <video> fires
+  // `error`, and `onError` below points at the master. That path is untouched.
+  // Same recovery shape as /log's footage pane (log-footage.tsx).
   const recoverStuck = useCallback(() => {
     const video = videoRef.current;
+    const canStepDown =
+      !onMaster && renditionWidth !== undefined && renditionWidth > SMALLEST_RENDITION_WIDTH;
 
-    if (!renditionFailed && !onMaster) {
-      // Drop the rendition for the raw master (mirrors the onError fallback).
-      setRenditionFailed(true);
+    if (canStepDown) {
+      setStallDownshifts((steps) => steps + 1);
 
       return;
     }
 
-    // Already on the master (or the rendition already gave up): re-arm the load.
-    if (video) {
-      video.load();
-      video.play().catch(() => {});
+    if (!video || rearmed.current) {
+      return;
     }
-  }, [onMaster, renditionFailed]);
+
+    rearmed.current = true;
+    video.load();
+    // The watchdog only fires while `expectsPlayback` (active && playing), so the
+    // re-armed load should resume playing; a denied play() degrades to the poster.
+    video.play().catch(() => {});
+  }, [onMaster, renditionWidth]);
 
   useVideoStallRecovery({
     expectsPlayback: active && playing && Boolean(videoUrl),
@@ -112,11 +159,16 @@ export function StoryView({
   // it (e.g. a >100MB source straggler). For squared findings the frame is
   // portrait-cropped to match the cropped clip (Cloudflare MT accepts
   // fit=cover + mode=frame); legacy findings take the plain opening frame.
+  //
+  // The crop rides the measured `paneWidth`, never the stall-downshifted clip
+  // rung: a wedged clip must not also re-fetch a poster the reel already holds.
+  // (Unmeasured → the native crop, the pre-#485 behavior — the full-bleed reel
+  // lands the 1080 rung on most phones anyway, so the URL rarely even changes.)
   const [framePosterFailed, setFramePosterFailed] = useState(false);
   const framePoster =
     track.logId && !framePosterFailed
       ? squared
-        ? videoCropPoster(track.logId, "portrait", renditionWidth, 0, version)
+        ? videoCropPoster(track.logId, "portrait", paneWidth, 0, version)
         : videoPoster(track.logId, undefined, version)
       : undefined;
   const posterUrl =
