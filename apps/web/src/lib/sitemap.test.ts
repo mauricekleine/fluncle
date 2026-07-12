@@ -6,6 +6,7 @@ import {
   EMPTY_SITEMAP_BAGS,
   parseShard,
   shardCount,
+  SITEMAP_KINDS,
   shardPath,
   type SitemapBags,
   SITEMAP_MAX_URLS,
@@ -13,6 +14,19 @@ import {
 
 function bags(overrides: Partial<SitemapBags> = {}): SitemapBags {
   return { ...EMPTY_SITEMAP_BAGS, ...overrides };
+}
+
+// Every `<loc>` the index would ever serve: walk every kind × every one of its pages and pull
+// the URLs out. This is the "what does the sitemap actually list" question the split must not
+// change the answer to.
+function allSitemapLocs(source: SitemapBags): string[] {
+  return SITEMAP_KINDS.flatMap((kind) =>
+    Array.from({ length: shardCount(kind, source) }, (_unused, page) =>
+      buildSitemapShardXml(kind, page + 1, source),
+    )
+      .filter((xml): xml is string => Boolean(xml))
+      .flatMap((xml) => [...xml.matchAll(/<loc>([^<]+)<\/loc>/g)].map((match) => match[1] ?? "")),
+  );
 }
 
 const LOGS = [
@@ -40,8 +54,73 @@ describe("the sitemap index", () => {
     // An empty <urlset> tells a crawler the URLs were REMOVED; a missing sitemap says nothing.
     const xml = buildSitemapIndexXml(bags({ logs: LOGS }));
 
-    expect(xml).not.toContain("logbook-1.xml");
-    expect(xml).not.toContain("graph-1.xml");
+    for (const empty of [
+      "artists-1.xml",
+      "labels-1.xml",
+      "albums-1.xml",
+      "galaxies-1.xml",
+      "logbook-1.xml",
+    ]) {
+      expect(xml).not.toContain(empty);
+    }
+    // The retired `graph` bucket is gone — never advertise it.
+    expect(xml).not.toContain("graph-");
+  });
+
+  it("lists a child per NON-EMPTY entity type, each on its own line", () => {
+    // The whole point of the split: artists / labels / albums / galaxies are four children, not
+    // one `graph`, so GSC reports each type's submitted/indexed count on its own.
+    const xml = buildSitemapIndexXml(
+      bags({
+        albums: [{ lastmod: "2026-05-01T00:00:00.000Z", slug: "wormhole" }],
+        artists: [{ lastmod: "2026-06-01T00:00:00.000Z", slug: "dimension" }],
+        galaxies: [{ slug: "deep-roller" }],
+        labels: [{ lastmod: "2026-04-01T00:00:00.000Z", slug: "medschool" }],
+        logbook: [{ lastmod: "2026-07-04T02:11:00.000Z", sector: "036" }],
+        logs: LOGS,
+      }),
+    );
+
+    for (const child of [
+      "pages-1.xml",
+      "findings-1.xml",
+      "artists-1.xml",
+      "labels-1.xml",
+      "albums-1.xml",
+      "galaxies-1.xml",
+      "logbook-1.xml",
+    ]) {
+      expect(xml).toContain(`<loc>${siteUrl}/sitemap/${child}</loc>`);
+    }
+  });
+
+  it("dates each entity-type child from its own freshest member", () => {
+    const xml = buildSitemapIndexXml(
+      bags({
+        artists: [
+          { lastmod: "2026-06-01T00:00:00.000Z", slug: "dimension" },
+          { lastmod: "2026-06-20T00:00:00.000Z", slug: "calibre" },
+        ],
+        labels: [{ lastmod: "2026-04-01T00:00:00.000Z", slug: "medschool" }],
+      }),
+    );
+
+    // The artists child dates from its freshest artist; the labels child from its own.
+    expect(xml.slice(xml.indexOf("artists-1.xml"), xml.indexOf("labels-1.xml"))).toContain(
+      "<lastmod>2026-06-20T00:00:00.000Z</lastmod>",
+    );
+    expect(xml.slice(xml.indexOf("labels-1.xml"))).toContain(
+      "<lastmod>2026-04-01T00:00:00.000Z</lastmod>",
+    );
+  });
+
+  it("leaves a galaxies child undated — the lens page has no honest lastmod", () => {
+    const xml = buildSitemapIndexXml(bags({ galaxies: [{ slug: "deep-roller" }] }));
+    const galaxiesLine = xml.slice(xml.indexOf("galaxies-1.xml"));
+
+    expect(galaxiesLine).toContain("galaxies-1.xml");
+    // The <sitemap> block ends at the next </sitemap>; it must carry no <lastmod>.
+    expect(galaxiesLine.slice(0, galaxiesLine.indexOf("</sitemap>"))).not.toContain("<lastmod>");
   });
 
   it("always lists the hubs child, even on an empty archive", () => {
@@ -112,25 +191,45 @@ describe("a child sitemap", () => {
     expect(buildSitemapShardXml("pages", 1, EMPTY_SITEMAP_BAGS)).not.toContain("<lastmod>");
   });
 
-  it("collects artists, labels, albums and galaxies into `graph`", () => {
-    const xml =
-      buildSitemapShardXml(
-        "graph",
-        1,
-        bags({
-          albums: [{ slug: "wormhole" }],
-          artists: [{ imageLoc: "https://img/dimension.jpg", slug: "dimension" }],
-          galaxies: [{ slug: "deep-roller" }],
-          labels: [{ slug: "medschool" }],
-        }),
-      ) ?? "";
+  it("puts artists in their OWN child, and nothing else in it", () => {
+    const graphBags = bags({
+      albums: [{ slug: "wormhole" }],
+      artists: [{ imageLoc: "https://img/dimension.jpg", slug: "dimension" }],
+      galaxies: [{ slug: "deep-roller" }],
+      labels: [{ slug: "medschool" }],
+    });
+    const xml = buildSitemapShardXml("artists", 1, graphBags) ?? "";
 
     expect(xml).toContain(`<loc>${siteUrl}/artist/dimension</loc>`);
-    expect(xml).toContain(`<loc>${siteUrl}/label/medschool</loc>`);
-    expect(xml).toContain(`<loc>${siteUrl}/album/wormhole</loc>`);
-    expect(xml).toContain(`<loc>${siteUrl}/galaxies/deep-roller</loc>`);
     expect(xml).toContain("<image:loc>https://img/dimension.jpg</image:loc>");
-    expect(xml.match(/<loc>/g)).toHaveLength(4);
+    // The artists child carries ONLY artists — no label / album / galaxy leaks across the split.
+    expect(xml).not.toContain("/label/");
+    expect(xml).not.toContain("/album/");
+    expect(xml).not.toContain("/galaxies/");
+    expect(xml.match(/<loc>/g)).toHaveLength(1);
+  });
+
+  it("puts labels, albums and galaxies each in their own child", () => {
+    const graphBags = bags({
+      albums: [{ slug: "wormhole" }],
+      artists: [{ slug: "dimension" }],
+      galaxies: [{ slug: "deep-roller" }],
+      labels: [{ slug: "medschool" }],
+    });
+
+    expect(buildSitemapShardXml("labels", 1, graphBags)).toContain(
+      `<loc>${siteUrl}/label/medschool</loc>`,
+    );
+    expect(buildSitemapShardXml("albums", 1, graphBags)).toContain(
+      `<loc>${siteUrl}/album/wormhole</loc>`,
+    );
+    expect(buildSitemapShardXml("galaxies", 1, graphBags)).toContain(
+      `<loc>${siteUrl}/galaxies/deep-roller</loc>`,
+    );
+    // Each entity-type child carries exactly its own one <loc>.
+    for (const kind of ["labels", "albums", "galaxies"] as const) {
+      expect(buildSitemapShardXml(kind, 1, graphBags)?.match(/<loc>/g)).toHaveLength(1);
+    }
   });
 
   it("lists the /galaxies hub only once the map is named", () => {
@@ -263,6 +362,27 @@ describe("a child sitemap", () => {
       3,
     );
   });
+
+  it("keyset-paginates a NON-findings entity type past SITEMAP_MAX_URLS too", () => {
+    // Pagination is built into every kind, not just findings — an artist space that outgrows a
+    // child grows a second one exactly the same way, so the machinery is proven per type.
+    const manyArtists = Array.from({ length: SITEMAP_MAX_URLS + 2 }, (_unused, index) => ({
+      lastmod: "2026-06-10T14:57:38.786Z",
+      slug: `artist-${index}`,
+    }));
+    const artistBags = bags({ artists: manyArtists });
+
+    expect(shardCount("artists", artistBags)).toBe(2);
+    expect(buildSitemapShardXml("artists", 1, artistBags)?.match(/<loc>/g)).toHaveLength(
+      SITEMAP_MAX_URLS,
+    );
+    expect(buildSitemapShardXml("artists", 2, artistBags)?.match(/<loc>/g)).toHaveLength(2);
+    expect(buildSitemapShardXml("artists", 3, artistBags)).toBeUndefined();
+    // The index advertises both artist children.
+    const index = buildSitemapIndexXml(artistBags);
+    expect(index).toContain("artists-1.xml");
+    expect(index).toContain("artists-2.xml");
+  });
 });
 
 describe("shard paths", () => {
@@ -278,5 +398,71 @@ describe("shard paths", () => {
     expect(parseShard("findings-x.xml")).toBeUndefined();
     expect(parseShard("findings-1")).toBeUndefined();
     expect(parseShard("../../etc/passwd")).toBeUndefined();
+  });
+});
+
+describe("the URL set is preserved across the split", () => {
+  // A fully-populated archive: one member of every kind, so the union covers every path shape.
+  const FULL = bags({
+    albums: [{ slug: "wormhole" }],
+    artists: [{ slug: "dimension" }],
+    galaxies: [{ slug: "deep-roller" }],
+    labels: [{ slug: "medschool" }],
+    logbook: [{ lastmod: "2026-07-04T02:11:00.000Z", sector: "036" }],
+    logs: LOGS,
+  });
+
+  it("emits exactly the union of static hubs + findings + every graph entity + logbook", () => {
+    // The diff proof: splitting the old `graph` child into artists/labels/albums/galaxies must
+    // not add or drop a single URL. This is the whole known URL space, spelled out.
+    const expected = new Set([
+      // pages (the static hubs — /galaxies is lit because the map is named here)
+      `${siteUrl}/`,
+      `${siteUrl}/log`,
+      `${siteUrl}/logbook`,
+      `${siteUrl}/mixtapes`,
+      `${siteUrl}/artists`,
+      `${siteUrl}/labels`,
+      `${siteUrl}/albums`,
+      `${siteUrl}/about`,
+      `${siteUrl}/privacy`,
+      `${siteUrl}/galaxy`,
+      `${siteUrl}/galaxies`,
+      // findings
+      `${siteUrl}/log/011.6.8K`,
+      `${siteUrl}/log/004.7.2I`,
+      // the graph entities, now each in its own child
+      `${siteUrl}/artist/dimension`,
+      `${siteUrl}/label/medschool`,
+      `${siteUrl}/album/wormhole`,
+      `${siteUrl}/galaxies/deep-roller`,
+      // logbook
+      `${siteUrl}/logbook/036`,
+    ]);
+
+    const locs = allSitemapLocs(FULL);
+
+    // No duplicates, and the set matches exactly — nothing lost, nothing doubled.
+    expect(locs).toHaveLength(expected.size);
+    expect(new Set(locs)).toEqual(expected);
+  });
+
+  it("keeps every graph entity's <loc> that the single `graph` child used to carry", () => {
+    // The four per-entity children, unioned, are exactly what a `graph` bucket held — the four
+    // entity URLs, no more, no less.
+    const graphLocs = (["artists", "labels", "albums", "galaxies"] as const).flatMap((kind) => {
+      const xml = buildSitemapShardXml(kind, 1, FULL) ?? "";
+
+      return [...xml.matchAll(/<loc>([^<]+)<\/loc>/g)].map((match) => match[1] ?? "");
+    });
+
+    expect(new Set(graphLocs)).toEqual(
+      new Set([
+        `${siteUrl}/artist/dimension`,
+        `${siteUrl}/label/medschool`,
+        `${siteUrl}/album/wormhole`,
+        `${siteUrl}/galaxies/deep-roller`,
+      ]),
+    );
   });
 });

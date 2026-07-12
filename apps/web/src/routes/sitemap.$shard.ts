@@ -2,10 +2,10 @@ import { createFileRoute } from "@tanstack/react-router";
 import { buildSitemapShardXml, parseShard } from "../lib/sitemap";
 import { collectSitemapBags, SITEMAP_HEADERS } from "../lib/server/sitemap-data";
 
-// `/sitemap/<kind>-<n>.xml` — one child of the sitemap index. `kind` is one of
-// pages / findings / graph / logbook; `n` is 1-indexed and only ever exceeds 1 once a kind
-// outgrows SITEMAP_MAX_URLS. Both this route and the index read `collectSitemapBags()`, so a
-// child always serves exactly what the index promised.
+// `/sitemap/<kind>-<n>.xml` — one child of the sitemap index. `kind` is one per entity type:
+// pages / findings / artists / labels / albums / galaxies / logbook; `n` is 1-indexed and only
+// ever exceeds 1 once a kind outgrows SITEMAP_MAX_URLS. Both this route and the index read
+// `collectSitemapBags()`, so a child always serves exactly what the index promised.
 //
 // The `.xml` rides INSIDE the `$shard` param (the route is `/sitemap/$shard`, not
 // `/sitemap/$shard.xml`) — a `$param.xml` segment makes TanStack name the param `shard.xml`,

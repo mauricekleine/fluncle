@@ -9,14 +9,18 @@ import { siteUrl } from "./fluncle-links";
 // partially honoured, the document is DROPPED. One flat `<urlset>` therefore carries a cliff
 // it cannot see itself approaching, and "we are nowhere near it" is a claim that expires.
 //
-// So `/sitemap.xml` is a `<sitemapindex>` and the URLs live in children, each child a KIND
-// (`pages` / `findings` / `graph` / `logbook`) and each kind AUTO-PAGED at
-// {@link SITEMAP_MAX_URLS}. The breach stops being something to watch and becomes something
-// that cannot happen: a kind that outgrows a child grows a second child instead.
+// So `/sitemap.xml` is a `<sitemapindex>` and the URLs live in children, ONE CHILD PER ENTITY
+// TYPE (`pages` / `findings` / `artists` / `labels` / `albums` / `galaxies` / `logbook`) and
+// each type AUTO-PAGED at {@link SITEMAP_MAX_URLS}. The breach stops being something to watch
+// and becomes something that cannot happen: a type that outgrows a child grows a second child
+// instead.
 //
-// Splitting by kind is also the diagnostic. Search Console reports coverage PER SITEMAP, so
-// "graph: 41 submitted, 3 indexed" is a sentence you can read — which is exactly the question
-// worth asking of a graph that grows with a crawler.
+// Splitting PER ENTITY TYPE is also the diagnostic. Search Console reports coverage PER
+// SITEMAP, so "labels: 41 submitted, 3 indexed" is a sentence you can read — which is exactly
+// the question worth asking of an entity space that grows with a crawler. The graph pages once
+// shared a single `graph` child; pulling artists/labels/albums/galaxies apart turns that one
+// blurred number into four legible ones, and lets a crawler refetch only the type that changed
+// (a new label touches `labels`, not every graph page).
 //
 // A finding that carries a rendered video also gets a Google video-sitemap `<video:video>`
 // block (thumbnail/title/description/content_loc), and every finding gets an `<image:image>`
@@ -30,8 +34,20 @@ import { siteUrl } from "./fluncle-links";
  */
 export const SITEMAP_MAX_URLS = 45_000;
 
-/** The four kinds, and the order the index lists them in. */
-export const SITEMAP_KINDS = ["pages", "findings", "graph", "logbook"] as const;
+/**
+ * The kinds, and the order the index lists them in. One child PER ENTITY TYPE (not a single
+ * `graph` bucket) so Search Console reports indexing per type and a changed type refetches
+ * alone. `pages` is the static hubs; the rest map one-to-one onto the {@link SitemapBags}.
+ */
+export const SITEMAP_KINDS = [
+  "pages",
+  "findings",
+  "artists",
+  "labels",
+  "albums",
+  "galaxies",
+  "logbook",
+] as const;
 
 export type SitemapKind = (typeof SITEMAP_KINDS)[number];
 
@@ -233,13 +249,17 @@ function kindEntries(kind: SitemapKind, bags: SitemapBags): string[] {
     case "findings":
       return bags.logs.map((page) => findingEntry(page));
 
-    case "graph":
-      return [
-        ...bags.artists.map((page) => artistEntry(page)),
-        ...bags.labels.map((page) => entityEntry("label", page)),
-        ...bags.albums.map((page) => entityEntry("album", page)),
-        ...bags.galaxies.map((page) => galaxyEntry(page)),
-      ];
+    case "artists":
+      return bags.artists.map((page) => artistEntry(page));
+
+    case "labels":
+      return bags.labels.map((page) => entityEntry("label", page));
+
+    case "albums":
+      return bags.albums.map((page) => entityEntry("album", page));
+
+    case "galaxies":
+      return bags.galaxies.map((page) => galaxyEntry(page));
 
     case "logbook":
       return bags.logbook.map((page) => logbookEntry(page));
@@ -278,12 +298,19 @@ function kindLastmod(kind: SitemapKind, bags: SitemapBags): string | undefined {
     case "findings":
       return freshest(bags.logs.map((page) => page.lastmod));
 
-    case "graph":
-      return freshest([
-        ...bags.artists.map((page) => page.lastmod),
-        ...bags.labels.map((page) => page.lastmod),
-        ...bags.albums.map((page) => page.lastmod),
-      ]);
+    case "artists":
+      return freshest(bags.artists.map((page) => page.lastmod));
+
+    case "labels":
+      return freshest(bags.labels.map((page) => page.lastmod));
+
+    case "albums":
+      return freshest(bags.albums.map((page) => page.lastmod));
+
+    // The lens page carries no single freshest timestamp (its members date their own /log
+    // entries), so a galaxies child is honestly undated — the tag is simply omitted.
+    case "galaxies":
+      return undefined;
 
     case "logbook":
       return freshest(bags.logbook.map((page) => page.lastmod));
