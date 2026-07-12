@@ -23,11 +23,11 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { Image } from "expo-image";
 import { useVideoPlayer, VideoView } from "expo-video";
-import { useAudioPlayer, useAudioPlayerStatus } from "expo-audio";
+import { useAudioPlayer } from "expo-audio";
 import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
 import { type TrackListItem } from "@fluncle/contracts";
 import { resolveCardMedia } from "@/lib/media";
-import { observationRail, soundRail } from "@/lib/feed-rail";
+import { soundRail } from "@/lib/feed-rail";
 import { useBackgroundPause } from "@/audio/session";
 import { color, font } from "@/theme/tokens";
 
@@ -109,54 +109,34 @@ export const FeedCard = memo(function FeedCard({ finding, active, soundOn, onTog
     media.kind === "cover" && media.previewUrl ? media.previewUrl : null,
   );
 
-  // The recovered observation (VOICE.md's first-heard surface): Fluncle's own
-  // voice over the finding, on its own player so it never collides with the
-  // card's video/preview track. Only loaded when the finding actually has one.
-  const observationUrl = finding.observationAudioUrl ?? null;
-  const observation = useAudioPlayer(observationUrl);
-  const observationStatus = useAudioPlayerStatus(observation);
-  const observing = active && observationStatus.playing;
-  // Stable rail labels + a11y hints (the Chrome Rule); the icon/gold tint carry state.
-  const observationControl = observationRail(observing);
-  // The observation and the card's sound are mutually exclusive: while the observation
-  // plays, the Sound control renders its muted state (never gold), and the audio effect
-  // below keeps the card track silent. When it ends, `soundOn` restores the card's sound.
-  const soundControl = soundRail(soundOn, observing);
+  // Stable rail labels + a11y hints (the Chrome Rule); the icon + gold tint carry state.
+  const soundControl = soundRail(soundOn);
 
-  // Only the visible card plays; sound follows the global toggle. While the
-  // observation plays it owns the one sound source — keep the card media silent.
+  // Only the visible card plays; sound follows the global toggle.
   useEffect(() => {
     if (media.kind === "video") {
       // eslint-disable-next-line react-hooks/immutability -- expo-video exposes `muted` as the documented imperative player API.
-      player.muted = !soundOn || observing;
-      if (active && !observing) {
+      player.muted = !soundOn;
+      if (active) {
         player.play();
       } else {
         player.pause();
       }
     } else if (media.previewUrl) {
-      if (active && soundOn && !observing) {
+      if (active && soundOn) {
         audio.play();
       } else {
         audio.pause();
       }
     }
-  }, [active, audio, media, observing, player, soundOn]);
+  }, [active, audio, media, player, soundOn]);
 
-  // Scrolling the card away stops a playing observation (visible-card-only rule).
-  useEffect(() => {
-    if (!active && observationStatus.playing) {
-      observation.pause();
-    }
-  }, [active, observation, observationStatus.playing]);
-
-  // Hold the wake lock while this card is the one actually making sound (an
-  // audible video, or Fluncle's observation) so a long clip never lets the
-  // screen sleep mid-listen. A stable per-card tag keeps the calls idempotent;
-  // the cleanup always releases, so locks can't leak on pause/scroll/unmount.
+  // Hold the wake lock while this card is the one actually making sound (an audible
+  // video) so a long clip never lets the screen sleep mid-listen. A stable per-card tag
+  // keeps the calls idempotent; the cleanup always releases, so locks can't leak on
+  // pause/scroll/unmount.
   const keepAwakeTag = useId();
-  const audibleVideo = active && media.kind === "video" && soundOn && !observing;
-  const playing = observing || audibleVideo;
+  const playing = active && media.kind === "video" && soundOn;
   useEffect(() => {
     if (!playing) {
       return;
@@ -167,21 +147,6 @@ export const FeedCard = memo(function FeedCard({ finding, active, soundOn, onTog
     };
   }, [keepAwakeTag, playing]);
 
-  const stopObservation = useCallback(() => {
-    observation.pause();
-  }, [observation]);
-
-  const toggleObservation = useCallback(() => {
-    if (observing) {
-      stopObservation();
-      return;
-    }
-    player.pause();
-    audio.pause();
-    void observation.seekTo(0);
-    observation.play();
-  }, [observing, stopObservation, player, audio, observation]);
-
   // No background audio (reinforces the session rule; covers calls / route changes).
   const pauseAll = useCallback(() => {
     if (media.kind === "video") {
@@ -189,10 +154,7 @@ export const FeedCard = memo(function FeedCard({ finding, active, soundOn, onTog
     } else {
       audio.pause();
     }
-    if (observing) {
-      observation.pause();
-    }
-  }, [audio, media, observation, observing, player]);
+  }, [audio, media, player]);
   useBackgroundPause(pauseAll);
 
   // Cover rung: a slow eclipse drift (The Light-Years cover card is alive, not static).
@@ -234,29 +196,14 @@ export const FeedCard = memo(function FeedCard({ finding, active, soundOn, onTog
       {/* No scrim pane (operator ruling 2026-07-11 — it read as a dark box on light
           footage). The footage stays unveiled; per-glyph shadows carry legibility. */}
 
-      {/* Right action rail (TikTok-style). Each control keeps ONE stable label (the
-          Chrome Rule); the icon + the gold tint carry state, never the word. Every glyph
-          renders inside a fixed 36×36 centered box (styles.railIcon) so all four advance
-          boxes center on the rail axis identically, regardless of the glyph's internal
-          artwork — no per-glyph nudges. Icons carry the tight ICON_SHADOW halo; gold
-          marks the active state (Ignition). */}
+      {/* Right action rail (TikTok-style): Spotify / Share / Sound. Observation discovery
+          moved to the Radio tab (operator ruling 2026-07-12), so the card rail no longer
+          carries it. Each control keeps ONE stable label (the Chrome Rule); the icon + the
+          gold tint carry state, never the word. Every glyph renders inside a fixed 36×36
+          centered box (styles.railIcon) so all three advance boxes center on the rail axis
+          identically, regardless of the glyph's internal artwork — no per-glyph nudges.
+          Icons carry the tight ICON_SHADOW halo; gold marks the active state (Ignition). */}
       <View style={[styles.rail, { bottom: bottomLine }]}>
-        {observationUrl ? (
-          <RailAction
-            accessibilityLabel={observationControl.accessibilityLabel}
-            active={observationControl.active}
-            icon={
-              <Ionicons
-                name={observing ? "headset" : "headset-outline"}
-                size={28}
-                color={observing ? color.eclipseGold : color.starlightCream}
-                style={styles.icon}
-              />
-            }
-            label={observationControl.label}
-            onPress={toggleObservation}
-          />
-        ) : null}
         <RailAction
           icon={
             <MaterialCommunityIcons
@@ -374,14 +321,12 @@ const styles = StyleSheet.create({
   captionShadow: TEXT_SHADOW,
   // Rail glyphs: the tight halo, not the firm text shadow (see ICON_SHADOW). Every icon
   // renders inside the fixed 36×36 `railIcon` box, so its advance box centers on the rail
-  // axis on its own — no per-glyph translateX estimates. If a glyph whose artwork is
-  // optically off-center (the headset's mic boom) still reads off after true container
-  // centering, the operator judges it on-device rather than re-introducing a nudge.
+  // axis on its own — no per-glyph translateX estimates.
   icon: ICON_SHADOW,
   logId: { color: color.eclipseGold, fontSize: 13 },
   rail: { alignItems: "center", gap: 16, position: "absolute", right: 6 },
   railIcon: { alignItems: "center", height: 36, justifyContent: "center", width: 36 },
-  // Wide enough for the longest stable label ("Observation") on one line.
+  // Wide enough for the longest stable label ("Spotify") on one line.
   railItem: { alignItems: "center", gap: 3, width: 80 },
   railLabel: {
     color: color.starlightCream,
