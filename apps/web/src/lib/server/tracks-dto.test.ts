@@ -18,6 +18,9 @@ const BASE_ROW: TrackRow = {
   added_at: "2026-06-21T09:00:00.000Z",
   added_to_spotify: 0,
   album: null,
+  album_artwork_height: null,
+  album_artwork_url_template: null,
+  album_artwork_width: null,
   album_image_url: null,
   album_slug: null,
   analyzed_at: null,
@@ -288,5 +291,85 @@ describe("track projection ↔ contract round-trip (Finding B20)", () => {
       leakedHeavy: [],
     });
     expect(leanKeys).toEqual(expectedLeanKeys);
+  });
+});
+
+// ── The best-cover DTO fix (RFC musickit-second-authority U3a) ────────────────
+//
+// The DTO is where web, mobile, and the video pipeline all upgrade at once: the stored
+// Spotify 300² is swapped to 640² server-side, and the album's stored Apple facts are
+// composed into a ≥1920 render source (`artworkMaxUrl`). Neither reads a schema — the
+// swap is pure over the row, so these tests pin the exact behaviour.
+
+const SPOTIFY_HASH = "18c0fd64aad5d4fb51a499b0";
+
+describe("toLeanTrackListItem — albumImageUrl upgraded to 640² at the DTO boundary", () => {
+  it("upgrades the stored Spotify 300² cover to the 640² rendition", () => {
+    const item = toLeanTrackListItem({
+      ...BASE_ROW,
+      album_image_url: `https://i.scdn.co/image/ab67616d00001e02${SPOTIFY_HASH}`,
+    });
+
+    expect(item.albumImageUrl).toBe(`https://i.scdn.co/image/ab67616d0000b273${SPOTIFY_HASH}`);
+  });
+
+  it("is idempotent — an already-640² stored URL survives untouched", () => {
+    const already640 = `https://i.scdn.co/image/ab67616d0000b273${SPOTIFY_HASH}`;
+    const item = toLeanTrackListItem({ ...BASE_ROW, album_image_url: already640 });
+
+    expect(item.albumImageUrl).toBe(already640);
+  });
+
+  it("passes a non-Spotify cover URL (an owned master, once U3b lands) through untouched", () => {
+    const owned = "https://found.fluncle.com/cdn-cgi/image/width=640/albums/some-album.jpg";
+    const item = toLeanTrackListItem({ ...BASE_ROW, album_image_url: owned });
+
+    expect(item.albumImageUrl).toBe(owned);
+  });
+
+  it("stays undefined when the row carries no cover", () => {
+    expect(
+      toLeanTrackListItem({ ...BASE_ROW, album_image_url: null }).albumImageUrl,
+    ).toBeUndefined();
+  });
+});
+
+describe("toLeanTrackListItem — artworkMaxUrl composed from the album's Apple facts", () => {
+  it("composes a 2048² Apple URL when the album carries artwork bigger than the target", () => {
+    const item = toLeanTrackListItem({
+      ...BASE_ROW,
+      album_artwork_height: 3000,
+      album_artwork_url_template: "https://is1-ssl.mzstatic.com/image/thumb/abc/{w}x{h}bb.jpg",
+      album_artwork_width: 3000,
+    });
+
+    // 2048 clears the render pipeline's ≥1920 need; clamped BELOW native 3000 (no upscale).
+    expect(item.artworkMaxUrl).toBe("https://is1-ssl.mzstatic.com/image/thumb/abc/2048x2048bb.jpg");
+  });
+
+  it("clamps the request to the artwork's native max (never upscales a smaller master)", () => {
+    const item = toLeanTrackListItem({
+      ...BASE_ROW,
+      album_artwork_height: 1400,
+      album_artwork_url_template: "https://is1-ssl.mzstatic.com/image/thumb/abc/{w}x{h}bb.jpg",
+      album_artwork_width: 1400,
+    });
+
+    expect(item.artworkMaxUrl).toBe("https://is1-ssl.mzstatic.com/image/thumb/abc/1400x1400bb.jpg");
+  });
+
+  it("is undefined when the album has no stored Apple artwork (the render falls through)", () => {
+    expect(toLeanTrackListItem(BASE_ROW).artworkMaxUrl).toBeUndefined();
+  });
+
+  it("is undefined when the template is present but the dimensions are missing", () => {
+    const item = toLeanTrackListItem({
+      ...BASE_ROW,
+      album_artwork_height: null,
+      album_artwork_url_template: "https://is1-ssl.mzstatic.com/image/thumb/abc/{w}x{h}bb.jpg",
+      album_artwork_width: null,
+    });
+
+    expect(item.artworkMaxUrl).toBeUndefined();
   });
 });

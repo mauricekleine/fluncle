@@ -11,6 +11,11 @@ type ApiTrack = {
   artists: string[];
   album?: string;
   albumImageUrl?: string;
+  // A ≥1920 render source the DTO composes server-side from Apple's stored artwork facts
+  // (RFC musickit-second-authority U3a). Present only when the album carries Apple artwork;
+  // we prefer it over the 640² `albumImageUrl` so the composition samples a native-res cover
+  // instead of upscaling the Spotify thumbnail. RENDER-TIME ONLY — never persisted.
+  artworkMaxUrl?: string;
   note?: string;
   addedAt: string;
   spotifyUrl?: string;
@@ -57,7 +62,7 @@ export async function fetchTrack(idOrLogId: string): Promise<CosmosTrack> {
   const track: CosmosTrack = {
     album: found.album,
     artists: found.artists ?? [],
-    artworkUrl: found.albumImageUrl,
+    artworkUrl: found.artworkMaxUrl ?? found.albumImageUrl,
     discoveredAt: found.addedAt,
     durationMs: found.durationMs,
     features: found.features,

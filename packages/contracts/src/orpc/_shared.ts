@@ -59,6 +59,14 @@ export const TrackListItemSchema = z
     // here too when no artist has a resolvable `/channel/UC…` link.
     artistYoutubeChannelIds: z.array(z.string()).optional(),
     artists: z.array(z.string()),
+    // The best ≥1920 render source for this finding's cover — Apple's `{w}x{h}` artwork
+    // template composed server-side at 2048² (clamped to native) from the album facts U1
+    // stored (RFC musickit-second-authority U3a). Present ONLY when the album carries Apple
+    // artwork; absent otherwise, and the render falls through to `albumImageUrl`. RENDER-TIME
+    // ONLY (decision A: never persisted) — the video pipeline (`packages/video`) reads it as a
+    // dumb consumer, so it never composes an Apple URL itself. Web/mobile ignore it (they
+    // render `albumImageUrl` small).
+    artworkMaxUrl: z.string().optional(),
     bpm: z.number().optional(),
     // Who last set bpm/key — the source-hierarchy provenance (operator > rekordbox > DSP;
     // apps/web track-update.ts). ADMIN-ONLY on this DTO: `toPublicTrackListItem` strips both
