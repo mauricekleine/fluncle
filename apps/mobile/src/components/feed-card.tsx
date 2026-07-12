@@ -24,6 +24,7 @@ import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { Image } from "expo-image";
 import { useVideoPlayer, VideoView } from "expo-video";
 import { useAudioPlayer } from "expo-audio";
+import { LinearGradient } from "expo-linear-gradient";
 import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
 import { type TrackListItem } from "@fluncle/contracts";
 import { resolveCardMedia } from "@/lib/media";
@@ -42,21 +43,63 @@ import { color, font } from "@/theme/tokens";
 // in the simulator after merge.
 export const NATIVE_TAB_BAR_HEIGHT = 49;
 
-// OPERATOR RULING 2026-07-11: no scrim pane. The earlier AA-worst-case fix laid a
-// multi-stop warm-dark gradient over the lower screen; on lighter footage it read as a
-// clearly visible dark opaque box (TikTok doesn't do it either). So the footage stays
-// UNVEILED — no gradient — and legibility rides firm per-glyph shadows instead (the
-// TikTok-style treatment: a wide, warm-dark, high-alpha text shadow on every overlay
-// glyph; see `TEXT_SHADOW` below). The tradeoff is accepted by the operator: against a
-// pure-white cover the thin caption strokes can dip under the WCAG AA 4.5:1 target, and
-// that worst case is taken knowingly for footage-first parity over an occluding box.
+// OPERATOR RULING 2026-07-12: the scrim returns (third iteration). The previous fix
+// removed the gradient entirely because iteration two had a visible ONSET LINE — its
+// first stop jumped 0→0.35 alpha at 14% of the height, a perceptible edge on light
+// footage. The direction was right; the failure was the hard start. This iteration is a
+// bottom gradient that reaches FULL opacity at the very bottom screen edge (behind the
+// tab bar too) with an IMPERCEPTIBLE onset: many stops on an eased curve where alpha
+// stays under ~0.05 through the first third of the gradient's height, so there is no
+// human-visible start line even on a pure-white cover. The per-glyph shadows below stay
+// — they COMPOSE with the scrim (the caption/rail sit in the gradient's ≥0.7 zone, and
+// the shadows carry the last mile). See SCRIM_* below for the exact stops.
 const TEXT_SHADOW = {
   // Warm near-black (r>g>b, never pure black — DESIGN.md), wide + strong so a light
-  // glyph reads on light footage without a pane behind it.
+  // glyph reads on light footage; composes over the scrim below it.
   textShadowColor: "rgba(9, 6, 3, 0.92)",
   textShadowOffset: { height: 1, width: 0 },
   textShadowRadius: 10,
 } as const;
+
+// THE SCRIM (operator ruling 2026-07-12). A warm near-black (rgb(9,6,3) — never pure
+// #000, DESIGN.md) bottom-to-top gradient. Two properties are load-bearing:
+//
+//  1. IMPERCEPTIBLE ONSET — no visible start line. The alpha ramp is eased (a soft
+//     quadratic toe): it holds under ~0.05 through the first third of the gradient
+//     (locations ≤ 0.34 → alpha ≤ 0.04), so where the box begins over the cover there is
+//     nothing an eye can catch. This is the exact failure of iteration two (0→0.35 at
+//     14%) inverted.
+//  2. OPAQUE FLOOR — alpha 1.0 at the very bottom edge, so the area behind the floating
+//     (translucent) native tab bar reads as solid warm-black, not a fading cover.
+//
+// Rendered bottom-anchored and sized by `scrimHeight()` so the highest overlay (the
+// rail's top) lands inside the ≥0.7 band. Colours and locations index-align.
+const SCRIM_RGB = "9, 6, 3";
+const SCRIM_COLORS = [
+  `rgba(${SCRIM_RGB}, 0)`,
+  `rgba(${SCRIM_RGB}, 0.01)`,
+  `rgba(${SCRIM_RGB}, 0.04)`,
+  `rgba(${SCRIM_RGB}, 0.12)`,
+  `rgba(${SCRIM_RGB}, 0.3)`,
+  `rgba(${SCRIM_RGB}, 0.55)`,
+  `rgba(${SCRIM_RGB}, 0.8)`,
+  `rgba(${SCRIM_RGB}, 0.95)`,
+  `rgba(${SCRIM_RGB}, 1)`,
+] as const;
+const SCRIM_LOCATIONS = [0, 0.16, 0.34, 0.44, 0.52, 0.58, 0.64, 0.8, 1] as const;
+// The rail is the tallest bottom overlay: three RailAction stacks (icon box 36 + label,
+// gap 16) rising from the shared bottom line. This is the height of that band, used to
+// size the scrim so the rail's TOP sits inside the opaque ≥0.7 zone.
+const RAIL_BAND = 196;
+
+// The scrim's total height, from the opaque bottom edge up to its imperceptible toe.
+// Sized so the highest overlay (bottomLine + RAIL_BAND from the bottom) lands at ~0.66
+// down the gradient — inside the ≥0.7 band (alpha ≈ 0.82 there) — while the top third
+// stays under 0.05. Clamped to the screen so it never overflows; the operator verifies
+// the exact clearance on-device (as with NATIVE_TAB_BAR_HEIGHT).
+function scrimHeight(overlayTop: number, screenHeight: number): number {
+  return Math.min(screenHeight, overlayTop / 0.34);
+}
 
 // OPERATOR RULING 2026-07-11 (device pass): the firm TEXT_SHADOW above is right for the
 // thin text strokes (caption + rail labels), but on an Ionicons/MaterialCommunityIcons
@@ -96,6 +139,9 @@ export const FeedCard = memo(function FeedCard({ finding, active, soundOn, onTog
   // label ("Sound") bottom-aligns with the caption's last line (the coordinate + Found
   // row) — one line, not two staggered ones (operator device pass).
   const bottomLine = bottomFloor + 10;
+  // The scrim rises from the opaque bottom edge past the tallest overlay (the rail top)
+  // and fades to nothing above it — sized so the rail/caption band sits in its ≥0.7 zone.
+  const scrimH = scrimHeight(bottomLine + RAIL_BAND, height);
   // Stabilize the resolved media so effects can depend on the object itself (not
   // computed `media.kind`/`media.previewUrl` member reads) and only re-run when the
   // finding actually changes.
@@ -193,8 +239,18 @@ export const FeedCard = memo(function FeedCard({ finding, active, soundOn, onTog
         </Animated.View>
       )}
 
-      {/* No scrim pane (operator ruling 2026-07-11 — it read as a dark box on light
-          footage). The footage stays unveiled; per-glyph shadows carry legibility. */}
+      {/* The scrim (operator ruling 2026-07-12): a warm near-black gradient anchored to
+          the bottom edge, opaque at the very bottom (behind the tab bar) and fading to an
+          imperceptible onset above the overlays — no visible start line on a light cover.
+          Non-interactive so the rail below still takes every tap. */}
+      <LinearGradient
+        colors={SCRIM_COLORS}
+        end={{ x: 0, y: 1 }}
+        locations={SCRIM_LOCATIONS}
+        pointerEvents="none"
+        start={{ x: 0, y: 0 }}
+        style={{ bottom: 0, height: scrimH, left: 0, position: "absolute", right: 0 }}
+      />
 
       {/* Right action rail (TikTok-style): Spotify / Share / Sound. Observation discovery
           moved to the Radio tab (operator ruling 2026-07-12), so the card rail no longer
@@ -248,7 +304,7 @@ export const FeedCard = memo(function FeedCard({ finding, active, soundOn, onTog
           operator ruling: it floated too far above the bar). The title leads (PRODUCT.md
           — artist + title first); the gold coordinate sits below it at reduced prominence,
           still the identity mark but no longer out-shouting. Every glyph carries the firm
-          per-glyph shadow (no scrim pane) so it reads on light footage. */}
+          per-glyph shadow, which composes over the scrim so it reads on light footage. */}
       <View style={{ bottom: bottomLine, gap: 8, left: 16, position: "absolute", right: 96 }}>
         <Text
           style={[font.title, styles.captionShadow, { color: color.starlightCream }]}
@@ -314,10 +370,10 @@ const styles = StyleSheet.create({
   // The gold coordinate, demoted below the title: the identity gold (not the brighter
   // Eclipse Glow) at a size under the title's, so it reads as a mark, not a headline.
   captionMeta: { alignItems: "baseline", flexDirection: "row", gap: 8 },
-  // The firm per-glyph shadow that replaces the scrim pane (operator ruling): with no
-  // gradient behind it, every caption glyph carries this warm-dark halo so it reads on
-  // light footage. The rail labels share it; the rail icons use the tighter ICON_SHADOW
-  // (the firm one smeared into a dark blotch behind the solid glyphs — device pass).
+  // The firm per-glyph shadow that composes over the scrim (operator ruling): every
+  // caption glyph carries this warm-dark halo on top of the gradient so it reads on light
+  // footage. The rail labels share it; the rail icons use the tighter ICON_SHADOW (the
+  // firm one smeared into a dark blotch behind the solid glyphs — device pass).
   captionShadow: TEXT_SHADOW,
   // Rail glyphs: the tight halo, not the firm text shadow (see ICON_SHADOW). Every icon
   // renders inside the fixed 36×36 `railIcon` box, so its advance box centers on the rail
