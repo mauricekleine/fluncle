@@ -74,7 +74,12 @@ const config: ExpoConfig = {
         resizeMode: "contain",
       },
     ],
-    ["expo-video", { supportsBackgroundPlayback: false, supportsPictureInPicture: false }],
+    // supportsBackgroundPlayback must be TRUE even though the FEED never plays in the
+    // background: expo-video's plugin, when false, actively STRIPS "audio" from
+    // UIBackgroundModes — deleting the entitlement the Radio's expo-audio plugin adds
+    // (the two plugins fight; video's mod wraps audio's and wins). The feed's silence
+    // in the background is JS behavior (useBackgroundPause), not this plist entry.
+    ["expo-video", { supportsBackgroundPlayback: true, supportsPictureInPicture: false }],
     // The Radio surface keeps the spoken observation playing past a lock / backgrounding.
     // This plugin adds iOS `UIBackgroundModes: ["audio"]` and the Android media-playback
     // foreground service + permissions. Recording is disabled (Radio never records), so
