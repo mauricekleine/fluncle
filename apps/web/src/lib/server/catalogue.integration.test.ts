@@ -257,16 +257,19 @@ describe("the sweep — batching, staleness, and self-healing", () => {
     expect(second.prioritized).toBe(0);
     expect(second.remaining).toBe(0);
 
-    // A new finding lands, and it is a BETTER match for the catalogue track. The fingerprint
-    // moves, the row goes stale on its own, and the next tick re-points it — no invalidation
-    // call from the publish path, which is the whole point of the fingerprint.
-    await seedFinding("finding-b", { vector: blend(axis(0), axis(1), 0.3) });
+    // A new finding lands, and it is a BETTER match for the catalogue track (closer than
+    // finding-a, but not a near-1.0 same-master — that would be wrong-audio territory). The
+    // fingerprint moves, the row goes stale on its own, and the next tick re-points it — no
+    // invalidation call from the publish path, which is the whole point of the fingerprint.
+    await seedFinding("finding-b", { vector: blend(axis(0), axis(1), 0.4) });
 
     const third = await rankCatalogue();
     expect(third.corpus).toBe("2:2");
     expect(third.scored).toBe(1);
+    expect(third.quarantined).toBe(0);
     expect((await rankingOf("cat-a")).nearest_finding_track_id).toBe("finding-b");
-    expect((await rankingOf("cat-a")).nearest_finding_score ?? 0).toBeCloseTo(1, 4);
+    // Closer than finding-a's ~0.92, but comfortably below the wrong-audio line.
+    expect((await rankingOf("cat-a")).nearest_finding_score ?? 0).toBeGreaterThan(0.95);
   });
 
   it("drains a backlog in batches, reporting what is left", async () => {
@@ -504,9 +507,11 @@ describe("the read — the ranked page, and the WHY on every row", () => {
 
     expect(await listCatalogueTracks("ear")).toEqual([]);
     expect(await listCatalogueTracks("capture")).toEqual([]);
+    expect(await listCatalogueTracks("quarantine")).toEqual([]);
     expect(await getCatalogueSummary()).toEqual({
       awaitingCapture: 0,
       awaitingRank: 0,
+      quarantined: 0,
       ranked: 0,
       total: 0,
     });
@@ -562,13 +567,17 @@ describe("duplicates — a crawled copy of a finding is flagged, never bought", 
     expect(capture.find((track) => track.trackId === "cat-real")?.duplicateOf).toBeNull();
   });
 
-  it("reads a scored ≥ 0.995 row as a duplicate on the ear lens — display-only, nothing stored", async () => {
-    const { DUPLICATE_SIMILARITY, listCatalogueTracks, rankCatalogue } =
+  it("reads a scored row in the display band [0.995, 0.9995) as a duplicate on the ear lens — display-only, nothing stored", async () => {
+    const { DUPLICATE_SIMILARITY, listCatalogueTracks, rankCatalogue, WRONG_AUDIO_QUARANTINE } =
       await import("./catalogue");
 
     await seedFinding("finding-owned", { title: "Infinity", vector: axis(0) });
-    // An identical master scores ~1.0 against the finding it copies.
-    await seedCatalogue("cat-identical", { title: "Infinity (copy)", vector: axis(0) });
+    // An ALTERNATE master lands in the display band: above DUPLICATE_SIMILARITY (a near-dup), but
+    // below WRONG_AUDIO_QUARANTINE — a genuinely different recording, so display-only, not vetoed.
+    await seedCatalogue("cat-identical", {
+      title: "Infinity (copy)",
+      vector: blend(axis(0), axis(1), 0.06),
+    });
     // A genuine near-neighbour — close, but a different recording, and clearly below threshold.
     await seedCatalogue("cat-near", { vector: blend(axis(0), axis(1), 0.2) });
 
@@ -578,8 +587,10 @@ describe("duplicates — a crawled copy of a finding is flagged, never bought", 
     const identical = ear.find((track) => track.trackId === "cat-identical");
     const near = ear.find((track) => track.trackId === "cat-near");
 
-    // The identical master is flagged "already in the archive", naming the finding it copies.
+    // The alternate master is flagged "already in the archive", naming the finding it copies — and
+    // it sits in the DISPLAY band, below the wrong-audio adjudication line, so it is not touched.
     expect(identical?.nearestFindingScore ?? 0).toBeGreaterThanOrEqual(DUPLICATE_SIMILARITY);
+    expect(identical?.nearestFindingScore ?? 1).toBeLessThan(WRONG_AUDIO_QUARANTINE);
     expect(identical?.duplicateOf?.trackId).toBe("finding-owned");
     // The near-neighbour is a genuine discovery, not a duplicate.
     expect(near?.nearestFindingScore ?? 1).toBeLessThan(DUPLICATE_SIMILARITY);
@@ -619,5 +630,163 @@ describe("duplicates — a crawled copy of a finding is flagged, never bought", 
     expect(cleared.duplicate_of_track_id).toBeNull();
     // It falls back to the ordinary metadata ladder — nothing ties it to the (now empty) archive.
     expect(cleared.capture_priority).toBe(0);
+  });
+});
+
+describe("wrong audio — a cross-title near-1.0 capture is quarantined, never trusted (docs/the-ear.md § Wrong audio)", () => {
+  /** Give a catalogue row a captured-audio key, the way a real capture would. */
+  async function withSourceKey(trackId: string, key: string): Promise<void> {
+    await db.execute({
+      args: [key, trackId],
+      sql: `update tracks set source_audio_key = ? where track_id = ?`,
+    });
+  }
+
+  /** Read the capture side-channel columns the quarantine touches. */
+  async function stateOf(trackId: string): Promise<{
+    capture_status: null | string;
+    embedding_json: null | string;
+    source_audio_key: null | string;
+  }> {
+    const result = await db.execute({
+      args: [trackId],
+      sql: `select capture_status, embedding_json, source_audio_key from tracks where track_id = ?`,
+    });
+
+    return result.rows[0] as unknown as Awaited<ReturnType<typeof stateOf>>;
+  }
+
+  it("quarantines a CROSS-TITLE near-1.0 row: the vector is dropped, the bad key kept, the row re-queued", async () => {
+    const { WRONG_AUDIO_STATUS, rankCatalogue } = await import("./catalogue");
+
+    // The audit's real case: Flowidus "Find Your Love" captured the audio of the SAME artist's
+    // already-logged "Shelter", so its vector is identical to Shelter's under a different title.
+    await seedFinding("finding-shelter", {
+      artists: ["Flowidus"],
+      title: "Shelter",
+      vector: axis(0),
+    });
+    await seedCatalogue("cat-fyl", {
+      artists: ["Flowidus"],
+      title: "Find Your Love",
+      vector: axis(0),
+    });
+    await withSourceKey("cat-fyl", "catalogue/cat-fyl/badbeef.webm");
+
+    const summary = await rankCatalogue();
+    expect(summary.quarantined).toBe(1);
+    // A quarantined row is no longer a scored find — it never reaches the top of the ear lens.
+    expect(summary.scored).toBe(0);
+
+    const row = await rankingOf("cat-fyl");
+    // Rewound to the pre-audio ladder: no score, the restored capture tier (artist Flowidus is on
+    // a finding → 3), and the collided finding KEPT as the WHY.
+    expect(row.nearest_finding_score).toBeNull();
+    expect(row.nearest_finding_track_id).toBe("finding-shelter");
+    expect(row.capture_priority).toBe(3);
+
+    // The vector is nulled (it was a lie), the bad key is KEPT (the re-capture's bad-audio memory),
+    // and the status marks it quarantined.
+    const state = await stateOf("cat-fyl");
+    expect(state.capture_status).toBe(WRONG_AUDIO_STATUS);
+    expect(state.embedding_json).toBeNull();
+    expect(state.source_audio_key).toBe("catalogue/cat-fyl/badbeef.webm");
+  });
+
+  it("does NOT quarantine a SAME-TITLE near-1.0 row — it is a true duplicate (tier −2, finding stored, vector kept)", async () => {
+    const { DUPLICATE_CAPTURE_TIER, rankCatalogue } = await import("./catalogue");
+
+    // Same artist AND same title → the crawler re-found a logged track, with the RIGHT audio.
+    await seedFinding("finding-shelter", {
+      artists: ["Flowidus"],
+      title: "Shelter",
+      vector: axis(0),
+    });
+    await seedCatalogue("cat-shelter", {
+      artists: ["Flowidus"],
+      title: "Shelter",
+      vector: axis(0),
+    });
+
+    const summary = await rankCatalogue();
+    expect(summary.quarantined).toBe(0);
+
+    const row = await rankingOf("cat-shelter");
+    // The #545 duplicate handling: named, tier −2, and it KEEPS its vector + score (not quarantined).
+    expect(row.duplicate_of_track_id).toBe("finding-shelter");
+    expect(row.capture_priority).toBe(DUPLICATE_CAPTURE_TIER);
+    expect(row.nearest_finding_score ?? 0).toBeGreaterThan(0.99);
+
+    const state = await stateOf("cat-shelter");
+    expect(state.capture_status).not.toBe("wrong-audio");
+    expect(state.embedding_json).not.toBeNull();
+  });
+
+  it("converges: a quarantined row and a −2 true duplicate are both stable on the next tick — no re-pick loop", async () => {
+    const { rankCatalogue } = await import("./catalogue");
+
+    await seedFinding("finding-shelter", {
+      artists: ["Flowidus"],
+      title: "Shelter",
+      vector: axis(0),
+    });
+    await seedCatalogue("cat-fyl", {
+      artists: ["Flowidus"],
+      title: "Find Your Love",
+      vector: axis(0),
+    });
+    await seedCatalogue("cat-shelter", {
+      artists: ["Flowidus"],
+      title: "Shelter",
+      vector: axis(0),
+    });
+
+    const first = await rankCatalogue();
+    expect(first.quarantined).toBe(1);
+
+    // The next tick is a NO-OP: the quarantined row (vector nulled, corpus stamped) and the −2 true
+    // duplicate (a deliberate negative tier the staleness `>= 0` clause leaves stable) are neither
+    // re-scored nor re-quarantined.
+    const second = await rankCatalogue();
+    expect(second.quarantined).toBe(0);
+    expect(second.scored).toBe(0);
+    expect(second.prioritized).toBe(0);
+    expect(second.remaining).toBe(0);
+  });
+
+  it("the operator force-clear is sticky: a cleared row re-ranks normally and is never re-quarantined", async () => {
+    const { clearWrongAudio, QUARANTINE_CLEARED, rankCatalogue } = await import("./catalogue");
+
+    await seedFinding("finding-shelter", {
+      artists: ["Flowidus"],
+      title: "Shelter",
+      vector: axis(0),
+    });
+    await seedCatalogue("cat-fyl", {
+      artists: ["Flowidus"],
+      title: "Find Your Love",
+      vector: axis(0),
+    });
+    await withSourceKey("cat-fyl", "catalogue/cat-fyl/badbeef.webm");
+
+    await rankCatalogue();
+    expect((await stateOf("cat-fyl")).capture_status).toBe("wrong-audio");
+
+    // The operator overrules the verdict — "this capture is fine".
+    expect(await clearWrongAudio("cat-fyl")).toBe(true);
+    expect((await stateOf("cat-fyl")).capture_status).toBe(QUARANTINE_CLEARED);
+
+    // Its kept audio re-embeds (simulate the embed cron), then a re-rank scores it NORMALLY — the
+    // near-1.0 does NOT re-quarantine, because the operator's override is sticky.
+    await embed("cat-fyl", axis(0));
+    const summary = await rankCatalogue();
+    expect(summary.quarantined).toBe(0);
+
+    const row = await rankingOf("cat-fyl");
+    expect(row.nearest_finding_score ?? 0).toBeGreaterThan(0.99);
+    expect((await stateOf("cat-fyl")).capture_status).toBe(QUARANTINE_CLEARED);
+
+    // A second force-clear is a no-op — the row is not quarantined anymore.
+    expect(await clearWrongAudio("cat-fyl")).toBe(false);
   });
 });

@@ -143,6 +143,11 @@ const APPROVED_VERBS = new Set<string>([
   // `update_*` (edit fields): this REPLACES all the rows.
   "replace",
   "reset",
+  // `clear` (lift the wrong-audio quarantine on one catalogue row — the operator's override on
+  // The Ear's wrong-audio verdict) — added deliberately with `clear_wrong_audio` (docs/the-ear.md
+  // § Wrong audio). Distinct from `reset` (restore an initial state) and `delete` (drop a row): it
+  // CLEARS a flag/verdict, keeping the row and its captured audio.
+  "clear",
   // `review` (mark an artist's link list as reviewed — the "Looks good" acknowledgment that
   // stamps reviewed_at and promotes surviving candidates) — added deliberately with
   // `review_artist`. A single per-artist ack, distinct from `confirm` (one link) and `approve`

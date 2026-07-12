@@ -1954,13 +1954,36 @@ function addAdminCommands(program: Command): void {
 
   catalogue
     .command("list")
-    .description("The ranked catalogue: closest to a finding (ear), or next to capture")
-    .option("--lens <lens>", "ear (default) or capture", "ear")
+    .description(
+      "The ranked catalogue: closest to a finding (ear), next to capture, or wrong audio",
+    )
+    .option("--lens <lens>", "ear (default), capture, or quarantine", "ear")
     .option("--limit <limit>", "Rows (default 50, max 200)")
     .option("--json", "Print JSON", false)
     .action(async (options: CatalogueListOptions) => {
       const { catalogueListCommand } = await import("./commands/admin-catalogue");
       await runCatalogueList(options, catalogueListCommand);
+    });
+
+  catalogue
+    .command("clear-wrong-audio")
+    .description("Overrule the wrong-audio quarantine on one catalogue row (operator)")
+    .argument("<trackId>", "The catalogue track id to keep")
+    .option("--json", "Print JSON", false)
+    .action(async (trackId: string, options: JsonOptions) => {
+      const { clearWrongAudioCommand } = await import("./commands/admin-catalogue");
+      const { cleared } = await clearWrongAudioCommand(trackId);
+
+      if (options.json) {
+        printJson({ cleared, ok: true });
+        return;
+      }
+
+      console.log(
+        cleared
+          ? `Kept ${trackId}. Its audio re-embeds and rejoins the ranking on the next sweep.`
+          : `${trackId} was not quarantined — nothing to clear.`,
+      );
     });
 
   catalogue
@@ -4725,8 +4748,11 @@ async function runCatalogueRank(
     return;
   }
 
+  const quarantine =
+    summary.quarantined > 0 ? ` Quarantined ${summary.quarantined} as wrong audio.` : "";
+
   console.log(
-    `Ranked ${summary.scored} against ${summary.embeddedFindings} embedded findings; prioritized ${summary.prioritized} for capture. ${summary.remaining} still stale.`,
+    `Ranked ${summary.scored} against ${summary.embeddedFindings} embedded findings; prioritized ${summary.prioritized} for capture.${quarantine} ${summary.remaining} still stale.`,
   );
 }
 
@@ -4745,12 +4771,25 @@ async function runCatalogueList(
   }
 
   if (tracks.length === 0) {
-    console.log("Nothing out there yet.");
+    console.log(
+      options.lens === "quarantine" ? "No wrong-audio captures." : "Nothing out there yet.",
+    );
     return;
   }
 
   for (const track of tracks) {
     const identity = `${track.artists.join(", ")} — ${track.title}`;
+
+    // The wrong-audio holding pen: the WHY names the finding the capture was mistaken FOR.
+    if (options.lens === "quarantine") {
+      const collided = track.nearestFinding;
+      const why = collided
+        ? `its audio came back as ${collided.logId ? `${collided.logId} ` : ""}${collided.artists.join(", ")} — ${collided.title}`
+        : "its audio matched a track already in the archive";
+
+      console.log(`wrong-audio  ${identity.padEnd(52)} ${why}`);
+      continue;
+    }
     // The DUPLICATE WHY wins on either lens: this row is the same recording as a finding, so it
     // is "already in the archive" and (on capture) never bought. It names the finding it matched.
     const dup = track.duplicateOf;

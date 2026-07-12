@@ -209,6 +209,10 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // The capture sweep is agent-allowed (admin tier): it only fills the public URL
   // Postiz withheld on create + links the analytics release-id — it publishes nothing.
   capture_post_urls: "admin",
+  // The wrong-audio quarantine override (docs/the-ear.md § Wrong audio) — operator tier: an
+  // agent does not get to reverse the machine's own wrong-audio verdict on its own output, the
+  // same reasoning that keeps `update_label` and `set_capture_budget` operator-tier.
+  clear_wrong_audio: "operator",
   collect_private_galaxy_log: "private-session",
   // The follow queue's one-tap confirm (candidate → confirmed) — operator tier: it lets
   // a Firecrawl-sourced link onto the public artist page.

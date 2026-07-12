@@ -27,6 +27,8 @@ export type RankCatalogueSummary = {
   embeddedFindings: number;
   findings: number;
   prioritized: number;
+  /** Rows quarantined as wrong audio this tick (docs/the-ear.md § Wrong audio). */
+  quarantined: number;
   remaining: number;
   scored: number;
 };
@@ -51,10 +53,11 @@ export async function catalogueRankCommand(options: {
 }
 
 /**
- * The ranked catalogue. `fluncle admin catalogue list [--lens ear|capture] [--limit <n>]`.
+ * The ranked catalogue. `fluncle admin catalogue list [--lens ear|capture|quarantine] [--limit <n>]`.
  *
  * `ear` (the default) is "closest to your findings, not yet logged"; `capture` is "whose audio
- * should we buy next" — the rows with no vector at all, which the ear structurally cannot rank.
+ * should we buy next" — the rows with no vector at all, which the ear structurally cannot rank;
+ * `quarantine` is the wrong-audio holding pen (docs/the-ear.md § Wrong audio).
  */
 export async function catalogueListCommand(options: {
   lens?: string;
@@ -62,13 +65,28 @@ export async function catalogueListCommand(options: {
 }): Promise<CatalogueResponse> {
   const params = new URLSearchParams();
 
-  params.set("lens", options.lens === "capture" ? "capture" : "ear");
+  params.set(
+    "lens",
+    options.lens === "capture" ? "capture" : options.lens === "quarantine" ? "quarantine" : "ear",
+  );
 
   if (options.limit) {
     params.set("limit", options.limit);
   }
 
   return adminApiGet<CatalogueResponse>(`/api/admin/catalogue?${params.toString()}`);
+}
+
+/**
+ * Overrule the wrong-audio quarantine on one catalogue row (operator). `fluncle admin catalogue
+ * clear-wrong-audio <trackId>`. Flips the row from `wrong-audio` to the sticky `quarantine-cleared`
+ * state the sweep never re-quarantines, so its kept audio re-embeds and re-ranks (docs/the-ear.md
+ * § Wrong audio). `cleared: false` when the row was not actually quarantined.
+ */
+export async function clearWrongAudioCommand(trackId: string): Promise<{ cleared: boolean }> {
+  return adminApiPost<{ cleared: boolean; ok: true }>("/api/admin/catalogue/wrong-audio/clear", {
+    trackId,
+  });
 }
 
 // ── The crawler (`crawl_catalogue` / `get_crawl_status`) ─────────────────────

@@ -45,12 +45,18 @@ import * as z from "zod";
 /**
  * Which question the page asks of the catalogue.
  *
- *   - `ear`     — ranked by similarity to the NEAREST finding. The telescope.
- *   - `capture` — ranked by the pre-audio priority ladder. A track has no vector until its
- *                 audio is captured, and capture is metered, so this lens answers the one
- *                 question the `ear` lens structurally cannot: who gets captured next.
+ *   - `ear`        — ranked by similarity to the NEAREST finding. The telescope.
+ *   - `capture`    — ranked by the pre-audio priority ladder. A track has no vector until its
+ *                    audio is captured, and capture is metered, so this lens answers the one
+ *                    question the `ear` lens structurally cannot: who gets captured next.
+ *   - `quarantine` — the WRONG-AUDIO holding pen (docs/the-ear.md § Wrong audio): rows whose
+ *                    capture landed the wrong master (a near-1.0 cross-title match), vetoed from
+ *                    the ear lens and re-queued for a fresh download. Its own quiet section so a
+ *                    bad capture never silently vanishes, each row force-clearable by the operator.
  */
-export const CatalogueLensSchema = z.enum(["capture", "ear"]).meta({ id: "CatalogueLens" });
+export const CatalogueLensSchema = z
+  .enum(["capture", "ear", "quarantine"])
+  .meta({ id: "CatalogueLens" });
 
 /**
  * Why a not-yet-captured track sits where it does in the capture queue. The rungs, strongest
@@ -121,6 +127,8 @@ export const CatalogueSummarySchema = z
   .object({
     awaitingCapture: z.number(),
     awaitingRank: z.number(),
+    /** Rows quarantined as wrong audio, awaiting a fresh capture (docs/the-ear.md § Wrong audio). */
+    quarantined: z.number(),
     ranked: z.number(),
     total: z.number(),
   })
@@ -192,11 +200,37 @@ export const rankCatalogue = oc
         embeddedFindings: z.number(),
         findings: z.number(),
         prioritized: z.number(),
+        /** Rows quarantined as wrong audio this tick (docs/the-ear.md § Wrong audio). */
+        quarantined: z.number(),
         remaining: z.number(),
         scored: z.number(),
       }),
     }),
   );
+
+/**
+ * `clear_wrong_audio` → `POST /admin/catalogue/wrong-audio/clear` (operationId `clearWrongAudio`).
+ *
+ * OPERATOR tier — the operator's override on the wrong-audio quarantine (docs/the-ear.md § Wrong
+ * audio). "I disagree, this capture is fine, stop re-capturing it." It flips one quarantined row
+ * from `wrong-audio` to the sticky `quarantine-cleared` state the sweep never re-quarantines, so
+ * the kept audio re-embeds and re-ranks normally.
+ *
+ * Operator-only, not agent-allowed: overruling the machine's wrong-audio verdict is a judgement a
+ * machine does not get to make about its own output — the same reasoning that keeps `update_label`
+ * and `set_capture_budget` operator-tier. `{ ok, cleared }`; `cleared: false` when the row was not
+ * actually quarantined (already handled, or a race).
+ */
+export const clearWrongAudio = oc
+  .route({
+    method: "POST",
+    operationId: "clearWrongAudio",
+    path: "/admin/catalogue/wrong-audio/clear",
+    summary: "Overrule the wrong-audio quarantine on one catalogue row (operator)",
+    tags: ["Admin"],
+  })
+  .input(z.object({ trackId: z.string().min(1) }))
+  .output(z.object({ cleared: z.boolean(), ok: z.literal(true) }));
 
 // ─────────────────────────────────────────────────────────────────────────────
 // THE CRAWLER — what makes the rows above exist. docs/catalogue-crawler.md.
@@ -446,6 +480,7 @@ export const resetAppleBreaker = oc
 
 /** The `admin-catalogue` domain's ops, merged into the root contract by `./index.ts`. */
 export const adminCatalogueContract = {
+  clear_wrong_audio: clearWrongAudio,
   crawl_catalogue: crawlCatalogue,
   get_capture_budget: getCaptureBudget,
   get_crawl_status: getCrawlStatus,
