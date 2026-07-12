@@ -299,6 +299,40 @@ describe("the sweep — batching, staleness, and self-healing", () => {
     expect(summary.remaining).toBe(1);
   });
 
+  it("re-scores a row whose OWN vector arrived after it was ranked (capture → embed)", async () => {
+    const { rankCatalogue } = await import("./catalogue");
+
+    // The real lifecycle, in order: the crawler mints a vectorless row, the ranking sweep
+    // gives it a pre-audio capture tier, THEN the capture+embed pipeline gives it a vector.
+    // Neither corpus number moved, so the fingerprint alone would leave it on the ladder
+    // forever — the bug the 58 first-ever catalogue embeds hit. The scoring path always
+    // nulls `capture_priority`, so tier-still-set + vector-present is the stale signal.
+    await seedFinding("finding-a", { artists: ["Finding Artist"], vector: axis(0) });
+    await seedCatalogue("cat-a", { artists: ["Finding Artist"] });
+
+    const first = await rankCatalogue();
+    expect(first.prioritized).toBe(1);
+    expect((await rankingOf("cat-a")).capture_priority).toBe(3);
+
+    // The capture+embed side-channel lands the vector; the corpus is untouched.
+    await embed("cat-a", blend(axis(0), axis(1), 0.2));
+
+    const second = await rankCatalogue();
+    expect(second.corpus).toBe(first.corpus);
+    expect(second.scored).toBe(1);
+    expect(second.remaining).toBe(0);
+
+    const ranking = await rankingOf("cat-a");
+    expect(ranking.nearest_finding_track_id).toBe("finding-a");
+    expect(ranking.nearest_finding_score ?? 0).toBeGreaterThan(0.9);
+    // The tier is cleared by the scoring write, so the row has LEFT the stale set — a third
+    // tick must be a clean no-op (no re-pick loop).
+    expect(ranking.capture_priority).toBeNull();
+    const third = await rankCatalogue();
+    expect(third.scored).toBe(0);
+    expect(third.remaining).toBe(0);
+  });
+
   it("stamps a row it cannot score, so a hopeless row is never re-picked forever", async () => {
     const { rankCatalogue } = await import("./catalogue");
 

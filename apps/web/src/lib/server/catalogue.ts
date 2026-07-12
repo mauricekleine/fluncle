@@ -179,15 +179,24 @@ export function capturePriorityFor(
  * The fingerprint of the finding corpus a ranking was computed against —
  * `"<findings>:<embedded findings>"`, stored on every ranked row as `catalogue_rank_corpus`.
  *
- * THIS IS WHAT MAKES THE SWEEP SELF-HEALING, and it is the whole of the staleness model.
- * Both numbers move whenever the answer could change: log a finding and the first moves (a
- * new artist/label affinity, a new nearest candidate); embed one and the second moves (a new
- * vector to be near). A row whose stored fingerprint differs from the live one is stale and
- * re-ranks on a later tick — so the sweep converges on its own after ANY archive change, and
- * needs no invalidation call from the publish path. On an unchanged archive it is a no-op.
+ * THIS IS WHAT MAKES THE SWEEP SELF-HEALING — but it is only HALF the staleness model.
+ * Both numbers move whenever the CORPUS side of the answer could change: log a finding and
+ * the first moves (a new artist/label affinity, a new nearest candidate); embed one and the
+ * second moves (a new vector to be near). A row whose stored fingerprint differs from the
+ * live one is stale and re-ranks on a later tick — so the sweep converges on its own after
+ * ANY archive change, and needs no invalidation call from the publish path.
  *
- * It is compared with `<>`, never `<`, so a DELETED finding (the count goes down) is caught
- * exactly like an added one.
+ * The other half is the ROW side: a catalogue track that gains its OWN vector (captured →
+ * embedded) moves neither number, so the fingerprint alone would leave it ranked forever on
+ * the pre-audio ladder — 58 freshly-embedded tracks sat invisible to The Ear the first time
+ * this happened. The discriminator is `capture_priority`: the vectored scoring path ALWAYS
+ * nulls it (scored or malformed alike), and only the pre-audio ladder sets it. So
+ * `has_vector AND capture_priority IS NOT NULL` reads precisely as "ranked before its vector
+ * arrived" and joins the stale predicate — one tick re-scores it, the write nulls the tier,
+ * and it leaves the set (no loop, even for a malformed vector).
+ *
+ * The fingerprint is compared with `<>`, never `<`, so a DELETED finding (the count goes
+ * down) is caught exactly like an added one.
  */
 export function rankCorpus(findings: number, embeddedFindings: number): string {
   return `${findings}:${embeddedFindings}`;
@@ -319,8 +328,10 @@ export async function rankCatalogue(limit = RANK_BATCH_SIZE): Promise<RankCatalo
   const embeddedFindings = Number(counts?.embedded ?? 0);
   const corpus = rankCorpus(findings, embeddedFindings);
 
-  // The stale catalogue rows. `has_vector` evaluates the read contract (blob first, guarded
-  // JSON fallback) as a BOOLEAN in SQL — no vector ever crosses the wire.
+  // The stale catalogue rows: fingerprint drift (the corpus moved) OR a vector that arrived
+  // after the row was last ranked (it still carries the pre-audio tier the scoring path
+  // always clears — see the rankCorpus doc). `has_vector` evaluates the read contract (blob
+  // first, guarded JSON fallback) as a BOOLEAN in SQL — no vector ever crosses the wire.
   const candidateResult = await db.execute({
     args: [corpus, Math.max(0, limit)],
     sql: `select ct.track_id as track_id,
@@ -330,7 +341,9 @@ export async function rankCatalogue(limit = RANK_BATCH_SIZE): Promise<RankCatalo
           from tracks ct
           left join findings cf on cf.track_id = ct.track_id
           where cf.track_id is null
-            and (ct.catalogue_rank_corpus is null or ct.catalogue_rank_corpus <> ?)
+            and (ct.catalogue_rank_corpus is null
+                 or ct.catalogue_rank_corpus <> ?
+                 or (${embeddingVectorSql("ct")} is not null and ct.capture_priority is not null))
           order by ct.track_id asc
           limit ?`,
   });
@@ -474,7 +487,9 @@ async function countStale(corpus: string): Promise<number> {
           from tracks ct
           left join findings cf on cf.track_id = ct.track_id
           where cf.track_id is null
-            and (ct.catalogue_rank_corpus is null or ct.catalogue_rank_corpus <> ?)`,
+            and (ct.catalogue_rank_corpus is null
+                 or ct.catalogue_rank_corpus <> ?
+                 or (${embeddingVectorSql("ct")} is not null and ct.capture_priority is not null))`,
   });
 
   return Number(typedRows<{ n: number }>(result.rows)[0]?.n ?? 0);

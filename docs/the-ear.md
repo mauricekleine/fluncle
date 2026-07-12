@@ -42,9 +42,11 @@ Per [docs/local-database.md](./local-database.md):
 
 ### Self-healing, by fingerprint
 
-Staleness is a fingerprint of the finding corpus, `"<findings>:<embedded findings>"`, stored on every ranked row. Both numbers move whenever the answer could change: log a finding and the first moves (a new artist/label affinity, a new candidate to be near); embed one and the second moves. A row whose stored fingerprint differs from the live one is stale and re-ranks on a later tick.
+Staleness has two halves. The **corpus half** is a fingerprint of the finding corpus, `"<findings>:<embedded findings>"`, stored on every ranked row. Both numbers move whenever the corpus side of the answer could change: log a finding and the first moves (a new artist/label affinity, a new candidate to be near); embed one and the second moves. A row whose stored fingerprint differs from the live one is stale and re-ranks on a later tick.
 
-So the sweep **converges on its own after any archive change** and needs no invalidation call from the publish path. It is compared with `<>`, never `<`, so a _deleted_ finding is caught exactly like an added one. On an unchanged archive the tick is a no-op.
+The **row half**: a catalogue track that gains its _own_ vector (captured → embedded) moves neither number, so the fingerprint alone would leave it ranked on the pre-audio ladder forever — the first 58 catalogue embeds hit exactly this. The discriminator is `capture_priority`: the vectored scoring path always nulls it and only the pre-audio ladder sets it, so _has-a-vector AND still-carries-a-tier_ reads precisely as "ranked before its vector arrived" and joins the stale predicate. One tick re-scores it, the write clears the tier, and it leaves the set — no loop, even for a malformed vector (that stamp clears the tier too).
+
+So the sweep **converges on its own after any archive change** — corpus or row — and needs no invalidation call from the publish or capture paths. The fingerprint is compared with `<>`, never `<`, so a _deleted_ finding is caught exactly like an added one. On an unchanged archive the tick is a no-op.
 
 ### The cost model
 
