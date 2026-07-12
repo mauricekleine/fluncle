@@ -10,6 +10,7 @@ import {
   siSoundcloud,
   siSpotify,
   siTiktok,
+  siTwitch,
   siX,
   siYoutube,
 } from "simple-icons";
@@ -103,6 +104,7 @@ const SOCIAL_META: Record<
   soundcloud: siSoundcloud,
   spotify: siSpotify,
   tiktok: siTiktok,
+  twitch: siTwitch,
   twitter: siX,
   youtube: siYoutube,
 };
@@ -117,6 +119,7 @@ const SOCIAL_LABEL: Record<ArtistSocialPlatform, string> = {
   soundcloud: "SoundCloud",
   spotify: "Spotify",
   tiktok: "TikTok",
+  twitch: "Twitch",
   twitter: "X",
   youtube: "YouTube",
 };

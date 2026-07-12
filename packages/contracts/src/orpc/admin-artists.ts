@@ -138,6 +138,7 @@ export const ResolvedSocialSchema = z
       "soundcloud",
       "spotify",
       "tiktok",
+      "twitch",
       "twitter",
       "youtube",
     ]),

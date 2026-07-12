@@ -92,6 +92,11 @@ describe("classifyMbUrl", () => {
     expect(classifyMbUrl("https://www.facebook.com/artist")).toBe("facebook");
   });
 
+  it("classifies Twitch channel URLs", () => {
+    expect(classifyMbUrl("https://www.twitch.tv/flunclelive")).toBe("twitch");
+    expect(classifyMbUrl("https://twitch.tv/flunclelive")).toBe("twitch");
+  });
+
   it("returns null for known aggregators (linktr.ee, discogs, etc.)", () => {
     expect(classifyMbUrl("https://linktr.ee/artist")).toBeNull();
     expect(classifyMbUrl("https://www.discogs.com/artist/12345")).toBeNull();
@@ -204,6 +209,14 @@ describe("normalizeProfileUrl", () => {
     expect(await normalizeProfileUrl("twitter", "https://twitter.com/nutone/status/999")).toBe(
       "https://twitter.com/nutone",
     );
+  });
+
+  it("reduces a Twitch clip/video deep-link to the channel root", async () => {
+    expect(
+      await normalizeProfileUrl("twitch", "https://www.twitch.tv/flunclelive/clip/AbC123"),
+    ).toBe("https://www.twitch.tv/flunclelive");
+    // A non-channel section (the video list) has no handle → null.
+    expect(await normalizeProfileUrl("twitch", "https://www.twitch.tv/directory")).toBeNull();
   });
 
   it("reduces a Bandcamp album deep-link to the artist origin", async () => {

@@ -1748,6 +1748,7 @@ export const artistSocials = sqliteTable(
         "beatport",
         "twitter",
         "facebook",
+        "twitch",
         "homepage",
       ],
     }).notNull(),
