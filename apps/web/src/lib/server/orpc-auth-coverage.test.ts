@@ -476,6 +476,10 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // submission with its agent-scoped token. Advisory only; approve/reject stay operator.
   triage_submission: "admin",
   unsave_private_finding: "private-session",
+  // The fresh-links INLINE EDIT — operator tier: it corrects a social's URL AND approves it
+  // (operator-owned, confirmed, public) in one act, the add_artist_social/#544 write path, so
+  // an agent token 403s.
+  update_artist_social: "operator",
   update_clip: "operator",
   update_edition: "admin",
   // The operator's galaxy naming write (browse-by-feel RFC) — operator tier: naming mints

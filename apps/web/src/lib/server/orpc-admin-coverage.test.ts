@@ -165,6 +165,10 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // skips it; it lives here for completeness (like `get_clip_caption`).
   "GET /admin/tracks/{trackId}": "get_track_admin",
   "GET /admin/tracks/{trackId}/social": "list_track_social",
+  // The fresh-links INLINE EDIT (correct + approve a social's URL in one act) — contract-only
+  // oRPC (no TanStack route file; oRPC owns the path directly, sharing it with the DELETE remove
+  // above). Operator tier: it writes an operator-owned, confirmed, public link.
+  "PATCH /admin/artists/socials/{socialId}": "update_artist_social",
   "PATCH /admin/clips/{clipId}": "update_clip",
   // The operator's clip-drip schedule control — contract-only oRPC. Operator tier:
   // set/override a clip's Instagram drip slot.

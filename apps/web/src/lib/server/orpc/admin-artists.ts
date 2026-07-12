@@ -16,6 +16,7 @@ import {
   removeArtistSocial,
   reviewArtist,
   reviewArtistSocial,
+  updateArtistSocial,
 } from "../artists";
 import { listUnresolvedArtists, resolveArtist } from "../artist-resolution";
 import { backfillArtistImages } from "../backfill-artist-images";
@@ -186,6 +187,22 @@ export function adminArtistsHandlers(os: Implementer) {
       }
     });
 
+  // PATCH /admin/artists/socials/{socialId} — operator tier: the fresh-links INLINE EDIT.
+  // Validate + normalize the entered URL against the row's platform, then store it operator-
+  // owned + confirmed + reviewed (correct AND approve in one act). Loose body carries `url`.
+  const updateArtistSocialHandler = os.update_artist_social
+    .use(adminAuth)
+    .use(operatorGuard)
+    .handler(async ({ input }) => {
+      try {
+        const url = typeof input.url === "string" ? input.url : "";
+
+        return { ok: true as const, social: await updateArtistSocial(input.socialId, url) };
+      } catch (error) {
+        throw toSocialFault(error);
+      }
+    });
+
   // DELETE /admin/artists/socials/{socialId} — operator tier: remove a social.
   const removeArtistSocialHandler = os.remove_artist_social
     .use(adminAuth)
@@ -254,5 +271,6 @@ export function adminArtistsHandlers(os: Implementer) {
     resolve_artist: resolveArtistHandler,
     review_artist: reviewArtistHandler,
     review_artist_social: reviewArtistSocialHandler,
+    update_artist_social: updateArtistSocialHandler,
   };
 }

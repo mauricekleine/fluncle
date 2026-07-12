@@ -506,6 +506,83 @@ export async function normalizeProfileUrl(
   }
 }
 
+// ── Operator inline-edit validation ────────────────────────────────────────────
+// The plain platform display names the operator-facing validation messages read from.
+// Kept here beside the classifier they describe (the route's PLATFORM_LABELS is the
+// client twin; this one feeds the SERVER's authoritative message).
+const SOCIAL_DISPLAY_NAMES: Record<ArtistSocialPlatform, string> = {
+  bandcamp: "Bandcamp",
+  beatport: "Beatport",
+  facebook: "Facebook",
+  homepage: "homepage",
+  instagram: "Instagram",
+  mixcloud: "Mixcloud",
+  soundcloud: "SoundCloud",
+  spotify: "Spotify",
+  tiktok: "TikTok",
+  twitch: "Twitch",
+  twitter: "Twitter / X",
+  youtube: "YouTube",
+};
+
+/** The result of validating an operator-entered social URL against its row's platform. */
+export type SocialUrlValidation = { ok: true; url: string } | { ok: false; reason: string };
+
+/**
+ * Validate + normalize an operator-entered social URL against the row's KNOWN platform —
+ * the server half of the fresh-links inline edit (an operator correcting a resolver miss
+ * without leaving the row). REUSES the resolver's own per-platform knowledge:
+ *
+ *   - `classifyMbUrl` maps the URL's host → the platform it belongs to. The URL's host
+ *     must classify to the SAME platform as the row (a YouTube row rejects an
+ *     instagram.com URL). `homepage` is the exception: an artist's own site can be any
+ *     host, so it accepts anything that ISN'T some OTHER known social/aggregator.
+ *   - `normalizeProfileUrl` reduces a deep link to the profile root (a `youtu.be/<video>`
+ *     collapses to the channel root where it can; an unreducible deep link is rejected
+ *     with an honest message rather than stored verbatim).
+ *
+ * Pure per-platform validation — no DB, no external I/O beyond the best-effort YouTube
+ * channel lookup `normalizeProfileUrl` already does. Returns the normalized URL to store,
+ * or a plain, quiet reason for the row's inline error.
+ */
+export async function validateSocialUrlForPlatform(
+  platform: ArtistSocialPlatform,
+  rawUrl: string,
+): Promise<SocialUrlValidation> {
+  const trimmed = rawUrl.trim();
+
+  if (!trimmed) {
+    return { ok: false, reason: "A URL is required" };
+  }
+
+  if (!isHttpScheme(trimmed)) {
+    return { ok: false, reason: "Only http and https links are allowed" };
+  }
+
+  const classified = classifyMbUrl(trimmed);
+
+  if (platform === "homepage") {
+    // A homepage is the artist's own front door — any host EXCEPT a recognized social
+    // (those belong in their own row). `classified` is null for a plain website.
+    if (classified && classified !== "wikidata") {
+      return {
+        ok: false,
+        reason: `That's a ${SOCIAL_DISPLAY_NAMES[classified]} link, not a homepage`,
+      };
+    }
+  } else if (classified !== platform) {
+    return { ok: false, reason: `Not a ${SOCIAL_DISPLAY_NAMES[platform]} link` };
+  }
+
+  const normalized = await normalizeProfileUrl(platform, trimmed);
+
+  if (!normalized) {
+    return { ok: false, reason: `Not a ${SOCIAL_DISPLAY_NAMES[platform]} profile link` };
+  }
+
+  return { ok: true, url: normalized };
+}
+
 // ── MB fetch helper ────────────────────────────────────────────────────────────
 // `mbFetch` is the shared client (./musicbrainz.ts): 1 req/s, an identifiable
 // User-Agent, Retry-After honoured on a 503, and `rateLimited` reported honestly.

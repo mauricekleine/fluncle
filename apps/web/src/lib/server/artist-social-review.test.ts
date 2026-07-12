@@ -16,8 +16,14 @@ vi.mock("./db", async (importOriginal) => {
   return { ...actual, getDb: async () => holder.db };
 });
 
-const { addArtistSocial, listArtistReviewRows, reviewArtist, reviewArtistSocial } =
-  await import("./artists");
+const {
+  addArtistSocial,
+  InvalidArtistSocialError,
+  listArtistReviewRows,
+  reviewArtist,
+  reviewArtistSocial,
+  updateArtistSocial,
+} = await import("./artists");
 
 async function seedSocial(
   db: Client,
@@ -128,6 +134,45 @@ describe("per-link review writes + the fresh-links queue", () => {
     expect((await readSocial(db, "s1"))?.reviewed_at).not.toBeNull();
     expect((await readSocial(db, "s2"))?.reviewed_at).not.toBeNull();
     expect(await listArtistReviewRows()).toEqual([]);
+  });
+
+  it("updateArtistSocial corrects the URL AND approves it (operator-owned, confirmed, reviewed)", async () => {
+    await seedSocial(db, {
+      id: "s-firecrawl",
+      platform: "instagram",
+      reviewedAt: null,
+      source: "firecrawl",
+      status: "candidate",
+    });
+
+    // A pasted profile deep-link normalizes to the profile root on the way in.
+    const updated = await updateArtistSocial("s-firecrawl", "https://www.instagram.com/dimension/");
+
+    expect(updated.url).toBe("https://www.instagram.com/dimension");
+    expect(updated.source).toBe("operator");
+    expect(updated.status).toBe("confirmed");
+    expect(updated.reviewedAt).not.toBeNull();
+    // The corrected link left the fresh-links queue.
+    expect(await listArtistReviewRows()).toEqual([]);
+  });
+
+  it("updateArtistSocial rejects a URL whose host is the wrong platform", async () => {
+    await seedSocial(db, {
+      id: "s-firecrawl",
+      platform: "instagram",
+      reviewedAt: null,
+      source: "firecrawl",
+      status: "candidate",
+    });
+
+    await expect(
+      updateArtistSocial("s-firecrawl", "https://www.youtube.com/@dimension"),
+    ).rejects.toBeInstanceOf(InvalidArtistSocialError);
+
+    // The bad edit never landed — the row is still the fresh firecrawl candidate.
+    const row = await readSocial(db, "s-firecrawl");
+    expect(row?.status).toBe("candidate");
+    expect(row?.reviewed_at).toBeNull();
   });
 
   it("listArtistReviewRows counts only UNREVIEWED links, oldest-first anchor", async () => {
