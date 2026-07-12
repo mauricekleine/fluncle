@@ -23,11 +23,12 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { Image } from "expo-image";
 import { useVideoPlayer, VideoView } from "expo-video";
-import { useAudioPlayer, useAudioPlayerStatus } from "expo-audio";
+import { useAudioPlayer } from "expo-audio";
+import { LinearGradient } from "expo-linear-gradient";
 import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
 import { type TrackListItem } from "@fluncle/contracts";
 import { resolveCardMedia } from "@/lib/media";
-import { observationRail, soundRail } from "@/lib/feed-rail";
+import { soundRail } from "@/lib/feed-rail";
 import { useBackgroundPause } from "@/audio/session";
 import { color, font } from "@/theme/tokens";
 
@@ -42,21 +43,63 @@ import { color, font } from "@/theme/tokens";
 // in the simulator after merge.
 export const NATIVE_TAB_BAR_HEIGHT = 49;
 
-// OPERATOR RULING 2026-07-11: no scrim pane. The earlier AA-worst-case fix laid a
-// multi-stop warm-dark gradient over the lower screen; on lighter footage it read as a
-// clearly visible dark opaque box (TikTok doesn't do it either). So the footage stays
-// UNVEILED — no gradient — and legibility rides firm per-glyph shadows instead (the
-// TikTok-style treatment: a wide, warm-dark, high-alpha text shadow on every overlay
-// glyph; see `TEXT_SHADOW` below). The tradeoff is accepted by the operator: against a
-// pure-white cover the thin caption strokes can dip under the WCAG AA 4.5:1 target, and
-// that worst case is taken knowingly for footage-first parity over an occluding box.
+// OPERATOR RULING 2026-07-12: the scrim returns (third iteration). The previous fix
+// removed the gradient entirely because iteration two had a visible ONSET LINE — its
+// first stop jumped 0→0.35 alpha at 14% of the height, a perceptible edge on light
+// footage. The direction was right; the failure was the hard start. This iteration is a
+// bottom gradient that reaches FULL opacity at the very bottom screen edge (behind the
+// tab bar too) with an IMPERCEPTIBLE onset: many stops on an eased curve where alpha
+// stays under ~0.05 through the first third of the gradient's height, so there is no
+// human-visible start line even on a pure-white cover. The per-glyph shadows below stay
+// — they COMPOSE with the scrim (the caption/rail sit in the gradient's ≥0.7 zone, and
+// the shadows carry the last mile). See SCRIM_* below for the exact stops.
 const TEXT_SHADOW = {
   // Warm near-black (r>g>b, never pure black — DESIGN.md), wide + strong so a light
-  // glyph reads on light footage without a pane behind it.
+  // glyph reads on light footage; composes over the scrim below it.
   textShadowColor: "rgba(9, 6, 3, 0.92)",
   textShadowOffset: { height: 1, width: 0 },
   textShadowRadius: 10,
 } as const;
+
+// THE SCRIM (operator ruling 2026-07-12). A warm near-black (rgb(9,6,3) — never pure
+// #000, DESIGN.md) bottom-to-top gradient. Two properties are load-bearing:
+//
+//  1. IMPERCEPTIBLE ONSET — no visible start line. The alpha ramp is eased (a soft
+//     quadratic toe): it holds under ~0.05 through the first third of the gradient
+//     (locations ≤ 0.34 → alpha ≤ 0.04), so where the box begins over the cover there is
+//     nothing an eye can catch. This is the exact failure of iteration two (0→0.35 at
+//     14%) inverted.
+//  2. OPAQUE FLOOR — alpha 1.0 at the very bottom edge, so the area behind the floating
+//     (translucent) native tab bar reads as solid warm-black, not a fading cover.
+//
+// Rendered bottom-anchored and sized by `scrimHeight()` so the highest overlay (the
+// rail's top) lands inside the ≥0.7 band. Colours and locations index-align.
+const SCRIM_RGB = "9, 6, 3";
+const SCRIM_COLORS = [
+  `rgba(${SCRIM_RGB}, 0)`,
+  `rgba(${SCRIM_RGB}, 0.01)`,
+  `rgba(${SCRIM_RGB}, 0.04)`,
+  `rgba(${SCRIM_RGB}, 0.12)`,
+  `rgba(${SCRIM_RGB}, 0.3)`,
+  `rgba(${SCRIM_RGB}, 0.55)`,
+  `rgba(${SCRIM_RGB}, 0.8)`,
+  `rgba(${SCRIM_RGB}, 0.95)`,
+  `rgba(${SCRIM_RGB}, 1)`,
+] as const;
+const SCRIM_LOCATIONS = [0, 0.16, 0.34, 0.44, 0.52, 0.58, 0.64, 0.8, 1] as const;
+// The rail is the tallest bottom overlay: three RailAction stacks (icon box 36 + label,
+// gap 16) rising from the shared bottom line. This is the height of that band, used to
+// size the scrim so the rail's TOP sits inside the opaque ≥0.7 zone.
+const RAIL_BAND = 196;
+
+// The scrim's total height, from the opaque bottom edge up to its imperceptible toe.
+// Sized so the highest overlay (bottomLine + RAIL_BAND from the bottom) lands at ~0.66
+// down the gradient — inside the ≥0.7 band (alpha ≈ 0.82 there) — while the top third
+// stays under 0.05. Clamped to the screen so it never overflows; the operator verifies
+// the exact clearance on-device (as with NATIVE_TAB_BAR_HEIGHT).
+function scrimHeight(overlayTop: number, screenHeight: number): number {
+  return Math.min(screenHeight, overlayTop / 0.34);
+}
 
 // OPERATOR RULING 2026-07-11 (device pass): the firm TEXT_SHADOW above is right for the
 // thin text strokes (caption + rail labels), but on an Ionicons/MaterialCommunityIcons
@@ -96,6 +139,9 @@ export const FeedCard = memo(function FeedCard({ finding, active, soundOn, onTog
   // label ("Sound") bottom-aligns with the caption's last line (the coordinate + Found
   // row) — one line, not two staggered ones (operator device pass).
   const bottomLine = bottomFloor + 10;
+  // The scrim rises from the opaque bottom edge past the tallest overlay (the rail top)
+  // and fades to nothing above it — sized so the rail/caption band sits in its ≥0.7 zone.
+  const scrimH = scrimHeight(bottomLine + RAIL_BAND, height);
   // Stabilize the resolved media so effects can depend on the object itself (not
   // computed `media.kind`/`media.previewUrl` member reads) and only re-run when the
   // finding actually changes.
@@ -109,54 +155,34 @@ export const FeedCard = memo(function FeedCard({ finding, active, soundOn, onTog
     media.kind === "cover" && media.previewUrl ? media.previewUrl : null,
   );
 
-  // The recovered observation (VOICE.md's first-heard surface): Fluncle's own
-  // voice over the finding, on its own player so it never collides with the
-  // card's video/preview track. Only loaded when the finding actually has one.
-  const observationUrl = finding.observationAudioUrl ?? null;
-  const observation = useAudioPlayer(observationUrl);
-  const observationStatus = useAudioPlayerStatus(observation);
-  const observing = active && observationStatus.playing;
-  // Stable rail labels + a11y hints (the Chrome Rule); the icon/gold tint carry state.
-  const observationControl = observationRail(observing);
-  // The observation and the card's sound are mutually exclusive: while the observation
-  // plays, the Sound control renders its muted state (never gold), and the audio effect
-  // below keeps the card track silent. When it ends, `soundOn` restores the card's sound.
-  const soundControl = soundRail(soundOn, observing);
+  // Stable rail labels + a11y hints (the Chrome Rule); the icon + gold tint carry state.
+  const soundControl = soundRail(soundOn);
 
-  // Only the visible card plays; sound follows the global toggle. While the
-  // observation plays it owns the one sound source — keep the card media silent.
+  // Only the visible card plays; sound follows the global toggle.
   useEffect(() => {
     if (media.kind === "video") {
       // eslint-disable-next-line react-hooks/immutability -- expo-video exposes `muted` as the documented imperative player API.
-      player.muted = !soundOn || observing;
-      if (active && !observing) {
+      player.muted = !soundOn;
+      if (active) {
         player.play();
       } else {
         player.pause();
       }
     } else if (media.previewUrl) {
-      if (active && soundOn && !observing) {
+      if (active && soundOn) {
         audio.play();
       } else {
         audio.pause();
       }
     }
-  }, [active, audio, media, observing, player, soundOn]);
+  }, [active, audio, media, player, soundOn]);
 
-  // Scrolling the card away stops a playing observation (visible-card-only rule).
-  useEffect(() => {
-    if (!active && observationStatus.playing) {
-      observation.pause();
-    }
-  }, [active, observation, observationStatus.playing]);
-
-  // Hold the wake lock while this card is the one actually making sound (an
-  // audible video, or Fluncle's observation) so a long clip never lets the
-  // screen sleep mid-listen. A stable per-card tag keeps the calls idempotent;
-  // the cleanup always releases, so locks can't leak on pause/scroll/unmount.
+  // Hold the wake lock while this card is the one actually making sound (an audible
+  // video) so a long clip never lets the screen sleep mid-listen. A stable per-card tag
+  // keeps the calls idempotent; the cleanup always releases, so locks can't leak on
+  // pause/scroll/unmount.
   const keepAwakeTag = useId();
-  const audibleVideo = active && media.kind === "video" && soundOn && !observing;
-  const playing = observing || audibleVideo;
+  const playing = active && media.kind === "video" && soundOn;
   useEffect(() => {
     if (!playing) {
       return;
@@ -167,21 +193,6 @@ export const FeedCard = memo(function FeedCard({ finding, active, soundOn, onTog
     };
   }, [keepAwakeTag, playing]);
 
-  const stopObservation = useCallback(() => {
-    observation.pause();
-  }, [observation]);
-
-  const toggleObservation = useCallback(() => {
-    if (observing) {
-      stopObservation();
-      return;
-    }
-    player.pause();
-    audio.pause();
-    void observation.seekTo(0);
-    observation.play();
-  }, [observing, stopObservation, player, audio, observation]);
-
   // No background audio (reinforces the session rule; covers calls / route changes).
   const pauseAll = useCallback(() => {
     if (media.kind === "video") {
@@ -189,10 +200,7 @@ export const FeedCard = memo(function FeedCard({ finding, active, soundOn, onTog
     } else {
       audio.pause();
     }
-    if (observing) {
-      observation.pause();
-    }
-  }, [audio, media, observation, observing, player]);
+  }, [audio, media, player]);
   useBackgroundPause(pauseAll);
 
   // Cover rung: a slow eclipse drift (The Light-Years cover card is alive, not static).
@@ -231,32 +239,27 @@ export const FeedCard = memo(function FeedCard({ finding, active, soundOn, onTog
         </Animated.View>
       )}
 
-      {/* No scrim pane (operator ruling 2026-07-11 — it read as a dark box on light
-          footage). The footage stays unveiled; per-glyph shadows carry legibility. */}
+      {/* The scrim (operator ruling 2026-07-12): a warm near-black gradient anchored to
+          the bottom edge, opaque at the very bottom (behind the tab bar) and fading to an
+          imperceptible onset above the overlays — no visible start line on a light cover.
+          Non-interactive so the rail below still takes every tap. */}
+      <LinearGradient
+        colors={SCRIM_COLORS}
+        end={{ x: 0, y: 1 }}
+        locations={SCRIM_LOCATIONS}
+        pointerEvents="none"
+        start={{ x: 0, y: 0 }}
+        style={{ bottom: 0, height: scrimH, left: 0, position: "absolute", right: 0 }}
+      />
 
-      {/* Right action rail (TikTok-style). Each control keeps ONE stable label (the
-          Chrome Rule); the icon + the gold tint carry state, never the word. Every glyph
-          renders inside a fixed 36×36 centered box (styles.railIcon) so all four advance
-          boxes center on the rail axis identically, regardless of the glyph's internal
-          artwork — no per-glyph nudges. Icons carry the tight ICON_SHADOW halo; gold
-          marks the active state (Ignition). */}
+      {/* Right action rail (TikTok-style): Spotify / Share / Sound. Observation discovery
+          moved to the Radio tab (operator ruling 2026-07-12), so the card rail no longer
+          carries it. Each control keeps ONE stable label (the Chrome Rule); the icon + the
+          gold tint carry state, never the word. Every glyph renders inside a fixed 36×36
+          centered box (styles.railIcon) so all three advance boxes center on the rail axis
+          identically, regardless of the glyph's internal artwork — no per-glyph nudges.
+          Icons carry the tight ICON_SHADOW halo; gold marks the active state (Ignition). */}
       <View style={[styles.rail, { bottom: bottomLine }]}>
-        {observationUrl ? (
-          <RailAction
-            accessibilityLabel={observationControl.accessibilityLabel}
-            active={observationControl.active}
-            icon={
-              <Ionicons
-                name={observing ? "headset" : "headset-outline"}
-                size={28}
-                color={observing ? color.eclipseGold : color.starlightCream}
-                style={styles.icon}
-              />
-            }
-            label={observationControl.label}
-            onPress={toggleObservation}
-          />
-        ) : null}
         <RailAction
           icon={
             <MaterialCommunityIcons
@@ -301,7 +304,7 @@ export const FeedCard = memo(function FeedCard({ finding, active, soundOn, onTog
           operator ruling: it floated too far above the bar). The title leads (PRODUCT.md
           — artist + title first); the gold coordinate sits below it at reduced prominence,
           still the identity mark but no longer out-shouting. Every glyph carries the firm
-          per-glyph shadow (no scrim pane) so it reads on light footage. */}
+          per-glyph shadow, which composes over the scrim so it reads on light footage. */}
       <View style={{ bottom: bottomLine, gap: 8, left: 16, position: "absolute", right: 96 }}>
         <Text
           style={[font.title, styles.captionShadow, { color: color.starlightCream }]}
@@ -367,21 +370,19 @@ const styles = StyleSheet.create({
   // The gold coordinate, demoted below the title: the identity gold (not the brighter
   // Eclipse Glow) at a size under the title's, so it reads as a mark, not a headline.
   captionMeta: { alignItems: "baseline", flexDirection: "row", gap: 8 },
-  // The firm per-glyph shadow that replaces the scrim pane (operator ruling): with no
-  // gradient behind it, every caption glyph carries this warm-dark halo so it reads on
-  // light footage. The rail labels share it; the rail icons use the tighter ICON_SHADOW
-  // (the firm one smeared into a dark blotch behind the solid glyphs — device pass).
+  // The firm per-glyph shadow that composes over the scrim (operator ruling): every
+  // caption glyph carries this warm-dark halo on top of the gradient so it reads on light
+  // footage. The rail labels share it; the rail icons use the tighter ICON_SHADOW (the
+  // firm one smeared into a dark blotch behind the solid glyphs — device pass).
   captionShadow: TEXT_SHADOW,
   // Rail glyphs: the tight halo, not the firm text shadow (see ICON_SHADOW). Every icon
   // renders inside the fixed 36×36 `railIcon` box, so its advance box centers on the rail
-  // axis on its own — no per-glyph translateX estimates. If a glyph whose artwork is
-  // optically off-center (the headset's mic boom) still reads off after true container
-  // centering, the operator judges it on-device rather than re-introducing a nudge.
+  // axis on its own — no per-glyph translateX estimates.
   icon: ICON_SHADOW,
   logId: { color: color.eclipseGold, fontSize: 13 },
   rail: { alignItems: "center", gap: 16, position: "absolute", right: 6 },
   railIcon: { alignItems: "center", height: 36, justifyContent: "center", width: 36 },
-  // Wide enough for the longest stable label ("Observation") on one line.
+  // Wide enough for the longest stable label ("Spotify") on one line.
   railItem: { alignItems: "center", gap: 3, width: 80 },
   railLabel: {
     color: color.starlightCream,

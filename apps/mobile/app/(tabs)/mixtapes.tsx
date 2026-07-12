@@ -6,7 +6,6 @@
 // + link out (see the detail screen).
 import { FlatList, Pressable, StyleSheet, Text, View } from "react-native";
 import { useRouter } from "expo-router";
-import { Ionicons } from "@expo/vector-icons";
 import { Image } from "expo-image";
 import { type MixtapeDTO } from "@fluncle/contracts";
 import { useMixtapes } from "@/api/hooks";
@@ -75,31 +74,41 @@ export default function MixtapesScreen() {
   );
 }
 
+// One mixtape as a cover-led row: a generous leading artwork, then the coordinate,
+// title, and quiet meta line (the finding-row / archive-row idiom). The whole row is the
+// pressable — it opens the native detail — so there is NO trailing chevron (an archive
+// row carries one only to signal a link OUT of the app; this navigates in-app). The
+// horizontal layout lives on a plain inner View with a static StyleSheet style: a
+// Pressable style FUNCTION drops flexDirection under NativeWind (see finding-row.tsx),
+// which is what stacked the cover, body, and chevron onto their own lines.
 function MixtapeRow({ mixtape, onPress }: { mixtape: MixtapeDTO; onPress: () => void }) {
   return (
-    <Pressable
-      accessibilityRole="button"
-      onPress={onPress}
-      style={({ pressed }) => [styles.row, pressed ? styles.rowPressed : null]}
-    >
-      {mixtape.logId ? (
-        <Image
-          contentFit="cover"
-          source={mixtapeCoverUrl(mixtape.logId, "thumb")}
-          style={styles.cover}
-          transition={200}
-        />
-      ) : (
-        <View style={[styles.cover, styles.coverEmpty]} />
+    <Pressable accessibilityRole="button" onPress={onPress}>
+      {({ pressed }) => (
+        <View style={[styles.row, pressed ? styles.rowPressed : null]}>
+          {mixtape.logId ? (
+            <Image
+              contentFit="cover"
+              source={mixtapeCoverUrl(mixtape.logId, "thumb")}
+              style={styles.cover}
+              transition={200}
+            />
+          ) : (
+            <View style={[styles.cover, styles.coverEmpty]} />
+          )}
+          <View style={styles.rowBody}>
+            {mixtape.logId ? (
+              <Text style={[font.numeric, styles.rowId, pressed ? styles.rowIdHot : null]}>
+                {mixtape.logId}
+              </Text>
+            ) : null}
+            <Text numberOfLines={2} style={[font.title, styles.rowTitle]}>
+              {displayTitle(mixtape.title)}
+            </Text>
+            <Text style={[font.body, styles.rowMeta]}>{metaLine(mixtape)}</Text>
+          </View>
+        </View>
       )}
-      <View style={styles.rowBody}>
-        {mixtape.logId ? <Text style={[font.numeric, styles.rowId]}>{mixtape.logId}</Text> : null}
-        <Text numberOfLines={2} style={[font.title, styles.rowTitle]}>
-          {displayTitle(mixtape.title)}
-        </Text>
-        <Text style={[font.body, styles.rowMeta]}>{metaLine(mixtape)}</Text>
-      </View>
-      <Ionicons color={color.stardust} name="chevron-forward" size={20} />
     </Pressable>
   );
 }
@@ -111,21 +120,31 @@ const styles = StyleSheet.create({
     width: 72,
   },
   coverEmpty: { backgroundColor: color.tapeBlack },
-  header: { gap: 8, marginBottom: 8, paddingHorizontal: 4 },
+  // Header + rows share a left edge: list padding (10) + inner padding (10) = 20, so the
+  // nameplate/title align with each row's cover.
+  header: { gap: 8, marginBottom: 8, paddingHorizontal: 10 },
   intro: { color: color.stardust, maxWidth: 340 },
-  list: { gap: 14, padding: 20, paddingTop: 72 },
+  list: { gap: 4, padding: 10, paddingTop: 72 },
   nameplate: { color: color.stardust, fontSize: 12, letterSpacing: 0.5 },
+  // The pressable card: a generous leading cover beside the coordinate/title/meta column,
+  // padded + rounded so the press wash reads as a card highlight (The Ignition Rule).
   row: {
     alignItems: "center",
+    borderRadius: radius.md,
     flexDirection: "row",
     gap: 14,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
   },
   rowBody: { flex: 1, gap: 3 },
   rowId: { color: color.eclipseGold, fontSize: 13 },
+  // Press ignites the coordinate from its resting identity gold to Eclipse Glow (mirrors
+  // finding-row / archive-row), under the Gold Veil wash.
+  rowIdHot: { color: color.eclipseGlow },
   rowMeta: { color: color.stardust, fontSize: 13 },
-  rowPressed: { opacity: 0.6 },
+  rowPressed: { backgroundColor: color.goldVeil },
   rowTitle: { color: color.starlightCream },
   screen: { backgroundColor: color.deepField, flex: 1 },
-  state: { color: color.stardust, paddingHorizontal: 4, paddingVertical: 24, textAlign: "center" },
+  state: { color: color.stardust, paddingHorizontal: 10, paddingVertical: 24, textAlign: "center" },
   title: { color: color.starlightCream, fontSize: 30 },
 });

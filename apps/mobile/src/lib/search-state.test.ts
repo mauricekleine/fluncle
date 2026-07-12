@@ -7,13 +7,14 @@
 // (so a cold field never flashes an empty state, and a one-char query never fires the
 // server), and the entity partitioning (canonical order, empty groups dropped).
 
-import { type SearchEntity } from "@fluncle/contracts/orpc";
+import { type SearchEntity, type SearchHit } from "@fluncle/contracts/orpc";
 
 import {
   MIN_QUERY_LENGTH,
   entityWebPath,
   normalizeQuery,
   partitionEntities,
+  partitionTracks,
   searchView,
 } from "@/lib/search-state";
 
@@ -92,7 +93,39 @@ assertEqual(groups[1]?.kind, "album", "albums follow (labels dropped, none prese
 
 assertEqual(partitionEntities([]).length, 0, "no entities → no groups");
 
-// 9. Entity web path: kind decides the route, nothing else.
+// 9. Track partitioning (operator ruling 2026-07-12): certified "Fluncle's Findings"
+//    ALWAYS before uncertified "Tracks", order preserved within each, empty groups dropped.
+function hit(trackId: string, certified: boolean): SearchHit {
+  return { artists: ["Netsky"], certified, title: trackId, trackId };
+}
+const mixed = partitionTracks([
+  hit("uncert-1", false),
+  hit("cert-1", true),
+  hit("uncert-2", false),
+  hit("cert-2", true),
+]);
+assertEqual(mixed.length, 2, "both a certified and an uncertified group render");
+assertEqual(mixed[0]?.heading, "Fluncle's Findings", "certified group leads");
+assertEqual(mixed[0]?.certified, true, "the leading group is the certified one");
+assertEqual(mixed[0]?.hits.length, 2, "both certified hits land in the findings group");
+assertEqual(mixed[0]?.hits[0]?.trackId, "cert-1", "certified order preserved (cert-1 first)");
+assertEqual(mixed[1]?.heading, "Tracks", "uncertified group is headed 'Tracks'");
+assertEqual(mixed[1]?.certified, false, "the second group is the uncertified one");
+assertEqual(mixed[1]?.hits[0]?.trackId, "uncert-1", "uncertified order preserved");
+
+// Only certified present → a single "Fluncle's Findings" group, no empty "Tracks".
+const onlyCert = partitionTracks([hit("c", true)]);
+assertEqual(onlyCert.length, 1, "no uncertified hits → only the findings group");
+assertEqual(onlyCert[0]?.heading, "Fluncle's Findings", "the sole group is the findings one");
+
+// Only uncertified present → a single "Tracks" group, no empty findings group.
+const onlyUncert = partitionTracks([hit("u", false)]);
+assertEqual(onlyUncert.length, 1, "no certified hits → only the tracks group");
+assertEqual(onlyUncert[0]?.heading, "Tracks", "the sole group is the tracks one");
+
+assertEqual(partitionTracks([]).length, 0, "no results → no track groups");
+
+// 10. Entity web path: kind decides the route, nothing else.
 assertEqual(
   entityWebPath({ kind: "artist", slug: "netsky" }),
   "/artist/netsky",
