@@ -1112,6 +1112,30 @@ export const userSavedFindings = sqliteTable(
   (table) => [uniqueIndex("user_saved_findings_user_track_idx").on(table.userId, table.trackId)],
 );
 
+// A signed-in user's saved `/mix` sets — the account-backed home for a chained
+// set. `/mix` stays fully usable anonymous (the set + taste live in the URL, the
+// wire format); signing in only SAVES a chain so it survives the tab. `set_tokens`
+// is the serialized `?set=` chain stored VERBATIM (same codec the route uses), and
+// `taste` the serialized `?taste=` seed, so opening a saved set round-trips through
+// the exact serializer that wrote it. There is no natural unique key (a user may
+// keep two differently-named sets of the same tracks), so the row `id` is the
+// identity; the index serves the newest-first list. `user_id` is a logical FK (no
+// SQL cascade), matching every sibling per-user table — deletion is application-code
+// (accountDeletionStatements), never a constraint.
+export const userSavedSets = sqliteTable(
+  "user_saved_sets",
+  {
+    createdAt: text("created_at").notNull(),
+    id: text("id").primaryKey(),
+    name: text("name").notNull(),
+    setTokens: text("set_tokens").notNull(),
+    taste: text("taste"),
+    updatedAt: text("updated_at").notNull(),
+    userId: text("user_id").notNull(),
+  },
+  (table) => [index("user_saved_sets_user_updated_idx").on(table.userId, table.updatedAt)],
+);
+
 export const userDataExports = sqliteTable(
   "user_data_exports",
   {

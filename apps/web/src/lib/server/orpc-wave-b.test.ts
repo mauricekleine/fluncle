@@ -18,6 +18,10 @@ const collectLogId = vi.fn();
 const listSavedFindings = vi.fn();
 const saveFinding = vi.fn();
 const deleteSavedFinding = vi.fn();
+const listSavedSets = vi.fn();
+const saveSet = vi.fn();
+const updateSavedSet = vi.fn();
+const deleteSavedSet = vi.fn();
 const listUserSubmissions = vi.fn();
 const exportAccountData = vi.fn();
 const getAccountExport = vi.fn();
@@ -28,16 +32,20 @@ vi.mock("./account-data", () => ({
   collectLogId: (...a: unknown[]) => collectLogId(...a),
   deleteAccount: (...a: unknown[]) => deleteAccount(...a),
   deleteSavedFinding: (...a: unknown[]) => deleteSavedFinding(...a),
+  deleteSavedSet: (...a: unknown[]) => deleteSavedSet(...a),
   exportAccountData: (...a: unknown[]) => exportAccountData(...a),
   getAccountExport: (...a: unknown[]) => getAccountExport(...a),
   getGalaxyProgress: (...a: unknown[]) => getGalaxyProgress(...a),
   listSavedFindings: (...a: unknown[]) => listSavedFindings(...a),
+  listSavedSets: (...a: unknown[]) => listSavedSets(...a),
   listUserSubmissions: (...a: unknown[]) => listUserSubmissions(...a),
   meResponse: (...a: unknown[]) => meResponse(...a),
   mergeGalaxyProgress: (...a: unknown[]) => mergeGalaxyProgress(...a),
   requireAccountMutation: (...a: unknown[]) => requireAccountMutation(...a),
   saveFinding: (...a: unknown[]) => saveFinding(...a),
+  saveSet: (...a: unknown[]) => saveSet(...a),
   updatePrivateUsername: (...a: unknown[]) => updatePrivateUsername(...a),
+  updateSavedSet: (...a: unknown[]) => updateSavedSet(...a),
 }));
 
 // ── public-auth: the session resolver + the CSRF token issuer ────────────────
@@ -81,6 +89,10 @@ beforeEach(() => {
     listSavedFindings,
     saveFinding,
     deleteSavedFinding,
+    listSavedSets,
+    saveSet,
+    updateSavedSet,
+    deleteSavedSet,
     listUserSubmissions,
     exportAccountData,
     getAccountExport,
@@ -267,6 +279,136 @@ describe("oRPC /me — DELETE /me/saved-findings/{trackId} (unsave_private_findi
     expect(response?.status).toBe(200);
     expect(await readJson(response)).toEqual({ ok: true });
     expect(deleteSavedFinding.mock.calls[0]?.[1]).toBe("abc");
+  });
+});
+
+// ── list_private_saved_sets (GET /me/saved-sets) ─────────────────────────────
+
+const SAVED_SET = {
+  createdAt: "2026-01-01T00:00:00.000Z",
+  id: "set-1",
+  name: "My set",
+  setTokens: "4iV5W9uYEdYUVa79Axb7Rh,1301WleyT98MSxVHPZCA6M",
+  updatedAt: "2026-01-01T00:00:00.000Z",
+};
+
+describe("oRPC /me — GET /me/saved-sets (list_private_saved_sets)", () => {
+  it("serves { ok: true, savedSets }", async () => {
+    signIn();
+    listSavedSets.mockResolvedValueOnce({ ok: true, savedSets: [SAVED_SET] });
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(get(`${BASE}/me/saved-sets`));
+
+    expect(response?.status).toBe(200);
+    expect(await readJson(response)).toEqual({ ok: true, savedSets: [SAVED_SET] });
+  });
+
+  it("401s with NO session (the read tier guard)", async () => {
+    requirePublicUser.mockResolvedValueOnce(
+      jsonError(401, "auth_required", "Sign in to use this private account route"),
+    );
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(get(`${BASE}/me/saved-sets`));
+
+    expect(response?.status).toBe(401);
+  });
+});
+
+// ── save_private_set (POST /me/saved-sets) ───────────────────────────────────
+
+describe("oRPC /me — POST /me/saved-sets (save_private_set)", () => {
+  it("serves { ok: true, savedSet } on a valid save", async () => {
+    signIn();
+    saveSet.mockResolvedValueOnce({ ok: true, savedSet: SAVED_SET });
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      body(`${BASE}/me/saved-sets`, "POST", { set: SAVED_SET.setTokens }),
+    );
+
+    expect(response?.status).toBe(200);
+    expect(await readJson(response)).toEqual({ ok: true, savedSet: SAVED_SET });
+    expect(saveSet.mock.calls[0]?.[1]).toEqual({ set: SAVED_SET.setTokens });
+  });
+
+  it("carries the helper's empty_set/400 Response byte-for-byte", async () => {
+    signIn();
+    saveSet.mockResolvedValueOnce(jsonError(400, "empty_set", "There's no set to save yet"));
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(body(`${BASE}/me/saved-sets`, "POST", { set: "" }));
+
+    expect(response?.status).toBe(400);
+    expect(await readJson(response)).toEqual({
+      code: "empty_set",
+      message: "There's no set to save yet",
+      ok: false,
+    });
+  });
+
+  it("403s a CSRF-rejected write byte-for-byte (the mutation guard)", async () => {
+    requireAccountMutation.mockResolvedValueOnce(
+      jsonError(403, "csrf_required", "Invalid account mutation token"),
+    );
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      body(`${BASE}/me/saved-sets`, "POST", { set: SAVED_SET.setTokens }),
+    );
+
+    expect(response?.status).toBe(403);
+    expect(saveSet).not.toHaveBeenCalled();
+  });
+});
+
+// ── update_private_saved_set (PATCH /me/saved-sets/{id}) ──────────────────────
+
+describe("oRPC /me — PATCH /me/saved-sets/{id} (update_private_saved_set)", () => {
+  it("serves { ok: true, savedSet } and passes the path id + body to the helper", async () => {
+    signIn();
+    updateSavedSet.mockResolvedValueOnce({ ok: true, savedSet: { ...SAVED_SET, name: "Renamed" } });
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      body(`${BASE}/me/saved-sets/set-1`, "PATCH", { name: "Renamed" }),
+    );
+
+    expect(response?.status).toBe(200);
+    expect(updateSavedSet.mock.calls[0]?.[1]).toBe("set-1");
+    expect(updateSavedSet.mock.calls[0]?.[2]).toMatchObject({ name: "Renamed" });
+  });
+
+  it("carries the helper's set_not_found/404 (another user's id)", async () => {
+    signIn();
+    updateSavedSet.mockResolvedValueOnce(jsonError(404, "set_not_found", "No set to update"));
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(body(`${BASE}/me/saved-sets/nope`, "PATCH", { name: "x" }));
+
+    expect(response?.status).toBe(404);
+  });
+});
+
+// ── delete_private_saved_set (DELETE /me/saved-sets/{id}) ─────────────────────
+
+describe("oRPC /me — DELETE /me/saved-sets/{id} (delete_private_saved_set)", () => {
+  it("serves the bare { ok: true } and passes the path id", async () => {
+    signIn();
+    deleteSavedSet.mockResolvedValueOnce({ ok: true });
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      new Request(`${BASE}/me/saved-sets/set-1`, {
+        headers: { "Content-Type": "application/json" },
+        method: "DELETE",
+      }),
+    );
+
+    expect(response?.status).toBe(200);
+    expect(await readJson(response)).toEqual({ ok: true });
+    expect(deleteSavedSet.mock.calls[0]?.[1]).toBe("set-1");
   });
 });
 
@@ -560,5 +702,11 @@ describe("oRPC OpenAPI generation — Wave B operationIds", () => {
       "getPrivateAccountExport",
     );
     expect(document.paths["/me/submissions"]?.get?.operationId).toBe("listPrivateSubmissions");
+    expect(document.paths["/me/saved-sets"]?.get?.operationId).toBe("listPrivateSavedSets");
+    expect(document.paths["/me/saved-sets"]?.post?.operationId).toBe("savePrivateSet");
+    expect(document.paths["/me/saved-sets/{id}"]?.patch?.operationId).toBe("updatePrivateSavedSet");
+    expect(document.paths["/me/saved-sets/{id}"]?.delete?.operationId).toBe(
+      "deletePrivateSavedSet",
+    );
   });
 });

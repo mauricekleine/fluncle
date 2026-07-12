@@ -254,6 +254,7 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   delete_clip_schedule: "operator",
   delete_edition: "operator",
   delete_private_account: "private-session",
+  delete_private_saved_set: "private-session",
   delete_recording: "operator",
   delete_subscription: "operator",
   draft_track_social: "admin",
@@ -347,6 +348,7 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // see what it has already had rejected, and the `/admin` queue reads it every tick.
   list_note_rejections: "admin",
   list_private_saved_findings: "private-session",
+  list_private_saved_sets: "private-session",
   list_private_submissions: "private-session",
   // The prompt registry's operator read — OPERATOR tier. It returns every prompt's full
   // edit history, and it is the surface the operator edits Fluncle's voice from; editing
@@ -462,6 +464,7 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // promotes a candidate onto the public artist page (the trust gate, at the link grain).
   review_artist_social: "operator",
   save_private_finding: "private-session",
+  save_private_set: "private-session",
   send_edition: "operator",
   // The catalogue capture budget + its kill switch — operator tier, like `set_clip_drip`
   // and `set_publish_advance`. It is the ONE operator-tier op in the `admin-catalogue`
@@ -520,6 +523,7 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // retune is a flip rather than a deploy.
   update_note_gate: "operator",
   update_private_profile: "private-session",
+  update_private_saved_set: "private-session",
   // Appending a prompt version (an edit, a rollback, or a reset) — OPERATOR tier. A
   // prompt IS code: a bad edit silently degrades every artifact it touches. An agent
   // token 403s, so no automation can rewrite the words Fluncle speaks in.

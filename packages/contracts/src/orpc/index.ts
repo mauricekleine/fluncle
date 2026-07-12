@@ -51,6 +51,7 @@ import { healthContract } from "./health";
 import { meContract } from "./me";
 import { meGalaxyContract } from "./me-galaxy";
 import { meSavedContract } from "./me-saved";
+import { meSetsContract } from "./me-sets";
 import { mixContract } from "./mix";
 import { mixtapesContract } from "./mixtapes";
 import { newsletterContract } from "./newsletter";
@@ -234,6 +235,13 @@ export {
   mergePrivateGalaxyProgress,
 } from "./me-galaxy";
 export { listPrivateSavedFindings, savePrivateFinding, unsavePrivateFinding } from "./me-saved";
+export {
+  deletePrivateSavedSet,
+  listPrivateSavedSets,
+  savePrivateSet,
+  SavedSetSchema,
+  updatePrivateSavedSet,
+} from "./me-sets";
 export { listMixtapes } from "./mixtapes";
 export { type NewsletterBody, subscribeNewsletter } from "./newsletter";
 export { getRadioNowPlaying, getRandomRadioTrack } from "./radio";
@@ -320,6 +328,7 @@ export const contract = {
   ...meContract,
   ...meGalaxyContract,
   ...meSavedContract,
+  ...meSetsContract,
   ...mixContract,
   ...mixtapesContract,
   ...newsletterContract,

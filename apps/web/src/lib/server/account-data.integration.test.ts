@@ -71,6 +71,12 @@ describe("deleteAccount (real SQL via accountDeletionStatements)", () => {
           values (?, ?, ?, ?, ?)`,
       },
       {
+        args: [`ss-${userId}`, userId, `A set`, "4iV5W9uYEdYUVa79Axb7Rh", null, now, now],
+        sql: `insert into user_saved_sets
+          (id, user_id, name, set_tokens, taste, created_at, updated_at)
+          values (?, ?, ?, ?, ?, ?, ?)`,
+      },
+      {
         args: [`gc-${userId}`, userId, trackId, logId, now, now, "web"],
         sql: `insert into user_galaxy_collections
           (id, user_id, track_id, log_id, first_collected_at, last_collected_at, source_surface)
@@ -108,6 +114,7 @@ describe("deleteAccount (real SQL via accountDeletionStatements)", () => {
     // 1. Hard-deleted per-user tables are now empty for this user.
     for (const table of [
       "user_saved_findings",
+      "user_saved_sets",
       "user_galaxy_collections",
       "user_galaxy_state",
       "push_tokens",
@@ -164,6 +171,11 @@ describe("deleteAccount (real SQL via accountDeletionStatements)", () => {
       `select count(*) as n from user_saved_findings where user_id = 'user-B'`,
     );
     expect(Number(bSaved.rows[0]?.n)).toBe(1);
+
+    const bSets = await db.execute(
+      `select count(*) as n from user_saved_sets where user_id = 'user-B'`,
+    );
+    expect(Number(bSets.rows[0]?.n)).toBe(1);
 
     const bUser = await db.execute({
       args: ["user-B"],
@@ -262,5 +274,121 @@ describe("/me cross-user data scoping (real SQL, two seeded users)", () => {
 
     const bSubs = await listUserSubmissions(publicUser(userB));
     expect(bSubs.submissions.map((s) => s.id)).toEqual(["sub-b"]);
+  });
+});
+
+describe("saved sets (real SQL, owner-scoped)", () => {
+  const userA = "user-A";
+  const userB = "user-B";
+  // Two 22-char base62 Spotify ids — valid `?set=` tokens with no DB row needed
+  // (the codec accepts them; the name-derivation title lookup simply finds nothing
+  // and falls back), so a set round-trips without seeding a certified finding.
+  const SET_A = "4iV5W9uYEdYUVa79Axb7Rh,1301WleyT98MSxVHPZCA6M";
+
+  beforeEach(async () => {
+    await seedUser(db, { email: "a@example.com", id: userA, username: "aaa" });
+    await seedUser(db, { email: "b@example.com", id: userB, username: "bbb" });
+  });
+
+  it("saveSet round-trips the chain + taste through the shared codec, list returns it", async () => {
+    const { listSavedSets, saveSet } = await import("./account-data");
+
+    const result = await saveSet(publicUser(userA), {
+      name: "My set",
+      set: SET_A,
+      taste: "netsky,nu-tone",
+    });
+    expect(result).not.toBeInstanceOf(Response);
+
+    const list = await listSavedSets(publicUser(userA));
+    expect(list.savedSets).toHaveLength(1);
+    expect(list.savedSets[0]?.name).toBe("My set");
+    expect(list.savedSets[0]?.setTokens).toBe(SET_A);
+    expect(list.savedSets[0]?.taste).toBe("netsky,nu-tone");
+  });
+
+  it("saveSet rejects an empty chain (400 empty_set)", async () => {
+    const { saveSet } = await import("./account-data");
+
+    const result = await saveSet(publicUser(userA), { set: "" });
+    expect(result).toBeInstanceOf(Response);
+    expect((result as Response).status).toBe(400);
+  });
+
+  it("saveSet derives a non-empty name when none is given", async () => {
+    const { saveSet } = await import("./account-data");
+
+    const result = (await saveSet(publicUser(userA), { set: SET_A })) as {
+      savedSet: { name: string };
+    };
+    expect(result.savedSet.name.length).toBeGreaterThan(0);
+  });
+
+  it("list/update/delete are owner-scoped — A never touches B's set", async () => {
+    const { deleteSavedSet, listSavedSets, saveSet, updateSavedSet } =
+      await import("./account-data");
+
+    const aSaved = (await saveSet(publicUser(userA), { name: "A's set", set: SET_A })) as {
+      savedSet: { id: string };
+    };
+    const bSaved = (await saveSet(publicUser(userB), { name: "B's set", set: SET_A })) as {
+      savedSet: { id: string };
+    };
+
+    // A's list holds only A's set.
+    const aList = await listSavedSets(publicUser(userA));
+    expect(aList.savedSets.map((s) => s.id)).toEqual([aSaved.savedSet.id]);
+
+    // A cannot update B's set (scoped → 404).
+    const updateAttempt = await updateSavedSet(publicUser(userA), bSaved.savedSet.id, {
+      name: "hijacked",
+    });
+    expect(updateAttempt).toBeInstanceOf(Response);
+    expect((updateAttempt as Response).status).toBe(404);
+
+    // A cannot delete B's set (scoped → 404).
+    const deleteAttempt = await deleteSavedSet(publicUser(userA), bSaved.savedSet.id);
+    expect(deleteAttempt).toBeInstanceOf(Response);
+    expect((deleteAttempt as Response).status).toBe(404);
+
+    // B's set survived both attacks, name intact.
+    const bList = await listSavedSets(publicUser(userB));
+    expect(bList.savedSets.map((s) => s.id)).toEqual([bSaved.savedSet.id]);
+    expect(bList.savedSets[0]?.name).toBe("B's set");
+  });
+
+  it("updateSavedSet overwrites name + chain for the owner", async () => {
+    const { listSavedSets, saveSet, updateSavedSet } = await import("./account-data");
+
+    const saved = (await saveSet(publicUser(userA), { name: "old", set: SET_A })) as {
+      savedSet: { id: string };
+    };
+    const nextSet = "1301WleyT98MSxVHPZCA6M";
+    await updateSavedSet(publicUser(userA), saved.savedSet.id, { name: "new", set: nextSet });
+
+    const list = await listSavedSets(publicUser(userA));
+    expect(list.savedSets[0]?.name).toBe("new");
+    expect(list.savedSets[0]?.setTokens).toBe(nextSet);
+  });
+
+  it("deleteSavedSet clears only the owner's row", async () => {
+    const { deleteSavedSet, listSavedSets, saveSet } = await import("./account-data");
+
+    const saved = (await saveSet(publicUser(userA), { set: SET_A })) as {
+      savedSet: { id: string };
+    };
+    const result = await deleteSavedSet(publicUser(userA), saved.savedSet.id);
+    expect(result).toEqual({ ok: true });
+
+    const list = await listSavedSets(publicUser(userA));
+    expect(list.savedSets).toHaveLength(0);
+  });
+
+  it("exportAccountData includes the user's saved sets", async () => {
+    const { exportAccountData, saveSet } = await import("./account-data");
+
+    await saveSet(publicUser(userA), { name: "Export me", set: SET_A });
+    const result = await exportAccountData(publicUser(userA));
+    expect(result.export.savedSets.map((s) => s.name)).toEqual(["Export me"]);
   });
 });
