@@ -38,6 +38,7 @@ export const LABEL_INDEX_MIN_TRACKS = 3;
 type LabelRow = {
   created_at: string;
   id: string;
+  image_key: string | null;
   name: string;
   ruled_at: string | null;
   seed_state: LabelSeedState;
@@ -68,6 +69,7 @@ function toLabelItem(row: LabelRow, findingCount: number): LabelAdminItem {
     createdAt: row.created_at,
     findingCount,
     id: row.id,
+    logoImageUrl: labelLogoUrl(row.image_key),
     name: row.name,
     ruledAt: row.ruled_at,
     seedState: row.seed_state,
@@ -76,7 +78,7 @@ function toLabelItem(row: LabelRow, findingCount: number): LabelAdminItem {
   };
 }
 
-const LABEL_COLUMNS = "id, name, slug, seed_state, ruled_at, created_at, updated_at";
+const LABEL_COLUMNS = "id, name, slug, seed_state, ruled_at, created_at, updated_at, image_key";
 
 /**
  * Every distinct `tracks.label`, folded to its slug, with how many findings carry
@@ -207,10 +209,10 @@ export async function getLabelBySlug(slug: string): Promise<LabelRecord | undefi
   const db = await getDb();
   const result = await db.execute({
     args: [slug],
-    sql: `select ${LABEL_COLUMNS}, image_key from labels where slug = ? limit 1`,
+    sql: `select ${LABEL_COLUMNS} from labels where slug = ? limit 1`,
   });
 
-  const row = typedRows<LabelRow & { image_key: string | null }>(result.rows)[0];
+  const row = typedRows<LabelRow>(result.rows)[0];
 
   return row
     ? { id: row.id, logoImageUrl: labelLogoUrl(row.image_key), name: row.name, slug: row.slug }

@@ -239,7 +239,7 @@ function LabelRow({ label }: { label: LabelAdminItem }) {
     >
       <ObjectLead
         coordinate={label.slug}
-        leading={<ObjectGlyph icon={TagIcon} />}
+        leading={<LabelLogo logoImageUrl={label.logoImageUrl} />}
         subtitle={
           error ? (
             <span className="text-destructive" role="alert">
@@ -250,6 +250,24 @@ function LabelRow({ label }: { label: LabelAdminItem }) {
         title={label.name}
       />
     </ObjectRow>
+  );
+}
+
+// The label's OWN logo (the Discogs→R2 backfill), at the object row's md plate footprint. Falls
+// back to the exact tag-icon glyph when the label has no resolved logo yet, so a label without
+// an image reads exactly as it did before. Decorative (the name sits beside it), lazy-loaded.
+function LabelLogo({ logoImageUrl }: { logoImageUrl: string | undefined }) {
+  if (!logoImageUrl) {
+    return <ObjectGlyph icon={TagIcon} />;
+  }
+
+  return (
+    <img
+      alt=""
+      className="size-11 shrink-0 rounded-md border border-border object-cover"
+      loading="lazy"
+      src={logoImageUrl}
+    />
   );
 }
 

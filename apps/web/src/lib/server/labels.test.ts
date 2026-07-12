@@ -215,6 +215,23 @@ describe("listLabels (the read, and the crawler's seed set)", () => {
     expect((await listLabels("disabled")).map((label) => label.slug)).toEqual(["anjunabeats"]);
     expect((await listLabels("undecided")).map((label) => label.slug)).toEqual(["chelou"]);
   });
+
+  it("surfaces the label's own logo when a resolved image_key exists, undefined otherwise", async () => {
+    await seedFinding("t1", "Hospital Records");
+    await seedFinding("t2", "Anjunabeats");
+    await reconcileLabels();
+    await db.execute({
+      args: ["labels/hospital-records.jpg", "hospital-records"],
+      sql: `update labels set image_key = ?, image_state = 'resolved' where slug = ?`,
+    });
+
+    const bySlug = new Map((await listLabels()).map((label) => [label.slug, label]));
+
+    expect(bySlug.get("hospital-records")?.logoImageUrl).toBe(
+      "https://found.fluncle.com/labels/hospital-records.jpg",
+    );
+    expect(bySlug.get("anjunabeats")?.logoImageUrl).toBeUndefined();
+  });
 });
 
 describe("listLabelReviewRows (the attention-queue source)", () => {
