@@ -34,17 +34,17 @@ function edgeCache(): Cache | undefined {
 // Fresh window: within this many seconds a cached document is served as-is. Short
 // because a re-enrichment or re-tag should surface quickly even if a purge is
 // missed; long enough that bursts of crawler/share traffic collapse onto one render.
-const FRESH_SECONDS = 300;
+export const FRESH_SECONDS = 300;
 // Stale-while-revalidate tail: past the fresh window we still serve the cached copy
 // (instantly) for up to this long while a background render refreshes it. A day is
 // ample for a quiet archive — a finding rarely changes, and any change purges anyway.
-const SWR_SECONDS = 86_400;
+export const SWR_SECONDS = 86_400;
 
 // The browser/CDN-facing directive. `s-maxage`/`stale-while-revalidate` let any
 // downstream shared cache (and Cloudflare's own, where applicable) apply the same
 // policy; `max-age=0` keeps private browser caches honest so a viewer always
 // revalidates against the edge rather than pinning a stale page locally.
-const PUBLIC_CACHE_CONTROL = `public, max-age=0, s-maxage=${FRESH_SECONDS}, stale-while-revalidate=${SWR_SECONDS}`;
+export const PUBLIC_CACHE_CONTROL = `public, max-age=0, s-maxage=${FRESH_SECONDS}, stale-while-revalidate=${SWR_SECONDS}`;
 // What we tell `caches.default` to keep the entry for: the entire fresh+stale window,
 // so a stale-serve is possible. Freshness inside that window is judged by our stamp.
 const STORED_MAX_AGE = FRESH_SECONDS + SWR_SECONDS;
@@ -195,6 +195,16 @@ function logPathsToPurge(logId: string): string[] {
 }
 
 /**
+ * The full canonical purge URLs for a finding's change — its own `/log/<id>` page
+ * and the `/log` index — keyed off the canonical origin the read path stored under.
+ * The global zone purge sends exactly these; exported so the URL shape is unit-pinned
+ * (a drifted origin or a dropped index would silently leave a stale page served).
+ */
+export function logPurgeUrls(logId: string): string[] {
+  return logPathsToPurge(logId).map((path) => `${CANONICAL_ORIGIN}${path}`);
+}
+
+/**
  * Purge a finding's cached log surfaces after a write. Fire-and-extend via
  * `waitUntil` so callers (the write paths) don't await network I/O; safe to call
  * with a missing/blank logId (no-op).
@@ -229,7 +239,7 @@ async function purgeLogCacheNow(logId: string): Promise<void> {
     return;
   }
 
-  const urls = paths.map((path) => `${CANONICAL_ORIGIN}${path}`);
+  const urls = logPurgeUrls(logId);
 
   try {
     await fetch(`https://api.cloudflare.com/client/v4/zones/${zoneId}/purge_cache`, {
