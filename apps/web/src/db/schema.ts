@@ -1901,6 +1901,67 @@ export const labels = sqliteTable("labels", {
   updatedAt: text("updated_at").notNull(),
 });
 
+// LABEL ALIASES — two spellings, one label, ISRC-anchored trust (RFC musickit-second-authority,
+// U2a). The `artist_socials` precedent: a per-label side table of alternative spellings, each
+// carrying its source + a candidate/confirmed status, so a second metadata authority (Apple's
+// album `recordLabel`, corroborated by MusicBrainz over a shared ISRC) can propose that
+// "Med School Recordings" is the same label as "Medschool" WITHOUT ever rewriting the immutable
+// `tracks.label` string or auto-changing `labels.name`. A JSON column was rejected on the label
+// entity's own no-denormalization principle (docs/label-entity.md).
+//
+// ── WHAT EACH COLUMN IS ─────────────────────────────────────────────────────────
+//   - `label_id`   — the CANONICAL label this alias belongs to. The alias is another spelling
+//                    OF this label, never a label of its own.
+//   - `alias`      — the raw alternative spelling (Apple's `recordLabel`, an operator's typing).
+//   - `alias_slug` — `slugify(alias)`, INDEXED: the join key the resolution wiring reads by, so
+//                    a CONFIRMED alias's slug resolves to `label_id` BEFORE `ensureLabel` /
+//                    `reconcileLabels` would otherwise re-mint it as a new label. This is the
+//                    whole correctness point — the immutable `tracks.label` re-mints merged-away
+//                    slugs on every deploy backfill unless the mint path consults this first.
+//   - `source`     — where the spelling came from. `apple` is the U2a writer; `operator` is a
+//                    hand-added alias; `musicbrainz`/`discogs`/`spotify` are reserved for future
+//                    corroboration sources.
+//   - `kind`       — `name` (a corroborated alternate spelling — Apple AND MusicBrainz agree on
+//                    the same label over the ISRC) or `hint` (a weaker lead — Apple names a label
+//                    the archive does not recognise as this one, or a distributor string). Only
+//                    the operator's CONFIRM promotes either to the public graph.
+//   - `status`     — `candidate` (awaiting the operator) or `confirmed` (ruled the same label).
+//                    ONLY `confirmed` feeds resolution + the public `alternateName` JSON-LD
+//                    (decision C); `candidate`/`hint` stay admin-only. Reject deletes the row.
+//
+// The derivation is IDEMPOTENT and never clobbers a ruling: the unique index is
+// `(label_id, alias_slug, source)` with `on conflict do nothing`, so a re-run over a
+// `confirmed` row is a no-op. See docs/label-entity.md + scripts/backfill-label-aliases.ts.
+export const labelAliases = sqliteTable(
+  "label_aliases",
+  {
+    alias: text("alias").notNull(),
+    aliasSlug: text("alias_slug").notNull(),
+    createdAt: text("created_at").notNull(),
+    id: text("id").primaryKey(),
+    kind: text("kind", { enum: ["name", "hint"] }).notNull(),
+    labelId: text("label_id").notNull(),
+    source: text("source", {
+      enum: ["operator", "apple", "musicbrainz", "discogs", "spotify"],
+    }).notNull(),
+    status: text("status", { enum: ["candidate", "confirmed"] }).notNull(),
+  },
+  (table) => [
+    // One spelling per (label, source): the derivation upserts `on conflict do nothing`, so a
+    // second pass never duplicates a candidate and never reverts a confirmed row.
+    uniqueIndex("label_aliases_label_slug_source_idx").on(
+      table.labelId,
+      table.aliasSlug,
+      table.source,
+    ),
+    // The resolution read (`ensureLabel` / `reconcileLabels`): `where alias_slug = ? and
+    // status = 'confirmed'`. Bounded as aliases grow.
+    index("label_aliases_alias_slug_idx").on(table.aliasSlug),
+    // The `/admin/labels` review section reads the open candidates (`where status = 'candidate'`).
+    index("label_aliases_status_idx").on(table.status),
+  ],
+);
+
 // The ALBUM — the fourth node of the graph (log ↔ artist ↔ label ↔ album), and the
 // structural twin of `labels` above: `tracks.album` stays the raw captured string
 // forever, this table is its normalized twin related by `slug`

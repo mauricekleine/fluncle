@@ -9,6 +9,7 @@ import {
   musicGroupJsonLd,
   musicPlaylistJsonLd,
   musicRecordingJsonLd,
+  recordLabelJsonLd,
   videoObjectJsonLd,
 } from "./log-schema";
 import { fold } from "./server/track-match";
@@ -354,6 +355,40 @@ describe("breadcrumbsJsonLd", () => {
       "The log",
       "004.7.2I",
     ]);
+  });
+});
+
+describe("recordLabelJsonLd (the label page schema — U2a alternateName)", () => {
+  const base = {
+    artists: [{ name: "Artist", slug: "artist" }],
+    name: "Medschool",
+    slug: "medschool",
+    tracks: [],
+  };
+
+  function organizationOf(input: Parameters<typeof recordLabelJsonLd>[0]) {
+    return (recordLabelJsonLd(input) as { about: Record<string, unknown> }).about;
+  }
+
+  it("omits alternateName entirely when the label carries no confirmed aliases", () => {
+    expect(organizationOf(base)).not.toHaveProperty("alternateName");
+    // No aliases ⇒ byte-identical to the pre-U2a shape.
+    expect(organizationOf({ ...base, alternateNames: [] })).not.toHaveProperty("alternateName");
+  });
+
+  it("emits a single confirmed alias as a scalar alternateName", () => {
+    expect(organizationOf({ ...base, alternateNames: ["Med School Recordings"] })).toMatchObject({
+      "@type": "Organization",
+      alternateName: "Med School Recordings",
+      name: "Medschool",
+    });
+  });
+
+  it("emits several confirmed aliases as an alternateName array", () => {
+    expect(
+      organizationOf({ ...base, alternateNames: ["Med School", "Med School Recordings"] })
+        .alternateName,
+    ).toEqual(["Med School", "Med School Recordings"]);
   });
 });
 

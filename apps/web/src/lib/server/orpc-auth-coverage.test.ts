@@ -217,6 +217,10 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // The follow queue's one-tap confirm (candidate → confirmed) — operator tier: it lets
   // a Firecrawl-sourced link onto the public artist page.
   confirm_artist_social: "operator",
+  // The label-alias review confirm (candidate → confirmed) — operator tier: deciding two
+  // spellings are one label folds it into resolution + the public JSON-LD, an editorial act
+  // (the confirm_artist_social / update_label precedent).
+  confirm_label_alias: "operator",
   context_track: "admin",
   // The catalogue crawler — admin tier (adminAuth only, no operatorGuard): it acquires
   // METADATA and nothing else. It publishes nothing, certifies nothing (a crawled row has
@@ -322,6 +326,9 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // The full galaxy map read (browse-by-feel RFC) — admin tier (agent-allowed), the
   // list_*_admin precedent; the `fluncle-cluster` cron reads the prior map + split flags.
   list_galaxies_admin: "admin",
+  // The open label-alias candidates the `/admin/labels` review section reads — admin tier
+  // (agent-allowed), the list_labels_admin precedent. A pure read; it publishes nothing.
+  list_label_aliases: "admin",
   // Every label with its crawl-seed state — admin tier (agent-allowed), the
   // list_galaxies_admin precedent: `?seedState=enabled` is the seed-set read the future
   // catalogue crawler makes with its agent token. A pure read; it publishes nothing.
@@ -412,6 +419,9 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // record_health precedent; it writes only the internal single-row live_state table
   // (no publish), so the box agent token drives it each minute.
   record_live_state: "admin",
+  // Discard a label-alias candidate — operator tier: ruling two spellings are NOT one label
+  // is an editorial act (the remove_artist_social / confirm_label_alias precedent).
+  reject_label_alias: "operator",
   reject_submission: "operator",
   // The review queue's inline remove of a social — operator tier.
   remove_artist_social: "operator",

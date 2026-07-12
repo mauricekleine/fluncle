@@ -80,6 +80,32 @@ export type LabelsBackfillResult = {
 };
 
 /**
+ * Every CONFIRMED alias as `alias_slug → canonical label_id` (RFC musickit-second-authority,
+ * U2a). This is the re-mint guard: `tracks.label` is immutable, so a raw string whose spelling
+ * the operator folded into another label would, on this deploy backfill, (1) re-mint its own
+ * slug as a NEW label and (2) point its tracks at that duplicate — un-doing the fold every
+ * deploy. Preloaded once and consulted before both the mint and the link below.
+ */
+export async function loadConfirmedAliases(client: Client): Promise<Map<string, string>> {
+  const rows = await client.execute({
+    sql: `select alias_slug, label_id from label_aliases where status = 'confirmed'`,
+  });
+
+  const bySlug = new Map<string, string>();
+
+  for (const row of rows.rows) {
+    const slug = asText(row.alias_slug);
+    const labelId = asText(row.label_id);
+
+    if (slug !== "" && labelId !== "") {
+      bySlug.set(slug, labelId);
+    }
+  }
+
+  return bySlug;
+}
+
+/**
  * Stamp `tracks.label_id` on every track that carries a label string, has no pointer yet,
  * and has a `labels` row to point at — the indexed edge the public `/label/<slug>` page
  * reads by (schema.ts). Shared shape with `backfill-albums.ts`.
@@ -90,7 +116,11 @@ export type LabelsBackfillResult = {
  * that does not know the column exists (an admin update, a future catalogue crawler) is
  * linked into the graph.
  */
-export async function linkTracksToLabels(client: Client): Promise<number> {
+export async function linkTracksToLabels(
+  client: Client,
+  confirmedAliases?: Map<string, string>,
+): Promise<number> {
+  const aliases = confirmedAliases ?? (await loadConfirmedAliases(client));
   const unlinked = await client.execute({
     sql: `select label from tracks
           where label_id is null and label is not null and trim(label) <> ''
@@ -111,7 +141,9 @@ export async function linkTracksToLabels(client: Client): Promise<number> {
       args: [slug],
       sql: `select id from labels where slug = ? limit 1`,
     });
-    const labelId = found.rows[0]?.id;
+    // A confirmed alias points a folded-away spelling at its canonical label; without this a
+    // track carrying that raw string would stay unlinked (there is no `labels` row on its slug).
+    const labelId = found.rows[0]?.id ?? aliases.get(slug);
 
     if (typeof labelId !== "string") {
       continue;
@@ -156,6 +188,11 @@ export async function backfillLabels(client: Client): Promise<LabelsBackfillResu
     undecided: 0,
   };
 
+  // The re-mint guard: a slug the operator has folded into another label (a CONFIRMED alias) is
+  // never re-minted here and its tracks link to the CANONICAL label, not a duplicate. Loaded
+  // once for both the mint and the link below (U2a). Empty until the first alias is confirmed.
+  const confirmedAliases = await loadConfirmedAliases(client);
+
   // ── 1. RECONCILE (every deploy) — a row per distinct tracks.label, folded by slug.
   const distinct = await client.execute({
     sql: `select tracks.label as label from findings join tracks on tracks.track_id = findings.track_id
@@ -170,7 +207,7 @@ export async function backfillLabels(client: Client): Promise<LabelsBackfillResu
     const raw = asText(row.label).trim();
     const slug = slugify(raw);
 
-    if (slug !== "" && !bySlug.has(slug)) {
+    if (slug !== "" && !confirmedAliases.has(slug) && !bySlug.has(slug)) {
       bySlug.set(slug, raw);
     }
   }
@@ -187,8 +224,9 @@ export async function backfillLabels(client: Client): Promise<LabelsBackfillResu
   }
 
   // ── 1b. LINK (every deploy) — the `tracks.label_id` pointer for every track whose label
-  // now has a row. Runs AFTER the mint, so a label minted this very run is pointed at.
-  result.linked = await linkTracksToLabels(client);
+  // now has a row (or a confirmed alias). Runs AFTER the mint, so a label minted this very run
+  // is pointed at.
+  result.linked = await linkTracksToLabels(client, confirmedAliases);
 
   // ── 2. THE BOOTSTRAP (once, ever) — D7's starting ruling over the labels already in
   // the archive. Gated on the settings marker, so a label minted AFTER this deploy enters

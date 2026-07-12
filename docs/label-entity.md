@@ -120,6 +120,30 @@ Every label surface — the `/labels` index cards, the `/label/<slug>` page (its
 
 A label logo is a **trademark shown to identify the label** — nominative use, the same posture as album art; it never implies endorsement.
 
-## Follow-ups
+## Label aliases (two spellings, one label)
 
-- **The alias map** — `spiration music` is a truncation of _Inspiration Music_; `1991` is a label named like a year. No normalizer gets these right. A committed alias map (fold + edit-distance proposes, the operator confirms) is the eventual answer, and it now covers **both** entities: the album entity inherits the same class of collision (two records that share a name fold into one page). See [docs/album-entity.md](./album-entity.md#the-known-limit-two-records-one-name).
+`slugify` folds `Pilot.` and `Pilot`, but it cannot fold `Med School` and `Medschool` (they slug apart), and no normalizer gets `spiration music` → _Inspiration Music_ right on its own. The answer is a committed **alias map** where a second authority proposes and the operator confirms: the **`label_aliases`** table (the `artist_socials` precedent), one row per alternate spelling.
+
+| Column       | What it is                                                                                                         |
+| ------------ | ------------------------------------------------------------------------------------------------------------------ |
+| `label_id`   | The CANONICAL label this alias belongs to. An alias is another spelling OF a label, never a label of its own.      |
+| `alias`      | The raw alternative spelling (Apple's `recordLabel`, an operator's typing).                                        |
+| `alias_slug` | `slugify(alias)`, **indexed** — the join key the resolution wiring reads by.                                       |
+| `source`     | `operator` \| `apple` \| `musicbrainz` \| `discogs` \| `spotify`. `apple` is the current writer.                   |
+| `kind`       | `name` (a corroborated alternate spelling) or `hint` (a weaker lead — Apple names a label we don't yet recognise). |
+| `status`     | `candidate` (awaiting the operator) or `confirmed` (ruled the same label). Reject deletes the row.                 |
+
+**Where candidates come from (the ISRC anchor doing real work).** Apple's album `recordLabel` (stored on `albums.record_label_raw`) is a real second label authority — but ISRC identity alone does NOT clean it, because Apple's `recordLabel` is very often the DISTRIBUTOR, not the imprint. So `scripts/backfill-label-aliases.ts` (a deploy-time derivation over the stored album facts — it derives, it never remembers) applies two guardrails before writing a candidate:
+
+1. **A distributor denylist** (`src/lib/label-distributors.ts`, operator-extendable: Believe, The Orchard, FUGA, …). A denylisted `recordLabel` is dropped — never a candidate.
+2. **Cross-source corroboration.** Apple's `recordLabel` becomes a `candidate` (`kind: name`) only when it **fold-agrees** (`labelFold`) with the MusicBrainz label the crawled row already carries — the same recording, two independent authorities agreeing over the ISRC. If its slug already equals the canonical label's, there is nothing to alias. A lone Apple string that fold-agrees with no known label is a `hint` on the album's dominant label.
+
+`tracks.label` is never rewritten (the immutable rail) and `labels.name` is never auto-changed (operator display authority); the derivation only proposes rows.
+
+**Resolution (the re-mint trap this closes).** `tracks.label` is immutable, so a raw string whose spelling an operator has folded into another label would, on the next `ensureLabel` or deploy `reconcileLabels`, **re-mint its own slug as a NEW label — un-doing the fold every deploy.** So both consult CONFIRMED aliases (`status = 'confirmed'`, by `alias_slug`) BEFORE minting: `ensureLabel` adds one indexed read and returns the canonical id (the crawler reaches this same choke point); `reconcileLabels` and the deploy backfill (`scripts/backfill-labels.ts`) preload the confirmed-alias set once and skip re-minting any slug in it, linking those tracks to the canonical label instead. `apps/web/src/lib/server/labels.test.ts` reproduces the re-mint and proves it closed.
+
+**The operator surface** is a review section on `/admin/labels` — **deliberately a page section, NOT a new attention-queue source.** Alias candidates are crawl-volume, and `label-review` is capped at 25 (`LABEL_REVIEW_QUEUE_LIMIT`) precisely because an uncapped crawl-volume source drowns the other five; spelling curation steers nothing and blocks nothing, so it stays low-priority background work off the queue. Each candidate shows the spelling, its provenance (Apple, matched to MusicBrainz vs Apple only), and **Fold it in / Not a match** (the operator-tier `confirm_label_alias` / `reject_label_alias` ops).
+
+**Public visibility.** A `confirmed` alias joins the `/label/<slug>` page's `Organization` JSON-LD as `alternateName`, so a crawler that knows the imprint under either spelling lands on the same entity; `candidate`/`hint` aliases stay admin-only.
+
+The album entity inherits the same class of collision (two records that share a name fold into one page); its disambiguation is the same map, run the other way. See [docs/album-entity.md](./album-entity.md#the-known-limit-two-records-one-name).

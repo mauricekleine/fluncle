@@ -513,6 +513,13 @@ function foldArtistSlugs(artists: { name: string; slug: string }[]): Record<stri
 
 /** The label page's identity + the page's contents. */
 export type RecordLabelInput = {
+  /**
+   * The label's CONFIRMED alternate spellings (RFC musickit-second-authority, U2a, decision C).
+   * A second authority (Apple, corroborated by MusicBrainz) proposed them and the operator ruled
+   * them the same label; `candidate`/`hint` aliases never reach here. Emitted as the
+   * Organization's `alternateName`. Absent/empty ⇒ the key is omitted.
+   */
+  alternateNames?: string[];
   artists: { name: string; slug: string }[];
   name: string;
   slug: string;
@@ -524,9 +531,14 @@ export type RecordLabelInput = {
  * record-label type; a label is an organization, never a `MusicGroup` — it is not a band),
  * carrying the page's tracks as its `mainEntity` list. The Organization's `@id` is the
  * page URL, so the `recordLabel` node an album page emits points straight back here.
+ *
+ * When the label carries CONFIRMED aliases, the Organization gets an `alternateName` — the two
+ * spellings the operator ruled one label, so a crawler that knows the imprint under either name
+ * lands on the same entity (decision C).
  */
 export function recordLabelJsonLd(label: RecordLabelInput): Record<string, unknown> {
   const pageUrl = labelPageUrl(label.slug);
+  const alternateNames = label.alternateNames ?? [];
 
   return {
     "@context": "https://schema.org",
@@ -535,6 +547,12 @@ export function recordLabelJsonLd(label: RecordLabelInput): Record<string, unkno
     about: {
       "@id": `${pageUrl}#organization`,
       "@type": "Organization",
+      // Only when confirmed aliases exist: one string collapses to a scalar, several to an array
+      // (both valid schema.org). Omitted entirely otherwise, so a label without aliases is byte-
+      // identical to before.
+      ...(alternateNames.length > 0
+        ? { alternateName: alternateNames.length === 1 ? alternateNames[0] : alternateNames }
+        : {}),
       name: label.name,
       url: pageUrl,
     },

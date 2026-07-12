@@ -9,7 +9,11 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { type ReactNode, useMemo, useState } from "react";
-import { type LabelAdminItem, type LabelSeedState } from "@fluncle/contracts";
+import {
+  type LabelAdminItem,
+  type LabelAliasCandidate,
+  type LabelSeedState,
+} from "@fluncle/contracts";
 import { AdminShell } from "@/components/admin/admin-shell";
 import { ObjectGlyph, ObjectLead, ObjectList, ObjectRow } from "@/components/admin/object-row";
 import { Button } from "@fluncle/ui/components/button";
@@ -21,7 +25,7 @@ import {
 } from "@fluncle/ui/components/dropdown-menu";
 import { findingsCount } from "@/lib/format";
 import { isAdminRequest } from "@/lib/server/admin-auth";
-import { listLabels } from "@/lib/server/labels";
+import { listLabelAliasCandidates, listLabels } from "@/lib/server/labels";
 
 // The `/admin/labels` station — the record-label entity and the operator's CRAWL-SEED
 // control (the-archive RFC, D7). Every label a finding has ever carried is a row here.
@@ -45,37 +49,41 @@ import { listLabels } from "@/lib/server/labels";
 
 const LABELS_KEY = ["admin", "labels"] as const;
 
+/** The board the page hydrates from: the labels to rule on + the alias spellings to confirm. */
+type LabelsBoard = { aliases: LabelAliasCandidate[]; labels: LabelAdminItem[] };
+
 const ensureAdmin = createServerFn({ method: "GET" }).handler(async () => {
   if (!(await isAdminRequest())) {
     throw redirect({ to: "/admin/login" });
   }
 });
 
-const fetchLabels = createServerFn({ method: "GET" }).handler(
-  async (): Promise<LabelAdminItem[]> => {
-    if (!(await isAdminRequest())) {
-      throw redirect({ to: "/admin/login" });
-    }
+const fetchBoard = createServerFn({ method: "GET" }).handler(async (): Promise<LabelsBoard> => {
+  if (!(await isAdminRequest())) {
+    throw redirect({ to: "/admin/login" });
+  }
 
-    return listLabels();
-  },
-);
+  const [labels, aliases] = await Promise.all([listLabels(), listLabelAliasCandidates()]);
+
+  return { aliases, labels };
+});
 
 // oxlint-disable-next-line sort-keys
 export const Route = createFileRoute("/admin/labels")({
   beforeLoad: () => ensureAdmin(),
-  loader: () => fetchLabels(),
+  loader: () => fetchBoard(),
   component: AdminLabelsPage,
 });
 
 function AdminLabelsPage() {
   const initial = Route.useLoaderData();
-  const { data: labels } = useQuery({
+  const { data } = useQuery({
     initialData: initial,
-    queryFn: () => fetchLabels(),
+    queryFn: () => fetchBoard(),
     queryKey: LABELS_KEY,
     refetchOnWindowFocus: true,
   });
+  const { aliases, labels } = data;
 
   const board = useMemo(
     () => ({
@@ -136,6 +144,17 @@ function AdminLabelsPage() {
               >
                 {board.disabled.map((label) => (
                   <LabelRow key={label.id} label={label} />
+                ))}
+              </Section>
+            ) : null}
+
+            {aliases.length > 0 ? (
+              <Section
+                intro="Apple spells a label differently than the archive does. Where MusicBrainz agrees it's the same one, fold the spelling in so both point at one label."
+                title={`Spellings to confirm · ${aliases.length}`}
+              >
+                {aliases.map((alias) => (
+                  <AliasRow alias={alias} key={alias.id} />
                 ))}
               </Section>
             ) : null}
@@ -321,6 +340,90 @@ function RuleMenu({
       </DropdownMenuContent>
     </DropdownMenu>
   );
+}
+
+// ── The label-alias review section (RFC musickit-second-authority, U2a) ─────────────────────
+// A second authority (Apple's album `recordLabel`, corroborated by MusicBrainz over a shared
+// ISRC) proposes an alternate spelling of a label; the operator confirms or rejects it here.
+//
+// DELIBERATELY a page SECTION, not a new attention-queue source. Alias candidates are
+// crawl-volume, and the `label-review` attention source is capped at 25 (LABEL_REVIEW_QUEUE_LIMIT)
+// precisely because an uncapped crawl-volume source drowns the other five in the /admin cockpit.
+// Spelling curation is low-priority background work — it steers nothing and blocks nothing — so
+// it lives on this page and never rides the queue.
+
+/** One alias candidate: the proposed spelling, its provenance, and confirm/reject. */
+function AliasRow({ alias }: { alias: LabelAliasCandidate }) {
+  const queryClient = useQueryClient();
+  const [error, setError] = useState<string | undefined>();
+
+  const rule = useMutation({
+    mutationFn: (decision: "confirm" | "reject") => decideAlias(alias.id, decision),
+    onError: (caught) => setError(caught instanceof Error ? caught.message : String(caught)),
+    onSuccess: () => {
+      setError(undefined);
+      void queryClient.invalidateQueries({ queryKey: LABELS_KEY });
+    },
+  });
+
+  // The corroboration state, in the archive's flat functional register: a `name` alias is Apple
+  // AND MusicBrainz agreeing; a `hint` is Apple alone.
+  const provenance =
+    alias.kind === "name" ? "Apple, matched to MusicBrainz" : "Apple only, unmatched";
+
+  return (
+    <ObjectRow
+      trailing={
+        rule.isPending ? (
+          <CircleNotchIcon
+            aria-hidden="true"
+            className="size-4 text-muted-foreground motion-safe:animate-spin"
+            weight="bold"
+          />
+        ) : (
+          <>
+            <Button onClick={() => rule.mutate("confirm")} size="sm">
+              Fold it in
+            </Button>
+            <Button onClick={() => rule.mutate("reject")} size="sm" variant="outline">
+              Not a match
+            </Button>
+          </>
+        )
+      }
+    >
+      <ObjectLead
+        coordinate={alias.labelSlug}
+        leading={<ObjectGlyph icon={TagIcon} />}
+        subtitle={
+          error ? (
+            <span className="text-destructive" role="alert">
+              {error}
+            </span>
+          ) : (
+            <span className="text-xs text-muted-foreground">
+              {provenance} · folds into {alias.labelName}
+            </span>
+          )
+        }
+        title={alias.alias}
+      />
+    </ObjectRow>
+  );
+}
+
+// The operator-tier alias ops: confirm (POST /admin/labels/aliases/{id}/confirm) and reject
+// (DELETE /admin/labels/aliases/{id}). Same admin grant cookie + message-bearing errors as
+// `patchLabel`.
+async function decideAlias(id: string, decision: "confirm" | "reject"): Promise<void> {
+  const base = `/api/v1/admin/labels/aliases/${encodeURIComponent(id)}`;
+  const response = await fetch(decision === "confirm" ? `${base}/confirm` : base, {
+    method: decision === "confirm" ? "POST" : "DELETE",
+  });
+
+  if (!response.ok) {
+    throw new Error(await readError(response));
+  }
 }
 
 // The operator-tier `update_label` op (PATCH /admin/labels/{id}). The browser carries the
