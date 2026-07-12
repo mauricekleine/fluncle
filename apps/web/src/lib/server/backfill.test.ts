@@ -14,10 +14,10 @@ const appleCatalogLookupByIsrcs = vi.fn();
 // The cross-cutting Apple breaker/meter — vi.fns so a test can flip the breaker/budget shut.
 // Default: allowed + budget available + record calls a no-op, so the reliability-gate tests are
 // isolated from the breaker (its own behaviour is proven in apple-breaker.test.ts).
-const areAppleCallsAllowed = vi.fn(async () => true);
-const isAppleCallBudgetAvailable = vi.fn(async () => true);
-const recordAppleAuthOutcome = vi.fn(async () => {});
-const recordAppleCall = vi.fn(async () => {});
+const areAppleCallsAllowed = vi.fn(async (..._a: unknown[]) => true);
+const isAppleCallBudgetAvailable = vi.fn(async (..._a: unknown[]) => true);
+const recordAppleAuthOutcome = vi.fn(async (..._a: unknown[]) => {});
+const recordAppleCall = vi.fn(async (..._a: unknown[]) => {});
 
 // The mocked libSQL client: `execute({ sql, args })`. SELECTs return a reliability
 // row from `reliabilityRows` (keyed by trackId); writes are captured in `writes`.
