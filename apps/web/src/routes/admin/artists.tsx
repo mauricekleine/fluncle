@@ -23,6 +23,7 @@ import {
   siSoundcloud,
   siSpotify,
   siTiktok,
+  siTwitch,
   siX,
   siYoutube,
 } from "simple-icons";
@@ -108,6 +109,7 @@ const PLATFORM_LABELS: Record<ArtistSocialPlatform, string> = {
   soundcloud: "SoundCloud",
   spotify: "Spotify",
   tiktok: "TikTok",
+  twitch: "Twitch",
   twitter: "Twitter / X",
   youtube: "YouTube",
 };
@@ -144,6 +146,8 @@ function PlatformLogo({
       return <BrandIcon className={className} icon={siSpotify} />;
     case "tiktok":
       return <BrandIcon className={className} icon={siTiktok} />;
+    case "twitch":
+      return <BrandIcon className={className} icon={siTwitch} />;
     case "twitter":
       return <BrandIcon className={className} icon={siX} />;
     case "youtube":

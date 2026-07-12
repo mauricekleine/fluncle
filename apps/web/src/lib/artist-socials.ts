@@ -16,6 +16,7 @@ export type ArtistSocialPlatform =
   | "twitter"
   | "facebook"
   | "mixcloud"
+  | "twitch"
   | "homepage";
 
 // The canonical platform order — the operator's add-platform Select renders in this order.
@@ -26,6 +27,7 @@ export const ARTIST_SOCIAL_PLATFORMS: ArtistSocialPlatform[] = [
   "instagram",
   "tiktok",
   "mixcloud",
+  "twitch",
   "bandcamp",
   "beatport",
   "twitter",

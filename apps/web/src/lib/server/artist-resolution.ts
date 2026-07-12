@@ -80,6 +80,7 @@ export type ArtistSocialPlatform =
   | "beatport"
   | "twitter"
   | "facebook"
+  | "twitch"
   | "homepage";
 
 // ── MB types ─────────────────────────────────────────────────────────────────
@@ -229,6 +230,9 @@ export function classifyMbUrl(
   }
   if (host === "facebook.com" || host === "fb.com") {
     return "facebook";
+  }
+  if (host === "twitch.tv") {
+    return "twitch";
   }
   if (host === "wikidata.org") {
     return "wikidata";
@@ -476,6 +480,15 @@ export async function normalizeProfileUrl(
         rawUrl,
         "https://twitter.com",
         new Set(["i", "status", "home", "search", "hashtag", "intent", "share"]),
+      );
+
+    case "twitch":
+      // The channel handle IS the first path segment (twitch.tv/flunclelive); reduce a
+      // clip/video/directory deep link to the channel root.
+      return profileRootFromFirstSegment(
+        rawUrl,
+        "https://www.twitch.tv",
+        new Set(["videos", "clips", "directory", "p", "about", "schedule", "settings", "team"]),
       );
 
     case "bandcamp": {
@@ -815,6 +828,7 @@ const FIRECRAWL_TARGETS: ArtistSocialPlatform[] = [
   "twitter",
   "facebook",
   "mixcloud",
+  "twitch",
   "beatport",
 ];
 
@@ -959,6 +973,7 @@ const HANDLE_IN_FIRST_SEGMENT = new Set<ArtistSocialPlatform>([
   "soundcloud",
   "mixcloud",
   "facebook",
+  "twitch",
 ]);
 
 /** Name tokens for the relatedness check: the full concatenation + each ≥3-char word. */
