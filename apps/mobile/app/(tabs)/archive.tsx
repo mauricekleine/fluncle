@@ -25,17 +25,17 @@ import { useSavedFindings } from "@/lib/saved";
 import { partitionEntities, searchView } from "@/lib/search-state";
 import { color, font } from "@/theme/tokens";
 
-// The archive (RFC Unit 3): browse + the sonic-galaxy lens (browse-by-feel RFC) +
-// SEARCH (the catalogue sprint's public `search_archive` op) + a device-local Saved
-// view. The lens is DATA-DRIVEN off the real, operator-named galaxies present in the
-// loaded findings — it filters client-side by galaxy slug (before any galaxy is named,
-// only "All" shows). Search is a quiet magnifier in the header, mirroring the web
-// palette's stance: the quietest surface doesn't get a permanent form field, it gets a
-// glyph that opens one. Searching REPLACES the browse list; closing it restores the
-// lens exactly where it was.
+// The archive (RFC Unit 3): browse + a device-local Saved view + SEARCH (the catalogue
+// sprint's public `search_archive` op). The filter row is two chips, All and Saved — the
+// sonic-galaxy lens chips were removed (operator ruling 2026-07-12: with Saved added, the
+// galaxy chips crowded the row to the device edge and read wonky). Galaxy names still
+// render in each finding row's meta line; only the chip lens is gone. Search is a quiet
+// magnifier in the header, mirroring the web palette's stance: the quietest surface
+// doesn't get a permanent form field, it gets a glyph that opens one. Searching REPLACES
+// the browse list; closing it restores the filter exactly where it was.
 
 /** What the browse list is filtered to when NOT searching. */
-type Browse = { kind: "all" } | { kind: "galaxy"; slug: string } | { kind: "saved" };
+type Browse = { kind: "all" } | { kind: "saved" };
 
 export default function ArchiveScreen() {
   const router = useRouter();
@@ -65,31 +65,9 @@ export default function ArchiveScreen() {
 
   const saved = useSavedFindings();
 
-  const activeSlug = browse.kind === "galaxy" ? browse.slug : null;
-  const shown = activeSlug ? all.filter((f) => f.galaxy?.slug === activeSlug) : all;
-
-  // The distinct named galaxies present in the loaded findings, in first-seen order —
-  // the chip list. Empty until the operator names the map (then only "All" renders).
-  const presentGalaxies: Array<{ name: string; slug: string }> = [];
-  const seenSlugs = new Set<string>();
-  for (const finding of all) {
-    const found = finding.galaxy;
-    if (found && !seenSlugs.has(found.slug)) {
-      seenSlugs.add(found.slug);
-      presentGalaxies.push(found);
-    }
-  }
-
-  // The galaxy lens filters client-side over loaded pages, so a sparse galaxy can look
-  // empty while its findings sit unloaded further down the feed. While a filter is
-  // active and the filtered list is still short, keep draining pages so the lens never
-  // renders a false "quiet sector" before the feed is exhausted (P4).
-  const draining = hasNextPage || isFetchingNextPage;
-  useEffect(() => {
-    if (activeSlug && shown.length < 8 && hasNextPage && !isFetchingNextPage) {
-      void fetchNextPage();
-    }
-  }, [activeSlug, shown.length, hasNextPage, isFetchingNextPage, fetchNextPage]);
+  // No client-side filter any more (the galaxy lens is gone); the browse list is the
+  // whole feed, paginated by `onEndReached` below.
+  const shown = all;
 
   // Stable renderItem so the list bails out of rebuilding every visible row on
   // each screen redraw; only re-created when the row count (last-row flag) shifts.
@@ -147,32 +125,19 @@ export default function ArchiveScreen() {
                   <HeaderPill label="Submit a track" onPress={() => router.push("/submit")} />
                 </View>
               </View>
-              {/* One horizontal line forever — the lens never wraps to a second row (P5). */}
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                contentInsetAdjustmentBehavior="never"
-                contentContainerStyle={styles.chipRow}
-              >
-                <GalaxyChip
+              {/* Two chips, All and Saved — a quiet filter pair, not a scrolling lens. */}
+              <View style={styles.chipRow}>
+                <FilterChip
                   label="All"
                   active={browse.kind === "all"}
                   onPress={() => setBrowse({ kind: "all" })}
                 />
-                <GalaxyChip
+                <FilterChip
                   label="Saved"
                   active={browse.kind === "saved"}
                   onPress={() => setBrowse({ kind: "saved" })}
                 />
-                {presentGalaxies.map((g) => (
-                  <GalaxyChip
-                    key={g.slug}
-                    label={g.name}
-                    active={activeSlug === g.slug}
-                    onPress={() => setBrowse({ kind: "galaxy", slug: g.slug })}
-                  />
-                ))}
-              </ScrollView>
+              </View>
             </>
           )}
         </View>
@@ -212,16 +177,9 @@ export default function ArchiveScreen() {
             onEndReachedThreshold={0.5}
             ListFooterComponent={isFetchingNextPage ? <FindingRowSkeleton isLast /> : null}
             ListEmptyComponent={
-              // A filter still draining pages shows quiet skeletons, not the sector line,
-              // so a sparse galaxy never flashes a false empty state (P4). Only a settled,
-              // genuinely empty result reads "Quiet sector."
-              draining ? (
-                <LoadingRows count={4} />
-              ) : (
-                <Text style={[font.body, styles.emptyText]}>
-                  No findings logged in this galaxy yet. Quiet sector.
-                </Text>
-              )
+              <Text style={[font.body, styles.emptyText]}>
+                No findings logged yet. Quiet sector.
+              </Text>
             }
           />
         )}
@@ -482,7 +440,7 @@ function SearchIconButton({ onPress }: { onPress: () => void }) {
   );
 }
 
-function GalaxyChip({
+function FilterChip({
   active,
   label,
   onPress,
@@ -516,7 +474,13 @@ function GalaxyChip({
 }
 
 const styles = {
-  chipRow: { gap: 8, paddingBottom: 16, paddingHorizontal: 16, paddingTop: 18 },
+  chipRow: {
+    flexDirection: "row",
+    gap: 8,
+    paddingBottom: 16,
+    paddingHorizontal: 16,
+    paddingTop: 18,
+  },
   emptyText: { color: color.stardust, padding: 16 },
   errorState: { alignItems: "center", gap: 16, paddingHorizontal: 16, paddingTop: 40 },
   errorText: { color: color.stardust, textAlign: "center" },
