@@ -208,6 +208,7 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // The artist-entity backfill (Unit 1 of the artist-relationship RFC) —
   // contract-only oRPC (no TanStack route file; oRPC owns the path directly).
   // Agent tier: the box's `fluncle-artist-backfill` cron drives it with its agent token.
+  "POST /admin/backfill/apple-music": "backfill_apple_music",
   "POST /admin/backfill/artist-images": "backfill_artist_images",
   "POST /admin/backfill/artists": "backfill_artists",
   "POST /admin/backfill/discogs": "backfill_discogs",

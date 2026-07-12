@@ -442,6 +442,54 @@ export async function backfillDiscogsCommand(
   return adminApiPost<DiscogsBackfillResult>(`/api/admin/backfill/discogs?${params.toString()}`);
 }
 
+export type AppleMusicBackfillResult = {
+  // False when the Worker's MusicKit secrets are unset — the leg is a no-op this tick.
+  configured: boolean;
+  dryRun: boolean;
+  failed: Array<{ error: string; logId: string }>;
+  failedCount: number;
+  // The feed cursor to resume from on the next pass, or null when the archive is
+  // drained (or the leg is unconfigured / throttled). The endpoint handles only a
+  // bounded pass per request (each resolve runs under a rate limiter), so the CLI
+  // loops this until null.
+  nextCursor: string | null;
+  ok: boolean;
+  // True when the pass STOPPED on the Apple Music rate-limit circuit breaker: the CLI
+  // must stop looping the cursor (the next tick resumes with a fresh window).
+  rateLimited: boolean;
+  resolved: Array<{ logId: string; url: string }>;
+  resolvedCount: number;
+  // Findings the per-finding reliability gate held back this pass (already resolved,
+  // or cooling down after a recent attempt/failure). Didn't burn budget.
+  skipped: string[];
+  skippedCount: number;
+  // Findings whose ISRC Apple has no song for (a clean no-match, re-checkable later).
+  unresolved: string[];
+  unresolvedCount: number;
+};
+
+// One bounded pass of the Apple Music URL backfill via the admin API — the Worker holds
+// the MusicKit secrets, mints the developer token, and resolves each finding EXACTLY by
+// ISRC, writing apple_music_url server-side. Rows that already have a URL are skipped
+// (idempotent). A safe no-op until the secrets are provisioned. `--dry-run` reports the
+// eligible set without resolving. Pass the prior pass's `nextCursor` to resume; the CLI
+// loops until it comes back null.
+export async function backfillAppleMusicCommand(
+  limit: number,
+  dryRun: boolean,
+  cursor?: string,
+): Promise<AppleMusicBackfillResult> {
+  const params = new URLSearchParams({ dryRun: String(dryRun), limit: String(limit) });
+
+  if (cursor) {
+    params.set("cursor", cursor);
+  }
+
+  return adminApiPost<AppleMusicBackfillResult>(
+    `/api/admin/backfill/apple-music?${params.toString()}`,
+  );
+}
+
 export type VehicleEntry = {
   addedAt: string;
   artists: string[];

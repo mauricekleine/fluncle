@@ -8,6 +8,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const listTracks = vi.fn();
 const discogsResolveRelease = vi.fn();
 const lastfmLove = vi.fn();
+const appleMusicLookupByIsrc = vi.fn();
 
 // The mocked libSQL client: `execute({ sql, args })`. SELECTs return a reliability
 // row from `reliabilityRows` (keyed by trackId); writes are captured in `writes`.
@@ -58,6 +59,9 @@ vi.mock("./discogs", () => ({
   discogsResolveRelease: (...a: unknown[]) => discogsResolveRelease(...a),
 }));
 vi.mock("./lastfm", () => ({ lastfmLove: (...a: unknown[]) => lastfmLove(...a) }));
+vi.mock("./apple-music", () => ({
+  appleMusicLookupByIsrc: (...a: unknown[]) => appleMusicLookupByIsrc(...a),
+}));
 
 // A minimal published finding (the only fields the backfill reads).
 function finding(trackId: string, over: Record<string, unknown> = {}) {
@@ -232,5 +236,152 @@ describe("backfillLastfmLoves — reliability gate", () => {
     expect(limited.failed, "a throttled love is not recorded as a failure").toEqual([]);
     expect(writes, "no reliability write for a throttled love").toHaveLength(0);
     expect(lastfmLove, "the run halted before the second finding").toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("backfillAppleMusicUrls — reliability gate + exact ISRC resolve", () => {
+  it("skips a finding that already has an Apple Music URL (idempotent), no lookup", async () => {
+    singlePage([
+      finding("1", { appleMusicUrl: "https://music.apple.com/us/song/x/1", isrc: "I1" }),
+    ]);
+
+    const { backfillAppleMusicUrls } = await import("./backfill");
+    const result = await backfillAppleMusicUrls(10, false);
+
+    expect(result.resolvedCount).toBe(0);
+    expect(appleMusicLookupByIsrc).not.toHaveBeenCalled();
+    expect(writes).toHaveLength(0);
+  });
+
+  it("skips a finding with no ISRC (nothing to match on), no lookup, not counted", async () => {
+    singlePage([finding("1")]);
+
+    const { backfillAppleMusicUrls } = await import("./backfill");
+    const result = await backfillAppleMusicUrls(10, false);
+
+    expect(result.resolvedCount).toBe(0);
+    expect(result.unresolvedCount).toBe(0);
+    expect(appleMusicLookupByIsrc).not.toHaveBeenCalled();
+  });
+
+  it("skips a finding already marked done (done_at set), no lookup, no write", async () => {
+    reliabilityRows.set("1", {
+      attempted_at: null,
+      done_at: "2026-01-01T00:00:00.000Z",
+      failures: 0,
+    });
+    singlePage([finding("1", { isrc: "I1" })]);
+
+    const { backfillAppleMusicUrls } = await import("./backfill");
+    const result = await backfillAppleMusicUrls(10, false);
+
+    expect(result.skipped).toEqual(["LOG-1"]);
+    expect(appleMusicLookupByIsrc).not.toHaveBeenCalled();
+    expect(writes).toHaveLength(0);
+  });
+
+  it("resolves an eligible finding by ISRC and records done (url written, failures reset)", async () => {
+    appleMusicLookupByIsrc.mockResolvedValueOnce({
+      configured: true,
+      ok: true,
+      url: "https://music.apple.com/us/album/x/1?i=2",
+    });
+    singlePage([finding("1", { isrc: "I1" })]);
+
+    const { backfillAppleMusicUrls } = await import("./backfill");
+    const result = await backfillAppleMusicUrls(10, false);
+
+    expect(result.configured).toBe(true);
+    expect(result.resolved).toEqual([
+      { logId: "LOG-1", url: "https://music.apple.com/us/album/x/1?i=2" },
+    ]);
+    const urlWrite = writes.find((w) => w.sql.includes("set apple_music_url = ?"));
+    expect(urlWrite?.args).toEqual(["https://music.apple.com/us/album/x/1?i=2", "1"]);
+    const recordDone = writes.find((w) => w.sql.includes("backfill_apple_music_done_at = ?"));
+    expect(recordDone, "a done record should be written").toBeTruthy();
+    expect(recordDone?.sql).toContain("backfill_apple_music_failures = 0");
+  });
+
+  it("a clean no-match (url null) records TRIED (base cooldown, streak reset), no url write", async () => {
+    appleMusicLookupByIsrc.mockResolvedValueOnce({ configured: true, ok: true, url: null });
+    singlePage([finding("1", { isrc: "I1" })]);
+
+    const { backfillAppleMusicUrls } = await import("./backfill");
+    const result = await backfillAppleMusicUrls(10, false);
+
+    expect(result.unresolved).toEqual(["LOG-1"]);
+    expect(writes.find((w) => w.sql.includes("set apple_music_url = ?"))).toBeUndefined();
+    expect(writes[0]?.sql).toContain("backfill_apple_music_failures = 0");
+  });
+
+  it("a rate-limited lookup trips the circuit breaker — stops the run, nulls the cursor, no write", async () => {
+    appleMusicLookupByIsrc.mockResolvedValueOnce({
+      configured: true,
+      error: "429",
+      ok: false,
+      rateLimited: true,
+    });
+    singlePage([finding("1", { isrc: "I1" }), finding("2", { isrc: "I2" })]);
+
+    const { backfillAppleMusicUrls } = await import("./backfill");
+    const limited = await backfillAppleMusicUrls(10, false);
+
+    expect(limited.rateLimited).toBe(true);
+    expect(limited.nextCursor).toBeNull();
+    expect(writes).toHaveLength(0);
+    expect(
+      appleMusicLookupByIsrc,
+      "the run halted before the second finding",
+    ).toHaveBeenCalledTimes(1);
+  });
+
+  it("an unconfigured leg reports configured:false, stops cheaply, records nothing", async () => {
+    appleMusicLookupByIsrc.mockResolvedValueOnce({ configured: false });
+    singlePage([finding("1", { isrc: "I1" }), finding("2", { isrc: "I2" })]);
+
+    const { backfillAppleMusicUrls } = await import("./backfill");
+    const result = await backfillAppleMusicUrls(10, false);
+
+    expect(result.configured).toBe(false);
+    expect(result.nextCursor, "an unconfigured no-op nulls the cursor").toBeNull();
+    expect(result.resolvedCount).toBe(0);
+    expect(writes, "nothing recorded — the finding stays eligible for when the key lands").toEqual(
+      [],
+    );
+    expect(
+      appleMusicLookupByIsrc,
+      "stopped after the first unconfigured answer",
+    ).toHaveBeenCalledTimes(1);
+  });
+
+  it("a non-rate error records a failure (backoff) and surfaces it in `failed`", async () => {
+    appleMusicLookupByIsrc.mockResolvedValueOnce({
+      configured: true,
+      error: "bad token",
+      ok: false,
+      rateLimited: false,
+    });
+    singlePage([finding("1", { isrc: "I1" })]);
+
+    const { backfillAppleMusicUrls } = await import("./backfill");
+    const result = await backfillAppleMusicUrls(10, false);
+
+    expect(result.failed).toEqual([{ error: "bad token", logId: "LOG-1" }]);
+    expect(result.rateLimited).toBe(false);
+    expect(writes[0]?.sql).toContain(
+      "backfill_apple_music_failures = backfill_apple_music_failures + 1",
+    );
+  });
+
+  it("dry-run previews the eligible set, no lookup, no write", async () => {
+    singlePage([finding("1", { isrc: "I1" })]);
+
+    const { backfillAppleMusicUrls } = await import("./backfill");
+    const result = await backfillAppleMusicUrls(10, true);
+
+    expect(result.dryRun).toBe(true);
+    expect(result.unresolved).toEqual(["LOG-1"]);
+    expect(appleMusicLookupByIsrc).not.toHaveBeenCalled();
+    expect(writes).toHaveLength(0);
   });
 });

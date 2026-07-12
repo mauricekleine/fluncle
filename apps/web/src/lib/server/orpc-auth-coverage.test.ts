@@ -185,6 +185,10 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // (and is one-shot, marker-guarded), so the agent token 403s.
   announce_mixtape: "operator",
   approve_submission: "operator",
+  // The Apple Music URL backfill — agent tier (adminAuth only): internal + reversible
+  // metadata enrichment (resolve each finding's Apple Music URL EXACTLY by ISRC, no
+  // publish), so the box's agent-token cron drives it, the `backfill_discogs` precedent.
+  backfill_apple_music: "admin",
   // The artist-avatar backfill — agent tier (adminAuth only): internal + reversible
   // enrichment (fetch each artist's Spotify image), same tier as backfill_artists.
   backfill_artist_images: "admin",
