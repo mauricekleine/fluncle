@@ -1661,11 +1661,11 @@ export const artists = sqliteTable(
     mbid: text("mbid"),
     name: text("name").notNull(),
     resolvedAt: text("resolved_at"),
-    // When the operator last acknowledged this artist's link list ("Looks good"). The
-    // socials review model (docs/admin-shell.md): an artist "needs a look" when it has a
-    // link discovered AFTER this stamp (or never reviewed) — a single per-artist ack, not
-    // per-link follow bookkeeping. A manual link-add bumps this too (adding implies you
-    // saw the list). Null = never reviewed.
+    // LEGACY per-artist review stamp — superseded by `artist_socials.reviewed_at` (review
+    // moved down to the link). It is no longer written or read for needs-a-look; it survives
+    // only as the ONE-TIME derivation source for the per-link backfill
+    // (scripts/backfill-artist-social-reviews.ts), which reads it to seed each link's stamp,
+    // then never touches it again. Droppable once that backfill has run in prod.
     reviewedAt: text("reviewed_at"),
     slug: text("slug").notNull().unique(),
     spotifyArtistId: text("spotify_artist_id").unique(),
@@ -1752,6 +1752,13 @@ export const artistSocials = sqliteTable(
         "homepage",
       ],
     }).notNull(),
+    // When the operator last acknowledged THIS link — the review stamp, moved down from
+    // the artist (docs/artist-relationship.md). Review lands on the LINK, not the artist:
+    // a link "needs a look" when `reviewed_at IS NULL`. A resolver INSERT (a new link) or a
+    // URL CHANGE nulls this (born/re-armed unreviewed); an untouched re-resolve keeps it; an
+    // operator add/edit is born reviewed (`reviewed_at = now`, they just wrote it). "Looks
+    // good" bulk-stamps every one of an artist's links; the fresh-links section stamps one.
+    reviewedAt: text("reviewed_at"),
     source: text("source", { enum: ["musicbrainz", "firecrawl", "operator"] }).notNull(),
     status: text("status", { enum: ["auto", "candidate", "confirmed"] }).notNull(),
     updatedAt: text("updated_at").notNull(),
@@ -1759,6 +1766,9 @@ export const artistSocials = sqliteTable(
   },
   (table) => [
     uniqueIndex("artist_socials_artist_platform_idx").on(table.artistId, table.platform),
+    // The fresh-links queue + the board's fresh-links section both scan for the unreviewed
+    // links (`reviewed_at IS NULL`); a partial index keeps that scan bounded as socials grow.
+    index("artist_socials_unreviewed_idx").on(table.reviewedAt),
     index("artist_socials_artist_id_idx").on(table.artistId),
     index("artist_socials_platform_idx").on(table.platform),
   ],

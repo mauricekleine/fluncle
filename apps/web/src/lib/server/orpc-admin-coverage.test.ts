@@ -199,6 +199,8 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // The identity-graph per-social write (Unit 5) — contract-only oRPC (no TanStack route
   // file; oRPC owns the path directly). Operator tier (the queue's manual confirm).
   "POST /admin/artists/socials/{socialId}/confirm": "confirm_artist_social",
+  // The per-link review — approve ONE fresh link in the board's fresh-links section. Operator tier.
+  "POST /admin/artists/socials/{socialId}/review": "review_artist_social",
   // The artist social-identity resolution (Unit 2.1 of the artist-relationship RFC) —
   // contract-only oRPC (no TanStack route file; oRPC owns the path directly).
   // Agent tier: the box's `fluncle-artist-sweep` cron drives it with its agent token.

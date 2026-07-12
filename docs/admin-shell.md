@@ -31,7 +31,7 @@ Per page, the primary goal decides the layout — what's loud, what's hidden:
 | Dashboard                         | Clear the next actionable step             | the row's one inline action / `↵` | snooze, won't-do (icon + tooltip)                       |
 | Findings                          | Scan pipeline state; preview a finding     | cover = play; scan the columns    | run-a-step, R2, silent clip (`⋮`); socials (hover card) |
 | Renders                           | Watch the fresh render                     | cover = play                      | requeue, purge (`⋮` → confirm)                          |
-| Artists                           | Review the links needing a look            | Looks good (review the list)      | add, remove, edit a platform (Manage-links dialog)      |
+| Artists                           | Approve the fresh links needing a look     | Approve a fresh link / Looks good | add, remove, edit a platform (Manage-links dialog)      |
 | Labels                            | Rule on the labels nobody has ruled on     | Seed from it / Not our lane       | re-rule a settled label (`⋮`)                           |
 | Catalogue                         | Hear the one closest to a finding          | Listen (Spotify)                  | re-rank the sweep by hand (header)                      |
 | Galaxies                          | Name the unnamed galaxies (after audition) | Name it (the inline name field)   | rename, request a split (`⋮` → split confirm)           |
