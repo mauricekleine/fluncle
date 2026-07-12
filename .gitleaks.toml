@@ -30,6 +30,11 @@ regexes = [
   # the `...+xml` / `...+json` media types.
   '''application/(rss|atom)\+xml''',
   '''application/feed\+json''',
+  # The mobile app's AsyncStorage key names (`STORAGE_KEY = "fluncle.<store>.v1"`) — local
+  # storage namespaces, not credentials. The `KEY` keyword plus the dotted name sits right
+  # at generic-api-key's 3.5 entropy floor: "fluncle.saved.v1" scrapes under, "fluncle.mix.v1"
+  # lands a hair over and reddened CI. Allowlist the whole family so the next store doesn't.
+  '''fluncle\.[a-z0-9.-]+\.v\d+''',
 ]
 paths = [
   '''(^|/)node_modules/''',
