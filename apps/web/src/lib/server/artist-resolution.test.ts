@@ -8,6 +8,7 @@ import {
   parseSpotifyArtistId,
   resolveArtistViaMb,
   resolveGapViaFirecrawl,
+  validateSocialUrlForPlatform,
 } from "@/lib/server/artist-resolution";
 
 // A tiny URL-routing fetch mock identical in spirit to discogs.test.ts.
@@ -963,5 +964,61 @@ describe("resolveGapViaFirecrawl (MB-hub-first scrape + web-search gap-fill)", (
     );
 
     expect(result.map((s) => s.url)).toEqual(["https://www.tiktok.com/@nutone"]);
+  });
+});
+
+// ── validateSocialUrlForPlatform (the fresh-links inline edit) ──────────────────
+
+describe("validateSocialUrlForPlatform", () => {
+  it("accepts a matching-platform URL and normalizes it to the profile root", async () => {
+    expect(
+      await validateSocialUrlForPlatform("youtube", "https://www.youtube.com/channel/UCxxx"),
+    ).toEqual({ ok: true, url: "https://www.youtube.com/channel/UCxxx" });
+
+    expect(
+      await validateSocialUrlForPlatform("instagram", "https://www.instagram.com/dimension/"),
+    ).toEqual({ ok: true, url: "https://www.instagram.com/dimension" });
+  });
+
+  it("normalizes a deep link down to the profile root", async () => {
+    // A SoundCloud track deep-link collapses to the artist profile.
+    expect(
+      await validateSocialUrlForPlatform(
+        "soundcloud",
+        "https://soundcloud.com/dimension/some-track",
+      ),
+    ).toEqual({ ok: true, url: "https://soundcloud.com/dimension" });
+  });
+
+  it("rejects a URL whose host belongs to a DIFFERENT platform (a YouTube row rejects instagram.com)", async () => {
+    const result = await validateSocialUrlForPlatform(
+      "youtube",
+      "https://www.instagram.com/someone",
+    );
+
+    expect(result).toEqual({ ok: false, reason: "Not a YouTube link" });
+  });
+
+  it("accepts any plain host as a homepage but rejects a known social", async () => {
+    expect(await validateSocialUrlForPlatform("homepage", "https://dimensiondnb.com")).toEqual({
+      ok: true,
+      url: "https://dimensiondnb.com",
+    });
+
+    expect(
+      await validateSocialUrlForPlatform("homepage", "https://soundcloud.com/dimension"),
+    ).toEqual({ ok: false, reason: "That's a SoundCloud link, not a homepage" });
+  });
+
+  it("rejects an empty value and a non-http(s) scheme", async () => {
+    expect(await validateSocialUrlForPlatform("youtube", "   ")).toEqual({
+      ok: false,
+      reason: "A URL is required",
+    });
+
+    expect(await validateSocialUrlForPlatform("youtube", "javascript:alert(1)")).toEqual({
+      ok: false,
+      reason: "Only http and https links are allowed",
+    });
   });
 });

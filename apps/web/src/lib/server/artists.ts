@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { type ArtistSocialPlatform, ARTIST_SOCIAL_PLATFORMS } from "../artist-socials";
+import { validateSocialUrlForPlatform } from "./artist-resolution";
 import { getDb, typedRow, typedRows } from "./db";
 import { logEvent } from "./log";
 import { fetchArtistImages } from "./spotify";
@@ -1077,6 +1078,53 @@ export async function reviewArtistSocial(socialId: string): Promise<ArtistSocial
           set reviewed_at = ?,
               status = case when status = 'candidate' then 'confirmed' else status end,
               updated_at = ?
+          where id = ?`,
+  });
+
+  const social = await getArtistSocialById(socialId);
+
+  if (!social) {
+    throw new ArtistSocialNotFoundError(socialId);
+  }
+
+  return social;
+}
+
+/**
+ * Correct an artist social's URL AND approve it in one act — the operator's inline edit in the
+ * board's fresh-links section (fixing a resolver miss without leaving the row: a
+ * `music.youtube.com/search` page or a label's Bandcamp the resolver mistook for the artist).
+ *
+ * Validates + normalizes the entered URL against the row's KNOWN platform through the resolver's
+ * own helpers (`validateSocialUrlForPlatform` → `classifyMbUrl` + `normalizeProfileUrl`): a
+ * YouTube row rejects an instagram.com URL; a pasted deep link collapses to its profile root
+ * where it can, or is rejected with an honest reason (thrown as `InvalidArtistSocialError`).
+ *
+ * On success the row becomes OPERATOR-OWNED and public in one write, mirroring `add_artist_social`
+ * / #544's operator write path: `source=operator`, `status=confirmed`, and BORN REVIEWED
+ * (`reviewed_at = now`) — so the corrected link leaves the fresh-links queue and is immune to a
+ * later re-resolve (persistResolution skips operator/confirmed rows). Returns the fresh row.
+ */
+export async function updateArtistSocial(socialId: string, url: string): Promise<ArtistSocial> {
+  const existing = await getArtistSocialById(socialId);
+
+  if (!existing) {
+    throw new ArtistSocialNotFoundError(socialId);
+  }
+
+  const validation = await validateSocialUrlForPlatform(existing.platform, url);
+
+  if (!validation.ok) {
+    throw new InvalidArtistSocialError(validation.reason);
+  }
+
+  const db = await getDb();
+  const now = new Date().toISOString();
+
+  await db.execute({
+    args: [validation.url, now, now, socialId],
+    sql: `update artist_socials
+          set url = ?, source = 'operator', status = 'confirmed', reviewed_at = ?, updated_at = ?
           where id = ?`,
   });
 
