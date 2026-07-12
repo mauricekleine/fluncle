@@ -1,0 +1,1 @@
+ALTER TABLE `tracks` ADD `duplicate_of_track_id` text;

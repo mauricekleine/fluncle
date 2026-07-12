@@ -20,15 +20,16 @@ Ranking the catalogue against the findings at request time is a **cross join**: 
 
 So the arithmetic happens **once, ahead of time**, in a periodic sweep, exactly like the cluster engine's nightly assignment tick ([docs/agents/cluster-engine.md](./agents/cluster-engine.md)). The sweep stores each catalogue track's answer on the row; the page then does an ordered walk of an indexed column. **There is no vector math on the request path at all.**
 
-Five columns on `tracks`, written **only** by the sweep and meaningful **only** on a catalogue row (the sweep anti-joins `findings` and never touches one, so a non-null `nearest_finding_score` is itself a catalogue marker):
+Six columns on `tracks`, written **only** by the sweep and meaningful **only** on a catalogue row (the sweep anti-joins `findings` and never touches one, so a non-null `nearest_finding_score` is itself a catalogue marker):
 
-| column                     | what it holds                                                                                                      |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `nearest_finding_score`    | cosine similarity to the nearest finding (`1 − vector_distance_cos`, so higher is nearer). The Ear's sort key.     |
-| `nearest_finding_track_id` | **which** finding. The row's WHY.                                                                                  |
-| `capture_priority`         | 0–3, the pre-audio ladder. The capture queue's sort key.                                                           |
-| `catalogue_rank_corpus`    | the finding-corpus fingerprint the two above were computed against, `"<findings>:<embedded>"`. The staleness test. |
-| `catalogue_ranked_at`      | when. Freshness for the operator; never a predicate.                                                               |
+| column                     | what it holds                                                                                                         |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `nearest_finding_score`    | cosine similarity to the nearest finding (`1 − vector_distance_cos`, so higher is nearer). The Ear's sort key.        |
+| `nearest_finding_track_id` | **which** finding. The row's WHY.                                                                                     |
+| `capture_priority`         | −2…3, the pre-audio ladder (−1 a ruled-out label, −2 a duplicate). The capture queue's sort key.                      |
+| `duplicate_of_track_id`    | the finding this row is the SAME RECORDING as (pre-audio ISRC match). The duplicate's WHY — see _Duplicates_.         |
+| `catalogue_rank_corpus`    | the finding-corpus fingerprint the values above were computed against, `"<findings>:<embedded>"`. The staleness test. |
+| `catalogue_ranked_at`      | when. Freshness for the operator; never a predicate.                                                                  |
 
 Two indexes (`tracks_nearest_finding_score_idx`, `tracks_capture_priority_idx`) serve the two ordered reads. NULLs sort first in an ASC index, so a DESC walk hits the ranked rows first and stops at the page's `LIMIT` — the cost is the page, not the corpus.
 
@@ -84,6 +85,20 @@ The two lenses are **disjoint by construction**: scoring a track clears its `cap
 `capture_priority` is what the **work queues** ([docs/gpu-batch-embed.md](./gpu-batch-embed.md)) actually drain on: `list_track_work` serves capture, analysis, and embedding off `tracks`, ordered certified-first and then by this ladder. The veto is scoped to **capture** alone — a ruling governs what Fluncle _acquires_, not what he may _measure_, so a vetoed track whose bytes are already on file is still analysed and embedded (and its vector is how The Ear gets to disagree with the ladder).
 
 This repo does **not** build the capture itself — the acquisition layer lives in the private companion repo (the-archive RFC, D6). The Ear ships the queue and the priority signal; the layer that acts on them reads `capture_priority` and works down.
+
+## Duplicates — already in the archive
+
+The crawler walks outward from labels, not from the archive's own tracks, so it will re-surface a recording Fluncle **already logged** — a release re-issued on a compilation, the same master under a second catalogue number. That row is worthless to buy: capturing it spends metered proxy bytes on audio already on file. It was caught on real data — a crawled "Infinity" scored a perfect **1.0** against a finding, and pre-audio it sat on the capture ladder where the budget would have bought it.
+
+So the sweep flags a duplicate, and it never gets bought. There are **two detectors, one for each side of the audio boundary**, because the identity signal changes the moment a row has a vector:
+
+1. **Pre-audio — the money saver, an ISRC match.** In the pre-audio ladder half, a catalogue row whose `isrc` (non-null, non-empty) equals a certified finding's `isrc` is the **same recording**. The sweep writes it the dedicated tier **−2** (strictly below the label veto's −1) and stores the finding on `duplicate_of_track_id`. The veto is enforced by the **existing** `capture_priority >= 0` predicate the capture queue already applies ([docs/gpu-batch-embed.md](./gpu-batch-embed.md)) — a duplicate is a reused veto, not a second mechanism, so `track-work.ts` is untouched. ISRCs are folded (case + stray hyphens stripped) before comparison, the same spirit as `labelSlug`. The finding corpus this reads is bounded by the finding count, exactly like the affinity sets.
+
+2. **Post-embed — the honesty marker, a near-identical score.** Once a row has a vector it is off the capture queue, so the ISRC veto no longer applies — but a duplicate now shows up as the thing it always was: a cosine of **≥ 0.995** to its nearest finding (an identical master lands at ~1.0; a remaster, edit, or VIP arranges differently enough to fall below). On the ear lens that row reads as **"already in the archive"** rather than a discovery. This half is **display-only** — nothing is stored, no state machine — and the threshold (`DUPLICATE_SIMILARITY`) is a named, tunable constant.
+
+Both surface the **same honest register**: the row stays visible (ordered last on the capture lens, still shown on the ear lens), it **names the finding it duplicates**, and it is never silently hidden — the-ear.md's display promise holds for a duplicate exactly as for a vetoed label.
+
+**It stays self-healing.** The pre-audio marker rides the same fingerprint staleness as everything else: `duplicate_of_track_id` is re-written every time a row is re-ranked, so it clears on its own when the finding it matched is deleted (the corpus fingerprint moves, the row goes stale, the next tick re-ranks it and finds no match). A stamped duplicate is not re-picked — no loop — and the scoring path nulls the marker along with `capture_priority`, keeping the two lenses disjoint.
 
 ## The capture budget — the brake
 

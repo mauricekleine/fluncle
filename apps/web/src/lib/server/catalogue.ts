@@ -87,6 +87,45 @@ const CAPTURE_TIER: Record<CapturePriorityReason["kind"], number> = {
   "skipped-label": -1,
 };
 
+/**
+ * The capture tier for a DUPLICATE — a catalogue row whose ISRC exactly matches a certified
+ * finding's, i.e. the SAME RECORDING Fluncle already owns (docs/the-ear.md § Duplicates).
+ *
+ * It is −2, STRICTLY below the label veto (−1), for two reasons. First, "we already own this"
+ * is a stronger, more permanent statement than "not your lane" — it is an identity fact, not a
+ * taste ruling — so it reads dead last on the capture board. Second, and load-bearing: the
+ * capture WORK QUEUE excludes any negative tier with its existing `capture_priority >= 0`
+ * predicate (track-work.ts), so a duplicate is never bought and no new predicate is needed — the
+ * money saver is a reused veto, not a second mechanism. `duplicate_of_track_id` carries WHICH
+ * finding it duplicates, so the board can name it rather than let it silently vanish.
+ *
+ * This is NOT a `capturePriorityFor` rung: that function is a PURE metadata ladder over
+ * artists+label, and a duplicate is an IDENTITY match that needs the ISRC and the finding
+ * corpus — so it is detected in the sweep and STORED (like `nearest_finding_track_id`), never
+ * re-derived. A duplicate row's metadata rung stays truthful; the marker overrides its display.
+ */
+export const DUPLICATE_CAPTURE_TIER = -2;
+
+/**
+ * The cosine-similarity threshold at or above which a SCORED catalogue row is displayed as a
+ * duplicate ("already in the archive") rather than a discovery (docs/the-ear.md § Duplicates).
+ *
+ * The two halves of duplicate detection fire at different points in a track's life. The ISRC
+ * match (above) is the pre-audio money saver — it stops a duplicate being CAPTURED. This is the
+ * post-embed honesty marker: once a row HAS a vector, an identical master scores ~1.0 against
+ * the finding it duplicates (the real event that motivated this: a crawled "Infinity" scored a
+ * perfect 1.0 against a logged track), so a near-1.0 score is the tell that the Ear is pointing
+ * at something Fluncle already has, not a find.
+ *
+ * 0.995 is chosen defensibly for MuQ vectors: the same master scores ~1.0 (float32 rounding
+ * keeps an identical vector comfortably above 0.995), while a remaster, a radio edit, or a
+ * VIP — a genuinely different recording — arranges differently enough to land below it, and a
+ * merely SIMILAR track (a different roller in the same pocket) lands far lower still. It is
+ * DISPLAY-ONLY (no state machine, nothing stored) and tunable: raise it toward 1.0 to flag only
+ * bit-identical masters, lower it to also catch alternate masters of the same performance.
+ */
+export const DUPLICATE_SIMILARITY = 0.995;
+
 /** The archive's cheap identity sets — bounded by the FINDING count, never the catalogue. */
 export type ArchiveAffinity = {
   /** Label slugs the operator ruled OUT (`labels.seed_state = 'disabled'`) — "not our lane". */
@@ -226,6 +265,7 @@ export const RANK_BATCH_SIZE = 250;
 type CandidateRow = {
   artists_json: string;
   has_vector: number;
+  isrc: string | null;
   label: string | null;
   track_id: string;
 };
@@ -288,6 +328,53 @@ async function readArchiveAffinity(): Promise<ArchiveAffinity> {
 }
 
 /**
+ * An ISRC, folded for comparison. ISRCs are case-insensitive alphanumeric codes that carry
+ * stray hyphens/spaces in the wild (`GB-AYE-12-34567` vs `GBAYE1234567`), so a raw string
+ * equality would miss a real duplicate on a cosmetic difference. Empty/whitespace → null, so a
+ * blank ISRC never matches another blank one. Mirrors the spirit of `labelSlug`'s fold.
+ */
+function normalizeIsrc(isrc: null | string): null | string {
+  const folded = (isrc ?? "").replace(/[^a-z0-9]/gi, "").toUpperCase();
+
+  return folded.length > 0 ? folded : null;
+}
+
+/**
+ * The archive's ISRC identity map — normalized ISRC → the certified finding's `track_id`.
+ *
+ * This is the DUPLICATE detector's corpus (docs/the-ear.md § Duplicates), and it is a WRITE-PATH
+ * concern only: the sweep reads it to decide whether a catalogue row is the same recording as a
+ * finding, then STORES the answer on `duplicate_of_track_id`. It is deliberately NOT part of
+ * `ArchiveAffinity` — that set feeds the PURE metadata ladder (`capturePriorityFor`), which the
+ * display re-derives, whereas the duplicate is an identity fact read back from the column, never
+ * recomputed at request time (the same store-and-read shape as `nearest_finding_track_id`).
+ *
+ * Bounded by the FINDING count, like every other affinity read. If two findings somehow share an
+ * ISRC, either is a valid "we own this", so last-writer-wins is fine.
+ */
+async function readFindingIsrcs(): Promise<Map<string, string>> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [],
+    sql: `select findings.track_id as track_id, tracks.isrc as isrc
+          from findings join tracks on tracks.track_id = findings.track_id
+          where tracks.isrc is not null and trim(tracks.isrc) <> ''`,
+  });
+
+  const byIsrc = new Map<string, string>();
+
+  for (const row of typedRows<{ isrc: string; track_id: string }>(result.rows)) {
+    const key = normalizeIsrc(row.isrc);
+
+    if (key) {
+      byIsrc.set(key, row.track_id);
+    }
+  }
+
+  return byIsrc;
+}
+
+/**
  * ONE TICK of the ranking sweep — the whole of The Ear's arithmetic, and the only writer of
  * the five `tracks` ranking columns.
  *
@@ -337,6 +424,7 @@ export async function rankCatalogue(limit = RANK_BATCH_SIZE): Promise<RankCatalo
     sql: `select ct.track_id as track_id,
                  ct.artists_json as artists_json,
                  ct.label as label,
+                 ct.isrc as isrc,
                  (${embeddingVectorSql("ct")} is not null) as has_vector
           from tracks ct
           left join findings cf on cf.track_id = ct.track_id
@@ -425,7 +513,9 @@ export async function rankCatalogue(limit = RANK_BATCH_SIZE): Promise<RankCatalo
         corpus,
         now,
         // A track that HAS audio is not in the capture queue. Clearing the tier keeps the two
-        // lenses disjoint: the capture queue is exactly "catalogue, no score yet".
+        // lenses disjoint: the capture queue is exactly "catalogue, no score yet". The
+        // pre-audio duplicate marker is cleared too — it is a capture-ladder concern; a scored
+        // duplicate is flagged from its ~1.0 score instead (DUPLICATE_SIMILARITY, display-only).
         candidate.track_id,
       ],
       sql: `update tracks
@@ -433,7 +523,8 @@ export async function rankCatalogue(limit = RANK_BATCH_SIZE): Promise<RankCatalo
                 nearest_finding_track_id = ?,
                 catalogue_rank_corpus = ?,
                 catalogue_ranked_at = ?,
-                capture_priority = null
+                capture_priority = null,
+                duplicate_of_track_id = null
             where track_id = ?`,
     });
   }
@@ -443,18 +534,31 @@ export async function rankCatalogue(limit = RANK_BATCH_SIZE): Promise<RankCatalo
   // bytes, not vectors — so the one authority for the ladder (`capturePriorityFor`) runs here
   // and the surface re-runs the same function to explain the same answer.
   if (unvectored.length > 0) {
-    const archive = await readArchiveAffinity();
+    // Both corpora are FINDING-bounded, and both are needed here: the affinity sets feed the
+    // pure metadata ladder, the ISRC map catches a row that is literally the same recording as
+    // a finding Fluncle already owns (docs/the-ear.md § Duplicates).
+    const [archive, findingIsrcs] = await Promise.all([readArchiveAffinity(), readFindingIsrcs()]);
 
     for (const candidate of unvectored) {
-      const { priority } = capturePriorityFor(
-        { artists: parseArtistsJson(candidate.artists_json), label: candidate.label },
-        archive,
-      );
+      // THE DUPLICATE CHECK, before the ladder. An exact ISRC match to a certified finding means
+      // buying this row's audio buys something already on file — the money the crawler's real
+      // "Infinity" duplicate would have spent. It is the −2 veto tier (excluded by the capture
+      // queue's `capture_priority >= 0` predicate, no new mechanism), and the finding it matched
+      // is stored so the board can name it. NULL clears a stale marker when the finding is gone.
+      const dupKey = normalizeIsrc(candidate.isrc);
+      const duplicateOf = dupKey ? (findingIsrcs.get(dupKey) ?? null) : null;
+      const priority = duplicateOf
+        ? DUPLICATE_CAPTURE_TIER
+        : capturePriorityFor(
+            { artists: parseArtistsJson(candidate.artists_json), label: candidate.label },
+            archive,
+          ).priority;
 
       writes.push({
-        args: [priority, corpus, now, candidate.track_id],
+        args: [priority, duplicateOf, corpus, now, candidate.track_id],
         sql: `update tracks
               set capture_priority = ?,
+                  duplicate_of_track_id = ?,
                   catalogue_rank_corpus = ?,
                   catalogue_ranked_at = ?,
                   nearest_finding_score = null,
@@ -515,6 +619,14 @@ export type CatalogueTrackItem = {
   bpm: number | null;
   capturePriority: number | null;
   captureReason: CapturePriorityReason | null;
+  /**
+   * The certified finding this row is the SAME RECORDING as — hydrated, so the board can name
+   * it ("already in the archive"). Two paths set it (docs/the-ear.md § Duplicates): the CAPTURE
+   * lens from the stored `duplicate_of_track_id` (a pre-audio ISRC match), the EAR lens from
+   * `nearestFinding` when the score is ≥ `DUPLICATE_SIMILARITY` (a scored near-1.0 match). Null
+   * on an ordinary catalogue row — the common case, an actual discovery.
+   */
+  duplicateOf: CatalogueMatch | null;
   key: string | null;
   label: string | null;
   /** The nearest finding, hydrated. Null when the row has no score yet. */
@@ -576,6 +688,7 @@ type CatalogueRow = {
   bpm: number | null;
   capture_priority: number | null;
   catalogue_ranked_at: string | null;
+  duplicate_of_track_id: string | null;
   key: string | null;
   label: string | null;
   nearest_finding_score: number | null;
@@ -595,7 +708,7 @@ type MatchRow = {
 
 const CATALOGUE_SELECT = `ct.track_id, ct.title, ct.artists_json, ct.album_image_url, ct.spotify_url,
   ct.bpm, ct.key, ct.label, ct.release_date, ct.nearest_finding_score, ct.nearest_finding_track_id,
-  ct.capture_priority, ct.catalogue_ranked_at`;
+  ct.capture_priority, ct.catalogue_ranked_at, ct.duplicate_of_track_id`;
 
 /**
  * The Ear's read — and the reason the whole sweep exists.
@@ -646,11 +759,32 @@ export async function listCatalogueTracks(
     return [];
   }
 
-  const matches = lens === "ear" ? await hydrateMatches(rows) : new Map<string, CatalogueMatch>();
+  // The findings this page names — ONE batched read, whichever lens. The `ear` lens hydrates the
+  // nearest finding (the WHY, and the duplicate when the score is near-1.0); the `capture` lens
+  // hydrates the finding a pre-audio ISRC match flagged as a duplicate (docs/the-ear.md).
+  const matches = await hydrateMatches(
+    rows.map((row) => (lens === "ear" ? row.nearest_finding_track_id : row.duplicate_of_track_id)),
+  );
   const archive = lens === "capture" ? await readArchiveAffinity() : undefined;
 
   return rows.map((row) => {
     const artists = parseArtistsJson(row.artists_json);
+    const nearestFinding = row.nearest_finding_track_id
+      ? (matches.get(row.nearest_finding_track_id) ?? null)
+      : null;
+
+    // The DUPLICATE marker — "already in the archive", the same finding surfaced two ways
+    // (docs/the-ear.md § Duplicates). The capture lens reads the STORED pre-audio ISRC match;
+    // the ear lens reads a near-1.0 SCORE, display-only, off the same nearest finding.
+    const duplicateOf =
+      lens === "ear"
+        ? typeof row.nearest_finding_score === "number" &&
+          row.nearest_finding_score >= DUPLICATE_SIMILARITY
+          ? nearestFinding
+          : null
+        : row.duplicate_of_track_id
+          ? (matches.get(row.duplicate_of_track_id) ?? null)
+          : null;
 
     return {
       albumImageUrl: row.album_image_url,
@@ -660,11 +794,10 @@ export async function listCatalogueTracks(
       captureReason: archive
         ? capturePriorityFor({ artists, label: row.label }, archive).reason
         : null,
+      duplicateOf,
       key: row.key,
       label: row.label,
-      nearestFinding: row.nearest_finding_track_id
-        ? (matches.get(row.nearest_finding_track_id) ?? null)
-        : null,
+      nearestFinding,
       nearestFindingScore: row.nearest_finding_score,
       rankedAt: row.catalogue_ranked_at,
       releaseDate: row.release_date,
@@ -676,14 +809,8 @@ export async function listCatalogueTracks(
 }
 
 /** Hydrate the page's matched findings in ONE batched read (never N+1), keyed by track id. */
-async function hydrateMatches(rows: CatalogueRow[]): Promise<Map<string, CatalogueMatch>> {
-  const ids = [
-    ...new Set(
-      rows
-        .map((row) => row.nearest_finding_track_id)
-        .filter((id): id is string => typeof id === "string"),
-    ),
-  ];
+async function hydrateMatches(findingIds: (string | null)[]): Promise<Map<string, CatalogueMatch>> {
+  const ids = [...new Set(findingIds.filter((id): id is string => typeof id === "string"))];
 
   if (ids.length === 0) {
     return new Map();

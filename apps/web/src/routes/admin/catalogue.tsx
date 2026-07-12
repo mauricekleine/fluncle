@@ -12,6 +12,7 @@ import {
   type CaptureBudgetState,
   type CapturePriorityReason,
   type CatalogueLens,
+  type CatalogueMatch,
 } from "@fluncle/contracts";
 import { AdminShell } from "@/components/admin/admin-shell";
 import { ObjectGlyph, ObjectLead, ObjectList, ObjectRow } from "@/components/admin/object-row";
@@ -302,6 +303,19 @@ function CatalogueRow({ lens, track }: { lens: CatalogueLens; track: CatalogueTr
     <ObjectRow
       trailing={
         <>
+          {/* THE DUPLICATE MARKER. When this row is the same recording as a finding, it reads
+              as "already in the archive" rather than a discovery — the honest register on both
+              lenses. On capture it REPLACES the ladder chip (a duplicate is never bought, so the
+              rung is moot); on ear the score stays too, because the ~1.0 IS the tell. */}
+          {track.duplicateOf ? (
+            <Badge className="whitespace-nowrap" variant="outline">
+              Already logged
+            </Badge>
+          ) : lens === "capture" ? (
+            <Badge className="whitespace-nowrap" variant="secondary">
+              {captureTierLabel(track.captureReason)}
+            </Badge>
+          ) : null}
           {lens === "ear" ? (
             <span
               aria-label={`Similarity to its nearest finding: ${formatScore(track.nearestFindingScore)}`}
@@ -309,11 +323,7 @@ function CatalogueRow({ lens, track }: { lens: CatalogueLens; track: CatalogueTr
             >
               {formatScore(track.nearestFindingScore)}
             </span>
-          ) : (
-            <Badge className="whitespace-nowrap" variant="secondary">
-              {captureTierLabel(track.captureReason)}
-            </Badge>
-          )}
+          ) : null}
           {track.spotifyUrl ? (
             // The one thing the operator came here to do: HEAR it. There is no in-app preview
             // for a catalogue track — the `/ln` relay resolves through `findings`, by design —
@@ -365,6 +375,12 @@ function CatalogueRow({ lens, track }: { lens: CatalogueLens; track: CatalogueTr
 
 /** The row's reason for being where it is, in one line. */
 function Why({ lens, track }: { lens: CatalogueLens; track: CatalogueTrackItem }): ReactNode {
+  // The duplicate WHY wins on both lenses: "you already logged this one." It NAMES the finding
+  // (coordinate, artists, title) — the same evidence line the nearest-finding WHY carries.
+  if (track.duplicateOf) {
+    return <MatchLine lead="Already in the archive —" match={track.duplicateOf} />;
+  }
+
   if (lens === "capture") {
     return captureWhy(track.captureReason);
   }
@@ -375,9 +391,14 @@ function Why({ lens, track }: { lens: CatalogueLens; track: CatalogueTrackItem }
     return "Nothing to compare it to yet.";
   }
 
+  return <MatchLine lead="Closest to" match={match} />;
+}
+
+/** A finding named in one line: the lead-in, its coordinate, and its identity. */
+function MatchLine({ lead, match }: { lead: string; match: CatalogueMatch }): ReactNode {
   return (
     <>
-      Closest to{" "}
+      {lead}{" "}
       {match.logId ? (
         <span className="font-mono text-[11px] tracking-tight tabular-nums">{match.logId}</span>
       ) : null}{" "}

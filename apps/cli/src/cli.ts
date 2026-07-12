@@ -4633,12 +4633,19 @@ async function runCatalogueList(
 
   for (const track of tracks) {
     const identity = `${track.artists.join(", ")} — ${track.title}`;
+    // The DUPLICATE WHY wins on either lens: this row is the same recording as a finding, so it
+    // is "already in the archive" and (on capture) never bought. It names the finding it matched.
+    const dup = track.duplicateOf;
+    const dupWhy = dup
+      ? `already in the archive — ${dup.logId ? `${dup.logId} ` : ""}${dup.artists.join(", ")} — ${dup.title}`
+      : null;
 
     if (options.lens === "capture") {
       // The WHY, on a catalogue row that has never been heard: what ties it to the archive.
       const reason = track.captureReason;
       const why =
-        reason?.kind === "artist"
+        dupWhy ??
+        (reason?.kind === "artist"
           ? `${reason.name} is already in the archive`
           : reason?.kind === "label"
             ? `${reason.name} already carries a finding`
@@ -4646,7 +4653,7 @@ async function runCatalogueList(
               ? `${reason.name} is a label the crawler digs from`
               : reason?.kind === "skipped-label"
                 ? `${reason.name} is not your lane — ranked last, kept anyway`
-                : "nothing ties it to the archive yet";
+                : "nothing ties it to the archive yet");
 
       console.log(`${String(track.capturePriority ?? 0)}  ${identity.padEnd(52)} ${why}`);
       continue;
@@ -4655,9 +4662,11 @@ async function runCatalogueList(
     // The WHY on a ranked row: never a bare score. It names the finding it matched.
     const match = track.nearestFinding;
     const score = track.nearestFindingScore?.toFixed(2) ?? "—";
-    const why = match
-      ? `closest to ${match.logId ? `${match.logId} ` : ""}${match.artists.join(", ")} — ${match.title}`
-      : "nothing to compare it to yet";
+    const why =
+      dupWhy ??
+      (match
+        ? `closest to ${match.logId ? `${match.logId} ` : ""}${match.artists.join(", ")} — ${match.title}`
+        : "nothing to compare it to yet");
 
     console.log(`${score}  ${identity.padEnd(52)} ${why}`);
   }
