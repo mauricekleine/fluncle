@@ -56,6 +56,13 @@ export type AppIconVariant =
   | "traveler-stars"
   /** The traveler with a faint warm eclipse glow behind — the rim light haloed. */
   | "traveler-glow"
+  /** PRODUCTION ASSET: the traveler on a TRANSPARENT ground, scaled to ~58% for
+      Android's adaptive-icon safe zone (the adaptive mask crops harder than iOS). */
+  | "adaptive-foreground"
+  /** PRODUCTION ASSET: the splash mark — the traveler small over an edge-faded
+      starfield on a TRANSPARENT ground; the native splash backgroundColor
+      (Deep Field) supplies the ground, so the composited square has no seam. */
+  | "splash"
   /** Exploration: the burning eclipse mark alone on Deep Field. */
   | "eclipse"
   /** Exploration: a single Oxanium `F` stamp, in the plate's printed frame. */
@@ -362,6 +369,57 @@ const TravelerGlowVariant: React.FC = () => (
   </>
 );
 
+// ── Production asset: the Android adaptive-icon foreground ───────────────────
+// The transparent traveler cut, re-scaled and re-centred for Android's adaptive
+// mask. Android composites this over the config's backgroundColor (Deep Field)
+// and crops to the launcher's shape — its safe zone is a 66/108 (~61%) circle,
+// tighter than iOS's superellipse — so the figure sits at 58% of frame height.
+// The ground stays TRANSPARENT (no WarmGround, no grain: grain would paint
+// noise into the transparent field); the figure's own lossy texture carries
+// the Light-Years Rule.
+const AdaptiveForegroundVariant: React.FC = () => <Traveler heightFrac={0.58} />;
+
+// ── Production asset: the splash mark ─────────────────────────────────────────
+// The picked icon's splash sibling, in variant F's family: the traveler small
+// over the quiet starfield. Rendered on a TRANSPARENT ground so the native
+// splash backgroundColor (Deep Field, already in app.config.ts) supplies the
+// ground — and the stars FADE OUT toward the edges, so the composited square
+// dissolves into the native ground with no visible seam. The figure sits at
+// 46% of frame height: small, drifting, the fluncle-small.jpg composition
+// language reproduced from code.
+const SplashVariant: React.FC = () => {
+  const stars: Star[] = [];
+
+  for (let index = 0; index < 110; index += 1) {
+    const roll = random(`splash-r-${index}`);
+    const x = random(`splash-x-${index}`) * 100;
+    const y = random(`splash-y-${index}`) * 100;
+    // Radial edge falloff: full brightness inside r=30% of centre, fading to
+    // zero by r=47% — the corner of the square never carries a star, so the
+    // asset dissolves into the native Deep Field ground.
+    const distance = Math.hypot(x - 50, y - 50);
+    const falloff = Math.min(1, Math.max(0, (47 - distance) / 17));
+
+    if (falloff <= 0) {
+      continue;
+    }
+
+    stars.push({
+      bright: ((roll > 0.9 ? 0.55 : 0.16) + random(`splash-b-${index}`) * 0.3) * falloff,
+      size: (roll > 0.9 ? 3.4 : 1.6) + random(`splash-s-${index}`) * 1.6,
+      x,
+      y,
+    });
+  }
+
+  return (
+    <>
+      <Starfield stars={stars} />
+      <Traveler heightFrac={0.46} />
+    </>
+  );
+};
+
 // ── Variant A: the burning eclipse mark alone ────────────────────────────────
 // The purest brand mark — the sun the traveler moves toward, big and centred,
 // wrapped in the cover's stippled burning corona. Minimal starfield, near-silent
@@ -649,20 +707,37 @@ const DiamondVariant: React.FC = () => {
 };
 
 const VARIANTS: Record<AppIconVariant, React.FC> = {
+  "adaptive-foreground": AdaptiveForegroundVariant,
   cover: CoverVariant,
   diamond: DiamondVariant,
   eclipse: EclipseVariant,
+  splash: SplashVariant,
   stamp: StampVariant,
   traveler: TravelerVariant,
   "traveler-glow": TravelerGlowVariant,
   "traveler-stars": TravelerStarsVariant,
 };
 
+// The production-asset variants keep a TRANSPARENT ground: Android layers the
+// adaptive foreground over the config's backgroundColor, and the splash mark
+// composites over the native splash ground. Every icon CANDIDATE stays opaque
+// (iOS rejects an app icon with alpha).
+const TRANSPARENT_VARIANTS: ReadonlySet<AppIconVariant> = new Set([
+  "adaptive-foreground",
+  "splash",
+]);
+
 export const AppIcon: React.FC<AppIconProps> = ({ variant }) => {
   const Variant = VARIANTS[variant];
+  const transparent = TRANSPARENT_VARIANTS.has(variant);
 
   return (
-    <AbsoluteFill style={{ backgroundColor: colors.deepField, overflow: "hidden" }}>
+    <AbsoluteFill
+      style={{
+        backgroundColor: transparent ? "transparent" : colors.deepField,
+        overflow: "hidden",
+      }}
+    >
       <Variant />
     </AbsoluteFill>
   );

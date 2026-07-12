@@ -1,11 +1,13 @@
-// The app-icon candidate set — the single source of truth shared by the registry
-// (root.tsx maps it to <Still>s) and the render script (render-app-icons.ts).
+// The app-icon spec sets — the single source of truth shared by the registry
+// (root.tsx maps them to <Still>s) and the render scripts.
 //
-// Each candidate is one <AppIcon> variant (app-icon.tsx) rendered at the 1024×1024
-// master size (the size iOS and Android both want; the OS masks/downscales from
-// it). This is a TASTE deliverable — the operator picks one, and only then does it
-// get wired into apps/mobile (see the PR body's wiring plan). The `slug` names the
-// rendered file (icon-<slug>.png) so the candidates are eyeball-able side by side.
+// Two sets. APP_ICON_SPECS is the CANDIDATE set (render-app-icons.ts → the
+// gitignored out/, for the operator's taste pick — resolved 2026-07-12: variant
+// "traveler", plain Deep Field). MOBILE_ASSET_SPECS is the PRODUCTION set
+// (render-mobile-assets.ts → apps/mobile/assets/, committed): the picked icon
+// master plus its two Expo siblings, the Android adaptive-icon foreground and
+// the splash mark. All render at the 1024×1024 master size (Expo's recommended
+// icon size; the OS masks/downscales from it).
 
 import { type AppIconVariant } from "./app-icon";
 
@@ -78,5 +80,42 @@ export const APP_ICON_SPECS: readonly AppIconSpec[] = [
       "The banger-diamond star motif — every banger out there is a star, the geometric fourth axis.",
     slug: "d-banger-diamond",
     variant: "diamond",
+  },
+] as const;
+
+export type MobileAssetSpec = {
+  /** The committed file name under apps/mobile/assets/. */
+  file: string;
+  /** Remotion <Still> id + selectComposition id. */
+  id: string;
+  /** What the asset is, for the render log. */
+  rationale: string;
+  /** The variant this asset renders. */
+  variant: AppIconVariant;
+};
+
+// The production mobile assets — the operator's pick (variant "traveler",
+// 2026-07-12) plus its Expo siblings. render-mobile-assets.ts renders these to
+// apps/mobile/assets/, which app.config.ts references; they are COMMITTED
+// files (like the OG card), regenerated + re-committed when the design changes.
+export const MOBILE_ASSET_SPECS: readonly MobileAssetSpec[] = [
+  {
+    file: "icon.png",
+    id: "AppIconTraveler",
+    rationale: "the app icon master (the pick: the traveler on plain Deep Field; opaque)",
+    variant: "traveler",
+  },
+  {
+    file: "adaptive-icon.png",
+    id: "AppIconAdaptiveForeground",
+    rationale:
+      "the Android adaptive-icon foreground (transparent; figure at 58% for the adaptive mask)",
+    variant: "adaptive-foreground",
+  },
+  {
+    file: "splash-icon.png",
+    id: "AppIconSplash",
+    rationale: "the splash mark (transparent; the traveler small over an edge-faded starfield)",
+    variant: "splash",
   },
 ] as const;
