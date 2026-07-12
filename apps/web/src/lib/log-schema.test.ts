@@ -16,6 +16,7 @@ import { fold } from "./server/track-match";
 const track = {
   addedAt: "2026-06-03T18:21:00.000Z",
   album: "Nobody Else (1991 Remix)",
+  appleMusicUrl: "https://music.apple.com/us/album/nobody-else/123?i=456",
   artists: ["Axwell", "1991"],
   discogsReleaseUrl: "https://www.discogs.com/release/12345",
   durationMs: 215_000,
@@ -48,10 +49,15 @@ describe("musicRecordingJsonLd (the log page schema)", () => {
     expect(jsonLd.duration).toBe("PT3M35S");
   });
 
-  it("includes isrcCode, inAlbum, and the TikTok + Discogs sameAs when present", () => {
+  it("includes isrcCode, inAlbum, and the Apple Music + TikTok + Discogs sameAs when present", () => {
     expect(jsonLd.isrcCode).toBe("GBKCF1900759");
     expect(jsonLd.inAlbum).toEqual({ "@type": "MusicAlbum", name: track.album });
-    expect(jsonLd.sameAs).toEqual([track.spotifyUrl, track.tiktokUrl, track.discogsReleaseUrl]);
+    expect(jsonLd.sameAs).toEqual([
+      track.spotifyUrl,
+      track.appleMusicUrl,
+      track.tiktokUrl,
+      track.discogsReleaseUrl,
+    ]);
     expect(jsonLd.url).toBe("https://www.fluncle.com/log/004.7.2I");
   });
 

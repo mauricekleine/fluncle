@@ -14,7 +14,7 @@
 // `parseLimit`/`parseBool` did (a tolerant string → number/bool, never a 400).
 
 import { env } from "cloudflare:workers";
-import { backfillDiscogsIds, backfillLastfmLoves } from "../backfill";
+import { backfillAppleMusicUrls, backfillDiscogsIds, backfillLastfmLoves } from "../backfill";
 import { resolveLabelImages } from "../label-images";
 import { adminAuth } from "../orpc-auth";
 import { apiFault, type Implementer, parseBool, parseLimit } from "./_shared";
@@ -85,6 +85,40 @@ export function adminBackfillsHandlers(os: Implementer) {
     }
   });
 
+  // POST /admin/backfill/apple-music — agent tier (`adminAuth`): resolves each finding's
+  // Apple Music URL EXACTLY by ISRC and stores it (no publish), so the box's agent-token
+  // cron drives it. A NO-OP until the MusicKit secrets are provisioned (configured:false).
+  const backfillAppleMusicHandler = os.backfill_apple_music
+    .use(adminAuth)
+    .handler(async ({ input }) => {
+      try {
+        const { query } = input;
+        const result = await backfillAppleMusicUrls(
+          parseLimit(query.limit, BACKFILL_DEFAULT_LIMIT, BACKFILL_MAX_LIMIT),
+          parseBool(query.dryRun),
+          query.cursor ?? undefined,
+        );
+
+        return {
+          configured: result.configured,
+          dryRun: result.dryRun,
+          failed: result.failed,
+          failedCount: result.failedCount,
+          nextCursor: result.nextCursor,
+          ok: true as const,
+          rateLimited: result.rateLimited,
+          resolved: result.resolved,
+          resolvedCount: result.resolvedCount,
+          skipped: result.skipped,
+          skippedCount: result.skippedCount,
+          unresolved: result.unresolved,
+          unresolvedCount: result.unresolvedCount,
+        };
+      } catch (error) {
+        throw apiFault(error);
+      }
+    });
+
   // POST /admin/backfill/label-images — agent tier (`adminAuth`): resolves a label's OWN logo
   // (Discogs → Wikidata) into R2, no publish, so the box's agent-token cron drives it. The
   // world-served bucket is `env.VIDEOS` (behind found.fluncle.com) — the one the observation /
@@ -119,6 +153,7 @@ export function adminBackfillsHandlers(os: Implementer) {
     });
 
   return {
+    backfill_apple_music: backfillAppleMusicHandler,
     backfill_discogs: backfillDiscogsHandler,
     backfill_label_images: backfillLabelImagesHandler,
     backfill_lastfm: backfillLastfmHandler,

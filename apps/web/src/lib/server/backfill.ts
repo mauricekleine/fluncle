@@ -27,6 +27,7 @@
 // exponentially instead of being retried every tick. After the call the outcome
 // is recorded so the next tick resumes from a clean, durable state.
 
+import { appleMusicLookupByIsrc } from "./apple-music";
 import { getDb, typedRows } from "./db";
 import { discogsResolveRelease } from "./discogs";
 import { lastfmLove } from "./lastfm";
@@ -40,6 +41,10 @@ const PAGE_SIZE = 48;
 // (MB bridge + a couple of scored search candidates), so we pace one resolve
 // every ~1.2s to stay comfortably under the ceiling across a long backfill.
 const DISCOGS_DELAY_MS = 1200;
+
+// Apple Music guidance is ~20 req/min; one ISRC resolve is a single request, so pace
+// one every ~3s to stay comfortably under the ceiling across a long backfill.
+const APPLE_MUSIC_DELAY_MS = 3000;
 
 // Per-pass ceiling on eligible findings. Each resolve runs under a ~1.1s-floored
 // rate limiter (Discogs + MB), so a finding can cost several seconds; sweeping
@@ -104,13 +109,35 @@ export type DiscogsBackfillResult = BackfillPass<{
   unresolvedCount: number;
 }>;
 
+export type AppleMusicBackfillResult = BackfillPass<{
+  // False when the MusicKit secrets are unset — the leg is a NO-OP this tick (nothing
+  // resolved, nothing stored, no finding cooled down), so the box cron output reads
+  // honestly as "unconfigured" instead of a silent "0 resolved".
+  configured: boolean;
+  dryRun: boolean;
+  // Findings whose resolve threw a non-rate error this pass (recorded as a failure so
+  // they back off) — the printSweepJson partial-failure signal.
+  failed: Array<{ error: string; logId: string }>;
+  failedCount: number;
+  resolved: Array<{ logId: string; url: string }>;
+  resolvedCount: number;
+  // Findings the reliability gate skipped this pass (already resolved, or cooling down
+  // after a recent attempt/failure). They don't burn the batch budget.
+  skipped: string[];
+  skippedCount: number;
+  // Findings whose ISRC Apple has no song for (a clean no-match — a `tried`, base
+  // cooldown), so a later pass can re-resolve if Apple's catalogue grows.
+  unresolved: string[];
+  unresolvedCount: number;
+}>;
+
 // Which source's reliability columns a query/write targets. `note` is the odd one
 // out: it is NOT a Worker-paced vendor sweep (no `backfillNote…` driver lives in
 // this module) — it only shares the per-source `backfill_note_*` column shape so the
 // auto-note authoring step (`note_track`, agent tier) can reuse `recordAttempt` for
 // its "ran" stamp and the board can reuse `listBackfillRanForTracks(_, "note")` for
 // the Note cell's done-when-ran semantics, exactly like Discogs/Last.fm.
-export type BackfillSource = "discogs" | "lastfm" | "note";
+export type BackfillSource = "apple_music" | "discogs" | "lastfm" | "note";
 
 // The per-source reliability state read off a finding's row.
 type ReliabilityState = {
@@ -611,6 +638,156 @@ async function setDiscogsIds(
           set in_release_id = ?,
             in_master_id = ?
           where track_id = ?`,
+      },
+      {
+        args: [new Date().toISOString(), trackId],
+        sql: `update findings set updated_at = ? where track_id = ?`,
+      },
+    ],
+    "write",
+  );
+}
+
+// ── Apple Music ─────────────────────────────────────────────────────────────────
+
+// Back-fill Apple Music URLs over published findings WHERE apple_music_url is null and
+// the finding carries an ISRC. Resolves EXACTLY by ISRC (never a fuzzy artist/title
+// guess) via the Apple Music API and, on a match, writes the URL server-side. Paced
+// under the ~20 req/min guidance, with the same per-finding reliability state as the
+// other sweeps: a resolved finding is marked done, a clean no-match earns the base
+// cooldown (Apple has no song for that ISRC — re-checkable later), and a rate-limited
+// resolve backs off via the failure-scaled window. NO-OP until the MusicKit secrets are
+// provisioned: the first unconfigured resolve stops the pass cheaply and the result
+// reports `configured: false`.
+export async function backfillAppleMusicUrls(
+  limit: number,
+  dryRun: boolean,
+  startCursor?: string,
+): Promise<AppleMusicBackfillResult> {
+  const resolved: AppleMusicBackfillResult["resolved"] = [];
+  const unresolved: string[] = [];
+  const failed: AppleMusicBackfillResult["failed"] = [];
+  const skipped: string[] = [];
+  const now = Date.now();
+  let first = true;
+  let rateLimited = false;
+  let configured = true;
+
+  const nextCursor = await runPublishedFindingPass(
+    startCursor,
+    batchLimit(limit),
+    async (track) => {
+      // Already has an Apple Music URL → idempotent skip; doesn't count toward the
+      // limit so a full backfill keeps making progress.
+      if (track.appleMusicUrl) {
+        return false;
+      }
+
+      // The worklist is ISRC-gated: the resolve is exact-by-ISRC, so a finding without
+      // one has nothing to match on — skip without burning the budget.
+      if (!track.isrc?.trim()) {
+        return false;
+      }
+
+      const logId = track.logId ?? track.trackId;
+
+      // Reliability gate: already resolved (done), or cooling down → skip.
+      const state = await readReliability(track.trackId, "apple_music");
+
+      if (shouldSkip(state, now)) {
+        skipped.push(logId);
+        return false;
+      }
+
+      if (dryRun) {
+        // Preview the eligible set without resolving, writing, or recording state.
+        unresolved.push(logId);
+        return true;
+      }
+
+      // Pace the calls (skip the wait before the first one).
+      if (!first) {
+        await delay(APPLE_MUSIC_DELAY_MS);
+      }
+      first = false;
+
+      const outcome = await appleMusicLookupByIsrc(track.isrc);
+
+      if (!outcome.configured) {
+        // The MusicKit secrets are unset — the whole leg is a no-op. Every finding
+        // would answer the same, so stop the pass here (cheap) rather than scanning
+        // the archive to no effect. Record NOTHING: the finding stays eligible for
+        // when the key is provisioned.
+        configured = false;
+        return "stop";
+      }
+
+      if (!outcome.ok) {
+        if (outcome.rateLimited) {
+          // Circuit breaker: Apple is actively rate-limiting. Stop the run; do NOT cool
+          // this finding down (it was throttled, not unresolvable) so the next tick
+          // retries it with a fresh window — symmetric with Discogs/Last.fm.
+          rateLimited = true;
+          return "stop";
+        }
+
+        // A non-rate error (bad token, network) is a real failure — record it so the
+        // finding backs off, and surface it in `failed` for the partial-failure signal.
+        await recordAttempt(track.trackId, "apple_music", "failure");
+        failed.push({ error: outcome.error, logId });
+        return true;
+      }
+
+      if (!outcome.url) {
+        // A clean no-match is a TRIED (base cooldown, streak reset): Apple has no song
+        // for this ISRC yet, so don't re-hit it every tick — but it isn't done, so a
+        // later pass can pick it up if Apple's catalogue grows.
+        await recordAttempt(track.trackId, "apple_music", "tried");
+        unresolved.push(logId);
+        return true;
+      }
+
+      await setAppleMusicUrl(track.trackId, outcome.url);
+      await recordAttempt(track.trackId, "apple_music", "done");
+      resolved.push({ logId, url: outcome.url });
+
+      return true;
+    },
+  );
+
+  return {
+    configured,
+    dryRun,
+    failed,
+    failedCount: failed.length,
+    // Null the cursor on a throttle-stop OR an unconfigured no-op so even the deployed
+    // CLI (which breaks only on a null cursor) stops looping this tick. Losing the
+    // resume point is harmless: the cron restarts from the top and the reliability gate
+    // re-skips done/cooling findings cheaply.
+    nextCursor: rateLimited || !configured ? null : nextCursor,
+    rateLimited,
+    resolved,
+    resolvedCount: resolved.length,
+    skipped,
+    skippedCount: skipped.length,
+    unresolved,
+    unresolvedCount: unresolved.length,
+  };
+}
+
+// Server-side write of the Apple Music URL. Mirrors `setDiscogsIds`: the URL is
+// CATALOGUE identity (it describes the recording, so it lives on `tracks` and would be
+// just as true of an uncertified track), while `updated_at` is the FINDING's public
+// lastmod — the `music.apple.com/…` sameAs the write puts on /log is what moves. One
+// batch, so the URL and the lastmod that advertises it can never diverge.
+async function setAppleMusicUrl(trackId: string, url: string): Promise<void> {
+  const db = await getDb();
+
+  await db.batch(
+    [
+      {
+        args: [url, trackId],
+        sql: `update tracks set apple_music_url = ? where track_id = ?`,
       },
       {
         args: [new Date().toISOString(), trackId],

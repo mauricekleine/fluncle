@@ -41,6 +41,22 @@ const LastfmFailedSchema = z
   })
   .meta({ id: "LastfmBackfillFailed" });
 
+/** A resolved-Apple-Music row (`{ logId, url }`). */
+const AppleMusicResolvedSchema = z
+  .object({
+    logId: z.string(),
+    url: z.string(),
+  })
+  .meta({ id: "AppleMusicBackfillResolved" });
+
+/** A failed-Apple-Music row (`{ error, logId }`). */
+const AppleMusicFailedSchema = z
+  .object({
+    error: z.string(),
+    logId: z.string(),
+  })
+  .meta({ id: "AppleMusicBackfillFailed" });
+
 /**
  * `backfill_discogs` → `POST /admin/backfill/discogs` (operationId
  * `backfillDiscogs`).
@@ -134,6 +150,60 @@ export const backfillLastfm = oc
     }),
   );
 
+/**
+ * `backfill_apple_music` → `POST /admin/backfill/apple-music` (operationId
+ * `backfillAppleMusic`).
+ *
+ * Agent tier (`adminAuth`). One bounded, reliability-gated pass over published findings
+ * that carry an ISRC but no Apple Music URL; on an EXACT ISRC match (via the Apple Music
+ * API) the URL is written server-side. NO-OP until the MusicKit secrets are provisioned
+ * (`configured: false`). Returns `{ ok, configured, dryRun, resolved, resolvedCount,
+ * unresolved, unresolvedCount, failed, failedCount, skipped, skippedCount, nextCursor,
+ * rateLimited }` — `unresolved` is the ISRCs Apple had no song for, `skipped` the
+ * findings the per-finding cooldown/done gate held back this pass.
+ */
+export const backfillAppleMusic = oc
+  .route({
+    inputStructure: "detailed",
+    method: "POST",
+    operationId: "backfillAppleMusic",
+    path: "/admin/backfill/apple-music",
+    summary: "Back-fill Apple Music URLs over published findings by exact ISRC (batched)",
+    tags: ["Admin"],
+  })
+  .input(
+    z.object({
+      query: z.object({
+        cursor: z.string().optional(),
+        dryRun: z.string().optional(),
+        limit: z.string().optional(),
+      }),
+    }),
+  )
+  .output(
+    z.object({
+      // False when the MusicKit secrets are unset — the leg is a no-op this tick.
+      configured: z.boolean(),
+      dryRun: z.boolean(),
+      failed: z.array(AppleMusicFailedSchema),
+      failedCount: z.number(),
+      nextCursor: z.string().nullable(),
+      ok: z.literal(true),
+      // True when the pass STOPPED on the Apple Music rate-limit circuit breaker — the
+      // CLI stops looping the cursor and the next tick resumes with a fresh window.
+      rateLimited: z.boolean(),
+      resolved: z.array(AppleMusicResolvedSchema),
+      resolvedCount: z.number(),
+      // Findings the reliability gate skipped this pass (already resolved, or cooling
+      // down after a recent attempt/failure) — they didn't burn the batch.
+      skipped: z.array(z.string()),
+      skippedCount: z.number(),
+      // Findings whose ISRC Apple has no song for (a clean no-match, re-checkable later).
+      unresolved: z.array(z.string()),
+      unresolvedCount: z.number(),
+    }),
+  );
+
 /** A failed label-image row (`{ error, slug }`). */
 const LabelImagesBackfillFailedSchema = z
   .object({
@@ -194,6 +264,7 @@ export const backfillLabelImages = oc
 
 /** The `admin-backfills` domain's ops, merged into the root contract by `./index.ts`. */
 export const adminBackfillsContract = {
+  backfill_apple_music: backfillAppleMusic,
   backfill_discogs: backfillDiscogs,
   backfill_label_images: backfillLabelImages,
   backfill_lastfm: backfillLastfm,

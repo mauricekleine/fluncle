@@ -76,6 +76,19 @@ const envKeys = [
   "LASTFM_API_KEY",
   "LASTFM_SHARED_SECRET",
   "LASTFM_SESSION_KEY",
+  // Apple Music API developer token, for the EXACT ISRC → Apple Music URL resolve
+  // (lib/server/apple-music.ts, the `apple-music` backfill). Three parts of one
+  // MusicKit key: TEAM_ID (the Apple Developer team), KEY_ID (the MusicKit key id),
+  // and PRIVATE_KEY (the ES256 .p8 private key, PEM). The Worker mints a short-lived
+  // ES256 JWT from them per the Apple Music API auth spec — the box never holds them.
+  // All three read via readOptionalEnv, so the whole leg is a NO-OP until they are
+  // set (exactly like Last.fm's session key): no URL is ever stored, and nothing wrong
+  // is stored, while they are absent. Provisioning them requires an Apple Developer
+  // MusicKit key (the keyless iTunes Search API has no ISRC lookup — that is the Apple
+  // Music API, which needs this token). See docs/app-store-review.md.
+  "APPLE_MUSIC_TEAM_ID",
+  "APPLE_MUSIC_KEY_ID",
+  "APPLE_MUSIC_PRIVATE_KEY",
   // Discogs read-only release-ID enrichment (lib/server/discogs.ts): a personal
   // access token created in the `fluncle` Discogs developer settings. It lifts the
   // rate limit to ~60 req/min and is read via readOptionalEnv, so the lookup

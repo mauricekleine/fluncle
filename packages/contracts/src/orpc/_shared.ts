@@ -45,6 +45,12 @@ export const TrackListItemSchema = z
     // it is present only on admin reads (the capture sweep + the `requeue-analysis` command
     // read it to find preview-grade findings). Absent on legacy rows (pre-provenance).
     analyzedFrom: z.enum(["preview", "full"]).optional(),
+    // The finding's Apple Music track URL — a PUBLIC listen link, the Spotify twin,
+    // resolved EXACTLY by ISRC (the `apple-music` backfill). Present only once resolved;
+    // a missing link is honest (Apple has no match, or the leg is unprovisioned), a wrong
+    // one never renders — the resolve is exact-or-nothing. Feeds the /log "Listen on Apple
+    // Music" link + the MusicRecording `sameAs`.
+    appleMusicUrl: z.string().optional(),
     // The artist's own YouTube channel id(s) (`UC…`), gathered from the confirmed
     // `artist_socials` YouTube links of every artist on the finding. Populated ONLY on
     // the admin capture-queue read (`captureQueue=true`) — the full-song capture sweep

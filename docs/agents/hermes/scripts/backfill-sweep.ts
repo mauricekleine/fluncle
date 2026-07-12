@@ -18,8 +18,14 @@
 // The loop, idempotent by construction (the Worker skips already-done + cooling-down
 // findings server-side), fast no-op once the catalogue is drained:
 //
-//   1. `fluncle admin backfills discogs --limit <N> --json`  → one paced batch.
-//   2. `fluncle admin backfills lastfm  --limit <N> --json`  → one paced batch.
+//   1. `fluncle admin backfills discogs      --limit <N> --json`  → one paced batch.
+//   2. `fluncle admin backfills lastfm       --limit <N> --json`  → one paced batch.
+//   3. `fluncle admin backfills apple-music  --limit <N> --json`  → one paced batch.
+//
+// The apple-music leg is a NO-OP until the Worker's MusicKit secrets are provisioned
+// (the summary carries `configured: false`), exactly like the lastfm leg is a no-op
+// without a session key — so this driver drives all three unconditionally and the
+// server decides what actually runs.
 //
 // stdout: one JSON summary line (the cron run output). Diagnostics → stderr.
 
@@ -66,6 +72,17 @@ type LastfmSummary = {
   ok?: boolean;
   rateLimited?: boolean;
   skippedCount?: number;
+};
+
+type AppleMusicSummary = {
+  // False when the Worker's MusicKit secrets are unset — the leg was a no-op this tick.
+  configured?: boolean;
+  failedCount?: number;
+  ok?: boolean;
+  rateLimited?: boolean;
+  resolvedCount?: number;
+  skippedCount?: number;
+  unresolvedCount?: number;
 };
 
 // ---------------------------------------------------------------------------
@@ -130,6 +147,15 @@ function isCliErrorPayload(value: unknown): value is { code: string; message: st
 
 function main(): void {
   const summary = {
+    "apple-music": {
+      configured: false,
+      error: null as string | null,
+      failed: 0,
+      resolved: 0,
+      skipped: 0,
+      throttled: false,
+      unresolved: 0,
+    },
     discogs: {
       error: null as string | null,
       resolved: 0,
@@ -170,6 +196,27 @@ function main(): void {
   } catch (error) {
     summary.lastfm.error = error instanceof Error ? error.message : String(error);
     log(`lastfm backfill failed: ${summary.lastfm.error}`);
+  }
+
+  try {
+    const apple = fluncleJson<AppleMusicSummary>(["admin", "backfills", "apple-music", ...limit]);
+    summary["apple-music"].configured = apple.configured ?? false;
+    summary["apple-music"].resolved = apple.resolvedCount ?? 0;
+    summary["apple-music"].unresolved = apple.unresolvedCount ?? 0;
+    summary["apple-music"].failed = apple.failedCount ?? 0;
+    summary["apple-music"].skipped = apple.skippedCount ?? 0;
+    summary["apple-music"].throttled = apple.rateLimited ?? false;
+
+    if (apple.ok === false) {
+      // A partial-failure batch (`ok: false`, exit 1): the counts above are the honest
+      // summary — some resolved, some failed — distinct from the catch below.
+      log(
+        `apple-music backfill partial: ${summary["apple-music"].failed} item(s) failed this tick`,
+      );
+    }
+  } catch (error) {
+    summary["apple-music"].error = error instanceof Error ? error.message : String(error);
+    log(`apple-music backfill failed: ${summary["apple-music"].error}`);
   }
 
   console.log(JSON.stringify(summary));

@@ -2033,6 +2033,20 @@ function addAdminCommands(program: Command): void {
       await runBackfillDiscogs(options, backfillDiscogsCommand);
     });
 
+  // `backfill_apple_music` → `admin backfills apple-music`. Resolves each finding's
+  // Apple Music URL EXACTLY by ISRC and stores it. A no-op until the Worker's MusicKit
+  // secrets are provisioned.
+  backfill
+    .command("apple-music")
+    .description("Resolve missing Apple Music URLs for published findings (exact ISRC match)")
+    .option("--dry-run", "Report the eligible set without resolving or writing", false)
+    .option("--limit <limit>", "Max findings to resolve", "50")
+    .option("--json", "Print JSON", false)
+    .action(async (options: BackfillSyncOptions) => {
+      const { backfillAppleMusicCommand } = await import("./commands/admin-tracks");
+      await runBackfillAppleMusic(options, backfillAppleMusicCommand);
+    });
+
   // `backfill_artists` → `admin backfills artists`. Back-fills the artist entity
   // tables (artists + track_artists) for existing findings that predate Unit 1.
   backfill
@@ -2767,6 +2781,104 @@ async function runBackfillDiscogs(
   for (const item of resolved) {
     const master = item.masterId ? ` (master ${item.masterId})` : "";
     console.log(`  ${item.logId}: release ${item.releaseId}${master}`);
+  }
+}
+
+async function runBackfillAppleMusic(
+  options: BackfillSyncOptions,
+  backfillAppleMusicCommand: typeof import("./commands/admin-tracks").backfillAppleMusicCommand,
+): Promise<void> {
+  const limit = parseListLimit(options.limit);
+  const resolved: Array<{ logId: string; url: string }> = [];
+  const unresolved: string[] = [];
+  const failed: Array<{ error: string; logId: string }> = [];
+  const skipped: string[] = [];
+  let cursor: string | undefined;
+  let dryRun = options.dryRun;
+  let throttled = false;
+  let configured = true;
+
+  // The cap is on findings actually HANDLED (resolved + unresolved + failed); skips
+  // don't count, so the loop keeps draining cursors past cooling-down/done findings
+  // until the cap is met or the archive is exhausted (nextCursor null).
+  while (resolved.length + unresolved.length + failed.length < limit) {
+    const remaining = limit - (resolved.length + unresolved.length + failed.length);
+    const result = await backfillAppleMusicCommand(remaining, options.dryRun, cursor);
+    dryRun = result.dryRun;
+    configured = result.configured;
+    resolved.push(...result.resolved);
+    unresolved.push(...result.unresolved);
+    failed.push(...result.failed);
+    skipped.push(...result.skipped);
+
+    if (!options.json) {
+      const verb = result.dryRun ? "would resolve" : "resolved";
+      console.log(
+        `  …${verb} ${result.resolvedCount}; ${result.unresolvedCount} unresolved; ${result.failedCount} failed; ${result.skippedCount} skipped`,
+      );
+    }
+
+    if (!result.configured) {
+      // The Worker's MusicKit secrets are unset — the leg is a no-op. Stop looping; the
+      // server already stopped the pass and nulled the cursor.
+      break;
+    }
+
+    if (result.rateLimited) {
+      // Apple Music circuit breaker tripped. Stop looping the cursor — the next tick
+      // resumes from a fresh rate-limit window.
+      throttled = true;
+      break;
+    }
+
+    if (result.nextCursor === null) {
+      break;
+    }
+
+    cursor = result.nextCursor;
+  }
+
+  if (options.json) {
+    printSweepJson(
+      {
+        configured,
+        dryRun,
+        failed,
+        rateLimited: throttled,
+        resolved,
+        resolvedCount: resolved.length,
+        skipped,
+        skippedCount: skipped.length,
+        unresolved,
+        unresolvedCount: unresolved.length,
+      },
+      failed.length,
+    );
+    return;
+  }
+
+  if (!configured) {
+    console.log(
+      "Apple Music backfill is not configured (the Worker's MusicKit secrets are unset) — nothing resolved.",
+    );
+    return;
+  }
+
+  const verb = dryRun ? "Would resolve" : "Resolved";
+  console.log(
+    `${verb} ${resolved.length} Apple Music URL(s); ${unresolved.length} unresolved; ${failed.length} failed; ${skipped.length} skipped.`,
+  );
+
+  for (const item of resolved) {
+    console.log(`  ${item.logId}: ${item.url}`);
+  }
+
+  for (const item of failed) {
+    console.log(`  ${item.logId}: ${item.error}`);
+  }
+
+  if (failed.length > 0) {
+    process.exitCode = 1;
   }
 }
 

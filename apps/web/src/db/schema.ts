@@ -97,6 +97,17 @@ export const tracks = sqliteTable(
     //     like "preview" — anything that is not confirmed "full" is re-enrichable).
     analyzedAt: text("analyzed_at"),
     analyzedFrom: text("analyzed_from", { enum: ["preview", "full"] }),
+    // The finding's Apple Music track URL — a public listen link, the Spotify twin.
+    // CATALOGUE identity (it describes the recording, not the certification), so it
+    // lives here and is just as true of an uncertified track. Resolved EXACTLY by
+    // ISRC via the Apple Music API (`filter[isrc]`) in the `apple-music` backfill —
+    // never a fuzzy artist/title guess, so a wrong link can never render on /log
+    // (the iTunes Search API has no ISRC lookup, only fuzzy term search; a term-search
+    // match is unsafe for a public link, so this leg is exact-or-nothing). Stored as
+    // Apple returns it (`music.apple.com/<storefront>/…`, which geo-redirects per the
+    // visitor's account region). NULL until the ISRC resolves (or forever, if it never
+    // does — a missing link is honest, a wrong one is not).
+    appleMusicUrl: text("apple_music_url"),
     artistsJson: text("artists_json").notNull(),
     bpm: real("bpm"),
     // The analyzer's confidence in `bpm` (0..1) and where it came from (analysis
@@ -390,6 +401,18 @@ export const findings = sqliteTable(
     //     no-op). Null until done. All four are null on rows that predate the column.
     // The Discogs sweep's OUTPUT (`in_release_id`/`in_master_id`) is catalogue identity
     // and lives on `tracks`; only the per-finding sweep BOOKKEEPING lives here.
+    //
+    // The Apple Music sweep follows the SAME per-source shape (attempted_at / attempts /
+    // failures / done_at) and the same rules: its OUTPUT (`apple_music_url`) is catalogue
+    // identity on `tracks`, only the bookkeeping lives here. The one twist is `done_at`
+    // semantics — it stamps when the ISRC RESOLVED to a URL; a clean no-match (Apple has no
+    // song for that ISRC) is a `tried` (base cooldown, no done_at), so a later catalogue
+    // pass can re-resolve it if Apple's catalogue grows. A finding with no ISRC never
+    // enters the sweep at all (the worklist is ISRC-gated).
+    backfillAppleMusicAttemptedAt: text("backfill_apple_music_attempted_at"),
+    backfillAppleMusicAttempts: integer("backfill_apple_music_attempts").notNull().default(0),
+    backfillAppleMusicDoneAt: text("backfill_apple_music_done_at"),
+    backfillAppleMusicFailures: integer("backfill_apple_music_failures").notNull().default(0),
     backfillDiscogsAttemptedAt: text("backfill_discogs_attempted_at"),
     backfillDiscogsAttempts: integer("backfill_discogs_attempts").notNull().default(0),
     backfillDiscogsDoneAt: text("backfill_discogs_done_at"),
