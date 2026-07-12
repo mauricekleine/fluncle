@@ -6,7 +6,7 @@
 // same 2-char floor the server also enforces, and the same entity groups in the same
 // order. The archive is one more SURFACE over the one `search_archive` op.
 
-import { type SearchEntity } from "@fluncle/contracts/orpc";
+import { type SearchEntity, type SearchHit } from "@fluncle/contracts/orpc";
 
 /** The floor the server also enforces — below it there is nothing to go on yet. */
 export const MIN_QUERY_LENGTH = 2;
@@ -85,4 +85,35 @@ export function partitionEntities(entities: SearchEntity[]): EntityGroup[] {
 /** The public path a jump-target entity opens on the web (the app has no such page). */
 export function entityWebPath(entity: Pick<SearchEntity, "kind" | "slug">): string {
   return `/${entity.kind}/${entity.slug}`;
+}
+
+/** One track group as it renders: a heading, its rows, and whether they are certified. */
+export type TrackGroup = { certified: boolean; heading: string; hits: SearchHit[] };
+
+/**
+ * Split the track results into the two named groups the mobile archive renders (operator
+ * ruling 2026-07-12): "Fluncle's Findings" (certified, coordinate rows) ALWAYS before
+ * "Tracks" (uncertified, link-out rows). This differs from the web palette, which heads
+ * neither track group — the operator asked for the split on mobile so the two registers
+ * read as two lists, not one interleaved run.
+ *
+ * The order WITHIN each group is preserved (the server's relevance order), and an empty
+ * group drops out. The Unlit Rule stays intact: "Tracks" is a neutral heading for the
+ * link-out rows, never a NAME for the tier — "Finding" is still the only named object,
+ * and each row keeps its own certified/unlit treatment.
+ */
+export function partitionTracks(results: SearchHit[]): TrackGroup[] {
+  const certified: SearchHit[] = [];
+  const uncertified: SearchHit[] = [];
+  for (const hit of results) {
+    (hit.certified ? certified : uncertified).push(hit);
+  }
+  const groups: TrackGroup[] = [];
+  if (certified.length > 0) {
+    groups.push({ certified: true, heading: "Fluncle's Findings", hits: certified });
+  }
+  if (uncertified.length > 0) {
+    groups.push({ certified: false, heading: "Tracks", hits: uncertified });
+  }
+  return groups;
 }

@@ -22,7 +22,7 @@ import { CosmosBackdrop } from "@/components/cosmos-backdrop";
 import { archiveView } from "@/lib/archive-state";
 import { type SavedFinding } from "@/lib/saved-store";
 import { useSavedFindings } from "@/lib/saved";
-import { partitionEntities, searchView } from "@/lib/search-state";
+import { partitionEntities, partitionTracks, searchView } from "@/lib/search-state";
 import { color, font } from "@/theme/tokens";
 
 // The archive (RFC Unit 3): browse + a device-local Saved view + SEARCH (the catalogue
@@ -202,10 +202,12 @@ function pickHit(hit: SearchHit, router: ReturnType<typeof useRouter>): void {
 }
 
 // The search pane: one `search_archive` op behind a debounced query, rendered in the
-// archive row idiom. Entities (artist/label/album) are jump targets grouped by kind and
-// opened on the web (the app has no such page); tracks follow in the certified/unlit
-// register. Empty/error states are honest and voiced; the two notes (sonic anchor,
-// degraded fallback) mirror the web palette's ratified lines.
+// archive row idiom. Results render in three heading groups (operator ruling 2026-07-12):
+// entity jump targets first (Artists / Labels / Albums, opened on the web — the app has
+// no such page), then the tracks split into "Fluncle's Findings" (certified, coordinate
+// rows) ALWAYS before "Tracks" (uncertified, link-out rows). Empty/error states are
+// honest and voiced; the two notes (sonic anchor, degraded fallback) mirror the web
+// palette's ratified lines.
 function SearchResults({
   onPickHit,
   query,
@@ -218,7 +220,8 @@ function SearchResults({
   const entities = data?.entities ?? [];
   const hasResults = results.length > 0 || entities.length > 0;
   const state = searchView({ hasResults, isError, isFetching, query });
-  const groups = partitionEntities(entities);
+  const entityGroups = partitionEntities(entities);
+  const trackGroups = partitionTracks(results);
 
   if (state === "idle" || state === "tooShort") {
     return <View style={{ flex: 1 }} />;
@@ -261,7 +264,7 @@ function SearchResults({
           Reading by name only right now — showing the closest words.
         </Text>
       ) : null}
-      {groups.map((group) => (
+      {entityGroups.map((group) => (
         <View key={group.kind}>
           <Text style={[font.label, styles.groupHeading]}>{group.heading}</Text>
           {group.entities.map((entity, index) => (
@@ -273,25 +276,30 @@ function SearchResults({
           ))}
         </View>
       ))}
-      {results.map((hit, index) => (
-        <ArchiveRow
-          key={hit.trackId}
-          accessibilityLabel={
-            hit.certified && hit.logId
-              ? `Open the log page for ${hit.artists.join(", ")} — ${hit.title}`
-              : `Open ${hit.artists.join(", ")} — ${hit.title} on Spotify`
-          }
-          albumImageUrl={hit.albumImageUrl}
-          artists={hit.artists}
-          bpm={hit.bpm}
-          certified={hit.certified}
-          galaxyName={hit.galaxy}
-          isLast={index === results.length - 1}
-          logId={hit.logId}
-          musicalKey={hit.key}
-          onPress={() => onPickHit(hit)}
-          title={hit.title}
-        />
+      {trackGroups.map((group) => (
+        <View key={group.heading}>
+          <Text style={[font.label, styles.groupHeading]}>{group.heading}</Text>
+          {group.hits.map((hit, index) => (
+            <ArchiveRow
+              key={hit.trackId}
+              accessibilityLabel={
+                hit.certified && hit.logId
+                  ? `Open the log page for ${hit.artists.join(", ")} — ${hit.title}`
+                  : `Open ${hit.artists.join(", ")} — ${hit.title} on Spotify`
+              }
+              albumImageUrl={hit.albumImageUrl}
+              artists={hit.artists}
+              bpm={hit.bpm}
+              certified={hit.certified}
+              galaxyName={hit.galaxy}
+              isLast={index === group.hits.length - 1}
+              logId={hit.logId}
+              musicalKey={hit.key}
+              onPress={() => onPickHit(hit)}
+              title={hit.title}
+            />
+          ))}
+        </View>
       ))}
     </ScrollView>
   );
