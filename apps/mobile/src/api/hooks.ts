@@ -131,6 +131,72 @@ export function useMixtapes() {
   return useQuery(orpc.list_mixtapes.queryOptions({ select: (res) => res.mixtapes }));
 }
 
+/**
+ * The artists a mix can be seeded from — the taste picker's grid (`list_mixable_artists`,
+ * GET /mix/artists), most-represented first. `q` filters by name for someone the grid
+ * missed; below the debounce floor the query still runs with no `q` (the default grid), so
+ * the picker is never blank. Selects the `artists` array out of the `{ ok, artists }`
+ * envelope. The archive's roster of mixable artists doesn't churn while you browse, so it
+ * stays fresh for a minute; a public read never refetches on focus.
+ */
+export function useMixableArtists(q?: string) {
+  const trimmed = q?.trim() ?? "";
+  return useQuery(
+    orpc.list_mixable_artists.queryOptions({
+      input: trimmed ? { limit: "48", q: trimmed } : { limit: "48" },
+      refetchOnWindowFocus: false,
+      select: (res) => res.artists,
+      staleTime: 60_000,
+    }),
+  );
+}
+
+/**
+ * What to open a set WITH, for a seed of artists you like (`list_mix_openers`, GET
+ * /mix/openers) — those artists' own tracks, certified first. Disabled with no seed (the
+ * contract requires a `taste`, and an empty seed yields an empty list anyway), so the grid
+ * stands alone until the reader names someone. Selects the `tracks` array.
+ */
+export function useMixOpeners(taste: string[]) {
+  return useQuery(
+    orpc.list_mix_openers.queryOptions({
+      enabled: taste.length > 0,
+      input: { limit: "24", taste: taste.join(",") },
+      refetchOnWindowFocus: false,
+      select: (res) => res.tracks,
+      staleTime: 60_000,
+    }),
+  );
+}
+
+/**
+ * The rail: the tracks that mix cleanly OUT of the chain's tail (`list_mixable_tracks`, GET
+ * /tracks/{idOrLogId}/mixable), each carrying its reason chip. `exclude` is the whole chain
+ * (Log IDs / Spotify ids mixed freely) applied server-side, and `taste` tilts the order to
+ * the seeded artists. Disabled until there is a tail to rank from. Selects the `findings`
+ * array; an unknown target / empty archive comes back `[]`, the screen's quiet-rail state.
+ */
+export function useMixableTracks(params: {
+  exclude: string[];
+  idOrLogId: string | undefined;
+  taste: string[];
+}) {
+  const { exclude, idOrLogId, taste } = params;
+  return useQuery(
+    orpc.list_mixable_tracks.queryOptions({
+      enabled: Boolean(idOrLogId),
+      input: {
+        idOrLogId: idOrLogId ?? "",
+        limit: "12",
+        ...(exclude.length > 0 ? { exclude: exclude.join(",") } : {}),
+        ...(taste.length > 0 ? { taste: taste.join(",") } : {}),
+      },
+      refetchOnWindowFocus: false,
+      select: (res) => res.findings,
+    }),
+  );
+}
+
 /** A timed now-playing sample: the slot plus the send/receive instants for NTP-lite skew. */
 export type RadioSlotFetch = { receivedAt: number; sentAt: number; slot: RadioNowPlaying };
 
