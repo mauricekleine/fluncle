@@ -15,6 +15,9 @@ export { logPageUrl };
 export type LogSchemaInput = LogProseInput & {
   album?: string;
   albumImageUrl?: string;
+  // The finding's Apple Music URL — a per-track `sameAs` (the Spotify twin). Present
+  // only when the exact-ISRC resolve landed one.
+  appleMusicUrl?: string;
   // Name → slug for the finding's artists (the resolved artist entities). Present
   // names get an `@id = <siteUrl>/artist/<slug>` stamped on their `byArtist`
   // MusicGroup node — the cross-page graph that reconciles recording→artist across
@@ -119,6 +122,7 @@ export function musicRecordingJsonLd(
     ...(recordingOf ? { recordingOf } : {}),
     sameAs: [
       track.spotifyUrl,
+      ...(track.appleMusicUrl ? [track.appleMusicUrl] : []),
       ...(track.tiktokUrl ? [track.tiktokUrl] : []),
       ...(track.discogsReleaseUrl ? [track.discogsReleaseUrl] : []),
     ],

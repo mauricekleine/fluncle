@@ -22,6 +22,7 @@ const BASE_ROW: TrackRow = {
   album_slug: null,
   analyzed_at: null,
   analyzed_from: null,
+  apple_music_url: null,
   artists_json: '["Some Artist"]',
   bpm: null,
   bpm_source: null,

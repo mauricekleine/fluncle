@@ -2,7 +2,14 @@ import { CaretLeftIcon, CaretRightIcon } from "@phosphor-icons/react";
 import { Fragment } from "react";
 import { Link, createFileRoute, notFound, redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
-import { siMixcloud, siSoundcloud, siSpotify, siTiktok, siYoutube } from "simple-icons";
+import {
+  siApplemusic,
+  siMixcloud,
+  siSoundcloud,
+  siSpotify,
+  siTiktok,
+  siYoutube,
+} from "simple-icons";
 import { VideoBehindTheScenes } from "@/components/behind-the-scenes";
 import { BrandIcon } from "@/components/brand-icon";
 import { LogFootage } from "@/components/log/log-footage";
@@ -504,6 +511,17 @@ function LogPage() {
             <BrandIcon icon={siSpotify} />
             Listen on Spotify
           </Button>
+          {track.appleMusicUrl ? (
+            <Button
+              nativeButton={false}
+              render={<a href={track.appleMusicUrl} rel="noreferrer" target="_blank" />}
+              size="lg"
+              variant="outline"
+            >
+              <BrandIcon icon={siApplemusic} />
+              Listen on Apple Music
+            </Button>
+          ) : undefined}
           <SaveFindingButton logId={logId} trackId={track.trackId} />
           {track.tiktokUrl ? (
             <Button
