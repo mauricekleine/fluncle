@@ -14,7 +14,12 @@
 // `parseLimit`/`parseBool` did (a tolerant string → number/bool, never a 400).
 
 import { env } from "cloudflare:workers";
-import { backfillAppleMusicUrls, backfillDiscogsIds, backfillLastfmLoves } from "../backfill";
+import {
+  backfillAppleMusicCatalogue,
+  backfillAppleMusicUrls,
+  backfillDiscogsIds,
+  backfillLastfmLoves,
+} from "../backfill";
 import { resolveLabelImages } from "../label-images";
 import { adminAuth } from "../orpc-auth";
 import { apiFault, type Implementer, parseBool, parseLimit } from "./_shared";
@@ -100,6 +105,8 @@ export function adminBackfillsHandlers(os: Implementer) {
         );
 
         return {
+          albumFactsWritten: result.albumFactsWritten,
+          breakerTripped: result.breakerTripped,
           configured: result.configured,
           dryRun: result.dryRun,
           failed: result.failed,
@@ -111,6 +118,39 @@ export function adminBackfillsHandlers(os: Implementer) {
           resolvedCount: result.resolvedCount,
           skipped: result.skipped,
           skippedCount: result.skippedCount,
+          unresolved: result.unresolved,
+          unresolvedCount: result.unresolvedCount,
+        };
+      } catch (error) {
+        throw apiFault(error);
+      }
+    });
+
+  // POST /admin/backfill/apple-catalogue — agent tier (`adminAuth`): the catalogue sibling of
+  // `backfill_apple_music`. Batched URL drain over uncertified rows + single-ISRC album facts.
+  // Catalogue identity only (no publish, no certification), so the box's agent-token cron drives
+  // it. A NO-OP until the MusicKit secrets are provisioned (configured:false).
+  const backfillAppleCatalogueHandler = os.backfill_apple_catalogue
+    .use(adminAuth)
+    .handler(async ({ input }) => {
+      try {
+        const { query } = input;
+        const result = await backfillAppleMusicCatalogue(
+          parseLimit(query.limit, BACKFILL_DEFAULT_LIMIT, BACKFILL_MAX_LIMIT),
+          parseBool(query.dryRun),
+        );
+
+        return {
+          albumFactsWritten: result.albumFactsWritten,
+          breakerTripped: result.breakerTripped,
+          configured: result.configured,
+          dryRun: result.dryRun,
+          failed: result.failed,
+          failedCount: result.failedCount,
+          ok: true as const,
+          rateLimited: result.rateLimited,
+          resolved: result.resolved,
+          resolvedCount: result.resolvedCount,
           unresolved: result.unresolved,
           unresolvedCount: result.unresolvedCount,
         };
@@ -153,6 +193,7 @@ export function adminBackfillsHandlers(os: Implementer) {
     });
 
   return {
+    backfill_apple_catalogue: backfillAppleCatalogueHandler,
     backfill_apple_music: backfillAppleMusicHandler,
     backfill_discogs: backfillDiscogsHandler,
     backfill_label_images: backfillLabelImagesHandler,

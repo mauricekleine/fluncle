@@ -29,6 +29,7 @@
 // `crawl_catalogue`'s params ride the query string of a bodyless POST, so its handler reads
 // `input.query.*` and applies the same tolerant parse/clamp the backfills do.
 
+import { resetAppleBreaker } from "../apple-breaker";
 import {
   getCatalogueCaptureState,
   setCatalogueCaptureBudget,
@@ -157,12 +158,28 @@ export function adminCatalogueHandlers(os: Implementer) {
       }
     });
 
+  // POST /admin/catalogue/apple-breaker/reset — OPERATOR tier. Clear the cross-cutting Apple
+  // failure-regime breaker once the token is fixed. Operator tier, the `set_capture_budget`
+  // neighbour's rule: a machine does not get to silently re-arm a spend-adjacent external
+  // integration it just tripped.
+  const resetAppleBreakerHandler = os.reset_apple_breaker
+    .use(adminAuth)
+    .use(operatorGuard)
+    .handler(async () => {
+      try {
+        return { ...(await resetAppleBreaker()), ok: true as const };
+      } catch (error) {
+        throw apiFault(error);
+      }
+    });
+
   return {
     crawl_catalogue: crawlCatalogueHandler,
     get_capture_budget: getCaptureBudgetHandler,
     get_crawl_status: getCrawlStatusHandler,
     list_catalogue_tracks: listCatalogueTracksHandler,
     rank_catalogue: rankCatalogueHandler,
+    reset_apple_breaker: resetAppleBreakerHandler,
     set_capture_budget: setCaptureBudgetHandler,
   };
 }

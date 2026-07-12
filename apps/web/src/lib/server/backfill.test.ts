@@ -9,6 +9,15 @@ const listTracks = vi.fn();
 const discogsResolveRelease = vi.fn();
 const lastfmLove = vi.fn();
 const appleMusicLookupByIsrc = vi.fn();
+const appleCatalogLookupByIsrc = vi.fn();
+const appleCatalogLookupByIsrcs = vi.fn();
+// The cross-cutting Apple breaker/meter — vi.fns so a test can flip the breaker/budget shut.
+// Default: allowed + budget available + record calls a no-op, so the reliability-gate tests are
+// isolated from the breaker (its own behaviour is proven in apple-breaker.test.ts).
+const areAppleCallsAllowed = vi.fn(async () => true);
+const isAppleCallBudgetAvailable = vi.fn(async () => true);
+const recordAppleAuthOutcome = vi.fn(async () => {});
+const recordAppleCall = vi.fn(async () => {});
 
 // The mocked libSQL client: `execute({ sql, args })`. SELECTs return a reliability
 // row from `reliabilityRows` (keyed by trackId); writes are captured in `writes`.
@@ -60,7 +69,15 @@ vi.mock("./discogs", () => ({
 }));
 vi.mock("./lastfm", () => ({ lastfmLove: (...a: unknown[]) => lastfmLove(...a) }));
 vi.mock("./apple-music", () => ({
+  appleCatalogLookupByIsrc: (...a: unknown[]) => appleCatalogLookupByIsrc(...a),
+  appleCatalogLookupByIsrcs: (...a: unknown[]) => appleCatalogLookupByIsrcs(...a),
   appleMusicLookupByIsrc: (...a: unknown[]) => appleMusicLookupByIsrc(...a),
+}));
+vi.mock("./apple-breaker", () => ({
+  areAppleCallsAllowed: (...a: unknown[]) => areAppleCallsAllowed(...a),
+  isAppleCallBudgetAvailable: (...a: unknown[]) => isAppleCallBudgetAvailable(...a),
+  recordAppleAuthOutcome: (...a: unknown[]) => recordAppleAuthOutcome(...a),
+  recordAppleCall: (...a: unknown[]) => recordAppleCall(...a),
 }));
 
 // A minimal published finding (the only fields the backfill reads).
@@ -239,7 +256,12 @@ describe("backfillLastfmLoves — reliability gate", () => {
   });
 });
 
-describe("backfillAppleMusicUrls — reliability gate + exact ISRC resolve", () => {
+describe("backfillAppleMusicUrls — reliability gate + exact ISRC resolve (oracle)", () => {
+  // A resolved single-ISRC oracle bundle with just the URL (no album facts).
+  function urlBundle(url: string) {
+    return { bundle: { songId: "s1", songUrl: url }, configured: true, ok: true };
+  }
+
   it("skips a finding that already has an Apple Music URL (idempotent), no lookup", async () => {
     singlePage([
       finding("1", { appleMusicUrl: "https://music.apple.com/us/song/x/1", isrc: "I1" }),
@@ -249,7 +271,7 @@ describe("backfillAppleMusicUrls — reliability gate + exact ISRC resolve", () 
     const result = await backfillAppleMusicUrls(10, false);
 
     expect(result.resolvedCount).toBe(0);
-    expect(appleMusicLookupByIsrc).not.toHaveBeenCalled();
+    expect(appleCatalogLookupByIsrc).not.toHaveBeenCalled();
     expect(writes).toHaveLength(0);
   });
 
@@ -261,7 +283,7 @@ describe("backfillAppleMusicUrls — reliability gate + exact ISRC resolve", () 
 
     expect(result.resolvedCount).toBe(0);
     expect(result.unresolvedCount).toBe(0);
-    expect(appleMusicLookupByIsrc).not.toHaveBeenCalled();
+    expect(appleCatalogLookupByIsrc).not.toHaveBeenCalled();
   });
 
   it("skips a finding already marked done (done_at set), no lookup, no write", async () => {
@@ -276,16 +298,14 @@ describe("backfillAppleMusicUrls — reliability gate + exact ISRC resolve", () 
     const result = await backfillAppleMusicUrls(10, false);
 
     expect(result.skipped).toEqual(["LOG-1"]);
-    expect(appleMusicLookupByIsrc).not.toHaveBeenCalled();
+    expect(appleCatalogLookupByIsrc).not.toHaveBeenCalled();
     expect(writes).toHaveLength(0);
   });
 
   it("resolves an eligible finding by ISRC and records done (url written, failures reset)", async () => {
-    appleMusicLookupByIsrc.mockResolvedValueOnce({
-      configured: true,
-      ok: true,
-      url: "https://music.apple.com/us/album/x/1?i=2",
-    });
+    appleCatalogLookupByIsrc.mockResolvedValueOnce(
+      urlBundle("https://music.apple.com/us/album/x/1?i=2"),
+    );
     singlePage([finding("1", { isrc: "I1" })]);
 
     const { backfillAppleMusicUrls } = await import("./backfill");
@@ -295,15 +315,22 @@ describe("backfillAppleMusicUrls — reliability gate + exact ISRC resolve", () 
     expect(result.resolved).toEqual([
       { logId: "LOG-1", url: "https://music.apple.com/us/album/x/1?i=2" },
     ]);
+    // A finding bumps its lastmod — setAppleMusicUrl was called with bumpFinding=true, so the
+    // batch carries the findings updated_at write alongside the tracks url write.
     const urlWrite = writes.find((w) => w.sql.includes("set apple_music_url = ?"));
     expect(urlWrite?.args).toEqual(["https://music.apple.com/us/album/x/1?i=2", "1"]);
+    expect(writes.find((w) => w.sql.includes("update findings set updated_at"))).toBeTruthy();
     const recordDone = writes.find((w) => w.sql.includes("backfill_apple_music_done_at = ?"));
     expect(recordDone, "a done record should be written").toBeTruthy();
+    // The Apple reliability write now targets `tracks`, not `findings` (RFC U1 — the move).
+    expect(recordDone?.sql).toContain("update tracks");
     expect(recordDone?.sql).toContain("backfill_apple_music_failures = 0");
+    // A success feeds the breaker "ok" (resets any auth streak).
+    expect(recordAppleAuthOutcome).toHaveBeenCalledWith("ok", expect.any(Number));
   });
 
-  it("a clean no-match (url null) records TRIED (base cooldown, streak reset), no url write", async () => {
-    appleMusicLookupByIsrc.mockResolvedValueOnce({ configured: true, ok: true, url: null });
+  it("a clean no-match (bundle null) records TRIED (base cooldown, streak reset), no url write", async () => {
+    appleCatalogLookupByIsrc.mockResolvedValueOnce({ bundle: null, configured: true, ok: true });
     singlePage([finding("1", { isrc: "I1" })]);
 
     const { backfillAppleMusicUrls } = await import("./backfill");
@@ -311,11 +338,13 @@ describe("backfillAppleMusicUrls — reliability gate + exact ISRC resolve", () 
 
     expect(result.unresolved).toEqual(["LOG-1"]);
     expect(writes.find((w) => w.sql.includes("set apple_music_url = ?"))).toBeUndefined();
-    expect(writes[0]?.sql).toContain("backfill_apple_music_failures = 0");
+    const tried = writes.find((w) => w.sql.includes("backfill_apple_music_attempted_at"));
+    expect(tried?.sql).toContain("update tracks");
+    expect(tried?.sql).toContain("backfill_apple_music_failures = 0");
   });
 
-  it("a rate-limited lookup trips the circuit breaker — stops the run, nulls the cursor, no write", async () => {
-    appleMusicLookupByIsrc.mockResolvedValueOnce({
+  it("a rate-limited lookup stops the run, nulls the cursor, no write, feeds breaker 'other'", async () => {
+    appleCatalogLookupByIsrc.mockResolvedValueOnce({
       configured: true,
       error: "429",
       ok: false,
@@ -330,13 +359,56 @@ describe("backfillAppleMusicUrls — reliability gate + exact ISRC resolve", () 
     expect(limited.nextCursor).toBeNull();
     expect(writes).toHaveLength(0);
     expect(
-      appleMusicLookupByIsrc,
+      appleCatalogLookupByIsrc,
       "the run halted before the second finding",
     ).toHaveBeenCalledTimes(1);
+    // A 429 is the OTHER regime — it does not advance the auth-failure breaker streak.
+    expect(recordAppleAuthOutcome).toHaveBeenCalledWith("other", expect.any(Number));
+  });
+
+  it("a 401/403 (authFailed) feeds the breaker an 'auth_failure' and records a finding failure", async () => {
+    appleCatalogLookupByIsrc.mockResolvedValueOnce({
+      authFailed: true,
+      configured: true,
+      error: "401",
+      ok: false,
+      rateLimited: false,
+    });
+    singlePage([finding("1", { isrc: "I1" })]);
+
+    const { backfillAppleMusicUrls } = await import("./backfill");
+    const result = await backfillAppleMusicUrls(10, false);
+
+    expect(result.failed).toEqual([{ error: "401", logId: "LOG-1" }]);
+    expect(recordAppleAuthOutcome).toHaveBeenCalledWith("auth_failure", expect.any(Number));
+  });
+
+  it("stops the pass when the cross-cutting breaker is tripped — no call, no write", async () => {
+    areAppleCallsAllowed.mockResolvedValueOnce(false);
+    singlePage([finding("1", { isrc: "I1" })]);
+
+    const { backfillAppleMusicUrls } = await import("./backfill");
+    const result = await backfillAppleMusicUrls(10, false);
+
+    expect(result.breakerTripped).toBe(true);
+    expect(result.nextCursor, "a breaker trip nulls the cursor").toBeNull();
+    expect(appleCatalogLookupByIsrc).not.toHaveBeenCalled();
+    expect(writes).toHaveLength(0);
+  });
+
+  it("stops the pass when the shared call budget is spent — no call, no write", async () => {
+    isAppleCallBudgetAvailable.mockResolvedValueOnce(false);
+    singlePage([finding("1", { isrc: "I1" })]);
+
+    const { backfillAppleMusicUrls } = await import("./backfill");
+    const result = await backfillAppleMusicUrls(10, false);
+
+    expect(result.breakerTripped).toBe(true);
+    expect(appleCatalogLookupByIsrc).not.toHaveBeenCalled();
   });
 
   it("an unconfigured leg reports configured:false, stops cheaply, records nothing", async () => {
-    appleMusicLookupByIsrc.mockResolvedValueOnce({ configured: false });
+    appleCatalogLookupByIsrc.mockResolvedValueOnce({ configured: false });
     singlePage([finding("1", { isrc: "I1" }), finding("2", { isrc: "I2" })]);
 
     const { backfillAppleMusicUrls } = await import("./backfill");
@@ -349,13 +421,13 @@ describe("backfillAppleMusicUrls — reliability gate + exact ISRC resolve", () 
       [],
     );
     expect(
-      appleMusicLookupByIsrc,
+      appleCatalogLookupByIsrc,
       "stopped after the first unconfigured answer",
     ).toHaveBeenCalledTimes(1);
   });
 
   it("a non-rate error records a failure (backoff) and surfaces it in `failed`", async () => {
-    appleMusicLookupByIsrc.mockResolvedValueOnce({
+    appleCatalogLookupByIsrc.mockResolvedValueOnce({
       configured: true,
       error: "bad token",
       ok: false,
@@ -368,7 +440,9 @@ describe("backfillAppleMusicUrls — reliability gate + exact ISRC resolve", () 
 
     expect(result.failed).toEqual([{ error: "bad token", logId: "LOG-1" }]);
     expect(result.rateLimited).toBe(false);
-    expect(writes[0]?.sql).toContain(
+    const failure = writes.find((w) => w.sql.includes("backfill_apple_music_attempted_at"));
+    expect(failure?.sql).toContain("update tracks");
+    expect(failure?.sql).toContain(
       "backfill_apple_music_failures = backfill_apple_music_failures + 1",
     );
   });
@@ -381,7 +455,7 @@ describe("backfillAppleMusicUrls — reliability gate + exact ISRC resolve", () 
 
     expect(result.dryRun).toBe(true);
     expect(result.unresolved).toEqual(["LOG-1"]);
-    expect(appleMusicLookupByIsrc).not.toHaveBeenCalled();
+    expect(appleCatalogLookupByIsrc).not.toHaveBeenCalled();
     expect(writes).toHaveLength(0);
   });
 });

@@ -210,6 +210,10 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // The artist-entity backfill (Unit 1 of the artist-relationship RFC) —
   // contract-only oRPC (no TanStack route file; oRPC owns the path directly).
   // Agent tier: the box's `fluncle-artist-backfill` cron drives it with its agent token.
+  // The Apple catalogue drain (RFC musickit U1) — contract-only oRPC (no TanStack route file).
+  // Agent tier: the box's `fluncle-backfill` cron drives it with its agent token. It writes
+  // catalogue identity only (a URL on `tracks`, facts on `albums`), never a certification.
+  "POST /admin/backfill/apple-catalogue": "backfill_apple_catalogue",
   "POST /admin/backfill/apple-music": "backfill_apple_music",
   "POST /admin/backfill/artist-images": "backfill_artist_images",
   "POST /admin/backfill/artists": "backfill_artists",
@@ -221,6 +225,10 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // token. It certifies nothing (no `findings` row) and captures no audio, so it needs no
   // operator gate; RULING on a seed label — what may be crawled at all — is `update_label`,
   // and that stays operator tier.
+  // The operator's reset for the cross-cutting Apple failure-regime breaker (RFC musickit U1) —
+  // contract-only oRPC (no TanStack route file). OPERATOR tier: it re-arms a spend-adjacent
+  // external integration a machine should not silently un-brake (the `set_capture_budget` rule).
+  "POST /admin/catalogue/apple-breaker/reset": "reset_apple_breaker",
   "POST /admin/catalogue/crawl": "crawl_catalogue",
   // The clip drip-feed tick — contract-only oRPC (no TanStack route file). ADMIN tier
   // (agent-allowed): the on-box `fluncle-clip-drip` cron triggers it with the agent token

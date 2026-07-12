@@ -185,6 +185,10 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // (and is one-shot, marker-guarded), so the agent token 403s.
   announce_mixtape: "operator",
   approve_submission: "operator",
+  // The Apple catalogue drain — agent tier (adminAuth only): the catalogue sibling of
+  // `backfill_apple_music`. It writes catalogue identity only (a URL on `tracks`, facts on
+  // `albums`), never a certification, so the box's agent-token cron drives it.
+  backfill_apple_catalogue: "admin",
   // The Apple Music URL backfill — agent tier (adminAuth only): internal + reversible
   // metadata enrichment (resolve each finding's Apple Music URL EXACTLY by ISRC, no
   // publish), so the box's agent-token cron drives it, the `backfill_discogs` precedent.
@@ -414,6 +418,10 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // re-render — operator-only (adminAuth + operatorGuard); the box agent never
   // clears videos, so an agent token 403s.
   requeue_video: "operator",
+  // The Apple failure-regime breaker reset (RFC musickit U1) — OPERATOR tier: it re-arms a
+  // spend-adjacent external integration a machine should not silently un-brake (the
+  // `set_capture_budget` neighbour's rule).
+  reset_apple_breaker: "operator",
   // resolve_artist — the box's agent-token artist-socials resolution (MB + Firecrawl); internal
   // enrichment only, so agent-tier (adminAuth, no operatorGuard) like backfill_artists.
   resolve_artist: "admin",

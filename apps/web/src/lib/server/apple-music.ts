@@ -53,7 +53,7 @@ const TOKEN_REFRESH_SKEW_MS = 24 * 60 * 60 * 1000;
 export type AppleMusicLookupOutcome =
   | { configured: false }
   | { configured: true; ok: true; url: string | null }
-  | { configured: true; error: string; ok: false; rateLimited: boolean };
+  | { authFailed?: boolean; configured: true; error: string; ok: false; rateLimited: boolean };
 
 // The three key parts, read together so "any missing ⇒ unconfigured no-op" is one check.
 type AppleMusicCredentials = {
@@ -245,12 +245,17 @@ export async function appleMusicLookupByIsrc(isrc: string): Promise<AppleMusicLo
     }
 
     if (!response.ok) {
-      // A 401/403 here is a bad/expired token: drop the cache so the next tick re-mints.
-      if (response.status === 401 || response.status === 403) {
+      // A 401/403 here is a bad/expired/SUSPENDED token: drop the cache so the next tick
+      // re-mints, and flag it so the caller can feed the cross-cutting breaker (apple-breaker.ts)
+      // — K consecutive 401/403 is the failure regime that darkens every Apple surface at once.
+      const authFailed = response.status === 401 || response.status === 403;
+
+      if (authFailed) {
         cachedToken = undefined;
       }
 
       return {
+        authFailed,
         configured: true,
         error: `Apple Music request failed: ${response.status} ${response.statusText}`,
         ok: false,
@@ -710,7 +715,7 @@ export function buildBatchBundles(
 export type AppleCatalogRequestOutcome =
   | { configured: false }
   | { configured: true; ok: true; body: unknown }
-  | { configured: true; error: string; ok: false; rateLimited: boolean };
+  | { authFailed?: boolean; configured: true; error: string; ok: false; rateLimited: boolean };
 
 export async function requestAppleCatalog(query: string): Promise<AppleCatalogRequestOutcome> {
   const credentials = await readAppleMusicCredentials();
@@ -739,11 +744,17 @@ export async function requestAppleCatalog(query: string): Promise<AppleCatalogRe
     }
 
     if (!response.ok) {
-      if (response.status === 401 || response.status === 403) {
+      // A 401/403 is a bad/SUSPENDED token: drop the cache AND flag it so the caller feeds the
+      // cross-cutting breaker (apple-breaker.ts). This is U0's single point of failure — one bad
+      // token fails every downstream unit's Apple rung at once.
+      const authFailed = response.status === 401 || response.status === 403;
+
+      if (authFailed) {
         cachedToken = undefined;
       }
 
       return {
+        authFailed,
         configured: true,
         error: `Apple Music request failed: ${response.status} ${response.statusText}`,
         ok: false,
@@ -771,7 +782,7 @@ export async function requestAppleCatalog(query: string): Promise<AppleCatalogRe
 export type AppleCatalogLookupOutcome =
   | { configured: false }
   | { configured: true; ok: true; bundle: AppleCatalogBundle | null }
-  | { configured: true; error: string; ok: false; rateLimited: boolean };
+  | { authFailed?: boolean; configured: true; error: string; ok: false; rateLimited: boolean };
 
 export async function appleCatalogLookupByIsrc(isrc: string): Promise<AppleCatalogLookupOutcome> {
   const clean = isrc.trim();
@@ -789,7 +800,13 @@ export async function appleCatalogLookupByIsrc(isrc: string): Promise<AppleCatal
   }
 
   if (!outcome.ok) {
-    return { configured: true, error: outcome.error, ok: false, rateLimited: outcome.rateLimited };
+    return {
+      authFailed: outcome.authFailed,
+      configured: true,
+      error: outcome.error,
+      ok: false,
+      rateLimited: outcome.rateLimited,
+    };
   }
 
   return { bundle: buildCatalogBundle(outcome.body), configured: true, ok: true };
@@ -805,7 +822,7 @@ export async function appleCatalogLookupByIsrc(isrc: string): Promise<AppleCatal
 export type AppleCatalogBatchOutcome =
   | { configured: false }
   | { configured: true; ok: true; bundles: Map<string, AppleCatalogBatchBundle> }
-  | { configured: true; error: string; ok: false; rateLimited: boolean };
+  | { authFailed?: boolean; configured: true; error: string; ok: false; rateLimited: boolean };
 
 export async function appleCatalogLookupByIsrcs(
   isrcs: string[],
@@ -841,6 +858,7 @@ export async function appleCatalogLookupByIsrcs(
 
     if (!outcome.ok) {
       return {
+        authFailed: outcome.authFailed,
         configured: true,
         error: outcome.error,
         ok: false,
