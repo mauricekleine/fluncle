@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { cronSurfaces, type CronSchedule } from "@fluncle/registry";
 import { siteUrl } from "@/lib/fluncle-links";
+import { cn } from "@/lib/utils";
 import {
   estimateNextRun,
   formatCadence,
@@ -119,13 +120,17 @@ const SERVICE_LABELS: Record<string, string> = {
   "cron.clip-drip": "Clip drip-feed",
   "cron.cluster": "Sonic galaxies",
   "cron.context-note": "Context notes",
+  "cron.crawl": "Catalogue crawler",
   "cron.embed": "Audio embeddings",
   "cron.enrich": "Audio enrichment",
   "cron.healthcheck": "Healthcheck prober",
+  "cron.label-images": "Label logos",
   "cron.logbook": "Logbook author",
   "cron.newsletter": "Weekly newsletter",
   "cron.note": "Editorial notes",
   "cron.observation": "Audio observations",
+  "cron.publish-advance": "Publish advance",
+  "cron.rank": "Catalogue ranking",
   // Two DIFFERENT render signals (not the agent twice): `cron.render` is the
   // conductor cron's last-run freshness; `render-box` is the scale-to-zero box's
   // reachability. The labels make the distinction obvious.
@@ -159,13 +164,17 @@ const SERVICE_SUBTITLES: Record<string, string> = {
   "cron.clip-drip": "drip-feeds set clips to Instagram",
   "cron.cluster": "groups the archive into sonic galaxies",
   "cron.context-note": "distills the facts behind each finding",
+  "cron.crawl": "charts new tracks from the wider label graph",
   "cron.embed": "MuQ vectors for sonic similarity",
   "cron.enrich": "BPM, key, and the spectral fingerprint",
   "cron.healthcheck": "the prober behind this very page",
+  "cron.label-images": "resolves each label's own mark",
   "cron.logbook": "writes each sector-day up in the Logbook",
   "cron.newsletter": "drafts the Friday edition",
   "cron.note": "writes each finding's editorial note",
   "cron.observation": "Fluncle's spoken field observations",
+  "cron.publish-advance": "advances the publish queue on his own clock",
+  "cron.rank": "ranks the catalogue by nearness to the archive",
   "cron.render": "the conductor's last run",
   "cron.social-capture": "the live YouTube and TikTok URLs for each posted video",
   "cron.studio-clip": "cuts set videos into 9:16 clips",
@@ -578,7 +587,14 @@ function ServiceGroup({
 
   return (
     <section aria-label={label}>
-      <h2 className={SECTION_HEADING_CLASS}>{label}</h2>
+      {/* The count sits at the far end of the rule — how many rows the section watches,
+          quiet data rather than a second heading. */}
+      <h2 className={cn(SECTION_HEADING_CLASS, "flex items-baseline justify-between")}>
+        {label}
+        <span className="text-xs font-normal normal-case tracking-normal text-muted-foreground">
+          {rows.length}
+        </span>
+      </h2>
       <div className="divide-y divide-border/50">
         {rows.map((service) => (
           <ServiceRow
