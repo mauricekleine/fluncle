@@ -142,12 +142,14 @@ export function mixReasonLabel(reason: MixReason): string {
 
 /**
  * The set-level `MusicPlaylist` JSON-LD (its members `MusicRecording`s) — the homepage
- * precedent, so a shared `/mix` link is a legible playlist to crawlers. Every member links
- * to Spotify, certified or not: the playlist describes the MUSIC, and a `/log` page is a
- * claim about Fluncle rather than about the recording.
+ * precedent, so a shared `/mix` link is a legible playlist to crawlers. A member links
+ * to Spotify where the recording has one, certified or not: the playlist describes the
+ * MUSIC, and a `/log` page is a claim about Fluncle rather than about the recording. A
+ * crawler-minted row may have no store link at all — then the recording stands on its
+ * name and artists, with no `url` claim.
  */
 export function mixPlaylistJsonLd(
-  chain: { artists: string[]; spotifyUrl: string; title: string }[],
+  chain: { artists: string[]; spotifyUrl?: string; title: string }[],
   pageUrl: string,
 ): Record<string, unknown> {
   return {
@@ -160,7 +162,7 @@ export function mixPlaylistJsonLd(
       byArtist: track.artists.map((name) => ({ "@type": "MusicGroup", name })),
       name: track.title,
       position: index + 1,
-      url: track.spotifyUrl,
+      ...(track.spotifyUrl ? { url: track.spotifyUrl } : {}),
     })),
     url: pageUrl,
   };

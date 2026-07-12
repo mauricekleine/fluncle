@@ -188,7 +188,13 @@ export const MixTrackSchema = z
     key: z.string().optional(),
     /** The permanent coordinate. Present ⇔ `certified` (the Unlit Rule, structurally). */
     logId: z.string().optional(),
-    spotifyUrl: z.string(),
+    /**
+     * Absent for a crawler-minted catalogue row — MusicBrainz-born, no Spotify presence
+     * (docs/catalogue-crawler.md: Spotify is a per-track ISRC anchor, never a guarantee).
+     * Any keyed track is rankable, so the rail MUST serialize one; a required string here
+     * once 500'd the whole /mix domain the day the first crawled track earned a key.
+     */
+    spotifyUrl: z.string().optional(),
     title: z.string(),
     trackId: z.string(),
   })

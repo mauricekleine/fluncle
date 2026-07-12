@@ -173,8 +173,10 @@ function BuilderRow({
         </div>
       </div>
       {/* The way out, on an unlit row only: there is no /log page for a track Fluncle has
-          not been to, so the row leaves for the one place it can be heard. */}
-      {!track.certified ? (
+          not been to, so the row leaves for the one place it can be heard. A crawler-minted
+          row may have no Spotify presence at all — then there is no way out, and the row
+          simply doesn't offer one (never a dead link). */}
+      {!track.certified && track.spotifyUrl ? (
         <a
           aria-label={`Open ${track.title} on Spotify`}
           className="mix-row-out"
@@ -291,7 +293,7 @@ async function searchMixTracks(q: string): Promise<MixTrack[]> {
       artists: string[];
       certified: boolean;
       logId?: string;
-      spotifyUrl: string;
+      spotifyUrl?: string;
       title: string;
       trackId: string;
     }[];

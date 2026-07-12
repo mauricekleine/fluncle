@@ -1169,7 +1169,11 @@ type MixTrackRow = {
   duration_ms: number;
   key: string | null;
   log_id: string | null;
-  spotify_url: string;
+  // NULL for a crawler-minted catalogue row (MusicBrainz-born; Spotify is a per-track
+  // ISRC anchor, not a guarantee). Typing this `string` once let a NULL sail into a
+  // required schema field and 500 the whole /mix rail the day the first crawled track
+  // was analyzed into rankability.
+  spotify_url: string | null;
   title: string;
   track_id: string;
 };
@@ -1189,7 +1193,7 @@ function toMixTrackDTO(row: MixTrackRow): MixTrackDTO {
     durationMs: row.duration_ms,
     key: row.key ?? undefined,
     logId: row.log_id ?? undefined,
-    spotifyUrl: row.spotify_url,
+    spotifyUrl: row.spotify_url ?? undefined,
     title: row.title,
     trackId: row.track_id,
   };
