@@ -19,12 +19,17 @@ vi.mock("./db", async (importOriginal) => {
 import { backfillLabels } from "../../../scripts/backfill-labels";
 import { createIntegrationDb } from "./integration-db";
 import {
+  confirmLabelAlias,
   ensureLabel,
+  getConfirmedAliasNames,
+  isDistributorLabel,
   labelSlug,
   LabelNotFoundError,
+  listLabelAliasCandidates,
   listLabelReviewRows,
   listLabels,
   reconcileLabels,
+  rejectLabelAlias,
   updateLabelSeedState,
 } from "./labels";
 
@@ -326,4 +331,226 @@ describe("the D7 bootstrap (scripts/backfill-labels.ts)", () => {
   // The guarantee the whole design rests on is one line up (`updateLabelSeedState` → the
   // tracks table byte-identical, line ~178). The backfill's pointer write does not touch it:
   // a RULING still changes nothing that is stored.
+});
+
+// ── LABEL ALIASES: two spellings, one label (RFC musickit-second-authority, U2a) ────────────
+
+/** Insert a canonical `labels` row directly (the merge target an alias points at). */
+async function insertLabel(id: string, name: string, slug: string): Promise<void> {
+  const now = new Date().toISOString();
+  await db.execute({
+    args: [id, name, slug, now, now],
+    sql: `insert into labels (id, name, slug, created_at, updated_at) values (?, ?, ?, ?, ?)`,
+  });
+}
+
+/** Insert a `label_aliases` row (defaults: an Apple `name` candidate). */
+async function insertAlias(opts: {
+  alias: string;
+  aliasSlug: string;
+  id: string;
+  kind?: "hint" | "name";
+  labelId: string;
+  source?: string;
+  status: "candidate" | "confirmed";
+}): Promise<void> {
+  await db.execute({
+    args: [
+      opts.id,
+      opts.labelId,
+      opts.alias,
+      opts.aliasSlug,
+      opts.source ?? "apple",
+      opts.kind ?? "name",
+      opts.status,
+      new Date().toISOString(),
+    ],
+    sql: `insert into label_aliases
+            (id, label_id, alias, alias_slug, source, kind, status, created_at)
+          values (?, ?, ?, ?, ?, ?, ?, ?)`,
+  });
+}
+
+async function labelSlugs(): Promise<string[]> {
+  const result = await db.execute(`select slug from labels order by slug`);
+  return result.rows.map((row) => row.slug as string);
+}
+
+describe("isDistributorLabel (the panel's denylist guardrail)", () => {
+  it("matches a seeded distributor by fold, and never a real imprint", () => {
+    expect(isDistributorLabel("Believe")).toBe(true);
+    expect(isDistributorLabel("the orchard")).toBe(true); // folded, case-insensitive
+    expect(isDistributorLabel("Horus Music")).toBe(true);
+    expect(isDistributorLabel("Medschool")).toBe(false);
+    expect(isDistributorLabel("Hospital Records")).toBe(false);
+    expect(isDistributorLabel(null)).toBe(false);
+  });
+});
+
+describe("the re-mint trap (a confirmed alias's raw string must not re-mint its slug)", () => {
+  // The trap, reproduced: the operator has folded "Med School Recordings" into "Medschool" via a
+  // CONFIRMED alias, but `tracks.label` is immutable and still carries the raw string. Without the
+  // guard, reconcile/ensureLabel would mint a fresh `med-school-recordings` label every deploy —
+  // re-opening the split forever.
+  async function seedFoldedAwaySpelling(): Promise<void> {
+    await insertLabel("lbl_med", "Medschool", "medschool");
+    await insertAlias({
+      alias: "Med School Recordings",
+      aliasSlug: "med-school-recordings",
+      id: "lba_1",
+      labelId: "lbl_med",
+      status: "confirmed",
+    });
+    await seedFinding("t1", "Med School Recordings");
+  }
+
+  it("PROOF the trap is real: a NON-aliased raw string DOES re-mint on reconcile", async () => {
+    await seedFinding("t1", "Med School Recordings");
+
+    await reconcileLabels();
+
+    // No alias exists, so the raw string mints its own slug — this is exactly what a confirmed
+    // alias must prevent.
+    expect(await labelSlugs()).toContain("med-school-recordings");
+  });
+
+  it("reconcileLabels never re-mints a confirmed alias's slug", async () => {
+    await seedFoldedAwaySpelling();
+
+    const minted = await reconcileLabels();
+
+    expect(minted).toBe(0);
+    // The only label is the canonical one; the folded-away slug was NOT re-minted.
+    expect(await labelSlugs()).toEqual(["medschool"]);
+  });
+
+  it("ensureLabel resolves a confirmed alias's raw string to the canonical label, minting nothing", async () => {
+    await seedFoldedAwaySpelling();
+
+    // This is ALSO the crawler's discovery choke point — `crawl.ts` calls `ensureLabel` on a
+    // discovered label, so the crawl path is covered by the same guard.
+    const id = await ensureLabel("Med School Recordings");
+
+    expect(id).toBe("lbl_med");
+    expect(await labelSlugs()).toEqual(["medschool"]);
+  });
+
+  it("the deploy backfill (backfillLabels) never re-mints, and links the raw string to the canonical label", async () => {
+    await seedFoldedAwaySpelling();
+
+    await backfillLabels(db);
+
+    // The canonical label is the only med* row.
+    expect(await labelSlugs()).toEqual(["medschool"]);
+    // The track carrying the folded-away spelling points at the CANONICAL label, via the alias.
+    const track = await db.execute(`select label_id from tracks where track_id = 't1'`);
+    expect(track.rows[0]?.label_id).toBe("lbl_med");
+  });
+
+  it("a CANDIDATE (unconfirmed) alias does NOT protect its slug — only a confirmed one folds in", async () => {
+    await insertLabel("lbl_med", "Medschool", "medschool");
+    await insertAlias({
+      alias: "Med School Recordings",
+      aliasSlug: "med-school-recordings",
+      id: "lba_1",
+      labelId: "lbl_med",
+      status: "candidate",
+    });
+    await seedFinding("t1", "Med School Recordings");
+
+    await reconcileLabels();
+
+    // Unconfirmed ⇒ no protection ⇒ the raw string mints (the operator hasn't ruled yet).
+    expect(await labelSlugs()).toContain("med-school-recordings");
+  });
+});
+
+describe("the alias review reads + operator writes", () => {
+  it("getConfirmedAliasNames returns only confirmed aliases, name-sorted", async () => {
+    await insertLabel("lbl_med", "Medschool", "medschool");
+    await insertAlias({
+      alias: "Med School Recordings",
+      aliasSlug: "med-school-recordings",
+      id: "lba_1",
+      labelId: "lbl_med",
+      status: "confirmed",
+    });
+    await insertAlias({
+      alias: "Med School",
+      aliasSlug: "med-school",
+      id: "lba_2",
+      labelId: "lbl_med",
+      status: "confirmed",
+    });
+    await insertAlias({
+      alias: "Medschool Music",
+      aliasSlug: "medschool-music",
+      id: "lba_3",
+      labelId: "lbl_med",
+      status: "candidate",
+    });
+
+    expect(await getConfirmedAliasNames("lbl_med")).toEqual([
+      "Med School",
+      "Med School Recordings",
+    ]);
+    expect(await getConfirmedAliasNames("nope")).toEqual([]);
+  });
+
+  it("listLabelAliasCandidates returns open candidates joined to their label", async () => {
+    await insertLabel("lbl_med", "Medschool", "medschool");
+    await insertAlias({
+      alias: "Med School Recordings",
+      aliasSlug: "med-school-recordings",
+      id: "lba_1",
+      kind: "name",
+      labelId: "lbl_med",
+      status: "candidate",
+    });
+    await insertAlias({
+      alias: "Confirmed One",
+      aliasSlug: "confirmed-one",
+      id: "lba_2",
+      labelId: "lbl_med",
+      status: "confirmed",
+    });
+
+    const candidates = await listLabelAliasCandidates();
+
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]).toMatchObject({
+      alias: "Med School Recordings",
+      kind: "name",
+      labelName: "Medschool",
+      labelSlug: "medschool",
+      source: "apple",
+    });
+  });
+
+  it("confirmLabelAlias promotes a candidate; rejectLabelAlias deletes it; both idempotent", async () => {
+    await insertLabel("lbl_med", "Medschool", "medschool");
+    await insertAlias({
+      alias: "Med School Recordings",
+      aliasSlug: "med-school-recordings",
+      id: "lba_1",
+      labelId: "lbl_med",
+      status: "candidate",
+    });
+    await insertAlias({
+      alias: "Med School",
+      aliasSlug: "med-school",
+      id: "lba_2",
+      labelId: "lbl_med",
+      status: "candidate",
+    });
+
+    expect(await confirmLabelAlias("lba_1")).toBe(true);
+    expect(await confirmLabelAlias("lba_1")).toBe(false); // already confirmed — no-op
+    expect(await getConfirmedAliasNames("lbl_med")).toEqual(["Med School Recordings"]);
+
+    expect(await rejectLabelAlias("lba_2")).toBe(true);
+    expect(await rejectLabelAlias("lba_2")).toBe(false); // gone — no-op
+    // The confirmed one survives; only the rejected candidate is gone.
+    expect(await listLabelAliasCandidates()).toHaveLength(0);
+  });
 });

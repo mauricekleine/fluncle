@@ -97,8 +97,108 @@ export const updateLabel = oc
   .input(z.object({ id: z.string(), seedState: LabelSeedStateSchema }))
   .output(z.object({ label: LabelAdminItemSchema, ok: z.literal(true) }));
 
+// ── Label aliases: two spellings, one label (RFC musickit-second-authority, U2a) ──────────
+// A second metadata authority (Apple's album `recordLabel`, corroborated by MusicBrainz over a
+// shared ISRC) proposes that "Med School Recordings" is the same label as "Medschool". These
+// three ops are the operator's low-priority review of those proposals — DELIBERATELY a page
+// section on `/admin/labels`, never a new attention-queue source (alias candidates are
+// crawl-volume, and the `label-review` queue is capped at 25 precisely because an uncapped
+// crawl-volume source drowns the other five). CONFIRM promotes a candidate onto resolution +
+// the public `alternateName` JSON-LD; REJECT discards it. See docs/label-entity.md.
+
+/** Where an alias spelling came from. `apple` is the U2a writer; `operator` is hand-added. */
+export const LabelAliasSourceSchema = z
+  .enum(["operator", "apple", "musicbrainz", "discogs", "spotify"])
+  .meta({ id: "LabelAliasSource" });
+
+/**
+ * `name` — a corroborated alternate spelling (Apple AND MusicBrainz agree on the same label
+ * over the ISRC). `hint` — a weaker lead (Apple names a label the archive does not recognise as
+ * this one). Only the operator's confirm promotes either to the public graph.
+ */
+export const LabelAliasKindSchema = z.enum(["name", "hint"]).meta({ id: "LabelAliasKind" });
+
+/**
+ * One open alias candidate in the review shape: the alternative spelling, its provenance, and
+ * the canonical label it is proposed FOR (name + slug, so the section can name and deep-link the
+ * label). `status` is always `candidate` here — this read is the open queue.
+ */
+export const LabelAliasCandidateSchema = z
+  .object({
+    alias: z.string(),
+    aliasSlug: z.string(),
+    createdAt: z.string(),
+    id: z.string(),
+    kind: LabelAliasKindSchema,
+    labelId: z.string(),
+    labelName: z.string(),
+    labelSlug: z.string(),
+    source: LabelAliasSourceSchema,
+  })
+  .meta({ id: "LabelAliasCandidate" });
+
+/**
+ * `list_label_aliases` → `GET /admin/labels/aliases` (operationId `listLabelAliases`).
+ *
+ * Admin tier (agent-allowed read, the `list_labels_admin` precedent). Every OPEN alias
+ * candidate (`status = 'candidate'`), newest-first, each joined to its canonical label.
+ * The `/admin/labels` review section reads this. `{ ok, aliases }`.
+ */
+export const listLabelAliases = oc
+  .route({
+    method: "GET",
+    operationId: "listLabelAliases",
+    path: "/admin/labels/aliases",
+    summary: "Every open label-alias candidate awaiting the operator's ruling",
+    tags: ["Admin"],
+  })
+  .input(z.object({}))
+  .output(z.object({ aliases: z.array(LabelAliasCandidateSchema), ok: z.literal(true) }));
+
+/**
+ * `confirm_label_alias` → `POST /admin/labels/aliases/{id}/confirm` (operationId
+ * `confirmLabelAlias`).
+ *
+ * OPERATOR tier (`adminAuth` + `operatorGuard`, the `confirm_artist_social` precedent). Rule a
+ * candidate spelling the SAME label: `status → confirmed`. Only then does it fold in resolution
+ * (`ensureLabel`/`reconcileLabels` stop re-minting its slug) and join the public
+ * `alternateName` JSON-LD. An agent token 403s — deciding two spellings are one label is an
+ * editorial act. Idempotent. `{ ok }`.
+ */
+export const confirmLabelAlias = oc
+  .route({
+    method: "POST",
+    operationId: "confirmLabelAlias",
+    path: "/admin/labels/aliases/{id}/confirm",
+    summary: "Confirm a label-alias candidate (candidate → confirmed; folds into the label)",
+    tags: ["Admin"],
+  })
+  .input(z.object({ id: z.string() }))
+  .output(z.object({ ok: z.literal(true) }));
+
+/**
+ * `reject_label_alias` → `DELETE /admin/labels/aliases/{id}` (operationId `rejectLabelAlias`).
+ *
+ * OPERATOR tier (the `remove_artist_social` precedent). Rule a candidate NOT the same label:
+ * delete the row. It never touched `tracks.label` or `labels.name`, so there is nothing to
+ * unwind. Idempotent. `{ ok }`.
+ */
+export const rejectLabelAlias = oc
+  .route({
+    method: "DELETE",
+    operationId: "rejectLabelAlias",
+    path: "/admin/labels/aliases/{id}",
+    summary: "Reject a label-alias candidate (discard the proposed spelling)",
+    tags: ["Admin"],
+  })
+  .input(z.object({ id: z.string() }))
+  .output(z.object({ ok: z.literal(true) }));
+
 /** The `admin-labels` domain's ops, merged into the root contract by `./index.ts`. */
 export const adminLabelsContract = {
+  confirm_label_alias: confirmLabelAlias,
+  list_label_aliases: listLabelAliases,
   list_labels_admin: listLabelsAdmin,
+  reject_label_alias: rejectLabelAlias,
   update_label: updateLabel,
 };

@@ -20,10 +20,18 @@ vi.mock("./db", async (importOriginal) => {
 
   return { ...actual, getDb: () => Promise.resolve(db) };
 });
-vi.mock("./apple-music", () => ({
-  appleCatalogLookupByIsrc: (...a: unknown[]) => appleCatalogLookupByIsrc(...a),
-  appleCatalogLookupByIsrcs: (...a: unknown[]) => appleCatalogLookupByIsrcs(...a),
-}));
+vi.mock("./apple-music", async (importOriginal) => {
+  // Partial mock: only the two network-touching lookups are stubbed. The pure helpers
+  // (composeAppleArtworkUrl etc.) stay real — the DTO under test calls them, and a
+  // whole-module mock fails the suite the day any pure helper is added.
+  const actual = await importOriginal<typeof import("./apple-music")>();
+
+  return {
+    ...actual,
+    appleCatalogLookupByIsrc: (...a: unknown[]) => appleCatalogLookupByIsrc(...a),
+    appleCatalogLookupByIsrcs: (...a: unknown[]) => appleCatalogLookupByIsrcs(...a),
+  };
+});
 // The breaker is proven in apple-breaker.test.ts; here it is open + a no-op so the drain runs.
 vi.mock("./apple-breaker", () => ({
   areAppleCallsAllowed: async () => true,

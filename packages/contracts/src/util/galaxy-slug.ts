@@ -213,3 +213,25 @@ export function slugify(title: string): string {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
 }
+
+/**
+ * Fold a label name to its comparable core: lowercase, alphanumerics only, no spaces or
+ * punctuation at all. Deliberately more aggressive than {@link slugify}, because label names
+ * are the single dirtiest string in the archive and the two spellings that must fold together
+ * are exactly the ones a gentler normalizer keeps apart:
+ *
+ *   "Medschool" (the operator's) \u21c4 "Med School" (MusicBrainz's / Apple's) \u2014 VERIFIED live, and
+ *   the reason the first pilot crawl found nothing. `slugify` keeps these apart
+ *   (`medschool` vs `med-school`); this fold agrees on both (`medschool`).
+ *   "Pilot." \u21c4 "Pilot" \u00b7 "R.O.A.M" \u21c4 "ROAM"
+ *
+ * Equality of this fold is still an EXACT match \u2014 it never accepts "Shogun Records" for
+ * "Shogun Audio". It is the shared home for the crawler's label dedup (`crawl.ts`) and the
+ * Apple recordLabel cross-source corroboration (`label_aliases`), so both agree by construction.
+ */
+export function labelFold(value: string): string {
+  return value
+    .normalize("NFKD")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, "");
+}

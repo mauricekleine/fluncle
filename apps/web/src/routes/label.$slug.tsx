@@ -22,7 +22,11 @@ import {
   listLabelCatalogue,
   parseCatalogueSort,
 } from "@/lib/server/catalogue-groups";
-import { getLabelBySlug, LABEL_INDEX_MIN_TRACKS } from "@/lib/server/labels";
+import {
+  getConfirmedAliasNames,
+  getLabelBySlug,
+  LABEL_INDEX_MIN_TRACKS,
+} from "@/lib/server/labels";
 import { getFindingsByLabel, type TrackListItem } from "@/lib/server/tracks";
 
 // The label page — one label's place in the archive, and the third node of the graph
@@ -43,6 +47,8 @@ import { getFindingsByLabel, type TrackListItem } from "@/lib/server/tracks";
 
 type LabelPageData =
   | {
+      /** The label's CONFIRMED alternate spellings — the Organization JSON-LD's `alternateName`. */
+      alternateNames: string[];
       artists: ArtistChip[];
       /** The crawled catalogue, grouped by artist — one page of it, plus SQL-counted totals. */
       catalogue: CatalogueGroupPage<CatalogueArtistGroup>;
@@ -99,12 +105,14 @@ export async function resolveLabelPageData(
     throw error;
   }
 
-  const [findings, artists] = await Promise.all([
+  const [findings, artists, alternateNames] = await Promise.all([
     getFindingsByLabel(label.id),
     listArtistsByLabel(label.id),
+    getConfirmedAliasNames(label.id),
   ]);
 
   return {
+    alternateNames,
     artists,
     catalogue,
     findings,
@@ -141,7 +149,8 @@ function labelHead(loaderData: LabelPageData | undefined) {
     return {};
   }
 
-  const { artists, catalogue, findings, indexable, logoImageUrl, name, slug } = loaderData;
+  const { alternateNames, artists, catalogue, findings, indexable, logoImageUrl, name, slug } =
+    loaderData;
   // The canonical is SELF-REFERENCING PER PAGE (page 2 is its own page, not a duplicate of page
   // 1) but SORT-COLLAPSING: it always drops the sort param, so `?sort=recent` and the default
   // A–Z view of the same page fold to one canonical URL rather than diluting each other. Page 1
@@ -194,6 +203,7 @@ function labelHead(loaderData: LabelPageData | undefined) {
     scripts: [
       jsonLdScript(
         recordLabelJsonLd({
+          alternateNames,
           artists,
           name,
           slug,

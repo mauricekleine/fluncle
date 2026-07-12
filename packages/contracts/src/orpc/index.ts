@@ -113,9 +113,15 @@ export {
 } from "./admin-catalogue";
 export {
   adminLabelsContract,
+  confirmLabelAlias,
   LabelAdminItemSchema,
+  LabelAliasCandidateSchema,
+  LabelAliasKindSchema,
+  LabelAliasSourceSchema,
   LabelSeedStateSchema,
+  listLabelAliases,
   listLabelsAdmin,
+  rejectLabelAlias,
   updateLabel,
 } from "./admin-labels";
 export { adminMigrationsContract, migratePreviewArchive } from "./admin-migrations";

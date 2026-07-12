@@ -52,6 +52,9 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // The operator's "unschedule" — contract-only oRPC. Operator tier: take a clip off the
   // Instagram drip queue (delete its un-posted schedule row).
   "DELETE /admin/clips/{clipId}/schedule": "delete_clip_schedule",
+  // The label-alias reject (RFC musickit-second-authority, U2a) — contract-only oRPC. Operator
+  // tier: discard a proposed spelling; the agent token 403s.
+  "DELETE /admin/labels/aliases/{id}": "reject_label_alias",
   // The newsletter edition delete — contract-only oRPC (no TanStack route file).
   // Operator tier: a hard delete that reaches a SENT edition too (pulling a sent
   // test edition from the public archive); the agent token 403s.
@@ -114,6 +117,10 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // matches the public `list_` prefix so the "holds exactly" check skips it; it lives here
   // for completeness (like `list_galaxies_admin`).
   "GET /admin/labels": "list_labels_admin",
+  // The label-alias review reads (RFC musickit-second-authority, U2a) — contract-only oRPC.
+  // Admin tier (agent-allowed read); `list_label_aliases` matches the public `list_` prefix so
+  // the "holds exactly" check skips it, but the entry keeps this map honest.
+  "GET /admin/labels/aliases": "list_label_aliases",
   "GET /admin/lastfm/auth/start": "start_lastfm_auth",
   // The logbook sweep's gap+material read — contract-only oRPC (no TanStack route
   // file; oRPC owns the path directly). Admin tier (agent-allowed). `list_logbook_gaps`
@@ -165,6 +172,10 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // skips it; it lives here for completeness (like `get_clip_caption`).
   "GET /admin/tracks/{trackId}": "get_track_admin",
   "GET /admin/tracks/{trackId}/social": "list_track_social",
+  // The fresh-links INLINE EDIT (correct + approve a social's URL in one act) — contract-only
+  // oRPC (no TanStack route file; oRPC owns the path directly, sharing it with the DELETE remove
+  // above). Operator tier: it writes an operator-owned, confirmed, public link.
+  "PATCH /admin/artists/socials/{socialId}": "update_artist_social",
   "PATCH /admin/clips/{clipId}": "update_clip",
   // The operator's clip-drip schedule control — contract-only oRPC. Operator tier:
   // set/override a clip's Instagram drip slot.
@@ -261,6 +272,9 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // no TanStack route file; oRPC owns the path directly, like context_track. Admin
   // tier (agent-allowed): the box's status cron POSTs a snapshot with its agent token.
   "POST /admin/health": "record_health",
+  // The label-alias confirm (RFC musickit-second-authority, U2a) — contract-only oRPC. Operator
+  // tier: fold a candidate spelling into the label; the agent token 403s.
+  "POST /admin/labels/aliases/{id}/confirm": "confirm_label_alias",
   "POST /admin/lastfm/auth/session": "exchange_lastfm_session",
   // The logbook nightly author — contract-only oRPC (no TanStack route file; oRPC owns
   // the path directly, like note_track). Admin tier (agent-allowed): the on-box

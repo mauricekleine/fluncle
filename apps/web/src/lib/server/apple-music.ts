@@ -430,6 +430,45 @@ export function appleArtworkUrl(artwork: AppleArtwork, width: number, height: nu
   return artwork.urlTemplate.replace("{w}", String(w)).replace("{h}", String(h));
 }
 
+/**
+ * The render pipeline's target artwork edge (px). The RFC's U3a fix closes the video
+ * render's 300²-into-1920² upscale by asking Apple's `{w}x{h}` template for a ≥1920
+ * source; 2048 clears that with headroom and is CLAMPED to the artwork's native max by
+ * `appleArtworkUrl`, so a smaller master is never upscaled. RENDER-TIME ONLY — never
+ * persisted (decision A: the 3000² original is never stored; only this ephemeral,
+ * server-composed URL feeds the films, the same posture as today's render-time Spotify
+ * fetch).
+ */
+export const RENDER_ARTWORK_TARGET_PX = 2048;
+
+/**
+ * Compose a square, render-grade artwork URL from an album's STORED Apple facts
+ * (`albums.artwork_url_template` + `artwork_width`/`artwork_height`, written once per
+ * album by U1's sweep). Returns undefined when the template or dimensions are absent —
+ * the honest "no Apple cover", which lets the DTO fall through to the Spotify floor.
+ * `target` defaults to `RENDER_ARTWORK_TARGET_PX` and is clamped to native by
+ * `appleArtworkUrl`. Pure (no token, no network): the DTO composes it server-side so
+ * `packages/video` stays a dumb consumer that never imports apps/web.
+ */
+export function composeAppleArtworkUrl(
+  urlTemplate: string | null | undefined,
+  width: number | null | undefined,
+  height: number | null | undefined,
+  target: number = RENDER_ARTWORK_TARGET_PX,
+): string | undefined {
+  if (
+    !urlTemplate ||
+    typeof width !== "number" ||
+    typeof height !== "number" ||
+    width <= 0 ||
+    height <= 0
+  ) {
+    return undefined;
+  }
+
+  return appleArtworkUrl({ height, urlTemplate, width }, target, target);
+}
+
 // Map Apple's raw artwork to our shape, or undefined when the template/dimensions
 // are missing (art we could not substitute is art we do not claim to have).
 function parseArtwork(raw: AppleRawArtwork | undefined): AppleArtwork | undefined {

@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "build": "bun run scripts/copy-sprites.ts && NODE_OPTIONS=--max-old-space-size=6144 vite build",
-    "db:backfill": "bun run scripts/backfill-plan-recording-mixtape.ts && bun run scripts/backfill-embedding-blob.ts && bun run scripts/backfill-labels.ts && bun run scripts/backfill-albums.ts && bun run scripts/backfill-apple-reliability.ts && bun run scripts/backfill-artist-links.ts && bun run scripts/backfill-artist-social-reviews.ts",
+    "db:backfill": "bun run scripts/backfill-plan-recording-mixtape.ts && bun run scripts/backfill-embedding-blob.ts && bun run scripts/backfill-labels.ts && bun run scripts/backfill-albums.ts && bun run scripts/backfill-label-aliases.ts && bun run scripts/backfill-apple-reliability.ts && bun run scripts/backfill-artist-links.ts && bun run scripts/backfill-artist-social-reviews.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate && bun run scripts/ensure-search-index.ts",
     "db:pull-prod": "bun run scripts/db-pull-prod.ts",

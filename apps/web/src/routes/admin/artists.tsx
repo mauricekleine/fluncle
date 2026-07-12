@@ -53,6 +53,7 @@ import {
   ARTIST_SOCIAL_PLATFORMS,
   type ArtistSocialPlatform,
   isHttpUrl,
+  urlHostMatchesPlatform,
 } from "@/lib/artist-socials";
 import { findingsCount } from "@/lib/format";
 import { isAdminRequest } from "@/lib/server/admin-auth";
@@ -167,6 +168,26 @@ async function mutateJson<T>(url: string, method: "POST" | "DELETE"): Promise<T>
 
   if (!response.ok || data.ok === false) {
     throw new Error(data.message ?? `Request failed (${response.status})`);
+  }
+
+  return data;
+}
+
+// The fresh-links inline edit's write: PATCH a corrected URL onto one social. The server
+// validates + normalizes it against the row's platform and, on success, stores it operator-
+// owned + confirmed + reviewed (correct AND approve in one act). A validation failure comes
+// back as a 400 whose message the row shows inline (quiet, no toast).
+async function patchSocialUrl(socialId: string, url: string): Promise<{ message?: string }> {
+  const response = await fetch(`/api/admin/artists/socials/${socialId}`, {
+    body: JSON.stringify({ url }),
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
+    method: "PATCH",
+  });
+  const data = (await response.json()) as { message?: string; ok?: boolean };
+
+  if (!response.ok || data.ok === false) {
+    throw new Error(data.message ?? `Save failed (${response.status})`);
   }
 
   return data;
@@ -299,6 +320,7 @@ function AdminArtistsPage() {
           busy={busy}
           onApprove={(socialId) => reviewSocial.mutate(socialId)}
           onRemove={(socialId) => removeSocial.mutate(socialId)}
+          onSaved={invalidate}
         />
 
         {!isLoading && artists.length === 0 ? (
@@ -362,11 +384,13 @@ function FreshLinksSection({
   busy,
   onApprove,
   onRemove,
+  onSaved,
 }: {
   artists: ArtistOverviewItem[];
   busy: boolean;
   onApprove: (socialId: string) => void;
   onRemove: (socialId: string) => void;
+  onSaved: () => void;
 }) {
   const groups = useMemo(
     () =>
@@ -400,6 +424,7 @@ function FreshLinksSection({
               key={social.id}
               onApprove={() => onApprove(social.id)}
               onRemove={() => onRemove(social.id)}
+              onSaved={onSaved}
               social={social}
             />
           )),
@@ -409,28 +434,129 @@ function FreshLinksSection({
   );
 }
 
-// One fresh link — the platform mark, the artist it belongs to, its URL (click-through, inert for
-// a non-http(s) scheme), and the two actions. Approve stamps it reviewed; Remove deletes it.
+// One fresh link — the platform mark, the artist it belongs to, its URL, and the actions.
+// At rest: Approve (stamp reviewed) + Edit (correct the URL) + Remove. In EDIT mode the URL
+// text becomes an input IN PLACE and Approve becomes Save (correct + approve in one act). The
+// input matches the row's existing sm-button band (h-8), so opening the editor never shifts the
+// row height. Escape or blur restores the original; a validation error shows quietly in the row.
 function FreshLinkRow({
   artistName,
   busy,
   onApprove,
   onRemove,
+  onSaved,
   social,
 }: {
   artistName: string;
   busy: boolean;
   onApprove: () => void;
   onRemove: () => void;
+  onSaved: () => void;
   social: ArtistSocial;
 }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(social.url);
+  const [saveError, setSaveError] = useState<string | undefined>();
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const saveButtonRef = useRef<HTMLButtonElement | null>(null);
+
+  const save = useMutation({
+    mutationFn: (nextUrl: string) => patchSocialUrl(social.id, nextUrl),
+    onError: (caught) => setSaveError(caught instanceof Error ? caught.message : String(caught)),
+    onSuccess: () => {
+      setEditing(false);
+      setSaveError(undefined);
+      onSaved();
+    },
+  });
+
+  // Focus the field the moment the editor opens (and place the caret at the end).
+  useEffect(() => {
+    if (editing) {
+      const input = inputRef.current;
+      input?.focus();
+      input?.setSelectionRange(input.value.length, input.value.length);
+    }
+  }, [editing]);
+
+  const startEditing = () => {
+    setDraft(social.url);
+    setSaveError(undefined);
+    setEditing(true);
+  };
+
+  const cancel = () => {
+    setEditing(false);
+    setSaveError(undefined);
+    setDraft(social.url);
+  };
+
+  const trimmed = draft.trim();
+  const hostMismatch =
+    trimmed !== "" && isHttpUrl(trimmed) && !urlHostMatchesPlatform(social.platform, trimmed);
+  const clientValid = trimmed !== "" && isHttpUrl(trimmed) && !hostMismatch;
+  const rowBusy = busy || save.isPending;
+
+  const submit = () => {
+    if (clientValid && !rowBusy) {
+      setSaveError(undefined);
+      save.mutate(trimmed);
+    }
+  };
+
+  // The quiet inline message: the server's ruling once a Save has failed, else the cheap
+  // client host-mismatch hint. The Chrome Rule — plain, literal, no toast.
+  const inlineMessage =
+    saveError ??
+    (hostMismatch
+      ? social.platform === "homepage"
+        ? "That's a social link, not a homepage"
+        : `Not a ${PLATFORM_LABELS[social.platform]} link`
+      : undefined);
+
   const safeUrl = isHttpUrl(social.url);
 
   return (
     <li className="flex flex-wrap items-center gap-2 px-4 py-2.5">
       <PlatformLogo className="size-4 shrink-0 text-muted-foreground" platform={social.platform} />
       <span className="shrink-0 text-xs font-medium">{artistName}</span>
-      {safeUrl ? (
+
+      {editing ? (
+        <Input
+          aria-invalid={inlineMessage !== undefined}
+          aria-label={`${PLATFORM_LABELS[social.platform]} URL for ${artistName}`}
+          className="h-8 min-w-0 flex-1 text-xs"
+          onBlur={(event) => {
+            // Blur cancels — EXCEPT when focus is moving to this row's Save button, whose
+            // click is about to fire the save (a disabled Save can't take focus, so an
+            // invalid entry still cancels on blur, restoring the original).
+            const next = event.relatedTarget;
+            if (
+              saveButtonRef.current &&
+              next instanceof Node &&
+              saveButtonRef.current.contains(next)
+            ) {
+              return;
+            }
+            cancel();
+          }}
+          onChange={(event) => {
+            setDraft(event.target.value);
+            setSaveError(undefined);
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              submit();
+            } else if (event.key === "Escape") {
+              event.preventDefault();
+              cancel();
+            }
+          }}
+          ref={inputRef}
+          value={draft}
+        />
+      ) : safeUrl ? (
         <a
           className="inline-flex min-w-0 flex-1 items-center gap-1 truncate text-xs text-muted-foreground hover:text-primary"
           href={social.url}
@@ -449,20 +575,45 @@ function FreshLinkRow({
         </span>
       )}
 
-      <Button disabled={busy} onClick={onApprove} size="sm">
-        <ThumbsUpIcon aria-hidden="true" className="size-3.5" />
-        Approve
-      </Button>
+      {editing ? (
+        <Button disabled={rowBusy || !clientValid} onClick={submit} ref={saveButtonRef} size="sm">
+          <CheckCircleIcon aria-hidden="true" className="size-3.5" weight="fill" />
+          Save
+        </Button>
+      ) : (
+        <>
+          <Button disabled={busy} onClick={onApprove} size="sm">
+            <ThumbsUpIcon aria-hidden="true" className="size-3.5" />
+            Approve
+          </Button>
+          <Button
+            aria-label={`Edit ${PLATFORM_LABELS[social.platform]} link for ${artistName}`}
+            className="text-muted-foreground hover:text-foreground"
+            disabled={busy}
+            onClick={startEditing}
+            size="icon-sm"
+            variant="ghost"
+          >
+            <PencilSimpleIcon aria-hidden="true" className="size-3.5" />
+          </Button>
+        </>
+      )}
       <Button
         aria-label={`Remove ${PLATFORM_LABELS[social.platform]} for ${artistName}`}
         className="text-muted-foreground hover:text-destructive"
-        disabled={busy}
+        disabled={rowBusy}
         onClick={onRemove}
         size="icon-sm"
         variant="ghost"
       >
         <TrashIcon aria-hidden="true" className="size-3.5" />
       </Button>
+
+      {/* The quiet inline error — full-width so it sits under the row without shifting the
+          controls; only present while editing with a client hint or a server rejection. */}
+      {editing && inlineMessage ? (
+        <p className="basis-full pl-6 text-[11px] text-destructive">{inlineMessage}</p>
+      ) : null}
     </li>
   );
 }

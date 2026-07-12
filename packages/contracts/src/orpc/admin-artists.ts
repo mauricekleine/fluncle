@@ -350,6 +350,25 @@ export const removeArtistSocial = oc
   .input(z.object({ socialId: z.string() }))
   .output(z.object({ ok: z.literal(true) }));
 
+/**
+ * `update_artist_social` → `PATCH /admin/artists/socials/{socialId}` (operationId
+ * `updateArtistSocial`). Operator tier. Correct a social's URL AND approve it in one act —
+ * the board's fresh-links INLINE EDIT (fixing a resolver miss without leaving the row). LOOSE
+ * body — the handler validates + normalizes the `url` against the row's platform through the
+ * resolver's `classifyMbUrl` + `normalizeProfileUrl`, then stores it operator-owned + confirmed
+ * + reviewed. `{ ok, social }`.
+ */
+export const updateArtistSocial = oc
+  .route({
+    method: "PATCH",
+    operationId: "updateArtistSocial",
+    path: "/admin/artists/socials/{socialId}",
+    summary: "Correct + approve an artist social's URL inline (operator)",
+    tags: ["Admin"],
+  })
+  .input(z.looseObject({ socialId: z.string() }))
+  .output(ArtistSocialEnvelope);
+
 /** The `admin-artists` domain's ops, merged into the root contract by `./index.ts`. */
 export const adminArtistsContract = {
   add_artist_social: addArtistSocial,
@@ -362,4 +381,5 @@ export const adminArtistsContract = {
   resolve_artist: resolveArtist,
   review_artist: reviewArtist,
   review_artist_social: reviewArtistSocial,
+  update_artist_social: updateArtistSocial,
 };

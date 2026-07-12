@@ -20,6 +20,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const getLabelBySlug = vi.hoisted(() => vi.fn());
 const getLabelForAlbum = vi.hoisted(() => vi.fn());
+// The label page reads confirmed aliases for its JSON-LD `alternateName` (U2a); this gate test
+// is blind to them, so it stays a stub returning none.
+const getConfirmedAliasNames = vi.hoisted(() => vi.fn(async () => []));
 const getAlbumBySlug = vi.hoisted(() => vi.fn());
 const listArtistsByLabel = vi.hoisted(() => vi.fn());
 const listArtistsByAlbum = vi.hoisted(() => vi.fn());
@@ -30,6 +33,7 @@ const listCatalogueTracksByAlbum = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/server/labels", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/server/labels")>()),
+  getConfirmedAliasNames,
   getLabelBySlug,
   getLabelForAlbum,
 }));

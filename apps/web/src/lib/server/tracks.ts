@@ -10,9 +10,10 @@ import {
   type TrackListItem,
 } from "@fluncle/contracts";
 import { logPageUrl } from "../fluncle-links";
-import { versionedObservationAudioUrl } from "../media";
+import { spotifyAlbumImageAtSize, versionedObservationAudioUrl } from "../media";
 import { nextBoundaryEpochMs, type RadioScheduleEntry } from "../radio-schedule";
 import { type FeedItem, type MixtapeMember, rowToMixtape } from "../mixtapes";
+import { composeAppleArtworkUrl } from "./apple-music";
 import { parseArtistsJson } from "./artists";
 import { getDb, typedRow, typedRows } from "./db";
 import { discogsReleaseUrl } from "./discogs";
@@ -50,6 +51,12 @@ export type { RadioScheduleEntry };
 export type TrackRow = {
   added_at: string;
   album: string | null;
+  // The album's stored Apple artwork facts (RFC musickit-second-authority U1), joined by
+  // `tracks.album_id`. Non-null only when the album has a row AND the Apple sweep filled it.
+  // The DTO composes them into `artworkMaxUrl` (a ≥1920 render source) — RENDER-TIME ONLY.
+  album_artwork_height: number | null;
+  album_artwork_url_template: string | null;
+  album_artwork_width: number | null;
   album_image_url: string | null;
   // The graph pointers, joined by `tracks.album_id` / `tracks.label_id` (see `label_slug`
   // below). Non-null only when the entity row exists — which is what lets a `GraphLink`
@@ -166,6 +173,9 @@ const TRACK_SELECT = `tracks.track_id, tracks.spotify_url, tracks.apple_music_ur
   (select name from galaxies where galaxies.id = findings.galaxy_id) as galaxy_name,
   (select slug from galaxies where galaxies.id = findings.galaxy_id) as galaxy_slug,
   (select slug from albums where albums.id = tracks.album_id) as album_slug,
+  (select artwork_url_template from albums where albums.id = tracks.album_id) as album_artwork_url_template,
+  (select artwork_width from albums where albums.id = tracks.album_id) as album_artwork_width,
+  (select artwork_height from albums where albums.id = tracks.album_id) as album_artwork_height,
   (select slug from labels where labels.id = tracks.label_id) as label_slug,
   (select url from social_posts
      where track_id = tracks.track_id and platform = 'tiktok' and status = 'published'
@@ -328,7 +338,14 @@ export function toLeanTrackListItem(row: LeanTrackRow): LeanTrackListItem {
     addedAt: row.added_at,
     addedToSpotify: Boolean(row.added_to_spotify),
     album: row.album ?? undefined,
-    albumImageUrl: row.album_image_url ?? undefined,
+    // THE BEST DISPLAY COVER, chosen at the DTO boundary so web, mobile, and the video
+    // pipeline all upgrade at once (RFC musickit-second-authority U3a). We store Spotify's
+    // 300² but every surface wants the sharper 640² (the /log poster upscaled it client-side;
+    // mobile + the video pipeline read the raw stored URL and never touched web's helpers), so
+    // the swap happens HERE, once, server-side. `spotifyAlbumImageAtSize` is idempotent and
+    // passes a non-Spotify (or owned-master, once U3b lands) URL through untouched, so a web
+    // caller re-sizing this to `small`/`large` still works.
+    albumImageUrl: spotifyAlbumImageAtSize(row.album_image_url ?? undefined, "large"),
     // The graph pointers — the `/album/<slug>` + `/label/<slug>` pages this finding belongs
     // to, resolved in the SAME select that loaded the track. This is what makes the GraphLink
     // system free at the point of use: every surface that renders a finding already holds the
@@ -348,6 +365,15 @@ export function toLeanTrackListItem(row: LeanTrackRow): LeanTrackListItem {
     // PRIVATE_TRACK_FIELDS and survives to the public DTO. Absent until the ISRC resolves.
     appleMusicUrl: row.apple_music_url ?? undefined,
     artists: parseArtistsJson(row.artists_json),
+    // A ≥1920 render source composed server-side from the album's stored Apple facts (U1),
+    // so `packages/video` prefers it over the 640² Spotify cover without importing apps/web or
+    // minting an Apple URL itself. Undefined when the album carries no Apple artwork — the
+    // render falls through to `albumImageUrl`. RENDER-TIME ONLY, never persisted (decision A).
+    artworkMaxUrl: composeAppleArtworkUrl(
+      row.album_artwork_url_template,
+      row.album_artwork_width,
+      row.album_artwork_height,
+    ),
     bpm: row.bpm ?? undefined,
     // Source-hierarchy provenance (operator > rekordbox > DSP; track-update.ts). Admin-only
     // on this DTO — `toPublicTrackListItem` strips both. The Rekordbox sync reads them to
