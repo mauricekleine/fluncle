@@ -427,6 +427,7 @@ const AUTOMATION_CRONS: CronDef[] = [
   { cadenceMs: 30 * 60_000, match: "backfill", service: "cron.backfill" },
   { cadenceMs: 10 * 60_000, match: "crawl", service: "cron.crawl" }, // catalogue crawl — one bounded MusicBrainz pass per tick
   { cadenceMs: 30 * 60_000, match: "rank", service: "cron.rank" }, // The Ear's ranking — drains the stale catalogue
+  { cadenceMs: 60 * 60_000, match: "label-images", service: "cron.label-images" }, // label logos — resolve one bounded batch of pending labels per tick
   { cadenceMs: 60 * 60_000, match: "artist-sweep", service: "cron.artist-sweep" },
   { cadenceMs: 10 * 60_000, match: "social-capture", service: "cron.social-capture" },
   // `studio-clip` (11 chars) is checked before `clip-drip` (9) by longest-match-first,

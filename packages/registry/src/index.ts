@@ -986,6 +986,18 @@ export const SURFACES: readonly Surface[] = [
     weights: { status: "hidden" },
   },
   {
+    command: "fluncle admin backfills label-images",
+    exposedContent: [
+      "resolve each pending label's own logo (Discogs → Wikidata → cover floor) → its own R2 image",
+    ],
+    kind: "cron",
+    name: "cron.label-images",
+    operatorNotes:
+      "every 60m, run by a rave-02 HOST systemd timer (docs/agents/hermes/label-images-timer/). The DURABLE other half of the label entity: the crawler MINTS new labels every few minutes (each `image_state='pending'`) and the one-shot operator backfill only seeded the labels that already existed, so this cron is what gives every freshly-minted label its OWN logo instead of a borrowed album cover. METADATA ONLY — a label logo is internal, reversible, nominative-use trademark (the album-art posture); it certifies nothing and publishes nothing (agent tier, the `backfill_discogs` precedent). Worker-paced (the box holds no Discogs key / MusicBrainz budget): one bounded batch per tick walks each label's MB identity → its curated Discogs/Wikidata url-rels → downloads the logo once into R2, up the ladder Discogs → Wikidata → none (the freshest-cover floor). The `labels` row carries the durable reliability state (image_state/image_attempted_at/image_failures), so a resolved/none label is terminal and a vendor throttle just circuit-breaks and resumes next tick. Zero LLM tokens. Source: docs/agents/hermes/scripts/label-images-sweep.*. See docs/label-entity.md.",
+    probeConfig: { cadenceMs: 60 * MINUTE_MS, cronName: "fluncle-label-images", kind: "cron" },
+    weights: { status: "hidden" },
+  },
+  {
     command: "fluncle admin tracks capture-audio --queue",
     exposedContent: [
       "capture each finding's full song once → private R2 (yt-dlp via a residential proxy)",
