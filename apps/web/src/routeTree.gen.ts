@@ -69,6 +69,7 @@ import { Route as AdminGalaxiesRouteImport } from './routes/admin/galaxies'
 import { Route as AdminFindingsRouteImport } from './routes/admin/findings'
 import { Route as AdminCostsRouteImport } from './routes/admin/costs'
 import { Route as AdminClipsRouteImport } from './routes/admin/clips'
+import { Route as AdminChatRouteImport } from './routes/admin/chat'
 import { Route as AdminCatalogueRouteImport } from './routes/admin/catalogue'
 import { Route as AdminArtistsRouteImport } from './routes/admin/artists'
 import { Route as ApiV1StatusRouteImport } from './routes/api/v1/status'
@@ -80,6 +81,7 @@ import { Route as ApiOgLogIdRouteImport } from './routes/api/og.$logId'
 import { Route as ApiMixtapeCoverLogIdRouteImport } from './routes/api/mixtape-cover.$logId'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 import { Route as ApiAdminLogoutRouteImport } from './routes/api/admin/logout'
+import { Route as ApiAdminChatRouteImport } from './routes/api/admin/chat'
 import { Route as AdminStudioRecordingIdRouteImport } from './routes/admin/studio.$recordingId'
 import { Route as ApiV1PreviewIdOrLogIdRouteImport } from './routes/api/v1/preview.$idOrLogId'
 import { Route as ApiV1OgLogIdRouteImport } from './routes/api/v1/og.$logId'
@@ -409,6 +411,11 @@ const AdminClipsRoute = AdminClipsRouteImport.update({
   path: '/clips',
   getParentRoute: () => AdminRouteRoute,
 } as any)
+const AdminChatRoute = AdminChatRouteImport.update({
+  id: '/chat',
+  path: '/chat',
+  getParentRoute: () => AdminRouteRoute,
+} as any)
 const AdminCatalogueRoute = AdminCatalogueRouteImport.update({
   id: '/catalogue',
   path: '/catalogue',
@@ -462,6 +469,11 @@ const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
 const ApiAdminLogoutRoute = ApiAdminLogoutRouteImport.update({
   id: '/api/admin/logout',
   path: '/api/admin/logout',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiAdminChatRoute = ApiAdminChatRouteImport.update({
+  id: '/api/admin/chat',
+  path: '/api/admin/chat',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AdminStudioRecordingIdRoute = AdminStudioRecordingIdRouteImport.update({
@@ -645,6 +657,7 @@ export interface FileRoutesByFullPath {
   '/status': typeof StatusRoute
   '/admin/artists': typeof AdminArtistsRoute
   '/admin/catalogue': typeof AdminCatalogueRoute
+  '/admin/chat': typeof AdminChatRoute
   '/admin/clips': typeof AdminClipsRoute
   '/admin/costs': typeof AdminCostsRoute
   '/admin/findings': typeof AdminFindingsRoute
@@ -686,6 +699,7 @@ export interface FileRoutesByFullPath {
   '/newsletter/': typeof NewsletterIndexRoute
   '/stories/': typeof StoriesIndexRoute
   '/admin/studio/$recordingId': typeof AdminStudioRecordingIdRoute
+  '/api/admin/chat': typeof ApiAdminChatRoute
   '/api/admin/logout': typeof ApiAdminLogoutRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/mixtape-cover/$logId': typeof ApiMixtapeCoverLogIdRoute
@@ -743,6 +757,7 @@ export interface FileRoutesByTo {
   '/status': typeof StatusRoute
   '/admin/artists': typeof AdminArtistsRoute
   '/admin/catalogue': typeof AdminCatalogueRoute
+  '/admin/chat': typeof AdminChatRoute
   '/admin/clips': typeof AdminClipsRoute
   '/admin/costs': typeof AdminCostsRoute
   '/admin/findings': typeof AdminFindingsRoute
@@ -784,6 +799,7 @@ export interface FileRoutesByTo {
   '/newsletter': typeof NewsletterIndexRoute
   '/stories': typeof StoriesIndexRoute
   '/admin/studio/$recordingId': typeof AdminStudioRecordingIdRoute
+  '/api/admin/chat': typeof ApiAdminChatRoute
   '/api/admin/logout': typeof ApiAdminLogoutRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/mixtape-cover/$logId': typeof ApiMixtapeCoverLogIdRoute
@@ -844,6 +860,7 @@ export interface FileRoutesById {
   '/status': typeof StatusRoute
   '/admin/artists': typeof AdminArtistsRoute
   '/admin/catalogue': typeof AdminCatalogueRoute
+  '/admin/chat': typeof AdminChatRoute
   '/admin/clips': typeof AdminClipsRoute
   '/admin/costs': typeof AdminCostsRoute
   '/admin/findings': typeof AdminFindingsRoute
@@ -885,6 +902,7 @@ export interface FileRoutesById {
   '/newsletter/': typeof NewsletterIndexRoute
   '/stories/': typeof StoriesIndexRoute
   '/admin/studio/$recordingId': typeof AdminStudioRecordingIdRoute
+  '/api/admin/chat': typeof ApiAdminChatRoute
   '/api/admin/logout': typeof ApiAdminLogoutRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/mixtape-cover/$logId': typeof ApiMixtapeCoverLogIdRoute
@@ -946,6 +964,7 @@ export interface FileRouteTypes {
     | '/status'
     | '/admin/artists'
     | '/admin/catalogue'
+    | '/admin/chat'
     | '/admin/clips'
     | '/admin/costs'
     | '/admin/findings'
@@ -987,6 +1006,7 @@ export interface FileRouteTypes {
     | '/newsletter/'
     | '/stories/'
     | '/admin/studio/$recordingId'
+    | '/api/admin/chat'
     | '/api/admin/logout'
     | '/api/auth/$'
     | '/api/mixtape-cover/$logId'
@@ -1044,6 +1064,7 @@ export interface FileRouteTypes {
     | '/status'
     | '/admin/artists'
     | '/admin/catalogue'
+    | '/admin/chat'
     | '/admin/clips'
     | '/admin/costs'
     | '/admin/findings'
@@ -1085,6 +1106,7 @@ export interface FileRouteTypes {
     | '/newsletter'
     | '/stories'
     | '/admin/studio/$recordingId'
+    | '/api/admin/chat'
     | '/api/admin/logout'
     | '/api/auth/$'
     | '/api/mixtape-cover/$logId'
@@ -1144,6 +1166,7 @@ export interface FileRouteTypes {
     | '/status'
     | '/admin/artists'
     | '/admin/catalogue'
+    | '/admin/chat'
     | '/admin/clips'
     | '/admin/costs'
     | '/admin/findings'
@@ -1185,6 +1208,7 @@ export interface FileRouteTypes {
     | '/newsletter/'
     | '/stories/'
     | '/admin/studio/$recordingId'
+    | '/api/admin/chat'
     | '/api/admin/logout'
     | '/api/auth/$'
     | '/api/mixtape-cover/$logId'
@@ -1265,6 +1289,7 @@ export interface RootRouteChildren {
   MixtapesIndexRoute: typeof MixtapesIndexRoute
   NewsletterIndexRoute: typeof NewsletterIndexRoute
   StoriesIndexRoute: typeof StoriesIndexRoute
+  ApiAdminChatRoute: typeof ApiAdminChatRoute
   ApiAdminLogoutRoute: typeof ApiAdminLogoutRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
   ApiMixtapeCoverLogIdRoute: typeof ApiMixtapeCoverLogIdRoute
@@ -1724,6 +1749,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminClipsRouteImport
       parentRoute: typeof AdminRouteRoute
     }
+    '/admin/chat': {
+      id: '/admin/chat'
+      path: '/chat'
+      fullPath: '/admin/chat'
+      preLoaderRoute: typeof AdminChatRouteImport
+      parentRoute: typeof AdminRouteRoute
+    }
     '/admin/catalogue': {
       id: '/admin/catalogue'
       path: '/catalogue'
@@ -1799,6 +1831,13 @@ declare module '@tanstack/react-router' {
       path: '/api/admin/logout'
       fullPath: '/api/admin/logout'
       preLoaderRoute: typeof ApiAdminLogoutRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/admin/chat': {
+      id: '/api/admin/chat'
+      path: '/api/admin/chat'
+      fullPath: '/api/admin/chat'
+      preLoaderRoute: typeof ApiAdminChatRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin/studio/$recordingId': {
@@ -1996,6 +2035,7 @@ declare module '@tanstack/react-router' {
 interface AdminRouteRouteChildren {
   AdminArtistsRoute: typeof AdminArtistsRoute
   AdminCatalogueRoute: typeof AdminCatalogueRoute
+  AdminChatRoute: typeof AdminChatRoute
   AdminClipsRoute: typeof AdminClipsRoute
   AdminCostsRoute: typeof AdminCostsRoute
   AdminFindingsRoute: typeof AdminFindingsRoute
@@ -2017,6 +2057,7 @@ interface AdminRouteRouteChildren {
 const AdminRouteRouteChildren: AdminRouteRouteChildren = {
   AdminArtistsRoute: AdminArtistsRoute,
   AdminCatalogueRoute: AdminCatalogueRoute,
+  AdminChatRoute: AdminChatRoute,
   AdminClipsRoute: AdminClipsRoute,
   AdminCostsRoute: AdminCostsRoute,
   AdminFindingsRoute: AdminFindingsRoute,
@@ -2097,6 +2138,7 @@ const rootRouteChildren: RootRouteChildren = {
   MixtapesIndexRoute: MixtapesIndexRoute,
   NewsletterIndexRoute: NewsletterIndexRoute,
   StoriesIndexRoute: StoriesIndexRoute,
+  ApiAdminChatRoute: ApiAdminChatRoute,
   ApiAdminLogoutRoute: ApiAdminLogoutRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
   ApiMixtapeCoverLogIdRoute: ApiMixtapeCoverLogIdRoute,

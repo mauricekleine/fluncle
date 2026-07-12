@@ -1,5 +1,6 @@
 import {
   CassetteTapeIcon,
+  ChatCircleDotsIcon,
   ChatTeardropTextIcon,
   CurrencyDollarIcon,
   FilmReelIcon,
@@ -69,6 +70,7 @@ import { listTracks } from "@/lib/server/tracks";
 export type AdminNavCurrent =
   | "artists"
   | "catalogue"
+  | "chat"
   | "clips"
   | "costs"
   | "dashboard"
@@ -92,6 +94,7 @@ type AdminNavPath =
   | "/admin"
   | "/admin/artists"
   | "/admin/catalogue"
+  | "/admin/chat"
   | "/admin/clips"
   | "/admin/costs"
   | "/admin/findings"
@@ -222,6 +225,14 @@ const OBJECT_SECTIONS: NavSection[] = [
 // page); System stays the deep-link to /status. Neither carries a count: a prompt has
 // no backlog, and /status is a health read, not a queue.
 const SYSTEM_ENTRIES: NavEntry[] = [
+  // ChatDnB — the admin-gated spike where Fluncle answers over his own archive tools. Sits
+  // with the machine's own instruments (Prompts, System), not the pipeline objects.
+  {
+    icon: ChatCircleDotsIcon,
+    key: "chat",
+    label: "ChatDnB",
+    to: "/admin/chat",
+  },
   {
     icon: ChatTeardropTextIcon,
     key: "prompts",
