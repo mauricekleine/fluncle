@@ -16,6 +16,7 @@ import {
   contentTypeForExt,
   durationAcceptable,
   durationWithinTolerance,
+  extractSourceAudioSha256,
   needsReenrichAfterCapture,
   normalizeChannelName,
   pickCandidate,
@@ -111,6 +112,26 @@ describe("buildSourceAudioKey", () => {
     expect(buildSourceAudioKey("catalogue/mb_1f2a3b4c", "abc123", "webm")).toBe(
       "catalogue/mb_1f2a3b4c/abc123.webm",
     );
+  });
+});
+
+describe("extractSourceAudioSha256 — the wrong-audio re-capture memory", () => {
+  const sha = "a".repeat(64);
+
+  test("round-trips buildSourceAudioKey: the hash slot comes back out", () => {
+    expect(extractSourceAudioSha256(buildSourceAudioKey("004.7.2I", sha, "webm"))).toBe(sha);
+    expect(extractSourceAudioSha256(buildSourceAudioKey(`catalogue/mb_x`, sha, "opus"))).toBe(sha);
+  });
+
+  test("lowercases and tolerates a missing key", () => {
+    expect(extractSourceAudioSha256(`catalogue/mb_x/${"F".repeat(64)}.mp3`)).toBe("f".repeat(64));
+    expect(extractSourceAudioSha256(undefined)).toBeNull();
+  });
+
+  test("rejects a basename that is not a 64-hex digest — no false bad-audio match", () => {
+    // A pre-hash legacy key, or any non-digest basename, must not read as a reject hash.
+    expect(extractSourceAudioSha256("004.7.2I/notahash.webm")).toBeNull();
+    expect(extractSourceAudioSha256("catalogue/x/deadbeef.opus")).toBeNull();
   });
 });
 

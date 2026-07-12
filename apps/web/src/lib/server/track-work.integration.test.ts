@@ -815,3 +815,58 @@ describe("countTrackWork — how big is the backlog, not how big is the page", (
     });
   });
 });
+
+describe("listTrackWork — the wrong-audio quarantine (docs/the-ear.md § Wrong audio)", () => {
+  it("re-queues a wrong-audio row for capture, carrying its bad key, and keeps it out of embed/analyze", async () => {
+    const { listTrackWork } = await import("./track-work");
+
+    await openCaptureBudget();
+
+    // A quarantined row: The Ear caught the wrong master, nulled the vector, restored the pre-audio
+    // tier, and KEPT the bad key so the sweep can refuse the identical bytes on the re-download.
+    await seedCatalogueTrack(db, { title: "Find Your Love", trackId: "catwrong00000000000000" });
+    await db.execute({
+      args: ["catwrong00000000000000"],
+      sql: `update tracks
+            set capture_status = 'wrong-audio',
+                capture_priority = 3,
+                source_audio_key = 'catalogue/catwrong00000000000000/badbeef.webm',
+                embedding_json = null
+            where track_id = ?`,
+    });
+
+    // It re-enters the CAPTURE queue for a fresh download, carrying its old bad key.
+    const capture = await listTrackWork({ kind: "capture", scope: "catalogue" });
+    expect(capture.map((item) => item.trackId)).toEqual(["catwrong00000000000000"]);
+    expect(capture[0]?.sourceAudioKey).toBe("catalogue/catwrong00000000000000/badbeef.webm");
+
+    // But it is NEVER handed to embed or analyze — those must not touch the bad bytes still on
+    // file, or they would just re-poison the ranking.
+    expect(await listTrackWork({ kind: "embed", scope: "catalogue" })).toEqual([]);
+    expect(await listTrackWork({ kind: "analyze", scope: "catalogue" })).toEqual([]);
+  });
+
+  it("a quarantine-cleared row leaves the capture queue and its kept audio re-embeds", async () => {
+    const { listTrackWork } = await import("./track-work");
+
+    await openCaptureBudget();
+
+    await seedCatalogueTrack(db, { trackId: "catclear00000000000000" });
+    await db.execute({
+      args: ["catclear00000000000000"],
+      sql: `update tracks
+            set capture_status = 'quarantine-cleared',
+                capture_priority = 3,
+                source_audio_key = 'catalogue/catclear00000000000000/badbeef.webm',
+                embedding_json = null
+            where track_id = ?`,
+    });
+
+    // The operator kept it: it is NOT re-captured (a terminal-for-capture state), and its kept
+    // audio flows to embed so it rejoins the ranking.
+    expect(await listTrackWork({ kind: "capture", scope: "catalogue" })).toEqual([]);
+    expect(
+      (await listTrackWork({ kind: "embed", scope: "catalogue" })).map((item) => item.trackId),
+    ).toEqual(["catclear00000000000000"]);
+  });
+});
