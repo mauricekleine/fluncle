@@ -711,13 +711,21 @@ export function buildBatchBundles(
  * error). `query` is the querystring after `?`. Never throws. Exported so the pilot
  * can drive one authed read per ISRC and derive its diagnostics from the raw body
  * with the pure parsers above — the same path the two lookups take internally.
+ *
+ * `signal` is optional so a user-facing hot-path caller (U4's live preview rung) can
+ * bound the call with a short timeout, aborting the underlying fetch instead of leaking
+ * it — an aborted fetch throws, which surfaces here as a plain `{ ok: false }` (the
+ * caller falls through to its keyless fallback). The sweeps pass no signal.
  */
 export type AppleCatalogRequestOutcome =
   | { configured: false }
   | { configured: true; ok: true; body: unknown }
   | { authFailed?: boolean; configured: true; error: string; ok: false; rateLimited: boolean };
 
-export async function requestAppleCatalog(query: string): Promise<AppleCatalogRequestOutcome> {
+export async function requestAppleCatalog(
+  query: string,
+  signal?: AbortSignal,
+): Promise<AppleCatalogRequestOutcome> {
   const credentials = await readAppleMusicCredentials();
 
   if (!credentials) {
@@ -732,6 +740,7 @@ export async function requestAppleCatalog(query: string): Promise<AppleCatalogRe
         Authorization: `Bearer ${token}`,
         "User-Agent": USER_AGENT,
       },
+      signal,
     });
 
     if (response.status === 429) {
@@ -818,6 +827,11 @@ export async function appleCatalogLookupByIsrc(isrc: string): Promise<AppleCatal
  * chunk that errors, the whole call surfaces that error (`rateLimited` preserved) so
  * the caller re-drives from a clean state; otherwise the per-ISRC bundles merge into
  * one map. ISRCs with no match are absent from the map.
+ *
+ * This is the SLIM path (no `&include=albums`) — the lightest catalog read that still
+ * carries the URL/preview/artwork, so a single-ISRC caller that only needs the preview
+ * (U4's live rung) drives it with a one-element list rather than paying for the album
+ * join. `signal` bounds that hot-path call with a timeout (see `requestAppleCatalog`).
  */
 export type AppleCatalogBatchOutcome =
   | { configured: false }
@@ -826,6 +840,7 @@ export type AppleCatalogBatchOutcome =
 
 export async function appleCatalogLookupByIsrcs(
   isrcs: string[],
+  signal?: AbortSignal,
 ): Promise<AppleCatalogBatchOutcome> {
   // Validate + dedupe: trim, drop empties, keep first-seen order.
   const clean: string[] = [];
@@ -850,6 +865,7 @@ export async function appleCatalogLookupByIsrcs(
     const chunk = clean.slice(start, start + CATALOG_ISRC_BATCH_MAX);
     const outcome = await requestAppleCatalog(
       `filter%5Bisrc%5D=${chunk.map((value) => encodeURIComponent(value)).join(",")}`,
+      signal,
     );
 
     if (!outcome.configured) {
