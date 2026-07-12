@@ -74,11 +74,12 @@ The pipeline and the bespoke Fluncle voice are live end to end; what remains is 
 
 - **Finetune the Recovered-audio voice guide.** Tighten the writing guide for the _spoken_ observation: the arc (sensory → mood → connection → log ID → artist/title), line length and pacing for a heard surface (a clunky line can't be skimmed past), how hard the cosmos-sauce should ride out loud, never naming earthly geography, and where "too purple" begins. Fold Maurice's notes from the real renders back into the `copywriting-fluncle` voice reference (`packages/skills/copywriting-fluncle`) + `observation-agent.md`. (SSML is no longer a lever — `<break>` tokens are stripped; Cartesia paces on punctuation.)
 
-### Optimize web playback — the `/log` mobile rung
+### Optimize web playback — what's left is a watch, not a build
 
-The playback layer is in place and the throttled-mobile win is verified: `apps/web/src/lib/media.ts` serves same-zone Media Transformation renditions (the width ladder + centre-crops + `mode=frame` poster, one-shot fallback to the raw master), and the `?v=N` vintage token solves re-ship purge. Keep watch that the pipeline's CRF doesn't drift footage back over Cloudflare's 100 MB transform ceiling (the largest sit close to ~95 MB). The one remaining thread:
+The playback layer is in place and the throttled-mobile win is verified: `apps/web/src/lib/media.ts` serves same-zone Media Transformation renditions (the width ladder + centre-crops + `mode=frame` poster, one-shot fallback to the raw master), the `?v=N` vintage token solves re-ship purge, and every playback surface now sizes its request to the measured pane, with a stall stepping DOWN the ladder instead of bailing up to the heavier master (`/log` shipped in #485; Stories follows the same shape). Two small threads remain:
 
-- **`/log` mobile requests the native 1080×1920 crop regardless of pane size** (`log-footage.tsx` calls `videoCrop(logId, "portrait")` with no width, unlike Stories which passes the measured `renditionWidth`), so on the slowest connections the muted loop is effectively dormant and the stall watchdog makes it worse by bailing to the even-heavier master. The small, well-scoped fix: have `/log` mobile pass a pane-sized ladder rung the way Stories already does, and revisit the watchdog's bail-to-master on a constrained link. An optimization, not a blocker.
+- **Keep the transform ceiling honest.** Watch that the pipeline's CRF doesn't drift footage back over Cloudflare's 100 MB transform ceiling (the largest sit close to ~95 MB).
+- **A real-device pass on the step-down recovery.** The wedge → downshift → re-arm ladder only shows itself on a genuinely constrained link; a throttled-cellular phone session on `/log` and the Stories reel (the operator's phone) is the closing check.
 
 ### Log IDs in search + AI answers (AEO/GEO) — off-site thread
 
