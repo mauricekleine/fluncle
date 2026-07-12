@@ -104,10 +104,6 @@ The Fluncle web onion is live on the rave VPS, proxying `www.fluncle.com` (API/R
 
 - **The rave SSH onion (deferred).** A second onion identity → the SSH terminal was scoped but deferred; stand it up if the flex earns its keep.
 
-### Hosted-Turso proof of the embed queue's `--count` (before the crawl hits six figures)
-
-The one scale claim from the catalogue sprint never proven against **hosted** Turso (the docs/local-database.md rule: local lies about scale): the embed work-queue's `--count`, a `count(*)` over the partial index `tracks_embed_queue_idx`. The 2026-07-11 spike (#455, absorbed into docs/local-database.md) measured the _vector_ shapes at 100k — blob-vs-text probe binding, the ANN-index trap, JSON-vs-blob storage — but not this query. Risk profile is the mildest of the family (the partial index holds only the un-embedded backlog, bounded by capture rate, and the query touches none of the three measured cliffs), so it is not urgent — but it is a claim, not a measurement, until a scratch hosted DB at ~100k rows says so. Fold it into the next scratch-DB pass; destroy the DB after, per the spike protocol.
-
 ### Database latency — evaluate Turso → Cloudflare D1
 
 Turso (libSQL) is the source of truth, hosted in **Ireland**, so every Worker→DB read pays a cross-region hop — a real chunk of the `/log/<id>` ~896 ms cold TTFB (the Worker runs at the edge near the reader; the database doesn't). Cloudflare-native **D1** co-locates with Workers and would shrink that roundtrip. The catch is migration cost: D1 is SQLite with its own ceilings (database-size and write-throughput limits, no libSQL-only features), and the whole Drizzle data layer, migration history, and the per-worktree local-dev story (`turso dev` + `.dev/local.db`, see `docs/local-database.md`) would move with it — a real arc, not a config flip.

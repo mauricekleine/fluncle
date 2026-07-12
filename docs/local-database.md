@@ -122,3 +122,22 @@ A **14× cliff on hosted that does not exist locally.** The text version benchma
 - Storing a 1024-d vector as JSON text costs **21.8 KB/row**; as `F32_BLOB(1024)` it is ~4 KB. At 100k that is **2,474 MB vs 440 MB — the JSON column alone would be 82% of the database.**
 - Reading an `F32_BLOB` back through the driver yields an **`ArrayBuffer`**, not a `Uint8Array`. Handle it.
 - Bulk writes are fine: **348 rows/s** on hosted with reads holding at 355 ms p50 during the burst. Writes were never the problem.
+
+### The embed queue's `--count` at 100k — proven cheap (2026-07-12)
+
+The one scale claim from the catalogue sprint left unproven against hosted Turso: the embed work-queue's backlog count (`fluncle admin tracks work --kind embed --count`, `countTrackWork` in `apps/web/src/lib/server/track-work.ts`), a `count(*)` over the partial index `tracks_embed_queue_idx` (`ON tracks(track_id) WHERE source_audio_key is not null and embedding_json is null`). Claim: cheap because the partial index holds only the un-embedded backlog, not the archive. Measured against a scratch hosted DB (100k `tracks` + 5k `findings`, the real DDL) through `@libsql/client/web`, p50 over 10 runs, one round trip from this Mac. The count query verbatim:
+
+```sql
+select count(*) as queued from tracks t
+left join findings f on f.track_id = t.track_id
+where 1 = 1 and t.source_audio_key is not null and t.embedding_json is null
+```
+
+| State (100k `tracks`)                             | `--count` (scope=all) | page read (200 rows) | plain `count(*)` ref |
+| ------------------------------------------------- | --------------------- | -------------------- | -------------------- |
+| **A — steady state** (~1k un-embedded backlog)    | **53.6 ms**           | 97.3 ms              | 47.1 ms              |
+| **B — cold start** (100k un-embedded, index full) | **316.5 ms**          | 185.1 ms             | 141.1 ms             |
+
+`explain query plan` in **both** states is `SCAN t USING INDEX tracks_embed_queue_idx` — the count is always served from the partial index, never a table scan. In steady state the index carries only the ~1k backlog, so the count returns in ~50 ms **regardless of the 100k archive behind it** — the claim holds exactly as stated. The pathological cold-start case (the whole archive un-embedded, so the partial index is at full 100k size) still stays sub-second at ~320 ms for the default `all` scope. The only latent cost worth naming: the count carries the `left join findings` in its FROM even though the join is a semantic no-op for a `count(*)` at `scope=all` (`findings.track_id` is unique, so it can neither filter nor fan out), and the planner probes it 100k times in State B — that join probe, not any table scan, is the whole gap between the 316 ms worst case and the 141 ms bare `count(*)`.
+
+**Verdict:** ship it. The `--count` is cheap in the state that matters (~50 ms steady, reading only the backlog-sized partial index) and bounded sub-second even in the worst case a cold crawl can produce; it touches none of the three cliffs above. If the cold-start number ever needs shaving, drop the `findings` join from the count path (it changes no result at `scope=all`).
