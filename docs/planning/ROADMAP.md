@@ -104,6 +104,10 @@ The Fluncle web onion is live on the rave VPS, proxying `www.fluncle.com` (API/R
 
 - **The rave SSH onion (deferred).** A second onion identity → the SSH terminal was scoped but deferred; stand it up if the flex earns its keep.
 
+### MusicKit as a second metadata authority (riffed 2026-07-12, nothing committed)
+
+The Apple Developer signup (2026-07-11) makes the MusicKit catalog API available beyond the shipped Apple Music links, and it fills three genuine gaps: (1) a **second ISRC oracle** — exact ISRC search in both directions over a catalog whose DnB coverage beats MusicBrainz's, strengthening the crawler's per-track anchoring and the pre-audio duplicate gate (more same-recording matches caught by paperwork before the proxy buys audio); (2) **`recordLabel` on album objects** — a second label-name authority to cross-check the Spotify free-text `tracks.label` strings that produced the Medschool/Med School slug split; (3) **artwork up to ~3000px** where Spotify tops out at 640 — a real upgrade for the video masters, set videos, and OG cards that currently upscale. Nice-to-haves behind those: Apple's editorial notes as context-note fuel, and authorized previews as a fallback source (same policy tier as the allowed iTunes previews). Deliberately unchanged: the crawl boundary — Apple has genre tags and curated DnB playlists, but the gate stays the operator's label allowlist, never genre inference.
+
 ### Database latency — evaluate Turso → Cloudflare D1
 
 Turso (libSQL) is the source of truth, hosted in **Ireland**, so every Worker→DB read pays a cross-region hop — a real chunk of the `/log/<id>` ~896 ms cold TTFB (the Worker runs at the edge near the reader; the database doesn't). Cloudflare-native **D1** co-locates with Workers and would shrink that roundtrip. The catch is migration cost: D1 is SQLite with its own ceilings (database-size and write-throughput limits, no libSQL-only features), and the whole Drizzle data layer, migration history, and the per-worktree local-dev story (`turso dev` + `.dev/local.db`, see `docs/local-database.md`) would move with it — a real arc, not a config flip.
