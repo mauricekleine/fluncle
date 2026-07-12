@@ -60,11 +60,16 @@ async function embed(trackId: string, vector: number[]): Promise<void> {
   });
 }
 
-/** A certified finding, optionally embedded. */
-async function seedFinding(
-  trackId: string,
-  options: { artists?: string[]; label?: string; title?: string; vector?: number[] } = {},
-): Promise<void> {
+type SeedOptions = {
+  artists?: string[];
+  isrc?: string;
+  label?: string;
+  title?: string;
+  vector?: number[];
+};
+
+/** A certified finding, optionally embedded / labelled / ISRC-stamped. */
+async function seedFinding(trackId: string, options: SeedOptions = {}): Promise<void> {
   await seedTrack(db, {
     artists: options.artists ?? ["Finding Artist"],
     logId: `00${trackId.slice(-1)}.1.1A`,
@@ -72,28 +77,27 @@ async function seedFinding(
     trackId,
   });
 
-  if (options.label) {
-    await db.execute({ args: [options.label, trackId], sql: labelSql });
-  }
-
-  if (options.vector) {
-    await embed(trackId, options.vector);
-  }
+  await applySeedOptions(trackId, options);
 }
 
-/** A catalogue track: a `tracks` row with NO `findings` row. Optionally embedded. */
-async function seedCatalogue(
-  trackId: string,
-  options: { artists?: string[]; label?: string; title?: string; vector?: number[] } = {},
-): Promise<void> {
+/** A catalogue track: a `tracks` row with NO `findings` row. Optionally embedded / stamped. */
+async function seedCatalogue(trackId: string, options: SeedOptions = {}): Promise<void> {
   await seedCatalogueTrack(db, {
     artists: options.artists ?? ["Catalogue Artist"],
     title: options.title ?? `Catalogue ${trackId}`,
     trackId,
   });
 
+  await applySeedOptions(trackId, options);
+}
+
+async function applySeedOptions(trackId: string, options: SeedOptions): Promise<void> {
   if (options.label) {
     await db.execute({ args: [options.label, trackId], sql: labelSql });
+  }
+
+  if (options.isrc) {
+    await db.execute({ args: [options.isrc, trackId], sql: isrcSql });
   }
 
   if (options.vector) {
@@ -102,19 +106,21 @@ async function seedCatalogue(
 }
 
 const labelSql = `update tracks set label = ? where track_id = ?`;
+const isrcSql = `update tracks set isrc = ? where track_id = ?`;
 
 /** Read a catalogue row's stored ranking columns straight from the table. */
 async function rankingOf(trackId: string): Promise<{
   capture_priority: number | null;
   catalogue_rank_corpus: string | null;
   catalogue_ranked_at: string | null;
+  duplicate_of_track_id: string | null;
   nearest_finding_score: number | null;
   nearest_finding_track_id: string | null;
 }> {
   const result = await db.execute({
     args: [trackId],
     sql: `select nearest_finding_track_id, nearest_finding_score, capture_priority,
-                 catalogue_rank_corpus, catalogue_ranked_at
+                 catalogue_rank_corpus, catalogue_ranked_at, duplicate_of_track_id
           from tracks where track_id = ?`,
   });
   const row = result.rows[0];
@@ -523,5 +529,95 @@ describe("the read — the ranked page, and the WHY on every row", () => {
     expect(summary.awaitingCapture).toBe(1);
     // The third row never made it into the batch of 2 — it has no fingerprint at all.
     expect(summary.awaitingRank).toBe(1);
+  });
+});
+
+describe("duplicates — a crawled copy of a finding is flagged, never bought", () => {
+  it("flags a pre-audio ISRC duplicate: tier −2, the finding STORED, still on the board with its WHY", async () => {
+    const { listCatalogueTracks, rankCatalogue } = await import("./catalogue");
+
+    // THE REAL EVENT, in fixtures. The crawler pulled in a copy of a track already logged — same
+    // ISRC, cosmetically different formatting (hyphens/case), the shape a raw equality would miss.
+    await seedFinding("finding-owned", { isrc: "GBAYE1234567", title: "Infinity" });
+    await seedCatalogue("cat-dupe", { isrc: "gb-aye-12-34567", title: "Infinity (copy)" });
+    // A genuine candidate with no clash — the queue must still hand THIS one out.
+    await seedCatalogue("cat-real", { artists: ["Nobody"], title: "A Real Candidate" });
+
+    const summary = await rankCatalogue();
+    expect(summary.prioritized).toBe(2);
+
+    // −2, strictly below the label veto's −1, and the finding it duplicates is stored so the
+    // board can NAME it (never a silent disappearance).
+    const dupe = await rankingOf("cat-dupe");
+    expect(dupe.capture_priority).toBe(-2);
+    expect(dupe.duplicate_of_track_id).toBe("finding-owned");
+    expect(dupe.nearest_finding_score).toBeNull();
+
+    // Still visible on the capture board, ordered LAST, carrying the finding as its WHY.
+    const capture = await listCatalogueTracks("capture");
+    expect(capture.map((track) => track.trackId)).toEqual(["cat-real", "cat-dupe"]);
+    const dupeItem = capture.find((track) => track.trackId === "cat-dupe");
+    expect(dupeItem?.duplicateOf?.trackId).toBe("finding-owned");
+    expect(dupeItem?.duplicateOf?.title).toBe("Infinity");
+    expect(capture.find((track) => track.trackId === "cat-real")?.duplicateOf).toBeNull();
+  });
+
+  it("reads a scored ≥ 0.995 row as a duplicate on the ear lens — display-only, nothing stored", async () => {
+    const { DUPLICATE_SIMILARITY, listCatalogueTracks, rankCatalogue } =
+      await import("./catalogue");
+
+    await seedFinding("finding-owned", { title: "Infinity", vector: axis(0) });
+    // An identical master scores ~1.0 against the finding it copies.
+    await seedCatalogue("cat-identical", { title: "Infinity (copy)", vector: axis(0) });
+    // A genuine near-neighbour — close, but a different recording, and clearly below threshold.
+    await seedCatalogue("cat-near", { vector: blend(axis(0), axis(1), 0.2) });
+
+    await rankCatalogue();
+
+    const ear = await listCatalogueTracks("ear");
+    const identical = ear.find((track) => track.trackId === "cat-identical");
+    const near = ear.find((track) => track.trackId === "cat-near");
+
+    // The identical master is flagged "already in the archive", naming the finding it copies.
+    expect(identical?.nearestFindingScore ?? 0).toBeGreaterThanOrEqual(DUPLICATE_SIMILARITY);
+    expect(identical?.duplicateOf?.trackId).toBe("finding-owned");
+    // The near-neighbour is a genuine discovery, not a duplicate.
+    expect(near?.nearestFindingScore ?? 1).toBeLessThan(DUPLICATE_SIMILARITY);
+    expect(near?.duplicateOf).toBeNull();
+
+    // The similarity half is DISPLAY-ONLY: a scored row has audio, so it is not a capture-ladder
+    // duplicate — nothing is written to `duplicate_of_track_id`, and it stays out of the queue.
+    const stored = await rankingOf("cat-identical");
+    expect(stored.duplicate_of_track_id).toBeNull();
+    expect(stored.capture_priority).toBeNull();
+  });
+
+  it("converges: a pre-audio duplicate is stamped and not re-picked, and CLEARS if its finding goes", async () => {
+    const { rankCatalogue } = await import("./catalogue");
+
+    await seedFinding("finding-owned", { isrc: "GBAYE1234567" });
+    await seedCatalogue("cat-dupe", { isrc: "GBAYE1234567" });
+
+    const first = await rankCatalogue();
+    expect(first.prioritized).toBe(1);
+    expect((await rankingOf("cat-dupe")).duplicate_of_track_id).toBe("finding-owned");
+
+    // The row is stamped with the live fingerprint, so it is NOT stale — the next tick is a
+    // no-op and it is never re-picked (no loop).
+    const second = await rankCatalogue();
+    expect(second.prioritized).toBe(0);
+    expect(second.scored).toBe(0);
+    expect(second.remaining).toBe(0);
+
+    // Delete the finding it duplicated: the corpus fingerprint moves (findings count drops), so
+    // the row goes stale on its own and re-ranks — and the stale marker clears, because there is
+    // no longer anything it is a duplicate of. Self-healing, with no invalidation call.
+    await db.execute({ args: ["finding-owned"], sql: `delete from findings where track_id = ?` });
+
+    await rankCatalogue();
+    const cleared = await rankingOf("cat-dupe");
+    expect(cleared.duplicate_of_track_id).toBeNull();
+    // It falls back to the ordinary metadata ladder — nothing ties it to the (now empty) archive.
+    expect(cleared.capture_priority).toBe(0);
   });
 });

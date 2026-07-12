@@ -561,6 +561,13 @@
       "when": 1783849448080,
       "tag": "0079_clever_fenris",
       "breakpoints": true
+    },
+    {
+      "idx": 80,
+      "version": "6",
+      "when": 1783878429236,
+      "tag": "0080_lovely_madrox",
+      "breakpoints": true
     }
   ]
 }

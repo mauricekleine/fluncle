@@ -97,6 +97,13 @@ export const CatalogueTrackItemSchema = z
     bpm: z.number().nullable(),
     capturePriority: z.number().nullable(),
     captureReason: CapturePriorityReasonSchema.nullable(),
+    /**
+     * The certified finding this row is the SAME RECORDING as — "already in the archive". Set
+     * two ways (docs/the-ear.md § Duplicates): the CAPTURE lens from a pre-audio ISRC match
+     * (stored, and vetoed from ever being bought), the EAR lens from a near-1.0 cosine score
+     * (display-only). Null on an ordinary catalogue row — a real discovery.
+     */
+    duplicateOf: CatalogueMatchSchema.nullable(),
     key: z.string().nullable(),
     label: z.string().nullable(),
     nearestFinding: CatalogueMatchSchema.nullable(),

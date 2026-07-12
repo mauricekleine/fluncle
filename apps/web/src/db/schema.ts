@@ -124,8 +124,9 @@ export const tracks = sqliteTable(
     // Enum: pending (never attempted) → done (key written) | unmatched (no confident
     // match — terminal) | failed (attempt threw — retriable under backoff).
     // ── THE EAR: the precomputed catalogue ranking (docs/the-ear.md) ─────────────
-    // Five columns, written ONLY by the `rank_catalogue` sweep, and meaningful ONLY on a
-    // CATALOGUE track (a `tracks` row with no `findings` row). They stay NULL on a
+    // Six columns (the five below + `duplicate_of_track_id`), written ONLY by the
+    // `rank_catalogue` sweep, and meaningful ONLY on a CATALOGUE track (a `tracks` row with no
+    // `findings` row). They stay NULL on a
     // certified finding — the sweep anti-joins `findings` and never touches one — so a
     // non-null `nearest_finding_score` is itself a catalogue marker.
     //
@@ -169,6 +170,20 @@ export const tracks = sqliteTable(
     captureStatus: text("capture_status").notNull().default("pending"),
     catalogueRankCorpus: text("catalogue_rank_corpus"),
     catalogueRankedAt: text("catalogue_ranked_at"),
+    // THE DUPLICATE MARKER (docs/the-ear.md § Duplicates). The `track_id` of the certified
+    // finding this catalogue row is the SAME RECORDING as — set only by the `rank_catalogue`
+    // sweep, only on a catalogue row, when the row's `isrc` (non-null, non-empty) exactly
+    // matches a finding's `isrc`. NULL on every other row (no ISRC match, a finding, or a row
+    // whose match was cleared because the finding was deleted).
+    //
+    // It exists because a crawled duplicate of a logged track is worthless to buy: the money
+    // saver is catching it BEFORE audio is captured. The VETO itself rides `capture_priority`
+    // (a duplicate is written the −2 tier, so the capture queue's existing `capture_priority
+    // >= 0` predicate excludes it — no new predicate), and this column carries WHICH finding,
+    // so the board can name it ("already in the archive") instead of the row silently
+    // vanishing. The similarity half (a scored row at ≥ 0.995 cosine) is display-only and does
+    // NOT write here — it reads its finding off `nearest_finding_track_id`.
+    duplicateOfTrackId: text("duplicate_of_track_id"),
     durationMs: integer("duration_ms").notNull(),
     // The finding's MuQ audio embedding, in the form the DATABASE can rank: a native
     // libSQL `F32_BLOB(1024)`. Every similarity read (`get_similar_findings`, the `/mix`

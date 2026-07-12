@@ -144,6 +144,11 @@ async function seedDisabledLabel(name: string, slug: string): Promise<void> {
   });
 }
 
+/** Stamp a track's ISRC — the recording identity the duplicate detector matches on. */
+async function setIsrc(trackId: string, isrc: string): Promise<void> {
+  await db.execute({ args: [isrc, trackId], sql: `update tracks set isrc = ? where track_id = ?` });
+}
+
 beforeEach(async () => {
   db = await createIntegrationDb();
 });
@@ -287,6 +292,47 @@ describe("listTrackWork — the order is the budget", () => {
 
     // THE PROOF. The vetoed track is not merely ordered last — it is NOT IN THE QUEUE. A veto
     // that only sorts last is not a veto: the queue drains, and last eventually arrives.
+    const work = await listTrackWork({ kind: "capture", scope: "catalogue" });
+    expect(work.map((item) => item.trackId)).toEqual(["cat2000000000000000000"]);
+  });
+
+  it("never hands an ISRC DUPLICATE to the capture queue — audio already owned is never re-bought", async () => {
+    const { listTrackWork } = await import("./track-work");
+    const { rankCatalogue } = await import("./catalogue");
+
+    await openCaptureBudget();
+
+    // The real event this exists for: the crawler pulled in a copy of a LOGGED track (a perfect
+    // 1.0 similarity on "Infinity"), and pre-audio it sat on the capture ladder where the metered
+    // proxy budget would have bought audio the archive already holds. The tell is the ISRC.
+    await seedTrack(db, {
+      logId: "004.7.2I",
+      title: "Infinity",
+      trackId: "aaaaaaaaaaaaaaaaaaaaaa",
+    });
+    await setIsrc("aaaaaaaaaaaaaaaaaaaaaa", "GBAYE1234567");
+    await seedCatalogueTrack(db, { title: "Infinity (copy)", trackId: "cat1000000000000000000" });
+    await setIsrc("cat1000000000000000000", "gb-aye-12-34567"); // same ISRC, cosmetic difference
+    // A real candidate with no ISRC clash — the queue must still hand THIS one out.
+    await seedCatalogueTrack(db, {
+      artists: ["Nobody We Know"],
+      title: "A Real Candidate",
+      trackId: "cat2000000000000000000",
+    });
+
+    await rankCatalogue();
+
+    const priorities = await db.execute(
+      `select track_id, capture_priority, duplicate_of_track_id from tracks
+       where track_id like 'cat%' order by track_id`,
+    );
+    // The duplicate is tier −2 (below the label veto's −1) and carries the finding it duplicates.
+    expect(priorities.rows.map((row) => Number(row.capture_priority))).toEqual([-2, 0]);
+    expect(priorities.rows[0]?.duplicate_of_track_id).toBe("aaaaaaaaaaaaaaaaaaaaaa");
+
+    // THE PROOF. The duplicate is NOT in the capture queue — the SAME `capture_priority >= 0`
+    // predicate that enforces the label veto excludes it too, so no metered byte is ever spent on
+    // audio Fluncle already owns. No new predicate: a reused veto, not a second mechanism.
     const work = await listTrackWork({ kind: "capture", scope: "catalogue" });
     expect(work.map((item) => item.trackId)).toEqual(["cat2000000000000000000"]);
   });
