@@ -11,9 +11,12 @@ import * as z from "zod";
 // An Expo push token is always `ExponentPushToken[…]` (the FCM/APNs detail is
 // hidden behind it). Validate the shape at the contract edge so a malformed token
 // 400s before it can bloat the registry or break a fan-out. The bracketed body is
-// opaque, so accept any non-`]` run inside the brackets.
+// opaque, so accept any non-`]` run inside the brackets — but bound the length
+// (`.max`) so an anonymous POST cannot register a multi-MB token string as the
+// row PK (a real Expo token is well under 100 chars; the regex bounds shape, not size).
 export const ExpoPushTokenSchema = z
   .string()
+  .max(256)
   .regex(/^ExponentPushToken\[[^\]]+\]$/, "Must be a valid ExponentPushToken[…]");
 
 // The push categories a device can mute. Mirrors the two send paths in the server
@@ -45,7 +48,10 @@ export const registerDevice = oc
   .input(
     z.object({
       appVersion: z.string().max(64).optional(),
-      mutedCategories: z.array(PushCategorySchema).optional(),
+      // Bound the length so an anonymous POST cannot store a huge array in
+      // `muted_json` — the set has only two real members (see PushCategorySchema),
+      // so the ceiling sits well above any legitimate mute-list.
+      mutedCategories: z.array(PushCategorySchema).max(8).optional(),
       platform: DevicePlatformSchema,
       token: ExpoPushTokenSchema,
     }),

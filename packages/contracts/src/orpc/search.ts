@@ -28,7 +28,7 @@ export const searchTracks = oc
     summary: "Search Spotify for finding candidates",
     tags: ["Search"],
   })
-  .input(z.object({ q: z.string().optional() }))
+  .input(z.object({ q: z.string().max(512).optional() }))
   .output(z.object({ ok: z.literal(true), results: z.array(TrackSearchResultSchema) }));
 
 /**
@@ -134,7 +134,9 @@ export const searchArchive = oc
     summary: "Search Fluncle's archive — coordinate, entity, full-text, or natural language",
     tags: ["Search"],
   })
-  .input(z.object({ limit: z.coerce.number().int().min(1).max(50).optional(), q: z.string() }))
+  .input(
+    z.object({ limit: z.coerce.number().int().min(1).max(50).optional(), q: z.string().max(512) }),
+  )
   .output(
     z.object({
       /** The track the sonic tier anchored on — a REAL row, never an invented vibe. */
