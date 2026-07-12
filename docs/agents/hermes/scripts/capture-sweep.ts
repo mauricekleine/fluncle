@@ -2,12 +2,14 @@
 // capture-sweep.ts — the bun orchestrator behind the full-song CAPTURE sweep
 // (`fluncle-capture`), scheduled by a rave-02 HOST systemd timer (../capture-timer/), not
 // a Hermes gateway cron (a proxied yt-dlp fetch has an unbounded tail that would starve
-// the 5-min sweeps). For each finding still needing a capture, it downloads the full song
+// the 5-min sweeps). For each track still needing a capture — a certified FINDING or, once
+// the operator opens the budget, an uncertified CATALOGUE row — it downloads the full song
 // ONCE (yt-dlp → a YouTube match, through a residential proxy on a per-track STICKY
-// session), duration-guards the match against the finding's Spotify length, stores the
-// bytes in the PRIVATE `fluncle-source-audio` R2 bucket, and writes the key + status back
-// via the agent-tier `update_track` op. It is a NON-BLOCKING parallel side-channel: it
-// never gates the enrich/embed queues (docs/track-lifecycle.md).
+// session), duration-guards the match against the track's Spotify length, stores the
+// bytes in the PRIVATE `fluncle-source-audio` R2 bucket (a finding under `<logId>/…`, a
+// catalogue row under `catalogue/<trackId>/…`), and writes the key + status back via the
+// agent-tier `update_track` op. It is a NON-BLOCKING parallel side-channel: it never gates
+// the enrich/embed queues (docs/track-lifecycle.md).
 //
 // LIVE-INTENT. Version-controlled source; the repo is canonical and the box is a deploy
 // target (fluncle-hermes-operator skill). Invoked by the bash wrapper (capture-sweep.sh)
@@ -169,20 +171,24 @@ export type CaptureFinding = {
 };
 
 /**
- * Build the STICKY residential-proxy URL for one track: append `__sessid.<logId>` to the
- * username (pins one exit IP for the whole download — a rotating session 403s the
+ * Build the STICKY residential-proxy URL for one track: append `__sessid.<sessionId>` to
+ * the username (pins one exit IP for the whole download — a rotating session 403s the
  * media-bytes fetch), then url-encode the (username+suffix) and password so a credential
- * containing `@`/`:`/`/` can't corrupt the authority. logId chars (alnum + `.`) are
- * url-safe, so the session id survives encoding intact.
+ * containing `@`/`:`/`/` can't corrupt the authority. The session id is the track's
+ * identity — a finding's Log ID, or the raw `track_id` for a catalogue row — SANITIZED to
+ * the alnum + `.` charset a Log ID already uses (a crawler-minted `mb_<uuid>` carries `_`
+ * and `-`, which the proxy vendor's session parser has never been proven to accept).
+ * Stickiness only needs determinism per track, so stripping is safe.
  */
 export function buildStickyProxyUrl(options: {
   host: string;
-  logId: string;
   password: string;
   port: string;
+  sessionId: string;
   username: string;
 }): string {
-  const userWithSession = `${options.username}__sessid.${options.logId}`;
+  const session = options.sessionId.replace(/[^0-9A-Za-z.]/g, "");
+  const userWithSession = `${options.username}__sessid.${session}`;
   const user = encodeURIComponent(userWithSession);
   const pass = encodeURIComponent(options.password);
 
@@ -216,11 +222,18 @@ export function durationWithinTolerance(
   return Math.abs(candidateSec - targetSec) <= allowed;
 }
 
-/** The R2 key for a captured full song: `<logId>/<sha256>.<ext>` (the bucket is dedicated to source audio, so no prefix). */
-export function buildSourceAudioKey(logId: string, sha256Hex: string, ext: string): string {
+/**
+ * The R2 key for a captured full song. A FINDING keys under its coordinate,
+ * `<logId>/<sha256>.<ext>`; a CATALOGUE row (no coordinate exists) under
+ * `catalogue/<trackId>/<sha256>.<ext>` — a distinct, self-describing namespace that can
+ * never collide with a Log ID. Certification later does NOT re-key: `source_audio_key`
+ * is the pointer of record, wherever the object sits. (The bucket is dedicated to source
+ * audio, so no further prefix.)
+ */
+export function buildSourceAudioKey(keyRoot: string, sha256Hex: string, ext: string): string {
   const cleanExt = ext.replace(/^\./, "").toLowerCase();
 
-  return `${logId}/${sha256Hex}.${cleanExt}`;
+  return `${keyRoot}/${sha256Hex}.${cleanExt}`;
 }
 
 // Title markers that signal a WRONG version (a same-length remix/edit slips the duration
@@ -754,21 +767,27 @@ type FindingOutcome = "done" | "unmatched" | "failed" | "skipped";
 async function captureFinding(finding: CaptureFinding): Promise<FindingOutcome> {
   const { logId, trackId } = finding;
 
-  // No coordinate → nothing to key the archive under (like the video/observation
-  // pipelines, which hard-require a Log ID). Belt-and-suspenders: the capture queue
-  // already excludes `log_id is null` rows, so this is a defensive skip (never re-picked;
-  // a later Log ID backfill lets it capture).
-  if (!logId) {
+  // A CERTIFIED row with no coordinate is the impossible case (the queue requires
+  // `log_id` on the finding half) — defensive skip, exactly as before. An UNCERTIFIED
+  // (catalogue) row has no coordinate BY CONSTRUCTION and captures under its `track_id`
+  // instead: the queue serves it deliberately (the Ear's ladder, behind the budget brake),
+  // so skipping it here would silently defeat the whole catalogue half — which is exactly
+  // the bug this guard once was (every catalogue row skipped, unstamped, re-picked forever).
+  if (!logId && finding.certified !== false) {
     return "skipped";
   }
+
+  // The track's identity for everything that needs one below: the sticky proxy session
+  // and the R2 key root. A finding is its coordinate; a catalogue row is its track id.
+  const keyRoot = logId ?? `catalogue/${trackId}`;
 
   const artists = (finding.artists ?? []).join(" ");
   const query = `${artists} ${finding.title ?? ""}`.trim();
   const proxyUrl = buildStickyProxyUrl({
     host: PROXY_HOST,
-    logId,
     password: PROXY_PASSWORD,
     port: PROXY_PORT,
+    sessionId: logId ?? trackId,
     username: PROXY_USERNAME,
   });
 
@@ -847,7 +866,7 @@ async function captureFinding(finding: CaptureFinding): Promise<FindingOutcome> 
 
     const bytes = new Uint8Array(readFileSync(downloaded.path));
     const digest = createHash("sha256").update(bytes).digest("hex");
-    const key = buildSourceAudioKey(logId, digest, downloaded.ext);
+    const key = buildSourceAudioKey(keyRoot, digest, downloaded.ext);
 
     await r2Put(key, bytes, contentTypeForExt(downloaded.ext));
 
@@ -892,7 +911,7 @@ async function captureFinding(finding: CaptureFinding): Promise<FindingOutcome> 
       log(`failed to record failure for ${trackId}: ${String(patchError)}`);
     });
     log(
-      `capture failed for ${logId} (${trackId}): ${error instanceof Error ? error.message : String(error)}`,
+      `capture failed for ${logId ?? "catalogue"} (${trackId}): ${error instanceof Error ? error.message : String(error)}`,
     );
     return "failed";
   } finally {

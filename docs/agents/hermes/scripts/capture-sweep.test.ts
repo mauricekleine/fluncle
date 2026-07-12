@@ -24,12 +24,12 @@ import {
 } from "./capture-sweep";
 
 describe("buildStickyProxyUrl", () => {
-  test("appends __sessid.<logId> to the username and url-encodes user + pass", () => {
+  test("appends __sessid.<sessionId> to the username and url-encodes user + pass", () => {
     const url = buildStickyProxyUrl({
       host: "gw.example",
-      logId: "004.7.2I",
       password: "p@ss:w/rd",
       port: "823",
+      sessionId: "004.7.2I",
       username: "user123",
     });
 
@@ -41,15 +41,32 @@ describe("buildStickyProxyUrl", () => {
   test("url-encodes a username that itself carries @ / : so the authority can't be spoofed", () => {
     const url = buildStickyProxyUrl({
       host: "gw.example",
-      logId: "010.2.9Z",
       password: "secret",
       port: "823",
+      sessionId: "010.2.9Z",
       username: "acct@corp",
     });
 
     // The whole username+suffix is encoded as one unit, so the raw `@` cannot terminate
     // the authority early.
     expect(url).toBe("http://acct%40corp__sessid.010.2.9Z:secret@gw.example:823");
+  });
+
+  test("sanitizes a catalogue track id (mb_<uuid>) to the alnum+dot session charset", () => {
+    const url = buildStickyProxyUrl({
+      host: "gw.example",
+      password: "secret",
+      port: "823",
+      sessionId: "mb_1f2a3b4c-5d6e-7f80-9a0b-c1d2e3f4a5b6",
+      username: "user123",
+    });
+
+    // `_` and `-` are stripped (the proxy vendor's session parser is only proven on the
+    // Log ID charset); the result stays deterministic per track, which is all
+    // stickiness needs.
+    expect(url).toBe(
+      "http://user123__sessid.mb1f2a3b4c5d6e7f809a0bc1d2e3f4a5b6:secret@gw.example:823",
+    );
   });
 });
 
@@ -88,6 +105,12 @@ describe("buildSourceAudioKey", () => {
   test("builds <logId>/<sha>.<ext> and normalizes the ext", () => {
     expect(buildSourceAudioKey("004.7.2I", "abc123", ".WEBM")).toBe("004.7.2I/abc123.webm");
     expect(buildSourceAudioKey("F-0001", "deadbeef", "opus")).toBe("F-0001/deadbeef.opus");
+  });
+
+  test("a catalogue row keys under catalogue/<trackId>/ — a namespace no Log ID can collide with", () => {
+    expect(buildSourceAudioKey("catalogue/mb_1f2a3b4c", "abc123", "webm")).toBe(
+      "catalogue/mb_1f2a3b4c/abc123.webm",
+    );
   });
 });
 
