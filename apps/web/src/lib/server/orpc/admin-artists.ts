@@ -15,6 +15,7 @@ import {
   listArtistSocialsQueue,
   removeArtistSocial,
   reviewArtist,
+  reviewArtistSocial,
 } from "../artists";
 import { listUnresolvedArtists, resolveArtist } from "../artist-resolution";
 import { backfillArtistImages } from "../backfill-artist-images";
@@ -140,7 +141,7 @@ export function adminArtistsHandlers(os: Implementer) {
     });
 
   // POST /admin/artists/{artistId}/review — operator tier: the "Looks good" acknowledgment.
-  // Stamps reviewed_at + promotes surviving candidates to confirmed.
+  // Bulk-stamps every one of the artist's links reviewed + promotes surviving candidates.
   const reviewArtistHandler = os.review_artist
     .use(adminAuth)
     .use(operatorGuard)
@@ -151,6 +152,19 @@ export function adminArtistsHandlers(os: Implementer) {
         return { confirmed, ok: true as const };
       } catch (error) {
         throw apiFault(error);
+      }
+    });
+
+  // POST /admin/artists/socials/{socialId}/review — operator tier: approve ONE fresh link (the
+  // fresh-links section's "approve"). Stamps reviewed_at + promotes a candidate to confirmed.
+  const reviewArtistSocialHandler = os.review_artist_social
+    .use(adminAuth)
+    .use(operatorGuard)
+    .handler(async ({ input }) => {
+      try {
+        return { ok: true as const, social: await reviewArtistSocial(input.socialId) };
+      } catch (error) {
+        throw toSocialFault(error);
       }
     });
 
@@ -239,5 +253,6 @@ export function adminArtistsHandlers(os: Implementer) {
     remove_artist_social: removeArtistSocialHandler,
     resolve_artist: resolveArtistHandler,
     review_artist: reviewArtistHandler,
+    review_artist_social: reviewArtistSocialHandler,
   };
 }

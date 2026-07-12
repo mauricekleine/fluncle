@@ -667,9 +667,11 @@ export type ArtistSocial = {
   url: string;
   source: ArtistSocialSource;
   status: ArtistSocialStatus;
-  /** ISO stamp of when this link was discovered/added — the "is this newer than the last
-   *  review?" anchor behind an artist's needs-a-look flag. */
+  /** ISO stamp of when this link was discovered/added — the fresh-links queue's oldest-first anchor. */
   createdAt: string;
+  /** ISO stamp of when the operator last acknowledged THIS link, or null when it hasn't been
+   *  reviewed yet (a fresh insert, or a machine re-resolve that changed its URL). Null = fresh. */
+  reviewedAt: string | null;
 };
 
 /** One artist in the review queue, carrying all of its socials for the operator's glance. */
@@ -701,11 +703,14 @@ function toArtistSocial(row: Record<string, unknown>): ArtistSocial {
   const status = typeof row["status"] === "string" ? row["status"] : "candidate";
   const source = typeof row["source"] === "string" ? row["source"] : "operator";
 
+  const reviewedAt = row["reviewed_at"];
+
   return {
     artistId: textOf(row["artist_id"]),
     createdAt: textOf(row["created_at"]),
     id: textOf(row["id"]),
     platform: isArtistSocialPlatform(platform) ? platform : "homepage",
+    reviewedAt: typeof reviewedAt === "string" && reviewedAt ? reviewedAt : null,
     source: (source === "musicbrainz" || source === "firecrawl"
       ? source
       : "operator") as ArtistSocialSource,
@@ -728,7 +733,7 @@ export async function listArtistSocialsQueue(limit = 100): Promise<ArtistSocials
   const result = await db.execute({
     args: [Math.max(1, Math.min(limit, 500))],
     sql: `select a.id as artist_id, a.name, a.slug, a.spotify_url,
-                 s.id, s.platform, s.url, s.source, s.status, s.created_at
+                 s.id, s.platform, s.url, s.source, s.status, s.created_at, s.reviewed_at
           from artists a
           join artist_socials s on s.artist_id = a.id
           where a.id in (
@@ -767,21 +772,24 @@ export async function listArtistSocialsQueue(limit = 100): Promise<ArtistSocials
 export type ArtistOverviewItem = ArtistSocialsQueueItem & {
   /** Coordinate-bearing findings featuring this artist (the canonical track_artists join). */
   findingCount: number;
-  /** When the operator last acknowledged this artist's link list ("Looks good"), or null.
-   *  The UI flags "needs a look" when a social's `createdAt` is newer than this. */
-  reviewedAt: string | null;
 };
 
-/** Whether an artist has a link the operator hasn't seen since their last review — the single
- *  needs-a-look predicate, shared by the overview UI and the /admin attention count. A link is
- *  "unseen" when it was discovered/added after `reviewedAt` (or the list was never reviewed). */
-export function artistNeedsLook(
-  reviewedAt: string | null,
-  socials: readonly { createdAt: string }[],
-): boolean {
-  const seenThrough = reviewedAt ?? "";
+/** Whether an artist has any link the operator hasn't reviewed yet — the single needs-a-look
+ *  predicate, shared by the overview UI and the /admin attention count. Review now lands on the
+ *  LINK (docs/artist-relationship.md): a link is fresh iff its `reviewedAt` is null. */
+export function artistNeedsLook(socials: readonly { reviewedAt: string | null }[]): boolean {
+  return socials.some((social) => social.reviewedAt === null);
+}
 
-  return socials.some((social) => social.createdAt > seenThrough);
+/** An artist's still-unreviewed links (`reviewedAt === null`), oldest-first — the fresh-links
+ *  section's per-artist group. Shared by the board's fresh-links section so the "what's fresh"
+ *  rule lives in one place. */
+export function unreviewedSocials<T extends { createdAt: string; reviewedAt: string | null }>(
+  socials: readonly T[],
+): T[] {
+  return socials
+    .filter((social) => social.reviewedAt === null)
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 }
 
 // The `/admin/artists` overview — EVERY artist Fluncle features, name-sorted, each with its
@@ -794,11 +802,11 @@ export async function listAllArtistsWithSocials(): Promise<ArtistOverviewItem[]>
   const db = await getDb();
   const result = await db.execute({
     args: [],
-    sql: `select a.id as artist_id, a.name, a.slug, a.spotify_url, a.reviewed_at,
+    sql: `select a.id as artist_id, a.name, a.slug, a.spotify_url,
                  (select count(*) from (findings join tracks on tracks.track_id = findings.track_id) t
                     join track_artists ta on ta.track_id = t.track_id
                     where ta.artist_id = a.id and t.log_id is not null) as finding_count,
-                 s.id, s.platform, s.url, s.source, s.status, s.created_at
+                 s.id, s.platform, s.url, s.source, s.status, s.created_at, s.reviewed_at
           from artists a
           left join artist_socials s on s.artist_id = a.id
           order by a.name asc, s.platform asc`,
@@ -814,12 +822,10 @@ export async function listAllArtistsWithSocials(): Promise<ArtistOverviewItem[]>
     if (!artist) {
       const spotifyUrl = row["spotify_url"];
       const findingCount = row["finding_count"];
-      const reviewedAt = row["reviewed_at"];
       artist = {
         findingCount: Number(findingCount) || 0,
         id: artistId,
         name: textOf(row["name"]),
-        reviewedAt: typeof reviewedAt === "string" ? reviewedAt : null,
         slug: textOf(row["slug"]),
         socials: [],
         spotifyUrl: typeof spotifyUrl === "string" ? spotifyUrl : null,
@@ -845,13 +851,13 @@ export type ArtistReviewRow = {
   pending: number;
 };
 
-// The /admin attention row's honest read: one row per artist with a link discovered SINCE the
-// operator last acknowledged the list ("Looks good") — or never acknowledged — with the count of
-// unseen links and the oldest one's stamp (the queue's oldest-first anchor). Mirrors
+// The /admin attention row's honest read: one row per artist that has UNREVIEWED links
+// (`reviewed_at IS NULL`) — a fresh link the operator hasn't looked at yet — with the count of
+// those links and the oldest one's stamp (the queue's oldest-first anchor). Mirrors
 // artistNeedsLook; the pure model turns each into a "Review →" deep-link onto /admin/artists (the
-// manage surface), so the queue surfaces the work and the page does it. This is a per-artist ACK,
-// not per-link follow bookkeeping — a link Fluncle can't act on (no Facebook profile) no longer
-// nags forever.
+// manage surface, where the fresh-links section lives), so the queue surfaces the work and the
+// page does it. Review lands on the LINK, so a single fresh Twitch link surfaces without
+// re-flagging the whole already-reviewed artist.
 export async function listArtistReviewRows(): Promise<ArtistReviewRow[]> {
   const db = await getDb();
   const result = await db.execute({
@@ -860,7 +866,7 @@ export async function listArtistReviewRows(): Promise<ArtistReviewRow[]> {
                  count(*) as pending, min(s.created_at) as anchor_at
           from artists a
           join artist_socials s on s.artist_id = a.id
-          where s.created_at > coalesce(a.reviewed_at, '')
+          where s.reviewed_at is null
           group by a.id, a.name
           order by anchor_at asc`,
   });
@@ -883,7 +889,7 @@ async function getArtistSocialById(socialId: string): Promise<ArtistSocial | und
   const db = await getDb();
   const result = await db.execute({
     args: [socialId],
-    sql: `select id, artist_id, platform, url, source, status, created_at
+    sql: `select id, artist_id, platform, url, source, status, created_at, reviewed_at
           from artist_socials where id = ? limit 1`,
   });
   const row = result.rows[0] as Record<string, unknown> | undefined;
@@ -974,10 +980,9 @@ export function assertHttpUrl(raw: string): string {
 /**
  * Add (or replace) an artist's social by platform — the operator's add in the Manage-links
  * dialog. An operator-entered link is trusted, so it lands `source=operator`,
- * `status=confirmed` (it renders publicly at once). Upserts on the `(artist_id, platform)`
- * unique index. Adding a link also stamps the artist as reviewed (the operator was looking at
- * the whole list to add one, so it needn't immediately flip back to "needs a look"). Returns
- * the fresh row.
+ * `status=confirmed` (it renders publicly at once) and BORN REVIEWED (`reviewed_at = now`) —
+ * the operator just wrote it, so it never surfaces in the fresh-links queue. Upserts on the
+ * `(artist_id, platform)` unique index. Returns the fresh row.
  */
 export async function addArtistSocial(
   artistId: string,
@@ -993,27 +998,21 @@ export async function addArtistSocial(
   const now = new Date().toISOString();
 
   await db.execute({
-    args: [randomUUID(), artistId, platform, trimmed, now, now],
+    args: [randomUUID(), artistId, platform, trimmed, now, now, now],
     sql: `insert into artist_socials
-            (id, artist_id, platform, url, source, status, created_at, updated_at)
-          values (?, ?, ?, ?, 'operator', 'confirmed', ?, ?)
+            (id, artist_id, platform, url, source, status, reviewed_at, created_at, updated_at)
+          values (?, ?, ?, ?, 'operator', 'confirmed', ?, ?, ?)
           on conflict(artist_id, platform) do update set
             url = excluded.url,
             source = 'operator',
             status = 'confirmed',
+            reviewed_at = excluded.reviewed_at,
             updated_at = excluded.updated_at`,
-  });
-
-  // Adding implies the operator saw the list — stamp reviewed so the new link (created_at = now)
-  // doesn't itself re-arm needs-a-look (`created_at > reviewed_at` is false when they're equal).
-  await db.execute({
-    args: [now, now, artistId],
-    sql: `update artists set reviewed_at = ?, updated_at = ? where id = ?`,
   });
 
   const result = await db.execute({
     args: [artistId, platform],
-    sql: `select id, artist_id, platform, url, source, status, created_at
+    sql: `select id, artist_id, platform, url, source, status, created_at, reviewed_at
           from artist_socials where artist_id = ? and platform = ? limit 1`,
   });
   const row = result.rows[0] as Record<string, unknown> | undefined;
@@ -1026,11 +1025,12 @@ export async function addArtistSocial(
 }
 
 /**
- * Mark an artist's link list as reviewed — the operator's "Looks good". Stamps `reviewed_at =
- * now` so every link discovered up to now counts as seen (needs-a-look clears until a NEW link
- * arrives), AND promotes any surviving `candidate` links to `confirmed`: reviewing the list IS
- * the trust gate (a wrong candidate is deleted in Manage links before this), so what's left is
- * good to go public. Idempotent. Returns the count of candidates promoted.
+ * Mark an artist's WHOLE link list as reviewed — the operator's "Looks good". Bulk-stamps
+ * `reviewed_at = now` on every one of the artist's still-unreviewed links (clearing needs-a-look
+ * until a NEW link arrives), AND promotes any surviving `candidate` links to `confirmed`:
+ * reviewing the list IS the trust gate (a wrong candidate is deleted in Manage links before this),
+ * so what's left is good to go public. This is the per-artist bulk of the per-link `reviewArtistSocial`.
+ * Idempotent. Returns the count of candidates promoted.
  */
 export async function reviewArtist(artistId: string): Promise<{ confirmed: number }> {
   const db = await getDb();
@@ -1044,10 +1044,49 @@ export async function reviewArtist(artistId: string): Promise<{ confirmed: numbe
 
   await db.execute({
     args: [now, now, artistId],
-    sql: `update artists set reviewed_at = ?, updated_at = ? where id = ?`,
+    sql: `update artist_socials set reviewed_at = ?, updated_at = ?
+          where artist_id = ? and reviewed_at is null`,
   });
 
   return { confirmed: promoted.rowsAffected ?? 0 };
+}
+
+/**
+ * Mark ONE link as reviewed — the operator's "approve" in the board's fresh-links section.
+ * Stamps `reviewed_at = now` (the link leaves the fresh-links queue) AND, mirroring "Looks good"
+ * at the link grain, promotes it `candidate → confirmed` so approving a fresh Firecrawl link also
+ * lets it onto the public artist page. Idempotent. Returns the fresh row.
+ */
+export async function reviewArtistSocial(socialId: string): Promise<ArtistSocial> {
+  const existing = await getArtistSocialById(socialId);
+
+  if (!existing) {
+    throw new ArtistSocialNotFoundError(socialId);
+  }
+
+  // Reviewing a link is the trust gate onto the public page — never promote a stored URL whose
+  // scheme isn't http(s) (the same defense confirmArtistSocial applies).
+  assertHttpUrl(existing.url);
+
+  const db = await getDb();
+  const now = new Date().toISOString();
+
+  await db.execute({
+    args: [now, now, socialId],
+    sql: `update artist_socials
+          set reviewed_at = ?,
+              status = case when status = 'candidate' then 'confirmed' else status end,
+              updated_at = ?
+          where id = ?`,
+  });
+
+  const social = await getArtistSocialById(socialId);
+
+  if (!social) {
+    throw new ArtistSocialNotFoundError(socialId);
+  }
+
+  return social;
 }
 
 /** Remove one artist social by id (the operator's inline delete). Idempotent. */

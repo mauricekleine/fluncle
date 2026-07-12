@@ -7,6 +7,7 @@ import {
   MagnifyingGlassIcon,
   PencilSimpleIcon,
   PlusIcon,
+  SparkleIcon,
   ThumbsUpIcon,
   TrashIcon,
 } from "@phosphor-icons/react";
@@ -60,6 +61,7 @@ import {
   type ArtistOverviewItem,
   type ArtistSocial,
   listAllArtistsWithSocials,
+  unreviewedSocials,
 } from "@/lib/server/artists";
 import { cn } from "@/lib/utils";
 
@@ -70,13 +72,15 @@ import { cn } from "@/lib/utils";
 // is a COLLAPSED summary row (name, finding count, link count, a "needs a look" flag) that
 // expands to reveal its links (read-only) and ONE acknowledgment: "Looks good".
 //
-// The review model (ratified 2026-07-08): "needs a look" means Fluncle FOUND links the operator
-// hasn't seen yet. "Looks good" (review_artist) stamps the whole list seen and promotes any
-// surviving candidates onto the public artist page (the trust gate that feeds `sameAs`); a link
-// discovered LATER re-arms the flag (artistNeedsLook, off reviewedAt vs each link's createdAt).
-// The structural edits — add, remove — live behind the "Manage links" dialog. The WORK surfaces
-// as an /admin attention row (source "artist-review") that deep-links here with ?artist=<id>,
-// auto-expanding that artist.
+// The review model: review lands on the LINK, not the artist (docs/artist-relationship.md). A
+// link "needs a look" while its `reviewedAt` is null — a fresh resolver insert, or a machine
+// re-resolve that changed its URL. The FRESH LINKS section at the top lists exactly those,
+// grouped by artist, each with Approve (review_artist_social: mark reviewed + promote a candidate)
+// and Remove — so a single new Twitch link surfaces without re-flagging the whole already-reviewed
+// artist. The per-artist "Looks good" (review_artist) stays as the bulk: it stamps ALL of an
+// artist's links reviewed at once. The structural edits — add, remove — live behind the "Manage
+// links" dialog. The WORK surfaces as an /admin attention row (source "artist-review") that
+// deep-links here with ?artist=<id>, auto-expanding that artist.
 
 const ARTIST_OVERVIEW_KEY = ["admin", "artists", "overview"] as const;
 // The /admin attention queue's key — a confirm/add here changes an artist-review row, so
@@ -223,6 +227,13 @@ function AdminArtistsPage() {
     onError: (caught) => setError(caught instanceof Error ? caught.message : String(caught)),
     onSuccess: invalidate,
   });
+  // Approve ONE fresh link (the fresh-links section) — mark it reviewed + promote a candidate.
+  const reviewSocial = useMutation({
+    mutationFn: (socialId: string) =>
+      mutateJson(`/api/admin/artists/socials/${socialId}/review`, "POST"),
+    onError: (caught) => setError(caught instanceof Error ? caught.message : String(caught)),
+    onSuccess: invalidate,
+  });
   const addSocial = useMutation({
     mutationFn: (input: { artistId: string; platform: string; url: string }) =>
       fetch(`/api/admin/artists/${input.artistId}/socials`, {
@@ -241,7 +252,11 @@ function AdminArtistsPage() {
     onSuccess: invalidate,
   });
 
-  const busy = reviewArtist.isPending || removeSocial.isPending || addSocial.isPending;
+  const busy =
+    reviewArtist.isPending ||
+    removeSocial.isPending ||
+    addSocial.isPending ||
+    reviewSocial.isPending;
 
   const needle = query.trim().toLowerCase();
   const visible = useMemo(
@@ -278,6 +293,13 @@ function AdminArtistsPage() {
             {error}
           </p>
         ) : undefined}
+
+        <FreshLinksSection
+          artists={artists}
+          busy={busy}
+          onApprove={(socialId) => reviewSocial.mutate(socialId)}
+          onRemove={(socialId) => removeSocial.mutate(socialId)}
+        />
 
         {!isLoading && artists.length === 0 ? (
           <p className="rounded-md border border-border bg-card/60 px-4 py-8 text-center text-sm text-muted-foreground">
@@ -330,6 +352,121 @@ function AdminArtistsPage() {
   );
 }
 
+// The FRESH LINKS section — every unreviewed link (`reviewedAt === null`) across the archive,
+// grouped by artist, so the operator reviews exactly what's new since he last looked instead of
+// re-reviewing whole artists. Each row is one link with Approve (mark reviewed + promote a
+// candidate) and Remove. Hidden entirely when nothing is fresh (the resting state). Reads the
+// full list, not the search-filtered one — fresh work is global, not scoped to a name filter.
+function FreshLinksSection({
+  artists,
+  busy,
+  onApprove,
+  onRemove,
+}: {
+  artists: ArtistOverviewItem[];
+  busy: boolean;
+  onApprove: (socialId: string) => void;
+  onRemove: (socialId: string) => void;
+}) {
+  const groups = useMemo(
+    () =>
+      artists
+        .map((artist) => ({ artist, fresh: unreviewedSocials(artist.socials) }))
+        .filter((group) => group.fresh.length > 0),
+    [artists],
+  );
+
+  if (groups.length === 0) {
+    return null;
+  }
+
+  const total = groups.reduce((sum, group) => sum + group.fresh.length, 0);
+
+  return (
+    <section className="mb-5 overflow-hidden rounded-lg border border-primary/30 bg-primary/5">
+      <div className="flex items-center gap-2 border-b border-primary/20 px-4 py-3">
+        <SparkleIcon aria-hidden="true" className="size-4 shrink-0 text-primary" weight="fill" />
+        <h2 className="text-sm font-medium">Fresh links</h2>
+        <span className="text-xs text-muted-foreground tabular-nums">
+          {total} {total === 1 ? "link" : "links"} to review
+        </span>
+      </div>
+      <ul className="m-0 flex list-none flex-col divide-y divide-border/60 p-0">
+        {groups.flatMap(({ artist, fresh }) =>
+          fresh.map((social) => (
+            <FreshLinkRow
+              artistName={artist.name}
+              busy={busy}
+              key={social.id}
+              onApprove={() => onApprove(social.id)}
+              onRemove={() => onRemove(social.id)}
+              social={social}
+            />
+          )),
+        )}
+      </ul>
+    </section>
+  );
+}
+
+// One fresh link — the platform mark, the artist it belongs to, its URL (click-through, inert for
+// a non-http(s) scheme), and the two actions. Approve stamps it reviewed; Remove deletes it.
+function FreshLinkRow({
+  artistName,
+  busy,
+  onApprove,
+  onRemove,
+  social,
+}: {
+  artistName: string;
+  busy: boolean;
+  onApprove: () => void;
+  onRemove: () => void;
+  social: ArtistSocial;
+}) {
+  const safeUrl = isHttpUrl(social.url);
+
+  return (
+    <li className="flex flex-wrap items-center gap-2 px-4 py-2.5">
+      <PlatformLogo className="size-4 shrink-0 text-muted-foreground" platform={social.platform} />
+      <span className="shrink-0 text-xs font-medium">{artistName}</span>
+      {safeUrl ? (
+        <a
+          className="inline-flex min-w-0 flex-1 items-center gap-1 truncate text-xs text-muted-foreground hover:text-primary"
+          href={social.url}
+          rel="noreferrer"
+          target="_blank"
+        >
+          <span className="truncate">{social.url}</span>
+          <ArrowSquareOutIcon aria-hidden="true" className="size-3 shrink-0" />
+        </a>
+      ) : (
+        <span
+          className="inline-flex min-w-0 flex-1 items-center gap-1 truncate text-xs text-muted-foreground line-through"
+          title="Unsupported URL scheme — not linkable"
+        >
+          <span className="truncate">{social.url}</span>
+        </span>
+      )}
+
+      <Button disabled={busy} onClick={onApprove} size="sm">
+        <ThumbsUpIcon aria-hidden="true" className="size-3.5" />
+        Approve
+      </Button>
+      <Button
+        aria-label={`Remove ${PLATFORM_LABELS[social.platform]} for ${artistName}`}
+        className="text-muted-foreground hover:text-destructive"
+        disabled={busy}
+        onClick={onRemove}
+        size="icon-sm"
+        variant="ghost"
+      >
+        <TrashIcon aria-hidden="true" className="size-3.5" />
+      </Button>
+    </li>
+  );
+}
+
 function ArtistAccordion({
   artist,
   busy,
@@ -353,7 +490,7 @@ function ArtistAccordion({
 }) {
   const headerId = useId();
   const bodyId = useId();
-  const needsLook = artistNeedsLook(artist.reviewedAt, artist.socials);
+  const needsLook = artistNeedsLook(artist.socials);
 
   return (
     <section

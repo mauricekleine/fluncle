@@ -227,6 +227,8 @@ const ArtistSocialSchema = z
     createdAt: z.string(),
     id: z.string(),
     platform: z.string(),
+    /** When the operator last acknowledged this link, or null when it's still fresh (unreviewed). */
+    reviewedAt: z.string().nullable(),
     source: z.string(),
     status: z.string(),
     url: z.string(),
@@ -298,6 +300,23 @@ export const addArtistSocial = oc
   .output(ArtistSocialEnvelope);
 
 /**
+ * `review_artist_social` → `POST /admin/artists/socials/{socialId}/review` (operationId
+ * `reviewArtistSocial`). Operator tier. Approve ONE fresh link in the board's fresh-links
+ * section: stamp `reviewed_at = now` (it leaves the fresh-links queue) and promote a `candidate`
+ * to `confirmed` (onto the public page). Idempotent. `{ ok, social }`.
+ */
+export const reviewArtistSocial = oc
+  .route({
+    method: "POST",
+    operationId: "reviewArtistSocial",
+    path: "/admin/artists/socials/{socialId}/review",
+    summary: "Review one artist social (mark reviewed; candidate → confirmed)",
+    tags: ["Admin"],
+  })
+  .input(z.object({ socialId: z.string() }))
+  .output(ArtistSocialEnvelope);
+
+/**
  * `review_artist` → `POST /admin/artists/{artistId}/review` (operationId `reviewArtist`).
  * Operator tier. Mark an artist's link list as reviewed — the "Looks good" acknowledgment.
  * Stamps `reviewed_at = now` (clears needs-a-look until a NEW link is discovered) and promotes
@@ -342,4 +361,5 @@ export const adminArtistsContract = {
   remove_artist_social: removeArtistSocial,
   resolve_artist: resolveArtist,
   review_artist: reviewArtist,
+  review_artist_social: reviewArtistSocial,
 };

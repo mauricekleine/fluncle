@@ -15,23 +15,39 @@ vi.mock("./db", async (importOriginal) => {
 
 import { persistResolution } from "./artist-resolution";
 
-type SocialRow = { source: string; status: string; url: string };
+type SocialRow = { reviewed_at: string | null; source: string; status: string; url: string };
 
 async function seedSocial(
   db: Client,
-  row: { platform: string; source: string; status: string; url: string },
+  row: {
+    platform: string;
+    reviewedAt?: string | null;
+    source: string;
+    status: string;
+    url: string;
+  },
 ): Promise<void> {
   await db.execute({
-    args: [`s-${row.platform}`, "a1", row.platform, row.url, row.source, row.status, "t0", "t0"],
-    sql: `insert into artist_socials (id, artist_id, platform, url, source, status, created_at, updated_at)
-          values (?, ?, ?, ?, ?, ?, ?, ?)`,
+    args: [
+      `s-${row.platform}`,
+      "a1",
+      row.platform,
+      row.url,
+      row.source,
+      row.status,
+      row.reviewedAt ?? null,
+      "t0",
+      "t0",
+    ],
+    sql: `insert into artist_socials (id, artist_id, platform, url, source, status, reviewed_at, created_at, updated_at)
+          values (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   });
 }
 
 async function readSocial(db: Client, platform: string): Promise<SocialRow | undefined> {
   const result = await db.execute({
     args: ["a1", platform],
-    sql: `select url, source, status from artist_socials where artist_id = ? and platform = ?`,
+    sql: `select url, source, status, reviewed_at from artist_socials where artist_id = ? and platform = ?`,
   });
 
   return result.rows[0] as SocialRow | undefined;
@@ -49,7 +65,7 @@ describe("persistResolution — operator rows are immune to a re-resolve", () =>
     );
     await db.execute(
       `create table artist_socials (id text primary key, artist_id text, platform text, url text,
-        source text, status text, created_at text, updated_at text, unique(artist_id, platform))`,
+        source text, status text, reviewed_at text, created_at text, updated_at text, unique(artist_id, platform))`,
     );
     await db.execute({ args: ["a1"], sql: `insert into artists (id) values (?)` });
   });
@@ -78,6 +94,7 @@ describe("persistResolution — operator rows are immune to a re-resolve", () =>
     );
 
     expect(await readSocial(db, "instagram")).toEqual({
+      reviewed_at: null,
       source: "operator",
       status: "candidate",
       url: "https://www.instagram.com/operator-set",
@@ -144,6 +161,7 @@ describe("persistResolution — operator rows are immune to a re-resolve", () =>
     );
 
     expect(await readSocial(db, "bandcamp")).toEqual({
+      reviewed_at: null,
       source: "musicbrainz",
       status: "auto",
       url: "https://new.bandcamp.com",
@@ -163,9 +181,93 @@ describe("persistResolution — operator rows are immune to a re-resolve", () =>
     ]);
 
     expect(await readSocial(db, "youtube")).toEqual({
+      reviewed_at: null,
       source: "operator",
       status: "confirmed",
       url: "https://www.youtube.com/@operator",
     });
+  });
+});
+
+describe("persistResolution — the per-link review stamp (reviewed_at)", () => {
+  let db: Client;
+
+  beforeEach(async () => {
+    db = createClient({ url: ":memory:" });
+    holder.db = db;
+
+    await db.execute(
+      `create table artists (id text primary key, mbid text, wikidata_qid text, resolved_at text, updated_at text)`,
+    );
+    await db.execute(
+      `create table artist_socials (id text primary key, artist_id text, platform text, url text,
+        source text, status text, reviewed_at text, created_at text, updated_at text, unique(artist_id, platform))`,
+    );
+    await db.execute({ args: ["a1"], sql: `insert into artists (id) values (?)` });
+  });
+
+  it("a NEW MB link is born unreviewed (reviewed_at null)", async () => {
+    await persistResolution(
+      "a1",
+      "mb1",
+      null,
+      [{ platform: "instagram", source: "musicbrainz", url: "https://www.instagram.com/new" }],
+      "auto",
+      [],
+    );
+
+    expect((await readSocial(db, "instagram"))?.reviewed_at).toBeNull();
+  });
+
+  it("a NEW Firecrawl gap-fill link is born unreviewed (reviewed_at null)", async () => {
+    await persistResolution("a1", "mb1", null, [], "auto", [
+      { platform: "tiktok", source: "firecrawl", url: "https://www.tiktok.com/@fresh" },
+    ]);
+
+    expect((await readSocial(db, "tiktok"))?.reviewed_at).toBeNull();
+  });
+
+  it("an UNCHANGED-URL re-resolve keeps the existing review stamp", async () => {
+    await seedSocial(db, {
+      platform: "twitter",
+      reviewedAt: "2026-07-10T00:00:00.000Z",
+      source: "musicbrainz",
+      status: "auto",
+      url: "https://twitter.com/same",
+    });
+
+    await persistResolution(
+      "a1",
+      "mb1",
+      null,
+      [{ platform: "twitter", source: "musicbrainz", url: "https://twitter.com/same" }],
+      "auto",
+      [],
+    );
+
+    expect((await readSocial(db, "twitter"))?.reviewed_at).toBe("2026-07-10T00:00:00.000Z");
+  });
+
+  it("a CHANGED-URL re-resolve re-arms the link (reviewed_at back to null)", async () => {
+    await seedSocial(db, {
+      platform: "soundcloud",
+      reviewedAt: "2026-07-10T00:00:00.000Z",
+      source: "musicbrainz",
+      status: "auto",
+      url: "https://soundcloud.com/old",
+    });
+
+    await persistResolution(
+      "a1",
+      "mb1",
+      null,
+      [{ platform: "soundcloud", source: "musicbrainz", url: "https://soundcloud.com/moved" }],
+      "auto",
+      [],
+    );
+
+    const row = await readSocial(db, "soundcloud");
+    expect(row?.url).toBe("https://soundcloud.com/moved");
+    expect(row?.reviewed_at).toBeNull();
   });
 });

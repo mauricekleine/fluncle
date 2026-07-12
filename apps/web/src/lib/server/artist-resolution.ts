@@ -1237,13 +1237,21 @@ export async function persistResolution(
         nowIso,
         nowIso,
       ],
+      // A NEW link is born unreviewed (`reviewed_at = null`). On a re-resolve of a machine
+      // row, the stamp is nulled ONLY when the URL actually CHANGED (a fresh link to look at);
+      // an untouched re-resolve keeps whatever stamp the operator left. Operator/confirmed rows
+      // are skipped wholesale by the WHERE clause, so their review stamp is never disturbed.
       sql: `insert into artist_socials
-              (id, artist_id, platform, url, source, status, created_at, updated_at)
-            values (?, ?, ?, ?, ?, ?, ?, ?)
+              (id, artist_id, platform, url, source, status, reviewed_at, created_at, updated_at)
+            values (?, ?, ?, ?, ?, ?, null, ?, ?)
             on conflict(artist_id, platform) do update set
               url = excluded.url,
               source = excluded.source,
               status = excluded.status,
+              reviewed_at = case
+                when artist_socials.url != excluded.url then null
+                else artist_socials.reviewed_at
+              end,
               updated_at = excluded.updated_at
             where artist_socials.source != 'operator'
               and artist_socials.status != 'confirmed'`,
@@ -1255,9 +1263,11 @@ export async function persistResolution(
     const id = randomUUID();
     await db.execute({
       args: [id, artistId, social.platform, social.url, "firecrawl", "candidate", nowIso, nowIso],
+      // A gap-fill only ever INSERTS (does-nothing on conflict), so the row is always new →
+      // born unreviewed (`reviewed_at = null`), surfacing in the fresh-links queue.
       sql: `insert into artist_socials
-              (id, artist_id, platform, url, source, status, created_at, updated_at)
-            values (?, ?, ?, ?, ?, ?, ?, ?)
+              (id, artist_id, platform, url, source, status, reviewed_at, created_at, updated_at)
+            values (?, ?, ?, ?, ?, ?, null, ?, ?)
             on conflict(artist_id, platform) do nothing`,
     });
   }

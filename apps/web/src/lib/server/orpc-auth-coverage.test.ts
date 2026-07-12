@@ -432,6 +432,9 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // The "Looks good" acknowledgment — operator tier: it stamps the artist reviewed and promotes
   // surviving candidates onto the public artist page (the trust gate).
   review_artist: "operator",
+  // The per-link approve in the fresh-links section — operator tier: marks a link reviewed and
+  // promotes a candidate onto the public artist page (the trust gate, at the link grain).
+  review_artist_social: "operator",
   save_private_finding: "private-session",
   send_edition: "operator",
   // The catalogue capture budget + its kill switch — operator tier, like `set_clip_drip`
