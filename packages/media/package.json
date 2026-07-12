@@ -7,6 +7,8 @@
   "scripts": {
     "studio": "remotion studio",
     "render:og": "bun src/render/render-og.ts",
+    "render:app-icons": "bun src/render/render-app-icons.ts",
+    "render:mobile-assets": "bun src/render/render-mobile-assets.ts",
     "render:socials": "bun src/render/render-socials.ts",
     "render:mixtape-bg": "bun src/render/render-mixtape-bg.ts",
     "typecheck": "tsgo --noEmit"

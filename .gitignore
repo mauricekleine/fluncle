@@ -25,6 +25,11 @@ apps/*/.wrangler/
 apps/ssh/.local/
 apps/ssh/ssh
 
+# @fluncle/media render output — throwaway working stills (app-icon candidates,
+# etc.). Committed image assets live under apps/web/public and docs/socials/banners,
+# not here; anything rendered into out/ is local working state.
+packages/media/out/
+
 # @fluncle/video render output and downloaded audio previews (never commit)
 packages/video/out/
 packages/video/public/*.mp3

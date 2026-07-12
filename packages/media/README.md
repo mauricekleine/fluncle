@@ -16,6 +16,14 @@ The **safe-area contract**: platforms crop a banner differently across devices, 
 
 `bun run render:socials` writes the claimed accounts (`render: true`) to `docs/socials/banners/` — drop each straight into the platform's profile uploader. The current set: YouTube channel banner (2048×1152 PNG) and Mixcloud cover (2048×512 PNG). SoundCloud (2480×520) and X (1500×500) are wired in with `render: false` — previewable in Studio, written once those accounts exist. The Spotify playlist cover is the founding cover art, **not** generated here. The spec table + the brand asset map live in [docs/socials/README.md](../../docs/socials/README.md).
 
+## The mobile app icon
+
+`src/remotion/app-icon.tsx` is the mobile app icon (`apps/mobile`) — one `<AppIcon>` composition rendered at the 1024² master size, parametrized by `variant` so it renders every candidate. The candidate set lives in `src/remotion/app-icon-specs.ts` (id + slug + variant + rationale), shared by the registry (`root.tsx`) and the render script. The **live candidates are the existing brand mark — the drifting traveler** (`public/fluncle-cosmonaut.png`, the founding figure), composited onto three canon backgrounds: **traveler** (plain Deep Field), **traveler-stars** (the quiet starfield — the site avatar's vibe), **traveler-glow** (a faint warm eclipse halo behind the figure). The figure is scaled from its measured alpha bounding box (398×488 inside the 1180² cut) to ~72% of icon height and re-centred on the figure, so it reads as a figure at 60px — the raw cut's ~41% figure height is exactly why the site avatar is unusable as an icon as-is. Four invented marks (eclipse / stamp / cover / diamond) remain as exploration. Every variant fills an opaque Deep Field ground (iOS rejects alpha), bakes **no** rounded corners (iOS/Android apply their own mask), and keeps load-bearing content inside a central safe zone.
+
+`bun run render:app-icons` renders each candidate to `out/app-icon/icon-<slug>.png` — `out/` is gitignored, so these are **throwaway working stills**, not committed assets.
+
+**The pick is resolved (operator, 2026-07-12): variant `traveler` — the figure on plain Deep Field.** The production set lives in `MOBILE_ASSET_SPECS` (same specs file): `bun run render:mobile-assets` renders the picked icon master (`icon.png`, opaque), the Android adaptive-icon foreground (`adaptive-icon.png`, transparent, figure at 58% for Android's tighter adaptive mask), and the splash mark (`splash-icon.png`, transparent, the traveler small over an edge-faded starfield) into `apps/mobile/assets/` — **committed** files referenced by `apps/mobile/app.config.ts` (`icon`, `android.adaptiveIcon`, the `expo-splash-screen` plugin's `image`). Icon + splash are NATIVE assets: regenerating them needs a native rebuild (`expo run:ios` / a new EAS build), not a JS reload.
+
 ## Conventions (mirrors `@fluncle/video`)
 
 - **Code-generated, deterministic.** Everything on screen is generated from code — CSS, SVG, transforms — so a render is reproducible from source alone. The bitmap exceptions are the fonts (Oxanium + Space Grotesk woff2 under `public/fonts`, byte-identical to the `apps/web` copies) and the cosmonaut cutout (`public/fluncle-cosmonaut.png`, Maurice's founding artwork — the one image we composite rather than re-draw). No `Math.random()` and no wall-clock time inside a composition; seed any procedural layer via Remotion's `random()`.
@@ -28,8 +36,10 @@ The **safe-area contract**: platforms crop a banner differently across devices, 
 Run from `packages/media` (or with `bun run --cwd packages/media …`). Use **bun**, never npm/pnpm/yarn.
 
 ```bash
-bun run render:og        # bundles, selects GalaxyOg, renders apps/web/public/galaxy/og.png at 1200×630
-bun run render:socials   # renders the claimed social banners/covers into docs/socials/banners/
+bun run render:og          # bundles, selects GalaxyOg, renders apps/web/public/galaxy/og.png at 1200×630
+bun run render:app-icons      # renders the mobile app-icon candidates (1024²) into out/app-icon/ (gitignored)
+bun run render:mobile-assets  # renders the PICKED icon + adaptive foreground + splash into apps/mobile/assets/ (committed)
+bun run render:socials     # renders the claimed social banners/covers into docs/socials/banners/
 bun run studio      # Remotion Studio — live scrub the asset while editing
 bun run typecheck   # tsgo --noEmit, the quality check for any change here
 ```

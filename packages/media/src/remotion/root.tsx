@@ -4,6 +4,8 @@
 
 import { Still } from "remotion";
 
+import { AppIcon } from "./app-icon";
+import { APP_ICON_SIZE, APP_ICON_SPECS, MOBILE_ASSET_SPECS } from "./app-icon-specs";
 import { CosmosBanner } from "./cosmos-banner";
 import { GalaxyOg } from "./galaxy-og";
 import { MixtapeCover } from "./mixtape-cover";
@@ -16,6 +18,40 @@ export const RemotionRoot: React.FC = () => {
       {/* The Open Graph / link-preview card for the /galaxy route (1200×630),
           rendered to apps/web/public/galaxy/og.png by `bun run render:og`. */}
       <Still component={GalaxyOg} height={630} id="GalaxyOg" width={1200} />
+
+      {/* App-icon candidates for apps/mobile — one <AppIcon> variant per
+          candidate at the 1024² master size (app-icon-specs.ts). A TASTE
+          deliverable: `bun run render:app-icons` writes them to out/app-icon/
+          for the operator to pick one, which then gets wired into the app. */}
+      {APP_ICON_SPECS.map((spec) => (
+        <Still
+          component={AppIcon}
+          defaultProps={{ variant: spec.variant }}
+          height={APP_ICON_SIZE}
+          id={spec.id}
+          key={spec.id}
+          width={APP_ICON_SIZE}
+        />
+      ))}
+
+      {/* The production mobile assets (app-icon-specs.ts MOBILE_ASSET_SPECS):
+          the picked icon plus the Android adaptive foreground + the splash
+          mark. `bun run render:mobile-assets` writes them to
+          apps/mobile/assets/ (committed). The picked icon's still is already
+          registered by the candidate map above, so only the ids the candidate
+          set doesn't carry are added here. */}
+      {MOBILE_ASSET_SPECS.filter(
+        (spec) => !APP_ICON_SPECS.some((candidate) => candidate.id === spec.id),
+      ).map((spec) => (
+        <Still
+          component={AppIcon}
+          defaultProps={{ variant: spec.variant }}
+          height={APP_ICON_SIZE}
+          id={spec.id}
+          key={spec.id}
+          width={APP_ICON_SIZE}
+        />
+      ))}
 
       {/* Social profile banners / covers — one CosmosBanner per platform, sized
           and safe-area'd from socials-specs.ts. `bun run render:socials` writes

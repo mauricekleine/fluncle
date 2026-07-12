@@ -21,6 +21,15 @@ const withFreeTeamSigning: ConfigPlugin = (config) =>
 
 const config: ExpoConfig = {
   android: {
+    // The adaptive launcher icon: the transparent traveler cut (figure at 58%
+    // of frame for Android's tighter adaptive mask) layered over Deep Field.
+    // Rendered from @fluncle/media (`bun run --cwd packages/media
+    // render:mobile-assets`); a change is a NATIVE asset change — rebuild, not
+    // reload.
+    adaptiveIcon: {
+      backgroundColor: DEEP_FIELD,
+      foregroundImage: "./assets/adaptive-icon.png",
+    },
     intentFilters: [
       {
         action: "VIEW",
@@ -39,6 +48,9 @@ const config: ExpoConfig = {
       projectId: "4db7808b-9463-4411-af2a-d0d2c5af72e9",
     },
   },
+  // The app icon: the drifting traveler on plain Deep Field (operator's pick,
+  // 2026-07-12), a 1024×1024 opaque PNG rendered from @fluncle/media.
+  icon: "./assets/icon.png",
   ios: {
     bundleIdentifier: "com.fluncle.app",
     supportsTablet: false,
@@ -49,7 +61,19 @@ const config: ExpoConfig = {
   orientation: "portrait",
   plugins: [
     "expo-router",
-    ["expo-splash-screen", { backgroundColor: DEEP_FIELD, resizeMode: "contain" }],
+    // The splash mark: the traveler small over an edge-faded starfield on a
+    // transparent ground, composited over the Deep Field backgroundColor (so
+    // the square dissolves into the native ground with no seam). imageWidth is
+    // in dp; 240 keeps the mark quiet, per the icon family's composition.
+    [
+      "expo-splash-screen",
+      {
+        backgroundColor: DEEP_FIELD,
+        image: "./assets/splash-icon.png",
+        imageWidth: 240,
+        resizeMode: "contain",
+      },
+    ],
     ["expo-video", { supportsBackgroundPlayback: false, supportsPictureInPicture: false }],
     // The Radio surface keeps the spoken observation playing past a lock / backgrounding.
     // This plugin adds iOS `UIBackgroundModes: ["audio"]` and the Android media-playback
