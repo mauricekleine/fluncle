@@ -269,6 +269,30 @@ describe("oRPC public read — GET /tracks (list_tracks)", () => {
   });
 });
 
+describe("oRPC public read — GET /stories (list_stories)", () => {
+  it("STRIPS the private sourceAudioKey from every story before it world-serves", async () => {
+    // Stories are the `hasVideo` findings — exactly the ones most likely captured — so the
+    // lean projection's `sourceAudioKey` must be stripped like the `list_tracks` feed's.
+    const captured = { ...TRACK, sourceAudioKey: "004.7.2I/abc123.m4a", trackId: "captured" };
+    listTracks.mockResolvedValueOnce({ totalCount: 1, tracks: [captured] });
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(get("https://www.fluncle.com/api/v1/stories"));
+
+    expect(response?.status).toBe(200);
+    const body = (await readJson(response)) as { tracks: Array<Record<string, unknown>> };
+    expect(body.tracks[0]).not.toHaveProperty("sourceAudioKey");
+    expect(body.tracks[0]?.trackId).toBe("captured");
+    // The story feed reads the `hasVideo` slice, lean.
+    expect(listTracks).toHaveBeenCalledWith({
+      cursor: undefined,
+      hasVideo: true,
+      lean: true,
+      limit: 16,
+    });
+  });
+});
+
 describe("oRPC public read — GET /tracks/random (get_random_track)", () => {
   it("serves { ok: true, track }", async () => {
     getRandomTrack.mockResolvedValueOnce(TRACK);
@@ -322,6 +346,20 @@ describe("oRPC public read — GET /radio/random (get_random_radio_track)", () =
     // random read, so an un-squared / observation-less track can never reach it.
     expect(getRandomRadioTrack).toHaveBeenCalledTimes(1);
     expect(getRandomTrack).not.toHaveBeenCalled();
+  });
+
+  it("STRIPS the private sourceAudioKey from the served track", async () => {
+    // The radio hydrates from the FAT DTO, which carries the private capture key — the
+    // public read must strip it just like the tracks feed does.
+    getRandomRadioTrack.mockResolvedValueOnce({ ...TRACK, sourceAudioKey: "004.7.2I/abc123.m4a" });
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(get("https://www.fluncle.com/api/v1/radio/random"));
+
+    expect(response?.status).toBe(200);
+    const body = (await readJson(response)) as { track: Record<string, unknown> };
+    expect(body.track).not.toHaveProperty("sourceAudioKey");
+    expect(body.track.trackId).toBe(TRACK.trackId);
   });
 
   it("404s an empty eligible set with the custom track_not_found code", async () => {
@@ -422,6 +460,36 @@ describe("oRPC public read — GET /radio/now-playing (get_radio_now_playing)", 
 
     const body = (await response?.json()) as { nowPlaying: { nextTrack?: unknown } };
     expect(body.nowPlaying.nextTrack).toBeUndefined();
+  });
+
+  it("STRIPS the private sourceAudioKey from both hydrated slots", async () => {
+    getRadioEligibleTracks.mockResolvedValueOnce([
+      { logId: "001.1.1A", observationDurationMs: 20_000, trackId: "track-a" },
+      { logId: "002.1.1B", observationDurationMs: 30_000, trackId: "track-b" },
+    ]);
+    getRadioScheduleFingerprint.mockResolvedValueOnce("2:s");
+    getRadioScheduleAnchor.mockResolvedValueOnce({ epochMs: Date.now() - 5_000, version: "2:s" });
+    // Both slots hydrate from the FAT DTO carrying the private capture key.
+    getTrackByIdOrLogId.mockImplementation(async (id: string) =>
+      id === "track-a"
+        ? { ...CURRENT, sourceAudioKey: "001.1.1A/aaa.m4a" }
+        : id === "track-b"
+          ? { ...NEXT, sourceAudioKey: "002.1.1B/bbb.m4a" }
+          : undefined,
+    );
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(get("https://www.fluncle.com/api/v1/radio/now-playing"));
+
+    const body = (await response?.json()) as {
+      nowPlaying: {
+        currentTrack: Record<string, unknown>;
+        nextTrack?: Record<string, unknown>;
+      };
+    };
+    expect(body.nowPlaying.currentTrack).not.toHaveProperty("sourceAudioKey");
+    expect(body.nowPlaying.nextTrack).not.toHaveProperty("sourceAudioKey");
+    expect(body.nowPlaying.currentTrack.trackId).toBe("track-a");
   });
 
   it("strips the galaxy from now-playing until the whole map is named (launch gate)", async () => {

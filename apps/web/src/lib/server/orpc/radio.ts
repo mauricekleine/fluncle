@@ -13,6 +13,7 @@ import {
   getRadioScheduleFingerprint,
   getRandomRadioTrack,
   getTrackByIdOrLogId,
+  toPublicTrackListItem,
 } from "../tracks";
 import { apiFault, type Implementer } from "./_shared";
 
@@ -30,8 +31,17 @@ import { apiFault, type Implementer } from "./_shared";
 // ships would break the "nothing public renders a galaxy until fully named" rail. When
 // the gate is closed the galaxy is stripped from the payload; the rest of the finding
 // is untouched.
+//
+// This is also the radio's public-strip choke point: every finding served by these public
+// ops passes through here, so it runs the `toPublicTrackListItem` public-strip (the same one
+// the `list_tracks` feed runs) BEFORE the galaxy gate. The radio hydrates its slots from the
+// FAT DTO (`getRandomRadioTrack`/`getTrackByIdOrLogId` → `toTrackListItem`), which populates
+// `sourceAudioKey` + the internal provenance fields; without this the private R2 key of the
+// captured full song would world-serve on the radio.
 function gateGalaxy(track: TrackListItem, fullyNamed: boolean): TrackListItem {
-  return fullyNamed ? track : { ...track, galaxy: undefined };
+  const publicTrack = toPublicTrackListItem(track);
+
+  return fullyNamed ? publicTrack : { ...publicTrack, galaxy: undefined };
 }
 
 export function radioHandlers(os: Implementer) {

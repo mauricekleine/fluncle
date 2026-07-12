@@ -97,6 +97,7 @@ function AdminGalaxiesPage() {
     initialData: initial,
     queryFn: () => fetchGalaxies(),
     queryKey: GALAXIES_KEY,
+    refetchOnWindowFocus: true,
   });
 
   const board = useMemo(() => partitionGalaxyBoard(galaxies), [galaxies]);

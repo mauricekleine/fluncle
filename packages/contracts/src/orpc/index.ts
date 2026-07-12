@@ -197,12 +197,15 @@ export {
 export {
   contextTrack,
   finalizeTrackVideo,
+  getMixableOrder,
   getTrackAdmin,
   listTracksAdmin,
   listTrackWork,
+  noteTrack,
   observeTrack,
   presignTrackVideoUploads,
   publishTrack,
+  purgeVideo,
   requeueVideo,
   TrackWorkItemSchema,
   TrackWorkKindSchema,
@@ -242,7 +245,13 @@ export {
 } from "./search";
 export { listStories } from "./stories";
 export { type SubmissionBody, submitTrack } from "./submissions";
-export { getRandomTrack, getSimilarFindings, getTrack, listTracks } from "./tracks";
+export {
+  getRandomTrack,
+  getSimilarFindings,
+  getTrack,
+  listMixableTracks,
+  listTracks,
+} from "./tracks";
 export { recordLiveState } from "./admin-twitch";
 export {
   type ClipDTO,

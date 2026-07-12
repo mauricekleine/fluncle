@@ -183,6 +183,7 @@ function AdminArtistsPage() {
     initialData: initial,
     queryFn: () => fetchAllArtists(),
     queryKey: ARTIST_OVERVIEW_KEY,
+    refetchOnWindowFocus: true,
   });
   const [error, setError] = useState<string | undefined>();
   const [query, setQuery] = useState("");

@@ -28,8 +28,13 @@ type DeviceSearch = {
 
 type Phase = "approved" | "denied" | "error" | "idle" | "working";
 
+// TanStack's canonical option order (validateSearch feeds the next step's
+// inference), which isn't alphabetical — so sort-keys is off here. See AGENTS.md.
+// oxlint-disable-next-line sort-keys
 export const Route = createFileRoute("/device")({
-  component: DevicePage,
+  validateSearch: (search: Record<string, unknown>): DeviceSearch => ({
+    user_code: typeof search.user_code === "string" ? search.user_code : undefined,
+  }),
   head: () => ({
     links: [{ href: `${siteUrl}/device`, rel: "canonical" }],
     meta: [
@@ -42,9 +47,7 @@ export const Route = createFileRoute("/device")({
       { content: "noindex, nofollow", name: "robots" },
     ],
   }),
-  validateSearch: (search: Record<string, unknown>): DeviceSearch => ({
-    user_code: typeof search.user_code === "string" ? search.user_code : undefined,
-  }),
+  component: DevicePage,
 });
 
 function DevicePage() {
