@@ -27,7 +27,17 @@
 // exponentially instead of being retried every tick. After the call the outcome
 // is recorded so the next tick resumes from a clean, durable state.
 
-import { appleMusicLookupByIsrc } from "./apple-music";
+import {
+  type AppleCatalogBundle,
+  appleCatalogLookupByIsrc,
+  appleCatalogLookupByIsrcs,
+} from "./apple-music";
+import {
+  areAppleCallsAllowed,
+  isAppleCallBudgetAvailable,
+  recordAppleAuthOutcome,
+  recordAppleCall,
+} from "./apple-breaker";
 import { getDb, typedRows } from "./db";
 import { discogsResolveRelease } from "./discogs";
 import { lastfmLove } from "./lastfm";
@@ -110,6 +120,14 @@ export type DiscogsBackfillResult = BackfillPass<{
 }>;
 
 export type AppleMusicBackfillResult = BackfillPass<{
+  // Album-fact rows this pass wrote once (recordLabel/upc/artwork/palette) off the single-ISRC
+  // oracle's canonical album — the second half of the Apple read (RFC U1). Zero on a pass that
+  // only touched findings whose album was already fact-stamped (or has no `albums` row).
+  albumFactsWritten: number;
+  // True when the pass STOPPED because the cross-cutting Apple breaker is tripped (K consecutive
+  // 401/403 — a suspended developer token) or its per-window call budget is spent. Distinct from
+  // `rateLimited` (a 429): the breaker short-circuits the whole leg until it cools down / is reset.
+  breakerTripped: boolean;
   // False when the MusicKit secrets are unset — the leg is a NO-OP this tick (nothing
   // resolved, nothing stored, no finding cooled down), so the box cron output reads
   // honestly as "unconfigured" instead of a silent "0 resolved".
@@ -162,6 +180,14 @@ function columnPrefix(source: BackfillSource): string {
   return `backfill_${source}`;
 }
 
+// Which TABLE a source's reliability columns live on. `apple_music` moved to `tracks` (its
+// output `apple_music_url` is catalogue identity and the sweep drains catalogue rows, which
+// have no `findings` row — RFC musickit-second-authority U1); the finding-only sweeps
+// (discogs/lastfm/note) stay on `findings`. A static literal, never interpolated user input.
+function reliabilityTable(source: BackfillSource): "findings" | "tracks" {
+  return source === "apple_music" ? "tracks" : "findings";
+}
+
 // Read a finding's per-source reliability state. Rows that predate the columns
 // read as all-null/zero (the migration defaults attempts/failures to 0), which is
 // exactly the "never attempted" state — so a fresh finding is eligible immediately.
@@ -174,7 +200,7 @@ async function readReliability(trackId: string, source: BackfillSource): Promise
     sql: `select ${p}_attempted_at as attempted_at,
         ${p}_failures as failures,
         ${p}_done_at as done_at
-      from findings
+      from ${reliabilityTable(source)}
       where track_id = ?
       limit 1`,
   });
@@ -311,7 +337,7 @@ async function recordAttempt(
 
   await db.execute({
     args,
-    sql: `update findings
+    sql: `update ${reliabilityTable(source)}
       set ${p}_attempted_at = ?,
         ${p}_attempts = ${p}_attempts + 1,
         ${doneClause}
@@ -671,7 +697,9 @@ export async function backfillAppleMusicUrls(
   const now = Date.now();
   let first = true;
   let rateLimited = false;
+  let breakerTripped = false;
   let configured = true;
+  let albumFactsWritten = 0;
 
   const nextCursor = await runPublishedFindingPass(
     startCursor,
@@ -705,13 +733,25 @@ export async function backfillAppleMusicUrls(
         return true;
       }
 
+      // THE CROSS-CUTTING BREAKER + METER (RFC U1). Consult before spending a call: a tripped
+      // breaker (a suspended token) or a spent call window short-circuits the whole leg this
+      // tick — stop cleanly, record nothing (the finding stays eligible), resume next tick.
+      if (!(await areAppleCallsAllowed(now)) || !(await isAppleCallBudgetAvailable(now))) {
+        breakerTripped = true;
+        return "stop";
+      }
+
       // Pace the calls (skip the wait before the first one).
       if (!first) {
         await delay(APPLE_MUSIC_DELAY_MS);
       }
       first = false;
 
-      const outcome = await appleMusicLookupByIsrc(track.isrc);
+      // ONE single-ISRC oracle read carries BOTH the URL and the canonical album facts, so the
+      // finding sweep resolves the listen link AND populates its album's second-authority facts
+      // in a single call (RFC U1) — no extra Apple request per finding.
+      await recordAppleCall(now);
+      const outcome = await appleCatalogLookupByIsrc(track.isrc);
 
       if (!outcome.configured) {
         // The MusicKit secrets are unset — the whole leg is a no-op. Every finding
@@ -723,6 +763,10 @@ export async function backfillAppleMusicUrls(
       }
 
       if (!outcome.ok) {
+        // Feed the breaker: a 401/403 advances its consecutive-auth-failure streak (and trips
+        // it on the K-th); a 429 / other error leaves it untouched.
+        await recordAppleAuthOutcome(appleOutcomeKind(outcome), now);
+
         if (outcome.rateLimited) {
           // Circuit breaker: Apple is actively rate-limiting. Stop the run; do NOT cool
           // this finding down (it was throttled, not unresolvable) so the next tick
@@ -738,7 +782,9 @@ export async function backfillAppleMusicUrls(
         return true;
       }
 
-      if (!outcome.url) {
+      await recordAppleAuthOutcome("ok", now);
+
+      if (!outcome.bundle) {
         // A clean no-match is a TRIED (base cooldown, streak reset): Apple has no song
         // for this ISRC yet, so don't re-hit it every tick — but it isn't done, so a
         // later pass can pick it up if Apple's catalogue grows.
@@ -747,24 +793,32 @@ export async function backfillAppleMusicUrls(
         return true;
       }
 
-      await setAppleMusicUrl(track.trackId, outcome.url);
+      // A finding HAS a `findings` row, so bump its public lastmod alongside the URL write.
+      await setAppleMusicUrl(track.trackId, outcome.bundle.songUrl, true);
       await recordAttempt(track.trackId, "apple_music", "done");
-      resolved.push({ logId, url: outcome.url });
+      resolved.push({ logId, url: outcome.bundle.songUrl });
+
+      // Album facts, once per album — off the same read, no extra call.
+      if (await storeAlbumFactsForTrack(track.trackId, outcome.bundle)) {
+        albumFactsWritten += 1;
+      }
 
       return true;
     },
   );
 
   return {
+    albumFactsWritten,
+    breakerTripped,
     configured,
     dryRun,
     failed,
     failedCount: failed.length,
-    // Null the cursor on a throttle-stop OR an unconfigured no-op so even the deployed
-    // CLI (which breaks only on a null cursor) stops looping this tick. Losing the
+    // Null the cursor on a throttle-stop, a breaker trip, OR an unconfigured no-op so even the
+    // deployed CLI (which breaks only on a null cursor) stops looping this tick. Losing the
     // resume point is harmless: the cron restarts from the top and the reliability gate
     // re-skips done/cooling findings cheaply.
-    nextCursor: rateLimited || !configured ? null : nextCursor,
+    nextCursor: rateLimited || breakerTripped || !configured ? null : nextCursor,
     rateLimited,
     resolved,
     resolvedCount: resolved.length,
@@ -775,27 +829,400 @@ export async function backfillAppleMusicUrls(
   };
 }
 
-// Server-side write of the Apple Music URL. Mirrors `setDiscogsIds`: the URL is
-// CATALOGUE identity (it describes the recording, so it lives on `tracks` and would be
-// just as true of an uncertified track), while `updated_at` is the FINDING's public
-// lastmod — the `music.apple.com/…` sameAs the write puts on /log is what moves. One
-// batch, so the URL and the lastmod that advertises it can never diverge.
-async function setAppleMusicUrl(trackId: string, url: string): Promise<void> {
+/**
+ * Map an Apple `{ ok: false }` outcome to the breaker's outcome kind: a flagged 401/403 is an
+ * `auth_failure` (advances the trip streak); everything else (a 429, a network throw) is `other`
+ * (the breaker leaves it alone — that is the 429 regime the sweeps' own backoff handles).
+ */
+function appleOutcomeKind(outcome: {
+  authFailed?: boolean;
+  rateLimited: boolean;
+}): "auth_failure" | "other" {
+  return outcome.authFailed ? "auth_failure" : "other";
+}
+
+// Server-side write of the Apple Music URL, CATALOGUE-AWARE (RFC U1). The URL is CATALOGUE
+// identity (it describes the recording, so it lives on `tracks` and is just as true of an
+// uncertified track). `bumpFinding` is the conditional half: a FINDING carries a `findings`
+// row whose public lastmod (`updated_at`) advertises the new `music.apple.com/…` sameAs on
+// /log, so its write bumps it in the SAME batch (the URL and the lastmod can never diverge). A
+// CATALOGUE row has no `findings` row to bump — passing `false` writes the URL alone.
+async function setAppleMusicUrl(trackId: string, url: string, bumpFinding: boolean): Promise<void> {
   const db = await getDb();
 
-  await db.batch(
-    [
-      {
-        args: [url, trackId],
-        sql: `update tracks set apple_music_url = ? where track_id = ?`,
-      },
-      {
-        args: [new Date().toISOString(), trackId],
-        sql: `update findings set updated_at = ? where track_id = ?`,
-      },
+  const statements = [
+    {
+      args: [url, trackId],
+      sql: `update tracks set apple_music_url = ? where track_id = ?`,
+    },
+  ];
+
+  if (bumpFinding) {
+    statements.push({
+      args: [new Date().toISOString(), trackId],
+      sql: `update findings set updated_at = ? where track_id = ?`,
+    });
+  }
+
+  await db.batch(statements, "write");
+}
+
+/**
+ * Store the Apple album FACTS (recordLabel/upc/artwork/palette) for a track's album, ONCE. Given
+ * a resolved single-ISRC bundle, this resolves the track's `albums` row (via `tracks.album_id`)
+ * and — only when that row exists AND has not been fact-stamped yet (`apple_album_id IS NULL`) —
+ * writes the canonical album's facts. Returns true iff a row was written (so the caller counts
+ * one album fact). NULL-SAFE at every hop: an honest miss (the bundle has no `canonicalAlbum`, the
+ * track has no `album_id`, its album is already stamped, or another concurrent pass stamped it
+ * first) writes nothing and returns false. Facts are ALBUM-grained, so this is idempotent and
+ * runs at most once per album across every pass.
+ */
+export async function storeAlbumFactsForTrack(
+  trackId: string,
+  bundle: AppleCatalogBundle,
+): Promise<boolean> {
+  const album = bundle.canonicalAlbum;
+
+  if (!album) {
+    return false;
+  }
+
+  const db = await getDb();
+
+  // Resolve the album row this track points at, but only if it still needs facts. The join +
+  // the `apple_album_id is null` guard are both in SQL, so an already-stamped album never
+  // crosses the wire and the whole thing stays a single indexed read.
+  const target = await db.execute({
+    args: [trackId],
+    sql: `select a.id as id
+          from tracks t
+          join albums a on a.id = t.album_id
+          where t.track_id = ? and a.apple_album_id is null
+          limit 1`,
+  });
+
+  const albumId = typedRows<{ id: string }>(target.rows)[0]?.id;
+
+  if (typeof albumId !== "string") {
+    return false;
+  }
+
+  const artwork = album.artwork;
+  const updated = await db.execute({
+    // `apple_album_id is null` in the WHERE makes the write itself the idempotence: two passes
+    // racing the same album, only the first stamps it. The rest of the columns are NULL-safe
+    // (an absent fact binds NULL). `updated_at` bumps — the album page reads these facts.
+    args: [
+      album.id,
+      album.upc ?? null,
+      album.recordLabel ?? null,
+      artwork?.urlTemplate ?? null,
+      artwork?.width ?? null,
+      artwork?.height ?? null,
+      artwork?.bgColor ?? null,
+      artwork?.textColor1 ?? null,
+      artwork?.textColor2 ?? null,
+      artwork?.textColor3 ?? null,
+      artwork?.textColor4 ?? null,
+      new Date().toISOString(),
+      albumId,
     ],
-    "write",
+    sql: `update albums
+          set apple_album_id = ?,
+              upc = ?,
+              record_label_raw = ?,
+              artwork_url_template = ?,
+              artwork_width = ?,
+              artwork_height = ?,
+              artwork_bg_color = ?,
+              artwork_text_color1 = ?,
+              artwork_text_color2 = ?,
+              artwork_text_color3 = ?,
+              artwork_text_color4 = ?,
+              updated_at = ?
+          where id = ? and apple_album_id is null`,
+  });
+
+  return updated.rowsAffected > 0;
+}
+
+// ── Apple Music — the CATALOGUE drain (RFC musickit-second-authority, U1) ────────────────────
+//
+// The findings sweep above rides the public FEED (an inner join onto the certification), so it is
+// structurally blind to a CATALOGUE track (a `tracks` row with no `findings` row) — the same hole
+// track-work.ts fixed for the audio pipeline. This is that fix for the Apple read: a worklist
+// derived straight off `tracks`, gated only by the reliability columns that MOVED to `tracks`.
+//
+// It uses the BATCHED oracle (≤25 ISRCs/request) for the URL — the cheap half, one request per 25
+// rows — and fires the single-ISRC oracle only for the NEW albums the drain encounters, to
+// populate their second-authority facts once. No cursor: the worklist is a fresh reliability-gated
+// anti-join each tick, so a drained (done/cooling) row simply drops out of the next read.
+
+/** The catalogue worklist candidate — identity + the reliability columns the gate reads. */
+type CatalogueAppleCandidate = {
+  albumId: null | string;
+  attemptedAt: null | string;
+  failures: number;
+  isrc: string;
+  trackId: string;
+};
+
+/** One catalogue drain pass's numbers. No cursor — the worklist self-drains by reliability. */
+export type AppleCatalogueBackfillResult = {
+  albumFactsWritten: number;
+  breakerTripped: boolean;
+  configured: boolean;
+  dryRun: boolean;
+  failed: Array<{ error: string; trackId: string }>;
+  failedCount: number;
+  rateLimited: boolean;
+  resolved: Array<{ trackId: string; url: string }>;
+  resolvedCount: number;
+  // ISRCs Apple has no song for (a clean no-match, base cooldown, re-checkable if Apple grows).
+  unresolved: string[];
+  unresolvedCount: number;
+};
+
+// A catalogue drain reads at most this many candidates a pass (the batched oracle chunks them at
+// 25/request internally). Larger than the findings `MAX_BATCH` because a batched URL read is one
+// cheap request per 25 rows, not one paced request per row.
+const CATALOGUE_APPLE_MAX_BATCH = 100;
+
+// At most this many NEW albums get their facts resolved per pass — each is a paced single-ISRC
+// call, so this bounds the pass's wall time independently of how many URLs the batch resolved.
+const CATALOGUE_FACTS_MAX_PER_PASS = 10;
+
+/**
+ * Read the catalogue Apple worklist: uncertified tracks (no `findings` row) that carry an ISRC,
+ * have no Apple URL yet, are not done, and are past their base cooldown. Ordered by the Ear's
+ * capture-priority ladder so the rows nearest the archive resolve first (a free ordering — the
+ * URL read is not metered). The precise failure-scaled cooldown is refined in TS per row.
+ */
+async function listCatalogueAppleWork(limit: number): Promise<CatalogueAppleCandidate[]> {
+  const db = await getDb();
+  const cutoff = new Date(Date.now() - COOLDOWN_BASE_MS).toISOString();
+  const result = await db.execute({
+    args: [cutoff, limit],
+    sql: `select t.track_id, t.isrc, t.album_id,
+                 t.backfill_apple_music_attempted_at as attempted_at,
+                 t.backfill_apple_music_failures as failures
+          from tracks t
+          left join findings f on f.track_id = t.track_id
+          where f.track_id is null
+            and t.apple_music_url is null
+            and t.isrc is not null and trim(t.isrc) <> ''
+            and t.backfill_apple_music_done_at is null
+            and (t.backfill_apple_music_attempted_at is null
+                 or t.backfill_apple_music_attempted_at < ?)
+          order by coalesce(t.capture_priority, 0) desc, t.track_id
+          limit ?`,
+  });
+
+  return typedRows<{
+    album_id: null | string;
+    attempted_at: null | string;
+    failures: null | number;
+    isrc: string;
+    track_id: string;
+  }>(result.rows).map((row) => ({
+    albumId: row.album_id,
+    attemptedAt: row.attempted_at,
+    failures: typeof row.failures === "number" ? row.failures : 0,
+    isrc: row.isrc,
+    trackId: row.track_id,
+  }));
+}
+
+/**
+ * Drain one bounded pass of the CATALOGUE Apple worklist. Batched URL resolve for every eligible
+ * row; single-ISRC facts resolve for the new albums it encounters. Reliability + the cross-cutting
+ * breaker/meter gate the whole thing exactly like the findings sweep. NO-OP until configured.
+ */
+export async function backfillAppleMusicCatalogue(
+  limit: number,
+  dryRun: boolean,
+): Promise<AppleCatalogueBackfillResult> {
+  const resolved: AppleCatalogueBackfillResult["resolved"] = [];
+  const unresolved: string[] = [];
+  const failed: AppleCatalogueBackfillResult["failed"] = [];
+  const now = Date.now();
+  let albumFactsWritten = 0;
+
+  const empty = (over: Partial<AppleCatalogueBackfillResult>): AppleCatalogueBackfillResult => ({
+    albumFactsWritten,
+    breakerTripped: false,
+    configured: true,
+    dryRun,
+    failed,
+    failedCount: failed.length,
+    rateLimited: false,
+    resolved,
+    resolvedCount: resolved.length,
+    unresolved,
+    unresolvedCount: unresolved.length,
+    ...over,
+  });
+
+  const page = Math.max(1, Math.min(limit, CATALOGUE_APPLE_MAX_BATCH));
+  const candidates = await listCatalogueAppleWork(page);
+
+  // The precise failure-scaled cooldown, refined per row (the SQL applied only the base cutoff).
+  const eligible = candidates.filter(
+    (candidate) =>
+      !shouldSkip(
+        { attemptedAt: candidate.attemptedAt, failures: candidate.failures, isDone: false },
+        now,
+      ),
   );
+
+  if (eligible.length === 0) {
+    return empty({});
+  }
+
+  if (dryRun) {
+    // Preview the eligible set (as `unresolved` — the "would resolve" set) without any call.
+    for (const candidate of eligible) {
+      unresolved.push(candidate.trackId);
+    }
+
+    return empty({});
+  }
+
+  // THE BREAKER + METER — consult once before the batch (RFC U1).
+  if (!(await areAppleCallsAllowed(now)) || !(await isAppleCallBudgetAvailable(now))) {
+    return empty({ breakerTripped: true });
+  }
+
+  const byIsrc = new Map<string, CatalogueAppleCandidate>();
+
+  for (const candidate of eligible) {
+    // First-seen wins per ISRC (two catalogue rows can share one) — the loser is left for a
+    // later pass rather than double-counted.
+    if (!byIsrc.has(candidate.isrc)) {
+      byIsrc.set(candidate.isrc, candidate);
+    }
+  }
+
+  // Record one meter tick per underlying request the oracle will make (one per ≤25 ISRCs).
+  const chunks = Math.ceil(byIsrc.size / 25);
+
+  for (let i = 0; i < chunks; i += 1) {
+    await recordAppleCall(now);
+  }
+
+  const outcome = await appleCatalogLookupByIsrcs([...byIsrc.keys()]);
+
+  if (!outcome.configured) {
+    return empty({ configured: false });
+  }
+
+  if (!outcome.ok) {
+    await recordAppleAuthOutcome(appleOutcomeKind(outcome), now);
+
+    // A 429 backs the pass off; a 401/403 has already advanced the breaker. Either way stop
+    // cleanly — record nothing on the rows (they stay eligible), resume next tick.
+    return empty({ breakerTripped: Boolean(outcome.authFailed), rateLimited: outcome.rateLimited });
+  }
+
+  await recordAppleAuthOutcome("ok", now);
+
+  // The albums that still need facts among the resolved rows — deduped to ONE track per album.
+  const factsQueue: CatalogueAppleCandidate[] = [];
+  const albumsSeen = new Set<string>();
+
+  for (const [isrc, candidate] of byIsrc) {
+    const bundle = outcome.bundles.get(isrc);
+
+    if (!bundle) {
+      // Apple has no song for this ISRC — a clean TRIED (base cooldown), re-checkable later.
+      await recordAttempt(candidate.trackId, "apple_music", "tried");
+      unresolved.push(candidate.trackId);
+      continue;
+    }
+
+    // A catalogue row has no `findings` row — write the URL alone (no lastmod to bump).
+    await setAppleMusicUrl(candidate.trackId, bundle.songUrl, false);
+    await recordAttempt(candidate.trackId, "apple_music", "done");
+    resolved.push({ trackId: candidate.trackId, url: bundle.songUrl });
+
+    if (candidate.albumId && !albumsSeen.has(candidate.albumId)) {
+      albumsSeen.add(candidate.albumId);
+      factsQueue.push(candidate);
+    }
+  }
+
+  // Facts, once per NEW album the drain encountered — a single-ISRC oracle read each, paced and
+  // bounded, and only for albums whose row still lacks facts.
+  albumFactsWritten += await drainCatalogueAlbumFacts(factsQueue, now);
+
+  return empty({});
+}
+
+/**
+ * Resolve + store album facts for up to {@link CATALOGUE_FACTS_MAX_PER_PASS} of the given
+ * candidates whose album row still needs them, one paced single-ISRC oracle read each. Returns
+ * how many album rows were written. Consults the breaker/meter before each call; a trip stops the
+ * facts drain early (the URLs are already written — facts catch up on a later pass).
+ */
+async function drainCatalogueAlbumFacts(
+  candidates: CatalogueAppleCandidate[],
+  now: number,
+): Promise<number> {
+  if (candidates.length === 0) {
+    return 0;
+  }
+
+  // Pre-filter to the albums that actually need facts (`apple_album_id is null`), in ONE read, so
+  // we never spend a single-ISRC call on an album already stamped.
+  const db = await getDb();
+  const byTrack = new Map(candidates.map((candidate) => [candidate.trackId, candidate]));
+  const placeholders = candidates.map(() => "?").join(", ");
+  const need = await db.execute({
+    args: candidates.map((candidate) => candidate.trackId),
+    sql: `select t.track_id
+          from tracks t
+          join albums a on a.id = t.album_id
+          where t.track_id in (${placeholders}) and a.apple_album_id is null`,
+  });
+
+  const needing = typedRows<{ track_id: string }>(need.rows)
+    .map((row) => byTrack.get(row.track_id))
+    .filter((candidate): candidate is CatalogueAppleCandidate => candidate !== undefined)
+    .slice(0, CATALOGUE_FACTS_MAX_PER_PASS);
+
+  let written = 0;
+  let first = true;
+
+  for (const candidate of needing) {
+    if (!(await areAppleCallsAllowed(now)) || !(await isAppleCallBudgetAvailable(now))) {
+      break;
+    }
+
+    if (!first) {
+      await delay(APPLE_MUSIC_DELAY_MS);
+    }
+    first = false;
+
+    await recordAppleCall(now);
+    const outcome = await appleCatalogLookupByIsrc(candidate.isrc);
+
+    if (!outcome.configured) {
+      break;
+    }
+
+    if (!outcome.ok) {
+      await recordAppleAuthOutcome(appleOutcomeKind(outcome), now);
+      break;
+    }
+
+    await recordAppleAuthOutcome("ok", now);
+
+    if (outcome.bundle && (await storeAlbumFactsForTrack(candidate.trackId, outcome.bundle))) {
+      written += 1;
+    }
+  }
+
+  return written;
 }
 
 // One pass never handles more than MAX_BATCH eligible findings, so a single

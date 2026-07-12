@@ -443,6 +443,12 @@ export async function backfillDiscogsCommand(
 }
 
 export type AppleMusicBackfillResult = {
+  // Album-fact rows written once this pass (recordLabel/upc/artwork/palette) off the
+  // single-ISRC oracle's canonical album — the second half of the Apple read (RFC U1).
+  albumFactsWritten: number;
+  // True when the pass STOPPED on the cross-cutting Apple breaker (a suspended token / a spent
+  // call budget) rather than a 429.
+  breakerTripped: boolean;
   // False when the Worker's MusicKit secrets are unset — the leg is a no-op this tick.
   configured: boolean;
   dryRun: boolean;
@@ -487,6 +493,38 @@ export async function backfillAppleMusicCommand(
 
   return adminApiPost<AppleMusicBackfillResult>(
     `/api/admin/backfill/apple-music?${params.toString()}`,
+  );
+}
+
+export type AppleCatalogueBackfillResult = {
+  albumFactsWritten: number;
+  // True when the pass STOPPED on the cross-cutting Apple breaker (suspended token / spent budget).
+  breakerTripped: boolean;
+  configured: boolean;
+  dryRun: boolean;
+  failed: Array<{ error: string; trackId: string }>;
+  failedCount: number;
+  // True when the pass STOPPED on the Apple 429 rate-limit circuit breaker.
+  rateLimited: boolean;
+  resolved: Array<{ trackId: string; url: string }>;
+  resolvedCount: number;
+  // Catalogue ISRCs Apple has no song for (a clean no-match, re-checkable later).
+  unresolved: string[];
+  unresolvedCount: number;
+};
+
+// One bounded pass of the Apple CATALOGUE drain (RFC U1) — the catalogue sibling of
+// `backfillAppleMusicCommand`. The Worker batches uncertified rows' ISRCs (≤25/request) into the
+// catalog oracle for the URL, and resolves each NEW album's facts once. No cursor: the worklist is
+// a fresh reliability-gated anti-join each tick, so the CLI loops until a pass resolves nothing.
+export async function backfillAppleCatalogueCommand(
+  limit: number,
+  dryRun: boolean,
+): Promise<AppleCatalogueBackfillResult> {
+  const params = new URLSearchParams({ dryRun: String(dryRun), limit: String(limit) });
+
+  return adminApiPost<AppleCatalogueBackfillResult>(
+    `/api/admin/backfill/apple-catalogue?${params.toString()}`,
   );
 }
 

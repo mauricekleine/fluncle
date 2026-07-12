@@ -2047,6 +2047,19 @@ function addAdminCommands(program: Command): void {
       await runBackfillAppleMusic(options, backfillAppleMusicCommand);
     });
 
+  // `backfill_apple_catalogue` → `admin backfills apple-catalogue`. The catalogue sibling:
+  // batched Apple URL drain over uncertified rows + single-ISRC album facts (RFC musickit U1).
+  backfill
+    .command("apple-catalogue")
+    .description("Resolve Apple URLs + album facts for catalogue tracks (batched exact ISRC)")
+    .option("--dry-run", "Report the eligible set without resolving or writing", false)
+    .option("--limit <limit>", "Max catalogue rows to resolve", "50")
+    .option("--json", "Print JSON", false)
+    .action(async (options: BackfillSyncOptions) => {
+      const { backfillAppleCatalogueCommand } = await import("./commands/admin-tracks");
+      await runBackfillAppleCatalogue(options, backfillAppleCatalogueCommand);
+    });
+
   // `backfill_artists` → `admin backfills artists`. Back-fills the artist entity
   // tables (artists + track_artists) for existing findings that predate Unit 1.
   backfill
@@ -2796,7 +2809,9 @@ async function runBackfillAppleMusic(
   let cursor: string | undefined;
   let dryRun = options.dryRun;
   let throttled = false;
+  let breakerTripped = false;
   let configured = true;
+  let albumFactsWritten = 0;
 
   // The cap is on findings actually HANDLED (resolved + unresolved + failed); skips
   // don't count, so the loop keeps draining cursors past cooling-down/done findings
@@ -2806,6 +2821,7 @@ async function runBackfillAppleMusic(
     const result = await backfillAppleMusicCommand(remaining, options.dryRun, cursor);
     dryRun = result.dryRun;
     configured = result.configured;
+    albumFactsWritten += result.albumFactsWritten;
     resolved.push(...result.resolved);
     unresolved.push(...result.unresolved);
     failed.push(...result.failed);
@@ -2814,13 +2830,20 @@ async function runBackfillAppleMusic(
     if (!options.json) {
       const verb = result.dryRun ? "would resolve" : "resolved";
       console.log(
-        `  …${verb} ${result.resolvedCount}; ${result.unresolvedCount} unresolved; ${result.failedCount} failed; ${result.skippedCount} skipped`,
+        `  …${verb} ${result.resolvedCount}; ${result.unresolvedCount} unresolved; ${result.failedCount} failed; ${result.skippedCount} skipped; ${result.albumFactsWritten} album facts`,
       );
     }
 
     if (!result.configured) {
       // The Worker's MusicKit secrets are unset — the leg is a no-op. Stop looping; the
       // server already stopped the pass and nulled the cursor.
+      break;
+    }
+
+    if (result.breakerTripped) {
+      // The cross-cutting Apple breaker is tripped (a suspended token) or its call budget is
+      // spent. Stop looping — the next tick resumes once it cools down / the operator resets it.
+      breakerTripped = true;
       break;
     }
 
@@ -2841,6 +2864,8 @@ async function runBackfillAppleMusic(
   if (options.json) {
     printSweepJson(
       {
+        albumFactsWritten,
+        breakerTripped,
         configured,
         dryRun,
         failed,
@@ -2866,7 +2891,7 @@ async function runBackfillAppleMusic(
 
   const verb = dryRun ? "Would resolve" : "Resolved";
   console.log(
-    `${verb} ${resolved.length} Apple Music URL(s); ${unresolved.length} unresolved; ${failed.length} failed; ${skipped.length} skipped.`,
+    `${verb} ${resolved.length} Apple Music URL(s); ${unresolved.length} unresolved; ${failed.length} failed; ${skipped.length} skipped; ${albumFactsWritten} album facts.`,
   );
 
   for (const item of resolved) {
@@ -2875,6 +2900,99 @@ async function runBackfillAppleMusic(
 
   for (const item of failed) {
     console.log(`  ${item.logId}: ${item.error}`);
+  }
+
+  if (failed.length > 0) {
+    process.exitCode = 1;
+  }
+}
+
+async function runBackfillAppleCatalogue(
+  options: BackfillSyncOptions,
+  backfillAppleCatalogueCommand: typeof import("./commands/admin-tracks").backfillAppleCatalogueCommand,
+): Promise<void> {
+  const limit = parseListLimit(options.limit);
+  const resolved: Array<{ trackId: string; url: string }> = [];
+  const unresolved: string[] = [];
+  const failed: Array<{ error: string; trackId: string }> = [];
+  let dryRun = options.dryRun;
+  let throttled = false;
+  let breakerTripped = false;
+  let configured = true;
+  let albumFactsWritten = 0;
+
+  // No cursor: the catalogue worklist self-drains by reliability, so the CLI loops until a pass
+  // resolves nothing (the worklist is empty this window) or a breaker stops it.
+  while (resolved.length + unresolved.length + failed.length < limit) {
+    const remaining = limit - (resolved.length + unresolved.length + failed.length);
+    const result = await backfillAppleCatalogueCommand(remaining, options.dryRun);
+    dryRun = result.dryRun;
+    configured = result.configured;
+    albumFactsWritten += result.albumFactsWritten;
+    resolved.push(...result.resolved);
+    unresolved.push(...result.unresolved);
+    failed.push(...result.failed);
+
+    if (!options.json) {
+      const verb = result.dryRun ? "would resolve" : "resolved";
+      console.log(
+        `  …${verb} ${result.resolvedCount}; ${result.unresolvedCount} unresolved; ${result.failedCount} failed; ${result.albumFactsWritten} album facts`,
+      );
+    }
+
+    if (!result.configured) {
+      break;
+    }
+
+    if (result.breakerTripped) {
+      breakerTripped = true;
+      break;
+    }
+
+    if (result.rateLimited) {
+      throttled = true;
+      break;
+    }
+
+    // A pass that resolved nothing (and hit no error) drained the eligible worklist this window.
+    if (result.resolvedCount === 0 && result.unresolvedCount === 0 && result.failedCount === 0) {
+      break;
+    }
+  }
+
+  if (options.json) {
+    printSweepJson(
+      {
+        albumFactsWritten,
+        breakerTripped,
+        configured,
+        dryRun,
+        failed,
+        rateLimited: throttled,
+        resolved,
+        resolvedCount: resolved.length,
+        unresolved,
+        unresolvedCount: unresolved.length,
+      },
+      failed.length,
+    );
+    return;
+  }
+
+  if (!configured) {
+    console.log(
+      "Apple catalogue backfill is not configured (the Worker's MusicKit secrets are unset) — nothing resolved.",
+    );
+    return;
+  }
+
+  const verb = dryRun ? "Would resolve" : "Resolved";
+  console.log(
+    `${verb} ${resolved.length} catalogue Apple URL(s); ${unresolved.length} unresolved; ${failed.length} failed; ${albumFactsWritten} album facts.`,
+  );
+
+  for (const item of failed) {
+    console.log(`  ${item.trackId}: ${item.error}`);
   }
 
   if (failed.length > 0) {

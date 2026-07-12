@@ -403,6 +403,47 @@ export const setCaptureBudget = oc
   )
   .output(CaptureBudgetStateSchema.extend({ ok: z.literal(true) }));
 
+// ─────────────────────────────────────────────────────────────────────────────
+// THE APPLE BREAKER — the operator's reset for the cross-cutting Apple failure-regime breaker
+// (RFC musickit-second-authority, Cross-cutting). docs/track-lifecycle.md.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** The Apple breaker's readout — what the reset returns, and observability shows. */
+export const AppleBreakerStateSchema = z
+  .object({
+    /** Consecutive 401/403 responses seen since the last success (0 after a reset / a success). */
+    consecutiveAuthFailures: z.number(),
+    /** Milliseconds left on the cooldown while tripped; 0 when not tripped. */
+    cooldownRemainingMs: z.number(),
+    /** True ⇒ every Apple-touching path short-circuits (no call) until the cooldown / a reset. */
+    tripped: z.boolean(),
+    /** ISO of when it last tripped, or null when not tripped. */
+    trippedAt: z.string().nullable(),
+  })
+  .meta({ id: "AppleBreakerState" });
+
+/**
+ * `reset_apple_breaker` → `POST /admin/catalogue/apple-breaker/reset` (operationId
+ * `resetAppleBreaker`).
+ *
+ * OPERATOR tier. Clears the cross-cutting Apple failure-regime breaker: K consecutive 401/403
+ * responses (a suspended developer token) trip it, and while tripped EVERY Apple-touching path —
+ * the two sweeps here, and later the live preview rung + editorial fuel — short-circuits until a
+ * cooldown elapses. This lifts the trip early (once the token is fixed) and zeroes the streak,
+ * returning the breaker's state. Operator tier because it re-arms a spend-adjacent external
+ * integration a machine should not silently un-brake — the `set_capture_budget` neighbour's rule.
+ */
+export const resetAppleBreaker = oc
+  .route({
+    method: "POST",
+    operationId: "resetAppleBreaker",
+    path: "/admin/catalogue/apple-breaker/reset",
+    summary: "Clear the Apple failure-regime breaker (operator)",
+    tags: ["Admin"],
+  })
+  .input(z.object({}))
+  .output(AppleBreakerStateSchema.extend({ ok: z.literal(true) }));
+
 /** The `admin-catalogue` domain's ops, merged into the root contract by `./index.ts`. */
 export const adminCatalogueContract = {
   crawl_catalogue: crawlCatalogue,
@@ -410,5 +451,6 @@ export const adminCatalogueContract = {
   get_crawl_status: getCrawlStatus,
   list_catalogue_tracks: listCatalogueTracks,
   rank_catalogue: rankCatalogue,
+  reset_apple_breaker: resetAppleBreaker,
   set_capture_budget: setCaptureBudget,
 };

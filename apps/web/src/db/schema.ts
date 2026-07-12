@@ -109,6 +109,26 @@ export const tracks = sqliteTable(
     // does — a missing link is honest, a wrong one is not).
     appleMusicUrl: text("apple_music_url"),
     artistsJson: text("artists_json").notNull(),
+    // The Apple Music backfill's per-ROW reliability state (RFC musickit-second-authority,
+    // U1). These MOVED here from `findings` — and the move is the whole point. `apple_music_url`
+    // is CATALOGUE identity (it describes the recording, true of an uncertified track), so the
+    // Apple sweep now drains CATALOGUE rows too (a `tracks` row with no `findings` row). The
+    // shipped bookkeeping lived on `findings`, where a catalogue row has no row at all —
+    // `readReliability`/`recordAttempt` hard-coded `findings` and silently updated zero rows on
+    // a catalogue track, so a naive catalogue sweep would re-hit every ISRC every tick forever.
+    // Putting the bookkeeping on `tracks` (where the output already lives) is the capture-
+    // side-channel precedent, not the Discogs one: it makes the sweep resumable over the WHOLE
+    // catalogue. Same four-column shape + rules as the surviving `backfill_*` sets on `findings`
+    // (see the block there): *AttemptedAt drives the failure-scaled cooldown, *Failures is the
+    // consecutive-failure streak, *DoneAt stamps when the ISRC RESOLVED to a URL (a clean
+    // no-match is a `tried`, re-checkable if Apple's catalogue grows). Discogs/Last.fm/note stay
+    // on `findings` — they are finding-only sweeps. NULL/0 on rows that predate the columns.
+    // The one-time carry of existing findings' Apple state lives in scripts/backfill-apple-
+    // reliability.ts (gated once, the `labels_seeded_at` precedent).
+    backfillAppleMusicAttemptedAt: text("backfill_apple_music_attempted_at"),
+    backfillAppleMusicAttempts: integer("backfill_apple_music_attempts").notNull().default(0),
+    backfillAppleMusicDoneAt: text("backfill_apple_music_done_at"),
+    backfillAppleMusicFailures: integer("backfill_apple_music_failures").notNull().default(0),
     bpm: real("bpm"),
     // The analyzer's confidence in `bpm` (0..1) and where it came from (analysis
     // provenance, RFC bpm-key-accuracy). `bpmSource` is the analyzer's `bpmSource`
@@ -1894,11 +1914,32 @@ export const labels = sqliteTable("labels", {
 // disambiguation answer is the alias map docs/label-entity.md already records as the
 // eventual fix for both entities; it is not a normalizer's job. See docs/album-entity.md.
 export const albums = sqliteTable("albums", {
+  // ── Apple Music ALBUM FACTS (RFC musickit-second-authority, U1) ────────────────────────
+  // Written ONCE per album by the Apple sweep, off the single-ISRC oracle's canonical-album
+  // picker (`appleCatalogLookupByIsrc` → `canonicalAlbum`). recordLabel is an ALBUM attribute,
+  // so storing it at album grain fixes "recordLabel differs per pressing" structurally: U2
+  // reads `record_label_raw` as its second label authority, U3 reads the artwork template as a
+  // ≥1920 cover source. NULL-safe: an honest miss (no album included, or a compilation-only
+  // pressing set) writes nothing, and `apple_album_id IS NULL` is the "not yet fetched" gate
+  // that makes the fetch once-per-album. `artwork_url_template` keeps Apple's `{w}x{h}` tokens
+  // intact (substituted by `appleArtworkUrl`); the palette (`artwork_bg_color`/`text_color1..4`)
+  // is what Apple derives from the cover. `upc` is the album's barcode.
+  appleAlbumId: text("apple_album_id"),
+  artworkBgColor: text("artwork_bg_color"),
+  artworkHeight: integer("artwork_height"),
+  artworkTextColor1: text("artwork_text_color1"),
+  artworkTextColor2: text("artwork_text_color2"),
+  artworkTextColor3: text("artwork_text_color3"),
+  artworkTextColor4: text("artwork_text_color4"),
+  artworkUrlTemplate: text("artwork_url_template"),
+  artworkWidth: integer("artwork_width"),
   createdAt: text("created_at").notNull(),
   id: text("id").primaryKey(),
   // The display name — the first raw `tracks.album` spelling seen for this slug.
   name: text("name").notNull(),
+  recordLabelRaw: text("record_label_raw"),
   slug: text("slug").notNull().unique(),
+  upc: text("upc"),
   updatedAt: text("updated_at").notNull(),
 });
 

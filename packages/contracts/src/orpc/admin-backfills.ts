@@ -182,6 +182,12 @@ export const backfillAppleMusic = oc
   )
   .output(
     z.object({
+      // Album-fact rows written once this pass (recordLabel/upc/artwork/palette) off the
+      // single-ISRC oracle's canonical album — the second half of the Apple read (RFC U1).
+      albumFactsWritten: z.number(),
+      // True when the pass STOPPED because the cross-cutting Apple breaker is tripped (K
+      // consecutive 401/403 — a suspended developer token) or its call budget is spent.
+      breakerTripped: z.boolean(),
       // False when the MusicKit secrets are unset — the leg is a no-op this tick.
       configured: z.boolean(),
       dryRun: z.boolean(),
@@ -199,6 +205,73 @@ export const backfillAppleMusic = oc
       skipped: z.array(z.string()),
       skippedCount: z.number(),
       // Findings whose ISRC Apple has no song for (a clean no-match, re-checkable later).
+      unresolved: z.array(z.string()),
+      unresolvedCount: z.number(),
+    }),
+  );
+
+/** A resolved catalogue row (`{ trackId, url }`) — the batched drain keys by track, not log id. */
+const AppleCatalogueResolvedSchema = z
+  .object({
+    trackId: z.string(),
+    url: z.string(),
+  })
+  .meta({ id: "AppleCatalogueResolved" });
+
+/** A failed catalogue row (`{ error, trackId }`). */
+const AppleCatalogueFailedSchema = z
+  .object({
+    error: z.string(),
+    trackId: z.string(),
+  })
+  .meta({ id: "AppleCatalogueFailed" });
+
+/**
+ * `backfill_apple_catalogue` → `POST /admin/backfill/apple-catalogue` (operationId
+ * `backfillAppleCatalogue`).
+ *
+ * Agent tier (`adminAuth`) — the catalogue sibling of `backfill_apple_music` (RFC U1). One
+ * bounded, reliability-gated pass over CATALOGUE tracks (a `tracks` row with no `findings` row)
+ * that carry an ISRC but no Apple URL: the BATCHED oracle (≤25 ISRCs/request) resolves the URL,
+ * and the single-ISRC oracle populates each NEW album's second-authority facts once. No cursor —
+ * the worklist is a fresh reliability-gated anti-join each tick, so a drained row simply drops
+ * out. NO-OP until the MusicKit secrets are provisioned (`configured: false`). It writes catalogue
+ * identity only (a URL on `tracks`, facts on `albums`) — never a certification — so it stays
+ * agent-allowed, exactly like `rank_catalogue`.
+ */
+export const backfillAppleCatalogue = oc
+  .route({
+    inputStructure: "detailed",
+    method: "POST",
+    operationId: "backfillAppleCatalogue",
+    path: "/admin/backfill/apple-catalogue",
+    summary: "Back-fill Apple URLs + album facts over catalogue tracks by exact ISRC (batched)",
+    tags: ["Admin"],
+  })
+  .input(
+    z.object({
+      query: z.object({
+        dryRun: z.string().optional(),
+        limit: z.string().optional(),
+      }),
+    }),
+  )
+  .output(
+    z.object({
+      // Album-fact rows written once this pass (recordLabel/upc/artwork/palette).
+      albumFactsWritten: z.number(),
+      // True when the pass STOPPED on the cross-cutting Apple breaker (suspended token / spent
+      // call budget) rather than a 429.
+      breakerTripped: z.boolean(),
+      configured: z.boolean(),
+      dryRun: z.boolean(),
+      failed: z.array(AppleCatalogueFailedSchema),
+      failedCount: z.number(),
+      ok: z.literal(true),
+      rateLimited: z.boolean(),
+      resolved: z.array(AppleCatalogueResolvedSchema),
+      resolvedCount: z.number(),
+      // Catalogue ISRCs Apple has no song for (a clean no-match, re-checkable later).
       unresolved: z.array(z.string()),
       unresolvedCount: z.number(),
     }),
@@ -264,6 +337,7 @@ export const backfillLabelImages = oc
 
 /** The `admin-backfills` domain's ops, merged into the root contract by `./index.ts`. */
 export const adminBackfillsContract = {
+  backfill_apple_catalogue: backfillAppleCatalogue,
   backfill_apple_music: backfillAppleMusic,
   backfill_discogs: backfillDiscogs,
   backfill_label_images: backfillLabelImages,
