@@ -117,9 +117,9 @@ The operator merge op (`merge_label`, operator tier, verb_noun): re-point `track
 
 ### U3b — owned masters (staged; the REF-05 line)
 
-Clone the label-image state machine onto `albums` (`image_key`, `image_state`, `image_source`, `image_attempted_at`, `image_failures`). **Master sources: Cover Art Archive by MB release (redistribution-safe, `in_release_id` already on crawled rows) first; Spotify's 640² as the floor. Size-capped at ≤1500².** Stored at `albums/<slug>.<ext>` in `fluncle-videos`; `?v=<image_updated_at>` bust on replace (transform caches survive zone purges — the video-variants lesson); cache `immutable`.
+Clone the label-image state machine onto `albums` (`image_key`, `image_state`, `image_source`, `image_attempted_at`, `image_failures`) — and onto the artist-image pipeline for `artists/<slug>.<ext>` (decision A's ruled scope extension). **Master sources (per decision A's ruling): Apple's artwork template downscaled to ≤1200² at ingest, first; Cover Art Archive by MB release next; Spotify's 640² as the floor.** Stored at `albums/<slug>.<ext>` in `fluncle-videos`; `?v=<image_updated_at>` bust on replace (transform caches survive zone purges — the video-variants lesson); cache `immutable`.
 
-**Apple bytes are NOT stored** — this is REF-05's precedent (the shipped ruling that moved third-party copyrighted media off the world-served bucket as "a copyright exposure"; a hotlinkable 3000² master archive is a materially different exposure than art downscaled and composited inside a video). Apple's full-res stays render-time-only (U3a). The operator can overrule this in decision A — the tradeoffs are stated there, including the takedown blast radius.
+**The 3000² original is never stored or served** — the derivative cap is the REF-05-conscious line (a hotlinkable full-res Apple-master archive is a materially different exposure than 1200² display art). Apple's full-res stays render-time-only (U3a). The ingest downscale is a one-time server-side resize before the R2 put (builder's call on mechanism, quality-tested); `image_source` stamps `apple|coverart|spotify`.
 
 **Serving:** owned masters via **Cloudflare Images URL transforms** (`/cdn-cgi/image/…` — a separate one-time zone toggle from the video `/cdn-cgi/media` one; decision B), fixed ladder 64/300/640/1200. **The arithmetic the operator flips the toggle on:** transforms bill per _unique_ (source × size) per month above 5,000 free — the ladder is 4 sizes, so cost ≈ (albums _viewed that month_ × 4 − 5,000) × $0.0005; at 1,250 viewed albums/month it is $0; at 5,000 viewed it is ~$7.50/month; catalogue _size_ is irrelevant, only traffic counts. R2 storage: ~free at current scale (~$2/month at 100k albums).
 
@@ -154,9 +154,11 @@ The shipped client backs off only on 429; **a developer-token suspension surface
 
 Settled by canon, not decisions (cited, demoted): fuzzy-ISRC supply rejected (#540's exact-or-nothing rail); catalogue links stored-not-rendered (certification rail + Unlit Rule); `labels.name` authority order (the ratified operator > curated > free-text hierarchy); preview rung order (a strict quality upgrade).
 
-**A. Artwork risk posture (the one real legal call).** Recommended: the REF-05-consistent middle — owned masters ≤1500² from CAA/Spotify only; Apple 3000² render-time-only, never persisted. Bolder (own Apple bytes on the public bucket) reverses REF-05 and creates a hotlinkable Apple-master archive with a personal takedown blast radius — available, named, not recommended. Timid (no owned masters) abandons the resilience goal.
-**B. The Cloudflare Images zone toggle** — one-time, billing-bearing (arithmetic in U3b; ~$0 at current traffic). Operator flips it before U3b merges.
-**C. Public alias visibility (new — the draft missed it).** Do _confirmed_ label aliases feed the public `/label` page's `Organization` JSON-LD as `alternateName` (a real AEO lever: "also known as Med School" helps an engine resolve the entity)? Recommended: yes for `confirmed`, never for `candidate`/`hint`; admin-only until confirmed.
+All three RULED by the operator, 2026-07-12:
+
+**A. Artwork risk posture — RULED: the 1200-derivative middle.** Owned masters are **downscaled derivatives capped at 1200²**, stored at `albums/<slug>.<ext>` (and `artists/<slug>.<ext>`) in the existing `fluncle-videos` bucket behind found.fluncle.com (the label-logo precedent; no new bucket). Source ranking for the derivative: **Apple's artwork template (downscaled to ≤1200 at ingest) > Cover Art Archive > Spotify 640**. The 3000² original is NEVER stored or served — the video render fetches it at render time, in-memory, never persisted (stored 1200 for the web, ephemeral 3000 for the films). Honest posture: a downscaled copy is still a copy, but it is the non-substitutional display posture, and the operator's **label-outreach program** (ROADMAP, week of 2026-07-13) is the path that converts it to blessed. **Scope extension (ruled): artist images join U3b** — Apple artist objects carry artwork; it slots into the existing artist-image pipeline as a higher-res source. Labels stay Discogs/Wikidata-only (Apple has no label entity).
+**B. The Cloudflare Images zone toggle — CONFIRMED.** Operator flips it before U3b merges (~$0 at current traffic; arithmetic in U3b).
+**C. Public alias visibility — CONFIRMED.** `confirmed` label aliases feed the `/label` page's `Organization` JSON-LD as `alternateName`; `candidate`/`hint` stay admin-only.
 
 ## Acceptance criteria
 
@@ -165,7 +167,7 @@ Settled by canon, not decisions (cited, demoted): fuzzy-ISRC supply rejected (#5
 - **U2a:** alias table + guardrails (denylist, MB corroboration) unit-tested; the re-mint regression test; board section strings passed the copywriting register.
 - **U2b:** merge op with `ruled_at` precedence + stop-and-ask tested; 301 + canonical sitemap verified live on a real merged pair.
 - **U3a:** **before/after rendered frames compared by eye** (the operator's view-frames law); mobile + video pipeline verified consuming the upgraded DTO URL.
-- **U3b:** a replaced master's `?v` bust proven against cached renditions; `image_source` provenance stamped; a grep-style test proves no Apple-sourced bytes are written to R2.
+- **U3b:** a replaced master's `?v` bust proven against cached renditions; `image_source` provenance stamped; a test proves every stored master is ≤1200 on its longest side (the decision-A cap) and that no code path writes the un-downscaled original to R2; artist images verified through the same cap.
 - **U4:** a finding with a dead Deezer preview plays via the exact rung; the breaker short-circuit falls through to fuzzy-iTunes; timeout fall-through tested.
 - **U5:** the n-gram gate rejects a seeded verbatim-echo fixture to empty and passes a clean one; `sources[]` carries the Apple URL.
 - Docs updated per unit: `label-entity.md`, `the-ear.md` (ISRC coverage + force_capture), a new `docs/album-artwork.md` (or a `video-variants.md` sibling section), `track-lifecycle.md` touchpoints. All quality gates green per unit.
