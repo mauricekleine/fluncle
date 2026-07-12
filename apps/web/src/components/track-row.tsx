@@ -15,7 +15,7 @@ import {
 } from "@fluncle/ui/components/dropdown-menu";
 import { siteUrl } from "@/lib/fluncle-links";
 import { formatAlbumDuration, formatDuration } from "@/lib/format";
-import { spotifyAlbumImageAtSize } from "@/lib/media";
+import { albumCoverAtSize } from "@/lib/media";
 import { type FeedItem, mixtapeCoverUrl, mixtapeDisplayTitle } from "@/lib/mixtapes";
 import { type Track } from "@/lib/tracks";
 import { cn } from "@/lib/utils";
@@ -115,7 +115,7 @@ export function TrackRow({ track, trackNumber }: { track: FeedItem; trackNumber:
         >
           <TrackArtwork
             alt={`${trackLine} cover art`}
-            src={spotifyAlbumImageAtSize(track.albumImageUrl, "small")}
+            src={albumCoverAtSize(track.albumImageUrl, "small")}
           />
           <span aria-hidden="true" className="track-play-glyph">
             <PlayIcon weight="fill" />
@@ -124,7 +124,7 @@ export function TrackRow({ track, trackNumber }: { track: FeedItem; trackNumber:
       ) : (
         <TrackArtwork
           alt={`${trackLine} cover art`}
-          src={spotifyAlbumImageAtSize(track.albumImageUrl, "small")}
+          src={albumCoverAtSize(track.albumImageUrl, "small")}
         />
       )}
 

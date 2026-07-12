@@ -3,6 +3,7 @@ import { type ArtistSocialPlatform, ARTIST_SOCIAL_PLATFORMS } from "../artist-so
 import { validateSocialUrlForPlatform } from "./artist-resolution";
 import { getDb, typedRow, typedRows } from "./db";
 import { logEvent } from "./log";
+import { bestArtistAvatarUrl } from "../media";
 import { fetchArtistImages } from "./spotify";
 import { fold } from "./track-match";
 
@@ -199,6 +200,8 @@ export async function listArtistsWithFindingCounts(): Promise<ArtistIndexEntry[]
   const db = await getDb();
   const result = await db.execute({
     sql: `select a.name as name, a.slug as slug, a.image_url as image_url,
+                 a.image_key as image_key, a.image_state as image_state,
+                 a.image_updated_at as image_updated_at,
                  count(t.track_id) as finding_count,
                  max(t.added_at) as lastmod,
                  (select t2.album_image_url
@@ -225,7 +228,13 @@ export async function listArtistsWithFindingCounts(): Promise<ArtistIndexEntry[]
       entries.push({
         coverImageUrl: optionalText(row["cover_url"]),
         findingCount,
-        imageUrl: optionalText(row["image_url"]),
+        // The OWNED avatar master (RFC U3b) when resolved, else the raw Spotify image_url.
+        imageUrl: bestArtistAvatarUrl({
+          imageKey: optionalText(row["image_key"]),
+          imageState: optionalText(row["image_state"]),
+          imageUpdatedAt: optionalText(row["image_updated_at"]),
+          imageUrl: optionalText(row["image_url"]),
+        }),
         lastmod: optionalText(row["lastmod"]),
         name,
         slug,
@@ -257,7 +266,9 @@ async function listArtistsByEntity(
   const db = await getDb();
   const result = await db.execute({
     args: [entityId],
-    sql: `select distinct a.name as name, a.slug as slug, a.image_url as image_url
+    sql: `select distinct a.name as name, a.slug as slug, a.image_url as image_url,
+                 a.image_key as image_key, a.image_state as image_state,
+                 a.image_updated_at as image_updated_at
           from artists a
           join track_artists ta on ta.artist_id = a.id
           join tracks on tracks.track_id = ta.track_id
@@ -266,13 +277,24 @@ async function listArtistsByEntity(
           order by a.name collate nocase asc`,
   });
 
-  return typedRows<{ image_url: string | null; name: string; slug: string }>(result.rows).map(
-    (row) => ({
-      imageUrl: optionalText(row.image_url),
-      name: row.name,
-      slug: row.slug,
+  return typedRows<{
+    image_key: string | null;
+    image_state: string | null;
+    image_updated_at: string | null;
+    image_url: string | null;
+    name: string;
+    slug: string;
+  }>(result.rows).map((row) => ({
+    // The OWNED avatar master (RFC U3b) when resolved, else the raw Spotify image_url.
+    imageUrl: bestArtistAvatarUrl({
+      imageKey: row.image_key,
+      imageState: row.image_state,
+      imageUpdatedAt: row.image_updated_at,
+      imageUrl: row.image_url,
     }),
-  );
+    name: row.name,
+    slug: row.slug,
+  }));
 }
 
 export async function listArtistsByLabel(labelId: string): Promise<ArtistChip[]> {

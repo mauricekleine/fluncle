@@ -5,7 +5,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { type ReactNode } from "react";
 import { AdminShell } from "@/components/admin/admin-shell";
 import { StatTile } from "@/components/admin/stat-tile";
-import { spotifyAlbumImageAtSize } from "@/lib/media";
+import { albumCoverAtSize } from "@/lib/media";
 import { isAdminRequest } from "@/lib/server/admin-auth";
 import { type CostInsights, getCostInsights } from "@/lib/server/costs";
 
@@ -191,8 +191,7 @@ function FindingSection({ findings }: { findings: CostInsights["topFindings"] })
         <ol className="divide-y divide-border rounded-lg border border-border">
           {findings.map((finding) => {
             const cover =
-              spotifyAlbumImageAtSize(finding.albumImageUrl ?? undefined, "small") ??
-              "/fluncle-cover.png";
+              albumCoverAtSize(finding.albumImageUrl ?? undefined, "small") ?? "/fluncle-cover.png";
 
             return (
               <li className="flex items-center gap-3 px-3 py-2.5 sm:px-4" key={finding.trackId}>

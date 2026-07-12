@@ -4,7 +4,7 @@ import { BrandIcon } from "@/components/brand-icon";
 import { Button } from "@fluncle/ui/components/button";
 import { formatDate } from "@/lib/format";
 import {
-  spotifyAlbumImageAtSize,
+  albumCoverAtSize,
   trackMedia,
   videoCrop,
   videoCropPoster,
@@ -174,7 +174,7 @@ export function StoryView({
   const posterUrl =
     framePoster ??
     (!posterFailed ? media?.posterUrl : undefined) ??
-    spotifyAlbumImageAtSize(track.albumImageUrl, "large");
+    albumCoverAtSize(track.albumImageUrl, "large");
 
   useEffect(() => {
     if (!framePoster) {

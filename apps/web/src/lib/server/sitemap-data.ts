@@ -24,7 +24,7 @@
 // sitemap — exactly the invariant this file exists to hold. See docs/album-entity.md.
 
 import { formatSector } from "../log-id-shared";
-import { mixtapeSetVideoUrl, spotifyAlbumImageAtSize, trackMedia } from "../media";
+import { mixtapeSetVideoUrl, albumCoverAtSize, trackMedia } from "../media";
 import { mixtapeCoverUrl } from "../mixtapes";
 import { artistTitleLine, definitionalSentences } from "../log-prose";
 import {
@@ -71,8 +71,7 @@ function trackPage(row: TrackRow): SitemapLogPage {
   const artists = parseArtistsJson(row.artists_json);
   // Google Images cover: the Spotify album art (full size), falling back to the
   // rendered cover.jpg — mirrors the /log og:image choice, always a real URL.
-  const imageLoc =
-    spotifyAlbumImageAtSize(row.album_image_url ?? undefined, "large") ?? media.coverUrl;
+  const imageLoc = albumCoverAtSize(row.album_image_url ?? undefined, "large") ?? media.coverUrl;
 
   if (!row.video_url) {
     return { imageLoc, lastmod: row.lastmod, logId };
@@ -197,7 +196,7 @@ export async function collectSitemapBags(): Promise<SitemapBags> {
   const artists: SitemapArtist[] = artistEntries
     .filter((artist) => artist.findingCount >= ARTIST_INDEX_MIN_FINDINGS)
     .map((artist) => ({
-      imageLoc: spotifyAlbumImageAtSize(artist.coverImageUrl, "large"),
+      imageLoc: albumCoverAtSize(artist.coverImageUrl, "large"),
       lastmod: artist.lastmod,
       slug: artist.slug,
     }));
@@ -214,12 +213,12 @@ export async function collectSitemapBags(): Promise<SitemapBags> {
   // so a page that says "index me" is always in the sitemap, and one that says `noindex`
   // never is. A crawler-discovered label with enough tracks has a real page, and it is here.
   const labels: SitemapEntity[] = labelEntries.map((label) => ({
-    imageLoc: spotifyAlbumImageAtSize(label.coverImageUrl, "large"),
+    imageLoc: albumCoverAtSize(label.coverImageUrl, "large"),
     lastmod: label.lastmod,
     slug: label.slug,
   }));
   const albums: SitemapEntity[] = albumEntries.map((album) => ({
-    imageLoc: spotifyAlbumImageAtSize(album.coverImageUrl, "large"),
+    imageLoc: albumCoverAtSize(album.coverImageUrl, "large"),
     lastmod: album.lastmod,
     slug: album.slug,
   }));

@@ -19,7 +19,7 @@
 // shared across every link that names it (see the contract's note on why this is not an N+1).
 
 import { type GraphEntityKind, type GraphPreview, graphSignatureLine } from "../graph-prose";
-import { spotifyAlbumImageAtSize } from "../media";
+import { albumCoverAtSize } from "../media";
 import { getAlbumBySlug } from "./albums";
 import { getArtistBySlug } from "./artists";
 import { getPublicGalaxyBySlug } from "./galaxies-map";
@@ -40,7 +40,7 @@ const PREVIEW_COVER_CAP = 4;
  */
 function coversOf(findings: TrackListItem[], leadCover?: string): string[] {
   const covers = findings.flatMap((finding) => {
-    const cover = spotifyAlbumImageAtSize(finding.albumImageUrl, "small");
+    const cover = albumCoverAtSize(finding.albumImageUrl, "small");
 
     return cover ? [cover] : [];
   });

@@ -6,7 +6,7 @@ import { Button } from "@fluncle/ui/components/button";
 import { TrackArtwork } from "@/components/track-artwork";
 import { formatDuration } from "@/lib/format";
 import { formatKey, type KeyNotation } from "@/lib/key-notation";
-import { spotifyAlbumImageAtSize } from "@/lib/media";
+import { albumCoverAtSize } from "@/lib/media";
 import { stopPreview, usePreviewControls, usePreviewProgress } from "@/lib/preview-player";
 
 // The fixed-to-viewport preview panel for /mix (Beatport's now-playing bar, retinted
@@ -94,7 +94,7 @@ export function MixPreviewBar({
         >
           {isPlaying ? <PauseIcon className="size-4" /> : <PlayIcon className="size-4" />}
         </Button>
-        <TrackArtwork alt="" src={spotifyAlbumImageAtSize(active.albumImageUrl, "small")} />
+        <TrackArtwork alt="" src={albumCoverAtSize(active.albumImageUrl, "small")} />
         <div className="min-w-0 flex-1">
           {/* aria-live polite: announces the track on change. The ticking clock sits
               on the SEPARATE line below so it never spams the live region. */}

@@ -61,7 +61,7 @@ import {
   toFtsMatch,
   tokenize,
 } from "../search-query";
-import { labelLogoUrl } from "../media";
+import { bestArtistAvatarUrl, labelLogoUrl } from "../media";
 import { getDb, typedRow, typedRows } from "./db";
 import { embeddingVectorSql, parseEmbedding, toVectorProbe } from "./embedding";
 import { translateQuery } from "./search-llm";
@@ -215,7 +215,17 @@ async function ftsSearch(match: string, limit: number): Promise<SearchHit[]> {
  * LABEL's own logo R2 key (labels only; null/absent for artists + albums), which — resolved to a
  * URL — leads over the cover so a label reads as its real logo, not a borrowed sleeve.
  */
-type EntityRow = { image_url: string | null; logo_key?: string | null; name: string; slug: string };
+type EntityRow = {
+  // The OWNED avatar master columns (artists only; RFC U3b) — resolved to a CF Images URL that
+  // leads over the raw Spotify `image_url`, the label `logo_key` precedent one entity over.
+  image_key?: string | null;
+  image_state?: string | null;
+  image_updated_at?: string | null;
+  image_url: string | null;
+  logo_key?: string | null;
+  name: string;
+  slug: string;
+};
 
 /** How many jump targets one kind may offer beside the rows. */
 const ENTITY_LIMIT = 3;
@@ -238,7 +248,7 @@ const ENTITY_LIMIT = 3;
  */
 function entitySql(kind: SearchEntity["kind"], predicate: string): string {
   if (kind === "artist") {
-    return `select name, slug, image_url from artists
+    return `select name, slug, image_url, image_key, image_state, image_updated_at from artists
             where lower(name) ${predicate}
             order by length(name) asc, name asc
             limit ?`;
@@ -289,9 +299,18 @@ async function matchEntities(
   });
 
   return typedRows<EntityRow>(result.rows).map((row) => ({
-    // A label leads with its own logo; anything without one (album/artist, or a label the sweep
-    // hasn't resolved) falls back to the freshest cover exactly as before.
-    imageUrl: labelLogoUrl(row.logo_key) ?? row.image_url ?? undefined,
+    // An ARTIST leads with its OWN avatar master (RFC U3b) when resolved; a LABEL with its own
+    // logo; anything without one (album, or an unresolved artist/label) falls back to the raw
+    // Spotify avatar / freshest cover exactly as before.
+    imageUrl:
+      kind === "artist"
+        ? bestArtistAvatarUrl({
+            imageKey: row.image_key,
+            imageState: row.image_state,
+            imageUpdatedAt: row.image_updated_at,
+            imageUrl: row.image_url,
+          })
+        : (labelLogoUrl(row.logo_key) ?? row.image_url ?? undefined),
     kind,
     name: row.name,
     slug: row.slug,

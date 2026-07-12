@@ -335,10 +335,72 @@ export const backfillLabelImages = oc
     }),
   );
 
+/** A failed cover-master row (`{ error, slug }`). */
+const CoverMastersFailedSchema = z
+  .object({
+    error: z.string(),
+    slug: z.string(),
+  })
+  .meta({ id: "CoverMastersFailed" });
+
+/**
+ * `backfill_cover_masters` → `POST /admin/backfill/cover-masters` (operationId
+ * `backfillCoverMasters`).
+ *
+ * Agent tier (`adminAuth`): internal + reversible metadata enrichment (RFC U3b). It resolves an
+ * ALBUM or ARTIST (`?kind=album|artist`, default album) its OWN ≤1200²-capped cover derivative and
+ * stores it in R2 — no publish — up the source ladder (album: Apple template → Cover Art Archive →
+ * Spotify floor; artist: Spotify floor). The `label_images` precedent: one bounded, reliability-
+ * gated pass over the `pending` worklist, slug-cursored, the box's agent-token cron drives it.
+ * Returns `{ ok, kind, dryRun, resolved, resolvedCount, none, noneCount, failed, failedCount,
+ * nextCursor, rateLimited }` — `none` is the entities with no usable source (floored to the raw
+ * URL, terminal).
+ */
+export const backfillCoverMasters = oc
+  .route({
+    inputStructure: "detailed",
+    method: "POST",
+    operationId: "backfillCoverMasters",
+    path: "/admin/backfill/cover-masters",
+    summary: "Resolve owned ≤1200² cover masters (album/artist) into R2 (batched)",
+    tags: ["Admin"],
+  })
+  .input(
+    z.object({
+      query: z.object({
+        cursor: z.string().optional(),
+        dryRun: z.string().optional(),
+        // `album` (the 3-rung ladder) or `artist` (the Spotify floor). Default album. Tolerant
+        // string, clamped in-handler like `limit`/`dryRun` — never a 400 on a stray value.
+        kind: z.string().optional(),
+        limit: z.string().optional(),
+      }),
+    }),
+  )
+  .output(
+    z.object({
+      dryRun: z.boolean(),
+      failed: z.array(CoverMastersFailedSchema),
+      failedCount: z.number(),
+      // The kind this pass drained — echoed back so the CLI/cron reads honestly.
+      kind: z.enum(["album", "artist"]),
+      nextCursor: z.string().nullable(),
+      // Entities with no usable source anywhere — floored to the raw URL, terminal.
+      none: z.array(z.string()),
+      noneCount: z.number(),
+      ok: z.literal(true),
+      // Uniform with the label-images sweep; image CDNs are not throttled, so this never trips.
+      rateLimited: z.boolean(),
+      resolved: z.array(z.string()),
+      resolvedCount: z.number(),
+    }),
+  );
+
 /** The `admin-backfills` domain's ops, merged into the root contract by `./index.ts`. */
 export const adminBackfillsContract = {
   backfill_apple_catalogue: backfillAppleCatalogue,
   backfill_apple_music: backfillAppleMusic,
+  backfill_cover_masters: backfillCoverMasters,
   backfill_discogs: backfillDiscogs,
   backfill_label_images: backfillLabelImages,
   backfill_lastfm: backfillLastfm,

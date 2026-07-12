@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   FOUND_BASE,
-  spotifyAlbumImageAtSize,
+  albumCoverAtSize,
+  bestAlbumCoverUrl,
+  bestArtistAvatarUrl,
+  ownedCoverUrl,
   trackMedia,
   versionedObservationAudioUrl,
   videoAudioStripped,
@@ -233,47 +236,45 @@ describe("videoPoster", () => {
 // ab67616d00001e02 = 300², ab67616d00004851 = 64²). The helper swaps that prefix
 // to right-size a stored cover; these tests pin the codes (verified to resolve on
 // i.scdn.co) and guard the pass-through so a non-Spotify URL is never mangled.
-describe("spotifyAlbumImageAtSize", () => {
+describe("albumCoverAtSize", () => {
   const HASH = "18c0fd64aad5d4fb51a499b0";
   const stored = `https://i.scdn.co/image/ab67616d00001e02${HASH}`; // the 300² we store
 
   it("rewrites the size-code prefix to the small (64²) rendition", () => {
-    expect(spotifyAlbumImageAtSize(stored, "small")).toBe(
+    expect(albumCoverAtSize(stored, "small")).toBe(
       `https://i.scdn.co/image/ab67616d00004851${HASH}`,
     );
   });
 
   it("rewrites to the large (640²) rendition", () => {
-    expect(spotifyAlbumImageAtSize(stored, "large")).toBe(
+    expect(albumCoverAtSize(stored, "large")).toBe(
       `https://i.scdn.co/image/ab67616d0000b273${HASH}`,
     );
   });
 
   it("rewrites to the medium (300²) rendition", () => {
-    expect(spotifyAlbumImageAtSize(stored, "medium")).toBe(
+    expect(albumCoverAtSize(stored, "medium")).toBe(
       `https://i.scdn.co/image/ab67616d00001e02${HASH}`,
     );
   });
 
   it("re-sizes whatever source code is stored, not just the 300² variant", () => {
     const big = `https://i.scdn.co/image/ab67616d0000b273${HASH}`;
-    expect(spotifyAlbumImageAtSize(big, "small")).toBe(
-      `https://i.scdn.co/image/ab67616d00004851${HASH}`,
-    );
+    expect(albumCoverAtSize(big, "small")).toBe(`https://i.scdn.co/image/ab67616d00004851${HASH}`);
   });
 
   it("passes a non-Spotify URL through untouched", () => {
     const deezer = "https://e-cdns-images.dzcdn.net/images/cover/abc/250x250-000000-80-0-0.jpg";
-    expect(spotifyAlbumImageAtSize(deezer, "small")).toBe(deezer);
+    expect(albumCoverAtSize(deezer, "small")).toBe(deezer);
   });
 
   it("passes an unparseable Spotify URL through untouched", () => {
     const odd = "https://i.scdn.co/image/not-a-cover-id";
-    expect(spotifyAlbumImageAtSize(odd, "small")).toBe(odd);
+    expect(albumCoverAtSize(odd, "small")).toBe(odd);
   });
 
   it("returns undefined for an undefined input", () => {
-    expect(spotifyAlbumImageAtSize(undefined, "small")).toBeUndefined();
+    expect(albumCoverAtSize(undefined, "small")).toBeUndefined();
   });
 });
 
@@ -469,5 +470,114 @@ describe("videoVersion (the transform vintage token)", () => {
 
     expect(bare).toContain(media.videoUrl);
     expect(bare).toContain(media.posterUrl);
+  });
+});
+
+// ── Owned cover masters (RFC U3b) ────────────────────────────────────────────
+
+const KEY = "albums/some-album.jpg";
+
+describe("ownedCoverUrl — Cloudflare Images transform", () => {
+  it("builds a /cdn-cgi/image URL at the requested rung, ?v riding the source", () => {
+    const url = ownedCoverUrl(KEY, "2026-07-13T00:00:00.000Z", "large");
+    const v = Date.parse("2026-07-13T00:00:00.000Z");
+
+    expect(url).toBe(
+      `${FOUND_BASE}/cdn-cgi/image/width=640,format=auto/${FOUND_BASE}/albums/some-album.jpg?v=${v}`,
+    );
+  });
+
+  it("maps each ladder rung to its width", () => {
+    expect(ownedCoverUrl(KEY, "x", "small")).toContain("width=64,");
+    expect(ownedCoverUrl(KEY, "x", "medium")).toContain("width=300,");
+    expect(ownedCoverUrl(KEY, "x", "xl")).toContain("width=1200,");
+  });
+
+  it("returns undefined when there is no owned master", () => {
+    expect(ownedCoverUrl(null, "x", "large")).toBeUndefined();
+  });
+
+  it("busts the rendition cache when the vintage changes (the ?v bust)", () => {
+    const a = ownedCoverUrl(KEY, "2026-07-13T00:00:00.000Z", "large");
+    const b = ownedCoverUrl(KEY, "2026-07-14T00:00:00.000Z", "large");
+
+    expect(a).not.toBe(b);
+  });
+});
+
+describe("albumCoverAtSize — resizes BOTH providers", () => {
+  it("rewrites an owned-master transform width to the requested rung", () => {
+    const large = ownedCoverUrl(KEY, "2026-07-13T00:00:00.000Z", "large");
+
+    expect(albumCoverAtSize(large, "small")).toContain("width=64,");
+    // The ?v bust survives the resize (it rides the source, past the options).
+    expect(albumCoverAtSize(large, "small")).toContain("?v=");
+  });
+
+  it("still swaps a Spotify album-art prefix (xl clamps to 640)", () => {
+    const spotify = "https://i.scdn.co/image/ab67616d00001e02cafef00d";
+
+    expect(albumCoverAtSize(spotify, "small")).toBe(
+      "https://i.scdn.co/image/ab67616d00004851cafef00d",
+    );
+    expect(albumCoverAtSize(spotify, "xl")).toBe(
+      "https://i.scdn.co/image/ab67616d0000b273cafef00d",
+    );
+  });
+
+  it("passes a non-provider URL (a raw artist avatar) through untouched", () => {
+    const avatar = "https://i.scdn.co/image/ab6761610000e5ebcafe";
+
+    expect(albumCoverAtSize(avatar, "small")).toBe(avatar);
+  });
+});
+
+describe("bestAlbumCoverUrl — owned master preferred, Spotify floor", () => {
+  it("serves the owned master (640) when the album resolved one", () => {
+    const url = bestAlbumCoverUrl({
+      imageKey: KEY,
+      imageState: "resolved",
+      imageUpdatedAt: "2026-07-13T00:00:00.000Z",
+      spotifyUrl: "https://i.scdn.co/image/ab67616d00001e02cafe",
+    });
+
+    expect(url).toContain("/cdn-cgi/image/width=640,");
+  });
+
+  it("falls through to the Spotify 640 chain when there is no owned master", () => {
+    const url = bestAlbumCoverUrl({
+      imageKey: null,
+      imageState: "pending",
+      imageUpdatedAt: null,
+      spotifyUrl: "https://i.scdn.co/image/ab67616d00001e02cafe",
+    });
+
+    expect(url).toBe("https://i.scdn.co/image/ab67616d0000b273cafe");
+  });
+});
+
+describe("bestArtistAvatarUrl — owned master preferred, raw avatar floor", () => {
+  it("serves the owned master when resolved", () => {
+    const url = bestArtistAvatarUrl({
+      imageKey: "artists/some-artist.jpg",
+      imageState: "resolved",
+      imageUpdatedAt: "2026-07-13T00:00:00.000Z",
+      imageUrl: "https://i.scdn.co/image/ab6761610000e5ebcafe",
+    });
+
+    expect(url).toContain("/cdn-cgi/image/width=640,format=auto/");
+    expect(url).toContain("artists/some-artist.jpg");
+  });
+
+  it("falls back to the raw Spotify avatar when unowned", () => {
+    const raw = "https://i.scdn.co/image/ab6761610000e5ebcafe";
+    const url = bestArtistAvatarUrl({
+      imageKey: null,
+      imageState: "pending",
+      imageUpdatedAt: null,
+      imageUrl: raw,
+    });
+
+    expect(url).toBe(raw);
   });
 });

@@ -1695,11 +1695,29 @@ export const artists = sqliteTable(
   {
     createdAt: text("created_at").notNull(),
     id: text("id").primaryKey(),
-    // The artist's canonical avatar — the largest Spotify profile image (an
+    // ── THE OWNED AVATAR MASTER (RFC musickit-second-authority, U3b) ─────────────────
+    // The same image state machine as `albums`, so an artist serves its OWN 1200²-capped
+    // avatar from our R2 instead of hotlinking `i.scdn.co`. The `backfill_cover_masters`
+    // sweep (kind=artist) downloads the stored `image_url` (Spotify's largest profile
+    // image — the floor, ≤640; an Apple artist-artwork template is the future higher-res
+    // source decision A leaves room for) into `artists/<slug>.<ext>`, byte-verified ≤1200,
+    // and stamps `image_source`. The worklist selects only artists that already carry an
+    // `image_url` (a source to own), so an imageless artist stays `pending` until the
+    // Spotify backfill fills it. Served via `bestArtistAvatarUrl` (media.ts) — owned master
+    // preferred, raw `image_url` the fallback, the label `logo_key ?? image_url` precedent.
+    imageAttemptedAt: text("image_attempted_at"),
+    imageFailures: integer("image_failures").notNull().default(0),
+    imageKey: text("image_key"),
+    imageSource: text("image_source", { enum: ["apple", "coverart", "spotify"] }),
+    imageState: text("image_state", { enum: ["pending", "resolved", "none"] })
+      .notNull()
+      .default("pending"),
+    imageUpdatedAt: text("image_updated_at"),
+    // The artist's canonical avatar SOURCE — the largest Spotify profile image (an
     // `i.scdn.co` URL, the same host/precedent as `tracks.album_image_url`).
     // Filled from the Spotify `/v1/artists` lookup at entity create + by the
     // image backfill; null until fetched (the render falls back to a monogram
-    // tile). Attribution-by-link matches how album art is already served.
+    // tile). The owned-master sweep downloads THIS into R2 (image_key above).
     imageUrl: text("image_url"),
     mbid: text("mbid"),
     name: text("name").notNull(),
@@ -2004,6 +2022,35 @@ export const albums = sqliteTable("albums", {
   artworkWidth: integer("artwork_width"),
   createdAt: text("created_at").notNull(),
   id: text("id").primaryKey(),
+  // ── THE OWNED COVER MASTER (RFC musickit-second-authority, U3b) ─────────────────────────
+  // The `labels` image state machine, cloned onto the album so every album serves its OWN
+  // 1200²-capped cover derivative from our R2 (found.fluncle.com) instead of hotlinking a
+  // third party. The `backfill_cover_masters` sweep (cover-masters.ts) fetches a ≤1200
+  // rendition from the BEST source — Apple's stored `artwork_url_template` substituted to
+  // ≤1200 (native downscale, no local resize), then Cover Art Archive, then Spotify's 640 as
+  // the floor — and stores it at `albums/<slug>.<ext>`, downscale-guaranteed by the requested
+  // size and byte-verified ≤1200 before the R2 put. The 3000² original is NEVER stored or
+  // served (the REF-05 line); the video render still fetches Apple's full-res at render time,
+  // never persisted. Served via Cloudflare Images `/cdn-cgi/image/…` (decision B) — see
+  // media.ts `ownedCoverUrl` + `bestAlbumCoverUrl`, and docs/album-artwork.md.
+  //   - `image_key`        — the R2 object key of the stored master (e.g. `albums/<slug>.jpg`).
+  //                          NULL = no owned master; the DTO falls through to the Spotify chain.
+  //   - `image_source`     — which rung won: `apple` | `coverart` | `spotify`. NULL until resolved.
+  //   - `image_state`      — `pending` (DDL default; every album enters the worklist), `resolved`
+  //                          (has a master), `none` (no source anywhere — terminal, floors to the
+  //                          stored Spotify cover).
+  //   - `image_updated_at` — the `?v` bust VINTAGE: a replaced master bumps it, re-keying the
+  //                          Cloudflare Images rendition cache (the video-variants `?v` lesson —
+  //                          a transform cache survives a zone purge).
+  //   - `image_attempted_at` / `image_failures` — the shipped reliability pair (backoff + give-up).
+  imageAttemptedAt: text("image_attempted_at"),
+  imageFailures: integer("image_failures").notNull().default(0),
+  imageKey: text("image_key"),
+  imageSource: text("image_source", { enum: ["apple", "coverart", "spotify"] }),
+  imageState: text("image_state", { enum: ["pending", "resolved", "none"] })
+    .notNull()
+    .default("pending"),
+  imageUpdatedAt: text("image_updated_at"),
   // The display name — the first raw `tracks.album` spelling seen for this slug.
   name: text("name").notNull(),
   recordLabelRaw: text("record_label_raw"),

@@ -4,7 +4,7 @@ import { TrackArtwork } from "@/components/track-artwork";
 import { siteUrl } from "@/lib/fluncle-links";
 import { findingsCount } from "@/lib/format";
 import { jsonLdScript } from "@/lib/json-ld";
-import { spotifyAlbumImageAtSize } from "@/lib/media";
+import { albumCoverAtSize } from "@/lib/media";
 import { type LabelIndexEntry, listLabelsWithFindingCounts } from "@/lib/server/labels";
 
 // The labels index: every label Fluncle has logged a finding off, cover-led, each linking to
@@ -88,9 +88,7 @@ function LabelsPage() {
                   <TrackArtwork
                     alt=""
                     className="artist-grid-cover"
-                    src={
-                      label.logoImageUrl ?? spotifyAlbumImageAtSize(label.coverImageUrl, "large")
-                    }
+                    src={label.logoImageUrl ?? albumCoverAtSize(label.coverImageUrl, "large")}
                   />
                   <span className="artist-grid-line">{label.name}</span>
                   <span className="artist-grid-count">{findingsCount(label.findingCount)}</span>

@@ -170,22 +170,93 @@ const SPOTIFY_IMAGE_SIZE_CODE = {
   small: "ab67616d00004851", // 64²
 } as const;
 
-export type SpotifyImageSize = keyof typeof SPOTIFY_IMAGE_SIZE_CODE;
+// The cover-rendition size ladder shared by the two providers a cover URL can carry: Spotify's
+// stored album art AND our OWNED masters (RFC musickit-second-authority, U3b). `xl` is the
+// owned-master 1200 rung (Spotify has no >640 rendition, so a Spotify `xl` clamps to `large`).
+export type CoverSize = "large" | "medium" | "small" | "xl";
+
+// The owned-master serving ladder (px) — the fixed 64/300/640/1200 the RFC specifies. Every rung
+// is a separately-cached Cloudflare Images rendition of the ≤1200 R2 master.
+const OWNED_COVER_WIDTH: Record<CoverSize, number> = {
+  large: 640,
+  medium: 300,
+  small: 64,
+  xl: 1200,
+};
 
 // The Spotify album-art id is the 16-char size code + a 24-char (hex) cover hash.
 const SPOTIFY_ALBUM_IMAGE_RE = /^(https:\/\/i\.scdn\.co\/image\/)ab67616d[0-9a-f]{8}([0-9a-f]+)$/;
 
+// ── Cloudflare Images (owned cover masters) ──────────────────────────────────
+//
+// The owned-master resolve sweep (cover-masters.ts) stores a ≤1200² cover
+// derivative for each album/artist in the world-served bucket (found.fluncle.com,
+// `albums/<slug>.<ext>` / `artists/<slug>.<ext>`). We serve every display size off
+// that one master through Cloudflare Images URL transforms — a SEPARATE zone toggle
+// from the video `/cdn-cgi/media` one (decision B; source restricted to this zone).
+//
+// URL shape (https://developers.cloudflare.com/images/optimization/features/, URL
+// interface): `<ZONE>/cdn-cgi/image/<OPTIONS>/<SOURCE>`. `<OPTIONS>` is a
+// comma-separated list (`width=`, `format=auto` for WebP/AVIF negotiation); the
+// source is the R2 master on the SAME zone. The `?v=<image_updated_at>` bust rides
+// the SOURCE (like the video MT `?v`): Cloudflare keys the rendition cache on the
+// full URL, so a replaced master (which bumps `image_updated_at`) re-keys every
+// rendition — a transform cache survives a zone purge (the video-variants lesson).
+
+/** The /cdn-cgi/image base on the found.fluncle.com zone (same zone as the master). */
+const IMAGE_TRANSFORM_BASE = `${FOUND_BASE}/cdn-cgi/image`;
+
+// Matches the `width=<n>` option in one of OUR owned-cover transform URLs, so the size-picker can
+// rewrite the rung without re-deriving the source. Deliberately narrow to the shape we build.
+const OWNED_COVER_WIDTH_RE = /(\/cdn-cgi\/image\/width=)\d+(,)/;
+
+/** The `?v` bust token for an owned master — its `image_updated_at` as epoch ms (else a constant). */
+function ownedCoverVintage(imageUpdatedAt: string | null | undefined): number {
+  if (!imageUpdatedAt) {
+    return 1;
+  }
+
+  const epoch = Date.parse(imageUpdatedAt);
+
+  return Number.isNaN(epoch) ? 1 : epoch;
+}
+
 /**
- * Rewrite a stored Spotify album-art URL to the requested rendition size, leaving
- * any non-Spotify URL (or unparseable id) untouched. `small` for the feed/index
- * rows, `large` for the full-bleed /log poster (the stored 300² would upscale).
+ * A Cloudflare Images transform URL for an OWNED cover master (`albums/<slug>.<ext>` /
+ * `artists/<slug>.<ext>`), at the requested ladder rung. `format=auto` lets Cloudflare negotiate
+ * WebP/AVIF; the `?v=<image_updated_at>` bust rides the source so a replaced master evicts every
+ * rendition. Returns undefined when the entity has no owned master yet.
  */
-export function spotifyAlbumImageAtSize(
-  url: string | undefined,
-  size: SpotifyImageSize,
+export function ownedCoverUrl(
+  imageKey: string | null | undefined,
+  imageUpdatedAt: string | null | undefined,
+  size: CoverSize = "large",
 ): string | undefined {
+  if (!imageKey) {
+    return undefined;
+  }
+
+  const source = `${r2PublicUrl(FOUND_BASE, imageKey)}?v=${ownedCoverVintage(imageUpdatedAt)}`;
+
+  return `${IMAGE_TRANSFORM_BASE}/width=${OWNED_COVER_WIDTH[size]},format=auto/${source}`;
+}
+
+/**
+ * Re-size a cover URL to the requested rendition, whichever provider it carries:
+ *   - an OWNED-master Cloudflare Images URL → rewrite its `width=` to the ladder rung;
+ *   - a stored Spotify album-art URL → swap the size-code prefix (Spotify has no >640, so `xl`
+ *     clamps to `large`);
+ *   - anything else (a raw artist avatar, a future source) → untouched.
+ * `small` for the feed/index rows, `large` for the full-bleed /log poster. The generalisation of
+ * the old `albumCoverAtSize` so the U3b owned masters resize at every existing call site.
+ */
+export function albumCoverAtSize(url: string | undefined, size: CoverSize): string | undefined {
   if (!url) {
     return url;
+  }
+
+  if (OWNED_COVER_WIDTH_RE.test(url)) {
+    return url.replace(OWNED_COVER_WIDTH_RE, `$1${OWNED_COVER_WIDTH[size]}$2`);
   }
 
   const match = SPOTIFY_ALBUM_IMAGE_RE.exec(url);
@@ -194,7 +265,56 @@ export function spotifyAlbumImageAtSize(
     return url;
   }
 
-  return `${match[1]}${SPOTIFY_IMAGE_SIZE_CODE[size]}${match[2]}`;
+  const code = SPOTIFY_IMAGE_SIZE_CODE[size === "xl" ? "large" : size];
+
+  return `${match[1]}${code}${match[2]}`;
+}
+
+/**
+ * THE BEST ALBUM COVER for a finding's DTO (RFC U3b): the owned master through Cloudflare Images
+ * when the album has resolved one, else the Spotify chain upgraded to 640. Emitted at `large` so a
+ * consumer that never re-sizes (mobile, search) still gets a right-sized cover; `albumCoverAtSize`
+ * takes it down to `small`/up to `xl` at the surfaces that do. The label `logoKey ?? cover`
+ * precedent, one layer up.
+ */
+export function bestAlbumCoverUrl(cover: {
+  imageKey: string | null | undefined;
+  imageState: string | null | undefined;
+  imageUpdatedAt: string | null | undefined;
+  spotifyUrl: string | null | undefined;
+}): string | undefined {
+  if (cover.imageState === "resolved") {
+    const owned = ownedCoverUrl(cover.imageKey, cover.imageUpdatedAt, "large");
+
+    if (owned) {
+      return owned;
+    }
+  }
+
+  return albumCoverAtSize(cover.spotifyUrl ?? undefined, "large");
+}
+
+/**
+ * THE BEST ARTIST AVATAR (RFC U3b): the owned master through Cloudflare Images when the artist has
+ * resolved one, else the raw stored `image_url` (Spotify's profile image) — the label
+ * `logoKey ?? image_url` precedent, applied to artists. The raw avatar is NOT a Spotify ALBUM-art
+ * URL, so it is served as-is when unowned (a monogram tile still covers a null).
+ */
+export function bestArtistAvatarUrl(avatar: {
+  imageKey: string | null | undefined;
+  imageState: string | null | undefined;
+  imageUpdatedAt: string | null | undefined;
+  imageUrl: string | null | undefined;
+}): string | undefined {
+  if (avatar.imageState === "resolved") {
+    const owned = ownedCoverUrl(avatar.imageKey, avatar.imageUpdatedAt, "large");
+
+    if (owned) {
+      return owned;
+    }
+  }
+
+  return avatar.imageUrl ?? undefined;
 }
 
 // ── Cloudflare Media Transformations ─────────────────────────────────────────

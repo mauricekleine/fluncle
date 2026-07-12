@@ -41,7 +41,7 @@ import {
   musicRecordingJsonLd,
   videoObjectJsonLd,
 } from "@/lib/log-schema";
-import { mixtapeSetVideoUrl, spotifyAlbumImageAtSize, trackMedia } from "@/lib/media";
+import { mixtapeSetVideoUrl, albumCoverAtSize, trackMedia } from "@/lib/media";
 import { type MixtapeDTO, mixtapeCoverUrl, mixtapeDisplayTitle } from "@/lib/mixtapes";
 import { resolveLogPageTarget } from "@/lib/server/log-resolver";
 import {
@@ -217,7 +217,7 @@ function logHead(loaderData: LogPageData | undefined) {
   // definitionalProse the JSON-LD mirrors weaves it in.
   const galaxy = galaxyReady ? track.galaxy : undefined;
   const description = definitionalSentences({ ...track, logId });
-  const imageUrl = spotifyAlbumImageAtSize(track.albumImageUrl, "large") ?? media.coverUrl;
+  const imageUrl = albumCoverAtSize(track.albumImageUrl, "large") ?? media.coverUrl;
   const recording = musicRecordingJsonLd({ ...track, artistSlugs, galaxy, logId }, imageUrl);
   // The social card: the per-finding OG image (the poster frame + treatment),
   // versioned by `updatedAt` so a re-enriched finding re-renders (the /api/og
@@ -569,7 +569,7 @@ function LogPage() {
                       <TrackArtwork
                         alt=""
                         className="log-similar-cover"
-                        src={spotifyAlbumImageAtSize(finding.albumImageUrl, "small")}
+                        src={albumCoverAtSize(finding.albumImageUrl, "small")}
                       />
                       <span className="log-similar-line">{artistTitleLine(finding)}</span>
                     </Link>

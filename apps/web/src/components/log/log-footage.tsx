@@ -4,7 +4,7 @@ import { Button } from "@fluncle/ui/components/button";
 import {
   type CropOrientation,
   type RenditionWidth,
-  spotifyAlbumImageAtSize,
+  albumCoverAtSize,
   trackMedia,
   videoCrop,
   videoCropPoster,
@@ -190,7 +190,7 @@ export function LogFootage({ track }: { track: Track }) {
   const posterUrl =
     framePoster ??
     (!posterFailed ? media?.posterUrl : undefined) ??
-    spotifyAlbumImageAtSize(track.albumImageUrl, "large");
+    albumCoverAtSize(track.albumImageUrl, "large");
 
   useEffect(() => {
     if (!framePoster) {

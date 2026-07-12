@@ -16,7 +16,7 @@ import {
   DialogTitle,
 } from "@fluncle/ui/components/dialog";
 import { beatportSearchUrl } from "@/lib/beatport";
-import { spotifyAlbumImageAtSize } from "@/lib/media";
+import { albumCoverAtSize } from "@/lib/media";
 import { mixtapeDisplayTitle } from "@/lib/mixtapes";
 import { type MixtapeMembership } from "@/lib/server/mixtapes";
 import { type PlanMembership } from "@/lib/server/recordings";
@@ -128,7 +128,7 @@ export function AddToPlanDialog({
                 <img
                   alt=""
                   className="size-9 shrink-0 rounded-sm border border-border object-cover"
-                  src={spotifyAlbumImageAtSize(track.albumImageUrl, "small")}
+                  src={albumCoverAtSize(track.albumImageUrl, "small")}
                 />
               ) : (
                 <div className="track-artwork-fallback size-9 shrink-0 rounded-sm border border-border" />
