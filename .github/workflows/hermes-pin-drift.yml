@@ -61,7 +61,14 @@ jobs:
           open_pr="$(gh pr list --state open --json number,headRefName \
             --jq '[.[] | select(.headRefName | startswith("hermes-pin-drift/"))][0].number')"
           if [ -n "$open_pr" ]; then
-            echo "pin-drift PR #$open_pr is still open — skipping (merge it first)."
+            # Branch protection requires the branch to be UP TO DATE (strict checks), and
+            # GitHub's auto-merge never updates the branch itself — on a fast-moving main an
+            # auto-merge-armed PR starves forever (observed: #529 sat green-but-stale for 12h
+            # while main advanced ~15 times). So each run NUDGES the open PR current; CI
+            # re-runs on the fresh base and the already-armed auto-merge completes.
+            echo "pin-drift PR #$open_pr is still open — updating its branch so auto-merge can land."
+            gh pr update-branch "$open_pr" \
+              || echo "update-branch unavailable (conflict or already current) — leaving it for review."
             exit 0
           fi
           branch="hermes-pin-drift/${{ github.run_id }}"
