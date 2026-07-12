@@ -1,4 +1,14 @@
-bunx lint-staged
+# Agent worktrees share the repo's git but NOT node_modules, so the tools lint-staged
+# spawns (oxlint, oxfmt — bare commands resolved from node_modules/.bin) ENOENT there
+# and kill the commit; the historical workaround was `--no-verify`, which then skipped
+# the hook in checkouts where it DOES work (and shipped a sort-keys violation to main
+# on 2026-07-12). So: skip lint-staged LOUDLY when the tools are absent — the CI gate
+# is the correctness net — and always run it where they exist.
+if [ -x "node_modules/.bin/oxlint" ]; then
+  bunx lint-staged
+else
+  echo "husky: node_modules/.bin/oxlint missing (fresh worktree?) — skipping lint-staged; CI runs the full gate."
+fi
 
 # Scoped skills auto-sync — keep the committed skill copies in lockstep with their
 # canonical sources under packages/skills/**. `skills:install` is a CODEGEN step: it
