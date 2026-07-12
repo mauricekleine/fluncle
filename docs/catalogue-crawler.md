@@ -1,6 +1,6 @@
 # The catalogue crawler
 
-Fluncle's acquisition of **metadata**, and nothing else.
+Fluncle's acquisition of **metadata**, and nothing else. The crawler is a **probe**: it charts, it measures, it never speaks. Nothing it brings back is a finding.
 
 The crawler walks the MusicBrainz release graph outward from the record labels the operator has **enabled** and writes catalogue rows into `tracks`. A catalogue track is a `tracks` row with **no `findings` row** — that is the entire definition, and it is what the crawler can and cannot do, expressed as a schema rather than as a rule (see [track-lifecycle.md](./track-lifecycle.md) for the tracks/findings split).
 
