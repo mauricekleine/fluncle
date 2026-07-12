@@ -131,11 +131,22 @@ export default function LogScreen() {
                 <Text style={[font.body, { color: color.stardust }]}>{finding.note}</Text>
               ) : null}
             </ScrollView>
-            <View style={{ paddingBottom: 4, paddingHorizontal: 16, paddingTop: 12 }}>
+            <View style={{ gap: 8, paddingBottom: 4, paddingHorizontal: 16, paddingTop: 12 }}>
               <HeatButton
                 label="Listen on Spotify"
                 onPress={() => Linking.openURL(finding.spotifyUrl)}
               />
+              {/* The second listen destination, present only once the exact-ISRC resolve
+                  landed one. Outline (Spotify stays the single primary), text-only — the
+                  Apple Music brand mark waits on the parked brand-icon dependency (a text
+                  label breaks no icon idiom), so this is detail-screen-only for now. */}
+              {finding.appleMusicUrl ? (
+                <HeatButton
+                  label="Listen on Apple Music"
+                  variant="outline"
+                  onPress={() => finding.appleMusicUrl && Linking.openURL(finding.appleMusicUrl)}
+                />
+              ) : null}
             </View>
           </View>
         ) : resolution?.kind === "mixtape" ? (
