@@ -158,8 +158,12 @@ const ECHO_STOPWORDS = new Set(
   ).split(" "),
 );
 
-/** Normalize a note to a word stream: lowercase, punctuation dropped, apostrophes split. */
-function echoWords(text: string): string[] {
+/**
+ * Normalize a note to a word stream: lowercase, punctuation dropped, apostrophes split.
+ * Exported so the corpus-wide diversity harness (artifact-diversity.ts) measures phrases
+ * over exactly the same word stream the echo gate does — one definition of "the words".
+ */
+export function echoWords(text: string): string[] {
   return text
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, " ")
@@ -168,13 +172,21 @@ function echoWords(text: string): string[] {
     .filter(Boolean);
 }
 
-/** The content words of a note — the words that carry the editorial claim. */
-function echoContentWords(text: string): string[] {
+/**
+ * The content words of a note — the words that carry the editorial claim. Exported for
+ * the diversity harness's single-word recurrence scan (the "is 'shoulders' still in N of M
+ * observations" measure), which reads content words by exactly this definition.
+ */
+export function echoContentWords(text: string): string[] {
   return echoWords(text).filter((word) => !ECHO_STOPWORDS.has(word) && word.length > 2);
 }
 
-/** Content-word Jaccard overlap of two notes (0 = disjoint, 1 = the same words). */
-function contentOverlap(a: string, b: string): number {
+/**
+ * Content-word Jaccard overlap of two notes (0 = disjoint, 1 = the same words). Exported
+ * so the diversity harness's mean-pairwise-overlap reads sameness by the SAME definition
+ * the echo gate uses, and the two numbers are comparable.
+ */
+export function contentOverlap(a: string, b: string): number {
   const left = new Set(echoContentWords(a));
   const right = new Set(echoContentWords(b));
 
