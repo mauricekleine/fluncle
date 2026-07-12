@@ -24,7 +24,7 @@ These are the facts a reviewer reacts to, grounded in the code:
 
 Why it bites: the videos bake in commercial track audio, so to a reviewer the app reads as "a feed of videos set to commercial music" — exactly the shape that draws a _"provide documentation of your rights to this content"_ request.
 
-Our posture: the audio is **bounded to preview length** (≤30s, 20s default), comparable to a standard streaming preview; every clip is our **own brand render**; the app **links out to Spotify** rather than replacing it; and the no-video fallback uses **official preview endpoints**. Keep store-build render duration inside the preview band (do not push `--duration-ms` past ~30s for app content) so the "this is a preview" argument stays true.
+Our posture: the audio is **bounded to preview length** (≤30s, 20s default), comparable to a standard streaming preview; every clip is our **own brand render**; the app **links out to Spotify and Apple Music** rather than replacing them; and the no-video fallback uses **official preview endpoints**. Keep store-build render duration inside the preview band (do not push `--duration-ms` past ~30s for app content) so the "this is a preview" argument stays true.
 
 **If radio or mixtapes land in-app** (both are candidates — the app already interleaves published mixtapes in the feed contract, and `radio.fluncle.com` streams observations): before shipping either surface, verify and document that what plays is the same bounded material — the ≤30s brand renders plus the agent-authored observation audio (`docs/agents/observation-agent.md`), never a full commercial track. The radio stream is Fluncle's own recovered-audio voice over its own renders; keep it that way and the 5.2 "this is a preview / this is our own content" posture carries over unchanged. A surface that streamed full commercial recordings would break this argument outright — do not ship one.
 
@@ -44,7 +44,7 @@ Our posture: a native full-screen vertical-video pager, native push, and a nativ
 
 ## Before you submit (cheap moves that avoid a rejection round)
 
-- **App Review notes:** state up front that audio is official previews plus our own brand renders ≤30s and that the app links out to Spotify. Pre-empting the 5.2 question often skips the rejection round entirely.
+- **App Review notes:** state up front that audio is official previews plus our own brand renders ≤30s and that the app links out to Spotify and Apple Music. Pre-empting the 5.2 question often skips the rejection round entirely.
 - **Cold open:** first launch must show real content immediately — no empty states, no "coming soon." Reviewers judge on a cold open, so seed the feed.
 - **Account + entitlements:** a paid Apple Developer account (€99/yr) is required for store distribution and for TestFlight. Keep the push + associated-domains entitlements in place; the `EXPO_FREE_TEAM` strip is only for free-team local installs, never store builds. The step-by-step enrolment, build, and submit sequence is [mobile-release.md](mobile-release.md).
 
