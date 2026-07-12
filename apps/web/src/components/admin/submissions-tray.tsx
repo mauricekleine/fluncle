@@ -21,7 +21,7 @@ import {
 } from "@fluncle/ui/components/sheet";
 import { Skeleton } from "@fluncle/ui/components/skeleton";
 import { formatDate } from "@/lib/format";
-import { spotifyAlbumImageAtSize } from "@/lib/media";
+import { albumCoverAtSize } from "@/lib/media";
 import { cn } from "@/lib/utils";
 
 // The candidates tray — the crew's pending submissions (`fluncle submit`, the SSH
@@ -182,7 +182,7 @@ export function SubmissionsTray({
                         <img
                           alt=""
                           className="size-9 shrink-0 rounded-sm border border-border object-cover"
-                          src={spotifyAlbumImageAtSize(submission.artworkUrl, "small")}
+                          src={albumCoverAtSize(submission.artworkUrl, "small")}
                         />
                       ) : (
                         <div className="track-artwork-fallback size-9 shrink-0 rounded-sm border border-border" />

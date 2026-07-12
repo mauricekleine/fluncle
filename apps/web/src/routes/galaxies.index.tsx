@@ -5,7 +5,7 @@ import { TrackArtwork } from "@/components/track-artwork";
 import { siteUrl } from "@/lib/fluncle-links";
 import { findingsCount } from "@/lib/format";
 import { jsonLdScript } from "@/lib/json-ld";
-import { spotifyAlbumImageAtSize } from "@/lib/media";
+import { albumCoverAtSize } from "@/lib/media";
 import { type GalaxyPane, listGalaxyPanes } from "@/lib/server/galaxies-map";
 
 // The /galaxies index (browse-by-feel RFC, Slice 4): the sonic map of the archive —
@@ -100,7 +100,7 @@ function GalaxiesPage() {
                         alt=""
                         className="galaxy-pane-cover"
                         key={cover}
-                        src={spotifyAlbumImageAtSize(cover, "small")}
+                        src={albumCoverAtSize(cover, "small")}
                       />
                     ))}
                   </span>

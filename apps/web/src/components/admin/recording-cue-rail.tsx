@@ -22,7 +22,7 @@ import { Input } from "@fluncle/ui/components/input";
 import { Label } from "@fluncle/ui/components/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@fluncle/ui/components/popover";
 import { formatClock } from "@/components/video";
-import { spotifyAlbumImageAtSize } from "@/lib/media";
+import { albumCoverAtSize } from "@/lib/media";
 import { type NewCue, parseArtists, recordingCueProgress } from "@/lib/recording-cues";
 
 // The recording cue-authoring rail (RFC plan→recording→mixtape §8, surface 3). A TAKE's
@@ -421,7 +421,7 @@ function CueThumb({ src }: { src?: string }) {
       <img
         alt=""
         className="size-8 shrink-0 rounded-sm border border-border object-cover"
-        src={spotifyAlbumImageAtSize(src, "small")}
+        src={albumCoverAtSize(src, "small")}
       />
     );
   }

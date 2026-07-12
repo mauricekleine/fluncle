@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { ImageResponse } from "workers-og";
-import { spotifyAlbumImageAtSize } from "@/lib/media";
+import { albumCoverAtSize } from "@/lib/media";
 import { parseSetParam } from "@/lib/mix-set";
 import { BODY, BRAND, OG_CACHE_CONTROL, cardFonts, satoriText } from "@/lib/server/satori-render";
 import { getTracksByLogIds } from "@/lib/server/tracks";
@@ -59,7 +59,7 @@ export const serverHandlers: ApiHandlers = {
     // Up to five covers fan across the card; the count names the whole set.
     const covers = await Promise.all(
       chain.slice(0, 5).map((finding) => {
-        const src = spotifyAlbumImageAtSize(finding.albumImageUrl, "medium");
+        const src = albumCoverAtSize(finding.albumImageUrl, "medium");
 
         return src ? fetchImageDataUri(src) : Promise.resolve(undefined);
       }),

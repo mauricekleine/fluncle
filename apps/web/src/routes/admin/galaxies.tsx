@@ -37,7 +37,7 @@ import { MixPreviewBar } from "@/components/mix/mix-preview-bar";
 import { TrackArtwork } from "@/components/track-artwork";
 import { partitionGalaxyBoard } from "@/lib/galaxy-board";
 import { useKeyNotation } from "@/lib/key-notation";
-import { spotifyAlbumImageAtSize } from "@/lib/media";
+import { albumCoverAtSize } from "@/lib/media";
 import { usePreviewControls } from "@/lib/preview-player";
 import { findingsCount } from "@/lib/format";
 import { isAdminRequest } from "@/lib/server/admin-auth";
@@ -355,7 +355,7 @@ function AuditionCover({ logId, member }: { logId: string; member: TrackListItem
       <TrackArtwork
         alt=""
         className="size-12"
-        src={spotifyAlbumImageAtSize(member.albumImageUrl, "small")}
+        src={albumCoverAtSize(member.albumImageUrl, "small")}
       />
       <button
         aria-label={

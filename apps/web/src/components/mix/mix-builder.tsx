@@ -36,7 +36,7 @@ import { SpotifyIcon } from "@/components/platform-icons";
 import { TrackArtwork } from "@/components/track-artwork";
 import { TrackChips } from "@/components/track-row";
 import { formatKey, type KeyNotation, useKeyNotation } from "@/lib/key-notation";
-import { spotifyAlbumImageAtSize } from "@/lib/media";
+import { albumCoverAtSize } from "@/lib/media";
 import { mixReasonLabel, serializeTaste, setToken } from "@/lib/mix-set";
 import { usePreviewControls } from "@/lib/preview-player";
 import { usePrefersReducedMotion } from "@/lib/use-prefers-reduced-motion";
@@ -61,7 +61,7 @@ import { cn } from "@/lib/utils";
 const rowId = (track: MixTrack): string => setToken(track);
 
 const artworkUrl = (track: MixTrack): string | undefined =>
-  spotifyAlbumImageAtSize(track.albumImageUrl, "small");
+  albumCoverAtSize(track.albumImageUrl, "small");
 
 // The album artwork doubles as a preview control on a CERTIFIED row: a play/pause overlay
 // that previews via the shared `/api/preview/<logId>` relay. An uncertified row has no

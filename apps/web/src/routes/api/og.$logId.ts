@@ -2,7 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { ImageResponse } from "workers-og";
 import { formatDateLong } from "@/lib/format";
 import { isGalaxyMapFullyNamed } from "@/lib/server/galaxies-map";
-import { spotifyAlbumImageAtSize, trackMedia } from "@/lib/media";
+import { albumCoverAtSize, trackMedia } from "@/lib/media";
 import { requireParam } from "@/lib/server/http-errors";
 import { BODY, BRAND, OG_CACHE_CONTROL, cardFonts, satoriText } from "@/lib/server/satori-render";
 import { getTrackByIdOrLogId } from "@/lib/server/tracks";
@@ -73,7 +73,7 @@ export const serverHandlers: ApiHandlers = {
     // album cover.
     const bgSource = track.videoUrl
       ? trackMedia(track.logId ?? logId).posterUrl
-      : spotifyAlbumImageAtSize(track.albumImageUrl, "large");
+      : albumCoverAtSize(track.albumImageUrl, "large");
     const background = bgSource ? await fetchImageDataUri(bgSource) : undefined;
 
     // The finding's sonic galaxy (browse-by-feel RFC) rides the card's meta line only

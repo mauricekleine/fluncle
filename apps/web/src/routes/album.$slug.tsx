@@ -12,7 +12,7 @@ import { siteUrl } from "@/lib/fluncle-links";
 import { albumSignatureLine, firstFoundAt } from "@/lib/graph-prose";
 import { jsonLdScript } from "@/lib/json-ld";
 import { albumBreadcrumbsJsonLd, musicAlbumJsonLd } from "@/lib/log-schema";
-import { spotifyAlbumImageAtSize } from "@/lib/media";
+import { albumCoverAtSize } from "@/lib/media";
 import { ALBUM_INDEX_MIN_TRACKS, getAlbumBySlug } from "@/lib/server/albums";
 import { type ArtistChip, listArtistsByAlbum } from "@/lib/server/artists";
 import { getLabelForAlbum, type LabelRecord } from "@/lib/server/labels";
@@ -111,8 +111,7 @@ function albumHead(loaderData: AlbumPageData | undefined) {
     findings.length > 0
       ? `Every banger Fluncle has found on ${name} and logged in the Galaxy, ${findings.length} so far, each with a coordinate.`
       : `The tracks on ${name}, charted in Fluncle's Galaxy.`;
-  const imageUrl =
-    spotifyAlbumImageAtSize(coverImageUrl, "large") ?? `${siteUrl}/fluncle-cover.png`;
+  const imageUrl = albumCoverAtSize(coverImageUrl, "large") ?? `${siteUrl}/fluncle-cover.png`;
 
   return {
     links: [{ href: pageUrl, rel: "canonical" }],
@@ -134,7 +133,7 @@ function albumHead(loaderData: AlbumPageData | undefined) {
       jsonLdScript(
         musicAlbumJsonLd({
           artists,
-          imageUrl: spotifyAlbumImageAtSize(coverImageUrl, "large"),
+          imageUrl: albumCoverAtSize(coverImageUrl, "large"),
           label: label ? { name: label.name, slug: label.slug } : undefined,
           name,
           slug,

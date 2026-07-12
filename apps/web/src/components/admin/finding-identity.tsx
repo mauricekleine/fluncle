@@ -2,7 +2,7 @@ import { PlayIcon } from "@phosphor-icons/react";
 import { type ReactNode } from "react";
 import { formatAlbumDuration } from "@/lib/format";
 import { formatKey, useKeyNotation } from "@/lib/key-notation";
-import { spotifyAlbumImageAtSize } from "@/lib/media";
+import { albumCoverAtSize } from "@/lib/media";
 import { cn } from "@/lib/utils";
 
 // The finding's identity block — cover + title + artists (+ its coordinate) — shared by
@@ -130,7 +130,7 @@ function Cover({
       <img
         alt=""
         className={cn("shrink-0 rounded-sm border border-border object-cover", COVER_SIZE[size])}
-        src={spotifyAlbumImageAtSize(cover, "small")}
+        src={albumCoverAtSize(cover, "small")}
       />
     ) : (
       <div
@@ -142,7 +142,7 @@ function Cover({
     );
   }
 
-  const src = spotifyAlbumImageAtSize(cover, "small") ?? "/fluncle-cover.png";
+  const src = albumCoverAtSize(cover, "small") ?? "/fluncle-cover.png";
 
   if (hasClip && onPreview) {
     return (

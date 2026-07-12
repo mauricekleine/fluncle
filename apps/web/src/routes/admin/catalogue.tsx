@@ -37,7 +37,7 @@ import {
   getCatalogueSummary,
   listCatalogueTracks,
 } from "@/lib/server/catalogue";
-import { spotifyAlbumImageAtSize } from "@/lib/media";
+import { albumCoverAtSize } from "@/lib/media";
 
 // THE EAR — `/admin/catalogue` (docs/the-ear.md).
 //
@@ -554,7 +554,7 @@ function CatalogueCover({ cover }: { cover: string | null }) {
     <img
       alt=""
       className="size-11 shrink-0 rounded-md border border-border object-cover"
-      src={spotifyAlbumImageAtSize(cover, "small")}
+      src={albumCoverAtSize(cover, "small")}
     />
   );
 }

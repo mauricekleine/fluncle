@@ -228,6 +228,9 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "POST /admin/backfill/apple-music": "backfill_apple_music",
   "POST /admin/backfill/artist-images": "backfill_artist_images",
   "POST /admin/backfill/artists": "backfill_artists",
+  // Agent tier: the box's `fluncle-cover-masters` cron drives it. It owns an album's/artist's
+  // ≤1200² cover master in R2 (RFC U3b), never a certification, never a publish.
+  "POST /admin/backfill/cover-masters": "backfill_cover_masters",
   "POST /admin/backfill/discogs": "backfill_discogs",
   "POST /admin/backfill/label-images": "backfill_label_images",
   "POST /admin/backfill/lastfm": "backfill_lastfm",

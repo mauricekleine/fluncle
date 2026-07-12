@@ -11,7 +11,7 @@ import { siteUrl } from "@/lib/fluncle-links";
 import { firstFoundAt, labelSignatureLine } from "@/lib/graph-prose";
 import { jsonLdScript } from "@/lib/json-ld";
 import { labelBreadcrumbsJsonLd, recordLabelJsonLd } from "@/lib/log-schema";
-import { spotifyAlbumImageAtSize } from "@/lib/media";
+import { albumCoverAtSize } from "@/lib/media";
 import { type ArtistChip, listArtistsByLabel } from "@/lib/server/artists";
 import {
   type CatalogueArtistGroup,
@@ -175,7 +175,7 @@ function labelHead(loaderData: LabelPageData | undefined) {
   const coverFinding = findings[0];
   const imageUrl =
     logoImageUrl ??
-    (coverFinding ? spotifyAlbumImageAtSize(coverFinding.albumImageUrl, "large") : undefined) ??
+    (coverFinding ? albumCoverAtSize(coverFinding.albumImageUrl, "large") : undefined) ??
     `${siteUrl}/fluncle-cover.png`;
 
   return {

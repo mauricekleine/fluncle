@@ -200,6 +200,10 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // internal + reversible metadata enrichment (no publish), so the box's agent-token
   // `fluncle-artist-backfill` cron drives it without an operator token.
   backfill_artists: "admin",
+  // The owned-cover-master sweep (RFC U3b) — agent tier (adminAuth only): it resolves an
+  // album's/artist's OWN ≤1200² cover into R2, publishes nothing, the `backfill_label_images`
+  // precedent.
+  backfill_cover_masters: "admin",
   backfill_discogs: "admin",
   // The label-logo resolve sweep — agent tier (adminAuth only): it resolves a label's OWN image
   // (Discogs → Wikidata) into R2, publishes nothing, so the box's agent-token cron drives it,

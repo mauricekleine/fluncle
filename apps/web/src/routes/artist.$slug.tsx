@@ -30,7 +30,7 @@ import { artistSignatureLine } from "@/lib/graph-prose";
 import { jsonLdScript } from "@/lib/json-ld";
 import { artistBreadcrumbsJsonLd, musicGroupJsonLd } from "@/lib/log-schema";
 import { artistTitleLine } from "@/lib/log-prose";
-import { spotifyAlbumImageAtSize } from "@/lib/media";
+import { albumCoverAtSize } from "@/lib/media";
 import {
   type ArtistNeighbour,
   type ArtistSignature,
@@ -227,7 +227,7 @@ function artistHead(loaderData: ArtistPageData | undefined) {
       : `${name} in Fluncle's Galaxy.`;
   const coverFinding = findings[0];
   const imageUrl =
-    (coverFinding ? spotifyAlbumImageAtSize(coverFinding.albumImageUrl, "large") : undefined) ??
+    (coverFinding ? albumCoverAtSize(coverFinding.albumImageUrl, "large") : undefined) ??
     `${siteUrl}/fluncle-cover.png`;
 
   const musicGroup = musicGroupJsonLd(
@@ -376,7 +376,7 @@ function ArtistPage() {
                     <TrackArtwork
                       alt=""
                       className="artist-grid-cover"
-                      src={spotifyAlbumImageAtSize(finding.albumImageUrl, "large")}
+                      src={albumCoverAtSize(finding.albumImageUrl, "large")}
                     />
                     <span className="artist-grid-line">{artistTitleLine(finding)}</span>
                   </Link>

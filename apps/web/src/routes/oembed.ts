@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { siteUrl } from "@/lib/fluncle-links";
 import { artistTitleLine } from "@/lib/log-prose";
-import { spotifyAlbumImageAtSize } from "@/lib/media";
+import { albumCoverAtSize } from "@/lib/media";
 import { mixtapeCoverUrl, mixtapeDisplayTitle } from "@/lib/mixtapes";
 import {
   buildLinkResponse,
@@ -112,7 +112,7 @@ async function resolveOembed(
     const findings = await getFindingsByArtist(artist.id, artist.name);
     const cover = findings[0];
     const thumbnailUrl =
-      (cover ? spotifyAlbumImageAtSize(cover.albumImageUrl, "large") : undefined) ??
+      (cover ? albumCoverAtSize(cover.albumImageUrl, "large") : undefined) ??
       `${siteUrl}/fluncle-cover.png`;
 
     return buildLinkResponse({

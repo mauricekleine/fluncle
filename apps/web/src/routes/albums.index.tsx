@@ -4,7 +4,7 @@ import { TrackArtwork } from "@/components/track-artwork";
 import { siteUrl } from "@/lib/fluncle-links";
 import { findingsCount } from "@/lib/format";
 import { jsonLdScript } from "@/lib/json-ld";
-import { spotifyAlbumImageAtSize } from "@/lib/media";
+import { albumCoverAtSize } from "@/lib/media";
 import { type AlbumIndexEntry, listAlbumsWithFindingCounts } from "@/lib/server/albums";
 
 // The albums index: every record Fluncle has logged a finding off, cover-led (the album art
@@ -78,7 +78,7 @@ function AlbumsPage() {
                   <TrackArtwork
                     alt=""
                     className="artist-grid-cover"
-                    src={spotifyAlbumImageAtSize(album.coverImageUrl, "large")}
+                    src={albumCoverAtSize(album.coverImageUrl, "large")}
                   />
                   <span className="artist-grid-line">{album.name}</span>
                   <span className="artist-grid-count">{findingsCount(album.findingCount)}</span>

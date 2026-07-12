@@ -2,7 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { siteUrl } from "@/lib/fluncle-links";
 import { formatDateLong } from "@/lib/format";
 import { artistTitleLine } from "@/lib/log-prose";
-import { spotifyAlbumImageAtSize, trackMedia } from "@/lib/media";
+import { albumCoverAtSize, trackMedia } from "@/lib/media";
 import { mixtapeCoverUrl, mixtapeDisplayTitle } from "@/lib/mixtapes";
 import { requireParam } from "@/lib/server/http-errors";
 import { resolveLogPageTarget } from "@/lib/server/log-resolver";
@@ -174,8 +174,7 @@ export const Route = createFileRoute("/embed/$logId")({
             actionLabel: "Listen on Spotify",
             artist: track.artists.join(", "),
             coverUrl:
-              spotifyAlbumImageAtSize(track.albumImageUrl, "large") ??
-              trackMedia(resolvedLogId).coverUrl,
+              albumCoverAtSize(track.albumImageUrl, "large") ?? trackMedia(resolvedLogId).coverUrl,
             dateLabel: "Found",
             dateValue: formatDateLong(track.addedAt),
             logId: resolvedLogId,

@@ -9,7 +9,7 @@ import { findingsCount } from "@/lib/format";
 import { jsonLdScript } from "@/lib/json-ld";
 import { galaxyBreadcrumbsJsonLd, musicPlaylistJsonLd } from "@/lib/log-schema";
 import { artistTitleLine } from "@/lib/log-prose";
-import { spotifyAlbumImageAtSize } from "@/lib/media";
+import { albumCoverAtSize } from "@/lib/media";
 import { GALAXY_INDEX_MIN_FINDINGS, getGalaxyLensPage } from "@/lib/server/galaxies-map";
 import { type GalaxyListItem, type TrackListItem } from "@fluncle/contracts";
 
@@ -49,7 +49,7 @@ function galaxyHead(loaderData: GalaxyPageData | null | undefined) {
   const description = `${galaxy.name}: ${galaxyIntroLine(galaxy.memberCount)} A sonic galaxy in Fluncle's Findings.`;
   const coverFinding = findings[0];
   const imageUrl =
-    (coverFinding ? spotifyAlbumImageAtSize(coverFinding.albumImageUrl, "large") : undefined) ??
+    (coverFinding ? albumCoverAtSize(coverFinding.albumImageUrl, "large") : undefined) ??
     `${siteUrl}/fluncle-cover.png`;
   // Thin-content gate: index only at ≥ GALAXY_INDEX_MIN_FINDINGS members; below that the
   // page still serves 200 but is noindex + out of the sitemap (the /artist precedent).
@@ -130,7 +130,7 @@ function GalaxyPage() {
                     <TrackArtwork
                       alt=""
                       className="artist-grid-cover"
-                      src={spotifyAlbumImageAtSize(finding.albumImageUrl, "large")}
+                      src={albumCoverAtSize(finding.albumImageUrl, "large")}
                     />
                     <span className="artist-grid-line">{artistTitleLine(finding)}</span>
                   </Link>

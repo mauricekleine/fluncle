@@ -10,7 +10,7 @@ import {
   type TrackListItem,
 } from "@fluncle/contracts";
 import { logPageUrl } from "../fluncle-links";
-import { spotifyAlbumImageAtSize, versionedObservationAudioUrl } from "../media";
+import { bestAlbumCoverUrl, versionedObservationAudioUrl } from "../media";
 import { nextBoundaryEpochMs, type RadioScheduleEntry } from "../radio-schedule";
 import { type FeedItem, type MixtapeMember, rowToMixtape } from "../mixtapes";
 import { composeAppleArtworkUrl } from "./apple-music";
@@ -58,6 +58,12 @@ export type TrackRow = {
   album_artwork_url_template: string | null;
   album_artwork_width: number | null;
   album_image_url: string | null;
+  // The album's OWNED cover master (RFC U3b), joined by `tracks.album_id`. `album_image_state` is
+  // `resolved` only once the `backfill_cover_masters` sweep stored a ≤1200 derivative; the DTO
+  // then serves it via Cloudflare Images (`bestAlbumCoverUrl`) instead of the Spotify hotlink.
+  album_image_key: string | null;
+  album_image_state: string | null;
+  album_image_updated_at: string | null;
   // The graph pointers, joined by `tracks.album_id` / `tracks.label_id` (see `label_slug`
   // below). Non-null only when the entity row exists — which is what lets a `GraphLink`
   // render server-side, with the page, and never point at a 404.
@@ -176,6 +182,9 @@ const TRACK_SELECT = `tracks.track_id, tracks.spotify_url, tracks.apple_music_ur
   (select artwork_url_template from albums where albums.id = tracks.album_id) as album_artwork_url_template,
   (select artwork_width from albums where albums.id = tracks.album_id) as album_artwork_width,
   (select artwork_height from albums where albums.id = tracks.album_id) as album_artwork_height,
+  (select image_key from albums where albums.id = tracks.album_id) as album_image_key,
+  (select image_state from albums where albums.id = tracks.album_id) as album_image_state,
+  (select image_updated_at from albums where albums.id = tracks.album_id) as album_image_updated_at,
   (select slug from labels where labels.id = tracks.label_id) as label_slug,
   (select url from social_posts
      where track_id = tracks.track_id and platform = 'tiktok' and status = 'published'
@@ -338,14 +347,18 @@ export function toLeanTrackListItem(row: LeanTrackRow): LeanTrackListItem {
     addedAt: row.added_at,
     addedToSpotify: Boolean(row.added_to_spotify),
     album: row.album ?? undefined,
-    // THE BEST DISPLAY COVER, chosen at the DTO boundary so web, mobile, and the video
-    // pipeline all upgrade at once (RFC musickit-second-authority U3a). We store Spotify's
-    // 300² but every surface wants the sharper 640² (the /log poster upscaled it client-side;
-    // mobile + the video pipeline read the raw stored URL and never touched web's helpers), so
-    // the swap happens HERE, once, server-side. `spotifyAlbumImageAtSize` is idempotent and
-    // passes a non-Spotify (or owned-master, once U3b lands) URL through untouched, so a web
-    // caller re-sizing this to `small`/`large` still works.
-    albumImageUrl: spotifyAlbumImageAtSize(row.album_image_url ?? undefined, "large"),
+    // THE BEST DISPLAY COVER, chosen at the DTO boundary so web, mobile, and the video pipeline
+    // all upgrade at once (RFC musickit-second-authority U3a → U3b). Prefer the album's OWNED
+    // 1200²-capped master through Cloudflare Images once the sweep resolved one; else fall through
+    // to the Spotify chain upgraded from the stored 300² to 640². Emitted at `large`; a surface
+    // re-sizes with `albumCoverAtSize` (which handles BOTH providers), so mobile + the video
+    // pipeline (raw consumers) get a right-sized cover and the feed rows can still ask for `small`.
+    albumImageUrl: bestAlbumCoverUrl({
+      imageKey: row.album_image_key,
+      imageState: row.album_image_state,
+      imageUpdatedAt: row.album_image_updated_at,
+      spotifyUrl: row.album_image_url,
+    }),
     // The graph pointers — the `/album/<slug>` + `/label/<slug>` pages this finding belongs
     // to, resolved in the SAME select that loaded the track. This is what makes the GraphLink
     // system free at the point of use: every surface that renders a finding already holds the

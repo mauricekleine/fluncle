@@ -20,6 +20,7 @@ import {
   backfillDiscogsIds,
   backfillLastfmLoves,
 } from "../backfill";
+import { type CoverMasterKind, resolveCoverMasters } from "../cover-masters";
 import { resolveLabelImages } from "../label-images";
 import { adminAuth } from "../orpc-auth";
 import { apiFault, type Implementer, parseBool, parseLimit } from "./_shared";
@@ -192,9 +193,46 @@ export function adminBackfillsHandlers(os: Implementer) {
       }
     });
 
+  // POST /admin/backfill/cover-masters — agent tier (`adminAuth`): resolves an album's/artist's OWN
+  // ≤1200²-capped cover master (RFC U3b) into R2, no publish, so the box's agent-token cron drives
+  // it. The world-served bucket is `env.VIDEOS` (found.fluncle.com), the label-logo precedent.
+  const backfillCoverMastersHandler = os.backfill_cover_masters
+    .use(adminAuth)
+    .handler(async ({ input }) => {
+      try {
+        const { query } = input;
+        // Tolerant parse, like limit/dryRun: any value other than `artist` is `album` (the default).
+        const kind: CoverMasterKind = query.kind === "artist" ? "artist" : "album";
+        const result = await resolveCoverMasters(
+          env.VIDEOS,
+          kind,
+          parseLimit(query.limit, BACKFILL_DEFAULT_LIMIT, BACKFILL_MAX_LIMIT),
+          parseBool(query.dryRun),
+          query.cursor ?? undefined,
+        );
+
+        return {
+          dryRun: result.dryRun,
+          failed: result.failed,
+          failedCount: result.failedCount,
+          kind: result.kind,
+          nextCursor: result.nextCursor,
+          none: result.none,
+          noneCount: result.noneCount,
+          ok: true as const,
+          rateLimited: result.rateLimited,
+          resolved: result.resolved,
+          resolvedCount: result.resolvedCount,
+        };
+      } catch (error) {
+        throw apiFault(error);
+      }
+    });
+
   return {
     backfill_apple_catalogue: backfillAppleCatalogueHandler,
     backfill_apple_music: backfillAppleMusicHandler,
+    backfill_cover_masters: backfillCoverMastersHandler,
     backfill_discogs: backfillDiscogsHandler,
     backfill_label_images: backfillLabelImagesHandler,
     backfill_lastfm: backfillLastfmHandler,

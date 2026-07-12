@@ -46,7 +46,7 @@ import { BrandIcon } from "@/components/brand-icon";
 import { GraphLink } from "@/components/graph-link";
 import { TrackArtwork } from "@/components/track-artwork";
 import { artistTitleLine } from "@/lib/log-prose";
-import { spotifyAlbumImageAtSize } from "@/lib/media";
+import { albumCoverAtSize } from "@/lib/media";
 import { type GraphPageTrack } from "@/lib/log-schema";
 import { type ArtistChip } from "@/lib/server/artists";
 import { type CatalogueTrackItem, type TrackListItem } from "@/lib/server/tracks";
@@ -109,7 +109,7 @@ export function FindingsGrid({
               <TrackArtwork
                 alt=""
                 className="artist-grid-cover"
-                src={spotifyAlbumImageAtSize(finding.albumImageUrl, "large")}
+                src={albumCoverAtSize(finding.albumImageUrl, "large")}
               />
               <span className="artist-grid-line">{artistTitleLine(finding)}</span>
             </Link>

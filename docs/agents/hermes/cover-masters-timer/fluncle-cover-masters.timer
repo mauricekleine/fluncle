@@ -1,0 +1,18 @@
+[Unit]
+Description=fluncle-cover-masters timer — resolve one bounded batch of pending album/artist cover masters every 60m on the rave-02 host (not the Hermes gateway)
+
+[Timer]
+# First tick shortly after boot (staggered at 11min, off the other sweeps' minutes), then every
+# 60m. The publish path + catalogue crawl mint only a handful of new `pending` albums/artists a
+# day, and each cover is a single image GET, so an hourly cadence drains the worklist with room to
+# spare. A tick that finds everything already resolved/none is a cheap no-op.
+#
+# The `albums`/`artists` rows are the durable state (per-entity `image_state`/`image_attempted_at`/
+# `image_failures`), so a tick missed across a reboot costs nothing — Persistent catches it up and
+# the next tick resumes from the top; the cooldown re-skips the rows already attempted.
+OnBootSec=11min
+OnUnitActiveSec=60min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
