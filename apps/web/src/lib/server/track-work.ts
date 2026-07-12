@@ -190,7 +190,7 @@ const WORK_ORDER = `order by (f.track_id is not null) desc,
   t.track_id desc`;
 
 /** The scope's WHERE fragment. Static literals — never interpolated user input. */
-function scopeClause(scope: TrackWorkScope): string {
+export function scopeClause(scope: TrackWorkScope): string {
   if (scope === "findings") {
     return "f.track_id is not null";
   }
@@ -226,7 +226,7 @@ function scopeClause(scope: TrackWorkScope): string {
  *   admissible source (a 30s preview yields a garbage vector — ratified), so the key gate
  *   is the point, not a convenience.
  */
-function kindClause(kind: TrackWorkKind): { args: string[]; sql: string } {
+export function kindClause(kind: TrackWorkKind): { args: string[]; sql: string } {
   if (kind === "capture") {
     const cooldown = new Date(Date.now() - CAPTURE_FAILED_COOLDOWN_MS).toISOString();
 
@@ -395,13 +395,25 @@ export async function countTrackWork(options: {
 
   const effectiveScope: TrackWorkScope = catalogueShut ? "findings" : scope;
   const kindWhere = kindClause(kind);
+  const where = `${scopeClause(effectiveScope)} and ${kindWhere.sql}`;
+
+  // THE JOIN IS CONDITIONAL — and only in this count path (the page read above always needs `f`
+  // for its SELECT and its ORDER BY). `findings.track_id` is unique, so a `left join findings`
+  // the WHERE never mentions can neither filter nor fan a row out: it changes no `count(*)`. It
+  // is not free, though — at 100k rows the planner still probes `findings` once per row, ~175 ms
+  // of the 316 ms cold-start p50 (measured 2026-07-12; docs/local-database.md). So the join goes
+  // in exactly when the predicate references it, derived STRUCTURALLY from the assembled clause
+  // rather than a kind/scope truth table: the ONLY thing under an `f.` prefix is the `findings`
+  // alias, so any `f.` fragment — the `findings`/`catalogue` scopes' `f.track_id`, `capture`'s
+  // `f.log_id` — pulls the join in, and `embed`/`analyze` at `scope=all` (no `f.` at all) drop it.
+  const needsFindings = where.includes("f.");
   const db = await getDb();
   const result = await db.execute({
     args: kindWhere.args,
     sql: `select count(*) as queued
           from tracks t
-          left join findings f on f.track_id = t.track_id
-          where ${scopeClause(effectiveScope)} and ${kindWhere.sql}`,
+          ${needsFindings ? "left join findings f on f.track_id = t.track_id" : ""}
+          where ${where}`,
   });
 
   return Number(typedRows<{ queued: number }>(result.rows)[0]?.queued ?? 0);

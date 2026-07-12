@@ -666,4 +666,106 @@ describe("countTrackWork — how big is the backlog, not how big is the page", (
 
     expect(await countTrackWork({ kind: "capture" })).toBe(2);
   });
+
+  // ───────────────────────────────────────────────────────────────────────────────────────
+  // THE JOIN DROP IS RESULT-PRESERVING (perf: shave the count's un-read `left join findings`).
+  //
+  // `countTrackWork` now includes the `left join findings` ONLY when its assembled predicate
+  // references `f` — `embed`/`analyze` at `scope=all` count a bare `from tracks`, which drops a
+  // per-row join probe worth ~175 ms of the 316 ms cold-start p50 at 100k rows (measured against
+  // hosted Turso, docs/local-database.md). The correctness claim: `findings.track_id` is unique,
+  // so an unreferenced left join can neither filter nor fan out and changes no `count(*)`. This
+  // proves it against the REAL predicates for every kind × scope, on a mixed dataset, by counting
+  // the ALWAYS-JOINED version directly and asserting the shipped count matches it.
+  // ───────────────────────────────────────────────────────────────────────────────────────
+  describe("dropping the un-read findings join changes no count", () => {
+    /** The ground-truth count: the module's exact predicate, but with the join ALWAYS present. */
+    async function joinedCount(
+      kind: "analyze" | "capture" | "embed",
+      scope: "all" | "catalogue" | "findings",
+    ): Promise<number> {
+      const { kindClause, scopeClause } = await import("./track-work");
+      const kindWhere = kindClause(kind);
+      const result = await db.execute({
+        args: kindWhere.args,
+        sql: `select count(*) as queued
+              from tracks t
+              left join findings f on f.track_id = t.track_id
+              where ${scopeClause(scope)} and ${kindWhere.sql}`,
+      });
+
+      return Number(result.rows[0]?.queued ?? 0);
+    }
+
+    /**
+     * A genuinely MIXED archive: certified + catalogue, captured + not, embedded + not, analysed
+     * from full / preview / never, and capture priorities spanning ranked / unranked / vetoed. The
+     * point is that `findings` rows actually exist and actually get captured — so the left join is
+     * non-trivially exercised and the "no-op" claim has something to be true ABOUT.
+     */
+    async function seedMixedArchive(): Promise<void> {
+      // Certified, fully done: audio + vector + full-song analysis. Out of every queue.
+      const findingDone = "fdonennnnnnnnnnnnnnnnnn";
+      await seedTrack(db, { logId: "004.7.2A", trackId: findingDone });
+      await withAudio(findingDone, { analyzedFrom: "full", embedding: true });
+
+      // Certified, no audio, coordinate present → capture only.
+      await seedTrack(db, { logId: "004.7.2B", trackId: "fnoaudionnnnnnnnnnnnnn" });
+
+      // Certified, captured, preview analysis, no vector → analyze + embed (capture is done).
+      const findingPreview = "fpreviewnnnnnnnnnnnnnn";
+      await seedTrack(db, { logId: "004.7.2C", trackId: findingPreview });
+      await withAudio(findingPreview, { analyzedFrom: "preview" });
+
+      // Catalogue, fully done, top rung. Out of every queue.
+      const catDone = "catdonennnnnnnnnnnnnnn";
+      await seedCatalogueTrack(db, { trackId: catDone });
+      await withAudio(catDone, { embedding: true });
+      await withPriority(catDone, 3);
+
+      // Catalogue, no audio, ranked non-vetoed → capture only.
+      const catRanked = "catrankednnnnnnnnnnnnn";
+      await seedCatalogueTrack(db, { trackId: catRanked });
+      await withPriority(catRanked, 2);
+
+      // Catalogue, no audio, VETOED (−1) → in no capture queue.
+      const catVetoed = "catvetoednnnnnnnnnnnnn";
+      await seedCatalogueTrack(db, { trackId: catVetoed });
+      await withPriority(catVetoed, -1);
+
+      // Catalogue, no audio, UNRANKED (no priority) → in no capture queue.
+      await seedCatalogueTrack(db, { trackId: "catunrankednnnnnnnnnnn" });
+
+      // Catalogue, captured, never analysed, no vector → analyze + embed.
+      const catCaptured = "catcapturednnnnnnnnnnn";
+      await seedCatalogueTrack(db, { trackId: catCaptured });
+      await withAudio(catCaptured);
+    }
+
+    it("matches the always-joined count for every kind × scope on a mixed archive", async () => {
+      const { countTrackWork } = await import("./track-work");
+
+      // Budget OPEN so the capture brake does not narrow catalogue→findings — that would move the
+      // scope out from under the comparison. The brake is proven separately above; this case is
+      // about the FROM clause, holding everything else equal.
+      await openCaptureBudget();
+      await seedMixedArchive();
+
+      const kinds = ["analyze", "capture", "embed"] as const;
+      const scopes = ["all", "catalogue", "findings"] as const;
+
+      for (const kind of kinds) {
+        for (const scope of scopes) {
+          expect(await countTrackWork({ kind, scope })).toBe(await joinedCount(kind, scope));
+        }
+      }
+
+      // …and the archive is non-degenerate, so the equalities above are not all trivially 0 — the
+      // join-dropping `scope=all` counts (embed/analyze) and the join-keeping ones each see rows.
+      expect(await countTrackWork({ kind: "embed", scope: "all" })).toBeGreaterThan(0);
+      expect(await countTrackWork({ kind: "analyze", scope: "all" })).toBeGreaterThan(0);
+      expect(await countTrackWork({ kind: "capture", scope: "findings" })).toBeGreaterThan(0);
+      expect(await countTrackWork({ kind: "embed", scope: "catalogue" })).toBeGreaterThan(0);
+    });
+  });
 });
