@@ -53,6 +53,9 @@ const config: ExpoConfig = {
   icon: "./assets/icon.png",
   ios: {
     bundleIdentifier: "com.fluncle.app",
+    infoPlist: {
+      ITSAppUsesNonExemptEncryption: false,
+    },
     supportsTablet: false,
     // universal links need the paid account — omitted on free-team builds
     ...(FREE_TEAM ? {} : { associatedDomains: ["applinks:www.fluncle.com"] }),
