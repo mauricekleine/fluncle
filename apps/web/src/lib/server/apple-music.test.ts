@@ -301,6 +301,59 @@ describe("buildCatalogBundle", () => {
     expect(buildCatalogBundle(null)).toBeNull();
   });
 
+  it("THE REAL SHAPE: albums arrive INLINED in relationships.albums.data with attributes — no included[] at all", async () => {
+    // Verified live 2026-07-12: Apple does NOT send a top-level `included[]` (contra
+    // generic JSON:API). The full album objects ride inside the relationship array.
+    // The first pilot read 0 albums on 43/43 hits against the included[]-only join —
+    // this is that bug, pinned.
+    const { buildCatalogBundle } = await import("./apple-music");
+
+    const body = {
+      data: [
+        {
+          attributes: {
+            artwork: { height: 3000, url: "https://a.mzstatic.com/img/{w}x{h}bb.jpg", width: 3000 },
+            isrc: "GBBGL2400001",
+            previews: [{ url: "https://audio-ssl.itunes.apple.com/preview.m4a" }],
+            url: "https://music.apple.com/us/song/1",
+          },
+          id: "song1",
+          relationships: {
+            albums: {
+              data: [
+                {
+                  attributes: {
+                    isCompilation: true,
+                    recordLabel: "Believe",
+                    releaseDate: "2018-01-01",
+                  },
+                  id: "comp1",
+                  type: "albums",
+                },
+                {
+                  attributes: {
+                    isCompilation: false,
+                    recordLabel: "Hospital Records",
+                    releaseDate: "2019-03-15",
+                    upc: "originalupc",
+                  },
+                  id: "orig1",
+                  type: "albums",
+                },
+              ],
+            },
+          },
+          type: "songs",
+        },
+      ],
+    };
+
+    const bundle = buildCatalogBundle(body);
+
+    expect(bundle?.canonicalAlbum?.id).toBe("orig1");
+    expect(bundle?.canonicalAlbum?.recordLabel).toBe("Hospital Records");
+  });
+
   it("THE ADVERSARIAL CASE: data[0]'s first album is a distributor compilation, the correct original is deeper in included[]", async () => {
     const { buildCatalogBundle } = await import("./apple-music");
 

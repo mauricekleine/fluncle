@@ -385,7 +385,11 @@ type AppleRawSong = {
     artwork?: AppleRawArtwork;
     previews?: Array<{ url?: string }>;
   };
-  relationships?: { albums?: { data?: AppleRawResourceRef[] } };
+  // With `include=albums`, Apple INLINES the full album objects here — each entry
+  // carries `attributes` directly (verified live 2026-07-12: no top-level `included[]`
+  // arrives at all, contra generic JSON:API convention). The `AppleRawAlbum` shape
+  // covers both the bare-ref and the inlined-attributes forms.
+  relationships?: { albums?: { data?: AppleRawAlbum[] } };
 };
 
 type AppleRawAlbum = {
@@ -465,12 +469,16 @@ function parseAlbum(raw: AppleRawAlbum): AppleAlbumCandidate | undefined {
 
 /**
  * Collect the album candidates for the picker: every album the response's songs
- * reference (via `relationships.albums.data[]`), resolved from the TOP-LEVEL
- * `included[]` array by id, deduped. Exported pure — the adversarial case (the
- * primary song belongs to BOTH a distributor compilation and its original album,
- * both present in `included[]`) is exactly what this feeds the picker. A song that
- * references an album id absent from `included[]` (a bare ref) simply drops out —
- * the honest miss the bundle then reports as `canonicalAlbum: undefined`.
+ * reference via `relationships.albums.data[]`. With `include=albums`, Apple INLINES
+ * the full album objects there — each entry carries `attributes` directly. (Verified
+ * live 2026-07-12 against the real API: NO top-level `included[]` arrives, contra the
+ * generic JSON:API convention this first shipped against — the pilot read 0 albums on
+ * 43/43 hits until this join was corrected.) A top-level `included[]` lookup is kept
+ * as a fallback in case any response variant ever ships one. Exported pure — the
+ * adversarial case (the primary song belongs to BOTH a distributor compilation and
+ * its original album) is exactly what this feeds the picker. A bare ref with no
+ * attributes anywhere simply drops out — the honest miss the bundle then reports as
+ * `canonicalAlbum: undefined`.
  */
 export function collectAlbumCandidates(body: unknown): AppleAlbumCandidate[] {
   const response = (body ?? {}) as AppleRawCatalogResponse;
@@ -500,7 +508,9 @@ export function collectAlbumCandidates(body: unknown): AppleAlbumCandidate[] {
         continue;
       }
 
-      const album = albumsById.get(id);
+      // Prefer the inlined album object (the real shape); fall back to an
+      // `included[]` resolution should one ever arrive.
+      const album = (ref.attributes ? parseAlbum(ref) : undefined) ?? albumsById.get(id);
 
       if (album) {
         seen.add(id);
