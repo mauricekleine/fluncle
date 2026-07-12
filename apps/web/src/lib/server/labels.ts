@@ -20,10 +20,21 @@
 // (one row per DISTINCT label, never a row per track).
 
 import { randomUUID } from "node:crypto";
-import { type LabelAdminItem, type LabelSeedState } from "@fluncle/contracts";
-import { slugify } from "@fluncle/contracts/util/galaxy-slug";
+import {
+  type LabelAdminItem,
+  type LabelAliasCandidate,
+  type LabelSeedState,
+} from "@fluncle/contracts";
+import { labelFold, slugify } from "@fluncle/contracts/util/galaxy-slug";
 import { labelLogoUrl } from "../media";
 import { getDb, typedRows } from "./db";
+
+// Re-exported so the label module is the one home for label string identity: the crawler
+// (`crawl.ts`) folds MB label names with it, and the alias derivation folds Apple recordLabels
+// with it, so the two agree by construction. `labelFold` is more aggressive than `labelSlug`:
+// it drops ALL non-alphanumerics ("Med School" ⇄ "Medschool"), where the slug keeps the fold's
+// hyphen boundary ("med-school" ≠ "medschool"). See @fluncle/contracts/util/galaxy-slug.
+export { labelFold };
 
 // The thin-content gate for label pages: a `/label/<slug>` page indexes (and enters the
 // sitemap) only with this many RENDERABLE tracks or more — its findings plus the quieter
@@ -33,6 +44,10 @@ import { getDb, typedRows } from "./db";
 // `ALBUM_INDEX_MIN_TRACKS` for why the count is over renderable tracks rather than
 // findings alone.
 export const LABEL_INDEX_MIN_TRACKS = 3;
+
+// The distributor denylist (U2a) lives in a client-safe module so the deploy-time derivation
+// shares one source of truth; re-exported here as the runtime home the label consumers reach.
+export { DISTRIBUTOR_DENYLIST, isDistributorLabel } from "../label-distributors";
 
 /** A row from the `labels` table (snake_case columns). */
 type LabelRow = {
@@ -110,6 +125,26 @@ async function findingCountsBySlug(): Promise<Map<string, number>> {
 }
 
 /**
+ * The CONFIRMED-ALIAS choke point: does a slug resolve to an existing label through a spelling
+ * the operator has already folded in? Returns the canonical `label_id`, or `undefined` when the
+ * slug is nobody's confirmed alias. One indexed read on `label_aliases_alias_slug_idx`.
+ *
+ * This is the correctness trap the whole unit exists for. `tracks.label` is immutable, so a raw
+ * string whose spelling an operator folded into another label (via a confirmed alias) would, on
+ * the next `ensureLabel` or deploy `reconcileLabels`, re-mint its own slug as a NEW label —
+ * un-doing the fold every deploy. Consulting confirmed aliases BEFORE minting closes that.
+ */
+async function resolveConfirmedAliasLabelId(slug: string): Promise<string | undefined> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [slug],
+    sql: `select label_id from label_aliases where alias_slug = ? and status = 'confirmed' limit 1`,
+  });
+
+  return typedRows<{ label_id: string }>(result.rows)[0]?.label_id;
+}
+
+/**
  * Ensure a `labels` row exists for one raw label string, and return its id. A brand-new
  * label enters as `undecided` (the DDL default) — never silently crawled, never silently
  * dropped — and lands in the operator's attention queue as a label to rule on.
@@ -118,12 +153,24 @@ async function findingCountsBySlug(): Promise<Map<string, number>> {
  * `ruled_at`, and its display `name` (the first spelling seen wins). A blank or
  * all-punctuation label mints nothing. Called best-effort from the publish path, so
  * a failure here must never block an add — the deploy-time reconcile backstops it.
+ *
+ * ── ALIAS-AWARE (RFC musickit-second-authority, U2a) ────────────────────────────
+ * Before minting, it consults confirmed aliases: if this slug is a spelling the operator has
+ * folded into another label, it returns THAT label's id and mints nothing. The crawler reaches
+ * this same choke point (`crawl.ts` calls `ensureLabel` on a discovered label), so its discovery
+ * path is covered here too.
  */
 export async function ensureLabel(raw: string | null | undefined): Promise<string | undefined> {
   const slug = labelSlug(raw);
 
   if (!slug || typeof raw !== "string") {
     return undefined;
+  }
+
+  const aliasLabelId = await resolveConfirmedAliasLabelId(slug);
+
+  if (aliasLabelId) {
+    return aliasLabelId;
   }
 
   const db = await getDb();
@@ -386,6 +433,13 @@ export async function listLabelSitemapRows(minTracks: number): Promise<EntitySit
  * queue with the label of every track Fluncle has merely heard of, the moment the
  * catalogue epic lands. Same predicate as `findingCountsBySlug`, so the mint and the
  * count can never disagree.
+ *
+ * ── ALIAS-AWARE (RFC musickit-second-authority, U2a) ────────────────────────────
+ * A confirmed alias's slug is NEVER re-minted: it already resolves to another label, and
+ * `tracks.label` is immutable, so minting it here would re-open a fold the operator closed —
+ * every deploy. The confirmed-alias slug set is preloaded once (the `findingCountsBySlug`
+ * pattern) and any slug in it is skipped. NOTE: the deploy path is `scripts/backfill-labels.ts`
+ * (which carries the same guard); this runtime twin is proven by the re-mint regression test.
  */
 export async function reconcileLabels(): Promise<number> {
   const db = await getDb();
@@ -397,6 +451,10 @@ export async function reconcileLabels(): Promise<number> {
           group by tracks.label`,
   });
 
+  // Every slug the operator has already folded into another label — preloaded once so the
+  // mint loop below never re-mints one (the re-mint trap this unit closes).
+  const confirmedAliasSlugs = await confirmedAliasSlugSet();
+
   // First spelling wins per slug — stable across runs because the row is only ever
   // inserted once (`on conflict do nothing`).
   const bySlug = new Map<string, string>();
@@ -404,7 +462,7 @@ export async function reconcileLabels(): Promise<number> {
   for (const row of typedRows<LabelCountRow>(result.rows)) {
     const slug = labelSlug(row.label);
 
-    if (slug && !bySlug.has(slug)) {
+    if (slug && !confirmedAliasSlugs.has(slug) && !bySlug.has(slug)) {
       bySlug.set(slug, row.label.trim());
     }
   }
@@ -530,4 +588,111 @@ export async function listLabelReviewRows(): Promise<LabelReviewRow[]> {
     labelId: row.id,
     name: row.name,
   }));
+}
+
+// ── LABEL ALIASES: two spellings, one label (RFC musickit-second-authority, U2a) ────────────
+// A second metadata authority (Apple `recordLabel`, corroborated by MusicBrainz over a shared
+// ISRC) proposes an alternate spelling of a label; the operator confirms or rejects it. A
+// CONFIRMED alias (1) protects its slug from re-minting (above), and (2) joins the public
+// `/label/<slug>` Organization JSON-LD as `alternateName` (decision C). See docs/label-entity.md.
+
+/**
+ * Every slug the operator has folded into another label via a CONFIRMED alias — preloaded once
+ * for the reconcile's re-mint guard (the `findingCountsBySlug` pattern). Bounded: `label_aliases`
+ * holds a handful of rows per label, never one per track.
+ */
+async function confirmedAliasSlugSet(): Promise<Set<string>> {
+  const db = await getDb();
+  const result = await db.execute(
+    `select alias_slug from label_aliases where status = 'confirmed'`,
+  );
+
+  return new Set(typedRows<{ alias_slug: string }>(result.rows).map((row) => row.alias_slug));
+}
+
+/**
+ * A label's CONFIRMED alternate spellings, name-sorted — the `alternateName` array the public
+ * `/label/<slug>` Organization JSON-LD carries (decision C). `candidate`/`hint` never surface
+ * publicly, so this filters to `status = 'confirmed'`. Empty for a label with no confirmed alias.
+ */
+export async function getConfirmedAliasNames(labelId: string): Promise<string[]> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [labelId],
+    sql: `select alias from label_aliases
+          where label_id = ? and status = 'confirmed'
+          order by alias collate nocase asc`,
+  });
+
+  return typedRows<{ alias: string }>(result.rows).map((row) => row.alias);
+}
+
+/**
+ * Every OPEN alias candidate (`status = 'candidate'`), joined to its canonical label, newest
+ * first — the `/admin/labels` review section's read. Bounded by the alias table, which the
+ * derivation keeps small (one row per corroborated/hinted spelling, `on conflict do nothing`).
+ */
+export async function listLabelAliasCandidates(): Promise<LabelAliasCandidate[]> {
+  const db = await getDb();
+  const result = await db.execute(
+    `select la.id, la.alias, la.alias_slug, la.source, la.kind, la.created_at,
+            labels.id as label_id, labels.name as label_name, labels.slug as label_slug
+     from label_aliases la
+     join labels on labels.id = la.label_id
+     where la.status = 'candidate'
+     order by la.created_at desc, la.alias collate nocase asc`,
+  );
+
+  return typedRows<{
+    alias: string;
+    alias_slug: string;
+    created_at: string;
+    id: string;
+    kind: LabelAliasCandidate["kind"];
+    label_id: string;
+    label_name: string;
+    label_slug: string;
+    source: LabelAliasCandidate["source"];
+  }>(result.rows).map((row) => ({
+    alias: row.alias,
+    aliasSlug: row.alias_slug,
+    createdAt: row.created_at,
+    id: row.id,
+    kind: row.kind,
+    labelId: row.label_id,
+    labelName: row.label_name,
+    labelSlug: row.label_slug,
+    source: row.source,
+  }));
+}
+
+/**
+ * The operator's CONFIRM: rule a candidate the same label (`status → confirmed`). Only then does
+ * it fold into resolution and the public `alternateName`. Idempotent — confirming an already-
+ * confirmed or absent alias is a harmless no-op (the `/admin` board is a live surface; a double
+ * tap or a stale row must never throw). Returns whether a row moved.
+ */
+export async function confirmLabelAlias(id: string): Promise<boolean> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [id],
+    sql: `update label_aliases set status = 'confirmed' where id = ? and status <> 'confirmed'`,
+  });
+
+  return result.rowsAffected > 0;
+}
+
+/**
+ * The operator's REJECT: rule a candidate NOT the same label, and delete the row. It never
+ * touched `tracks.label` or `labels.name`, so there is nothing to unwind. Idempotent — rejecting
+ * an absent alias is a no-op. Returns whether a row was removed.
+ */
+export async function rejectLabelAlias(id: string): Promise<boolean> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [id],
+    sql: `delete from label_aliases where id = ?`,
+  });
+
+  return result.rowsAffected > 0;
 }

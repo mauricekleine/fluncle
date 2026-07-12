@@ -12,7 +12,14 @@
 // touches nothing already stored. Neither handler reads or writes a track, a finding, or
 // anything a crawl brought in — and neither ever should. See docs/label-entity.md.
 
-import { LabelNotFoundError, listLabels, updateLabelSeedState } from "../labels";
+import {
+  confirmLabelAlias,
+  LabelNotFoundError,
+  listLabelAliasCandidates,
+  listLabels,
+  rejectLabelAlias,
+  updateLabelSeedState,
+} from "../labels";
 import { adminAuth, operatorGuard } from "../orpc-auth";
 import { ORPCError } from "@orpc/server";
 import { apiFault, type Implementer } from "./_shared";
@@ -48,8 +55,48 @@ export function adminLabelsHandlers(os: Implementer) {
       }
     });
 
+  // GET /admin/labels/aliases — `adminAuth`: the open alias candidates the review section reads.
+  const listLabelAliasesHandler = os.list_label_aliases.use(adminAuth).handler(async () => {
+    try {
+      return { aliases: await listLabelAliasCandidates(), ok: true } as const;
+    } catch (error) {
+      throw apiFault(error);
+    }
+  });
+
+  // POST /admin/labels/aliases/{id}/confirm — OPERATOR tier: rule two spellings one label.
+  const confirmLabelAliasHandler = os.confirm_label_alias
+    .use(adminAuth)
+    .use(operatorGuard)
+    .handler(async ({ input }) => {
+      try {
+        await confirmLabelAlias(input.id);
+
+        return { ok: true } as const;
+      } catch (error) {
+        throw apiFault(error);
+      }
+    });
+
+  // DELETE /admin/labels/aliases/{id} — OPERATOR tier: discard a proposed spelling.
+  const rejectLabelAliasHandler = os.reject_label_alias
+    .use(adminAuth)
+    .use(operatorGuard)
+    .handler(async ({ input }) => {
+      try {
+        await rejectLabelAlias(input.id);
+
+        return { ok: true } as const;
+      } catch (error) {
+        throw apiFault(error);
+      }
+    });
+
   return {
+    confirm_label_alias: confirmLabelAliasHandler,
+    list_label_aliases: listLabelAliasesHandler,
     list_labels_admin: listLabelsAdminHandler,
+    reject_label_alias: rejectLabelAliasHandler,
     update_label: updateLabelHandler,
   };
 }

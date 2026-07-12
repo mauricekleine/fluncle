@@ -62,7 +62,7 @@ import { linkTracksToArtistEntities } from "./artists";
 import { getDb, typedRows } from "./db";
 import { parseDiscogsUrl } from "./discogs";
 import { setLabelMbLabelId } from "./label-images";
-import { ensureLabel, labelSlug, listLabels } from "./labels";
+import { ensureLabel, labelFold, labelSlug, listLabels } from "./labels";
 import { logEvent } from "./log";
 import { mbFetch } from "./musicbrainz";
 import { findSpotifyTrackByIsrc } from "./spotify";
@@ -228,27 +228,12 @@ export function catalogueTrackId(recordingMbid: string): string {
   return `mb_${recordingMbid}`;
 }
 
-/**
- * Fold a label name to its comparable core: lowercase, alphanumerics only, no spaces or
- * punctuation at all. This is deliberately aggressive, because label names are the single
- * dirtiest string in the archive and the two spellings that must fold together are
- * exactly the ones a gentler normalizer keeps apart:
- *
- *   "Medschool" (the operator's) ⇄ "Med School" (MusicBrainz's) — VERIFIED live, and the
- *   reason the first pilot crawl found nothing.
- *   "Pilot." ⇄ "Pilot" · "R.O.A.M" ⇄ "ROAM"
- *
- * Equality of this fold is still an EXACT match — it never accepts "Shogun Records" for
- * "Shogun Audio". And when two MB labels fold the same (there are two "Hospital Records",
- * London and US), the first — MusicBrainz returns them score-ordered — wins, so the
- * choice is deterministic rather than arbitrary.
- */
-function fold(value: string): string {
-  return value
-    .normalize("NFKD")
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}]+/gu, "");
-}
+// The aggressive label fold ("Medschool" ⇄ "Med School", "Pilot." ⇄ "Pilot") is the shared
+// `labelFold` (re-exported from ./labels), so the crawler's label dedup and the Apple
+// recordLabel corroboration agree by construction. When two MB labels fold the same (there
+// are two "Hospital Records", London and US), the first — MusicBrainz returns them
+// score-ordered — wins, so the choice is deterministic rather than arbitrary.
+const fold = labelFold;
 
 // ── Frontier persistence ─────────────────────────────────────────────────────
 

@@ -48,7 +48,13 @@ import {
 } from "./orpc/admin-tracks.js";
 import { type ServiceHealthStatusSchema } from "./orpc/admin-health.js";
 import { type GalaxyAdminItemSchema, type TrackEmbeddingSchema } from "./orpc/admin-galaxies.js";
-import { type LabelAdminItemSchema, type LabelSeedStateSchema } from "./orpc/admin-labels.js";
+import {
+  type LabelAdminItemSchema,
+  type LabelAliasCandidateSchema,
+  type LabelAliasKindSchema,
+  type LabelAliasSourceSchema,
+  type LabelSeedStateSchema,
+} from "./orpc/admin-labels.js";
 import { type NoteGateSchema, type NoteRejectionSchema } from "./orpc/admin-notes.js";
 import { type GalaxyListItemSchema } from "./orpc/galaxies.js";
 import { type GalaxyProgressSchema } from "./orpc/me-galaxy.js";
@@ -158,6 +164,15 @@ export type LabelsAdminResponse = Ok<{ labels: LabelAdminItem[] }>;
 
 /** `PATCH /api/admin/labels/:id` response — the one ruled label. */
 export type LabelUpdateResponse = Ok<{ label: LabelAdminItem }>;
+
+/** Where a label-alias spelling came from (RFC musickit-second-authority, U2a). */
+export type LabelAliasSource = z.infer<typeof LabelAliasSourceSchema>;
+
+/** A label alias's confidence: `name` (corroborated spelling) or `hint` (a weaker lead). */
+export type LabelAliasKind = z.infer<typeof LabelAliasKindSchema>;
+
+/** One open label-alias candidate in the `/admin/labels` review shape. */
+export type LabelAliasCandidate = z.infer<typeof LabelAliasCandidateSchema>;
 
 // ── The auto-note echo gate's ledger (docs/agents/note-agent.md) ─────────────────
 // The gate refuses to STORE an auto-note that echoes a sonic neighbour. It always did,
