@@ -64,11 +64,14 @@ const TEXT_SHADOW = {
 // THE SCRIM (operator ruling 2026-07-12). A warm near-black (rgb(9,6,3) — never pure
 // #000, DESIGN.md) bottom-to-top gradient. Two properties are load-bearing:
 //
-//  1. IMPERCEPTIBLE ONSET — no visible start line. The alpha ramp is eased (a soft
-//     quadratic toe): it holds under ~0.05 through the first third of the gradient
-//     (locations ≤ 0.34 → alpha ≤ 0.04), so where the box begins over the cover there is
-//     nothing an eye can catch. This is the exact failure of iteration two (0→0.35 at
-//     14%) inverted.
+//  1. IMPERCEPTIBLE ONSET AND RAMP — no visible start line AND no visible mid-ramp
+//     banding. Iteration three eased the onset but climbed 0.04→0.30 across 18% of the
+//     height with big slope-jumps between stops — the eye caught the KINKS (Mach
+//     banding), not the darkness. So the alpha now follows one continuous curve —
+//     smootherstep((t−0.12)/0.88)^1.15 — sampled at 15 even stops: near-zero through
+//     the first ~28%, no segment's slope jumping against its neighbour, opaque only
+//     at the very bottom. Regenerate the arrays from that formula; never hand-tune
+//     individual stops (that reintroduces the kinks).
 //  2. OPAQUE FLOOR — alpha 1.0 at the very bottom edge, so the area behind the floating
 //     (translucent) native tab bar reads as solid warm-black, not a fading cover.
 //
@@ -77,28 +80,36 @@ const TEXT_SHADOW = {
 const SCRIM_RGB = "9, 6, 3";
 const SCRIM_COLORS = [
   `rgba(${SCRIM_RGB}, 0)`,
-  `rgba(${SCRIM_RGB}, 0.01)`,
-  `rgba(${SCRIM_RGB}, 0.04)`,
-  `rgba(${SCRIM_RGB}, 0.12)`,
-  `rgba(${SCRIM_RGB}, 0.3)`,
-  `rgba(${SCRIM_RGB}, 0.55)`,
-  `rgba(${SCRIM_RGB}, 0.8)`,
-  `rgba(${SCRIM_RGB}, 0.95)`,
+  `rgba(${SCRIM_RGB}, 0)`,
+  `rgba(${SCRIM_RGB}, 0)`,
+  `rgba(${SCRIM_RGB}, 0.005)`,
+  `rgba(${SCRIM_RGB}, 0.032)`,
+  `rgba(${SCRIM_RGB}, 0.091)`,
+  `rgba(${SCRIM_RGB}, 0.191)`,
+  `rgba(${SCRIM_RGB}, 0.322)`,
+  `rgba(${SCRIM_RGB}, 0.475)`,
+  `rgba(${SCRIM_RGB}, 0.634)`,
+  `rgba(${SCRIM_RGB}, 0.776)`,
+  `rgba(${SCRIM_RGB}, 0.89)`,
+  `rgba(${SCRIM_RGB}, 0.962)`,
+  `rgba(${SCRIM_RGB}, 0.995)`,
   `rgba(${SCRIM_RGB}, 1)`,
 ] as const;
-const SCRIM_LOCATIONS = [0, 0.16, 0.34, 0.44, 0.52, 0.58, 0.64, 0.8, 1] as const;
+const SCRIM_LOCATIONS = [
+  0, 0.071, 0.143, 0.214, 0.286, 0.357, 0.429, 0.5, 0.571, 0.643, 0.714, 0.786, 0.857, 0.929, 1,
+] as const;
 // The rail is the tallest bottom overlay: three RailAction stacks (icon box 36 + label,
 // gap 16) rising from the shared bottom line. This is the height of that band, used to
 // size the scrim so the rail's TOP sits inside the opaque ≥0.7 zone.
 const RAIL_BAND = 196;
 
 // The scrim's total height, from the opaque bottom edge up to its imperceptible toe.
-// Sized so the highest overlay (bottomLine + RAIL_BAND from the bottom) lands at ~0.66
-// down the gradient — inside the ≥0.7 band (alpha ≈ 0.82 there) — while the top third
-// stays under 0.05. Clamped to the screen so it never overflows; the operator verifies
-// the exact clearance on-device (as with NATIVE_TAB_BAR_HEIGHT).
+// Sized so the highest overlay (bottomLine + RAIL_BAND from the bottom) lands at ~0.72
+// down the gradient — alpha ≈ 0.78 on the smootherstep curve — while the first ~28%
+// stays under 0.03. Clamped to the screen (clamping pushes overlays DEEPER into the
+// curve — the safe direction); the operator verifies clearance on-device.
 function scrimHeight(overlayTop: number, screenHeight: number): number {
-  return Math.min(screenHeight, overlayTop / 0.34);
+  return Math.min(screenHeight, overlayTop / 0.28);
 }
 
 // OPERATOR RULING 2026-07-11 (device pass): the firm TEXT_SHADOW above is right for the
