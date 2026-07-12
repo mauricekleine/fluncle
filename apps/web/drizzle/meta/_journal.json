@@ -547,6 +547,13 @@
       "when": 1783805196992,
       "tag": "0077_short_power_man",
       "breakpoints": true
+    },
+    {
+      "idx": 78,
+      "version": "6",
+      "when": 1783838386245,
+      "tag": "0078_greedy_ma_gnuci",
+      "breakpoints": true
     }
   ]
 }
