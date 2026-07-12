@@ -299,6 +299,22 @@ function renderReport(readings: FamilyDiversity[], meta: { db: string; when: str
   return lines.join("\n");
 }
 
+// A libsql cell as text. The columns read here are TEXT (log_id, note, body) or INTEGER
+// (sector); anything else — a blob, a null — honestly becomes the fallback. Narrowing by
+// typeof (rather than String(...)) is what satisfies oxlint's type-aware no-base-to-string:
+// a raw `Value` may be an ArrayBuffer, whose default stringification is garbage.
+function cellText(value: unknown, fallback: string): string {
+  if (typeof value === "string") {
+    return value;
+  }
+
+  if (typeof value === "number") {
+    return String(value);
+  }
+
+  return fallback;
+}
+
 async function readCorpora(url: string): Promise<FamilyDiversity[]> {
   const authToken = process.env.TURSO_AUTH_TOKEN;
   const client = createClient(authToken ? { authToken, url } : { url });
@@ -308,24 +324,24 @@ async function readCorpora(url: string): Promise<FamilyDiversity[]> {
       "SELECT log_id, note FROM findings WHERE note IS NOT NULL AND trim(note) != ''",
     );
     const notes: Artifact[] = notesRows.rows.map((row) => ({
-      id: String(row.log_id ?? "?"),
-      text: String(row.note ?? ""),
+      id: cellText(row.log_id, "?"),
+      text: cellText(row.note, ""),
     }));
 
     const obsRows = await client.execute(
       "SELECT log_id, observation_script FROM findings WHERE observation_script IS NOT NULL AND trim(observation_script) != ''",
     );
     const observations: Artifact[] = obsRows.rows.map((row) => ({
-      id: String(row.log_id ?? "?"),
-      text: String(row.observation_script ?? ""),
+      id: cellText(row.log_id, "?"),
+      text: cellText(row.observation_script, ""),
     }));
 
     const logRows = await client.execute(
       "SELECT sector, body FROM logbook_entries WHERE body IS NOT NULL AND trim(body) != '' ORDER BY sector",
     );
     const logbook: Artifact[] = logRows.rows.map((row) => ({
-      id: `sector ${String(row.sector ?? "?")}`,
-      text: stripLogbookProse(String(row.body ?? "")),
+      id: `sector ${cellText(row.sector, "?")}`,
+      text: stripLogbookProse(cellText(row.body, "")),
     }));
 
     return [
