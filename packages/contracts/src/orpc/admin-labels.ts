@@ -39,13 +39,15 @@ export const LabelSeedStateSchema = z
  * One label in the admin shape. `slug` is the identity + the join key back to the raw
  * `tracks.label` string (`slugify(tracks.label) = labels.slug`); `findingCount` is
  * DERIVED, never stored. `ruledAt` is the operator's stamp — null means no human has
- * ruled this label yet (a machine default or the one-time bootstrap).
+ * ruled this label yet (a machine default or the one-time bootstrap). `logoImageUrl` is the
+ * label's OWN logo (its resolved Discogs/Wikidata image on R2), absent when it has none yet.
  */
 export const LabelAdminItemSchema = z
   .object({
     createdAt: z.string(),
     findingCount: z.number(),
     id: z.string(),
+    logoImageUrl: z.string().optional(),
     name: z.string(),
     ruledAt: z.string().nullable(),
     seedState: LabelSeedStateSchema,
