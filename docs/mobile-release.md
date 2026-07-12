@@ -48,6 +48,19 @@ The `EXPO_FREE_TEAM=1` strip in `app.config.ts` is **not** part of this path —
 16. `[operator]` **Submit for review** — attach the build to the App Store version and hit Submit. External TestFlight groups (if you want public beta testers before release) _do_ require **Beta App Review** and the TestFlight test-information fields filled in; internal-only testing (Phase 2) never does.
 17. `[operator]` **Respond to any reviewer clarification** — most likely the 5.2 music-rights question; the notes in step 14 usually pre-empt it. Approve/hold decisions are Apple's; the resubmit is `[operator]`.
 
+## The submission kit (operator-ratified 2026-07-12)
+
+The App Store Connect listing values, ratified by the operator — paste these when filling Phase 3's listing step; edit here first if they change (this doc is the source of truth, not ASC).
+
+- **Name** (30 chars): `Fluncle` · **Subtitle**: `Drum & bass, found & certified`
+- **Category**: Music (secondary: Entertainment) · **Age rating**: 4+ (questionnaire: all "None")
+- **Support URL**: `https://www.fluncle.com/about` · **Privacy policy**: `https://www.fluncle.com/privacy`
+- **Keywords** (≤100 chars): `drum and bass,dnb,jungle,liquid,neurofunk,music discovery,radio,dj mix,mixtape,tracklist`
+- **Description**: Fluncle is one uncle's drum & bass archive. Every track here is a finding: heard, certified, and logged with its own coordinate — no algorithm, no playlist filler, just the bangers that got an "oof" out of a human ear. The feed plays each finding's own video, made for that track and nothing else. The radio runs the archive as one continuous broadcast — drop in mid-flight, wherever it's got to. Browse the archive by what was found and when, search it by name or coordinate, save what hits, and listen on Spotify or Apple Music. Heard a banger the rest of us missed? Send it in — if it earns its place, it lands in the log with a coordinate of its own.
+- **App Privacy labels**: Identifiers → Device ID (the push token), app functionality only, not linked to identity, no tracking. User Content → track submissions + optional contact, app functionality, not linked. Everything else: Data Not Collected (the app ships no analytics SDK).
+- **Review notes** (the 5.2 pre-empt): audio is official previews and our own brand renders ≤30s; the radio streams only our own narration over silent renders; the app links out to Spotify and Apple Music; submissions are private suggestions reviewed by the operator, never displayed; no account needed to review any feature.
+- **Screenshots**: the 6.9" set (3-10 shots) from the iPhone Pro Max-class simulator: feed (a dark cover), radio playing, archive, a finding, submit.
+
 ## The cold-open requirement
 
 The review doc's rule: **first launch must show real content immediately** — reviewers (and the operator, on that first TestFlight install) judge on a cold open, and an empty or errored first paint reads as a broken app. What the app's first paint actually needs:
