@@ -15,7 +15,7 @@
 // - The `(Year)` is the RELEASE year (a catalog credit, like the label); the
 //   explicit "Found" label keeps it distinct from Fluncle's own date.
 // - Hashtags: a fixed D&B base. Per-track sub-genre tags were removed in fbad929
-//   (grouping is now the vibe-map); the caption carries the base set only.
+//   (sonic grouping lives in the galaxies); the caption carries the base set only.
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 

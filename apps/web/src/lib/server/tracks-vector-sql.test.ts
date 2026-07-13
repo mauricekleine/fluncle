@@ -8,7 +8,7 @@ import { isNamedMove, rankMixable, sonicGateOpen, toMixTrack } from "./mixabilit
 import { getFindingsByGalaxyRanked, getMixableTracks } from "./tracks";
 
 // The other two readers that used to pull every vector into the isolate, now ranked IN SQL
-// (lib/server/embedding.ts, docs/rfcs/turso-scale-spike.md): the `/mix` rail
+// (lib/server/embedding.ts, docs/local-database.md "Local is not production"): the `/mix` rail
 // (`getMixableTracks` — the DB computes each candidate's cosine to the target) and a
 // galaxy's core-first order (`getFindingsByGalaxyRanked` — a `galaxy_id`-pre-filtered
 // exact scan, paged in SQL). Real libSQL, real migrations, real vector functions — a mock

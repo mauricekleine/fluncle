@@ -7,8 +7,9 @@
 // a galaxy's core-first order — ranks IN SQL against the blob.
 //
 // WHY THE RANKING MOVED INTO SQL. It used to pull every row's `embedding_json` into
-// the isolate and cosine-rank there. That path is dead (measured, docs/rfcs/
-// turso-scale-spike.md): a 1024-d vector is 21,804 B as JSON, so the unpaginated
+// the isolate and cosine-rank there. That path is dead (measured; the numbers live in
+// docs/local-database.md "Local is not production"): a 1024-d vector is 21,804 B as
+// JSON, so the unpaginated
 // candidate scan hit `turso dev`'s 10 MiB response cap at 460 embedded findings (row
 // 460 threw RESPONSE_TOO_LARGE — a THIS-YEAR wall, not a 100k one), and on hosted
 // Turso — which has no cap — it would simply have kept growing into the Worker's

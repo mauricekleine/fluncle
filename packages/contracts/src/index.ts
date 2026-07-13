@@ -145,7 +145,7 @@ export type GalaxyMapUpdateResponse = Ok<{ galaxies: GalaxyAdminItem[] }>;
 // ── Labels (the entity + the operator's crawl-seed control) ──────────────────
 
 /**
- * A label's crawl-seed state — CRAWL SCOPE, NEVER STORAGE. It says whether the future
+ * A label's crawl-seed state — CRAWL SCOPE, NEVER STORAGE. It says whether the
  * catalogue crawler may seed from this label, and nothing else: `disabled` removes the
  * label from the NEXT crawl's seeds and touches nothing already stored. A brand-new
  * label enters `undecided` (never silently crawled, never silently dropped).
@@ -396,8 +396,8 @@ export type TrackGetResponse = Ok<{ track: TrackListItem }> | Ok<{ mixtape: Mixt
 // ── Radio (the shared broadcast clock) ───────────────────────────────────────
 
 /**
- * The radio.fluncle.com now-playing slot on the shared loop (RFC
- * radio-broadcast.md Unit A). Inferred from `RadioNowPlayingSchema`
+ * The radio.fluncle.com now-playing slot on the shared loop (the
+ * radio-broadcast RFC, Unit A). Inferred from `RadioNowPlayingSchema`
  * (./orpc/_shared.ts) — the schema the `/radio/now-playing` op validates against.
  */
 export type RadioNowPlaying = z.infer<typeof RadioNowPlayingSchema>;

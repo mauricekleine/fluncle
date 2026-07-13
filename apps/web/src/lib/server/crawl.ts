@@ -507,8 +507,8 @@ async function writeCatalogueTracks(
  * `/label/<slug>` page reads by (docs/label-entity.md), which shows every track on a label,
  * certified or not. One resolve + one batched UPDATE per RELEASE, never per track.
  *
- * The deploy-time `linkTracksToLabels` backfill already names "a future catalogue crawler"
- * as a writer it self-heals, and it does. But a crawl ticks every ten minutes and a deploy
+ * The deploy-time `linkTracksToLabels` backfill self-heals any writer that does not know
+ * the column, this crawler included. But a crawl ticks every ten minutes and a deploy
  * does not, so a crawled row would sit off its label's page until the next one. This closes
  * that window; the backfill stays the backstop.
  *

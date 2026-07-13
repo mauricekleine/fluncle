@@ -33,8 +33,8 @@ export const getRandomRadioTrack = oc
   .output(z.object({ ok: z.literal(true), track: TrackListItemSchema }));
 
 /**
- * The server-authoritative now-playing slot on the shared schedule (RFC
- * radio-broadcast.md, Unit A). The broadcast is one continuous loop every listener
+ * The server-authoritative now-playing slot on the shared schedule (the
+ * radio-broadcast RFC, Unit A). The broadcast is one continuous loop every listener
  * computes their place in: `currentTrack` + `offsetMs` is what's playing right now
  * and how far in. The client seeks `<audio>.currentTime = offsetMs/1000`, then
  * runs the SAME modulo math locally off `serverEpochMs` (NTP-lite skew) between

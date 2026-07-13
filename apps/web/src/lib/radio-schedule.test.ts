@@ -16,7 +16,7 @@ import {
   totalLoopDurationMs,
 } from "./radio-schedule";
 
-// The shared-clock math (RFC radio-broadcast.md Unit A) is the load-bearing logic
+// The shared-clock math (the radio-broadcast RFC Unit A) is the load-bearing logic
 // of the whole broadcast — server and client compute it identically off one
 // epoch, so it MUST be tested in isolation, not only through the UI. The cases
 // that matter: the cumulative-walk + modulo correctness; the empty pool (no

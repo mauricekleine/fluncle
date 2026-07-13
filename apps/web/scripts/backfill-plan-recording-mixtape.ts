@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 /**
- * The plan→recording→mixtape Deploy-1 backfill (docs/tracklist-recording-mixtape-rfc.md §9)
+ * The plan→recording→mixtape Deploy-1 backfill (the shipped tracklist/recording/mixtape
+ * RFC; the spine model now lives in packages/skills/fluncle-mixtapes/references/spine-model.md)
  * — IDEMPOTENT, and FOLDED INTO THE DEPLOY: `deploy:cf` runs it as `db:backfill` on
  * every push, right after `db:migrate` and before `wrangler deploy`, so the DDL and
  * the data it populates ship atomically (the RFC's ship-blocker fix). Every step is
