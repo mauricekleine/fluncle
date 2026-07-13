@@ -303,6 +303,19 @@ export const SURFACES: readonly Surface[] = [
     weights: { status: "primary", web: "secondary" },
   },
   {
+    exposedContent: [
+      "the public reach page — Fluncle's numbers across every platform over time (the crew aboard + how far the findings reached), grouped as audience/reach, no KPI hero",
+    ],
+    kind: "web_route",
+    name: "web.reach",
+    operatorNotes:
+      "Reads the append-only platform_stats ledger via the public list_platform_stats op (a record_health noun-swap). Every number is already public on its own platform, so the read is anonymous. Loader-only, no react-query. The grouping taxonomy + per-platform display labels live in the PAGE, never the server (the rows stay raw).",
+    probeConfig: { cadenceMs: PROBE_CADENCE_MS, kind: "http", timeoutMs: PROBE_TIMEOUT_MS },
+    route: "/reach",
+    url: `${SITE}/reach`,
+    weights: { status: "secondary", web: "secondary" },
+  },
+  {
     exposedContent: ["the Galaxy game — the 8-bit fly-to-every-banger arcade front door"],
     kind: "web_route",
     name: "web.galaxy",
