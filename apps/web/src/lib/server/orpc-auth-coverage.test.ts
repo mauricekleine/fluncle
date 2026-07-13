@@ -344,7 +344,7 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // (agent-allowed), the list_labels_admin precedent. A pure read; it publishes nothing.
   list_label_aliases: "admin",
   // Every label with its crawl-seed state — admin tier (agent-allowed), the
-  // list_galaxies_admin precedent: `?seedState=enabled` is the seed-set read the future
+  // list_galaxies_admin precedent: `?seedState=enabled` is the seed-set read the
   // catalogue crawler makes with its agent token. A pure read; it publishes nothing.
   list_labels_admin: "admin",
   // The logbook sweep's self-healing window + material read — admin tier

@@ -1,4 +1,4 @@
-// The radio.fluncle.com shared-clock math (RFC radio-broadcast.md, Unit A).
+// The radio.fluncle.com shared-clock math (the radio-broadcast RFC, Unit A).
 //
 // The broadcast is a PURE FUNCTION of `(deterministic eligible list, per-segment
 // duration, one stored epoch)` — there is no clock to run, only a clock to

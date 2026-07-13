@@ -386,7 +386,7 @@ describe("the catalogue crawler", () => {
   it("stamps `label_id` so a crawled track lands on the public /label/<slug> page", async () => {
     // The graph pages (docs/label-entity.md) read `tracks.label_id` — the indexed edge, not
     // the raw string — and they show every track on a label, certified or not. The deploy
-    // backfill names "a future catalogue crawler" as a writer it self-heals, and it does;
+    // backfill self-heals any writer that does not know the column, this crawler included;
     // but a crawl ticks every ten minutes and a deploy does not, so the crawler stamps the
     // pointer itself and lets the backfill stay the backstop.
     await drain();

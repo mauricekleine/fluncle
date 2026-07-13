@@ -3,14 +3,14 @@
 // route loader, the attention queue's read, and the publish path's upsert.
 //
 // ── THE ONE RULE: `seed_state` IS CRAWL SCOPE, NEVER STORAGE ────────────────────
-// A label's seed state answers exactly one question — MAY THE FUTURE CATALOGUE
-// CRAWLER SEED FROM THIS LABEL? Disabling a label removes it from the NEXT crawl's
+// A label's seed state answers exactly one question — MAY THE CATALOGUE CRAWLER
+// SEED FROM THIS LABEL? Disabling a label removes it from the NEXT crawl's
 // seed set and touches nothing already stored: no deletion, no hiding, no
 // retroactive effect on tracks, on findings, or on anything a previous crawl
 // brought in. There is deliberately NO function in this module that reads
 // `seed_state` to decide what is shown, kept, or removed — and there must never be
-// one. `listSeedLabels("enabled")` is the ONLY consumer shape: the seed set the
-// crawler will read when it exists. See docs/label-entity.md.
+// one. `listLabels("enabled")` is the ONLY consumer shape: the seed set the
+// crawler reads (crawl.ts). See docs/label-entity.md.
 //
 // Identity is the SLUG, not the name. `tracks.label` stays the raw captured string
 // forever (the audit trail and the re-normalization input); a label row is related
@@ -486,8 +486,8 @@ export async function reconcileLabels(): Promise<number> {
 
 /**
  * Every label with its finding count — the `/admin/labels` read and the CLI/agent
- * read. Optionally scoped to one seed state, which is how the future crawler will
- * ask for its seed set (`listLabels("enabled")`): the ONE sanctioned consumer of
+ * read. Optionally scoped to one seed state, which is how the crawler asks for
+ * its seed set (`listLabels("enabled")`): the ONE sanctioned consumer of
  * `seed_state`. Name-sorted (the operator scans it alphabetically).
  */
 export async function listLabels(seedState?: LabelSeedState): Promise<LabelAdminItem[]> {

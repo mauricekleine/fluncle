@@ -155,7 +155,7 @@ describe("videoCropPoster", () => {
   });
 });
 
-// The fast offset-join clip (RFC radio-broadcast.md Unit B). CF MT `mode=video`
+// The fast offset-join clip (the radio-broadcast RFC Unit B). CF MT `mode=video`
 // `time=`/`duration=` returns a faststart rendition that BEGINS at the global
 // offset (verified live: time=5s,duration=10s → 200, ~7MB faststart, edge-cached).
 // Crop + audio-strip + clip are ONE combined transform, never nested.

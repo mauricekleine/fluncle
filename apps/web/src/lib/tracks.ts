@@ -58,8 +58,8 @@ type RadioNowPlayingResponse = {
 };
 
 /**
- * The server-authoritative now-playing slot on the shared broadcast loop (RFC
- * radio-broadcast.md Unit A). Served by the `get_radio_now_playing` oRPC op. The
+ * The server-authoritative now-playing slot on the shared broadcast loop (the
+ * radio-broadcast RFC, Unit A). Served by the `get_radio_now_playing` oRPC op. The
  * page seeks to `offsetMs`, runs the same modulo math locally off `serverEpochMs`
  * between polls, and re-fetches when `scheduleVersion` changes. A 404 (empty
  * eligible set) throws — the page surfaces the quiet-sector state.

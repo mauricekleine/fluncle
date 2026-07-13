@@ -4,16 +4,16 @@
 //
 //   - `list_labels_admin` — admin tier (agent-allowed read): every label with its
 //     seed state and finding count, optionally scoped to one state. `?seedState=enabled`
-//     IS the crawler's seed-set read: when the catalogue crawler exists, this is where
-//     it asks what it may seed from, with its agent token. Named `_admin` (the
+//     IS the crawler's seed-set read: this is where the catalogue crawler asks what
+//     it may seed from, with its agent token. Named `_admin` (the
 //     `list_galaxies_admin` precedent) so the public `list_labels` / `get_label` names
-//     stay free for the coming `/label/<slug>` pages.
+//     stay free for the public `/label/<slug>` surface.
 //   - `update_label` — OPERATOR tier: the ruling. Ruling on a label is an editorial act
 //     that steers what Fluncle crawls next, so an agent token 403s at `operatorGuard`
 //     (the `update_galaxy` precedent).
 //
 // ── `seedState` IS CRAWL SCOPE, NEVER STORAGE ──────────────────────────────────────
-// A label's seed state answers exactly one question: MAY THE FUTURE CATALOGUE CRAWLER
+// A label's seed state answers exactly one question: MAY THE CATALOGUE CRAWLER
 // SEED FROM THIS LABEL? Setting it to `disabled` removes the label from the NEXT crawl's
 // seed set and touches NOTHING already stored — no deletion, no hiding, no retroactive
 // effect on tracks, on findings, or on anything a previous crawl already brought in.
@@ -61,9 +61,9 @@ export const LabelAdminItemSchema = z
  *
  * Admin tier (agent-allowed read, the `list_galaxies_admin` precedent). Every label
  * Fluncle's archive knows, with its crawl-seed state and its finding count. The optional
- * `seedState` filter is the clean exposure of the seed set: the future catalogue crawler
+ * `seedState` filter is the clean exposure of the seed set: the catalogue crawler
  * reads `?seedState=enabled` with its agent token and gets exactly the labels it may seed
- * from. Nothing consumes it yet — the crawler does not exist. `{ ok, labels }`.
+ * from. `{ ok, labels }`.
  */
 export const listLabelsAdmin = oc
   .route({
