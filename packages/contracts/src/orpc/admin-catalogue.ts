@@ -249,6 +249,33 @@ export const clearWrongAudio = oc
   .output(z.object({ cleared: z.boolean(), ok: z.literal(true) }));
 
 /**
+ * `flag_wrong_audio` → `POST /admin/catalogue/wrong-audio/flag` (operationId `flagWrongAudio`).
+ *
+ * OPERATOR tier — `clear_wrong_audio`'s counterpart: "the FINDING's capture is the wrong one"
+ * (docs/the-ear.md § Wrong audio). The auto-quarantine can only ever accuse the CATALOGUE side of
+ * a cross-title collision, but six-nines cosine proves same-recording, not which title is lying.
+ * When the operator auditions the catalogue row's captured bytes and hears the row's OWN song,
+ * the poisoned capture is the finding's — this is how he says so. The finding's vector drops out
+ * of the ranking corpus, its analysis provenance resets (bpm/key were measured off the wrong
+ * song), and it re-enters the capture queue with the bad bytes hash-rejected.
+ *
+ * Operator-only, not agent-allowed: it rewinds a PUBLIC finding's enrichment on the strength of a
+ * human listen — a judgement a machine does not get to make (the `clear_wrong_audio` reasoning).
+ * `{ ok, flagged }`; `flagged: false` when the track is not a captured finding (or already
+ * flagged), so a double-click reports honestly.
+ */
+export const flagWrongAudio = oc
+  .route({
+    method: "POST",
+    operationId: "flagWrongAudio",
+    path: "/admin/catalogue/wrong-audio/flag",
+    summary: "Flag a finding's captured audio as the wrong recording (operator)",
+    tags: ["Admin"],
+  })
+  .input(z.object({ trackId: z.string().min(1) }))
+  .output(z.object({ flagged: z.boolean(), ok: z.literal(true) }));
+
+/**
  * `certify_track` → `POST /admin/catalogue/certify` (operationId `certifyTrack`).
  *
  * OPERATOR tier — the "Log it" the Ear's workstation fires (docs/the-ear.md § The operator's
@@ -549,6 +576,7 @@ export const adminCatalogueContract = {
   certify_track: certifyTrack,
   clear_wrong_audio: clearWrongAudio,
   crawl_catalogue: crawlCatalogue,
+  flag_wrong_audio: flagWrongAudio,
   get_capture_budget: getCaptureBudget,
   get_crawl_status: getCrawlStatus,
   list_catalogue_tracks: listCatalogueTracks,

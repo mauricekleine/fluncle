@@ -790,6 +790,52 @@ describe("wrong audio — a cross-title near-1.0 capture is quarantined, never t
     // A second force-clear is a no-op — the row is not quarantined anymore.
     expect(await clearWrongAudio("cat-fyl")).toBe(false);
   });
+
+  it("the operator flag rewinds a FINDING: vector out, provenance reset, bad key kept; findings-only", async () => {
+    const { flagWrongAudio, WRONG_AUDIO_STATUS } = await import("./catalogue");
+
+    // The audit's real case, other side: the FINDING "Down With Your Love" captured Infinity's
+    // audio — the sweep can only accuse the catalogue side, so the operator flags the finding.
+    await seedFinding("finding-dwyl", {
+      artists: ["Freaks & Geeks"],
+      title: "Down With Your Love",
+      vector: axis(1),
+    });
+    await withSourceKey("finding-dwyl", "005.9.9L/badbeef.webm");
+    await db.execute({
+      args: ["finding-dwyl"],
+      sql: `update tracks set analyzed_from = 'full', capture_status = 'done' where track_id = ?`,
+    });
+
+    expect(await flagWrongAudio("finding-dwyl")).toBe(true);
+
+    const state = await stateOf("finding-dwyl");
+    expect(state.capture_status).toBe(WRONG_AUDIO_STATUS);
+    // The poisoned vector leaves the ranking corpus immediately…
+    expect(state.embedding_json).toBeNull();
+    // …the bad bytes' key is KEPT (the sha memory the capture sweep hash-rejects)…
+    expect(state.source_audio_key).toBe("005.9.9L/badbeef.webm");
+    // …and the analysis provenance resets, so the post-re-capture sweep re-enriches
+    // (shouldReenrichAfterCapture keys off exactly this).
+    const provenance = await db.execute({
+      args: ["finding-dwyl"],
+      sql: `select analyzed_from from tracks where track_id = ?`,
+    });
+    expect(provenance.rows[0]?.analyzed_from ?? null).toBeNull();
+
+    // Idempotent: a second flag reports honestly that nothing changed.
+    expect(await flagWrongAudio("finding-dwyl")).toBe(false);
+
+    // The guard mirror of clearWrongAudio's: a CATALOGUE row is never flaggable — that side of
+    // the collision belongs to the sweep's own quarantine.
+    await seedCatalogue("cat-inf", {
+      artists: ["Freaks & Geeks"],
+      title: "Infinity",
+      vector: axis(1),
+    });
+    await withSourceKey("cat-inf", "catalogue/cat-inf/cafef00d.webm");
+    expect(await flagWrongAudio("cat-inf")).toBe(false);
+  });
 });
 
 describe("the operator's actions — dismiss/restore, and the deterministic-duplicate exclusion", () => {

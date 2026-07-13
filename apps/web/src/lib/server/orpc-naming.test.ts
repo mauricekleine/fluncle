@@ -154,6 +154,10 @@ const APPROVED_VERBS = new Set<string>([
   // § Wrong audio). Distinct from `reset` (restore an initial state) and `delete` (drop a row): it
   // CLEARS a flag/verdict, keeping the row and its captured audio.
   "clear",
+  // `flag` (mark a finding's captured audio as the wrong recording — the operator's counterpart
+  // to `clear`) — added deliberately with `flag_wrong_audio` (docs/the-ear.md § Wrong audio). It
+  // RAISES the verdict the sweep can only raise against the catalogue side; `clear` lifts one.
+  "flag",
   // `review` (mark an artist's link list as reviewed — the "Looks good" acknowledgment that
   // stamps reviewed_at and promotes surviving candidates) — added deliberately with
   // `review_artist`. A single per-artist ack, distinct from `confirm` (one link) and `approve`

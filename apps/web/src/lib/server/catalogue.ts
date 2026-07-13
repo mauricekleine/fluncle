@@ -1195,6 +1195,43 @@ export async function clearWrongAudio(trackId: string): Promise<boolean> {
 }
 
 /**
+ * THE OPERATOR FLAG (`flag_wrong_audio`) — "the FINDING's capture is the wrong one" (docs/
+ * the-ear.md § Wrong audio). The auto-quarantine can only ever accuse the CATALOGUE side of a
+ * cross-title collision, but six-nines cosine proves same-recording, not which title is lying:
+ * when the operator auditions the catalogue row's captured bytes and hears the row's OWN song,
+ * the poisoned capture is the finding's. This is his way to say so.
+ *
+ * It applies the same rewind the sweep applies to a quarantined catalogue row, aimed at the
+ * finding: `capture_status = 'wrong-audio'` (the re-capture trigger AND the embed/analyze guard),
+ * the poisoned vector dropped (it was silently warping every ranking scored against it), and
+ * `analyzed_from` nulled so the post-re-capture sweep re-enriches (bpm/key/features were measured
+ * off the wrong song; `shouldReenrichAfterCapture` keys off exactly this). `source_audio_key` is
+ * KEPT — its embedded sha256 is what the capture sweep uses to refuse an identical re-download.
+ *
+ * Dropping the finding's vector moves the corpus fingerprint (`<findings>:<embedded>`), so every
+ * catalogue ranking heals itself on the next sweep ticks — including un-scoring the fake ~1.0
+ * rows this finding manufactured. Findings-only (the mirror of `clearWrongAudio`'s catalogue-only
+ * guard) and captured-only; a no-op success otherwise, so a double-click reports honestly.
+ */
+export async function flagWrongAudio(trackId: string): Promise<boolean> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [WRONG_AUDIO_STATUS, trackId],
+    sql: `update tracks
+          set capture_status = ?,
+              embedding_json = null,
+              embedding_blob = null,
+              analyzed_from = null
+          where track_id = ?
+            and source_audio_key is not null
+            and capture_status <> 'wrong-audio'
+            and exists (select 1 from findings where findings.track_id = tracks.track_id)`,
+  });
+
+  return result.rowsAffected > 0;
+}
+
+/**
  * THE OPERATOR'S "NOT FOR ME" (docs/the-ear.md § The operator's actions) — a REVERSIBLE veto on a
  * catalogue row. `dismissed: true` stamps `dismissed_at` so the row drops out of the ear/capture
  * reads and the capture work queue (track-work.ts); `dismissed: false` clears it, so the row

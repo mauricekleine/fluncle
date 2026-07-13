@@ -124,7 +124,12 @@ The Duplicates section above handles a row that is honestly the same recording a
 
 **Convergence is preserved, and it needed one refinement.** The row-half staleness discriminator gained a `capture_priority >= 0` clause: a vectored row carrying a NON-negative tier is "ranked before its vector arrived" and re-ranks, but a _negative_ tier (the −2 true duplicate) is a deliberate decision the scoring path made, so it is left stable — no re-pick loop. A quarantined row has no vector, so it is stable the moment it is stamped. A `quarantine-cleared` row is never re-quarantined even at a near-1.0 score, so the operator's override wins exactly like his note wins over the auto-note.
 
-**The operator sees all of it.** Quarantined rows get their **own quiet lens** on `/admin/catalogue` (`?lens=quarantine`), shown only when there is something in it, each naming the finding its audio came back as and carrying a **Keep it** button — the operator's override (`clear_wrong_audio`, operator tier: an agent does not get to reverse the machine's verdict on its own output). A bad capture never silently vanishes.
+**The operator sees all of it — and his ears hold the verdict.** Quarantined rows get their **own quiet lens** on `/admin/catalogue` (`?lens=quarantine`), shown only when there is something in it, each naming the finding its audio came back as. On this lens the artwork audition plays the **captured bytes themselves** (through the operator-tier `get_source_audio` proxy), not the official preview — the preview is ISRC-resolved and always the right song, so it cannot answer the one question the lens asks. Six-nines cosine proves _same recording_, never _which title is lying_, so the row carries the verdict pair:
+
+- **Keep it** — the rare true-twin override (`clear_wrong_audio`, operator tier): "this capture is fine"; the row keeps its audio, re-embeds, and re-ranks. Doing nothing is the default verdict — a quarantined row is already queued for a fresh download.
+- **Re-capture the finding** — the operator heard the row's OWN song in the captured bytes, so the poisoned capture is the **finding's** (the case the sweep can never accuse: it only ever suspects the catalogue side). One decision settles the pair: `flag_wrong_audio` (operator tier) rewinds the finding — vector dropped out of the ranking corpus (the fingerprint moves, so every fake ~1.0 it manufactured un-scores on the next ticks), `analyzed_from` nulled so the post-re-capture sweep re-enriches the bpm/key it measured off the wrong song, re-capture queued with the bad bytes hash-rejected — and the catalogue row is kept in the same stroke.
+
+A bad capture never silently vanishes, on either side of the collision.
 
 ## The capture budget — the brake
 

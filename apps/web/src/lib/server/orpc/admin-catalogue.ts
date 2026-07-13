@@ -37,6 +37,7 @@ import {
 } from "../capture-budget";
 import {
   clearWrongAudio,
+  flagWrongAudio,
   listCatalogueTracks as listCatalogue,
   getCatalogueSummary,
   rankCatalogue,
@@ -105,6 +106,22 @@ export function adminCatalogueHandlers(os: Implementer) {
     .handler(async ({ input }) => {
       try {
         return { cleared: await clearWrongAudio(input.trackId), ok: true } as const;
+      } catch (error) {
+        throw apiFault(error);
+      }
+    });
+
+  // POST /admin/catalogue/wrong-audio/flag — OPERATOR tier, `clear_wrong_audio`'s counterpart:
+  // the operator's ears say the FINDING's capture is the wrong recording (docs/the-ear.md § Wrong
+  // audio). Rewinds the finding — vector dropped, analysis provenance reset, re-capture queued
+  // with the bad bytes hash-rejected. Idempotent: `flagged: false` when the track is not a
+  // captured finding or is already flagged.
+  const flagWrongAudioHandler = os.flag_wrong_audio
+    .use(adminAuth)
+    .use(operatorGuard)
+    .handler(async ({ input }) => {
+      try {
+        return { flagged: await flagWrongAudio(input.trackId), ok: true } as const;
       } catch (error) {
         throw apiFault(error);
       }
@@ -230,6 +247,7 @@ export function adminCatalogueHandlers(os: Implementer) {
     certify_track: certifyTrackHandler,
     clear_wrong_audio: clearWrongAudioHandler,
     crawl_catalogue: crawlCatalogueHandler,
+    flag_wrong_audio: flagWrongAudioHandler,
     get_capture_budget: getCaptureBudgetHandler,
     get_crawl_status: getCrawlStatusHandler,
     list_catalogue_tracks: listCatalogueTracksHandler,

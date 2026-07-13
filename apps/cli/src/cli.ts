@@ -1991,6 +1991,27 @@ function addAdminCommands(program: Command): void {
     });
 
   catalogue
+    .command("flag-wrong-audio")
+    .description("Flag a finding's captured audio as the wrong recording (operator)")
+    .argument("<trackId>", "The finding's track id whose capture is wrong")
+    .option("--json", "Print JSON", false)
+    .action(async (trackId: string, options: JsonOptions) => {
+      const { flagWrongAudioCommand } = await import("./commands/admin-catalogue");
+      const { flagged } = await flagWrongAudioCommand(trackId);
+
+      if (options.json) {
+        printJson({ flagged, ok: true });
+        return;
+      }
+
+      console.log(
+        flagged
+          ? `Flagged ${trackId}. Its vector is out of the ranking and a fresh capture is queued (the bad bytes are hash-rejected).`
+          : `${trackId} is not a captured finding — nothing to flag.`,
+      );
+    });
+
+  catalogue
     .command("certify")
     .description("Certify an existing catalogue track in place — mint its finding (operator)")
     .argument("<trackId>", "The catalogue track id to log")

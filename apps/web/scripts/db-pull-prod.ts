@@ -51,11 +51,16 @@ const authToken = await readSecret("TURSO_AUTH_TOKEN");
 const client = createClient({ authToken, intMode: "bigint", url });
 
 const schemaResult = await client.execute(
+  // `tracks_fts%` is the FTS5 search index and its shadow tables — a DERIVED artifact
+  // (docs/search.md), rebuilt by the dev flow itself. Dumping it double-creates the shadow
+  // tables on restore (the virtual-table CREATE emits them AND the dump re-creates them),
+  // which is exactly the parse error a refresh then dies on.
   `SELECT type, name, sql FROM sqlite_master
    WHERE sql IS NOT NULL
      AND name NOT LIKE 'sqlite_%'
      AND name NOT LIKE 'libsql_%'
      AND name NOT LIKE '_litestream%'
+     AND name NOT LIKE 'tracks_fts%'
    ORDER BY CASE type WHEN 'table' THEN 0 WHEN 'index' THEN 1 WHEN 'trigger' THEN 2 ELSE 3 END, name`,
 );
 

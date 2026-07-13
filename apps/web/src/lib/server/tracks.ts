@@ -831,7 +831,11 @@ export async function getSourceAudioKey(idOrLogId: string): Promise<string | nul
   const db = await getDb();
   const result = await db.execute({
     args: [idOrLogId, idOrLogId],
-    sql: `select tracks.source_audio_key from ${FINDINGS_FROM}
+    // LEFT join, not the finding inner join: a CATALOGUE row's captured bytes stream too — the
+    // quarantine lens auditions them so the operator can hear which side of a wrong-audio
+    // collision is actually wrong (docs/the-ear.md § Wrong audio). Same privacy tier either way.
+    sql: `select tracks.source_audio_key from tracks
+          left join findings on findings.track_id = tracks.track_id
           where tracks.track_id = ? or findings.log_id = ? limit 1`,
   });
   const row = typedRow<{ source_audio_key: string | null }>(result.rows);

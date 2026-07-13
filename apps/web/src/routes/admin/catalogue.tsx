@@ -10,7 +10,7 @@ import {
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, redirect, useNavigate } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
-import { type ReactNode } from "react";
+import { type ReactNode, useState } from "react";
 import { toast } from "sonner";
 import {
   type CaptureBudgetState,
@@ -164,6 +164,30 @@ function AdminCataloguePage() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: CATALOGUE_KEY }),
   });
 
+  // THE OTHER VERDICT. The operator heard this row's captured bytes and they ARE the row's own
+  // song — so the poisoned capture is the FINDING'S. One decision settles the pair: flag the
+  // finding (vector out, re-capture queued, bad bytes hash-rejected) AND keep this row.
+  const blameFinding = useMutation({
+    mutationFn: async ({
+      findingTrackId,
+      trackId,
+    }: {
+      findingTrackId: string;
+      trackId: string;
+    }) => {
+      await postFlagWrongAudio(findingTrackId);
+      await postClearWrongAudio(trackId);
+    },
+    onError: (error) =>
+      toast.error(error instanceof Error ? error.message : "Could not flag the finding."),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: CATALOGUE_KEY });
+      toast.success("The finding is re-capturing", {
+        description: "This row kept its audio and rejoins the ranking.",
+      });
+    },
+  });
+
   // THE RESTORE. Put a dismissed row back — declared before `dismiss` so its toast Undo can call it.
   const restore = useMutation({
     mutationFn: (trackId: string) => putDismissed(trackId, false),
@@ -260,16 +284,6 @@ function AdminCataloguePage() {
       title="Catalogue"
     >
       <div className="space-y-4 p-4 sm:p-5">
-        <p className="max-w-2xl text-sm text-muted-foreground">
-          {lens === "ear"
-            ? "Tracks nobody logged, ranked by how close each one sits to its nearest finding. Every row names the finding it matched — that claim is the whole list. Play the artwork to hear it, log the ones worth keeping, and wave off the ones that are not. Nothing here is a finding until you say so."
-            : lens === "quarantine"
-              ? "The capture for each of these landed the wrong track — its audio came back near-identical to a finding under a different title, so it was the artist's already-logged hit, not the track named here. They are held out of the ranking and queued for a fresh download. If a capture is actually fine, keep it and it rejoins the ranking."
-              : lens === "dismissed"
-                ? "The ones you waved off. They are out of the ranking and the capture ladder — the row is untouched, just set aside. Restore any of them and it re-enters the ranking on the next sweep."
-                : "None of these has been heard yet — no audio, so no vector, so nothing to rank. Capture is metered, so they are ordered by what their metadata is worth: an artist already in the archive beats a label already in the archive beats a label the crawler may dig from. A label you ruled out sinks to the bottom, whoever is on it."}
-        </p>
-
         {/* THE SPEND, on the capture lens. It lives here and not on a settings page because
             this is the list of tracks the money would be spent ON — the cost belongs next to
             the thing being bought, where he is already looking when he decides. */}
@@ -288,6 +302,8 @@ function AdminCataloguePage() {
             {tracks.map((track) => (
               <CatalogueRow
                 busy={{
+                  blaming:
+                    blameFinding.isPending && blameFinding.variables?.trackId === track.trackId,
                   certifying: certify.isPending && certify.variables === track.trackId,
                   clearing: clearAudio.isPending && clearAudio.variables === track.trackId,
                   dismissing: dismiss.isPending && dismiss.variables === track.trackId,
@@ -295,6 +311,9 @@ function AdminCataloguePage() {
                 }}
                 key={track.trackId}
                 lens={lens}
+                onBlameFinding={(findingTrackId) =>
+                  blameFinding.mutate({ findingTrackId, trackId: track.trackId })
+                }
                 onCertify={() => certify.mutate(track.trackId)}
                 onClear={() => clearAudio.mutate(track.trackId)}
                 onDismiss={() => dismiss.mutate(track.trackId)}
@@ -430,6 +449,7 @@ function LensPill({
 }
 
 type CatalogueRowBusy = {
+  blaming: boolean;
   certifying: boolean;
   clearing: boolean;
   dismissing: boolean;
@@ -439,6 +459,7 @@ type CatalogueRowBusy = {
 function CatalogueRow({
   busy,
   lens,
+  onBlameFinding,
   onCertify,
   onClear,
   onDismiss,
@@ -447,6 +468,7 @@ function CatalogueRow({
 }: {
   busy: CatalogueRowBusy;
   lens: CatalogueLens;
+  onBlameFinding: (findingTrackId: string) => void;
   onCertify: () => void;
   onClear: () => void;
   onDismiss: () => void;
@@ -494,13 +516,32 @@ function CatalogueRow({
               <AppleMusicIcon className="size-4" />
             </ListenLink>
           ) : null}
-          {/* THE OVERRIDE. On the quarantine lens the operator can overrule a wrong-audio verdict
-              — "keep it, this capture is fine" — and the row rejoins the ranking. Named plainly
-              ("Keep it"), not dressed up: it is a literal control, not chrome. */}
+          {/* THE VERDICT PAIR. The quarantine says same-recording, not which title is lying — the
+              operator's ears decide. Play the artwork (it auditions the CAPTURED bytes here, not
+              the preview): hearing the FINDING's song means this row's capture is wrong (leave it;
+              re-capture is already queued — "Keep it" is the rare true-twin override). Hearing
+              THIS row's own song means the finding's capture is wrong — "Re-capture the finding"
+              flags it and keeps this row, one decision for the pair. */}
           {lens === "quarantine" ? (
-            <PendingButton onClick={onClear} pending={busy.clearing} variant="outline">
-              Keep it
-            </PendingButton>
+            <>
+              <PendingButton onClick={onClear} pending={busy.clearing} variant="outline">
+                Keep it
+              </PendingButton>
+              {track.nearestFinding ? (
+                <PendingButton
+                  onClick={() => {
+                    const finding = track.nearestFinding;
+                    if (finding) {
+                      onBlameFinding(finding.trackId);
+                    }
+                  }}
+                  pending={busy.blaming}
+                  variant="outline"
+                >
+                  Re-capture the finding
+                </PendingButton>
+              ) : null}
+            </>
           ) : null}
           {/* RESTORE — put a dismissed row back into the ranking. The restore lens' one action. */}
           {lens === "dismissed" ? (
@@ -517,7 +558,10 @@ function CatalogueRow({
               <PendingButton onClick={onDismiss} pending={busy.dismissing} variant="ghost">
                 Not for me
               </PendingButton>
-              <PendingButton onClick={onCertify} pending={busy.certifying} variant="default">
+              {/* OUTLINE, not gold: a gold CTA per row makes a screen of suns (The One Sun Rule
+                  caps gold at ~10%); the Ignition Rule's hover heat still marks it as the row's
+                  primary. Gold on this page belongs to certification MOMENTS, not standing rows. */}
+              <PendingButton onClick={onCertify} pending={busy.certifying} variant="outline">
                 Log it
               </PendingButton>
             </>
@@ -528,10 +572,18 @@ function CatalogueRow({
       <ObjectLead
         leading={
           <CatalogueCover
+            // On the quarantine lens the artwork auditions the CAPTURED BYTES, not the preview:
+            // the preview is ISRC-resolved and always the right song, so it cannot answer the one
+            // question this lens asks — which side of the collision actually holds wrong audio.
+            auditionSrc={
+              lens === "quarantine"
+                ? `/api/admin/tracks/${encodeURIComponent(track.trackId)}/source-audio`
+                : undefined
+            }
             cover={track.albumImageUrl}
             title={track.title}
             trackId={track.trackId}
-            playable={track.hasPreview}
+            playable={lens === "quarantine" || track.hasPreview}
           />
         }
         subtitle={
@@ -712,29 +764,38 @@ function PendingButton({
 // 30s preview through the shared singleton player, so starting one preview stops any other. A row
 // with no preview source (and no cover) falls back to the plain, non-playable ObjectGlyph.
 function CatalogueCover({
+  auditionSrc,
   cover,
   playable,
   title,
   trackId,
 }: {
+  // When set, the audition plays THESE bytes (the captured full song via the admin source-audio
+  // proxy) instead of the official preview — the quarantine lens's evidence player.
+  auditionSrc?: string;
   cover: string | null;
   playable: boolean;
   title: string;
   trackId: string;
 }) {
   const { activeTrackId, pauseResume, start, status } = usePreviewControls();
+  const [coverFailed, setCoverFailed] = useState(false);
   const isCurrent = activeTrackId === trackId;
   const isPlaying = isCurrent && (status === "playing" || status === "loading");
 
-  const art = cover ? (
-    <img
-      alt=""
-      className="size-11 shrink-0 rounded-md border border-border object-cover"
-      src={albumCoverAtSize(cover, "small")}
-    />
-  ) : (
-    <ObjectGlyph icon={WaveformIcon} />
-  );
+  // A crawled row's album art URL can 404 (no owned master, a dead upstream link) — swap to the
+  // glyph instead of the browser's broken-image mark, which reads as a defect in every row.
+  const art =
+    cover && !coverFailed ? (
+      <img
+        alt=""
+        className="size-11 shrink-0 rounded-md border border-border object-cover"
+        onError={() => setCoverFailed(true)}
+        src={albumCoverAtSize(cover, "small")}
+      />
+    ) : (
+      <ObjectGlyph icon={WaveformIcon} />
+    );
 
   if (!playable) {
     return art;
@@ -744,10 +805,17 @@ function CatalogueCover({
     <span className="relative shrink-0">
       {art}
       <button
-        aria-label={isPlaying ? `Pause ${title}` : `Play the preview of ${title}`}
+        aria-label={
+          isPlaying
+            ? `Pause ${title}`
+            : auditionSrc
+              ? `Play the captured audio of ${title}`
+              : `Play the preview of ${title}`
+        }
         aria-pressed={isCurrent}
         className="absolute inset-0 flex items-center justify-center rounded-md bg-background/55 text-foreground opacity-0 transition-opacity hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-ring aria-pressed:opacity-100"
-        onClick={() => (isCurrent ? pauseResume() : start(trackId))}
+        onClick={() => (isCurrent ? pauseResume() : start(trackId, auditionSrc))}
+        title={auditionSrc ? "Plays the captured file itself, not the store preview" : undefined}
         type="button"
       >
         {isPlaying ? (
@@ -899,6 +967,21 @@ async function postRank(): Promise<void> {
 // quarantined row to `quarantine-cleared`, the sticky state the sweep never re-quarantines.
 async function postClearWrongAudio(trackId: string): Promise<void> {
   const response = await fetch("/api/v1/admin/catalogue/wrong-audio/clear", {
+    body: JSON.stringify({ trackId }),
+    headers: { "Content-Type": "application/json" },
+    method: "POST",
+  });
+
+  if (!response.ok) {
+    throw new Error(await readError(response));
+  }
+}
+
+// The operator-tier wrong-audio FLAG (POST /admin/catalogue/wrong-audio/flag) — the clear's
+// counterpart: the FINDING's capture is the wrong recording. Its vector drops, its analysis
+// provenance resets, and a fresh capture is queued with the bad bytes hash-rejected.
+async function postFlagWrongAudio(trackId: string): Promise<void> {
+  const response = await fetch("/api/v1/admin/catalogue/wrong-audio/flag", {
     body: JSON.stringify({ trackId }),
     headers: { "Content-Type": "application/json" },
     method: "POST",

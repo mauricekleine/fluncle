@@ -257,6 +257,9 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // The wrong-audio quarantine override — contract-only oRPC. OPERATOR tier: overruling The Ear's
   // wrong-audio verdict on its own output is not an agent's call (docs/the-ear.md § Wrong audio).
   "POST /admin/catalogue/wrong-audio/clear": "clear_wrong_audio",
+  // The clear's counterpart — flag a FINDING's capture as the wrong recording, the side the sweep
+  // can never accuse. OPERATOR tier: it rewinds a public finding's enrichment on a human listen.
+  "POST /admin/catalogue/wrong-audio/flag": "flag_wrong_audio",
   "POST /admin/clips/drip": "drip_clips",
   // The batch-schedule op (the set_clip_schedule sibling) — contract-only oRPC (no TanStack
   // route file). Operator tier: chain a whole selection onto the jittered drip queue in one

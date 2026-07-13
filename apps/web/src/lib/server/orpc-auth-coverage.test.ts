@@ -278,6 +278,10 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // The autonomous render box links its own cut + sets video_url — agent tier
   // (adminAuth only, no operatorGuard); the box's agent token publishes its renders.
   finalize_track_video: "admin",
+  // The wrong-audio counterpart flag — operator tier: it rewinds a PUBLIC finding's enrichment on
+  // the strength of a human listen, a judgement a machine does not get to make (the
+  // `clear_wrong_audio` reasoning).
+  flag_wrong_audio: "operator",
   // The `/admin` attention-queue digest read — admin tier (adminAuth only, no
   // operatorGuard), the list_*_admin precedent: it composes the same admin-tier reads
   // the snapshot draws from and publishes nothing, so the operator's CLI + Raycast

@@ -90,6 +90,19 @@ export async function clearWrongAudioCommand(trackId: string): Promise<{ cleared
 }
 
 /**
+ * Flag a FINDING's captured audio as the wrong recording (operator). `fluncle admin catalogue
+ * flag-wrong-audio <trackId>` — `clear-wrong-audio`'s counterpart (docs/the-ear.md § Wrong
+ * audio). The finding's vector drops out of the ranking corpus, its analysis provenance resets,
+ * and it re-enters the capture queue with the bad bytes hash-rejected. `flagged: false` when the
+ * track is not a captured finding (or already flagged).
+ */
+export async function flagWrongAudioCommand(trackId: string): Promise<{ flagged: boolean }> {
+  return adminApiPost<{ flagged: boolean; ok: true }>("/api/admin/catalogue/wrong-audio/flag", {
+    trackId,
+  });
+}
+
+/**
  * Certify an existing catalogue track in place — mint its finding, without creating a new track
  * (operator). `fluncle admin catalogue certify <trackId> [--note <text>]`. Returns the minted Log
  * ID (docs/the-ear.md § The operator's actions). 409 when the track is already logged.
