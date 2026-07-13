@@ -62,6 +62,13 @@ const envKeys = [
   "YOUTUBE_CLIENT_ID",
   "YOUTUBE_CLIENT_SECRET",
   "YOUTUBE_REDIRECT_URI",
+  // A plain YouTube Data API v3 key (a `key=` query param, NOT OAuth) for the public
+  // channel statistics the /reach collector reads (subscribers + total views). The
+  // stats are public, so no OAuth ceremony — distinct from the YOUTUBE_CLIENT_* OAuth
+  // above that the mixtape video distribution uses. OPTIONAL, read via readOptionalEnv:
+  // absent, the reach collector skips the youtube platform cleanly (env-gated), exactly
+  // like the Last.fm/Bluesky legs no-op unprovisioned.
+  "YOUTUBE_API_KEY",
   // Our own Mixcloud OAuth (mixtape audio distribution). The Worker runs the code
   // exchange + stores the durable token in mixcloud_auth, then hands it to the CLI
   // just-in-time for the CLI-direct upload (the bytes are CLI-direct; the token is

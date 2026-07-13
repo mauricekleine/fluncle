@@ -37,6 +37,7 @@ import { adminCatalogueHandlers } from "./orpc/admin-catalogue";
 import { adminCostsHandlers } from "./orpc/admin-costs";
 import { adminGalaxiesHandlers } from "./orpc/admin-galaxies";
 import { adminPromptsHandlers } from "./orpc/admin-prompts";
+import { adminReachHandlers } from "./orpc/admin-reach";
 import { artistsHandlers } from "./orpc/artists";
 import { galaxiesHandlers } from "./orpc/galaxies";
 import { graphHandlers } from "./orpc/graph";
@@ -65,6 +66,7 @@ import { mixHandlers } from "./orpc/mix";
 import { mixtapesHandlers } from "./orpc/mixtapes";
 import { newsletterHandlers } from "./orpc/newsletter";
 import { radioHandlers } from "./orpc/radio";
+import { reachHandlers } from "./orpc/reach";
 import { searchHandlers } from "./orpc/search";
 import { storiesHandlers } from "./orpc/stories";
 import { submissionsHandlers } from "./orpc/submissions";
@@ -92,6 +94,7 @@ export const router = os.router({
   ...adminCostsHandlers(os),
   ...adminGalaxiesHandlers(os),
   ...adminPromptsHandlers(os),
+  ...adminReachHandlers(os),
   ...artistsHandlers(os),
   ...galaxiesHandlers(os),
   ...graphHandlers(os),
@@ -120,6 +123,7 @@ export const router = os.router({
   ...mixtapesHandlers(os),
   ...newsletterHandlers(os),
   ...radioHandlers(os),
+  ...reachHandlers(os),
   ...searchHandlers(os),
   ...storiesHandlers(os),
   ...submissionsHandlers(os),

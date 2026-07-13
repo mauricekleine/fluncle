@@ -2181,6 +2181,42 @@ function addAdminCommands(program: Command): void {
       await runCrawlStatus(options, crawlStatusCommand);
     });
 
+  // REACH — how far Fluncle's tentacles stretch across the web: the follower /
+  // subscriber / play / star counts on every platform, snapshotted daily. `collect`
+  // is a bare trigger the on-box `fluncle-reach` `--no-agent` cron drives (the Worker
+  // owns every platform credential and does all the fetching), exactly like
+  // `catalogue rank`. A pacer, not an engine.
+  const reach = configureCommand(
+    admin.command("reach").description("The public /reach numbers: collect a daily snapshot"),
+  );
+
+  reach.action(() => {
+    reach.outputHelp();
+  });
+
+  reach
+    .command("collect")
+    .description("Collect + record one daily reach snapshot across every platform")
+    .option("--json", "Print JSON", false)
+    .action(async (options: JsonOptions) => {
+      const { reachCollectCommand } = await import("./commands/admin-reach");
+      const { collected, inserted, skipped } = await reachCollectCommand();
+
+      if (options.json) {
+        printJson({ collected, inserted, ok: true, skipped });
+        return;
+      }
+
+      const landed = collected
+        .map((entry) => `${entry.platform} (${entry.metrics.join(", ")})`)
+        .join("; ");
+      const missed = skipped.map((entry) => `${entry.platform}: ${entry.reason}`).join("; ");
+
+      console.log(
+        `Collected ${collected.length} platform(s), wrote ${inserted} new row(s).${landed ? ` Landed: ${landed}.` : ""}${missed ? ` Skipped: ${missed}.` : ""}`,
+      );
+    });
+
   const backfill = configureCommand(
     admin.command("backfills").description("Backfill operator-only archives"),
   );
