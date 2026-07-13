@@ -1,8 +1,14 @@
-import { type ExpoConfig } from "expo/config";
-import { withEntitlementsPlist, type ConfigPlugin } from "expo/config-plugins";
+// PLAIN CommonJS ON PURPOSE (2026-07-13, after a failed EAS "Read app config" step): the
+// freshness pass broke BOTH ways of evaluating an app.config.ts here. expo ≥56.0.15's
+// loader evaluates a TS config as an ES module, where the `expo/config*` subpaths (CJS
+// directory shims with no `exports` entry) throw "Directory import … is not supported";
+// and the TS transpile path crashes outright under typescript@7, whose native compiler
+// dropped the legacy JS API (`ts.ModuleKind`/`transpileModule`) that expo's loader calls.
+// A .js config in a no-"type" package takes the boring require() path: no transpile, no
+// ESM resolution, nothing to break. Types ride JSDoc off the same expo type entries.
 
-// Config-time brand hexes are hardcoded: Expo evaluates app.config.ts standalone
-// and cannot import the raw-TS @fluncle/tokens package. Mirror of packages/tokens.
+// Config-time brand hexes are hardcoded: Expo evaluates this file standalone and cannot
+// import the raw-TS @fluncle/tokens package. Mirror of packages/tokens.
 const DEEP_FIELD = "#090a0b";
 
 // Personal/free Apple teams can't sign Push Notifications or Associated Domains
@@ -12,14 +18,18 @@ const DEEP_FIELD = "#090a0b";
 // Omit the env var for paid / EAS builds to keep the full V1 capabilities.
 const FREE_TEAM = process.env.EXPO_FREE_TEAM === "1";
 
-const withFreeTeamSigning: ConfigPlugin = (config) =>
-  withEntitlementsPlist(config, (c) => {
+/** @type {import("expo/config-plugins").ConfigPlugin} */
+const withFreeTeamSigning = (config) => {
+  const { withEntitlementsPlist } = require("expo/config-plugins");
+  return withEntitlementsPlist(config, (c) => {
     delete c.modResults["aps-environment"];
     delete c.modResults["com.apple.developer.associated-domains"];
     return c;
   });
+};
 
-const config: ExpoConfig = {
+/** @type {import("expo/config").ExpoConfig} */
+const config = {
   android: {
     // The adaptive launcher icon: the transparent traveler cut (figure at 58%
     // of frame for Android's tighter adaptive mask) layered over Deep Field.
@@ -105,7 +115,7 @@ const config: ExpoConfig = {
 };
 
 if (FREE_TEAM) {
-  (config.plugins as unknown[]).push(withFreeTeamSigning);
+  config.plugins.push(withFreeTeamSigning);
 }
 
-export default config;
+module.exports = config;
