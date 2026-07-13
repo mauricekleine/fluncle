@@ -4,7 +4,7 @@
     "agent-orchestration": {
       "source": "packages/skills/agent-orchestration",
       "sourceType": "local",
-      "computedHash": "6e5aceeac8aa9ba360a56f443bc32478e5d3863a36134ca735c78d2105cf8c7f"
+      "computedHash": "00d723179b2289bcfef0a910194d0d1fad1b814a562b44955c829c01ddc200ac"
     },
     "ai-seo": {
       "source": "coreyhaines31/marketingskills",
@@ -31,7 +31,7 @@
     "fluncle-goal-writer": {
       "source": "packages/skills/fluncle-goal-writer",
       "sourceType": "local",
-      "computedHash": "0887ae3e5237dd5cb51cc5994c130d3a94fd504113f650937ee8493197900fea"
+      "computedHash": "31ceeca0b130b8f90a419e5e24539d65599445b777427acd06f9d4f526e45f07"
     },
     "fluncle-hermes-operator": {
       "source": "packages/skills/fluncle-hermes-operator",
@@ -51,7 +51,7 @@
     "fluncle-operator": {
       "source": "packages/skills/fluncle-operator",
       "sourceType": "local",
-      "computedHash": "8b4074a2ba5811bdb62e6e02510a2f92c7db9b7bcebfe398f65bfad620ced483"
+      "computedHash": "49e5fcc839cc1c3d5fe034682a5253aeeb270aa7e97f966c5a24aac73a1f0e03"
     },
     "fluncle-publish": {
       "source": "packages/skills/fluncle-publish",
@@ -76,7 +76,7 @@
     "fluncle-sprites": {
       "source": "packages/skills/fluncle-sprites",
       "sourceType": "local",
-      "computedHash": "27e6105ce933725d445ff1034eb4e1e5d5721b6be9e77724c905547e645727d7"
+      "computedHash": "b4fc240a30bff0c081bf2bbf9151478c48c7c4b0798f343db84a6802113a52c5"
     },
     "fluncle-surfaces": {
       "source": "packages/skills/fluncle-surfaces",
@@ -86,12 +86,12 @@
     "fluncle-track-enrichment": {
       "source": "packages/skills/fluncle-track-enrichment",
       "sourceType": "local",
-      "computedHash": "eb3d07d7364d7425b33676f167f8781ac6fee052da6d612efef3aa8f6d6e18a5"
+      "computedHash": "70dee345ab0a57c41dca527eb22bafdde9738d8b4f8aab4b569f1ed25601d519"
     },
     "fluncle-video": {
       "source": "packages/skills/fluncle-video",
       "sourceType": "local",
-      "computedHash": "b7e65fef65344d16925813b448f98bbccac149dfc30b3cbb8a845f78206e70e6"
+      "computedHash": "8a56c38d71e2a323041045ba1351e58eff72c1c79ba0a229f957b99f1286ce2e"
     },
     "hetzner-devbox": {
       "source": "packages/skills/hetzner-devbox",

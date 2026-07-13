@@ -13,7 +13,7 @@ This is the async half of the track lifecycle (the fast metadata add already hap
 
 - **`ffmpeg`** on PATH (decodes the audio — the captured full song, or a preview when there is none).
 - **`bun`** (runs the analysis script).
-- The **`fluncle` CLI** installed and, for the write step, authenticated (`FLUNCLE_API_TOKEN`). Reads (`fluncle track get`) are public.
+- The **`fluncle` CLI** installed and, for the write step, authenticated (`FLUNCLE_API_TOKEN`). Reads (`fluncle tracks get`) are public.
 - Network access (the Fluncle API; Deezer/iTunes only for the preview fallback).
 
 The analysis script (`scripts/analyze-track.ts`) is **self-contained** — zero npm dependencies, no Fluncle imports — so it runs anywhere this skill is installed.
@@ -23,7 +23,7 @@ The analysis script (`scripts/analyze-track.ts`) is **self-contained** — zero 
 1. **Get the track.** Resolve your input (id or log_id) to metadata:
 
    ```
-   fluncle track get <track_id|log_id> --json
+   fluncle tracks get <track_id|log_id> --json
    ```
 
    Keep the `trackId`, `artists`, `title`, and `isrc` from the result. (You write back by `trackId`.)
