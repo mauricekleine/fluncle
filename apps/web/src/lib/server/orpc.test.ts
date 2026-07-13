@@ -596,6 +596,8 @@ const PUBLIC_OPERATION_IDS = [
   "listMixableArtists",
   "listMixableTracks",
   "listMixtapes",
+  // The public /reach read — Fluncle's numbers across every platform, over time.
+  "listPlatformStats",
   "listPrivateSavedFindings",
   "listPrivateSavedSets",
   "listPrivateSubmissions",

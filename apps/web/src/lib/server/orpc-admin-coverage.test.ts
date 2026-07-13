@@ -342,6 +342,11 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // the history is append-only). OPERATOR tier: a prompt IS code, so an agent token 403s.
   "POST /admin/prompts/{slug}": "update_prompt",
   "POST /admin/push/receipts/sweep": "sweep_push_receipts",
+  // record_platform_stats (the public /reach page's write) is contract-only oRPC —
+  // no TanStack route file; oRPC owns the path directly, like record_health. Admin
+  // tier (agent-allowed): the box's reach cron POSTs a bare trigger with its agent
+  // token, and the Worker fetches every platform + writes the platform_stats snapshot.
+  "POST /admin/reach/collect": "record_platform_stats",
   "POST /admin/recordings": "create_recording",
   // create_clip is now recording-scoped (RFC recording-primitive, Design B): the legacy
   // `POST /admin/mixtapes/{mixtapeId}/clips` path is retired.

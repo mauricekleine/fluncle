@@ -880,6 +880,53 @@ export const costEvents = sqliteTable(
   ],
 );
 
+// The public REACH snapshot ledger — one append-only row per (platform, metric)
+// per day: how far Fluncle's tentacles reach across the web, over time. Sibling of
+// serviceCheckSamples / costEvents (id PK + a time-indexed query shape), and the
+// noun-swap of the record_health discipline: a daily on-box trigger fires the
+// agent-tier record_platform_stats op, the Worker fetches each platform with the
+// auth it already holds, and one snapshot row lands per number. NEVER pruned — the
+// series IS the point (the day-one row is the genesis baseline), and daily × ~14
+// metrics is trivial volume.
+//
+// `platform`/`metric` are plain TEXT so a NEW platform (or a new metric on one) is
+// a data row, never a migration — exactly the serviceCheckSamples idiom. The
+// standardization taxonomy (audience / reach / depth buckets) is NOT stored: the
+// rows stay raw and the page decides how to group them.
+//
+// PUBLIC-SAFE by construction: every number here is already public on its own
+// platform (a follower count, a star count, a play count), so nothing sensitive
+// ever lives in this table.
+export const platformStats = sqliteTable(
+  "platform_stats",
+  {
+    // ISO instant the snapshot was collected. The series' x-axis; one point per day.
+    capturedAt: text("captured_at").notNull(),
+    // The client-STABLE idempotency key: `${platform}:${metric}:${yyyy-mm-dd}` (the
+    // day derived from the collection `at`). A second collect on the same UTC day
+    // re-inserts the SAME id and is ignored (INSERT … ON CONFLICT(id) DO NOTHING),
+    // so the daily snapshot is idempotent — the record_cost discipline.
+    id: text("id").primaryKey(),
+    // The measured number (followers / listens / stars / subscribers / …). Always a
+    // non-negative integer count; no fractional platform metric exists in Tier 1.
+    metric: text("metric").notNull(),
+    // The platform this metric belongs to (mixcloud / bluesky / github / npm /
+    // lastfm / appstore / telegram / newsletter / spotify_playlist / youtube). Plain
+    // TEXT — a new platform needs no DDL.
+    platform: text("platform").notNull(),
+    value: integer("value").notNull(),
+  },
+  (table) => [
+    // The page read groups by (platform, metric) and windows by captured_at (last N
+    // days), so one composite index serves both the grouping and the bounded window.
+    index("platform_stats_platform_metric_captured_at_idx").on(
+      table.platform,
+      table.metric,
+      table.capturedAt,
+    ),
+  ],
+);
+
 export const spotifyAuth = sqliteTable("spotify_auth", {
   accessToken: text("access_token").notNull(),
   expiresAt: text("expires_at").notNull(),

@@ -142,6 +142,9 @@ const PUBLIC_UNAUTH_OPS = new Set<string>([
   "list_mixable_tracks",
   "list_mixtapes",
   "list_stories",
+  // The public /reach read — Fluncle's numbers across every platform, over time.
+  // Anonymous by design: every number is already public on its own platform.
+  "list_platform_stats",
   "list_tracks",
   // Fluncle's own archive search — the public read behind the CMD+K dialog and, at
   // catalogue scale, the primary navigation. Anonymous by design (it searches material that
@@ -442,6 +445,11 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // record_health precedent; it writes only the internal single-row live_state table
   // (no publish), so the box agent token drives it each minute.
   record_live_state: "admin",
+  // The box's reach cron collects + POSTs a daily platform snapshot — agent tier
+  // (adminAuth only, no operatorGuard), the record_health precedent; the Worker owns
+  // every platform credential and the op writes only the internal platform_stats
+  // table (no publish), so the box's agent token drives the bare trigger.
+  record_platform_stats: "admin",
   // Discard a label-alias candidate — operator tier: ruling two spellings are NOT one label
   // is an editorial act (the remove_artist_social / confirm_label_alias precedent).
   reject_label_alias: "operator",

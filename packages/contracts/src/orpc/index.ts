@@ -28,6 +28,7 @@ import { adminCatalogueContract } from "./admin-catalogue";
 import { adminCostsContract } from "./admin-costs";
 import { adminGalaxiesContract } from "./admin-galaxies";
 import { adminPromptsContract } from "./admin-prompts";
+import { adminReachContract } from "./admin-reach";
 import { artistsContract } from "./artists";
 import { galaxiesContract } from "./galaxies";
 import { graphContract } from "./graph";
@@ -56,6 +57,7 @@ import { mixContract } from "./mix";
 import { mixtapesContract } from "./mixtapes";
 import { newsletterContract } from "./newsletter";
 import { radioContract } from "./radio";
+import { reachContract } from "./reach";
 import { searchContract } from "./search";
 import { storiesContract } from "./stories";
 import { submissionsContract } from "./submissions";
@@ -136,6 +138,8 @@ export {
 } from "./admin-notes";
 export { type CostEventInput, CostEventInputSchema, recordCost } from "./admin-costs";
 export { recordHealth, ServiceHealthStatusSchema } from "./admin-health";
+export { adminReachContract, recordPlatformStats } from "./admin-reach";
+export { listPlatformStats, reachContract } from "./reach";
 export {
   adminPromptsContract,
   getPrompt,
@@ -305,6 +309,7 @@ export const contract = {
   ...adminCostsContract,
   ...adminGalaxiesContract,
   ...adminPromptsContract,
+  ...adminReachContract,
   ...artistsContract,
   ...galaxiesContract,
   ...graphContract,
@@ -333,6 +338,7 @@ export const contract = {
   ...mixtapesContract,
   ...newsletterContract,
   ...radioContract,
+  ...reachContract,
   ...searchContract,
   ...storiesContract,
   ...submissionsContract,

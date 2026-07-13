@@ -384,6 +384,36 @@ export async function findSpotifyTrackByIsrc(isrc: string): Promise<SpotifyIsrcL
   }
 }
 
+/**
+ * The Fluncle playlist's saved/follower count — the one Spotify number that survived
+ * the February-2026 API gutting (`GET /playlists/{id}?fields=followers.total`), and
+ * the /reach collector's `spotify_playlist` metric. Reuses the same durable OAuth the
+ * publish path holds (`getSpotifyAccessToken`) and the same `SPOTIFY_PLAYLIST_ID`
+ * `addTrackToPlaylist` writes to, so it needs no new credential.
+ *
+ * NOT best-effort here — it throws on a missing playlist id, an unconnected
+ * `spotify_auth` row, or a malformed response — because the collector wraps every
+ * platform in its own try/catch and turns a throw into an honest per-platform skip.
+ */
+export async function fetchPlaylistFollowerCount(): Promise<number> {
+  const [env, accessToken] = await Promise.all([
+    readEnvs(["SPOTIFY_PLAYLIST_ID"]),
+    getSpotifyAccessToken(),
+  ]);
+  const response = await spotifyFetch(
+    `/playlists/${env.SPOTIFY_PLAYLIST_ID}?fields=followers.total`,
+    accessToken,
+  );
+  const data = (await response.json()) as { followers?: { total?: number } };
+  const total = data.followers?.total;
+
+  if (typeof total !== "number" || !Number.isFinite(total)) {
+    throw new Error("Spotify playlist response missing followers.total");
+  }
+
+  return total;
+}
+
 export async function addTrackToPlaylist(track: TrackMetadata): Promise<void> {
   const [env, accessToken] = await Promise.all([
     readEnvs(["SPOTIFY_PLAYLIST_ID"]),
