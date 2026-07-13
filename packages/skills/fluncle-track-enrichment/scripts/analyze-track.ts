@@ -5,7 +5,7 @@
 // access (Deezer/iTunes for the preview). It does NOT import any Fluncle code, so
 // it runs anywhere the skill is installed — a local session or the Hermes box.
 //
-// Given an artist + title (the agent gets these from `fluncle track get --json`),
+// Given an artist + title (the agent gets these from `fluncle tracks get --json`),
 // it resolves a legal preview clip, decodes it, and emits an analysis JSON on
 // stdout: BPM, musical key (+confidence), and spectral features. The agent then
 // writes the result back with `fluncle admin tracks update`.

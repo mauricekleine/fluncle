@@ -20,7 +20,7 @@ rg --files -g '!node_modules' -g '!dist'
 
 - CLI behavior or JSON contracts: read `references/cli-contract.md`.
 - Raycast commands, local install, or command refresh issues: read `references/raycast.md`.
-- Public web app or fluncle.com changes: keep API behavior inside `apps/web/src/routes/api` route handlers and server modules under `apps/web/src/lib/server`.
+- Public web app or fluncle.com changes: put public/admin HTTP surfaces on oRPC contract ops (`packages/contracts/src/orpc/**`, registered in the `apps/web/src/lib/server/orpc/**` router) with server modules under `apps/web/src/lib/server`; `apps/web/src/routes/api` file routes are only the documented carve-outs (auth redirects, uploads/streaming, non-JSON emitters, `/status`+`/health`) — see `AGENTS.md` Architecture.
 - VPS install or standalone binary deployment: read `references/vps-deploy.md`.
 
 3. Keep `.env.local`, `.dev.vars`, `node_modules`, `dist`, and generated temporary assets out of commits.

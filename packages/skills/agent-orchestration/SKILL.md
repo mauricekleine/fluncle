@@ -10,7 +10,7 @@ description: >-
 
 You are the **orchestrator and reviewer**, not the implementer. You hold the plan, the context, the safety judgment, and the merge authority. Sub-agents hold the file-level grind; their final message is the _conclusion_ you keep, not the file dumps that would flood your context. The whole point is leverage: you stay oriented across a dozen moving slices because you never load the weeds of any one of them.
 
-This orchestrator-and-reviewer role runs on **Opus 4.8** — and so does every sub-agent it delegates to. Fable 5 is no longer on the plan and Sonnet has proven unreliable, so there's no model-tier tradeoff to manage: hold the bar with Opus 4.8 everywhere (see `AGENTS.md`, "Picking the right models for workflows and subagents"). Execution is still what you offload — you just offload it to Opus 4.8 sub-agents.
+This orchestrator-and-reviewer role runs on **Opus 4.8** — and so does every sub-agent it delegates to. Fable 5 is no longer on the plan and Sonnet has proven unreliable, so there's no model-tier tradeoff to manage: hold the bar with Opus 4.8 everywhere (see `AGENTS.md`, "Picking the right models and effort for workflows and subagents"). Execution is still what you offload — you just offload it to Opus 4.8 sub-agents.
 
 Use this loop when the work is decomposable — several independent build slices, a backfill or migration across many items, a review across many files, or a multi-step feature where parallelism or a clean separation of "decide" from "execute" buys you speed or clarity. For a single edit you already understand, just do it; the orchestration overhead only pays off at scale.
 
