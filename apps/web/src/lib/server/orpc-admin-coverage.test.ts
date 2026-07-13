@@ -243,6 +243,9 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // contract-only oRPC (no TanStack route file). OPERATOR tier: it re-arms a spend-adjacent
   // external integration a machine should not silently un-brake (the `set_capture_budget` rule).
   "POST /admin/catalogue/apple-breaker/reset": "reset_apple_breaker",
+  // Certify an existing catalogue row in place — contract-only oRPC. OPERATOR tier: certifying is
+  // the one act the catalogue domain forbids a machine (docs/the-ear.md § The operator's actions).
+  "POST /admin/catalogue/certify": "certify_track",
   "POST /admin/catalogue/crawl": "crawl_catalogue",
   // The clip drip-feed tick — contract-only oRPC (no TanStack route file). ADMIN tier
   // (agent-allowed): the on-box `fluncle-clip-drip` cron triggers it with the agent token
@@ -377,6 +380,10 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // proxy may spend, so the box's agent token 403s on it (an agent may not raise its own
   // budget). The read half is `get_capture_budget`, above.
   "PUT /admin/catalogue/capture-budget": "set_capture_budget",
+  // The catalogue "not for me" / restore toggle — contract-only oRPC. OPERATOR tier: steering
+  // what the telescope keeps pointing at is a taste ruling (docs/the-ear.md § The operator's
+  // actions), so the box's agent token 403s.
+  "PUT /admin/catalogue/dismissed": "set_track_dismissed",
   // The clip drip-feed kill switch — contract-only oRPC (no TanStack route file).
   // Operator tier: pause/resume every future scheduled Instagram post.
   "PUT /admin/clips/drip/state": "set_clip_drip",

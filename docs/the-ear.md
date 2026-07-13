@@ -189,10 +189,11 @@ The `fluncle-capture` sweep reads the catalogue-aware `list_track_work` queue (`
 
 ## The surface
 
-`/admin/catalogue`, one AdminShell station under Findings/Artists/Labels/Galaxies in the sidebar ([docs/admin-shell.md](./admin-shell.md)). Two lenses in the subheader strip, deep-linked through `?lens=` so a pasted URL restores the view:
+`/admin/catalogue`, one AdminShell station under Findings/Artists/Labels/Galaxies in the sidebar ([docs/admin-shell.md](./admin-shell.md)). Lenses in the subheader strip, deep-linked through `?lens=` so a pasted URL restores the view (the two below the fold — quarantine, dismissed — surface only when they hold something):
 
-- **Closest to a finding** (`?lens=ear`, the default) — the telescope. Each row: the cover, the identity, the WHY, the score, and one primary action — **Listen** (Spotify). There is no in-app preview for a catalogue track: the `/ln` relay resolves through `findings`, by design, so the audition is the real one.
+- **Closest to a finding** (`?lens=ear`, the default) — the telescope. Each row: the cover, the identity, the WHY, the score, the row actions below, and the two full-listen links. The deterministic duplicates (`duplicate_of_track_id` set — an ISRC / same-title identity match) do **not** appear here: an identity match is nothing to validate, so it never occupies a ranked slot (Maurice's ruling). The alternate-master display band (a scored row at ≥ `DUPLICATE_SIMILARITY`, nothing stored) still shows, labelled "already in the archive".
 - **Next to capture** (`?lens=capture`) — the rows with no audio at all, ranked by the ladder above, each carrying the rung that put it there.
+- **Dismissed** (`?lens=dismissed`) — the restore pile (§ The operator's actions), a quiet pill shown only when there is something in it.
 
 **No count badge on the sidebar entry.** The honest number is "how many are worth your time", and a `COUNT` cannot answer that. A telescope with a backlog badge is a conveyor belt.
 
@@ -200,15 +201,26 @@ The `fluncle-capture` sweep reads the catalogue-aware `list_track_work` queue (`
 
 The header carries **Re-rank**, one tick of the sweep by hand. The sweep is a periodic job, but the operator must be able to log a finding, poke it, and watch the ranking move — otherwise the list's freshness is something he has to take on faith.
 
+## The operator's actions — the page is a workstation, not a readout
+
+A ranked list he can only read is a report; the operator ruled it must be a place he can _act_. Four things live on the row, and the Unlit Rule does not reach them — this is his own tool, not a crew-facing surface (the persona law, [docs/admin-shell.md](./admin-shell.md)), so where to listen and what to do are the whole point.
+
+- **Audition inline.** The artwork doubles as a play control: a click streams the track's official 30s preview through the shared `/api/preview` relay and the app's one preview player (the same `PreviewArtwork` pattern `/mix` uses), so starting one preview stops any other. The relay resolves a catalogue row from `tracks` (a LEFT join, not the finding INNER join the finding read uses), and resolves the clip by ISRC — a fresh Deezer, then the exact-Apple rung (#554), then fuzzy iTunes — so a catalogue row with an ISRC or a stored preview auditions; one with neither shows the plain, non-playable cover.
+- **Full-listen links.** Small quiet icon buttons out to the real thing — **Spotify** and its **Apple Music** twin — shown when the row carries that link. There is no capture-source link: the capture pipeline stores an R2 key and byte count, not a source URL, so there is nothing honest to link to.
+- **Log it** — certify this EXISTING row in place. It mints only the certification half (`certify_track`, reusing the Spotify add's exact coordinate mint), so it never creates a second `tracks` row; the fresh finding enters the enrichment chain (`enrichment_status` defaults to `pending`) and the operator is routed to the findings board to finish the note / galaxy / publish. **OPERATOR tier** — certifying is the one act the whole catalogue domain forbids a machine.
+- **Not for me** — a reversible veto (`set_track_dismissed`). It stamps `dismissed_at`, so the row drops out of the ear + capture lenses, the rank sweep, and the capture work queue (the ruled-out-label veto's class — a metered download is never spent on a dismissed row). It is undone by the toast's Undo or from the **Dismissed** lens, which restores it into the ranking on the next sweep tick. **OPERATOR tier** — steering what the telescope keeps pointing at is a taste ruling.
+
 ## The ops
 
 Both `adminAuth` (operator **or** agent), registered in the contract as `admin-catalogue`:
 
-- **`list_catalogue_tracks`** → `GET /admin/catalogue?lens=&limit=` — the ranked read + the summary. `lens` is `ear` | `capture` | `quarantine`.
+- **`list_catalogue_tracks`** → `GET /admin/catalogue?lens=&limit=` — the ranked read + the summary. `lens` is `ear` | `capture` | `quarantine` | `dismissed`.
 - **`rank_catalogue`** → `POST /admin/catalogue/rank?limit=` — one tick of the sweep. `remaining > 0` means run it again.
 - **`clear_wrong_audio`** → `POST /admin/catalogue/wrong-audio/clear` — the operator's override on the wrong-audio quarantine (§ Wrong audio). **OPERATOR tier**, unlike the two above: an agent does not get to reverse the machine's verdict on its own output.
+- **`certify_track`** → `POST /admin/catalogue/certify` — **Log it**: certify an existing catalogue row in place, minting only its finding (§ The operator's actions). **OPERATOR tier**: an agent may never certify.
+- **`set_track_dismissed`** → `PUT /admin/catalogue/dismissed` — **Not for me** / restore, the `set_capture_budget` shape (one op, both directions). **OPERATOR tier**: a taste ruling, not a machine job.
 
-`rank_catalogue` is **agent-allowed, not operator-tier** (the `update_galaxy_map` precedent): it writes only _derived_ ranking columns, and only on catalogue rows. It cannot mint a coordinate, write a note, or certify anything — those columns do not exist on the rows it can reach.
+`rank_catalogue` is **agent-allowed, not operator-tier** (the `update_galaxy_map` precedent): it writes only _derived_ ranking columns, and only on catalogue rows. It cannot mint a coordinate, write a note, or certify anything — those columns do not exist on the rows it can reach. The three OPERATOR-tier ops are the acts that change what the archive _is_ (a certification) or what the telescope _points at_ (a dismissal, a quarantine override) — the `update_label` / `set_capture_budget` class.
 
 The CLI mirrors them, and holds no ranking logic of its own:
 
@@ -218,6 +230,9 @@ fluncle admin catalogue list --lens ear            # the telescope
 fluncle admin catalogue list --lens capture        # what to capture next
 fluncle admin catalogue list --lens quarantine     # the wrong-audio holding pen
 fluncle admin catalogue clear-wrong-audio <id>     # keep a capture the sweep flagged (operator)
+fluncle admin catalogue certify <id> [--note …]    # log an existing catalogue row in place (operator)
+fluncle admin catalogue dismiss <id>               # "not for me" — out of ranking + capture (operator)
+fluncle admin catalogue restore <id>               # put a dismissed row back (operator)
 ```
 
 ## Where it stands

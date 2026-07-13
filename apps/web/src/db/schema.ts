@@ -199,6 +199,17 @@ export const tracks = sqliteTable(
     captureStatus: text("capture_status").notNull().default("pending"),
     catalogueRankCorpus: text("catalogue_rank_corpus"),
     catalogueRankedAt: text("catalogue_ranked_at"),
+    // THE OPERATOR'S "NOT FOR ME" (docs/the-ear.md § The operator's actions). An ISO stamp,
+    // written ONLY on a catalogue row when the operator dismisses it from the ear/capture
+    // workstation — "I looked, it is not for me." It is a REVERSIBLE veto (the operator can
+    // restore it), and it is exactly the ruled-out-label veto's class: it decides what The Ear
+    // keeps pointing at and what the capture ladder may buy, never what is stored. A dismissed
+    // row keeps its `tracks` row untouched; it simply drops out of every ranking read and the
+    // capture work queue (catalogue.ts + track-work.ts filter `dismissed_at is null`), and is
+    // restorable from the "Dismissed" lens. NULL on every live catalogue row and every finding —
+    // dismissal is a catalogue-only act. The partial index below keeps both the restore listing
+    // and the exclusion filter a seek rather than a scan of the growing catalogue.
+    dismissedAt: text("dismissed_at"),
     // THE DUPLICATE MARKER (docs/the-ear.md § Duplicates). The `track_id` of the certified
     // finding this catalogue row is the SAME RECORDING as — set only by the `rank_catalogue`
     // sweep, only on a catalogue row, when the row's `isrc` (non-null, non-empty) exactly
@@ -373,6 +384,14 @@ export const tracks = sqliteTable(
     index("tracks_embed_queue_idx")
       .on(table.trackId)
       .where(sql`${table.sourceAudioKey} is not null and ${table.embeddingJson} is null`),
+    // THE OPERATOR'S DISMISSALS — "not for me" (docs/the-ear.md § The operator's actions).
+    // PARTIAL, exactly like the anchor + embed queues above: dismissals are rare (an operator
+    // act, never a machine one), so the index holds a tiny, near-static slice of a growing
+    // table. It serves the "Dismissed" restore listing (a seek to the dismissed rows, ordered
+    // by when) and backs the `dismissed_at is null` exclusion the ranking + capture reads apply.
+    index("tracks_dismissed_idx")
+      .on(table.dismissedAt)
+      .where(sql`${table.dismissedAt} is not null`),
     // The MIXABILITY pre-filter, and the one index `/mix` cannot be public without.
     //
     // The key is MANDATORY to be rankable (`scoreMix`'s floor: a pair whose key we do not

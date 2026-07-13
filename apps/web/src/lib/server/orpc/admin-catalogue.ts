@@ -40,9 +40,11 @@ import {
   listCatalogueTracks as listCatalogue,
   getCatalogueSummary,
   rankCatalogue,
+  setTrackDismissed,
 } from "../catalogue";
 import { crawlCatalogue, DEFAULT_MAX_HOP, getCrawlStatus, MAX_HOP_CEILING } from "../crawl";
 import { adminAuth, operatorGuard } from "../orpc-auth";
+import { certifyExistingTrack } from "../publish";
 import { apiFault, type Implementer, parseBool, parseLimit } from "./_shared";
 
 // One crawl tick expands this many frontier nodes. Each node is ~1 MusicBrainz request paced
@@ -103,6 +105,41 @@ export function adminCatalogueHandlers(os: Implementer) {
     .handler(async ({ input }) => {
       try {
         return { cleared: await clearWrongAudio(input.trackId), ok: true } as const;
+      } catch (error) {
+        throw apiFault(error);
+      }
+    });
+
+  // POST /admin/catalogue/certify — OPERATOR tier. Certify an existing catalogue row in place:
+  // mint its finding, without creating a new track (docs/the-ear.md § The operator's actions).
+  // Operator-only because certifying is the one act the domain forbids a machine — the agent-tier
+  // sweep is agent-allowed precisely because it can never certify. Returns the minted Log ID.
+  const certifyTrackHandler = os.certify_track
+    .use(adminAuth)
+    .use(operatorGuard)
+    .handler(async ({ input }) => {
+      try {
+        const { logId } = await certifyExistingTrack(input.trackId, { note: input.note });
+
+        return { logId, ok: true } as const;
+      } catch (error) {
+        throw apiFault(error);
+      }
+    });
+
+  // PUT /admin/catalogue/dismissed — OPERATOR tier. The "not for me" / restore toggle
+  // (docs/the-ear.md § The operator's actions): dismissing steers what the telescope keeps
+  // pointing at and what the capture ladder may buy — a taste ruling, the `update_label` class,
+  // so an agent may never fire it. `changed: false` when the row was already in that state.
+  const setTrackDismissedHandler = os.set_track_dismissed
+    .use(adminAuth)
+    .use(operatorGuard)
+    .handler(async ({ input }) => {
+      try {
+        return {
+          changed: await setTrackDismissed(input.trackId, input.dismissed),
+          ok: true,
+        } as const;
       } catch (error) {
         throw apiFault(error);
       }
@@ -190,6 +227,7 @@ export function adminCatalogueHandlers(os: Implementer) {
     });
 
   return {
+    certify_track: certifyTrackHandler,
     clear_wrong_audio: clearWrongAudioHandler,
     crawl_catalogue: crawlCatalogueHandler,
     get_capture_budget: getCaptureBudgetHandler,
@@ -198,5 +236,6 @@ export function adminCatalogueHandlers(os: Implementer) {
     rank_catalogue: rankCatalogueHandler,
     reset_apple_breaker: resetAppleBreakerHandler,
     set_capture_budget: setCaptureBudgetHandler,
+    set_track_dismissed: setTrackDismissedHandler,
   };
 }

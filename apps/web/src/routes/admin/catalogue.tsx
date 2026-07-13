@@ -1,13 +1,17 @@
 import {
   ArrowsClockwiseIcon,
+  ArrowUUpLeftIcon,
   CircleNotchIcon,
   BinocularsIcon,
+  PauseIcon,
+  PlayIcon,
   WaveformIcon,
 } from "@phosphor-icons/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, redirect, useNavigate } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { type ReactNode } from "react";
+import { toast } from "sonner";
 import {
   type CaptureBudgetState,
   type CapturePriorityReason,
@@ -16,6 +20,7 @@ import {
 } from "@fluncle/contracts";
 import { AdminShell } from "@/components/admin/admin-shell";
 import { ObjectGlyph, ObjectLead, ObjectList, ObjectRow } from "@/components/admin/object-row";
+import { AppleMusicIcon, SpotifyIcon } from "@/components/platform-icons";
 import { Badge } from "@fluncle/ui/components/badge";
 import { Button } from "@fluncle/ui/components/button";
 import {
@@ -29,6 +34,7 @@ import {
 import { Label } from "@fluncle/ui/components/label";
 import { Progress } from "@fluncle/ui/components/progress";
 import { Switch } from "@fluncle/ui/components/switch";
+import { usePreviewControls } from "@/lib/preview-player";
 import { isAdminRequest } from "@/lib/server/admin-auth";
 import { getCatalogueCaptureState } from "@/lib/server/capture-budget";
 import {
@@ -107,7 +113,13 @@ export const Route = createFileRoute("/admin/catalogue")({
   // the view, and a reload keeps it.
   validateSearch: (search: Record<string, unknown>): CatalogueSearch => ({
     lens:
-      search.lens === "capture" ? "capture" : search.lens === "quarantine" ? "quarantine" : "ear",
+      search.lens === "capture"
+        ? "capture"
+        : search.lens === "quarantine"
+          ? "quarantine"
+          : search.lens === "dismissed"
+            ? "dismissed"
+            : "ear",
   }),
   loaderDeps: ({ search }) => ({ lens: search.lens }),
   beforeLoad: () => ensureAdmin(),
@@ -150,6 +162,38 @@ function AdminCataloguePage() {
   const clearAudio = useMutation({
     mutationFn: (trackId: string) => postClearWrongAudio(trackId),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: CATALOGUE_KEY }),
+  });
+
+  // THE RESTORE. Put a dismissed row back — declared before `dismiss` so its toast Undo can call it.
+  const restore = useMutation({
+    mutationFn: (trackId: string) => putDismissed(trackId, false),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: CATALOGUE_KEY }),
+  });
+
+  // "NOT FOR ME". A reversible veto: it drops the row out of the ranking + the capture ladder and
+  // re-reads. The toast Undo is the immediate reversal; the durable one is the "Dismissed" lens.
+  const dismiss = useMutation({
+    mutationFn: (trackId: string) => putDismissed(trackId, true),
+    onSuccess: (_result, trackId) => {
+      void queryClient.invalidateQueries({ queryKey: CATALOGUE_KEY });
+      toast("Not for me", {
+        action: { label: "Undo", onClick: () => restore.mutate(trackId) },
+      });
+    },
+  });
+
+  // "LOG IT". Certify the existing row in place — mint its finding, no new track — then hand the
+  // operator to the findings board with the pipeline already moving, and confirm with the Log ID.
+  const certify = useMutation({
+    mutationFn: (trackId: string) => postCertify(trackId),
+    onError: (error) => toast.error(error instanceof Error ? error.message : "Could not log it."),
+    onSuccess: (result) => {
+      void queryClient.invalidateQueries({ queryKey: CATALOGUE_KEY });
+      toast.success(`Logged — ${result.logId}`, { description: "Enrichment is running." });
+      // Hand the operator to the findings board with the pipeline already moving, to finish the
+      // note / galaxy / publish. The board's search is required, so we pass its defaults.
+      void navigate({ search: { mix: "all", stage: "all" }, to: "/admin/findings" });
+    },
   });
 
   const { budget, summary, tracks } = data;
@@ -195,6 +239,16 @@ function AdminCataloguePage() {
               onClick={() => void navigate({ search: { lens: "quarantine" } })}
             />
           ) : null}
+          {/* The restore pile — a QUIET pill, shown only when there is something dismissed (or the
+              operator is looking at it), so a clean catalogue never advertises an empty section. */}
+          {summary.dismissed > 0 || lens === "dismissed" ? (
+            <LensPill
+              active={lens === "dismissed"}
+              count={summary.dismissed}
+              label="Dismissed"
+              onClick={() => void navigate({ search: { lens: "dismissed" } })}
+            />
+          ) : null}
           {rank.isError ? (
             <span className="ml-2 text-xs text-destructive" role="alert">
               {rank.error instanceof Error ? rank.error.message : "The re-rank failed."}
@@ -208,10 +262,12 @@ function AdminCataloguePage() {
       <div className="space-y-4 p-4 sm:p-5">
         <p className="max-w-2xl text-sm text-muted-foreground">
           {lens === "ear"
-            ? "Tracks nobody logged, ranked by how close each one sits to its nearest finding. Every row names the finding it matched — that claim is the whole list. Nothing here has a coordinate, and none of it is a finding until Fluncle says so."
+            ? "Tracks nobody logged, ranked by how close each one sits to its nearest finding. Every row names the finding it matched — that claim is the whole list. Play the artwork to hear it, log the ones worth keeping, and wave off the ones that are not. Nothing here is a finding until you say so."
             : lens === "quarantine"
               ? "The capture for each of these landed the wrong track — its audio came back near-identical to a finding under a different title, so it was the artist's already-logged hit, not the track named here. They are held out of the ranking and queued for a fresh download. If a capture is actually fine, keep it and it rejoins the ranking."
-              : "None of these has been heard yet — no audio, so no vector, so nothing to rank. Capture is metered, so they are ordered by what their metadata is worth: an artist already in the archive beats a label already in the archive beats a label the crawler may dig from. A label you ruled out sinks to the bottom, whoever is on it."}
+              : lens === "dismissed"
+                ? "The ones you waved off. They are out of the ranking and the capture ladder — the row is untouched, just set aside. Restore any of them and it re-enters the ranking on the next sweep."
+                : "None of these has been heard yet — no audio, so no vector, so nothing to rank. Capture is metered, so they are ordered by what their metadata is worth: an artist already in the archive beats a label already in the archive beats a label the crawler may dig from. A label you ruled out sinks to the bottom, whoever is on it."}
         </p>
 
         {/* THE SPEND, on the capture lens. It lives here and not on a settings page because
@@ -231,10 +287,18 @@ function AdminCataloguePage() {
           <ObjectList>
             {tracks.map((track) => (
               <CatalogueRow
-                clearing={clearAudio.isPending && clearAudio.variables === track.trackId}
+                busy={{
+                  certifying: certify.isPending && certify.variables === track.trackId,
+                  clearing: clearAudio.isPending && clearAudio.variables === track.trackId,
+                  dismissing: dismiss.isPending && dismiss.variables === track.trackId,
+                  restoring: restore.isPending && restore.variables === track.trackId,
+                }}
                 key={track.trackId}
                 lens={lens}
+                onCertify={() => certify.mutate(track.trackId)}
                 onClear={() => clearAudio.mutate(track.trackId)}
+                onDismiss={() => dismiss.mutate(track.trackId)}
+                onRestore={() => restore.mutate(track.trackId)}
                 track={track}
               />
             ))}
@@ -286,6 +350,25 @@ function EmptyCatalogue({ lens, summary }: { lens: CatalogueLens; summary: Catal
           <EmptyDescription>
             Every capture matched the track it was for. When one comes back as the artist&apos;s
             other, already-logged tune instead, it lands here to be re-captured.
+          </EmptyDescription>
+        </EmptyHeader>
+      </Empty>
+    );
+  }
+
+  // The restore pile is clean when nothing is set aside — the resting state, said plainly and
+  // independent of whether the catalogue itself is empty.
+  if (lens === "dismissed") {
+    return (
+      <Empty>
+        <EmptyHeader>
+          <EmptyMedia variant="icon">
+            <BinocularsIcon aria-hidden="true" weight="thin" />
+          </EmptyMedia>
+          <EmptyTitle>Nothing set aside</EmptyTitle>
+          <EmptyDescription>
+            You have not waved anything off. When you mark a track &ldquo;not for me&rdquo; it drops
+            out of the ranking and lands here, restorable any time.
           </EmptyDescription>
         </EmptyHeader>
       </Empty>
@@ -346,15 +429,28 @@ function LensPill({
   );
 }
 
+type CatalogueRowBusy = {
+  certifying: boolean;
+  clearing: boolean;
+  dismissing: boolean;
+  restoring: boolean;
+};
+
 function CatalogueRow({
-  clearing,
+  busy,
   lens,
+  onCertify,
   onClear,
+  onDismiss,
+  onRestore,
   track,
 }: {
-  clearing: boolean;
+  busy: CatalogueRowBusy;
   lens: CatalogueLens;
+  onCertify: () => void;
   onClear: () => void;
+  onDismiss: () => void;
+  onRestore: () => void;
   track: CatalogueTrackItem;
 }) {
   return (
@@ -386,41 +482,58 @@ function CatalogueRow({
               {formatScore(track.nearestFindingScore)}
             </span>
           ) : null}
+          {/* THE FULL-LISTEN LINKS — quiet icon buttons out to the real thing, the twin of the
+              inline 30s audition on the artwork. Shown when the row carries that platform's link. */}
+          {track.spotifyUrl ? (
+            <ListenLink href={track.spotifyUrl} label={`Open ${track.title} in Spotify`}>
+              <SpotifyIcon className="size-4" />
+            </ListenLink>
+          ) : null}
+          {track.appleMusicUrl ? (
+            <ListenLink href={track.appleMusicUrl} label={`Open ${track.title} in Apple Music`}>
+              <AppleMusicIcon className="size-4" />
+            </ListenLink>
+          ) : null}
           {/* THE OVERRIDE. On the quarantine lens the operator can overrule a wrong-audio verdict
               — "keep it, this capture is fine" — and the row rejoins the ranking. Named plainly
               ("Keep it"), not dressed up: it is a literal control, not chrome. */}
           {lens === "quarantine" ? (
-            <Button disabled={clearing} onClick={onClear} size="sm" variant="outline">
-              {clearing ? (
-                <CircleNotchIcon
-                  aria-hidden="true"
-                  className="motion-safe:animate-spin"
-                  weight="bold"
-                />
-              ) : null}
+            <PendingButton onClick={onClear} pending={busy.clearing} variant="outline">
               Keep it
-            </Button>
+            </PendingButton>
           ) : null}
-          {track.spotifyUrl ? (
-            // The one thing the operator came here to do: HEAR it. There is no in-app preview
-            // for a catalogue track — the `/ln` relay resolves through `findings`, by design —
-            // so the audition is the real one, in Spotify.
-            <Button
-              // `nativeButton={false}` is required when the render node is an <a>: Base UI
-              // otherwise keeps native button semantics on a link, which breaks a11y.
-              nativeButton={false}
-              render={<a href={track.spotifyUrl} rel="noreferrer" target="_blank" />}
-              size="sm"
-              variant="outline"
-            >
-              Listen
-            </Button>
+          {/* RESTORE — put a dismissed row back into the ranking. The restore lens' one action. */}
+          {lens === "dismissed" ? (
+            <PendingButton onClick={onRestore} pending={busy.restoring} variant="outline">
+              <ArrowUUpLeftIcon aria-hidden="true" weight="bold" />
+              Restore
+            </PendingButton>
+          ) : null}
+          {/* THE TWO WORKSTATION ACTIONS on the live lenses: wave it off (quiet), or LOG IT (the
+              one primary — mint the finding in place and go finish it). "Not for me" is reversible
+              (a toast Undo + the Dismissed lens), so it stays a light ghost, never a confirm. */}
+          {lens === "ear" || lens === "capture" ? (
+            <>
+              <PendingButton onClick={onDismiss} pending={busy.dismissing} variant="ghost">
+                Not for me
+              </PendingButton>
+              <PendingButton onClick={onCertify} pending={busy.certifying} variant="default">
+                Log it
+              </PendingButton>
+            </>
           ) : null}
         </>
       }
     >
       <ObjectLead
-        leading={<CatalogueCover cover={track.albumImageUrl} />}
+        leading={
+          <CatalogueCover
+            cover={track.albumImageUrl}
+            title={track.title}
+            trackId={track.trackId}
+            playable={track.hasPreview}
+          />
+        }
         subtitle={
           <>
             <span className="truncate">{track.artists.join(", ")}</span>
@@ -542,20 +655,108 @@ function formatScore(score: number | null): string {
   return typeof score === "number" ? score.toFixed(2) : "—";
 }
 
-// The cover, at the shared size-11 Object Row footprint — and deliberately WITHOUT the
-// finding plate's gold story-ring: that ring is certification light, and Fluncle never
-// certified this. No cover art falls back to the shared ObjectGlyph.
-function CatalogueCover({ cover }: { cover: string | null }) {
-  if (!cover) {
-    return <ObjectGlyph icon={WaveformIcon} />;
-  }
-
+// A quiet full-listen link out to a platform — an <a> styled as a small ghost icon button, the
+// twin of the inline 30s audition on the artwork. Brand marks come from platform-icons, never a
+// Phosphor logo (DESIGN.md "Iconography").
+function ListenLink({
+  children,
+  href,
+  label,
+}: {
+  children: ReactNode;
+  href: string;
+  label: string;
+}) {
   return (
+    <Button
+      aria-label={label}
+      // `nativeButton={false}` is required when the render node is an <a>: Base UI otherwise
+      // keeps native button semantics on a link, which breaks a11y.
+      nativeButton={false}
+      render={<a href={href} rel="noreferrer" target="_blank" title={label} />}
+      size="icon-sm"
+      variant="ghost"
+    >
+      {children}
+    </Button>
+  );
+}
+
+// A row action that shows a spinner while its mutation is in flight — the shared shape for
+// Keep it / Restore / Not for me / Log it, so every one reads and disables the same way.
+function PendingButton({
+  children,
+  onClick,
+  pending,
+  variant,
+}: {
+  children: ReactNode;
+  onClick: () => void;
+  pending: boolean;
+  variant: "default" | "ghost" | "outline";
+}) {
+  return (
+    <Button disabled={pending} onClick={onClick} size="sm" variant={variant}>
+      {pending ? (
+        <CircleNotchIcon aria-hidden="true" className="motion-safe:animate-spin" weight="bold" />
+      ) : null}
+      {children}
+    </Button>
+  );
+}
+
+// The cover, at the shared size-11 Object Row footprint — and deliberately WITHOUT the finding
+// plate's gold story-ring: that ring is certification light, and Fluncle never certified this.
+// When the row has a preview source the cover DOUBLES as the audition control (the shared /mix
+// `PreviewArtwork` pattern, docs/the-ear.md § The operator's actions): a click plays the official
+// 30s preview through the shared singleton player, so starting one preview stops any other. A row
+// with no preview source (and no cover) falls back to the plain, non-playable ObjectGlyph.
+function CatalogueCover({
+  cover,
+  playable,
+  title,
+  trackId,
+}: {
+  cover: string | null;
+  playable: boolean;
+  title: string;
+  trackId: string;
+}) {
+  const { activeTrackId, pauseResume, start, status } = usePreviewControls();
+  const isCurrent = activeTrackId === trackId;
+  const isPlaying = isCurrent && (status === "playing" || status === "loading");
+
+  const art = cover ? (
     <img
       alt=""
       className="size-11 shrink-0 rounded-md border border-border object-cover"
       src={albumCoverAtSize(cover, "small")}
     />
+  ) : (
+    <ObjectGlyph icon={WaveformIcon} />
+  );
+
+  if (!playable) {
+    return art;
+  }
+
+  return (
+    <span className="relative shrink-0">
+      {art}
+      <button
+        aria-label={isPlaying ? `Pause ${title}` : `Play the preview of ${title}`}
+        aria-pressed={isCurrent}
+        className="absolute inset-0 flex items-center justify-center rounded-md bg-background/55 text-foreground opacity-0 transition-opacity hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-ring aria-pressed:opacity-100"
+        onClick={() => (isCurrent ? pauseResume() : start(trackId))}
+        type="button"
+      >
+        {isPlaying ? (
+          <PauseIcon aria-hidden="true" className="size-4" weight="fill" />
+        ) : (
+          <PlayIcon aria-hidden="true" className="size-4" weight="fill" />
+        )}
+      </button>
+    </span>
   );
 }
 
@@ -701,6 +902,37 @@ async function postClearWrongAudio(trackId: string): Promise<void> {
     body: JSON.stringify({ trackId }),
     headers: { "Content-Type": "application/json" },
     method: "POST",
+  });
+
+  if (!response.ok) {
+    throw new Error(await readError(response));
+  }
+}
+
+// The operator-tier "Log it" — certify an existing catalogue row in place (POST
+// /admin/catalogue/certify). It mints the finding WITHOUT creating a new track and returns the
+// minted Log ID, so the caller can confirm and route the operator to the finding.
+async function postCertify(trackId: string): Promise<{ logId: string }> {
+  const response = await fetch("/api/v1/admin/catalogue/certify", {
+    body: JSON.stringify({ trackId }),
+    headers: { "Content-Type": "application/json" },
+    method: "POST",
+  });
+
+  if (!response.ok) {
+    throw new Error(await readError(response));
+  }
+
+  return (await response.json()) as { logId: string };
+}
+
+// The operator-tier "not for me" / restore toggle (PUT /admin/catalogue/dismissed). `dismissed:
+// true` takes the row out of the ranking + capture ladder; `false` restores it.
+async function putDismissed(trackId: string, dismissed: boolean): Promise<void> {
+  const response = await fetch("/api/v1/admin/catalogue/dismissed", {
+    body: JSON.stringify({ dismissed, trackId }),
+    headers: { "Content-Type": "application/json" },
+    method: "PUT",
   });
 
   if (!response.ok) {

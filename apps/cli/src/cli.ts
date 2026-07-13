@@ -1991,6 +1991,68 @@ function addAdminCommands(program: Command): void {
     });
 
   catalogue
+    .command("certify")
+    .description("Certify an existing catalogue track in place — mint its finding (operator)")
+    .argument("<trackId>", "The catalogue track id to log")
+    .option("--note <note>", "An optional editorial note to mint onto the finding")
+    .option("--json", "Print JSON", false)
+    .action(async (trackId: string, options: { json?: boolean; note?: string }) => {
+      const { certifyTrackCommand } = await import("./commands/admin-catalogue");
+      const { logId } = await certifyTrackCommand(trackId, options.note);
+
+      if (options.json) {
+        printJson({ logId, ok: true });
+        return;
+      }
+
+      console.log(`Logged ${trackId} — ${logId}. Enrichment is running; finish it in the admin.`);
+    });
+
+  catalogue
+    .command("dismiss")
+    .description(
+      "Take a catalogue track out of the ranking + capture ladder — 'not for me' (operator)",
+    )
+    .argument("<trackId>", "The catalogue track id to dismiss")
+    .option("--json", "Print JSON", false)
+    .action(async (trackId: string, options: JsonOptions) => {
+      const { setTrackDismissedCommand } = await import("./commands/admin-catalogue");
+      const { changed } = await setTrackDismissedCommand(trackId, true);
+
+      if (options.json) {
+        printJson({ changed, ok: true });
+        return;
+      }
+
+      console.log(
+        changed
+          ? `Dismissed ${trackId}. It leaves the ranking and the capture ladder; restore it any time.`
+          : `${trackId} was not a live catalogue row — nothing dismissed.`,
+      );
+    });
+
+  catalogue
+    .command("restore")
+    .description("Put a dismissed catalogue track back into the ranking (operator)")
+    .argument("<trackId>", "The catalogue track id to restore")
+    .option("--json", "Print JSON", false)
+    .action(async (trackId: string, options: JsonOptions) => {
+      const { setTrackDismissedCommand } = await import("./commands/admin-catalogue");
+      const { changed } = await setTrackDismissedCommand(trackId, false);
+
+      if (options.json) {
+        printJson({ changed, ok: true });
+        return;
+      }
+
+      console.log(
+        changed
+          ? `Restored ${trackId}. It re-enters the ranking on the next sweep.`
+          : `${trackId} was not dismissed — nothing to restore.`,
+      );
+    });
+
+  catalogue
     .command("crawl")
     .description("Run one bounded, resumable pass of the catalogue crawler")
     .option("--dry-run", "Report the seed plan and write nothing at all", false)

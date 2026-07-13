@@ -6,7 +6,7 @@ import {
   trackNotFoundResponse,
 } from "../../lib/server/http-errors";
 import { fetchLivePreview } from "../../lib/server/preview-live";
-import { getTrackByIdOrLogId } from "../../lib/server/tracks";
+import { getLivePreviewTrack } from "../../lib/server/tracks";
 import { type ApiHandlers, aliasHandlers } from "./-alias";
 
 // Streams a finding's official 30s preview (Deezer/iTunes — never YouTube;
@@ -29,7 +29,10 @@ export const serverHandlers: ApiHandlers = {
     const idOrLogId = requireParam(params.idOrLogId, "idOrLogId");
 
     try {
-      const track = await getTrackByIdOrLogId(idOrLogId);
+      // Resolve from `tracks` (LEFT join findings), so a CATALOGUE row previews too — the Ear's
+      // inline artwork audition (docs/the-ear.md). The preview is the official Deezer/Apple/iTunes
+      // 30s clip; a catalogue row's clip is as public as a finding's.
+      const track = await getLivePreviewTrack(idOrLogId);
 
       if (!track) {
         return trackNotFoundResponse(idOrLogId);

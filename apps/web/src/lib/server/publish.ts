@@ -1,3 +1,4 @@
+import { type InStatement } from "@libsql/client/web";
 import { type PublishTrackResult } from "@fluncle/contracts";
 
 export type { PublishTrackResult };
@@ -39,6 +40,56 @@ type TrackRow = {
   added_to_spotify: number;
   posted_to_telegram: number;
 };
+
+/**
+ * THE CERTIFICATION MINT, single-sourced. Resolve a unique Log ID for a track from the found
+ * date + the recording's ISRC (the Spotify id as fallback), retrying to a fresh tail on the rare
+ * collision. Shared by the Spotify add path (`publishTrack`) and the certify-in-place path
+ * (`certifyExistingTrack`), so a coordinate is minted the SAME way however a finding is born.
+ */
+async function resolveFindingLogId(
+  db: Awaited<ReturnType<typeof getDb>>,
+  input: { foundAt: string; isrc?: null | string; trackId: string },
+): Promise<string> {
+  return resolveLogId(
+    { foundAt: input.foundAt, isrc: input.isrc, trackId: input.trackId },
+    async (candidate) => {
+      const taken = await db.execute({
+        args: [candidate],
+        sql: `select 1 from findings where log_id = ? limit 1`,
+      });
+
+      return taken.rows.length > 0;
+    },
+  );
+}
+
+/**
+ * THE CERTIFICATION-HALF INSERT, single-sourced (docs/track-lifecycle.md). The one statement that
+ * turns a `tracks` row into a finding: its coordinate, its note, its found date, and the publish
+ * bookkeeping. `enrichment_status` takes its DDL default (`pending`), which is what enqueues the
+ * fresh finding for the enrich sweep. Reused verbatim by `publishTrack` (inside its atomic
+ * tracks+findings batch) and `certifyExistingTrack` (the row already exists, so this alone mints).
+ */
+function findingInsertStatement(input: {
+  logId: string;
+  note?: null | string;
+  nowIso: string;
+  trackId: string;
+}): InStatement {
+  return {
+    args: [input.trackId, input.logId, input.note ?? null, input.nowIso, input.nowIso, 0, 0],
+    sql: `insert into findings (
+        track_id,
+        log_id,
+        note,
+        added_at,
+        updated_at,
+        added_to_spotify,
+        posted_to_telegram
+      ) values (?, ?, ?, ?, ?, ?, ?)`,
+  };
+}
 
 export async function publishTrack(
   spotifyUrl: string,
@@ -92,17 +143,11 @@ ${existing.posted_to_telegram ? "Posted to Telegram" : "Not posted to Telegram"}
   // recording's ISRC (Spotify id as fallback); a rare collision resolves to a
   // fresh tail on the same sector. Computed even on dry run so the operator can
   // preview the coordinate.
-  const logId = await resolveLogId(
-    { foundAt: nowIso, isrc: track.isrc, trackId: track.trackId },
-    async (candidate) => {
-      const taken = await db.execute({
-        args: [candidate],
-        sql: `select 1 from findings where log_id = ? limit 1`,
-      });
-
-      return taken.rows.length > 0;
-    },
-  );
+  const logId = await resolveFindingLogId(db, {
+    foundAt: nowIso,
+    isrc: track.isrc,
+    trackId: track.trackId,
+  });
 
   if (options.dryRun) {
     const message = `Dry run
@@ -195,21 +240,9 @@ No database, Spotify, or Telegram changes were made. Enrichment (label, preview)
             in_master_id
           ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       },
-      {
-        args: [track.trackId, logId, options.note ?? null, nowIso, nowIso, 0, 0],
-        // The CERTIFICATION half — the coordinate, the note, the found date, the publish
-        // state. `enrichment_status` takes its DDL default (`pending`), which is what
-        // enqueues the fresh find for the enrich sweep (docs/track-lifecycle.md).
-        sql: `insert into findings (
-            track_id,
-            log_id,
-            note,
-            added_at,
-            updated_at,
-            added_to_spotify,
-            posted_to_telegram
-          ) values (?, ?, ?, ?, ?, ?, ?)`,
-      },
+      // The CERTIFICATION half — the coordinate, the note, the found date, the publish state,
+      // minted through the shared `findingInsertStatement` so certify-in-place cannot drift.
+      findingInsertStatement({ logId, note: options.note, nowIso, trackId: track.trackId }),
     ],
     "write",
   );
@@ -367,6 +400,84 @@ Posted to Telegram`;
     },
     { label: deezer.label, logId, previewUrl: deezer.previewUrl },
   );
+}
+
+/**
+ * CERTIFY IN PLACE (docs/the-ear.md § The operator's actions) — turn an EXISTING catalogue row
+ * into a finding, WITHOUT creating a new track. This is the "Log it" the Ear's workstation fires:
+ * a catalogue track (a `tracks` row with no `findings` row) is the same recording Fluncle already
+ * knows — the Spotify add path would re-fetch it and try to insert a duplicate `tracks` row, so
+ * certification here mints ONLY the certification half.
+ *
+ * It shares the exact mint the Spotify add uses (`resolveFindingLogId` + `findingInsertStatement`),
+ * so a coordinate is born the same way however a finding arrives. `enrichment_status` takes its
+ * DDL default (`pending`), which enqueues the fresh finding for the enrichment chain (audio →
+ * video → publish) — so the operator lands on the finding's admin surface with the rest of the
+ * pipeline already moving, and finishes the note / galaxy / publish from there.
+ *
+ * Guards: the row must EXIST (404) and must NOT already be certified (409). The graph links + cache
+ * purge + IndexNow ping are best-effort — a fresh coordinate page and its edge cache — and never
+ * block the mint. It deliberately does NOT touch Spotify or Telegram: certifying a crawled row is
+ * not the same act as publishing a Spotify find, and a catalogue row may have no Spotify presence
+ * at all. Returns the minted Log ID so the caller can route the operator to the finding.
+ */
+export async function certifyExistingTrack(
+  trackId: string,
+  options: { note?: string } = {},
+): Promise<{ logId: string }> {
+  const db = await getDb();
+  const row = typedRow<{
+    album: null | string;
+    artists_json: string;
+    finding_id: null | string;
+    isrc: null | string;
+    label: null | string;
+    title: string;
+    track_id: string;
+  }>(
+    (
+      await db.execute({
+        args: [trackId],
+        sql: `select tracks.track_id, tracks.title, tracks.artists_json, tracks.isrc,
+                     tracks.label, tracks.album, findings.track_id as finding_id
+              from tracks
+              left join findings on findings.track_id = tracks.track_id
+              where tracks.track_id = ?
+              limit 1`,
+      })
+    ).rows,
+  );
+
+  if (!row) {
+    throw new ApiError("not_found", `No track with id ${trackId}.`, 404);
+  }
+
+  const line = `${parseArtistsJson(row.artists_json).join(", ")} — ${row.title}`;
+
+  if (row.finding_id) {
+    throw new ApiError("already_certified", `Already logged: ${line}`, 409);
+  }
+
+  const nowIso = new Date().toISOString();
+  const logId = await resolveFindingLogId(db, { foundAt: nowIso, isrc: row.isrc, trackId });
+
+  await db.execute(findingInsertStatement({ logId, note: options.note, nowIso, trackId }));
+
+  // Best-effort, exactly as the Spotify add does it: mint the graph entities this track now
+  // hangs off (its label + album, both minted ONLY off a certified finding) and stamp its
+  // pointers. Purely additive; the deploy-time reconciles back both up, so a miss never blocks.
+  try {
+    await Promise.all([linkTrackToLabel(trackId, row.label), linkTrackToAlbum(trackId, row.album)]);
+  } catch (labelError) {
+    logEvent("warn", "certify.graph-entity-upsert-failed", { error: labelError, logId, trackId });
+  }
+
+  // A new finding now sits at the top of `/log` and owns its coordinate page: drop the edge
+  // cache and ping IndexNow so both re-render / re-crawl. Both are fire-and-forget-safe.
+  purgeLogCache(logId);
+  submitFindingToIndexNow(logId);
+
+  return { logId };
 }
 
 function buildAddResult(

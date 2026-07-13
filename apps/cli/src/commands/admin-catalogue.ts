@@ -17,7 +17,7 @@
 //   - `status` — the crawl frontier's state (`get_crawl_status`).
 
 import { type CatalogueResponse, type CatalogueTrackItem } from "@fluncle/contracts";
-import { adminApiGet, adminApiPost } from "../api";
+import { adminApiGet, adminApiPost, adminApiPut } from "../api";
 
 export type { CatalogueTrackItem };
 
@@ -85,6 +85,37 @@ export async function catalogueListCommand(options: {
  */
 export async function clearWrongAudioCommand(trackId: string): Promise<{ cleared: boolean }> {
   return adminApiPost<{ cleared: boolean; ok: true }>("/api/admin/catalogue/wrong-audio/clear", {
+    trackId,
+  });
+}
+
+/**
+ * Certify an existing catalogue track in place — mint its finding, without creating a new track
+ * (operator). `fluncle admin catalogue certify <trackId> [--note <text>]`. Returns the minted Log
+ * ID (docs/the-ear.md § The operator's actions). 409 when the track is already logged.
+ */
+export async function certifyTrackCommand(
+  trackId: string,
+  note?: string,
+): Promise<{ logId: string }> {
+  return adminApiPost<{ logId: string; ok: true }>("/api/admin/catalogue/certify", {
+    ...(note ? { note } : {}),
+    trackId,
+  });
+}
+
+/**
+ * Dismiss a catalogue track ("not for me") or restore it (operator). `fluncle admin catalogue
+ * dismiss <trackId>` / `restore <trackId>`. A dismissed row drops out of the ear/capture reads and
+ * the capture ladder; restore puts it back (docs/the-ear.md § The operator's actions). `changed:
+ * false` is an idempotent no-op (already in that state, or a finding trackId).
+ */
+export async function setTrackDismissedCommand(
+  trackId: string,
+  dismissed: boolean,
+): Promise<{ changed: boolean }> {
+  return adminApiPut<{ changed: boolean; ok: true }>("/api/admin/catalogue/dismissed", {
+    dismissed,
     trackId,
   });
 }

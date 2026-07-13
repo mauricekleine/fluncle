@@ -53,9 +53,12 @@ import * as z from "zod";
  *                    capture landed the wrong master (a near-1.0 cross-title match), vetoed from
  *                    the ear lens and re-queued for a fresh download. Its own quiet section so a
  *                    bad capture never silently vanishes, each row force-clearable by the operator.
+ *   - `dismissed`  — the operator's "not for me" restore pile (docs/the-ear.md § The operator's
+ *                    actions): rows he took out of the telescope. A REVERSIBLE veto, its own quiet
+ *                    lens so a dismissal is never a black hole — each row carries a Restore.
  */
 export const CatalogueLensSchema = z
-  .enum(["capture", "ear", "quarantine"])
+  .enum(["capture", "dismissed", "ear", "quarantine"])
   .meta({ id: "CatalogueLens" });
 
 /**
@@ -99,10 +102,14 @@ export const CatalogueMatchSchema = z
 export const CatalogueTrackItemSchema = z
   .object({
     albumImageUrl: z.string().nullable(),
+    /** The Apple Music listen link, when the ISRC has resolved one — the Spotify twin. */
+    appleMusicUrl: z.string().nullable(),
     artists: z.array(z.string()),
     bpm: z.number().nullable(),
     capturePriority: z.number().nullable(),
     captureReason: CapturePriorityReasonSchema.nullable(),
+    /** ISO of when the operator dismissed this row ("not for me"); null on a live row. */
+    dismissedAt: z.string().nullable(),
     /**
      * The certified finding this row is the SAME RECORDING as — "already in the archive". Set
      * two ways (docs/the-ear.md § Duplicates): the CAPTURE lens from a pre-audio ISRC match
@@ -110,6 +117,13 @@ export const CatalogueTrackItemSchema = z
      * (display-only). Null on an ordinary catalogue row — a real discovery.
      */
     duplicateOf: CatalogueMatchSchema.nullable(),
+    /**
+     * Whether an official 30s preview can be auditioned inline (docs/the-ear.md § The operator's
+     * actions) — true when the row carries a stored preview or an ISRC, so the artwork is a live
+     * play control rather than a dead one.
+     */
+    hasPreview: z.boolean(),
+    isrc: z.string().nullable(),
     key: z.string().nullable(),
     label: z.string().nullable(),
     nearestFinding: CatalogueMatchSchema.nullable(),
@@ -127,6 +141,8 @@ export const CatalogueSummarySchema = z
   .object({
     awaitingCapture: z.number(),
     awaitingRank: z.number(),
+    /** Rows the operator dismissed ("not for me") — the restore pile's depth. */
+    dismissed: z.number(),
     /** Rows quarantined as wrong audio, awaiting a fresh capture (docs/the-ear.md § Wrong audio). */
     quarantined: z.number(),
     ranked: z.number(),
@@ -231,6 +247,56 @@ export const clearWrongAudio = oc
   })
   .input(z.object({ trackId: z.string().min(1) }))
   .output(z.object({ cleared: z.boolean(), ok: z.literal(true) }));
+
+/**
+ * `certify_track` → `POST /admin/catalogue/certify` (operationId `certifyTrack`).
+ *
+ * OPERATOR tier — the "Log it" the Ear's workstation fires (docs/the-ear.md § The operator's
+ * actions). It turns an EXISTING catalogue row (a `tracks` row with no `findings` row) into a
+ * finding by minting the certification half in place — the SAME coordinate mint the Spotify add
+ * uses — and never creates a new track. The fresh finding enters the enrichment chain (its
+ * `enrichment_status` defaults to `pending`), so the operator lands on it with the pipeline
+ * already moving and finishes note / galaxy / publish from there.
+ *
+ * Operator-only, NOT agent-allowed: certifying is the one act the whole catalogue domain forbids a
+ * machine — the agent-tier sweep is agent-allowed precisely BECAUSE it can never certify. Same rule
+ * that keeps `update_label` and `set_capture_budget` operator-tier. Returns the minted `logId`.
+ * 404 when the track does not exist; 409 when it is already certified.
+ */
+export const certifyTrack = oc
+  .route({
+    method: "POST",
+    operationId: "certifyTrack",
+    path: "/admin/catalogue/certify",
+    summary: "Certify an existing catalogue track in place — mint its finding (operator)",
+    tags: ["Admin"],
+  })
+  .input(z.object({ note: z.string().optional(), trackId: z.string().min(1) }))
+  .output(z.object({ logId: z.string(), ok: z.literal(true) }));
+
+/**
+ * `set_track_dismissed` → `PUT /admin/catalogue/dismissed` (operationId `setTrackDismissed`).
+ *
+ * OPERATOR tier — the "not for me" / restore toggle (docs/the-ear.md § The operator's actions), the
+ * `set_capture_budget` shape (one op, both directions). `dismissed: true` stamps `dismissed_at` so
+ * the row drops out of the ear/capture reads AND the capture work queue (the ruled-out-label veto's
+ * class — a metered download is never spent on a dismissed row); `dismissed: false` restores it, so
+ * it re-enters the ranking on the next sweep tick.
+ *
+ * Operator-only for the same reason `update_label` is: steering what the telescope keeps pointing at
+ * is a taste ruling, not a machine job. `changed: false` is an idempotent no-op (already in that
+ * state, or a finding trackId — a finding is never dismissed).
+ */
+export const setTrackDismissed = oc
+  .route({
+    method: "PUT",
+    operationId: "setTrackDismissed",
+    path: "/admin/catalogue/dismissed",
+    summary: "Dismiss a catalogue track ('not for me') or restore it (operator)",
+    tags: ["Admin"],
+  })
+  .input(z.object({ dismissed: z.boolean(), trackId: z.string().min(1) }))
+  .output(z.object({ changed: z.boolean(), ok: z.literal(true) }));
 
 // ─────────────────────────────────────────────────────────────────────────────
 // THE CRAWLER — what makes the rows above exist. docs/catalogue-crawler.md.
@@ -480,6 +546,7 @@ export const resetAppleBreaker = oc
 
 /** The `admin-catalogue` domain's ops, merged into the root contract by `./index.ts`. */
 export const adminCatalogueContract = {
+  certify_track: certifyTrack,
   clear_wrong_audio: clearWrongAudio,
   crawl_catalogue: crawlCatalogue,
   get_capture_budget: getCaptureBudget,
@@ -488,4 +555,5 @@ export const adminCatalogueContract = {
   rank_catalogue: rankCatalogue,
   reset_apple_breaker: resetAppleBreaker,
   set_capture_budget: setCaptureBudget,
+  set_track_dismissed: setTrackDismissed,
 };
