@@ -522,7 +522,7 @@ export function videoCropPoster(
 
 /**
  * A same-zone Media Transformations CLIP of the cropped square master that BEGINS
- * at a global offset — the fast offset-join (RFC radio-broadcast.md Unit B). CF MT
+ * at a global offset — the fast offset-join (the radio-broadcast RFC Unit B). CF MT
  * `mode=video` supports `time=` (start offset) + `duration=` (1-60s), so a joiner
  * fetches a faststart rendition whose frame 0 IS the offset — no in-file seek of
  * the non-faststart master (verified live 2026-06-22: `time=5s,duration=10s` → a

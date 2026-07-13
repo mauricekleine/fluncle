@@ -568,8 +568,8 @@ export const findings = sqliteTable(
     // passed to the observe render. It already lives
     // in the R2 `observation.json` (field `text`) + `observation.txt`; this column
     // mirrors it on the row so the admin observation dialog can show the transcript
-    // without an R2 round-trip, and (future) radio.fluncle.com can render line-by-line
-    // subtitles synced over the video. Internal like `context_note`: never on the
+    // without an R2 round-trip, and radio.fluncle.com renders it as synced captions
+    // over the footage. Internal like `context_note`: never on the
     // public TrackListItem contract — surfaced only through the admin-only board path.
     observationScript: text("observation_script"),
     postedToTelegram: integer("posted_to_telegram", { mode: "boolean" }).notNull().default(false),
@@ -633,7 +633,7 @@ export const findings = sqliteTable(
   ],
 );
 
-// The radio.fluncle.com shared-schedule anchor (RFC radio-broadcast.md, Unit A).
+// The radio.fluncle.com shared-schedule anchor (the radio-broadcast RFC, Unit A).
 // ONE row (PK = service = "radio") holding the wall-clock `epoch` the modulo
 // schedule is measured from and the `version` fingerprint of the eligible set it
 // was computed for (`${count}:${maxObservationGeneratedAt}`). The broadcast is a
@@ -1777,7 +1777,7 @@ export const artists = sqliteTable(
 );
 
 // The sonic galaxy — a stable-ID, operator-named cluster over the MuQ embedding
-// space (browse-by-feel RFC). The FIRST time galaxy identity lives in the database:
+// space (docs/agents/cluster-engine.md). The FIRST time galaxy identity lives in the database:
 // the four vibe-quadrant galaxies were a hardcoded constant (`lib/galaxies.ts`),
 // derived per-track from the dead vibe axes; these are the real, sound-derived map.
 // The structural precedent is `artists` (the slug-addressable public entity), with
@@ -1790,7 +1790,7 @@ export const artists = sqliteTable(
 // anchor. `retiredAt` is set when a galaxy empties (row kept, ID never recycled);
 // `splitRequestedAt` is the operator's split trigger the nightly tick consumes.
 // Member counts are DERIVED (`COUNT(*) GROUP BY galaxy_id`), never stored. See
-// docs/rfcs/browse-by-feel.md.
+// docs/agents/cluster-engine.md.
 export const galaxies = sqliteTable("galaxies", {
   centroidJson: text("centroid_json").notNull(),
   createdAt: text("created_at").notNull(),
@@ -1902,9 +1902,8 @@ export const artistSocials = sqliteTable(
 // `ruled_at` is the OPERATOR's stamp — set only by the operator-tier `update_label`
 // write. NULL means no human has ruled this label, which is what lets the one-time
 // D7 bootstrap (scripts/backfill-labels.ts) seed a state without ever clobbering an
-// operator's decision. `slug` is the identity + the join key. Nothing consumes the
-// enabled set yet (the crawler does not exist); `list_labels_admin?seedState=enabled`
-// is where it will read it. See docs/label-entity.md.
+// operator's decision. `slug` is the identity + the join key. The catalogue crawler
+// reads the enabled set via `list_labels_admin?seedState=enabled`. See docs/label-entity.md.
 // ── THE LABEL'S OWN IMAGE (its real logo, not a borrowed album cover) ───────────
 // A label surface (the /labels cards, the /label/<slug> page, search, the hover
 // card) used to show the freshest finding's album art as the label's picture — an

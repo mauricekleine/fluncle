@@ -67,8 +67,8 @@ const PUBLIC_ROUTE_OPS: Record<string, string> = {
   // The cycling station's reads. Contract-only — there is no TanStack alias file
   // under /api/v1/radio (oRPC serves them straight off the registry), so they have
   // no route-file basename to enumerate; documented here as part of the public
-  // surface net. `now-playing` is the shared-broadcast clock (RFC
-  // radio-broadcast.md Unit A); `random` is the kept fallback (RFC Unit B).
+  // surface net. `now-playing` is the shared-broadcast clock (the radio-broadcast
+  // RFC, Unit A); `random` is the kept fallback (RFC Unit B).
   "GET /radio/now-playing": "get_radio_now_playing",
   "GET /radio/random": "get_random_radio_track",
   "GET /search": "search_tracks",

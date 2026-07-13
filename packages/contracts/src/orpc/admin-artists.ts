@@ -191,7 +191,7 @@ export const resolveArtist = oc
  * [{ id, name }], nextCursor }` (`nextCursor` is null when the queue is drained).
  *
  * Named `list_unresolved_artists` (not `list_artists`) to avoid a Convention-B
- * collision with Unit 4's future public `api.artists` op.
+ * collision with the public `list_artists` op.
  */
 export const listUnresolvedArtists = oc
   .route({

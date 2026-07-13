@@ -760,7 +760,7 @@ const MixOrderStopSchema = z
  * (minimizing total adjacent roughness), NOT an energy-shaped set — a proposed
  * tracklist the operator copy-pastes into Rekordbox. A PURE admin READ (no writes):
  * `promote_recording` remains the only way a mixtape exists. Admin tier
- * (agent-allowed, like `get_track_admin`), GET like all 17 `get_*` ops (64 comma-
+ * (agent-allowed, like `get_track_admin`), GET like every other `get_*` op (64 comma-
  * joined logIds fit a query param). Held-Karp exact for ≤16, greedy + 2-opt to 64.
  *
  * `ids` is a comma-separated Log ID list (2..64; a 65-id request 400s at validation);

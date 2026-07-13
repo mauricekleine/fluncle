@@ -218,8 +218,8 @@ export const MixCandidateSchema = MixTrackSchema.extend({
 }).meta({ id: "MixCandidate" });
 
 /**
- * The radio.fluncle.com now-playing slot (`RadioNowPlaying` in ../index.ts; RFC
- * radio-broadcast.md Unit A). The server-authoritative position on the shared loop
+ * The radio.fluncle.com now-playing slot (`RadioNowPlaying` in ../index.ts; the
+ * radio-broadcast RFC, Unit A). The server-authoritative position on the shared loop
  * — `currentTrack` + `offsetMs` is what's playing right now; `nextTrack` the
  * preload target (offset 0); `serverEpochMs` + `scheduleVersion` drive the
  * client's NTP-lite skew + the re-fetch on a changed catalogue.

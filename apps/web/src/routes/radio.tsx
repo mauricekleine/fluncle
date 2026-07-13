@@ -35,8 +35,8 @@ import {
 import { DESKTOP_QUERY, useMediaQuery } from "@/lib/use-media-query";
 import { useVideoStallRecovery } from "@/lib/use-video-recovery";
 
-// radio.fluncle.com — ONE synchronized run of Fluncle's Findings (RFC
-// radio-broadcast.md). Not a per-client shuffle: a single server-authoritative
+// radio.fluncle.com — ONE synchronized run of Fluncle's Findings (the
+// radio-broadcast RFC). Not a per-client shuffle: a single server-authoritative
 // loop every listener computes their place in and drops into mid-flight. Each
 // finding's CLEAN footage runs silent under its spoken observation, then on to the
 // next, forever; the only sound is the recovered observation (the first HEARD
@@ -178,7 +178,7 @@ function trackSegmentMs(track: Track): number {
 }
 
 // Synced observation captions, redesigned as Fluncle NARRATING LIVE, center-stage
-// (RFC radio-broadcast.md / the operator's center-stage ask): not the whole
+// (the radio-broadcast RFC / the operator's center-stage ask): not the whole
 // transcript as a bottom-anchored subtitle strip, but ONE slice at a time, big and
 // centered over the footage. The script is split into sequential slices (sentence
 // units, long sentences chunked into bounded phrase windows — see

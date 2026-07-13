@@ -33,7 +33,7 @@ vi.mock("@/lib/server/catalogue-groups", async (importOriginal) => ({
   listArtistCatalogue,
 }));
 
-/** The empty grouped catalogue every artist has today (the archive is entirely certified). */
+/** The empty grouped catalogue — an artist the crawler has not touched. */
 const NO_CATALOGUE = { groups: [], page: 1, pageCount: 1, totalGroups: 0, totalTracks: 0 };
 
 // The dossier's neighbours are DB-backed; stub them so the resolver stays a pure

@@ -112,7 +112,7 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // completeness. Admin tier (agent-allowed — the `fluncle-cluster` cron reads it).
   "GET /admin/galaxies": "list_galaxies_admin",
   // The label entity + the operator's crawl-seed control — contract-only oRPC (no TanStack
-  // route file; oRPC owns the path directly). Admin tier (agent-allowed read): the future
+  // route file; oRPC owns the path directly). Admin tier (agent-allowed read): the
   // catalogue crawler reads its seed set here (`?seedState=enabled`). `list_labels_admin`
   // matches the public `list_` prefix so the "holds exactly" check skips it; it lives here
   // for completeness (like `list_galaxies_admin`).
