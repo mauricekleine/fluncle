@@ -581,10 +581,10 @@ const PUBLIC_OPERATION_IDS = [
   // entity's own public page already prints).
   "getGraphPreview",
   "getHealth",
-  "getMyPreferences",
   "getPrivateAccountExport",
   "getPrivateGalaxyProgress",
   "getPrivateMutationToken",
+  "getPrivatePreferences",
   "getRadioNowPlaying",
   "getRandomRadioTrack",
   "getRandomTrack",
@@ -611,7 +611,7 @@ const PUBLIC_OPERATION_IDS = [
   "submitTrack",
   "subscribeNewsletter",
   "unsavePrivateFinding",
-  "updateMyPreferences",
+  "updatePrivatePreferences",
   "updatePrivateProfile",
   "updatePrivateSavedSet",
 ];

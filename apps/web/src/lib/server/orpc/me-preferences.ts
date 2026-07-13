@@ -13,28 +13,30 @@ import { apiFault, type Implementer, responseFault } from "./_shared";
 /**
  * Build the `me-preferences` domain's handlers.
  *
- *   - `get_my_preferences` — `GET /me/preferences`. Reuses `getUserPreferences`;
+ *   - `get_private_preferences` — `GET /me/preferences`. Reuses `getUserPreferences`;
  *     returns the `{ ok: true, preferences }` envelope (an empty object when none
  *     set or the stored blob is unreadable — the read never throws).
- *   - `update_my_preferences` — `PATCH /me/preferences`. CSRF + the
+ *   - `update_private_preferences` — `PATCH /me/preferences`. CSRF + the
  *     `account.preferences.update`/90 rate limit; reuses `updateUserPreferences`
  *     (partial merge into the stored object → the full merged echo, or a 400
  *     `invalid_request` Response on an unknown key).
  */
 export function mePreferencesHandlers(os: Implementer) {
-  const getPreferences = os.get_my_preferences.use(privateUserAuth).handler(async ({ context }) => {
-    try {
-      return await getUserPreferences(context.user);
-    } catch (error) {
-      if (error instanceof ORPCError) {
-        throw error;
+  const getPreferences = os.get_private_preferences
+    .use(privateUserAuth)
+    .handler(async ({ context }) => {
+      try {
+        return await getUserPreferences(context.user);
+      } catch (error) {
+        if (error instanceof ORPCError) {
+          throw error;
+        }
+
+        throw apiFault(error);
       }
+    });
 
-      throw apiFault(error);
-    }
-  });
-
-  const updatePreferences = os.update_my_preferences
+  const updatePreferences = os.update_private_preferences
     .use(privateUserMutation({ action: "account.preferences.update", limit: 90 }))
     .handler(async ({ context, input }) => {
       try {
@@ -55,7 +57,7 @@ export function mePreferencesHandlers(os: Implementer) {
     });
 
   return {
-    get_my_preferences: getPreferences,
-    update_my_preferences: updatePreferences,
+    get_private_preferences: getPreferences,
+    update_private_preferences: updatePreferences,
   };
 }

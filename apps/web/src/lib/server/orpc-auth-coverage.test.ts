@@ -307,12 +307,12 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // no operatorGuard. `promote_recording` remains the only way a mixtape exists.
   get_mixable_order: "admin",
   get_mixtape_social: "admin",
-  // The signed-in user's cross-device preferences read (the key-notation sync) —
-  // private-session (privateUserAuth), the get_private_galaxy_progress precedent.
-  get_my_preferences: "private-session",
   get_private_account_export: "private-session",
   get_private_galaxy_progress: "private-session",
   get_private_mutation_token: "private-session",
+  // The signed-in user's cross-device preferences read (the key-notation sync) —
+  // private-session (privateUserAuth), the get_private_galaxy_progress precedent.
+  get_private_preferences: "private-session",
   // The recording reads — admin tier (agent-allowed): the box's clip-cut cron resolves a
   // clip's recording (r2Key + tracklist + promoted logId) via `get_recording`.
   // The prompt registry's per-tick resolve — AGENT tier (adminAuth only, no
@@ -541,14 +541,14 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // The interactive single-cue write (Studio cue rail) — operator tier: it re-times a
   // published set's surface, so the agent token 403s (like set_mixtape_cues).
   update_mixtape_cue: "operator",
-  // The `/me/preferences` cross-device store's partial-merge write — private-session
-  // (privateUserMutation), the update_private_profile precedent.
-  update_my_preferences: "private-session",
   // Retuning the auto-note echo gate's thresholds — operator tier: the dials decide what
   // Fluncle will and will not say about his own archive, so an agent token 403s at
   // operatorGuard (the update_galaxy precedent). They live in the `settings` KV, so the
   // retune is a flip rather than a deploy.
   update_note_gate: "operator",
+  // The `/me/preferences` cross-device store's partial-merge write — private-session
+  // (privateUserMutation), the update_private_profile precedent.
+  update_private_preferences: "private-session",
   update_private_profile: "private-session",
   update_private_saved_set: "private-session",
   // Appending a prompt version (an edit, a rollback, or a reset) — OPERATOR tier. A

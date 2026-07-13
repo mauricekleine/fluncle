@@ -236,13 +236,13 @@ export {
   mergePrivateGalaxyProgress,
 } from "./me-galaxy";
 export {
-  getMyPreferences,
+  getPrivatePreferences,
   KeyNotationPreferenceSchema,
   mePreferencesContract,
   type UserPreferences,
   UserPreferencesInputSchema,
   UserPreferencesSchema,
-  updateMyPreferences,
+  updatePrivatePreferences,
 } from "./me-preferences";
 export { listPrivateSavedFindings, savePrivateFinding, unsavePrivateFinding } from "./me-saved";
 export {

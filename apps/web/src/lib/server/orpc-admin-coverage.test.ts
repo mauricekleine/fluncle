@@ -553,9 +553,6 @@ describe("oRPC admin-route contract coverage", () => {
       "delete_private",
       "export_private",
       "update_private",
-      // The `/me/preferences` cross-device store (private-session, not admin). The
-      // read matches `get_` above; this covers its partial-merge write.
-      "update_my",
       "register_device",
       "deregister_device",
     ];
