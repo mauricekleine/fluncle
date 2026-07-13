@@ -56,7 +56,17 @@ The App Store Connect listing values, ratified by the operator — paste these w
 - **Category**: Music (secondary: Entertainment) · **Age rating**: 4+ (questionnaire: all "None")
 - **Support URL**: `https://www.fluncle.com/about` · **Privacy policy**: `https://www.fluncle.com/privacy`
 - **Keywords** (≤100 chars): `drum and bass,dnb,jungle,liquid,neurofunk,music discovery,radio,dj mix,mixtape,set builder`
-- **Description**: Fluncle is one uncle's drum & bass archive. Every track here is a finding: heard, certified, and logged with its own coordinate — no algorithm, no playlist filler, just the bangers that got an "oof" out of a human ear. The feed plays each finding's own video, made for that track and nothing else. The radio runs the archive as one continuous broadcast — drop in mid-flight, wherever it's got to. The Decks are a real tool: name a few artists you like, pick an opener, and Fluncle ranks what mixes in clean next, by key, tempo, and feel — chain a set, then share it with the crew. Browse the archive by what was found and when, search it by name or coordinate, save what hits, and listen on Spotify or Apple Music. Heard a banger the rest of us missed? Send it in — if it earns its place, it lands in the log with a coordinate of its own.
+- **Description** (multi-paragraph; paste with the line breaks):
+
+  > Drum & bass bangers from another dimension.
+  >
+  > I'm Fluncle, the uncle with the good records. I dig drum & bass out of the far sectors, and when a tune gets an involuntary "oof" out of me, I certify it and log it as a finding, with its own coordinate. No algorithm, no playlist filler: if it's in the archive, it put my knees up.
+  >
+  > The feed plays each finding's own video, one I made for that track and nothing else. The radio runs my whole archive as one long set. Drop in mid-flight, wherever it's got to. And on the Decks you take over: name a few artists you like, pick an opener, and I rank what mixes in clean next, by key, tempo, and feel. Chain a set, then share it with the crew.
+  >
+  > Browse the archive by what I found and when, search by name or coordinate, save what hits, and listen on Spotify or Apple Music. Heard one I missed? Send it in. If it earns its place, I log it with a coordinate of its own.
+
+- **Promotional text** (optional ASC field, updatable without review): `Fresh bangers, most nights. The radio never stops; drop in mid-flight.`
 - **App Privacy labels**: Identifiers → Device ID (the push token), app functionality only, not linked to identity, no tracking. User Content → track submissions + optional contact, app functionality, not linked. Everything else: Data Not Collected (the app ships no analytics SDK).
 - **Review notes** (the 5.2 pre-empt + the 4.2 lead): the Decks tab is an interactive set-building tool — a harmonic next-track engine ranking the archive by key, tempo, and sonic feel — not a content browser; audio is official previews and our own brand renders ≤30s; the radio streams only our own narration over silent renders; the app links out to Spotify and Apple Music; submissions are private suggestions reviewed by the operator, never displayed; no account needed to review any feature.
 - **Screenshots**: the 6.9" set (3-10 shots) from the iPhone Pro Max-class simulator: feed (a dark cover), the Decks mid-chain (a numbered set + the ranked rail — the 4.2 evidence), radio playing, archive, a finding, submit.
