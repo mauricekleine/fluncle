@@ -41,10 +41,14 @@ function AdminLayout() {
     return <Outlet />;
   }
 
-  // The Studio is the one viewport-height, self-scrolling station (its two-pane
-  // workstation owns its own scroll on lg+); every other page grows the plate and
-  // scrolls the document.
-  const fill = pathname === "/admin/studio" || pathname.startsWith("/admin/studio/");
+  // The viewport-height, self-scrolling stations: the Studio (its two-pane
+  // workstation owns its own scroll on lg+) and ChatDnB (the message scroller must
+  // be the scroll container for stick-to-bottom to work); every other page grows
+  // the plate and scrolls the document.
+  const fill =
+    pathname === "/admin/studio" ||
+    pathname.startsWith("/admin/studio/") ||
+    pathname === "/admin/chat";
 
   return (
     <SidebarProvider defaultOpen={sidebarOpen}>
