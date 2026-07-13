@@ -124,6 +124,37 @@ function isCliErrorPayload(value: unknown): value is { code: string; message: st
 // timer is the loop. A tick that finds a drained frontier is a cheap no-op.
 // ---------------------------------------------------------------------------
 
+// One crawl pass, with ONE retry on a transient transport failure. A slow MusicBrainz day
+// can time the CLI call out ("The operation timed out") while the very next attempt sails —
+// seen flapping /status DOWN→recovered all morning 2026-07-13. A timeout is the transport
+// giving up, not the walk failing (the frontier is idempotent, so re-running a pass never
+// double-writes); anything that fails TWICE is real and reports `ok: false` honestly.
+export function crawlPassWithRetry(): CrawlSummary {
+  const args = [
+    "admin",
+    "catalogue",
+    "crawl",
+    "--limit",
+    String(NODES),
+    "--max-hop",
+    String(MAX_HOP),
+  ];
+
+  try {
+    return fluncleJson<CrawlSummary>(args);
+  } catch (error) {
+    const text = error instanceof Error ? error.message : String(error);
+
+    if (!/timed out|timeout|ECONNRESET|EPIPE|socket/i.test(text)) {
+      throw error;
+    }
+
+    log(`crawl pass hit a transient transport failure (${text.slice(0, 120)}) — retrying once`);
+
+    return fluncleJson<CrawlSummary>(args);
+  }
+}
+
 export function main(): void {
   const summary = {
     anchorsFilled: 0,
@@ -142,15 +173,7 @@ export function main(): void {
   };
 
   try {
-    const pass = fluncleJson<CrawlSummary>([
-      "admin",
-      "catalogue",
-      "crawl",
-      "--limit",
-      String(NODES),
-      "--max-hop",
-      String(MAX_HOP),
-    ]);
+    const pass = crawlPassWithRetry();
 
     summary.anchorsFilled = pass.anchorsFilled ?? 0;
     summary.expanded = pass.expanded ?? 0;
