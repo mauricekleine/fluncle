@@ -136,6 +136,13 @@ const envKeys = [
   // from the distil's so the two can be tuned independently: one is a summariser, the other a
   // parser. Unprovisioned, search degrades to full text and keeps working.
   "OPENROUTER_SEARCH_MODEL",
+  // ChatDnB (the admin-gated /admin/chat spike, lib/server/chat.ts) — the model that
+  // holds Fluncle's voice and answers over his own archive tools. OPTIONAL, non-secret
+  // override for the chat model; absent, it defaults to `anthropic/claude-haiku-4.5`, the
+  // same family the search + distil tiers trust. The chat itself needs OPENROUTER_API_KEY
+  // (the shared key above); without it the route answers 503, since a chat has no cheaper
+  // degraded fallback the way search degrades to full text.
+  "OPENROUTER_CHAT_MODEL",
 ] as const;
 
 export type EnvKey = (typeof envKeys)[number];
