@@ -16,6 +16,7 @@ The same archive, reachable however you like. Every surface reads the same publi
 | Public API | `https://www.fluncle.com/api/v1/*`                                      | JSON reads and submissions; `/api/*` stays as a permanent alias (see [Web](#web), [Submission Flow](#submission-flow))  |
 | RSS        | <https://www.fluncle.com/rss.xml>                                       | The 25 most recent findings, for feed readers                                                                           |
 | CLI        | `curl -fsSL https://www.fluncle.com/cli/latest.sh \| sh`                | The archive in your terminal (see [CLI](#cli))                                                                          |
+| DNS        | `dig random.dig.fluncle.com TXT +short`                                 | Findings answered over DNS TXT — `latest`, `random`, or any Log ID (see [docs/dig.md](docs/dig.md))                     |
 | SSH        | `ssh rave.fluncle.com`                                                  | The rave terminal, a Wish/Bubble Tea app (see [SSH](#ssh))                                                              |
 | MCP        | `https://www.fluncle.com/mcp`                                           | The archive as agent tools, Streamable HTTP, no auth (see [MCP](#mcp))                                                  |
 | Tor        | `http://p53pc2uzfu2tnih4cd6wd42ok6zup2uttj6xdmjdccy5kqo33fyppkqd.onion` | The whole site mirrored onto Tor, off the grid: the archive plus the API, RSS, and MCP (see [docs/tor.md](docs/tor.md)) |
@@ -36,6 +37,7 @@ packages/contracts  oRPC contracts for the public + admin HTTP API (the contract
 packages/live       The live runtime: the glass (WebGL renderer) + the bridge (plan + fingerprint identity + supervisor + phone remote).
 packages/media      Remotion kit for static image assets (link-preview cards, covers).
 packages/registry   The typed catalog of every Fluncle surface (@fluncle/registry, the source of truth).
+packages/skills     Agent skills: operator runbooks + creative doctrine. Installed via bun run skills:install.
 packages/sprites    Fluncle's pixel-sprite family — the Galaxy game's sprites. Owns the PNGs; the web build mirrors them into public/.
 packages/tokens     Shared design tokens (colors, typography, radii, motion) from DESIGN.md.
 packages/ui         Shared @fluncle/ui design system: the Shadcn base + the Nostalgic Cosmos tokens, consumed by apps/web.
@@ -313,7 +315,7 @@ fluncle recent --limit 1 --json
 
 ## Publish Flow
 
-`fluncle admin add` calls `POST /api/v1/admin/tracks` with `Authorization: Bearer <FLUNCLE_API_TOKEN>`. The server checks Turso for duplicates by case-sensitive Spotify track id. It inserts a pending row first, then adds the track to Spotify, then posts to Telegram. Each external operation is retried three times.
+`fluncle admin tracks publish` calls `POST /api/v1/admin/tracks` with `Authorization: Bearer <FLUNCLE_API_TOKEN>`. The server checks Turso for duplicates by case-sensitive Spotify track id. It inserts a pending row first, then adds the track to Spotify, then posts to Telegram. Each external operation is retried three times.
 
 If Spotify fails, Telegram is not posted. If Spotify succeeds but Telegram fails, the database row is kept with `posted_to_telegram = false` for later inspection or recovery.
 
@@ -338,7 +340,7 @@ fluncle admin submissions reject <submission-id>
 fluncle admin submissions approve <submission-id>
 ```
 
-Approval fetches the submission, runs `fluncle admin add "<spotify-url>" --dry-run`, asks `Publish this submission? (Y/n)`, then runs the real admin add call only after confirmation and marks the submission approved.
+Approval fetches the submission, runs `fluncle admin tracks publish "<spotify-url>" --dry-run`, asks `Publish this submission? (Y/n)`, then runs the real publish call only after confirmation and marks the submission approved.
 
 ## CLI Releases
 
