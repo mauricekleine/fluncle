@@ -1,0 +1,63 @@
+# Spike: the public reach page — Fluncle's numbers, over time
+
+The operator's idea (2026-07-13, on seeing the playlist's 2 saves next to the channel's 4 subscribers): a **public page listing Fluncle's stats across every platform, over time — aggregates, per platform**. This spike collects the platforms, what each one measures, what is actually fetchable on a cron, and how the build rides existing patterns. Planning, not spec — canon (DESIGN/PRODUCT/VOICE) arbitrates the words when it is picked up.
+
+## The one-line architecture
+
+**A noun-swap of `record_health`:** a daily on-box trigger → an agent-tier `record_platform_stats` op → the WORKER fetches each platform with the OAuth it already holds → one append-only snapshot row per (platform, metric) → a public page reads the series. Every seam exists and is load-bearing today (`/status`, `record_health`, `record_cost`); nothing new is invented. The box cron is a bare trigger (zero LLM tokens, like crawl/rank) because every platform secret lives Worker-side.
+
+## The standardization — three honest buckets, no fake equivalence
+
+- **Audience** — people who opted in: followers (Bluesky, Mixcloud, TikTok, IG, Twitch, SoundCloud), subscribers (YouTube, Telegram, the newsletter), saves (the Spotify playlist), users (the Lens extension), stars (GitHub). These aggregate honestly: each is one person who chose to keep Fluncle around.
+- **Reach** — consumption events: video views (YouTube, TikTok), plays/listens (Mixcloud, SoundCloud), scrobbles (Last.fm), downloads (npm, the App Store once live). These aggregate per-platform but the cross-platform sum is labeled for what it is (a view ≠ a listen).
+- **Depth** — Mixcloud's minutes listened is the only depth metric any platform exposes, and its public API does NOT return it (only `listen_count`) — depth stays a per-upload play count unless the operator exports dashboard numbers by hand. Stated honestly rather than promised.
+
+Followers === subscribers === saves for the AUDIENCE aggregate; nothing else is merged.
+
+## The platform matrix (inventory × API reality, July 2026)
+
+| Platform · what its profile shows                     | Fetchable on a cron?                                                                                    | Auth                                                                                     | Tier                                                                    |
+| ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| Mixcloud — followers, per-upload plays, total listens | `api.mixcloud.com/<user>` → `follower_count`, `listen_count`                                            | **keyless**                                                                              | **1 — build now**                                                       |
+| Bluesky — followers, posts                            | public AppView `getProfile` → `followersCount`, `postsCount`                                            | **keyless**                                                                              | **1**                                                                   |
+| GitHub — repo stars                                   | `GET /repos/{owner}/{repo}` → `stargazers_count`                                                        | keyless (token only if 60/hr binds)                                                      | **1**                                                                   |
+| npm — CLI downloads                                   | `api.npmjs.org/downloads/point/last-week/fluncle`                                                       | **keyless**                                                                              | **1**                                                                   |
+| Last.fm — scrobbles, loved count                      | `user.getInfo` / `user.getLovedTracks`                                                                  | held API key                                                                             | **1**                                                                   |
+| App Store — rating count (pre-downloads)              | iTunes `lookup?id=<appId>` → `userRatingCount`                                                          | **keyless**, works the day the app is live                                               | **1**                                                                   |
+| YouTube — subscribers, total views                    | Data API `channels.list?part=statistics`                                                                | plain API key (stats are public; OAuth NOT needed), 1 unit/call                          | **1** (needs minting one API key) — note subs are rounded to 3 sig figs |
+| Telegram — channel subscribers                        | Bot API `getChatMemberCount`                                                                            | held bot token; **bot must be channel admin** (it posts, so it is)                       | **1**                                                                   |
+| Newsletter — audience count                           | Resend contacts list (count = array length; the repo's `countSegmentRecipients` already does it)        | held API key                                                                             | **1 — the only read that exists today**                                 |
+| Spotify — playlist saves/followers                    | `GET /playlists/{id}` → `followers.total` **survived the Feb 2026 API gutting**                         | held OAuth                                                                               | **1**                                                                   |
+| Spotify — profile followers                           | **Dev-Mode apps lost `/me` followers AND `/users/{id}` entirely (Feb 2026)**; needs Extended Quota Mode | held OAuth, gated                                                                        | **operator question**: which quota mode is Fluncle's app in?            |
+| TikTok — followers, likes                             | Display API `user/info` with `user.info.stats` scope — own account only                                 | user OAuth + refresh (NOT held; Postiz exposes no analytics)                             | **2 — OAuth plumbing**                                                  |
+| Instagram — followers                                 | Graph API `followers_count` (business acct)                                                             | Page token (NOT held); Meta has flagged 2026 deprecations                                | **2**                                                                   |
+| Twitch — followers                                    | Helix `channels/followers` → `total`                                                                    | broadcaster's OWN user token + `moderator:read:followers` (app token no longer suffices) | **2**                                                                   |
+| SoundCloud — followers, plays                         | API keys closed to new apps for years                                                                   | none                                                                                     | **3 — no sane path** (scrape or skip)                                   |
+| Chrome Web Store — Lens users                         | official API retired Oct 2025, never had counts                                                         | none                                                                                     | **3** — scrape the listing page, best-effort forever                    |
+| App Store — downloads                                 | ASC `salesReports` (gzipped TSV), JWT with a `.p8` key                                                  | ASC key (NOT held; app pending)                                                          | **2/3 — post-launch**                                                   |
+| Telegram — per-post views                             | MTProto only, not the Bot API                                                                           | user client not held                                                                     | **3 — skip**                                                            |
+| Discogs / MusicBrainz / Wikidata / Discord webhook    | presence only or no read path                                                                           | —                                                                                        | not stats candidates                                                    |
+
+Tier 1 alone is **10 platforms / ~14 metrics** with zero new OAuth ceremony — enough for the page to be real on day one.
+
+## The build (when picked up) — every piece mirrors an existing one
+
+- **Table:** `platform_stats` (id PK client-stable `${platform}:${metric}:${yyyy-mm-dd}` + `ON CONFLICT DO NOTHING` → idempotent daily snapshots, the `record_cost` discipline), plain-TEXT `platform`/`metric` so a new platform is a data row, not a migration. Generated via `db:generate`, never by hand. Daily × ~15 metrics is trivial volume; the page read stays a bounded window (last N days).
+- **Ops:** `record_platform_stats` (AGENT tier — the box token writes internal rows, mirrors `record_health`) + `list_platform_stats` (public read). `record`/`list` are approved verbs; no naming-registry edit needed. New contract modules + handlers; the four coverage tests enforce the wiring at build time.
+- **Collector:** the op handler fetches all platforms Worker-side, each platform isolated best-effort (a 401 skips and logs, never fails the snapshot — the healthcheck's per-probe discipline).
+- **Cron:** `fluncle-stats`, a daily host systemd timer that runs `fluncle admin stats collect` (a thin CLI POST). Joins `OPS_AUTOMATION_IDS` on /status + the healthcheck prober; bakes automatically on merge.
+- **Page:** the DESIGN.md hero-metric ban is the explicit constraint — _"There are no heroes, no metrics, no pitch."_ The escape is already demonstrated: **/status is a numbers page that reads as a logbook.** One quiet row per platform (label · sparkline over `captured_at` · terse `followers · N` footer), `tabular-nums`, muted register, One Sun Rule (gold on at most the live edge), `log-plate` chrome, loader-only data flow (public route, no react-query). Copy through the voice canon — these are not KPIs; they are **the crew growing and how far the probes reached**.
+- **Registry:** the page registers as a `web_route` surface + `cron.stats` as a cron surface (auto-lights /status, homepage dev-row, llms.txt, sitemap). Per-platform stat sources stay collector data, never registry entries.
+- **Honest history:** the series starts the day it ships — no synthetic backfill. Day one's snapshot IS the baseline (playlist 2 saves · Telegram 3 humans · Bluesky 0 followers is a genuinely charming genesis row).
+
+## Decisions before handoff (operator)
+
+1. **The page's name and register** — `/stats` is the SaaS word; `/reach` or a Fluncle-native noun wants a canon pass (VOICE.md) before the route is minted.
+2. **Spotify quota mode** — check whether Fluncle's Spotify app is Development or Extended Quota Mode (the developer dashboard); it decides whether any profile-follower number is ever fetchable. Playlist saves work either way.
+3. **Tier 2 now or later** — TikTok/Instagram/Twitch each want their own OAuth + refresh plumbing for one number apiece; recommend shipping Tier 1 first and letting the page's real presence argue for the rest.
+4. **One API key to mint** — a plain YouTube Data API key (no OAuth) for subscribers/views.
+5. **Public from day one, or `/admin` first** — nothing in the data is sensitive (every number is already public on its platform), so public-first is defensible; the operator may still want to see a week of series before the flip.
+
+## Effort, honestly
+
+Tier 1 end-to-end (table + ops + collector + cron + page + registry + tests + docs) is one focused build day for a sub-agent fan-out (schema/ops/collector one slice, page one slice, cron/registry one slice), with the page slice wanting the design pass. Tier 2 is a separate small arc per platform, each gated on its own OAuth ceremony.
