@@ -23,6 +23,8 @@ export type { CatalogueTrackItem };
 
 /** The sweep's per-tick summary — the JSON line a cron reads. */
 export type RankCatalogueSummary = {
+  /** Rows re-pointed at a canonical catalogue sibling this tick (docs/the-ear.md § Duplicates). */
+  catalogueDuplicates: number;
   corpus: string;
   embeddedFindings: number;
   findings: number;

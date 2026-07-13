@@ -371,15 +371,29 @@ export function capturePriorityFor(
  *
  * The fingerprint is compared with `<>`, never `<`, so a DELETED finding (the count goes
  * down) is caught exactly like an added one.
+ *
+ * A leading RANKING-LOGIC VERSION is folded in so a change to the sweep's ALGORITHM (not just
+ * the corpus) invalidates every stored fingerprint and forces one self-healing full re-rank —
+ * the same mechanism, no bulk write, no manual invalidation. Bump it only when the ranking
+ * DECISION changes for rows the corpus counts did not move: `v2` added catalogue-internal
+ * duplicate detection (docs/the-ear.md § Duplicates), which must re-mark rows already ranked.
  */
+const RANK_LOGIC_VERSION = "v2";
+
 export function rankCorpus(findings: number, embeddedFindings: number): string {
-  return `${findings}:${embeddedFindings}`;
+  return `${RANK_LOGIC_VERSION}:${findings}:${embeddedFindings}`;
 }
 
 // ── The sweep ────────────────────────────────────────────────────────────────────────
 
 /** One tick's outcome — the JSON summary line a `--no-agent` cron prints. */
 export type RankCatalogueSummary = {
+  /**
+   * Catalogue rows re-pointed at a CANONICAL catalogue sibling this tick — the same master the
+   * crawler re-found under a second MusicBrainz MBID (docs/the-ear.md § Duplicates). Marked
+   * `duplicate_of_track_id` + the −2 tier, so it leaves both the capture queue and the ear lens.
+   */
+  catalogueDuplicates: number;
   /** The live finding-corpus fingerprint this tick ranked against. */
   corpus: string;
   /** Embedded findings — how many vectors a candidate could be near. */
@@ -573,6 +587,109 @@ async function readFindingIdentities(): Promise<Map<string, string>> {
 }
 
 /**
+ * The CATALOGUE-INTERNAL duplicate corpus — the other half of duplicate detection.
+ *
+ * The finding-bounded maps above catch a catalogue row that duplicates a certified FINDING. They
+ * are blind to the commonest duplicate at catalogue scale: the crawler walks MusicBrainz, which
+ * carries a distinct recording MBID per release/compilation, so ONE song enters `tracks` as N
+ * rows and each is captured + embedded separately — the same master bought two or three times,
+ * only one sibling ever carrying an ISRC. This reads the identity of every CAPTURED catalogue row
+ * so the sweep can name one canonical sibling and veto the rest off both the capture queue (the
+ * money) and the ear lens (the telescope), exactly as the finding duplicate does.
+ *
+ * The canonical sibling is deterministic: the most-processed one wins (a row that already carries
+ * a vector, then the smallest `track_id`), so the choice is stable across ticks and idempotent —
+ * the same row stays canonical, its siblings stay marked, no flap.
+ *
+ * Bounded by the CAPTURED catalogue (the metered ≤1,000/day half), never the raw metadata
+ * catalogue that grows unbounded — and it pulls only the tiny identity fields (title, artists,
+ * isrc), never a vector. Read once per sweep, only when a batch has candidates to adjudicate.
+ */
+type CatalogueIdentity = {
+  byIsrc: Map<string, string>;
+  byMatchKey: Map<string, string>;
+};
+
+async function readCatalogueIdentity(): Promise<CatalogueIdentity> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [WRONG_AUDIO_STATUS],
+    sql: `select ct.track_id as track_id,
+                 ct.title as title,
+                 ct.artists_json as artists_json,
+                 ct.isrc as isrc,
+                 (${embeddingVectorSql("ct")} is not null) as has_vector
+          from tracks ct
+          left join findings cf on cf.track_id = ct.track_id
+          where cf.track_id is null
+            and ct.source_audio_key is not null
+            and ct.dismissed_at is null
+            and (ct.capture_status is null or ct.capture_status <> ?)
+          order by ct.track_id asc`,
+  });
+
+  const byMatchKey = new Map<string, string>();
+  const byIsrc = new Map<string, string>();
+  // Track the winning candidate's vector state per key so a later, more-processed sibling (one
+  // that carries a vector) can take the canonical slot from an earlier unembedded one.
+  const keyHasVector = new Map<string, boolean>();
+
+  for (const row of typedRows<CatalogueCandidateIdentity>(result.rows)) {
+    const key = matchKey(parseArtistsJson(row.artists_json), row.title);
+    const hasVector = Number(row.has_vector) === 1;
+    const incumbentHasVector = keyHasVector.get(key);
+
+    // First sibling for this identity wins by default; a later one only displaces it when it is
+    // MORE processed (carries a vector while the incumbent does not). `track_id asc` ordering
+    // makes the "first" deterministic, so canonical selection is stable across ticks.
+    if (incumbentHasVector === undefined || (hasVector && !incumbentHasVector)) {
+      byMatchKey.set(key, row.track_id);
+      keyHasVector.set(key, hasVector);
+    }
+
+    const isrcKey = normalizeIsrc(row.isrc);
+
+    if (isrcKey && !byIsrc.has(isrcKey)) {
+      byIsrc.set(isrcKey, row.track_id);
+    }
+  }
+
+  return { byIsrc, byMatchKey };
+}
+
+type CatalogueCandidateIdentity = {
+  artists_json: string;
+  has_vector: number;
+  isrc: null | string;
+  title: string;
+  track_id: string;
+};
+
+/**
+ * Resolve a candidate to the CANONICAL captured catalogue sibling it duplicates, or null. The
+ * folded title+artist `matchKey` is the primary identity (it distinguishes a remix's own
+ * descriptor from the base, so it never merges genuinely different recordings); an exact ISRC
+ * match is the fallback for a row whose title/artist strings drifted between MBIDs. A row is
+ * never its own duplicate — the canonical pointing back at the candidate returns null.
+ */
+function catalogueDuplicateOf(
+  candidate: { artists_json: string; isrc: null | string; title: string; track_id: string },
+  identity: CatalogueIdentity,
+): null | string {
+  const key = matchKey(parseArtistsJson(candidate.artists_json), candidate.title);
+  const byKey = identity.byMatchKey.get(key);
+
+  if (byKey && byKey !== candidate.track_id) {
+    return byKey;
+  }
+
+  const isrcKey = normalizeIsrc(candidate.isrc);
+  const byIsrc = isrcKey ? identity.byIsrc.get(isrcKey) : undefined;
+
+  return byIsrc && byIsrc !== candidate.track_id ? byIsrc : null;
+}
+
+/**
  * ONE TICK of the ranking sweep — the whole of The Ear's arithmetic, and the only writer of
  * the five `tracks` ranking columns.
  *
@@ -655,6 +772,7 @@ export async function rankCatalogue(limit = RANK_BATCH_SIZE): Promise<RankCatalo
     // stop calling while rows were still stale. The count is one cheap scoped COUNT, paid only
     // on an already-idle tick.
     return {
+      catalogueDuplicates: 0,
       corpus,
       embeddedFindings,
       findings,
@@ -727,14 +845,20 @@ export async function rankCatalogue(limit = RANK_BATCH_SIZE): Promise<RankCatalo
     );
   });
   const needsPreAudio = unvectored.length > 0 || nearWrongAudio.length > 0;
-  const [archive, findingIsrcs, findingIdentities] = await Promise.all([
+  const [archive, findingIsrcs, findingIdentities, catalogueIdentity] = await Promise.all([
     needsPreAudio ? readArchiveAffinity() : undefined,
     needsPreAudio ? readFindingIsrcs() : undefined,
     nearWrongAudio.length > 0 ? readFindingIdentities() : undefined,
+    // The catalogue-internal duplicate corpus — needed on EVERY tick with candidates: a vectored
+    // row may be a captured sibling of another catalogue row (declutter the ear lens), and an
+    // unvectored row may duplicate an already-captured sibling (veto it off the capture queue).
+    readCatalogueIdentity(),
   ]);
 
   // ── The scored half, now with the wrong-audio veto (docs/the-ear.md § Wrong audio) ──
   let quarantined = 0;
+  // Vectored rows re-pointed at a canonical catalogue sibling (already-captured duplicates).
+  let catalogueDuplicates = 0;
 
   for (const candidate of vectored) {
     const winner = winners.get(candidate.track_id);
@@ -832,6 +956,41 @@ export async function rankCatalogue(limit = RANK_BATCH_SIZE): Promise<RankCatalo
       continue;
     }
 
+    // CATALOGUE-INTERNAL DUPLICATE (docs/the-ear.md § Duplicates). This vectored row is not near
+    // a finding, but it may be a captured sibling of another catalogue row — the same master the
+    // crawler re-found under a second MusicBrainz MBID. If a canonical sibling exists, mirror the
+    // same-title finding-duplicate handling: name the canonical on `duplicate_of_track_id` and
+    // stamp the −2 tier so the row leaves the ear lens (the telescope stays one-row-per-recording)
+    // while KEEPING its vector + score (it still reads "already in the archive"). Written HERE
+    // rather than by a separate pass because the normal path below CLEARS `duplicate_of_track_id`
+    // on every scored row — a mark made elsewhere would be wiped on the next tick. The −2 on a
+    // vectored row is stable under the staleness predicate's `capture_priority >= 0` guard.
+    const canonical = catalogueIdentity ? catalogueDuplicateOf(candidate, catalogueIdentity) : null;
+
+    if (canonical) {
+      catalogueDuplicates += 1;
+      writes.push({
+        args: [
+          score,
+          winner?.fid ?? null,
+          DUPLICATE_CAPTURE_TIER,
+          canonical,
+          corpus,
+          now,
+          candidate.track_id,
+        ],
+        sql: `update tracks
+              set nearest_finding_score = ?,
+                  nearest_finding_track_id = ?,
+                  capture_priority = ?,
+                  duplicate_of_track_id = ?,
+                  catalogue_rank_corpus = ?,
+                  catalogue_ranked_at = ?
+              where track_id = ?`,
+      });
+      continue;
+    }
+
     writes.push({
       args: [
         score,
@@ -866,11 +1025,22 @@ export async function rankCatalogue(limit = RANK_BATCH_SIZE): Promise<RankCatalo
       // "Infinity" duplicate would have spent. It is the −2 veto tier (excluded by the capture
       // queue's `capture_priority >= 0` predicate, no new mechanism), and the finding it matched
       // is stored so the board can name it. NULL clears a stale marker when the finding is gone.
-      const { duplicateOf, priority } = preAudioPriority(
+      const finding = preAudioPriority(
         candidate,
         archive,
         findingIsrcs ?? new Map<string, string>(),
       );
+
+      // THEN the catalogue-internal duplicate: this uncaptured row may be the same master as an
+      // already-CAPTURED catalogue sibling (a second MusicBrainz MBID for one song). Vetoing it
+      // here — before a single byte moves — is the real spend saver: it stops the crawler buying
+      // the same track twice. A finding duplicate wins if both fire (the certified row is the
+      // canonical the board would rather name). Same −2 tier, same stored-marker mechanism.
+      const canonical =
+        finding.duplicateOf ??
+        (catalogueIdentity ? catalogueDuplicateOf(candidate, catalogueIdentity) : null);
+      const duplicateOf = canonical;
+      const priority = canonical ? DUPLICATE_CAPTURE_TIER : finding.priority;
 
       writes.push({
         args: [priority, duplicateOf, corpus, now, candidate.track_id],
@@ -891,13 +1061,15 @@ export async function rankCatalogue(limit = RANK_BATCH_SIZE): Promise<RankCatalo
   await db.batch(writes, "write");
 
   return {
+    catalogueDuplicates,
     corpus,
     embeddedFindings,
     findings,
     prioritized: unvectored.length,
     quarantined,
     remaining: await countStale(corpus),
-    // A quarantined row was scored, then vetoed — it is no longer a `scored` find.
+    // A quarantined row was scored, then vetoed — it is no longer a `scored` find. A catalogue
+    // duplicate KEEPS its score (it reads "already in the archive"), so it stays a `scored` row.
     scored: vectored.length - quarantined,
   };
 }

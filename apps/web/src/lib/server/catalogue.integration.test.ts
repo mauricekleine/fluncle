@@ -248,7 +248,7 @@ describe("the sweep — batching, staleness, and self-healing", () => {
 
     const first = await rankCatalogue();
     expect(first.scored).toBe(1);
-    expect(first.corpus).toBe("1:1");
+    expect(first.corpus).toBe("v2:1:1");
     expect((await rankingOf("cat-a")).nearest_finding_track_id).toBe("finding-a");
 
     // Nothing changed: the fingerprint matches, so there is no candidate at all.
@@ -264,7 +264,7 @@ describe("the sweep — batching, staleness, and self-healing", () => {
     await seedFinding("finding-b", { vector: blend(axis(0), axis(1), 0.4) });
 
     const third = await rankCatalogue();
-    expect(third.corpus).toBe("2:2");
+    expect(third.corpus).toBe("v2:2:2");
     expect(third.scored).toBe(1);
     expect(third.quarantined).toBe(0);
     expect((await rankingOf("cat-a")).nearest_finding_track_id).toBe("finding-b");
@@ -356,7 +356,7 @@ describe("the sweep — batching, staleness, and self-healing", () => {
     // Stamped, with an honest null score — not left stale to be re-picked every tick.
     const ranking = await rankingOf("cat-a");
     expect(ranking.nearest_finding_score).toBeNull();
-    expect(ranking.catalogue_rank_corpus).toBe("1:0");
+    expect(ranking.catalogue_rank_corpus).toBe("v2:1:0");
     expect(summary.remaining).toBe(0);
   });
 });
@@ -951,5 +951,116 @@ describe("the operator's actions — dismiss/restore, and the deterministic-dupl
       sql: "select dismissed_at from tracks where track_id = ?",
     });
     expect(row.rows[0]?.dismissed_at).toBeNull();
+  });
+});
+
+// ── Catalogue-internal duplicate detection ────────────────────────────────────────────────
+// The crawler walks MusicBrainz, which carries a distinct recording MBID per release, so ONE
+// song enters `tracks` as several rows and each is captured + embedded separately. The sweep
+// must name one canonical sibling and veto the rest off both the capture queue (the money) and
+// the ear lens (the telescope), reusing `duplicate_of_track_id` + the −2 tier — never a second
+// mechanism, and never merging a remix (whose `matchKey` descriptor differs from the base).
+describe("catalogue-internal duplicates — one master, one row", () => {
+  /** Mark a catalogue row as CAPTURED (an R2 key on file), optionally with an ISRC. */
+  async function capture(trackId: string, isrc?: string): Promise<void> {
+    await db.execute({
+      args: [`catalogue/${trackId}/x.webm`, trackId],
+      sql: `update tracks set source_audio_key = ?, capture_status = 'done' where track_id = ?`,
+    });
+    if (isrc) {
+      await db.execute({ args: [isrc, trackId], sql: isrcSql });
+    }
+  }
+
+  it("marks an already-captured sibling as a duplicate of the canonical (min id, kept vector)", async () => {
+    const { rankCatalogue } = await import("./catalogue");
+
+    // Same title + artists under two MBIDs, both captured + embedded with the same vector.
+    await seedCatalogueTrack(db, { artists: ["Whiney"], title: "Nightfall", trackId: "cat-a" });
+    await seedCatalogueTrack(db, { artists: ["Whiney"], title: "Nightfall", trackId: "cat-b" });
+    await capture("cat-a");
+    await capture("cat-b");
+    await embed("cat-a", unit(axis(3)));
+    await embed("cat-b", unit(axis(3)));
+
+    const summary = await rankCatalogue();
+
+    expect(summary.catalogueDuplicates).toBe(1);
+    // cat-a (smaller id) is canonical and untouched; cat-b points at it, tiered −2, off the lens.
+    expect((await rankingOf("cat-a")).duplicate_of_track_id).toBeNull();
+    expect((await rankingOf("cat-b")).duplicate_of_track_id).toBe("cat-a");
+    expect((await rankingOf("cat-b")).capture_priority).toBe(-2);
+    // The duplicate KEEPS its vector — it still reads "already in the archive" on the board.
+    const kept = await db.execute({
+      args: ["cat-b"],
+      sql: "select embedding_json from tracks where track_id = ?",
+    });
+    expect(kept.rows[0]?.embedding_json).not.toBeNull();
+  });
+
+  it("vetoes an UNcaptured sibling off the capture queue before a byte is bought", async () => {
+    const { rankCatalogue } = await import("./catalogue");
+
+    // One captured sibling, one still awaiting capture — the real spend saver.
+    await seedCatalogueTrack(db, { artists: ["Bcee"], title: "Souls Apart", trackId: "cat-have" });
+    await seedCatalogueTrack(db, { artists: ["Bcee"], title: "Souls Apart", trackId: "cat-want" });
+    await capture("cat-have");
+
+    await rankCatalogue();
+
+    // cat-want has no audio → the pre-audio branch sees the captured sibling and vetoes it.
+    expect((await rankingOf("cat-want")).duplicate_of_track_id).toBe("cat-have");
+    expect((await rankingOf("cat-want")).capture_priority).toBe(-2);
+    // The captured canonical is never marked a duplicate of itself.
+    expect((await rankingOf("cat-have")).duplicate_of_track_id).toBeNull();
+  });
+
+  it("matches on an exact ISRC even when the titles drift between MBIDs", async () => {
+    const { rankCatalogue } = await import("./catalogue");
+
+    await seedCatalogueTrack(db, {
+      artists: ["Archangel"],
+      title: "Obsession",
+      trackId: "cat-isrc-x",
+    });
+    await seedCatalogueTrack(db, {
+      artists: ["Archangel"],
+      title: "Obsession (Remastered)",
+      trackId: "cat-isrc-y",
+    });
+    await capture("cat-isrc-x", "GBTEST0000001");
+    // A different title (a remaster tag) means matchKey differs, so ONLY the shared ISRC links them.
+    await db.execute({
+      args: ["catalogue/cat-isrc-y/x.webm", "cat-isrc-y"],
+      sql: `update tracks set source_audio_key = ?, capture_status = 'done' where track_id = ?`,
+    });
+    await db.execute({ args: ["GBTEST0000001", "cat-isrc-y"], sql: isrcSql });
+    await embed("cat-isrc-x", unit(axis(4)));
+    await embed("cat-isrc-y", unit(axis(4)));
+
+    await rankCatalogue();
+
+    expect((await rankingOf("cat-isrc-y")).duplicate_of_track_id).toBe("cat-isrc-x");
+  });
+
+  it("does NOT merge a remix — a different version descriptor is a different recording", async () => {
+    const { rankCatalogue } = await import("./catalogue");
+
+    await seedCatalogueTrack(db, { artists: ["J-Cut"], title: "Deep End", trackId: "cat-orig" });
+    await seedCatalogueTrack(db, {
+      artists: ["J-Cut"],
+      title: "Deep End (VIP)",
+      trackId: "cat-vip",
+    });
+    await capture("cat-orig");
+    await capture("cat-vip");
+    await embed("cat-orig", unit(axis(6)));
+    await embed("cat-vip", unit(axis(7)));
+
+    const summary = await rankCatalogue();
+
+    expect(summary.catalogueDuplicates).toBe(0);
+    expect((await rankingOf("cat-orig")).duplicate_of_track_id).toBeNull();
+    expect((await rankingOf("cat-vip")).duplicate_of_track_id).toBeNull();
   });
 });

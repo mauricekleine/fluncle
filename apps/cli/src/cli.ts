@@ -4991,9 +4991,13 @@ async function runCatalogueRank(
 
   const quarantine =
     summary.quarantined > 0 ? ` Quarantined ${summary.quarantined} as wrong audio.` : "";
+  const deduped =
+    summary.catalogueDuplicates > 0
+      ? ` Marked ${summary.catalogueDuplicates} as catalogue duplicates.`
+      : "";
 
   console.log(
-    `Ranked ${summary.scored} against ${summary.embeddedFindings} embedded findings; prioritized ${summary.prioritized} for capture.${quarantine} ${summary.remaining} still stale.`,
+    `Ranked ${summary.scored} against ${summary.embeddedFindings} embedded findings; prioritized ${summary.prioritized} for capture.${quarantine}${deduped} ${summary.remaining} still stale.`,
   );
 }
 

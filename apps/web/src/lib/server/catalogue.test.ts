@@ -126,7 +126,7 @@ describe("capturePriorityFor — the pre-audio capture ladder", () => {
 
 describe("rankCorpus — the staleness fingerprint", () => {
   it("moves when a finding is logged, and when one is embedded", () => {
-    expect(rankCorpus(60, 60)).toBe("60:60");
+    expect(rankCorpus(60, 60)).toBe("v2:60:60");
     // A new finding lands (unembedded): the affinity corpus changed, so every ranked row is
     // stale — its capture ladder could now name a new artist.
     expect(rankCorpus(61, 60)).not.toBe(rankCorpus(60, 60));
