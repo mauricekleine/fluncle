@@ -128,6 +128,25 @@ export const DUPLICATE_CAPTURE_TIER = -2;
 export const DUPLICATE_SIMILARITY = 0.995;
 
 /**
+ * The LONG-FORM veto (operator ruling, 2026-07-13): a "track" at or above this duration is not a
+ * track — it is a continuous DJ mix riding a MusicBrainz compilation release ("Drum&BassArena
+ * Summer Selection 2012 (Continuous mix 1)", 78 minutes; "Ten Years of Med School (continuous
+ * mix)", 60 minutes). The crawler mints them honestly (they ARE recordings on releases it walks),
+ * but they are unloggable as findings and poisonous to the ear lens: an hour-long mean-pooled MuQ
+ * vector is a taste-centroid of everything inside it, so a mix ranks artificially high against
+ * ANY finding (the two above scored 0.92/0.91) while never being a discovery. They are also the
+ * fattest thing the metered capture can buy (74.5 MB for one mix — the audit's max-file outlier).
+ *
+ * So a long-form row is excluded from BOTH lenses and the CAPTURE QUEUE (81 uncaptured mixes ≈
+ * 4–5 GB of proxy spend this veto refuses), by duration alone — deterministic, no title
+ * heuristics. 15 minutes is comfortably above any real DnB single (the longest liquid rollers run
+ * ~12) and comfortably below any mix. The rows KEEP their data (a captured mix keeps its bytes and
+ * vector — already paid for, and harmless to others: a catalogue row is never anyone's
+ * nearest-finding candidate); the veto is a READ + QUEUE exclusion, never a deletion.
+ */
+export const LONG_FORM_MS = 15 * 60_000;
+
+/**
  * The cosine-similarity threshold at or above which a SCORED catalogue row is adjudicated rather
  * than merely labelled — a DISTINCT, higher line than `DUPLICATE_SIMILARITY` (docs/the-ear.md
  * § Wrong audio). The difference is the whole point:
@@ -1228,6 +1247,12 @@ export type CatalogueTrackItem = {
    */
   duplicateOf: CatalogueMatch | null;
   /**
+   * Whether the private bucket holds this row's captured full song — the audition FALLBACK:
+   * a row with no resolvable store preview (no URL, no ISRC — the small-label case) still plays
+   * the bytes Fluncle owns, through the operator source-audio route.
+   */
+  hasCapturedAudio: boolean;
+  /**
    * Whether an official 30s preview can be auditioned for this row — the operator's inline
    * play control (docs/the-ear.md § The operator's actions). True when the row carries a stored
    * preview URL OR an ISRC (the `/api/preview` relay resolves a fresh Deezer / exact-Apple /
@@ -1283,11 +1308,13 @@ export async function getCatalogueSummary(): Promise<CatalogueSummary> {
             sum(case when ct.dismissed_at is null then 1 else 0 end) as total,
             sum(case when ct.dismissed_at is null
                       and ct.nearest_finding_score is not null
-                      and ct.duplicate_of_track_id is null then 1 else 0 end) as ranked,
+                      and ct.duplicate_of_track_id is null
+                      and ct.duration_ms < ${LONG_FORM_MS} then 1 else 0 end) as ranked,
             sum(case when ct.dismissed_at is null
                       and ct.nearest_finding_score is null
                       and ct.capture_priority is not null
-                      and ct.capture_status <> ? then 1 else 0 end) as awaiting_capture,
+                      and ct.capture_status <> ?
+                      and ct.duration_ms < ${LONG_FORM_MS} then 1 else 0 end) as awaiting_capture,
             sum(case when ct.dismissed_at is null
                       and ct.capture_status = ? then 1 else 0 end) as quarantined,
             sum(case when ct.dismissed_at is null
@@ -1326,6 +1353,7 @@ type CatalogueRow = {
   catalogue_ranked_at: string | null;
   dismissed_at: string | null;
   duplicate_of_track_id: string | null;
+  has_captured_audio: number;
   isrc: string | null;
   key: string | null;
   label: string | null;
@@ -1348,7 +1376,8 @@ type MatchRow = {
 const CATALOGUE_SELECT = `ct.track_id, ct.title, ct.artists_json, ct.album_image_url, ct.spotify_url,
   ct.apple_music_url, ct.isrc, ct.preview_url, ct.bpm, ct.key, ct.label, ct.release_date,
   ct.nearest_finding_score, ct.nearest_finding_track_id, ct.capture_priority, ct.capture_verification,
-  ct.catalogue_ranked_at, ct.duplicate_of_track_id, ct.dismissed_at`;
+  ct.catalogue_ranked_at, ct.duplicate_of_track_id, ct.dismissed_at,
+  (ct.source_audio_key is not null) as has_captured_audio`;
 
 /**
  * The Ear's read — and the reason the whole sweep exists.
@@ -1383,6 +1412,8 @@ export async function listCatalogueTracks(
     lens === "ear"
       ? {
           args: [page],
+          // `duration_ms < LONG_FORM_MS` is the long-form veto (see the constant): a continuous
+          // mix's centroid-like vector would otherwise sit at the very top of the telescope.
           sql: `select ${CATALOGUE_SELECT}
                 from tracks ct
                 left join findings cf on cf.track_id = ct.track_id
@@ -1390,6 +1421,7 @@ export async function listCatalogueTracks(
                   and ct.dismissed_at is null
                   and ct.nearest_finding_score is not null
                   and ct.duplicate_of_track_id is null
+                  and ct.duration_ms < ${LONG_FORM_MS}
                 order by ct.nearest_finding_score desc, ct.track_id asc
                 limit ?`,
         }
@@ -1420,7 +1452,8 @@ export async function listCatalogueTracks(
             }
           : {
               // The capture queue EXCLUDES the quarantined rows — they are a re-capture, held in
-              // their own lens, not part of the cold pre-audio queue.
+              // their own lens, not part of the cold pre-audio queue — and the LONG-FORM rows
+              // (the veto's money half: a mix is the fattest thing the metered budget can buy).
               args: [WRONG_AUDIO_STATUS, page],
               sql: `select ${CATALOGUE_SELECT}
                     from tracks ct
@@ -1430,6 +1463,7 @@ export async function listCatalogueTracks(
                       and ct.nearest_finding_score is null
                       and ct.capture_priority is not null
                       and ct.capture_status <> ?
+                      and ct.duration_ms < ${LONG_FORM_MS}
                     order by ct.capture_priority desc, ct.track_id asc
                     limit ?`,
             };
@@ -1482,6 +1516,10 @@ export async function listCatalogueTracks(
       captureVerification: row.capture_verification,
       dismissedAt: row.dismissed_at,
       duplicateOf,
+      // Whether the private bucket holds this row's captured full song — the audition
+      // FALLBACK: a row with no resolvable store preview (no URL, no ISRC — the small-label
+      // case) can still play the bytes Fluncle actually owns, via the admin source-audio route.
+      hasCapturedAudio: Number(row.has_captured_audio) === 1,
       // The `/api/preview` relay resolves a fresh preview by ISRC (Deezer → exact Apple →
       // fuzzy iTunes), so a stored URL OR an ISRC means the artwork is a live play control.
       hasPreview: Boolean(row.preview_url) || Boolean(row.isrc && row.isrc.trim()),

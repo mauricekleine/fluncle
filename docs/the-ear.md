@@ -86,6 +86,10 @@ The two lenses are **disjoint by construction**: scoring a track clears its `cap
 
 This repo does **not** build the capture itself — the acquisition layer lives in the private companion repo (the-archive RFC, D6). The Ear ships the queue and the priority signal; the layer that acts on them reads `capture_priority` and works down.
 
+## The long-form veto — a mix is not a track
+
+A recording at or above **`LONG_FORM_MS` (15 minutes)** is a continuous DJ mix riding a MusicBrainz compilation release ("Drum&BassArena Summer Selection 2012 (Continuous mix 1)", 78 minutes), not a track (operator ruling, 2026-07-13). The crawler mints them honestly — they ARE recordings on releases it walks — but they are unloggable as findings and pathological on the ear lens: an hour-long mean-pooled MuQ vector is a taste-centroid of everything inside it, so a mix ranks artificially high against ANY finding (the two captured ones scored 0.92/0.91) while never being a discovery. They are also the fattest thing the metered capture can buy (74.5 MB for one). So a long-form row is excluded by duration alone — deterministic, no title heuristics — from **both lenses and their headline counts** (`listCatalogueTracks` / `getCatalogueSummary`) and from the **capture worklist's catalogue half** (`track-work.ts` — a finding is never duration-gated), refusing the ~81 uncaptured mixes ≈ 4–5 GB of proxy spend that sat in the queue when the veto landed. The veto is a READ + QUEUE exclusion, never a deletion: a captured mix keeps its bytes and vector (already paid for, and harmless — a catalogue row is never anyone's nearest-finding candidate).
+
 ## Duplicates — already in the archive
 
 The crawler walks outward from labels, not from the archive's own tracks, so it will re-surface a recording Fluncle **already logged** — a release re-issued on a compilation, the same master under a second catalogue number. That row is worthless to buy: capturing it spends metered proxy bytes on audio already on file. It was caught on real data — a crawled "Infinity" scored a perfect **1.0** against a finding, and pre-audio it sat on the capture ladder where the budget would have bought it.

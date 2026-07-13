@@ -123,6 +123,12 @@ export const CatalogueTrackItemSchema = z
      */
     duplicateOf: CatalogueMatchSchema.nullable(),
     /**
+     * Whether the private bucket holds this row's captured full song — the audition FALLBACK:
+     * a row with no resolvable store preview (no URL, no ISRC — the small-label case) can still
+     * play the bytes Fluncle owns, through the operator source-audio route.
+     */
+    hasCapturedAudio: z.boolean(),
+    /**
      * Whether an official 30s preview can be auditioned inline (docs/the-ear.md § The operator's
      * actions) — true when the row carries a stored preview or an ISRC, so the artwork is a live
      * play control rather than a dead one.

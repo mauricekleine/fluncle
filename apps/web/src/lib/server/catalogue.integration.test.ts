@@ -1375,3 +1375,99 @@ describe("the dupe-veto escape hatch — force_capture", () => {
     expect(cooled.map((w) => w.trackId)).toContain("cat-want");
   });
 });
+
+// ── The long-form veto (docs/the-ear.md § The long-form veto) ─────────────────────────────
+// A "track" at/above LONG_FORM_MS is a continuous DJ mix riding a compilation release: unloggable
+// as a finding, centroid-like in vector space (it ranks ~0.92 against ANY finding), and the
+// fattest thing the metered capture can buy. The veto is a READ + QUEUE exclusion, never a
+// deletion — a captured mix keeps its bytes and vector.
+describe("the long-form veto — a continuous mix never reaches a lens or the money", () => {
+  async function captureAt(trackId: string): Promise<void> {
+    await db.execute({
+      args: [`catalogue/${trackId}/x.webm`, trackId],
+      sql: `update tracks set source_audio_key = ?, capture_status = 'done' where track_id = ?`,
+    });
+  }
+
+  it("a scored 70-minute mix is excluded from the ear lens (and its ranked count) — a 6-minute track is not", async () => {
+    const { getCatalogueSummary, listCatalogueTracks, rankCatalogue } = await import("./catalogue");
+
+    await seedFinding("finding-a", { vector: axis(0) });
+    await seedCatalogueTrack(db, {
+      artists: ["Etherwood"],
+      durationMs: 70 * 60_000,
+      title: "Ten Years of Test (continuous mix)",
+      trackId: "cat-mix",
+    });
+    await seedCatalogueTrack(db, {
+      artists: ["Etherwood"],
+      durationMs: 6 * 60_000,
+      title: "Real Single",
+      trackId: "cat-single",
+    });
+    await captureAt("cat-mix");
+    await captureAt("cat-single");
+    // The mix's hour-long mean-pool sits NEARER the finding than the single — the exact
+    // pathology: without the veto it would occupy the top slot.
+    await embed("cat-mix", blend(axis(0), axis(1), 0.05));
+    await embed("cat-single", blend(axis(0), axis(1), 0.2));
+
+    await rankCatalogue();
+
+    const ear = await listCatalogueTracks("ear");
+    expect(ear.map((t) => t.trackId)).toEqual(["cat-single"]);
+
+    const summary = await getCatalogueSummary();
+    expect(summary.ranked).toBe(1);
+  });
+
+  it("an uncaptured 70-minute mix never enters the capture worklist — the money half", async () => {
+    const { rankCatalogue } = await import("./catalogue");
+    const { setCatalogueCapturePaused } = await import("./capture-budget");
+    const { listTrackWork } = await import("./track-work");
+
+    await setCatalogueCapturePaused(false);
+    await seedFinding("finding-a", { vector: axis(0) });
+    await seedCatalogueTrack(db, {
+      artists: ["Someone"],
+      durationMs: 78 * 60_000,
+      title: "Summer Selection (Continuous mix 1)",
+      trackId: "cat-mix-uncaptured",
+    });
+    await seedCatalogueTrack(db, {
+      artists: ["Someone"],
+      durationMs: 5 * 60_000,
+      title: "Buy Me",
+      trackId: "cat-buyme",
+    });
+
+    await rankCatalogue();
+
+    const work = await listTrackWork({ kind: "capture", scope: "catalogue" });
+    const ids = work.map((item) => item.trackId);
+    expect(ids).toContain("cat-buyme");
+    expect(ids).not.toContain("cat-mix-uncaptured");
+  });
+
+  it("a captured row with NO store preview still auditions — hasCapturedAudio is the fallback signal", async () => {
+    const { listCatalogueTracks, rankCatalogue } = await import("./catalogue");
+
+    await seedFinding("finding-a", { vector: axis(0) });
+    // No isrc, no preview_url seeded — the small-label case (the real "Talk to You" row).
+    await seedCatalogueTrack(db, {
+      artists: ["Changing Faces"],
+      durationMs: 4 * 60_000 + 30_000,
+      title: "Talk to You",
+      trackId: "cat-noprev",
+    });
+    await captureAt("cat-noprev");
+    await embed("cat-noprev", blend(axis(0), axis(1), 0.2));
+
+    await rankCatalogue();
+
+    const ear = await listCatalogueTracks("ear");
+    const row = ear.find((t) => t.trackId === "cat-noprev");
+    expect(row?.hasPreview).toBe(false);
+    expect(row?.hasCapturedAudio).toBe(true);
+  });
+});

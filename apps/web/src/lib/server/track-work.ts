@@ -69,6 +69,7 @@
 // and the archive is never starved by the speculative half.
 
 import { isCatalogueCaptureOpen } from "./capture-budget";
+import { LONG_FORM_MS } from "./catalogue";
 import { parseArtistsJson } from "./artists";
 import { getDb, typedRows } from "./db";
 import {
@@ -264,6 +265,10 @@ export function kindClause(kind: TrackWorkKind): { args: string[]; sql: string }
       //   · the same failure-cap + cooldown as the `failed` arm — a FAILED forced capture keeps
       //     the sentinel too (its status never becomes `failed`), so its retries are bounded by
       //     `source_audio_failures` / `source_audio_attempted_at` here instead.
+      // The catalogue half also excludes a LONG-FORM row (`duration_ms < LONG_FORM_MS`, the
+      // continuous-mix veto — docs/the-ear.md § The long-form veto): a mix is the fattest thing
+      // the metered budget can buy and can never become a finding. Catalogue-scoped like the
+      // dismissal — a FINDING is never duration-gated.
       // The catalogue half also excludes a DISMISSED row (`dismissed_at is null`): the operator's
       // "not for me" is the ruled-out-label veto's class (docs/the-ear.md § The operator's
       // actions) — a metered download must never be spent on a row he took out of the telescope.
@@ -282,7 +287,8 @@ export function kindClause(kind: TrackWorkKind): { args: string[]; sql: string }
             and (
               (f.track_id is not null and f.log_id is not null)
               or (f.track_id is null and t.capture_priority is not null and t.capture_priority >= 0
-                  and t.dismissed_at is null)
+                  and t.dismissed_at is null
+                  and t.duration_ms < ${LONG_FORM_MS})
             )`,
     };
   }

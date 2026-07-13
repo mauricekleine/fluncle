@@ -724,15 +724,18 @@ function CatalogueRow({
             // On the quarantine lens the artwork auditions the CAPTURED BYTES, not the preview:
             // the preview is ISRC-resolved and always the right song, so it cannot answer the one
             // question this lens asks — which side of the collision actually holds wrong audio.
+            // On every other lens the captured bytes are the FALLBACK: a row with no resolvable
+            // store preview (no URL, no ISRC — the small-label case) still plays the full song
+            // Fluncle owns, instead of a dead artwork.
             auditionSrc={
-              lens === "quarantine"
+              lens === "quarantine" || (!track.hasPreview && track.hasCapturedAudio)
                 ? `/api/admin/tracks/${encodeURIComponent(track.trackId)}/source-audio`
                 : undefined
             }
             cover={track.albumImageUrl}
             title={track.title}
             trackId={track.trackId}
-            playable={lens === "quarantine" || track.hasPreview}
+            playable={lens === "quarantine" || track.hasPreview || track.hasCapturedAudio}
           />
         }
         subtitle={
@@ -748,6 +751,12 @@ function CatalogueRow({
               <>
                 <span aria-hidden="true">·</span>
                 <span>{Math.round(track.bpm)} BPM</span>
+              </>
+            ) : null}
+            {track.releaseDate ? (
+              <>
+                <span aria-hidden="true">·</span>
+                <span>{track.releaseDate.slice(0, 4)}</span>
               </>
             ) : null}
             {/* THE WHY, on its own line (basis-full). It is not decoration and it is not
