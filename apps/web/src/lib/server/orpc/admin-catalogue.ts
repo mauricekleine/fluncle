@@ -40,8 +40,10 @@ import {
   flagWrongAudio,
   listCatalogueTracks as listCatalogue,
   getCatalogueSummary,
+  listUnverifiedCaptures,
   rankCatalogue,
   setTrackDismissed,
+  verifyCapture,
 } from "../catalogue";
 import { crawlCatalogue, DEFAULT_MAX_HOP, getCrawlStatus, MAX_HOP_CEILING } from "../crawl";
 import { adminAuth, operatorGuard } from "../orpc-auth";
@@ -91,6 +93,29 @@ export function adminCatalogueHandlers(os: Implementer) {
   const rankCatalogueHandler = os.rank_catalogue.use(adminAuth).handler(async ({ input }) => {
     try {
       return { ok: true, summary: await rankCatalogue(input.limit) } as const;
+    } catch (error) {
+      throw apiFault(error);
+    }
+  });
+
+  // GET /admin/catalogue/captures/unverified — the verification backfill's worklist (agent read).
+  const listUnverifiedCapturesHandler = os.list_unverified_captures
+    .use(adminAuth)
+    .handler(async ({ input }) => {
+      try {
+        return { ok: true, tracks: await listUnverifiedCaptures(input.limit) } as const;
+      } catch (error) {
+        throw apiFault(error);
+      }
+    });
+
+  // POST /admin/catalogue/captures/verify — record a capture's fingerprint verdict and ROUTE it
+  // (docs/the-ear.md § Wrong audio). AGENT tier, the `rank_catalogue` precedent: it writes only
+  // derived/measurement columns and never certifies — a catalogue mismatch quarantines, a finding
+  // mismatch only raises an operator attention item (the machine never rewinds a public finding).
+  const verifyCaptureHandler = os.verify_capture.use(adminAuth).handler(async ({ input }) => {
+    try {
+      return { action: await verifyCapture(input.trackId, input.verdict), ok: true } as const;
     } catch (error) {
       throw apiFault(error);
     }
@@ -251,9 +276,11 @@ export function adminCatalogueHandlers(os: Implementer) {
     get_capture_budget: getCaptureBudgetHandler,
     get_crawl_status: getCrawlStatusHandler,
     list_catalogue_tracks: listCatalogueTracksHandler,
+    list_unverified_captures: listUnverifiedCapturesHandler,
     rank_catalogue: rankCatalogueHandler,
     reset_apple_breaker: resetAppleBreakerHandler,
     set_capture_budget: setCaptureBudgetHandler,
     set_track_dismissed: setTrackDismissedHandler,
+    verify_capture: verifyCaptureHandler,
   };
 }

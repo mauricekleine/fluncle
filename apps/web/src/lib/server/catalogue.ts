@@ -49,7 +49,7 @@
 
 import { type InStatement } from "@libsql/client/web";
 import { parseArtistsJson } from "./artists";
-import { getDb, typedRows } from "./db";
+import { getDb, typedRow, typedRows } from "./db";
 import { embeddingVectorSql } from "./embedding";
 import { labelSlug } from "./labels";
 import { matchKey } from "./track-match";
@@ -169,6 +169,92 @@ export const WRONG_AUDIO_STATUS = "wrong-audio";
  * if it genuinely matches, or a discovery if it does not).
  */
 export const QUARANTINE_CLEARED = "quarantine-cleared";
+
+// ── The bad-audio memory, server side (docs/the-ear.md § Wrong audio) ──────────────────
+// The GENERAL form of the single-sha memory that once lived embedded in a kept `source_audio_key`.
+// A JSON array on `tracks.source_audio_rejected` ({ videoId?, sha256, reason, at }, capped). Every
+// server write-path that REWINDS a row (the rank quarantine, `flagWrongAudio`, `verifyCapture`)
+// grows it the same way, so the capture sweep's pre-download videoId filter + sha backstop always
+// read a consistent memory. It MIRRORS the box's fingerprint-match.ts helper (the box cannot import
+// the workspace) — keep the two in step.
+
+/** One remembered bad-audio source. `videoId` is the pre-download filter; `sha256` the backstop. */
+type RejectedSource = { at: string; reason: string; sha256: string; videoId?: string };
+
+/** The cap on the memory — the newest N, oldest dropped. */
+const REJECTED_MEMORY_CAP = 10;
+
+/** The sha256 embedded in a `<root>/<sha256>.<ext>` source-audio key, lowercased, or null. */
+function shaFromSourceAudioKey(key: null | string): null | string {
+  if (!key) {
+    return null;
+  }
+
+  const base = key.split("/").pop() ?? "";
+  const dot = base.indexOf(".");
+  const hash = (dot >= 0 ? base.slice(0, dot) : base).toLowerCase();
+
+  return /^[0-9a-f]{64}$/.test(hash) ? hash : null;
+}
+
+function parseRejectedSources(value: null | string): RejectedSource[] {
+  if (!value) {
+    return [];
+  }
+
+  let raw: unknown;
+
+  try {
+    raw = JSON.parse(value);
+  } catch {
+    return [];
+  }
+
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+
+  const out: RejectedSource[] = [];
+
+  for (const entry of raw) {
+    const row = entry as Partial<RejectedSource> | null;
+
+    if (row && typeof row.sha256 === "string" && typeof row.at === "string") {
+      out.push({
+        at: row.at,
+        reason: typeof row.reason === "string" ? row.reason : "rejected",
+        sha256: row.sha256,
+        ...(typeof row.videoId === "string" ? { videoId: row.videoId } : {}),
+      });
+    }
+  }
+
+  return out;
+}
+
+/**
+ * Append a rejected sha256 (derived from the poisoned capture's key) to the memory JSON, capped +
+ * deduped. Returns the next JSON string, or the existing value unchanged when there is no sha to
+ * remember (a legacy row with no key-embedded digest) — the rewind still proceeds, it just has
+ * nothing new to store. `now` is injected so the write is deterministic in tests.
+ */
+function appendRejectedSha(
+  existing: null | string,
+  sha: null | string,
+  reason: string,
+  now: string,
+): null | string {
+  if (!sha) {
+    return existing;
+  }
+
+  const prior = parseRejectedSources(existing).filter((row) => row.sha256 !== sha);
+  const next: RejectedSource[] = [...prior, { at: now, reason, sha256: sha }].slice(
+    -REJECTED_MEMORY_CAP,
+  );
+
+  return JSON.stringify(next);
+}
 
 /** The archive's cheap identity sets — bounded by the FINDING count, never the catalogue. */
 export type ArchiveAffinity = {
@@ -323,6 +409,10 @@ type CandidateRow = {
   has_vector: number;
   isrc: string | null;
   label: string | null;
+  // Read only so a wrong-audio QUARANTINE can grow the bad-audio memory (source_audio_rejected)
+  // with the poisoned capture's sha256, derived from its key (docs/the-ear.md § Wrong audio).
+  source_audio_key: string | null;
+  source_audio_rejected: string | null;
   title: string;
   track_id: string;
 };
@@ -542,6 +632,8 @@ export async function rankCatalogue(limit = RANK_BATCH_SIZE): Promise<RankCatalo
                  ct.label as label,
                  ct.isrc as isrc,
                  ct.capture_status as capture_status,
+                 ct.source_audio_key as source_audio_key,
+                 ct.source_audio_rejected as source_audio_rejected,
                  (${embeddingVectorSql("ct")} is not null) as has_vector
           from tracks ct
           left join findings cf on cf.track_id = ct.track_id
@@ -700,7 +792,10 @@ export async function rankCatalogue(limit = RANK_BATCH_SIZE): Promise<RankCatalo
       // tier so it re-enters the capture queue for a fresh download. `source_audio_key` is KEPT
       // on the row: its embedded sha256 is the memory the capture sweep uses to refuse an
       // identical re-download (docs/the-ear.md § Wrong audio). `capture_status = 'wrong-audio'`
-      // is the re-capture trigger AND the embed/analyze guard (track-work.ts).
+      // is the re-capture trigger AND the embed/analyze guard (track-work.ts). The poisoned
+      // capture's sha ALSO enters the GENERAL bad-audio memory, so the re-download's videoId/sha
+      // filters (and any future capture of this row) refuse it — the general form of the legacy
+      // key-derived check, kept alongside it for backward compatibility.
       const preAudio = archive
         ? preAudioPriority(candidate, archive, findingIsrcs ?? new Map<string, string>())
         : { duplicateOf: null, priority: 0 };
@@ -711,6 +806,12 @@ export async function rankCatalogue(limit = RANK_BATCH_SIZE): Promise<RankCatalo
           winner.fid,
           preAudio.priority,
           preAudio.duplicateOf,
+          appendRejectedSha(
+            candidate.source_audio_rejected,
+            shaFromSourceAudioKey(candidate.source_audio_key),
+            "quarantine",
+            now,
+          ),
           corpus,
           now,
           candidate.track_id,
@@ -723,6 +824,7 @@ export async function rankCatalogue(limit = RANK_BATCH_SIZE): Promise<RankCatalo
                   nearest_finding_track_id = ?,
                   capture_priority = ?,
                   duplicate_of_track_id = ?,
+                  source_audio_rejected = ?,
                   catalogue_rank_corpus = ?,
                   catalogue_ranked_at = ?
               where track_id = ?`,
@@ -855,6 +957,13 @@ export type CatalogueTrackItem = {
   capturePriority: number | null;
   captureReason: CapturePriorityReason | null;
   /**
+   * The capture-verification verdict (docs/the-ear.md § Wrong audio): `preview-match` (the
+   * captured audio matched the ISRC preview), `unverified` (the gate abstained — no reference),
+   * `mismatch` (a finding awaiting the operator's ruling), or null (pre-gate legacy / no capture).
+   * A quiet honesty marker; the board may whisper `unverified`, never redesign around it.
+   */
+  captureVerification: string | null;
+  /**
    * ISO of when the operator dismissed this row ("not for me"), or null on a live row. Only
    * ever set on a row read through the `dismissed` lens (the restore pile) — every other lens
    * filters dismissed rows out.
@@ -963,6 +1072,7 @@ type CatalogueRow = {
   artists_json: string;
   bpm: number | null;
   capture_priority: number | null;
+  capture_verification: string | null;
   catalogue_ranked_at: string | null;
   dismissed_at: string | null;
   duplicate_of_track_id: string | null;
@@ -987,8 +1097,8 @@ type MatchRow = {
 
 const CATALOGUE_SELECT = `ct.track_id, ct.title, ct.artists_json, ct.album_image_url, ct.spotify_url,
   ct.apple_music_url, ct.isrc, ct.preview_url, ct.bpm, ct.key, ct.label, ct.release_date,
-  ct.nearest_finding_score, ct.nearest_finding_track_id, ct.capture_priority, ct.catalogue_ranked_at,
-  ct.duplicate_of_track_id, ct.dismissed_at`;
+  ct.nearest_finding_score, ct.nearest_finding_track_id, ct.capture_priority, ct.capture_verification,
+  ct.catalogue_ranked_at, ct.duplicate_of_track_id, ct.dismissed_at`;
 
 /**
  * The Ear's read — and the reason the whole sweep exists.
@@ -1119,6 +1229,7 @@ export async function listCatalogueTracks(
       captureReason: archive
         ? capturePriorityFor({ artists, label: row.label }, archive).reason
         : null,
+      captureVerification: row.capture_verification,
       dismissedAt: row.dismissed_at,
       duplicateOf,
       // The `/api/preview` relay resolves a fresh preview by ISRC (Deezer → exact Apple →
@@ -1212,16 +1323,52 @@ export async function clearWrongAudio(trackId: string): Promise<boolean> {
  * catalogue ranking heals itself on the next sweep ticks — including un-scoring the fake ~1.0
  * rows this finding manufactured. Findings-only (the mirror of `clearWrongAudio`'s catalogue-only
  * guard) and captured-only; a no-op success otherwise, so a double-click reports honestly.
+ *
+ * The poisoned sha ALSO enters the GENERAL bad-audio memory (the general form of the legacy
+ * key-derived check, kept alongside it), and `capture_verification` is NULLED so the fresh capture
+ * is re-verified from scratch — a flagged finding was verified `mismatch` by the backfill, and that
+ * verdict is stale the instant it re-enters the capture queue.
  */
 export async function flagWrongAudio(trackId: string): Promise<boolean> {
   const db = await getDb();
+  const now = new Date().toISOString();
+
+  // Read the row's key + prior memory under the SAME guard the write applies, so the memory is
+  // computed only for a row that actually qualifies (a captured finding not already quarantined).
+  const rowResult = await db.execute({
+    args: [trackId],
+    sql: `select source_audio_key, source_audio_rejected
+          from tracks
+          where track_id = ?
+            and source_audio_key is not null
+            and capture_status <> 'wrong-audio'
+            and exists (select 1 from findings where findings.track_id = tracks.track_id)
+          limit 1`,
+  });
+  const row = typedRow<{ source_audio_key: null | string; source_audio_rejected: null | string }>(
+    rowResult.rows,
+  );
+
+  if (!row) {
+    return false;
+  }
+
+  const rejected = appendRejectedSha(
+    row.source_audio_rejected,
+    shaFromSourceAudioKey(row.source_audio_key),
+    "flag-wrong-audio",
+    now,
+  );
+
   const result = await db.execute({
-    args: [WRONG_AUDIO_STATUS, trackId],
+    args: [WRONG_AUDIO_STATUS, rejected, trackId],
     sql: `update tracks
           set capture_status = ?,
               embedding_json = null,
               embedding_blob = null,
-              analyzed_from = null
+              analyzed_from = null,
+              capture_verification = null,
+              source_audio_rejected = ?
           where track_id = ?
             and source_audio_key is not null
             and capture_status <> 'wrong-audio'
@@ -1265,4 +1412,189 @@ export async function setTrackDismissed(trackId: string, dismissed: boolean): Pr
       });
 
   return result.rowsAffected > 0;
+}
+
+// ── CAPTURE VERIFICATION (docs/the-ear.md § Wrong audio) ──────────────────────────────
+// The historic backfill (verify-captures.ts) fingerprints every captured row against its ISRC
+// preview and reports one of three verdicts here; this module ROUTES that verdict to the right
+// action, so the doctrine lives server-side (one authority, integration-tested) and the box script
+// stays dumb. The INGEST gate (capture-sweep.ts) stamps `preview-match`/`unverified` inline on its
+// own store and never reaches this path — it only ever produces those two, and rejects a mismatch
+// before storing.
+
+/** One row the backfill still has to verify — enough to fetch its preview + captured bytes. */
+export type CaptureVerifyItem = {
+  artists: string[];
+  certified: boolean;
+  isrc: null | string;
+  /** Null for a catalogue row (the coordinate lives on the certification). */
+  logId: null | string;
+  sourceAudioKey: string;
+  title: string;
+  trackId: string;
+};
+
+/** The backfill's verdict for one captured file against its official preview. */
+export type CaptureVerifyVerdict = "match" | "mismatch" | "no-preview";
+
+/** What `verifyCapture` did — for the sweep's honest per-row summary. */
+export type CaptureVerifyAction =
+  | "flagged-finding"
+  | "not-captured"
+  | "preview-match"
+  | "quarantined-catalogue"
+  | "unverified";
+
+type VerifyRow = {
+  artists_json: string;
+  capture_status: null | string;
+  certified: number;
+  isrc: null | string;
+  label: null | string;
+  source_audio_key: null | string;
+  source_audio_rejected: null | string;
+  title: string;
+};
+
+/**
+ * The backfill's worklist — captured rows (findings + catalogue) not yet verified, bounded and
+ * resumable. A stamped row leaves the `capture_verification is null` set, so re-running simply
+ * picks up what is left (the embed-queue pattern) — no cursor to persist. Quarantined
+ * (`wrong-audio`) rows are excluded: their key points at bytes pending a fresh capture, which the
+ * gate will re-verify. Ordered by `track_id` for a deterministic, stable drain.
+ */
+export async function listUnverifiedCaptures(limit = 50): Promise<CaptureVerifyItem[]> {
+  const page = Math.min(Math.max(1, Math.trunc(limit)), 200);
+  const db = await getDb();
+  const result = await db.execute({
+    args: [WRONG_AUDIO_STATUS, page],
+    sql: `select ct.track_id as track_id, ct.title as title, ct.artists_json as artists_json,
+                 ct.isrc as isrc, ct.source_audio_key as source_audio_key,
+                 f.log_id as log_id, (f.track_id is not null) as certified
+          from tracks ct
+          left join findings f on f.track_id = ct.track_id
+          where ct.source_audio_key is not null
+            and ct.capture_verification is null
+            and (ct.capture_status is null or ct.capture_status <> ?)
+          order by ct.track_id asc
+          limit ?`,
+  });
+
+  return typedRows<{
+    artists_json: string;
+    certified: number;
+    isrc: null | string;
+    log_id: null | string;
+    source_audio_key: string;
+    title: string;
+    track_id: string;
+  }>(result.rows).map((row) => ({
+    artists: parseArtistsJson(row.artists_json),
+    certified: Number(row.certified) === 1,
+    isrc: row.isrc,
+    logId: row.log_id,
+    sourceAudioKey: row.source_audio_key,
+    title: row.title,
+    trackId: row.track_id,
+  }));
+}
+
+/**
+ * ROUTE a backfill verdict to its action (docs/the-ear.md § Wrong audio):
+ *
+ *   - `match`      → stamp `capture_verification = 'preview-match'`. The good case.
+ *   - `no-preview` → stamp `'unverified'` (the honest abstain — no reference to check against).
+ *   - `mismatch` on a FINDING → stamp `'mismatch'` only. A machine does NOT rewind a public
+ *     finding: this raises the /admin attention item, and the OPERATOR rules with `flag_wrong_audio`.
+ *   - `mismatch` on a CATALOGUE row → QUARANTINE it (the sweep's rewind): drop the vector + score,
+ *     re-derive the pre-audio tier so it re-enters the capture queue, remember the poisoned sha in
+ *     the bad-audio memory, and stamp `capture_status = 'wrong-audio'`. No operator in the loop —
+ *     a catalogue row is not something Fluncle has spoken about.
+ *
+ * A row with no captured audio (or already quarantined) is a `not-captured` no-op. Returns the
+ * action taken so the sweep reports honestly.
+ */
+export async function verifyCapture(
+  trackId: string,
+  verdict: CaptureVerifyVerdict,
+): Promise<CaptureVerifyAction> {
+  const db = await getDb();
+  const now = new Date().toISOString();
+
+  const rowResult = await db.execute({
+    args: [trackId],
+    sql: `select ct.artists_json as artists_json, ct.label as label, ct.isrc as isrc,
+                 ct.capture_status as capture_status, ct.source_audio_key as source_audio_key,
+                 ct.source_audio_rejected as source_audio_rejected, ct.title as title,
+                 (f.track_id is not null) as certified
+          from tracks ct
+          left join findings f on f.track_id = ct.track_id
+          where ct.track_id = ? limit 1`,
+  });
+  const row = typedRow<VerifyRow>(rowResult.rows);
+
+  // Nothing to verify: no bytes on file, or the row is already quarantined (pending a fresh
+  // capture the gate will verify). Either way, a no-op the sweep reports as `not-captured`.
+  if (!row || !row.source_audio_key || row.capture_status === WRONG_AUDIO_STATUS) {
+    return "not-captured";
+  }
+
+  const certified = Number(row.certified) === 1;
+
+  if (verdict === "match" || verdict === "no-preview") {
+    const verification = verdict === "match" ? "preview-match" : "unverified";
+
+    await db.execute({
+      args: [verification, now, trackId],
+      sql: `update tracks set capture_verification = ?, capture_verified_at = ? where track_id = ?`,
+    });
+
+    return verification;
+  }
+
+  // A MISMATCH on a FINDING — stamp the suspicion, raise the attention item, do NOT rewind.
+  if (certified) {
+    await db.execute({
+      args: [now, trackId],
+      sql: `update tracks set capture_verification = 'mismatch', capture_verified_at = ? where track_id = ?`,
+    });
+
+    return "flagged-finding";
+  }
+
+  // A MISMATCH on a CATALOGUE row — quarantine it (the machine may rewind an uncertified row).
+  const [archive, findingIsrcs] = await Promise.all([readArchiveAffinity(), readFindingIsrcs()]);
+  const preAudio = preAudioPriority(
+    { artists_json: row.artists_json, isrc: row.isrc, label: row.label },
+    archive,
+    findingIsrcs,
+  );
+  const rejected = appendRejectedSha(
+    row.source_audio_rejected,
+    shaFromSourceAudioKey(row.source_audio_key),
+    "backfill-mismatch",
+    now,
+  );
+
+  // `capture_verification = 'mismatch'` is KEPT on the quarantined row — it is the lens's honest
+  // WHY (a preview-mismatch quarantine, not a cross-title archive collision), and it can never
+  // reach the finding attention read (that read joins `findings`, and this row has none). The
+  // fresh capture's ingest gate overwrites it with a new verdict when the re-download lands.
+  await db.execute({
+    args: [WRONG_AUDIO_STATUS, preAudio.priority, preAudio.duplicateOf, rejected, now, trackId],
+    sql: `update tracks
+          set capture_status = ?,
+              embedding_json = null,
+              embedding_blob = null,
+              nearest_finding_score = null,
+              capture_priority = ?,
+              duplicate_of_track_id = ?,
+              source_audio_rejected = ?,
+              capture_verification = 'mismatch',
+              capture_verified_at = ?,
+              catalogue_rank_corpus = null
+          where track_id = ?`,
+  });
+
+  return "quarantined-catalogue";
 }

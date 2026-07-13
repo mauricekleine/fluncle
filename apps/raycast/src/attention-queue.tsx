@@ -18,6 +18,7 @@ type Source = AttentionQueue["rows"][number]["source"];
 const SOURCE_META: Record<Source, { icon: Icon; title: string }> = {
   "artist-review": { icon: Icon.Person, title: "Artist links" },
   "attach-cues": { icon: Icon.BulletPoints, title: "Attach cues" },
+  "capture-suspect": { icon: Icon.Waveform, title: "Capture checks" },
   distribute: { icon: Icon.Globe, title: "Distribute" },
   "drip-empty": { icon: Icon.Image, title: "Clip drip" },
   "label-review": { icon: Icon.Tag, title: "Labels" },

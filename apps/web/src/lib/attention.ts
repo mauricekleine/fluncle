@@ -28,6 +28,7 @@ import { type AttentionRow, type AttentionSourceCount } from "@fluncle/contracts
 export type AttentionSource =
   | "artist-review"
   | "attach-cues"
+  | "capture-suspect"
   | "distribute"
   | "drip-empty"
   | "label-review"
@@ -187,6 +188,23 @@ export type NoteRejectionInput = {
   trackId: string;
 };
 
+/**
+ * A FINDING whose captured audio failed the fingerprint check against its official preview
+ * (docs/the-ear.md § Wrong audio). The backfill stamped it `capture_verification = 'mismatch'` and
+ * stops — a machine never rewinds a public finding — so it lands here for the operator, who
+ * auditions and rules with `flag_wrong_audio`. Catalogue mismatches never appear (they quarantine).
+ */
+export type CaptureSuspectInput = {
+  artUrl?: string;
+  artists: string[];
+  /** When the mismatch was recorded — the queue's oldest-first anchor. */
+  anchorAt: string;
+  logId?: string;
+  title: string;
+  /** The finding — the flag target (`fluncle admin catalogue flag-wrong-audio <trackId>`). */
+  trackId: string;
+};
+
 /** A drafted-but-unsent weekly newsletter edition awaiting the operator's send. */
 export type NewsletterInput = {
   /** When the Friday sweep authored the draft — the queue's oldest-first anchor. */
@@ -199,6 +217,7 @@ export type NewsletterInput = {
 
 export type AttentionInputs = {
   artistReviews: ArtistReviewInput[];
+  captureSuspects: CaptureSuspectInput[];
   clipPosts: ClipPostInput[];
   clips: ClipInput[];
   labelReviews: LabelReviewInput[];
@@ -372,6 +391,25 @@ export function deriveAttentionItems(inputs: AttentionInputs, now: number): Atte
       id: `label-review:${review.labelId}`,
       source: "label-review",
       title: review.name,
+    });
+  }
+
+  // Each finding whose capture failed fingerprint verification is one row — the backfill caught a
+  // finding whose stored audio does not match its official preview and STOPPED (a machine does not
+  // rewind a public finding), so the operator auditions and rules with `flag_wrong_audio`. Never a
+  // deadline: the wrong bytes are inaudible on every public surface (site/video/radio play the
+  // preview), so nothing is on fire — it is a correctness cleanup, seen not chased. Deep-links to
+  // the catalogue workstation where the wrong-audio verdict lives.
+  for (const suspect of inputs.captureSuspects) {
+    items.push({
+      anchorAt: suspect.anchorAt,
+      ...(suspect.artUrl ? { artUrl: suspect.artUrl } : {}),
+      href: "/admin/catalogue?lens=quarantine",
+      id: `capture-suspect:${suspect.trackId}`,
+      ...(suspect.logId ? { logId: suspect.logId } : {}),
+      source: "capture-suspect",
+      title: trackLabel(suspect.artists, suspect.title),
+      trackId: suspect.trackId,
     });
   }
 
@@ -604,6 +642,11 @@ export function primaryFor(item: AttentionItem, now: number): PrimaryAction {
       return { href: item.href ?? "/admin/artists", kind: "open", label: "Review" };
     case "attach-cues":
       return { href: item.href ?? "/admin/plans", kind: "open", label: "Attach cues" };
+    case "capture-suspect":
+      // The operator auditions the captured bytes on the catalogue workstation and rules with
+      // flag_wrong_audio (or the CLI); the row opens there rather than flagging inline — flagging a
+      // public finding's audio is a judgement, and publishing-class authority never sits on a queue row.
+      return { href: item.href ?? "/admin/catalogue", kind: "open", label: "Check it" };
     case "distribute":
       return { href: item.href ?? "/admin/plans", kind: "open", label: "Distribute" };
     case "drip-empty":
@@ -663,6 +706,9 @@ const SOURCE_ORDER: AttentionSource[] = [
   // The curation rows sit last: a label ruling steers the NEXT crawl, so it is never
   // urgent and never blocks a finding.
   "label-review",
+  // A capture suspicion is a correctness cleanup, never urgent (the wrong bytes are inaudible on
+  // every public surface), so it sits among the low-priority curation rows.
+  "capture-suspect",
   // A held auto-note is the least urgent row on the board and deliberately so: the finding
   // is simply note-less, which is a state it can sit in indefinitely without hurting
   // anything, and the sweep keeps trying to write a better line regardless. It is here to
@@ -720,6 +766,12 @@ function briefPhrase(source: AttentionSource, rows: AttentionItem[]): string {
       return n === 1 ? "an artist's links to review" : `${countWord(n)} artists' links to review`;
     case "attach-cues":
       return n === 1 ? "a recording waiting on cues" : `${countWord(n)} recordings waiting on cues`;
+    case "capture-suspect":
+      // Name the mechanism: the fingerprint check disagreed with the stored audio, and only the
+      // operator's ears can settle it.
+      return n === 1
+        ? "a capture that doesn't sound right"
+        : `${countWord(n)} captures that don't sound right`;
     case "distribute": {
       if (n !== 1) {
         return `${countWord(n)} mixtapes to distribute`;

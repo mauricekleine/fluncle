@@ -51,6 +51,11 @@ const UpdateTrackBodySchema = z.looseObject({
   // failures to a number). Internal — the handler keeps them out of VISIBLE_FIELDS so
   // a capture write moves no public lastmod.
   captureStatus: z.unknown().optional(),
+  // The capture VERIFICATION provenance (docs/the-ear.md § Wrong audio) — the ingest gate's
+  // fingerprint verdict + its stamp + the bad-audio memory. Agent-writable analysis fields, LOOSE
+  // like the rest: the handler narrows the verdict to its 3-value enum and the memory to a string.
+  captureVerification: z.unknown().optional(),
+  captureVerifiedAt: z.unknown().optional(),
   // The MuQ audio embedding (a JSON array of 1024 floats) — an agent-writable
   // analysis field the on-box `fluncle-embed` cron sets. LOOSE like the rest: the
   // handler validates the 1024-d shape itself and emits `invalid_embedding`/400.
@@ -74,6 +79,9 @@ const UpdateTrackBodySchema = z.looseObject({
   sourceAudioCapturedAt: z.unknown().optional(),
   sourceAudioFailures: z.unknown().optional(),
   sourceAudioKey: z.unknown().optional(),
+  // The bad-audio memory (docs/the-ear.md § Wrong audio) — a JSON array of rejected capture
+  // sources. Agent-writable; the handler narrows it to a string.
+  sourceAudioRejected: z.unknown().optional(),
   videoUrl: z.unknown().optional(),
 });
 
@@ -652,6 +660,10 @@ export const TrackWorkItemSchema = z
     logId: z.string().nullable(),
     sourceAudioFailures: z.number().optional(),
     sourceAudioKey: z.string().nullable(),
+    // The bad-audio memory (docs/the-ear.md § Wrong audio) — the JSON array of rejected capture
+    // sources, CAPTURE-only like the trust signals above. The sweep's pre-download videoId filter
+    // + post-download sha backstop read it. Omitted when nothing has been rejected.
+    sourceAudioRejected: z.string().optional(),
     title: z.string(),
     trackId: z.string(),
   })

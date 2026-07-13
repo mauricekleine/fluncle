@@ -12,6 +12,7 @@ import {
   QuotesIcon,
   TagIcon,
   TrayIcon,
+  WaveformIcon,
 } from "@phosphor-icons/react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, redirect } from "@tanstack/react-router";
@@ -711,6 +712,7 @@ function AdminQueuePage() {
 const SOURCE_ICONS: Record<AttentionSource, ComponentType<{ className?: string }>> = {
   "artist-review": MicrophoneStageIcon,
   "attach-cues": FilmSlateIcon,
+  "capture-suspect": WaveformIcon,
   distribute: CassetteTapeIcon,
   "drip-empty": InstagramIcon,
   "label-review": TagIcon,
@@ -727,6 +729,7 @@ const SOURCE_ICONS: Record<AttentionSource, ComponentType<{ className?: string }
 const SOURCE_LABELS: Record<AttentionSource, string> = {
   "artist-review": "Artist",
   "attach-cues": "Recording",
+  "capture-suspect": "Capture check",
   distribute: "Mixtape",
   "drip-empty": "Instagram drip",
   "label-review": "Label",

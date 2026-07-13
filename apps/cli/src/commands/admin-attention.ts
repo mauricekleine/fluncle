@@ -22,6 +22,7 @@ export async function attentionQueueCommand(): Promise<AttentionQueue> {
 const SOURCE_LABELS: Record<AttentionSource, string> = {
   "artist-review": "artist links",
   "attach-cues": "cues",
+  "capture-suspect": "capture check",
   distribute: "distribute",
   "drip-empty": "clip drip",
   "label-review": "label",

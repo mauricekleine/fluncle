@@ -95,6 +95,7 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // THE CRAWLER (docs/catalogue-crawler.md) — the frontier's state. Contract-only oRPC (no
   // TanStack route file). Admin tier (agent-allowed): the on-box `fluncle-crawl` sweep reads
   // it with its agent token, and so does the operator.
+  "GET /admin/catalogue/captures/unverified": "list_unverified_captures",
   "GET /admin/catalogue/crawl": "get_crawl_status",
   "GET /admin/clips": "list_clips",
   // Every clip's Instagram drip-feed row (schedule + status) — contract-only oRPC (no
@@ -243,6 +244,14 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // contract-only oRPC (no TanStack route file). OPERATOR tier: it re-arms a spend-adjacent
   // external integration a machine should not silently un-brake (the `set_capture_budget` rule).
   "POST /admin/catalogue/apple-breaker/reset": "reset_apple_breaker",
+  // The capture-verification write — contract-only oRPC. Agent tier (the rank_catalogue
+  // precedent): the box's `fluncle-verify-captures` sweep fingerprints a capture against its
+  // official preview and reports the verdict; the SERVER routes it (docs/the-ear.md § Wrong
+  // audio) — a catalogue mismatch quarantines, a FINDING mismatch only raises the operator
+  // attention item (a machine never rewinds a public finding). Its worklist read
+  // (`list_unverified_captures`, above) matches the public `list_` prefix and lives here for
+  // completeness.
+  "POST /admin/catalogue/captures/verify": "verify_capture",
   // Certify an existing catalogue row in place — contract-only oRPC. OPERATOR tier: certifying is
   // the one act the catalogue domain forbids a machine (docs/the-ear.md § The operator's actions).
   "POST /admin/catalogue/certify": "certify_track",

@@ -2011,6 +2011,70 @@ function addAdminCommands(program: Command): void {
       );
     });
 
+  // Capture verification (docs/the-ear.md § Wrong audio) — the backfill's CLI face. The worklist
+  // is a `--queue` view on the verb (never a *-queue command, docs/naming-conventions.md §6.4);
+  // the verdict write takes the trackId + --verdict the box's fpcalc run produced. The CLI holds
+  // no fingerprinting — the box measures, the Worker routes, this paces.
+  catalogue
+    .command("verify")
+    .description("Capture verification: the unverified worklist (--queue), or record one verdict")
+    .argument("[trackId]", "The track whose capture verdict to record (omit with --queue)")
+    .option("--queue", "List captured rows not yet verified against their preview", false)
+    .option("--verdict <verdict>", "The fingerprint verdict: match | mismatch | no-preview")
+    .option("--limit <limit>", "Worklist rows (default 50, max 200)")
+    .option("--json", "Print JSON", false)
+    .action(
+      async (
+        trackId: string | undefined,
+        options: JsonOptions & { limit?: string; queue?: boolean; verdict?: string },
+      ) => {
+        const { listUnverifiedCapturesCommand, verifyCaptureCommand } =
+          await import("./commands/admin-catalogue");
+
+        if (options.queue) {
+          const { tracks } = await listUnverifiedCapturesCommand(
+            options.limit ? { limit: options.limit } : {},
+          );
+
+          if (options.json) {
+            printJson({ ok: true, tracks });
+            return;
+          }
+
+          if (tracks.length === 0) {
+            console.log("Every capture is verified. Nothing to check.");
+            return;
+          }
+
+          for (const track of tracks) {
+            console.log(
+              `${track.logId ?? `${track.trackId} · catalogue`} — ${track.artists.join(", ")} — ${track.title}`,
+            );
+          }
+          return;
+        }
+
+        if (!trackId) {
+          throw new Error("Pass a trackId with --verdict, or --queue for the worklist.");
+        }
+
+        const verdict = options.verdict;
+
+        if (verdict !== "match" && verdict !== "mismatch" && verdict !== "no-preview") {
+          throw new Error("--verdict must be match, mismatch, or no-preview.");
+        }
+
+        const { action } = await verifyCaptureCommand(trackId, verdict);
+
+        if (options.json) {
+          printJson({ action, ok: true });
+          return;
+        }
+
+        console.log(`Recorded. ${trackId} → ${action}.`);
+      },
+    );
+
   catalogue
     .command("certify")
     .description("Certify an existing catalogue track in place — mint its finding (operator)")

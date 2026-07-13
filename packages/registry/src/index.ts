@@ -1024,6 +1024,18 @@ export const SURFACES: readonly Surface[] = [
     weights: { status: "hidden" },
   },
   {
+    command: "fluncle admin catalogue verify --queue",
+    exposedContent: [
+      "fingerprint-check each captured song against its official preview → the wrong-audio verdict",
+    ],
+    kind: "cron",
+    name: "cron.verify-captures",
+    operatorNotes:
+      "every 30m, run by a rave-02 HOST systemd timer (docs/agents/hermes/verify-captures-timer/). The HISTORIC half of the capture verification gate (docs/the-ear.md § Wrong audio): the capture sweep verifies every NEW download at ingest, and this sweep walks every capture that landed before the gate existed and gives each the same Chromaprint check against the track's ISRC-resolved official preview. The box only MEASURES (fpcalc + the sliding-window match) and reports a plain verdict; the Worker ROUTES it — match/no-preview stamp `capture_verification`, a CATALOGUE mismatch quarantines for re-capture, a FINDING mismatch only raises the `capture-suspect` /admin attention item (a machine never rewinds a public finding; the operator rules with flag_wrong_audio). Resumable by construction (a stamped row leaves the worklist); degrades honestly without fpcalc (pre-rebake: `fpcalc_missing`, nothing stamped). Zero LLM tokens. Source: docs/agents/hermes/scripts/verify-captures.* + fingerprint-match.ts. See docs/the-ear.md.",
+    probeConfig: { cadenceMs: 30 * MINUTE_MS, cronName: "fluncle-verify-captures", kind: "cron" },
+    weights: { status: "hidden" },
+  },
+  {
     command: "fluncle admin tracks context --queue",
     exposedContent: [
       "Firecrawl facts → distilled context_note + a Texture: line (Worker-side Haiku)",

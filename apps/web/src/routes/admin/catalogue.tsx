@@ -737,6 +737,13 @@ function Why({ lens, track }: { lens: CatalogueLens; track: CatalogueTrackItem }
   // says the DEFAULT out loud: a fresh download is already queued, so doing nothing is a verdict
   // the operator can trust rather than a gap he has to wonder about.
   if (lens === "quarantine") {
+    // Two ways in, two honest WHYs: the rank sweep's cross-title collision names the finding the
+    // audio came back as; the verification backfill's preview mismatch has no collided finding —
+    // its evidence is the fingerprint check itself (docs/the-ear.md § Wrong audio).
+    if (track.captureVerification === "mismatch" && !track.nearestFinding) {
+      return "Its audio doesn't match the official preview — a fresh download is queued.";
+    }
+
     return track.nearestFinding ? (
       <>
         <MatchLine lead="Its audio came back as" match={track.nearestFinding} />

@@ -379,6 +379,10 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // tier (adminAuth only): a read the box's `fluncle-artist-sweep` cron drives with
   // its agent-scoped token to pick the next batch, the list_*_admin precedent.
   list_unresolved_artists: "admin",
+  // The capture-verification backfill's worklist (docs/the-ear.md § Wrong audio) — admin tier
+  // (agent-allowed read), the list_track_work precedent; the box's `fluncle-verify-captures` cron
+  // drains it. A pure read; it publishes nothing.
+  list_unverified_captures: "admin",
   merge_private_galaxy_progress: "private-session",
   // The REF-05 public → private preview-bucket migration — operator tier: a one-off,
   // destructive-capable data move (it can delete public R2 objects), so an agent
@@ -545,6 +549,12 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   update_subscription: "operator",
   update_track: "admin",
   update_track_social: "operator",
+  // The capture-verification write (docs/the-ear.md § Wrong audio) — agent tier (adminAuth only),
+  // the rank_catalogue precedent. It writes only derived/measurement columns and never certifies: a
+  // catalogue mismatch quarantines (a machine may rewind an uncertified row), a FINDING mismatch is
+  // only STAMPED for the operator's attention queue (the machine never rewinds a public finding).
+  // So the box's `fluncle-verify-captures` agent token drives it.
+  verify_capture: "admin",
 };
 
 describe("oRPC auth-tier coverage", () => {

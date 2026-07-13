@@ -73,6 +73,13 @@
 //     match (remix/live/sped-up/nightcore/radio-edit) is the real failure mode — the
 //     DURATION GUARD (accept only within tolerance of the finding's durationMs) + a
 //     de-rank of remix/live markers catch it → `unmatched` on a mismatch.
+//   - And a wrong-SONG match (same artist/label, right length, different track — the 005.9.9L
+//     defect) slips both, so every download passes THE FINGERPRINT GATE before storing: the
+//     captured bytes Chromaprint-matched against the track's ISRC-resolved official preview
+//     (docs/the-ear.md § Wrong audio; the matcher is fingerprint-match.ts, shared with the
+//     verify-captures backfill). Match → stored + `capture_verification = 'preview-match'`;
+//     mismatch → rejected + remembered in `source_audio_rejected`, next candidate; no
+//     preview / no fpcalc → stored + `'unverified'` (the honest abstain, never a block).
 //   - On a 403 that survives the sticky session, retry the download once with
 //     `--extractor-args youtube:player_client=tv,web_safari` before marking `failed`.
 //
@@ -83,6 +90,18 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+// THE FINGERPRINT VERIFICATION GATE (docs/the-ear.md § Wrong audio) — the shared, pure matcher
+// (also used by the historic backfill, verify-captures.ts) + the fpcalc/preview I/O helpers.
+import {
+  appendRejectedSource,
+  fetchPreviewFingerprint,
+  fpcalcFingerprint,
+  parseRejectedSources,
+  type RejectedSource,
+  rejectedShas,
+  rejectedVideoIds,
+  slidingWindowMatch,
+} from "./fingerprint-match";
 
 // ── Config (env; the shared ~/.fluncle-secrets.env supplies the secrets on the box) ──
 
@@ -117,14 +136,14 @@ const BATCH_CAP = Number(process.env.FLUNCLE_CAPTURE_BATCH_CAP ?? "4");
 // a same-length remaster is fine (Unit 4's shape-normalized log-mel tolerates it).
 const TOLERANCE_SEC = Number(process.env.FLUNCLE_CAPTURE_TOLERANCE_SEC ?? "3");
 const TOLERANCE_PCT = Number(process.env.FLUNCLE_CAPTURE_TOLERANCE_PCT ?? "0.03");
-// A candidate from a TRUSTED channel (the finding's label, a curated aggregator, or the
-// artist's own channel) is the right track even when its length runs OVER the master —
-// label/artist video uploads carry an intro sting + outro card the streaming master lacks.
-// So for trusted channels the guard widens ASYMMETRICALLY: stay tight below (a shorter
-// upload is a radio edit/snippet, a different arrangement), but allow up to this much
-// padding above. Bounded so a trusted channel's hour-long DJ set (same title) is still
-// rejected. See the "1991 - If Only" case (191s master, 214s label video).
-const TRUSTED_PAD_SEC = Number(process.env.FLUNCLE_CAPTURE_TRUSTED_PAD_SEC ?? "60");
+// CHANNEL TRUST NO LONGER WAIVES THE DURATION GUARD (docs/the-ear.md § Wrong audio). It once
+// widened the guard asymmetrically for a trusted channel (a +60s pad for a label/artist upload's
+// intro sting + outro card) — and that pad is exactly the hole 005.9.9L fell through: an Elevate
+// Records channel video whose AUDIO was a different song ran 48s over the master, inside the pad,
+// and was stored as the finding's capture. So the trusted pad is GONE: every candidate takes the
+// same symmetric guard, and trust now only helps RANK equals (below). The real identity check is
+// the fingerprint gate — a candidate's captured bytes are verified against the ISRC-resolved
+// official preview, whatever channel it came from. Nothing skips that gate.
 // How many ranked candidates to attempt per finding before giving up: the top hit is
 // sometimes DRM-locked or bot-walled, and a different upload of the same track downloads
 // fine, so walk down the ranked list (fast-failing errors keep the cost low).
@@ -158,9 +177,10 @@ export type CaptureFinding = {
   certified?: boolean;
   durationMs?: number;
   // The release label (already on the admin list DTO). A YouTube candidate whose channel
-  // name equals the label is almost certainly the correct upload — it lets the duration
-  // guard relax for that candidate. For self-released tracks the label IS the artist name,
-  // so this doubles as an artist-channel signal before `artist_socials` lands.
+  // name equals the label is almost certainly the correct upload — a trust RANKING signal
+  // (it never relaxes the duration guard; that waiver was the 005.9.9L hole). For
+  // self-released tracks the label IS the artist name, so this doubles as an artist-channel
+  // signal before `artist_socials` lands.
   label?: string;
   logId?: string;
   // The prior consecutive-failure count (the admin list DTO surfaces it when non-zero),
@@ -168,9 +188,16 @@ export type CaptureFinding = {
   sourceAudioFailures?: number;
   // The R2 key of the row's PRIOR capture (`<root>/<sha256>.<ext>`). Normally absent on a capture
   // worklist row (nothing captured yet), but a WRONG-AUDIO re-capture (docs/the-ear.md § Wrong
-  // audio) KEEPS it: its embedded sha256 is the memory that lets this sweep refuse to re-download
-  // the identical bad bytes. Present ⇒ reject any candidate whose bytes hash to that sha256.
+  // audio) KEEPS it: its embedded sha256 is the LEGACY single-sha memory (kept for backward compat
+  // with rows quarantined before the general memory shipped). Present ⇒ reject any candidate whose
+  // bytes hash to that sha256.
   sourceAudioKey?: string;
+  // THE GENERAL BAD-AUDIO MEMORY (docs/the-ear.md § Wrong audio) — the JSON array of sources this
+  // track's captures have been rejected from ({ videoId?, sha256, reason, at }, capped ~10). Two
+  // filters ride it: the `videoId` is the PRE-download filter (a known-bad candidate never costs
+  // proxy bytes again), the `sha256` the POST-download backstop (same audio, new id). Absent when
+  // the worklist DTO omitted it (nothing rejected yet). Surfaced by list_track_work?kind=capture.
+  sourceAudioRejected?: unknown;
   title?: string;
   trackId: string;
 };
@@ -284,8 +311,10 @@ export function normalizeChannelName(value: string): string {
 
 // Curated trusted D&B channels: labels + aggregators that release/host the real master and
 // do NOT upload a wrong VERSION under a bare "Artist - Title". A clean-title hit on one of
-// these (or on a channel named like the finding's label, or the artist's own channel) lets
-// the duration guard relax to allow the video intro/outro padding. Matched by normalized
+// these (or on a channel named like the finding's label, or the artist's own channel) ranks
+// ABOVE an equal untrusted upload — a tiebreak only; the duration guard stays symmetric for
+// every tier (docs/the-ear.md § Wrong audio), and identity is the fingerprint gate's job now.
+// Matched by normalized
 // channel NAME (resilient to new uploads) OR stable channel_id where known. This is domain
 // curation — extend it with the labels/aggregators you trust (verified channels only).
 const TRUSTED_CHANNEL_NAMES = new Set(
@@ -316,8 +345,8 @@ const TRUSTED_CHANNEL_IDS = new Set<string>([
   "UCr8oc-LOaApCXWLjL7vdsgw", // UKF Drum & Bass (verified via box probe 2026-07-07)
 ]);
 
-// 0 = untrusted, 1 = verified-only (a soft tiebreak, does NOT relax duration), 2 = trusted
-// (label match / curated allowlist / the artist's own channel — relaxes the duration guard).
+// 0 = untrusted, 1 = verified-only, 2 = trusted (label match / curated allowlist / the artist's
+// own channel). ALL tiers are ranking tiebreaks only — no tier relaxes the duration guard.
 export type TrustTier = 0 | 1 | 2;
 
 /**
@@ -349,39 +378,6 @@ export function classifyChannelTrust(
   return candidate.verified ? 1 : 0;
 }
 
-/**
- * Whether a candidate's length is acceptable given its channel trust. Untrusted candidates
- * take the strict symmetric guard (`durationWithinTolerance`). Trusted candidates (tier 2)
- * take an ASYMMETRIC guard: tight below (no radio edit / snippet) but padded above by
- * `trustedPadSec` (the label/artist video's intro sting + outro card) — bounded so an
- * hour-long DJ set on the same trusted channel is still rejected.
- */
-export function durationAcceptable(
-  candidateSec: number,
-  targetMs: number | undefined,
-  trust: TrustTier,
-  options: { tolerancePct: number; toleranceSec: number; trustedPadSec: number } = {
-    tolerancePct: TOLERANCE_PCT,
-    toleranceSec: TOLERANCE_SEC,
-    trustedPadSec: TRUSTED_PAD_SEC,
-  },
-): boolean {
-  if (trust < 2) {
-    return durationWithinTolerance(candidateSec, targetMs, options);
-  }
-  if (!Number.isFinite(candidateSec) || candidateSec <= 0) {
-    return false;
-  }
-  if (!targetMs || !Number.isFinite(targetMs) || targetMs <= 0) {
-    return false;
-  }
-  const targetSec = targetMs / 1000;
-  return (
-    candidateSec >= targetSec - options.toleranceSec &&
-    candidateSec <= targetSec + options.trustedPadSec
-  );
-}
-
 export type YtCandidate = {
   channel?: string;
   channelId?: string;
@@ -392,28 +388,29 @@ export type YtCandidate = {
 };
 
 /**
- * Pick the best YouTube candidate for a finding. Keep only candidates whose duration passes
- * the trust-aware guard (trusted channels tolerate video padding), then rank: CLEAN titles
- * before wrong-version markers (a trusted remix never beats an untrusted clean master), then
- * higher channel trust (the label/artist upload over a random re-host, even when the re-host
- * is closer in length — identity safety beats a few seconds of fidelity), then official/
- * `- Topic`, then verified, then closest duration. Returns the pick WITH its trust tier (the
- * caller re-uses it for the post-download length re-check) or null → the finding is `unmatched`.
+ * Pick the best YouTube candidate for a finding. Keep only candidates whose duration passes the
+ * SYMMETRIC guard (`durationWithinTolerance`) — trust no longer widens it (docs/the-ear.md § Wrong
+ * audio; the removed +60s trusted pad was the 005.9.9L hole) — then rank: CLEAN titles before
+ * wrong-version markers (a trusted remix never beats an untrusted clean master), then higher
+ * channel trust (the label/artist upload over a random re-host, even when the re-host is closer in
+ * length — identity safety beats a few seconds of fidelity), then official/`- Topic`, then
+ * verified, then closest duration. Trust is a RANKING signal only now; the fingerprint gate is the
+ * identity check. Returns the pick WITH its trust tier (a soft tiebreak the caller carries) or
+ * null → `unmatched`.
  */
 export function rankCandidates(
   candidates: readonly YtCandidate[],
   context: { artistYoutubeChannelIds?: readonly string[]; durationMs?: number; label?: string },
-  options: { tolerancePct: number; toleranceSec: number; trustedPadSec: number } = {
+  options: { tolerancePct: number; toleranceSec: number } = {
     tolerancePct: TOLERANCE_PCT,
     toleranceSec: TOLERANCE_SEC,
-    trustedPadSec: TRUSTED_PAD_SEC,
   },
 ): { candidate: YtCandidate; trust: TrustTier }[] {
   const targetSec = context.durationMs && context.durationMs > 0 ? context.durationMs / 1000 : 0;
   const scored = candidates
     .map((candidate) => ({ candidate, trust: classifyChannelTrust(candidate, context) }))
-    .filter(({ candidate, trust }) =>
-      durationAcceptable(candidate.durationSec, context.durationMs, trust, options),
+    .filter(({ candidate }) =>
+      durationWithinTolerance(candidate.durationSec, context.durationMs, options),
     )
     .map(({ candidate, trust }) => ({
       candidate,
@@ -444,7 +441,7 @@ export function rankCandidates(
 export function pickCandidate(
   candidates: readonly YtCandidate[],
   context: { artistYoutubeChannelIds?: readonly string[]; durationMs?: number; label?: string },
-  options?: { tolerancePct: number; toleranceSec: number; trustedPadSec: number },
+  options?: { tolerancePct: number; toleranceSec: number },
 ): { candidate: YtCandidate; trust: TrustTier } | null {
   return rankCandidates(candidates, context, options)[0] ?? null;
 }
@@ -510,6 +507,56 @@ export function contentTypeForExt(ext: string): string {
   };
 
   return map[cleanExt] ?? "application/octet-stream";
+}
+
+/**
+ * THE PRE-DOWNLOAD FILTER (docs/the-ear.md § Wrong audio): drop every ranked candidate whose
+ * video id is already in the bad-audio memory, THEN take the attempt budget — so a known-bad
+ * candidate never costs proxy bytes again, and `DOWNLOAD_ATTEMPTS` is spent only on uploads that
+ * could actually be new audio. Order is load-bearing: filter first, budget second (a budget cut
+ * first would let remembered ids eat attempt slots).
+ */
+export function filterRejectedCandidates<T extends { candidate: { id: string } }>(
+  ranked: readonly T[],
+  rejectedIds: ReadonlySet<string>,
+  attempts: number,
+): T[] {
+  return ranked.filter((entry) => !rejectedIds.has(entry.candidate.id)).slice(0, attempts);
+}
+
+/** The capture-verification verdict for one downloaded file against a preview fingerprint. */
+export type CaptureVerdict = "match" | "mismatch" | "no-reference";
+
+/**
+ * Verify a downloaded capture against the track's official-preview fingerprint (docs/the-ear.md §
+ * Wrong audio). `previewFp` is the ISRC-resolved reference, fingerprinted once per track; null when
+ * the track has no preview source OR fpcalc is absent — in which case the gate ABSTAINS
+ * (`no-reference`), never blocks. Otherwise the capture is fingerprinted and slid against the
+ * preview: a contained match ⇒ `match`, a clear miss ⇒ `mismatch`, an inconclusive/too-short
+ * comparison ⇒ `no-reference` (abstain, never a false accusation). The caller maps `match` →
+ * `preview-match`, `no-reference` → `unverified`, and rejects the candidate on `mismatch`.
+ */
+export function verifyCaptureFile(
+  previewFp: number[] | null,
+  captureFilePath: string,
+): CaptureVerdict {
+  if (previewFp === null) {
+    return "no-reference";
+  }
+
+  const captureFp = fpcalcFingerprint(captureFilePath);
+
+  if (captureFp === null) {
+    return "no-reference";
+  }
+
+  const result = slidingWindowMatch(previewFp, captureFp);
+
+  if (result === null) {
+    return "no-reference";
+  }
+
+  return result.match ? "match" : "mismatch";
 }
 
 // ── MIRROR of apps/web/src/lib/server/aws-sigv4.ts — keep in step ────────────
@@ -817,9 +864,9 @@ async function captureFinding(finding: CaptureFinding): Promise<FindingOutcome> 
   const dir = mkdtempSync(join(tmpdir(), "fluncle-capture-"));
 
   try {
-    // Search candidates WITHOUT downloading, then RANK them whose length passes the
-    // trust-aware guard (a trusted label/artist channel tolerates video intro/outro padding;
-    // wrong-version titles de-rank) — avoids downloading a wrong-length file.
+    // Search candidates WITHOUT downloading, then RANK the ones that pass the SYMMETRIC duration
+    // guard (trust no longer widens it; wrong-version titles de-rank) — avoids downloading a
+    // wrong-length file. Trust is a ranking tiebreak only now; identity is the fingerprint gate.
     const candidates = runYtSearch(proxyUrl, query);
     const ranked = rankCandidates(candidates, {
       artistYoutubeChannelIds: finding.artistYoutubeChannelIds,
@@ -839,23 +886,45 @@ async function captureFinding(finding: CaptureFinding): Promise<FindingOutcome> 
       return "unmatched";
     }
 
-    // The bad-audio memory: on a WRONG-AUDIO re-capture the row kept its prior key, whose sha256
-    // is the exact bytes The Ear flagged as wrong (docs/the-ear.md § Wrong audio). Reject any
-    // candidate that hashes to it, so the re-capture cannot re-download the same mistaken master
-    // and is forced to find a DIFFERENT upload — or, if none exists, land honestly `unmatched`.
-    const rejectHash = extractSourceAudioSha256(finding.sourceAudioKey);
+    // ── THE BAD-AUDIO MEMORY (docs/the-ear.md § Wrong audio) ──────────────────────────────────
+    // Two layers. The GENERAL memory (`source_audio_rejected`) drives a videoId PRE-download
+    // filter + a sha256 POST-download backstop. The LEGACY single-sha (embedded in a kept
+    // `source_audio_key`) is folded into the same backstop, so a row quarantined before the
+    // general memory shipped still refuses its known-bad bytes. `memoryDirty` tracks whether this
+    // run added a rejection, so the terminal write persists the grown memory exactly once.
+    let rejectedMemory: RejectedSource[] = parseRejectedSources(finding.sourceAudioRejected);
+    let memoryDirty = false;
+    const rejectedIds = rejectedVideoIds(rejectedMemory);
+    const knownBadShas = rejectedShas(rejectedMemory);
+    const legacyRejectHash = extractSourceAudioSha256(finding.sourceAudioKey);
+    if (legacyRejectHash) {
+      knownBadShas.add(legacyRejectHash);
+    }
 
-    // Walk the ranked candidates: download the best one, but fall through a DRM-locked or
-    // bot-walled hit — OR the known wrong audio — to the next-ranked candidate (a different upload
-    // of the same track is usually pullable). On a 403 surviving the sticky session, retry once
-    // with the tv/web_safari player clients first. A non-recoverable error aborts (→ `failed`).
-    let downloaded: { ext: string; path: string } | undefined;
-    let chosen: { candidate: YtCandidate; trust: TrustTier } | undefined;
-    let bytes: Uint8Array | undefined;
-    let digest: string | undefined;
+    // PRE-DOWNLOAD FILTER: a candidate whose video id is already remembered as bad never costs
+    // proxy bytes again. Applied before the attempt budget, so DOWNLOAD_ATTEMPTS is spent only on
+    // candidates that could actually be new audio.
+    const attempts = filterRejectedCandidates(ranked, rejectedIds, DOWNLOAD_ATTEMPTS);
+
+    // ── THE REFERENCE ────────────────────────────────────────────────────────────────────────
+    // The ISRC-resolved official 30s preview, fingerprinted ONCE per track (not per candidate).
+    // null ⇒ the track has NO preview source, or fpcalc is absent — the gate then ABSTAINS on
+    // whatever downloads (stamped `unverified`), never blocking a track that has no reference.
+    // The preview is a verification REFERENCE only: never a vector, never a stored analysis input.
+    const previewFp = await fetchPreviewFingerprint({
+      apiBaseUrl: API_BASE_URL,
+      apiToken: API_TOKEN,
+      idOrLogId: trackId,
+    });
+
+    // Walk the (pre-filtered) candidates: download → known-bad sha backstop → real-duration
+    // re-check → THE FINGERPRINT GATE. A verified MATCH (or an abstain, when there is no
+    // reference) is stored + stamped; a fingerprint MISMATCH rejects the candidate, remembers it,
+    // and falls through to the next upload. A DRM/bot-walled hit is skipped (recoverable); a
+    // non-recoverable error aborts (→ `failed`).
     let lastError: unknown;
-    let rejectedKnownBad = false;
-    for (const candidate of ranked.slice(0, DOWNLOAD_ATTEMPTS)) {
+    let sawRejection = false;
+    for (const candidate of attempts) {
       try {
         let file: { ext: string; path: string };
         try {
@@ -871,20 +940,77 @@ async function captureFinding(finding: CaptureFinding): Promise<FindingOutcome> 
         const fileBytes = new Uint8Array(readFileSync(file.path));
         const fileDigest = createHash("sha256").update(fileBytes).digest("hex");
 
-        if (rejectHash && fileDigest === rejectHash) {
-          // The identical bytes already flagged as wrong audio. Skip this upload, clear the file
-          // so the next iteration's read cannot pick it up, and try the next candidate.
+        // KNOWN-BAD BYTES (the deep backstop): the same wrong audio re-uploaded under a new id.
+        if (knownBadShas.has(fileDigest)) {
           log(`candidate ${candidate.candidate.id} is the known wrong audio — trying next`);
           rmSync(file.path, { force: true });
-          rejectedKnownBad = true;
+          sawRejection = true;
           continue;
         }
 
-        downloaded = file;
-        chosen = candidate;
-        bytes = fileBytes;
-        digest = fileDigest;
-        break;
+        // Belt-and-suspenders: confirm the REAL downloaded duration passes the SYMMETRIC guard
+        // (the search value can lie / point at a different manifest). A wrong-LENGTH file is a
+        // plain miss, not a same-recording claim, so it is skipped but NOT remembered.
+        const realDurationSec = probeDurationSec(file.path);
+        if (!durationWithinTolerance(realDurationSec, finding.durationMs)) {
+          rmSync(file.path, { force: true });
+          continue;
+        }
+
+        // ── THE FINGERPRINT GATE ──────────────────────────────────────────────────────────────
+        const verdict = verifyCaptureFile(previewFp, file.path);
+
+        if (verdict === "mismatch") {
+          // WRONG AUDIO: the captured bytes do not match the ISRC-resolved preview (the 005.9.9L
+          // failure). Remember the source — videoId (PRE-download filter) + sha (backstop) — so it
+          // never costs bytes again, and fall through to the next upload.
+          log(`candidate ${candidate.candidate.id} failed fingerprint verification — trying next`);
+          rejectedMemory = appendRejectedSource(rejectedMemory, {
+            at: new Date().toISOString(),
+            reason: "fingerprint-mismatch",
+            sha256: fileDigest,
+            videoId: candidate.candidate.id,
+          });
+          memoryDirty = true;
+          knownBadShas.add(fileDigest);
+          rmSync(file.path, { force: true });
+          sawRejection = true;
+          continue;
+        }
+
+        // MATCH → `preview-match`; NO-REFERENCE → `unverified` (the honest abstain). Store the
+        // bytes + stamp the verdict provenance in the same write.
+        const verification = verdict === "match" ? "preview-match" : "unverified";
+        const key = buildSourceAudioKey(keyRoot, fileDigest, file.ext);
+
+        await r2Put(key, fileBytes, contentTypeForExt(file.ext));
+
+        // The key + done + the captured stamp + THE METER + THE VERIFICATION PROVENANCE.
+        // Clobber-safe enrichment trigger — for a CERTIFIED finding, re-queue when the BPM is
+        // missing OR the row was analyzed from a preview (closing the capture→enrich race; a
+        // catalogue row has no enrichment and is skipped). `sourceAudioBytes` is the billed size,
+        // knowable only HERE. `sourceAudioAttemptedAt` is stamped on success too (the budget's
+        // rolling-24h ledger is a range seek on it). If this run REJECTED an earlier candidate,
+        // the grown memory rides this write so it is never lost.
+        const now = new Date().toISOString();
+        const update: Record<string, unknown> = {
+          captureStatus: "done",
+          captureVerification: verification,
+          captureVerifiedAt: now,
+          sourceAudioAttemptedAt: now,
+          sourceAudioBytes: fileBytes.byteLength,
+          sourceAudioCapturedAt: now,
+          sourceAudioKey: key,
+        };
+        if (memoryDirty) {
+          update.sourceAudioRejected = JSON.stringify(rejectedMemory);
+        }
+        if (shouldReenrichAfterCapture(finding.certified, finding.bpm, finding.analyzedFrom)) {
+          update.enrichmentStatus = "pending";
+        }
+        await patchTrack(trackId, update);
+
+        return "done";
       } catch (error) {
         lastError = error;
         if ((error as { isRecoverable?: boolean }).isRecoverable) {
@@ -895,65 +1021,24 @@ async function captureFinding(finding: CaptureFinding): Promise<FindingOutcome> 
       }
     }
 
-    if (!downloaded || !chosen || !bytes || !digest) {
-      // Every downloadable candidate was the known wrong audio → a wrong-audio dead end: the only
-      // uploads that match are the mistaken master, so there is no right audio to find. Land it
-      // `unmatched` (terminal — the capture queue never re-burns it), which also lifts it out of
-      // the re-capture loop that would otherwise re-download the same bad bytes every tick.
-      if (rejectedKnownBad && !lastError) {
-        await patchTrack(trackId, {
-          captureStatus: "unmatched",
-          sourceAudioAttemptedAt: new Date().toISOString(),
-        });
-        return "unmatched";
-      }
-
-      throw lastError ?? new Error("no downloadable candidate");
-    }
-
-    // Belt-and-suspenders: confirm the REAL downloaded duration passes the guard too (the
-    // search value can lie / point at a different manifest). Re-use the chosen candidate's
-    // trust tier so a trusted padded upload isn't rejected here after passing the pick.
-    const realDurationSec = probeDurationSec(downloaded.path);
-    if (!durationAcceptable(realDurationSec, finding.durationMs, chosen.trust)) {
-      // Unmatched AFTER a download — the most expensive miss there is (the bytes were pulled
-      // through the metered proxy and then thrown away). It absolutely counts as an attempt.
-      await patchTrack(trackId, {
+    // Nothing stored. Either every fresh candidate was WRONG AUDIO (known-bad or a fingerprint
+    // mismatch) or wrong-length, or the pre-filter left nothing to try. Land `unmatched` (terminal
+    // — the queue never re-burns it; a fresh finding still jumps it newest-first) and PERSIST the
+    // grown memory so the next re-capture skips the rejected sources. A genuine download error
+    // (nothing was rejected) rethrows to the `failed` path instead.
+    if (sawRejection || rejectedIds.size > 0 || !lastError) {
+      const update: Record<string, unknown> = {
         captureStatus: "unmatched",
         sourceAudioAttemptedAt: new Date().toISOString(),
-      });
+      };
+      if (memoryDirty) {
+        update.sourceAudioRejected = JSON.stringify(rejectedMemory);
+      }
+      await patchTrack(trackId, update);
       return "unmatched";
     }
 
-    const key = buildSourceAudioKey(keyRoot, digest, downloaded.ext);
-
-    await r2Put(key, bytes, contentTypeForExt(downloaded.ext));
-
-    // Write back: the key + done + the captured stamp + THE METER. Clobber-safe enrichment
-    // trigger — for a CERTIFIED finding, re-queue when the BPM is missing OR the row was analyzed
-    // from a preview (not full audio), closing the capture→enrich race (see
-    // shouldReenrichAfterCapture; a catalogue row has no enrichment to re-queue and is skipped).
-    //
-    // `sourceAudioBytes` is what the operator is actually billed for, and it is knowable only
-    // HERE — the queue holds metadata, not media, so there is no size to consult before the
-    // download. It is the whole reason the capture budget's byte cap is a between-batches
-    // backstop rather than a pre-flight guarantee. `sourceAudioAttemptedAt` is stamped on the
-    // success too (not only on failure): the budget's rolling-24h ledger is a range seek on
-    // that column, so a success that did not stamp it would be a download the meter never saw.
-    const now = new Date().toISOString();
-    const update: Record<string, unknown> = {
-      captureStatus: "done",
-      sourceAudioAttemptedAt: now,
-      sourceAudioBytes: bytes.byteLength,
-      sourceAudioCapturedAt: now,
-      sourceAudioKey: key,
-    };
-    if (shouldReenrichAfterCapture(finding.certified, finding.bpm, finding.analyzedFrom)) {
-      update.enrichmentStatus = "pending";
-    }
-    await patchTrack(trackId, update);
-
-    return "done";
+    throw lastError;
   } catch (error) {
     // A yt-dlp / proxy / R2 error → failed (retriable under backoff). ACCUMULATE the
     // consecutive-failure count + stamp the attempt: the capture queue holds a `failed`

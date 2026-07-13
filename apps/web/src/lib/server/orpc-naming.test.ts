@@ -96,6 +96,13 @@ const APPROVED_VERBS = new Set<string>([
   // cues and push it to the live platform — no re-upload) — added deliberately with the
   // `resync_mixtape_youtube` + `resync_mixtape_mixcloud` ops (both server-side).
   "resync",
+  // `verify` (check a stored artifact against a REFERENCE and record the verdict) — added
+  // deliberately with the capture-verification `verify_capture` op (docs/the-ear.md § Wrong
+  // audio): the captured full song is fingerprinted against the track's ISRC-resolved official
+  // preview to catch wrong-audio captures. Genuinely new: not `enrich` (derive an entity's own
+  // attributes from its own audio/facts), not `rank` (order a corpus against taste), not `resolve`
+  // (fix an external identity) — it ADJUDICATES a captured artifact against ground truth.
+  "verify",
   // Concrete actions already in the live registry the prose set doesn't spell out
   // verbatim. Adding a genuinely new verb is a deliberate edit here (with a reason),
   // which is exactly the gate this test exists to enforce.
