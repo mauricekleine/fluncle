@@ -1,5 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { type InValue } from "@libsql/client/web";
+import {
+  type UserPreferences,
+  UserPreferencesInputSchema,
+  UserPreferencesSchema,
+} from "@fluncle/contracts/orpc";
 import { parseSetParam, parseTasteParam, serializeSet, serializeTaste } from "../mix-set";
 import { parseArtistsJson } from "./artists";
 import { getDb, typedRow, typedRows } from "./db";
@@ -58,6 +63,10 @@ type SavedSetRow = {
 
 type SetTitleRow = {
   title: string;
+};
+
+type PreferencesRow = {
+  preferences: string;
 };
 
 type SubmissionRow = {
@@ -646,6 +655,84 @@ function rowToItem(row: SavedSetRow): SavedSetItem {
   };
 }
 
+// ── User preferences (the cross-device settings store) ────────────────────────
+// One row per user holding the whole `UserPreferences` object as JSON. The account
+// NEVER gates a feature: every preference also has a device-local home, so this is
+// purely the SYNCED copy for a signed-in user. Extensible by construction — a new
+// preference is a field on the shared `UserPreferences` schema, no migration.
+
+/**
+ * Read a user's stored preferences, tolerant of a missing or corrupt blob. A row
+ * that is absent, not JSON, or holds an out-of-range value resolves to an EMPTY
+ * object — the read never throws, so a bad blob degrades to "nothing set" (the
+ * device/default value wins) rather than a 500. Parsed through the LENIENT
+ * `UserPreferencesSchema` (unknown keys stripped), so a blob a newer deploy wrote
+ * mid-rollout still yields its known fields.
+ */
+async function readStoredPreferences(userId: string): Promise<UserPreferences> {
+  const result = await (
+    await getDb()
+  ).execute({
+    args: [userId],
+    sql: `select preferences from user_preferences where user_id = ? limit 1`,
+  });
+  const row = typedRow<PreferencesRow>(result.rows);
+
+  if (!row) {
+    return {};
+  }
+
+  try {
+    const parsed = UserPreferencesSchema.safeParse(JSON.parse(row.preferences));
+
+    return parsed.success ? parsed.data : {};
+  } catch {
+    // Not valid JSON — treat a corrupt blob as empty, never throw on read.
+    return {};
+  }
+}
+
+/** The signed-in user's stored preferences (`{}` when none set or the blob is unreadable). */
+export async function getUserPreferences(
+  user: PublicUser,
+): Promise<{ ok: true; preferences: UserPreferences }> {
+  return { ok: true, preferences: await readStoredPreferences(user.id) };
+}
+
+/**
+ * Merge a partial preferences patch into the user's stored object. The body is the
+ * closed `UserPreferencesInputSchema` (`.strict()`, so an unknown key is a 400); a
+ * field it carries is written, a field it omits is preserved from the current blob,
+ * so preferences update INDEPENDENTLY. Upserts one row per user and echoes the full
+ * merged object.
+ */
+export async function updateUserPreferences(
+  user: PublicUser,
+  body: unknown,
+): Promise<Response | { ok: true; preferences: UserPreferences }> {
+  const parsed = UserPreferencesInputSchema.safeParse(body);
+
+  if (!parsed.success) {
+    return jsonError(400, "invalid_request", "Invalid preferences");
+  }
+
+  const merged: UserPreferences = { ...(await readStoredPreferences(user.id)), ...parsed.data };
+  const now = new Date().toISOString();
+
+  await (
+    await getDb()
+  ).execute({
+    args: [user.id, JSON.stringify(merged), now],
+    sql: `insert into user_preferences (user_id, preferences, updated_at)
+      values (?, ?, ?)
+      on conflict(user_id) do update set
+        preferences = excluded.preferences,
+        updated_at = excluded.updated_at`,
+  });
+
+  return { ok: true, preferences: merged };
+}
+
 export async function listUserSubmissions(
   user: PublicUser,
 ): Promise<{ ok: true; submissions: PrivateSubmissionItem[] }> {
@@ -683,6 +770,7 @@ export async function exportAccountData(user: PublicUser): Promise<{
     account: PublicUser;
     generatedAt: string;
     id: string;
+    preferences: UserPreferences;
     privacyNotes: string[];
     progress: GalaxyProgressResult;
     savedFindings: SavedFindingItem[];
@@ -694,11 +782,12 @@ export async function exportAccountData(user: PublicUser): Promise<{
   const requestedAt = new Date().toISOString();
   const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
   const exportId = randomUUID();
-  const [progress, saved, sets, submissions] = await Promise.all([
+  const [progress, saved, sets, submissions, preferences] = await Promise.all([
     getGalaxyProgress(user),
     listSavedFindings(user),
     listSavedSets(user),
     listUserSubmissions(user),
+    getUserPreferences(user),
   ]);
 
   await (
@@ -715,6 +804,7 @@ export async function exportAccountData(user: PublicUser): Promise<{
       account: user,
       generatedAt: requestedAt,
       id: exportId,
+      preferences: preferences.preferences,
       privacyNotes: [
         "I include your signed-in submissions here, and if you delete your account I keep them as anonymized review history.",
         "Discord and Resend processor copies may follow their own retention windows.",
@@ -776,6 +866,7 @@ export async function deleteAccount(user: PublicUser): Promise<{
   summary: {
     credentials: string;
     galaxyProgress: string;
+    preferences: string;
     savedFindings: string;
     savedSets: string;
     sessions: string;
@@ -795,6 +886,7 @@ export async function deleteAccount(user: PublicUser): Promise<{
   const summary = {
     credentials: "deleted",
     galaxyProgress: "deleted",
+    preferences: "deleted",
     savedFindings: "deleted",
     savedSets: "deleted",
     sessions: "revoked",
@@ -837,6 +929,10 @@ export function accountDeletionStatements({
     {
       args: [userId],
       sql: `delete from user_saved_sets where user_id = ?`,
+    },
+    {
+      args: [userId],
+      sql: `delete from user_preferences where user_id = ?`,
     },
     {
       args: [userId],

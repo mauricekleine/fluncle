@@ -21,6 +21,7 @@ import { Button } from "@fluncle/ui/components/button";
 import { siteUrl } from "@/lib/fluncle-links";
 import { formatAlbumDuration, formatDateLong, formatDuration } from "@/lib/format";
 import { jsonLdScript } from "@/lib/json-ld";
+import { formatKey, useKeyNotation } from "@/lib/key-notation";
 import { isLogPageParam } from "@/lib/log-page-param";
 import { GraphLink } from "@/components/graph-link";
 import {
@@ -325,6 +326,10 @@ export const Route = createFileRoute("/log/$logId")({
 
 function LogPage() {
   const data = Route.useLoaderData();
+  // The app-wide key-notation preference (device-local, profile-synced when signed
+  // in). SSR + first paint render the default "scales" verbatim; the stored/profile
+  // choice is adopted post-mount, so there is no hydration mismatch.
+  const { notation } = useKeyNotation();
 
   if (data.status !== "found") {
     if (data.status === "found-mixtape") {
@@ -458,7 +463,7 @@ function LogPage() {
                   Key
                 </Link>
               </dt>
-              <dd>{track.key}</dd>
+              <dd>{formatKey(track.key, notation)}</dd>
             </div>
           ) : undefined}
           {/* The graph, made walkable. The record and the imprint are entities with pages of

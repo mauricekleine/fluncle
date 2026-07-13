@@ -9,6 +9,7 @@
 import { oc } from "@orpc/contract";
 import * as z from "zod";
 import { GalaxyProgressSchema } from "./me-galaxy";
+import { UserPreferencesSchema } from "./me-preferences";
 import { SavedFindingSchema } from "./me-saved";
 import { PublicUserSchema } from "./_shared";
 
@@ -152,6 +153,7 @@ export const exportPrivateAccountData = oc
         account: PublicUserSchema,
         generatedAt: z.string(),
         id: z.string(),
+        preferences: UserPreferencesSchema,
         privacyNotes: z.array(z.string()),
         progress: GalaxyProgressSchema,
         savedFindings: z.array(SavedFindingSchema),
