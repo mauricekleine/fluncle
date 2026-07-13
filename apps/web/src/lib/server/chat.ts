@@ -351,12 +351,13 @@ export function parseChatRequest(body: unknown): ChatMessage[] | null {
   return parsed.success ? parsed.data.messages : null;
 }
 
-/** The turn history as AI SDK model messages, with the grounding system prompt on the front. */
+/**
+ * The turn history as AI SDK model messages. The grounding system prompt does NOT ride here:
+ * AI SDK 7 rejects `role: "system"` in `messages` outright — it goes through `streamText`'s
+ * top-level `instructions` option instead.
+ */
 function toModelMessages(messages: ChatMessage[]): ModelMessage[] {
-  return [
-    { content: FLUNCLE_CHAT_SYSTEM_PROMPT, role: "system" },
-    ...messages.map((message) => ({ content: message.content, role: message.role })),
-  ];
+  return messages.map((message) => ({ content: message.content, role: message.role }));
 }
 
 /** The chat model id — `OPENROUTER_CHAT_MODEL`, or the family the search tier trusts. */
@@ -387,6 +388,7 @@ export async function streamChat(
 
   const result = streamText({
     abortSignal: signal,
+    instructions: FLUNCLE_CHAT_SYSTEM_PROMPT,
     messages: toModelMessages(messages),
     model: openrouter(model),
     stopWhen: stepCountIs(MAX_STEPS),
