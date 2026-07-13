@@ -30,6 +30,7 @@ const iso = (at: number) => new Date(at).toISOString();
 
 const EMPTY_INPUTS: AttentionInputs = {
   artistReviews: [],
+  captureSuspects: [],
   clipPosts: [{ scheduledFor: iso(NOW + HOUR), status: "scheduled" }],
   clips: [],
   labelReviews: [],
@@ -348,6 +349,46 @@ describe("deriveAttentionItems", () => {
       href: "/admin/labels",
       kind: "open",
       label: "Rule on it",
+    });
+  });
+
+  // The capture-verification backfill's finding mismatches (docs/the-ear.md § Wrong audio).
+  // A machine never rewinds a public finding, so a fingerprint mismatch on one becomes a queue
+  // row for the operator's ears — pre-evidenced, deep-linked to the catalogue workstation where
+  // the flag_wrong_audio verdict lives. Never urgent: the wrong bytes are inaudible on every
+  // public surface (the site/video/radio all play the official preview).
+  it("rows each capture suspect, deep-linked to the catalogue workstation, never a deadline", () => {
+    const items = deriveAttentionItems(
+      {
+        ...EMPTY_INPUTS,
+        captureSuspects: [
+          {
+            anchorAt: iso(NOW - 2 * DAY),
+            artists: ["Elevate Artist"],
+            logId: "005.9.9L",
+            title: "The Wrong Capture",
+            trackId: "trk_suspect",
+          },
+        ],
+      },
+      NOW,
+    );
+
+    expect(items).toHaveLength(1);
+    expect(items[0]).toEqual({
+      anchorAt: iso(NOW - 2 * DAY),
+      href: "/admin/catalogue?lens=quarantine",
+      id: "capture-suspect:trk_suspect",
+      logId: "005.9.9L",
+      source: "capture-suspect",
+      title: "Elevate Artist — The Wrong Capture",
+      trackId: "trk_suspect",
+    });
+    expect(items[0]?.deadlineAt).toBeUndefined();
+    expect(primaryFor(items[0] as AttentionItem, NOW)).toEqual({
+      href: "/admin/catalogue?lens=quarantine",
+      kind: "open",
+      label: "Check it",
     });
   });
 

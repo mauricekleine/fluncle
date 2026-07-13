@@ -1,0 +1,17 @@
+[Unit]
+Description=fluncle-verify-captures timer — fingerprint-verify the historic captures every 30m on the rave-02 host (not the Hermes gateway)
+
+[Timer]
+# First tick shortly after boot (staggered at 17min, off the other sweeps' minutes), then every
+# 30m. One tick verifies a bounded batch (default 20 rows), so the ~590 historic captures drain
+# in about a day of ticks and the timer then idles: a fully-verified archive makes every tick a
+# single empty worklist read (a stamped row leaves the `capture_verification IS NULL` set — the
+# resumable-by-construction shape). New captures are verified INLINE by the capture sweep's
+# ingest gate, so this timer only ever mops up history + anything the gate abstained on before
+# fpcalc landed. Persistent catches up a tick missed across a reboot.
+OnBootSec=17min
+OnUnitActiveSec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

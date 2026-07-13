@@ -133,6 +133,59 @@ export async function setTrackDismissedCommand(
   });
 }
 
+// ── Capture verification (`list_unverified_captures` / `verify_capture`) ─────
+//
+// The historic backfill's two halves (docs/the-ear.md § Wrong audio). The box's
+// `fluncle-verify-captures` sweep does the FINGERPRINTING (fpcalc against the official preview,
+// off the private R2 bytes) and reports plain verdicts; the Worker owns the ROUTING (stamp /
+// quarantine / attention item). The CLI is the same thin pacer shape as `rank`/`crawl`.
+
+/** One captured row still awaiting fingerprint verification (the backfill worklist). */
+export type CaptureVerifyItem = {
+  artists: string[];
+  certified: boolean;
+  isrc: null | string;
+  logId: null | string;
+  sourceAudioKey: string;
+  title: string;
+  trackId: string;
+};
+
+/**
+ * The verification backfill's worklist. `fluncle admin catalogue verify --queue [--limit <n>]`.
+ * Captured rows (findings + catalogue) whose bytes were never checked against their preview;
+ * a verified row leaves the set, so the read is resumable by construction.
+ */
+export async function listUnverifiedCapturesCommand(options: {
+  limit?: string;
+}): Promise<{ tracks: CaptureVerifyItem[] }> {
+  const params = new URLSearchParams();
+
+  if (options.limit) {
+    params.set("limit", options.limit);
+  }
+
+  return adminApiGet<{ ok: true; tracks: CaptureVerifyItem[] }>(
+    `/api/admin/catalogue/captures/unverified?${params.toString()}`,
+  );
+}
+
+/**
+ * Record one capture's fingerprint verdict and let the server ROUTE it. `fluncle admin catalogue
+ * verify <trackId> --verdict match|mismatch|no-preview`. A `match` stamps `preview-match`;
+ * `no-preview` stamps `unverified`; a `mismatch` quarantines a catalogue row or raises the
+ * operator attention item on a finding (never an auto-rewind). Returns the action taken.
+ */
+export async function verifyCaptureCommand(
+  trackId: string,
+  verdict: "match" | "mismatch" | "no-preview",
+): Promise<{ action: string }> {
+  return adminApiPost<{ action: string; ok: true }>("/api/admin/catalogue/captures/verify", {
+    trackId,
+    verdict,
+  });
+}
+
 // ── The crawler (`crawl_catalogue` / `get_crawl_status`) ─────────────────────
 //
 // The Worker holds the vendor budget, does the MusicBrainz walk, and owns the durable

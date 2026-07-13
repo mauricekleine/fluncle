@@ -430,6 +430,9 @@ const AUTOMATION_CRONS: CronDef[] = [
   { cadenceMs: 60 * 60_000, match: "label-images", service: "cron.label-images" }, // label logos — resolve one bounded batch of pending labels per tick
   { cadenceMs: 60 * 60_000, match: "artist-sweep", service: "cron.artist-sweep" },
   { cadenceMs: 10 * 60_000, match: "social-capture", service: "cron.social-capture" },
+  // `verify-captures` (a longer match) claims the fluncle-verify-captures dir before the bare
+  // `capture` token can (claimCronDirs is longest-match-first), exactly like social-capture.
+  { cadenceMs: 30 * 60_000, match: "verify-captures", service: "cron.verify-captures" },
   // `studio-clip` (11 chars) is checked before `clip-drip` (9) by longest-match-first,
   // and neither token is a substring of the other's `fluncle-…` header — so each claims
   // its own dir cleanly.

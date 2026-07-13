@@ -197,6 +197,27 @@ export const tracks = sqliteTable(
     //   - quarantine-cleared: the operator's `clear_wrong_audio` override — "this capture is fine".
     //     A sticky state the sweep never re-quarantines; its kept audio re-embeds and re-ranks.
     captureStatus: text("capture_status").notNull().default("pending"),
+    // THE CAPTURE VERIFICATION VERDICT (docs/the-ear.md § Wrong audio). The captured full song is
+    // fingerprint-checked (Chromaprint) against the track's ISRC-resolved OFFICIAL 30s preview at
+    // ingest — the one reference that is the RIGHT recording by construction, since every human
+    // surface plays it, not the captured file. This column records that verdict, so a wrong
+    // capture (inaudible everywhere but poisoning analysis + the MuQ ranking space) can be caught.
+    // Enum:
+    //   - preview-match: the captured audio matched the preview (same recording). The good case.
+    //   - unverified: the gate ABSTAINED — the track has no preview source to check against, or
+    //     fpcalc was absent/failed. Capture proceeded; this is an honest "no reference", not a pass.
+    //   - mismatch: the historic backfill (verify-captures) found a FINDING whose captured audio does
+    //     NOT match its preview. NOT auto-rewound (a machine does not rewind a public finding) — it
+    //     raises an /admin attention item; the operator rules with `flag_wrong_audio`. Only ever set
+    //     on a FINDING: a CATALOGUE mismatch is quarantined (capture_status = 'wrong-audio') instead.
+    //   - null: pre-gate legacy (captured before verification shipped), or a fresh row not yet checked.
+    // Machine-measured provenance like `analyzed_from`: internal, never a public surface, never a
+    // lastmod bump. A fresh (re-)capture clears it so the new bytes are re-verified.
+    captureVerification: text("capture_verification"),
+    // ISO of the last capture-verification check (paired with `capture_verification`). Null until
+    // verified. The historic backfill (verify-captures) never re-checks a stamped row, so this
+    // doubles as its resume watermark alongside the null-verification predicate.
+    captureVerifiedAt: text("capture_verified_at"),
     catalogueRankCorpus: text("catalogue_rank_corpus"),
     catalogueRankedAt: text("catalogue_ranked_at"),
     // THE OPERATOR'S "NOT FOR ME" (docs/the-ear.md § The operator's actions). An ISO stamp,
@@ -302,6 +323,16 @@ export const tracks = sqliteTable(
     // The R2 key of the captured full song (`<logId>/<sha256>.<ext>` in the private
     // `fluncle-source-audio` bucket). PRESENCE = captured. Null until then.
     sourceAudioKey: text("source_audio_key"),
+    // THE BAD-AUDIO MEMORY (docs/the-ear.md § Wrong audio) — a JSON array of the sources this
+    // track's captures have been REJECTED from, capped at the newest ~10 ({ videoId?, sha256,
+    // reason, at }). It is the general form of the single-sha memory the old quarantine embedded in
+    // a kept `source_audio_key`: two filters ride it in the capture sweep. The `videoId` is the
+    // cheap PRE-download filter (a known-bad candidate never costs proxy bytes again); the `sha256`
+    // is the deep backstop (the same audio re-uploaded under a NEW id is rejected post-download and
+    // remembered). Written by the sweep's ingest gate on a mismatch, and by the wrong-audio
+    // quarantine + the operator's `flag_wrong_audio` when they rewind a row. Null until the first
+    // rejection. Internal, like the rest of the capture side-channel — no public surface, no lastmod.
+    sourceAudioRejected: text("source_audio_rejected"),
     // NULLABLE (they were NOT NULL until the tracks/findings split): a catalogue track
     // resolved from MusicBrainz/Discogs may have no Spotify presence at all. `track_id`
     // stays the opaque PK — today it happens to be the Spotify id; a catalogue-only track

@@ -149,6 +149,12 @@ export type TrackWorkItem = {
   sourceAudioFailures?: number;
   /** The private-R2 key of the captured full song. Presence = there is audio to work on. */
   sourceAudioKey: null | string;
+  /**
+   * The bad-audio memory (docs/the-ear.md § Wrong audio) — the JSON array of rejected capture
+   * sources ({ videoId?, sha256, reason, at }). CAPTURE-only like the trust signals: the sweep's
+   * pre-download videoId filter + post-download sha backstop read it. Absent when empty.
+   */
+  sourceAudioRejected?: string;
   title: string;
   trackId: string;
 };
@@ -165,12 +171,13 @@ type WorkRow = {
   log_id: null | string;
   source_audio_failures: null | number;
   source_audio_key: null | string;
+  source_audio_rejected: null | string;
   title: string;
   track_id: string;
 };
 
 const WORK_SELECT = `t.track_id, t.title, t.artists_json, t.isrc, t.label, t.duration_ms,
-  t.source_audio_key, t.capture_priority, t.bpm, t.analyzed_from, t.source_audio_failures,
+  t.source_audio_key, t.source_audio_rejected, t.capture_priority, t.bpm, t.analyzed_from, t.source_audio_failures,
   f.log_id as log_id,
   (f.track_id is not null) as certified`;
 
@@ -359,6 +366,10 @@ export async function listTrackWork(options: {
           sourceAudioFailures:
             row.source_audio_failures !== null && Number(row.source_audio_failures) > 0
               ? Number(row.source_audio_failures)
+              : undefined,
+          sourceAudioRejected:
+            typeof row.source_audio_rejected === "string" && row.source_audio_rejected.trim()
+              ? row.source_audio_rejected
               : undefined,
         }
       : {}),

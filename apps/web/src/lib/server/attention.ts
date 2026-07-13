@@ -7,6 +7,7 @@
 
 import {
   type AttentionItem,
+  type CaptureSuspectInput,
   type ClipInput,
   deriveAttentionItems,
   type NewsletterInput,
@@ -112,6 +113,44 @@ async function listSubmissionRows(): Promise<SubmissionInput[]> {
   }));
 }
 
+type CaptureSuspectRow = {
+  album_image_url: string | null;
+  artists_json: string;
+  capture_verified_at: string | null;
+  log_id: string | null;
+  title: string;
+  track_id: string;
+};
+
+// Every FINDING whose captured audio failed the fingerprint check against its official preview
+// (docs/the-ear.md § Wrong audio) — `capture_verification = 'mismatch'`, stamped by the
+// verify-captures backfill, which never rewinds a public finding on its own. One queue row each,
+// oldest suspicion first; the operator auditions and rules with `flag_wrong_audio` (which nulls
+// the verdict, so a ruled row leaves this read — the trust rule). Only findings can carry
+// `'mismatch'` (a catalogue mismatch is quarantined instead), but the finding join is kept as the
+// honest scope anyway.
+async function listCaptureSuspectRows(): Promise<CaptureSuspectInput[]> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [],
+    sql: `select t.track_id, t.title, t.artists_json, t.album_image_url,
+                 t.capture_verified_at, f.log_id
+          from tracks t
+          join findings f on f.track_id = t.track_id
+          where t.capture_verification = 'mismatch'
+          order by t.capture_verified_at asc, t.track_id asc`,
+  });
+
+  return typedRows<CaptureSuspectRow>(result.rows).map((row) => ({
+    anchorAt: row.capture_verified_at ?? new Date(0).toISOString(),
+    ...(row.album_image_url ? { artUrl: row.album_image_url } : {}),
+    artists: parseArtistsJson(row.artists_json),
+    ...(row.log_id ? { logId: row.log_id } : {}),
+    title: row.title,
+    trackId: row.track_id,
+  }));
+}
+
 type EditionDraftRow = {
   created_at: string;
   id: string;
@@ -147,6 +186,7 @@ export async function readAttentionSnapshot(now: number = Date.now()): Promise<A
     mixtapes,
     clipPosts,
     artistReviews,
+    captureSuspects,
     labelReviews,
     submissions,
     newsletters,
@@ -159,6 +199,9 @@ export async function readAttentionSnapshot(now: number = Date.now()): Promise<A
     listMixtapes({ includeUnpublished: true }),
     listClipPosts(),
     listArtistReviewRows(),
+    // Every finding whose captured audio failed the fingerprint check (the trust rule: a
+    // ruled/flagged row leaves this read — flag_wrong_audio nulls the verdict).
+    listCaptureSuspectRows(),
     // Every label still awaiting the operator's ruling (the trust rule: a ruled label is
     // not the operator's business anymore). Ruling is crawl scope, never storage.
     listLabelReviewRows(),
@@ -178,6 +221,7 @@ export async function readAttentionSnapshot(now: number = Date.now()): Promise<A
   const items = deriveAttentionItems(
     {
       artistReviews,
+      captureSuspects,
       clipPosts: clipPosts.map((post) => ({
         scheduledFor: post.scheduledFor,
         status: post.status,

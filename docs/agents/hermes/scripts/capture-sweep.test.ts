@@ -10,11 +10,11 @@
 import { describe, expect, test } from "bun:test";
 import {
   bpmIsMissing,
+  filterRejectedCandidates,
   buildSourceAudioKey,
   buildStickyProxyUrl,
   classifyChannelTrust,
   contentTypeForExt,
-  durationAcceptable,
   durationWithinTolerance,
   extractSourceAudioSha256,
   needsReenrichAfterCapture,
@@ -22,6 +22,7 @@ import {
   pickCandidate,
   rankCandidates,
   shouldReenrichAfterCapture,
+  verifyCaptureFile,
 } from "./capture-sweep";
 
 describe("buildStickyProxyUrl", () => {
@@ -187,30 +188,8 @@ describe("classifyChannelTrust", () => {
   });
 });
 
-describe("durationAcceptable", () => {
-  const opts = { tolerancePct: 0.03, toleranceSec: 3, trustedPadSec: 60 };
-
-  test("untrusted takes the strict symmetric guard", () => {
-    expect(durationAcceptable(214, 191_724, 0, opts)).toBe(false); // 22s over → rejected
-    expect(durationAcceptable(192, 191_724, 0, opts)).toBe(true);
-  });
-
-  test("trusted tolerates intro/outro padding above the master (the 'If Only' case)", () => {
-    // 191.7s master, 214s label video (22.3s of padding) → accepted for a trusted channel.
-    expect(durationAcceptable(214, 191_724, 2, opts)).toBe(true);
-  });
-
-  test("trusted stays tight BELOW (a shorter upload is a radio edit, not the master)", () => {
-    expect(durationAcceptable(150, 191_724, 2, opts)).toBe(false);
-  });
-
-  test("trusted is still BOUNDED — an hour-long DJ set on the same channel is rejected", () => {
-    expect(durationAcceptable(3549, 191_724, 2, opts)).toBe(false);
-  });
-});
-
 describe("pickCandidate", () => {
-  const opts = { tolerancePct: 0.03, toleranceSec: 3, trustedPadSec: 60 };
+  const opts = { tolerancePct: 0.03, toleranceSec: 3 };
 
   test("returns null when no candidate passes the duration guard", () => {
     const chosen = pickCandidate(
@@ -260,10 +239,13 @@ describe("pickCandidate", () => {
     expect(chosen?.candidate.id).toBe("near");
   });
 
-  test("recovers 'If Only': a trusted label upload padded past the guard is chosen + tier 2", () => {
-    // The real 'ytsearch5:1991 if only' shape: four 214s hits (label master is 191.7s) plus a
-    // 59-min live set on the artist's channel. Only the trusted channels pass the padded guard;
-    // the untrusted 214s re-uploads and the live set are rejected.
+  test("TRUST NO LONGER WAIVES THE DURATION GUARD: a padded trusted upload is now REJECTED", () => {
+    // Demoted trust (docs/the-ear.md § Wrong audio): the old +60s trusted pad was the 005.9.9L
+    // hole, so it is gone. A trusted label upload 22s over the 191.7s master (which the removed pad
+    // once accepted) now fails the SYMMETRIC guard just like an untrusted one. When only padded
+    // uploads exist, `pickCandidate` returns null → the sweep lands `unmatched` rather than storing
+    // a possibly-wrong file; the fingerprint gate would have been the only thing standing between it
+    // and a bad capture, and correctness runs toward not downloading at all.
     const chosen = pickCandidate(
       [
         {
@@ -281,23 +263,27 @@ describe("pickCandidate", () => {
           title: "1991 - If Only",
           verified: true,
         },
-        { channel: "GALAXIES MUSIC", durationSec: 214, id: "junk1", title: "1991 - If Only" },
-        { channel: "EDM Old&New", durationSec: 214, id: "junk2", title: "1991 - If Only" },
-        {
-          channel: "1991",
-          channelId: "UCA0G8t",
-          durationSec: 3549,
-          id: "set",
-          title: "1991 @ circuitGROUNDS | EDC Vegas 2026",
-        },
       ],
       { durationMs: 191_724, label: "1991" },
       opts,
     );
-    // A trusted channel is chosen (the guard let the 22s padding through); the untrusted
-    // 214s re-uploads and the 3549s live set are excluded.
+    expect(chosen).toBeNull();
+  });
+
+  test("trust still RANKS equals: the trusted same-length master wins over an untrusted re-upload", () => {
+    // Trust survives as a ranking tiebreak among candidates that all pass the symmetric guard —
+    // the label upload beats a random re-host of the same-length master (identity safety), even
+    // though the fingerprint gate now backstops the identity check.
+    const chosen = pickCandidate(
+      [
+        { channel: "randochan", durationSec: 192, id: "reupload", title: "1991 - If Only" },
+        { channel: "UKF Drum & Bass", durationSec: 192, id: "ukf", title: "1991 - If Only" },
+      ],
+      { durationMs: 191_724, label: "1991" },
+      opts,
+    );
     expect(chosen?.trust).toBe(2);
-    expect(["artist", "ukf"]).toContain(chosen?.candidate.id);
+    expect(chosen?.candidate.id).toBe("ukf");
   });
 
   test("trust does NOT override a wrong-version title: an untrusted clean master beats a trusted remix", () => {
@@ -320,7 +306,7 @@ describe("pickCandidate", () => {
 });
 
 describe("rankCandidates", () => {
-  const opts = { tolerancePct: 0.03, toleranceSec: 3, trustedPadSec: 60 };
+  const opts = { tolerancePct: 0.03, toleranceSec: 3 };
 
   test("returns the full ordered list so the sweep can fall through a DRM/bot-walled top hit", () => {
     // The top hit is a trusted exact-length master (e.g. DRM-locked at download time); the
@@ -413,6 +399,54 @@ describe("shouldReenrichAfterCapture — the certification gate on the re-derive
 
   test("an ABSENT certified flag is treated as not-certified (a malformed row writes nothing)", () => {
     expect(shouldReenrichAfterCapture(undefined, null, "preview")).toBe(false);
+  });
+});
+
+describe("filterRejectedCandidates — the pre-download memory filter", () => {
+  const entry = (id: string) => ({ candidate: { durationSec: 388, id, title: "T" }, trust: 0 });
+
+  test("skips remembered video ids BEFORE spending the attempt budget", () => {
+    // v1 is in the bad-audio memory. With a budget of 2, the walk must get v2 + v3 — a budget cut
+    // FIRST would hand back [v1, v2], wasting an attempt slot on a candidate the memory already
+    // ruled out.
+    const attempts = filterRejectedCandidates(
+      [entry("v1"), entry("v2"), entry("v3")],
+      new Set(["v1"]),
+      2,
+    );
+
+    expect(attempts.map((a) => a.candidate.id)).toEqual(["v2", "v3"]);
+  });
+
+  test("every candidate remembered → nothing to attempt (the sweep lands unmatched)", () => {
+    const attempts = filterRejectedCandidates([entry("v1"), entry("v2")], new Set(["v1", "v2"]), 3);
+
+    expect(attempts).toEqual([]);
+  });
+
+  test("an empty memory is a plain budget slice", () => {
+    const attempts = filterRejectedCandidates(
+      [entry("v1"), entry("v2"), entry("v3"), entry("v4")],
+      new Set(),
+      3,
+    );
+
+    expect(attempts.map((a) => a.candidate.id)).toEqual(["v1", "v2", "v3"]);
+  });
+});
+
+describe("verifyCaptureFile", () => {
+  test("ABSTAINS (no-reference) when there is no preview fingerprint to check against", () => {
+    // A track with no preview source ⇒ the gate never blocks; it stamps `unverified`. This is the
+    // one branch reachable without an fpcalc binary (CI has none); the match/mismatch verdicts ride
+    // `slidingWindowMatch`, unit-tested exhaustively in fingerprint-match.test.ts.
+    expect(verifyCaptureFile(null, "/nonexistent/audio.webm")).toBe("no-reference");
+  });
+
+  test("ABSTAINS when the capture cannot be fingerprinted (fpcalc absent / bad decode)", () => {
+    // With a real preview fp but a file fpcalc cannot read, the verdict is `no-reference` (abstain),
+    // never a false `mismatch` — the gate degrades honestly.
+    expect(verifyCaptureFile([1, 2, 3], "/nonexistent/audio.webm")).toBe("no-reference");
   });
 });
 

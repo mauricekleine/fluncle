@@ -324,6 +324,26 @@ export function adminTracksHandlers(os: Implementer) {
         update.sourceAudioBytes = body.sourceAudioBytes;
       }
 
+      // THE CAPTURE VERIFICATION provenance (docs/the-ear.md § Wrong audio) — the ingest gate's
+      // verdict + its stamp + the bad-audio memory. Agent-writable analysis fields (internal, no
+      // public surface). The verdict is narrowed to the 3-value enum; the memory is a JSON string
+      // ("" clears it, handled in updateTrack).
+      if (
+        body.captureVerification === "preview-match" ||
+        body.captureVerification === "unverified" ||
+        body.captureVerification === "mismatch"
+      ) {
+        update.captureVerification = body.captureVerification;
+      }
+
+      if (typeof body.captureVerifiedAt === "string" && body.captureVerifiedAt.trim()) {
+        update.captureVerifiedAt = body.captureVerifiedAt;
+      }
+
+      if (typeof body.sourceAudioRejected === "string") {
+        update.sourceAudioRejected = body.sourceAudioRejected;
+      }
+
       // The agent role may only touch analysis fields. Reject (not silently drop)
       // an attempt at an operator-only field — a 403 the gate can voice. The role
       // is read from the oRPC context (lifted by `adminAuth`), not re-derived.

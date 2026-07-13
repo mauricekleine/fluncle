@@ -131,6 +131,26 @@ The Duplicates section above handles a row that is honestly the same recording a
 
 A bad capture never silently vanishes, on either side of the collision.
 
+### The verification gate — verify at ingest, so the lie never lands
+
+Everything above catches a wrong capture **after** it has poisoned a vector — a detector. The gate is the **preventer**, and it came out of a second real defect (finding **005.9.9L**, the 2026-07-12 audit): the sweep's yt-dlp search picked a same-label upload whose audio was a different song, and the old TRUSTED-CHANNEL relaxation waived the duration guard (expected 198.6s, stored 246.9s off an Elevate Records channel video). Wrong bytes are **inaudible on every human surface** — the site, the video, and the radio all play the ISRC-resolved official preview, never the captured file — so they only poison analysis, BPM/key, and the MuQ ranking space, silently. The ruling: **verify every download against the official preview at ingest.** The preview is ISRC-resolved, so it is the right recording _by construction_ — the one reference that can answer "are these the same recording?".
+
+**The mechanism is Chromaprint.** After a candidate downloads, the sweep fetches the track's preview through the same `/api/preview` relay the site uses, fingerprints both files with `fpcalc -raw -json`, and runs a **sliding-window bit-error match**: does the preview's fingerprint appear as a contiguous window anywhere inside the capture's, within `DEFAULT_MAX_BER` (0.20 — AcoustID practice is <0.15 for same-source audio; widened for our cross-source Deezer-preview-vs-YouTube-capture pair, still far below the ~0.45+ different-recording regime; env-overridable via `FLUNCLE_VERIFY_MAX_BER`)? The matcher lives in one shared module (`fingerprint-match.ts`) so the ingest gate and the backfill below cannot drift. The preview is a verification **reference only** — it never feeds a vector and is never stored as analysis input (full-audio-only is ratified).
+
+**The three verdicts, and the honesty rule.** A MATCH stores as before, stamped `capture_verification = 'preview-match'`. A MISMATCH **rejects the candidate before storing** — nothing to quarantine because the bad bytes never land — remembers it (below), and walks to the next ranked candidate; all candidates exhausted lands the honest `unmatched`. NO PREVIEW SOURCE (or no fpcalc on the box yet) and the gate **abstains**: capture proceeds, stamped `'unverified'` — never a silent pass, never a block on a track with no reference. `null` means pre-gate legacy.
+
+**Channel trust is demoted.** The trusted-channel path still helps RANK candidates (a label upload beats a random re-host of the same-length master), but it no longer widens the duration guard — the +60s trusted pad was exactly the 005.9.9L hole, and it is gone. Nothing skips the gate.
+
+**The rejection memory** — `source_audio_rejected`, a JSON array on `tracks` of `{ videoId, sha256, reason, at }`, capped at the newest ~10. It generalizes the old single-sha memory (the digest embedded in a quarantined row's kept `source_audio_key`, which still works for pre-memory rows): the **videoId is the pre-download filter** — a known-bad candidate never costs proxy bytes again — and the **sha256 is the deep backstop** — the same audio re-uploaded under a new id is rejected post-download and remembered. Every rewind grows it: the gate's fingerprint mismatch, the rank sweep's quarantine, and the operator's `flag_wrong_audio`.
+
+### The backfill — every historic capture gets the same check
+
+The gate verifies what downloads **from now on**; `fluncle-verify-captures` (an on-box host timer, [docs/agents/hermes/verify-captures-timer/](./agents/hermes/verify-captures-timer/README.md)) walks every capture that landed **before** it (~590 rows, findings + catalogue). The box only **measures** — one private-R2 read of the captured bytes, one preview fetch, the same fingerprint match — and reports a plain verdict through the agent-tier `verify_capture` op; the **Worker routes it**, so the doctrine has one integration-tested authority:
+
+- **match** → `capture_verification = 'preview-match'`; **no preview** → `'unverified'`. Either way the row leaves the `capture_verification IS NULL` worklist, which is what makes the sweep bounded, resumable, and never a re-verifier.
+- **mismatch on a CATALOGUE row** → the quarantine rewind above (vector dropped, re-queued for capture, sha into the rejection memory). The machine may rewind a row Fluncle never spoke about.
+- **mismatch on a FINDING** → stamped `'mismatch'` and **nothing else**: a machine does not rewind a public finding. The stamp raises a `capture-suspect` row on the `/admin` attention queue, pre-evidenced; the operator auditions the captured bytes and rules with `flag_wrong_audio` (which nulls the verdict, so a ruled row leaves the queue).
+
 ## The capture budget — the brake
 
 The ladder above decides **what** the metered GB buy. It has nothing to say about **how much**, and at catalogue scale that gap is the one that costs real money.
@@ -263,3 +283,10 @@ The capture budget (the brake):
 - `apps/web/src/lib/server/track-work.ts` — **where the brake is applied** (the queue narrows to the findings when the budget is shut).
 - `apps/web/src/lib/server/track-work.integration.test.ts` — **the three proofs**.
 - `apps/cli/src/commands/capture.ts` — `fluncle admin capture`.
+
+The verification gate (§ Wrong audio · the gate + the backfill):
+
+- `docs/agents/hermes/scripts/fingerprint-match.ts` — the shared Chromaprint matcher (the threshold + its reasoning), the fpcalc/preview I/O, and the rejection-memory helpers; `fingerprint-match.test.ts` proves the sliding-window match on synthetic fingerprints.
+- `docs/agents/hermes/scripts/capture-sweep.ts` — the ingest gate (verify → store/reject/abstain) + the demoted channel trust; `capture-sweep.test.ts` encodes the no-waiver rule.
+- `docs/agents/hermes/scripts/verify-captures.ts` + `.sh` + `../verify-captures-timer/` — the historic backfill (measure on the box, route on the Worker); `verify-captures.test.ts` proves the tick's skip-not-stamp discipline.
+- `apps/web/src/lib/server/capture-verify.integration.test.ts` — **the routing proof** (catalogue mismatch quarantines; a finding mismatch is only stamped; a stamped row leaves the worklist).

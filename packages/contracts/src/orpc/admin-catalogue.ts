@@ -108,6 +108,11 @@ export const CatalogueTrackItemSchema = z
     bpm: z.number().nullable(),
     capturePriority: z.number().nullable(),
     captureReason: CapturePriorityReasonSchema.nullable(),
+    /**
+     * The capture-verification verdict (docs/the-ear.md § Wrong audio): `preview-match` /
+     * `unverified` / `mismatch`, or null (pre-gate legacy / no capture). A quiet honesty marker.
+     */
+    captureVerification: z.string().nullable(),
     /** ISO of when the operator dismissed this row ("not for me"); null on a live row. */
     dismissedAt: z.string().nullable(),
     /**
@@ -324,6 +329,87 @@ export const setTrackDismissed = oc
   })
   .input(z.object({ dismissed: z.boolean(), trackId: z.string().min(1) }))
   .output(z.object({ changed: z.boolean(), ok: z.literal(true) }));
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CAPTURE VERIFICATION — the historic backfill's two ops. docs/the-ear.md § Wrong audio.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** One captured row the verification backfill still has to fingerprint-check. */
+export const CaptureVerifyItemSchema = z
+  .object({
+    artists: z.array(z.string()),
+    certified: z.boolean(),
+    isrc: z.string().nullable(),
+    logId: z.string().nullable(),
+    sourceAudioKey: z.string(),
+    title: z.string(),
+    trackId: z.string(),
+  })
+  .meta({ id: "CaptureVerifyItem" });
+
+/**
+ * `list_unverified_captures` → `GET /admin/catalogue/captures/unverified` (operationId
+ * `listUnverifiedCaptures`).
+ *
+ * Admin tier (agent-allowed read), the `list_track_work` precedent. The verification backfill's
+ * worklist: captured rows (findings + catalogue) whose bytes have never been checked against their
+ * ISRC preview. Bounded + resumable — a verified row leaves the set, so re-running drains what is
+ * left, no cursor. A pure read; it publishes nothing. The `fluncle-verify-captures` box cron drives it.
+ */
+export const listUnverifiedCaptures = oc
+  .route({
+    method: "GET",
+    operationId: "listUnverifiedCaptures",
+    path: "/admin/catalogue/captures/unverified",
+    summary:
+      "Captured rows not yet fingerprint-verified against their preview (the backfill worklist)",
+    tags: ["Admin"],
+  })
+  .input(z.object({ limit: z.coerce.number().int().min(1).max(200).default(50) }))
+  .output(z.object({ ok: z.literal(true), tracks: z.array(CaptureVerifyItemSchema) }));
+
+/**
+ * `verify_capture` → `POST /admin/catalogue/captures/verify` (operationId `verifyCapture`).
+ *
+ * Admin tier (AGENT-allowed WRITE), the `rank_catalogue` precedent. The box fingerprints a captured
+ * file against the track's ISRC-resolved official preview and reports one of three verdicts; the
+ * SERVER routes it (docs/the-ear.md § Wrong audio): `match` → stamp `preview-match`; `no-preview` →
+ * stamp `unverified`; `mismatch` on a CATALOGUE row → quarantine it (drop the vector, re-queue for
+ * capture, remember the bad sha); `mismatch` on a FINDING → stamp `mismatch` only, raising an
+ * /admin attention item — a machine never rewinds a public finding, so the operator rules with
+ * `flag_wrong_audio`. It writes only derived/measurement columns and never certifies, so the box's
+ * agent token drives it. `{ ok, action }`.
+ *
+ * `verify` is a new verb, added deliberately (docs/naming-conventions.md): it is not `enrich`
+ * (deriving an entity's own attributes), not `rank` (ordering a corpus), not `resolve` (fixing an
+ * external identity) — it CHECKS a stored artifact against a reference and records the verdict.
+ */
+export const verifyCapture = oc
+  .route({
+    method: "POST",
+    operationId: "verifyCapture",
+    path: "/admin/catalogue/captures/verify",
+    summary: "Record a capture's fingerprint verdict against its preview, and route it",
+    tags: ["Admin"],
+  })
+  .input(
+    z.object({
+      trackId: z.string().min(1),
+      verdict: z.enum(["match", "mismatch", "no-preview"]),
+    }),
+  )
+  .output(
+    z.object({
+      action: z.enum([
+        "flagged-finding",
+        "not-captured",
+        "preview-match",
+        "quarantined-catalogue",
+        "unverified",
+      ]),
+      ok: z.literal(true),
+    }),
+  );
 
 // ─────────────────────────────────────────────────────────────────────────────
 // THE CRAWLER — what makes the rows above exist. docs/catalogue-crawler.md.
@@ -580,8 +666,10 @@ export const adminCatalogueContract = {
   get_capture_budget: getCaptureBudget,
   get_crawl_status: getCrawlStatus,
   list_catalogue_tracks: listCatalogueTracks,
+  list_unverified_captures: listUnverifiedCaptures,
   rank_catalogue: rankCatalogue,
   reset_apple_breaker: resetAppleBreaker,
   set_capture_budget: setCaptureBudget,
   set_track_dismissed: setTrackDismissed,
+  verify_capture: verifyCapture,
 };

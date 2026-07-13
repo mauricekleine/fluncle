@@ -37,9 +37,16 @@ FROM nousresearch/hermes-agent@sha256:9c841866021c54c4596849f6135717e8a4d52ba510
 # It stands in for the Remotion trackLine's `ui-sans-serif, system-ui, sans-serif`,
 # which is not an embedded webfont there, so headless Chromium renders it as its generic
 # `sans-serif` = DejaVu on Debian; baking the same font makes the clip match the render.
+# libchromaprint-tools supplies `fpcalc`, the Chromaprint fingerprinter behind the CAPTURE
+# VERIFICATION gate (docs/the-ear.md § Wrong audio): the fluncle-capture sweep fingerprints
+# every download against the track's official preview at ingest, and the
+# fluncle-verify-captures backfill gives the historic captures the same check. Both sweeps
+# DEGRADE HONESTLY when the binary is absent (they stamp `unverified` / report
+# `fpcalc_missing`, never crash), so the repo half of the gate merges safely ahead of the
+# rebake that bakes this in.
 # One layer, lists cleaned, no recommends.
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ffmpeg unzip openssh-client dnsutils fonts-dejavu-core \
+  && apt-get install -y --no-install-recommends ffmpeg unzip openssh-client dnsutils fonts-dejavu-core libchromaprint-tools \
   && rm -rf /var/lib/apt/lists/*
 
 # Bake a PINNED yt-dlp (the fluncle-capture sweep's fetcher) in its OWN EARLY layer — above the

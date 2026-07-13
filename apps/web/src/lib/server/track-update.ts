@@ -56,6 +56,19 @@ export type TrackUpdate = {
     | "unmatched"
     | "wrong-audio";
   /**
+   * THE CAPTURE VERIFICATION VERDICT (docs/the-ear.md § Wrong audio) — machine-measured provenance
+   * of the capture, like `analyzedFrom`. Internal, NOT in VISIBLE_FIELDS/CERTIFICATION_FIELDS: it
+   * describes the recording, applies to a catalogue row or a finding, and moves no public surface.
+   *   - `preview-match` / `unverified` — the ingest gate's verdict (matched the ISRC preview, or
+   *     abstained: no preview source / no fpcalc).
+   *   - `mismatch` — the historic backfill's suspicion on a FINDING (drives the /admin attention
+   *     queue; the operator rules with `flag_wrong_audio`). A catalogue mismatch is quarantined
+   *     instead, never stamped `mismatch`.
+   */
+  captureVerification?: "mismatch" | "preview-match" | "unverified";
+  /** ISO of the last capture-verification check (paired with `captureVerification`). */
+  captureVerifiedAt?: string;
+  /**
    * Firecrawl-derived FACTUAL context (creative fuel for the observation script
    * + video agent). Internal only — never on /log, never in JSON-LD/RSS. Writing
    * it alone does NOT bump updated_at (it moves no public surface).
@@ -158,6 +171,13 @@ export type TrackUpdate = {
   sourceAudioFailures?: number;
   /** The R2 key of the captured full song (presence = captured). See captureStatus. */
   sourceAudioKey?: string;
+  /**
+   * THE BAD-AUDIO MEMORY (docs/the-ear.md § Wrong audio) — a JSON array of the sources this
+   * track's captures have been REJECTED from ({ videoId?, sha256, reason, at }, capped ~10),
+   * written by the capture sweep's ingest gate on a fingerprint mismatch. Internal capture
+   * side-channel like `sourceAudioKey`; empty string clears it.
+   */
+  sourceAudioRejected?: string;
   /** The AI model that authored the video, in <provider>/<model> notation. */
   videoModel?: string;
   /** The reasoning/thinking effort the authoring model ran at (e.g. "high"). */
@@ -515,6 +535,22 @@ export async function updateTrack(
   if (update.sourceAudioKey !== undefined) {
     sets.push("source_audio_key = ?");
     args.push(update.sourceAudioKey);
+  }
+
+  if (update.captureVerification !== undefined) {
+    sets.push("capture_verification = ?");
+    args.push(update.captureVerification);
+  }
+
+  if (update.captureVerifiedAt !== undefined) {
+    sets.push("capture_verified_at = ?");
+    args.push(update.captureVerifiedAt);
+  }
+
+  if (update.sourceAudioRejected !== undefined) {
+    // Empty string clears the memory — null, not "", so a cleared row reads as "no rejections yet".
+    sets.push("source_audio_rejected = ?");
+    args.push(update.sourceAudioRejected === "" ? null : update.sourceAudioRejected);
   }
 
   if (update.sourceAudioCapturedAt !== undefined) {
