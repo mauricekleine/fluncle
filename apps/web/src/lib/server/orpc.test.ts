@@ -584,6 +584,7 @@ const PUBLIC_OPERATION_IDS = [
   "getPrivateAccountExport",
   "getPrivateGalaxyProgress",
   "getPrivateMutationToken",
+  "getPrivatePreferences",
   "getRadioNowPlaying",
   "getRandomRadioTrack",
   "getRandomTrack",
@@ -612,6 +613,7 @@ const PUBLIC_OPERATION_IDS = [
   "submitTrack",
   "subscribeNewsletter",
   "unsavePrivateFinding",
+  "updatePrivatePreferences",
   "updatePrivateProfile",
   "updatePrivateSavedSet",
 ];

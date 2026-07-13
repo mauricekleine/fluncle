@@ -572,6 +572,7 @@ describe("oRPC /me — POST /me/export (export_private_account_data)", () => {
         account: USER,
         generatedAt: "2026-01-01T00:00:00.000Z",
         id: "exp-1",
+        preferences: { keyNotation: "camelot" },
         privacyNotes: ["a", "b"],
         progress: { collectedLogIds: [], deaths: 0, ok: true, wins: 0 },
         savedFindings: [],

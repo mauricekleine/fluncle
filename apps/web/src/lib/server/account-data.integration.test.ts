@@ -77,6 +77,11 @@ describe("deleteAccount (real SQL via accountDeletionStatements)", () => {
           values (?, ?, ?, ?, ?, ?, ?)`,
       },
       {
+        args: [userId, JSON.stringify({ keyNotation: "camelot" }), now],
+        sql: `insert into user_preferences (user_id, preferences, updated_at)
+          values (?, ?, ?)`,
+      },
+      {
         args: [`gc-${userId}`, userId, trackId, logId, now, now, "web"],
         sql: `insert into user_galaxy_collections
           (id, user_id, track_id, log_id, first_collected_at, last_collected_at, source_surface)
@@ -115,6 +120,7 @@ describe("deleteAccount (real SQL via accountDeletionStatements)", () => {
     for (const table of [
       "user_saved_findings",
       "user_saved_sets",
+      "user_preferences",
       "user_galaxy_collections",
       "user_galaxy_state",
       "push_tokens",
@@ -390,5 +396,107 @@ describe("saved sets (real SQL, owner-scoped)", () => {
     await saveSet(publicUser(userA), { name: "Export me", set: SET_A });
     const result = await exportAccountData(publicUser(userA));
     expect(result.export.savedSets.map((s) => s.name)).toEqual(["Export me"]);
+  });
+});
+
+describe("user preferences (real SQL, closed schema + owner-scoped)", () => {
+  const userA = "user-A";
+  const userB = "user-B";
+
+  beforeEach(async () => {
+    await seedUser(db, { email: "a@example.com", id: userA, username: "aaa" });
+    await seedUser(db, { email: "b@example.com", id: userB, username: "bbb" });
+  });
+
+  it("getUserPreferences returns an empty object when nothing is stored", async () => {
+    const { getUserPreferences } = await import("./account-data");
+
+    const result = await getUserPreferences(publicUser(userA));
+    expect(result).toEqual({ ok: true, preferences: {} });
+  });
+
+  it("updateUserPreferences upserts, and getUserPreferences reads it back", async () => {
+    const { getUserPreferences, updateUserPreferences } = await import("./account-data");
+
+    const updated = await updateUserPreferences(publicUser(userA), { keyNotation: "camelot" });
+    expect(updated).toEqual({ ok: true, preferences: { keyNotation: "camelot" } });
+
+    const read = await getUserPreferences(publicUser(userA));
+    expect(read.preferences).toEqual({ keyNotation: "camelot" });
+
+    // Upsert (not a second row): a further write updates the same row in place.
+    await updateUserPreferences(publicUser(userA), { keyNotation: "scales" });
+    expect(await rowCount(db, "user_preferences")).toBe(1);
+    expect((await getUserPreferences(publicUser(userA))).preferences).toEqual({
+      keyNotation: "scales",
+    });
+  });
+
+  it("merges partially — an empty patch preserves the stored value", async () => {
+    const { getUserPreferences, updateUserPreferences } = await import("./account-data");
+
+    await updateUserPreferences(publicUser(userA), { keyNotation: "camelot" });
+    const merged = (await updateUserPreferences(publicUser(userA), {})) as {
+      preferences: { keyNotation?: string };
+    };
+    expect(merged.preferences.keyNotation).toBe("camelot");
+    expect((await getUserPreferences(publicUser(userA))).preferences.keyNotation).toBe("camelot");
+  });
+
+  it("rejects an unknown key (400 invalid_request — the closed .strict() schema)", async () => {
+    const { updateUserPreferences } = await import("./account-data");
+
+    const result = await updateUserPreferences(publicUser(userA), {
+      theme: "dark",
+    } as unknown);
+    expect(result).toBeInstanceOf(Response);
+    expect((result as Response).status).toBe(400);
+    // A rejected write persists nothing.
+    expect(await rowCount(db, "user_preferences")).toBe(0);
+  });
+
+  it("rejects an out-of-range value (400)", async () => {
+    const { updateUserPreferences } = await import("./account-data");
+
+    const result = await updateUserPreferences(publicUser(userA), {
+      keyNotation: "bogus",
+    } as unknown);
+    expect(result).toBeInstanceOf(Response);
+    expect((result as Response).status).toBe(400);
+  });
+
+  it("tolerates a corrupt stored blob (reads as empty, never throws)", async () => {
+    const now = new Date().toISOString();
+
+    await db.execute({
+      args: [userA, "not json {{{", now],
+      sql: `insert into user_preferences (user_id, preferences, updated_at) values (?, ?, ?)`,
+    });
+
+    const { getUserPreferences } = await import("./account-data");
+    const result = await getUserPreferences(publicUser(userA));
+    expect(result.preferences).toEqual({});
+  });
+
+  it("is owner-scoped — A's write never touches B's row", async () => {
+    const { getUserPreferences, updateUserPreferences } = await import("./account-data");
+
+    await updateUserPreferences(publicUser(userA), { keyNotation: "camelot" });
+    await updateUserPreferences(publicUser(userB), { keyNotation: "scales" });
+
+    expect((await getUserPreferences(publicUser(userA))).preferences).toEqual({
+      keyNotation: "camelot",
+    });
+    expect((await getUserPreferences(publicUser(userB))).preferences).toEqual({
+      keyNotation: "scales",
+    });
+  });
+
+  it("exportAccountData includes the user's preferences", async () => {
+    const { exportAccountData, updateUserPreferences } = await import("./account-data");
+
+    await updateUserPreferences(publicUser(userA), { keyNotation: "camelot" });
+    const result = await exportAccountData(publicUser(userA));
+    expect(result.export.preferences).toEqual({ keyNotation: "camelot" });
   });
 });

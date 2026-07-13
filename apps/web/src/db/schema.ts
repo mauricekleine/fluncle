@@ -1272,6 +1272,25 @@ export const userSavedSets = sqliteTable(
   (table) => [index("user_saved_sets_user_updated_idx").on(table.userId, table.updatedAt)],
 );
 
+// A signed-in user's cross-device preferences — the account-backed home for a
+// setting that today lives device-local (the Scales/Camelot key-notation choice in
+// localStorage). ONE row per user (the `user_id` primary key), holding a single
+// zod-validated JSON `preferences` blob. This is the FIRST user preference, not the
+// last: a new preference extends the shared zod object (`UserPreferencesSchema` in
+// `@fluncle/contracts/orpc`) + its consumers, never this schema — the column is a
+// closed object, so growing it needs no migration. THE ACCOUNT NEVER GATES A
+// FEATURE: an anonymous visitor keeps the device-local toggle exactly as before;
+// this row only carries the choice ACROSS devices when signed in. `user_id` is a
+// logical FK (no SQL cascade), matching every sibling per-user table — deletion is
+// application-code (`accountDeletionStatements`), never a constraint, because the
+// deletion flow ANONYMIZES the user row rather than dropping it, so a SQL cascade
+// would never fire.
+export const userPreferences = sqliteTable("user_preferences", {
+  preferences: text("preferences").notNull().default("{}"),
+  updatedAt: text("updated_at").notNull(),
+  userId: text("user_id").primaryKey(),
+});
+
 export const userDataExports = sqliteTable(
   "user_data_exports",
   {

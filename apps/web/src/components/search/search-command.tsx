@@ -43,6 +43,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import { SpotifyIcon } from "@/components/platform-icons";
+import { formatKey, useKeyNotation } from "@/lib/key-notation";
 import { cn } from "@/lib/utils";
 
 // ── The wire ─────────────────────────────────────────────────────────────────────────
@@ -231,11 +232,15 @@ function EntityRow({
  * reinterprets you is a search you cannot trust.
  */
 function FilterChips({ filters }: { filters: SearchFilters }): ReactNode {
+  // The key filter echoes in the app-wide notation (Scales/Camelot), like every other
+  // key readout. `formatKey` renders an unparseable key verbatim, so a filter the
+  // model phrased oddly still shows what it understood.
+  const { notation } = useKeyNotation();
   const chips = [
     filters.artist && `artist: ${filters.artist}`,
     filters.label && `label: ${filters.label}`,
     filters.album && `album: ${filters.album}`,
-    filters.key && `key: ${filters.key}`,
+    filters.key && `key: ${formatKey(filters.key, notation)}`,
     filters.bpmMin !== undefined && `bpm ≥ ${filters.bpmMin}`,
     filters.bpmMax !== undefined && `bpm ≤ ${filters.bpmMax}`,
     filters.yearMin !== undefined && `from ${filters.yearMin}`,

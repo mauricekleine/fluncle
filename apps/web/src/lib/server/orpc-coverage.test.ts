@@ -55,6 +55,9 @@ const PUBLIC_ROUTE_OPS: Record<string, string> = {
   "GET /me/csrf": "get_private_mutation_token",
   "GET /me/export/{exportId}": "get_private_account_export",
   "GET /me/galaxy-progress": "get_private_galaxy_progress",
+  // The cross-device preferences store — contract-only oRPC (no TanStack route file
+  // under /api/v1/me), documented here as part of the public surface net.
+  "GET /me/preferences": "get_private_preferences",
   "GET /me/saved-findings": "list_private_saved_findings",
   "GET /me/submissions": "list_private_submissions",
   "GET /mixtapes": "list_mixtapes",
@@ -91,6 +94,7 @@ const PUBLIC_ROUTE_OPS: Record<string, string> = {
   // registry), so it has no route-file basename to enumerate; documented here as part of
   // the public surface net.
   "GET /tracks/{idOrLogId}/similar": "get_similar_findings",
+  "PATCH /me/preferences": "update_private_preferences",
   "PATCH /me/profile": "update_private_profile",
   "POST /devices": "register_device",
   "POST /me/delete": "delete_private_account",

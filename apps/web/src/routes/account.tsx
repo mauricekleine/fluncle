@@ -5,8 +5,10 @@ import { Input } from "@fluncle/ui/components/input";
 import { Label } from "@fluncle/ui/components/label";
 import { Tabs, TabsList, TabsTrigger } from "@fluncle/ui/components/tabs";
 import { Textarea } from "@fluncle/ui/components/textarea";
+import { KeyNotationToggle } from "@/components/mix/key-notation-toggle";
 import { authClient } from "@/lib/auth-client";
 import { siteUrl } from "@/lib/fluncle-links";
+import { syncKeyNotationFromAccount } from "@/lib/key-notation";
 
 type Me = {
   ok: true;
@@ -315,6 +317,14 @@ function SignedInAccount({
   const [exportText, setExportText] = useState("");
   const joined = useMemo(() => new Date(user.createdAt).toLocaleDateString(), [user.createdAt]);
 
+  // This section only mounts for a signed-in user, so force the key-notation store to
+  // adopt the profile's stored choice — covering a sign-in mid-session (the one-time
+  // sync may have already run anonymously). Toggling the control below then mirrors
+  // the change back to the profile.
+  useEffect(() => {
+    void syncKeyNotationFromAccount({ force: true });
+  }, []);
+
   async function patchProfile(event: React.FormEvent) {
     event.preventDefault();
     const response = await fetch("/api/me/profile", {
@@ -410,6 +420,18 @@ function SignedInAccount({
             </li>
           ))}
         </ListEmpty>
+      </section>
+
+      <section className="account-section">
+        <h2>Preferences</h2>
+        <p className="account-muted">
+          How every key reads across Fluncle. Saved to your account, so it follows you to every
+          device you sign in on.
+        </p>
+        <div className="account-field">
+          <span className="text-sm font-medium">Key notation</span>
+          <KeyNotationToggle />
+        </div>
       </section>
 
       <section className="account-section">
