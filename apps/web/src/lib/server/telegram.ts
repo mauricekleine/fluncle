@@ -13,11 +13,20 @@ export function formatTelegramMessage(track: TrackMetadata, note?: string, logId
     lines.push(`${notePrefix} ${note.trim()}`);
   }
 
-  lines.push("", `🎧 Spotify: ${track.spotifyUrl}`);
+  // A certified catalogue row can have NO Spotify presence (no stored identity, no exact-ISRC
+  // match — publish.ts's certify fan-out); the crew post omits the line rather than printing a
+  // broken one. Every Spotify-add finding carries a URL, so nothing changes on that path.
+  if (track.spotifyUrl) {
+    lines.push("", `🎧 Spotify: ${track.spotifyUrl}`);
+  }
 
   // The finding's permanent home: its own log page, quiet under the Spotify
   // link. Only when the coordinate exists (older posts predate the Log ID).
   if (logId?.trim()) {
+    if (!track.spotifyUrl) {
+      lines.push("");
+    }
+
     lines.push(`Read the log: ${logPageUrl(logId)}`);
   }
 

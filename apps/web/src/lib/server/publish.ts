@@ -23,8 +23,10 @@ import {
   addTrackToPlaylist,
   ApiError,
   fetchTrackMetadata,
+  findSpotifyTrackByIsrc,
   parseSpotifyTrackUrl,
   SPOTIFY_REAUTH_REQUIRED,
+  type TrackMetadata,
 } from "./spotify";
 import { formatTelegramMessage, postToTelegram } from "./telegram";
 
@@ -410,16 +412,28 @@ Posted to Telegram`;
  * certification here mints ONLY the certification half.
  *
  * It shares the exact mint the Spotify add uses (`resolveFindingLogId` + `findingInsertStatement`),
- * so a coordinate is born the same way however a finding arrives. `enrichment_status` takes its
- * DDL default (`pending`), which enqueues the fresh finding for the enrichment chain (audio →
- * video → publish) — so the operator lands on the finding's admin surface with the rest of the
- * pipeline already moving, and finishes the note / galaxy / publish from there.
+ * so a coordinate is born the same way however a finding arrives — AND the same announce fan-out
+ * (operator ruling, 2026-07-13: the first workstation certify skipped Spotify + Telegram, and a
+ * finding is a finding however it arrives). The differences from `publishTrack`, both deliberate:
  *
- * Guards: the row must EXIST (404) and must NOT already be certified (409). The graph links + cache
- * purge + IndexNow ping are best-effort — a fresh coordinate page and its edge cache — and never
- * block the mint. It deliberately does NOT touch Spotify or Telegram: certifying a crawled row is
- * not the same act as publishing a Spotify find, and a catalogue row may have no Spotify presence
- * at all. Returns the minted Log ID so the caller can route the operator to the finding.
+ *   · PRESENCE IS RESOLVED, NEVER ASSUMED. A crawled row may have no Spotify identity at all, so
+ *     the playlist add rides the row's stored `spotify_uri` or an exact-ISRC lookup
+ *     (`findSpotifyTrackByIsrc` — the honest resolver: a hit is stamped back onto the track, a
+ *     miss is recorded, and a fuzzy metadata guess NEVER reaches the public playlist). The legs
+ *     that print the Spotify link degrade with it: Telegram simply omits the line
+ *     (`formatTelegramMessage`), Bluesky — whose card is built around the link — is skipped.
+ *   · A LEG FAILURE NEVER UNWINDS THE MINT. `publishTrack` throws mid-chain because its caller is
+ *     the CLI mid-add; here the finding already exists and the operator has moved on, so each leg
+ *     records its failure on the findings error columns (`spotify_error` / `telegram_error` — the
+ *     attention queue's existing rails) and the mint stands.
+ *   · IT RESUMES. Re-certifying an already-logged row is a 409 only when BOTH announce legs are
+ *     done; with legs missing it runs exactly the missing ones (fill-empty semantics — a posted
+ *     leg is never re-posted). That makes `certify` its own retry: a leg that failed (or a finding
+ *     certified before this fan-out existed) is finished by firing certify again.
+ *
+ * `enrichment_status` takes its DDL default (`pending`), which enqueues the fresh finding for the
+ * enrichment chain, so the operator lands on the finding's admin surface with the pipeline moving.
+ * Guards: the row must EXIST (404). Graph links + cache purge + IndexNow stay best-effort.
  */
 export async function certifyExistingTrack(
   trackId: string,
@@ -427,11 +441,19 @@ export async function certifyExistingTrack(
 ): Promise<{ logId: string }> {
   const db = await getDb();
   const row = typedRow<{
+    added_to_spotify: number | null;
     album: null | string;
+    album_image_url: null | string;
     artists_json: string;
+    duration_ms: number;
     finding_id: null | string;
+    finding_log_id: null | string;
+    finding_note: null | string;
     isrc: null | string;
     label: null | string;
+    posted_to_telegram: number | null;
+    spotify_uri: null | string;
+    spotify_url: null | string;
     title: string;
     track_id: string;
   }>(
@@ -439,7 +461,12 @@ export async function certifyExistingTrack(
       await db.execute({
         args: [trackId],
         sql: `select tracks.track_id, tracks.title, tracks.artists_json, tracks.isrc,
-                     tracks.label, tracks.album, findings.track_id as finding_id
+                     tracks.label, tracks.album, tracks.album_image_url, tracks.duration_ms,
+                     tracks.spotify_uri, tracks.spotify_url,
+                     findings.track_id as finding_id, findings.log_id as finding_log_id,
+                     findings.note as finding_note,
+                     findings.added_to_spotify as added_to_spotify,
+                     findings.posted_to_telegram as posted_to_telegram
               from tracks
               left join findings on findings.track_id = tracks.track_id
               where tracks.track_id = ?
@@ -452,30 +479,140 @@ export async function certifyExistingTrack(
     throw new ApiError("not_found", `No track with id ${trackId}.`, 404);
   }
 
-  const line = `${parseArtistsJson(row.artists_json).join(", ")} — ${row.title}`;
+  const artists = parseArtistsJson(row.artists_json);
+  const line = `${artists.join(", ")} — ${row.title}`;
+  const alreadySpotify = Number(row.added_to_spotify ?? 0) === 1;
+  const alreadyTelegram = Number(row.posted_to_telegram ?? 0) === 1;
 
-  if (row.finding_id) {
+  if (row.finding_id && alreadySpotify && alreadyTelegram) {
     throw new ApiError("already_certified", `Already logged: ${line}`, 409);
   }
 
   const nowIso = new Date().toISOString();
-  const logId = await resolveFindingLogId(db, { foundAt: nowIso, isrc: row.isrc, trackId });
+  let logId: string;
 
-  await db.execute(findingInsertStatement({ logId, note: options.note, nowIso, trackId }));
+  if (row.finding_id && row.finding_log_id) {
+    // THE RESUME: the finding exists with announce legs missing — a leg that failed, or a
+    // certify from before the fan-out. Run only what is missing; mint nothing.
+    logId = row.finding_log_id;
+  } else {
+    logId = await resolveFindingLogId(db, { foundAt: nowIso, isrc: row.isrc, trackId });
+    await db.execute(findingInsertStatement({ logId, note: options.note, nowIso, trackId }));
 
-  // Best-effort, exactly as the Spotify add does it: mint the graph entities this track now
-  // hangs off (its label + album, both minted ONLY off a certified finding) and stamp its
-  // pointers. Purely additive; the deploy-time reconciles back both up, so a miss never blocks.
-  try {
-    await Promise.all([linkTrackToLabel(trackId, row.label), linkTrackToAlbum(trackId, row.album)]);
-  } catch (labelError) {
-    logEvent("warn", "certify.graph-entity-upsert-failed", { error: labelError, logId, trackId });
+    // Best-effort, exactly as the Spotify add does it: mint the graph entities this track now
+    // hangs off (its label + album, both minted ONLY off a certified finding) and stamp its
+    // pointers. Purely additive; the deploy-time reconciles back both up, so a miss never blocks.
+    try {
+      await Promise.all([
+        linkTrackToLabel(trackId, row.label),
+        linkTrackToAlbum(trackId, row.album),
+      ]);
+    } catch (labelError) {
+      logEvent("warn", "certify.graph-entity-upsert-failed", { error: labelError, logId, trackId });
+    }
+
+    // A new finding now sits at the top of `/log` and owns its coordinate page: drop the edge
+    // cache and ping IndexNow so both re-render / re-crawl. Both are fire-and-forget-safe.
+    purgeLogCache(logId);
+    submitFindingToIndexNow(logId);
   }
 
-  // A new finding now sits at the top of `/log` and owns its coordinate page: drop the edge
-  // cache and ping IndexNow so both re-render / re-crawl. Both are fire-and-forget-safe.
-  purgeLogCache(logId);
-  submitFindingToIndexNow(logId);
+  const note = options.note ?? row.finding_note ?? undefined;
+
+  // ── THE ANNOUNCE FAN-OUT (record-not-throw; each leg fills only its own empty slot) ────────
+  // Presence first: the stored identity, else one exact-ISRC lookup. A hit is stamped back onto
+  // the track (the same columns the crawler's own anchor uses), so the resolve is paid once.
+  let spotifyUri = row.spotify_uri;
+  let spotifyUrl = row.spotify_url;
+
+  if (!spotifyUri && row.isrc && !(alreadySpotify && alreadyTelegram)) {
+    const lookup = await findSpotifyTrackByIsrc(row.isrc);
+
+    if (lookup.match) {
+      spotifyUri = lookup.match.spotifyUri;
+      spotifyUrl = lookup.match.spotifyUrl;
+      await db.execute({
+        args: [spotifyUri, spotifyUrl, trackId],
+        sql: `update tracks set spotify_uri = ?, spotify_url = ? where track_id = ?`,
+      });
+    }
+  }
+
+  const metadata: TrackMetadata = {
+    album: row.album ?? undefined,
+    albumImageUrl: row.album_image_url ?? undefined,
+    artists,
+    durationMs: row.duration_ms,
+    isrc: row.isrc ?? undefined,
+    spotifyArtistIds: [],
+    spotifyUri: spotifyUri ?? "",
+    spotifyUrl: spotifyUrl ?? "",
+    title: row.title,
+    trackId,
+  };
+
+  if (!alreadySpotify) {
+    if (spotifyUri) {
+      try {
+        await withRetries("Spotify playlist add", () => addTrackToPlaylist(metadata));
+        await db.execute({
+          args: [nowIso, nowIso, trackId],
+          sql: `update findings
+                set added_to_spotify = 1, added_to_spotify_at = ?, spotify_error = null,
+                    updated_at = ?
+                where track_id = ?`,
+        });
+      } catch (error) {
+        await db.execute({
+          args: [formatError(error), nowIso, trackId],
+          sql: `update findings set spotify_error = ?, updated_at = ? where track_id = ?`,
+        });
+      }
+    } else {
+      // The honest miss: no stored identity and no exact-ISRC match. Recorded on the same
+      // attention rail as a failed add — the operator links it by hand (or re-certifies once an
+      // ISRC lands) — because a fuzzy metadata guess must never reach the public playlist.
+      await db.execute({
+        args: [nowIso, trackId],
+        sql: `update findings
+              set spotify_error = 'no Spotify presence (no exact-ISRC match) — link manually',
+                  updated_at = ?
+              where track_id = ?`,
+      });
+    }
+  }
+
+  if (!alreadyTelegram) {
+    try {
+      await withRetries("Telegram post", () => postToTelegram(metadata, note, logId));
+      await db.execute({
+        args: [nowIso, nowIso, trackId],
+        sql: `update findings
+              set posted_to_telegram = 1, posted_to_telegram_at = ?, telegram_error = null,
+                  updated_at = ?
+              where track_id = ?`,
+      });
+    } catch (error) {
+      await db.execute({
+        args: [formatError(error), nowIso, trackId],
+        sql: `update findings set telegram_error = ?, updated_at = ? where track_id = ?`,
+      });
+    }
+
+    // The best-effort announce wave rides the FIRST Telegram attempt (posted was 0 at entry), so
+    // a later Spotify-only resume never re-loves / re-pushes / re-posts what already went out.
+    await lastfmLove(artists[0] ?? artists.join(", "), row.title);
+    notifyNewFinding(metadata, logId);
+
+    if (spotifyUrl) {
+      // Bluesky's link card is built around the Spotify link — a no-presence finding skips it.
+      try {
+        await postToBluesky(metadata, note, logId);
+      } catch (blueskyError) {
+        logEvent("warn", "certify.bluesky-post-failed", { error: blueskyError, logId, trackId });
+      }
+    }
+  }
 
   return { logId };
 }

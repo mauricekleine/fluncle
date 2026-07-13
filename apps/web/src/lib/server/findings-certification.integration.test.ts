@@ -28,6 +28,49 @@ vi.mock("./db", async (importOriginal) => {
   return { ...actual, getDb: () => Promise.resolve(db) };
 });
 
+// ── The certify announce fan-out's side-effect seams (publish.ts) ─────────────────────────
+// Certify now rides the same announce legs as the Spotify add (operator ruling, 2026-07-13), so
+// the network-touching modules are stubbed with recorders. Partial mocks: everything else on
+// each module (ApiError, the parsers) stays real.
+const playlistAdds: string[] = [];
+const telegramPosts: { logId?: string; spotifyUrl: string }[] = [];
+const blueskyPosts: string[] = [];
+let isrcLookup: {
+  match?: { albumImageUrl?: string; spotifyUri: string; spotifyUrl: string; trackId: string };
+  rateLimited: boolean;
+} = { rateLimited: false };
+
+vi.mock("./spotify", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./spotify")>();
+
+  return {
+    ...actual,
+    addTrackToPlaylist: vi.fn(async (track: { spotifyUri: string }) => {
+      playlistAdds.push(track.spotifyUri);
+    }),
+    findSpotifyTrackByIsrc: vi.fn(async () => isrcLookup),
+  };
+});
+
+vi.mock("./telegram", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./telegram")>();
+
+  return {
+    ...actual,
+    postToTelegram: vi.fn(async (track: { spotifyUrl: string }, _note?: string, logId?: string) => {
+      telegramPosts.push({ logId, spotifyUrl: track.spotifyUrl });
+    }),
+  };
+});
+
+vi.mock("./lastfm", () => ({ lastfmLove: vi.fn(async () => undefined) }));
+vi.mock("./push", () => ({ notifyNewFinding: vi.fn(() => undefined) }));
+vi.mock("./bluesky", () => ({
+  postToBluesky: vi.fn(async (track: { trackId: string }) => {
+    blueskyPosts.push(track.trackId);
+  }),
+}));
+
 const NOW = "2026-07-01T00:00:00.000Z";
 const FINDING_ID = "aaaaaaaaaaaaaaaaaaaaaa"; // 22 chars, the tracks PK shape
 const CATALOGUE_ID = "bbbbbbbbbbbbbbbbbbbbbb";
@@ -37,8 +80,20 @@ const EMBED = `update tracks set embedding_json = ?, embedding_blob = vector32(?
 
 beforeEach(async () => {
   db = await createIntegrationDb();
-  await seedTrack(db, { logId: "004.7.2I", title: "A Certified Track", trackId: FINDING_ID });
+  // Seeded FULLY ANNOUNCED (both legs done): certify's resume semantics re-run missing legs on
+  // an incompletely-announced finding, so only a complete one exercises the 409.
+  await seedTrack(db, {
+    addedToSpotify: true,
+    logId: "004.7.2I",
+    postedToTelegram: true,
+    title: "A Certified Track",
+    trackId: FINDING_ID,
+  });
   await seedCatalogueTrack(db, { title: "An Uncertified Catalogue Track", trackId: CATALOGUE_ID });
+  playlistAdds.length = 0;
+  telegramPosts.length = 0;
+  blueskyPosts.length = 0;
+  isrcLookup = { rateLimited: false };
 });
 
 describe("the tracks/findings split — an uncertified catalogue track is not a finding", () => {
@@ -491,7 +546,7 @@ describe("certify in place — logging an existing catalogue track without creat
     expect(finding.rows[0]?.note).toBe("logged from the telescope");
   });
 
-  it("REFUSES a row that is already certified (409) — never a second finding", async () => {
+  it("REFUSES a row that is certified AND fully announced (409) — never a second finding", async () => {
     const { certifyExistingTrack } = await import("./publish");
 
     await expect(certifyExistingTrack(FINDING_ID)).rejects.toThrow(/already logged/i);
@@ -508,5 +563,116 @@ describe("certify in place — logging an existing catalogue track without creat
     const { certifyExistingTrack } = await import("./publish");
 
     await expect(certifyExistingTrack("cccccccccccccccccccccc")).rejects.toThrow(/no track/i);
+  });
+
+  // ── The announce fan-out (operator ruling, 2026-07-13: a finding is a finding however it
+  // arrives, so certify rides the same legs as the Spotify add — presence resolved, never
+  // assumed; a leg failure recorded, never unwinding the mint; missing legs resumable). ──
+  it("fans out on mint — resolves presence by exact ISRC, adds to the playlist, posts to Telegram", async () => {
+    const { certifyExistingTrack } = await import("./publish");
+
+    await db.execute({
+      args: ["GBTEST7700042", CATALOGUE_ID],
+      sql: "update tracks set isrc = ?, spotify_uri = null, spotify_url = null where track_id = ?",
+    });
+    isrcLookup = {
+      match: {
+        spotifyUri: "spotify:track:resolved42",
+        spotifyUrl: "https://open.spotify.com/track/resolved42",
+        trackId: "resolved42",
+      },
+      rateLimited: false,
+    };
+
+    const { logId } = await certifyExistingTrack(CATALOGUE_ID);
+
+    expect(playlistAdds).toEqual(["spotify:track:resolved42"]);
+    expect(telegramPosts).toEqual([
+      { logId, spotifyUrl: "https://open.spotify.com/track/resolved42" },
+    ]);
+    // Bluesky rides the announce wave when the Spotify link exists (its card is built on it).
+    expect(blueskyPosts).toEqual([CATALOGUE_ID]);
+
+    // The flags stamped, the resolved identity written back onto the track.
+    const finding = await db.execute({
+      args: [CATALOGUE_ID],
+      sql: "select added_to_spotify, posted_to_telegram, spotify_error from findings where track_id = ?",
+    });
+    expect(Number(finding.rows[0]?.added_to_spotify)).toBe(1);
+    expect(Number(finding.rows[0]?.posted_to_telegram)).toBe(1);
+    expect(finding.rows[0]?.spotify_error).toBeNull();
+    const track = await db.execute({
+      args: [CATALOGUE_ID],
+      sql: "select spotify_uri from tracks where track_id = ?",
+    });
+    expect(track.rows[0]?.spotify_uri).toBe("spotify:track:resolved42");
+  });
+
+  it("records the honest no-presence miss — Telegram still posts (no Spotify line), Bluesky skipped", async () => {
+    const { certifyExistingTrack } = await import("./publish");
+
+    // No stored identity, no ISRC → no lookup can run → the playlist is never guessed at.
+    await db.execute({
+      args: [CATALOGUE_ID],
+      sql: "update tracks set spotify_uri = null, spotify_url = null where track_id = ?",
+    });
+    const { logId } = await certifyExistingTrack(CATALOGUE_ID);
+
+    expect(playlistAdds).toEqual([]);
+    expect(blueskyPosts).toEqual([]);
+    expect(telegramPosts).toEqual([{ logId, spotifyUrl: "" }]);
+
+    const finding = await db.execute({
+      args: [CATALOGUE_ID],
+      sql: "select added_to_spotify, posted_to_telegram, spotify_error from findings where track_id = ?",
+    });
+    expect(Number(finding.rows[0]?.added_to_spotify)).toBe(0);
+    expect(Number(finding.rows[0]?.posted_to_telegram)).toBe(1);
+    expect(finding.rows[0]?.spotify_error as string).toMatch(/no spotify presence/i);
+  });
+
+  it("RESUMES an incompletely-announced finding — fills only the missing legs, mints nothing", async () => {
+    const { certifyExistingTrack } = await import("./publish");
+
+    // First pass: no presence → Telegram posts, Spotify records the miss (the 044.1.3L shape).
+    await db.execute({
+      args: [CATALOGUE_ID],
+      sql: "update tracks set spotify_uri = null, spotify_url = null where track_id = ?",
+    });
+    const first = await certifyExistingTrack(CATALOGUE_ID);
+    expect(telegramPosts).toHaveLength(1);
+    expect(playlistAdds).toEqual([]);
+
+    // An ISRC lands later (the crawler's anchor backfill); certify again — the resume.
+    await db.execute({
+      args: ["GBTEST7700043", CATALOGUE_ID],
+      sql: "update tracks set isrc = ? where track_id = ?",
+    });
+    isrcLookup = {
+      match: {
+        spotifyUri: "spotify:track:late43",
+        spotifyUrl: "https://open.spotify.com/track/late43",
+        trackId: "late43",
+      },
+      rateLimited: false,
+    };
+
+    const second = await certifyExistingTrack(CATALOGUE_ID);
+
+    // Same coordinate, no second finding, the Spotify leg filled — and Telegram NOT re-posted.
+    expect(second.logId).toBe(first.logId);
+    expect(playlistAdds).toEqual(["spotify:track:late43"]);
+    expect(telegramPosts).toHaveLength(1);
+    const findings = await db.execute({
+      args: [CATALOGUE_ID],
+      sql: "select count(*) as n from findings where track_id = ?",
+    });
+    expect(Number(findings.rows[0]?.n)).toBe(1);
+    const finding = await db.execute({
+      args: [CATALOGUE_ID],
+      sql: "select added_to_spotify, spotify_error from findings where track_id = ?",
+    });
+    expect(Number(finding.rows[0]?.added_to_spotify)).toBe(1);
+    expect(finding.rows[0]?.spotify_error).toBeNull();
   });
 });

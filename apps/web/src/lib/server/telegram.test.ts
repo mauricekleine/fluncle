@@ -73,3 +73,39 @@ describe("formatMixtapeAnnouncement", () => {
     expect(text).not.toContain("Mixcloud");
   });
 });
+
+// The per-finding crew post (formatTelegramMessage) — only the seam the certify fan-out bent:
+// a certified catalogue row can have NO Spotify presence, and the post must omit the line
+// rather than print a broken one. The Spotify-add path (URL always present) is unchanged.
+describe("formatTelegramMessage — the Spotify line is conditional on a presence", () => {
+  const track = {
+    artists: ["Artificial Intelligence"],
+    durationMs: 270_000,
+    spotifyArtistIds: [],
+    spotifyUri: "",
+    spotifyUrl: "",
+    title: "Ask Yourself",
+    trackId: "t1",
+  };
+
+  it("omits the Spotify line when there is no URL, and still links the log page", async () => {
+    const { formatTelegramMessage } = await import("./telegram");
+    const message = formatTelegramMessage(track, undefined, "044.1.3L");
+
+    expect(message).not.toContain("Spotify:");
+    expect(message).toContain("Ask Yourself");
+    expect(message).toContain("/log/044.1.3L");
+  });
+
+  it("keeps the Spotify line when the URL exists (the add path, unchanged)", async () => {
+    const { formatTelegramMessage } = await import("./telegram");
+    const message = formatTelegramMessage(
+      { ...track, spotifyUrl: "https://open.spotify.com/track/x" },
+      undefined,
+      "044.1.3L",
+    );
+
+    expect(message).toContain("🎧 Spotify: https://open.spotify.com/track/x");
+    expect(message).toContain("/log/044.1.3L");
+  });
+});
