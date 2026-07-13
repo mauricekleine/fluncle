@@ -12,9 +12,14 @@ import { describe, expect, test } from "bun:test";
 import {
   appendRejectedSource,
   DEFAULT_MAX_BER,
+  durationAgrees,
+  fold,
+  type ItunesReference,
+  matchKey,
   MIN_OVERLAP_FRAMES,
   parseFpcalcJson,
   parseRejectedSources,
+  pickSearchReference,
   popcount32,
   REJECTED_MEMORY_CAP,
   rejectedShas,
@@ -214,5 +219,106 @@ describe("the bad-audio memory (appendRejectedSource / parse / sets)", () => {
 
     expect([...rejectedVideoIds(memory)]).toEqual(["v1"]);
     expect([...rejectedShas(memory)].sort()).toEqual(["s1", "s2"]);
+  });
+});
+
+// ── The second reference rung's precision guards (docs/the-ear.md § Wrong audio) ─────────────
+
+describe("durationAgrees (the replicated capture tolerance)", () => {
+  test("accepts within max(3s, 3%) and rejects beyond it", () => {
+    // 200s target ⇒ allowed = max(3, 6) = 6s.
+    expect(durationAgrees(201, 200_000)).toBe(true);
+    expect(durationAgrees(206, 200_000)).toBe(true);
+    expect(durationAgrees(207, 200_000)).toBe(false);
+  });
+
+  test("a missing/zero/negative target or candidate abstains (never trusts blind)", () => {
+    expect(durationAgrees(200, undefined)).toBe(false);
+    expect(durationAgrees(200, 0)).toBe(false);
+    expect(durationAgrees(0, 200_000)).toBe(false);
+    expect(durationAgrees(-5, 200_000)).toBe(false);
+  });
+});
+
+describe("matchKey (the replicated folded identity)", () => {
+  test("is order- and separator-agnostic across the artist set, and folds & ↔ and", () => {
+    expect(matchKey(["A", "B"], "Song")).toBe(matchKey(["B", "A"], "Song"));
+    expect(matchKey("A & B", "Song")).toBe(matchKey(["A", "and", "B"].join(", "), "Song"));
+  });
+
+  test("a remix/VIP is a DIFFERENT recording from the original", () => {
+    expect(matchKey(["Calibre"], "Mr Majestic")).not.toBe(
+      matchKey(["Calibre"], "Mr Majestic (VIP)"),
+    );
+    expect(fold("Where's Your Head At")).toBe("where s your head at");
+  });
+});
+
+const hit = (over: Partial<ItunesReference>): ItunesReference => ({
+  artistName: "Calibre",
+  durationSec: 201,
+  previewUrl: "https://itunes/preview/u1.m4a",
+  trackName: "Mr Majestic",
+  ...over,
+});
+
+describe("pickSearchReference (the precision heart — resolve one confident reference or abstain)", () => {
+  const target = { artists: ["Calibre"], durationMs: 200_000, title: "Mr Majestic" };
+
+  test("a confident identity+duration hit → its preview URL", () => {
+    expect(pickSearchReference([hit({})], target)).toEqual({
+      previewUrl: "https://itunes/preview/u1.m4a",
+    });
+  });
+
+  test("zero hits → no-hit (abstain)", () => {
+    expect(pickSearchReference([], target)).toEqual({ previewUrl: null, reason: "no-hit" });
+  });
+
+  test("an IDENTITY-mismatch hit is rejected as a reference → no-hit (a remix is not the original)", () => {
+    const remix = hit({ trackName: "Mr Majestic (Loadstar Remix)" });
+
+    expect(pickSearchReference([remix], target)).toEqual({ previewUrl: null, reason: "no-hit" });
+  });
+
+  test("a DURATION-disagree hit is rejected as a reference → no-hit", () => {
+    const wrongLength = hit({ durationSec: 240, previewUrl: "https://itunes/preview/u3.m4a" });
+
+    expect(pickSearchReference([wrongLength], target)).toEqual({
+      previewUrl: null,
+      reason: "no-hit",
+    });
+  });
+
+  test("survivors that disagree on length with each other → conflict (never guess which recording)", () => {
+    // Both within 6s of the 200s target, but 10s apart from each other → two different recordings
+    // sharing the title+artist. Abstain.
+    const a = hit({ durationSec: 195, previewUrl: "https://itunes/preview/a.m4a" });
+    const b = hit({ durationSec: 205, previewUrl: "https://itunes/preview/b.m4a" });
+
+    expect(pickSearchReference([a, b], target)).toEqual({ previewUrl: null, reason: "conflict" });
+  });
+
+  test("multiple survivors that AGREE on length are the same recording → the closest one resolves", () => {
+    const near = hit({ durationSec: 200, previewUrl: "https://itunes/preview/near.m4a" });
+    const far = hit({ durationSec: 202, previewUrl: "https://itunes/preview/far.m4a" });
+
+    expect(pickSearchReference([far, near], target)).toEqual({
+      previewUrl: "https://itunes/preview/near.m4a",
+    });
+  });
+
+  test("no target duration → abstain (the duration guard cannot run, so nothing is trusted)", () => {
+    expect(pickSearchReference([hit({})], { ...target, durationMs: undefined })).toEqual({
+      previewUrl: null,
+      reason: "no-hit",
+    });
+  });
+
+  test("a hit with no preview URL is ignored", () => {
+    expect(pickSearchReference([hit({ previewUrl: "" })], target)).toEqual({
+      previewUrl: null,
+      reason: "no-hit",
+    });
   });
 });

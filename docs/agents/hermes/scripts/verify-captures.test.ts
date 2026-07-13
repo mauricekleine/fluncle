@@ -75,12 +75,17 @@ function stubDeps(overrides: DepsOverrides, certifiedIds: Set<string> = new Set(
         }
         return certifiedIds.has(trackId) ? "flagged-finding" : "quarantined-catalogue";
       }),
+    resolveSearchFp: overrides.resolveSearchFp ?? (async () => ({ fingerprint: PREVIEW_FP })),
     rmWorkdir: overrides.rmWorkdir ?? (() => undefined),
   };
 }
 
+// The routing tests default to a TRUSTED (ISRC) row so a mismatch stays on the condemning path.
+// The second-rung tests below pass `isrc: null` explicitly to exercise the abstain-only path.
 const row = (trackId: string, extra: Partial<VerifyWorkItem> = {}): VerifyWorkItem => ({
   artists: ["A"],
+  durationMs: 200_000,
+  isrc: "USREF0000001",
   sourceAudioKey: `catalogue/${trackId}/deadbeef.webm`,
   title: "T",
   trackId,
@@ -186,5 +191,63 @@ describe("runVerifyTick — skip-not-stamp + isolation (idempotence's other half
 
     expect(summary.ok).toBe(false);
     expect(summary.error).toContain("api down");
+  });
+});
+
+describe("runVerifyTick — the second rung (ISRC-null, title+artist reference)", () => {
+  test("an ISRC-null row confirmed by a search reference → verified via the search rung, not the ISRC rung", async () => {
+    const fetchPreviewFp = mock(async () => PREVIEW_FP);
+    const resolveSearchFp = mock(async () => ({ fingerprint: PREVIEW_FP }));
+    const report = mock(async () => "preview-match");
+    const summary = await runVerifyTick(
+      20,
+      stubDeps({ fetchPreviewFp, queue: [row("s1", { isrc: null })], report, resolveSearchFp }),
+    );
+
+    // The ISRC rung is skipped entirely; the title+artist rung answered.
+    expect(fetchPreviewFp).not.toHaveBeenCalled();
+    expect(resolveSearchFp).toHaveBeenCalledTimes(1);
+    expect(report).toHaveBeenCalledWith("s1", "match");
+    expect(summary).toMatchObject({ matched: 1, searchMatched: 1, unverified: 0, verified: 1 });
+  });
+
+  test("no confident search reference → unverified (abstain), and no R2 read is paid", async () => {
+    const fetchCapture = mock(async () => "/tmp/fake.webm");
+    const report = mock(async () => "unverified");
+    const summary = await runVerifyTick(
+      20,
+      stubDeps({
+        fetchCapture,
+        queue: [row("s2", { isrc: null })],
+        report,
+        resolveSearchFp: async () => ({ fingerprint: null, reason: "no-hit" }),
+      }),
+    );
+
+    expect(report).toHaveBeenCalledWith("s2", "no-preview");
+    expect(fetchCapture).not.toHaveBeenCalled();
+    expect(summary.unverified).toBe(1);
+    expect(summary.searchMismatch).toBe(0);
+  });
+
+  test("a search reference that MISMATCHES the capture → unverified, NEVER a mismatch verdict (low trust never condemns)", async () => {
+    const report = mock(async () => "unverified");
+    const summary = await runVerifyTick(
+      20,
+      stubDeps({
+        // A confident-but-WRONG reference: its fingerprint does not appear in the capture.
+        queue: [row("s3", { certified: false, isrc: null })],
+        report,
+        resolveSearchFp: async () => ({ fingerprint: WRONG_FP }),
+      }),
+    );
+
+    // The capture is NOT condemned: no `mismatch` verdict, no quarantine — just the honest abstain,
+    // recorded distinctly as a search mismatch.
+    expect(report).toHaveBeenCalledWith("s3", "no-preview");
+    expect(summary.searchMismatch).toBe(1);
+    expect(summary.quarantinedCatalogue).toBe(0);
+    expect(summary.unverified).toBe(1);
+    expect(summary.verified).toBe(1);
   });
 });

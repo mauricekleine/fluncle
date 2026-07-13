@@ -1598,6 +1598,8 @@ export async function setTrackDismissed(trackId: string, dismissed: boolean): Pr
 export type CaptureVerifyItem = {
   artists: string[];
   certified: boolean;
+  /** The stored length — the backfill's TITLE+ARTIST rung guards a search hit against it. */
+  durationMs: number;
   isrc: null | string;
   /** Null for a catalogue row (the coordinate lives on the certification). */
   logId: null | string;
@@ -1641,7 +1643,7 @@ export async function listUnverifiedCaptures(limit = 50): Promise<CaptureVerifyI
   const result = await db.execute({
     args: [WRONG_AUDIO_STATUS, page],
     sql: `select ct.track_id as track_id, ct.title as title, ct.artists_json as artists_json,
-                 ct.isrc as isrc, ct.source_audio_key as source_audio_key,
+                 ct.isrc as isrc, ct.duration_ms as duration_ms, ct.source_audio_key as source_audio_key,
                  f.log_id as log_id, (f.track_id is not null) as certified
           from tracks ct
           left join findings f on f.track_id = ct.track_id
@@ -1655,6 +1657,7 @@ export async function listUnverifiedCaptures(limit = 50): Promise<CaptureVerifyI
   return typedRows<{
     artists_json: string;
     certified: number;
+    duration_ms: null | number;
     isrc: null | string;
     log_id: null | string;
     source_audio_key: string;
@@ -1663,6 +1666,7 @@ export async function listUnverifiedCaptures(limit = 50): Promise<CaptureVerifyI
   }>(result.rows).map((row) => ({
     artists: parseArtistsJson(row.artists_json),
     certified: Number(row.certified) === 1,
+    durationMs: Number(row.duration_ms) || 0,
     isrc: row.isrc,
     logId: row.log_id,
     sourceAudioKey: row.source_audio_key,
