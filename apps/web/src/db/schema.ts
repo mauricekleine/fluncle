@@ -960,6 +960,47 @@ export const mixcloudAuth = sqliteTable("mixcloud_auth", {
   updatedAt: text("updated_at").notNull(),
 });
 
+// The /reach Tier-2 OAuth token stores (docs/reach-tier2-activation.md), one row per
+// platform — the same shape as spotify_auth / youtube_auth (the CLI/box never holds the
+// durable credential; the Worker mints an access token on demand). DORMANT until the
+// operator connects each: the reach collector skips a platform whose row is absent.
+
+// Twitch — the broadcaster's OWN user token + refresh, for the Helix follower total
+// (moderator:read:followers). Access token ~4h; refreshed via the stored refresh token.
+// Single row, service PK = "twitch".
+export const twitchAuth = sqliteTable("twitch_auth", {
+  accessToken: text("access_token").notNull(),
+  expiresAt: text("expires_at").notNull(),
+  refreshToken: text("refresh_token").notNull(),
+  scope: text("scope").notNull(),
+  service: text("service").primaryKey(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+// TikTok — Display API user token + refresh, for follower_count + likes_count
+// (user.info.stats). Access token 24h; refreshed via the stored refresh token. Single
+// row, service PK = "tiktok".
+export const tiktokAuth = sqliteTable("tiktok_auth", {
+  accessToken: text("access_token").notNull(),
+  expiresAt: text("expires_at").notNull(),
+  refreshToken: text("refresh_token").notNull(),
+  scope: text("scope").notNull(),
+  service: text("service").primaryKey(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+// Instagram — the "Instagram API with Instagram Login" LONG-LIVED token (60 days) for
+// followers_count. There is NO refresh_token: the token itself is refreshed in place
+// (graph.instagram.com/refresh_access_token), so this table has no refresh column and
+// no scope column, just the durable token + its expiry. Single row, service PK =
+// "instagram".
+export const instagramAuth = sqliteTable("instagram_auth", {
+  accessToken: text("access_token").notNull(),
+  expiresAt: text("expires_at").notNull(),
+  service: text("service").primaryKey(),
+  updatedAt: text("updated_at").notNull(),
+});
+
 export const submissions = sqliteTable(
   "submissions",
   {

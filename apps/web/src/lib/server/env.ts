@@ -1,5 +1,11 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 
+// The injectable `fetch` — the default is the global `fetch`; tests pass a fake that
+// routes by URL, so every fetch+parse leg (the reach collectors, the OAuth token
+// helpers) is unit-testable with zero real network. Its canonical home is here (a leaf
+// module) so any server module can import it without a cycle.
+export type FetchImpl = typeof fetch;
+
 let didLoadLocalEnv = false;
 
 const envKeys = [
@@ -76,6 +82,32 @@ const envKeys = [
   // runtime, so it's derived from the request origin (mixcloudRedirectUri).
   "MIXCLOUD_CLIENT_ID",
   "MIXCLOUD_CLIENT_SECRET",
+  // The /reach Tier-2 OAuth plumbing (docs/reach-tier2-activation.md) — one number
+  // apiece behind a per-platform USER OAuth + refresh, mirroring the Spotify/YouTube
+  // token dance (the durable token lives Worker-side in <platform>_auth, minted on
+  // demand). All OPTIONAL, read via readOptionalEnv: every leg is DORMANT until its
+  // creds are set AND the operator connects, so the reach collector skips the platform
+  // cleanly (env-gated) exactly like the Last.fm/Bluesky legs no-op unprovisioned. The
+  // redirect URI is derived from the request origin (like Mixcloud), so no *_REDIRECT_URI
+  // var — the operator registers that exact callback URL in each platform's app console.
+  //
+  // Twitch — the broadcaster's OWN user token + `moderator:read:followers` (an app
+  // token no longer suffices for the follower total). Client id/secret from the Twitch
+  // developer console.
+  "TWITCH_CLIENT_ID",
+  "TWITCH_CLIENT_SECRET",
+  // TikTok — Display API `user.info.stats` (own account only) for follower + likes
+  // totals. `client_key`/`client_secret` from the TikTok developer app (note TikTok's
+  // "client_key", not "client_id").
+  "TIKTOK_CLIENT_KEY",
+  "TIKTOK_CLIENT_SECRET",
+  // Instagram — the "Instagram API with Instagram Login" business flow (NOT the
+  // Facebook-Login variant), `instagram_business_basic` scope → `followers_count`. The
+  // Instagram App ID/Secret from the Meta app dashboard. The stored token is a 60-day
+  // LONG-LIVED token (no refresh_token — it is refreshed in place via
+  // graph.instagram.com/refresh_access_token), so instagram_auth carries no refresh column.
+  "INSTAGRAM_CLIENT_ID",
+  "INSTAGRAM_CLIENT_SECRET",
   // Last.fm write side (love-on-add). API_KEY + SHARED_SECRET come from the
   // Last.fm API application; SESSION_KEY (durable, non-expiring) comes from
   // running `fluncle admin auth lastfm`. All three are Worker secrets. The love

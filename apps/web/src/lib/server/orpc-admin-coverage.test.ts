@@ -435,8 +435,9 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
 // route dir). NOT counted against coverage — they will never have a contract —
 // but listed so the enumeration is total and a new carve-out is a deliberate edit.
 //
-//   - OAuth browser-redirect callbacks/starts (Spotify / YouTube / Mixcloud
-//     `*/auth/*`): they return 302 redirects, not RPC JSON. Permanent. (Last.fm's
+//   - OAuth browser-redirect callbacks/starts (Spotify / YouTube / Mixcloud, plus the
+//     /reach Tier-2 Twitch / TikTok / Instagram `*/auth/*`): they return 302 redirects,
+//     not RPC JSON. Permanent. (Last.fm's
 //     `auth/start` + `auth/session` are NOT redirects — they return RPC JSON — so
 //     they are CONVERTED, not carved out, in the admin wave.)
 //   - The admin `logout` (GET): a 302 that expires the grant cookie and bounces to
@@ -448,7 +449,16 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
 //     for at kickoff). (The legacy multipart `…/video.ts` POST that was carved out
 //     alongside it has since been REMOVED — no first-party caller posted a small
 //     multipart bundle; the CLI uses the presign/finalize JSON flow.)
-const ADMIN_CARVE_OUT_ROUTE_PREFIXES = ["spotify/auth/", "youtube/auth/", "mixcloud/auth/"];
+const ADMIN_CARVE_OUT_ROUTE_PREFIXES = [
+  "spotify/auth/",
+  "youtube/auth/",
+  "mixcloud/auth/",
+  // The /reach Tier-2 OAuth starts + callbacks (docs/reach-tier2-activation.md): 302
+  // browser redirects like the others, not RPC JSON — permanent carve-outs.
+  "twitch/auth/",
+  "tiktok/auth/",
+  "instagram/auth/",
+];
 
 const ADMIN_CARVE_OUT_ROUTES = new Set([
   "chat", // ChatDnB (spike): streams an NDJSON transcript (one event per line) from streamText, not a single RPC JSON body — a streaming carve-out like the media proxies.
