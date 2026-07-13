@@ -68,7 +68,22 @@ The App Store Connect listing values, ratified by the operator — paste these w
 
 - **Promotional text** (optional ASC field, updatable without review): `Fresh bangers, most nights. The radio never stops; drop in mid-flight.`
 - **App Privacy labels**: Identifiers → Device ID (the push token), app functionality only, not linked to identity, no tracking. User Content → track submissions + optional contact, app functionality, not linked. Everything else: Data Not Collected (the app ships no analytics SDK).
-- **Review notes** (the 5.2 pre-empt + the 4.2 lead): the Decks tab is an interactive set-building tool — a harmonic next-track engine ranking the archive by key, tempo, and sonic feel — not a content browser; audio is official previews and our own brand renders ≤30s; the radio streams only our own narration over silent renders; the app links out to Spotify and Apple Music; submissions are private suggestions reviewed by the operator, never displayed; no account needed to review any feature.
+- **Review notes** — the FULL paste-ready text for the ASC "Notes" field (reviewer-facing, deliberately plain per the narrator rule; the 4.2 lead, then the 5.2 pre-empt, then the 1.2 line):
+
+  > Thank you for reviewing Fluncle. A few notes up front that usually answer the common questions:
+  >
+  > What the app is. Fluncle is a single-editor drum & bass archive with an interactive set-building tool. Every track in the app was selected, verified, and published by the developer personally; there is no user-generated feed and no third-party catalog.
+  >
+  > Interactive functionality (Guideline 4.2). The "Decks" tab is a working tool, not a content browser: the user picks artists they like (or searches for a track), chooses an opening track, and a harmonic mixing engine ranks which tracks mix in cleanly next, by musical key, tempo, and sonic similarity, re-ranking after every addition. The user builds an ordered set, can remove tracks, and can share the finished set as a link. This runs alongside the native video feed, a continuous radio station with background-audio and lock-screen playback, full archive search, local saves, and push notifications.
+  >
+  > Music rights (Guideline 5.2). The app does not stream or distribute commercial recordings. Audio in the app consists of (a) official short preview clips of the kind provided by music platforms for exactly this purpose, kept at or under ~30 seconds, and (b) audio and narration we produced ourselves. The videos in the feed are our own original renders. The radio streams only our own spoken narration and brand audio. For full tracks, the app links out to the official listings on Spotify and Apple Music — it never plays full commercial recordings itself.
+  >
+  > The "Submit a track" feature is not user-generated content (Guideline 1.2). It is a private, one-way suggestion box addressed to the developer: nothing a user submits is ever shown to any other user or published automatically. Submissions are rate-limited server-side and each one is manually reviewed by the developer, who decides whether to add the track to the archive through a separate editorial process. It is functionally a contact form, so there is no user-facing moderation surface to provide.
+  >
+  > No account, no sign-in. Every feature above can be reviewed without creating an account or logging in — the app has no accounts at all. No demo credentials are needed. Push notifications are optional and requested only after content is on screen; declining them changes nothing.
+  >
+  > If anything needs clarification, we're happy to answer quickly through Resolution Center.
+
 - **Screenshots**: the 6.9" set (3-10 shots) from the iPhone Pro Max-class simulator: feed (a dark cover), the Decks mid-chain (a numbered set + the ranked rail — the 4.2 evidence), radio playing, archive, a finding, submit.
 
 ## The cold-open requirement
