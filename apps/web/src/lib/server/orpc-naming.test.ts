@@ -105,6 +105,12 @@ const APPROVED_VERBS = new Set<string>([
   // `publish` (mint/flip) nor `distribute` (the byte-move) names the act of telling the crew.
   "announce",
   "approve",
+  // `certify` (turn an existing catalogue row into a finding in place — mint its certification
+  // half, without creating a new track) — added deliberately with The Ear's `certify_track` op.
+  // It names the exact act the catalogue domain otherwise forbids: `publish` is the Spotify add
+  // (it inserts a new track), while this certifies a row the archive ALREADY holds. It is the one
+  // catalogue act reserved for the operator.
+  "certify",
   "collect",
   // `confirm` (promote a candidate artist social to `confirmed`, letting it onto the
   // public artist page) — added deliberately with the artist-relationship `confirm_artist_social`

@@ -244,6 +244,11 @@ export function kindClause(kind: TrackWorkKind): { args: string[]; sql: string }
       args: [cooldown],
       // CAPTURE_MAX_FAILURES is a trusted module int (interpolated, like listTracks does);
       // the cooldown is BOUND. `wrong-audio` is a re-capture trigger (docs/the-ear.md).
+      // The catalogue half also excludes a DISMISSED row (`dismissed_at is null`): the operator's
+      // "not for me" is the ruled-out-label veto's class (docs/the-ear.md § The operator's
+      // actions) — a metered download must never be spent on a row he took out of the telescope.
+      // Scoped to the catalogue branch: a finding is never dismissed, and capture is the only
+      // stage that spends money (the veto's own scope), so analyze/embed are untouched.
       sql: `(t.capture_status is null
              or t.capture_status = 'pending'
              or t.capture_status = 'wrong-audio'
@@ -252,7 +257,8 @@ export function kindClause(kind: TrackWorkKind): { args: string[]; sql: string }
                  and (t.source_audio_attempted_at is null or t.source_audio_attempted_at < ?)))
             and (
               (f.track_id is not null and f.log_id is not null)
-              or (f.track_id is null and t.capture_priority is not null and t.capture_priority >= 0)
+              or (f.track_id is null and t.capture_priority is not null and t.capture_priority >= 0
+                  and t.dismissed_at is null)
             )`,
     };
   }

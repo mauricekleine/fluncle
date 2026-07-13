@@ -500,6 +500,48 @@ export function toPublicTrackListItem<T extends object>(item: T): T {
 }
 
 /** Fetch a single track by its Spotify trackId or its Log ID. */
+/**
+ * The minimal shape the `/api/preview` relay needs to resolve a live preview — resolved from
+ * `tracks` (a LEFT join to `findings`, so it answers by track id OR Log ID), NOT through the
+ * finding INNER join `getTrackByIdOrLogId` uses. That difference is the point: a CATALOGUE track
+ * (a `tracks` row with no `findings` row) has no finding to inner-join, so the finding-scoped
+ * resolver returns nothing for it — and The Ear's inline artwork audition (docs/the-ear.md § The
+ * operator's actions) previews catalogue rows. The preview itself is the official 30s Deezer /
+ * Apple / iTunes preview the relay resolves by ISRC; nothing about the catalogue is exposed but a
+ * public song preview. Everything it selects lives on `tracks` (catalogue identity), never on the
+ * certification half.
+ */
+export async function getLivePreviewTrack(
+  idOrLogId: string,
+): Promise<{ artists: string[]; isrc?: string; previewUrl?: string; title: string } | undefined> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [idOrLogId, idOrLogId],
+    sql: `select tracks.title, tracks.artists_json, tracks.isrc, tracks.preview_url
+          from tracks
+          left join findings on findings.track_id = tracks.track_id
+          where tracks.track_id = ? or findings.log_id = ?
+          limit 1`,
+  });
+  const row = typedRow<{
+    artists_json: string;
+    isrc: null | string;
+    preview_url: null | string;
+    title: string;
+  }>(result.rows);
+
+  if (!row) {
+    return undefined;
+  }
+
+  return {
+    artists: parseArtistsJson(row.artists_json),
+    isrc: row.isrc ?? undefined,
+    previewUrl: row.preview_url ?? undefined,
+    title: row.title,
+  };
+}
+
 export async function getTrackByIdOrLogId(idOrLogId: string): Promise<TrackListItem | undefined> {
   const db = await getDb();
   const result = await db.execute({

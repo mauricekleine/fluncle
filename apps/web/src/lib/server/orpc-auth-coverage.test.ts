@@ -213,6 +213,11 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // The capture sweep is agent-allowed (admin tier): it only fills the public URL
   // Postiz withheld on create + links the analytics release-id — it publishes nothing.
   capture_post_urls: "admin",
+  // Certify an existing catalogue row in place (docs/the-ear.md § The operator's actions) —
+  // operator tier: certifying is the one act the catalogue domain forbids a machine (the
+  // agent-tier sweep is agent-allowed precisely because it can never certify). The
+  // `update_label` / `set_capture_budget` rule.
+  certify_track: "operator",
   // The wrong-audio quarantine override (docs/the-ear.md § Wrong audio) — operator tier: an
   // agent does not get to reverse the machine's own wrong-audio verdict on its own output, the
   // same reasoning that keeps `update_label` and `set_capture_budget` operator-tier.
@@ -486,6 +491,10 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // The auto-advance kill switch — operator tier, like `set_clip_drip`: pausing/resuming
   // the whole auto-publish is the operator's control, never the box's.
   set_publish_advance: "operator",
+  // The catalogue "not for me" / restore toggle (docs/the-ear.md § The operator's actions) —
+  // operator tier: steering what the telescope keeps pointing at is a taste ruling, the
+  // `update_label` class, so an agent may never dismiss.
+  set_track_dismissed: "operator",
   start_lastfm_auth: "operator",
   sweep_push_receipts: "admin",
   // The pre-chew triage verdict write — agent tier (adminAuth only, no operatorGuard),

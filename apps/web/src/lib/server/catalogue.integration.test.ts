@@ -511,6 +511,7 @@ describe("the read — the ranked page, and the WHY on every row", () => {
     expect(await getCatalogueSummary()).toEqual({
       awaitingCapture: 0,
       awaitingRank: 0,
+      dismissed: 0,
       quarantined: 0,
       ranked: 0,
       total: 0,
@@ -788,5 +789,121 @@ describe("wrong audio — a cross-title near-1.0 capture is quarantined, never t
 
     // A second force-clear is a no-op — the row is not quarantined anymore.
     expect(await clearWrongAudio("cat-fyl")).toBe(false);
+  });
+});
+
+describe("the operator's actions — dismiss/restore, and the deterministic-duplicate exclusion", () => {
+  it("a dismissed row leaves the ear + capture lenses and the sweep; restore puts it back", async () => {
+    const { listCatalogueTracks, rankCatalogue, setTrackDismissed } = await import("./catalogue");
+
+    await seedFinding("finding-a", { vector: axis(0) });
+    // One scored (ear-lens) row and one cold (capture-lens) row.
+    await seedCatalogue("cat-scored", { vector: blend(axis(0), axis(1), 0.2) });
+    await seedCatalogue("cat-cold");
+    await rankCatalogue();
+
+    // Both are present before dismissal.
+    expect((await listCatalogueTracks("ear")).map((t) => t.trackId)).toContain("cat-scored");
+    expect((await listCatalogueTracks("capture")).map((t) => t.trackId)).toContain("cat-cold");
+
+    expect(await setTrackDismissed("cat-scored", true)).toBe(true);
+    expect(await setTrackDismissed("cat-cold", true)).toBe(true);
+
+    // Gone from the working lenses, present in the restore pile.
+    expect((await listCatalogueTracks("ear")).map((t) => t.trackId)).not.toContain("cat-scored");
+    expect((await listCatalogueTracks("capture")).map((t) => t.trackId)).not.toContain("cat-cold");
+    expect((await listCatalogueTracks("dismissed")).map((t) => t.trackId).sort()).toEqual([
+      "cat-cold",
+      "cat-scored",
+    ]);
+
+    // The sweep does not spend on a dismissed row: with both out, a fresh corpus leaves them stale
+    // to nobody — the candidate query excludes them, so the tick reports nothing prioritized/scored.
+    await seedFinding("finding-b", { vector: axis(2) }); // moves the corpus fingerprint
+    const tick = await rankCatalogue();
+    expect(tick.scored).toBe(0);
+    expect(tick.prioritized).toBe(0);
+
+    // Restore re-includes: the row is a candidate again and re-ranks on the next tick.
+    expect(await setTrackDismissed("cat-scored", false)).toBe(true);
+    await rankCatalogue();
+    expect((await listCatalogueTracks("ear")).map((t) => t.trackId)).toContain("cat-scored");
+  });
+
+  it("excludes a dismissed catalogue row from the capture WORK queue (the metered ladder)", async () => {
+    const { rankCatalogue, setTrackDismissed } = await import("./catalogue");
+    const { setCatalogueCapturePaused } = await import("./capture-budget");
+    const { listTrackWork } = await import("./track-work");
+
+    // The capture budget ships default-deny (paused), which narrows the queue to the findings.
+    // Open it so the catalogue half is actually served — that is what makes the exclusion visible.
+    await setCatalogueCapturePaused(false);
+
+    await seedFinding("finding-a", { artists: ["Known"], vector: axis(0) });
+    // A cold catalogue row whose artist is on a finding → capture tier 3, so it WOULD be captured.
+    await seedCatalogue("cat-hot", { artists: ["Known"] });
+    await rankCatalogue();
+
+    const before = await listTrackWork({ kind: "capture", scope: "catalogue" });
+    expect(before.map((w) => w.trackId)).toContain("cat-hot");
+
+    await setTrackDismissed("cat-hot", true);
+
+    const after = await listTrackWork({ kind: "capture", scope: "catalogue" });
+    expect(after.map((w) => w.trackId)).not.toContain("cat-hot");
+  });
+
+  it("a deterministic duplicate (duplicate_of_track_id set) never occupies an ear-lens slot", async () => {
+    const { listCatalogueTracks, rankCatalogue } = await import("./catalogue");
+
+    // A same-title near-1.0 vectored row is a TRUE duplicate: the sweep stores duplicate_of_track_id
+    // AND keeps its score. Maurice's ruling: an ISRC/identity match is nothing to validate, so it
+    // must not sit in "Closest to a finding" — even though it carries a score.
+    await seedFinding("finding-owned", { artists: ["Dupe"], title: "Infinity", vector: axis(0) });
+    await seedCatalogue("cat-dupe", { artists: ["Dupe"], title: "Infinity", vector: axis(0) });
+    // A genuine discovery in the same region, so the lens is not simply empty.
+    await seedCatalogue("cat-real", { vector: blend(axis(0), axis(1), 0.2) });
+    await rankCatalogue();
+
+    // The duplicate IS scored and stored (it is not deleted) …
+    const stored = await rankingOf("cat-dupe");
+    expect(stored.duplicate_of_track_id).toBe("finding-owned");
+    expect(stored.nearest_finding_score ?? 0).toBeGreaterThan(0.99);
+
+    // … but it does NOT appear on the ear lens; the real discovery does.
+    const ear = (await listCatalogueTracks("ear")).map((t) => t.trackId);
+    expect(ear).not.toContain("cat-dupe");
+    expect(ear).toContain("cat-real");
+  });
+
+  it("keeps the summary consistent with the lenses (dupes + dismissed out of `ranked`)", async () => {
+    const { getCatalogueSummary, rankCatalogue, setTrackDismissed } = await import("./catalogue");
+
+    await seedFinding("finding-owned", { artists: ["Dupe"], title: "Infinity", vector: axis(0) });
+    await seedCatalogue("cat-dupe", { artists: ["Dupe"], title: "Infinity", vector: axis(0) });
+    await seedCatalogue("cat-real", { vector: blend(axis(0), axis(1), 0.2) });
+    await seedCatalogue("cat-dismissed", { vector: blend(axis(0), axis(1), 0.3) });
+    await rankCatalogue();
+    await setTrackDismissed("cat-dismissed", true);
+
+    const summary = await getCatalogueSummary();
+    // `ranked` is exactly the ear lens: cat-real only (the dupe and the dismissed are excluded).
+    expect(summary.ranked).toBe(1);
+    expect(summary.dismissed).toBe(1);
+    // `total` is the live working set — the dismissed row is not counted among the 3 live rows.
+    expect(summary.total).toBe(2);
+  });
+
+  it("never touches a finding — setTrackDismissed on a certified track is a no-op", async () => {
+    const { setTrackDismissed } = await import("./catalogue");
+
+    await seedFinding("finding-a", { vector: axis(0) });
+
+    expect(await setTrackDismissed("finding-a", true)).toBe(false);
+    const row = await db.execute({
+      args: ["finding-a"],
+      sql: "select dismissed_at from tracks where track_id = ?",
+    });
+    expect(row.rows[0]?.dismissed_at).toBeNull();
   });
 });

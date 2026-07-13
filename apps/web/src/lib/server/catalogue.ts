@@ -530,7 +530,10 @@ export async function rankCatalogue(limit = RANK_BATCH_SIZE): Promise<RankCatalo
   // duplicate, docs/the-ear.md § Wrong audio) without that stamp reading as "ranked before its
   // vector arrived" — a negative tier is a decision, not a leftover, so it is not re-picked.
   // `has_vector` evaluates the read contract (blob first, guarded JSON fallback) as a BOOLEAN in
-  // SQL — no vector ever crosses the wire.
+  // SQL — no vector ever crosses the wire. A DISMISSED row ("not for me", docs/the-ear.md § The
+  // operator's actions) is excluded here so the sweep never spends cosine work re-ranking a row
+  // the operator has taken out of the telescope; on restore it re-enters this candidate set and
+  // re-ranks if its fingerprint has drifted.
   const candidateResult = await db.execute({
     args: [corpus, Math.max(0, limit)],
     sql: `select ct.track_id as track_id,
@@ -543,6 +546,7 @@ export async function rankCatalogue(limit = RANK_BATCH_SIZE): Promise<RankCatalo
           from tracks ct
           left join findings cf on cf.track_id = ct.track_id
           where cf.track_id is null
+            and ct.dismissed_at is null
             and (ct.catalogue_rank_corpus is null
                  or ct.catalogue_rank_corpus <> ?
                  or (${embeddingVectorSql("ct")} is not null
@@ -805,6 +809,7 @@ async function countStale(corpus: string): Promise<number> {
           from tracks ct
           left join findings cf on cf.track_id = ct.track_id
           where cf.track_id is null
+            and ct.dismissed_at is null
             and (ct.catalogue_rank_corpus is null
                  or ct.catalogue_rank_corpus <> ?
                  or (${embeddingVectorSql("ct")} is not null
@@ -826,8 +831,11 @@ async function countStale(corpus: string): Promise<number> {
  *     capture landed the wrong master, vetoed from the ear lens and re-queued for a fresh
  *     download. Its own quiet section so a bad capture never silently vanishes, each row carrying
  *     the honest reason and a force-clear the operator can use to overrule it.
+ *   - `dismissed`  — the operator's "not for me" pile (docs/the-ear.md § The operator's actions):
+ *     rows he looked at and took out of the telescope. A REVERSIBLE veto — its own quiet lens so a
+ *     dismissal is never a black hole, each row carrying a Restore that puts it back in the ranking.
  */
-export type CatalogueLens = "capture" | "ear" | "quarantine";
+export type CatalogueLens = "capture" | "dismissed" | "ear" | "quarantine";
 
 /** The finding a catalogue row matched — the WHY, hydrated. */
 export type CatalogueMatch = {
@@ -840,10 +848,18 @@ export type CatalogueMatch = {
 /** One catalogue row, in the shape `/admin/catalogue` and the CLI render. */
 export type CatalogueTrackItem = {
   albumImageUrl: string | null;
+  /** The Apple Music listen link, when the ISRC has resolved one — the Spotify twin. */
+  appleMusicUrl: string | null;
   artists: string[];
   bpm: number | null;
   capturePriority: number | null;
   captureReason: CapturePriorityReason | null;
+  /**
+   * ISO of when the operator dismissed this row ("not for me"), or null on a live row. Only
+   * ever set on a row read through the `dismissed` lens (the restore pile) — every other lens
+   * filters dismissed rows out.
+   */
+  dismissedAt: string | null;
   /**
    * The certified finding this row is the SAME RECORDING as — hydrated, so the board can name
    * it ("already in the archive"). Two paths set it (docs/the-ear.md § Duplicates): the CAPTURE
@@ -852,6 +868,14 @@ export type CatalogueTrackItem = {
    * on an ordinary catalogue row — the common case, an actual discovery.
    */
   duplicateOf: CatalogueMatch | null;
+  /**
+   * Whether an official 30s preview can be auditioned for this row — the operator's inline
+   * play control (docs/the-ear.md § The operator's actions). True when the row carries a stored
+   * preview URL OR an ISRC (the `/api/preview` relay resolves a fresh Deezer / exact-Apple /
+   * fuzzy-iTunes preview by ISRC), so the artwork is a play button rather than a dead one.
+   */
+  hasPreview: boolean;
+  isrc: string | null;
   key: string | null;
   label: string | null;
   /** The nearest finding, hydrated. Null when the row has no score yet. */
@@ -871,30 +895,45 @@ export type CatalogueSummary = {
   awaitingCapture: number;
   /** Catalogue rows the sweep has not reached yet (or that went stale). */
   awaitingRank: number;
+  /** Catalogue rows the operator dismissed ("not for me") — the restore pile's depth. */
+  dismissed: number;
   /**
    * Catalogue rows QUARANTINED as wrong audio (docs/the-ear.md § Wrong audio) — awaiting a
    * fresh capture, held in their own lens rather than mixed into the capture queue.
    */
   quarantined: number;
-  /** Catalogue rows carrying a `nearest_finding_score` — what The Ear can actually hear. */
+  /**
+   * Catalogue rows carrying a `nearest_finding_score` that ARE the ear lens — a real
+   * discovery. EXCLUDES the deterministic duplicates (`duplicate_of_track_id` set, an ISRC /
+   * same-title identity match: nothing to validate, so they leave the list per Maurice's
+   * ruling) and dismissed rows, so this count matches exactly what the ear lens shows.
+   */
   ranked: number;
-  /** Every `tracks` row with no `findings` row. */
+  /** Every live `tracks` row with no `findings` row (dismissed rows excluded). */
   total: number;
 };
 
 /** The catalogue's whole shape in one read — four scoped counts, no scan of the rows. */
 export async function getCatalogueSummary(): Promise<CatalogueSummary> {
   const db = await getDb();
+  // Every count but `dismissed` describes the LIVE working set (`dismissed_at is null`), so the
+  // headline numbers and the lens rows agree; `dismissed` is the restore pile, counted on its own.
   const result = await db.execute({
     args: [WRONG_AUDIO_STATUS, WRONG_AUDIO_STATUS],
     sql: `select
-            count(*) as total,
-            sum(case when ct.nearest_finding_score is not null then 1 else 0 end) as ranked,
-            sum(case when ct.nearest_finding_score is null
+            sum(case when ct.dismissed_at is null then 1 else 0 end) as total,
+            sum(case when ct.dismissed_at is null
+                      and ct.nearest_finding_score is not null
+                      and ct.duplicate_of_track_id is null then 1 else 0 end) as ranked,
+            sum(case when ct.dismissed_at is null
+                      and ct.nearest_finding_score is null
                       and ct.capture_priority is not null
                       and ct.capture_status <> ? then 1 else 0 end) as awaiting_capture,
-            sum(case when ct.capture_status = ? then 1 else 0 end) as quarantined,
-            sum(case when ct.catalogue_rank_corpus is null then 1 else 0 end) as awaiting_rank
+            sum(case when ct.dismissed_at is null
+                      and ct.capture_status = ? then 1 else 0 end) as quarantined,
+            sum(case when ct.dismissed_at is null
+                      and ct.catalogue_rank_corpus is null then 1 else 0 end) as awaiting_rank,
+            sum(case when ct.dismissed_at is not null then 1 else 0 end) as dismissed
           from tracks ct
           left join findings cf on cf.track_id = ct.track_id
           where cf.track_id is null`,
@@ -902,6 +941,7 @@ export async function getCatalogueSummary(): Promise<CatalogueSummary> {
   const row = typedRows<{
     awaiting_capture: number | null;
     awaiting_rank: number | null;
+    dismissed: number | null;
     quarantined: number | null;
     ranked: number | null;
     total: number | null;
@@ -910,6 +950,7 @@ export async function getCatalogueSummary(): Promise<CatalogueSummary> {
   return {
     awaitingCapture: Number(row?.awaiting_capture ?? 0),
     awaitingRank: Number(row?.awaiting_rank ?? 0),
+    dismissed: Number(row?.dismissed ?? 0),
     quarantined: Number(row?.quarantined ?? 0),
     ranked: Number(row?.ranked ?? 0),
     total: Number(row?.total ?? 0),
@@ -918,15 +959,19 @@ export async function getCatalogueSummary(): Promise<CatalogueSummary> {
 
 type CatalogueRow = {
   album_image_url: string | null;
+  apple_music_url: string | null;
   artists_json: string;
   bpm: number | null;
   capture_priority: number | null;
   catalogue_ranked_at: string | null;
+  dismissed_at: string | null;
   duplicate_of_track_id: string | null;
+  isrc: string | null;
   key: string | null;
   label: string | null;
   nearest_finding_score: number | null;
   nearest_finding_track_id: string | null;
+  preview_url: string | null;
   release_date: string | null;
   spotify_url: string | null;
   title: string;
@@ -941,8 +986,9 @@ type MatchRow = {
 };
 
 const CATALOGUE_SELECT = `ct.track_id, ct.title, ct.artists_json, ct.album_image_url, ct.spotify_url,
-  ct.bpm, ct.key, ct.label, ct.release_date, ct.nearest_finding_score, ct.nearest_finding_track_id,
-  ct.capture_priority, ct.catalogue_ranked_at, ct.duplicate_of_track_id`;
+  ct.apple_music_url, ct.isrc, ct.preview_url, ct.bpm, ct.key, ct.label, ct.release_date,
+  ct.nearest_finding_score, ct.nearest_finding_track_id, ct.capture_priority, ct.catalogue_ranked_at,
+  ct.duplicate_of_track_id, ct.dismissed_at`;
 
 /**
  * The Ear's read — and the reason the whole sweep exists.
@@ -968,6 +1014,11 @@ export async function listCatalogueTracks(
 ): Promise<CatalogueTrackItem[]> {
   const page = Math.min(Math.max(1, limit), 200);
   const db = await getDb();
+  // EVERY lens but `dismissed` filters `ct.dismissed_at is null`: a dismissed row is out of the
+  // telescope and the capture ladder both, and only the `dismissed` lens (the restore pile) shows
+  // it. The `ear` lens ALSO drops the deterministic duplicates (`duplicate_of_track_id` set — an
+  // ISRC / same-title identity match, nothing to validate; Maurice's ruling): they never occupy a
+  // ranked slot.
   const query =
     lens === "ear"
       ? {
@@ -975,7 +1026,10 @@ export async function listCatalogueTracks(
           sql: `select ${CATALOGUE_SELECT}
                 from tracks ct
                 left join findings cf on cf.track_id = ct.track_id
-                where cf.track_id is null and ct.nearest_finding_score is not null
+                where cf.track_id is null
+                  and ct.dismissed_at is null
+                  and ct.nearest_finding_score is not null
+                  and ct.duplicate_of_track_id is null
                 order by ct.nearest_finding_score desc, ct.track_id asc
                 limit ?`,
         }
@@ -987,24 +1041,38 @@ export async function listCatalogueTracks(
             sql: `select ${CATALOGUE_SELECT}
                   from tracks ct
                   left join findings cf on cf.track_id = ct.track_id
-                  where cf.track_id is null and ct.capture_status = ?
+                  where cf.track_id is null and ct.dismissed_at is null and ct.capture_status = ?
                   order by ct.catalogue_ranked_at desc, ct.track_id asc
                   limit ?`,
           }
-        : {
-            // The capture queue EXCLUDES the quarantined rows — they are a re-capture, held in
-            // their own lens, not part of the cold pre-audio queue.
-            args: [WRONG_AUDIO_STATUS, page],
-            sql: `select ${CATALOGUE_SELECT}
-                  from tracks ct
-                  left join findings cf on cf.track_id = ct.track_id
-                  where cf.track_id is null
-                    and ct.nearest_finding_score is null
-                    and ct.capture_priority is not null
-                    and ct.capture_status <> ?
-                  order by ct.capture_priority desc, ct.track_id asc
-                  limit ?`,
-          };
+        : lens === "dismissed"
+          ? {
+              // The restore pile (docs/the-ear.md § The operator's actions): every "not for me",
+              // most-recently dismissed first, each restorable. Driven by the partial
+              // `tracks_dismissed_idx`, so the listing is a seek, not a scan of the catalogue.
+              args: [page],
+              sql: `select ${CATALOGUE_SELECT}
+                    from tracks ct
+                    left join findings cf on cf.track_id = ct.track_id
+                    where cf.track_id is null and ct.dismissed_at is not null
+                    order by ct.dismissed_at desc, ct.track_id asc
+                    limit ?`,
+            }
+          : {
+              // The capture queue EXCLUDES the quarantined rows — they are a re-capture, held in
+              // their own lens, not part of the cold pre-audio queue.
+              args: [WRONG_AUDIO_STATUS, page],
+              sql: `select ${CATALOGUE_SELECT}
+                    from tracks ct
+                    left join findings cf on cf.track_id = ct.track_id
+                    where cf.track_id is null
+                      and ct.dismissed_at is null
+                      and ct.nearest_finding_score is null
+                      and ct.capture_priority is not null
+                      and ct.capture_status <> ?
+                    order by ct.capture_priority desc, ct.track_id asc
+                    limit ?`,
+            };
   const result = await db.execute(query);
   const rows = typedRows<CatalogueRow>(result.rows);
 
@@ -1044,13 +1112,19 @@ export async function listCatalogueTracks(
 
     return {
       albumImageUrl: row.album_image_url,
+      appleMusicUrl: row.apple_music_url,
       artists,
       bpm: row.bpm,
       capturePriority: row.capture_priority,
       captureReason: archive
         ? capturePriorityFor({ artists, label: row.label }, archive).reason
         : null,
+      dismissedAt: row.dismissed_at,
       duplicateOf,
+      // The `/api/preview` relay resolves a fresh preview by ISRC (Deezer → exact Apple →
+      // fuzzy iTunes), so a stored URL OR an ISRC means the artwork is a live play control.
+      hasPreview: Boolean(row.preview_url) || Boolean(row.isrc && row.isrc.trim()),
+      isrc: row.isrc,
       key: row.key,
       label: row.label,
       nearestFinding,
@@ -1116,6 +1190,42 @@ export async function clearWrongAudio(trackId: string): Promise<boolean> {
             and capture_status = ?
             and not exists (select 1 from findings where findings.track_id = tracks.track_id)`,
   });
+
+  return result.rowsAffected > 0;
+}
+
+/**
+ * THE OPERATOR'S "NOT FOR ME" (docs/the-ear.md § The operator's actions) — a REVERSIBLE veto on a
+ * catalogue row. `dismissed: true` stamps `dismissed_at` so the row drops out of the ear/capture
+ * reads and the capture work queue (track-work.ts); `dismissed: false` clears it, so the row
+ * re-enters the ranking on the next sweep tick (its fingerprint is untouched, so it re-ranks only
+ * if the corpus moved while it was out).
+ *
+ * It is the ruled-out-label veto's class: it steers what Fluncle KEEPS pointing at and what the
+ * capture ladder may BUY, and it changes nothing else the row stores. It only ever touches a
+ * CATALOGUE row — a finding has no dismissal (the `not exists` guard), so a stray finding trackId
+ * is a no-op. Returns whether a row actually changed, so the caller reports honestly (a double
+ * dismiss / restore is an idempotent no-op success).
+ */
+export async function setTrackDismissed(trackId: string, dismissed: boolean): Promise<boolean> {
+  const db = await getDb();
+  const result = dismissed
+    ? await db.execute({
+        args: [new Date().toISOString(), trackId],
+        sql: `update tracks
+              set dismissed_at = ?
+              where track_id = ?
+                and dismissed_at is null
+                and not exists (select 1 from findings where findings.track_id = tracks.track_id)`,
+      })
+    : await db.execute({
+        args: [trackId],
+        sql: `update tracks
+              set dismissed_at = null
+              where track_id = ?
+                and dismissed_at is not null
+                and not exists (select 1 from findings where findings.track_id = tracks.track_id)`,
+      });
 
   return result.rowsAffected > 0;
 }

@@ -464,3 +464,49 @@ describe("a CRAWLED track never reaches a public surface", () => {
     expect(enrich.tracks.map((track) => track.trackId)).not.toContain(CRAWLED_ID);
   });
 });
+
+// CERTIFY IN PLACE — the "Log it" the Ear's workstation fires (docs/the-ear.md § The operator's
+// actions). It turns an EXISTING catalogue row into a finding by minting ONLY the certification
+// half; it must NOT create a new `tracks` row, and it must refuse a row that is already a finding.
+describe("certify in place — logging an existing catalogue track without creating a new one", () => {
+  it("mints the finding for the existing row, and creates NO new track", async () => {
+    const { certifyExistingTrack } = await import("./publish");
+
+    const before = await db.execute("select count(*) as n from tracks");
+    const { logId } = await certifyExistingTrack(CATALOGUE_ID, {
+      note: "logged from the telescope",
+    });
+
+    // A real coordinate, minted onto the EXISTING row — and no second track was inserted.
+    expect(logId).toMatch(/\d{3}\.\d+\.\d+[A-Z]/);
+    const after = await db.execute("select count(*) as n from tracks");
+    expect(Number(after.rows[0]?.n)).toBe(Number(before.rows[0]?.n));
+
+    // The catalogue row is now a finding: a `findings` row exists, carrying the coordinate + note.
+    const finding = await db.execute({
+      args: [CATALOGUE_ID],
+      sql: "select log_id, note from findings where track_id = ?",
+    });
+    expect(finding.rows[0]?.log_id).toBe(logId);
+    expect(finding.rows[0]?.note).toBe("logged from the telescope");
+  });
+
+  it("REFUSES a row that is already certified (409) — never a second finding", async () => {
+    const { certifyExistingTrack } = await import("./publish");
+
+    await expect(certifyExistingTrack(FINDING_ID)).rejects.toThrow(/already logged/i);
+
+    // Exactly one finding for that track, unchanged.
+    const findings = await db.execute({
+      args: [FINDING_ID],
+      sql: "select count(*) as n from findings where track_id = ?",
+    });
+    expect(Number(findings.rows[0]?.n)).toBe(1);
+  });
+
+  it("REFUSES a track that does not exist (404)", async () => {
+    const { certifyExistingTrack } = await import("./publish");
+
+    await expect(certifyExistingTrack("cccccccccccccccccccccc")).rejects.toThrow(/no track/i);
+  });
+});
