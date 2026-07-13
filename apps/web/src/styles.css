@@ -2820,6 +2820,20 @@ body::before {
   line-height: 1.6;
 }
 
+/* The probe figure on the probes beat — a quiet illustration break in the story
+   column. Integer 2x upscale so the pixels stay square (nearest-neighbor). */
+.log-about-probe {
+  display: flex;
+  justify-content: center;
+  margin: 0.6rem 0 0.2rem;
+}
+
+.log-about-probe img {
+  image-rendering: pixelated;
+  max-width: 70%;
+  width: 252px;
+}
+
 .log-about-definitions dl {
   display: grid;
   gap: 1.1rem;

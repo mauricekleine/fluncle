@@ -11,13 +11,16 @@
 /**
  * The sprite sets. `galaxy` is the game's set; `void` is the black hole at the empty
  * coordinate (the /404 page — a finding Fluncle went looking for and found nothing
- * where it should be). Same family, one shared perspective/light/palette.
+ * where it should be); `probes` is the survey fleet (the /about probes beat — the
+ * instruments that measure and never speak). Same family, one shared
+ * perspective/light/palette.
  */
-export type SpriteCollection = "galaxy" | "void";
+export type SpriteCollection = "galaxy" | "probes" | "void";
 
 /** Every sprite id, by collection (the file at `assets/<collection>/<id>.png`). */
 export const SPRITES = {
   galaxy: ["asteroid", "earth", "roadster", "ship", "ufo"],
+  probes: ["probe", "telescope"],
   void: ["accretion", "discman", "event-horizon"],
 } as const satisfies Record<SpriteCollection, readonly string[]>;
 

@@ -71,6 +71,8 @@ apps/web/public/galaxy/earth.png
 apps/web/public/galaxy/roadster.png
 apps/web/public/galaxy/ship.png
 apps/web/public/galaxy/ufo.png
+apps/web/public/probes/probe.png
+apps/web/public/probes/telescope.png
 apps/web/public/void/accretion.png
 apps/web/public/void/discman.png
 apps/web/public/void/event-horizon.png

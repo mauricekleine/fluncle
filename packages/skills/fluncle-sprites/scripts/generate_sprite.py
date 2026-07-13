@@ -224,6 +224,31 @@ SPRITES = {
             "drawn line, no blobby mass, no gold and no red on the cable"
         ),
     },
+    # The probes set — figure-tier (wider than the game sprites; they illustrate the
+    # /about probes beat, not a playfield). Ratified winners 2026-07-13: probe_voyager
+    # and telescope_reflector, picked from a three-variant contact sheet.
+    "probe": {
+        "collection": "probes",
+        "w": 126,
+        "palette": CREAMS + BLACKS + GOLDS,
+        "prompt": p(
+            "an unmanned deep-space survey probe in the Voyager style, a large round cream "
+            "high-gain dish antenna facing lower-left with a thin dark feed spike, behind it a "
+            "compact warm-grey instrument bus body with small gold instrument panels, gold only "
+            "on the panels, one long thin boom arm trailing to the upper-right with a small "
+            "sensor at its end"
+        ),
+    },
+    "telescope": {
+        "collection": "probes",
+        "w": 118,
+        "palette": CREAMS + BLACKS + GOLDS,
+        "prompt": p(
+            "a reflector telescope on a sturdy warm-grey fork mount and tripod, a long cream "
+            "main tube pointing to the lower-left with a dark open aperture, one small gold "
+            "focus knob near the eyepiece, gold only on the knob, clean mechanical joints"
+        ),
+    },
 }
 
 

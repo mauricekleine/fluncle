@@ -19,6 +19,7 @@ import {
 } from "@/lib/fluncle-links";
 import { fluncleDescription, fluncleMetaDescription } from "@/lib/identity";
 import { jsonLdScript } from "@/lib/json-ld";
+import { spriteUrl } from "@fluncle/sprites";
 
 // The entity and answer surface (web-overhaul RFC §4): the Galaxy lore in
 // Fluncle's own voice, the four definition blocks, the Log-ID decode with a
@@ -183,6 +184,9 @@ function AboutPage() {
             someone goes down and everyone stops to pick them up. I go first and leave the markers;
             you come after and find what I found.
           </p>
+          <figure aria-hidden="true" className="log-about-probe">
+            <img alt="" src={spriteUrl({ collection: "probes", id: "probe" })} />
+          </figure>
           <p>
             And I don't go in blind. Ahead of the ship I send a small fleet of probes, unmanned
             instruments I build to chart the regions I haven't reached yet. They read a place's
