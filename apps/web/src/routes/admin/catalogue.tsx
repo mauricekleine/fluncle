@@ -5,6 +5,7 @@ import {
   BinocularsIcon,
   PauseIcon,
   PlayIcon,
+  ThumbsDownIcon,
   WaveformIcon,
 } from "@phosphor-icons/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -19,6 +20,16 @@ import {
   type CatalogueMatch,
 } from "@fluncle/contracts";
 import { AdminShell } from "@/components/admin/admin-shell";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@fluncle/ui/components/alert-dialog";
 import { ObjectGlyph, ObjectLead, ObjectList, ObjectRow } from "@/components/admin/object-row";
 import { AppleMusicIcon, SpotifyIcon } from "@/components/platform-icons";
 import { Badge } from "@fluncle/ui/components/badge";
@@ -206,11 +217,14 @@ function AdminCataloguePage() {
     },
   });
 
-  // "LOG IT". Certify the existing row in place — mint its finding, no new track — then hand the
-  // operator to the findings board with the pipeline already moving, and confirm with the Log ID.
+  // "LOG IT" — behind a confirm (below): certifying creates lore, so the row's button only OPENS
+  // the dialog; this mutation fires from the dialog's own gold action. It mints the finding in
+  // place — no new track — then hands the operator to the findings board with the pipeline moving.
+  const [confirmTrack, setConfirmTrack] = useState<CatalogueTrackItem | null>(null);
   const certify = useMutation({
     mutationFn: (trackId: string) => postCertify(trackId),
     onError: (error) => toast.error(error instanceof Error ? error.message : "Could not log it."),
+    onSettled: () => setConfirmTrack(null),
     onSuccess: (result) => {
       void queryClient.invalidateQueries({ queryKey: CATALOGUE_KEY });
       toast.success(`Logged — ${result.logId}`, { description: "Enrichment is running." });
@@ -314,7 +328,7 @@ function AdminCataloguePage() {
                 onBlameFinding={(findingTrackId) =>
                   blameFinding.mutate({ findingTrackId, trackId: track.trackId })
                 }
-                onCertify={() => certify.mutate(track.trackId)}
+                onCertify={() => setConfirmTrack(track)}
                 onClear={() => clearAudio.mutate(track.trackId)}
                 onDismiss={() => dismiss.mutate(track.trackId)}
                 onRestore={() => restore.mutate(track.trackId)}
@@ -324,7 +338,65 @@ function AdminCataloguePage() {
           </ObjectList>
         )}
       </div>
+
+      <LogItConfirm
+        busy={certify.isPending}
+        onConfirm={() => {
+          if (confirmTrack) {
+            certify.mutate(confirmTrack.trackId);
+          }
+        }}
+        onOpenChange={(open) => {
+          if (!open && !certify.isPending) {
+            setConfirmTrack(null);
+          }
+        }}
+        track={confirmTrack}
+      />
     </AdminShell>
+  );
+}
+
+// The certify confirm — the SplitConfirm pattern (admin/galaxies.tsx): the one action on this
+// page that creates lore gets a beat before it commits, and the dialog is where the page's gold
+// belongs (one sun, one moment). It names exactly what is about to happen.
+function LogItConfirm({
+  busy,
+  onConfirm,
+  onOpenChange,
+  track,
+}: {
+  busy: boolean;
+  onConfirm: () => void;
+  onOpenChange: (open: boolean) => void;
+  track: CatalogueTrackItem | null;
+}) {
+  return (
+    <AlertDialog onOpenChange={onOpenChange} open={track !== null}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Log it as a finding?</AlertDialogTitle>
+          <AlertDialogDescription>
+            {track ? `${track.artists.join(", ")} — ${track.title}` : ""} gets its Log ID and enters
+            the archive. Enrichment starts on its own; you land on the finding to finish the note
+            and galaxy.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={busy}>Not yet</AlertDialogCancel>
+          <AlertDialogAction disabled={busy} onClick={onConfirm}>
+            {busy ? (
+              <CircleNotchIcon
+                aria-hidden="true"
+                className="motion-safe:animate-spin"
+                weight="bold"
+              />
+            ) : null}
+            Log it
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }
 
@@ -496,25 +568,33 @@ function CatalogueRow({
               {captureTierLabel(track.captureReason)}
             </Badge>
           ) : null}
+          {/* THE FULL-LISTEN LINKS — quiet icon buttons out to the real thing, the twin of the
+              inline 30s audition on the artwork. A FIXED-WIDTH slot on the live lenses (rendered
+              even when empty) so the score column never shifts: comparing scores down the list is
+              the lens's whole job, and a column that jitters cannot be compared. */}
+          {lens === "ear" || lens === "capture" ? (
+            <span className="flex w-14 shrink-0 items-center justify-end gap-0.5">
+              {track.spotifyUrl ? (
+                <ListenLink href={track.spotifyUrl} label={`Open ${track.title} in Spotify`}>
+                  <SpotifyIcon className="size-4" />
+                </ListenLink>
+              ) : null}
+              {track.appleMusicUrl ? (
+                <ListenLink href={track.appleMusicUrl} label={`Open ${track.title} in Apple Music`}>
+                  <AppleMusicIcon className="size-4" />
+                </ListenLink>
+              ) : null}
+            </span>
+          ) : null}
+          {/* THE SCORE — its own fixed, right-aligned column, after the links so nothing variable
+              sits between it and the actions. */}
           {lens === "ear" ? (
             <span
               aria-label={`Similarity to its nearest finding: ${formatScore(track.nearestFindingScore)}`}
-              className="text-sm font-medium tabular-nums"
+              className="w-11 shrink-0 text-right text-sm font-medium tabular-nums"
             >
               {formatScore(track.nearestFindingScore)}
             </span>
-          ) : null}
-          {/* THE FULL-LISTEN LINKS — quiet icon buttons out to the real thing, the twin of the
-              inline 30s audition on the artwork. Shown when the row carries that platform's link. */}
-          {track.spotifyUrl ? (
-            <ListenLink href={track.spotifyUrl} label={`Open ${track.title} in Spotify`}>
-              <SpotifyIcon className="size-4" />
-            </ListenLink>
-          ) : null}
-          {track.appleMusicUrl ? (
-            <ListenLink href={track.appleMusicUrl} label={`Open ${track.title} in Apple Music`}>
-              <AppleMusicIcon className="size-4" />
-            </ListenLink>
           ) : null}
           {/* THE VERDICT PAIR. The quarantine says same-recording, not which title is lying — the
               operator's ears decide. Play the artwork (it auditions the CAPTURED bytes here, not
@@ -550,17 +630,35 @@ function CatalogueRow({
               Restore
             </PendingButton>
           ) : null}
-          {/* THE TWO WORKSTATION ACTIONS on the live lenses: wave it off (quiet), or LOG IT (the
-              one primary — mint the finding in place and go finish it). "Not for me" is reversible
-              (a toast Undo + the Dismissed lens), so it stays a light ghost, never a confirm. */}
+          {/* THE TWO WORKSTATION ACTIONS on the live lenses. "Not for me" is the FREQUENT verdict
+              (most of the catalogue is not lore), so it recedes to a quiet thumbs-down icon — it
+              is reversible (a toast Undo + the Dismissed lens), never a confirm. "Log it" is the
+              RARE, impactful one: it stays the row's only worded action, and clicking it opens a
+              confirm (the moment lore is created deserves a beat). */}
           {lens === "ear" || lens === "capture" ? (
             <>
-              <PendingButton onClick={onDismiss} pending={busy.dismissing} variant="ghost">
-                Not for me
-              </PendingButton>
+              <Button
+                aria-label={`Not for me: ${track.title}`}
+                disabled={busy.dismissing}
+                onClick={onDismiss}
+                size="icon-sm"
+                title="Not for me"
+                variant="ghost"
+              >
+                {busy.dismissing ? (
+                  <CircleNotchIcon
+                    aria-hidden="true"
+                    className="motion-safe:animate-spin"
+                    weight="bold"
+                  />
+                ) : (
+                  <ThumbsDownIcon aria-hidden="true" />
+                )}
+              </Button>
               {/* OUTLINE, not gold: a gold CTA per row makes a screen of suns (The One Sun Rule
                   caps gold at ~10%); the Ignition Rule's hover heat still marks it as the row's
-                  primary. Gold on this page belongs to certification MOMENTS, not standing rows. */}
+                  primary. Gold on this page belongs to certification MOMENTS — the confirm dialog
+                  this opens. */}
               <PendingButton onClick={onCertify} pending={busy.certifying} variant="outline">
                 Log it
               </PendingButton>
