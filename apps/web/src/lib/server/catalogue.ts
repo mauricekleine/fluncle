@@ -194,8 +194,21 @@ export const QUARANTINE_CLEARED = "quarantine-cleared";
  * a DIFFERENT-title near-1.0 (wrong audio) still quarantines. Getting the row captured is exactly
  * what lets the finding-side detectors (1, 2) settle it honestly: once it has its OWN vector, a
  * genuinely different recording no longer scores identical, so the exoneration the RFC describes
- * finally runs. The capture work queue (track-work.ts) treats a `duplicate-cleared` row as
- * capture-eligible for precisely this reason.
+ * finally runs. The capture work queue (track-work.ts) treats an UNCAPTURED `duplicate-cleared`
+ * row as capture-eligible for precisely this reason.
+ *
+ * AND THE SENTINEL SURVIVES THE CAPTURE IT ENABLES. The forced row is EXPECTED to be captured, and
+ * the capture sweep's terminal PATCH (`captureStatus: 'done'` — or `failed`/`unmatched`) would
+ * overwrite the sentinel at exactly the moment it must hold: the post-embed re-rank would then
+ * re-mark the row a duplicate, silently reversing the ruling right after the capture the operator
+ * paid for. So the generic update path carries a RULING GUARD (track-update.ts): a machine PATCH
+ * never overwrites `duplicate-cleared` — the same class of guarantee as the auto-note's
+ * fill-empty-only rule (an operator ruling is never clobbered by a machine write). The scheduling
+ * state the queue reads (`source_audio_key`, the attempt stamps, the failure count) still lands
+ * normally, and the queue's `duplicate-cleared` arm keys off THOSE columns (a captured row stays
+ * out; a failed retry backs off) since the status itself no longer moves. The ONE writer that may
+ * overwrite the sentinel is the rank sweep's wrong-audio quarantine (direct SQL) — the
+ * verification gate deliberately outranks the duplicate override.
  */
 export const DUPLICATE_CLEARED = "duplicate-cleared";
 
