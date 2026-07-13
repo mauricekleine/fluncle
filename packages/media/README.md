@@ -41,7 +41,7 @@ bun run render:app-icons      # renders the mobile app-icon candidates (1024²) 
 bun run render:mobile-assets  # renders the PICKED icon + adaptive foreground + splash into apps/mobile/assets/ (committed)
 bun run render:socials     # renders the claimed social banners/covers into docs/socials/banners/
 bun run studio      # Remotion Studio — live scrub the asset while editing
-bun run typecheck   # tsgo --noEmit, the quality check for any change here
+bun run typecheck   # tsc --noEmit, the quality check for any change here
 ```
 
 Stills render headless through a Chromium that Remotion downloads on first run; `render:og` needs that browser available (the same toolchain `@fluncle/video` uses).

@@ -12,7 +12,7 @@
 // never on a Pressable `style` prop.
 
 // Bun's file reader — declared locally so the Expo (no-node, no bun-types) tsconfig still
-// typechecks this file under tsgo.
+// typechecks this file under tsc.
 declare const Bun: { file(path: string | URL): { text(): Promise<string> } };
 
 const source = await Bun.file(new URL("./heat-button.tsx", import.meta.url)).text();

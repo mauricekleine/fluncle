@@ -28,7 +28,7 @@
     "smoke:routine": "bun run scripts/smoke-routine.ts",
     "smoke:shell": "bun tests/browser/shell-smoke.ts",
     "smoke:touch": "bun tests/browser/admin-touch-smoke.ts",
-    "typecheck": "tsgo --noEmit",
+    "typecheck": "tsc --noEmit",
     "test": "vitest run --coverage"
   },
   "dependencies": {
@@ -74,7 +74,6 @@
     "@cloudflare/vite-plugin": "~1.42.4",
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
-    "@typescript/native-preview": "catalog:",
     "@vitejs/plugin-react": "~6.0.3",
     "@vitest/coverage-v8": "~4.1.10",
     "drizzle-kit": "catalog:",

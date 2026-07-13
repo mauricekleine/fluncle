@@ -76,7 +76,7 @@ The full local loop: fetch track → resolve a preview clip → download + **two
 - **`--composition-source <file>`** — explicitly record the source file that produced the render. If omitted, the pipeline records `src/remotion/workbench/<Id>.tsx`, matching the auto-registration contract.
 - **`--duration-ms <10000-30000>`** — pick the clip length off the waveform (end on a clean beat). Drives `durationInFrames`.
 
-Other scripts: `bun run studio` (Remotion Studio, the live scrub loop), `bun run typecheck` (`tsgo --noEmit`, the quality check for any change here).
+Other scripts: `bun run studio` (Remotion Studio, the live scrub loop), `bun run typecheck` (`tsc --noEmit`, the quality check for any change here).
 
 The per-hop curve-builders the analyzer relies on (`computeBands`, `onsetEnvelope`, the normalizers) live in `src/pipeline/audio-curves.ts`, shared so both the render path and the set path use the same kernel.
 
