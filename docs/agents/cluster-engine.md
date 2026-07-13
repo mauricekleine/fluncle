@@ -66,9 +66,9 @@ Before the timer is armed and before any naming, the operator runs the fit by ha
 ```bash
 # On rave-02, against the live map (or a dev DB for a dry pilot):
 docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/cluster-sweep.sh --cold-start
-# Read the summary: 9 galaxies minted, every finding assigned, the per-galaxy silhouette + size.
+# Read the summary: 4 galaxies minted (the held k), every finding assigned, the per-galaxy silhouette + size.
 # Then the naming sitting (Slice 3): open /admin/galaxies, audition each galaxy's member previews,
-# name the nine. The public lens (Slice 4) ships only once the initial map is fully named.
+# name them all. The public lens (Slice 4) ships only once the initial map is fully named.
 ```
 
 ### Box activation
