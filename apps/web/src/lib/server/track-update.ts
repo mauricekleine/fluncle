@@ -44,12 +44,16 @@ export type TrackUpdate = {
    * is the consecutive-failure count driving the backoff window. See schema.ts.
    *
    * `wrong-audio` / `quarantine-cleared` are the wrong-audio quarantine states
-   * (docs/the-ear.md § Wrong audio). They are written by the `rank_catalogue` sweep and the
-   * `clear_wrong_audio` op DIRECTLY (not typically through this generic path), but they belong
-   * to the same `capture_status` column, so the enum carries them for completeness.
+   * (docs/the-ear.md § Wrong audio), and `duplicate-cleared` is the operator's force-capture
+   * override (docs/the-ear.md § Duplicates). They are written by the `rank_catalogue` sweep and
+   * the `clear_wrong_audio` / `force_capture` ops DIRECTLY (not through this generic path — the
+   * HTTP handler's enum admits only the four machine statuses), but they belong to the same
+   * `capture_status` column, so the enum carries them for completeness. A machine write through
+   * this path can never OVERWRITE `duplicate-cleared` — see the ruling guard at the write below.
    */
   captureStatus?:
     | "done"
+    | "duplicate-cleared"
     | "failed"
     | "pending"
     | "quarantine-cleared"
@@ -528,7 +532,24 @@ export async function updateTrack(
   // written by the `fluncle-capture` cron — NONE is in VISIBLE_FIELDS, so a capture
   // write bumps no public lastmod (mirrors the embedding/context discipline above).
   if (update.captureStatus !== undefined) {
-    sets.push("capture_status = ?");
+    // THE RULING GUARD (docs/the-ear.md § Duplicates) — the same class of guarantee as the
+    // auto-note's fill-empty-only rule: A MACHINE WRITE NEVER CLOBBERS AN OPERATOR RULING.
+    // `duplicate-cleared` is the operator's sticky force-capture override, and the row it sits on
+    // is EXPECTED to be captured — that is the whole point of the override — so the capture
+    // sweep's terminal PATCH (`done`, or `failed`/`unmatched` on a bad day) would erase the
+    // sentinel at exactly the moment it must survive: the very next post-embed re-rank would then
+    // re-mark the row a duplicate, silently reversing the ruling right after the capture the
+    // operator paid for. The CASE keeps the sentinel standing while every other capture column
+    // (`sourceAudioKey`, the stamps, the failure count — the scheduling state the queue reads)
+    // lands normally. Enforced HERE, server-side, rather than in the box sweep: the baked box
+    // scripts freshen asynchronously after a deploy, so a box-side guard would leave a window
+    // where an old sweep erases the sentinel — the Worker ships atomically with the deploy.
+    // (The HTTP handler's enum admits only the four machine statuses, so no PATCH can write the
+    // sentinel itself; the rank sweep's wrong-audio quarantine writes direct SQL and MAY overwrite
+    // it — the verification gate deliberately outranks the duplicate override.)
+    sets.push(
+      "capture_status = case when capture_status = 'duplicate-cleared' then capture_status else ? end",
+    );
     args.push(update.captureStatus);
   }
 

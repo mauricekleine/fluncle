@@ -241,16 +241,29 @@ export function scopeClause(scope: TrackWorkScope): string {
  *   is the point, not a convenience. A `wrong-audio` row is EXCLUDED for the same reason: the
  *   quarantine nulled its vector, but its key still points at the bad bytes — re-embedding them
  *   would just re-poison the ranking. A `quarantine-cleared` row (the operator's override) is
- *   allowed through, so its kept audio re-embeds and re-ranks.
+ *   allowed through, so its kept audio re-embeds and re-ranks. A `duplicate-cleared` row (the
+ *   force-capture override, docs/the-ear.md § Duplicates) with audio on file passes both guards
+ *   too — the forced row must still get its vector, or the exoneration the override exists for
+ *   never runs.
  */
 export function kindClause(kind: TrackWorkKind): { args: string[]; sql: string } {
   if (kind === "capture") {
     const cooldown = new Date(Date.now() - CAPTURE_FAILED_COOLDOWN_MS).toISOString();
 
     return {
-      args: [cooldown],
+      args: [cooldown, cooldown],
       // CAPTURE_MAX_FAILURES is a trusted module int (interpolated, like listTracks does);
       // the cooldown is BOUND. `wrong-audio` is a re-capture trigger (docs/the-ear.md).
+      // `duplicate-cleared` is the operator's force-capture escape hatch (docs/the-ear.md §
+      // Duplicates), and its status is STICKY — the generic update path never lets a machine
+      // PATCH overwrite it (the track-update ruling guard) — so this arm carries its own
+      // scheduling conditions off the columns the capture sweep DOES stamp:
+      //   · `source_audio_key is null` — a SUCCESSFUL forced capture lands the key while the
+      //     sentinel stays standing, and a captured row must never re-enter the capture queue
+      //     (the sentinel is a duplicate override, not a standing re-capture order);
+      //   · the same failure-cap + cooldown as the `failed` arm — a FAILED forced capture keeps
+      //     the sentinel too (its status never becomes `failed`), so its retries are bounded by
+      //     `source_audio_failures` / `source_audio_attempted_at` here instead.
       // The catalogue half also excludes a DISMISSED row (`dismissed_at is null`): the operator's
       // "not for me" is the ruled-out-label veto's class (docs/the-ear.md § The operator's
       // actions) — a metered download must never be spent on a row he took out of the telescope.
@@ -259,6 +272,10 @@ export function kindClause(kind: TrackWorkKind): { args: string[]; sql: string }
       sql: `(t.capture_status is null
              or t.capture_status = 'pending'
              or t.capture_status = 'wrong-audio'
+             or (t.capture_status = 'duplicate-cleared'
+                 and t.source_audio_key is null
+                 and t.source_audio_failures < ${CAPTURE_MAX_FAILURES}
+                 and (t.source_audio_attempted_at is null or t.source_audio_attempted_at < ?))
              or (t.capture_status = 'failed'
                  and t.source_audio_failures < ${CAPTURE_MAX_FAILURES}
                  and (t.source_audio_attempted_at is null or t.source_audio_attempted_at < ?)))

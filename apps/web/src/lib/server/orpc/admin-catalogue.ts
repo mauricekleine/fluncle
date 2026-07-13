@@ -38,6 +38,7 @@ import {
 import {
   clearWrongAudio,
   flagWrongAudio,
+  forceCapture,
   listCatalogueTracks as listCatalogue,
   getCatalogueSummary,
   listUnverifiedCaptures,
@@ -147,6 +148,21 @@ export function adminCatalogueHandlers(os: Implementer) {
     .handler(async ({ input }) => {
       try {
         return { flagged: await flagWrongAudio(input.trackId), ok: true } as const;
+      } catch (error) {
+        throw apiFault(error);
+      }
+    });
+
+  // POST /admin/catalogue/force-capture — OPERATOR tier. The dupe-veto escape hatch (docs/the-ear.md
+  // § Duplicates): overrule a WRONG duplicate verdict on one catalogue row so it can be captured.
+  // Operator-only, not agent-allowed — reversing the machine's own duplicate verdict is the
+  // `clear_wrong_audio` class. Idempotent: `forced: false` when the row was not actually vetoed.
+  const forceCaptureHandler = os.force_capture
+    .use(adminAuth)
+    .use(operatorGuard)
+    .handler(async ({ input }) => {
+      try {
+        return { forced: await forceCapture(input.trackId), ok: true } as const;
       } catch (error) {
         throw apiFault(error);
       }
@@ -273,6 +289,7 @@ export function adminCatalogueHandlers(os: Implementer) {
     clear_wrong_audio: clearWrongAudioHandler,
     crawl_catalogue: crawlCatalogueHandler,
     flag_wrong_audio: flagWrongAudioHandler,
+    force_capture: forceCaptureHandler,
     get_capture_budget: getCaptureBudgetHandler,
     get_crawl_status: getCrawlStatusHandler,
     list_catalogue_tracks: listCatalogueTracksHandler,

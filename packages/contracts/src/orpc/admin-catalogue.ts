@@ -288,6 +288,35 @@ export const flagWrongAudio = oc
   .output(z.object({ flagged: z.boolean(), ok: z.literal(true) }));
 
 /**
+ * `force_capture` → `POST /admin/catalogue/force-capture` (operationId `forceCapture`).
+ *
+ * OPERATOR tier — the dupe-veto escape hatch (docs/the-ear.md § Duplicates). "This row is NOT the
+ * duplicate the sweep thinks it is." A duplicate veto (`duplicate_of_track_id` + the −2 tier) can
+ * be WRONG — a shared/mis-assigned ISRC, a `matchKey` collision on a genuinely different recording
+ * — and it is self-sealing: an uncaptured vetoed row is excluded from capture forever, so the
+ * post-audio check that would exonerate it never runs. This lifts the veto STICKILY (a
+ * `capture_status` sentinel all three duplicate detectors respect before re-stamping) and puts the
+ * row back on the pre-audio ladder at its honest tier; the next open-budget capture tick buys it.
+ * It bypasses the DUPLICATE veto, never the VERIFICATION gate — a re-captured forced row still runs
+ * the fingerprint gate at ingest.
+ *
+ * Operator-only, not agent-allowed: overruling the machine's duplicate verdict is a judgement a
+ * machine does not get to make about its own output — the same reasoning that keeps `clear_wrong_audio`,
+ * `update_label`, and `set_capture_budget` operator-tier. `{ ok, forced }`; `forced: false` when the
+ * row was not actually vetoed as a duplicate (already handled, a non-duplicate, or a finding).
+ */
+export const forceCapture = oc
+  .route({
+    method: "POST",
+    operationId: "forceCapture",
+    path: "/admin/catalogue/force-capture",
+    summary: "Overrule the duplicate veto on one catalogue row so it can be captured (operator)",
+    tags: ["Admin"],
+  })
+  .input(z.object({ trackId: z.string().min(1) }))
+  .output(z.object({ forced: z.boolean(), ok: z.literal(true) }));
+
+/**
  * `certify_track` → `POST /admin/catalogue/certify` (operationId `certifyTrack`).
  *
  * OPERATOR tier — the "Log it" the Ear's workstation fires (docs/the-ear.md § The operator's
@@ -671,6 +700,7 @@ export const adminCatalogueContract = {
   clear_wrong_audio: clearWrongAudio,
   crawl_catalogue: crawlCatalogue,
   flag_wrong_audio: flagWrongAudio,
+  force_capture: forceCapture,
   get_capture_budget: getCaptureBudget,
   get_crawl_status: getCrawlStatus,
   list_catalogue_tracks: listCatalogueTracks,

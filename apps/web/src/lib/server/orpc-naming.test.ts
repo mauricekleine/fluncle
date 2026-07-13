@@ -165,6 +165,12 @@ const APPROVED_VERBS = new Set<string>([
   // to `clear`) — added deliberately with `flag_wrong_audio` (docs/the-ear.md § Wrong audio). It
   // RAISES the verdict the sweep can only raise against the catalogue side; `clear` lifts one.
   "flag",
+  // `force` (overrule a WRONG duplicate veto so a catalogue row can be captured — the dupe-veto
+  // escape hatch) — added deliberately with `force_capture` (docs/the-ear.md § Duplicates). It
+  // names OVERRIDING a self-sealing machine gate to make an acquisition happen: distinct from
+  // `clear` (lift a wrong-audio flag on an already-captured row) and `rank`/`crawl`/`capture` —
+  // it is the operator forcing an action past a verdict the sweep would otherwise re-apply forever.
+  "force",
   // `review` (mark an artist's link list as reviewed — the "Looks good" acknowledgment that
   // stamps reviewed_at and promotes surviving candidates) — added deliberately with
   // `review_artist`. A single per-artist ack, distinct from `confirm` (one link) and `approve`

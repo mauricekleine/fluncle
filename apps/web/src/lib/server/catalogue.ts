@@ -170,6 +170,48 @@ export const WRONG_AUDIO_STATUS = "wrong-audio";
  */
 export const QUARANTINE_CLEARED = "quarantine-cleared";
 
+/**
+ * The `capture_status` the OPERATOR force-capture stamps (`forceCapture`) — the dupe-veto escape
+ * hatch (docs/the-ear.md § Duplicates). "This row is NOT the duplicate the sweep thinks it is —
+ * capture it / rank it on its own merits." It is the `QUARANTINE_CLEARED` sibling for the OTHER
+ * self-sealing verdict: a duplicate veto (`duplicate_of_track_id` + the −2 tier) can be WRONG (a
+ * shared or mis-assigned ISRC, a `matchKey` collision on a genuinely different recording), and
+ * without an override the row can never be captured, so the post-audio check that would exonerate
+ * it never runs. This is that override, and it is STICKY: all THREE duplicate detectors respect it
+ * before re-stamping —
+ *
+ *   1. the pre-audio ISRC match to a finding (`preAudioPriority`),
+ *   2. the near-1.0 post-embed same-title adjudication (the scored path),
+ *   3. the catalogue↔catalogue dedup (`catalogueDuplicateOf` + `readCatalogueIdentity`),
+ *
+ * so the sweep's self-healing re-rank (which re-stamps a duplicate on every tick as the corpus
+ * fingerprint moves) never re-marks a force-captured row. A cleared row is also excluded from
+ * being a CANONICAL sibling (`readCatalogueIdentity`), so the operator's ruling takes it out of
+ * the duplicate equivalence class in both directions.
+ *
+ * IT BYPASSES THE DUPLICATE VETO, NEVER THE VERIFICATION GATE. The escape hatch only lifts the
+ * duplicate marker; a re-captured forced row still runs the #578 fingerprint gate at ingest, and
+ * a DIFFERENT-title near-1.0 (wrong audio) still quarantines. Getting the row captured is exactly
+ * what lets the finding-side detectors (1, 2) settle it honestly: once it has its OWN vector, a
+ * genuinely different recording no longer scores identical, so the exoneration the RFC describes
+ * finally runs. The capture work queue (track-work.ts) treats an UNCAPTURED `duplicate-cleared`
+ * row as capture-eligible for precisely this reason.
+ *
+ * AND THE SENTINEL SURVIVES THE CAPTURE IT ENABLES. The forced row is EXPECTED to be captured, and
+ * the capture sweep's terminal PATCH (`captureStatus: 'done'` — or `failed`/`unmatched`) would
+ * overwrite the sentinel at exactly the moment it must hold: the post-embed re-rank would then
+ * re-mark the row a duplicate, silently reversing the ruling right after the capture the operator
+ * paid for. So the generic update path carries a RULING GUARD (track-update.ts): a machine PATCH
+ * never overwrites `duplicate-cleared` — the same class of guarantee as the auto-note's
+ * fill-empty-only rule (an operator ruling is never clobbered by a machine write). The scheduling
+ * state the queue reads (`source_audio_key`, the attempt stamps, the failure count) still lands
+ * normally, and the queue's `duplicate-cleared` arm keys off THOSE columns (a captured row stays
+ * out; a failed retry backs off) since the status itself no longer moves. The ONE writer that may
+ * overwrite the sentinel is the rank sweep's wrong-audio quarantine (direct SQL) — the
+ * verification gate deliberately outranks the duplicate override.
+ */
+export const DUPLICATE_CLEARED = "duplicate-cleared";
+
 // ── The bad-audio memory, server side (docs/the-ear.md § Wrong audio) ──────────────────
 // The GENERAL form of the single-sha memory that once lived embedded in a kept `source_audio_key`.
 // A JSON array on `tracks.source_audio_rejected` ({ videoId?, sha256, reason, at }, capped). Every
@@ -440,11 +482,20 @@ type WinnerRow = { cid: string; dist: number; fid: string };
  * the capture ladder, or vetoed off it). Pure over the two finding-bounded corpora.
  */
 function preAudioPriority(
-  candidate: { artists_json: string; isrc: null | string; label: null | string },
+  candidate: {
+    artists_json: string;
+    capture_status?: null | string;
+    isrc: null | string;
+    label: null | string;
+  },
   archive: ArchiveAffinity,
   findingIsrcs: Map<string, string>,
 ): { duplicateOf: null | string; priority: number } {
-  const dupKey = normalizeIsrc(candidate.isrc);
+  // The operator's force-capture (`DUPLICATE_CLEARED`) overrules the duplicate veto stickily
+  // (docs/the-ear.md § Duplicates): skip the ISRC match so the row lands on its HONEST ladder tier
+  // and re-enters the capture queue, instead of being re-vetoed to −2 on every self-healing tick.
+  const dupKey =
+    candidate.capture_status === DUPLICATE_CLEARED ? null : normalizeIsrc(candidate.isrc);
   const duplicateOf = dupKey ? (findingIsrcs.get(dupKey) ?? null) : null;
   const priority = duplicateOf
     ? DUPLICATE_CAPTURE_TIER
@@ -613,7 +664,7 @@ type CatalogueIdentity = {
 async function readCatalogueIdentity(): Promise<CatalogueIdentity> {
   const db = await getDb();
   const result = await db.execute({
-    args: [WRONG_AUDIO_STATUS],
+    args: [WRONG_AUDIO_STATUS, DUPLICATE_CLEARED],
     sql: `select ct.track_id as track_id,
                  ct.title as title,
                  ct.artists_json as artists_json,
@@ -624,7 +675,8 @@ async function readCatalogueIdentity(): Promise<CatalogueIdentity> {
           where cf.track_id is null
             and ct.source_audio_key is not null
             and ct.dismissed_at is null
-            and (ct.capture_status is null or ct.capture_status <> ?)
+            and (ct.capture_status is null
+                 or (ct.capture_status <> ? and ct.capture_status <> ?))
           order by ct.track_id asc`,
   });
 
@@ -673,9 +725,23 @@ type CatalogueCandidateIdentity = {
  * never its own duplicate — the canonical pointing back at the candidate returns null.
  */
 function catalogueDuplicateOf(
-  candidate: { artists_json: string; isrc: null | string; title: string; track_id: string },
+  candidate: {
+    artists_json: string;
+    capture_status?: null | string;
+    isrc: null | string;
+    title: string;
+    track_id: string;
+  },
   identity: CatalogueIdentity,
 ): null | string {
+  // The operator's force-capture (`DUPLICATE_CLEARED`) took this row out of its duplicate group
+  // (docs/the-ear.md § Duplicates): never re-mark it a sibling, whatever its title/ISRC collides
+  // with. `readCatalogueIdentity` also drops it as a canonical CANDIDATE, so the ruling holds both
+  // ways — it neither points at a canonical nor becomes one.
+  if (candidate.capture_status === DUPLICATE_CLEARED) {
+    return null;
+  }
+
   const key = matchKey(parseArtistsJson(candidate.artists_json), candidate.title);
   const byKey = identity.byMatchKey.get(key);
 
@@ -878,8 +944,14 @@ export async function rankCatalogue(limit = RANK_BATCH_SIZE): Promise<RankCatalo
     ) {
       const rowKey = matchKey(parseArtistsJson(candidate.artists_json), candidate.title);
       const findingKey = findingIdentities.get(winner.fid);
+      const sameTitle = findingKey !== undefined && findingKey === rowKey;
+      // The operator's force-capture (`DUPLICATE_CLEARED`, docs/the-ear.md § Duplicates) overrules
+      // the DUPLICATE veto only: a same-title true-duplicate is NOT re-stamped (it falls through to
+      // a normal scored write and ranks on its own merits), but a DIFFERENT-title near-1.0 still
+      // QUARANTINES — the escape hatch never bypasses the verification gate.
+      const forcedPastDuplicate = candidate.capture_status === DUPLICATE_CLEARED;
 
-      if (findingKey !== undefined && findingKey === rowKey) {
+      if (sameTitle && !forcedPastDuplicate) {
         // SAME TITLE → a TRUE DUPLICATE. The crawler re-found a track already logged, with the
         // RIGHT audio — worthless to buy but not wrong. Route it to the #545 duplicate handling:
         // name the finding on `duplicate_of_track_id` and stamp the −2 tier (excluded from the
@@ -909,38 +981,43 @@ export async function rankCatalogue(limit = RANK_BATCH_SIZE): Promise<RankCatalo
         continue;
       }
 
-      // DIFFERENT TITLE → WRONG AUDIO. The capture matched the artist's already-logged hit, so
-      // this vector is a lie about what the row is. QUARANTINE: drop the poisoned vector + score
-      // (a catalogue row is never anyone's nearest-finding candidate, so nulling it poisons no
-      // other ranking), remember the collided finding as the WHY, and re-derive the pre-audio
-      // tier so it re-enters the capture queue for a fresh download. `source_audio_key` is KEPT
-      // on the row: its embedded sha256 is the memory the capture sweep uses to refuse an
-      // identical re-download (docs/the-ear.md § Wrong audio). `capture_status = 'wrong-audio'`
-      // is the re-capture trigger AND the embed/analyze guard (track-work.ts). The poisoned
-      // capture's sha ALSO enters the GENERAL bad-audio memory, so the re-download's videoId/sha
-      // filters (and any future capture of this row) refuse it — the general form of the legacy
-      // key-derived check, kept alongside it for backward compatibility.
-      const preAudio = archive
-        ? preAudioPriority(candidate, archive, findingIsrcs ?? new Map<string, string>())
-        : { duplicateOf: null, priority: 0 };
-      quarantined += 1;
-      writes.push({
-        args: [
-          WRONG_AUDIO_STATUS,
-          winner.fid,
-          preAudio.priority,
-          preAudio.duplicateOf,
-          appendRejectedSha(
-            candidate.source_audio_rejected,
-            shaFromSourceAudioKey(candidate.source_audio_key),
-            "quarantine",
+      // DIFFERENT TITLE → WRONG AUDIO — but only when the titles DIFFER. A same-title row that
+      // reached here was force-captured past the duplicate veto (`DUPLICATE_CLEARED`): it is not
+      // wrong audio, so it falls through to the normal scored write below. The escape hatch lifts
+      // the DUPLICATE veto only, never the verification gate — a genuine cross-title collision
+      // still quarantines here.
+      //
+      // The capture matched the artist's already-logged hit, so this vector is a lie about what
+      // the row is. QUARANTINE: drop the poisoned vector + score (a catalogue row is never
+      // anyone's nearest-finding candidate, so nulling it poisons no other ranking), remember the
+      // collided finding as the WHY, and re-derive the pre-audio tier so it re-enters the capture
+      // queue for a fresh download. `source_audio_key` is KEPT on the row: its embedded sha256 is
+      // the memory the capture sweep uses to refuse an identical re-download (docs/the-ear.md §
+      // Wrong audio). `capture_status = 'wrong-audio'` is the re-capture trigger AND the
+      // embed/analyze guard (track-work.ts). The poisoned capture's sha ALSO enters the GENERAL
+      // bad-audio memory, so the re-download's videoId/sha filters refuse it.
+      if (!sameTitle) {
+        const preAudio = archive
+          ? preAudioPriority(candidate, archive, findingIsrcs ?? new Map<string, string>())
+          : { duplicateOf: null, priority: 0 };
+        quarantined += 1;
+        writes.push({
+          args: [
+            WRONG_AUDIO_STATUS,
+            winner.fid,
+            preAudio.priority,
+            preAudio.duplicateOf,
+            appendRejectedSha(
+              candidate.source_audio_rejected,
+              shaFromSourceAudioKey(candidate.source_audio_key),
+              "quarantine",
+              now,
+            ),
+            corpus,
             now,
-          ),
-          corpus,
-          now,
-          candidate.track_id,
-        ],
-        sql: `update tracks
+            candidate.track_id,
+          ],
+          sql: `update tracks
               set capture_status = ?,
                   embedding_json = null,
                   embedding_blob = null,
@@ -952,8 +1029,9 @@ export async function rankCatalogue(limit = RANK_BATCH_SIZE): Promise<RankCatalo
                   catalogue_rank_corpus = ?,
                   catalogue_ranked_at = ?
               where track_id = ?`,
-      });
-      continue;
+        });
+        continue;
+      }
     }
 
     // CATALOGUE-INTERNAL DUPLICATE (docs/the-ear.md § Duplicates). This vectored row is not near
@@ -1471,6 +1549,49 @@ export async function clearWrongAudio(trackId: string): Promise<boolean> {
           set capture_status = ?
           where track_id = ?
             and capture_status = ?
+            and not exists (select 1 from findings where findings.track_id = tracks.track_id)`,
+  });
+
+  return result.rowsAffected > 0;
+}
+
+/**
+ * THE OPERATOR FORCE-CAPTURE (`forceCapture`) — the dupe-veto escape hatch (docs/the-ear.md §
+ * Duplicates). "This row is NOT the duplicate the sweep thinks it is." A duplicate veto can be
+ * WRONG in rare cases — a shared or mis-assigned ISRC, a `matchKey` collision on a genuinely
+ * different recording — and the veto is self-sealing: an uncaptured row marked `duplicate_of` +
+ * the −2 tier is excluded from capture forever, so the post-audio similarity check that would
+ * exonerate it never runs (the track never gets audio to embed). This is the only exit.
+ *
+ * It stamps the STICKY `DUPLICATE_CLEARED` `capture_status` — the `clearWrongAudio` precedent for
+ * the OTHER self-sealing verdict — which all three duplicate detectors respect (`preAudioPriority`,
+ * the scored-path same-title adjudication, `catalogueDuplicateOf`/`readCatalogueIdentity`), so the
+ * self-healing re-rank never re-marks the row. In the same write it CLEARS the veto (`duplicate_of`
+ * null, `capture_priority` null) and NULLS `catalogue_rank_corpus` so the row goes stale and the
+ * next tick re-ranks it: an UNCAPTURED row lands back on the pre-audio ladder at its HONEST tier
+ * and the next open-budget capture tick buys it (the capture work queue treats `duplicate-cleared`
+ * as capture-eligible); a CAPTURED sibling re-scores and rejoins the ear lens as a discovery.
+ *
+ * IT BYPASSES THE DUPLICATE VETO, NEVER THE VERIFICATION GATE — a re-captured forced row still runs
+ * the #578 fingerprint gate at ingest, and a wrong-audio (cross-title near-1.0) capture still
+ * quarantines. Getting the row captured is the point: its OWN vector is what lets the finding-side
+ * detectors settle it honestly.
+ *
+ * Guarded to a CATALOGUE row that is ACTUALLY vetoed (`duplicate_of_track_id is not null`): a
+ * no-op success on any other row (a non-duplicate, a finding), so a double-click reports honestly.
+ * Returns whether the veto was lifted.
+ */
+export async function forceCapture(trackId: string): Promise<boolean> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [DUPLICATE_CLEARED, trackId],
+    sql: `update tracks
+          set capture_status = ?,
+              duplicate_of_track_id = null,
+              capture_priority = null,
+              catalogue_rank_corpus = null
+          where track_id = ?
+            and duplicate_of_track_id is not null
             and not exists (select 1 from findings where findings.track_id = tracks.track_id)`,
   });
 

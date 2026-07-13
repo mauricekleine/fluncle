@@ -282,6 +282,10 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // the strength of a human listen, a judgement a machine does not get to make (the
   // `clear_wrong_audio` reasoning).
   flag_wrong_audio: "operator",
+  // The dupe-veto escape hatch (docs/the-ear.md § Duplicates) — operator tier: overruling the
+  // machine's own duplicate verdict so a row can be captured is a judgement a machine does not get
+  // to make about its own output (the `clear_wrong_audio` reasoning).
+  force_capture: "operator",
   // The `/admin` attention-queue digest read — admin tier (adminAuth only, no
   // operatorGuard), the list_*_admin precedent: it composes the same admin-tier reads
   // the snapshot draws from and publishes nothing, so the operator's CLI + Raycast

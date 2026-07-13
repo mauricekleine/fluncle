@@ -1064,3 +1064,314 @@ describe("catalogue-internal duplicates — one master, one row", () => {
     expect((await rankingOf("cat-vip")).duplicate_of_track_id).toBeNull();
   });
 });
+
+// ── The dupe-veto escape hatch — force_capture ────────────────────────────────────────────────
+// A duplicate veto (`duplicate_of_track_id` + the −2 tier) can be WRONG in rare cases — a shared or
+// mis-assigned ISRC, a `matchKey` collision on a genuinely different recording — and it is
+// self-sealing: an uncaptured vetoed row is excluded from capture forever, so the post-audio check
+// that would exonerate it never runs. `forceCapture` is the only exit. It stamps a STICKY
+// `capture_status` sentinel all three duplicate detectors respect, so the self-healing re-rank never
+// re-marks the row (docs/the-ear.md § Duplicates). It bypasses the DUPLICATE veto, never the
+// VERIFICATION gate — wrong audio still quarantines.
+describe("the dupe-veto escape hatch — force_capture", () => {
+  /** Read one row's capture_status (the sticky-override sentinel lives here). */
+  async function statusOf(trackId: string): Promise<null | string> {
+    const result = await db.execute({
+      args: [trackId],
+      sql: `select capture_status from tracks where track_id = ?`,
+    });
+
+    return (result.rows[0]?.capture_status as null | string) ?? null;
+  }
+
+  /** Mark a catalogue row CAPTURED (an R2 key on file), the way a real capture would. */
+  async function capture(trackId: string): Promise<void> {
+    await db.execute({
+      args: [`catalogue/${trackId}/x.webm`, trackId],
+      sql: `update tracks set source_audio_key = ?, capture_status = 'done' where track_id = ?`,
+    });
+  }
+
+  it("lifts a catalogue-internal duplicate veto and SURVIVES a re-rank — the forced row is never re-marked", async () => {
+    const { forceCapture, rankCatalogue } = await import("./catalogue");
+
+    // Two captured siblings, same identity → cat-b is marked a duplicate of cat-a (the min-id
+    // canonical). This is the RFC's `matchKey`-collision case: the operator says they are NOT one
+    // recording.
+    await seedCatalogueTrack(db, { artists: ["Whiney"], title: "Nightfall", trackId: "cat-a" });
+    await seedCatalogueTrack(db, { artists: ["Whiney"], title: "Nightfall", trackId: "cat-b" });
+    await capture("cat-a");
+    await capture("cat-b");
+    await embed("cat-a", unit(axis(3)));
+    await embed("cat-b", unit(axis(3)));
+    await rankCatalogue();
+    expect((await rankingOf("cat-b")).duplicate_of_track_id).toBe("cat-a");
+
+    // The operator overrules the veto.
+    expect(await forceCapture("cat-b")).toBe(true);
+    expect((await rankingOf("cat-b")).duplicate_of_track_id).toBeNull();
+    expect(await statusOf("cat-b")).toBe("duplicate-cleared");
+
+    // A second force is an idempotent no-op — the row is no longer vetoed.
+    expect(await forceCapture("cat-b")).toBe(false);
+
+    // THE CORE PROOF: a re-rank re-stamps duplicates on every tick as the corpus moves, but the
+    // sticky override means it MUST NOT re-mark the forced row.
+    const summary = await rankCatalogue();
+    expect(summary.catalogueDuplicates).toBe(0);
+    expect((await rankingOf("cat-b")).duplicate_of_track_id).toBeNull();
+    expect(await statusOf("cat-b")).toBe("duplicate-cleared");
+    // The canonical is untouched, and it never becomes a duplicate of the forced row either.
+    expect((await rankingOf("cat-a")).duplicate_of_track_id).toBeNull();
+  });
+
+  it("puts an uncaptured pre-audio ISRC duplicate back on the capture ladder at its HONEST tier, and into the capture queue", async () => {
+    const { forceCapture, rankCatalogue } = await import("./catalogue");
+    const { setCatalogueCapturePaused } = await import("./capture-budget");
+    const { listTrackWork } = await import("./track-work");
+
+    // Open the catalogue budget so the capture work queue actually serves catalogue rows.
+    await setCatalogueCapturePaused(false);
+
+    // A finding and an UNCAPTURED catalogue row share an ISRC (a mis-assigned one) → the pre-audio
+    // ISRC veto marks the catalogue row a duplicate at tier −2, so it is never bought. The artist is
+    // also on the finding, so its HONEST ladder tier is 3 (artist).
+    await seedFinding("finding-owned", {
+      artists: ["Known"],
+      isrc: "GBTEST0000009",
+      vector: axis(0),
+    });
+    await seedCatalogue("cat-wrongisrc", { artists: ["Known"], isrc: "GBTEST0000009" });
+    await rankCatalogue();
+    expect((await rankingOf("cat-wrongisrc")).duplicate_of_track_id).toBe("finding-owned");
+    expect((await rankingOf("cat-wrongisrc")).capture_priority).toBe(-2);
+
+    // The operator forces it — the shared ISRC is wrong; this is a different recording.
+    expect(await forceCapture("cat-wrongisrc")).toBe(true);
+
+    // A re-rank lands it back on the ladder at its honest tier (3), NOT re-vetoed to −2.
+    await rankCatalogue();
+    const row = await rankingOf("cat-wrongisrc");
+    expect(row.duplicate_of_track_id).toBeNull();
+    expect(row.capture_priority).toBe(3);
+
+    // And it is now capture-eligible: the next open-budget tick buys it.
+    const work = await listTrackWork({ kind: "capture", scope: "catalogue" });
+    expect(work.map((w) => w.trackId)).toContain("cat-wrongisrc");
+  });
+
+  it("a forced SAME-title near-1.0 row ranks on its own merits instead of being re-marked a finding duplicate", async () => {
+    const { forceCapture, rankCatalogue } = await import("./catalogue");
+
+    await seedFinding("finding-owned", { artists: ["Dupe"], title: "Infinity", vector: axis(0) });
+    await seedCatalogue("cat-dupe", { artists: ["Dupe"], title: "Infinity", vector: axis(0) });
+    await rankCatalogue();
+    // A same-title near-1.0 vectored row is stamped a TRUE duplicate (tier −2, finding stored).
+    expect((await rankingOf("cat-dupe")).duplicate_of_track_id).toBe("finding-owned");
+
+    expect(await forceCapture("cat-dupe")).toBe(true);
+
+    // A re-rank scores it normally (near-1.0) and does NOT re-stamp the duplicate; it is NOT
+    // quarantined either (same title is never wrong audio), and the override stays sticky.
+    const summary = await rankCatalogue();
+    expect(summary.quarantined).toBe(0);
+    const row = await rankingOf("cat-dupe");
+    expect(row.duplicate_of_track_id).toBeNull();
+    expect(row.nearest_finding_score ?? 0).toBeGreaterThan(0.99);
+    expect(await statusOf("cat-dupe")).toBe("duplicate-cleared");
+  });
+
+  it("still quarantines WRONG AUDIO on a duplicate-cleared row — bypasses the DUPLICATE veto, never the VERIFICATION gate", async () => {
+    const { WRONG_AUDIO_STATUS, rankCatalogue } = await import("./catalogue");
+
+    // A forced row that then captures the WRONG audio (a cross-title near-1.0 to a DIFFERENT-titled
+    // finding) must still quarantine — the escape hatch never lets bad bytes through.
+    await seedFinding("finding-shelter", {
+      artists: ["Flowidus"],
+      title: "Shelter",
+      vector: axis(0),
+    });
+    await seedCatalogue("cat-fyl", {
+      artists: ["Flowidus"],
+      title: "Find Your Love",
+      vector: axis(0),
+    });
+    // Simulate the row's post-capture state carrying the sticky override.
+    await db.execute({
+      args: ["cat-fyl"],
+      sql: `update tracks
+            set capture_status = 'duplicate-cleared', source_audio_key = 'catalogue/cat-fyl/x.webm'
+            where track_id = ?`,
+    });
+
+    const summary = await rankCatalogue();
+    expect(summary.quarantined).toBe(1);
+    expect(await statusOf("cat-fyl")).toBe(WRONG_AUDIO_STATUS);
+  });
+
+  it("refuses a finding and a non-duplicate row — an honest no-op success", async () => {
+    const { forceCapture } = await import("./catalogue");
+
+    await seedFinding("finding-a", { vector: axis(0) });
+    await seedCatalogue("cat-plain");
+
+    // A finding is never a duplicate row → refused (the findings guard).
+    expect(await forceCapture("finding-a")).toBe(false);
+    // A catalogue row that is not vetoed as a duplicate → nothing to force.
+    expect(await forceCapture("cat-plain")).toBe(false);
+    // A row that does not exist → false.
+    expect(await forceCapture("nope")).toBe(false);
+  });
+
+  // ── The sentinel survives the capture it enables (the ruling guard, track-update.ts) ─────
+  // The forced row is EXPECTED to be captured, and the capture sweep's terminal PATCH
+  // (`captureStatus: 'done'`) would erase the sentinel at exactly the moment it must hold — the
+  // post-embed re-rank would then re-mark the row a duplicate, silently reversing the ruling
+  // right after the capture the operator paid for. These cases run the FULL arc through the SAME
+  // generic update path the box sweep PATCHes, so the guard is exercised for real.
+
+  it("FULL ARC: force → capture done (real update path) → embed → re-rank — the ruling is never reversed", async () => {
+    const { forceCapture, rankCatalogue } = await import("./catalogue");
+    const { updateTrack } = await import("./track-update");
+
+    // A corpus finding so the scored path has something to rank against.
+    await seedFinding("finding-x", { vector: axis(5) });
+    // The canonical captured+embedded sibling, and the uncaptured row the sweep vetoes as its
+    // duplicate — the matchKey-collision case the operator overrules.
+    await seedCatalogueTrack(db, { artists: ["Whiney"], title: "Nightfall", trackId: "cat-can" });
+    await seedCatalogueTrack(db, {
+      artists: ["Whiney"],
+      title: "Nightfall",
+      trackId: "cat-forced",
+    });
+    await capture("cat-can");
+    await embed("cat-can", unit(axis(3)));
+    await rankCatalogue();
+    expect((await rankingOf("cat-forced")).duplicate_of_track_id).toBe("cat-can");
+
+    // Force, then re-rank onto the honest ladder (nothing ties it to the archive → tier 0).
+    expect(await forceCapture("cat-forced")).toBe(true);
+    await rankCatalogue();
+    expect((await rankingOf("cat-forced")).capture_priority).toBe(0);
+
+    // THE CAPTURE SUCCEEDS — through the generic update path, with the exact PATCH shape the box
+    // sweep sends on success. The ruling guard must keep the sentinel standing while every other
+    // capture column lands normally.
+    const now = new Date().toISOString();
+    await updateTrack(
+      "cat-forced",
+      {
+        captureStatus: "done",
+        sourceAudioAttemptedAt: now,
+        sourceAudioBytes: 1234,
+        sourceAudioCapturedAt: now,
+        sourceAudioKey: "catalogue/cat-forced/fresh.webm",
+      },
+      { writer: "agent" },
+    );
+    expect(await statusOf("cat-forced")).toBe("duplicate-cleared");
+    const captured = await db.execute({
+      args: ["cat-forced"],
+      sql: `select source_audio_key from tracks where track_id = ?`,
+    });
+    expect(captured.rows[0]?.source_audio_key).toBe("catalogue/cat-forced/fresh.webm");
+
+    // The fresh audio embeds; the row-half staleness re-picks it (vector + non-negative tier).
+    // Its identity STILL collides with cat-can — without the surviving sentinel this is the tick
+    // that would silently re-mark it −2. With it: scored normally, ruling intact.
+    await embed("cat-forced", unit(axis(3)));
+    const summary = await rankCatalogue();
+    expect(summary.catalogueDuplicates).toBe(0);
+    const row = await rankingOf("cat-forced");
+    expect(row.duplicate_of_track_id).toBeNull();
+    expect(row.nearest_finding_score).not.toBeNull();
+    expect(row.capture_priority).toBeNull();
+    expect(await statusOf("cat-forced")).toBe("duplicate-cleared");
+  });
+
+  it("a CAPTURED duplicate-cleared row never re-enters the capture worklist — even in the window before the next re-rank", async () => {
+    const { setCatalogueCapturePaused } = await import("./capture-budget");
+    const { listTrackWork } = await import("./track-work");
+
+    await setCatalogueCapturePaused(false);
+    // The post-capture window: sentinel standing, audio key landed, and the PRE-capture ladder
+    // tier (3) still stamped because the rank sweep has not ticked yet. Without the queue's
+    // key-null condition this row would be bought again.
+    await seedFinding("finding-a", { artists: ["Known"], vector: axis(0) });
+    await seedCatalogue("cat-forced", { artists: ["Known"] });
+    await db.execute({
+      args: ["cat-forced"],
+      sql: `update tracks
+            set capture_status = 'duplicate-cleared',
+                capture_priority = 3,
+                source_audio_key = 'catalogue/cat-forced/fresh.webm'
+            where track_id = ?`,
+    });
+
+    const work = await listTrackWork({ kind: "capture", scope: "catalogue" });
+    expect(work.map((w) => w.trackId)).not.toContain("cat-forced");
+  });
+
+  it("a duplicate-cleared row WITH audio is embed- and analyze-eligible — the forced row still gets its vector", async () => {
+    const { listTrackWork } = await import("./track-work");
+
+    await seedCatalogue("cat-forced");
+    await db.execute({
+      args: ["cat-forced"],
+      sql: `update tracks
+            set capture_status = 'duplicate-cleared',
+                capture_priority = 0,
+                source_audio_key = 'catalogue/cat-forced/fresh.webm'
+            where track_id = ?`,
+    });
+
+    const embedWork = await listTrackWork({ kind: "embed", scope: "catalogue" });
+    expect(embedWork.map((w) => w.trackId)).toContain("cat-forced");
+    const analyzeWork = await listTrackWork({ kind: "analyze", scope: "catalogue" });
+    expect(analyzeWork.map((w) => w.trackId)).toContain("cat-forced");
+  });
+
+  it("a FAILED forced capture keeps the sentinel (never re-marked) and backs off on the attempt stamp", async () => {
+    const { forceCapture, rankCatalogue } = await import("./catalogue");
+    const { setCatalogueCapturePaused } = await import("./capture-budget");
+    const { listTrackWork } = await import("./track-work");
+    const { updateTrack } = await import("./track-update");
+
+    await setCatalogueCapturePaused(false);
+    // An uncaptured sibling pair → cat-want vetoed → forced → back on the honest ladder.
+    await seedCatalogueTrack(db, { artists: ["Bcee"], title: "Souls Apart", trackId: "cat-have" });
+    await seedCatalogueTrack(db, { artists: ["Bcee"], title: "Souls Apart", trackId: "cat-want" });
+    await capture("cat-have");
+    await rankCatalogue();
+    expect((await rankingOf("cat-want")).duplicate_of_track_id).toBe("cat-have");
+    expect(await forceCapture("cat-want")).toBe(true);
+    await rankCatalogue();
+
+    // The capture FAILS — the sweep's failure PATCH. The sentinel survives (the status never
+    // becomes 'failed'), so a later re-rank still honours the ruling…
+    await updateTrack(
+      "cat-want",
+      {
+        captureStatus: "failed",
+        sourceAudioAttemptedAt: new Date().toISOString(),
+        sourceAudioFailures: 1,
+      },
+      { writer: "agent" },
+    );
+    expect(await statusOf("cat-want")).toBe("duplicate-cleared");
+    await rankCatalogue();
+    expect((await rankingOf("cat-want")).duplicate_of_track_id).toBeNull();
+
+    // …and the retry is BOUNDED like a failed row: the fresh attempt stamp holds it out of the
+    // worklist until the cooldown passes; an old stamp re-admits it.
+    const fresh = await listTrackWork({ kind: "capture", scope: "catalogue" });
+    expect(fresh.map((w) => w.trackId)).not.toContain("cat-want");
+
+    await db.execute({
+      args: ["2000-01-01T00:00:00.000Z", "cat-want"],
+      sql: `update tracks set source_audio_attempted_at = ? where track_id = ?`,
+    });
+    const cooled = await listTrackWork({ kind: "capture", scope: "catalogue" });
+    expect(cooled.map((w) => w.trackId)).toContain("cat-want");
+  });
+});
