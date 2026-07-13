@@ -217,6 +217,13 @@ export const rankCatalogue = oc
     z.object({
       ok: z.literal(true),
       summary: z.object({
+        /**
+         * Rows re-pointed at a canonical catalogue sibling this tick — the same master under a
+         * second MusicBrainz MBID (docs/the-ear.md § Duplicates). Missing from the schema when
+         * the server first shipped it, and zod STRIPPED it silently — the field must be pinned
+         * here or no client ever sees it.
+         */
+        catalogueDuplicates: z.number(),
         corpus: z.string(),
         embeddedFindings: z.number(),
         findings: z.number(),
