@@ -105,9 +105,9 @@ describe("verifyCapture — the verdict routing", () => {
     expect(row.capture_status).toBe(WRONG_AUDIO_STATUS);
     expect(row.embedding_json).toBeNull();
     expect(row.capture_priority).toBe(0);
-    // The verdict is NOT persisted as `mismatch` on a quarantined row: the fresh capture will be
-    // re-verified from scratch, so the column stays null (still honest — the quarantine IS the state).
-    expect(row.capture_verification).toBeNull();
+    // The verdict IS kept on the quarantined row — the lens's honest WHY (a preview mismatch, not
+    // an archive collision); the fresh capture's ingest gate overwrites it when the re-download lands.
+    expect(row.capture_verification).toBe("mismatch");
     // The REJECTION MEMORY: the bad bytes' sha entered `source_audio_rejected`, so the re-capture's
     // pre-download/backstop filters refuse the same master.
     const rejected = JSON.parse(row.source_audio_rejected ?? "[]") as { sha256: string }[];

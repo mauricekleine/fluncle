@@ -61,9 +61,9 @@ export type TrackUpdate = {
    * describes the recording, applies to a catalogue row or a finding, and moves no public surface.
    *   - `preview-match` / `unverified` — the ingest gate's verdict (matched the ISRC preview, or
    *     abstained: no preview source / no fpcalc).
-   *   - `mismatch` — the historic backfill's suspicion on a FINDING (drives the /admin attention
-   *     queue; the operator rules with `flag_wrong_audio`). A catalogue mismatch is quarantined
-   *     instead, never stamped `mismatch`.
+   *   - `mismatch` — the captured audio failed the preview check. On a FINDING it drives the
+   *     /admin attention queue (the operator rules with `flag_wrong_audio`); on a CATALOGUE row it
+   *     rides alongside the wrong-audio quarantine as the lens's honest WHY.
    */
   captureVerification?: "mismatch" | "preview-match" | "unverified";
   /** ISO of the last capture-verification check (paired with `captureVerification`). */

@@ -1576,6 +1576,10 @@ export async function verifyCapture(
     now,
   );
 
+  // `capture_verification = 'mismatch'` is KEPT on the quarantined row — it is the lens's honest
+  // WHY (a preview-mismatch quarantine, not a cross-title archive collision), and it can never
+  // reach the finding attention read (that read joins `findings`, and this row has none). The
+  // fresh capture's ingest gate overwrites it with a new verdict when the re-download lands.
   await db.execute({
     args: [WRONG_AUDIO_STATUS, preAudio.priority, preAudio.duplicateOf, rejected, now, trackId],
     sql: `update tracks
@@ -1586,7 +1590,7 @@ export async function verifyCapture(
               capture_priority = ?,
               duplicate_of_track_id = ?,
               source_audio_rejected = ?,
-              capture_verification = null,
+              capture_verification = 'mismatch',
               capture_verified_at = ?,
               catalogue_rank_corpus = null
           where track_id = ?`,

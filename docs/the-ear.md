@@ -148,7 +148,7 @@ Everything above catches a wrong capture **after** it has poisoned a vector — 
 The gate verifies what downloads **from now on**; `fluncle-verify-captures` (an on-box host timer, [docs/agents/hermes/verify-captures-timer/](./agents/hermes/verify-captures-timer/README.md)) walks every capture that landed **before** it (~590 rows, findings + catalogue). The box only **measures** — one private-R2 read of the captured bytes, one preview fetch, the same fingerprint match — and reports a plain verdict through the agent-tier `verify_capture` op; the **Worker routes it**, so the doctrine has one integration-tested authority:
 
 - **match** → `capture_verification = 'preview-match'`; **no preview** → `'unverified'`. Either way the row leaves the `capture_verification IS NULL` worklist, which is what makes the sweep bounded, resumable, and never a re-verifier.
-- **mismatch on a CATALOGUE row** → the quarantine rewind above (vector dropped, re-queued for capture, sha into the rejection memory). The machine may rewind a row Fluncle never spoke about.
+- **mismatch on a CATALOGUE row** → the quarantine rewind above (vector dropped, re-queued for capture, sha into the rejection memory), with the `'mismatch'` stamp kept as the quarantine lens's honest WHY — a preview mismatch reads differently from a cross-title archive collision. The machine may rewind a row Fluncle never spoke about.
 - **mismatch on a FINDING** → stamped `'mismatch'` and **nothing else**: a machine does not rewind a public finding. The stamp raises a `capture-suspect` row on the `/admin` attention queue, pre-evidenced; the operator auditions the captured bytes and rules with `flag_wrong_audio` (which nulls the verdict, so a ruled row leaves the queue).
 
 ## The capture budget — the brake

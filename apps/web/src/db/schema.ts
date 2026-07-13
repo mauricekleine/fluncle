@@ -206,10 +206,12 @@ export const tracks = sqliteTable(
     //   - preview-match: the captured audio matched the preview (same recording). The good case.
     //   - unverified: the gate ABSTAINED — the track has no preview source to check against, or
     //     fpcalc was absent/failed. Capture proceeded; this is an honest "no reference", not a pass.
-    //   - mismatch: the historic backfill (verify-captures) found a FINDING whose captured audio does
-    //     NOT match its preview. NOT auto-rewound (a machine does not rewind a public finding) — it
-    //     raises an /admin attention item; the operator rules with `flag_wrong_audio`. Only ever set
-    //     on a FINDING: a CATALOGUE mismatch is quarantined (capture_status = 'wrong-audio') instead.
+    //   - mismatch: the captured audio does NOT match the preview. On a FINDING it is a stamp and
+    //     nothing more (a machine does not rewind a public finding) — it raises an /admin attention
+    //     item and the operator rules with `flag_wrong_audio`. On a CATALOGUE row it rides ALONGSIDE
+    //     the wrong-audio quarantine (capture_status = 'wrong-audio') as the lens's honest WHY — a
+    //     preview mismatch, not a cross-title archive collision — and the fresh capture's ingest
+    //     gate overwrites it when the re-download lands.
     //   - null: pre-gate legacy (captured before verification shipped), or a fresh row not yet checked.
     // Machine-measured provenance like `analyzed_from`: internal, never a public surface, never a
     // lastmod bump. A fresh (re-)capture clears it so the new bytes are re-verified.
