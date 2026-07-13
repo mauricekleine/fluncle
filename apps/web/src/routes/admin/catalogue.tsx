@@ -596,14 +596,33 @@ function CatalogueRow({
               {formatScore(track.nearestFindingScore)}
             </span>
           ) : null}
-          {/* THE VERDICT PAIR. The quarantine says same-recording, not which title is lying — the
-              operator's ears decide. Play the artwork (it auditions the CAPTURED bytes here, not
-              the preview): hearing the FINDING's song means this row's capture is wrong (leave it;
-              re-capture is already queued — "Keep it" is the rare true-twin override). Hearing
-              THIS row's own song means the finding's capture is wrong — "Re-capture the finding"
-              flags it and keeps this row, one decision for the pair. */}
+          {/* THE VERDICTS. The quarantine says same-recording, not which title is lying — the
+              operator's ears decide, and DOING NOTHING is a verdict too (the default: a fresh
+              download of this row is already queued, the bad bytes hash-rejected — the WHY line
+              says so). The explicit actions are the overrides: the thumbs-down cancels the
+              re-capture outright (a dismissed row leaves the capture queue — no metered download
+              for a track he'd wave off anyway); "Keep it" is the rare true-twin call; "Re-capture
+              the finding" flips the accusation when the captured bytes are this row's OWN song. */}
           {lens === "quarantine" ? (
             <>
+              <Button
+                aria-label={`Not for me: ${track.title} (also cancels its re-capture)`}
+                disabled={busy.dismissing}
+                onClick={onDismiss}
+                size="icon-sm"
+                title="Not for me — also cancels the queued re-capture"
+                variant="ghost"
+              >
+                {busy.dismissing ? (
+                  <CircleNotchIcon
+                    aria-hidden="true"
+                    className="motion-safe:animate-spin"
+                    weight="bold"
+                  />
+                ) : (
+                  <ThumbsDownIcon aria-hidden="true" />
+                )}
+              </Button>
               <PendingButton onClick={onClear} pending={busy.clearing} variant="outline">
                 Keep it
               </PendingButton>
@@ -715,13 +734,17 @@ function CatalogueRow({
 
 /** The row's reason for being where it is, in one line. */
 function Why({ lens, track }: { lens: CatalogueLens; track: CatalogueTrackItem }): ReactNode {
-  // The wrong-audio WHY names the finding the capture was mistaken FOR — the evidence that this
-  // row's audio was the artist's other, already-logged track, not the track named here.
+  // The wrong-audio WHY names the finding the capture was mistaken FOR — the evidence — and then
+  // says the DEFAULT out loud: a fresh download is already queued, so doing nothing is a verdict
+  // the operator can trust rather than a gap he has to wonder about.
   if (lens === "quarantine") {
     return track.nearestFinding ? (
-      <MatchLine lead="Its audio came back as" match={track.nearestFinding} />
+      <>
+        <MatchLine lead="Its audio came back as" match={track.nearestFinding} />
+        {" — a fresh download is queued."}
+      </>
     ) : (
-      "Its audio matched a track already in the archive."
+      "Its audio matched a track already in the archive — a fresh download is queued."
     );
   }
 
