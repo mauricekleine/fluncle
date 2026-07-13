@@ -27,8 +27,8 @@ Six columns on `tracks`, written **only** by the sweep and meaningful **only** o
 | `nearest_finding_score`    | cosine similarity to the nearest finding (`1 − vector_distance_cos`, so higher is nearer). The Ear's sort key.        |
 | `nearest_finding_track_id` | **which** finding. The row's WHY.                                                                                     |
 | `capture_priority`         | −2…3, the pre-audio ladder (−1 a ruled-out label, −2 a duplicate). The capture queue's sort key.                      |
-| `duplicate_of_track_id`    | the finding this row is the SAME RECORDING as (pre-audio ISRC match). The duplicate's WHY — see _Duplicates_.         |
-| `catalogue_rank_corpus`    | the finding-corpus fingerprint the values above were computed against, `"<findings>:<embedded>"`. The staleness test. |
+| `duplicate_of_track_id`    | the finding OR canonical catalogue sibling this row is the SAME RECORDING as. The duplicate's WHY — see _Duplicates_. |
+| `catalogue_rank_corpus`    | the corpus fingerprint the values above were computed against, `"<logic-version>:<findings>:<embedded>"`. Staleness.  |
 | `catalogue_ranked_at`      | when. Freshness for the operator; never a predicate.                                                                  |
 
 Two indexes (`tracks_nearest_finding_score_idx`, `tracks_capture_priority_idx`) serve the two ordered reads. NULLs sort first in an ASC index, so a DESC walk hits the ranked rows first and stops at the page's `LIMIT` — the cost is the page, not the corpus.
