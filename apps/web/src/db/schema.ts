@@ -123,8 +123,9 @@ export const tracks = sqliteTable(
     // consecutive-failure streak, *DoneAt stamps when the ISRC RESOLVED to a URL (a clean
     // no-match is a `tried`, re-checkable if Apple's catalogue grows). Discogs/Last.fm/note stay
     // on `findings` — they are finding-only sweeps. NULL/0 on rows that predate the columns.
-    // The one-time carry of existing findings' Apple state lives in scripts/backfill-apple-
-    // reliability.ts (gated once, the `labels_seeded_at` precedent).
+    // The one-time carry of existing findings' Apple state (a gated deploy step, the
+    // `labels_seeded_at` precedent) has run in production; its now-vestigial `findings`
+    // columns and the carry script were dropped once it proved out.
     backfillAppleMusicAttemptedAt: text("backfill_apple_music_attempted_at"),
     backfillAppleMusicAttempts: integer("backfill_apple_music_attempts").notNull().default(0),
     backfillAppleMusicDoneAt: text("backfill_apple_music_done_at"),
@@ -445,17 +446,12 @@ export const findings = sqliteTable(
     // The Discogs sweep's OUTPUT (`in_release_id`/`in_master_id`) is catalogue identity
     // and lives on `tracks`; only the per-finding sweep BOOKKEEPING lives here.
     //
-    // The Apple Music sweep follows the SAME per-source shape (attempted_at / attempts /
-    // failures / done_at) and the same rules: its OUTPUT (`apple_music_url`) is catalogue
-    // identity on `tracks`, only the bookkeeping lives here. The one twist is `done_at`
-    // semantics — it stamps when the ISRC RESOLVED to a URL; a clean no-match (Apple has no
-    // song for that ISRC) is a `tried` (base cooldown, no done_at), so a later catalogue
-    // pass can re-resolve it if Apple's catalogue grows. A finding with no ISRC never
-    // enters the sweep at all (the worklist is ISRC-gated).
-    backfillAppleMusicAttemptedAt: text("backfill_apple_music_attempted_at"),
-    backfillAppleMusicAttempts: integer("backfill_apple_music_attempts").notNull().default(0),
-    backfillAppleMusicDoneAt: text("backfill_apple_music_done_at"),
-    backfillAppleMusicFailures: integer("backfill_apple_music_failures").notNull().default(0),
+    // The Apple Music sweep once kept the same per-source bookkeeping here, but its four
+    // `backfill_apple_music_*` columns MOVED to `tracks` (RFC musickit U1) — `apple_music_url`
+    // is catalogue identity and the sweep now drains catalogue rows that have no `findings`
+    // row, so the bookkeeping had to live where the output does. The one-time carry of the old
+    // findings state has run in production; the vestigial columns were dropped here. See the
+    // `backfill_apple_music_*` block on `tracks`.
     backfillDiscogsAttemptedAt: text("backfill_discogs_attempted_at"),
     backfillDiscogsAttempts: integer("backfill_discogs_attempts").notNull().default(0),
     backfillDiscogsDoneAt: text("backfill_discogs_done_at"),
