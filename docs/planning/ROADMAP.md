@@ -101,9 +101,9 @@ The Fluncle web onion is live on the rave VPS, proxying `www.fluncle.com` (API/R
 
 - **The rave SSH onion (deferred).** A second onion identity → the SSH terminal was scoped but deferred; stand it up if the flex earns its keep.
 
-### MusicKit second authority — the remaining tail (U2b + the dupe-veto escape hatch)
+### MusicKit second authority — the remaining tail (U2b only)
 
-The MusicKit arc shipped whole across seven PRs (#548 the catalog oracle, #550 the facts keystone, #554 the exact-ISRC preview rung, #556 editorial-notes fuel, #563 label aliases, the U3a/U3b cover work — doctrine: [docs/album-artwork.md](../album-artwork.md)). Two units remain, carried by the trimmed [docs/musickit-second-authority-rfc.md](../musickit-second-authority-rfc.md): **U2b** — the operator `merge_label` op + slug 301s that clean up the pre-existing label splits (the Medschool/Med School class), deliberately staged behind real U2a alias data; and **the `force_capture` escape hatch** — the operator override for a wrong-but-confirmed ISRC that would otherwise veto a real track from capture forever.
+The MusicKit arc shipped whole across seven PRs (#548 the catalog oracle, #550 the facts keystone, #554 the exact-ISRC preview rung, #556 editorial-notes fuel, #563 label aliases, the U3a/U3b cover work — doctrine: [docs/album-artwork.md](../album-artwork.md)), and the `force_capture` dupe-veto escape hatch followed (#583 — the operator override across all three duplicate detectors, sticky through the capture it enables; doctrine: [docs/the-ear.md](../the-ear.md) § Duplicates). One unit remains, carried by the trimmed [docs/musickit-second-authority-rfc.md](../musickit-second-authority-rfc.md): **U2b** — the operator `merge_label` op + slug 301s that clean up the pre-existing label splits (the Medschool/Med School class), deliberately staged behind real U2a alias data accumulating in prod (revisit ~2026-07-20).
 
 ### Database latency — evaluate Turso → Cloudflare D1
 
