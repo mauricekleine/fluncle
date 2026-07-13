@@ -111,25 +111,26 @@ The `/mcp` endpoint speaks the full protocol, not just tools: **tools** (verbs),
 
 ### SSH — the rave terminal
 
-| Surface    | Command                | Exposes                                                                                                                                                                                                                | Weight  |
-| ---------- | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
-| `ssh.rave` | `ssh rave.fluncle.com` | the rave terminal TUI (Enter the Galaxy, Latest bangers, Mixtape archive, Random banger, Submit, Subscribe, Install CLI, System status, About), plus the deep-register one-shots `ssh rave.fluncle.com latest\|random` | primary |
+| Surface    | Command                | Exposes                                                                                                                                                                                                                                            | Weight  |
+| ---------- | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| `ssh.rave` | `ssh rave.fluncle.com` | the rave terminal TUI (Latest bangers, Artist archive, Sonic galaxies, Mixtape archive, Random banger, Submit a track, Subscribe, Install CLI, System status, About, Quit), plus the deep-register one-shots `ssh rave.fluncle.com latest\|random` | primary |
 
 ### CLI — the `fluncle` thin client
 
-| Surface          | Command              | Exposes                                                                                            | Weight    |
-| ---------------- | -------------------- | -------------------------------------------------------------------------------------------------- | --------- |
-| `cli.recent`     | `fluncle recent`     | the latest bangers, newest first (alias `list`)                                                    | primary   |
-| `cli.mixtapes`   | `fluncle mixtapes`   | Fluncle's checkpoint sets                                                                          | secondary |
-| `cli.artists`    | `fluncle artists`    | every artist with at least one published finding (a bare `slug` looks one up)                      | secondary |
-| `cli.open`       | `fluncle open`       | pick a track, open it in Spotify                                                                   | secondary |
-| `cli.random`     | `fluncle random`     | the archive throws one back                                                                        | secondary |
-| `cli.subscribe`  | `fluncle subscribe`  | subscribe to the Friday newsletter                                                                 | secondary |
-| `cli.submit`     | `fluncle submit`     | send a track for review                                                                            | secondary |
-| `cli.tracks-get` | `fluncle tracks get` | look up one finding by id or Log ID (group alias `track`)                                          | tertiary  |
-| `cli.about`      | `fluncle about`      | Fluncle, and where to find him                                                                     | tertiary  |
-| `cli.version`    | `fluncle version`    | print or check the version (`--check` hits the latest GitHub release)                              | tertiary  |
-| `cli.admin`      | `fluncle admin`      | the operator/agent command group (hidden): `tracks`, `mixtapes`, `newsletter`, `backfills`, `auth` | hidden    |
+| Surface              | Command                  | Exposes                                                                                                           | Weight    |
+| -------------------- | ------------------------ | ----------------------------------------------------------------------------------------------------------------- | --------- |
+| `cli.recent`         | `fluncle recent`         | the latest bangers, newest first (alias `list`)                                                                   | primary   |
+| `cli.mixtapes`       | `fluncle mixtapes`       | Fluncle's checkpoint sets                                                                                         | secondary |
+| `cli.artists`        | `fluncle artists`        | every artist with at least one published finding (a bare `slug` looks one up)                                     | secondary |
+| `cli.open`           | `fluncle open`           | pick a track, open it in Spotify                                                                                  | secondary |
+| `cli.random`         | `fluncle random`         | the archive throws one back                                                                                       | secondary |
+| `cli.subscribe`      | `fluncle subscribe`      | subscribe to the Friday newsletter                                                                                | secondary |
+| `cli.submit`         | `fluncle submit`         | send a track for review                                                                                           | secondary |
+| `cli.tracks-get`     | `fluncle tracks get`     | look up one finding by id or Log ID (group alias `track`)                                                         | tertiary  |
+| `cli.tracks-similar` | `fluncle tracks similar` | the findings that sound nearest to one (the sonic neighbourhood, off the MuQ audio embedding), each with its note | tertiary  |
+| `cli.about`          | `fluncle about`          | Fluncle, and where to find him                                                                                    | tertiary  |
+| `cli.version`        | `fluncle version`        | print or check the version (`--check` hits the latest GitHub release)                                             | tertiary  |
+| `cli.admin`          | `fluncle admin`          | the operator/agent command group (hidden): `tracks`, `mixtapes`, `newsletter`, `backfills`, `auth`                | hidden    |
 
 ### Browser extensions — vendor-store surfaces
 
@@ -143,22 +144,33 @@ Listings on a third-party store, not pages we host. Their uptime is the store's,
 
 Checked by their last-run freshness (not an HTTP hit), so they carry a `cronName` + cadence instead of a URL probe.
 
-| Surface               | Cron job                 | Cadence             | Exposes                                                                                                                                                                                              | Weight    |
-| --------------------- | ------------------------ | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------- |
-| `cron.newsletter`     | `fluncle-newsletter`     | Fri 15:00 Amsterdam | draft + persist the weekly edition, then offer the operator a Discord Send button (the only full-agent cron; send is operator-gated)                                                                 | secondary |
-| `cron.enrich`         | `fluncle-enrich`         | every 5m            | BPM / key / spectral analysis on the box, write-back (`--no-agent`, on-box DSP, zero LLM tokens)                                                                                                     | hidden    |
-| `cron.cluster`        | `fluncle-cluster`        | nightly 02:20 Amst. | assign each finding to its nearest sonic galaxy (assignment-only k-means over the MuQ space; a full fit is an operator act), retire empties, consume a split request (`--no-agent`, zero LLM tokens) | hidden    |
-| `cron.context-note`   | `fluncle-context-note`   | every 5m            | Firecrawl facts → distilled `context_note` + a Texture line (Worker-side Haiku, zero on-box tokens)                                                                                                  | hidden    |
-| `cron.note`           | `fluncle-note`           | every 10m           | auto-author the editorial `/log` note, fill-empty-only (hybrid: one `claude -p` call; never clobbers an operator note)                                                                               | hidden    |
-| `cron.triage`         | `fluncle-triage`         | every 15m           | pre-chew a pending crew submission → an advisory verdict on the `/admin` attention queue, fill-first (hybrid: one `claude -p` call; approve/reject stays operator tier)                              | hidden    |
-| `cron.logbook`        | `fluncle-logbook`        | 00:40 Amsterdam     | author the previous day's Logbook travelogue entry, fill-empty-only (hybrid: one `claude -p` call; self-healing gap window backfills history)                                                        | hidden    |
-| `cron.observation`    | `fluncle-observation`    | every 60m           | author the recovered-audio script → Worker Cartesia render (hybrid: one `claude -p` call, Worker voice-gates + renders)                                                                              | hidden    |
-| `cron.backfill`       | `fluncle-backfill`       | every 30m           | Discogs id + Last.fm love catalogue repair (`--no-agent`, Worker HTTP, zero LLM tokens)                                                                                                              | hidden    |
-| `cron.social-capture` | `fluncle-social-capture` | every 10m           | capture the YouTube/TikTok post URLs Postiz withholds on create → write back (`--no-agent`, Worker HTTP)                                                                                             | hidden    |
-| `cron.clip-drip`      | `fluncle-clip-drip`      | every 20m           | post the due, cut clips to Instagram on a jittered ~daily cadence via Postiz (`--no-agent`, Worker HTTP; kill-switch aware)                                                                          | hidden    |
-| `cron.render`         | `fluncle-render`         | every 60m           | wake the render box → render + ship one finding's video → park (a conductor; never posts to social)                                                                                                  | hidden    |
-| `cron.healthcheck`    | `fluncle-healthcheck`    | every 10m           | probe each service → Discord-ping on a status flip → POST the `/status` snapshot (a rave-02 host systemd timer, not a gateway cron)                                                                  | hidden    |
-| `cron.backup`         | `fluncle-backup`         | every 24h           | dump the prod DB → gzip → a PRIVATE R2 bucket (owned off-site backup) + prune to 30 daily / 12 monthly (`--no-agent`, zero tokens)                                                                   | secondary |
+| Surface                | Cron job                  | Cadence             | Exposes                                                                                                                                                                                              | Weight    |
+| ---------------------- | ------------------------- | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------- |
+| `cron.newsletter`      | `fluncle-newsletter`      | Fri 15:00 Amsterdam | draft + persist the weekly edition, then offer the operator a Discord Send button (the only full-agent cron; send is operator-gated)                                                                 | secondary |
+| `cron.enrich`          | `fluncle-enrich`          | every 5m            | BPM / key / spectral analysis on the box, write-back (`--no-agent`, on-box DSP, zero LLM tokens)                                                                                                     | hidden    |
+| `cron.cluster`         | `fluncle-cluster`         | nightly 02:20 Amst. | assign each finding to its nearest sonic galaxy (assignment-only k-means over the MuQ space; a full fit is an operator act), retire empties, consume a split request (`--no-agent`, zero LLM tokens) | hidden    |
+| `cron.context-note`    | `fluncle-context-note`    | every 5m            | Firecrawl facts → distilled `context_note` + a Texture line (Worker-side Haiku, zero on-box tokens)                                                                                                  | hidden    |
+| `cron.note`            | `fluncle-note`            | every 10m           | auto-author the editorial `/log` note, fill-empty-only (hybrid: one `claude -p` call; never clobbers an operator note)                                                                               | hidden    |
+| `cron.triage`          | `fluncle-triage`          | every 15m           | pre-chew a pending crew submission → an advisory verdict on the `/admin` attention queue, fill-first (hybrid: one `claude -p` call; approve/reject stays operator tier)                              | hidden    |
+| `cron.logbook`         | `fluncle-logbook`         | 00:40 Amsterdam     | author the previous day's Logbook travelogue entry, fill-empty-only (hybrid: one `claude -p` call; self-healing gap window backfills history)                                                        | hidden    |
+| `cron.observation`     | `fluncle-observation`     | every 60m           | author the recovered-audio script → Worker Cartesia render (hybrid: one `claude -p` call, Worker voice-gates + renders)                                                                              | hidden    |
+| `cron.backfill`        | `fluncle-backfill`        | every 30m           | Discogs id + Last.fm love catalogue repair (`--no-agent`, Worker HTTP, zero LLM tokens)                                                                                                              | hidden    |
+| `cron.social-capture`  | `fluncle-social-capture`  | every 10m           | capture the YouTube/TikTok post URLs Postiz withholds on create → write back (`--no-agent`, Worker HTTP)                                                                                             | hidden    |
+| `cron.clip-drip`       | `fluncle-clip-drip`       | every 20m           | post the due, cut clips to Instagram on a jittered ~daily cadence via Postiz (`--no-agent`, Worker HTTP; kill-switch aware)                                                                          | hidden    |
+| `cron.render`          | `fluncle-render`          | every 60m           | wake the render box → render + ship one finding's video → park (a conductor; never posts to social)                                                                                                  | hidden    |
+| `cron.publish-advance` | `fluncle-publish-advance` | every 30m           | advance one freshly-rendered finding into the publish push — YouTube Short + TikTok inbox draft (`--no-agent`, Worker HTTP; default-deny kill switch)                                                | hidden    |
+| `cron.studio-clip`     | `fluncle-studio-clip`     | every 15m           | cut each pending operator-framed 9:16 clip out of its set video → ship to R2 (`--no-agent`, ffmpeg)                                                                                                  | hidden    |
+| `cron.capture`         | `fluncle-capture`         | every 5m            | capture each finding's full song once → private R2 (the metered side-channel; the capture budget gates the catalogue rows)                                                                           | hidden    |
+| `cron.embed`           | `fluncle-embed`           | every 5m            | MuQ-large audio embedding (1024-d) for sonic similarity + clusters (`--no-agent`, on-box torch)                                                                                                      | hidden    |
+| `cron.crawl`           | `fluncle-crawl`           | every 10m           | walk the MusicBrainz release graph outward from the operator's enabled seed labels → uncertified catalogue rows (`--no-agent`)                                                                       | hidden    |
+| `cron.rank`            | `fluncle-rank`            | every 30m           | score each stale catalogue track against every embedded finding → its nearest finding + capture priority (`--no-agent`)                                                                              | hidden    |
+| `cron.artist-sweep`    | `fluncle-artist-sweep`    | every 60m           | resolve each artist's social identity: MB url-rel walk + Firecrawl gap-fill (`--no-agent`, Worker-side)                                                                                              | hidden    |
+| `cron.label-images`    | `fluncle-label-images`    | every 60m           | resolve each pending label's own logo (Discogs → Wikidata → cover floor) → its own R2 image (`--no-agent`, Worker-side)                                                                              | hidden    |
+| `cron.cover-masters`   | `fluncle-cover-masters`   | every 60m           | resolve each pending album/artist its own ≤1200² cover master (best source wins) → its own R2 image (`--no-agent`, Worker-side)                                                                      | hidden    |
+| `cron.audit`           | `fluncle-audit`           | nightly 01:00 Amst. | the nightly codebase audit — one domain/night on a 7-day rotation; opens a PR the reviewer merges (`claude -p`, subscription auth)                                                                   | secondary |
+| `cron.audit-review`    | `fluncle-audit-review`    | daily 05:00 Amst.   | the reviewer for the nightly audit PR — fix-small-and-merge on green CI, else comment + hold (`claude -p`)                                                                                           | secondary |
+| `cron.healthcheck`     | `fluncle-healthcheck`     | every 10m           | probe each service → Discord-ping on a status flip → POST the `/status` snapshot (a rave-02 host systemd timer, not a gateway cron)                                                                  | hidden    |
+| `cron.backup`          | `fluncle-backup`          | every 24h           | dump the prod DB → gzip → a PRIVATE R2 bucket (owned off-site backup) + prune to 30 daily / 12 monthly (`--no-agent`, zero tokens)                                                                   | secondary |
 
 ## 3. The per-context weight matrix
 
@@ -189,6 +201,8 @@ The weight ladder within a context is unchanged — **`primary`** (the loud fron
 | `web.status`                | secondary |           |           | primary   |
 | `web.radio`                 | secondary |           |           |           |
 | `web.artist`                | secondary | secondary |           |           |
+| `web.labels`                | secondary |           |           |           |
+| `web.albums`                | secondary |           |           |           |
 | `web.galaxies`              | secondary | secondary |           |           |
 | `web.privacy`               | tertiary  |           |           |           |
 | `subdomain.galaxy`          | primary   | secondary |           |           |
@@ -236,6 +250,7 @@ The weight ladder within a context is unchanged — **`primary`** (the loud fron
 | `cli.subscribe`             |           |           | secondary |           |
 | `cli.submit`                |           |           | secondary |           |
 | `cli.tracks-get`            |           |           | tertiary  |           |
+| `cli.tracks-similar`        |           |           | tertiary  |           |
 | `cli.about`                 |           |           | tertiary  |           |
 | `cli.version`               |           |           | tertiary  |           |
 | `cli.admin`                 |           |           | hidden    |           |
@@ -252,9 +267,21 @@ The weight ladder within a context is unchanged — **`primary`** (the loud fron
 | `cron.social-capture`       |           |           |           | hidden    |
 | `cron.clip-drip`            |           |           |           | hidden    |
 | `cron.render`               |           |           |           | hidden    |
+| `cron.publish-advance`      |           |           |           | hidden    |
+| `cron.studio-clip`          |           |           |           | hidden    |
+| `cron.capture`              |           |           |           | hidden    |
+| `cron.embed`                |           |           |           | hidden    |
+| `cron.crawl`                |           |           |           | hidden    |
+| `cron.rank`                 |           |           |           | hidden    |
+| `cron.artist-sweep`         |           |           |           | hidden    |
+| `cron.label-images`         |           |           |           | hidden    |
+| `cron.cover-masters`        |           |           |           | hidden    |
+| `cron.audit`                |           |           |           | secondary |
+| `cron.audit-review`         |           |           |           | secondary |
 | `cron.healthcheck`          |           |           |           | hidden    |
+| `cron.backup`               |           |           |           | secondary |
 
-A surface is operator/agent-only where its only display weight is `hidden` (`cli.admin` in `cli`; every cron but the newsletter in `status`) — registered (and probeable) without being advertised.
+A surface is operator/agent-only where its only display weight is `hidden` (`cli.admin` in `cli`; most crons in `status` — the newsletter, the backup, and the audit pair rank `secondary` there) — registered (and probeable) without being advertised.
 
 ## 3.5. Pre-staging a surface — the `pending` (dark) gate
 

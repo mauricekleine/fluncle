@@ -31,7 +31,7 @@ The dividing line: _could a stranger see the result, or could it not be taken ba
 | `track draft` — TikTok/default                                                                                                    | agent    | `SELF_ONLY` inbox draft; a human still posts it                        |
 | `add` (Spotify playlist + Telegram)                                                                                               | operator | Public, irreversible                                                   |
 | `track draft --platform youtube`                                                                                                  | operator | Direct public upload                                                   |
-| `track update` — `--note/--video-url/--vibe-x/y` (+ identity `isrc/logId`)                                                        | operator | Editorial voice + map placement — Fluncle's judgment                   |
+| `track update` — `--note/--video-url` (+ identity `isrc/logId`)                                                                   | operator | Editorial voice + identity — Fluncle's judgment                        |
 | `track video` / `preview` / `observe`                                                                                             | operator | Durable artifacts                                                      |
 | `newsletter draft/update/list`                                                                                                    | agent    | Drafts a reversible edition row + reads it back; the cron authors it   |
 | `newsletter send`                                                                                                                 | operator | Publish-class: sends the Resend broadcast to the real list             |
@@ -52,13 +52,13 @@ Built from the pinned upstream gateway plus the `fluncle` CLI and the Claude Cod
 - **The image carries `ffmpeg` + `bun`** so the box can run the audio-analysis enrichment on-box — the lever for the `fluncle-enrich` `--no-agent` cron (it decodes the preview with `ffmpeg` and runs the `analyze-track` DSP with `bun`, no Worker round-trip).
 - **The image carries the `claude` (Claude Code) CLI + the whole `packages/skills` set** so every box `claude -p` survives a rebuild: the `fluncle-observation`/`note`/`newsletter` voice crons load `copywriting-fluncle`, and the nightly audit + reviewer agents lean on the operator skills (`fluncle-hermes-operator`, `fluncle-surfaces`, `fluncle-audit-operator`, `fluncle-maintenance`, `taste`, …). The skills are baked at `/opt/claude/skills/<name>` with `CLAUDE_CONFIG_DIR=/opt/claude` (a world-readable config dir), so the non-root cron user finds them without depending on its HOME; the whole tree is ~1 MB, so baking all of it is drift-proof (a new skill needs no Dockerfile change, and no per-run `skills:install`). `claude -p` authenticates from `CLAUDE_CODE_OAUTH_TOKEN` (subscription auth, **not** OpenRouter), injected at run via the secret env-file (§ Secrets) — never baked.
 - **The image carries the box.ascii CLI (`box`) + `openssh-client`** for the `fluncle-render` conductor cron — the box has no GPU/Remotion, so this cron wakes a separate scale-to-zero box.ascii render box, renders one finding there via a remote `claude -p`, and parks it (`box ssh`/`scp` shell out to system ssh). `box` is copied to `/usr/local/bin` (world-traversable, like bun); auth is **not** baked — `BOX_API_KEY` arrives at run, file-sourced like the claude token (§ Crons, the render conductor). box.ascii is pre-1.0 with no installer version pin, so it is the one image dependency that tracks a channel rather than a fixed tag.
-- **Pin the upstream tag** (Hermes is pre-1.0; `latest` can change message handling and the model-context startup check under you). Current pin: `nousresearch/hermes-agent:v2026.6.19`. The `fluncle` CLI is the **standalone bun-compiled binary** pinned by its `releases/download/v<ver>/fluncle-linux-<arch>` URL (currently **v0.71.0**), not the `npm -g` thin client (the clip-cut + media-upload commands need the Bun runtime the binary embeds); Claude Code (`@anthropic-ai/claude-code@2.1.196`) is pinned the same way. Bump each deliberately at its line in the Dockerfile — `fluncle-pin-watch` + `hermes-pin-drift` parse the binary release URL, not an `fluncle@` npm spec.
+- **Pin the upstream** (Hermes is pre-1.0; `latest` can change message handling and the model-context startup check under you). The base is pinned by its **immutable digest** (`FROM nousresearch/hermes-agent@sha256:…` — the Dockerfile's `FROM` line, with the matching version tag in the comment above it, is the source of truth; v2026.7.7.2 at the time of writing). The `fluncle` CLI is the **standalone bun-compiled binary** pinned by its `releases/download/v<ver>/fluncle-linux-<arch>` URL, not the `npm -g` thin client (the clip-cut + media-upload commands need the Bun runtime the binary embeds); Claude Code (`@anthropic-ai/claude-code@<ver>`) is pinned the same way. The fluncle + Claude Code pins are auto-bumped (`fluncle-pin-watch` + `hermes-pin-drift` parse the binary release URL, not an `fluncle@` npm spec), so read the current versions off the Dockerfile, never off this doc; the base image stays a manual, deliberate bump at its line.
 - **Pin the model** at ≥64k context. A model below the floor takes the _whole gateway_ down at startup (upstream issue #24140), not just one feature.
 - **Review the upstream pin monthly** and bump deliberately (pinning forever = no security patches for a wide Chromium/ffmpeg/Node/Python surface).
 
 ```bash
 # on the devbox, from the REPO ROOT (the skill COPY needs packages/skills/ in context)
-docker build -f docs/agents/hermes/Dockerfile -t fluncle-hermes:v2026.6.19 .
+docker build -f docs/agents/hermes/Dockerfile -t fluncle-hermes:v2026.7.7.2 .
 ```
 
 ## Changing what the agent may do
@@ -98,7 +98,7 @@ docker run -d --name hermes --restart unless-stopped \
   --log-driver json-file --log-opt max-size=10m --log-opt max-file=5 \
   -v ~/.hermes:/opt/data \
   --env-file <secret-env-file> \
-  fluncle-hermes:v2026.6.19 gateway run
+  fluncle-hermes:v2026.7.7.2 gateway run
 ```
 
 - **Never mount the Docker socket** — it would hand the agent host root and moot every file-permission control. No in-scope job needs it.
@@ -131,14 +131,14 @@ Because a host-timer `docker exec` sends stdout to journald (not the gateway run
 
 ```bash
 # CLI present
-docker run --rm --entrypoint fluncle fluncle-hermes:v2026.6.19 version            # -> fluncle <ver>
+docker run --rm --entrypoint fluncle fluncle-hermes:v2026.7.7.2 version            # -> fluncle <ver>
 # agent-allowed read with the agent token + live API (expect {"ok":true,...})
 docker run --rm --env-file <secret-env-file> --entrypoint fluncle \
-  fluncle-hermes:v2026.6.19 admin tracks enrich --queue --json --limit 1
+  fluncle-hermes:v2026.7.7.2 admin tracks enrich --queue --json --limit 1
 # the server boundary: a publish-class command with the agent token is refused
 # (expect a 403 "forbidden" — the operator role is required, not an execution)
 docker run --rm --env-file <secret-env-file> --entrypoint fluncle \
-  fluncle-hermes:v2026.6.19 admin add <url>
+  fluncle-hermes:v2026.7.7.2 admin add <url>
 ```
 
 When the gateway is live, repeat the boundary check **through the agent** ("run `fluncle admin tracks publish …`" must come back as an in-voice refusal off the server 403, not an execution).
