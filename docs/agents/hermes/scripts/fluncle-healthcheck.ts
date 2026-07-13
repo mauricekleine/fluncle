@@ -456,7 +456,7 @@ const AUTOMATION_CRONS: CronDef[] = [
   { cadenceMs: 24 * 60 * 60_000, match: "audit", service: "cron.audit" },
 ];
 
-type CronVerdict = "fresh-ok" | "lagging" | "failed" | "no-data";
+type CronVerdict = "fresh-ok" | "lagging" | "failed" | "failed-once" | "no-data";
 
 /**
  * The cron NAME a given output dir belongs to (from the newest run-file's
@@ -591,7 +591,13 @@ function judgeCron(cron: CronDef, dir: string | undefined): CronVerdict {
     const parsed = JSON.parse(lastLine) as { ok?: unknown };
 
     if (parsed && typeof parsed === "object" && parsed.ok === false) {
-      return "failed";
+      // ONE failed run is not an outage — every sweep retries on its own cadence, and a
+      // transient (a MusicBrainz slow day timing out one crawl tick) self-heals on the next
+      // tick. Alarming DOWN on a single miss made /status + Discord flap all morning
+      // (2026-07-13). So: the newest run failed AND the one before it also failed ⇒ the job
+      // is genuinely stuck ⇒ "failed" (down). A lone failure ⇒ "failed-once" (degraded,
+      // "watching the retry") — visible, never silent, but not a page.
+      return runFailed(runFiles[1]?.path) ? "failed" : "failed-once";
     }
   } catch {
     // Not JSON — fine; many cron summaries are a human line. Freshness governs.
@@ -600,13 +606,38 @@ function judgeCron(cron: CronDef, dir: string | undefined): CronVerdict {
   return "fresh-ok";
 }
 
+/** Did a (previous) run file's last non-empty line report `ok: false`? Unreadable/absent ⇒ no. */
+function runFailed(path: string | undefined): boolean {
+  if (!path) {
+    return false;
+  }
+
+  try {
+    const lines = readFileSync(path, "utf8")
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean);
+    const parsed = JSON.parse(lines[lines.length - 1] ?? "") as { ok?: unknown };
+
+    return typeof parsed === "object" && parsed !== null && parsed.ok === false;
+  } catch {
+    return false;
+  }
+}
+
 /** Map one cron's verdict to its public Check (status + a short, public-safe note). */
 function cronCheck(cron: CronDef, verdict: CronVerdict): Check {
   const base = { latencyMs: null, service: cron.service };
 
   if (verdict === "failed") {
-    // The cron's last run reported `{ ok: false }` — a real failure for THIS system.
-    return { ...base, message: msg("last run failed"), status: "down" };
+    // Two consecutive failed runs — the job is stuck, not unlucky. A real outage.
+    return { ...base, message: msg("last runs failed"), status: "down" };
+  }
+
+  if (verdict === "failed-once") {
+    // A single failed run with a healthy one before it — the sweep's own retry is the
+    // remediation, so this surfaces as degraded and resolves (or escalates) on the next tick.
+    return { ...base, message: msg("last run failed; watching the retry"), status: "degraded" };
   }
 
   if (verdict === "lagging") {
