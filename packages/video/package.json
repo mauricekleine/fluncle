@@ -21,7 +21,7 @@
     "set:render": "bun src/set-video/render-set.ts",
     "ship": "bun src/pipeline/ship.ts",
     "test": "bun test",
-    "typecheck": "tsgo --noEmit",
+    "typecheck": "tsc --noEmit",
     "factory:clips": "bun scripts/prep-factory-clips.ts"
   },
   "dependencies": {
@@ -41,7 +41,6 @@
     "@types/bun": "catalog:",
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
-    "@typescript/native-preview": "catalog:",
     "typescript": "catalog:"
   }
 }

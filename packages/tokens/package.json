@@ -11,10 +11,9 @@
   },
   "scripts": {
     "generate": "bun scripts/generate-css.ts",
-    "typecheck": "tsgo --noEmit"
+    "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
-    "@typescript/native-preview": "catalog:",
     "typescript": "catalog:"
   }
 }

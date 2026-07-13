@@ -10,14 +10,13 @@
     "show": "bun src/show.ts",
     "test": "bun test",
     "test:matcher-accuracy": "bun src/bridge/accuracy.ts",
-    "typecheck": "tsgo --noEmit"
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@fluncle/video": "workspace:*"
   },
   "devDependencies": {
     "@types/bun": "catalog:",
-    "@typescript/native-preview": "catalog:",
     "typescript": "catalog:"
   }
 }

@@ -11,7 +11,7 @@
     "render:mobile-assets": "bun src/render/render-mobile-assets.ts",
     "render:socials": "bun src/render/render-socials.ts",
     "render:mixtape-bg": "bun src/render/render-mixtape-bg.ts",
-    "typecheck": "tsgo --noEmit"
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@fluncle/tokens": "workspace:*",
@@ -26,7 +26,6 @@
   "devDependencies": {
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
-    "@typescript/native-preview": "catalog:",
     "typescript": "catalog:"
   }
 }
