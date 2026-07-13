@@ -251,6 +251,11 @@ export function kindClause(kind: TrackWorkKind): { args: string[]; sql: string }
       args: [cooldown],
       // CAPTURE_MAX_FAILURES is a trusted module int (interpolated, like listTracks does);
       // the cooldown is BOUND. `wrong-audio` is a re-capture trigger (docs/the-ear.md).
+      // `duplicate-cleared` is the operator's force-capture escape hatch (docs/the-ear.md §
+      // Duplicates): a row he overruled the duplicate veto on must be capture-eligible so the next
+      // open-budget tick buys it. It only reaches capture once the sweep re-ranks it to a
+      // non-negative tier (an already-captured forced sibling keeps `capture_priority` null and is
+      // filtered out by the `>= 0` predicate below — never re-captured).
       // The catalogue half also excludes a DISMISSED row (`dismissed_at is null`): the operator's
       // "not for me" is the ruled-out-label veto's class (docs/the-ear.md § The operator's
       // actions) — a metered download must never be spent on a row he took out of the telescope.
@@ -259,6 +264,7 @@ export function kindClause(kind: TrackWorkKind): { args: string[]; sql: string }
       sql: `(t.capture_status is null
              or t.capture_status = 'pending'
              or t.capture_status = 'wrong-audio'
+             or t.capture_status = 'duplicate-cleared'
              or (t.capture_status = 'failed'
                  and t.source_audio_failures < ${CAPTURE_MAX_FAILURES}
                  and (t.source_audio_attempted_at is null or t.source_audio_attempted_at < ?)))

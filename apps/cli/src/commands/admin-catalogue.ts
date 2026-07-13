@@ -92,6 +92,19 @@ export async function clearWrongAudioCommand(trackId: string): Promise<{ cleared
 }
 
 /**
+ * Overrule the duplicate veto on one catalogue row so it can be captured (operator). `fluncle
+ * admin catalogue force-capture <trackId>` — the dupe-veto escape hatch (docs/the-ear.md §
+ * Duplicates). Lifts a WRONG `duplicate_of` + −2 veto stickily and puts the row back on the
+ * pre-audio ladder at its honest tier; the next open-budget capture tick buys it. It bypasses the
+ * duplicate veto, never the verification gate. `forced: false` when the row was not actually vetoed.
+ */
+export async function forceCaptureCommand(trackId: string): Promise<{ forced: boolean }> {
+  return adminApiPost<{ forced: boolean; ok: true }>("/api/admin/catalogue/force-capture", {
+    trackId,
+  });
+}
+
+/**
  * Flag a FINDING's captured audio as the wrong recording (operator). `fluncle admin catalogue
  * flag-wrong-audio <trackId>` — `clear-wrong-audio`'s counterpart (docs/the-ear.md § Wrong
  * audio). The finding's vector drops out of the ranking corpus, its analysis provenance resets,

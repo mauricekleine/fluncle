@@ -199,6 +199,23 @@ function AdminCataloguePage() {
     },
   });
 
+  // THE DUPE-VETO ESCAPE HATCH. The sweep marked this row "already in the archive", but the
+  // operator disagrees — a shared or mis-assigned ISRC, a title collision on a different recording.
+  // Force-capture lifts the duplicate veto stickily (the sweep never re-marks it), so the row
+  // re-ranks onto the capture ladder and the next open-budget tick buys it. It re-reads the server's
+  // verdict rather than guessing, so the list reflects what actually changed.
+  const forceCapture = useMutation({
+    mutationFn: (trackId: string) => postForceCapture(trackId),
+    onError: (error) =>
+      toast.error(error instanceof Error ? error.message : "Could not force the capture."),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: CATALOGUE_KEY });
+      toast.success("Capturing anyway", {
+        description: "The duplicate veto is lifted; it rejoins the capture queue.",
+      });
+    },
+  });
+
   // THE RESTORE. Put a dismissed row back — declared before `dismiss` so its toast Undo can call it.
   const restore = useMutation({
     mutationFn: (trackId: string) => putDismissed(trackId, false),
@@ -321,6 +338,7 @@ function AdminCataloguePage() {
                   certifying: certify.isPending && certify.variables === track.trackId,
                   clearing: clearAudio.isPending && clearAudio.variables === track.trackId,
                   dismissing: dismiss.isPending && dismiss.variables === track.trackId,
+                  forcing: forceCapture.isPending && forceCapture.variables === track.trackId,
                   restoring: restore.isPending && restore.variables === track.trackId,
                 }}
                 key={track.trackId}
@@ -331,6 +349,7 @@ function AdminCataloguePage() {
                 onCertify={() => setConfirmTrack(track)}
                 onClear={() => clearAudio.mutate(track.trackId)}
                 onDismiss={() => dismiss.mutate(track.trackId)}
+                onForceCapture={() => forceCapture.mutate(track.trackId)}
                 onRestore={() => restore.mutate(track.trackId)}
                 track={track}
               />
@@ -524,6 +543,7 @@ type CatalogueRowBusy = {
   certifying: boolean;
   clearing: boolean;
   dismissing: boolean;
+  forcing: boolean;
   restoring: boolean;
 };
 
@@ -534,6 +554,7 @@ function CatalogueRow({
   onCertify,
   onClear,
   onDismiss,
+  onForceCapture,
   onRestore,
   track,
 }: {
@@ -543,6 +564,7 @@ function CatalogueRow({
   onCertify: () => void;
   onClear: () => void;
   onDismiss: () => void;
+  onForceCapture: () => void;
   onRestore: () => void;
   track: CatalogueTrackItem;
 }) {
@@ -646,6 +668,17 @@ function CatalogueRow({
             <PendingButton onClick={onRestore} pending={busy.restoring} variant="outline">
               <ArrowUUpLeftIcon aria-hidden="true" weight="bold" />
               Restore
+            </PendingButton>
+          ) : null}
+          {/* THE DUPE-VETO ESCAPE HATCH (docs/the-ear.md § Duplicates). A capture-lens row the sweep
+              vetoed as "already in the archive" (a STORED duplicate) can be a false positive — a
+              shared or mis-assigned ISRC, a title collision on a genuinely different recording. This
+              quiet override lifts the veto so the row is captured anyway. Only here (the stored veto
+              only surfaces on the capture lens), only on a duplicate, and deliberately quiet
+              (outline, no gold): a rare escape hatch, never a primary action. */}
+          {lens === "capture" && track.duplicateOf ? (
+            <PendingButton onClick={onForceCapture} pending={busy.forcing} variant="outline">
+              Capture anyway
             </PendingButton>
           ) : null}
           {/* THE TWO WORKSTATION ACTIONS on the live lenses. "Not for me" is the FREQUENT verdict
@@ -1109,6 +1142,21 @@ async function postClearWrongAudio(trackId: string): Promise<void> {
 // provenance resets, and a fresh capture is queued with the bad bytes hash-rejected.
 async function postFlagWrongAudio(trackId: string): Promise<void> {
   const response = await fetch("/api/v1/admin/catalogue/wrong-audio/flag", {
+    body: JSON.stringify({ trackId }),
+    headers: { "Content-Type": "application/json" },
+    method: "POST",
+  });
+
+  if (!response.ok) {
+    throw new Error(await readError(response));
+  }
+}
+
+// The operator-tier dupe-veto escape hatch (POST /admin/catalogue/force-capture). Lifts a WRONG
+// duplicate veto stickily so the row re-ranks onto the capture ladder and the next open-budget
+// tick buys it. Bypasses the duplicate veto, never the verification gate (docs/the-ear.md § Duplicates).
+async function postForceCapture(trackId: string): Promise<void> {
+  const response = await fetch("/api/v1/admin/catalogue/force-capture", {
     body: JSON.stringify({ trackId }),
     headers: { "Content-Type": "application/json" },
     method: "POST",

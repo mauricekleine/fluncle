@@ -256,6 +256,9 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // the one act the catalogue domain forbids a machine (docs/the-ear.md § The operator's actions).
   "POST /admin/catalogue/certify": "certify_track",
   "POST /admin/catalogue/crawl": "crawl_catalogue",
+  // The dupe-veto escape hatch — contract-only oRPC. OPERATOR tier: overruling the sweep's own
+  // duplicate verdict so a WRONG-vetoed row can be captured (docs/the-ear.md § Duplicates).
+  "POST /admin/catalogue/force-capture": "force_capture",
   // The clip drip-feed tick — contract-only oRPC (no TanStack route file). ADMIN tier
   // (agent-allowed): the on-box `fluncle-clip-drip` cron triggers it with the agent token
   // (the box holds no Postiz key; the Worker owns it). Kill-switch aware, bounded, idempotent.

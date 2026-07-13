@@ -2011,6 +2011,29 @@ function addAdminCommands(program: Command): void {
       );
     });
 
+  catalogue
+    .command("force-capture")
+    .description(
+      "Overrule the duplicate veto on one catalogue row so it can be captured (operator)",
+    )
+    .argument("<trackId>", "The catalogue track id to capture anyway")
+    .option("--json", "Print JSON", false)
+    .action(async (trackId: string, options: JsonOptions) => {
+      const { forceCaptureCommand } = await import("./commands/admin-catalogue");
+      const { forced } = await forceCaptureCommand(trackId);
+
+      if (options.json) {
+        printJson({ forced, ok: true });
+        return;
+      }
+
+      console.log(
+        forced
+          ? `Forced ${trackId}. The duplicate veto is lifted; it re-ranks onto the capture ladder and the next open-budget tick buys it.`
+          : `${trackId} was not vetoed as a duplicate — nothing to force.`,
+      );
+    });
+
   // Capture verification (docs/the-ear.md § Wrong audio) — the backfill's CLI face. The worklist
   // is a `--queue` view on the verb (never a *-queue command, docs/naming-conventions.md §6.4);
   // the verdict write takes the trackId + --verdict the box's fpcalc run produced. The CLI holds

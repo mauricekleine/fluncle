@@ -102,6 +102,8 @@ All three surface the **same honest register**: the row stays visible (ordered l
 
 **It stays self-healing.** The pre-audio marker rides the same fingerprint staleness as everything else: `duplicate_of_track_id` is re-written every time a row is re-ranked, so it clears on its own when the finding it matched is deleted (the corpus fingerprint moves, the row goes stale, the next tick re-ranks it and finds no match). A stamped duplicate is not re-picked — no loop — and the scoring path nulls the marker along with `capture_priority`, keeping the two lenses disjoint.
 
+**The escape hatch — `force_capture`.** All three detectors can be WRONG in rare cases: a shared or mis-assigned ISRC, a `matchKey` collision on a genuinely different recording. And the veto is **self-sealing** — an uncaptured row marked a duplicate is excluded from capture forever, so the post-audio similarity check that would _exonerate_ it never runs (it never gets audio to embed). `force_capture` (**operator tier**, the `clear_wrong_audio` sibling for the other self-sealing verdict) is the only exit. It stamps a **sticky `capture_status = 'duplicate-cleared'` sentinel** that all three detectors respect before re-stamping — so the self-healing re-rank never re-marks the row — and in the same write it lifts the veto (`duplicate_of_track_id` null, tier cleared) and nulls the corpus fingerprint so the next tick re-ranks the row onto the pre-audio ladder at its **honest tier**; the next open-budget capture tick then buys it (the capture work queue treats `duplicate-cleared` as capture-eligible). It **bypasses the DUPLICATE veto, never the VERIFICATION gate**: a re-captured forced row still runs the ingest fingerprint gate, and a wrong-audio (cross-title near-1.0) capture still quarantines. Getting the row captured is the point — its OWN vector is what lets the finding-side detectors settle it honestly. It surfaces as a quiet **"Capture anyway"** control beside the "already in the archive" marker on the capture lens.
+
 ## Wrong audio — the capture that lied
 
 The Duplicates section above handles a row that is honestly the same recording as a finding. This section handles the row that only _looks_ like one because the wrong bytes got captured — a distinct failure, caught on real data (the 2026-07-12 capture audit).
@@ -244,6 +246,7 @@ Both `adminAuth` (operator **or** agent), registered in the contract as `admin-c
 - **`list_catalogue_tracks`** → `GET /admin/catalogue?lens=&limit=` — the ranked read + the summary. `lens` is `ear` | `capture` | `quarantine` | `dismissed`.
 - **`rank_catalogue`** → `POST /admin/catalogue/rank?limit=` — one tick of the sweep. `remaining > 0` means run it again.
 - **`clear_wrong_audio`** → `POST /admin/catalogue/wrong-audio/clear` — the operator's override on the wrong-audio quarantine (§ Wrong audio). **OPERATOR tier**, unlike the two above: an agent does not get to reverse the machine's verdict on its own output.
+- **`force_capture`** → `POST /admin/catalogue/force-capture` — the dupe-veto escape hatch (§ Duplicates): lift a WRONG duplicate veto so the row is captured anyway. **OPERATOR tier**, the `clear_wrong_audio` class — overruling the machine's own duplicate verdict is not an agent's call.
 - **`certify_track`** → `POST /admin/catalogue/certify` — **Log it**: certify an existing catalogue row in place, minting only its finding (§ The operator's actions). **OPERATOR tier**: an agent may never certify.
 - **`set_track_dismissed`** → `PUT /admin/catalogue/dismissed` — **Not for me** / restore, the `set_capture_budget` shape (one op, both directions). **OPERATOR tier**: a taste ruling, not a machine job.
 
@@ -257,6 +260,7 @@ fluncle admin catalogue list --lens ear            # the telescope
 fluncle admin catalogue list --lens capture        # what to capture next
 fluncle admin catalogue list --lens quarantine     # the wrong-audio holding pen
 fluncle admin catalogue clear-wrong-audio <id>     # keep a capture the sweep flagged (operator)
+fluncle admin catalogue force-capture <id>         # overrule a wrong duplicate veto — capture it anyway (operator)
 fluncle admin catalogue certify <id> [--note …]    # log an existing catalogue row in place (operator)
 fluncle admin catalogue dismiss <id>               # "not for me" — out of ranking + capture (operator)
 fluncle admin catalogue restore <id>               # put a dismissed row back (operator)
