@@ -1,0 +1,22 @@
+diff --git a/dist/esbuild-loader/index.js b/dist/esbuild-loader/index.js
+index 3e77ccc046de2cac4f05655342b6c6ce7278678e..b649e2d9df06e820e43c76362634accb4f268ca1 100644
+--- a/dist/esbuild-loader/index.js
++++ b/dist/esbuild-loader/index.js
+@@ -36,8 +36,15 @@ async function ESBuildLoader(source) {
+     if (!('tsconfigRaw' in transformOptions) && isTypescriptInstalled()) {
+         // eslint-disable-next-line @typescript-eslint/consistent-type-imports
+         const typescript = require('typescript');
+-        const tsConfig = typescript.readConfigFile(tsConfigPath, typescript.sys.readFile);
+-        transformOptions.tsconfigRaw = tsConfig.config;
++        // PATCHED (fluncle): TypeScript 7's native compiler exports no `sys` from its JS API
++        // entry, so the unguarded `typescript.sys.readFile` crashed every bundle. When `sys`
++        // is absent, skip tsconfig loading and let esbuild's defaults transform the entry —
++        // the same behavior as when typescript is not installed at all. Drop this patch when
++        // Remotion guards it upstream.
++        if (typescript && typescript.sys) {
++            const tsConfig = typescript.readConfigFile(tsConfigPath, typescript.sys.readFile);
++            transformOptions.tsconfigRaw = tsConfig.config;
++        }
+     }
+     // https://github.com/privatenumber/esbuild-loader/pull/107
+     if (transformOptions.loader === 'tsx' &&

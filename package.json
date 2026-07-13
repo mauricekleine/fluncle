@@ -82,6 +82,9 @@
     ]
   },
   "packageManager": "bun@1.3.14",
+  "patchedDependencies": {
+    "@remotion/bundler@4.0.487": "patches/@remotion%2Fbundler@4.0.487.patch"
+  },
   "trustedDependencies": [
     "@shopify/react-native-skia"
   ]
