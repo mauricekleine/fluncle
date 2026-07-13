@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { Dimensions, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { Image } from "expo-image";
 import { type MixArtist } from "@fluncle/contracts";
@@ -126,7 +126,15 @@ export function MixTastePicker({
   );
 }
 
-const TILE_WIDTH = 104;
+// Three columns, flush to the screen's 16pt content inset: the tile width is computed from
+// the window so the grid balances instead of leaving a dead gutter on the right (a fixed
+// 104pt tile left ~22pt spare at 390pt). Read once at module load — this layout doesn't
+// rotate, and a size-class change reloads the JS anyway.
+const GRID_PADDING = 16;
+const GRID_GAP = 12;
+const TILE_WIDTH = Math.floor(
+  (Dimensions.get("window").width - GRID_PADDING * 2 - GRID_GAP * 2) / 3,
+);
 
 const styles = StyleSheet.create({
   check: {
@@ -140,8 +148,10 @@ const styles = StyleSheet.create({
     right: 0,
     width: 20,
   },
-  container: { gap: 16 },
-  empty: { color: color.stardust, paddingHorizontal: 4 },
+  // The picker owns its inset (the screen's ScrollView content is edge-to-edge for the
+  // row lists) and its clearance from the tagline above it.
+  container: { gap: 16, paddingHorizontal: GRID_PADDING, paddingTop: 24 },
+  empty: { color: color.stardust },
   face: {
     borderRadius: 32,
     height: 64,
@@ -155,7 +165,7 @@ const styles = StyleSheet.create({
     padding: 2,
   },
   faceWrapOn: { borderColor: color.eclipseGold },
-  grid: { flexDirection: "row", flexWrap: "wrap", gap: 12 },
+  grid: { flexDirection: "row", flexWrap: "wrap", gap: GRID_GAP, rowGap: 16 },
   heading: { color: color.starlightCream, marginBottom: 2 },
   name: { fontSize: 12, maxWidth: TILE_WIDTH, textAlign: "center" },
   searchField: {

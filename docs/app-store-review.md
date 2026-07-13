@@ -32,7 +32,7 @@ Our posture: the audio is **bounded to preview length** (≤30s, 20s default), c
 
 Why it bites: the classic rejection for content apps that wrap a site.
 
-Our posture: a native full-screen vertical-video pager, native push, and a native archive with the four-galaxy lens is well beyond a web wrapper. Low-to-moderate risk and easy to argue if questioned — lead with the native feed.
+Our posture: the app carries a working TOOL, not just content — the Decks tab is an interactive set builder (pick artists or an opener; the harmonic engine ranks what mixes in clean next by key, tempo, and feel; the chain re-ranks on every add and shares as a link). An interactive utility is the strongest possible 4.2 answer, and it sits alongside a native full-screen vertical-video pager, native push, background-audio radio, and a native archive. Low risk — lead with the Decks tool, then the native feed.
 
 ## Lower-risk hygiene
 

@@ -7,12 +7,34 @@
 // The device store (mix-store.ts) is the phone's own convenience — it survives an app
 // restart — but the shareable, cross-surface truth is still the URL these helpers build.
 
-import { type MixReason } from "@fluncle/contracts";
+import { type MixReason, type MixTrack } from "@fluncle/contracts";
+import { type SearchHit } from "@fluncle/contracts/orpc";
 import { isLogId } from "@fluncle/contracts/log-id";
 import { API_BASE } from "@/config";
 
 /** The most tracks a set link carries (mirrors the web cap). */
 export const MAX_SET_LENGTH = 32;
+
+/**
+ * Adapt an archive-search hit into a chain row (the web `searchMixTracks` adaptation) —
+ * the "search a track to open with" path. A hit carries everything a row renders except
+ * a duration; the rail fills real durations in once the chain has a tail. `logId` rides
+ * only on a certified hit (the Unlit Rule, structurally — mirrors `MixTrackSchema`).
+ */
+export function searchHitToMixTrack(hit: SearchHit): MixTrack {
+  return {
+    albumImageUrl: hit.albumImageUrl,
+    artists: hit.artists,
+    bpm: hit.bpm,
+    certified: hit.certified,
+    durationMs: 0,
+    key: hit.key,
+    logId: hit.certified ? hit.logId : undefined,
+    spotifyUrl: hit.spotifyUrl,
+    title: hit.title,
+    trackId: hit.trackId,
+  };
+}
 
 /** The most artists a taste seed carries — a seed, not a library. */
 export const MAX_TASTE_ARTISTS = 10;

@@ -14,6 +14,7 @@ import {
   mixReasonLabel,
   parseSetParam,
   parseTasteParam,
+  searchHitToMixTrack,
   serializeSet,
   serializeTaste,
   setToken,
@@ -92,3 +93,25 @@ assertEqual(
   "Close in sound",
   "sonic label",
 );
+
+// 9. A search hit adapts into a chain row: logId rides only on a certified hit (the Unlit
+//    Rule, structurally), and the hit's bpm/key are carried so the row renders them.
+const certifiedHit = searchHitToMixTrack({
+  artists: ["Netsky"],
+  bpm: 174,
+  certified: true,
+  key: "G# minor",
+  logId: "004.7.2I",
+  title: "Come Alive",
+  trackId: "4iV5W9uYEdYUVa79Axb7Rh",
+});
+assertEqual(certifiedHit.logId, "004.7.2I", "a certified hit keeps its coordinate");
+assertEqual(certifiedHit.key, "G# minor", "the hit's key is carried");
+const unlitHit = searchHitToMixTrack({
+  artists: ["Unknown"],
+  certified: false,
+  logId: "should.never.ride",
+  title: "Untitled",
+  trackId: "4iV5W9uYEdYUVa79Axb7Rh",
+});
+assertEqual(unlitHit.logId, undefined, "an uncertified hit never carries a coordinate");

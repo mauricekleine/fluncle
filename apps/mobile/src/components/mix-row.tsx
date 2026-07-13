@@ -4,6 +4,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { Image } from "expo-image";
 import { type MixTrack } from "@fluncle/contracts";
 import { findingMetaSegments } from "@/lib/archive-state";
+import { formatKey, useKeyNotation } from "@/lib/key-notation";
 import { color, font, radius } from "@/theme/tokens";
 
 // A set-builder row — the archive-row twin for the Mix tab: cover, then the music with its
@@ -25,28 +26,36 @@ export type MixRowProps = {
   accessibilityLabel: string;
   isLast?: boolean;
   onPress?: () => void;
+  /** 1-based slot in the chain — set on chain rows only, so the set reads as a tracklist. */
+  position?: number;
   reasonLabel?: string;
   track: MixTrack;
   trailing?: ReactNode;
 };
 
 function RowBody({
+  position,
   pressed,
   reasonLabel,
   track,
   trailing,
 }: {
+  position?: number;
   pressed: boolean;
   reasonLabel?: string;
   track: MixTrack;
   trailing?: ReactNode;
 }) {
+  const { notation } = useKeyNotation();
   const showCoordinate = track.certified && Boolean(track.logId);
-  const meta = findingMetaSegments({ bpm: track.bpm, key: track.key });
+  const meta = findingMetaSegments({ bpm: track.bpm, key: formatKey(track.key, notation) });
   const titleColor = track.certified ? color.starlightCream : color.stardust;
 
   return (
     <View style={[styles.row, pressed ? styles.pressed : null]}>
+      {position === undefined ? null : (
+        <Text style={[font.numeric, styles.position]}>{String(position).padStart(2, "0")}</Text>
+      )}
       <Image
         contentFit="cover"
         source={track.albumImageUrl ?? undefined}
@@ -94,6 +103,7 @@ export const MixRow = memo(function MixRow({
   accessibilityLabel,
   isLast,
   onPress,
+  position,
   reasonLabel,
   track,
   trailing,
@@ -133,12 +143,20 @@ export const MixRow = memo(function MixRow({
 
   // A chain row: not pressable itself; the caller supplies a trailing control (the remove ✕).
   return withBorder(
-    <RowBody pressed={false} reasonLabel={reasonLabel} track={track} trailing={trailing} />,
+    <RowBody
+      position={position}
+      pressed={false}
+      reasonLabel={reasonLabel}
+      track={track}
+      trailing={trailing}
+    />,
   );
 });
 
 const styles = StyleSheet.create({
   art: {
+    // The fill keeps a missing cover reading as a deliberate blank sleeve, not a broken box.
+    backgroundColor: color.tapeBlackFill,
     borderColor: color.dustLine,
     borderRadius: radius.artwork,
     borderWidth: 1,
@@ -165,6 +183,7 @@ const styles = StyleSheet.create({
     letterSpacing: font.numeric.letterSpacing,
   },
   metaRow: { alignItems: "center", flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 2 },
+  position: { color: color.stardust, fontSize: 12, textAlign: "center", width: 20 },
   pressed: { backgroundColor: color.goldVeil },
   row: {
     alignItems: "center",
