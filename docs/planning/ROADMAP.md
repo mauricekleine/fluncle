@@ -235,7 +235,7 @@ The Friday newsletter ([docs/agents/newsletter-agent.md](../agents/newsletter-ag
 
 ## Homogenisation — the next big slice (2026-07-11)
 
-**The observation that names it:** Fluncle's generated artifacts drift toward a mean. It has now been seen independently in two places, which is what makes it a property rather than a pair of bugs.
+**The observation that names it:** Fluncle's generated artifacts drift toward a mean. It has now been seen independently in two places, which is what makes it a property rather than a pair of bugs. **Evidence collection is underway before any scoping** (operator ruling, 2026-07-13): occurrences land in the [homogenisation evidence ledger](./homogenisation-evidence.md) as they are seen — including the third independent sighting, four of five consecutive YouTube renders sharing one palette + texture.
 
 - **The notes.** Measured, not guessed: the word "shoulders" appears in **15 of 61** live notes; "I've been rewinding it since" is lifted verbatim between two. The un-layered auto-note reproduced a standing GLXY note almost word for word. (The vibe-neighbour layer + echo gate is the first counter-measure — it works by handing the model the neighbourhood's moves as **spent**, and it measurably _reduced_ within-region overlap, 0.041 → 0.015.)
 - **The videos.** They are far better than they were, but the models still skew to the same vehicles. The video work already learned the general law and wrote it down: **parallel generation converges on a shared attractor, so diversity has to be DESIGNED IN, not hoped for** (assign each agent a distinct structural family at launch; prescriptive mid-flight coaching increases convergence rather than fixing it).
