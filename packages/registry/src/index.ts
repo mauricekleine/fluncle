@@ -804,7 +804,7 @@ export const SURFACES: readonly Surface[] = [
   {
     command: "ssh rave.fluncle.com",
     exposedContent: [
-      "the rave terminal TUI: Latest bangers, Mixtape archive, Submit, Subscribe, Install CLI, About",
+      "the rave terminal TUI: Latest bangers, Artist archive, Sonic galaxies, Mixtape archive, Random banger, Submit, Subscribe, Install CLI, System status, About",
       "deep-register one-shots: `ssh rave.fluncle.com latest|random`",
     ],
     kind: "ssh",
