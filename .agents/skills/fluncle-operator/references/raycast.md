@@ -19,6 +19,7 @@ Current commands:
 - `quick-add`: no-view command; reads clipboard and runs `fluncle admin tracks publish <url> --json`.
 - `add-track`: form command; Spotify URL plus optional note.
 - `recent-tracks`: list command titled "Recent Bangers"; runs `fluncle recent --json`.
+- `attention-queue`: menu-bar command titled "Attention Queue"; runs `fluncle admin queue --json` (the `/admin` attention queue + the day's dispatch).
 
 Do not re-add a separate note command unless there is a materially different workflow. `Add Track` already includes an optional note field and clipboard-prefills the URL.
 

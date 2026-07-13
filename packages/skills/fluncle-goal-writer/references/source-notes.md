@@ -8,7 +8,7 @@ Use these notes only when updating the skill. Do not load them for ordinary goal
 - `PRODUCT.md` is the product and design source of truth for audience, purpose, brand personality, anti-references, design principles, and accessibility.
 - `.agents/skills/fluncle-operator/SKILL.md` captures repo-specific operating rules for the Bun/Turborepo monorepo, CLI, Raycast extension, web app, Turso-backed publishing flow, and deployment surfaces.
 - `.agents/skills/fluncle-operator/references/cli-contract.md`, `.agents/skills/fluncle-operator/references/raycast.md`, and `.agents/skills/fluncle-operator/references/vps-deploy.md` provide deeper Fluncle-specific workflow details.
-- `packages/skills/goal-writer` is intentionally not part of the Bun workspace; it is a bundled agent skill, not a runtime package.
+- `packages/skills/fluncle-goal-writer` is intentionally not part of the Bun workspace; it is a bundled agent skill, not a runtime package.
 
 ## Codex Goal Guidance
 

@@ -27,6 +27,7 @@ const STUB = `#!/bin/bash
 case "$(cat "$(dirname "$0")/mode")" in
   throttled) printf '{"ok":true,"expanded":3,"failed":1,"tracksFound":21,"tracksWritten":18,"tracksSkipped":3,"nodesEnqueued":5,"frontierPending":212,"seeded":0,"maxHop":2,"dryRun":false,"labelsDiscovered":["Hospital Records"],"rateLimited":true}\\n' ;;
   cli-error) printf '{"code":"missing_token","message":"Missing required env vars: FLUNCLE_API_TOKEN","ok":false}\\n'; exit 1 ;;
+  timeout-once) if [ -f "$(dirname "$0")/tried" ]; then printf '{"ok":true,"expanded":10,"failed":0,"tracksFound":40,"tracksWritten":31,"tracksSkipped":9,"nodesEnqueued":80,"frontierPending":150,"seeded":0,"maxHop":2,"dryRun":false,"labelsDiscovered":[],"rateLimited":false}\\n'; else touch "$(dirname "$0")/tried"; printf 'error: The operation timed out.\\n' >&2; exit 1; fi ;;
   crash) printf 'boom\\n' >&2; exit 1 ;;
   *) printf '{"ok":true,"expanded":10,"failed":0,"tracksFound":77,"tracksWritten":63,"tracksSkipped":14,"nodesEnqueued":100,"frontierPending":191,"seeded":1,"maxHop":2,"dryRun":false,"labelsDiscovered":[],"rateLimited":false}\\n' ;;
 esac
@@ -34,6 +35,7 @@ esac
 
 let dir: string;
 let fluncleJson: typeof import("./crawl-sweep").fluncleJson;
+let crawlPassWithRetry: typeof import("./crawl-sweep").crawlPassWithRetry;
 
 /** Point the stub at one of its canned responses. */
 function mode(name: string): void {
@@ -48,7 +50,7 @@ beforeAll(async () => {
   process.env.FLUNCLE_BIN = bin;
   mode("ok");
 
-  ({ fluncleJson } = await import("./crawl-sweep"));
+  ({ crawlPassWithRetry, fluncleJson } = await import("./crawl-sweep"));
 });
 
 afterAll(() => {
@@ -96,5 +98,27 @@ describe("crawl-sweep's fluncleJson", () => {
     mode("crash");
 
     expect(() => fluncleJson<Pass>(["admin", "catalogue", "crawl"])).toThrow(/exited 1/);
+  });
+});
+
+describe("crawl-sweep's transient-timeout retry", () => {
+  test("a pass that times out ONCE self-heals inside the tick (no ok:false flap)", () => {
+    // The 2026-07-13 flap: a slow MusicBrainz day timed the CLI call out, the tick wrote
+    // `ok: false`, /status went DOWN, and the very next tick recovered. The retry makes the
+    // transient invisible: first call times out, the immediate retry lands, the summary is
+    // a clean pass. (The frontier is idempotent, so re-running a pass never double-writes.)
+    rmSync(join(dir, "tried"), { force: true });
+    mode("timeout-once");
+
+    const pass = crawlPassWithRetry();
+
+    expect(pass.ok).toBe(true);
+    expect(pass.tracksWritten).toBe(31);
+  });
+
+  test("a NON-transient failure is not retried — it throws first time", () => {
+    mode("cli-error");
+
+    expect(() => crawlPassWithRetry()).toThrow(/missing_token|exited/);
   });
 });
