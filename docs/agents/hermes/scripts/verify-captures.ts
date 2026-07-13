@@ -10,13 +10,25 @@
 // docker-execs — see that file's header for the wire-up and ../verify-captures-timer/README.md for
 // the operator runbook.
 //
+// ── TWO RUNGS FOR THE REFERENCE (docs/the-ear.md § Wrong audio) ─────────────────────────────
+// A row's verification REFERENCE is resolved by one of two rungs, by trust:
+//   - ISRC row → the ISRC-resolved official preview through `/api/preview` (the trusted rung). A
+//     mismatch against it is trustworthy, so the server may rewind on it.
+//   - ISRC-NULL row → a TITLE + ARTIST search reference (the second rung, resolveSearchPreview-
+//     Fingerprint), for the ~221 rows that can never reach an ISRC preview. It is LOWER trust
+//     (folded-identity + duration guarded, but not byte-exact), so it may only ever CONFIRM a
+//     capture: a mismatch against it is mapped to the honest abstain (`unverified`), NEVER a
+//     `mismatch` verdict. A wrong reference can leave a row unverified; it can never quarantine
+//     good audio. Precision over recall.
+//
 // ── WHAT ONE ROW COSTS, AND WHO DECIDES WHAT HAPPENS ────────────────────────────────────
 // Per row: one private-R2 GET (the captured bytes — the same read + creds embed-batch.ts uses,
-// which is what the box's AGENT-scoped R2 token can already do), one public `/api/preview` fetch
-// (the ISRC-resolved official 30s clip), two `fpcalc -raw -json` runs, one sliding-window match
-// (fingerprint-match.ts — the SAME matcher the ingest gate uses, so the two cannot drift), and one
-// agent-tier `verify_capture` POST. The box only MEASURES and reports a plain verdict
-// (match | mismatch | no-preview); the WORKER routes it (apps/web/src/lib/server/catalogue.ts):
+// which is what the box's AGENT-scoped R2 token can already do), one reference fetch (the ISRC
+// preview, or — for the second rung — one 1 req/s iTunes search + one preview fetch), two
+// `fpcalc -raw -json` runs, one sliding-window match (fingerprint-match.ts — the SAME matcher the
+// ingest gate uses, so the two cannot drift), and one agent-tier `verify_capture` POST. The box
+// only MEASURES and reports a plain verdict (match | mismatch | no-preview); the WORKER routes it
+// (apps/web/src/lib/server/catalogue.ts):
 //   - match      → `capture_verification = 'preview-match'`.
 //   - no-preview → `'unverified'` (the honest abstain — no reference exists).
 //   - mismatch on a CATALOGUE row → the wrong-audio quarantine rewind (vector dropped, re-queued
@@ -53,6 +65,8 @@ import { join } from "node:path";
 import {
   fetchPreviewFingerprint,
   fpcalcFingerprint,
+  resolveSearchPreviewFingerprint,
+  type SearchReferenceResult,
   slidingWindowMatch,
 } from "./fingerprint-match";
 
@@ -79,6 +93,10 @@ const log = (message: string) => console.error(`[verify-captures] ${message}`);
 export type VerifyWorkItem = {
   artists?: string[];
   certified?: boolean;
+  /** The row's stored length — the TITLE+ARTIST rung's duration guard reads it. */
+  durationMs?: number;
+  /** Null on the 221 rows this rung exists for: they resolve a reference by title+artist, not ISRC. */
+  isrc?: null | string;
   logId?: null | string;
   sourceAudioKey?: string;
   title?: string;
@@ -94,6 +112,10 @@ export type VerifySummary = {
   matched: number;
   ok: boolean;
   quarantinedCatalogue: number;
+  /** ISRC-null rows CONFIRMED by a title+artist reference (a subset of `matched`). */
+  searchMatched: number;
+  /** ISRC-null rows whose title+artist reference MISMATCHED — abstained (unverified), NEVER condemned. */
+  searchMismatch: number;
   /** Rows this tick could not settle (a failed R2 read / fpcalc decode) — retried next tick. */
   skipped: number;
   unverified: number;
@@ -107,7 +129,7 @@ export type VerifySummary = {
 export type VerifyDeps = {
   /** Fingerprint one downloaded capture file; null = fpcalc absent / bad decode. */
   fingerprintFile: (path: string) => number[] | null;
-  /** Fetch + fingerprint the track's official preview; null = no preview source. */
+  /** Fetch + fingerprint the track's ISRC-resolved official preview; null = no preview source. */
   fetchPreviewFp: (trackId: string) => Promise<number[] | null>;
   fetchQueue: (limit: number) => Promise<VerifyWorkItem[]>;
   /** Pull the captured bytes from the private bucket into a scratch file; null = R2 read failed. */
@@ -115,6 +137,11 @@ export type VerifyDeps = {
   log: (message: string) => void;
   mkWorkdir: () => string;
   report: (trackId: string, verdict: Verdict) => Promise<string>;
+  /**
+   * Resolve a LOWER-TRUST reference fingerprint for an ISRC-null row by TITLE + ARTIST search
+   * (the second rung). Returns a fingerprint on a confident single hit, else an abstain reason.
+   */
+  resolveSearchFp: (item: VerifyWorkItem) => Promise<SearchReferenceResult>;
   rmWorkdir: (dir: string) => void;
 };
 
@@ -157,6 +184,8 @@ export async function runVerifyTick(batch: number, deps: VerifyDeps): Promise<Ve
     matched: 0,
     ok: true,
     quarantinedCatalogue: 0,
+    searchMatched: 0,
+    searchMismatch: 0,
     skipped: 0,
     unverified: 0,
     verified: 0,
@@ -184,12 +213,34 @@ export async function runVerifyTick(batch: number, deps: VerifyDeps): Promise<Ve
     const dir = deps.mkWorkdir();
 
     try {
-      // The REFERENCE first: no preview means no R2 GET is needed at all — the verdict is
+      // The REFERENCE first: no reference means no R2 GET is needed at all — the verdict is
       // already `no-preview`, and the captured bytes would be pulled for nothing.
-      const previewFp = await deps.fetchPreviewFp(trackId);
+      //
+      // TWO RUNGS, TWO TRUST LEVELS (docs/the-ear.md § Wrong audio):
+      //   - an ISRC row resolves the ISRC-exact preview (the trusted rung) — a mismatch against it
+      //     is trustworthy and the server may rewind on it;
+      //   - an ISRC-NULL row resolves a TITLE+ARTIST reference (the second rung) — LOWER trust, so
+      //     it may only ever CONFIRM the capture. A mismatch against it is mapped to the honest
+      //     abstain (`no-preview` → `unverified`), NEVER a `mismatch` verdict, so a wrong reference
+      //     can never quarantine good audio. Precision over recall.
+      const trusted = Boolean(item.isrc);
+      let referenceFp: number[] | null;
+
+      if (trusted) {
+        referenceFp = await deps.fetchPreviewFp(trackId);
+      } else {
+        const resolved = await deps.resolveSearchFp(item);
+
+        referenceFp = resolved.fingerprint;
+
+        if (resolved.fingerprint === null) {
+          deps.log(`${trackId}: no title+artist reference (${resolved.reason})`);
+        }
+      }
+
       let verdict: null | Verdict;
 
-      if (previewFp === null) {
+      if (referenceFp === null) {
         verdict = "no-preview";
       } else {
         const capturePath = await deps.fetchCapture(sourceAudioKey, dir);
@@ -202,14 +253,30 @@ export async function runVerifyTick(batch: number, deps: VerifyDeps): Promise<Ve
           continue;
         }
 
-        verdict = deriveVerdict(previewFp, deps.fingerprintFile(capturePath));
-      }
+        const raw = deriveVerdict(referenceFp, deps.fingerprintFile(capturePath));
 
-      if (verdict === null) {
-        // fpcalc failed on the captured bytes — a decode problem, never a stamp.
-        deps.log(`${trackId}: capture fingerprint failed — skipped`);
-        summary.skipped += 1;
-        continue;
+        if (raw === null) {
+          // fpcalc failed on the captured bytes — a decode problem, never a stamp.
+          deps.log(`${trackId}: capture fingerprint failed — skipped`);
+          summary.skipped += 1;
+          continue;
+        }
+
+        if (raw === "mismatch" && !trusted) {
+          // A LOW-TRUST reference never condemns good audio: record the fuzzy mismatch distinctly
+          // and abstain. Left `unverified`, terminally stamped, never re-tried, never quarantined.
+          deps.log(
+            `${trackId}: title+artist reference MISMATCH — abstaining (unverified), not condemning`,
+          );
+          summary.searchMismatch += 1;
+          verdict = "no-preview";
+        } else {
+          verdict = raw;
+
+          if (raw === "match" && !trusted) {
+            summary.searchMatched += 1;
+          }
+        }
       }
 
       const action = await deps.report(trackId, verdict);
@@ -447,6 +514,13 @@ async function main(): Promise<void> {
     log,
     mkWorkdir: () => mkdtempSync(join(tmpdir(), "fluncle-verify-captures-")),
     report: reportVerdict,
+    resolveSearchFp: (item) =>
+      resolveSearchPreviewFingerprint({
+        artists: item.artists ?? [],
+        durationMs: item.durationMs,
+        fpcalcBin: FPCALC_BIN,
+        title: item.title ?? "",
+      }),
     rmWorkdir: (dir) => rmSync(dir, { force: true, recursive: true }),
   };
 

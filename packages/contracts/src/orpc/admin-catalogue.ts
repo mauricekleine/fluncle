@@ -339,6 +339,7 @@ export const CaptureVerifyItemSchema = z
   .object({
     artists: z.array(z.string()),
     certified: z.boolean(),
+    durationMs: z.number(),
     isrc: z.string().nullable(),
     logId: z.string().nullable(),
     sourceAudioKey: z.string(),
