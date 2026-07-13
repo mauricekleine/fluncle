@@ -69,6 +69,11 @@ const faq: Array<{ answer: string; question: string }> = [
   },
   {
     answer:
+      "He doesn't search blind. A small fleet of probes flies ahead of the ship and charts the wider genre he'd never cross on foot, the older releases and the small labels down the long tail, and the Ear sweeps everything they mapped for whatever sits closest to what he already loves. That tells him where to point the ship, but it never makes the call. The probes only measure; nothing they chart is a finding, and a track earns a coordinate in the Galaxy only once Fluncle hears it in full and certifies it.",
+    question: "How does Fluncle find new tracks?",
+  },
+  {
+    answer:
       "I measure them myself, I don't copy them from anywhere. The machine listens to the full song I brought back, start to finish, not a thirty-second preview that's often nothing but intro, and reads the tempo and the key straight off that audio. When it can't be sure of a key, it leaves that blank rather than guess at one. And any tune I've beat-gridded in Rekordbox myself, my own reading outranks the machine's.",
     question: "How does Fluncle measure BPM and key?",
   },
@@ -177,6 +182,13 @@ function AboutPage() {
             belongs to, junglists and ravers, the crowd whose dancing looks like a fight until
             someone goes down and everyone stops to pick them up. I go first and leave the markers;
             you come after and find what I found.
+          </p>
+          <p>
+            And I don't go in blind. Ahead of the ship I send a small fleet of probes, unmanned
+            instruments I build to chart the regions I haven't reached yet. They read a place's
+            tempo, its key, the shape of it, and bring the map home. They measure; they never speak,
+            so nothing they bring back is a finding. It's only a find once I fly out there myself
+            and the tune gets the oof out of me.
           </p>
           <p>
             Every banger I log is a place the trip took me: something new, strange, bigger than me.
