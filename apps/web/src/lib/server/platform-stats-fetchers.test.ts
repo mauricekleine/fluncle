@@ -4,10 +4,13 @@ import {
   collectAppStore,
   collectBluesky,
   collectGithub,
+  collectInstagramFollowers,
   collectLastfm,
   collectMixcloud,
   collectNpm,
   collectTelegram,
+  collectTiktokStats,
+  collectTwitchFollowers,
   collectYoutube,
   type FetchImpl,
   requireCount,
@@ -197,5 +200,100 @@ describe("collectYoutube", () => {
     delete process.env.YOUTUBE_API_KEY;
 
     await expect(collectYoutube(fakeFetch([]))).rejects.toThrow(/YOUTUBE_API_KEY is not set/);
+  });
+});
+
+// ── Tier-2 PARSE halves (token + fetch injected, no DB) ──────────────────────
+
+describe("collectTwitchFollowers", () => {
+  it("resolves the broadcaster id then parses the follower total", async () => {
+    const metrics = await collectTwitchFollowers(
+      fakeFetch([
+        { body: { data: [{ id: "12345" }] }, match: "helix/users" },
+        { body: { data: [], total: 4210 }, match: "helix/channels/followers" },
+      ]),
+      "twitch-access-token",
+      "twitch-client-id",
+    );
+
+    expect(metrics).toEqual([{ metric: "followers", value: 4210 }]);
+  });
+
+  it("throws when the users read returns no broadcaster (→ a skip)", async () => {
+    await expect(
+      collectTwitchFollowers(
+        fakeFetch([{ body: { data: [] }, match: "helix/users" }]),
+        "tok",
+        "cid",
+      ),
+    ).rejects.toThrow(/no broadcaster id/);
+  });
+
+  it("throws on a non-200 from the followers read (→ a skip)", async () => {
+    await expect(
+      collectTwitchFollowers(
+        fakeFetch([
+          { body: { data: [{ id: "1" }] }, match: "helix/users" },
+          { body: {}, match: "helix/channels/followers", status: 401 },
+        ]),
+        "tok",
+        "cid",
+      ),
+    ).rejects.toThrow(/channels\/followers responded 401/);
+  });
+});
+
+describe("collectTiktokStats", () => {
+  it("parses follower_count + likes_count from data.user", async () => {
+    const metrics = await collectTiktokStats(
+      fakeFetch([
+        {
+          body: { data: { user: { follower_count: 88, likes_count: 512 } } },
+          match: "open.tiktokapis.com/v2/user/info",
+        },
+      ]),
+      "tiktok-access-token",
+    );
+
+    expect(metrics).toEqual([
+      { metric: "followers", value: 88 },
+      { metric: "likes", value: 512 },
+    ]);
+  });
+
+  it("throws when TikTok reports a non-ok error code in the body (→ a skip)", async () => {
+    await expect(
+      collectTiktokStats(
+        fakeFetch([
+          {
+            body: { error: { code: "access_token_invalid", message: "bad token" } },
+            match: "open.tiktokapis.com/v2/user/info",
+          },
+        ]),
+        "tok",
+      ),
+    ).rejects.toThrow(/bad token/);
+  });
+});
+
+describe("collectInstagramFollowers", () => {
+  it("parses followers_count from the graph me read", async () => {
+    const metrics = await collectInstagramFollowers(
+      fakeFetch([
+        { body: { followers_count: 143, id: "178..." }, match: "graph.instagram.com/me" },
+      ]),
+      "instagram-long-token",
+    );
+
+    expect(metrics).toEqual([{ metric: "followers", value: 143 }]);
+  });
+
+  it("throws on a non-200 (→ a skip)", async () => {
+    await expect(
+      collectInstagramFollowers(
+        fakeFetch([{ body: {}, match: "graph.instagram.com/me", status: 400 }]),
+        "tok",
+      ),
+    ).rejects.toThrow(/Instagram me responded 400/);
   });
 });

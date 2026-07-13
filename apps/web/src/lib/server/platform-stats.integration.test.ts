@@ -110,14 +110,14 @@ describe("the /reach store", () => {
     process.env = { ...ORIGINAL_ENV };
   });
 
-  it("collects every platform and writes one row per (platform, metric)", async () => {
+  it("collects every Tier-1 platform and writes one row per (platform, metric)", async () => {
     const at = new Date().toISOString();
     const result = await recordPlatformStats({ at, fetchImpl: collectorFetch() });
 
-    // 10 platforms, 15 metrics total (mixcloud 3, bluesky 2, youtube 2, lastfm 2, the
-    // other six 1 each).
+    // 10 Tier-1 platforms, 15 metrics total (mixcloud 3, bluesky 2, youtube 2, lastfm 2,
+    // the other six 1 each). The 3 Tier-2 platforms (twitch/tiktok/instagram) are DORMANT
+    // — no stored token in this fresh db — so they skip cleanly and write nothing.
     expect(result.collected).toHaveLength(10);
-    expect(result.skipped).toHaveLength(0);
     expect(result.inserted).toBe(15);
     expect(await rowCount(db, "platform_stats")).toBe(15);
 
@@ -136,6 +136,14 @@ describe("the /reach store", () => {
         "youtube",
       ].sort(),
     );
+
+    // The Tier-2 legs skip (dormant), never faulting the snapshot — every skip carries a
+    // reason and none contributed a row.
+    const skippedPlatforms = result.skipped.map((entry) => entry.platform).sort();
+    expect(skippedPlatforms).toEqual(["instagram", "tiktok", "twitch"]);
+    for (const skip of result.skipped) {
+      expect(skip.reason.length).toBeGreaterThan(0);
+    }
   });
 
   it("isolates a single platform's fetch fault as a skip, never dropping the rest", async () => {
@@ -145,11 +153,13 @@ describe("the /reach store", () => {
       fetchImpl: collectorFetch(new Set(["github"])),
     });
 
-    expect(result.skipped).toHaveLength(1);
-    expect(result.skipped[0]?.platform).toBe("github");
-    expect(result.skipped[0]?.reason).toMatch(/GitHub responded 500/);
+    const githubSkip = result.skipped.find((entry) => entry.platform === "github");
+    expect(githubSkip).toBeDefined();
+    expect(githubSkip?.reason).toMatch(/GitHub responded 500/);
 
-    // The other nine still landed: 15 total metrics minus github's single `stars`.
+    // The other nine Tier-1 platforms still landed: 15 total metrics minus github's
+    // single `stars`. (The 3 dormant Tier-2 legs skip too, but that is not this test's
+    // subject — github's fault is isolated from the rest of the Tier-1 snapshot.)
     expect(result.collected).toHaveLength(9);
     expect(result.inserted).toBe(14);
     expect(result.collected.some((entry) => entry.platform === "github")).toBe(false);

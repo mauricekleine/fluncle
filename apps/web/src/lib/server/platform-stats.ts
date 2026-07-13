@@ -21,14 +21,19 @@
 // NOT stored here — the rows stay raw and the page slice decides how to group them.
 
 import { getDb, typedRows } from "./db";
-import { readOptionalEnv } from "./env";
+import { type FetchImpl, readOptionalEnv } from "./env";
+import { getInstagramAccessToken } from "./instagram";
 import { logEvent } from "./log";
 import { countSegmentRecipients } from "./resend";
 import { fetchPlaylistFollowerCount } from "./spotify";
+import { getTiktokAccessToken } from "./tiktok";
+import { getTwitchAccessToken, readTwitchClientId } from "./twitch";
 
 // The injectable fetch — the default is the global `fetch`; the tests pass a fake
-// that routes by URL, so every collector is unit-testable with zero real network.
-export type FetchImpl = typeof fetch;
+// that routes by URL, so every collector is unit-testable with zero real network. The
+// canonical alias lives in env.ts (a leaf module); re-exported here so its long-standing
+// import site (`./platform-stats`) and the fetcher tests keep working.
+export type { FetchImpl };
 
 /** One measured number a platform fetcher returns (metric name + integer value). */
 export type PlatformMetric = { metric: string; value: number };
@@ -342,8 +347,134 @@ export async function collectYoutube(fetchImpl: FetchImpl): Promise<PlatformMetr
   ];
 }
 
-// The Tier-1 registry — the drain order is stable so the collect summary reads the
-// same each run. A keyless collector takes `fetchImpl`; the two module-backed ones
+// ── Tier-2 collectors (user-OAuth, docs/reach-tier2-activation.md) ───────────
+//
+// Each reads a durable token minted server-side by its `get<Platform>AccessToken`
+// helper (twitch/tiktok/instagram.ts) — DORMANT until the operator connects, so an
+// absent env or an unconnected token throws a clean reason the collector turns into an
+// honest `{ platform, reason }` skip. The DB-free PARSE half of each is a separate
+// exported function (token + fetch injected) so it is unit-testable with zero network.
+
+/**
+ * Twitch — the follower TOTAL via Helix, given the broadcaster's own user token +
+ * the app's client id. Two reads: `/helix/users` (resolve the authenticated
+ * broadcaster's id) then `/helix/channels/followers?broadcaster_id=…` → `total`. Pure
+ * fetch+parse; the registry wrapper supplies the token + client id.
+ */
+export async function collectTwitchFollowers(
+  fetchImpl: FetchImpl,
+  accessToken: string,
+  clientId: string,
+): Promise<PlatformMetric[]> {
+  const headers = { Authorization: `Bearer ${accessToken}`, "Client-Id": clientId };
+  const usersResponse = await fetchImpl("https://api.twitch.tv/helix/users", { headers });
+
+  if (!usersResponse.ok) {
+    throw new Error(`Twitch users responded ${usersResponse.status}`);
+  }
+
+  const users = (await usersResponse.json()) as { data?: { id?: unknown }[] };
+  const broadcasterId = users.data?.[0]?.id;
+
+  if (typeof broadcasterId !== "string" || broadcasterId.length === 0) {
+    throw new Error("Twitch users returned no broadcaster id");
+  }
+
+  const followersResponse = await fetchImpl(
+    `https://api.twitch.tv/helix/channels/followers?broadcaster_id=${encodeURIComponent(broadcasterId)}`,
+    { headers },
+  );
+
+  if (!followersResponse.ok) {
+    throw new Error(`Twitch channels/followers responded ${followersResponse.status}`);
+  }
+
+  const data = (await followersResponse.json()) as { total?: unknown };
+
+  return [{ metric: "followers", value: requireCount(data.total, "Twitch followers total") }];
+}
+
+/** Twitch registry wrapper — supplies the stored token + the app client id. */
+export async function collectTwitch(fetchImpl: FetchImpl): Promise<PlatformMetric[]> {
+  const [accessToken, clientId] = await Promise.all([getTwitchAccessToken(), readTwitchClientId()]);
+
+  return collectTwitchFollowers(fetchImpl, accessToken, clientId);
+}
+
+/**
+ * TikTok — follower_count + likes_count via the Display API `user/info`, given the
+ * own-account user token. Pure fetch+parse; the registry wrapper supplies the token.
+ * TikTok wraps the payload in `data.user` and reports errors in `error.code` (a
+ * non-"ok" code throws → an honest skip).
+ */
+export async function collectTiktokStats(
+  fetchImpl: FetchImpl,
+  accessToken: string,
+): Promise<PlatformMetric[]> {
+  const response = await fetchImpl(
+    "https://open.tiktokapis.com/v2/user/info/?fields=follower_count,likes_count",
+    { headers: { Authorization: `Bearer ${accessToken}` } },
+  );
+
+  if (!response.ok) {
+    throw new Error(`TikTok user/info responded ${response.status}`);
+  }
+
+  const data = (await response.json()) as {
+    data?: { user?: { follower_count?: unknown; likes_count?: unknown } };
+    error?: { code?: string; message?: string };
+  };
+
+  if (data.error && data.error.code && data.error.code !== "ok") {
+    throw new Error(`TikTok user/info error: ${data.error.message ?? data.error.code}`);
+  }
+
+  const user = data.data?.user;
+
+  return [
+    { metric: "followers", value: requireCount(user?.follower_count, "TikTok follower_count") },
+    { metric: "likes", value: requireCount(user?.likes_count, "TikTok likes_count") },
+  ];
+}
+
+/** TikTok registry wrapper — supplies the stored token. */
+export async function collectTiktok(fetchImpl: FetchImpl): Promise<PlatformMetric[]> {
+  const accessToken = await getTiktokAccessToken();
+
+  return collectTiktokStats(fetchImpl, accessToken);
+}
+
+/**
+ * Instagram — followers_count via the Graph API `me` endpoint (Instagram Login), given
+ * the long-lived token. Pure fetch+parse; the registry wrapper supplies the token.
+ */
+export async function collectInstagramFollowers(
+  fetchImpl: FetchImpl,
+  accessToken: string,
+): Promise<PlatformMetric[]> {
+  const params = new URLSearchParams({ access_token: accessToken, fields: "followers_count" });
+  const response = await fetchImpl(`https://graph.instagram.com/me?${params.toString()}`);
+
+  if (!response.ok) {
+    throw new Error(`Instagram me responded ${response.status}`);
+  }
+
+  const data = (await response.json()) as { followers_count?: unknown };
+
+  return [
+    { metric: "followers", value: requireCount(data.followers_count, "Instagram followers_count") },
+  ];
+}
+
+/** Instagram registry wrapper — supplies the stored long-lived token. */
+export async function collectInstagram(fetchImpl: FetchImpl): Promise<PlatformMetric[]> {
+  const accessToken = await getInstagramAccessToken();
+
+  return collectInstagramFollowers(fetchImpl, accessToken);
+}
+
+// The registry — the drain order is stable so the collect summary reads the
+// same each run. A keyless collector takes `fetchImpl`; the module-backed ones
 // ignore it (they route through a helper), which is why the signature is uniform.
 type PlatformFetcher = {
   collect: (fetchImpl: FetchImpl) => Promise<PlatformMetric[]>;
@@ -361,6 +492,11 @@ const PLATFORM_FETCHERS: PlatformFetcher[] = [
   { collect: () => collectNewsletter(), platform: "newsletter" },
   { collect: () => collectSpotifyPlaylist(), platform: "spotify_playlist" },
   { collect: collectYoutube, platform: "youtube" },
+  // Tier-2 (user-OAuth, DORMANT until the operator connects — each skips cleanly while
+  // its token/env is absent). See docs/reach-tier2-activation.md.
+  { collect: collectTwitch, platform: "twitch" },
+  { collect: collectTiktok, platform: "tiktok" },
+  { collect: collectInstagram, platform: "instagram" },
 ];
 
 /**

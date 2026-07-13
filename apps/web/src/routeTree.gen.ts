@@ -89,15 +89,21 @@ import { Route as ApiV1MixtapeCoverLogIdRouteImport } from './routes/api/v1/mixt
 import { Route as ApiV1AdminLogoutRouteImport } from './routes/api/v1/admin/logout'
 import { Route as ApiAdminYoutubeAuthStartRouteImport } from './routes/api/admin/youtube/auth/start'
 import { Route as ApiAdminYoutubeAuthCallbackRouteImport } from './routes/api/admin/youtube/auth/callback'
+import { Route as ApiAdminTwitchAuthStartRouteImport } from './routes/api/admin/twitch/auth/start'
+import { Route as ApiAdminTwitchAuthCallbackRouteImport } from './routes/api/admin/twitch/auth/callback'
 import { Route as ApiAdminTracksTrackIdSourceAudioRouteImport } from './routes/api/admin/tracks.$trackId.source-audio'
 import { Route as ApiAdminTracksTrackIdSilentClipRouteImport } from './routes/api/admin/tracks.$trackId.silent-clip'
 import { Route as ApiAdminTracksTrackIdPreviewAudioRouteImport } from './routes/api/admin/tracks.$trackId.preview-audio'
 import { Route as ApiAdminTracksTrackIdPreviewRouteImport } from './routes/api/admin/tracks.$trackId.preview'
+import { Route as ApiAdminTiktokAuthStartRouteImport } from './routes/api/admin/tiktok/auth/start'
+import { Route as ApiAdminTiktokAuthCallbackRouteImport } from './routes/api/admin/tiktok/auth/callback'
 import { Route as ApiAdminSpotifyAuthStartRouteImport } from './routes/api/admin/spotify/auth/start'
 import { Route as ApiAdminSpotifyAuthLoginRouteImport } from './routes/api/admin/spotify/auth/login'
 import { Route as ApiAdminSpotifyAuthCallbackRouteImport } from './routes/api/admin/spotify/auth/callback'
 import { Route as ApiAdminMixcloudAuthStartRouteImport } from './routes/api/admin/mixcloud/auth/start'
 import { Route as ApiAdminMixcloudAuthCallbackRouteImport } from './routes/api/admin/mixcloud/auth/callback'
+import { Route as ApiAdminInstagramAuthStartRouteImport } from './routes/api/admin/instagram/auth/start'
+import { Route as ApiAdminInstagramAuthCallbackRouteImport } from './routes/api/admin/instagram/auth/callback'
 import { Route as ApiV1AdminYoutubeAuthStartRouteImport } from './routes/api/v1/admin/youtube/auth/start'
 import { Route as ApiV1AdminYoutubeAuthCallbackRouteImport } from './routes/api/v1/admin/youtube/auth/callback'
 import { Route as ApiV1AdminTracksTrackIdSourceAudioRouteImport } from './routes/api/v1/admin/tracks.$trackId.source-audio'
@@ -513,6 +519,17 @@ const ApiAdminYoutubeAuthCallbackRoute =
     path: '/api/admin/youtube/auth/callback',
     getParentRoute: () => rootRouteImport,
   } as any)
+const ApiAdminTwitchAuthStartRoute = ApiAdminTwitchAuthStartRouteImport.update({
+  id: '/api/admin/twitch/auth/start',
+  path: '/api/admin/twitch/auth/start',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiAdminTwitchAuthCallbackRoute =
+  ApiAdminTwitchAuthCallbackRouteImport.update({
+    id: '/api/admin/twitch/auth/callback',
+    path: '/api/admin/twitch/auth/callback',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ApiAdminTracksTrackIdSourceAudioRoute =
   ApiAdminTracksTrackIdSourceAudioRouteImport.update({
     id: '/api/admin/tracks/$trackId/source-audio',
@@ -535,6 +552,17 @@ const ApiAdminTracksTrackIdPreviewRoute =
   ApiAdminTracksTrackIdPreviewRouteImport.update({
     id: '/api/admin/tracks/$trackId/preview',
     path: '/api/admin/tracks/$trackId/preview',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiAdminTiktokAuthStartRoute = ApiAdminTiktokAuthStartRouteImport.update({
+  id: '/api/admin/tiktok/auth/start',
+  path: '/api/admin/tiktok/auth/start',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiAdminTiktokAuthCallbackRoute =
+  ApiAdminTiktokAuthCallbackRouteImport.update({
+    id: '/api/admin/tiktok/auth/callback',
+    path: '/api/admin/tiktok/auth/callback',
     getParentRoute: () => rootRouteImport,
   } as any)
 const ApiAdminSpotifyAuthStartRoute =
@@ -565,6 +593,18 @@ const ApiAdminMixcloudAuthCallbackRoute =
   ApiAdminMixcloudAuthCallbackRouteImport.update({
     id: '/api/admin/mixcloud/auth/callback',
     path: '/api/admin/mixcloud/auth/callback',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiAdminInstagramAuthStartRoute =
+  ApiAdminInstagramAuthStartRouteImport.update({
+    id: '/api/admin/instagram/auth/start',
+    path: '/api/admin/instagram/auth/start',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiAdminInstagramAuthCallbackRoute =
+  ApiAdminInstagramAuthCallbackRouteImport.update({
+    id: '/api/admin/instagram/auth/callback',
+    path: '/api/admin/instagram/auth/callback',
     getParentRoute: () => rootRouteImport,
   } as any)
 const ApiV1AdminYoutubeAuthStartRoute =
@@ -713,15 +753,21 @@ export interface FileRoutesByFullPath {
   '/api/v1/mixtape-cover/$logId': typeof ApiV1MixtapeCoverLogIdRoute
   '/api/v1/og/$logId': typeof ApiV1OgLogIdRoute
   '/api/v1/preview/$idOrLogId': typeof ApiV1PreviewIdOrLogIdRoute
+  '/api/admin/instagram/auth/callback': typeof ApiAdminInstagramAuthCallbackRoute
+  '/api/admin/instagram/auth/start': typeof ApiAdminInstagramAuthStartRoute
   '/api/admin/mixcloud/auth/callback': typeof ApiAdminMixcloudAuthCallbackRoute
   '/api/admin/mixcloud/auth/start': typeof ApiAdminMixcloudAuthStartRoute
   '/api/admin/spotify/auth/callback': typeof ApiAdminSpotifyAuthCallbackRoute
   '/api/admin/spotify/auth/login': typeof ApiAdminSpotifyAuthLoginRoute
   '/api/admin/spotify/auth/start': typeof ApiAdminSpotifyAuthStartRoute
+  '/api/admin/tiktok/auth/callback': typeof ApiAdminTiktokAuthCallbackRoute
+  '/api/admin/tiktok/auth/start': typeof ApiAdminTiktokAuthStartRoute
   '/api/admin/tracks/$trackId/preview': typeof ApiAdminTracksTrackIdPreviewRoute
   '/api/admin/tracks/$trackId/preview-audio': typeof ApiAdminTracksTrackIdPreviewAudioRoute
   '/api/admin/tracks/$trackId/silent-clip': typeof ApiAdminTracksTrackIdSilentClipRoute
   '/api/admin/tracks/$trackId/source-audio': typeof ApiAdminTracksTrackIdSourceAudioRoute
+  '/api/admin/twitch/auth/callback': typeof ApiAdminTwitchAuthCallbackRoute
+  '/api/admin/twitch/auth/start': typeof ApiAdminTwitchAuthStartRoute
   '/api/admin/youtube/auth/callback': typeof ApiAdminYoutubeAuthCallbackRoute
   '/api/admin/youtube/auth/start': typeof ApiAdminYoutubeAuthStartRoute
   '/api/v1/admin/mixcloud/auth/callback': typeof ApiV1AdminMixcloudAuthCallbackRoute
@@ -813,15 +859,21 @@ export interface FileRoutesByTo {
   '/api/v1/mixtape-cover/$logId': typeof ApiV1MixtapeCoverLogIdRoute
   '/api/v1/og/$logId': typeof ApiV1OgLogIdRoute
   '/api/v1/preview/$idOrLogId': typeof ApiV1PreviewIdOrLogIdRoute
+  '/api/admin/instagram/auth/callback': typeof ApiAdminInstagramAuthCallbackRoute
+  '/api/admin/instagram/auth/start': typeof ApiAdminInstagramAuthStartRoute
   '/api/admin/mixcloud/auth/callback': typeof ApiAdminMixcloudAuthCallbackRoute
   '/api/admin/mixcloud/auth/start': typeof ApiAdminMixcloudAuthStartRoute
   '/api/admin/spotify/auth/callback': typeof ApiAdminSpotifyAuthCallbackRoute
   '/api/admin/spotify/auth/login': typeof ApiAdminSpotifyAuthLoginRoute
   '/api/admin/spotify/auth/start': typeof ApiAdminSpotifyAuthStartRoute
+  '/api/admin/tiktok/auth/callback': typeof ApiAdminTiktokAuthCallbackRoute
+  '/api/admin/tiktok/auth/start': typeof ApiAdminTiktokAuthStartRoute
   '/api/admin/tracks/$trackId/preview': typeof ApiAdminTracksTrackIdPreviewRoute
   '/api/admin/tracks/$trackId/preview-audio': typeof ApiAdminTracksTrackIdPreviewAudioRoute
   '/api/admin/tracks/$trackId/silent-clip': typeof ApiAdminTracksTrackIdSilentClipRoute
   '/api/admin/tracks/$trackId/source-audio': typeof ApiAdminTracksTrackIdSourceAudioRoute
+  '/api/admin/twitch/auth/callback': typeof ApiAdminTwitchAuthCallbackRoute
+  '/api/admin/twitch/auth/start': typeof ApiAdminTwitchAuthStartRoute
   '/api/admin/youtube/auth/callback': typeof ApiAdminYoutubeAuthCallbackRoute
   '/api/admin/youtube/auth/start': typeof ApiAdminYoutubeAuthStartRoute
   '/api/v1/admin/mixcloud/auth/callback': typeof ApiV1AdminMixcloudAuthCallbackRoute
@@ -916,15 +968,21 @@ export interface FileRoutesById {
   '/api/v1/mixtape-cover/$logId': typeof ApiV1MixtapeCoverLogIdRoute
   '/api/v1/og/$logId': typeof ApiV1OgLogIdRoute
   '/api/v1/preview/$idOrLogId': typeof ApiV1PreviewIdOrLogIdRoute
+  '/api/admin/instagram/auth/callback': typeof ApiAdminInstagramAuthCallbackRoute
+  '/api/admin/instagram/auth/start': typeof ApiAdminInstagramAuthStartRoute
   '/api/admin/mixcloud/auth/callback': typeof ApiAdminMixcloudAuthCallbackRoute
   '/api/admin/mixcloud/auth/start': typeof ApiAdminMixcloudAuthStartRoute
   '/api/admin/spotify/auth/callback': typeof ApiAdminSpotifyAuthCallbackRoute
   '/api/admin/spotify/auth/login': typeof ApiAdminSpotifyAuthLoginRoute
   '/api/admin/spotify/auth/start': typeof ApiAdminSpotifyAuthStartRoute
+  '/api/admin/tiktok/auth/callback': typeof ApiAdminTiktokAuthCallbackRoute
+  '/api/admin/tiktok/auth/start': typeof ApiAdminTiktokAuthStartRoute
   '/api/admin/tracks/$trackId/preview': typeof ApiAdminTracksTrackIdPreviewRoute
   '/api/admin/tracks/$trackId/preview-audio': typeof ApiAdminTracksTrackIdPreviewAudioRoute
   '/api/admin/tracks/$trackId/silent-clip': typeof ApiAdminTracksTrackIdSilentClipRoute
   '/api/admin/tracks/$trackId/source-audio': typeof ApiAdminTracksTrackIdSourceAudioRoute
+  '/api/admin/twitch/auth/callback': typeof ApiAdminTwitchAuthCallbackRoute
+  '/api/admin/twitch/auth/start': typeof ApiAdminTwitchAuthStartRoute
   '/api/admin/youtube/auth/callback': typeof ApiAdminYoutubeAuthCallbackRoute
   '/api/admin/youtube/auth/start': typeof ApiAdminYoutubeAuthStartRoute
   '/api/v1/admin/mixcloud/auth/callback': typeof ApiV1AdminMixcloudAuthCallbackRoute
@@ -1020,15 +1078,21 @@ export interface FileRouteTypes {
     | '/api/v1/mixtape-cover/$logId'
     | '/api/v1/og/$logId'
     | '/api/v1/preview/$idOrLogId'
+    | '/api/admin/instagram/auth/callback'
+    | '/api/admin/instagram/auth/start'
     | '/api/admin/mixcloud/auth/callback'
     | '/api/admin/mixcloud/auth/start'
     | '/api/admin/spotify/auth/callback'
     | '/api/admin/spotify/auth/login'
     | '/api/admin/spotify/auth/start'
+    | '/api/admin/tiktok/auth/callback'
+    | '/api/admin/tiktok/auth/start'
     | '/api/admin/tracks/$trackId/preview'
     | '/api/admin/tracks/$trackId/preview-audio'
     | '/api/admin/tracks/$trackId/silent-clip'
     | '/api/admin/tracks/$trackId/source-audio'
+    | '/api/admin/twitch/auth/callback'
+    | '/api/admin/twitch/auth/start'
     | '/api/admin/youtube/auth/callback'
     | '/api/admin/youtube/auth/start'
     | '/api/v1/admin/mixcloud/auth/callback'
@@ -1120,15 +1184,21 @@ export interface FileRouteTypes {
     | '/api/v1/mixtape-cover/$logId'
     | '/api/v1/og/$logId'
     | '/api/v1/preview/$idOrLogId'
+    | '/api/admin/instagram/auth/callback'
+    | '/api/admin/instagram/auth/start'
     | '/api/admin/mixcloud/auth/callback'
     | '/api/admin/mixcloud/auth/start'
     | '/api/admin/spotify/auth/callback'
     | '/api/admin/spotify/auth/login'
     | '/api/admin/spotify/auth/start'
+    | '/api/admin/tiktok/auth/callback'
+    | '/api/admin/tiktok/auth/start'
     | '/api/admin/tracks/$trackId/preview'
     | '/api/admin/tracks/$trackId/preview-audio'
     | '/api/admin/tracks/$trackId/silent-clip'
     | '/api/admin/tracks/$trackId/source-audio'
+    | '/api/admin/twitch/auth/callback'
+    | '/api/admin/twitch/auth/start'
     | '/api/admin/youtube/auth/callback'
     | '/api/admin/youtube/auth/start'
     | '/api/v1/admin/mixcloud/auth/callback'
@@ -1222,15 +1292,21 @@ export interface FileRouteTypes {
     | '/api/v1/mixtape-cover/$logId'
     | '/api/v1/og/$logId'
     | '/api/v1/preview/$idOrLogId'
+    | '/api/admin/instagram/auth/callback'
+    | '/api/admin/instagram/auth/start'
     | '/api/admin/mixcloud/auth/callback'
     | '/api/admin/mixcloud/auth/start'
     | '/api/admin/spotify/auth/callback'
     | '/api/admin/spotify/auth/login'
     | '/api/admin/spotify/auth/start'
+    | '/api/admin/tiktok/auth/callback'
+    | '/api/admin/tiktok/auth/start'
     | '/api/admin/tracks/$trackId/preview'
     | '/api/admin/tracks/$trackId/preview-audio'
     | '/api/admin/tracks/$trackId/silent-clip'
     | '/api/admin/tracks/$trackId/source-audio'
+    | '/api/admin/twitch/auth/callback'
+    | '/api/admin/twitch/auth/start'
     | '/api/admin/youtube/auth/callback'
     | '/api/admin/youtube/auth/start'
     | '/api/v1/admin/mixcloud/auth/callback'
@@ -1303,15 +1379,21 @@ export interface RootRouteChildren {
   ApiV1MixtapeCoverLogIdRoute: typeof ApiV1MixtapeCoverLogIdRoute
   ApiV1OgLogIdRoute: typeof ApiV1OgLogIdRoute
   ApiV1PreviewIdOrLogIdRoute: typeof ApiV1PreviewIdOrLogIdRoute
+  ApiAdminInstagramAuthCallbackRoute: typeof ApiAdminInstagramAuthCallbackRoute
+  ApiAdminInstagramAuthStartRoute: typeof ApiAdminInstagramAuthStartRoute
   ApiAdminMixcloudAuthCallbackRoute: typeof ApiAdminMixcloudAuthCallbackRoute
   ApiAdminMixcloudAuthStartRoute: typeof ApiAdminMixcloudAuthStartRoute
   ApiAdminSpotifyAuthCallbackRoute: typeof ApiAdminSpotifyAuthCallbackRoute
   ApiAdminSpotifyAuthLoginRoute: typeof ApiAdminSpotifyAuthLoginRoute
   ApiAdminSpotifyAuthStartRoute: typeof ApiAdminSpotifyAuthStartRoute
+  ApiAdminTiktokAuthCallbackRoute: typeof ApiAdminTiktokAuthCallbackRoute
+  ApiAdminTiktokAuthStartRoute: typeof ApiAdminTiktokAuthStartRoute
   ApiAdminTracksTrackIdPreviewRoute: typeof ApiAdminTracksTrackIdPreviewRoute
   ApiAdminTracksTrackIdPreviewAudioRoute: typeof ApiAdminTracksTrackIdPreviewAudioRoute
   ApiAdminTracksTrackIdSilentClipRoute: typeof ApiAdminTracksTrackIdSilentClipRoute
   ApiAdminTracksTrackIdSourceAudioRoute: typeof ApiAdminTracksTrackIdSourceAudioRoute
+  ApiAdminTwitchAuthCallbackRoute: typeof ApiAdminTwitchAuthCallbackRoute
+  ApiAdminTwitchAuthStartRoute: typeof ApiAdminTwitchAuthStartRoute
   ApiAdminYoutubeAuthCallbackRoute: typeof ApiAdminYoutubeAuthCallbackRoute
   ApiAdminYoutubeAuthStartRoute: typeof ApiAdminYoutubeAuthStartRoute
   ApiV1AdminMixcloudAuthCallbackRoute: typeof ApiV1AdminMixcloudAuthCallbackRoute
@@ -1889,6 +1971,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiAdminYoutubeAuthCallbackRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/admin/twitch/auth/start': {
+      id: '/api/admin/twitch/auth/start'
+      path: '/api/admin/twitch/auth/start'
+      fullPath: '/api/admin/twitch/auth/start'
+      preLoaderRoute: typeof ApiAdminTwitchAuthStartRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/admin/twitch/auth/callback': {
+      id: '/api/admin/twitch/auth/callback'
+      path: '/api/admin/twitch/auth/callback'
+      fullPath: '/api/admin/twitch/auth/callback'
+      preLoaderRoute: typeof ApiAdminTwitchAuthCallbackRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/admin/tracks/$trackId/source-audio': {
       id: '/api/admin/tracks/$trackId/source-audio'
       path: '/api/admin/tracks/$trackId/source-audio'
@@ -1915,6 +2011,20 @@ declare module '@tanstack/react-router' {
       path: '/api/admin/tracks/$trackId/preview'
       fullPath: '/api/admin/tracks/$trackId/preview'
       preLoaderRoute: typeof ApiAdminTracksTrackIdPreviewRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/admin/tiktok/auth/start': {
+      id: '/api/admin/tiktok/auth/start'
+      path: '/api/admin/tiktok/auth/start'
+      fullPath: '/api/admin/tiktok/auth/start'
+      preLoaderRoute: typeof ApiAdminTiktokAuthStartRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/admin/tiktok/auth/callback': {
+      id: '/api/admin/tiktok/auth/callback'
+      path: '/api/admin/tiktok/auth/callback'
+      fullPath: '/api/admin/tiktok/auth/callback'
+      preLoaderRoute: typeof ApiAdminTiktokAuthCallbackRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/admin/spotify/auth/start': {
@@ -1950,6 +2060,20 @@ declare module '@tanstack/react-router' {
       path: '/api/admin/mixcloud/auth/callback'
       fullPath: '/api/admin/mixcloud/auth/callback'
       preLoaderRoute: typeof ApiAdminMixcloudAuthCallbackRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/admin/instagram/auth/start': {
+      id: '/api/admin/instagram/auth/start'
+      path: '/api/admin/instagram/auth/start'
+      fullPath: '/api/admin/instagram/auth/start'
+      preLoaderRoute: typeof ApiAdminInstagramAuthStartRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/admin/instagram/auth/callback': {
+      id: '/api/admin/instagram/auth/callback'
+      path: '/api/admin/instagram/auth/callback'
+      fullPath: '/api/admin/instagram/auth/callback'
+      preLoaderRoute: typeof ApiAdminInstagramAuthCallbackRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/v1/admin/youtube/auth/start': {
@@ -2152,16 +2276,22 @@ const rootRouteChildren: RootRouteChildren = {
   ApiV1MixtapeCoverLogIdRoute: ApiV1MixtapeCoverLogIdRoute,
   ApiV1OgLogIdRoute: ApiV1OgLogIdRoute,
   ApiV1PreviewIdOrLogIdRoute: ApiV1PreviewIdOrLogIdRoute,
+  ApiAdminInstagramAuthCallbackRoute: ApiAdminInstagramAuthCallbackRoute,
+  ApiAdminInstagramAuthStartRoute: ApiAdminInstagramAuthStartRoute,
   ApiAdminMixcloudAuthCallbackRoute: ApiAdminMixcloudAuthCallbackRoute,
   ApiAdminMixcloudAuthStartRoute: ApiAdminMixcloudAuthStartRoute,
   ApiAdminSpotifyAuthCallbackRoute: ApiAdminSpotifyAuthCallbackRoute,
   ApiAdminSpotifyAuthLoginRoute: ApiAdminSpotifyAuthLoginRoute,
   ApiAdminSpotifyAuthStartRoute: ApiAdminSpotifyAuthStartRoute,
+  ApiAdminTiktokAuthCallbackRoute: ApiAdminTiktokAuthCallbackRoute,
+  ApiAdminTiktokAuthStartRoute: ApiAdminTiktokAuthStartRoute,
   ApiAdminTracksTrackIdPreviewRoute: ApiAdminTracksTrackIdPreviewRoute,
   ApiAdminTracksTrackIdPreviewAudioRoute:
     ApiAdminTracksTrackIdPreviewAudioRoute,
   ApiAdminTracksTrackIdSilentClipRoute: ApiAdminTracksTrackIdSilentClipRoute,
   ApiAdminTracksTrackIdSourceAudioRoute: ApiAdminTracksTrackIdSourceAudioRoute,
+  ApiAdminTwitchAuthCallbackRoute: ApiAdminTwitchAuthCallbackRoute,
+  ApiAdminTwitchAuthStartRoute: ApiAdminTwitchAuthStartRoute,
   ApiAdminYoutubeAuthCallbackRoute: ApiAdminYoutubeAuthCallbackRoute,
   ApiAdminYoutubeAuthStartRoute: ApiAdminYoutubeAuthStartRoute,
   ApiV1AdminMixcloudAuthCallbackRoute: ApiV1AdminMixcloudAuthCallbackRoute,
