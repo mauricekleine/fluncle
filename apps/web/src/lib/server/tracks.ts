@@ -964,7 +964,7 @@ export async function getRandomRadioTrack(): Promise<TrackListItem | undefined> 
   return row ? toTrackListItem(row) : undefined;
 }
 
-// ── radio.fluncle.com — the shared schedule (RFC radio-broadcast.md, Unit A) ──
+// ── radio.fluncle.com — the shared schedule (the radio-broadcast RFC, Unit A) ──
 
 /**
  * The radio loop's eligible findings, deterministically ordered. The eligibility
@@ -1146,9 +1146,9 @@ export async function getTrackNeighbors(track: {
  * binding is the whole ballgame). It returns the ~6 winners, never the corpus: 100%
  * recall, one round trip, ~2.5 KB. The old shape — every `embedding_json` into the
  * isolate, cosine there — hard-failed `turso dev`'s 10 MiB response cap at 460 embedded
- * findings and was on course to OOM the 128 MB Worker isolate in prod (docs/rfcs/
- * turso-scale-spike.md). No ANN index: `libsql_vector_idx` wedged hosted Turso's write
- * path in the spike and is not to be used.
+ * findings and was on course to OOM the 128 MB Worker isolate in prod
+ * (docs/local-database.md "Local is not production"). No ANN index: `libsql_vector_idx`
+ * wedged hosted Turso's write path in the measurement spike and is not to be used.
  *
  * Returns `[]` (never throws) when the finding is unknown, has no embedding yet (the
  * embed cron hasn't drained it), or nothing else is embedded. A malformed stored vector

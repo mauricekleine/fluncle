@@ -2,8 +2,8 @@
 // operator's crawl-seed control. Two ops, on the `admin-galaxies` pattern:
 //
 //   - `list_labels_admin` — `adminAuth` (agent-allowed read): every label with its seed
-//     state + finding count. `?seedState=enabled` is the seed-set read the future
-//     catalogue crawler will make with its agent token. Nothing consumes it yet.
+//     state + finding count. `?seedState=enabled` is the seed-set read the catalogue
+//     crawler makes with its agent token.
 //   - `update_label` — `adminAuth` + `operatorGuard` (OPERATOR): the ruling. Steering what
 //     Fluncle crawls next is an editorial act, so the box's agent token 403s — the
 //     `update_galaxy` precedent.
@@ -27,7 +27,7 @@ import { apiFault, type Implementer } from "./_shared";
 /** Build the `admin-labels` domain's handlers. */
 export function adminLabelsHandlers(os: Implementer) {
   // GET /admin/labels — `adminAuth` (operator OR agent): every label, optionally scoped
-  // to one seed state (the crawler's future `?seedState=enabled` read).
+  // to one seed state (the crawler's `?seedState=enabled` read).
   const listLabelsAdminHandler = os.list_labels_admin.use(adminAuth).handler(async ({ input }) => {
     try {
       return { labels: await listLabels(input.seedState), ok: true } as const;

@@ -1,7 +1,7 @@
-// The galaxy map's backing functions (browse-by-feel RFC) — the `artists.ts` twin,
-// consumed by BOTH the oRPC handlers (`./orpc/galaxies.ts`, `./orpc/admin-galaxies.ts`)
-// and the public route loaders (Slice 4). The filename dodges the existing
-// `lib/galaxies.ts` (the four vibe-quadrant constants, which Unit E retires).
+// The galaxy map's backing functions (docs/agents/cluster-engine.md) — the `artists.ts`
+// twin, consumed by BOTH the oRPC handlers (`./orpc/galaxies.ts`, `./orpc/admin-galaxies.ts`)
+// and the public route loaders (Slice 4). The filename dodged the then-existing
+// `lib/galaxies.ts` (the four vibe-quadrant constants, since retired).
 //
 // Identity is minted HERE, server-side: a new cluster's stable `id` (`gal_<uuid>`,
 // never recycled) and its permanent machine `handle` (`galaxySlug(id, attempt)`,

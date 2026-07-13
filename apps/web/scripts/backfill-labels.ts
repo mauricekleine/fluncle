@@ -113,8 +113,8 @@ export async function loadConfirmedAliases(client: Client): Promise<Map<string, 
  * The fold happens here in TS (SQLite has no `slugify`), but what it folds is the UNLINKED
  * set — drained through `tracks_label_id_idx`, and empty on a steady-state deploy — never
  * the whole catalogue. This is the self-healing path by which a track written by ANY writer
- * that does not know the column exists (an admin update, a future catalogue crawler) is
- * linked into the graph.
+ * that does not know the column exists (an admin update) is linked into the graph. The
+ * catalogue crawler stamps its own pointers per release (crawl.ts); this is its backstop.
  */
 export async function linkTracksToLabels(
   client: Client,

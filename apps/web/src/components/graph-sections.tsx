@@ -35,9 +35,8 @@
 //     unlit row can never read as a focused one; `:focus-visible` still gets the canonical
 //     gold ring, because focus must stay legible and consistent (WCAG).
 //   - AN EMPTY SET RENDERS NOTHING AT ALL. Not an empty state, not a heading with no rows:
-//     the component returns undefined. Today that is every page (the archive is entirely
-//     certified), so these bands are dark until the catalogue lands, and the pages read as
-//     if they had never existed.
+//     the component returns undefined, so a page with no uncertified tracks reads as if
+//     the band had never existed.
 
 import { Link } from "@tanstack/react-router";
 import { siSpotify } from "simple-icons";

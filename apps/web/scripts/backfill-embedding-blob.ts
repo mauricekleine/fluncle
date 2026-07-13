@@ -10,7 +10,7 @@
  * WHY: a 1024-d MuQ vector is 21,804 B as a JSON array and 4,096 B as a native libSQL
  * `F32_BLOB(1024)`, and only the blob form can be ranked by the DATABASE
  * (`vector_distance_cos`) instead of by shipping the whole corpus into a 128 MB Worker
- * isolate. See lib/server/embedding.ts and docs/rfcs/turso-scale-spike.md.
+ * isolate. See lib/server/embedding.ts and docs/local-database.md ("Local is not production").
  *
  * SAFETY. `vector32()` THROWS on anything it cannot read (malformed JSON, a wrong-width
  * array, an array of strings), and one bad row would abort the whole statement — so the
@@ -24,7 +24,7 @@
  * follow-up, once the blob path has run in production.
  *
  * Chunked by `track_id` so a large archive backfills in bounded statements rather than
- * one enormous write (60 findings today; the loop is what makes it safe at 100k).
+ * one enormous write (~60 findings when this shipped; the loop is what makes it safe at 100k).
  */
 import { type Client, createClient } from "@libsql/client";
 import { config } from "dotenv";

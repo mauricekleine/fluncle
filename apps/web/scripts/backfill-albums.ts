@@ -19,8 +19,8 @@
  *      or not. This is the half that fills the quieter rows on an album page: an uncertified
  *      track on a record Fluncle found a banger on gets linked, and one on a record he never
  *      touched stays unlinked, and therefore invisible. Self-healing, and the path by which a
- *      track written by any writer that does not know the column exists (an admin update, a
- *      future catalogue crawler) is folded into the graph.
+ *      track written by any writer that does not know the column exists (an admin update, the
+ *      catalogue crawler) is folded into the graph.
  *
  * Unlike labels, an album carries NO operator control — no seed state, no ruling, no
  * bootstrap. There is nothing for a human to decide about a record. See docs/album-entity.md.

@@ -423,8 +423,7 @@ function summaryLine(summary: CatalogueSummary): string {
   return parts.join(" · ");
 }
 
-// The honest empty state — and today it is the REAL state: the crawler does not exist yet, so
-// the catalogue holds nothing. Three different nothings, and they mean different things, so
+// The honest empty state. Three different nothings, and they mean different things, so
 // the page says which one it is instead of showing one shrug for all three.
 function EmptyCatalogue({ lens, summary }: { lens: CatalogueLens; summary: CatalogueSummary }) {
   // The quarantine lens is clean when nothing is quarantined — the GOOD state, said plainly and

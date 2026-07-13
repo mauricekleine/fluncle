@@ -15,8 +15,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // tracklist still (an album is one record), so it keeps the `{ total, tracks }` slice.
 //
 // The second contract, and the one that matters more: a page with ZERO quieter rows renders
-// them as NOTHING — no heading, no empty state, no dangling anything. That is the state of every
-// page today (the archive is entirely certified), and it is asserted here.
+// them as NOTHING — no heading, no empty state, no dangling anything. That is the state of
+// every page whose entity the crawler has not touched, and it is asserted here.
 
 const getLabelBySlug = vi.hoisted(() => vi.fn());
 const getLabelForAlbum = vi.hoisted(() => vi.fn());

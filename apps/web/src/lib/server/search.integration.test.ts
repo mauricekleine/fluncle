@@ -11,10 +11,10 @@
 //   - the LEFT JOIN that lets an uncertified track be FOUND while never being certified;
 //   - the vector scan, with the probe bound as a raw BLOB.
 //
-// THE CATALOGUE IS EMPTY IN PRODUCTION TODAY (the crawler is being built in parallel), so the
-// uncertified rows here are SYNTHETIC — and that is the whole point of seeding them: the code
-// path that renders an unlit row and links it OUT to Spotify must not ship untested just
-// because there is nothing in the archive to exercise it yet.
+// The uncertified rows here are SYNTHETIC — the crawler fills the real catalogue in
+// production, but a test must state EXACTLY which unlit rows exist: the code path that
+// renders an unlit row and links it OUT to Spotify is proven on a known set, never on
+// whatever the crawl happens to have brought in.
 
 import { type Client } from "@libsql/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
