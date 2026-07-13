@@ -32,6 +32,7 @@ Generated from the `SURFACES` catalog. Each row is the registry `name`, its addr
 | `web.newsletter` | `/newsletter` | the newsletter archive + `/newsletter/:number`, one past edition on the web                                                                       | secondary |
 | `web.docs`       | `/docs`       | the Fumadocs developer docs + `/docs/api`, the embedded Scalar API reference                                                                      | secondary |
 | `web.status`     | `/status`     | the public service-health dashboard — uptime per service, recent events                                                                           | secondary |
+| `web.reach`      | `/reach`      | the public reach page — Fluncle's numbers across every platform over time, grouped as the crew (audience) + the reach (consumption); no KPI hero  | secondary |
 | `web.radio`      | `/radio`      | the cycling observation station — Fluncle's spoken field observations on a loop (also at `radio.fluncle.com`)                                     | secondary |
 | `web.artist`     | `/artist`     | `/artist/:slug` — one artist's page: every published finding from that artist, plus their identity links                                          | secondary |
 | `web.labels`     | `/labels`     | every label Fluncle has found a banger on + `/label/:slug` — one imprint: its findings, its artists, the rest of its catalogue                    | secondary |
@@ -199,6 +200,7 @@ The weight ladder within a context is unchanged — **`primary`** (the loud fron
 | `web.newsletter`            | secondary |           |           |           |
 | `web.docs`                  | secondary |           |           |           |
 | `web.status`                | secondary |           |           | primary   |
+| `web.reach`                 | secondary |           |           | secondary |
 | `web.radio`                 | secondary |           |           |           |
 | `web.artist`                | secondary | secondary |           |           |
 | `web.labels`                | secondary |           |           |           |
