@@ -5,6 +5,7 @@
 User-agent: *
 Allow: /
 Disallow: /api/admin/
+Disallow: /admin
 
 # Content Signals (https://contentsignals.org/): the archive is open for
 # search, AI answers, and training. Crawl away applies to the robots too.
