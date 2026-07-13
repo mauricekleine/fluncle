@@ -51,6 +51,7 @@ import { editionsContract } from "./editions";
 import { healthContract } from "./health";
 import { meContract } from "./me";
 import { meGalaxyContract } from "./me-galaxy";
+import { mePreferencesContract } from "./me-preferences";
 import { meSavedContract } from "./me-saved";
 import { meSetsContract } from "./me-sets";
 import { mixContract } from "./mix";
@@ -238,6 +239,15 @@ export {
   getPrivateGalaxyProgress,
   mergePrivateGalaxyProgress,
 } from "./me-galaxy";
+export {
+  getMyPreferences,
+  KeyNotationPreferenceSchema,
+  mePreferencesContract,
+  type UserPreferences,
+  UserPreferencesInputSchema,
+  UserPreferencesSchema,
+  updateMyPreferences,
+} from "./me-preferences";
 export { listPrivateSavedFindings, savePrivateFinding, unsavePrivateFinding } from "./me-saved";
 export {
   deletePrivateSavedSet,
@@ -332,6 +342,7 @@ export const contract = {
   ...healthContract,
   ...meContract,
   ...meGalaxyContract,
+  ...mePreferencesContract,
   ...meSavedContract,
   ...meSetsContract,
   ...mixContract,
