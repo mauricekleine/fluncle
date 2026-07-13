@@ -64,7 +64,7 @@ Public + private (`/me`) operations, with their OpenAPI `operationId`:
 | `POST /me/export`, `GET /me/export/{id}` | `exportPrivateAccountData`                                |                                                              |
 | `POST /me/delete`                        | `deletePrivateAccount`                                    | **`POST` on a `/delete` path**, not `DELETE /me`             |
 | `PATCH /me/profile`                      | (not in spec)                                             |                                                              |
-| `GET/PATCH /me/preferences`              | `getMyPreferences` / `updateMyPreferences`                | cross-device prefs (key notation); PATCH partial-merges      |
+| `GET/PATCH /me/preferences`              | `getPrivatePreferences` / `updatePrivatePreferences`      | cross-device prefs (key notation); PATCH partial-merges      |
 | `GET /health`                            | `getHealth`                                               |                                                              |
 
 Admin operations (cookie-or-bearer, **not in the public OpenAPI spec**), expressed as method + path:

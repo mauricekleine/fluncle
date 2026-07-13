@@ -48,16 +48,16 @@ export const UserPreferencesInputSchema = z.strictObject({
 export type UserPreferences = z.infer<typeof UserPreferencesSchema>;
 
 /**
- * `get_my_preferences` → `GET /me/preferences` (operationId `getMyPreferences`).
+ * `get_private_preferences` → `GET /me/preferences` (operationId `getPrivatePreferences`).
  *
  * The signed-in user's stored preferences. A missing session is the rails-encoded
  * 401 (`auth_required`); an unreadable stored blob resolves to an empty object
  * rather than an error (the read never throws).
  */
-export const getMyPreferences = oc
+export const getPrivatePreferences = oc
   .route({
     method: "GET",
-    operationId: "getMyPreferences",
+    operationId: "getPrivatePreferences",
     path: "/me/preferences",
     summary: "Get the signed-in user's preferences",
     tags: ["Me"],
@@ -65,18 +65,18 @@ export const getMyPreferences = oc
   .output(z.object({ ok: z.literal(true), preferences: UserPreferencesSchema }));
 
 /**
- * `update_my_preferences` → `PATCH /me/preferences`
- * (operationId `updateMyPreferences`).
+ * `update_private_preferences` → `PATCH /me/preferences`
+ * (operationId `updatePrivatePreferences`).
  *
  * Merge a partial preferences patch into the signed-in user's stored object — a
  * field the body carries is written, a field it omits is preserved, so preferences
  * update independently. CSRF-guarded; an unknown key is `invalid_request`/400 (the
  * closed schema). Echoes the full merged object back.
  */
-export const updateMyPreferences = oc
+export const updatePrivatePreferences = oc
   .route({
     method: "PATCH",
-    operationId: "updateMyPreferences",
+    operationId: "updatePrivatePreferences",
     path: "/me/preferences",
     summary: "Update the signed-in user's preferences",
     tags: ["Me"],
@@ -86,6 +86,6 @@ export const updateMyPreferences = oc
 
 /** The `me-preferences` domain's ops, merged into the root contract by `./index.ts`. */
 export const mePreferencesContract = {
-  get_my_preferences: getMyPreferences,
-  update_my_preferences: updateMyPreferences,
+  get_private_preferences: getPrivatePreferences,
+  update_private_preferences: updatePrivatePreferences,
 };
