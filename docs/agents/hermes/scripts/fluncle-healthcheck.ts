@@ -452,6 +452,10 @@ const AUTOMATION_CRONS: CronDef[] = [
   { cadenceMs: 7 * 24 * 60 * 60_000, match: "newsletter", service: "cron.newsletter" }, // weekly — a generous floor
   { cadenceMs: 24 * 60 * 60_000, match: "backup", service: "cron.backup" }, // daily DB backup → private R2
   { cadenceMs: 24 * 60 * 60_000, match: "logbook", service: "cron.logbook" }, // daily Logbook author — a generous floor
+  // The daily /reach snapshot. `reach` is a substring of no other cron's fluncle-<token> dir
+  // header (and no other token is a substring of "reach"), so claimCronDirs' longest-match-first
+  // pass gives it its own fluncle-reach dir cleanly — no collision guard needed.
+  { cadenceMs: 24 * 60 * 60_000, match: "reach", service: "cron.reach" },
   // The two nightly-audit crons: `audit-review` (12 chars) is claimed before `audit` (5) by
   // longest-match-first, and neither is a substring of the other's `fluncle-…` dir header, so
   // each claims its own dir cleanly (same pattern as studio-clip/clip-drip). Both daily.

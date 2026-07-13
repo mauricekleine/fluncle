@@ -1,0 +1,24 @@
+[Unit]
+Description=fluncle-reach — rave-02 host trigger for the daily /reach snapshot sweep (Fluncle's numbers across every platform)
+Documentation=https://github.com/mauricekleine/fluncle/blob/main/docs/agents/hermes/reach-timer/README.md
+Wants=network-online.target docker.service
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+# Root drives the Docker daemon; `docker exec -u hermes` runs the WORK as the unprivileged
+# hermes user. This sweep needs NO secrets file — `collect` is a bare trigger: the box's
+# agent-scoped token (which rides the container env like the other CLI sweeps) drives the
+# AGENT-tier record_platform_stats op, and every platform credential lives Worker-side. The
+# .sh/.ts pair is BAKED at /opt/hermes-scripts/ (Unit A — auto-updates from main via
+# pin-watch); this host unit only TRIGGERS it, and the sweep self-writes its /status marker
+# (cron-output.sh) so the prober stays honest.
+ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/reach-sweep.sh
+# One idempotent `fluncle admin reach collect` call; the Worker fetches ~10 platforms
+# best-effort. A generous ceiling for a slow platform or a cold Worker.
+TimeoutStartSec=300
+# Modest hardening for a root docker-driving oneshot.
+NoNewPrivileges=true
+ProtectControlGroups=true
+ProtectKernelTunables=true
+RestrictSUIDSGID=true
