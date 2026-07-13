@@ -96,6 +96,7 @@ const OPS_AUTOMATION_IDS = new Set([
   "cron.audit-review",
   "cron.backup",
   "cron.healthcheck",
+  "cron.reach",
   "self-deploy",
   "self-deploy-ssh",
 ]);
@@ -132,6 +133,7 @@ const SERVICE_LABELS: Record<string, string> = {
   "cron.observation": "Audio observations",
   "cron.publish-advance": "Publish advance",
   "cron.rank": "Track ranking",
+  "cron.reach": "Reach snapshot",
   // Two DIFFERENT render signals (not the agent twice): `cron.render` is the
   // conductor cron's last-run freshness; `render-box` is the scale-to-zero box's
   // reachability. The labels make the distinction obvious.
@@ -177,6 +179,7 @@ const SERVICE_SUBTITLES: Record<string, string> = {
   "cron.observation": "Fluncle's spoken field observations",
   "cron.publish-advance": "advances the publish queue on his own clock",
   "cron.rank": "ranks unvisited tracks by nearness to the archive",
+  "cron.reach": "counts the crew and how far the probes reached",
   "cron.render": "the conductor's last run",
   "cron.social-capture": "the live YouTube and TikTok URLs for each posted video",
   "cron.studio-clip": "cuts set videos into 9:16 clips",

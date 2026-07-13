@@ -1224,6 +1224,23 @@ export const SURFACES: readonly Surface[] = [
     weights: { status: "secondary" },
   },
   {
+    command: "fluncle admin reach collect",
+    exposedContent: [
+      "daily snapshot of Fluncle's numbers across every platform (followers / subscribers / plays / stars) → one append-only row per (platform, metric) behind the public /reach page (--no-agent)",
+    ],
+    kind: "cron",
+    name: "cron.reach",
+    operatorNotes:
+      "04:00 Amsterdam daily. A bare trigger (the catalogue-rank shape): fires the AGENT-tier record_platform_stats op once — the Worker fetches every Tier-1 platform best-effort and upserts one idempotent row per (platform, metric) keyed ${platform}:${metric}:${yyyy-mm-dd} (a same-day re-run lands inserted:0). Zero LLM tokens; the box's agent token drives it and every platform credential lives Worker-side (no new secret). Source: docs/agents/hermes/scripts/reach-sweep.*",
+    probeConfig: {
+      cadenceMs: 24 * 60 * MINUTE_MS,
+      cronName: "fluncle-reach",
+      kind: "cron",
+      schedule: { time: "04:00", tz: "Europe/Amsterdam" },
+    },
+    weights: { status: "secondary" },
+  },
+  {
     exposedContent: [
       "nightly codebase audit — one domain/night on a 7-day rotation; opens a PR the reviewer merges (claude -p, subscription auth)",
     ],
