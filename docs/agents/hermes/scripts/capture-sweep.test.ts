@@ -11,12 +11,14 @@ import { describe, expect, test } from "bun:test";
 import {
   bpmIsMissing,
   filterRejectedCandidates,
+  buildSearchQuery,
   buildSourceAudioKey,
   buildStickyProxyUrl,
   classifyChannelTrust,
   contentTypeForExt,
   durationWithinTolerance,
   extractSourceAudioSha256,
+  isTopicChannel,
   needsReenrichAfterCapture,
   normalizeChannelName,
   pickCandidate,
@@ -103,6 +105,64 @@ describe("durationWithinTolerance", () => {
   });
 });
 
+describe("isTopicChannel", () => {
+  test("recognizes an auto-generated <Artist> - Topic channel (whatever the spacing)", () => {
+    expect(isTopicChannel("Cyantific - Topic")).toBe(true);
+    expect(isTopicChannel("Netsky - Topic")).toBe(true);
+    expect(isTopicChannel("Chase & Status-Topic")).toBe(true);
+    expect(isTopicChannel("  Sub Focus - Topic  ")).toBe(true);
+  });
+
+  test("does not fire on a normal channel that merely mentions 'topic'", () => {
+    expect(isTopicChannel("UKF Drum & Bass")).toBe(false);
+    expect(isTopicChannel("Topical News Network")).toBe(false);
+    expect(isTopicChannel("Hot Topic Records")).toBe(false);
+    expect(isTopicChannel(undefined)).toBe(false);
+  });
+});
+
+describe("buildSearchQuery", () => {
+  test("variant 0 keeps the historic shape: every artist joined + the full title", () => {
+    expect(
+      buildSearchQuery({ artists: ["Commix", "Nu:Tone", "Logistics"], title: "Coffee" }, 0),
+    ).toBe("Commix Nu:Tone Logistics Coffee");
+    // Whitespace is collapsed but nothing is dropped — a currently-matching row cannot regress.
+    expect(buildSearchQuery({ artists: ["Sub Focus"], title: "Scarecrow" }, 0)).toBe(
+      "Sub Focus Scarecrow",
+    );
+  });
+
+  test("variant 1 de-constrains a multi-artist credit to the PRIMARY artist only", () => {
+    expect(
+      buildSearchQuery({ artists: ["Commix", "Nu:Tone", "Logistics"], title: "Coffee" }, 1),
+    ).toBe("Commix Coffee");
+  });
+
+  test("variant 1 strips a trailing version parenthetical/bracket", () => {
+    expect(buildSearchQuery({ artists: ["Technimatic"], title: "Parallel (radio edit)" }, 1)).toBe(
+      "Technimatic Parallel",
+    );
+    expect(buildSearchQuery({ artists: ["Artist"], title: "Song [VIP Mix]" }, 1)).toBe(
+      "Artist Song",
+    );
+    // A bare (non-parenthetical) version word like "VIP" is part of the real title — kept.
+    expect(buildSearchQuery({ artists: ["Nu:Tone"], title: "Missing Link VIP" }, 1)).toBe(
+      "Nu:Tone Missing Link VIP",
+    );
+  });
+
+  test("variant 1 equals variant 0 for a single-artist clean title — the caller skips the retry", () => {
+    const finding = { artists: ["Sub Focus"], title: "Scarecrow" };
+    expect(buildSearchQuery(finding, 1)).toBe(buildSearchQuery(finding, 0));
+  });
+
+  test("tolerates a missing artist list or title without throwing", () => {
+    expect(buildSearchQuery({ title: "Untitled" }, 0)).toBe("Untitled");
+    expect(buildSearchQuery({ artists: ["Solo"] }, 1)).toBe("Solo");
+    expect(buildSearchQuery({}, 1)).toBe("");
+  });
+});
+
 describe("buildSourceAudioKey", () => {
   test("builds <logId>/<sha>.<ext> and normalizes the ext", () => {
     expect(buildSourceAudioKey("004.7.2I", "abc123", ".WEBM")).toBe("004.7.2I/abc123.webm");
@@ -167,6 +227,20 @@ describe("classifyChannelTrust", () => {
     const trust = classifyChannelTrust(
       { channel: "1991", durationSec: 200, id: "x", title: "t" },
       { label: "1991" },
+    );
+    expect(trust).toBe(2);
+  });
+
+  test("trusts an <Artist> - Topic art-track channel (the label-delivered master)", () => {
+    const trust = classifyChannelTrust(
+      {
+        channel: "Cyantific - Topic",
+        channelId: "UC_topic",
+        durationSec: 200,
+        id: "x",
+        title: "Quiet Star",
+      },
+      { label: "Hospital Records" },
     );
     expect(trust).toBe(2);
   });
@@ -302,6 +376,37 @@ describe("pickCandidate", () => {
       opts,
     );
     expect(chosen?.candidate.id).toBe("untrusted-clean");
+  });
+
+  test("prefers an <Artist> - Topic art-track over a curated-aggregator upload of the same length", () => {
+    // Both pass the guard and both are tier-2 trust; the Topic upload wins on the `official`
+    // tiebreak (the label-delivered master), which its bare title alone would never have earned.
+    const chosen = pickCandidate(
+      [
+        {
+          channel: "UKF Drum & Bass",
+          durationSec: 281,
+          id: "ukf",
+          title: "Cyantific - Quiet Star",
+        },
+        { channel: "Cyantific - Topic", durationSec: 281, id: "topic", title: "Quiet Star" },
+      ],
+      { durationMs: 281_213, label: "Hospital Records" },
+      opts,
+    );
+    expect(chosen?.candidate.id).toBe("topic");
+    expect(chosen?.trust).toBe(2);
+  });
+
+  test("a Topic art-track does NOT rescue a wrong-length upload — the guard still rejects it", () => {
+    // Topic recognition is a RANKING signal only; it never relaxes the duration guard. A Topic
+    // upload 100s off the master is filtered out exactly like any other candidate.
+    const chosen = pickCandidate(
+      [{ channel: "Cyantific - Topic", durationSec: 381, id: "topic", title: "Quiet Star" }],
+      { durationMs: 281_213 },
+      opts,
+    );
+    expect(chosen).toBeNull();
   });
 });
 

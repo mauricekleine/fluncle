@@ -59,7 +59,8 @@
 // MIRRORS apps/web/src/lib/server/aws-sigv4.ts (unit-tested there via aws-sigv4.test.ts)
 // exactly like backup-sweep.ts — keep them in step. The pure helpers below
 // (buildStickyProxyUrl / durationWithinTolerance / buildSourceAudioKey / pickCandidate /
-// needsReenrichAfterCapture) are exported + unit-tested in capture-sweep.test.ts; `main()` is
+// needsReenrichAfterCapture / buildSearchQuery / isTopicChannel) are exported + unit-tested in
+// capture-sweep.test.ts; `main()` is
 // guarded behind `import.meta.main` so importing this module for the tests is side-effect
 // free (it does not spawn yt-dlp or touch R2).
 //
@@ -73,6 +74,17 @@
 //     match (remix/live/sped-up/nightcore/radio-edit) is the real failure mode — the
 //     DURATION GUARD (accept only within tolerance of the finding's durationMs) + a
 //     de-rank of remix/live markers catch it → `unmatched` on a mismatch.
+//   - FINDING the upload (the `unmatched`-rate fix, 2026-07-13). The primary search is
+//     `<artists> <title>`, and the ranker PREFERS a YouTube auto-generated `<Artist> - Topic`
+//     art-track: the label-delivered master, duration-exact and ISRC-tagged by construction, and
+//     recognized by CHANNEL name (its title is the bare song, so the title-only official marker
+//     misses it). And when the primary search returns ZERO RAW candidates — the over-constrained
+//     multi-artist credit or the odd-punctuation title that found nothing — ONE de-constrained
+//     fallback search (primary artist + a version-stripped title) is spent before declaring
+//     `unmatched`. The fallback fires ONLY on zero raw results, never when candidates came back
+//     and missed the guard (the song genuinely isn't there at that length, and a reshaped query
+//     cannot conjure it): the cost ceiling is `FLUNCLE_CAPTURE_QUERY_VARIANTS` billed searches per
+//     finding, and there is no loop. Neither change relaxes the duration guard or the gate below.
 //   - And a wrong-SONG match (same artist/label, right length, different track — the 005.9.9L
 //     defect) slips both, so every download passes THE FINGERPRINT GATE before storing: the
 //     captured bytes Chromaprint-matched against the track's ISRC-resolved official preview
@@ -148,6 +160,16 @@ const TOLERANCE_PCT = Number(process.env.FLUNCLE_CAPTURE_TOLERANCE_PCT ?? "0.03"
 // sometimes DRM-locked or bot-walled, and a different upload of the same track downloads
 // fine, so walk down the ranked list (fast-failing errors keep the cost low).
 const DOWNLOAD_ATTEMPTS = Number(process.env.FLUNCLE_CAPTURE_DOWNLOAD_ATTEMPTS ?? "3");
+
+// How many differently-shaped SEARCHES to spend on a finding before declaring `unmatched`.
+// Default 2 = the primary `<artists> <title>` query PLUS one de-constrained fallback (primary
+// artist + a version-stripped title, `buildSearchQuery` variant 1). The fallback is BILLED ONLY
+// when the primary returned ZERO RAW candidates — the over-constrained multi-artist credit or the
+// odd-punctuation title that found nothing on YouTube — never when candidates came back and missed
+// the duration guard (then the song genuinely isn't there at that length). This is the ONLY
+// per-search cost knob: the ceiling is exactly this many billed proxy searches per finding, and the
+// walk never loops. Set to 1 to disable the fallback and restore the single-search behaviour.
+const QUERY_VARIANTS = Number(process.env.FLUNCLE_CAPTURE_QUERY_VARIANTS ?? "2");
 
 const YT_SEARCH_TIMEOUT_MS = 60_000;
 const YT_DOWNLOAD_TIMEOUT_MS = 180_000;
@@ -292,6 +314,55 @@ const WRONG_VERSION_MARKERS =
   /\b(remix|bootleg|live|sped[\s-]?up|slowed|nightcore|8d audio|cover|karaoke|instrumental|mashup|edit|rework|vip mix)\b/i;
 const OFFICIAL_MARKERS = /(-\s*topic\b|official audio|official video|official music video)/i;
 
+// A YouTube auto-generated art-track lives on an "<Artist> - Topic" CHANNEL, generated per artist
+// from the label-delivered master: duration-exact, ISRC-tagged, the correct audio BY CONSTRUCTION.
+// The signal is the channel NAME (the video TITLE is the bare song), so `OFFICIAL_MARKERS` — which
+// tests the title — structurally misses it; this tests the channel. Recognizing it turns a Topic
+// upload into the top-ranked, safest candidate (a ranking tiebreak only; the fingerprint gate is
+// still the identity check, and the duration guard is untouched).
+const TOPIC_CHANNEL_MARKER = /-\s*topic\s*$/i;
+
+/** Whether a YouTube channel name is an auto-generated `<Artist> - Topic` art-track channel. */
+export function isTopicChannel(channel: string | undefined): boolean {
+  return channel ? TOPIC_CHANNEL_MARKER.test(channel.trim()) : false;
+}
+
+/**
+ * A trailing version parenthetical/bracket — "(radio edit)", "[VIP Mix]", "(Original Mix)" — used
+ * ONLY by the fallback query variant to de-noise a title. A DnB release nearly always carries the
+ * version at the END; stripping mid-string tokens would corrupt real titles, so this is anchored.
+ */
+const TRAILING_VERSION_PAREN = /\s*[([][^)\]]*[)\]]\s*$/;
+
+/**
+ * Build the yt-dlp search query for a finding. Variant 0 is the PRIMARY shape — every credited
+ * artist joined + the full title, whitespace-collapsed — kept byte-equivalent to the historic
+ * query so a matching row never regresses. Variant 1 is the DE-CONSTRAINED FALLBACK the sweep
+ * spends only when variant 0 found ZERO raw candidates: it drops the secondary artists (a
+ * multi-credit like "Commix Nu:Tone Logistics Coffee" over-specifies the search and can return
+ * nothing) and strips a trailing version parenthetical ("Technimatic Parallel (radio edit)" →
+ * "Technimatic Parallel"), so the reshaped query reaches the upload the strict one missed. When a
+ * single-artist clean title makes the two identical, the caller sees `variant1 === variant0` and
+ * skips the pointless second billed search.
+ */
+export function buildSearchQuery(
+  finding: { artists?: readonly string[]; title?: string },
+  variant: 0 | 1,
+): string {
+  const artists = finding.artists ?? [];
+  const title = finding.title ?? "";
+  const collapse = (value: string) => value.trim().replace(/\s+/g, " ");
+
+  if (variant === 0) {
+    return collapse(`${artists.join(" ")} ${title}`);
+  }
+
+  const primaryArtist = artists[0] ?? "";
+  const cleanedTitle = title.replace(TRAILING_VERSION_PAREN, "").trim();
+
+  return collapse(`${primaryArtist} ${cleanedTitle}`);
+}
+
 /**
  * Normalize a YouTube channel name (or a release label) to a comparison key: lowercase, map
  * `&`→`and`, strip the boilerplate suffixes labels tack on (records/recordings/music/audio/
@@ -368,6 +439,12 @@ export function classifyChannelTrust(
   if (channelId && TRUSTED_CHANNEL_IDS.has(channelId)) {
     return 2;
   }
+  // An `<Artist> - Topic` art-track is the artist's own auto-generated official channel (the
+  // label-delivered master) — the strongest correctness signal after the artist's declared
+  // channel, and it needs no per-artist allowlist. A ranking tiebreak only, like every tier.
+  if (isTopicChannel(candidate.channel)) {
+    return 2;
+  }
   if (channelKey && TRUSTED_CHANNEL_NAMES.has(channelKey)) {
     return 2;
   }
@@ -416,7 +493,9 @@ export function rankCandidates(
       candidate,
       clean: WRONG_VERSION_MARKERS.test(candidate.title) ? 0 : 1,
       delta: Math.abs(candidate.durationSec - targetSec),
-      official: OFFICIAL_MARKERS.test(candidate.title) ? 1 : 0,
+      // Title-borne official marker OR an `<Artist> - Topic` channel (the marker tests the title,
+      // which a Topic upload leaves bare) — so a Topic art-track ranks above a plain tier-2 upload.
+      official: OFFICIAL_MARKERS.test(candidate.title) || isTopicChannel(candidate.channel) ? 1 : 0,
       trust,
       verified: candidate.verified ? 1 : 0,
     }));
@@ -851,8 +930,7 @@ async function captureFinding(finding: CaptureFinding): Promise<FindingOutcome> 
   // and the R2 key root. A finding is its coordinate; a catalogue row is its track id.
   const keyRoot = logId ?? `catalogue/${trackId}`;
 
-  const artists = (finding.artists ?? []).join(" ");
-  const query = `${artists} ${finding.title ?? ""}`.trim();
+  const primaryQuery = buildSearchQuery(finding, 0);
   const proxyUrl = buildStickyProxyUrl({
     host: PROXY_HOST,
     password: PROXY_PASSWORD,
@@ -867,7 +945,23 @@ async function captureFinding(finding: CaptureFinding): Promise<FindingOutcome> 
     // Search candidates WITHOUT downloading, then RANK the ones that pass the SYMMETRIC duration
     // guard (trust no longer widens it; wrong-version titles de-rank) — avoids downloading a
     // wrong-length file. Trust is a ranking tiebreak only now; identity is the fingerprint gate.
-    const candidates = runYtSearch(proxyUrl, query);
+    let candidates = runYtSearch(proxyUrl, primaryQuery);
+
+    // THE BOUNDED FALLBACK (the `unmatched`-rate fix): the primary query found NOTHING on YouTube —
+    // the failure mode of an over-constrained multi-artist credit or an odd-punctuation title — so
+    // spend ONE more billed search on the de-constrained variant (primary artist + version-stripped
+    // title). Fired ONLY on ZERO RAW candidates: if uploads came back and merely missed the duration
+    // guard, the song genuinely isn't there at that length and a reshaped query cannot conjure it, so
+    // we do NOT pay for a second search. Skipped when the variant is identical (a single-artist clean
+    // title). Total searches are capped at QUERY_VARIANTS per finding — a hard ceiling, never a loop.
+    if (candidates.length === 0 && QUERY_VARIANTS > 1) {
+      const fallbackQuery = buildSearchQuery(finding, 1);
+      if (fallbackQuery && fallbackQuery !== primaryQuery) {
+        log(`primary query returned nothing — one de-constrained retry: "${fallbackQuery}"`);
+        candidates = runYtSearch(proxyUrl, fallbackQuery);
+      }
+    }
+
     const ranked = rankCandidates(candidates, {
       artistYoutubeChannelIds: finding.artistYoutubeChannelIds,
       durationMs: finding.durationMs,
