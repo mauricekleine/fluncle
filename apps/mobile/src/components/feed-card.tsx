@@ -146,10 +146,12 @@ export const FeedCard = memo(function FeedCard({ finding, active, soundOn, onTog
   // under it).
   const bottomFloor = insets.bottom + NATIVE_TAB_BAR_HEIGHT;
   // INVARIANT: the rail and the caption share a bottom line. Both bottom overlays anchor
-  // their bottom edge here (tab-bar floor + a little tightened air), so the rail's last
-  // label ("Sound") bottom-aligns with the caption's last line (the coordinate + Found
-  // row) — one line, not two staggered ones (operator device pass).
-  const bottomLine = bottomFloor + 10;
+  // their bottom edge here, so the rail's last label ("Sound") bottom-aligns with the
+  // caption's last line (the coordinate + Found row) — one line, not two staggered ones
+  // (operator device pass). The -24 is the Decks-proven correction (mix.tsx's footer
+  // clearance): the iOS 26 floating pill hugs the bottom tighter than inset + bar-height
+  // implies, so the naive sum left a dead band above the bar (operator flag 2026-07-14).
+  const bottomLine = bottomFloor - 24;
   // The scrim rises from the opaque bottom edge past the tallest overlay (the rail top)
   // and fades to nothing above it — sized so the rail/caption band sits in its ≥0.7 zone.
   const scrimH = scrimHeight(bottomLine + RAIL_BAND, height);
@@ -277,7 +279,9 @@ export const FeedCard = memo(function FeedCard({ finding, active, soundOn, onTog
               name="spotify"
               size={30}
               color={color.starlightCream}
-              style={styles.icon}
+              // Optical centering: MCI's grid pads this glyph left of the Ionicons axis —
+              // measured ~1.5pt off a rendered frame. The other two glyphs sit true.
+              style={[styles.icon, { transform: [{ translateX: 1.5 }] }]}
             />
           }
           label="Spotify"
@@ -316,7 +320,7 @@ export const FeedCard = memo(function FeedCard({ finding, active, soundOn, onTog
           — artist + title first); the gold coordinate sits below it at reduced prominence,
           still the identity mark but no longer out-shouting. Every glyph carries the firm
           per-glyph shadow, which composes over the scrim so it reads on light footage. */}
-      <View style={{ bottom: bottomLine, gap: 8, left: 16, position: "absolute", right: 96 }}>
+      <View style={{ bottom: bottomLine, gap: 8, left: 16, position: "absolute", right: 100 }}>
         <Text
           style={[font.title, styles.captionShadow, { color: color.starlightCream }]}
           numberOfLines={2}
@@ -391,7 +395,8 @@ const styles = StyleSheet.create({
   // axis on its own — no per-glyph translateX estimates.
   icon: ICON_SHADOW,
   logId: { color: color.eclipseGold, fontSize: 13 },
-  rail: { alignItems: "center", gap: 16, position: "absolute", right: 6 },
+  // right: 12 keeps the labels a real margin off the device edge (operator flag).
+  rail: { alignItems: "center", gap: 16, position: "absolute", right: 12 },
   railIcon: { alignItems: "center", height: 36, justifyContent: "center", width: 36 },
   // Wide enough for the longest stable label ("Spotify") on one line.
   railItem: { alignItems: "center", gap: 3, width: 80 },
