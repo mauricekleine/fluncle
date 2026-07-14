@@ -17,10 +17,10 @@
 // saved chain lands straight in the builder. The web route is gated by a self-lifting
 // archive-depth check; the app deliberately does not check it (the mix ops are public + open
 // in prod, and App Review must reach the tool) — see mix.ts.
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Pressable, ScrollView, Share, StyleSheet, Text, TextInput, View } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useQueryClient } from "@tanstack/react-query";
@@ -62,7 +62,11 @@ export default function MixScreen() {
 
   const tokens = chainTokens(chain);
   const tail = tokens[tokens.length - 1];
-  const { data: candidates = [] } = useMixableTracks({ exclude: tokens, idOrLogId: tail, taste });
+  const { data: candidates = [], isPending: railPending } = useMixableTracks({
+    exclude: tokens,
+    idOrLogId: tail,
+    taste,
+  });
 
   // Open-a-saved-set hydration: account.tsx hands the stored `?set=`/`?taste=` in as route
   // params (router.dismissTo → this tab). We resolve the tokens to chain snapshots and load
@@ -167,7 +171,7 @@ export default function MixScreen() {
               </Text>
             ) : null}
             <ChainList chain={chain} onRemove={remove} />
-            <Rail candidates={candidates} onAdd={add} />
+            <Rail candidates={candidates} onAdd={add} pending={railPending} />
           </ScrollView>
         ) : step === "taste" ? (
           <TasteStep onNext={() => setStep("opener")} onToggle={toggleTaste} taste={taste} />
@@ -318,7 +322,9 @@ function OpenerStep({
               );
             })}
           </View>
-        ) : searchPending ? null : (
+        ) : searchPending ? (
+          <PendingRows />
+        ) : (
           <Text style={[font.body, styles.stateText]}>Nothing by that name out here.</Text>
         )
       ) : seeded ? (
@@ -333,7 +339,9 @@ function OpenerStep({
               />
             ))}
           </View>
-        ) : openersPending ? null : (
+        ) : openersPending ? (
+          <PendingRows />
+        ) : (
           // Trimmed from the web's line (which offers "or search for a track yourself" — here
           // the search field sits right above). The honest half is kept.
           <Text style={[font.body, styles.stateText]}>
@@ -383,12 +391,28 @@ function ChainList({ chain, onRemove }: { chain: MixTrack[]; onRemove: (token: s
 
 // The rail off the chain's tail, tilted by taste, excluding the whole chain server-side. Each
 // row carries its reason chip (the whole explanation — no number ever). Copy reused verbatim.
+// Loading rows for the pending lists (the rail re-ranking, openers, live search): the
+// same quiet skeletons as the cold start. An empty-state line during a fetch is a false
+// claim (operator flag 2026-07-14 — "Quiet sector tonight" rendered while the rail was
+// still ranking), so pending ALWAYS reads as skeletons, never as an answer.
+function PendingRows({ count = 3 }: { count?: number }) {
+  return (
+    <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+      {Array.from({ length: count }, (_, i) => (
+        <FindingRowSkeleton isLast={i === count - 1} key={i} />
+      ))}
+    </View>
+  );
+}
+
 function Rail({
   candidates,
   onAdd,
+  pending,
 }: {
   candidates: MixCandidate[];
   onAdd: (track: MixTrack) => void;
+  pending: boolean;
 }) {
   return (
     <View style={styles.railSection}>
@@ -396,7 +420,9 @@ function Rail({
         <Text style={[font.label, styles.railHeading]}>What mixes in next, ranked</Text>
         <KeyNotationToggle />
       </View>
-      {candidates.length > 0 ? (
+      {pending ? (
+        <PendingRows />
+      ) : candidates.length > 0 ? (
         <View>
           {candidates.map((candidate) => (
             <MixRow
@@ -463,20 +489,26 @@ function HeaderAction({
 function useIsSignedIn(): boolean {
   const [signedIn, setSignedIn] = useState(false);
 
-  useEffect(() => {
-    let active = true;
-    void meFetch("/api/me")
-      .then((res) => res.json() as Promise<{ user: unknown }>)
-      .then((body) => {
-        if (active) {
-          setSignedIn(Boolean(body.user));
-        }
-      })
-      .catch(() => undefined);
-    return () => {
-      active = false;
-    };
-  }, []);
+  // Re-probe on every FOCUS, not once on mount: the tab stays mounted for the app's whole
+  // life, so a mount-only probe never learns about a sign-in that happened on the account
+  // modal (operator find 2026-07-14 — signed in, and the "Save set" pill never appeared).
+  // Returning to the Decks after the modal closes is a focus event, so the pill catches up.
+  useFocusEffect(
+    useCallback(() => {
+      let active = true;
+      void meFetch("/api/me")
+        .then((res) => res.json() as Promise<{ user: unknown }>)
+        .then((body) => {
+          if (active) {
+            setSignedIn(Boolean(body.user));
+          }
+        })
+        .catch(() => undefined);
+      return () => {
+        active = false;
+      };
+    }, []),
+  );
 
   return signedIn;
 }
