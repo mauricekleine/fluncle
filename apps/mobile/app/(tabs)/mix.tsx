@@ -39,7 +39,6 @@ import {
   buildMixShareUrl,
   MAX_TASTE_ARTISTS,
   mixReasonLabel,
-  parseSetParam,
   parseTasteParam,
   searchHitToMixTrack,
   serializeSet,
@@ -47,12 +46,7 @@ import {
   setToken,
 } from "@/lib/mix-set";
 import { chainTokens } from "@/lib/mix-store";
-import {
-  adaptTrackToMixTrack,
-  buildSaveSetBody,
-  resolveChainFromTokens,
-  SAVED_SETS_PATH,
-} from "@/lib/saved-sets";
+import { buildSaveSetBody, resolveSavedSet, SAVED_SETS_PATH } from "@/lib/saved-sets";
 import { color, font } from "@/theme/tokens";
 
 const TAGLINE =
@@ -94,12 +88,10 @@ export default function MixScreen() {
         body: JSON.stringify(bodyPayload),
         method: "POST",
       });
-      // Copy reused verbatim from the web ShareSetButton's toast (the Chrome Rule).
-      setSaveNotice(
-        response.ok
-          ? "Saved to your account. Find it under your findings."
-          : "Couldn't save that set.",
-      );
+      // On mobile a saved set lands under "Saved sets" on /account, NOT under findings — so the
+      // web toast's locator clause ("Find it under your findings.") would be false here. Drop it:
+      // literal and true beats verbatim-but-wrong (the Chrome Rule serves accuracy, not echo).
+      setSaveNotice(response.ok ? "Saved to your account." : "Couldn't save that set.");
     } catch {
       setSaveNotice("Couldn't save that set.");
     } finally {
@@ -490,11 +482,15 @@ function useIsSignedIn(): boolean {
 }
 
 // Open-a-saved-set hydration. account.tsx hands the stored `?set=`/`?taste=` in as route
-// params (router.dismissTo → this tab); we parse them, resolve each token to a chain snapshot
-// through the public `get_track` op (the web's `getMixTracksByTokens` has no public twin — a
-// token that can't resolve, e.g. an uncertified catalogue row, is dropped, mirroring that
-// helper's order-preserving flatMap), load the chain, then CONSUME the params once so a later
-// manual return to the tab never re-clobbers a chain the reader has since built.
+// params (router.dismissTo → this tab); we hand the whole `?set=` string to the public
+// `list_set_tracks` op (GET /mix/set-tracks — the server twin of the web loader's
+// `getMixTracksByTokens`), which resolves BOTH certified findings and uncertified catalogue
+// tracks in one order-preserving read, load the resulting chain, then CONSUME the params once so
+// a later manual return to the tab never re-clobbers a chain the reader has since built.
+//
+// This is the fix for the accounts-arc gap: the old per-token `get_track` walk resolved only
+// certified findings, so a saved set's uncertified tokens (the ones the Decks rail actively
+// serves) silently dropped. `list_set_tracks` resolves both, so a set opens whole.
 function useSavedSetHydration(load: (chain: MixTrack[], taste: string[]) => void): void {
   const params = useLocalSearchParams<{ set?: string; taste?: string }>();
   const router = useRouter();
@@ -510,19 +506,14 @@ function useSavedSetHydration(load: (chain: MixTrack[], taste: string[]) => void
     }
     consumedRef.current = setParam;
 
-    const tokens = parseSetParam(setParam);
     const tasteSlugs = parseTasteParam(tasteParam);
 
     void (async () => {
-      const resolved = await resolveChainFromTokens(tokens, async (token) => {
-        try {
-          const res = await queryClient.fetchQuery(
-            orpc.get_track.queryOptions({ input: { idOrLogId: token } }),
-          );
-          return "track" in res ? adaptTrackToMixTrack(res.track) : null;
-        } catch {
-          return null;
-        }
+      const resolved = await resolveSavedSet(setParam, async (set) => {
+        const res = await queryClient.fetchQuery(
+          orpc.list_set_tracks.queryOptions({ input: { set } }),
+        );
+        return res.tracks;
       });
       load(resolved, tasteSlugs);
       // Consume the params so re-focusing the tab later doesn't re-hydrate over a fresh chain.

@@ -3,17 +3,16 @@
 // or `bun src/lib/saved-sets.test.ts`.
 //
 // These pin the POST body assembly, the tolerant list parse (junk in the wire must never
-// crash a signed-in account view or resurrect a partial row), the get_track→MixTrack adapter,
-// and the token→chain hydration (order preserved, unresolved tokens dropped, duplicates
-// collapsed) with the token fetcher mocked.
+// crash a signed-in account view or resurrect a partial row), and the one-shot set hydration
+// through the `list_set_tracks` op (its rows pass through in order; an empty seed short-circuits
+// with no round trip; a fault degrades to an empty chain) with the op fetcher mocked.
 
 import { type MixTrack } from "@fluncle/contracts";
 import {
-  adaptTrackToMixTrack,
   buildSaveSetBody,
   parseRemoteSetsList,
   type RemoteSavedSet,
-  resolveChainFromTokens,
+  resolveSavedSet,
 } from "@/lib/saved-sets";
 
 function assertEqual<T>(actual: T, expected: T, message = "assertion failed"): void {
@@ -58,54 +57,56 @@ assertEqual(parseRemoteSetsList(null).length, 0, "null body → []");
 assertEqual(parseRemoteSetsList({ savedSets: "nope" }).length, 0, "non-array savedSets → []");
 assertEqual(parseRemoteSetsList({}).length, 0, "absent savedSets → []");
 
-// 3. adaptTrackToMixTrack marks a get_track finding certified and carries its coordinate.
-const adapted = adaptTrackToMixTrack({
-  artists: ["Netsky"],
-  durationMs: 240_000,
-  key: "G# minor",
-  logId: "004.7.2I",
-  spotifyUrl: "https://open.spotify.com/track/x",
-  title: "Rio",
-  trackId: "t-1",
-});
-assertEqual(adapted.certified, true, "a get_track finding is always certified");
-assertEqual(adapted.logId, "004.7.2I", "the coordinate rides as logId");
-assertEqual(adapted.title, "Rio", "title carried");
-
-// 4. resolveChainFromTokens walks tokens in order, drops the unresolved, collapses dupes.
-const certified = (logId: string): MixTrack => ({
+// 3. resolveSavedSet hands the whole `?set=` string to the op ONCE and passes its rows through in
+// order — a MIXED chain (a certified finding + an uncertified catalogue track) hydrates whole,
+// which the old per-token get_track walk could not do (it dropped the uncertified token).
+const certified: MixTrack = {
   artists: ["Netsky"],
   certified: true,
   durationMs: 240_000,
-  logId,
-  title: `Track ${logId}`,
-  trackId: `t-${logId}`,
-});
-
-const resolvedCalls: string[] = [];
-const fetcher = async (token: string): Promise<MixTrack | null> => {
-  resolvedCalls.push(token);
-  // "004.7.2I" and "005.1.0" resolve; the Spotify-id token (uncertified) does not.
-  if (token === "004.7.2I") {
-    return certified("004.7.2I");
-  }
-  if (token === "005.1.0") {
-    return certified("005.1.0");
-  }
-  return null;
+  logId: "004.7.2I",
+  title: "Rio",
+  trackId: "t-rio",
+};
+const uncertified: MixTrack = {
+  artists: ["Unknown Artist"],
+  certified: false,
+  durationMs: 300_000,
+  title: "Catalogue Roller",
+  trackId: "4iV5W9uYEdYUVa79Axb7Rh",
 };
 
-const chain = await resolveChainFromTokens(
-  ["004.7.2I", "4iV5W9uYEdYUVa79Axb7Rh", "005.1.0", "004.7.2I"],
-  fetcher,
-);
-assertEqual(chain.length, 2, "the two certified tokens resolve; the uncertified one drops");
-assertEqual(chain[0]?.logId, "004.7.2I", "token order is preserved (a set is a sequence)");
-assertEqual(chain[1]?.logId, "005.1.0", "the second certified token follows");
-assertEqual(resolvedCalls.length, 3, "the duplicate token is not fetched twice");
+const fetchCalls: string[] = [];
+const fetchSet = async (set: string): Promise<MixTrack[]> => {
+  fetchCalls.push(set);
+  // The op resolves the whole chain in order — both kinds — and returns MixTrack rows.
+  return [certified, uncertified];
+};
 
-// A total wipe-out (every token unresolvable) yields an empty chain, never a throw.
-const empty = await resolveChainFromTokens(["zzz"], async () => null);
-assertEqual(empty.length, 0, "all-unresolved → empty chain, no throw");
+const chain = await resolveSavedSet("004.7.2I,4iV5W9uYEdYUVa79Axb7Rh", fetchSet);
+assertEqual(chain.length, 2, "both the certified and the uncertified token hydrate");
+assertEqual(chain[0]?.trackId, "t-rio", "order is preserved (a set is a sequence)");
+assertEqual(chain[1]?.certified, false, "the uncertified catalogue track rides in the chain");
+assertEqual(fetchCalls.length, 1, "the whole set is hydrated in ONE op read, not per-token");
+assertEqual(
+  fetchCalls[0],
+  "004.7.2I,4iV5W9uYEdYUVa79Axb7Rh",
+  "the raw set string is handed through",
+);
+
+// 4. An empty / whitespace seed short-circuits with no round trip.
+const emptyCalls: string[] = [];
+const empty = await resolveSavedSet("  ", async (set) => {
+  emptyCalls.push(set);
+  return [];
+});
+assertEqual(empty.length, 0, "an empty seed yields an empty chain");
+assertEqual(emptyCalls.length, 0, "an empty seed never calls the op");
+
+// 5. A fault (network/parse) degrades to an empty chain, never a throw that blanks the tab.
+const faulted = await resolveSavedSet("004.7.2I", async () => {
+  throw new Error("network down");
+});
+assertEqual(faulted.length, 0, "a fault → empty chain, no throw");
 
 console.log("saved-sets.test.ts: all checks passed");

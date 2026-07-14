@@ -5,7 +5,8 @@
 // The rail itself (`list_mixable_tracks`) lives in ./tracks.ts, where its `/tracks/{id}/…`
 // path belongs.
 
-import { getMixOpeners, listMixableArtists } from "../tracks";
+import { parseSetParam } from "../../mix-set";
+import { getMixOpeners, getMixTracksByTokens, listMixableArtists } from "../tracks";
 import { apiFault, type Implementer } from "./_shared";
 
 /** The default/max number of artists the taste picker's grid offers. */
@@ -65,8 +66,25 @@ export function mixHandlers(os: Implementer) {
     }
   });
 
+  // `list_set_tracks` — hydrate a whole `?set=` chain in one read, the public twin of the web
+  // `/mix` loader's `getMixTracksByTokens`. Parsed by the SAME tolerant `parseSetParam` the loader
+  // uses (order preserved, dupes collapsed, 32-token cap, junk dropped without a DB hit); an
+  // unknown token thins the chain rather than faulting. Public: a set row carries only what an
+  // opener already exposes.
+  const listSetTracksHandler = os.list_set_tracks.handler(async ({ input }) => {
+    try {
+      const tokens = parseSetParam(input.set);
+      const tracks = tokens.length > 0 ? await getMixTracksByTokens(tokens) : [];
+
+      return { ok: true, tracks } as const;
+    } catch (error) {
+      throw apiFault(error);
+    }
+  });
+
   return {
     list_mix_openers: listMixOpenersHandler,
     list_mixable_artists: listMixableArtistsHandler,
+    list_set_tracks: listSetTracksHandler,
   };
 }

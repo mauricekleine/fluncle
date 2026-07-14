@@ -140,6 +140,10 @@ const PUBLIC_UNAUTH_OPS = new Set<string>([
   "list_mix_openers",
   "list_mixable_artists",
   "list_mixable_tracks",
+  // Hydrate a whole shared `?set=` chain — the public twin of the web /mix loader's
+  // getMixTracksByTokens. Public for the same reason as the openers/rail: a set row carries
+  // only what every track chip already prints (keys, BPMs, artist names, cover).
+  "list_set_tracks",
   "list_mixtapes",
   "list_stories",
   // The public /reach read — Fluncle's numbers across every platform, over time.

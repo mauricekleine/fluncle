@@ -10,12 +10,14 @@ import { AGENT_TOKEN, OPERATOR_TOKEN, readJson, setAdminTokenEnv } from "./orpc-
 
 const getMixableTracks = vi.fn();
 const getMixableOrder = vi.fn();
+const getMixTracksByTokens = vi.fn();
 
 vi.mock("./tracks", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./tracks")>();
 
   return {
     ...actual,
+    getMixTracksByTokens: (...args: unknown[]) => getMixTracksByTokens(...args),
     getMixableOrder: (...args: unknown[]) => getMixableOrder(...args),
     getMixableTracks: (...args: unknown[]) => getMixableTracks(...args),
   };
@@ -40,6 +42,7 @@ beforeAll(setAdminTokenEnv);
 beforeEach(() => {
   getMixableTracks.mockReset();
   getMixableOrder.mockReset();
+  getMixTracksByTokens.mockReset();
 });
 
 function get(url: string, token?: string): Request {
@@ -201,5 +204,97 @@ describe("oRPC get_mixable_order (GET /admin/tracks/mixable-order)", () => {
     expect(response?.status).toBe(400);
     const body = (await readJson(response)) as { message?: string };
     expect(body.message).toContain("No finding for");
+  });
+});
+
+describe("oRPC list_set_tracks (GET /mix/set-tracks)", () => {
+  // A certified finding is named by its Log ID; an uncertified track by its 22-char Spotify id.
+  // The op parses the `?set=` grammar with the SAME tolerant parseSetParam the /mix loader uses,
+  // hands the clean token list to getMixTracksByTokens, and returns the rows it resolves — in the
+  // order the tokens arrived (a set is a sequence). The DB read is mocked; the handler's job under
+  // test is the parse → resolve → envelope wiring.
+  const CERTIFIED = {
+    artists: ["Netsky"],
+    certified: true,
+    durationMs: 240000,
+    key: "G# minor",
+    logId: "004.7.2I",
+    spotifyUrl: "https://open.spotify.com/track/a",
+    title: "Rio",
+    trackId: "track-rio",
+  };
+  const UNCERTIFIED = {
+    artists: ["Unknown Artist"],
+    certified: false,
+    durationMs: 300000,
+    spotifyUrl: "https://open.spotify.com/track/b",
+    title: "Catalogue Roller",
+    trackId: "4iV5W9uYEdYUVa79Axb7Rh",
+  };
+
+  const URL_BASE = "https://www.fluncle.com/api/v1/mix/set-tracks";
+
+  it("resolves a MIXED certified + uncertified chain in order, no auth needed", async () => {
+    // The resolver preserves token order; the handler returns its rows verbatim.
+    getMixTracksByTokens.mockResolvedValueOnce([CERTIFIED, UNCERTIFIED]);
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(get(`${URL_BASE}?set=004.7.2I,4iV5W9uYEdYUVa79Axb7Rh`));
+
+    expect(response?.status).toBe(200);
+    // The parsed token list — a Log ID + a Spotify id — reaches the resolver in order.
+    expect(getMixTracksByTokens).toHaveBeenCalledWith(["004.7.2I", "4iV5W9uYEdYUVa79Axb7Rh"]);
+
+    const body = (await readJson(response)) as {
+      ok: boolean;
+      tracks: { certified: boolean; logId?: string; trackId: string }[];
+    };
+    expect(body.ok).toBe(true);
+    expect(body.tracks.map((track) => track.trackId)).toEqual([
+      "track-rio",
+      "4iV5W9uYEdYUVa79Axb7Rh",
+    ]);
+    // The unlit register survives the round trip: the uncertified row carries no coordinate.
+    expect(body.tracks[1]?.certified).toBe(false);
+    expect(body.tracks[1]).not.toHaveProperty("logId");
+  });
+
+  it("drops junk tokens + duplicates quietly before the resolver is called", async () => {
+    getMixTracksByTokens.mockResolvedValueOnce([CERTIFIED]);
+
+    const { handleOrpc } = await import("./orpc");
+    // "not-a-token" and "zzz" fail both grammars; the repeated Log ID collapses.
+    await handleOrpc(get(`${URL_BASE}?set=004.7.2I,not-a-token,004.7.2I,zzz`));
+
+    expect(getMixTracksByTokens).toHaveBeenCalledWith(["004.7.2I"]);
+  });
+
+  it("caps the chain at 32 tokens (MAX_SET_LENGTH), the loader's own guard", async () => {
+    getMixTracksByTokens.mockResolvedValueOnce([]);
+
+    // 40 distinct valid 22-char Spotify ids; only the first 32 survive the cap.
+    const ids = Array.from({ length: 40 }, (_, i) =>
+      `t${String(i).padStart(2, "0")}`.padEnd(22, "x"),
+    );
+
+    const { handleOrpc } = await import("./orpc");
+    await handleOrpc(get(`${URL_BASE}?set=${ids.join(",")}`));
+
+    const passed = getMixTracksByTokens.mock.calls[0]?.[0] as string[];
+    expect(passed).toHaveLength(32);
+    expect(passed).toEqual(ids.slice(0, 32));
+  });
+
+  it("short-circuits an empty / all-junk set to { ok: true, tracks: [] } with no DB read", async () => {
+    const { handleOrpc } = await import("./orpc");
+
+    const empty = await handleOrpc(get(`${URL_BASE}?set=`));
+    expect(empty?.status).toBe(200);
+    expect(await readJson(empty)).toEqual({ ok: true, tracks: [] });
+
+    const junk = await handleOrpc(get(`${URL_BASE}?set=nope,also-not-a-token`));
+    expect(await readJson(junk)).toEqual({ ok: true, tracks: [] });
+
+    expect(getMixTracksByTokens).not.toHaveBeenCalled();
   });
 });

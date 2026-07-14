@@ -11,7 +11,6 @@
 // `fetch` mocked — the wiring (meFetch, the store commit, navigation) lives in the screens.
 
 import { type MixTrack } from "@fluncle/contracts";
-import { setToken } from "@/lib/mix-set";
 
 /** The API path for the saved-sets endpoints (list/save/delete). */
 export const SAVED_SETS_PATH = "/api/me/saved-sets";
@@ -80,62 +79,29 @@ function isRemoteSavedSet(value: unknown): value is RemoteSavedSet {
 }
 
 /**
- * Adapt a `get_track` finding into a chain row. A `get_track` "track" result is always a
- * CERTIFIED finding (it resolved a log-page target), so `certified` is true and the coordinate
- * rides as `logId` — the same shape `searchHitToMixTrack` builds for the opener search. Typed
- * as a Pick of just the fields a row needs, so the adapter stays decoupled + unit-testable.
+ * Hydrate a whole saved set from its serialized `?set=` token string in ONE read, via the
+ * injected `fetchSet` (the public `list_set_tracks` op — GET /mix/set-tracks). That op is the
+ * server twin of the web `/mix` loader's `getMixTracksByTokens`: it parses the token grammar
+ * (Log IDs + Spotify ids mixed), resolves BOTH certified findings and uncertified catalogue
+ * tracks, preserves order, collapses duplicates, caps at 32, and omits any token it cannot
+ * resolve. So this wrapper only guards the edges the op does not see — an empty seed short-
+ * circuits with no round trip, and a network/parse fault degrades to an empty chain rather than
+ * blanking the tab. The rows come back as `MixTrack` already; there is nothing to adapt.
+ *
+ * This replaces the old per-token `get_track` walk, which resolved ONLY certified findings and
+ * silently dropped every uncertified token — the exact tokens the Decks rail serves.
  */
-export function adaptTrackToMixTrack(item: {
-  albumImageUrl?: string;
-  artists: string[];
-  bpm?: number;
-  durationMs: number;
-  key?: string;
-  logId?: string;
-  spotifyUrl?: string;
-  title: string;
-  trackId: string;
-}): MixTrack {
-  return {
-    albumImageUrl: item.albumImageUrl,
-    artists: item.artists,
-    bpm: item.bpm,
-    certified: true,
-    durationMs: item.durationMs,
-    key: item.key,
-    logId: item.logId,
-    spotifyUrl: item.spotifyUrl,
-    title: item.title,
-    trackId: item.trackId,
-  };
-}
-
-/**
- * Resolve an ordered token list into chain rows, walking the tokens in order (a set is a
- * sequence — mirrors the web's `getMixTracksByTokens`, which orders by the tokens, not the
- * rows). Each token is resolved through the injected `fetchToken`; a token that resolves to
- * `null` (an uncertified catalogue track `get_track` can't reach, a dead coordinate, a
- * network fault) is DROPPED rather than blanking the whole load. Duplicates are collapsed by
- * set token, so a set never carries the same row twice.
- */
-export async function resolveChainFromTokens(
-  tokens: string[],
-  fetchToken: (token: string) => Promise<MixTrack | null>,
+export async function resolveSavedSet(
+  serializedSet: string,
+  fetchSet: (set: string) => Promise<MixTrack[]>,
 ): Promise<MixTrack[]> {
-  const seen = new Set<string>();
-  const chain: MixTrack[] = [];
-
-  for (const token of tokens) {
-    if (seen.has(token)) {
-      continue;
-    }
-    seen.add(token);
-
-    const track = await fetchToken(token);
-    if (track && !chain.some((existing) => setToken(existing) === setToken(track))) {
-      chain.push(track);
-    }
+  if (!serializedSet.trim()) {
+    return [];
   }
 
-  return chain;
+  try {
+    return await fetchSet(serializedSet);
+  } catch {
+    return [];
+  }
 }

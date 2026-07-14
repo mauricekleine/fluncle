@@ -67,7 +67,13 @@ import { tracksContract } from "./tracks";
 // Re-export the per-op contracts so existing importers (and the typed client)
 // keep their entrypoints.
 export { ArtistListItemSchema, artistsContract, getArtist, listArtists } from "./artists";
-export { listMixableArtists, listMixOpeners, MixArtistSchema, mixContract } from "./mix";
+export {
+  listMixableArtists,
+  listMixOpeners,
+  listSetTracks,
+  MixArtistSchema,
+  mixContract,
+} from "./mix";
 export { GalaxyListItemSchema, galaxiesContract, getGalaxy, listGalaxies } from "./galaxies";
 export { getGraphPreview, GraphEntityKindSchema, graphContract, GraphPreviewSchema } from "./graph";
 export {
