@@ -399,7 +399,11 @@ function SignedInPanel({
           device you sign in on.
         </Text>
         <Text style={[font.body, styles.prefsFieldLabel]}>Key notation</Text>
-        <KeyNotationToggle />
+        {/* Hug the segments: the modal's column stretches children full-width, which
+            left the two small segments marooned in a plate-wide well. */}
+        <View style={styles.prefsToggle}>
+          <KeyNotationToggle />
+        </View>
         <NotationPreview />
       </View>
 
@@ -702,6 +706,7 @@ const styles = StyleSheet.create({
   muted: { color: color.stardust },
   prefs: { gap: 8, marginTop: 8 },
   prefsFieldLabel: { color: color.starlightCream, fontSize: 14, fontWeight: "600", marginTop: 4 },
+  prefsToggle: { alignSelf: "flex-start" },
   setDelete: {
     borderColor: color.reentryRed,
     borderRadius: radius.md,
