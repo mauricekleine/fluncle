@@ -5,6 +5,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // resolve). The tools' `execute` closures — the only DB-touching part — are covered by the
 // route at runtime, not here.
 const readOptionalEnv = vi.hoisted(() => vi.fn<(name: string) => Promise<string | undefined>>());
+const getTracksByLogIds = vi.hoisted(() =>
+  vi.fn<(logIds: string[]) => Promise<Record<string, unknown>>>(),
+);
 
 vi.mock("./env", () => ({ readOptionalEnv }));
 vi.mock("./search", () => ({ searchArchive: vi.fn() }));
@@ -12,6 +15,7 @@ vi.mock("./log-resolver", () => ({ resolveLogPageTarget: vi.fn() }));
 vi.mock("./status", () => ({ getServiceStatuses: vi.fn() }));
 vi.mock("./tracks", () => ({
   getRandomTrack: vi.fn(),
+  getTracksByLogIds,
   listTracks: vi.fn(),
   toPublicTrackListItem: (item: unknown) => item,
 }));
@@ -28,6 +32,10 @@ import {
 beforeEach(() => {
   readOptionalEnv.mockReset();
   readOptionalEnv.mockResolvedValue(undefined);
+  getTracksByLogIds.mockReset();
+  // Default: the hydrator finds nothing, so search falls back to the bare hit shape. Tests that
+  // exercise the rich card path override this with the findings they expect hydrated.
+  getTracksByLogIds.mockResolvedValue({});
 });
 
 afterEach(() => {
@@ -133,7 +141,149 @@ describe("buildChatTools — the MCP hands", () => {
     expect(result.findings[0]?.title).toBe("Better Places");
     expect(result.findings[0]?.coordinate).toBe("004.7.2I");
   });
+
+  it("hydrates search findings with cover, duration, and a hasPreview flag (the card fields)", async () => {
+    const { searchArchive } = await import("./search");
+    vi.mocked(searchArchive).mockResolvedValue({
+      degraded: false,
+      entities: [],
+      kind: "token",
+      results: [
+        {
+          artists: ["Nu:Tone"],
+          certified: true,
+          logId: "004.7.2I",
+          title: "Better Places",
+          trackId: "a",
+        },
+      ],
+    } as never);
+
+    // The batch hydrator resolves the certified hit to its full DTO — the source of the cover,
+    // the duration, and the (private, expiring) previewUrl the card must NOT receive.
+    getTracksByLogIds.mockResolvedValue({
+      "004.7.2I": {
+        addedAt: "2026-01-01",
+        albumImageUrl: "https://cover.example/better-places.jpg",
+        artists: ["Nu:Tone"],
+        bpm: 174,
+        durationMs: 210_000,
+        key: "F minor",
+        logId: "004.7.2I",
+        previewUrl: "https://deezer.example/expiring-token.mp3",
+        title: "Better Places",
+      },
+    });
+
+    const tools = buildChatTools();
+    const execute = tools.search_archive?.execute;
+    if (typeof execute !== "function") {
+      throw new Error("search_archive executor missing");
+    }
+
+    const result = (await execute({ query: "nu:tone" }, {} as never)) as {
+      findings: { albumImageUrl?: string; durationMs?: number; hasPreview?: boolean }[];
+    };
+
+    expect(result.findings[0]?.albumImageUrl).toBe("https://cover.example/better-places.jpg");
+    expect(result.findings[0]?.durationMs).toBe(210_000);
+    expect(result.findings[0]?.hasPreview).toBe(true);
+  });
+
+  it("never leaks a previewUrl onto any tool output (the expiring token stays server-side)", async () => {
+    const { searchArchive } = await import("./search");
+    vi.mocked(searchArchive).mockResolvedValue({
+      degraded: false,
+      entities: [],
+      kind: "token",
+      results: [
+        {
+          artists: ["Nu:Tone"],
+          certified: true,
+          logId: "004.7.2I",
+          title: "Better Places",
+          trackId: "a",
+        },
+      ],
+    } as never);
+
+    getTracksByLogIds.mockResolvedValue({
+      "004.7.2I": {
+        addedAt: "2026-01-01",
+        albumImageUrl: "https://cover.example/better-places.jpg",
+        artists: ["Nu:Tone"],
+        durationMs: 210_000,
+        logId: "004.7.2I",
+        previewUrl: "https://deezer.example/expiring-token.mp3",
+        title: "Better Places",
+      },
+    });
+
+    const tools = buildChatTools();
+    const execute = tools.search_archive?.execute;
+    if (typeof execute !== "function") {
+      throw new Error("search_archive executor missing");
+    }
+
+    const result = await execute({ query: "nu:tone" }, {} as never);
+
+    expect(hasKeyDeep(result, "previewUrl")).toBe(false);
+  });
+
+  it("applies the certified filter BEFORE the hydrator (no uncertified logId is looked up)", async () => {
+    const { searchArchive } = await import("./search");
+    vi.mocked(searchArchive).mockResolvedValue({
+      degraded: false,
+      entities: [],
+      kind: "token",
+      results: [
+        {
+          artists: ["Nu:Tone"],
+          certified: true,
+          logId: "004.7.2I",
+          title: "Better Places",
+          trackId: "a",
+        },
+        {
+          artists: ["Someone"],
+          certified: false,
+          // An uncertified row can carry a coordinate-shaped id; it must still never be hydrated.
+          logId: "999.9.9Z",
+          title: "An Uncertified Cut",
+          trackId: "b",
+        },
+      ],
+    } as never);
+
+    const tools = buildChatTools();
+    const execute = tools.search_archive?.execute;
+    if (typeof execute !== "function") {
+      throw new Error("search_archive executor missing");
+    }
+
+    await execute({ query: "nu:tone" }, {} as never);
+
+    expect(getTracksByLogIds).toHaveBeenCalledTimes(1);
+    const lookedUp = getTracksByLogIds.mock.calls[0]?.[0] ?? [];
+    expect(lookedUp).toContain("004.7.2I");
+    expect(lookedUp).not.toContain("999.9.9Z");
+  });
 });
+
+/** Walk any value and report whether `key` appears anywhere in it (arrays + nested objects). */
+function hasKeyDeep(value: unknown, key: string): boolean {
+  if (Array.isArray(value)) {
+    return value.some((entry) => hasKeyDeep(entry, key));
+  }
+
+  if (typeof value === "object" && value !== null) {
+    return Object.entries(value).some(
+      ([entryKey, entryValue]) => entryKey === key || hasKeyDeep(entryValue, key),
+    );
+  }
+
+  return false;
+}
 
 describe("streamChat — the unprovisioned guard", () => {
   it("returns null when OPENROUTER_API_KEY is unset (the route answers 503)", async () => {
