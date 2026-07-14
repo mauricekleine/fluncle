@@ -169,14 +169,19 @@ export function SaveSetDialog({
       open={open}
     >
       <DialogTrigger render={<Button className="shrink-0" variant="outline" />}>
-        <BookmarkSimpleIcon className="size-4" weight="bold" />
+        <BookmarkSimpleIcon aria-hidden="true" className="size-4" weight="bold" />
         Save set
       </DialogTrigger>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Save set</DialogTitle>
+          {/* The overwrite clause shows ONLY when a stable reference exists — for a fresh
+              chain there is no "set you opened", and claiming one would be a false locator
+              (the same defect class the toast fix removed). */}
           <DialogDescription>
-            Name it and I&rsquo;ll keep it on your account. Saving writes to the set you opened.
+            {reference?.id
+              ? "Name it and I'll keep it on your account. I'll update the set you opened."
+              : "Name it and I'll keep it on your account."}
           </DialogDescription>
         </DialogHeader>
         <form className="grid gap-4" onSubmit={(event) => void save(event)}>
