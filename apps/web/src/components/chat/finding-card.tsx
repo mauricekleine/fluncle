@@ -99,7 +99,9 @@ export function FindingCard({
       )}
 
       <div className="min-w-0 flex-1">
-        <p className="truncate text-sm font-medium text-foreground">{trackLine}</p>
+        {/* The ratified title register (.track-title, DESIGN.md §3): the music is the loudest
+            text on the card, same as every TrackRow — never a quiet caption. */}
+        <p className="track-title">{trackLine}</p>
         {logId ? (
           <Link
             aria-label={`Open the log page for ${trackLine}`}

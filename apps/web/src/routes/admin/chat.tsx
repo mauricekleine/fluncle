@@ -111,7 +111,7 @@ function ChatWorkbench() {
                 ) : undefined}
 
                 {error ? (
-                  <Marker variant="border" role="status">
+                  <Marker variant="border" role="alert">
                     <MarkerIcon>
                       <WarningCircleIcon className="text-destructive" />
                     </MarkerIcon>
@@ -219,7 +219,7 @@ function renderParts(message: FluncleUIMessage, notation: KeyNotation): ReactNod
         return (
           <Fragment key={key}>
             {call}
-            <Marker variant="border" role="status">
+            <Marker variant="border" role="alert">
               <MarkerIcon>
                 <WarningCircleIcon className="text-destructive" />
               </MarkerIcon>
