@@ -952,6 +952,15 @@ body::before {
   width: min(100%, 44rem);
 }
 
+/* The CONSOLE plate — /reach's full-width telemetry variant (operator ruling,
+   2026-07-14). Same material as the logbook plate (the card wash, the hairline,
+   the radius: it is still Fluncle's plate), opened up to instrument-panel width.
+   The masthead stays the plate's one display moment; everything inside runs in
+   the reading register. */
+.log-plate--console {
+  width: min(100%, 87.5rem);
+}
+
 @supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
   .log-plate {
     -webkit-backdrop-filter: blur(18px) saturate(125%);
