@@ -28,9 +28,11 @@
 
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import {
-  type ModelMessage,
-  type TextStreamPart,
+  type InferUITools,
   type ToolSet,
+  type UIDataTypes,
+  type UIMessage,
+  convertToModelMessages,
   stepCountIs,
   streamText,
   tool,
@@ -132,7 +134,7 @@ function clampInt(value: unknown, max: number, fallback: number): number {
  * the schemas, the grounding filter) without a database — the `execute` closures are the
  * only part that touches Turso, and they are exercised by the route, not the unit test.
  */
-export function buildChatTools(): ToolSet {
+export function buildChatTools() {
   return {
     get_random_track: tool({
       description: "Pull one random certified finding from the archive.",
@@ -215,7 +217,7 @@ export function buildChatTools(): ToolSet {
           .describe("What to dig for — a name, a label, a key/BPM, or 'sounds like <track>'."),
       }),
     }),
-  };
+  } satisfies ToolSet;
 }
 
 /** A search hit, reduced to the facts Fluncle speaks from (certified rows only reach here). */
@@ -281,83 +283,45 @@ async function summarizeStatus(): Promise<{ headline: string; ok: boolean }> {
   return { headline: `Not all systems up: ${parts.join("; ")}.`, ok: false };
 }
 
-// ── The transcript stream ─────────────────────────────────────────────────────────────
+// ── The wire type ──────────────────────────────────────────────────────────────────────
 //
-// A deliberately small NDJSON protocol (one JSON object per line) so the bare /admin/chat
-// workbench can render the GROUNDING WORK visibly — every tool call and its result land in
-// the transcript, not just the final text. Fully under our control (no UI-message-stream
-// framing to decode), which is the point for a workbench.
+// The chat rides the AI SDK UIMessage stream protocol end to end: `useChat` on the client
+// posts `UIMessage[]` and `toUIMessageStreamResponse` streams UIMessage chunks back, so the
+// GROUNDING WORK (every tool call and its result) arrives as typed tool parts the workbench
+// renders inline — no bespoke framing to maintain.
 
-export type TranscriptEvent =
-  | { text: string; type: "text" }
-  | { input: unknown; name: string; type: "tool-call" }
-  | { name: string; output: unknown; type: "tool-result" }
-  | { error: string; name?: string; type: "tool-error" }
-  | { error: string; type: "error" }
-  | { type: "done" };
-
-/**
- * Map one AI SDK stream part to a transcript event, or `null` to drop it (the low-level
- * start/step/input-delta chatter the workbench does not show). Pure — unit-tested directly.
- */
-export function toTranscriptEvent(part: TextStreamPart<ToolSet>): TranscriptEvent | null {
-  switch (part.type) {
-    case "text-delta":
-      return part.text ? { text: part.text, type: "text" } : null;
-    case "tool-call":
-      return { input: part.input, name: part.toolName, type: "tool-call" };
-    case "tool-result":
-      return { name: part.toolName, output: part.output, type: "tool-result" };
-    case "tool-error":
-      return { error: errorText(part.error), name: part.toolName, type: "tool-error" };
-    case "error":
-      return { error: errorText(part.error), type: "error" };
-    case "finish":
-      return { type: "done" };
-    default:
-      return null;
-  }
-}
-
-function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-/** One NDJSON line for the wire. */
-function encodeEvent(event: TranscriptEvent): string {
-  return `${JSON.stringify(event)}\n`;
-}
+/** The chat's message type: no metadata, no data parts, the archive verbs as typed tools. */
+export type FluncleUIMessage = UIMessage<
+  never,
+  UIDataTypes,
+  InferUITools<ReturnType<typeof buildChatTools>>
+>;
 
 // ── Incoming messages ─────────────────────────────────────────────────────────────────
 
-const ChatMessageSchema = z.object({
-  content: z.string(),
-  role: z.enum(["user", "assistant"]),
-});
-
+// A structural guard, not a full UIMessage validation: enough to confirm the body is a
+// non-empty turn history of user/assistant messages that each carry a `parts` array. The
+// grounding system prompt never rides in `messages` (it goes through `instructions`), so a
+// `system` role from the wire is rejected outright.
 const ChatRequestSchema = z.object({
-  messages: z.array(ChatMessageSchema).min(1),
+  messages: z
+    .array(
+      z.looseObject({
+        parts: z.array(z.looseObject({ type: z.string() })),
+        role: z.enum(["assistant", "user"]),
+      }),
+    )
+    .min(1),
 });
-
-export type ChatMessage = z.infer<typeof ChatMessageSchema>;
 
 /**
  * Parse the request body into the turn history, or `null` if it is malformed. A model turn is
  * untrusted input like any other; the caller answers a `null` with a 400.
  */
-export function parseChatRequest(body: unknown): ChatMessage[] | null {
+export function parseChatRequest(body: unknown): FluncleUIMessage[] | null {
   const parsed = ChatRequestSchema.safeParse(body);
 
-  return parsed.success ? parsed.data.messages : null;
-}
-
-/**
- * The turn history as AI SDK model messages. The grounding system prompt does NOT ride here:
- * AI SDK 7 rejects `role: "system"` in `messages` outright — it goes through `streamText`'s
- * top-level `instructions` option instead.
- */
-function toModelMessages(messages: ChatMessage[]): ModelMessage[] {
-  return messages.map((message) => ({ content: message.content, role: message.role }));
+  return parsed.success ? (parsed.data.messages as unknown as FluncleUIMessage[]) : null;
 }
 
 /** The chat model id — `OPENROUTER_CHAT_MODEL`, or the family the search tier trusts. */
@@ -366,17 +330,19 @@ export async function resolveChatModel(): Promise<string> {
 }
 
 /**
- * Run one ChatDnB turn and stream the transcript as NDJSON.
+ * Run one ChatDnB turn and stream it back as an AI SDK UIMessage stream `Response`.
  *
  * Returns `null` when there is no `OPENROUTER_API_KEY` — the caller answers 503, the honest
  * "the chat is unprovisioned" (this is a spike; there is no cheaper degraded chat to fall
  * back to, unlike search). The model, the grounding prompt, and the archive tools are wired
- * here; `signal` lets a client disconnect abort the model mid-turn.
+ * here; `signal` lets a client disconnect abort the model mid-turn. The grounding system
+ * prompt does NOT ride in `messages` — AI SDK 7 rejects `role: "system"` there outright — it
+ * goes through `streamText`'s top-level `instructions` option instead.
  */
 export async function streamChat(
-  messages: ChatMessage[],
+  messages: FluncleUIMessage[],
   signal?: AbortSignal,
-): Promise<ReadableStream<Uint8Array> | null> {
+): Promise<Response | null> {
   const apiKey = await readOptionalEnv("OPENROUTER_API_KEY");
 
   if (!apiKey) {
@@ -389,7 +355,7 @@ export async function streamChat(
   const result = streamText({
     abortSignal: signal,
     instructions: FLUNCLE_CHAT_SYSTEM_PROMPT,
-    messages: toModelMessages(messages),
+    messages: await convertToModelMessages(messages),
     model: openrouter(model),
     stopWhen: stepCountIs(MAX_STEPS),
     // Structure over flourish: he is grounding, not riffing. Low, not zero — the voice needs
@@ -398,23 +364,5 @@ export async function streamChat(
     tools: buildChatTools(),
   });
 
-  const encoder = new TextEncoder();
-
-  return new ReadableStream<Uint8Array>({
-    async start(controller) {
-      try {
-        for await (const part of result.fullStream) {
-          const event = toTranscriptEvent(part);
-
-          if (event) {
-            controller.enqueue(encoder.encode(encodeEvent(event)));
-          }
-        }
-      } catch (error) {
-        controller.enqueue(encoder.encode(encodeEvent({ error: errorText(error), type: "error" })));
-      } finally {
-        controller.close();
-      }
-    },
-  });
+  return result.toUIMessageStreamResponse();
 }

@@ -32,6 +32,7 @@
     "test": "vitest run --coverage"
   },
   "dependencies": {
+    "@ai-sdk/react": "catalog:",
     "@base-ui/react": "catalog:",
     "@better-auth/expo": "~1.6.23",
     "@breezystack/lamejs": "^1.2.7",

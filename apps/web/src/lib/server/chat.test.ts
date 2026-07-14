@@ -1,8 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { type TextStreamPart, type ToolSet } from "ai";
 
 // The archive/DB modules the tools wire to are mocked: this suite exercises the PURE parts
-// (the grounding prompt, request parsing, tool SHAPE, the transcript event mapping, the model
+// (the grounding prompt, request parsing, tool SHAPE, the unprovisioned guard, the model
 // resolve). The tools' `execute` closures — the only DB-touching part — are covered by the
 // route at runtime, not here.
 const readOptionalEnv = vi.hoisted(() => vi.fn<(name: string) => Promise<string | undefined>>());
@@ -19,11 +18,11 @@ vi.mock("./tracks", () => ({
 
 import {
   buildChatTools,
-  type ChatMessage,
   FLUNCLE_CHAT_SYSTEM_PROMPT,
+  type FluncleUIMessage,
   parseChatRequest,
   resolveChatModel,
-  toTranscriptEvent,
+  streamChat,
 } from "./chat";
 
 beforeEach(() => {
@@ -53,10 +52,18 @@ describe("FLUNCLE_CHAT_SYSTEM_PROMPT — the grounding rule is the product", () 
 });
 
 describe("parseChatRequest", () => {
-  it("accepts a well-formed turn history", () => {
-    const messages: ChatMessage[] = [
-      { content: "what's on Hospital?", role: "user" },
-      { content: "let me dig", role: "assistant" },
+  it("accepts a well-formed UIMessage turn history", () => {
+    const messages = [
+      {
+        id: "msg-1",
+        parts: [{ text: "what's on Hospital?", type: "text" }],
+        role: "user",
+      },
+      {
+        id: "msg-2",
+        parts: [{ text: "let me dig", type: "text" }],
+        role: "assistant",
+      },
     ];
 
     expect(parseChatRequest({ messages })).toEqual(messages);
@@ -64,8 +71,13 @@ describe("parseChatRequest", () => {
 
   it("rejects malformed bodies", () => {
     expect(parseChatRequest({ messages: [] })).toBeNull();
-    expect(parseChatRequest({ messages: [{ content: "hi", role: "system" }] })).toBeNull();
-    expect(parseChatRequest({ messages: [{ role: "user" }] })).toBeNull();
+    expect(
+      parseChatRequest({
+        messages: [{ id: "m", parts: [{ text: "hi", type: "text" }], role: "system" }],
+      }),
+    ).toBeNull();
+    expect(parseChatRequest({ messages: [{ id: "m", role: "user" }] })).toBeNull();
+    expect(parseChatRequest({ messages: "nope" })).toBeNull();
     expect(parseChatRequest({})).toBeNull();
     expect(parseChatRequest("nope")).toBeNull();
   });
@@ -83,10 +95,9 @@ describe("buildChatTools — the MCP hands", () => {
       "search_archive",
     ]);
 
-    for (const name of Object.keys(tools)) {
-      const definition = tools[name];
-      expect(definition?.inputSchema, `${name} needs an input schema`).toBeDefined();
-      expect(typeof definition?.execute, `${name} needs an executor`).toBe("function");
+    for (const [name, definition] of Object.entries(tools)) {
+      expect(definition.inputSchema, `${name} needs an input schema`).toBeDefined();
+      expect(typeof definition.execute, `${name} needs an executor`).toBe("function");
     }
   });
 
@@ -124,36 +135,13 @@ describe("buildChatTools — the MCP hands", () => {
   });
 });
 
-describe("toTranscriptEvent — the NDJSON mapping", () => {
-  const part = (value: object) => value as unknown as TextStreamPart<ToolSet>;
+describe("streamChat — the unprovisioned guard", () => {
+  it("returns null when OPENROUTER_API_KEY is unset (the route answers 503)", async () => {
+    const messages = [
+      { id: "msg-1", parts: [{ text: "you up?", type: "text" }], role: "user" },
+    ] as unknown as FluncleUIMessage[];
 
-  it("maps the events the workbench renders", () => {
-    expect(toTranscriptEvent(part({ id: "1", text: "oof", type: "text-delta" }))).toEqual({
-      text: "oof",
-      type: "text",
-    });
-    expect(
-      toTranscriptEvent(part({ input: { q: "x" }, toolName: "search_archive", type: "tool-call" })),
-    ).toEqual({ input: { q: "x" }, name: "search_archive", type: "tool-call" });
-    expect(
-      toTranscriptEvent(part({ output: { ok: true }, toolName: "get_track", type: "tool-result" })),
-    ).toEqual({ name: "get_track", output: { ok: true }, type: "tool-result" });
-    expect(
-      toTranscriptEvent(
-        part({ error: new Error("boom"), toolName: "get_status", type: "tool-error" }),
-      ),
-    ).toEqual({ error: "boom", name: "get_status", type: "tool-error" });
-    expect(toTranscriptEvent(part({ error: "down", type: "error" }))).toEqual({
-      error: "down",
-      type: "error",
-    });
-    expect(toTranscriptEvent(part({ type: "finish" }))).toEqual({ type: "done" });
-  });
-
-  it("drops the low-level chatter the workbench does not show", () => {
-    expect(toTranscriptEvent(part({ type: "start" }))).toBeNull();
-    expect(toTranscriptEvent(part({ type: "start-step" }))).toBeNull();
-    expect(toTranscriptEvent(part({ id: "1", text: "", type: "text-delta" }))).toBeNull();
+    expect(await streamChat(messages)).toBeNull();
   });
 });
 
