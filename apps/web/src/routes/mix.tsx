@@ -1,10 +1,10 @@
 import { createFileRoute, redirect, useNavigate } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { type MixTrack } from "@fluncle/contracts";
 import { KeyNotationToggle } from "@/components/key-notation-toggle";
 import { MixBuilder } from "@/components/mix/mix-builder";
-import { SaveSetButton } from "@/components/mix/save-set-button";
+import { SaveSetDialog } from "@/components/mix/save-set-dialog";
 import { ShareSetButton } from "@/components/mix/share-set-button";
 import { siteUrl } from "@/lib/fluncle-links";
 import { jsonLdScript } from "@/lib/json-ld";
@@ -14,6 +14,7 @@ import {
   parseTasteParam,
   serializeSet,
   serializeTaste,
+  setToken,
 } from "@/lib/mix-set";
 import { isAdminRequest } from "@/lib/server/admin-auth";
 import { getMixChainDepth, getMixTracksByTokens } from "@/lib/server/tracks";
@@ -67,7 +68,18 @@ const loadMix = createServerFn({ method: "GET" })
     return { chain: tokens.length > 0 ? await getMixTracksByTokens(tokens) : [] };
   });
 
-type MixSearch = { set: string; taste: string; view: "build" | "play" };
+// `from`/`fromName` carry the STABLE REFERENCE when a saved set is opened from /account — its
+// id + name, so the builder can PATCH that set on save and prefill the dialog. They are read
+// ONCE into component state and then stripped from the URL (see MixPage), so they never reach
+// the canonical/share links (both built from the chain alone) and a refresh drops the reference
+// (web = session-scoped: the reference holds until refresh/navigate-away).
+type MixSearch = {
+  from?: string;
+  fromName?: string;
+  set: string;
+  taste: string;
+  view: "build" | "play";
+};
 
 // TanStack canonical option order (validateSearch → loaderDeps → loader → head → component),
 // each step feeding the next step's type inference; the disable keeps `eslint/sort-keys` off
@@ -75,6 +87,8 @@ type MixSearch = { set: string; taste: string; view: "build" | "play" };
 // oxlint-disable-next-line sort-keys
 export const Route = createFileRoute("/mix")({
   validateSearch: (search: Record<string, unknown>): MixSearch => ({
+    from: typeof search.from === "string" ? search.from : undefined,
+    fromName: typeof search.fromName === "string" ? search.fromName : undefined,
     set: typeof search.set === "string" ? search.set : "",
     taste: typeof search.taste === "string" ? search.taste : "",
     view: search.view === "play" ? "play" : "build",
@@ -112,24 +126,59 @@ export const Route = createFileRoute("/mix")({
 });
 
 function MixPage() {
-  const { chain } = Route.useLoaderData();
-  const { set, taste: tasteParam, view } = Route.useSearch();
+  const { chain: initialChain } = Route.useLoaderData();
+  const { from, fromName, taste: tasteParam, view } = Route.useSearch();
   const navigate = useNavigate();
+
+  // The LIVE CHAIN is component state, seeded once from the loader's hydrated `?set=`. It is
+  // the single source of truth the builder edits AND the save dialog reads — the ruling's
+  // "save reads the live chain, never the URL param". The URL `?set=` is kept as a mirror (for
+  // sharing + a cold reload), but it is downstream of this state, never the source.
+  const [chain, setChain] = useState<MixTrack[]>(initialChain);
+
+  // The STABLE REFERENCE: the saved set this chain was opened from, or last saved to. Seeded
+  // once from `?from=`/`?fromName=` (see below), then updated in place as saves adopt an id.
+  const [reference, setReference] = useState<{ id: string; name: string } | undefined>(
+    from ? { id: from, name: fromName ?? "" } : undefined,
+  );
 
   // Taste is the LIVE search param, parsed on the client (pure + client-safe), not loader
   // data — so seeding tilts the rail with no loader round-trip and no page flicker. Memoized
   // so the array keeps a stable identity while `?taste=` is unchanged.
   const taste = useMemo(() => parseTasteParam(tasteParam), [tasteParam]);
 
-  // Sync the chain to `?set=` in place: a replace navigation with the loader held
-  // (shouldReload: false), so a reorder click never re-fetches. Masked so a raw replaceState
-  // can't wipe TanStack's routing state.
-  const onSetChange = useCallback(
-    (tokens: string[]) => {
+  // The live chain, serialized to its `?set=` tokens — the save + share payload, derived from
+  // state (never the URL param).
+  const serializedSet = useMemo(() => serializeSet(chain.map(setToken)), [chain]);
+
+  // Strip `from`/`fromName` from the URL once seeded into component state above: the reference
+  // now lives in state, so a refresh (which re-reads the URL) MUST lose it — web is session-
+  // scoped. Also keeps them out of every subsequent share/canonical URL. Masked replace so a
+  // raw replaceState can't wipe TanStack's routing state; runs once on mount.
+  useEffect(() => {
+    if (from === undefined && fromName === undefined) {
+      return;
+    }
+
+    void navigate({
+      replace: true,
+      resetScroll: false,
+      search: ({ from: _from, fromName: _fromName, ...rest }: MixSearch) => rest,
+      to: "/mix",
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once, on mount, off the initial params
+  }, []);
+
+  // Commit a chain edit: set the live state AND mirror it to `?set=` in place — a replace
+  // navigation with the loader held (shouldReload: false), so a reorder click never re-fetches.
+  // Masked so a raw replaceState can't wipe TanStack's routing state.
+  const onChainChange = useCallback(
+    (next: MixTrack[]) => {
+      setChain(next);
       void navigate({
         replace: true,
         resetScroll: false,
-        search: (prev: MixSearch) => ({ ...prev, set: serializeSet(tokens) }),
+        search: (prev: MixSearch) => ({ ...prev, set: serializeSet(next.map(setToken)) }),
         to: "/mix",
       });
     },
@@ -174,22 +223,29 @@ function MixPage() {
           </div>
           <div className="home-masthead-actions">
             <KeyNotationToggle />
-            {view !== "play" && set ? (
+            {view !== "play" && chain.length > 0 ? (
               <>
                 {/* Save (quiet outline) sits BEFORE Copy set link (the gold primary),
                     so the terminal, gold action reads last. A signed-out visitor sees
-                    only Copy — SaveSetButton renders nothing without a session. */}
-                <SaveSetButton serializedSet={set} serializedTaste={tasteParam} />
-                <ShareSetButton serializedSet={set} serializedTaste={tasteParam} />
+                    only Copy — SaveSetDialog renders nothing without a session. Both read
+                    the LIVE serialized chain, never the `?set=` URL param. */}
+                <SaveSetDialog
+                  chainLength={chain.length}
+                  onAdopt={setReference}
+                  reference={reference}
+                  serializedSet={serializedSet}
+                  serializedTaste={tasteParam}
+                />
+                <ShareSetButton serializedSet={serializedSet} serializedTaste={tasteParam} />
               </>
             ) : undefined}
           </div>
         </header>
         <MixBuilder
-          initialChain={chain}
+          chain={chain}
           key={view}
+          onChainChange={onChainChange}
           onPromote={onPromote}
-          onSetChange={onSetChange}
           onTasteChange={onTasteChange}
           readOnly={view === "play"}
           taste={taste}

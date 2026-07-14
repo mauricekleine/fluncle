@@ -702,11 +702,11 @@ function SignedInAccount({
   );
 }
 
-// One saved set: open it back on /mix (the stored tokens + taste handed straight to
-// the route's loader — no new hydration path), rename it, or delete it (behind the
-// same confirm-dialog vocabulary as account deletion — one grammar for destructive
-// acts). Rename + delete are plain CSRF fetches then a refresh, the page's
-// established mutation shape.
+// One saved set: open it back on /mix (the stored tokens + taste handed to the route's
+// loader; the set's `id`/`name` ride as `from`/`fromName` so /mix adopts it as the STABLE
+// REFERENCE — every save there PATCHes THIS set), rename it, or delete it (behind the same
+// confirm-dialog vocabulary as account deletion — one grammar for destructive acts). Rename +
+// delete are plain CSRF fetches then a refresh, the page's established mutation shape.
 function SavedSetRow({
   csrfToken,
   refresh,
@@ -775,7 +775,13 @@ function SavedSetRow({
   return (
     <li className="account-set-row">
       <Link
-        search={{ set: set.setTokens, taste: set.taste ?? "", view: "build" as const }}
+        search={{
+          from: set.id,
+          fromName: set.name,
+          set: set.setTokens,
+          taste: set.taste ?? "",
+          view: "build" as const,
+        }}
         to="/mix"
       >
         {set.name}

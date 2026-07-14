@@ -65,12 +65,27 @@ for (let i = 0; i < 40; i += 1) {
 }
 assertEqual(big.length <= 32, true, "chain capped at MAX_SET_LENGTH");
 
-// 5. Round-trip serialize → deserialize preserves the chain + taste.
-const roundTrip = deserialize(serialize({ chain, taste: ["netsky", "camo-krooked"] }));
+// 5. Round-trip serialize → deserialize preserves the chain + taste + the stable reference
+//    (its id AND name — the name prefills the Save-set dialog after a cold start).
+const roundTrip = deserialize(
+  serialize({
+    chain,
+    sourceSetId: "set-1",
+    sourceSetName: "Friday warmup",
+    taste: ["netsky", "camo-krooked"],
+  }),
+);
 assertEqual(roundTrip.chain.length, 2, "both rows survive the round trip");
 assertEqual(roundTrip.chain[0]?.logId, "004.7.2I", "chain order preserved");
 assertEqual(roundTrip.taste.length, 2, "taste survives");
 assertEqual(roundTrip.taste[0], "netsky", "taste order preserved");
+assertEqual(roundTrip.sourceSetId, "set-1", "the source set id survives");
+assertEqual(roundTrip.sourceSetName, "Friday warmup", "the source set name survives");
+
+// 5b. A set with no reference round-trips to undefined on both fields (not empty strings).
+const noRef = deserialize(serialize({ chain, taste: [] }));
+assertEqual(noRef.sourceSetId, undefined, "absent id → undefined");
+assertEqual(noRef.sourceSetName, undefined, "absent name → undefined");
 
 // 6. Tolerant deserialize: null, garbage, wrong version, partial rows → empty/dropped.
 assertEqual(deserialize(null).chain.length, 0, "null → empty chain");
