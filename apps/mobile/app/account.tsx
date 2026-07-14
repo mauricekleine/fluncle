@@ -17,6 +17,7 @@ import { HeatButton } from "@/components/heat-button";
 import { authClient, meFetch } from "@/lib/auth-client";
 import { mergeSavedWithAccount } from "@/lib/saved";
 import { API_BASE } from "@/config";
+import { syncKeyNotationFromAccount } from "@/lib/key-notation";
 import { color, font, radius } from "@/theme/tokens";
 
 // The /account modal (RFC: accounts in the pocket). An account is a QUIET, opt-in
@@ -147,6 +148,10 @@ function AuthPanel({
       // lands; nothing here gates the UI). See @/lib/saved.
       void mergeSavedWithAccount();
       await onSignedIn();
+      // Adopt the profile's key-notation now that a session exists — force past the
+      // once-per-launch guard, since the anonymous sync likely already ran (mirrors the web
+      // account page). The Mix-tab toggle then mirrors changes back to the profile.
+      void syncKeyNotationFromAccount({ force: true });
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not sign in.");
     } finally {

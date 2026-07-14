@@ -10,8 +10,16 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Oxanium_400Regular, Oxanium_800ExtraBold, useFonts } from "@expo-google-fonts/oxanium";
 import { SpaceGrotesk_400Regular, SpaceGrotesk_700Bold } from "@expo-google-fonts/space-grotesk";
 import { configureAudioSession } from "@/audio/session";
+import { meFetch } from "@/lib/auth-client";
+import { configureKeyNotationSync } from "@/lib/key-notation";
 import { useNotificationObserver } from "@/push/use-notification-observer";
 import { color } from "@/theme/tokens";
+
+// Wire the authenticated /me fetch into the key-notation profile-sync layer once, at app
+// startup, so a returning signed-in user's notation adopts on the Mix tab without opening
+// the account screen first (the layer is RN-shallow and injects this rather than importing
+// the native auth client — see key-notation.ts).
+configureKeyNotationSync(meFetch);
 
 export default function RootLayout() {
   const [client] = useState(() => new QueryClient());
