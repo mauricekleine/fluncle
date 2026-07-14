@@ -55,6 +55,15 @@ export function findingsCount(count: number): string {
   return `${count} ${count === 1 ? "finding" : "findings"}`;
 }
 
+/**
+ * "1 banger" / "12 bangers" — the count noun for a mixtape's members (the tunes on the set),
+ * the sibling of {@link findingsCount}. A mixtape carries bangers, not findings; routing its
+ * count through here keeps the pluralization arithmetic in one place, same as findings.
+ */
+export function bangersCount(count: number): string {
+  return `${count} ${count === 1 ? "banger" : "bangers"}`;
+}
+
 export function formatIsoDuration(durationMs: number): string {
   // schema.org duration (ISO-8601), e.g. "PT3M37S".
   const totalSeconds = Math.round(durationMs / 1000);

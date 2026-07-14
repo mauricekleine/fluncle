@@ -109,7 +109,7 @@ export function ArtistCard({ artist, notation }: { artist: ChatArtist; notation:
   const count = artist.findingCount ?? findings.length;
 
   return (
-    <div className="flex flex-col gap-3 rounded-md border border-border bg-card px-3 py-3">
+    <div className="flex flex-col gap-3 rounded-md border border-border bg-card px-3 py-2.5">
       <div className="flex items-start gap-3">
         <ArtistAvatar className="size-[3.25rem] shrink-0" name={name} src={artist.avatarUrl} />
         <div className="min-w-0 flex-1">

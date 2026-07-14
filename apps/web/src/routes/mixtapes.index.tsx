@@ -1,7 +1,7 @@
 import { Link, createFileRoute } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { siteUrl } from "@/lib/fluncle-links";
-import { formatAlbumDuration } from "@/lib/format";
+import { bangersCount, formatAlbumDuration } from "@/lib/format";
 import { jsonLdScript } from "@/lib/json-ld";
 import { type MixtapeDTO, mixtapeCoverUrl, mixtapeDisplayTitle } from "@/lib/mixtapes";
 import { listMixtapes } from "@/lib/server/mixtapes";
@@ -110,7 +110,7 @@ function MixtapesPage() {
                     {mixtapeDisplayTitle(mixtape.title)}
                   </Link>
                   <span className="log-index-date">
-                    {mixtape.memberCount} bangers
+                    {bangersCount(mixtape.memberCount)}
                     {mixtape.durationMs ? ` · ${formatAlbumDuration(mixtape.durationMs)}` : ""}
                   </span>
                 </div>

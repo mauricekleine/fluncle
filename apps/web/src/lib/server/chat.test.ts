@@ -753,6 +753,52 @@ describe("build_set — the chain card's grounding + the no-numbers invariant", 
   });
 });
 
+describe("get_status — the status strip's shape", () => {
+  function statusExecutor() {
+    const execute = buildChatTools().get_status?.execute;
+
+    if (typeof execute !== "function") {
+      throw new Error("get_status executor missing");
+    }
+
+    return execute;
+  }
+
+  it("summarizes an all-up cosmos as { ok: true, headline }", async () => {
+    const { getServiceStatuses } = await import("./status");
+    vi.mocked(getServiceStatuses).mockResolvedValue([
+      { service: "web", status: "up" },
+      { service: "api", status: "up" },
+    ] as never);
+
+    const result = (await statusExecutor()({}, {} as never)) as {
+      headline: string;
+      ok: boolean;
+    };
+
+    expect(result.ok).toBe(true);
+    expect(result.headline).toBe("All 2 systems are up.");
+    // The strip renders exactly these two fields — nothing else rides the output.
+    expect(Object.keys(result).sort()).toEqual(["headline", "ok"]);
+  });
+
+  it("flags a down system as { ok: false, headline }", async () => {
+    const { getServiceStatuses } = await import("./status");
+    vi.mocked(getServiceStatuses).mockResolvedValue([
+      { service: "web", status: "up" },
+      { service: "api", status: "down" },
+    ] as never);
+
+    const result = (await statusExecutor()({}, {} as never)) as {
+      headline: string;
+      ok: boolean;
+    };
+
+    expect(result.ok).toBe(false);
+    expect(result.headline).toContain("api down");
+  });
+});
+
 describe("streamChat — the unprovisioned guard", () => {
   it("returns null when OPENROUTER_API_KEY is unset (the route answers 503)", async () => {
     const messages = [
