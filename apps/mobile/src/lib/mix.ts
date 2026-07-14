@@ -61,6 +61,7 @@ export function useMixChain(): {
   add: (track: MixTrack) => void;
   chain: MixTrack[];
   clear: () => void;
+  load: (chain: MixTrack[], taste: string[]) => void;
   ready: boolean;
   remove: (token: string) => void;
   setTaste: (taste: string[]) => void;
@@ -102,10 +103,16 @@ export function useMixChain(): {
 
   const clear = useCallback(() => commit(EMPTY_MIX), []);
 
+  // Replace the whole set at once — the open-a-saved-set path (account.tsx hands the resolved
+  // chain + taste in). Unlike add/remove this overwrites both fields, so opening a saved set
+  // lands the reader in that set rather than appending to whatever scratch chain they had.
+  const load = useCallback((chain: MixTrack[], taste: string[]) => commit({ chain, taste }), []);
+
   return {
     add,
     chain: state.chain,
     clear,
+    load,
     ready,
     remove,
     setTaste,

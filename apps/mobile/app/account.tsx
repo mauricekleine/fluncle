@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -16,6 +16,7 @@ import { CosmosBackdrop } from "@/components/cosmos-backdrop";
 import { HeatButton } from "@/components/heat-button";
 import { authClient, meFetch } from "@/lib/auth-client";
 import { mergeSavedWithAccount } from "@/lib/saved";
+import { parseRemoteSetsList, type RemoteSavedSet, SAVED_SETS_PATH } from "@/lib/saved-sets";
 import { API_BASE } from "@/config";
 import { syncKeyNotationFromAccount } from "@/lib/key-notation";
 import { color, font, radius } from "@/theme/tokens";
@@ -392,6 +393,8 @@ function SignedInPanel({
         variant="outline"
       />
 
+      <SavedSets />
+
       <View style={styles.danger}>
         <Text style={[font.label, { color: color.starlightCream }]}>Delete account</Text>
         <Text style={[font.body, styles.muted]}>
@@ -418,6 +421,139 @@ function SignedInPanel({
           </Text>
         ) : null}
       </View>
+    </View>
+  );
+}
+
+// The account's saved `/mix` sets (RFC: accounts in the pocket, slice 5). A saved set has NO
+// device-local store (the set-in-progress lives on the phone; a SAVED set lives only on the
+// account), so this is an account-only read — no union-merge, no sign-in sync. Each row opens
+// back into the Decks (the stored tokens handed to the mix tab via router.dismissTo) or is
+// removed behind the app's two-tap arm. RENAME is out of scope for mobile v1 — it lives on the
+// web /account page (the AlertDialog form has no compact native analogue here).
+function SavedSets() {
+  const router = useRouter();
+  // `undefined` = not loaded yet (render nothing, no empty-state flash); an array once fetched.
+  const [sets, setSets] = useState<RemoteSavedSet[] | undefined>(undefined);
+  const [message, setMessage] = useState("");
+
+  const load = useCallback(async () => {
+    try {
+      const body = await meFetch(SAVED_SETS_PATH).then((res) => res.json());
+      setSets(parseRemoteSetsList(body));
+    } catch {
+      // A failed read leaves the section on its empty line rather than a broken control.
+      setSets([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  // Open a set back on the Decks: dismiss this modal and land on the mix tab with the stored
+  // tokens as params (the tab hydrates them). `dismissTo` pops to the already-mounted tab.
+  function openSet(set: RemoteSavedSet) {
+    router.dismissTo({
+      params: { set: set.setTokens, taste: set.taste ?? "" },
+      pathname: "/mix",
+    });
+  }
+
+  async function removeSet(set: RemoteSavedSet) {
+    setMessage("");
+    try {
+      const response = await meFetch(`${SAVED_SETS_PATH}/${encodeURIComponent(set.id)}`, {
+        method: "DELETE",
+      });
+      // Copy reused verbatim from the web /account SavedSetRow.
+      setMessage(response.ok ? "Set removed." : "Could not remove that set.");
+      if (response.ok) {
+        await load();
+      }
+    } catch {
+      setMessage("Could not remove that set.");
+    }
+  }
+
+  return (
+    <View style={styles.setsSection}>
+      <Text style={[font.label, { color: color.starlightCream }]}>Saved sets</Text>
+      {sets === undefined ? null : sets.length === 0 ? (
+        // Adapted from the web's "No saved sets yet. Chain one on /mix and save it here." — the
+        // "/mix" web locator is dropped (the Decks are one tab away, not a URL).
+        <Text style={[font.body, styles.muted]}>
+          No saved sets yet. Chain one and save it here.
+        </Text>
+      ) : (
+        <View style={styles.setList}>
+          {sets.map((set) => (
+            <SavedSetRow
+              key={set.id}
+              onOpen={() => openSet(set)}
+              onRemove={() => void removeSet(set)}
+              set={set}
+            />
+          ))}
+        </View>
+      )}
+      {message ? (
+        <Text accessibilityLiveRegion="polite" style={[font.body, styles.muted]}>
+          {message}
+        </Text>
+      ) : null}
+    </View>
+  );
+}
+
+// One saved-set row: tap the name to open it on the Decks; the trailing control removes it
+// behind the app's two-tap arm (the "Start over" / delete-account precedent — no native
+// AlertDialog). The visible "Delete" matches the web row action verbatim.
+function SavedSetRow({
+  onOpen,
+  onRemove,
+  set,
+}: {
+  onOpen: () => void;
+  onRemove: () => void;
+  set: RemoteSavedSet;
+}) {
+  const [armed, setArmed] = useState(false);
+  const touched = new Date(set.updatedAt).toLocaleDateString();
+
+  return (
+    <View style={styles.setRow}>
+      <Pressable
+        accessibilityHint="Opens this set on the Decks"
+        accessibilityLabel={`Open ${set.name}`}
+        accessibilityRole="button"
+        onPress={onOpen}
+        style={styles.setOpen}
+      >
+        <Text numberOfLines={1} style={[font.label, { color: color.starlightCream }]}>
+          {set.name}
+        </Text>
+        <Text style={[font.body, styles.muted]}>{touched}</Text>
+      </Pressable>
+      <Pressable
+        accessibilityLabel={armed ? `Tap again to delete ${set.name}` : `Delete ${set.name}`}
+        accessibilityRole="button"
+        hitSlop={8}
+        onPress={() => {
+          if (armed) {
+            onRemove();
+            setArmed(false);
+          } else {
+            setArmed(true);
+          }
+        }}
+      >
+        {({ pressed }) => (
+          <View style={[styles.setDelete, pressed ? styles.setDeletePressed : null]}>
+            <Text style={[font.label, styles.dangerLabel]}>{armed ? "Tap again" : "Delete"}</Text>
+          </View>
+        )}
+      </Pressable>
     </View>
   );
 }
@@ -526,6 +662,18 @@ const styles = StyleSheet.create({
   linkRow: { alignSelf: "flex-start", minHeight: 32, paddingVertical: 4 },
   loading: { paddingTop: 48 },
   muted: { color: color.stardust },
+  setDelete: {
+    borderColor: color.reentryRed,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  setDeletePressed: { backgroundColor: color.reentryRed },
+  setList: { gap: 8 },
+  setOpen: { flex: 1, gap: 2, paddingVertical: 4 },
+  setRow: { alignItems: "center", flexDirection: "row", gap: 12 },
+  setsSection: { gap: 10, marginTop: 8 },
   stack: { gap: 16 },
   tab: {
     alignItems: "center",

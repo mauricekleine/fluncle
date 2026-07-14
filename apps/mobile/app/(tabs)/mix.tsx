@@ -17,35 +17,49 @@
 // saved chain lands straight in the builder. The web route is gated by a self-lifting
 // archive-depth check; the app deliberately does not check it (the mix ops are public + open
 // in prod, and App Review must reach the tool) — see mix.ts.
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Pressable, ScrollView, Share, StyleSheet, Text, TextInput, View } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
+import { useQueryClient } from "@tanstack/react-query";
 import { type MixCandidate, type MixTrack } from "@fluncle/contracts";
 import { useArchiveSearch, useMixableTracks, useMixOpeners } from "@/api/hooks";
+import { orpc } from "@/api/orpc";
 import { CosmosBackdrop } from "@/components/cosmos-backdrop";
 import { NATIVE_TAB_BAR_HEIGHT } from "@/components/feed-card";
 import { FindingRowSkeleton } from "@/components/finding-row";
 import { KeyNotationToggle } from "@/components/key-notation-toggle";
 import { MixRow } from "@/components/mix-row";
 import { MixTastePicker } from "@/components/mix-taste-picker";
+import { meFetch } from "@/lib/auth-client";
 import { useMixChain } from "@/lib/mix";
 import {
   buildMixShareUrl,
   MAX_TASTE_ARTISTS,
   mixReasonLabel,
+  parseSetParam,
+  parseTasteParam,
   searchHitToMixTrack,
+  serializeSet,
+  serializeTaste,
   setToken,
 } from "@/lib/mix-set";
 import { chainTokens } from "@/lib/mix-store";
+import {
+  adaptTrackToMixTrack,
+  buildSaveSetBody,
+  resolveChainFromTokens,
+  SAVED_SETS_PATH,
+} from "@/lib/saved-sets";
 import { color, font } from "@/theme/tokens";
 
 const TAGLINE =
   "Name a few artists you like. I rank what mixes in clean next, by key, tempo, and feel. Chain a set, then share it with the crew.";
 
 export default function MixScreen() {
-  const { add, chain, clear, ready, remove, setTaste, taste } = useMixChain();
+  const { add, chain, clear, load, ready, remove, setTaste, taste } = useMixChain();
   // The pre-chain step. Deliberately NOT persisted: a cold start always begins at taste
   // (or, with a saved chain, straight in the builder); after an undo-to-empty the reader
   // lands back on the opener step they came from.
@@ -55,6 +69,43 @@ export default function MixScreen() {
   const tokens = chainTokens(chain);
   const tail = tokens[tokens.length - 1];
   const { data: candidates = [] } = useMixableTracks({ exclude: tokens, idOrLogId: tail, taste });
+
+  // Open-a-saved-set hydration: account.tsx hands the stored `?set=`/`?taste=` in as route
+  // params (router.dismissTo → this tab). We resolve the tokens to chain snapshots and load
+  // them, then CONSUME the params once so a later manual return to the tab never re-clobbers a
+  // chain the reader has since built. See useSavedSetHydration.
+  useSavedSetHydration(load);
+
+  // The Save-set pill is shown ONLY to a signed-in reader (the never-gates law: a signed-out
+  // Decks is byte-for-byte unchanged — no button, no upsell). Confirmed via `/api/me`, exactly
+  // as the web ShareSetButton does, so a lapsed cookie never shows a broken control.
+  const signedIn = useIsSignedIn();
+  // A brief inline confirmation, the account modal's live-region grammar. Cleared on the next
+  // save attempt so a stale line never lingers over a fresh action.
+  const [saving, setSaving] = useState(false);
+  const [saveNotice, setSaveNotice] = useState("");
+
+  async function onSaveSet() {
+    setSaving(true);
+    setSaveNotice("");
+    try {
+      const bodyPayload = buildSaveSetBody(serializeSet(tokens), serializeTaste(taste));
+      const response = await meFetch(SAVED_SETS_PATH, {
+        body: JSON.stringify(bodyPayload),
+        method: "POST",
+      });
+      // Copy reused verbatim from the web ShareSetButton's toast (the Chrome Rule).
+      setSaveNotice(
+        response.ok
+          ? "Saved to your account. Find it under your findings."
+          : "Couldn't save that set.",
+      );
+    } catch {
+      setSaveNotice("Couldn't save that set.");
+    } finally {
+      setSaving(false);
+    }
+  }
 
   // Live multi-select into the device seed (no commit step — the phone-native move), capped
   // at the same MAX_TASTE_ARTISTS the URL carries so a seed stays a seed, not a library.
@@ -103,6 +154,13 @@ export default function MixScreen() {
             <View style={styles.header}>
               <Text style={[font.display, styles.nameplate]}>Chain a set</Text>
               <View style={styles.actions}>
+                {signedIn ? (
+                  <HeaderAction
+                    disabled={saving}
+                    label={saving ? "Saving…" : "Save set"}
+                    onPress={() => void onSaveSet()}
+                  />
+                ) : null}
                 <HeaderAction label="Share" onPress={onShare} />
                 <HeaderAction
                   danger={confirmingClear}
@@ -111,6 +169,11 @@ export default function MixScreen() {
                 />
               </View>
             </View>
+            {saveNotice ? (
+              <Text accessibilityLiveRegion="polite" style={[font.body, styles.saveNotice]}>
+                {saveNotice}
+              </Text>
+            ) : null}
             <ChainList chain={chain} onRemove={remove} />
             <Rail candidates={candidates} onAdd={add} />
           </ScrollView>
@@ -363,24 +426,34 @@ function Rail({
 }
 
 // A quiet outline pill (the archive HeaderPill idiom). `danger` turns it Re-entry Red while
-// the destructive "Start over" is armed for its second tap.
+// the destructive "Start over" is armed for its second tap; `disabled` greys it while a save
+// is in flight.
 function HeaderAction({
   danger,
+  disabled,
   label,
   onPress,
 }: {
   danger?: boolean;
+  disabled?: boolean;
   label: string;
   onPress: () => void;
 }) {
   return (
-    <Pressable accessibilityRole="button" hitSlop={8} onPress={onPress}>
+    <Pressable
+      accessibilityRole="button"
+      accessibilityState={{ disabled: Boolean(disabled) }}
+      disabled={disabled}
+      hitSlop={8}
+      onPress={onPress}
+    >
       {({ pressed }) => (
         <View
           style={[
             styles.pill,
             danger ? styles.pillDanger : null,
             pressed ? styles.pillPressed : null,
+            disabled ? styles.pillDisabled : null,
           ]}
         >
           <Text style={[font.label, { color: danger ? color.reentryRed : color.stardust }]}>
@@ -390,6 +463,72 @@ function HeaderAction({
       )}
     </Pressable>
   );
+}
+
+// A one-shot `/api/me` probe — true once the server confirms a session. Mirrors the web
+// ShareSetButton's gate exactly: a failed check leaves it false, so a signed-out (or
+// lapsed-cookie) reader never sees the Save-set pill (the never-gates law).
+function useIsSignedIn(): boolean {
+  const [signedIn, setSignedIn] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    void meFetch("/api/me")
+      .then((res) => res.json() as Promise<{ user: unknown }>)
+      .then((body) => {
+        if (active) {
+          setSignedIn(Boolean(body.user));
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  return signedIn;
+}
+
+// Open-a-saved-set hydration. account.tsx hands the stored `?set=`/`?taste=` in as route
+// params (router.dismissTo → this tab); we parse them, resolve each token to a chain snapshot
+// through the public `get_track` op (the web's `getMixTracksByTokens` has no public twin — a
+// token that can't resolve, e.g. an uncertified catalogue row, is dropped, mirroring that
+// helper's order-preserving flatMap), load the chain, then CONSUME the params once so a later
+// manual return to the tab never re-clobbers a chain the reader has since built.
+function useSavedSetHydration(load: (chain: MixTrack[], taste: string[]) => void): void {
+  const params = useLocalSearchParams<{ set?: string; taste?: string }>();
+  const router = useRouter();
+  const queryClient = useQueryClient();
+  const consumedRef = useRef<string | null>(null);
+
+  const setParam = typeof params.set === "string" ? params.set : "";
+  const tasteParam = typeof params.taste === "string" ? params.taste : "";
+
+  useEffect(() => {
+    if (!setParam || consumedRef.current === setParam) {
+      return;
+    }
+    consumedRef.current = setParam;
+
+    const tokens = parseSetParam(setParam);
+    const tasteSlugs = parseTasteParam(tasteParam);
+
+    void (async () => {
+      const resolved = await resolveChainFromTokens(tokens, async (token) => {
+        try {
+          const res = await queryClient.fetchQuery(
+            orpc.get_track.queryOptions({ input: { idOrLogId: token } }),
+          );
+          return "track" in res ? adaptTrackToMixTrack(res.track) : null;
+        } catch {
+          return null;
+        }
+      });
+      load(resolved, tasteSlugs);
+      // Consume the params so re-focusing the tab later doesn't re-hydrate over a fresh chain.
+      router.setParams({ set: "", taste: "" });
+    })();
+  }, [setParam, tasteParam, load, queryClient, router]);
 }
 
 const styles = StyleSheet.create({
@@ -439,6 +578,7 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
   },
   pillDanger: { borderColor: color.reentryRed },
+  pillDisabled: { opacity: 0.5 },
   pillPressed: { backgroundColor: color.goldVeil },
   railHeading: { color: color.stardust },
   railHeadingRow: {
@@ -453,6 +593,7 @@ const styles = StyleSheet.create({
   railSection: { paddingTop: 28 },
   removeBtn: { alignItems: "center", height: 32, justifyContent: "center", width: 32 },
   rows: { paddingTop: 12 },
+  saveNotice: { color: color.stardust, paddingHorizontal: 16, paddingTop: 12 },
   screen: { backgroundColor: color.deepField, flex: 1 },
   searchField: {
     alignItems: "center",
