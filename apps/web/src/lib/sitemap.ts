@@ -274,6 +274,10 @@ function kindEntries(kind: SitemapKind, bags: SitemapBags): string[] {
         staticEntry(`${siteUrl}/log`, latest),
         staticEntry(`${siteUrl}/logbook`, logbookLatest),
         staticEntry(`${siteUrl}/mixtapes`, latest),
+        // The newsletter archive — a real editorial hub (ItemList JSON-LD, self-canonical,
+        // indexable) in the /mixtapes family: Fluncle's own published series kept as web
+        // pages. Shares the hubs' `latest` stamp; the per-edition pages are discovered from it.
+        staticEntry(`${siteUrl}/newsletter`, latest),
         staticEntry(`${siteUrl}/artists`, latest),
         // The graph HUBS are listed unconditionally, exactly like /artists: a hub is a real
         // page whose content is the whole list, so the per-page thin-content gate (which can,

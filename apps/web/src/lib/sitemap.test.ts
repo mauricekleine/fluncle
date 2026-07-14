@@ -152,15 +152,24 @@ describe("a child sitemap", () => {
   it("puts the static hubs in `pages`", () => {
     const xml = buildSitemapShardXml("pages", 1, bags({ logs: LOGS })) ?? "";
 
-    for (const hub of ["/", "/log", "/logbook", "/mixtapes", "/artists", "/labels", "/albums"]) {
+    for (const hub of [
+      "/",
+      "/log",
+      "/logbook",
+      "/mixtapes",
+      "/newsletter",
+      "/artists",
+      "/labels",
+      "/albums",
+    ]) {
       expect(xml).toContain(`<loc>${siteUrl}${hub}</loc>`);
     }
 
     expect(xml).toContain(`<loc>${siteUrl}/about</loc>`);
     expect(xml).toContain(`<loc>${siteUrl}/privacy</loc>`);
     expect(xml).toContain(`<loc>${siteUrl}/galaxy</loc>`);
-    // 10 hubs; /galaxies is gated on the map being named.
-    expect(xml.match(/<loc>/g)).toHaveLength(10);
+    // 11 hubs; /galaxies is gated on the map being named.
+    expect(xml.match(/<loc>/g)).toHaveLength(11);
   });
 
   it("puts one <loc> per /log page in `findings`, and nothing else", () => {
@@ -421,6 +430,7 @@ describe("the URL set is preserved across the split", () => {
       `${siteUrl}/log`,
       `${siteUrl}/logbook`,
       `${siteUrl}/mixtapes`,
+      `${siteUrl}/newsletter`,
       `${siteUrl}/artists`,
       `${siteUrl}/labels`,
       `${siteUrl}/albums`,

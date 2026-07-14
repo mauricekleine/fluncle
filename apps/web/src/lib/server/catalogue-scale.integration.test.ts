@@ -307,13 +307,13 @@ describe("the sitemap at catalogue volume", () => {
     const { xml } = await renderSitemap();
     const locs = xml.match(/<loc>/g) ?? [];
 
-    // 10 hubs + 1 finding + 2 label pages (Hospital: 1 finding + 900 rows; Metalheadz: 400
+    // 11 hubs + 1 finding + 2 label pages (Hospital: 1 finding + 900 rows; Metalheadz: 400
     // rows, no finding — both clear the renderable floor). Not one crawled TRACK earns a URL.
     expect(xml).toContain("/log/004.7.2I");
     expect(xml).toContain("/label/hospital-records");
     expect(xml).not.toContain("Crawled");
     expect(xml).not.toContain("mb_lbl_");
-    expect(locs).toHaveLength(13);
+    expect(locs).toHaveLength(14);
   });
 
   it("LISTS the discovered label — the page exists, so the sitemap must point at it", async () => {
