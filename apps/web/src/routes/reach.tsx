@@ -64,7 +64,7 @@ type PlatformDef = {
   slug: string;
 };
 
-// Every platform the console knows, in display order (the loudest surfaces first).
+// Every platform the console knows (display order is alphabetical, applied at render).
 // `slug` is the `?platform=` value; icons are the OFFICIAL simple-icons marks (DESIGN.md
 // "Platform icons vs interface icons") — the newsletter is Fluncle's own surface, so it
 // carries a Phosphor interface glyph instead of a brand mark.
@@ -165,14 +165,13 @@ function toRow(series: PlatformStatSeries): ReachRow | undefined {
   };
 }
 
-const platformRank = (row: ReachRow) => PLATFORMS.findIndex((p) => p.slug === row.platform.slug);
-
+// Alphabetical by platform, then metric (operator ruling, 2026-07-14 — the console is
+// tabular, and tabular order is alphabetical; "loudest first" was the editor's bias).
 function orderRows(rows: ReachRow[]): ReachRow[] {
   return [...rows].sort((a, b) => {
-    const ar = platformRank(a);
-    const br = platformRank(b);
+    const byPlatform = a.platform.label.localeCompare(b.platform.label);
 
-    return ar === br ? a.metricLabel.localeCompare(b.metricLabel) : ar - br;
+    return byPlatform === 0 ? a.metricLabel.localeCompare(b.metricLabel) : byPlatform;
   });
 }
 
@@ -640,17 +639,19 @@ function ReachPage() {
                 >
                   All
                 </button>
-                {PLATFORMS.filter((p) => presentSlugs.has(p.slug)).map((p) => (
-                  <button
-                    className={chipClass(activeSlug === p.slug)}
-                    key={p.slug}
-                    onClick={() => selectPlatform(activeSlug === p.slug ? undefined : p.slug)}
-                    type="button"
-                  >
-                    <PlatformMark className="size-3" platform={p} />
-                    {p.label}
-                  </button>
-                ))}
+                {PLATFORMS.filter((p) => presentSlugs.has(p.slug))
+                  .sort((a, b) => a.label.localeCompare(b.label))
+                  .map((p) => (
+                    <button
+                      className={chipClass(activeSlug === p.slug)}
+                      key={p.slug}
+                      onClick={() => selectPlatform(activeSlug === p.slug ? undefined : p.slug)}
+                      type="button"
+                    >
+                      <PlatformMark className="size-3" platform={p} />
+                      {p.label}
+                    </button>
+                  ))}
               </div>
 
               <div aria-label="Period" className="flex gap-1.5" role="group">
