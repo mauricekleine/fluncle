@@ -43,6 +43,7 @@ import {
   getCatalogueSummary,
   listUnverifiedCaptures,
   rankCatalogue,
+  requeueUnmatchedCaptures,
   setTrackDismissed,
   verifyCapture,
 } from "../catalogue";
@@ -132,6 +133,22 @@ export function adminCatalogueHandlers(os: Implementer) {
     .handler(async ({ input }) => {
       try {
         return { cleared: await clearWrongAudio(input.trackId), ok: true } as const;
+      } catch (error) {
+        throw apiFault(error);
+      }
+    });
+
+  // POST /admin/catalogue/captures/requeue-unmatched — OPERATOR tier. The terminal-unmatched
+  // rescue: flip every catalogue `unmatched` back to `pending` after a matcher improvement,
+  // honoring the duration vetoes (a vetoed row stays terminal — re-queueing it buys a
+  // guaranteed-unmatched billed search). Operator-only: it re-arms metered spend across
+  // hundreds of rows at once, the `set_capture_budget` money-judgement tier. Idempotent.
+  const requeueUnmatchedCapturesHandler = os.requeue_unmatched_captures
+    .use(adminAuth)
+    .use(operatorGuard)
+    .handler(async () => {
+      try {
+        return { ...(await requeueUnmatchedCaptures()), ok: true as const };
       } catch (error) {
         throw apiFault(error);
       }
@@ -295,6 +312,7 @@ export function adminCatalogueHandlers(os: Implementer) {
     list_catalogue_tracks: listCatalogueTracksHandler,
     list_unverified_captures: listUnverifiedCapturesHandler,
     rank_catalogue: rankCatalogueHandler,
+    requeue_unmatched_captures: requeueUnmatchedCapturesHandler,
     reset_apple_breaker: resetAppleBreakerHandler,
     set_capture_budget: setCaptureBudgetHandler,
     set_track_dismissed: setTrackDismissedHandler,

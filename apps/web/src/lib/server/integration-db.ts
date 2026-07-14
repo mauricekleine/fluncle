@@ -130,7 +130,10 @@ export async function seedCatalogueTrack(
       JSON.stringify(track.artists ?? ["Test Artist"]),
       `spotify:track:${track.trackId}`,
       `https://open.spotify.com/track/${track.trackId}`,
-      track.durationMs ?? 0,
+      // A realistic DnB single, NOT 0: the capture queue vetoes both duration tails
+      // (MIN_TRACK_MS ≤ d < LONG_FORM_MS), so a zero-duration default would silently
+      // veto every fixture out of the queue. Tests that probe the vetoes set their own.
+      track.durationMs ?? 270_000,
       track.label ?? null,
     ],
     sql: `insert into tracks

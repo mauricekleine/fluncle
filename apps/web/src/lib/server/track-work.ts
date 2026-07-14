@@ -69,7 +69,7 @@
 // and the archive is never starved by the speculative half.
 
 import { isCatalogueCaptureOpen } from "./capture-budget";
-import { LONG_FORM_MS } from "./catalogue";
+import { LONG_FORM_MS, MIN_TRACK_MS } from "./catalogue";
 import { parseArtistsJson } from "./artists";
 import { getDb, typedRows } from "./db";
 import {
@@ -288,6 +288,7 @@ export function kindClause(kind: TrackWorkKind): { args: string[]; sql: string }
               (f.track_id is not null and f.log_id is not null)
               or (f.track_id is null and t.capture_priority is not null and t.capture_priority >= 0
                   and t.dismissed_at is null
+                  and t.duration_ms >= ${MIN_TRACK_MS}
                   and t.duration_ms < ${LONG_FORM_MS})
             )`,
     };

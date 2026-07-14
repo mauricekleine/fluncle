@@ -18,9 +18,11 @@ import {
   contentTypeForExt,
   durationWithinTolerance,
   extractSourceAudioSha256,
+  hasForeignVersionMarker,
   isTopicChannel,
   needsReenrichAfterCapture,
   normalizeChannelName,
+  normalizeSearchQuery,
   pickCandidate,
   rankCandidates,
   shouldReenrichAfterCapture,
@@ -160,6 +162,49 @@ describe("buildSearchQuery", () => {
     expect(buildSearchQuery({ title: "Untitled" }, 0)).toBe("Untitled");
     expect(buildSearchQuery({ artists: ["Solo"] }, 1)).toBe("Solo");
     expect(buildSearchQuery({}, 1)).toBe("");
+  });
+});
+
+describe("normalizeSearchQuery — the ASCII fold for the ladder's third rung", () => {
+  test("folds typographic apostrophes and hyphens to ASCII", () => {
+    expect(normalizeSearchQuery("Ownglow Won’t U")).toBe("Ownglow Won't U");
+    expect(normalizeSearchQuery("NC‐17 Trioxin")).toBe("NC-17 Trioxin");
+  });
+
+  test("strips intra-token dots and colons (S.P.Y, Nu:Tone, goddard.)", () => {
+    expect(normalizeSearchQuery("S.P.Y By Your Side")).toBe("SPY By Your Side");
+    expect(normalizeSearchQuery("Nu:Tone Tides")).toBe("NuTone Tides");
+    expect(normalizeSearchQuery("goddard. Way Up")).toBe("goddard Way Up");
+  });
+
+  test("maps & to a space and collapses the result", () => {
+    expect(normalizeSearchQuery("Optiv & BTK Zero Tolerance")).toBe("Optiv BTK Zero Tolerance");
+  });
+
+  test("leaves a plain ASCII query untouched", () => {
+    expect(normalizeSearchQuery("Technimatic Mirror Image")).toBe("Technimatic Mirror Image");
+  });
+});
+
+describe("hasForeignVersionMarker — a finding's own version never de-ranks its candidates", () => {
+  test("a remix finding keeps its remix candidates clean", () => {
+    expect(
+      hasForeignVersionMarker("By Your Side (Logistics remix)", "By Your Side (Logistics remix)"),
+    ).toBe(false);
+  });
+
+  test("a marker the finding does NOT carry still flags the candidate", () => {
+    expect(hasForeignVersionMarker("Song (live at Fabric)", "Song")).toBe(true);
+    expect(hasForeignVersionMarker("Song (instrumental)", "Song (remix)")).toBe(true);
+  });
+
+  test("a clean candidate is never flagged, with or without a finding title", () => {
+    expect(hasForeignVersionMarker("Mirror Image", "Mirror Image")).toBe(false);
+    expect(hasForeignVersionMarker("Mirror Image", undefined)).toBe(false);
+  });
+
+  test("marker matching is case-insensitive both ways", () => {
+    expect(hasForeignVersionMarker("Song (REMIX)", "Song (remix)")).toBe(false);
   });
 });
 

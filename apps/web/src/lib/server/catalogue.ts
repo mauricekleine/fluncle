@@ -147,6 +147,19 @@ export const DUPLICATE_SIMILARITY = 0.995;
 export const LONG_FORM_MS = 15 * 60_000;
 
 /**
+ * The long-form veto's LOWER twin (the 2026-07-14 unmatched audit). Two classes below this
+ * line, both guaranteed-unmatched spend: a sub-60s interlude/skit (a YouTube upload of it
+ * rarely exists at that length, and it is worthless to The Ear anyway), and the
+ * missing/zero-duration row — with no reference length the sweep's symmetric duration guard
+ * can NEVER accept a candidate (`durationWithinTolerance` returns false on a missing
+ * target), so every attempt is a billed search that lands `unmatched` by construction (33
+ * such rows had, before this bound). SQL note: `duration_ms >= MIN_TRACK_MS` also excludes
+ * NULL (NULL comparisons are falsy), so the missing-duration class needs no separate
+ * clause; those rows wait for the crawler's metadata backfill instead.
+ */
+export const MIN_TRACK_MS = 60_000;
+
+/**
  * The cosine-similarity threshold at or above which a SCORED catalogue row is adjudicated rather
  * than merely labelled — a DISTINCT, higher line than `DUPLICATE_SIMILARITY` (docs/the-ear.md
  * § Wrong audio). The difference is the whole point:
@@ -1314,6 +1327,7 @@ export async function getCatalogueSummary(): Promise<CatalogueSummary> {
                       and ct.nearest_finding_score is null
                       and ct.capture_priority is not null
                       and ct.capture_status <> ?
+                      and ct.duration_ms >= ${MIN_TRACK_MS}
                       and ct.duration_ms < ${LONG_FORM_MS} then 1 else 0 end) as awaiting_capture,
             sum(case when ct.dismissed_at is null
                       and ct.capture_status = ? then 1 else 0 end) as quarantined,
@@ -1463,6 +1477,7 @@ export async function listCatalogueTracks(
                       and ct.nearest_finding_score is null
                       and ct.capture_priority is not null
                       and ct.capture_status <> ?
+                      and ct.duration_ms >= ${MIN_TRACK_MS}
                       and ct.duration_ms < ${LONG_FORM_MS}
                     order by ct.capture_priority desc, ct.track_id asc
                     limit ?`,
@@ -1591,6 +1606,49 @@ export async function clearWrongAudio(trackId: string): Promise<boolean> {
   });
 
   return result.rowsAffected > 0;
+}
+
+/**
+ * THE OPERATOR UNMATCHED RESCUE (`requeue_unmatched_captures`) — flip the terminal
+ * `unmatched` verdicts back to `pending` after a MATCHER improvement (the 2026-07-14
+ * search-ladder upgrade). `unmatched` is terminal so the metered budget never re-burns a
+ * hopeless search; when the search itself gets better, the old verdicts describe the old
+ * matcher, not the tracks. One deliberate operator act, not a sweep behavior.
+ *
+ * The duration vetoes are honored HERE too: a row the capture queue would refuse anyway
+ * (missing duration, < MIN_TRACK_MS, ≥ LONG_FORM_MS) stays terminal — re-queueing it buys a
+ * guaranteed-unmatched billed search. Those are counted honestly as `skippedVetoed`.
+ * `source_audio_failures` resets so the rescued rows start their retry ledger clean.
+ * Catalogue rows only (a finding's unmatched is rescued by its own re-capture flows).
+ */
+export async function requeueUnmatchedCaptures(): Promise<{
+  requeued: number;
+  skippedVetoed: number;
+}> {
+  const db = await getDb();
+  const vetoed = await db.execute({
+    sql: `select count(*) as vetoed
+          from tracks
+          where capture_status = 'unmatched'
+            and not exists (select 1 from findings where findings.track_id = tracks.track_id)
+            and (duration_ms is null
+                 or duration_ms < ${MIN_TRACK_MS}
+                 or duration_ms >= ${LONG_FORM_MS})`,
+  });
+  const result = await db.execute({
+    sql: `update tracks
+          set capture_status = 'pending',
+              source_audio_failures = 0
+          where capture_status = 'unmatched'
+            and not exists (select 1 from findings where findings.track_id = tracks.track_id)
+            and duration_ms >= ${MIN_TRACK_MS}
+            and duration_ms < ${LONG_FORM_MS}`,
+  });
+
+  return {
+    requeued: result.rowsAffected,
+    skippedVetoed: Number(typedRows<{ vetoed: number | null }>(vetoed.rows)[0]?.vetoed ?? 0),
+  };
 }
 
 /**

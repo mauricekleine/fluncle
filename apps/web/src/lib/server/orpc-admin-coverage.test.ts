@@ -244,6 +244,10 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // contract-only oRPC (no TanStack route file). OPERATOR tier: it re-arms a spend-adjacent
   // external integration a machine should not silently un-brake (the `set_capture_budget` rule).
   "POST /admin/catalogue/apple-breaker/reset": "reset_apple_breaker",
+  // The terminal-unmatched rescue — contract-only oRPC. OPERATOR tier: it re-arms metered
+  // capture spend across hundreds of rows after a matcher improvement (the set_capture_budget
+  // money-judgement class); the duration vetoes keep hopeless rows terminal.
+  "POST /admin/catalogue/captures/requeue-unmatched": "requeue_unmatched_captures",
   // The capture-verification write — contract-only oRPC. Agent tier (the rank_catalogue
   // precedent): the box's `fluncle-verify-captures` sweep fingerprints a capture against its
   // official preview and reports the verdict; the SERVER routes it (docs/the-ear.md § Wrong

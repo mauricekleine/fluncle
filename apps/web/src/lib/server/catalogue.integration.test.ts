@@ -1470,4 +1470,49 @@ describe("the long-form veto — a continuous mix never reaches a lens or the mo
     expect(row?.hasPreview).toBe(false);
     expect(row?.hasCapturedAudio).toBe(true);
   });
+
+  // ── requeue_unmatched_captures — the terminal-unmatched rescue ────────────────────────
+  it("re-queues only clean-duration unmatched CATALOGUE rows; vetoed rows and findings stay put", async () => {
+    const { requeueUnmatchedCaptures } = await import("./catalogue");
+
+    await seedCatalogueTrack(db, { durationMs: 270_000, trackId: "unm-clean" });
+    await seedCatalogueTrack(db, { durationMs: 0, trackId: "unm-nodur" });
+    await seedCatalogueTrack(db, { durationMs: 70 * 60_000, trackId: "unm-long" });
+    await seedFinding("unm-find");
+    await db.execute({
+      sql: `update tracks set capture_status = 'unmatched', source_audio_failures = 5
+            where track_id like 'unm-%'`,
+    });
+
+    const result = await requeueUnmatchedCaptures();
+
+    // Only the clean-duration catalogue row is rescued; the missing-duration and long-form
+    // rows would be re-refused by the queue's vetoes, so re-queueing them buys a
+    // guaranteed-unmatched billed search — they stay terminal, counted honestly.
+    expect(result).toEqual({ requeued: 1, skippedVetoed: 2 });
+
+    const states = await db.execute({
+      sql: `select track_id, capture_status, source_audio_failures from tracks
+            where track_id like 'unm-%' order by track_id`,
+    });
+    const rows = states.rows as unknown as Array<{
+      capture_status: null | string;
+      source_audio_failures: number;
+      track_id: string;
+    }>;
+    const byId = new Map(
+      rows.map((row) => [
+        row.track_id,
+        { failures: Number(row.source_audio_failures), status: row.capture_status },
+      ]),
+    );
+    expect(byId.get("unm-clean")).toEqual({ failures: 0, status: "pending" });
+    expect(byId.get("unm-nodur")?.status).toBe("unmatched");
+    expect(byId.get("unm-long")?.status).toBe("unmatched");
+    // A FINDING marked unmatched is never this op's business — its own re-capture flows own it.
+    expect(byId.get("unm-find")?.status).toBe("unmatched");
+
+    // Idempotent: the rescued row is gone from the unmatched set; the vetoed pile is stable.
+    expect(await requeueUnmatchedCaptures()).toEqual({ requeued: 0, skippedVetoed: 2 });
+  });
 });

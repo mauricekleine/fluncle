@@ -267,6 +267,36 @@ export const clearWrongAudio = oc
   .output(z.object({ cleared: z.boolean(), ok: z.literal(true) }));
 
 /**
+ * `requeue_unmatched_captures` → `POST /admin/catalogue/captures/requeue-unmatched`
+ * (operationId `requeueUnmatchedCaptures`).
+ *
+ * OPERATOR tier — the terminal-`unmatched` rescue (the 2026-07-14 unmatched audit). An
+ * `unmatched` capture verdict is terminal by design so the metered budget never re-burns a
+ * hopeless search — but when the SEARCH itself improves (the music-search ladder, the
+ * normalized query variant), the old verdicts describe the old matcher, not the tracks: the
+ * spike recovered 66% of the terminal set with the new ladder. This op flips every
+ * catalogue row still marked `unmatched` back to `pending` in one deliberate act, EXCLUDING
+ * the rows the duration vetoes would immediately re-refuse (missing/short/long — those stay
+ * terminal; re-queueing them buys guaranteed-unmatched searches), and resets their failure
+ * count so the re-attempt starts clean.
+ *
+ * Operator-only: it re-arms metered spend across hundreds of rows at once — the same
+ * money-judgement tier as `set_capture_budget`. Idempotent: a second call finds zero
+ * `unmatched` rows and returns `{ requeued: 0 }`.
+ */
+export const requeueUnmatchedCaptures = oc
+  .route({
+    method: "POST",
+    operationId: "requeueUnmatchedCaptures",
+    path: "/admin/catalogue/captures/requeue-unmatched",
+    summary:
+      "Re-queue terminal-unmatched catalogue captures after a matcher improvement (operator)",
+    tags: ["Admin"],
+  })
+  .input(z.object({}))
+  .output(z.object({ ok: z.literal(true), requeued: z.number(), skippedVetoed: z.number() }));
+
+/**
  * `flag_wrong_audio` → `POST /admin/catalogue/wrong-audio/flag` (operationId `flagWrongAudio`).
  *
  * OPERATOR tier — `clear_wrong_audio`'s counterpart: "the FINDING's capture is the wrong one"
@@ -712,6 +742,7 @@ export const adminCatalogueContract = {
   list_catalogue_tracks: listCatalogueTracks,
   list_unverified_captures: listUnverifiedCaptures,
   rank_catalogue: rankCatalogue,
+  requeue_unmatched_captures: requeueUnmatchedCaptures,
   reset_apple_breaker: resetAppleBreaker,
   set_capture_budget: setCaptureBudget,
   set_track_dismissed: setTrackDismissed,

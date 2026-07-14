@@ -1991,6 +1991,24 @@ function addAdminCommands(program: Command): void {
     });
 
   catalogue
+    .command("requeue-unmatched")
+    .description("Re-queue terminal-unmatched captures after a matcher improvement (operator)")
+    .option("--json", "Print JSON", false)
+    .action(async (options: JsonOptions) => {
+      const { requeueUnmatchedCommand } = await import("./commands/admin-catalogue");
+      const { requeued, skippedVetoed } = await requeueUnmatchedCommand();
+
+      if (options.json) {
+        printJson({ ok: true, requeued, skippedVetoed });
+        return;
+      }
+
+      console.log(
+        `Re-queued ${requeued} unmatched capture(s) for the upgraded search ladder; ${skippedVetoed} stay terminal under the duration vetoes.`,
+      );
+    });
+
+  catalogue
     .command("flag-wrong-audio")
     .description("Flag a finding's captured audio as the wrong recording (operator)")
     .argument("<trackId>", "The finding's track id whose capture is wrong")

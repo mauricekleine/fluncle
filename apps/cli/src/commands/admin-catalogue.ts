@@ -92,6 +92,23 @@ export async function clearWrongAudioCommand(trackId: string): Promise<{ cleared
 }
 
 /**
+ * Re-queue every terminal-`unmatched` catalogue capture after a matcher improvement (operator).
+ * `fluncle admin catalogue requeue-unmatched`. Flips `unmatched` rows back to `pending` so the
+ * upgraded search ladder re-attempts them; rows the duration vetoes would immediately re-refuse
+ * stay terminal and are reported as `skippedVetoed`. One deliberate operator act — it re-arms
+ * metered spend across hundreds of rows.
+ */
+export async function requeueUnmatchedCommand(): Promise<{
+  requeued: number;
+  skippedVetoed: number;
+}> {
+  return adminApiPost<{ ok: true; requeued: number; skippedVetoed: number }>(
+    "/api/admin/catalogue/captures/requeue-unmatched",
+    {},
+  );
+}
+
+/**
  * Overrule the duplicate veto on one catalogue row so it can be captured (operator). `fluncle
  * admin catalogue force-capture <trackId>` — the dupe-veto escape hatch (docs/the-ear.md §
  * Duplicates). Lifts a WRONG `duplicate_of` + −2 veto stickily and puts the row back on the

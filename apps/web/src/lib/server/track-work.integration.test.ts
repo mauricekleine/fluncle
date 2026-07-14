@@ -435,7 +435,7 @@ describe("listTrackWork — the wire", () => {
       artists: ["Krakota"],
       capturePriority: null,
       certified: false,
-      durationMs: 0,
+      durationMs: 270_000,
       isrc: null,
       label: "Hospital",
       logId: null,

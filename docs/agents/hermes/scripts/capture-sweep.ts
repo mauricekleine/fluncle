@@ -169,7 +169,8 @@ const DOWNLOAD_ATTEMPTS = Number(process.env.FLUNCLE_CAPTURE_DOWNLOAD_ATTEMPTS ?
 // the duration guard (then the song genuinely isn't there at that length). This is the ONLY
 // per-search cost knob: the ceiling is exactly this many billed proxy searches per finding, and the
 // walk never loops. Set to 1 to disable the fallback and restore the single-search behaviour.
-const QUERY_VARIANTS = Number(process.env.FLUNCLE_CAPTURE_QUERY_VARIANTS ?? "2");
+// 3 = the full search ladder (raw ytsearch → music search → normalized fallback on music).
+const QUERY_VARIANTS = Number(process.env.FLUNCLE_CAPTURE_QUERY_VARIANTS ?? "3");
 
 const YT_SEARCH_TIMEOUT_MS = 60_000;
 const YT_DOWNLOAD_TIMEOUT_MS = 180_000;
@@ -309,9 +310,31 @@ export function extractSourceAudioSha256(key: string | undefined): null | string
 }
 
 // Title markers that signal a WRONG version (a same-length remix/edit slips the duration
-// guard, so de-rank these before the guard even runs).
-const WRONG_VERSION_MARKERS =
-  /\b(remix|bootleg|live|sped[\s-]?up|slowed|nightcore|8d audio|cover|karaoke|instrumental|mashup|edit|rework|vip mix)\b/i;
+// guard, so de-rank these before the guard even runs). g-flagged so a title's markers can
+// be ENUMERATED and compared against the finding's own (`hasForeignVersionMarker`).
+const WRONG_VERSION_MARKERS_ALL =
+  /\b(remix|bootleg|live|sped[\s-]?up|slowed|nightcore|8d audio|cover|karaoke|instrumental|mashup|edit|rework|vip mix)\b/gi;
+
+/**
+ * Whether a candidate title carries a wrong-version marker THE FINDING ITSELF DOES NOT.
+ * A finding whose own canonical title is "(Logistics remix)" must not have its correct
+ * candidates de-ranked for saying "remix" — before this, any same-length non-remix upload
+ * outranked the actual remix, a wrong-version-match risk (the 2026-07-14 unmatched audit,
+ * class 4). A marker the finding does NOT carry still de-ranks exactly as before.
+ */
+export function hasForeignVersionMarker(candidateTitle: string, findingTitle?: string): boolean {
+  const candidateMarkers = candidateTitle.match(WRONG_VERSION_MARKERS_ALL);
+
+  if (!candidateMarkers) {
+    return false;
+  }
+
+  const own = new Set(
+    (findingTitle?.match(WRONG_VERSION_MARKERS_ALL) ?? []).map((m) => m.toLowerCase()),
+  );
+
+  return candidateMarkers.some((marker) => !own.has(marker.toLowerCase()));
+}
 const OFFICIAL_MARKERS = /(-\s*topic\b|official audio|official video|official music video)/i;
 
 // A YouTube auto-generated art-track lives on an "<Artist> - Topic" CHANNEL, generated per artist
@@ -361,6 +384,27 @@ export function buildSearchQuery(
   const cleanedTitle = title.replace(TRAILING_VERSION_PAREN, "").trim();
 
   return collapse(`${primaryArtist} ${cleanedTitle}`);
+}
+
+/**
+ * Fold a query to the ASCII shape YouTube uploads are actually typed in. MusicBrainz
+ * canonical metadata carries typographic characters — U+2019 in "Won’t U", a real U+2010
+ * hyphen in "NC‐17" — and intra-token punctuation ("S.P.Y", "Nu:Tone") that a literal
+ * search can miss or down-rank. Measured on the 2026-07-14 unmatched spike (323 terminal
+ * rows): the normalized primary-artist variant recovered 20 rows the raw query missed —
+ * and the raw query found 11 the normalized one missed, so this is an ADDITIONAL search
+ * step, never a replacement for the raw shape.
+ */
+export function normalizeSearchQuery(value: string): string {
+  return value
+    .normalize("NFKC")
+    .replace(/[‘’]/g, "'")
+    .replace(/[‐‒–—]/g, "-")
+    .replace(/(?<=\w)[.:](?=\w)/g, "")
+    .replace(/[.:](?=\s|$)/g, "")
+    .replace(/&/g, " ")
+    .trim()
+    .replace(/\s+/g, " ");
 }
 
 /**
@@ -477,7 +521,12 @@ export type YtCandidate = {
  */
 export function rankCandidates(
   candidates: readonly YtCandidate[],
-  context: { artistYoutubeChannelIds?: readonly string[]; durationMs?: number; label?: string },
+  context: {
+    artistYoutubeChannelIds?: readonly string[];
+    durationMs?: number;
+    label?: string;
+    title?: string;
+  },
   options: { tolerancePct: number; toleranceSec: number } = {
     tolerancePct: TOLERANCE_PCT,
     toleranceSec: TOLERANCE_SEC,
@@ -491,7 +540,7 @@ export function rankCandidates(
     )
     .map(({ candidate, trust }) => ({
       candidate,
-      clean: WRONG_VERSION_MARKERS.test(candidate.title) ? 0 : 1,
+      clean: hasForeignVersionMarker(candidate.title, context.title) ? 0 : 1,
       delta: Math.abs(candidate.durationSec - targetSec),
       // Title-borne official marker OR an `<Artist> - Topic` channel (the marker tests the title,
       // which a Topic upload leaves bare) — so a Topic art-track ranks above a plain tier-2 upload.
@@ -519,7 +568,12 @@ export function rankCandidates(
  */
 export function pickCandidate(
   candidates: readonly YtCandidate[],
-  context: { artistYoutubeChannelIds?: readonly string[]; durationMs?: number; label?: string },
+  context: {
+    artistYoutubeChannelIds?: readonly string[];
+    durationMs?: number;
+    label?: string;
+    title?: string;
+  },
   options?: { tolerancePct: number; toleranceSec: number },
 ): { candidate: YtCandidate; trust: TrustTier } | null {
   return rankCandidates(candidates, context, options)[0] ?? null;
@@ -795,7 +849,24 @@ async function patchTrack(trackId: string, update: Record<string, unknown>): Pro
 
 // ── yt-dlp + ffprobe (subprocess) ────────────────────────────────────────────
 
-function runYtSearch(proxyUrl: string, query: string): YtCandidate[] {
+function runYtSearch(
+  proxyUrl: string,
+  query: string,
+  source: "music" | "youtube" = "youtube",
+): YtCandidate[] {
+  // Both sources resolve every entry fully (duration/channel/verified — the same billed
+  // shape). "youtube" is the historic ytsearch5. "music" searches the SAME inventory
+  // through music.youtube.com, where the auto-generated `<Artist> - Topic` art-tracks
+  // that plain search buries rank first — measured 2026-07-14: it recovered 61% of the
+  // catalogue's terminal-unmatched rows, duration-verified.
+  const target =
+    source === "music"
+      ? [
+          "--playlist-items",
+          "1:5",
+          `https://music.youtube.com/search?q=${encodeURIComponent(query)}`,
+        ]
+      : [`ytsearch5:${query}`];
   const result = spawnSync(
     YT_DLP_BIN,
     [
@@ -809,7 +880,7 @@ function runYtSearch(proxyUrl: string, query: string): YtCandidate[] {
       // prints "NA" for an absent field.
       "--print",
       "%(duration)s\t%(id)s\t%(channel)s\t%(channel_id)s\t%(channel_is_verified)s\t%(title)s",
-      `ytsearch5:${query}`,
+      ...target,
     ],
     { encoding: "utf8", maxBuffer: 8 * 1024 * 1024, timeout: YT_SEARCH_TIMEOUT_MS },
   );
@@ -820,12 +891,16 @@ function runYtSearch(proxyUrl: string, query: string): YtCandidate[] {
 
   const naToUndefined = (value?: string) => (value && value !== "NA" ? value : undefined);
   const candidates: YtCandidate[] = [];
+  const seen = new Set<string>();
   for (const line of (result.stdout || "").split("\n")) {
     const [durationRaw, id, channelRaw, channelIdRaw, verifiedRaw, ...titleParts] =
       line.split("\t");
-    if (!id) {
+    if (!id || seen.has(id)) {
+      // The music search page can list the same video twice (song + video shelf) — one
+      // candidate per id keeps the download-attempt budget honest.
       continue;
     }
+    seen.add(id);
     candidates.push({
       channel: naToUndefined(channelRaw),
       channelId: naToUndefined(channelIdRaw),
@@ -942,31 +1017,47 @@ async function captureFinding(finding: CaptureFinding): Promise<FindingOutcome> 
   const dir = mkdtempSync(join(tmpdir(), "fluncle-capture-"));
 
   try {
-    // Search candidates WITHOUT downloading, then RANK the ones that pass the SYMMETRIC duration
-    // guard (trust no longer widens it; wrong-version titles de-rank) — avoids downloading a
-    // wrong-length file. Trust is a ranking tiebreak only now; identity is the fingerprint gate.
-    let candidates = runYtSearch(proxyUrl, primaryQuery);
-
-    // THE BOUNDED FALLBACK (the `unmatched`-rate fix): the primary query found NOTHING on YouTube —
-    // the failure mode of an over-constrained multi-artist credit or an odd-punctuation title — so
-    // spend ONE more billed search on the de-constrained variant (primary artist + version-stripped
-    // title). Fired ONLY on ZERO RAW candidates: if uploads came back and merely missed the duration
-    // guard, the song genuinely isn't there at that length and a reshaped query cannot conjure it, so
-    // we do NOT pay for a second search. Skipped when the variant is identical (a single-artist clean
-    // title). Total searches are capped at QUERY_VARIANTS per finding — a hard ceiling, never a loop.
-    if (candidates.length === 0 && QUERY_VARIANTS > 1) {
-      const fallbackQuery = buildSearchQuery(finding, 1);
-      if (fallbackQuery && fallbackQuery !== primaryQuery) {
-        log(`primary query returned nothing — one de-constrained retry: "${fallbackQuery}"`);
-        candidates = runYtSearch(proxyUrl, fallbackQuery);
-      }
-    }
-
-    const ranked = rankCandidates(candidates, {
+    // THE SEARCH LADDER (bounded — QUERY_VARIANTS billed searches max, never a loop).
+    // Ranked ACCEPTANCE is the gate between steps, not raw-candidate count: the 2026-07-14
+    // unmatched audit showed an over-constrained multi-artist query routinely returns five
+    // WRONG candidates (live sets, shorts) that all miss the duration guard — under the old
+    // "zero raw candidates" trigger that suppressed the fallback exactly when it was needed.
+    // The rungs, in measured-yield order (the 323-row spike):
+    //   1. ytsearch5 with the historic raw query — byte-identical, no regression.
+    //   2. the SAME query against music.youtube.com — the auto-generated `<Artist> - Topic`
+    //      art-tracks rank first there; this step alone recovered 61% of the terminal-
+    //      unmatched set, duration-verified.
+    //   3. the normalized de-constrained variant (primary artist + version-stripped title,
+    //      typographic punctuation folded) on music — +20 rows the raw shape missed.
+    const rankContext = {
       artistYoutubeChannelIds: finding.artistYoutubeChannelIds,
       durationMs: finding.durationMs,
       label: finding.label,
-    });
+      title: finding.title,
+    };
+    const fallbackQuery = normalizeSearchQuery(buildSearchQuery(finding, 1));
+    const ladder: { query: string; source: "music" | "youtube" }[] = [
+      { query: primaryQuery, source: "youtube" },
+      { query: primaryQuery, source: "music" },
+      ...(fallbackQuery && fallbackQuery !== primaryQuery
+        ? [{ query: fallbackQuery, source: "music" as const }]
+        : []),
+    ].slice(0, Math.max(1, QUERY_VARIANTS));
+
+    let candidates: YtCandidate[] = [];
+    let ranked: ReturnType<typeof rankCandidates> = [];
+    for (const [step, rung] of ladder.entries()) {
+      if (step > 0) {
+        log(
+          `no accepted candidate yet — ladder step ${step + 1}/${ladder.length}: ${rung.source} search "${rung.query}"`,
+        );
+      }
+      candidates = runYtSearch(proxyUrl, rung.query, rung.source);
+      ranked = rankCandidates(candidates, rankContext);
+      if (ranked.length > 0) {
+        break;
+      }
+    }
 
     if (ranked.length === 0) {
       // `sourceAudioAttemptedAt` on an UNMATCHED too: it was a billed proxy request (a search),
