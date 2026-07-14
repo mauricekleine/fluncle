@@ -207,6 +207,13 @@ const crewItems: NavItem[] = [
     to: "/about",
   },
   {
+    blurb: "How many of you are aboard, and how far it's carried.",
+    id: "reach",
+    kind: "route",
+    label: "Reach",
+    to: "/reach",
+  },
+  {
     blurb: "The week's findings, in your inbox.",
     id: "newsletter",
     kind: "route",

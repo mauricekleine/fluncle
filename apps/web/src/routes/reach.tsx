@@ -18,6 +18,8 @@ import {
 } from "simple-icons";
 import { BrandIcon } from "@/components/brand-icon";
 import { siteUrl } from "@/lib/fluncle-links";
+import { fluncleDescription } from "@/lib/identity";
+import { jsonLdScript } from "@/lib/json-ld";
 import {
   listPlatformStats,
   type PlatformStatSeries,
@@ -315,8 +317,8 @@ function ReachChart({ series }: { series: ChartSeries }) {
       <figcaption className="mt-2 flex items-baseline justify-between gap-3 text-xs text-muted-foreground tabular-nums">
         {single && latest ? (
           <span>
-            {series.label}: {formatValue(latest.value)} · first reading {formatDate(latest.at)} —
-            the line draws itself from here
+            {series.label}: {formatValue(latest.value)} · first reading {formatDate(latest.at)}. The
+            line draws itself from here.
           </span>
         ) : (
           <>
@@ -492,9 +494,47 @@ function crewSeries(rows: ReachRow[]): ReachPoint[] {
 
 const title = "Reach · Fluncle";
 const description =
-  "Fluncle's telemetry console: the crew aboard across every platform, and how far the findings have carried, over time.";
+  "Fluncle's reach across every platform, over time: the crew aboard, and how far the findings have carried.";
 
-function reachHead() {
+// The AEO half (docs § Log IDs in search + AI answers): this page is the one place
+// Fluncle's audience numbers exist as DATA, so the head carries them as
+// `interactionStatistic` on the canonical MusicGroup entity — schema.org's
+// InteractionCounter, one FollowAction counter per crew platform, refreshed on every
+// crawl because the loader feeds the head. Every count is already public on its own
+// platform; this only makes the aggregate machine-readable.
+function reachHead({ loaderData }: { loaderData?: PlatformStatsView }) {
+  const counters = (loaderData?.series ?? []).flatMap((series) => {
+    const key = `${series.platform}:${series.metric}`;
+    const meta = METRIC_META[key];
+    const platform = meta ? PLATFORM_BY_SLUG.get(meta.platform) : undefined;
+
+    if (!meta || !platform || meta.bucket !== "crew") {
+      return [];
+    }
+
+    const value = meta.botMinusOne ? Math.max(0, series.latest - 1) : series.latest;
+
+    return [
+      {
+        "@type": "InteractionCounter",
+        interactionService: { "@type": "WebSite", name: platform.label },
+        interactionType: { "@type": "FollowAction" },
+        userInteractionCount: value,
+      },
+    ];
+  });
+
+  const entity = {
+    "@context": "https://schema.org",
+    "@type": "MusicGroup",
+    description: fluncleDescription,
+    genre: "Drum and Bass",
+    image: `${siteUrl}/fluncle-cover.png`,
+    ...(counters.length > 0 ? { interactionStatistic: counters } : {}),
+    name: "Fluncle",
+    url: siteUrl,
+  };
+
   return {
     links: [{ href: `${siteUrl}/reach`, rel: "canonical" }],
     meta: [
@@ -502,8 +542,10 @@ function reachHead() {
       { content: description, name: "description" },
       { content: title, property: "og:title" },
       { content: description, property: "og:description" },
+      { content: `${siteUrl}/fluncle-cover.png`, property: "og:image" },
       { content: `${siteUrl}/reach`, property: "og:url" },
     ],
+    scripts: [jsonLdScript(entity)],
   };
 }
 
@@ -613,8 +655,8 @@ function ReachPage() {
           <h1 className="log-coordinate log-index-title">Reach</h1>
           <p className="log-index-intro">
             {crewTotal > 0 && !activeSlug
-              ? `${formatValue(crewTotal)} of you aboard across the Galaxy so far. This is the console where the probes report home.`
-              : "This is the console where the probes report home: every surface reached, and how far it's carried."}
+              ? `${formatValue(crewTotal)} of you aboard across the Galaxy so far. This is the console where my probes report home.`
+              : "This is the console where my probes report home: every surface I've reached, and how far it's carried."}
           </p>
         </header>
 
@@ -712,7 +754,10 @@ function ReachPage() {
 
             {reach.length > 0 ? (
               <section aria-label="The reach" className="space-y-4">
-                <LaneHeading detail="never summed — a view isn't a listen" label="The reach" />
+                <LaneHeading
+                  detail="I don't add these up: a view isn't a listen"
+                  label="The reach"
+                />
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
                   {reach.map((row) => (
                     <StatTile area={false} key={row.key} row={row} />
