@@ -399,7 +399,7 @@ function SignedInPanel({
           How every key reads across Fluncle. Saved to your account, so it follows you to every
           device you sign in on.
         </Text>
-        <Text style={[font.body, styles.prefsFieldLabel]}>Key notation</Text>
+        <Text style={[font.label, styles.prefsFieldLabel]}>Key notation</Text>
         {/* Hug the segments: the modal's column stretches children full-width, which
             left the two small segments marooned in a plate-wide well. */}
         <View style={styles.prefsToggle}>
@@ -762,7 +762,9 @@ const styles = StyleSheet.create({
   loading: { paddingTop: 48 },
   muted: { color: color.stardust },
   prefs: { gap: 8, marginTop: 8 },
-  prefsFieldLabel: { color: color.starlightCream, fontSize: 14, fontWeight: "600", marginTop: 4 },
+  // Subordinate to the section header: the label face at a smaller, muted step —
+  // a sub-item must never out-size "Preferences" above it (operator flag).
+  prefsFieldLabel: { color: color.stardust, fontSize: 13, marginTop: 4 },
   prefsToggle: { alignSelf: "flex-start" },
   setDate: { color: color.stardust, fontSize: 13 },
   setDeleteGhost: { color: color.stardust },
