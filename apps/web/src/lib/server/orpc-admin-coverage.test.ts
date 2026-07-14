@@ -477,7 +477,7 @@ const ADMIN_CARVE_OUT_ROUTE_PREFIXES = [
 ];
 
 const ADMIN_CARVE_OUT_ROUTES = new Set([
-  "chat", // ChatDnB (spike): streams an NDJSON transcript (one event per line) from streamText, not a single RPC JSON body — a streaming carve-out like the media proxies.
+  "chat", // ChatDnB (spike): streams an AI SDK UIMessage stream from streamText (the `useChat` wire protocol), not a single RPC JSON body — a streaming carve-out like the media proxies.
   "logout", // a 302 redirect (expire the grant cookie, bounce to /admin/login), not RPC JSON.
   "tracks.$trackId.preview", // multipart-file body (formData → File).
   "tracks.$trackId.preview-audio", // a streaming media proxy: streams the archived 30s preview bytes from R2 (private, or the legacy public bucket), not RPC JSON.
