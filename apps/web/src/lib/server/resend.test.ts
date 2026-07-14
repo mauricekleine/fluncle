@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { addContactToSegment, createBroadcast, sendBroadcast } from "./resend";
+import {
+  addContactToSegment,
+  createBroadcast,
+  sendBroadcast,
+  sendPasswordResetEmail,
+} from "./resend";
 
 // The Resend client is raw `fetch` against the REST API; mock `fetch` + the env
 // reads so no real call goes out and assert the endpoints/bodies/idempotency.
@@ -123,5 +128,39 @@ describe("createBroadcast + sendBroadcast", () => {
     await expect(
       createBroadcast({ editionId: "ed_x", html: "x", name: "n", subject: "s" }),
     ).rejects.toMatchObject({ code: "broadcast_create_failed" });
+  });
+});
+
+describe("sendPasswordResetEmail", () => {
+  it("sends a single transactional email from the verified sender with the reset link", async () => {
+    fetchMock.mockResolvedValueOnce(ok({ id: "email_1" }));
+
+    await sendPasswordResetEmail({
+      to: "raver@example.com",
+      url: "https://www.fluncle.com/api/auth/reset-password/tok_123",
+    });
+
+    const [url, init] = fetchMock.mock.calls[0] ?? [];
+    expect(url).toBe("https://api.resend.com/emails");
+    const body = JSON.parse(init.body);
+    expect(body.from).toBe("Fluncle <fluncle@newsletter.fluncle.com>");
+    expect(body.to).toBe("raver@example.com");
+    expect(body.subject).toBe("Reset your Fluncle password");
+    // The whole link is the literal call to action — it must ride both bodies.
+    expect(body.text).toContain("https://www.fluncle.com/api/auth/reset-password/tok_123");
+    expect(body.html).toContain("https://www.fluncle.com/api/auth/reset-password/tok_123");
+    // Transactional-plain voice: no exclamation marks, no em dashes in the prose.
+    expect(body.text).not.toContain("!");
+    expect(body.text).not.toContain("—");
+  });
+
+  it("throws email_send_failed on an upstream error", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ message: "boom" }), { status: 500 }),
+    );
+
+    await expect(
+      sendPasswordResetEmail({ to: "err@example.com", url: "https://www.fluncle.com/x" }),
+    ).rejects.toMatchObject({ code: "email_send_failed" });
   });
 });

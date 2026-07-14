@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as StatusRouteImport } from './routes/status'
 import { Route as SitemapDotxmlRouteImport } from './routes/sitemap[.]xml'
 import { Route as RssDotxmlRouteImport } from './routes/rss[.]xml'
+import { Route as ResetPasswordRouteImport } from './routes/reset-password'
 import { Route as ReachRouteImport } from './routes/reach'
 import { Route as RadioRouteImport } from './routes/radio'
 import { Route as PrivacyRouteImport } from './routes/privacy'
@@ -128,6 +129,11 @@ const SitemapDotxmlRoute = SitemapDotxmlRouteImport.update({
 const RssDotxmlRoute = RssDotxmlRouteImport.update({
   id: '/rss.xml',
   path: '/rss.xml',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ResetPasswordRoute = ResetPasswordRouteImport.update({
+  id: '/reset-password',
+  path: '/reset-password',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ReachRoute = ReachRouteImport.update({
@@ -686,6 +692,7 @@ export interface FileRoutesByFullPath {
   '/privacy': typeof PrivacyRoute
   '/radio': typeof RadioRoute
   '/reach': typeof ReachRoute
+  '/reset-password': typeof ResetPasswordRoute
   '/rss.xml': typeof RssDotxmlRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/status': typeof StatusRoute
@@ -791,6 +798,7 @@ export interface FileRoutesByTo {
   '/privacy': typeof PrivacyRoute
   '/radio': typeof RadioRoute
   '/reach': typeof ReachRoute
+  '/reset-password': typeof ResetPasswordRoute
   '/rss.xml': typeof RssDotxmlRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/status': typeof StatusRoute
@@ -899,6 +907,7 @@ export interface FileRoutesById {
   '/privacy': typeof PrivacyRoute
   '/radio': typeof RadioRoute
   '/reach': typeof ReachRoute
+  '/reset-password': typeof ResetPasswordRoute
   '/rss.xml': typeof RssDotxmlRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/status': typeof StatusRoute
@@ -1008,6 +1017,7 @@ export interface FileRouteTypes {
     | '/privacy'
     | '/radio'
     | '/reach'
+    | '/reset-password'
     | '/rss.xml'
     | '/sitemap.xml'
     | '/status'
@@ -1113,6 +1123,7 @@ export interface FileRouteTypes {
     | '/privacy'
     | '/radio'
     | '/reach'
+    | '/reset-password'
     | '/rss.xml'
     | '/sitemap.xml'
     | '/status'
@@ -1220,6 +1231,7 @@ export interface FileRouteTypes {
     | '/privacy'
     | '/radio'
     | '/reach'
+    | '/reset-password'
     | '/rss.xml'
     | '/sitemap.xml'
     | '/status'
@@ -1328,6 +1340,7 @@ export interface RootRouteChildren {
   PrivacyRoute: typeof PrivacyRoute
   RadioRoute: typeof RadioRoute
   ReachRoute: typeof ReachRoute
+  ResetPasswordRoute: typeof ResetPasswordRoute
   RssDotxmlRoute: typeof RssDotxmlRoute
   SitemapDotxmlRoute: typeof SitemapDotxmlRoute
   StatusRoute: typeof StatusRoute
@@ -1416,6 +1429,13 @@ declare module '@tanstack/react-router' {
       path: '/rss.xml'
       fullPath: '/rss.xml'
       preLoaderRoute: typeof RssDotxmlRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/reset-password': {
+      id: '/reset-password'
+      path: '/reset-password'
+      fullPath: '/reset-password'
+      preLoaderRoute: typeof ResetPasswordRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/reach': {
@@ -2217,6 +2237,7 @@ const rootRouteChildren: RootRouteChildren = {
   PrivacyRoute: PrivacyRoute,
   RadioRoute: RadioRoute,
   ReachRoute: ReachRoute,
+  ResetPasswordRoute: ResetPasswordRoute,
   RssDotxmlRoute: RssDotxmlRoute,
   SitemapDotxmlRoute: SitemapDotxmlRoute,
   StatusRoute: StatusRoute,
