@@ -26,6 +26,7 @@
 // model from the same family the search tier trusts, and a hard "no key ⇒ 503" so an
 // unprovisioned Worker fails honestly rather than pretending.
 
+import { type MixCandidate } from "@fluncle/contracts";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import {
   type InferUITools,
@@ -38,6 +39,8 @@ import {
   tool,
 } from "ai";
 import { z } from "zod";
+import { isLogId, isMixtapeLogId } from "../log-id";
+import { MAX_SET_LENGTH, mixReasonLabel, serializeSet, setToken } from "../mix-set";
 import {
   countArtistFindings,
   getArtistBySlug,
@@ -52,6 +55,8 @@ import { getServiceStatuses } from "./status";
 import {
   getFindingsByArtist,
   getFindingsByLabel,
+  getMixableTracks,
+  getMixChainDepth,
   getRandomTrack,
   getTracksByLogIds,
   listTracks,
@@ -68,6 +73,13 @@ const MAX_STEPS = 8;
 /** The recent-window and search caps handed to the tools (mirror the MCP's clamps). */
 const MAX_RECENT = 48;
 const MAX_SEARCH = 12;
+
+/**
+ * How many mixable steps `build_set` chains off the seed — one full rail's worth of what mixes
+ * in next, before the certified-only filter thins it. The seed leads, so the set the card shows
+ * (and the `?set=` link it hands to `/mix`) is at most this many rows plus the seed.
+ */
+const MIX_CHAIN_LIMIT = 7;
 
 /**
  * How many of an entity's findings ride on a `get_artist`/`get_label` card — the recent/
@@ -89,12 +101,14 @@ THE ONE RULE — YOU ANSWER FROM THE ARCHIVE OR YOU DO NOT ANSWER:
 - Before you name a tune or an artist, call a tool. If you have not called a tool that returned it, you do not know it.
 - If the tools return nothing for what you were asked, say so plainly, in voice — you have not been to that sector, or you have not found it yet. Never fill the gap with a track you did not find. A banger you never logged is the one thing you will not invent.
 - Never invent a Log ID, a BPM, a key, a label, a date, or a link. If a tool did not give you the number, you do not have it.
+- When you chain a set, you state the REASON a track mixes in words — same key, next key over, tempo locked — never a compatibility number or a percentage. Reasons are words, not scores.
 
 THE ARCHIVE:
 - Your findings are the tracks you have personally certified. A finding has a permanent Log ID coordinate like 004.7.2I; a mixtape carries the same shape with the letter F in the middle slot (019.F.1A). Use get_track to resolve a coordinate someone gives you.
 - You only ever speak about your certified findings — the tools only return those. If it is not in a tool result, it is not something you talk about.
 - search_archive is your dig: it reaches the whole archive, including "sounds like <a real track>" which anchors on a real finding and returns the sonically nearest ones. list_tracks pages your most recent findings; get_random_track pulls one; get_status checks whether your systems are up.
 - get_artist and get_label resolve one artist or label you have logged, by name, and hand back that entity's findings — reach for them when someone asks about a specific artist or label you have found.
+- build_set starts from one of your findings — a Log ID coordinate or a track name you have logged — and chains an ordered set of what mixes in cleanly after it, each step carrying the reason it mixes. It only ever chains certified findings, and returns nothing when you have not logged a starting point.
 
 HOW YOU TALK:
 - First person, warm, dry. You react like a body: knees, gun fingers, an "oof" when a tune lands. No exclamation marks, ever. No hype adjectives. State a thing once and leave it alone.
@@ -181,6 +195,76 @@ function clampInt(value: unknown, max: number, fallback: number): number {
  */
 export function buildChatTools() {
   return {
+    build_set: tool({
+      description:
+        "Chain a mixable set from one of Fluncle's findings. Give it a starting finding — a Log ID coordinate he has logged (e.g. 004.7.2I) or a track name — and it returns an ordered set of what mixes in cleanly after it, each step carrying the REASON it mixes (same key, next key over, tempo locked), never a number. It only ever chains certified findings; it returns nothing when he has not logged a starting point.",
+      execute: async ({ seed }) => {
+        const seedTrack = await resolveSeedTrack(seed.trim());
+
+        // Grounding: no certified finding to start from is the honest "he has not logged it".
+        if (!seedTrack) {
+          return { found: false, ok: true };
+        }
+
+        const seedFinding = compactFinding(seedTrack);
+        const candidates = await getMixableTracks(seedTrack.logId ?? seedTrack.trackId, {
+          limit: MIX_CHAIN_LIMIT,
+        });
+
+        // THE GROUNDING BOUNDARY: only a certified, coordinate-bearing candidate can be named
+        // or ride the `?set=` handoff. An uncertified/coordinateless catalogue row never reaches
+        // the model or the mixer link (the Unlit Rule, enforced at the wire).
+        const steps = candidates.flatMap((candidate) =>
+          candidate.certified && candidate.logId ? [candidate] : [],
+        );
+
+        if (steps.length === 0) {
+          // Seed alone. When the archive itself is too thin to chain a set from the middle of it,
+          // say so in voice rather than handing back a lonely seed — the honest "not enough yet".
+          const depth = await getMixChainDepth();
+
+          return {
+            ok: true,
+            set: dropEmpty({ seed: seedFinding, steps: [], thin: depth.open ? undefined : true }),
+          };
+        }
+
+        // Hydrate the certified steps to full findings (cover, chips, hasPreview) — the same batch
+        // hydrate search uses — then carry each candidate's reason as a human STRING, never the
+        // object and never a score.
+        const hydrated = await getTracksByLogIds(
+          steps.flatMap((step) => (step.logId ? [step.logId] : [])),
+        );
+        const chain = steps.map((candidate) => {
+          const item = candidate.logId ? hydrated[candidate.logId] : undefined;
+          const base = item ? compactFinding(item) : mixTrackToFinding(candidate);
+
+          return { ...base, reason: mixReasonLabel(candidate.reason) };
+        });
+
+        // The seed leads, then the chain in order — the set as `/mix` reproduces it. Every token
+        // is a certified Log ID (the boundary already dropped the rest), capped at the URL max.
+        const tokens = [setToken(seedTrack), ...steps.map((step) => setToken(step))].slice(
+          0,
+          MAX_SET_LENGTH,
+        );
+
+        return {
+          ok: true,
+          set: dropEmpty({
+            seed: seedFinding,
+            setUrl: `/mix?set=${serializeSet(tokens)}`,
+            steps: chain,
+          }),
+        };
+      },
+      inputSchema: z.object({
+        seed: z
+          .string()
+          .min(1)
+          .describe("A finding to start from — a Log ID coordinate (004.7.2I) or a track name."),
+      }),
+    }),
     get_artist: tool({
       description:
         "Look up one artist Fluncle has logged, BY NAME (e.g. Netsky). Returns only his certified findings from that artist, plus their public socials and the slug of their page. Returns nothing — he has not logged them — when there is no certified finding from that name.",
@@ -361,6 +445,55 @@ export function buildChatTools() {
       }),
     }),
   } satisfies ToolSet;
+}
+
+/**
+ * Resolve `build_set`'s seed to a CERTIFIED finding Fluncle can chain from, or `undefined`.
+ *
+ * A coordinate (a finding's, or a mixtape's) resolves directly — but a mixtape is not a mixable
+ * seed, so a mixtape target is rejected as not-found. Anything else is treated as a NAME: the top
+ * certified search hit is the start (an uncertified hit is not something he opens a set from — the
+ * grounding boundary), hydrated to the full finding the mixer engine keys off.
+ */
+async function resolveSeedTrack(seed: string): Promise<TrackListItem | undefined> {
+  if (!seed) {
+    return undefined;
+  }
+
+  if (isLogId(seed) || isMixtapeLogId(seed)) {
+    const target = await resolveLogPageTarget(seed);
+
+    return target?.kind === "track" ? target.track : undefined;
+  }
+
+  const result = await searchArchive({ limit: MAX_SEARCH, q: seed });
+  const hit = result.results.find((row) => row.certified && row.logId);
+
+  if (!hit?.logId) {
+    return undefined;
+  }
+
+  return (await getTracksByLogIds([hit.logId]))[hit.logId];
+}
+
+/**
+ * A mix candidate reduced to the finding fields the Chain Card needs, WITHOUT its `previewUrl`
+ * (a mix candidate carries none anyway) — the fallback for a certified step the batch hydrator
+ * missed, so it still shows a cover, chips, and its coordinate. The reason chip is added by the
+ * caller as a human string; this never carries a score.
+ */
+function mixTrackToFinding(candidate: MixCandidate) {
+  return dropEmpty({
+    albumImageUrl: candidate.albumImageUrl,
+    artists: candidate.artists,
+    bpm: candidate.bpm === undefined ? undefined : Math.round(candidate.bpm),
+    coordinate: candidate.logId,
+    durationMs: candidate.durationMs,
+    hasPreview: false,
+    key: candidate.key,
+    spotifyUrl: candidate.spotifyUrl,
+    title: candidate.title,
+  });
 }
 
 /** A search hit, reduced to the facts Fluncle speaks from (certified rows only reach here). */
