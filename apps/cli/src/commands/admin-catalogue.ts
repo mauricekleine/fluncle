@@ -229,6 +229,9 @@ export async function verifyCaptureCommand(
 
 /** One bounded crawl pass's real numbers (the `crawl_catalogue` envelope). */
 export type CrawlPassResult = {
+  // How the Spotify anchor fill fared, so anchorsFilled: 0 is never ambiguous — filled / ok /
+  // throttled / unauthorized (reconnect Spotify) / breaker_open (paused on the anchor breaker).
+  anchorOutcome: "breaker_open" | "filled" | "ok" | "throttled" | "unauthorized";
   // Spotify anchors filled onto existing catalogue rows — a separate, bounded step from
   // the walk (its queue is derived, so a throttled pass loses nothing).
   anchorsFilled: number;
@@ -258,6 +261,14 @@ export type CrawlStatusResult = {
   labelsUndecided: number;
   ok: boolean;
   seedLabels: string[];
+  // Why the anchor queue is (or is not) draining. Tripped with a reason = the fill is PAUSED
+  // (a persistent 429, or a lost grant to reconnect) — an operator work item, not background noise.
+  spotifyAnchor: {
+    consecutiveFailures: number;
+    cooldownRemainingMs: number;
+    reason: "throttled" | "unauthorized" | null;
+    tripped: boolean;
+  };
 };
 
 /**

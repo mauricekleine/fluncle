@@ -423,6 +423,7 @@ describe("the catalogue crawler", () => {
   it("fills the Spotify anchor as a SEPARATE step, and a 429 costs the walk nothing", async () => {
     const { findSpotifyTrackByIsrc } = await import("./spotify");
     const { crawlCatalogue, getCrawlStatus } = await import("./crawl");
+    const { resetSpotifyAnchorBreaker } = await import("./spotify-anchor-breaker");
 
     // Spotify is throttling — the exact failure the first live pilot hit when the lookup
     // sat inside the release write. The rows must still land; only the anchor waits.
@@ -437,6 +438,11 @@ describe("the catalogue crawler", () => {
     // be remembered: the next tick simply picks the anchor up.
     expect((await getCrawlStatus()).anchorsPending).toBe(1); // only rec-1 carries an ISRC
 
+    // Spotify recovers. The breaker may have started tracking the throttle; clearing it stands
+    // in for the cooldown having elapsed (or an operator reset), so recovery is deterministic
+    // regardless of how many passes the drain took. (The trip itself is proven precisely in
+    // spotify-anchor-breaker.test.ts and the `breaker_open` integration test below.)
+    await resetSpotifyAnchorBreaker();
     vi.mocked(findSpotifyTrackByIsrc).mockResolvedValue({
       match: {
         spotifyUri: "spotify:track:3QKpHwwmOUJfu53agh7UjW",
@@ -448,10 +454,46 @@ describe("the catalogue crawler", () => {
     const pass = await crawlCatalogue({ limit: 10, maxHop: 2 });
 
     expect(pass.anchorsFilled).toBe(1);
+    expect(pass.anchorOutcome).toBe("filled");
     expect((await getCrawlStatus()).anchorsPending).toBe(0);
+    // A healthy pass lifted the breaker: no lingering trip, no reason to explain.
+    expect((await getCrawlStatus()).spotifyAnchor.tripped).toBe(false);
 
     const anchored = await db.execute("select spotify_uri from tracks where track_id = 'mb_rec-1'");
     expect(anchored.rows[0]?.spotify_uri).toBe("spotify:track:3QKpHwwmOUJfu53agh7UjW");
+  });
+
+  it("PAUSES the anchor fill (breaker_open) when Spotify's grant is gone, and surfaces it", async () => {
+    const { findSpotifyTrackByIsrc } = await import("./spotify");
+    const { crawlCatalogue, getCrawlStatus } = await import("./crawl");
+    const { SPOTIFY_ANCHOR_BREAKER_MAX_FAILURES } = await import("./spotify-anchor-breaker");
+
+    // The grant is gone: every lookup answers `unauthorized` (not a throttle, not a no-match).
+    // This is the OTHER silent-zero regime — before the breaker, it read identically to a
+    // fully-drained queue. A run of these trips the breaker toward a pause, with a reason the
+    // operator can act on (reconnect Spotify) rather than wait out a throttle that never lifts.
+    vi.mocked(findSpotifyTrackByIsrc).mockResolvedValue({ rateLimited: false, unauthorized: true });
+    await drain(); // writes the rows; rec-1's anchor stays pending (nothing minted)
+
+    // Drive exactly K failing passes so the trip is deterministic (drain's pass count is not).
+    // Each pass processes the still-pending anchor, gets `unauthorized`, and folds it in until the
+    // K-th trips; once tripped a pass short-circuits (`breaker_open`) and records nothing.
+    for (let i = 0; i < SPOTIFY_ANCHOR_BREAKER_MAX_FAILURES; i += 1) {
+      await crawlCatalogue({ limit: 10, maxHop: 2 });
+    }
+
+    const trippedStatus = await getCrawlStatus();
+    expect(trippedStatus.spotifyAnchor.tripped).toBe(true);
+    expect(trippedStatus.spotifyAnchor.reason).toBe("unauthorized");
+    expect(trippedStatus.anchorsPending).toBe(1); // the row is still queued, nothing minted
+
+    // While tripped the fill makes NO Spotify call — even if Spotify recovers this instant, the
+    // pass short-circuits until the cooldown lapses. The mock proves the call never happened.
+    vi.mocked(findSpotifyTrackByIsrc).mockClear();
+    const pass = await crawlCatalogue({ limit: 10, maxHop: 2 });
+    expect(pass.anchorOutcome).toBe("breaker_open");
+    expect(pass.anchorsFilled).toBe(0);
+    expect(vi.mocked(findSpotifyTrackByIsrc)).not.toHaveBeenCalled();
   });
 
   it("reports the seed plan and writes NOTHING on a dry run", async () => {

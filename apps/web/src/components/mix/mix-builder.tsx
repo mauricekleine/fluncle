@@ -32,7 +32,7 @@ import {
 } from "@fluncle/ui/components/command";
 import { MixPreviewBar } from "@/components/mix/mix-preview-bar";
 import { TastePicker } from "@/components/mix/taste-picker";
-import { SpotifyIcon } from "@/components/platform-icons";
+import { AppleMusicIcon, SpotifyIcon } from "@/components/platform-icons";
 import { TrackArtwork } from "@/components/track-artwork";
 import { TrackChips } from "@/components/track-row";
 import { formatKey, type KeyNotation, useKeyNotation } from "@/lib/key-notation";
@@ -172,20 +172,37 @@ function BuilderRow({
           ) : null}
         </div>
       </div>
-      {/* The way out, on an unlit row only: there is no /log page for a track Fluncle has
-          not been to, so the row leaves for the one place it can be heard. A crawler-minted
-          row may have no Spotify presence at all — then there is no way out, and the row
-          simply doesn't offer one (never a dead link). */}
-      {!track.certified && track.spotifyUrl ? (
-        <a
-          aria-label={`Open ${track.title} on Spotify`}
-          className="mix-row-out"
-          href={track.spotifyUrl}
-          rel="noreferrer"
-          target="_blank"
-        >
-          <SpotifyIcon aria-hidden="true" className="size-4" />
-        </a>
+      {/* The way(s) out, on an unlit row only: there is no /log page for a track Fluncle has
+          not been to, so the row leaves for the places it can be heard. A crawler-minted row
+          may carry a Spotify anchor, an Apple Music twin, both, or neither — we render only the
+          glyphs it actually has, right-aligned and quiet (never a dead link, never a placeholder
+          for one it lacks). Both marks come from `simple-icons` via platform-icons, per DESIGN.md
+          Iconography — never a Phosphor glyph for a brand. */}
+      {!track.certified && (track.spotifyUrl || track.appleMusicUrl) ? (
+        <div className="flex shrink-0 items-center gap-1">
+          {track.spotifyUrl ? (
+            <a
+              aria-label={`Open ${track.title} on Spotify`}
+              className="mix-row-out"
+              href={track.spotifyUrl}
+              rel="noreferrer"
+              target="_blank"
+            >
+              <SpotifyIcon aria-hidden="true" className="size-4" />
+            </a>
+          ) : null}
+          {track.appleMusicUrl ? (
+            <a
+              aria-label={`Open ${track.title} on Apple Music`}
+              className="mix-row-out"
+              href={track.appleMusicUrl}
+              rel="noreferrer"
+              target="_blank"
+            >
+              <AppleMusicIcon aria-hidden="true" className="size-4" />
+            </a>
+          ) : null}
+        </div>
       ) : null}
       {actions ? <div className="flex shrink-0 items-center gap-1">{actions}</div> : null}
     </li>

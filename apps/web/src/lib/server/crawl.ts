@@ -65,6 +65,11 @@ import { setLabelMbLabelId } from "./label-images";
 import { ensureLabel, labelFold, labelSlug, listLabels } from "./labels";
 import { logEvent } from "./log";
 import { mbFetch } from "./musicbrainz";
+import {
+  areSpotifyAnchorCallsAllowed,
+  getSpotifyAnchorBreakerState,
+  recordSpotifyAnchorOutcome,
+} from "./spotify-anchor-breaker";
 import { findSpotifyTrackByIsrc } from "./spotify";
 
 // ── Policy constants ─────────────────────────────────────────────────────────
@@ -136,8 +141,25 @@ type TrackCandidate = {
   title: string;
 };
 
+/**
+ * What one Spotify anchor-fill pass could do — the signal that ends the silent `anchorsFilled: 0`:
+ *   - `filled`       — at least one anchor was written.
+ *   - `ok`           — Spotify answered, but nothing in this pass's slice matched (or the queue is
+ *                      drained). No action needed.
+ *   - `throttled`    — a 429; the app is being rate-limited. Waits out the breaker cooldown.
+ *   - `unauthorized` — the Spotify grant is gone; the operator must reconnect (the anchor cannot
+ *                      self-heal from this — the cooldown just re-checks).
+ *   - `breaker_open` — the fill made NO call this pass because the breaker is tripped.
+ */
+export type AnchorFillOutcome = "breaker_open" | "filled" | "ok" | "throttled" | "unauthorized";
+
 /** What one `crawl_catalogue` pass did. Every number here is real, not an estimate. */
 export type CrawlPass = {
+  /**
+   * How the Spotify anchor fill fared — so `anchorsFilled: 0` is never ambiguous between drained,
+   * throttled, unauthorized, and paused (`spotify-anchor-breaker.ts`).
+   */
+  anchorOutcome: AnchorFillOutcome;
   /** Spotify `spotify_uri`/`spotify_url` anchors filled onto existing catalogue rows. */
   anchorsFilled: number;
   dryRun: boolean;
@@ -177,6 +199,17 @@ export type CrawlStatus = {
   frontierByKind: { artist: number; label: number; release: number };
   /** The operator's enabled seed labels — what the NEXT crawl would seed from. */
   seedLabels: string[];
+  /**
+   * The Spotify anchor breaker at rest — why the anchor queue is (or is not) draining. Tripped
+   * with a `reason` means the fill is PAUSED (a persistent 429, or a lost grant to reconnect);
+   * this is what turns `anchorsPending` sitting flat from a mystery into an operator work item.
+   */
+  spotifyAnchor: {
+    consecutiveFailures: number;
+    cooldownRemainingMs: number;
+    reason: "throttled" | "unauthorized" | null;
+    tripped: boolean;
+  };
 };
 
 // ── MusicBrainz response shapes (only the fields we consume) ──────────────────
@@ -570,8 +603,22 @@ async function linkTracksToLabel(trackIds: string[], labelName: string): Promise
  *
  * Findings are excluded (the anti-join): a certified track's Spotify id is its identity
  * and was written at publish. This only ever touches catalogue rows.
+ *
+ * A SUSTAINED "Spotify won't answer" regime — a 429 the app earned app-wide, or a lost grant —
+ * would otherwise report `anchorsFilled: 0` every tick with no visible reason. So the fill is
+ * wrapped in a durable breaker (`spotify-anchor-breaker.ts`, the Apple-sibling pattern): while
+ * tripped it makes NO call, and each pass folds its outcome into that breaker so a persistent
+ * failure trips it (pausing the re-poke) and surfaces on `get_crawl_status`.
  */
-async function fillSpotifyAnchors(limit: number): Promise<{ filled: number; throttled: boolean }> {
+async function fillSpotifyAnchors(
+  limit: number,
+): Promise<{ filled: number; outcome: AnchorFillOutcome }> {
+  // The breaker: while tripped, make no Spotify call at all — a persistent throttle or a dead
+  // grant is not re-poked every tick, it waits out the cooldown (or an operator reset).
+  if (!(await areSpotifyAnchorCallsAllowed())) {
+    return { filled: 0, outcome: "breaker_open" };
+  }
+
   const db = await getDb();
   const queue = await db.execute({
     args: [limit],
@@ -586,12 +633,25 @@ async function fillSpotifyAnchors(limit: number): Promise<{ filled: number; thro
   let filled = 0;
 
   for (const row of typedRows<{ isrc: string; track_id: string }>(queue.rows)) {
-    const { match, rateLimited } = await findSpotifyTrackByIsrc(row.isrc);
+    const { match, rateLimited, unauthorized } = await findSpotifyTrackByIsrc(row.isrc);
 
     if (rateLimited) {
+      // Spotify is throttling the app. Fold it into the breaker (a run of these trips it) and
+      // stop — grinding the 429 wall just earns a longer ban.
+      await recordSpotifyAnchorOutcome("throttled");
       logEvent("warn", "crawl.spotify-throttled", { filled });
 
-      return { filled, throttled: true };
+      return { filled, outcome: "throttled" };
+    }
+
+    if (unauthorized) {
+      // The stored Spotify grant is gone — every remaining row would fail identically. Trip the
+      // breaker toward a pause and surface the reason so the operator reconnects, rather than
+      // logging the same silent no-match 20 times a tick forever.
+      await recordSpotifyAnchorOutcome("unauthorized");
+      logEvent("warn", "crawl.spotify-unauthorized", { filled });
+
+      return { filled, outcome: "unauthorized" };
     }
 
     if (!match) {
@@ -610,7 +670,11 @@ async function fillSpotifyAnchors(limit: number): Promise<{ filled: number; thro
     filled += 1;
   }
 
-  return { filled, throttled: false };
+  // The pass ran clean — Spotify answered (whether or not anything matched). Clear any streak so
+  // a healthy tick after a rough patch lifts the breaker immediately.
+  await recordSpotifyAnchorOutcome("ok");
+
+  return { filled, outcome: filled > 0 ? "filled" : "ok" };
 }
 
 // ── Node expansion ───────────────────────────────────────────────────────────
@@ -917,6 +981,7 @@ export async function crawlCatalogue({
 } = {}): Promise<CrawlPass> {
   const hopLimit = Math.max(0, Math.min(maxHop, MAX_HOP_CEILING));
   const pass: CrawlPass = {
+    anchorOutcome: "ok",
     anchorsFilled: 0,
     dryRun,
     expanded: 0,
@@ -992,6 +1057,7 @@ export async function crawlCatalogue({
   // walk a node: by the time it runs, everything this pass discovered is already durable.
   const anchors = await fillSpotifyAnchors(ANCHOR_BUDGET);
   pass.anchorsFilled = anchors.filled;
+  pass.anchorOutcome = anchors.outcome;
 
   const status = await getCrawlStatus();
   pass.frontierPending = status.frontier.pending;
@@ -1005,7 +1071,7 @@ export async function crawlCatalogue({
  */
 export async function getCrawlStatus(): Promise<CrawlStatus> {
   const db = await getDb();
-  const [states, kinds, catalogue, anchors, labels] = await Promise.all([
+  const [states, kinds, catalogue, anchors, labels, spotifyAnchor] = await Promise.all([
     db.execute("select state, count(*) as n from crawl_frontier group by state"),
     db.execute("select kind, count(*) as n from crawl_frontier group by kind"),
     // A CATALOGUE track is a `tracks` row with no `findings` row. That anti-join IS the
@@ -1018,6 +1084,7 @@ export async function getCrawlStatus(): Promise<CrawlStatus> {
                 where isrc is not null and spotify_uri is null
                   and not exists (select 1 from findings where findings.track_id = tracks.track_id)`),
     listLabels(),
+    getSpotifyAnchorBreakerState(),
   ]);
 
   const frontier = { done: 0, failed: 0, pending: 0, skipped: 0 };
@@ -1041,5 +1108,11 @@ export async function getCrawlStatus(): Promise<CrawlStatus> {
       .filter((label) => label.seedState === "enabled")
       .map((label) => label.name)
       .sort(),
+    spotifyAnchor: {
+      consecutiveFailures: spotifyAnchor.consecutiveFailures,
+      cooldownRemainingMs: spotifyAnchor.cooldownRemainingMs,
+      reason: spotifyAnchor.reason,
+      tripped: spotifyAnchor.tripped,
+    },
   };
 }
