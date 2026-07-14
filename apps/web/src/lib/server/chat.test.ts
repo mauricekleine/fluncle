@@ -10,6 +10,10 @@ const getTracksByLogIds = vi.hoisted(() =>
 );
 const getFindingsByArtist = vi.hoisted(() => vi.fn<() => Promise<unknown[]>>());
 const getFindingsByLabel = vi.hoisted(() => vi.fn<() => Promise<unknown[]>>());
+const getMixableTracks = vi.hoisted(() => vi.fn<() => Promise<unknown[]>>());
+const getMixChainDepth = vi.hoisted(() =>
+  vi.fn<() => Promise<{ median: number; open: boolean; rankable: number }>>(),
+);
 const toArtistSlug = vi.hoisted(() => vi.fn<(name: string) => string>());
 const getArtistBySlug = vi.hoisted(() => vi.fn<(slug: string) => Promise<unknown>>());
 const getPublicArtistSocials = vi.hoisted(() => vi.fn<() => Promise<unknown[]>>());
@@ -46,6 +50,8 @@ vi.mock("./labels", () => ({
 vi.mock("./tracks", () => ({
   getFindingsByArtist,
   getFindingsByLabel,
+  getMixChainDepth,
+  getMixableTracks,
   getRandomTrack: vi.fn(),
   getTracksByLogIds,
   listTracks: vi.fn(),
@@ -75,6 +81,12 @@ beforeEach(() => {
   getFindingsByArtist.mockResolvedValue([]);
   getFindingsByLabel.mockReset();
   getFindingsByLabel.mockResolvedValue([]);
+  // build_set defaults: no chain, and a deep-enough archive (so an empty chain is "just this
+  // seed", not "thin"). The build_set suite overrides both with the fixtures it needs.
+  getMixableTracks.mockReset();
+  getMixableTracks.mockResolvedValue([]);
+  getMixChainDepth.mockReset();
+  getMixChainDepth.mockResolvedValue({ median: 40, open: true, rankable: 100 });
   toArtistSlug.mockReset();
   toArtistSlug.mockImplementation(toSlug);
   getArtistBySlug.mockReset();
@@ -149,6 +161,7 @@ describe("buildChatTools — the MCP hands", () => {
     const tools = buildChatTools();
 
     expect(Object.keys(tools).sort()).toEqual([
+      "build_set",
       "get_artist",
       "get_label",
       "get_random_track",
@@ -524,6 +537,221 @@ function hasKeyDeep(value: unknown, key: string): boolean {
 
   return false;
 }
+
+describe("build_set — the chain card's grounding + the no-numbers invariant", () => {
+  function buildSetExecutor() {
+    const execute = buildChatTools().build_set?.execute;
+
+    if (typeof execute !== "function") {
+      throw new Error("build_set executor missing");
+    }
+
+    return execute;
+  }
+
+  // A real finding coordinate (isLogId is the unmocked grammar guard) resolving to a seed track.
+  function seedTargetIs(track: Record<string, unknown>) {
+    return { kind: "track", track };
+  }
+
+  it("chains a set from a resolved coordinate seed — seed, ordered steps, and a /mix setUrl", async () => {
+    const { resolveLogPageTarget } = await import("./log-resolver");
+    vi.mocked(resolveLogPageTarget).mockResolvedValue(
+      seedTargetIs({
+        artists: ["Seed Artist"],
+        durationMs: 200_000,
+        logId: "004.7.2I",
+        title: "Seed Track",
+        trackId: "seed-t",
+      }) as never,
+    );
+    getMixableTracks.mockResolvedValue([
+      {
+        artists: ["A One"],
+        certified: true,
+        durationMs: 210_000,
+        logId: "005.1.3B",
+        reason: { kind: "key", relationship: "same_key" },
+        title: "One",
+        trackId: "t1",
+      },
+      {
+        artists: ["A Two"],
+        certified: true,
+        durationMs: 220_000,
+        logId: "006.2.4C",
+        reason: { kind: "bpm", relationship: "tempo_match" },
+        title: "Two",
+        trackId: "t2",
+      },
+    ]);
+    // The certified steps hydrate to full findings (the card fields), carrying the private,
+    // expiring previewUrl the output must NOT leak.
+    getTracksByLogIds.mockResolvedValue({
+      "005.1.3B": {
+        albumImageUrl: "https://cover.example/one.jpg",
+        artists: ["A One"],
+        durationMs: 210_000,
+        logId: "005.1.3B",
+        previewUrl: "https://deezer.example/one.mp3",
+        title: "One",
+      },
+      "006.2.4C": {
+        artists: ["A Two"],
+        durationMs: 220_000,
+        logId: "006.2.4C",
+        previewUrl: "https://deezer.example/two.mp3",
+        title: "Two",
+      },
+    });
+
+    const result = (await buildSetExecutor()({ seed: "004.7.2I" }, {} as never)) as {
+      set: {
+        seed: { coordinate?: string };
+        setUrl: string;
+        steps: { coordinate?: string; reason?: unknown }[];
+      };
+    };
+
+    // The seed came from the coordinate resolver, and the engine was asked from the seed's logId.
+    expect(getMixableTracks).toHaveBeenCalledWith("004.7.2I", { limit: 7 });
+    expect(result.set.seed.coordinate).toBe("004.7.2I");
+    expect(result.set.steps.map((step) => step.coordinate)).toEqual(["005.1.3B", "006.2.4C"]);
+    // Every step's reason is a human STRING (mixReasonLabel), never the reason object.
+    expect(result.set.steps.map((step) => step.reason)).toEqual(["Same key", "Tempo locked"]);
+    for (const step of result.set.steps) {
+      expect(typeof step.reason).toBe("string");
+    }
+    // The handoff carries the seed FIRST, then the chain in order — all certified Log IDs.
+    expect(result.set.setUrl).toBe("/mix?set=004.7.2I,005.1.3B,006.2.4C");
+    // No numeric score, and no expiring preview token, anywhere in the output.
+    expect(hasKeyDeep(result, "score")).toBe(false);
+    expect(hasKeyDeep(result, "previewUrl")).toBe(false);
+  });
+
+  it("drops an uncertified candidate from the steps AND from the setUrl (the grounding boundary)", async () => {
+    const { resolveLogPageTarget } = await import("./log-resolver");
+    vi.mocked(resolveLogPageTarget).mockResolvedValue(
+      seedTargetIs({
+        artists: ["Seed Artist"],
+        durationMs: 200_000,
+        logId: "004.7.2I",
+        title: "Seed Track",
+        trackId: "seed-t",
+      }) as never,
+    );
+    getMixableTracks.mockResolvedValue([
+      {
+        artists: ["A One"],
+        certified: true,
+        durationMs: 210_000,
+        logId: "005.1.3B",
+        reason: { kind: "key", relationship: "same_key" },
+        title: "One",
+        trackId: "t1",
+      },
+      {
+        artists: ["Uncertified"],
+        certified: false,
+        durationMs: 230_000,
+        // An uncertified row can carry a coordinate-shaped id; it must still never be named or linked.
+        logId: "999.9.9Z",
+        reason: { kind: "sonic", relationship: "close_in_sound" },
+        title: "Catalogue Cut",
+        trackId: "t3",
+      },
+    ]);
+    getTracksByLogIds.mockResolvedValue({
+      "005.1.3B": { artists: ["A One"], durationMs: 210_000, logId: "005.1.3B", title: "One" },
+    });
+
+    const result = (await buildSetExecutor()({ seed: "004.7.2I" }, {} as never)) as {
+      set: { setUrl: string; steps: { coordinate?: string }[] };
+    };
+
+    expect(result.set.steps.map((step) => step.coordinate)).toEqual(["005.1.3B"]);
+    expect(result.set.setUrl).toBe("/mix?set=004.7.2I,005.1.3B");
+    expect(result.set.setUrl).not.toContain("999.9.9Z");
+    // The uncertified logId is never even hydrated (the filter is BEFORE the hydrator).
+    const hydrated = getTracksByLogIds.mock.calls.at(-1)?.[0] ?? [];
+    expect(hydrated).not.toContain("999.9.9Z");
+  });
+
+  it("resolves a NAME seed to the top certified search hit", async () => {
+    const { searchArchive } = await import("./search");
+    vi.mocked(searchArchive).mockResolvedValue({
+      degraded: false,
+      entities: [],
+      kind: "token",
+      results: [
+        { artists: ["Uncertified"], certified: false, title: "Skip Me", trackId: "u" },
+        {
+          artists: ["Seed Artist"],
+          certified: true,
+          logId: "004.7.2I",
+          title: "Seed Track",
+          trackId: "seed-t",
+        },
+      ],
+    } as never);
+    getTracksByLogIds.mockResolvedValue({
+      "004.7.2I": {
+        artists: ["Seed Artist"],
+        durationMs: 200_000,
+        logId: "004.7.2I",
+        title: "Seed Track",
+      },
+    });
+
+    const result = (await buildSetExecutor()({ seed: "seed track" }, {} as never)) as {
+      set: { seed: { coordinate?: string } };
+    };
+
+    // The seed resolved via the certified hit's logId, and the engine was asked from it.
+    expect(getMixableTracks).toHaveBeenCalledWith("004.7.2I", { limit: 7 });
+    expect(result.set.seed.coordinate).toBe("004.7.2I");
+  });
+
+  it("returns found:false when the seed resolves to nothing certified", async () => {
+    const { searchArchive } = await import("./search");
+    vi.mocked(searchArchive).mockResolvedValue({
+      degraded: false,
+      entities: [],
+      kind: "token",
+      results: [{ artists: ["Uncertified"], certified: false, title: "Skip Me", trackId: "u" }],
+    } as never);
+
+    const result = await buildSetExecutor()({ seed: "nobody at all" }, {} as never);
+
+    expect(result).toEqual({ found: false, ok: true });
+    expect(getMixableTracks).not.toHaveBeenCalled();
+  });
+
+  it("says the archive is thin (steps: [], thin: true) when there is nothing to chain and the gate is closed", async () => {
+    const { resolveLogPageTarget } = await import("./log-resolver");
+    vi.mocked(resolveLogPageTarget).mockResolvedValue(
+      seedTargetIs({
+        artists: ["Seed Artist"],
+        durationMs: 200_000,
+        logId: "004.7.2I",
+        title: "Seed Track",
+        trackId: "seed-t",
+      }) as never,
+    );
+    getMixableTracks.mockResolvedValue([]);
+    getMixChainDepth.mockResolvedValue({ median: 3, open: false, rankable: 20 });
+
+    const result = (await buildSetExecutor()({ seed: "004.7.2I" }, {} as never)) as {
+      set: { seed: { coordinate?: string }; steps?: unknown[]; thin?: boolean };
+    };
+
+    expect(result.set.seed.coordinate).toBe("004.7.2I");
+    expect(result.set.thin).toBe(true);
+    // No chain and no handoff — a lonely seed is not a set.
+    expect(result.set.steps ?? []).toEqual([]);
+    expect(hasKeyDeep(result, "setUrl")).toBe(false);
+  });
+});
 
 describe("streamChat — the unprovisioned guard", () => {
   it("returns null when OPENROUTER_API_KEY is unset (the route answers 503)", async () => {

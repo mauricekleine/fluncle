@@ -11,6 +11,7 @@ import { DefaultChatTransport, getToolName, isToolUIPart } from "ai";
 import { type FormEvent, Fragment, type ReactNode, useMemo, useState } from "react";
 import { AdminShell } from "@/components/admin/admin-shell";
 import { ArtistCard, type ChatArtist } from "@/components/chat/artist-card";
+import { ChainCard, type ChatSet } from "@/components/chat/chain-card";
 import { type ChatFinding, FindingCard } from "@/components/chat/finding-card";
 import { FindingList } from "@/components/chat/finding-list";
 import { type ChatLabel, LabelCard } from "@/components/chat/label-card";
@@ -256,6 +257,10 @@ function renderFindingOutput(output: unknown, notation: KeyNotation): ReactNode 
     return undefined;
   }
 
+  if ("set" in output && output.set) {
+    return <ChainCard notation={notation} set={output.set as ChatSet} />;
+  }
+
   if ("artist" in output && output.artist) {
     return <ArtistCard artist={output.artist as ChatArtist} notation={notation} />;
   }
@@ -347,6 +352,19 @@ function collectPreviewRows(messages: FluncleUIMessage[]): {
       if ("findings" in output && Array.isArray(output.findings)) {
         findings.push(...(output.findings as ChatFinding[]));
       }
+      // A chain card nests its seed + steps one level down — both are previewable certified
+      // findings, so the now-playing bar reaches them the same as a top-level result set.
+      if ("set" in output && output.set && typeof output.set === "object") {
+        const set = output.set as { seed?: ChatFinding; steps?: ChatFinding[] };
+
+        if (set.seed) {
+          findings.push(set.seed);
+        }
+        if (Array.isArray(set.steps)) {
+          findings.push(...set.steps);
+        }
+      }
+
       // An artist/label card nests its entity's findings one level down — they are previewable
       // too, so the now-playing bar reaches them the same as a top-level result set.
       for (const entityKey of ["artist", "label"] as const) {
