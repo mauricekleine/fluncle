@@ -59,13 +59,14 @@ function commit(next: MixState): void {
  */
 export function useMixChain(): {
   add: (track: MixTrack) => void;
-  adoptSourceSet: (sourceSetId: string | undefined) => void;
+  adoptSourceSet: (reference: { id: string; name: string } | undefined) => void;
   chain: MixTrack[];
   clear: () => void;
-  load: (chain: MixTrack[], taste: string[], sourceSetId?: string) => void;
+  load: (chain: MixTrack[], taste: string[], sourceSetId?: string, sourceSetName?: string) => void;
   ready: boolean;
   remove: (token: string) => void;
   sourceSetId?: string;
+  sourceSetName?: string;
   setTaste: (taste: string[]) => void;
   taste: string[];
 } {
@@ -106,19 +107,21 @@ export function useMixChain(): {
   const clear = useCallback(() => commit(EMPTY_MIX), []);
 
   // Replace the whole set at once — the open-a-saved-set path (account.tsx hands the resolved
-  // chain + taste in). Unlike add/remove this overwrites both fields, so opening a saved set
-  // lands the reader in that set rather than appending to whatever scratch chain they had.
+  // chain + taste + the set's id/name in). Unlike add/remove this overwrites every field, so
+  // opening a saved set lands the reader in that set (its name prefilling the Save dialog)
+  // rather than appending to whatever scratch chain they had.
   const load = useCallback(
-    (chain: MixTrack[], taste: string[], sourceSetId?: string) =>
-      commit({ chain, sourceSetId, taste }),
+    (chain: MixTrack[], taste: string[], sourceSetId?: string, sourceSetName?: string) =>
+      commit({ chain, sourceSetId, sourceSetName, taste }),
     [],
   );
 
-  // Adopt the account set this chain now belongs to (after a fresh save creates one),
-  // so every later "Save set" updates that set instead of minting siblings.
-  const adoptSourceSet = useCallback((sourceSetId: string | undefined) => {
+  // Adopt the account set this chain now belongs to (after a fresh save creates one, or a
+  // rename-on-save changes its name), so every later "Save set" updates that set instead of
+  // minting siblings — and the dialog prefills with the current name.
+  const adoptSourceSet = useCallback((reference: { id: string; name: string } | undefined) => {
     const current = cache ?? EMPTY_MIX;
-    commit({ ...current, sourceSetId });
+    commit({ ...current, sourceSetId: reference?.id, sourceSetName: reference?.name });
   }, []);
 
   return {
@@ -131,6 +134,7 @@ export function useMixChain(): {
     remove,
     setTaste,
     sourceSetId: state.sourceSetId,
+    sourceSetName: state.sourceSetName,
     taste: state.taste,
   };
 }

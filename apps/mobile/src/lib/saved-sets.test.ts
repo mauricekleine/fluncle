@@ -21,11 +21,21 @@ function assertEqual<T>(actual: T, expected: T, message = "assertion failed"): v
   }
 }
 
-// 1. buildSaveSetBody keys the body exactly as the web posts (`{ set, taste }`), taste and all.
-const body = buildSaveSetBody("004.7.2I,4iV5W9uYEdYUVa79Axb7Rh", "netsky,camo-krooked");
+// 1. buildSaveSetBody keys the body exactly as the web posts (`{ name, set, taste }`), name
+//    trimmed, taste and all.
+const body = buildSaveSetBody(
+  "  Friday warmup  ",
+  "004.7.2I,4iV5W9uYEdYUVa79Axb7Rh",
+  "netsky,camo-krooked",
+);
+assertEqual(body.name, "Friday warmup", "the name is trimmed");
 assertEqual(body.set, "004.7.2I,4iV5W9uYEdYUVa79Axb7Rh", "set rides verbatim");
 assertEqual(body.taste, "netsky,camo-krooked", "taste rides verbatim");
-assertEqual(buildSaveSetBody("004.7.2I", "").taste, "", "an empty taste still rides (web parity)");
+assertEqual(
+  buildSaveSetBody("x", "004.7.2I", "").taste,
+  "",
+  "an empty taste still rides (web parity)",
+);
 
 // 2. parseRemoteSetsList reads the envelope, dropping malformed rows and surviving junk.
 const good: RemoteSavedSet = {

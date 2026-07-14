@@ -486,7 +486,14 @@ function SavedSets() {
   // tokens as params (the tab hydrates them). `dismissTo` pops to the already-mounted tab.
   function openSet(set: RemoteSavedSet) {
     router.dismissTo({
-      params: { savedSetId: set.id, set: set.setTokens, taste: set.taste ?? "" },
+      // `savedSetName` rides so the Decks' Save-set dialog prefills with the set's name (the
+      // stable reference: a re-save keeps the name unless the reader changes it).
+      params: {
+        savedSetId: set.id,
+        savedSetName: set.name,
+        set: set.setTokens,
+        taste: set.taste ?? "",
+      },
       pathname: "/mix",
     });
   }

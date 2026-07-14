@@ -22,6 +22,7 @@ import { type CSSProperties, useCallback, useMemo, useState } from "react";
 import { type MixCandidate, type MixTrack } from "@fluncle/contracts";
 import { Badge } from "@fluncle/ui/components/badge";
 import { Button } from "@fluncle/ui/components/button";
+import { Skeleton } from "@fluncle/ui/components/skeleton";
 import {
   Command,
   CommandEmpty,
@@ -330,26 +331,49 @@ async function searchMixTracks(q: string): Promise<MixTrack[]> {
   }));
 }
 
+// Row-shaped shimmer for a list that is still fetching (the rail re-ranking, the openers) —
+// the artwork square + two text lines of a BuilderRow, in the plate-field pane the real rows
+// land in. Shown WHILE pending so a fetch never reads as an empty answer (the never-false-empty
+// law); the settled empty line renders only on a genuinely empty result.
+function MixRowSkeletonList({ count = 3 }: { count?: number }) {
+  return (
+    <ul
+      aria-hidden="true"
+      className="plate-field m-0 list-none divide-y divide-border rounded-md border border-border p-0"
+    >
+      {Array.from({ length: count }, (_, index) => (
+        <li className="mix-row flex items-center gap-3 px-3 py-2.5" key={index}>
+          <Skeleton className="size-12 shrink-0 rounded-md" />
+          <div className="min-w-0 flex-1 space-y-2">
+            <Skeleton className="h-3.5 w-2/3" />
+            <Skeleton className="h-3 w-1/3" />
+          </div>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 export function MixBuilder({
-  initialChain,
+  chain,
+  onChainChange,
   onPromote,
-  onSetChange,
   onTasteChange,
   readOnly,
   taste,
 }: {
-  initialChain: MixTrack[];
+  /** The LIVE chain — controlled by the route (its single source of truth), not local state. */
+  chain: MixTrack[];
+  /** Commit a chain edit: the route sets its state AND mirrors the order to `?set=`. */
+  onChainChange: (chain: MixTrack[]) => void;
   /** Read-only → editable ("Chain your own set from here"). */
   onPromote: () => void;
-  /** Sync the ordered chain to `?set=` (masked replace, no loader rerun). */
-  onSetChange: (tokens: string[]) => void;
   /** Sync the taste seed to `?taste=`. */
   onTasteChange: (slugs: string[]) => void;
   readOnly: boolean;
   /** The seeded artist slugs, from `?taste=`. */
   taste: string[];
 }) {
-  const [chain, setChain] = useState<MixTrack[]>(initialChain);
   // "I don't want to seed, just let me search" — a session-local escape from the picker.
   const [skippedSeeding, setSkippedSeeding] = useState(false);
   // Re-opening the picker on a live seed ("Change artists").
@@ -357,13 +381,7 @@ export function MixBuilder({
 
   const chainTokens = useMemo(() => chain.map(setToken), [chain]);
 
-  const mutate = useCallback(
-    (next: MixTrack[]) => {
-      setChain(next);
-      onSetChange(next.map(setToken));
-    },
-    [onSetChange],
-  );
+  const mutate = onChainChange;
 
   const add = useCallback(
     (track: MixTrack) => {
@@ -446,7 +464,10 @@ export function MixBuilder({
   const tail = chainTokens[chainTokens.length - 1];
 
   // The rail off the chain's tail, excluding the whole chain server-side, tilted by taste.
-  const { data: candidates = [] } = useQuery({
+  // `isPending` is the never-false-empty guard: a fetch (the first, and every re-rank after an
+  // add — a fresh query key) reads as skeletons, never the "Quiet sector" line (operator flag
+  // 2026-07-14 — the empty state rendered while the rail was still ranking).
+  const { data: candidates = [], isPending: railPending } = useQuery({
     enabled: !readOnly && Boolean(tail),
     queryFn: () => (tail ? fetchMixable(tail, chainTokens, taste) : Promise.resolve([])),
     queryKey: ["mixable", tail, chainTokens.length, serializeTaste(taste)],
@@ -548,7 +569,9 @@ export function MixBuilder({
           <h2 className="mb-2 px-1 text-xs font-bold text-muted-foreground">
             What mixes in next, ranked
           </h2>
-          {candidates.length > 0 ? (
+          {railPending ? (
+            <MixRowSkeletonList />
+          ) : candidates.length > 0 ? (
             <ul className="plate-field m-0 list-none divide-y divide-border rounded-md border border-border p-0">
               {candidates.map((candidate) => (
                 <BuilderRow
@@ -637,7 +660,9 @@ function MixOpeners({
             />
           ))}
         </ul>
-      ) : isPending ? null : (
+      ) : isPending ? (
+        <MixRowSkeletonList />
+      ) : (
         <p className="px-1 text-sm text-muted-foreground">
           I have nothing on those artists I can place yet. Pick another few, or search for a track
           yourself.
@@ -652,7 +677,7 @@ function MixOpeners({
 // Fluncle has never been to, and naming either tier over it would be a false claim.
 function MixSearchPicker({ onPick }: { onPick: (track: MixTrack) => void }) {
   const [q, setQ] = useState("");
-  const { data: results = [] } = useQuery({
+  const { data: results = [], isFetching } = useQuery({
     enabled: q.trim().length > 1,
     queryFn: () => searchMixTracks(q),
     queryKey: ["mix-search", q],
@@ -667,7 +692,11 @@ function MixSearchPicker({ onPick }: { onPick: (track: MixTrack) => void }) {
       <Command className="rounded-lg border border-border" shouldFilter={false}>
         <CommandInput onValueChange={setQ} placeholder="Search tracks" value={q} />
         <CommandList>
-          {q.trim().length > 1 ? <CommandEmpty>Nothing by that name out here.</CommandEmpty> : null}
+          {/* Only a SETTLED empty result reads as "nothing" — while a query is in flight the
+              line is withheld, so a keystroke mid-fetch never flashes a false empty. */}
+          {q.trim().length > 1 && !isFetching ? (
+            <CommandEmpty>Nothing by that name out here.</CommandEmpty>
+          ) : null}
           <CommandGroup>
             {results.map((track) => (
               <CommandItem

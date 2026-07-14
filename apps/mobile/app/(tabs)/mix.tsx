@@ -18,7 +18,16 @@
 // archive-depth check; the app deliberately does not check it (the mix ops are public + open
 // in prod, and App Review must reach the tool) — see mix.ts.
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Pressable, ScrollView, Share, StyleSheet, Text, TextInput, View } from "react-native";
+import {
+  Modal,
+  Pressable,
+  ScrollView,
+  Share,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
@@ -47,14 +56,25 @@ import {
 } from "@/lib/mix-set";
 import { chainTokens } from "@/lib/mix-store";
 import { buildSaveSetBody, resolveSavedSet, SAVED_SETS_PATH } from "@/lib/saved-sets";
-import { color, font } from "@/theme/tokens";
+import { color, font, radius } from "@/theme/tokens";
 
 const TAGLINE =
   "Name a few artists you like. I rank what mixes in clean next, by key, tempo, and feel. Chain a set, then share it with the crew.";
 
 export default function MixScreen() {
-  const { add, adoptSourceSet, chain, clear, load, ready, remove, setTaste, sourceSetId, taste } =
-    useMixChain();
+  const {
+    add,
+    adoptSourceSet,
+    chain,
+    clear,
+    load,
+    ready,
+    remove,
+    setTaste,
+    sourceSetId,
+    sourceSetName,
+    taste,
+  } = useMixChain();
   // The pre-chain step. Deliberately NOT persisted: a cold start always begins at taste
   // (or, with a saved chain, straight in the builder); after an undo-to-empty the reader
   // lands back on the opener step they came from.
@@ -83,17 +103,29 @@ export default function MixScreen() {
   // save attempt so a stale line never lingers over a fresh action.
   const [saving, setSaving] = useState(false);
   const [saveNotice, setSaveNotice] = useState("");
+  // The Save-set dialog (the one save-set contract on web AND mobile, operator ruling
+  // 2026-07-14): the pill opens a small overlay with a name field + Save/Cancel, rather than
+  // saving straight away. The name prefills with the stable reference's name when editing.
+  const [saveOpen, setSaveOpen] = useState(false);
+  const [saveName, setSaveName] = useState("");
 
-  async function onSaveSet() {
+  function openSaveDialog() {
+    setSaveNotice("");
+    setSaveName(sourceSetName ?? "");
+    setSaveOpen(true);
+  }
+
+  async function onSaveSet(name: string) {
     setSaving(true);
     setSaveNotice("");
     try {
-      const bodyPayload = buildSaveSetBody(serializeSet(tokens), serializeTaste(taste));
+      const bodyPayload = buildSaveSetBody(name, serializeSet(tokens), serializeTaste(taste));
+      const savedName = name.trim();
       // A chain opened from (or already saved to) an account set UPDATES that set in
       // place — Save set never mints siblings of the set you are editing (operator flag
-      // 2026-07-14). A fresh chain POSTs once, then adopts the returned id so every
+      // 2026-07-14). A fresh chain POSTs once, then adopts the returned id + name so every
       // save after the first is also an update. A 404 on the PATCH (the set was deleted
-      // on another device) falls back to creating anew.
+      // on another device) falls back to creating anew and adopting THAT.
       let response: Response;
       if (sourceSetId) {
         response = await meFetch(`${SAVED_SETS_PATH}/${sourceSetId}`, {
@@ -101,32 +133,45 @@ export default function MixScreen() {
           method: "PATCH",
         });
         if (response.status === 404) {
-          adoptSourceSet(undefined);
           response = await meFetch(SAVED_SETS_PATH, {
             body: JSON.stringify(bodyPayload),
             method: "POST",
           });
+          if (response.ok) {
+            await adoptFromResponse(response, savedName);
+          }
+        } else if (response.ok) {
+          // Keep the id, adopt the (possibly renamed) name.
+          adoptSourceSet({ id: sourceSetId, name: savedName });
         }
       } else {
         response = await meFetch(SAVED_SETS_PATH, {
           body: JSON.stringify(bodyPayload),
           method: "POST",
         });
-      }
-      if (response.ok && !sourceSetId) {
-        const body = (await response.json()) as { savedSet?: { id?: string } };
-        if (typeof body.savedSet?.id === "string") {
-          adoptSourceSet(body.savedSet.id);
+        if (response.ok) {
+          await adoptFromResponse(response, savedName);
         }
       }
       // On mobile a saved set lands under "Saved sets" on /account, NOT under findings — so the
       // web toast's locator clause ("Find it under your findings.") would be false here. Drop it:
       // literal and true beats verbatim-but-wrong (the Chrome Rule serves accuracy, not echo).
       setSaveNotice(response.ok ? "Saved to your account." : "Couldn't save that set.");
+      if (response.ok) {
+        setSaveOpen(false);
+      }
     } catch {
       setSaveNotice("Couldn't save that set.");
     } finally {
       setSaving(false);
+    }
+  }
+
+  // Adopt the id a fresh POST returned (+ the entered name), so the next save is an update.
+  async function adoptFromResponse(response: Response, savedName: string) {
+    const body = (await response.json()) as { savedSet?: { id?: string } };
+    if (typeof body.savedSet?.id === "string") {
+      adoptSourceSet({ id: body.savedSet.id, name: savedName });
     }
   }
 
@@ -177,13 +222,7 @@ export default function MixScreen() {
             <View style={styles.header}>
               <Text style={[font.display, styles.nameplate]}>Chain a set</Text>
               <View style={styles.actions}>
-                {signedIn ? (
-                  <HeaderAction
-                    disabled={saving}
-                    label={saving ? "Saving…" : "Save set"}
-                    onPress={() => void onSaveSet()}
-                  />
-                ) : null}
+                {signedIn ? <HeaderAction label="Save set" onPress={openSaveDialog} /> : null}
                 <HeaderAction label="Share" onPress={onShare} />
                 <HeaderAction
                   danger={confirmingClear}
@@ -206,7 +245,97 @@ export default function MixScreen() {
           <OpenerStep onBack={() => setStep("taste")} onPick={add} taste={taste} />
         )}
       </SafeAreaView>
+      <SaveSetModal
+        busy={saving}
+        chainLength={chain.length}
+        name={saveName}
+        onCancel={() => setSaveOpen(false)}
+        onChangeName={setSaveName}
+        onSave={() => void onSaveSet(saveName)}
+        visible={saveOpen}
+      />
     </View>
+  );
+}
+
+// The Save-set dialog — the same small overlay the web renders (operator ruling 2026-07-14):
+// a name field, a Save button, a Cancel button. A React Native `Modal` over a transparent
+// scrim, a small centered card in the app's dark, quiet register (the account modal's field
+// styles are the sibling). Save is disabled while the live chain is empty or the name is blank
+// — the empty chain is blocked HERE, never by a server error after the fact.
+function SaveSetModal({
+  busy,
+  chainLength,
+  name,
+  onCancel,
+  onChangeName,
+  onSave,
+  visible,
+}: {
+  busy: boolean;
+  chainLength: number;
+  name: string;
+  onCancel: () => void;
+  onChangeName: (next: string) => void;
+  onSave: () => void;
+  visible: boolean;
+}) {
+  const canSave = chainLength > 0 && name.trim().length > 0 && !busy;
+
+  return (
+    <Modal animationType="fade" onRequestClose={onCancel} transparent visible={visible}>
+      <Pressable accessibilityLabel="Close" onPress={onCancel} style={styles.saveBackdrop}>
+        {/* Stop a tap on the card from bubbling to the backdrop's dismiss. */}
+        <Pressable onPress={() => undefined} style={styles.saveCard}>
+          <Text style={[font.display, styles.saveTitle]}>Save set</Text>
+          <Text style={[font.label, styles.saveFieldLabel]}>Set name</Text>
+          <TextInput
+            accessibilityLabel="Set name"
+            autoCapitalize="sentences"
+            autoCorrect
+            autoFocus
+            maxLength={80}
+            onChangeText={onChangeName}
+            placeholder="Name this set"
+            placeholderTextColor={color.stardust}
+            returnKeyType="done"
+            selectionColor={color.eclipseGold}
+            style={styles.saveInput}
+            value={name}
+          />
+          <View style={styles.saveActions}>
+            <Pressable accessibilityRole="button" hitSlop={8} onPress={onCancel}>
+              {({ pressed }) => (
+                <View style={[styles.saveCancel, pressed ? styles.pillPressed : null]}>
+                  <Text style={[font.label, { color: color.stardust }]}>Cancel</Text>
+                </View>
+              )}
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityState={{ disabled: !canSave }}
+              disabled={!canSave}
+              hitSlop={8}
+              onPress={onSave}
+            >
+              {({ pressed }) => (
+                <View
+                  style={[
+                    styles.saveConfirm,
+                    pressed ? styles.saveConfirmPressed : null,
+                    canSave ? null : styles.pillDisabled,
+                  ]}
+                >
+                  <Text style={[font.label, { color: color.inkOnGold }]}>
+                    {busy ? "Saving…" : "Save set"}
+                  </Text>
+                </View>
+              )}
+            </Pressable>
+          </View>
+        </Pressable>
+      </Pressable>
+    </Modal>
   );
 }
 
@@ -551,15 +680,25 @@ function useIsSignedIn(): boolean {
 // certified findings, so a saved set's uncertified tokens (the ones the Decks rail actively
 // serves) silently dropped. `list_set_tracks` resolves both, so a set opens whole.
 function useSavedSetHydration(
-  load: (chain: MixTrack[], taste: string[], sourceSetId?: string) => void,
+  load: (chain: MixTrack[], taste: string[], sourceSetId?: string, sourceSetName?: string) => void,
 ): void {
-  const params = useLocalSearchParams<{ savedSetId?: string; set?: string; taste?: string }>();
+  const params = useLocalSearchParams<{
+    savedSetId?: string;
+    savedSetName?: string;
+    set?: string;
+    taste?: string;
+  }>();
   const router = useRouter();
   const queryClient = useQueryClient();
   const consumedRef = useRef<string | null>(null);
 
   const setParam = typeof params.set === "string" ? params.set : "";
   const savedSetId = typeof params.savedSetId === "string" ? params.savedSetId : undefined;
+  // The set's NAME rides in so the Save-set dialog prefills with it (the stable reference).
+  const savedSetName =
+    typeof params.savedSetName === "string" && params.savedSetName
+      ? params.savedSetName
+      : undefined;
   const tasteParam = typeof params.taste === "string" ? params.taste : "";
 
   useEffect(() => {
@@ -577,11 +716,11 @@ function useSavedSetHydration(
         );
         return res.tracks;
       });
-      load(resolved, tasteSlugs, savedSetId);
+      load(resolved, tasteSlugs, savedSetId, savedSetName);
       // Consume the params so re-focusing the tab later doesn't re-hydrate over a fresh chain.
-      router.setParams({ savedSetId: "", set: "", taste: "" });
+      router.setParams({ savedSetId: "", savedSetName: "", set: "", taste: "" });
     })();
-  }, [setParam, tasteParam, savedSetId, load, queryClient, router]);
+  }, [setParam, tasteParam, savedSetId, savedSetName, load, queryClient, router]);
 }
 
 const styles = StyleSheet.create({
@@ -646,7 +785,51 @@ const styles = StyleSheet.create({
   railSection: { paddingTop: 28 },
   removeBtn: { alignItems: "center", height: 32, justifyContent: "center", width: 32 },
   rows: { paddingTop: 12 },
+  saveActions: { flexDirection: "row", gap: 8, justifyContent: "flex-end", marginTop: 20 },
+  // A tap-scrim over a darkened field; the card floats centered on it.
+  saveBackdrop: {
+    alignItems: "center",
+    backgroundColor: "rgba(9, 10, 11, 0.72)",
+    flex: 1,
+    justifyContent: "center",
+    padding: 24,
+  },
+  saveCancel: {
+    borderColor: color.dustLine,
+    borderRadius: 8,
+    borderWidth: 1,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+  },
+  saveCard: {
+    backgroundColor: color.sleeveBlack,
+    borderColor: color.dustLine,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    padding: 20,
+    width: "100%",
+  },
+  saveConfirm: {
+    backgroundColor: color.eclipseGold,
+    borderRadius: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+  },
+  saveConfirmPressed: { backgroundColor: color.eclipseGlow },
+  saveFieldLabel: { color: color.starlightCream, marginBottom: 8, marginTop: 16 },
+  saveInput: {
+    backgroundColor: color.tapeBlackFill,
+    borderColor: color.dustLine,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    color: color.starlightCream,
+    fontFamily: font.body.fontFamily,
+    fontSize: 16,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
   saveNotice: { color: color.stardust, paddingHorizontal: 16, paddingTop: 12 },
+  saveTitle: { color: color.starlightCream, fontSize: 20 },
   screen: { backgroundColor: color.deepField, flex: 1 },
   searchField: {
     alignItems: "center",

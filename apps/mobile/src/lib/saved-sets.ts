@@ -31,17 +31,18 @@ export type RemoteSavedSet = {
 };
 
 /**
- * The save-set POST body — the serialized `?set=` chain plus its `?taste=` seed, keyed EXACTLY
- * as the web ShareSetButton posts them (`{ set, taste }`), so the one server helper parses both
- * surfaces the same way. No `name`: a blank name lets the server derive one from the first
- * track + date (renaming lives on the web /account page). Taste rides even when empty (the
+ * The save-set request body — the reader's `name` plus the serialized `?set=` chain and its
+ * `?taste=` seed, keyed EXACTLY as the web posts them (`{ name, set, taste }`), so the one
+ * server helper parses both surfaces the same way. The name is trimmed; a blank one still rides
+ * (the server derives one from the first track + date). Taste rides even when empty (the
  * server's `parseTasteParam("")` yields no seed), mirroring the web byte-for-byte.
  */
 export function buildSaveSetBody(
+  name: string,
   serializedSet: string,
   serializedTaste: string,
-): { set: string; taste: string } {
-  return { set: serializedSet, taste: serializedTaste };
+): { name: string; set: string; taste: string } {
+  return { name: name.trim(), set: serializedSet, taste: serializedTaste };
 }
 
 /**
