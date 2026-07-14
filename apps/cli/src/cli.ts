@@ -2924,6 +2924,23 @@ async function runBackfillLastfm(
 // cron, not a sprint paced by a CLI, and every scrap of its state is durable — so "run
 // again" and "resume" are the same command. (`--limit` sizes the pass; the sweep sets the
 // cadence.) A pass that stops on the rate-limit breaker exits 1 so the cron sees it.
+// The parenthetical after "N Spotify anchor(s) filled" — the reason a pass wrote none, so
+// `anchorsFilled: 0` is never a silent shrug. Empty when the fill ran clean.
+function anchorOutcomeSuffix(
+  outcome: "breaker_open" | "filled" | "ok" | "throttled" | "unauthorized",
+): string {
+  switch (outcome) {
+    case "throttled":
+      return " (Spotify throttled the fill; the anchor breaker is pacing it)";
+    case "unauthorized":
+      return " (Spotify grant is gone — reconnect Spotify from /admin to resume anchoring)";
+    case "breaker_open":
+      return " (anchor fill PAUSED on its breaker; it resumes after the cooldown)";
+    default:
+      return "";
+  }
+}
+
 async function runCrawlCatalogue(
   options: CrawlOptions,
   crawlCatalogueCommand: typeof import("./commands/admin-catalogue").crawlCatalogueCommand,
@@ -2950,7 +2967,9 @@ async function runCrawlCatalogue(
     console.log(
       `  +${result.seeded} seed(s), +${result.nodesEnqueued} node(s) enqueued, ${result.frontierPending} pending, ${result.failed} failed.`,
     );
-    console.log(`  ${result.anchorsFilled} Spotify anchor(s) filled.`);
+    console.log(
+      `  ${result.anchorsFilled} Spotify anchor(s) filled${anchorOutcomeSuffix(result.anchorOutcome)}.`,
+    );
 
     if (result.labelsDiscovered.length > 0) {
       console.log(
@@ -2985,6 +3004,22 @@ async function runCrawlStatus(
   console.log(
     `Catalogue: ${result.catalogueTracks} uncertified track(s); ${result.anchorsPending} awaiting a Spotify anchor.`,
   );
+
+  const { spotifyAnchor } = result;
+
+  if (spotifyAnchor.tripped) {
+    const mins = Math.ceil(spotifyAnchor.cooldownRemainingMs / 60000);
+    const why =
+      spotifyAnchor.reason === "unauthorized"
+        ? "the Spotify grant is gone — reconnect Spotify from /admin to resume anchoring"
+        : "Spotify is throttling the app — it self-heals when the throttle lifts";
+
+    console.log(`  Spotify anchor PAUSED (${why}); breaker cools in ~${mins} min.`);
+  } else if (spotifyAnchor.consecutiveFailures > 0) {
+    console.log(
+      `  Spotify anchor wobbling (${spotifyAnchor.consecutiveFailures} failing pass(es); reason: ${spotifyAnchor.reason ?? "unknown"}).`,
+    );
+  }
   console.log(
     `Frontier: ${frontier.pending} pending, ${frontier.done} done, ${frontier.failed} failed, ${frontier.skipped} skipped` +
       ` (${frontierByKind.label} label, ${frontierByKind.artist} artist, ${frontierByKind.release} release).`,

@@ -1245,10 +1245,13 @@ const MIX_FROM = `tracks left join findings on findings.track_id = tracks.track_
 // register, because they are not selected. `log_id` is the ONLY certification signal, and
 // both `certified` and `logId` are read off it, so they cannot disagree.
 const MIX_TRACK_SELECT = `tracks.track_id, tracks.title, tracks.artists_json, tracks.album_image_url,
-  tracks.spotify_url, tracks.duration_ms, tracks.bpm, tracks.key, findings.log_id`;
+  tracks.spotify_url, tracks.apple_music_url, tracks.duration_ms, tracks.bpm, tracks.key, findings.log_id`;
 
 type MixTrackRow = {
   album_image_url: string | null;
+  // NULL until the Apple ISRC backfill resolves it (or Apple has no match) — the Apple twin of
+  // spotify_url below. An unlit /mix row shows whichever listen-out glyphs it actually has.
+  apple_music_url: string | null;
   artists_json: string;
   bpm: number | null;
   duration_ms: number;
@@ -1272,6 +1275,7 @@ type MixTrackRow = {
 function toMixTrackDTO(row: MixTrackRow): MixTrackDTO {
   return {
     albumImageUrl: row.album_image_url ?? undefined,
+    appleMusicUrl: row.apple_music_url ?? undefined,
     artists: parseArtistsJson(row.artists_json),
     bpm: row.bpm ?? undefined,
     certified: Boolean(row.log_id),

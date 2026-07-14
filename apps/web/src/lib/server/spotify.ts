@@ -328,7 +328,18 @@ export type SpotifyIsrcMatch = {
  * pilot crawl — a sustained by-ISRC sweep DOES earn a 429 — which is exactly why the
  * signal exists and why `fillSpotifyAnchors` trips a breaker on it.
  */
-export type SpotifyIsrcLookup = { match?: SpotifyIsrcMatch; rateLimited: boolean };
+export type SpotifyIsrcLookup = {
+  match?: SpotifyIsrcMatch;
+  rateLimited: boolean;
+  /**
+   * True when the lookup could not run because the stored Spotify grant is gone
+   * (`spotify_not_authenticated` / `spotify_reauth_required`). Distinct from `rateLimited`
+   * (a throttle) and from a clean no-match (`match` undefined, both flags false): the crawler's
+   * anchor breaker pauses on this so a dead grant is not re-poked every tick, and surfaces it so
+   * the operator knows to reconnect rather than wait out a throttle that will never lift.
+   */
+  unauthorized?: boolean;
+};
 
 /**
  * Find a track's Spotify presence BY ISRC — the one job Spotify still does well, and now
@@ -376,7 +387,17 @@ export async function findSpotifyTrackByIsrc(isrc: string): Promise<SpotifyIsrcL
   } catch (error) {
     logEvent("warn", "spotify.isrc-lookup-failed", { error, isrc: clean });
 
-    // `spotifyFetch` throws an ApiError whose message carries the upstream status. A 429
+    // The grant is gone (`getSpotifyAccessToken` throws an ApiError with these codes): every
+    // subsequent call will fail the same way until the operator reconnects, so this is NOT a
+    // "not on Spotify" answer and NOT a throttle — the caller must pause and surface it.
+    if (
+      error instanceof ApiError &&
+      (error.code === "spotify_not_authenticated" || error.code === SPOTIFY_REAUTH_REQUIRED)
+    ) {
+      return { rateLimited: false, unauthorized: true };
+    }
+
+    // `spotifyFetch` throws a plain Error whose message carries the upstream status. A 429
     // means the vendor is throttling, not that the track is absent — the caller must stop.
     const rateLimited = error instanceof Error && error.message.includes("429");
 

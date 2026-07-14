@@ -188,6 +188,13 @@ export const MixReasonSchema = z
 export const MixTrackSchema = z
   .object({
     albumImageUrl: z.string().optional(),
+    /**
+     * The track's Apple Music URL — the Spotify twin on the unlit register's way out, resolved
+     * exactly by ISRC (the `apple-music` catalogue backfill fills it for catalogue rows the same
+     * way `spotify_url` gets its anchor). Present only once resolved; a crawler-minted row may
+     * carry neither, one, or both. The unlit `/mix` row shows whichever glyphs it has.
+     */
+    appleMusicUrl: z.string().optional(),
     artists: z.array(z.string()),
     bpm: z.number().optional(),
     /** True ⇔ Fluncle certified this track — i.e. it is a finding, and has a coordinate. */

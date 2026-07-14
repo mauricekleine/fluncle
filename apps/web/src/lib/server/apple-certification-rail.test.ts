@@ -91,13 +91,21 @@ describe("apple_music_url certification rail", () => {
     expect(block).not.toContain("apple_music_url");
   });
 
-  it("only certified-finding surfaces + the admin catalogue reference appleMusicUrl in the component tree", () => {
+  it("only certified-finding surfaces + the admin catalogue + /mix reference appleMusicUrl in the component tree", () => {
     // A PUBLIC component may render the Apple listen link only for a CERTIFIED finding — the /log
-    // finding page. The ADMIN catalogue (The Ear) is the one non-finding surface allowed it: it is
-    // the operator's workstation, where a full-listen link is the point (docs/the-ear.md § The
-    // operator's actions), not a public unlit row. A new `.tsx` touching `appleMusicUrl` lands here
-    // as a deliberate, reviewed addition — or the build fails.
-    const ALLOWED = new Set(["routes/log.$logId.tsx", "routes/admin/catalogue.tsx"]);
+    // finding page. The ADMIN catalogue (The Ear) is one non-finding surface allowed it: it is the
+    // operator's workstation, where a full-listen link is the point (docs/the-ear.md § The
+    // operator's actions), not a public unlit row. The OTHER is `/mix`'s set-builder: it is the one
+    // public surface whose UNLIT row deliberately links OUT (there is no /log page to send you to,
+    // so it offers the place the track CAN be heard — the Spotify anchor, and now its Apple twin;
+    // MixTrackSchema + mix-builder.tsx document this exception to the graph pages' Unlit Rule). A
+    // new `.tsx` touching `appleMusicUrl` lands here as a deliberate, reviewed addition — or the
+    // build fails.
+    const ALLOWED = new Set([
+      "components/mix/mix-builder.tsx",
+      "routes/admin/catalogue.tsx",
+      "routes/log.$logId.tsx",
+    ]);
 
     const offenders = tsxFiles().filter((file) => read(file).includes("appleMusicUrl"));
 

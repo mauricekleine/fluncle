@@ -504,6 +504,13 @@ export const verifyCapture = oc
 export const CrawlPassSchema = z
   .object({
     /**
+     * How the Spotify anchor fill fared — so `anchorsFilled: 0` is never ambiguous. `filled`
+     * (wrote ≥1), `ok` (Spotify answered, nothing matched / queue drained), `throttled` (a 429),
+     * `unauthorized` (the grant is gone — reconnect Spotify), or `breaker_open` (paused this pass
+     * on the persistent anchor breaker). See docs/catalogue-crawler.md § the anchor.
+     */
+    anchorOutcome: z.enum(["breaker_open", "filled", "ok", "throttled", "unauthorized"]),
+    /**
      * Spotify `spotify_uri`/`spotify_url` anchors filled onto existing catalogue rows.
      * A SEPARATE, bounded step from the walk — Spotify's 429 is a hard wall (the pilot hit
      * it), and its queue is derived (`isrc is not null and spotify_uri is null`), so an
@@ -565,6 +572,18 @@ export const CrawlStatusSchema = z
     labelsUndecided: z.number(),
     /** What the NEXT crawl would seed from. */
     seedLabels: z.array(z.string()),
+    /**
+     * The Spotify anchor breaker at rest — why `anchorsPending` is (or is not) draining. `tripped`
+     * with a `reason` means the fill is PAUSED: `throttled` waits out the cooldown, `unauthorized`
+     * needs the operator to reconnect Spotify. This is what turns a flat anchor queue from a
+     * silent mystery into an operator work item.
+     */
+    spotifyAnchor: z.object({
+      consecutiveFailures: z.number(),
+      cooldownRemainingMs: z.number(),
+      reason: z.enum(["throttled", "unauthorized"]).nullable(),
+      tripped: z.boolean(),
+    }),
   })
   .meta({ id: "CrawlStatus" });
 
