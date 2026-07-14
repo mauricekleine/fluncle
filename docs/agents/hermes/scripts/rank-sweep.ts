@@ -72,6 +72,18 @@ type RankSummary = {
   scored?: number;
 };
 
+// The CLI prints the rank tick as an ENVELOPE — `{"ok":true,"summary":{…}}` — with the
+// counts nested under `summary`. This sweep originally read them at the TOP level, so
+// every count parsed as `undefined ?? 0`: the tick reported zeros AND `remaining = 0`
+// broke the drain loop after ONE call of its MAX_CALLS budget — the 2026-07-14 silent
+// 1/8th-pace regression (the server ranked; the sweep just couldn't see it). Unwrap the
+// envelope, and keep the flat read as a fallback so either shape parses.
+type RankResponse = RankSummary & { summary?: RankSummary };
+
+function unwrapRankSummary(response: RankResponse): RankSummary {
+  return response.summary ?? response;
+}
+
 // ---------------------------------------------------------------------------
 // Shell helper — synchronous, fail-loud where it matters. Parse-first, so a partial
 // batch is RECORDED rather than discarded as a crash (the backfill-sweep contract).
@@ -143,13 +155,9 @@ export function main(): { ok: boolean } & Record<string, unknown> {
 
   try {
     for (let call = 0; call < MAX_CALLS; call += 1) {
-      const tick = fluncleJson<RankSummary>([
-        "admin",
-        "catalogue",
-        "rank",
-        "--limit",
-        String(BATCH),
-      ]);
+      const tick = unwrapRankSummary(
+        fluncleJson<RankResponse>(["admin", "catalogue", "rank", "--limit", String(BATCH)]),
+      );
 
       summary.calls += 1;
       summary.corpus = tick.corpus ?? summary.corpus;

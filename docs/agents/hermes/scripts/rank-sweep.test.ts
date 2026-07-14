@@ -26,17 +26,22 @@ N=$(cat "$DIR/count" 2>/dev/null || echo 0)
 N=$((N + 1))
 echo "$N" > "$DIR/count"
 case "$(cat "$DIR/mode")" in
-  # Three ticks of real work, then drained. The drain must consume all three in ONE run.
+  # Three ticks of real work, then drained — in the REAL CLI shape: the counts nest under
+  # "summary" ({"ok":true,"summary":{…}}). The original stubs printed the counts FLAT, which
+  # is exactly how the 2026-07-14 regression shipped green: the sweep read top-level keys,
+  # prod nested them, and every tick parsed as zeros. The stubs now mirror prod.
   drain)
     case "$N" in
-      1) printf '{"ok":true,"scored":250,"prioritized":10,"remaining":400,"corpus":"60:60"}\\n' ;;
-      2) printf '{"ok":true,"scored":250,"prioritized":5,"remaining":150,"corpus":"60:60"}\\n' ;;
-      *) printf '{"ok":true,"scored":150,"prioritized":0,"remaining":0,"corpus":"60:60"}\\n' ;;
+      1) printf '{"ok":true,"summary":{"scored":250,"prioritized":10,"remaining":400,"corpus":"60:60"}}\\n' ;;
+      2) printf '{"ok":true,"summary":{"scored":250,"prioritized":5,"remaining":150,"corpus":"60:60"}}\\n' ;;
+      *) printf '{"ok":true,"summary":{"scored":150,"prioritized":0,"remaining":0,"corpus":"60:60"}}\\n' ;;
     esac ;;
   # Never drains — the tick budget must stop it, and say so honestly.
-  endless) printf '{"ok":true,"scored":250,"prioritized":0,"remaining":9999,"corpus":"60:60"}\\n' ;;
+  endless) printf '{"ok":true,"summary":{"scored":250,"prioritized":0,"remaining":9999,"corpus":"60:60"}}\\n' ;;
   # An unchanged archive: one cheap scoped COUNT, nothing to do.
-  idle) printf '{"ok":true,"scored":0,"prioritized":0,"remaining":0,"corpus":"60:60"}\\n' ;;
+  idle) printf '{"ok":true,"summary":{"scored":0,"prioritized":0,"remaining":0,"corpus":"60:60"}}\\n' ;;
+  # The pre-envelope flat shape — the unwrap keeps it parseable as a fallback.
+  flat) printf '{"ok":true,"scored":42,"prioritized":7,"remaining":0,"corpus":"60:60"}\\n' ;;
   cli-error) printf '{"code":"missing_token","message":"Missing required env vars","ok":false}\\n'; exit 1 ;;
   crash) printf 'boom\\n' >&2; exit 1 ;;
 esac
@@ -115,6 +120,16 @@ describe("rank-sweep drains the stale set", () => {
 
     expect(calls()).toBe(1);
     expect(summary.scored).toBe(0);
+    expect(summary.remaining).toBe(0);
+  });
+
+  test("the pre-envelope FLAT payload still parses (the unwrap fallback)", () => {
+    mode("flat");
+    const summary = run();
+
+    expect(calls()).toBe(1);
+    expect(summary.scored).toBe(42);
+    expect(summary.prioritized).toBe(7);
     expect(summary.remaining).toBe(0);
   });
 });
