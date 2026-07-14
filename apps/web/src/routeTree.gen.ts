@@ -96,8 +96,6 @@ import { Route as ApiAdminTracksTrackIdSourceAudioRouteImport } from './routes/a
 import { Route as ApiAdminTracksTrackIdSilentClipRouteImport } from './routes/api/admin/tracks.$trackId.silent-clip'
 import { Route as ApiAdminTracksTrackIdPreviewAudioRouteImport } from './routes/api/admin/tracks.$trackId.preview-audio'
 import { Route as ApiAdminTracksTrackIdPreviewRouteImport } from './routes/api/admin/tracks.$trackId.preview'
-import { Route as ApiAdminTiktokAuthStartRouteImport } from './routes/api/admin/tiktok/auth/start'
-import { Route as ApiAdminTiktokAuthCallbackRouteImport } from './routes/api/admin/tiktok/auth/callback'
 import { Route as ApiAdminSpotifyAuthStartRouteImport } from './routes/api/admin/spotify/auth/start'
 import { Route as ApiAdminSpotifyAuthLoginRouteImport } from './routes/api/admin/spotify/auth/login'
 import { Route as ApiAdminSpotifyAuthCallbackRouteImport } from './routes/api/admin/spotify/auth/callback'
@@ -560,17 +558,6 @@ const ApiAdminTracksTrackIdPreviewRoute =
     path: '/api/admin/tracks/$trackId/preview',
     getParentRoute: () => rootRouteImport,
   } as any)
-const ApiAdminTiktokAuthStartRoute = ApiAdminTiktokAuthStartRouteImport.update({
-  id: '/api/admin/tiktok/auth/start',
-  path: '/api/admin/tiktok/auth/start',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiAdminTiktokAuthCallbackRoute =
-  ApiAdminTiktokAuthCallbackRouteImport.update({
-    id: '/api/admin/tiktok/auth/callback',
-    path: '/api/admin/tiktok/auth/callback',
-    getParentRoute: () => rootRouteImport,
-  } as any)
 const ApiAdminSpotifyAuthStartRoute =
   ApiAdminSpotifyAuthStartRouteImport.update({
     id: '/api/admin/spotify/auth/start',
@@ -767,8 +754,6 @@ export interface FileRoutesByFullPath {
   '/api/admin/spotify/auth/callback': typeof ApiAdminSpotifyAuthCallbackRoute
   '/api/admin/spotify/auth/login': typeof ApiAdminSpotifyAuthLoginRoute
   '/api/admin/spotify/auth/start': typeof ApiAdminSpotifyAuthStartRoute
-  '/api/admin/tiktok/auth/callback': typeof ApiAdminTiktokAuthCallbackRoute
-  '/api/admin/tiktok/auth/start': typeof ApiAdminTiktokAuthStartRoute
   '/api/admin/tracks/$trackId/preview': typeof ApiAdminTracksTrackIdPreviewRoute
   '/api/admin/tracks/$trackId/preview-audio': typeof ApiAdminTracksTrackIdPreviewAudioRoute
   '/api/admin/tracks/$trackId/silent-clip': typeof ApiAdminTracksTrackIdSilentClipRoute
@@ -874,8 +859,6 @@ export interface FileRoutesByTo {
   '/api/admin/spotify/auth/callback': typeof ApiAdminSpotifyAuthCallbackRoute
   '/api/admin/spotify/auth/login': typeof ApiAdminSpotifyAuthLoginRoute
   '/api/admin/spotify/auth/start': typeof ApiAdminSpotifyAuthStartRoute
-  '/api/admin/tiktok/auth/callback': typeof ApiAdminTiktokAuthCallbackRoute
-  '/api/admin/tiktok/auth/start': typeof ApiAdminTiktokAuthStartRoute
   '/api/admin/tracks/$trackId/preview': typeof ApiAdminTracksTrackIdPreviewRoute
   '/api/admin/tracks/$trackId/preview-audio': typeof ApiAdminTracksTrackIdPreviewAudioRoute
   '/api/admin/tracks/$trackId/silent-clip': typeof ApiAdminTracksTrackIdSilentClipRoute
@@ -984,8 +967,6 @@ export interface FileRoutesById {
   '/api/admin/spotify/auth/callback': typeof ApiAdminSpotifyAuthCallbackRoute
   '/api/admin/spotify/auth/login': typeof ApiAdminSpotifyAuthLoginRoute
   '/api/admin/spotify/auth/start': typeof ApiAdminSpotifyAuthStartRoute
-  '/api/admin/tiktok/auth/callback': typeof ApiAdminTiktokAuthCallbackRoute
-  '/api/admin/tiktok/auth/start': typeof ApiAdminTiktokAuthStartRoute
   '/api/admin/tracks/$trackId/preview': typeof ApiAdminTracksTrackIdPreviewRoute
   '/api/admin/tracks/$trackId/preview-audio': typeof ApiAdminTracksTrackIdPreviewAudioRoute
   '/api/admin/tracks/$trackId/silent-clip': typeof ApiAdminTracksTrackIdSilentClipRoute
@@ -1095,8 +1076,6 @@ export interface FileRouteTypes {
     | '/api/admin/spotify/auth/callback'
     | '/api/admin/spotify/auth/login'
     | '/api/admin/spotify/auth/start'
-    | '/api/admin/tiktok/auth/callback'
-    | '/api/admin/tiktok/auth/start'
     | '/api/admin/tracks/$trackId/preview'
     | '/api/admin/tracks/$trackId/preview-audio'
     | '/api/admin/tracks/$trackId/silent-clip'
@@ -1202,8 +1181,6 @@ export interface FileRouteTypes {
     | '/api/admin/spotify/auth/callback'
     | '/api/admin/spotify/auth/login'
     | '/api/admin/spotify/auth/start'
-    | '/api/admin/tiktok/auth/callback'
-    | '/api/admin/tiktok/auth/start'
     | '/api/admin/tracks/$trackId/preview'
     | '/api/admin/tracks/$trackId/preview-audio'
     | '/api/admin/tracks/$trackId/silent-clip'
@@ -1311,8 +1288,6 @@ export interface FileRouteTypes {
     | '/api/admin/spotify/auth/callback'
     | '/api/admin/spotify/auth/login'
     | '/api/admin/spotify/auth/start'
-    | '/api/admin/tiktok/auth/callback'
-    | '/api/admin/tiktok/auth/start'
     | '/api/admin/tracks/$trackId/preview'
     | '/api/admin/tracks/$trackId/preview-audio'
     | '/api/admin/tracks/$trackId/silent-clip'
@@ -1399,8 +1374,6 @@ export interface RootRouteChildren {
   ApiAdminSpotifyAuthCallbackRoute: typeof ApiAdminSpotifyAuthCallbackRoute
   ApiAdminSpotifyAuthLoginRoute: typeof ApiAdminSpotifyAuthLoginRoute
   ApiAdminSpotifyAuthStartRoute: typeof ApiAdminSpotifyAuthStartRoute
-  ApiAdminTiktokAuthCallbackRoute: typeof ApiAdminTiktokAuthCallbackRoute
-  ApiAdminTiktokAuthStartRoute: typeof ApiAdminTiktokAuthStartRoute
   ApiAdminTracksTrackIdPreviewRoute: typeof ApiAdminTracksTrackIdPreviewRoute
   ApiAdminTracksTrackIdPreviewAudioRoute: typeof ApiAdminTracksTrackIdPreviewAudioRoute
   ApiAdminTracksTrackIdSilentClipRoute: typeof ApiAdminTracksTrackIdSilentClipRoute
@@ -2033,20 +2006,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiAdminTracksTrackIdPreviewRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/admin/tiktok/auth/start': {
-      id: '/api/admin/tiktok/auth/start'
-      path: '/api/admin/tiktok/auth/start'
-      fullPath: '/api/admin/tiktok/auth/start'
-      preLoaderRoute: typeof ApiAdminTiktokAuthStartRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/admin/tiktok/auth/callback': {
-      id: '/api/admin/tiktok/auth/callback'
-      path: '/api/admin/tiktok/auth/callback'
-      fullPath: '/api/admin/tiktok/auth/callback'
-      preLoaderRoute: typeof ApiAdminTiktokAuthCallbackRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/api/admin/spotify/auth/start': {
       id: '/api/admin/spotify/auth/start'
       path: '/api/admin/spotify/auth/start'
@@ -2304,8 +2263,6 @@ const rootRouteChildren: RootRouteChildren = {
   ApiAdminSpotifyAuthCallbackRoute: ApiAdminSpotifyAuthCallbackRoute,
   ApiAdminSpotifyAuthLoginRoute: ApiAdminSpotifyAuthLoginRoute,
   ApiAdminSpotifyAuthStartRoute: ApiAdminSpotifyAuthStartRoute,
-  ApiAdminTiktokAuthCallbackRoute: ApiAdminTiktokAuthCallbackRoute,
-  ApiAdminTiktokAuthStartRoute: ApiAdminTiktokAuthStartRoute,
   ApiAdminTracksTrackIdPreviewRoute: ApiAdminTracksTrackIdPreviewRoute,
   ApiAdminTracksTrackIdPreviewAudioRoute:
     ApiAdminTracksTrackIdPreviewAudioRoute,
