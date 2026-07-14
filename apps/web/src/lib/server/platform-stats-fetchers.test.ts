@@ -4,12 +4,11 @@ import {
   collectAppStore,
   collectBluesky,
   collectGithub,
-  collectInstagramFollowers,
   collectLastfm,
   collectMixcloud,
   collectNpm,
   collectTelegram,
-  collectTiktokStats,
+  mapPostizMetrics,
   collectTwitchFollowers,
   collectYoutube,
   type FetchImpl,
@@ -258,57 +257,29 @@ describe("collectTwitchFollowers", () => {
   });
 });
 
-describe("collectTiktokStats", () => {
-  it("parses follower_count + likes_count from data.user", async () => {
-    const metrics = await collectTiktokStats(
-      fakeFetch([
-        {
-          body: { data: { user: { follower_count: 88, likes_count: 512 } } },
-          match: "open.tiktokapis.com/v2/user/info",
-        },
-      ]),
-      "tiktok-access-token",
+describe("mapPostizMetrics", () => {
+  it("maps the platform labels onto reach metric names and drops the unmapped", () => {
+    const metrics = mapPostizMetrics(
+      [
+        { label: "Followers", latestTotal: 6 },
+        { label: "Total Likes", latestTotal: 89 },
+        { label: "Views", latestTotal: 1145 },
+        { label: "Following", latestTotal: 40 },
+      ],
+      { Followers: "followers", "Total Likes": "likes", Views: "views" },
+      "tiktok",
     );
 
     expect(metrics).toEqual([
-      { metric: "followers", value: 88 },
-      { metric: "likes", value: 512 },
+      { metric: "followers", value: 6 },
+      { metric: "likes", value: 89 },
+      { metric: "views", value: 1145 },
     ]);
   });
 
-  it("throws when TikTok reports a non-ok error code in the body (→ a skip)", async () => {
-    await expect(
-      collectTiktokStats(
-        fakeFetch([
-          {
-            body: { error: { code: "access_token_invalid", message: "bad token" } },
-            match: "open.tiktokapis.com/v2/user/info",
-          },
-        ]),
-        "tok",
-      ),
-    ).rejects.toThrow(/bad token/);
-  });
-});
-
-describe("collectInstagramFollowers", () => {
-  it("parses followers_count from the graph me read", async () => {
-    const metrics = await collectInstagramFollowers(
-      fakeFetch([
-        { body: { followers_count: 143, id: "178..." }, match: "graph.instagram.com/me" },
-      ]),
-      "instagram-long-token",
-    );
-
-    expect(metrics).toEqual([{ metric: "followers", value: 143 }]);
-  });
-
-  it("throws on a non-200 (→ a skip)", async () => {
-    await expect(
-      collectInstagramFollowers(
-        fakeFetch([{ body: {}, match: "graph.instagram.com/me", status: 400 }]),
-        "tok",
-      ),
-    ).rejects.toThrow(/Instagram me responded 400/);
+  it("throws on a payload with no mapped labels — an honest skip, never a hollow row", () => {
+    expect(() =>
+      mapPostizMetrics([{ label: "Reach", latestTotal: 0 }], { Views: "views" }, "instagram"),
+    ).toThrow(/no mapped metrics/);
   });
 });

@@ -1,0 +1,1 @@
+DROP TABLE `tiktok_auth`;

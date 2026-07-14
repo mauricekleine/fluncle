@@ -99,8 +99,6 @@ const envKeys = [
   // TikTok — Display API `user.info.stats` (own account only) for follower + likes
   // totals. `client_key`/`client_secret` from the TikTok developer app (note TikTok's
   // "client_key", not "client_id").
-  "TIKTOK_CLIENT_KEY",
-  "TIKTOK_CLIENT_SECRET",
   // Instagram — the "Instagram API with Instagram Login" business flow (NOT the
   // Facebook-Login variant), `instagram_business_basic` scope → `followers_count`. The
   // Instagram App ID/Secret from the Meta app dashboard. The stored token is a 60-day

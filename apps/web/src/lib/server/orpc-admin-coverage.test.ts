@@ -456,7 +456,6 @@ const ADMIN_CARVE_OUT_ROUTE_PREFIXES = [
   // The /reach Tier-2 OAuth starts + callbacks (docs/reach-tier2-activation.md): 302
   // browser redirects like the others, not RPC JSON — permanent carve-outs.
   "twitch/auth/",
-  "tiktok/auth/",
   "instagram/auth/",
 ];
 

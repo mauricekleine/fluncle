@@ -35,12 +35,18 @@ type Integration = {
 
 type Media = { id: string; path: string };
 
-async function postizFetch(path: string, init: RequestInit): Promise<Response> {
+async function postizFetch(
+  path: string,
+  init: RequestInit,
+  fetchImpl: typeof fetch = fetch,
+): Promise<Response> {
   const key = await readEnv("POSTIZ_API_KEY");
   const base = (await readOptionalEnv("POSTIZ_API_URL")) ?? DEFAULT_BASE;
 
-  // Postiz wants the raw key in Authorization — no "Bearer" prefix.
-  return fetch(`${base}${path}`, {
+  // Postiz wants the raw key in Authorization — no "Bearer" prefix. `fetchImpl` is
+  // injectable so the /reach analytics read is unit-testable with ZERO real network
+  // (the publish callers keep the global fetch default).
+  return fetchImpl(`${base}${path}`, {
     ...init,
     headers: { Authorization: key, ...(init.headers as Record<string, string> | undefined) },
   });
@@ -55,8 +61,9 @@ async function postizFetch(path: string, init: RequestInit): Promise<Response> {
  */
 async function resolveIntegration(
   candidates: string[],
+  fetchImpl: typeof fetch = fetch,
 ): Promise<{ id: string; identifier: string }> {
-  const response = await postizFetch("/integrations", { method: "GET" });
+  const response = await postizFetch("/integrations", { method: "GET" }, fetchImpl);
 
   if (!response.ok) {
     throw new ApiError(
@@ -91,6 +98,49 @@ async function resolveIntegration(
  *  identifier (its `__type`), so it uses `resolveIntegration` directly. */
 async function resolveIntegrationId(candidates: string[]): Promise<string> {
   return (await resolveIntegration(candidates)).id;
+}
+
+/** One Postiz analytics metric: the platform's label + the latest day's value. */
+export type PostizMetric = { label: string; latestTotal: number };
+
+/**
+ * The /reach collectors' read — `GET /analytics/{integration}?date=N` for the platform's
+ * connected channel. Postiz returns per-label DAILY series ({ label, data: [{ total, date }] });
+ * the reach snapshot wants the latest point per label, parsed to an int. READ-ONLY: this is the
+ * one Postiz call in the codebase that can never publish anything. Labels are platform-dependent
+ * ("Followers" / "Total Likes" / "Views" on TikTok; "Reach" / "Views" / "Saves" on Instagram) —
+ * the caller maps the ones it wants and ignores the rest, so a Postiz label change degrades to
+ * a missing metric, never a wrong one.
+ */
+export async function getPostizPlatformAnalytics(
+  candidates: string[],
+  days = 7,
+  fetchImpl: typeof fetch = fetch,
+): Promise<PostizMetric[]> {
+  const { id } = await resolveIntegration(candidates, fetchImpl);
+  const response = await postizFetch(`/analytics/${id}?date=${days}`, { method: "GET" }, fetchImpl);
+
+  if (!response.ok) {
+    throw new ApiError("postiz_analytics", `Postiz analytics failed (${response.status})`, 502);
+  }
+
+  const list = (await response.json()) as {
+    data?: { date?: string; total?: unknown }[];
+    label?: string;
+  }[];
+
+  const metrics: PostizMetric[] = [];
+
+  for (const entry of Array.isArray(list) ? list : []) {
+    const latest = entry.data?.at(-1)?.total;
+    const value = typeof latest === "string" ? Number(latest) : latest;
+
+    if (entry.label && typeof value === "number" && Number.isFinite(value)) {
+      metrics.push({ label: entry.label, latestTotal: Math.trunc(value) });
+    }
+  }
+
+  return metrics;
 }
 
 /** Register a public HTTPS media URL with Postiz (it pulls it). Returns the ref. */

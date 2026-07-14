@@ -2,11 +2,10 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { type FetchImpl } from "./env";
 import { refreshInstagramToken } from "./instagram";
-import { requestTiktokToken } from "./tiktok";
 import { requestTwitchToken } from "./twitch";
 
 // The Tier-2 token-REFRESH path (docs/reach-tier2-activation.md), fetch mocked so no
-// real network + no DB is touched. Each platform's raw token helper (twitch/tiktok are
+// real network + no DB is touched. Each platform's raw token helper (twitch is
 // POSTs; instagram is a GET) is the DB-free core the DB-backed `get<Platform>AccessToken`
 // calls when the stored token nears expiry — this exercises that core: it parses the
 // refreshed token out of the response, throws a clean reason on a fault, and (twitch/
@@ -102,52 +101,6 @@ describe("requestTwitchToken (refresh path)", () => {
           .fetchImpl,
       ),
     ).rejects.toThrow(/Twitch token request failed/);
-  });
-});
-
-describe("requestTiktokToken (refresh path)", () => {
-  it("posts the refresh grant with client_key and parses the new tokens", async () => {
-    process.env.TIKTOK_CLIENT_KEY = "tiktok-key";
-    process.env.TIKTOK_CLIENT_SECRET = "tiktok-secret";
-
-    const { calls, fetchImpl } = recordingFetch([
-      {
-        body: {
-          access_token: "new-access",
-          expires_in: 86400,
-          refresh_token: "new-refresh",
-          scope: "user.info.basic,user.info.stats",
-        },
-        match: "open.tiktokapis.com/v2/oauth/token",
-      },
-    ]);
-
-    const data = await requestTiktokToken(
-      { grant_type: "refresh_token", refresh_token: "old-refresh" },
-      fetchImpl,
-    );
-
-    expect(data.access_token).toBe("new-access");
-    expect(data.refresh_token).toBe("new-refresh");
-    expect(calls[0]?.body).toContain("client_key=tiktok-key");
-    expect(calls[0]?.body).toContain("grant_type=refresh_token");
-  });
-
-  it("throws when TikTok reports an error in the body (a 200 with error set)", async () => {
-    process.env.TIKTOK_CLIENT_KEY = "tiktok-key";
-    process.env.TIKTOK_CLIENT_SECRET = "tiktok-secret";
-
-    await expect(
-      requestTiktokToken(
-        { grant_type: "refresh_token", refresh_token: "old" },
-        recordingFetch([
-          {
-            body: { error: "invalid_grant", error_description: "refresh token expired" },
-            match: "oauth/token",
-          },
-        ]).fetchImpl,
-      ),
-    ).rejects.toThrow(/refresh token expired/);
   });
 });
 

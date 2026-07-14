@@ -22,11 +22,10 @@
 
 import { getDb, typedRows } from "./db";
 import { type FetchImpl, readOptionalEnv } from "./env";
-import { getInstagramAccessToken } from "./instagram";
 import { logEvent } from "./log";
+import { getPostizPlatformAnalytics } from "./postiz";
 import { countSegmentRecipients } from "./resend";
 import { fetchPlaylistFollowerCount } from "./spotify";
-import { getTiktokAccessToken } from "./tiktok";
 import { getTwitchAccessToken, readTwitchClientId } from "./twitch";
 
 // The injectable fetch — the default is the global `fetch`; the tests pass a fake
@@ -413,75 +412,66 @@ export async function collectTwitch(fetchImpl: FetchImpl): Promise<PlatformMetri
 }
 
 /**
- * TikTok — follower_count + likes_count via the Display API `user/info`, given the
- * own-account user token. Pure fetch+parse; the registry wrapper supplies the token.
- * TikTok wraps the payload in `data.user` and reports errors in `error.code` (a
- * non-"ok" code throws → an honest skip).
+ * Map a Postiz analytics payload's platform-dependent LABELS onto reach metric names —
+ * the shared parse half of the two Postiz-backed collectors, pure + unit-testable. A label
+ * Postiz stops sending degrades to a missing metric (never a wrong one), and an entirely
+ * empty result throws so the collector records an honest skip instead of a hollow row.
  */
-export async function collectTiktokStats(
-  fetchImpl: FetchImpl,
-  accessToken: string,
-): Promise<PlatformMetric[]> {
-  const response = await fetchImpl(
-    "https://open.tiktokapis.com/v2/user/info/?fields=follower_count,likes_count",
-    { headers: { Authorization: `Bearer ${accessToken}` } },
-  );
+export function mapPostizMetrics(
+  metrics: { label: string; latestTotal: number }[],
+  labelMap: Record<string, string>,
+  platform: string,
+): PlatformMetric[] {
+  const out: PlatformMetric[] = [];
 
-  if (!response.ok) {
-    throw new Error(`TikTok user/info responded ${response.status}`);
+  for (const entry of metrics) {
+    const metric = labelMap[entry.label];
+
+    if (metric && entry.latestTotal >= 0) {
+      out.push({ metric, value: entry.latestTotal });
+    }
   }
 
-  const data = (await response.json()) as {
-    data?: { user?: { follower_count?: unknown; likes_count?: unknown } };
-    error?: { code?: string; message?: string };
-  };
-
-  if (data.error && data.error.code && data.error.code !== "ok") {
-    throw new Error(`TikTok user/info error: ${data.error.message ?? data.error.code}`);
+  if (out.length === 0) {
+    throw new Error(`${platform}: no mapped metrics in the Postiz analytics payload`);
   }
 
-  const user = data.data?.user;
-
-  return [
-    { metric: "followers", value: requireCount(user?.follower_count, "TikTok follower_count") },
-    { metric: "likes", value: requireCount(user?.likes_count, "TikTok likes_count") },
-  ];
-}
-
-/** TikTok registry wrapper — supplies the stored token. */
-export async function collectTiktok(fetchImpl: FetchImpl): Promise<PlatformMetric[]> {
-  const accessToken = await getTiktokAccessToken();
-
-  return collectTiktokStats(fetchImpl, accessToken);
+  return out;
 }
 
 /**
- * Instagram — followers_count via the Graph API `me` endpoint (Instagram Login), given
- * the long-lived token. Pure fetch+parse; the registry wrapper supplies the token.
+ * TikTok — via POSTIZ platform analytics (the account is already connected there for the
+ * publish drafts, and Postiz exposes MORE than TikTok's own Display API would have:
+ * followers + total likes + total views, no TikTok developer app, no scope review). The
+ * 2026-07-14 live probe's labels: "Followers" / "Total Likes" / "Views" (plus
+ * Following/Videos/Recent-* — deliberately unmapped: the reach page tracks audience and
+ * carry, not the posting cadence). Supersedes the retired TikTok user-OAuth leg.
  */
-export async function collectInstagramFollowers(
-  fetchImpl: FetchImpl,
-  accessToken: string,
-): Promise<PlatformMetric[]> {
-  const params = new URLSearchParams({ access_token: accessToken, fields: "followers_count" });
-  const response = await fetchImpl(`https://graph.instagram.com/me?${params.toString()}`);
+export async function collectTiktok(fetchImpl: FetchImpl): Promise<PlatformMetric[]> {
+  const metrics = await getPostizPlatformAnalytics(["tiktok"], 7, fetchImpl);
 
-  if (!response.ok) {
-    throw new Error(`Instagram me responded ${response.status}`);
-  }
-
-  const data = (await response.json()) as { followers_count?: unknown };
-
-  return [
-    { metric: "followers", value: requireCount(data.followers_count, "Instagram followers_count") },
-  ];
+  return mapPostizMetrics(
+    metrics,
+    { Followers: "followers", "Total Likes": "likes", Views: "views" },
+    "tiktok",
+  );
 }
 
-/** Instagram registry wrapper — supplies the stored long-lived token. */
+/**
+ * Instagram — via POSTIZ platform analytics. The standalone-Instagram connection exposes
+ * ENGAGEMENT only (Reach/Views/Likes/Saves — the 2026-07-14 live probe), NOT a follower
+ * count, so the reach page carries Instagram's `views` and the audience number stays absent
+ * (honest) until the dormant Instagram-Login OAuth leg (instagram.ts + its auth routes) is
+ * ever activated through Meta's business verification — see docs/reach-tier2-activation.md.
+ */
 export async function collectInstagram(fetchImpl: FetchImpl): Promise<PlatformMetric[]> {
-  const accessToken = await getInstagramAccessToken();
+  const metrics = await getPostizPlatformAnalytics(
+    ["instagram-standalone", "instagram"],
+    7,
+    fetchImpl,
+  );
 
-  return collectInstagramFollowers(fetchImpl, accessToken);
+  return mapPostizMetrics(metrics, { Views: "views" }, "instagram");
 }
 
 // The registry — the drain order is stable so the collect summary reads the
@@ -503,11 +493,13 @@ const PLATFORM_FETCHERS: PlatformFetcher[] = [
   { collect: () => collectNewsletter(), platform: "newsletter" },
   { collect: () => collectSpotifyPlaylist(), platform: "spotify_playlist" },
   { collect: collectYoutube, platform: "youtube" },
-  // Tier-2 (user-OAuth, DORMANT until the operator connects — each skips cleanly while
-  // its token/env is absent). See docs/reach-tier2-activation.md.
-  { collect: collectTwitch, platform: "twitch" },
+  // Postiz-backed (the accounts are connected there for publishing; analytics ride the
+  // same POSTIZ_API_KEY — read-only, one integrations lookup + one analytics read each).
   { collect: collectTiktok, platform: "tiktok" },
   { collect: collectInstagram, platform: "instagram" },
+  // Tier-2 (user-OAuth, DORMANT until the operator connects — skips cleanly while
+  // its token/env is absent). See docs/reach-tier2-activation.md.
+  { collect: collectTwitch, platform: "twitch" },
 ];
 
 /**

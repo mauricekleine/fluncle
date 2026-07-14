@@ -115,7 +115,8 @@ describe("the /reach store", () => {
     const result = await recordPlatformStats({ at, fetchImpl: collectorFetch() });
 
     // 10 Tier-1 platforms, 15 metrics total (mixcloud 3, bluesky 2, youtube 2, lastfm 2,
-    // the other six 1 each). The 3 Tier-2 platforms (twitch/tiktok/instagram) are DORMANT
+    // the other six 1 each). tiktok/instagram ride Postiz (no POSTIZ_API_KEY in tests -> skip)
+    // and twitch is Tier-2 DORMANT
     // — no stored token in this fresh db — so they skip cleanly and write nothing.
     expect(result.collected).toHaveLength(10);
     expect(result.inserted).toBe(15);
