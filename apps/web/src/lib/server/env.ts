@@ -106,6 +106,7 @@ const envKeys = [
   // Instagram App ID/Secret from the Meta app dashboard. The stored token is a 60-day
   // LONG-LIVED token (no refresh_token — it is refreshed in place via
   // graph.instagram.com/refresh_access_token), so instagram_auth carries no refresh column.
+  "GITHUB_TOKEN",
   "INSTAGRAM_CLIENT_ID",
   "INSTAGRAM_CLIENT_SECRET",
   // Last.fm write side (love-on-add). API_KEY + SHARED_SECRET come from the

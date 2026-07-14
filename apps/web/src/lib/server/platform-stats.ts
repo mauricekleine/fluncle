@@ -144,10 +144,21 @@ export async function collectBluesky(fetchImpl: FetchImpl): Promise<PlatformMetr
   ];
 }
 
-/** GitHub — GET /repos/{owner}/{repo} (keyless; a UA header is required). */
+/**
+ * GitHub — GET /repos/{owner}/{repo}. Keyless in principle, but the unauthenticated quota is
+ * 60 req/hr PER IP and the Worker egresses from Cloudflare's SHARED pool — other tenants
+ * exhaust it constantly (day 2's snapshot missed exactly this way). An optional GITHUB_TOKEN
+ * (a fine-grained PAT with public-read only — it grants nothing) lifts the quota to 5,000/hr
+ * on Fluncle's own bucket; absent, the keyless attempt still runs and may get lucky.
+ */
 export async function collectGithub(fetchImpl: FetchImpl): Promise<PlatformMetric[]> {
+  const token = await readOptionalEnv("GITHUB_TOKEN");
   const response = await fetchImpl(`https://api.github.com/repos/${GITHUB_REPO}`, {
-    headers: { Accept: "application/vnd.github+json", "User-Agent": USER_AGENT },
+    headers: {
+      Accept: "application/vnd.github+json",
+      "User-Agent": USER_AGENT,
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
   });
 
   if (!response.ok) {

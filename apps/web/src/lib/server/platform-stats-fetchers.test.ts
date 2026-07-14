@@ -101,6 +101,21 @@ describe("collectGithub", () => {
 
     expect(metrics).toEqual([{ metric: "stars", value: 256 }]);
   });
+
+  it("sends the Authorization header when GITHUB_TOKEN is set — the shared-egress quota fix", async () => {
+    process.env.GITHUB_TOKEN = "gh-token";
+
+    let sawAuth = "";
+    const metrics = await collectGithub((async (_url: unknown, init?: RequestInit) => {
+      sawAuth = String((init?.headers as Record<string, string>)?.Authorization ?? "");
+
+      return new Response(JSON.stringify({ stargazers_count: 2 }), { status: 200 });
+    }) as FetchImpl);
+
+    delete process.env.GITHUB_TOKEN;
+    expect(sawAuth).toBe("Bearer gh-token");
+    expect(metrics).toEqual([{ metric: "stars", value: 2 }]);
+  });
 });
 
 describe("collectNpm", () => {

@@ -43,6 +43,7 @@ YOUTUBE_REDIRECT_URI=http://127.0.0.1:3000/api/admin/youtube/auth/callback
 # A plain YouTube Data API v3 key (a `key=` query param, not OAuth) for the /reach
 # collector's public channel stats. Optional — absent, the youtube leg skips cleanly.
 # YOUTUBE_API_KEY=op://$FLUNCLE_1PASSWORD_ENV_ITEM/YOUTUBE_API_KEY
+# GITHUB_TOKEN=op://$FLUNCLE_1PASSWORD_ENV_ITEM/GITHUB_TOKEN
 # Mixcloud needs no redirect-URI var — it's derived from the request origin.
 MIXCLOUD_CLIENT_ID=op://$FLUNCLE_1PASSWORD_ENV_ITEM/MIXCLOUD_CLIENT_ID
 MIXCLOUD_CLIENT_SECRET=op://$FLUNCLE_1PASSWORD_ENV_ITEM/MIXCLOUD_CLIENT_SECRET
