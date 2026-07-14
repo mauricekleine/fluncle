@@ -46,6 +46,7 @@ export default function RootLayout() {
             }}
           >
             <Stack.Screen name="(tabs)" />
+            <Stack.Screen name="account" options={{ presentation: "modal" }} />
             <Stack.Screen name="log/[id]" options={{ presentation: "modal" }} />
             <Stack.Screen name="mixtape/[id]" />
             <Stack.Screen name="notifications" options={{ presentation: "modal" }} />
