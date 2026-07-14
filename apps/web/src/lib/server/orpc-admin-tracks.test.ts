@@ -230,6 +230,34 @@ describe("oRPC update_track (PATCH /admin/tracks/{trackId})", () => {
     );
   });
 
+  it("maps the render's diversity-ledger trio — the finalize-miss correction path", async () => {
+    updateTrack.mockResolvedValueOnce({
+      fields: ["videoVehicle", "videoGrain", "videoRegister"],
+      trackId: TRACK_ID,
+    });
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      patch(OPERATOR_TOKEN, {
+        videoGrain: "grainBayer",
+        videoRegister: "representational",
+        videoVehicle: "  arch in the shallows  ",
+      }),
+    );
+
+    expect(response?.status).toBe(200);
+    // Trimmed like the finalize mapping; an empty/whitespace value would be dropped.
+    expect(updateTrack).toHaveBeenCalledWith(
+      TRACK_ID,
+      {
+        videoGrain: "grainBayer",
+        videoRegister: "representational",
+        videoVehicle: "arch in the shallows",
+      },
+      { writer: "operator" },
+    );
+  });
+
   it('clears the note on `note: ""` (the regression — write, don\'t no-op)', async () => {
     updateTrack.mockResolvedValueOnce({ fields: ["note"], trackId: TRACK_ID });
 

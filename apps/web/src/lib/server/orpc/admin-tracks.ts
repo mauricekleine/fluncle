@@ -271,6 +271,24 @@ export function adminTracksHandlers(os: Implementer) {
         update.note = parseEditorialNote(body.note);
       }
 
+      // The render's diversity-ledger stamps (vehicle/grain/register). Normally the
+      // video FINALIZE writes them from the bundle's render.json, but a bundle can ship
+      // without them (the 2026-07 unlabelled trio), and the correction path is this
+      // generic update — the operator watches the video and stamps what is on screen.
+      // Same trim/length discipline as the finalize mapping; the certification rail in
+      // updateTrack still 409s them on an uncertified row (they are findings columns).
+      if (typeof body.videoVehicle === "string" && body.videoVehicle.trim()) {
+        update.videoVehicle = body.videoVehicle.trim().slice(0, 120);
+      }
+
+      if (typeof body.videoGrain === "string" && body.videoGrain.trim()) {
+        update.videoGrain = body.videoGrain.trim().slice(0, 120);
+      }
+
+      if (typeof body.videoRegister === "string" && body.videoRegister.trim()) {
+        update.videoRegister = body.videoRegister.trim().slice(0, 120);
+      }
+
       // Straggler repair: one-time backfill of identity fields into null slots
       // (updateTrack enforces immutability once set).
       if (typeof body.isrc === "string") {
