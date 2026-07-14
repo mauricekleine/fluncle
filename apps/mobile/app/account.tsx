@@ -386,14 +386,18 @@ function SignedInPanel({
         </Text>
       ) : null}
 
+      <SavedSets />
+
+      {/* The infrequent actions live at the FOOT of the panel (operator ruling
+          2026-07-14: sign out was the first control the eye landed on — leaving and
+          destroying are rare acts and earn the least real estate, not the most).
+          Sign out stays quiet and separate from the fenced danger zone below it. */}
       <HeatButton
         disabled={busy !== ""}
         label={busy === "signout" ? "Signing out…" : "Sign out"}
         onPress={() => void signOut()}
         variant="outline"
       />
-
-      <SavedSets />
 
       <View style={styles.danger}>
         <Text style={[font.label, { color: color.starlightCream }]}>Delete account</Text>
