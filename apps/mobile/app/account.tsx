@@ -18,7 +18,8 @@ import { authClient, meFetch } from "@/lib/auth-client";
 import { mergeSavedWithAccount } from "@/lib/saved";
 import { parseRemoteSetsList, type RemoteSavedSet, SAVED_SETS_PATH } from "@/lib/saved-sets";
 import { API_BASE } from "@/config";
-import { syncKeyNotationFromAccount } from "@/lib/key-notation";
+import { KeyNotationToggle } from "@/components/key-notation-toggle";
+import { formatKey, syncKeyNotationFromAccount, useKeyNotation } from "@/lib/key-notation";
 import { color, font, radius } from "@/theme/tokens";
 
 // The /account modal (RFC: accounts in the pocket). An account is a QUIET, opt-in
@@ -388,6 +389,20 @@ function SignedInPanel({
 
       <SavedSets />
 
+      {/* Preferences — the web account page's section, ported (operator ask 2026-07-14).
+          The toggle is the same store the Decks control writes; the preview line makes
+          the choice legible without leaving the screen. */}
+      <View style={styles.prefs}>
+        <Text style={[font.label, { color: color.starlightCream }]}>Preferences</Text>
+        <Text style={[font.body, styles.muted]}>
+          How every key reads across Fluncle. Saved to your account, so it follows you to every
+          device you sign in on.
+        </Text>
+        <Text style={[font.body, styles.prefsFieldLabel]}>Key notation</Text>
+        <KeyNotationToggle />
+        <NotationPreview />
+      </View>
+
       {/* The infrequent actions live at the FOOT of the panel (operator ruling
           2026-07-14: sign out was the first control the eye landed on — leaving and
           destroying are rare acts and earn the least real estate, not the most).
@@ -435,6 +450,18 @@ function SignedInPanel({
 // back into the Decks (the stored tokens handed to the mix tab via router.dismissTo) or is
 // removed behind the app's two-tap arm. RENAME is out of scope for mobile v1 — it lives on the
 // web /account page (the AlertDialog form has no compact native analogue here).
+// The live example under the Preferences toggle — the choice previews itself
+// (mirrors the web account page's "Keys read as 1A." line).
+function NotationPreview() {
+  const { notation } = useKeyNotation();
+
+  return (
+    <Text accessibilityLiveRegion="polite" style={[font.body, styles.muted]}>
+      Keys read as {formatKey("G# minor", notation)}.
+    </Text>
+  );
+}
+
 function SavedSets() {
   const router = useRouter();
   // `undefined` = not loaded yet (render nothing, no empty-state flash); an array once fetched.
@@ -666,6 +693,8 @@ const styles = StyleSheet.create({
   linkRow: { alignSelf: "flex-start", minHeight: 32, paddingVertical: 4 },
   loading: { paddingTop: 48 },
   muted: { color: color.stardust },
+  prefs: { gap: 8, marginTop: 8 },
+  prefsFieldLabel: { color: color.starlightCream, fontSize: 14, fontWeight: "600", marginTop: 4 },
   setDelete: {
     borderColor: color.reentryRed,
     borderRadius: radius.md,
