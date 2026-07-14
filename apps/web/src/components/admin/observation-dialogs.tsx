@@ -1,4 +1,5 @@
 import { CircleNotchIcon, FileTextIcon, MicrophoneIcon } from "@phosphor-icons/react";
+import { HeldObservationPanel } from "@/components/admin/held-observation-panel";
 import { type BoardRow } from "@/components/admin/use-publish";
 import { stripSsml } from "@/lib/observation-text";
 import {
@@ -155,6 +156,11 @@ export function ObservationDialog({
             step.
           </p>
         )}
+
+        {/* The observation echo gate's held script, when one exists for this finding — the
+            spoken sibling of the note dialog's held-note panel. Renders nothing for the
+            common case (no held rejection): the panel's own read returns an empty ledger. */}
+        {row ? <HeldObservationPanel trackId={row.trackId} /> : undefined}
       </DialogContent>
     </Dialog>
   );

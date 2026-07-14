@@ -34,8 +34,18 @@ import {
   type Artifact,
   type FamilyDiversity,
   measureFamily,
+  measureRegisters,
+  type RegisterStats,
   stripLogbookProse,
 } from "../src/lib/server/artifact-diversity";
+
+// The crutch words the 2026-07-14 audit tracked on the observations — the closer formula
+// ("enjoy"/"cosmonaut"), the "hope" reflex, and the "shoulders" body-image tic. Tracked in a
+// fixed order so a re-measure lines up column-for-column against the audit's numbers.
+const CRUTCH_WORDS = ["hope", "enjoy", "cosmonaut", "cosmonauts", "shoulders"] as const;
+
+/** A family's diversity reading plus its register cut (openers/closers/crutches). */
+type FamilyReport = FamilyDiversity & { registers: RegisterStats };
 
 // The note work's ratified baseline, from the roadmap + PR #502: the vibe-neighbour layer
 // + echo gate CUT within-sonic-region mean pairwise word overlap from 0.041 to 0.015. It
@@ -95,7 +105,45 @@ function pct(value: number): string {
   return `${(value * 100).toFixed(1)}%`;
 }
 
-function renderFamily(reading: FamilyDiversity): string {
+/**
+ * The REGISTER cut — how templated a family's openers, closers, and reflexes are. This is the
+ * cut that makes the observations' worst homogenisation legible: the formulaic closer, the
+ * "I…" opener, the "hope" crutch. The before/after on these lines is the proof the prompt +
+ * neighbourhood rails broke the formula, in a way the whole-corpus mean overlap never showed.
+ */
+function renderRegisters(registers: RegisterStats): string {
+  const lines: string[] = [];
+
+  lines.push(`**Register (openers / closers / crutches over ${registers.size} artifacts):**`);
+  lines.push("");
+
+  const edgeTable = (rows: { docFreq: number; phrase: string }[]) =>
+    rows.length === 0
+      ? "_None shared across two or more._"
+      : rows.map((row) => `\`${row.phrase}\` (${row.docFreq}/${registers.size})`).join(", ");
+
+  lines.push(`- **Top openers (first 3 words):** ${edgeTable(registers.openers)}`);
+  lines.push(
+    `- **Opening word:** ${
+      registers.openingWords.length === 0
+        ? "_no first word recurs._"
+        : registers.openingWords
+            .map((word) => `\`${word.word}\` (${word.docFreq}/${registers.size})`)
+            .join(", ")
+    }`,
+  );
+  lines.push(`- **Top closers (last 3 words):** ${edgeTable(registers.closers)}`);
+  lines.push(
+    `- **Crutch words:** ${registers.crutches
+      .map((crutch) => `\`${crutch.word}\` ${crutch.docFreq}/${registers.size}`)
+      .join(", ")}`,
+  );
+  lines.push("");
+
+  return lines.join("\n");
+}
+
+function renderFamily(reading: FamilyReport): string {
   const lines: string[] = [];
 
   lines.push(`### ${reading.family} (${reading.size} artifacts)`);
@@ -159,6 +207,7 @@ function renderFamily(reading: FamilyDiversity): string {
   }
 
   lines.push("");
+  lines.push(renderRegisters(reading.registers));
 
   return lines.join("\n");
 }
@@ -229,7 +278,7 @@ function renderVerdict(readings: FamilyDiversity[]): string {
   );
 }
 
-function renderReport(readings: FamilyDiversity[], meta: { db: string; when: string }): string {
+function renderReport(readings: FamilyReport[], meta: { db: string; when: string }): string {
   const ranked = [...readings].sort((a, b) => b.meanPairwiseOverlap - a.meanPairwiseOverlap);
   const lines: string[] = [];
 
@@ -315,7 +364,15 @@ function cellText(value: unknown, fallback: string): string {
   return fallback;
 }
 
-async function readCorpora(url: string): Promise<FamilyDiversity[]> {
+/** One family measured both ways — the overlap/lift reading and the register cut. */
+function measureBoth(family: string, artifacts: Artifact[]): FamilyReport {
+  return {
+    ...measureFamily(family, artifacts),
+    registers: measureRegisters(artifacts, { crutchWords: CRUTCH_WORDS }),
+  };
+}
+
+async function readCorpora(url: string): Promise<FamilyReport[]> {
   const authToken = process.env.TURSO_AUTH_TOKEN;
   const client = createClient(authToken ? { authToken, url } : { url });
 
@@ -345,9 +402,9 @@ async function readCorpora(url: string): Promise<FamilyDiversity[]> {
     }));
 
     return [
-      measureFamily("notes", notes),
-      measureFamily("observations", observations),
-      measureFamily("logbook", logbook),
+      measureBoth("notes", notes),
+      measureBoth("observations", observations),
+      measureBoth("logbook", logbook),
     ];
   } finally {
     client.close();

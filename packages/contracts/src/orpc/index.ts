@@ -39,6 +39,7 @@ import { adminLogbookContract } from "./admin-logbook";
 import { adminMigrationsContract } from "./admin-migrations";
 import { adminMixtapesContract } from "./admin-mixtapes";
 import { adminNotesContract } from "./admin-notes";
+import { adminObservationsContract } from "./admin-observations";
 import { adminRecordingsContract } from "./admin-recordings";
 import { adminSocialContract } from "./admin-social";
 import { adminSubmissionsContract } from "./admin-submissions";
@@ -143,6 +144,16 @@ export {
   resolveNoteRejection,
   updateNoteGate,
 } from "./admin-notes";
+export {
+  adminObservationsContract,
+  listObservationNeighbours,
+  listObservationRejections,
+  ObservationGateSchema,
+  ObservationNeighbourSchema,
+  ObservationRejectionSchema,
+  resolveObservationRejection,
+  updateObservationGate,
+} from "./admin-observations";
 export { type CostEventInput, CostEventInputSchema, recordCost } from "./admin-costs";
 export { recordHealth, ServiceHealthStatusSchema } from "./admin-health";
 export { adminReachContract, recordPlatformStats } from "./admin-reach";
@@ -336,6 +347,7 @@ export const contract = {
   ...adminMigrationsContract,
   ...adminMixtapesContract,
   ...adminNotesContract,
+  ...adminObservationsContract,
   ...adminRecordingsContract,
   ...adminSocialContract,
   ...adminSubmissionsContract,

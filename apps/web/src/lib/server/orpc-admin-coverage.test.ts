@@ -139,6 +139,10 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // Admin tier (agent-allowed read). `list_note_rejections` matches the public `list_`
   // prefix so the "holds exactly" check skips it; it lives here for completeness.
   "GET /admin/note-rejections": "list_note_rejections",
+  // The observation echo gate's ledger — contract-only oRPC (no TanStack route file), the
+  // spoken sibling of the note-rejections ledger. `list_observation_rejections` matches the
+  // public `list_` prefix so the "holds exactly" check skips it.
+  "GET /admin/observation-rejections": "list_observation_rejections",
   // The prompt registry (docs/agents/prompt-registry.md) — contract-only oRPC (no
   // TanStack route file; oRPC owns the paths directly). `GET /admin/prompts/{slug}` is
   // the AGENT-tier per-tick resolve the on-box sweeps live on — the box runs a pinned CLI
@@ -172,6 +176,10 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // `get_track_admin` matches the public `get_` prefix so the "holds exactly" check
   // skips it; it lives here for completeness (like `get_clip_caption`).
   "GET /admin/tracks/{trackId}": "get_track_admin",
+  // The box author's spent-move fuel (the observation vibe-neighbour layer) — contract-only
+  // oRPC. AGENT tier: the observe sweep reads it every tick with its agent token.
+  // `list_observation_neighbours` matches the public `list_` prefix so the check skips it.
+  "GET /admin/tracks/{trackId}/observation-neighbours": "list_observation_neighbours",
   "GET /admin/tracks/{trackId}/social": "list_track_social",
   // The fresh-links INLINE EDIT (correct + approve a social's URL in one act) — contract-only
   // oRPC (no TanStack route file; oRPC owns the path directly, sharing it with the DELETE remove
@@ -203,6 +211,8 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // OPERATOR tier: the dials decide what Fluncle will and won't say about his archive, so
   // the agent token 403s. They live in the `settings` KV — a flip, not a deploy.
   "PATCH /admin/note-gate": "update_note_gate",
+  // Retuning the observation echo gate — contract-only oRPC. OPERATOR tier, the settings KV.
+  "PATCH /admin/observation-gate": "update_observation_gate",
   "PATCH /admin/recordings/{recordingId}": "update_recording",
   // The cost-ledger edit (COST-02) — contract-only oRPC (no TanStack route file). Operator tier.
   "PATCH /admin/subscriptions/{id}": "update_subscription",
@@ -338,6 +348,9 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // the same atomic fill-empty-only predicate as the agent's — it can never clobber an
   // operator note.
   "POST /admin/note-rejections/{id}/resolve": "resolve_note_rejection",
+  // The operator's ruling on a held observation — contract-only oRPC. OPERATOR tier:
+  // `accepted` renders the held script (a Cartesia spend, publish-class), so the agent 403s.
+  "POST /admin/observation-rejections/{id}/resolve": "resolve_observation_rejection",
   // The push receipts sweep is a contract-only admin op (no TanStack route file —
   // the whole devices domain is contract-first oRPC), so it has no file-enumeration
   // entry; it lives here only to satisfy the "registry holds EXACTLY this map's

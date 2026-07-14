@@ -28,6 +28,7 @@ const SOURCE_LABELS: Record<AttentionSource, string> = {
   "label-review": "label",
   newsletter: "newsletter",
   "note-rejected": "held note",
+  "observation-rejected": "held observation",
   "post-tiktok": "tiktok",
   "post-youtube": "youtube",
   submission: "submission",

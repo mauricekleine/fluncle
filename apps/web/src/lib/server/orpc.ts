@@ -48,6 +48,7 @@ import { adminLogbookHandlers } from "./orpc/admin-logbook";
 import { adminMigrationsHandlers } from "./orpc/admin-migrations";
 import { adminMixtapesHandlers } from "./orpc/admin-mixtapes";
 import { adminNotesHandlers } from "./orpc/admin-notes";
+import { adminObservationsHandlers } from "./orpc/admin-observations";
 import { adminRecordingsHandlers } from "./orpc/admin-recordings";
 import { adminSocialHandlers } from "./orpc/admin-social";
 import { adminSubmissionsHandlers } from "./orpc/admin-submissions";
@@ -106,6 +107,7 @@ export const router = os.router({
   ...adminMigrationsHandlers(os),
   ...adminMixtapesHandlers(os),
   ...adminNotesHandlers(os),
+  ...adminObservationsHandlers(os),
   ...adminRecordingsHandlers(os),
   ...adminSocialHandlers(os),
   ...adminSubmissionsHandlers(os),

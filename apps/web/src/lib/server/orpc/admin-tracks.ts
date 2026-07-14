@@ -34,16 +34,14 @@ import { parseEditorialNote } from "../http-errors";
 import { gateNoteText, noteEchoError, scoreNoteEcho, type NoteNeighbor } from "../note";
 import { getNoteEchoThresholds, recordNoteRejection } from "../note-rejections";
 import { publishTrack } from "../publish";
+import { buildContextQuery, fetchTrackContext, gateObservationScript } from "../observation";
+import { observationEchoError, scoreObservationEcho } from "../observation-echo";
+import { observationNeighbours } from "../observation-neighbours";
+import { renderAndStoreObservation } from "../observation-render";
 import {
-  DEFAULT_CARTESIA_SPEED,
-  type ObservationArtifact,
-  buildContextQuery,
-  fetchTrackContext,
-  gateObservationScript,
-  observationDurationFromAlignment,
-  renderObservationCartesia,
-  resolveCartesiaVoiceId,
-} from "../observation";
+  getObservationEchoThresholds,
+  recordObservationRejection,
+} from "../observation-rejections";
 import { adminAuth, operatorGuard } from "../orpc-auth";
 import { VIDEOS_BUCKET, presignUploads } from "../r2-presign";
 import { fillEmptyNote, type TrackUpdate, updateTrack } from "../track-update";
@@ -560,132 +558,49 @@ export function adminTracksHandlers(os: Implementer) {
       // mechanical scan (defence in depth) and hard-fails on any violation.
       const script = gateObservationScript(body.script);
       const durationTargetSec = resolveDurationTargetSec(body.durationTargetSec);
+      const promptVersion = typeof body.promptVersion === "number" ? body.promptVersion : null;
 
-      // The factual context, treated strictly as INTERNAL DATA (never instructions).
-      // observe_track no longer holds Firecrawl: it reads the already-stored
-      // `context_note` (written by the split-out `context_track` step). Order of
-      // preference: an explicit body.contextNote (the agent passing the fuel it
-      // authored from), then the stored note, then — only if neither exists — a
-      // best-effort Firecrawl fetch so a finding that skipped context_track still
-      // resolves. The note is persisted only if it was freshly fetched here.
-      const storedContextNote = await getTrackContextNote(track.trackId);
-      let contextNote = "";
-      let freshlyFetched = false;
+      // THE ECHO GATE — the anti-sameness rail, run BEFORE the paid Cartesia render so a
+      // bounced draft costs nothing. Score the script against the finding's sonic
+      // neighbourhood (the SAME neighbour scripts the box author was handed as spent moves,
+      // `observationNeighbours` → `getSimilarFindings`), and a lifted phrase or wholesale word
+      // overlap hard-fails with `observation_echoes_neighbours`/422 — so the observations, the
+      // worst-measured family (docs/planning/homogenisation-evidence.md, 2026-07-14), can no
+      // longer quietly flatten a region into one voice. A finding with no embedding yet, or the
+      // first observation in an empty neighbourhood, has nothing to echo and passes untouched.
+      // A rejected script is HELD in the `observation_rejections` ledger + raised in the
+      // attention queue, never binned. `force` (a deliberate operator re-render) skips the gate —
+      // he is overruling it, the same way accepting a held rejection does.
+      if (!force) {
+        const neighbors = await observationNeighbours(track.trackId);
+        const thresholds = await getObservationEchoThresholds();
+        const echo = scoreObservationEcho(script, neighbors, thresholds);
 
-      if (typeof body.contextNote === "string" && body.contextNote.trim()) {
-        contextNote = body.contextNote.trim().slice(0, 2000);
-      } else if (storedContextNote?.trim()) {
-        contextNote = storedContextNote.trim().slice(0, 2000);
-      } else {
-        const fetched = await fetchTrackContext(
-          buildContextQuery(track),
-          {
-            logId: track.logId,
-            trackId: track.trackId,
-          },
-          // Apple editorial notes as extra fuel when the finding carries an ISRC (RFC U5);
-          // behind the echo gate inside fetchTrackContext.
-          { isrc: track.isrc },
-        );
-        contextNote = fetched.contextNote;
-        freshlyFetched = Boolean(fetched.contextNote);
+        if (echo.echoes) {
+          // Best-effort: the ledger must never turn a clean 422 into a 500. Losing one
+          // bounce's evidence is bad; failing the gate open would be worse.
+          try {
+            await recordObservationRejection(track.trackId, script, echo, thresholds);
+          } catch (ledgerError) {
+            console.error("observe_track: failed to hold the rejected observation", ledgerError);
+          }
+
+          throw observationEchoError(echo);
+        }
       }
 
-      // Render via Cartesia Sonic: renderObservationCartesia clones-once → SSE (raw PCM
-      // + word timestamps) → in-process MP3, returning `{ alignment, bytes, voiceId }`.
-      // A missing/malformed alignment is `null` (captions degrade) — never a render fail.
-      const cartesiaVoiceId = await resolveCartesiaVoiceId(
-        typeof body.voiceId === "string" ? body.voiceId : undefined,
-      );
-      const { alignment, bytes, voiceId } = await renderObservationCartesia(cartesiaVoiceId, {
-        capture: { logId: track.logId, trackId: track.trackId },
-        text: script,
-      });
-
-      // Duration: Cartesia returns no clip length and the Worker can't probe (no
-      // ffprobe). Prefer an explicit probed `body.durationMs`; absent it (the box cron
-      // doesn't ffprobe), derive the REAL length from the alignment's last word —
-      // since the radio segment length IS this duration (radio-schedule.ts), the old
-      // `durationTargetSec * 1000` fallback clamped every read to 30s and cut the audio
-      // at the seam. The 30s target only survives as a last resort when there's no
-      // alignment at all. The radio page never re-probes.
-      const durationMs =
-        typeof body.durationMs === "number" &&
-        Number.isFinite(body.durationMs) &&
-        body.durationMs > 0
-          ? Math.round(body.durationMs)
-          : (observationDurationFromAlignment(alignment) ?? durationTargetSec * 1000);
-
-      const media = trackMedia(track.logId);
-      const generatedAt = new Date().toISOString();
-
-      const artifact: ObservationArtifact = {
-        ...(alignment ? { alignment } : {}),
-        audioUrl: media.observationAudioUrl,
-        ...(contextNote ? { contextNote } : {}),
-        durationMs,
+      // Render + upload + persist through the shared path (also the ledger's accept ruling).
+      const result = await renderAndStoreObservation(track, script, {
+        ...(typeof body.contextNote === "string" && body.contextNote.trim()
+          ? { contextNote: body.contextNote }
+          : {}),
+        ...(typeof body.durationMs === "number" ? { durationMs: body.durationMs } : {}),
         durationTargetSec,
-        generatedAt,
-        logId: track.logId,
-        provider: "cartesia",
-        speed: DEFAULT_CARTESIA_SPEED,
-        text: script,
-        textUrl: media.observationTextUrl,
-        trackId: track.trackId,
-        voiceId,
-      };
-
-      // Upload the three R2 objects at <log-id>/<name> (the Worker holds the
-      // ≈0.5 MB bytes — direct put, no presign needed for a small artifact).
-      const base = encodeURIComponent(track.logId);
-      // Independent objects, distinct keys — write them together, then flag the DB.
-      await Promise.all([
-        env.VIDEOS.put(`${track.logId}/observation.mp3`, bytes, {
-          httpMetadata: { contentType: "audio/mpeg" },
-        }),
-        env.VIDEOS.put(`${track.logId}/observation.txt`, script, {
-          httpMetadata: { contentType: "text/plain; charset=utf-8" },
-        }),
-        env.VIDEOS.put(`${track.logId}/observation.json`, JSON.stringify(artifact, null, 2), {
-          httpMetadata: { contentType: "application/json; charset=utf-8" },
-        }),
-      ]);
-
-      // Persist: the audio url (the "has observation" flag) + duration + timestamp
-      // (visible — they bump lastmod) + the spoken script (the transcript mirror of
-      // observation.json `text`, so the admin dialog reads it from the row, not R2).
-      // Backfill the context note only when this step freshly fetched it (the
-      // context_track split usually wrote it already); a body-supplied or
-      // already-stored note is not re-written.
-      await updateTrack(track.trackId, {
-        // The caption timings (when captured) — internal-but-public, not in
-        // VISIBLE_FIELDS; the sibling observationAudioUrl bumps lastmod for the render.
-        ...(alignment ? { observationAlignmentJson: JSON.stringify(alignment) } : {}),
-        observationAudioUrl: media.observationAudioUrl,
-        observationDurationMs: durationMs,
-        observationGeneratedAt: generatedAt,
-        // PROVENANCE — the prompt version the sweep authored this script under, written
-        // in the same statement as the script itself.
-        observationPromptVersion:
-          typeof body.promptVersion === "number" ? body.promptVersion : null,
-        observationScript: script,
-        // A freshly-fetched-here note also marks `context_status = 'resolved'` so the
-        // context queue (status-aware) treats this finding as done, mirroring the
-        // split-out `context_track` step's write.
-        ...(freshlyFetched ? { contextNote, contextStatus: "resolved" as const } : {}),
+        promptVersion,
+        ...(typeof body.voiceId === "string" ? { voiceId: body.voiceId } : {}),
       });
 
-      return {
-        audioUrl: media.observationAudioUrl,
-        durationMs,
-        generatedAt,
-        jsonUrl: `${FOUND_BASE}/${base}/observation.json`,
-        logId: track.logId,
-        ok: true as const,
-        textUrl: media.observationTextUrl,
-        trackId: track.trackId,
-        voiceId,
-      };
+      return { ok: true as const, ...result };
     } catch (error) {
       throw toFault(error);
     }

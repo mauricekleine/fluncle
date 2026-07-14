@@ -155,6 +155,9 @@ Load and apply the \`copywriting-fluncle\` skill — it is the full voice canon;
 
 This is the recovered-audio register: a short spoken observation, as if Fluncle is talking over the track to the crew.
 Ground every claim in the facts below. Never invent a track, artist, date, Log ID, label, or stat.
+{{#if echoedMove}}
+YOUR LAST ATTEMPT WAS REJECTED: it echoed a neighbour's read ("{{echoedMove}}"). That move is spent. Arrive at this record from somewhere else entirely — a different body reaction, a different moment in the track, a different way of turning to the crew.
+{{/if}}
 {{#if contextNote}}
 CONTEXT NOTE (the gathered facts — your PRIMARY material; ground the prose in these):
 {{contextNote}}
@@ -168,10 +171,20 @@ THE FINDING (identity):
   label: {{label}}
   year: {{year}}
   galaxy: {{galaxy}}
+{{#if neighbours}}
+THE SONIC NEIGHBOURHOOD (the observations already standing on the findings that sound nearest to this one):
+{{neighbours}}
 
+READ THEM TWICE, THEN USE THEM AS A LIST OF WHAT IS ALREADY TAKEN.
+  - They tell you the REGISTER of this corner of the archive: how certain, how dry, how bodily.
+  - Every body reaction, image, opener, and closing address in them is SPENT. Do not reuse one — not the same body part, not the same sign-off name, not the phrasing, not the sentence shape.
+  - The server REJECTS an observation that lifts a run of words from any of them, and one that just reshuffles their words. A rejected read is not rendered at all.
+  - If your read could be swapped with one of these and nobody would notice, it is the wrong read. Say what is true of THIS record's arrival and nothing else.
+{{/if}}
 FORMAT + VOICE CONSTRAINTS (the server voice-gate re-scans and will reject a violation):
   - Target 20–45 seconds spoken (roughly 50–110 words).
-  - Lead with the body — the sound, the feel — then turn to the crew.
+  - Lead with the body — the sound, the feel — then turn to the crew (the Selector's Rule). VARY THE OPENER: not every read starts on "I" or "this one" — sometimes the sound lands first, sometimes a moment in the track, sometimes the crew. Never reach for the same first move as a neighbour.
+  - The turn to the crew is required, but it is ONE move with many shapes. VARY THE ADDRESS: rotate the kin name you land on (junglist, raver, fam, cosmonaut) and vary the phrasing, and let some reads make the turn with no sign-off tag at all. Never default to "hope it… enjoy, cosmonauts" — that exact close is worn through. Drop "hope" as a reflex; say what the tune does, not what you hope it does.
   - NEVER name earthly geography (no countries, cities, regions); the cosmos replaces the map.
   - Use only SPARSE \`<break>\` tags (dense breaks get vocalised as thinking sounds). A couple at most.
   - No exclamation marks. No em dashes in the prose. Sentence case.
@@ -268,7 +281,7 @@ Rules:
 - Drop all search-result junk: view counts, play counts, durations, prices, store/streaming boilerplate, and untranslated foreign-language fragments.
 - Never quote or paraphrase lyrics.
 - Prefer label, release year, artist background, and how the track sits in its scene.
-- After the prose, add exactly one final line beginning 'Texture: ' giving 3–6 comma-separated sensory/scene/mood pointers (not facts) the writer can lean on (e.g. 'rolling, nocturnal, half-step menace, rain-on-glass').
+- After the prose, add exactly one final line beginning 'Texture: ' giving 3–6 comma-separated sensory/scene/mood pointers (not facts) the writer can lean on. This line seeds every downstream voice, so it must be SPECIFIC to THIS track, not a house default. The words 'rolling', 'liquid', 'introspective', 'atmospheric', and 'breakbeats' are worn through from overuse across the archive — avoid them unless nothing else is true, and never as the whole line. Draw from the FULL sensory range — texture, temperature, light, weather, movement, material, colour, space — so two tracks rarely land the same Texture line (e.g. 'gunmetal, tidal, halogen-lit, coiled' or 'humid, ratcheting, dusk-toned, patient').
 - Output only the note. No headings, no preamble, no bullet lists, no source list.`;
 
 const SEARCH_FILTER_DEFAULT = `You translate a music search query into a JSON filter object. You are a parser, not a librarian.
@@ -350,11 +363,21 @@ export const PROMPT_REGISTRY: Record<PromptSlug, PromptDefinition> = {
   observation_script: {
     defaultBody: OBSERVATION_SCRIPT_DEFAULT,
     description:
-      "Writes a finding's spoken recovered-audio observation — the script Cartesia then voices for /log and radio.fluncle.com.",
+      "Writes a finding's spoken recovered-audio observation — the script Cartesia then voices for /log and radio.fluncle.com. Carries the sonic neighbourhood as the register to hear AND the moves that are spent (openers, closers, body reactions), the front line against the observations reading the same.",
     slug: "observation_script",
     surface: "box",
     title: "Observation script",
-    variables: ["artists", "title", "label", "year", "galaxy", "contextNote", "noContextNote"],
+    variables: [
+      "artists",
+      "title",
+      "label",
+      "year",
+      "galaxy",
+      "contextNote",
+      "noContextNote",
+      "neighbours",
+      "echoedMove",
+    ],
   },
   search_filter: {
     defaultBody: SEARCH_FILTER_DEFAULT,

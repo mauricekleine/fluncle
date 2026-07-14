@@ -1923,6 +1923,42 @@ function addAdminCommands(program: Command): void {
       await runNoteGate(options, noteGateCommand);
     });
 
+  // THE OBSERVATION ECHO GATE'S LEDGER — the spoken sibling of `admin notes`, same two verbs.
+  // The gate refuses to RENDER a script that echoes a sonic neighbour's (before the Cartesia
+  // spend), and every rejection is HELD, never binned. Ruling on one (render it / bin it) is
+  // OPERATOR-tier and lives on the web admin (the observation dialog's held panel).
+  const observations = configureCommand(
+    admin.command("observations").description("The observation echo gate: held scripts + dials"),
+  );
+
+  observations.action(() => {
+    observations.outputHelp();
+  });
+
+  observations
+    .command("held")
+    .description("The observation scripts the echo gate held back (and why)")
+    .option("--settled", "Read the ones already ruled on instead (the retune evidence)", false)
+    .option("--json", "Print JSON", false)
+    .action(async (options: NoteHeldOptions) => {
+      const { observationHeldCommand } = await import("./commands/admin-observations");
+      await runObservationHeld(options, observationHeldCommand);
+    });
+
+  observations
+    .command("gate")
+    .description("Read or retune the observation echo gate's thresholds (a flip, not a deploy)")
+    .option("--min-phrase-words <n>", "A shared run this long is a lift (2-20; default 4)")
+    .option(
+      "--max-overlap <x>",
+      "Content-word overlap at/above this is an echo (0.05-1; default 0.3)",
+    )
+    .option("--json", "Print JSON", false)
+    .action(async (options: NoteGateOptions) => {
+      const { observationGateCommand } = await import("./commands/admin-observations");
+      await runObservationGate(options, observationGateCommand);
+    });
+
   // THE CATALOGUE — every track the archive knows and Fluncle never certified (a `tracks`
   // row with no `findings` row). Two halves, four commands:
   //
@@ -5258,6 +5294,74 @@ async function runNoteGate(
 
   console.log(
     `The echo gate: a lift is ${gate.minPhraseWords}+ shared words; an echo is ${Math.round(gate.maxOverlap * 100)}%+ of a neighbour's words.`,
+  );
+}
+
+// The held observations as a deadpan board — the runNoteHeld shape, on the spoken ledger.
+// Each prints the SCRIPT the model wrote, the neighbour script it echoed, and the score next
+// to the threshold it was judged against.
+async function runObservationHeld(
+  options: NoteHeldOptions,
+  observationHeldCommand: typeof import("./commands/admin-observations").observationHeldCommand,
+): Promise<void> {
+  const { gate, rejections } = await observationHeldCommand({ settled: options.settled === true });
+
+  if (options.json) {
+    printJson({ gate, ok: true, rejections });
+    return;
+  }
+
+  if (rejections.length === 0) {
+    console.log(
+      options.settled ? "Nothing ruled on yet." : "Nothing held back. The gate is quiet.",
+    );
+    return;
+  }
+
+  console.log(
+    `The gate sits at ${gate.minPhraseWords} lifted words / ${Math.round(gate.maxOverlap * 100)}% overlap.`,
+  );
+
+  for (const held of rejections) {
+    const ruled = held.resolution ? ` [${held.resolution}]` : "";
+    const bounced = held.attempts > 1 ? ` (bounced ${held.attempts}x)` : "";
+    console.log("");
+    console.log(`${held.logId ?? held.trackId}  ${held.title}${bounced}${ruled}`);
+    console.log(`  wrote:  ${held.script}`);
+    if (held.phrase) {
+      console.log(`  lifted: "${held.phrase}" from ${held.neighborLogId ?? "a neighbour"}`);
+    } else {
+      console.log(
+        `  reuses: ${Math.round(held.overlap * 100)}% of ${held.neighborLogId ?? "a neighbour"}'s words`,
+      );
+    }
+    console.log(
+      `  judged at: ${held.minPhraseWords} words / ${Math.round(held.maxOverlap * 100)}%`,
+    );
+  }
+}
+
+// Read or retune the observation gate. A bare `gate` reports; a dial sets it.
+async function runObservationGate(
+  options: NoteGateOptions,
+  observationGateCommand: typeof import("./commands/admin-observations").observationGateCommand,
+): Promise<void> {
+  const minPhraseWords =
+    options.minPhraseWords === undefined ? undefined : Number(options.minPhraseWords);
+  const maxOverlap = options.maxOverlap === undefined ? undefined : Number(options.maxOverlap);
+
+  const gate = await observationGateCommand({
+    ...(maxOverlap === undefined ? {} : { maxOverlap }),
+    ...(minPhraseWords === undefined ? {} : { minPhraseWords }),
+  });
+
+  if (options.json) {
+    printJson({ gate, ok: true });
+    return;
+  }
+
+  console.log(
+    `The observation echo gate: a lift is ${gate.minPhraseWords}+ shared words; an echo is ${Math.round(gate.maxOverlap * 100)}%+ of a neighbour's words.`,
   );
 }
 

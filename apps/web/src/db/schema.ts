@@ -1650,6 +1650,60 @@ export const noteRejections = sqliteTable(
   ],
 );
 
+// THE SPOKEN sibling of `note_rejections` — an observation script the echo gate refused to
+// RENDER because it echoed a sonic neighbour's script, held for the operator's eye rather
+// than binned (docs/agents/observation-agent.md; docs/planning/homogenisation-evidence.md,
+// 2026-07-14). Same shape as the note ledger, one column renamed: the evidence is the SCRIPT
+// the model wrote, and the snapshot is the NEIGHBOUR SCRIPT it echoed. The gate rejects BEFORE
+// the Cartesia render, so a held rejection never cost a cent.
+export const observationRejections = sqliteTable(
+  "observation_rejections",
+  {
+    // How many times this finding's observation has bounced off the gate while THIS rejection
+    // stayed open (the sweep's one re-author makes 2 a normal tick). A high count is the signal
+    // that the region is exhausted or the gate is too tight.
+    attempts: integer("attempts").notNull().default(1),
+    // The FIRST time this finding's observation was held — the attention queue's oldest-first
+    // anchor. It never moves on a re-bounce (the `created_at` invariant note_rejections carries).
+    createdAt: text("created_at").notNull(),
+    id: text("id").primaryKey(),
+    // The overlap threshold in force when this script was rejected — snapshotted so a later
+    // retune cannot rewrite history.
+    maxOverlap: real("max_overlap").notNull(),
+    // The lifted-phrase threshold in force when this script was rejected.
+    minPhraseWords: integer("min_phrase_words").notNull(),
+    // The neighbour it echoed hardest — the finding whose script the gate matched it against.
+    neighborLogId: text("neighbor_log_id"),
+    // A SNAPSHOT of the neighbour's script as it read at rejection time (the neighbour's own
+    // script can be re-rendered later; the operator must read the exact PAIR the gate compared).
+    neighborScript: text("neighbor_script"),
+    // The measured content-word Jaccard against that neighbour (0..1).
+    overlap: real("overlap").notNull(),
+    // The run of words lifted from the neighbour; '' when the rejection was overlap-only.
+    phrase: text("phrase").notNull().default(""),
+    // The operator's ruling. NULL = still open (it raises a queue row). `accepted` = he read it,
+    // judged it good, and it was RENDERED to the finding (the observe render path, `force`).
+    // `discarded` = the gate was right.
+    resolution: text("resolution", { enum: ["accepted", "discarded"] }),
+    resolvedAt: text("resolved_at"),
+    // THE EVIDENCE: the observation script the model actually wrote.
+    script: text("script").notNull(),
+    // The finding whose observation was rejected (no declared FK — the note_rejections precedent).
+    trackId: text("track_id").notNull(),
+    // The LATEST bounce — moves with `script`/`attempts` on every re-hold. Diagnostic, never the anchor.
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    // ONE open rejection per finding — bounds the ledger and keeps the attention queue to one
+    // row per finding. PARTIAL, so a finding may accumulate any number of RESOLVED rejections.
+    uniqueIndex("observation_rejections_open_track_idx")
+      .on(table.trackId)
+      .where(sql`${table.resolvedAt} is null`),
+    // The queue read: "every rejection still waiting on the operator's eye", oldest first.
+    index("observation_rejections_open_idx").on(table.resolvedAt, table.createdAt),
+  ],
+);
+
 // THE PROMPT HISTORY — the append-only override store behind the prompt registry
 // (docs/agents/prompt-registry.md). Every prompt Fluncle feeds a model at runtime has
 // a BAKED-IN DEFAULT in the repo (the registry, lib/server/prompts.ts); a row here

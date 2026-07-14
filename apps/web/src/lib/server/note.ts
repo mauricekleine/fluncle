@@ -238,6 +238,81 @@ function liftedPhrase(a: string, b: string, minPhraseWords: number): string {
   return carriesContent ? best.join(" ") : "";
 }
 
+/**
+ * The longest run of consecutive words two strings share (with a content word), or "".
+ * Exported so the SPOKEN observation echo gate (observation.ts) measures a lift over exactly
+ * the same word stream and the same run-finder the written-note gate does — one definition of
+ * "a lifted phrase" across both written families.
+ */
+export function longestSharedPhrase(a: string, b: string, minPhraseWords: number): string {
+  return liftedPhrase(a, b, minPhraseWords);
+}
+
+// ── The GENERIC echo scorer — one definition of "does this text echo its neighbourhood" ──
+//
+// The notes were the first family to get an echo gate; the spoken observations are the
+// second (they were the worst-measured family, and had no rail — docs/planning/
+// homogenisation-evidence.md, 2026-07-14). Rather than clone the scorer, both families call
+// this ONE function over a `{ logId, text }` neighbourhood, so "same" means exactly the same
+// thing whether the text is a one-line note or a 40-second spoken script. The family wrappers
+// (`scoreNoteEcho`, `scoreObservationEcho`) only rename `text` to the field their callers know.
+
+/** One neighbour the candidate is measured against — its id and the prose already standing. */
+export type EchoNeighbor = { logId: string; text: string };
+
+/** The worst echo a candidate makes against its neighbourhood (family-agnostic). */
+export type Echo = {
+  /** True when the candidate crosses either threshold — it must not be stored. */
+  echoes: boolean;
+  /** The neighbour it echoes hardest (its Log ID), or null when there is nothing to echo. */
+  logId: string | null;
+  /** That neighbour's prose, as it read at scoring time ("" when there is nothing to echo). */
+  text: string;
+  /** The content-word overlap with that neighbour (0..1). */
+  overlap: number;
+  /** The run of words lifted from that neighbour, or "" when none reaches the threshold. */
+  phrase: string;
+};
+
+/**
+ * Score a candidate against a `{ logId, text }` neighbourhood — the mechanical anti-sameness
+ * measurement behind every written-family echo gate. Pure and deterministic; reports the WORST
+ * neighbour (any lift outranks every bare overlap; longer lifts win; among lift-free neighbours
+ * the highest overlap wins). An empty neighbourhood scores `{ echoes: false, overlap: 0 }`.
+ */
+export function scoreEcho(
+  text: string,
+  neighbors: readonly EchoNeighbor[],
+  thresholds: NoteEchoThresholds = NOTE_ECHO_DEFAULTS,
+): Echo {
+  let worst: Echo = { echoes: false, logId: null, overlap: 0, phrase: "", text: "" };
+  const severity = (echo: Echo) => (echo.phrase ? 1 + echo.phrase.split(" ").length : echo.overlap);
+  let worstSeverity = -1;
+
+  for (const neighbor of neighbors) {
+    if (!neighbor.text.trim()) {
+      continue;
+    }
+
+    const phrase = liftedPhrase(text, neighbor.text, thresholds.minPhraseWords);
+    const overlap = contentOverlap(text, neighbor.text);
+    const candidate: Echo = {
+      echoes: phrase.length > 0 || overlap >= thresholds.maxOverlap,
+      logId: neighbor.logId,
+      overlap,
+      phrase,
+      text: neighbor.text,
+    };
+
+    if (severity(candidate) > worstSeverity) {
+      worstSeverity = severity(candidate);
+      worst = candidate;
+    }
+  }
+
+  return worst;
+}
+
 /** One neighbour note the candidate is measured against (the notes the agent was shown). */
 export type NoteNeighbor = { logId: string; note: string };
 
@@ -275,37 +350,22 @@ export function scoreNoteEcho(
   neighbors: readonly NoteNeighbor[],
   thresholds: NoteEchoThresholds = NOTE_ECHO_DEFAULTS,
 ): NoteEcho {
-  let worst: NoteEcho = { echoes: false, logId: null, note: "", overlap: 0, phrase: "" };
-  // Severity orders the neighbours: ANY lift outranks EVERY bare overlap (a lifted
-  // phrase is the harder evidence), longer lifts outrank shorter ones, and among
-  // lift-free neighbours the highest overlap wins. Overlap is < 1, so the +1 offset
-  // keeps the two bands from ever crossing.
-  const severity = (echo: NoteEcho) =>
-    echo.phrase ? 1 + echo.phrase.split(" ").length : echo.overlap;
-  let worstSeverity = -1;
+  // Delegate to the shared scorer over a `{ logId, text }` neighbourhood, then rename the
+  // generic `text` back to the `note` field this family's callers (the ledger, the report)
+  // read. One definition of "echo" for notes and observations both.
+  const echo = scoreEcho(
+    note,
+    neighbors.map((neighbor) => ({ logId: neighbor.logId, text: neighbor.note })),
+    thresholds,
+  );
 
-  for (const neighbor of neighbors) {
-    if (!neighbor.note.trim()) {
-      continue;
-    }
-
-    const phrase = liftedPhrase(note, neighbor.note, thresholds.minPhraseWords);
-    const overlap = contentOverlap(note, neighbor.note);
-    const candidate: NoteEcho = {
-      echoes: phrase.length > 0 || overlap >= thresholds.maxOverlap,
-      logId: neighbor.logId,
-      note: neighbor.note,
-      overlap,
-      phrase,
-    };
-
-    if (severity(candidate) > worstSeverity) {
-      worstSeverity = severity(candidate);
-      worst = candidate;
-    }
-  }
-
-  return worst;
+  return {
+    echoes: echo.echoes,
+    logId: echo.logId,
+    note: echo.text,
+    overlap: echo.overlap,
+    phrase: echo.phrase,
+  };
 }
 
 /**

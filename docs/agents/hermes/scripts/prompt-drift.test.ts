@@ -127,6 +127,38 @@ describe("the registry default and the sweep's inlined fallback are the same pro
     ).toBe(buildAuthoringPromptTrimmed(() => buildObservePrompt(finding, contextNote)));
   });
 
+  // The vibe-neighbour + echo arms: the neighbourhood block and the re-author block are the
+  // anti-sameness rails, and a renderer with no `else` is easiest to get subtly wrong there.
+  test("observation_script — with the neighbourhood + a spent move", () => {
+    const finding = {
+      artists: ["Calibre"],
+      galaxy: { name: "The Drift" },
+      label: "Signature",
+      releaseDate: "2008-03-01",
+      title: "Mr Right On",
+    };
+    const contextNote = "Signature Recordings, 2008.\nTexture: half-step, patient.";
+    const neighbors = [{ logId: "012.1.0A", script: "The bass walked in on its own two feet." }];
+
+    expect(
+      fromRegistry("observation_script", {
+        artists: "Calibre",
+        contextNote,
+        echoedMove: "my shoulders went before",
+        galaxy: "The Drift",
+        label: "Signature",
+        neighbours: `  - 012.1.0A: "The bass walked in on its own two feet."`,
+        noContextNote: "",
+        title: "Mr Right On",
+        year: "2008",
+      }),
+    ).toBe(
+      buildAuthoringPromptTrimmed(() =>
+        buildObservePrompt(finding, contextNote, neighbors, "my shoulders went before"),
+      ),
+    );
+  });
+
   test("triage_verdict", () => {
     const submission = { album: "Colours", artists: ["Netsky"], title: "Iron Heart" };
     const assessment = {

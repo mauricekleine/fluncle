@@ -8,6 +8,20 @@ One dated entry per observed occurrence: the artifact family (notes / observatio
 
 ## The ledger
 
+### 2026-07-14 · Observations — the counter-measure ships (the notes' rail, ported to the spoken family)
+
+The audit below named the observations the confirmed priority (echoing 59/61, mean pairwise 0.0816, "…enjoy cosmonauts" verbatim closing 32/61, "hope" in 51/61, 34/61 opening on "I…"/"This one…") and the context-note `Texture:` vocabulary as the upstream seed. The same day, the notes' proven mechanism (the vibe-neighbour layer + echo gate, 0.041 → 0.015) was ported to them end to end:
+
+- **The vibe-neighbour layer:** the observe sweep now authors against the finding's sonic neighbours' scripts, handed to the model as SPENT moves (openers, closers, body reactions, sign-offs) over a new agent-tier `list_observation_neighbours` read. `OBSERVE_NEIGHBORS=0` is the A/B control.
+- **The echo gate:** `observe_track` re-reads the same neighbours and 422s a draft that lifts a ≥4-word run or reuses ≥0.3 of a neighbour's content words — BEFORE the Cartesia render, so a bounce costs nothing. One pointed re-author, then the finding stays unvoiced. Same scorer as the note gate (a shared `scoreEcho`), operator-tunable dials on their own `settings` keys.
+- **The ledger:** a rejected script is HELD (`observation_rejections`, one open row per finding) and raised in the attention queue (`observation-rejected`); the operator rules from the observation dialog's held panel — Render it (a deliberate, render-spending overrule) or Bin it.
+- **The closer formula broken in the prompt:** the baked `observation_script` prompt (and the registry default) now treats the crew address as one move among several — rotate the kin name (junglist / raver / fam / cosmonaut), vary the phrasing, sometimes no sign-off — and names "hope it… enjoy, cosmonauts" as worn through. Opener variation is mandated the same way.
+- **The upstream seed:** the `context_distil` prompt's `Texture:` instruction now demands track-specific pointers across the full sensory range and names `rolling`/`liquid`/`introspective`/`atmospheric`/`breakbeats` as overused; the line's parseable shape is unchanged.
+- **The measure:** `measure-artifact-diversity.ts` grew a REGISTER cut per family — top openers/closers (first/last 3 words), the opening-word histogram, and the crutch words `hope`/`enjoy`/`cosmonaut(s)`/`shoulders` — so the audit's hand-made numbers above are now one command, re-runnable.
+- **Provenance:** the audit's `note_prompt_version`-NULL-on-60/61 finding traced to HISTORY, not a broken write — the stamp shipped with the prompt registry (#516) after most of the corpus was authored, and the forward path (sweep → CLI → handler → the atomic fill) is now pinned by tests so it cannot silently reopen. Observations were already stamped (`observation_prompt_version`); rows authored before the registry stay honestly NULL.
+
+**Honesty note:** these are the mechanisms, not yet the after-numbers. The before-numbers are the audit's (directly below); the proof is a re-run of the measure harness once the sweep has authored a meaningful batch under the new rail — expect the existing 61 to stay put (nothing rewrites a stored script) and the MARGINS to diversify, which is what the notes' "flat, not shrinking" trajectory looked like.
+
 ### 2026-07-14 · The full-corpus audit — every generated family measured at once
 
 The first systematic sweep across every family (operator request; two harnesses — the repo's `measure-artifact-diversity.ts` for comparability with earlier entries, plus purpose-built opener/closer/verbatim/texture cuts). Corpus-size reality first: notes/observations/context-notes are 61 each, the **video ledger is 61 vehicles / 26 grain+register stamps** (completed the same morning via the eyeball backfill), the **logbook is only 5 entries and the newsletter 1 sent edition** — those two are already rhyming but too thin for a trend.

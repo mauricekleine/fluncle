@@ -63,8 +63,33 @@ import { resolveSweepPrompt } from "./prompt-fetch";
 const BATCH_CAP = 1;
 const QUEUE_LIMIT = 50; // hard ceiling on the queue read (we only act on BATCH_CAP)
 
+// The sonic neighbourhood the observation is authored against — the same six the note layer
+// and `/log`'s "more like this" use. The Worker's echo gate reads the SAME neighbours, so the
+// script is judged against exactly the scripts it was shown (one definition of "the
+// neighbourhood" on both sides of the wire).
+const NEIGHBOR_LIMIT = 6;
+
+// The re-author budget when the Worker's echo gate rejects a script for echoing its
+// neighbourhood. ONE retry: the second attempt is handed the move it spent, so it knows exactly
+// what to route around. A second echo means the model has nothing fresh for this finding — leave
+// it unvoiced (silence beats a generic read) and let the next tick try with a cold context.
+const ECHO_RETRIES = 1;
+
 const FLUNCLE_BIN = process.env.FLUNCLE_BIN ?? "fluncle";
 const CLAUDE_BIN = process.env.CLAUDE_BIN ?? "claude";
+
+// The vibe-neighbour layer's kill switch (and the A/B control): OBSERVE_NEIGHBORS=0 authors from
+// the context note + identity alone, exactly as the sweep did before the layer.
+const NEIGHBORS_ENABLED = process.env.OBSERVE_NEIGHBORS !== "0";
+
+// The agent-tier API the neighbourhood read rides (the same seam prompt-fetch.ts + cost-emit.ts
+// use — the box runs a PINNED CLI, so a NEW read verb does not exist there until a release + a
+// pin bump; a raw HTTP GET with the agent token is the only way to reach something new).
+const FLUNCLE_API_BASE_URL = (
+  process.env.FLUNCLE_API_BASE_URL ?? "https://www.fluncle.com"
+).replace(/\/+$/, "");
+const FLUNCLE_API_TOKEN = process.env.FLUNCLE_API_TOKEN ?? "";
+const NEIGHBOURS_TIMEOUT_MS = 2500;
 
 // The authoring model. Env-configurable; default the spike-proven Sonnet alias.
 const OBSERVE_CLAUDE_MODEL = process.env.OBSERVE_CLAUDE_MODEL ?? "claude-sonnet-4-6";
@@ -99,6 +124,14 @@ type Finding = {
 // A `track get` can resolve to a finding OR a mixtape; we only ever queue findings.
 type TrackGetResponse = { mixtape?: unknown; track?: Finding };
 
+// One member of the finding's sonic neighbourhood: a nearby finding's Log ID and the
+// observation script already standing on it. The register to hear, and the moves that are SPENT
+// (the openers, closers, and body reactions the new read must route around).
+export type Neighbor = { logId: string; script: string };
+
+// `GET /api/admin/tracks/{id}/observation-neighbours` → the lean neighbourhood read.
+type NeighboursResponse = { neighbours?: Neighbor[] };
+
 // The `claude -p --output-format json` envelope. We take `.result` as the script;
 // `is_error`/`subtype` distinguish a clean run from an error. `usage` /
 // `total_cost_usd` / `modelUsage` carry the authoring spend — read after the parse
@@ -117,7 +150,11 @@ type ClaudeEnvelope = {
   usage?: ClaudeUsage;
 };
 
-type Outcome = "rendered" | "gateSkipped" | "skipped";
+type Outcome = "rendered" | "gateSkipped" | "echoSkipped" | "skipped";
+
+// What the Worker made of a delivered script. `echoedMove` carries the phrase the echo gate
+// caught, so the re-author pass can hand the model its own echo back as the thing to avoid.
+type Delivery = { echoedMove?: string; outcome: Outcome };
 
 // The authored script plus its MEASURED authoring spend (the COST-01 §5 `observe`
 // row): the total_cost_usd the CLI computed, the model, and the token count. `usd` is
@@ -220,12 +257,25 @@ function looksLikeAuthFailure(text: string): boolean {
 // apps/web/src/lib/server/prompts.ts.
 // ---------------------------------------------------------------------------
 
-export function buildAuthoringPrompt(finding: Finding, contextNote: string): string {
+export function buildAuthoringPrompt(
+  finding: Finding,
+  contextNote: string,
+  neighbors: Neighbor[] = [],
+  echoedMove?: string,
+): string {
   const artists = finding.artists?.length ? finding.artists.join(", ") : "unknown";
   const title = finding.title ?? "unknown";
   const label = finding.label ?? "unknown";
   const year = finding.releaseDate ? finding.releaseDate.slice(0, 4) : "unknown";
   const galaxy = finding.galaxy?.name ?? "unplaced";
+
+  // The re-author pass: the model's own echo, handed back as the thing to route around.
+  const echoBlock = echoedMove
+    ? [
+        `YOUR LAST ATTEMPT WAS REJECTED: it echoed a neighbour's read ("${echoedMove}"). That move is spent. Arrive at this record from somewhere else entirely — a different body reaction, a different moment in the track, a different way of turning to the crew.`,
+        "",
+      ]
+    : [];
 
   // The stored context note (the firecrawl facts the context sweep distilled) is
   // the PRIMARY fuel — it carries release context, scene, and label history the bare
@@ -242,6 +292,25 @@ export function buildAuthoringPrompt(finding: Finding, contextNote: string): str
         "",
       ];
 
+  // THE VIBE-NEIGHBOUR LAYER. The observations already standing on the findings that sound
+  // nearest to this one — the register of this corner of the archive, and a list of what is
+  // already taken. The Worker enforces the exclusion mechanically (it re-reads these same
+  // scripts and rejects a lift), so this is not a style suggestion.
+  const neighborBlock =
+    neighbors.length > 0
+      ? [
+          "THE SONIC NEIGHBOURHOOD (the observations already standing on the findings that sound nearest to this one):",
+          ...neighbors.map((neighbor) => `  - ${neighbor.logId}: "${neighbor.script}"`),
+          "",
+          "READ THEM TWICE, THEN USE THEM AS A LIST OF WHAT IS ALREADY TAKEN.",
+          "  - They tell you the REGISTER of this corner of the archive: how certain, how dry, how bodily.",
+          "  - Every body reaction, image, opener, and closing address in them is SPENT. Do not reuse one — not the same body part, not the same sign-off name, not the phrasing, not the sentence shape.",
+          "  - The server REJECTS an observation that lifts a run of words from any of them, and one that just reshuffles their words. A rejected read is not rendered at all.",
+          "  - If your read could be swapped with one of these and nobody would notice, it is the wrong read. Say what is true of THIS record's arrival and nothing else.",
+          "",
+        ]
+      : [];
+
   return [
     "You are Fluncle, writing the SPOKEN recovered-audio observation for one finding.",
     "Load and apply the `copywriting-fluncle` skill — it is the full voice canon; let it govern the voice.",
@@ -249,6 +318,7 @@ export function buildAuthoringPrompt(finding: Finding, contextNote: string): str
     "This is the recovered-audio register: a short spoken observation, as if Fluncle is talking over the track to the crew.",
     "Ground every claim in the facts below. Never invent a track, artist, date, Log ID, label, or stat.",
     "",
+    ...echoBlock,
     ...noteBlock,
     "THE FINDING (identity):",
     `  artists: ${artists}`,
@@ -257,9 +327,11 @@ export function buildAuthoringPrompt(finding: Finding, contextNote: string): str
     `  year: ${year}`,
     `  galaxy: ${galaxy}`,
     "",
+    ...neighborBlock,
     "FORMAT + VOICE CONSTRAINTS (the server voice-gate re-scans and will reject a violation):",
     "  - Target 20–45 seconds spoken (roughly 50–110 words).",
-    "  - Lead with the body — the sound, the feel — then turn to the crew.",
+    '  - Lead with the body — the sound, the feel — then turn to the crew (the Selector\'s Rule). VARY THE OPENER: not every read starts on "I" or "this one" — sometimes the sound lands first, sometimes a moment in the track, sometimes the crew. Never reach for the same first move as a neighbour.',
+    '  - The turn to the crew is required, but it is ONE move with many shapes. VARY THE ADDRESS: rotate the kin name you land on (junglist, raver, fam, cosmonaut) and vary the phrasing, and let some reads make the turn with no sign-off tag at all. Never default to "hope it… enjoy, cosmonauts" — that exact close is worn through. Drop "hope" as a reflex; say what the tune does, not what you hope it does.',
     "  - NEVER name earthly geography (no countries, cities, regions); the cosmos replaces the map.",
     "  - Use only SPARSE `<break>` tags (dense breaks get vocalised as thinking sounds). A couple at most.",
     "  - No exclamation marks. No em dashes in the prose. Sentence case.",
@@ -283,12 +355,20 @@ export function buildAuthoringPrompt(finding: Finding, contextNote: string): str
 function promptVariables(
   finding: Finding,
   contextNote: string,
+  neighbors: Neighbor[],
+  echoedMove?: string,
 ): Record<string, string | undefined> {
   return {
     artists: finding.artists?.length ? finding.artists.join(", ") : "unknown",
     contextNote,
+    echoedMove,
     galaxy: finding.galaxy?.name ?? "unplaced",
     label: finding.label ?? "unknown",
+    // Pre-joined — the renderer has no loops, so a list is just a string. Same format the
+    // fallback builder's neighbour block uses, so the two render identically (the drift guard).
+    neighbours: neighbors
+      .map((neighbor) => `  - ${neighbor.logId}: "${neighbor.script}"`)
+      .join("\n"),
     noContextNote: contextNote ? "" : "yes",
     title: finding.title ?? "unknown",
     year: finding.releaseDate ? finding.releaseDate.slice(0, 4) : "unknown",
@@ -308,11 +388,16 @@ function promptVariables(
 // store that blinks must never be able to stop the pipeline.
 // ---------------------------------------------------------------------------
 
-async function authorScript(finding: Finding, contextNote: string): Promise<AuthoredScript | null> {
+async function authorScript(
+  finding: Finding,
+  contextNote: string,
+  neighbors: Neighbor[],
+  echoedMove?: string,
+): Promise<AuthoredScript | null> {
   const { prompt, promptVersion } = await resolveSweepPrompt({
-    fallback: () => buildAuthoringPrompt(finding, contextNote),
+    fallback: () => buildAuthoringPrompt(finding, contextNote, neighbors, echoedMove),
     slug: "observation_script",
-    variables: promptVariables(finding, contextNote),
+    variables: promptVariables(finding, contextNote, neighbors, echoedMove),
   });
 
   if (promptVersion === null) {
@@ -389,11 +474,12 @@ async function authorScript(finding: Finding, contextNote: string): Promise<Auth
 
 // ---------------------------------------------------------------------------
 // Deliver one script: write it to a temp file, post via the CLI (the Worker
-// voice-gates + renders + stores), clean up. A gate rejection (403/422) is a
-// `gateSkipped` outcome — the finding stays queued for a future author pass.
+// voice-gates + ECHO-gates + renders + stores), clean up. A voice-gate rejection is a
+// `gateSkipped` outcome; the ECHO gate is distinct because it is RECOVERABLE — the
+// model gets one more pass, told exactly which move it spent. Both leave the finding queued.
 // ---------------------------------------------------------------------------
 
-function deliverScript(id: string, script: string, promptVersion: number | null): Outcome {
+function deliverScript(id: string, script: string, promptVersion: number | null): Delivery {
   const dir = mkdtempSync(join(tmpdir(), "observe-sweep-"));
   const scriptPath = join(dir, "observation.txt");
 
@@ -415,7 +501,23 @@ function deliverScript(id: string, script: string, promptVersion: number | null)
     ]);
 
     if (code !== 0) {
-      const detail = `${stdout}\n${stderr}`.toLowerCase();
+      const combined = `${stdout}\n${stderr}`;
+      const detail = combined.toLowerCase();
+
+      // The ECHO gate: the script read like its sonic neighbours, so the Worker refused to
+      // render it (before spending a cent). Distinct from the voice gate because it is
+      // RECOVERABLE — the model gets one more pass, told exactly which move it spent.
+      if (detail.includes("observation_echoes_neighbours")) {
+        const echoedMove = readEchoedMove(combined);
+
+        log(
+          `${id}: the echo gate rejected the observation${
+            echoedMove ? ` (it lifted "${echoedMove}")` : ""
+          }`,
+        );
+
+        return { echoedMove, outcome: "echoSkipped" };
+      }
 
       // The voice gate rejects with a 403/422 + a voice_gate/forbidden signature.
       // Treat that as a skip (the finding stays queued), not a hard error.
@@ -427,19 +529,84 @@ function deliverScript(id: string, script: string, promptVersion: number | null)
       ) {
         log(`${id}: voice gate rejected the script — skipping (stays queued)`);
 
-        return "gateSkipped";
+        return { outcome: "gateSkipped" };
       }
 
       log(`${id}: observe exited ${code}: ${stderr.trim().slice(-200)}`);
 
-      return "skipped";
+      return { outcome: "skipped" };
     }
 
     log(`${id}: observation rendered`);
 
-    return "rendered";
+    return { outcome: "rendered" };
   } finally {
     rmSync(dir, { force: true, recursive: true });
+  }
+}
+
+/**
+ * Pull the lifted phrase out of the Worker's `observation_echoes_neighbours` message (it
+ * quotes it: `it lifts "…" straight from 012.1.0A`), so the re-author pass can name the spent
+ * move back to the model. Best-effort — a miss just means a less pointed retry. Tolerates both
+ * the raw and the JSON-escaped quoting (the note-sweep's `readEchoedPhrase` precedent).
+ */
+export function readEchoedMove(output: string): string | undefined {
+  const match = /it lifts \\?"([^"\\]+)\\?"/.exec(output);
+
+  return match?.[1];
+}
+
+// ---------------------------------------------------------------------------
+// The SONIC NEIGHBOURHOOD — the vibe-neighbour layer's fuel. A raw HTTP GET to the agent-tier
+// `list_observation_neighbours` endpoint (the box runs a pinned CLI, so a new read verb does not
+// exist there — this is the prompt-fetch.ts / cost-emit.ts seam). Best-effort: no token, a
+// non-2xx, a timeout, or a malformed body all come back `[]` and the observation is authored
+// (and gated) exactly as before the layer. OBSERVE_NEIGHBORS=0 turns it off outright.
+// ---------------------------------------------------------------------------
+
+async function readNeighbours(id: string): Promise<Neighbor[]> {
+  if (!NEIGHBORS_ENABLED) {
+    return [];
+  }
+
+  if (!FLUNCLE_API_TOKEN) {
+    log(`${id}: no FLUNCLE_API_TOKEN — authoring without the sonic neighbourhood`);
+
+    return [];
+  }
+
+  try {
+    const url = `${FLUNCLE_API_BASE_URL}/api/admin/tracks/${encodeURIComponent(
+      id,
+    )}/observation-neighbours?limit=${NEIGHBOR_LIMIT}`;
+    const response = await fetch(url, {
+      headers: { Authorization: `Bearer ${FLUNCLE_API_TOKEN}` },
+      method: "GET",
+      signal: AbortSignal.timeout(NEIGHBOURS_TIMEOUT_MS),
+    });
+
+    if (!response.ok) {
+      log(`${id}: observation-neighbours returned HTTP ${response.status} — authoring without it`);
+
+      return [];
+    }
+
+    const payload = (await response.json()) as NeighboursResponse;
+
+    return (payload.neighbours ?? []).flatMap((neighbor) =>
+      neighbor.logId && neighbor.script?.trim()
+        ? [{ logId: neighbor.logId, script: neighbor.script.trim() }]
+        : [],
+    );
+  } catch (error) {
+    log(
+      `${id}: could not read the sonic neighbourhood (${
+        error instanceof Error ? error.message : String(error)
+      }) — authoring without it`,
+    );
+
+    return [];
   }
 }
 
@@ -501,23 +668,56 @@ async function observeOne(queued: QueueFinding): Promise<ObserveResult> {
   // facts the context sweep produced). Best-effort: degrades to identity-only.
   const contextNote = readContextNote(id);
 
-  // (c) Author the script (the one agentic step). Throws ClaudeAuthError to abort
-  // the whole batch; returns null to leave THIS finding queued.
-  const authored = await authorScript(finding, contextNote);
+  // (c) Read the SONIC NEIGHBOURHOOD — the observations already standing on the findings that
+  // sound nearest to this one (the vibe-neighbour layer). The register to hear, and the moves
+  // that are spent. Empty when the finding has no embedding, or OBSERVE_NEIGHBORS=0.
+  const neighbors = await readNeighbours(id);
 
-  if (!authored) {
-    return { cost: null, outcome: "skipped" };
+  if (neighbors.length > 0) {
+    log(`${id}: ${neighbors.length} neighbour observation(s) in the sonic neighbourhood`);
   }
 
-  // (d) Deliver: the CLI posts it; the Worker re-scans + renders + stores.
-  const outcome = deliverScript(id, authored.script, authored.promptVersion);
+  // (d) Author → deliver, with ONE re-author if the Worker's echo gate says the read is too
+  // close to its neighbours. The retry is handed the move it echoed, so the second pass knows
+  // exactly what is spent. Two echoes and we stop: the finding stays unvoiced and queued,
+  // because an observation that reads like every other one in its region is worth less than none.
+  let authored: AuthoredScript | null = null;
+  let delivery: Delivery = { outcome: "skipped" };
+  let echoedMove: string | undefined;
+
+  for (let attempt = 0; attempt <= ECHO_RETRIES; attempt += 1) {
+    // Throws ClaudeAuthError to abort the whole batch; returns null to leave THIS finding queued.
+    authored = await authorScript(finding, contextNote, neighbors, echoedMove);
+
+    if (!authored) {
+      return { cost: null, outcome: "skipped" };
+    }
+
+    delivery = deliverScript(id, authored.script, authored.promptVersion);
+
+    if (delivery.outcome !== "echoSkipped") {
+      break;
+    }
+
+    echoedMove = delivery.echoedMove;
+
+    if (attempt < ECHO_RETRIES) {
+      log(`${id}: re-authoring once, routing around the echo`);
+    } else {
+      log(
+        `${id}: still echoing its neighbourhood — left unvoiced, and HELD for the operator's eye (see /admin)`,
+      );
+    }
+  }
+
+  const outcome = delivery.outcome;
 
   // (e) Record the authoring spend ONLY when the observation actually rendered. A
   // gate-skip / failure spent the tokens too, but attributing an "observe" cost to a
   // finding with no observation would misread — the ledger tracks DELIVERED work. The
   // token spend on a rejected author is accepted lossiness.
   const cost: BoxCostEvent | null =
-    outcome === "rendered"
+    outcome === "rendered" && authored
       ? {
           costBasis: "subsidized",
           logId: finding.logId ?? null,
@@ -591,7 +791,15 @@ async function main(): Promise<void> {
   ]);
   const queue = response.tracks ?? [];
 
-  const summary = { failed: 0, gateSkipped: 0, queueRemaining: queue.length, rendered: 0 };
+  const summary = {
+    // The read echoed its sonic neighbourhood twice over and was left unrendered — the
+    // anti-sameness rail firing. A finding here stays queued for a later, colder pass.
+    echoSkipped: 0,
+    failed: 0,
+    gateSkipped: 0,
+    queueRemaining: queue.length,
+    rendered: 0,
+  };
 
   if (queue.length === 0) {
     console.log(JSON.stringify({ ok: true, ...summary }));
@@ -615,6 +823,8 @@ async function main(): Promise<void> {
         summary.rendered += 1;
       } else if (outcome === "gateSkipped") {
         summary.gateSkipped += 1;
+      } else if (outcome === "echoSkipped") {
+        summary.echoSkipped += 1;
       } else {
         summary.failed += 1;
       }

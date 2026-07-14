@@ -397,7 +397,13 @@ const fetchPublishAdvance = createServerFn({ method: "GET" }).handler(
   },
 );
 
-type BoardSearch = { mix: MixFilter; note?: string; stage: Worklist; submission?: string };
+type BoardSearch = {
+  mix: MixFilter;
+  note?: string;
+  observation?: string;
+  stage: Worklist;
+  submission?: string;
+};
 
 const ADVANCE_KEY = ["admin", "publish-advance"] as const;
 
@@ -419,6 +425,11 @@ export const Route = createFileRoute("/admin/findings")({
     // side by side and the operator rules on it. The queue row cannot rule inline — reading
     // the two notes against each other is the whole act.
     ...(typeof search.note === "string" ? { note: search.note } : {}),
+    // The attention queue's HELD-OBSERVATION deep-link (`?observation=<trackId>`): present ⇒
+    // open that finding's observation dialog (the spoken sibling of the held-note link). The
+    // ruling itself (render it / bin it) is the operator's resolve op — publish-class (a
+    // Cartesia spend), so it never sits on a queue row or a dialog button.
+    ...(typeof search.observation === "string" ? { observation: search.observation } : {}),
     // The attention queue's submission-row deep-link (`?submission=<id>`): present ⇒
     // open the review tray with that candidate focused. A bare `?submission=` (the
     // pure model's fallback when the row had no id) still opens the tray.
@@ -440,6 +451,7 @@ function AdminBoardPage() {
   const {
     mix: activeMix,
     note: focusNoteTrackId,
+    observation: focusObservationTrackId,
     stage: activeWorklist,
     submission: focusSubmissionId,
   } = Route.useSearch();
@@ -531,7 +543,10 @@ function AdminBoardPage() {
   // the observe endpoint, so the board reflects status and lets the operator read
   // the context note / play the observation; generating is left to the agent.
   const [contextId, setContextId] = useState<string | undefined>();
-  const [observationId, setObservationId] = useState<string | undefined>();
+  // Seeded from the attention queue's held-observation deep-link (`?observation=<trackId>`).
+  const [observationId, setObservationId] = useState<string | undefined>(
+    () => focusObservationTrackId,
+  );
 
   // The web intake: [Add finding] is the
   // board's primary header action; the candidates tray sits beside it as a quiet
@@ -559,6 +574,13 @@ function AdminBoardPage() {
     }
   }, [focusNoteTrackId]);
 
+  // And for the held-observation deep-link — same contract, the spoken sibling.
+  useEffect(() => {
+    if (focusObservationTrackId !== undefined) {
+      setObservationId(focusObservationTrackId);
+    }
+  }, [focusObservationTrackId]);
+
   // Closing the note dialog drops the deep-link param so a reload/back doesn't re-open it.
   const onNoteOpenChange = useCallback(
     (open: boolean) => {
@@ -573,6 +595,22 @@ function AdminBoardPage() {
       }
     },
     [focusNoteTrackId, navigate],
+  );
+
+  // Closing the observation dialog drops its deep-link param so a reload/back doesn't re-open it.
+  const onObservationOpenChange = useCallback(
+    (open: boolean) => {
+      if (open) {
+        return;
+      }
+
+      setObservationId(undefined);
+
+      if (focusObservationTrackId !== undefined) {
+        void navigate({ search: (previous) => ({ ...previous, observation: undefined }) });
+      }
+    },
+    [focusObservationTrackId, navigate],
   );
 
   // Closing the tray drops the deep-link param so a reload/back doesn't re-open it.
@@ -1135,7 +1173,7 @@ function AdminBoardPage() {
       />
 
       <ObservationDialog
-        onOpenChange={(open) => !open && setObservationId(undefined)}
+        onOpenChange={onObservationOpenChange}
         row={observationRow ?? null}
         script={observationScriptData?.script ?? ""}
         scriptLoading={observationScriptFetching}

@@ -53,6 +53,32 @@ describe("fillEmptyNote — the atomic fill-empty-only guard", () => {
     expect(await noteOf(TRACK_ID)).toBe("Pure rolling menace, patient and mean.");
   });
 
+  // THE PROVENANCE STAMP, at the row. The 2026-07-14 audit found `note_prompt_version` NULL
+  // on 60/61 findings — the stamp shipped with the registry (#516), after most of the corpus
+  // was authored, so the NULLs are historical rather than a broken write. This pins that a
+  // stamped fill actually lands the version in the column, in the same atomic statement.
+  it("stamps note_prompt_version in the same statement as the note (and NULL when unstamped)", async () => {
+    const { fillEmptyNote } = await import("./track-update");
+
+    const filled = await fillEmptyNote(TRACK_ID, "Pure rolling menace, patient and mean.", 5);
+
+    expect(filled).toBe(true);
+    const stamped = await db.execute({
+      args: [TRACK_ID],
+      sql: "select note_prompt_version from findings where track_id = ?",
+    });
+    expect(stamped.rows[0]?.note_prompt_version).toBe(5);
+
+    // An operator-typed fill (no version) reads honestly as "no registry prompt wrote this".
+    await setNote(TRACK_ID, null);
+    await fillEmptyNote(TRACK_ID, "An operator's line, typed by hand.");
+    const unstamped = await db.execute({
+      args: [TRACK_ID],
+      sql: "select note_prompt_version from findings where track_id = ?",
+    });
+    expect(unstamped.rows[0]?.note_prompt_version).toBeNull();
+  });
+
   it("fills a WHITESPACE-ONLY (spaces) note — trim() counts it as empty (returns true, stores)", async () => {
     // SQLite's default `trim()` strips ASCII spaces, so a spaces-only note reads as
     // empty and is filled — mirroring the fast-path JS `note?.trim()` guard for the
