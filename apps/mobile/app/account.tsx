@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import {
+  AccessibilityInfo,
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
@@ -331,7 +332,7 @@ function SignedInPanel({
   user: NonNullable<Me["user"]>;
 }) {
   const [busy, setBusy] = useState<"" | "delete" | "signout">("");
-  const [armed, setArmed] = useState(false);
+  const { arm, armed, disarm } = useArm("Tap again to delete your account, or cancel");
   const [error, setError] = useState("");
 
   const name = user.displayUsername ?? user.username ?? "cosmonaut";
@@ -351,7 +352,7 @@ function SignedInPanel({
   // Two-tap: the first tap arms, the second deletes (the Decks "Start over" precedent).
   async function onDelete() {
     if (!armed) {
-      setArmed(true);
+      arm();
       return;
     }
 
@@ -360,15 +361,15 @@ function SignedInPanel({
     try {
       const response = await meFetch("/api/me/delete", { body: "{}", method: "POST" });
       if (!response.ok) {
-        setError("Could not delete account.");
-        setArmed(false);
+        setError("Could not delete account. Try again in a moment.");
+        disarm();
         return;
       }
       setNotice("Account deleted. Anonymous mode is still here.");
       await onChanged();
     } catch {
-      setError("Could not delete account.");
-      setArmed(false);
+      setError("Could not delete account. Try again in a moment.");
+      disarm();
     } finally {
       setBusy("");
     }
@@ -411,12 +412,16 @@ function SignedInPanel({
           2026-07-14: sign out was the first control the eye landed on — leaving and
           destroying are rare acts and earn the least real estate, not the most).
           Sign out stays quiet and separate from the fenced danger zone below it. */}
-      <HeatButton
-        disabled={busy !== ""}
-        label={busy === "signout" ? "Signing out…" : "Sign out"}
-        onPress={() => void signOut()}
-        variant="outline"
-      />
+      {/* Self-start, not full-bleed: the de-emphasis ruling's intent made execution —
+          a rare act at the least real estate, not a primary-CTA footprint. */}
+      <View style={styles.signOut}>
+        <HeatButton
+          disabled={busy !== ""}
+          label={busy === "signout" ? "Signing out…" : "Sign out"}
+          onPress={() => void signOut()}
+          variant="outline"
+        />
+      </View>
 
       <View style={styles.danger}>
         <Text style={[font.label, { color: color.starlightCream }]}>Delete account</Text>
@@ -438,6 +443,17 @@ function SignedInPanel({
             </View>
           )}
         </Pressable>
+        {armed && busy !== "delete" ? (
+          <Pressable
+            accessibilityLabel="Cancel deleting your account"
+            accessibilityRole="button"
+            hitSlop={8}
+            onPress={disarm}
+            style={styles.dangerCancel}
+          >
+            <Text style={[font.label, styles.muted]}>Cancel</Text>
+          </Pressable>
+        ) : null}
         {error ? (
           <Text accessibilityLiveRegion="polite" style={[font.body, { color: color.reentryRed }]}>
             {error}
@@ -551,6 +567,30 @@ function SavedSets() {
 // One saved-set row: tap the name to open it on the Decks; the trailing control removes it
 // behind the app's two-tap arm (the "Start over" / delete-account precedent — no native
 // AlertDialog). The visible "Delete" matches the web row action verbatim.
+// A disarmable two-tap arm (the critique's P1): arming announces itself to VoiceOver,
+// auto-disarms after a few seconds, and every armed control offers an explicit way back
+// — an accidental first tap must never leave a live destructive trigger on screen.
+const ARM_TIMEOUT_MS = 4000;
+
+function useArm(announcement: string): {
+  arm: () => void;
+  armed: boolean;
+  disarm: () => void;
+} {
+  const [armed, setArmed] = useState(false);
+
+  useEffect(() => {
+    if (!armed) {
+      return;
+    }
+    AccessibilityInfo.announceForAccessibility(announcement);
+    const timer = setTimeout(() => setArmed(false), ARM_TIMEOUT_MS);
+    return () => clearTimeout(timer);
+  }, [armed, announcement]);
+
+  return { arm: () => setArmed(true), armed, disarm: () => setArmed(false) };
+}
+
 function SavedSetRow({
   onOpen,
   onRemove,
@@ -560,7 +600,7 @@ function SavedSetRow({
   onRemove: () => void;
   set: RemoteSavedSet;
 }) {
-  const [armed, setArmed] = useState(false);
+  const { arm, armed, disarm } = useArm(`Tap again to delete ${set.name}, or cancel`);
   const touched = new Date(set.updatedAt).toLocaleDateString();
 
   return (
@@ -575,27 +615,43 @@ function SavedSetRow({
         <Text numberOfLines={1} style={[font.label, { color: color.starlightCream }]}>
           {set.name}
         </Text>
-        <Text style={[font.body, styles.muted]}>{touched}</Text>
+        <Text style={[font.numeric, styles.setDate]}>{touched}</Text>
       </Pressable>
-      <Pressable
-        accessibilityLabel={armed ? `Tap again to delete ${set.name}` : `Delete ${set.name}`}
-        accessibilityRole="button"
-        hitSlop={8}
-        onPress={() => {
-          if (armed) {
-            onRemove();
-            setArmed(false);
-          } else {
-            setArmed(true);
-          }
-        }}
-      >
-        {({ pressed }) => (
-          <View style={[styles.setDelete, pressed ? styles.setDeletePressed : null]}>
-            <Text style={[font.label, styles.dangerLabel]}>{armed ? "Tap again" : "Delete"}</Text>
-          </View>
-        )}
-      </Pressable>
+      {/* Removing a saved set is ROUTINE — it recedes to a quiet ghost so red keeps
+          meaning irreversible (the account delete below owns the red). Armed shows the
+          red word plus an explicit Cancel; the arm also times out on its own. */}
+      {armed ? (
+        <View style={styles.setRowActions}>
+          <Pressable
+            accessibilityLabel={`Confirm deleting ${set.name}`}
+            accessibilityRole="button"
+            hitSlop={8}
+            onPress={() => {
+              onRemove();
+              disarm();
+            }}
+          >
+            <Text style={[font.label, styles.dangerLabel]}>Tap again</Text>
+          </Pressable>
+          <Pressable
+            accessibilityLabel="Cancel deleting"
+            accessibilityRole="button"
+            hitSlop={8}
+            onPress={disarm}
+          >
+            <Text style={[font.label, styles.muted]}>Cancel</Text>
+          </Pressable>
+        </View>
+      ) : (
+        <Pressable
+          accessibilityLabel={`Delete ${set.name}`}
+          accessibilityRole="button"
+          hitSlop={8}
+          onPress={arm}
+        >
+          <Text style={[font.label, styles.setDeleteGhost]}>Delete</Text>
+        </Pressable>
+      )}
     </View>
   );
 }
@@ -686,6 +742,7 @@ const styles = StyleSheet.create({
     paddingVertical: 9,
   },
   dangerButtonPressed: { backgroundColor: color.reentryRed },
+  dangerCancel: { alignSelf: "center", padding: 6 },
   dangerLabel: { color: color.reentryRed },
   field: { gap: 8 },
   flex: { flex: 1 },
@@ -707,18 +764,14 @@ const styles = StyleSheet.create({
   prefs: { gap: 8, marginTop: 8 },
   prefsFieldLabel: { color: color.starlightCream, fontSize: 14, fontWeight: "600", marginTop: 4 },
   prefsToggle: { alignSelf: "flex-start" },
-  setDelete: {
-    borderColor: color.reentryRed,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-  },
-  setDeletePressed: { backgroundColor: color.reentryRed },
+  setDate: { color: color.stardust, fontSize: 13 },
+  setDeleteGhost: { color: color.stardust },
   setList: { gap: 8 },
   setOpen: { flex: 1, gap: 2, paddingVertical: 4 },
   setRow: { alignItems: "center", flexDirection: "row", gap: 12 },
+  setRowActions: { alignItems: "center", flexDirection: "row", gap: 14 },
   setsSection: { gap: 10, marginTop: 8 },
+  signOut: { alignSelf: "flex-start" },
   stack: { gap: 16 },
   tab: {
     alignItems: "center",
