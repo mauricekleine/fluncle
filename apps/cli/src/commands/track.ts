@@ -379,31 +379,47 @@ export async function trackVideoCommand(
 
 // Reads the bundle's render.json once and returns the string fields the finalize
 // call needs (vehicle/grain/register — the diversity ledgers — plus model/reasoning).
-// A missing or unparseable value just leaves that field absent (the caller
-// defaults), never fails the upload.
+// A missing or unparseable value leaves that field absent (the caller defaults) and
+// never FAILS the upload — but it no longer passes SILENTLY: vehicle/grain/register
+// are the homogenisation evidence (docs/planning/homogenisation-evidence.md), and
+// three 2026-07 renders shipped as unlabelled holes in that ledger before this warn
+// existed. The warning lands on stderr, so the render conductor's log carries it and
+// the ship is auditable after the fact.
 type RenderManifestField = "grain" | "model" | "reasoning" | "register" | "vehicle";
+
+const DIVERSITY_LEDGER_FIELDS = ["vehicle", "grain", "register"] as const;
 
 async function readManifestFields(
   renderPath: string,
 ): Promise<Partial<Record<RenderManifestField, string>>> {
+  let result: Partial<Record<RenderManifestField, string>> = {};
+
   try {
     const manifest = (await Bun.file(renderPath).json()) as Record<RenderManifestField, unknown>;
-    const result: Partial<Record<RenderManifestField, string>> = {};
+    const parsed: Partial<Record<RenderManifestField, string>> = {};
 
     for (const key of ["vehicle", "grain", "model", "reasoning", "register"] as const) {
       const value = manifest[key];
 
       if (typeof value === "string" && value.trim()) {
-        result[key] = value.trim().slice(0, 120);
+        parsed[key] = value.trim().slice(0, 120);
       }
     }
 
-    return result;
+    result = parsed;
   } catch {
-    // Loose manifest; ignore.
+    // Loose manifest; the warn below names every missing field.
   }
 
-  return {};
+  const missing = DIVERSITY_LEDGER_FIELDS.filter((key) => !result[key]);
+
+  if (missing.length > 0) {
+    console.error(
+      `[video] render.json is missing ${missing.join(", ")} — the finding ships without its diversity-ledger stamp(s); fix the render bundle's render.json`,
+    );
+  }
+
+  return result;
 }
 
 type TrackDraftResult = {
