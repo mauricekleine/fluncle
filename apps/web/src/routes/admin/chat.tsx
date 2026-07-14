@@ -10,8 +10,10 @@ import { createServerFn } from "@tanstack/react-start";
 import { DefaultChatTransport, getToolName, isToolUIPart } from "ai";
 import { type FormEvent, Fragment, type ReactNode, useMemo, useState } from "react";
 import { AdminShell } from "@/components/admin/admin-shell";
+import { ArtistCard, type ChatArtist } from "@/components/chat/artist-card";
 import { type ChatFinding, FindingCard } from "@/components/chat/finding-card";
 import { FindingList } from "@/components/chat/finding-list";
+import { type ChatLabel, LabelCard } from "@/components/chat/label-card";
 import { MixPreviewBar } from "@/components/mix/mix-preview-bar";
 import { type KeyNotation, useKeyNotation } from "@/lib/key-notation";
 import { isAdminRequest } from "@/lib/server/admin-auth";
@@ -254,6 +256,14 @@ function renderFindingOutput(output: unknown, notation: KeyNotation): ReactNode 
     return undefined;
   }
 
+  if ("artist" in output && output.artist) {
+    return <ArtistCard artist={output.artist as ChatArtist} notation={notation} />;
+  }
+
+  if ("label" in output && output.label) {
+    return <LabelCard label={output.label as ChatLabel} notation={notation} />;
+  }
+
   if ("finding" in output && output.finding) {
     return <FindingCard finding={output.finding as ChatFinding} notation={notation} />;
   }
@@ -336,6 +346,18 @@ function collectPreviewRows(messages: FluncleUIMessage[]): {
       }
       if ("findings" in output && Array.isArray(output.findings)) {
         findings.push(...(output.findings as ChatFinding[]));
+      }
+      // An artist/label card nests its entity's findings one level down — they are previewable
+      // too, so the now-playing bar reaches them the same as a top-level result set.
+      for (const entityKey of ["artist", "label"] as const) {
+        const entity =
+          entityKey in output
+            ? (output as Record<string, { findings?: unknown }>)[entityKey]
+            : undefined;
+
+        if (entity && Array.isArray(entity.findings)) {
+          findings.push(...(entity.findings as ChatFinding[]));
+        }
       }
 
       for (const finding of findings) {
