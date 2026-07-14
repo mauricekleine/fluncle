@@ -15,6 +15,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { CosmosBackdrop } from "@/components/cosmos-backdrop";
 import { HeatButton } from "@/components/heat-button";
 import { authClient, meFetch } from "@/lib/auth-client";
+import { mergeSavedWithAccount } from "@/lib/saved";
 import { API_BASE } from "@/config";
 import { color, font, radius } from "@/theme/tokens";
 
@@ -141,6 +142,10 @@ function AuthPanel({
       }
 
       setNotice("Aboard. Your private Galaxy state is ready.");
+      // Ride the device-local saved findings onto the account: a union-merge, once per
+      // sign-in (fire-and-forget — the Saved view updates via the store's listeners when it
+      // lands; nothing here gates the UI). See @/lib/saved.
+      void mergeSavedWithAccount();
       await onSignedIn();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not sign in.");
