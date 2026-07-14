@@ -394,7 +394,7 @@ function SignedInPanel({
           The toggle is the same store the Decks control writes; the preview line makes
           the choice legible without leaving the screen. */}
       <View style={styles.prefs}>
-        <Text style={[font.label, { color: color.starlightCream }]}>Preferences</Text>
+        <Text style={[font.label, styles.sectionHeading]}>Preferences</Text>
         <Text style={[font.body, styles.muted]}>
           How every key reads across Fluncle. Saved to your account, so it follows you to every
           device you sign in on.
@@ -424,7 +424,7 @@ function SignedInPanel({
       </View>
 
       <View style={styles.danger}>
-        <Text style={[font.label, { color: color.starlightCream }]}>Delete account</Text>
+        <Text style={[font.label, styles.sectionHeading]}>Delete account</Text>
         <Text style={[font.body, styles.muted]}>
           Deletion removes private progress, saves, and sets, revokes sessions, and unlinks
           submissions from this account.
@@ -536,7 +536,7 @@ function SavedSets() {
 
   return (
     <View style={styles.setsSection}>
-      <Text style={[font.label, { color: color.starlightCream }]}>Saved sets</Text>
+      <Text style={[font.label, styles.sectionHeading]}>Saved sets</Text>
       {sets === undefined ? null : sets.length === 0 ? (
         // Adapted from the web's "No saved sets yet. Chain one on /mix and save it here." — the
         // "/mix" web locator is dropped (the Decks are one tab away, not a URL).
@@ -612,7 +612,7 @@ function SavedSetRow({
         onPress={onOpen}
         style={styles.setOpen}
       >
-        <Text numberOfLines={1} style={[font.label, { color: color.starlightCream }]}>
+        <Text numberOfLines={1} style={[font.label, styles.setName]}>
           {set.name}
         </Text>
         <Text style={[font.numeric, styles.setDate]}>{touched}</Text>
@@ -762,13 +762,15 @@ const styles = StyleSheet.create({
   loading: { paddingTop: 48 },
   muted: { color: color.stardust },
   prefs: { gap: 8, marginTop: 8 },
-  // Subordinate to the section header: the label face at a smaller, muted step —
-  // a sub-item must never out-size "Preferences" above it (operator flag).
-  prefsFieldLabel: { color: color.stardust, fontSize: 13, marginTop: 4 },
+  prefsFieldLabel: { color: color.starlightCream, fontSize: 15, marginTop: 4 },
   prefsToggle: { alignSelf: "flex-start" },
+  // The modal's type scale (typeset pass): heading 18 > body 16 > secondary 15 >
+  // caption 13 — size + weight + color stepping together, never size alone.
+  sectionHeading: { color: color.starlightCream, fontSize: 18 },
   setDate: { color: color.stardust, fontSize: 13 },
   setDeleteGhost: { color: color.stardust },
   setList: { gap: 8 },
+  setName: { color: color.starlightCream, fontSize: 15 },
   setOpen: { flex: 1, gap: 2, paddingVertical: 4 },
   setRow: { alignItems: "center", flexDirection: "row", gap: 12 },
   setRowActions: { alignItems: "center", flexDirection: "row", gap: 14 },
