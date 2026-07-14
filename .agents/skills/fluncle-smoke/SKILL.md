@@ -24,7 +24,7 @@ It is a skill, not a command, on purpose: surfaces shift, and judging each resul
 Read the current sources of truth so shifted surfaces are covered automatically and a stale list can't lie:
 
 - **oRPC routes** — `packages/contracts/src/orpc/**`: every op's `path` + `method` + tier. The exhaustive route list. Enumerate with `rg -n 'path:' packages/contracts/src/orpc`.
-- **Surfaces** — `@fluncle/registry` (`packages/registry/src/index.ts`, `liveSurfaces()`): web routes, feeds, subdomains, api, discovery, mcp, ssh, dns, cli, cron. The add-a-surface map is the [fluncle-surfaces](../fluncle-surfaces) skill + [`docs/surfaces-doctrine.md`](../../docs/surfaces-doctrine.md).
+- **Surfaces** — `@fluncle/registry` (`packages/registry/src/index.ts`, `liveSurfaces()`): web routes, feeds, subdomains, api, discovery, mcp, ssh, dns, cli, cron. The add-a-surface map is the [fluncle-surfaces](../fluncle-surfaces) skill + [`docs/surfaces-doctrine.md`](../../../docs/surfaces-doctrine.md).
 - **What just moved** — `git diff --stat <last-deploy>..HEAD -- apps/web/src/routes packages/contracts packages/registry` to focus the sweep on the change and to catch surfaces not yet (or never) in the registry.
 
 ## Target
