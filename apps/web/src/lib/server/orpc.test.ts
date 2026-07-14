@@ -602,6 +602,10 @@ const PUBLIC_OPERATION_IDS = [
   "listPrivateSavedFindings",
   "listPrivateSavedSets",
   "listPrivateSubmissions",
+  // Hydrate a whole shared `?set=` chain in one read — the public twin of the web /mix loader's
+  // server-only getMixTracksByTokens, so a saved set opens whole on mobile (uncertified tokens
+  // included). Public-unauth like the other /mix reads.
+  "listSetTracks",
   "listStories",
   "listTracks",
   "mergePrivateGalaxyProgress",

@@ -96,8 +96,40 @@ export const listMixOpeners = oc
   .input(z.object({ limit: z.string().optional(), taste: z.string() }))
   .output(z.object({ ok: z.literal(true), tracks: z.array(MixTrackSchema) }));
 
+/**
+ * `list_set_tracks` → `GET /mix/set-tracks` (operationId `listSetTracks`).
+ *
+ * Hydrate a whole `?set=` chain in ONE read — the share-link grammar handed back as rows. The
+ * `set` input is the same comma-separated token list the URL carries: a finding's Log ID for a
+ * certified track, its 22-char Spotify id for one Fluncle never certified (the Decks rail serves
+ * both, so a chain holds both). Order is preserved (a set is a sequence), duplicates collapse,
+ * and the list is parsed by the same tolerant rules the `/mix` loader uses — capped at 32 tokens,
+ * junk dropped without a DB hit.
+ *
+ * An unknown token is simply OMITTED from the result, never a fault: a set link outlives the
+ * archive it was built from, so a vanished (or never-certified-and-since-purged) row should thin
+ * the chain, not 500 the read. Public-unauth like its `list_mix_openers` sibling — every field on
+ * a {@link MixTrackSchema} row is already public on every track chip (title, artists, cover, key,
+ * BPM, and whether it is certified), so a set opener carries nothing an opener or the rail doesn't.
+ *
+ * This is the public twin of the server-only `getMixTracksByTokens` the web `/mix` loader calls,
+ * so a saved set hydrates whole on every surface — the mobile app opens an uncertified token the
+ * per-track `get_track` op (certified-findings-only) would silently drop.
+ */
+export const listSetTracks = oc
+  .route({
+    method: "GET",
+    operationId: "listSetTracks",
+    path: "/mix/set-tracks",
+    summary: "Hydrate a whole shared set from its comma-separated token list",
+    tags: ["Mix"],
+  })
+  .input(z.object({ set: z.string() }))
+  .output(z.object({ ok: z.literal(true), tracks: z.array(MixTrackSchema) }));
+
 /** The `mix` domain's ops, merged into the root contract by `./index.ts`. */
 export const mixContract = {
   list_mix_openers: listMixOpeners,
   list_mixable_artists: listMixableArtists,
+  list_set_tracks: listSetTracks,
 };
