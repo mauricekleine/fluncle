@@ -122,6 +122,7 @@ export default function ArchiveScreen() {
                 </Text>
                 <View style={{ alignItems: "center", flexDirection: "row", gap: 8 }}>
                   <SearchIconButton onPress={() => setSearching(true)} />
+                  <AccountIconButton onPress={() => router.push("/account")} />
                   <HeaderPill label="Submit a track" onPress={() => router.push("/submit")} />
                 </View>
               </View>
@@ -444,6 +445,23 @@ function SearchIconButton({ onPress }: { onPress: () => void }) {
       style={{ padding: 6 }}
     >
       <Ionicons name="search" size={20} color={color.stardust} />
+    </Pressable>
+  );
+}
+
+// The quiet account entry — a person glyph beside the search magnifier, opening the
+// /account modal (never a tab; nothing gates on an account). Icon-only chrome carries its
+// literal in the a11y label (the Chrome Rule). Padding + hitSlop lift it past the 44pt floor.
+function AccountIconButton({ onPress }: { onPress: () => void }) {
+  return (
+    <Pressable
+      accessibilityLabel="Your account"
+      accessibilityRole="button"
+      hitSlop={{ bottom: 10, left: 10, right: 10, top: 10 }}
+      onPress={onPress}
+      style={{ padding: 6 }}
+    >
+      <Ionicons name="person-circle-outline" size={22} color={color.stardust} />
     </Pressable>
   );
 }
