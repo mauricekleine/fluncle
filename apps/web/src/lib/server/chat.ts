@@ -42,7 +42,13 @@ import { readOptionalEnv } from "./env";
 import { resolveLogPageTarget } from "./log-resolver";
 import { searchArchive } from "./search";
 import { getServiceStatuses } from "./status";
-import { getRandomTrack, listTracks, type TrackListItem, toPublicTrackListItem } from "./tracks";
+import {
+  getRandomTrack,
+  getTracksByLogIds,
+  listTracks,
+  type TrackListItem,
+  toPublicTrackListItem,
+} from "./tracks";
 
 /** The model family the search tier trusts (search-llm.ts / observation.ts default). */
 const DEFAULT_CHAT_MODEL = "anthropic/claude-haiku-4.5";
@@ -89,17 +95,28 @@ HOW YOU TALK:
 // row before the model sees it, so an uncertified catalogue track is not something the model
 // can name (the catalogue rule, enforced at the wire, not just asked for in the prompt).
 
-/** A finding as Fluncle needs to speak it: the coordinate, the names, the facts it carries. */
+/**
+ * A finding as Fluncle needs to speak it AND as the card needs to show it: the coordinate, the
+ * names, the facts it carries, plus the three display fields the Finding Card renders from —
+ * `albumImageUrl` (the DTO's already-chosen best cover), `durationMs`, and a derived `hasPreview`
+ * so the card can offer inline playback. The card plays through the live `/api/preview/<logId>`
+ * relay, so the raw `previewUrl` (an EXPIRING Deezer token) NEVER rides a tool output — only the
+ * boolean does. `hasPreview: false` is kept intact (dropEmpty drops only undefined/null/[]); the
+ * card needs the explicit false to know NOT to render a play control.
+ */
 function compactFinding(item: TrackListItem) {
   const track = toPublicTrackListItem(item);
 
   return dropEmpty({
     album: track.album,
+    albumImageUrl: track.albumImageUrl,
     artists: track.artists,
     bpm: track.bpm === undefined ? undefined : Math.round(track.bpm),
     coordinate: track.logId,
+    durationMs: track.durationMs,
     found: track.addedAt,
     galaxy: track.galaxy?.name,
+    hasPreview: Boolean(track.previewUrl),
     key: track.key,
     label: track.label,
     note: track.note,
@@ -197,11 +214,22 @@ export function buildChatTools() {
       execute: async ({ query }) => {
         const result = await searchArchive({ limit: MAX_SEARCH, q: query.trim() });
 
-        // THE GROUNDING BOUNDARY: an uncertified catalogue row has no coordinate and is
-        // never something Fluncle speaks about — strip it before the model ever sees it.
-        const findings = result.results
-          .filter((hit) => hit.certified && hit.logId)
-          .map((hit) => searchHitToFinding(hit));
+        // THE GROUNDING BOUNDARY, FIRST: an uncertified catalogue row has no coordinate and is
+        // never something Fluncle speaks about — strip it before anything else (before the
+        // hydrator is ever asked about it, so no uncertified logId is even looked up).
+        const certifiedHits = result.results.filter((hit) => hit.certified && hit.logId);
+
+        // A search hit carries no artwork/duration/preview; batch-hydrate the certified ones so
+        // each card can show its cover, chips, and a play control. A logId the hydrator misses
+        // falls back to the bare hit shape (still certified, just without the display extras).
+        const hydrated = await getTracksByLogIds(
+          certifiedHits.flatMap((hit) => (hit.logId ? [hit.logId] : [])),
+        );
+        const findings = certifiedHits.map((hit) => {
+          const item = hit.logId ? hydrated[hit.logId] : undefined;
+
+          return item ? compactFinding(item) : searchHitToFinding(hit);
+        });
 
         return dropEmpty({
           anchor: result.anchor?.certified ? searchHitToFinding(result.anchor) : undefined,
@@ -223,6 +251,7 @@ export function buildChatTools() {
 /** A search hit, reduced to the facts Fluncle speaks from (certified rows only reach here). */
 function searchHitToFinding(hit: {
   album?: string;
+  albumImageUrl?: string;
   artists: string[];
   bpm?: number;
   galaxy?: string;
@@ -233,6 +262,7 @@ function searchHitToFinding(hit: {
 }) {
   return dropEmpty({
     album: hit.album,
+    albumImageUrl: hit.albumImageUrl,
     artists: hit.artists,
     bpm: hit.bpm === undefined ? undefined : Math.round(hit.bpm),
     coordinate: hit.logId,

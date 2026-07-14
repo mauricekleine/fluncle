@@ -8,14 +8,19 @@ import {
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { DefaultChatTransport, getToolName, isToolUIPart } from "ai";
-import { type FormEvent, Fragment, type ReactNode, useState } from "react";
+import { type FormEvent, Fragment, type ReactNode, useMemo, useState } from "react";
 import { AdminShell } from "@/components/admin/admin-shell";
+import { type ChatFinding, FindingCard } from "@/components/chat/finding-card";
+import { FindingList } from "@/components/chat/finding-list";
+import { MixPreviewBar } from "@/components/mix/mix-preview-bar";
+import { type KeyNotation, useKeyNotation } from "@/lib/key-notation";
 import { isAdminRequest } from "@/lib/server/admin-auth";
 import { type FluncleUIMessage } from "@/lib/server/chat";
 import { Bubble, BubbleContent } from "@fluncle/ui/components/bubble";
 import { Button } from "@fluncle/ui/components/button";
 import { Marker, MarkerContent, MarkerIcon } from "@fluncle/ui/components/marker";
 import { Message, MessageContent } from "@fluncle/ui/components/message";
+import { Skeleton } from "@fluncle/ui/components/skeleton";
 import {
   MessageScroller,
   MessageScrollerContent,
@@ -49,11 +54,16 @@ export const Route = createFileRoute("/admin/chat")({
 
 function ChatWorkbench() {
   const [draft, setDraft] = useState("");
+  const { notation } = useKeyNotation();
   const { error, messages, sendMessage, status } = useChat<FluncleUIMessage>({
     transport: new DefaultChatTransport({ api: "/api/admin/chat" }),
   });
   // "submitted" is the gap between posting a turn and the first streamed chunk.
   const busy = status === "submitted" || status === "streaming";
+
+  // Every finding on the transcript, deduped by coordinate — the persistent now-playing bar's
+  // row set, so a preview started from any card gets the same bottom bar the rest of the app has.
+  const previewRows = useMemo(() => collectPreviewRows(messages), [messages]);
 
   function send(event: FormEvent) {
     event.preventDefault();
@@ -89,7 +99,7 @@ function ChatWorkbench() {
                     scrollAnchor={message.role === "user"}
                   >
                     <Message align={message.role === "user" ? "end" : "start"}>
-                      <MessageContent>{renderParts(message)}</MessageContent>
+                      <MessageContent>{renderParts(message, notation)}</MessageContent>
                     </Message>
                   </MessageScrollerItem>
                 ))}
@@ -141,16 +151,22 @@ function ChatWorkbench() {
           </Button>
         </form>
       </div>
+
+      {/* The persistent now-playing bar (portals to document.body): renders null unless a
+          preview is actually playing, so it costs nothing until a card starts one. */}
+      <MixPreviewBar notation={notation} tracks={previewRows} />
     </AdminShell>
   );
 }
 
 // Render a message's parts: user + assistant text as bubbles, every tool step as a visible
-// marker (the grounding work). Text bubbles read muted for the assistant, primary for the
-// crew. A tool part carries its whole lifecycle in one part, so the call marker renders from
-// the moment the input streams and the result (or error) marker joins it once the state says
-// so. `step-start` and any other part types are workbench noise and render nothing.
-function renderParts(message: FluncleUIMessage): ReactNode {
+// marker (the grounding work) — and, when a tool returns findings, the real Finding Cards in
+// place of the raw JSON output marker. Text bubbles read muted for the assistant, primary for
+// the crew. A tool part carries its whole lifecycle in one part, so the call marker renders from
+// the moment the input streams; while the dig is underway a skeleton card stands in for the
+// future output, and the cards (or the summarize fallback) join once the output arrives.
+// `step-start` and any other part types are workbench noise and render nothing.
+function renderParts(message: FluncleUIMessage, notation: KeyNotation): ReactNode {
   return message.parts.map((part, index) => {
     const key = `${message.id}-${index}`;
 
@@ -168,6 +184,8 @@ function renderParts(message: FluncleUIMessage): ReactNode {
 
     if (isToolUIPart(part)) {
       const name = getToolName(part);
+      // KEEP the call marker exactly as-is — watching the grounding work happen is the point of
+      // the workbench. The cards REPLACE only the raw `→ {json}` output marker.
       const call = (
         <Marker variant="separator">
           <MarkerIcon>
@@ -181,14 +199,18 @@ function renderParts(message: FluncleUIMessage): ReactNode {
       );
 
       if (part.state === "output-available") {
+        const cards = renderFindingOutput(part.output, notation);
+
         return (
           <Fragment key={key}>
             {call}
-            <Marker variant="border">
-              <MarkerContent className="font-mono text-xs text-muted-foreground">
-                → {summarize(part.output)}
-              </MarkerContent>
-            </Marker>
+            {cards ?? (
+              <Marker variant="border">
+                <MarkerContent className="font-mono text-xs text-muted-foreground">
+                  → {summarize(part.output)}
+                </MarkerContent>
+              </Marker>
+            )}
           </Fragment>
         );
       }
@@ -209,12 +231,129 @@ function renderParts(message: FluncleUIMessage): ReactNode {
         );
       }
 
-      // input-streaming / input-available — the dig is underway; the call marker is enough.
-      return <Fragment key={key}>{call}</Fragment>;
+      // input-streaming / input-available — the dig is underway; a skeleton card stands in for
+      // the finding it is about to hand back, under the same call marker.
+      return (
+        <Fragment key={key}>
+          {call}
+          <SkeletonCard />
+        </Fragment>
+      );
     }
 
     return undefined;
   });
+}
+
+// A tool output rendered as its Finding Card(s), or `undefined` for every shape the cards do not
+// own (a mixtape, a not-found, a status headline, an empty result) — the caller keeps the plain
+// summarize marker for those (and, unchanged, the error marker for output-error). Structural, so
+// one branch covers both single-finding tools and both list tools regardless of the tool name.
+function renderFindingOutput(output: unknown, notation: KeyNotation): ReactNode {
+  if (typeof output !== "object" || output === null) {
+    return undefined;
+  }
+
+  if ("finding" in output && output.finding) {
+    return <FindingCard finding={output.finding as ChatFinding} notation={notation} />;
+  }
+
+  if ("findings" in output && Array.isArray(output.findings) && output.findings.length > 0) {
+    const anchor = "anchor" in output && output.anchor ? (output.anchor as ChatFinding) : undefined;
+
+    return (
+      <div className="flex flex-col gap-2">
+        {anchor ? (
+          <>
+            <p className="px-1 text-xs text-muted-foreground">anchored on</p>
+            <FindingCard finding={anchor} notation={notation} />
+          </>
+        ) : null}
+        <FindingList findings={output.findings as ChatFinding[]} notation={notation} />
+      </div>
+    );
+  }
+
+  return undefined;
+}
+
+// The "dig underway" placeholder: one artwork square + two text lines, sized to a Finding Card so
+// the layout does not jump when the real card arrives.
+function SkeletonCard(): ReactNode {
+  return (
+    <div className="flex items-start gap-3 rounded-md border border-border bg-card px-3 py-2.5">
+      <Skeleton className="size-[3.25rem] shrink-0 rounded-[var(--rounded-artwork)]" />
+      <div className="min-w-0 flex-1 space-y-2 py-1">
+        <Skeleton className="h-3.5 w-2/3" />
+        <Skeleton className="h-3 w-1/3" />
+      </div>
+    </div>
+  );
+}
+
+// Every finding visible on the transcript, deduped by coordinate — the now-playing bar's rows.
+// Reads the same tool outputs the cards render from, so the bar and the cards agree on what is
+// previewable. Only findings with a coordinate (the relay key) can ever be the active row.
+function collectPreviewRows(messages: FluncleUIMessage[]): {
+  albumImageUrl?: string;
+  artists: string[];
+  bpm?: number;
+  key?: string;
+  logId?: string;
+  title: string;
+}[] {
+  const byLogId = new Map<
+    string,
+    {
+      albumImageUrl?: string;
+      artists: string[];
+      bpm?: number;
+      key?: string;
+      logId: string;
+      title: string;
+    }
+  >();
+
+  for (const message of messages) {
+    for (const part of message.parts) {
+      if (!isToolUIPart(part) || part.state !== "output-available") {
+        continue;
+      }
+
+      const output = part.output;
+
+      if (typeof output !== "object" || output === null) {
+        continue;
+      }
+
+      const findings: ChatFinding[] = [];
+
+      if ("finding" in output && output.finding) {
+        findings.push(output.finding as ChatFinding);
+      }
+      if ("anchor" in output && output.anchor) {
+        findings.push(output.anchor as ChatFinding);
+      }
+      if ("findings" in output && Array.isArray(output.findings)) {
+        findings.push(...(output.findings as ChatFinding[]));
+      }
+
+      for (const finding of findings) {
+        if (finding.coordinate && !byLogId.has(finding.coordinate)) {
+          byLogId.set(finding.coordinate, {
+            albumImageUrl: finding.albumImageUrl,
+            artists: finding.artists ?? [],
+            bpm: finding.bpm,
+            key: finding.key,
+            logId: finding.coordinate,
+            title: finding.title ?? "",
+          });
+        }
+      }
+    }
+  }
+
+  return [...byLogId.values()];
 }
 
 // A one-line, readable digest of a tool input/output for the transcript (never the raw
