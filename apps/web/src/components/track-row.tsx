@@ -14,7 +14,7 @@ import {
   DropdownMenuTrigger,
 } from "@fluncle/ui/components/dropdown-menu";
 import { siteUrl } from "@/lib/fluncle-links";
-import { formatAlbumDuration, formatDuration } from "@/lib/format";
+import { bangersCount, formatAlbumDuration, formatDuration } from "@/lib/format";
 import { albumCoverAtSize } from "@/lib/media";
 import { type FeedItem, mixtapeCoverUrl, mixtapeDisplayTitle } from "@/lib/mixtapes";
 import { type Track } from "@/lib/tracks";
@@ -27,7 +27,7 @@ import { cn } from "@/lib/utils";
 export function TrackRow({ track, trackNumber }: { track: FeedItem; trackNumber: number }) {
   if (track.type === "mixtape") {
     const logId = track.logId as string;
-    const bangersLabel = `${track.memberCount} ${track.memberCount === 1 ? "banger" : "bangers"}`;
+    const bangersLabel = bangersCount(track.memberCount);
 
     return (
       <li className="track-row track-row-checkpoint">

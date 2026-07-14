@@ -32,7 +32,7 @@ export function LabelCard({ label, notation }: { label: ChatLabel; notation: Key
   const aliases = label.aliases ?? [];
 
   return (
-    <div className="flex flex-col gap-3 rounded-md border border-border bg-card px-3 py-3">
+    <div className="flex flex-col gap-3 rounded-md border border-border bg-card px-3 py-2.5">
       <div className="flex items-start gap-3">
         <span className="shrink-0">
           <TrackArtwork alt={`${name} logo`} src={label.logoUrl} />

@@ -137,7 +137,7 @@ function ChainStep({
       )}
 
       <div className="min-w-0 flex-1">
-        <p className="track-title truncate">{trackLine}</p>
+        <p className="track-title">{trackLine}</p>
         <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1">
           {logId ? (
             <Link

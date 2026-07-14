@@ -15,6 +15,8 @@ import { ChainCard, type ChatSet } from "@/components/chat/chain-card";
 import { type ChatFinding, FindingCard } from "@/components/chat/finding-card";
 import { FindingList } from "@/components/chat/finding-list";
 import { type ChatLabel, LabelCard } from "@/components/chat/label-card";
+import { type ChatMixtape, MixtapeCard } from "@/components/chat/mixtape-card";
+import { type ChatStatus, StatusStrip } from "@/components/chat/status-strip";
 import { MixPreviewBar } from "@/components/mix/mix-preview-bar";
 import { type KeyNotation, useKeyNotation } from "@/lib/key-notation";
 import { isAdminRequest } from "@/lib/server/admin-auth";
@@ -248,10 +250,10 @@ function renderParts(message: FluncleUIMessage, notation: KeyNotation): ReactNod
   });
 }
 
-// A tool output rendered as its Finding Card(s), or `undefined` for every shape the cards do not
-// own (a mixtape, a not-found, a status headline, an empty result) — the caller keeps the plain
-// summarize marker for those (and, unchanged, the error marker for output-error). Structural, so
-// one branch covers both single-finding tools and both list tools regardless of the tool name.
+// A tool output rendered as its card (a finding, a list, an artist, a label, a chain, a mixtape,
+// or the status strip), or `undefined` for the shapes no card owns (a not-found, an empty result)
+// — the caller keeps the plain summarize marker for those (and, unchanged, the error marker for
+// output-error). Structural, so one branch covers each shape regardless of the tool name.
 function renderFindingOutput(output: unknown, notation: KeyNotation): ReactNode {
   if (typeof output !== "object" || output === null) {
     return undefined;
@@ -269,6 +271,15 @@ function renderFindingOutput(output: unknown, notation: KeyNotation): ReactNode 
     return <LabelCard label={output.label as ChatLabel} notation={notation} />;
   }
 
+  if ("mixtape" in output && output.mixtape) {
+    return <MixtapeCard mixtape={output.mixtape as ChatMixtape} />;
+  }
+
+  // get_status → the compact one-line strip (structural, like every other branch).
+  if ("headline" in output && output.headline) {
+    return <StatusStrip status={output as ChatStatus} />;
+  }
+
   if ("finding" in output && output.finding) {
     return <FindingCard finding={output.finding as ChatFinding} notation={notation} />;
   }
@@ -280,7 +291,7 @@ function renderFindingOutput(output: unknown, notation: KeyNotation): ReactNode 
       <div className="flex flex-col gap-2">
         {anchor ? (
           <>
-            <p className="px-1 text-xs text-muted-foreground">anchored on</p>
+            <p className="px-1 text-xs text-muted-foreground">Anchored on</p>
             <FindingCard finding={anchor} notation={notation} />
           </>
         ) : null}
