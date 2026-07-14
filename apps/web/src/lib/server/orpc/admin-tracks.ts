@@ -61,7 +61,7 @@ import {
   searchTracks,
 } from "../tracks";
 import { isLogId } from "../../log-id";
-import { type VideoArtifact, artifactByField } from "../video-bundle";
+import { type VideoArtifact, artifactByField, readRenderManifestStamps } from "../video-bundle";
 import { type Implementer, parseLimit, requireTrack, toFault } from "./_shared";
 
 // Fields only the operator may write: editorial voice (note), the vehicle/video
@@ -1102,26 +1102,42 @@ export function adminTracksHandlers(os: Implementer) {
         });
       }
 
-      const videoVehicle =
+      const bodyVehicle =
         typeof body.videoVehicle === "string" && body.videoVehicle.trim()
           ? body.videoVehicle.trim().slice(0, 120)
           : undefined;
-      const videoGrain =
+      const bodyGrain =
         typeof body.videoGrain === "string" && body.videoGrain.trim()
           ? body.videoGrain.trim().slice(0, 120)
           : undefined;
-      const videoRegister =
+      const bodyRegister =
         typeof body.videoRegister === "string" && body.videoRegister.trim()
           ? body.videoRegister.trim().slice(0, 120)
           : undefined;
-      const videoModel =
+      const bodyModel =
         typeof body.videoModel === "string" && body.videoModel.trim()
           ? body.videoModel.trim().slice(0, 120)
-          : "anthropic/claude-opus-4-8";
-      const videoModelReasoning =
+          : undefined;
+      const bodyReasoning =
         typeof body.videoModelReasoning === "string" && body.videoModelReasoning.trim()
           ? body.videoModelReasoning.trim().slice(0, 120)
-          : "high";
+          : undefined;
+
+      // THE TRANSPORT-PROOF STAMP FALLBACK (the 044.1.3L lesson): when the body
+      // leaves any diversity-ledger stamp out — a crashed CLI's salvage ship, a
+      // partial upload, any caller that never read the manifest — read the bundle's
+      // own render.json from R2 and fill the gaps. The manifest was uploaded by the
+      // same ship this finalize completes, so it is the authority of record; a
+      // missing/corrupt manifest yields {} and the finalize lands exactly as before.
+      const manifestStamps =
+        bodyVehicle && bodyGrain && bodyRegister
+          ? {}
+          : await readRenderManifestStamps(env.VIDEOS, track.logId);
+      const videoVehicle = bodyVehicle ?? manifestStamps.vehicle;
+      const videoGrain = bodyGrain ?? manifestStamps.grain;
+      const videoRegister = bodyRegister ?? manifestStamps.register;
+      const videoModel = bodyModel ?? manifestStamps.model ?? "anthropic/claude-opus-4-8";
+      const videoModelReasoning = bodyReasoning ?? manifestStamps.reasoning ?? "high";
 
       const videoUrl = trackMedia(track.logId).videoUrl;
       // `squared` (the CLI sends it when it uploaded BOTH the square footage.mp4

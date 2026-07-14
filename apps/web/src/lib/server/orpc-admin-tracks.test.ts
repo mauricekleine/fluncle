@@ -23,6 +23,9 @@ const getTrackByIdOrLogId = vi.fn();
 const getSimilarFindings = vi.fn();
 const getTrackContextNote = vi.fn();
 const put = vi.fn();
+// env.VIDEOS.get — the finalize handler's transport-proof stamp fallback reads the
+// bundle's render.json off R2 when the body misses the diversity-ledger trio.
+const bucketGet = vi.fn();
 const renderObservationCartesia = vi.fn();
 const fetchTrackContext = vi.fn();
 const presignUploads = vi.fn();
@@ -38,7 +41,12 @@ const recordNoteRejection = vi.fn();
 const getNoteEchoThresholds = vi.fn();
 
 vi.mock("cloudflare:workers", () => ({
-  env: { VIDEOS: { put: (...args: unknown[]) => put(...args) } },
+  env: {
+    VIDEOS: {
+      get: (...args: unknown[]) => bucketGet(...args),
+      put: (...args: unknown[]) => put(...args),
+    },
+  },
 }));
 
 vi.mock("./track-update", () => ({
@@ -142,6 +150,9 @@ beforeEach(() => {
   getSimilarFindings.mockReset().mockResolvedValue([]);
   getTrackContextNote.mockReset().mockResolvedValue(null);
   put.mockReset();
+  // Default: no render.json on R2 — the fallback yields {} and every pre-existing
+  // finalize test keeps its exact old behaviour. The fallback tests stock it.
+  bucketGet.mockReset().mockResolvedValue(null);
   fetchTrackContext.mockReset();
   presignUploads.mockReset();
   renderObservationCartesia
@@ -1385,6 +1396,66 @@ describe("oRPC finalize_track_video (POST .../video/finalize)", () => {
     expect(response?.status).toBe(404);
     expect(((await readJson(response)) as { code: string }).code).toBe("not_found");
     expect(updateTrack).not.toHaveBeenCalled();
+  });
+
+  // The transport-proof stamp fallback (the 044.1.3L lesson): a crashed CLI's salvage
+  // ship finalizes without the diversity-ledger trio even though render.json is
+  // already on R2. The handler reads the bundle's own manifest and fills the gaps.
+  it("fills missing stamps from the bundle's render.json on R2", async () => {
+    getTrackByIdOrLogId.mockResolvedValueOnce(TRACK);
+    updateTrack.mockResolvedValueOnce({ fields: ["video_url"], trackId: TRACK_ID });
+    bucketGet.mockResolvedValueOnce({
+      json: async () => ({
+        grain: "grainFineEmulsion",
+        model: "anthropic/claude-opus-4-8",
+        reasoning: "high",
+        register: "representational",
+        vehicle: "tidal retreat",
+      }),
+    });
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(post("/video/finalize", AGENT_TOKEN, {}));
+
+    expect(response?.status).toBe(200);
+    expect(bucketGet).toHaveBeenCalledWith("004.7.2I/render.json");
+    const [, update] = updateTrack.mock.calls[0] as [string, Record<string, unknown>];
+    expect(update.videoVehicle).toBe("tidal retreat");
+    expect(update.videoGrain).toBe("grainFineEmulsion");
+    expect(update.videoRegister).toBe("representational");
+  });
+
+  it("skips the R2 read when the body already carries the full trio", async () => {
+    getTrackByIdOrLogId.mockResolvedValueOnce(TRACK);
+    updateTrack.mockResolvedValueOnce({ fields: ["video_url"], trackId: TRACK_ID });
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      post("/video/finalize", AGENT_TOKEN, {
+        videoGrain: "grainBayer",
+        videoRegister: "abstract",
+        videoVehicle: "thermal raptor",
+      }),
+    );
+
+    expect(response?.status).toBe(200);
+    expect(bucketGet).not.toHaveBeenCalled();
+    const [, update] = updateTrack.mock.calls[0] as [string, Record<string, unknown>];
+    expect(update.videoVehicle).toBe("thermal raptor");
+  });
+
+  it("lands the finalize unstamped when no manifest exists (best-effort, never a failure)", async () => {
+    getTrackByIdOrLogId.mockResolvedValueOnce(TRACK);
+    updateTrack.mockResolvedValueOnce({ fields: ["video_url"], trackId: TRACK_ID });
+    // bucketGet default: resolves null (no render.json on R2).
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(post("/video/finalize", AGENT_TOKEN, {}));
+
+    expect(response?.status).toBe(200);
+    const [, update] = updateTrack.mock.calls[0] as [string, Record<string, unknown>];
+    expect(update.videoVehicle).toBeUndefined();
+    expect(update.videoModel).toBe("anthropic/claude-opus-4-8");
   });
 });
 

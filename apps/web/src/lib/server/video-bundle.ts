@@ -56,3 +56,52 @@ export const VIDEO_ARTIFACTS: readonly VideoArtifact[] = [
 export function artifactByField(field: string): VideoArtifact | undefined {
   return VIDEO_ARTIFACTS.find((artifact) => artifact.field === field);
 }
+
+// The finalize-side stamp fields render.json carries: the diversity-ledger trio
+// (vehicle/grain/register — docs/planning/homogenisation-evidence.md) plus the
+// authoring model/reasoning provenance.
+export type RenderManifestStamps = {
+  grain?: string;
+  model?: string;
+  reasoning?: string;
+  register?: string;
+  vehicle?: string;
+};
+
+const MANIFEST_STAMP_KEYS = ["grain", "model", "reasoning", "register", "vehicle"] as const;
+
+// THE TRANSPORT-PROOF STAMP FALLBACK (the 044.1.3L lesson, 2026-07-14): the render
+// box's ship crashed mid-upload (a Bun segfault on the box runtime), the agent
+// salvaged with a partial per-file upload, and finalize arrived WITHOUT the
+// diversity-ledger trio — even though render.json was already sitting on R2 in the
+// same bundle. The bundle's own manifest is the authority of record, so the finalize
+// handler calls this to fill any stamp the request body left out. Best-effort by
+// contract: a missing, corrupt, or unreadable manifest returns {} and NEVER fails
+// the finalize — the ship must land regardless.
+export async function readRenderManifestStamps(
+  bucket: Pick<R2Bucket, "get">,
+  logId: string,
+): Promise<RenderManifestStamps> {
+  try {
+    const object = await bucket.get(`${logId}/render.json`);
+
+    if (!object) {
+      return {};
+    }
+
+    const manifest = (await object.json()) as Record<string, unknown>;
+    const stamps: RenderManifestStamps = {};
+
+    for (const key of MANIFEST_STAMP_KEYS) {
+      const value = manifest[key];
+
+      if (typeof value === "string" && value.trim()) {
+        stamps[key] = value.trim().slice(0, 120);
+      }
+    }
+
+    return stamps;
+  } catch {
+    return {};
+  }
+}
