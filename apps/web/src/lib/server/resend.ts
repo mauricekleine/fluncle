@@ -221,3 +221,80 @@ export async function sendBroadcast(
     );
   }
 }
+
+/**
+ * Send a single transactional email via `POST /emails` — the one-off sibling of the
+ * broadcast path (which mails the whole segment). Reuses the same verified sender
+ * (`RESEND_FROM`) as the newsletter, so a reset mail arrives from the address the
+ * crew already knows. Throws `ApiError` on a real upstream fault; the caller decides
+ * whether that surfaces to the user (Better Auth's `sendResetPassword` swallows it so
+ * a delivery hiccup never leaks whether an account exists).
+ */
+export async function sendTransactionalEmail(params: {
+  html: string;
+  subject: string;
+  text: string;
+  to: string;
+}): Promise<void> {
+  const from = await readOptionalEnv("RESEND_FROM");
+
+  if (!from) {
+    throw new ApiError(
+      "send_misconfigured",
+      "RESEND_FROM is not configured — set the verified sender before sending.",
+      500,
+    );
+  }
+
+  const response = await resendFetch("/emails", {
+    body: {
+      from,
+      html: params.html,
+      subject: params.subject,
+      text: params.text,
+      to: params.to,
+    },
+    method: "POST",
+  });
+
+  if (!response.ok) {
+    throw new ApiError(
+      "email_send_failed",
+      `Resend could not send the email (${await readError(response)})`,
+      502,
+    );
+  }
+}
+
+/**
+ * Compose and send the password-reset email (web + mobile). Transactional-plain in
+ * Fluncle's first-person voice; the whole link is the literal call to action. `url`
+ * is the reset link Better Auth builds (it validates the token then redirects to the
+ * `/reset-password` page with the token in the query). Flagged for operator taste
+ * review — the copy is a first pass.
+ */
+export async function sendPasswordResetEmail(params: { to: string; url: string }): Promise<void> {
+  const text = [
+    "Someone asked to reset the password on your Fluncle account. If that was you, open this link to set a new one:",
+    "",
+    params.url,
+    "",
+    "The link works for one hour. If it wasn't you, ignore this and nothing changes.",
+    "",
+    "Fluncle",
+  ].join("\n");
+
+  const html = [
+    "<p>Someone asked to reset the password on your Fluncle account. If that was you, open this link to set a new one:</p>",
+    `<p><a href="${params.url}">Set a new password</a></p>`,
+    "<p>The link works for one hour. If it wasn&rsquo;t you, ignore this and nothing changes.</p>",
+    "<p>Fluncle</p>",
+  ].join("\n");
+
+  await sendTransactionalEmail({
+    html,
+    subject: "Reset your Fluncle password",
+    text,
+    to: params.to,
+  });
+}

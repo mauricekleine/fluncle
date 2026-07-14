@@ -230,6 +230,7 @@ function AuthForms({
   refresh: () => Promise<void>;
   setMessage: (message: string) => void;
 }) {
+  const [view, setView] = useState<"auth" | "reset">("auth");
   const [mode, setMode] = useState<"signin" | "signup">("signin");
   const [email, setEmail] = useState("");
   const [username, setUsername] = useState("");
@@ -267,6 +268,17 @@ function AuthForms({
     } finally {
       setBusy(false);
     }
+  }
+
+  if (view === "reset") {
+    return (
+      <ForgotPasswordForm
+        onBack={() => {
+          setView("auth");
+          setMessage("");
+        }}
+      />
+    );
   }
 
   return (
@@ -307,6 +319,18 @@ function AuthForms({
           onChange={(event) => setPassword(event.target.value)}
         />
       </Field>
+      {mode === "signin" ? (
+        <button
+          className="self-start text-sm text-muted-foreground hover:text-accent-foreground"
+          onClick={() => {
+            setView("reset");
+            setMessage("");
+          }}
+          type="button"
+        >
+          Forgot password?
+        </button>
+      ) : null}
       <Button disabled={busy} type="submit">
         {busy
           ? mode === "signup"
@@ -321,6 +345,68 @@ function AuthForms({
           {message}
         </p>
       ) : null}
+    </form>
+  );
+}
+
+// The "Forgot password?" panel: collect the account email and ask Better Auth to
+// send a reset link (its `/request-password-reset` endpoint, delivered by the
+// server's `sendResetPassword` → Resend). The confirmation is deliberately identical
+// whether or not the email is on an account — email-enumeration-safe — so the send
+// error (if any) is swallowed and the same line always shows.
+function ForgotPasswordForm({ onBack }: { onBack: () => void }) {
+  const [email, setEmail] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [sent, setSent] = useState(false);
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+
+    try {
+      await authClient.requestPasswordReset({
+        email,
+        redirectTo: `${siteUrl}/reset-password`,
+      });
+    } catch {
+      // Swallow — the confirmation below is the same either way (enumeration-safe).
+    } finally {
+      setBusy(false);
+      setSent(true);
+    }
+  }
+
+  return (
+    <form className="account-stack" onSubmit={(event) => void submit(event)}>
+      <div>
+        <h2>Reset your password</h2>
+        <p className="account-muted">
+          Enter your account email and I&rsquo;ll send a link to set a new password.
+        </p>
+      </div>
+      <Field label="Email">
+        <Input
+          autoComplete="email"
+          type="email"
+          value={email}
+          onChange={(event) => setEmail(event.target.value)}
+        />
+      </Field>
+      <Button disabled={busy} type="submit">
+        {busy ? "Sending…" : "Send reset link"}
+      </Button>
+      {sent ? (
+        <p aria-live="polite" className="account-muted">
+          If that account exists, a reset link is on its way.
+        </p>
+      ) : null}
+      <button
+        className="self-start text-sm text-muted-foreground hover:text-accent-foreground"
+        onClick={onBack}
+        type="button"
+      >
+        Back to sign in
+      </button>
     </form>
   );
 }

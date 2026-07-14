@@ -1,4 +1,5 @@
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
+import { expo } from "@better-auth/expo";
 import { betterAuth, type Auth, type BetterAuthOptions } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { bearer, deviceAuthorization } from "better-auth/plugins";
@@ -6,6 +7,7 @@ import { username } from "better-auth/plugins/username";
 import * as schema from "../../db/schema";
 import { getDb, getDrizzleDb, typedRow } from "./db";
 import { jsonError, readOptionalEnv } from "./env";
+import { sendPasswordResetEmail } from "./resend";
 
 // The CLI's OAuth client id for the device-authorization grant (RFC 8628). The
 // `fluncle login` flow is a first-party, fully-trusted client — the CLI is ours,
@@ -113,6 +115,21 @@ export function createPublicAuthOptions(
       enabled: true,
       maxPasswordLength: 128,
       minPasswordLength: 10,
+      // The password-reset rail (web + mobile). Better Auth builds the tokenised
+      // `url` (it validates the token then redirects to the `/reset-password` page
+      // with the token in the query); we just deliver it. The token rides the
+      // existing `verification` table — no schema change. A Resend fault is caught
+      // and logged rather than rethrown, so the `/request-password-reset` response
+      // is uniform whether or not delivery succeeded — keeping it
+      // email-enumeration-safe (Better Auth already returns the same shape whether
+      // or not the address is on an account).
+      sendResetPassword: async ({ url, user }) => {
+        try {
+          await sendPasswordResetEmail({ to: user.email, url });
+        } catch (error) {
+          console.error("password reset email failed to send", error);
+        }
+      },
     },
     plugins: [
       username({
@@ -149,9 +166,23 @@ export function createPublicAuthOptions(
       // (./env.ts) compares the Bearer against `FLUNCLE_API_TOKEN`/`FLUNCLE_AGENT_TOKEN`
       // by constant-time equality, which a random session token cannot satisfy.
       bearer(),
+      // The Expo native-client handshake for the mobile app. It only adds handling
+      // for requests carrying the `fluncle://` origin (the app scheme, allow-listed
+      // in `trustedOrigins` below) — cookie/session behaviour for browser clients is
+      // byte-for-byte unchanged. It lets the app complete the OAuth/deep-link round
+      // trip and read the session token from the response header (no cookie jar on
+      // native), the mobile analogue of the CLI's `bearer` path.
+      expo(),
     ],
     secret: publicAuthSecret(),
-    trustedOrigins: ["http://localhost:3000", "http://127.0.0.1:3000", "https://www.fluncle.com"],
+    // The app scheme (`fluncle://`) is trusted so the Expo plugin accepts the native
+    // client's deep-link origin; the web origins are unchanged.
+    trustedOrigins: [
+      "http://localhost:3000",
+      "http://127.0.0.1:3000",
+      "https://www.fluncle.com",
+      "fluncle://",
+    ],
     user: {
       additionalFields: {
         deletedAt: { required: false, returned: false, type: "number" },
