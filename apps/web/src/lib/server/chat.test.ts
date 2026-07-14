@@ -8,12 +8,44 @@ const readOptionalEnv = vi.hoisted(() => vi.fn<(name: string) => Promise<string 
 const getTracksByLogIds = vi.hoisted(() =>
   vi.fn<(logIds: string[]) => Promise<Record<string, unknown>>>(),
 );
+const getFindingsByArtist = vi.hoisted(() => vi.fn<() => Promise<unknown[]>>());
+const getFindingsByLabel = vi.hoisted(() => vi.fn<() => Promise<unknown[]>>());
+const toArtistSlug = vi.hoisted(() => vi.fn<(name: string) => string>());
+const getArtistBySlug = vi.hoisted(() => vi.fn<(slug: string) => Promise<unknown>>());
+const getPublicArtistSocials = vi.hoisted(() => vi.fn<() => Promise<unknown[]>>());
+const countArtistFindings = vi.hoisted(() => vi.fn<() => Promise<number>>());
+const labelSlug = vi.hoisted(() => vi.fn<(name: string) => string | undefined>());
+const getLabelBySlug = vi.hoisted(() => vi.fn<(slug: string) => Promise<unknown>>());
+const getConfirmedAliasNames = vi.hoisted(() => vi.fn<() => Promise<string[]>>());
+
+// A faithful stand-in for the real deterministic slug helpers (the DB-touching modules stay
+// mocked). "Netsky" → "netsky", "Hospital Records" → "hospital-records" — enough to prove the
+// name → helper → getBySlug wiring without importing node:crypto + spotify + db.
+function toSlug(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
 
 vi.mock("./env", () => ({ readOptionalEnv }));
 vi.mock("./search", () => ({ searchArchive: vi.fn() }));
 vi.mock("./log-resolver", () => ({ resolveLogPageTarget: vi.fn() }));
 vi.mock("./status", () => ({ getServiceStatuses: vi.fn() }));
+vi.mock("./artists", () => ({
+  countArtistFindings,
+  getArtistBySlug,
+  getPublicArtistSocials,
+  toArtistSlug,
+}));
+vi.mock("./labels", () => ({
+  getConfirmedAliasNames,
+  getLabelBySlug,
+  labelSlug,
+}));
 vi.mock("./tracks", () => ({
+  getFindingsByArtist,
+  getFindingsByLabel,
   getRandomTrack: vi.fn(),
   getTracksByLogIds,
   listTracks: vi.fn(),
@@ -36,6 +68,27 @@ beforeEach(() => {
   // Default: the hydrator finds nothing, so search falls back to the bare hit shape. Tests that
   // exercise the rich card path override this with the findings they expect hydrated.
   getTracksByLogIds.mockResolvedValue({});
+
+  // Entity tools default to "resolves to nothing" so an unrelated test never trips them; the
+  // entity suite overrides these with the records it expects.
+  getFindingsByArtist.mockReset();
+  getFindingsByArtist.mockResolvedValue([]);
+  getFindingsByLabel.mockReset();
+  getFindingsByLabel.mockResolvedValue([]);
+  toArtistSlug.mockReset();
+  toArtistSlug.mockImplementation(toSlug);
+  getArtistBySlug.mockReset();
+  getArtistBySlug.mockResolvedValue(undefined);
+  getPublicArtistSocials.mockReset();
+  getPublicArtistSocials.mockResolvedValue([]);
+  countArtistFindings.mockReset();
+  countArtistFindings.mockResolvedValue(0);
+  labelSlug.mockReset();
+  labelSlug.mockImplementation((name: string) => toSlug(name) || undefined);
+  getLabelBySlug.mockReset();
+  getLabelBySlug.mockResolvedValue(undefined);
+  getConfirmedAliasNames.mockReset();
+  getConfirmedAliasNames.mockResolvedValue([]);
 });
 
 afterEach(() => {
@@ -96,6 +149,8 @@ describe("buildChatTools — the MCP hands", () => {
     const tools = buildChatTools();
 
     expect(Object.keys(tools).sort()).toEqual([
+      "get_artist",
+      "get_label",
       "get_random_track",
       "get_status",
       "get_track",
@@ -267,6 +322,191 @@ describe("buildChatTools — the MCP hands", () => {
     const lookedUp = getTracksByLogIds.mock.calls[0]?.[0] ?? [];
     expect(lookedUp).toContain("004.7.2I");
     expect(lookedUp).not.toContain("999.9.9Z");
+  });
+});
+
+describe("get_artist / get_label — the entity cards' grounding", () => {
+  function artistExecutor() {
+    const execute = buildChatTools().get_artist?.execute;
+
+    if (typeof execute !== "function") {
+      throw new Error("get_artist executor missing");
+    }
+
+    return execute;
+  }
+
+  function labelExecutor() {
+    const execute = buildChatTools().get_label?.execute;
+
+    if (typeof execute !== "function") {
+      throw new Error("get_label executor missing");
+    }
+
+    return execute;
+  }
+
+  it("get_artist resolves a NAME through the slug helper and returns the artist's findings", async () => {
+    getArtistBySlug.mockResolvedValue({
+      id: "art-1",
+      name: "Netsky",
+      slug: "netsky",
+      spotifyUrl: "https://open.spotify.com/artist/x",
+    });
+    countArtistFindings.mockResolvedValue(2);
+    getFindingsByArtist.mockResolvedValue([
+      {
+        albumImageUrl: "https://cover.example/rio.jpg",
+        artists: ["Netsky"],
+        logId: "004.7.2I",
+        title: "Rio",
+      },
+      { artists: ["Netsky"], logId: "005.1.3B", title: "Come Alive" },
+    ]);
+    getPublicArtistSocials.mockResolvedValue([
+      { platform: "spotify", url: "https://open.spotify.com/artist/x" },
+    ]);
+
+    const result = (await artistExecutor()({ name: "Netsky" }, {} as never)) as {
+      artist: {
+        avatarUrl?: string;
+        findingCount?: number;
+        findings: { coordinate?: string }[];
+        slug?: string;
+        socials?: { platform: string }[];
+      };
+    };
+
+    // name → slug helper → getArtistBySlug(slug) is the resolution the /artist page uses.
+    expect(toArtistSlug).toHaveBeenCalledWith("Netsky");
+    expect(getArtistBySlug).toHaveBeenCalledWith("netsky");
+    expect(result.artist.slug).toBe("netsky");
+    expect(result.artist.findingCount).toBe(2);
+    expect(result.artist.findings.map((finding) => finding.coordinate)).toEqual([
+      "004.7.2I",
+      "005.1.3B",
+    ]);
+    // The avatar is the freshest certified finding's cover (no avatar rides on the record).
+    expect(result.artist.avatarUrl).toBe("https://cover.example/rio.jpg");
+    expect(result.artist.socials).toEqual([
+      { platform: "spotify", url: "https://open.spotify.com/artist/x" },
+    ]);
+  });
+
+  it("get_artist returns found:false when the name resolves to no artist he has logged", async () => {
+    getArtistBySlug.mockResolvedValue(undefined);
+
+    const result = await artistExecutor()({ name: "Nobody At All" }, {} as never);
+
+    expect(result).toEqual({ found: false, ok: true });
+  });
+
+  it("get_artist returns found:false for an artist with zero certified findings", async () => {
+    getArtistBySlug.mockResolvedValue({ id: "art-2", name: "Quiet One", slug: "quiet-one" });
+    countArtistFindings.mockResolvedValue(0);
+    getFindingsByArtist.mockResolvedValue([]);
+
+    const result = await artistExecutor()({ name: "Quiet One" }, {} as never);
+
+    expect(result).toEqual({ found: false, ok: true });
+  });
+
+  it("drops an entity finding with no coordinate before it reaches the model (the wire boundary)", async () => {
+    getArtistBySlug.mockResolvedValue({ id: "art-1", name: "Netsky", slug: "netsky" });
+    countArtistFindings.mockResolvedValue(1);
+    getFindingsByArtist.mockResolvedValue([
+      { artists: ["Netsky"], logId: "004.7.2I", title: "Rio" },
+      // No logId → no coordinate → never something Fluncle speaks about, so it is dropped.
+      { artists: ["Netsky"], title: "Uncertified Cut" },
+    ]);
+
+    const result = (await artistExecutor()({ name: "Netsky" }, {} as never)) as {
+      artist: { findings: { title?: string }[] };
+    };
+
+    expect(result.artist.findings).toHaveLength(1);
+    expect(result.artist.findings[0]?.title).toBe("Rio");
+  });
+
+  it("get_label resolves a NAME through the slug helper and returns the label's findings + aliases", async () => {
+    getLabelBySlug.mockResolvedValue({
+      id: "lbl-1",
+      logoImageUrl: "https://found.example/logo.png",
+      name: "Hospital Records",
+      slug: "hospital-records",
+    });
+    getFindingsByLabel.mockResolvedValue([
+      { artists: ["Nu:Tone"], logId: "004.7.2I", title: "Better Places" },
+    ]);
+    getConfirmedAliasNames.mockResolvedValue(["Hospital"]);
+
+    const result = (await labelExecutor()({ name: "Hospital Records" }, {} as never)) as {
+      label: {
+        aliases?: string[];
+        findingCount?: number;
+        findings: { coordinate?: string }[];
+        logoUrl?: string;
+        slug?: string;
+      };
+    };
+
+    expect(labelSlug).toHaveBeenCalledWith("Hospital Records");
+    expect(getLabelBySlug).toHaveBeenCalledWith("hospital-records");
+    expect(result.label.slug).toBe("hospital-records");
+    expect(result.label.findingCount).toBe(1);
+    expect(result.label.findings.map((finding) => finding.coordinate)).toEqual(["004.7.2I"]);
+    expect(result.label.aliases).toEqual(["Hospital"]);
+    expect(result.label.logoUrl).toBe("https://found.example/logo.png");
+  });
+
+  it("get_label returns found:false for a label with no certified finding on it", async () => {
+    getLabelBySlug.mockResolvedValue({
+      id: "lbl-2",
+      logoImageUrl: undefined,
+      name: "Empty Imprint",
+      slug: "empty-imprint",
+    });
+    getFindingsByLabel.mockResolvedValue([]);
+
+    const result = await labelExecutor()({ name: "Empty Imprint" }, {} as never);
+
+    expect(result).toEqual({ found: false, ok: true });
+  });
+
+  it("never leaks a previewUrl onto a get_artist or get_label output (the token stays server-side)", async () => {
+    getArtistBySlug.mockResolvedValue({ id: "art-1", name: "Netsky", slug: "netsky" });
+    countArtistFindings.mockResolvedValue(1);
+    getFindingsByArtist.mockResolvedValue([
+      {
+        artists: ["Netsky"],
+        logId: "004.7.2I",
+        previewUrl: "https://deezer.example/expiring-a.mp3",
+        title: "Rio",
+      },
+    ]);
+    getLabelBySlug.mockResolvedValue({
+      id: "lbl-1",
+      logoImageUrl: undefined,
+      name: "Hospital Records",
+      slug: "hospital-records",
+    });
+    getFindingsByLabel.mockResolvedValue([
+      {
+        artists: ["Nu:Tone"],
+        logId: "005.1.3B",
+        previewUrl: "https://deezer.example/expiring-b.mp3",
+        title: "Better Places",
+      },
+    ]);
+
+    const artistResult = await artistExecutor()({ name: "Netsky" }, {} as never);
+    const labelResult = await labelExecutor()({ name: "Hospital Records" }, {} as never);
+
+    expect(hasKeyDeep(artistResult, "previewUrl")).toBe(false);
+    expect(hasKeyDeep(labelResult, "previewUrl")).toBe(false);
+    // The derived boolean DID ride through — the card still knows a preview exists.
+    expect(hasKeyDeep(artistResult, "hasPreview")).toBe(true);
+    expect(hasKeyDeep(labelResult, "hasPreview")).toBe(true);
   });
 });
 

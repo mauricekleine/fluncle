@@ -38,11 +38,20 @@ import {
   tool,
 } from "ai";
 import { z } from "zod";
+import {
+  countArtistFindings,
+  getArtistBySlug,
+  getPublicArtistSocials,
+  toArtistSlug,
+} from "./artists";
 import { readOptionalEnv } from "./env";
+import { getConfirmedAliasNames, getLabelBySlug, labelSlug } from "./labels";
 import { resolveLogPageTarget } from "./log-resolver";
 import { searchArchive } from "./search";
 import { getServiceStatuses } from "./status";
 import {
+  getFindingsByArtist,
+  getFindingsByLabel,
   getRandomTrack,
   getTracksByLogIds,
   listTracks,
@@ -59,6 +68,13 @@ const MAX_STEPS = 8;
 /** The recent-window and search caps handed to the tools (mirror the MCP's clamps). */
 const MAX_RECENT = 48;
 const MAX_SEARCH = 12;
+
+/**
+ * How many of an entity's findings ride on a `get_artist`/`get_label` card — the recent/
+ * representative ones. The card links to the full `/artist` or `/label` page for the rest, so a
+ * dossier reads as a conversation, not a discography dump.
+ */
+const MAX_ENTITY_FINDINGS = 6;
 
 // ── The grounding + voice prompt ─────────────────────────────────────────────────────
 //
@@ -78,6 +94,7 @@ THE ARCHIVE:
 - Your findings are the tracks you have personally certified. A finding has a permanent Log ID coordinate like 004.7.2I; a mixtape carries the same shape with the letter F in the middle slot (019.F.1A). Use get_track to resolve a coordinate someone gives you.
 - You only ever speak about your certified findings — the tools only return those. If it is not in a tool result, it is not something you talk about.
 - search_archive is your dig: it reaches the whole archive, including "sounds like <a real track>" which anchors on a real finding and returns the sonically nearest ones. list_tracks pages your most recent findings; get_random_track pulls one; get_status checks whether your systems are up.
+- get_artist and get_label resolve one artist or label you have logged, by name, and hand back that entity's findings — reach for them when someone asks about a specific artist or label you have found.
 
 HOW YOU TALK:
 - First person, warm, dry. You react like a body: knees, gun fingers, an "oof" when a tune lands. No exclamation marks, ever. No hype adjectives. State a thing once and leave it alone.
@@ -125,6 +142,17 @@ function compactFinding(item: TrackListItem) {
   });
 }
 
+/**
+ * Compact an entity's findings for a card, CERTIFIED-ONLY. `getFindingsByArtist`/`getFindingsByLabel`
+ * already inner-join `findings … log_id is not null`, but the coordinate filter is the same wire-level
+ * grounding boundary search_archive applies — a row without a coordinate is not something Fluncle
+ * speaks about, so it never reaches the model even if a resolver's shape ever changed. Newest-first is
+ * preserved from the resolver; the caller slices to {@link MAX_ENTITY_FINDINGS}.
+ */
+function compactCertifiedFindings(items: TrackListItem[]) {
+  return items.map(compactFinding).filter((finding) => finding.coordinate);
+}
+
 /** Drop undefined/empty so a tool result carries only present, real facts (never a null). */
 function dropEmpty<T extends Record<string, unknown>>(record: T): Partial<T> {
   return Object.fromEntries(
@@ -153,6 +181,93 @@ function clampInt(value: unknown, max: number, fallback: number): number {
  */
 export function buildChatTools() {
   return {
+    get_artist: tool({
+      description:
+        "Look up one artist Fluncle has logged, BY NAME (e.g. Netsky). Returns only his certified findings from that artist, plus their public socials and the slug of their page. Returns nothing — he has not logged them — when there is no certified finding from that name.",
+      execute: async ({ name }) => {
+        const slug = toArtistSlug(name.trim());
+        const artist = slug ? await getArtistBySlug(slug) : undefined;
+
+        if (!artist) {
+          return { found: false, ok: true };
+        }
+
+        const [findingCount, findingItems, socials] = await Promise.all([
+          countArtistFindings(artist.id),
+          getFindingsByArtist(artist.id, artist.name),
+          getPublicArtistSocials(artist.id),
+        ]);
+        const certified = compactCertifiedFindings(findingItems);
+
+        // Grounding: an artist Fluncle has never certified a finding from is not something he
+        // speaks about — the honest "not found", exactly like an unresolved slug.
+        if (findingCount === 0 && certified.length === 0) {
+          return { found: false, ok: true };
+        }
+
+        const findings = certified.slice(0, MAX_ENTITY_FINDINGS);
+
+        return {
+          artist: dropEmpty({
+            // No avatar rides on the artist record; the freshest certified finding's cover is
+            // the representative image (ArtistAvatar/TrackArtwork degrade to a monogram tile).
+            avatarUrl: findings[0]?.albumImageUrl,
+            findingCount,
+            findings,
+            name: artist.name,
+            slug: artist.slug,
+            socials,
+            spotifyUrl: artist.spotifyUrl,
+          }),
+          ok: true,
+        };
+      },
+      inputSchema: z.object({
+        name: z
+          .string()
+          .min(1)
+          .describe("The artist's name, as it reads on a finding (e.g. Netsky)."),
+      }),
+    }),
+    get_label: tool({
+      description:
+        "Look up one label Fluncle has logged, BY NAME (e.g. Hospital Records). Returns only his certified findings on that label, plus any confirmed alternate spellings and the slug of its page. Returns nothing — he has found nothing on it — when there is no certified finding on that name.",
+      execute: async ({ name }) => {
+        const slug = labelSlug(name);
+        const label = slug ? await getLabelBySlug(slug) : undefined;
+
+        if (!label) {
+          return { found: false, ok: true };
+        }
+
+        const certified = compactCertifiedFindings(await getFindingsByLabel(label.id));
+
+        // Grounding: a label Fluncle has no certified finding on is not something he speaks about.
+        if (certified.length === 0) {
+          return { found: false, ok: true };
+        }
+
+        const aliases = await getConfirmedAliasNames(label.id);
+
+        return {
+          label: dropEmpty({
+            aliases,
+            findingCount: certified.length,
+            findings: certified.slice(0, MAX_ENTITY_FINDINGS),
+            logoUrl: label.logoImageUrl,
+            name: label.name,
+            slug: label.slug,
+          }),
+          ok: true,
+        };
+      },
+      inputSchema: z.object({
+        name: z
+          .string()
+          .min(1)
+          .describe("The label's name, as it reads on a finding (e.g. Hospital Records)."),
+      }),
+    }),
     get_random_track: tool({
       description: "Pull one random certified finding from the archive.",
       execute: async () => {
