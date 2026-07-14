@@ -312,9 +312,16 @@ export async function trackVideoCommand(
   const byField = new Map(presign.uploads.map((upload) => [upload.field, upload]));
   const urls: Record<string, string> = {};
 
-  // Phase 2: PUT each file straight to its presigned URL. Stream via Bun.file so
-  // a 99MB cut is never buffered into memory. The Content-Type MUST match the
-  // one baked into the signature, or R2 returns SignatureDoesNotMatch.
+  // Phase 2: PUT each file straight to its presigned URL. The two ~99MB footage
+  // masters stream via Bun.file so they are never buffered into memory; everything
+  // small (the JSON/text artifacts, posters, plates) is BUFFERED instead — the
+  // 2026-07-14 render-box crash (Bun 1.3.14 Linux x64 segfaulted repeatedly while
+  // PUTting the small bundle artifacts, killing the ship mid-flight) implicates the
+  // streamed-small-body path, and buffering a few-KB file costs nothing. The
+  // Content-Type MUST match the one baked into the signature, or R2 returns
+  // SignatureDoesNotMatch.
+  const STREAM_THRESHOLD_BYTES = 8 * 1024 * 1024;
+
   for (const spec of present) {
     const upload = byField.get(spec.field);
 
@@ -324,8 +331,10 @@ export async function trackVideoCommand(
 
     onProgress?.(`Uploading ${spec.field} → ${upload.key}`);
 
+    const file = Bun.file(spec.path);
+    const body = file.size > STREAM_THRESHOLD_BYTES ? file : await file.arrayBuffer();
     const response = await fetch(upload.url, {
-      body: Bun.file(spec.path),
+      body,
       headers: { "Content-Type": upload.contentType },
       method: "PUT",
     });
