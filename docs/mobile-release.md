@@ -86,6 +86,39 @@ The App Store Connect listing values, ratified by the operator — paste these w
 
 - **Screenshots**: the 6.9" set (3-10 shots) from the iPhone Pro Max-class simulator: feed (a dark cover), the Decks mid-chain (a numbered set + the ranked rail — the 4.2 evidence), radio playing, archive, a finding, submit.
 
+## The 1.1 submission delta (accounts)
+
+Everything above is the **1.0 kit** (no accounts). It stands as-is; do not rewrite it. This section carries only what CHANGES when 1.1 (accounts in the pocket) is submitted — the scope operator-ratified 2026-07-14 in `docs/planning/ROADMAP.md` ("The 1.1 arc — accounts in the pocket"). 1.1 adds an **optional** email/password account (an `/account` modal, never a tab) that syncs saved findings, saved sets, and the key-notation preference across web ↔ mobile. The law holds on every slice: **an account never gates a feature** — every surface stays fully usable signed-out, so everything a reviewer touches is reviewable without an account. Signing in only syncs.
+
+### App Privacy label changes
+
+The app now creates accounts, so the App Privacy questionnaire gains one collected data type and re-classifies two existing ones **for signed-in users**. An anonymous user's posture is unchanged from the 1.0 kit above. The app still ships **no analytics or tracking SDK**, so the answer to "Used for tracking?" stays **No** for every type. Re-declare in App Store Connect at the 1.1 submission:
+
+- **Contact Info → Email Address** — **NEW.** Collected: **Yes**. Purpose: **App Functionality** only (account creation, sign-in, and password reset). Linked to the user's identity: **Yes** (it is the account key). Used for tracking: **No**.
+- **User Content** (the track submissions + optional contact from the 1.0 kit) — still collected for **App Functionality**, still **not** used for tracking. Linked to identity: **Yes for a signed-in account holder** (saved findings and saved sets are stored against their account and are covered by account export + delete). An anonymous submission stays **not linked**, exactly as 1.0. Declare it **Linked** (the questionnaire is per data type across the app, and the signed-in path links it).
+- **Identifiers** (the push-token Device ID from the 1.0 kit) — still **App Functionality**, still **no tracking**. Linked to identity: **Yes for a signed-in account holder** (the account ties the device/session to the person); **not linked** for anonymous. Declare it **Linked**.
+- **Everything else: Data Not Collected**, unchanged. No new tracking, no data sold, no third-party analytics — the account is a first-party sync backup, nothing more.
+
+### Review-notes addendum (paste-ready)
+
+Append this to the existing review-notes block above (do not replace it — the 4.2 / 5.2 / 1.2 posture is unchanged). Reviewer-facing plain prose, per the narrator rule:
+
+> Accounts (new in this version). This version adds an optional account so a user can sync their saved tracks, their built sets, and their preferences across our web app and this app. Accounts are entirely optional and gate nothing: every feature — the video feed, the radio, the Decks set builder, search, saving, and submitting — is fully usable without signing in, so nothing in the app requires an account to review. Signing in only syncs data the app already stores on the device.
+>
+> Account creation is email and password only. We do not offer any third-party or social login (no Sign in with Apple, Google, or Facebook), so Guideline 4.8 does not apply.
+>
+> Account deletion is available in the app. The account screen has a "Delete account" action, behind a confirmation, that permanently deletes the account and all associated data from within the app itself (Guideline 5.1.1(v)) — no website visit or support request is required. The same screen also lets a user export their saved data. Users who forget their password can reset it from the sign-in screen via an email link.
+
+### The 1.1 checklist
+
+Run alongside the 1.0 "Before you submit" checklist above; these are the 1.1-specific moves.
+
+- [ ] Marketing `version` bumped in `apps/mobile/app.config.ts` (EAS still owns the build number via `autoIncrement`).
+- [ ] New screenshots **only if a surface changed materially** — the candidate is the Decks "Save set" shot (the new signed-in secondary action); the rest of the 1.0 set still holds. Do not re-shoot unchanged screens.
+- [ ] App Privacy labels re-pasted per the changes above (Email Address added; User Content and Identifiers set to Linked; tracking still No).
+- [ ] Review-notes addendum appended to the ASC "Notes" field.
+- [ ] On the exact store build: verify sign-up, sign-in, sign-out, **in-app account deletion** (behind the confirm), data export, and password-reset email — all before submitting.
+
 ## The cold-open requirement
 
 The review doc's rule: **first launch must show real content immediately** — reviewers (and the operator, on that first TestFlight install) judge on a cold open, and an empty or errored first paint reads as a broken app. What the app's first paint actually needs:
