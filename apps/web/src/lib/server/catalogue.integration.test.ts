@@ -1515,4 +1515,48 @@ describe("the long-form veto — a continuous mix never reaches a lens or the mo
     // Idempotent: the rescued row is gone from the unmatched set; the vetoed pile is stable.
     expect(await requeueUnmatchedCaptures()).toEqual({ requeued: 0, skippedVetoed: 2 });
   });
+
+  // ── the unmatched/failed observability lenses + the captureStatus DTO field ────────────
+  it("exposes capture outcomes: the unmatched and failed lenses, newest attempt first, with captureStatus", async () => {
+    const { listCatalogueTracks } = await import("./catalogue");
+
+    await seedCatalogueTrack(db, { trackId: "obs-unm-old" });
+    await seedCatalogueTrack(db, { trackId: "obs-unm-new" });
+    await seedCatalogueTrack(db, { trackId: "obs-fail" });
+    await seedCatalogueTrack(db, { trackId: "obs-pending" });
+    await seedFinding("obs-find");
+    await db.execute({
+      sql: `update tracks set capture_status = 'unmatched',
+                              source_audio_attempted_at = '2026-07-10T00:00:00Z'
+            where track_id = 'obs-unm-old'`,
+    });
+    await db.execute({
+      sql: `update tracks set capture_status = 'unmatched',
+                              source_audio_attempted_at = '2026-07-14T00:00:00Z'
+            where track_id = 'obs-unm-new'`,
+    });
+    await db.execute({
+      sql: `update tracks set capture_status = 'failed',
+                              source_audio_attempted_at = '2026-07-12T00:00:00Z'
+            where track_id in ('obs-fail', 'obs-find')`,
+    });
+    await db.execute({
+      sql: `update tracks set capture_status = 'pending', capture_priority = 3
+            where track_id = 'obs-pending'`,
+    });
+
+    const unmatched = await listCatalogueTracks("unmatched");
+    expect(unmatched.map((t) => t.trackId)).toEqual(["obs-unm-new", "obs-unm-old"]);
+    expect(unmatched[0]?.captureStatus).toBe("unmatched");
+
+    // The failed lens is catalogue-scoped: the failed FINDING never appears in it.
+    const failed = await listCatalogueTracks("failed");
+    expect(failed.map((t) => t.trackId)).toEqual(["obs-fail"]);
+    expect(failed[0]?.captureStatus).toBe("failed");
+
+    // The status rides every lens's DTO, so any view can say where a row stands.
+    const capture = await listCatalogueTracks("capture");
+    const pending = capture.find((t) => t.trackId === "obs-pending");
+    expect(pending?.captureStatus).toBe("pending");
+  });
 });

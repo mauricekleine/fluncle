@@ -1219,7 +1219,7 @@ async function countStale(corpus: string): Promise<number> {
  *     rows he looked at and took out of the telescope. A REVERSIBLE veto — its own quiet lens so a
  *     dismissal is never a black hole, each row carrying a Restore that puts it back in the ranking.
  */
-export type CatalogueLens = "capture" | "dismissed" | "ear" | "quarantine";
+export type CatalogueLens = "capture" | "dismissed" | "ear" | "failed" | "quarantine" | "unmatched";
 
 /** The finding a catalogue row matched — the WHY, hydrated. */
 export type CatalogueMatch = {
@@ -1238,6 +1238,12 @@ export type CatalogueTrackItem = {
   bpm: number | null;
   capturePriority: number | null;
   captureReason: CapturePriorityReason | null;
+  /**
+   * The capture state machine's verdict on this row (`pending` / `done` / `failed` /
+   * `unmatched` / `wrong-audio` / the sticky cleared states), or null (never attempted) — the
+   * observability field the 2026-07-14 unmatched audit had to pull a prod snapshot for.
+   */
+  captureStatus: string | null;
   /**
    * The capture-verification verdict (docs/the-ear.md § Wrong audio): `preview-match` (the
    * captured audio matched the ISRC preview), `unverified` (the gate abstained — no reference),
@@ -1363,6 +1369,7 @@ type CatalogueRow = {
   artists_json: string;
   bpm: number | null;
   capture_priority: number | null;
+  capture_status: string | null;
   capture_verification: string | null;
   catalogue_ranked_at: string | null;
   dismissed_at: string | null;
@@ -1389,8 +1396,8 @@ type MatchRow = {
 
 const CATALOGUE_SELECT = `ct.track_id, ct.title, ct.artists_json, ct.album_image_url, ct.spotify_url,
   ct.apple_music_url, ct.isrc, ct.preview_url, ct.bpm, ct.key, ct.label, ct.release_date,
-  ct.nearest_finding_score, ct.nearest_finding_track_id, ct.capture_priority, ct.capture_verification,
-  ct.catalogue_ranked_at, ct.duplicate_of_track_id, ct.dismissed_at,
+  ct.nearest_finding_score, ct.nearest_finding_track_id, ct.capture_priority, ct.capture_status,
+  ct.capture_verification, ct.catalogue_ranked_at, ct.duplicate_of_track_id, ct.dismissed_at,
   (ct.source_audio_key is not null) as has_captured_audio`;
 
 /**
@@ -1451,25 +1458,40 @@ export async function listCatalogueTracks(
                   order by ct.catalogue_ranked_at desc, ct.track_id asc
                   limit ?`,
           }
-        : lens === "dismissed"
+        : lens === "unmatched" || lens === "failed"
           ? {
-              // The restore pile (docs/the-ear.md § The operator's actions): every "not for me",
-              // most-recently dismissed first, each restorable. Driven by the partial
-              // `tracks_dismissed_idx`, so the listing is a seek, not a scan of the catalogue.
-              args: [page],
+              // The OBSERVABILITY lenses (the 2026-07-14 unmatched audit's gap): the terminal
+              // `unmatched` verdicts and the cooling `failed` retries, most-recently attempted
+              // first — so "what is failing and why" is one read, not a prod snapshot. Read-only
+              // windows onto the sweep's outcomes; the rescue (`requeue_unmatched_captures`) and
+              // the retry cooldown act on them elsewhere.
+              args: [lens, page],
               sql: `select ${CATALOGUE_SELECT}
+                    from tracks ct
+                    left join findings cf on cf.track_id = ct.track_id
+                    where cf.track_id is null and ct.dismissed_at is null and ct.capture_status = ?
+                    order by ct.source_audio_attempted_at desc, ct.track_id asc
+                    limit ?`,
+            }
+          : lens === "dismissed"
+            ? {
+                // The restore pile (docs/the-ear.md § The operator's actions): every "not for me",
+                // most-recently dismissed first, each restorable. Driven by the partial
+                // `tracks_dismissed_idx`, so the listing is a seek, not a scan of the catalogue.
+                args: [page],
+                sql: `select ${CATALOGUE_SELECT}
                     from tracks ct
                     left join findings cf on cf.track_id = ct.track_id
                     where cf.track_id is null and ct.dismissed_at is not null
                     order by ct.dismissed_at desc, ct.track_id asc
                     limit ?`,
-            }
-          : {
-              // The capture queue EXCLUDES the quarantined rows — they are a re-capture, held in
-              // their own lens, not part of the cold pre-audio queue — and the LONG-FORM rows
-              // (the veto's money half: a mix is the fattest thing the metered budget can buy).
-              args: [WRONG_AUDIO_STATUS, page],
-              sql: `select ${CATALOGUE_SELECT}
+              }
+            : {
+                // The capture queue EXCLUDES the quarantined rows — they are a re-capture, held in
+                // their own lens, not part of the cold pre-audio queue — and the LONG-FORM rows
+                // (the veto's money half: a mix is the fattest thing the metered budget can buy).
+                args: [WRONG_AUDIO_STATUS, page],
+                sql: `select ${CATALOGUE_SELECT}
                     from tracks ct
                     left join findings cf on cf.track_id = ct.track_id
                     where cf.track_id is null
@@ -1481,7 +1503,7 @@ export async function listCatalogueTracks(
                       and ct.duration_ms < ${LONG_FORM_MS}
                     order by ct.capture_priority desc, ct.track_id asc
                     limit ?`,
-            };
+              };
   const result = await db.execute(query);
   const rows = typedRows<CatalogueRow>(result.rows);
 
@@ -1528,6 +1550,7 @@ export async function listCatalogueTracks(
       captureReason: archive
         ? capturePriorityFor({ artists, label: row.label }, archive).reason
         : null,
+      captureStatus: row.capture_status,
       captureVerification: row.capture_verification,
       dismissedAt: row.dismissed_at,
       duplicateOf,

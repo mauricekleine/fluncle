@@ -1961,7 +1961,11 @@ function addAdminCommands(program: Command): void {
     .description(
       "The ranked catalogue: closest to a finding (ear), next to capture, or wrong audio",
     )
-    .option("--lens <lens>", "ear (default), capture, or quarantine", "ear")
+    .option(
+      "--lens <lens>",
+      "ear (default), capture, quarantine, unmatched, failed, or dismissed",
+      "ear",
+    )
     .option("--limit <limit>", "Rows (default 50, max 200)")
     .option("--json", "Print JSON", false)
     .action(async (options: CatalogueListOptions) => {

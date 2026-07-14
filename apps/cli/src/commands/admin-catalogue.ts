@@ -54,12 +54,18 @@ export async function catalogueRankCommand(options: {
   return response.summary;
 }
 
+/** The lenses the CLI forwards verbatim; anything else falls back to the `ear` default. */
+const CATALOGUE_LENSES = new Set(["capture", "dismissed", "failed", "quarantine", "unmatched"]);
+
 /**
- * The ranked catalogue. `fluncle admin catalogue list [--lens ear|capture|quarantine] [--limit <n>]`.
+ * The ranked catalogue.
+ * `fluncle admin catalogue list [--lens ear|capture|quarantine|unmatched|failed|dismissed] [--limit <n>]`.
  *
  * `ear` (the default) is "closest to your findings, not yet logged"; `capture` is "whose audio
  * should we buy next" — the rows with no vector at all, which the ear structurally cannot rank;
- * `quarantine` is the wrong-audio holding pen (docs/the-ear.md § Wrong audio).
+ * `quarantine` is the wrong-audio holding pen (docs/the-ear.md § Wrong audio); `unmatched` and
+ * `failed` are the capture-outcome observability windows (newest attempt first); `dismissed` is
+ * the operator's restore pile.
  */
 export async function catalogueListCommand(options: {
   lens?: string;
@@ -67,10 +73,7 @@ export async function catalogueListCommand(options: {
 }): Promise<CatalogueResponse> {
   const params = new URLSearchParams();
 
-  params.set(
-    "lens",
-    options.lens === "capture" ? "capture" : options.lens === "quarantine" ? "quarantine" : "ear",
-  );
+  params.set("lens", options.lens && CATALOGUE_LENSES.has(options.lens) ? options.lens : "ear");
 
   if (options.limit) {
     params.set("limit", options.limit);

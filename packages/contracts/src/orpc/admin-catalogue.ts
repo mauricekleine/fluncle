@@ -56,9 +56,14 @@ import * as z from "zod";
  *   - `dismissed`  — the operator's "not for me" restore pile (docs/the-ear.md § The operator's
  *                    actions): rows he took out of the telescope. A REVERSIBLE veto, its own quiet
  *                    lens so a dismissal is never a black hole — each row carries a Restore.
+ *   - `unmatched`  — the terminal "no acceptable candidate" verdicts, most-recently attempted
+ *                    first: the observability window the 2026-07-14 audit lacked. Read-only;
+ *                    the rescue is `requeue_unmatched_captures`.
+ *   - `failed`     — the download-failure pile (cooling toward retry or past the failure cap),
+ *                    most-recently attempted first. `unmatched`'s sibling window.
  */
 export const CatalogueLensSchema = z
-  .enum(["capture", "dismissed", "ear", "quarantine"])
+  .enum(["capture", "dismissed", "ear", "failed", "quarantine", "unmatched"])
   .meta({ id: "CatalogueLens" });
 
 /**
@@ -108,6 +113,13 @@ export const CatalogueTrackItemSchema = z
     bpm: z.number().nullable(),
     capturePriority: z.number().nullable(),
     captureReason: CapturePriorityReasonSchema.nullable(),
+    /**
+     * The capture state machine's verdict on this row (`pending` / `done` / `failed` /
+     * `unmatched` / `wrong-audio` / the sticky cleared states), or null (never attempted).
+     * The observability field the 2026-07-14 unmatched audit had to pull a prod snapshot
+     * for — with it, "what is failing and why" is one filtered read.
+     */
+    captureStatus: z.string().nullable(),
     /**
      * The capture-verification verdict (docs/the-ear.md § Wrong audio): `preview-match` /
      * `unverified` / `mismatch`, or null (pre-gate legacy / no capture). A quiet honesty marker.
