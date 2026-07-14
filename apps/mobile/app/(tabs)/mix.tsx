@@ -53,7 +53,8 @@ const TAGLINE =
   "Name a few artists you like. I rank what mixes in clean next, by key, tempo, and feel. Chain a set, then share it with the crew.";
 
 export default function MixScreen() {
-  const { add, chain, clear, load, ready, remove, setTaste, taste } = useMixChain();
+  const { add, adoptSourceSet, chain, clear, load, ready, remove, setTaste, sourceSetId, taste } =
+    useMixChain();
   // The pre-chain step. Deliberately NOT persisted: a cold start always begins at taste
   // (or, with a saved chain, straight in the builder); after an undo-to-empty the reader
   // lands back on the opener step they came from.
@@ -88,10 +89,36 @@ export default function MixScreen() {
     setSaveNotice("");
     try {
       const bodyPayload = buildSaveSetBody(serializeSet(tokens), serializeTaste(taste));
-      const response = await meFetch(SAVED_SETS_PATH, {
-        body: JSON.stringify(bodyPayload),
-        method: "POST",
-      });
+      // A chain opened from (or already saved to) an account set UPDATES that set in
+      // place — Save set never mints siblings of the set you are editing (operator flag
+      // 2026-07-14). A fresh chain POSTs once, then adopts the returned id so every
+      // save after the first is also an update. A 404 on the PATCH (the set was deleted
+      // on another device) falls back to creating anew.
+      let response: Response;
+      if (sourceSetId) {
+        response = await meFetch(`${SAVED_SETS_PATH}/${sourceSetId}`, {
+          body: JSON.stringify(bodyPayload),
+          method: "PATCH",
+        });
+        if (response.status === 404) {
+          adoptSourceSet(undefined);
+          response = await meFetch(SAVED_SETS_PATH, {
+            body: JSON.stringify(bodyPayload),
+            method: "POST",
+          });
+        }
+      } else {
+        response = await meFetch(SAVED_SETS_PATH, {
+          body: JSON.stringify(bodyPayload),
+          method: "POST",
+        });
+      }
+      if (response.ok && !sourceSetId) {
+        const body = (await response.json()) as { savedSet?: { id?: string } };
+        if (typeof body.savedSet?.id === "string") {
+          adoptSourceSet(body.savedSet.id);
+        }
+      }
       // On mobile a saved set lands under "Saved sets" on /account, NOT under findings — so the
       // web toast's locator clause ("Find it under your findings.") would be false here. Drop it:
       // literal and true beats verbatim-but-wrong (the Chrome Rule serves accuracy, not echo).
@@ -523,13 +550,16 @@ function useIsSignedIn(): boolean {
 // This is the fix for the accounts-arc gap: the old per-token `get_track` walk resolved only
 // certified findings, so a saved set's uncertified tokens (the ones the Decks rail actively
 // serves) silently dropped. `list_set_tracks` resolves both, so a set opens whole.
-function useSavedSetHydration(load: (chain: MixTrack[], taste: string[]) => void): void {
-  const params = useLocalSearchParams<{ set?: string; taste?: string }>();
+function useSavedSetHydration(
+  load: (chain: MixTrack[], taste: string[], sourceSetId?: string) => void,
+): void {
+  const params = useLocalSearchParams<{ savedSetId?: string; set?: string; taste?: string }>();
   const router = useRouter();
   const queryClient = useQueryClient();
   const consumedRef = useRef<string | null>(null);
 
   const setParam = typeof params.set === "string" ? params.set : "";
+  const savedSetId = typeof params.savedSetId === "string" ? params.savedSetId : undefined;
   const tasteParam = typeof params.taste === "string" ? params.taste : "";
 
   useEffect(() => {
@@ -547,11 +577,11 @@ function useSavedSetHydration(load: (chain: MixTrack[], taste: string[]) => void
         );
         return res.tracks;
       });
-      load(resolved, tasteSlugs);
+      load(resolved, tasteSlugs, savedSetId);
       // Consume the params so re-focusing the tab later doesn't re-hydrate over a fresh chain.
-      router.setParams({ set: "", taste: "" });
+      router.setParams({ savedSetId: "", set: "", taste: "" });
     })();
-  }, [setParam, tasteParam, load, queryClient, router]);
+  }, [setParam, tasteParam, savedSetId, load, queryClient, router]);
 }
 
 const styles = StyleSheet.create({

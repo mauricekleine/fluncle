@@ -14,10 +14,10 @@ import { type MixTrack } from "@fluncle/contracts";
 import { MAX_SET_LENGTH, setToken } from "@/lib/mix-set";
 
 /** The device-local set: the ordered chain plus the taste seed the rail is tuned by. */
-export type MixState = { chain: MixTrack[]; taste: string[] };
+export type MixState = { chain: MixTrack[]; sourceSetId?: string; taste: string[] };
 
 /** The storage envelope. Versioned so a future shape change can migrate or discard. */
-export type MixEnvelope = { chain: MixTrack[]; taste: string[]; version: 1 };
+export type MixEnvelope = { chain: MixTrack[]; sourceSetId?: string; taste: string[]; version: 1 };
 
 const CURRENT_VERSION = 1 as const;
 
@@ -58,6 +58,9 @@ export function chainTokens(chain: MixTrack[]): string[] {
 export function serialize(state: MixState): string {
   return JSON.stringify({
     chain: state.chain,
+    // The account set this chain was opened from (if any) — Save set updates it in
+    // place instead of minting a sibling (operator flag 2026-07-14).
+    sourceSetId: state.sourceSetId,
     taste: state.taste,
     version: CURRENT_VERSION,
   } satisfies MixEnvelope);
@@ -90,12 +93,14 @@ export function deserialize(raw: string | null | undefined): MixState {
     return EMPTY_MIX;
   }
 
+  const source = (parsed as { sourceSetId?: unknown }).sourceSetId;
+  const sourceSetId = typeof source === "string" ? source : undefined;
   const chain = Array.isArray(envelope.chain) ? envelope.chain.filter(isMixTrack) : [];
   const taste = Array.isArray(envelope.taste)
     ? envelope.taste.filter((slug): slug is string => typeof slug === "string")
     : [];
 
-  return { chain: chain.slice(0, MAX_SET_LENGTH), taste };
+  return { chain: chain.slice(0, MAX_SET_LENGTH), sourceSetId, taste };
 }
 
 /**

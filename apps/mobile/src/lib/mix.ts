@@ -59,11 +59,13 @@ function commit(next: MixState): void {
  */
 export function useMixChain(): {
   add: (track: MixTrack) => void;
+  adoptSourceSet: (sourceSetId: string | undefined) => void;
   chain: MixTrack[];
   clear: () => void;
-  load: (chain: MixTrack[], taste: string[]) => void;
+  load: (chain: MixTrack[], taste: string[], sourceSetId?: string) => void;
   ready: boolean;
   remove: (token: string) => void;
+  sourceSetId?: string;
   setTaste: (taste: string[]) => void;
   taste: string[];
 } {
@@ -106,16 +108,29 @@ export function useMixChain(): {
   // Replace the whole set at once — the open-a-saved-set path (account.tsx hands the resolved
   // chain + taste in). Unlike add/remove this overwrites both fields, so opening a saved set
   // lands the reader in that set rather than appending to whatever scratch chain they had.
-  const load = useCallback((chain: MixTrack[], taste: string[]) => commit({ chain, taste }), []);
+  const load = useCallback(
+    (chain: MixTrack[], taste: string[], sourceSetId?: string) =>
+      commit({ chain, sourceSetId, taste }),
+    [],
+  );
+
+  // Adopt the account set this chain now belongs to (after a fresh save creates one),
+  // so every later "Save set" updates that set instead of minting siblings.
+  const adoptSourceSet = useCallback((sourceSetId: string | undefined) => {
+    const current = cache ?? EMPTY_MIX;
+    commit({ ...current, sourceSetId });
+  }, []);
 
   return {
     add,
+    adoptSourceSet,
     chain: state.chain,
     clear,
     load,
     ready,
     remove,
     setTaste,
+    sourceSetId: state.sourceSetId,
     taste: state.taste,
   };
 }

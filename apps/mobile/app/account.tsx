@@ -459,7 +459,7 @@ function SavedSets() {
   // tokens as params (the tab hydrates them). `dismissTo` pops to the already-mounted tab.
   function openSet(set: RemoteSavedSet) {
     router.dismissTo({
-      params: { set: set.setTokens, taste: set.taste ?? "" },
+      params: { savedSetId: set.id, set: set.setTokens, taste: set.taste ?? "" },
       pathname: "/mix",
     });
   }
