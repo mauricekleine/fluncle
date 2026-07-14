@@ -3206,6 +3206,41 @@ body::before {
   gap: 0.4rem;
 }
 
+/* The identity row: who's aboard on the left, the quiet exit on the right. Sign out
+   lives here rather than beside "Delete account" so leaving and destroying never sit
+   as peers. */
+.account-identity {
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+/* The danger zone: the one fenced section on the plate. Deletion is a different class
+   of act from everything above it, and the fence says so before any copy does. */
+.account-danger {
+  border: 1px solid color-mix(in oklch, var(--destructive) 35%, var(--border));
+  border-radius: var(--radius);
+  padding: 1rem;
+}
+
+.account-danger h2 {
+  color: color-mix(in oklch, var(--destructive) 55%, var(--starlight-cream));
+}
+
+/* A saved set: the set link leads, the row's controls sit composed at the end. */
+.account-set-row {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  justify-content: space-between;
+}
+
+.account-set-actions {
+  align-items: center;
+  display: inline-flex;
+  gap: 0.25rem;
+}
+
 @media (max-width: 520px) {
   .account-grid {
     grid-template-columns: 1fr;

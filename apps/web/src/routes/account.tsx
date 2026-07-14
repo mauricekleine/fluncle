@@ -1,14 +1,33 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { cloneElement, isValidElement, useEffect, useMemo, useReducer, useState } from "react";
+import {
+  cloneElement,
+  isValidElement,
+  useEffect,
+  useId,
+  useMemo,
+  useReducer,
+  useState,
+} from "react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@fluncle/ui/components/alert-dialog";
 import { Button } from "@fluncle/ui/components/button";
 import { Input } from "@fluncle/ui/components/input";
 import { Label } from "@fluncle/ui/components/label";
 import { Tabs, TabsList, TabsTrigger } from "@fluncle/ui/components/tabs";
 import { Textarea } from "@fluncle/ui/components/textarea";
-import { KeyNotationToggle } from "@/components/mix/key-notation-toggle";
+import { KeyNotationToggle } from "@/components/key-notation-toggle";
 import { authClient } from "@/lib/auth-client";
 import { siteUrl } from "@/lib/fluncle-links";
-import { syncKeyNotationFromAccount } from "@/lib/key-notation";
+import { formatKey, syncKeyNotationFromAccount, useKeyNotation } from "@/lib/key-notation";
 
 type Me = {
   ok: true;
@@ -195,7 +214,7 @@ function AccountPage() {
             user={me.user}
           />
         ) : (
-          <AuthForms refresh={refresh} setMessage={setMessage} />
+          <AuthForms message={message} refresh={refresh} setMessage={setMessage} />
         )}
       </article>
     </main>
@@ -203,9 +222,11 @@ function AccountPage() {
 }
 
 function AuthForms({
+  message,
   refresh,
   setMessage,
 }: {
+  message: string;
   refresh: () => Promise<void>;
   setMessage: (message: string) => void;
 }) {
@@ -213,10 +234,12 @@ function AuthForms({
   const [email, setEmail] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     setMessage("");
+    setBusy(true);
 
     try {
       const result =
@@ -241,6 +264,8 @@ function AuthForms({
       setMessage("Aboard. Your private Galaxy state is ready.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Could not sign in.");
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -282,7 +307,20 @@ function AuthForms({
           onChange={(event) => setPassword(event.target.value)}
         />
       </Field>
-      <Button type="submit">{mode === "signup" ? "Create private account" : "Sign in"}</Button>
+      <Button disabled={busy} type="submit">
+        {busy
+          ? mode === "signup"
+            ? "Creating account…"
+            : "Signing in…"
+          : mode === "signup"
+            ? "Create private account"
+            : "Sign in"}
+      </Button>
+      {message ? (
+        <p aria-live="polite" className="account-muted">
+          {message}
+        </p>
+      ) : null}
     </form>
   );
 }
@@ -314,7 +352,13 @@ function SignedInAccount({
   const [displayUsername, setDisplayUsername] = useState(
     user.displayUsername ?? user.username ?? "",
   );
+  const [settingsMessage, setSettingsMessage] = useState("");
+  const [settingsBusy, setSettingsBusy] = useState(false);
+  const [setsMessage, setSetsMessage] = useState("");
+  const [dangerMessage, setDangerMessage] = useState("");
+  const [dangerBusy, setDangerBusy] = useState<"" | "delete" | "export">("");
   const [exportText, setExportText] = useState("");
+  const { notation } = useKeyNotation();
   const joined = useMemo(() => new Date(user.createdAt).toLocaleDateString(), [user.createdAt]);
 
   // This section only mounts for a signed-in user, so force the key-notation store to
@@ -327,40 +371,65 @@ function SignedInAccount({
 
   async function patchProfile(event: React.FormEvent) {
     event.preventDefault();
-    const response = await fetch("/api/me/profile", {
-      body: JSON.stringify({ displayUsername, username }),
-      headers: { "Content-Type": "application/json", "x-fluncle-csrf": csrfToken },
-      method: "PATCH",
-    });
+    setSettingsBusy(true);
 
-    setMessage(
-      response.ok ? "Username updated." : ((await response.json()) as { message: string }).message,
-    );
-    await refresh();
+    try {
+      const response = await fetch("/api/me/profile", {
+        body: JSON.stringify({ displayUsername, username }),
+        headers: { "Content-Type": "application/json", "x-fluncle-csrf": csrfToken },
+        method: "PATCH",
+      });
+
+      setSettingsMessage(
+        response.ok
+          ? "Username updated."
+          : ((await response.json()) as { message: string }).message,
+      );
+      await refresh();
+    } finally {
+      setSettingsBusy(false);
+    }
   }
 
   async function exportData() {
-    const response = await fetch("/api/me/export", {
-      body: "{}",
-      headers: { "Content-Type": "application/json", "x-fluncle-csrf": csrfToken },
-      method: "POST",
-    });
-    const data = (await response.json()) as { export?: unknown };
+    setDangerBusy("export");
+    setDangerMessage("");
 
-    setExportText(JSON.stringify(data.export ?? data, null, 2));
+    try {
+      const response = await fetch("/api/me/export", {
+        body: "{}",
+        headers: { "Content-Type": "application/json", "x-fluncle-csrf": csrfToken },
+        method: "POST",
+      });
+      const data = (await response.json()) as { export?: unknown };
+
+      setExportText(JSON.stringify(data.export ?? data, null, 2));
+    } catch {
+      setDangerMessage("Could not export right now. Try again in a moment.");
+    } finally {
+      setDangerBusy("");
+    }
   }
 
   async function deleteData() {
-    const response = await fetch("/api/me/delete", {
-      body: "{}",
-      headers: { "Content-Type": "application/json", "x-fluncle-csrf": csrfToken },
-      method: "POST",
-    });
+    setDangerBusy("delete");
 
-    setMessage(
-      response.ok ? "Account deleted. Anonymous mode is still here." : "Could not delete account.",
-    );
-    await refresh();
+    try {
+      const response = await fetch("/api/me/delete", {
+        body: "{}",
+        headers: { "Content-Type": "application/json", "x-fluncle-csrf": csrfToken },
+        method: "POST",
+      });
+
+      setMessage(
+        response.ok
+          ? "Account deleted. Anonymous mode is still here."
+          : "Could not delete account.",
+      );
+      await refresh();
+    } finally {
+      setDangerBusy("");
+    }
   }
 
   async function signOut() {
@@ -371,16 +440,34 @@ function SignedInAccount({
   return (
     <div className="account-stack">
       <section className="account-section">
-        <p className="account-kicker">Signed in as {name}</p>
-        <p className="account-muted">
-          Joined {joined}. Email stays private and never appears in public Fluncle surfaces.
-        </p>
+        <div className="account-row account-identity">
+          <div>
+            <p className="account-kicker">Signed in as {name}</p>
+            <p className="account-muted">
+              Joined {joined}. Email stays private and never appears in public Fluncle surfaces.
+            </p>
+          </div>
+          <Button onClick={() => void signOut()} size="sm" type="button" variant="ghost">
+            Sign out
+          </Button>
+        </div>
+        {message ? (
+          <p aria-live="polite" className="account-muted">
+            {message}
+          </p>
+        ) : null}
       </section>
 
-      <section className="account-grid">
-        <Metric label="Lifetime logs" value={progress?.collectedLogIds.length ?? 0} />
-        <Metric label="Runs home" value={progress?.wins ?? 0} />
-        <Metric label="Tows" value={progress?.deaths ?? 0} />
+      <section className="account-section">
+        <div className="account-grid">
+          <Metric label="Lifetime logs" value={progress?.collectedLogIds.length ?? 0} />
+          <Metric label="Runs home" value={progress?.wins ?? 0} />
+          <Metric label="Tows" value={progress?.deaths ?? 0} />
+        </div>
+        <p className="account-muted">
+          Your Galaxy game record: stars logged, runs flown home, and tows back to Earth after a dry
+          tank.
+        </p>
       </section>
 
       <section className="account-section">
@@ -405,10 +492,15 @@ function SignedInAccount({
               key={set.id}
               refresh={refresh}
               set={set}
-              setMessage={setMessage}
+              setMessage={setSetsMessage}
             />
           ))}
         </ListEmpty>
+        {setsMessage ? (
+          <p aria-live="polite" className="account-muted">
+            {setsMessage}
+          </p>
+        ) : null}
       </section>
 
       <section className="account-section">
@@ -431,16 +523,10 @@ function SignedInAccount({
         <div className="account-field">
           <span className="text-sm font-medium">Key notation</span>
           <KeyNotationToggle />
+          <p aria-live="polite" className="account-muted">
+            Keys read as {formatKey("G# minor", notation)}.
+          </p>
         </div>
-      </section>
-
-      <section className="account-section">
-        <h2>Link the CLI</h2>
-        <p className="account-muted">
-          Got the <code>fluncle</code> CLI? Run <code>fluncle login</code> in your terminal to link
-          this device and sync your Galaxy from the command line. I&rsquo;ll send you back here to
-          approve it.
-        </p>
       </section>
 
       <form className="account-section" onSubmit={(event) => void patchProfile(event)}>
@@ -454,12 +540,28 @@ function SignedInAccount({
             onChange={(event) => setDisplayUsername(event.target.value)}
           />
         </Field>
-        <Button type="submit" variant="outline">
-          Update settings
-        </Button>
+        <div className="account-row">
+          <Button disabled={settingsBusy} type="submit" variant="outline">
+            {settingsBusy ? "Updating…" : "Update settings"}
+          </Button>
+          {settingsMessage ? (
+            <p aria-live="polite" className="account-muted">
+              {settingsMessage}
+            </p>
+          ) : null}
+        </div>
       </form>
 
       <section className="account-section">
+        <h2>Link the CLI</h2>
+        <p className="account-muted">
+          Got the <code>fluncle</code> CLI? Run <code>fluncle login</code> in your terminal to link
+          this device and sync your Galaxy from the command line. I&rsquo;ll send you back here to
+          approve it.
+        </p>
+      </section>
+
+      <section className="account-section account-danger">
         <h2>Export and deletion</h2>
         <p className="account-muted">
           Export includes private progress, saved findings, saved sets, and signed-in submissions.
@@ -467,28 +569,58 @@ function SignedInAccount({
           submissions from this account.
         </p>
         <div className="account-row">
-          <Button type="button" variant="outline" onClick={() => void exportData()}>
-            Export data
+          <Button
+            disabled={dangerBusy !== ""}
+            type="button"
+            variant="outline"
+            onClick={() => void exportData()}
+          >
+            {dangerBusy === "export" ? "Exporting…" : "Export data"}
           </Button>
-          <Button type="button" variant="destructive" onClick={() => void deleteData()}>
-            Delete account
-          </Button>
-          <Button type="button" variant="ghost" onClick={() => void signOut()}>
-            Sign out
-          </Button>
+          <AlertDialog>
+            <AlertDialogTrigger
+              render={
+                <Button disabled={dangerBusy !== ""} type="button" variant="destructive">
+                  {dangerBusy === "delete" ? "Deleting…" : "Delete account"}
+                </Button>
+              }
+            />
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Delete this account?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  This removes your private progress, saves, and sets, revokes your sessions, and
+                  unlinks submissions from this account. It cannot be undone. The archive stays, and
+                  anonymous mode is still here.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction variant="destructive" onClick={() => void deleteData()}>
+                  Delete account
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
         </div>
+        {dangerMessage ? (
+          <p aria-live="polite" className="account-muted">
+            {dangerMessage}
+          </p>
+        ) : null}
         {exportText ? (
           <Textarea readOnly className="min-h-48 font-mono text-xs" value={exportText} />
         ) : null}
       </section>
-      {message ? <p className="account-muted">{message}</p> : null}
     </div>
   );
 }
 
 // One saved set: open it back on /mix (the stored tokens + taste handed straight to
-// the route's loader — no new hydration path), rename it, or delete it. Rename +
-// delete are plain CSRF fetches then a refresh, the page's established mutation shape.
+// the route's loader — no new hydration path), rename it, or delete it (behind the
+// same confirm-dialog vocabulary as account deletion — one grammar for destructive
+// acts). Rename + delete are plain CSRF fetches then a refresh, the page's
+// established mutation shape.
 function SavedSetRow({
   csrfToken,
   refresh,
@@ -555,19 +687,41 @@ function SavedSetRow({
   }
 
   return (
-    <li>
+    <li className="account-set-row">
       <Link
         search={{ set: set.setTokens, taste: set.taste ?? "", view: "build" as const }}
         to="/mix"
       >
         {set.name}
-      </Link>{" "}
-      <Button onClick={() => setEditing(true)} size="sm" type="button" variant="ghost">
-        Rename
-      </Button>
-      <Button onClick={() => void remove()} size="sm" type="button" variant="ghost">
-        Delete
-      </Button>
+      </Link>
+      <span className="account-set-actions">
+        <Button onClick={() => setEditing(true)} size="sm" type="button" variant="ghost">
+          Rename
+        </Button>
+        <AlertDialog>
+          <AlertDialogTrigger
+            render={
+              <Button size="sm" type="button" variant="ghost">
+                Delete
+              </Button>
+            }
+          />
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Delete this set?</AlertDialogTitle>
+              <AlertDialogDescription>
+                Removes “{set.name}” from your saved sets. The tracks stay in the archive.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction variant="destructive" onClick={() => void remove()}>
+                Delete set
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      </span>
     </li>
   );
 }
@@ -579,7 +733,9 @@ function Field({
   children: React.ReactElement<{ id?: string }>;
   label: string;
 }) {
-  const id = label.toLowerCase().replaceAll(" ", "-");
+  // useId keeps the id unique even when two forms carry the same label text (the auth
+  // and settings forms both have a "Username" field).
+  const id = `${useId()}-${label.toLowerCase().replaceAll(" ", "-")}`;
 
   return (
     <div className="account-field">

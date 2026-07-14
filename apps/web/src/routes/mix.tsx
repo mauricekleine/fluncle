@@ -2,7 +2,7 @@ import { createFileRoute, redirect, useNavigate } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { useCallback, useMemo } from "react";
 import { type MixTrack } from "@fluncle/contracts";
-import { KeyNotationToggle } from "@/components/mix/key-notation-toggle";
+import { KeyNotationToggle } from "@/components/key-notation-toggle";
 import { MixBuilder } from "@/components/mix/mix-builder";
 import { SaveSetButton } from "@/components/mix/save-set-button";
 import { ShareSetButton } from "@/components/mix/share-set-button";
