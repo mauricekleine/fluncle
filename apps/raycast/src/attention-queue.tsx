@@ -24,6 +24,7 @@ const SOURCE_META: Record<Source, { icon: Icon; title: string }> = {
   "label-review": { icon: Icon.Tag, title: "Labels" },
   newsletter: { icon: Icon.Envelope, title: "Newsletter" },
   "note-rejected": { icon: Icon.QuoteBlock, title: "Held notes" },
+  "observation-rejected": { icon: Icon.Microphone, title: "Held observations" },
   "post-tiktok": { icon: Icon.Upload, title: "Push to TikTok" },
   "post-youtube": { icon: Icon.Upload, title: "Post to YouTube" },
   submission: { icon: Icon.Tray, title: "Submissions" },

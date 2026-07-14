@@ -37,6 +37,7 @@ const EMPTY_INPUTS: AttentionInputs = {
   mixtapes: [],
   newsletters: [],
   noteRejections: [],
+  observationRejections: [],
   recordings: [],
   submissions: [],
 };

@@ -56,6 +56,10 @@ import {
   type LabelSeedStateSchema,
 } from "./orpc/admin-labels.js";
 import { type NoteGateSchema, type NoteRejectionSchema } from "./orpc/admin-notes.js";
+import {
+  type ObservationGateSchema,
+  type ObservationRejectionSchema,
+} from "./orpc/admin-observations.js";
 import { type GalaxyListItemSchema } from "./orpc/galaxies.js";
 import { type GalaxyProgressSchema } from "./orpc/me-galaxy.js";
 import { type MixArtistSchema } from "./orpc/mix.js";
@@ -197,6 +201,22 @@ export type NoteRejection = z.infer<typeof NoteRejectionSchema>;
 
 /** `GET /api/v1/admin/note-rejections` response — the held notes + the gate's dials. */
 export type NoteRejectionsResponse = Ok<{ gate: NoteGate; rejections: NoteRejection[] }>;
+
+/** The observation echo gate's dials — the spoken sibling of `NoteGate`, same KV pattern. */
+export type ObservationGate = z.infer<typeof ObservationGateSchema>;
+
+/**
+ * One HELD observation — a spoken script the echo gate refused to RENDER, kept whole with the
+ * neighbour script it echoed, the lifted phrase, the score, and the thresholds in force at
+ * rejection time. Held BEFORE the Cartesia render, so it never cost a cent.
+ */
+export type ObservationRejection = z.infer<typeof ObservationRejectionSchema>;
+
+/** `GET /api/v1/admin/observation-rejections` response — the held scripts + the gate's dials. */
+export type ObservationRejectionsResponse = Ok<{
+  gate: ObservationGate;
+  rejections: ObservationRejection[];
+}>;
 
 // ── The catalogue (The Ear — docs/the-ear.md) ────────────────────────────────────
 // A CATALOGUE TRACK is a `tracks` row with NO `findings` row: a track Fluncle knows

@@ -74,7 +74,7 @@ function echoKey(word: string): string {
  * before". Matching runs of NORMALIZED tokens against the original token stream is what
  * makes the highlight land on the real words.
  */
-function markPhrase(text: string, phrase: string) {
+export function markPhrase(text: string, phrase: string) {
   const wanted = phrase.split(" ").filter(Boolean).map(echoKey);
 
   if (wanted.length === 0) {

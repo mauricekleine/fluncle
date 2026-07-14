@@ -370,6 +370,10 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // list_labels_admin precedent. A pure read that publishes nothing; the sweep may want to
   // see what it has already had rejected, and the `/admin` queue reads it every tick.
   list_note_rejections: "admin",
+  // The observation echo gate's held scripts + the box author's neighbourhood read — admin tier
+  // (agent-allowed): the box sweep reads the neighbourhood every tick, and both are pure reads.
+  list_observation_neighbours: "admin",
+  list_observation_rejections: "admin",
   list_private_saved_findings: "private-session",
   list_private_saved_sets: "private-session",
   list_private_submissions: "private-session",
@@ -486,6 +490,8 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // which is publish-class (the update_galaxy / update_label precedent), so an agent token
   // 403s. The agent authors the note; only the operator may overrule its rejection.
   resolve_note_rejection: "operator",
+  // Rendering a held observation overrules the gate and spends a Cartesia render — publish-class.
+  resolve_observation_rejection: "operator",
   // The Mixcloud metadata re-sync — operator tier: it EDITS a LIVE published cloudcast's
   // sections[] (the Mixcloud edit endpoint, server-side with the mixcloud_auth token),
   // so the agent token 403s (the parity twin of resync_mixtape_youtube).
@@ -562,6 +568,7 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // operatorGuard (the update_galaxy precedent). They live in the `settings` KV, so the
   // retune is a flip rather than a deploy.
   update_note_gate: "operator",
+  update_observation_gate: "operator",
   // The `/me/preferences` cross-device store's partial-merge write — private-session
   // (privateUserMutation), the update_private_profile precedent.
   update_private_preferences: "private-session",

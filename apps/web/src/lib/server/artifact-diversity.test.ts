@@ -4,6 +4,7 @@ import {
   type Artifact,
   meanPairwiseOverlap,
   measureFamily,
+  measureRegisters,
   nearestNeighbourLifts,
   stripLogbookProse,
   topPhrases,
@@ -182,6 +183,64 @@ describe("measureFamily", () => {
     expect(reading.topPhrases).toEqual([]);
     expect(reading.topWords).toEqual([]);
     expect(reading.echoingCount).toBe(0);
+  });
+});
+
+describe("measureRegisters", () => {
+  // The register cut is what makes the observations' worst homogenisation legible: the
+  // formulaic closer, the "I…" opener, the "hope" crutch (the 2026-07-14 audit's hand-made
+  // numbers, as a function). These pin it on a corpus whose answers are hand-checkable.
+  const CORPUS = [
+    A(
+      "1",
+      "I landed hard on this one and my knees went. Hope the crew rinses it. Enjoy, cosmonauts.",
+    ),
+    A(
+      "2",
+      "I clocked the drop late and it threw me sideways. Hope you rinse it. Enjoy, cosmonauts.",
+    ),
+    A("3", "The bass walked in on its own two feet. Tune in when you are ready, junglist."),
+  ];
+
+  it("counts the shared closer and opener runs by distinct artifact", () => {
+    const registers = measureRegisters(CORPUS, { crutchWords: ["hope", "enjoy", "cosmonauts"] });
+
+    expect(registers.size).toBe(3);
+    // Two of three close on the exact formula — the "…enjoy cosmonauts" cut. The closer is
+    // the LAST 3 words, so the shared run must be exact ("it enjoy cosmonauts" in both).
+    expect(registers.closers[0]).toEqual({ docFreq: 2, phrase: "it enjoy cosmonauts" });
+    // Two of three open on "I …" — the opening-word histogram catches the register.
+    expect(registers.openingWords[0]).toEqual({ docFreq: 2, word: "i" });
+  });
+
+  it("reports each tracked crutch word's document frequency, in the order asked", () => {
+    const registers = measureRegisters(CORPUS, { crutchWords: ["hope", "enjoy", "shoulders"] });
+
+    expect(registers.crutches).toEqual([
+      { docFreq: 2, word: "hope" },
+      { docFreq: 2, word: "enjoy" },
+      { docFreq: 0, word: "shoulders" },
+    ]);
+  });
+
+  it("drops edge phrases that recur in only one artifact (a cadence is not a family tic)", () => {
+    const registers = measureRegisters([
+      A("1", "one of a kind opener here and a one of a kind closer here"),
+      A("2", "another entirely different read that shares no edges with anything"),
+    ]);
+
+    expect(registers.openers).toEqual([]);
+    expect(registers.closers).toEqual([]);
+  });
+
+  it("gives a clean zeroed reading for an empty family", () => {
+    const registers = measureRegisters([]);
+
+    expect(registers.size).toBe(0);
+    expect(registers.openers).toEqual([]);
+    expect(registers.closers).toEqual([]);
+    expect(registers.openingWords).toEqual([]);
+    expect(registers.crutches).toEqual([]);
   });
 });
 

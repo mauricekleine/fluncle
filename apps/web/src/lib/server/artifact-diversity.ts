@@ -348,6 +348,130 @@ export function measureFamily(
   };
 }
 
+// ── The REGISTER cuts (openers / closers / crutch words) ─────────────────────────────
+//
+// Mean overlap and phrase lifts catch a WHOLESALE echo, but the observations' worst
+// homogenisation is a REGISTER tic the whole-corpus mean barely moves: the closer is a
+// formula ("…enjoy cosmonauts" as the last words of 32/61), the opener is a register
+// (34/61 start on "I"/"This one"), and a crutch word recurs almost corpus-wide ("hope" in
+// 51/61). These are the cuts the 2026-07-14 audit made by hand; this makes them a function,
+// so "did the counter-measure break the formula?" is a number, not an eyeball. Pure and
+// deterministic, over the same `echoWords` stream the gate uses.
+
+/** One recurring edge phrase (an opener or a closer) and how many artifacts share it. */
+export type EdgePhrase = {
+  /** How many DISTINCT artifacts open/close on exactly this word run. */
+  docFreq: number;
+  /** The lowercased word run (first-N or last-N words of the artifact). */
+  phrase: string;
+};
+
+/** One tracked crutch word and how many artifacts reach for it (the "hope in 51/61" cut). */
+export type CrutchWord = {
+  /** How many DISTINCT artifacts contain the word at least once. */
+  docFreq: number;
+  word: string;
+};
+
+/** The register reading for one family: how templated its openers, closers, and reflexes are. */
+export type RegisterStats = {
+  /** The most common CLOSERS (last-N words), ranked by how many artifacts share them. */
+  closers: EdgePhrase[];
+  /** Tracked crutch words and their document frequency, in the order requested. */
+  crutches: CrutchWord[];
+  /** The single most common OPENING WORD and its share (the "34/61 start on I" cut). */
+  openingWords: CrutchWord[];
+  /** The most common OPENERS (first-N words), ranked by how many artifacts share them. */
+  openers: EdgePhrase[];
+  /** Artifacts with non-empty prose (the denominator). */
+  size: number;
+};
+
+/** Rank the first-N (or last-N) word runs by how many distinct artifacts share them. */
+function edgePhrases(
+  streams: readonly string[][],
+  edgeWords: number,
+  fromEnd: boolean,
+  topK: number,
+): EdgePhrase[] {
+  const docFreq = new Map<string, number>();
+
+  for (const words of streams) {
+    if (words.length === 0) {
+      continue;
+    }
+
+    const edge = fromEnd
+      ? words.slice(Math.max(0, words.length - edgeWords))
+      : words.slice(0, edgeWords);
+    const phrase = edge.join(" ");
+
+    docFreq.set(phrase, (docFreq.get(phrase) ?? 0) + 1);
+  }
+
+  return [...docFreq.entries()]
+    .filter(([, freq]) => freq >= 2)
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, topK)
+    .map(([phrase, freq]) => ({ docFreq: freq, phrase }));
+}
+
+/**
+ * The register reading for a family: how templated its openers and closers are, plus the
+ * document frequency of a caller-supplied list of crutch words. `edgeWords` is how many words
+ * count as the opener/closer (3 catches "…enjoy cosmonauts" and "this one crept up"); the
+ * opening-WORD histogram is separate because the audit's headline opener cut is a single first
+ * word ("I"). Everything reads the same `echoWords` stream the echo gate uses.
+ */
+export function measureRegisters(
+  artifacts: readonly Artifact[],
+  options: { crutchWords?: readonly string[]; edgeWords?: number; topK?: number } = {},
+): RegisterStats {
+  const { crutchWords = [], edgeWords = 3, topK = 8 } = options;
+  const populated = artifacts.filter((artifact) => artifact.text.trim().length > 0);
+  const streams = populated.map((artifact) => echoWords(artifact.text)).filter((w) => w.length > 0);
+
+  // Opening-word histogram — the single first word, the audit's headline opener cut.
+  const firstWord = new Map<string, number>();
+
+  for (const words of streams) {
+    const first = words[0];
+
+    if (first) {
+      firstWord.set(first, (firstWord.get(first) ?? 0) + 1);
+    }
+  }
+
+  const openingWords = [...firstWord.entries()]
+    .filter(([, freq]) => freq >= 2)
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, topK)
+    .map(([word, freq]) => ({ docFreq: freq, word }));
+
+  // Crutch words — document frequency of each tracked reflex, in the order asked (a stable
+  // report, so a re-measure lines up column-for-column against the last one).
+  const crutches = crutchWords.map((word) => {
+    const needle = word.toLowerCase();
+    let docFreq = 0;
+
+    for (const words of streams) {
+      if (words.includes(needle)) {
+        docFreq += 1;
+      }
+    }
+
+    return { docFreq, word: needle };
+  });
+
+  return {
+    closers: edgePhrases(streams, edgeWords, true, topK),
+    crutches,
+    openers: edgePhrases(streams, edgeWords, false, topK),
+    openingWords,
+    size: populated.length,
+  };
+}
+
 /**
  * Strip the logbook body's non-prose furniture before measuring: the `[[<logId>]]` figure
  * tokens (each on its own line, swapped for a poster image by the renderer) and markdown

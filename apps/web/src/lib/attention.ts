@@ -34,6 +34,7 @@ export type AttentionSource =
   | "label-review"
   | "newsletter"
   | "note-rejected"
+  | "observation-rejected"
   | "post-tiktok"
   | "post-youtube"
   | "submission"
@@ -189,6 +190,28 @@ export type NoteRejectionInput = {
 };
 
 /**
+ * An observation script the echo gate REFUSED to render, held for the operator's eye — the
+ * spoken sibling of `NoteRejectionInput`. The gate rejects a script that lifts a phrase from a
+ * sonic neighbour's script (before any Cartesia render is spent) and still refuses to render it,
+ * but the script is no longer destroyed: it becomes a queue row so the operator can read what
+ * the model wrote and rule (render it anyway, or agree with the gate).
+ */
+export type ObservationRejectionInput = {
+  /** The FIRST hold — the queue's oldest-first anchor. */
+  anchorAt: string;
+  artUrl?: string;
+  artists: string[];
+  /** How many times this finding's observation has bounced (a high count = it's stuck). */
+  attempts: number;
+  /** The rejection id — the row identity. */
+  id: string;
+  logId?: string;
+  title: string;
+  /** The finding — the review deep-link target. */
+  trackId: string;
+};
+
+/**
  * A FINDING whose captured audio failed the fingerprint check against its official preview
  * (docs/the-ear.md § Wrong audio). The backfill stamped it `capture_verification = 'mismatch'` and
  * stops — a machine never rewinds a public finding — so it lands here for the operator, who
@@ -224,6 +247,7 @@ export type AttentionInputs = {
   mixtapes: MixtapeInput[];
   newsletters: NewsletterInput[];
   noteRejections: NoteRejectionInput[];
+  observationRejections: ObservationRejectionInput[];
   recordings: RecordingInput[];
   submissions: SubmissionInput[];
 };
@@ -452,6 +476,25 @@ export function deriveAttentionItems(inputs: AttentionInputs, now: number): Atte
     });
   }
 
+  // Each held observation is one row — the echo gate wrote a spoken script, judged it too
+  // close to a sonic neighbour's, and refused to render it (before spending a cent). Like the
+  // held note, it is NOT thrown away: the operator reads what the model wrote and rules — render
+  // it anyway, or bin it. One row per finding (the ledger holds one open rejection each),
+  // oldest-first, never a deadline: an observation-less finding is unfinished, not urgent.
+  for (const rejection of inputs.observationRejections) {
+    items.push({
+      anchorAt: rejection.anchorAt,
+      ...(rejection.artUrl ? { artUrl: rejection.artUrl } : {}),
+      attempts: rejection.attempts,
+      href: `/admin/findings?observation=${encodeURIComponent(rejection.trackId)}`,
+      id: `observation-rejected:${rejection.id}`,
+      ...(rejection.logId ? { logId: rejection.logId } : {}),
+      source: "observation-rejected",
+      title: trackLabel(rejection.artists, rejection.title),
+      trackId: rejection.trackId,
+    });
+  }
+
   // Each pending crew submission is one row — a banger someone sent in, waiting on the
   // operator's approve/reject. Oldest-first, deep-linking to the exact submission in the
   // review tray (findings board). Its pre-chew triage verdict rides along as the row's
@@ -667,6 +710,12 @@ export function primaryFor(item: AttentionItem, now: number): PrimaryAction {
       // one-home-per-control move the submission and label rows make. Accepting a held note
       // publishes a line to /log, and publishing authority never sits on the queue row.
       return { href: item.href ?? "/admin/findings", kind: "open", label: "Read it" };
+    case "observation-rejected":
+      // The spoken sibling of the held note. Render-it/bin-it is the operator's ruling
+      // (`fluncle admin observations resolve`, or the resolve op) — publishing-class, since
+      // accepting spends a Cartesia render, so it never sits on the queue row. The row opens
+      // the finding so he can hear the neighbourhood it was judged against.
+      return { href: item.href ?? "/admin/findings", kind: "open", label: "Hear it" };
     case "post-tiktok":
       // No TikTok post yet — the first step is pushing the silent inbox draft.
       return { kind: "push", label: "Push draft", platform: "tiktok" };
@@ -714,6 +763,10 @@ const SOURCE_ORDER: AttentionSource[] = [
   // anything, and the sweep keeps trying to write a better line regardless. It is here to
   // be SEEN, not to be chased.
   "note-rejected",
+  // A held observation is the spoken twin of the held note and sits at the same low urgency:
+  // the finding is simply unvoiced, a state it can hold indefinitely, and the sweep keeps
+  // trying a colder script. Here to be SEEN, not chased.
+  "observation-rejected",
 ];
 
 /**
@@ -801,6 +854,12 @@ function briefPhrase(source: AttentionSource, rows: AttentionItem[]): string {
       return n === 1
         ? "a note the echo gate held back"
         : `${countWord(n)} notes the echo gate held back`;
+    case "observation-rejected":
+      // Name the mechanism, like the held note: the gate fired on a SPOKEN read and the script
+      // still exists, held for a ruling.
+      return n === 1
+        ? "an observation the echo gate held back"
+        : `${countWord(n)} observations the echo gate held back`;
     case "post-tiktok":
       return n === 1 ? "a clip to push to TikTok" : `${countWord(n)} clips to push to TikTok`;
     case "post-youtube":

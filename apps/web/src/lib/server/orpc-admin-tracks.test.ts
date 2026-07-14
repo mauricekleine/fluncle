@@ -39,6 +39,9 @@ const recordNoteAttempt = vi.fn();
 // the ledger: the gate must HOLD a rejected note before it 422s, never bin it.
 const recordNoteRejection = vi.fn();
 const getNoteEchoThresholds = vi.fn();
+const getObservationEchoThresholds = vi.fn();
+const observationNeighbours = vi.fn();
+const recordObservationRejection = vi.fn();
 
 vi.mock("cloudflare:workers", () => ({
   env: {
@@ -61,6 +64,19 @@ vi.mock("./backfill", () => ({
 vi.mock("./note-rejections", () => ({
   getNoteEchoThresholds: (...args: unknown[]) => getNoteEchoThresholds(...args),
   recordNoteRejection: (...args: unknown[]) => recordNoteRejection(...args),
+}));
+
+// The observation echo gate's impure edges — the neighbourhood read (a DB vector scan) and
+// the ledger (a DB table), both proven for real in observation-rejections.integration.test.ts.
+// The gate SCORING itself (scoreObservationEcho) stays REAL here, so the observe tests
+// exercise the true gate decision over the mocked neighbourhood.
+vi.mock("./observation-neighbours", () => ({
+  observationNeighbours: (...args: unknown[]) => observationNeighbours(...args),
+}));
+
+vi.mock("./observation-rejections", () => ({
+  getObservationEchoThresholds: (...args: unknown[]) => getObservationEchoThresholds(...args),
+  recordObservationRejection: (...args: unknown[]) => recordObservationRejection(...args),
 }));
 
 vi.mock("./tracks", async (importOriginal) => {
@@ -141,6 +157,11 @@ beforeEach(() => {
   // The gate's calibrated defaults — the dials are operator-tunable at runtime, so the
   // handler reads them per run rather than importing constants.
   getNoteEchoThresholds.mockResolvedValue({ maxOverlap: 0.3, minPhraseWords: 4 });
+  getObservationEchoThresholds
+    .mockReset()
+    .mockResolvedValue({ maxOverlap: 0.3, minPhraseWords: 4 });
+  observationNeighbours.mockReset().mockResolvedValue([]);
+  recordObservationRejection.mockReset().mockResolvedValue(undefined);
   updateTrack.mockReset();
   fillEmptyNote.mockReset();
   getTrackByIdOrLogId.mockReset();
@@ -622,6 +643,109 @@ describe("oRPC observe_track (POST /admin/tracks/{trackId}/observe)", () => {
     expect(response?.status).toBe(400);
     expect(((await readJson(response)) as { code: string }).code).toBe("no_log_id");
   });
+
+  // ── The ECHO gate — the anti-sameness rail (the note gate's spoken sibling) ──
+  describe("the echo gate (the vibe-neighbour layer's guardrail, before the render spend)", () => {
+    it("422s a script that lifts a phrase from a sonic neighbour — HELD, and no render spent", async () => {
+      getTrackByIdOrLogId.mockResolvedValueOnce(TRACK);
+      // The neighbourhood carries a script whose exact body-move the candidate reuses.
+      observationNeighbours.mockResolvedValueOnce([
+        {
+          logId: "027.2.8R",
+          script:
+            "Knees went up before I clocked the coordinate on this one, a hard even roller all the way through.",
+        },
+      ]);
+
+      const { handleOrpc } = await import("./orpc");
+      const response = await handleOrpc(
+        post("/observe", AGENT_TOKEN, { promptVersion: 3, script: GOOD_SCRIPT }),
+      );
+
+      expect(response?.status).toBe(422);
+      expect(((await readJson(response)) as { code: string }).code).toBe(
+        "observation_echoes_neighbours",
+      );
+      // The rejection is HELD (the ledger), and — the whole point of gating BEFORE the
+      // render — not a cent of Cartesia was spent and nothing landed in R2 or the row.
+      expect(recordObservationRejection).toHaveBeenCalledTimes(1);
+      expect(renderObservationCartesia).not.toHaveBeenCalled();
+      expect(put).not.toHaveBeenCalled();
+      expect(updateTrack).not.toHaveBeenCalled();
+    });
+
+    it("passes an honestly-different script over the same neighbourhood", async () => {
+      getTrackByIdOrLogId.mockResolvedValueOnce(TRACK);
+      updateTrack.mockResolvedValueOnce({ fields: [], trackId: TRACK_ID });
+      observationNeighbours.mockResolvedValueOnce([
+        {
+          logId: "027.2.8R",
+          script: "The pads hang like weather over a patient half-step, tide-slow and warm.",
+        },
+      ]);
+
+      const { handleOrpc } = await import("./orpc");
+      const response = await handleOrpc(
+        post("/observe", AGENT_TOKEN, { durationMs: 28000, script: GOOD_SCRIPT }),
+      );
+
+      expect(response?.status).toBe(200);
+      expect(recordObservationRejection).not.toHaveBeenCalled();
+      expect(renderObservationCartesia).toHaveBeenCalled();
+    });
+
+    it("an empty neighbourhood has nothing to echo — the script passes untouched", async () => {
+      getTrackByIdOrLogId.mockResolvedValueOnce(TRACK);
+      updateTrack.mockResolvedValueOnce({ fields: [], trackId: TRACK_ID });
+      observationNeighbours.mockResolvedValueOnce([]);
+
+      const { handleOrpc } = await import("./orpc");
+      const response = await handleOrpc(
+        post("/observe", AGENT_TOKEN, { durationMs: 28000, script: GOOD_SCRIPT }),
+      );
+
+      expect(response?.status).toBe(200);
+      expect(renderObservationCartesia).toHaveBeenCalled();
+    });
+
+    it("force SKIPS the echo gate — a deliberate operator re-render is an overrule", async () => {
+      getTrackByIdOrLogId.mockResolvedValueOnce({
+        ...TRACK,
+        observationAudioUrl: "https://found.fluncle.com/004.7.2I/observation.mp3?v=1",
+      });
+      updateTrack.mockResolvedValueOnce({ fields: [], trackId: TRACK_ID });
+      // Even a neighbourhood the script verbatim-echoes must not block a forced render.
+      observationNeighbours.mockResolvedValueOnce([{ logId: "027.2.8R", script: GOOD_SCRIPT }]);
+
+      const { handleOrpc } = await import("./orpc");
+      const response = await handleOrpc(
+        post("/observe", OPERATOR_TOKEN, { force: true, script: GOOD_SCRIPT }),
+      );
+
+      expect(response?.status).toBe(200);
+      // The gate never ran: the neighbourhood was not even read.
+      expect(observationNeighbours).not.toHaveBeenCalled();
+      expect(renderObservationCartesia).toHaveBeenCalled();
+    });
+
+    it("a ledger failure never turns the 422 into a 500 (best-effort hold)", async () => {
+      getTrackByIdOrLogId.mockResolvedValueOnce(TRACK);
+      observationNeighbours.mockResolvedValueOnce([
+        {
+          logId: "027.2.8R",
+          script: "Knees went up before I clocked the coordinate on this one, a hard even roller.",
+        },
+      ]);
+      recordObservationRejection.mockRejectedValueOnce(new Error("ledger down"));
+
+      const { handleOrpc } = await import("./orpc");
+      const response = await handleOrpc(post("/observe", AGENT_TOKEN, { script: GOOD_SCRIPT }));
+
+      // We lose one bounce's evidence, not the safety property: still a clean 422, no render.
+      expect(response?.status).toBe(422);
+      expect(renderObservationCartesia).not.toHaveBeenCalled();
+    });
+  });
 });
 
 // ── context_track — agent tier (the split-out context half; Build order #3) ──
@@ -839,6 +963,25 @@ describe("oRPC note_track (POST /admin/tracks/{trackId}/note)", () => {
     expect(updateTrack).not.toHaveBeenCalled();
     // A fill stamps the "ran" state as done (filled = true).
     expect(recordNoteAttempt).toHaveBeenCalledWith(TRACK_ID, true);
+  });
+
+  // THE PROVENANCE STAMP, end to end. The 2026-07-14 audit found `note_prompt_version` NULL
+  // on 60/61 findings; the wire path (sweep --prompt-version → CLI body → this handler →
+  // fillEmptyNote) shipped with the registry (#516), so the NULLs are HISTORICAL — notes
+  // authored before the stamp existed, plus operator-typed ones. This pins the forward path,
+  // so a regression can never quietly reopen the gap.
+  it("FORWARDS the sweep's promptVersion into the atomic fill (the provenance stamp)", async () => {
+    getTrackByIdOrLogId.mockResolvedValueOnce(TRACK);
+    fillEmptyNote.mockResolvedValueOnce(true);
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      post("/note", AGENT_TOKEN, { note: GOOD_NOTE, promptVersion: 5 }),
+    );
+
+    expect(response?.status).toBe(200);
+    // The version lands in the SAME atomic statement as the note it describes.
+    expect(fillEmptyNote).toHaveBeenCalledWith(TRACK_ID, GOOD_NOTE, 5);
   });
 
   // THE RACE IS CLOSED AT THE DB: a note lands between the handler's read and its

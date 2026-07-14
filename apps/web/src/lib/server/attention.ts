@@ -20,6 +20,7 @@ import { getDb, typedRows } from "./db";
 import { listLabelReviewRows } from "./labels";
 import { listMixtapes } from "./mixtapes";
 import { listNoteRejectionReviewRows } from "./note-rejections";
+import { listObservationRejectionReviewRows } from "./observation-rejections";
 import { listRecordings } from "./recordings";
 import { listTracks } from "./tracks";
 
@@ -191,6 +192,7 @@ export async function readAttentionSnapshot(now: number = Date.now()): Promise<A
     submissions,
     newsletters,
     noteRejections,
+    observationRejections,
     renders,
     newest,
   ] = await Promise.all([
@@ -212,6 +214,9 @@ export async function readAttentionSnapshot(now: number = Date.now()): Promise<A
     // to STORE these — it always did — but it no longer destroys them, so he can read what
     // the model wrote and decide whether the gate was right.
     listNoteRejectionReviewRows(),
+    // Every observation the echo gate held back and nobody has ruled on yet — the spoken
+    // sibling of the held notes (the trust rule: a ruled row leaves this read).
+    listObservationRejectionReviewRows(),
     // The render queue's canonical read (`fluncle admin tracks queue`): findings
     // with context gathered but no video yet.
     listTracks({ hasContext: true, hasVideo: false, limit: 1 }),
@@ -243,6 +248,7 @@ export async function readAttentionSnapshot(now: number = Date.now()): Promise<A
       })),
       newsletters,
       noteRejections,
+      observationRejections,
       recordings: recordings.map((recording) => ({
         createdAt: recording.createdAt,
         hasVideo: recording.hasVideo,
