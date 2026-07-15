@@ -567,26 +567,54 @@ async function writeCatalogueTracks(
  * does not, so a crawled row would sit off its label's page until the next one. This closes
  * that window; the backfill stays the backstop.
  *
- * It resolves by `slugify(label)`, which is exactly why the crawler writes the ARCHIVE's
- * spelling of a label it already knows (`canonicalLabelName`) rather than MusicBrainz's:
- * `Med School` would slug to `med-school` and point at nothing.
+ * It resolves the label on the MBID FIRST (`where mb_label_id = ?`), then falls back to
+ * `slugify(label)`. The MBID fold is why two spellings that slugify apart ("Med School" ⇄
+ * "Medschool") point at the SAME label row; the slug fallback is why the crawler writes the
+ * ARCHIVE's spelling of a label it already knows (`canonicalLabelName`) rather than
+ * MusicBrainz's, so even a label with no MBID lands on a real `labels.slug` rather than
+ * pointing at nothing. Purely resolve-and-stamp — it never mints (the discovered label was
+ * already minted by `ensureLabel` above, and a known label already exists).
  *
  * Its album twin is `linkTracksToAlbum` below: the album edge is written INLINE at crawl
  * time now, folded on the release-group MBID, not deferred to a deploy backfill.
  */
-async function linkTracksToLabel(trackIds: string[], labelName: string): Promise<void> {
-  const slug = labelSlug(labelName);
-
-  if (!slug || trackIds.length === 0) {
+async function linkTracksToLabel(
+  trackIds: string[],
+  labelName: string,
+  mbLabelId: null | string,
+): Promise<void> {
+  if (trackIds.length === 0) {
     return;
   }
 
   const db = await getDb();
-  const found = await db.execute({
-    args: [slug],
-    sql: `select id from labels where slug = ? limit 1`,
-  });
-  const labelId = typedRows<{ id: string }>(found.rows)[0]?.id;
+  const mbid = mbLabelId?.trim() ? mbLabelId.trim() : null;
+
+  // mbid-first: the row `ensureLabel` just folded on this MBID, whatever its slug. Falls back
+  // to the archive-spelling slug for a label with no MBID (the common pre-catalogue case).
+  let labelId: string | undefined;
+
+  if (mbid) {
+    const byMbid = await db.execute({
+      args: [mbid],
+      sql: `select id from labels where mb_label_id = ? limit 1`,
+    });
+    labelId = typedRows<{ id: string }>(byMbid.rows)[0]?.id;
+  }
+
+  if (!labelId) {
+    const slug = labelSlug(labelName);
+
+    if (!slug) {
+      return;
+    }
+
+    const found = await db.execute({
+      args: [slug],
+      sql: `select id from labels where slug = ? limit 1`,
+    });
+    labelId = typedRows<{ id: string }>(found.rows)[0]?.id;
+  }
 
   if (!labelId) {
     return;
@@ -1100,7 +1128,12 @@ async function expandRelease(node: FrontierRow, maxHop: number): Promise<Expansi
     }
   }
 
-  const mbLabelName = (release["label-info"] ?? []).find((info) => info.label?.name)?.label?.name;
+  // The label edge, taken from the SAME `label-info` entry so the name and the MBID belong to
+  // one label. The MBID (`label.id`) is MusicBrainz's stable label identity — the discovered
+  // label's fold key, the twin of the release-group MBID the album edge folds on.
+  const mbLabel = (release["label-info"] ?? []).find((info) => info.label?.name)?.label;
+  const mbLabelName = mbLabel?.name;
+  const mbLabelId = mbLabel?.id ?? null;
   const labelsDiscovered: string[] = [];
   // The name we WRITE onto the track: the archive's own spelling when it already knows this
   // label under any spelling, else MusicBrainz's. Either way `slugify(tracks.label)` lands
@@ -1117,7 +1150,8 @@ async function expandRelease(node: FrontierRow, maxHop: number): Promise<Expansi
       // A label nobody has ruled on: it enters `undecided` (the `labels` DDL default) and
       // surfaces in the operator's attention queue. It is NOT crawled — the next crawl
       // seeds from it only if he enables it. The crawler proposes; the operator rules.
-      await ensureLabel(mbLabelName);
+      // Minted (or folded) on the MBID so two spellings that slugify apart collapse to one row.
+      await ensureLabel(mbLabelName, mbLabelId);
       labelsDiscovered.push(mbLabelName);
     }
   }
@@ -1173,7 +1207,7 @@ async function expandRelease(node: FrontierRow, maxHop: number): Promise<Expansi
   const { skipped, written, writtenIds } = await writeCatalogueTracks(candidates);
 
   if (labelName) {
-    await linkTracksToLabel(writtenIds, labelName);
+    await linkTracksToLabel(writtenIds, labelName, mbLabelId);
   }
 
   // The album edge, stamped INLINE and folded on the release-group MBID — every pressing of a

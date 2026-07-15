@@ -36,6 +36,13 @@ vi.mock("./spotify", () => ({
 // which is the whole gate — and its label is the one the operator must rule on next.
 
 const LABEL_MBID = "label-medschool";
+// Hospital carries its OWN MBID — the discovered-label fold key is real now, so two different
+// labels must NOT share one MBID (that would fold them to one row). Keyed by name below.
+const HOSPITAL_MBID = "label-hospital";
+const LABEL_MBIDS: Record<string, string> = {
+  "Hospital Records": HOSPITAL_MBID,
+  "Med School": LABEL_MBID,
+};
 const ARTIST_MBID = "artist-etherwood";
 const OTHER_ARTIST_MBID = "artist-hospital-guest";
 const SEED_RELEASE = "release-seed";
@@ -54,7 +61,7 @@ function release(
     "cover-art-archive": { front: true },
     date: "2013-06-10",
     id,
-    "label-info": [{ label: { id: LABEL_MBID, name: label } }],
+    "label-info": [{ label: { id: LABEL_MBIDS[label] ?? LABEL_MBID, name: label } }],
     // The album fold key MusicBrainz returns under `inc=release-groups` — a singular object.
     // Null models a release MusicBrainz has no release group for (the crawler's slug fallback).
     ...(releaseGroup ? { "release-group": { id: releaseGroup } } : {}),
@@ -288,11 +295,14 @@ describe("the catalogue crawler", () => {
     expect(totals.labelsDiscovered).toEqual(["Hospital Records"]);
 
     const label = await db.execute(
-      "select seed_state, ruled_at from labels where slug = 'hospital-records'",
+      "select seed_state, ruled_at, mb_label_id from labels where slug = 'hospital-records'",
     );
     expect(label.rows[0]?.seed_state).toBe("undecided");
     // No human has ruled — which is exactly what puts it in the attention queue.
     expect(label.rows[0]?.ruled_at).toBeNull();
+    // The discovered label folds on its MusicBrainz MBID — stamped inline at discovery, so a
+    // spelling that slugifies apart later collapses onto this row instead of duplicating.
+    expect(label.rows[0]?.mb_label_id).toBe(HOSPITAL_MBID);
 
     // It is NOT a seed. The crawler proposes; the operator rules.
     const seeds = await db.execute(

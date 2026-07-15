@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX `labels_mb_label_id_idx` ON `labels` (`mb_label_id`);

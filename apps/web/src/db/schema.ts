@@ -2127,52 +2127,68 @@ export const artistSocials = sqliteTable(
 //   - `image_attempted_at` / `image_failures` — the reliability pair (the shipped
 //     backfill convention): a transient failure backs off and is retried; a
 //     persistent one gives up (→ `none`), so the sweep never storms a vendor.
-export const labels = sqliteTable("labels", {
-  // ── THE VOICED BIO (the artist/label bio engine) ────────────────────────────────
-  // A short, Fluncle-voiced public bio for the label — the written sibling of a finding's
-  // editorial `note`, grounded in Firecrawl facts + the tracks Fluncle has actually LOGGED
-  // on this label (never a fabricated roster). Authored by the future on-box sweep via the
-  // agent-tier `describe_label` route, which VOICE-GATES it and writes it FILL-EMPTY-ONLY
-  // (an operator-written bio is never clobbered). Nullable until authored; not surfaced
-  // anywhere yet (the surfacing PR reads it). See lib/server/bio.ts.
-  bio: text("bio"),
-  // PROVENANCE — the `describe_label` prompt version this bio was authored under (0 = the
-  // registry's baked default, N = operator override N), or NULL when no registry prompt
-  // produced it (an operator-typed bio). Same contract as `note_prompt_version`.
-  bioPromptVersion: integer("bio_prompt_version"),
-  // The bio-authoring reliability marker, mirroring `context_status`: pending (never
-  // attempted) · resolved (a bio is stored) · empty (no usable facts) · failed (the fetch
-  // threw). Internal reliability state; the future bio worklist picks `pending`/NULL rows.
-  bioStatus: text("bio_status", { enum: ["pending", "resolved", "empty", "failed"] }),
-  createdAt: text("created_at").notNull(),
-  // The Discogs label id (from the MB label's curated Discogs url-rel) — the source
-  // of the logo image. NULL until the resolve sweep walks it (or MB carried no link).
-  discogsLabelId: integer("discogs_label_id"),
-  id: text("id").primaryKey(),
-  // The last time the image resolve sweep attempted this label (reliability/backoff).
-  imageAttemptedAt: text("image_attempted_at"),
-  // Consecutive resolve failures — drives the backoff and the give-up cap (→ `none`).
-  imageFailures: integer("image_failures").notNull().default(0),
-  // The R2 object key of the stored logo (e.g. `labels/<slug>.jpg`), served from
-  // found.fluncle.com. NULL = no own image; the surface falls back to the cover.
-  imageKey: text("image_key"),
-  // The image resolve lifecycle (see the header). `pending` is the DDL default so
-  // every label — existing and future — enters the worklist automatically.
-  imageState: text("image_state", { enum: ["pending", "resolved", "none"] })
-    .notNull()
-    .default("pending"),
-  // The MusicBrainz label MBID — the identity the crawler resolves at walk time and
-  // the sweep walks for the label's curated Discogs + Wikidata url-rels.
-  mbLabelId: text("mb_label_id"),
-  // The display name — the first raw `tracks.label` spelling seen for this slug.
-  name: text("name").notNull(),
-  ruledAt: text("ruled_at"),
-  seedState: text("seed_state", { enum: ["enabled", "disabled", "undecided"] })
-    .notNull()
-    .default("undecided"),
-  slug: text("slug").notNull().unique(),
-  updatedAt: text("updated_at").notNull(),
-});
+export const labels = sqliteTable(
+  "labels",
+  {
+    // ── THE VOICED BIO (the artist/label bio engine) ────────────────────────────────
+    // A short, Fluncle-voiced public bio for the label — the written sibling of a finding's
+    // editorial `note`, grounded in Firecrawl facts + the tracks Fluncle has actually LOGGED
+    // on this label (never a fabricated roster). Authored by the future on-box sweep via the
+    // agent-tier `describe_label` route, which VOICE-GATES it and writes it FILL-EMPTY-ONLY
+    // (an operator-written bio is never clobbered). Nullable until authored; not surfaced
+    // anywhere yet (the surfacing PR reads it). See lib/server/bio.ts.
+    bio: text("bio"),
+    // PROVENANCE — the `describe_label` prompt version this bio was authored under (0 = the
+    // registry's baked default, N = operator override N), or NULL when no registry prompt
+    // produced it (an operator-typed bio). Same contract as `note_prompt_version`.
+    bioPromptVersion: integer("bio_prompt_version"),
+    // The bio-authoring reliability marker, mirroring `context_status`: pending (never
+    // attempted) · resolved (a bio is stored) · empty (no usable facts) · failed (the fetch
+    // threw). Internal reliability state; the future bio worklist picks `pending`/NULL rows.
+    bioStatus: text("bio_status", { enum: ["pending", "resolved", "empty", "failed"] }),
+    createdAt: text("created_at").notNull(),
+    // The Discogs label id (from the MB label's curated Discogs url-rel) — the source
+    // of the logo image. NULL until the resolve sweep walks it (or MB carried no link).
+    discogsLabelId: integer("discogs_label_id"),
+    id: text("id").primaryKey(),
+    // The last time the image resolve sweep attempted this label (reliability/backoff).
+    imageAttemptedAt: text("image_attempted_at"),
+    // Consecutive resolve failures — drives the backoff and the give-up cap (→ `none`).
+    imageFailures: integer("image_failures").notNull().default(0),
+    // The R2 object key of the stored logo (e.g. `labels/<slug>.jpg`), served from
+    // found.fluncle.com. NULL = no own image; the surface falls back to the cover.
+    imageKey: text("image_key"),
+    // The image resolve lifecycle (see the header). `pending` is the DDL default so
+    // every label — existing and future — enters the worklist automatically.
+    imageState: text("image_state", { enum: ["pending", "resolved", "none"] })
+      .notNull()
+      .default("pending"),
+    // ── THE DISCOVERED-LABEL FOLD KEY (catalogue-graph, inline label linking) ────────────────
+    // The MusicBrainz label MBID — the STABLE identity a DISCOVERED label folds on, so a crawled
+    // release's label edge collapses two spellings that slugify apart ("Med School" ⇄ "Medschool")
+    // onto one row, rather than minting a duplicate. The crawler resolves it at walk time (the seed
+    // path via `expandSeedLabel` → `setLabelMbLabelId`; the discovered path via `ensureLabel(name,
+    // mbLabelId)`), and the image sweep walks it for the label's curated Discogs + Wikidata url-rels.
+    // Nullable and NON-KEYING for existing rows: a publish-minted / pre-crawl label folds on `slug`
+    // and carries NULL here until the one-off `backfill-label-mbid.ts` populates it, and a discovered
+    // label with no MBID still folds by the slug/alias path. UNIQUE index below — SQLite treats NULLs
+    // as distinct, so the many NULL rows never collide. See docs/label-entity.md.
+    mbLabelId: text("mb_label_id"),
+    // The display name — the first raw `tracks.label` spelling seen for this slug.
+    name: text("name").notNull(),
+    ruledAt: text("ruled_at"),
+    seedState: text("seed_state", { enum: ["enabled", "disabled", "undecided"] })
+      .notNull()
+      .default("undecided"),
+    slug: text("slug").notNull().unique(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    // The discovered-label fold: `where mb_label_id = ?` resolves an existing label before the
+    // alias/slug path, so one MusicBrainz label is one row across every spelling it walks in under.
+    uniqueIndex("labels_mb_label_id_idx").on(table.mbLabelId),
+  ],
+);
 
 // LABEL ALIASES — two spellings, one label, ISRC-anchored trust (RFC musickit-second-authority,
 // U2a). The `artist_socials` precedent: a per-label side table of alternative spellings, each
