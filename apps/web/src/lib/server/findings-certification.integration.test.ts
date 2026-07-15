@@ -608,42 +608,42 @@ describe("certify in place — logging an existing catalogue track without creat
     expect(track.rows[0]?.spotify_uri).toBe("spotify:track:resolved42");
   });
 
-  it("records the honest no-presence miss — Telegram still posts (no Spotify line), Bluesky skipped", async () => {
+  it("REFUSES to certify without a Spotify anchor — 409, mints nothing, announces nothing", async () => {
     const { certifyExistingTrack } = await import("./publish");
 
-    // No stored identity, no ISRC → no lookup can run → the playlist is never guessed at.
+    // RULED 2026-07-15: the public playlist carries every banger, so only a Spotify-linked
+    // track can be certified. No stored identity, no ISRC → no lookup can run → refuse.
     await db.execute({
       args: [CATALOGUE_ID],
       sql: "update tracks set spotify_uri = null, spotify_url = null where track_id = ?",
     });
-    const { logId } = await certifyExistingTrack(CATALOGUE_ID);
 
+    await expect(certifyExistingTrack(CATALOGUE_ID)).rejects.toThrow(/no spotify identity/i);
+
+    // Nothing minted, nothing announced — the refusal is total.
     expect(playlistAdds).toEqual([]);
     expect(blueskyPosts).toEqual([]);
-    expect(telegramPosts).toEqual([{ logId, spotifyUrl: "" }]);
-
-    const finding = await db.execute({
+    expect(telegramPosts).toEqual([]);
+    const findings = await db.execute({
       args: [CATALOGUE_ID],
-      sql: "select added_to_spotify, posted_to_telegram, spotify_error from findings where track_id = ?",
+      sql: "select count(*) as n from findings where track_id = ?",
     });
-    expect(Number(finding.rows[0]?.added_to_spotify)).toBe(0);
-    expect(Number(finding.rows[0]?.posted_to_telegram)).toBe(1);
-    expect(finding.rows[0]?.spotify_error as string).toMatch(/no spotify presence/i);
+    expect(Number(findings.rows[0]?.n)).toBe(0);
   });
 
-  it("RESUMES an incompletely-announced finding — fills only the missing legs, mints nothing", async () => {
+  it("certifies clean once the anchor lands — the 409'd track's ISRC resolves later", async () => {
     const { certifyExistingTrack } = await import("./publish");
 
-    // First pass: no presence → Telegram posts, Spotify records the miss (the 044.1.3L shape).
+    // First attempt: no identity, no ISRC → the pre-flight refuses, mints nothing.
     await db.execute({
       args: [CATALOGUE_ID],
       sql: "update tracks set spotify_uri = null, spotify_url = null where track_id = ?",
     });
-    const first = await certifyExistingTrack(CATALOGUE_ID);
-    expect(telegramPosts).toHaveLength(1);
-    expect(playlistAdds).toEqual([]);
+    await expect(certifyExistingTrack(CATALOGUE_ID)).rejects.toThrow(/no spotify identity/i);
+    expect(telegramPosts).toEqual([]);
 
-    // An ISRC lands later (the crawler's anchor backfill); certify again — the resume.
+    // An ISRC lands later (the crawler's anchor backfill); certify again — this time the
+    // pre-flight resolves the identity, stamps it back, and the certify runs end to end.
     await db.execute({
       args: ["GBTEST7700043", CATALOGUE_ID],
       sql: "update tracks set isrc = ? where track_id = ?",
@@ -657,22 +657,19 @@ describe("certify in place — logging an existing catalogue track without creat
       rateLimited: false,
     };
 
-    const second = await certifyExistingTrack(CATALOGUE_ID);
+    const { logId } = await certifyExistingTrack(CATALOGUE_ID);
 
-    // Same coordinate, no second finding, the Spotify leg filled — and Telegram NOT re-posted.
-    expect(second.logId).toBe(first.logId);
     expect(playlistAdds).toEqual(["spotify:track:late43"]);
-    expect(telegramPosts).toHaveLength(1);
+    expect(telegramPosts).toEqual([{ logId, spotifyUrl: "https://open.spotify.com/track/late43" }]);
     const findings = await db.execute({
       args: [CATALOGUE_ID],
       sql: "select count(*) as n from findings where track_id = ?",
     });
     expect(Number(findings.rows[0]?.n)).toBe(1);
-    const finding = await db.execute({
+    const track = await db.execute({
       args: [CATALOGUE_ID],
-      sql: "select added_to_spotify, spotify_error from findings where track_id = ?",
+      sql: "select spotify_uri from tracks where track_id = ?",
     });
-    expect(Number(finding.rows[0]?.added_to_spotify)).toBe(1);
-    expect(finding.rows[0]?.spotify_error).toBeNull();
+    expect(track.rows[0]?.spotify_uri).toBe("spotify:track:late43");
   });
 });

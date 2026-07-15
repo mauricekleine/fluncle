@@ -488,6 +488,38 @@ export async function certifyExistingTrack(
     throw new ApiError("already_certified", `Already logged: ${line}`, 409);
   }
 
+  // ── THE ANCHOR PRE-FLIGHT (resolve BEFORE minting) ─────────────────────────────────────
+  // RULED 2026-07-15: a finding must anchor to Spotify — the public playlist carries every
+  // banger, the feed contract requires `spotifyUrl`, and the log page's open action links it.
+  // The crawler still reaches beyond Spotify (archive value), but only a Spotify-linked track
+  // can be CERTIFIED. A crawler-born row arrives without an identity, so try the same
+  // exact-ISRC resolve the crawler's anchor uses — and when nothing resolves, REFUSE (409)
+  // rather than mint a finding that breaks every public list read. A successful resolve is
+  // stamped back onto the track, so it is paid once.
+  let spotifyUri = row.spotify_uri;
+  let spotifyUrl = row.spotify_url;
+
+  if (!spotifyUri && row.isrc) {
+    const lookup = await findSpotifyTrackByIsrc(row.isrc);
+
+    if (lookup.match) {
+      spotifyUri = lookup.match.spotifyUri;
+      spotifyUrl = lookup.match.spotifyUrl;
+      await db.execute({
+        args: [spotifyUri, spotifyUrl, trackId],
+        sql: `update tracks set spotify_uri = ?, spotify_url = ? where track_id = ?`,
+      });
+    }
+  }
+
+  if (!spotifyUri || !spotifyUrl) {
+    throw new ApiError(
+      "no_spotify_anchor",
+      `Cannot certify ${line}: no Spotify identity, and no ISRC match to resolve one. Only a Spotify-linked banger can be certified.`,
+      409,
+    );
+  }
+
   const nowIso = new Date().toISOString();
   let logId: string;
 
@@ -520,23 +552,7 @@ export async function certifyExistingTrack(
   const note = options.note ?? row.finding_note ?? undefined;
 
   // ── THE ANNOUNCE FAN-OUT (record-not-throw; each leg fills only its own empty slot) ────────
-  // Presence first: the stored identity, else one exact-ISRC lookup. A hit is stamped back onto
-  // the track (the same columns the crawler's own anchor uses), so the resolve is paid once.
-  let spotifyUri = row.spotify_uri;
-  let spotifyUrl = row.spotify_url;
-
-  if (!spotifyUri && row.isrc && !(alreadySpotify && alreadyTelegram)) {
-    const lookup = await findSpotifyTrackByIsrc(row.isrc);
-
-    if (lookup.match) {
-      spotifyUri = lookup.match.spotifyUri;
-      spotifyUrl = lookup.match.spotifyUrl;
-      await db.execute({
-        args: [spotifyUri, spotifyUrl, trackId],
-        sql: `update tracks set spotify_uri = ?, spotify_url = ? where track_id = ?`,
-      });
-    }
-  }
+  // The Spotify identity was resolved (or verified present) by the pre-flight above.
 
   const metadata: TrackMetadata = {
     album: row.album ?? undefined,
@@ -545,8 +561,8 @@ export async function certifyExistingTrack(
     durationMs: row.duration_ms,
     isrc: row.isrc ?? undefined,
     spotifyArtistIds: [],
-    spotifyUri: spotifyUri ?? "",
-    spotifyUrl: spotifyUrl ?? "",
+    spotifyUri,
+    spotifyUrl,
     title: row.title,
     trackId,
   };
