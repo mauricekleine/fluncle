@@ -77,6 +77,11 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // `list_artist_socials` matches the public `list_` prefix so the "holds exactly" check
   // skips it; it lives here for completeness.
   "GET /admin/artists/socials": "list_artist_socials",
+  // The artist bio-draft — contract-only oRPC (no TanStack route file; oRPC owns the path
+  // directly). Agent tier: the box's bio sweep triggers this Worker-side grounding read
+  // (Firecrawl facts + finding titles → a ready-to-author prompt) with its agent token. It
+  // does not match a public prefix, so it lives here to satisfy the "holds exactly" check.
+  "GET /admin/artists/{slug}/bio-draft": "draft_artist_bio",
   // The `/admin` attention-queue digest read — contract-only oRPC (no TanStack route
   // file; oRPC owns the path directly). Admin tier (agent-allowed): the operator's
   // `fluncle admin queue` CLI + its Raycast menu bar read it. `get_attention` matches
@@ -122,6 +127,11 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // Admin tier (agent-allowed read); `list_label_aliases` matches the public `list_` prefix so
   // the "holds exactly" check skips it, but the entry keeps this map honest.
   "GET /admin/labels/aliases": "list_label_aliases",
+  // The label bio-draft — contract-only oRPC (no TanStack route file). Agent tier: the box's
+  // bio sweep triggers this Worker-side grounding read (Firecrawl facts + finding titles → a
+  // ready-to-author prompt) with its agent token; the describe_label sibling. It does not
+  // match a public prefix, so it lives here to satisfy the "holds exactly" check.
+  "GET /admin/labels/{slug}/bio-draft": "draft_label_bio",
   "GET /admin/lastfm/auth/start": "start_lastfm_auth",
   // The logbook sweep's gap+material read — contract-only oRPC (no TanStack route
   // file; oRPC owns the path directly). Admin tier (agent-allowed). `list_logbook_gaps`

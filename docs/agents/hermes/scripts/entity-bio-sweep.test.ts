@@ -1,19 +1,52 @@
-// Unit tests for entity-bio-sweep.ts — specifically the COST-01 metering seam
-// (`bioCostEvent`), the box scripts being self-contained (they cannot import the
-// workspace) and living outside any package's test runner, so this file uses
-// `bun:test` and is run directly:
+// Unit tests for entity-bio-sweep.ts — the two load-bearing seams the box scripts being
+// self-contained (they cannot import the workspace) let us pin without a live CLI/DB:
+//
+//   1. `isAuthorableDraft` — the Worker-draft GATE. The box triggers `draft-bio` (the
+//      Worker-paced grounding read) per queued entity; the sweep only authors when the
+//      Worker RESOLVED the entity and returned a non-empty prompt. A null draft (a failed
+//      call / gather) or a `found:false` (unresolved slug) is a clean skip — never an
+//      author. This is the Worker-paced parity with the context-note sweep.
+//   2. `bioCostEvent` — the COST-01 metering seam. The ledger tracks DELIVERED work: a `bio`
+//      authoring-spend row is recorded ONLY when a bio was actually authored AND stored this
+//      tick, NEVER on a dry-run, an operator-bio no-op, a gate rejection, or a failure. Its
+//      shape mirrors note-sweep's `note` row (subsidized/anthropic/tokens/measured), just
+//      with `step: "bio"` and the entity slug as the id scope.
+//
+// This file uses `bun:test` and is run directly:
 //
 //   bun test docs/agents/hermes/scripts/entity-bio-sweep.test.ts
-//
-// The load-bearing behaviour under test: the ledger tracks DELIVERED work — a `bio`
-// authoring-spend row is recorded ONLY when a bio was actually authored AND stored this
-// tick, NEVER on a dry-run, an operator-bio no-op, a gate rejection, or a failure. Its
-// shape mirrors note-sweep's `note` row exactly (subsidized/anthropic/tokens/measured),
-// just with `step: "bio"` and the entity slug as the id scope.
 
 import { describe, expect, test } from "bun:test";
 import { costEventId } from "./cost-emit";
-import { bioCostEvent } from "./entity-bio-sweep";
+import { bioCostEvent, isAuthorableDraft } from "./entity-bio-sweep";
+
+const DRAFT = {
+  findingCount: 3,
+  found: true,
+  hasFacts: true,
+  name: "Calibre",
+  prompt: "You are Fluncle, writing the bio for Calibre…",
+  promptVersion: 0,
+};
+
+describe("isAuthorableDraft (the Worker-draft gate)", () => {
+  test("authors on a resolved draft with a non-empty prompt", () => {
+    expect(isAuthorableDraft(DRAFT)).toBe(true);
+  });
+
+  test("SKIPS on a null draft (the draft-bio call / gather failed)", () => {
+    expect(isAuthorableDraft(null)).toBe(false);
+  });
+
+  test("SKIPS on found:false (the Worker did not resolve the slug)", () => {
+    expect(isAuthorableDraft({ ...DRAFT, found: false })).toBe(false);
+  });
+
+  test("SKIPS on an empty prompt (nothing to author)", () => {
+    expect(isAuthorableDraft({ ...DRAFT, prompt: "   " })).toBe(false);
+    expect(isAuthorableDraft({ ...DRAFT, prompt: undefined })).toBe(false);
+  });
+});
 
 const AUTHORED = {
   bio: "Calibre is a drum and bass producer.",

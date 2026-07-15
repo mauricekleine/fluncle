@@ -276,6 +276,13 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // Deliberately agent tier, unlike the operator-tier `update_label` crawl-seed ruling:
   // authoring a bio is enrichment, not an editorial ruling that steers the crawl.
   describe_label: "admin",
+  // The artist bio-draft — agent tier (adminAuth only), the describe_artist precedent: the
+  // box's bio sweep triggers this Worker-side grounding read (Firecrawl facts + finding
+  // titles → a ready-to-author prompt) with its agent token. A pure read; it publishes nothing.
+  draft_artist_bio: "admin",
+  // The label bio-draft — agent tier (adminAuth only): the describe_label sibling of the
+  // artist bio-draft. A pure read that gathers the box's grounding Worker-side; it publishes nothing.
+  draft_label_bio: "admin",
   draft_track_social: "admin",
   // The clip drip-feed tick — ADMIN tier (adminAuth only, no operatorGuard): the on-box
   // `fluncle-clip-drip` cron drives it with the agent token (the `finalize_clip_cut` /

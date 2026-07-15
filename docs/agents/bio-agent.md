@@ -11,7 +11,7 @@ An artist bio and a label bio are the SAME artifact — same queue shape, same v
 |            | the `bio` (the entity's factual paragraph)                                                                                                                                                            |
 | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **What**   | A short 2–4 sentence OBJECTIVE, factual, Wikipedia-style bio in Fluncle's dry register: third person 'who this is' / 'what this imprint is', real-world facts (including origin/base) stated plainly. |
-| **Source** | Written by the **box** (it holds `copywriting-fluncle`) grounded ONLY in the gathered Firecrawl facts + the entity's identity. Never a fabricated fact.                                               |
+| **Source** | Written by the **box** (it holds `copywriting-fluncle`) grounded ONLY in the Worker-gathered Firecrawl facts + the logged finding titles the `draft-bio` read supplies. Never a fabricated fact.      |
 | **Lives**  | `artists.bio` / `labels.bio` — **PUBLIC**: it renders on `/artist/<slug>` and `/label/<slug>` and in the entity's structured data.                                                                    |
 | **Gate**   | the **bio voice gate** (`gateBioText`, below), the note's shared scan with geography ALLOWED, at the bio's longer 2–4 sentence length ceiling.                                                        |
 
@@ -23,19 +23,19 @@ Each tick:
 
 1. **QUEUE** (deterministic): `fluncle admin <kind>s describe --queue --json` → entities with a certified finding but no bio yet (`bio IS NULL/'' AND a finding exists`, oldest first). A bare array of `{ id, name, slug }`. Empty → fast no-op.
 2. per entity (bounded batch, `ENTITY_BIO_BATCH_CAP`, default 1):
-   - **GATHER** (best-effort): a Firecrawl search for the entity's background (the bio's PRIMARY fuel) + an artist's `findingCount`.
-   - **AUTHOR** (the one agentic step): resolve the `describe_artist` / `describe_label` prompt from the registry (baked default as fallback) and run `claude -p` (`claude-sonnet-4-6`, subscription auth, read-only tools) so it loads `copywriting-fluncle`.
+   - **DRAFT** (deterministic, Worker-paced): `fluncle admin <kind>s draft-bio <slug> --json` → the `draft_artist_bio` / `draft_label_bio` READ. The **Worker** runs the Firecrawl gather (with its key) + pulls the logged finding **titles** (with its DB) and assembles the registered `describe_artist` / `describe_label` prompt, returning `{ found, name, findingCount, prompt, promptVersion, hasFacts }`. A `found:false` (unresolved slug) or a failed call → skip (stays queued).
+   - **AUTHOR** (the one agentic step): run `claude -p` (`claude-sonnet-4-6`, subscription auth, read-only tools) on the Worker-supplied `prompt` so it loads `copywriting-fluncle`.
    - **DELIVER** (deterministic): `fluncle admin <kind>s describe <slug> --bio-file <tmp> --prompt-version <v>` → the Worker voice-gates, fills-empty-only, stores.
 
-## The grounding (and its gap)
+## The grounding is Worker-paced (the gap is CLOSED)
 
-The bio is grounded in **Firecrawl FACTS** — the entity's background, scene, release history (`fetchEntityFacts`, `lib/server/bio.ts`; the raw snippets ARE the facts). The box sweep mirrors that fetch self-contained (the cost-emit / prompt-fetch pattern, since the box cannot import the workspace), best-effort: null on no key / vendor-down, and the entity is authored from identity alone.
+The bio is grounded in **Firecrawl FACTS** (the entity's background, scene, release history — the raw snippets ARE the facts) **plus the titles of the tracks Fluncle has actually logged**. The box is a thin CLI client and holds **neither** a `FIRECRAWL_API_KEY` (by convention — the Worker owns it; `context-sweep.ts`) **nor** a read that exposes an entity's finding TITLES (only a `findingCount`). So on its own the box cannot ground a bio at all.
 
-**The gap, stated plainly:** the box is a thin CLI client and **cannot enumerate an entity's logged finding TITLES** — no public/agent read exposes them (only an artist's `findingCount`, a number). The Worker-side `getFindingsByArtist` / `getFindingsByLabel` that the pages read are not on the wire. So on-box the `{{findings}}` block is empty and the grounding rests on the Firecrawl facts plus the truthful floor the queue guarantees (every queued entity has ≥1 certified finding, so "an artist/label I have logged" is always true). When a Worker-paced grounding seam lands — a read that hands the box the assembled findings + facts, the way context-note hands the note sweep its `context_note` — pass its titles into the sweep's `findings` variable and both crons upgrade with no other change.
+The `draft_artist_bio` / `draft_label_bio` READ closes both gaps at once — the **exact parity the context-note sweep already has**, where the box triggers a Worker read for its grounding and then authors. On this READ the Worker runs Firecrawl with **its** key (`fetchEntityFacts`, `lib/server/bio.ts`), pulls the logged finding titles from **its** DB (`getFindingsByArtist` / `getFindingsByLabel`), assembles the registered prompt (`buildEntityBioPrompt`), and hands the box a ready-to-author prompt + its provenance version. The consequence that matters: **the on-box crons now produce GROUNDED bios**, not only the manual backfill. The read publishes nothing and returns only public facts (web snippets + finding titles), never a secret.
 
-**Because the bio is now FACTUAL, no facts means REFUSE — not improvise.** A first-person observation could always fall back on the sound alone; a factual dossier cannot invent a biography from a bare name. The prompt's no-facts arm therefore tells the author to write **at most one plain, certain sentence from the findings, or nothing**. The gate's 40-char floor (`BIO_MIN_CHARS`) then turns that refusal into a clean NO-WRITE: a stub too short to be a real bio fails `bio_too_short` (422), the entity stays queued, and no hallucinated CV ever lands. The floor is load-bearing for exactly this reason — do not lower it.
+**Because the bio is FACTUAL, no facts means REFUSE — not improvise.** A first-person observation could always fall back on the sound alone; a factual dossier cannot invent a biography from a bare name. The Worker's `hasFacts:false` case renders the prompt's no-facts arm, which tells the author to write **at most one plain, certain sentence from the findings, or nothing**. The gate's 40-char floor (`BIO_MIN_CHARS`) then turns that refusal into a clean NO-WRITE: a stub too short to be a real bio fails `bio_too_short` (422), the entity stays queued, and no hallucinated CV ever lands. The floor is load-bearing for exactly this reason — do not lower it.
 
-**Firecrawl on the box:** the established pattern is Firecrawl runs Worker-side (the box holds no key — context-sweep, artist-sweep). The bio sweep's mirrored `fetchEntityFacts` is WIRED and lights up wherever a `FIRECRAWL_API_KEY` is in the sourced env. On the box that key is absent by default, so on-box bios ground on identity (honest, sparse, operator-replaceable). The **operator backfill** (below), run locally with a key in env, is where the facts genuinely light up.
+**No Firecrawl key on the box.** Because the gather runs Worker-side in the `draft-bio` read, the box needs no `FIRECRAWL_API_KEY` — the earlier box-mirrored `fetchEntityFacts` is gone. On-box bios come out Firecrawl-grounded, exactly like the manual backfill.
 
 ## The cardinal safety guarantee: fill an EMPTY bio only
 
@@ -47,19 +47,20 @@ The bio is a live, **public** Fluncle surface. `gateBioText` (`lib/server/bio.ts
 
 ## The prompt lives in the DATABASE, not in the image
 
-The authoring prompt is the `describe_artist` / `describe_label` entry in the **prompt registry** ([prompt-registry.md](./prompt-registry.md)). The sweep fetches it over the AGENT-tier `get_prompt` each tick, so the operator can retune it from `/admin/prompts` or the CLI with **no deploy and no rebake**. The repo keeps the baked default (`buildEntityBioPrompt` in `entity-bio-sweep.ts`, a verbatim mirror of the registry default), and a failed fetch falls back to it and logs. Every bio records the version that drafted it (`--prompt-version` → the entity's `*_bio_prompt_version`; `0` = registry default, `N` = override N, `NULL` = the baked fallback wrote it).
+The authoring prompt is the `describe_artist` / `describe_label` entry in the **prompt registry** ([prompt-registry.md](./prompt-registry.md)). The **Worker** resolves and renders it inside the `draft-bio` read (`buildEntityBioPrompt` → `renderRegisteredPrompt`), so the operator can retune it from `/admin/prompts` or the CLI with **no deploy and no rebake**, and the box no longer carries any baked copy of the bio prompt (nothing on-box can drift from the registry). Every bio records the version that drafted it (the Worker returns `promptVersion`, stamped via `--prompt-version` onto the entity's `*_bio_prompt_version`; `0` = registry default, `N` = override N).
 
 ## Box activation is OPERATOR-GATED (repo half shipped)
 
-The repo half ships — the sweep, the two `.sh` wrappers, the two host timers, the registry + `/status` wiring, and this doc. **Nothing auto-enables and nothing spends model or Firecrawl credits on merge**, mirroring the crawler / cluster / triage pattern. The operator enables the timers after a dry-run pre-flight (each timer's README) and, optionally, provisioning `FIRECRAWL_API_KEY` in the box secrets for on-box facts.
+The repo half ships — the sweep, the two `.sh` wrappers, the two host timers, the registry + `/status` wiring, and this doc. **Nothing auto-enables and nothing spends model credits on merge**, mirroring the crawler / cluster / triage pattern. The operator enables the timers after a dry-run pre-flight (each timer's README). The box needs no Firecrawl key — the gather runs Worker-side.
 
 ### The backfill (bounded corpus, one operator run)
 
-The corpus is bounded (tens of artists + labels). `ENTITY_BIO_BATCH_CAP` makes the backfill simply the sweep run once with a high cap — run **locally in a repo checkout** (not on the box), where the operator's env can carry both the subscription token and a `FIRECRAWL_API_KEY` so the bios come out Firecrawl-grounded. Operator-run, never auto-run:
+The corpus is bounded (tens of artists + labels). `ENTITY_BIO_BATCH_CAP` makes the backfill simply the sweep run once with a high cap. It now goes through the **same Worker `draft-bio` read** as the box crons, so it no longer needs a local `FIRECRAWL_API_KEY` — the Worker gathers the facts. It is just a high-cap run of the same sweep (run locally so the subscription token authors `claude -p`). Operator-run, never auto-run:
 
 ```bash
-# Requires in the local env: CLAUDE_CODE_OAUTH_TOKEN (subscription auth for claude -p),
-# FLUNCLE_API_TOKEN (agent-scoped), and optionally FIRECRAWL_API_KEY (rich facts).
+# Requires in the local env: CLAUDE_CODE_OAUTH_TOKEN (subscription auth for claude -p) and
+# FLUNCLE_API_TOKEN (agent-scoped — the draft-bio + describe reads/writes). The Firecrawl
+# gather runs Worker-side, so NO local Firecrawl key is needed.
 # Drain the whole artist bio backlog in one pass:
 ENTITY_BIO_BATCH_CAP=500 FLUNCLE_BIN=./path/to/fluncle \
   bun docs/agents/hermes/scripts/entity-bio-sweep.ts --kind artist

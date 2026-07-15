@@ -1,5 +1,10 @@
 import { adminApiGet, adminApiPost } from "../api";
-import { buildBioBody, type EntityBioResult, type EntityBioWorkItem } from "./admin-artists";
+import {
+  buildBioBody,
+  type EntityBioDraft,
+  type EntityBioResult,
+  type EntityBioWorkItem,
+} from "./admin-artists";
 
 // ── The voiced bio: the entity-bio engine (thin HTTP client) ──────────────────
 // The label sibling of `admin artists describe`: author the label's bio through the
@@ -18,8 +23,15 @@ export async function describeLabelCommand(
   );
 }
 
+// Trigger the Worker's bio-draft grounding for one label: the Firecrawl gather + finding
+// titles + the assembled `describe_label` prompt, returned ready-to-author. The box's bio
+// sweep calls this per queued entity, then runs `claude -p` on the returned prompt.
+export async function draftLabelBioCommand(slug: string): Promise<EntityBioDraft> {
+  return adminApiGet<EntityBioDraft>(`/api/admin/labels/${encodeURIComponent(slug)}/bio-draft`);
+}
+
 // The BIO queue: labels with findings but no bio yet, oldest first — the worklist the
-// future `describe_label` cron drains (each row is a `admin labels describe <slug>`).
+// `describe_label` cron drains (each row is a `admin labels describe <slug>`).
 export async function labelsBioQueueCommand(limit: number): Promise<EntityBioWorkItem[]> {
   const response = await adminApiGet<{ labels: EntityBioWorkItem[]; ok: boolean }>(
     `/api/admin/labels/bio-queue?limit=${limit}`,

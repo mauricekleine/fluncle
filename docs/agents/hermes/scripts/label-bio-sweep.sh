@@ -11,13 +11,14 @@
 # entry; its sibling artist-bio-sweep.sh passes `--kind artist`. All the JSON work lives in
 # entity-bio-sweep.ts. Its stdout is the cron's run output.
 #
-# THE HYBRID MODEL (same shape as note-sweep): the queue read, the best-effort grounding
-# gather, and the bio delivery are all DETERMINISTIC (the `fluncle` CLI). Only the creative
-# authoring — turning a label's facts into a short Fluncle-voiced paragraph — runs
-# `claude -p` (Claude Code, SUBSCRIPTION auth via CLAUDE_CODE_OAUTH_TOKEN, NOT OpenRouter)
-# with READ-ONLY tools. The SCRIPT posts the authored bio to the describe endpoint; the
-# Worker re-scans (the voice gate, `gateBioText`) + FILLS AN EMPTY BIO ONLY (an operator bio
-# is never clobbered) + stores. This is the entity sibling of the auto-note cron.
+# THE HYBRID MODEL (same shape as note-sweep): the queue read, the Worker-paced grounding
+# DRAFT (`fluncle admin labels draft-bio` → the Worker runs Firecrawl + pulls finding titles
+# + assembles the prompt), and the bio delivery are all DETERMINISTIC (the `fluncle` CLI).
+# Only the creative authoring — turning that Worker-supplied prompt into a short Fluncle-voiced
+# paragraph — runs `claude -p` (Claude Code, SUBSCRIPTION auth via CLAUDE_CODE_OAUTH_TOKEN, NOT
+# OpenRouter) with READ-ONLY tools. The SCRIPT posts the authored bio to the describe endpoint;
+# the Worker re-scans (the voice gate, `gateBioText`) + FILLS AN EMPTY BIO ONLY (an operator
+# bio is never clobbered) + stores. This is the entity sibling of the auto-note cron.
 #
 # PRODUCTION PRE-REQS (see ../cron/README.md):
 #   - `claude` (Claude Code CLI) — BAKED into the image; authed via subscription
@@ -28,9 +29,8 @@
 #   - the `copywriting-fluncle` skill — BAKED into the image at /opt/claude/skills/
 #     (discovered via CLAUDE_CONFIG_DIR=/opt/claude, readable by the non-root cron user).
 #   - optional DISCORD_ALERT_WEBHOOK for the claude-auth-failed ping (in the same file).
-#   - optional FIRECRAWL_API_KEY for the best-effort facts gather — ABSENT on the box by
-#     default (Firecrawl is Worker-side), so on-box bios ground on identity; the operator
-#     BACKFILL run (locally, with a key in env) is where the facts light up.
+#   - NO Firecrawl key needed on the box: the grounding gather runs Worker-side in the
+#     `draft-bio` read (the Worker holds the key), so on-box bios come out grounded.
 #
 # Scheduled by a repo-checked-in HOST systemd timer (../label-bio-timer/, installed by
 # ../install-host-timers.sh), NOT a gateway `hermes cron create`. `describe_label` is AGENT
@@ -57,7 +57,7 @@ export FLUNCLE_BIN="${FLUNCLE_BIN:-/usr/local/bin/fluncle}"
 # (FLUNCLE_API_TOKEN) pass. So `claude -p`'s token can ONLY reach this script via a file the
 # operator places — sourced here: a 0600 ${HOME}/.fluncle-secrets.env (mounted ~/.hermes)
 # holding CLAUDE_CODE_OAUTH_TOKEN (required) + optionally DISCORD_ALERT_WEBHOOK /
-# ENTITY_BIO_CLAUDE_MODEL / FIRECRAWL_API_KEY. Written from the configured 1Password item.
+# ENTITY_BIO_CLAUDE_MODEL. Written from the configured 1Password item.
 BIO_ENV_FILE="${BIO_ENV_FILE:-${HOME:-/opt/data/home}/.fluncle-secrets.env}"
 if [ -r "${BIO_ENV_FILE}" ]; then
   set -a

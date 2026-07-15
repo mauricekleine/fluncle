@@ -12,7 +12,7 @@
 // touches nothing already stored. Neither handler reads or writes a track, a finding, or
 // anything a crawl brought in — and neither ever should. See docs/label-entity.md.
 
-import { gateBioText } from "../bio";
+import { buildEntityBioPrompt, fetchEntityFacts, gateBioText } from "../bio";
 import {
   confirmLabelAlias,
   fillEmptyLabelBio,
@@ -25,6 +25,7 @@ import {
   updateLabelSeedState,
 } from "../labels";
 import { adminAuth, operatorGuard } from "../orpc-auth";
+import { getFindingsByLabel } from "../tracks";
 import { ORPCError } from "@orpc/server";
 import { apiFault, type Implementer, parseLimit, toFault } from "./_shared";
 
@@ -147,6 +148,54 @@ export function adminLabelsHandlers(os: Implementer) {
     }
   });
 
+  // GET /admin/labels/{slug}/bio-draft — agent tier (`adminAuth`): the Worker-paced grounding
+  // seam (the describe_label sibling). The box cannot gather Firecrawl facts (no key) or
+  // enumerate the tracks it has logged on a label (not on the wire), so it triggers this READ:
+  // the Worker runs the Firecrawl gather with ITS key + pulls the logged finding titles from
+  // ITS DB, assembles the registered bio prompt, and returns the ready-to-author prompt + its
+  // provenance version. The box then authors with `claude -p` and writes back via
+  // `describe_label`. Publishes nothing. A missing slug returns `found:false` (never throws).
+  const draftLabelBioHandler = os.draft_label_bio.use(adminAuth).handler(async ({ input }) => {
+    try {
+      const label = await getLabelBySlug(input.slug);
+
+      if (!label) {
+        return {
+          findingCount: 0,
+          found: false as const,
+          hasFacts: false,
+          name: "",
+          prompt: "",
+          promptVersion: 0,
+        };
+      }
+
+      // Gather Worker-side: Firecrawl facts (with the Worker's key) + the logged finding
+      // titles (with the Worker's DB) — the two the box cannot reach. Both best-effort.
+      const facts = await fetchEntityFacts({ kind: "label", name: label.name });
+      const findings = await getFindingsByLabel(label.id);
+      const findingTitles = findings.map((finding) => finding.title);
+
+      const { body, version } = await buildEntityBioPrompt({
+        facts: facts?.facts ?? null,
+        findingTitles,
+        kind: "label",
+        name: label.name,
+      });
+
+      return {
+        findingCount: findingTitles.length,
+        found: true as const,
+        hasFacts: facts != null,
+        name: label.name,
+        prompt: body,
+        promptVersion: version,
+      };
+    } catch (error) {
+      throw apiFault(error);
+    }
+  });
+
   // GET /admin/labels/bio-queue — agent tier (`adminAuth`), the list_labels_admin
   // precedent: the bio worklist (labels with findings but no bio yet), oldest-first.
   const listLabelsMissingBioHandler = os.list_labels_missing_bio
@@ -164,6 +213,7 @@ export function adminLabelsHandlers(os: Implementer) {
   return {
     confirm_label_alias: confirmLabelAliasHandler,
     describe_label: describeLabelHandler,
+    draft_label_bio: draftLabelBioHandler,
     list_label_aliases: listLabelAliasesHandler,
     list_labels_admin: listLabelsAdminHandler,
     list_labels_missing_bio: listLabelsMissingBioHandler,

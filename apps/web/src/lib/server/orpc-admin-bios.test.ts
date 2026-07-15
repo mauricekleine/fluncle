@@ -17,6 +17,10 @@ const listArtistsMissingBio = vi.fn();
 const getLabelBySlug = vi.fn();
 const fillEmptyLabelBio = vi.fn();
 const listLabelsMissingBio = vi.fn();
+const fetchEntityFacts = vi.fn();
+const buildEntityBioPrompt = vi.fn();
+const getFindingsByArtist = vi.fn();
+const getFindingsByLabel = vi.fn();
 
 // The router graph imports `env` from cloudflare:workers at module load; stub it so the
 // import resolves in the test runtime (this suite touches no Worker binding).
@@ -44,6 +48,28 @@ vi.mock("./labels", async (importOriginal) => {
   };
 });
 
+// The bio-draft handler gathers Worker-side: keep the real `gateBioText` (the describe path
+// depends on it) but stub the Firecrawl gather + the prompt assembly the draft op drives.
+vi.mock("./bio", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./bio")>();
+
+  return {
+    ...actual,
+    buildEntityBioPrompt: (...args: unknown[]) => buildEntityBioPrompt(...args),
+    fetchEntityFacts: (...args: unknown[]) => fetchEntityFacts(...args),
+  };
+});
+
+vi.mock("./tracks", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./tracks")>();
+
+  return {
+    ...actual,
+    getFindingsByArtist: (...args: unknown[]) => getFindingsByArtist(...args),
+    getFindingsByLabel: (...args: unknown[]) => getFindingsByLabel(...args),
+  };
+});
+
 beforeAll(() => {
   setAdminTokenEnv();
 });
@@ -62,6 +88,10 @@ beforeEach(() => {
   getLabelBySlug.mockReset();
   fillEmptyLabelBio.mockReset();
   listLabelsMissingBio.mockReset();
+  fetchEntityFacts.mockReset();
+  buildEntityBioPrompt.mockReset();
+  getFindingsByArtist.mockReset();
+  getFindingsByLabel.mockReset();
 });
 
 // ── describe_artist ───────────────────────────────────────────────────────────
@@ -239,5 +269,123 @@ describe("the bio worklists (agent-tier reads)", () => {
     expect(response?.status).toBe(200);
     const data = (await readJson(response)) as { labels: { slug: string }[] };
     expect(data.labels).toEqual([{ id: "l1", name: "Signature", slug: "signature" }]);
+  });
+});
+
+// ── the Worker-paced bio DRAFTS (agent-tier grounding reads) ──────────────────────
+// The seam that closes the box's grounding gap: the Worker runs Firecrawl (its key) + pulls
+// the finding titles (its DB) and assembles the registered prompt, handing the box a
+// ready-to-author prompt. A pure read; publishes nothing; found:false on an unknown slug.
+type BioDraft = {
+  findingCount: number;
+  found: boolean;
+  hasFacts: boolean;
+  name: string;
+  prompt: string;
+  promptVersion: number;
+};
+
+describe("draft_artist_bio (GET /admin/artists/{slug}/bio-draft)", () => {
+  it("401s with no admin token (the adminAuth tier)", async () => {
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(req("/admin/artists/calibre/bio-draft", "GET", undefined));
+
+    expect(response?.status).toBe(401);
+  });
+
+  it("assembles the prompt from Firecrawl facts + finding titles (hasFacts true)", async () => {
+    getArtistBySlug.mockResolvedValueOnce(ARTIST);
+    getFindingsByArtist.mockResolvedValueOnce([{ title: "Iron Heart" }, { title: "Mr Right On" }]);
+    fetchEntityFacts.mockResolvedValueOnce({ facts: "A producer on Signature.", sources: ["u"] });
+    buildEntityBioPrompt.mockResolvedValueOnce({ body: "THE ASSEMBLED PROMPT", version: 3 });
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(req("/admin/artists/calibre/bio-draft", "GET", AGENT_TOKEN));
+
+    expect(response?.status).toBe(200);
+    const data = (await readJson(response)) as BioDraft;
+    expect(data.found).toBe(true);
+    expect(data.name).toBe("Calibre");
+    expect(data.findingCount).toBe(2);
+    expect(data.prompt).toBe("THE ASSEMBLED PROMPT");
+    expect(data.promptVersion).toBe(3);
+    expect(data.hasFacts).toBe(true);
+    // The finding TITLES the box cannot reach are gathered Worker-side and passed through.
+    expect(buildEntityBioPrompt).toHaveBeenCalledWith({
+      facts: "A producer on Signature.",
+      findingTitles: ["Iron Heart", "Mr Right On"],
+      kind: "artist",
+      name: "Calibre",
+    });
+  });
+
+  it("reports hasFacts:false when Firecrawl gathered nothing", async () => {
+    getArtistBySlug.mockResolvedValueOnce(ARTIST);
+    getFindingsByArtist.mockResolvedValueOnce([{ title: "Iron Heart" }]);
+    fetchEntityFacts.mockResolvedValueOnce(null);
+    buildEntityBioPrompt.mockResolvedValueOnce({ body: "PROMPT (no facts)", version: 0 });
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(req("/admin/artists/calibre/bio-draft", "GET", AGENT_TOKEN));
+
+    expect(response?.status).toBe(200);
+    const data = (await readJson(response)) as BioDraft;
+    expect(data.hasFacts).toBe(false);
+    expect(data.prompt).toBe("PROMPT (no facts)");
+    expect(buildEntityBioPrompt).toHaveBeenCalledWith(
+      expect.objectContaining({ facts: null, kind: "artist" }),
+    );
+  });
+
+  it("returns found:false for an unknown slug (never throws)", async () => {
+    getArtistBySlug.mockResolvedValueOnce(undefined);
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(req("/admin/artists/nope/bio-draft", "GET", AGENT_TOKEN));
+
+    expect(response?.status).toBe(200);
+    const data = (await readJson(response)) as BioDraft;
+    expect(data.found).toBe(false);
+    expect(data.prompt).toBe("");
+    expect(fetchEntityFacts).not.toHaveBeenCalled();
+    expect(buildEntityBioPrompt).not.toHaveBeenCalled();
+  });
+});
+
+describe("draft_label_bio (GET /admin/labels/{slug}/bio-draft)", () => {
+  it("assembles the label prompt from facts + finding titles", async () => {
+    getLabelBySlug.mockResolvedValueOnce(LABEL);
+    getFindingsByLabel.mockResolvedValueOnce([{ title: "Mr Right On" }]);
+    fetchEntityFacts.mockResolvedValueOnce({ facts: "A London imprint.", sources: ["u"] });
+    buildEntityBioPrompt.mockResolvedValueOnce({ body: "LABEL PROMPT", version: 0 });
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(req("/admin/labels/signature/bio-draft", "GET", AGENT_TOKEN));
+
+    expect(response?.status).toBe(200);
+    const data = (await readJson(response)) as BioDraft;
+    expect(data.found).toBe(true);
+    expect(data.name).toBe("Signature");
+    expect(data.findingCount).toBe(1);
+    expect(data.prompt).toBe("LABEL PROMPT");
+    expect(data.hasFacts).toBe(true);
+    expect(buildEntityBioPrompt).toHaveBeenCalledWith({
+      facts: "A London imprint.",
+      findingTitles: ["Mr Right On"],
+      kind: "label",
+      name: "Signature",
+    });
+  });
+
+  it("returns found:false for an unknown label slug", async () => {
+    getLabelBySlug.mockResolvedValueOnce(undefined);
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(req("/admin/labels/nope/bio-draft", "GET", AGENT_TOKEN));
+
+    expect(response?.status).toBe(200);
+    const data = (await readJson(response)) as BioDraft;
+    expect(data.found).toBe(false);
+    expect(buildEntityBioPrompt).not.toHaveBeenCalled();
   });
 });
