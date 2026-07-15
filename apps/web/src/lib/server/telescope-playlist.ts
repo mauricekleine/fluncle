@@ -48,6 +48,15 @@ const TELESCOPE_PLAYLIST_NAME = "Fluncle's Telescope";
 const TELESCOPE_PLAYLIST_DESCRIPTION =
   "What the telescope is pointed at. Candidates, not findings. The log decides.";
 
+/** Names the failing Spotify call in the error, so a 403 says WHICH request it refused. */
+async function step<T>(name: string, request: Promise<T>): Promise<T> {
+  try {
+    return await request;
+  } catch (error) {
+    throw new Error(`[${name}] ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
 /** `open.spotify.com/track/<id>` → `spotify:track:<id>`; null for anything else. */
 export function spotifyUriFromUrl(url: null | string): null | string {
   if (!url) {
@@ -70,17 +79,22 @@ async function ensureTelescopePlaylist(accessToken: string): Promise<string> {
     return stored;
   }
 
-  const me = (await (await spotifyFetch("/me", accessToken)).json()) as { id: string };
+  const me = (await (await step("me", spotifyFetch("/me", accessToken))).json()) as {
+    id: string;
+  };
   const created = (await (
-    await spotifyFetch(`/users/${me.id}/playlists`, accessToken, {
-      body: JSON.stringify({
-        description: TELESCOPE_PLAYLIST_DESCRIPTION,
-        name: TELESCOPE_PLAYLIST_NAME,
-        public: false,
+    await step(
+      "create",
+      spotifyFetch(`/users/${me.id}/playlists`, accessToken, {
+        body: JSON.stringify({
+          description: TELESCOPE_PLAYLIST_DESCRIPTION,
+          name: TELESCOPE_PLAYLIST_NAME,
+          public: false,
+        }),
+        headers: { "Content-Type": "application/json" },
+        method: "POST",
       }),
-      headers: { "Content-Type": "application/json" },
-      method: "POST",
-    })
+    )
   ).json()) as { id: string };
 
   await setSetting(TELESCOPE_PLAYLIST_SETTING, created.id);
@@ -113,11 +127,14 @@ export async function syncTelescopePlaylist(): Promise<TelescopeSyncResult> {
       const accessToken = await getSpotifyAccessToken();
       const playlistId = await ensureTelescopePlaylist(accessToken);
 
-      await spotifyFetch(`/playlists/${playlistId}/tracks`, accessToken, {
-        body: JSON.stringify({ uris: desired }),
-        headers: { "Content-Type": "application/json" },
-        method: "PUT",
-      });
+      await step(
+        "replace",
+        spotifyFetch(`/playlists/${playlistId}/tracks`, accessToken, {
+          body: JSON.stringify({ uris: desired }),
+          headers: { "Content-Type": "application/json" },
+          method: "PUT",
+        }),
+      );
       // Stored only AFTER the PUT landed, so a failed write is retried next sync.
       await setSetting(TELESCOPE_MIRROR_SETTING, mirror);
     }
