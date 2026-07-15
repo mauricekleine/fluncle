@@ -101,6 +101,27 @@ for (const cron of crons) {
   assert.equal(cron.probeConfig?.kind, "cron", `${cron.name}: a cron is freshness-probed`);
 }
 
+// ── Every status-visible surface carries its /status title + description ──────
+// THE RECURRENCE GUARD. A cron surface's registry `name` IS its /status service id
+// (e.g. `cron.enrich`), and the /status page reads that row's display title + one-line
+// subtitle STRAIGHT from the surface's `title`/`statusDescription` (see status.tsx —
+// the registry is the single source of truth for both). So a cron added here without
+// them would render as a raw `cron.<slug>` with no description — the exact decoupling
+// this field pair closes. Enforce it: every cron the board shows carries both,
+// non-empty. (The core HTTP probes appear under short infra aliases — `web`/`r2`/`dns`
+// — that are NOT registry names, so their labels live in status.tsx's INFRA map,
+// guarded there by the apps/web coverage test.)
+for (const cron of crons) {
+  assert.ok(
+    cron.title !== undefined && cron.title.trim().length > 0,
+    `${cron.name}: a status-visible surface must carry a non-empty title`,
+  );
+  assert.ok(
+    cron.statusDescription !== undefined && cron.statusDescription.trim().length > 0,
+    `${cron.name}: a status-visible surface must carry a non-empty statusDescription`,
+  );
+}
+
 // Sanity anchors — the load-bearing surfaces a consumer is sure to want.
 assert.ok(
   SURFACES.some((surface) => surface.name === "discovery.llms"),
