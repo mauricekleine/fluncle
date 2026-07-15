@@ -517,7 +517,7 @@ async function readSpotifyAuthRow(): Promise<SpotifyAuthRow | undefined> {
   return typedRow<SpotifyAuthRow>(result.rows);
 }
 
-async function getSpotifyAccessToken(): Promise<string> {
+export async function getSpotifyAccessToken(): Promise<string> {
   const auth = await readSpotifyAuthRow();
 
   if (!auth) {
@@ -682,7 +682,7 @@ async function upsertSpotifyAuth(
   });
 }
 
-async function spotifyFetch(
+export async function spotifyFetch(
   path: string,
   accessToken: string,
   init: RequestInit = {},

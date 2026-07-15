@@ -184,6 +184,19 @@ export const MIN_TRACK_MS = 60_000;
 export const WRONG_AUDIO_QUARANTINE = 0.9995;
 
 /**
+ * THE DIVERSITY DECAY (operator ruling, 2026-07-15): the ear's raw ranking is max-similarity,
+ * which is structurally a sonic-clone magnet — an artist Fluncle has logged boosts ALL their
+ * other tracks, and a page of eleven A-minor rollers from 2019 is a worse telescope than a
+ * spread. So the ranked PAGE is re-ordered greedily: each candidate's raw score is decayed by
+ * how many rows of the same artist / release year / musical key already sit above it
+ * (raw × ARTIST^a × YEAR^y × KEY^k). Read-time only — the STORED score stays pure similarity
+ * (the WHY the row displays), labels deliberately carry no decay (the operator's call), and a
+ * missing year/key simply contributes no factor. Artist decays hardest (the clone magnet),
+ * year gentler, key gentlest (a mixtape-building nicety, not a taste statement).
+ */
+export const EAR_DIVERSITY_DECAY = { artist: 0.97, key: 0.99, year: 0.985 } as const;
+
+/**
  * The `capture_status` a quarantined row carries — a wrong-audio capture awaiting re-download
  * (docs/the-ear.md § Wrong audio). It is a re-capture TRIGGER in the capture work queue
  * (track-work.ts) and a GUARD the embed/analyze queues honour (they must not re-embed the bad
@@ -1423,9 +1436,10 @@ export async function listCatalogueTracks(
   limit = 50,
 ): Promise<CatalogueTrackItem[]> {
   const page = Math.min(Math.max(1, limit), 200);
-  // The ear lens over-fetches: the display-band duplicate filter below may drop a few
-  // rows, and the page should stay full. 25 covers the realistic dup count per page.
-  const fetchLimit = lens === "ear" ? page + 25 : page;
+  // The ear lens over-fetches a POOL, not a page: the display-band duplicate filter drops
+  // rows, and the diversity re-rank needs candidates beyond the raw top so a decayed clone
+  // can be displaced by a fresh artist that scored slightly lower.
+  const fetchLimit = lens === "ear" ? Math.min(page * 3 + 25, 500) : page;
   const db = await getDb();
   // EVERY lens but `dismissed` filters `ct.dismissed_at is null`: a dismissed row is out of the
   // telescope and the capture ladder both, and only the `dismissed` lens (the restore pile) shows
@@ -1581,12 +1595,85 @@ export async function listCatalogueTracks(
   // band — a near-1.0 match on the finding it scored against) never occupies a ranked slot:
   // a known duplicate is not a discovery, and its perfect score would sit above every real
   // one (the operator's ruling, 2026-07-15 — the Anwius "Trust" case). The marker itself
-  // stays display-only; only the EAR ranking excludes it.
+  // stays display-only; only the EAR ranking excludes it. The survivors then pass through
+  // the diversity decay (EAR_DIVERSITY_DECAY) before the page is cut.
   if (lens === "ear") {
-    return items.filter((item) => item.duplicateOf === null).slice(0, page);
+    return diversifyEarPage(
+      items.filter((item) => item.duplicateOf === null),
+      page,
+    );
   }
 
   return items;
+}
+
+/**
+ * The greedy diversified selection (EAR_DIVERSITY_DECAY): repeatedly pick the candidate whose
+ * raw score, decayed by how many already-picked rows share its artist / year / key, is highest.
+ * O(pool × page) over a ≤500 pool — pennies. Deterministic: ties break on the raw order the
+ * pool arrived in (score DESC, track_id ASC).
+ */
+function diversifyEarPage(pool: CatalogueTrackItem[], page: number): CatalogueTrackItem[] {
+  const picked: CatalogueTrackItem[] = [];
+  const artistSeen = new Map<string, number>();
+  const yearSeen = new Map<string, number>();
+  const keySeen = new Map<string, number>();
+  const remaining = [...pool];
+
+  const artistOf = (item: CatalogueTrackItem): null | string =>
+    item.artists[0] ? item.artists[0].trim().toLowerCase() : null;
+  const yearOf = (item: CatalogueTrackItem): null | string =>
+    item.releaseDate ? item.releaseDate.slice(0, 4) : null;
+  const keyOf = (item: CatalogueTrackItem): null | string =>
+    item.key ? item.key.trim().toLowerCase() : null;
+
+  while (picked.length < page && remaining.length > 0) {
+    let bestIndex = 0;
+    let bestScore = -Infinity;
+
+    for (const [index, item] of remaining.entries()) {
+      const raw = item.nearestFindingScore ?? 0;
+      const artist = artistOf(item);
+      const year = yearOf(item);
+      const key = keyOf(item);
+      const decayed =
+        raw *
+        EAR_DIVERSITY_DECAY.artist ** (artist ? (artistSeen.get(artist) ?? 0) : 0) *
+        EAR_DIVERSITY_DECAY.year ** (year ? (yearSeen.get(year) ?? 0) : 0) *
+        EAR_DIVERSITY_DECAY.key ** (key ? (keySeen.get(key) ?? 0) : 0);
+
+      if (decayed > bestScore) {
+        bestScore = decayed;
+        bestIndex = index;
+      }
+    }
+
+    const [chosen] = remaining.splice(bestIndex, 1);
+
+    if (chosen === undefined) {
+      break;
+    }
+
+    const artist = artistOf(chosen);
+    const year = yearOf(chosen);
+    const key = keyOf(chosen);
+
+    if (artist) {
+      artistSeen.set(artist, (artistSeen.get(artist) ?? 0) + 1);
+    }
+
+    if (year) {
+      yearSeen.set(year, (yearSeen.get(year) ?? 0) + 1);
+    }
+
+    if (key) {
+      keySeen.set(key, (keySeen.get(key) ?? 0) + 1);
+    }
+
+    picked.push(chosen);
+  }
+
+  return picked;
 }
 
 /** Hydrate the page's matched findings in ONE batched read (never N+1), keyed by track id. */

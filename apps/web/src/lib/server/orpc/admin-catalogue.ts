@@ -47,6 +47,7 @@ import {
   setTrackDismissed,
   verifyCapture,
 } from "../catalogue";
+import { syncTelescopePlaylist } from "../telescope-playlist";
 import { crawlCatalogue, DEFAULT_MAX_HOP, getCrawlStatus, MAX_HOP_CEILING } from "../crawl";
 import { adminAuth, operatorGuard } from "../orpc-auth";
 import { certifyExistingTrack } from "../publish";
@@ -94,7 +95,13 @@ export function adminCatalogueHandlers(os: Implementer) {
   // POST /admin/catalogue/rank — one tick of the sweep. `remaining > 0` means run it again.
   const rankCatalogueHandler = os.rank_catalogue.use(adminAuth).handler(async ({ input }) => {
     try {
-      return { ok: true, summary: await rankCatalogue(input.limit) } as const;
+      const summary = await rankCatalogue(input.limit);
+
+      // The Telescope mirror rides the sweep: rankings changed, so the private playlist
+      // re-syncs. Best-effort by construction — the sync never throws.
+      await syncTelescopePlaylist();
+
+      return { ok: true, summary } as const;
     } catch (error) {
       throw apiFault(error);
     }
@@ -196,6 +203,9 @@ export function adminCatalogueHandlers(os: Implementer) {
       try {
         const { logId } = await certifyExistingTrack(input.trackId, { note: input.note });
 
+        // A certified row leaves the telescope (the anti-join); mirror it out promptly.
+        await syncTelescopePlaylist();
+
         return { logId, ok: true } as const;
       } catch (error) {
         throw apiFault(error);
@@ -211,10 +221,15 @@ export function adminCatalogueHandlers(os: Implementer) {
     .use(operatorGuard)
     .handler(async ({ input }) => {
       try {
-        return {
-          changed: await setTrackDismissed(input.trackId, input.dismissed),
-          ok: true,
-        } as const;
+        const changed = await setTrackDismissed(input.trackId, input.dismissed);
+
+        // The thumbs-down IS the playlist removal (operator ruling): a dismissed row leaves
+        // the telescope, so the mirror follows on the same act, not the next sweep.
+        if (changed) {
+          await syncTelescopePlaylist();
+        }
+
+        return { changed, ok: true } as const;
       } catch (error) {
         throw apiFault(error);
       }

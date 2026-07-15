@@ -63,7 +63,9 @@ async function embed(trackId: string, vector: number[]): Promise<void> {
 type SeedOptions = {
   artists?: string[];
   isrc?: string;
+  key?: string;
   label?: string;
+  releaseDate?: string;
   title?: string;
   vector?: number[];
 };
@@ -98,6 +100,20 @@ async function applySeedOptions(trackId: string, options: SeedOptions): Promise<
 
   if (options.isrc) {
     await db.execute({ args: [options.isrc, trackId], sql: isrcSql });
+  }
+
+  if (options.releaseDate) {
+    await db.execute({
+      args: [options.releaseDate, trackId],
+      sql: "update tracks set release_date = ? where track_id = ?",
+    });
+  }
+
+  if (options.key) {
+    await db.execute({
+      args: [options.key, trackId],
+      sql: 'update tracks set "key" = ? where track_id = ?',
+    });
   }
 
   if (options.vector) {
@@ -1560,5 +1576,58 @@ describe("the long-form veto — a continuous mix never reaches a lens or the mo
     const capture = await listCatalogueTracks("capture");
     const pending = capture.find((t) => t.trackId === "obs-pending");
     expect(pending?.captureStatus).toBe("pending");
+  });
+});
+
+describe("the diversity decay — the ear page spreads artists, years, and keys", () => {
+  it("a same-artist clone wall is interleaved: the fresh artist rises past the second clone", async () => {
+    const { listCatalogueTracks, rankCatalogue } = await import("./catalogue");
+
+    await seedFinding("finding-anchor", { vector: axis(0) });
+
+    // Three near-identical rows by ONE artist (the clone magnet), descending raw score...
+    await seedCatalogue("cat-clone-1", {
+      artists: ["Clone Artist"],
+      key: "A Minor",
+      releaseDate: "2019-05-01",
+      vector: blend(axis(0), axis(1), 0.16),
+    });
+    await seedCatalogue("cat-clone-2", {
+      artists: ["Clone Artist"],
+      key: "A Minor",
+      releaseDate: "2019-06-01",
+      vector: blend(axis(0), axis(1), 0.18),
+    });
+    await seedCatalogue("cat-clone-3", {
+      artists: ["Clone Artist"],
+      key: "A Minor",
+      releaseDate: "2019-07-01",
+      vector: blend(axis(0), axis(1), 0.2),
+    });
+    // ...and a different artist scoring just below clone-2's raw score. Undecayed it ranks
+    // third; the artist decay on clone-2 (second Clone Artist row) drops it below.
+    await seedCatalogue("cat-fresh", {
+      artists: ["Fresh Artist"],
+      key: "F Major",
+      releaseDate: "2023-01-01",
+      vector: blend(axis(0), axis(1), 0.19),
+    });
+
+    await rankCatalogue();
+
+    const page = await listCatalogueTracks("ear");
+
+    // Raw order would be clone-1, clone-2, fresh, clone-3. Diversified: clone-1 leads (best
+    // raw), then FRESH (clone-2 pays the artist decay), then the remaining clones.
+    expect(page.map((track) => track.trackId)).toEqual([
+      "cat-clone-1",
+      "cat-fresh",
+      "cat-clone-2",
+      "cat-clone-3",
+    ]);
+
+    // The DISPLAYED score stays the raw similarity — the decay re-orders, never rewrites.
+    const fresh = page.find((track) => track.trackId === "cat-fresh");
+    expect(fresh?.nearestFindingScore ?? 0).toBeGreaterThan(0.9);
   });
 });
