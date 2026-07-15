@@ -119,7 +119,7 @@ function PreviewBody({
     return <p className="graph-card-loading">Digging that out…</p>;
   }
 
-  const { covers, findingCount, line, name } = preview;
+  const { bio, covers, findingCount, line, name } = preview;
 
   return (
     <>
@@ -134,6 +134,11 @@ function PreviewBody({
       {/* No findings ⇒ the page prints no opening line, so neither does the card. It carries
           the page's sentence or it carries none; it never writes one of its own. */}
       {line ? <p className="graph-card-line">{line}</p> : undefined}
+      {/* The factual bio, BELOW the signature line — the full page's order (Fluncle's relation
+          first, then the objective paragraph). Clamped so a 3–4 sentence bio never makes the
+          card tall. Absent (album/galaxy, or an entity still awaiting its backfilled bio) ⇒ no
+          row, no gap. */}
+      {bio ? <p className="graph-card-bio">{bio}</p> : undefined}
       {findingCount > 0 ? (
         <p className="graph-card-count">
           {findingsCount(findingCount)} {COUNT_NOUN[kind]}

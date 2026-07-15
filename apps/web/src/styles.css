@@ -4814,6 +4814,21 @@ body::before {
   text-wrap: pretty;
 }
 
+/* The factual entity bio on the hover card — the muted body register of the full page's
+   .log-index-bio, one notch smaller than the signature line above it, and CLAMPED to four lines
+   so a 3–4 sentence bio never grows the card tall. Stardust STRAIGHT (no opacity), the same
+   AA-proven muted ink the line + count take on the tape-black card. */
+.graph-card-bio {
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  color: var(--stardust);
+  display: -webkit-box;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  overflow: hidden;
+  text-wrap: pretty;
+}
+
 /* The count and the pre-arrival line take Stardust STRAIGHT — no `opacity`. Stardust already
    IS the canon's muted ink; dimming it invents an ink below the palette's floor, and both
    lines were sitting within a rounding error of the 4.5:1 AA gate because of it. Unmodified,

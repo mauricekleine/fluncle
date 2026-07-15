@@ -97,6 +97,9 @@ export async function getGraphPreview(kind: GraphEntityKind, slug: string): Prom
   const findings = entity.findings.filter((finding) => finding.logId);
 
   return {
+    // The factual bio (artist/label carry it; albums do not — `resolveEntity` returns it only
+    // where the entity read has it). Undefined ⇒ the card renders no bio row, exactly as before.
+    bio: entity.bio,
     // A label leads with its own logo (when the sweep has resolved one); artists/albums have no
     // lead cover, so their cards read exactly as before.
     covers: coversOf(findings, entity.leadCover),
@@ -116,13 +119,15 @@ async function resolveEntity(
   kind: Exclude<GraphEntityKind, "galaxy">,
   slug: string,
 ): Promise<
-  { findings: TrackListItem[]; leadCover?: string; name: string; slug: string } | undefined
+  | { bio?: string; findings: TrackListItem[]; leadCover?: string; name: string; slug: string }
+  | undefined
 > {
   if (kind === "artist") {
     const artist = await getArtistBySlug(slug);
 
     return artist
       ? {
+          bio: artist.bio,
           findings: await getFindingsByArtist(artist.id, artist.name),
           name: artist.name,
           slug: artist.slug,
@@ -133,6 +138,7 @@ async function resolveEntity(
   if (kind === "album") {
     const album = await getAlbumBySlug(slug);
 
+    // Albums carry no bio — the card omits the row for them.
     return album
       ? { findings: await getFindingsByAlbum(album.id), name: album.name, slug: album.slug }
       : undefined;
@@ -142,6 +148,7 @@ async function resolveEntity(
 
   return label
     ? {
+        bio: label.bio,
         findings: await getFindingsByLabel(label.id),
         leadCover: label.logoImageUrl,
         name: label.name,

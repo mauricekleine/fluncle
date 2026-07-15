@@ -61,8 +61,17 @@ vi.mock("@/lib/server/tracks", async (importOriginal) => ({
   listCatalogueTracksByAlbum,
 }));
 
-const { resolveLabelPageData } = await import("./label.$slug");
+const { Route: LabelRoute, resolveLabelPageData } = await import("./label.$slug");
 const { resolveAlbumPageData } = await import("./album.$slug");
+
+/** The label route's `<meta name="description">` — the same string og:/twitter: description carry. */
+function labelMetaDescription(data: unknown): string | undefined {
+  const head = LabelRoute.options.head?.({ loaderData: data } as never) as
+    | { meta?: Array<{ content?: string; name?: string }> }
+    | undefined;
+
+  return head?.meta?.find((entry) => entry.name === "description")?.content;
+}
 
 const LABEL = { id: "lbl_1", name: "Hospital Records", slug: "hospital-records" };
 const ALBUM = { id: "alb_1", name: "Wormhole", slug: "wormhole" };
@@ -225,6 +234,31 @@ describe("the label page", () => {
     getLabelBySlug.mockResolvedValue(LABEL);
     const withoutBio = await resolveLabelPageData("hospital-records", "name", 1);
     expect(withoutBio.status === "found" && withoutBio.bio).toBeUndefined();
+  });
+
+  it("derives a ≤160-char meta description from the bio, and the template when there is none", async () => {
+    getFindingsByLabel.mockResolvedValue(findings(1));
+
+    // A bio over the meta cap: the description is bio-derived, trimmed to ≤160, and drops the
+    // catalogue-count template (unique per label, not the near-duplicate line).
+    const bio =
+      "Hospital Records is a British drum and bass label founded in 1996 by London Elektricity, " +
+      "long the definitive home of liquid and soulful drum and bass across a deep back catalogue.";
+    getLabelBySlug.mockResolvedValue({ ...LABEL, bio });
+    const withBio = await resolveLabelPageData("hospital-records", "name", 1);
+
+    const desc = labelMetaDescription(withBio);
+    expect(desc).toBeDefined();
+    expect((desc ?? "").length).toBeLessThanOrEqual(160);
+    expect(desc).not.toContain("each with a coordinate");
+    expect(desc?.startsWith("Hospital Records is a British drum and bass label")).toBe(true);
+
+    // No bio ⇒ the original template is preserved verbatim (no regression).
+    getLabelBySlug.mockResolvedValue(LABEL);
+    const withoutBio = await resolveLabelPageData("hospital-records", "name", 1);
+    expect(labelMetaDescription(withoutBio)).toBe(
+      "Every banger Fluncle has found on Hospital Records and logged in the Galaxy, 1 so far, each with a coordinate.",
+    );
   });
 
   it("counts the quieter rows toward the floor (they are content on the page)", async () => {
