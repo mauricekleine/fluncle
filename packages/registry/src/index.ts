@@ -1073,6 +1073,30 @@ export const SURFACES: readonly Surface[] = [
     weights: { status: "hidden" },
   },
   {
+    command: "fluncle admin artists describe --queue",
+    exposedContent: [
+      "auto-author the /artist/<slug> voiced bio, fill-empty-only (hybrid: one claude -p call)",
+    ],
+    kind: "cron",
+    name: "cron.artist-bio",
+    operatorNotes:
+      "every 30m. Hybrid --no-agent; one claude -p authors the paragraph off best-effort Firecrawl facts + identity. Never clobbers an operator bio. Box activation operator-gated. Source: docs/agents/hermes/scripts/{entity-bio-sweep.ts,artist-bio-sweep.sh}.",
+    probeConfig: { cadenceMs: 30 * MINUTE_MS, cronName: "fluncle-artist-bio", kind: "cron" },
+    weights: { status: "hidden" },
+  },
+  {
+    command: "fluncle admin labels describe --queue",
+    exposedContent: [
+      "auto-author the /label/<slug> voiced bio, fill-empty-only (hybrid: one claude -p call)",
+    ],
+    kind: "cron",
+    name: "cron.label-bio",
+    operatorNotes:
+      "every 30m. Hybrid --no-agent; one claude -p authors the paragraph off best-effort Firecrawl facts + identity. Never clobbers an operator bio. Box activation operator-gated. Source: docs/agents/hermes/scripts/{entity-bio-sweep.ts,label-bio-sweep.sh}.",
+    probeConfig: { cadenceMs: 30 * MINUTE_MS, cronName: "fluncle-label-bio", kind: "cron" },
+    weights: { status: "hidden" },
+  },
+  {
     command: "fluncle admin submissions triage",
     exposedContent: [
       "pre-chew a pending crew submission → an advisory queue verdict, fill-first (hybrid: one claude -p call)",

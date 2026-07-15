@@ -26,6 +26,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { PROMPT_REGISTRY, renderPrompt } from "../../../../apps/web/src/lib/server/prompts";
+import { bioDefaultBody, buildEntityBioPrompt } from "./entity-bio-sweep";
 import { buildAuthoringPrompt as buildLogbookPrompt } from "./logbook-sweep";
 import { buildAuthoringPrompt as buildNewsletterPrompt } from "./newsletter-sweep";
 import { buildAuthoringPrompt as buildNotePrompt } from "./note-sweep";
@@ -156,6 +157,56 @@ describe("the registry default and the sweep's inlined fallback are the same pro
       buildAuthoringPromptTrimmed(() =>
         buildObservePrompt(finding, contextNote, neighbors, "my shoulders went before"),
       ),
+    );
+  });
+
+  // The entity bio: ONE sweep over two kinds, so BOTH describe_* defaults are pinned, and
+  // BOTH the facts and the no-facts arms (the `{{#if facts}}` / `{{#if noFacts}}` two-flag
+  // pattern is where a renderer with no `else` is easiest to get subtly wrong). The body
+  // copies are asserted equal directly too — the truest drift guard.
+  test("describe_artist — the body copies match", () => {
+    expect(bioDefaultBody("artist")).toBe(PROMPT_REGISTRY.describe_artist.defaultBody);
+  });
+
+  test("describe_label — the body copies match", () => {
+    expect(bioDefaultBody("label")).toBe(PROMPT_REGISTRY.describe_label.defaultBody);
+  });
+
+  test("describe_artist — with facts", () => {
+    expect(
+      fromRegistry("describe_artist", {
+        facts: "A producer on Hospital Records.",
+        findingCount: "3",
+        findings: "  - Iron Heart",
+        name: "Netsky",
+      }),
+    ).toBe(
+      buildEntityBioPrompt("artist", {
+        facts: "A producer on Hospital Records.",
+        findingCount: "3",
+        findings: "  - Iron Heart",
+        name: "Netsky",
+      }).trim(),
+    );
+  });
+
+  // The no-facts arm: the `{{#if noFacts}}` branch must reproduce the "author from findings
+  // alone" line exactly when there are no facts.
+  test("describe_label — the NO-facts arm", () => {
+    expect(
+      fromRegistry("describe_label", {
+        findingCount: "5",
+        findings: "  - Mr Right On",
+        name: "Signature",
+        noFacts: "true",
+      }),
+    ).toBe(
+      buildEntityBioPrompt("label", {
+        facts: "",
+        findingCount: "5",
+        findings: "  - Mr Right On",
+        name: "Signature",
+      }).trim(),
     );
   });
 
