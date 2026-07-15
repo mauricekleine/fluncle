@@ -50,6 +50,11 @@ type LabelPageData =
       /** The label's CONFIRMED alternate spellings — the Organization JSON-LD's `alternateName`. */
       alternateNames: string[];
       artists: ArtistChip[];
+      /**
+       * The label's voiced bio — a short paragraph beneath the dateline, undefined until one is
+       * authored (lib/server/bio.ts). The masthead renders it only when present.
+       */
+      bio: string | undefined;
       /** The crawled catalogue, grouped by artist — one page of it, plus SQL-counted totals. */
       catalogue: CatalogueGroupPage<CatalogueArtistGroup>;
       findings: TrackListItem[];
@@ -114,6 +119,7 @@ export async function resolveLabelPageData(
   return {
     alternateNames,
     artists,
+    bio: label.bio,
     catalogue,
     findings,
     // Thin-content gate: index only past LABEL_INDEX_MIN_TRACKS RENDERABLE tracks — the
@@ -262,7 +268,7 @@ function LabelPage() {
     return null;
   }
 
-  const { artists, catalogue, findings, name, slug, sort } = data;
+  const { artists, bio, catalogue, findings, name, slug, sort } = data;
   const signature = labelSignatureLine(name, findings.length, firstFoundAt(findings));
 
   return (
@@ -273,6 +279,9 @@ function LabelPage() {
           <h1 className="log-coordinate log-index-title artist-name">{name}</h1>
           {/* No findings, no line. The masthead is just the name (lib/graph-prose.ts). */}
           {signature ? <p className="log-index-intro">{signature}</p> : undefined}
+          {/* The voiced bio sits directly beneath the dateline — body prose that augments the
+              relationship line, never replaces it. Only rendered once one is authored. */}
+          {bio ? <p className="log-index-bio">{bio}</p> : undefined}
         </header>
 
         {/* Every band below is conditional: an empty one renders nothing at all, so this page

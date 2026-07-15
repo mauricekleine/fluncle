@@ -296,6 +296,9 @@ export function buildChatTools() {
             // No avatar rides on the artist record; the freshest certified finding's cover is
             // the representative image (ArtistAvatar/TrackArtwork degrade to a monogram tile).
             avatarUrl: findings[0]?.albumImageUrl,
+            // The voiced entity bio — undefined until one is authored, so `dropEmpty` ships it
+            // only when it is real (the card renders it as a quiet intro paragraph).
+            bio: artist.bio,
             findingCount,
             findings,
             name: artist.name,
@@ -336,6 +339,9 @@ export function buildChatTools() {
         return {
           label: dropEmpty({
             aliases,
+            // The voiced entity bio — undefined until one is authored, so `dropEmpty` ships it
+            // only when it is real (the card renders it as a quiet intro paragraph).
+            bio: label.bio,
             findingCount: certified.length,
             findings: certified.slice(0, MAX_ENTITY_FINDINGS),
             logoUrl: label.logoImageUrl,

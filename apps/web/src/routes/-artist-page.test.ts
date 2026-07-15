@@ -160,4 +160,23 @@ describe("resolveArtistPageData (the artist page indexability gate)", () => {
       { imageUrl: "https://i.scdn.co/image/echo", name: "Echo", slug: "echo" },
     ]);
   });
+
+  it("carries the artist's bio into the page data when the record has one, undefined otherwise", async () => {
+    getFindingsByArtist.mockResolvedValue([finding("001.1.1A")]);
+    countArtistFindings.mockResolvedValue(1);
+
+    getArtistBySlug.mockResolvedValue({ ...ARTIST, bio: "Drift makes rollers for the deep end." });
+    const withBio = await resolveArtistPageData("drift", "name", 1);
+    if (withBio.status !== "found") {
+      throw new Error("expected the artist to be found");
+    }
+    expect(withBio.bio).toBe("Drift makes rollers for the deep end.");
+
+    getArtistBySlug.mockResolvedValue(ARTIST);
+    const withoutBio = await resolveArtistPageData("drift", "name", 1);
+    if (withoutBio.status !== "found") {
+      throw new Error("expected the artist to be found");
+    }
+    expect(withoutBio.bio).toBeUndefined();
+  });
 });
