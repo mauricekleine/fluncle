@@ -35,6 +35,8 @@ import { type KeyNotation } from "@/lib/key-notation";
 export type ChatArtist = {
   /** The freshest finding's cover, the representative image (no avatar rides on the record). */
   avatarUrl?: string;
+  /** The voiced entity bio — a short intro paragraph, present only once one is authored. */
+  bio?: string;
   findingCount?: number;
   findings?: ChatFinding[];
   name?: string;
@@ -107,6 +109,7 @@ export function ArtistCard({ artist, notation }: { artist: ChatArtist; notation:
   const socials = artist.socials ?? [];
   const findings = artist.findings ?? [];
   const count = artist.findingCount ?? findings.length;
+  const bio = artist.bio;
 
   return (
     <div className="flex flex-col gap-3 rounded-md border border-border bg-card px-3 py-2.5">
@@ -139,6 +142,12 @@ export function ArtistCard({ artist, notation }: { artist: ChatArtist; notation:
             <SocialLink key={social.platform} platform={social.platform} url={social.url} />
           ))}
         </nav>
+      ) : null}
+
+      {/* The voiced bio introduces the entity before its findings back it up — a quiet paragraph,
+          the same muted body register the archive uses for prose, never a hero block. */}
+      {bio ? (
+        <p className="whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">{bio}</p>
       ) : null}
 
       {findings.length > 0 ? <FindingList findings={findings} notation={notation} /> : null}

@@ -17,6 +17,8 @@ import { type KeyNotation } from "@/lib/key-notation";
 /** The label shape get_label emits — every field optional (the tool output rides `dropEmpty`). */
 export type ChatLabel = {
   aliases?: string[];
+  /** The voiced entity bio — a short intro paragraph, present only once one is authored. */
+  bio?: string;
   findingCount?: number;
   findings?: ChatFinding[];
   logoUrl?: string;
@@ -30,6 +32,7 @@ export function LabelCard({ label, notation }: { label: ChatLabel; notation: Key
   const findings = label.findings ?? [];
   const count = label.findingCount ?? findings.length;
   const aliases = label.aliases ?? [];
+  const bio = label.bio;
 
   return (
     <div className="flex flex-col gap-3 rounded-md border border-border bg-card px-3 py-2.5">
@@ -62,6 +65,12 @@ export function LabelCard({ label, notation }: { label: ChatLabel; notation: Key
           ) : null}
         </div>
       </div>
+
+      {/* The voiced bio introduces the entity before its findings back it up — a quiet paragraph,
+          the same muted body register the archive uses for prose, never a hero block. */}
+      {bio ? (
+        <p className="whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">{bio}</p>
+      ) : null}
 
       {findings.length > 0 ? <FindingList findings={findings} notation={notation} /> : null}
     </div>

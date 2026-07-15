@@ -71,6 +71,9 @@ type ArtistDossier = ArtistSignature & {
 
 type ArtistPageData =
   | {
+      // The artist's voiced bio — a short paragraph beneath the dateline, undefined until one
+      // is authored (lib/server/bio.ts). The masthead renders it only when present.
+      bio: string | undefined;
       // The rest of this artist's catalogue — their crawled tracks grouped into records, one
       // page of it (`catalogue-groups.ts` owns the bound). Empty until the catalogue lands.
       catalogue: CatalogueGroupPage<CatalogueRecord>;
@@ -172,6 +175,7 @@ export async function resolveArtistPageData(
   );
 
   return {
+    bio: artist.bio,
     catalogue,
     dossier: { ...signature, findingCount: gridFindings.length, neighbours },
     findings,
@@ -349,7 +353,7 @@ function ArtistPage() {
     return null;
   }
 
-  const { catalogue, dossier, findings, name, slug, socials, sort } = data;
+  const { bio, catalogue, dossier, findings, name, slug, socials, sort } = data;
   const grid = findings.filter((finding) => finding.logId);
 
   return (
@@ -361,6 +365,9 @@ function ArtistPage() {
           <p className="log-index-intro">
             {artistSignatureLine(name, dossier.findingCount, dossier.firstFoundAt)}
           </p>
+          {/* The voiced bio sits directly beneath the dateline — body prose that augments the
+              relationship line, never replaces it. Only rendered once one is authored. */}
+          {bio ? <p className="log-index-bio">{bio}</p> : undefined}
         </header>
 
         {/* The findings lead: the logged tracks are the primary entity in the

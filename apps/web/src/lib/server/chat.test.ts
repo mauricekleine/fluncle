@@ -441,6 +441,32 @@ describe("get_artist / get_label — the entity cards' grounding", () => {
     expect(result.artist.findings[0]?.title).toBe("Rio");
   });
 
+  it("get_artist ships the bio when the record carries one, and omits it when empty", async () => {
+    countArtistFindings.mockResolvedValue(1);
+    getFindingsByArtist.mockResolvedValue([
+      { artists: ["Netsky"], logId: "004.7.2I", title: "Rio" },
+    ]);
+    getPublicArtistSocials.mockResolvedValue([]);
+
+    getArtistBySlug.mockResolvedValue({
+      bio: "Belgian producer who bends liquid drum and bass toward daylight.",
+      id: "art-1",
+      name: "Netsky",
+      slug: "netsky",
+    });
+    const withBio = (await artistExecutor()({ name: "Netsky" }, {} as never)) as {
+      artist: { bio?: string };
+    };
+    expect(withBio.artist.bio).toBe(
+      "Belgian producer who bends liquid drum and bass toward daylight.",
+    );
+
+    // No bio on the record → `dropEmpty` strips the key entirely (not a null / empty string).
+    getArtistBySlug.mockResolvedValue({ id: "art-1", name: "Netsky", slug: "netsky" });
+    const withoutBio = await artistExecutor()({ name: "Netsky" }, {} as never);
+    expect(hasKeyDeep(withoutBio, "bio")).toBe(false);
+  });
+
   it("get_label resolves a NAME through the slug helper and returns the label's findings + aliases", async () => {
     getLabelBySlug.mockResolvedValue({
       id: "lbl-1",
@@ -470,6 +496,37 @@ describe("get_artist / get_label — the entity cards' grounding", () => {
     expect(result.label.findings.map((finding) => finding.coordinate)).toEqual(["004.7.2I"]);
     expect(result.label.aliases).toEqual(["Hospital"]);
     expect(result.label.logoUrl).toBe("https://found.example/logo.png");
+  });
+
+  it("get_label ships the bio when the record carries one, and omits it when empty", async () => {
+    getFindingsByLabel.mockResolvedValue([
+      { artists: ["Nu:Tone"], logId: "004.7.2I", title: "Better Places" },
+    ]);
+    getConfirmedAliasNames.mockResolvedValue([]);
+
+    getLabelBySlug.mockResolvedValue({
+      bio: "London imprint that has carried liquid drum and bass for two decades.",
+      id: "lbl-1",
+      logoImageUrl: undefined,
+      name: "Hospital Records",
+      slug: "hospital-records",
+    });
+    const withBio = (await labelExecutor()({ name: "Hospital Records" }, {} as never)) as {
+      label: { bio?: string };
+    };
+    expect(withBio.label.bio).toBe(
+      "London imprint that has carried liquid drum and bass for two decades.",
+    );
+
+    // No bio on the record → `dropEmpty` strips the key entirely (not a null / empty string).
+    getLabelBySlug.mockResolvedValue({
+      id: "lbl-1",
+      logoImageUrl: undefined,
+      name: "Hospital Records",
+      slug: "hospital-records",
+    });
+    const withoutBio = await labelExecutor()({ name: "Hospital Records" }, {} as never);
+    expect(hasKeyDeep(withoutBio, "bio")).toBe(false);
   });
 
   it("get_label returns found:false for a label with no certified finding on it", async () => {

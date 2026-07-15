@@ -2473,6 +2473,20 @@ body::before {
   margin-top: 0.4rem;
 }
 
+/* The voiced entity bio: body prose beneath the dateline. The same muted reading ink as the
+   intro dateline (--muted-foreground resolves to --stardust, AA-proven on the plate by the
+   adjacent .log-index-intro), set apart as a PARAGRAPH by its leading and readable measure
+   rather than by color; the Oxanium name stays the one loud register. Pre-wrapped so an
+   authored paragraph's line breaks survive. */
+.log-index-bio {
+  color: var(--muted-foreground);
+  font-size: 0.95rem;
+  line-height: 1.6;
+  margin-top: 0.7rem;
+  max-width: 52ch;
+  white-space: pre-wrap;
+}
+
 .log-index-empty {
   color: var(--muted-foreground);
   padding: 2rem 0;

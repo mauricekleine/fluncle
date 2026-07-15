@@ -215,6 +215,18 @@ describe("the label page", () => {
     });
   });
 
+  it("carries the label's bio into the page data when the record has one, undefined otherwise", async () => {
+    getFindingsByLabel.mockResolvedValue(findings(1));
+
+    getLabelBySlug.mockResolvedValue({ ...LABEL, bio: "London's liquid drum and bass home." });
+    const withBio = await resolveLabelPageData("hospital-records", "name", 1);
+    expect(withBio.status === "found" && withBio.bio).toBe("London's liquid drum and bass home.");
+
+    getLabelBySlug.mockResolvedValue(LABEL);
+    const withoutBio = await resolveLabelPageData("hospital-records", "name", 1);
+    expect(withoutBio.status === "found" && withoutBio.bio).toBeUndefined();
+  });
+
   it("counts the quieter rows toward the floor (they are content on the page)", async () => {
     getFindingsByLabel.mockResolvedValue(findings(1));
     listLabelCatalogue.mockResolvedValue(labelCatalogue(2));
