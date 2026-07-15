@@ -1139,6 +1139,20 @@ export const SURFACES: readonly Surface[] = [
     weights: { status: "hidden" },
   },
   {
+    command: "fluncle admin albums describe --queue",
+    exposedContent: [
+      "auto-author the /album/<slug> voiced bio, fill-empty-only (hybrid: one claude -p call)",
+    ],
+    kind: "cron",
+    name: "cron.album-bio",
+    operatorNotes:
+      "every 30m. Hybrid --no-agent; one claude -p authors the paragraph, its grounding assembled WORKER-side (Firecrawl facts + the album's finding titles) via the draft-bio op. Never clobbers an operator bio. Live. Source: docs/agents/hermes/scripts/{entity-bio-sweep.ts,album-bio-sweep.sh}.",
+    probeConfig: { cadenceMs: 30 * MINUTE_MS, cronName: "fluncle-album-bio", kind: "cron" },
+    statusDescription: "writes each album's voiced bio",
+    title: "Album bios",
+    weights: { status: "hidden" },
+  },
+  {
     command: "fluncle admin submissions triage",
     exposedContent: [
       "pre-chew a pending crew submission → an advisory queue verdict, fill-first (hybrid: one claude -p call)",

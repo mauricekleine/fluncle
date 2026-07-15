@@ -585,6 +585,12 @@ export function recordLabelJsonLd(label: RecordLabelInput): Record<string, unkno
 /** The album page's identity + the page's contents. */
 export type MusicAlbumInput = {
   artists: { name: string; slug: string }[];
+  /**
+   * The album's factual bio, when one is authored — the SAME paragraph the page prints. Emitted
+   * as the MusicAlbum's `description` (schema description mirrors the visible definitional
+   * content). Undefined until backfilled ⇒ the key is omitted, never `description: null`.
+   */
+  bio?: string;
   imageUrl?: string;
   /** The album's label, when one of its tracks carried one — the album → label graph edge. */
   label?: { name: string; slug: string };
@@ -627,6 +633,9 @@ export function musicAlbumJsonLd(album: MusicAlbumInput): Record<string, unknown
       "@type": "MusicGroup",
       name: artist.name,
     })),
+    // The factual bio mirrors the page's visible definitional paragraph — omitted cleanly
+    // (never `description: null`) until one is authored.
+    ...(album.bio ? { description: album.bio } : {}),
     genre: "Drum and Bass",
     ...(album.imageUrl ? { image: album.imageUrl } : {}),
     name: album.name,

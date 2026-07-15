@@ -2275,6 +2275,21 @@ export const albums = sqliteTable("albums", {
   artworkTextColor4: text("artwork_text_color4"),
   artworkUrlTemplate: text("artwork_url_template"),
   artworkWidth: integer("artwork_width"),
+  // ── THE VOICED BIO (the artist/label/album bio engine) ──────────────────────────
+  // A short, Fluncle-voiced public bio for the album — the written sibling of a finding's
+  // editorial `note`, grounded in Firecrawl facts + the tracks Fluncle has actually LOGGED
+  // off this record (never a fabricated tracklist). Authored by the on-box sweep via the
+  // agent-tier `describe_album` route, which VOICE-GATES it and writes it FILL-EMPTY-ONLY
+  // (an operator-written bio is never clobbered). Nullable until authored. See lib/server/bio.ts.
+  bio: text("bio"),
+  // PROVENANCE — the `describe_album` prompt version this bio was authored under (0 = the
+  // registry's baked default, N = operator override N), or NULL when no registry prompt
+  // produced it (an operator-typed bio). Same contract as `note_prompt_version`.
+  bioPromptVersion: integer("bio_prompt_version"),
+  // The bio-authoring reliability marker, mirroring `context_status`: pending (never
+  // attempted) · resolved (a bio is stored) · empty (no usable facts) · failed (the fetch
+  // threw). Internal reliability state; the future bio worklist picks `pending`/NULL rows.
+  bioStatus: text("bio_status", { enum: ["pending", "resolved", "empty", "failed"] }),
   createdAt: text("created_at").notNull(),
   id: text("id").primaryKey(),
   // ── THE OWNED COVER MASTER (RFC musickit-second-authority, U3b) ─────────────────────────

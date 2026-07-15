@@ -1,20 +1,20 @@
 #!/usr/bin/env bun
 // entity-bio-sweep.ts — the bun orchestrator behind the `--no-agent` entity-bio crons
-// (`fluncle-artist-bio` and `fluncle-label-bio`).
+// (`fluncle-artist-bio`, `fluncle-label-bio`, and `fluncle-album-bio`).
 //
 // LIVE. Version-controlled source; the repo is canonical and the box is a
-// deploy target (fluncle-hermes-operator skill). Invoked by the two bash wrappers
-// (artist-bio-sweep.sh / label-bio-sweep.sh) the host timers docker-exec on a schedule —
-// see those files' headers for the `host-timer` wire-up and ../cron/README.md for the
-// cron model.
+// deploy target (fluncle-hermes-operator skill). Invoked by the three bash wrappers
+// (artist-bio-sweep.sh / label-bio-sweep.sh / album-bio-sweep.sh) the host timers docker-exec
+// on a schedule — see those files' headers for the `host-timer` wire-up and ../cron/README.md
+// for the cron model.
 //
-// ONE SWEEP, TWO KINDS. An artist bio and a label bio are the SAME artifact over two
-// entity kinds — same queue shape, same voice gate, same fill-empty-only store, same
+// ONE SWEEP, THREE KINDS. An artist bio, a label bio, and an album bio are the SAME artifact
+// over three entity kinds — same queue shape, same voice gate, same fill-empty-only store, same
 // authoring step — so they share ONE orchestrator, dispatched by a required `--kind
-// artist|label` arg. The two `.sh` wrappers and the two timer dirs are the only
+// artist|label|album` arg. The three `.sh` wrappers and the three timer dirs are the only
 // per-kind surface; everything creative lives here once (the note/observe sweeps are
 // per-artifact, but those artifacts genuinely differ — a spoken script vs a written
-// note; two bios do not).
+// note; the bios do not).
 //
 // THE HYBRID MODEL (the entity sibling of the auto-note). Unlike the pure-trigger sweeps
 // (enrich/context/backfill), this one has ONE agentic step in the middle. Everything
@@ -92,6 +92,7 @@ const CLAUDE_BIN = process.env.CLAUDE_BIN ?? "claude";
 // spike-proven Sonnet alias (the voiced-note family; NOT haiku).
 const ARTIST_BIO_CLAUDE_MODEL = process.env.ARTIST_BIO_CLAUDE_MODEL;
 const LABEL_BIO_CLAUDE_MODEL = process.env.LABEL_BIO_CLAUDE_MODEL;
+const ALBUM_BIO_CLAUDE_MODEL = process.env.ALBUM_BIO_CLAUDE_MODEL;
 const ENTITY_BIO_CLAUDE_MODEL = process.env.ENTITY_BIO_CLAUDE_MODEL ?? "claude-sonnet-4-6";
 // Optional reasoning effort, passed through to `claude -p --effort` when set (mirrors
 // NOTE_CLAUDE_EFFORT / OBSERVE_CLAUDE_EFFORT — the box's per-sweep token dial).
@@ -105,7 +106,12 @@ const log = (message: string) => console.error(`[entity-bio-sweep] ${message}`);
 // Types — only the fields we consume from each surface.
 // ---------------------------------------------------------------------------
 
-type EntityKind = "artist" | "label";
+type EntityKind = "artist" | "label" | "album";
+
+// The CLI command GROUP for one kind (the `fluncle admin <group>` noun): plural of the kind.
+function groupForKind(kind: EntityKind): "artists" | "labels" | "albums" {
+  return kind === "artist" ? "artists" : kind === "label" ? "labels" : "albums";
+}
 
 // One row of the bio worklist (`admin <kind>s describe --queue --json` is a BARE ARRAY).
 type QueueRow = {
@@ -260,7 +266,7 @@ function looksLikeAuthFailure(text: string): boolean {
 // call, and the entity stays queued for the next tick.
 // ---------------------------------------------------------------------------
 
-function fetchBioDraft(group: "artists" | "labels", slug: string): BioDraft | null {
+function fetchBioDraft(group: "artists" | "labels" | "albums", slug: string): BioDraft | null {
   try {
     return fluncleJson<BioDraft>(["admin", group, "draft-bio", slug]);
   } catch (error) {
@@ -414,7 +420,12 @@ export function bioCostEvent(input: {
 }
 
 function modelForKind(kind: EntityKind): string {
-  const perKind = kind === "artist" ? ARTIST_BIO_CLAUDE_MODEL : LABEL_BIO_CLAUDE_MODEL;
+  const perKind =
+    kind === "artist"
+      ? ARTIST_BIO_CLAUDE_MODEL
+      : kind === "label"
+        ? LABEL_BIO_CLAUDE_MODEL
+        : ALBUM_BIO_CLAUDE_MODEL;
 
   return perKind ?? ENTITY_BIO_CLAUDE_MODEL;
 }
@@ -433,7 +444,7 @@ function deliverBio(
   promptVersion: number | null,
   dryRun = false,
 ): Outcome {
-  const group = kind === "artist" ? "artists" : "labels";
+  const group = groupForKind(kind);
   const dir = mkdtempSync(join(tmpdir(), "entity-bio-sweep-"));
   const bioPath = join(dir, "bio.txt");
 
@@ -518,7 +529,7 @@ async function describeOne(
     return { cost: null, outcome: "skipped" };
   }
 
-  const group = kind === "artist" ? "artists" : "labels";
+  const group = groupForKind(kind);
 
   // (a) DRAFT the grounding Worker-side: the Worker runs Firecrawl (its key) + pulls the
   // logged finding titles (its DB) and assembles the registered prompt. A failed call or a
@@ -613,15 +624,15 @@ function pingClaudeAuthFailure(kind: EntityKind, detail: string): void {
 }
 
 // ---------------------------------------------------------------------------
-// Parse `--kind artist|label` (required) off argv, plus the optional `--dry-run <slug…>`.
+// Parse `--kind artist|label|album` (required) off argv, plus the optional `--dry-run <slug…>`.
 // ---------------------------------------------------------------------------
 
 function parseKind(argv: string[]): EntityKind {
   const index = argv.indexOf("--kind");
   const value = index >= 0 ? argv[index + 1] : undefined;
 
-  if (value !== "artist" && value !== "label") {
-    log("usage: entity-bio-sweep.ts --kind <artist|label> [--dry-run <slug…>]");
+  if (value !== "artist" && value !== "label" && value !== "album") {
+    log("usage: entity-bio-sweep.ts --kind <artist|label|album> [--dry-run <slug…>]");
     process.exit(2);
   }
 
@@ -635,7 +646,7 @@ function parseKind(argv: string[]): EntityKind {
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const kind = parseKind(argv);
-  const group = kind === "artist" ? "artists" : "labels";
+  const group = groupForKind(kind);
 
   // `--dry-run <slug…>` — the operator's pre-flight. Author for the named entities, run the
   // voice gate, print the paragraphs, store NOTHING. A `--kind <k>` sits in argv too; drop

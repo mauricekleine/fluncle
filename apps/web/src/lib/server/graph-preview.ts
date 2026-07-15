@@ -97,8 +97,8 @@ export async function getGraphPreview(kind: GraphEntityKind, slug: string): Prom
   const findings = entity.findings.filter((finding) => finding.logId);
 
   return {
-    // The factual bio (artist/label carry it; albums do not — `resolveEntity` returns it only
-    // where the entity read has it). Undefined ⇒ the card renders no bio row, exactly as before.
+    // The factual bio (artist/label/album all carry it now; `resolveEntity` returns it where the
+    // entity read has one). Undefined ⇒ the card renders no bio row, exactly as before.
     bio: entity.bio,
     // A label leads with its own logo (when the sweep has resolved one); artists/albums have no
     // lead cover, so their cards read exactly as before.
@@ -138,9 +138,13 @@ async function resolveEntity(
   if (kind === "album") {
     const album = await getAlbumBySlug(slug);
 
-    // Albums carry no bio — the card omits the row for them.
     return album
-      ? { findings: await getFindingsByAlbum(album.id), name: album.name, slug: album.slug }
+      ? {
+          bio: album.bio,
+          findings: await getFindingsByAlbum(album.id),
+          name: album.name,
+          slug: album.slug,
+        }
       : undefined;
   }
 

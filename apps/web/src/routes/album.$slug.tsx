@@ -13,6 +13,7 @@ import { albumSignatureLine, firstFoundAt } from "@/lib/graph-prose";
 import { jsonLdScript } from "@/lib/json-ld";
 import { albumBreadcrumbsJsonLd, musicAlbumJsonLd } from "@/lib/log-schema";
 import { albumCoverAtSize } from "@/lib/media";
+import { bioMetaDescription } from "@/lib/meta-description";
 import { ALBUM_INDEX_MIN_TRACKS, getAlbumBySlug } from "@/lib/server/albums";
 import { type ArtistChip, listArtistsByAlbum } from "@/lib/server/artists";
 import { getLabelForAlbum, type LabelRecord } from "@/lib/server/labels";
@@ -32,6 +33,11 @@ import {
 type AlbumPageData =
   | {
       artists: ArtistChip[];
+      /**
+       * The album's voiced factual bio — a short paragraph beneath the masthead, undefined until
+       * one is authored (lib/server/bio.ts). The page renders it only when present.
+       */
+      bio: string | undefined;
       /** Uncertified tracks on this album. Empty until the catalogue lands. */
       catalogue: CatalogueTrackItem[];
       coverImageUrl: string | undefined;
@@ -73,6 +79,7 @@ export async function resolveAlbumPageData(slug: string): Promise<AlbumPageData>
 
   return {
     artists,
+    bio: album.bio,
     catalogue: catalogue.tracks,
     // The record's cover is its freshest finding's album art — never invented, never
     // re-hosted (the `i.scdn.co` attribution-by-link precedent). A record with no finding
@@ -100,17 +107,22 @@ function albumHead(loaderData: AlbumPageData | undefined) {
     return {};
   }
 
-  const { artists, catalogue, coverImageUrl, findings, indexable, label, name, slug } = loaderData;
+  const { artists, bio, catalogue, coverImageUrl, findings, indexable, label, name, slug } =
+    loaderData;
   const pageUrl = `${siteUrl}/album/${slug}`;
   // Honestly-plain third-person for the machine-facing strings (the Narrator rule).
   const title = `${name} · Fluncle's Findings`;
-  // It describes the page it is actually on, and never claims findings a page does not have.
-  // It also never names the tier the quieter rows belong to — that tier has no public name
-  // (docs/album-entity.md), so "catalogue" cannot leak into a SERP snippet.
+  // The factual bio is the honest, UNIQUE description when one is authored — the same objective
+  // paragraph the page prints, trimmed to the meta cap. Absent (the bio backfill is in flight),
+  // it falls back to the templated line verbatim, so nothing regresses. It describes the page it
+  // is actually on, and never names the tier the quieter rows belong to — that tier has no public
+  // name (docs/album-entity.md), so "catalogue" cannot leak into a SERP snippet.
   const description =
-    findings.length > 0
-      ? `Every banger Fluncle has found on ${name} and logged in the Galaxy, ${findings.length} so far, each with a coordinate.`
-      : `The tracks on ${name}, charted in Fluncle's Galaxy.`;
+    bio !== undefined
+      ? bioMetaDescription(bio)
+      : findings.length > 0
+        ? `Every banger Fluncle has found on ${name} and logged in the Galaxy, ${findings.length} so far, each with a coordinate.`
+        : `The tracks on ${name}, charted in Fluncle's Galaxy.`;
   const imageUrl = albumCoverAtSize(coverImageUrl, "large") ?? `${siteUrl}/fluncle-cover.png`;
 
   return {
@@ -133,6 +145,7 @@ function albumHead(loaderData: AlbumPageData | undefined) {
       jsonLdScript(
         musicAlbumJsonLd({
           artists,
+          bio,
           imageUrl: albumCoverAtSize(coverImageUrl, "large"),
           label: label ? { name: label.name, slug: label.slug } : undefined,
           name,
@@ -170,7 +183,7 @@ function AlbumPage() {
     return null;
   }
 
-  const { artists, catalogue, findings, label, name } = data;
+  const { artists, bio, catalogue, findings, label, name } = data;
   const signature = albumSignatureLine(name, findings.length, firstFoundAt(findings));
 
   return (
@@ -191,6 +204,9 @@ function AlbumPage() {
               </GraphLink>
             </p>
           ) : undefined}
+          {/* The voiced bio sits beneath the masthead — body prose that augments the signature
+              line, never replaces it. Only rendered once one is authored. */}
+          {bio ? <p className="log-index-bio">{bio}</p> : undefined}
         </header>
 
         {/* Every band below is conditional: an empty one renders nothing at all, so this page

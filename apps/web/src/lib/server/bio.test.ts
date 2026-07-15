@@ -129,6 +129,12 @@ describe("buildEntityFactsQuery", () => {
       "Shogun Audio drum and bass record label",
     );
   });
+
+  it("anchors an album query on album + the genre lane", () => {
+    expect(buildEntityFactsQuery("album", "Colours in the Dark")).toBe(
+      "Colours in the Dark drum and bass album",
+    );
+  });
 });
 
 describe("fetchEntityFacts", () => {
@@ -174,5 +180,20 @@ describe("buildEntityBioPrompt (the reusable authoring-prompt assembly)", () => 
     expect(body).toContain("No facts gathered");
     expect(body).toContain("Metalheadz");
     expect(body).toContain("Terminus");
+  });
+
+  it("renders the baked album prompt with the grounding rail, findings, and name", async () => {
+    const { body, version } = await buildEntityBioPrompt({
+      facts: "Third studio album; released on Hospital Records.",
+      findingTitles: ["Higher Ground"],
+      kind: "album",
+      name: "Colours in the Dark",
+    });
+
+    expect(version).toBe(0);
+    expect(body).toContain("GROUNDING RAIL");
+    expect(body).toContain("Colours in the Dark");
+    expect(body).toContain("Higher Ground");
+    expect(body).toContain("Hospital Records");
   });
 });

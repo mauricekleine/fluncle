@@ -424,6 +424,7 @@ const AUTOMATION_CRONS: CronDef[] = [
   { cadenceMs: 10 * 60_000, match: "note", service: "cron.note" },
   { cadenceMs: 30 * 60_000, match: "artist-bio", service: "cron.artist-bio" }, // artist voiced-bio author — every 30m
   { cadenceMs: 30 * 60_000, match: "label-bio", service: "cron.label-bio" }, // label voiced-bio author — every 30m
+  { cadenceMs: 30 * 60_000, match: "album-bio", service: "cron.album-bio" }, // album voiced-bio author — every 30m
   { cadenceMs: 15 * 60_000, match: "triage", service: "cron.triage" }, // submission pre-chew — every 15m
   { cadenceMs: 60 * 60_000, match: "observation", service: "cron.observation" },
   { cadenceMs: 30 * 60_000, match: "backfill", service: "cron.backfill" },

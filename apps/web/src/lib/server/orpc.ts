@@ -30,6 +30,7 @@ import { implement, ORPCError } from "@orpc/server";
 import { ZodToJsonSchemaConverter } from "@orpc/zod/zod4";
 import { type OrpcContext } from "./orpc-auth";
 import { isApiFaultData } from "./orpc/_shared";
+import { adminAlbumsHandlers } from "./orpc/admin-albums";
 import { adminArtistsHandlers } from "./orpc/admin-artists";
 import { adminAttentionHandlers } from "./orpc/admin-attention";
 import { adminBackfillsHandlers } from "./orpc/admin-backfills";
@@ -89,6 +90,7 @@ const os = implement(contract).$context<OrpcContext>();
 //
 // Add a domain: import its `*Handlers(os)` factory and spread it here.
 export const router = os.router({
+  ...adminAlbumsHandlers(os),
   ...adminArtistsHandlers(os),
   ...adminAttentionHandlers(os),
   ...adminBackfillsHandlers(os),

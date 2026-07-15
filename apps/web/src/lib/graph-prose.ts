@@ -40,10 +40,10 @@ export type GraphEntityKind = "album" | "artist" | "galaxy" | "label";
 /** What a hover card (and the SSH/CLI surfaces, later) needs to preview an entity. */
 export type GraphPreview = {
   /**
-   * The entity's factual, third-person bio (artist/label only), when one is authored — the SAME
+   * The entity's factual, third-person bio (artist/label/album), when one is authored — the SAME
    * paragraph the entity page prints beneath its dateline. Undefined when none exists yet (the
-   * backfill is in flight for many entities) and for album/galaxy previews, which never carry
-   * one. The card renders it below the signature `line`, clamped; absent, the card is unchanged.
+   * backfill is in flight for many entities) and for galaxy previews, which never carry one. The
+   * card renders it below the signature `line`, clamped; absent, the card is unchanged.
    */
   bio?: string;
   /** Up to a handful of finding covers — the card's visual proof. */

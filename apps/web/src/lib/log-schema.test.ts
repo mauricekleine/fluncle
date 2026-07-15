@@ -6,6 +6,7 @@ import {
   breadcrumbsJsonLd,
   galaxyBreadcrumbsJsonLd,
   mixtapeAlbumJsonLd,
+  musicAlbumJsonLd,
   musicGroupJsonLd,
   musicPlaylistJsonLd,
   musicRecordingJsonLd,
@@ -416,6 +417,33 @@ describe("recordLabelJsonLd (the label page schema — U2a alternateName)", () =
     expect(
       organizationOf({ ...base, bio: "Medschool is Hospital Records' sister label." }).description,
     ).toBe("Medschool is Hospital Records' sister label.");
+  });
+});
+
+describe("musicAlbumJsonLd (the album page schema)", () => {
+  const base = {
+    artists: [{ name: "Netsky", slug: "netsky" }],
+    name: "Colours in the Dark",
+    slug: "colours-in-the-dark",
+    tracks: [],
+  };
+
+  it("is a MusicAlbum with the credited artist + genre", () => {
+    const jsonLd = musicAlbumJsonLd(base);
+    expect(jsonLd["@type"]).toBe("MusicAlbum");
+    expect(jsonLd.genre).toBe("Drum and Bass");
+  });
+
+  it("carries the factual bio as description only when one is authored", () => {
+    // No bio ⇒ no description key at all (never `description: null`).
+    expect(musicAlbumJsonLd(base)).not.toHaveProperty("description");
+
+    expect(
+      musicAlbumJsonLd({
+        ...base,
+        bio: "Colours in the Dark is the third studio album by Netsky, released in 2019.",
+      }).description,
+    ).toBe("Colours in the Dark is the third studio album by Netsky, released in 2019.");
   });
 });
 
