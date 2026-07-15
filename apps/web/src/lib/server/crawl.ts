@@ -70,6 +70,7 @@ import {
   getSpotifyAnchorBreakerState,
   recordSpotifyAnchorOutcome,
 } from "./spotify-anchor-breaker";
+import { getSetting, setSetting } from "./settings";
 import { findSpotifyTrackByIsrc } from "./spotify";
 
 // ── Policy constants ─────────────────────────────────────────────────────────
@@ -92,6 +93,9 @@ const MAX_FAILURES = 5;
  * so whatever this tick misses, the next one picks up. `fillSpotifyAnchors` explains why.
  */
 const ANCHOR_BUDGET = 20;
+
+/** The anchor rotation's keyset cursor (settings KV): the last track_id attempted. */
+const ANCHOR_CURSOR_KEY = "crawl.spotify_anchor_cursor";
 
 // The retry window for a FAILED node, growing with its consecutive-failure count — the
 // shipped `backfill_*` backoff, verbatim in shape (backfill.ts): base × 2^failures,
@@ -620,25 +624,49 @@ async function fillSpotifyAnchors(
   }
 
   const db = await getDb();
-  const queue = await db.execute({
-    args: [limit],
+
+  // THE ROTATION: a keyset cursor on the settings KV. The no-match policy deliberately
+  // leaves a not-on-Spotify row in the queue (re-ask over a "we checked" column) — but with
+  // a fixed `order by track_id limit N` head, twenty permanent no-matches BLOCK the queue
+  // forever: every tick re-asks the same twenty rows and the other thousands never get a
+  // turn. The cursor makes the scan a full rotation: pick up past the last attempted row,
+  // wrap to the top when the tail runs dry.
+  const cursor = (await getSetting(ANCHOR_CURSOR_KEY)) ?? "";
+  let queue = await db.execute({
+    args: [cursor, limit],
     sql: `select track_id, isrc from tracks
           where isrc is not null
             and spotify_uri is null
+            and track_id > ?
             and not exists (select 1 from findings where findings.track_id = tracks.track_id)
           order by track_id
           limit ?`,
   });
 
+  if (queue.rows.length === 0 && cursor !== "") {
+    queue = await db.execute({
+      args: [limit],
+      sql: `select track_id, isrc from tracks
+            where isrc is not null
+              and spotify_uri is null
+              and not exists (select 1 from findings where findings.track_id = tracks.track_id)
+            order by track_id
+            limit ?`,
+    });
+  }
+
   let filled = 0;
+  let lastAttempted = "";
 
   for (const row of typedRows<{ isrc: string; track_id: string }>(queue.rows)) {
+    lastAttempted = row.track_id;
     const { match, rateLimited, unauthorized } = await findSpotifyTrackByIsrc(row.isrc);
 
     if (rateLimited) {
       // Spotify is throttling the app. Fold it into the breaker (a run of these trips it) and
       // stop — grinding the 429 wall just earns a longer ban.
       await recordSpotifyAnchorOutcome("throttled");
+      await setSetting(ANCHOR_CURSOR_KEY, lastAttempted);
       logEvent("warn", "crawl.spotify-throttled", { filled });
 
       return { filled, outcome: "throttled" };
@@ -649,6 +677,7 @@ async function fillSpotifyAnchors(
       // breaker toward a pause and surface the reason so the operator reconnects, rather than
       // logging the same silent no-match 20 times a tick forever.
       await recordSpotifyAnchorOutcome("unauthorized");
+      await setSetting(ANCHOR_CURSOR_KEY, lastAttempted);
       logEvent("warn", "crawl.spotify-unauthorized", { filled });
 
       return { filled, outcome: "unauthorized" };
@@ -670,8 +699,14 @@ async function fillSpotifyAnchors(
     filled += 1;
   }
 
-  // The pass ran clean — Spotify answered (whether or not anything matched). Clear any streak so
-  // a healthy tick after a rough patch lifts the breaker immediately.
+  // The pass ran clean — Spotify answered (whether or not anything matched). Clear any streak
+  // so a healthy tick after a rough patch lifts the breaker immediately. The cursor advances
+  // past everything attempted (matches AND no-matches), so the next tick starts where this
+  // one ended rather than re-grinding the head.
+  if (lastAttempted !== "") {
+    await setSetting(ANCHOR_CURSOR_KEY, lastAttempted);
+  }
+
   await recordSpotifyAnchorOutcome("ok");
 
   return { filled, outcome: filled > 0 ? "filled" : "ok" };

@@ -510,3 +510,69 @@ describe("the catalogue crawler", () => {
     expect(Number(tracks.rows[0]?.n)).toBe(0);
   });
 });
+
+describe("the Spotify anchor rotation (the keyset cursor)", () => {
+  it("a head of permanent no-matches never blocks the queue — the cursor rotates past it", async () => {
+    const { findSpotifyTrackByIsrc } = await import("./spotify");
+    const { crawlCatalogue } = await import("./crawl");
+    const { resetSpotifyAnchorBreaker } = await import("./spotify-anchor-breaker");
+
+    await resetSpotifyAnchorBreaker();
+
+    // 22 anchor-pending rows (ANCHOR_BUDGET is 20): the first 21 sort ahead of the
+    // matchable one by track_id, and every one of them is genuinely not on Spotify.
+    // Under the fixed-head scan, row 22 would NEVER be attempted.
+    for (let index = 1; index <= 22; index += 1) {
+      const suffix = String(index).padStart(2, "0");
+
+      await db.execute({
+        args: [
+          `mb_rot-${suffix}`,
+          `Rotation ${suffix}`,
+          `["Rotation Artist"]`,
+          `ROTISRC${suffix}`,
+          270000,
+        ],
+        sql: `insert into tracks (track_id, title, artists_json, isrc, duration_ms)
+              values (?, ?, ?, ?, ?)`,
+      });
+    }
+
+    vi.mocked(findSpotifyTrackByIsrc).mockImplementation((isrc: string) =>
+      Promise.resolve(
+        isrc === "ROTISRC22"
+          ? {
+              match: {
+                spotifyUri: "spotify:track:rotated22",
+                spotifyUrl: "https://open.spotify.com/track/rotated22",
+                trackId: "rotated22",
+              },
+              rateLimited: false,
+            }
+          : { rateLimited: false },
+      ),
+    );
+
+    // Pass 1 attempts rows 01-20 — all no-match, nothing filled, cursor parked at row 20.
+    const first = await crawlCatalogue({ limit: 1, maxHop: 2 });
+    expect(first.anchorsFilled).toBe(0);
+    expect(first.anchorOutcome).toBe("ok");
+
+    // Pass 2 starts PAST the cursor — rows 21-22 — and fills the match the fixed head
+    // would have ground past forever.
+    const second = await crawlCatalogue({ limit: 1, maxHop: 2 });
+    expect(second.anchorsFilled).toBe(1);
+    expect(second.anchorOutcome).toBe("filled");
+
+    const anchored = await db.execute(
+      "select spotify_uri from tracks where track_id = 'mb_rot-22'",
+    );
+    expect(anchored.rows[0]?.spotify_uri).toBe("spotify:track:rotated22");
+
+    // Pass 3 finds the tail dry and WRAPS to the top — the rotation is a full loop, so a
+    // no-match row is still re-asked eventually (the module's re-ask-over-checked policy).
+    const third = await crawlCatalogue({ limit: 1, maxHop: 2 });
+    expect(third.anchorsFilled).toBe(0);
+    expect(third.anchorOutcome).toBe("ok");
+  });
+});
