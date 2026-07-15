@@ -1,4 +1,32 @@
-import { adminApiPost } from "../api";
+import { adminApiGet, adminApiPost } from "../api";
+import { buildBioBody, type EntityBioResult, type EntityBioWorkItem } from "./admin-artists";
+
+// ── The voiced bio: the entity-bio engine (thin HTTP client) ──────────────────
+// The label sibling of `admin artists describe`: author the label's bio through the
+// agent-tier `describe_label` route. Fills an empty bio only; an operator bio is never
+// clobbered. Shares the body builder + result types with the artist command.
+
+// Author + store one label's bio (the voice-gated, fill-empty-only write). `--dry-run`
+// runs the voice gate and reports the verdict without storing anything.
+export async function describeLabelCommand(
+  slug: string,
+  options: { bio: string; dryRun?: boolean; promptVersion?: number },
+): Promise<EntityBioResult> {
+  return adminApiPost<EntityBioResult>(
+    `/api/admin/labels/${encodeURIComponent(slug)}/bio`,
+    buildBioBody(options),
+  );
+}
+
+// The BIO queue: labels with findings but no bio yet, oldest first — the worklist the
+// future `describe_label` cron drains (each row is a `admin labels describe <slug>`).
+export async function labelsBioQueueCommand(limit: number): Promise<EntityBioWorkItem[]> {
+  const response = await adminApiGet<{ labels: EntityBioWorkItem[]; ok: boolean }>(
+    `/api/admin/labels/bio-queue?limit=${limit}`,
+  );
+
+  return response.labels;
+}
 
 export type LabelImagesBackfillResult = {
   dryRun: boolean;

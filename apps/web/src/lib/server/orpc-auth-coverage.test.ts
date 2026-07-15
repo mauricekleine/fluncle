@@ -269,6 +269,13 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   delete_private_saved_set: "private-session",
   delete_recording: "operator",
   delete_subscription: "operator",
+  // The artist-bio authoring step — agent tier (adminAuth only, no operatorGuard), the
+  // note_track precedent: the box's agent token drives the fill-empty-only voiced-bio write.
+  describe_artist: "admin",
+  // The label-bio authoring step — agent tier (adminAuth only): the note_track precedent.
+  // Deliberately agent tier, unlike the operator-tier `update_label` crawl-seed ruling:
+  // authoring a bio is enrichment, not an editorial ruling that steers the crawl.
+  describe_label: "admin",
   draft_track_social: "admin",
   // The clip drip-feed tick — ADMIN tier (adminAuth only, no operatorGuard): the on-box
   // `fluncle-clip-drip` cron drives it with the agent token (the `finalize_clip_cut` /
@@ -339,6 +346,10 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // The `/admin/artists` review queue read — admin tier (agent-allowed), the list_*_admin
   // precedent; the operator's review-queue station consumes it.
   list_artist_socials: "admin",
+  // The artist-bio worklist (artists with findings but no bio yet) — admin tier
+  // (agent-allowed read), the list_unresolved_artists precedent; the future bio cron drains
+  // it. A pure read; it publishes nothing.
+  list_artists_missing_bio: "admin",
   // The ranked catalogue read (The Ear) — admin tier (agent-allowed), the
   // list_labels_admin precedent. An ordered walk of the columns the rank_catalogue
   // sweep precomputed; it returns catalogue rows only (no finding, no coordinate) and
@@ -361,6 +372,9 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // list_galaxies_admin precedent: `?seedState=enabled` is the seed-set read the
   // catalogue crawler makes with its agent token. A pure read; it publishes nothing.
   list_labels_admin: "admin",
+  // The label-bio worklist (labels with findings but no bio yet) — admin tier
+  // (agent-allowed read), the list_labels_admin precedent; the future bio cron drains it.
+  list_labels_missing_bio: "admin",
   // The logbook sweep's self-healing window + material read — admin tier
   // (agent-allowed), the list_editions_admin precedent; the box's `fluncle-logbook`
   // cron reads it to pick the next sector-day to author and gather its findings.

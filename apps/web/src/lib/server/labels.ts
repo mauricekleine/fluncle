@@ -220,6 +220,13 @@ export async function linkTrackToLabel(
 
 /** The canonical label identity record the public page + JSON-LD read. */
 export type LabelRecord = {
+  /**
+   * The label's voiced public bio (the entity sibling of a finding's `note`), or undefined
+   * when none is authored yet. Optional so the callers that mint a bare `LabelRecord`
+   * (e.g. `getLabelForAlbum`) need not carry it; the surfacing PR reads it off
+   * `getLabelBySlug`. See lib/server/bio.ts.
+   */
+  bio?: string;
   id: string;
   /**
    * The label's OWN logo (its resolved Discogs/Wikidata image on R2), or undefined when it has
@@ -256,13 +263,19 @@ export async function getLabelBySlug(slug: string): Promise<LabelRecord | undefi
   const db = await getDb();
   const result = await db.execute({
     args: [slug],
-    sql: `select ${LABEL_COLUMNS} from labels where slug = ? limit 1`,
+    sql: `select ${LABEL_COLUMNS}, bio from labels where slug = ? limit 1`,
   });
 
-  const row = typedRows<LabelRow>(result.rows)[0];
+  const row = typedRows<LabelRow & { bio: string | null }>(result.rows)[0];
 
   return row
-    ? { id: row.id, logoImageUrl: labelLogoUrl(row.image_key), name: row.name, slug: row.slug }
+    ? {
+        bio: typeof row.bio === "string" && row.bio.trim() ? row.bio : undefined,
+        id: row.id,
+        logoImageUrl: labelLogoUrl(row.image_key),
+        name: row.name,
+        slug: row.slug,
+      }
     : undefined;
 }
 
@@ -544,6 +557,71 @@ export async function updateLabelSeedState(
   const counts = await findingCountsBySlug();
 
   return toLabelItem(row, counts.get(row.slug) ?? 0);
+}
+
+// ── The voiced bio: fill-empty-only write + the worklist (the entity-bio engine) ──────
+//
+// The label bio is the entity sibling of a finding's `note` and inherits its cardinal
+// safety guarantee: the agent NEVER overwrites an existing bio. The `and (bio is null or
+// trim(bio) = '')` predicate lives in the SQL, so an operator bio (or a second agent tick)
+// that lands between the handler's read and this write can never be clobbered — the loser
+// matches no row (mirrors `fillEmptyNote` / `fillEmptyArtistBio`).
+
+/**
+ * Fill a label's bio ATOMICALLY, only when it is currently empty. The bio + its PROVENANCE
+ * (`bio_prompt_version`) + `bio_status = 'resolved'` land in the SAME statement, gated by the
+ * fill-empty-only predicate. Returns whether a row was written (false = a non-empty bio was
+ * already there / the label is gone). `promptVersion` is undefined for an operator-typed bio
+ * and null when the sweep fell back to its baked prompt — both store NULL. The caller has
+ * already voice-gated the bio (`gateBioText`).
+ */
+export async function fillEmptyLabelBio(
+  slug: string,
+  bio: string,
+  promptVersion?: number | null,
+): Promise<boolean> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [bio, promptVersion ?? null, new Date().toISOString(), slug],
+    sql: `update labels
+            set bio = ?, bio_prompt_version = ?, bio_status = 'resolved', updated_at = ?
+          where slug = ?
+            and (bio is null or trim(bio) = '')`,
+  });
+
+  return result.rowsAffected > 0;
+}
+
+/** One row of the bio worklist: a label with findings but no bio yet. */
+export type LabelBioWorkItem = { id: string; name: string; slug: string };
+
+/**
+ * The bio worklist: labels that have at least one coordinate-bearing finding but NO bio
+ * yet, oldest-first — the worklist the future `describe_label` cron drains. A bare read
+ * (no writes), bounded by `limit`. A label earns a bio only once Fluncle has logged a track
+ * on it, so the `exists` gate is the same certified-finding floor the label page uses.
+ */
+export async function listLabelsMissingBio(limit: number): Promise<LabelBioWorkItem[]> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [limit],
+    sql: `select l.id, l.name, l.slug
+          from labels l
+          where (l.bio is null or trim(l.bio) = '')
+            and exists (
+              select 1 from tracks t
+              join findings f on f.track_id = t.track_id
+              where t.label_id = l.id and f.log_id is not null
+            )
+          order by l.created_at asc
+          limit ?`,
+  });
+
+  return typedRows<{ id: string; name: string; slug: string }>(result.rows).map((row) => ({
+    id: row.id,
+    name: row.name,
+    slug: row.slug,
+  }));
 }
 
 /** An unruled label, in the shape the attention queue's pure model derives from. */

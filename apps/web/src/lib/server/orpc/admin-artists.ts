@@ -11,7 +11,10 @@ import {
   addArtistSocial,
   ArtistSocialNotFoundError,
   confirmArtistSocial,
+  fillEmptyArtistBio,
+  getArtistBySlug,
   InvalidArtistSocialError,
+  listArtistsMissingBio,
   listArtistSocialsQueue,
   removeArtistSocial,
   reviewArtist,
@@ -21,9 +24,10 @@ import {
 import { listUnresolvedArtists, resolveArtist } from "../artist-resolution";
 import { backfillArtistImages } from "../backfill-artist-images";
 import { backfillArtists } from "../backfill-artists";
+import { gateBioText } from "../bio";
 import { adminAuth, operatorGuard } from "../orpc-auth";
 import { ORPCError } from "@orpc/server";
-import { apiFault, type Implementer, parseBool, parseLimit } from "./_shared";
+import { apiFault, type Implementer, parseBool, parseLimit, toFault } from "./_shared";
 
 const BACKFILL_DEFAULT_LIMIT = 10;
 const BACKFILL_MAX_LIMIT = 50;
@@ -260,12 +264,83 @@ export function adminArtistsHandlers(os: Implementer) {
     }
   });
 
+  // POST /admin/artists/{slug}/bio — agent tier (`adminAuth`), the note_track precedent:
+  // the on-box sweep authored the artist's bio; this VOICE-GATES it and stores it
+  // FILL-EMPTY-ONLY. A bio already on file (operator OR previously auto-authored) is a
+  // skipped no-op — the operator override always wins, enforced atomically at the DB.
+  const describeArtistHandler = os.describe_artist.use(adminAuth).handler(async ({ input }) => {
+    try {
+      // `dryRun` runs the voice gate and stores nothing (the sweep's pre-check).
+      const dryRun = input.dryRun === true;
+      const artist = await getArtistBySlug(input.slug);
+
+      if (!artist) {
+        throw new ORPCError("NOT_FOUND", {
+          data: { apiCode: "not_found", apiMessage: `No artist with slug ${input.slug}` },
+          message: `No artist with slug ${input.slug}`,
+          status: 404,
+        });
+      }
+
+      // Fast-path skip: a bio already on file short-circuits before the gate runs. The
+      // real guarantee is the DB predicate in `fillEmptyArtistBio` below — a bio that
+      // lands AFTER this read still cannot be clobbered.
+      if (!dryRun && artist.bio?.trim()) {
+        return { bio: artist.bio, ok: true as const, skipped: true as const, slug: artist.slug };
+      }
+
+      // Voice-gate the agent-authored bio (defence in depth: the sweep gates as it writes;
+      // the Worker re-scans and hard-fails any violation before the bio is stored).
+      const bio = gateBioText(input.bio);
+
+      if (dryRun) {
+        return { bio, dryRun: true as const, ok: true as const, slug: artist.slug };
+      }
+
+      // Fill the empty bio ATOMICALLY — the fill-empty-only predicate lives in the SQL, so
+      // an operator bio (or a concurrent tick) that landed between our read and this write
+      // matches no row and reports skipped, never clobbered.
+      const filled = await fillEmptyArtistBio(artist.slug, bio, input.promptVersion);
+
+      if (!filled) {
+        const current = await getArtistBySlug(input.slug);
+
+        return {
+          bio: current?.bio ?? bio,
+          ok: true as const,
+          skipped: true as const,
+          slug: artist.slug,
+        };
+      }
+
+      return { bio, ok: true as const, slug: artist.slug };
+    } catch (error) {
+      throw toFault(error);
+    }
+  });
+
+  // GET /admin/artists/bio-queue — agent tier (`adminAuth`), the list_unresolved_artists
+  // precedent: the bio worklist (artists with findings but no bio yet), oldest-first.
+  const listArtistsMissingBioHandler = os.list_artists_missing_bio
+    .use(adminAuth)
+    .handler(async ({ input }) => {
+      try {
+        const artists = await listArtistsMissingBio(parseLimit(input.limit, 50, 200));
+
+        return { artists, ok: true as const };
+      } catch (error) {
+        throw apiFault(error);
+      }
+    });
+
   return {
     add_artist_social: addArtistSocialHandler,
     backfill_artist_images: backfillArtistImagesHandler,
     backfill_artists: backfillArtistsHandler,
     confirm_artist_social: confirmArtistSocialHandler,
+    describe_artist: describeArtistHandler,
     list_artist_socials: listArtistSocialsHandler,
+    list_artists_missing_bio: listArtistsMissingBioHandler,
     list_unresolved_artists: listUnresolvedArtistsHandler,
     remove_artist_social: removeArtistSocialHandler,
     resolve_artist: resolveArtistHandler,

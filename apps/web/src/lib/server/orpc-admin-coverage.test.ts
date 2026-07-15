@@ -229,6 +229,10 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "POST /admin/artists/{artistId}/resolve": "resolve_artist",
   "POST /admin/artists/{artistId}/review": "review_artist",
   "POST /admin/artists/{artistId}/socials": "add_artist_social",
+  // The artist voiced-bio author (the entity-bio engine) — contract-only oRPC (no TanStack
+  // route file; oRPC owns the path directly). Agent tier: the box's future bio sweep drives
+  // the fill-empty-only write with its agent token, the note_track precedent.
+  "POST /admin/artists/{slug}/bio": "describe_artist",
   // The artist-entity backfill (Unit 1 of the artist-relationship RFC) —
   // contract-only oRPC (no TanStack route file; oRPC owns the path directly).
   // Agent tier: the box's `fluncle-artist-backfill` cron drives it with its agent token.
@@ -310,6 +314,10 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // The label-alias confirm (RFC musickit-second-authority, U2a) — contract-only oRPC. Operator
   // tier: fold a candidate spelling into the label; the agent token 403s.
   "POST /admin/labels/aliases/{id}/confirm": "confirm_label_alias",
+  // The label voiced-bio author (the entity-bio engine) — contract-only oRPC (no TanStack
+  // route file; oRPC owns the path directly). Agent tier: the box's future bio sweep drives
+  // the fill-empty-only write with its agent token, the note_track precedent.
+  "POST /admin/labels/{slug}/bio": "describe_label",
   "POST /admin/lastfm/auth/session": "exchange_lastfm_session",
   // The logbook nightly author — contract-only oRPC (no TanStack route file; oRPC owns
   // the path directly, like note_track). Admin tier (agent-allowed): the on-box

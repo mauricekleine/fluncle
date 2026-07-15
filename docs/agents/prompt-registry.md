@@ -84,7 +84,7 @@ The whole prose is in the template, deliberately. A template that only exposed t
 
 ## The inventory
 
-Seven prompts author a Fluncle artifact in production. All seven are in the registry.
+Nine prompts author a Fluncle artifact in production. All nine are in the registry.
 
 | slug                 | what it writes                                 | runs   | provenance column                     |
 | -------------------- | ---------------------------------------------- | ------ | ------------------------------------- |
@@ -95,8 +95,12 @@ Seven prompts author a Fluncle artifact in production. All seven are in the regi
 | `newsletter_edition` | the Friday edition (JSON)                      | box    | `editions.prompt_version`             |
 | `context_distil`     | the internal `context_note` (the factual fuel) | Worker | `findings.context_prompt_version`     |
 | `search_filter`      | a search query → a JSON filter object          | Worker | — (nothing is persisted)              |
+| `describe_artist`    | an artist's voiced public bio                  | box    | `artists.bio_prompt_version`          |
+| `describe_label`     | a record label's voiced public bio             | box    | `labels.bio_prompt_version`           |
 
-`search_filter` is a **parser**, not a voice, and it persists no artifact — so it carries no provenance column. It is in the registry anyway, and it is the _safest_ of the seven to make editable: its output is Zod-validated, so a bad edit degrades search to the full-text tier rather than corrupting anything. Search quality is exactly the kind of thing you want to tune without a deploy.
+`describe_artist` / `describe_label` are the **entity-bio engine** — the entity sibling of `note_author` (that authors ONE finding's line; these describe a whole artist/label). Each carries a grounding rail: the bio states only what the gathered Firecrawl facts support AND what Fluncle has actually LOGGED, never a fabricated discography, roster, or scene credential.
+
+`search_filter` is a **parser**, not a voice, and it persists no artifact — so it carries no provenance column. It is in the registry anyway, and it is the _safest_ to make editable: its output is Zod-validated, so a bad edit degrades search to the full-text tier rather than corrupting anything. Search quality is exactly the kind of thing you want to tune without a deploy.
 
 ### What stays baked in the repo, and why
 

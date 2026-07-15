@@ -276,7 +276,9 @@ export function gateObservationScript(text: unknown): string {
 // Worker-safe. The result is FACTS ONLY — lyric-site snippets are dropped, and
 // the assembled note never quotes lyrics.
 
-const FIRECRAWL_SEARCH_URL = "https://api.firecrawl.dev/v2/search";
+// Exported so the entity-bio fact-gather (lib/server/bio.ts) fires the SAME Firecrawl
+// v2 search idiom against the SAME endpoint — one request shape for tracks and entities.
+export const FIRECRAWL_SEARCH_URL = "https://api.firecrawl.dev/v2/search";
 
 // Lyric/tab domains whose snippets we never fold into the context note (a leaked
 // lyric in a spoken artifact is a copyright + voice problem at once).
@@ -293,7 +295,9 @@ const LYRIC_DOMAINS = [
 
 type FirecrawlResult = { description?: string; title?: string; url?: string };
 
-function isLyricDomain(url: string | undefined): boolean {
+// Exported so the entity-bio fact-gather (lib/server/bio.ts) drops the SAME lyric/tab
+// domains the track context fetch does — one definition of "never fold this snippet in".
+export function isLyricDomain(url: string | undefined): boolean {
   if (!url) {
     return false;
   }

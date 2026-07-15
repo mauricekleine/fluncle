@@ -12,17 +12,21 @@
 // touches nothing already stored. Neither handler reads or writes a track, a finding, or
 // anything a crawl brought in — and neither ever should. See docs/label-entity.md.
 
+import { gateBioText } from "../bio";
 import {
   confirmLabelAlias,
+  fillEmptyLabelBio,
+  getLabelBySlug,
   LabelNotFoundError,
   listLabelAliasCandidates,
   listLabels,
+  listLabelsMissingBio,
   rejectLabelAlias,
   updateLabelSeedState,
 } from "../labels";
 import { adminAuth, operatorGuard } from "../orpc-auth";
 import { ORPCError } from "@orpc/server";
-import { apiFault, type Implementer } from "./_shared";
+import { apiFault, type Implementer, parseLimit, toFault } from "./_shared";
 
 /** Build the `admin-labels` domain's handlers. */
 export function adminLabelsHandlers(os: Implementer) {
@@ -92,10 +96,77 @@ export function adminLabelsHandlers(os: Implementer) {
       }
     });
 
+  // POST /admin/labels/{slug}/bio — agent tier (`adminAuth`), the note_track precedent:
+  // the on-box sweep authored the label's bio; this VOICE-GATES it and stores it
+  // FILL-EMPTY-ONLY. A bio already on file (operator OR previously auto-authored) is a
+  // skipped no-op. Deliberately AGENT tier (unlike the operator-tier `update_label`
+  // crawl-seed ruling): authoring a bio is enrichment, not an editorial crawl ruling.
+  const describeLabelHandler = os.describe_label.use(adminAuth).handler(async ({ input }) => {
+    try {
+      // `dryRun` runs the voice gate and stores nothing (the sweep's pre-check).
+      const dryRun = input.dryRun === true;
+      const label = await getLabelBySlug(input.slug);
+
+      if (!label) {
+        throw new ORPCError("NOT_FOUND", {
+          data: { apiCode: "not_found", apiMessage: `No label with slug ${input.slug}` },
+          message: `No label with slug ${input.slug}`,
+          status: 404,
+        });
+      }
+
+      // Fast-path skip; the real guarantee is the DB predicate in `fillEmptyLabelBio`.
+      if (!dryRun && label.bio?.trim()) {
+        return { bio: label.bio, ok: true as const, skipped: true as const, slug: label.slug };
+      }
+
+      // Voice-gate the agent-authored bio (defence in depth, re-scanned server-side).
+      const bio = gateBioText(input.bio);
+
+      if (dryRun) {
+        return { bio, dryRun: true as const, ok: true as const, slug: label.slug };
+      }
+
+      // Fill the empty bio ATOMICALLY — the fill-empty-only predicate lives in the SQL.
+      const filled = await fillEmptyLabelBio(label.slug, bio, input.promptVersion);
+
+      if (!filled) {
+        const current = await getLabelBySlug(input.slug);
+
+        return {
+          bio: current?.bio ?? bio,
+          ok: true as const,
+          skipped: true as const,
+          slug: label.slug,
+        };
+      }
+
+      return { bio, ok: true as const, slug: label.slug };
+    } catch (error) {
+      throw toFault(error);
+    }
+  });
+
+  // GET /admin/labels/bio-queue — agent tier (`adminAuth`), the list_labels_admin
+  // precedent: the bio worklist (labels with findings but no bio yet), oldest-first.
+  const listLabelsMissingBioHandler = os.list_labels_missing_bio
+    .use(adminAuth)
+    .handler(async ({ input }) => {
+      try {
+        const labels = await listLabelsMissingBio(parseLimit(input.limit, 50, 200));
+
+        return { labels, ok: true as const };
+      } catch (error) {
+        throw apiFault(error);
+      }
+    });
+
   return {
     confirm_label_alias: confirmLabelAliasHandler,
+    describe_label: describeLabelHandler,
     list_label_aliases: listLabelAliasesHandler,
     list_labels_admin: listLabelsAdminHandler,
+    list_labels_missing_bio: listLabelsMissingBioHandler,
     reject_label_alias: rejectLabelAliasHandler,
     update_label: updateLabelHandler,
   };
