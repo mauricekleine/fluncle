@@ -1,10 +1,10 @@
-# Bio Agent (the entity bio — the artist/label sibling of the auto-note)
+# Bio Agent (the entity bio — the artist/label/album sibling of the auto-note)
 
-The **entity bio** auto-authors the short paragraph that stands on an entity's page: `/artist/<slug>` and `/label/<slug>`. It is an OBJECTIVE, factual, Wikipedia-style dossier — who this artist/label is, where they are from, what they are known for — written in Fluncle's dry register but in the THIRD person, not as a first-person in-fiction take. Where the [auto-note](./note-agent.md) authors one editorial line about one FINDING in the observation voice, this authors a 2–4 sentence factual bio about an ARTIST or a LABEL — the entity sibling, one artifact over two kinds. It is one more deterministic-with-one-agentic-step sweep the box runs (mirroring the note pipeline), not a new runtime. The Worker owns the store + the voice gate; the box holds only its `agent`-scoped token and calls one CLI command.
+The **entity bio** auto-authors the short paragraph that stands on an entity's page: `/artist/<slug>`, `/label/<slug>`, and `/album/<slug>`. It is an OBJECTIVE, factual, Wikipedia-style dossier — who this artist/label is or what this record is, where they are from, what they are known for — written in Fluncle's dry register but in the THIRD person, not as a first-person in-fiction take. Where the [auto-note](./note-agent.md) authors one editorial line about one FINDING in the observation voice, this authors a 2–4 sentence factual bio about an ARTIST, a LABEL, or an ALBUM — the entity sibling, one artifact over three kinds. It is one more deterministic-with-one-agentic-step sweep the box runs (mirroring the note pipeline), not a new runtime. The Worker owns the store + the voice gate; the box holds only its `agent`-scoped token and calls one CLI command.
 
 **The register deliberately DEPARTS from the observation's no-geography rule.** The observation and the auto-note replace the earthly map with the cosmos and ban countries, cities, and nationalities. The bio does the opposite on purpose: it is a reference dossier, so naming a real origin or base ("a producer from Belgium", "a label run out of London") is CORRECT. The bio prompts state the departure explicitly, and the voice gate (below) allows geography for the bio while keeping the other bans.
 
-An artist bio and a label bio are the SAME artifact — same queue shape, same voice gate, same fill-empty-only store, same `claude -p` authoring — so ONE box sweep ([`entity-bio-sweep.ts`](./hermes/scripts/entity-bio-sweep.ts)) serves both, dispatched by `--kind artist|label`. It runs behind TWO host timers (`fluncle-artist-bio`, `fluncle-label-bio`), so each kind drains on its own cadence and reports its own `/status` row.
+An artist bio, a label bio, and an album bio are the SAME artifact — same queue shape, same voice gate, same fill-empty-only store, same `claude -p` authoring — so ONE box sweep ([`entity-bio-sweep.ts`](./hermes/scripts/entity-bio-sweep.ts)) serves all three, dispatched by `--kind artist|label|album`. It runs behind THREE host timers (`fluncle-artist-bio`, `fluncle-label-bio`, `fluncle-album-bio`), so each kind drains on its own cadence and reports its own `/status` row.
 
 ## What the bio is (and is NOT)
 
@@ -31,7 +31,7 @@ Each tick:
 
 The bio is grounded in **Firecrawl FACTS** (the entity's background, scene, release history — the raw snippets ARE the facts) **plus the titles of the tracks Fluncle has actually logged**. The box is a thin CLI client and holds **neither** a `FIRECRAWL_API_KEY` (by convention — the Worker owns it; `context-sweep.ts`) **nor** a read that exposes an entity's finding TITLES (only a `findingCount`). So on its own the box cannot ground a bio at all.
 
-The `draft_artist_bio` / `draft_label_bio` READ closes both gaps at once — the **exact parity the context-note sweep already has**, where the box triggers a Worker read for its grounding and then authors. On this READ the Worker runs Firecrawl with **its** key (`fetchEntityFacts`, `lib/server/bio.ts`), pulls the logged finding titles from **its** DB (`getFindingsByArtist` / `getFindingsByLabel`), assembles the registered prompt (`buildEntityBioPrompt`), and hands the box a ready-to-author prompt + its provenance version. The consequence that matters: **the on-box crons now produce GROUNDED bios**, not only the manual backfill. The read publishes nothing and returns only public facts (web snippets + finding titles), never a secret.
+The `draft_artist_bio` / `draft_label_bio` READ closes both gaps at once — the **exact parity the context-note sweep already has**, where the box triggers a Worker read for its grounding and then authors. On this READ the Worker runs Firecrawl with **its** key (`fetchEntityFacts`, `lib/server/bio.ts`), pulls the logged finding titles from **its** DB (`getFindingsByArtist` / `getFindingsByLabel` / `getFindingsByAlbum`), assembles the registered prompt (`buildEntityBioPrompt`), and hands the box a ready-to-author prompt + its provenance version. The consequence that matters: **the on-box crons now produce GROUNDED bios**, not only the manual backfill. The read publishes nothing and returns only public facts (web snippets + finding titles), never a secret.
 
 **Because the bio is FACTUAL, no facts means REFUSE — not improvise.** A first-person observation could always fall back on the sound alone; a factual dossier cannot invent a biography from a bare name. The Worker's `hasFacts:false` case renders the prompt's no-facts arm, which tells the author to write **at most one plain, certain sentence from the findings, or nothing**. The gate's 40-char floor (`BIO_MIN_CHARS`) then turns that refusal into a clean NO-WRITE: a stub too short to be a real bio fails `bio_too_short` (422), the entity stays queued, and no hallucinated CV ever lands. The floor is load-bearing for exactly this reason — do not lower it.
 
@@ -65,9 +65,13 @@ The corpus is bounded (tens of artists + labels). `ENTITY_BIO_BATCH_CAP` makes t
 ENTITY_BIO_BATCH_CAP=500 FLUNCLE_BIN=./path/to/fluncle \
   bun docs/agents/hermes/scripts/entity-bio-sweep.ts --kind artist
 
-# …and the labels:
+# …the labels:
 ENTITY_BIO_BATCH_CAP=500 FLUNCLE_BIN=./path/to/fluncle \
   bun docs/agents/hermes/scripts/entity-bio-sweep.ts --kind label
+
+# …and the albums:
+ENTITY_BIO_BATCH_CAP=500 FLUNCLE_BIN=./path/to/fluncle \
+  bun docs/agents/hermes/scripts/entity-bio-sweep.ts --kind album
 ```
 
 Dry-run first to eyeball the voice (nothing stored):
@@ -75,6 +79,7 @@ Dry-run first to eyeball the voice (nothing stored):
 ```bash
 bun docs/agents/hermes/scripts/entity-bio-sweep.ts --kind artist --dry-run <slug-a> <slug-b>
 bun docs/agents/hermes/scripts/entity-bio-sweep.ts --kind label  --dry-run <slug-a> <slug-b>
+bun docs/agents/hermes/scripts/entity-bio-sweep.ts --kind album  --dry-run <slug-a> <slug-b>
 ```
 
 ## Safety rails (inline so they survive even if the skill fails to load)
