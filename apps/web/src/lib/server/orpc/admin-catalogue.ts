@@ -98,10 +98,11 @@ export function adminCatalogueHandlers(os: Implementer) {
       const summary = await rankCatalogue(input.limit);
 
       // The Telescope mirror rides the sweep: rankings changed, so the private playlist
-      // re-syncs. Best-effort by construction — the sync never throws.
-      await syncTelescopePlaylist();
+      // re-syncs. Best-effort by construction — the sync never throws — and its outcome
+      // rides the response, so a silent Spotify failure is one `rank --json` away.
+      const telescope = await syncTelescopePlaylist();
 
-      return { ok: true, summary } as const;
+      return { ok: true, summary, telescope } as const;
     } catch (error) {
       throw apiFault(error);
     }

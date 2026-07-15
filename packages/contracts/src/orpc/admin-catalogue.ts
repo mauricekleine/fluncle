@@ -251,6 +251,19 @@ export const rankCatalogue = oc
         remaining: z.number(),
         scored: z.number(),
       }),
+      /**
+       * What the Telescope playlist mirror did after this tick (docs/the-ear.md § Fluncle's
+       * Telescope). The sync is best-effort by design — it never fails the sweep — so this
+       * field is where its outcome becomes OBSERVABLE: `{ ok: false, reason }` is the only
+       * surface a silent Spotify failure (a stale grant, a missing scope) ever reaches.
+       * Optional: absent on responses from before the field shipped.
+       */
+      telescope: z
+        .union([
+          z.object({ changed: z.boolean(), ok: z.literal(true), size: z.number() }),
+          z.object({ ok: z.literal(false), reason: z.string() }),
+        ])
+        .optional(),
     }),
   );
 
