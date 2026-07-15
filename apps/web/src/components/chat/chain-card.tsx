@@ -52,7 +52,7 @@ export function ChainCard({ notation, set }: { notation: KeyNotation; set: ChatS
     <div className="flex flex-col gap-3 rounded-md border border-border bg-card px-3 py-2.5">
       <div className="flex flex-col gap-2">
         <p className="text-xs text-muted-foreground">Start here</p>
-        <FindingCard finding={seed} notation={notation} />
+        <FindingCard embedded finding={seed} notation={notation} />
       </div>
 
       {steps.length > 0 ? (

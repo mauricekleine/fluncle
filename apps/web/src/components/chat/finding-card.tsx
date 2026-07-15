@@ -56,9 +56,14 @@ function ProgressHairline() {
 }
 
 export function FindingCard({
+  embedded = false,
   finding,
   notation,
 }: {
+  /** Drop the card's own pane (border/bg/rounding/padding) so it sits FLAT inside a parent
+      container — the chain card's seed, where the outer container is the single pane (One Pane
+      Rule, DESIGN.md §4). Standalone (the default) keeps its own card chrome. */
+  embedded?: boolean;
   finding: ChatFinding;
   notation: KeyNotation;
 }) {
@@ -78,7 +83,13 @@ export function FindingCard({
   const artwork = <TrackArtwork alt={`${trackLine} cover art`} src={coverSrc} />;
 
   return (
-    <div className="relative flex items-start gap-3 overflow-hidden rounded-md border border-border bg-card px-3 py-2.5">
+    <div
+      className={
+        embedded
+          ? "relative flex items-start gap-3 overflow-hidden"
+          : "relative flex items-start gap-3 overflow-hidden rounded-md border border-border bg-card px-3 py-2.5"
+      }
+    >
       {playable && isActive ? <ProgressHairline /> : null}
 
       {playable ? (

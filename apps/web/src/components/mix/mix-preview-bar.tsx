@@ -109,7 +109,7 @@ export function MixPreviewBar({
         </div>
         {/* Stopping the preview clears the active track, and the bar renders null when
             nothing is active — so this close control IS the dismiss. One action. */}
-        <Button aria-label="Close player" onClick={stopPreview} size="icon" variant="outline">
+        <Button aria-label="Close preview" onClick={stopPreview} size="icon" variant="outline">
           <XIcon className="size-4" />
         </Button>
       </div>
