@@ -18,9 +18,9 @@
  * so the name-folded rows are re-keyed on the stable id and the anchor-before-mint rows gain a link.
  *
  * IT MINTS NO FINDING. `upsertTrackArtists` only ever writes `artists` + `track_artists`; every read
- * that means "finding" inner-joins `findings … log_id is not null`, so a crawl-minted artist stays
- * internal until slice 004 (catalogue publicness). Avatar fetches are left OFF (`fillImages: false`)
- * — the batched `backfill-artist-images` sweep fills them.
+ * that means "finding" inner-joins `findings … log_id is not null`, so a crawl-minted artist renders
+ * its page on its catalogue (bounded by the thin-content floor), never as a certified count. Avatar
+ * fetches are left OFF (`fillImages: false`) — the batched `backfill-artist-images` sweep fills them.
  *
  * SCALE — this set may be LARGE (thousands of catalogue tracks, one Spotify `/tracks/{id}` call
  * each). So it is METERED: a bounded `BATCH` per invocation, a small delay between calls, and a hard

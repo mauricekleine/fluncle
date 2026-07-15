@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { type ArtistSocialPlatform, ARTIST_SOCIAL_PLATFORMS } from "../artist-socials";
 import { validateSocialUrlForPlatform } from "./artist-resolution";
 import { getDb, typedRow, typedRows } from "./db";
+import { type EntitySitemapRow } from "./labels";
 import { logEvent } from "./log";
 import { bestArtistAvatarUrl } from "../media";
 import { fetchArtistImages } from "./spotify";
@@ -243,30 +244,11 @@ export async function getArtistSlugMap(trackId: string): Promise<Record<string, 
 /**
  * The CANONICAL coordinate-bearing finding count for one artist — the pure
  * `track_artists` inner join (NO `artists_json` fallback), the SAME count the
- * `/artists` index and the sitemap key off (`listArtistsWithFindingCounts`). The
- * artist page's `noindex` gate keys off THIS (not the fallback-inclusive grid
- * count) so an indexable page is never orphaned from the sitemap + index during
- * the backfill window (Unit 3, artist-relationship RFC §3).
+ * `/artists` index uses (`listArtistsWithFindingCounts`). It is the artist page's
+ * FINDING count (the masthead line, the dossier); the page's `indexable` gate adds
+ * the catalogue total to it (findings PLUS renderable catalogue tracks), keyed off the
+ * canonical join both sides so an indexable page is never orphaned from the sitemap.
  */
-// TEMPORARY — slice 004 (catalogue publicness) removes this gate. Grep `artistHasCertifiedFindingSql`.
-//
-// Slice 003 connects a crawled track's artists by their stable `spotify_artist_id` at the anchor
-// step, which MINTS `artists` rows for artists Fluncle has never certified — so an `artists` row
-// with NO certified finding now exists where it never did before. Public REACHABILITY is slice
-// 004's deliberate flip: until then a crawl-minted, findings-free artist must stay invisible on
-// every public surface — its `/artist/<slug>` 404s exactly as when no row existed, and a catalogue
-// heading does not link to it. This predicate IS the gate: an artist is publicly reachable only if
-// some track credited to it is a certified finding (`log_id` present), read through the indexed
-// `track_artists` edge. It is the exact twin of `albumHasCertifiedFindingSql`. A certified artist is
-// unchanged. Slice 004 deletes this helper + every caller. (`/artists` index + sitemap already key
-// on `countArtistFindings`, the findings-only join, so they need no gate and are left alone.)
-export function artistHasCertifiedFindingSql(artistIdExpr: string): string {
-  return `exists (select 1 from findings cf
-                  join tracks ct on ct.track_id = cf.track_id
-                  join track_artists cta on cta.track_id = ct.track_id
-                  where cta.artist_id = ${artistIdExpr} and cf.log_id is not null)`;
-}
-
 export async function countArtistFindings(artistId: string): Promise<number> {
   const db = await getDb();
   const result = await db.execute({
@@ -337,6 +319,53 @@ export async function listArtistsWithFindingCounts(): Promise<ArtistIndexEntry[]
   }
 
   return entries;
+}
+
+/**
+ * Every ARTIST whose page clears the thin-content floor — findings or no findings. The exact twin
+ * of `listAlbumSitemapRows` / `listLabelSitemapRows`: the `/artists` HUB is Fluncle's editorial
+ * list (findings-joined, "every artist I've pulled a banger from"), while the SITEMAP is the
+ * machine's complete map of pages that exist and may be indexed, so a crawl-minted, findings-free
+ * artist with enough catalogue tracks belongs here — orphaning its page from the sitemap would
+ * break the same invariant album-entity.md states.
+ *
+ * The floor is applied in SQL (`having`), never in the isolate: a finding counts when it is
+ * coordinate-bearing (`log_id is not null`), a catalogue row is the anti-join's complement, and
+ * their sum is the RENDERABLE track count the page's `indexable` keys off (the canonical
+ * `track_artists` join both sides), so the two agree by construction. `lastmod` is the freshest
+ * certified finding's date, undefined for an artist that carries none (catalogue rows have no
+ * `added_at`, and `max` ignores nulls).
+ */
+export async function listArtistSitemapRows(minTracks: number): Promise<EntitySitemapRow[]> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [minTracks],
+    sql: `select a.slug as slug,
+                 max(findings.added_at) as lastmod,
+                 (select t2.album_image_url
+                    from (findings join tracks on tracks.track_id = findings.track_id) t2
+                    join track_artists ta2 on ta2.track_id = t2.track_id
+                    where ta2.artist_id = a.id and t2.log_id is not null
+                    order by t2.added_at desc limit 1) as cover_url
+          from artists a
+          join track_artists ta on ta.artist_id = a.id
+          join tracks on tracks.track_id = ta.track_id
+          left join findings on findings.track_id = tracks.track_id
+          group by a.id
+          having sum(case when findings.log_id is not null then 1 else 0 end)
+               + sum(case when findings.track_id is null then 1 else 0 end) >= ?
+          order by a.slug asc`,
+  });
+
+  return typedRows<{
+    cover_url: string | null;
+    lastmod: string | null;
+    slug: string;
+  }>(result.rows).map((row) => ({
+    coverImageUrl: row.cover_url ?? undefined,
+    lastmod: row.lastmod ?? undefined,
+    slug: row.slug,
+  }));
 }
 
 /** An artist chip on a graph page (the label's roster, the album's credits). */
@@ -605,11 +634,10 @@ export async function linkTracksToArtistEntities(trackIds?: string[]): Promise<n
 //
 // `options.fillImages` (default true) controls the best-effort Spotify avatar fetch. The
 // publish path leaves it on so a freshly-logged artist has its avatar the moment its page can
-// be seen. The CRAWLER passes `false`: a crawl-minted, findings-free artist stays internal until
-// slice 004 (catalogue publicness), and the batched `backfill-artist-images` sweep (the
-// `fluncle-artist-sweep` cron) fills its avatar in one call per 50 ids — so per-track avatar
-// calls at crawl time would be uncounted Spotify load (outside the anchor breaker) for an image
-// no public surface shows yet. The graph edge is written either way; only the avatar fetch defers.
+// be seen. The CRAWLER passes `false` and lets the batched `backfill-artist-images` sweep (the
+// `fluncle-artist-sweep` cron) fill its avatar in one call per 50 ids — per-track avatar calls at
+// crawl time would be uncounted Spotify load (outside the anchor breaker) for one image, spent on
+// the hot path. The graph edge is written either way; only the avatar fetch defers to the sweep.
 export async function upsertTrackArtists(
   trackId: string,
   artistNames: string[],

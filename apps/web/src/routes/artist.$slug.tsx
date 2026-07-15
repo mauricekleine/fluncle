@@ -128,13 +128,14 @@ const SOCIAL_LABEL: Record<ArtistSocialPlatform, string> = {
   youtube: "YouTube",
 };
 
-// Resolve the artist page's data. Extracted from the server fn so the
-// indexability decision is unit-testable (see artist-page.test.ts). The grid's
-// `findings` come from `getFindingsByArtist` (which has an `artists_json`
-// fallback so a pre-backfill artist still shows its covers), but the `noindex`
-// gate + JSON-LD key off `countArtistFindings` — the SAME pure `track_artists`
-// join the sitemap + `/artists` index use — so an indexable page is never
-// orphaned from the sitemap/index during the backfill window (RFC §3).
+// Resolve the artist page's data. Extracted from the server fn so the indexability decision is
+// unit-testable (see -artist-page.test.ts). An artist earns a page on its CONTENT, exactly as a
+// label/album does: a `getArtistBySlug` row renders, and the thin-content gate below (not a
+// certified-finding gate) decides whether it indexes. The grid's `findings` come from
+// `getFindingsByArtist` (which has an `artists_json` fallback so a pre-backfill artist still shows
+// its covers), but the `indexable` gate keys off `countArtistFindings` + the catalogue's
+// `totalTracks` — the SAME canonical `track_artists` join the sitemap uses — so an indexable page
+// is never orphaned from the sitemap.
 export async function resolveArtistPageData(
   slug: string,
   sort: CatalogueSort,
@@ -168,17 +169,6 @@ export async function resolveArtistPageData(
     getArtistNeighbours(artist.id),
   ]);
 
-  // TEMPORARY — slice 004 (catalogue publicness) removes this gate (grep `artistHasCertifiedFindingSql`).
-  // Slice 003 connects a crawled track's artists by their stable Spotify id at the anchor step,
-  // which MINTS `artists` rows for artists Fluncle has never certified — so `getArtistBySlug` now
-  // RESOLVES a crawl-minted, findings-free artist where it used to find nothing. Public reachability
-  // is slice 004's call: until then such an artist 404s exactly as when no row existed. Reachability
-  // requires at least one certified finding (counted through the canonical `track_artists` join, the
-  // TS twin of `artistHasCertifiedFindingSql`), never the mere row. A certified artist is unchanged.
-  if (canonicalFindingCount === 0) {
-    return { status: "missing" };
-  }
-
   // The signature is pure over the findings already loaded for the grid (no extra
   // query); the neighbours came from the corpus-wide embedding pass above.
   const gridFindings = findings.filter((finding) => finding.logId);
@@ -191,17 +181,16 @@ export async function resolveArtistPageData(
     catalogue,
     dossier: { ...signature, findingCount: gridFindings.length, neighbours },
     findings,
-    // Thin-content gate: index only at ≥3 coordinate-bearing findings (counted via
-    // the canonical `track_artists` join, the same source as the sitemap + index);
-    // below that the page still serves 200 but is noindex + out of the sitemap.
-    //
-    // The artist gate keys off FINDINGS, not total content, and that is deliberate: the EXISTENCE
-    // gate above (`canonicalFindingCount === 0` → missing) has already 404'd every findings-free
-    // artist, so a page that renders here always carries at least one certified finding and has
-    // already cleared the "who wrote it" question. A 1–2 finding artist renders (noindex); only ≥3
-    // is indexable. Slice 003 mints crawl-only artist rows, but the existence gate keeps them off
-    // the public surface until slice 004 (docs/artist-relationship.md).
-    indexable: canonicalFindingCount >= ARTIST_INDEX_MIN_FINDINGS,
+    // Thin-content gate: index only past ARTIST_INDEX_MIN_FINDINGS RENDERABLE tracks — the
+    // certified findings PLUS the quieter catalogue rows, because both are real content on the
+    // page and a page is thin or not thin on what it RENDERS, never on who wrote it. Both counts
+    // read through the canonical `track_artists` join (`countArtistFindings` + the catalogue's
+    // SQL-counted `totalTracks`), the same source the sitemap keys off, so an indexable page is
+    // never orphaned from it. Below the floor the page still serves 200 (deep links, link equity)
+    // but is noindex + out of the sitemap. A crawl-minted, findings-free artist with enough
+    // catalogue tracks is a real page and indexes; a 1–2-track one renders noindex
+    // (docs/artist-relationship.md).
+    indexable: canonicalFindingCount + catalogue.totalTracks >= ARTIST_INDEX_MIN_FINDINGS,
     mbid: artist.mbid,
     name: artist.name,
     slug: artist.slug,

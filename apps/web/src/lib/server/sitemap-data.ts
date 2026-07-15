@@ -2,26 +2,25 @@
 // gathered in one place so the two can never disagree about what exists.
 //
 // ── THE CERTIFICATION RAIL, RESTATED AS A BUDGET ────────────────────────────────────────
-// Every read here drives from `findings` — the `/log` pages through the inner join, and the
-// three entity lists through `listXWithFindingCounts`, each of which inner-joins findings
-// too. So the sitemap is bounded by the ARCHIVE (what Fluncle certified), never by the
-// CATALOGUE (what the crawler merely heard of), and a 30,000-row crawl adds exactly ZERO
-// `<loc>`s. That is not an accident to be re-derived each time someone reads this file, it
+// The TRACK read drives from `findings` through the inner join, so no `/log` <loc> is ever a
+// catalogue row: the log surface is bounded by the ARCHIVE (what Fluncle certified), never by
+// the CATALOGUE (what the crawler merely heard of), and a 30,000-row crawl adds exactly ZERO
+// `/log` <loc>s. That is not an accident to be re-derived each time someone reads this file, it
 // is the certification rail (docs/catalogue-crawler.md), and
 // `findings-certification.integration.test.ts` pins it against the real schema.
 //
-// What the catalogue DOES move is the ENTITY pages. A label/album page counts its findings
-// PLUS its quieter uncertified rows toward the thin-content gate, so a record Fluncle found
-// one banger on becomes a real tracklist page once the rest of the record is there — and a
-// label the crawler discovered and he has certified NOTHING on is a page too, built from its
-// releases, indexable once it clears the same floor. So the crawl DOES add <loc>s here: never
-// for a track, always only for the entity its tracks hang off.
+// What the catalogue DOES move is the ENTITY pages. An artist/label/album page counts its findings
+// PLUS its quieter uncertified rows toward the thin-content gate, so a record Fluncle found one
+// banger on becomes a real tracklist page once the rest of the record is there — and an entity the
+// crawler discovered and he has certified NOTHING on is a page too, built from its releases,
+// indexable once it clears the same floor. So the crawl DOES add <loc>s here: never for a track,
+// always only for the entity its tracks hang off.
 //
-// That is why the two graph reads below are NOT the ones the `/labels` and `/albums` hubs use.
-// The hubs are Fluncle's own editorial lists (findings-joined, "every label I've pulled a
-// banger off"); the sitemap is the machine's complete map of pages that exist and may be
-// indexed. Using the hub reads here would orphan every crawler-discovered page from the
-// sitemap — exactly the invariant this file exists to hold. See docs/album-entity.md.
+// That is why the three graph reads below are NOT the ones the `/artists`, `/labels`, `/albums`
+// hubs use. The hubs are Fluncle's own editorial lists (findings-joined, "every label I've pulled a
+// banger off"); the sitemap is the machine's complete map of pages that exist and may be indexed.
+// Using the hub reads here would orphan every crawler-discovered page from the sitemap — exactly
+// the invariant this file exists to hold. See docs/album-entity.md.
 
 import { formatSector } from "../log-id-shared";
 import { mixtapeSetVideoUrl, albumCoverAtSize, trackMedia } from "../media";
@@ -36,11 +35,7 @@ import {
   type SitemapLogPage,
 } from "../sitemap";
 import { ALBUM_INDEX_MIN_TRACKS, listAlbumSitemapRows } from "./albums";
-import {
-  ARTIST_INDEX_MIN_FINDINGS,
-  listArtistsWithFindingCounts,
-  parseArtistsJson,
-} from "./artists";
+import { ARTIST_INDEX_MIN_FINDINGS, listArtistSitemapRows, parseArtistsJson } from "./artists";
 import { getDb, typedRows } from "./db";
 import { GALAXY_INDEX_MIN_FINDINGS, listPublicGalaxies } from "./galaxies-map";
 import { LABEL_INDEX_MIN_TRACKS, listLabelSitemapRows } from "./labels";
@@ -167,7 +162,7 @@ export async function collectSitemapBags(): Promise<SitemapBags> {
             where status = 'published' and log_id is not null and added_at is not null
             order by lastmod desc`,
     }),
-    listArtistsWithFindingCounts(),
+    listArtistSitemapRows(ARTIST_INDEX_MIN_FINDINGS),
     // The logbook travelogue entries — one <loc> per authored sector-day, with
     // its last (re)generation as lastmod.
     db.execute({
@@ -176,10 +171,10 @@ export async function collectSitemapBags(): Promise<SitemapBags> {
     // The named sonic galaxies — empty until the launch gate opens (browse-by-
     // feel RFC), so no galaxy <loc> leaks before the whole map is named.
     listPublicGalaxies(),
-    // The graph pages. Both reads apply the thin-content floor IN SQL and return exactly the
-    // entities whose page is indexable — findings or no findings, because a label page now
-    // exists on crawled content alone and orphaning those pages from the sitemap would break
-    // the invariant this file exists to hold.
+    // The graph pages. All three reads apply the thin-content floor IN SQL and return exactly the
+    // entities whose page is indexable — findings or no findings, because a graph page now exists
+    // on crawled content alone and orphaning those pages from the sitemap would break the
+    // invariant this file exists to hold.
     listLabelSitemapRows(LABEL_INDEX_MIN_TRACKS),
     listAlbumSitemapRows(ALBUM_INDEX_MIN_TRACKS),
   ]);
@@ -191,15 +186,15 @@ export async function collectSitemapBags(): Promise<SitemapBags> {
     lastmod: row.generated_at,
     sector: formatSector(row.sector),
   }));
-  // Thin-content gate: only artists past ARTIST_INDEX_MIN_FINDINGS enter the
-  // sitemap (the thin ones render `noindex, follow`).
-  const artists: SitemapArtist[] = artistEntries
-    .filter((artist) => artist.findingCount >= ARTIST_INDEX_MIN_FINDINGS)
-    .map((artist) => ({
-      imageLoc: albumCoverAtSize(artist.coverImageUrl, "large"),
-      lastmod: artist.lastmod,
-      slug: artist.slug,
-    }));
+  // Thin-content gate: `listArtistSitemapRows` applies the floor IN SQL over RENDERABLE tracks —
+  // findings PLUS the quieter catalogue rows, the same sum the artist page's `indexable` keys off
+  // — so a crawler-discovered artist with enough tracks is here and the thin ones (which render
+  // `noindex, follow`) are not, exactly as labels + albums below.
+  const artists: SitemapArtist[] = artistEntries.map((artist) => ({
+    imageLoc: albumCoverAtSize(artist.coverImageUrl, "large"),
+    lastmod: artist.lastmod,
+    slug: artist.slug,
+  }));
   // Thin-content gate: only galaxies past GALAXY_INDEX_MIN_FINDINGS enter the
   // sitemap (the thin ones render `noindex, follow`). `galaxyEntries` is already
   // empty behind the launch gate, so this stays dark until the map is fully named.

@@ -373,10 +373,10 @@ describe("the graph hover-card preview carries the entity's bio", () => {
   });
 });
 
-describe("the TEMPORARY publicness gate (slice 004 removes albumHasCertifiedFindingSql)", () => {
-  it("keeps a crawl-minted, findings-free album OUT of the sitemap; a certified one stays IN", async () => {
+describe("the album sitemap is catalogue-aware: a findings-free album with enough tracks is IN", () => {
+  it("sitemaps a crawl-minted, findings-free album past the floor, alongside a certified one", async () => {
     // A CERTIFIED album with 3 renderable tracks (>= ALBUM_INDEX_MIN_TRACKS): one finding + two
-    // quieter rows. It is publicly reachable and belongs in the sitemap, exactly as before 001.
+    // quieter rows. Publicly reachable and in the sitemap.
     await seedTrack({
       album: "Wormhole",
       label: null,
@@ -388,8 +388,8 @@ describe("the TEMPORARY publicness gate (slice 004 removes albumHasCertifiedFind
     await seedTrack({ album: "Wormhole", label: null, title: "C", trackId: "t3" });
 
     // A CATALOGUE-ONLY album, minted INLINE like the crawler does (an `albums` row folded on a
-    // release group + `album_id` stamped) — three tracks, never a finding. The internal graph
-    // holds it; the public sitemap must not, until slice 004 flips the gate.
+    // release group + `album_id` stamped) — three tracks, never a finding. It has a public page now
+    // (a tracklist), clears the renderable-track floor, and so belongs in the sitemap too.
     const catalogueAlbumId = await ensureAlbum("Dark Matter", "rg-dark-matter");
     await seedTrack({ album: "Dark Matter", label: null, title: "D", trackId: "t4" });
     await seedTrack({ album: "Dark Matter", label: null, title: "E", trackId: "t5" });
@@ -401,13 +401,29 @@ describe("the TEMPORARY publicness gate (slice 004 removes albumHasCertifiedFind
 
     await reconcile();
 
-    // Both clear the renderable-track floor; only the certified one is publicly reachable.
+    // Both clear the renderable-track floor, and both are publicly reachable now.
     const sitemap = await listAlbumSitemapRows(ALBUM_INDEX_MIN_TRACKS);
-    expect(sitemap.map((row) => row.slug)).toEqual(["wormhole"]);
+    expect(sitemap.map((row) => row.slug).sort()).toEqual(["dark-matter", "wormhole"]);
+  });
 
-    // The catalogue-only album still EXISTS in the internal graph (row + linked tracks) — the gate
-    // is a public-surface gate, never a mint gate.
-    expect(await getAlbumBySlug("dark-matter")).toBeDefined();
+  it("keeps a THIN findings-free album (1-2 tracks) OUT of the sitemap, though its page renders", async () => {
+    // A crawl-minted album with a single catalogue track: below ALBUM_INDEX_MIN_TRACKS, so it is a
+    // thin page — it still serves 200 (the resolver renders it, noindex) but stays out of the
+    // sitemap. Thin is still thin, findings or not.
+    const thinAlbumId = await ensureAlbum("Faint Signal", "rg-faint-signal");
+    await seedTrack({ album: "Faint Signal", label: null, title: "One", trackId: "t7" });
+    await db.execute({
+      args: [thinAlbumId ?? "", "t7"],
+      sql: `update tracks set album_id = ? where track_id = ?`,
+    });
+
+    await reconcile();
+
+    // The row exists (a real internal entity) …
+    expect(await getAlbumBySlug("faint-signal")).toBeDefined();
+    // … but the single-track album is below the floor, so the sitemap omits it.
+    const sitemap = await listAlbumSitemapRows(ALBUM_INDEX_MIN_TRACKS);
+    expect(sitemap.map((row) => row.slug)).not.toContain("faint-signal");
   });
 });
 

@@ -301,19 +301,26 @@ describe("a label earns a page on its content, not on Fluncle's", () => {
 describe("the sitemap at catalogue volume", () => {
   it("gives 1,300 crawled TRACKS exactly ZERO URLs of their own", async () => {
     // THE RAIL, and it never moved: a crawled track is not a finding, has no coordinate, and
-    // never earns a `/log` URL. The catalogue can grow without bound and the finding count in
-    // the sitemap does not move. What the crawl DOES earn is a page for the ENTITY the tracks
-    // hang off — which is the next test, and the deliberate reversal.
+    // never earns a `/log` URL (nor a `/track` one — there is no such route). The catalogue can
+    // grow without bound and the finding count in the sitemap does not move. What the crawl DOES
+    // earn is a page for the ENTITIES the tracks hang off — the label AND, now, every crawled
+    // artist with enough catalogue tracks to clear the thin-content floor.
     const { xml } = await renderSitemap();
     const locs = xml.match(/<loc>/g) ?? [];
 
-    // 11 hubs + 1 finding + 2 label pages (Hospital: 1 finding + 900 rows; Metalheadz: 400
-    // rows, no finding — both clear the renderable floor). Not one crawled TRACK earns a URL.
+    // 11 hubs + 1 finding + 2 label pages (Hospital: 1 finding + 900 rows; Metalheadz: 400 rows,
+    // no finding — both clear the floor) + 60 crawled artist pages (CRAWLED_ARTISTS per label, a
+    // distinct entity each, every one well past the floor). No `albums` rows are minted in this
+    // seed, so no album <loc>. Not one crawled TRACK earns a URL.
     expect(xml).toContain("/log/004.7.2I");
     expect(xml).toContain("/label/hospital-records");
+    // A findings-free discovered artist now has a public page, so the sitemap points at it.
+    expect(xml).toContain("/artist/lbl_hospital-records-artist-0");
+    // The RAIL: no crawled TRACK title, id, or `/log`/`/track` URL leaks in.
     expect(xml).not.toContain("Crawled");
     expect(xml).not.toContain("mb_lbl_");
-    expect(locs).toHaveLength(14);
+    expect(xml).not.toContain("/track/");
+    expect(locs).toHaveLength(11 + 1 + 2 + 2 * CRAWLED_ARTISTS);
   });
 
   it("LISTS the discovered label — the page exists, so the sitemap must point at it", async () => {
