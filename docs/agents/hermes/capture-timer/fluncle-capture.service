@@ -16,17 +16,18 @@ Type=oneshot
 # ride the one serial Hermes cron runner (a ~300s global budget) where a backfill-drain
 # tick would starve the latency-sensitive 5-min enrich/context/note sweeps — the same
 # reason the healthcheck prober and the pin-watch rebuild are host timers.
-# FLUNCLE_CAPTURE_BATCH_CAP=8 (2026-07-14, the cap raise): doubles the sweep's mechanical
-# ceiling to ~2,300 tracks/day so the opened daily budget (2,000) is actually reachable.
+# FLUNCLE_CAPTURE_BATCH_CAP=12 (2026-07-15, the second raise — operator ruling): lifts the
+# sweep's mechanical ceiling past the daily budget (2,000) so capture runs budget-bound,
+# not batch-bound. (The 2026-07-14 raise to 8 opened the road; utilization sat ~75%.)
 # The tick self-paces — OnUnitActiveSec counts from the last activation, so a long tick
 # just delays the next; there is no overload spiral.
 # QUEUE_LIMIT rides along at 2× the batch (the 4/8 defaults' ratio), so pre-filtered rows
 # (the bad-audio memory, a mid-tick budget close) never starve the batch of candidates.
-ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home -e FLUNCLE_CAPTURE_BATCH_CAP=8 -e FLUNCLE_CAPTURE_QUEUE_LIMIT=16 hermes bash /opt/hermes-scripts/capture-sweep.sh
+ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home -e FLUNCLE_CAPTURE_BATCH_CAP=12 -e FLUNCLE_CAPTURE_QUEUE_LIMIT=24 hermes bash /opt/hermes-scripts/capture-sweep.sh
 # A worst-case tick (BATCH_CAP findings, each up to a 60s search + a 180s download) can run
-# tens of minutes at cap 8; the timeout scales with the batch so a slow-download tick is
-# never killed mid-batch (a kill mid-track wastes the billed bytes already pulled).
-TimeoutStartSec=2100
+# tens of minutes; the timeout scales with the batch (12 × ~240s + overhead) so a
+# slow-download tick is never killed mid-batch (a kill mid-track wastes billed bytes).
+TimeoutStartSec=3300
 # Modest hardening for a root docker-driving oneshot.
 NoNewPrivileges=true
 ProtectControlGroups=true
