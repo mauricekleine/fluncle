@@ -181,15 +181,15 @@ export function createSim(stars: Star[], options: SimOptions = {}): SimState {
   const config = tuneConfig(stars);
   const frontier = options.frontier ?? {};
   const seed = options.seed ?? DEFAULT_SEED;
+  // Lifetime-logged stars arrive already collected (logged IS collected), so the
+  // counter opens at the log's size — "2/60", growing toward the whole field.
+  const alreadyCollected = stars.filter((star) => star.collected).length;
 
   return {
     adriftT: 0,
     atEarth: false,
     boltSeq: 0,
-    // Lifetime-logged stars arrive already collected (logged IS collected), so the
-    // counter opens at the log's size — "2/60", growing toward the whole field.
-    collectedCount: stars.filter((star) => star.collected).length,
-    runStartCollected: stars.filter((star) => star.collected).length,
+    collectedCount: alreadyCollected,
     config,
     deaths: 0,
     entities: placeFrontier(stars, frontier, seed),
@@ -200,6 +200,7 @@ export function createSim(stars: Star[], options: SimOptions = {}): SimState {
     orbitFresh: false,
     orbitIndex: -1,
     phase: "flying",
+    runStartCollected: alreadyCollected,
     seed,
     ship: launchShip(config),
     stars,
