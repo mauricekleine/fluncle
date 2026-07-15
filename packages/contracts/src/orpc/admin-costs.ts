@@ -29,6 +29,7 @@ const CostStep = z.enum([
   "context",
   "observe",
   "note",
+  "bio",
   "video",
   "publish",
   "discogs",

@@ -83,6 +83,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { type BoxCostEvent, emitCost, parseAuthoringSpend } from "./cost-emit";
 import { renderPrompt, resolveSweepPrompt } from "./prompt-fetch";
 
 // ---------------------------------------------------------------------------
@@ -148,19 +149,39 @@ type BioResult = {
 type EntityFacts = { facts: string; sources: string[] };
 
 // The `claude -p --output-format json` envelope. We take `.result` as the bio;
-// `is_error`/`subtype` distinguish a clean run from an error.
+// `is_error`/`subtype` distinguish a clean run from an error. `usage` /
+// `total_cost_usd` / `modelUsage` carry the authoring spend — read after the parse
+// (via the shared `parseAuthoringSpend`) and emitted as one `subsidized` anthropic
+// row (COST-01 §5), the note/observe pattern, zero new claude flags.
 type ClaudeEnvelope = {
   is_error?: boolean;
+  modelUsage?: Record<string, unknown>;
   result?: string;
   subtype?: string;
+  total_cost_usd?: number;
+  usage?: { input_tokens?: number; output_tokens?: number };
 };
 
 type Outcome = "authored" | "alreadyBio" | "gateSkipped" | "skipped";
 
 // The authored bio plus the prompt version it was written under (N = operator override,
 // 0 = registry default, null = the baked-in fallback wrote it — stamped on the artifact
-// via `--prompt-version` so a bio authored during an outage stays legible as such).
-type AuthoredBio = { bio: string; promptVersion: number | null };
+// via `--prompt-version` so a bio authored during an outage stays legible as such), and
+// its MEASURED authoring spend (the COST-01 §5 `bio` row): the CLI's own total_cost_usd,
+// the model, and the token count. `usd` is null only when the envelope carried no
+// `total_cost_usd` (then the row is unpriced, never $0).
+type AuthoredBio = {
+  bio: string;
+  model: string;
+  promptVersion: number | null;
+  tokens: number;
+  usd: number | null;
+};
+
+// The per-entity result: the outcome plus the cost row to emit — non-null ONLY when a
+// bio was actually authored AND stored this tick (a no-op / gate-skip / failure / dry-run
+// records nothing). Mirrors note-sweep's NoteResult.
+type DescribeResult = { cost: BoxCostEvent | null; outcome: Outcome };
 
 // A narrow sentinel the loop throws to abort the batch on a claude auth failure.
 class ClaudeAuthError extends Error {}
@@ -555,7 +576,51 @@ async function authorBio(
     return null;
   }
 
-  return { bio, promptVersion };
+  // The measured authoring spend (shared parse — the CLI's own total_cost_usd is
+  // authoritative, the token count is the informational quantity, the model comes off
+  // modelUsage else the one we asked for).
+  return { bio, promptVersion, ...parseAuthoringSpend(envelope, modelForKind(kind)) };
+}
+
+// ---------------------------------------------------------------------------
+// The tick's authoring-spend row for one bio (COST-01 §5) — the `subsidized` anthropic
+// `bio` row, SAME shape note-sweep emits for its `note` row (vendor/unitType/source/
+// costBasis), just with `step: "bio"` and the ENTITY SLUG as the id scope (a bio is
+// about an entity, not a finding — no logId/trackId; the slug rides in `logId` so
+// costEventId scopes per entity, the way note scopes per finding).
+//
+// Non-null ONLY when a bio was actually authored+stored this tick: an `alreadyBio`
+// operator no-op, a `gateSkipped` rejection, a `skipped` failure, or ANY dry run records
+// nothing — the ledger tracks DELIVERED work (the token spend on a rejected author is
+// accepted lossiness, exactly as in note-sweep). One place the decision + shape live so
+// the sweep and its test can't drift.
+// ---------------------------------------------------------------------------
+
+export function bioCostEvent(input: {
+  authored: AuthoredBio | null;
+  dryRun: boolean;
+  outcome: Outcome;
+  slug: string;
+}): BoxCostEvent | null {
+  const { authored, dryRun, outcome, slug } = input;
+
+  if (outcome !== "authored" || dryRun || !authored) {
+    return null;
+  }
+
+  return {
+    costBasis: "subsidized",
+    logId: slug, // the entity slug is the id scope (a bio has no finding coordinate)
+    model: authored.model,
+    occurredAt: new Date().toISOString(),
+    quantity: authored.tokens,
+    source: "measured",
+    step: "bio",
+    trackId: null,
+    unitType: "tokens",
+    usd: authored.usd,
+    vendor: "anthropic",
+  };
 }
 
 function modelForKind(kind: EntityKind): string {
@@ -678,14 +743,18 @@ function readFindingCount(kind: EntityKind, slug: string): string {
 // Per-entity: gather → author → deliver.
 // ---------------------------------------------------------------------------
 
-async function describeOne(kind: EntityKind, row: QueueRow, dryRun = false): Promise<Outcome> {
+async function describeOne(
+  kind: EntityKind,
+  row: QueueRow,
+  dryRun = false,
+): Promise<DescribeResult> {
   const slug = row.slug;
   const name = row.name;
 
   if (!slug || !name) {
     log("queue row without a slug/name — skipping");
 
-    return "skipped";
+    return { cost: null, outcome: "skipped" };
   }
 
   // (a) Gather the grounding. The FACTS (Firecrawl) are the primary fuel; the finding
@@ -703,7 +772,7 @@ async function describeOne(kind: EntityKind, row: QueueRow, dryRun = false): Pro
   const authored = await authorBio(kind, facts?.facts ?? "", findingCount, "", name);
 
   if (!authored) {
-    return "skipped";
+    return { cost: null, outcome: "skipped" };
   }
 
   const outcome = deliverBio(kind, slug, authored.bio, authored.promptVersion, dryRun);
@@ -725,7 +794,10 @@ async function describeOne(kind: EntityKind, row: QueueRow, dryRun = false): Pro
     console.error(`   verdict: ${outcome}\n`);
   }
 
-  return outcome;
+  // Record the authoring spend ONLY when the bio actually landed (`authored`, not a
+  // dry-run) — a gate-skip / operator-bio no-op / failure spent tokens too, but the
+  // ledger tracks DELIVERED work (bioCostEvent enforces this).
+  return { cost: bioCostEvent({ authored, dryRun, outcome, slug }), outcome };
 }
 
 // ---------------------------------------------------------------------------
@@ -806,7 +878,7 @@ async function main(): Promise<void> {
 
     for (const slug of dryRunSlugs) {
       try {
-        outcomes[slug] = await describeOne(kind, { name: slug, slug }, true);
+        outcomes[slug] = (await describeOne(kind, { name: slug, slug }, true)).outcome;
       } catch (error) {
         outcomes[slug] = "failed";
         log(`error on ${slug}: ${error instanceof Error ? error.message : String(error)}`);
@@ -844,9 +916,17 @@ async function main(): Promise<void> {
     return; // fast no-op
   }
 
+  // The tick's authoring-spend rows, POSTed once at the end (best-effort, after the bios
+  // are already durable — a dropped POST only understates the ledger).
+  const costs: BoxCostEvent[] = [];
+
   for (const row of queue.slice(0, BATCH_CAP)) {
     try {
-      const outcome = await describeOne(kind, row);
+      const { cost, outcome } = await describeOne(kind, row);
+
+      if (cost) {
+        costs.push(cost);
+      }
 
       if (outcome === "authored") {
         summary.authored += 1;
@@ -885,6 +965,11 @@ async function main(): Promise<void> {
   summary.queueRemaining = Math.max(0, queue.length - summary.authored - summary.alreadyBio);
 
   console.log(JSON.stringify({ ok: true, ...summary }));
+
+  // Record the tick's authoring spend, best-effort, AFTER the summary is printed (the
+  // cron parses the summary as its last stdout line; emitCost only logs to stderr).
+  // Cannot throw; a hard 2.5s cap keeps it well inside the runner budget.
+  await emitCost(costs);
 }
 
 // `import.meta.main` so the pure helpers (the fallback prompt builder) can be imported by

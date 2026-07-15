@@ -30,6 +30,7 @@ const USAGE_KEY = ["admin", "usage"] as const;
 // A human label per ledger step (the enum is machine-terse). An unmapped step
 // falls back to its raw key, so a new step still renders.
 const STEP_LABELS: Record<string, string> = {
+  bio: "Bios",
   context: "Context notes",
   discogs: "Discogs",
   embed: "Embeddings",
