@@ -8,6 +8,20 @@ import { adminApiGet, adminApiPost } from "../api";
 /** One row of the bio worklist: an entity with findings but no bio yet. */
 export type EntityBioWorkItem = { id: string; name: string; slug: string };
 
+/**
+ * The Worker-paced bio DRAFT: the assembled grounding the box authors from. The Worker runs
+ * the Firecrawl gather (its key) + pulls the logged finding titles (its DB) and returns a
+ * ready-to-author prompt + its provenance version. `found:false` is an unresolved slug.
+ */
+export type EntityBioDraft = {
+  findingCount: number;
+  found: boolean;
+  hasFacts: boolean;
+  name: string;
+  prompt: string;
+  promptVersion: number;
+};
+
 /** What a describe call returns: the stored (or dry-run/skipped) bio + its slug. */
 export type EntityBioResult = {
   bio: string;
@@ -53,8 +67,15 @@ export async function describeArtistCommand(
   );
 }
 
+// Trigger the Worker's bio-draft grounding for one artist: the Firecrawl gather + finding
+// titles + the assembled `describe_artist` prompt, returned ready-to-author. The box's bio
+// sweep calls this per queued entity, then runs `claude -p` on the returned prompt.
+export async function draftArtistBioCommand(slug: string): Promise<EntityBioDraft> {
+  return adminApiGet<EntityBioDraft>(`/api/admin/artists/${encodeURIComponent(slug)}/bio-draft`);
+}
+
 // The BIO queue: artists with findings but no bio yet, oldest first — the worklist the
-// future `describe_artist` cron drains (each row is a `admin artists describe <slug>`).
+// `describe_artist` cron drains (each row is a `admin artists describe <slug>`).
 export async function artistsBioQueueCommand(limit: number): Promise<EntityBioWorkItem[]> {
   const response = await adminApiGet<{ artists: EntityBioWorkItem[]; ok: boolean }>(
     `/api/admin/artists/bio-queue?limit=${limit}`,

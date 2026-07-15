@@ -24,8 +24,9 @@ import {
 import { listUnresolvedArtists, resolveArtist } from "../artist-resolution";
 import { backfillArtistImages } from "../backfill-artist-images";
 import { backfillArtists } from "../backfill-artists";
-import { gateBioText } from "../bio";
+import { buildEntityBioPrompt, fetchEntityFacts, gateBioText } from "../bio";
 import { adminAuth, operatorGuard } from "../orpc-auth";
+import { getFindingsByArtist } from "../tracks";
 import { ORPCError } from "@orpc/server";
 import { apiFault, type Implementer, parseBool, parseLimit, toFault } from "./_shared";
 
@@ -319,6 +320,54 @@ export function adminArtistsHandlers(os: Implementer) {
     }
   });
 
+  // GET /admin/artists/{slug}/bio-draft — agent tier (`adminAuth`): the Worker-paced
+  // grounding seam. The box cannot gather Firecrawl facts (no key) or enumerate finding
+  // TITLES (not on the wire), so it triggers this READ: the Worker runs the Firecrawl gather
+  // with ITS key + pulls the logged finding titles from ITS DB, assembles the registered bio
+  // prompt, and returns the ready-to-author prompt + its provenance version. The box then
+  // authors with `claude -p` and writes back via `describe_artist`. Publishes nothing; the
+  // context-note sweep's Worker-side twin. A missing slug returns `found:false` (never throws).
+  const draftArtistBioHandler = os.draft_artist_bio.use(adminAuth).handler(async ({ input }) => {
+    try {
+      const artist = await getArtistBySlug(input.slug);
+
+      if (!artist) {
+        return {
+          findingCount: 0,
+          found: false as const,
+          hasFacts: false,
+          name: "",
+          prompt: "",
+          promptVersion: 0,
+        };
+      }
+
+      // Gather Worker-side: Firecrawl facts (with the Worker's key) + the logged finding
+      // titles (with the Worker's DB) — the two the box cannot reach. Both best-effort.
+      const facts = await fetchEntityFacts({ kind: "artist", name: artist.name });
+      const findings = await getFindingsByArtist(artist.id, artist.name);
+      const findingTitles = findings.map((finding) => finding.title);
+
+      const { body, version } = await buildEntityBioPrompt({
+        facts: facts?.facts ?? null,
+        findingTitles,
+        kind: "artist",
+        name: artist.name,
+      });
+
+      return {
+        findingCount: findingTitles.length,
+        found: true as const,
+        hasFacts: facts != null,
+        name: artist.name,
+        prompt: body,
+        promptVersion: version,
+      };
+    } catch (error) {
+      throw apiFault(error);
+    }
+  });
+
   // GET /admin/artists/bio-queue — agent tier (`adminAuth`), the list_unresolved_artists
   // precedent: the bio worklist (artists with findings but no bio yet), oldest-first.
   const listArtistsMissingBioHandler = os.list_artists_missing_bio
@@ -339,6 +388,7 @@ export function adminArtistsHandlers(os: Implementer) {
     backfill_artists: backfillArtistsHandler,
     confirm_artist_social: confirmArtistSocialHandler,
     describe_artist: describeArtistHandler,
+    draft_artist_bio: draftArtistBioHandler,
     list_artist_socials: listArtistSocialsHandler,
     list_artists_missing_bio: listArtistsMissingBioHandler,
     list_unresolved_artists: listUnresolvedArtistsHandler,

@@ -427,6 +427,40 @@ export const describeArtist = oc
     }),
   );
 
+/**
+ * `draft_artist_bio` → `GET /admin/artists/{slug}/bio-draft` (operationId `draftArtistBio`).
+ *
+ * Agent tier (`adminAuth`), the `describe_artist` sibling: the Worker-paced grounding seam.
+ * The box holds no Firecrawl key and cannot enumerate an artist's finding TITLES; this READ
+ * runs the Firecrawl gather (with the Worker's key) + pulls the logged finding titles (with
+ * the Worker's DB) and assembles the registered bio prompt, handing the box a ready-to-author
+ * PROMPT. The box then runs `claude -p` on it and writes back via `describe_artist`. A pure
+ * read — it publishes nothing, and it returns only public facts (web snippets + finding
+ * titles), never a secret or an internal id beyond the slug/name/count.
+ *
+ * `found:false` when the slug does not resolve (it never throws on a missing entity).
+ * `hasFacts` reports whether Firecrawl returned any facts (false = the prompt's no-facts arm).
+ */
+export const draftArtistBio = oc
+  .route({
+    method: "GET",
+    operationId: "draftArtistBio",
+    path: "/admin/artists/{slug}/bio-draft",
+    summary: "Assemble a ready-to-author bio prompt for an artist (Worker-side grounding)",
+    tags: ["Admin"],
+  })
+  .input(z.object({ slug: z.string() }))
+  .output(
+    z.object({
+      findingCount: z.number(),
+      found: z.boolean(),
+      hasFacts: z.boolean(),
+      name: z.string(),
+      prompt: z.string(),
+      promptVersion: z.number(),
+    }),
+  );
+
 /** One row of the bio worklist: an artist with findings but no bio yet. */
 const ArtistBioWorkItemSchema = z
   .object({ id: z.string(), name: z.string(), slug: z.string() })
@@ -458,6 +492,7 @@ export const adminArtistsContract = {
   backfill_artists: backfillArtists,
   confirm_artist_social: confirmArtistSocial,
   describe_artist: describeArtist,
+  draft_artist_bio: draftArtistBio,
   list_artist_socials: listArtistSocials,
   list_artists_missing_bio: listArtistsMissingBio,
   list_unresolved_artists: listUnresolvedArtists,

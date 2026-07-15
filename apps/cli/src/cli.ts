@@ -2484,6 +2484,20 @@ function addAdminCommands(program: Command): void {
       await runEntityDescribe("artist", slug, options, describeArtistCommand);
     });
 
+  // `draft_artist_bio` → `admin artists draft-bio <slug>`. The box's bio sweep's TRIGGER: the
+  // Worker gathers the grounding (Firecrawl facts + finding titles) and returns a
+  // ready-to-author prompt + its provenance version. Prints the JSON the sweep consumes.
+  artists
+    .command("draft-bio")
+    .description("Assemble the Worker-grounded bio prompt for an artist (the sweep's trigger)")
+    .argument("<slug>")
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (slug: string, options: { json: boolean }) => {
+      const { draftArtistBioCommand } = await import("./commands/admin-artists");
+      await runEntityBioDraft("artist", slug, options, draftArtistBioCommand);
+    });
+
   // `describe_label` + the crawl-seed reads → `admin labels` group (Convention B). The
   // voiced-bio author is the label sibling of `admin artists describe`.
   const labels = configureCommand(
@@ -2526,6 +2540,19 @@ function addAdminCommands(program: Command): void {
 
       const { describeLabelCommand } = await import("./commands/admin-labels");
       await runEntityDescribe("label", slug, options, describeLabelCommand);
+    });
+
+  // `draft_label_bio` → `admin labels draft-bio <slug>`. The label sibling of the artist
+  // draft: the box's bio sweep TRIGGER that returns the Worker-grounded, ready-to-author prompt.
+  labels
+    .command("draft-bio")
+    .description("Assemble the Worker-grounded bio prompt for a label (the sweep's trigger)")
+    .argument("<slug>")
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (slug: string, options: { json: boolean }) => {
+      const { draftLabelBioCommand } = await import("./commands/admin-labels");
+      await runEntityBioDraft("label", slug, options, draftLabelBioCommand);
     });
 
   // `migrate_*` ops → `admin migrations` group (Convention B). One-off, operator-run
@@ -2827,6 +2854,35 @@ async function runEntityBioQueue(
   for (const item of items) {
     console.log(`  ${item.slug}  ${item.name}`);
   }
+}
+
+// `admin artists|labels draft-bio <slug>` — the box bio sweep's TRIGGER: the Worker gathers
+// the grounding (Firecrawl facts + logged finding titles) and assembles the registered bio
+// prompt, returning it ready-to-author. The sweep reads `--json`, runs `claude -p` on the
+// prompt, then writes the bio back via `describe`.
+async function runEntityBioDraft(
+  kind: "artist" | "label",
+  slug: string,
+  options: { json: boolean },
+  draftCommand: (slug: string) => Promise<import("./commands/admin-artists").EntityBioDraft>,
+): Promise<void> {
+  const draft = await draftCommand(slug);
+
+  if (options.json) {
+    printJson(draft);
+    return;
+  }
+
+  if (!draft.found) {
+    console.log(`No ${kind} with slug ${slug}.`);
+    return;
+  }
+
+  console.log(
+    `Drafted a bio prompt for ${draft.name} (${draft.findingCount} finding(s), facts: ${
+      draft.hasFacts ? "yes" : "none"
+    }, prompt v${draft.promptVersion}).`,
+  );
 }
 
 // `fluncle tracks similar <id|logId>` — the sonic neighbourhood off the MuQ embedding.

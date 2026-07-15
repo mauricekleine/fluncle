@@ -251,6 +251,40 @@ export const describeLabel = oc
     }),
   );
 
+/**
+ * `draft_label_bio` → `GET /admin/labels/{slug}/bio-draft` (operationId `draftLabelBio`).
+ *
+ * Agent tier (`adminAuth`), the `describe_label` sibling: the Worker-paced grounding seam.
+ * The box holds no Firecrawl key and cannot enumerate the tracks it has logged on a label;
+ * this READ runs the Firecrawl gather (with the Worker's key) + pulls the logged finding
+ * titles (with the Worker's DB) and assembles the registered bio prompt, handing the box a
+ * ready-to-author PROMPT. The box then runs `claude -p` on it and writes back via
+ * `describe_label`. A pure read — it publishes nothing, and it returns only public facts
+ * (web snippets + finding titles), never a secret or an internal id beyond the slug/name/count.
+ *
+ * `found:false` when the slug does not resolve (it never throws on a missing entity).
+ * `hasFacts` reports whether Firecrawl returned any facts (false = the prompt's no-facts arm).
+ */
+export const draftLabelBio = oc
+  .route({
+    method: "GET",
+    operationId: "draftLabelBio",
+    path: "/admin/labels/{slug}/bio-draft",
+    summary: "Assemble a ready-to-author bio prompt for a label (Worker-side grounding)",
+    tags: ["Admin"],
+  })
+  .input(z.object({ slug: z.string() }))
+  .output(
+    z.object({
+      findingCount: z.number(),
+      found: z.boolean(),
+      hasFacts: z.boolean(),
+      name: z.string(),
+      prompt: z.string(),
+      promptVersion: z.number(),
+    }),
+  );
+
 /** One row of the bio worklist: a label with findings but no bio yet. */
 const LabelBioWorkItemSchema = z
   .object({ id: z.string(), name: z.string(), slug: z.string() })
@@ -279,6 +313,7 @@ export const listLabelsMissingBio = oc
 export const adminLabelsContract = {
   confirm_label_alias: confirmLabelAlias,
   describe_label: describeLabel,
+  draft_label_bio: draftLabelBio,
   list_label_aliases: listLabelAliases,
   list_labels_admin: listLabelsAdmin,
   list_labels_missing_bio: listLabelsMissingBio,
