@@ -222,12 +222,14 @@ export const QUARANTINE_CLEARED = "quarantine-cleared";
  * self-sealing verdict: a duplicate veto (`duplicate_of_track_id` + the −2 tier) can be WRONG (a
  * shared or mis-assigned ISRC, a `matchKey` collision on a genuinely different recording), and
  * without an override the row can never be captured, so the post-audio check that would exonerate
- * it never runs. This is that override, and it is STICKY: all THREE duplicate detectors respect it
+ * it never runs. This is that override, and it is STICKY: all FOUR duplicate detectors respect it
  * before re-stamping —
  *
  *   1. the pre-audio ISRC match to a finding (`preAudioPriority`),
- *   2. the near-1.0 post-embed same-title adjudication (the scored path),
- *   3. the catalogue↔catalogue dedup (`catalogueDuplicateOf` + `readCatalogueIdentity`),
+ *   2. the pre-audio + scored matchKey match to a finding — a logged track's folded title+artist
+ *      twin, the 2026-07-15 "Drifting Away" ruling (`preAudioPriority` / the scored path),
+ *   3. the near-1.0 post-embed same-title adjudication (the scored path),
+ *   4. the catalogue↔catalogue dedup (`catalogueDuplicateOf` + `readCatalogueIdentity`),
  *
  * so the sweep's self-healing re-rank (which re-stamps a duplicate on every tick as the corpus
  * fingerprint moves) never re-marks a force-captured row. A cleared row is also excluded from
@@ -463,9 +465,12 @@ export function capturePriorityFor(
  * the corpus) invalidates every stored fingerprint and forces one self-healing full re-rank —
  * the same mechanism, no bulk write, no manual invalidation. Bump it only when the ranking
  * DECISION changes for rows the corpus counts did not move: `v2` added catalogue-internal
- * duplicate detection (docs/the-ear.md § Duplicates), which must re-mark rows already ranked.
+ * duplicate detection (docs/the-ear.md § Duplicates), which must re-mark rows already ranked;
+ * `v3` added the matchKey-vs-findings detector (the 2026-07-15 "Drifting Away" ruling), which
+ * must re-mark an ALREADY-RANKED scored row that earlier ticks left as a discovery — a 0.94 twin
+ * of a logged finding whose corpus counts never moved would otherwise keep its stale ear slot.
  */
-const RANK_LOGIC_VERSION = "v2";
+const RANK_LOGIC_VERSION = "v3";
 
 export function rankCorpus(findings: number, embeddedFindings: number): string {
   return `${RANK_LOGIC_VERSION}:${findings}:${embeddedFindings}`;
@@ -532,16 +537,28 @@ function preAudioPriority(
     capture_status?: null | string;
     isrc: null | string;
     label: null | string;
+    title: string;
   },
   archive: ArchiveAffinity,
   findingIsrcs: Map<string, string>,
+  findingMatchKeys: Map<string, string>,
 ): { duplicateOf: null | string; priority: number } {
   // The operator's force-capture (`DUPLICATE_CLEARED`) overrules the duplicate veto stickily
-  // (docs/the-ear.md § Duplicates): skip the ISRC match so the row lands on its HONEST ladder tier
-  // and re-enters the capture queue, instead of being re-vetoed to −2 on every self-healing tick.
-  const dupKey =
-    candidate.capture_status === DUPLICATE_CLEARED ? null : normalizeIsrc(candidate.isrc);
-  const duplicateOf = dupKey ? (findingIsrcs.get(dupKey) ?? null) : null;
+  // (docs/the-ear.md § Duplicates): skip BOTH duplicate probes so the row lands on its HONEST
+  // ladder tier and re-enters the capture queue, instead of being re-vetoed to −2 every tick.
+  const cleared = candidate.capture_status === DUPLICATE_CLEARED;
+  const isrcKey = cleared ? null : normalizeIsrc(candidate.isrc);
+  const isrcDup = isrcKey ? (findingIsrcs.get(isrcKey) ?? null) : null;
+  // After the ISRC miss, the FOLDED TITLE+ARTIST identity (the 2026-07-15 "Drifting Away" ruling):
+  // a crawled row whose `matchKey` equals a certified finding's is the same song — a duplicate
+  // regardless of ISRC (a YouTube rip carries none) and regardless of any later embedding score.
+  const keyDup =
+    cleared || isrcDup
+      ? null
+      : (findingMatchKeys.get(
+          matchKey(parseArtistsJson(candidate.artists_json), candidate.title),
+        ) ?? null);
+  const duplicateOf = isrcDup ?? keyDup;
   const priority = duplicateOf
     ? DUPLICATE_CAPTURE_TIER
     : capturePriorityFor(
@@ -680,6 +697,45 @@ async function readFindingIdentities(): Promise<Map<string, string>> {
   }
 
   return byTrack;
+}
+
+/**
+ * The archive's TITLE+ARTIST identity map, INVERTED — folded `matchKey` → the certified finding's
+ * `track_id`. The corpus for the matchKey-vs-findings duplicate detector (docs/the-ear.md §
+ * Duplicates, the 2026-07-15 "Drifting Away" ruling): a crawled catalogue row whose folded
+ * title+artist identity EQUALS a finding's is the same song — a duplicate regardless of ISRC (a
+ * YouTube rip of a logged track carries none) and regardless of embedding score (the rip scored a
+ * merely-0.94 twin of the finding). It is stamped `duplicate_of_track_id` + tier −2 exactly like the
+ * ISRC match, on BOTH sides of the audio boundary (the pre-audio ladder and the scored path).
+ *
+ * The inverse of `readFindingIdentities` (finding → key, the near-1.0 wrong-audio discriminator):
+ * this one is read on EVERY tick with candidates, because a title-duplicate can hide at ANY score,
+ * not just in the near-1.0 band. If two findings share an identity the SMALLEST `track_id` wins —
+ * the same stable, deterministic canonical precedent `readCatalogueIdentity` uses, so the marker is
+ * idempotent across ticks. Bounded by the FINDING count, like every affinity read.
+ */
+async function readFindingMatchKeys(): Promise<Map<string, string>> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [],
+    sql: `select findings.track_id as track_id, tracks.title as title, tracks.artists_json as artists_json
+          from findings join tracks on tracks.track_id = findings.track_id`,
+  });
+
+  const byMatchKey = new Map<string, string>();
+
+  for (const row of typedRows<{ artists_json: string; title: string; track_id: string }>(
+    result.rows,
+  )) {
+    const key = matchKey(parseArtistsJson(row.artists_json), row.title);
+    const incumbent = byMatchKey.get(key);
+
+    if (incumbent === undefined || row.track_id < incumbent) {
+      byMatchKey.set(key, row.track_id);
+    }
+  }
+
+  return byMatchKey;
 }
 
 /**
@@ -944,8 +1000,8 @@ export async function rankCatalogue(limit = RANK_BATCH_SIZE): Promise<RankCatalo
   // ── The corpora the write half needs ───────────────────────────────────────────────
   // The pre-audio ladder (affinity + ISRC map) is needed whenever an UNVECTORED row exists, and
   // ALSO when a vectored row has to be QUARANTINED (rewound to the pre-audio ladder). The
-  // title+artist identity map is needed only to ADJUDICATE a near-1.0 vectored row — the common
-  // tick has none, so all three finding-bounded reads stay off the hot path until a row earns them.
+  // finding→key identity map is needed only to ADJUDICATE a near-1.0 vectored row — the common
+  // tick has none, so those finding-bounded reads stay off the hot path until a row earns them.
   const nearWrongAudio = vectored.filter((row) => {
     const winner = winners.get(row.track_id);
 
@@ -956,15 +1012,21 @@ export async function rankCatalogue(limit = RANK_BATCH_SIZE): Promise<RankCatalo
     );
   });
   const needsPreAudio = unvectored.length > 0 || nearWrongAudio.length > 0;
-  const [archive, findingIsrcs, findingIdentities, catalogueIdentity] = await Promise.all([
-    needsPreAudio ? readArchiveAffinity() : undefined,
-    needsPreAudio ? readFindingIsrcs() : undefined,
-    nearWrongAudio.length > 0 ? readFindingIdentities() : undefined,
-    // The catalogue-internal duplicate corpus — needed on EVERY tick with candidates: a vectored
-    // row may be a captured sibling of another catalogue row (declutter the ear lens), and an
-    // unvectored row may duplicate an already-captured sibling (veto it off the capture queue).
-    readCatalogueIdentity(),
-  ]);
+  const [archive, findingIsrcs, findingIdentities, findingMatchKeys, catalogueIdentity] =
+    await Promise.all([
+      needsPreAudio ? readArchiveAffinity() : undefined,
+      needsPreAudio ? readFindingIsrcs() : undefined,
+      nearWrongAudio.length > 0 ? readFindingIdentities() : undefined,
+      // The INVERTED finding identity map (matchKey → finding) — needed on EVERY tick with
+      // candidates, because a matchKey twin of a logged finding (the "Drifting Away" ruling) can
+      // hide at ANY score, not just the near-1.0 band: an unvectored row may duplicate a finding
+      // by title, and a scored row at 0.94 may be that finding's YouTube-rip twin.
+      readFindingMatchKeys(),
+      // The catalogue-internal duplicate corpus — needed on EVERY tick with candidates: a vectored
+      // row may be a captured sibling of another catalogue row (declutter the ear lens), and an
+      // unvectored row may duplicate an already-captured sibling (veto it off the capture queue).
+      readCatalogueIdentity(),
+    ]);
 
   // ── The scored half, now with the wrong-audio veto (docs/the-ear.md § Wrong audio) ──
   let quarantined = 0;
@@ -1043,7 +1105,12 @@ export async function rankCatalogue(limit = RANK_BATCH_SIZE): Promise<RankCatalo
       // bad-audio memory, so the re-download's videoId/sha filters refuse it.
       if (!sameTitle) {
         const preAudio = archive
-          ? preAudioPriority(candidate, archive, findingIsrcs ?? new Map<string, string>())
+          ? preAudioPriority(
+              candidate,
+              archive,
+              findingIsrcs ?? new Map<string, string>(),
+              findingMatchKeys,
+            )
           : { duplicateOf: null, priority: 0 };
         quarantined += 1;
         writes.push({
@@ -1077,6 +1144,48 @@ export async function rankCatalogue(limit = RANK_BATCH_SIZE): Promise<RankCatalo
         });
         continue;
       }
+    }
+
+    // MATCHKEY-VS-FINDINGS DUPLICATE (the 2026-07-15 "Drifting Away" ruling, docs/the-ear.md §
+    // Duplicates). Independent of the near-1.0 adjudication above and of the score entirely: a
+    // scored row whose folded title+artist `matchKey` EQUALS a certified finding's is that logged
+    // song, even when a YouTube-rip capture only scored a merely-0.94 twin (the exact live case —
+    // "Drifting Away" ranked 0.94 against the finding 012.8.0A, the same song). Mirror the
+    // same-title −2 write: name the finding on `duplicate_of_track_id`, stamp the −2 tier so it
+    // leaves the ear lens (its existing `duplicate_of_track_id is null` filter) while KEEPING its
+    // vector + score (the honest WHY of the number). The near-1.0 same-title path already handled
+    // its own band above (and `continue`d); this catches the whole rest of the score range. It runs
+    // BEFORE the catalogue-internal check because a certified finding is the canonical the board
+    // would rather name (the same precedence the pre-audio ladder uses). `DUPLICATE_CLEARED` is
+    // respected — a force-captured row is never re-stamped, per the escape hatch.
+    const findingDuplicate =
+      candidate.capture_status === DUPLICATE_CLEARED
+        ? null
+        : (findingMatchKeys.get(
+            matchKey(parseArtistsJson(candidate.artists_json), candidate.title),
+          ) ?? null);
+
+    if (findingDuplicate) {
+      writes.push({
+        args: [
+          score,
+          winner?.fid ?? null,
+          DUPLICATE_CAPTURE_TIER,
+          findingDuplicate,
+          corpus,
+          now,
+          candidate.track_id,
+        ],
+        sql: `update tracks
+              set nearest_finding_score = ?,
+                  nearest_finding_track_id = ?,
+                  capture_priority = ?,
+                  duplicate_of_track_id = ?,
+                  catalogue_rank_corpus = ?,
+                  catalogue_ranked_at = ?
+              where track_id = ?`,
+      });
+      continue;
     }
 
     // CATALOGUE-INTERNAL DUPLICATE (docs/the-ear.md § Duplicates). This vectored row is not near
@@ -1143,15 +1252,18 @@ export async function rankCatalogue(limit = RANK_BATCH_SIZE): Promise<RankCatalo
   // `preAudioPriority`) runs here and the surface re-runs the same function to explain the answer.
   if (unvectored.length > 0 && archive) {
     for (const candidate of unvectored) {
-      // THE DUPLICATE CHECK, before the ladder. An exact ISRC match to a certified finding means
-      // buying this row's audio buys something already on file — the money the crawler's real
-      // "Infinity" duplicate would have spent. It is the −2 veto tier (excluded by the capture
-      // queue's `capture_priority >= 0` predicate, no new mechanism), and the finding it matched
-      // is stored so the board can name it. NULL clears a stale marker when the finding is gone.
+      // THE DUPLICATE CHECK, before the ladder. An exact ISRC match — OR, after it misses, a folded
+      // title+artist `matchKey` match (the "Drifting Away" ruling: a YouTube rip carries no ISRC) —
+      // to a certified finding means buying this row's audio buys something already on file, the
+      // money the crawler's real "Infinity" duplicate would have spent. It is the −2 veto tier
+      // (excluded by the capture queue's `capture_priority >= 0` predicate, no new mechanism), and
+      // the finding it matched is stored so the board can name it. NULL clears a stale marker when
+      // the finding is gone.
       const finding = preAudioPriority(
         candidate,
         archive,
         findingIsrcs ?? new Map<string, string>(),
+        findingMatchKeys,
       );
 
       // THEN the catalogue-internal duplicate: this uncaptured row may be the same master as an
@@ -2080,11 +2192,16 @@ export async function verifyCapture(
   }
 
   // A MISMATCH on a CATALOGUE row — quarantine it (the machine may rewind an uncertified row).
-  const [archive, findingIsrcs] = await Promise.all([readArchiveAffinity(), readFindingIsrcs()]);
+  const [archive, findingIsrcs, findingMatchKeys] = await Promise.all([
+    readArchiveAffinity(),
+    readFindingIsrcs(),
+    readFindingMatchKeys(),
+  ]);
   const preAudio = preAudioPriority(
-    { artists_json: row.artists_json, isrc: row.isrc, label: row.label },
+    { artists_json: row.artists_json, isrc: row.isrc, label: row.label, title: row.title },
     archive,
     findingIsrcs,
+    findingMatchKeys,
   );
   const rejected = appendRejectedSha(
     row.source_audio_rejected,

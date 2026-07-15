@@ -264,7 +264,7 @@ describe("the sweep — batching, staleness, and self-healing", () => {
 
     const first = await rankCatalogue();
     expect(first.scored).toBe(1);
-    expect(first.corpus).toBe("v2:1:1");
+    expect(first.corpus).toBe("v3:1:1");
     expect((await rankingOf("cat-a")).nearest_finding_track_id).toBe("finding-a");
 
     // Nothing changed: the fingerprint matches, so there is no candidate at all.
@@ -280,7 +280,7 @@ describe("the sweep — batching, staleness, and self-healing", () => {
     await seedFinding("finding-b", { vector: blend(axis(0), axis(1), 0.4) });
 
     const third = await rankCatalogue();
-    expect(third.corpus).toBe("v2:2:2");
+    expect(third.corpus).toBe("v3:2:2");
     expect(third.scored).toBe(1);
     expect(third.quarantined).toBe(0);
     expect((await rankingOf("cat-a")).nearest_finding_track_id).toBe("finding-b");
@@ -372,7 +372,7 @@ describe("the sweep — batching, staleness, and self-healing", () => {
     // Stamped, with an honest null score — not left stale to be re-picked every tick.
     const ranking = await rankingOf("cat-a");
     expect(ranking.nearest_finding_score).toBeNull();
-    expect(ranking.catalogue_rank_corpus).toBe("v2:1:0");
+    expect(ranking.catalogue_rank_corpus).toBe("v3:1:0");
     expect(summary.remaining).toBe(0);
   });
 });
@@ -649,6 +649,166 @@ describe("duplicates — a crawled copy of a finding is flagged, never bought", 
     expect(cleared.duplicate_of_track_id).toBeNull();
     // It falls back to the ordinary metadata ladder — nothing ties it to the (now empty) archive.
     expect(cleared.capture_priority).toBe(0);
+  });
+});
+
+// ── The matchKey-vs-findings detector — a logged track's twin (the 2026-07-15 "Drifting Away" ruling)
+// A crawled catalogue row whose folded title+artist `matchKey` equals a certified finding's is that
+// same song — a DUPLICATE regardless of ISRC (a YouTube rip carries none) and regardless of embedding
+// score (the rip scored a merely-0.94 twin of the finding it copies). The ISRC-only pre-audio detector
+// and the ≥0.995 post-embed detector both missed it. This detector fires on BOTH sides of the audio
+// boundary — the pre-audio ladder and the scored path — stamping the −2 duplicate tier + the finding.
+describe("matchKey duplicate — a logged track's twin is flagged, ISRC-blind and score-blind", () => {
+  /** Stamp a catalogue row with the operator's force-capture sentinel, the way `forceCapture` would. */
+  async function markCleared(trackId: string): Promise<void> {
+    await db.execute({
+      args: [trackId],
+      sql: `update tracks set capture_status = 'duplicate-cleared' where track_id = ?`,
+    });
+  }
+
+  it("pre-audio: a no-ISRC row with the same folded title+artist as a finding is tier −2, finding stored, last on the board", async () => {
+    const { listCatalogueTracks, rankCatalogue } = await import("./catalogue");
+
+    // THE LIVE CASE. The crawler pulled a YouTube-rip copy of a logged track — NO ISRC — with a
+    // cosmetically different formatting (reversed artist order, lowercase, a hyphen for the space).
+    // The folded `matchKey` sees through all of it: same recording.
+    await seedFinding("finding-drifting", {
+      artists: ["BOP", "Unquote"],
+      title: "Drifting Away",
+    });
+    await seedCatalogue("cat-twin", {
+      artists: ["unquote", "bop"],
+      title: "DRIFTING-AWAY",
+    });
+    // A genuine candidate with no clash — the queue must still hand THIS one out first.
+    await seedCatalogue("cat-real", { artists: ["Nobody"], title: "A Real Candidate" });
+
+    const summary = await rankCatalogue();
+    expect(summary.prioritized).toBe(2);
+
+    // −2, strictly below the label veto's −1, the finding STORED so the board can name it — even
+    // though there is no ISRC anywhere and no vector to score against.
+    const twin = await rankingOf("cat-twin");
+    expect(twin.capture_priority).toBe(-2);
+    expect(twin.duplicate_of_track_id).toBe("finding-drifting");
+    expect(twin.nearest_finding_score).toBeNull();
+
+    // Still on the capture board, ordered LAST behind the real candidate, carrying its WHY.
+    const capture = await listCatalogueTracks("capture");
+    expect(capture.map((track) => track.trackId)).toEqual(["cat-real", "cat-twin"]);
+    expect(capture.find((track) => track.trackId === "cat-twin")?.duplicateOf?.trackId).toBe(
+      "finding-drifting",
+    );
+  });
+
+  it("scored: a 0.94 twin (well below 0.995) is stamped −2, KEEPS its score, and never occupies an ear slot", async () => {
+    const { DUPLICATE_SIMILARITY, listCatalogueTracks, rankCatalogue } =
+      await import("./catalogue");
+
+    // The exact defect: a rip of the logged "Drifting Away" embedded to a merely-0.94 twin of the
+    // finding — far below the 0.995 post-embed band, so the old detectors sailed past it and it
+    // ranked as a top discovery. The title+artist identity catches it regardless of the score.
+    await seedFinding("finding-drifting", {
+      artists: ["BOP", "Unquote"],
+      title: "Drifting Away",
+      vector: axis(0),
+    });
+    await seedCatalogue("cat-twin", {
+      artists: ["BOP", "Unquote"],
+      title: "Drifting Away (copy)",
+      vector: blend(axis(0), axis(1), 0.25),
+    });
+    // A genuine discovery so the ear lens is not trivially empty.
+    await seedCatalogue("cat-disco", { vector: blend(axis(0), axis(2), 0.3) });
+
+    await rankCatalogue();
+
+    const twin = await rankingOf("cat-twin");
+    expect(twin.duplicate_of_track_id).toBe("finding-drifting");
+    expect(twin.capture_priority).toBe(-2);
+    // It KEEPS its score — the honest WHY of the number — and that score is genuinely below the
+    // near-identical band, proving the detector is score-blind, not a re-labelled 0.995 marker.
+    expect(twin.nearest_finding_score ?? 0).toBeGreaterThan(0.85);
+    expect(twin.nearest_finding_score ?? 1).toBeLessThan(DUPLICATE_SIMILARITY);
+
+    // And it never occupies a ranked ear slot — a known copy is not a discovery.
+    const ear = await listCatalogueTracks("ear");
+    const earIds = ear.map((track) => track.trackId);
+    expect(earIds).toContain("cat-disco");
+    expect(earIds).not.toContain("cat-twin");
+  });
+
+  it("a VIP or a different artist is a DIFFERENT identity — not a duplicate, still ranks", async () => {
+    const { rankCatalogue } = await import("./catalogue");
+
+    // A VIP is a different recording — its descriptor is part of the identity, so an original of a
+    // logged VIP (or a VIP of a logged original) is a real discovery, never a duplicate.
+    await seedFinding("finding-dribble", {
+      artists: ["Enei"],
+      title: "Dribble",
+      vector: axis(0),
+    });
+    await seedCatalogue("cat-vip", {
+      artists: ["Enei"],
+      title: "Dribble - VIP",
+      vector: blend(axis(0), axis(1), 0.2),
+    });
+    // Same title, DIFFERENT artist — also a different identity, also a real discovery.
+    await seedFinding("finding-shared", {
+      artists: ["Artist A"],
+      title: "Shared Title",
+      vector: axis(3),
+    });
+    await seedCatalogue("cat-other-artist", {
+      artists: ["Artist B"],
+      title: "Shared Title",
+      vector: blend(axis(3), axis(4), 0.2),
+    });
+
+    await rankCatalogue();
+
+    // Neither is stamped a duplicate; both keep an ordinary scored ranking (tier cleared, score kept).
+    for (const id of ["cat-vip", "cat-other-artist"]) {
+      const row = await rankingOf(id);
+      expect(row.duplicate_of_track_id).toBeNull();
+      expect(row.capture_priority).toBeNull();
+      expect(row.nearest_finding_score ?? 0).toBeGreaterThan(0.9);
+    }
+  });
+
+  it("the force-capture sentinel is respected: a `duplicate-cleared` twin is NOT re-stamped, either side of the boundary", async () => {
+    const { rankCatalogue } = await import("./catalogue");
+
+    await seedFinding("finding-twin", {
+      artists: ["Known"],
+      title: "The Same Song",
+      vector: axis(0),
+    });
+    // Pre-audio (no vector): a matchKey twin the operator already forced past the veto.
+    await seedCatalogue("cat-preaudio", { artists: ["Known"], title: "The Same Song" });
+    await markCleared("cat-preaudio");
+    // Scored (a vector): same identity, also force-cleared.
+    await seedCatalogue("cat-scored", {
+      artists: ["Known"],
+      title: "The Same Song",
+      vector: blend(axis(0), axis(1), 0.25),
+    });
+    await markCleared("cat-scored");
+
+    await rankCatalogue();
+
+    // Pre-audio: NOT re-vetoed to −2 — it lands on its HONEST tier (artist "Known" is on the finding
+    // → 3) and re-enters the capture queue.
+    const preaudio = await rankingOf("cat-preaudio");
+    expect(preaudio.duplicate_of_track_id).toBeNull();
+    expect(preaudio.capture_priority).toBe(3);
+
+    // Scored: NOT re-stamped either — it ranks on its own merits (tier cleared, score kept).
+    const scored = await rankingOf("cat-scored");
+    expect(scored.duplicate_of_track_id).toBeNull();
+    expect(scored.capture_priority).toBeNull();
+    expect(scored.nearest_finding_score ?? 0).toBeGreaterThan(0.85);
   });
 });
 
