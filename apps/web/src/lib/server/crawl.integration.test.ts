@@ -795,4 +795,38 @@ describe("the Spotify anchor search rung (verified title+artist)", () => {
     );
     expect(anchored.rows[0]?.spotify_uri).toBe("spotify:track:spot-compcut");
   });
+
+  it("never spends a search call on a row with NO measured duration (the stored 0) — the triple is unverifiable", async () => {
+    const { searchTrackCandidates } = await import("./spotify");
+    const { crawlCatalogue } = await import("./crawl");
+
+    // MusicBrainz recordings can carry no length; the crawl writes those rows `duration_ms = 0`
+    // (`recording.length ?? track.length ?? 0`). Such a row can NEVER clear the verification
+    // triple (the duration signal is missing), so the rung must not burn one of its ten metered
+    // calls on it every rotation — even when a perfect-looking candidate exists.
+    await seedAnchorRow({
+      artists: ["No Length"],
+      durationMs: 0,
+      title: "Unmeasured",
+      trackId: "mb_no-duration",
+    });
+    vi.mocked(searchTrackCandidates).mockResolvedValue([
+      {
+        artists: ["No Length"],
+        durationMs: 200_000,
+        id: "spot-tempting",
+        spotifyUrl: "https://open.spotify.com/track/spot-tempting",
+        title: "Unmeasured",
+      },
+    ]);
+
+    const pass = await crawlCatalogue({ limit: 10, maxHop: 2 });
+    expect(pass.anchorsFilled).toBe(0);
+    expect(vi.mocked(searchTrackCandidates)).not.toHaveBeenCalled();
+
+    const row = await db.execute(
+      "select spotify_uri from tracks where track_id = 'mb_no-duration'",
+    );
+    expect(row.rows[0]?.spotify_uri).toBeNull();
+  });
 });

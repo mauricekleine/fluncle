@@ -810,7 +810,11 @@ async function fillSpotifyAnchors(
 
     // RUNG TWO — verified title+artist search, on its own budget. Once the budget is spent the
     // remaining rows wait for the next rotation (the cursor still advances past them below).
-    if (searchAttempts >= ANCHOR_SEARCH_BUDGET) {
+    // A row with NO measured duration — a MusicBrainz recording with no length is written as
+    // `duration_ms = 0` (the crawl's `recording.length ?? track.length ?? 0`) — can never clear
+    // the verification triple, so it never earns a search call: spending one of the ten metered
+    // calls on it every rotation would be a permanent budget leak toward a guaranteed no-stamp.
+    if (row.duration_ms <= 0 || searchAttempts >= ANCHOR_SEARCH_BUDGET) {
       continue;
     }
 
