@@ -269,6 +269,9 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   delete_private_saved_set: "private-session",
   delete_recording: "operator",
   delete_subscription: "operator",
+  // The album-bio authoring step — agent tier (adminAuth only, no operatorGuard), the
+  // note_track precedent: the box's agent token drives the fill-empty-only voiced-bio write.
+  describe_album: "admin",
   // The artist-bio authoring step — agent tier (adminAuth only, no operatorGuard), the
   // note_track precedent: the box's agent token drives the fill-empty-only voiced-bio write.
   describe_artist: "admin",
@@ -276,6 +279,10 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // Deliberately agent tier, unlike the operator-tier `update_label` crawl-seed ruling:
   // authoring a bio is enrichment, not an editorial ruling that steers the crawl.
   describe_label: "admin",
+  // The album bio-draft — agent tier (adminAuth only), the describe_album precedent: the
+  // box's bio sweep triggers this Worker-side grounding read (Firecrawl facts + finding
+  // titles → a ready-to-author prompt) with its agent token. A pure read; it publishes nothing.
+  draft_album_bio: "admin",
   // The artist bio-draft — agent tier (adminAuth only), the describe_artist precedent: the
   // box's bio sweep triggers this Worker-side grounding read (Firecrawl facts + finding
   // titles → a ready-to-author prompt) with its agent token. A pure read; it publishes nothing.
@@ -350,6 +357,9 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // the board + CLI + box can all consume.
   get_track_admin: "admin",
   initiate_mixtape_youtube: "operator",
+  // The album-bio worklist (albums with findings but no bio yet) — admin tier (agent-allowed
+  // read), the list_labels_missing_bio precedent; the bio cron drains it. Publishes nothing.
+  list_albums_missing_bio: "admin",
   // The `/admin/artists` review queue read — admin tier (agent-allowed), the list_*_admin
   // precedent; the operator's review-queue station consumes it.
   list_artist_socials: "admin",

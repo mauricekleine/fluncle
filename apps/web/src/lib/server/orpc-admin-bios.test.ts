@@ -17,10 +17,14 @@ const listArtistsMissingBio = vi.fn();
 const getLabelBySlug = vi.fn();
 const fillEmptyLabelBio = vi.fn();
 const listLabelsMissingBio = vi.fn();
+const getAlbumBySlug = vi.fn();
+const fillEmptyAlbumBio = vi.fn();
+const listAlbumsMissingBio = vi.fn();
 const fetchEntityFacts = vi.fn();
 const buildEntityBioPrompt = vi.fn();
 const getFindingsByArtist = vi.fn();
 const getFindingsByLabel = vi.fn();
+const getFindingsByAlbum = vi.fn();
 
 // The router graph imports `env` from cloudflare:workers at module load; stub it so the
 // import resolves in the test runtime (this suite touches no Worker binding).
@@ -48,6 +52,17 @@ vi.mock("./labels", async (importOriginal) => {
   };
 });
 
+vi.mock("./albums", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./albums")>();
+
+  return {
+    ...actual,
+    fillEmptyAlbumBio: (...args: unknown[]) => fillEmptyAlbumBio(...args),
+    getAlbumBySlug: (slug: string) => getAlbumBySlug(slug),
+    listAlbumsMissingBio: (...args: unknown[]) => listAlbumsMissingBio(...args),
+  };
+});
+
 // The bio-draft handler gathers Worker-side: keep the real `gateBioText` (the describe path
 // depends on it) but stub the Firecrawl gather + the prompt assembly the draft op drives.
 vi.mock("./bio", async (importOriginal) => {
@@ -65,6 +80,7 @@ vi.mock("./tracks", async (importOriginal) => {
 
   return {
     ...actual,
+    getFindingsByAlbum: (...args: unknown[]) => getFindingsByAlbum(...args),
     getFindingsByArtist: (...args: unknown[]) => getFindingsByArtist(...args),
     getFindingsByLabel: (...args: unknown[]) => getFindingsByLabel(...args),
   };
@@ -76,6 +92,7 @@ beforeAll(() => {
 
 const ARTIST = { id: "artist-1", mbid: undefined, name: "Calibre", slug: "calibre" };
 const LABEL = { id: "label-1", logoImageUrl: undefined, name: "Signature", slug: "signature" };
+const ALBUM = { id: "album-1", name: "Second Sun", slug: "second-sun" };
 
 // A clean, dry, in-voice bio (clears the real voice gate + the length bounds).
 const GOOD_BIO =
@@ -88,10 +105,14 @@ beforeEach(() => {
   getLabelBySlug.mockReset();
   fillEmptyLabelBio.mockReset();
   listLabelsMissingBio.mockReset();
+  getAlbumBySlug.mockReset();
+  fillEmptyAlbumBio.mockReset();
+  listAlbumsMissingBio.mockReset();
   fetchEntityFacts.mockReset();
   buildEntityBioPrompt.mockReset();
   getFindingsByArtist.mockReset();
   getFindingsByLabel.mockReset();
+  getFindingsByAlbum.mockReset();
 });
 
 // ── describe_artist ───────────────────────────────────────────────────────────
@@ -245,6 +266,50 @@ describe("oRPC describe_label (POST /admin/labels/{slug}/bio)", () => {
   });
 });
 
+// ── describe_album (parity) ─────────────────────────────────────────────────────
+describe("oRPC describe_album (POST /admin/albums/{slug}/bio)", () => {
+  it("fills an EMPTY album bio (agent), voice-gated", async () => {
+    getAlbumBySlug.mockResolvedValueOnce(ALBUM);
+    fillEmptyAlbumBio.mockResolvedValueOnce(true);
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      req("/admin/albums/second-sun/bio", "POST", AGENT_TOKEN, { bio: GOOD_BIO }),
+    );
+
+    expect(response?.status).toBe(200);
+    const data = (await readJson(response)) as { bio: string; slug: string };
+    expect(data.slug).toBe("second-sun");
+    expect(fillEmptyAlbumBio).toHaveBeenCalledWith("second-sun", GOOD_BIO, undefined);
+  });
+
+  it("NEVER overwrites an existing album bio — skipped no-op", async () => {
+    getAlbumBySlug.mockResolvedValueOnce({ ...ALBUM, bio: "The operator's own album bio." });
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      req("/admin/albums/second-sun/bio", "POST", AGENT_TOKEN, { bio: GOOD_BIO }),
+    );
+
+    expect(response?.status).toBe(200);
+    const data = (await readJson(response)) as { bio: string; skipped?: boolean };
+    expect(data.skipped).toBe(true);
+    expect(data.bio).toBe("The operator's own album bio.");
+    expect(fillEmptyAlbumBio).not.toHaveBeenCalled();
+  });
+
+  it("404s an unknown album slug", async () => {
+    getAlbumBySlug.mockResolvedValueOnce(undefined);
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      req("/admin/albums/nope/bio", "POST", AGENT_TOKEN, { bio: GOOD_BIO }),
+    );
+
+    expect(response?.status).toBe(404);
+  });
+});
+
 // ── the bio worklists ───────────────────────────────────────────────────────────
 describe("the bio worklists (agent-tier reads)", () => {
   it("list_artists_missing_bio returns the worklist rows", async () => {
@@ -269,6 +334,19 @@ describe("the bio worklists (agent-tier reads)", () => {
     expect(response?.status).toBe(200);
     const data = (await readJson(response)) as { labels: { slug: string }[] };
     expect(data.labels).toEqual([{ id: "l1", name: "Signature", slug: "signature" }]);
+  });
+
+  it("list_albums_missing_bio returns the worklist rows", async () => {
+    listAlbumsMissingBio.mockResolvedValueOnce([
+      { id: "al1", name: "Second Sun", slug: "second-sun" },
+    ]);
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(req("/admin/albums/bio-queue?limit=10", "GET", AGENT_TOKEN));
+
+    expect(response?.status).toBe(200);
+    const data = (await readJson(response)) as { albums: { slug: string }[] };
+    expect(data.albums).toEqual([{ id: "al1", name: "Second Sun", slug: "second-sun" }]);
   });
 });
 
@@ -382,6 +460,46 @@ describe("draft_label_bio (GET /admin/labels/{slug}/bio-draft)", () => {
 
     const { handleOrpc } = await import("./orpc");
     const response = await handleOrpc(req("/admin/labels/nope/bio-draft", "GET", AGENT_TOKEN));
+
+    expect(response?.status).toBe(200);
+    const data = (await readJson(response)) as BioDraft;
+    expect(data.found).toBe(false);
+    expect(buildEntityBioPrompt).not.toHaveBeenCalled();
+  });
+});
+
+describe("draft_album_bio (GET /admin/albums/{slug}/bio-draft)", () => {
+  it("assembles the album prompt from facts + finding titles", async () => {
+    getAlbumBySlug.mockResolvedValueOnce(ALBUM);
+    getFindingsByAlbum.mockResolvedValueOnce([{ title: "Higher Ground" }]);
+    fetchEntityFacts.mockResolvedValueOnce({ facts: "A 2019 album.", sources: ["u"] });
+    buildEntityBioPrompt.mockResolvedValueOnce({ body: "ALBUM PROMPT", version: 0 });
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      req("/admin/albums/second-sun/bio-draft", "GET", AGENT_TOKEN),
+    );
+
+    expect(response?.status).toBe(200);
+    const data = (await readJson(response)) as BioDraft;
+    expect(data.found).toBe(true);
+    expect(data.name).toBe("Second Sun");
+    expect(data.findingCount).toBe(1);
+    expect(data.prompt).toBe("ALBUM PROMPT");
+    expect(data.hasFacts).toBe(true);
+    expect(buildEntityBioPrompt).toHaveBeenCalledWith({
+      facts: "A 2019 album.",
+      findingTitles: ["Higher Ground"],
+      kind: "album",
+      name: "Second Sun",
+    });
+  });
+
+  it("returns found:false for an unknown album slug", async () => {
+    getAlbumBySlug.mockResolvedValueOnce(undefined);
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(req("/admin/albums/nope/bio-draft", "GET", AGENT_TOKEN));
 
     expect(response?.status).toBe(200);
     const data = (await readJson(response)) as BioDraft;

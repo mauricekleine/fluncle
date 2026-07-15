@@ -41,9 +41,9 @@ export const GraphEntityKindSchema = z
 export const GraphPreviewSchema = z
   .object({
     /**
-     * The entity's factual, third-person bio (artist/label only), when one is authored — the
+     * The entity's factual, third-person bio (artist/label/album), when one is authored — the
      * SAME paragraph the entity page prints beneath its dateline. Optional: MANY entities carry
-     * no bio yet (the backfill is in flight), and album/galaxy previews never have one. The card
+     * no bio yet (the backfill is in flight), and galaxy previews never have one. The card
      * renders it below the signature line, clamped; absent, the card reads exactly as before.
      */
     bio: z.string().optional(),

@@ -68,6 +68,12 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // route file; oRPC owns the paths directly). `list` is admin tier; create/update/
   // delete are operator tier (the operator's private spend data — a valid agent token 403s).
   "DELETE /admin/subscriptions/{id}": "delete_subscription",
+  // The album bio-draft — contract-only oRPC (no TanStack route file; oRPC owns the path
+  // directly). Agent tier: the box's bio sweep triggers this Worker-side grounding read
+  // (Firecrawl facts + finding titles → a ready-to-author prompt) with its agent token; the
+  // describe_album sibling. It does not match a public prefix, so it lives here to satisfy the
+  // "holds exactly" check.
+  "GET /admin/albums/{slug}/bio-draft": "draft_album_bio",
   // The artist-relationship RFC ops (Unit 2.1). `list_unresolved_artists` (the resolve
   // worklist) + `resolve_artist` are agent tier (the box's `fluncle-artist-sweep` cron
   // drives both with its agent-scoped token); `backfill_artists` (Unit 1) is agent tier too.
@@ -228,6 +234,10 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "PATCH /admin/subscriptions/{id}": "update_subscription",
   "PATCH /admin/tracks/{trackId}": "update_track",
   "PATCH /admin/tracks/{trackId}/social/{platform}": "update_track_social",
+  // The album voiced-bio author (the entity-bio engine) — contract-only oRPC (no TanStack
+  // route file; oRPC owns the path directly). Agent tier: the box's bio sweep drives the
+  // fill-empty-only write with its agent token, the note_track precedent.
+  "POST /admin/albums/{slug}/bio": "describe_album",
   // The identity-graph per-social write (Unit 5) — contract-only oRPC (no TanStack route
   // file; oRPC owns the path directly). Operator tier (the queue's manual confirm).
   "POST /admin/artists/socials/{socialId}/confirm": "confirm_artist_social",

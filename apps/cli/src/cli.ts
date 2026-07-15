@@ -268,7 +268,7 @@ type ArtistResolveOptions = {
   queue?: boolean;
 };
 
-// `admin artists|labels describe` — the voiced-bio author (the entity-bio engine). Mirrors
+// `admin artists|labels|albums describe` — the voiced-bio author (the entity-bio engine). Mirrors
 // `admin tracks note`: `--bio`/`--bio-file` carry the gated text, `--queue` shows the
 // worklist, `--dry-run` runs the voice gate without storing.
 type BioDescribeOptions = {
@@ -2555,6 +2555,64 @@ function addAdminCommands(program: Command): void {
       await runEntityBioDraft("label", slug, options, draftLabelBioCommand);
     });
 
+  // `describe_album` → `admin albums` group (Convention B). The voiced-bio author is the
+  // album sibling of `admin artists describe` / `admin labels describe`. An album carries no
+  // operator control, so this group is the bio engine and nothing else.
+  const albums = configureCommand(
+    admin.command("albums").description("Album entity commands (the voiced bio)"),
+  );
+
+  albums.action(() => {
+    albums.outputHelp();
+  });
+
+  albums
+    .command("describe")
+    .description("Author the voiced bio for an album (fills an empty bio only)")
+    .argument("[slug]")
+    .option(
+      "--queue",
+      "Show the bio worklist (albums with findings but no bio), oldest first",
+      false,
+    )
+    .option("--limit <limit>", "Number of albums to show with --queue", "50")
+    .option("--bio <text>", "The voice-gated bio paragraph")
+    .option("--bio-file <file>", "Read the bio from a file")
+    .option(
+      "--prompt-version <n>",
+      "The prompt-registry version that authored the bio (the sweep sends this; it is the bio's provenance)",
+    )
+    .option(
+      "--dry-run",
+      "Run the voice gate and report the verdict without storing anything",
+      false,
+    )
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (slug: string | undefined, options: BioDescribeOptions) => {
+      if (options.queue) {
+        const { albumsBioQueueCommand } = await import("./commands/admin-albums");
+        await runEntityBioQueue("album", options, albumsBioQueueCommand);
+        return;
+      }
+
+      const { describeAlbumCommand } = await import("./commands/admin-albums");
+      await runEntityDescribe("album", slug, options, describeAlbumCommand);
+    });
+
+  // `draft_album_bio` → `admin albums draft-bio <slug>`. The album sibling of the artist/label
+  // draft: the box's bio sweep TRIGGER that returns the Worker-grounded, ready-to-author prompt.
+  albums
+    .command("draft-bio")
+    .description("Assemble the Worker-grounded bio prompt for an album (the sweep's trigger)")
+    .argument("<slug>")
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (slug: string, options: { json: boolean }) => {
+      const { draftAlbumBioCommand } = await import("./commands/admin-albums");
+      await runEntityBioDraft("album", slug, options, draftAlbumBioCommand);
+    });
+
   // `migrate_*` ops → `admin migrations` group (Convention B). One-off, operator-run
   // data migrations. REF-05: move the archived 30s previews off the PUBLIC bucket
   // (a copyright exposure) into the PRIVATE one. Three modes, DRY-RUN BY DEFAULT:
@@ -2782,11 +2840,11 @@ async function runTrackNote(
   console.log(`  ${result.note}`);
 }
 
-// `admin artists|labels describe <slug>` — author + store an entity's voiced bio (the
+// `admin artists|labels|albums describe <slug>` — author + store an entity's voiced bio (the
 // entity-bio engine). The MODEL authors the bio in the box cron; the CLI posts the gated
 // text. Fills an empty bio only; an operator bio is never clobbered.
 async function runEntityDescribe(
-  kind: "artist" | "label",
+  kind: "artist" | "label" | "album",
   slug: string | undefined,
   options: BioDescribeOptions,
   describeCommand: (
@@ -2828,10 +2886,10 @@ async function runEntityDescribe(
   console.log(`  ${result.bio}`);
 }
 
-// `admin artists|labels describe --queue` — the bio worklist (entities with findings but
+// `admin artists|labels|albums describe --queue` — the bio worklist (entities with findings but
 // no bio yet), oldest first: the worklist the future bio cron drains.
 async function runEntityBioQueue(
-  kind: "artist" | "label",
+  kind: "artist" | "label" | "album",
   options: BioDescribeOptions,
   queueCommand: (limit: number) => Promise<import("./commands/admin-artists").EntityBioWorkItem[]>,
 ): Promise<void> {
@@ -2856,12 +2914,12 @@ async function runEntityBioQueue(
   }
 }
 
-// `admin artists|labels draft-bio <slug>` — the box bio sweep's TRIGGER: the Worker gathers
+// `admin artists|labels|albums draft-bio <slug>` — the box bio sweep's TRIGGER: the Worker gathers
 // the grounding (Firecrawl facts + logged finding titles) and assembles the registered bio
 // prompt, returning it ready-to-author. The sweep reads `--json`, runs `claude -p` on the
 // prompt, then writes the bio back via `describe`.
 async function runEntityBioDraft(
-  kind: "artist" | "label",
+  kind: "artist" | "label" | "album",
   slug: string,
   options: { json: boolean },
   draftCommand: (slug: string) => Promise<import("./commands/admin-artists").EntityBioDraft>,

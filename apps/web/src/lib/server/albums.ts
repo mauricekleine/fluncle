@@ -42,6 +42,12 @@ type AlbumRow = {
 
 /** The canonical album identity record the pages + JSON-LD read. */
 export type AlbumRecord = {
+  /**
+   * The album's voiced public bio (the entity sibling of a finding's `note`), or undefined
+   * when none is authored yet. Optional so the callers that mint a bare `AlbumRecord` need
+   * not carry it; the surfacing reads it off `getAlbumBySlug`. See lib/server/bio.ts.
+   */
+  bio?: string;
   id: string;
   name: string;
   slug: string;
@@ -147,12 +153,82 @@ export async function getAlbumBySlug(slug: string): Promise<AlbumRecord | undefi
   const db = await getDb();
   const result = await db.execute({
     args: [slug],
-    sql: `select ${ALBUM_COLUMNS} from albums where slug = ? limit 1`,
+    sql: `select ${ALBUM_COLUMNS}, bio from albums where slug = ? limit 1`,
   });
 
-  const row = typedRows<AlbumRow>(result.rows)[0];
+  const row = typedRows<AlbumRow & { bio: string | null }>(result.rows)[0];
 
-  return row ? toAlbumRecord(row) : undefined;
+  return row
+    ? {
+        ...toAlbumRecord(row),
+        bio: typeof row.bio === "string" && row.bio.trim() ? row.bio : undefined,
+      }
+    : undefined;
+}
+
+// ── The voiced bio: fill-empty-only write + the worklist (the entity-bio engine) ──────
+//
+// The album bio is the entity sibling of a finding's `note` and inherits its cardinal
+// safety guarantee: the agent NEVER overwrites an existing bio. The `and (bio is null or
+// trim(bio) = '')` predicate lives in the SQL, so an operator bio (or a second agent tick)
+// that lands between the handler's read and this write can never be clobbered — the loser
+// matches no row (mirrors `fillEmptyNote` / `fillEmptyArtistBio` / `fillEmptyLabelBio`).
+
+/**
+ * Fill an album's bio ATOMICALLY, only when it is currently empty. The bio + its PROVENANCE
+ * (`bio_prompt_version`) + `bio_status = 'resolved'` land in the SAME statement, gated by the
+ * fill-empty-only predicate. Returns whether a row was written (false = a non-empty bio was
+ * already there / the album is gone). `promptVersion` is undefined for an operator-typed bio
+ * and null when the sweep fell back to its baked prompt — both store NULL. The caller has
+ * already voice-gated the bio (`gateBioText`).
+ */
+export async function fillEmptyAlbumBio(
+  slug: string,
+  bio: string,
+  promptVersion?: number | null,
+): Promise<boolean> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [bio, promptVersion ?? null, new Date().toISOString(), slug],
+    sql: `update albums
+            set bio = ?, bio_prompt_version = ?, bio_status = 'resolved', updated_at = ?
+          where slug = ?
+            and (bio is null or trim(bio) = '')`,
+  });
+
+  return result.rowsAffected > 0;
+}
+
+/** One row of the bio worklist: an album with findings but no bio yet. */
+export type AlbumBioWorkItem = { id: string; name: string; slug: string };
+
+/**
+ * The bio worklist: albums that have at least one coordinate-bearing finding but NO bio
+ * yet, oldest-first — the worklist the `describe_album` cron drains. A bare read (no writes),
+ * bounded by `limit`. An album earns a bio only once Fluncle has logged a track off it, so
+ * the `exists` gate is the same certified-finding floor the album page uses.
+ */
+export async function listAlbumsMissingBio(limit: number): Promise<AlbumBioWorkItem[]> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [limit],
+    sql: `select a.id, a.name, a.slug
+          from albums a
+          where (a.bio is null or trim(a.bio) = '')
+            and exists (
+              select 1 from tracks t
+              join findings f on f.track_id = t.track_id
+              where t.album_id = a.id and f.log_id is not null
+            )
+          order by a.created_at asc
+          limit ?`,
+  });
+
+  return typedRows<{ id: string; name: string; slug: string }>(result.rows).map((row) => ({
+    id: row.id,
+    name: row.name,
+    slug: row.slug,
+  }));
 }
 
 /**

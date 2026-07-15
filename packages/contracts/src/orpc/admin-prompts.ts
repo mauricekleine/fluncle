@@ -40,6 +40,7 @@ export const PromptSlugSchema = z.enum([
   "search_filter",
   "describe_artist",
   "describe_label",
+  "describe_album",
 ]);
 
 /** Where an edit actually lands: `box` = live on the next sweep tick (no rebake);

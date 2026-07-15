@@ -1,7 +1,7 @@
-// The entity-bio engine (Worker-side): the artist/label BIO is the entity sibling of a
+// The entity-bio engine (Worker-side): the artist/label/album BIO is the entity sibling of a
 // finding's editorial `note`. Where the auto-note authors one line about one FINDING, this
-// authors a short paragraph about an ARTIST or a LABEL — grounded in Firecrawl facts + the
-// tracks Fluncle has actually LOGGED, never a fabricated discography, roster, or scene CV.
+// authors a short paragraph about an ARTIST, a LABEL, or an ALBUM — grounded in Firecrawl facts
+// + the tracks Fluncle has actually LOGGED, never a fabricated discography, roster, or tracklist.
 //
 // This module is the BACKEND ENGINE (the surfacing + the box cron land in later PRs):
 //   - `gateBioText` — the VOICE gate, adapted from `gateNoteText`. It reuses the SAME shared
@@ -18,21 +18,22 @@
 //     snippets as the bio's grounding fuel. Best-effort: null on no key / no results (the cron
 //     treats that as "no facts, skip").
 //   - `buildEntityBioPrompt` — the reusable prompt-assembly the future cron calls: it resolves
-//     the right registry slug (`describe_artist` / `describe_label`), interpolates the entity's
+//     the right registry slug (`describe_artist` / `describe_label` / `describe_album`), interpolates the entity's
 //     name, its logged findings, and the gathered facts, and returns the rendered body + its
 //     provenance version. The GROUNDING RAIL lives in the baked prompt (see prompts.ts).
 //
 // The AUTHORING itself (the `claude -p` call) is NOT here — it runs in the box cron, exactly
 // like the auto-note sweep. The Worker's job is the gate, the facts, and the fill-empty-only
-// store (`fillEmptyArtistBio` / `fillEmptyLabelBio` in artists.ts / labels.ts).
+// store (`fillEmptyArtistBio` / `fillEmptyLabelBio` / `fillEmptyAlbumBio` in artists.ts /
+// labels.ts / albums.ts).
 
 import { readOptionalEnv } from "./env";
 import { FIRECRAWL_SEARCH_URL, isLyricDomain, scanObservationScript } from "./observation";
 import { renderRegisteredPrompt } from "./prompts";
 import { ApiError } from "./spotify";
 
-/** Which entity a bio describes — the artist page, or the record-label page. */
-export type EntityKind = "artist" | "label";
+/** Which entity a bio describes — the artist page, the record-label page, or the album page. */
+export type EntityKind = "artist" | "label" | "album";
 
 // A bio is a short paragraph (2–4 sentences), not a one-line note. Floor it well above
 // the note's 24 so a bare stub cannot clear, and cap it at 500 — long enough for four
@@ -100,12 +101,18 @@ export type EntityFacts = {
 
 /**
  * Build the Firecrawl search query for one entity from its kind + name. An artist is a
- * producer; a label is an imprint. The genre anchor ("drum and bass") narrows the result
- * set to Fluncle's lane, exactly as the track query does — the widest query that still
- * lands on the right entity. The name is a trusted identity string, not free web content.
+ * producer; a label is an imprint; an album is a release. The genre anchor ("drum and bass")
+ * narrows the result set to Fluncle's lane, exactly as the track query does — the widest query
+ * that still lands on the right entity. The name is a trusted identity string, not free web
+ * content.
  */
 export function buildEntityFactsQuery(kind: EntityKind, name: string): string {
-  const descriptor = kind === "artist" ? "drum and bass producer" : "drum and bass record label";
+  const descriptor =
+    kind === "artist"
+      ? "drum and bass producer"
+      : kind === "label"
+        ? "drum and bass record label"
+        : "drum and bass album";
 
   return `${name} ${descriptor}`;
 }
@@ -191,8 +198,12 @@ type FirecrawlResult = { description?: string; title?: string; url?: string };
 // ── The prompt-assembly helper (the reusable seam the future cron authors through) ────
 
 /** The registry slug that authors each entity kind's bio. */
-function bioSlug(kind: EntityKind): "describe_artist" | "describe_label" {
-  return kind === "artist" ? "describe_artist" : "describe_label";
+function bioSlug(kind: EntityKind): "describe_artist" | "describe_label" | "describe_album" {
+  return kind === "artist"
+    ? "describe_artist"
+    : kind === "label"
+      ? "describe_label"
+      : "describe_album";
 }
 
 /**
