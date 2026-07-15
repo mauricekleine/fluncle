@@ -34,6 +34,14 @@ export function applyLifetimeMarkers(stars: Star[], logIds: Iterable<string>): v
 
   for (const star of stars) {
     star.lifetimeLogged = lifetime.has(star.logId.toLowerCase());
+
+    // Logged IS collected (the ruling): a star reached in any run stays reached.
+    // Re-collecting is not the game — the universe GROWS as new findings land,
+    // and the reward of returning is the new stars, not the old ones. The HUD
+    // counter reads lifetime + run against the whole growing field ("60/75").
+    if (star.lifetimeLogged) {
+      star.collected = true;
+    }
   }
 }
 

@@ -47,14 +47,14 @@ function starByLogId(stars: Star[], logId: string): Star {
 }
 
 describe("atlas mark states", () => {
-  it("maps run + lifetime progress to the three mark tiers", () => {
+  it("maps progress to the two mark tiers — logged IS collected, across sessions", () => {
     const stars = placeStars(TRACKS);
 
     applyLifetimeMarkers(stars, ["004.0.1C"]);
     starByLogId(stars, "018.5.7Y").collected = true;
 
     expect(atlasMarkState(starByLogId(stars, "018.5.7Y"))).toBe("logged");
-    expect(atlasMarkState(starByLogId(stars, "004.0.1C"))).toBe("lifetime");
+    expect(atlasMarkState(starByLogId(stars, "004.0.1C"))).toBe("logged");
     expect(atlasMarkState(starByLogId(stars, "000.0.1A"))).toBe("uncharted");
   });
 

@@ -64,14 +64,12 @@ export function atlasScale(
 // The map's two-tier read of the log: a star logged THIS run burns bright, a
 // star only in the signed-in lifetime log is a quieter fill (map knowledge
 // carrying across deaths), and an uncharted star is a dim hollow ring.
-export type AtlasMarkState = "lifetime" | "logged" | "uncharted";
+export type AtlasMarkState = "logged" | "uncharted";
 
+// Logged IS collected (a lifetime-logged star arrives collected), so the map
+// knows two truths only: reached, or not yet.
 export function atlasMarkState(star: Pick<Star, "collected" | "lifetimeLogged">): AtlasMarkState {
-  if (star.collected) {
-    return "logged";
-  }
-
-  return star.lifetimeLogged === true ? "lifetime" : "uncharted";
+  return star.collected || star.lifetimeLogged === true ? "logged" : "uncharted";
 }
 
 // The corner caption: the growth story in one deadpan line. The day numbers are

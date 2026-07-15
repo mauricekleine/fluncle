@@ -45,9 +45,11 @@ export type Star = EntityBase & {
   /** Bearing-stable angle on its ring, radians. */
   angle: number;
   artistLine: string;
-  /** Logged on the visit that reaches it (folds the old parallel collected[]). */
+  /** Reached — this run or any before it. Logged IS collected; nobody re-collects
+   * a star, the universe grows instead (new findings mint new stars). */
   collected: boolean;
-  /** Previously logged in the signed-in lifetime collection; never active cargo. */
+  /** In the signed-in lifetime collection (or logged earlier this session);
+   * survives resets — resetSim restores `collected` from it. */
   lifetimeLogged?: boolean;
   kind: "star";
   logId: string;

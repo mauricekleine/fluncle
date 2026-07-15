@@ -101,6 +101,8 @@ type ShipState = {
 export type SimState = {
   adriftT: number;
   atEarth: boolean;
+  /** collectedCount at run start — the win needs a HAUL (something logged this run). */
+  runStartCollected: number;
   /** Monotonic counter for spawned bolt ids (Unit D). */
   boltSeq: number;
   collectedCount: number;
@@ -184,7 +186,10 @@ export function createSim(stars: Star[], options: SimOptions = {}): SimState {
     adriftT: 0,
     atEarth: false,
     boltSeq: 0,
-    collectedCount: 0,
+    // Lifetime-logged stars arrive already collected (logged IS collected), so the
+    // counter opens at the log's size — "2/60", growing toward the whole field.
+    collectedCount: stars.filter((star) => star.collected).length,
+    runStartCollected: stars.filter((star) => star.collected).length,
     config,
     deaths: 0,
     entities: placeFrontier(stars, frontier, seed),
@@ -218,15 +223,19 @@ function launchShip(config: SimConfig): ShipState {
   };
 }
 
-/** Restart after a tow (or a manual restart): same galaxy, 0/N, full tank. */
+/** Restart after a tow (or a manual restart): same galaxy, the log endures, full tank. */
 export function resetSim(state: SimState, countDeath: boolean): void {
   state.adriftT = 0;
   state.atEarth = false;
-  state.collectedCount = 0;
 
+  // The log survives the tow: every star reached (this run or any before it)
+  // stays collected. Nobody re-collects; the universe grows instead.
   for (const star of state.stars) {
-    star.collected = false;
+    star.collected = star.lifetimeLogged === true;
   }
+
+  state.collectedCount = state.stars.filter((star) => star.collected).length;
+  state.runStartCollected = state.collectedCount;
 
   state.deaths += countDeath ? 1 : 0;
   // Same galaxy, same seed: the frontier rebuilds identically (bolts clear).
@@ -555,7 +564,16 @@ function drainFuel(state: SimState, amount: number): void {
 }
 
 function updateWin(state: SimState): void {
-  if (state.phase === "flying" && state.atEarth && state.collectedCount === state.stars.length) {
+  // A run home needs a HAUL: at least one star logged THIS run. Without the gate,
+  // a fully-logged returning player would spawn beside Earth already at 100% and
+  // collect a free win on arrival — with it, a complete log simply means nothing
+  // left to haul until the universe grows.
+  if (
+    state.phase === "flying" &&
+    state.atEarth &&
+    state.collectedCount === state.stars.length &&
+    state.collectedCount > state.runStartCollected
+  ) {
     state.phase = "home";
     state.events.push({ kind: "home" });
   }

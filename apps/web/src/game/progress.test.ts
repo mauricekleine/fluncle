@@ -25,7 +25,7 @@ function makeStar(logId: string): Star {
 }
 
 describe("Galaxy lifetime progress", () => {
-  it("marks lifetime logs without satisfying active-run cargo", () => {
+  it("a lifetime log arrives COLLECTED and seeds the counter (logged IS collected)", () => {
     const stars = [makeStar("241.0.1A"), makeStar("242.0.1B")];
 
     applyLifetimeMarkers(stars, ["241.0.1A"]);
@@ -37,25 +37,29 @@ describe("Galaxy lifetime progress", () => {
       throw new Error("expected at least one star");
     }
     expect(firstStar.lifetimeLogged).toBe(true);
-    expect(firstStar.collected).toBe(false);
-    expect(sim.collectedCount).toBe(0);
+    expect(firstStar.collected).toBe(true);
+    expect(sim.collectedCount).toBe(1);
   });
 
-  it("tow or manual restart clears active cargo only", () => {
-    const sim = createSim([makeStar("241.0.1A")]);
+  it("tow or manual restart keeps the log — nobody re-collects, the universe grows", () => {
+    const sim = createSim([makeStar("241.0.1A"), makeStar("242.0.1B")]);
 
-    const firstStar = sim.stars[0];
-    if (firstStar === undefined) {
-      throw new Error("expected at least one star");
+    const [firstStar, secondStar] = [sim.stars[0], sim.stars[1]];
+    if (firstStar === undefined || secondStar === undefined) {
+      throw new Error("expected two stars");
     }
+    // The first star was logged (any run marks it lifetime at collect time); the
+    // second was never reached.
     firstStar.lifetimeLogged = true;
     firstStar.collected = true;
     sim.collectedCount = 1;
 
     resetSim(sim, false);
 
-    expect(firstStar.collected).toBe(false);
+    expect(firstStar.collected).toBe(true);
     expect(firstStar.lifetimeLogged).toBe(true);
+    expect(secondStar.collected).toBe(false);
+    expect(sim.collectedCount).toBe(1);
     expect(collectLifetimeLogIds(sim)).toEqual(["241.0.1A"]);
   });
 

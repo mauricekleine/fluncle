@@ -548,8 +548,7 @@ export function createRenderer(container: HTMLElement): Renderer {
 
       bodies.push({
         draw: () =>
-          drawStarWithLifetime(
-            star.lifetimeLogged === true,
+          drawStarBody(
             Math.round(projected.sx),
             Math.round(projected.sy),
             size,
@@ -717,27 +716,6 @@ export function createRenderer(container: HTMLElement): Renderer {
 
     ctx.drawImage(img, Math.round(-w / 2), Math.round(-h / 2), Math.round(w), Math.round(h));
     ctx.restore();
-  }
-
-  function drawStarWithLifetime(
-    lifetimeLogged: boolean,
-    x: number,
-    y: number,
-    size: number,
-    nowS: number,
-    collected: boolean,
-    isCarrier: boolean,
-    tier: StarTier,
-  ): void {
-    drawStarBody(x, y, size, nowS, collected, isCarrier, tier);
-
-    if (!lifetimeLogged || collected || tier === "far") {
-      return;
-    }
-
-    ctx.globalAlpha = 0.55;
-    pixelDiamond(x, y, Math.max(2, Math.round(size / 2) + 3), palette.creamDim);
-    ctx.globalAlpha = 1;
   }
 
   /** A banger star: a pulsing pixel diamond, gold while uncollected. */
@@ -1558,9 +1536,9 @@ export function createRenderer(container: HTMLElement): Renderer {
       ctx.globalAlpha = 1;
     }
 
-    // Every finding at its true position: logged burns cream, the lifetime log
-    // fills quieter (map knowledge carries across deaths), uncharted stays a
-    // dim hollow ring.
+    // Every finding at its true position: logged burns cream (the log endures —
+    // logged IS collected, across runs and sessions), uncharted stays a dim
+    // hollow ring.
     for (const star of stars) {
       const starX = Math.round(toX(star.x));
       const starY = Math.round(toY(star.y));
@@ -1576,7 +1554,7 @@ export function createRenderer(container: HTMLElement): Renderer {
         continue;
       }
 
-      pixelDiamond(starX, starY, 1, state === "logged" ? palette.creamBright : palette.creamMuted);
+      pixelDiamond(starX, starY, 1, palette.creamBright);
     }
 
     // The ship: a small cream chevron at its position, nose along its heading.
