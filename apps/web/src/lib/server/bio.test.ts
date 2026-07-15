@@ -1,11 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // The entity-bio engine (lib/server/bio.ts): the voice gate, the Firecrawl fact query, and
-// the prompt-assembly helper. The gate is the artist/label sibling of `gateNoteText` — it
-// reuses the SAME shared voice scan (banned identity words, earthly geography, the Dry
-// Rule's no-exclamation-marks, no "we"-as-company) with the bio's own longer length ceiling
-// (a 2–4 sentence paragraph, not a one-line note). A bio lands on a public entity page, so
-// a violation hard-fails the store.
+// the prompt-assembly helper. The gate is the artist/label sibling of `gateNoteText`, but in
+// the FACTUAL DOSSIER register — it reuses the SAME shared voice scan for the banned identity
+// words, the Dry Rule's no-exclamation-marks, and no "we"-as-company, while ALLOWING earthly
+// geography (a Wikipedia-style bio names a real country or city plainly). It carries the bio's
+// own longer length ceiling (a 2–4 sentence paragraph, not a one-line note). A bio lands on a
+// public entity page, so a violation hard-fails the store.
 
 // `renderRegisteredPrompt` reads the prompt override table; with the store mocked to throw,
 // `resolvePrompt` falls back to the baked default (version 0) — its cardinal guarantee. So
@@ -90,12 +91,19 @@ describe("gateBioText", () => {
     ).toBe("voice_gate");
   });
 
-  it("rejects earthly geography — the cosmos replaces the map (voice_gate)", () => {
-    expect(
-      codeOf(() =>
-        gateBioText("A British imprint I keep coming back to; the drums do the talking here."),
-      ),
-    ).toBe("voice_gate");
+  it("ACCEPTS earthly geography — the factual dossier register names a real place plainly", () => {
+    const withCity = "Netsky is a drum and bass producer from Belgium. He has released widely.";
+    expect(gateBioText(withCity)).toBe(withCity);
+
+    const withLondon =
+      "Hospital Records is a drum and bass label run out of London since the 1990s.";
+    expect(gateBioText(withLondon)).toBe(withLondon);
+  });
+
+  it("returns a realistic factual bio naming geography, trimmed", () => {
+    const factual =
+      "Calibre is the alias of Dominick Martin, a drum and bass producer from Belfast. He runs the Signature Recordings label and is known for a warm, rolling sound.";
+    expect(gateBioText(`  ${factual}  `)).toBe(factual);
   });
 
   it("rejects an exclamation mark — the Dry Rule (voice_gate)", () => {

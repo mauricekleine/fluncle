@@ -107,6 +107,40 @@ describe("scanObservationScript", () => {
       ),
     ).toEqual([]);
   });
+
+  // The factual-dossier opt-out (`allowGeography`): the bio gate passes it so a Wikipedia-
+  // style bio may name a real country/city, while every other caller keeps the ban.
+  it("allowGeography: true does NOT flag earthly geography", () => {
+    expect(
+      scanObservationScript("Netsky is a drum and bass producer from Belgium.", {
+        allowGeography: true,
+      }),
+    ).toEqual([]);
+    // The dotted abbreviation the default catches is allowed too under the opt-out.
+    expect(scanObservationScript("A long-running u.k. imprint.", { allowGeography: true })).toEqual(
+      [],
+    );
+  });
+
+  it("allowGeography: true still flags banned words and exclamation marks", () => {
+    const violations = scanObservationScript(
+      "A British transmission of rolling menace from London!",
+      { allowGeography: true },
+    );
+    // The geography ("british", "london") is allowed…
+    expect(violations.some((v) => v.reason.includes("geography"))).toBe(false);
+    // …but the banned identity word and the Dry Rule still fire.
+    expect(violations.some((v) => v.word === "transmission")).toBe(true);
+    expect(violations.some((v) => v.reason.includes("exclamation"))).toBe(true);
+  });
+
+  it("allowGeography: true still flags 'we' as a company", () => {
+    const violations = scanObservationScript("We run this label out of Belgium.", {
+      allowGeography: true,
+    });
+    expect(violations.some((v) => v.reason.includes("we"))).toBe(true);
+    expect(violations.some((v) => v.reason.includes("geography"))).toBe(false);
+  });
 });
 
 describe("gateObservationScript", () => {

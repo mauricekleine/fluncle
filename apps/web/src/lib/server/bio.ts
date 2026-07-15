@@ -5,10 +5,13 @@
 //
 // This module is the BACKEND ENGINE (the surfacing + the box cron land in later PRs):
 //   - `gateBioText` — the VOICE gate, adapted from `gateNoteText`. It reuses the SAME shared
-//     scan (`scanObservationScript`: banned identity words, earthly geography, the Dry Rule's
-//     no-exclamation-marks, no "we"-as-company), with the bio's own longer length ceiling (a
-//     2–4 sentence paragraph, not a one-line note). A bio lands on a public entity page, so a
-//     violation hard-fails the store — the same defence-in-depth the note gate gives.
+//     scan (`scanObservationScript`) but in the FACTUAL DOSSIER register: it keeps the
+//     banned-identity-word, no-exclamation Dry Rule, and no-"we"-as-company bans, and ALLOWS
+//     earthly geography (`{ allowGeography: true }`) — a Wikipedia-style bio names a real
+//     country or city plainly ("a producer from Belgium"), which the observation's
+//     cosmos-replaces-the-map ban would wrongly reject. It carries the bio's own longer length
+//     ceiling (a 2–4 sentence paragraph, not a one-line note). A bio lands on a public entity
+//     page, so a violation hard-fails the store — the same defence-in-depth the note gate gives.
 //   - `fetchEntityFacts` — the Firecrawl fact-gather, generalized from `fetchTrackContext`. It
 //     fires the SAME Firecrawl v2 search idiom (the shared `FIRECRAWL_SEARCH_URL` + the
 //     `FIRECRAWL_API_KEY` env read), drops the same lyric/junk domains, and returns the raw
@@ -43,7 +46,9 @@ const BIO_MAX_CHARS = 500;
  * Validate + voice-gate an agent-authored entity bio, throwing a clean ApiError on any
  * failure (the handler's catch turns it into a 4xx). Returns the trimmed bio on success.
  * Reuses the note/observation shared voice scan (one source of truth for the banned
- * words / earthly geography / exclamation / "we"-as-company bans) with the bio's own
+ * identity words / exclamation / "we"-as-company bans) in the FACTUAL DOSSIER register:
+ * it passes `{ allowGeography: true }`, so a Wikipedia-style bio may name a real country
+ * or city plainly — the one ban this gate deliberately drops. It carries the bio's own
  * longer length bounds. The bio is a public entity surface, so a violation hard-fails the
  * store before it is ever shown.
  */
@@ -70,7 +75,7 @@ export function gateBioText(text: unknown): string {
     );
   }
 
-  const violations = scanObservationScript(trimmed);
+  const violations = scanObservationScript(trimmed, { allowGeography: true });
 
   if (violations.length > 0) {
     throw new ApiError(
