@@ -45,10 +45,12 @@
 // A crawled track carries its release title in the RAW `tracks.album` string and its artist
 // names in `artists_json`, and now an `album_id` too — the catalogue crawler mints + links the
 // album entity inline (folded on the release group, docs/album-entity.md). The record grouping
-// still keys on the RAW STRING, folded case-insensitively (the album_id is per release group,
-// the heading is per record title), and a group links to `/album/<slug>` when that record has
-// an entity. A heading here names a REAL RECORD either way — never the tier the rows belong to,
-// which has no public name and never will (DESIGN.md's Unlit Rule).
+// keys on the RAW STRING, folded case-insensitively. A group links to `/album/<slug>` only when
+// that record's album is PUBLICLY REACHABLE — and TEMPORARILY (slice 004, catalogue publicness)
+// that means it carries a certified finding: the `albums al` joins gate on
+// `albumHasCertifiedFindingSql`, so a crawl-minted, findings-free record renders as plain text
+// (no link to a page that 404s), exactly as before the inline mint. A heading here names a REAL
+// RECORD either way — never the tier the rows belong to (DESIGN.md's Unlit Rule).
 //
 // The artist side is the opposite, and it is why `linkTracksToArtistEntities` exists: the
 // LABEL page can group by `json_each(artists_json)` because its `tracks.label_id` seek has
@@ -70,6 +72,7 @@
 // rows, exactly as the flat list always did. There is no honest name for a bucket of tracks
 // whose record we do not know, so it is given none.
 
+import { albumHasCertifiedFindingSql } from "./albums";
 import { parseArtistsJson } from "./artists";
 import { getDb, typedRows } from "./db";
 import { type CatalogueTrackItem } from "./tracks";
@@ -247,7 +250,7 @@ export async function listArtistCatalogue(
           from tracks
           join track_artists ta on ta.track_id = tracks.track_id
           left join findings on findings.track_id = tracks.track_id
-          left join albums al on al.id = tracks.album_id
+          left join albums al on al.id = tracks.album_id and ${albumHasCertifiedFindingSql("al.id")}
           where ta.artist_id = ? and findings.track_id is null
           group by lower(coalesce(tracks.album, ''))
           order by ${groupOrderSql(sort)}
@@ -425,7 +428,7 @@ async function fetchGroupTracks(
             from tracks
             ${joinSql}
             left join findings on findings.track_id = tracks.track_id
-            left join albums al on al.id = tracks.album_id
+            left join albums al on al.id = tracks.album_id and ${albumHasCertifiedFindingSql("al.id")}
             where ${whereSql} and findings.track_id is null and ${keySql} in (${placeholders})
           )
           where rn <= ?`,

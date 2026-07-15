@@ -297,18 +297,16 @@ describe("the album page", () => {
     expect(await resolveAlbumPageData("nope")).toEqual({ status: "missing" });
   });
 
-  it("SERVES an album with no findings — the same rule the label page carries", async () => {
-    // A tracklist is a page. Unreachable today (an `albums` row is minted only off a certified
-    // finding), but the two graph pages hold the same rule so neither drifts when the crawler's
-    // write paths widen.
+  it("404s on a crawl-minted album with NO certified finding (TEMPORARY — slice 004 flips this)", async () => {
+    // Slice 001 mints an `albums` row INLINE at crawl time, so `getAlbumBySlug` now resolves a
+    // findings-free record where it used to find nothing. Public reachability is slice 004's call:
+    // until then such a record 404s exactly as it did when no row existed — the gate is a certified
+    // finding, never the mere row (the TS twin of `albumHasCertifiedFindingSql`). The LABEL page
+    // still SERVES a findings-free discography; only the album surface is held back, deliberately.
     getFindingsByAlbum.mockResolvedValue([]);
     listCatalogueTracksByAlbum.mockResolvedValue(albumCatalogue(12));
 
-    expect(await resolveAlbumPageData("wormhole")).toMatchObject({
-      findings: [],
-      indexable: true,
-      status: "found",
-    });
+    expect(await resolveAlbumPageData("wormhole")).toEqual({ status: "missing" });
   });
 
   it("stays out of the index below the renderable-track floor", async () => {
