@@ -127,9 +127,12 @@ export async function syncTelescopePlaylist(): Promise<TelescopeSyncResult> {
       const accessToken = await getSpotifyAccessToken();
       const playlistId = await ensureTelescopePlaylist(accessToken);
 
+      // `/items`, not the legacy `/tracks` alias: the Findings playlist's own add uses
+      // `/playlists/{id}/items` and works, while this app's tier 403s the alias (the
+      // step-labeled 2026-07-15 live failure).
       await step(
         "replace",
-        spotifyFetch(`/playlists/${playlistId}/tracks`, accessToken, {
+        spotifyFetch(`/playlists/${playlistId}/items`, accessToken, {
           body: JSON.stringify({ uris: desired }),
           headers: { "Content-Type": "application/json" },
           method: "PUT",
