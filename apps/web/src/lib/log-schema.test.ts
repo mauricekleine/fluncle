@@ -283,6 +283,24 @@ describe("musicGroupJsonLd (the artist page schema)", () => {
     expect(bare).not.toHaveProperty("sameAs");
   });
 
+  it("carries the factual bio as description only when one is authored", () => {
+    // No bio ⇒ no description key at all (never `description: null`).
+    expect(jsonLd).not.toHaveProperty("description");
+
+    const withBio = musicGroupJsonLd(
+      {
+        bio: "Dimension is a British drum and bass producer and DJ.",
+        imageUrl: "https://img/dimension.jpg",
+        name: "Dimension",
+        slug: "dimension",
+        socials: [],
+      },
+      [],
+    );
+
+    expect(withBio.description).toBe("Dimension is a British drum and bass producer and DJ.");
+  });
+
   it("is XSS-safe through the serialize sink (a </script> in a name can't break out)", () => {
     const evil = musicGroupJsonLd(
       {
@@ -389,6 +407,15 @@ describe("recordLabelJsonLd (the label page schema — U2a alternateName)", () =
       organizationOf({ ...base, alternateNames: ["Med School", "Med School Recordings"] })
         .alternateName,
     ).toEqual(["Med School", "Med School Recordings"]);
+  });
+
+  it("carries the factual bio as the Organization's description only when one is authored", () => {
+    // No bio ⇒ the Organization node has no description key at all (never `description: null`).
+    expect(organizationOf(base)).not.toHaveProperty("description");
+
+    expect(
+      organizationOf({ ...base, bio: "Medschool is Hospital Records' sister label." }).description,
+    ).toBe("Medschool is Hospital Records' sister label.");
   });
 });
 

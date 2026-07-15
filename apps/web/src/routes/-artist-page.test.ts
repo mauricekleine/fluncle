@@ -61,12 +61,21 @@ function finding(logId: string, extra: { addedAt?: string; bpm?: number; key?: s
   return { artists: ["Drift"], logId, title: "Untitled", trackId: `t-${logId}`, ...extra };
 }
 
-function robotsMeta(data: unknown): string | undefined {
+function headMeta(data: unknown): Array<{ content?: string; name?: string; property?: string }> {
   const head = Route.options.head?.({ loaderData: data } as never) as
-    | { meta?: Array<{ content?: string; name?: string }> }
+    | { meta?: Array<{ content?: string; name?: string; property?: string }> }
     | undefined;
 
-  return head?.meta?.find((entry) => entry.name === "robots")?.content;
+  return head?.meta ?? [];
+}
+
+function robotsMeta(data: unknown): string | undefined {
+  return headMeta(data).find((entry) => entry.name === "robots")?.content;
+}
+
+/** The `<meta name="description">` — the same string og:/twitter: description carry. */
+function metaDescription(data: unknown): string | undefined {
+  return headMeta(data).find((entry) => entry.name === "description")?.content;
 }
 
 describe("resolveArtistPageData (the artist page indexability gate)", () => {
@@ -178,5 +187,31 @@ describe("resolveArtistPageData (the artist page indexability gate)", () => {
       throw new Error("expected the artist to be found");
     }
     expect(withoutBio.bio).toBeUndefined();
+  });
+
+  it("derives a ≤160-char meta description from the bio, and the template when there is none", async () => {
+    getFindingsByArtist.mockResolvedValue([finding("001.1.1A")]);
+    countArtistFindings.mockResolvedValue(1);
+
+    // A bio over the meta cap: the description is bio-derived, trimmed to ≤160, and drops the
+    // catalogue-count template entirely (the whole point — a unique description per entity).
+    const bio =
+      "Drift is a British drum and bass producer known for deep, rolling liquid cuts and a run " +
+      "of releases across the scene's most respected labels over the past decade of the sound.";
+    getArtistBySlug.mockResolvedValue({ ...ARTIST, bio });
+    const withBio = await resolveArtistPageData("drift", "name", 1);
+
+    const desc = metaDescription(withBio);
+    expect(desc).toBeDefined();
+    expect((desc ?? "").length).toBeLessThanOrEqual(160);
+    expect(desc).not.toContain("each with a coordinate");
+    expect(desc?.startsWith("Drift is a British drum and bass producer")).toBe(true);
+
+    // No bio ⇒ the original template is preserved verbatim (no regression).
+    getArtistBySlug.mockResolvedValue(ARTIST);
+    const withoutBio = await resolveArtistPageData("drift", "name", 1);
+    expect(metaDescription(withoutBio)).toBe(
+      "Every Drift banger Fluncle has found and logged in the Galaxy, 1 so far, each with a coordinate.",
+    );
   });
 });

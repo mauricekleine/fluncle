@@ -335,6 +335,13 @@ export function breadcrumbsJsonLd(logId: string): Record<string, unknown> {
 
 /** The artist page's identity + its confirmed off-site anchors, for `sameAs`. */
 export type MusicGroupArtist = {
+  /**
+   * The artist's factual bio, when one is authored — the SAME paragraph the page prints. Emitted
+   * as the MusicGroup's `description` (schema description mirrors the visible definitional
+   * content). Undefined until the bio is backfilled ⇒ the key is omitted, never `description:
+   * null`.
+   */
+  bio?: string;
   imageUrl: string;
   mbid?: string;
   name: string;
@@ -389,6 +396,9 @@ export function musicGroupJsonLd(
     "@context": "https://schema.org",
     "@id": artistUrl,
     "@type": "MusicGroup",
+    // The factual bio mirrors the page's visible definitional paragraph — omitted cleanly (never
+    // `description: null`) until one is authored.
+    ...(artist.bio ? { description: artist.bio } : {}),
     genre: "Drum and Bass",
     image: artist.imageUrl,
     name: artist.name,
@@ -521,6 +531,13 @@ export type RecordLabelInput = {
    */
   alternateNames?: string[];
   artists: { name: string; slug: string }[];
+  /**
+   * The label's factual bio, when one is authored — the SAME paragraph the page prints. Emitted
+   * as the Organization's `description` (schema description mirrors the visible definitional
+   * content — and the bio describes the label entity, so it rides the Organization node, not the
+   * CollectionPage). Undefined until backfilled ⇒ the key is omitted, never `description: null`.
+   */
+  bio?: string;
   name: string;
   slug: string;
   tracks: GraphPageTrack[];
@@ -553,6 +570,9 @@ export function recordLabelJsonLd(label: RecordLabelInput): Record<string, unkno
       ...(alternateNames.length > 0
         ? { alternateName: alternateNames.length === 1 ? alternateNames[0] : alternateNames }
         : {}),
+      // The factual bio mirrors the page's visible definitional paragraph — omitted cleanly
+      // (never `description: null`) until one is authored.
+      ...(label.bio ? { description: label.bio } : {}),
       name: label.name,
       url: pageUrl,
     },

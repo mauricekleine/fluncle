@@ -11,6 +11,7 @@ import { siteUrl } from "@/lib/fluncle-links";
 import { firstFoundAt, labelSignatureLine } from "@/lib/graph-prose";
 import { jsonLdScript } from "@/lib/json-ld";
 import { labelBreadcrumbsJsonLd, recordLabelJsonLd } from "@/lib/log-schema";
+import { bioMetaDescription } from "@/lib/meta-description";
 import { albumCoverAtSize } from "@/lib/media";
 import { type ArtistChip, listArtistsByLabel } from "@/lib/server/artists";
 import {
@@ -155,7 +156,7 @@ function labelHead(loaderData: LabelPageData | undefined) {
     return {};
   }
 
-  const { alternateNames, artists, catalogue, findings, indexable, logoImageUrl, name, slug } =
+  const { alternateNames, artists, bio, catalogue, findings, indexable, logoImageUrl, name, slug } =
     loaderData;
   // The canonical is SELF-REFERENCING PER PAGE (page 2 is its own page, not a duplicate of page
   // 1) but SORT-COLLAPSING: it always drops the sort param, so `?sort=recent` and the default
@@ -168,14 +169,19 @@ function labelHead(loaderData: LabelPageData | undefined) {
   // The <title>/meta stay honestly-plain third-person (the Narrator rule); the first person
   // lives only in the on-page voice frame.
   const title = `${name} · Fluncle's Findings`;
-  // It describes the page it is actually on: with findings, the findings; without, the records
-  // this label put out. It never claims findings a page does not have, and it never names the
-  // tier the quieter rows belong to (that tier has no public name — docs/album-entity.md), so
-  // "catalogue" cannot leak into a SERP snippet.
+  // The factual bio is the honest, UNIQUE description when one is authored — the same objective
+  // paragraph the page prints, trimmed to the meta cap. Absent (the bio backfill is in flight for
+  // many labels), it falls back to the templated line verbatim, so nothing regresses: it still
+  // describes the page it is actually on (with findings, the findings; without, the records this
+  // label put out), never claiming findings a page does not have and never naming the unlit tier
+  // (docs/album-entity.md), so "catalogue" cannot leak into a SERP snippet. This one string flows
+  // to meta + og + twitter below, so all three go unique together.
   const description =
-    findings.length > 0
-      ? `Every banger Fluncle has found on ${name} and logged in the Galaxy, ${findings.length} so far, each with a coordinate.`
-      : `The records released on ${name}, charted in Fluncle's Galaxy.`;
+    bio !== undefined
+      ? bioMetaDescription(bio)
+      : findings.length > 0
+        ? `Every banger Fluncle has found on ${name} and logged in the Galaxy, ${findings.length} so far, each with a coordinate.`
+        : `The records released on ${name}, charted in Fluncle's Galaxy.`;
   // The label's representative image, up the same ladder every surface uses: its OWN logo first,
   // then the freshest finding's cover, then the site cover as the final floor.
   const coverFinding = findings[0];
@@ -211,6 +217,7 @@ function labelHead(loaderData: LabelPageData | undefined) {
         recordLabelJsonLd({
           alternateNames,
           artists,
+          bio,
           name,
           slug,
           tracks: graphPageTracks(findings, flattenArtistGroups(catalogue.groups)),

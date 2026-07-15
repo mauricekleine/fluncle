@@ -29,6 +29,7 @@ import { siteUrl } from "@/lib/fluncle-links";
 import { artistSignatureLine } from "@/lib/graph-prose";
 import { jsonLdScript } from "@/lib/json-ld";
 import { artistBreadcrumbsJsonLd, musicGroupJsonLd } from "@/lib/log-schema";
+import { bioMetaDescription } from "@/lib/meta-description";
 import { artistTitleLine } from "@/lib/log-prose";
 import { albumCoverAtSize } from "@/lib/media";
 import {
@@ -213,8 +214,18 @@ function artistHead(loaderData: ArtistPageData | undefined) {
     return {};
   }
 
-  const { catalogue, findings, indexable, name, slug, socials, mbid, spotifyUrl, wikidataQid } =
-    loaderData;
+  const {
+    bio,
+    catalogue,
+    findings,
+    indexable,
+    name,
+    slug,
+    socials,
+    mbid,
+    spotifyUrl,
+    wikidataQid,
+  } = loaderData;
   // Self-referencing PER PAGE, sort-collapsing (the label page carries the long note): page 2
   // is its own canonical, but the sort param always drops so order-variants of one page fold to
   // one URL. Page 1 stays the bare `/artist/<slug>`.
@@ -225,10 +236,16 @@ function artistHead(loaderData: ArtistPageData | undefined) {
   // The <title>/meta stay honestly-plain third-person (the Narrator rule); the
   // first person lives only in the on-page voice frame.
   const title = `${name} · Fluncle's Findings`;
+  // The factual bio is the honest, UNIQUE description when one is authored — the same objective
+  // paragraph the page prints, trimmed to the meta cap. Absent (the bio backfill is in flight for
+  // many artists), it falls back to the templated line verbatim, so nothing regresses. This one
+  // string flows to meta + og + twitter below, so all three go unique together.
   const description =
-    findings.length > 0
-      ? `Every ${name} banger Fluncle has found and logged in the Galaxy, ${findings.length} so far, each with a coordinate.`
-      : `${name} in Fluncle's Galaxy.`;
+    bio !== undefined
+      ? bioMetaDescription(bio)
+      : findings.length > 0
+        ? `Every ${name} banger Fluncle has found and logged in the Galaxy, ${findings.length} so far, each with a coordinate.`
+        : `${name} in Fluncle's Galaxy.`;
   const coverFinding = findings[0];
   const imageUrl =
     (coverFinding ? albumCoverAtSize(coverFinding.albumImageUrl, "large") : undefined) ??
@@ -236,6 +253,7 @@ function artistHead(loaderData: ArtistPageData | undefined) {
 
   const musicGroup = musicGroupJsonLd(
     {
+      bio,
       imageUrl,
       mbid,
       name,

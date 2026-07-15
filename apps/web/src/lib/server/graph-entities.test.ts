@@ -30,6 +30,7 @@ import {
 } from "./albums";
 import { flattenArtistGroups, listLabelCatalogue } from "./catalogue-groups";
 import { createIntegrationDb } from "./integration-db";
+import { getGraphPreview } from "./graph-preview";
 import { getLabelBySlug, getLabelForAlbum, listLabelsWithFindingCounts } from "./labels";
 import { getFindingsByAlbum, getFindingsByLabel, listCatalogueTracksByAlbum } from "./tracks";
 
@@ -288,6 +289,35 @@ describe("the finding reads vs the anti-join (the safety property)", () => {
       name: "Hospital Records",
       slug: "hospital-records",
     });
+  });
+});
+
+describe("the graph hover-card preview carries the entity's bio", () => {
+  it("includes a label's bio when one is authored, and omits it cleanly when not", async () => {
+    await seedTrack({
+      album: "Wormhole",
+      label: "Hospital Records",
+      logId: "001.1.1A",
+      title: "Certified",
+      trackId: "t1",
+    });
+    await reconcile();
+
+    // No bio yet ⇒ the preview carries none (the card renders no bio row, no gap).
+    const withoutBio = await getGraphPreview("label", "hospital-records");
+    expect(withoutBio.bio).toBeUndefined();
+    // The signature line still rides — the preview is otherwise unchanged.
+    expect(withoutBio.line).toBeDefined();
+
+    // Author a bio (the entity-bio engine's write) …
+    await db.execute({
+      args: ["London's liquid drum and bass home since 1996.", "hospital-records"],
+      sql: `update labels set bio = ? where slug = ?`,
+    });
+
+    // … and it flows straight onto the preview, the same paragraph the page prints.
+    const withBio = await getGraphPreview("label", "hospital-records");
+    expect(withBio.bio).toBe("London's liquid drum and bass home since 1996.");
   });
 });
 
