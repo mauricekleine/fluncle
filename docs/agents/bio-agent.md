@@ -1,17 +1,19 @@
 # Bio Agent (the entity bio — the artist/label sibling of the auto-note)
 
-The **entity bio** auto-authors the short Fluncle-voiced paragraph that stands on an entity's page: `/artist/<slug>` and `/label/<slug>`. Where the [auto-note](./note-agent.md) authors one editorial line about one FINDING, this authors a 2–4 sentence bio about an ARTIST or a LABEL — the entity sibling, one artifact over two kinds. It is one more deterministic-with-one-agentic-step sweep the box runs (mirroring the note pipeline), not a new runtime. The Worker owns the store + the voice gate; the box holds only its `agent`-scoped token and calls one CLI command.
+The **entity bio** auto-authors the short paragraph that stands on an entity's page: `/artist/<slug>` and `/label/<slug>`. It is an OBJECTIVE, factual, Wikipedia-style dossier — who this artist/label is, where they are from, what they are known for — written in Fluncle's dry register but in the THIRD person, not as a first-person in-fiction take. Where the [auto-note](./note-agent.md) authors one editorial line about one FINDING in the observation voice, this authors a 2–4 sentence factual bio about an ARTIST or a LABEL — the entity sibling, one artifact over two kinds. It is one more deterministic-with-one-agentic-step sweep the box runs (mirroring the note pipeline), not a new runtime. The Worker owns the store + the voice gate; the box holds only its `agent`-scoped token and calls one CLI command.
+
+**The register deliberately DEPARTS from the observation's no-geography rule.** The observation and the auto-note replace the earthly map with the cosmos and ban countries, cities, and nationalities. The bio does the opposite on purpose: it is a reference dossier, so naming a real origin or base ("a producer from Belgium", "a label run out of London") is CORRECT. The bio prompts state the departure explicitly, and the voice gate (below) allows geography for the bio while keeping the other bans.
 
 An artist bio and a label bio are the SAME artifact — same queue shape, same voice gate, same fill-empty-only store, same `claude -p` authoring — so ONE box sweep ([`entity-bio-sweep.ts`](./hermes/scripts/entity-bio-sweep.ts)) serves both, dispatched by `--kind artist|label`. It runs behind TWO host timers (`fluncle-artist-bio`, `fluncle-label-bio`), so each kind drains on its own cadence and reports its own `/status` row.
 
 ## What the bio is (and is NOT)
 
-|            | the `bio` (the entity's voiced paragraph)                                                                                                          |
-| ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **What**   | A short 2–4 sentence bio in Fluncle's voice: dry, warm 'who this is' / 'what this imprint is', in-fiction, as if introducing a name to the crew.   |
-| **Source** | Written by the **box** (it holds `copywriting-fluncle`) from the gathered Firecrawl facts + the entity's identity. Never a fabricated discography. |
-| **Lives**  | `artists.bio` / `labels.bio` — **PUBLIC**: it renders on `/artist/<slug>` and `/label/<slug>` and in the entity's structured data.                 |
-| **Gate**   | the **bio voice gate** (`gateBioText`, below), the same shared scan as the note, with the bio's longer 2–4 sentence length ceiling.                |
+|            | the `bio` (the entity's factual paragraph)                                                                                                                                                            |
+| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **What**   | A short 2–4 sentence OBJECTIVE, factual, Wikipedia-style bio in Fluncle's dry register: third person 'who this is' / 'what this imprint is', real-world facts (including origin/base) stated plainly. |
+| **Source** | Written by the **box** (it holds `copywriting-fluncle`) grounded ONLY in the gathered Firecrawl facts + the entity's identity. Never a fabricated fact.                                               |
+| **Lives**  | `artists.bio` / `labels.bio` — **PUBLIC**: it renders on `/artist/<slug>` and `/label/<slug>` and in the entity's structured data.                                                                    |
+| **Gate**   | the **bio voice gate** (`gateBioText`, below), the note's shared scan with geography ALLOWED, at the bio's longer 2–4 sentence length ceiling.                                                        |
 
 ## The two crons
 
@@ -31,6 +33,8 @@ The bio is grounded in **Firecrawl FACTS** — the entity's background, scene, r
 
 **The gap, stated plainly:** the box is a thin CLI client and **cannot enumerate an entity's logged finding TITLES** — no public/agent read exposes them (only an artist's `findingCount`, a number). The Worker-side `getFindingsByArtist` / `getFindingsByLabel` that the pages read are not on the wire. So on-box the `{{findings}}` block is empty and the grounding rests on the Firecrawl facts plus the truthful floor the queue guarantees (every queued entity has ≥1 certified finding, so "an artist/label I have logged" is always true). When a Worker-paced grounding seam lands — a read that hands the box the assembled findings + facts, the way context-note hands the note sweep its `context_note` — pass its titles into the sweep's `findings` variable and both crons upgrade with no other change.
 
+**Because the bio is now FACTUAL, no facts means REFUSE — not improvise.** A first-person observation could always fall back on the sound alone; a factual dossier cannot invent a biography from a bare name. The prompt's no-facts arm therefore tells the author to write **at most one plain, certain sentence from the findings, or nothing**. The gate's 40-char floor (`BIO_MIN_CHARS`) then turns that refusal into a clean NO-WRITE: a stub too short to be a real bio fails `bio_too_short` (422), the entity stays queued, and no hallucinated CV ever lands. The floor is load-bearing for exactly this reason — do not lower it.
+
 **Firecrawl on the box:** the established pattern is Firecrawl runs Worker-side (the box holds no key — context-sweep, artist-sweep). The bio sweep's mirrored `fetchEntityFacts` is WIRED and lights up wherever a `FIRECRAWL_API_KEY` is in the sourced env. On the box that key is absent by default, so on-box bios ground on identity (honest, sparse, operator-replaceable). The **operator backfill** (below), run locally with a key in env, is where the facts genuinely light up.
 
 ## The cardinal safety guarantee: fill an EMPTY bio only
@@ -39,7 +43,7 @@ The bio is grounded in **Firecrawl FACTS** — the entity's background, scene, r
 
 ## The voice gate (a hard ship requirement)
 
-The bio is a live, **public** Fluncle voice surface. `gateBioText` (`lib/server/bio.ts`) reuses the SAME shared scan as the note (`scanObservationScript`: banned identity words, earthly geography, the no-exclamation Dry Rule, no "we"-as-company) with the bio's own longer length bounds (40–500 chars — a 2–4 sentence paragraph, not a one-line note). A violation hard-fails the store before the bio is shown. The box authors through `copywriting-fluncle`; the Worker re-scans (defence in depth); the operator override is the final content control.
+The bio is a live, **public** Fluncle surface. `gateBioText` (`lib/server/bio.ts`) reuses the SAME shared scan as the note (`scanObservationScript`) but in the factual-dossier register: it passes `{ allowGeography: true }`, so it keeps the banned-identity-word, no-exclamation Dry Rule, and no-"we"-as-company bans but NOT the geography ban (a Wikipedia-style bio names a real country/city plainly). It carries the bio's own longer length bounds (40–500 chars — a 2–4 sentence paragraph, not a one-line note). A violation hard-fails the store before the bio is shown. The box authors through `copywriting-fluncle`; the Worker re-scans (defence in depth); the operator override is the final content control.
 
 ## The prompt lives in the DATABASE, not in the image
 

@@ -190,8 +190,17 @@ export type VoiceGateViolation = { reason: string; word?: string };
 /**
  * Scan a spoken observation script for the automatable voice-gate failures.
  * Returns the violations (empty = clean). The endpoint hard-fails on any.
+ *
+ * `options.allowGeography` opts OUT of the earthly-geography ban ONLY (the banned
+ * identity words, the exclamation Dry Rule, and the "we"-as-company checks all still
+ * run). The entity bio is a FACTUAL dossier register where naming a country/city is
+ * correct, so its gate passes this flag; every other caller (the observation script,
+ * the auto-note) omits it and keeps the cosmos-replaces-the-map ban.
  */
-export function scanObservationScript(text: string): VoiceGateViolation[] {
+export function scanObservationScript(
+  text: string,
+  options?: { allowGeography?: boolean },
+): VoiceGateViolation[] {
   const violations: VoiceGateViolation[] = [];
   const lower = text.toLowerCase();
 
@@ -201,12 +210,14 @@ export function scanObservationScript(text: string): VoiceGateViolation[] {
     }
   }
 
-  for (const { place, regex } of BANNED_GEOGRAPHY_MATCHERS) {
-    if (regex.test(lower)) {
-      violations.push({
-        reason: `earthly geography "${place}" — the cosmos replaces the map; translate an origin into a far sector or drop it (recovered-audio-delivery.md)`,
-        word: place,
-      });
+  if (!options?.allowGeography) {
+    for (const { place, regex } of BANNED_GEOGRAPHY_MATCHERS) {
+      if (regex.test(lower)) {
+        violations.push({
+          reason: `earthly geography "${place}" — the cosmos replaces the map; translate an origin into a far sector or drop it (recovered-audio-delivery.md)`,
+          word: place,
+        });
+      }
     }
   }
 
