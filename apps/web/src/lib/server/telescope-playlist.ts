@@ -24,8 +24,16 @@ import { getSpotifyAccessToken, spotifyFetch } from "./spotify";
 /** The settings-KV key holding the created playlist's Spotify id. */
 export const TELESCOPE_PLAYLIST_SETTING = "telescope.spotify_playlist_id";
 
-/** How many diversified ear rows the playlist mirrors. */
+/** How many anchored rows the playlist mirrors. */
 export const TELESCOPE_PLAYLIST_SIZE = 50;
+
+/**
+ * How deep down the diversified ranking the sync walks to find them. The telescope's best
+ * candidates are largely NOT on Spotify (crawler-born deep catalogue — the whole point of
+ * reaching past Spotify), so "top 50, drop the unanchored" would mirror a near-empty
+ * playlist. The mirror instead takes the first SIZE anchored rows in diversified order.
+ */
+const TELESCOPE_POOL_DEPTH = 200;
 
 const TELESCOPE_PLAYLIST_NAME = "Fluncle's Telescope";
 const TELESCOPE_PLAYLIST_DESCRIPTION =
@@ -82,10 +90,11 @@ export type TelescopeSyncResult =
  */
 export async function syncTelescopePlaylist(): Promise<TelescopeSyncResult> {
   try {
-    const rows = await listCatalogueTracks("ear", TELESCOPE_PLAYLIST_SIZE);
+    const rows = await listCatalogueTracks("ear", TELESCOPE_POOL_DEPTH);
     const desired = rows
       .map((row) => spotifyUriFromUrl(row.spotifyUrl))
-      .filter((uri): uri is string => uri !== null);
+      .filter((uri): uri is string => uri !== null)
+      .slice(0, TELESCOPE_PLAYLIST_SIZE);
 
     const accessToken = await getSpotifyAccessToken();
     const playlistId = await ensureTelescopePlaylist(accessToken);
