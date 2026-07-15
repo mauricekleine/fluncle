@@ -45,15 +45,18 @@ export function ChainCard({ notation, set }: { notation: KeyNotation; set: ChatS
 
   const steps = set.steps ?? [];
 
+  // One object, not three: a bordered container (the sibling card rhythm) holds the seed under
+  // "Start here", the numbered steps as a divider-ruled sequence beneath it, and the "/mix" handoff
+  // as a footer inside — never a link dangling below the card.
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex flex-col gap-3 rounded-md border border-border bg-card px-3 py-2.5">
       <div className="flex flex-col gap-2">
-        <p className="px-1 text-xs text-muted-foreground">Start here</p>
+        <p className="text-xs text-muted-foreground">Start here</p>
         <FindingCard finding={seed} notation={notation} />
       </div>
 
       {steps.length > 0 ? (
-        <ol className="flex flex-col gap-2">
+        <ol className="flex flex-col divide-y divide-border">
           {steps.map((step, index) => (
             <ChainStep
               key={step.coordinate ?? index}
@@ -64,20 +67,22 @@ export function ChainCard({ notation, set }: { notation: KeyNotation; set: ChatS
           ))}
         </ol>
       ) : (
-        <p className="px-1 text-sm text-muted-foreground">
+        <p className="text-sm text-muted-foreground">
           Not enough logged near this one yet to chain a set from it.
         </p>
       )}
 
       {set.setUrl && steps.length > 0 ? (
-        <a
-          aria-label="Open this set in the mixer"
-          className="track-log-id-link inline-flex items-center gap-1 self-start px-1 text-xs text-muted-foreground"
-          href={set.setUrl}
-        >
-          Open in /mix
-          <ArrowRightIcon aria-hidden="true" weight="bold" />
-        </a>
+        <div className="border-t border-border pt-2.5">
+          <a
+            aria-label="Open this set in the mixer"
+            className="track-log-id-link inline-flex items-center gap-1 text-xs text-muted-foreground"
+            href={set.setUrl}
+          >
+            Open in /mix
+            <ArrowRightIcon aria-hidden="true" weight="bold" />
+          </a>
+        </div>
       ) : null}
     </div>
   );
@@ -111,7 +116,7 @@ function ChainStep({
   const artwork = <TrackArtwork alt={`${trackLine} cover art`} src={coverSrc} />;
 
   return (
-    <li className="flex items-center gap-2.5">
+    <li className="flex items-center gap-2.5 py-2 first:pt-0 last:pb-0">
       <span
         aria-hidden="true"
         className="w-4 shrink-0 text-right text-xs tabular-nums text-muted-foreground"
