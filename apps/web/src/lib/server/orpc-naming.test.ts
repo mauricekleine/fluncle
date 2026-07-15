@@ -124,6 +124,11 @@ const APPROVED_VERBS = new Set<string>([
   // op. The operator's one-tap trust gate; distinct from `update` (edit a field).
   "confirm",
   "context",
+  // `describe` (auto-author an artist's/label's voiced public bio — the entity sibling of
+  // `note`) — added deliberately with the `describe_artist` / `describe_label` bio-engine
+  // ops. Distinct from `note` (that names ONE finding's editorial line): this describes a
+  // whole ENTITY (an artist, a label) in a short grounded paragraph.
+  "describe",
   // `crawl` (walk the MusicBrainz release graph outward from the operator's enabled seed
   // labels and write catalogue rows into `tracks`) — added deliberately with the
   // `crawl_catalogue` op. A genuinely new action: neither `backfill` (fill missing data on

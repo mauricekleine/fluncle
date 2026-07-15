@@ -1,5 +1,68 @@
 import { adminApiGet, adminApiPost } from "../api";
 
+// ── The voiced bio: the entity-bio engine (thin HTTP client) ──────────────────
+// The entity sibling of `admin tracks note`: author the artist's/label's bio through the
+// agent-tier `describe_*` route (the MODEL authors it in the box cron; the CLI just posts
+// the gated text). Fills an empty bio only; an operator bio is never clobbered.
+
+/** One row of the bio worklist: an entity with findings but no bio yet. */
+export type EntityBioWorkItem = { id: string; name: string; slug: string };
+
+/** What a describe call returns: the stored (or dry-run/skipped) bio + its slug. */
+export type EntityBioResult = {
+  bio: string;
+  // True on a --dry-run: the voice gate ran, nothing was stored.
+  dryRun?: boolean;
+  ok: boolean;
+  // True when a bio already existed and the fill-empty-only guard refused to clobber it.
+  skipped?: boolean;
+  slug: string;
+};
+
+type BioBody = { bio: string; dryRun?: boolean; promptVersion?: number };
+
+/** Build the POST body shared by both entity describe commands. */
+export function buildBioBody(options: {
+  bio: string;
+  dryRun?: boolean;
+  promptVersion?: number;
+}): BioBody {
+  const body: BioBody = { bio: options.bio };
+
+  if (options.dryRun) {
+    body.dryRun = true;
+  }
+
+  if (typeof options.promptVersion === "number") {
+    body.promptVersion = options.promptVersion;
+  }
+
+  return body;
+}
+
+// Author + store one artist's bio (the voice-gated, fill-empty-only write). The box's
+// future bio cron drives this per row; the operator runs it ad-hoc. `--dry-run` runs the
+// voice gate and reports the verdict without storing anything.
+export async function describeArtistCommand(
+  slug: string,
+  options: { bio: string; dryRun?: boolean; promptVersion?: number },
+): Promise<EntityBioResult> {
+  return adminApiPost<EntityBioResult>(
+    `/api/admin/artists/${encodeURIComponent(slug)}/bio`,
+    buildBioBody(options),
+  );
+}
+
+// The BIO queue: artists with findings but no bio yet, oldest first — the worklist the
+// future `describe_artist` cron drains (each row is a `admin artists describe <slug>`).
+export async function artistsBioQueueCommand(limit: number): Promise<EntityBioWorkItem[]> {
+  const response = await adminApiGet<{ artists: EntityBioWorkItem[]; ok: boolean }>(
+    `/api/admin/artists/bio-queue?limit=${limit}`,
+  );
+
+  return response.artists;
+}
+
 // ── Artist social resolution (Unit 2.1) ──────────────────────────────────────
 
 /** One row of the resolve worklist: an artist awaiting social resolution. */

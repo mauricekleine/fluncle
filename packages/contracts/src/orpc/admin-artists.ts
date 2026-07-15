@@ -369,13 +369,97 @@ export const updateArtistSocial = oc
   .input(z.looseObject({ socialId: z.string() }))
   .output(ArtistSocialEnvelope);
 
+// ── The voiced bio: the entity-bio engine (agent-tier author + its worklist) ──────────
+// `describe_artist` is the entity sibling of `note_track`: the on-box sweep authors the
+// artist's short Fluncle-voiced bio (grounded in Firecrawl facts + the tracks Fluncle has
+// logged), and this step VOICE-GATES it and writes it FILL-EMPTY-ONLY — an operator bio is
+// never clobbered. `list_artists_missing_bio` is its worklist. Both agent tier: the box's
+// agent token drives them, the `note_track` / `list_unresolved_artists` precedent.
+
+/**
+ * The describe body (POST /admin/artists/{slug}/bio). LOOSE: the live route voice-gates
+ * `bio` itself and length-bounds it, so the contract stays permissive. `promptVersion` is
+ * the bio's provenance (0 = the registry's baked default, N = operator override N); the
+ * sweep sends it, an operator-typed bio sends nothing (the column stays NULL). `dryRun`
+ * runs the voice gate and stores nothing.
+ */
+const DescribeEntityBodySchema = z.looseObject({
+  bio: z.unknown().optional(),
+  dryRun: z.unknown().optional(),
+  promptVersion: z.number().int().min(0).optional(),
+});
+
+/**
+ * `describe_artist` → `POST /admin/artists/{slug}/bio` (operationId `describeArtist`).
+ *
+ * Agent tier (`adminAuth`), the `note_track` precedent: the on-box sweep has authored the
+ * artist's bio in Fluncle's voice (grounded in the gathered facts + the tracks Fluncle has
+ * logged); this VOICE-GATES it (the banned-word / earthly-geography / exclamation /
+ * "we"-as-company scan shared with the note gate, plus the bio's own length ceiling) and
+ * stores it into the `bio` field with its `bio_prompt_version` provenance + `bio_status =
+ * 'resolved'`, all atomically.
+ *
+ * SAFETY (the cardinal guarantee): it fills an EMPTY bio ONLY. An artist that already
+ * carries a bio — operator-written OR previously auto-authored — is a no-op (`skipped:
+ * true`); the agent NEVER clobbers an existing bio. `dryRun` runs the gate and stores
+ * nothing. Codes: `not_found`/404, `no_bio`/400, `bio_too_short`/422, `bio_too_long`/422,
+ * `voice_gate`/422.
+ */
+export const describeArtist = oc
+  .route({
+    method: "POST",
+    operationId: "describeArtist",
+    path: "/admin/artists/{slug}/bio",
+    summary: "Auto-author an artist's voiced bio (fills an empty bio only)",
+    tags: ["Admin"],
+  })
+  .input(DescribeEntityBodySchema.extend({ slug: z.string() }))
+  .output(
+    z.object({
+      bio: z.string(),
+      // `true` when `dryRun` was set: the voice gate ran, NOTHING was stored.
+      dryRun: z.literal(true).optional(),
+      ok: z.literal(true),
+      // `true` when a bio already existed and the fill-empty-only guard refused to
+      // clobber it; absent on a fresh fill.
+      skipped: z.boolean().optional(),
+      slug: z.string(),
+    }),
+  );
+
+/** One row of the bio worklist: an artist with findings but no bio yet. */
+const ArtistBioWorkItemSchema = z
+  .object({ id: z.string(), name: z.string(), slug: z.string() })
+  .meta({ id: "ArtistBioWorkItem" });
+
+/**
+ * `list_artists_missing_bio` → `GET /admin/artists/bio-queue` (operationId
+ * `listArtistsMissingBio`).
+ *
+ * Agent tier (`adminAuth`), the `list_unresolved_artists` precedent. The bio worklist:
+ * artists with at least one coordinate-bearing finding but no bio yet, oldest-first — the
+ * worklist the future `describe_artist` cron drains. A pure read; it publishes nothing.
+ */
+export const listArtistsMissingBio = oc
+  .route({
+    method: "GET",
+    operationId: "listArtistsMissingBio",
+    path: "/admin/artists/bio-queue",
+    summary: "List artists with findings but no bio yet, oldest first (the bio worklist)",
+    tags: ["Admin"],
+  })
+  .input(z.object({ limit: z.string().optional() }))
+  .output(z.object({ artists: z.array(ArtistBioWorkItemSchema), ok: z.literal(true) }));
+
 /** The `admin-artists` domain's ops, merged into the root contract by `./index.ts`. */
 export const adminArtistsContract = {
   add_artist_social: addArtistSocial,
   backfill_artist_images: backfillArtistImages,
   backfill_artists: backfillArtists,
   confirm_artist_social: confirmArtistSocial,
+  describe_artist: describeArtist,
   list_artist_socials: listArtistSocials,
+  list_artists_missing_bio: listArtistsMissingBio,
   list_unresolved_artists: listUnresolvedArtists,
   remove_artist_social: removeArtistSocial,
   resolve_artist: resolveArtist,

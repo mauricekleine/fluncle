@@ -38,6 +38,12 @@ function compareSocialLinks(left: ArtistSocialLink, right: ArtistSocialLink): nu
 
 /** The canonical artist identity record the pages + JSON-LD read. */
 export type ArtistRecord = {
+  /**
+   * The artist's voiced public bio (the entity sibling of a finding's `note`), or undefined
+   * when none is authored yet. Optional so the many callers that mint a bare `ArtistRecord`
+   * need not carry it; the surfacing PR reads it off `getArtistBySlug`. See lib/server/bio.ts.
+   */
+  bio?: string;
   id: string;
   mbid: string | undefined;
   name: string;
@@ -72,7 +78,7 @@ export async function getArtistBySlug(slug: string): Promise<ArtistRecord | unde
   const db = await getDb();
   const result = await db.execute({
     args: [slug],
-    sql: `select id, name, slug, spotify_url, mbid, wikidata_qid
+    sql: `select id, name, slug, spotify_url, mbid, wikidata_qid, bio
           from artists where slug = ? limit 1`,
   });
 
@@ -83,6 +89,7 @@ export async function getArtistBySlug(slug: string): Promise<ArtistRecord | unde
   }
 
   return {
+    bio: optionalText(row["bio"]),
     id: row["id"],
     mbid: optionalText(row["mbid"]),
     name: row["name"],
@@ -90,6 +97,74 @@ export async function getArtistBySlug(slug: string): Promise<ArtistRecord | unde
     spotifyUrl: optionalText(row["spotify_url"]),
     wikidataQid: optionalText(row["wikidata_qid"]),
   };
+}
+
+// ── The voiced bio: fill-empty-only write + the worklist (the entity-bio engine) ──────
+//
+// The bio is the entity sibling of a finding's `note`, and it inherits the note's cardinal
+// safety guarantee: the agent NEVER overwrites an existing bio. `fillEmptyArtistBio` is the
+// AGENT-tier fill, where the `and (bio is null or trim(bio) = '')` predicate lives in the SQL
+// (not a JS check-then-act), so an operator bio — or a second agent tick — that lands between
+// the handler's read and this write can never lose the race and be clobbered: the loser
+// matches no row and writes nothing (mirrors `fillEmptyNote` in track-update.ts).
+
+/**
+ * Fill an artist's bio ATOMICALLY, only when it is currently empty. The bio + its
+ * PROVENANCE (`bio_prompt_version`) + `bio_status = 'resolved'` land in the SAME statement,
+ * gated by the fill-empty-only predicate, so the version can never describe a different bio
+ * than the one it wrote and an operator bio is never clobbered. Returns whether a row was
+ * written (false = a non-empty bio was already there / the entity is gone). `promptVersion`
+ * is undefined for an operator-typed bio and null when the sweep fell back to its baked
+ * prompt — both store NULL ("no registry prompt wrote this"). The caller has already
+ * voice-gated the bio (`gateBioText`).
+ */
+export async function fillEmptyArtistBio(
+  slug: string,
+  bio: string,
+  promptVersion?: number | null,
+): Promise<boolean> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [bio, promptVersion ?? null, new Date().toISOString(), slug],
+    sql: `update artists
+            set bio = ?, bio_prompt_version = ?, bio_status = 'resolved', updated_at = ?
+          where slug = ?
+            and (bio is null or trim(bio) = '')`,
+  });
+
+  return result.rowsAffected > 0;
+}
+
+/** One row of the bio worklist: an artist with findings but no bio yet. */
+export type EntityBioWorkItem = { id: string; name: string; slug: string };
+
+/**
+ * The bio worklist: artists that have at least one coordinate-bearing finding but NO bio
+ * yet, oldest-first — the worklist the future `describe_artist` cron drains. A bare read
+ * (no writes), bounded by `limit`. An artist earns a bio only once Fluncle has logged it,
+ * so the `exists` gate is the same certified-finding floor the entity pages use.
+ */
+export async function listArtistsMissingBio(limit: number): Promise<EntityBioWorkItem[]> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [limit],
+    sql: `select a.id, a.name, a.slug
+          from artists a
+          where (a.bio is null or trim(a.bio) = '')
+            and exists (
+              select 1 from track_artists ta
+              join findings f on f.track_id = ta.track_id
+              where ta.artist_id = a.id and f.log_id is not null
+            )
+          order by a.created_at asc
+          limit ?`,
+  });
+
+  return typedRows<{ id: string; name: string; slug: string }>(result.rows).map((row) => ({
+    id: row.id,
+    name: row.name,
+    slug: row.slug,
+  }));
 }
 
 const PUBLIC_SOCIAL_STATUSES = new Set<string>(["auto", "confirmed"]);

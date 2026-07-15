@@ -194,11 +194,94 @@ export const rejectLabelAlias = oc
   .input(z.object({ id: z.string() }))
   .output(z.object({ ok: z.literal(true) }));
 
+// ── The voiced bio: the entity-bio engine (agent-tier author + its worklist) ──────────
+// `describe_label` is the entity sibling of `note_track`: the on-box sweep authors the
+// label's short Fluncle-voiced bio (grounded in Firecrawl facts + the tracks Fluncle has
+// logged on it), and this step VOICE-GATES it and writes it FILL-EMPTY-ONLY — an operator
+// bio is never clobbered. `list_labels_missing_bio` is its worklist. Both agent tier: the
+// box's agent token drives them, the `note_track` / `list_labels_admin` precedent. This is
+// deliberately AGENT tier, unlike `update_label` (the crawl-seed ruling): authoring a bio
+// is enrichment, not an editorial ruling that steers the crawl.
+
+/**
+ * The describe body (POST /admin/labels/{slug}/bio). LOOSE: the live route voice-gates
+ * `bio` itself and length-bounds it. `promptVersion` is the bio's provenance (0 = the
+ * registry's baked default, N = operator override N); `dryRun` runs the voice gate and
+ * stores nothing.
+ */
+const DescribeLabelBodySchema = z.looseObject({
+  bio: z.unknown().optional(),
+  dryRun: z.unknown().optional(),
+  promptVersion: z.number().int().min(0).optional(),
+});
+
+/**
+ * `describe_label` → `POST /admin/labels/{slug}/bio` (operationId `describeLabel`).
+ *
+ * Agent tier (`adminAuth`), the `note_track` precedent: the on-box sweep has authored the
+ * label's bio in Fluncle's voice (grounded in the gathered facts + the tracks Fluncle has
+ * logged on it); this VOICE-GATES it (the note gate's shared scan + the bio's length
+ * ceiling) and stores it into `bio` with its `bio_prompt_version` provenance + `bio_status =
+ * 'resolved'`, atomically.
+ *
+ * SAFETY (the cardinal guarantee): it fills an EMPTY bio ONLY. A label that already carries
+ * a bio — operator-written OR previously auto-authored — is a no-op (`skipped: true`); the
+ * agent NEVER clobbers an existing bio. `dryRun` runs the gate and stores nothing. Codes:
+ * `not_found`/404, `no_bio`/400, `bio_too_short`/422, `bio_too_long`/422, `voice_gate`/422.
+ */
+export const describeLabel = oc
+  .route({
+    method: "POST",
+    operationId: "describeLabel",
+    path: "/admin/labels/{slug}/bio",
+    summary: "Auto-author a label's voiced bio (fills an empty bio only)",
+    tags: ["Admin"],
+  })
+  .input(DescribeLabelBodySchema.extend({ slug: z.string() }))
+  .output(
+    z.object({
+      bio: z.string(),
+      // `true` when `dryRun` was set: the voice gate ran, NOTHING was stored.
+      dryRun: z.literal(true).optional(),
+      ok: z.literal(true),
+      // `true` when a bio already existed and the fill-empty-only guard refused to
+      // clobber it; absent on a fresh fill.
+      skipped: z.boolean().optional(),
+      slug: z.string(),
+    }),
+  );
+
+/** One row of the bio worklist: a label with findings but no bio yet. */
+const LabelBioWorkItemSchema = z
+  .object({ id: z.string(), name: z.string(), slug: z.string() })
+  .meta({ id: "LabelBioWorkItem" });
+
+/**
+ * `list_labels_missing_bio` → `GET /admin/labels/bio-queue` (operationId
+ * `listLabelsMissingBio`).
+ *
+ * Agent tier (`adminAuth`), the `list_labels_admin` precedent. The bio worklist: labels
+ * with at least one coordinate-bearing finding but no bio yet, oldest-first — the worklist
+ * the future `describe_label` cron drains. A pure read; it publishes nothing.
+ */
+export const listLabelsMissingBio = oc
+  .route({
+    method: "GET",
+    operationId: "listLabelsMissingBio",
+    path: "/admin/labels/bio-queue",
+    summary: "List labels with findings but no bio yet, oldest first (the bio worklist)",
+    tags: ["Admin"],
+  })
+  .input(z.object({ limit: z.string().optional() }))
+  .output(z.object({ labels: z.array(LabelBioWorkItemSchema), ok: z.literal(true) }));
+
 /** The `admin-labels` domain's ops, merged into the root contract by `./index.ts`. */
 export const adminLabelsContract = {
   confirm_label_alias: confirmLabelAlias,
+  describe_label: describeLabel,
   list_label_aliases: listLabelAliases,
   list_labels_admin: listLabelsAdmin,
+  list_labels_missing_bio: listLabelsMissingBio,
   reject_label_alias: rejectLabelAlias,
   update_label: updateLabel,
 };

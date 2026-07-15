@@ -1914,6 +1914,24 @@ export const recordingCues = sqliteTable(
 export const artists = sqliteTable(
   "artists",
   {
+    // ── THE VOICED BIO (the artist/label bio engine) ────────────────────────────────
+    // A short, Fluncle-voiced public bio for the artist — the written sibling of a
+    // finding's editorial `note`, grounded in Firecrawl facts + the tracks Fluncle has
+    // actually LOGGED (never a fabricated discography). Authored by the future on-box
+    // sweep via the agent-tier `describe_artist` route, which VOICE-GATES it and writes
+    // it FILL-EMPTY-ONLY (an operator-written bio is never clobbered). Nullable until
+    // authored; not surfaced anywhere yet (the surfacing PR reads it). See lib/server/bio.ts.
+    bio: text("bio"),
+    // PROVENANCE — the `describe_artist` prompt version this bio was authored under (0 =
+    // the registry's baked default, N = operator override N), or NULL when no registry
+    // prompt produced it (an operator-typed bio). Same contract as `note_prompt_version`.
+    bioPromptVersion: integer("bio_prompt_version"),
+    // The bio-authoring reliability marker, mirroring `context_status`. The future
+    // bio worklist picks `pending`/NULL rows; a CONFIRMED-EMPTY fact-gather (`empty`)
+    // is distinct from never-attempted so the sweep does not re-burn Firecrawl on a
+    // hopeless entity. States: pending (never attempted) · resolved (a bio is stored) ·
+    // empty (no usable facts) · failed (the fetch threw). Internal reliability state.
+    bioStatus: text("bio_status", { enum: ["pending", "resolved", "empty", "failed"] }),
     createdAt: text("created_at").notNull(),
     id: text("id").primaryKey(),
     // ── THE OWNED AVATAR MASTER (RFC musickit-second-authority, U3b) ─────────────────
@@ -2109,6 +2127,22 @@ export const artistSocials = sqliteTable(
 //     backfill convention): a transient failure backs off and is retried; a
 //     persistent one gives up (→ `none`), so the sweep never storms a vendor.
 export const labels = sqliteTable("labels", {
+  // ── THE VOICED BIO (the artist/label bio engine) ────────────────────────────────
+  // A short, Fluncle-voiced public bio for the label — the written sibling of a finding's
+  // editorial `note`, grounded in Firecrawl facts + the tracks Fluncle has actually LOGGED
+  // on this label (never a fabricated roster). Authored by the future on-box sweep via the
+  // agent-tier `describe_label` route, which VOICE-GATES it and writes it FILL-EMPTY-ONLY
+  // (an operator-written bio is never clobbered). Nullable until authored; not surfaced
+  // anywhere yet (the surfacing PR reads it). See lib/server/bio.ts.
+  bio: text("bio"),
+  // PROVENANCE — the `describe_label` prompt version this bio was authored under (0 = the
+  // registry's baked default, N = operator override N), or NULL when no registry prompt
+  // produced it (an operator-typed bio). Same contract as `note_prompt_version`.
+  bioPromptVersion: integer("bio_prompt_version"),
+  // The bio-authoring reliability marker, mirroring `context_status`: pending (never
+  // attempted) · resolved (a bio is stored) · empty (no usable facts) · failed (the fetch
+  // threw). Internal reliability state; the future bio worklist picks `pending`/NULL rows.
+  bioStatus: text("bio_status", { enum: ["pending", "resolved", "empty", "failed"] }),
   createdAt: text("created_at").notNull(),
   // The Discogs label id (from the MB label's curated Discogs url-rel) — the source
   // of the logo image. NULL until the resolve sweep walks it (or MB carried no link).

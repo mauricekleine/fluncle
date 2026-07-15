@@ -92,6 +92,8 @@ export {
   backfillArtistImages,
   backfillArtists,
   confirmArtistSocial,
+  describeArtist,
+  listArtistsMissingBio,
   listArtistSocials,
   removeArtistSocial,
   resolveArtist,
@@ -125,6 +127,7 @@ export {
 export {
   adminLabelsContract,
   confirmLabelAlias,
+  describeLabel,
   LabelAdminItemSchema,
   LabelAliasCandidateSchema,
   LabelAliasKindSchema,
@@ -132,6 +135,7 @@ export {
   LabelSeedStateSchema,
   listLabelAliases,
   listLabelsAdmin,
+  listLabelsMissingBio,
   rejectLabelAlias,
   updateLabel,
 } from "./admin-labels";
