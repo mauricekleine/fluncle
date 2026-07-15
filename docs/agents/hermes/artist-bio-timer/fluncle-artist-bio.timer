@@ -1,0 +1,16 @@
+[Unit]
+Description=fluncle-artist-bio timer — trigger the artist voiced-bio authoring sweep every 30m on the rave-02 host
+
+[Timer]
+# First tick shortly after boot (staggered at 5min so it doesn't collide with the label-bio
+# sweep at 7min), then every 30m. A bio is one-shot-per-entity and the corpus is bounded
+# (~tens of artists), so a gentler cadence than the note sweep is right — the queue drains
+# across a few hours, and the operator BACKFILL (one high-cap run) drains it in one pass.
+# Persistent catches up a tick missed across a box reboot. The sweep is fill-empty-only +
+# idempotent, so a deferred tick just authors on the next cycle.
+OnBootSec=5min
+OnUnitActiveSec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
