@@ -1,11 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// The artist page's indexability gate: `noindex` (and sitemap absence) must key
-// off the CANONICAL `track_artists`-join count (`countArtistFindings`) — the same
-// source the sitemap + `/artists` index use — NOT the fallback-inclusive grid
-// count. Otherwise a pre-backfill artist whose findings live only in the
-// `artists_json` cache renders an indexable page while being absent from the
-// sitemap + index (an orphaned indexable page). These tests pin that contract.
+// The artist page's two findings gates, both keyed off the CANONICAL `track_artists`-join count
+// (`countArtistFindings`) — the same source the sitemap + `/artists` index use:
+//
+//   1. EXISTENCE (slice 003, TEMPORARY until slice 004): a findings-free artist — a row that
+//      carries NO certified finding through the canonical join — 404s, even though a row exists.
+//      Slice 003 mints crawl-only `artists` rows off the Spotify anchor, so this gate is what keeps
+//      them off the public surface (consistent with their sitemap/index absence). `grep
+//      artistHasCertifiedFindingSql`.
+//   2. INDEXABILITY: a page that DOES exist is `noindex` (and out of the sitemap) below
+//      ARTIST_INDEX_MIN_FINDINGS, again by the canonical count, so it is never an orphaned
+//      indexable page.
+//
+// Both key off the same count as the sitemap + index, so page reachability, indexability and
+// sitemap membership never disagree. These tests pin that contract.
 
 const getArtistBySlug = vi.hoisted(() => vi.fn());
 const getPublicArtistSocials = vi.hoisted(() => vi.fn());
@@ -92,16 +100,39 @@ describe("resolveArtistPageData (the artist page indexability gate)", () => {
     getArtistBySlug.mockResolvedValue(ARTIST);
   });
 
-  it("noindexes a page whose findings are only in artists_json (matching its sitemap absence)", async () => {
-    // The grid shows three covers via the artists_json fallback …
+  it("404s a findings-free artist — a crawl-minted row with no certified finding", async () => {
+    // The artist ROW exists (slice 003 minted it off a crawled track's Spotify anchor) …
+    getArtistBySlug.mockResolvedValue(ARTIST);
+    getFindingsByArtist.mockResolvedValue([]);
+    // … but the canonical track_artists→findings join has none, so the artist is not public until
+    // slice 004: the page 404s exactly as when no row existed, matching its sitemap/index absence.
+    countArtistFindings.mockResolvedValue(0);
+
+    const data = await resolveArtistPageData("drift", "name", 1);
+
+    expect(data).toEqual({ status: "missing" });
+  });
+
+  it("still 404s a zero-canonical-count artist even when the artists_json grid has covers", async () => {
+    // The completeness fallback (`getFindingsByArtist` reads `artists_json`) could show covers, but
+    // the EXISTENCE gate keys off the canonical count alone — so a page absent from the sitemap +
+    // index is never a reachable orphan. It 404s, it does not render noindex.
     getFindingsByArtist.mockResolvedValue([
       finding("001.1.1A"),
       finding("002.1.1A"),
       finding("003.1.1A"),
     ]);
-    // … but the canonical track_artists join has none yet (pre-backfill), so the
-    // page is below the threshold — noindex + out of the sitemap.
     countArtistFindings.mockResolvedValue(0);
+
+    const data = await resolveArtistPageData("drift", "name", 1);
+
+    expect(data).toEqual({ status: "missing" });
+  });
+
+  it("renders (noindex) an artist with one or two certified findings, below the index threshold", async () => {
+    getFindingsByArtist.mockResolvedValue([finding("001.1.1A"), finding("002.1.1A")]);
+    // Two certified findings: past the EXISTENCE gate (row is public), below the INDEX threshold.
+    countArtistFindings.mockResolvedValue(2);
 
     const data = await resolveArtistPageData("drift", "name", 1);
 
@@ -109,9 +140,7 @@ describe("resolveArtistPageData (the artist page indexability gate)", () => {
     if (data.status !== "found") {
       throw new Error("expected the artist to be found");
     }
-    // The grid still displays the fallback findings (completeness) …
-    expect(data.findings).toHaveLength(3);
-    // … but indexability keys off the canonical join count, so the page is noindex.
+    expect(data.findings).toHaveLength(2);
     expect(data.indexable).toBe(false);
     expect(robotsMeta(data)).toBe("noindex, follow");
   });

@@ -543,6 +543,7 @@ describe("the catalogue crawler", () => {
     await db.execute("delete from settings where key = 'crawl.spotify_anchor_cursor'");
     vi.mocked(findSpotifyTrackByIsrc).mockResolvedValue({
       match: {
+        artists: [],
         spotifyUri: "spotify:track:3QKpHwwmOUJfu53agh7UjW",
         spotifyUrl: "https://open.spotify.com/track/3QKpHwwmOUJfu53agh7UjW",
         trackId: "3QKpHwwmOUJfu53agh7UjW",
@@ -615,6 +616,148 @@ describe("the catalogue crawler", () => {
   });
 });
 
+describe("the Spotify anchor connects the track's artists by their stable id", () => {
+  it("mints + links a crawled track's artists by their Spotify id on an ISRC anchor", async () => {
+    const { findSpotifyTrackByIsrc } = await import("./spotify");
+    const { crawlCatalogue } = await import("./crawl");
+    const { resetSpotifyAnchorBreaker } = await import("./spotify-anchor-breaker");
+
+    await resetSpotifyAnchorBreaker();
+    // Isolate the anchor step: no enabled seed, so the walk writes nothing this pass.
+    await db.execute("update labels set seed_state = 'disabled'");
+
+    // A crawled catalogue track: an ISRC, artists on the row, and NO Spotify anchor yet.
+    await db.execute({
+      args: ["mb_cat-1", "Liquid Roller", `["Nu:Tone"]`, "GBTEST0000001", 270000],
+      sql: `insert into tracks (track_id, title, artists_json, isrc, duration_ms)
+            values (?, ?, ?, ?, ?)`,
+    });
+
+    // The ISRC lookup carries the track's Spotify artists — each with its stable id — off the SAME
+    // response the anchor is read from (no extra call). The crawler connects them by that id.
+    vi.mocked(findSpotifyTrackByIsrc).mockResolvedValue({
+      match: {
+        artists: [{ id: "sp-nutone", name: "Nu:Tone" }],
+        spotifyUri: "spotify:track:catanchor00000000000001",
+        spotifyUrl: "https://open.spotify.com/track/catanchor00000000000001",
+        trackId: "catanchor00000000000001",
+      },
+      rateLimited: false,
+    });
+
+    await crawlCatalogue({ limit: 10, maxHop: 2 });
+
+    // The anchor stamped …
+    const anchored = await db.execute("select spotify_uri from tracks where track_id = 'mb_cat-1'");
+    expect(text(anchored.rows[0]?.spotify_uri)).toBe("spotify:track:catanchor00000000000001");
+
+    // … the artist row was MINTED, folded on the stable Spotify id …
+    const artist = await db.execute("select id from artists where spotify_artist_id = 'sp-nutone'");
+    expect(artist.rows.length).toBe(1);
+
+    // … and the indexed edge links the track to it.
+    const link = await db.execute({
+      args: [text(artist.rows[0]?.id)],
+      sql: "select 1 from track_artists where track_id = 'mb_cat-1' and artist_id = ?",
+    });
+    expect(link.rows.length).toBe(1);
+
+    // THE CERTIFICATION RAIL HOLDS: minting an artist never mints a finding.
+    const findings = await db.execute("select count(*) as n from findings");
+    expect(Number(findings.rows[0]?.n)).toBe(0);
+  });
+
+  it("a track with no Spotify presence falls back to the name-fold and mints no artist by id", async () => {
+    const { resetSpotifyAnchorBreaker } = await import("./spotify-anchor-breaker");
+
+    await resetSpotifyAnchorBreaker();
+
+    // Etherwood already has an entity (a certified finding minted it), carrying NO Spotify id here.
+    await db.execute({
+      args: ["art-etherwood", "Etherwood", "etherwood", NOW, NOW],
+      sql: `insert into artists (id, name, slug, created_at, updated_at) values (?, ?, ?, ?, ?)`,
+    });
+
+    // Drain the walk. Spotify answers "not on Spotify" for every ISRC (the default mock), so the
+    // anchor's stable-id path never fires — the ONLY link a crawled track can earn is the name-fold.
+    await drain();
+
+    // The name-fold linked Etherwood's crawled tracks to the pre-existing entity …
+    const linked = await db.execute({
+      args: ["art-etherwood"],
+      sql: `select count(*) as n from track_artists where artist_id = ?`,
+    });
+    expect(Number(linked.rows[0]?.n)).toBeGreaterThan(0);
+
+    // … and NOTHING was minted by a Spotify id: the anchor path is a no-op with no Spotify presence,
+    // and the name-fold mints nothing. "Various Artists" — with no entity — links nothing either.
+    const minted = await db.execute(
+      "select count(*) as n from artists where spotify_artist_id is not null",
+    );
+    expect(Number(minted.rows[0]?.n)).toBe(0);
+
+    // Only the one pre-seeded artist exists; the crawl created no new `artists` row.
+    const total = await db.execute("select count(*) as n from artists");
+    expect(Number(total.rows[0]?.n)).toBe(1);
+  });
+
+  it("leaves a CERTIFIED artist's finding count untouched when a catalogue track anchors to it", async () => {
+    const { findSpotifyTrackByIsrc } = await import("./spotify");
+    const { crawlCatalogue } = await import("./crawl");
+    const { countArtistFindings } = await import("./artists");
+    const { resetSpotifyAnchorBreaker } = await import("./spotify-anchor-breaker");
+
+    await resetSpotifyAnchorBreaker();
+    await db.execute("update labels set seed_state = 'disabled'");
+
+    // A CERTIFIED artist: an entity folded on a Spotify id, a certified finding, and the edge.
+    await db.execute({
+      args: ["art-nutone", "sp-nutone", "Nu:Tone", "nu-tone", NOW, NOW],
+      sql: `insert into artists (id, spotify_artist_id, name, slug, created_at, updated_at)
+            values (?, ?, ?, ?, ?, ?)`,
+    });
+    await seedTrack(db, {
+      artists: ["Nu:Tone"],
+      logId: "001.1.1A",
+      title: "Certified",
+      trackId: "mb_finding-1",
+    });
+    await db.execute({
+      args: ["mb_finding-1", "art-nutone"],
+      sql: `insert into track_artists (track_id, artist_id, position) values (?, ?, 0)`,
+    });
+
+    const before = await countArtistFindings("art-nutone");
+    expect(before).toBe(1);
+
+    // A NEW catalogue track anchors to the SAME artist by its stable id.
+    await db.execute({
+      args: ["mb_cat-3", "Roller", `["Nu:Tone"]`, "GBTEST0000003", 270000],
+      sql: `insert into tracks (track_id, title, artists_json, isrc, duration_ms)
+            values (?, ?, ?, ?, ?)`,
+    });
+    vi.mocked(findSpotifyTrackByIsrc).mockResolvedValue({
+      match: {
+        artists: [{ id: "sp-nutone", name: "Nu:Tone" }],
+        spotifyUri: "spotify:track:catanchor00000000000003",
+        spotifyUrl: "https://open.spotify.com/track/catanchor00000000000003",
+        trackId: "catanchor00000000000003",
+      },
+      rateLimited: false,
+    });
+
+    await crawlCatalogue({ limit: 10, maxHop: 2 });
+
+    // The catalogue track is now linked to the SAME artist row (folded on the stable id) …
+    const links = await db.execute(
+      "select count(*) as n from track_artists where artist_id = 'art-nutone'",
+    );
+    expect(Number(links.rows[0]?.n)).toBe(2);
+    // … but the CERTIFIED finding count is unmoved: a catalogue link never counts as a finding.
+    expect(await countArtistFindings("art-nutone")).toBe(before);
+  });
+});
+
 describe("the Spotify anchor rotation (the keyset cursor)", () => {
   it("a head of permanent no-matches never blocks the queue — the cursor rotates past it", async () => {
     const { findSpotifyTrackByIsrc } = await import("./spotify");
@@ -647,6 +790,7 @@ describe("the Spotify anchor rotation (the keyset cursor)", () => {
         isrc === "ROTISRC22"
           ? {
               match: {
+                artists: [],
                 spotifyUri: "spotify:track:rotated22",
                 spotifyUrl: "https://open.spotify.com/track/rotated22",
                 trackId: "rotated22",

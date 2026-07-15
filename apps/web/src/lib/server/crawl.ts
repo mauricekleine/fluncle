@@ -59,7 +59,7 @@
 // See docs/catalogue-crawler.md.
 
 import { ensureAlbum } from "./albums";
-import { linkTracksToArtistEntities } from "./artists";
+import { linkTracksToArtistEntities, upsertTrackArtists } from "./artists";
 import { getDb, typedRows } from "./db";
 import { parseDiscogsUrl } from "./discogs";
 import { setLabelMbLabelId } from "./label-images";
@@ -736,6 +736,36 @@ async function linkTracksToAlbum(
 }
 
 /**
+ * Connect-or-create a just-anchored catalogue track's ARTISTS by their stable `spotify_artist_id`
+ * — the artist twin of `linkTracksToAlbum`, riding the SAME Spotify response the anchor was read
+ * from (no extra Spotify call). `upsertTrackArtists` mints an `artists` row per id (folded on the
+ * unique `spotify_artist_id`) and stamps the indexed `track_artists` edge, so an artist that once
+ * folded fragilely on its NAME now folds on its stable id. Reachability stays findings-gated
+ * (`artistHasCertifiedFindingSql`): a crawl-minted, findings-free artist is MEASURED here, never
+ * made public until slice 004. `fillImages: false` keeps avatar fetches off the crawl's hot path —
+ * the batched `backfill-artist-images` sweep fills them (one call per 50 ids).
+ *
+ * Best-effort: the anchor columns are already stamped, so a link failure here must never derail the
+ * fill. FALLBACK, load-bearing: a track with NO Spotify presence never reaches here — its artist
+ * edge comes from the name-fold `linkTracksToArtistEntities` at write time, minting nothing.
+ */
+async function connectAnchorArtists(
+  trackId: string,
+  artistNames: string[],
+  spotifyArtistIds: string[],
+): Promise<void> {
+  if (artistNames.length === 0) {
+    return;
+  }
+
+  try {
+    await upsertTrackArtists(trackId, artistNames, spotifyArtistIds, { fillImages: false });
+  } catch (error) {
+    logEvent("warn", "crawl.anchor-artist-link-failed", { error, trackId });
+  }
+}
+
+/**
  * THE SPOTIFY ANCHOR — a bounded, resumable gap-fill, and deliberately NOT part of the
  * write path.
  *
@@ -867,6 +897,12 @@ async function fillSpotifyAnchors(
                 set spotify_uri = ?, spotify_url = ?, album_image_url = coalesce(album_image_url, ?)
                 where track_id = ?`,
         });
+        // Connect the track's artists by their stable Spotify id, off the SAME lookup — no extra call.
+        await connectAnchorArtists(
+          row.track_id,
+          match.artists.map((artist) => artist.name),
+          match.artists.map((artist) => artist.id),
+        );
         filled += 1;
         continue;
       }
@@ -938,6 +974,10 @@ async function fillSpotifyAnchors(
               set spotify_uri = ?, spotify_url = ?, album_image_url = coalesce(album_image_url, ?)
               where track_id = ?`,
       });
+      // The verified candidate carries its artists' stable ids parallel to their names (populated in
+      // `searchTrackCandidates`), so the search-anchored track earns the same stable-id link as an
+      // ISRC-anchored one — off the search response already in hand, no extra call.
+      await connectAnchorArtists(row.track_id, verified.artists, verified.spotifyArtistIds ?? []);
       filled += 1;
     }
     // No verified candidate — no stamp. The row stays in rotation (re-ask over a checked column),
@@ -1218,11 +1258,13 @@ async function expandRelease(node: FrontierRow, maxHop: number): Promise<Expansi
 
   // The other indexed edge these rows need, stamped in the same breath as `label_id` and for
   // the same reason: `/artist/<slug>` shows the rest of an artist's catalogue, and it can only
-  // find these rows by an indexed seek on `track_artists`. Purely additive and best-effort —
-  // it links a crawled track to an artist Fluncle has ALREADY certified, mints nothing, and
-  // makes nothing here countable as a finding (lib/server/artists.ts). A track credited to
-  // nobody he has found stays unlinked, exactly as it stays unlinked from an album he never
-  // touched. The deploy-time reconcile is the backstop; this makes the edge live per tick.
+  // find these rows by an indexed seek on `track_artists`. This is the NAME-FOLD half — the
+  // FALLBACK for a track with no Spotify presence: it links a crawled track to an artist Fluncle
+  // has ALREADY certified (by name), mints nothing, and makes nothing here countable as a finding
+  // (lib/server/artists.ts). The stable-id half runs later, at the Spotify-anchor step
+  // (`connectAnchorArtists`), which MINTS the entity by `spotify_artist_id` for a track that does
+  // have a Spotify presence. A track credited to nobody he has found stays unlinked until its
+  // entity exists; the one-off `backfill-artist-links.ts` reconciles that (no longer a deploy step).
   await linkTracksToArtistEntities(writtenIds);
 
   // The outward edge: the artists on this release, one hop further out. Past the limit

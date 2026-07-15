@@ -309,14 +309,23 @@ export async function searchTrackCandidates(query: string): Promise<TrackSearchR
     artworkUrl: selectAlbumImageUrl(track.album?.images),
     durationMs: track.duration_ms,
     id: track.id,
+    // Parallel to `artists`: the stable Spotify artist ids, carried so the crawler's verified-search
+    // anchor rung can connect the track's artist entities by stable id with no extra Spotify call.
+    spotifyArtistIds: track.artists.map((artist) => artist.id),
     spotifyUrl: track.external_urls?.spotify ?? `https://open.spotify.com/track/${track.id}`,
     title: track.name,
   }));
 }
 
-/** What the catalogue crawler wants from Spotify, and all it wants: the anchor. */
+/** What the catalogue crawler wants from Spotify: the anchor, plus the artists riding on it. */
 export type SpotifyIsrcMatch = {
   albumImageUrl?: string;
+  /**
+   * The track's Spotify artists, each with its stable `id` — carried straight off the SAME
+   * `/search` response the anchor is read from, so the crawler can connect-or-create the track's
+   * artist entities by stable id with NO extra Spotify call (crawl.ts `fillSpotifyAnchors`).
+   */
+  artists: Array<{ id: string; name: string }>;
   spotifyUri: string;
   spotifyUrl: string;
   trackId: string;
@@ -379,6 +388,7 @@ export async function findSpotifyTrackByIsrc(isrc: string): Promise<SpotifyIsrcL
     return {
       match: {
         albumImageUrl: selectAlbumImageUrl(track.album?.images),
+        artists: track.artists.map((artist) => ({ id: artist.id, name: artist.name })),
         spotifyUri: `spotify:track:${track.id}`,
         spotifyUrl: track.external_urls?.spotify ?? `https://open.spotify.com/track/${track.id}`,
         trackId: track.id,
@@ -499,6 +509,7 @@ function toSearchResult(track: TrackMetadata): TrackSearchResult {
     artworkUrl: track.albumImageUrl,
     durationMs: track.durationMs,
     id: track.trackId,
+    spotifyArtistIds: track.spotifyArtistIds,
     spotifyUrl: track.spotifyUrl,
     title: track.title,
   };
