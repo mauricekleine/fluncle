@@ -69,12 +69,12 @@ export const tracks = sqliteTable(
     // exactly the shape AGENTS.md forbids (never rank/scan a growing table in the
     // Worker). An indexed equality on the entity id is a seek, at any catalogue size.
     //
-    // NULL means "not linked yet": either the track carries no album/label string, or its
-    // string folds to a slug no entity row exists for. An entity row is minted ONLY off a
-    // certified finding (see `reconcileAlbums`/`reconcileLabels`), so an uncertified
-    // catalogue track on an album Fluncle has never found anything on stays unlinked — and
-    // therefore invisible — by design. The publish path stamps this on the add; the
-    // deploy-time backfill is the self-healing backstop for every other write path.
+    // NULL means "not linked yet": the track carries no album/label string, or its string
+    // folds to a slug no entity row exists for. A LABEL row is minted off a certified finding
+    // or discovered `undecided` by the crawl; an ALBUM row is minted off a certified finding OR
+    // inline by the catalogue crawler (folded on the release group), so a crawled track lands
+    // its `album_id` off the bat. The publish path and the crawler stamp these on the write;
+    // the one-off `backfill-album-graph.ts` is history's catch-up, not a recurring deploy step.
     albumId: text("album_id"),
     albumImageUrl: text("album_image_url"),
     // BPM/key ANALYSIS PROVENANCE (RFC bpm-key-accuracy). The enrichment analyzer already
@@ -2243,91 +2243,113 @@ export const labelAliases = sqliteTable(
 // control: an album is not a crawl seed, so it carries NO `seed_state` and NO `ruled_at`.
 // There is nothing for an operator to rule on — which is why there is no `/admin/albums`.
 //
-// A row is minted ONLY off a CERTIFIED finding (`reconcileAlbums`, and the publish path's
-// `ensureAlbum`), never off a bare `tracks` scan — the same discipline `reconcileLabels`
-// records: an album earns an entity, a page, and a sitemap slot because Fluncle FOUND
-// something on it. That is also what keeps the album index bounded by the archive rather
-// than by the catalogue. An uncertified catalogue track whose album has a row LINKS to it
-// (that is the "other songs on this album" half of the page); one whose album has no row
-// stays unlinked and invisible.
+// A row is minted two ways, and folded on two identities. The publish path mints one off a
+// CERTIFIED finding, keyed on the `slug`. The catalogue crawler mints one INLINE for the
+// release it walks (`ensureAlbum` in crawl.ts), keyed on the `release_group_mbid` — the stable
+// fold over a record's pressings — falling back to the slug when MusicBrainz has no release
+// group. So an album entity now exists for a catalogue-only record too (the crawler is to
+// albums what it already is to `labels`: a mint path), and `tracks.album_id` is stamped off the
+// bat rather than at a deploy backfill. The `/albums` EDITORIAL index stays bounded by the
+// archive (it is findings-joined — `listAlbumsWithFindingCounts`); the crawl-minted rows are the
+// "other songs on this album" tier and reach a public `/album/<slug>` only through the
+// renderable-track thin-content gate.
 //
 // The known limit, inherited from the slug identity: two different albums that share a
 // name fold into one row (`labels`' `Pilot.`/`Pilot` fold, run the other way). The
 // disambiguation answer is the alias map docs/label-entity.md already records as the
 // eventual fix for both entities; it is not a normalizer's job. See docs/album-entity.md.
-export const albums = sqliteTable("albums", {
-  // ── Apple Music ALBUM FACTS (RFC musickit-second-authority, U1) ────────────────────────
-  // Written ONCE per album by the Apple sweep, off the single-ISRC oracle's canonical-album
-  // picker (`appleCatalogLookupByIsrc` → `canonicalAlbum`). recordLabel is an ALBUM attribute,
-  // so storing it at album grain fixes "recordLabel differs per pressing" structurally: U2
-  // reads `record_label_raw` as its second label authority, U3 reads the artwork template as a
-  // ≥1920 cover source. NULL-safe: an honest miss (no album included, or a compilation-only
-  // pressing set) writes nothing, and `apple_album_id IS NULL` is the "not yet fetched" gate
-  // that makes the fetch once-per-album. `artwork_url_template` keeps Apple's `{w}x{h}` tokens
-  // intact (substituted by `appleArtworkUrl`); the palette (`artwork_bg_color`/`text_color1..4`)
-  // is what Apple derives from the cover. `upc` is the album's barcode.
-  appleAlbumId: text("apple_album_id"),
-  artworkBgColor: text("artwork_bg_color"),
-  artworkHeight: integer("artwork_height"),
-  artworkTextColor1: text("artwork_text_color1"),
-  artworkTextColor2: text("artwork_text_color2"),
-  artworkTextColor3: text("artwork_text_color3"),
-  artworkTextColor4: text("artwork_text_color4"),
-  artworkUrlTemplate: text("artwork_url_template"),
-  artworkWidth: integer("artwork_width"),
-  // ── THE VOICED BIO (the artist/label/album bio engine) ──────────────────────────
-  // A short, Fluncle-voiced public bio for the album — the written sibling of a finding's
-  // editorial `note`, grounded in Firecrawl facts + the tracks Fluncle has actually LOGGED
-  // off this record (never a fabricated tracklist). Authored by the on-box sweep via the
-  // agent-tier `describe_album` route, which VOICE-GATES it and writes it FILL-EMPTY-ONLY
-  // (an operator-written bio is never clobbered). Nullable until authored. See lib/server/bio.ts.
-  bio: text("bio"),
-  // PROVENANCE — the `describe_album` prompt version this bio was authored under (0 = the
-  // registry's baked default, N = operator override N), or NULL when no registry prompt
-  // produced it (an operator-typed bio). Same contract as `note_prompt_version`.
-  bioPromptVersion: integer("bio_prompt_version"),
-  // The bio-authoring reliability marker, mirroring `context_status`: pending (never
-  // attempted) · resolved (a bio is stored) · empty (no usable facts) · failed (the fetch
-  // threw). Internal reliability state; the future bio worklist picks `pending`/NULL rows.
-  bioStatus: text("bio_status", { enum: ["pending", "resolved", "empty", "failed"] }),
-  createdAt: text("created_at").notNull(),
-  id: text("id").primaryKey(),
-  // ── THE OWNED COVER MASTER (RFC musickit-second-authority, U3b) ─────────────────────────
-  // The `labels` image state machine, cloned onto the album so every album serves its OWN
-  // 1200²-capped cover derivative from our R2 (found.fluncle.com) instead of hotlinking a
-  // third party. The `backfill_cover_masters` sweep (cover-masters.ts) fetches a ≤1200
-  // rendition from the BEST source — Apple's stored `artwork_url_template` substituted to
-  // ≤1200 (native downscale, no local resize), then Cover Art Archive, then Spotify's 640 as
-  // the floor — and stores it at `albums/<slug>.<ext>`, downscale-guaranteed by the requested
-  // size and byte-verified ≤1200 before the R2 put. The 3000² original is NEVER stored or
-  // served (the REF-05 line); the video render still fetches Apple's full-res at render time,
-  // never persisted. Served via Cloudflare Images `/cdn-cgi/image/…` (decision B) — see
-  // media.ts `ownedCoverUrl` + `bestAlbumCoverUrl`, and docs/album-artwork.md.
-  //   - `image_key`        — the R2 object key of the stored master (e.g. `albums/<slug>.jpg`).
-  //                          NULL = no owned master; the DTO falls through to the Spotify chain.
-  //   - `image_source`     — which rung won: `apple` | `coverart` | `spotify`. NULL until resolved.
-  //   - `image_state`      — `pending` (DDL default; every album enters the worklist), `resolved`
-  //                          (has a master), `none` (no source anywhere — terminal, floors to the
-  //                          stored Spotify cover).
-  //   - `image_updated_at` — the `?v` bust VINTAGE: a replaced master bumps it, re-keying the
-  //                          Cloudflare Images rendition cache (the video-variants `?v` lesson —
-  //                          a transform cache survives a zone purge).
-  //   - `image_attempted_at` / `image_failures` — the shipped reliability pair (backoff + give-up).
-  imageAttemptedAt: text("image_attempted_at"),
-  imageFailures: integer("image_failures").notNull().default(0),
-  imageKey: text("image_key"),
-  imageSource: text("image_source", { enum: ["apple", "coverart", "spotify"] }),
-  imageState: text("image_state", { enum: ["pending", "resolved", "none"] })
-    .notNull()
-    .default("pending"),
-  imageUpdatedAt: text("image_updated_at"),
-  // The display name — the first raw `tracks.album` spelling seen for this slug.
-  name: text("name").notNull(),
-  recordLabelRaw: text("record_label_raw"),
-  slug: text("slug").notNull().unique(),
-  upc: text("upc"),
-  updatedAt: text("updated_at").notNull(),
-});
+export const albums = sqliteTable(
+  "albums",
+  {
+    // ── Apple Music ALBUM FACTS (RFC musickit-second-authority, U1) ────────────────────────
+    // Written ONCE per album by the Apple sweep, off the single-ISRC oracle's canonical-album
+    // picker (`appleCatalogLookupByIsrc` → `canonicalAlbum`). recordLabel is an ALBUM attribute,
+    // so storing it at album grain fixes "recordLabel differs per pressing" structurally: U2
+    // reads `record_label_raw` as its second label authority, U3 reads the artwork template as a
+    // ≥1920 cover source. NULL-safe: an honest miss (no album included, or a compilation-only
+    // pressing set) writes nothing, and `apple_album_id IS NULL` is the "not yet fetched" gate
+    // that makes the fetch once-per-album. `artwork_url_template` keeps Apple's `{w}x{h}` tokens
+    // intact (substituted by `appleArtworkUrl`); the palette (`artwork_bg_color`/`text_color1..4`)
+    // is what Apple derives from the cover. `upc` is the album's barcode.
+    appleAlbumId: text("apple_album_id"),
+    artworkBgColor: text("artwork_bg_color"),
+    artworkHeight: integer("artwork_height"),
+    artworkTextColor1: text("artwork_text_color1"),
+    artworkTextColor2: text("artwork_text_color2"),
+    artworkTextColor3: text("artwork_text_color3"),
+    artworkTextColor4: text("artwork_text_color4"),
+    artworkUrlTemplate: text("artwork_url_template"),
+    artworkWidth: integer("artwork_width"),
+    // ── THE VOICED BIO (the artist/label/album bio engine) ──────────────────────────
+    // A short, Fluncle-voiced public bio for the album — the written sibling of a finding's
+    // editorial `note`, grounded in Firecrawl facts + the tracks Fluncle has actually LOGGED
+    // off this record (never a fabricated tracklist). Authored by the on-box sweep via the
+    // agent-tier `describe_album` route, which VOICE-GATES it and writes it FILL-EMPTY-ONLY
+    // (an operator-written bio is never clobbered). Nullable until authored. See lib/server/bio.ts.
+    bio: text("bio"),
+    // PROVENANCE — the `describe_album` prompt version this bio was authored under (0 = the
+    // registry's baked default, N = operator override N), or NULL when no registry prompt
+    // produced it (an operator-typed bio). Same contract as `note_prompt_version`.
+    bioPromptVersion: integer("bio_prompt_version"),
+    // The bio-authoring reliability marker, mirroring `context_status`: pending (never
+    // attempted) · resolved (a bio is stored) · empty (no usable facts) · failed (the fetch
+    // threw). Internal reliability state; the future bio worklist picks `pending`/NULL rows.
+    bioStatus: text("bio_status", { enum: ["pending", "resolved", "empty", "failed"] }),
+    createdAt: text("created_at").notNull(),
+    id: text("id").primaryKey(),
+    // ── THE OWNED COVER MASTER (RFC musickit-second-authority, U3b) ─────────────────────────
+    // The `labels` image state machine, cloned onto the album so every album serves its OWN
+    // 1200²-capped cover derivative from our R2 (found.fluncle.com) instead of hotlinking a
+    // third party. The `backfill_cover_masters` sweep (cover-masters.ts) fetches a ≤1200
+    // rendition from the BEST source — Apple's stored `artwork_url_template` substituted to
+    // ≤1200 (native downscale, no local resize), then Cover Art Archive, then Spotify's 640 as
+    // the floor — and stores it at `albums/<slug>.<ext>`, downscale-guaranteed by the requested
+    // size and byte-verified ≤1200 before the R2 put. The 3000² original is NEVER stored or
+    // served (the REF-05 line); the video render still fetches Apple's full-res at render time,
+    // never persisted. Served via Cloudflare Images `/cdn-cgi/image/…` (decision B) — see
+    // media.ts `ownedCoverUrl` + `bestAlbumCoverUrl`, and docs/album-artwork.md.
+    //   - `image_key`        — the R2 object key of the stored master (e.g. `albums/<slug>.jpg`).
+    //                          NULL = no owned master; the DTO falls through to the Spotify chain.
+    //   - `image_source`     — which rung won: `apple` | `coverart` | `spotify`. NULL until resolved.
+    //   - `image_state`      — `pending` (DDL default; every album enters the worklist), `resolved`
+    //                          (has a master), `none` (no source anywhere — terminal, floors to the
+    //                          stored Spotify cover).
+    //   - `image_updated_at` — the `?v` bust VINTAGE: a replaced master bumps it, re-keying the
+    //                          Cloudflare Images rendition cache (the video-variants `?v` lesson —
+    //                          a transform cache survives a zone purge).
+    //   - `image_attempted_at` / `image_failures` — the shipped reliability pair (backoff + give-up).
+    imageAttemptedAt: text("image_attempted_at"),
+    imageFailures: integer("image_failures").notNull().default(0),
+    imageKey: text("image_key"),
+    imageSource: text("image_source", { enum: ["apple", "coverart", "spotify"] }),
+    imageState: text("image_state", { enum: ["pending", "resolved", "none"] })
+      .notNull()
+      .default("pending"),
+    imageUpdatedAt: text("image_updated_at"),
+    // The display name — the first raw `tracks.album` spelling seen for this slug.
+    name: text("name").notNull(),
+    recordLabelRaw: text("record_label_raw"),
+    // ── THE CATALOGUE FOLD KEY (catalogue-graph, inline album linking) ──────────────────────
+    // The MusicBrainz release-group MBID — the STABLE identity the catalogue crawler folds an
+    // album on, so a crawled track's album edge is written inline at crawl time rather than
+    // deferred to a deploy backfill. A release group is MusicBrainz's "album" abstraction over
+    // its pressings, and every release belongs to exactly one, so it is the right grain to
+    // dedupe on. Nullable and NON-KEYING for existing rows: a finding-minted album folds on
+    // `slug` and carries NULL here until the one-off `backfill-album-graph.ts` populates it, and
+    // a crawled track whose release has no release group still links by the slug path. `upc`
+    // stays a stored FACT (the album barcode), never the fold key. UNIQUE index below — SQLite
+    // treats NULLs as distinct, so the many NULL rows never collide. See docs/album-entity.md.
+    releaseGroupMbid: text("release_group_mbid"),
+    slug: text("slug").notNull().unique(),
+    upc: text("upc"),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    // The catalogue crawler's connect-or-create fold: `where release_group_mbid = ?` resolves an
+    // existing album before the slug path, so one release group is one row across every pressing.
+    uniqueIndex("albums_release_group_mbid_idx").on(table.releaseGroupMbid),
+  ],
+);
 
 // THE CRAWL FRONTIER — the catalogue crawler's durable, resumable work queue.
 //

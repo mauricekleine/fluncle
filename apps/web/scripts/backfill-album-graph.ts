@@ -1,32 +1,39 @@
 #!/usr/bin/env bun
 /**
- * The albums backfill — IDEMPOTENT, and FOLDED INTO THE DEPLOY: `deploy:cf` runs it as part
- * of `db:backfill` on every push, right after `db:migrate` and before `wrangler deploy`, so
- * the `albums` DDL and the data it populates ship atomically (the `backfill-labels.ts`
- * precedent, which this script is deliberately the twin of).
+ * THE ALBUM-GRAPH ONE-OFF BACKFILL — operator-run, ONCE, by hand. NOT in the deploy chain.
  *
- * Two steps:
+ * IT HITS PRODUCTION TURSO. Run it on the operator machine after this migration ships:
+ *   `bun run --cwd apps/web scripts/backfill-album-graph.ts`
+ * It reads `TURSO_DATABASE_URL`/`TURSO_AUTH_TOKEN` from the environment (locally, `.dev.vars`).
  *
- *   1. MINT — an `albums` row for every distinct `tracks.album` carried by a CERTIFIED
- *      finding, folded by slug (`slugify(tracks.album) = albums.slug`). It seeds from the
- *      finding join, NOT from a bare `tracks` scan, and that is the whole design: an album
- *      earns an entity, a public page, and a sitemap slot because Fluncle FOUND something on
- *      it. Minting off the raw catalogue would mint an album row for every record Fluncle
- *      has merely heard of the moment the catalogue lands, and the `/albums` index would
- *      balloon from an archive-sized list to a catalogue-sized one.
+ * WHY IT IS ONE-OFF, NOT A RECURRING DEPLOY STEP. The album edge is now written INLINE: the
+ * publish path calls `linkTrackToAlbum` on a certified add, and the catalogue crawler ensures +
+ * links the album at crawl time, folded on the release-group MBID (`ensureAlbum`, lib/server/
+ * albums.ts + crawl.ts). So there is nothing left to reconcile on every push — the recurring
+ * `db:backfill` album step is gone. This script exists only to catch HISTORY up: rows written
+ * before the inline path existed.
  *
- *   2. LINK — the `tracks.album_id` pointer for every track whose album HAS a row, certified
- *      or not. This is the half that fills the quieter rows on an album page: an uncertified
- *      track on a record Fluncle found a banger on gets linked, and one on a record he never
- *      touched stays unlinked, and therefore invisible. Self-healing, and the path by which a
- *      track written by any writer that does not know the column exists (an admin update, the
- *      catalogue crawler) is folded into the graph.
+ * Two steps, IDEMPOTENT, the exact slug resolution the inline path uses when it carries no mbid:
  *
- * Unlike labels, an album carries NO operator control — no seed state, no ruling, no
- * bootstrap. There is nothing for a human to decide about a record. See docs/album-entity.md.
+ *   1. MINT — an `albums` row for every distinct `tracks.album` carried by a CERTIFIED finding,
+ *      folded by slug (`slugify(tracks.album) = albums.slug`). It seeds from the finding join,
+ *      NOT a bare `tracks` scan: an album earns an entity, a page, and a sitemap slot because
+ *      Fluncle FOUND something on it. Minting off the raw catalogue would balloon the `/albums`
+ *      index from archive-sized to catalogue-sized.
  *
- * Runs wherever `db:migrate` runs: the Cloudflare deploy environment provides
- * `TURSO_DATABASE_URL`/`TURSO_AUTH_TOKEN`; locally they come from `.dev.vars`.
+ *   2. LINK — the `tracks.album_id` pointer for every track whose album HAS a row, certified or
+ *      not. This is the half that fills the quieter rows on an album page, and the path by which
+ *      a track written before the inline link existed is folded into the graph.
+ *
+ * THE `release_group_mbid` COLUMN. A legacy `albums` row has no stored release group — the
+ * `tracks` table never captured one, so a pure-DB script cannot derive it and this script does
+ * NOT invent one (it mints/links by slug, mbid NULL). Those NULLs are populated LIVE, over time,
+ * by the crawler's ADOPT path: the next time it walks a release in that group, `ensureAlbum`
+ * resolves the album by slug and stamps the mbid onto it (fill-empty-only). So the fold-on-mbid
+ * self-heals through the running crawler rather than through a one-shot MusicBrainz sweep here.
+ *
+ * Unlike labels, an album carries NO operator control — no seed state, no ruling. There is
+ * nothing for a human to decide about a record. See docs/album-entity.md.
  */
 import { type Client, createClient } from "@libsql/client";
 import { slugify } from "@fluncle/contracts/util/galaxy-slug";
@@ -104,8 +111,8 @@ export async function backfillAlbums(client: Client): Promise<AlbumsBackfillResu
  * and has an `albums` row to point at.
  *
  * The fold happens here in TS (SQLite has no `slugify`), but what it folds is the UNLINKED
- * set — drained through `tracks_album_id_idx`, and empty on a steady-state deploy — never
- * the whole catalogue.
+ * set — drained through `tracks_album_id_idx`, and empty once the inline path has caught up —
+ * never the whole catalogue.
  */
 export async function linkTracksToAlbums(client: Client): Promise<number> {
   const unlinked = await client.execute({
@@ -160,7 +167,7 @@ async function main(): Promise<void> {
   const client = createClient(authToken ? { authToken, url } : { url });
   const result = await backfillAlbums(client);
 
-  console.log(`albums backfill: ${result.minted} minted · ${result.linked} linked.`);
+  console.log(`album-graph backfill: ${result.minted} minted · ${result.linked} linked.`);
 }
 
 if (import.meta.main) {

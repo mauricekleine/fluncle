@@ -140,7 +140,7 @@ The Spotify anchor resolved **148 / 149** ISRCs in an earlier pass — and then 
 One row of `crawl_frontier` is one node of the graph and one unit of work.
 
 - `label` — hop 0. Two flavours, and the pair is what makes label resolution itself resumable: the **seed** (`source: 'fluncle'`, `external_id` = the operator's `labels.slug`) expands into the MusicBrainz **entity** (`source: 'musicbrainz'`, `external_id` = the MB label MBID), which expands into its releases. A label MusicBrainz does not know is `skipped` with a reason — recorded honestly, never retried forever.
-- `release` — expands into the tracks it carries (the write) and the artists on them.
+- `release` — expands into the tracks it carries (the write) and the artists on them. In the same pass it stamps the graph edges INLINE: `tracks.label_id` (folded on the label slug), `track_artists` for any artist Fluncle has already certified, and — folded on the release's MusicBrainz **release-group MBID** (`inc=release-groups`, slug as the fallback) — the `albums` row and `tracks.album_id` pointer. The album edge is written off the bat now, not deferred to a deploy backfill; the one-off `scripts/backfill-album-graph.ts` only catches history up. See [album-entity.md](./album-entity.md#how-a-row-gets-minted).
 - `artist` — expands into that artist's other releases.
 
 `id` is deterministic (`<source>:<kind>:<external_id>`), so re-discovering a node the walk already holds is an `on conflict do nothing`, not a second traversal — which is what keeps a graph full of cycles (two artists on one release each pointing back at it) from looping forever.

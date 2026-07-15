@@ -58,6 +58,7 @@
 //
 // See docs/catalogue-crawler.md.
 
+import { ensureAlbum } from "./albums";
 import { linkTracksToArtistEntities } from "./artists";
 import { getDb, typedRows } from "./db";
 import { parseDiscogsUrl } from "./discogs";
@@ -251,6 +252,10 @@ type MbReleaseDetail = {
   "label-info"?: MbLabelInfo[];
   media?: MbMedium[];
   relations?: MbRelation[];
+  // MusicBrainz's album abstraction over a release's pressings, returned as a singular object
+  // (a release belongs to exactly one) when `release-groups` is in `inc`. Its MBID is the
+  // catalogue's stable album fold key. Verified against the live web service.
+  "release-group"?: { id?: string };
   title?: string;
 };
 type MbReleaseBrowse = { "release-count"?: number; releases?: { id?: string }[] };
@@ -566,11 +571,8 @@ async function writeCatalogueTracks(
  * spelling of a label it already knows (`canonicalLabelName`) rather than MusicBrainz's:
  * `Med School` would slug to `med-school` and point at nothing.
  *
- * ALBUMS are deliberately NOT linked here. An album row is minted only off a CERTIFIED
- * finding (`reconcileAlbums`) — it earns an entity, a page and a sitemap slot because
- * Fluncle found something on it — so the crawler must never mint one. Linking a crawled
- * track to an album that already exists is pure upside and costs nothing to defer, so the
- * deploy backfill (`linkTracksToAlbums`, which skips an absent album) owns it alone.
+ * Its album twin is `linkTracksToAlbum` below: the album edge is written INLINE at crawl
+ * time now, folded on the release-group MBID, not deferred to a deploy backfill.
  */
 async function linkTracksToLabel(trackIds: string[], labelName: string): Promise<void> {
   const slug = labelSlug(labelName);
@@ -666,6 +668,43 @@ function pickVerifiedCandidate(
         Math.abs((left.durationMs ?? 0) - rowDurationMs) -
         Math.abs((right.durationMs ?? 0) - rowDurationMs),
     )[0];
+}
+
+/**
+ * Stamp `tracks.album_id` on the rows this release just wrote — the album twin of
+ * `linkTracksToLabel`, and the indexed edge the public `/album/<slug>` page reads by
+ * (docs/album-entity.md). ONE connect-or-create + one batched UPDATE per RELEASE, never per
+ * track, mirroring the label pattern above.
+ *
+ * The fold key is the release-group MBID (`ensureAlbum(name, releaseGroupMbid)`): every pressing
+ * of one record resolves to the SAME album row, and an album a finding minted first is adopted
+ * onto the mbid rather than duplicated. FALLBACK, load-bearing: a release with no release group
+ * (or `ensureAlbum` returning nothing for a blank title) still links by `ensureAlbum`'s slug path
+ * — nothing here hard-requires the mbid. Best-effort: a failure must not derail the crawl, so it
+ * mirrors the deploy-era backstop's tolerance while writing the edge live per tick.
+ */
+async function linkTracksToAlbum(
+  trackIds: string[],
+  albumName: null | string,
+  releaseGroupMbid: null | string,
+): Promise<void> {
+  if (trackIds.length === 0) {
+    return;
+  }
+
+  const albumId = await ensureAlbum(albumName, releaseGroupMbid);
+
+  if (!albumId) {
+    return;
+  }
+
+  const db = await getDb();
+
+  await db.execute({
+    args: [albumId, ...trackIds],
+    sql: `update tracks set album_id = ?
+          where track_id in (${trackIds.map(() => "?").join(", ")})`,
+  });
 }
 
 /**
@@ -1033,11 +1072,13 @@ async function expandBrowse(node: FrontierRow, maxHop: number): Promise<Expansio
  *
  * It also mints a `labels` row for the release's label. THAT is the widening loop: a
  * label nobody has ruled on enters `undecided` and lands in the operator's attention
- * queue. It does not get crawled until he enables it.
+ * queue. It does not get crawled until he enables it. And it mints + links the `albums`
+ * row for the release, folded on the release-group MBID (`inc=release-groups`) — the album
+ * edge is written inline here, not deferred.
  */
 async function expandRelease(node: FrontierRow, maxHop: number): Promise<Expansion> {
   const release = await mb<MbReleaseDetail>(
-    `/release/${node.external_id}?inc=recordings+artist-credits+isrcs+labels+url-rels`,
+    `/release/${node.external_id}?inc=recordings+artist-credits+isrcs+labels+release-groups+url-rels`,
   );
 
   if (!release?.id) {
@@ -1134,6 +1175,12 @@ async function expandRelease(node: FrontierRow, maxHop: number): Promise<Expansi
   if (labelName) {
     await linkTracksToLabel(writtenIds, labelName);
   }
+
+  // The album edge, stamped INLINE and folded on the release-group MBID — every pressing of a
+  // record resolves to one album row. FALLBACK: a release MusicBrainz has no release group for
+  // links by the album title's slug instead (`ensureAlbum`), and a release with no title links
+  // nothing. Purely additive; a crawled album is minted here now, no deploy backfill.
+  await linkTracksToAlbum(writtenIds, release.title ?? null, release["release-group"]?.id ?? null);
 
   // The other indexed edge these rows need, stamped in the same breath as `label_id` and for
   // the same reason: `/artist/<slug>` shows the rest of an artist's catalogue, and it can only

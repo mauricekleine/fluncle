@@ -40,10 +40,13 @@ const ARTIST_MBID = "artist-etherwood";
 const OTHER_ARTIST_MBID = "artist-hospital-guest";
 const SEED_RELEASE = "release-seed";
 const HOP2_RELEASE = "release-hop2";
+const SEED_RELEASE_GROUP = "rg-medschool-sampler";
+const HOP2_RELEASE_GROUP = "rg-hospital-sampler";
 
 function release(
   id: string,
   label: string,
+  releaseGroup: null | string,
   tracks: { id: string; isrc?: string; title: string }[],
 ) {
   return {
@@ -52,6 +55,9 @@ function release(
     date: "2013-06-10",
     id,
     "label-info": [{ label: { id: LABEL_MBID, name: label } }],
+    // The album fold key MusicBrainz returns under `inc=release-groups` — a singular object.
+    // Null models a release MusicBrainz has no release group for (the crawler's slug fallback).
+    ...(releaseGroup ? { "release-group": { id: releaseGroup } } : {}),
     media: [
       {
         tracks: tracks.map((track) => ({
@@ -106,7 +112,7 @@ function stubMusicbrainz(): void {
 
       if (url.includes(`/release/${SEED_RELEASE}`)) {
         return json(
-          release(SEED_RELEASE, "Med School", [
+          release(SEED_RELEASE, "Med School", SEED_RELEASE_GROUP, [
             { id: "rec-1", isrc: "GBCJY1300173", title: "Weightless" },
             { id: "rec-2", title: "Begin by Letting Go" },
           ]),
@@ -115,7 +121,9 @@ function stubMusicbrainz(): void {
 
       if (url.includes(`/release/${HOP2_RELEASE}`)) {
         return json(
-          release(HOP2_RELEASE, "Hospital Records", [{ id: "rec-3", title: "A Hop-2 Track" }]),
+          release(HOP2_RELEASE, "Hospital Records", HOP2_RELEASE_GROUP, [
+            { id: "rec-3", title: "A Hop-2 Track" },
+          ]),
         );
       }
 
@@ -415,19 +423,81 @@ describe("the catalogue crawler", () => {
     );
   });
 
-  it("never mints an ALBUM — an album is earned by a finding, not by a crawl", async () => {
-    // `albums` rows come only off a CERTIFIED finding (reconcileAlbums): an album earns an
-    // entity, a page and a sitemap slot because Fluncle FOUND something on it. A crawl that
-    // minted them would flood the album index with every record it has merely heard of.
+  it("mints + links the ALBUM inline, folded on the release-group MBID", async () => {
+    // The album edge is now written INLINE at crawl time (no deferred deploy backfill),
+    // folded on MusicBrainz's release-group MBID (`inc=release-groups`). Two releases here
+    // sit in two DISTINCT release groups, so the walk mints two album rows and stamps every
+    // crawled track's `album_id` at the right one.
     await drain();
 
-    const albums = await db.execute("select count(*) as n from albums");
-    expect(Number(albums.rows[0]?.n)).toBe(0);
+    const albums = await db.execute("select slug, release_group_mbid from albums order by slug");
+    expect(albums.rows.map((row) => text(row.slug))).toEqual([
+      "hospital-records-sampler",
+      "med-school-sampler",
+    ]);
+    // Every album carries its fold key — the identity a re-crawl or a second pressing folds on.
+    expect(new Set(albums.rows.map((row) => text(row.release_group_mbid)))).toEqual(
+      new Set([SEED_RELEASE_GROUP, HOP2_RELEASE_GROUP]),
+    );
 
-    // The rows still carry the release title, so the deploy backfill can link them to an
-    // album that a finding later earns. Recorded, not promoted.
+    // All three crawled tracks are linked to an album (the indexed edge the /album page reads by).
+    const linked = await db.execute(`
+      select tracks.track_id, albums.slug
+      from tracks join albums on albums.id = tracks.album_id
+      where tracks.track_id like 'mb_%'
+    `);
+    expect(linked.rows.length).toBe(3);
+    expect(new Set(linked.rows.map((row) => text(row.slug)))).toEqual(
+      new Set(["hospital-records-sampler", "med-school-sampler"]),
+    );
+
+    // The raw `tracks.album` string is preserved alongside the pointer (audit trail).
     const titles = await db.execute("select album from tracks where track_id like 'mb_%'");
     expect(titles.rows.every((row) => text(row.album).length > 0)).toBe(true);
+  });
+
+  it("FALLBACK: a release with NO release group still links its album by the slug path", async () => {
+    // The load-bearing fallback — nothing hard-requires the mbid. A release MusicBrainz has no
+    // release group for must still land its album edge, folded on the title slug, mbid NULL.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) => {
+        const json = (body: unknown) =>
+          Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
+
+        if (url.includes("/label?query=")) {
+          return json({ labels: [{ id: LABEL_MBID, name: "Med School", score: 100 }] });
+        }
+
+        if (url.includes(`/release?label=${LABEL_MBID}`)) {
+          return json({ "release-count": 1, releases: [{ id: SEED_RELEASE }] });
+        }
+
+        if (url.includes(`/release?artist=${ARTIST_MBID}`)) {
+          return json({ "release-count": 1, releases: [{ id: SEED_RELEASE }] });
+        }
+
+        if (url.includes(`/release/${SEED_RELEASE}`)) {
+          // No release group — MusicBrainz genuinely omits it for some releases.
+          return json(
+            release(SEED_RELEASE, "Med School", null, [{ id: "rec-1", title: "Weightless" }]),
+          );
+        }
+
+        return json({});
+      }),
+    );
+
+    await drain();
+
+    const linked = await db.execute(`
+      select albums.slug, albums.release_group_mbid
+      from tracks join albums on albums.id = tracks.album_id
+      where tracks.track_id = 'mb_rec-1'
+    `);
+    expect(text(linked.rows[0]?.slug)).toBe("med-school-sampler");
+    // Linked by slug, with no fold key — exactly the null-tolerant fallback path.
+    expect(linked.rows[0]?.release_group_mbid).toBeNull();
   });
 
   it("fills the Spotify anchor as a SEPARATE step, and a 429 costs the walk nothing", async () => {

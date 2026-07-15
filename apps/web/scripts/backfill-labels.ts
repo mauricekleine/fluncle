@@ -108,7 +108,7 @@ export async function loadConfirmedAliases(client: Client): Promise<Map<string, 
 /**
  * Stamp `tracks.label_id` on every track that carries a label string, has no pointer yet,
  * and has a `labels` row to point at — the indexed edge the public `/label/<slug>` page
- * reads by (schema.ts). Shared shape with `backfill-albums.ts`.
+ * reads by (schema.ts). Shared shape with the one-off `backfill-album-graph.ts`.
  *
  * The fold happens here in TS (SQLite has no `slugify`), but what it folds is the UNLINKED
  * set — drained through `tracks_label_id_idx`, and empty on a steady-state deploy — never

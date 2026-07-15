@@ -27,19 +27,21 @@ It exists because the PUBLIC page asks a question the admin surface never did. F
 
 `NULL` means "not linked": the track carries no album/label string, or its string folds to a slug no entity row exists for.
 
-## How a row gets minted — and why only off a finding
+## How a row gets minted
 
-Two write paths, both idempotent, and both seeded **only from certified findings**:
+Two idempotent write paths, and — unlike the first cut — the album is now a **catalogue-scale entity**, minted like `labels` rather than only off a finding:
 
-1. **The publish path** — `publishTrack` calls `linkTrackToAlbum` / `linkTrackToLabel`, which mint the entity and stamp the track's pointer. Best-effort and purely additive, so a failure never blocks an add.
-2. **The deploy-time reconcile** — `scripts/backfill-albums.ts` (and the `label_id` half of `scripts/backfill-labels.ts`) run as part of `db:backfill` in `deploy:cf`. Two steps: **mint** every entity a certified finding carries, then **link** every track — certified or not — whose entity now has a row.
+1. **The publish path** — `publishTrack` calls `linkTrackToAlbum` / `linkTrackToLabel`, minting the entity off a certified finding (folded on the **slug**) and stamping the track's pointer. Best-effort and purely additive, so a failure never blocks an add.
+2. **The catalogue crawler, INLINE** — `expandRelease` calls `ensureAlbum(name, releaseGroupMbid)` for every release it walks, folding the album on the **MusicBrainz release-group MBID** (the stable identity over a record's pressings; the slug is the fallback when MusicBrainz has no release group), then stamps `album_id` on the tracks it just wrote. So a crawled record earns its album entity off the bat — the crawler is to albums what it already is to labels.
 
-That an entity is minted **only off a finding** is the load-bearing rule, and it does two jobs:
+The old **deploy-time reconcile** (`scripts/backfill-albums.ts` in `db:backfill`) is gone: the album edge is written inline now, so there is nothing to reconcile on every push. Its one-off descendant, `scripts/backfill-album-graph.ts`, is **operator-run once** to catch history up (mint off findings + link existing catalogue tracks by slug); it is in no deploy step. A legacy album row carries a `NULL` `release_group_mbid` until the running crawler's **adopt** path fills it — the next time it walks a release in that group, `ensureAlbum` resolves the album by slug and stamps the mbid in (fill-empty-only), so the fold-on-mbid self-heals through the live crawler rather than a one-shot MusicBrainz sweep.
 
-- **It bounds the `albums` TABLE.** Minting off a raw `tracks` scan would mint a row for every record Fluncle has merely heard of the moment the catalogue lands, and `/albums` would swell from an archive-sized list to a catalogue-sized one. (This bounds the ROW, and therefore — for albums, today — the page. It is not a rule about pages: a page's right to exist is settled by its content, below. The LABEL table has no such bound, because the crawler must mint a `labels` row for every label it discovers — that `undecided` row is the operator's ruling queue — which is exactly why discovered labels get pages and discovered albums do not yet.)
-- **It decides what the quieter rows can contain.** An uncertified track on a record Fluncle found a banger on gets linked, so it appears on that record's page. One on a record he never touched stays unlinked, and is therefore invisible everywhere.
+What this changes, and what it does **not**:
 
-The **link** step is also the self-healing path by which a track written by any writer that knows nothing of these columns — an admin update, the future catalogue crawler — is folded into the graph on the next deploy.
+- **The `albums` TABLE now grows with the catalogue** — one row per crawled release group, exactly as the crawler mints a `labels` row per discovered label (there are simply far more albums than labels). The old "mint only off a finding" bound is retired for albums.
+- **The `/albums` EDITORIAL index stays archive-bounded.** `listAlbumsWithFindingCounts` is findings-joined, so the hub still lists only records Fluncle has certified something on — it does not swell to catalogue size.
+- **The internal GRAPH is populated; PUBLIC reachability is deliberately held back.** Minting the row + `album_id` edge inline is a graph change, not a publicness change, and the two are decoupled on purpose. A crawl-minted album with **no certified finding** is fully in the graph but **invisible on every public surface** — its `/album/<slug>` 404s, it is out of the sitemap, and a catalogue-group heading does not link to it — exactly as before the inline mint. The gate is one greppable predicate, `albumHasCertifiedFindingSql` (`lib/server/albums.ts`), applied at the page resolver, `listAlbumSitemapRows`, and the two `catalogue-groups` album joins. It is **TEMPORARY**: the catalogue-publicness slice (004) is the reviewed flip that removes it, at which point a findings-free record reaches its page through the thin-content gate exactly as a discovered label already does. A **certified-finding** album is unchanged throughout.
+- **The quieter rows are unchanged in spirit.** An uncertified track on a record with a certified finding appears on that record's page; the crawled TRACK still earns no coordinate, no `/log` URL, and no name — the unnamed tier is intact.
 
 ## The public surfaces
 
