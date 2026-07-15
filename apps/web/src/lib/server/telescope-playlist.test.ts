@@ -91,10 +91,10 @@ describe("syncTelescopePlaylist", () => {
 
     const create = spotifyCalls.find((call) => call.path === "/users/fluncle/playlists");
     expect(create).toBeDefined();
-    expect(JSON.parse(String(create?.init?.body))).toMatchObject({ public: false });
+    expect(JSON.parse((create?.init?.body as string) ?? "{}")).toMatchObject({ public: false });
 
     const put = spotifyCalls.find((call) => call.init?.method === "PUT");
-    expect(JSON.parse(String(put?.init?.body)).uris).toEqual([
+    expect(JSON.parse((put?.init?.body as string) ?? "{}").uris).toEqual([
       "spotify:track:1111111111111111111111",
       "spotify:track:2222222222222222222222",
     ]);
