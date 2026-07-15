@@ -22,12 +22,15 @@ import {
 import { Button } from "@fluncle/ui/components/button";
 import { Input } from "@fluncle/ui/components/input";
 import { Label } from "@fluncle/ui/components/label";
-import { Tabs, TabsList, TabsTrigger } from "@fluncle/ui/components/tabs";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@fluncle/ui/components/tabs";
 import { Textarea } from "@fluncle/ui/components/textarea";
+import { GraphLink } from "@/components/graph-link";
 import { KeyNotationToggle } from "@/components/key-notation-toggle";
 import { authClient } from "@/lib/auth-client";
+import { formatDateLong } from "@/lib/format";
 import { siteUrl } from "@/lib/fluncle-links";
 import { formatKey, syncKeyNotationFromAccount, useKeyNotation } from "@/lib/key-notation";
+import { albumCoverAtSize } from "@/lib/media";
 
 type Me = {
   ok: true;
@@ -43,6 +46,29 @@ type Progress = {
   collectedLogIds: string[];
   deaths: number;
   wins: number;
+};
+
+type CollectionItem = {
+  artists: string[];
+  firstCollectedAt: string;
+  galaxyName?: string;
+  galaxySlug?: string;
+  imageUrl?: string;
+  logId: string;
+  title: string;
+  trackId: string;
+};
+
+type GalaxyCompletion = {
+  collected: number;
+  name: string;
+  slug: string;
+  total: number;
+};
+
+type Collection = {
+  collection: CollectionItem[];
+  galaxies: GalaxyCompletion[];
 };
 
 type SavedFinding = {
@@ -72,6 +98,7 @@ type SavedSet = {
 };
 
 type AccountState = {
+  collection: Collection | undefined;
   csrfToken: string;
   me: Me | undefined;
   progress: Progress | undefined;
@@ -83,6 +110,7 @@ type AccountState = {
 type AccountAction =
   | { me: Me; type: "signedOut" }
   | {
+      collection: Collection;
       csrfToken: string;
       me: Me;
       progress: Progress;
@@ -93,6 +121,7 @@ type AccountAction =
     };
 
 const initialAccountState: AccountState = {
+  collection: undefined,
   csrfToken: "",
   me: undefined,
   progress: undefined,
@@ -107,6 +136,7 @@ function accountReducer(state: AccountState, action: AccountAction): AccountStat
       return { ...initialAccountState, me: action.me };
     case "loaded":
       return {
+        collection: action.collection,
         csrfToken: action.csrfToken,
         me: action.me,
         progress: action.progress,
@@ -119,8 +149,18 @@ function accountReducer(state: AccountState, action: AccountAction): AccountStat
   }
 }
 
+/** The three signed-in panels. Absent from the URL = the Galaxy (the default view). */
+type AccountTab = "galaxy" | "saves" | "settings";
+
+function parseAccountTab(value: unknown): AccountTab | undefined {
+  return value === "saves" || value === "settings" ? value : undefined;
+}
+
+// oxlint-disable-next-line sort-keys -- TanStack's canonical option order (validateSearch feeds the rest).
 export const Route = createFileRoute("/account")({
-  component: AccountPage,
+  validateSearch: (search: Record<string, unknown>): { tab?: AccountTab } => ({
+    tab: parseAccountTab(search.tab),
+  }),
   head: () => ({
     links: [{ href: `${siteUrl}/account`, rel: "canonical" }],
     meta: [
@@ -132,10 +172,11 @@ export const Route = createFileRoute("/account")({
       },
     ],
   }),
+  component: AccountPage,
 });
 
 function AccountPage() {
-  const [{ csrfToken, me, progress, saved, sets, submissions }, dispatch] = useReducer(
+  const [{ collection, csrfToken, me, progress, saved, sets, submissions }, dispatch] = useReducer(
     accountReducer,
     initialAccountState,
   );
@@ -150,22 +191,31 @@ function AccountPage() {
       return;
     }
 
-    const [progressResponse, savedResponse, setsResponse, submissionsResponse, csrfResponse] =
-      await Promise.all([
-        fetch("/api/me/galaxy-progress").then((res) => res.json() as Promise<Progress>),
-        fetch("/api/me/saved-findings").then(
-          (res) => res.json() as Promise<{ savedFindings?: SavedFinding[] }>,
-        ),
-        fetch("/api/me/saved-sets").then(
-          (res) => res.json() as Promise<{ savedSets?: SavedSet[] }>,
-        ),
-        fetch("/api/me/submissions").then(
-          (res) => res.json() as Promise<{ submissions?: Submission[] }>,
-        ),
-        fetch("/api/me/csrf").then((res) => res.json() as Promise<{ csrfToken?: string }>),
-      ]);
+    const [
+      progressResponse,
+      collectionResponse,
+      savedResponse,
+      setsResponse,
+      submissionsResponse,
+      csrfResponse,
+    ] = await Promise.all([
+      fetch("/api/me/galaxy-progress").then((res) => res.json() as Promise<Progress>),
+      fetch("/api/me/galaxy-collection").then((res) => res.json() as Promise<Collection>),
+      fetch("/api/me/saved-findings").then(
+        (res) => res.json() as Promise<{ savedFindings?: SavedFinding[] }>,
+      ),
+      fetch("/api/me/saved-sets").then((res) => res.json() as Promise<{ savedSets?: SavedSet[] }>),
+      fetch("/api/me/submissions").then(
+        (res) => res.json() as Promise<{ submissions?: Submission[] }>,
+      ),
+      fetch("/api/me/csrf").then((res) => res.json() as Promise<{ csrfToken?: string }>),
+    ]);
 
     dispatch({
+      collection: {
+        collection: collectionResponse.collection ?? [],
+        galaxies: collectionResponse.galaxies ?? [],
+      },
       csrfToken: csrfResponse.csrfToken ?? "",
       me: nextMe,
       progress: progressResponse as Progress,
@@ -202,6 +252,7 @@ function AccountPage() {
           <p className="account-muted">Checking the manifest…</p>
         ) : signedIn && me.user ? (
           <SignedInAccount
+            collection={collection}
             message={message}
             name={name}
             progress={progress}
@@ -412,6 +463,7 @@ function ForgotPasswordForm({ onBack }: { onBack: () => void }) {
 }
 
 function SignedInAccount({
+  collection,
   csrfToken,
   message,
   name,
@@ -423,6 +475,7 @@ function SignedInAccount({
   submissions,
   user,
 }: {
+  collection?: Collection;
   csrfToken: string;
   message: string;
   name: string;
@@ -434,20 +487,299 @@ function SignedInAccount({
   submissions: Submission[];
   user: NonNullable<Me["user"]>;
 }) {
+  const { tab } = Route.useSearch();
+  const navigate = Route.useNavigate();
+  const [setsMessage, setSetsMessage] = useState("");
+  const joined = useMemo(() => formatDateLong(user.createdAt), [user.createdAt]);
+
+  async function signOut() {
+    await authClient.signOut();
+    await refresh();
+  }
+
+  return (
+    <div className="account-stack">
+      <section className="account-section">
+        <div className="account-row account-identity">
+          <div>
+            <p className="account-kicker">Signed in as {name}</p>
+            <p className="account-muted">
+              Joined {joined}. Email stays private and never appears in public Fluncle surfaces.
+            </p>
+          </div>
+          <Button onClick={() => void signOut()} size="sm" type="button" variant="ghost">
+            Sign out
+          </Button>
+        </div>
+        {message ? (
+          <p aria-live="polite" className="account-muted">
+            {message}
+          </p>
+        ) : null}
+      </section>
+
+      <Tabs
+        onValueChange={(value) => {
+          void navigate({
+            replace: true,
+            search: { tab: parseAccountTab(value) },
+          });
+        }}
+        value={tab ?? "galaxy"}
+      >
+        <TabsList className="w-full">
+          <TabsTrigger value="galaxy">Galaxy</TabsTrigger>
+          <TabsTrigger value="saves">Saves</TabsTrigger>
+          <TabsTrigger value="settings">Settings</TabsTrigger>
+        </TabsList>
+
+        <TabsContent className="account-tab-panel" value="galaxy">
+          <section className="account-section">
+            <div className="account-grid">
+              <Metric label="Lifetime logs" value={progress?.collectedLogIds.length ?? 0} />
+              <Metric label="Runs home" value={progress?.wins ?? 0} />
+              <Metric label="Tows" value={progress?.deaths ?? 0} />
+            </div>
+            <p className="account-muted">
+              Your Galaxy game record: stars logged, runs flown home, and tows back to Earth after a
+              dry tank.
+            </p>
+          </section>
+          <CollectionSection collection={collection} />
+        </TabsContent>
+
+        <TabsContent className="account-tab-panel" value="saves">
+          <section className="account-section">
+            <h2>Saved findings</h2>
+            <ListEmpty items={saved} empty="No saved findings yet.">
+              {saved.map((finding) => (
+                <li key={finding.trackId}>
+                  <Link to="/log/$logId" params={{ logId: finding.logId }}>
+                    {finding.artists.join(", ")} — {finding.title}
+                  </Link>
+                </li>
+              ))}
+            </ListEmpty>
+          </section>
+
+          <section className="account-section">
+            <h2>Saved sets</h2>
+            <ListEmpty items={sets} empty="No saved sets yet. Chain one on /mix and save it here.">
+              {sets.map((set) => (
+                <SavedSetRow
+                  csrfToken={csrfToken}
+                  key={set.id}
+                  refresh={refresh}
+                  set={set}
+                  setMessage={setSetsMessage}
+                />
+              ))}
+            </ListEmpty>
+            {setsMessage ? (
+              <p aria-live="polite" className="account-muted">
+                {setsMessage}
+              </p>
+            ) : null}
+          </section>
+
+          <section className="account-section">
+            <h2>Your submissions</h2>
+            <ListEmpty items={submissions} empty="No submissions from this account yet.">
+              {submissions.map((submission) => (
+                <li key={submission.id}>
+                  {submission.artists.join(", ")} — {submission.title}{" "}
+                  <span>{submission.status}</span>
+                </li>
+              ))}
+            </ListEmpty>
+          </section>
+        </TabsContent>
+
+        <TabsContent className="account-tab-panel" value="settings">
+          <SettingsPanel
+            csrfToken={csrfToken}
+            refresh={refresh}
+            setMessage={setMessage}
+            user={user}
+          />
+        </TabsContent>
+      </Tabs>
+    </div>
+  );
+}
+
+/**
+ * The collection browser: the named galaxies as a map of the archive with the
+ * user's progress written into it. Every NAMED galaxy renders a completion line
+ * ("4 of 17 logged"); a finished galaxy earns the page's one gold note. Collected
+ * findings whose galaxy is not yet named group under "Uncharted" — present, never
+ * introduced (they get a coordinate and a date, no galaxy name until the operator
+ * names one). Dates are the user's own first-collected moments, not the archive's.
+ */
+function CollectionSection({ collection }: { collection?: Collection }) {
+  if (!collection) {
+    return (
+      <section className="account-section">
+        <h2>Collection</h2>
+        <p className="account-muted">Reading your log…</p>
+      </section>
+    );
+  }
+
+  const bySlug = new Map<string, CollectionItem[]>();
+  const ungrouped: CollectionItem[] = [];
+
+  for (const item of collection.collection) {
+    if (item.galaxySlug) {
+      const group = bySlug.get(item.galaxySlug) ?? [];
+
+      group.push(item);
+      bySlug.set(item.galaxySlug, group);
+    } else {
+      ungrouped.push(item);
+    }
+  }
+
+  if (collection.collection.length === 0 && collection.galaxies.length === 0) {
+    return (
+      <section className="account-section">
+        <h2>Collection</h2>
+        <p className="account-muted">
+          No stars logged yet. Every star you reach in the Galaxy lands here, with the date you
+          reached it.
+        </p>
+        <Link className="account-collection-cta" to="/galaxy">
+          Fly the Galaxy
+        </Link>
+      </section>
+    );
+  }
+
+  return (
+    <section className="account-section">
+      <h2>Collection</h2>
+      <p className="account-muted">
+        Every star you reach in the Galaxy is logged here for good, with the date you reached it.
+      </p>
+      {collection.galaxies.map((galaxy) => (
+        <CollectionGroup
+          complete={galaxy.total > 0 && galaxy.collected >= galaxy.total}
+          count={`${galaxy.collected} of ${galaxy.total} logged`}
+          items={bySlug.get(galaxy.slug) ?? []}
+          key={galaxy.slug}
+          name={galaxy.name}
+          slug={galaxy.slug}
+        />
+      ))}
+      {ungrouped.length > 0 ? (
+        // Findings whose galaxy is not yet named (or whose galaxy retired) render
+        // UNHEADED — coordinate, cover, and date, no galaxy clause, no heading, no
+        // count. An unnamed tier is never introduced and never given a noun; until
+        // the map is fully named this block IS the whole collection.
+        <ul className="account-list account-collection-unheaded">
+          {ungrouped.map((item) => (
+            <CollectionRow item={item} key={item.trackId} />
+          ))}
+        </ul>
+      ) : null}
+    </section>
+  );
+}
+
+function CollectionGroup({
+  complete,
+  count,
+  items,
+  name,
+  slug,
+}: {
+  complete: boolean;
+  count: string;
+  items: CollectionItem[];
+  name: string;
+  slug: string;
+}) {
+  return (
+    <div className="account-collection-group">
+      <div className="account-collection-heading">
+        <h3>
+          <GraphLink kind="galaxy" slug={slug}>
+            {name}
+          </GraphLink>
+        </h3>
+        <span className={complete ? "account-collection-complete" : undefined}>
+          {complete ? `All ${items.length} logged` : count}
+        </span>
+      </div>
+      {items.length > 0 ? (
+        <ul className="account-list">
+          {items.map((item) => (
+            <CollectionRow item={item} key={item.trackId} />
+          ))}
+        </ul>
+      ) : (
+        <p className="account-muted">No stars logged here yet.</p>
+      )}
+    </div>
+  );
+}
+
+function CollectionRow({ item }: { item: CollectionItem }) {
+  return (
+    <li className="account-collection-row">
+      {item.imageUrl ? (
+        <img
+          alt=""
+          className="account-collection-thumb"
+          height={40}
+          loading="lazy"
+          src={albumCoverAtSize(item.imageUrl, "small")}
+          width={40}
+        />
+      ) : (
+        <span aria-hidden className="account-collection-thumb" />
+      )}
+      <span className="account-collection-body">
+        <Link to="/log/$logId" params={{ logId: item.logId }}>
+          {item.artists.join(", ")} — {item.title}
+        </Link>
+        <span className="account-collection-meta">
+          <span className="account-collection-logid">{item.logId}</span> · First logged{" "}
+          {formatDateLong(item.firstCollectedAt)}
+        </span>
+      </span>
+    </li>
+  );
+}
+
+/**
+ * The Settings tab: preferences, the profile form, the CLI pointer, and — at the
+ * bottom, deliberately last — export and deletion. Same behaviors as before the
+ * tab split; only the residence changed.
+ */
+function SettingsPanel({
+  csrfToken,
+  refresh,
+  setMessage,
+  user,
+}: {
+  csrfToken: string;
+  refresh: () => Promise<void>;
+  setMessage: (message: string) => void;
+  user: NonNullable<Me["user"]>;
+}) {
   const [username, setUsername] = useState(user.username ?? "");
   const [displayUsername, setDisplayUsername] = useState(
     user.displayUsername ?? user.username ?? "",
   );
   const [settingsMessage, setSettingsMessage] = useState("");
   const [settingsBusy, setSettingsBusy] = useState(false);
-  const [setsMessage, setSetsMessage] = useState("");
   const [dangerMessage, setDangerMessage] = useState("");
   const [dangerBusy, setDangerBusy] = useState<"" | "delete" | "export">("");
   const [exportText, setExportText] = useState("");
   const { notation } = useKeyNotation();
-  const joined = useMemo(() => new Date(user.createdAt).toLocaleDateString(), [user.createdAt]);
 
-  // This section only mounts for a signed-in user, so force the key-notation store to
+  // This panel only mounts for a signed-in user, so force the key-notation store to
   // adopt the profile's stored choice — covering a sign-in mid-session (the one-time
   // sync may have already run anonymously). Toggling the control below then mirrors
   // the change back to the profile.
@@ -518,88 +850,8 @@ function SignedInAccount({
     }
   }
 
-  async function signOut() {
-    await authClient.signOut();
-    await refresh();
-  }
-
   return (
-    <div className="account-stack">
-      <section className="account-section">
-        <div className="account-row account-identity">
-          <div>
-            <p className="account-kicker">Signed in as {name}</p>
-            <p className="account-muted">
-              Joined {joined}. Email stays private and never appears in public Fluncle surfaces.
-            </p>
-          </div>
-          <Button onClick={() => void signOut()} size="sm" type="button" variant="ghost">
-            Sign out
-          </Button>
-        </div>
-        {message ? (
-          <p aria-live="polite" className="account-muted">
-            {message}
-          </p>
-        ) : null}
-      </section>
-
-      <section className="account-section">
-        <div className="account-grid">
-          <Metric label="Lifetime logs" value={progress?.collectedLogIds.length ?? 0} />
-          <Metric label="Runs home" value={progress?.wins ?? 0} />
-          <Metric label="Tows" value={progress?.deaths ?? 0} />
-        </div>
-        <p className="account-muted">
-          Your Galaxy game record: stars logged, runs flown home, and tows back to Earth after a dry
-          tank.
-        </p>
-      </section>
-
-      <section className="account-section">
-        <h2>Saved findings</h2>
-        <ListEmpty items={saved} empty="No saved findings yet.">
-          {saved.map((finding) => (
-            <li key={finding.trackId}>
-              <Link to="/log/$logId" params={{ logId: finding.logId }}>
-                {finding.artists.join(", ")} — {finding.title}
-              </Link>
-            </li>
-          ))}
-        </ListEmpty>
-      </section>
-
-      <section className="account-section">
-        <h2>Saved sets</h2>
-        <ListEmpty items={sets} empty="No saved sets yet. Chain one on /mix and save it here.">
-          {sets.map((set) => (
-            <SavedSetRow
-              csrfToken={csrfToken}
-              key={set.id}
-              refresh={refresh}
-              set={set}
-              setMessage={setSetsMessage}
-            />
-          ))}
-        </ListEmpty>
-        {setsMessage ? (
-          <p aria-live="polite" className="account-muted">
-            {setsMessage}
-          </p>
-        ) : null}
-      </section>
-
-      <section className="account-section">
-        <h2>Your submissions</h2>
-        <ListEmpty items={submissions} empty="No submissions from this account yet.">
-          {submissions.map((submission) => (
-            <li key={submission.id}>
-              {submission.artists.join(", ")} — {submission.title} <span>{submission.status}</span>
-            </li>
-          ))}
-        </ListEmpty>
-      </section>
-
+    <>
       <section className="account-section">
         <h2>Preferences</h2>
         <p className="account-muted">
@@ -698,7 +950,7 @@ function SignedInAccount({
           <Textarea readOnly className="min-h-48 font-mono text-xs" value={exportText} />
         ) : null}
       </section>
-    </div>
+    </>
   );
 }
 

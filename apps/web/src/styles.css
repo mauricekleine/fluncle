@@ -3263,6 +3263,121 @@ body::before {
   gap: 0.25rem;
 }
 
+/* A signed-in tab panel stacks its sections like the plate always has; the first
+   section under the tab bar drops its top rule (the bar already divides). */
+.account-tab-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.account-tab-panel > .account-section:first-child,
+.account-tab-panel > form.account-section:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+/* One galaxy in the collection: the name leads, the completion count sits quiet
+   at the end of the same line. A finished galaxy earns the page's one gold note. */
+.account-collection-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.account-collection-heading {
+  align-items: baseline;
+  border-top: 1px solid var(--dust-line);
+  display: flex;
+  gap: 0.6rem;
+  justify-content: space-between;
+  padding-top: 0.7rem;
+}
+
+.account-collection-heading h3 {
+  color: var(--starlight-cream);
+  font-size: 0.88rem;
+  font-weight: 700;
+}
+
+.account-collection-heading span {
+  color: var(--stardust);
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.account-collection-heading .account-collection-complete {
+  color: var(--eclipse-gold);
+  font-weight: 700;
+}
+
+/* A collected finding: cover-led like every finding row, the user's own log date
+   riding as the quiet second line. */
+.account-collection-row {
+  align-items: center;
+  display: flex;
+  gap: 0.65rem;
+}
+
+.account-collection-thumb {
+  background: var(--tape-black);
+  border: 1px solid var(--dust-line);
+  border-radius: var(--artwork-radius, 6px);
+  display: block;
+  flex-shrink: 0;
+  height: 40px;
+  object-fit: cover;
+  width: 40px;
+}
+
+.account-collection-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.account-collection-body > a {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-collection-meta {
+  color: var(--stardust);
+  font-size: 0.76rem;
+}
+
+/* The coordinate reads in Oxanium tabular like every other number on the site
+   (the One Voice Rule — mono speaks only for the machine). */
+.account-collection-logid {
+  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-size: 0.76rem;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+/* The unheaded block: findings whose galaxy is not yet named (or retired), and —
+   until the map is fully named — the whole collection. A divider, never a heading:
+   an unnamed tier is never introduced and never given a noun. */
+.account-collection-unheaded {
+  border-top: 1px solid var(--dust-line);
+  padding-top: 0.7rem;
+}
+
+.account-collection-cta {
+  align-self: flex-start;
+  color: var(--eclipse-gold);
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.account-collection-cta:hover {
+  color: var(--eclipse-glow);
+}
+
 @media (max-width: 520px) {
   .account-grid {
     grid-template-columns: 1fr;

@@ -111,9 +111,75 @@ export const collectPrivateGalaxyLog = oc
   .input(GalaxyLogBodySchema)
   .output(z.object({ logId: z.string(), ok: z.literal(true) }));
 
+/**
+ * One collected finding in the signed-in user's Galaxy collection, enriched with
+ * the finding it points at (title, artists, cover, galaxy). `galaxyName`/`galaxySlug`
+ * are present only when the finding's galaxy is operator-NAMED — an unnamed or
+ * unassigned finding groups under the client's "Uncharted" bucket (the DTO's
+ * `galaxy` omission rule, applied to the collection). `firstCollectedAt` is the
+ * user's own log date (their Found date for that star), never the archive's.
+ */
+export const GalaxyCollectionItemSchema = z
+  .object({
+    artists: z.array(z.string()),
+    firstCollectedAt: z.string(),
+    galaxyName: z.string().optional(),
+    galaxySlug: z.string().optional(),
+    imageUrl: z.string().optional(),
+    logId: z.string(),
+    title: z.string(),
+    trackId: z.string(),
+  })
+  .meta({ id: "GalaxyCollectionItem" });
+
+/**
+ * A named galaxy's completion line: how many findings the archive holds there
+ * (`total`, certified + named only) against how many this user has logged
+ * (`collected`). Only NAMED galaxies appear — the unnamed remainder is not
+ * enumerated (the map is public only once the operator names it).
+ */
+export const GalaxyCompletionSchema = z
+  .object({
+    collected: z.number(),
+    name: z.string(),
+    slug: z.string(),
+    total: z.number(),
+  })
+  .meta({ id: "GalaxyCompletion" });
+
+/**
+ * `list_private_galaxy_collection` → `GET /me/galaxy-collection`
+ * (operationId `listPrivateGalaxyCollection`).
+ *
+ * The signed-in user's Galaxy collection as a browsable object: every collected
+ * finding enriched via the findings/tracks join (title, artists, cover, galaxy,
+ * the user's first-collected date), plus the per-named-galaxy completion lines.
+ * The read sibling of `collectPrivateGalaxyLog`; same cookie-session tier as
+ * `getPrivateGalaxyProgress` (401 without a session, no CSRF — a read).
+ */
+export const listPrivateGalaxyCollection = oc
+  .route({
+    method: "GET",
+    operationId: "listPrivateGalaxyCollection",
+    path: "/me/galaxy-collection",
+    summary: "List the signed-in user's Galaxy collection",
+    tags: ["Me"],
+  })
+  .output(
+    z.object({
+      collection: z.array(GalaxyCollectionItemSchema),
+      galaxies: z.array(GalaxyCompletionSchema),
+      ok: z.literal(true),
+    }),
+  );
+
+export type GalaxyCollectionItem = z.infer<typeof GalaxyCollectionItemSchema>;
+export type GalaxyCompletion = z.infer<typeof GalaxyCompletionSchema>;
+
 /** The `me-galaxy` domain's ops, merged into the root contract by `./index.ts`. */
 export const meGalaxyContract = {
   collect_private_galaxy_log: collectPrivateGalaxyLog,
   get_private_galaxy_progress: getPrivateGalaxyProgress,
+  list_private_galaxy_collection: listPrivateGalaxyCollection,
   merge_private_galaxy_progress: mergePrivateGalaxyProgress,
 };

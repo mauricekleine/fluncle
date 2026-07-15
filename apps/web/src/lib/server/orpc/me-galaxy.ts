@@ -6,7 +6,12 @@
 // handler reuses the live route's logic verbatim, re-expressing only I/O + framing.
 
 import { ORPCError } from "@orpc/server";
-import { collectLogId, getGalaxyProgress, mergeGalaxyProgress } from "../account-data";
+import {
+  collectLogId,
+  getGalaxyProgress,
+  listGalaxyCollection,
+  mergeGalaxyProgress,
+} from "../account-data";
 import { privateUserAuth, privateUserMutation } from "../orpc-auth";
 import { apiFault, type Implementer, responseFault } from "./_shared";
 
@@ -100,9 +105,24 @@ export function meGalaxyHandlers(os: Implementer) {
       }
     });
 
+  const listCollection = os.list_private_galaxy_collection
+    .use(privateUserAuth)
+    .handler(async ({ context }) => {
+      try {
+        return await listGalaxyCollection(context.user);
+      } catch (error) {
+        if (error instanceof ORPCError) {
+          throw error;
+        }
+
+        throw apiFault(error);
+      }
+    });
+
   return {
     collect_private_galaxy_log: collectLog,
     get_private_galaxy_progress: getProgress,
+    list_private_galaxy_collection: listCollection,
     merge_private_galaxy_progress: mergeProgress,
   };
 }

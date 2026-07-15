@@ -1,13 +1,17 @@
 import { randomUUID } from "node:crypto";
 import { type InValue } from "@libsql/client/web";
 import {
+  type GalaxyCollectionItem,
+  type GalaxyCompletion,
   type UserPreferences,
   UserPreferencesInputSchema,
   UserPreferencesSchema,
 } from "@fluncle/contracts/orpc";
+import { bestAlbumCoverUrl } from "../media";
 import { parseSetParam, parseTasteParam, serializeSet, serializeTaste } from "../mix-set";
 import { parseArtistsJson } from "./artists";
 import { getDb, typedRow, typedRows } from "./db";
+import { isGalaxyMapFullyNamed } from "./galaxies-map";
 import { jsonError } from "./env";
 import { enforceRateLimit } from "./rate-limit";
 
@@ -324,6 +328,110 @@ export async function collectLogId(
   await touchGalaxyState(user.id, now);
 
   return { logId: track.log_id, ok: true };
+}
+
+type CollectionRow = {
+  album_image_key: string | null;
+  album_image_state: string | null;
+  album_image_updated_at: string | null;
+  album_image_url: string | null;
+  artists_json: string;
+  first_collected_at: string;
+  galaxy_name: string | null;
+  galaxy_slug: string | null;
+  log_id: string;
+  title: string;
+  track_id: string;
+};
+
+type GalaxyTotalRow = {
+  name: string;
+  slug: string;
+  total: number;
+};
+
+/**
+ * The signed-in user's Galaxy collection as a browsable object (the read sibling
+ * of `collectLogId`): every collected row enriched through the certification join
+ * (title, artists, cover, galaxy), plus the per-NAMED-galaxy completion lines.
+ * The galaxy name/slug follow the DTO's omission rule — present only once the
+ * operator has named the galaxy; an unnamed or unassigned finding reaches the
+ * client without one and renders unheaded (never introduced, no coined noun).
+ * The WHOLE galaxy layer sits behind `isGalaxyMapFullyNamed()` — the same gate
+ * every galaxy-naming surface uses — so a half-named map never leaks: until the
+ * map ships, the read returns a flat collection (no names, no completion lines).
+ * Retired galaxies are excluded everywhere (`retired_at is null`, the
+ * galaxies-map precedent); a finding in a retired galaxy simply loses its
+ * clause. Ordered oldest-first: the collection reads as the user's own log, and
+ * their first star stays line one.
+ */
+export async function listGalaxyCollection(user: PublicUser): Promise<{
+  collection: GalaxyCollectionItem[];
+  galaxies: GalaxyCompletion[];
+  ok: true;
+}> {
+  const db = await getDb();
+  const [mapReady, collectionResult, totalsResult] = await Promise.all([
+    isGalaxyMapFullyNamed(),
+    db.execute({
+      args: [user.id],
+      sql: `select c.track_id, c.log_id, c.first_collected_at,
+          t.title, t.artists_json, t.album_image_url,
+          (select name from galaxies where galaxies.id = f.galaxy_id and retired_at is null) as galaxy_name,
+          (select slug from galaxies where galaxies.id = f.galaxy_id and retired_at is null) as galaxy_slug,
+          (select image_key from albums where albums.id = t.album_id) as album_image_key,
+          (select image_state from albums where albums.id = t.album_id) as album_image_state,
+          (select image_updated_at from albums where albums.id = t.album_id) as album_image_updated_at
+        from user_galaxy_collections c
+        join findings f on f.track_id = c.track_id
+        join tracks t on t.track_id = c.track_id
+        where c.user_id = ?
+        order by c.first_collected_at asc`,
+    }),
+    db.execute({
+      sql: `select g.name, g.slug, count(*) as total
+        from findings f
+        join galaxies g on g.id = f.galaxy_id
+        where f.log_id is not null and g.name is not null and g.retired_at is null
+        group by g.id
+        order by g.name asc`,
+    }),
+  ]);
+
+  const collection = typedRows<CollectionRow>(collectionResult.rows).map((row) => ({
+    artists: parseArtistsJson(row.artists_json),
+    firstCollectedAt: row.first_collected_at,
+    galaxyName: (mapReady ? row.galaxy_name : null) ?? undefined,
+    galaxySlug: (mapReady ? row.galaxy_slug : null) ?? undefined,
+    imageUrl: bestAlbumCoverUrl({
+      imageKey: row.album_image_key,
+      imageState: row.album_image_state,
+      imageUpdatedAt: row.album_image_updated_at,
+      spotifyUrl: row.album_image_url,
+    }),
+    logId: row.log_id,
+    title: row.title,
+    trackId: row.track_id,
+  }));
+
+  const collectedBySlug = new Map<string, number>();
+
+  for (const item of collection) {
+    if (item.galaxySlug) {
+      collectedBySlug.set(item.galaxySlug, (collectedBySlug.get(item.galaxySlug) ?? 0) + 1);
+    }
+  }
+
+  const galaxies = mapReady
+    ? typedRows<GalaxyTotalRow>(totalsResult.rows).map((row) => ({
+        collected: collectedBySlug.get(row.slug) ?? 0,
+        name: row.name,
+        slug: row.slug,
+        total: Number(row.total),
+      }))
+    : [];
+
+  return { collection, galaxies, ok: true };
 }
 
 export async function incrementGalaxyCounters(

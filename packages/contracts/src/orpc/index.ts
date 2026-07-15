@@ -257,7 +257,12 @@ export {
 } from "./me";
 export {
   collectPrivateGalaxyLog,
+  type GalaxyCollectionItem,
+  GalaxyCollectionItemSchema,
+  type GalaxyCompletion,
+  GalaxyCompletionSchema,
   getPrivateGalaxyProgress,
+  listPrivateGalaxyCollection,
   mergePrivateGalaxyProgress,
 } from "./me-galaxy";
 export {

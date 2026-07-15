@@ -500,3 +500,131 @@ describe("user preferences (real SQL, closed schema + owner-scoped)", () => {
     expect(result.export.preferences).toEqual({ keyNotation: "camelot" });
   });
 });
+
+describe("listGalaxyCollection (real SQL, the collection browser read)", () => {
+  const userA = publicUser("collector-a");
+  const userB = publicUser("collector-b");
+
+  async function seedGalaxy(
+    id: string,
+    name: null | string,
+    slug: null | string,
+    retiredAt: null | string = null,
+  ): Promise<void> {
+    const now = new Date().toISOString();
+
+    await db.execute({
+      args: [id, `${id}-handle`, name, slug, retiredAt, "[]", now, now],
+      sql: `insert into galaxies (id, handle, name, slug, retired_at, centroid_json, created_at, updated_at)
+        values (?, ?, ?, ?, ?, ?, ?, ?)`,
+    });
+  }
+
+  async function assignGalaxy(trackId: string, galaxyId: string): Promise<void> {
+    await db.execute({
+      args: [galaxyId, trackId],
+      sql: `update findings set galaxy_id = ? where track_id = ?`,
+    });
+  }
+
+  // The fully-named map: two live named galaxies + one RETIRED named galaxy (which
+  // must leak nowhere) + one finding with no galaxy assignment at all. The unnamed
+  // half-named-map case gets its own test below (it flips the whole gate).
+  beforeEach(async () => {
+    const { collectLogId } = await import("./account-data");
+
+    await seedUser(db, { email: "a@x.test", id: userA.id, username: userA.id });
+    await seedUser(db, { email: "b@x.test", id: userB.id, username: userB.id });
+    await seedGalaxy("g-lunar", "Lunar", "lunar");
+    await seedGalaxy("g-solar", "Solar", "solar");
+    await seedGalaxy("g-dead", "Dead", "dead", new Date().toISOString());
+    await seedTrack(db, { logId: "log-l1", title: "Roller One", trackId: "track-lunar-1-000000" });
+    await seedTrack(db, { logId: "log-l2", title: "Roller Two", trackId: "track-lunar-2-000000" });
+    await seedTrack(db, { logId: "log-s1", title: "Lift Off", trackId: "track-solar-1-000000" });
+    await seedTrack(db, { logId: "log-d1", title: "Ghost", trackId: "track-dead-1-0000000" });
+    await seedTrack(db, { logId: "log-u1", title: "Drift", trackId: "track-unassigned-0000" });
+    await assignGalaxy("track-lunar-1-000000", "g-lunar");
+    await assignGalaxy("track-lunar-2-000000", "g-lunar");
+    await assignGalaxy("track-solar-1-000000", "g-solar");
+    await assignGalaxy("track-dead-1-0000000", "g-dead");
+    await collectLogId(userA, "log-l1");
+    await collectLogId(userA, "log-d1");
+    await collectLogId(userA, "log-u1");
+    await collectLogId(userB, "log-l2");
+  });
+
+  it("returns the user's rows enriched with the finding + galaxy, oldest first", async () => {
+    const { listGalaxyCollection } = await import("./account-data");
+    const result = await listGalaxyCollection(userA);
+
+    expect(result.ok).toBe(true);
+    expect(result.collection.map((item) => item.logId)).toEqual(["log-l1", "log-d1", "log-u1"]);
+
+    const lunarItem = result.collection[0];
+
+    expect(lunarItem?.title).toBe("Roller One");
+    expect(lunarItem?.artists).toEqual(["Test Artist"]);
+    expect(lunarItem?.galaxyName).toBe("Lunar");
+    expect(lunarItem?.galaxySlug).toBe("lunar");
+    expect(lunarItem?.firstCollectedAt).toBeTruthy();
+  });
+
+  it("an unassigned finding reaches the client with NO galaxy name (unheaded)", async () => {
+    const { listGalaxyCollection } = await import("./account-data");
+    const result = await listGalaxyCollection(userA);
+    const unassignedItem = result.collection.find((item) => item.logId === "log-u1");
+
+    expect(unassignedItem).toBeDefined();
+    expect(unassignedItem?.galaxyName).toBeUndefined();
+    expect(unassignedItem?.galaxySlug).toBeUndefined();
+  });
+
+  it("a retired galaxy leaks nowhere: no completion line, and its finding loses the clause", async () => {
+    const { listGalaxyCollection } = await import("./account-data");
+    const result = await listGalaxyCollection(userA);
+
+    expect(result.galaxies.find((galaxy) => galaxy.slug === "dead")).toBeUndefined();
+
+    const deadItem = result.collection.find((item) => item.logId === "log-d1");
+
+    expect(deadItem?.galaxyName).toBeUndefined();
+    expect(deadItem?.galaxySlug).toBeUndefined();
+  });
+
+  it("completion lines cover live NAMED galaxies only, with per-user collected counts", async () => {
+    const { listGalaxyCollection } = await import("./account-data");
+    const result = await listGalaxyCollection(userA);
+
+    expect(result.galaxies).toEqual([
+      { collected: 1, name: "Lunar", slug: "lunar", total: 2 },
+      { collected: 0, name: "Solar", slug: "solar", total: 1 },
+    ]);
+  });
+
+  it("is owner-scoped — B's collects never appear in A's collection", async () => {
+    const { listGalaxyCollection } = await import("./account-data");
+    const [resultA, resultB] = [
+      await listGalaxyCollection(userA),
+      await listGalaxyCollection(userB),
+    ];
+
+    expect(resultA.collection.map((item) => item.logId)).toEqual(["log-l1", "log-d1", "log-u1"]);
+    expect(resultB.collection.map((item) => item.logId)).toEqual(["log-l2"]);
+    expect(resultB.galaxies.find((galaxy) => galaxy.slug === "lunar")?.collected).toBe(1);
+  });
+
+  it("GATES the whole galaxy layer while the map is half-named (isGalaxyMapFullyNamed)", async () => {
+    const { listGalaxyCollection } = await import("./account-data");
+
+    // One live UNNAMED galaxy flips the gate: names and completion lines vanish,
+    // the collection itself stays (flat, unheaded).
+    await seedGalaxy("g-fresh", null, null);
+
+    const result = await listGalaxyCollection(userA);
+
+    expect(result.galaxies).toEqual([]);
+    expect(result.collection.map((item) => item.logId)).toEqual(["log-l1", "log-d1", "log-u1"]);
+    expect(result.collection.every((item) => item.galaxyName === undefined)).toBe(true);
+    expect(result.collection.every((item) => item.galaxySlug === undefined)).toBe(true);
+  });
+});

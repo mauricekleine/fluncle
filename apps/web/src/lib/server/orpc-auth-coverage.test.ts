@@ -388,6 +388,9 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // (agent-allowed): the box sweep reads the neighbourhood every tick, and both are pure reads.
   list_observation_neighbours: "admin",
   list_observation_rejections: "admin",
+  // The collection browser read (the /account Galaxy tab) — private-session
+  // (privateUserAuth), the get_private_galaxy_progress precedent.
+  list_private_galaxy_collection: "private-session",
   list_private_saved_findings: "private-session",
   list_private_saved_sets: "private-session",
   list_private_submissions: "private-session",
