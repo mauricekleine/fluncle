@@ -120,6 +120,94 @@ describe("ensureLabel (the publish path's upsert)", () => {
   });
 });
 
+describe("ensureLabel — the MusicBrainz label MBID fold (the discovered-label fold key)", () => {
+  async function mbLabelIdOf(slug: string): Promise<null | string> {
+    const result = await db.execute({
+      args: [slug],
+      sql: `select mb_label_id from labels where slug = ?`,
+    });
+
+    return (result.rows[0]?.mb_label_id as null | string) ?? null;
+  }
+
+  it("mints a discovered label and stamps the MBID it folds on", async () => {
+    const id = await ensureLabel("Med School", "mbid-medschool");
+
+    expect(id).toBeDefined();
+    expect(await labelSlugs()).toEqual(["med-school"]);
+    expect(await mbLabelIdOf("med-school")).toBe("mbid-medschool");
+  });
+
+  it("collapses two spellings that slugify apart onto ONE row when they share an MBID", async () => {
+    // "Med School" → med-school, "Medschool" → medschool: two distinct slugs, one label. The MBID
+    // is what folds them — without it these mint as two rows (the bug this slice fixes).
+    const first = await ensureLabel("Med School", "mbid-medschool");
+    const second = await ensureLabel("Medschool", "mbid-medschool");
+
+    expect(second).toBe(first);
+    // Only the FIRST spelling's row exists; the second resolved to it by MBID and minted nothing.
+    expect(await labelSlugs()).toEqual(["med-school"]);
+  });
+
+  it("resolves by MBID first — reusing the row whatever spelling the caller passes", async () => {
+    const id = await ensureLabel("Med School", "mbid-medschool");
+
+    // A totally different display string, same MBID → the same row, no new mint.
+    const again = await ensureLabel("MedSchool Recordings UK", "mbid-medschool");
+
+    expect(again).toBe(id);
+    expect(await listLabels()).toHaveLength(1);
+  });
+
+  it("ADOPTS the MBID onto a pre-existing slug row that has none (fill-empty-only)", async () => {
+    // A publish minted the label first, no MBID. The crawler later walks it and carries the MBID.
+    const minted = await ensureLabel("Shogun Audio");
+    expect(await mbLabelIdOf("shogun-audio")).toBeNull();
+
+    const folded = await ensureLabel("Shogun Audio", "mbid-shogun");
+
+    expect(folded).toBe(minted);
+    expect(await mbLabelIdOf("shogun-audio")).toBe("mbid-shogun");
+    expect(await listLabels()).toHaveLength(1);
+  });
+
+  it("never rewrites an MBID already on the row (a different MBID for the same slug is ignored)", async () => {
+    await ensureLabel("Critical Music", "mbid-critical");
+
+    // A second, conflicting MBID for the same slug must not clobber the first — fill-empty-only.
+    await ensureLabel("Critical Music", "mbid-imposter");
+
+    expect(await mbLabelIdOf("critical-music")).toBe("mbid-critical");
+    expect(await listLabels()).toHaveLength(1);
+  });
+
+  it("FALLBACK: no MBID still folds by slug, and stores a NULL MBID", async () => {
+    const first = await ensureLabel("Hospital Records");
+    const again = await ensureLabel("Hospital Records");
+
+    expect(again).toBe(first);
+    expect(await mbLabelIdOf("hospital-records")).toBeNull();
+    expect(await listLabels()).toHaveLength(1);
+  });
+
+  it("FALLBACK: a confirmed alias still folds when no MBID resolves it", async () => {
+    await insertLabel("lbl_med", "Medschool", "medschool");
+    await insertAlias({
+      alias: "Med School Recordings",
+      aliasSlug: "med-school-recordings",
+      id: "lba_1",
+      labelId: "lbl_med",
+      status: "confirmed",
+    });
+
+    // No MBID passed — the alias path resolves the folded-away spelling to the canonical label.
+    const id = await ensureLabel("Med School Recordings");
+
+    expect(id).toBe("lbl_med");
+    expect(await labelSlugs()).toEqual(["medschool"]);
+  });
+});
+
 describe("reconcileLabels (the deterministic backstop)", () => {
   it("mints a row for every distinct label, folding spelling variants", async () => {
     await seedFinding("t1", "Pilot.");

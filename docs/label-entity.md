@@ -14,12 +14,15 @@ slugify(tracks.label) = labels.slug
 
 That fold is what makes `Pilot.` and `Pilot` one label without a destructive rewrite of the findings. `tracks` also carries an indexed **`label_id` pointer** at the row — added with the public pages, which read by it (a seek, never a fold over the catalogue). It is an addition, not a replacement: `tracks.label` stays the raw captured string forever. See [docs/album-entity.md](./album-entity.md#the-graph-pointer-tracksalbum_id--trackslabel_id).
 
-| Column       | What it is                                                                                               |
-| ------------ | -------------------------------------------------------------------------------------------------------- |
-| `slug`       | The identity and the join key (unique). Minted by `slugify(name)`.                                       |
-| `name`       | The display name — the first raw spelling seen for that slug.                                            |
-| `seed_state` | `enabled` \| `disabled` \| `undecided`. **Crawl scope, never storage** (below).                          |
-| `ruled_at`   | When a HUMAN last ruled. NULL = no operator has ruled it (a machine default, or the one-time bootstrap). |
+**The slug is the display identity and the fallback fold; the MusicBrainz label MBID (`mb_label_id`) is the stable fold key for a DISCOVERED label** — the label twin of the release-group MBID the album entity folds on. `slugify` cannot fold `Med School` and `Medschool` (they slug apart), so a crawler that minted a discovered label by slug alone would mint those two spellings as separate labels. Folding on the MBID collapses them: a UNIQUE index on `mb_label_id` (NULLs distinct — most rows carry none) makes `where mb_label_id = ?` a connect-or-create the crawler resolves BEFORE the slug path. When a caller carries an MBID and the resolved/minted row has none yet, it is **adopted fill-empty-only** (`where mb_label_id is null`), so a publish-minted label and the crawler's later discovery collapse into one row instead of duplicating, and a row already folded on a different MBID is never rewritten. The alias layer (below) stays the secondary defense for a NON-MusicBrainz source (Apple's `recordLabel`) and for the fold `slugify` can't do on its own.
+
+| Column        | What it is                                                                                                                   |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `slug`        | The display identity and the join key (unique). Minted by `slugify(name)`. Also the fold key when no MBID exists.            |
+| `mb_label_id` | The MusicBrainz label MBID — the stable fold key for a discovered label (UNIQUE, NULL for a publish-minted / pre-crawl row). |
+| `name`        | The display name — the first raw spelling seen for that slug.                                                                |
+| `seed_state`  | `enabled` \| `disabled` \| `undecided`. **Crawl scope, never storage** (below).                                              |
+| `ruled_at`    | When a HUMAN last ruled. NULL = no operator has ruled it (a machine default, or the one-time bootstrap).                     |
 
 A label's finding count is **derived** (`GROUP BY tracks.label`, folded by slug), never stored — the denormalization-drift class is deleted outright, as with galaxy member counts.
 
@@ -35,12 +38,15 @@ This is the ruling, and it is the whole point of the control. **`seed_state` ans
 
 ## How a label gets a row
 
-Automatically, two ways, both idempotent:
+Automatically, three ways, all idempotent:
 
-1. **The publish path** — `publishTrack` calls `ensureLabel(deezer.label)` right after it upserts the artist entity. Best-effort and purely additive (one `labels` row, nothing else), so a failure never blocks an add.
-2. **The deploy-time reconcile** — `scripts/backfill-labels.ts` runs as part of `db:backfill` in `deploy:cf`, ensuring a row exists for every distinct `tracks.label`. The self-healing backstop.
+1. **The publish path** — `publishTrack` calls `ensureLabel(deezer.label)` right after it upserts the artist entity. Best-effort and purely additive (one `labels` row, nothing else), so a failure never blocks an add. No MBID (Deezer hands back a string), so it folds by slug/alias.
+2. **The catalogue crawler** — at discovery `expandRelease` calls `ensureLabel(mbLabelName, mbLabelId)` with the MBID off the release's `label-info[].label.id`, so a discovered label **folds on the MBID** and its `tracks.label_id` edge is stamped inline (`linkTracksToLabel`, MBID-first then slug). The SEED path stamps the same column via `setLabelMbLabelId` — both fill-empty-only, so they never fight.
+3. **The deploy-time reconcile** — `scripts/backfill-labels.ts` runs as part of `db:backfill` in `deploy:cf`, ensuring a row exists for every distinct `tracks.label` and stamping any missing `label_id` pointer. The self-healing backstop for a writer that does not stamp inline.
 
-An existing label is never clobbered: its seed state, its ruling stamp, and its display name all survive.
+An existing label is never clobbered: its seed state, its ruling stamp, its display name, and any MBID already on it all survive.
+
+**Catching history up (one-off, operator-run).** Existing labels carry `mb_label_id = NULL` until `scripts/backfill-label-mbid.ts` — a standalone, one-off, prod-Turso script, **not** in `db:backfill` — resolves each by name through the shared 1 req/s MusicBrainz client and stamps it fill-empty-only. It **never merges**: if two existing rows resolve to one MBID (a duplicate that slugified apart), it LOGS the collision and leaves the second NULL, because merging would repoint a public `/label/<slug>` URL — the operator's call, not a script's.
 
 ## The starting ruling (the one-time bootstrap)
 
@@ -89,13 +95,13 @@ The crawl also bounds the `label-review` queue: `listLabelReviewRows` hands the 
 
 Every label surface — the `/labels` index cards, the `/label/<slug>` page (its OG/social image), the search entity row, the graph hover card — used to show **the freshest finding's album cover** as the label's picture. For most labels that is an arbitrary sleeve; only a label whose cover happens to carry its logo (Anjunabeats) read right. The fix gives a label its **OWN image**, and it is stored on the `labels` row:
 
-| Column                                  | What it is                                                                                                          |
-| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `mb_label_id`                           | The MusicBrainz label MBID — the identity anchor. The crawler already resolves it at walk time and now persists it. |
-| `discogs_label_id`                      | The Discogs label id (off the MB label's curated Discogs url-rel) — the source of the logo image.                   |
-| `image_key`                             | The R2 object key of the stored logo (`labels/<slug>.<ext>`), served world-readable from `found.fluncle.com`.       |
-| `image_state`                           | The resolve lifecycle: `pending` (the DDL default — every label enters the worklist), `resolved`, `none`.           |
-| `image_attempted_at` / `image_failures` | The reliability pair (the shipped `backfill_*` convention): transient failures back off; a persistent one gives up. |
+| Column                                  | What it is                                                                                                                                                                                       |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `mb_label_id`                           | The MusicBrainz label MBID — the identity anchor AND the discovered-label fold key (UNIQUE; see the data model). The crawler resolves it at walk time (seed + discovered paths) and persists it. |
+| `discogs_label_id`                      | The Discogs label id (off the MB label's curated Discogs url-rel) — the source of the logo image.                                                                                                |
+| `image_key`                             | The R2 object key of the stored logo (`labels/<slug>.<ext>`), served world-readable from `found.fluncle.com`.                                                                                    |
+| `image_state`                           | The resolve lifecycle: `pending` (the DDL default — every label enters the worklist), `resolved`, `none`.                                                                                        |
+| `image_attempted_at` / `image_failures` | The reliability pair (the shipped `backfill_*` convention): transient failures back off; a persistent one gives up.                                                                              |
 
 **Discogs is the source.** Labels are first-class on Discogs and `GET /labels/{id}` returns an `images[]` array with the real logo. The identity is reached the way `discogs.ts` already reaches releases — through **MusicBrainz's curated `url-rels`**, never through Discogs search — so the resolve walks: the label name → its MBID (`/label?query=`, exact-fold match, the crawler's `fold`) → `/label/<mbid>?inc=url-rels` → the Discogs (and Wikidata) relation. The logo is **downloaded once and stored in our own R2** (`env.VIDEOS`, behind `found.fluncle.com`) — Discogs is **never hotlinked**: their ToS forbids it and image requests need the authed token.
 

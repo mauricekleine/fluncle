@@ -154,13 +154,50 @@ async function resolveConfirmedAliasLabelId(slug: string): Promise<string | unde
  * all-punctuation label mints nothing. Called best-effort from the publish path, so
  * a failure here must never block an add — the deploy-time reconcile backstops it.
  *
+ * TWO IDENTITIES, resolved in priority order (the `ensureAlbum` twin — read that first):
+ *
+ *   1. THE MUSICBRAINZ LABEL MBID (`mb_label_id`), when the caller has one — the catalogue
+ *      crawler does, off MusicBrainz's release `label-info[].label.id`. It is the STABLE fold
+ *      key: two spellings of one label that slugify apart ("Med School" ⇄ "Medschool") resolve
+ *      to the SAME row. Resolved FIRST, so a label already folded on this MBID is reused outright.
+ *   2. THE CONFIRMED ALIAS (`resolveConfirmedAliasLabelId`) — a spelling the operator has folded
+ *      into another label. Then THE SLUG (`slugify(name)`) — the display identity, and the
+ *      fallback fold when no MBID exists (the publish path passes none; a discovered label whose
+ *      release carries no label MBID has none).
+ *
+ * When a caller carries an MBID and the row it lands on (minted this call, or pre-existing off the
+ * slug/alias because a finding minted it first) has none yet, the MBID is ADOPTED onto that row —
+ * fill-empty-only, so a row already folded on a DIFFERENT MBID is never rewritten and the unique
+ * index guards a genuine collision. That is what lets a publish-minted label and the crawler's
+ * later discovery collapse into one row instead of duplicating. It mirrors the SEED path, which
+ * stamps the same column via `setLabelMbLabelId` (label-images.ts) — the two write fill-empty-only,
+ * so they never fight.
+ *
  * ── ALIAS-AWARE (RFC musickit-second-authority, U2a) ────────────────────────────
- * Before minting, it consults confirmed aliases: if this slug is a spelling the operator has
- * folded into another label, it returns THAT label's id and mints nothing. The crawler reaches
- * this same choke point (`crawl.ts` calls `ensureLabel` on a discovered label), so its discovery
- * path is covered here too.
+ * The crawler reaches this same choke point (`crawl.ts` calls `ensureLabel` on a discovered
+ * label), so its discovery path is covered by both the MBID fold and the confirmed-alias fold.
  */
-export async function ensureLabel(raw: string | null | undefined): Promise<string | undefined> {
+export async function ensureLabel(
+  raw: string | null | undefined,
+  mbLabelId?: null | string,
+): Promise<string | undefined> {
+  const db = await getDb();
+  const mbid = typeof mbLabelId === "string" && mbLabelId.trim() ? mbLabelId.trim() : null;
+
+  // 1. mbid-first: a label already folded on this MusicBrainz MBID wins, whatever its slug.
+  if (mbid) {
+    const byMbid = await db.execute({
+      args: [mbid],
+      sql: `select id from labels where mb_label_id = ? limit 1`,
+    });
+    const existingId = typedRows<{ id: string }>(byMbid.rows)[0]?.id;
+
+    if (existingId) {
+      return existingId;
+    }
+  }
+
+  // 2. the alias/slug path — mint (or reuse) by the operator's fold, then the display identity.
   const slug = labelSlug(raw);
 
   if (!slug || typeof raw !== "string") {
@@ -170,25 +207,58 @@ export async function ensureLabel(raw: string | null | undefined): Promise<strin
   const aliasLabelId = await resolveConfirmedAliasLabelId(slug);
 
   if (aliasLabelId) {
+    await adoptLabelMbLabelId(aliasLabelId, mbid);
+
     return aliasLabelId;
   }
 
-  const db = await getDb();
   const now = new Date().toISOString();
 
   await db.execute({
-    args: [`lbl_${randomUUID()}`, raw.trim(), slug, now, now],
-    sql: `insert into labels (id, name, slug, created_at, updated_at)
-          values (?, ?, ?, ?, ?)
+    args: [`lbl_${randomUUID()}`, raw.trim(), slug, mbid, now, now],
+    sql: `insert into labels (id, name, slug, mb_label_id, created_at, updated_at)
+          values (?, ?, ?, ?, ?, ?)
           on conflict (slug) do nothing`,
   });
 
   const result = await db.execute({
     args: [slug],
-    sql: `select id from labels where slug = ? limit 1`,
+    sql: `select id, mb_label_id from labels where slug = ? limit 1`,
   });
+  const row = typedRows<{ id: string; mb_label_id: null | string }>(result.rows)[0];
 
-  return typedRows<{ id: string }>(result.rows)[0]?.id;
+  if (!row) {
+    return undefined;
+  }
+
+  // Adopt the MBID onto a pre-existing slug row that has none — fill-empty-only.
+  if (!row.mb_label_id) {
+    await adoptLabelMbLabelId(row.id, mbid);
+  }
+
+  return row.id;
+}
+
+/**
+ * Adopt a MusicBrainz label MBID onto a row that has none — fill-empty-only (`where mb_label_id
+ * is null`). A rare concurrent adoption of the same MBID onto two slugs loses the unique-index
+ * race harmlessly; the id is already in the caller's hand, so a throw here must not lose it (the
+ * `.catch()` keeps it). A no-op when there is no MBID to adopt.
+ */
+async function adoptLabelMbLabelId(labelId: string, mbid: null | string): Promise<void> {
+  if (!mbid) {
+    return;
+  }
+
+  const db = await getDb();
+
+  await db
+    .execute({
+      args: [mbid, new Date().toISOString(), labelId],
+      sql: `update labels set mb_label_id = ?, updated_at = ?
+            where id = ? and mb_label_id is null`,
+    })
+    .catch(() => undefined);
 }
 
 /**
