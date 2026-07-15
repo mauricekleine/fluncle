@@ -25,6 +25,9 @@ vi.mock("./db", async (importOriginal) => {
 // a crawl in an un-authorized (or throttled) environment must still write every row.
 vi.mock("./spotify", () => ({
   findSpotifyTrackByIsrc: vi.fn(() => Promise.resolve({ rateLimited: false })),
+  // The search rung's helper. Default: no candidates — so the walk-only and ISRC tests never
+  // stamp off a stray search, and a test that exercises the rung sets its own return.
+  searchTrackCandidates: vi.fn(() => Promise.resolve([])),
 }));
 
 // ── The stub graph ───────────────────────────────────────────────────────────
@@ -164,6 +167,13 @@ beforeEach(async () => {
   db = await createIntegrationDb();
   setMusicbrainzRateLimitForTests(0);
   stubMusicbrainz();
+  // Reset the Spotify mocks to their factory defaults so a mock a prior test set (a throttle, a
+  // dead grant, a match) cannot leak into the next — there is no global clearMocks here.
+  const { findSpotifyTrackByIsrc, searchTrackCandidates } = await import("./spotify");
+  vi.mocked(findSpotifyTrackByIsrc).mockReset();
+  vi.mocked(findSpotifyTrackByIsrc).mockResolvedValue({ rateLimited: false });
+  vi.mocked(searchTrackCandidates).mockReset();
+  vi.mocked(searchTrackCandidates).mockResolvedValue([]);
   // The operator's ruling: Medschool is in. Nothing else is.
   await seedLabel("Medschool", "medschool", "enabled");
   await seedLabel("Anjunabeats", "anjunabeats", "disabled");
@@ -434,8 +444,10 @@ describe("the catalogue crawler", () => {
     expect(Number(rows.rows[0]?.n)).toBe(0);
     expect((await getCrawlStatus()).catalogueTracks).toBe(3); // every row written anyway
 
-    // The queue is DERIVED (`isrc is not null and spotify_uri is null`), so nothing had to
-    // be remembered: the next tick simply picks the anchor up.
+    // The queue is DERIVED, so nothing had to be remembered: the next tick simply picks the
+    // anchor up. `anchorsPending` is the ISRC-bearing gauge of that queue (the cheap partial
+    // index), so it counts only rec-1 — rec-2/rec-3 have no ISRC and are drained by the search
+    // rung, not this gauge.
     expect((await getCrawlStatus()).anchorsPending).toBe(1); // only rec-1 carries an ISRC
 
     // Spotify recovers. The breaker may have started tracking the throttle; clearing it stands
@@ -443,6 +455,12 @@ describe("the catalogue crawler", () => {
     // regardless of how many passes the drain took. (The trip itself is proven precisely in
     // spotify-anchor-breaker.test.ts and the `breaker_open` integration test below.)
     await resetSpotifyAnchorBreaker();
+    // Since the search rung, the worklist also holds rec-2/rec-3 (no ISRC), so a throttle can
+    // park the rotation cursor mid-way rather than on the sole ISRC row — the old wrap-in-one-pass
+    // no longer holds. Clear the cursor to model the rotation returning to the top, so this single
+    // recovery pass deterministically re-attempts rec-1 first. (Production fills it within a
+    // rotation regardless; the cursor rotation itself is proven in the rotation describe below.)
+    await db.execute("delete from settings where key = 'crawl.spotify_anchor_cursor'");
     vi.mocked(findSpotifyTrackByIsrc).mockResolvedValue({
       match: {
         spotifyUri: "spotify:track:3QKpHwwmOUJfu53agh7UjW",
@@ -464,7 +482,7 @@ describe("the catalogue crawler", () => {
   });
 
   it("PAUSES the anchor fill (breaker_open) when Spotify's grant is gone, and surfaces it", async () => {
-    const { findSpotifyTrackByIsrc } = await import("./spotify");
+    const { findSpotifyTrackByIsrc, searchTrackCandidates } = await import("./spotify");
     const { crawlCatalogue, getCrawlStatus } = await import("./crawl");
     const { SPOTIFY_ANCHOR_BREAKER_MAX_FAILURES } = await import("./spotify-anchor-breaker");
 
@@ -473,6 +491,12 @@ describe("the catalogue crawler", () => {
     // fully-drained queue. A run of these trips the breaker toward a pause, with a reason the
     // operator can act on (reconnect Spotify) rather than wait out a throttle that never lifts.
     vi.mocked(findSpotifyTrackByIsrc).mockResolvedValue({ rateLimited: false, unauthorized: true });
+    // A dead grant fails BOTH rungs identically: `searchTrackCandidates` reads the token first, so
+    // it THROWS the same reauth `ApiError`. Modelling only the ISRC rung would let the no-ISRC rows
+    // (rec-2/rec-3) return a clean "ok" between the unauthorized passes and reset the streak.
+    vi.mocked(searchTrackCandidates).mockRejectedValue(
+      Object.assign(new Error("Spotify needs reconnecting"), { code: "spotify_reauth_required" }),
+    );
     await drain(); // writes the rows; rec-1's anchor stays pending (nothing minted)
 
     // Drive exactly K failing passes so the trip is deterministic (drain's pass count is not).
@@ -574,5 +598,235 @@ describe("the Spotify anchor rotation (the keyset cursor)", () => {
     const third = await crawlCatalogue({ limit: 1, maxHop: 2 });
     expect(third.anchorsFilled).toBe(0);
     expect(third.anchorOutcome).toBe("ok");
+  });
+});
+
+describe("the Spotify anchor search rung (verified title+artist)", () => {
+  // The recall unlock: a catalogue row whose recording exists on Spotify under a DIFFERENT
+  // release than the crawl walked (a compilation, a sampler) never anchors by ISRC — the ISRC
+  // it carries is the compilation's, or it has none. The second rung searches by title+artist
+  // and stamps ONLY on a triple-verified candidate (folded artist + folded title + duration
+  // within ±2s). Isolated here by disabling the seed label: the walk writes no catalogue rows,
+  // so each test's inserted rows are the only anchor-pending ones.
+  const CANDIDATE = {
+    artworkUrl: "https://i.scdn.co/image/searchhit",
+    spotifyUrl: "https://open.spotify.com/track/spot-dribble",
+  };
+
+  async function seedAnchorRow(row: {
+    artists: string[];
+    durationMs: number;
+    isrc?: string;
+    title: string;
+    trackId: string;
+  }): Promise<void> {
+    await db.execute({
+      args: [row.trackId, row.title, JSON.stringify(row.artists), row.durationMs, row.isrc ?? null],
+      sql: `insert into tracks (track_id, title, artists_json, duration_ms, isrc)
+            values (?, ?, ?, ?, ?)`,
+    });
+  }
+
+  beforeEach(async () => {
+    const { resetSpotifyAnchorBreaker } = await import("./spotify-anchor-breaker");
+
+    // No enabled seed label → no walk → the only anchor-pending rows are the ones each test seeds.
+    // (The module beforeEach already reset the Spotify mocks to their misses-nothing defaults.)
+    await db.execute("update labels set seed_state = 'disabled'");
+    await resetSpotifyAnchorBreaker();
+  });
+
+  it("anchors a no-ISRC row when a search candidate verifies (folded artist + title + duration)", async () => {
+    const { searchTrackCandidates } = await import("./spotify");
+    const { crawlCatalogue } = await import("./crawl");
+
+    await seedAnchorRow({
+      artists: ["Muffler"],
+      durationMs: 200_000,
+      title: "Dribble",
+      trackId: "mb_search-hit",
+    });
+
+    // Same artist + title, duration within ±2s — the recall win the ISRC rung could never reach.
+    vi.mocked(searchTrackCandidates).mockResolvedValue([
+      {
+        artists: ["Muffler"],
+        artworkUrl: CANDIDATE.artworkUrl,
+        durationMs: 201_000,
+        id: "spot-dribble",
+        spotifyUrl: CANDIDATE.spotifyUrl,
+        title: "Dribble",
+      },
+    ]);
+
+    const pass = await crawlCatalogue({ limit: 10, maxHop: 2 });
+    expect(pass.anchorsFilled).toBe(1);
+    expect(pass.anchorOutcome).toBe("filled");
+
+    const anchored = await db.execute(
+      "select spotify_uri, spotify_url, album_image_url from tracks where track_id = 'mb_search-hit'",
+    );
+    expect(anchored.rows[0]?.spotify_uri).toBe("spotify:track:spot-dribble");
+    expect(anchored.rows[0]?.spotify_url).toBe(CANDIDATE.spotifyUrl);
+    expect(anchored.rows[0]?.album_image_url).toBe(CANDIDATE.artworkUrl);
+  });
+
+  it("does NOT anchor when the candidate's duration is off by more than 2s", async () => {
+    const { searchTrackCandidates } = await import("./spotify");
+    const { crawlCatalogue } = await import("./crawl");
+
+    await seedAnchorRow({
+      artists: ["Hold Tight"],
+      durationMs: 200_000,
+      title: "Lounge",
+      trackId: "mb_dur-off",
+    });
+
+    // Right title, right artist — but 3s longer. A remaster, a different edit: not this recording.
+    vi.mocked(searchTrackCandidates).mockResolvedValue([
+      {
+        artists: ["Hold Tight"],
+        durationMs: 203_001,
+        id: "spot-wrong-len",
+        spotifyUrl: "https://open.spotify.com/track/spot-wrong-len",
+        title: "Lounge",
+      },
+    ]);
+
+    const pass = await crawlCatalogue({ limit: 10, maxHop: 2 });
+    expect(pass.anchorsFilled).toBe(0);
+
+    const row = await db.execute("select spotify_uri from tracks where track_id = 'mb_dur-off'");
+    expect(row.rows[0]?.spotify_uri).toBeNull();
+  });
+
+  it("does NOT anchor the '- VIP' of a plain-title row (the fold keeps descriptors distinct)", async () => {
+    const { searchTrackCandidates } = await import("./spotify");
+    const { crawlCatalogue } = await import("./crawl");
+
+    await seedAnchorRow({
+      artists: ["DJ Fresh"],
+      durationMs: 200_000,
+      title: "Bad Company",
+      trackId: "mb_vip-trap",
+    });
+
+    // The VIP is a DIFFERENT recording. Same artist, same duration, but `matchKey` carries the
+    // "vip" descriptor the plain row does not — so it must never anchor to it.
+    vi.mocked(searchTrackCandidates).mockResolvedValue([
+      {
+        artists: ["DJ Fresh"],
+        durationMs: 200_000,
+        id: "spot-vip",
+        spotifyUrl: "https://open.spotify.com/track/spot-vip",
+        title: "Bad Company - VIP",
+      },
+    ]);
+
+    const pass = await crawlCatalogue({ limit: 10, maxHop: 2 });
+    expect(pass.anchorsFilled).toBe(0);
+
+    const row = await db.execute("select spotify_uri from tracks where track_id = 'mb_vip-trap'");
+    expect(row.rows[0]?.spotify_uri).toBeNull();
+  });
+
+  it("treats a 429 from the search rung as a THROTTLE — stops the pass, advances the cursor", async () => {
+    const { searchTrackCandidates } = await import("./spotify");
+    const { crawlCatalogue } = await import("./crawl");
+
+    await seedAnchorRow({
+      artists: ["Someone"],
+      durationMs: 200_000,
+      title: "Throttled Track",
+      trackId: "mb_throttle",
+    });
+
+    // `searchTrackCandidates` THROWS on a 429 (where the ISRC rung returns `rateLimited`); the rung
+    // must read it off the error and stop the pass identically.
+    vi.mocked(searchTrackCandidates).mockRejectedValue(new Error("Spotify search failed: 429"));
+
+    const pass = await crawlCatalogue({ limit: 10, maxHop: 2 });
+    expect(pass.anchorOutcome).toBe("throttled");
+    expect(pass.anchorsFilled).toBe(0);
+
+    // Cursor parity with the ISRC rung: it advanced past the attempted row, so the next tick
+    // resumes rather than re-grinding the same 429.
+    const cursorRow = await db.execute(
+      "select value from settings where key = 'crawl.spotify_anchor_cursor'",
+    );
+    expect(cursorRow.rows[0]?.value).toBe("mb_throttle");
+
+    const row = await db.execute("select spotify_uri from tracks where track_id = 'mb_throttle'");
+    expect(row.rows[0]?.spotify_uri).toBeNull();
+  });
+
+  it("anchors via search when a row HAS an ISRC but the ISRC lookup misses (the rung order)", async () => {
+    const { findSpotifyTrackByIsrc, searchTrackCandidates } = await import("./spotify");
+    const { crawlCatalogue } = await import("./crawl");
+
+    await seedAnchorRow({
+      artists: ["Artist X"],
+      durationMs: 200_000,
+      isrc: "FAKEISRC0001",
+      title: "Compilation Cut",
+      trackId: "mb_isrc-miss",
+    });
+
+    // The ISRC it carries is the compilation's — Spotify has the recording, but not under this
+    // key. The ISRC rung runs FIRST and misses; the search rung then verifies and anchors.
+    vi.mocked(findSpotifyTrackByIsrc).mockResolvedValue({ rateLimited: false });
+    vi.mocked(searchTrackCandidates).mockResolvedValue([
+      {
+        artists: ["Artist X"],
+        durationMs: 199_500,
+        id: "spot-compcut",
+        spotifyUrl: "https://open.spotify.com/track/spot-compcut",
+        title: "Compilation Cut",
+      },
+    ]);
+
+    const pass = await crawlCatalogue({ limit: 10, maxHop: 2 });
+    expect(pass.anchorsFilled).toBe(1);
+    expect(pass.anchorOutcome).toBe("filled");
+    expect(vi.mocked(findSpotifyTrackByIsrc)).toHaveBeenCalledWith("FAKEISRC0001");
+
+    const anchored = await db.execute(
+      "select spotify_uri from tracks where track_id = 'mb_isrc-miss'",
+    );
+    expect(anchored.rows[0]?.spotify_uri).toBe("spotify:track:spot-compcut");
+  });
+
+  it("never spends a search call on a row with NO measured duration (the stored 0) — the triple is unverifiable", async () => {
+    const { searchTrackCandidates } = await import("./spotify");
+    const { crawlCatalogue } = await import("./crawl");
+
+    // MusicBrainz recordings can carry no length; the crawl writes those rows `duration_ms = 0`
+    // (`recording.length ?? track.length ?? 0`). Such a row can NEVER clear the verification
+    // triple (the duration signal is missing), so the rung must not burn one of its ten metered
+    // calls on it every rotation — even when a perfect-looking candidate exists.
+    await seedAnchorRow({
+      artists: ["No Length"],
+      durationMs: 0,
+      title: "Unmeasured",
+      trackId: "mb_no-duration",
+    });
+    vi.mocked(searchTrackCandidates).mockResolvedValue([
+      {
+        artists: ["No Length"],
+        durationMs: 200_000,
+        id: "spot-tempting",
+        spotifyUrl: "https://open.spotify.com/track/spot-tempting",
+        title: "Unmeasured",
+      },
+    ]);
+
+    const pass = await crawlCatalogue({ limit: 10, maxHop: 2 });
+    expect(pass.anchorsFilled).toBe(0);
+    expect(vi.mocked(searchTrackCandidates)).not.toHaveBeenCalled();
+
+    const row = await db.execute(
+      "select spotify_uri from tracks where track_id = 'mb_no-duration'",
+    );
+    expect(row.rows[0]?.spotify_uri).toBeNull();
   });
 });
