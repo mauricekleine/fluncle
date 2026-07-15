@@ -6,7 +6,12 @@
  * IT HITS PRODUCTION TURSO. Run it on the operator machine to see the number the catalogue-graph
  * publicness slice actually exposes before merging that slice:
  *   `bun run --cwd apps/web scripts/count-catalogue-public-entities.ts`
- * It reads `TURSO_DATABASE_URL`/`TURSO_AUTH_TOKEN` from the environment (locally, `.dev.vars`).
+ *
+ * Production credentials are never read from `.dev.vars` (in this repo that points at the tiny
+ * LOCAL per-worktree dev DB, so it would report a meaningless local count). They are read at run
+ * time from 1Password — point `FLUNCLE_TURSO_OP_ITEM` at the item that holds the production Turso
+ * credentials (the same var + item `db-pull-prod.ts` uses) — so `op` must be unlocked, and that
+ * biometric unlock IS the human-in-the-loop gate on touching prod.
  *
  * WHY IT EXISTS. The slice brings albums + artists to the same posture labels already have: a
  * discovered, findings-free entity's PAGE renders and (once it clears the thin-content floor)
@@ -27,10 +32,8 @@
  * findings row at all. A track linked to an entity but carrying an uncertified (log_id-null)
  * findings row is in neither — it is not renderable, and the page renders it nowhere.
  */
-import { type Client, createClient } from "@libsql/client";
-import { config } from "dotenv";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { $ } from "bun";
+import { type Client, createClient } from "@libsql/client/web";
 import { ALBUM_INDEX_MIN_TRACKS } from "../src/lib/server/albums";
 import { ARTIST_INDEX_MIN_FINDINGS } from "../src/lib/server/artists";
 import { LABEL_INDEX_MIN_TRACKS } from "../src/lib/server/labels";
@@ -134,19 +137,32 @@ function reportLine(kind: string, floor: number, v: EntityVolume): string {
   ].join("\n");
 }
 
+const ITEM = process.env.FLUNCLE_TURSO_OP_ITEM;
+
+/** Read one field of the prod-Turso 1Password item, exactly as `db-pull-prod.ts` does. */
+async function readSecret(field: string): Promise<string> {
+  try {
+    const value = await $`op read ${`${ITEM}/${field}`}`.text();
+
+    return value.trim();
+  } catch {
+    throw new Error(
+      `Could not read ${field} from 1Password (${ITEM}). Unlock 1Password and enable its CLI integration, then retry.`,
+    );
+  }
+}
+
 async function main(): Promise<void> {
-  if (!process.env.TURSO_DATABASE_URL) {
-    config({ path: join(dirname(fileURLToPath(import.meta.url)), "..", ".dev.vars") });
+  if (!ITEM) {
+    throw new Error(
+      "Set FLUNCLE_TURSO_OP_ITEM to the 1Password item holding the production Turso credentials — see the ops runbook note.",
+    );
   }
 
-  const url = process.env.TURSO_DATABASE_URL;
-
-  if (!url) {
-    throw new Error("TURSO_DATABASE_URL is required (set it in apps/web/.dev.vars)");
-  }
-
-  const authToken = process.env.TURSO_AUTH_TOKEN;
-  const client = createClient(authToken ? { authToken, url } : { url });
+  const url = await readSecret("TURSO_DATABASE_URL");
+  const authToken = await readSecret("TURSO_AUTH_TOKEN");
+  // intMode:"bigint" keeps large catalogue counts exact; `asCount` already narrows bigint → number.
+  const client = createClient({ authToken, intMode: "bigint", url });
 
   const [albums, labels, artists] = await Promise.all([
     countEntity(client, ALBUM_INNER, ALBUM_INDEX_MIN_TRACKS),
