@@ -315,3 +315,11 @@ Model (2026-07-11 research): **ACE-Step 1.5** — **MIT on code _and_ weights**,
 **Prepped and ready to run** in the companion repo (`experiments/dream-lora`): the corpus export, the captions, the presigned pull onto the pod, the whole runbook.
 
 **The hard rail — a PUBLIC Fluncle music generator is rejected, and that is not in tension with running this.** Shipping AI-made DnB under Fluncle's name fights the canon head-on (PRODUCT.md: a mixtape is authentically Fluncle _"where an AI-made original would fight the persona"_) and his whole credibility is that a human with taste went out, dug, and certified. So: the artifact is **internal only** — never published, never on a public surface, never in a mixtape, never sold, never presented as Fluncle's music. Its value is what it **teaches**, not what it emits. A surprising result is a **finding**, not a **release** — and it feeds the voice and the eye, which are the two faculties that _do_ ship.
+
+## Mobile gets the Galaxy collection (backlogged 2026-07-15)
+
+The `/account` collection home shipped on web (tabs, per-galaxy completion, cover-led rows, the `list_private_galaxy_collection` op). Maurice: "the mobile app should get a similar treatment" — web and mobile are the two real game surfaces (SSH was tried and is out). The op is mobile-ready as-is; the slice is UI only.
+
+## The Galaxy game: deeper is the game (direction, 2026-07-15)
+
+Ratified in play: **no refuel at logged stars** — the dry-tank pressure is what pushes players deeper. The direction riffed on top: power-ups out in the deep (bigger tanks, faster engines), star density thinning with distance so the frontier feels like a frontier, "leaving space for… other things" (Maurice's 😏 — undefined on purpose). Pairs with the ratified logged-is-collected model: the universe grows with every finding, and returning after a week means new stars, not re-collection.
