@@ -454,7 +454,9 @@ describe("the read — the ranked page, and the WHY on every row", () => {
       vector: axis(1),
     });
 
-    await seedCatalogue("cat-best", { vector: blend(axis(1), axis(2), 0.06) });
+    // cat-best stays BELOW the duplicate display band (≥ 0.995 never ranks — the
+    // operator's 2026-07-15 ruling): a strong find, not a copy.
+    await seedCatalogue("cat-best", { vector: blend(axis(1), axis(2), 0.15) });
     await seedCatalogue("cat-mid", { vector: blend(axis(0), axis(2), 0.25) });
     await seedCatalogue("cat-worst", { vector: blend(axis(0), axis(2), 0.5) });
 
@@ -471,7 +473,7 @@ describe("the read — the ranked page, and the WHY on every row", () => {
     expect(best?.nearestFinding?.title).toBe("Heaven's Gate");
     expect(best?.nearestFinding?.artists).toEqual(["Nu:Tone"]);
     expect(best?.nearestFinding?.logId).toBeTruthy();
-    expect(best?.nearestFindingScore ?? 0).toBeGreaterThan(0.99);
+    expect(best?.nearestFindingScore ?? 0).toBeGreaterThan(0.98);
 
     expect(page[1]?.nearestFinding?.trackId).toBe("finding-krakota");
   });
@@ -568,13 +570,16 @@ describe("duplicates — a crawled copy of a finding is flagged, never bought", 
     expect(capture.find((track) => track.trackId === "cat-real")?.duplicateOf).toBeNull();
   });
 
-  it("reads a scored row in the display band [0.995, 0.9995) as a duplicate on the ear lens — display-only, nothing stored", async () => {
+  it("a display-band [0.995, 0.9995) duplicate never occupies a ranked ear slot — and nothing is stored", async () => {
     const { DUPLICATE_SIMILARITY, listCatalogueTracks, rankCatalogue, WRONG_AUDIO_QUARANTINE } =
       await import("./catalogue");
 
     await seedFinding("finding-owned", { title: "Infinity", vector: axis(0) });
     // An ALTERNATE master lands in the display band: above DUPLICATE_SIMILARITY (a near-dup), but
-    // below WRONG_AUDIO_QUARANTINE — a genuinely different recording, so display-only, not vetoed.
+    // below WRONG_AUDIO_QUARANTINE — a genuinely different recording, so never vetoed. The
+    // operator's ruling (2026-07-15, the Anwius "Trust" case): a known duplicate is not a
+    // discovery, so the EAR ranking excludes it — its perfect score would sit above every
+    // real find.
     await seedCatalogue("cat-identical", {
       title: "Infinity (copy)",
       vector: blend(axis(0), axis(1), 0.06),
@@ -584,22 +589,19 @@ describe("duplicates — a crawled copy of a finding is flagged, never bought", 
 
     await rankCatalogue();
 
+    // The ear page carries ONLY the real discovery; the display-band duplicate is filtered out.
     const ear = await listCatalogueTracks("ear");
-    const identical = ear.find((track) => track.trackId === "cat-identical");
-    const near = ear.find((track) => track.trackId === "cat-near");
+    expect(ear.map((track) => track.trackId)).toEqual(["cat-near"]);
+    expect(ear[0]?.duplicateOf).toBeNull();
 
-    // The alternate master is flagged "already in the archive", naming the finding it copies — and
-    // it sits in the DISPLAY band, below the wrong-audio adjudication line, so it is not touched.
-    expect(identical?.nearestFindingScore ?? 0).toBeGreaterThanOrEqual(DUPLICATE_SIMILARITY);
-    expect(identical?.nearestFindingScore ?? 1).toBeLessThan(WRONG_AUDIO_QUARANTINE);
-    expect(identical?.duplicateOf?.trackId).toBe("finding-owned");
-    // The near-neighbour is a genuine discovery, not a duplicate.
-    expect(near?.nearestFindingScore ?? 1).toBeLessThan(DUPLICATE_SIMILARITY);
-    expect(near?.duplicateOf).toBeNull();
-
-    // The similarity half is DISPLAY-ONLY: a scored row has audio, so it is not a capture-ladder
-    // duplicate — nothing is written to `duplicate_of_track_id`, and it stays out of the queue.
+    // The exclusion fired on the display band, not arbitrarily: the raw ranking proves the
+    // row scored into [DUPLICATE_SIMILARITY, WRONG_AUDIO_QUARANTINE).
     const stored = await rankingOf("cat-identical");
+    expect(stored.nearest_finding_score ?? 0).toBeGreaterThanOrEqual(DUPLICATE_SIMILARITY);
+    expect(stored.nearest_finding_score ?? 1).toBeLessThan(WRONG_AUDIO_QUARANTINE);
+
+    // And the similarity half stays DISPLAY-ONLY: nothing written to `duplicate_of_track_id`,
+    // no capture-ladder involvement — the row simply does not rank.
     expect(stored.duplicate_of_track_id).toBeNull();
     expect(stored.capture_priority).toBeNull();
   });

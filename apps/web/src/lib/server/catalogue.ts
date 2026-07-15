@@ -1423,6 +1423,9 @@ export async function listCatalogueTracks(
   limit = 50,
 ): Promise<CatalogueTrackItem[]> {
   const page = Math.min(Math.max(1, limit), 200);
+  // The ear lens over-fetches: the display-band duplicate filter below may drop a few
+  // rows, and the page should stay full. 25 covers the realistic dup count per page.
+  const fetchLimit = lens === "ear" ? page + 25 : page;
   const db = await getDb();
   // EVERY lens but `dismissed` filters `ct.dismissed_at is null`: a dismissed row is out of the
   // telescope and the capture ladder both, and only the `dismissed` lens (the restore pile) shows
@@ -1432,7 +1435,7 @@ export async function listCatalogueTracks(
   const query =
     lens === "ear"
       ? {
-          args: [page],
+          args: [fetchLimit],
           // `duration_ms < LONG_FORM_MS` is the long-form veto (see the constant): a continuous
           // mix's centroid-like vector would otherwise sit at the very top of the telescope.
           sql: `select ${CATALOGUE_SELECT}
@@ -1522,7 +1525,7 @@ export async function listCatalogueTracks(
   );
   const archive = lens === "capture" ? await readArchiveAffinity() : undefined;
 
-  return rows.map((row) => {
+  const items = rows.map((row) => {
     const artists = parseArtistsJson(row.artists_json);
     const nearestFinding = row.nearest_finding_track_id
       ? (matches.get(row.nearest_finding_track_id) ?? null)
@@ -1573,6 +1576,17 @@ export async function listCatalogueTracks(
       trackId: row.track_id,
     };
   });
+
+  // A row the ear itself marked "already in the archive" (the ≥ DUPLICATE_SIMILARITY display
+  // band — a near-1.0 match on the finding it scored against) never occupies a ranked slot:
+  // a known duplicate is not a discovery, and its perfect score would sit above every real
+  // one (the operator's ruling, 2026-07-15 — the Anwius "Trust" case). The marker itself
+  // stays display-only; only the EAR ranking excludes it.
+  if (lens === "ear") {
+    return items.filter((item) => item.duplicateOf === null).slice(0, page);
+  }
+
+  return items;
 }
 
 /** Hydrate the page's matched findings in ONE batched read (never N+1), keyed by track id. */
