@@ -56,9 +56,14 @@ function ProgressHairline() {
 }
 
 export function FindingCard({
+  embedded = false,
   finding,
   notation,
 }: {
+  /** Drop the card's own pane (border/bg/rounding/padding) so it sits FLAT inside a parent
+      container — the chain card's seed, where the outer container is the single pane (One Pane
+      Rule, DESIGN.md §4). Standalone (the default) keeps its own card chrome. */
+  embedded?: boolean;
   finding: ChatFinding;
   notation: KeyNotation;
 }) {
@@ -78,7 +83,13 @@ export function FindingCard({
   const artwork = <TrackArtwork alt={`${trackLine} cover art`} src={coverSrc} />;
 
   return (
-    <div className="relative flex items-start gap-3 overflow-hidden rounded-md border border-border bg-card px-3 py-2.5">
+    <div
+      className={
+        embedded
+          ? "relative flex items-start gap-3 overflow-hidden"
+          : "relative flex items-start gap-3 overflow-hidden rounded-md border border-border bg-card px-3 py-2.5"
+      }
+    >
       {playable && isActive ? <ProgressHairline /> : null}
 
       {playable ? (
@@ -102,24 +113,36 @@ export function FindingCard({
         {/* The ratified title register (.track-title, DESIGN.md §3): the music is the loudest
             text on the card, same as every TrackRow — never a quiet caption. */}
         <p className="track-title">{trackLine}</p>
-        {logId ? (
-          <Link
-            aria-label={`Open the log page for ${trackLine}`}
-            className="track-log-id track-log-id-link mt-0.5 inline-block"
-            params={{ logId }}
-            to="/log/$logId"
-          >
-            {logId}
-          </Link>
+        {/* The two lore items ride one line: the Log ID coordinate and its galaxy, a quiet
+            middot between them. The galaxy is the coordinate's suffix — same waypoint, said
+            twice — so they read as one place, not two stray captions. */}
+        {logId || finding.galaxy ? (
+          <div className="mt-0.5 flex min-w-0 items-baseline gap-1.5">
+            {logId ? (
+              <Link
+                aria-label={`Open the log page for ${trackLine}`}
+                className="track-log-id track-log-id-link shrink-0"
+                params={{ logId }}
+                to="/log/$logId"
+              >
+                {logId}
+              </Link>
+            ) : null}
+            {logId && finding.galaxy ? (
+              <span aria-hidden="true" className="text-xs text-muted-foreground">
+                ·
+              </span>
+            ) : null}
+            {finding.galaxy ? (
+              <span className="truncate text-xs text-muted-foreground">{finding.galaxy}</span>
+            ) : null}
+          </div>
         ) : null}
         <TrackChips
           bpm={finding.bpm}
           durationMs={finding.durationMs}
           musicalKey={keyText || undefined}
         />
-        {finding.galaxy ? (
-          <p className="mt-1 truncate text-xs text-muted-foreground">{finding.galaxy}</p>
-        ) : null}
       </div>
     </div>
   );

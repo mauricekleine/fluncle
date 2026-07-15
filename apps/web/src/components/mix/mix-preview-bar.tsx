@@ -1,4 +1,4 @@
-import { PauseIcon, PlayIcon } from "@phosphor-icons/react";
+import { PauseIcon, PlayIcon, XIcon } from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 
@@ -107,6 +107,11 @@ export function MixPreviewBar({
             {keyText ? ` · ${keyText}` : ""}
           </p>
         </div>
+        {/* Stopping the preview clears the active track, and the bar renders null when
+            nothing is active — so this close control IS the dismiss. One action. */}
+        <Button aria-label="Close preview" onClick={stopPreview} size="icon" variant="outline">
+          <XIcon className="size-4" />
+        </Button>
       </div>
     </div>,
     document.body,
