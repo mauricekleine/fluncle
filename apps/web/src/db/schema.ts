@@ -847,6 +847,7 @@ export const costEvents = sqliteTable(
         "context",
         "observe",
         "note",
+        "bio",
         "video",
         "publish",
         "discogs",

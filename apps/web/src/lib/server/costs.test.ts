@@ -174,6 +174,15 @@ describe("getCostInsights aggregation", () => {
               subsidized_usd: 1.5,
               unpriced_count: 1,
             },
+            {
+              // The entity-bio authoring spend — a subsidized anthropic step, same
+              // family as note/observe, rolled up on its own `bio` row.
+              cash_usd: 0,
+              event_count: 1,
+              step: "bio",
+              subsidized_usd: 0.03,
+              unpriced_count: 0,
+            },
           ],
         };
       }
@@ -200,9 +209,9 @@ describe("getCostInsights aggregation", () => {
     const insights = await getCostInsights();
 
     // The totals: cash = Σ cash only; subsidized = Σ subsidized only; NEVER blended.
-    expect(insights.totals.cashUsd).toBeCloseTo(0.07, 10); // 0.05 + 0 + 0.02
-    expect(insights.totals.subsidizedUsd).toBeCloseTo(1.5, 10); // 0 + 0 + 1.5
-    expect(insights.totals.unpricedCount).toBe(4); // 0 + 3 + 1
+    expect(insights.totals.cashUsd).toBeCloseTo(0.07, 10); // 0.05 + 0 + 0.02 + 0
+    expect(insights.totals.subsidizedUsd).toBeCloseTo(1.53, 10); // 0 + 0 + 1.5 + 0.03
+    expect(insights.totals.unpricedCount).toBe(4); // 0 + 3 + 1 + 0
     // The load-bearing invariant: the two are not added into one number anywhere.
     expect(insights.totals.cashUsd).not.toBeCloseTo(
       insights.totals.cashUsd + insights.totals.subsidizedUsd,
@@ -213,6 +222,11 @@ describe("getCostInsights aggregation", () => {
     expect(observe?.cashUsd).toBeCloseTo(0.02, 10);
     expect(observe?.subsidizedUsd).toBeCloseTo(1.5, 10);
     expect(observe?.unpricedCount).toBe(1);
+
+    // The entity-bio authoring spend rolls up on its own subsidized `bio` row.
+    const bio = insights.steps.find((step) => step.step === "bio");
+    expect(bio?.cashUsd).toBeCloseTo(0, 10);
+    expect(bio?.subsidizedUsd).toBeCloseTo(0.03, 10);
 
     // The per-finding rollup joins tracks + parses the artists JSON.
     expect(insights.topFindings).toHaveLength(1);

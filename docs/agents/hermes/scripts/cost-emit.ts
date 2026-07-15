@@ -38,6 +38,7 @@ export type CostStep =
   | "context"
   | "observe"
   | "note"
+  | "bio"
   | "video"
   | "publish"
   | "discogs"
