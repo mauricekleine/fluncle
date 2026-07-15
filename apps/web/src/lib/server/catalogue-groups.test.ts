@@ -96,6 +96,31 @@ async function seedArtist(id: string, name: string, slug: string): Promise<void>
   });
 }
 
+/**
+ * Certify an artist: a `findings` row (a real coordinate) crediting them, linked through
+ * `track_artists`. Enough for `artistHasCertifiedFindingSql` to make the artist publicly reachable,
+ * so its catalogue-heading link appears. A findings-free (crawl-minted) artist entity gets no such
+ * row, so its heading renders as plain text.
+ */
+async function seedCertifiedFinding(
+  trackId: string,
+  artistId: string,
+  artistName: string,
+): Promise<void> {
+  await db.execute({
+    args: [trackId, `Certified ${trackId}`, JSON.stringify([artistName])],
+    sql: `insert into tracks (track_id, title, artists_json, duration_ms) values (?, ?, ?, 0)`,
+  });
+  await db.execute({
+    args: [trackId, `100.1.1A-${trackId}`],
+    sql: `insert into findings (track_id, log_id, added_at) values (?, ?, '2020-01-01T00:00:00.000Z')`,
+  });
+  await db.execute({
+    args: [trackId, artistId],
+    sql: `insert into track_artists (track_id, artist_id, position) values (?, ?, 0)`,
+  });
+}
+
 beforeEach(async () => {
   db = await createIntegrationDb();
   holder.db = db;
@@ -186,9 +211,13 @@ describe("listArtistCatalogue (the artist page's records)", () => {
 });
 
 describe("listLabelCatalogue (the label page's artists, then records)", () => {
-  it("groups by artist and keeps a crawl-only artist (no entity, no link)", async () => {
-    // Certified nobody: no `artists` row for either name, so the label page must fall back to the
-    // raw credited name and simply carry no `/artist/<slug>` link — never DROP the tracks.
+  it("links only a CERTIFIED artist's heading — no entity, or a findings-free entity, renders plain", async () => {
+    // Three artists, three link outcomes, none of them DROPPED:
+    //   · Doc Scott — no `artists` row at all → grouped by raw name, no link.
+    //   · Calibre   — has an entity (slice 003 minted it off a crawl anchor) but NO certified
+    //                 finding → still no link (the `artistHasCertifiedFindingSql` gate), TEMPORARY
+    //                 until slice 004. Its heading is plain text, not a link to a page that 404s.
+    //   · Goldie    — has an entity AND a certified finding → its heading carries the link.
     await seedCatalogueTrack({
       album: "Platinum Breakz",
       artists: ["Doc Scott"],
@@ -204,27 +233,41 @@ describe("listLabelCatalogue (the label page's artists, then records)", () => {
       trackId: "t_2",
     });
     await seedCatalogueTrack({
+      album: "Musique Concrète",
+      artists: ["Calibre"],
+      labelId: "lbl_1",
+      releaseDate: "2001-01-01",
+      trackId: "t_c1",
+    });
+    await seedCatalogueTrack({
       album: "Timeless",
       artists: ["Goldie"],
       labelId: "lbl_1",
       releaseDate: "1995-01-01",
       trackId: "t_3",
     });
-    // Goldie HAS an entity — its group must carry the link; Doc Scott must not.
+    await seedArtist("art_calibre", "Calibre", "calibre");
     await seedArtist("art_goldie", "Goldie", "goldie");
+    // Goldie earns a certified finding (elsewhere) — that, not the mere row, is what lights the link.
+    await seedCertifiedFinding("t_goldie_finding", "art_goldie", "Goldie");
     await backfillArtistLinks(db);
 
     const page = await listLabelCatalogue("lbl_1", "name", 1);
 
-    expect(page.totalGroups).toBe(2);
-    expect(page.totalTracks).toBe(3);
+    expect(page.totalGroups).toBe(3);
+    expect(page.totalTracks).toBe(4);
 
     const docScott = page.groups.find((group) => group.name === "Doc Scott");
+    const calibre = page.groups.find((group) => group.name === "Calibre");
     const goldie = page.groups.find((group) => group.name === "Goldie");
 
     expect(docScott?.slug).toBeUndefined();
     expect(docScott?.recordCount).toBe(1);
     expect(docScott?.records[0]?.tracks).toHaveLength(2);
+    // The findings-free entity is grouped, its track kept, but NOT linked.
+    expect(calibre?.slug).toBeUndefined();
+    expect(calibre?.records[0]?.tracks).toHaveLength(1);
+    // The certified entity carries the link.
     expect(goldie?.slug).toBe("goldie");
     // The whole flattened page is coordinate-less (the rail again).
     expect(flattenArtistGroups(page.groups).every((track) => !("logId" in track))).toBe(true);

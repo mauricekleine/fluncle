@@ -168,6 +168,17 @@ export async function resolveArtistPageData(
     getArtistNeighbours(artist.id),
   ]);
 
+  // TEMPORARY — slice 004 (catalogue publicness) removes this gate (grep `artistHasCertifiedFindingSql`).
+  // Slice 003 connects a crawled track's artists by their stable Spotify id at the anchor step,
+  // which MINTS `artists` rows for artists Fluncle has never certified — so `getArtistBySlug` now
+  // RESOLVES a crawl-minted, findings-free artist where it used to find nothing. Public reachability
+  // is slice 004's call: until then such an artist 404s exactly as when no row existed. Reachability
+  // requires at least one certified finding (counted through the canonical `track_artists` join, the
+  // TS twin of `artistHasCertifiedFindingSql`), never the mere row. A certified artist is unchanged.
+  if (canonicalFindingCount === 0) {
+    return { status: "missing" };
+  }
+
   // The signature is pure over the findings already loaded for the grid (no extra
   // query); the neighbours came from the corpus-wide embedding pass above.
   const gridFindings = findings.filter((finding) => finding.logId);
@@ -184,12 +195,12 @@ export async function resolveArtistPageData(
     // the canonical `track_artists` join, the same source as the sitemap + index);
     // below that the page still serves 200 but is noindex + out of the sitemap.
     //
-    // The artist gate keys off FINDINGS, not total content, and that is deliberate rather than a
-    // drift from the label/album gate: an artist entity is minted only off a certified finding
-    // (docs/artist-relationship.md), so an artist page with zero findings does not exist to
-    // begin with — there is no findings-free stub for a total-content gate to catch, the way a
-    // crawler-discovered LABEL has one. Every artist page already clears the "who wrote it"
-    // question by existing at all.
+    // The artist gate keys off FINDINGS, not total content, and that is deliberate: the EXISTENCE
+    // gate above (`canonicalFindingCount === 0` → missing) has already 404'd every findings-free
+    // artist, so a page that renders here always carries at least one certified finding and has
+    // already cleared the "who wrote it" question. A 1–2 finding artist renders (noindex); only ≥3
+    // is indexable. Slice 003 mints crawl-only artist rows, but the existence gate keeps them off
+    // the public surface until slice 004 (docs/artist-relationship.md).
     indexable: canonicalFindingCount >= ARTIST_INDEX_MIN_FINDINGS,
     mbid: artist.mbid,
     name: artist.name,

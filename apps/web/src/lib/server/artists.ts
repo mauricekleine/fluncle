@@ -248,6 +248,25 @@ export async function getArtistSlugMap(trackId: string): Promise<Record<string, 
  * count) so an indexable page is never orphaned from the sitemap + index during
  * the backfill window (Unit 3, artist-relationship RFC §3).
  */
+// TEMPORARY — slice 004 (catalogue publicness) removes this gate. Grep `artistHasCertifiedFindingSql`.
+//
+// Slice 003 connects a crawled track's artists by their stable `spotify_artist_id` at the anchor
+// step, which MINTS `artists` rows for artists Fluncle has never certified — so an `artists` row
+// with NO certified finding now exists where it never did before. Public REACHABILITY is slice
+// 004's deliberate flip: until then a crawl-minted, findings-free artist must stay invisible on
+// every public surface — its `/artist/<slug>` 404s exactly as when no row existed, and a catalogue
+// heading does not link to it. This predicate IS the gate: an artist is publicly reachable only if
+// some track credited to it is a certified finding (`log_id` present), read through the indexed
+// `track_artists` edge. It is the exact twin of `albumHasCertifiedFindingSql`. A certified artist is
+// unchanged. Slice 004 deletes this helper + every caller. (`/artists` index + sitemap already key
+// on `countArtistFindings`, the findings-only join, so they need no gate and are left alone.)
+export function artistHasCertifiedFindingSql(artistIdExpr: string): string {
+  return `exists (select 1 from findings cf
+                  join tracks ct on ct.track_id = cf.track_id
+                  join track_artists cta on cta.track_id = ct.track_id
+                  where cta.artist_id = ${artistIdExpr} and cf.log_id is not null)`;
+}
+
 export async function countArtistFindings(artistId: string): Promise<number> {
   const db = await getDb();
   const result = await db.execute({
@@ -578,15 +597,24 @@ export async function linkTracksToArtistEntities(trackIds?: string[]): Promise<n
 }
 
 // Upsert artists + track_artists for a track that was just inserted. Called at
-// ingest (publish path) and by the backfill. Idempotent: existing artist rows
-// are matched by `spotify_artist_id` and their `name` + `updated_at` are updated
-// if the name changed; `track_artists` rows are matched by the composite PK
-// (track_id, artist_id). Silently no-ops when `spotifyArtistIds` is empty (a
-// track with no parseable artist data, or a dry-run caller).
+// ingest (publish path), by the crawler's Spotify-anchor step, and by the backfill.
+// Idempotent: existing artist rows are matched by `spotify_artist_id` and their
+// `name` + `updated_at` are updated if the name changed; `track_artists` rows are
+// matched by the composite PK (track_id, artist_id). Silently no-ops when
+// `artistNames` is empty (a track with no parseable artist data, or a dry-run caller).
+//
+// `options.fillImages` (default true) controls the best-effort Spotify avatar fetch. The
+// publish path leaves it on so a freshly-logged artist has its avatar the moment its page can
+// be seen. The CRAWLER passes `false`: a crawl-minted, findings-free artist stays internal until
+// slice 004 (catalogue publicness), and the batched `backfill-artist-images` sweep (the
+// `fluncle-artist-sweep` cron) fills its avatar in one call per 50 ids — so per-track avatar
+// calls at crawl time would be uncounted Spotify load (outside the anchor breaker) for an image
+// no public surface shows yet. The graph edge is written either way; only the avatar fetch defers.
 export async function upsertTrackArtists(
   trackId: string,
   artistNames: string[],
   spotifyArtistIds: string[],
+  options?: { fillImages?: boolean },
 ): Promise<void> {
   if (artistNames.length === 0) {
     return;
@@ -693,11 +721,14 @@ export async function upsertTrackArtists(
 
   // Fill the canonical Spotify avatar for any of this track's artists that lacks one
   // (a freshly-minted artist always does). Best-effort: a Spotify hiccup must never
-  // block the fast synchronous add — the image backfill sweeps up anything missed.
-  try {
-    await fillMissingArtistImages(spotifyArtistIds);
-  } catch (error) {
-    logEvent("warn", "artists.image-fill-failed", { error, trackId });
+  // block the fast synchronous add — the image backfill sweeps up anything missed. The
+  // crawler opts out (`fillImages: false`); its artists' avatars are filled by the sweep.
+  if (options?.fillImages ?? true) {
+    try {
+      await fillMissingArtistImages(spotifyArtistIds);
+    } catch (error) {
+      logEvent("warn", "artists.image-fill-failed", { error, trackId });
+    }
   }
 }
 

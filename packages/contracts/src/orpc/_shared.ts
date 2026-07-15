@@ -313,6 +313,11 @@ export const TrackSearchResultSchema = z
     // of its three verification signals (crawl.ts `pickVerifiedCandidate`).
     durationMs: z.number().optional(),
     id: z.string(),
+    // Parallel to `artists`: each artist's stable Spotify id, same order. Optional and additive —
+    // the submit type-ahead ignores it, but the catalogue anchor's verified-search rung reads it
+    // to connect-or-create the crawled track's artist entities by stable id (crawl.ts), so a track
+    // anchored via the search rung earns the same stable-id link as an ISRC-anchored one.
+    spotifyArtistIds: z.array(z.string()).optional(),
     spotifyUrl: z.string(),
     title: z.string(),
   })
