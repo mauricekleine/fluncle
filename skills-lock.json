@@ -36,7 +36,7 @@
     "fluncle-hermes-operator": {
       "source": "packages/skills/fluncle-hermes-operator",
       "sourceType": "local",
-      "computedHash": "eb4f6749a4b60e3697eb78cf52031dce7cc55abdd78abaf3040656ab52e6c08c"
+      "computedHash": "620270ed3c0f6e36fa463c8fcb15d430bd59c8ae0fbd1e6b58f4e744b4d7ac45"
     },
     "fluncle-maintenance": {
       "source": "packages/skills/fluncle-maintenance",
@@ -71,7 +71,7 @@
     "fluncle-smoke": {
       "source": "packages/skills/fluncle-smoke",
       "sourceType": "local",
-      "computedHash": "e9d2de11e42f2fc828762abfbc3433758caff25afdff064059c706384fd72ddb"
+      "computedHash": "ba5ea67bd05e301b5e32451db0640d4f3b46fd982c5d9db35e2506dd10f71e1d"
     },
     "fluncle-sprites": {
       "source": "packages/skills/fluncle-sprites",
@@ -81,7 +81,7 @@
     "fluncle-surfaces": {
       "source": "packages/skills/fluncle-surfaces",
       "sourceType": "local",
-      "computedHash": "fcd8efb58da7c448a0a3f8e13be378c8105f9c25022db2e11d0b1c7d6300c472"
+      "computedHash": "452df7787298c698c622a7189a5abb29d17075e194c3b09f6bca109639101877"
     },
     "fluncle-track-enrichment": {
       "source": "packages/skills/fluncle-track-enrichment",

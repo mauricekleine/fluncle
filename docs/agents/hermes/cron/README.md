@@ -48,7 +48,7 @@ A bare re-provision restores three of the four layers automatically — the four
 
 - **Code** — baked into the image (Unit A). Restored by the rebuild.
 - **Schedule** — the host-timer units. Restored by running `../install-host-timers.sh` from the repo checkout.
-- **Secrets** — re-injected from 1Password by the host `fluncle-secrets-sync` timer ([`../secrets/`](../secrets/README.md)).
+- **Secrets** — re-injected from 1Password by the host `fluncle-secrets-sync` timer ([`../secrets/`](../secrets/)).
 - **Accumulated `state.db` state** — sessions, memories, kanban, and cron output/run-history under the agent home. This is NOT restored by the above; it restores from the daily [`fluncle-backup`](../backup-timer/README.md) → private-R2 backup, whose **restore tooling is the one sanctioned follow-on** (out of this epic, but named).
 
 ### Operator activation runbook (one-time cutover)
@@ -356,7 +356,7 @@ The `--no-agent` sweeps (enrich, context, observation, backfill) are plain box-c
 
 1. **Create the private bucket + a least-privilege token.** Create an R2 bucket `fluncle-backups` with **no** custom domain and **no** public access (`wrangler r2 bucket create fluncle-backups`, or the dashboard). Mint an R2 API token scoped to **Object Read & Write on `fluncle-backups` ONLY** (never `fluncle-videos`). Mint a **READ-ONLY** prod Turso token for the dump (`turso db tokens create <db> --read-only` — the box can read but never mutate prod). Store all four in the `Fluncle Automations` 1Password vault.
 
-2. **Add the secrets to the box's synced env template.** Append to the box's `op inject` template (`/etc/hermes/fluncle-secrets.env.tpl`, materialized to the shared `~/.fluncle-secrets.env` by `fluncle-secrets-sync` — see [`../secrets/`](../secrets/README.md)); use PLACEHOLDER `op://` paths (the concrete vault/item live in the ops runbook note):
+2. **Add the secrets to the box's synced env template.** Append to the box's `op inject` template (`/etc/hermes/fluncle-secrets.env.tpl`, materialized to the shared `~/.fluncle-secrets.env` by `fluncle-secrets-sync` — see [`../secrets/`](../secrets/)); use PLACEHOLDER `op://` paths (the concrete vault/item live in the ops runbook note):
 
    ```bash
    # Database backup (fluncle-backup cron): a read-only prod Turso token + a

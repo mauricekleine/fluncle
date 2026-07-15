@@ -1,10 +1,10 @@
 # fluncle-rank-timer — The Ear's ranking sweep on a host timer
 
-The rave-02 host trigger for the `--no-agent` **catalogue-ranking** sweep. `fluncle-rank` keeps The Ear's ranking fresh: each tick scores a bounded batch of **stale** catalogue rows against every embedded finding — entirely in SQL inside the Worker — and stores each one's nearest finding, the cosine similarity to it, and (for a row with no audio yet) its capture-priority tier. The full design is [docs/the-ear.md](../../the-ear.md).
+The rave-02 host trigger for the `--no-agent` **catalogue-ranking** sweep. `fluncle-rank` keeps The Ear's ranking fresh: each tick scores a bounded batch of **stale** catalogue rows against every embedded finding — entirely in SQL inside the Worker — and stores each one's nearest finding, the cosine similarity to it, and (for a row with no audio yet) its capture-priority tier. The full design is [docs/the-ear.md](../../../the-ear.md).
 
 ## Why this timer lands with the crawler's PR
 
-The Ear shipped `rank_catalogue` **deliberately without a schedule**, and said so in its own doc: _"a timer ranking an empty table would be a `/status` row that means nothing; the crawler is what creates rows, so its PR is where `rank_catalogue` gets its schedule."_ The crawler now exists ([docs/catalogue-crawler.md](../../catalogue-crawler.md)), so the ranking has something to rank. The two are one loop:
+The Ear shipped `rank_catalogue` **deliberately without a schedule**, and said so in its own doc: _"a timer ranking an empty table would be a `/status` row that means nothing; the crawler is what creates rows, so its PR is where `rank_catalogue` gets its schedule."_ The crawler now exists ([docs/catalogue-crawler.md](../../../catalogue-crawler.md)), so the ranking has something to rank. The two are one loop:
 
 ```
 fluncle-crawl  (every 10m) → writes catalogue rows

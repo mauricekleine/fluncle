@@ -71,7 +71,7 @@ Cloudflare deploys via Workers Builds, and migrations run as part of the **deplo
 "deploy:cf": "bun run db:migrate && bun run db:backfill && wrangler deploy"
 ```
 
-`db:backfill` is the idempotent data-backfill step folded into the deploy (currently `scripts/backfill-plan-recording-mixtape.ts`): DDL and the data it populates ship atomically, and because every backfill step is guarded (`where not exists` / convergent updates), re-running it on every deploy is a no-op once done. A new schema change that needs a data backfill extends this script (or swaps in its successor) rather than relying on a manual post-deploy step.
+`db:backfill` is the idempotent data-backfill step folded into the deploy (a chain of `scripts/backfill-*.ts` scripts, beginning with `scripts/backfill-plan-recording-mixtape.ts`): DDL and the data it populates ship atomically, and because every backfill step is guarded (`where not exists` / convergent updates), re-running it on every deploy is a no-op once done. A new schema change that needs a data backfill appends another `backfill-*.ts` script to the chain rather than relying on a manual post-deploy step.
 
 The Cloudflare **Deploy command** is `bun run --cwd apps/web deploy:cf` (build still runs separately as the Build command). Prod `TURSO_DATABASE_URL` / `TURSO_AUTH_TOKEN` come from the Cloudflare build/deploy environment, so the same `db:migrate` runs against prod there.
 

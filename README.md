@@ -105,7 +105,7 @@ bun run --cwd apps/cli fluncle version --check
 bun run --cwd apps/cli fluncle admin tracks publish "https://open.spotify.com/track/..." --note "Absolute weapon"
 bun run --cwd apps/cli fluncle admin tracks publish "https://open.spotify.com/track/..." --dry-run
 bun run --cwd apps/cli fluncle admin tracks preview <track-id-or-log-id> --file preview.mp3 --source deezer:isrc --mime audio/mpeg
-bun run --cwd apps/cli fluncle admin backfill previews --dry-run
+bun run --cwd apps/cli fluncle admin backfills previews --dry-run
 bun run --cwd apps/cli fluncle admin submissions
 bun run --cwd apps/cli fluncle admin submissions review <submission-id>
 bun run --cwd apps/cli fluncle admin submissions reject <submission-id>

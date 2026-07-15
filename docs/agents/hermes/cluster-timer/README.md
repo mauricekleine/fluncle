@@ -2,7 +2,7 @@
 
 The rave-02 (Hermes box) host trigger for the **browse-by-feel** cluster engine. `fluncle-cluster` keeps the sonic-galaxy map current: each night it assigns every embedded finding to its nearest stored galaxy centroid (cosine, over the MuQ embedding space), recomputes each centroid as its members' mean, retires an emptied galaxy, and consumes any operator-requested split. This is what SCHEDULES it: a small host systemd timer on the rave-02 host that `docker exec`s the baked sweep script inside the `hermes` container once a night (02:20 Amsterdam).
 
-The engine's full doctrine (why the nightly run is assignment-only, why a full fit is an operator act, the write-order contract, the naming flow) is [docs/agents/cluster-engine.md](../cluster-engine.md); the design record is [docs/rfcs/browse-by-feel.md](../../rfcs/browse-by-feel.md). This file is the box wire-up only.
+The engine's full doctrine (why the nightly run is assignment-only, why a full fit is an operator act, the write-order contract, the naming flow) is [docs/agents/cluster-engine.md](../../cluster-engine.md). This file is the box wire-up only.
 
 The sweep WORK is BAKED into the image — the `.sh`/`.ts`/`.py` trio at `/opt/hermes-scripts/` (source: [`../scripts/cluster-sweep.sh`](../scripts/cluster-sweep.sh) → [`../scripts/cluster-sweep.ts`](../scripts/cluster-sweep.ts) → [`../scripts/cluster.py`](../scripts/cluster.py)) plus **sklearn + scipy** in the baked MuQ venv (`/opt/muq-venv`, the Dockerfile MuQ layer's third pinned pip step). It rides the image and auto-updates from `main` via the hourly pin-watch rebuild — no `docker cp`. The host timer is only the trigger; the `.sh` is the same entry a manual `bash /opt/hermes-scripts/cluster-sweep.sh` runs.
 
