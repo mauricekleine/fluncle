@@ -1,9 +1,9 @@
 #!/usr/bin/env bun
 /**
  * The artist LINK backfill — IDEMPOTENT, and FOLDED INTO THE DEPLOY: `deploy:cf` runs it as
- * part of `db:backfill` on every push, right after the album/label backfills whose exact shape
- * it copies (`backfill-albums.ts` is the template, and its two-step MINT-then-LINK rule is the
- * doctrine here too).
+ * part of `db:backfill` on every push, right after the label backfill whose exact shape it
+ * copies (`backfill-labels.ts` is the template, and the two-step MINT-then-LINK rule the one-off
+ * `backfill-album-graph.ts` also follows is the doctrine here too).
  *
  * There is only a LINK step, and that asymmetry is the point.
  *

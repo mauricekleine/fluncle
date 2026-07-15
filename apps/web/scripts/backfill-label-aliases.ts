@@ -1,10 +1,12 @@
 #!/usr/bin/env bun
 /**
  * The label-aliases derivation — IDEMPOTENT, and FOLDED INTO THE DEPLOY: `deploy:cf` runs it as
- * part of `db:backfill`, AFTER `backfill-labels.ts` and `backfill-albums.ts` (it reads the album
- * facts they linked). It DERIVES, it does not remember: every run recomputes alias candidates
- * from the stored Apple album facts, so there is no queue to drain and nothing to bookkeep.
- * The `backfill-albums.ts` precedent, which this is the twin of.
+ * part of `db:backfill`, AFTER `backfill-labels.ts` (it needs `tracks.label_id` resolved). The
+ * `albums` rows it reads are minted inline now (the publish path + the catalogue crawler), and
+ * `albums.record_label_raw` is written by the Apple sweep — so this step no longer depends on a
+ * deploy-time album backfill. It DERIVES, it does not remember: every run recomputes alias
+ * candidates from the stored Apple album facts, so there is no queue to drain and nothing to
+ * bookkeep. The `backfill-labels.ts` precedent, which this is the twin of.
  *
  * ── WHAT IT DERIVES (RFC musickit-second-authority, U2a) ─────────────────────────────
  * U1 stored Apple's album `recordLabel` on `albums.record_label_raw`. This step reads it and,

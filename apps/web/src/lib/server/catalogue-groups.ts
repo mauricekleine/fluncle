@@ -43,12 +43,12 @@
 //
 // ── WHAT THE CRAWLER ACTUALLY GIVES US TO GROUP BY ────────────────────────────────────
 // A crawled track carries its release title in the RAW `tracks.album` string and its artist
-// names in `artists_json`. It does NOT carry an `album_id`: an `albums` row is minted only off
-// a certified finding (docs/album-entity.md), so most crawled tracks point at no album entity
-// at all. So the record grouping keys on the RAW STRING, folded case-insensitively, and a
-// group links to `/album/<slug>` only when that record happens to have an entity. A heading
-// here names a REAL RECORD either way — never the tier the rows belong to, which has no public
-// name and never will (DESIGN.md's Unlit Rule).
+// names in `artists_json`, and now an `album_id` too — the catalogue crawler mints + links the
+// album entity inline (folded on the release group, docs/album-entity.md). The record grouping
+// still keys on the RAW STRING, folded case-insensitively (the album_id is per release group,
+// the heading is per record title), and a group links to `/album/<slug>` when that record has
+// an entity. A heading here names a REAL RECORD either way — never the tier the rows belong to,
+// which has no public name and never will (DESIGN.md's Unlit Rule).
 //
 // The artist side is the opposite, and it is why `linkTracksToArtistEntities` exists: the
 // LABEL page can group by `json_each(artists_json)` because its `tracks.label_id` seek has

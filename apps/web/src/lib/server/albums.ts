@@ -14,8 +14,11 @@
 // over a BOUNDED read (one row per DISTINCT album on a certified finding), never over the
 // catalogue. Every catalogue-sized read goes through the `album_id` index.
 //
-// A row is minted ONLY off a certified finding: an album earns an entity, a page, and a
-// sitemap slot because Fluncle FOUND something on it. See docs/album-entity.md.
+// A row is minted two ways: off a certified finding (the publish path, folded on `slug`), and
+// INLINE by the catalogue crawler for the release it walks (folded on `release_group_mbid`, slug
+// as the fallback). So an album entity exists for a catalogue-only record too; the `/albums`
+// editorial index stays findings-bounded, the crawl-minted rows reach a page only through the
+// renderable-track thin-content gate. See docs/album-entity.md.
 
 import { randomUUID } from "node:crypto";
 import { slugify } from "@fluncle/contracts/util/galaxy-slug";
@@ -96,34 +99,90 @@ function toAlbumRecord(row: AlbumRow): AlbumRecord {
 /**
  * Ensure an `albums` row exists for one raw album string, and return its id.
  *
- * Idempotent and NON-CLOBBERING: an existing row keeps its display `name` (the first
- * spelling seen wins). A blank album name mints nothing and returns `undefined`. Called
- * best-effort from the publish path, so a failure here must never block an add — the
- * deploy-time reconcile backstops it.
+ * TWO IDENTITIES, resolved in priority order:
+ *
+ *   1. THE RELEASE-GROUP MBID (`release_group_mbid`), when the caller has one — the catalogue
+ *      crawler does, off MusicBrainz's `inc=release-groups`. A release group is MusicBrainz's
+ *      album abstraction over its pressings, so it is the STABLE fold key: two pressings of one
+ *      record (different titles, different slugs) resolve to the SAME row. Resolved FIRST, so an
+ *      album already folded on this release group is reused outright.
+ *   2. THE SLUG (`slugify(name)`) — the display identity, and the fallback fold when no mbid
+ *      exists (the publish path passes none; a crawled release with no release group has none).
+ *
+ * When a caller carries an mbid and the row it lands on (minted this call, or pre-existing off
+ * the slug because a finding minted it first) has none yet, the mbid is ADOPTED onto that row —
+ * fill-empty-only, so a row already folded on a DIFFERENT release group is never rewritten and
+ * the unique index guards a genuine collision. That adoption is what lets a finding-minted album
+ * and the crawler's later pressings collapse into one row instead of duplicating.
+ *
+ * Idempotent and NON-CLOBBERING on the display `name` (first spelling seen wins). A blank album
+ * name mints nothing and returns `undefined` (an album row's `name` is NOT NULL, so an mbid with
+ * no name still cannot mint — it can only RESOLVE an existing row). Called best-effort, so a
+ * failure here must never block an add — the one-off `backfill-album-graph.ts` backstops history.
  */
-export async function ensureAlbum(raw: string | null | undefined): Promise<string | undefined> {
+export async function ensureAlbum(
+  raw: string | null | undefined,
+  releaseGroupMbid?: null | string,
+): Promise<string | undefined> {
+  const db = await getDb();
+  const mbid =
+    typeof releaseGroupMbid === "string" && releaseGroupMbid.trim()
+      ? releaseGroupMbid.trim()
+      : null;
+
+  // 1. mbid-first: an album already folded on this release group wins, whatever its slug.
+  if (mbid) {
+    const byMbid = await db.execute({
+      args: [mbid],
+      sql: `select id from albums where release_group_mbid = ? limit 1`,
+    });
+    const existingId = typedRows<{ id: string }>(byMbid.rows)[0]?.id;
+
+    if (existingId) {
+      return existingId;
+    }
+  }
+
+  // 2. the slug path — mint (or reuse) by the display identity. Requires a real name.
   const slug = albumSlug(raw);
 
   if (!slug || typeof raw !== "string") {
     return undefined;
   }
 
-  const db = await getDb();
   const now = new Date().toISOString();
 
   await db.execute({
-    args: [`alb_${randomUUID()}`, raw.trim(), slug, now, now],
-    sql: `insert into albums (id, name, slug, created_at, updated_at)
-          values (?, ?, ?, ?, ?)
+    args: [`alb_${randomUUID()}`, raw.trim(), slug, mbid, now, now],
+    sql: `insert into albums (id, name, slug, release_group_mbid, created_at, updated_at)
+          values (?, ?, ?, ?, ?, ?)
           on conflict (slug) do nothing`,
   });
 
   const result = await db.execute({
     args: [slug],
-    sql: `select id from albums where slug = ? limit 1`,
+    sql: `select id, release_group_mbid from albums where slug = ? limit 1`,
   });
+  const row = typedRows<{ id: string; release_group_mbid: null | string }>(result.rows)[0];
 
-  return typedRows<{ id: string }>(result.rows)[0]?.id;
+  if (!row) {
+    return undefined;
+  }
+
+  // Adopt the mbid onto a pre-existing slug row that has none — fill-empty-only. A rare
+  // concurrent adoption of the same mbid onto two slugs loses the unique-index race harmlessly;
+  // the id is already in hand, so a throw here must not lose it.
+  if (mbid && !row.release_group_mbid) {
+    await db
+      .execute({
+        args: [mbid, new Date().toISOString(), row.id],
+        sql: `update albums set release_group_mbid = ?, updated_at = ?
+              where id = ? and release_group_mbid is null`,
+      })
+      .catch(() => undefined);
+  }
+
+  return row.id;
 }
 
 /**
@@ -316,10 +375,10 @@ export async function listAlbumSitemapRows(minTracks: number): Promise<EntitySit
   }));
 }
 
-// The deterministic reconcile — an `albums` row for every album a certified finding
-// carries, plus the `tracks.album_id` pointer for every track whose album has one — lives
-// in `scripts/backfill-albums.ts` (the `backfill-labels.ts` precedent: a standalone,
-// Client-taking script wired into `db:backfill`, so the DDL and the data it populates ship
-// atomically on every deploy). That is the self-healing backstop behind `linkTrackToAlbum`,
-// and the path by which a track written by ANY other writer — an admin update, a future
-// catalogue crawler that knows nothing of this column — is linked into the graph.
+// THE ALBUM EDGE IS WRITTEN INLINE, not deferred. The publish path calls `linkTrackToAlbum`
+// on a certified add, and the catalogue crawler ensures + links the album at crawl time,
+// folded on the release-group MBID (`ensureAlbum(name, releaseGroupMbid)`, crawl.ts). There is
+// no recurring deploy backfill for albums — the row is minted and the pointer stamped off the
+// bat. The ONE-OFF `scripts/backfill-album-graph.ts` (operator-run, NOT in the deploy chain)
+// populates `release_group_mbid` on existing rows and stamps `album_id` on catalogue tracks
+// that pre-date this path; it is history's catch-up, not a steady-state step.

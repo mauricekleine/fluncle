@@ -19,7 +19,7 @@ vi.mock("./db", async (importOriginal) => {
   return { ...actual, getDb: async () => holder.db };
 });
 
-import { backfillAlbums } from "../../../scripts/backfill-albums";
+import { backfillAlbums } from "../../../scripts/backfill-album-graph";
 import { backfillLabels } from "../../../scripts/backfill-labels";
 import {
   albumSlug,
@@ -61,7 +61,7 @@ async function seedTrack(options: {
   }
 }
 
-/** Run the deploy-time reconciles, exactly as `db:backfill` does (labels, then albums). */
+/** Run the reconciles: the labels deploy backfill, then the one-off album-graph catch-up. */
 async function reconcile(): Promise<void> {
   await backfillLabels(db);
   await backfillAlbums(db);
@@ -120,6 +120,56 @@ describe("ensureAlbum (the publish path's upsert)", () => {
   });
 });
 
+describe("ensureAlbum — the release-group MBID fold (the catalogue inline path)", () => {
+  const RG_MBID = "b1d19fbd-0840-3b90-ba0c-64832ba9838d";
+
+  it("folds two pressings of ONE release group onto a single album row", async () => {
+    const first = await ensureAlbum("Wormhole", RG_MBID);
+    // A different pressing title (a DIFFERENT slug) in the SAME release group reuses the row —
+    // the whole point of folding on the mbid instead of the slug.
+    const second = await ensureAlbum("Wormhole (Remastered)", RG_MBID);
+
+    expect(second).toBe(first);
+
+    const rows = await db.execute(`select count(*) as n from albums`);
+    expect(Number(rows.rows[0]?.n)).toBe(1);
+  });
+
+  it("stores the mbid on a freshly minted row", async () => {
+    await ensureAlbum("Wormhole", RG_MBID);
+
+    const row = await db.execute(`select release_group_mbid from albums where slug = 'wormhole'`);
+    expect(row.rows[0]?.release_group_mbid).toBe(RG_MBID);
+  });
+
+  it("ADOPTS the mbid onto a finding-minted album that had none, then folds on it", async () => {
+    // A finding minted the album first, by slug, with no mbid (the publish path passes none).
+    const bySlug = await ensureAlbum("Wormhole");
+    // The crawler reaches the same record: mbid miss → slug hit → adopt the mbid onto the row.
+    const byMbid = await ensureAlbum("Wormhole", RG_MBID);
+    expect(byMbid).toBe(bySlug);
+
+    const row = await db.execute(`select release_group_mbid from albums where slug = 'wormhole'`);
+    expect(row.rows[0]?.release_group_mbid).toBe(RG_MBID);
+
+    // A later pressing with a DIFFERENT slug now folds on the adopted mbid — no second row.
+    const third = await ensureAlbum("Wormhole (Deluxe)", RG_MBID);
+    expect(third).toBe(bySlug);
+
+    const count = await db.execute(`select count(*) as n from albums`);
+    expect(Number(count.rows[0]?.n)).toBe(1);
+  });
+
+  it("FALLBACK: with no mbid, folds by slug and leaves the fold key NULL", async () => {
+    const first = await ensureAlbum("Wormhole", null);
+    const second = await ensureAlbum("Wormhole");
+    expect(second).toBe(first);
+
+    const row = await db.execute(`select release_group_mbid from albums where slug = 'wormhole'`);
+    expect(row.rows[0]?.release_group_mbid).toBeNull();
+  });
+});
+
 describe("linkTrackToAlbum (the pointer the pages read by)", () => {
   it("stamps tracks.album_id at the minted album", async () => {
     await seedTrack({
@@ -138,7 +188,7 @@ describe("linkTrackToAlbum (the pointer the pages read by)", () => {
   });
 });
 
-describe("the deploy reconcile (scripts/backfill-albums.ts + backfill-labels.ts)", () => {
+describe("the reconcile (scripts/backfill-album-graph.ts + backfill-labels.ts)", () => {
   it("mints an entity only for an album/label a CERTIFIED finding carries", async () => {
     await seedTrack({
       album: "Wormhole",

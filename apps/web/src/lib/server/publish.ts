@@ -272,8 +272,8 @@ No database, Spotify, or Telegram changes were made. Enrichment (label, preview)
   // carries no ruling at all (docs/album-entity.md).
   //
   // Purely additive: two entity rows and two pointers, nothing else touched — so a failure
-  // never blocks the publish (the deploy-time reconciles in scripts/backfill-labels.ts +
-  // scripts/backfill-albums.ts back both of them up).
+  // never blocks the publish (the deploy-time scripts/backfill-labels.ts + the one-off
+  // scripts/backfill-album-graph.ts back both of them up).
   try {
     await Promise.all([
       linkTrackToLabel(track.trackId, deezer.label),
@@ -532,8 +532,8 @@ export async function certifyExistingTrack(
     await db.execute(findingInsertStatement({ logId, note: options.note, nowIso, trackId }));
 
     // Best-effort, exactly as the Spotify add does it: mint the graph entities this track now
-    // hangs off (its label + album, both minted ONLY off a certified finding) and stamp its
-    // pointers. Purely additive; the deploy-time reconciles back both up, so a miss never blocks.
+    // hangs off (its label + album) and stamp its pointers. Purely additive; the label backfill
+    // + the one-off album-graph backfill back both up, so a miss never blocks the certify.
     try {
       await Promise.all([
         linkTrackToLabel(trackId, row.label),

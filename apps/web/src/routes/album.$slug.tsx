@@ -57,9 +57,9 @@ type AlbumPageData =
  * A record earns a page on its CONTENT, exactly as a label does (`/label/<slug>` carries the
  * long version of this note): a tracklist is a real page whether or not Fluncle has certified
  * anything off it, and what keeps a stub out of the index is the thin-content gate below,
- * counting TOTAL renderable tracks. An `albums` row is minted only off a certified finding
- * today, so a findings-free record page is currently unreachable — but the two graph pages
- * hold the same rule, so neither drifts when the crawler's write paths widen.
+ * counting TOTAL renderable tracks. An `albums` row is now minted inline by the catalogue
+ * crawler as well as off a certified finding, so a findings-free record CAN reach this page —
+ * gated by that thin-content floor, the two graph pages holding the same rule.
  *
  * A slug with no `albums` row at all is still MISSING, and still 404s.
  */
