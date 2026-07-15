@@ -88,6 +88,9 @@ describe("syncTelescopePlaylist", () => {
 
     expect(result).toEqual({ changed: true, ok: true, size: 2 });
     expect(settings.get(TELESCOPE_PLAYLIST_SETTING)).toBe("pl-telescope");
+    expect(settings.get("telescope.last_mirror")).toBe(
+      "spotify:track:1111111111111111111111,spotify:track:2222222222222222222222",
+    );
 
     const create = spotifyCalls.find((call) => call.path === "/users/fluncle/playlists");
     expect(create).toBeDefined();
@@ -100,34 +103,35 @@ describe("syncTelescopePlaylist", () => {
     ]);
   });
 
-  it("an unchanged mirror is one GET and no PUT", async () => {
-    const { syncTelescopePlaylist, TELESCOPE_PLAYLIST_SETTING } =
+  it("an unchanged mirror makes NO Spotify call — the KV copy is the change detector", async () => {
+    const { syncTelescopePlaylist, TELESCOPE_MIRROR_SETTING, TELESCOPE_PLAYLIST_SETTING } =
       await import("./telescope-playlist");
 
     settings.set(TELESCOPE_PLAYLIST_SETTING, "pl-telescope");
+    settings.set(TELESCOPE_MIRROR_SETTING, "spotify:track:1111111111111111111111");
     earRows = [track("1111111111111111111111")];
-    playlistItems = ["spotify:track:1111111111111111111111"];
 
     const result = await syncTelescopePlaylist();
 
     expect(result).toEqual({ changed: false, ok: true, size: 1 });
-    expect(spotifyCalls.some((call) => call.init?.method === "PUT")).toBe(false);
+    expect(spotifyCalls).toEqual([]);
   });
 
   it("a re-ordering IS a change — the order is the ranking", async () => {
-    const { syncTelescopePlaylist, TELESCOPE_PLAYLIST_SETTING } =
+    const { syncTelescopePlaylist, TELESCOPE_MIRROR_SETTING, TELESCOPE_PLAYLIST_SETTING } =
       await import("./telescope-playlist");
 
     settings.set(TELESCOPE_PLAYLIST_SETTING, "pl-telescope");
+    settings.set(
+      TELESCOPE_MIRROR_SETTING,
+      "spotify:track:1111111111111111111111,spotify:track:2222222222222222222222",
+    );
     earRows = [track("2222222222222222222222"), track("1111111111111111111111")];
-    playlistItems = [
-      "spotify:track:1111111111111111111111",
-      "spotify:track:2222222222222222222222",
-    ];
 
     const result = await syncTelescopePlaylist();
 
     expect(result).toMatchObject({ changed: true, ok: true });
+    expect(spotifyCalls.some((call) => call.init?.method === "PUT")).toBe(true);
   });
 
   it("an anchor-less row never reaches the playlist", async () => {
@@ -142,8 +146,8 @@ describe("syncTelescopePlaylist", () => {
     expect(result).toMatchObject({ ok: true, size: 1 });
   });
 
-  it("a Spotify failure reports { ok: false } and never throws", async () => {
-    const { syncTelescopePlaylist, TELESCOPE_PLAYLIST_SETTING } =
+  it("a Spotify failure reports { ok: false }, never throws, and does NOT advance the mirror", async () => {
+    const { syncTelescopePlaylist, TELESCOPE_MIRROR_SETTING, TELESCOPE_PLAYLIST_SETTING } =
       await import("./telescope-playlist");
 
     settings.set(TELESCOPE_PLAYLIST_SETTING, "pl-telescope");
@@ -153,5 +157,7 @@ describe("syncTelescopePlaylist", () => {
     const result = await syncTelescopePlaylist();
 
     expect(result).toMatchObject({ ok: false });
+    // The mirror state only advances AFTER a landed PUT — the next sync retries.
+    expect(settings.get(TELESCOPE_MIRROR_SETTING)).toBeUndefined();
   });
 });

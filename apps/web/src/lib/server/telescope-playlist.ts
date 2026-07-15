@@ -24,6 +24,15 @@ import { getSpotifyAccessToken, spotifyFetch } from "./spotify";
 /** The settings-KV key holding the created playlist's Spotify id. */
 export const TELESCOPE_PLAYLIST_SETTING = "telescope.spotify_playlist_id";
 
+/**
+ * The settings-KV key holding the last list the mirror PUT — the change detector. The mirror
+ * deliberately never READS the playlist back: reading a PRIVATE playlist needs the
+ * `playlist-read-private` scope the stored grant does not carry (and should not need to —
+ * the playlist is never hand-curated, so the KV copy IS the truth of what the mirror wrote).
+ * The modify scopes alone cover create + replace.
+ */
+export const TELESCOPE_MIRROR_SETTING = "telescope.last_mirror";
+
 /** How many anchored rows the playlist mirrors. */
 export const TELESCOPE_PLAYLIST_SIZE = 50;
 
@@ -96,27 +105,21 @@ export async function syncTelescopePlaylist(): Promise<TelescopeSyncResult> {
       .filter((uri): uri is string => uri !== null)
       .slice(0, TELESCOPE_PLAYLIST_SIZE);
 
-    const accessToken = await getSpotifyAccessToken();
-    const playlistId = await ensureTelescopePlaylist(accessToken);
-
-    const current = (await (
-      await spotifyFetch(
-        `/playlists/${playlistId}/tracks?fields=items(track(uri)),total&limit=100`,
-        accessToken,
-      )
-    ).json()) as { items?: { track?: { uri?: string } }[] };
-    const currentUris = (current.items ?? []).map((item) => item.track?.uri ?? "");
-
-    const changed =
-      currentUris.length !== desired.length ||
-      currentUris.some((uri, index) => uri !== desired[index]);
+    const mirror = desired.join(",");
+    const lastMirror = await getSetting(TELESCOPE_MIRROR_SETTING);
+    const changed = mirror !== lastMirror;
 
     if (changed) {
+      const accessToken = await getSpotifyAccessToken();
+      const playlistId = await ensureTelescopePlaylist(accessToken);
+
       await spotifyFetch(`/playlists/${playlistId}/tracks`, accessToken, {
         body: JSON.stringify({ uris: desired }),
         headers: { "Content-Type": "application/json" },
         method: "PUT",
       });
+      // Stored only AFTER the PUT landed, so a failed write is retried next sync.
+      await setSetting(TELESCOPE_MIRROR_SETTING, mirror);
     }
 
     return { changed, ok: true, size: desired.length };
