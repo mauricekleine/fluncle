@@ -129,6 +129,22 @@ export type Surface = {
   name: string;
   kind: SurfaceKind;
   /**
+   * The human display NAME for this surface on the `/status` health board (e.g.
+   * "Audio enrichment", "Weekly newsletter"). REQUIRED for a status-visible surface
+   * (every `cron` surface `cronSurfaces()`/`statusProbes()` yields), enforced by the
+   * registry test — so a cron added here can never render as a raw `cron.<slug>`.
+   * Absent for a surface that never reaches `/status` (a CLI verb, a plain web route).
+   */
+  title?: string;
+  /**
+   * A quiet one-line subtitle for this surface's `/status` row — a plain, PUBLIC-safe
+   * description of what it does (the register of "writes each finding's editorial
+   * note"). REQUIRED alongside `title` for a status-visible surface (enforced by the
+   * registry test). PUBLIC: it shows on the page, so it names no internal host, IP, or
+   * op-path. Absent for a surface that never reaches `/status`.
+   */
+  statusDescription?: string;
+  /**
    * How loudly this surface is presented, PER DISPLAY CONTEXT. Sparse: a key is
    * present only for a context that displays the surface; an absent key means
    * "not shown there". See `SurfaceContext` and `surfacesForContext`.
@@ -950,6 +966,8 @@ export const SURFACES: readonly Surface[] = [
     operatorNotes:
       "every 5m. Pure compute, zero LLM tokens. Source: docs/agents/hermes/scripts/enrich-sweep.*",
     probeConfig: { cadenceMs: 5 * MINUTE_MS, cronName: "fluncle-enrich", kind: "cron" },
+    statusDescription: "BPM, key, and the spectral fingerprint",
+    title: "Audio enrichment",
     weights: { status: "hidden" },
   },
   {
@@ -962,6 +980,8 @@ export const SURFACES: readonly Surface[] = [
     operatorNotes:
       "every 5m. On-box MuQ (torch, ~16s/track), zero LLM tokens. Writes the vector via the agent-tier update_track. Source: docs/agents/hermes/scripts/embed-sweep.* + embed-track.py. See docs/track-lifecycle.md.",
     probeConfig: { cadenceMs: 5 * MINUTE_MS, cronName: "fluncle-embed", kind: "cron" },
+    statusDescription: "MuQ vectors for sonic similarity",
+    title: "Audio embeddings",
     weights: { status: "hidden" },
   },
   {
@@ -974,6 +994,8 @@ export const SURFACES: readonly Surface[] = [
     operatorNotes:
       "nightly (02:20 Amsterdam), run by a rave-02 HOST systemd timer (docs/agents/hermes/cluster-timer/). Assignment-ONLY + idempotent (a no-op on an unchanged corpus): assign each finding to its nearest stored centroid, recompute centroids as members' means, retire an emptied galaxy, consume an operator split_requested_at (a k=2 fit). Zero LLM tokens; sub-second CPU. A full k=9 fit is an OPERATOR act (--cold-start / --remint), never scheduled. Source: docs/agents/hermes/scripts/cluster-sweep.* + cluster.py. See docs/agents/cluster-engine.md.",
     probeConfig: { cadenceMs: 24 * 60 * MINUTE_MS, cronName: "fluncle-cluster", kind: "cron" },
+    statusDescription: "groups the archive into sonic galaxies",
+    title: "Sonic galaxies",
     weights: { status: "hidden" },
   },
   {
@@ -986,6 +1008,8 @@ export const SURFACES: readonly Surface[] = [
     operatorNotes:
       "every 10m, run by a rave-02 HOST systemd timer (docs/agents/hermes/crawl-timer/). METADATA ONLY — it writes a `tracks` row with no `findings` row, so it certifies nothing (no Log ID, no note, no video, no public surface) and it captures no audio. Worker-paced (the box holds no MusicBrainz budget): one bounded pass per tick over the durable `crawl_frontier`, so a crawl is a marathon the SCHEDULE finishes and a reboot mid-label costs one node, not one crawl. The boundary gate is the operator's seed-label allowlist + graph distance (hop 0-2), never genre inference; a label the walk discovers enters `undecided` and is NOT crawled until he rules on it. Zero LLM tokens. Source: docs/agents/hermes/scripts/crawl-sweep.*. See docs/catalogue-crawler.md.",
     probeConfig: { cadenceMs: 10 * MINUTE_MS, cronName: "fluncle-crawl", kind: "cron" },
+    statusDescription: "charts new tracks from the wider label graph",
+    title: "Track crawler",
     weights: { status: "hidden" },
   },
   {
@@ -998,6 +1022,8 @@ export const SURFACES: readonly Surface[] = [
     operatorNotes:
       "every 30m, run by a rave-02 HOST systemd timer (docs/agents/hermes/rank-timer/). THE EAR's schedule, and it lands with the crawler on purpose: a timer ranking an empty table would be a /status row that means nothing, and the crawler is what creates rows. All the vector arithmetic runs in SQL inside the Worker; the sweep DRAINS (it loops while `remaining > 0` up to a tick budget), so a crawl that just landed 700 rows is ranked by the next tick. Self-healing: staleness is a fingerprint of the finding corpus, so logging or embedding a finding re-ranks the catalogue with no invalidation call. Writes DERIVED columns on catalogue rows only — it cannot certify. Zero LLM tokens. Source: docs/agents/hermes/scripts/rank-sweep.*. See docs/the-ear.md.",
     probeConfig: { cadenceMs: 30 * MINUTE_MS, cronName: "fluncle-rank", kind: "cron" },
+    statusDescription: "ranks unvisited tracks by nearness to the archive",
+    title: "Track ranking",
     weights: { status: "hidden" },
   },
   {
@@ -1010,6 +1036,8 @@ export const SURFACES: readonly Surface[] = [
     operatorNotes:
       "every 60m, run by a rave-02 HOST systemd timer (docs/agents/hermes/label-images-timer/). The DURABLE other half of the label entity: the crawler MINTS new labels every few minutes (each `image_state='pending'`) and the one-shot operator backfill only seeded the labels that already existed, so this cron is what gives every freshly-minted label its OWN logo instead of a borrowed album cover. METADATA ONLY — a label logo is internal, reversible, nominative-use trademark (the album-art posture); it certifies nothing and publishes nothing (agent tier, the `backfill_discogs` precedent). Worker-paced (the box holds no Discogs key / MusicBrainz budget): one bounded batch per tick walks each label's MB identity → its curated Discogs/Wikidata url-rels → downloads the logo once into R2, up the ladder Discogs → Wikidata → none (the freshest-cover floor). The `labels` row carries the durable reliability state (image_state/image_attempted_at/image_failures), so a resolved/none label is terminal and a vendor throttle just circuit-breaks and resumes next tick. Zero LLM tokens. Source: docs/agents/hermes/scripts/label-images-sweep.*. See docs/label-entity.md.",
     probeConfig: { cadenceMs: 60 * MINUTE_MS, cronName: "fluncle-label-images", kind: "cron" },
+    statusDescription: "resolves each label's own mark",
+    title: "Label logos",
     weights: { status: "hidden" },
   },
   {
@@ -1022,6 +1050,8 @@ export const SURFACES: readonly Surface[] = [
     operatorNotes:
       "every 60m, run by a rave-02 HOST systemd timer (docs/agents/hermes/cover-masters-timer/). The DURABLE other half of the album/artist cover (RFC musickit-second-authority U3b): the publish path + catalogue crawl MINT albums/artists (each `image_state='pending'`) and this cron gives each its OWN ≤1200²-capped cover derivative in R2 (found.fluncle.com, `albums/<slug>.<ext>` / `artists/<slug>.<ext>`) instead of hotlinking a third party — the label-logo posture, two entities over. IMAGE ONLY — a downscaled display derivative, reversible, the REF-05-conscious 1200 line (docs/album-artwork.md); it certifies nothing and publishes nothing (agent tier, the `backfill_label_images` precedent). Worker-paced: one bounded batch of albums (Apple template → Cover Art Archive → Spotify floor), then one of artists (Spotify floor), per tick; every rung requests a ≤1200 rendition and a byte read enforces the cap before the R2 put, so no un-downscaled original is ever stored. The `albums`/`artists` row carries the durable reliability state (image_state/image_attempted_at/image_failures), so a resolved/none entity is terminal. Served via Cloudflare Images `/cdn-cgi/image/…` (decision B). Zero LLM tokens. Source: docs/agents/hermes/scripts/cover-masters-sweep.*. See docs/album-artwork.md.",
     probeConfig: { cadenceMs: 60 * MINUTE_MS, cronName: "fluncle-cover-masters", kind: "cron" },
+    statusDescription: "owns each album and artist its cover master",
+    title: "Cover masters",
     weights: { status: "hidden" },
   },
   {
@@ -1034,6 +1064,8 @@ export const SURFACES: readonly Surface[] = [
     operatorNotes:
       "every 5m, run by a rave-02 HOST systemd timer (docs/agents/hermes/capture-timer/) — NOT a gateway cron: a proxied yt-dlp fetch has an unbounded tail that would starve the 5-min enrich/context/note sweeps on the shared serial runner. A NON-BLOCKING side-channel (never gates enrich/embed). Runs yt-dlp through a residential proxy on a per-track sticky session, duration-guards the match, stores the full song in the PRIVATE fluncle-source-audio bucket (S3-direct), and writes back via the agent-tier update_track (with per-finding backoff). yt-dlp + ffprobe are a box deploy prereq. Newest-first so a fresh add jumps the backfill. Source: docs/agents/hermes/scripts/capture-sweep.*. See docs/track-lifecycle.md.",
     probeConfig: { cadenceMs: 5 * MINUTE_MS, cronName: "fluncle-capture", kind: "cron" },
+    statusDescription: "captures each finding's full song once",
+    title: "Full-song capture",
     weights: { status: "hidden" },
   },
   {
@@ -1046,6 +1078,8 @@ export const SURFACES: readonly Surface[] = [
     operatorNotes:
       "every 30m, run by a rave-02 HOST systemd timer (docs/agents/hermes/verify-captures-timer/). The HISTORIC half of the capture verification gate (docs/the-ear.md § Wrong audio): the capture sweep verifies every NEW download at ingest, and this sweep walks every capture that landed before the gate existed and gives each the same Chromaprint check against the track's ISRC-resolved official preview. The box only MEASURES (fpcalc + the sliding-window match) and reports a plain verdict; the Worker ROUTES it — match/no-preview stamp `capture_verification`, a CATALOGUE mismatch quarantines for re-capture, a FINDING mismatch only raises the `capture-suspect` /admin attention item (a machine never rewinds a public finding; the operator rules with flag_wrong_audio). Resumable by construction (a stamped row leaves the worklist); degrades honestly without fpcalc (pre-rebake: `fpcalc_missing`, nothing stamped). Zero LLM tokens. Source: docs/agents/hermes/scripts/verify-captures.* + fingerprint-match.ts. See docs/the-ear.md.",
     probeConfig: { cadenceMs: 30 * MINUTE_MS, cronName: "fluncle-verify-captures", kind: "cron" },
+    statusDescription: "checks each captured song against its official preview",
+    title: "Capture verification",
     weights: { status: "hidden" },
   },
   {
@@ -1058,6 +1092,8 @@ export const SURFACES: readonly Surface[] = [
     operatorNotes:
       "every 5m. --no-agent trigger; the Worker does the Firecrawl + Haiku distill. Zero on-box tokens.",
     probeConfig: { cadenceMs: 5 * MINUTE_MS, cronName: "fluncle-context-note", kind: "cron" },
+    statusDescription: "distills the facts behind each finding",
+    title: "Context notes",
     weights: { status: "hidden" },
   },
   {
@@ -1070,6 +1106,8 @@ export const SURFACES: readonly Surface[] = [
     operatorNotes:
       "every 10m. Hybrid --no-agent; one claude -p authors the line. Never clobbers an operator note.",
     probeConfig: { cadenceMs: 10 * MINUTE_MS, cronName: "fluncle-note", kind: "cron" },
+    statusDescription: "writes each finding's editorial note",
+    title: "Editorial notes",
     weights: { status: "hidden" },
   },
   {
@@ -1080,8 +1118,10 @@ export const SURFACES: readonly Surface[] = [
     kind: "cron",
     name: "cron.artist-bio",
     operatorNotes:
-      "every 30m. Hybrid --no-agent; one claude -p authors the paragraph off best-effort Firecrawl facts + identity. Never clobbers an operator bio. Box activation operator-gated. Source: docs/agents/hermes/scripts/{entity-bio-sweep.ts,artist-bio-sweep.sh}.",
+      "every 30m. Hybrid --no-agent; one claude -p authors the paragraph, its grounding assembled WORKER-side (Firecrawl facts + the artist's finding titles) via the draft-bio op. Never clobbers an operator bio. Live. Source: docs/agents/hermes/scripts/{entity-bio-sweep.ts,artist-bio-sweep.sh}.",
     probeConfig: { cadenceMs: 30 * MINUTE_MS, cronName: "fluncle-artist-bio", kind: "cron" },
+    statusDescription: "writes each artist's voiced bio",
+    title: "Artist bios",
     weights: { status: "hidden" },
   },
   {
@@ -1092,8 +1132,10 @@ export const SURFACES: readonly Surface[] = [
     kind: "cron",
     name: "cron.label-bio",
     operatorNotes:
-      "every 30m. Hybrid --no-agent; one claude -p authors the paragraph off best-effort Firecrawl facts + identity. Never clobbers an operator bio. Box activation operator-gated. Source: docs/agents/hermes/scripts/{entity-bio-sweep.ts,label-bio-sweep.sh}.",
+      "every 30m. Hybrid --no-agent; one claude -p authors the paragraph, its grounding assembled WORKER-side (Firecrawl facts + the label's finding titles) via the draft-bio op. Never clobbers an operator bio. Live. Source: docs/agents/hermes/scripts/{entity-bio-sweep.ts,label-bio-sweep.sh}.",
     probeConfig: { cadenceMs: 30 * MINUTE_MS, cronName: "fluncle-label-bio", kind: "cron" },
+    statusDescription: "writes each label's voiced bio",
+    title: "Label bios",
     weights: { status: "hidden" },
   },
   {
@@ -1106,6 +1148,8 @@ export const SURFACES: readonly Surface[] = [
     operatorNotes:
       "every 15m. Hybrid --no-agent; a deterministic archive dedupe + DnB-plausibility heuristic feeds one claude -p phrasing, length-gated. Writes the verdict onto a PENDING submission so it lands in the /admin attention queue already assessed; approve/reject stays operator tier. Source: docs/agents/hermes/scripts/triage-sweep.{sh,ts}.",
     probeConfig: { cadenceMs: 15 * MINUTE_MS, cronName: "fluncle-triage", kind: "cron" },
+    statusDescription: "pre-chews each crew submission's verdict",
+    title: "Submission triage",
     weights: { status: "hidden" },
   },
   {
@@ -1123,6 +1167,8 @@ export const SURFACES: readonly Surface[] = [
       kind: "cron",
       schedule: { time: "00:40", tz: "Europe/Amsterdam" },
     },
+    statusDescription: "writes each sector-day up in the Logbook",
+    title: "Logbook author",
     weights: { status: "hidden" },
   },
   {
@@ -1135,6 +1181,8 @@ export const SURFACES: readonly Surface[] = [
     operatorNotes:
       "every 60m. Hybrid --no-agent; one claude -p authors the script, the Worker voice-gates + renders.",
     probeConfig: { cadenceMs: 60 * MINUTE_MS, cronName: "fluncle-observation", kind: "cron" },
+    statusDescription: "Fluncle's spoken field observations",
+    title: "Audio observations",
     weights: { status: "hidden" },
   },
   {
@@ -1144,6 +1192,8 @@ export const SURFACES: readonly Surface[] = [
     name: "cron.backfill",
     operatorNotes: "every 30m. Pure HTTP driving, zero LLM tokens. Agent tier.",
     probeConfig: { cadenceMs: 30 * MINUTE_MS, cronName: "fluncle-backfill", kind: "cron" },
+    statusDescription: "repairs Discogs ids and Last.fm loves",
+    title: "Metadata backfill",
     weights: { status: "hidden" },
   },
   {
@@ -1155,6 +1205,8 @@ export const SURFACES: readonly Surface[] = [
     operatorNotes:
       "every 60m. --no-agent trigger; the Worker does the MB walk + Firecrawl /v2/extract + YouTube channel resolution. Zero on-box tokens. MB rows land as status=auto (trusted); Firecrawl rows as status=candidate (operator-confirm before public). Source: docs/agents/hermes/scripts/artist-sweep.*",
     probeConfig: { cadenceMs: 60 * MINUTE_MS, cronName: "fluncle-artist-sweep", kind: "cron" },
+    statusDescription: "resolves each artist's socials and identity links",
+    title: "Artist resolution",
     weights: { status: "hidden" },
   },
   {
@@ -1167,6 +1219,8 @@ export const SURFACES: readonly Surface[] = [
     operatorNotes:
       "every 10m. Pure HTTP trigger, zero LLM tokens. Agent tier (fills the public URL only — publishes nothing). The box's baked CLI predates the `--capture` verb, so the cron curls POST /api/admin/social/posts/capture directly; the Worker polls Postiz and writes back. Source: docs/agents/hermes/scripts/social-capture-sweep.sh. Probed on /status as cron.social-capture.",
     probeConfig: { cadenceMs: 10 * MINUTE_MS, cronName: "fluncle-social-capture", kind: "cron" },
+    statusDescription: "the live YouTube and TikTok URLs for each posted video",
+    title: "Social links",
     weights: { status: "hidden" },
   },
   {
@@ -1178,6 +1232,8 @@ export const SURFACES: readonly Surface[] = [
     operatorNotes:
       "every 15m. Pure-trigger, zero LLM tokens: a deterministic ffmpeg cut driven by the fluncle CLI (`admin clips list` → `admin clips cut`), agent-scoped (list_clips + the agent-tier presign_clip_upload / finalize_clip_cut). Cuts the operator-framed 9:16 clips from the /admin/studio editor (keyed by Log ID) out of the set video → ships `<clipId>/footage.mp4` to R2 for the /admin/clips library + the clip drip-feed. The box runs the standalone bun BINARY (the npm thin client can't spawn ffmpeg). Source: docs/agents/hermes/scripts/clip-sweep.sh. Probed on /status as cron.studio-clip.",
     probeConfig: { cadenceMs: 15 * MINUTE_MS, cronName: "fluncle-studio-clip", kind: "cron" },
+    statusDescription: "cuts set videos into 9:16 clips",
+    title: "Studio clips",
     weights: { status: "hidden" },
   },
   {
@@ -1190,6 +1246,8 @@ export const SURFACES: readonly Surface[] = [
     operatorNotes:
       "every 20m. Pure HTTP trigger, zero LLM tokens. Admin tier (needs the Worker's Postiz key, which the box never sees — the box only triggers; the `finalize_clip_cut` / `record_health` precedent). The Worker checks the global kill switch FIRST (paused → no-op), then posts due clips bounded by a per-tick cap AND a rolling-24h IG cap. Every clip auto-enters the schedule at a jittered ~23-25h after the queue tail. The operator pauses/resumes with `fluncle admin clips drip-pause` / `drip-resume`. Source: docs/agents/hermes/scripts/clip-drip-sweep.sh. Probed on /status as cron.clip-drip.",
     probeConfig: { cadenceMs: 20 * MINUTE_MS, cronName: "fluncle-clip-drip", kind: "cron" },
+    statusDescription: "drip-feeds set clips to Instagram",
+    title: "Clip drip-feed",
     weights: { status: "hidden" },
   },
   {
@@ -1202,6 +1260,8 @@ export const SURFACES: readonly Surface[] = [
     operatorNotes:
       "every 30m. Pure HTTP trigger, zero LLM tokens. The last autonomy gap: render finishes → this pushes, with no operator beat between. Admin tier (needs the Worker's Postiz key, which the box never sees — the box only triggers; the `drip_clips` / `capture_post_urls` precedent). SHIPS DARK: the Worker's kill switch is DEFAULT-DENY (only an explicit `false` in the `publish_advance_paused` setting runs it), so the timer ticks and posts nothing until `fluncle admin publish resume`. The Worker reads the switch FIRST, then advances at most ONE ready finding — both masters finalized, 15m settled, the whole bundle served on R2, the (track, platform) row CLAIMED atomically before any Postiz call, a rolling-24h cap of 6 pushes. A failed push is left `failed` for the operator and never auto-retried. Source: docs/agents/hermes/scripts/publish-advance-sweep.sh. Probed on /status as cron.publish-advance.",
     probeConfig: { cadenceMs: 30 * MINUTE_MS, cronName: "fluncle-publish-advance", kind: "cron" },
+    statusDescription: "advances the publish queue on his own clock",
+    title: "Publish advance",
     weights: { status: "hidden" },
   },
   {
@@ -1214,6 +1274,8 @@ export const SURFACES: readonly Surface[] = [
     operatorNotes:
       "every 60m. A conductor: triggers a detached @fluncle-video render on a scale-to-zero box.ascii box (rave-03). Never posts to social (operator-tier 403). Probed on /status as service `cron.render` (its own last-run freshness); the box's reachability is the SEPARATE `render-box` probe (the conductor state file).",
     probeConfig: { cadenceMs: 60 * MINUTE_MS, cronName: "fluncle-render", kind: "cron" },
+    statusDescription: "the conductor's last run",
+    title: "Render cron",
     weights: { status: "hidden" },
   },
   {
@@ -1225,6 +1287,8 @@ export const SURFACES: readonly Surface[] = [
     operatorNotes:
       "every 10m, run by a rave-02 host systemd timer (docs/agents/hermes/healthcheck-timer/) — decoupled from the Hermes cron gateway so the prober isn't starved by the scheduler it monitors. Pure probing, zero LLM tokens. POSTs to the agent-tier record_health op that /status reads.",
     probeConfig: { cadenceMs: 10 * MINUTE_MS, cronName: "fluncle-healthcheck", kind: "cron" },
+    statusDescription: "the prober behind this very page",
+    title: "Healthcheck prober",
     weights: { status: "hidden" },
   },
   {
@@ -1242,6 +1306,8 @@ export const SURFACES: readonly Surface[] = [
       kind: "cron",
       schedule: { time: "15:00", tz: "Europe/Amsterdam", weekday: 5 },
     },
+    statusDescription: "drafts the Friday edition",
+    title: "Weekly newsletter",
     weights: { status: "secondary" },
   },
   {
@@ -1258,6 +1324,8 @@ export const SURFACES: readonly Surface[] = [
       kind: "cron",
       schedule: { time: "03:00", tz: "Europe/Amsterdam" },
     },
+    statusDescription: "a daily off-site snapshot of the archive",
+    title: "Database backup",
     weights: { status: "secondary" },
   },
   {
@@ -1275,6 +1343,8 @@ export const SURFACES: readonly Surface[] = [
       kind: "cron",
       schedule: { time: "04:00", tz: "Europe/Amsterdam" },
     },
+    statusDescription: "counts the crew and how far the probes reached",
+    title: "Reach snapshot",
     weights: { status: "secondary" },
   },
   {
@@ -1291,6 +1361,8 @@ export const SURFACES: readonly Surface[] = [
       kind: "cron",
       schedule: { time: "01:00", tz: "Europe/Amsterdam" },
     },
+    statusDescription: "nightly one-domain codebase audit → a PR",
+    title: "Nightly audit",
     weights: { status: "secondary" },
   },
   {
@@ -1307,6 +1379,8 @@ export const SURFACES: readonly Surface[] = [
       kind: "cron",
       schedule: { time: "05:00", tz: "Europe/Amsterdam" },
     },
+    statusDescription: "reviews + merges the nightly audit PR",
+    title: "Audit reviewer",
     weights: { status: "secondary" },
   },
 ];

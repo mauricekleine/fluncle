@@ -36,7 +36,7 @@
     "fluncle-hermes-operator": {
       "source": "packages/skills/fluncle-hermes-operator",
       "sourceType": "local",
-      "computedHash": "620270ed3c0f6e36fa463c8fcb15d430bd59c8ae0fbd1e6b58f4e744b4d7ac45"
+      "computedHash": "109c2851fb982d9a3b60d1e3659885fb360a28c1e497d5f081da55ec5b069da2"
     },
     "fluncle-maintenance": {
       "source": "packages/skills/fluncle-maintenance",
@@ -81,7 +81,7 @@
     "fluncle-surfaces": {
       "source": "packages/skills/fluncle-surfaces",
       "sourceType": "local",
-      "computedHash": "452df7787298c698c622a7189a5abb29d17075e194c3b09f6bca109639101877"
+      "computedHash": "5b6179a475661cf7d54502ec53cbad7cb825cc5109a5785dddef5128301bff16"
     },
     "fluncle-track-enrichment": {
       "source": "packages/skills/fluncle-track-enrichment",

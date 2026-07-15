@@ -45,7 +45,7 @@ import {
 // own row, grouped under the "Track automation" / "Ops automation" headings. A cron added
 // to the registry surfaces here automatically (as track automation) — no edit to this file.
 const CRON_SURFACES = cronSurfaces();
-const CRON_ORDER = CRON_SURFACES.map((surface) => surface.name);
+export const CRON_ORDER = CRON_SURFACES.map((surface) => surface.name);
 
 // The declared run cadence per cron service id, read straight from the registry's
 // `probeConfig.cadenceMs` (service id = the cron surface name, e.g. `cron.enrich`).
@@ -82,7 +82,7 @@ for (const surface of CRON_SURFACES) {
 // they never enter the registry cron catalog, yet they are humming scheduled systems like
 // the rest. Both are OPS automations and LEAD that group (foundational), ahead of the ops
 // crons.
-const SELF_POSTED_AUTOMATION_ORDER = ["self-deploy", "self-deploy-ssh"];
+export const SELF_POSTED_AUTOMATION_ORDER = ["self-deploy", "self-deploy-ssh"];
 const AUTOMATION_ORDER = [...SELF_POSTED_AUTOMATION_ORDER, ...CRON_ORDER];
 const AUTOMATION_SERVICE_IDS = new Set(AUTOMATION_ORDER);
 
@@ -106,42 +106,45 @@ const OPS_AUTOMATION_IDS = new Set([
 // after them under the Track/Ops automation headings. Any service the snapshot reports that isn't named
 // here (and isn't an automation) is appended alphabetically, so a newly-probed service
 // surfaces without a code change.
-const SERVICE_ORDER = ["web", "db", "r2", "dns", "ssh", "onion", "hermes", "render-box", "disk"];
+export const SERVICE_ORDER = [
+  "web",
+  "db",
+  "r2",
+  "dns",
+  "ssh",
+  "onion",
+  "hermes",
+  "render-box",
+  "disk",
+];
 
-// A human label per known service id (falls back to the raw id for an unknown one). The
-// cron labels are keyed by their registry surface name; the fallback strips the `cron.`
-// prefix, so an as-yet-unlabeled cron still reads cleanly.
-const SERVICE_LABELS: Record<string, string> = {
-  "cron.artist-sweep": "Artist resolution",
-  "cron.audit": "Nightly audit",
-  "cron.audit-review": "Audit reviewer",
-  "cron.backfill": "Metadata backfill",
-  "cron.backup": "Database backup",
-  "cron.capture": "Full-song capture",
-  "cron.clip-drip": "Clip drip-feed",
-  "cron.cluster": "Sonic galaxies",
-  "cron.context-note": "Context notes",
-  "cron.cover-masters": "Cover masters",
-  "cron.crawl": "Track crawler",
-  "cron.embed": "Audio embeddings",
-  "cron.enrich": "Audio enrichment",
-  "cron.healthcheck": "Healthcheck prober",
-  "cron.label-images": "Label logos",
-  "cron.logbook": "Logbook author",
-  "cron.newsletter": "Weekly newsletter",
-  "cron.note": "Editorial notes",
-  "cron.observation": "Audio observations",
-  "cron.publish-advance": "Publish advance",
-  "cron.rank": "Track ranking",
-  "cron.reach": "Reach snapshot",
-  // Two DIFFERENT render signals (not the agent twice): `cron.render` is the
-  // conductor cron's last-run freshness; `render-box` is the scale-to-zero box's
-  // reachability. The labels make the distinction obvious.
-  "cron.render": "Render cron",
-  "cron.social-capture": "Social links",
-  "cron.studio-clip": "Studio clips",
-  "cron.triage": "Submission triage",
-  "cron.verify-captures": "Capture verification",
+// The registry is the SINGLE SOURCE OF TRUTH for a cron row's title + one-line
+// description. A cron surface's `title`/`statusDescription` (keyed by its registry
+// surface name, which IS the /status service id, e.g. `cron.enrich`) flows straight
+// onto its /status row — so adding a cron to @fluncle/registry with those two fields
+// makes it render correctly here with NO second edit, and the registry enforcement
+// test build-fails a status-visible surface that omits either. These two lookups
+// carry them; the explicit infra maps below hold ONLY the non-registry probes.
+const REGISTRY_STATUS_TITLES = new Map<string, string>(
+  CRON_SURFACES.flatMap((surface) =>
+    surface.title === undefined ? [] : [[surface.name, surface.title] as const],
+  ),
+);
+const REGISTRY_STATUS_DESCRIPTIONS = new Map<string, string>(
+  CRON_SURFACES.flatMap((surface) =>
+    surface.statusDescription === undefined
+      ? []
+      : [[surface.name, surface.statusDescription] as const],
+  ),
+);
+
+// The MINIMAL explicit label map — ONLY the genuine NON-registry infra probes, the
+// core services that have no `@fluncle/registry` surface to carry their title (their
+// /status service id is a short infra alias like `web`/`db`/`r2`, not a registry
+// `name`). Every registry surface (every `cron.*`) reads its title from the registry
+// above instead. `render-box` is the scale-to-zero box's reachability, distinct from
+// the `cron.render` conductor row.
+export const INFRA_SERVICE_LABELS: Record<string, string> = {
   db: "Database",
   disk: "Disk headroom",
   dns: "DNS",
@@ -155,37 +158,11 @@ const SERVICE_LABELS: Record<string, string> = {
   web: "Web",
 };
 
-// A quiet one-line subtitle per service — the public domain it lives at, or a plain
-// description of what it does. Public-safe (every domain here is already public; the
-// descriptions name no internal host). Absent for an unknown service.
-const SERVICE_SUBTITLES: Record<string, string> = {
-  "cron.artist-sweep": "resolves each artist's socials and identity links",
-  "cron.audit": "nightly one-domain codebase audit → a PR",
-  "cron.audit-review": "reviews + merges the nightly audit PR",
-  "cron.backfill": "repairs Discogs ids and Last.fm loves",
-  "cron.backup": "a daily off-site snapshot of the archive",
-  "cron.capture": "captures each finding's full song once",
-  "cron.clip-drip": "drip-feeds set clips to Instagram",
-  "cron.cluster": "groups the archive into sonic galaxies",
-  "cron.context-note": "distills the facts behind each finding",
-  "cron.cover-masters": "owns each album and artist its cover master",
-  "cron.crawl": "charts new tracks from the wider label graph",
-  "cron.embed": "MuQ vectors for sonic similarity",
-  "cron.enrich": "BPM, key, and the spectral fingerprint",
-  "cron.healthcheck": "the prober behind this very page",
-  "cron.label-images": "resolves each label's own mark",
-  "cron.logbook": "writes each sector-day up in the Logbook",
-  "cron.newsletter": "drafts the Friday edition",
-  "cron.note": "writes each finding's editorial note",
-  "cron.observation": "Fluncle's spoken field observations",
-  "cron.publish-advance": "advances the publish queue on his own clock",
-  "cron.rank": "ranks unvisited tracks by nearness to the archive",
-  "cron.reach": "counts the crew and how far the probes reached",
-  "cron.render": "the conductor's last run",
-  "cron.social-capture": "the live YouTube and TikTok URLs for each posted video",
-  "cron.studio-clip": "cuts set videos into 9:16 clips",
-  "cron.triage": "pre-chews each crew submission's verdict",
-  "cron.verify-captures": "checks each captured song against its official preview",
+// The subtitle sibling of INFRA_SERVICE_LABELS — a quiet one-line description per
+// non-registry infra probe (the public domain it lives at, or what it does).
+// Public-safe (every domain here is already public; the descriptions name no internal
+// host). A registry cron's subtitle comes from REGISTRY_STATUS_DESCRIPTIONS instead.
+export const INFRA_SERVICE_SUBTITLES: Record<string, string> = {
   db: "the archive's persistence",
   disk: "the agent box's free space",
   dns: "dig.fluncle.com",
@@ -199,17 +176,26 @@ const SERVICE_SUBTITLES: Record<string, string> = {
   web: "www.fluncle.com",
 };
 
-// A label for a service id, with the cron fallback (strip `cron.`) baked in.
-function serviceLabel(service: string): string {
-  if (SERVICE_LABELS[service]) {
-    return SERVICE_LABELS[service];
+// A label for a service id: the registry surface's `title` for a registry cron, else
+// the explicit infra label, else the cron-slug fallback (strip `cron.`) for a probe
+// that carries neither — kept only so an unknown id still reads cleanly.
+export function serviceLabel(service: string): string {
+  const registryTitle = REGISTRY_STATUS_TITLES.get(service);
+  if (registryTitle) {
+    return registryTitle;
+  }
+
+  if (INFRA_SERVICE_LABELS[service]) {
+    return INFRA_SERVICE_LABELS[service];
   }
 
   return service.startsWith("cron.") ? service.slice("cron.".length) : service;
 }
 
-function serviceSubtitle(service: string): string | undefined {
-  return SERVICE_SUBTITLES[service];
+// The registry surface's `statusDescription` for a registry cron, else the explicit
+// infra subtitle. Absent for an unknown service.
+export function serviceSubtitle(service: string): string | undefined {
+  return REGISTRY_STATUS_DESCRIPTIONS.get(service) ?? INFRA_SERVICE_SUBTITLES[service];
 }
 
 // The section heading — a prominent uppercase label with a hairline rule beneath it.
