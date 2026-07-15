@@ -5358,10 +5358,10 @@ async function runCatalogueRank(
   options: CatalogueRankOptions,
   catalogueRankCommand: typeof import("./commands/admin-catalogue").catalogueRankCommand,
 ): Promise<void> {
-  const summary = await catalogueRankCommand({ limit: options.limit });
+  const { summary, telescope } = await catalogueRankCommand({ limit: options.limit });
 
   if (options.json) {
-    printJson({ ok: true, summary });
+    printJson({ ok: true, summary, telescope });
     return;
   }
 
@@ -5375,6 +5375,15 @@ async function runCatalogueRank(
   console.log(
     `Ranked ${summary.scored} against ${summary.embeddedFindings} embedded findings; prioritized ${summary.prioritized} for capture.${quarantine}${deduped} ${summary.remaining} still stale.`,
   );
+
+  // The Telescope mirror's outcome — the one window onto a silent Spotify failure.
+  if (telescope) {
+    console.log(
+      telescope.ok
+        ? `Telescope: ${telescope.size} aboard${telescope.changed ? " (updated)" : ""}.`
+        : `Telescope: sync failed — ${telescope.reason}`,
+    );
+  }
 }
 
 async function runCatalogueList(

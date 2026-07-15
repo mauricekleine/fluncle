@@ -42,17 +42,28 @@ export type RankCatalogueSummary = {
  * SQL — storing each one's nearest finding + the similarity to it, or (for a row with no audio
  * yet) its capture-priority tier. Idempotent, resume-safe, and a no-op on an unchanged archive.
  */
-export async function catalogueRankCommand(options: {
-  limit?: string;
-}): Promise<RankCatalogueSummary> {
+export async function catalogueRankCommand(options: { limit?: string }): Promise<{
+  summary: RankCatalogueSummary;
+  telescope?: TelescopeSyncOutcome;
+}> {
   const limit = options.limit ? Number.parseInt(options.limit, 10) : undefined;
-  const response = await adminApiPost<{ ok: true; summary: RankCatalogueSummary }>(
-    "/api/admin/catalogue/rank",
-    limit ? { limit } : {},
-  );
+  const response = await adminApiPost<{
+    ok: true;
+    summary: RankCatalogueSummary;
+    telescope?: TelescopeSyncOutcome;
+  }>("/api/admin/catalogue/rank", limit ? { limit } : {});
 
-  return response.summary;
+  return { summary: response.summary, telescope: response.telescope };
 }
+
+/**
+ * What the Telescope playlist mirror did after the tick (docs/the-ear.md § Fluncle's
+ * Telescope). The sync is best-effort server-side, so this is the operator's ONLY window
+ * onto a silent Spotify failure — the command must never drop it.
+ */
+export type TelescopeSyncOutcome =
+  | { changed: boolean; ok: true; size: number }
+  | { ok: false; reason: string };
 
 /** The lenses the CLI forwards verbatim; anything else falls back to the `ear` default. */
 const CATALOGUE_LENSES = new Set(["capture", "dismissed", "failed", "quarantine", "unmatched"]);
