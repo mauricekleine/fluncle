@@ -308,6 +308,10 @@ export const TrackSearchResultSchema = z
     album: z.string().optional(),
     artists: z.array(z.string()),
     artworkUrl: z.string().optional(),
+    // The track length in ms, when Spotify carries it. Optional and additive: the submit
+    // type-ahead ignores it, but the catalogue anchor's verified-search rung reads it as one
+    // of its three verification signals (crawl.ts `pickVerifiedCandidate`).
+    durationMs: z.number().optional(),
     id: z.string(),
     spotifyUrl: z.string(),
     title: z.string(),
