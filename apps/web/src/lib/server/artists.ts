@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { type ArtistSocialPlatform, ARTIST_SOCIAL_PLATFORMS } from "../artist-socials";
 import { validateSocialUrlForPlatform } from "./artist-resolution";
 import { getDb, typedRow, typedRows } from "./db";
-import { type EntitySitemapRow } from "./labels";
+import { type CatalogueHubPage, clampCatalogueHubLimit, type EntitySitemapRow } from "./labels";
 import { logEvent } from "./log";
 import { bestArtistAvatarUrl } from "../media";
 import { fetchArtistImages } from "./spotify";
@@ -366,6 +366,79 @@ export async function listArtistSitemapRows(minTracks: number): Promise<EntitySi
     lastmod: row.lastmod ?? undefined,
     slug: row.slug,
   }));
+}
+
+/** An artist tile in the "also in the catalogue" section — the quiet, unlit twin of a hub row. */
+export type ArtistCatalogueEntry = {
+  /** The artist's canonical Spotify avatar (undefined → the tile renders a monogram). */
+  imageUrl: string | undefined;
+  name: string;
+  slug: string;
+  /** Renderable tracks credited to the artist (all catalogue here, since they carry no findings). */
+  trackCount: number;
+};
+
+/**
+ * One page of the ARTISTS hub's "also in the catalogue" section: every artist with ZERO certified
+ * findings whose page clears the renderable-track floor ({@link ARTIST_INDEX_MIN_FINDINGS}) — the
+ * complement of `listArtistsWithFindingCounts`. The exact twin of `listLabelsCatalogue` /
+ * `listAlbumsCatalogue`, over the `track_artists` join (the canonical artist edge both index and
+ * sitemap read use); that function carries the scale note. The avatar is the artist's own, not a
+ * track cover — an artist tile is an avatar card, never cover-led.
+ */
+export async function listArtistsCatalogue(options: {
+  cursor?: string;
+  limit?: number;
+}): Promise<CatalogueHubPage<ArtistCatalogueEntry>> {
+  const db = await getDb();
+  const limit = clampCatalogueHubLimit(options.limit);
+  const cursor = typeof options.cursor === "string" ? options.cursor : "";
+
+  const result = await db.execute({
+    args: [cursor, ARTIST_INDEX_MIN_FINDINGS, limit],
+    sql: `select a.slug as slug, a.name as name, a.image_url as image_url,
+                 a.image_key as image_key, a.image_state as image_state,
+                 a.image_updated_at as image_updated_at,
+                 sum(case when findings.log_id is not null then 1 else 0 end)
+               + sum(case when findings.track_id is null then 1 else 0 end) as track_count
+          from artists a
+          join track_artists ta on ta.artist_id = a.id
+          join tracks on tracks.track_id = ta.track_id
+          left join findings on findings.track_id = tracks.track_id
+          where a.slug > ?
+          group by a.id
+          having sum(case when findings.log_id is not null then 1 else 0 end) = 0
+             and sum(case when findings.log_id is not null then 1 else 0 end)
+               + sum(case when findings.track_id is null then 1 else 0 end) >= ?
+          order by a.slug asc
+          limit ?`,
+  });
+
+  const items = typedRows<{
+    image_key: string | null;
+    image_state: string | null;
+    image_updated_at: string | null;
+    image_url: string | null;
+    name: string;
+    slug: string;
+    track_count: number;
+  }>(result.rows).map((row) => ({
+    // The OWNED avatar master (RFC U3b) when resolved, else the raw Spotify image_url.
+    imageUrl: bestArtistAvatarUrl({
+      imageKey: row.image_key,
+      imageState: row.image_state,
+      imageUpdatedAt: row.image_updated_at,
+      imageUrl: row.image_url,
+    }),
+    name: row.name,
+    slug: row.slug,
+    trackCount: Number(row.track_count),
+  }));
+
+  return {
+    items,
+    nextCursor: items.length === limit ? (items[items.length - 1]?.slug ?? null) : null,
+  };
 }
 
 /** An artist chip on a graph page (the label's roster, the album's credits). */

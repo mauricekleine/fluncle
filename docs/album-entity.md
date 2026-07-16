@@ -39,7 +39,7 @@ The old **deploy-time reconcile** (`scripts/backfill-albums.ts` in `db:backfill`
 What this changes, and what it does **not**:
 
 - **The `albums` TABLE now grows with the catalogue** — one row per crawled release group, exactly as the crawler mints a `labels` row per discovered label (there are simply far more albums than labels). The old "mint only off a finding" bound is retired for albums.
-- **The `/albums` EDITORIAL index stays archive-bounded.** `listAlbumsWithFindingCounts` is findings-joined, so the hub still lists only records Fluncle has certified something on — it does not swell to catalogue size.
+- **The `/albums` EDITORIAL section stays archive-bounded.** `listAlbumsWithFindingCounts` is findings-joined, so the hub's TOP section still lists only records Fluncle has certified something on — it does not swell to catalogue size. Below it a SECOND section carries the indexable findings-free records (see [_The hub carries two sections_](#the-sitemap-carries-every-page-the-hub-carries-two-sections)), keyset-paginated so it never ranks a growing table in the isolate.
 - **A crawl-minted album is PUBLIC on its content, exactly as a discovered label is.** A findings-free album with a row renders its `/album/<slug>` page (a tracklist), and once it clears the thin-content floor it enters the sitemap too — reachability follows the same rule the label page has always had. There is no certified-finding gate on the album surface: a slug with no `albums` row 404s, a row renders, and the thin-content floor (findings PLUS the quieter catalogue rows) decides whether it indexes. The catalogue-group heading links to `/album/<slug>` whenever the record has an album entity. A **certified-finding** album is unchanged throughout.
 - **The quieter rows are unchanged in spirit.** An uncertified track on a record with a certified finding appears on that record's page; the crawled TRACK still earns no coordinate, no `/log` URL, and no name — the unnamed tier is intact.
 
@@ -92,16 +92,18 @@ The gate counts the entity's **true** catalogue total, never the rendered 100-ro
 
 The threshold matches `ARTIST_INDEX_MIN_FINDINGS`'s value; what differs is WHAT is counted, and that is deliberate: **an album Fluncle found one banger on is a thin page today and a genuine tracklist page once the rest of the record is there.** Today every album in the archive is a single, so no album detail page clears the floor — the gate is working, not broken. The hubs (`/albums`, `/labels`) are listed unconditionally, like `/artists`: a hub's content is the whole list, so the per-page gate says nothing about it.
 
-### The sitemap carries every page; the hub carries Fluncle's
+### The sitemap carries every page; the hub carries two sections
 
 The two lists answer different questions, and once a page can exist on crawled content alone they stop being the same list.
 
-- **The hubs** (`/labels`, `/albums`) are **Fluncle's own** — _"every label I've pulled a banger off"_ — so they drive from the findings join (`listLabelsWithFindingCounts`). A label he has certified nothing on is absent, and would be a lie if it were there.
+- **The hub's TOP section** (`/labels`, `/albums`, `/artists`) is **Fluncle's own** — _"every label I've pulled a banger off"_ — so it drives from the findings join (`listLabelsWithFindingCounts`). A label he has certified nothing on is absent from it, and would be a lie if it were there.
 - **The sitemap** is the machine's **complete** map of pages that exist and may be indexed, so it drives from a different read (`listLabelSitemapRows` / `listAlbumSitemapRows`) that left-joins findings and applies the thin-content floor **in SQL**. A crawler-discovered label past the floor is in it.
 
 The floor is applied in SQL rather than in the isolate on purpose: a wide crawl mints a `labels` row per label it walks past and most will sit on one or two rows, so filtering in TypeScript would drag every stub across the wire to throw it away (AGENTS.md — never rank or filter a growing table in the Worker).
 
 Both halves of the invariant hold, and the same constant computes both sides: **an indexable page is never orphaned from the sitemap, and the sitemap never points at a page that is not there.**
+
+**The hub's SECOND section closes the last gap** — the internal-link one. A crawler-discovered page could be reached by the sitemap and by search, but nothing on the site LINKED to it, so each hub gains a **"More &lt;entities&gt;"** section below the editorial list, driven by the sitemap read's findings-free complement (`listLabelsCatalogue` / `listAlbumsCatalogue` / `listArtistsCatalogue`: the same grouped scan and the same in-SQL floor, keyed to entities with **zero** certified findings, keyset-paginated by slug so subsequent pages never rank a growing table in the isolate). It is honest because it never poses as the editorial list: it is a **separate, quieter section** in the **unlit register** (dimmer tiles, no gold, only the focus ring loud), its heading names the **superset** (_"More labels"_ — never the tier, and the word "catalogue" never reaches public copy), and it carries no explanatory subtext at all: the heading over a dimmer grid is the whole tell, with no apology line under it. The editorial list stays exactly what it was; the hub simply stops orphaning the pages the crawl earned. An empty second section renders nothing at all.
 
 ## The known limit: two records, one name
 
