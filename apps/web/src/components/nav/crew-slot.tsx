@@ -16,11 +16,11 @@
 //     Gold Veil on hover), and it is a real Shadcn dropdown, so it is fully
 //     keyboard-operable for free (arrow keys, Enter, Escape, focus return).
 //
-// The menu is built to GROW. Two more doors are coming — ChatDnB and the
-// per-listener recommendation engine — and they live below as FUTURE slots:
-// present in the model, flagged, and filtered OUT of the render so no dead link
-// ever ships. The day their route lands, delete the one `future` flag and the door
-// lights up. Same discipline as the nav model's `future` slot (lib/nav-model.ts).
+// The menu is built to GROW. ChatDnB and Recommendations are both LIVE now (their
+// own doors at /chat and /recommendations). A future door lands the same way: add
+// its entry, and for one not yet routable keep it flagged `future` so it is filtered
+// OUT of the render until its route exists — the day it lands, delete the flag and
+// the door lights up. Same discipline as the nav model's `future` slot (lib/nav-model.ts).
 
 import {
   BinocularsIcon,
@@ -53,8 +53,8 @@ type AccountTab = "saves" | "settings";
 /**
  * One row in the account menu. Two shapes:
  * - LIVE: a door into `/account` (optionally onto one of its tabs), or — when `to`
- *   is set — onto its own top-level route (ChatDnB's `/chat`). `to` is a TYPED
- *   literal union, so every live door keeps its compile-time route check.
+ *   is set — onto its own top-level route (`/chat`, `/recommendations`). `to` is a
+ *   TYPED literal union, so every live door keeps its compile-time route check.
  * - FUTURE: a designed-but-unshipped door. Its `to` is a plain provisional string
  *   (the route does not exist in the type graph yet), it is flagged, and it is
  *   FILTERED OUT of the render — no dead link ever ships. Delete the flag (and set
@@ -67,7 +67,7 @@ type CrewMenuLink =
       id: string;
       label: string;
       search?: { tab: AccountTab };
-      to?: "/chat";
+      to?: "/chat" | "/recommendations";
     }
   | { future: true; icon: ReactNode; id: string; label: string; to: string };
 
@@ -97,17 +97,18 @@ const CREW_MENU_LINKS: CrewMenuLink[] = [
     label: "ChatDnB",
     to: "/chat",
   },
-  // ── EXTENSION SLOT ──────────────────────────────────────────────────────────
-  // One more door is planned. It is FILTERED OUT while `future` is set (so no
-  // dead link ships); remove the flag the day the route exists to light it up. The
-  // `to` value is a provisional placeholder — set the real path when it lands.
+  // Recommendations — LIVE (the per-listener telescope). Same wayfinding: the menu
+  // shows the door to every signed-in user; the /recommendations page itself carries
+  // the verify gate.
   {
-    future: true,
     icon: <BinocularsIcon aria-hidden="true" />,
     id: "recommendations",
     label: "Recommendations",
     to: "/recommendations",
   },
+  // ── EXTENSION SLOT ──────────────────────────────────────────────────────────
+  // A future door lands here flagged `future` (filtered OUT of the render so no dead
+  // link ships) until its route exists; delete the flag the day it lands.
 ];
 
 /** The rows that actually render: the live doors, never a future one. */
@@ -154,20 +155,22 @@ function AccountMenu({ image, name }: { image: null | string; name: string }): R
     globalThis.location.reload();
   }
 
-  // The active-door marker (the account redesign brief §Wayfinding): on `/account`,
-  // the menu link whose tab matches the current view is marked (`aria-current` for
-  // assistive tech, a quiet cream tint for sight). A bare `/account` is the Galaxy;
-  // `/chat` marks the ChatDnB door the same way.
+  // The active-door marker (the account redesign brief §Wayfinding): the menu link
+  // matching the current view is marked (`aria-current` for assistive tech, a quiet
+  // cream tint for sight). ChatDnB and Recommendations are their own routes; on
+  // `/account` the tab decides, and a bare `/account` is the Galaxy.
   const location = useRouterState({ select: (state) => state.location });
   const tab = (location.search as { tab?: string }).tab;
-  const activeDoor: null | "chatdnb" | "galaxy" | "saves" | "settings" =
+  const activeDoor: null | "chatdnb" | "galaxy" | "recommendations" | "saves" | "settings" =
     location.pathname === "/chat"
       ? "chatdnb"
-      : location.pathname === "/account"
-        ? tab === "saves" || tab === "settings"
-          ? tab
-          : "galaxy"
-        : null;
+      : location.pathname === "/recommendations"
+        ? "recommendations"
+        : location.pathname === "/account"
+          ? tab === "saves" || tab === "settings"
+            ? tab
+            : "galaxy"
+          : null;
 
   return (
     <DropdownMenu>
