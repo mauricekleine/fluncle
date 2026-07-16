@@ -38,6 +38,7 @@ import { Button } from "@fluncle/ui/components/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
@@ -154,7 +155,11 @@ function AccountMenu({ name }: { name: string }): ReactNode {
         <CaretDownIcon aria-hidden="true" className="crew-trigger-caret" weight="bold" />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="min-w-44">
-        <DropdownMenuLabel>Signed in as {name}</DropdownMenuLabel>
+        {/* Base UI requires a GroupLabel to live inside a Group — a bare
+            DropdownMenuLabel throws MenuGroupContext at runtime (browser-verified). */}
+        <DropdownMenuGroup>
+          <DropdownMenuLabel>Signed in as {name}</DropdownMenuLabel>
+        </DropdownMenuGroup>
         <DropdownMenuSeparator />
         {liveMenuLinks.map((link) => (
           <DropdownMenuItem
