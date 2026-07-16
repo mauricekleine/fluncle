@@ -1115,6 +1115,14 @@ export function accountDeletionStatements({
       sql: `delete from user_saved_findings where user_id = ?`,
     },
     {
+      // The user's Frontier playlist row (E2). This drops OUR pointer to the Spotify
+      // playlist; the playlist itself lives on Fluncle's Spotify account and is left as
+      // an orphan artifact (no per-user OAuth to revoke), harmless and unreachable once
+      // the row is gone.
+      args: [userId],
+      sql: `delete from user_frontier_playlists where user_id = ?`,
+    },
+    {
       args: [userId],
       sql: `delete from user_saved_sets where user_id = ?`,
     },

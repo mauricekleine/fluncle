@@ -43,6 +43,7 @@ import { artistsHandlers } from "./orpc/artists";
 import { galaxiesHandlers } from "./orpc/galaxies";
 import { graphHandlers } from "./orpc/graph";
 import { adminEditionsHandlers } from "./orpc/admin-editions";
+import { adminFrontierHandlers } from "./orpc/admin-frontier";
 import { adminHealthHandlers } from "./orpc/admin-health";
 import { adminLabelsHandlers } from "./orpc/admin-labels";
 import { adminLogbookHandlers } from "./orpc/admin-logbook";
@@ -62,6 +63,7 @@ import { devicesHandlers } from "./orpc/devices";
 import { editionsHandlers } from "./orpc/editions";
 import { healthHandlers } from "./orpc/health";
 import { meHandlers } from "./orpc/me";
+import { meFrontierHandlers } from "./orpc/me-frontier";
 import { meGalaxyHandlers } from "./orpc/me-galaxy";
 import { mePreferencesHandlers } from "./orpc/me-preferences";
 import { meRecsHandlers } from "./orpc/me-recs";
@@ -105,6 +107,7 @@ export const router = os.router({
   ...galaxiesHandlers(os),
   ...graphHandlers(os),
   ...adminEditionsHandlers(os),
+  ...adminFrontierHandlers(os),
   ...adminHealthHandlers(os),
   ...adminLabelsHandlers(os),
   ...adminLogbookHandlers(os),
@@ -124,6 +127,7 @@ export const router = os.router({
   ...editionsHandlers(os),
   ...healthHandlers(os),
   ...meHandlers(os),
+  ...meFrontierHandlers(os),
   ...meGalaxyHandlers(os),
   ...mePreferencesHandlers(os),
   ...meRecsHandlers(os),

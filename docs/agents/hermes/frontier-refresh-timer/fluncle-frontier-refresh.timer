@@ -1,0 +1,15 @@
+[Unit]
+Description=fluncle-frontier-refresh timer — re-mirror every crew member's Frontier playlist Fri 07:00 Amsterdam on the rave-02 host (not the Hermes gateway)
+
+[Timer]
+# The weekly Friday 07:00 Amsterdam refresh — the Discover-Weekly-style beat the Frontier
+# promises ("Refreshed weekly"). A systemd timer expresses the timezone DIRECTLY in
+# OnCalendar, so the slot is correct regardless of the host or container TZ. Persistent
+# catches up a Friday the box slept through on the next boot — harmless, because the refresh
+# is idempotent (it full-replaces each playlist from the CURRENT recommendations and skips
+# the unchanged ones), so a late run is just a normal run.
+OnCalendar=Fri 07:00 Europe/Amsterdam
+Persistent=true
+
+[Install]
+WantedBy=timers.target

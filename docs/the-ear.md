@@ -264,6 +264,24 @@ The operator's telescope above answers "what sits near what **he** loves". The p
 
 The seed set joins the account's privacy invariant like every per-user table: exported with the account data, deleted in the account-deletion batch (`account-data.ts`).
 
+## Fluncle's Frontier — the per-user playlist, shipped DARK
+
+The engine above computes a listener's recommendations on demand. **Fluncle's Frontier** (E2, `frontier-playlist.ts`) turns that computation into a **durable, shareable artifact**: every verified user can mint ONE **public** playlist named "Fluncle's Frontier" on **Fluncle's OWN Spotify account** — no per-user OAuth, so the dev-mode 5-user allow-list never binds — holding their current recommendations (the E1 blend: the findings slots first, then the anchored catalogue recs, de-duped), refreshed weekly. It is the operator's Telescope mirror generalized to the crew: a full-replace reflection of a ranking, never hand-curated. A playlist in someone's Spotify is reach that markets the archive every week.
+
+**Three brakes, all default-safe** — the feature ships DARK:
+
+- **The kill switch** (`frontier.minting`, the `settings` KV) is **DEFAULT-DENY**, the exact inversion the capture budget + publish-advance ship: only the literal string `"true"` opens minting. An unset key, a fresh deploy, a preview branch, a lost row — every one reads as CLOSED, and both the mint op and the weekly sweep become no-ops (`switch_off`). The machine can create a playlist on the operator's account only because he deliberately wrote `"true"`.
+- **A rolling daily mint cap** (`FRONTIER_DAILY_MINT_CAP`, ~20) bounds NEW playlist creations inside a rolling 24h window (a refresh of an existing playlist is never capped) — the blast radius of a bug.
+- **A per-row mirror guard**: the desired URI list's sha256 is stored on the row (`last_uri_hash`); an unchanged list skips the Spotify PUT entirely, so a quiet week is one read, not a needless write (the Telescope's discipline). The item replace is `PUT /playlists/{id}/items` — the proven endpoint, never the legacy `/tracks` alias. Every Spotify call is best-effort: a fault returns `{ ok: false, reason }`, never a throw.
+
+**The description is personalized** and stays in the crew-facing register (VOICE.md): _"Dug for @<username> from the far side of the archive. Refreshed weekly. fluncle.com"_ — sentence case, no em dashes, ≤300 chars.
+
+**The ops**: `mint_private_frontier_playlist` / `get_private_frontier_playlist` on the `/me` private-session tier (the mint is CSRF-guarded, verified-email gated, rate-limited 4/h; the read returns the playlist URL + last-sync + `mintingOpen` so the page messages honestly), and `refresh_frontier_playlists` on the **admin (agent-allowed)** tier — the weekly `fluncle-frontier-refresh` box cron (Fri 07:00 Amsterdam) re-mirrors every minted playlist with the box's agent token (the `advance_publish_queue` / `rank_catalogue` precedent: the Worker owns the Spotify grant, the box only triggers). It creates no new public authority — every playlist it touches already exists, minted by its own owner.
+
+**The cover is a NODE-SIDE leg, and honestly so.** A custom per-user cover is a Remotion render (`@fluncle/media`'s `FrontierCover` — the Nostalgic Cosmos base + the crew № stamped in a corner). Remotion needs a real headless Chromium and does **not** run in a Cloudflare Worker, so the render cannot happen where the playlist is minted. The split: the Worker mint leaves `cover_uploaded_at` NULL; the Node-side script `apps/web/scripts/render-frontier-covers.ts` (operator-run) reads the "`cover_uploaded_at IS NULL`" worklist, renders each cover, and calls `putFrontierCover` (a plain Spotify `PUT /playlists/{id}/images`) to upload it. That upload leg is **INERT** until the operator re-auths the grant with the `ugc-image-upload` scope: every PUT 403s the missing scope, degrades to `{ uploaded: false, reason: "missing_scope" }`, and stamps nothing — so the row stays queued and the retry costs nothing.
+
+The Frontier row (`user_frontier_playlists`) joins the account's privacy invariant like every per-user table — deleted in the account-deletion batch (`account-data.ts`).
+
 ## The operator's actions — the page is a workstation, not a readout
 
 A ranked list he can only read is a report; the operator ruled it must be a place he can _act_. Four things live on the row, and the Unlit Rule does not reach them — this is his own tool, not a crew-facing surface (the persona law, [docs/admin-shell.md](./admin-shell.md)), so where to listen and what to do are the whole point.
@@ -320,6 +338,15 @@ The per-user telescopes (§ above):
 - `apps/web/src/lib/server/recommendations.ts` — the seeds + the engine (the blend, the exclusions, the honest skip).
 - `apps/web/src/lib/server/recommendations.integration.test.ts` — **the engine's proof** (real vectors, real SQL: the cap, the scoping, every exclusion, the slots' voice, the decay, the max-sim/centroid case, the 403 gate).
 - `packages/contracts/src/orpc/me-recs.ts` + `apps/web/src/lib/server/orpc/me-recs.ts` — the four `/me` ops.
+
+Fluncle's Frontier (§ above — the per-user playlist, shipped DARK):
+
+- `apps/web/src/lib/server/frontier-playlist.ts` — the kill switch, the daily mint cap, mint-or-refresh (the mirror guard), the weekly `refreshAll`, and the cover upload leg (`putFrontierCover` + the worklist).
+- `apps/web/src/lib/server/frontier-playlist.test.ts` — **the behaviour proof** (switch-off makes no Spotify call, create-once idempotence, the URI order, the description, the mirror guard, the daily cap, the sweep's iteration, the scope-failure degradation).
+- `packages/contracts/src/orpc/me-frontier.ts` + `apps/web/src/lib/server/orpc/me-frontier.ts` — the two `/me` ops (mint + read).
+- `packages/contracts/src/orpc/admin-frontier.ts` + `apps/web/src/lib/server/orpc/admin-frontier.ts` — the admin `refresh_frontier_playlists` op; `apps/cli/src/commands/admin-frontier.ts` is the thin client.
+- `packages/media/src/remotion/frontier-cover.tsx` + `packages/media/src/render/render-frontier-cover.ts` — the Node-side cover render; `apps/web/scripts/render-frontier-covers.ts` is the operator-run render + upload driver.
+- `docs/agents/hermes/scripts/frontier-refresh-sweep.{ts,sh}` (+ `.test.ts`) + `docs/agents/hermes/frontier-refresh-timer/` — the weekly `fluncle-frontier-refresh` cron.
 
 The capture budget (the brake):
 
