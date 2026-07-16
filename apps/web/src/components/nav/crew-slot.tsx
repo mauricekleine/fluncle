@@ -33,7 +33,7 @@ import {
   UserCircleIcon,
   UsersThreeIcon,
 } from "@phosphor-icons/react";
-import { Link } from "@tanstack/react-router";
+import { Link, useRouterState } from "@tanstack/react-router";
 import { type ReactNode } from "react";
 import { Button } from "@fluncle/ui/components/button";
 import {
@@ -151,6 +151,18 @@ function AccountMenu({ image, name }: { image: null | string; name: string }): R
     globalThis.location.reload();
   }
 
+  // The active-door marker (the account redesign brief §Wayfinding): on `/account`,
+  // the menu link whose tab matches the current view is marked (`aria-current` for
+  // assistive tech, a quiet cream tint for sight). A bare `/account` is the Galaxy.
+  const location = useRouterState({ select: (state) => state.location });
+  const tab = (location.search as { tab?: string }).tab;
+  const activeDoor: null | "galaxy" | "saves" | "settings" =
+    location.pathname === "/account"
+      ? tab === "saves" || tab === "settings"
+        ? tab
+        : "galaxy"
+      : null;
+
   return (
     <DropdownMenu>
       <DropdownMenuTrigger aria-label="Your account" className="crew-trigger">
@@ -171,17 +183,30 @@ function AccountMenu({ image, name }: { image: null | string; name: string }): R
           <DropdownMenuLabel>Signed in as {name}</DropdownMenuLabel>
         </DropdownMenuGroup>
         <DropdownMenuSeparator />
-        {liveMenuLinks.map((link) => (
-          <DropdownMenuItem
-            key={link.id}
-            render={
-              link.search ? <Link search={link.search} to="/account" /> : <Link to="/account" />
-            }
-          >
-            {link.icon}
-            {link.label}
-          </DropdownMenuItem>
-        ))}
+        {liveMenuLinks.map((link) => {
+          const active = link.id === activeDoor;
+
+          return (
+            <DropdownMenuItem
+              className={active ? "crew-menu-item-active" : undefined}
+              key={link.id}
+              render={
+                link.search ? (
+                  <Link
+                    aria-current={active ? "page" : undefined}
+                    search={link.search}
+                    to="/account"
+                  />
+                ) : (
+                  <Link aria-current={active ? "page" : undefined} to="/account" />
+                )
+              }
+            >
+              {link.icon}
+              {link.label}
+            </DropdownMenuItem>
+          );
+        })}
         <DropdownMenuSeparator />
         <DropdownMenuItem onClick={() => void signOut()}>
           <SignOutIcon aria-hidden="true" />
