@@ -30,7 +30,7 @@ import { serializeJsonLd } from "@/lib/json-ld";
  */
 const SEGMENTS: Record<string, { index?: string; label: string }> = {
   about: { label: "About" },
-  account: { label: "Join the crew" },
+  account: { label: "Your account" },
   album: { index: "/albums", label: "Albums" },
   albums: { label: "Albums" },
   artist: { index: "/artists", label: "Artists" },

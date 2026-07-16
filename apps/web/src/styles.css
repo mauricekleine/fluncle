@@ -4329,6 +4329,42 @@ body::before {
   width: 1rem;
 }
 
+.account-identity-lead {
+  align-items: center;
+  display: flex;
+  gap: 0.75rem;
+}
+
+.account-avatar {
+  border: 1px solid color-mix(in oklch, var(--eclipse-gold) 25%, transparent);
+  border-radius: 9999px;
+  flex: none;
+  height: 2.5rem;
+  object-fit: cover;
+  width: 2.5rem;
+}
+
+.account-details-summary {
+  color: var(--muted-foreground);
+  cursor: pointer;
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.account-details[open] .account-details-summary {
+  color: var(--foreground);
+  margin-bottom: 0.5rem;
+}
+
+.crew-trigger-avatar {
+  border: 1px solid color-mix(in oklch, var(--eclipse-gold) 25%, transparent);
+  border-radius: 9999px;
+  flex: none;
+  height: 1.15rem;
+  object-fit: cover;
+  width: 1.15rem;
+}
+
 /* The caret is a hint that a menu hangs here, not a control — it never gets its own
    contrast budget, and it hides on a narrow bar with the name it points at. */
 .crew-trigger-caret {

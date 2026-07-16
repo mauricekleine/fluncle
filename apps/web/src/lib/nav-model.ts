@@ -274,7 +274,7 @@ export const navNerds: NavNerd[] = [
 // so the model still owns every route the nav can reach, for the completeness test.
 export const navPrimaryCta = {
   galaxy: { href: galaxyUrl, id: "galaxy", label: "Enter Fluncle's Galaxy" },
-  joinCrew: { id: "join-crew", label: "Join the crew", to: "/account" },
+  joinCrew: { id: "join-crew", label: "Your account", to: "/account" },
 } as const;
 
 /**

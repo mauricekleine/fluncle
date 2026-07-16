@@ -19,6 +19,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@fluncle/ui/components/alert-dialog";
+import { Badge } from "@fluncle/ui/components/badge";
 import { Button } from "@fluncle/ui/components/button";
 import {
   Dialog,
@@ -53,6 +54,7 @@ type Me = {
     email: string;
     emailVerified: boolean;
     id: string;
+    image?: string;
     name: string;
     username?: string;
   };
@@ -89,6 +91,7 @@ type Collection = {
 
 type SavedFinding = {
   artists: string[];
+  imageUrl?: string;
   logId: string;
   note?: string;
   savedAt: string;
@@ -197,9 +200,22 @@ function AccountPage() {
     initialAccountState,
   );
   const [message, setMessage] = useState("");
+  const [loadFailed, setLoadFailed] = useState(false);
   const signedIn = !!me?.user;
 
   async function refresh() {
+    setLoadFailed(false);
+
+    try {
+      await refreshInner();
+    } catch {
+      // A network blip must never strand the page on the loading line forever —
+      // surface it and offer the retry.
+      setLoadFailed(true);
+    }
+  }
+
+  async function refreshInner() {
     const nextMe = (await fetch("/api/me").then((res) => res.json())) as Me;
 
     if (!nextMe.user) {
@@ -256,16 +272,19 @@ function AccountPage() {
             <h1 className="home-nameplate">Your place in the Galaxy</h1>
             <p className="home-tagline">Private progress, saved findings, and submissions.</p>
           </div>
-          <Link
-            className="text-sm font-semibold text-muted-foreground hover:text-accent-foreground"
-            to="/"
-          >
-            Back to findings
-          </Link>
         </header>
 
         {me === undefined ? (
-          <p className="account-muted">Checking the manifest…</p>
+          loadFailed ? (
+            <div className="account-section">
+              <p className="account-muted">Could not load your account. Check your connection.</p>
+              <Button onClick={() => void refresh()} type="button" variant="outline">
+                Try again
+              </Button>
+            </div>
+          ) : (
+            <p className="account-muted">Checking the manifest…</p>
+          )
         ) : signedIn && me.user ? (
           <>
             <ClaimUsernameDialog csrfToken={csrfToken} refresh={refresh} user={me.user} />
@@ -308,7 +327,8 @@ function AuthForms({
   setMessage: (message: string) => void;
 }) {
   const [view, setView] = useState<"auth" | "reset">("auth");
-  const [mode, setMode] = useState<"signin" | "signup">("signin");
+  // "Join the crew" is the door most arrivals came through — default to joining.
+  const [mode, setMode] = useState<"signin" | "signup">("signup");
   const [email, setEmail] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -331,10 +351,11 @@ function AuthForms({
               password,
               username,
             })
-          : await authClient.signIn.username({
-              password,
-              username,
-            });
+          : // The recall-friendly identifier: a returning user remembers their
+            // email more reliably than a handle picked in passing — accept either.
+            username.includes("@")
+            ? await authClient.signIn.email({ email: username, password })
+            : await authClient.signIn.username({ password, username });
 
       if (result.error) {
         setMessage(result.error.message ?? "Could not sign in.");
@@ -342,13 +363,21 @@ function AuthForms({
       }
 
       await refresh();
+      // Signing in needs no toast — the account appearing is the confirmation. A
+      // sign-up keeps one useful line: where the verification link went.
       setMessage(
         mode === "signup"
-          ? "Aboard. I sent a link to verify your email. You're already signed in, so there's no rush."
-          : "Aboard. Your private Galaxy state is ready.",
+          ? "I sent a link to verify your email. You're already signed in, so there's no rush."
+          : "",
       );
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Could not sign in.");
+      setMessage(
+        error instanceof Error
+          ? error.message
+          : mode === "signup"
+            ? "Could not create the account."
+            : "Could not sign in.",
+      );
     } finally {
       setBusy(false);
     }
@@ -418,13 +447,18 @@ function AuthForms({
           />
         </Field>
       ) : null}
-      <Field label="Username">
+      <Field label={mode === "signin" ? "Email or username" : "Username"}>
         <Input
           autoComplete="username"
           value={username}
           onChange={(event) => setUsername(event.target.value)}
         />
       </Field>
+      {mode === "signup" ? (
+        <p className="account-muted text-xs">
+          3–24 characters: lowercase letters, numbers, underscores. Your handle across Fluncle.
+        </p>
+      ) : null}
       <Field label="Password">
         <Input
           autoComplete={mode === "signin" ? "current-password" : "new-password"}
@@ -558,11 +592,16 @@ function SignedInAccount({
     <div className="account-stack">
       <section className="account-section">
         <div className="account-row account-identity">
-          <div>
-            <p className="account-kicker">Signed in as {name}</p>
-            <p className="account-muted">
-              Joined {joined}. Email stays private and never appears in public Fluncle surfaces.
-            </p>
+          <div className="account-identity-lead">
+            {user.image ? (
+              <img alt="" className="account-avatar" height={40} src={user.image} width={40} />
+            ) : null}
+            <div>
+              <p className="account-kicker">Signed in as {name}</p>
+              <p className="account-muted">
+                Joined {joined}. Email stays private and never appears in public Fluncle surfaces.
+              </p>
+            </div>
           </div>
         </div>
         {message ? (
@@ -578,15 +617,38 @@ function SignedInAccount({
       {(tab ?? "galaxy") === "galaxy" ? (
         <div className="account-tab-panel">
           <section className="account-section">
-            <div className="account-grid">
-              <Metric label="Lifetime logs" value={progress?.collectedLogIds.length ?? 0} />
-              <Metric label="Runs home" value={progress?.wins ?? 0} />
-              <Metric label="Tows" value={progress?.deaths ?? 0} />
-            </div>
-            <p className="account-muted">
-              Your Galaxy game record: stars logged, runs flown home, and tows back to Earth after a
-              dry tank.
-            </p>
+            {(progress?.collectedLogIds.length ?? 0) > 0 ||
+            (progress?.wins ?? 0) > 0 ||
+            (progress?.deaths ?? 0) > 0 ? (
+              <>
+                <div className="account-row account-identity">
+                  <div className="account-grid">
+                    <Metric label="Lifetime logs" value={progress?.collectedLogIds.length ?? 0} />
+                    <Metric label="Runs home" value={progress?.wins ?? 0} />
+                    <Metric label="Tows" value={progress?.deaths ?? 0} />
+                  </div>
+                  <Button nativeButton={false} render={<Link to="/galaxy" />}>
+                    Fly the Galaxy
+                  </Button>
+                </div>
+                <p className="account-muted">
+                  Your Galaxy game record: stars logged, runs flown home, and tows back to Earth
+                  after a dry tank.
+                </p>
+              </>
+            ) : (
+              // A 0/0/0 scoreboard is not a welcome. Before the first flight, the
+              // page leads with the door into the game and lets the collection's
+              // teaching empty-state carry the rest.
+              <div className="account-row account-identity">
+                <p className="account-muted">
+                  Every star you reach in the Galaxy gets logged here, along with your runs home.
+                </p>
+                <Button nativeButton={false} render={<Link to="/galaxy" />}>
+                  Fly the Galaxy
+                </Button>
+              </div>
+            )}
           </section>
           <CollectionSection collection={collection} />
         </div>
@@ -594,15 +656,21 @@ function SignedInAccount({
 
       {tab === "saves" ? (
         <div className="account-tab-panel">
+          <p className="account-kicker">Saves</p>
           <section className="account-section">
             <h2>Saved findings</h2>
-            <ListEmpty items={saved} empty="No saved findings yet.">
+            <ListEmpty
+              items={saved}
+              empty="Nothing saved yet. Tap the bookmark on any finding in the archive and it lands here."
+            >
               {saved.map((finding) => (
-                <li key={finding.trackId}>
-                  <Link to="/log/$logId" params={{ logId: finding.logId }}>
-                    {finding.artists.join(", ")} — {finding.title}
-                  </Link>
-                </li>
+                <SavedFindingRow
+                  csrfToken={csrfToken}
+                  finding={finding}
+                  key={finding.trackId}
+                  refresh={refresh}
+                  setMessage={setSetsMessage}
+                />
               ))}
             </ListEmpty>
           </section>
@@ -633,7 +701,9 @@ function SignedInAccount({
               {submissions.map((submission) => (
                 <li key={submission.id}>
                   {submission.artists.join(", ")} — {submission.title}{" "}
-                  <span>{submission.status}</span>
+                  <Badge variant={submission.status === "approved" ? "default" : "outline"}>
+                    {submission.status}
+                  </Badge>
                 </li>
               ))}
             </ListEmpty>
@@ -643,6 +713,7 @@ function SignedInAccount({
 
       {tab === "settings" ? (
         <div className="account-tab-panel">
+          <p className="account-kicker">Settings</p>
           <SettingsPanel
             csrfToken={csrfToken}
             refresh={refresh}
@@ -768,6 +839,79 @@ function CollectionGroup({
         <p className="account-muted">No stars logged here yet.</p>
       )}
     </div>
+  );
+}
+
+/**
+ * A saved finding, rendered the way every finding renders: cover first (the
+ * recognition cue the user saved it by), coordinate, saved date — plus the one
+ * management action this list owes the user: Remove. Removing a save destroys
+ * nothing in the archive, so it is a plain action, not a confirm dialog.
+ */
+function SavedFindingRow({
+  csrfToken,
+  finding,
+  refresh,
+  setMessage,
+}: {
+  csrfToken: string;
+  finding: SavedFinding;
+  refresh: () => Promise<void>;
+  setMessage: (message: string) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+
+  async function remove() {
+    setBusy(true);
+
+    try {
+      const response = await fetch(`/api/me/saved-findings/${finding.trackId}`, {
+        headers: { "x-fluncle-csrf": csrfToken },
+        method: "DELETE",
+      });
+
+      setMessage(response.ok ? "" : "Could not remove that save. Try again in a moment.");
+      await refresh();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <li className="account-collection-row">
+      {finding.imageUrl ? (
+        <img
+          alt=""
+          className="account-collection-thumb"
+          height={40}
+          loading="lazy"
+          src={albumCoverAtSize(finding.imageUrl, "small")}
+          width={40}
+        />
+      ) : (
+        <span aria-hidden className="account-collection-thumb" />
+      )}
+      <span className="account-collection-body">
+        <Link to="/log/$logId" params={{ logId: finding.logId }}>
+          {finding.artists.join(", ")} — {finding.title}
+        </Link>
+        <span className="account-collection-meta">
+          <span className="account-collection-logid">{finding.logId}</span> · Saved{" "}
+          {formatDateLong(finding.savedAt)}
+          {finding.note ? <> · {finding.note}</> : null}
+        </span>
+      </span>
+      <Button
+        aria-label={`Remove ${finding.title} from saves`}
+        disabled={busy}
+        onClick={() => void remove()}
+        size="sm"
+        type="button"
+        variant="ghost"
+      >
+        Remove
+      </Button>
+    </li>
   );
 }
 
@@ -991,8 +1135,19 @@ function SettingsPanel({
         method: "POST",
       });
       const data = (await response.json()) as { export?: unknown };
+      const text = JSON.stringify(data.export ?? data, null, 2);
 
-      setExportText(JSON.stringify(data.export ?? data, null, 2));
+      setExportText(text);
+      // "Export" means a FILE lands — the textarea stays as the preview, but the
+      // download is the deliverable.
+      const blob = new Blob([text], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+
+      anchor.download = "fluncle-account.json";
+      anchor.href = url;
+      anchor.click();
+      URL.revokeObjectURL(url);
     } catch {
       setDangerMessage("Could not export right now. Try again in a moment.");
     } finally {
@@ -1023,21 +1178,6 @@ function SettingsPanel({
 
   return (
     <>
-      <section className="account-section">
-        <h2>Preferences</h2>
-        <p className="account-muted">
-          Pick how keys read: Scales or Camelot. The choice saves to your account and follows you
-          onto every device you sign in on.
-        </p>
-        <div className="account-field">
-          <span className="text-sm font-medium">Key notation</span>
-          <KeyNotationToggle />
-          <p aria-live="polite" className="account-muted">
-            Keys read as {formatKey("G# minor", notation)}.
-          </p>
-        </div>
-      </section>
-
       <form className="account-section" onSubmit={(event) => void patchProfile(event)}>
         <h2>Profile</h2>
         {/* The two-name model: Username is the handle, Name is what shows in the top
@@ -1045,11 +1185,15 @@ function SettingsPanel({
         <Field label="Username">
           <Input value={username} onChange={(event) => setUsername(event.target.value)} />
         </Field>
+        <p className="account-muted text-xs">
+          Your handle. 3–24 characters: lowercase letters, numbers, underscores.
+        </p>
         <Field label="Name">
           <Input value={name} onChange={(event) => setName(event.target.value)} />
         </Field>
+        <p className="account-muted text-xs">Shown in the top bar and on your account.</p>
         <div className="account-row">
-          <Button disabled={settingsBusy} type="submit" variant="outline">
+          <Button disabled={settingsBusy} type="submit">
             {settingsBusy ? "Updating…" : "Update profile"}
           </Button>
           {settingsMessage ? (
@@ -1090,12 +1234,31 @@ function SettingsPanel({
       </section>
 
       <section className="account-section">
-        <h2>Link the CLI</h2>
+        <h2>Preferences</h2>
         <p className="account-muted">
-          Got the <code>fluncle</code> CLI? Run <code>fluncle login</code> in your terminal to link
-          this device and sync your Galaxy from the command line. I&rsquo;ll send you back here to
-          approve it.
+          Pick how keys read: Scales or Camelot. The choice saves to your account and follows you
+          onto every device you sign in on.
         </p>
+        <div className="account-field">
+          <span className="text-sm font-medium">Key notation</span>
+          <KeyNotationToggle />
+          <p aria-live="polite" className="account-muted">
+            Keys read as {formatKey("G# minor", notation)}.
+          </p>
+        </div>
+      </section>
+
+      <section className="account-section">
+        {/* Developer content recedes behind a disclosure (the Quiet Surface Rule) —
+            present for the crew that wants it, invisible to everyone else. */}
+        <details className="account-details">
+          <summary className="account-details-summary">Link the CLI</summary>
+          <p className="account-muted">
+            Got the <code>fluncle</code> CLI? Run <code>fluncle login</code> in your terminal to
+            link this device and sync your Galaxy from the command line. I&rsquo;ll send you back
+            here to approve it.
+          </p>
+        </details>
       </section>
 
       <section className="account-section account-danger">

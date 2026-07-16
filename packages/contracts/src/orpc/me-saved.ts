@@ -13,6 +13,8 @@ import * as z from "zod";
 export const SavedFindingSchema = z
   .object({
     artists: z.array(z.string()),
+    // The cover URL (best-source resolve) — the recognition cue the row leads with.
+    imageUrl: z.string().optional(),
     logId: z.string(),
     note: z.string().optional(),
     savedAt: z.string(),

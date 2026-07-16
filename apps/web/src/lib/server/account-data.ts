@@ -48,6 +48,10 @@ type LogRow = {
 };
 
 type SavedRow = {
+  album_image_key: string | null;
+  album_image_state: string | null;
+  album_image_updated_at: string | null;
+  album_image_url: string | null;
   artists_json: string;
   log_id: string;
   note: string | null;
@@ -132,6 +136,7 @@ export type GalaxyProgressResult = {
 /** One saved finding as the list returns it (`listSavedFindings`). */
 export type SavedFindingItem = {
   artists: string[];
+  imageUrl?: string;
   logId: string;
   note?: string;
   savedAt: string;
@@ -491,7 +496,10 @@ export async function listSavedFindings(
     await getDb()
   ).execute({
     args: [user.id],
-    sql: `select s.track_id, s.log_id, s.saved_at, s.note, t.title, t.artists_json
+    sql: `select s.track_id, s.log_id, s.saved_at, s.note, t.title, t.artists_json, t.album_image_url,
+        (select image_key from albums where albums.id = t.album_id) as album_image_key,
+        (select image_state from albums where albums.id = t.album_id) as album_image_state,
+        (select image_updated_at from albums where albums.id = t.album_id) as album_image_updated_at
       from user_saved_findings s
       join (findings join tracks on tracks.track_id = findings.track_id) t on t.track_id = s.track_id
       where s.user_id = ?
@@ -502,6 +510,12 @@ export async function listSavedFindings(
     ok: true,
     savedFindings: typedRows<SavedRow>(result.rows).map((row) => ({
       artists: parseArtistsJson(row.artists_json),
+      imageUrl: bestAlbumCoverUrl({
+        imageKey: row.album_image_key,
+        imageState: row.album_image_state,
+        imageUpdatedAt: row.album_image_updated_at,
+        spotifyUrl: row.album_image_url,
+      }),
       logId: row.log_id,
       note: row.note ?? undefined,
       savedAt: row.saved_at,

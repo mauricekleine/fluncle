@@ -37,6 +37,9 @@ export type PublicUser = {
   // `emailVerification` below, which deliberately omits `requireEmailVerification`).
   emailVerified: boolean;
   id: string;
+  // The avatar URL when the account has one (Google fills it at sign-up; an
+  // upload path is a future slice). Absent = render the glyph fallback.
+  image?: string;
   // The freeform display name (the "Name" in Settings — what Google fills at
   // sign-up and what the header shows). Distinct from `username` (the handle) and
   // `displayUsername` (the handle's as-typed casing).
@@ -50,6 +53,7 @@ type PublicUserRow = {
   email: string | null;
   email_verified: number;
   id: string;
+  image: string | null;
   name: string | null;
   status: "active" | "deleted" | "suspended";
   username: string | null;
@@ -332,7 +336,7 @@ export async function getPublicSession(request: Request): Promise<PublicUser | u
     await getDb()
   ).execute({
     args: [sessionUser.id],
-    sql: `select id, username, display_username, name, created_at, status, email, email_verified from "user" where id = ? limit 1`,
+    sql: `select id, username, display_username, name, image, created_at, status, email, email_verified from "user" where id = ? limit 1`,
   });
   const user = typedRow<PublicUserRow>(result.rows);
 
@@ -346,6 +350,7 @@ export async function getPublicSession(request: Request): Promise<PublicUser | u
     email: user.email ?? "",
     emailVerified: user.email_verified === 1,
     id: user.id,
+    image: user.image ?? undefined,
     name: user.name ?? "",
     username: user.username ?? undefined,
   };

@@ -344,6 +344,8 @@ export const PublicUserSchema = z
     // session — an unverified user still signs in. A Google sign-in arrives verified.
     emailVerified: z.boolean(),
     id: z.string(),
+    // The avatar URL when one exists (Google fills it; upload is a future slice).
+    image: z.string().optional(),
     // The freeform display name (Settings "Name"; what Google fills and the header
     // shows). Distinct from username (the handle) and displayUsername (its casing).
     name: z.string(),

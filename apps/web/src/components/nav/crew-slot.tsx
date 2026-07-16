@@ -28,6 +28,7 @@ import {
   CaretDownIcon,
   ChatCircleDotsIcon,
   GearSixIcon,
+  PlanetIcon,
   SignOutIcon,
   UserCircleIcon,
   UsersThreeIcon,
@@ -70,7 +71,10 @@ type CrewMenuLink =
   | { future: true; icon: ReactNode; id: string; label: string; to: string };
 
 const CREW_MENU_LINKS: CrewMenuLink[] = [
-  { icon: <UserCircleIcon aria-hidden="true" />, id: "account", label: "My account" },
+  // "Galaxy", not "My account" — the door's name matches the room (the default
+  // /account view is the game record), so the menu reads as honest siblings:
+  // Galaxy / Saves / Settings. Revisit the default door once the rec engine lands.
+  { icon: <PlanetIcon aria-hidden="true" />, id: "galaxy", label: "Galaxy" },
   {
     icon: <BookmarkSimpleIcon aria-hidden="true" />,
     id: "saves",
@@ -138,7 +142,7 @@ function JoinButton({ glow }: { glow: boolean }): ReactNode {
  * any signed-in surface reading `/api/me` (the account page), so no stale signed-in
  * view survives the sign-out anywhere.
  */
-function AccountMenu({ name }: { name: string }): ReactNode {
+function AccountMenu({ image, name }: { image: null | string; name: string }): ReactNode {
   async function signOut() {
     await authClient.signOut();
     // A full reload is the cleanest way to flush EVERY signed-in surface at once —
@@ -150,7 +154,13 @@ function AccountMenu({ name }: { name: string }): ReactNode {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger aria-label="Your account" className="crew-trigger">
-        <UserCircleIcon aria-hidden="true" className="crew-trigger-icon" weight="bold" />
+        {image ? (
+          // The account's avatar (Google fills it at sign-up; an upload path is a
+          // future slice). Decorative — the name sits beside it.
+          <img alt="" className="crew-trigger-avatar" src={image} />
+        ) : (
+          <UserCircleIcon aria-hidden="true" className="crew-trigger-icon" weight="bold" />
+        )}
         <span className="crew-slot-label">{name}</span>
         <CaretDownIcon aria-hidden="true" className="crew-trigger-caret" weight="bold" />
       </DropdownMenuTrigger>
@@ -200,5 +210,5 @@ export function CrewSlot({ home }: { home: boolean }): ReactNode {
   // freeform Name; the handle is the fallback for a name-less account.
   const name = user.name || (user.displayUsername ?? user.username ?? "cosmonaut");
 
-  return <AccountMenu name={name} />;
+  return <AccountMenu image={user.image ?? null} name={name} />;
 }
