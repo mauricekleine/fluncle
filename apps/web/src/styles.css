@@ -4289,6 +4289,76 @@ body::before {
   }
 }
 
+/* ── The crew slot: Join / account, beside search in the top bar ───────────── */
+/* Two faces of one control. The signed-out Join button rides in from the home
+   masthead — it keeps its moving glow (.crew-glow) but sits small and quiet beside
+   search. The signed-in door is quieter still: a glyph, a name, a caret, heating like
+   search does (the Gold Veil on hover/open, the Ignition Rule — a control never dims
+   when you reach for it). Both collapse their word to the glyph on a narrow bar so the
+   trail always has room and the bar stays one line. */
+.crew-trigger {
+  align-items: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md, 0.5rem);
+  color: var(--muted-foreground);
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 0.82rem;
+  font-weight: 600;
+  gap: 0.4rem;
+  padding: 0.3rem 0.5rem;
+  transition:
+    color 150ms ease-out,
+    background-color 150ms ease-out,
+    border-color 150ms ease-out;
+  white-space: nowrap;
+}
+
+.crew-trigger:hover,
+.crew-trigger:focus-visible,
+.crew-trigger[aria-expanded="true"] {
+  background: var(--gold-veil);
+  border-color: color-mix(in oklch, var(--eclipse-gold) 30%, transparent);
+  color: var(--eclipse-glow);
+}
+
+.crew-trigger-icon {
+  flex: none;
+  height: 1rem;
+  width: 1rem;
+}
+
+/* The caret is a hint that a menu hangs here, not a control — it never gets its own
+   contrast budget, and it hides on a narrow bar with the name it points at. */
+.crew-trigger-caret {
+  color: color-mix(in oklch, var(--muted-foreground) 70%, transparent);
+  display: none;
+  flex: none;
+  height: 0.7rem;
+  width: 0.7rem;
+}
+
+/* The word — the username, or "Join the crew" — is a courtesy on a wide screen and
+   crowding on a narrow one; the glyph carries the affordance on its own and the
+   accessible name rides on the control either way (as the search label does). */
+.crew-slot-label {
+  display: none;
+}
+
+@media (min-width: 40rem) {
+  .crew-slot-label,
+  .crew-trigger-caret {
+    display: inline;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .crew-trigger {
+    transition: none;
+  }
+}
+
 /* ── Search: the dialog ────────────────────────────────────────────────────── */
 .search-dialog {
   max-width: 34rem;
