@@ -48,7 +48,7 @@ Concise rules for working in Fluncle. Use MUST/SHOULD/NEVER to guide decisions.
 
 ## Picking the right models and effort for workflows and subagents
 
-**Opus 4.8 across the board** — the orchestrator/reviewer AND every sub-agent and workflow stage run on Opus 4.8. Fable 5 is no longer available on the plan, and Sonnet has proven unreliable in practice (it passes its own checks but under-delivers or ships subtle bugs — e.g. a "surfaces" slice that silently omitted its core deliverable). So there is no model-tier tradeoff left to manage: hold the quality bar with Opus 4.8 everywhere.
+**Opus 4.8 for the execution work** — every sub-agent and workflow stage that builds, edits, or ships runs on Opus 4.8. Fable 5 is available but too expensive to run at execution scale, and Sonnet has proven unreliable in practice (it passes its own checks but under-delivers or ships subtle bugs — e.g. a "surfaces" slice that silently omitted its core deliverable). So the execution tier is settled on cost and reliability alike: hold the quality bar with Opus 4.8 for the work — Fable's per-token cost over a long run and Sonnet's misses point the same way.
 
 - Orchestration, delegation, brainstorm, and review — the "decide" and hold-the-overview work — run on Opus 4.8. The [agent-orchestration](./packages/skills/agent-orchestration) skill is driven by Opus 4.8 and offloads execution to Opus 4.8 sub-agents.
 - Do NOT downgrade an execution slice to a cheaper tier to save cost — judge the output, not the price tag; a cheap agent that under-delivers costs more than it saves.
