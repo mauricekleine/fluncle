@@ -267,6 +267,18 @@ The Friday newsletter ([docs/agents/newsletter-agent.md](../agents/newsletter-ag
 
 **It composes with the prompt registry (shipped — [docs/agents/prompt-registry.md](../agents/prompt-registry.md)): fighting sameness is an iterative, taste-driven loop — change a prompt, read ten outputs, change it again — and that loop now runs from `/admin/prompts` with no deploy and no box rebake.**
 
+## The public recommendation machine — per-user telescopes (riff-stage, 2026-07-16)
+
+The first outside pull ("sick can I fuck with it somehow?") arrived the day the operator's telescope started converting. The riff produced ratified decisions; **deliberately pre-RFC** — the operator wants to keep riffing before it's scoped:
+
+- **The shape:** a visitor picks ~10 seed tracks from the archive + catalogue, the Ear's anchored max-similarity scan (+ the diversity decay) ranks the embedded/anchored catalogue against _their_ seeds, and Fluncle mints them a **playlist on his own Spotify account** (the telescope module generalized — one authenticated identity, so the dev-mode 5-user allowlist cap never applies; no per-user OAuth, no quota wall). Weekly refresh via box cron, Discover-Weekly-style replace.
+- **Ratified — identity:** existing Better Auth accounts; the never-gates law holds (anonymous picks seeds + previews recs; signing in saves the seed set and earns the weekly playlist).
+- **Ratified — the blend (option B):** user seeds dominate; **2–3 labeled slots come from the findings nearest their seeds** — certified tracks, so those slots carry Fluncle's full voice (note, Log ID), while catalogue recs speak in the instrument register ("close to what you picked" — the machine's honest WHY, never his testimony). The register split _is_ the canon resolution: the instrument speaks about sightings, Fluncle speaks only about findings. It also solves cold-start.
+- **The two-way lens:** seed picks are taste _signal_ — an anonymized map of which corners of the catalogue real DnB heads gravitate to, a future input to the Ear's capture priority. Users feed the machine they consume.
+- **The lighting-up moment:** when a user's rec later gets certified, surface it — "one of your sightings made the archive."
+- **v2 onboarding cheat:** paste any public Spotify playlist URL → Fluncle's grant reads it → matchKey/ISRC overlap materializes the seed set.
+- **Open:** naming (product name plain enough for someone whose mate texted them a link; "telescope" stays the instrument in copy), abuse/rate limits, whether a multiplicative findings-nudge later seasons the catalogue portion.
+
 ## ChatDnB — the graduation questions (spike shipped, admin-gated)
 
 The pun (ChatGPT → ChatDnB) earned its spike and the spike shipped: `/admin/chat` (#562) — a chat with Fluncle himself that answers over his own archive tools with hard tool-boundary grounding (he answers from the archive or he does not answer — the model can surface rows, never invent them), admin-gated. What remains is the graduation call, and it wants a real design pass before any public flip:
