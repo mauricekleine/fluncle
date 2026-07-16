@@ -1033,6 +1033,16 @@ export const user = sqliteTable("user", {
   createdAt: integer("created_at", { mode: "timestamp_ms" })
     .default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
     .notNull(),
+  // The crew number — the account's enlistment ordinal on the manifest (the
+  // account-redesign brief, ruling #1). A stamped `№007` position in join order,
+  // deliberately NOT coordinate-shaped (a crew member is not certified music), fixed
+  // for life. NULLABLE + UNIQUE: SQLite lets many rows carry NULL under a UNIQUE
+  // index, so an unstamped row (a legacy user before the backfill, or the instant
+  // between the better-auth insert and the `user.create.after` assignment) coexists
+  // with the unique numbers. Assigned atomically by `assignCrewNumber` (public-auth.ts)
+  // as `max(crew_number) + 1`; backfilled for existing users by the one-time
+  // `scripts/backfill-crew-numbers.ts`.
+  crewNumber: integer("crew_number").unique(),
   deletedAt: integer("deleted_at", { mode: "timestamp_ms" }),
   displayUsername: text("display_username"),
   email: text("email").notNull().unique(),
