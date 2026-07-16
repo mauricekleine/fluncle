@@ -2,8 +2,10 @@
 # fluncle-pin-watch — the rave-02 box's self-deploy.
 #
 # Watches main's baked CLI pins (the `fluncle` + Claude Code versions in
-# docs/agents/hermes/Dockerfile) against what the running Hermes container has;
-# when main is ahead, rebuilds the image and swaps the container — with a
+# docs/agents/hermes/Dockerfile) AND main's baked content (the sweep scripts,
+# the skills, and the Dockerfile itself) against what the running Hermes
+# container has; when main is ahead on EITHER, rebuilds the image and swaps the
+# container — with a
 # pre-smoke gate (the new image is fully smoke-tested in throwaway containers
 # BEFORE the live one is touched) and an auto-rollback rail (on any failure the
 # previous image is restored). The box is never left broken.
@@ -34,6 +36,22 @@ case "${1:-}" in
   --force) MODE="--force" ;;     # rebuild regardless of drift (the operator pilot)
   --dry-run) MODE="--dry-run" ;; # build + pre-smoke the new image, then STOP (never swap)
 esac
+
+# The paths the image BAKES from main (Dockerfile COPYs): the sweep scripts, the Dockerfile
+# itself, and the two skills the box runs. A change to any must trigger a rebuild — the CLI
+# pins do NOT move for a script-only change, so without this the fix never reaches the box.
+BAKED_PATHS=(
+  docs/agents/hermes/scripts
+  docs/agents/hermes/Dockerfile
+  packages/skills/fluncle-track-enrichment/scripts
+  packages/skills/copywriting-fluncle
+)
+# A deterministic fingerprint of the baked content at REPO_DIR HEAD. `git ls-tree -r` emits the
+# mode+type+blob-sha+path of every file under those paths, so any content change moves it. It reads
+# only HEAD's tree — no history — so it is safe on the depth-1 shallow clone.
+baked_fingerprint() {
+  git -C "$REPO_DIR" ls-tree -r HEAD -- "${BAKED_PATHS[@]}" | sha256sum | cut -d' ' -f1
+}
 
 log() { printf '[pin-watch] %s\n' "$*" >&2; }
 die() { log "FATAL: $*"; exit 1; }
@@ -99,12 +117,21 @@ HAVE_FLUNCLE="$(docker exec "$CONTAINER" fluncle version 2>/dev/null | grep -oE 
 HAVE_CLAUDE="$(docker exec "$CONTAINER" claude --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
 log "fluncle: have=$HAVE_FLUNCLE want=$WANT_FLUNCLE | claude-code: have=$HAVE_CLAUDE want=$WANT_CLAUDE"
 
-if [ "$MODE" = "--if-stale" ] && [ "$HAVE_FLUNCLE" = "$WANT_FLUNCLE" ] && [ "$HAVE_CLAUDE" = "$WANT_CLAUDE" ]; then
-  log "pins current — no-op"
-  post_health ok "tools current"
+# ── 2b. read the baked-content fingerprint (main HEAD) vs the running image's stamp ────────────
+# The CLI pins do NOT move for a script-only change, so the fingerprint is what makes such a change
+# reach the box. An empty HAVE_FP (an image built before this fingerprint existed) counts as drift.
+WANT_FP="$(baked_fingerprint)"
+HAVE_FP="$(docker exec "$CONTAINER" cat /opt/.hermes-baked-fp 2>/dev/null | tr -d '[:space:]' || true)"
+log "baked-fp: have=${HAVE_FP:-<none>} want=$WANT_FP"
+
+if [ "$MODE" = "--if-stale" ] \
+   && [ "$HAVE_FLUNCLE" = "$WANT_FLUNCLE" ] && [ "$HAVE_CLAUDE" = "$WANT_CLAUDE" ] \
+   && [ -n "$HAVE_FP" ] && [ "$HAVE_FP" = "$WANT_FP" ]; then
+  log "pins + baked content current — no-op"
+  post_health ok "tools + scripts current"
   exit 0
 fi
-log "pins drifted (or --force) — rebuilding"
+log "pins or baked content drifted (or --force) — rebuilding"
 
 # ── 3. capture the running container's runtime env (the secrets) into a tmpfs ──
 # = the container's env MINUS the image's baked ENV (so we re-inject only the
@@ -145,7 +172,7 @@ docker builder prune -f --keep-storage=3GB >/dev/null 2>&1 || true
 SHA="$(git -C "$REPO_DIR" rev-parse --short HEAD)"
 NEW_IMAGE="$IMAGE_REPO:v$(date -u +%Y.%m.%d)-$SHA"
 log "building $NEW_IMAGE (repo root build context, -f $DOCKERFILE)"
-docker build -f "$REPO_DIR/$DOCKERFILE" -t "$NEW_IMAGE" "$REPO_DIR" >&2 || { alert "🛠️ pin-watch: BUILD FAILED for $NEW_IMAGE — box untouched, staying on $OLD_IMAGE"; post_health degraded "a tool update failed to build; staying on the current tools"; die "build failed"; }
+docker build --build-arg FLUNCLE_BAKED_FP="$WANT_FP" -f "$REPO_DIR/$DOCKERFILE" -t "$NEW_IMAGE" "$REPO_DIR" >&2 || { alert "🛠️ pin-watch: BUILD FAILED for $NEW_IMAGE — box untouched, staying on $OLD_IMAGE"; post_health degraded "a tool update failed to build; staying on the current tools"; die "build failed"; }
 
 # ── 5. PRE-SMOKE the new image in throwaway containers (live box untouched) ────
 presmoke_fail() { alert "🛠️ pin-watch: PRE-SMOKE FAILED ($1) for $NEW_IMAGE — box untouched, staying on $OLD_IMAGE"; post_health degraded "a tool update failed validation; box untouched on the current tools"; die "pre-smoke failed: $1"; }

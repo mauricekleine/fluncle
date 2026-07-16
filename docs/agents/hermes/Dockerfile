@@ -269,3 +269,9 @@ RUN chmod -R a+rX /opt/claude/skills \
 # rides the image + auto-updates from main, instead of being hand-`docker cp`'d to /opt/data/skills.
 COPY packages/skills/fluncle-track-enrichment/scripts /opt/hermes-skills/fluncle-track-enrichment/scripts
 RUN chmod -R a+rX /opt/hermes-skills
+
+# Baked-content fingerprint (pin-watch reads this to detect script/skill drift and rebuild —
+# a script-only change does not move the CLI pins). Last layer on purpose: it changes every time
+# the baked content does, so keep it cheap. Default marks a manual/legacy build.
+ARG FLUNCLE_BAKED_FP=unknown
+RUN printf '%s' "$FLUNCLE_BAKED_FP" > /opt/.hermes-baked-fp
