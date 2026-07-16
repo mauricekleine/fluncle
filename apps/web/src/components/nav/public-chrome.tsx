@@ -59,9 +59,11 @@ export function PublicChrome({
           {/* The two controls, banked to the far end so they never crowd the trail. Search
               also mounts the ⌘K listener, which is why it lives in the chrome and not on a
               page: search has to be one keystroke away from every public surface. The crew
-              slot rides beside it — Join when signed out, the account door when signed in. */}
+              slot rides beside it — Join when signed out, the account door when signed in.
+              `home` gates the Join glow to the page it was designed for (the ambient
+              budget: no perpetual sweep on the gold-spending deep pages). */}
           <SearchTrigger />
-          <CrewSlot />
+          <CrewSlot home={pathname === "/"} />
         </div>
       </header>
 

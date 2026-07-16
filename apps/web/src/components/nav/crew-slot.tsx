@@ -2,11 +2,15 @@
 //
 // One element, two faces, resolved from the session:
 //   - SIGNED OUT (and while the session is still resolving): the "Join the crew"
-//     button that used to live in the home masthead. It keeps its moving glow
-//     (.crew-glow) — the identity CTA, now reachable from every public page, not
-//     just home. Rendering it during the pending state means the bar never shifts:
-//     the join button and the account door share a footprint, so the swap is a
-//     content change, not a reflow.
+//     button that used to live in the home masthead — the identity CTA, now
+//     reachable from every public page, not just home. Rendering it during the
+//     pending state means the bar never shifts: the join button and the account
+//     door share a footprint, so the swap is a content change, not a reflow.
+//     ON HOME it keeps its moving glow (.crew-glow) — the flourish it always wore
+//     there. EVERYWHERE ELSE it stays a quiet outline: the ambient budget is
+//     exactly two movements (DESIGN.md §5), and a perpetual gold sweep riding
+//     every /log page would out-shout the page's own gold (Listen, the
+//     coordinate, FOUND — One Sun).
 //   - SIGNED IN: a quiet door — a glyph, the name, and a caret — opening a small
 //     account menu (the account tabs + sign out). It heats like search does (the
 //     Gold Veil on hover), and it is a real Shadcn dropdown, so it is fully
@@ -19,8 +23,10 @@
 // lights up. Same discipline as the nav model's `future` slot (lib/nav-model.ts).
 
 import {
+  BinocularsIcon,
   BookmarkSimpleIcon,
   CaretDownIcon,
+  ChatCircleDotsIcon,
   GearSixIcon,
   SignOutIcon,
   UserCircleIcon,
@@ -28,6 +34,7 @@ import {
 } from "@phosphor-icons/react";
 import { Link } from "@tanstack/react-router";
 import { type ReactNode } from "react";
+import { Button } from "@fluncle/ui/components/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -36,47 +43,44 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@fluncle/ui/components/dropdown-menu";
-import { Button } from "@fluncle/ui/components/button";
 import { authClient } from "@/lib/auth-client";
 
 /** The signed-in account tab a menu link opens (absent = the default Galaxy view). */
 type AccountTab = "saves" | "settings";
 
 /**
- * One row in the account menu. `to` is a plain string (the data-driven navigate
- * boundary casts it), so a not-yet-shipped `future` slot can name a route that does
- * not exist in the type graph yet without a compile error. A `future` row is never
- * rendered — no dead links — but it keeps the slot concrete and greppable.
+ * One row in the account menu. Two shapes:
+ * - LIVE: a door into `/account` (optionally onto one of its tabs). The route is
+ *   the literal `/account` at the render site, so these links keep their
+ *   compile-time route check.
+ * - FUTURE: a designed-but-unshipped door. Its `to` is a plain provisional string
+ *   (the route does not exist in the type graph yet), it is flagged, and it is
+ *   FILTERED OUT of the render — no dead link ever ships. Delete the flag (and set
+ *   the real path) the day the route lands.
  */
-type CrewMenuLink = {
-  future?: true;
-  icon: ReactNode;
-  id: string;
-  label: string;
-  search?: { tab: AccountTab };
-  to: string;
-};
+type CrewMenuLink =
+  | {
+      future?: undefined;
+      icon: ReactNode;
+      id: string;
+      label: string;
+      search?: { tab: AccountTab };
+    }
+  | { future: true; icon: ReactNode; id: string; label: string; to: string };
 
 const CREW_MENU_LINKS: CrewMenuLink[] = [
-  {
-    icon: <UserCircleIcon aria-hidden="true" />,
-    id: "account",
-    label: "My account",
-    to: "/account",
-  },
+  { icon: <UserCircleIcon aria-hidden="true" />, id: "account", label: "My account" },
   {
     icon: <BookmarkSimpleIcon aria-hidden="true" />,
     id: "saves",
     label: "Saves",
     search: { tab: "saves" },
-    to: "/account",
   },
   {
     icon: <GearSixIcon aria-hidden="true" />,
     id: "settings",
     label: "Settings",
     search: { tab: "settings" },
-    to: "/account",
   },
   // ── EXTENSION SLOTS ─────────────────────────────────────────────────────────
   // Two more doors are planned. They are FILTERED OUT while `future` is set (so no
@@ -84,14 +88,14 @@ const CREW_MENU_LINKS: CrewMenuLink[] = [
   // `to` values are provisional placeholders — set the real path when it lands.
   {
     future: true,
-    icon: <UserCircleIcon aria-hidden="true" />,
+    icon: <ChatCircleDotsIcon aria-hidden="true" />,
     id: "chatdnb",
     label: "ChatDnB",
     to: "/chat",
   },
   {
     future: true,
-    icon: <UserCircleIcon aria-hidden="true" />,
+    icon: <BinocularsIcon aria-hidden="true" />,
     id: "recommendations",
     label: "Recommendations",
     to: "/recommendations",
@@ -99,19 +103,22 @@ const CREW_MENU_LINKS: CrewMenuLink[] = [
 ];
 
 /** The rows that actually render: the live doors, never a future one. */
-const liveMenuLinks = CREW_MENU_LINKS.filter((link) => !link.future);
+const liveMenuLinks = CREW_MENU_LINKS.filter(
+  (link): link is Extract<CrewMenuLink, { future?: undefined }> => !link.future,
+);
 
 /**
- * The signed-out CTA — the masthead's "Join the crew" button, relocated. Kept an
- * OUTLINE control wearing the moving glow (never a gold FILL), so the sweep never
- * competes with the Galaxy's one sun (DESIGN.md One Sun). The label collapses to the
- * glyph on a narrow bar, exactly as the search label does, so the top bar stays one
- * line; the accessible name rides on the Link either way.
+ * The signed-out CTA — the masthead's "Join the crew" button, relocated. An OUTLINE
+ * control (never a gold FILL — One Sun). On home it wears the moving glow it always
+ * wore there; on every other page it stays quiet, because the ambient budget is
+ * exactly two movements and a page's own gold must keep leading. The label collapses
+ * to the glyph on a narrow bar, exactly as the search label does, so the top bar
+ * stays one line; the accessible name rides on the Link either way.
  */
-function JoinButton(): ReactNode {
+function JoinButton({ glow }: { glow: boolean }): ReactNode {
   return (
     <Button
-      className="crew-glow"
+      className={glow ? "crew-glow" : undefined}
       nativeButton={false}
       render={<Link aria-label="Join the crew" to="/account" />}
       size="sm"
@@ -142,7 +149,7 @@ function AccountMenu({ name }: { name: string }): ReactNode {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger aria-label="Your account" className="crew-trigger">
-        <UsersThreeIcon aria-hidden="true" className="crew-trigger-icon" weight="bold" />
+        <UserCircleIcon aria-hidden="true" className="crew-trigger-icon" weight="bold" />
         <span className="crew-slot-label">{name}</span>
         <CaretDownIcon aria-hidden="true" className="crew-trigger-caret" weight="bold" />
       </DropdownMenuTrigger>
@@ -153,11 +160,7 @@ function AccountMenu({ name }: { name: string }): ReactNode {
           <DropdownMenuItem
             key={link.id}
             render={
-              link.search ? (
-                <Link search={link.search as never} to={link.to as never} />
-              ) : (
-                <Link to={link.to as never} />
-              )
+              link.search ? <Link search={link.search} to="/account" /> : <Link to="/account" />
             }
           >
             {link.icon}
@@ -178,13 +181,14 @@ function AccountMenu({ name }: { name: string }): ReactNode {
  * The one control mounted in the top bar (PublicChrome), just after search. Resolves
  * the session client-side and shows Join until a signed-in session is CONFIRMED, then
  * the account door. The two share a footprint, so the resolve never shifts the bar.
+ * `home` gates the Join glow to the one page it was designed for.
  */
-export function CrewSlot(): ReactNode {
+export function CrewSlot({ home }: { home: boolean }): ReactNode {
   const { data: session } = authClient.useSession();
   const user = session?.user;
 
   if (!user) {
-    return <JoinButton />;
+    return <JoinButton glow={home} />;
   }
 
   const name = user.displayUsername ?? user.username ?? user.name ?? "cosmonaut";
