@@ -281,14 +281,26 @@ function fetchBioDraft(group: "artists" | "labels" | "albums", slug: string): Bi
 }
 
 // The gate the sweep authors behind: a draft is authorable only when the Worker RESOLVED the
-// entity (`found`) AND returned a non-empty prompt. A null draft (the call failed) or a
+// entity (`found`), returned a non-empty prompt, AND has real material to ground on —
+// Firecrawl facts OR at least one finding title. A null draft (the call failed) or a
 // `found:false` (an unresolved slug) is a clean skip — never an author, never a store.
+//
+// THE GROUNDING RAIL. The Worker ALWAYS renders a non-empty prompt (the template has an
+// "author from the finding titles" fallback), so `prompt` alone is not proof of material.
+// Before #643 every queued entity carried ≥1 CERTIFIED finding, so the fallback always had
+// real titles; now the queue also holds indexable findings-free CATALOGUE entities, and one
+// can arrive with `hasFacts:false AND findingCount:0` — a prompt with NOTHING to ground on.
+// Authoring that risks a confabulated bio on a public page (VOICE.md's every-claim-is-real
+// rule), so we refuse: a groundless entity is a clean skip (stays queued, retried; if
+// Firecrawl never yields facts it simply stays bio-less — the honest outcome, the page shows
+// its tracklist). A certified entity is unaffected (findingCount ≥ 1 always).
 export function isAuthorableDraft(draft: BioDraft | null): draft is BioDraft & { prompt: string } {
   return (
     draft != null &&
     draft.found === true &&
     typeof draft.prompt === "string" &&
-    draft.prompt.trim().length > 0
+    draft.prompt.trim().length > 0 &&
+    (draft.hasFacts === true || (draft.findingCount ?? 0) > 0)
   );
 }
 
