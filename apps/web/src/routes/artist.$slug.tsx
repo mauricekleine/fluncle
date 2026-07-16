@@ -21,16 +21,15 @@ import {
   CatalogueRecords,
   CatalogueSortControl,
 } from "@/components/catalogue-groups";
+import { FindingsGrid } from "@/components/graph-sections";
 import { GraphLink } from "@/components/graph-link";
 import { StoryNotFoundState } from "@/components/stories/stories-states";
-import { TrackArtwork } from "@/components/track-artwork";
 import { type ArtistSocialPlatform } from "@/lib/artist-socials";
 import { siteUrl } from "@/lib/fluncle-links";
 import { artistSignatureLine } from "@/lib/graph-prose";
 import { jsonLdScript } from "@/lib/json-ld";
 import { artistBreadcrumbsJsonLd, musicGroupJsonLd } from "@/lib/log-schema";
 import { bioMetaDescription } from "@/lib/meta-description";
-import { artistTitleLine } from "@/lib/log-prose";
 import { albumCoverAtSize } from "@/lib/media";
 import {
   type ArtistNeighbour,
@@ -372,7 +371,6 @@ function ArtistPage() {
   }
 
   const { bio, catalogue, dossier, findings, name, slug, socials, sort } = data;
-  const grid = findings.filter((finding) => finding.logId);
 
   return (
     <main className="log-plate-stage">
@@ -388,28 +386,13 @@ function ArtistPage() {
           {bio ? <p className="log-index-bio">{bio}</p> : undefined}
         </header>
 
-        {/* The findings lead: the logged tracks are the primary entity in the
-            Galaxy — the artist page frames THEM. Socials and kin follow. */}
-        {grid.length === 0 ? (
-          <p className="log-index-empty empty-scanlines">Quiet sector.</p>
-        ) : (
-          <ul className="artist-grid" aria-label={`Findings featuring ${name}`}>
-            {grid.map((finding) =>
-              finding.logId ? (
-                <li key={finding.trackId}>
-                  <Link params={{ logId: finding.logId }} to="/log/$logId">
-                    <TrackArtwork
-                      alt=""
-                      className="artist-grid-cover"
-                      src={albumCoverAtSize(finding.albumImageUrl, "large")}
-                    />
-                    <span className="artist-grid-line">{artistTitleLine(finding)}</span>
-                  </Link>
-                </li>
-              ) : null,
-            )}
-          </ul>
-        )}
+        {/* The findings lead: the logged tracks are the primary entity in the Galaxy — the artist
+            page frames THEM. Shared with the label/album graph pages via FindingsGrid: an artist
+            with no coordinate-bearing findings renders NOTHING here — no grid, no heading, no
+            empty-state apology. Its catalogue tracklist below and its masthead bio carry the page,
+            exactly as a crawler-discovered label's does (graph-sections.tsx header: a page with no
+            findings is a page about something else). Socials and kin follow. */}
+        <FindingsGrid findings={findings} label={`Findings featuring ${name}`} />
 
         {socials.length > 0 ? (
           <nav aria-label={`Follow ${name}`} className="artist-follow">

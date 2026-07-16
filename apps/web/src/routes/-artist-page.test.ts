@@ -1,4 +1,16 @@
+import {
+  createMemoryHistory,
+  createRootRoute,
+  createRoute,
+  createRouter,
+  RouterProvider,
+} from "@tanstack/react-router";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { createElement } from "react";
+import { renderToString } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { FindingsGrid } from "@/components/graph-sections";
 
 // The artist page earns its page on CONTENT, exactly as a label/album does: a `getArtistBySlug` row
 // renders, and the thin-content gate (NOT a certified-finding gate) decides whether it indexes.
@@ -257,5 +269,75 @@ describe("resolveArtistPageData (the artist page indexability gate)", () => {
     expect(metaDescription(withoutBio)).toBe(
       "Every Drift banger Fluncle has found and logged in the Galaxy, 1 so far, each with a coordinate.",
     );
+  });
+});
+
+// Fix 2 — the artist page must stop printing "Quiet sector.". Two layers of proof:
+//
+//  (1) STRUCTURAL: the artist route SOURCE no longer carries the apology, and its findings band is
+//      the shared FindingsGrid (the same component the label/album graph pages use) — so it inherits
+//      their "a band with nothing in it renders NOTHING" contract by construction, not by copy.
+//  (2) BEHAVIOURAL: FindingsGrid itself, SSR'd through a router, renders NOTHING for a findings-free
+//      entity (no grid, no heading, no "Quiet sector.") and a real cover-grid when findings exist.
+//
+// Together they pin: a findings-free artist page shows no apology — its masthead (name + signature)
+// and catalogue tracklist carry it, exactly as a crawler-discovered label's page does.
+
+describe("Fix 2: the artist route dropped the 'Quiet sector.' empty state", () => {
+  const source = readFileSync(
+    fileURLToPath(new URL("./artist.$slug.tsx", import.meta.url)),
+    "utf8",
+  );
+
+  it("no longer references the 'Quiet sector.' apology or its scanline empty state", () => {
+    expect(source).not.toContain("Quiet sector");
+    expect(source).not.toContain("empty-scanlines");
+    expect(source).not.toContain("log-index-empty");
+  });
+
+  it("renders its findings band through the shared FindingsGrid component", () => {
+    expect(source).toContain('import { FindingsGrid } from "@/components/graph-sections"');
+    expect(source).toContain("<FindingsGrid");
+  });
+});
+
+describe("FindingsGrid render contract (the band the artist page now delegates to)", () => {
+  /** SSR FindingsGrid through a router (its <Link> needs one), returning the static HTML. */
+  async function renderFindingsGrid(findings: unknown[]): Promise<string> {
+    const rootRoute = createRootRoute({
+      component: () =>
+        createElement(FindingsGrid, { findings, label: "Findings featuring Drift" } as never),
+    });
+    // The band's covers link to /log/$logId — the router needs the route so Link builds the href.
+    const logRoute = createRoute({ getParentRoute: () => rootRoute, path: "/log/$logId" });
+    const router = createRouter({
+      history: createMemoryHistory({ initialEntries: ["/"] }),
+      routeTree: rootRoute.addChildren([logRoute]),
+    });
+    await router.load();
+
+    return renderToString(createElement(RouterProvider, { router } as never));
+  }
+
+  it("renders NOTHING for a findings-free entity — no grid, no heading, no 'Quiet sector.'", async () => {
+    const html = await renderFindingsGrid([]);
+
+    expect(html).not.toContain("Quiet sector");
+    expect(html).not.toContain('class="artist-grid"');
+  });
+
+  it("still renders the cover grid, each cover a /log link, when findings exist", async () => {
+    const html = await renderFindingsGrid([
+      {
+        albumImageUrl: "https://i.scdn.co/image/cover",
+        artists: ["Drift"],
+        logId: "001.1.1A",
+        title: "Untitled",
+        trackId: "t-1",
+      },
+    ]);
+
+    expect(html).toContain('class="artist-grid"');
+    expect(html).toContain("/log/001.1.1A");
   });
 });
