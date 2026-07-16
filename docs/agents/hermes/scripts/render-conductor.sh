@@ -391,6 +391,17 @@ if [ -n "$boxid" ] && "$BOX_BIN" resume "$boxid" >/dev/null 2>&1; then
   else
     log "box CLI refresh failed — rendering with the existing CLI"
   fi
+  # render-detached.sh lives at ~/ (NOT inside the ~/fluncle checkout), so freshen_checkout
+  # can't update it — re-scp it every wake like the CLI above, or a resumed box keeps the
+  # render-detached.sh it was PROVISIONED with (its --model pin, its entry) frozen forever.
+  if [ -n "$boxid" ]; then
+    if "$BOX_BIN" scp "$SCRIPT_DIR/render-detached.sh" "$boxid:/home/user/render-detached.sh" >>"$LOG_FILE" 2>&1; then
+      "$BOX_BIN" ssh "$boxid" 'chmod +x ~/render-detached.sh' >/dev/null 2>&1 || true
+      log "render-detached.sh refreshed from the conductor's bundled copy"
+    else
+      log "render-detached.sh refresh failed — rendering with the box's existing copy"
+    fi
+  fi
 else
   boxid=""
 fi

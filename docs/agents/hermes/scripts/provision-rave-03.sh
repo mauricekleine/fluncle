@@ -12,6 +12,14 @@
 # Reproduces exactly what shipped 019.1.7X by hand: clone main, install, add the
 # fluncle-video skill, lay down the bun-wrapped `fluncle` CLI (the upload uses
 # Bun-runtime APIs, so it must run under bun) and the detached-render entry.
+#
+# CLAUDE: the box.ascii base image ships a GLOBAL npm claude under /usr/local (root-
+# owned), which the render user cannot auto-update ("insufficient permissions") — so it
+# freezes at whatever the base baked (2.1.145, 2026-05, which stopped rendering). We do
+# NOT own the base image, so we install a NATIVE claude into the user-owned ~/.local/bin
+# (self-updating, and render-detached.sh already puts ~/.local/bin first on PATH so it
+# SHADOWS the stale global). A native box then tracks current claude on its own at each
+# launch. This is required, not best-effort: a box that can't render is not worth keeping.
 set -uo pipefail
 export PATH="/usr/local/bin:/root/.bun/bin:${PATH:-/usr/bin:/bin}"
 BOX_BIN="${BOX_BIN:-/usr/local/bin/box}"
@@ -54,6 +62,10 @@ cd ~ && rm -rf fluncle
 git clone --depth 1 $REPO fluncle </dev/null
 cd fluncle && bun install </dev/null >/dev/null 2>&1
 npx -y skills add ./packages/skills/fluncle-video -y -a claude-code </dev/null >/dev/null 2>&1
+# Native, self-updating claude into ~/.local/bin (shadows the un-updatable global base
+# claude; render-detached.sh's PATH puts ~/.local/bin first). set -e aborts provisioning
+# on failure — a box without a current claude cannot render, so fail loud and reprovision.
+claude install stable </dev/null >&2
 mkdir -p ~/.local/bin ~/.local/lib
 printf '#!/bin/sh\nexec bun "\$HOME/.local/lib/fluncle.mjs" "\$@"\n' > ~/.local/bin/fluncle
 chmod +x ~/.local/bin/fluncle
