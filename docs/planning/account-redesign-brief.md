@@ -1,6 +1,6 @@
 # The account redesign brief — "you're on the manifest"
 
-Status: ideation, awaiting the operator's sift (2026-07-16). Non-canonical planning per AGENTS.md; canon wins on conflict. Produced by three ideation passes — four persona walks, an IA/frequency architecture, and a visual-system kit — synthesized here into one buildable brief. The build standard is boil-the-ocean: every unit ships whole, with tests and docs, no deferral bucket.
+Status: RATIFIED by the operator (2026-07-16), build in flight. Non-canonical planning per AGENTS.md; canon wins on conflict. Produced by three ideation passes — four persona walks, an IA/frequency architecture, and a visual-system kit — synthesized here into one buildable brief. The build standard is boil-the-ocean: every unit ships whole, with tests and docs, no deferral bucket.
 
 ## The diagnosis in one line
 
@@ -61,7 +61,15 @@ Signed-out /account defaults to Create account (shipped); signup email input gai
 - **U7 · Sent ledger** — submissions out of keep-list, status badges, `logId` on approved submissions linking to the finding (DTO addition).
 - **U8 · Onboarding & a11y** — the Sam fixes, claim-dialog durability, copy pass, canon-reviewer + a11y audit.
 
-## Decisions for the operator before build
+## The operator's rulings (2026-07-16)
+
+1. **Crew number, not a coordinate.** A stamped ordinal (`Crew №007`, enlistment order) — deliberately NOT coordinate-shaped, so "coordinate" stays a location concept. Public profiles later at `/crew/<username>` (the handle is the slug; the number rides the profile). Bonus direction: stamp the crew number on the player's spaceship at game start — multiplayer setup.
+2. **Voyage sentence** replaces the metric tiles.
+3. **Portrait plate lives in Settings only** (option a).
+4. **Inline play on saves via /api/preview** — yes.
+5. **The newsletter promise-gap row is SCRATCHED** (the scenario was rejected: nobody recommends an unbuilt feature). Replacement ruling: **signing up auto-subscribes the user to the newsletter**, and Settings shows the subscription status with a re-subscribe option for the unsubscribed.
+
+## Decisions for the operator before build (resolved above)
 
 1. **The crew coordinate** — mint `·C·` as a Log-ID sibling kind? (Canon-level: LORE/DESIGN would record it.)
 2. **Voyage sentence vs metric tiles** — the sentence is the recommendation; the tiles are your numbers as you know them.
