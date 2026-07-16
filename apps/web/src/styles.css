@@ -5575,3 +5575,133 @@ body::before {
 .mix-colophon a:hover {
   text-decoration: underline;
 }
+
+/* ── settings door (B1) ── the portrait plate + its avatar controls. Reuses the
+   .cover-frame recipe (sun-lit edge + eclipse-gradient mat) for the empty state;
+   the change-photo overlay mirrors .preview-art-btn (reveal on hover/focus, always
+   visible on touch). Derived only from existing account tokens. */
+.account-portrait-plate {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+
+/* The 64px square: the .cover-frame class paints the lit border colors + the warm
+   eclipse-gradient mat (the empty-state placeholder); this sets the box. */
+.account-portrait {
+  border-radius: var(--artwork-radius, 6px);
+  border-style: solid;
+  border-width: 1px;
+  flex-shrink: 0;
+  height: 64px;
+  overflow: hidden;
+  position: relative;
+  width: 64px;
+}
+
+.account-portrait-img {
+  height: 100%;
+  inset: 0;
+  object-fit: cover;
+  position: absolute;
+  width: 100%;
+}
+
+/* The change-photo overlay: a dark scrim + cream camera glyph, quiet by default
+   (no second sun), surfacing on hover/focus of the square and always up on touch. */
+.account-portrait-change {
+  align-items: center;
+  background: color-mix(in oklch, var(--tape-black) 55%, transparent);
+  border-radius: inherit;
+  color: var(--starlight-cream);
+  cursor: pointer;
+  display: flex;
+  inset: 0;
+  justify-content: center;
+  opacity: 0;
+  position: absolute;
+  transition: opacity 140ms ease-out;
+}
+
+.account-portrait-change:disabled {
+  cursor: default;
+}
+
+.account-portrait-change svg {
+  height: 1.15rem;
+  width: 1.15rem;
+}
+
+.account-portrait:hover .account-portrait-change,
+.account-portrait:focus-within .account-portrait-change {
+  opacity: 1;
+}
+
+.account-portrait-change:focus-visible {
+  opacity: 1;
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+/* Touch (no hover): the overlay can't be revealed on hover, so it stays visible. */
+@media (hover: none) {
+  .account-portrait-change {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .account-portrait-change {
+    transition: none;
+  }
+}
+
+.account-portrait-id {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.account-portrait-name {
+  color: var(--starlight-cream);
+  font-size: 0.95rem;
+  font-weight: 700;
+}
+
+.account-portrait-handle {
+  color: var(--stardust);
+  font-size: 0.85rem;
+}
+
+.account-portrait-since {
+  color: var(--stardust);
+  font-size: 0.78rem;
+}
+
+/* Remove photo: a quiet cream text button, heating on hover (the Ignition Rule),
+   never a second sun beside the gold Save. */
+.account-portrait-remove {
+  align-self: flex-start;
+  color: var(--stardust);
+  cursor: pointer;
+  font-size: 0.8rem;
+  margin-top: 0.15rem;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.account-portrait-remove:hover {
+  color: var(--eclipse-glow);
+}
+
+.account-portrait-remove:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.account-portrait-remove:disabled {
+  cursor: default;
+  opacity: 0.6;
+}

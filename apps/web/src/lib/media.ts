@@ -317,6 +317,39 @@ export function bestArtistAvatarUrl(avatar: {
   return avatar.imageUrl ?? undefined;
 }
 
+// ── The account portrait master (Settings → Profile avatar) ──────────────────
+//
+// A signed-in user's uploaded avatar lives in the same world-served bucket as
+// the cover masters (`avatars/<userId>.<ext>` on found.fluncle.com, written by
+// the /api/me/avatar upload route). It is served off that one ≤512² object
+// through the SAME Cloudflare Images ladder as the owned covers — format
+// negotiation (WebP/AVIF) + a right-sized rendition — so the 64px portrait plate
+// and the crew-slot avatar both pull a small, sharp image rather than the raw
+// upload. The `?v=<uploadedAt>` bust rides the source so replacing the avatar
+// (same key) evicts every rendition, exactly like the cover masters' `?v`.
+
+/** The R2 key an account's uploaded avatar master is stored at (world-readable, found.fluncle.com). */
+export function avatarKey(userId: string, ext: string): string {
+  return `avatars/${userId}.${ext}`;
+}
+
+/**
+ * A Cloudflare Images transform URL for an uploaded account avatar (`avatars/<userId>.<ext>`) at
+ * `width`, with the `?v=<version>` bust riding the source. `version` is the upload timestamp
+ * (epoch ms) so a re-upload at the same key re-keys every rendition. `width` defaults to 256 —
+ * 2× the 64px portrait plate with headroom for the crew-slot avatar and any Retina display.
+ */
+export function avatarDisplayUrl(
+  userId: string,
+  ext: string,
+  version: number,
+  width = 256,
+): string {
+  const source = `${r2PublicUrl(FOUND_BASE, avatarKey(userId, ext))}?v=${version}`;
+
+  return `${IMAGE_TRANSFORM_BASE}/width=${width},format=auto/${source}`;
+}
+
 // ── Cloudflare Media Transformations ─────────────────────────────────────────
 //
 // Playback surfaces (Stories, the log footage) don't fetch the raw 1080×1920

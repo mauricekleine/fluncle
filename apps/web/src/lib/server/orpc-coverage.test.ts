@@ -120,6 +120,11 @@ const CARVE_OUT_ROUTE_PREFIXES = [
 
 // Binary/render routes: emit images/audio, not RPC JSON. Carved out like OAuth.
 const CARVE_OUT_ROUTES = new Set([
+  // The account portrait upload — a large-body/direct-upload carve-out (AGENTS.md):
+  // it RECEIVES image bytes (a downscaled ≤512² avatar), not an RPC JSON body, and
+  // PUTs them to R2. Never an oRPC op; the safety rails (session, CSRF, rate-limit,
+  // type/size/dimension validation) live in the route + lib/server/avatar.ts.
+  "me/avatar",
   "mixtape-cover.$logId",
   "og.$logId",
   "preview.$idOrLogId",

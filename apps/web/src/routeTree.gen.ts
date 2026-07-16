@@ -82,6 +82,7 @@ import { Route as ApiPreviewIdOrLogIdRouteImport } from './routes/api/preview.$i
 import { Route as ApiOgSetRouteImport } from './routes/api/og.set'
 import { Route as ApiOgLogIdRouteImport } from './routes/api/og.$logId'
 import { Route as ApiMixtapeCoverLogIdRouteImport } from './routes/api/mixtape-cover.$logId'
+import { Route as ApiMeAvatarRouteImport } from './routes/api/me/avatar'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 import { Route as ApiAdminLogoutRouteImport } from './routes/api/admin/logout'
 import { Route as ApiAdminChatRouteImport } from './routes/api/admin/chat'
@@ -89,6 +90,7 @@ import { Route as AdminStudioRecordingIdRouteImport } from './routes/admin/studi
 import { Route as ApiV1PreviewIdOrLogIdRouteImport } from './routes/api/v1/preview.$idOrLogId'
 import { Route as ApiV1OgLogIdRouteImport } from './routes/api/v1/og.$logId'
 import { Route as ApiV1MixtapeCoverLogIdRouteImport } from './routes/api/v1/mixtape-cover.$logId'
+import { Route as ApiV1MeAvatarRouteImport } from './routes/api/v1/me/avatar'
 import { Route as ApiV1AdminLogoutRouteImport } from './routes/api/v1/admin/logout'
 import { Route as ApiAdminYoutubeAuthStartRouteImport } from './routes/api/admin/youtube/auth/start'
 import { Route as ApiAdminYoutubeAuthCallbackRouteImport } from './routes/api/admin/youtube/auth/callback'
@@ -483,6 +485,11 @@ const ApiMixtapeCoverLogIdRoute = ApiMixtapeCoverLogIdRouteImport.update({
   path: '/api/mixtape-cover/$logId',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiMeAvatarRoute = ApiMeAvatarRouteImport.update({
+  id: '/api/me/avatar',
+  path: '/api/me/avatar',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
   id: '/api/auth/$',
   path: '/api/auth/$',
@@ -516,6 +523,11 @@ const ApiV1OgLogIdRoute = ApiV1OgLogIdRouteImport.update({
 const ApiV1MixtapeCoverLogIdRoute = ApiV1MixtapeCoverLogIdRouteImport.update({
   id: '/api/v1/mixtape-cover/$logId',
   path: '/api/v1/mixtape-cover/$logId',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiV1MeAvatarRoute = ApiV1MeAvatarRouteImport.update({
+  id: '/api/v1/me/avatar',
+  path: '/api/v1/me/avatar',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiV1AdminLogoutRoute = ApiV1AdminLogoutRouteImport.update({
@@ -750,6 +762,7 @@ export interface FileRoutesByFullPath {
   '/api/admin/chat': typeof ApiAdminChatRoute
   '/api/admin/logout': typeof ApiAdminLogoutRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/me/avatar': typeof ApiMeAvatarRoute
   '/api/mixtape-cover/$logId': typeof ApiMixtapeCoverLogIdRoute
   '/api/og/$logId': typeof ApiOgLogIdRoute
   '/api/og/set': typeof ApiOgSetRoute
@@ -758,6 +771,7 @@ export interface FileRoutesByFullPath {
   '/api/v1/postman.json': typeof ApiV1PostmanDotjsonRoute
   '/api/v1/status': typeof ApiV1StatusRoute
   '/api/v1/admin/logout': typeof ApiV1AdminLogoutRoute
+  '/api/v1/me/avatar': typeof ApiV1MeAvatarRoute
   '/api/v1/mixtape-cover/$logId': typeof ApiV1MixtapeCoverLogIdRoute
   '/api/v1/og/$logId': typeof ApiV1OgLogIdRoute
   '/api/v1/preview/$idOrLogId': typeof ApiV1PreviewIdOrLogIdRoute
@@ -857,6 +871,7 @@ export interface FileRoutesByTo {
   '/api/admin/chat': typeof ApiAdminChatRoute
   '/api/admin/logout': typeof ApiAdminLogoutRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/me/avatar': typeof ApiMeAvatarRoute
   '/api/mixtape-cover/$logId': typeof ApiMixtapeCoverLogIdRoute
   '/api/og/$logId': typeof ApiOgLogIdRoute
   '/api/og/set': typeof ApiOgSetRoute
@@ -865,6 +880,7 @@ export interface FileRoutesByTo {
   '/api/v1/postman.json': typeof ApiV1PostmanDotjsonRoute
   '/api/v1/status': typeof ApiV1StatusRoute
   '/api/v1/admin/logout': typeof ApiV1AdminLogoutRoute
+  '/api/v1/me/avatar': typeof ApiV1MeAvatarRoute
   '/api/v1/mixtape-cover/$logId': typeof ApiV1MixtapeCoverLogIdRoute
   '/api/v1/og/$logId': typeof ApiV1OgLogIdRoute
   '/api/v1/preview/$idOrLogId': typeof ApiV1PreviewIdOrLogIdRoute
@@ -967,6 +983,7 @@ export interface FileRoutesById {
   '/api/admin/chat': typeof ApiAdminChatRoute
   '/api/admin/logout': typeof ApiAdminLogoutRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/me/avatar': typeof ApiMeAvatarRoute
   '/api/mixtape-cover/$logId': typeof ApiMixtapeCoverLogIdRoute
   '/api/og/$logId': typeof ApiOgLogIdRoute
   '/api/og/set': typeof ApiOgSetRoute
@@ -975,6 +992,7 @@ export interface FileRoutesById {
   '/api/v1/postman.json': typeof ApiV1PostmanDotjsonRoute
   '/api/v1/status': typeof ApiV1StatusRoute
   '/api/v1/admin/logout': typeof ApiV1AdminLogoutRoute
+  '/api/v1/me/avatar': typeof ApiV1MeAvatarRoute
   '/api/v1/mixtape-cover/$logId': typeof ApiV1MixtapeCoverLogIdRoute
   '/api/v1/og/$logId': typeof ApiV1OgLogIdRoute
   '/api/v1/preview/$idOrLogId': typeof ApiV1PreviewIdOrLogIdRoute
@@ -1078,6 +1096,7 @@ export interface FileRouteTypes {
     | '/api/admin/chat'
     | '/api/admin/logout'
     | '/api/auth/$'
+    | '/api/me/avatar'
     | '/api/mixtape-cover/$logId'
     | '/api/og/$logId'
     | '/api/og/set'
@@ -1086,6 +1105,7 @@ export interface FileRouteTypes {
     | '/api/v1/postman.json'
     | '/api/v1/status'
     | '/api/v1/admin/logout'
+    | '/api/v1/me/avatar'
     | '/api/v1/mixtape-cover/$logId'
     | '/api/v1/og/$logId'
     | '/api/v1/preview/$idOrLogId'
@@ -1185,6 +1205,7 @@ export interface FileRouteTypes {
     | '/api/admin/chat'
     | '/api/admin/logout'
     | '/api/auth/$'
+    | '/api/me/avatar'
     | '/api/mixtape-cover/$logId'
     | '/api/og/$logId'
     | '/api/og/set'
@@ -1193,6 +1214,7 @@ export interface FileRouteTypes {
     | '/api/v1/postman.json'
     | '/api/v1/status'
     | '/api/v1/admin/logout'
+    | '/api/v1/me/avatar'
     | '/api/v1/mixtape-cover/$logId'
     | '/api/v1/og/$logId'
     | '/api/v1/preview/$idOrLogId'
@@ -1294,6 +1316,7 @@ export interface FileRouteTypes {
     | '/api/admin/chat'
     | '/api/admin/logout'
     | '/api/auth/$'
+    | '/api/me/avatar'
     | '/api/mixtape-cover/$logId'
     | '/api/og/$logId'
     | '/api/og/set'
@@ -1302,6 +1325,7 @@ export interface FileRouteTypes {
     | '/api/v1/postman.json'
     | '/api/v1/status'
     | '/api/v1/admin/logout'
+    | '/api/v1/me/avatar'
     | '/api/v1/mixtape-cover/$logId'
     | '/api/v1/og/$logId'
     | '/api/v1/preview/$idOrLogId'
@@ -1381,6 +1405,7 @@ export interface RootRouteChildren {
   ApiAdminChatRoute: typeof ApiAdminChatRoute
   ApiAdminLogoutRoute: typeof ApiAdminLogoutRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
+  ApiMeAvatarRoute: typeof ApiMeAvatarRoute
   ApiMixtapeCoverLogIdRoute: typeof ApiMixtapeCoverLogIdRoute
   ApiOgLogIdRoute: typeof ApiOgLogIdRoute
   ApiOgSetRoute: typeof ApiOgSetRoute
@@ -1389,6 +1414,7 @@ export interface RootRouteChildren {
   ApiV1PostmanDotjsonRoute: typeof ApiV1PostmanDotjsonRoute
   ApiV1StatusRoute: typeof ApiV1StatusRoute
   ApiV1AdminLogoutRoute: typeof ApiV1AdminLogoutRoute
+  ApiV1MeAvatarRoute: typeof ApiV1MeAvatarRoute
   ApiV1MixtapeCoverLogIdRoute: typeof ApiV1MixtapeCoverLogIdRoute
   ApiV1OgLogIdRoute: typeof ApiV1OgLogIdRoute
   ApiV1PreviewIdOrLogIdRoute: typeof ApiV1PreviewIdOrLogIdRoute
@@ -1933,6 +1959,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiMixtapeCoverLogIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/me/avatar': {
+      id: '/api/me/avatar'
+      path: '/api/me/avatar'
+      fullPath: '/api/me/avatar'
+      preLoaderRoute: typeof ApiMeAvatarRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/auth/$': {
       id: '/api/auth/$'
       path: '/api/auth/$'
@@ -1980,6 +2013,13 @@ declare module '@tanstack/react-router' {
       path: '/api/v1/mixtape-cover/$logId'
       fullPath: '/api/v1/mixtape-cover/$logId'
       preLoaderRoute: typeof ApiV1MixtapeCoverLogIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/v1/me/avatar': {
+      id: '/api/v1/me/avatar'
+      path: '/api/v1/me/avatar'
+      fullPath: '/api/v1/me/avatar'
+      preLoaderRoute: typeof ApiV1MeAvatarRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/v1/admin/logout': {
@@ -2287,6 +2327,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiAdminChatRoute: ApiAdminChatRoute,
   ApiAdminLogoutRoute: ApiAdminLogoutRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
+  ApiMeAvatarRoute: ApiMeAvatarRoute,
   ApiMixtapeCoverLogIdRoute: ApiMixtapeCoverLogIdRoute,
   ApiOgLogIdRoute: ApiOgLogIdRoute,
   ApiOgSetRoute: ApiOgSetRoute,
@@ -2295,6 +2336,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiV1PostmanDotjsonRoute: ApiV1PostmanDotjsonRoute,
   ApiV1StatusRoute: ApiV1StatusRoute,
   ApiV1AdminLogoutRoute: ApiV1AdminLogoutRoute,
+  ApiV1MeAvatarRoute: ApiV1MeAvatarRoute,
   ApiV1MixtapeCoverLogIdRoute: ApiV1MixtapeCoverLogIdRoute,
   ApiV1OgLogIdRoute: ApiV1OgLogIdRoute,
   ApiV1PreviewIdOrLogIdRoute: ApiV1PreviewIdOrLogIdRoute,
