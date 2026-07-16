@@ -288,6 +288,64 @@ describe("/me cross-user data scoping (real SQL, two seeded users)", () => {
     const bSubs = await listUserSubmissions(publicUser(userB));
     expect(bSubs.submissions.map((s) => s.id)).toEqual(["sub-b"]);
   });
+
+  it("carries the finding's logId on an APPROVED submission that became a finding", async () => {
+    const { listUserSubmissions } = await import("./account-data");
+
+    // A recording that IS a certified finding (log-shared), submitted and approved:
+    // the join surfaces its coordinate. `seedTrack` mints `findings.track_id =
+    // trackId`, and a submission's `spotify_track_id` is that same recording id.
+    await seedSubmission(db, {
+      id: "sub-approved",
+      spotifyTrackId: "track-shared-00000000",
+      status: "approved",
+      userId: userA,
+    });
+
+    const subs = await listUserSubmissions(publicUser(userA));
+    const approved = subs.submissions.find((s) => s.id === "sub-approved");
+
+    expect(approved?.status).toBe("logged");
+    expect(approved?.logId).toBe("log-shared");
+  });
+
+  it("omits the logId on a PENDING submission even when a finding shares the recording", async () => {
+    const { listUserSubmissions } = await import("./account-data");
+
+    // Same certified recording, but the submission is still pending: the brief limits
+    // the link to the finding an APPROVED submission BECAME, so a pending row stays bare.
+    await seedSubmission(db, {
+      id: "sub-pending",
+      spotifyTrackId: "track-shared-00000000",
+      status: "pending",
+      userId: userA,
+    });
+
+    const subs = await listUserSubmissions(publicUser(userA));
+    const pending = subs.submissions.find((s) => s.id === "sub-pending");
+
+    expect(pending?.status).toBe("pending_review");
+    expect(pending?.logId).toBeUndefined();
+  });
+
+  it("omits the logId on an approved submission whose recording is not a finding", async () => {
+    const { listUserSubmissions } = await import("./account-data");
+
+    // Approved, but the recording it names has no `findings` row (never certified):
+    // the LEFT JOIN yields no log_id, so the row carries none.
+    await seedSubmission(db, {
+      id: "sub-orphan",
+      spotifyTrackId: "track-uncertified-000",
+      status: "approved",
+      userId: userA,
+    });
+
+    const subs = await listUserSubmissions(publicUser(userA));
+    const orphan = subs.submissions.find((s) => s.id === "sub-orphan");
+
+    expect(orphan?.status).toBe("logged");
+    expect(orphan?.logId).toBeUndefined();
+  });
 });
 
 describe("saved sets (real SQL, owner-scoped)", () => {

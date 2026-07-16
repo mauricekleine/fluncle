@@ -3644,6 +3644,164 @@ body::before {
   color: inherit;
 }
 
+/* ── saves door (B3) ─────────────────────────────────────────────────────────────
+   The Saves workbench: a saved finding IS a certified finding, so its row mirrors the
+   archive's `.track-row` ignition grammar (the Gold Veil wash, the Log ID heating to
+   gold, the cover scaling) at the account's 40px cover size, plus an inline `.preview-art`
+   play control and a receded ⋮ menu. Derived only from existing tokens. */
+
+/* The power-scale tools (search + sort), summoned above the list only past the
+   threshold — the Quiet Surface Rule. */
+.saves-tools {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.saves-search {
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+
+.saves-list {
+  gap: 0.1rem;
+}
+
+/* The ignition row: the archive's grammar, laid out for the account's Log ID +
+   40px cover + body + ⋮ columns. `position: relative` anchors the stretched row
+   link; the wash and heat live on hover/focus. */
+.saves-row {
+  align-items: center;
+  background: transparent;
+  border-radius: var(--radius);
+  display: grid;
+  gap: 0.65rem;
+  grid-template-columns: minmax(3rem, auto) 40px minmax(0, 1fr) auto;
+  outline: none;
+  padding: 0.5rem;
+  position: relative;
+  transition:
+    background-color 150ms ease-out,
+    color 150ms ease-out;
+}
+
+.saves-row:hover,
+.saves-row:focus-within {
+  background: var(--accent);
+}
+
+/* The Log ID heats to gold on row hover/focus — the certification light (The
+   Ignition Rule). It sits above the stretched row link so it stays its own target. */
+.saves-row-logid {
+  position: relative;
+  z-index: 1;
+}
+
+.saves-row:hover .track-log-id,
+.saves-row:focus-within .track-log-id {
+  color: var(--accent-foreground);
+}
+
+.saves-row:has(.track-row-link:focus-visible) {
+  box-shadow: inset 0 0 0 2px var(--ring);
+}
+
+/* The cover doubles as the play control: the `.preview-art` wrapper is positioned
+   (for the absolute button) and lifted above the stretched link. */
+.saves-cover-wrap {
+  position: relative;
+  z-index: 1;
+}
+
+.saves-cover {
+  aspect-ratio: 1;
+  background: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: var(--rounded-artwork);
+  display: block;
+  height: 40px;
+  object-fit: cover;
+  transition:
+    transform 180ms cubic-bezier(0.22, 1, 0.36, 1),
+    border-color 180ms ease-out;
+  width: 40px;
+}
+
+.saves-row:hover .saves-cover,
+.saves-row:focus-within .saves-cover {
+  border-color: color-mix(in oklch, var(--primary) 42%, transparent);
+  transform: scale(1.06);
+}
+
+.saves-row-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.saves-row-title {
+  color: var(--foreground);
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.saves-row-meta {
+  color: var(--stardust);
+  font-size: 0.76rem;
+}
+
+.saves-row-menu {
+  z-index: 1;
+}
+
+/* The saved note reads inside the ⋮ menu — quiet, wrapping, non-interactive. */
+.saves-note {
+  color: var(--stardust);
+  font-weight: 400;
+  max-width: 18rem;
+  white-space: normal;
+}
+
+/* The Sent ledger, held clearly apart from the keep-lists above it. A status
+   register: title (a link only when logged) + a badge, no cover, no bookmark. */
+.saves-sent {
+  margin-top: 0.75rem;
+}
+
+.saves-sent-list {
+  gap: 0.15rem;
+}
+
+.saves-sent-row {
+  align-items: center;
+  display: flex;
+  gap: 0.6rem;
+  justify-content: space-between;
+  padding: 0.3rem 0;
+}
+
+.saves-sent-title {
+  color: var(--starlight-cream);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+a.saves-sent-title {
+  text-decoration: none;
+  transition: color 150ms ease-out;
+}
+
+a.saves-sent-title:hover,
+a.saves-sent-title:focus-visible {
+  color: var(--eclipse-glow);
+}
+
 /* The Grounded Floats Rule (DESIGN.md): under reduced motion, every float
    collapses to a color-only transition. The Gold Veil wash carries feedback. */
 @media (prefers-reduced-motion: reduce) {
@@ -3654,6 +3812,17 @@ body::before {
   }
 
   .track-row :is(.track-artwork, svg) {
+    transform: none !important;
+  }
+
+  /* The Saves rows ground the same way: the cover never scales, the wash + heat carry
+     the feedback on their own. */
+  .saves-cover {
+    transition-property: border-color;
+  }
+
+  .saves-row:hover .saves-cover,
+  .saves-row:focus-within .saves-cover {
     transform: none !important;
   }
 
