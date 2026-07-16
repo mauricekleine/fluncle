@@ -1,5 +1,5 @@
 import { type Client } from "@libsql/client";
-import { betterAuth } from "better-auth";
+import { betterAuth, type BetterAuthOptions } from "better-auth";
 import { drizzle } from "drizzle-orm/libsql";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as schema from "../../db/schema";
@@ -17,13 +17,18 @@ import { createPublicAuthOptions } from "./public-auth";
 //      returns the same 200 whether or not the address is on an account, and the
 //      reset email only goes out for a real account, delivered from `sendResetPassword`.
 
-// Capture the reset-email send without touching Resend.
+// Capture the reset-email send without touching Resend. The mock covers EVERY
+// `./resend` export the sign-up path can reach (verification email, newsletter
+// segment) — a partial mock leaves those as throwing getters, which is noise here
+// and a variable this suite doesn't control.
 const sendPasswordResetEmail = vi.fn<(params: { to: string; url: string }) => Promise<void>>(
   async () => {},
 );
 
 vi.mock("./resend", () => ({
+  addContactToSegment: async () => {},
   sendPasswordResetEmail: (params: { to: string; url: string }) => sendPasswordResetEmail(params),
+  sendVerificationEmail: async () => {},
 }));
 
 let db: Client;
@@ -42,7 +47,21 @@ beforeEach(async () => {
   db = await createIntegrationDb();
   process.env.BETTER_AUTH_SECRET = "password-reset-test-secret-not-for-production";
   process.env.BETTER_AUTH_URL = BASE_URL;
-  auth = betterAuth(createPublicAuthOptions(drizzle(db, { schema })));
+  const options = createPublicAuthOptions(drizzle(db, { schema }));
+
+  // This suite tests the RESET rail, not sign-up verification. The verification
+  // branch is what makes better-auth call `ctx.request.clone()` mid-sign-up, and on
+  // Node's undici that clone intermittently throws `TypeError: unusable` (a teed
+  // body-stream race — it 500'd three consecutive Cloudflare builds while passing
+  // locally). Prod runs on workerd, where sign-ups verifiably work; the branch has
+  // its own coverage in the device-auth and signup-hooks suites. Turning it off here
+  // removes the clone from this file's path entirely.
+  const testOptions: BetterAuthOptions = {
+    ...options,
+    emailVerification: { ...options.emailVerification, sendOnSignUp: false },
+  };
+
+  auth = betterAuth(testOptions);
 });
 
 afterEach(() => {
