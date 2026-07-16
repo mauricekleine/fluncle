@@ -1,12 +1,14 @@
 // The audio-embedding vector core — the pure math AND the SQL contract of the MuQ
 // similarity pipeline (docs/track-lifecycle.md). The box's `fluncle-embed` cron
 // produces a 1024-d MuQ vector per finding and the agent-tier `update_track` path
-// stores it TWICE: as a JSON array in `tracks.embedding_json` (the source of truth)
-// and as a native libSQL `F32_BLOB(1024)` in `tracks.embedding_blob` (the form the
-// DATABASE can rank). Everything downstream — `get_similar_findings`, the `/mix` rail,
-// a galaxy's core-first order — ranks IN SQL against the blob.
+// stores it as a native libSQL `F32_BLOB(1024)` in `tracks.embedding_blob` (the form
+// the DATABASE can rank) via `vector32()` — the sole stored form and the source of
+// truth. Everything downstream — `get_similar_findings`, the `/mix` rail, a galaxy's
+// core-first order, the `fluncle-cluster` corpus read — ranks IN SQL against the blob.
+// (A legacy `tracks.embedding_json` column still exists but is inert, no longer written
+// or read; it is being retired — see schema.ts.)
 //
-// WHY THE RANKING MOVED INTO SQL. It used to pull every row's `embedding_json` into
+// WHY THE RANKING MOVED INTO SQL. It used to pull every row's JSON vector into
 // the isolate and cosine-rank there. That path is dead (measured; the numbers live in
 // docs/local-database.md "Local is not production"): a 1024-d vector is 21,804 B as
 // JSON, so the unpaginated
@@ -185,36 +187,6 @@ export function readEmbeddingBlob(cell: unknown): number[] | null {
   }
 
   return Array.from(new Float32Array(buffer));
-}
-
-/**
- * The SQL expression yielding a finding's rankable vector: the blob when it has one,
- * else the JSON parsed on the fly — the zero-downtime read contract while
- * `embedding_json` remains the source of truth (a row embedded by the previous
- * Worker between the deploy's backfill and its cutover has no blob yet).
- *
- * THE GUARD IS NOT OPTIONAL. `vector32()` THROWS on anything it cannot read — a NULL,
- * a malformed string, a wrong-width array, an array of strings — and one bad row would
- * take down the whole query, where the old JS path merely skipped it (`parseEmbedding`
- * → null). So the JSON arm is admitted only when it is valid JSON, of exactly
- * {@link EMBEDDING_DIMS} elements, every one of them a number. `CASE` short-circuits,
- * so a backfilled row (the steady state) never pays for any of that.
- *
- * `alias` is the table alias the columns hang off — a fixed literal at every call
- * site, never user input.
- */
-export function embeddingVectorSql(alias = "tracks"): string {
-  return `case
-    when ${alias}.embedding_blob is not null then ${alias}.embedding_blob
-    when ${alias}.embedding_json is not null
-         and json_valid(${alias}.embedding_json)
-         and json_array_length(${alias}.embedding_json) = ${EMBEDDING_DIMS}
-         and not exists (
-           select 1 from json_each(${alias}.embedding_json) je
-           where je.type not in ('integer', 'real')
-         )
-      then vector32(${alias}.embedding_json)
-  end`;
 }
 
 /**

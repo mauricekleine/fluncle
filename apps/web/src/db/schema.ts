@@ -87,7 +87,7 @@ export const tracks = sqliteTable(
     // public surface — NOT in `track-update.ts` VISIBLE_FIELDS). Internal does NOT mean
     // stripped, though — the other two internal columns each reach the public boundary
     // differently: `features_json` IS on the public DTO (parsed onto it as `features` —
-    // creative fuel for the video agent, deliberately surfaced), and `embedding_json` is
+    // creative fuel for the video agent, deliberately surfaced), and `embedding_blob` is
     // simply never selected into a DTO at all. Neither passes through
     // `toPublicTrackListItem`'s strip list.
     //   - `analyzedAt`   — ISO timestamp of the analysis write.
@@ -250,22 +250,22 @@ export const tracks = sqliteTable(
     durationMs: integer("duration_ms").notNull(),
     // The finding's MuQ audio embedding, in the form the DATABASE can rank: a native
     // libSQL `F32_BLOB(1024)`. Every similarity read (`get_similar_findings`, the `/mix`
-    // rail, a galaxy's core-first order) ranks with `vector_distance_cos(embedding_blob,
-    // ?)` IN SQL and ships back only the winners — never the vectors. Written alongside
-    // `embedding_json` by the same agent-tier `update_track` path (`vector32(?)` converts
-    // the validated JSON server-side), and backfilled from `embedding_json` on every
-    // deploy (scripts/backfill-embedding-blob.ts). See lib/server/embedding.ts for the
-    // read contract (blob first, guarded JSON fallback) and the raw-blob probe binding.
+    // rail, a galaxy's core-first order, the `fluncle-cluster` corpus read) ranks with
+    // `vector_distance_cos(embedding_blob, ?)` IN SQL and ships back only the winners —
+    // never the vectors. This is the SOLE stored form and the source of truth: the
+    // agent-tier `update_track` path writes it directly via `vector32(?)` (the validated
+    // JSON converted server-side; the Worker never encodes a vector). Internal analysis
+    // fuel like `features_json`, so writing it moves no public lastmod. NULL until the
+    // `fluncle-embed` cron drains the `embedding_blob IS NULL` queue. See
+    // lib/server/embedding.ts for the read contract (`readEmbeddingBlob`) and the
+    // raw-blob probe binding.
     embeddingBlob: float32Vector("embedding_blob"),
-    // The same vector as a JSON array — the ORIGINAL storage form, and still the
-    // source of truth: the blob is derived from it, `list_track_embeddings` (the
-    // `fluncle-cluster` cron's corpus read) reads it, and it is what a backfill can
-    // rebuild a lost blob from. Written by the on-box `fluncle-embed` cron (torch on
-    // rave-02) via the agent-tier `update_track` path; internal analysis fuel like
-    // `features_json`, so writing it moves no public lastmod. NULL until the embed cron
-    // drains it (`embedding_json IS NULL` is the queue). It is 82% of the database at
-    // 100k rows and its removal is the recorded follow-up, once the blob path has run in
-    // production. See docs/track-lifecycle.md.
+    // LEGACY. The original JSON storage form of the vector. No code writes or reads it
+    // anymore — the blob above is the sole stored form — so it is inert; the column is
+    // being retired (its `DROP COLUMN` is the follow-up now that the blob path has run in
+    // production). At ~20 KB a row it was 82% of the database at 100k rows, which is why
+    // it goes. Until the drop lands, `scripts/backfill-embedding-blob.ts` still runs on
+    // deploy as a belt for any legacy blob-less straggler. See docs/track-lifecycle.md.
     embeddingJson: text("embedding_json"),
     featuresJson: text("features_json"),
     // The Discogs release the finding resolves to (read-only enrichment, best-effort,
@@ -417,7 +417,7 @@ export const tracks = sqliteTable(
     // not an archive scan.
     index("tracks_embed_queue_idx")
       .on(table.trackId)
-      .where(sql`${table.sourceAudioKey} is not null and ${table.embeddingJson} is null`),
+      .where(sql`${table.sourceAudioKey} is not null and ${table.embeddingBlob} is null`),
     // THE OPERATOR'S DISMISSALS — "not for me" (docs/the-ear.md § The operator's actions).
     // PARTIAL, exactly like the anchor + embed queues above: dismissals are rare (an operator
     // act, never a machine one), so the index holds a tiny, near-static slice of a growing

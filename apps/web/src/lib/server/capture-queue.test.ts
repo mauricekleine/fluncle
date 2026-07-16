@@ -297,7 +297,7 @@ describe("listTracks captureQueue (the full-song capture queue)", () => {
   it("does NOT add a capture predicate to the EMBED queue (capture never gates it)", async () => {
     await listTracks({ hasEmbedding: false, limit: 50, order: "asc" });
     const sql = lastListSql();
-    expect(sql).toContain("embedding_json is null");
+    expect(sql).toContain("embedding_blob is null");
     expect(sql).not.toContain("capture_status");
   });
 });

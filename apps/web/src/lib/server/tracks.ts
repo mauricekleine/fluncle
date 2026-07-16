@@ -17,7 +17,7 @@ import { composeAppleArtworkUrl } from "./apple-music";
 import { parseArtistsJson } from "./artists";
 import { getDb, typedRow, typedRows } from "./db";
 import { discogsReleaseUrl } from "./discogs";
-import { cosineFromDistance, parseEmbedding, readEmbeddingBlob, toVectorProbe } from "./embedding";
+import { cosineFromDistance, readEmbeddingBlob, toVectorProbe } from "./embedding";
 import { logEvent } from "./log";
 import { isLogId } from "../log-id";
 import {
@@ -1153,10 +1153,9 @@ export async function getTrackNeighbors(track: {
  * Ordering is deterministic: distance ascending, `track_id` ascending as the tiebreak.
  *
  * SCALE NOTE. The scan is unfiltered by design — "close in sound" is a GLOBAL nearest-
- * neighbour question, and the archive is one corpus. Ranking the `embedding_blob` column
- * directly (NOT `embeddingVectorSql()`, whose JSON-fallback `json_each` guard hosted Turso
- * runs per row — see the call site) keeps it a plain linear blob scan. The lever, when the
- * archive gets large, is a btree pre-filter before the scan — `where galaxy_id = ?` — but
+ * neighbour question, and the archive is one corpus. Ranking the native `embedding_blob`
+ * column directly (the DB does the cosine in SQL) keeps it a plain linear blob scan. The
+ * lever, when the archive gets large, is a btree pre-filter before the scan — `where galaxy_id = ?` — but
  * it would confine the row to the finding's own galaxy, which CHANGES what comes back, and
  * a precomputed neighbour table (the Ear pattern) is the durable answer. Both are product/
  * infra calls, not made here.
@@ -1169,18 +1168,16 @@ export async function getSimilarFindings(idOrLogId: string, limit = 6): Promise<
   const db = await getDb();
   const targetResult = await db.execute({
     args: [idOrLogId, idOrLogId],
-    sql: `select tracks.track_id, tracks.embedding_json from ${FINDINGS_FROM}
+    sql: `select tracks.track_id, tracks.embedding_blob from ${FINDINGS_FROM}
           where tracks.track_id = ? or findings.log_id = ? limit 1`,
   });
-  const targetRow = typedRow<{ embedding_json: string | null; track_id: string }>(
-    targetResult.rows,
-  );
+  const targetRow = typedRow<{ embedding_blob: unknown; track_id: string }>(targetResult.rows);
 
   if (!targetRow) {
     return [];
   }
 
-  const target = parseEmbedding(targetRow.embedding_json);
+  const target = readEmbeddingBlob(targetRow.embedding_blob);
 
   if (!target) {
     return [];
@@ -1189,17 +1186,10 @@ export async function getSimilarFindings(idOrLogId: string, limit = 6): Promise<
   // The probe rides as raw f32 bytes, NOT as a JSON string — a 14x cliff on hosted that
   // does not reproduce locally (embedding.ts, `toVectorProbe`).
   const probe = toVectorProbe(target);
-  // Rank on `embedding_blob` DIRECTLY, not through `embeddingVectorSql()`. That helper's
-  // JSON-fallback arm carries a `not exists (json_each(embedding_json) …)` guard, and
-  // hosted Turso EXECUTES that correlated `json_each` PER ROW even when the blob branch
-  // should short-circuit — a 21 KB / 1024-element parse × every candidate that turned a
-  // 67-row scan into 3.3 s (measured 2026-07-16, hosted; `EXPLAIN` showed two
-  // `SCAN je VIRTUAL TABLE` passes). Filtering to `embedding_blob is not null` and ranking
-  // the blob column drops the parse entirely (~3x, and it kills the worst-case amplifier).
-  // The cost: a finding embedded but not yet blob-backfilled (the transient window between
-  // a deploy's backfill and its cutover) is skipped here rather than JSON-ranked — the same
-  // silent skip a malformed vector always got, and it self-heals on the next deploy.
-  // Args bind in SQL-TEXT order: probe, then the excluded target, then the limit.
+  // Rank the native `embedding_blob` column directly — the DB does the cosine in SQL and
+  // ships back only the winners. A candidate without a blob (un-embedded) is skipped by the
+  // `embedding_blob is not null` filter, never seen by `vector_distance_cos` (it throws on a
+  // NULL). Args bind in SQL-TEXT order: probe, then the excluded target, then the limit.
   const rankedResult = await db.execute({
     args: [probe, targetRow.track_id, limit],
     sql: `select tracks.track_id as track_id,
@@ -1293,7 +1283,7 @@ function toMixTrackDTO(row: MixTrackRow): MixTrackDTO {
 // A candidate/target row for the mixability engine: the four scoring columns + its ids.
 type MixRow = {
   bpm: number | null;
-  embedding_json: string | null;
+  embedding_blob: unknown;
   features_json: string | null;
   key: string | null;
   log_id: string | null;
@@ -1304,7 +1294,7 @@ type MixRow = {
 // reports only whether the track HAS one (`has_embedding`, feeding the coverage gate)
 // and its cosine DISTANCE to the target (`sonic_dist` — null when either side has no
 // vector), which `cosineFromDistance` turns back into the cosine the engine scores.
-type MixCandidateRow = Omit<MixRow, "embedding_json"> & {
+type MixCandidateRow = Omit<MixRow, "embedding_blob"> & {
   has_embedding: number | null;
   sonic_dist: number | null;
 };
@@ -1541,7 +1531,7 @@ export async function getMixableTracks(
   const targetResult = await db.execute({
     args: [idOrLogId, idOrLogId],
     sql: `select tracks.track_id, findings.log_id, tracks.key, tracks.bpm,
-                 tracks.embedding_json, tracks.features_json
+                 tracks.embedding_blob, tracks.features_json
           from ${MIX_FROM}
           where tracks.track_id = ? or findings.log_id = ? limit 1`,
   });
@@ -1567,7 +1557,7 @@ export async function getMixableTracks(
 
   // The target's vector becomes the probe. When it has none, every pair's sonic term is
   // null anyway, so the scan skips the distance work entirely.
-  const targetEmbedding = parseEmbedding(targetRow.embedding_json);
+  const targetEmbedding = readEmbeddingBlob(targetRow.embedding_blob);
   const probe = targetEmbedding ? toVectorProbe(targetEmbedding) : null;
 
   // A chain holds findings AND catalogue tracks, so an exclusion may arrive as either kind
@@ -1600,10 +1590,9 @@ export async function getMixableTracks(
       ...excludedLogIds,
       ...excludedTrackIds,
     ],
-    // `vec` reads `embedding_blob` DIRECTLY, not `embeddingVectorSql()`: that helper's
-    // JSON-fallback `json_each` guard runs per row on hosted even when the blob short-circuits
-    // (see getSimilarFindings / search.ts). Safe — the write path sets the blob atomically with
-    // the JSON, so prod has zero json-only rows across the whole `tracks` table.
+    // `vec` is the native `embedding_blob` column — the whole-archive candidate scan reads it
+    // directly and the DB ranks the cosine in SQL. A candidate with no blob gets a null `vec`
+    // (and a null sonic term), never pulled into the isolate.
     sql: `select track_id, log_id, key, bpm, features_json, has_embedding,
                  case when vec is null then null else ${distanceSql} end as sonic_dist
           from (
@@ -1623,14 +1612,14 @@ export async function getMixableTracks(
     // The database already answered the sonic question for this pair; `null` here means
     // "no comparable vector", exactly as a null embedding meant before.
     sonicCos: probe ? cosineFromDistance(row.sonic_dist) : null,
-    track: toMixTrack({ ...row, embedding_json: null }),
+    track: toMixTrack({ ...row, embedding_blob: null }),
   }));
 
   // The sonic-term gate is a global archive property: count the embedded tracks in play
   // (candidates + the target when embedded) and open the gate only past the floor.
   const embeddedCount =
     candidateRows.filter((row) => Boolean(row.has_embedding)).length +
-    (targetRow.embedding_json !== null ? 1 : 0);
+    (targetRow.embedding_blob !== null ? 1 : 0);
   const gateOpen = sonicGateOpen(embeddedCount);
   const target = toMixTrack(targetRow);
 
@@ -1771,7 +1760,7 @@ export async function listMixableArtists(
           join track_artists on track_artists.artist_id = artists.id
           join tracks on tracks.track_id = track_artists.track_id
           where tracks.key is not null
-            and (tracks.embedding_blob is not null or tracks.embedding_json is not null)
+            and tracks.embedding_blob is not null
             ${q ? "and artists.name like ? collate nocase" : ""}
           group by artists.id
           order by track_count desc, artists.name asc
@@ -1822,7 +1811,7 @@ export async function getMixOpeners(
           join artists on artists.id = track_artists.artist_id
           where artists.slug in (${slugs.map(() => "?").join(", ")})
             and tracks.key is not null
-            and (tracks.embedding_blob is not null or tracks.embedding_json is not null)
+            and tracks.embedding_blob is not null
           order by (findings.log_id is not null) desc, tracks.popularity desc
           limit ?`,
   });
@@ -1867,7 +1856,7 @@ export async function getMixableOrder(
   const result = await db.execute({
     args: unique,
     sql: `select tracks.track_id, findings.log_id, tracks.key, tracks.bpm,
-                 tracks.embedding_json, tracks.features_json, tracks.title, tracks.artists_json
+                 tracks.embedding_blob, tracks.features_json, tracks.title, tracks.artists_json
           from ${FINDINGS_FROM} where findings.log_id in (${placeholders})`,
   });
 
@@ -1896,7 +1885,7 @@ export async function getMixableOrder(
   });
 
   const tracks = ordered.map((row) => toMixTrack(row));
-  const embeddedCount = ordered.filter((row) => row.embedding_json !== null).length;
+  const embeddedCount = ordered.filter((row) => row.embedding_blob !== null).length;
   const gateOpen = sonicGateOpen(embeddedCount);
 
   const seedIndex = options.seedLogId !== undefined ? unique.indexOf(options.seedLogId) : -1;
@@ -1987,7 +1976,7 @@ export async function getFindingsByGalaxyRanked(
 }
 
 /**
- * Which of the given tracks already carry a MuQ audio embedding (`embedding_json IS
+ * Which of the given tracks already carry a MuQ audio embedding (`embedding_blob IS
  * NOT NULL`). Returns the trackIds that have one as a Set — the admin board turns it
  * into the Embeddings cell status. The embedding vector is INTERNAL analysis fuel: it
  * never rides the public `TrackListItem` contract (only its presence, admin-only, and
@@ -2006,7 +1995,7 @@ export async function listEmbeddingPresenceForTracks(trackIds: string[]): Promis
     args: trackIds,
     sql: `select track_id from tracks
           where track_id in (${placeholders})
-            and embedding_json is not null`,
+            and embedding_blob is not null`,
   });
 
   return new Set(typedRows<{ track_id: string }>(result.rows).map((row) => row.track_id));
@@ -2079,7 +2068,7 @@ type ListTracksOptions = {
   hasContext?: boolean;
   /**
    * Audio-embedding presence (admin only) — the MuQ embed queue's filter.
-   * `false` = the embed worklist: `embedding_json IS NULL` AND a captured source key
+   * `false` = the embed worklist: `embedding_blob IS NULL` AND a captured source key
    * on file (`source_audio_key IS NOT NULL`), since MuQ embeds the CAPTURED full song,
    * not a preview or the unmatched tail (RFC full-audio § Unit 3) — a keyless finding is
    * excluded. `true` = a vector is on file (a pure presence check, no key gate). Omitted
@@ -2293,16 +2282,16 @@ export async function listTracks({
     filterClauses.push("tracks.key is null");
   }
 
-  // The MuQ embed queue (RFC full-audio § Unit 3): `embedding_json IS NULL` AND a
+  // The MuQ embed queue (RFC full-audio § Unit 3): `embedding_blob IS NULL` AND a
   // captured source key on file (`source_audio_key IS NOT NULL`) — the `fluncle-embed`
   // cron's worklist. The key gate is the point: MuQ embeds the CAPTURED full song, never
   // a preview or the unmatched tail, so a keyless finding is not embeddable yet and stays
   // out of the queue. `true` = a vector is already on file (a pure presence check — no key
   // gate; an embedded finding is done regardless of how it was captured). Mirrors hasKey.
   if (hasEmbedding === true) {
-    filterClauses.push("tracks.embedding_json is not null");
+    filterClauses.push("tracks.embedding_blob is not null");
   } else if (hasEmbedding === false) {
-    filterClauses.push("tracks.embedding_json is null and tracks.source_audio_key is not null");
+    filterClauses.push("tracks.embedding_blob is null and tracks.source_audio_key is not null");
   }
 
   // The context queue. `true` = resolved (a note is stored). `false` = the work

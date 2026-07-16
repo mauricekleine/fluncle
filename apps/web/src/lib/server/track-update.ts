@@ -92,9 +92,9 @@ export type TrackUpdate = {
    */
   contextStatus?: "pending" | "resolved" | "empty" | "failed";
   /**
-   * The finding's MuQ audio embedding as a JSON array of 1024 floats (the
-   * `embedding_json` column). Internal analysis fuel like `features` — written by the
-   * on-box `fluncle-embed` cron, never rendered, so writing it does NOT bump
+   * The finding's MuQ audio embedding as a JSON array of 1024 floats — `vector32()`
+   * converts it to the native `embedding_blob` server-side. Internal analysis fuel like
+   * `features` — written by the on-box `fluncle-embed` cron, never rendered, so writing it does NOT bump
    * updated_at (a whole-archive embed backfill must move no public lastmod). It IS the
    * sonic-similarity space `get_similar_findings` ranks over; the handler validates the
    * 1024-d shape before it reaches here. See docs/track-lifecycle.md.
@@ -500,23 +500,21 @@ export async function updateTrack(
   }
 
   if (update.embedding !== undefined) {
-    // THE DUAL WRITE. The vector lands in BOTH forms, in one statement: the JSON array
-    // (the source of truth) and the native `F32_BLOB(1024)` the similarity reads rank
-    // against in SQL (`vector32()` converts it server-side, so the Worker never encodes
-    // a vector). Writing only the JSON would make a finding invisible to "more like
-    // this" until the next deploy's backfill caught it.
+    // The vector lands as a native `F32_BLOB(1024)` — the ONLY form now: every similarity
+    // read ranks `vector_distance_cos(embedding_blob, ?)` in SQL, and `vector32()` converts
+    // the validated JSON server-side (the Worker never encodes a vector). The write no
+    // longer mirrors to the `embedding_json` column (that column is being retired).
     //
-    // Empty string CLEARS both — null, not "", so the `embedding_json IS NULL` embed
-    // queue treats a cleared row as un-embedded (re-embed on the next tick), and no
-    // orphan blob outlives the vector it came from. `vector32(NULL)` throws, hence the
-    // two arms rather than one clever expression. The handler has already validated the
-    // 1024-d shape (`coerceEmbedding`), so `vector32()` cannot see garbage here.
+    // Empty string CLEARS it — null, not "", so the `embedding_blob IS NULL` embed queue
+    // treats a cleared row as un-embedded (re-embed on the next tick). `vector32(NULL)`
+    // throws, hence the two arms rather than one expression. The handler has already
+    // validated the 1024-d shape (`coerceEmbedding`), so `vector32()` cannot see garbage.
     if (update.embedding === "") {
-      sets.push("embedding_json = ?", "embedding_blob = ?");
-      args.push(null, null);
+      sets.push("embedding_blob = ?");
+      args.push(null);
     } else {
-      sets.push("embedding_json = ?", "embedding_blob = vector32(?)");
-      args.push(update.embedding, update.embedding);
+      sets.push("embedding_blob = vector32(?)");
+      args.push(update.embedding);
     }
   }
 

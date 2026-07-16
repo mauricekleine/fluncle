@@ -19,7 +19,7 @@ import {
 } from "@fluncle/contracts";
 import { galaxySlug } from "@fluncle/contracts/util/galaxy-slug";
 import { getDb, typedRow, typedRows } from "./db";
-import { cosineSimilarity } from "./embedding";
+import { cosineSimilarity, readEmbeddingBlob } from "./embedding";
 import { getFindingsByGalaxyRanked, toPublicTrackListItem } from "./tracks";
 
 // A row from the `galaxies` table (snake_case columns).
@@ -572,7 +572,7 @@ export async function listTrackEmbeddingsPage(
   const db = await getDb();
   const after = decodeCursor(cursor);
   const args: Array<number | string> = [];
-  let where = "findings.log_id is not null and tracks.embedding_json is not null";
+  let where = "findings.log_id is not null and tracks.embedding_blob is not null";
 
   if (after) {
     where += " and tracks.track_id > ?";
@@ -582,13 +582,13 @@ export async function listTrackEmbeddingsPage(
   args.push(limit + 1);
   const result = await db.execute({
     args,
-    sql: `select tracks.track_id, findings.galaxy_id, tracks.embedding_json
+    sql: `select tracks.track_id, findings.galaxy_id, tracks.embedding_blob
           from findings join tracks on tracks.track_id = findings.track_id
           where ${where} order by tracks.track_id asc limit ?`,
   });
 
   const rows = typedRows<{
-    embedding_json: string;
+    embedding_blob: unknown;
     galaxy_id: string | null;
     track_id: string;
   }>(result.rows);
@@ -598,9 +598,9 @@ export async function listTrackEmbeddingsPage(
   const embeddings: TrackEmbedding[] = [];
 
   for (const row of page) {
-    const embedding = parseCentroid(row.embedding_json);
+    const embedding = readEmbeddingBlob(row.embedding_blob);
 
-    if (embedding.length > 0) {
+    if (embedding && embedding.length > 0) {
       embeddings.push({ embedding, galaxyId: row.galaxy_id, trackId: row.track_id });
     }
   }

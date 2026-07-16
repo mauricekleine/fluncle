@@ -174,7 +174,7 @@ const fetchBoard = createServerFn({ method: "GET" })
     // on, and which plans it's pencilled into), which
     // findings carry an internal context_note (the Context column status — pulled
     // admin-only since context_note never rides the public track contract), which
-    // carry a MuQ audio embedding (the Embeddings column status — `embedding_json`
+    // carry a MuQ audio embedding (the Embeddings column status — `embedding_blob`
     // presence, admin-only for the same reason), and the Discogs/Last.fm backfill
     // RAN-stamps (`*_attempted_at`) + the Last.fm LOVED-stamp (`backfill_lastfm_done_at`).
     // The board's Discogs/Last.fm cells are workflow trackers: `done` once the backfill

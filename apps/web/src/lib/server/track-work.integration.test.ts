@@ -82,11 +82,11 @@ async function withAudio(
       `${trackId}/sha.webm`,
       fields.analyzedFrom ?? null,
       fields.analyzedFrom ? "2026-07-01T00:00:00.000Z" : null,
-      fields.embedding ? JSON.stringify(Array.from({ length: 1024 }, () => 0.01)) : null,
+      fields.embedding ? new Uint8Array(new Float32Array(1024).fill(0.01).buffer) : null,
       trackId,
     ],
     sql: `update tracks
-          set source_audio_key = ?, analyzed_from = ?, analyzed_at = ?, embedding_json = ?,
+          set source_audio_key = ?, analyzed_from = ?, analyzed_at = ?, embedding_blob = ?,
               capture_status = 'done'
           where track_id = ?`,
   });
@@ -831,7 +831,7 @@ describe("listTrackWork — the wrong-audio quarantine (docs/the-ear.md § Wrong
             set capture_status = 'wrong-audio',
                 capture_priority = 3,
                 source_audio_key = 'catalogue/catwrong00000000000000/badbeef.webm',
-                embedding_json = null
+                embedding_blob = null
             where track_id = ?`,
     });
 
@@ -858,7 +858,7 @@ describe("listTrackWork — the wrong-audio quarantine (docs/the-ear.md § Wrong
             set capture_status = 'quarantine-cleared',
                 capture_priority = 3,
                 source_audio_key = 'catalogue/catclear00000000000000/badbeef.webm',
-                embedding_json = null
+                embedding_blob = null
             where track_id = ?`,
     });
 

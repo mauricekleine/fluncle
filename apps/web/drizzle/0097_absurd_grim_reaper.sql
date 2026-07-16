@@ -1,0 +1,2 @@
+DROP INDEX `tracks_embed_queue_idx`;--> statement-breakpoint
+CREATE INDEX `tracks_embed_queue_idx` ON `tracks` (`track_id`) WHERE "tracks"."source_audio_key" is not null and "tracks"."embedding_blob" is null;

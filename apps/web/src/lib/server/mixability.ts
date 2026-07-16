@@ -19,7 +19,7 @@
 //   Coverage — 16/17 keyed, 17/17 features, 1/17 embedded (the sonic term dormant).
 //
 // THE SIGNAL REALITY. As of 2026-07-11 the embed cron has DRAINED: all 60 findings
-// carry an `embedding_json` vector (every one is assigned to a sonic galaxy, which is
+// carry a MuQ embedding vector (every one is assigned to a sonic galaxy, which is
 // impossible without one), so `sonicGateOpen(60)` → 1770 pairs ≥ MIN_EMBEDDED_PAIRS
 // and THE SONIC TERM IS LIVE. It activated with zero code change, exactly as designed.
 // The other signals: `key` ~50/60 and discriminative; `bpm` ~53/60 but near-constant in
@@ -30,7 +30,7 @@
 // downstream RFC into planning around a dead engine.
 
 import { type Camelot, parseKey, toCamelot } from "../key-camelot";
-import { cosineSimilarity, parseEmbedding } from "./embedding";
+import { cosineSimilarity, readEmbeddingBlob } from "./embedding";
 
 // ── Versioned product config ─────────────────────────────────────────────────
 
@@ -1127,16 +1127,16 @@ export function transitionsAlong(
   return transitions;
 }
 
-/** Parse a stored embedding for a `MixTrack` (thin re-export of the embedding parser). */
+/** Read a stored embedding for a `MixTrack` from its native `embedding_blob` bytes. */
 export function toMixTrack(row: {
   bpm: number | null;
-  embedding_json: string | null;
+  embedding_blob: unknown;
   features_json: string | null;
   key: string | null;
 }): MixTrack {
   return {
     bpm: row.bpm,
-    embedding: parseEmbedding(row.embedding_json),
+    embedding: readEmbeddingBlob(row.embedding_blob),
     features: parseFeatureVector(row.features_json),
     key: row.key,
   };

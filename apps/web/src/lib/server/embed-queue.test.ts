@@ -12,13 +12,13 @@ import { listTracks } from "./tracks";
 
 // The MuQ embed worklist (RFC full-audio § Unit 3): `hasEmbedding=false` lists findings
 // still needing an embedding — but ONLY the CAPTURED full songs, never a preview or the
-// unmatched tail. So the queue is `embedding_json IS NULL AND source_audio_key IS NOT NULL`:
+// unmatched tail. So the queue is `embedding_blob IS NULL AND source_audio_key IS NOT NULL`:
 // a keyless finding is excluded (there is no captured song to embed from); a keyed but
 // still-unembedded one is in. `hasEmbedding=true` stays a pure presence check (no key gate).
 
 type StoredTrack = {
   added_at: string;
-  embedding_json: string | null;
+  embedding_blob: string | null;
   source_audio_key: string | null;
   track_id: string;
 };
@@ -27,21 +27,21 @@ const archive: StoredTrack[] = [
   // IN the queue: captured (has a source key) but not yet embedded.
   {
     added_at: "2026-06-03T00:00:00.000Z",
-    embedding_json: null,
+    embedding_blob: null,
     source_audio_key: "003.1.1A/abc.m4a",
     track_id: "t-keyed-unembedded",
   },
   // EXCLUDED: no captured song → nothing to embed from.
   {
     added_at: "2026-06-02T00:00:00.000Z",
-    embedding_json: null,
+    embedding_blob: null,
     source_audio_key: null,
     track_id: "t-keyless",
   },
   // EXCLUDED: already carries a vector.
   {
     added_at: "2026-06-01T00:00:00.000Z",
-    embedding_json: "[0.1]",
+    embedding_blob: "[0.1]",
     source_audio_key: "001.1.1A/def.m4a",
     track_id: "t-embedded",
   },
@@ -92,7 +92,7 @@ function fullRow(stored: StoredTrack) {
 
 // The JS mirror of the embed key-gate: unembedded AND captured.
 function matchesEmbedQueue(t: StoredTrack): boolean {
-  return t.embedding_json === null && t.source_audio_key !== null;
+  return t.embedding_blob === null && t.source_audio_key !== null;
 }
 
 beforeEach(() => {
@@ -101,7 +101,7 @@ beforeEach(() => {
     const isCount = query.sql.includes("count(*)");
     // The embed key-gate emits BOTH predicates; model the archive filter off them.
     const wantsEmbedQueue =
-      query.sql.includes("embedding_json is null") &&
+      query.sql.includes("embedding_blob is null") &&
       query.sql.includes("source_audio_key is not null");
     const matched = archive
       .filter((t) => (wantsEmbedQueue ? matchesEmbedQueue(t) : true))
@@ -129,11 +129,11 @@ function lastListSql(): string {
 }
 
 describe("listTracks hasEmbedding=false — the MuQ embed key-gate", () => {
-  it("gates the embed worklist on a captured source key (embedding_json IS NULL AND source_audio_key IS NOT NULL)", async () => {
+  it("gates the embed worklist on a captured source key (embedding_blob IS NULL AND source_audio_key IS NOT NULL)", async () => {
     await listTracks({ hasEmbedding: false, limit: 50, order: "asc" });
     const sql = lastListSql();
 
-    expect(sql).toContain("embedding_json is null");
+    expect(sql).toContain("embedding_blob is null");
     expect(sql).toContain("source_audio_key is not null");
   });
 
@@ -158,7 +158,7 @@ describe("listTracks hasEmbedding=false — the MuQ embed key-gate", () => {
     await listTracks({ hasEmbedding: true, limit: 50, order: "asc" });
     const sql = lastListSql();
 
-    expect(sql).toContain("embedding_json is not null");
+    expect(sql).toContain("embedding_blob is not null");
     // `source_audio_key` rides in the SELECT list (a surfaced DTO column); what must be
     // absent is the WHERE-clause key GATE — hasEmbedding=true never filters on capture.
     expect(sql).not.toContain("source_audio_key is not null");

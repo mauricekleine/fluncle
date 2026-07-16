@@ -63,7 +63,7 @@ import {
 } from "../search-query";
 import { bestArtistAvatarUrl, labelLogoUrl } from "../media";
 import { getDb, typedRow, typedRows } from "./db";
-import { parseEmbedding, toVectorProbe } from "./embedding";
+import { readEmbeddingBlob, toVectorProbe } from "./embedding";
 import { translateQuery } from "./search-llm";
 
 /** How many rows a search returns when the caller does not say. */
@@ -575,22 +575,22 @@ async function resolveAnchor(
   const db = await getDb();
   const result = await db.execute({
     args: [match],
-    sql: `select ${SEARCH_SELECT}, tracks.embedding_json
+    sql: `select ${SEARCH_SELECT}, tracks.embedding_blob
           from tracks_fts
           join tracks on tracks.track_id = tracks_fts.track_id
           left join findings on findings.track_id = tracks.track_id
-          where tracks_fts match ? and tracks.embedding_json is not null
+          where tracks_fts match ? and tracks.embedding_blob is not null
           order by ${CERTIFIED_FIRST}, bm25(tracks_fts) asc, tracks.track_id asc
           limit 1`,
   });
 
-  const row = typedRow<SearchRow & { embedding_json: string | null }>(result.rows);
+  const row = typedRow<SearchRow & { embedding_blob: unknown }>(result.rows);
 
   if (!row) {
     return null;
   }
 
-  const vector = parseEmbedding(row.embedding_json);
+  const vector = readEmbeddingBlob(row.embedding_blob);
 
   return vector ? { hit: toHit(row), vector } : null;
 }
@@ -649,12 +649,9 @@ async function runSonic(filters: SearchFilters, limit: number): Promise<SearchRe
   const where = [
     ...clauses.map((clause) => clause.sql),
     `tracks.track_id != ?`,
-    // Rank on `embedding_blob` DIRECTLY, not `embeddingVectorSql()`: this scans the WHOLE
-    // archive (SEARCH_FROM, ~41k rows), and that helper's JSON-fallback `json_each` guard is
-    // executed PER ROW on hosted Turso even when the blob short-circuits (a per-row 21 KB
-    // parse — measured 2026-07-16, `EXPLAIN` showed the `je VIRTUAL TABLE` passes). Safe
-    // because the write path sets `embedding_blob` atomically with `embedding_json`
-    // (track-update.ts) — prod has zero json-only rows across the whole `tracks` table.
+    // Rank the native `embedding_blob` column directly: this scans the WHOLE archive
+    // (SEARCH_FROM, ~41k rows), so the vector has to be a plain column read the DB can rank in
+    // SQL, never pulled into the isolate.
     `tracks.embedding_blob is not null`,
   ].join(" and ");
 

@@ -25,8 +25,8 @@ export type BoardRow = TrackListItem & {
   // facts that fuel the observation script). Pulled through the admin-only board
   // path, never the public `TrackListItem` contract — see observation-board.ts.
   hasContextNote: boolean;
-  // Whether the finding carries a MuQ audio embedding (`embedding_json IS NOT NULL`).
-  // Drives the Embeddings cell: the embed cron drains the `embedding_json IS NULL`
+  // Whether the finding carries a MuQ audio embedding (`embedding_blob IS NOT NULL`).
+  // Drives the Embeddings cell: the embed cron drains the `embedding_blob IS NULL`
   // queue and stamps the vector. The vector is internal analysis fuel, so only its
   // presence rides this admin-only board path, never the public `TrackListItem`
   // contract — see tracks.ts listEmbeddingPresenceForTracks + docs/track-lifecycle.md.

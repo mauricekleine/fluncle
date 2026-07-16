@@ -50,7 +50,6 @@
 import { type InStatement } from "@libsql/client/web";
 import { parseArtistsJson } from "./artists";
 import { getDb, typedRow, typedRows } from "./db";
-import { embeddingVectorSql } from "./embedding";
 import { labelSlug } from "./labels";
 import { matchKey } from "./track-match";
 
@@ -770,7 +769,7 @@ async function readCatalogueIdentity(): Promise<CatalogueIdentity> {
                  ct.title as title,
                  ct.artists_json as artists_json,
                  ct.isrc as isrc,
-                 (${embeddingVectorSql("ct")} is not null) as has_vector
+                 (ct.embedding_blob is not null) as has_vector
           from tracks ct
           left join findings cf on cf.track_id = ct.track_id
           where cf.track_id is null
@@ -890,7 +889,7 @@ export async function rankCatalogue(limit = RANK_BATCH_SIZE): Promise<RankCatalo
     sql: `select
             (select count(*) from findings) as findings,
             (select count(*) from findings join tracks ft on ft.track_id = findings.track_id
-             where ${embeddingVectorSql("ft")} is not null) as embedded`,
+             where ft.embedding_blob is not null) as embedded`,
   });
   const counts = typedRows<{ embedded: number; findings: number }>(countResult.rows)[0];
   const findings = Number(counts?.findings ?? 0);
@@ -918,14 +917,14 @@ export async function rankCatalogue(limit = RANK_BATCH_SIZE): Promise<RankCatalo
                  ct.capture_status as capture_status,
                  ct.source_audio_key as source_audio_key,
                  ct.source_audio_rejected as source_audio_rejected,
-                 (${embeddingVectorSql("ct")} is not null) as has_vector
+                 (ct.embedding_blob is not null) as has_vector
           from tracks ct
           left join findings cf on cf.track_id = ct.track_id
           where cf.track_id is null
             and ct.dismissed_at is null
             and (ct.catalogue_rank_corpus is null
                  or ct.catalogue_rank_corpus <> ?
-                 or (${embeddingVectorSql("ct")} is not null
+                 or (ct.embedding_blob is not null
                      and ct.capture_priority is not null
                      and ct.capture_priority >= 0))
           order by ct.track_id asc
@@ -967,12 +966,12 @@ export async function rankCatalogue(limit = RANK_BATCH_SIZE): Promise<RankCatalo
     const rankedResult = await db.execute({
       args: ids,
       sql: `with finding_vec as (
-              select ft.track_id as fid, ${embeddingVectorSql("ft")} as fvec
+              select ft.track_id as fid, ft.embedding_blob as fvec
               from findings
               join tracks ft on ft.track_id = findings.track_id
             ),
             candidate_vec as (
-              select ct.track_id as cid, ${embeddingVectorSql("ct")} as cvec
+              select ct.track_id as cid, ct.embedding_blob as cvec
               from tracks ct
               where ct.track_id in (${placeholders})
             ),
@@ -1321,7 +1320,7 @@ async function countStale(corpus: string): Promise<number> {
             and ct.dismissed_at is null
             and (ct.catalogue_rank_corpus is null
                  or ct.catalogue_rank_corpus <> ?
-                 or (${embeddingVectorSql("ct")} is not null
+                 or (ct.embedding_blob is not null
                      and ct.capture_priority is not null
                      and ct.capture_priority >= 0))`,
   });

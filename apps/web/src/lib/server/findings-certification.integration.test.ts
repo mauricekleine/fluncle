@@ -259,21 +259,19 @@ describe("the certification rail — a catalogue track is measured, never spoken
     expect(row?.features_json).toBe(JSON.stringify({ centroidHz: 2100 }));
   });
 
-  it("CAN be embedded — the dual write lands the vector the Ear ranks against", async () => {
+  it("CAN be embedded — the write lands the F32_BLOB the Ear ranks against", async () => {
     const { updateTrack } = await import("./track-update");
 
     const vector = JSON.stringify(Array.from({ length: 1024 }, () => 0.03125));
     await updateTrack(CATALOGUE_ID, { embedding: vector }, { writer: "agent" });
 
-    // Both forms: the JSON (the source of truth) and the F32_BLOB the database ranks in SQL.
-    // Without this write the row has no vector, and a row with no vector is invisible to The
-    // Ear — which is precisely what the pre-split queues guaranteed.
+    // The vector lands as the native F32_BLOB the database ranks in SQL — the ONLY form now
+    // (the old `embedding_json` mirror is gone). Without this write the row has no vector, and
+    // a row with no vector is invisible to The Ear — which the pre-split queues guaranteed.
     const row = await db.execute({
       args: [CATALOGUE_ID],
-      sql: `select embedding_json is not null as j, embedding_blob is not null as b
-            from tracks where track_id = ?`,
+      sql: `select embedding_blob is not null as b from tracks where track_id = ?`,
     });
-    expect(Number(row.rows[0]?.j)).toBe(1);
     expect(Number(row.rows[0]?.b)).toBe(1);
   });
 

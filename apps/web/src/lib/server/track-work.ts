@@ -310,7 +310,7 @@ export function kindClause(kind: TrackWorkKind): { args: string[]; sql: string }
     // The `wrong-audio` guard: the quarantine nulled the vector but kept the bad key, so this
     // row must NOT re-embed the poisoned bytes (docs/the-ear.md § Wrong audio).
     sql: `t.source_audio_key is not null
-          and t.embedding_json is null
+          and t.embedding_blob is null
           and t.capture_status <> 'wrong-audio'`,
   };
 }

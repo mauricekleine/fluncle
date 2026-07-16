@@ -1,7 +1,7 @@
 import { type Client } from "@libsql/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { backfillEmbeddingBlob } from "../../../scripts/backfill-embedding-blob";
-import { cosineSimilarity, EMBEDDING_DIMS, readEmbeddingBlob } from "./embedding";
+import { cosineSimilarity, EMBEDDING_DIMS, readEmbeddingBlob, toVectorProbe } from "./embedding";
 import { createIntegrationDb, seedTrack } from "./integration-db";
 import { parseKey, toCamelot } from "../key-camelot";
 import { isNamedMove, rankMixable, sonicGateOpen, toMixTrack } from "./mixability";
@@ -108,7 +108,7 @@ function rankInIsolate(rows: MixSeed[], targetId: string, limit: number): string
   const targetCamelot = toCamelot(targetKey);
   const toRow = (row: MixSeed) => ({
     bpm: row.bpm,
-    embedding_json: row.embedding ? JSON.stringify(row.embedding) : null,
+    embedding_blob: row.embedding ? toVectorProbe(row.embedding) : null,
     features_json: JSON.stringify({
       centroidHz: 1000 + rows.indexOf(row),
       highRatio: rows.indexOf(row) / 100,
@@ -171,12 +171,10 @@ describe("getMixableTracks", () => {
   });
 
   it("scores a candidate with no blob as vector-less, not from its JSON", async () => {
-    // The scan reads `embedding_blob` DIRECTLY (not `embeddingVectorSql`, whose per-row
-    // `json_each` guard was a hosted-Turso cost — see getSimilarFindings / search.ts). A
-    // candidate with no blob keeps its place on the rail (key+BPM still mix) but its sonic
-    // term goes null, exactly as an un-embedded row — its JSON is NOT a ranking fallback.
-    // Safe: the write path sets the blob atomically with the JSON (prod has zero json-only
-    // rows), so this state does not occur outside a test.
+    // The scan reads the native `embedding_blob` column DIRECTLY and the DB does the cosine
+    // in SQL. A candidate with no blob keeps its place on the rail (key+BPM still mix) but its
+    // sonic term goes null, exactly as an un-embedded row. Safe: the write path always sets the
+    // blob (track-update.ts), so this state does not occur outside a test.
     const rows = corpus();
 
     await seed(rows);

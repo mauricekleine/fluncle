@@ -78,7 +78,7 @@ describe("boardSteps — Discogs cell", () => {
 
 // The Embeddings cell is a read-only presence tracker (like Last.fm/Discogs): its
 // FILL is driven by `state` — `done` (filled gold check) once the finding carries a
-// MuQ audio embedding (`embedding_json IS NOT NULL`, surfaced as `hasEmbedding`),
+// MuQ audio embedding (`embedding_blob IS NOT NULL`, surfaced as `hasEmbedding`),
 // `open` (hollow) while it's still in the embed cron's queue. No operator action — the
 // on-box `fluncle-embed` cron advances it. This is the sonic fingerprint that
 // superseded the retired manual vibe-map Tag cell (docs/track-lifecycle.md).

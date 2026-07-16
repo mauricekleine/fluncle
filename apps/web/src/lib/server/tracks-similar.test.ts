@@ -198,12 +198,11 @@ describe("getSimilarFindings", () => {
   });
 
   it("SKIPS a finding with no blob rather than ranking it from JSON", async () => {
-    // The ranking reads `embedding_blob` DIRECTLY (not `embeddingVectorSql`, whose per-row
-    // `json_each` guard made a 67-row scan cost 3.3 s on hosted Turso — see the call site).
-    // A blobless finding is dropped, not JSON-ranked. This is safe because the WRITE PATH
-    // sets `embedding_blob = vector32(embedding)` ATOMICALLY with `embedding_json`
-    // (track-update.ts), so an embedded finding is never in the json-only state; the deploy
-    // backfill is the belt for any legacy straggler.
+    // The ranking reads the native `embedding_blob` column DIRECTLY and the DB does the
+    // cosine in SQL. A blobless finding is dropped, never pulled into the isolate. This is
+    // safe because the WRITE PATH sets `embedding_blob = vector32(embedding)` (track-update.ts),
+    // so an embedded finding always carries a blob; the deploy backfill was the belt for any
+    // legacy straggler.
     await seed(CORPUS);
     await backfillEmbeddingBlob(db);
     await db.execute(`update tracks set embedding_blob = null where track_id = 't_diag'`);
