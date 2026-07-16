@@ -64,6 +64,10 @@ vi.mock("./public-auth", async (importOriginal) => {
 const USER = {
   createdAt: "2026-01-01T00:00:00.000Z",
   displayUsername: "Fan",
+  // Required on the wire since #647 (the verified-email arc): PublicUserSchema
+  // carries the requester's own email + verified state.
+  email: "fan@example.com",
+  emailVerified: false,
   id: "user-1",
   username: "fan",
 };
@@ -108,23 +112,23 @@ beforeEach(() => {
 
 describe("oRPC /me — GET /me (get_current_private_user)", () => {
   it("serves { ok: true, user } for a session", async () => {
-    meResponse.mockResolvedValueOnce({ ok: true, user: USER });
+    meResponse.mockResolvedValueOnce({ googleEnabled: false, ok: true, user: USER });
 
     const { handleOrpc } = await import("./orpc");
     const response = await handleOrpc(get(`${BASE}/me`));
 
     expect(response?.status).toBe(200);
-    expect(await readJson(response)).toEqual({ ok: true, user: USER });
+    expect(await readJson(response)).toEqual({ googleEnabled: false, ok: true, user: USER });
   });
 
   it("serves { ok: true, user: null } with NO session (does not 401)", async () => {
-    meResponse.mockResolvedValueOnce({ ok: true, user: null });
+    meResponse.mockResolvedValueOnce({ googleEnabled: false, ok: true, user: null });
 
     const { handleOrpc } = await import("./orpc");
     const response = await handleOrpc(get(`${BASE}/me`));
 
     expect(response?.status).toBe(200);
-    expect(await readJson(response)).toEqual({ ok: true, user: null });
+    expect(await readJson(response)).toEqual({ googleEnabled: false, ok: true, user: null });
   });
 });
 
@@ -661,13 +665,13 @@ describe("oRPC /me — GET /me/submissions (list_private_submissions)", () => {
 
 describe("oRPC /me — the bare /api alias", () => {
   it("serves get_current_private_user on /api/me", async () => {
-    meResponse.mockResolvedValueOnce({ ok: true, user: null });
+    meResponse.mockResolvedValueOnce({ googleEnabled: false, ok: true, user: null });
 
     const { handleOrpc } = await import("./orpc");
     const response = await handleOrpc(get("https://www.fluncle.com/api/me"));
 
     expect(response?.status).toBe(200);
-    expect(await readJson(response)).toEqual({ ok: true, user: null });
+    expect(await readJson(response)).toEqual({ googleEnabled: false, ok: true, user: null });
   });
 });
 
