@@ -102,6 +102,10 @@ type SqlStatement = {
 };
 
 export type MeResponse = {
+  // Whether "Continue with Google" is live server-side (both GOOGLE_CLIENT_* creds
+  // present). The account UI gates the Google button on this so it never renders a
+  // dead button. Session-independent — present on the `user: null` body too.
+  googleEnabled: boolean;
   ok: true;
   user: null | PublicUser;
 };
@@ -163,10 +167,14 @@ export type PrivateSubmissionItem = {
 };
 
 export async function meResponse(request: Request): Promise<MeResponse> {
-  const { getPublicSession } = await import("./public-auth");
-  const user = await getPublicSession(request);
+  const { getPublicSession, isGoogleSignInEnabled } = await import("./public-auth");
+  const [user, googleEnabled] = await Promise.all([
+    getPublicSession(request),
+    isGoogleSignInEnabled(),
+  ]);
 
   return {
+    googleEnabled,
     ok: true,
     user: user ?? null,
   };

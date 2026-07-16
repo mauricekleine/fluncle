@@ -298,3 +298,37 @@ export async function sendPasswordResetEmail(params: { to: string; url: string }
     to: params.to,
   });
 }
+
+/**
+ * Compose and send the email-verification email (web + mobile sign-up). The sibling
+ * of `sendPasswordResetEmail`: same transactional-plain first-person voice, same
+ * verified sender, and the whole link is the literal call to action. `url` is the
+ * verification link Better Auth builds (it validates the token then signs the user
+ * in and redirects to the callback). Verification gates future features, never the
+ * session — the copy says so plainly.
+ */
+export async function sendVerificationEmail(params: { to: string; url: string }): Promise<void> {
+  const text = [
+    "Welcome aboard. Confirm this is your email so I can keep your Fluncle account yours. Open this link:",
+    "",
+    params.url,
+    "",
+    "You are already signed in and nothing is locked behind this. Verifying just keeps the door yours. If you didn't create a Fluncle account, ignore this and nothing happens.",
+    "",
+    "Fluncle",
+  ].join("\n");
+
+  const html = [
+    "<p>Welcome aboard. Confirm this is your email so I can keep your Fluncle account yours. Open this link:</p>",
+    `<p><a href="${params.url}">Verify your email</a></p>`,
+    "<p>You are already signed in and nothing is locked behind this. Verifying just keeps the door yours. If you didn&rsquo;t create a Fluncle account, ignore this and nothing happens.</p>",
+    "<p>Fluncle</p>",
+  ].join("\n");
+
+  await sendTransactionalEmail({
+    html,
+    subject: "Verify your Fluncle email",
+    text,
+    to: params.to,
+  });
+}

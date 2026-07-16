@@ -4,6 +4,7 @@ import {
   createBroadcast,
   sendBroadcast,
   sendPasswordResetEmail,
+  sendVerificationEmail,
 } from "./resend";
 
 // The Resend client is raw `fetch` against the REST API; mock `fetch` + the env
@@ -161,6 +162,40 @@ describe("sendPasswordResetEmail", () => {
 
     await expect(
       sendPasswordResetEmail({ to: "err@example.com", url: "https://www.fluncle.com/x" }),
+    ).rejects.toMatchObject({ code: "email_send_failed" });
+  });
+});
+
+describe("sendVerificationEmail", () => {
+  it("sends a single transactional email from the verified sender with the verify link", async () => {
+    fetchMock.mockResolvedValueOnce(ok({ id: "email_2" }));
+
+    await sendVerificationEmail({
+      to: "raver@example.com",
+      url: "https://www.fluncle.com/api/auth/verify-email?token=tok_456&callbackURL=/account",
+    });
+
+    const [url, init] = fetchMock.mock.calls[0] ?? [];
+    expect(url).toBe("https://api.resend.com/emails");
+    const body = JSON.parse(init.body);
+    expect(body.from).toBe("Fluncle <fluncle@newsletter.fluncle.com>");
+    expect(body.to).toBe("raver@example.com");
+    expect(body.subject).toBe("Verify your Fluncle email");
+    // The whole link is the literal call to action — it must ride both bodies.
+    expect(body.text).toContain("token=tok_456");
+    expect(body.html).toContain("token=tok_456");
+    // Transactional-plain voice: no exclamation marks, no em dashes in the prose.
+    expect(body.text).not.toContain("!");
+    expect(body.text).not.toContain("—");
+  });
+
+  it("throws email_send_failed on an upstream error", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ message: "boom" }), { status: 500 }),
+    );
+
+    await expect(
+      sendVerificationEmail({ to: "err@example.com", url: "https://www.fluncle.com/x" }),
     ).rejects.toMatchObject({ code: "email_send_failed" });
   });
 });

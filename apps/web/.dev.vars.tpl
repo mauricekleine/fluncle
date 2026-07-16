@@ -87,6 +87,11 @@ R2_ACCOUNT_ID=0651fd3b33d9e0b2fe72a5f13e5cf65d
 # RESEND_API_KEY=op://$FLUNCLE_1PASSWORD_ENV_ITEM/RESEND_API_KEY
 # RESEND_SEGMENT_ID=op://$FLUNCLE_1PASSWORD_ENV_ITEM/RESEND_SEGMENT_ID
 # RESEND_FROM=op://$FLUNCLE_1PASSWORD_ENV_ITEM/RESEND_FROM
+# "Continue with Google" public sign-in -- the provider is registered ONLY when
+# BOTH are present, so the button ships dark until they are set (in prod they are
+# Worker secrets). The OAuth client id + secret from the Google Cloud console.
+# GOOGLE_CLIENT_ID=op://$FLUNCLE_1PASSWORD_ENV_ITEM/GOOGLE_CLIENT_ID
+# GOOGLE_CLIENT_SECRET=op://$FLUNCLE_1PASSWORD_ENV_ITEM/GOOGLE_CLIENT_SECRET
 # Last.fm love-on-add (no-ops until LASTFM_SESSION_KEY is set).
 # LASTFM_API_KEY=op://$FLUNCLE_1PASSWORD_ENV_ITEM/LASTFM_API_KEY
 # LASTFM_SHARED_SECRET=op://$FLUNCLE_1PASSWORD_ENV_ITEM/LASTFM_SHARED_SECRET

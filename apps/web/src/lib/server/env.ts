@@ -62,6 +62,16 @@ const envKeys = [
   "SPOTIFY_CLIENT_SECRET",
   "SPOTIFY_REDIRECT_URI",
   "SPOTIFY_PLAYLIST_ID",
+  // "Continue with Google" public sign-in (Better Auth `socialProviders.google`,
+  // lib/server/public-auth.ts). The OAuth client id + secret from the Google Cloud
+  // console. Both OPTIONAL, read via readOptionalEnv: the Google provider is spread
+  // into the auth config ONLY when BOTH are present, so the whole leg is a NO-OP
+  // (and the "Continue with Google" button never renders) until they are set —
+  // email/password sign-up + sign-in work unprovisioned exactly like the other
+  // env-gated side-channels. Distinct from SPOTIFY_CLIENT_* (that is the ADMIN
+  // "Login with Spotify" operator identity, not a public user provider).
+  "GOOGLE_CLIENT_ID",
+  "GOOGLE_CLIENT_SECRET",
   // Our own YouTube OAuth (mixtape video distribution), mirroring Spotify. The
   // Worker holds the durable refresh token in youtube_auth and mints a short-lived
   // access token for the CLI's resumable upload PUT.

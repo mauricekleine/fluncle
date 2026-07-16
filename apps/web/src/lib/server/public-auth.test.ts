@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  createPublicAuthOptions,
   createCsrfToken,
   isAllowedDisplayUsername,
   isAllowedUsername,
@@ -9,15 +10,70 @@ import {
   type PublicUser,
 } from "./public-auth";
 
+// The config builder only stores the db lazily (drizzleAdapter), so a stub is enough
+// to assert the shape of the options object it returns.
+const stubDb = {} as Parameters<typeof createPublicAuthOptions>[0];
+
 const user: PublicUser = {
   createdAt: "2026-01-01T00:00:00.000Z",
   displayUsername: "Junglist 174",
+  email: "junglist@example.com",
+  emailVerified: false,
   id: "user_123",
   username: "junglist_174",
 };
 
 afterEach(() => {
   delete process.env.BETTER_AUTH_SECRET;
+  delete process.env.GOOGLE_CLIENT_ID;
+  delete process.env.GOOGLE_CLIENT_SECRET;
+});
+
+describe("createPublicAuthOptions", () => {
+  it("wires email verification without gating sign-in", () => {
+    const options = createPublicAuthOptions(stubDb);
+
+    // Sends on sign-up, auto-signs-in after verifying, and delivers via a hook.
+    expect(options.emailVerification?.sendOnSignUp).toBe(true);
+    expect(options.emailVerification?.autoSignInAfterVerification).toBe(true);
+    expect(typeof options.emailVerification?.sendVerificationEmail).toBe("function");
+    // The load-bearing negative: verification NEVER gates the session. If this ever
+    // becomes truthy, an unverified user (incl. every mobile sign-up) is locked out.
+    expect(options.emailAndPassword?.requireEmailVerification).toBeUndefined();
+  });
+
+  it("trusts Google for account linking (the anti-takeover default stays on)", () => {
+    const options = createPublicAuthOptions(stubDb);
+
+    expect(options.account?.accountLinking?.enabled).toBe(true);
+    expect(options.account?.accountLinking?.trustedProviders).toContain("google");
+    // We rely on Better Auth's default requireLocalEmailVerified (true): a Google
+    // sign-in links into an existing account only when it is already verified. If we
+    // ever set this false, an unverified local row becomes linkable — account takeover.
+    expect(options.account?.accountLinking?.requireLocalEmailVerified).toBeUndefined();
+  });
+
+  it("ships Google DARK until both creds exist (conditional spread)", () => {
+    expect(createPublicAuthOptions(stubDb).socialProviders).toBeUndefined();
+
+    // Only one cred present is still dark — a half-empty config must never register.
+    process.env.GOOGLE_CLIENT_ID = "google-client-id";
+    expect(createPublicAuthOptions(stubDb).socialProviders).toBeUndefined();
+
+    process.env.GOOGLE_CLIENT_SECRET = "google-client-secret";
+    const withBoth = createPublicAuthOptions(stubDb).socialProviders as
+      | { google?: { clientId: string; clientSecret: string } }
+      | undefined;
+    expect(withBoth?.google?.clientId).toBe("google-client-id");
+    expect(withBoth?.google?.clientSecret).toBe("google-client-secret");
+  });
+
+  it("treats a blank cred as absent (no broken provider at startup)", () => {
+    process.env.GOOGLE_CLIENT_ID = "   ";
+    process.env.GOOGLE_CLIENT_SECRET = "google-client-secret";
+
+    expect(createPublicAuthOptions(stubDb).socialProviders).toBeUndefined();
+  });
 });
 
 describe("public username validation", () => {

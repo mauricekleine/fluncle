@@ -24,6 +24,8 @@ import { Input } from "@fluncle/ui/components/input";
 import { Label } from "@fluncle/ui/components/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@fluncle/ui/components/tabs";
 import { Textarea } from "@fluncle/ui/components/textarea";
+import { siGoogle } from "simple-icons";
+import { BrandIcon } from "@/components/brand-icon";
 import { GraphLink } from "@/components/graph-link";
 import { KeyNotationToggle } from "@/components/key-notation-toggle";
 import { authClient } from "@/lib/auth-client";
@@ -33,10 +35,15 @@ import { formatKey, syncKeyNotationFromAccount, useKeyNotation } from "@/lib/key
 import { albumCoverAtSize } from "@/lib/media";
 
 type Me = {
+  // Whether "Continue with Google" is live server-side. Gates the Google button so
+  // it never renders dead. Present whether or not there is a session.
+  googleEnabled: boolean;
   ok: true;
   user: null | {
     createdAt: string;
     displayUsername?: string;
+    email: string;
+    emailVerified: boolean;
     id: string;
     username?: string;
   };
@@ -265,7 +272,12 @@ function AccountPage() {
             user={me.user}
           />
         ) : (
-          <AuthForms message={message} refresh={refresh} setMessage={setMessage} />
+          <AuthForms
+            googleEnabled={me.googleEnabled}
+            message={message}
+            refresh={refresh}
+            setMessage={setMessage}
+          />
         )}
       </article>
     </main>
@@ -273,10 +285,12 @@ function AccountPage() {
 }
 
 function AuthForms({
+  googleEnabled,
   message,
   refresh,
   setMessage,
 }: {
+  googleEnabled: boolean;
   message: string;
   refresh: () => Promise<void>;
   setMessage: (message: string) => void;
@@ -297,6 +311,9 @@ function AuthForms({
       const result =
         mode === "signup"
           ? await authClient.signUp.email({
+              // Where the email-verification link lands the user once they click it
+              // (Better Auth signs them in first via autoSignInAfterVerification).
+              callbackURL: "/account",
               email,
               name: username,
               password,
@@ -313,10 +330,29 @@ function AuthForms({
       }
 
       await refresh();
-      setMessage("Aboard. Your private Galaxy state is ready.");
+      setMessage(
+        mode === "signup"
+          ? "Aboard. I sent a link to verify your email. You're already signed in, so there's no rush."
+          : "Aboard. Your private Galaxy state is ready.",
+      );
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Could not sign in.");
     } finally {
+      setBusy(false);
+    }
+  }
+
+  // "Continue with Google" — a full-page OAuth redirect to Google, back to /account.
+  // On success the browser navigates away (no busy reset needed); on a synchronous
+  // failure to start the flow, surface it and re-enable the form.
+  async function continueWithGoogle() {
+    setMessage("");
+    setBusy(true);
+
+    try {
+      await authClient.signIn.social({ callbackURL: "/account", provider: "google" });
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not continue with Google.");
       setBusy(false);
     }
   }
@@ -346,6 +382,21 @@ function AuthForms({
           <TabsTrigger value="signup">Create account</TabsTrigger>
         </TabsList>
       </Tabs>
+      {googleEnabled ? (
+        <>
+          <Button
+            className="w-full"
+            disabled={busy}
+            onClick={() => void continueWithGoogle()}
+            type="button"
+            variant="outline"
+          >
+            <BrandIcon className="size-4" icon={siGoogle} />
+            Continue with Google
+          </Button>
+          <p className="account-muted text-center text-xs">or use your email</p>
+        </>
+      ) : null}
       {mode === "signup" ? (
         <Field label="Email">
           <Input
@@ -774,6 +825,8 @@ function SettingsPanel({
   );
   const [settingsMessage, setSettingsMessage] = useState("");
   const [settingsBusy, setSettingsBusy] = useState(false);
+  const [emailMessage, setEmailMessage] = useState("");
+  const [emailBusy, setEmailBusy] = useState(false);
   const [dangerMessage, setDangerMessage] = useState("");
   const [dangerBusy, setDangerBusy] = useState<"" | "delete" | "export">("");
   const [exportText, setExportText] = useState("");
@@ -786,6 +839,22 @@ function SettingsPanel({
   useEffect(() => {
     void syncKeyNotationFromAccount({ force: true });
   }, []);
+
+  // Resend the verification link to the signed-in user's own email. The confirmation
+  // is deliberately uniform (never leaks whether the address is already verified).
+  async function resendVerification() {
+    setEmailBusy(true);
+    setEmailMessage("");
+
+    try {
+      await authClient.sendVerificationEmail({ callbackURL: "/account", email: user.email });
+      setEmailMessage("Sent. Check your inbox for the verification link.");
+    } catch {
+      setEmailMessage("Could not send right now. Try again in a moment.");
+    } finally {
+      setEmailBusy(false);
+    }
+  }
 
   async function patchProfile(event: React.FormEvent) {
     event.preventDefault();
@@ -852,6 +921,18 @@ function SettingsPanel({
 
   return (
     <>
+      {user.username ? null : (
+        // A Google arrival has no username yet. A quiet, non-blocking nudge toward
+        // the Username field just below — nothing on the account depends on it.
+        <section className="account-section">
+          <h2>Claim a username</h2>
+          <p className="account-muted">
+            You&rsquo;re in, but you haven&rsquo;t claimed a username yet. Pick one below so your
+            saves and submissions have a name on them. No rush, and you can change it later.
+          </p>
+        </section>
+      )}
+
       <section className="account-section">
         <h2>Preferences</h2>
         <p className="account-muted">
@@ -889,6 +970,35 @@ function SettingsPanel({
           ) : null}
         </div>
       </form>
+
+      <section className="account-section">
+        <h2>Email</h2>
+        <p className="account-muted">
+          {user.email} · {user.emailVerified ? "verified" : "not verified yet"}
+        </p>
+        {user.emailVerified ? null : (
+          <>
+            <p className="account-muted">
+              Nothing is locked without it. Verifying just keeps the door yours.
+            </p>
+            <div className="account-row">
+              <Button
+                disabled={emailBusy}
+                onClick={() => void resendVerification()}
+                type="button"
+                variant="outline"
+              >
+                {emailBusy ? "Sending…" : "Resend verification email"}
+              </Button>
+              {emailMessage ? (
+                <p aria-live="polite" className="account-muted">
+                  {emailMessage}
+                </p>
+              ) : null}
+            </div>
+          </>
+        )}
+      </section>
 
       <section className="account-section">
         <h2>Link the CLI</h2>

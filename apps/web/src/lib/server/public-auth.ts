@@ -7,7 +7,7 @@ import { username } from "better-auth/plugins/username";
 import * as schema from "../../db/schema";
 import { getDb, getDrizzleDb, typedRow } from "./db";
 import { jsonError, readOptionalEnv } from "./env";
-import { sendPasswordResetEmail } from "./resend";
+import { sendPasswordResetEmail, sendVerificationEmail } from "./resend";
 
 // The CLI's OAuth client id for the device-authorization grant (RFC 8628). The
 // `fluncle login` flow is a first-party, fully-trusted client — the CLI is ours,
@@ -24,6 +24,18 @@ type PublicAuth = Auth<BetterAuthOptions>;
 export type PublicUser = {
   createdAt: string;
   displayUsername?: string;
+  // The account's own email. This is the AUTHENTICATED identity — a `PublicUser` is
+  // only ever resolved from the requester's OWN session (the `/me` private tier), so
+  // this is always the requester's own address, never another user's. It powers the
+  // Settings "Email" section + the "resend verification" action, and rides the data
+  // export. The DESIGN invariant "email never appears on PUBLIC surfaces" is upheld:
+  // no public route serializes a `PublicUser`.
+  email: string;
+  // Whether this account's email is verified. Always present (the `user` row's
+  // `email_verified` is NOT NULL, default false). Verification GATES future
+  // features, never the session — an unverified user still signs in (see
+  // `emailVerification` below, which deliberately omits `requireEmailVerification`).
+  emailVerified: boolean;
   id: string;
   username?: string;
 };
@@ -31,6 +43,8 @@ export type PublicUser = {
 type PublicUserRow = {
   created_at: number;
   display_username: string | null;
+  email: string | null;
+  email_verified: number;
   id: string;
   status: "active" | "deleted" | "suspended";
   username: string | null;
@@ -101,7 +115,25 @@ function publicAuthSecret(): string {
 export function createPublicAuthOptions(
   db: Awaited<ReturnType<typeof getDrizzleDb>>,
 ): BetterAuthOptions {
+  const googleProvider = readGoogleProvider();
+
   return {
+    // "Continue with Google" account linking. `enabled` lets an OAuth sign-in link
+    // into an existing account carrying the same email; `trustedProviders` marks
+    // Google a trusted source. Kept SAFE by Better Auth's default
+    // `requireLocalEmailVerified` (left unset = true): a Google sign-in links into
+    // an existing email/password account ONLY when that account's email is already
+    // VERIFIED. A Google sign-in whose email collides with an UNVERIFIED local
+    // account is REFUSED ("account not linked"), never silently merged — the
+    // anti-takeover gate, since an unverified local row could have been created by
+    // anyone with the victim's address. Wholly inert until the Google provider is
+    // configured (env-gated `socialProviders` below).
+    account: {
+      accountLinking: {
+        enabled: true,
+        trustedProviders: ["google"],
+      },
+    },
     advanced: {
       cookiePrefix: "fluncle_user",
     },
@@ -128,6 +160,27 @@ export function createPublicAuthOptions(
           await sendPasswordResetEmail({ to: user.email, url });
         } catch (error) {
           console.error("password reset email failed to send", error);
+        }
+      },
+    },
+    // Email verification on sign-up. `sendOnSignUp` mails the link the moment an
+    // account is created; `autoSignInAfterVerification` signs the user in the
+    // instant they click it. Delivery mirrors `sendResetPassword` exactly — a
+    // Resend fault is caught and logged, never rethrown — so sign-up is
+    // enumeration-safe AND never fails on an unprovisioned Resend (mobile +
+    // email/password sign-up keep working unverified). `requireEmailVerification`
+    // is DELIBERATELY ABSENT: sign-in never requires a verified email. Verification
+    // gates future features, not the session — a Google sign-in already arrives
+    // verified (Better Auth maps the provider's verified email → `emailVerified`),
+    // and this rail only ever fires for the email/password path.
+    emailVerification: {
+      autoSignInAfterVerification: true,
+      sendOnSignUp: true,
+      sendVerificationEmail: async ({ url, user }) => {
+        try {
+          await sendVerificationEmail({ to: user.email, url });
+        } catch (error) {
+          console.error("verification email failed to send", error);
         }
       },
     },
@@ -175,6 +228,12 @@ export function createPublicAuthOptions(
       expo(),
     ],
     secret: publicAuthSecret(),
+    // "Continue with Google" — spread in ONLY when both creds are present
+    // (`readGoogleProvider`), so an unprovisioned Worker (or the device-auth test)
+    // registers no provider and the whole leg is a no-op. A half-empty config
+    // (`{ clientId: "", clientSecret: "" }`) is treated as absent, so a stray empty
+    // string can never register a broken provider at auth startup.
+    ...(googleProvider ? { socialProviders: { google: googleProvider } } : {}),
     // The app scheme (`fluncle://`) is trusted so the Expo plugin accepts the native
     // client's deep-link origin; the web origins are unchanged.
     trustedOrigins: [
@@ -193,11 +252,56 @@ export function createPublicAuthOptions(
   };
 }
 
+/**
+ * The Google social-provider config, or `undefined` when either cred is missing.
+ * Read SYNCHRONOUSLY from `process.env` (hoisted by `getPublicAuth` below, the same
+ * pattern as `BETTER_AUTH_SECRET`) so `createPublicAuthOptions` stays sync and the
+ * device-auth test can build the options with no Google leg. A blank value trims to
+ * empty and reads as absent, so "Continue with Google" ships DARK until both the
+ * `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` Worker secrets exist.
+ */
+function readGoogleProvider(): { clientId: string; clientSecret: string } | undefined {
+  const clientId = process.env.GOOGLE_CLIENT_ID?.trim();
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET?.trim();
+
+  return clientId && clientSecret ? { clientId, clientSecret } : undefined;
+}
+
+/**
+ * Whether "Continue with Google" is live — both creds present. Read via
+ * `readOptionalEnv` (async, `.dev.vars`-aware) so the `/me` response can expose a
+ * `googleEnabled` flag the account UI gates the button on, without ever rendering a
+ * dead button. Independent of the `process.env` hoist so it is correct even before
+ * the auth instance is first built.
+ */
+export async function isGoogleSignInEnabled(): Promise<boolean> {
+  const [clientId, clientSecret] = await Promise.all([
+    readOptionalEnv("GOOGLE_CLIENT_ID"),
+    readOptionalEnv("GOOGLE_CLIENT_SECRET"),
+  ]);
+
+  return Boolean(clientId && clientSecret);
+}
+
 export async function getPublicAuth(): Promise<PublicAuth> {
   if (!publicAuthPromise) {
     publicAuthPromise = (async () => {
       process.env.BETTER_AUTH_SECRET ??= await readOptionalEnv("BETTER_AUTH_SECRET");
       process.env.BETTER_AUTH_URL ??= await readOptionalEnv("BETTER_AUTH_URL");
+
+      // Hoist the Google creds onto `process.env` for the sync `readGoogleProvider`.
+      // Assign only when defined — `process.env.X = undefined` would coerce to the
+      // string "undefined" and falsely register a broken provider.
+      const googleClientId = await readOptionalEnv("GOOGLE_CLIENT_ID");
+      const googleClientSecret = await readOptionalEnv("GOOGLE_CLIENT_SECRET");
+
+      if (googleClientId) {
+        process.env.GOOGLE_CLIENT_ID = googleClientId;
+      }
+
+      if (googleClientSecret) {
+        process.env.GOOGLE_CLIENT_SECRET = googleClientSecret;
+      }
 
       return betterAuth(createPublicAuthOptions(await getDrizzleDb()));
     })();
@@ -223,7 +327,7 @@ export async function getPublicSession(request: Request): Promise<PublicUser | u
     await getDb()
   ).execute({
     args: [sessionUser.id],
-    sql: `select id, username, display_username, created_at, status from "user" where id = ? limit 1`,
+    sql: `select id, username, display_username, created_at, status, email, email_verified from "user" where id = ? limit 1`,
   });
   const user = typedRow<PublicUserRow>(result.rows);
 
@@ -234,6 +338,8 @@ export async function getPublicSession(request: Request): Promise<PublicUser | u
   return {
     createdAt: new Date(user.created_at).toISOString(),
     displayUsername: user.display_username ?? undefined,
+    email: user.email ?? "",
+    emailVerified: user.email_verified === 1,
     id: user.id,
     username: user.username ?? undefined,
   };
