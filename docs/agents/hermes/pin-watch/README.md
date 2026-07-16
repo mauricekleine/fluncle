@@ -1,6 +1,19 @@
 # fluncle-pin-watch — the box self-deploy
 
-The rave-02 (Hermes box) half of the version-currency loop. The [`fluncle-maintenance`](../../../../packages/skills/fluncle-maintenance) routine sweeps the pinned supply chain, opens a clearly-safe bump as a PR, and merges it on green — and then **stops**. This is what closes the loop: a small host systemd timer on rave-02 that watches `main` and, when a baked CLI pin moves ahead of what the running container has, rebuilds the Hermes image and swaps the container — with a pre-smoke gate and an auto-rollback rail.
+The rave-02 (Hermes box) half of the version-currency loop. The [`fluncle-maintenance`](../../../../packages/skills/fluncle-maintenance) routine sweeps the pinned supply chain, opens a clearly-safe bump as a PR, and merges it on green — and then **stops**. This is what closes the loop: a small host systemd timer on rave-02 that watches `main` and, when a baked CLI pin **or the baked content** moves ahead of what the running container has, rebuilds the Hermes image and swaps the container — with a pre-smoke gate and an auto-rollback rail.
+
+## The dual trigger: pins AND baked content
+
+A run rebuilds when **either** signal drifts from `main`:
+
+1. **The CLI pins** — the `fluncle` binary release version + the `@anthropic-ai/claude-code@` pin in the Dockerfile, read off the running container (`fluncle version` / `claude --version`).
+2. **The baked content** — a git-tree fingerprint (`git ls-tree -r HEAD`) of the paths the image COPYs from `main`: the sweep scripts (`docs/agents/hermes/scripts`), the `Dockerfile` itself, and the two skills the box runs (`packages/skills/fluncle-track-enrichment/scripts` + `packages/skills/copywriting-fluncle`). The build stamps this fingerprint into the image at `/opt/.hermes-baked-fp`; each run compares the running image's stamp against `main`'s.
+
+**Why the second signal exists.** The image bakes the sweep scripts and skills, but a **script-only change does not move a CLI pin** — so before this, such a change never reached the box. We hit exactly that: a just-merged bio-cron safety guard sat undeployed while the live cron ran the old script. The fingerprint closes that gap: any content change under the baked paths moves the hash, so the next hourly tick rebuilds and stamps the new fingerprint. An **empty** stamp (an image built before the fingerprint existed) counts as drift too, so the mechanism is self-healing on first deploy.
+
+The fingerprint is a **git-tree** hash, not a `find | sha256sum` of the container filesystem: `git ls-tree -r` is deterministic and immune to filesystem-state noise (timestamps, chmod), so it can never false-positive into an every-hour rebuild loop. It reads only `HEAD`'s tree, so it is safe on the depth-1 shallow clone at `/opt/fluncle-build` (which has no history to diff against).
+
+**The one residual gap (honest).** The fingerprint only covers the paths in `BAKED_PATHS`. A change to a baked path **not** in that list — e.g. `apps/cli/assets/fonts/`, or a skill outside the two listed — still needs a manual `sudo /opt/fluncle-pin-watch/rebuild-hermes.sh --force`. Add the path to `BAKED_PATHS` if it becomes a routinely-changing baked input.
 
 This is the **pull model**: the repo is canonical, the box is the deploy target, and the box deploys _itself_ — the same self-heal shape the box already uses for enrich / observe / the render conductor. It means the maintenance routine never needs SSH, `op`, or box access, so it can run anywhere (Claude Desktop today, the cloud tomorrow).
 
@@ -23,7 +36,7 @@ Default `--if-stale` (the timer); `--force` runs it unconditionally (the operato
 
 1. **Single-flight** (flock) — never two rebuilds at once.
 2. **Sync** the public repo into `/opt/fluncle-build` (clone or fetch + hard-reset to `origin/main`).
-3. **Compare pins:** the `fluncle` binary release-URL version + the `@anthropic-ai/claude-code@` pin in `docs/agents/hermes/Dockerfile` vs the running container's `fluncle version` / `claude --version`. Current → **no-op**. The base image (`FROM`) is _not_ watched — a base bump stays a manual operator brake.
+3. **Compare pins AND baked content:** the `fluncle` binary release-URL version + the `@anthropic-ai/claude-code@` pin in `docs/agents/hermes/Dockerfile` vs the running container's `fluncle version` / `claude --version`, AND the baked-content fingerprint on `main` (`git ls-tree -r HEAD` over `BAKED_PATHS`) vs the running image's stamp at `/opt/.hermes-baked-fp`. Both current → **no-op**; either drifted (or an empty stamp) → rebuild. The base image (`FROM`) is _not_ watched — a base bump stays a manual operator brake.
 4. **Capture** the running container's runtime env into a `0600` tmpfs file (the rollback-reversibility step) + record the current image as the rollback target.
 5. **Build** the new image (`fluncle-hermes:v<date>-<sha>`), repo-root context, `-f docs/agents/hermes/Dockerfile`.
 6. **Pre-smoke the NEW image in throwaway `--rm` containers — before the live one is touched:** `fluncle version` == the pin; `claude --version` == the pin; an agent-token read returns `{ok:true}`; a publish-class command is **refused** (role boundary intact). Any failure → abort, alert, **the live box is never touched**.
