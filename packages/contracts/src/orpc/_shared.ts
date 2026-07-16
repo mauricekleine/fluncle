@@ -333,6 +333,16 @@ export const PublicUserSchema = z
   .object({
     createdAt: z.string(),
     displayUsername: z.string().optional(),
+    // The account's OWN email. A `PublicUser` is only ever resolved from the
+    // requester's own session (the authenticated `/me` tier), so this is always the
+    // requester's own address — the DESIGN invariant "email never appears on PUBLIC
+    // surfaces" holds (no public route serializes a `PublicUser`). Powers the
+    // Settings email section + resend-verification action, and the data export.
+    email: z.string(),
+    // Whether the account's email is verified. Always present (the `user` row's
+    // `email_verified` is NOT NULL). Verification gates future features, never the
+    // session — an unverified user still signs in. A Google sign-in arrives verified.
+    emailVerified: z.boolean(),
     id: z.string(),
     username: z.string().optional(),
   })

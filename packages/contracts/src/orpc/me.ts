@@ -46,10 +46,15 @@ const ProfileBodySchema = z.looseObject({
 /**
  * `get_current_private_user` → `GET /me` (operationId `getCurrentPrivateUser`).
  *
- * The current public session — `{ ok: true, user }` where `user` is the signed-in
- * `PublicUser` or `null` when there is no session. UNLIKE the rest of the tier
- * this op does NOT 401 on an absent session; it returns `user: null` (the live
- * `meResponse`). So it stays a plain read, not on `privateUserProcedure`.
+ * The current public session — `{ ok: true, googleEnabled, user }` where `user` is
+ * the signed-in `PublicUser` or `null` when there is no session. UNLIKE the rest of
+ * the tier this op does NOT 401 on an absent session; it returns `user: null` (the
+ * live `meResponse`). So it stays a plain read, not on `privateUserProcedure`.
+ *
+ * `googleEnabled` reports whether "Continue with Google" is live server-side (both
+ * `GOOGLE_CLIENT_*` creds present) so the account UI shows the button only when it
+ * works — never a dead button. Session-independent (present on the `user: null`
+ * body too), since the sign-in form reads it while signed out.
  */
 export const getCurrentPrivateUser = oc
   .route({
@@ -59,7 +64,13 @@ export const getCurrentPrivateUser = oc
     summary: "Get the current public session (user or null)",
     tags: ["Me"],
   })
-  .output(z.object({ ok: z.literal(true), user: PublicUserSchema.nullable() }));
+  .output(
+    z.object({
+      googleEnabled: z.boolean(),
+      ok: z.literal(true),
+      user: PublicUserSchema.nullable(),
+    }),
+  );
 
 /**
  * `get_private_mutation_token` → `GET /me/csrf`

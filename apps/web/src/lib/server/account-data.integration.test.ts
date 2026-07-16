@@ -26,7 +26,13 @@ vi.mock("./db", async (importOriginal) => {
 });
 
 function publicUser(id: string): PublicUser {
-  return { createdAt: new Date().toISOString(), id, username: id };
+  return {
+    createdAt: new Date().toISOString(),
+    email: `${id}@example.com`,
+    emailVerified: false,
+    id,
+    username: id,
+  };
 }
 
 beforeEach(async () => {

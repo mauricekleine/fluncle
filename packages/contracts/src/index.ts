@@ -288,11 +288,13 @@ export type TrackEmbeddingsResponse = Ok<{
 export type PublicUser = z.infer<typeof PublicUserSchema>;
 
 /**
- * `GET /me` (`get_current_private_user`): `{ ok: true, user }` where `user` is the
- * signed-in `PublicUser` or `null` when there is no session. The hand-written
- * envelope over the inferred `PublicUser`, matching `getCurrentPrivateUser.output`.
+ * `GET /me` (`get_current_private_user`): `{ ok: true, googleEnabled, user }` where
+ * `user` is the signed-in `PublicUser` or `null` when there is no session, and
+ * `googleEnabled` reports whether "Continue with Google" is live server-side (so the
+ * account UI never renders a dead button). The hand-written envelope over the
+ * inferred `PublicUser`, matching `getCurrentPrivateUser.output`.
  */
-export type MeResponse = Ok<{ user: PublicUser | null }>;
+export type MeResponse = Ok<{ googleEnabled: boolean; user: PublicUser | null }>;
 
 /**
  * A user's Galaxy progress (the game's cross-device save) as
