@@ -46,6 +46,25 @@ describe("isAuthorableDraft (the Worker-draft gate)", () => {
     expect(isAuthorableDraft({ ...DRAFT, prompt: "   " })).toBe(false);
     expect(isAuthorableDraft({ ...DRAFT, prompt: undefined })).toBe(false);
   });
+
+  // The grounding rail (#643): a findings-free CATALOGUE entity Firecrawl knows nothing
+  // about arrives with a non-empty prompt (the template always renders) but NOTHING to
+  // ground on — refuse it, or the bio would be confabulated (VOICE.md).
+  test("SKIPS on a groundless draft (no Firecrawl facts AND no finding titles)", () => {
+    expect(isAuthorableDraft({ ...DRAFT, findingCount: 0, hasFacts: false })).toBe(false);
+    // …even though the Worker still handed us a resolved, non-empty prompt.
+    expect(isAuthorableDraft({ ...DRAFT, findingCount: undefined, hasFacts: undefined })).toBe(
+      false,
+    );
+  });
+
+  test("authors on Firecrawl facts alone (hasFacts:true, no findings)", () => {
+    expect(isAuthorableDraft({ ...DRAFT, findingCount: 0, hasFacts: true })).toBe(true);
+  });
+
+  test("authors on finding titles alone (findingCount>0, no Firecrawl facts)", () => {
+    expect(isAuthorableDraft({ ...DRAFT, findingCount: 2, hasFacts: false })).toBe(true);
+  });
 });
 
 const AUTHORED = {
