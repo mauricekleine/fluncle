@@ -8,6 +8,20 @@ One dated entry per observed occurrence: the artifact family (notes / observatio
 
 ## The ledger
 
+### 2026-07-16 · Logbook — an exact DUPLICATE TITLE, and it's the crutch word (operator-observed, corpus-verified)
+
+The /logbook index now shows two of its seven entries wearing the same title: sector 012 "Shoulders down" (authored 2026-07-14) and sector 018 "Shoulders Down" (authored 2026-07-15) — identical but for case, on the public surface where every title is read side by side. Verified against prod: 7 entries, both rows `generated_by = agent`, authored on CONSECUTIVE sweep days despite covering sector-days six apart.
+
+![The /logbook index with sectors 018 and 012 both titled "Shoulders down"](./assets/homogenisation-2026-07-16-logbook-duplicate-titles.png)
+
+Three things this adds to the map:
+
+1. **The crutch word has reached the TITLE surface.** `shoulders` is the ledger's most-measured tic (observations 23/61, notes 15/61, the newsletter's why-lines) — this is its first appearance as a whole artifact title, and it duplicated on its second use. The vocabulary flows across families exactly as the 07-14 audit predicted the logbook would inherit.
+2. **The author has NO memory of its own corpus.** `logbook-sweep.ts` hands the model the day's findings material only — no prior entries, no prior titles, nothing marked as spent. (`getLogbookNeighbors` exists but feeds only the public page's prev/next nav.) Two sweep days in a row reached for the same title because nothing told the second day the first had used it.
+3. **No uniqueness guard anywhere.** The Worker's create path voice-gates the title (length + register) but never compares it against stored titles; `title` carries no unique index. A verbatim duplicate is accepted silently.
+
+Existing counter-measure that did NOT prevent this: none reaches the logbook — the 07-14 entry flagged it WATCH (then n=5, structure-homogenised) and said it "will inherit whatever the observation fix ships"; the observation fix (the vibe-neighbour layer + echo gate) has not been ported here. The notes' template maps directly: hand the sweep the prior entries' titles + openers/closers as SPENT moves, and let the create path bounce a title that echoes a stored one.
+
 ### 2026-07-14 · Observations — the counter-measure ships (the notes' rail, ported to the spoken family)
 
 The audit below named the observations the confirmed priority (echoing 59/61, mean pairwise 0.0816, "…enjoy cosmonauts" verbatim closing 32/61, "hope" in 51/61, 34/61 opening on "I…"/"This one…") and the context-note `Texture:` vocabulary as the upstream seed. The same day, the notes' proven mechanism (the vibe-neighbour layer + echo gate, 0.041 → 0.015) was ported to them end to end:
@@ -58,4 +72,4 @@ Learned during the video-overhaul and batch-render runs, written down before thi
 ## What the ledger still wants
 
 - **A metric per family.** Notes have `scoreNoteEcho`; observations have the taste-pack word counts; videos, covers, and sprites have nothing — a palette-histogram + texture-family tag per render would have caught the 07-13 strip automatically. "An anti-sameness effort with no metric is folklore" (ROADMAP).
-- **Entries from families not yet observed** (covers, sprites, logbook entries, clip captions) — absence of evidence there is so far just absence of looking.
+- **Entries from families not yet observed** (covers, sprites, clip captions) — absence of evidence there is so far just absence of looking.
