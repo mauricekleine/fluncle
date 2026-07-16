@@ -34,6 +34,7 @@ import { artistsContract } from "./artists";
 import { galaxiesContract } from "./galaxies";
 import { graphContract } from "./graph";
 import { adminEditionsContract } from "./admin-editions";
+import { adminFrontierContract } from "./admin-frontier";
 import { adminHealthContract } from "./admin-health";
 import { adminLabelsContract } from "./admin-labels";
 import { adminLogbookContract } from "./admin-logbook";
@@ -53,6 +54,7 @@ import { devicesContract } from "./devices";
 import { editionsContract } from "./editions";
 import { healthContract } from "./health";
 import { meContract } from "./me";
+import { meFrontierContract } from "./me-frontier";
 import { meGalaxyContract } from "./me-galaxy";
 import { mePreferencesContract } from "./me-preferences";
 import { meRecsContract } from "./me-recs";
@@ -254,6 +256,12 @@ export {
   TrackWorkScopeSchema,
   updateTrack,
 } from "./admin-tracks";
+export { adminFrontierContract, refreshFrontierPlaylists } from "./admin-frontier";
+export {
+  getPrivateFrontierPlaylist,
+  meFrontierContract,
+  mintPrivateFrontierPlaylist,
+} from "./me-frontier";
 export { getHealth } from "./health";
 export {
   deletePrivateAccount,
@@ -375,6 +383,7 @@ export const contract = {
   ...galaxiesContract,
   ...graphContract,
   ...adminEditionsContract,
+  ...adminFrontierContract,
   ...adminHealthContract,
   ...adminLabelsContract,
   ...adminLogbookContract,
@@ -394,6 +403,7 @@ export const contract = {
   ...editionsContract,
   ...healthContract,
   ...meContract,
+  ...meFrontierContract,
   ...meGalaxyContract,
   ...mePreferencesContract,
   ...meRecsContract,

@@ -11,6 +11,7 @@
     "render:mobile-assets": "bun src/render/render-mobile-assets.ts",
     "render:socials": "bun src/render/render-socials.ts",
     "render:mixtape-bg": "bun src/render/render-mixtape-bg.ts",
+    "render:frontier-cover": "bun src/render/render-frontier-cover.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

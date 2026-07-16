@@ -1252,6 +1252,38 @@ export const userRecSeeds = sqliteTable(
   ],
 );
 
+// A signed-in user's ONE public Spotify playlist — "Fluncle's Frontier" (E2, the
+// public recommendation machine). It lives on FLUNCLE'S OWN Spotify account (no
+// per-user OAuth, so the dev-mode 5-user allow-list cap never applies), holds the
+// user's current recommendations (the E1 blend), and is refreshed weekly. ONE row
+// per user (the `user_id` primary key): the playlist is created once and mirrored
+// thereafter, never a second one.
+//
+//   - `playlist_id`      — the Spotify playlist id, minted once by the first sync.
+//   - `created_at`       — when the playlist was minted (the rolling daily MINT-cap
+//                          window reads this: `count(created_at >= now-24h)`).
+//   - `last_synced_at`   — the last successful item PUT (null until the first sync
+//                          lands), so `/me` can say when the Frontier last moved.
+//   - `last_uri_hash`    — the sha256 of the last URI list the mirror PUT (the
+//                          telescope's `last_mirror` change-detector, per-row): an
+//                          unchanged list skips the PUT, so a weekly refresh that
+//                          finds nothing new is one read, not a needless write.
+//   - `cover_uploaded_at`— when the custom cover last landed on Spotify, or NULL. The
+//                          cover is a NODE-SIDE render leg (Remotion can't run in the
+//                          Worker), keyed on `cover_uploaded_at IS NULL`; it stays
+//                          INERT until the operator re-auths with `ugc-image-upload`.
+//
+// `user_id` is a logical FK (no SQL cascade), matching every sibling per-user table —
+// deletion is application-code (accountDeletionStatements), never a constraint.
+export const userFrontierPlaylists = sqliteTable("user_frontier_playlists", {
+  coverUploadedAt: text("cover_uploaded_at"),
+  createdAt: text("created_at").notNull(),
+  lastSyncedAt: text("last_synced_at"),
+  lastUriHash: text("last_uri_hash"),
+  playlistId: text("playlist_id").notNull(),
+  userId: text("user_id").primaryKey(),
+});
+
 export const userSavedFindings = sqliteTable(
   "user_saved_findings",
   {

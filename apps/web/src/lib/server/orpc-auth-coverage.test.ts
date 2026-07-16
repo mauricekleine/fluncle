@@ -339,6 +339,9 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   get_mixable_order: "admin",
   get_mixtape_social: "admin",
   get_private_account_export: "private-session",
+  // The signed-in user's Frontier playlist state (E2) — private-session
+  // (privateUserAuth), the get_private_galaxy_progress precedent.
+  get_private_frontier_playlist: "private-session",
   get_private_galaxy_progress: "private-session",
   get_private_mutation_token: "private-session",
   // The signed-in user's cross-device preferences read (the key-notation sync) —
@@ -455,6 +458,10 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // token 403s. Dry-run by default; the CLI must opt into a real run.
   migrate_preview_archive: "operator",
   mint_mixcloud_token: "operator",
+  // The Frontier mint/refresh (E2) — private-session (privateUserMutation), the
+  // save_private_rec_seed precedent. CSRF + a 4/h rate limit; the verified-email gate
+  // and the DEFAULT-DENY kill switch live in the handler + helper, on top of the tier.
+  mint_private_frontier_playlist: "private-session",
   mint_youtube_token: "operator",
   // The auto-note authoring step — agent tier (adminAuth only, no operatorGuard), the
   // written-note sibling of observe_track/context_track; the box's agent token drives it.
@@ -509,6 +516,11 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // every platform credential and the op writes only the internal platform_stats
   // table (no publish), so the box's agent token drives the bare trigger.
   record_platform_stats: "admin",
+  // The weekly Frontier refresh (E2) — ADMIN tier (adminAuth only, no operatorGuard):
+  // the box's `fluncle-frontier-refresh` cron drives it with the agent token, the
+  // `advance_publish_queue` / `rank_catalogue` precedent. It re-mirrors playlists that
+  // already exist (each minted by its own owner), so it creates no new public authority.
+  refresh_frontier_playlists: "admin",
   // Discard a label-alias candidate — operator tier: ruling two spellings are NOT one label
   // is an editorial act (the remove_artist_social / confirm_label_alias precedent).
   reject_label_alias: "operator",

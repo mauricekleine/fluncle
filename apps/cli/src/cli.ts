@@ -136,6 +136,11 @@ type CatalogueRankOptions = {
   limit?: string;
 };
 
+type FrontierRefreshOptions = {
+  json: boolean;
+  limit?: string;
+};
+
 type GalaxyEmbeddingsOptions = {
   cursor?: string;
   json: boolean;
@@ -1985,6 +1990,42 @@ function addAdminCommands(program: Command): void {
   //
   // The CLI holds no crawl and no ranking logic — the walk and all of the vector arithmetic
   // happen inside the Worker. This is a pacer, not an engine.
+  // `admin frontier` — the public recommendation machine's playlists (E2). One verb:
+  // `refresh` re-mirrors every crew member's "Fluncle's Frontier" playlist from their
+  // current recommendations. Admin tier (agent-allowed); the on-box weekly cron drives
+  // it. The CLI holds no sync logic — the mirror + the Spotify writes are in the Worker.
+  const frontier = configureCommand(
+    admin.command("frontier").description("The Frontier playlists (per-user recommendations)"),
+  );
+
+  frontier.action(() => {
+    frontier.outputHelp();
+  });
+
+  frontier
+    .command("refresh")
+    .description("Re-mirror every crew member's Frontier playlist from their recommendations")
+    .option("--limit <limit>", "Playlists per tick (default 500)")
+    .option("--json", "Print JSON", false)
+    .action(async (options: FrontierRefreshOptions) => {
+      const { frontierRefreshCommand } = await import("./commands/admin-frontier");
+      const summary = await frontierRefreshCommand(options);
+
+      if (options.json) {
+        printJson(summary);
+        return;
+      }
+
+      if (summary.switchOff) {
+        console.log("Frontier minting is paused (the kill switch is closed). Nothing refreshed.");
+        return;
+      }
+
+      console.log(
+        `Walked ${summary.total} playlist(s): ${summary.refreshed} refreshed, ${summary.unchanged} unchanged, ${summary.minted} minted, ${summary.skipped} skipped, ${summary.failed} failed.`,
+      );
+    });
+
   const catalogue = configureCommand(
     admin
       .command("catalogue")

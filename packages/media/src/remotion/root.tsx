@@ -7,6 +7,7 @@ import { Still } from "remotion";
 import { AppIcon } from "./app-icon";
 import { APP_ICON_SIZE, APP_ICON_SPECS, MOBILE_ASSET_SPECS } from "./app-icon-specs";
 import { CosmosBanner } from "./cosmos-banner";
+import { FrontierCover } from "./frontier-cover";
 import { GalaxyOg } from "./galaxy-og";
 import { MixtapeCover } from "./mixtape-cover";
 import { MIXTAPE_COVER_SPECS } from "./mixtape-cover-specs";
@@ -18,6 +19,18 @@ export const RemotionRoot: React.FC = () => {
       {/* The Open Graph / link-preview card for the /galaxy route (1200×630),
           rendered to apps/web/public/galaxy/og.png by `bun run render:og`. */}
       <Still component={GalaxyOg} height={630} id="GalaxyOg" width={1200} />
+
+      {/* The per-user "Fluncle's Frontier" playlist cover (E2), 640×640. Rendered
+          NODE-SIDE by apps/web/scripts/render-frontier-covers.ts (parametrized by the
+          owner's crew №) and uploaded to Spotify; the default below stays previewable
+          in Studio. */}
+      <Still
+        component={FrontierCover}
+        defaultProps={{ crewNumber: 42 }}
+        height={640}
+        id="FrontierCover"
+        width={640}
+      />
 
       {/* App-icon candidates for apps/mobile — one <AppIcon> variant per
           candidate at the 1024² master size (app-icon-specs.ts). A TASTE

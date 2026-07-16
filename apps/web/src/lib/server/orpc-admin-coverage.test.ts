@@ -332,6 +332,11 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // route file; oRPC owns the path directly, like record_health). Admin tier
   // (agent-allowed): the box's sweeps POST a tick's cost rows with the agent token.
   "POST /admin/costs/events": "record_cost",
+  // The weekly Frontier refresh (E2, the public recommendation machine) — contract-only
+  // oRPC (no TanStack route file; oRPC owns the path). Admin tier (agent-allowed): the
+  // box's `fluncle-frontier-refresh` cron re-mirrors every crew member's playlist with
+  // its agent token. It touches only playlists their owners already minted.
+  "POST /admin/frontier-playlists/refresh": "refresh_frontier_playlists",
   // record_health (the public /status dashboard's write) is contract-only oRPC —
   // no TanStack route file; oRPC owns the path directly, like context_track. Admin
   // tier (agent-allowed): the box's status cron POSTs a snapshot with its agent token.
@@ -617,6 +622,10 @@ describe("oRPC admin-route contract coverage", () => {
       "delete_private",
       "export_private",
       "update_private",
+      // The `/me` Frontier mint (E2) — a private-session op, not admin. Scoped to
+      // `mint_private` so the admin token mints (`mint_youtube_token`,
+      // `mint_mixcloud_token`) stay on the admin net where they belong.
+      "mint_private",
       "register_device",
       "deregister_device",
     ];

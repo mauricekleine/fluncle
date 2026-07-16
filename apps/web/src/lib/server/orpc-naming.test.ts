@@ -149,6 +149,13 @@ const APPROVED_VERBS = new Set<string>([
   // the agent-tier write the box's status cron drives. "Record this snapshot": a
   // genuinely new action verb, added deliberately with the `record_health` op.
   "record",
+  // `refresh` (re-mirror every crew member's Frontier playlist from their current
+  // recommendations — E2, the public recommendation machine) — added deliberately with
+  // the `refresh_frontier_playlists` weekly sweep. The word the roadmap + the mint's own
+  // "refreshed" status use for the act: distinct from `resync` (re-derive a published
+  // mixtape's metadata and push it, no re-upload) and `rank` (order a corpus) — this
+  // RE-COMPUTES a per-user recommendation set and full-replaces the playlist that mirrors it.
+  "refresh",
   "register",
   "reject",
   // `remove` (drop one of an artist's social links inline in the review queue) — added

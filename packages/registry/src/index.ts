@@ -1027,6 +1027,24 @@ export const SURFACES: readonly Surface[] = [
     weights: { status: "hidden" },
   },
   {
+    command: "fluncle admin frontier refresh",
+    exposedContent: [
+      "re-mirror every crew member's Fluncle's Frontier playlist from their current recommendations",
+    ],
+    kind: "cron",
+    name: "cron.frontier-refresh",
+    operatorNotes:
+      "weekly (Fri 07:00 Amsterdam), run by a rave-02 HOST systemd timer (docs/agents/hermes/frontier-refresh-timer/). E2, the public recommendation machine: every verified user can mint ONE public 'Fluncle's Frontier' playlist on Fluncle's OWN Spotify account (no per-user OAuth), holding THEIR recommendations (the E1 blend); this cron is the Discover-Weekly-style refresh that keeps each one current. The walk + the Spotify item replaces all happen inside the Worker; the sweep just fires one `fluncle admin frontier refresh`. It respects the DEFAULT-DENY `frontier.minting` kill switch (a closed switch touches nothing), skips playlists whose recommendation set is unchanged (a per-row URI-hash mirror guard), and creates no new public authority — every playlist it touches already exists, minted by its own owner. `refresh_frontier_playlists` is AGENT tier, so the box's existing agent-scoped token drives it: NO new secret. Zero LLM tokens. Source: docs/agents/hermes/scripts/frontier-refresh-sweep.*. See docs/the-ear.md § Fluncle's Frontier.",
+    probeConfig: {
+      cadenceMs: 7 * 24 * 60 * MINUTE_MS,
+      cronName: "fluncle-frontier-refresh",
+      kind: "cron",
+    },
+    statusDescription: "refreshes every crew member's Frontier playlist",
+    title: "Frontier refresh",
+    weights: { status: "hidden" },
+  },
+  {
     command: "fluncle admin backfills label-images",
     exposedContent: [
       "resolve each pending label's own logo (Discogs → Wikidata → cover floor) → its own R2 image",
