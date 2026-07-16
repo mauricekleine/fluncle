@@ -13,6 +13,13 @@
 # THIS box's single clock — not the conductor's wake→detect delta (which folds in ~an
 # hour of idle-wait). Creds come from /dev/shm/fluncle.env, injected by the conductor
 # on each wake (tmpfs does not survive a stop/resume snapshot).
+#
+# The render is PINNED to `--model opus` — never the CLI default. The default is
+# whatever the box token resolves to (currently Fable), and video authoring is held
+# to the Opus bar everywhere (AGENTS.md): the shaders-and-aliveness quality the finding
+# asks for (`videoModel: claude-opus-4-8`), and Fable's per-token cost is not worth it
+# for an ~85-min render. Pin the model here so a shifting CLI default never silently
+# re-tiers the render.
 cd "$HOME/fluncle" || exit 1
 rm -f "$HOME/conductor-run.done" "$HOME/conductor-run.log"
 PROMPT="packages/skills/fluncle-video/automation/render-queue.prompt.md"
@@ -21,7 +28,7 @@ setsid bash -c '
   set -a; . /dev/shm/fluncle.env; set +a
   export PATH="$HOME/.local/bin:$PATH"
   __start=$(date +%s)
-  claude -p "$(cat '"$PROMPT"')" --dangerously-skip-permissions \
+  claude -p "$(cat '"$PROMPT"')" --model opus --dangerously-skip-permissions \
     > "$HOME/conductor-run.log" 2>&1
   __rc=$?
   printf "EXIT=%s @ %s DURATION=%s\n" "$__rc" "$(date -u +%FT%TZ)" "$(( $(date +%s) - __start ))" \

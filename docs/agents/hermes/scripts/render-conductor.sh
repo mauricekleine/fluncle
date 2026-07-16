@@ -68,8 +68,10 @@ STATE_FILE="$STATE_DIR/state"          # "idle" | "rendering"
 BOXID_FILE="$STATE_DIR/box-id"         # the current/last box.ascii id
 STARTED_FILE="$STATE_DIR/started-at"   # epoch of the last render START
 RENDER_LOGID_FILE="$STATE_DIR/render-logid" # logId of the in-flight render (its cost scope)
+FAILS_FILE="$STATE_DIR/fail-counts"    # poison ledger: logId<TAB>count<TAB>lastFailEpoch
 LOCK_DIR="$STATE_DIR/lock.d"           # atomic-mkdir single-flight lock
 LOG_FILE="$STATE_DIR/conductor.log"
+[ -f "$FAILS_FILE" ] || : >"$FAILS_FILE" # keep it present so the awk helpers never error on a first run
 # The box CLI keeps its auth under $HOME/.ascii; HOME is the mounted, persisted
 # /opt/data/home, so `box login` survives container restarts.
 
@@ -80,6 +82,14 @@ PROVISION="${PROVISION:-$SCRIPT_DIR/provision-rave-03.sh}"
 START_INTERVAL="${START_INTERVAL:-3600}" # min seconds between render STARTS (hourly throttle)
 MAX_RENDER="${MAX_RENDER:-12600}"         # a render past 3.5h is stuck -> force-park (plate-lane authoring runs ~2h+; 2.5h killed nearly-done renders)
 MARKER_SKEW="${MARKER_SKEW:-300}"         # clock-skew grace when checking a done-marker's finish time against this render's start
+# Poison-skip: a finding whose render keeps failing (non-zero exit, or force-parked as
+# stuck) must NOT stay the queue head forever — that is head-of-line blocking, it starves
+# every finding behind it (the 2026-07-16 stall: one finding failed hourly for ~9h while 5
+# waited). After POISON_THRESHOLD consecutive failures, the pick skips it for POISON_TTL,
+# then lets it retry (so a TRANSIENT box.ascii wobble self-heals, an item-specific defect
+# re-poisons). A clean render clears that finding's ledger.
+POISON_THRESHOLD="${POISON_THRESHOLD:-3}" # consecutive render failures before a finding is skipped
+POISON_TTL="${POISON_TTL:-21600}"         # seconds a poisoned finding is skipped before one retry (6h)
 DONE_MARKER='${HOME:-/home/user}/conductor-run.done'
 API_URL="${FLUNCLE_API_URL:-https://www.fluncle.com}"
 
@@ -117,6 +127,43 @@ emit_render_cost() {
     2*) log "cost: render self-seconds emitted (${seconds}s, $log_id, HTTP $http)" ;;
     *) log "cost: render emit HTTP $http (best-effort, ignored)" ;;
   esac
+}
+
+# --- poison ledger (head-of-line-block guard; see POISON_* config) -----------------
+# A tab-separated file of `logId  count  lastFailEpoch`. Manipulated with awk (present on
+# the box) via write-to-temp-then-mv so a killed tick never leaves a half-written ledger.
+
+# `1` (via exit status) when this logId is currently poisoned: at/over the threshold AND
+# still inside the TTL window. Past the TTL it is eligible again (transient infra recovers).
+is_poisoned() {
+  awk -F'\t' -v id="$1" -v thr="$POISON_THRESHOLD" -v ttl="$POISON_TTL" -v now="$(now)" '
+    $1==id && ($2+0)>=thr && (now-($3+0))<ttl { hit=1 } END { exit hit?0:1 }' "$FAILS_FILE" 2>/dev/null
+}
+
+# Increment a finding's consecutive-fail count, stamping the failure time. Alerts EXACTLY
+# when the count crosses the threshold (the poisoning moment), never on every later skip.
+bump_fail() {
+  local id="$1" prev next; [ -n "$id" ] || return 0
+  prev="$(awk -F'\t' -v id="$id" '$1==id{print $2+0; f=1} END{if(!f)print 0}' "$FAILS_FILE" 2>/dev/null || printf 0)"
+  next=$((prev + 1))
+  { awk -F'\t' -v id="$id" '$1!=id' "$FAILS_FILE" 2>/dev/null; printf '%s\t%s\t%s\n' "$id" "$next" "$(now)"; } \
+    >"$FAILS_FILE.tmp" && mv "$FAILS_FILE.tmp" "$FAILS_FILE"
+  log "render fail #$next for $id"
+  if [ "$next" -eq "$POISON_THRESHOLD" ]; then
+    log "POISON: $id failed $next consecutive renders — skipping it for ${POISON_TTL}s"
+    emit "render-conductor: POISON-SKIP $id after $next failed renders"
+    if [ -n "${DISCORD_ALERT_WEBHOOK:-}" ]; then
+      curl -sS -o /dev/null --max-time 10 -H 'Content-Type: application/json' \
+        -d "$(printf '{"content":"render conductor: POISON-SKIP %s after %s failed renders — needs a look (%s/admin)"}' "$id" "$next" "$API_URL")" \
+        "$DISCORD_ALERT_WEBHOOK" 2>>"$LOG_FILE" || true
+    fi
+  fi
+}
+
+# Drop a finding from the ledger — a clean render proves it (and the pipeline) are fine.
+clear_fail() {
+  local id="$1"; [ -n "$id" ] || return 0
+  awk -F'\t' -v id="$id" '$1!=id' "$FAILS_FILE" 2>/dev/null >"$FAILS_FILE.tmp" && mv "$FAILS_FILE.tmp" "$FAILS_FILE"
 }
 
 # Freshen a RESUMED snapshot's stale checkout to current `main`. The render box is
@@ -252,6 +299,17 @@ if [ "$state" = "rendering" ]; then
     render_iso="${result#*@ }"
     render_iso="${render_iso%% *}"
     emit_render_cost "$(read_or "$RENDER_LOGID_FILE" '')" "$render_iso" "${result##*DURATION=}"
+
+    # Poison accounting: a non-zero render EXIT (it ran but failed — e.g. the 13s crash)
+    # counts against this finding; a clean EXIT=0 clears its ledger (a good render proves
+    # the finding and the pipeline). The idle pick below then skips a poisoned head.
+    rendered_logid="$(read_or "$RENDER_LOGID_FILE" '')"
+    render_exit="${result#EXIT=}"; render_exit="${render_exit%% *}"
+    case "$render_exit" in
+      0) clear_fail "$rendered_logid" ;;
+      '' | *[!0-9]*) : ;; # unparseable exit — leave the ledger untouched
+      *) bump_fail "$rendered_logid" ;;
+    esac
     # Chain: fall out of the rendering block to the idle pick in THIS tick — a
     # finished render must not cost a dead hour. The hourly START gate below
     # still holds (the last start is over an hour old once a render finishes).
@@ -261,6 +319,7 @@ if [ "$state" = "rendering" ]; then
     if [ "$(( $(now) - started ))" -gt "$MAX_RENDER" ]; then
       "$BOX_BIN" stop "$boxid" >/dev/null 2>&1 || true
       printf 'idle' >"$STATE_FILE"
+      bump_fail "$(read_or "$RENDER_LOGID_FILE" '')" # a stuck render counts against the finding too
       log "render exceeded ${MAX_RENDER}s — force-parked box $boxid"
       emit "render-conductor: render stuck >${MAX_RENDER}s, force-parked"
       exit 0
@@ -285,12 +344,28 @@ if [ -z "${FLUNCLE_API_TOKEN:-}" ]; then
   emit "render-conductor: no agent token"
   exit 1
 fi
-queue_json="$("$FLUNCLE_BIN" admin tracks queue --limit 1 --json 2>/dev/null || printf '')"
-head="$(printf '%s' "$queue_json" | "$BUN_BIN" -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const t=(JSON.parse(s).tracks||[])[0];process.stdout.write(t&&t.logId?t.logId:"")}catch(e){}})' 2>/dev/null || printf '')"
+# Read a WINDOW of the queue (oldest first), not just the head, so a poisoned head can be
+# stepped over. The natural order is preserved: the pick is the oldest finding that is NOT
+# currently poisoned. 25 is far past any realistic simultaneous-poison count.
+queue_json="$("$FLUNCLE_BIN" admin tracks queue --limit 25 --json 2>/dev/null || printf '')"
+queued_ids="$(printf '%s' "$queue_json" | "$BUN_BIN" -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{for(const t of (JSON.parse(s).tracks||[]))if(t&&t.logId)process.stdout.write(t.logId+"\n")}catch(e){}})' 2>/dev/null || printf '')"
+head=""; skipped=0
+while IFS= read -r lid; do
+  [ -n "$lid" ] || continue
+  if is_poisoned "$lid"; then skipped=$((skipped + 1)); continue; fi
+  head="$lid"; break
+done <<EOF
+$queued_ids
+EOF
 if [ -z "$head" ]; then
-  emit "render-conductor: queue empty — nothing to render"
+  if [ "$skipped" -gt 0 ]; then
+    emit "render-conductor: nothing renderable — $skipped queued finding(s) poisoned"
+  else
+    emit "render-conductor: queue empty — nothing to render"
+  fi
   exit 0
 fi
+[ "$skipped" -gt 0 ] && log "skipped $skipped poisoned finding(s) at the head"
 log "queue head: $head"
 
 # Ensure the box exists: resume the parked snapshot, or reprovision if box.ascii
