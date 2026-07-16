@@ -35,6 +35,10 @@ const PUBLIC_ROUTE_OPS: Record<string, string> = {
   // It has no file-enumeration entry; it lives here
   // so the "every public op is converted" check covers it.
   "DELETE /devices/{token}": "deregister_device",
+  // The recommendation-seed domain (docs/the-ear.md § The per-user telescopes) —
+  // contract-only oRPC (no TanStack route file under /api/v1/me); documented here
+  // as part of the public surface net.
+  "DELETE /me/rec-seeds/{trackId}": "delete_private_rec_seed",
   "DELETE /me/saved-findings/{trackId}": "unsave_private_finding",
   // The artists domain — contract-only oRPC (Unit 4 of the artist-relationship RFC).
   // No TanStack route file under /api/v1/artists; oRPC serves these straight off the
@@ -58,6 +62,8 @@ const PUBLIC_ROUTE_OPS: Record<string, string> = {
   // The cross-device preferences store — contract-only oRPC (no TanStack route file
   // under /api/v1/me), documented here as part of the public surface net.
   "GET /me/preferences": "get_private_preferences",
+  "GET /me/rec-seeds": "list_private_rec_seeds",
+  "GET /me/recommendations": "list_private_recommendations",
   "GET /me/saved-findings": "list_private_saved_findings",
   "GET /me/submissions": "list_private_submissions",
   "GET /mixtapes": "list_mixtapes",
@@ -103,6 +109,7 @@ const PUBLIC_ROUTE_OPS: Record<string, string> = {
   // per-find write → `collectLogId`); there is no list-logs op, so it is named for
   // what it does (see ../orpc/me-galaxy.ts — oRPC owns the path directly now).
   "POST /me/galaxy-progress/logs": "collect_private_galaxy_log",
+  "POST /me/rec-seeds": "save_private_rec_seed",
   "POST /me/saved-findings": "save_private_finding",
   "POST /newsletter": "subscribe_newsletter",
   "POST /submissions": "submit_track",

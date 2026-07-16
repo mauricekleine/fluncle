@@ -10,7 +10,9 @@ import { oc } from "@orpc/contract";
 import * as z from "zod";
 import { GalaxyProgressSchema } from "./me-galaxy";
 import { UserPreferencesSchema } from "./me-preferences";
+import { RecSeedSchema } from "./me-recs";
 import { SavedFindingSchema } from "./me-saved";
+import { SavedSetSchema } from "./me-sets";
 import { PublicUserSchema } from "./_shared";
 
 /**
@@ -138,7 +140,13 @@ export const deletePrivateAccount = oc
       summary: z.object({
         credentials: z.string(),
         galaxyProgress: z.string(),
+        // The three later per-user stores (preferences, rec seeds, saved sets)
+        // joined the deletion after the op first shipped — OPTIONAL so the
+        // contract stays additive over any older recorded summary shape.
+        preferences: z.string().optional(),
+        recSeeds: z.string().optional(),
         savedFindings: z.string(),
+        savedSets: z.string().optional(),
         sessions: z.string(),
         submissions: z.string(),
         user: z.string(),
@@ -174,7 +182,13 @@ export const exportPrivateAccountData = oc
         preferences: UserPreferencesSchema,
         privacyNotes: z.array(z.string()),
         progress: GalaxyProgressSchema,
+        // Recommendation seeds join the export with their table (the privacy
+        // invariant: every per-user store is exported). `savedSets` was in the
+        // live body but missing from this schema; both are OPTIONAL so the
+        // contract stays additive.
+        recSeeds: z.array(RecSeedSchema).optional(),
         savedFindings: z.array(SavedFindingSchema),
+        savedSets: z.array(SavedSetSchema).optional(),
         submissions: z.array(PrivateSubmissionSchema),
       }),
       ok: z.literal(true),

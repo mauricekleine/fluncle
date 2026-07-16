@@ -11,6 +11,8 @@ import { bestAlbumCoverUrl } from "../media";
 import { parseSetParam, parseTasteParam, serializeSet, serializeTaste } from "../mix-set";
 import { parseArtistsJson } from "./artists";
 import { getDb, typedRow, typedRows } from "./db";
+// Type-only: the runtime import of recommendations.ts is lazy (see exportAccountData).
+import { type RecSeedItem } from "./recommendations";
 import { isGalaxyMapFullyNamed } from "./galaxies-map";
 import { jsonError } from "./env";
 import { enforceRateLimit } from "./rate-limit";
@@ -946,21 +948,27 @@ export async function exportAccountData(user: PublicUser): Promise<{
     preferences: UserPreferences;
     privacyNotes: string[];
     progress: GalaxyProgressResult;
+    recSeeds: RecSeedItem[];
     savedFindings: SavedFindingItem[];
     savedSets: SavedSetItem[];
     submissions: PrivateSubmissionItem[];
   };
   ok: true;
 }> {
+  // Lazy import: recommendations.ts imports catalogue.ts (the shared diversity
+  // decay), and pulling that chain at account-data module-eval time is weight the
+  // other /me paths never need.
+  const { listRecSeeds } = await import("./recommendations");
   const requestedAt = new Date().toISOString();
   const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
   const exportId = randomUUID();
-  const [progress, saved, sets, submissions, preferences] = await Promise.all([
+  const [progress, saved, sets, submissions, preferences, recSeeds] = await Promise.all([
     getGalaxyProgress(user),
     listSavedFindings(user),
     listSavedSets(user),
     listUserSubmissions(user),
     getUserPreferences(user),
+    listRecSeeds(user),
   ]);
 
   await (
@@ -983,6 +991,7 @@ export async function exportAccountData(user: PublicUser): Promise<{
         "Discord and Resend processor copies may follow their own retention windows.",
       ],
       progress,
+      recSeeds: recSeeds.seeds,
       savedFindings: saved.savedFindings,
       savedSets: sets.savedSets,
       submissions: submissions.submissions,
@@ -1040,6 +1049,7 @@ export async function deleteAccount(user: PublicUser): Promise<{
     credentials: string;
     galaxyProgress: string;
     preferences: string;
+    recSeeds: string;
     savedFindings: string;
     savedSets: string;
     sessions: string;
@@ -1060,6 +1070,7 @@ export async function deleteAccount(user: PublicUser): Promise<{
     credentials: "deleted",
     galaxyProgress: "deleted",
     preferences: "deleted",
+    recSeeds: "deleted",
     savedFindings: "deleted",
     savedSets: "deleted",
     sessions: "revoked",
@@ -1095,6 +1106,10 @@ export function accountDeletionStatements({
   userId: string;
 }): SqlStatement[] {
   return [
+    {
+      args: [userId],
+      sql: `delete from user_rec_seeds where user_id = ?`,
+    },
     {
       args: [userId],
       sql: `delete from user_saved_findings where user_id = ?`,
