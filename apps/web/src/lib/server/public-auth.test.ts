@@ -20,6 +20,7 @@ const user: PublicUser = {
   email: "junglist@example.com",
   emailVerified: false,
   id: "user_123",
+  name: "Junglist 174",
   username: "junglist_174",
 };
 

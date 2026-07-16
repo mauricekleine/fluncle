@@ -224,12 +224,33 @@ export async function updatePrivateUsername(
     return jsonError(400, "invalid_request", "Invalid account settings");
   }
 
-  const username = typeof body.username === "string" ? body.username.trim().toLowerCase() : "";
+  // The two-name model (X-shaped, operator-ratified 2026-07-16): `username` is the
+  // handle (normalized lowercase; its as-typed casing becomes `display_username`),
+  // and `name` is the freeform display name (what Google fills, what the header
+  // shows). An EMPTY submitted value falls back rather than failing: display casing
+  // falls back to the handle as typed, and a cleared name falls back to the handle —
+  // the old code let an empty-string displayUsername through to the validator and
+  // then blamed the USERNAME for it (the "cosmonaut" incident).
+  const usernameInput = typeof body.username === "string" ? body.username.trim() : "";
+  const username = usernameInput.toLowerCase();
   const displayUsername =
-    typeof body.displayUsername === "string" ? body.displayUsername.trim() : username;
+    typeof body.displayUsername === "string" && body.displayUsername.trim()
+      ? body.displayUsername.trim()
+      : usernameInput;
+  const name = typeof body.name === "string" && body.name.trim() ? body.name.trim() : usernameInput;
 
+  // Literal, surface-appropriate errors: a settings form is a tool, not a stage —
+  // say what is wrong and what fits (the canon register stays off validation copy).
   if (!isAllowedUsername(username) || !isAllowedDisplayUsername(displayUsername)) {
-    return jsonError(400, "invalid_username", "That username does not fit the flight manifest");
+    return jsonError(
+      400,
+      "invalid_username",
+      "That username can't be used. 3–24 characters: letters, numbers, underscores.",
+    );
+  }
+
+  if (name.length > 32) {
+    return jsonError(400, "invalid_name", "That name is too long. 32 characters at most.");
   }
 
   const db = await getDb();
@@ -239,12 +260,12 @@ export async function updatePrivateUsername(
   });
 
   if (existing.rows.length > 0) {
-    return jsonError(409, "username_taken", "That username is already aboard");
+    return jsonError(409, "username_taken", "That username is already taken.");
   }
 
   await db.execute({
-    args: [username, displayUsername, Date.now(), user.id],
-    sql: `update "user" set username = ?, display_username = ?, updated_at = ? where id = ?`,
+    args: [username, displayUsername, name, Date.now(), user.id],
+    sql: `update "user" set username = ?, display_username = ?, name = ?, updated_at = ? where id = ?`,
   });
 
   return {
@@ -252,6 +273,7 @@ export async function updatePrivateUsername(
     user: {
       ...user,
       displayUsername,
+      name,
       username,
     },
   };

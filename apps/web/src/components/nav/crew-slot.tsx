@@ -196,7 +196,9 @@ export function CrewSlot({ home }: { home: boolean }): ReactNode {
     return <JoinButton glow={home} />;
   }
 
-  const name = user.displayUsername ?? user.username ?? user.name ?? "cosmonaut";
+  // Name first (the X model, operator-ratified 2026-07-16): the header shows the
+  // freeform Name; the handle is the fallback for a name-less account.
+  const name = user.name || (user.displayUsername ?? user.username ?? "cosmonaut");
 
   return <AccountMenu name={name} />;
 }

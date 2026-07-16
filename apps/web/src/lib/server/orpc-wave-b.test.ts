@@ -69,6 +69,7 @@ const USER = {
   email: "fan@example.com",
   emailVerified: false,
   id: "user-1",
+  name: "Fan",
   username: "fan",
 };
 

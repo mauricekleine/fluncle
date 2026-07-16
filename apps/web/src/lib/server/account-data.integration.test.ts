@@ -31,6 +31,7 @@ function publicUser(id: string): PublicUser {
     email: `${id}@example.com`,
     emailVerified: false,
     id,
+    name: id,
     username: id,
   };
 }

@@ -40,6 +40,8 @@ export const PrivateSubmissionSchema = z
  */
 const ProfileBodySchema = z.looseObject({
   displayUsername: z.unknown().optional(),
+  // The freeform display name (Settings "Name") — additive, the two-name model.
+  name: z.unknown().optional(),
   username: z.unknown().optional(),
 });
 

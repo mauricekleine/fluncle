@@ -20,9 +20,17 @@ import {
   AlertDialogTrigger,
 } from "@fluncle/ui/components/alert-dialog";
 import { Button } from "@fluncle/ui/components/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@fluncle/ui/components/dialog";
 import { Input } from "@fluncle/ui/components/input";
 import { Label } from "@fluncle/ui/components/label";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@fluncle/ui/components/tabs";
+import { Tabs, TabsList, TabsTrigger } from "@fluncle/ui/components/tabs";
 import { Textarea } from "@fluncle/ui/components/textarea";
 import { siGoogle } from "simple-icons";
 import { BrandIcon } from "@/components/brand-icon";
@@ -45,6 +53,7 @@ type Me = {
     email: string;
     emailVerified: boolean;
     id: string;
+    name: string;
     username?: string;
   };
 };
@@ -237,7 +246,7 @@ function AccountPage() {
     void refresh();
   }, []);
 
-  const name = me?.user?.displayUsername ?? me?.user?.username ?? "cosmonaut";
+  const name = me?.user?.name || (me?.user?.displayUsername ?? me?.user?.username ?? "cosmonaut");
 
   return (
     <main className="min-h-screen overflow-x-hidden p-4 text-foreground sm:p-6 lg:p-8">
@@ -258,19 +267,22 @@ function AccountPage() {
         {me === undefined ? (
           <p className="account-muted">Checking the manifest…</p>
         ) : signedIn && me.user ? (
-          <SignedInAccount
-            collection={collection}
-            message={message}
-            name={name}
-            progress={progress}
-            refresh={refresh}
-            saved={saved}
-            csrfToken={csrfToken}
-            setMessage={setMessage}
-            sets={sets}
-            submissions={submissions}
-            user={me.user}
-          />
+          <>
+            <ClaimUsernameDialog csrfToken={csrfToken} refresh={refresh} user={me.user} />
+            <SignedInAccount
+              collection={collection}
+              message={message}
+              name={name}
+              progress={progress}
+              refresh={refresh}
+              saved={saved}
+              csrfToken={csrfToken}
+              setMessage={setMessage}
+              sets={sets}
+              submissions={submissions}
+              user={me.user}
+            />
+          </>
         ) : (
           <AuthForms
             googleEnabled={me.googleEnabled}
@@ -539,14 +551,8 @@ function SignedInAccount({
   user: NonNullable<Me["user"]>;
 }) {
   const { tab } = Route.useSearch();
-  const navigate = Route.useNavigate();
   const [setsMessage, setSetsMessage] = useState("");
   const joined = useMemo(() => formatDateLong(user.createdAt), [user.createdAt]);
-
-  async function signOut() {
-    await authClient.signOut();
-    await refresh();
-  }
 
   return (
     <div className="account-stack">
@@ -558,9 +564,6 @@ function SignedInAccount({
               Joined {joined}. Email stays private and never appears in public Fluncle surfaces.
             </p>
           </div>
-          <Button onClick={() => void signOut()} size="sm" type="button" variant="ghost">
-            Sign out
-          </Button>
         </div>
         {message ? (
           <p aria-live="polite" className="account-muted">
@@ -569,22 +572,11 @@ function SignedInAccount({
         ) : null}
       </section>
 
-      <Tabs
-        onValueChange={(value) => {
-          void navigate({
-            replace: true,
-            search: { tab: parseAccountTab(value) },
-          });
-        }}
-        value={tab ?? "galaxy"}
-      >
-        <TabsList className="w-full">
-          <TabsTrigger value="galaxy">Galaxy</TabsTrigger>
-          <TabsTrigger value="saves">Saves</TabsTrigger>
-          <TabsTrigger value="settings">Settings</TabsTrigger>
-        </TabsList>
-
-        <TabsContent className="account-tab-panel" value="galaxy">
+      {/* The panels are driven by ?tab= alone — the account menu in the top bar is
+          the switcher (operator ruling 2026-07-16), so the page carries no second
+          tab strip of its own. */}
+      {(tab ?? "galaxy") === "galaxy" ? (
+        <div className="account-tab-panel">
           <section className="account-section">
             <div className="account-grid">
               <Metric label="Lifetime logs" value={progress?.collectedLogIds.length ?? 0} />
@@ -597,9 +589,11 @@ function SignedInAccount({
             </p>
           </section>
           <CollectionSection collection={collection} />
-        </TabsContent>
+        </div>
+      ) : null}
 
-        <TabsContent className="account-tab-panel" value="saves">
+      {tab === "saves" ? (
+        <div className="account-tab-panel">
           <section className="account-section">
             <h2>Saved findings</h2>
             <ListEmpty items={saved} empty="No saved findings yet.">
@@ -644,17 +638,19 @@ function SignedInAccount({
               ))}
             </ListEmpty>
           </section>
-        </TabsContent>
+        </div>
+      ) : null}
 
-        <TabsContent className="account-tab-panel" value="settings">
+      {tab === "settings" ? (
+        <div className="account-tab-panel">
           <SettingsPanel
             csrfToken={csrfToken}
             refresh={refresh}
             setMessage={setMessage}
             user={user}
           />
-        </TabsContent>
-      </Tabs>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -803,6 +799,116 @@ function CollectionRow({ item }: { item: CollectionItem }) {
   );
 }
 
+// The dismissal marker for the claim-username dialog: per-tab-session, so "Not now"
+// holds for the visit but the door knocks again next time — a missing handle keeps
+// saves and submissions nameless, which is worth one quiet re-ask.
+const CLAIM_DISMISSED_KEY = "fluncle-claim-username-dismissed";
+
+/** The email's local part, folded into a valid handle suggestion ("hey@…" → "hey"). */
+function suggestUsername(email: string): string {
+  return (email.split("@")[0] ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9_]/g, "")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 24);
+}
+
+/**
+ * The claim-username moment. A fresh Google arrival lands signed in but nameless —
+ * instead of hiding a hint in Settings, the page opens one small dialog with the
+ * handle prefilled from their email. Claiming is one tap; "Not now" dismisses it
+ * for the session and Settings keeps the field either way.
+ */
+function ClaimUsernameDialog({
+  csrfToken,
+  refresh,
+  user,
+}: {
+  csrfToken: string;
+  refresh: () => Promise<void>;
+  user: NonNullable<Me["user"]>;
+}) {
+  const [open, setOpen] = useState(
+    () =>
+      !user.username &&
+      typeof window !== "undefined" &&
+      window.sessionStorage.getItem(CLAIM_DISMISSED_KEY) !== "1",
+  );
+  const [value, setValue] = useState(() => suggestUsername(user.email));
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  function dismiss() {
+    window.sessionStorage.setItem(CLAIM_DISMISSED_KEY, "1");
+    setOpen(false);
+  }
+
+  async function claim(event: React.FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    setError("");
+
+    try {
+      const response = await fetch("/api/me/profile", {
+        body: JSON.stringify({ name: user.name || value, username: value }),
+        headers: { "Content-Type": "application/json", "x-fluncle-csrf": csrfToken },
+        method: "PATCH",
+      });
+
+      if (!response.ok) {
+        setError(((await response.json()) as { message: string }).message);
+
+        return;
+      }
+
+      setOpen(false);
+      await refresh();
+    } catch {
+      setError("Could not save right now. Try again in a moment.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (user.username) {
+    return null;
+  }
+
+  return (
+    <Dialog onOpenChange={(next: boolean) => (next ? setOpen(true) : dismiss())} open={open}>
+      <DialogContent>
+        <form onSubmit={(event) => void claim(event)}>
+          <DialogHeader>
+            <DialogTitle>Claim your username</DialogTitle>
+            <DialogDescription>
+              Your handle across Fluncle: it names your saves and submissions. You can change it
+              later in Settings.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="py-4">
+            <Field label="Username">
+              <Input autoFocus onChange={(event) => setValue(event.target.value)} value={value} />
+            </Field>
+            {error ? (
+              <p aria-live="polite" className="account-muted mt-2">
+                {error}
+              </p>
+            ) : null}
+          </div>
+          <DialogFooter>
+            <Button disabled={busy} onClick={dismiss} type="button" variant="ghost">
+              Not now
+            </Button>
+            <Button disabled={busy || value.trim().length < 3} type="submit">
+              {busy ? "Claiming…" : "Claim username"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 /**
  * The Settings tab: preferences, the profile form, the CLI pointer, and — at the
  * bottom, deliberately last — export and deletion. Same behaviors as before the
@@ -820,9 +926,7 @@ function SettingsPanel({
   user: NonNullable<Me["user"]>;
 }) {
   const [username, setUsername] = useState(user.username ?? "");
-  const [displayUsername, setDisplayUsername] = useState(
-    user.displayUsername ?? user.username ?? "",
-  );
+  const [name, setName] = useState(user.name);
   const [settingsMessage, setSettingsMessage] = useState("");
   const [settingsBusy, setSettingsBusy] = useState(false);
   const [emailMessage, setEmailMessage] = useState("");
@@ -862,15 +966,13 @@ function SettingsPanel({
 
     try {
       const response = await fetch("/api/me/profile", {
-        body: JSON.stringify({ displayUsername, username }),
+        body: JSON.stringify({ name, username }),
         headers: { "Content-Type": "application/json", "x-fluncle-csrf": csrfToken },
         method: "PATCH",
       });
 
       setSettingsMessage(
-        response.ok
-          ? "Username updated."
-          : ((await response.json()) as { message: string }).message,
+        response.ok ? "Profile updated." : ((await response.json()) as { message: string }).message,
       );
       await refresh();
     } finally {
@@ -921,23 +1023,11 @@ function SettingsPanel({
 
   return (
     <>
-      {user.username ? null : (
-        // A Google arrival has no username yet. A quiet, non-blocking nudge toward
-        // the Username field just below — nothing on the account depends on it.
-        <section className="account-section">
-          <h2>Claim a username</h2>
-          <p className="account-muted">
-            You&rsquo;re in, but you haven&rsquo;t claimed a username yet. Pick one below so your
-            saves and submissions have a name on them. No rush, and you can change it later.
-          </p>
-        </section>
-      )}
-
       <section className="account-section">
         <h2>Preferences</h2>
         <p className="account-muted">
-          How every key reads across Fluncle. Saved to your account, so it follows you to every
-          device you sign in on.
+          Pick how keys read: Scales or Camelot. The choice saves to your account and follows you
+          onto every device you sign in on.
         </p>
         <div className="account-field">
           <span className="text-sm font-medium">Key notation</span>
@@ -949,19 +1039,18 @@ function SettingsPanel({
       </section>
 
       <form className="account-section" onSubmit={(event) => void patchProfile(event)}>
-        <h2>Settings</h2>
+        <h2>Profile</h2>
+        {/* The two-name model: Username is the handle, Name is what shows in the top
+            bar. No third field — a "display name" next to both was one name too many. */}
         <Field label="Username">
           <Input value={username} onChange={(event) => setUsername(event.target.value)} />
         </Field>
-        <Field label="Display name">
-          <Input
-            value={displayUsername}
-            onChange={(event) => setDisplayUsername(event.target.value)}
-          />
+        <Field label="Name">
+          <Input value={name} onChange={(event) => setName(event.target.value)} />
         </Field>
         <div className="account-row">
           <Button disabled={settingsBusy} type="submit" variant="outline">
-            {settingsBusy ? "Updating…" : "Update settings"}
+            {settingsBusy ? "Updating…" : "Update profile"}
           </Button>
           {settingsMessage ? (
             <p aria-live="polite" className="account-muted">

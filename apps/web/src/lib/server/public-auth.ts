@@ -37,6 +37,10 @@ export type PublicUser = {
   // `emailVerification` below, which deliberately omits `requireEmailVerification`).
   emailVerified: boolean;
   id: string;
+  // The freeform display name (the "Name" in Settings — what Google fills at
+  // sign-up and what the header shows). Distinct from `username` (the handle) and
+  // `displayUsername` (the handle's as-typed casing).
+  name: string;
   username?: string;
 };
 
@@ -46,6 +50,7 @@ type PublicUserRow = {
   email: string | null;
   email_verified: number;
   id: string;
+  name: string | null;
   status: "active" | "deleted" | "suspended";
   username: string | null;
 };
@@ -327,7 +332,7 @@ export async function getPublicSession(request: Request): Promise<PublicUser | u
     await getDb()
   ).execute({
     args: [sessionUser.id],
-    sql: `select id, username, display_username, created_at, status, email, email_verified from "user" where id = ? limit 1`,
+    sql: `select id, username, display_username, name, created_at, status, email, email_verified from "user" where id = ? limit 1`,
   });
   const user = typedRow<PublicUserRow>(result.rows);
 
@@ -341,6 +346,7 @@ export async function getPublicSession(request: Request): Promise<PublicUser | u
     email: user.email ?? "",
     emailVerified: user.email_verified === 1,
     id: user.id,
+    name: user.name ?? "",
     username: user.username ?? undefined,
   };
 }
