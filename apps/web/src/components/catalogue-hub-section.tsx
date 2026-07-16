@@ -1,10 +1,12 @@
-// "Also in the catalogue": the SECOND section of each hub (`/labels`, `/albums`, `/artists`).
+// The "more <entities>" section: the SECOND section of each hub (`/labels`, `/albums`, `/artists`).
 //
 // The hub leads with Fluncle's editorial list — the entities he has certified a finding off. This
 // section is everything BELOW that: the INDEXABLE findings-free entities the crawler minted a page
 // for on crawled content alone. It is honestly quieter — the unlit register (DESIGN.md) — and its
-// copy never NAMES the tier or claims Fluncle found/logged/certified these (docs/album-entity.md,
-// the unnamed tier). The tiles are the SAME grid as the section above; only the light drops.
+// copy never NAMES the tier (the word "catalogue" never appears in public copy) or claims Fluncle
+// found/logged/certified these (docs/album-entity.md, the unnamed tier). The heading names the
+// SUPERSET ("More labels"), which the Unlit Rule permits. The tiles are the SAME grid as the
+// section above; only the light drops.
 //
 // Data flows exactly like the homepage feed (routes/index.tsx): a `useInfiniteQuery` seeded from
 // the loader's first page (`initialData`), a slug keyset for `getNextPageParam`, and an
@@ -29,7 +31,7 @@ export function CatalogueHubSection<Entry extends { slug: string }>({
 }: {
   /** The grid class shared with the section above: "artist-grid" (covers) or "artist-avatar-grid". */
   gridClassName: string;
-  /** The section's quiet heading, e.g. "Also in the catalogue". */
+  /** The section's quiet heading — names the superset, e.g. "More labels" (never the tier). */
   heading: string;
   /** DOM id linking the heading to its <section> (aria-labelledby). */
   headingId: string;

@@ -2019,15 +2019,15 @@ body::before {
   color: var(--starlight-cream);
 }
 
-/* ── THE HUB'S "ALSO IN THE CATALOGUE" SECTION ──────────────────────────────────────────────
+/* ── THE HUB'S "MORE <ENTITIES>" SECTION ────────────────────────────────────────────────────
    The SECOND section of /labels, /albums and /artists: the indexable findings-free entities the
    crawler minted a page for. It reuses the same grid as the editorial section above; the register
    is what changes — this is the UNLIT one (DESIGN.md). The tiles sit a step dimmer at rest and
    heat to full on hover/focus, so the eye reads them as quieter than the findings without a second
    layout, and the One Sun budget stays with the findings: the cover border never heats to gold
    here (a neutral Dust lift instead), only the focus ring stays canonical Eclipse. The heading is
-   allowed — unlike a graph page's quieter rows, a hub section names a real SECTION, not the tier
-   (docs/album-entity.md, the unnamed tier). */
+   allowed — it names the SUPERSET ("More labels"), never the tier, and the word "catalogue" never
+   reaches public copy (docs/album-entity.md, the unnamed tier). */
 .catalogue-hub {
   /* A hairline above the section sets it apart from the findings grid without a card (One Pane). */
   border-top: 1px solid var(--border);
@@ -2038,13 +2038,13 @@ body::before {
   margin-bottom: 1.1rem;
 }
 
+/* The quiet Label role: bold and small, NOT a tracked-out uppercase eyebrow (a DESIGN §6 Don't),
+   and 700 max on the body face (Space Grotesk's ceiling — 800 would silently clamp). */
 .catalogue-hub-heading {
   color: var(--muted-foreground);
-  font-size: 0.76rem;
-  font-weight: 800;
-  letter-spacing: 0.03em;
+  font-size: 0.82rem;
+  font-weight: 700;
   margin: 0;
-  text-transform: uppercase;
 }
 
 .catalogue-hub-note {
@@ -2073,6 +2073,15 @@ body::before {
 
 .catalogue-grid .artist-grid-line {
   color: var(--muted-foreground);
+}
+
+/* Focus, and only focus, is loud: the canonical Eclipse-Glow ring (the unlit register's rule —
+   because hover carries no gold here, this ring reads unambiguously). Keyboard focus must stay
+   legible and consistent everywhere (WCAG). */
+.catalogue-grid a:focus-visible {
+  border-radius: var(--rounded-md);
+  outline: 2px solid var(--eclipse-glow);
+  outline-offset: 3px;
 }
 
 /* The infinite-scroll sentinel: a full-width row below the grid that holds the loading spinner

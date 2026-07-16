@@ -120,11 +120,11 @@ function AlbumsPage() {
 
         <CatalogueHubSection
           gridClassName="artist-grid"
-          heading="Also in the catalogue"
+          heading="More records"
           headingId="albums-catalogue-heading"
           initialPage={catalogue}
-          intro="Records the crawl mapped. I haven't logged anything off these yet."
-          listLabel="Records also in the catalogue"
+          intro="Records the probes mapped. I haven't logged anything off these yet."
+          listLabel="More records"
           queryFn={(cursor) =>
             fetchAlbumsCatalogue({ data: { cursor, limit: CATALOGUE_HUB_DEFAULT_LIMIT } })
           }
