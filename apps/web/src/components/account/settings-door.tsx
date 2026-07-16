@@ -428,10 +428,17 @@ export function SettingsDoor({
             {user.username ? (
               <span className="account-portrait-handle">@{user.username}</span>
             ) : null}
-            {/* CREW NUMBER SLOT — operator ruling #1 (a stamped `Crew №NNN`, enlistment
-                order) is minted server-side by a parallel U4 agent; render it here
-                beside the join date the day it lands. Cream, never gold. */}
-            <span className="account-portrait-since">crew since {joined}</span>
+            <span className="account-portrait-since">
+              {/* The enlistment stamp (operator ruling #1): cream, never gold — a crew
+                  member is not certified music. A legacy row shows plain "crew since"
+                  until the one-time backfill stamps it. */}
+              {user.crewNumber !== undefined ? (
+                <>
+                  <span className="account-portrait-crew">Crew №{user.crewNumber}</span> ·{" "}
+                </>
+              ) : null}
+              crew since {joined}
+            </span>
             {user.image ? (
               <button
                 className="account-portrait-remove"
@@ -452,16 +459,15 @@ export function SettingsDoor({
 
         {/* The two-name model: Username is the handle, Name is what shows in the top
             bar. No third field — a "display name" next to both was one name too many. */}
-        <Field label="Username">
+        <Field
+          hint="Your handle. 3–24 characters: lowercase letters, numbers, underscores."
+          label="Username"
+        >
           <Input value={username} onChange={(event) => setUsername(event.target.value)} />
         </Field>
-        <p className="account-muted text-xs">
-          Your handle. 3–24 characters: lowercase letters, numbers, underscores.
-        </p>
-        <Field label="Name">
+        <Field hint="Shown in the top bar and on your account." label="Name">
           <Input value={name} onChange={(event) => setName(event.target.value)} />
         </Field>
-        <p className="account-muted text-xs">Shown in the top bar and on your account.</p>
       </AccountSection>
 
       {user.emailVerified ? (

@@ -5675,6 +5675,12 @@ body::before {
   font-size: 0.85rem;
 }
 
+.account-portrait-crew {
+  color: var(--foreground);
+  font-family: "Oxanium", "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+  font-variant-numeric: tabular-nums;
+}
+
 .account-portrait-since {
   color: var(--stardust);
   font-size: 0.78rem;

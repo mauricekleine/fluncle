@@ -21,6 +21,8 @@ export type Me = {
 /** The signed-in user as the account surfaces read them (the `PublicUser` subset). */
 export type AccountUser = {
   createdAt: string;
+  // The enlistment ordinal (Crew №NNN) — absent on a legacy row until the backfill.
+  crewNumber?: number;
   displayUsername?: string;
   email: string;
   emailVerified: boolean;
@@ -132,19 +134,30 @@ export function parseAccountTab(value: unknown): AccountTab | undefined {
 
 export function Field({
   children,
+  hint,
   label,
 }: {
-  children: React.ReactElement<{ id?: string }>;
+  children: React.ReactElement<{ "aria-describedby"?: string; id?: string }>;
+  /** Helper text under the control, announced with it (`aria-describedby`). */
+  hint?: string;
   label: string;
 }) {
   // useId keeps the id unique even when two forms carry the same label text (the auth
   // and settings forms both have a "Username" field).
   const id = `${useId()}-${label.toLowerCase().replaceAll(" ", "-")}`;
+  const hintId = hint ? `${id}-hint` : undefined;
 
   return (
     <div className="account-field">
       <Label htmlFor={id}>{label}</Label>
-      {isValidElement(children) ? cloneElement(children, { id }) : children}
+      {isValidElement(children)
+        ? cloneElement(children, { "aria-describedby": hintId, id })
+        : children}
+      {hint ? (
+        <p className="account-muted text-xs" id={hintId}>
+          {hint}
+        </p>
+      ) : null}
     </div>
   );
 }

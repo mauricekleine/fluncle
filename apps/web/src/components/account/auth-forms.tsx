@@ -149,23 +149,26 @@ export function AuthForms({
         <Field label="Email">
           <Input
             autoComplete="email"
+            type="email"
             value={email}
             onChange={(event) => setEmail(event.target.value)}
           />
         </Field>
       ) : null}
-      <Field label={mode === "signin" ? "Email or username" : "Username"}>
+      <Field
+        hint={
+          mode === "signup"
+            ? "3–24 characters: lowercase letters, numbers, underscores. Your handle across Fluncle."
+            : undefined
+        }
+        label={mode === "signin" ? "Email or username" : "Username"}
+      >
         <Input
           autoComplete="username"
           value={username}
           onChange={(event) => setUsername(event.target.value)}
         />
       </Field>
-      {mode === "signup" ? (
-        <p className="account-muted text-xs">
-          3–24 characters: lowercase letters, numbers, underscores. Your handle across Fluncle.
-        </p>
-      ) : null}
       <Field label="Password">
         <Input
           autoComplete={mode === "signin" ? "current-password" : "new-password"}
@@ -269,7 +272,14 @@ function ForgotPasswordForm({ onBack }: { onBack: () => void }) {
 // The dismissal marker for the claim-username dialog: per-tab-session, so "Not now"
 // holds for the visit but the door knocks again next time — a missing handle keeps
 // saves and submissions nameless, which is worth one quiet re-ask.
+// Durable per ACCOUNT (localStorage, keyed by user id): "Not now" means not now for
+// this account on this browser — the door doesn't knock again every session. The
+// username prompt keeps a durable home in Settings → Profile either way.
 const CLAIM_DISMISSED_KEY = "fluncle-claim-username-dismissed";
+
+function claimDismissedKey(userId: string): string {
+  return `${CLAIM_DISMISSED_KEY}:${userId}`;
+}
 
 /** The email's local part, folded into a valid handle suggestion ("hey@…" → "hey"). */
 function suggestUsername(email: string): string {
@@ -299,14 +309,14 @@ export function ClaimUsernameDialog({
     () =>
       !user.username &&
       typeof window !== "undefined" &&
-      window.sessionStorage.getItem(CLAIM_DISMISSED_KEY) !== "1",
+      window.localStorage.getItem(claimDismissedKey(user.id)) !== "1",
   );
   const [value, setValue] = useState(() => suggestUsername(user.email));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
   function dismiss() {
-    window.sessionStorage.setItem(CLAIM_DISMISSED_KEY, "1");
+    window.localStorage.setItem(claimDismissedKey(user.id), "1");
     setOpen(false);
   }
 
