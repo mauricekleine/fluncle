@@ -1,10 +1,9 @@
 import { type Client } from "@libsql/client";
-import { betterAuth } from "better-auth";
 import { drizzle } from "drizzle-orm/libsql";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import * as schema from "../../db/schema";
 import { createIntegrationDb } from "./integration-db";
-import { createPublicAuthOptions } from "./public-auth";
+import { createIntegrationAuth } from "./integration-auth";
 
 // End-to-end proof that the `user.create.after` sign-up hook fires and does its two
 // jobs (the account-redesign brief): stamp the crew number (ruling #1) and auto-
@@ -47,7 +46,8 @@ vi.mock("./db", async (importOriginal) => {
 });
 
 function buildAuth() {
-  return betterAuth(createPublicAuthOptions(drizzle(db, { schema })));
+  // The real production options with sendOnSignUp off — see integration-auth.ts.
+  return createIntegrationAuth(drizzle(db, { schema }));
 }
 
 async function crewNumberOfEmail(email: string): Promise<number | null> {

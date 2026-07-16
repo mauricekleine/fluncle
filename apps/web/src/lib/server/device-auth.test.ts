@@ -4,7 +4,7 @@ import { drizzle } from "drizzle-orm/libsql";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as schema from "../../db/schema";
 import { createIntegrationDb } from "./integration-db";
-import { createPublicAuthOptions } from "./public-auth";
+import { createIntegrationAuth } from "./integration-auth";
 
 // End-to-end test of the `fluncle login` device-authorization flow AND the hard
 // user/admin token boundary. We build the REAL production auth options
@@ -41,7 +41,9 @@ beforeEach(async () => {
   process.env.BETTER_AUTH_URL = BASE_URL;
   process.env.FLUNCLE_API_TOKEN = ADMIN_TOKEN;
   delete process.env.FLUNCLE_AGENT_TOKEN;
-  auth = betterAuth(createPublicAuthOptions(drizzle(db, { schema })));
+  // The real production options with sendOnSignUp off — see integration-auth.ts
+  // for why the verification branch's request clone cannot ride in a Node suite.
+  auth = createIntegrationAuth(drizzle(db, { schema }));
 });
 
 afterEach(() => {

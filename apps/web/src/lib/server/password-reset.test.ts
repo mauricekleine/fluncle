@@ -1,8 +1,9 @@
 import { type Client } from "@libsql/client";
-import { betterAuth, type BetterAuthOptions } from "better-auth";
+import { betterAuth } from "better-auth";
 import { drizzle } from "drizzle-orm/libsql";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as schema from "../../db/schema";
+import { createIntegrationAuth } from "./integration-auth";
 import { createIntegrationDb } from "./integration-db";
 import { createPublicAuthOptions } from "./public-auth";
 
@@ -47,21 +48,9 @@ beforeEach(async () => {
   db = await createIntegrationDb();
   process.env.BETTER_AUTH_SECRET = "password-reset-test-secret-not-for-production";
   process.env.BETTER_AUTH_URL = BASE_URL;
-  const options = createPublicAuthOptions(drizzle(db, { schema }));
-
-  // This suite tests the RESET rail, not sign-up verification. The verification
-  // branch is what makes better-auth call `ctx.request.clone()` mid-sign-up, and on
-  // Node's undici that clone intermittently throws `TypeError: unusable` (a teed
-  // body-stream race — it 500'd three consecutive Cloudflare builds while passing
-  // locally). Prod runs on workerd, where sign-ups verifiably work; the branch has
-  // its own coverage in the device-auth and signup-hooks suites. Turning it off here
-  // removes the clone from this file's path entirely.
-  const testOptions: BetterAuthOptions = {
-    ...options,
-    emailVerification: { ...options.emailVerification, sendOnSignUp: false },
-  };
-
-  auth = betterAuth(testOptions);
+  // The real production options with sendOnSignUp off — see integration-auth.ts
+  // for why the verification branch's request clone cannot ride in a Node suite.
+  auth = createIntegrationAuth(drizzle(db, { schema }));
 });
 
 afterEach(() => {
