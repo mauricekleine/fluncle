@@ -138,13 +138,15 @@ function SavedFindingsSection({
             type="search"
             value={query}
           />
+          {/* The toggle names the ACTION it performs (the Chrome Rule), not the state
+              it left behind — pressing it re-sorts, and the label says to what. */}
           <Button
             onClick={() => setSort(sort === "saved" ? "title" : "saved")}
             size="sm"
             type="button"
             variant="outline"
           >
-            {sort === "saved" ? "Sorted by newest" : "Sorted by title"}
+            {sort === "saved" ? "Sort by title" : "Sort by newest"}
           </Button>
         </div>
       ) : null}
@@ -155,7 +157,7 @@ function SavedFindingsSection({
         </p>
       ) : visible.length === 0 ? (
         <p aria-live="polite" className="account-muted">
-          No saved finding matches that search.
+          No saved findings match that search.
         </p>
       ) : (
         <ul className="account-list saves-list">
@@ -283,13 +285,17 @@ function SavedFindingRow({
       </span>
 
       <span className="saves-row-body min-w-0">
+        {/* The stretched row link mirrors TrackRow exactly: the `::after` overlay lives on
+            the bare link (statically positioned, so it anchors to the relative row), and
+            the truncation lives on an INNER span — overflow on the link itself would be a
+            trap if it ever gained a position. */}
         <Link
           aria-label={`Open the log page for ${trackLine}`}
-          className="track-row-link saves-row-title"
+          className="track-row-link"
           params={{ logId: finding.logId }}
           to="/log/$logId"
         >
-          {trackLine}
+          <span className="saves-row-title block">{trackLine}</span>
         </Link>
         <span className="saves-row-meta">Saved {formatDateLong(finding.savedAt)}</span>
       </span>
