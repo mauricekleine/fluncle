@@ -63,7 +63,7 @@ A genuinely new label is minted from MusicBrainz's spelling and the track carrie
 
 ## Deterministic · resumable · polite · idempotent
 
-**Deterministic.** The frontier is picked `order by hop, created_at, id` — breadth-first, so two runs over the same graph expand the same nodes in the same order.
+**Deterministic.** The frontier is picked breadth-first (`order by hop, created_at, id`) **within a kind-aware split**: release nodes are guaranteed half of every batch (rounded up) whenever any are pending, and the discovery kinds (label/artist) fill the rest from the same breadth-first order. The split is the 2026-07-16 starvation fix — a pure `hop asc` drain let a wave of 2,015 hop-1 artist nodes sort ahead of 39k hop-2 releases, and since only a RELEASE node writes tracks, `tracksWritten` sat at zero for eight hours while every artist expansion enqueued ~9 more releases to the back of the line. With the split, acquisition and discovery advance together and neither kind can starve the other; two runs over the same graph still expand the same nodes in the same order.
 
 **Resumable.** Every scrap of walk state lives in the `crawl_frontier` table, never in a process. A crawl is a **marathon the schedule finishes, not the process** — the neighbourhood of one seed label is hundreds of releases at one request per second. So "run again" and "resume" are the same command, and a box reboot mid-label costs one node, not one crawl. A paginated node (a label's or an artist's release list) stays `pending` with its browse cursor advanced, so a 900-release label drains across ticks instead of blowing one.
 

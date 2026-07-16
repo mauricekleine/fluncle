@@ -356,10 +356,22 @@ async function settle(
 }
 
 /**
- * The pass's pick: the next `limit` nodes to expand, BREADTH-FIRST and deterministic
- * (`hop, created_at, id`). It takes `pending` nodes plus `failed` ones whose exponential
- * backoff has elapsed and which have not yet been abandoned — so a transient 503 is
- * retried by a later tick instead of silently pruning a subtree.
+ * The pass's pick: the next `limit` nodes to expand — breadth-first and deterministic
+ * (`hop, created_at, id`) WITHIN each half of a kind-aware split. It takes `pending`
+ * nodes plus `failed` ones whose exponential backoff has elapsed and which have not
+ * yet been abandoned — so a transient 503 is retried by a later tick instead of
+ * silently pruning a subtree.
+ *
+ * THE SPLIT (the 2026-07-16 starvation fix). A pure `hop asc` drain starves the
+ * track-bearing kind: a wave of hop-1 ARTIST nodes (2,015 of them, measured live)
+ * sorts ahead of every hop-2 RELEASE node, and each artist expansion enqueues ~9
+ * more releases — so the frontier grew ~12k nodes in a day while `tracksWritten`
+ * sat at ZERO for eight hours. The crawler's whole job is metadata acquisition;
+ * only a RELEASE node writes tracks. So every pick now GUARANTEES releases half
+ * the batch (rounded up) when any are pending, and discovery kinds (label/artist)
+ * fill the rest — acquisition and discovery move together, deterministically, and
+ * neither can starve the other (releases still drain a widening artist wave's
+ * output; artists still drain even under a release glut).
  */
 async function pickNodes(limit: number): Promise<FrontierRow[]> {
   const db = await getDb();
@@ -369,23 +381,46 @@ async function pickNodes(limit: number): Promise<FrontierRow[]> {
   const cutoff = (failures: number): string =>
     new Date(now - Math.min(RETRY_BASE_MS * 2 ** failures, RETRY_MAX_MS)).toISOString();
 
-  const result = await db.execute({
-    args: [MAX_FAILURES, cutoff(1), cutoff(2), cutoff(3), cutoff(4), limit],
-    sql: `select id, kind, source, external_id, hop, cursor, failures, label_slug
-          from crawl_frontier
-          where state = 'pending'
+  const eligible = `(state = 'pending'
              or (state = 'failed'
                  and failures < ?
                  and attempted_at <= (case failures
                                         when 1 then ?
                                         when 2 then ?
                                         when 3 then ?
-                                        else ? end))
+                                        else ? end)))`;
+  const releaseShare = Math.ceil(limit / 2);
+  const cutoffs = [MAX_FAILURES, cutoff(1), cutoff(2), cutoff(3), cutoff(4)];
+
+  const releases = await db.execute({
+    args: [...cutoffs, releaseShare],
+    sql: `select id, kind, source, external_id, hop, cursor, failures, label_slug
+          from crawl_frontier
+          where kind = 'release' and ${eligible}
+          order by hop asc, created_at asc, id asc
+          limit ?`,
+  });
+  const releaseRows = typedRows<FrontierRow>(releases.rows);
+  const remainder = limit - releaseRows.length;
+
+  if (remainder <= 0) {
+    return releaseRows;
+  }
+
+  // The rest of the batch: any kind, oldest-lowest-hop first, excluding the release
+  // ids already picked (releases may win these slots too when discovery is drained).
+  const placeholders = releaseRows.map(() => "?").join(", ");
+  const rest = await db.execute({
+    args: [...cutoffs, ...releaseRows.map((row) => row.id), remainder],
+    sql: `select id, kind, source, external_id, hop, cursor, failures, label_slug
+          from crawl_frontier
+          where ${eligible}
+            ${releaseRows.length > 0 ? `and id not in (${placeholders})` : ""}
           order by hop asc, created_at asc, id asc
           limit ?`,
   });
 
-  return typedRows<FrontierRow>(result.rows);
+  return [...releaseRows, ...typedRows<FrontierRow>(rest.rows)];
 }
 
 /**

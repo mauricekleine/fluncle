@@ -1054,3 +1054,43 @@ describe("the Spotify anchor search rung (verified title+artist)", () => {
     expect(row.rows[0]?.spotify_uri).toBeNull();
   });
 });
+
+describe("the frontier drain — releases never starve behind a discovery wave", () => {
+  it("guarantees release nodes half the batch even when older, lower-hop artist nodes crowd the head", async () => {
+    const { crawlCatalogue } = await import("./crawl");
+
+    // No seed label: the walk itself enqueues nothing; the frontier below is the whole queue.
+    await db.execute("update labels set seed_state = 'disabled'");
+
+    // THE LIVE STARVATION SHAPE (2026-07-16): a wave of hop-1 artist nodes, all OLDER
+    // than the hop-2 release, so a pure `hop asc, created_at asc` drain would spend the
+    // entire batch expanding artists (which write no tracks) and the catalogue flatlines.
+    const old = new Date(Date.now() - 60_000).toISOString();
+    const newer = new Date().toISOString();
+
+    for (let i = 0; i < 6; i += 1) {
+      await db.execute({
+        args: [`mb:artist:starver-${i}`, `starver-${i}`, old, old],
+        sql: `insert into crawl_frontier (id, kind, source, external_id, hop, parent_id, label_slug, created_at, updated_at)
+              values (?, 'artist', 'musicbrainz', ?, 1, null, 'medschool', ?, ?)`,
+      });
+    }
+    await db.execute({
+      args: [`mb:release:${SEED_RELEASE}`, SEED_RELEASE, newer, newer],
+      sql: `insert into crawl_frontier (id, kind, source, external_id, hop, parent_id, label_slug, created_at, updated_at)
+            values (?, 'release', 'musicbrainz', ?, 2, null, 'medschool', ?, ?)`,
+    });
+
+    // A batch smaller than the artist wave: without the split, all 4 slots go to
+    // artists and tracksWritten is 0. With the split, releases get ceil(4/2) = 2
+    // slots, the one pending release expands, and its tracks land.
+    const pass = await crawlCatalogue({ limit: 4, maxHop: 2 });
+
+    expect(pass.tracksWritten).toBeGreaterThan(0);
+
+    const releaseNode = await db.execute(
+      `select state from crawl_frontier where id = 'mb:release:${SEED_RELEASE}'`,
+    );
+    expect(releaseNode.rows[0]?.state).toBe("done");
+  });
+});
