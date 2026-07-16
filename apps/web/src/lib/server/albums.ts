@@ -337,30 +337,18 @@ export async function listAlbumsWithFindingCounts(): Promise<AlbumIndexEntry[]> 
   }));
 }
 
-// TEMPORARY — slice 004 (catalogue publicness) removes this gate. Grep `albumHasCertifiedFindingSql`.
-//
-// Slice 001 mints an album row + the `album_id` edge for a crawled record at crawl time — the
-// internal GRAPH is fully populated (row + release-group fold + adopt). Public REACHABILITY is a
-// separate, reviewed slice (004): until it deliberately flips, a crawl-minted album with NO
-// certified finding must stay invisible on every public surface — its `/album/<slug>` 404s, it is
-// out of the sitemap, and a catalogue heading does not link to it — exactly as in the
-// pre-inline-mint world where the row simply did not exist. This predicate IS the whole gate: an
-// album is publicly reachable only if some track on it is a certified finding (`log_id` present).
-// A certified-finding album is unchanged throughout. Slice 004 deletes this helper + every caller.
-export function albumHasCertifiedFindingSql(albumIdExpr: string): string {
-  return `exists (select 1 from findings cf join tracks ct on ct.track_id = cf.track_id
-                  where ct.album_id = ${albumIdExpr} and cf.log_id is not null)`;
-}
-
 /**
- * Every ALBUM whose page clears the thin-content floor. The exact twin of `listLabelSitemapRows`,
- * and that function carries the reasoning: the `/albums` hub is Fluncle's editorial list
- * (findings-joined), while the SITEMAP must carry every page that exists and may be indexed, or an
- * indexable page ends up orphaned from it.
+ * Every ALBUM whose page clears the thin-content floor — findings or no findings. The exact twin
+ * of `listLabelSitemapRows`, and that function carries the reasoning: the `/albums` hub is
+ * Fluncle's editorial list (findings-joined), while the SITEMAP must carry every page that exists
+ * and may be indexed, or an indexable page ends up orphaned from it. A crawl-minted, findings-free
+ * album is a page on its tracklist exactly as a discovered label is on its releases, so it belongs
+ * here once it clears the floor.
  *
- * The floor is applied in SQL (`having`), never in the isolate. TEMPORARY (slice 004): the
- * `albumHasCertifiedFindingSql` gate keeps a crawl-minted, findings-free album OUT of the sitemap
- * until the publicness slice — findings-bounded for now, so a page that 404s is never advertised.
+ * The floor is applied in SQL (`having`), never in the isolate: a finding counts when it is
+ * coordinate-bearing (`log_id is not null`), a catalogue row is the anti-join's complement, and
+ * their sum is the RENDERABLE track count the page's `indexable` keys off — so the two agree by
+ * construction.
  */
 export async function listAlbumSitemapRows(minTracks: number): Promise<EntitySitemapRow[]> {
   const db = await getDb();
@@ -375,7 +363,6 @@ export async function listAlbumSitemapRows(minTracks: number): Promise<EntitySit
           from albums
           join tracks on tracks.album_id = albums.id
           left join findings on findings.track_id = tracks.track_id
-          where ${albumHasCertifiedFindingSql("albums.id")}
           group by albums.id
           having sum(case when findings.log_id is not null then 1 else 0 end)
                + sum(case when findings.track_id is null then 1 else 0 end) >= ?

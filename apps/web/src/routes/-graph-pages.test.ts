@@ -297,16 +297,30 @@ describe("the album page", () => {
     expect(await resolveAlbumPageData("nope")).toEqual({ status: "missing" });
   });
 
-  it("404s on a crawl-minted album with NO certified finding (TEMPORARY — slice 004 flips this)", async () => {
-    // Slice 001 mints an `albums` row INLINE at crawl time, so `getAlbumBySlug` now resolves a
-    // findings-free record where it used to find nothing. Public reachability is slice 004's call:
-    // until then such a record 404s exactly as it did when no row existed — the gate is a certified
-    // finding, never the mere row (the TS twin of `albumHasCertifiedFindingSql`). The LABEL page
-    // still SERVES a findings-free discography; only the album surface is held back, deliberately.
+  it("SERVES a findings-free album — a discography is a page (the album twin of the label reversal)", async () => {
+    // A crawl-minted `albums` row with no finding and a full tracklist is a real, useful page — an
+    // honest record of what is on it — exactly as a discovered label is. It renders AND indexes
+    // once it clears the renderable-track floor; only a slug with no `albums` row at all 404s.
     getFindingsByAlbum.mockResolvedValue([]);
     listCatalogueTracksByAlbum.mockResolvedValue(albumCatalogue(12));
 
-    expect(await resolveAlbumPageData("wormhole")).toEqual({ status: "missing" });
+    const data = await resolveAlbumPageData("wormhole");
+
+    expect(data).toMatchObject({ indexable: true, status: "found" });
+    // Nothing reaches the findings band, so nothing renders there.
+    expect(data.status === "found" && data.findings).toEqual([]);
+  });
+
+  it("keeps a 1-row findings-free album OUT of the index (thin is still thin)", async () => {
+    // One crawled track and nothing else is a stub: it still serves 200 (deep links, link equity),
+    // it is just `noindex, follow` and absent from the sitemap.
+    getFindingsByAlbum.mockResolvedValue([]);
+    listCatalogueTracksByAlbum.mockResolvedValue(albumCatalogue(1));
+
+    expect(await resolveAlbumPageData("wormhole")).toMatchObject({
+      indexable: false,
+      status: "found",
+    });
   });
 
   it("stays out of the index below the renderable-track floor", async () => {

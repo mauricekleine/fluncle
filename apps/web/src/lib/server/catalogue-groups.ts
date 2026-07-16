@@ -45,23 +45,23 @@
 // A crawled track carries its release title in the RAW `tracks.album` string and its artist
 // names in `artists_json`, and now an `album_id` too — the catalogue crawler mints + links the
 // album entity inline (folded on the release group, docs/album-entity.md). The record grouping
-// keys on the RAW STRING, folded case-insensitively. A group links to `/album/<slug>` only when
-// that record's album is PUBLICLY REACHABLE — and TEMPORARILY (slice 004, catalogue publicness)
-// that means it carries a certified finding: the `albums al` joins gate on
-// `albumHasCertifiedFindingSql`, so a crawl-minted, findings-free record renders as plain text
-// (no link to a page that 404s), exactly as before the inline mint. A heading here names a REAL
+// keys on the RAW STRING, folded case-insensitively. A group links to `/album/<slug>` whenever
+// that record has an album entity (a `tracks.album_id` pointer): a crawl-minted, findings-free
+// record has a public page now — a tracklist bounded by the thin-content floor, exactly as a
+// discovered label does — so the heading is a live link, never a plain-text stub. A record with no
+// album entity (the nameless bucket) still renders as plain text. A heading here names a REAL
 // RECORD either way — never the tier the rows belong to (DESIGN.md's Unlit Rule).
 //
 // The artist side needs the same indexed edge: the LABEL page can group by
 // `json_each(artists_json)` because its `tracks.label_id` seek has already bounded the scan to one
 // label, but the ARTIST page has no such bound — finding an artist's tracks through `artists_json`
 // would be a full scan of a table that grows without limit, which is exactly the shape AGENTS.md
-// forbids. So a crawled track is LINKED into `track_artists` two ways: slice 003 connect-or-creates
+// forbids. So a crawled track is LINKED into `track_artists` two ways: the crawler connect-or-creates
 // the artist by its stable `spotify_artist_id` at the Spotify-anchor step (minting the entity), and
 // the name-fold `linkTracksToArtistEntities` remains the fallback for a track with no Spotify
-// presence (link only, never mint). The artist page reads through that indexed edge. Reachability
-// stays findings-gated: a crawl-minted, findings-free artist page 404s and earns no heading link
-// until slice 004 (`artistHasCertifiedFindingSql`, the album twin).
+// presence (link only, never mint). The artist page reads through that indexed edge, and a group
+// links to `/artist/<slug>` whenever the artist has an entity — a crawl-minted, findings-free artist
+// has a public catalogue page too. A credited name with no entity at all renders as plain text.
 //
 // ── WHERE AN UNDATED ROW SORTS, AND WHY IT NEVER VANISHES ─────────────────────────────
 // `tracks.release_date` is NULLABLE, and plenty of crawled rows have no date. SQLite sorts
@@ -75,8 +75,7 @@
 // rows, exactly as the flat list always did. There is no honest name for a bucket of tracks
 // whose record we do not know, so it is given none.
 
-import { albumHasCertifiedFindingSql } from "./albums";
-import { artistHasCertifiedFindingSql, parseArtistsJson } from "./artists";
+import { parseArtistsJson } from "./artists";
 import { getDb, typedRows } from "./db";
 import { type CatalogueTrackItem } from "./tracks";
 
@@ -253,7 +252,7 @@ export async function listArtistCatalogue(
           from tracks
           join track_artists ta on ta.track_id = tracks.track_id
           left join findings on findings.track_id = tracks.track_id
-          left join albums al on al.id = tracks.album_id and ${albumHasCertifiedFindingSql("al.id")}
+          left join albums al on al.id = tracks.album_id
           where ta.artist_id = ? and findings.track_id is null
           group by lower(coalesce(tracks.album, ''))
           order by ${groupOrderSql(sort)}
@@ -301,14 +300,14 @@ export async function listArtistCatalogue(
  * A label's uncertified tracks, grouped by ARTIST and then by record inside each artist.
  *
  * Groups on `json_each(artists_json)` rather than the `track_artists` edge, and that is
- * deliberate: a crawl artist may now have an `artists` row (slice 003 mints one off the Spotify
+ * deliberate: a crawl artist may have an `artists` row (the crawler mints one off the Spotify
  * anchor's stable id) or none at all (a track with no Spotify presence), so a `track_artists`
  * grouping would silently DROP every track of an unentitied artist from the label's page. Their
  * name is always on the track; the page groups by it regardless. The `/artist/<slug>` link is a
- * SEPARATE question: the `artists a` join is gated on `artistHasCertifiedFindingSql`, so a group
- * links to a page only when that artist carries a certified finding — a crawl-minted, findings-free
- * artist renders as plain text (TEMPORARY, slice 004, catalogue publicness), exactly as the album
- * heading does. Nothing vanishes either way.
+ * SEPARATE question: the `artists a` name-fold join lights the link whenever that artist has an
+ * entity — a crawl-minted, findings-free artist has a public catalogue page now, so its heading is a
+ * live link, exactly as the album heading is. A credited name with no entity renders as plain text.
+ * Nothing vanishes either way.
  *
  * The `json_each` explosion is safe here because `tracks.label_id` is indexed: the scan is
  * bounded to ONE label's rows before the JSON is ever touched, and the aggregation happens
@@ -349,7 +348,6 @@ export async function listLabelCatalogue(
           left join findings on findings.track_id = tracks.track_id
           join json_each(tracks.artists_json) credit
           left join artists a on a.name = credit.value collate nocase
-            and ${artistHasCertifiedFindingSql("a.id")}
           where tracks.label_id = ? and findings.track_id is null
           group by lower(credit.value)
           order by ${groupOrderSql(sort)}
@@ -436,7 +434,7 @@ async function fetchGroupTracks(
             from tracks
             ${joinSql}
             left join findings on findings.track_id = tracks.track_id
-            left join albums al on al.id = tracks.album_id and ${albumHasCertifiedFindingSql("al.id")}
+            left join albums al on al.id = tracks.album_id
             where ${whereSql} and findings.track_id is null and ${keySql} in (${placeholders})
           )
           where rn <= ?`,

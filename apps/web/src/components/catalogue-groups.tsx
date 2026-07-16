@@ -71,10 +71,10 @@ function ReleaseYear({ date }: { date: string | undefined }) {
 
 /**
  * One record and its tracklist. The heading names the RECORD — a real entity — and links to
- * `/album/<slug>` when that record's album is publicly reachable. TEMPORARILY (slice 004,
- * catalogue publicness) that means it carries a certified finding: a crawl-minted, findings-free
- * record has an album row in the internal graph but no public page yet, so the server hands this
- * component no `slug` for it and the heading is plain text.
+ * `/album/<slug>` whenever that record has an album entity, findings or not: a crawl-minted,
+ * findings-free record has a public page now (a tracklist bounded by the thin-content floor), so
+ * the server hands this component its `slug` and the heading is a live link. A record with no album
+ * entity at all leaves `slug` undefined and the heading is plain text.
  *
  * The NAMELESS record (tracks whose record we do not know) renders with NO heading at all: bare
  * unlit rows, exactly as the flat list always did.

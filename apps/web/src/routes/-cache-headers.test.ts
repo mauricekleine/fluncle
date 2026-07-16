@@ -19,7 +19,7 @@ vi.mock("../lib/server/db", () => ({
 }));
 vi.mock("../lib/server/artists", () => ({
   ARTIST_INDEX_MIN_FINDINGS: 3,
-  listArtistsWithFindingCounts: vi.fn(async () => []),
+  listArtistSitemapRows: vi.fn(async () => []),
   parseArtistsJson: () => [],
 }));
 vi.mock("../lib/server/galaxies-map", () => ({

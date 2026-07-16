@@ -56,13 +56,9 @@ type AlbumPageData =
  *
  * A record earns a page on its CONTENT, exactly as a label does (`/label/<slug>` carries the
  * long version of this note): a tracklist is a real page, and what keeps a stub out of the index
- * is the thin-content gate below, counting TOTAL renderable tracks.
- *
- * TEMPORARY (slice 004, catalogue publicness): slice 001 now mints an `albums` row INLINE at
- * crawl time, so a crawl-minted, findings-free record has a row where it once had none. Public
- * reachability is a separate reviewed flip — until it lands, such a record 404s exactly as before,
- * gated below on carrying at least one certified finding (never the mere row). A certified-finding
- * record is unchanged.
+ * is the thin-content gate below, counting TOTAL renderable tracks. A crawl-minted, findings-free
+ * record has an `albums` row (minted inline at crawl time) and renders on its tracklist, indexing
+ * once it clears the floor — exactly as a discovered label does on its releases.
  *
  * A slug with no `albums` row at all is still MISSING, and still 404s.
  */
@@ -79,17 +75,6 @@ export async function resolveAlbumPageData(slug: string): Promise<AlbumPageData>
     listArtistsByAlbum(album.id),
     getLabelForAlbum(album.id),
   ]);
-
-  // TEMPORARY — slice 004 (catalogue publicness) removes this gate (grep `albumHasCertifiedFindingSql`).
-  // Slice 001 mints an album row inline at crawl time, so `getAlbumBySlug` now RESOLVES a
-  // crawl-minted, findings-free record where it used to find nothing — but public reachability is
-  // slice 004's call. Until then a catalogue-only album 404s exactly as it did when no row existed:
-  // reachability requires at least one certified finding, never the mere row. A certified album is
-  // unchanged. (`getFindingsByAlbum` returns only certified findings, so this is the TS twin of the
-  // SQL predicate the sitemap + catalogue headings use.)
-  if (findings.length === 0) {
-    return { status: "missing" };
-  }
 
   return {
     artists,

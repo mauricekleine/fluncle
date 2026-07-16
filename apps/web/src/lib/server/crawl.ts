@@ -740,10 +740,11 @@ async function linkTracksToAlbum(
  * — the artist twin of `linkTracksToAlbum`, riding the SAME Spotify response the anchor was read
  * from (no extra Spotify call). `upsertTrackArtists` mints an `artists` row per id (folded on the
  * unique `spotify_artist_id`) and stamps the indexed `track_artists` edge, so an artist that once
- * folded fragilely on its NAME now folds on its stable id. Reachability stays findings-gated
- * (`artistHasCertifiedFindingSql`): a crawl-minted, findings-free artist is MEASURED here, never
- * made public until slice 004. `fillImages: false` keeps avatar fetches off the crawl's hot path —
- * the batched `backfill-artist-images` sweep fills them (one call per 50 ids).
+ * folded fragilely on its NAME now folds on its stable id. It MINTS NO FINDING: every read that
+ * means "finding" inner-joins `findings … log_id is not null`, so this link moves none of them —
+ * a crawl-minted artist's page renders on its catalogue (bounded by the thin-content floor), never
+ * as a certified count. `fillImages: false` keeps avatar fetches off the crawl's hot path — the
+ * batched `backfill-artist-images` sweep fills them (one call per 50 ids).
  *
  * Best-effort: the anchor columns are already stamped, so a link failure here must never derail the
  * fill. FALLBACK, load-bearing: a track with NO Spotify presence never reaches here — its artist
