@@ -1,12 +1,11 @@
 // The pure helpers of the artist entity module (lib/server/artists.ts): the JSON parse of the
-// raw `artists_json` names, the canonical slug mint, the certified-finding EXISTS fragment, the
-// two review predicates the /admin board + attention count share, and the write-path URL guard.
+// raw `artists_json` names, the canonical slug mint, the two review predicates the /admin board
+// + attention count share, and the write-path URL guard.
 // These carry no DB — they are exercised directly, no libSQL engine needed. The DB-backed paths
 // (upsert/link/queue) mock `./db` against the real schema like labels.test.ts and are out of
 // scope here; this file closes the pure-unit gap flagged by the coverage audit.
 import { describe, expect, it } from "vitest";
 import {
-  artistHasCertifiedFindingSql,
   artistNeedsLook,
   assertHttpUrl,
   InvalidArtistSocialError,
@@ -60,16 +59,6 @@ describe("toArtistSlug", () => {
 
   it("returns an empty string when nothing survives (caller supplies the id fallback)", () => {
     expect(toArtistSlug("！！！")).toBe("");
-  });
-});
-
-describe("artistHasCertifiedFindingSql", () => {
-  it("interpolates the artist-id expression and requires a coordinate-bearing finding", () => {
-    const sql = artistHasCertifiedFindingSql("a.artist_id");
-
-    expect(sql).toContain("cta.artist_id = a.artist_id");
-    expect(sql).toContain("cf.log_id is not null");
-    expect(sql.trimStart().startsWith("exists (")).toBe(true);
   });
 });
 
