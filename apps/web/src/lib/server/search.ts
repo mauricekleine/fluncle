@@ -63,7 +63,7 @@ import {
 } from "../search-query";
 import { bestArtistAvatarUrl, labelLogoUrl } from "../media";
 import { getDb, typedRow, typedRows } from "./db";
-import { embeddingVectorSql, parseEmbedding, toVectorProbe } from "./embedding";
+import { parseEmbedding, toVectorProbe } from "./embedding";
 import { translateQuery } from "./search-llm";
 
 /** How many rows a search returns when the caller does not say. */
@@ -649,7 +649,13 @@ async function runSonic(filters: SearchFilters, limit: number): Promise<SearchRe
   const where = [
     ...clauses.map((clause) => clause.sql),
     `tracks.track_id != ?`,
-    `${embeddingVectorSql()} is not null`,
+    // Rank on `embedding_blob` DIRECTLY, not `embeddingVectorSql()`: this scans the WHOLE
+    // archive (SEARCH_FROM, ~41k rows), and that helper's JSON-fallback `json_each` guard is
+    // executed PER ROW on hosted Turso even when the blob short-circuits (a per-row 21 KB
+    // parse — measured 2026-07-16, `EXPLAIN` showed the `je VIRTUAL TABLE` passes). Safe
+    // because the write path sets `embedding_blob` atomically with `embedding_json`
+    // (track-update.ts) — prod has zero json-only rows across the whole `tracks` table.
+    `tracks.embedding_blob is not null`,
   ].join(" and ");
 
   const db = await getDb();
@@ -661,7 +667,7 @@ async function runSonic(filters: SearchFilters, limit: number): Promise<SearchRe
       anchor.hit.trackId,
       limit,
     ],
-    sql: `select ${SEARCH_SELECT}, vector_distance_cos(${embeddingVectorSql()}, ?) as dist
+    sql: `select ${SEARCH_SELECT}, vector_distance_cos(tracks.embedding_blob, ?) as dist
           from ${SEARCH_FROM}
           where ${where}
           order by dist asc, tracks.track_id asc

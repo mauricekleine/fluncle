@@ -121,8 +121,8 @@ beforeEach(async () => {
 
 describe("getSimilarFindings", () => {
   // Self (the target), three neighbours in decreasing similarity, and three vectors that
-  // are stored but UNREADABLE — each of which would make `vector32()` throw if it ever
-  // reached it, which is what `embeddingVectorSql`'s guard exists to prevent.
+  // are stored but UNREADABLE — the backfill's guard rejects each (wrong width, non-JSON,
+  // wrong element type), so they never gain a blob and the blob-only ranking skips them.
   const CORPUS: Seed[] = [
     { embeddingJson: JSON.stringify(vector(1, 0)), logId: "004.0.0A", trackId: "t_self" },
     {
@@ -197,22 +197,28 @@ describe("getSimilarFindings", () => {
     expect(findings.map((finding) => finding.trackId)).toEqual(["t_ident", "t_diag"]);
   });
 
-  it("ranks a finding the backfill has not reached yet, from its JSON", async () => {
-    // The zero-downtime case: a row embedded by the PREVIOUS Worker between the deploy's
-    // backfill and its cutover has `embedding_json` but no blob. It must still rank.
+  it("SKIPS a finding with no blob rather than ranking it from JSON", async () => {
+    // The ranking reads `embedding_blob` DIRECTLY (not `embeddingVectorSql`, whose per-row
+    // `json_each` guard made a 67-row scan cost 3.3 s on hosted Turso — see the call site).
+    // A blobless finding is dropped, not JSON-ranked. This is safe because the WRITE PATH
+    // sets `embedding_blob = vector32(embedding)` ATOMICALLY with `embedding_json`
+    // (track-update.ts), so an embedded finding is never in the json-only state; the deploy
+    // backfill is the belt for any legacy straggler.
     await seed(CORPUS);
     await backfillEmbeddingBlob(db);
     await db.execute(`update tracks set embedding_blob = null where track_id = 't_diag'`);
 
     const findings = await getSimilarFindings("t_self");
 
-    expect(findings.map((finding) => finding.trackId)).toEqual(["t_ident", "t_diag", "t_orth"]);
+    expect(findings.map((finding) => finding.trackId)).toEqual(["t_ident", "t_orth"]);
   });
 
-  it("survives an unreadable stored vector rather than throwing", async () => {
-    // Nothing is backfilled, so EVERY row takes the JSON arm — including the three that
-    // would make `vector32()` throw and abort the whole query.
+  it("excludes unreadable stored vectors without throwing (they never gained a blob)", async () => {
+    // The three unreadable rows (wrong width, non-JSON, wrong element type) are rejected by
+    // the backfill's guard, so they carry `embedding_json` but no blob — and the blob-only
+    // ranking simply skips them. `vector32()` is never reached on them, so nothing throws.
     await seed(CORPUS);
+    await backfillEmbeddingBlob(db);
 
     const findings = await getSimilarFindings("t_self");
 

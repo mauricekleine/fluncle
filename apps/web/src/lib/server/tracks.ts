@@ -17,13 +17,7 @@ import { composeAppleArtworkUrl } from "./apple-music";
 import { parseArtistsJson } from "./artists";
 import { getDb, typedRow, typedRows } from "./db";
 import { discogsReleaseUrl } from "./discogs";
-import {
-  cosineFromDistance,
-  embeddingVectorSql,
-  parseEmbedding,
-  readEmbeddingBlob,
-  toVectorProbe,
-} from "./embedding";
+import { cosineFromDistance, parseEmbedding, readEmbeddingBlob, toVectorProbe } from "./embedding";
 import { logEvent } from "./log";
 import { isLogId } from "../log-id";
 import {
@@ -1151,19 +1145,21 @@ export async function getTrackNeighbors(track: {
  * wedged hosted Turso's write path in the measurement spike and is not to be used.
  *
  * Returns `[]` (never throws) when the finding is unknown, has no embedding yet (the
- * embed cron hasn't drained it), or nothing else is embedded. A malformed stored vector
- * is skipped, not fatal (`embeddingVectorSql`'s guard). Only coordinate-bearing
- * candidates (`log_id IS NOT NULL`) are considered — every result links to a `/log`
- * page — and the target is excluded.
+ * embed cron hasn't drained it), or nothing else is embedded. A candidate without an
+ * `embedding_blob` (un-embedded, or the transient pre-backfill window) is skipped, not
+ * fatal. Only coordinate-bearing candidates (`log_id IS NOT NULL`) are considered — every
+ * result links to a `/log` page — and the target is excluded.
  *
  * Ordering is deterministic: distance ascending, `track_id` ascending as the tiebreak.
  *
  * SCALE NOTE. The scan is unfiltered by design — "close in sound" is a GLOBAL nearest-
- * neighbour question, and the archive is one corpus. That costs ~1.9 s at 100k on
- * hosted (linear in N: 175 ms at 10k). The lever, when the archive gets there, is a
- * btree pre-filter before the scan — `where galaxy_id = ?` takes it to 274 ms — but it
- * would confine the row to the finding's own galaxy, which CHANGES what comes back. That
- * is a product call, not a performance one, and it is not made here.
+ * neighbour question, and the archive is one corpus. Ranking the `embedding_blob` column
+ * directly (NOT `embeddingVectorSql()`, whose JSON-fallback `json_each` guard hosted Turso
+ * runs per row — see the call site) keeps it a plain linear blob scan. The lever, when the
+ * archive gets large, is a btree pre-filter before the scan — `where galaxy_id = ?` — but
+ * it would confine the row to the finding's own galaxy, which CHANGES what comes back, and
+ * a precomputed neighbour table (the Ear pattern) is the durable answer. Both are product/
+ * infra calls, not made here.
  */
 export async function getSimilarFindings(idOrLogId: string, limit = 6): Promise<TrackListItem[]> {
   if (limit <= 0) {
@@ -1193,20 +1189,26 @@ export async function getSimilarFindings(idOrLogId: string, limit = 6): Promise<
   // The probe rides as raw f32 bytes, NOT as a JSON string — a 14x cliff on hosted that
   // does not reproduce locally (embedding.ts, `toVectorProbe`).
   const probe = toVectorProbe(target);
-  // Args bind in SQL-TEXT order, and the probe's `?` is written before the subquery's:
-  // probe, then the excluded target, then the limit. `where vec is not null` filters the
-  // un-embedded/malformed rows BEFORE `vector_distance_cos` ever sees them (it throws on
-  // a NULL rather than returning one).
+  // Rank on `embedding_blob` DIRECTLY, not through `embeddingVectorSql()`. That helper's
+  // JSON-fallback arm carries a `not exists (json_each(embedding_json) …)` guard, and
+  // hosted Turso EXECUTES that correlated `json_each` PER ROW even when the blob branch
+  // should short-circuit — a 21 KB / 1024-element parse × every candidate that turned a
+  // 67-row scan into 3.3 s (measured 2026-07-16, hosted; `EXPLAIN` showed two
+  // `SCAN je VIRTUAL TABLE` passes). Filtering to `embedding_blob is not null` and ranking
+  // the blob column drops the parse entirely (~3x, and it kills the worst-case amplifier).
+  // The cost: a finding embedded but not yet blob-backfilled (the transient window between
+  // a deploy's backfill and its cutover) is skipped here rather than JSON-ranked — the same
+  // silent skip a malformed vector always got, and it self-heals on the next deploy.
+  // Args bind in SQL-TEXT order: probe, then the excluded target, then the limit.
   const rankedResult = await db.execute({
     args: [probe, targetRow.track_id, limit],
-    sql: `select track_id, vector_distance_cos(vec, ?) as dist
-          from (
-            select tracks.track_id as track_id, ${embeddingVectorSql()} as vec
-            from ${FINDINGS_FROM}
-            where findings.log_id is not null and tracks.track_id != ?
-          )
-          where vec is not null
-          order by dist asc, track_id asc
+    sql: `select tracks.track_id as track_id,
+                 vector_distance_cos(tracks.embedding_blob, ?) as dist
+          from ${FINDINGS_FROM}
+          where findings.log_id is not null
+            and tracks.track_id != ?
+            and tracks.embedding_blob is not null
+          order by dist asc, tracks.track_id asc
           limit ?`,
   });
 
@@ -1423,7 +1425,7 @@ async function getTasteProbes(artistSlugs: string[]): Promise<Uint8Array[]> {
   const result = await db.execute({
     args: slugs,
     sql: `select vec from (
-            select ${embeddingVectorSql()} as vec,
+            select tracks.embedding_blob as vec,
                    row_number() over (
                      partition by artists.id
                      order by (findings.track_id is not null) desc, tracks.popularity desc
@@ -1434,7 +1436,7 @@ async function getTasteProbes(artistSlugs: string[]): Promise<Uint8Array[]> {
             left join findings on findings.track_id = tracks.track_id
             where artists.slug in (${placeholders})
               and tracks.key is not null
-              and (tracks.embedding_blob is not null or tracks.embedding_json is not null)
+              and tracks.embedding_blob is not null
           )
           where rank <= ${PROBES_PER_ARTIST} and vec is not null
           limit ${MAX_TASTE_PROBES}`,
@@ -1474,9 +1476,9 @@ async function getTasteCosines(
     // SQL-TEXT order: the shortlist's ids bind inside the CTE, then one probe per branch.
     args: [...trackIds, ...probes],
     sql: `with shortlist as (
-            select track_id, ${embeddingVectorSql()} as vec
+            select track_id, embedding_blob as vec
             from tracks
-            where track_id in (${ids}) and (embedding_blob is not null or embedding_json is not null)
+            where track_id in (${ids}) and embedding_blob is not null
           )
           select track_id, min(dist) as dist
           from (${branches})
@@ -1598,14 +1600,17 @@ export async function getMixableTracks(
       ...excludedLogIds,
       ...excludedTrackIds,
     ],
+    // `vec` reads `embedding_blob` DIRECTLY, not `embeddingVectorSql()`: that helper's
+    // JSON-fallback `json_each` guard runs per row on hosted even when the blob short-circuits
+    // (see getSimilarFindings / search.ts). Safe — the write path sets the blob atomically with
+    // the JSON, so prod has zero json-only rows across the whole `tracks` table.
     sql: `select track_id, log_id, key, bpm, features_json, has_embedding,
                  case when vec is null then null else ${distanceSql} end as sonic_dist
           from (
             select tracks.track_id as track_id, findings.log_id as log_id, tracks.key as key,
                    tracks.bpm as bpm, tracks.features_json as features_json,
-                   (tracks.embedding_blob is not null or tracks.embedding_json is not null)
-                     as has_embedding,
-                   ${embeddingVectorSql()} as vec
+                   (tracks.embedding_blob is not null) as has_embedding,
+                   tracks.embedding_blob as vec
             from ${MIX_FROM}
             where tracks.key in (${keyClause})
               and tracks.track_id != ? ${logIdClause} ${trackIdClause}
@@ -1957,7 +1962,7 @@ export async function getFindingsByGalaxyRanked(
   const pageResult = await db.execute({
     args: [galaxyId, probe, limit, offset],
     sql: `select track_id from (
-            select tracks.track_id as track_id, ${embeddingVectorSql()} as vec
+            select tracks.track_id as track_id, tracks.embedding_blob as vec
             from ${FINDINGS_FROM}
             where findings.galaxy_id = ? and findings.log_id is not null
           )

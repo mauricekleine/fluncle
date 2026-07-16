@@ -170,7 +170,13 @@ describe("getMixableTracks", () => {
     expect(first?.reason).toMatchObject({ kind: expect.any(String) });
   });
 
-  it("scores a candidate the backfill has not reached yet, from its JSON", async () => {
+  it("scores a candidate with no blob as vector-less, not from its JSON", async () => {
+    // The scan reads `embedding_blob` DIRECTLY (not `embeddingVectorSql`, whose per-row
+    // `json_each` guard was a hosted-Turso cost — see getSimilarFindings / search.ts). A
+    // candidate with no blob keeps its place on the rail (key+BPM still mix) but its sonic
+    // term goes null, exactly as an un-embedded row — its JSON is NOT a ranking fallback.
+    // Safe: the write path sets the blob atomically with the JSON (prod has zero json-only
+    // rows), so this state does not occur outside a test.
     const rows = corpus();
 
     await seed(rows);
@@ -181,7 +187,11 @@ describe("getMixableTracks", () => {
       (candidate) => candidate.trackId,
     );
 
-    expect(fromSql).toEqual(rankInIsolate(rows, "t_00", 12));
+    // The reference treats the two blob-less rows as vector-less, and the SQL ranking agrees.
+    const asSeen = rows.map((row) =>
+      row.trackId === "t_01" || row.trackId === "t_02" ? { ...row, embedding: null } : row,
+    );
+    expect(fromSql).toEqual(rankInIsolate(asSeen, "t_00", 12));
   });
 
   it("drops the excluded tracks server-side", async () => {
