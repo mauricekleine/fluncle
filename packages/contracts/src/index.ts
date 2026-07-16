@@ -55,6 +55,7 @@ import {
   type LabelAliasSourceSchema,
   type LabelSeedStateSchema,
 } from "./orpc/admin-labels.js";
+import { type UserAdminItemSchema, type UserStatusSchema } from "./orpc/admin-users.js";
 import { type NoteGateSchema, type NoteRejectionSchema } from "./orpc/admin-notes.js";
 import {
   type ObservationGateSchema,
@@ -168,6 +169,22 @@ export type LabelsAdminResponse = Ok<{ labels: LabelAdminItem[] }>;
 
 /** `PATCH /api/admin/labels/:id` response — the one ruled label. */
 export type LabelUpdateResponse = Ok<{ label: LabelAdminItem }>;
+
+// ── Users (the account roster — the operator's read-only rollout window) ───────
+
+/** A user account's lifecycle status (`active` / `suspended` / `deleted`). */
+export type UserStatus = z.infer<typeof UserStatusSchema>;
+
+/**
+ * One account in the admin roster shape (`GET /api/admin/users`). Inferred from
+ * `UserAdminItemSchema` (./orpc/admin-users.ts) — the verified/status flags plus the
+ * per-user artifact counts (saved findings, saved sets, whether Galaxy progress exists),
+ * every count DERIVED, never stored.
+ */
+export type UserAdminItem = z.infer<typeof UserAdminItemSchema>;
+
+/** `GET /api/admin/users` response — every account, newest-first. */
+export type UsersAdminResponse = Ok<{ users: UserAdminItem[] }>;
 
 /** Where a label-alias spelling came from (RFC musickit-second-authority, U2a). */
 export type LabelAliasSource = z.infer<typeof LabelAliasSourceSchema>;

@@ -435,6 +435,10 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // (agent-allowed read), the list_track_work precedent; the box's `fluncle-verify-captures` cron
   // drains it. A pure read; it publishes nothing.
   list_unverified_captures: "admin",
+  // The user-account roster (the operator's read-only rollout window) — admin tier
+  // (agent-allowed read), the list_labels_admin precedent. A pure read of accounts +
+  // their derived artifact counts; it publishes nothing and mutates nothing.
+  list_users_admin: "admin",
   merge_private_galaxy_progress: "private-session",
   // The REF-05 public → private preview-bucket migration — operator tier: a one-off,
   // destructive-capable data move (it can delete public R2 objects), so an agent

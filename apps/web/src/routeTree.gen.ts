@@ -57,6 +57,7 @@ import { Route as CliLatestDotshRouteImport } from './routes/cli/latest[.]sh'
 import { Route as ArtistSlugRouteImport } from './routes/artist.$slug'
 import { Route as ApiStatusRouteImport } from './routes/api/status'
 import { Route as AlbumSlugRouteImport } from './routes/album.$slug'
+import { Route as AdminUsersRouteImport } from './routes/admin/users'
 import { Route as AdminUsageRouteImport } from './routes/admin/usage'
 import { Route as AdminRendersRouteImport } from './routes/admin/renders'
 import { Route as AdminRecordingsRouteImport } from './routes/admin/recordings'
@@ -356,6 +357,11 @@ const AlbumSlugRoute = AlbumSlugRouteImport.update({
   id: '/album/$slug',
   path: '/album/$slug',
   getParentRoute: () => rootRouteImport,
+} as any)
+const AdminUsersRoute = AdminUsersRouteImport.update({
+  id: '/users',
+  path: '/users',
+  getParentRoute: () => AdminRouteRoute,
 } as any)
 const AdminUsageRoute = AdminUsageRouteImport.update({
   id: '/usage',
@@ -713,6 +719,7 @@ export interface FileRoutesByFullPath {
   '/admin/recordings': typeof AdminRecordingsRoute
   '/admin/renders': typeof AdminRendersRoute
   '/admin/usage': typeof AdminUsageRoute
+  '/admin/users': typeof AdminUsersRoute
   '/album/$slug': typeof AlbumSlugRoute
   '/api/status': typeof ApiStatusRoute
   '/artist/$slug': typeof ArtistSlugRoute
@@ -819,6 +826,7 @@ export interface FileRoutesByTo {
   '/admin/recordings': typeof AdminRecordingsRoute
   '/admin/renders': typeof AdminRendersRoute
   '/admin/usage': typeof AdminUsageRoute
+  '/admin/users': typeof AdminUsersRoute
   '/album/$slug': typeof AlbumSlugRoute
   '/api/status': typeof ApiStatusRoute
   '/artist/$slug': typeof ArtistSlugRoute
@@ -928,6 +936,7 @@ export interface FileRoutesById {
   '/admin/recordings': typeof AdminRecordingsRoute
   '/admin/renders': typeof AdminRendersRoute
   '/admin/usage': typeof AdminUsageRoute
+  '/admin/users': typeof AdminUsersRoute
   '/album/$slug': typeof AlbumSlugRoute
   '/api/status': typeof ApiStatusRoute
   '/artist/$slug': typeof ArtistSlugRoute
@@ -1038,6 +1047,7 @@ export interface FileRouteTypes {
     | '/admin/recordings'
     | '/admin/renders'
     | '/admin/usage'
+    | '/admin/users'
     | '/album/$slug'
     | '/api/status'
     | '/artist/$slug'
@@ -1144,6 +1154,7 @@ export interface FileRouteTypes {
     | '/admin/recordings'
     | '/admin/renders'
     | '/admin/usage'
+    | '/admin/users'
     | '/album/$slug'
     | '/api/status'
     | '/artist/$slug'
@@ -1252,6 +1263,7 @@ export interface FileRouteTypes {
     | '/admin/recordings'
     | '/admin/renders'
     | '/admin/usage'
+    | '/admin/users'
     | '/album/$slug'
     | '/api/status'
     | '/artist/$slug'
@@ -1746,6 +1758,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AlbumSlugRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/admin/users': {
+      id: '/admin/users'
+      path: '/users'
+      fullPath: '/admin/users'
+      preLoaderRoute: typeof AdminUsersRouteImport
+      parentRoute: typeof AdminRouteRoute
+    }
     '/admin/usage': {
       id: '/admin/usage'
       path: '/usage'
@@ -2173,6 +2192,7 @@ interface AdminRouteRouteChildren {
   AdminRecordingsRoute: typeof AdminRecordingsRoute
   AdminRendersRoute: typeof AdminRendersRoute
   AdminUsageRoute: typeof AdminUsageRoute
+  AdminUsersRoute: typeof AdminUsersRoute
   AdminIndexRoute: typeof AdminIndexRoute
   AdminStudioRecordingIdRoute: typeof AdminStudioRecordingIdRoute
 }
@@ -2195,6 +2215,7 @@ const AdminRouteRouteChildren: AdminRouteRouteChildren = {
   AdminRecordingsRoute: AdminRecordingsRoute,
   AdminRendersRoute: AdminRendersRoute,
   AdminUsageRoute: AdminUsageRoute,
+  AdminUsersRoute: AdminUsersRoute,
   AdminIndexRoute: AdminIndexRoute,
   AdminStudioRecordingIdRoute: AdminStudioRecordingIdRoute,
 }
