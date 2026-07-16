@@ -3,8 +3,11 @@
  * THE ALBUM-GRAPH ONE-OFF BACKFILL — operator-run, ONCE, by hand. NOT in the deploy chain.
  *
  * IT HITS PRODUCTION TURSO. Run it on the operator machine after this migration ships:
- *   `bun run --cwd apps/web scripts/backfill-album-graph.ts`
- * It reads `TURSO_DATABASE_URL`/`TURSO_AUTH_TOKEN` from the environment (locally, `.dev.vars`).
+ *   `FLUNCLE_TURSO_OP_ITEM="<item>" bun run --cwd apps/web scripts/backfill-album-graph.ts`
+ * Production credentials come from 1Password via `op`, NOT `.dev.vars` (in this repo that points at
+ * the tiny LOCAL per-worktree dev DB). Point `FLUNCLE_TURSO_OP_ITEM` at the item holding the
+ * production Turso credentials (the same var + item `db-pull-prod.ts` uses), so `op` must be
+ * unlocked — that biometric unlock IS the human-in-the-loop gate on touching prod.
  *
  * WHY IT IS ONE-OFF, NOT A RECURRING DEPLOY STEP. The album edge is now written INLINE: the
  * publish path calls `linkTrackToAlbum` on a certified add, and the catalogue crawler ensures +
@@ -35,12 +38,9 @@
  * Unlike labels, an album carries NO operator control — no seed state, no ruling. There is
  * nothing for a human to decide about a record. See docs/album-entity.md.
  */
-import { type Client, createClient } from "@libsql/client";
+import { type Client, createClient } from "@libsql/client/web";
 import { slugify } from "@fluncle/contracts/util/galaxy-slug";
-import { config } from "dotenv";
 import { randomUUID } from "node:crypto";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 
 export type AlbumsBackfillResult = {
   /** Tracks whose `album_id` pointer this run stamped. */
@@ -152,19 +152,33 @@ export async function linkTracksToAlbums(client: Client): Promise<number> {
   return linked;
 }
 
+const ITEM = process.env.FLUNCLE_TURSO_OP_ITEM;
+
+/** Read one field of the prod-Turso 1Password item, exactly as `db-pull-prod.ts` does. */
+async function readSecret(field: string): Promise<string> {
+  try {
+    const value = await Bun.$`op read ${`${ITEM}/${field}`}`.text();
+
+    return value.trim();
+  } catch {
+    throw new Error(
+      `Could not read ${field} from 1Password (${ITEM}). Unlock 1Password and enable its CLI integration, then retry.`,
+    );
+  }
+}
+
 async function main(): Promise<void> {
-  if (!process.env.TURSO_DATABASE_URL) {
-    config({ path: join(dirname(fileURLToPath(import.meta.url)), "..", ".dev.vars") });
+  if (!ITEM) {
+    throw new Error(
+      "Set FLUNCLE_TURSO_OP_ITEM to the 1Password item holding the production Turso credentials — see the ops runbook note.",
+    );
   }
 
-  const url = process.env.TURSO_DATABASE_URL;
-
-  if (!url) {
-    throw new Error("TURSO_DATABASE_URL is required (set it in apps/web/.dev.vars)");
-  }
-
-  const authToken = process.env.TURSO_AUTH_TOKEN;
-  const client = createClient(authToken ? { authToken, url } : { url });
+  const url = await readSecret("TURSO_DATABASE_URL");
+  const authToken = await readSecret("TURSO_AUTH_TOKEN");
+  // intMode:"bigint" keeps large catalogue integers exact; the script reads only text cells and
+  // `rowsAffected` (always a JS number), so nothing here needs bigint narrowing.
+  const client = createClient({ authToken, intMode: "bigint", url });
   const result = await backfillAlbums(client);
 
   console.log(`album-graph backfill: ${result.minted} minted · ${result.linked} linked.`);
