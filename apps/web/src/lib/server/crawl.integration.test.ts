@@ -1094,3 +1094,57 @@ describe("the frontier drain — releases never starve behind a discovery wave",
     expect(releaseNode.rows[0]?.state).toBe("done");
   });
 });
+
+describe("the anchor priority head — the ear's top candidates anchor first", () => {
+  it("spends the head on the highest-ranked un-anchored rows and never advances the cursor off them", async () => {
+    const { searchTrackCandidates } = await import("./spotify");
+    const { crawlCatalogue } = await import("./crawl");
+
+    await db.execute("update labels set seed_state = 'disabled'");
+
+    // Two rows: a LOW track_id with no ranking (the rotation's natural first pick)
+    // and a HIGH track_id carrying a top ear score. Without the priority head, the
+    // rotation attempts aa_unranked first; with it, zz_top leads the pass.
+    await db.execute({
+      args: ["aa_unranked", "Deep Cut", JSON.stringify(["Nobody"]), 200_000],
+      sql: `insert into tracks (track_id, title, artists_json, duration_ms) values (?, ?, ?, ?)`,
+    });
+    await db.execute({
+      args: ["zz_top-candidate", "Top Candidate", JSON.stringify(["Someone"]), 200_000, 0.97],
+      sql: `insert into tracks (track_id, title, artists_json, duration_ms, nearest_finding_score)
+            values (?, ?, ?, ?, ?)`,
+    });
+
+    // The search rung matches ONLY the top candidate; the unranked row misses.
+    vi.mocked(searchTrackCandidates).mockImplementation((query: string) =>
+      Promise.resolve(
+        query.includes("Top Candidate")
+          ? [
+              {
+                artists: ["Someone"],
+                durationMs: 200_500,
+                id: "spot-top",
+                spotifyUrl: "https://open.spotify.com/track/spot-top",
+                title: "Top Candidate",
+              },
+            ]
+          : [],
+      ),
+    );
+
+    const pass = await crawlCatalogue({ limit: 10, maxHop: 2 });
+    expect(pass.anchorsFilled).toBe(1);
+
+    const anchored = await db.execute(
+      "select spotify_uri from tracks where track_id = 'zz_top-candidate'",
+    );
+    expect(anchored.rows[0]?.spotify_uri).toBe("spotify:track:spot-top");
+
+    // The cursor reflects the ROTATION's last attempt (the unranked row), never the
+    // priority row — the fair rotation's position survives the head.
+    const cursorRow = await db.execute(
+      "select value from settings where key = 'crawl.spotify_anchor_cursor'",
+    );
+    expect(cursorRow.rows[0]?.value).toBe("aa_unranked");
+  });
+});

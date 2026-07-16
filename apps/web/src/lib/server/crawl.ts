@@ -74,6 +74,7 @@ import {
 import { getSetting, setSetting } from "./settings";
 import { findSpotifyTrackByIsrc, searchTrackCandidates, type TrackSearchResult } from "./spotify";
 import { matchKey } from "./track-match";
+import { LONG_FORM_MS } from "./catalogue";
 
 // ── Policy constants ─────────────────────────────────────────────────────────
 
@@ -846,6 +847,15 @@ async function connectAnchorArtists(
  * tripped it makes NO call, and each pass folds its outcome into that breaker so a persistent
  * failure trips it (pausing the re-poke) and surfaces on `get_crawl_status`.
  */
+/** One row of the anchor worklist (both the priority head and the rotation). */
+type AnchorRow = {
+  artists_json: string;
+  duration_ms: number;
+  isrc: string | null;
+  title: string;
+  track_id: string;
+};
+
 async function fillSpotifyAnchors(
   limit: number,
 ): Promise<{ filled: number; outcome: AnchorFillOutcome }> {
@@ -864,6 +874,31 @@ async function fillSpotifyAnchors(
   // turn. The cursor makes the scan a full rotation: pick up past the last attempted row,
   // wrap to the top when the tail runs dry.
   const cursor = (await getSetting(ANCHOR_CURSOR_KEY)) ?? "";
+
+  // THE PRIORITY HEAD (2026-07-16): before the fair rotation, spend up to half the
+  // batch on the EAR'S TOP un-anchored candidates — highest nearest-finding score
+  // first, the same "the order IS the budget" law the capture ladder lives by.
+  // Measured before this head existed: only 10 of the ear's top 200 rows carried an
+  // anchor, so the telescope (which mirrors the first 50 ANCHORED of the top 200)
+  // was drawing from the best-anchored sliver rather than the best candidates.
+  // Duplicates, dismissed rows, and long-form mixes are excluded exactly as the ear
+  // lens excludes them — an anchor here is one the telescope can actually board.
+  const priorityShare = Math.ceil(limit / 2);
+  const priority = await db.execute({
+    args: [LONG_FORM_MS, priorityShare],
+    sql: `select track_id, isrc, title, artists_json, duration_ms from tracks
+          where spotify_uri is null
+            and nearest_finding_score is not null
+            and duplicate_of_track_id is null
+            and dismissed_at is null
+            and duration_ms < ?
+            and not exists (select 1 from findings where findings.track_id = tracks.track_id)
+          order by nearest_finding_score desc, track_id asc
+          limit ?`,
+  });
+  const priorityRows = typedRows<AnchorRow>(priority.rows);
+  const priorityIds = new Set(priorityRows.map((row) => row.track_id));
+
   let queue = await db.execute({
     args: [cursor, limit],
     sql: `select track_id, isrc, title, artists_json, duration_ms from tracks
@@ -891,14 +926,21 @@ async function fillSpotifyAnchors(
   // a `/search`, so ISRC hits and budget-skipped rows don't spend it.
   let searchAttempts = 0;
 
-  for (const row of typedRows<{
-    artists_json: string;
-    duration_ms: number;
-    isrc: string | null;
-    title: string;
-    track_id: string;
-  }>(queue.rows)) {
-    lastAttempted = row.track_id;
+  // Priority rows lead and NEVER advance the rotation cursor (they are picked by
+  // rank, not by position — advancing the cursor off one would teleport the fair
+  // rotation). Rotation rows follow, deduped against the priority set.
+  const rotationRows = typedRows<AnchorRow>(queue.rows).filter(
+    (row) => !priorityIds.has(row.track_id),
+  );
+  const work: { fromRotation: boolean; row: AnchorRow }[] = [
+    ...priorityRows.map((row) => ({ fromRotation: false, row })),
+    ...rotationRows.map((row) => ({ fromRotation: true, row })),
+  ];
+
+  for (const { fromRotation, row } of work) {
+    if (fromRotation) {
+      lastAttempted = row.track_id;
+    }
 
     // RUNG ONE — the exact-ISRC key lookup, unchanged. Only reached when the row carries an ISRC;
     // its stamp-back and its throttle/unauthorized handling are exactly as before.
@@ -907,9 +949,13 @@ async function fillSpotifyAnchors(
 
       if (rateLimited) {
         // Spotify is throttling the app. Fold it into the breaker (a run of these trips it) and
-        // stop — grinding the 429 wall just earns a longer ban.
+        // stop — grinding the 429 wall just earns a longer ban. (The cursor only moves if the
+        // ROTATION was reached — a throttle inside the priority head leaves it in place.)
         await recordSpotifyAnchorOutcome("throttled");
-        await setSetting(ANCHOR_CURSOR_KEY, lastAttempted);
+
+        if (lastAttempted) {
+          await setSetting(ANCHOR_CURSOR_KEY, lastAttempted);
+        }
         logEvent("warn", "crawl.spotify-throttled", { filled });
 
         return { filled, outcome: "throttled" };
@@ -920,7 +966,10 @@ async function fillSpotifyAnchors(
         // breaker toward a pause and surface the reason so the operator reconnects, rather than
         // logging the same silent no-match 20 times a tick forever.
         await recordSpotifyAnchorOutcome("unauthorized");
-        await setSetting(ANCHOR_CURSOR_KEY, lastAttempted);
+
+        if (lastAttempted) {
+          await setSetting(ANCHOR_CURSOR_KEY, lastAttempted);
+        }
         logEvent("warn", "crawl.spotify-unauthorized", { filled });
 
         return { filled, outcome: "unauthorized" };
@@ -971,7 +1020,10 @@ async function fillSpotifyAnchors(
 
       if (rateLimited) {
         await recordSpotifyAnchorOutcome("throttled");
-        await setSetting(ANCHOR_CURSOR_KEY, lastAttempted);
+
+        if (lastAttempted) {
+          await setSetting(ANCHOR_CURSOR_KEY, lastAttempted);
+        }
         logEvent("warn", "crawl.spotify-throttled", { filled });
 
         return { filled, outcome: "throttled" };
@@ -979,7 +1031,10 @@ async function fillSpotifyAnchors(
 
       if (unauthorized) {
         await recordSpotifyAnchorOutcome("unauthorized");
-        await setSetting(ANCHOR_CURSOR_KEY, lastAttempted);
+
+        if (lastAttempted) {
+          await setSetting(ANCHOR_CURSOR_KEY, lastAttempted);
+        }
         logEvent("warn", "crawl.spotify-unauthorized", { filled });
 
         return { filled, outcome: "unauthorized" };
