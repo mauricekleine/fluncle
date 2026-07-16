@@ -140,22 +140,43 @@ export async function fillEmptyArtistBio(
 export type EntityBioWorkItem = { id: string; name: string; slug: string };
 
 /**
- * The bio worklist: artists that have at least one coordinate-bearing finding but NO bio
- * yet, oldest-first — the worklist the future `describe_artist` cron drains. A bare read
- * (no writes), bounded by `limit`. An artist earns a bio only once Fluncle has logged it,
- * so the `exists` gate is the same certified-finding floor the entity pages use.
+ * The bio worklist: bio-empty artists whose page is INDEXABLE, oldest-first — the worklist the
+ * `describe_artist` cron drains. A bare read (no writes), bounded by `limit`. Two ways in, matching
+ * exactly the two ways an `/artist/<slug>` page renders:
+ *
+ * - a CERTIFIED artist (at least one coordinate-bearing finding) — the original floor, preserved
+ *   verbatim, so a certified-but-thin artist never regresses out of the queue; OR
+ * - a findings-free CATALOGUE artist whose page clears the thin-content floor
+ *   ({@link ARTIST_INDEX_MIN_FINDINGS}) on renderable tracks alone — a crawl-minted page that is
+ *   indexable earns a bio too, so it stops showing a bare tracklist with no dossier.
+ *
+ * The renderable count mirrors `listArtistSitemapRows` exactly: over the canonical `track_artists`
+ * join, a track counts when its finding is coordinate-bearing (`log_id is not null`) OR when there
+ * is no finding row (the anti-join's `track_id is null` complement). Bounding the findings-free arm
+ * to the indexable floor caps the Firecrawl + `claude -p` cost — a wide crawl mints thousands of
+ * stub artists, and only the ones with a real page should ever enter the sweep.
  */
 export async function listArtistsMissingBio(limit: number): Promise<EntityBioWorkItem[]> {
   const db = await getDb();
   const result = await db.execute({
-    args: [limit],
+    args: [ARTIST_INDEX_MIN_FINDINGS, limit],
     sql: `select a.id, a.name, a.slug
           from artists a
           where (a.bio is null or trim(a.bio) = '')
-            and exists (
-              select 1 from track_artists ta
-              join findings f on f.track_id = ta.track_id
-              where ta.artist_id = a.id and f.log_id is not null
+            and (
+              exists (
+                select 1 from track_artists ta
+                join findings f on f.track_id = ta.track_id
+                where ta.artist_id = a.id and f.log_id is not null
+              )
+              or (
+                select count(*)
+                from track_artists ta2
+                join tracks t on t.track_id = ta2.track_id
+                left join findings f2 on f2.track_id = t.track_id
+                where ta2.artist_id = a.id
+                  and (f2.log_id is not null or f2.track_id is null)
+              ) >= ?
             )
           order by a.created_at asc
           limit ?`,

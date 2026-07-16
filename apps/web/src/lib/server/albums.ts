@@ -262,22 +262,42 @@ export async function fillEmptyAlbumBio(
 export type AlbumBioWorkItem = { id: string; name: string; slug: string };
 
 /**
- * The bio worklist: albums that have at least one coordinate-bearing finding but NO bio
- * yet, oldest-first — the worklist the `describe_album` cron drains. A bare read (no writes),
- * bounded by `limit`. An album earns a bio only once Fluncle has logged a track off it, so
- * the `exists` gate is the same certified-finding floor the album page uses.
+ * The bio worklist: bio-empty albums whose page is INDEXABLE, oldest-first — the worklist the
+ * `describe_album` cron drains. A bare read (no writes), bounded by `limit`. Two ways in, matching
+ * exactly the two ways an `/album/<slug>` page renders:
+ *
+ * - a CERTIFIED album (at least one coordinate-bearing finding) — the original floor, preserved
+ *   verbatim, so a certified-but-thin album never regresses out of the queue; OR
+ * - a findings-free CATALOGUE album whose page clears the thin-content floor
+ *   ({@link ALBUM_INDEX_MIN_TRACKS}) on renderable tracks alone — a crawl-minted page that is
+ *   indexable earns a bio too, so it stops showing a bare tracklist with no dossier.
+ *
+ * The renderable count mirrors `listAlbumSitemapRows` exactly: over the `tracks.album_id` join, a
+ * track counts when its finding is coordinate-bearing (`log_id is not null`) OR when there is no
+ * finding row (the anti-join's `track_id is null` complement). Bounding the findings-free arm to the
+ * indexable floor caps the Firecrawl + `claude -p` cost — a wide crawl mints thousands of stub
+ * albums, and only the ones with a real page should ever enter the sweep.
  */
 export async function listAlbumsMissingBio(limit: number): Promise<AlbumBioWorkItem[]> {
   const db = await getDb();
   const result = await db.execute({
-    args: [limit],
+    args: [ALBUM_INDEX_MIN_TRACKS, limit],
     sql: `select a.id, a.name, a.slug
           from albums a
           where (a.bio is null or trim(a.bio) = '')
-            and exists (
-              select 1 from tracks t
-              join findings f on f.track_id = t.track_id
-              where t.album_id = a.id and f.log_id is not null
+            and (
+              exists (
+                select 1 from tracks t
+                join findings f on f.track_id = t.track_id
+                where t.album_id = a.id and f.log_id is not null
+              )
+              or (
+                select count(*)
+                from tracks t2
+                left join findings f2 on f2.track_id = t2.track_id
+                where t2.album_id = a.id
+                  and (f2.log_id is not null or f2.track_id is null)
+              ) >= ?
             )
           order by a.created_at asc
           limit ?`,

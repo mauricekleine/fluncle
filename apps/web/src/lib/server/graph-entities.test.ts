@@ -28,10 +28,11 @@ import {
   getAlbumBySlug,
   linkTrackToAlbum,
   listAlbumsCatalogue,
+  listAlbumsMissingBio,
   listAlbumSitemapRows,
   listAlbumsWithFindingCounts,
 } from "./albums";
-import { listArtistsCatalogue, upsertTrackArtists } from "./artists";
+import { listArtistsCatalogue, listArtistsMissingBio, upsertTrackArtists } from "./artists";
 import { flattenArtistGroups, listLabelCatalogue } from "./catalogue-groups";
 import { createIntegrationDb } from "./integration-db";
 import { getGraphPreview } from "./graph-preview";
@@ -40,6 +41,7 @@ import {
   getLabelForAlbum,
   linkTrackToLabel,
   listLabelsCatalogue,
+  listLabelsMissingBio,
   listLabelsWithFindingCounts,
 } from "./labels";
 import { getFindingsByAlbum, getFindingsByLabel, listCatalogueTracksByAlbum } from "./tracks";
@@ -569,5 +571,134 @@ describe('the hub "also in the catalogue" reads (findings-free, floor-gated, key
     expect(page.items.map((entry) => entry.name)).toEqual(["Deep Artist"]);
     expect(page.items[0]?.trackCount).toBe(3);
     expect(page.nextCursor).toBeNull();
+  });
+});
+
+// The bio worklist reads (listArtistsMissingBio / listLabelsMissingBio / listAlbumsMissingBio): a
+// bio-empty entity earns a bio the moment its page is INDEXABLE, matching the two ways an entity
+// page renders. Four load-bearing cases per kind:
+//   (a) a findings-free CATALOGUE entity at the floor (≥3 renderable, 0 certified) is NOW queued
+//       (the widening that gives a crawl-minted page a dossier instead of a bare tracklist);
+//   (b) a CERTIFIED-but-thin entity (1 finding, below the floor) is STILL queued — NO regression
+//       of the original certified-finding gate;
+//   (c) a THIN findings-free entity (<3 renderable) is NOT queued (the floor caps Firecrawl +
+//       claude -p cost against the wide crawl's stub rows);
+//   (d) an entity that already carries a bio is NEVER queued (the fill-empty-only guarantee).
+describe("the bio worklist is catalogue-aware (indexable findings-free entities join the queue)", () => {
+  it("ARTISTS: queues certified-thin + findings-free-indexable, not the thin or the already-bio'd", async () => {
+    // (b) certified but THIN — 1 finding, 0 catalogue, below the ≥3 floor. Still queued.
+    await seedTrack({
+      album: null,
+      label: null,
+      logId: "001.1.1A",
+      title: "Cert",
+      trackId: "bq-art-cert-1",
+    });
+    await upsertTrackArtists("bq-art-cert-1", ["Certified Artist"], [], { fillImages: false });
+
+    // (a) findings-free but INDEXABLE — 3 catalogue tracks, 0 findings. Now queued.
+    for (const trackId of ["bq-art-deep-1", "bq-art-deep-2", "bq-art-deep-3"]) {
+      await seedTrack({ album: null, label: null, title: trackId, trackId });
+      await upsertTrackArtists(trackId, ["Deep Artist"], [], { fillImages: false });
+    }
+
+    // (c) findings-free and THIN — 2 catalogue tracks. Never queued.
+    for (const trackId of ["bq-art-thin-1", "bq-art-thin-2"]) {
+      await seedTrack({ album: null, label: null, title: trackId, trackId });
+      await upsertTrackArtists(trackId, ["Thin Artist"], [], { fillImages: false });
+    }
+
+    const queued = await listArtistsMissingBio(100);
+    expect(queued.map((entry) => entry.name).sort()).toEqual(["Certified Artist", "Deep Artist"]);
+
+    // (d) author a bio on the indexable one → it drops out of the queue.
+    const deep = queued.find((entry) => entry.name === "Deep Artist");
+    expect(deep).toBeDefined();
+    await db.execute({
+      args: ["A plain factual dossier paragraph about the artist.", deep?.slug ?? ""],
+      sql: `update artists set bio = ? where slug = ?`,
+    });
+
+    const after = await listArtistsMissingBio(100);
+    expect(after.map((entry) => entry.name)).not.toContain("Deep Artist");
+  });
+
+  it("LABELS: queues certified-thin + findings-free-indexable, not the thin or the already-bio'd", async () => {
+    // (b) certified but THIN — 1 finding on the label, below the floor. Still queued.
+    await seedTrack({
+      album: null,
+      label: "Certified Imprint",
+      logId: "001.1.1A",
+      title: "Cert",
+      trackId: "bq-lbl-cert-1",
+    });
+    await linkTrackToLabel("bq-lbl-cert-1", "Certified Imprint");
+
+    // (a) findings-free but INDEXABLE — 3 catalogue tracks. Now queued.
+    for (const trackId of ["bq-lbl-deep-1", "bq-lbl-deep-2", "bq-lbl-deep-3"]) {
+      await seedTrack({ album: null, label: "Deep Catalogue", title: trackId, trackId });
+      await linkTrackToLabel(trackId, "Deep Catalogue");
+    }
+
+    // (c) findings-free and THIN — 2 catalogue tracks. Never queued.
+    for (const trackId of ["bq-lbl-thin-1", "bq-lbl-thin-2"]) {
+      await seedTrack({ album: null, label: "Thin Imprint", title: trackId, trackId });
+      await linkTrackToLabel(trackId, "Thin Imprint");
+    }
+
+    const queued = await listLabelsMissingBio(100);
+    expect(queued.map((entry) => entry.name).sort()).toEqual([
+      "Certified Imprint",
+      "Deep Catalogue",
+    ]);
+
+    // (d) author a bio on the indexable one → it drops out of the queue.
+    const deep = queued.find((entry) => entry.name === "Deep Catalogue");
+    expect(deep).toBeDefined();
+    await db.execute({
+      args: ["A plain factual dossier paragraph about the imprint.", deep?.slug ?? ""],
+      sql: `update labels set bio = ? where slug = ?`,
+    });
+
+    const after = await listLabelsMissingBio(100);
+    expect(after.map((entry) => entry.name)).not.toContain("Deep Catalogue");
+  });
+
+  it("ALBUMS: queues certified-thin + findings-free-indexable, not the thin or the already-bio'd", async () => {
+    // (b) certified but THIN — 1 finding on the record, below the floor. Still queued.
+    await seedTrack({
+      album: "Certified Record",
+      label: null,
+      logId: "001.1.1A",
+      title: "Cert",
+      trackId: "bq-alb-cert-1",
+    });
+    await linkTrackToAlbum("bq-alb-cert-1", "Certified Record");
+
+    // (a) findings-free but INDEXABLE — 3 catalogue tracks. Now queued.
+    for (const trackId of ["bq-alb-deep-1", "bq-alb-deep-2", "bq-alb-deep-3"]) {
+      await seedTrack({ album: "Deep Record", label: null, title: trackId, trackId });
+      await linkTrackToAlbum(trackId, "Deep Record");
+    }
+
+    // (c) findings-free and THIN — 2 catalogue tracks. Never queued.
+    for (const trackId of ["bq-alb-thin-1", "bq-alb-thin-2"]) {
+      await seedTrack({ album: "Thin Record", label: null, title: trackId, trackId });
+      await linkTrackToAlbum(trackId, "Thin Record");
+    }
+
+    const queued = await listAlbumsMissingBio(100);
+    expect(queued.map((entry) => entry.name).sort()).toEqual(["Certified Record", "Deep Record"]);
+
+    // (d) author a bio on the indexable one → it drops out of the queue.
+    const deep = queued.find((entry) => entry.name === "Deep Record");
+    expect(deep).toBeDefined();
+    await db.execute({
+      args: ["A plain factual dossier paragraph about the record.", deep?.slug ?? ""],
+      sql: `update albums set bio = ? where slug = ?`,
+    });
+
+    const after = await listAlbumsMissingBio(100);
+    expect(after.map((entry) => entry.name)).not.toContain("Deep Record");
   });
 });

@@ -777,22 +777,42 @@ export async function fillEmptyLabelBio(
 export type LabelBioWorkItem = { id: string; name: string; slug: string };
 
 /**
- * The bio worklist: labels that have at least one coordinate-bearing finding but NO bio
- * yet, oldest-first — the worklist the future `describe_label` cron drains. A bare read
- * (no writes), bounded by `limit`. A label earns a bio only once Fluncle has logged a track
- * on it, so the `exists` gate is the same certified-finding floor the label page uses.
+ * The bio worklist: bio-empty labels whose page is INDEXABLE, oldest-first — the worklist the
+ * `describe_label` cron drains. A bare read (no writes), bounded by `limit`. Two ways in, matching
+ * exactly the two ways a `/label/<slug>` page renders:
+ *
+ * - a CERTIFIED label (at least one coordinate-bearing finding) — the original floor, preserved
+ *   verbatim, so a certified-but-thin label never regresses out of the queue; OR
+ * - a findings-free CATALOGUE label whose page clears the thin-content floor
+ *   ({@link LABEL_INDEX_MIN_TRACKS}) on renderable tracks alone — a crawl-minted page that is
+ *   indexable earns a bio too, so it stops showing a bare tracklist with no dossier.
+ *
+ * The renderable count mirrors `listLabelSitemapRows` exactly: over the `tracks.label_id` join, a
+ * track counts when its finding is coordinate-bearing (`log_id is not null`) OR when there is no
+ * finding row (the anti-join's `track_id is null` complement). Bounding the findings-free arm to the
+ * indexable floor caps the Firecrawl + `claude -p` cost — a wide crawl mints thousands of stub
+ * labels, and only the ones with a real page should ever enter the sweep.
  */
 export async function listLabelsMissingBio(limit: number): Promise<LabelBioWorkItem[]> {
   const db = await getDb();
   const result = await db.execute({
-    args: [limit],
+    args: [LABEL_INDEX_MIN_TRACKS, limit],
     sql: `select l.id, l.name, l.slug
           from labels l
           where (l.bio is null or trim(l.bio) = '')
-            and exists (
-              select 1 from tracks t
-              join findings f on f.track_id = t.track_id
-              where t.label_id = l.id and f.log_id is not null
+            and (
+              exists (
+                select 1 from tracks t
+                join findings f on f.track_id = t.track_id
+                where t.label_id = l.id and f.log_id is not null
+              )
+              or (
+                select count(*)
+                from tracks t2
+                left join findings f2 on f2.track_id = t2.track_id
+                where t2.label_id = l.id
+                  and (f2.log_id is not null or f2.track_id is null)
+              ) >= ?
             )
           order by l.created_at asc
           limit ?`,

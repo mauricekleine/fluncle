@@ -21,7 +21,7 @@ Both are on-box HYBRID `--no-agent` sweeps — a deterministic queue + ONE `clau
 
 Each tick:
 
-1. **QUEUE** (deterministic): `fluncle admin <kind>s describe --queue --json` → entities with a certified finding but no bio yet (`bio IS NULL/'' AND a finding exists`, oldest first). A bare array of `{ id, name, slug }`. Empty → fast no-op.
+1. **QUEUE** (deterministic): `fluncle admin <kind>s describe --queue --json` → bio-empty entities whose page is INDEXABLE, oldest first. A bare array of `{ id, name, slug }`. Empty → fast no-op. "Indexable" is the SAME two-way floor the entity pages render on: `bio IS NULL/''` AND (a certified finding exists **OR** the renderable-track count clears the page's thin-content floor — `ARTIST_INDEX_MIN_FINDINGS` / `LABEL_INDEX_MIN_TRACKS` / `ALBUM_INDEX_MIN_TRACKS`, all 3, counted exactly as the sitemap reads count: certified findings + catalogue anti-join tracks). So a crawl-minted, findings-free catalogue entity that has a real page earns a bio too — it no longer stands with a full tracklist and no dossier. The floor is the cost bound: it keeps the wide crawl's thousands of one-track stubs out of the Firecrawl + `claude -p` path.
 2. per entity (bounded batch, `ENTITY_BIO_BATCH_CAP`, default 1):
    - **DRAFT** (deterministic, Worker-paced): `fluncle admin <kind>s draft-bio <slug> --json` → the `draft_artist_bio` / `draft_label_bio` READ. The **Worker** runs the Firecrawl gather (with its key) + pulls the logged finding **titles** (with its DB) and assembles the registered `describe_artist` / `describe_label` prompt, returning `{ found, name, findingCount, prompt, promptVersion, hasFacts }`. A `found:false` (unresolved slug) or a failed call → skip (stays queued).
    - **AUTHOR** (the one agentic step): run `claude -p` (`claude-sonnet-4-6`, subscription auth, read-only tools) on the Worker-supplied `prompt` so it loads `copywriting-fluncle`.
@@ -86,7 +86,8 @@ bun docs/agents/hermes/scripts/entity-bio-sweep.ts --kind album  --dry-run <slug
 
 - One entity per tick (one `claude -p` authoring); the queue is the durable worklist. `ENTITY_BIO_BATCH_CAP` raises it for the operator backfill only.
 - Fill an EMPTY bio ONLY — never overwrite an operator-written or already-set bio (enforced server-side, atomically, by a DB predicate).
-- Only a CERTIFIED entity gets a bio: the queue's `EXISTS` join requires a finding with a non-null `log_id`, so an uncertified/catalogue-only entity never enters the worklist.
+- An INDEXABLE entity gets a bio — certified OR findings-free: the queue admits a `bio`-empty entity with either a certified finding OR a renderable-track count at the indexable floor (≥3, counted as the sitemap reads count). A crawl-minted catalogue entity that clears the floor is in; a thin (<3) findings-free stub stays out. The floor caps Firecrawl + `claude -p` cost against the wide crawl.
+- For a findings-free catalogue entity the grounding is **Firecrawl facts + identity only** — the box has no on-box finding TITLES to lean on (there are none logged). The refuse-if-no-facts rail is what makes this safe: an entity Firecrawl yields nothing on stays bio-less (the 40-char floor turns the no-facts arm into a clean no-write), and — post the artist-page fix — a bio-less page shows no apology, just its tracklist.
 - The bio carries **facts grounded in the Firecrawl snippets** + what Fluncle has logged — never invent a discography, roster, date, or scene credential. If the facts are thin, say less.
 - The bio is **public** the moment it lands on the entity page — the voice gate is a hard ship requirement, not a nicety.
 - Subscription auth only (`CLAUDE_CODE_OAUTH_TOKEN`) — zero OpenRouter tokens, never a raw API key in the repo.
