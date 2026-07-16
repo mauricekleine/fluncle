@@ -3784,21 +3784,25 @@ body::before {
   padding: 0.3rem 0;
 }
 
-.saves-sent-title {
+/* Scoped under the row so the generic `.account-list span` sizing (0-1-1) can't
+   out-specify it — browser-verified: the bare class left the un-linked titles
+   smaller and dimmer than the linked one. */
+.saves-sent-row .saves-sent-title {
   color: var(--starlight-cream);
+  font-size: 0.9rem;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-a.saves-sent-title {
+.saves-sent-row a.saves-sent-title {
   text-decoration: none;
   transition: color 150ms ease-out;
 }
 
-a.saves-sent-title:hover,
-a.saves-sent-title:focus-visible {
+.saves-sent-row a.saves-sent-title:hover,
+.saves-sent-row a.saves-sent-title:focus-visible {
   color: var(--eclipse-glow);
 }
 

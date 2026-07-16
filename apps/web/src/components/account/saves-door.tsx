@@ -27,6 +27,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuGroup,
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
@@ -229,8 +230,11 @@ function SavedFindingRow({
     setBusy(true);
 
     try {
+      // `requireJsonMutation` 415s ANY mutation without a JSON content-type — DELETEs
+      // included (browser-verified; the monolith's remove shipped without it and never
+      // worked). The saved-set mutations already carry it; this matches them.
       const response = await fetch(`/api/me/saved-findings/${finding.trackId}`, {
-        headers: { "x-fluncle-csrf": csrfToken },
+        headers: { "Content-Type": "application/json", "x-fluncle-csrf": csrfToken },
         method: "DELETE",
       });
 
@@ -331,7 +335,12 @@ function SavedFindingMenu({
       <DropdownMenuContent align="end" className="min-w-48">
         {finding.note ? (
           <>
-            <DropdownMenuLabel className="saves-note">{finding.note}</DropdownMenuLabel>
+            {/* Base UI requires a GroupLabel to live inside a Group — a bare
+                DropdownMenuLabel throws MenuGroupContext at runtime (browser-verified;
+                the crew-slot menu documents the same trap). */}
+            <DropdownMenuGroup>
+              <DropdownMenuLabel className="saves-note">{finding.note}</DropdownMenuLabel>
+            </DropdownMenuGroup>
             <DropdownMenuSeparator />
           </>
         ) : null}
