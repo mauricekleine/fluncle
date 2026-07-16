@@ -50,13 +50,11 @@ function blend(from: number[], toward: number[], weight: number): number[] {
   return unit(from.map((value, index) => value * (1 - weight) + (toward[index] ?? 0) * weight));
 }
 
-/** The dual write the agent-tier `update_track` path performs: JSON + the ranked F32_BLOB. */
+/** The write the agent-tier `update_track` path performs: the validated JSON → ranked F32_BLOB. */
 async function embed(trackId: string, vector: number[]): Promise<void> {
-  const json = JSON.stringify(vector);
-
   await db.execute({
-    args: [json, json, trackId],
-    sql: `update tracks set embedding_json = ?, embedding_blob = vector32(?) where track_id = ?`,
+    args: [JSON.stringify(vector), trackId],
+    sql: `update tracks set embedding_blob = vector32(?) where track_id = ?`,
   });
 }
 
@@ -824,12 +822,12 @@ describe("wrong audio — a cross-title near-1.0 capture is quarantined, never t
   /** Read the capture side-channel columns the quarantine touches. */
   async function stateOf(trackId: string): Promise<{
     capture_status: null | string;
-    embedding_json: null | string;
+    embedding_blob: unknown;
     source_audio_key: null | string;
   }> {
     const result = await db.execute({
       args: [trackId],
-      sql: `select capture_status, embedding_json, source_audio_key from tracks where track_id = ?`,
+      sql: `select capture_status, embedding_blob, source_audio_key from tracks where track_id = ?`,
     });
 
     return result.rows[0] as unknown as Awaited<ReturnType<typeof stateOf>>;
@@ -868,7 +866,7 @@ describe("wrong audio — a cross-title near-1.0 capture is quarantined, never t
     // and the status marks it quarantined.
     const state = await stateOf("cat-fyl");
     expect(state.capture_status).toBe(WRONG_AUDIO_STATUS);
-    expect(state.embedding_json).toBeNull();
+    expect(state.embedding_blob).toBeNull();
     expect(state.source_audio_key).toBe("catalogue/cat-fyl/badbeef.webm");
   });
 
@@ -898,7 +896,7 @@ describe("wrong audio — a cross-title near-1.0 capture is quarantined, never t
 
     const state = await stateOf("cat-shelter");
     expect(state.capture_status).not.toBe("wrong-audio");
-    expect(state.embedding_json).not.toBeNull();
+    expect(state.embedding_blob).not.toBeNull();
   });
 
   it("converges: a quarantined row and a −2 true duplicate are both stable on the next tick — no re-pick loop", async () => {
@@ -990,7 +988,7 @@ describe("wrong audio — a cross-title near-1.0 capture is quarantined, never t
     const state = await stateOf("finding-dwyl");
     expect(state.capture_status).toBe(WRONG_AUDIO_STATUS);
     // The poisoned vector leaves the ranking corpus immediately…
-    expect(state.embedding_json).toBeNull();
+    expect(state.embedding_blob).toBeNull();
     // …the bad bytes' key is KEPT (the sha memory the capture sweep hash-rejects)…
     expect(state.source_audio_key).toBe("005.9.9L/badbeef.webm");
     // …and the analysis provenance resets, so the post-re-capture sweep re-enriches
@@ -1171,9 +1169,9 @@ describe("catalogue-internal duplicates — one master, one row", () => {
     // The duplicate KEEPS its vector — it still reads "already in the archive" on the board.
     const kept = await db.execute({
       args: ["cat-b"],
-      sql: "select embedding_json from tracks where track_id = ?",
+      sql: "select embedding_blob from tracks where track_id = ?",
     });
-    expect(kept.rows[0]?.embedding_json).not.toBeNull();
+    expect(kept.rows[0]?.embedding_blob).not.toBeNull();
   });
 
   it("vetoes an UNcaptured sibling off the capture queue before a byte is bought", async () => {

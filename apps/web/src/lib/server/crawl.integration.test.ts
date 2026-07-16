@@ -224,7 +224,7 @@ describe("the catalogue crawler", () => {
     await drain();
 
     const rows = await db.execute(
-      "select capture_status, source_audio_key, embedding_json from tracks",
+      "select capture_status, source_audio_key, embedding_blob from tracks",
     );
 
     for (const row of rows.rows) {
@@ -232,7 +232,7 @@ describe("the catalogue crawler", () => {
       // predicate (`findings.log_id is not null`) cannot reach a row with no finding.
       expect(row.capture_status).toBe("pending");
       expect(row.source_audio_key).toBeNull();
-      expect(row.embedding_json).toBeNull();
+      expect(row.embedding_blob).toBeNull();
     }
   });
 

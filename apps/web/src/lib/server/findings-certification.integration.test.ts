@@ -74,9 +74,9 @@ vi.mock("./bluesky", () => ({
 const NOW = "2026-07-01T00:00:00.000Z";
 const FINDING_ID = "aaaaaaaaaaaaaaaaaaaaaa"; // 22 chars, the tracks PK shape
 const CATALOGUE_ID = "bbbbbbbbbbbbbbbbbbbbbb";
-// The dual write the agent-tier `update_track` path performs (embedding.ts): the JSON
-// array (the source of truth) and the native F32_BLOB the database ranks in SQL.
-const EMBED = `update tracks set embedding_json = ?, embedding_blob = vector32(?) where track_id = ?`;
+// The write the agent-tier `update_track` path performs (embedding.ts): the validated JSON
+// array converted server-side into the native F32_BLOB the database ranks in SQL.
+const EMBED = `update tracks set embedding_blob = vector32(?) where track_id = ?`;
 
 beforeEach(async () => {
   db = await createIntegrationDb();
@@ -154,7 +154,7 @@ describe("the tracks/findings split — an uncertified catalogue track is not a 
   it('never surfaces in "more like this", even when it HAS an embedding', async () => {
     const { getSimilarFindings } = await import("./tracks");
 
-    // THE SHARPEST CASE. `embedding_json` lives on `tracks`, so an uncertified catalogue
+    // THE SHARPEST CASE. `embedding_blob` lives on `tracks`, so an uncertified catalogue
     // track can carry a perfectly good MuQ vector — the sonic space does not care whether
     // Fluncle certified it. Only the join keeps it out of a public neighbours row. Give
     // BOTH candidates a vector, make the catalogue track the NEARER one, and it still must
@@ -166,9 +166,9 @@ describe("the tracks/findings split — an uncertified catalogue track is not a 
     const vector = (first: number): string =>
       JSON.stringify([first, ...Array.from({ length: 1023 }, () => 0.01)]);
 
-    await db.execute({ args: [vector(1), vector(1), target], sql: EMBED });
-    await db.execute({ args: [vector(0.99), vector(0.99), CATALOGUE_ID], sql: EMBED }); // nearest
-    await db.execute({ args: [vector(0.2), vector(0.2), FINDING_ID], sql: EMBED }); // further
+    await db.execute({ args: [vector(1), target], sql: EMBED });
+    await db.execute({ args: [vector(0.99), CATALOGUE_ID], sql: EMBED }); // nearest
+    await db.execute({ args: [vector(0.2), FINDING_ID], sql: EMBED }); // further
 
     const similar = await getSimilarFindings(target, 6);
 
@@ -227,7 +227,7 @@ describe("the certification rail — a catalogue track is measured, never spoken
     const result = await db.execute({
       args: [trackId],
       sql: `select bpm, key, features_json, analyzed_from,
-                   embedding_json is not null as has_vector, source_audio_key
+                   embedding_blob is not null as has_vector, source_audio_key
             from tracks where track_id = ?`,
     });
 
@@ -265,8 +265,8 @@ describe("the certification rail — a catalogue track is measured, never spoken
     const vector = JSON.stringify(Array.from({ length: 1024 }, () => 0.03125));
     await updateTrack(CATALOGUE_ID, { embedding: vector }, { writer: "agent" });
 
-    // The vector lands as the native F32_BLOB the database ranks in SQL — the ONLY form now
-    // (the old `embedding_json` mirror is gone). Without this write the row has no vector, and
+    // The vector lands as the native F32_BLOB the database ranks in SQL — the ONLY stored
+    // form. Without this write the row has no vector, and
     // a row with no vector is invisible to The Ear — which the pre-split queues guaranteed.
     const row = await db.execute({
       args: [CATALOGUE_ID],

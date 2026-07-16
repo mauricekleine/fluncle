@@ -1,6 +1,5 @@
 import { type Client } from "@libsql/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { backfillEmbeddingBlob } from "../../../scripts/backfill-embedding-blob";
 import { cosineSimilarity, EMBEDDING_DIMS, readEmbeddingBlob, toVectorProbe } from "./embedding";
 import { createIntegrationDb, seedTrack } from "./integration-db";
 import { parseKey, toCamelot } from "../key-camelot";
@@ -77,9 +76,12 @@ async function seed(rows: MixSeed[]): Promise<void> {
         JSON.stringify({ centroidHz: 1000 + index, highRatio: index / 100, onsetRate: index }),
         row.trackId,
       ],
+      // `vector32(NULL)` throws, so an un-embedded fixture writes a null blob explicitly.
       sql: `update tracks
-            set key = ?, bpm = ?, embedding_json = ?, features_json = ?
-            where track_id = ?`,
+            set key = ?1, bpm = ?2,
+                embedding_blob = case when ?3 is null then null else vector32(?3) end,
+                features_json = ?4
+            where track_id = ?5`,
     });
     await db.execute({
       args: [row.galaxyId ?? null, row.trackId],
@@ -145,7 +147,6 @@ describe("getMixableTracks", () => {
     const rows = corpus();
 
     await seed(rows);
-    await backfillEmbeddingBlob(db);
 
     // The sonic gate is OPEN at 30 embedded findings (435 pairs ≥ 50), so the MuQ term is
     // live and this really is pinning the SQL-computed cosine against the JS-computed one.
@@ -163,22 +164,20 @@ describe("getMixableTracks", () => {
 
   it("keeps the reason chip the engine picked", async () => {
     await seed(corpus());
-    await backfillEmbeddingBlob(db);
 
     const [first] = await getMixableTracks("t_00", { limit: 1 });
 
     expect(first?.reason).toMatchObject({ kind: expect.any(String) });
   });
 
-  it("scores a candidate with no blob as vector-less, not from its JSON", async () => {
-    // The scan reads the native `embedding_blob` column DIRECTLY and the DB does the cosine
-    // in SQL. A candidate with no blob keeps its place on the rail (key+BPM still mix) but its
-    // sonic term goes null, exactly as an un-embedded row. Safe: the write path always sets the
-    // blob (track-update.ts), so this state does not occur outside a test.
+  it("scores a candidate with no blob as vector-less", async () => {
+    // The scan reads the native `embedding_blob` column and the DB does the cosine in SQL. A
+    // candidate with no blob keeps its place on the rail (key+BPM still mix) but its sonic term
+    // goes null, exactly as an un-embedded row. Safe: the write path always sets the blob
+    // (track-update.ts), so this state does not occur outside a test.
     const rows = corpus();
 
     await seed(rows);
-    await backfillEmbeddingBlob(db);
     await db.execute(`update tracks set embedding_blob = null where track_id in ('t_01','t_02')`);
 
     const fromSql = (await getMixableTracks("t_00", { limit: 12 })).map(
@@ -194,7 +193,6 @@ describe("getMixableTracks", () => {
 
   it("drops the excluded tracks server-side", async () => {
     await seed(corpus());
-    await backfillEmbeddingBlob(db);
 
     const [first] = await getMixableTracks("t_00", { limit: 1 });
     const excluded = await getMixableTracks("t_00", {
@@ -211,7 +209,6 @@ describe("getMixableTracks", () => {
     );
 
     await seed(rows);
-    await backfillEmbeddingBlob(db);
 
     const fromSql = (await getMixableTracks("t_00", { limit: 6 })).map(
       (candidate) => candidate.trackId,
@@ -233,7 +230,6 @@ describe("getFindingsByGalaxyRanked", () => {
     const rows = corpus();
 
     await seed(rows);
-    await backfillEmbeddingBlob(db);
 
     const centroid = pseudoVector(1);
     const members = rows.filter((row) => row.galaxyId === "galaxy-0");
@@ -258,7 +254,6 @@ describe("getFindingsByGalaxyRanked", () => {
     );
 
     await seed(rows);
-    await backfillEmbeddingBlob(db);
 
     const ranked = await getFindingsByGalaxyRanked("galaxy-0", pseudoVector(1), 20, 0);
     const ids = ranked.map((item) => item.trackId);
@@ -274,22 +269,9 @@ describe("getFindingsByGalaxyRanked", () => {
   });
 });
 
-describe("backfillEmbeddingBlob", () => {
-  it("converts every readable vector, and is a no-op on a second run", async () => {
+describe("the seeded vector round-trips through vector32/readEmbeddingBlob", () => {
+  it("writes the same float32s the JSON held", async () => {
     await seed(corpus());
-
-    const first = await backfillEmbeddingBlob(db);
-
-    expect(first).toEqual({ converted: 30, malformed: 0 });
-
-    const second = await backfillEmbeddingBlob(db);
-
-    expect(second).toEqual({ converted: 0, malformed: 0 });
-  });
-
-  it("writes the same float32s the JSON held (the blob round-trips)", async () => {
-    await seed(corpus());
-    await backfillEmbeddingBlob(db);
 
     const row = await db.execute(`select embedding_blob from tracks where track_id = 't_00'`);
     // The driver hands a blob back as an ArrayBuffer, NOT a Uint8Array — the quirk
@@ -304,16 +286,5 @@ describe("backfillEmbeddingBlob", () => {
     expect(decoded).not.toBeNull();
     // float32 storage, so compare at float32 precision, not bit-for-bit against a float64.
     expect(cosineSimilarity(decoded ?? [], original)).toBeCloseTo(1, 6);
-  });
-
-  it("skips an unreadable vector and NAMES it rather than throwing", async () => {
-    await seed(corpus());
-    await db.execute(
-      `update tracks set embedding_json = '["x"]' where track_id in ('t_01','t_02')`,
-    );
-
-    const result = await backfillEmbeddingBlob(db);
-
-    expect(result).toEqual({ converted: 28, malformed: 2 });
   });
 });

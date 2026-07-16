@@ -22,7 +22,7 @@
  *      at run time.
  *
  * Reads the 17 set members off the PUBLIC API (key/bpm/features are public), so it is
- * reproducible with no DB. `embedding_json` presence is NOT public — run against a
+ * reproducible with no DB. Embedding presence is NOT public — run against a
  * dev server (`--base http://localhost:3000`) if you want the embedding coverage line
  * populated; against the public API it prints "unknown (not public)".
  *

@@ -603,7 +603,7 @@ async function resolveAnchor(
  * ~12 winners and never the corpus. The three rules from docs/local-database.md, and why each
  * one is load-bearing:
  *
- *   1. RANK IN SQL. Pulling `embedding_json` into the isolate to cosine it there is 21 KB per
+ *   1. RANK IN SQL. Pulling the JSON vector into the isolate to cosine it there is 21 KB per
  *      candidate — it threw at ~460 rows against local sqld's 10 MiB cap, and on hosted
  *      (which has no cap) it would silently grow toward OOMing the 128 MB Worker.
  *   2. BIND THE PROBE AS A RAW BLOB (`toVectorProbe`), never as a JSON string: 1,883 ms vs

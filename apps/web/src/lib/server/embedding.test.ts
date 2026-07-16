@@ -1,14 +1,8 @@
 import { describe, expect, it } from "vitest";
-import {
-  coerceEmbedding,
-  cosineSimilarity,
-  EMBEDDING_DIMS,
-  parseEmbedding,
-  rankBySimilarity,
-} from "./embedding";
+import { coerceEmbedding, cosineSimilarity, EMBEDDING_DIMS, rankBySimilarity } from "./embedding";
 
 // The pure core of the MuQ audio-embedding pipeline (docs/track-lifecycle.md):
-// the shape gate the embed step's write-back leans on (coerce/parse) and the cosine
+// the shape gate the embed step's write-back leans on (coerce) and the cosine
 // ranking the public `get_similar_findings` op + the `/log` "more like this" row read.
 // Fixture vectors only — no DB, no network.
 
@@ -48,25 +42,6 @@ describe("coerceEmbedding — the write-back shape gate", () => {
     expect(coerceEmbedding(undefined)).toBeNull();
     expect(coerceEmbedding({ length: EMBEDDING_DIMS })).toBeNull();
     expect(coerceEmbedding("[]")).toBeNull();
-  });
-});
-
-describe("parseEmbedding — the stored-JSON reader", () => {
-  it("parses a bare JSON array of 1024 numbers", () => {
-    const raw = vec((index) => Math.sin(index));
-    expect(parseEmbedding(JSON.stringify(raw))).toEqual(raw);
-  });
-
-  it("returns null for absent, empty, or non-JSON input", () => {
-    expect(parseEmbedding(null)).toBeNull();
-    expect(parseEmbedding(undefined)).toBeNull();
-    expect(parseEmbedding("")).toBeNull();
-    expect(parseEmbedding("not json")).toBeNull();
-  });
-
-  it("returns null for a well-formed JSON value of the wrong shape", () => {
-    expect(parseEmbedding(JSON.stringify(vec().slice(0, 10)))).toBeNull();
-    expect(parseEmbedding(JSON.stringify({ embedding: vec() }))).toBeNull();
   });
 });
 

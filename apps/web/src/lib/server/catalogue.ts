@@ -1130,7 +1130,6 @@ export async function rankCatalogue(limit = RANK_BATCH_SIZE): Promise<RankCatalo
           ],
           sql: `update tracks
               set capture_status = ?,
-                  embedding_json = null,
                   embedding_blob = null,
                   nearest_finding_score = null,
                   nearest_finding_track_id = ?,
@@ -1988,7 +1987,6 @@ export async function flagWrongAudio(trackId: string): Promise<boolean> {
     args: [WRONG_AUDIO_STATUS, rejected, trackId],
     sql: `update tracks
           set capture_status = ?,
-              embedding_json = null,
               embedding_blob = null,
               analyzed_from = null,
               capture_verification = null,
@@ -2217,7 +2215,6 @@ export async function verifyCapture(
     args: [WRONG_AUDIO_STATUS, preAudio.priority, preAudio.duplicateOf, rejected, now, trackId],
     sql: `update tracks
           set capture_status = ?,
-              embedding_json = null,
               embedding_blob = null,
               nearest_finding_score = null,
               capture_priority = ?,

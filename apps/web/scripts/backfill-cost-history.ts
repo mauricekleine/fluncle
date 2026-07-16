@@ -45,7 +45,7 @@ const AVG_EMBED_SECONDS = 8; // one MuQ embedding
 type FindingRow = {
   added_at: string;
   bpm: number | null;
-  embedding_json: string | null;
+  has_embedding: number;
   log_id: string;
   observation_script: string | null;
   track_id: string;
@@ -101,8 +101,8 @@ function buildEvents(row: FindingRow): CostEventInput[] {
     });
   }
 
-  // Embed seconds — subsidized/self (an embedding_json means the finding was embedded).
-  if (row.embedding_json?.trim()) {
+  // Embed seconds — subsidized/self (an embedding means the finding was embedded).
+  if (row.has_embedding) {
     events.push({
       ...base,
       costBasis: "subsidized",
@@ -125,7 +125,7 @@ async function main() {
   const result = await db.execute({
     sql: `select tracks.track_id, findings.log_id, findings.added_at,
                  findings.observation_script, findings.video_url, tracks.bpm,
-                 tracks.embedding_json
+                 tracks.embedding_blob is not null as has_embedding
             from findings join tracks on tracks.track_id = findings.track_id
            where findings.log_id is not null`,
   });

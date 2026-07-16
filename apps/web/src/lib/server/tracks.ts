@@ -1138,7 +1138,7 @@ export async function getTrackNeighbors(track: {
  * THE RANKING IS AN EXACT SCAN IN SQL — `order by vector_distance_cos(vector, ?) limit N`
  * with the probe bound as a RAW BLOB (`toVectorProbe`; see embedding.ts for why the
  * binding is the whole ballgame). It returns the ~6 winners, never the corpus: 100%
- * recall, one round trip, ~2.5 KB. The old shape — every `embedding_json` into the
+ * recall, one round trip, ~2.5 KB. The old shape — every stored JSON vector into the
  * isolate, cosine there — hard-failed `turso dev`'s 10 MiB response cap at 460 embedded
  * findings and was on course to OOM the 128 MB Worker isolate in prod
  * (docs/local-database.md "Local is not production"). No ANN index: `libsql_vector_idx`

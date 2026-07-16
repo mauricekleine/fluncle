@@ -5,10 +5,9 @@
 // the DATABASE can rank) via `vector32()` — the sole stored form and the source of
 // truth. Everything downstream — `get_similar_findings`, the `/mix` rail, a galaxy's
 // core-first order, the `fluncle-cluster` corpus read — ranks IN SQL against the blob.
-// (A legacy `tracks.embedding_json` column still exists but is inert, no longer written
-// or read; it is being retired — see schema.ts.)
 //
-// WHY THE RANKING MOVED INTO SQL. It used to pull every row's JSON vector into
+// WHY THE RANKING MOVED INTO SQL. It used to store the vector as JSON too and pull every
+// row's JSON into
 // the isolate and cosine-rank there. That path is dead (measured; the numbers live in
 // docs/local-database.md "Local is not production"): a 1024-d vector is 21,804 B as
 // JSON, so the unpaginated
@@ -65,28 +64,6 @@ export function coerceEmbedding(raw: unknown): number[] | null {
   }
 
   return vector;
-}
-
-/**
- * Parse a stored `embedding_json` string into a validated vector, or `null` when it
- * is absent / not JSON / the wrong shape. The wire + storage format is a bare JSON
- * array of {@link EMBEDDING_DIMS} numbers (the box orchestrator unwraps the Python
- * script's `{ embedding }` envelope to this bare array before the write).
- */
-export function parseEmbedding(json: string | null | undefined): number[] | null {
-  if (!json) {
-    return null;
-  }
-
-  let raw: unknown;
-
-  try {
-    raw = JSON.parse(json);
-  } catch {
-    return null;
-  }
-
-  return coerceEmbedding(raw);
 }
 
 /**

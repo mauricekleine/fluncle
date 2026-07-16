@@ -260,13 +260,6 @@ export const tracks = sqliteTable(
     // lib/server/embedding.ts for the read contract (`readEmbeddingBlob`) and the
     // raw-blob probe binding.
     embeddingBlob: float32Vector("embedding_blob"),
-    // LEGACY. The original JSON storage form of the vector. No code writes or reads it
-    // anymore — the blob above is the sole stored form — so it is inert; the column is
-    // being retired (its `DROP COLUMN` is the follow-up now that the blob path has run in
-    // production). At ~20 KB a row it was 82% of the database at 100k rows, which is why
-    // it goes. Until the drop lands, `scripts/backfill-embedding-blob.ts` still runs on
-    // deploy as a belt for any legacy blob-less straggler. See docs/track-lifecycle.md.
-    embeddingJson: text("embedding_json"),
     featuresJson: text("features_json"),
     // The Discogs release the finding resolves to (read-only enrichment, best-effort,
     // matched by artist + title since Discogs has no ISRC search). inMasterId is the
@@ -408,9 +401,9 @@ export const tracks = sqliteTable(
     // predicate matches a shrinking slice of a growing table, so the index shrinks as the
     // backlog drains instead of growing with the archive.
     //
-    // It earns its keep twice. `embedding_json` is a ~20 KB JSON vector, so a `tracks` row
-    // carrying one SPILLS to overflow pages: a full scan of the table to find the un-embedded
-    // rows costs (roughly) a page per embedded row — the exact shape AGENTS.md warns about, and
+    // It earns its keep twice. `embedding_blob` is a 4 KB `F32_BLOB(1024)`, so a `tracks` row
+    // carrying one SPILLS off the page: a full scan of the table to find the un-embedded
+    // rows costs (roughly) an extra page per embedded row — the exact shape AGENTS.md warns about, and
     // it is paid on every 5-minute box tick and on every page of the GPU batch. Driving that
     // predicate off this index reads only the backlog. And it is what makes `countTrackWork`
     // affordable: the honest "how many are still queued" the batch reports is an index count,
@@ -436,7 +429,7 @@ export const tracks = sqliteTable(
     //   - The candidate scan (`getMixableTracks`). The rail only ever wants the ~8 Camelot
     //     classes a named harmonic move can reach, so the scan is `key in (…)` — an index
     //     range, roughly a third of the archive, instead of a full scan whose every
-    //     embedded row spills to overflow pages (the `embedding_json` trap above).
+    //     embedded row spills off the page (the `embedding_blob` spill above).
     //   - The key histogram (`getMixChainDepth`). A `group by key` over 24-ish distinct
     //     values, which this index answers WITHOUT touching the table at all.
     //
@@ -556,7 +549,7 @@ export const findings = sqliteTable(
     }),
     enrichmentStatus: text("enrichment_status").notNull().default("pending"),
     // The sonic galaxy this finding belongs to — a nullable logical FK to `galaxies.id`,
-    // the internal-grouping precedent of `embedding_json`. Hard assignment (one galaxy
+    // the internal-grouping precedent of `embedding_blob`. Hard assignment (one galaxy
     // per finding), written by the on-box `fluncle-cluster` cron via the agent-tier
     // `update_track` path (assignment-only nightly step). Internal like the embedding, so
     // writing it moves no public lastmod (kept OUT of `VISIBLE_FIELDS`); it surfaces on

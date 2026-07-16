@@ -500,10 +500,9 @@ export async function updateTrack(
   }
 
   if (update.embedding !== undefined) {
-    // The vector lands as a native `F32_BLOB(1024)` — the ONLY form now: every similarity
+    // The vector lands as a native `F32_BLOB(1024)` — the ONLY stored form: every similarity
     // read ranks `vector_distance_cos(embedding_blob, ?)` in SQL, and `vector32()` converts
-    // the validated JSON server-side (the Worker never encodes a vector). The write no
-    // longer mirrors to the `embedding_json` column (that column is being retired).
+    // the validated JSON server-side (the Worker never encodes a vector).
     //
     // Empty string CLEARS it — null, not "", so the `embedding_blob IS NULL` embed queue
     // treats a cleared row as un-embedded (re-embed on the next tick). `vector32(NULL)`

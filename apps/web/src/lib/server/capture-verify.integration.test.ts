@@ -37,8 +37,8 @@ async function embed(trackId: string): Promise<void> {
   const vector = JSON.stringify(Array.from({ length: 1024 }, (_, index) => (index === 0 ? 1 : 0)));
 
   await db.execute({
-    args: [vector, vector, trackId],
-    sql: `update tracks set embedding_json = ?, embedding_blob = vector32(?) where track_id = ?`,
+    args: [vector, trackId],
+    sql: `update tracks set embedding_blob = vector32(?) where track_id = ?`,
   });
 }
 
@@ -47,7 +47,7 @@ type Row = {
   capture_status: string;
   capture_verification: null | string;
   capture_verified_at: null | string;
-  embedding_json: null | string;
+  embedding_blob: unknown;
   source_audio_rejected: null | string;
 };
 
@@ -55,7 +55,7 @@ async function readRow(trackId: string): Promise<Row> {
   const result = await db.execute({
     args: [trackId],
     sql: `select capture_status, capture_verification, capture_verified_at, capture_priority,
-                 embedding_json, source_audio_rejected
+                 embedding_blob, source_audio_rejected
           from tracks where track_id = ?`,
   });
 
@@ -103,7 +103,7 @@ describe("verifyCapture — the verdict routing", () => {
     // The wrong-audio rewind: status flipped, the poisoned vector dropped, the pre-audio tier
     // re-derived (a plain row lands 0 — back on the capture ladder for a fresh download).
     expect(row.capture_status).toBe(WRONG_AUDIO_STATUS);
-    expect(row.embedding_json).toBeNull();
+    expect(row.embedding_blob).toBeNull();
     expect(row.capture_priority).toBe(0);
     // The verdict IS kept on the quarantined row — the lens's honest WHY (a preview mismatch, not
     // an archive collision); the fresh capture's ingest gate overwrites it when the re-download lands.
@@ -129,7 +129,7 @@ describe("verifyCapture — the verdict routing", () => {
     // …and NOTHING is rewound: the status, the vector, and the memory are untouched until the
     // operator rules with flag_wrong_audio.
     expect(row.capture_status).toBe("done");
-    expect(row.embedding_json).not.toBeNull();
+    expect(row.embedding_blob).not.toBeNull();
     expect(row.source_audio_rejected).toBeNull();
   });
 

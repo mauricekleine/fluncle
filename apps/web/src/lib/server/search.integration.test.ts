@@ -86,13 +86,12 @@ async function seed(client: Client, track: Fixture): Promise<void> {
       track.releaseDate ?? null,
       `https://open.spotify.com/track/${track.trackId}`,
       180_000,
-      embedding ? JSON.stringify([...embedding]) : null,
       embedding ? new Uint8Array(embedding.buffer) : null,
     ],
     sql: `insert into tracks
       (track_id, title, artists_json, album, label, key, bpm, release_date, spotify_url,
-       duration_ms, embedding_json, embedding_blob)
-      values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       duration_ms, embedding_blob)
+      values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   });
 
   if (track.logId !== undefined) {
