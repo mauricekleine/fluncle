@@ -3,10 +3,14 @@
  * THE ARTIST-GRAPH ONE-OFF BACKFILL — operator-run, by hand, RESUMABLE. NOT in the deploy chain.
  *
  * IT HITS PRODUCTION TURSO and it hits SPOTIFY. Run it on the operator machine:
- *   `bun run --cwd apps/web scripts/backfill-artist-graph.ts`
- * It reads `TURSO_DATABASE_URL`/`TURSO_AUTH_TOKEN` (and the stored Spotify grant) from the
- * environment (locally, `.dev.vars`). Print the `nextCursor` it reports and pass it back to resume:
- *   `bun run --cwd apps/web scripts/backfill-artist-graph.ts <nextCursor>`
+ *   `FLUNCLE_TURSO_OP_ITEM="<item>" bun run --cwd apps/web scripts/backfill-artist-graph.ts`
+ * Production Turso credentials come from 1Password via `op`, NOT `.dev.vars` (in this repo that
+ * points at the tiny LOCAL per-worktree dev DB). Point `FLUNCLE_TURSO_OP_ITEM` at the item holding
+ * the production Turso credentials (the same var + item `db-pull-prod.ts` uses), so `op` must be
+ * unlocked — that biometric unlock IS the human-in-the-loop gate on touching prod. The Spotify
+ * grant is still read from the environment. Print the `nextCursor` it reports and pass it back to
+ * resume:
+ *   `FLUNCLE_TURSO_OP_ITEM="<item>" bun run --cwd apps/web scripts/backfill-artist-graph.ts <nextCursor>`
  *
  * WHY IT EXISTS. Slice 003 connects a crawled track's artists by their stable `spotify_artist_id`
  * at the Spotify-ANCHOR step (crawl.ts `connectAnchorArtists`). That is the path FROM NOW ON. But a
@@ -27,10 +31,7 @@
  * STOP on the first Spotify 429 (grinding the wall earns a longer ban). It resumes from the printed
  * `nextCursor`; every write is idempotent, so a re-run is safe. See docs/artist-relationship.md.
  */
-import { type Client, createClient } from "@libsql/client";
-import { config } from "dotenv";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { type Client, createClient } from "@libsql/client/web";
 import { spotifyTrackIdOf } from "../src/lib/spotify-track-id";
 import { fetchTrackMetadata } from "../src/lib/server/spotify";
 import { upsertTrackArtists } from "../src/lib/server/artists";
@@ -161,19 +162,33 @@ export async function backfillArtistGraph(
   return result;
 }
 
+const ITEM = process.env.FLUNCLE_TURSO_OP_ITEM;
+
+/** Read one field of the prod-Turso 1Password item, exactly as `db-pull-prod.ts` does. */
+async function readSecret(field: string): Promise<string> {
+  try {
+    const value = await Bun.$`op read ${`${ITEM}/${field}`}`.text();
+
+    return value.trim();
+  } catch {
+    throw new Error(
+      `Could not read ${field} from 1Password (${ITEM}). Unlock 1Password and enable its CLI integration, then retry.`,
+    );
+  }
+}
+
 async function main(): Promise<void> {
-  if (!process.env.TURSO_DATABASE_URL) {
-    config({ path: join(dirname(fileURLToPath(import.meta.url)), "..", ".dev.vars") });
+  if (!ITEM) {
+    throw new Error(
+      "Set FLUNCLE_TURSO_OP_ITEM to the 1Password item holding the production Turso credentials — see the ops runbook note.",
+    );
   }
 
-  const url = process.env.TURSO_DATABASE_URL;
-
-  if (!url) {
-    throw new Error("TURSO_DATABASE_URL is required (set it in apps/web/.dev.vars)");
-  }
-
-  const authToken = process.env.TURSO_AUTH_TOKEN;
-  const client = createClient(authToken ? { authToken, url } : { url });
+  const url = await readSecret("TURSO_DATABASE_URL");
+  const authToken = await readSecret("TURSO_AUTH_TOKEN");
+  // intMode:"bigint" keeps large integers exact; the script reads only text cells and uses JS array
+  // lengths for the batch check, so nothing here needs bigint narrowing.
+  const client = createClient({ authToken, intMode: "bigint", url });
   const cursor = process.argv[2];
 
   const result = await backfillArtistGraph(

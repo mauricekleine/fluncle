@@ -4,8 +4,11 @@
  *
  * IT HITS PRODUCTION TURSO and it hits MUSICBRAINZ. Run it on the operator machine after this
  * migration ships:
- *   `bun run --cwd apps/web scripts/backfill-label-mbid.ts`
- * It reads `TURSO_DATABASE_URL`/`TURSO_AUTH_TOKEN` from the environment (locally, `.dev.vars`).
+ *   `FLUNCLE_TURSO_OP_ITEM="<item>" bun run --cwd apps/web scripts/backfill-label-mbid.ts`
+ * Production credentials come from 1Password via `op`, NOT `.dev.vars` (in this repo that points at
+ * the tiny LOCAL per-worktree dev DB). Point `FLUNCLE_TURSO_OP_ITEM` at the item holding the
+ * production Turso credentials (the same var + item `db-pull-prod.ts` uses), so `op` must be
+ * unlocked — that biometric unlock IS the human-in-the-loop gate on touching prod.
  *
  * WHY IT IS ONE-OFF, NOT A RECURRING DEPLOY STEP. The label MBID (`labels.mb_label_id`) is now the
  * DISCOVERED-label fold key, and it is populated INLINE from here forward: the catalogue crawler
@@ -34,11 +37,8 @@
  * MusicBrainz starts actively throttling, the run STOPS (it does not re-storm), and a later re-run
  * picks up where it left off (fill-empty-only makes that safe).
  */
-import { type Client, createClient } from "@libsql/client";
+import { type Client, createClient } from "@libsql/client/web";
 import { labelFold } from "@fluncle/contracts/util/galaxy-slug";
-import { config } from "dotenv";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { mbFetch } from "../src/lib/server/musicbrainz";
 
 /** Only the MusicBrainz `/label` search fields we consume. */
@@ -177,19 +177,33 @@ export async function backfillLabelMbids(
   return result;
 }
 
+const ITEM = process.env.FLUNCLE_TURSO_OP_ITEM;
+
+/** Read one field of the prod-Turso 1Password item, exactly as `db-pull-prod.ts` does. */
+async function readSecret(field: string): Promise<string> {
+  try {
+    const value = await Bun.$`op read ${`${ITEM}/${field}`}`.text();
+
+    return value.trim();
+  } catch {
+    throw new Error(
+      `Could not read ${field} from 1Password (${ITEM}). Unlock 1Password and enable its CLI integration, then retry.`,
+    );
+  }
+}
+
 async function main(): Promise<void> {
-  if (!process.env.TURSO_DATABASE_URL) {
-    config({ path: join(dirname(fileURLToPath(import.meta.url)), "..", ".dev.vars") });
+  if (!ITEM) {
+    throw new Error(
+      "Set FLUNCLE_TURSO_OP_ITEM to the 1Password item holding the production Turso credentials — see the ops runbook note.",
+    );
   }
 
-  const url = process.env.TURSO_DATABASE_URL;
-
-  if (!url) {
-    throw new Error("TURSO_DATABASE_URL is required (set it in apps/web/.dev.vars)");
-  }
-
-  const authToken = process.env.TURSO_AUTH_TOKEN;
-  const client = createClient(authToken ? { authToken, url } : { url });
+  const url = await readSecret("TURSO_DATABASE_URL");
+  const authToken = await readSecret("TURSO_AUTH_TOKEN");
+  // intMode:"bigint" keeps large integers exact; the script reads only text cells and `rowsAffected`
+  // (always a JS number), so nothing here needs bigint narrowing.
+  const client = createClient({ authToken, intMode: "bigint", url });
   const result = await backfillLabelMbids(client, resolveLabelMbidByName);
 
   console.log(
