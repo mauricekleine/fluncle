@@ -23,6 +23,11 @@ export const PrivateSubmissionSchema = z
     artists: z.array(z.string()),
     createdAt: z.string(),
     id: z.string(),
+    // The coordinate of the finding an APPROVED submission became — present only
+    // when the submission is `logged` AND its recording carries a certified
+    // finding. OPTIONAL and additive: a pending/passed-on row omits it, and the
+    // Sent ledger links the row to `/log/<id>` when it's there.
+    logId: z.string().optional(),
     note: z.string().optional(),
     source: z.string(),
     spotifyUrl: z.string(),

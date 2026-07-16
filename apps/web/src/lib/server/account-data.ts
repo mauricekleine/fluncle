@@ -81,6 +81,10 @@ type SubmissionRow = {
   artists_json: string;
   created_at: string;
   id: string;
+  // The certified finding this recording became, via the LEFT JOIN on
+  // `findings.track_id = submissions.spotify_track_id`. NULL when no finding
+  // exists (the recording was never certified, or the submission is not approved).
+  log_id: string | null;
   note: string | null;
   source: string;
   spotify_url: string;
@@ -164,6 +168,10 @@ export type PrivateSubmissionItem = {
   artists: string[];
   createdAt: string;
   id: string;
+  // The coordinate of the finding an approved submission became — present only on
+  // a `logged` submission whose recording carries a certified finding. The Sent
+  // ledger links the row to `/log/<id>` when it's here.
+  logId?: string;
   note?: string;
   source: string;
   spotifyUrl: string;
@@ -892,9 +900,17 @@ export async function listUserSubmissions(
     await getDb()
   ).execute({
     args: [user.id],
-    sql: `select id, title, artists_json, spotify_url, source, status, note, created_at
-      from submissions where user_id = ?
-      order by created_at desc`,
+    // LEFT JOIN the certification: a submission's `spotify_track_id` is the recording
+    // id, which becomes `tracks.track_id` when it's added — and `findings.track_id` is
+    // that same key (1:1). So `findings.log_id` is the coordinate the recording became,
+    // present only once it's a certified finding. The join stays a per-row seek (findings
+    // PK), never a scan.
+    sql: `select s.id, s.title, s.artists_json, s.spotify_url, s.source, s.status, s.note,
+        s.created_at, f.log_id
+      from submissions s
+      left join findings f on f.track_id = s.spotify_track_id
+      where s.user_id = ?
+      order by s.created_at desc`,
   });
 
   return {
@@ -903,6 +919,11 @@ export async function listUserSubmissions(
       artists: parseArtistsJson(row.artists_json),
       createdAt: row.created_at,
       id: row.id,
+      // The finding link is surfaced only for an APPROVED (logged) submission — the
+      // one that became a finding. A pending/passed-on row omits it even if a finding
+      // happens to share the recording (the brief: an approved submission links to the
+      // finding it became).
+      logId: row.status === "approved" ? (row.log_id ?? undefined) : undefined,
       note: row.note ?? undefined,
       source: row.source,
       spotifyUrl: row.spotify_url,

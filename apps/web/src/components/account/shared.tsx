@@ -72,10 +72,13 @@ export type SavedFinding = {
 // The submission status arrives already folded to the reader's vocabulary
 // ("logged" / "passed_on" / "pending_review", from `listUserSubmissions`). Typed as
 // a plain string so the badge's rendering carries over from the monolith unchanged.
+// `logId` rides only on an approved (logged) submission whose recording became a
+// certified finding — the Sent ledger links that row to `/log/<id>`.
 export type Submission = {
   artists: string[];
   createdAt: string;
   id: string;
+  logId?: string;
   status: string;
   title: string;
 };
