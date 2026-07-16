@@ -64,6 +64,16 @@ export function bangersCount(count: number): string {
   return `${count} ${count === 1 ? "banger" : "bangers"}`;
 }
 
+/**
+ * "1 track" / "12 tracks" — the count noun for a catalogue entity's renderable tracks (the
+ * quiet count on a hub's "also in the catalogue" tile). Deliberately NOT `findingsCount`: a
+ * catalogue entity is one Fluncle has certified nothing on, so its tiles count plain TRACKS,
+ * never findings (docs/album-entity.md, the unnamed tier). Same one-place pluralization.
+ */
+export function tracksCount(count: number): string {
+  return `${count} ${count === 1 ? "track" : "tracks"}`;
+}
+
 export function formatIsoDuration(durationMs: number): string {
   // schema.org duration (ISO-8601), e.g. "PT3M37S".
   const totalSeconds = Math.round(durationMs / 1000);

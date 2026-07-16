@@ -2019,6 +2019,73 @@ body::before {
   color: var(--starlight-cream);
 }
 
+/* ── THE HUB'S "ALSO IN THE CATALOGUE" SECTION ──────────────────────────────────────────────
+   The SECOND section of /labels, /albums and /artists: the indexable findings-free entities the
+   crawler minted a page for. It reuses the same grid as the editorial section above; the register
+   is what changes — this is the UNLIT one (DESIGN.md). The tiles sit a step dimmer at rest and
+   heat to full on hover/focus, so the eye reads them as quieter than the findings without a second
+   layout, and the One Sun budget stays with the findings: the cover border never heats to gold
+   here (a neutral Dust lift instead), only the focus ring stays canonical Eclipse. The heading is
+   allowed — unlike a graph page's quieter rows, a hub section names a real SECTION, not the tier
+   (docs/album-entity.md, the unnamed tier). */
+.catalogue-hub {
+  /* A hairline above the section sets it apart from the findings grid without a card (One Pane). */
+  border-top: 1px solid var(--border);
+  padding-top: 1.6rem;
+}
+
+.catalogue-hub-head {
+  margin-bottom: 1.1rem;
+}
+
+.catalogue-hub-heading {
+  color: var(--muted-foreground);
+  font-size: 0.76rem;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  margin: 0;
+  text-transform: uppercase;
+}
+
+.catalogue-hub-note {
+  color: var(--muted-foreground);
+  font-size: 0.85rem;
+  margin-top: 0.35rem;
+}
+
+/* The dimming that makes a tile read as unlit: the artwork/avatar and the name sit a step down at
+   rest and lift to full on hover/focus. The name still heats to cream through the grid's own hover
+   rule; only the resting light drops. */
+.catalogue-grid .artist-grid-cover,
+.catalogue-grid .artist-card-avatar {
+  opacity: 0.66;
+  transition: opacity 150ms ease-out;
+}
+
+.catalogue-grid a:hover .artist-grid-cover,
+.catalogue-grid a:focus-visible .artist-grid-cover,
+.catalogue-grid a:hover .artist-card-avatar,
+.catalogue-grid a:focus-visible .artist-card-avatar {
+  /* A neutral Dust lift, never the gold border the findings grid takes (the light is theirs). */
+  border-color: color-mix(in oklch, var(--border) 85%, transparent);
+  opacity: 1;
+}
+
+.catalogue-grid .artist-grid-line {
+  color: var(--muted-foreground);
+}
+
+/* The infinite-scroll sentinel: a full-width row below the grid that holds the loading spinner
+   and is what the IntersectionObserver watches. It carries no tile of its own. */
+.catalogue-hub-sentinel {
+  align-items: center;
+  color: var(--muted-foreground);
+  display: flex;
+  grid-column: 1 / -1;
+  justify-content: center;
+  min-height: 2.5rem;
+}
+
 /* The album page's uplink to its label — one quiet line under the masthead, the album →
    label edge of the graph made visible. Stardust ink; it heats to cream on hover like every
    other quiet link, and never carries gold at rest (One Sun). */
