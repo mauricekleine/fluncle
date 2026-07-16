@@ -17,6 +17,7 @@ import {
   SquaresFourIcon,
   TagIcon,
   BinocularsIcon,
+  UserCircleIcon,
   UsersThreeIcon,
   VinylRecordIcon,
   WaveTriangleIcon,
@@ -85,7 +86,8 @@ export type AdminNavCurrent =
   | "recordings"
   | "renders"
   | "system"
-  | "usage";
+  | "usage"
+  | "users";
 
 // The nav targets, as literal route paths so each entry renders a typed TanStack
 // <Link> (client-side navigation, not a full document reload — the whole point of
@@ -108,6 +110,7 @@ type AdminNavPath =
   | "/admin/recordings"
   | "/admin/renders"
   | "/admin/usage"
+  | "/admin/users"
   | "/status";
 
 type NavEntry = {
@@ -211,6 +214,10 @@ const OBJECT_SECTIONS: NavSection[] = [
   },
   {
     entries: [
+      // The account roster — the operator's read-only window on the gated rollout of the
+      // account-backed features (saved findings, saved sets, the Galaxy). Ops, not a
+      // pipeline object: it monitors the platform, it does not move a finding along.
+      { icon: UserCircleIcon, key: "users", label: "Users", to: "/admin/users" },
       { icon: ReceiptIcon, key: "costs", label: "Costs", to: "/admin/costs" },
       { icon: CurrencyDollarIcon, key: "usage", label: "Usage & cost", to: "/admin/usage" },
     ],

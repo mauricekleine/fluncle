@@ -57,6 +57,7 @@ import { adminSubscriptionsHandlers } from "./orpc/admin-subscriptions";
 import { adminTokensHandlers } from "./orpc/admin-tokens";
 import { adminTracksHandlers } from "./orpc/admin-tracks";
 import { adminTwitchHandlers } from "./orpc/admin-twitch";
+import { adminUsersHandlers } from "./orpc/admin-users";
 import { devicesHandlers } from "./orpc/devices";
 import { editionsHandlers } from "./orpc/editions";
 import { healthHandlers } from "./orpc/health";
@@ -117,6 +118,7 @@ export const router = os.router({
   ...adminTokensHandlers(os),
   ...adminTracksHandlers(os),
   ...adminTwitchHandlers(os),
+  ...adminUsersHandlers(os),
   ...devicesHandlers(os),
   ...editionsHandlers(os),
   ...healthHandlers(os),

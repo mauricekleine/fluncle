@@ -48,6 +48,7 @@ import { adminSubscriptionsContract } from "./admin-subscriptions";
 import { adminTokensContract } from "./admin-tokens";
 import { adminTracksContract } from "./admin-tracks";
 import { adminTwitchContract } from "./admin-twitch";
+import { adminUsersContract } from "./admin-users";
 import { devicesContract } from "./devices";
 import { editionsContract } from "./editions";
 import { healthContract } from "./health";
@@ -315,6 +316,12 @@ export {
 } from "./tracks";
 export { recordLiveState } from "./admin-twitch";
 export {
+  adminUsersContract,
+  listUsersAdmin,
+  UserAdminItemSchema,
+  UserStatusSchema,
+} from "./admin-users";
+export {
   type ClipDTO,
   ClipDTOSchema,
   EditionContentSchema,
@@ -372,6 +379,7 @@ export const contract = {
   ...adminTokensContract,
   ...adminTracksContract,
   ...adminTwitchContract,
+  ...adminUsersContract,
   ...devicesContract,
   ...editionsContract,
   ...healthContract,

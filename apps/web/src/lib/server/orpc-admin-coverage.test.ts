@@ -197,6 +197,11 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // `list_observation_neighbours` matches the public `list_` prefix so the check skips it.
   "GET /admin/tracks/{trackId}/observation-neighbours": "list_observation_neighbours",
   "GET /admin/tracks/{trackId}/social": "list_track_social",
+  // The user-account roster — contract-only oRPC (no TanStack route file; oRPC owns the
+  // path directly). Admin tier (agent-allowed read). `list_users_admin` matches the public
+  // `list_` prefix so the "holds exactly" check skips it; it lives here for completeness
+  // (like `list_labels_admin`).
+  "GET /admin/users": "list_users_admin",
   // The fresh-links INLINE EDIT (correct + approve a social's URL in one act) — contract-only
   // oRPC (no TanStack route file; oRPC owns the path directly, sharing it with the DELETE remove
   // above). Operator tier: it writes an operator-owned, confirmed, public link.
