@@ -356,7 +356,8 @@ export const tracks = sqliteTable(
   //
   // The GRAPH pages read `tracks` BY ENTITY: every track on this album / this label,
   // certified or not (the public `/album/<slug>` + `/label/<slug>` pages, docs/album-entity.md).
-  // Both pointers also serve the deploy backfill's `… _id is null` drain.
+  // Both pointers also serve a backfill's `… _id is null` drain — `label_id` the recurring
+  // labels deploy backfill, `album_id` the one-off `backfill-album-graph.ts` catch-up.
   //   - `album_id` / `label_id` — the entity a track hangs off.
   //
   // The EAR's two ordered reads are the whole reason its request path does no vector math

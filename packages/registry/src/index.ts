@@ -356,12 +356,12 @@ export const SURFACES: readonly Surface[] = [
   {
     discoveryUrl: `${SITE}/llms.txt`,
     exposedContent: [
-      "/artist/:slug — one artist's page: every published finding from that artist, plus their identity links",
+      "/artist/:slug — one artist's page: its findings, its identity links, and the rest of its catalogue",
     ],
     kind: "web_route",
     name: "web.artist",
     operatorNotes:
-      "Slug is real-name kebab-case (e.g. /artist/dbridge). Read-only; only artists with at least one published finding resolve (others 404). No probeConfig — the route is slug-parameterized, so there is no fixed URL to GET-probe.",
+      "Slug is real-name kebab-case (e.g. /artist/dbridge). Read-only; an artist earns a page on its CONTENT exactly as a label/album does — a row renders (a findings-free discovered artist included), a slug with no row 404s, and a page below the thin-content floor renders noindex + stays out of the sitemap (the ARTIST_INDEX_MIN_FINDINGS precedent). No probeConfig — the route is slug-parameterized, so there is no fixed URL to GET-probe.",
     route: "/artist",
     url: `${SITE}/artist`,
     weights: { ssh: "secondary", web: "secondary" },
@@ -390,7 +390,7 @@ export const SURFACES: readonly Surface[] = [
     kind: "web_route",
     name: "web.albums",
     operatorNotes:
-      "The album half of the graph, and the node that closes it: the album page carries the album → label edge (a link, plus `albumRelease.recordLabel` in its MusicAlbum JSON-LD). The INDEX is probeable (always 200); the slug page is not. Bounded by the archive, not the catalogue — an album earns a page by carrying a finding (docs/album-entity.md).",
+      "The album half of the graph, and the node that closes it: the album page carries the album → label edge (a link, plus `albumRelease.recordLabel` in its MusicAlbum JSON-LD). The INDEX is probeable (always 200); the slug page is not. The `/albums` index stays archive-bounded (findings-joined), but a crawl-minted findings-free album is PUBLIC on its content — a row renders its page, a below-floor page renders noindex + stays out of the sitemap, like a discovered label (docs/album-entity.md).",
     probeConfig: { cadenceMs: PROBE_CADENCE_MS, kind: "http", timeoutMs: PROBE_TIMEOUT_MS },
     route: "/albums",
     url: `${SITE}/albums`,
