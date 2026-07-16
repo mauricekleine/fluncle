@@ -1,4 +1,4 @@
-import { CircleNotchIcon, PlayIcon, UsersThreeIcon } from "@phosphor-icons/react";
+import { CircleNotchIcon, PlayIcon } from "@phosphor-icons/react";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import {
   Link,
@@ -14,7 +14,6 @@ import { HomeLinkHub } from "@/components/home/link-hub";
 import { LiveBanner } from "@/components/home/live-banner";
 import { StoriesDialog } from "@/components/stories/stories-dialog";
 import { TrackRow } from "@/components/track-row";
-import { Button } from "@fluncle/ui/components/button";
 import { ScrollArea } from "@fluncle/ui/components/scroll-area";
 import { TooltipProvider } from "@fluncle/ui/components/tooltip";
 import {
@@ -335,20 +334,9 @@ function HomePage() {
               <h1 className="home-nameplate">Fluncle's Findings</h1>
               <p className="home-tagline">Drum & bass bangers from another dimension.</p>
             </div>
-            <div className="home-masthead-actions">
-              {/* Join the Crew — the conventional top-right sign-up slot, wearing
-                  the glowing moving border (.crew-glow). Outline, not a gold fill,
-                  so the One Sun stays the Galaxy CTA's. */}
-              <Button
-                className="crew-glow"
-                nativeButton={false}
-                render={<Link aria-label="Join the crew" to="/account" />}
-                variant="outline"
-              >
-                <UsersThreeIcon aria-hidden="true" weight="bold" />
-                Join the crew
-              </Button>
-            </div>
+            {/* "Join the crew" moved into the global top bar (the crew slot), so it
+                reaches every public page instead of only home; the masthead keeps just
+                its nameplate and tagline. */}
           </header>
           <section className="grid gap-y-8 lg:min-h-0 lg:grid-cols-[minmax(240px,280px)_minmax(0,1fr)] lg:gap-x-10">
             <aside className="mx-auto flex w-full max-w-80 flex-col lg:mx-0 lg:max-w-none">

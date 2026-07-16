@@ -10,6 +10,7 @@
 
 import { Link, useRouterState } from "@tanstack/react-router";
 import { type ReactNode } from "react";
+import { CrewSlot } from "@/components/nav/crew-slot";
 import { NavBreadcrumb } from "@/components/nav/nav-breadcrumb";
 import { NavFooter } from "@/components/nav/nav-footer";
 import { SearchTrigger } from "@/components/search/search-command";
@@ -55,10 +56,14 @@ export function PublicChrome({
             FLUNCLE
           </Link>
           <NavBreadcrumb pathname={pathname} />
-          {/* The one control in the bar, banked to the far end so it never crowds the trail.
-              It also mounts the ⌘K listener, which is why it lives in the chrome and not on a
-              page: search has to be one keystroke away from every public surface. */}
+          {/* The two controls, banked to the far end so they never crowd the trail. Search
+              also mounts the ⌘K listener, which is why it lives in the chrome and not on a
+              page: search has to be one keystroke away from every public surface. The crew
+              slot rides beside it — Join when signed out, the account door when signed in.
+              `home` gates the Join glow to the page it was designed for (the ambient
+              budget: no perpetual sweep on the gold-spending deep pages). */}
           <SearchTrigger />
+          <CrewSlot home={pathname === "/"} />
         </div>
       </header>
 
