@@ -23,6 +23,12 @@ type PublicAuth = Auth<BetterAuthOptions>;
 
 export type PublicUser = {
   createdAt: string;
+  // The account's enlistment ordinal — its place on the crew manifest (the
+  // account-redesign brief, ruling #1). Stamped once at sign-up by the
+  // `user.create.after` hook and fixed for life. OPTIONAL: a legacy account created
+  // before the crew number existed carries none until the one-time backfill runs, so
+  // every reader must treat its absence as "unstamped", never zero.
+  crewNumber?: number;
   displayUsername?: string;
   // The account's own email. This is the AUTHENTICATED identity — a `PublicUser` is
   // only ever resolved from the requester's OWN session (the `/me` private tier), so
@@ -49,6 +55,7 @@ export type PublicUser = {
 
 type PublicUserRow = {
   created_at: number;
+  crew_number: number | null;
   display_username: string | null;
   email: string | null;
   email_verified: number;
@@ -64,6 +71,12 @@ const devAuthSecret = "fluncle-dev-auth-secret-change-before-production";
 const csrfHeaderName = "x-fluncle-csrf";
 const csrfWindowMs = 24 * 60 * 60 * 1000;
 
+// Handles a user may never claim, because each collides with a top-level route
+// segment. NOTE on the coming `/crew/<username>` public-profile namespace (the
+// account-redesign brief, ruling #1): it does NOT need an entry here. Reserved
+// usernames guard the HANDLE, and `/crew/<username>` USES the handle as its slug —
+// the profile lives one segment DOWN from `/crew`, so no handle can shadow it and
+// nothing needs reserving. The crew NUMBER rides that profile; it is not a handle.
 const reservedUsernames = new Set([
   "account",
   "admin",
@@ -118,6 +131,105 @@ function publicAuthSecret(): string {
   return resolvePublicAuthSecret(process.env.BETTER_AUTH_SECRET, import.meta.env.DEV);
 }
 
+type DbClient = Awaited<ReturnType<typeof getDb>>;
+type CrewNumberRow = { crew_number: number };
+
+/**
+ * Stamp the account's crew number — its enlistment ordinal on the manifest (the
+ * account-redesign brief, ruling #1) — as `max(crew_number) + 1`, atomically.
+ *
+ * CONCURRENCY. The whole assignment is ONE `UPDATE … SET crew_number = (SELECT
+ * MAX + 1)` statement. libSQL/Turso serializes writers (docs/local-database.md), so
+ * two simultaneous sign-ups can never both read the same MAX: the first commits N+1,
+ * the second's sub-select then sees N+1 and commits N+2. The `UNIQUE` index is the
+ * backstop — should any layer ever race the sub-select, the loser hits a UNIQUE
+ * violation and this retries (recomputing MAX) up to `maxAttempts`.
+ *
+ * IDEMPOTENT. `WHERE crew_number IS NULL` leaves an already-numbered row untouched
+ * (0 rows updated ⇒ returns `undefined`), so a re-run — or the backfill visiting an
+ * already-stamped user — is a safe no-op.
+ *
+ * Returns the number it assigned, or `undefined` when the user already had one (or
+ * the row is gone). Accepts an explicit client so a test (and the backfill) can drive
+ * it against a chosen DB; production passes none and it uses `getDb()`.
+ */
+export async function assignCrewNumber(
+  userId: string,
+  client?: DbClient,
+): Promise<number | undefined> {
+  const db = client ?? (await getDb());
+  const maxAttempts = 5;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      const result = await db.execute({
+        args: [userId],
+        sql: `update "user"
+          set crew_number = (select coalesce(max(crew_number), 0) + 1 from "user")
+          where id = ? and crew_number is null
+          returning crew_number`,
+      });
+
+      return typedRow<CrewNumberRow>(result.rows)?.crew_number;
+    } catch (error) {
+      if (attempt < maxAttempts && isUniqueViolation(error)) {
+        continue;
+      }
+
+      throw error;
+    }
+  }
+
+  return undefined;
+}
+
+/** True when a libSQL error is a UNIQUE-constraint violation (the crew-number race backstop). */
+function isUniqueViolation(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+
+  return message.toUpperCase().includes("UNIQUE CONSTRAINT");
+}
+
+/**
+ * Best-effort newsletter subscribe for a brand-new account (the account-redesign
+ * brief, ruling #5): signing up puts your email on the Friday newsletter. Reuses the
+ * public `subscribeToNewsletter` path (validation + the shared rate limiter + the
+ * Resend segment write), imported DYNAMICALLY so the module graph stays acyclic
+ * (`newsletter` already imports from here).
+ *
+ * A fault here NEVER fails the sign-up — a missing Resend env, a Resend outage, or a
+ * rate-limit throw is caught and logged, exactly like `sendResetPassword` /
+ * `sendVerificationEmail` below. The account is created either way.
+ */
+async function autoSubscribeAtSignup(email: string, ctx: unknown): Promise<void> {
+  try {
+    const { subscribeToNewsletter } = await import("./newsletter");
+
+    await subscribeToNewsletter({ email }, requestFromHookContext(ctx));
+  } catch (error) {
+    console.error("auto-subscribe at sign-up failed", error);
+  }
+}
+
+/**
+ * The `Request` a better-auth database hook's context carries (the sign-up request —
+ * POST for email/password, the OAuth callback GET for social), used for the newsletter
+ * rate-limit bucket. The typed `GenericEndpointContext` under-declares the runtime
+ * context, so read it defensively and fall back to a synthetic request when a creation
+ * has no endpoint context (never at a real sign-up).
+ */
+function requestFromHookContext(ctx: unknown): Request {
+  const maybe = ctx as { headers?: HeadersInit; request?: unknown } | null;
+
+  if (maybe?.request instanceof Request) {
+    return maybe.request;
+  }
+
+  return new Request("https://www.fluncle.com/internal/signup-subscribe", {
+    headers: maybe?.headers,
+  });
+}
+
 // Exported as a test seam: the device-auth suite builds a fresh, isolated auth
 // instance per test over an in-memory drizzle DB by passing it here, sidestepping
 // the module-level `getPublicAuth` memo. Production builds it once via `getPublicAuth`.
@@ -152,6 +264,29 @@ export function createPublicAuthOptions(
       provider: "sqlite",
       schema,
     }),
+    // The enlistment side effects, fired ONCE per new account (the account-redesign
+    // brief). `user.create.after` runs for BOTH email/password sign-up AND social
+    // (Google) sign-up — the latter lands here via the OAuth `/callback/:id` create
+    // path, so both share this one seam. It (1) stamps the crew number (ruling #1) and
+    // (2) auto-subscribes the email to the newsletter (ruling #5). Crew-number
+    // assignment is wrapped so a race it could not win never fails the sign-up — the
+    // one-time backfill recovers any unstamped row — and auto-subscribe is best-effort
+    // by construction (a Resend fault is swallowed, never rethrown).
+    databaseHooks: {
+      user: {
+        create: {
+          after: async (createdUser, hookContext) => {
+            try {
+              await assignCrewNumber(createdUser.id);
+            } catch (error) {
+              console.error("crew-number assignment failed", error);
+            }
+
+            await autoSubscribeAtSignup(createdUser.email, hookContext);
+          },
+        },
+      },
+    },
     emailAndPassword: {
       enabled: true,
       maxPasswordLength: 128,
@@ -336,7 +471,7 @@ export async function getPublicSession(request: Request): Promise<PublicUser | u
     await getDb()
   ).execute({
     args: [sessionUser.id],
-    sql: `select id, username, display_username, name, image, created_at, status, email, email_verified from "user" where id = ? limit 1`,
+    sql: `select id, username, display_username, name, image, created_at, status, email, email_verified, crew_number from "user" where id = ? limit 1`,
   });
   const user = typedRow<PublicUserRow>(result.rows);
 
@@ -346,6 +481,7 @@ export async function getPublicSession(request: Request): Promise<PublicUser | u
 
   return {
     createdAt: new Date(user.created_at).toISOString(),
+    crewNumber: user.crew_number ?? undefined,
     displayUsername: user.display_username ?? undefined,
     email: user.email ?? "",
     emailVerified: user.email_verified === 1,

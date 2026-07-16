@@ -332,6 +332,11 @@ export const TrackSearchResultSchema = z
 export const PublicUserSchema = z
   .object({
     createdAt: z.string(),
+    // The account's enlistment ordinal — its place on the crew manifest (the
+    // account-redesign brief, ruling #1). Stamped once at sign-up and fixed for life.
+    // OPTIONAL: a legacy account created before the crew number existed carries none
+    // until the one-time backfill runs, so a reader treats its absence as "unstamped".
+    crewNumber: z.number().optional(),
     displayUsername: z.string().optional(),
     // The account's OWN email. A `PublicUser` is only ever resolved from the
     // requester's own session (the authenticated `/me` tier), so this is always the
