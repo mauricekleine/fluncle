@@ -3454,6 +3454,67 @@ body::before {
   }
 }
 
+/* ── galaxy door (B2) — the voyage sentence + collection meters (account redesign
+   brief, ruling #2). The three metric tiles became one first-person line; the gold
+   Fly CTA rides beside it as the view's One Sun. All colours from existing tokens. */
+
+/* The scoreboard row: the sentence flows left and wraps, the CTA holds the right.
+   On a narrow column the CTA drops under the line (flex-wrap) without crowding it. */
+.account-voyage-row {
+  align-items: center;
+  gap: 0.75rem 1rem;
+  justify-content: space-between;
+}
+
+/* The read line: Space Grotesk (inherited), cream, comfortable measure. It is the
+   hero of the view now, so it reads a notch above muted copy. */
+.account-voyage {
+  color: var(--starlight-cream);
+  flex: 1 1 16rem;
+  font-size: 0.98rem;
+  line-height: 1.5;
+  min-width: 0;
+}
+
+/* The inline numbers in the coordinate face: Oxanium tabular so a two-digit count
+   never shifts the words around it (DESIGN.md, The Tabular Rule). Cream, never gold —
+   a tally is not certified music. */
+.account-voyage-num {
+  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+/* A galaxy's completion meter: a 2px rail under the count line. Quiet stardust while
+   in progress; the fill ignites to gold only when the galaxy is fully logged, the
+   same gold note the count earns (One Sun). Respects reduced motion. */
+.account-collection-meter {
+  background: color-mix(in oklch, var(--stardust) 22%, transparent);
+  border-radius: 999px;
+  height: 2px;
+  overflow: hidden;
+  width: 100%;
+}
+
+.account-collection-meter-fill {
+  background: color-mix(in oklch, var(--stardust) 78%, transparent);
+  border-radius: inherit;
+  display: block;
+  height: 100%;
+  transition: inline-size 0.4s ease;
+}
+
+.account-collection-meter-fill[data-complete] {
+  background: var(--eclipse-gold);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .account-collection-meter-fill {
+    transition: none;
+  }
+}
+
 /* ── THE ACCOUNT KIT — the Fence Ladder (DESIGN.md; the account redesign brief) ─────
    Enclosure encodes consequence: how many sides a concern prints says how much its
    boundary matters. Derived only from existing tokens. */

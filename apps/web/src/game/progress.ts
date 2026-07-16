@@ -76,6 +76,30 @@ export async function fetchLifetimeProgress(): Promise<LifetimeProgress | undefi
   return (await response.json()) as LifetimeProgress;
 }
 
+/**
+ * The signed-in crew number, for the ship stamp (account brief, ruling #1). Reads the
+ * same `/me` identity the account surfaces do, on the same fetch-and-tolerate seam as
+ * the lifetime sync: an absent session, an unshipped field, or any failure all resolve
+ * to `undefined`, and the HUD renders nothing. The field is optional server-side (a
+ * parallel wave adds `crewNumber` to the PublicUser), so this reads it defensively.
+ */
+export async function fetchCrewNumber(): Promise<number | undefined> {
+  try {
+    const response = await fetch("/api/me");
+
+    if (!response.ok) {
+      return undefined;
+    }
+
+    const body = (await response.json()) as { user?: { crewNumber?: number } | null };
+    const crewNumber = body.user?.crewNumber;
+
+    return typeof crewNumber === "number" ? crewNumber : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function persistLoggedLogId(logId: string): void {
   void csrfHeaders().then((headers) => {
     if (!headers) {

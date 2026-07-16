@@ -9,33 +9,27 @@ import { Skeleton } from "@fluncle/ui/components/skeleton";
 import { GraphLink } from "@/components/graph-link";
 import { formatDateLong } from "@/lib/format";
 import { albumCoverAtSize } from "@/lib/media";
-import { type Collection, type CollectionItem, type GalaxyDoorData, Metric } from "./shared";
+import {
+  buildVoyageSentence,
+  flyCtaVariant,
+  galaxiesReached,
+  type VoyagePart,
+} from "./galaxy-voyage";
+import { type Collection, type CollectionItem, type GalaxyDoorData, type Progress } from "./shared";
 
 export function GalaxyDoor({ data }: { data: GalaxyDoorData }) {
   const { collection, progress } = data;
 
+  const hasProgress =
+    (progress?.collectedLogIds.length ?? 0) > 0 ||
+    (progress?.wins ?? 0) > 0 ||
+    (progress?.deaths ?? 0) > 0;
+
   return (
     <div className="account-tab-panel">
       <section className="account-section">
-        {(progress?.collectedLogIds.length ?? 0) > 0 ||
-        (progress?.wins ?? 0) > 0 ||
-        (progress?.deaths ?? 0) > 0 ? (
-          <>
-            <div className="account-row account-identity">
-              <div className="account-grid">
-                <Metric label="Lifetime logs" value={progress?.collectedLogIds.length ?? 0} />
-                <Metric label="Runs home" value={progress?.wins ?? 0} />
-                <Metric label="Tows" value={progress?.deaths ?? 0} />
-              </div>
-              <Button nativeButton={false} render={<Link to="/galaxy" />}>
-                Fly the Galaxy
-              </Button>
-            </div>
-            <p className="account-muted">
-              Your Galaxy game record: stars logged, runs flown home, and tows back to Earth after a
-              dry tank.
-            </p>
-          </>
+        {hasProgress ? (
+          <VoyageScoreboard collection={collection} progress={progress} />
         ) : (
           // A 0/0/0 scoreboard is not a welcome. Before the first flight, the page
           // leads with the door into the game and lets the collection's teaching
@@ -55,17 +49,63 @@ export function GalaxyDoor({ data }: { data: GalaxyDoorData }) {
   );
 }
 
-/** The metric-line pending state, shown only on a client-side switch into the Galaxy. */
+/**
+ * The voyage told in one first-person line (ruling #2), the numbers inline in Oxanium
+ * tabular, with the gold Fly CTA beside it as the view's One Sun — until a galaxy is
+ * fully logged, when the CTA yields to outline and the completion carries the gold.
+ */
+function VoyageScoreboard({
+  collection,
+  progress,
+}: {
+  collection?: Collection;
+  progress?: Progress;
+}) {
+  const galaxies = collection?.galaxies ?? [];
+  const ungroupedCount = collection
+    ? collection.collection.filter((item) => !item.galaxySlug).length
+    : 0;
+
+  const parts = buildVoyageSentence({
+    galaxies: galaxiesReached(galaxies, ungroupedCount),
+    homes: progress?.wins ?? 0,
+    stars: progress?.collectedLogIds.length ?? 0,
+    tows: progress?.deaths ?? 0,
+  });
+
+  return (
+    <div className="account-row account-voyage-row">
+      <p className="account-voyage">
+        {parts.map((part: VoyagePart, index) =>
+          typeof part === "string" ? (
+            <span key={index}>{part}</span>
+          ) : (
+            <span className="account-voyage-num" key={index}>
+              {part.num}
+            </span>
+          ),
+        )}
+      </p>
+      <Button nativeButton={false} render={<Link to="/galaxy" />} variant={flyCtaVariant(galaxies)}>
+        Fly the Galaxy
+      </Button>
+    </div>
+  );
+}
+
+/** The voyage-line pending state, shown only on a client-side switch into the Galaxy:
+ *  the sentence row (two wrapped lines) beside the Fly CTA, matching the loaded shape. */
 export function GalaxyDoorSkeleton() {
   return (
     <div className="account-tab-panel" aria-hidden>
       <section className="account-section">
-        <div className="account-grid">
-          <Skeleton className="h-16" />
-          <Skeleton className="h-16" />
-          <Skeleton className="h-16" />
+        <div className="account-row account-voyage-row">
+          <div className="account-voyage flex flex-col gap-1.5">
+            <Skeleton className="h-4 w-full" />
+            <Skeleton className="h-4 w-2/3" />
+          </div>
+          <Skeleton className="h-9 w-32" />
         </div>
-        <Skeleton className="h-4 w-2/3" />
       </section>
       <section className="account-section">
         <Skeleton className="h-4 w-24" />
@@ -131,12 +171,14 @@ function CollectionSection({ collection }: { collection?: Collection }) {
       </p>
       {collection.galaxies.map((galaxy) => (
         <CollectionGroup
+          collected={galaxy.collected}
           complete={galaxy.total > 0 && galaxy.collected >= galaxy.total}
           count={`${galaxy.collected} of ${galaxy.total} logged`}
           items={bySlug.get(galaxy.slug) ?? []}
           key={galaxy.slug}
           name={galaxy.name}
           slug={galaxy.slug}
+          total={galaxy.total}
         />
       ))}
       {ungrouped.length > 0 ? (
@@ -155,18 +197,28 @@ function CollectionSection({ collection }: { collection?: Collection }) {
 }
 
 function CollectionGroup({
+  collected,
   complete,
   count,
   items,
   name,
   slug,
+  total,
 }: {
+  collected: number;
   complete: boolean;
   count: string;
   items: CollectionItem[];
   name: string;
   slug: string;
+  total: number;
 }) {
+  // A slim completion meter under the count line: how full this galaxy is at a
+  // glance. Gold only when finished (One Sun — the completion earns the gold),
+  // quiet stardust while in progress. Built from tokens, not the shadcn Progress
+  // primitive, whose flex/gap chrome fights the account rows.
+  const pct = total > 0 ? Math.min(100, Math.round((collected / total) * 100)) : 0;
+
   return (
     <div className="account-collection-group">
       <div className="account-collection-heading">
@@ -179,6 +231,22 @@ function CollectionGroup({
           {complete ? `All ${items.length} logged` : count}
         </span>
       </div>
+      {total > 0 ? (
+        <div
+          aria-label={`${name}: ${count}`}
+          aria-valuemax={total}
+          aria-valuemin={0}
+          aria-valuenow={collected}
+          className="account-collection-meter"
+          role="progressbar"
+        >
+          <span
+            className="account-collection-meter-fill"
+            data-complete={complete ? "" : undefined}
+            style={{ inlineSize: `${pct}%` }}
+          />
+        </div>
+      ) : null}
       {items.length > 0 ? (
         <ul className="account-list">
           {items.map((item) => (
