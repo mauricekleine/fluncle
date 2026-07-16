@@ -133,7 +133,6 @@ function LabelsPage() {
           heading="More labels"
           headingId="labels-catalogue-heading"
           initialPage={catalogue}
-          intro="Labels the probes mapped. I haven't logged anything off these yet."
           listLabel="More labels"
           queryFn={(cursor) =>
             fetchLabelsCatalogue({ data: { cursor, limit: CATALOGUE_HUB_DEFAULT_LIMIT } })

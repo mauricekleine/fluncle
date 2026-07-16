@@ -126,7 +126,6 @@ function ArtistsPage() {
           heading="More artists"
           headingId="artists-catalogue-heading"
           initialPage={catalogue}
-          intro="Artists the probes mapped. I haven't logged anything off these yet."
           listLabel="More artists"
           queryFn={(cursor) =>
             fetchArtistsCatalogue({ data: { cursor, limit: CATALOGUE_HUB_DEFAULT_LIMIT } })

@@ -2047,12 +2047,6 @@ body::before {
   margin: 0;
 }
 
-.catalogue-hub-note {
-  color: var(--muted-foreground);
-  font-size: 0.85rem;
-  margin-top: 0.35rem;
-}
-
 /* The dimming that makes a tile read as unlit: the artwork/avatar and the name sit a step down at
    rest and lift to full on hover/focus. The name still heats to cream through the grid's own hover
    rule; only the resting light drops. */

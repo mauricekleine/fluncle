@@ -23,7 +23,6 @@ export function CatalogueHubSection<Entry extends { slug: string }>({
   headingId,
   heading,
   initialPage,
-  intro,
   listLabel,
   queryFn,
   queryKey,
@@ -37,8 +36,6 @@ export function CatalogueHubSection<Entry extends { slug: string }>({
   headingId: string;
   /** The loader's first page — the SSR seed; the section renders nothing when it is empty. */
   initialPage: CatalogueHubPage<Entry>;
-  /** One quiet line under the heading; never claims a finding (the unnamed-tier rule). */
-  intro: string;
   /** The grid's accessible name — names the TRACKS/entities, never the tier. */
   listLabel: string;
   /** Fetch the next page for a cursor (undefined = first page); the route's createServerFn. */
@@ -99,7 +96,6 @@ export function CatalogueHubSection<Entry extends { slug: string }>({
         <h2 className="catalogue-hub-heading" id={headingId}>
           {heading}
         </h2>
-        <p className="catalogue-hub-note">{intro}</p>
       </div>
 
       <ul aria-label={listLabel} className={`${gridClassName} catalogue-grid`}>

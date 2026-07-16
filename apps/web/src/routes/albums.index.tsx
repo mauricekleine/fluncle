@@ -123,7 +123,6 @@ function AlbumsPage() {
           heading="More records"
           headingId="albums-catalogue-heading"
           initialPage={catalogue}
-          intro="Records the probes mapped. I haven't logged anything off these yet."
           listLabel="More records"
           queryFn={(cursor) =>
             fetchAlbumsCatalogue({ data: { cursor, limit: CATALOGUE_HUB_DEFAULT_LIMIT } })
