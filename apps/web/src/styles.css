@@ -3454,6 +3454,134 @@ body::before {
   }
 }
 
+/* ── THE ACCOUNT KIT — the Fence Ladder (DESIGN.md; the account redesign brief) ─────
+   Enclosure encodes consequence: how many sides a concern prints says how much its
+   boundary matters. Derived only from existing tokens. */
+
+/* Class A · Full section — a two-sided crop bracket (top + left, in a stardust mix),
+   rounded top-left, a stamped header, then an optional status/Save action rule. */
+.account-kit-section {
+  border-left: 1px solid color-mix(in oklch, var(--stardust) 45%, transparent);
+  border-top: 1px solid color-mix(in oklch, var(--stardust) 45%, transparent);
+  border-top-left-radius: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 1rem 0 0 1rem;
+}
+
+.account-kit-header {
+  align-items: center;
+  display: flex;
+  gap: 0.5rem;
+}
+
+.account-kit-mark {
+  color: color-mix(in oklch, var(--stardust) 80%, var(--starlight-cream));
+  display: inline-flex;
+}
+
+.account-kit-mark svg {
+  height: 1rem;
+  width: 1rem;
+}
+
+.account-kit-label {
+  color: var(--starlight-cream);
+  font-size: 0.95rem;
+  font-weight: 800;
+}
+
+.account-kit-helper {
+  color: var(--stardust);
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+.account-kit-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+/* The action rule: status reads left, the Save reads right, divided by a top rule.
+   Stacked sections can never show two suns — the Save ignites (outline → gold) only
+   when its own section is dirty, which the caller drives via the Button variant. */
+.account-kit-action {
+  align-items: center;
+  border-top: 1px solid var(--dust-line);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  justify-content: space-between;
+  padding-top: 0.75rem;
+}
+
+.account-kit-status {
+  color: var(--stardust);
+  font-size: 0.9rem;
+}
+
+.account-kit-action-control {
+  margin-left: auto;
+}
+
+/* Class B · Compact row — one divider rule, label left / control right. */
+.account-kit-row {
+  border-top: 1px solid var(--dust-line);
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding-top: 0.85rem;
+}
+
+.account-kit-row-main {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.9rem;
+  justify-content: space-between;
+}
+
+.account-kit-row-label {
+  color: var(--starlight-cream);
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.account-kit-row-control {
+  color: var(--stardust);
+  font-size: 0.9rem;
+  margin-left: auto;
+}
+
+/* Class D · The fence — four sides, red-keyed, always open, a Warning-icon header
+   (matching the existing .account-danger enclosure). */
+.account-kit-fence {
+  border: 1px solid color-mix(in oklch, var(--destructive) 35%, var(--border));
+  border-radius: var(--radius);
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 1rem;
+}
+
+.account-kit-fence-header {
+  align-items: center;
+  color: color-mix(in oklch, var(--destructive) 55%, var(--starlight-cream));
+  display: flex;
+  gap: 0.5rem;
+}
+
+.account-kit-fence-header svg {
+  height: 1rem;
+  width: 1rem;
+}
+
+.account-kit-fence-header .account-kit-label {
+  color: inherit;
+}
+
 /* The Grounded Floats Rule (DESIGN.md): under reduced motion, every float
    collapses to a color-only transition. The Gold Veil wash carries feedback. */
 @media (prefers-reduced-motion: reduce) {
@@ -4373,6 +4501,15 @@ body::before {
   flex: none;
   height: 0.7rem;
   width: 0.7rem;
+}
+
+/* The active-door marker in the account menu (the account redesign brief §Wayfinding):
+   the current view's row gets a quiet cream tint — never gold (a door is not a
+   certification, and the One Sun budget stays with the page's own gold). */
+.crew-menu-item-active {
+  background: color-mix(in oklch, var(--stardust) 14%, transparent);
+  color: var(--starlight-cream);
+  font-weight: 600;
 }
 
 /* The word — the username, or "Join the crew" — is a courtesy on a wide screen and
