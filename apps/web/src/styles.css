@@ -3463,7 +3463,7 @@ body::before {
 .account-kit-section {
   border-left: 1px solid color-mix(in oklch, var(--stardust) 45%, transparent);
   border-top: 1px solid color-mix(in oklch, var(--stardust) 45%, transparent);
-  border-top-left-radius: 6px;
+  border-top-left-radius: var(--artwork-radius, 6px);
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
@@ -3489,7 +3489,8 @@ body::before {
 .account-kit-label {
   color: var(--starlight-cream);
   font-size: 0.95rem;
-  font-weight: 800;
+  /* 700, not 800 — Space Grotesk tops out at 700; a heavier ask silently clamps. */
+  font-weight: 700;
 }
 
 .account-kit-helper {
