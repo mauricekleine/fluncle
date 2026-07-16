@@ -121,14 +121,18 @@ export function adminArtistsHandlers(os: Implementer) {
     });
 
   // GET /admin/artists/socials — admin tier (agent-allowed read): the review queue for
-  // the `/admin/artists` station. Returns artists with unconfirmed socials.
+  // the `/admin/artists` station. Returns artists with unconfirmed socials; `fresh=true`
+  // widens to every artist carrying an unreviewed link (the board's fresh-links rule).
   const listArtistSocialsHandler = os.list_artist_socials
     .use(adminAuth)
     .handler(async ({ input }) => {
       try {
         const limit = parseLimit(input.limit, 100, 500);
 
-        return { artists: await listArtistSocialsQueue(limit), ok: true as const };
+        return {
+          artists: await listArtistSocialsQueue(limit, parseBool(input.fresh)),
+          ok: true as const,
+        };
       } catch (error) {
         throw apiFault(error);
       }

@@ -978,8 +978,15 @@ function toArtistSocial(row: Record<string, unknown>): ArtistSocial {
  * identity graph in one card. Bounded so a huge archive never blows the payload; the
  * queue is small by construction (most socials arrive `auto` from MusicBrainz — the
  * RFC's design note).
+ *
+ * `fresh` widens the narrowing to the board's fresh-links rule (`reviewed_at IS NULL`),
+ * so an artist whose only fresh links are trusted `auto` rows — no candidate anywhere —
+ * still surfaces. The default stays candidate-only for the /admin attention count.
  */
-export async function listArtistSocialsQueue(limit = 100): Promise<ArtistSocialsQueueItem[]> {
+export async function listArtistSocialsQueue(
+  limit = 100,
+  fresh = false,
+): Promise<ArtistSocialsQueueItem[]> {
   const db = await getDb();
   const result = await db.execute({
     args: [Math.max(1, Math.min(limit, 500))],
@@ -988,8 +995,8 @@ export async function listArtistSocialsQueue(limit = 100): Promise<ArtistSocials
           from artists a
           join artist_socials s on s.artist_id = a.id
           where a.id in (
-            select artist_id from artist_socials
-            where status = 'candidate'
+            select distinct artist_id from artist_socials
+            where ${fresh ? "reviewed_at is null" : "status = 'candidate'"}
             limit ?
           )
           order by a.name asc, s.platform asc`,

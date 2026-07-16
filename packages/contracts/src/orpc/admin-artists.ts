@@ -254,6 +254,10 @@ const ArtistSocialsQueueItemSchema = z
  *
  * Admin tier (agent-allowed read). The `/admin/artists` review queue: every artist with
  * a `candidate` social to confirm, each carrying ALL its socials. Returns `{ ok, artists }`.
+ *
+ * `fresh=true` widens the queue to the board's fresh-links rule: every artist carrying an
+ * UNREVIEWED link (`reviewed_at IS NULL`) — which includes fresh `auto` links on artists
+ * with no candidate at all, invisible to the default candidate-only narrowing.
  */
 export const listArtistSocials = oc
   .route({
@@ -263,7 +267,7 @@ export const listArtistSocials = oc
     summary: "The artist review queue (artists with unconfirmed socials)",
     tags: ["Admin"],
   })
-  .input(z.object({ limit: z.string().optional() }))
+  .input(z.object({ fresh: z.string().optional(), limit: z.string().optional() }))
   .output(z.object({ artists: z.array(ArtistSocialsQueueItemSchema), ok: z.literal(true) }));
 
 /**
