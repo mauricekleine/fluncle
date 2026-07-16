@@ -85,9 +85,11 @@ export function FindingCard({
   return (
     <div
       className={
+        // items-center: the text block (title + coordinate line + chips) runs taller than the
+        // artwork square, and a top-pinned cover reads as a misalignment, not a choice.
         embedded
-          ? "relative flex items-start gap-3 overflow-hidden"
-          : "relative flex items-start gap-3 overflow-hidden rounded-md border border-border bg-card px-3 py-2.5"
+          ? "relative flex items-center gap-3 overflow-hidden"
+          : "relative flex items-center gap-3 overflow-hidden rounded-md border border-border bg-card px-3 py-2.5"
       }
     >
       {playable && isActive ? <ProgressHairline /> : null}
@@ -115,9 +117,11 @@ export function FindingCard({
         <p className="track-title">{trackLine}</p>
         {/* The two lore items ride one line: the Log ID coordinate and its galaxy, a quiet
             middot between them. The galaxy is the coordinate's suffix — same waypoint, said
-            twice — so they read as one place, not two stray captions. */}
+            twice — so they read as one place, not two stray captions. items-center, NOT
+            baseline: .track-log-id carries its own `align-self: center`, so a baseline row
+            floats the smaller galaxy text high against the centered coordinate. */}
         {logId || finding.galaxy ? (
-          <div className="mt-0.5 flex min-w-0 items-baseline gap-1.5">
+          <div className="mt-0.5 flex min-w-0 items-center gap-1.5">
             {logId ? (
               <Link
                 aria-label={`Open the log page for ${trackLine}`}

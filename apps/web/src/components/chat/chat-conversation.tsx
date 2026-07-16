@@ -9,6 +9,7 @@ import { DefaultChatTransport, getToolName, isToolUIPart } from "ai";
 import { type FormEvent, Fragment, type ReactNode, useMemo, useState } from "react";
 import { ArtistCard, type ChatArtist } from "@/components/chat/artist-card";
 import { ChainCard, type ChatSet } from "@/components/chat/chain-card";
+import { linkifyCoordinates } from "@/components/chat/chat-coordinate";
 import { type ChatFinding, FindingCard } from "@/components/chat/finding-card";
 import { FindingList } from "@/components/chat/finding-list";
 import { type ChatLabel, LabelCard } from "@/components/chat/label-card";
@@ -87,9 +88,10 @@ export function ChatConversation({
   // "submitted" is the gap between posting a turn and the first streamed chunk.
   const busy = status === "submitted" || status === "streaming";
 
-  // Every finding on the transcript, deduped by coordinate — the persistent now-playing bar's
-  // row set, so a preview started from any card gets the same bottom bar the rest of the app has.
-  const previewRows = useMemo(() => collectPreviewRows(messages), [messages]);
+  // Every finding on the transcript, deduped by coordinate — one walk feeds both the
+  // persistent now-playing bar's rows AND the prose coordinate links' hover cards.
+  const findingsByLogId = useMemo(() => collectChatFindings(messages), [messages]);
+  const previewRows = useMemo(() => toPreviewRows(findingsByLogId), [findingsByLogId]);
 
   function send(event: FormEvent) {
     event.preventDefault();
@@ -121,7 +123,9 @@ export function ChatConversation({
                   scrollAnchor={message.role === "user"}
                 >
                   <Message align={message.role === "user" ? "end" : "start"}>
-                    <MessageContent>{renderParts(message, notation)}</MessageContent>
+                    <MessageContent>
+                      {renderParts(message, notation, findingsByLogId)}
+                    </MessageContent>
                   </Message>
                 </MessageScrollerItem>
               ))}
@@ -187,7 +191,11 @@ export function ChatConversation({
 // the moment the input streams; while the dig is underway a skeleton card stands in for the
 // future output, and the cards (or the summarize fallback) join once the output arrives.
 // `step-start` and any other part types are workbench noise and render nothing.
-function renderParts(message: FluncleUIMessage, notation: KeyNotation): ReactNode {
+function renderParts(
+  message: FluncleUIMessage,
+  notation: KeyNotation,
+  findingsByLogId: ReadonlyMap<string, ChatFinding>,
+): ReactNode {
   return message.parts.map((part, index) => {
     const key = `${message.id}-${index}`;
 
@@ -198,7 +206,13 @@ function renderParts(message: FluncleUIMessage, notation: KeyNotation): ReactNod
           align={message.role === "user" ? "end" : "start"}
           variant={message.role === "user" ? "default" : "muted"}
         >
-          <BubbleContent className="whitespace-pre-wrap">{part.text}</BubbleContent>
+          <BubbleContent className="whitespace-pre-wrap">
+            {/* Fluncle's prose gets its coordinates linkified (the hover-card treatment);
+                the crew's own bubbles stay plain text — the links are his citations. */}
+            {message.role === "assistant"
+              ? linkifyCoordinates(part.text, findingsByLogId, notation)
+              : part.text}
+          </BubbleContent>
         </Bubble>
       );
     }
@@ -333,28 +347,12 @@ function SkeletonCard(): ReactNode {
   );
 }
 
-// Every finding visible on the transcript, deduped by coordinate — the now-playing bar's rows.
-// Reads the same tool outputs the cards render from, so the bar and the cards agree on what is
-// previewable. Only findings with a coordinate (the relay key) can ever be the active row.
-function collectPreviewRows(messages: FluncleUIMessage[]): {
-  albumImageUrl?: string;
-  artists: string[];
-  bpm?: number;
-  key?: string;
-  logId?: string;
-  title: string;
-}[] {
-  const byLogId = new Map<
-    string,
-    {
-      albumImageUrl?: string;
-      artists: string[];
-      bpm?: number;
-      key?: string;
-      logId: string;
-      title: string;
-    }
-  >();
+// Every finding visible on the transcript, deduped by coordinate — the FULL tool-output
+// shape, so both consumers read one walk: the now-playing bar derives its lean rows from it,
+// and the prose coordinate links (chat-coordinate.tsx) hand it to their hover cards, which is
+// why a coordinate Fluncle just dug needs no fetch at all.
+function collectChatFindings(messages: FluncleUIMessage[]): Map<string, ChatFinding> {
+  const byLogId = new Map<string, ChatFinding>();
 
   for (const message of messages) {
     for (const part of message.parts) {
@@ -407,20 +405,34 @@ function collectPreviewRows(messages: FluncleUIMessage[]): {
 
       for (const finding of findings) {
         if (finding.coordinate && !byLogId.has(finding.coordinate)) {
-          byLogId.set(finding.coordinate, {
-            albumImageUrl: finding.albumImageUrl,
-            artists: finding.artists ?? [],
-            bpm: finding.bpm,
-            key: finding.key,
-            logId: finding.coordinate,
-            title: finding.title ?? "",
-          });
+          byLogId.set(finding.coordinate, finding);
         }
       }
     }
   }
 
-  return [...byLogId.values()];
+  return byLogId;
+}
+
+// The now-playing bar's lean row set, derived from the transcript's findings map. Only
+// findings with a coordinate (the relay key) can ever be the active row — the map's own
+// invariant, since the coordinate is its key.
+function toPreviewRows(findingsByLogId: ReadonlyMap<string, ChatFinding>): {
+  albumImageUrl?: string;
+  artists: string[];
+  bpm?: number;
+  key?: string;
+  logId?: string;
+  title: string;
+}[] {
+  return [...findingsByLogId.entries()].map(([logId, finding]) => ({
+    albumImageUrl: finding.albumImageUrl,
+    artists: finding.artists ?? [],
+    bpm: finding.bpm,
+    key: finding.key,
+    logId,
+    title: finding.title ?? "",
+  }));
 }
 
 // A one-line, readable digest of a tool input/output for the transcript (never the raw

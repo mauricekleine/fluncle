@@ -5313,6 +5313,18 @@ body::before {
   text-decoration: none;
 }
 
+/* A coordinate named in chat prose (components/chat/chat-coordinate.tsx): the graph link's
+   underline + heat, wearing the Log ID's own face — Oxanium, tabular digits — so the token
+   reads as the same coordinate it is everywhere else (.track-log-id), just inline in a
+   sentence. Sized to the surrounding prose, never .track-log-id's fixed 0.92rem, so the line
+   rhythm holds. */
+.chat-coordinate {
+  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-size: 0.95em;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
 /* The card. A printed card on the plate: the entity's own opening line, a few covers, the
    count.
 
