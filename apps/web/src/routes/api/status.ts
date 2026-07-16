@@ -1,7 +1,34 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { getDb } from "@/lib/server/db";
 import { getLiveState } from "@/lib/server/live";
 import { getServiceStatuses } from "@/lib/server/status";
 import { type ApiHandlers, aliasHandlers } from "./-alias";
+
+/**
+ * A WORKER-vantage Turso round-trip sample: the Worker times a `select 1` to the Turso
+ * primary (aws-eu-west-1, Dublin) on THIS request. It is the exact path a visitor's page
+ * load pays — a Cloudflare Worker at the edge reaching across to the Dublin primary — so it
+ * is the honest signal for "how is Turso responding right now", as opposed to the rave-02
+ * prober's box→Turso path. `select 1` isolates the network + connection cost from any query
+ * work, which is what makes a trend of it a clean read on latency/jitter over time.
+ *
+ * NON-FATAL by construction: a probe failure returns `null` and never breaks the status
+ * response (the whole point of /status is to stay up while something else is down). The
+ * healthcheck cron reads this field on its /api/status GET and records it as the `db`
+ * service, so the sample flows into the existing `service_check_samples` uptime series —
+ * no new storage, no per-request write.
+ */
+async function probeDbRoundTrip(): Promise<{ at: string; roundTripMs: number } | null> {
+  try {
+    const db = await getDb();
+    const started = performance.now();
+    await db.execute("select 1");
+
+    return { at: new Date().toISOString(), roundTripMs: Math.round(performance.now() - started) };
+  } catch {
+    return null;
+  }
+}
 
 // The PUBLIC, machine-readable sibling of the /status HTML dashboard. Same
 // exposure (no auth — anyone may read the current health of Fluncle's services),
@@ -32,7 +59,11 @@ import { type ApiHandlers, aliasHandlers } from "./-alias";
 // coverage net), so it needs no contract.
 export const serverHandlers: ApiHandlers = {
   GET: async () => {
-    const [services, live] = await Promise.all([getServiceStatuses(), getLiveState()]);
+    const [services, live, dbProbe] = await Promise.all([
+      getServiceStatuses(),
+      getLiveState(),
+      probeDbRoundTrip(),
+    ]);
 
     // The freshest report instant across all services = the last cron tick. Null
     // when there are no services yet (a brand-new store the cron hasn't written).
@@ -66,6 +97,9 @@ export const serverHandlers: ApiHandlers = {
 
     return Response.json(
       {
+        // This request's Worker→Turso (Dublin) round-trip, or null if the probe failed.
+        // A poller (the healthcheck cron) turns a series of these into the `db` uptime bar.
+        dbProbe,
         freshestReportAt,
         generatedAt: new Date(now).toISOString(),
         // The cross-surface live-set callout (staleness already applied by

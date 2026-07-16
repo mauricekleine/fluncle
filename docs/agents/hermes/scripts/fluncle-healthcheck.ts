@@ -213,6 +213,66 @@ async function probeWeb(): Promise<Check> {
 }
 
 // ---------------------------------------------------------------------------
+// PROBE: db — GET ${WORKER_URL}/api/status and read `dbProbe.roundTripMs`, the WORKER's own
+// `select 1` round-trip to the Turso primary (aws-eu-west-1, Dublin). That is the path a
+// visitor's page load pays (edge Worker → Dublin), NOT this box's path — the honest read on
+// Turso latency + jitter over time. ok when snappy, degraded when it drags, down when the
+// Worker could not reach Turso (the field is null) or /api/status is unreachable. Recording
+// it as its own service feeds the sample into the existing `service_check_samples` uptime bar.
+// ---------------------------------------------------------------------------
+
+const DB_OK_MS = Number.parseInt(process.env.HEALTHCHECK_DB_OK_MS ?? "", 10) || 250;
+const DB_DEGRADED_MS = Number.parseInt(process.env.HEALTHCHECK_DB_DEGRADED_MS ?? "", 10) || 1500;
+
+async function probeDb(): Promise<Check> {
+  const service = "db";
+
+  if (!WORKER_URL) {
+    return { latencyMs: null, message: msg("not configured"), service, status: "down" };
+  }
+
+  try {
+    const response = await fetchWithTimeout(`${WORKER_URL}/api/status`, { method: "GET" });
+
+    if (response.status !== 200) {
+      return {
+        latencyMs: null,
+        message: msg(`/api/status HTTP ${response.status}`),
+        service,
+        status: "down",
+      };
+    }
+
+    const body = (await response.json()) as { dbProbe?: { roundTripMs?: number } | null };
+    const roundTripMs = body.dbProbe?.roundTripMs ?? null;
+
+    if (roundTripMs === null) {
+      return {
+        latencyMs: null,
+        message: msg("Worker could not reach Turso"),
+        service,
+        status: "down",
+      };
+    }
+
+    const status: Status =
+      roundTripMs <= DB_OK_MS ? "ok" : roundTripMs <= DB_DEGRADED_MS ? "degraded" : "down";
+
+    return {
+      latencyMs: roundTripMs,
+      message: msg(`select 1 in ${roundTripMs}ms`),
+      service,
+      status,
+    };
+  } catch (error) {
+    const reason =
+      error instanceof Error && error.name === "AbortError" ? "timeout" : "unreachable";
+
+    return { latencyMs: null, message: msg(`/api/status ${reason}`), service, status: "down" };
+  }
+}
+
+// ---------------------------------------------------------------------------
 // PROBE: r2 — HEAD ${R2_PROBE_URL}. ok on any 2xx.
 // ---------------------------------------------------------------------------
 
@@ -1011,7 +1071,7 @@ async function main(): Promise<void> {
   // Network probes run concurrently; the file/state probes are synchronous and
   // cheap. All probes are individually timeout-bounded, so the whole tick stays
   // well under the runner's ~120s kill.
-  const [web, r2, ssh] = await Promise.all([probeWeb(), probeR2(), probeSsh()]);
+  const [web, db, r2, ssh] = await Promise.all([probeWeb(), probeDb(), probeR2(), probeSsh()]);
   const dns = probeDns();
   const disk = probeDisk();
   const crons = probeCrons();
@@ -1026,7 +1086,7 @@ async function main(): Promise<void> {
   // (the state map is keyed by service id), so a single cron going down/recovering
   // pings on its own. cron.healthcheck rides alongside the gateway crons even though
   // it's emitted self-evidently.
-  const checks: Check[] = [web, r2, dns, ssh, disk, ...crons, healthcheck, renderBox, hermes];
+  const checks: Check[] = [web, db, r2, dns, ssh, disk, ...crons, healthcheck, renderBox, hermes];
 
   // Transitions against the prior state map.
   const prev = loadState();
