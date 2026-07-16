@@ -280,17 +280,19 @@ The Friday newsletter ([docs/agents/newsletter-agent.md](../agents/newsletter-ag
 
 **It composes with the prompt registry (shipped — [docs/agents/prompt-registry.md](../agents/prompt-registry.md)): fighting sameness is an iterative, taste-driven loop — change a prompt, read ten outputs, change it again — and that loop now runs from `/admin/prompts` with no deploy and no box rebake.**
 
-## ChatDnB — the graduation questions (spike shipped, admin-gated)
+## ChatDnB — the graduation questions (user tier SHIPPED, gated; public exposure open)
 
-The pun (ChatGPT → ChatDnB) earned its spike and the spike shipped: `/admin/chat` (#562) — a chat with Fluncle himself that answers over his own archive tools with hard tool-boundary grounding (he answers from the archive or he does not answer — the model can surface rows, never invent them), admin-gated. What remains is the graduation call, and it wants a real design pass before any public flip:
+The pun (ChatGPT → ChatDnB) earned its spike and the spike shipped: `/admin/chat` (#562) — a chat with Fluncle himself that answers over his own archive tools with hard tool-boundary grounding (he answers from the archive or he does not answer — the model can surface rows, never invent them), admin-gated.
 
-- **Sequenced AFTER the rec machine (operator, 2026-07-16):** every conversation costs real inference money from non-paying users, so ChatDnB holds until the public-usage model is understood; the rec engine has no such cost and wins the public-surface race. When ChatDnB does graduate, a logged-in chat gains the add-to-my-playlist tool (see the rec machine's synergy bullet).
-- **Public exposure** — a public front door or a crew toy first; `chat.fluncle.com` or `/chat` (`chatdnb.com` is taken — the pun survives the URL).
-- **Rate-limiting and abuse** for an anonymous public LLM surface — every conversation costs real inference money.
+**The user-tier rollout SHIPPED (gated, no announcements):** `/chat` opens the same chat to signed-in, **verified-email** accounts — the learning cohort of the gated rollout (sign-in never requires verification; features gate on `emailVerified`). One shared conversation UI (`components/chat/chat-conversation.tsx`) serves both doors; the crew door POSTs to `/api/chat` behind the full rail stack (session → verified-email → same-origin + CSRF → two per-user rate dials) and the crew menu carries the ChatDnB entry. The rate dials are the friends-phase numbers, deliberately conservative while the usage model is unknown: **30 messages/hour + 150/day, per user** (`chat.message` / `chat.message.daily` in `routes/api/chat.ts`) — raise them deliberately, not because someone hit them. The page stays unlisted: no registry entry, `noindex`, no announcement.
+
+What remains is the PUBLIC exposure call:
+
+- **Sequenced AFTER the rec machine (operator, 2026-07-16):** every conversation costs real inference money from non-paying users, so an anonymous/public ChatDnB holds until the verified-cohort usage model is understood; the rec engine has no such cost and wins the public-surface race. When ChatDnB fully graduates, the logged-in chat gains the add-to-my-playlist tool (see the rec machine's synergy bullet).
+- **Public exposure** — `/chat` is the door and it now exists; the open question is whether it ever opens past the signed-in crew (`chat.fluncle.com` remains an option; `chatdnb.com` is taken — the pun survives the URL). An anonymous tier would need its own abuse posture (IP-keyed dials, no session identity to hang a ceiling on).
 - **Model choice** — a well-prompted frontier model with the hard grounding rule is the honest v1; the FluncleLLM voice fine-tune (below) is an obvious future consumer.
-- **The surface itself** — how a chat stays quiet and cover-led rather than becoming a SaaS chat window (`PRODUCT.md` bans the streaming-app clone by name).
 
-The spike's rails carry forward unchanged into any public version: grounding is the product, he never speaks about an uncertified track (ratified canon — the catalogue is a utility layer with no narrative voice), and the voice gate applies — this is him _talking_, the most exposed his voice ever gets.
+The spike's rails carried forward unchanged into the user tier and carry into any public version: grounding is the product, he never speaks about an uncertified track (ratified canon — the catalogue is a utility layer with no narrative voice), the surface stays a quiet plate rather than a SaaS chat window (`PRODUCT.md` bans the streaming-app clone by name), and the voice gate applies — this is him _talking_, the most exposed his voice ever gets.
 
 ## The Fluncle models — the voice, the eye, the ear (idea, 2026-07-11)
 

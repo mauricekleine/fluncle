@@ -52,9 +52,9 @@ type AccountTab = "saves" | "settings";
 
 /**
  * One row in the account menu. Two shapes:
- * - LIVE: a door into `/account` (optionally onto one of its tabs). The route is
- *   the literal `/account` at the render site, so these links keep their
- *   compile-time route check.
+ * - LIVE: a door into `/account` (optionally onto one of its tabs), or — when `to`
+ *   is set — onto its own top-level route (ChatDnB's `/chat`). `to` is a TYPED
+ *   literal union, so every live door keeps its compile-time route check.
  * - FUTURE: a designed-but-unshipped door. Its `to` is a plain provisional string
  *   (the route does not exist in the type graph yet), it is flagged, and it is
  *   FILTERED OUT of the render — no dead link ever ships. Delete the flag (and set
@@ -67,6 +67,7 @@ type CrewMenuLink =
       id: string;
       label: string;
       search?: { tab: AccountTab };
+      to?: "/chat";
     }
   | { future: true; icon: ReactNode; id: string; label: string; to: string };
 
@@ -87,17 +88,19 @@ const CREW_MENU_LINKS: CrewMenuLink[] = [
     label: "Settings",
     search: { tab: "settings" },
   },
-  // ── EXTENSION SLOTS ─────────────────────────────────────────────────────────
-  // Two more doors are planned. They are FILTERED OUT while `future` is set (so no
-  // dead link ships); remove the flag the day the route exists to light one up. The
-  // `to` values are provisional placeholders — set the real path when it lands.
+  // ChatDnB — LIVE (the verified-user rollout). The menu shows the door to every
+  // signed-in user; the /chat page itself communicates the verify gate — a menu item
+  // may lead to a door that asks for verification, that is honest wayfinding.
   {
-    future: true,
     icon: <ChatCircleDotsIcon aria-hidden="true" />,
     id: "chatdnb",
     label: "ChatDnB",
     to: "/chat",
   },
+  // ── EXTENSION SLOT ──────────────────────────────────────────────────────────
+  // One more door is planned. It is FILTERED OUT while `future` is set (so no
+  // dead link ships); remove the flag the day the route exists to light it up. The
+  // `to` value is a provisional placeholder — set the real path when it lands.
   {
     future: true,
     icon: <BinocularsIcon aria-hidden="true" />,
@@ -153,15 +156,18 @@ function AccountMenu({ image, name }: { image: null | string; name: string }): R
 
   // The active-door marker (the account redesign brief §Wayfinding): on `/account`,
   // the menu link whose tab matches the current view is marked (`aria-current` for
-  // assistive tech, a quiet cream tint for sight). A bare `/account` is the Galaxy.
+  // assistive tech, a quiet cream tint for sight). A bare `/account` is the Galaxy;
+  // `/chat` marks the ChatDnB door the same way.
   const location = useRouterState({ select: (state) => state.location });
   const tab = (location.search as { tab?: string }).tab;
-  const activeDoor: null | "galaxy" | "saves" | "settings" =
-    location.pathname === "/account"
-      ? tab === "saves" || tab === "settings"
-        ? tab
-        : "galaxy"
-      : null;
+  const activeDoor: null | "chatdnb" | "galaxy" | "saves" | "settings" =
+    location.pathname === "/chat"
+      ? "chatdnb"
+      : location.pathname === "/account"
+        ? tab === "saves" || tab === "settings"
+          ? tab
+          : "galaxy"
+        : null;
 
   return (
     <DropdownMenu>
@@ -191,7 +197,9 @@ function AccountMenu({ image, name }: { image: null | string; name: string }): R
               className={active ? "crew-menu-item-active" : undefined}
               key={link.id}
               render={
-                link.search ? (
+                link.to ? (
+                  <Link aria-current={active ? "page" : undefined} to={link.to} />
+                ) : link.search ? (
                   <Link
                     aria-current={active ? "page" : undefined}
                     search={link.search}

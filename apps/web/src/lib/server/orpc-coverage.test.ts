@@ -127,6 +127,11 @@ const CARVE_OUT_ROUTE_PREFIXES = [
 
 // Binary/render routes: emit images/audio, not RPC JSON. Carved out like OAuth.
 const CARVE_OUT_ROUTES = new Set([
+  // ChatDnB's crew door (POST /api/chat) — a STREAMING carve-out (AGENTS.md): the
+  // response is an open AI SDK UIMessage stream, not a single RPC JSON body, exactly
+  // like the admin sibling /api/admin/chat. Never an oRPC op; the safety rails
+  // (session, emailVerified, origin/CSRF, the two rate dials) live in the route.
+  "chat",
   // The account portrait upload — a large-body/direct-upload carve-out (AGENTS.md):
   // it RECEIVES image bytes (a downscaled ≤512² avatar), not an RPC JSON body, and
   // PUTs them to R2. Never an oRPC op; the safety rails (session, CSRF, rate-limit,

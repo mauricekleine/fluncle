@@ -24,6 +24,7 @@ import { Route as GalaxyRouteImport } from './routes/galaxy'
 import { Route as FeedDotjsonRouteImport } from './routes/feed[.]json'
 import { Route as DocsRouteImport } from './routes/docs'
 import { Route as DeviceRouteImport } from './routes/device'
+import { Route as ChatRouteImport } from './routes/chat'
 import { Route as CalendarDoticsRouteImport } from './routes/calendar[.]ics'
 import { Route as AtomDotxmlRouteImport } from './routes/atom[.]xml'
 import { Route as AccountRouteImport } from './routes/account'
@@ -56,6 +57,7 @@ import { Route as DocsDotmdSplatRouteImport } from './routes/docs[.]md.$'
 import { Route as CliLatestDotshRouteImport } from './routes/cli/latest[.]sh'
 import { Route as ArtistSlugRouteImport } from './routes/artist.$slug'
 import { Route as ApiStatusRouteImport } from './routes/api/status'
+import { Route as ApiChatRouteImport } from './routes/api/chat'
 import { Route as AlbumSlugRouteImport } from './routes/album.$slug'
 import { Route as AdminUsersRouteImport } from './routes/admin/users'
 import { Route as AdminUsageRouteImport } from './routes/admin/usage'
@@ -78,6 +80,7 @@ import { Route as AdminArtistsRouteImport } from './routes/admin/artists'
 import { Route as ApiV1StatusRouteImport } from './routes/api/v1/status'
 import { Route as ApiV1PostmanDotjsonRouteImport } from './routes/api/v1/postman[.]json'
 import { Route as ApiV1OpenapiDotjsonRouteImport } from './routes/api/v1/openapi[.]json'
+import { Route as ApiV1ChatRouteImport } from './routes/api/v1/chat'
 import { Route as ApiPreviewIdOrLogIdRouteImport } from './routes/api/preview.$idOrLogId'
 import { Route as ApiOgSetRouteImport } from './routes/api/og.set'
 import { Route as ApiOgLogIdRouteImport } from './routes/api/og.$logId'
@@ -192,6 +195,11 @@ const DocsRoute = DocsRouteImport.update({
 const DeviceRoute = DeviceRouteImport.update({
   id: '/device',
   path: '/device',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ChatRoute = ChatRouteImport.update({
+  id: '/chat',
+  path: '/chat',
   getParentRoute: () => rootRouteImport,
 } as any)
 const CalendarDoticsRoute = CalendarDoticsRouteImport.update({
@@ -355,6 +363,11 @@ const ApiStatusRoute = ApiStatusRouteImport.update({
   path: '/api/status',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiChatRoute = ApiChatRouteImport.update({
+  id: '/api/chat',
+  path: '/api/chat',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AlbumSlugRoute = AlbumSlugRouteImport.update({
   id: '/album/$slug',
   path: '/album/$slug',
@@ -463,6 +476,11 @@ const ApiV1PostmanDotjsonRoute = ApiV1PostmanDotjsonRouteImport.update({
 const ApiV1OpenapiDotjsonRoute = ApiV1OpenapiDotjsonRouteImport.update({
   id: '/api/v1/openapi.json',
   path: '/api/v1/openapi.json',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiV1ChatRoute = ApiV1ChatRouteImport.update({
+  id: '/api/v1/chat',
+  path: '/api/v1/chat',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiPreviewIdOrLogIdRoute = ApiPreviewIdOrLogIdRouteImport.update({
@@ -699,6 +717,7 @@ export interface FileRoutesByFullPath {
   '/account': typeof AccountRoute
   '/atom.xml': typeof AtomDotxmlRoute
   '/calendar.ics': typeof CalendarDoticsRoute
+  '/chat': typeof ChatRoute
   '/device': typeof DeviceRoute
   '/docs': typeof DocsRouteWithChildren
   '/feed.json': typeof FeedDotjsonRoute
@@ -733,6 +752,7 @@ export interface FileRoutesByFullPath {
   '/admin/usage': typeof AdminUsageRoute
   '/admin/users': typeof AdminUsersRoute
   '/album/$slug': typeof AlbumSlugRoute
+  '/api/chat': typeof ApiChatRoute
   '/api/status': typeof ApiStatusRoute
   '/artist/$slug': typeof ArtistSlugRoute
   '/cli/latest.sh': typeof CliLatestDotshRoute
@@ -767,6 +787,7 @@ export interface FileRoutesByFullPath {
   '/api/og/$logId': typeof ApiOgLogIdRoute
   '/api/og/set': typeof ApiOgSetRoute
   '/api/preview/$idOrLogId': typeof ApiPreviewIdOrLogIdRoute
+  '/api/v1/chat': typeof ApiV1ChatRoute
   '/api/v1/openapi.json': typeof ApiV1OpenapiDotjsonRoute
   '/api/v1/postman.json': typeof ApiV1PostmanDotjsonRoute
   '/api/v1/status': typeof ApiV1StatusRoute
@@ -809,6 +830,7 @@ export interface FileRoutesByTo {
   '/account': typeof AccountRoute
   '/atom.xml': typeof AtomDotxmlRoute
   '/calendar.ics': typeof CalendarDoticsRoute
+  '/chat': typeof ChatRoute
   '/device': typeof DeviceRoute
   '/feed.json': typeof FeedDotjsonRoute
   '/galaxy': typeof GalaxyRoute
@@ -842,6 +864,7 @@ export interface FileRoutesByTo {
   '/admin/usage': typeof AdminUsageRoute
   '/admin/users': typeof AdminUsersRoute
   '/album/$slug': typeof AlbumSlugRoute
+  '/api/chat': typeof ApiChatRoute
   '/api/status': typeof ApiStatusRoute
   '/artist/$slug': typeof ArtistSlugRoute
   '/cli/latest.sh': typeof CliLatestDotshRoute
@@ -876,6 +899,7 @@ export interface FileRoutesByTo {
   '/api/og/$logId': typeof ApiOgLogIdRoute
   '/api/og/set': typeof ApiOgSetRoute
   '/api/preview/$idOrLogId': typeof ApiPreviewIdOrLogIdRoute
+  '/api/v1/chat': typeof ApiV1ChatRoute
   '/api/v1/openapi.json': typeof ApiV1OpenapiDotjsonRoute
   '/api/v1/postman.json': typeof ApiV1PostmanDotjsonRoute
   '/api/v1/status': typeof ApiV1StatusRoute
@@ -920,6 +944,7 @@ export interface FileRoutesById {
   '/account': typeof AccountRoute
   '/atom.xml': typeof AtomDotxmlRoute
   '/calendar.ics': typeof CalendarDoticsRoute
+  '/chat': typeof ChatRoute
   '/device': typeof DeviceRoute
   '/docs': typeof DocsRouteWithChildren
   '/feed.json': typeof FeedDotjsonRoute
@@ -954,6 +979,7 @@ export interface FileRoutesById {
   '/admin/usage': typeof AdminUsageRoute
   '/admin/users': typeof AdminUsersRoute
   '/album/$slug': typeof AlbumSlugRoute
+  '/api/chat': typeof ApiChatRoute
   '/api/status': typeof ApiStatusRoute
   '/artist/$slug': typeof ArtistSlugRoute
   '/cli/latest.sh': typeof CliLatestDotshRoute
@@ -988,6 +1014,7 @@ export interface FileRoutesById {
   '/api/og/$logId': typeof ApiOgLogIdRoute
   '/api/og/set': typeof ApiOgSetRoute
   '/api/preview/$idOrLogId': typeof ApiPreviewIdOrLogIdRoute
+  '/api/v1/chat': typeof ApiV1ChatRoute
   '/api/v1/openapi.json': typeof ApiV1OpenapiDotjsonRoute
   '/api/v1/postman.json': typeof ApiV1PostmanDotjsonRoute
   '/api/v1/status': typeof ApiV1StatusRoute
@@ -1033,6 +1060,7 @@ export interface FileRouteTypes {
     | '/account'
     | '/atom.xml'
     | '/calendar.ics'
+    | '/chat'
     | '/device'
     | '/docs'
     | '/feed.json'
@@ -1067,6 +1095,7 @@ export interface FileRouteTypes {
     | '/admin/usage'
     | '/admin/users'
     | '/album/$slug'
+    | '/api/chat'
     | '/api/status'
     | '/artist/$slug'
     | '/cli/latest.sh'
@@ -1101,6 +1130,7 @@ export interface FileRouteTypes {
     | '/api/og/$logId'
     | '/api/og/set'
     | '/api/preview/$idOrLogId'
+    | '/api/v1/chat'
     | '/api/v1/openapi.json'
     | '/api/v1/postman.json'
     | '/api/v1/status'
@@ -1143,6 +1173,7 @@ export interface FileRouteTypes {
     | '/account'
     | '/atom.xml'
     | '/calendar.ics'
+    | '/chat'
     | '/device'
     | '/feed.json'
     | '/galaxy'
@@ -1176,6 +1207,7 @@ export interface FileRouteTypes {
     | '/admin/usage'
     | '/admin/users'
     | '/album/$slug'
+    | '/api/chat'
     | '/api/status'
     | '/artist/$slug'
     | '/cli/latest.sh'
@@ -1210,6 +1242,7 @@ export interface FileRouteTypes {
     | '/api/og/$logId'
     | '/api/og/set'
     | '/api/preview/$idOrLogId'
+    | '/api/v1/chat'
     | '/api/v1/openapi.json'
     | '/api/v1/postman.json'
     | '/api/v1/status'
@@ -1253,6 +1286,7 @@ export interface FileRouteTypes {
     | '/account'
     | '/atom.xml'
     | '/calendar.ics'
+    | '/chat'
     | '/device'
     | '/docs'
     | '/feed.json'
@@ -1287,6 +1321,7 @@ export interface FileRouteTypes {
     | '/admin/usage'
     | '/admin/users'
     | '/album/$slug'
+    | '/api/chat'
     | '/api/status'
     | '/artist/$slug'
     | '/cli/latest.sh'
@@ -1321,6 +1356,7 @@ export interface FileRouteTypes {
     | '/api/og/$logId'
     | '/api/og/set'
     | '/api/preview/$idOrLogId'
+    | '/api/v1/chat'
     | '/api/v1/openapi.json'
     | '/api/v1/postman.json'
     | '/api/v1/status'
@@ -1365,6 +1401,7 @@ export interface RootRouteChildren {
   AccountRoute: typeof AccountRoute
   AtomDotxmlRoute: typeof AtomDotxmlRoute
   CalendarDoticsRoute: typeof CalendarDoticsRoute
+  ChatRoute: typeof ChatRoute
   DeviceRoute: typeof DeviceRoute
   DocsRoute: typeof DocsRouteWithChildren
   FeedDotjsonRoute: typeof FeedDotjsonRoute
@@ -1381,6 +1418,7 @@ export interface RootRouteChildren {
   SitemapDotxmlRoute: typeof SitemapDotxmlRoute
   StatusRoute: typeof StatusRoute
   AlbumSlugRoute: typeof AlbumSlugRoute
+  ApiChatRoute: typeof ApiChatRoute
   ApiStatusRoute: typeof ApiStatusRoute
   ArtistSlugRoute: typeof ArtistSlugRoute
   CliLatestDotshRoute: typeof CliLatestDotshRoute
@@ -1410,6 +1448,7 @@ export interface RootRouteChildren {
   ApiOgLogIdRoute: typeof ApiOgLogIdRoute
   ApiOgSetRoute: typeof ApiOgSetRoute
   ApiPreviewIdOrLogIdRoute: typeof ApiPreviewIdOrLogIdRoute
+  ApiV1ChatRoute: typeof ApiV1ChatRoute
   ApiV1OpenapiDotjsonRoute: typeof ApiV1OpenapiDotjsonRoute
   ApiV1PostmanDotjsonRoute: typeof ApiV1PostmanDotjsonRoute
   ApiV1StatusRoute: typeof ApiV1StatusRoute
@@ -1551,6 +1590,13 @@ declare module '@tanstack/react-router' {
       path: '/device'
       fullPath: '/device'
       preLoaderRoute: typeof DeviceRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/chat': {
+      id: '/chat'
+      path: '/chat'
+      fullPath: '/chat'
+      preLoaderRoute: typeof ChatRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/calendar.ics': {
@@ -1777,6 +1823,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiStatusRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/chat': {
+      id: '/api/chat'
+      path: '/api/chat'
+      fullPath: '/api/chat'
+      preLoaderRoute: typeof ApiChatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/album/$slug': {
       id: '/album/$slug'
       path: '/album/$slug'
@@ -1929,6 +1982,13 @@ declare module '@tanstack/react-router' {
       path: '/api/v1/openapi.json'
       fullPath: '/api/v1/openapi.json'
       preLoaderRoute: typeof ApiV1OpenapiDotjsonRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/v1/chat': {
+      id: '/api/v1/chat'
+      path: '/api/v1/chat'
+      fullPath: '/api/v1/chat'
+      preLoaderRoute: typeof ApiV1ChatRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/preview/$idOrLogId': {
@@ -2287,6 +2347,7 @@ const rootRouteChildren: RootRouteChildren = {
   AccountRoute: AccountRoute,
   AtomDotxmlRoute: AtomDotxmlRoute,
   CalendarDoticsRoute: CalendarDoticsRoute,
+  ChatRoute: ChatRoute,
   DeviceRoute: DeviceRoute,
   DocsRoute: DocsRouteWithChildren,
   FeedDotjsonRoute: FeedDotjsonRoute,
@@ -2303,6 +2364,7 @@ const rootRouteChildren: RootRouteChildren = {
   SitemapDotxmlRoute: SitemapDotxmlRoute,
   StatusRoute: StatusRoute,
   AlbumSlugRoute: AlbumSlugRoute,
+  ApiChatRoute: ApiChatRoute,
   ApiStatusRoute: ApiStatusRoute,
   ArtistSlugRoute: ArtistSlugRoute,
   CliLatestDotshRoute: CliLatestDotshRoute,
@@ -2332,6 +2394,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiOgLogIdRoute: ApiOgLogIdRoute,
   ApiOgSetRoute: ApiOgSetRoute,
   ApiPreviewIdOrLogIdRoute: ApiPreviewIdOrLogIdRoute,
+  ApiV1ChatRoute: ApiV1ChatRoute,
   ApiV1OpenapiDotjsonRoute: ApiV1OpenapiDotjsonRoute,
   ApiV1PostmanDotjsonRoute: ApiV1PostmanDotjsonRoute,
   ApiV1StatusRoute: ApiV1StatusRoute,
