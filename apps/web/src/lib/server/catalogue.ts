@@ -1718,36 +1718,45 @@ export async function listCatalogueTracks(
 }
 
 /**
+ * What the diversity decay reads off a candidate: the raw score to decay and the
+ * three redundancy signals. `null` for a missing signal contributes no factor.
+ */
+export type DiversitySignals = {
+  artist: null | string;
+  key: null | string;
+  score: number;
+  year: null | string;
+};
+
+/**
  * The greedy diversified selection (EAR_DIVERSITY_DECAY): repeatedly pick the candidate whose
  * raw score, decayed by how many already-picked rows share its artist / year / key, is highest.
  * O(pool × page) over a ≤500 pool — pennies. Deterministic: ties break on the raw order the
  * pool arrived in (score DESC, track_id ASC).
+ *
+ * GENERIC over the candidate type so the one decay serves both rankings that need it: the ear
+ * lens (`CatalogueTrackItem`, via `diversifyEarPage` below) and the per-user recommendation
+ * engine (recommendations.ts) — same dials, same greed, never re-implemented.
  */
-function diversifyEarPage(pool: CatalogueTrackItem[], page: number): CatalogueTrackItem[] {
-  const picked: CatalogueTrackItem[] = [];
+export function diversifyRanked<T>(
+  pool: T[],
+  page: number,
+  signalsOf: (item: T) => DiversitySignals,
+): T[] {
+  const picked: T[] = [];
   const artistSeen = new Map<string, number>();
   const yearSeen = new Map<string, number>();
   const keySeen = new Map<string, number>();
   const remaining = [...pool];
-
-  const artistOf = (item: CatalogueTrackItem): null | string =>
-    item.artists[0] ? item.artists[0].trim().toLowerCase() : null;
-  const yearOf = (item: CatalogueTrackItem): null | string =>
-    item.releaseDate ? item.releaseDate.slice(0, 4) : null;
-  const keyOf = (item: CatalogueTrackItem): null | string =>
-    item.key ? item.key.trim().toLowerCase() : null;
 
   while (picked.length < page && remaining.length > 0) {
     let bestIndex = 0;
     let bestScore = -Infinity;
 
     for (const [index, item] of remaining.entries()) {
-      const raw = item.nearestFindingScore ?? 0;
-      const artist = artistOf(item);
-      const year = yearOf(item);
-      const key = keyOf(item);
+      const { artist, key, score, year } = signalsOf(item);
       const decayed =
-        raw *
+        score *
         EAR_DIVERSITY_DECAY.artist ** (artist ? (artistSeen.get(artist) ?? 0) : 0) *
         EAR_DIVERSITY_DECAY.year ** (year ? (yearSeen.get(year) ?? 0) : 0) *
         EAR_DIVERSITY_DECAY.key ** (key ? (keySeen.get(key) ?? 0) : 0);
@@ -1764,9 +1773,7 @@ function diversifyEarPage(pool: CatalogueTrackItem[], page: number): CatalogueTr
       break;
     }
 
-    const artist = artistOf(chosen);
-    const year = yearOf(chosen);
-    const key = keyOf(chosen);
+    const { artist, key, year } = signalsOf(chosen);
 
     if (artist) {
       artistSeen.set(artist, (artistSeen.get(artist) ?? 0) + 1);
@@ -1784,6 +1791,16 @@ function diversifyEarPage(pool: CatalogueTrackItem[], page: number): CatalogueTr
   }
 
   return picked;
+}
+
+/** The ear lens's decay pass — `diversifyRanked` bound to the catalogue row's signals. */
+function diversifyEarPage(pool: CatalogueTrackItem[], page: number): CatalogueTrackItem[] {
+  return diversifyRanked(pool, page, (item) => ({
+    artist: item.artists[0] ? item.artists[0].trim().toLowerCase() : null,
+    key: item.key ? item.key.trim().toLowerCase() : null,
+    score: item.nearestFindingScore ?? 0,
+    year: item.releaseDate ? item.releaseDate.slice(0, 4) : null,
+  }));
 }
 
 /** Hydrate the page's matched findings in ONE batched read (never N+1), keyed by track id. */

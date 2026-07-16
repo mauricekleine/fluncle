@@ -78,6 +78,11 @@ describe("deleteAccount (real SQL via accountDeletionStatements)", () => {
           values (?, ?, ?, ?, ?)`,
       },
       {
+        args: [userId, trackId, now],
+        sql: `insert into user_rec_seeds (user_id, track_id, added_at)
+          values (?, ?, ?)`,
+      },
+      {
         args: [`ss-${userId}`, userId, `A set`, "4iV5W9uYEdYUVa79Axb7Rh", null, now, now],
         sql: `insert into user_saved_sets
           (id, user_id, name, set_tokens, taste, created_at, updated_at)
@@ -125,6 +130,7 @@ describe("deleteAccount (real SQL via accountDeletionStatements)", () => {
 
     // 1. Hard-deleted per-user tables are now empty for this user.
     for (const table of [
+      "user_rec_seeds",
       "user_saved_findings",
       "user_saved_sets",
       "user_preferences",

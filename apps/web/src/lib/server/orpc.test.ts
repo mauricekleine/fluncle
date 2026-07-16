@@ -568,6 +568,8 @@ type GeneratedSpec = {
 const PUBLIC_OPERATION_IDS = [
   "collectPrivateGalaxyLog",
   "deletePrivateAccount",
+  // The recommendation-seed domain (docs/the-ear.md § The per-user telescopes).
+  "deletePrivateRecSeed",
   "deletePrivateSavedSet",
   "deregisterDevice",
   "exportPrivateAccountData",
@@ -600,6 +602,8 @@ const PUBLIC_OPERATION_IDS = [
   // The public /reach read — Fluncle's numbers across every platform, over time.
   "listPlatformStats",
   "listPrivateGalaxyCollection",
+  "listPrivateRecSeeds",
+  "listPrivateRecommendations",
   "listPrivateSavedFindings",
   "listPrivateSavedSets",
   "listPrivateSubmissions",
@@ -612,6 +616,7 @@ const PUBLIC_OPERATION_IDS = [
   "mergePrivateGalaxyProgress",
   "registerDevice",
   "savePrivateFinding",
+  "savePrivateRecSeed",
   "savePrivateSet",
   "searchArchive",
   "searchTracks",

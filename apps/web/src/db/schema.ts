@@ -1228,6 +1228,30 @@ export const userGalaxyCollections = sqliteTable(
   ],
 );
 
+// A signed-in user's recommendation SEEDS — the ≤12 tracks their personal
+// telescope points from (the per-user recommendation engine, docs/the-ear.md
+// § The per-user telescopes). A seed references ANY `tracks` row — a certified
+// finding or an uncertified catalogue track — because a listener seeds with what
+// they like, not with what Fluncle certified. The (user_id, track_id) PRIMARY KEY
+// is the natural identity (a track is a seed once per user; re-adding refreshes
+// `added_at`), and the `user_id` index serves the per-user reads (the seed list +
+// the seed-vector probe read, both bounded by the 12-seed cap — enforced in the
+// op, not the schema: SQLite has no per-group row cap). Like every sibling
+// per-user table, `user_id` is a logical FK (no SQL cascade) — deletion is
+// application-code (`accountDeletionStatements`), never a constraint.
+export const userRecSeeds = sqliteTable(
+  "user_rec_seeds",
+  {
+    addedAt: text("added_at").notNull(),
+    trackId: text("track_id").notNull(),
+    userId: text("user_id").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.userId, table.trackId] }),
+    index("user_rec_seeds_user_idx").on(table.userId),
+  ],
+);
+
 export const userSavedFindings = sqliteTable(
   "user_saved_findings",
   {

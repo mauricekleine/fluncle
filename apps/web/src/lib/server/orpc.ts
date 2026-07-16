@@ -64,6 +64,7 @@ import { healthHandlers } from "./orpc/health";
 import { meHandlers } from "./orpc/me";
 import { meGalaxyHandlers } from "./orpc/me-galaxy";
 import { mePreferencesHandlers } from "./orpc/me-preferences";
+import { meRecsHandlers } from "./orpc/me-recs";
 import { meSavedHandlers } from "./orpc/me-saved";
 import { meSetsHandlers } from "./orpc/me-sets";
 import { mixHandlers } from "./orpc/mix";
@@ -125,6 +126,7 @@ export const router = os.router({
   ...meHandlers(os),
   ...meGalaxyHandlers(os),
   ...mePreferencesHandlers(os),
+  ...meRecsHandlers(os),
   ...meSavedHandlers(os),
   ...meSetsHandlers(os),
   ...mixHandlers(os),

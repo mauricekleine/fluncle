@@ -266,6 +266,9 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   delete_clip_schedule: "operator",
   delete_edition: "operator",
   delete_private_account: "private-session",
+  // The recommendation-seed remove — private-session (privateUserMutation), the
+  // delete_private_saved_set precedent (docs/the-ear.md § The per-user telescopes).
+  delete_private_rec_seed: "private-session",
   delete_private_saved_set: "private-session",
   delete_recording: "operator",
   delete_subscription: "operator",
@@ -408,6 +411,13 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // The collection browser read (the /account Galaxy tab) — private-session
   // (privateUserAuth), the get_private_galaxy_progress precedent.
   list_private_galaxy_collection: "private-session",
+  // The recommendation-seed list — private-session (privateUserAuth), the
+  // list_private_saved_findings precedent.
+  list_private_rec_seeds: "private-session",
+  // THE ENGINE's read — private-session (privateUserAuth). The verified-email
+  // gate (403 email_unverified) and the hourly rate limit live in the handler +
+  // helper, on TOP of the session tier — the tier here is the session carrier.
+  list_private_recommendations: "private-session",
   list_private_saved_findings: "private-session",
   list_private_saved_sets: "private-session",
   list_private_submissions: "private-session",
@@ -544,6 +554,9 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // promotes a candidate onto the public artist page (the trust gate, at the link grain).
   review_artist_social: "operator",
   save_private_finding: "private-session",
+  // The recommendation-seed add — private-session (privateUserMutation), the
+  // save_private_finding precedent; the 12-seed cap 409s in the helper.
+  save_private_rec_seed: "private-session",
   save_private_set: "private-session",
   send_edition: "operator",
   // The catalogue capture budget + its kill switch — operator tier, like `set_clip_drip`

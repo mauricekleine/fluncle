@@ -55,6 +55,7 @@ import { healthContract } from "./health";
 import { meContract } from "./me";
 import { meGalaxyContract } from "./me-galaxy";
 import { mePreferencesContract } from "./me-preferences";
+import { meRecsContract } from "./me-recs";
 import { meSavedContract } from "./me-saved";
 import { meSetsContract } from "./me-sets";
 import { mixContract } from "./mix";
@@ -282,6 +283,15 @@ export {
   UserPreferencesSchema,
   updatePrivatePreferences,
 } from "./me-preferences";
+export {
+  deletePrivateRecSeed,
+  listPrivateRecommendations,
+  listPrivateRecSeeds,
+  RecommendationCatalogueSchema,
+  RecommendationFindingSchema,
+  RecSeedSchema,
+  savePrivateRecSeed,
+} from "./me-recs";
 export { listPrivateSavedFindings, savePrivateFinding, unsavePrivateFinding } from "./me-saved";
 export {
   deletePrivateSavedSet,
@@ -386,6 +396,7 @@ export const contract = {
   ...meContract,
   ...meGalaxyContract,
   ...mePreferencesContract,
+  ...meRecsContract,
   ...meSavedContract,
   ...meSetsContract,
   ...mixContract,

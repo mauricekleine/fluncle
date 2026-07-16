@@ -252,6 +252,18 @@ The discovery loop, closed (operator ruling, 2026-07-15): the diversified ear to
 
 The playlist is **never curated by hand**. It is a pure mirror of the telescope (`telescope-playlist.ts`): the sync rides every rank-sweep tick and the operator's certify/dismiss acts, computes the desired ordered list, and — only when it differs from the last list the mirror wrote (kept on the settings KV, `telescope.last_mirror`; the playlist is never read back, so the modify scopes suffice and `playlist-read-private` is never needed) — replaces the playlist in one PUT (the order _is_ the ranking; full-replace is idempotent, nothing to reconcile). So logging a find removes it (the certification anti-join), the **thumbs-down removes it on the same act**, and a better candidate displaces a weaker one. The playlist itself can be created lazily on first sync OR hand-minted by the operator and adopted (its id lives on the settings KV, `telescope.spotify_playlist_id` — the live one was hand-created 2026-07-15 and adopted via a one-off settings write, after the API create 403'd on this app tier). The replace posts to `/playlists/{id}/items` — the legacy `/tracks` alias 403s where `/items` works. Rows without a Spotify anchor simply never reach it (the sync walks the diversified ranking to depth 200 for its 50). Best-effort by construction — a Spotify hiccup logs and returns, never failing the sweep or the operator's act.
 
+## The per-user telescopes — the engine, generalized to the crew
+
+The operator's telescope above answers "what sits near what **he** loves". The per-user recommendation engine (`recommendations.ts`) asks the same question for a **signed-in listener**: they pick up to 12 seed tracks — archive or catalogue, because a listener seeds with what they like, not with what Fluncle certified — and the engine ranks the embedded, Spotify-anchored catalogue against **their** seeds. Same physics, different pointing.
+
+**The ops**, all on the `/me` private-session tier (cookie session; the writes CSRF-guarded): `list_private_rec_seeds` / `save_private_rec_seed` / `delete_private_rec_seed` (`/me/rec-seeds` — the seed set, capped at 12, the cap enforced on the write with an honest 409) and `list_private_recommendations` (`/me/recommendations` — the engine). The engine's read additionally requires a **verified email** (403 `email_unverified` — the learning-cohort ruling) and carries a modest per-user hourly rate limit: each request is a real vector scan.
+
+**The scan is this page's machinery, reused, not re-derived.** Each candidate's score is max-similarity across the seed set (`min` over cosine distances, one `union all` branch per seed vector, each probe bound as a raw BLOB — the `/mix` taste-rail shape), ranked and cut **in SQL**; the seed cap IS the probe fan-out bound. The candidate exclusions are the ear lens's own (no findings row, not dismissed, no duplicate marker, the display-band duplicate cut, the long-form veto) plus the Spotify anchor, and the page is spread by the **same** `EAR_DIVERSITY_DECAY` greedy re-rank (`diversifyRanked`) the ear lens uses — the score a row displays stays the true similarity. Computed per request, no cache in v1: the scan is bounded (≤12 probes) and the rate limit meters it. A seed whose track has no vector yet is skipped **honestly** — named in `seedsSkipped`, never silently ignored.
+
+**The blend (option B) is the register split on the wire.** The response is two lists. `findings` — the 2–3 certified findings nearest the seed set — are the labeled slots Fluncle's full voice rides: each carries its Log ID and note (its WHY, his testimony). `catalogue` rows carry **nothing editorial**: identity, listen-out links, and the honest similarity number — the instrument register, DESIGN.md's Unlit Rule on the wire ("close to what you picked" is UI copy, not data). And a row the user seeded is never recommended back to them, in either half.
+
+The seed set joins the account's privacy invariant like every per-user table: exported with the account data, deleted in the account-deletion batch (`account-data.ts`).
+
 ## The operator's actions — the page is a workstation, not a readout
 
 A ranked list he can only read is a report; the operator ruled it must be a place he can _act_. Four things live on the row, and the Unlit Rule does not reach them — this is his own tool, not a crew-facing surface (the persona law, [docs/admin-shell.md](./admin-shell.md)), so where to listen and what to do are the whole point.
@@ -302,6 +314,12 @@ fluncle admin catalogue restore <id>               # put a dismissed row back (o
 - `apps/web/src/routes/admin/catalogue.tsx` — the station (and the capture-budget card).
 - `packages/contracts/src/orpc/admin-catalogue.ts` + `apps/web/src/lib/server/orpc/admin-catalogue.ts` — the ops.
 - `apps/cli/src/commands/admin-catalogue.ts` — the thin HTTP client.
+
+The per-user telescopes (§ above):
+
+- `apps/web/src/lib/server/recommendations.ts` — the seeds + the engine (the blend, the exclusions, the honest skip).
+- `apps/web/src/lib/server/recommendations.integration.test.ts` — **the engine's proof** (real vectors, real SQL: the cap, the scoping, every exclusion, the slots' voice, the decay, the max-sim/centroid case, the 403 gate).
+- `packages/contracts/src/orpc/me-recs.ts` + `apps/web/src/lib/server/orpc/me-recs.ts` — the four `/me` ops.
 
 The capture budget (the brake):
 
