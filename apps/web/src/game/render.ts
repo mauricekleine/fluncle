@@ -79,6 +79,8 @@ export type RenderView = {
   atlas?: AtlasView;
   bootT: number;
   carrier?: CarrierInfo;
+  /** The signed-in traveller's crew number, stamped on the ship. Absent = no stamp. */
+  crewNumber?: number;
   endT: number;
   logCard?: LogCardView;
   muted: boolean;
@@ -816,6 +818,17 @@ export function createRenderer(container: HTMLElement): Renderer {
       sprite.height * scale,
     );
     ctx.restore();
+
+    // The crew stamp (account brief, ruling #1): the signed-in traveller's enlistment
+    // number, painted small and upright just above the nose — near the hull, clear of
+    // the engine flames below, never over the play space. Absent = nothing drawn.
+    if (view.crewNumber !== undefined) {
+      ctx.font = '7px "Oxanium", "Space Grotesk", ui-sans-serif, system-ui, sans-serif';
+      ctx.fillStyle = palette.cream;
+      ctx.textAlign = "center";
+      fillTextFromCapTop(`№${view.crewNumber}`, Math.round(shipX), Math.round(shipY) - bottom - 9);
+      ctx.textAlign = "left";
+    }
   }
 
   // The listening moment: a meditative side-on scene. The banger burns big at

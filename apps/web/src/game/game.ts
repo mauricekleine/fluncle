@@ -5,6 +5,7 @@ import { collectPages } from "./paginate";
 import { placeStars } from "./placement";
 import {
   applyLifetimeMarkers,
+  fetchCrewNumber,
   fetchLifetimeProgress,
   persistLoggedLogId,
   persistProgressCounters,
@@ -113,6 +114,10 @@ export function createGame(container: HTMLElement): Game {
 
   let destroyed = false;
   let sim: SimState | undefined;
+  // The crew stamp on the ship (account brief, ruling #1): the signed-in traveller's
+  // enlistment number, painted small near the hull. Absent for anonymous flights, an
+  // unshipped field, or any sync failure — the renderer draws nothing when undefined.
+  let crewNumber: number | undefined;
   let phase: MasterPhase = "gate";
   let bootT = 0;
   let endT = 0;
@@ -227,6 +232,14 @@ export function createGame(container: HTMLElement): Game {
 
   void loadCatalogue().catch(() => {
     emptyGalaxy = true;
+  });
+
+  // The crew number rides its own tolerant fetch — never a gate on the flight. It
+  // lands (or does not) independently of the catalogue and the lifetime sync.
+  void fetchCrewNumber().then((value) => {
+    if (!destroyed) {
+      crewNumber = value;
+    }
   });
 
   function handleEvent(event: SimEvent, state: SimState): void {
@@ -458,6 +471,7 @@ export function createGame(container: HTMLElement): Game {
             : undefined,
         bootT: Math.min(1, bootT),
         carrier: nearestCarrier(sim),
+        crewNumber,
         endT,
         logCard: cardView,
         muted: audio.muted(),
