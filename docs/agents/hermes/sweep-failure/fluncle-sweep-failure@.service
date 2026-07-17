@@ -1,0 +1,21 @@
+[Unit]
+Description=fluncle sweep-failure notifier for %i — Discord alert when a host sweep dies before writing its /status marker
+Documentation=https://github.com/mauricekleine/fluncle/blob/main/docs/agents/hermes/sweep-failure/README.md
+Wants=network-online.target docker.service
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+# Runs as root on the HOST: it queries host systemd for the failed unit's exit status (the
+# container can't see host systemd) and reads DISCORD_ALERT_WEBHOOK from the LIVE container's
+# env via `docker inspect` — mirroring pin-watch, so there is no config file, no `op` read, and
+# no secret on host disk. %i is the failed unit name, from `OnFailure=fluncle-sweep-failure@%n.service`
+# on each sweep unit. This unit itself carries NO OnFailure — a failing notifier must not loop.
+ExecStart=/opt/fluncle-sweep-failure/fluncle-sweep-failure-notify.sh %i
+# A single systemctl read + one webhook POST (10s curl cap) — seconds at most.
+TimeoutStartSec=30
+# Modest hardening for a root docker-driving oneshot (matches the sweep units).
+NoNewPrivileges=true
+ProtectControlGroups=true
+ProtectKernelTunables=true
+RestrictSUIDSGID=true

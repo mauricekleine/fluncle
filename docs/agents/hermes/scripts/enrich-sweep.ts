@@ -742,7 +742,11 @@ async function main(): Promise<void> {
 // this file directly, so `import.meta.main` is true when the cron runs it.
 if (import.meta.main) {
   main().catch((error: unknown) => {
-    log(`enrich sweep failed: ${error instanceof Error ? error.message : String(error)}`);
+    const message = error instanceof Error ? error.message : String(error);
+    log(`enrich sweep failed: ${message}`);
+    // Emit the `{ ok: false }` summary line to STDOUT so the /status marker (cron-output.sh
+    // captures stdout only) sees the failure — parity with the sibling sweeps' catch.
+    console.log(JSON.stringify({ error: message, ok: false, reason: "enrich_failed" }));
     process.exit(1);
   });
 }

@@ -3,6 +3,10 @@ Description=fluncle-enrich — rave-02 host trigger for the on-box enrichment sw
 Documentation=https://github.com/mauricekleine/fluncle/blob/main/docs/agents/hermes/enrich-timer/README.md
 Wants=network-online.target docker.service
 After=network-online.target docker.service
+# If this unit dies before writing its own /status marker (OOM, missing binary, a crash
+# before the sweep catch runs), the healthcheck prober never sees a failure. This catch-all
+# posts a minimal Discord alert; %n is this unit's full name.
+OnFailure=fluncle-sweep-failure@%n.service
 
 [Service]
 Type=oneshot

@@ -694,7 +694,7 @@ async function main(): Promise<void> {
   // 4. ZERO-FIND RULE
   if (findings.length === 0 && mixtapes.length === 0) {
     log("no finds this window — skipping (a missed Friday is quieter than a hollow one)");
-    console.error(JSON.stringify({ ok: true, reason: "no_finds", skipped: true }));
+    console.log(JSON.stringify({ ok: true, reason: "no_finds", skipped: true }));
 
     return;
   }
@@ -707,7 +707,7 @@ async function main(): Promise<void> {
   } catch (error) {
     if (error instanceof ClaudeAuthError) {
       pingClaudeAuthFailure(error.message);
-      console.error(JSON.stringify({ ok: false, reason: "claude_auth" }));
+      console.log(JSON.stringify({ ok: false, reason: "claude_auth" }));
       process.exit(1);
     }
 
@@ -716,7 +716,7 @@ async function main(): Promise<void> {
 
   if (!authored?.content || !authored.subject) {
     log("authoring failed — no draft this run (the window re-opens next Friday)");
-    console.error(JSON.stringify({ ok: false, reason: "author_failed" }));
+    console.log(JSON.stringify({ ok: false, reason: "author_failed" }));
     process.exit(1);
   }
 
@@ -740,7 +740,7 @@ async function main(): Promise<void> {
 
   if (!id) {
     log("persist failed — no draft this run");
-    console.error(JSON.stringify({ ok: false, reason: "persist_failed" }));
+    console.log(JSON.stringify({ ok: false, reason: "persist_failed" }));
     process.exit(1);
   }
 
@@ -786,7 +786,7 @@ async function main(): Promise<void> {
 if (import.meta.main) {
   main().catch((error) => {
     log(`fatal: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`);
-    console.error(JSON.stringify({ ok: false, reason: "sweep_error" }));
+    console.log(JSON.stringify({ ok: false, reason: "sweep_error" }));
     process.exit(1);
   });
 }
