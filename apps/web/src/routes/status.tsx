@@ -97,6 +97,7 @@ const OPS_AUTOMATION_IDS = new Set([
   "cron.backup",
   "cron.healthcheck",
   "cron.reach",
+  "cron.sentry-triage",
   "self-deploy",
   "self-deploy-ssh",
 ]);

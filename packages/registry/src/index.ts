@@ -1415,6 +1415,24 @@ export const SURFACES: readonly Surface[] = [
     title: "Audit reviewer",
     weights: { status: "secondary" },
   },
+  {
+    exposedContent: [
+      "nightly Sentry triage — reads the day's unresolved production errors and opens a fix PR for each straightforward one, files the rest (claude -p, subscription auth)",
+    ],
+    kind: "cron",
+    name: "cron.sentry-triage",
+    operatorNotes:
+      "03:30 Amsterdam, a rave-02 host systemd timer (docs/agents/hermes/sentry-triage-timer/). Its OWN cron, not the audit rotation — checks Sentry every night. A full agentic claude -p session: reconciles merged fixes (resolves their issues), pulls new unresolved issues from both Sentry projects, fixes the straightforward ones (one PR each, `Sentry-Issue:` refs so a merge resolves the issue), files the rest to docs/sentry-backlog.md. The deterministic Sentry API work lives in sentry-triage-sweep.ts so the Sentry token never enters claude. Subscription auth (CLAUDE_CODE_OAUTH_TOKEN), zero OpenRouter tokens. Operator-gated on SENTRY_TRIAGE_TOKEN (skips cleanly until set). Source: docs/agents/hermes/scripts/sentry-triage-sweep.sh. Probed on /status as service `cron.sentry-triage`.",
+    probeConfig: {
+      cadenceMs: 24 * 60 * MINUTE_MS,
+      cronName: "fluncle-sentry-triage",
+      kind: "cron",
+      schedule: { time: "03:30", tz: "Europe/Amsterdam" },
+    },
+    statusDescription: "nightly triage of production errors → fix PRs",
+    title: "Sentry triage",
+    weights: { status: "secondary" },
+  },
 ];
 
 // ── Selectors ────────────────────────────────────────────────────────────────
