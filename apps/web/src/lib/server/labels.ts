@@ -28,7 +28,6 @@ import {
 import { labelFold, slugify } from "@fluncle/contracts/util/galaxy-slug";
 import { labelLogoUrl } from "../media";
 import { getDb, typedRows } from "./db";
-import { purgeEntityCache } from "./edge-cache";
 
 // Re-exported so the label module is the one home for label string identity: the crawler
 // (`crawl.ts`) folds MB label names with it, and the alias derivation folds Apple recordLabels
@@ -771,15 +770,7 @@ export async function fillEmptyLabelBio(
             and (bio is null or trim(bio) = '')`,
   });
 
-  const wrote = result.rowsAffected > 0;
-
-  if (wrote) {
-    // The bio is a primary rendered block on `/label/<slug>`; refresh its cached page so the
-    // new bio surfaces. Only on an actual write — a fill-empty no-op changed nothing.
-    purgeEntityCache("label", slug);
-  }
-
-  return wrote;
+  return result.rowsAffected > 0;
 }
 
 /** One row of the bio worklist: a label with findings but no bio yet. */

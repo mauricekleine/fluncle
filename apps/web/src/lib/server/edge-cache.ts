@@ -56,23 +56,6 @@ export function isCacheableLogPath(pathname: string): boolean {
   return pathname === "/log" || pathname === "/log/" || pathname.startsWith("/log/");
 }
 
-// The public entity DETAIL pages we edge-cache: `/artist/<slug>`, `/album/<slug>`,
-// `/label/<slug>` (singular + a single slug segment). Deliberately NOT the plural index
-// pages (`/artists`, `/albums`, `/labels`) — those invalidate on any member change, so they
-// ride the fresh window instead of an explicit purge. A trailing slash is tolerated; a
-// nested path (`/artist/<slug>/x`) is not a detail page.
-const ENTITY_DETAIL_PATH = /^\/(?:artist|album|label)\/[^/]+\/?$/;
-
-/**
- * True for a cacheable entity detail page — AND ONLY when it carries no query string. The
- * cache key drops the query (cacheKeyForPath), so a paginated/sorted variant (`?page=2`,
- * `?sort=…`) would collide onto the canonical page-1 entry; caching only the bare canonical
- * URL (what crawlers hit) keeps the SEO win without ever serving page 2's body for page 1.
- */
-export function isCacheableEntityRequest(pathname: string, search: string): boolean {
-  return search === "" && ENTITY_DETAIL_PATH.test(pathname);
-}
-
 // The canonical origin for cache keys. Storing and purging both key off THIS origin
 // (plus the request's path), never the incoming host — so the key a write deletes is
 // exactly the key a read stored, regardless of which hostname served the request
@@ -235,20 +218,7 @@ export function purgeLogCache(logId: string | null | undefined): void {
 }
 
 async function purgeLogCacheNow(logId: string): Promise<void> {
-  await purgePathsNow(logPathsToPurge(logId));
-}
-
-/**
- * The shared purge core: evict a set of canonical paths from BOTH the local `caches.default`
- * (instant, this data center) and the global Cloudflare cache (every data center, via the
- * zone purge-by-URL REST API). Every purge — log surfaces and entity pages alike — funnels
- * through here so the two-layer behaviour and the canonical-origin keying are defined once.
- */
-async function purgePathsNow(paths: string[]): Promise<void> {
-  if (paths.length === 0) {
-    return;
-  }
-
+  const paths = logPathsToPurge(logId);
   const cache = edgeCache();
 
   // Local eviction: instant, this data center. Always safe, no credentials. Skipped
@@ -269,7 +239,7 @@ async function purgePathsNow(paths: string[]): Promise<void> {
     return;
   }
 
-  const urls = paths.map((path) => `${CANONICAL_ORIGIN}${path}`);
+  const urls = logPurgeUrls(logId);
 
   try {
     await fetch(`https://api.cloudflare.com/client/v4/zones/${zoneId}/purge_cache`, {
@@ -283,66 +253,6 @@ async function purgePathsNow(paths: string[]): Promise<void> {
   } catch {
     // Best-effort: the local delete + short fresh window bound staleness regardless.
   }
-}
-
-// ── Purge the public entity detail pages ───────────────────────────────────────
-//
-// The `/artist|/album|/label/<slug>` pages are a JOIN — an entity row plus the findings and
-// catalogue rows that point at it — so a write to any of those must drop the affected page(s)
-// exactly as a finding write drops `/log/<id>`. Same two layers, same canonical keying.
-
-/** The three cacheable entity detail kinds. */
-export type EntityCacheKind = "artist" | "album" | "label";
-
-/** The canonical path for one entity detail page. */
-function entityPath(kind: EntityCacheKind, slug: string): string {
-  return `/${kind}/${encodeURIComponent(slug)}`;
-}
-
-/**
- * The canonical purge URL for an entity detail page — exported so the URL shape is unit-pinned
- * (a drifted origin or path would silently leave a stale page served, exactly as for the log
- * surfaces).
- */
-export function entityPurgeUrl(kind: EntityCacheKind, slug: string): string {
-  return `${CANONICAL_ORIGIN}${entityPath(kind, slug)}`;
-}
-
-/**
- * Purge a set of entity detail pages after a write, awaitably. Blank slugs are dropped and
- * duplicate targets collapse to one path. Callers that ALREADY run inside a `waitUntil`
- * (e.g. after resolving a track's linked slugs) use this; everything else uses the
- * fire-and-forget `purgeEntityCache`/`purgeEntityCaches` below.
- */
-export async function purgeEntityCachesNow(
-  targets: { kind: EntityCacheKind; slug: string }[],
-): Promise<void> {
-  const paths = [
-    ...new Set(
-      targets
-        .filter((target) => target.slug.trim())
-        .map((target) => entityPath(target.kind, target.slug.trim())),
-    ),
-  ];
-
-  await purgePathsNow(paths);
-}
-
-/**
- * Fire-and-forget purge of several entity detail pages after a write — `waitUntil`-extended
- * so the write path never awaits network I/O. Safe with an empty/blank-only target list.
- */
-export function purgeEntityCaches(targets: { kind: EntityCacheKind; slug: string }[]): void {
-  waitUntil(purgeEntityCachesNow(targets));
-}
-
-/** Fire-and-forget purge of a single entity detail page. No-op on a missing/blank slug. */
-export function purgeEntityCache(kind: EntityCacheKind, slug: string | null | undefined): void {
-  if (!slug?.trim()) {
-    return;
-  }
-
-  purgeEntityCaches([{ kind, slug: slug.trim() }]);
 }
 
 // The purge credentials live on the Worker env (wrangler vars/secrets), read the

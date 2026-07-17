@@ -146,34 +146,27 @@ export async function resolveArtistPageData(
     return { status: "missing" };
   }
 
-  // Ride the catalogue read in the SAME parallel wave as the four finding/social/neighbour
-  // reads — all five key only off `artist.id` and are mutually independent. A page past the
-  // end of the pager throws `CataloguePageOutOfRangeError`; map ONLY that to null here so it
-  // no longer blocks the batch, and 404 once the wave settles. Any other error still throws.
-  const cataloguePromise = listArtistCatalogue(artist.id, sort, page).catch(
-    (error: unknown): CatalogueGroupPage<CatalogueRecord> | null => {
-      if (error instanceof CataloguePageOutOfRangeError) {
-        return null;
-      }
+  let catalogue: CatalogueGroupPage<CatalogueRecord>;
 
-      throw error;
-    },
-  );
+  try {
+    catalogue = await listArtistCatalogue(artist.id, sort, page);
+  } catch (error) {
+    // A page past the end of the pager is genuinely not-found, not a 500 — a crawler or a
+    // hand-typed `?page=99` on a 3-page artist gets an honest 404, never an empty page that
+    // duplicates page 1's content under a new URL.
+    if (error instanceof CataloguePageOutOfRangeError) {
+      return { status: "missing" };
+    }
 
-  const [catalogue, findings, socials, canonicalFindingCount, neighbours] = await Promise.all([
-    cataloguePromise,
+    throw error;
+  }
+
+  const [findings, socials, canonicalFindingCount, neighbours] = await Promise.all([
     getFindingsByArtist(artist.id, artist.name),
     getPublicArtistSocials(artist.id),
     countArtistFindings(artist.id),
     getArtistNeighbours(artist.id),
   ]);
-
-  if (catalogue === null) {
-    // A page past the end of the pager is genuinely not-found, not a 500 — a crawler or a
-    // hand-typed `?page=99` on a 3-page artist gets an honest 404, never an empty page that
-    // duplicates page 1's content under a new URL.
-    return { status: "missing" };
-  }
 
   // The signature is pure over the findings already loaded for the grid (no extra
   // query); the neighbours came from the corpus-wide embedding pass above.

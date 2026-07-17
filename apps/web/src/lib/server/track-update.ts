@@ -12,7 +12,6 @@ export type { TrackUpdateResult };
 import { isLogId } from "../log-id";
 import { getDb, typedRow } from "./db";
 import { purgeLogCache } from "./edge-cache";
-import { purgeTrackEntityPages } from "./tracks";
 import { type AdminRole } from "./env";
 import { resolveLogId } from "./log-id";
 import { ApiError } from "./spotify";
@@ -815,11 +814,9 @@ export async function updateTrack(
   await db.batch(statements, "write");
 
   // The finding changed (enrichment, re-tag, video link, note edit, a backfilled
-  // coordinate): drop its cached `/log/<id>` page + the `/log` index, and the entity
-  // detail pages (artist/album/label) whose grids render this finding, so the next
-  // request re-renders. Both fire-and-forget — never block the write.
+  // coordinate): drop its cached `/log/<id>` page + the `/log` index so the next
+  // request re-renders. Fire-and-forget — never blocks the write.
   purgeLogCache(effectiveLogId);
-  purgeTrackEntityPages(trackId);
 
   return {
     fields: [...sets, ...findingSets].map((set) => set.split(" ")[0] ?? set),
@@ -875,11 +872,9 @@ export async function fillEmptyNote(
   const filled = result.rowsAffected > 0;
 
   if (filled) {
-    // Only when the fill actually wrote: refresh the finding's cached `/log` page and the
-    // entity pages whose grids show its note, so the new note surfaces. A lost race changed
-    // nothing, so it must NOT purge.
+    // Only when the fill actually wrote: refresh the finding's cached `/log` page so
+    // the new note surfaces. A lost race changed nothing, so it must NOT purge.
     purgeLogCache(existing.log_id);
-    purgeTrackEntityPages(trackId);
   }
 
   return filled;

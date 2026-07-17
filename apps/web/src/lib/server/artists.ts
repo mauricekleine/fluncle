@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import { type ArtistSocialPlatform, ARTIST_SOCIAL_PLATFORMS } from "../artist-socials";
 import { validateSocialUrlForPlatform } from "./artist-resolution";
 import { getDb, typedRow, typedRows } from "./db";
-import { purgeEntityCache } from "./edge-cache";
 import { type CatalogueHubPage, clampCatalogueHubLimit, type EntitySitemapRow } from "./labels";
 import { logEvent } from "./log";
 import { bestArtistAvatarUrl } from "../media";
@@ -134,15 +133,7 @@ export async function fillEmptyArtistBio(
             and (bio is null or trim(bio) = '')`,
   });
 
-  const wrote = result.rowsAffected > 0;
-
-  if (wrote) {
-    // The bio is a primary rendered block on `/artist/<slug>`; refresh its cached page so the
-    // new bio surfaces. Only on an actual write — a fill-empty no-op changed nothing.
-    purgeEntityCache("artist", slug);
-  }
-
-  return wrote;
+  return result.rowsAffected > 0;
 }
 
 /** One row of the bio worklist: an artist with findings but no bio yet. */

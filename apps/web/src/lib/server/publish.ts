@@ -29,7 +29,6 @@ import {
   type TrackMetadata,
 } from "./spotify";
 import { formatTelegramMessage, postToTelegram } from "./telegram";
-import { purgeTrackEntityPages } from "./tracks";
 
 type AddOptions = {
   note?: string;
@@ -353,10 +352,8 @@ No database, Spotify, or Telegram changes were made. Enrichment (label, preview)
   }
 
   // A new finding now sits at the top of the `/log` index (and owns its own
-  // coordinate page), and joins the artist/album/label grids: drop all of those from
-  // the edge cache so they re-render with it.
+  // coordinate page): drop both from the edge cache so they re-render with it.
   purgeLogCache(logId);
-  purgeTrackEntityPages(track.trackId);
   // Best-effort endorsement: love the finding on Last.fm (a Loved Track, not a
   // scrobble — see lastfm.ts / the RFC). A single signed HTTPS call, Worker-safe.
   // Never blocks or fails the add — same side-channel discipline as Deezer/Telegram:
@@ -546,11 +543,9 @@ export async function certifyExistingTrack(
       logEvent("warn", "certify.graph-entity-upsert-failed", { error: labelError, logId, trackId });
     }
 
-    // A new finding now sits at the top of `/log`, owns its coordinate page, and joins the
-    // artist/album/label grids: drop all from the edge cache and ping IndexNow so they
-    // re-render / re-crawl. All fire-and-forget-safe.
+    // A new finding now sits at the top of `/log` and owns its coordinate page: drop the edge
+    // cache and ping IndexNow so both re-render / re-crawl. Both are fire-and-forget-safe.
     purgeLogCache(logId);
-    purgeTrackEntityPages(trackId);
     submitFindingToIndexNow(logId);
   }
 

@@ -4,11 +4,7 @@ import {
   appendOnionLocation,
   handleAgentDiscovery,
 } from "./lib/server/agent-discovery";
-import {
-  isCacheableEntityRequest,
-  isCacheableLogPath,
-  withEdgeCache,
-} from "./lib/server/edge-cache";
+import { isCacheableLogPath, withEdgeCache } from "./lib/server/edge-cache";
 import { ADMIN_COOKIE_NAME } from "./lib/server/env";
 import { handleMcp } from "./lib/server/mcp";
 import { handleOrpc } from "./lib/server/orpc";
@@ -45,19 +41,17 @@ export default createServerEntry({
       return discovery;
     }
 
-    // Edge-cache the public log surfaces (`/log` and `/log/<id>`) and the entity detail
-    // pages (`/artist|/album|/label/<slug>`): the cold path is Worker SSR + Turso reads per
-    // render, but these pages change rarely, so short-TTL + stale-while-revalidate
-    // (edge-cache.ts) makes the hot path a cache hit and the write paths purge on change.
-    // Scoped to a plain GET HTML view that no admin is signed into — an admin must always see
-    // live data, and a personalized/non-HTML response must never be shared-cached. Entity
-    // pages cache only their canonical (query-less) URL; a paginated/sorted variant flows
-    // through uncached so it can't collide onto page 1 (isCacheableEntityRequest).
+    // Edge-cache the public log surfaces (`/log` and `/log/<id>`): the cold path
+    // is Worker SSR + a Turso read per render (~896ms TTFB), but a finding is
+    // publish-then-immutable, so short-TTL + stale-while-revalidate (edge-cache.ts)
+    // makes the hot path a cache hit and the rare edit purges on change. Scoped to
+    // a plain GET HTML view that no admin is signed into — an admin must always see
+    // live data, and a personalized/non-HTML response must never be shared-cached.
     const url = new URL(request.url);
 
     if (
       request.method === "GET" &&
-      (isCacheableLogPath(url.pathname) || isCacheableEntityRequest(url.pathname, url.search)) &&
+      isCacheableLogPath(url.pathname) &&
       !hasAdminCookie(request) &&
       (request.headers.get("accept")?.includes("text/html") ?? false)
     ) {
