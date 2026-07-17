@@ -126,6 +126,9 @@ export function PlaylistPanel({
   const mint = useMutation({
     mutationFn: async () => {
       const response = await fetch(FRONTIER_PATH, {
+        // The mint takes no parameters, but the op's input schema still expects an
+        // OBJECT — a bodyless POST parses to undefined and 400s (invalid_request).
+        body: JSON.stringify({}),
         headers: { "Content-Type": "application/json", "x-fluncle-csrf": csrfToken },
         method: "POST",
       });
