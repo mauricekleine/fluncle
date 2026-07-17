@@ -22,19 +22,6 @@ The full path a finding travels: one human act (Maurice finds the banger and add
 
 ## Next — surface what we make, and tidy reliability
 
-### The public recommendation machine — per-user telescopes (**#1 build priority**, operator-ratified 2026-07-16; riff-stage)
-
-The first outside pull ("sick can I fuck with it somehow?") arrived the day the operator's telescope started converting. Bumped to the TOP of the build queue: the first demand-pulled item on this list, near-zero marginal cost (SQL vector scans, no inference), and the strongest reach lever — a durable, shareable artifact (a playlist in someone's Spotify) that markets the archive weekly. The riff produced ratified decisions; **deliberately pre-RFC** — the operator wants to keep riffing before it's scoped:
-
-- **The shape:** a visitor picks ~10 seed tracks from the archive + catalogue, the Ear's anchored max-similarity scan (+ the diversity decay) ranks the embedded/anchored catalogue against _their_ seeds, and Fluncle mints them a **playlist on his own Spotify account** (the telescope module generalized — one authenticated identity, so the dev-mode 5-user allowlist cap never applies; no per-user OAuth, no quota wall). Weekly refresh via box cron, Discover-Weekly-style replace.
-- **Ratified — identity:** existing Better Auth accounts; the never-gates law holds (anonymous picks seeds + previews recs; signing in saves the seed set and earns the weekly playlist).
-- **Ratified — the blend (option B):** user seeds dominate; **2–3 labeled slots come from the findings nearest their seeds** — certified tracks, so those slots carry Fluncle's full voice (note, Log ID), while catalogue recs speak in the instrument register ("close to what you picked" — the machine's honest WHY, never his testimony). The register split _is_ the canon resolution: the instrument speaks about sightings, Fluncle speaks only about findings. It also solves cold-start.
-- **The two-way lens:** seed picks are taste _signal_ — an anonymized map of which corners of the catalogue real DnB heads gravitate to, a future input to the Ear's capture priority. Users feed the machine they consume.
-- **The lighting-up moment:** when a user's rec later gets certified, surface it — "one of your sightings made the archive."
-- **v2 onboarding cheat:** paste any public Spotify playlist URL → Fluncle's grant reads it → matchKey/ISRC overlap materializes the seed set.
-- **ChatDnB synergy (operator, 2026-07-16):** a logged-in ChatDnB should be able to mutate your playlist by tools — "add 3 more recommendations to my playlist". The rec machine ships first (no per-use inference cost); the chat gains the playlist tool when IT graduates.
-- **Open:** naming (product name plain enough for someone whose mate texted them a link; "telescope" stays the instrument in copy), abuse/rate limits, whether a multiplicative findings-nudge later seasons the catalogue portion.
-
 ### Hermes automation — follow-ups
 
 The per-finding pipeline runs entirely as `--no-agent` jobs on the Hermes box (enrich, context-note, note, observation, backfill, render, social-capture, studio-clip, newsletter, plus the host healthcheck timer); the source of truth is the sweep sources in `docs/agents/hermes/scripts/` + the per-job units in `docs/agents/hermes/*-timer/`, managed on the devbox via the **fluncle-hermes-operator** skill. As of the **2026-07-08 durable-deploy activation** these all run as **repo host systemd timers** reading the baked `/opt/hermes-scripts` path (the Hermes gateway cron runner is retired). Operating doc + roles: [docs/agents/hermes-agent.md](../agents/hermes-agent.md). Ongoing operation is a verify pass per job, not build work. One follow-up stays separate from the cron wiring:
@@ -306,7 +293,7 @@ The pun (ChatGPT → ChatDnB) earned its spike and the spike shipped: `/admin/ch
 
 What remains is the PUBLIC exposure call:
 
-- **Sequenced AFTER the rec machine (operator, 2026-07-16):** every conversation costs real inference money from non-paying users, so an anonymous/public ChatDnB holds until the verified-cohort usage model is understood; the rec engine has no such cost and wins the public-surface race. When ChatDnB fully graduates, the logged-in chat gains the add-to-my-playlist tool (see the rec machine's synergy bullet).
+- **The rec machine won the public-surface race and SHIPPED (2026-07-17, auth-gated), per the operator's sequencing ruling (2026-07-16):** every conversation costs real inference money from non-paying users, so an anonymous/public ChatDnB holds until the verified-cohort usage model is understood. When ChatDnB fully graduates, the logged-in chat gains the add-to-my-playlist tool — "add 3 more recommendations to my playlist" mutating the user's minted playlist by tools (operator, 2026-07-16).
 - **Public exposure** — `/chat` is the door and it now exists; the open question is whether it ever opens past the signed-in crew (`chat.fluncle.com` remains an option; `chatdnb.com` is taken — the pun survives the URL). An anonymous tier would need its own abuse posture (IP-keyed dials, no session identity to hang a ceiling on).
 - **Model choice** — a well-prompted frontier model with the hard grounding rule is the honest v1; the FluncleLLM voice fine-tune (below) is an obvious future consumer.
 
