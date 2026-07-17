@@ -444,7 +444,7 @@ function SearchDialog({
           {/* The findings lead under the archive's own name — a finding is a named object, so
               its heading is allowed. */}
           {findings.length > 0 ? (
-            <CommandGroup heading="Fluncle’s Findings">
+            <CommandGroup heading="Fluncle's Findings">
               {findings.map((hit) => (
                 <TrackRow hit={hit} key={hit.trackId} onPick={pick} />
               ))}
