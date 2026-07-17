@@ -651,6 +651,10 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   update_subscription: "operator",
   update_track: "admin",
   update_track_social: "operator",
+  // The mint-cover retry drain (E2) — admin tier (agent-allowed), the refresh_frontier_playlists
+  // precedent: the box's cron (and the operator) render + upload every owing Frontier cover IN
+  // THE WORKER with the agent token. It touches only playlists their owners already minted.
+  upload_frontier_covers: "admin",
   // The capture-verification write (docs/the-ear.md § Wrong audio) — agent tier (adminAuth only),
   // the rank_catalogue precedent. It writes only derived/measurement columns and never certifies: a
   // catalogue mismatch quarantines (a machine may rewind an uncertified row), a FINDING mismatch is
