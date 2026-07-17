@@ -94,6 +94,10 @@
 //     preview / no fpcalc → stored + `'unverified'` (the honest abstain, never a block).
 //   - On a 403 that survives the sticky session, retry the download once with
 //     `--extractor-args youtube:player_client=tv,web_safari` before marking `failed`.
+//   - On a BOT CHALLENGE ("Sign in to confirm you're not a bot" — an IP-reputation verdict
+//     on the proxy exit, which no client fallback clears), re-roll the sticky session ONCE
+//     per run (`<id>.r1`, a fresh residential exit) and retry; search and download share
+//     the one re-roll, and a run challenged on both exits leaves the rest to backoff.
 //
 // stdout: one JSON summary line (the cron run output). Diagnostics → stderr.
 
@@ -248,6 +252,28 @@ export function buildStickyProxyUrl(options: {
   const pass = encodeURIComponent(options.password);
 
   return `http://${user}:${pass}@${options.host}:${options.port}`;
+}
+
+/**
+ * A YouTube BOT-CHALLENGE verdict ("Sign in to confirm you're not a bot" and kin) is an
+ * IP-REPUTATION ruling on the proxy exit, not on the video or the query — retrying through
+ * the same flagged exit re-fails, and the player-client fallback can't clear it either.
+ * Classified separately from DRM/403 so the caller can answer it with the one move that
+ * works: a fresh sticky session (a new residential exit). Pure; pinned by tests.
+ */
+export function isBotChallengeStderr(stderr: string): boolean {
+  return /Sign in to confirm|not a bot|Please sign in/i.test(stderr);
+}
+
+/**
+ * The ONE re-rolled sticky session for a track: `<id>.r1`. The `.` survives the session
+ * sanitizer (alnum + `.`), keeps determinism (same track, same re-roll), and stays sticky —
+ * the re-roll changes WHICH exit, never the one-exit-per-download rule the media fetch needs.
+ * Deliberately single (no .r2): a pool that challenges two distinct exits in one run is
+ * cooling off, and the retry budget belongs to the next sweep tick.
+ */
+export function rerollSessionId(sessionId: string): string {
+  return `${sessionId}.r1`;
 }
 
 /**
@@ -886,7 +912,10 @@ function runYtSearch(
   );
 
   if (result.status !== 0) {
-    throw new Error(`yt-dlp search failed: ${(result.stderr || "").slice(0, 200)}`);
+    const stderr = result.stderr || "";
+    const err = new Error(`yt-dlp search failed: ${stderr.slice(0, 200)}`);
+    (err as { isBotChallenge?: boolean }).isBotChallenge = isBotChallengeStderr(stderr);
+    throw err;
   }
 
   const naToUndefined = (value?: string) => (value && value !== "NA" ? value : undefined);
@@ -952,6 +981,7 @@ function runYtDownload(
     // for the same finding often can → the caller falls through to the next-ranked one.
     (err as { isRecoverable?: boolean }).isRecoverable =
       /DRM protected|Sign in to confirm|not a bot/i.test(stderr);
+    (err as { isBotChallenge?: boolean }).isBotChallenge = isBotChallengeStderr(stderr);
     throw err;
   }
 
@@ -1013,6 +1043,27 @@ async function captureFinding(finding: CaptureFinding): Promise<FindingOutcome> 
     sessionId: logId ?? trackId,
     username: PROXY_USERNAME,
   });
+  // THE BOT-CHALLENGE RE-ROLL (one per run). A "Sign in to confirm you're not a bot" is an
+  // IP-reputation verdict on the sticky exit — the answer is a DIFFERENT residential exit,
+  // once, after which the run stays on the re-rolled session (a pool that challenges two
+  // exits is cooling off; backoff owns the rest). `activeProxyUrl` is what every yt-dlp
+  // call below uses; `rerollOnBotChallenge` flips it exactly once.
+  const rerolledProxyUrl = buildStickyProxyUrl({
+    host: PROXY_HOST,
+    password: PROXY_PASSWORD,
+    port: PROXY_PORT,
+    sessionId: rerollSessionId(logId ?? trackId),
+    username: PROXY_USERNAME,
+  });
+  let activeProxyUrl = proxyUrl;
+  const rerollOnBotChallenge = (stage: string): boolean => {
+    if (activeProxyUrl === rerolledProxyUrl) {
+      return false;
+    }
+    log(`bot-challenged at ${stage} — re-rolling the proxy session for a fresh exit`);
+    activeProxyUrl = rerolledProxyUrl;
+    return true;
+  };
 
   const dir = mkdtempSync(join(tmpdir(), "fluncle-capture-"));
 
@@ -1052,7 +1103,17 @@ async function captureFinding(finding: CaptureFinding): Promise<FindingOutcome> 
           `no accepted candidate yet — ladder step ${step + 1}/${ladder.length}: ${rung.source} search "${rung.query}"`,
         );
       }
-      candidates = runYtSearch(proxyUrl, rung.query, rung.source);
+      try {
+        candidates = runYtSearch(activeProxyUrl, rung.query, rung.source);
+      } catch (error) {
+        if (
+          !(error as { isBotChallenge?: boolean }).isBotChallenge ||
+          !rerollOnBotChallenge("search")
+        ) {
+          throw error;
+        }
+        candidates = runYtSearch(activeProxyUrl, rung.query, rung.source);
+      }
       ranked = rankCandidates(candidates, rankContext);
       if (ranked.length > 0) {
         break;
@@ -1113,10 +1174,18 @@ async function captureFinding(finding: CaptureFinding): Promise<FindingOutcome> 
       try {
         let file: { ext: string; path: string };
         try {
-          file = runYtDownload(proxyUrl, candidate.candidate.id, dir, false);
+          file = runYtDownload(activeProxyUrl, candidate.candidate.id, dir, false);
         } catch (error) {
           if ((error as { is403?: boolean }).is403) {
-            file = runYtDownload(proxyUrl, candidate.candidate.id, dir, true);
+            file = runYtDownload(activeProxyUrl, candidate.candidate.id, dir, true);
+          } else if (
+            (error as { isBotChallenge?: boolean }).isBotChallenge &&
+            rerollOnBotChallenge("download")
+          ) {
+            // A fresh exit usually clears the challenge for the SAME candidate; if it
+            // throws again the outer catch handles it as before (recoverable → next
+            // candidate, since the run's one re-roll is now spent).
+            file = runYtDownload(activeProxyUrl, candidate.candidate.id, dir, false);
           } else {
             throw error;
           }

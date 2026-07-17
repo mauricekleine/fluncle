@@ -19,12 +19,14 @@ import {
   durationWithinTolerance,
   extractSourceAudioSha256,
   hasForeignVersionMarker,
+  isBotChallengeStderr,
   isTopicChannel,
   needsReenrichAfterCapture,
   normalizeChannelName,
   normalizeSearchQuery,
   pickCandidate,
   rankCandidates,
+  rerollSessionId,
   shouldReenrichAfterCapture,
   verifyCaptureFile,
 } from "./capture-sweep";
@@ -607,5 +609,56 @@ describe("contentTypeForExt", () => {
     expect(contentTypeForExt("m4a")).toBe("audio/mp4");
     expect(contentTypeForExt("mp3")).toBe("audio/mpeg");
     expect(contentTypeForExt("xyz")).toBe("application/octet-stream");
+  });
+});
+
+describe("isBotChallengeStderr — the IP-reputation verdict, classified apart from DRM/403", () => {
+  test("matches every observed challenge phrasing from the box journal", () => {
+    expect(
+      isBotChallengeStderr(
+        "ERROR: [youtube] tup6Bgf8oQw: Sign in to confirm you\u2019re not a bot. Use --cookies-from-browser",
+      ),
+    ).toBe(true);
+    expect(
+      isBotChallengeStderr("ERROR: [youtube] L_qSTRTRULU: Please sign in. Use --cookies"),
+    ).toBe(true);
+    expect(isBotChallengeStderr("confirm you're not a bot")).toBe(true);
+  });
+
+  test("never fires on DRM, plain 403s, or dead videos — those keep their own handling", () => {
+    expect(isBotChallengeStderr("ERROR: this video is DRM protected")).toBe(false);
+    expect(isBotChallengeStderr("HTTP Error 403: Forbidden")).toBe(false);
+    expect(isBotChallengeStderr("ERROR: [youtube] TpUSlHUoivc: This video is not available")).toBe(
+      false,
+    );
+    expect(isBotChallengeStderr("")).toBe(false);
+  });
+});
+
+describe("rerollSessionId — one fresh sticky exit per run", () => {
+  test("derives a deterministic .r1 sibling that SURVIVES the session sanitizer", () => {
+    const rerolled = rerollSessionId("038.6.1J");
+
+    expect(rerolled).toBe("038.6.1J.r1");
+
+    // Composed through the real URL builder: the `.r1` marker must reach the proxy's
+    // username (the sanitizer keeps alnum + `.`), or the "fresh exit" is silently the
+    // same exit and the retry re-fails.
+    const url = buildStickyProxyUrl({
+      host: "proxy.example",
+      password: "pw",
+      port: "823",
+      sessionId: rerolled,
+      username: "user",
+    });
+
+    expect(url).toContain("__sessid.038.6.1J.r1");
+  });
+
+  test("a catalogue row's mb_<uuid> id re-rolls to a DIFFERENT session than its base", () => {
+    const base = "mb_206b56cc-02eb-403f-9a6c-78c915247e2a";
+    const strip = (value: string) => value.replace(/[^0-9A-Za-z.]/g, "");
+
+    expect(strip(rerollSessionId(base))).not.toBe(strip(base));
   });
 });
