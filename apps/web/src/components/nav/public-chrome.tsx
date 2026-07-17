@@ -43,19 +43,32 @@ export function PublicChrome({
   galaxiesLive: boolean;
 }): ReactNode {
   const pathname = useRouterState({ select: (state) => state.location.pathname });
+  // The /account tabs live in a search param, invisible to the path-based trail —
+  // surface the open door as the breadcrumb's tail (FLUNCLE › Your account › Saves).
+  const accountTab = useRouterState({
+    select: (state) => (state.location.search as { tab?: string }).tab,
+  });
+  const tail =
+    pathname === "/account" && accountTab
+      ? { saves: "Saves", settings: "Settings" }[accountTab]
+      : undefined;
+  // The workbench register: /chat is a conversation, not a reading page — the shell
+  // locks to the viewport (the transcript scrolls inside it) and the liner-notes
+  // footer stays on the reading pages where a colophon belongs.
+  const workbench = pathname === "/chat";
 
   if (isChromeless(pathname)) {
     return <>{children}</>;
   }
 
   return (
-    <div className="nav-shell">
+    <div className={workbench ? "nav-shell nav-shell--workbench" : "nav-shell"}>
       <header className="nav-topbar">
         <div className="nav-topbar-inner">
           <Link aria-label="Fluncle home" className="nav-wordmark" to="/">
             FLUNCLE
           </Link>
-          <NavBreadcrumb pathname={pathname} />
+          <NavBreadcrumb pathname={pathname} tail={tail} />
           {/* The two controls, banked to the far end so they never crowd the trail. Search
               also mounts the ⌘K listener, which is why it lives in the chrome and not on a
               page: search has to be one keystroke away from every public surface. The crew
@@ -69,7 +82,7 @@ export function PublicChrome({
 
       <div className="nav-content">{children}</div>
 
-      <NavFooter galaxiesLive={galaxiesLive} />
+      {workbench ? undefined : <NavFooter galaxiesLive={galaxiesLive} />}
     </div>
   );
 }

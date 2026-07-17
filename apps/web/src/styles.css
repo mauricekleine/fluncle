@@ -4432,6 +4432,35 @@ body::before {
   min-width: 0;
 }
 
+/* The workbench register (/chat): the shell locks to the viewport and the content
+   becomes a column the page fills — the transcript scrolls INSIDE the plate, the
+   document never scrolls, and no footer competes for the height (public-chrome
+   drops it in this mode). Reading pages keep the min-height shell + colophon. */
+.nav-shell--workbench {
+  height: 100dvh;
+  min-height: 0;
+}
+
+.nav-shell--workbench .nav-content {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* The workbench plate: .home-plate is a grid, and a grid stretched taller than its
+   content pours the extra height into its auto rows (align-content: stretch) — the
+   masthead balloons and its rule floats mid-plate. The workbench wants a column
+   where ONE child (the transcript) takes the slack, so it overrides to flex. */
+.chat-plate {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.chat-plate > .home-masthead {
+  flex: 0 0 auto;
+}
+
 /* The wordmark — the brand voice (Oxanium caps), heats toward gold on hover. In the
    top bar it doubles as the FIRST BREADCRUMB: FLUNCLE › Log › 038.6.1J.
    The negative right margin cancels the TRAILING letter-space after the final E:

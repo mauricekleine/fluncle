@@ -35,6 +35,7 @@ const SEGMENTS: Record<string, { index?: string; label: string }> = {
   albums: { label: "Albums" },
   artist: { index: "/artists", label: "Artists" },
   artists: { label: "Artists" },
+  chat: { label: "ChatDnB" },
   docs: { label: "Docs" },
   galaxies: { label: "Galaxies" },
   label: { index: "/labels", label: "Labels" },
@@ -44,6 +45,7 @@ const SEGMENTS: Record<string, { index?: string; label: string }> = {
   mixtapes: { label: "Mixtapes" },
   newsletter: { label: "Newsletter" },
   privacy: { label: "Privacy" },
+  recommendations: { label: "Recommendations" },
   status: { label: "Status" },
   stories: { label: "Stories" },
 };
@@ -72,7 +74,7 @@ function humanizeSlug(slug: string): string {
  * A pathname → its trail, WITHOUT the wordmark root crumb (the top bar renders that
  * itself). Home, and any unmapped segment, yields an empty trail.
  */
-export function resolveCrumbs(pathname: string, leafLabel?: string): Crumb[] {
+export function resolveCrumbs(pathname: string, leafLabel?: string, tail?: string): Crumb[] {
   const segments = pathname.split("/").filter(Boolean);
   const root = segments[0];
 
@@ -86,9 +88,14 @@ export function resolveCrumbs(pathname: string, leafLabel?: string): Crumb[] {
     return [];
   }
 
-  // An index page (/log, /artists) IS the tail: one crumb, unlinked.
+  // An index page (/log, /artists) IS the tail: one crumb, unlinked — unless a
+  // search-param sub-page (`tail`, the /account tabs) hangs under it, in which case
+  // the page crumb links back to its bare self and the tab reads as the tail:
+  // FLUNCLE › Your account › Saves.
   if (segments.length === 1) {
-    return [{ label: known.label }];
+    return tail
+      ? [{ label: known.label, to: `/${root}` }, { label: tail }]
+      : [{ label: known.label }];
   }
 
   const raw = decodeURIComponent(segments.slice(1).join("/"));
@@ -103,11 +110,14 @@ export function resolveCrumbs(pathname: string, leafLabel?: string): Crumb[] {
 export function NavBreadcrumb({
   leafLabel,
   pathname,
+  tail,
 }: {
   leafLabel?: string;
   pathname: string;
+  /** A search-param sub-page (the /account tabs) rendered as the trail's tail. */
+  tail?: string;
 }): ReactNode {
-  const crumbs = resolveCrumbs(pathname, leafLabel);
+  const crumbs = resolveCrumbs(pathname, leafLabel, tail);
 
   if (crumbs.length === 0) {
     return undefined;

@@ -175,7 +175,7 @@ function AccountPage() {
 
   return (
     <main className="min-h-screen overflow-x-hidden p-4 text-foreground sm:p-6 lg:p-8">
-      <article className="home-plate account-plate mx-auto my-6 w-full max-w-3xl sm:my-8">
+      <article className="home-plate account-plate mx-auto my-6 w-full max-w-4xl sm:my-8">
         <header className="home-masthead">
           <div>
             <h1 className="home-nameplate">{masthead.title}</h1>

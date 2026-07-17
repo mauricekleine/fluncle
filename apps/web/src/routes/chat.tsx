@@ -69,8 +69,12 @@ function ChatDoor() {
   const gate = Route.useLoaderData();
 
   return (
-    <main className="min-h-screen overflow-x-hidden p-4 text-foreground sm:p-6 lg:p-8">
-      <article className="home-plate mx-auto my-6 w-full max-w-3xl sm:my-8">
+    // The workbench register (public-chrome locks the shell to the viewport on /chat):
+    // this main is a flex column filling everything under the top bar, the plate fills
+    // the main, and the transcript scrolls INSIDE the plate — the ChatGPT shape, worn
+    // as a Fluncle plate. min-h-0 at every level or the scroller can't shrink.
+    <main className="flex min-h-0 flex-1 flex-col overflow-x-hidden p-4 text-foreground sm:p-6 lg:px-8 lg:py-6">
+      <article className="home-plate chat-plate mx-auto min-h-0 w-full max-w-4xl flex-1">
         <header className="home-masthead">
           <div>
             <h1 className="home-nameplate">ChatDnB</h1>
@@ -79,10 +83,8 @@ function ChatDoor() {
         </header>
 
         {gate.state === "verified" ? (
-          // The chat needs a bounded viewport for the transcript to scroll inside — a
-          // tall column on the plate, never the whole window (the top bar and the plate
-          // frame stay; the conversation is the content).
-          <div className="flex h-[65vh] min-h-96 flex-col">
+          // The transcript takes every row the plate has left under the masthead.
+          <div className="flex min-h-0 flex-1 flex-col">
             <ChatConversation
               csrfToken={gate.csrfToken}
               emptyState="Ask for a mood, an artist, or a coordinate off one of my log pages. I answer from the archive, or I say I haven't been there yet."

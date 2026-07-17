@@ -54,6 +54,22 @@ describe("resolveCrumbs", () => {
     ]);
   });
 
+  it("names the workbench doors (the crew-menu routes carry a trail too)", () => {
+    expect(resolveCrumbs("/chat")).toEqual([{ label: "ChatDnB" }]);
+    expect(resolveCrumbs("/recommendations")).toEqual([{ label: "Recommendations" }]);
+  });
+
+  it("reads an /account tab as the tail, re-linking the page crumb", () => {
+    expect(resolveCrumbs("/account", undefined, "Saves")).toEqual([
+      { label: "Your account", to: "/account" },
+      { label: "Saves" },
+    ]);
+  });
+
+  it("keeps the bare /account a single unlinked crumb (no tab, no tail)", () => {
+    expect(resolveCrumbs("/account")).toEqual([{ label: "Your account" }]);
+  });
+
   it("hangs a docs page off /docs", () => {
     expect(resolveCrumbs("/docs/cli")).toEqual([{ label: "Docs", to: "/docs" }, { label: "Cli" }]);
   });
