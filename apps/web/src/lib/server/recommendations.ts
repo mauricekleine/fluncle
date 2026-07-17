@@ -101,6 +101,8 @@ type HydrateRow = {
   album_image_updated_at: null | string;
   album_image_url: null | string;
   artists_json: string;
+  bpm: null | number;
+  duration_ms: null | number;
   key: null | string;
   log_id: null | string;
   note: null | string;
@@ -128,7 +130,11 @@ export type RecSeedItem = {
  */
 export type RecommendationFindingItem = {
   artists: string[];
+  /** The instrument readout (The Readout Rule) — each present only when the row carries it. */
+  bpm?: number;
+  durationMs?: number;
   imageUrl?: string;
+  key?: string;
   logId: string;
   note?: string;
   similarity: number;
@@ -136,6 +142,8 @@ export type RecommendationFindingItem = {
   spotifyUrl?: string;
   title: string;
   trackId: string;
+  /** The release year (`release_date.slice(0, 4)`), when the row has a release date. */
+  year?: string;
 };
 
 /**
@@ -145,12 +153,18 @@ export type RecommendationFindingItem = {
  */
 export type RecommendationCatalogueItem = {
   artists: string[];
+  /** The instrument readout (The Readout Rule) — each present only when the row carries it. */
+  bpm?: number;
+  durationMs?: number;
   imageUrl?: string;
+  key?: string;
   similarity: number;
   spotifyUri?: string;
   spotifyUrl?: string;
   title: string;
   trackId: string;
+  /** The release year (`release_date.slice(0, 4)`), when the row has a release date. */
+  year?: string;
 };
 
 export type RecommendationsResult = {
@@ -453,6 +467,7 @@ export async function listRecommendations(
     };
   }).map((entry) => ({
     artists: parseArtistsJson(entry.row.artists_json),
+    ...readoutOf(entry.row),
     imageUrl: coverOf(entry.row),
     similarity: entry.similarity,
     spotifyUri: entry.row.spotify_uri ?? undefined,
@@ -472,6 +487,7 @@ export async function listRecommendations(
     return [
       {
         artists: parseArtistsJson(row.artists_json),
+        ...readoutOf(row),
         imageUrl: coverOf(row),
         logId: row.log_id,
         note: row.note ?? undefined,
@@ -500,7 +516,7 @@ async function hydrateTracks(trackIds: string[]): Promise<Map<string, HydrateRow
   ).execute({
     args: ids,
     sql: `select t.track_id, t.title, t.artists_json, t.album_image_url, t.spotify_url,
-        t.spotify_uri, t.key, t.release_date, f.log_id, f.note,
+        t.spotify_uri, t.key, t.bpm, t.duration_ms, t.release_date, f.log_id, f.note,
         (select image_key from albums where albums.id = t.album_id) as album_image_key,
         (select image_state from albums where albums.id = t.album_id) as album_image_state,
         (select image_updated_at from albums where albums.id = t.album_id) as album_image_updated_at
@@ -516,6 +532,25 @@ async function hydrateTracks(trackIds: string[]): Promise<Map<string, HydrateRow
   }
 
   return byTrackId;
+}
+
+/**
+ * The instrument readout every track-shaped surface carries (DESIGN.md's Readout Rule): the
+ * duration/BPM/key chips and the release year, each present ONLY when the row can back it — a
+ * missing chip is an honest data gap upstream, never dropped by choice.
+ */
+function readoutOf(row: HydrateRow): {
+  bpm?: number;
+  durationMs?: number;
+  key?: string;
+  year?: string;
+} {
+  return {
+    bpm: row.bpm ?? undefined,
+    durationMs: row.duration_ms ?? undefined,
+    key: row.key ?? undefined,
+    year: row.release_date ? row.release_date.slice(0, 4) : undefined,
+  };
 }
 
 function coverOf(row: HydrateRow): string | undefined {

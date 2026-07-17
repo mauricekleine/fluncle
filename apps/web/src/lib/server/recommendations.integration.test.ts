@@ -360,6 +360,53 @@ describe("listRecommendations (real SQL)", () => {
     expect(catalogueRow).not.toHaveProperty("logId");
   });
 
+  it("carries the instrument readout (bpm/durationMs/key/year) onto BOTH registers, and omits a field the row cannot back", async () => {
+    const { listRecommendations, saveRecSeed } = await import("./recommendations");
+    const user = publicUser("user-A");
+    const home = axis(0);
+
+    await seedCatalogue("seed-1", { vector: home });
+    await saveRecSeed(user, { trackId: "seed-1" });
+
+    // A finding and a catalogue row, each near the seed so both win a slot, each carrying the
+    // full readout in the DB (duration_ms is the fixture default, 270_000ms → 4:30).
+    await seedFinding("find-1", { logId: "001.1.1A", vector: blend(home, axis(1), 0.05) });
+    await seedCatalogue("cat-1", { vector: blend(home, axis(2), 0.05) });
+
+    await db.execute(
+      `update tracks set bpm = 174, key = 'A minor', release_date = '2014-06-01'
+        where track_id = 'find-1'`,
+    );
+    // The catalogue row carries no release_date — its year must come back UNDEFINED (honest
+    // absence, The Readout Rule), while its bpm/key/duration still land.
+    await db.execute(
+      `update tracks set bpm = 172, key = 'F minor', release_date = null where track_id = 'cat-1'`,
+    );
+
+    const result = await listRecommendations(user);
+
+    expect(result).not.toBeInstanceOf(Response);
+
+    if (result instanceof Response) {
+      return;
+    }
+
+    const finding = result.findings.find((row) => row.trackId === "find-1");
+    const catalogue = result.catalogue.find((row) => row.trackId === "cat-1");
+
+    // The findings register — every chip plus the year.
+    expect(finding?.bpm).toBe(174);
+    expect(finding?.durationMs).toBe(270_000);
+    expect(finding?.key).toBe("A minor");
+    expect(finding?.year).toBe("2014");
+
+    // The catalogue register — chips land; the missing release_date drops the year, never fakes it.
+    expect(catalogue?.bpm).toBe(172);
+    expect(catalogue?.durationMs).toBe(270_000);
+    expect(catalogue?.key).toBe("F minor");
+    expect(catalogue?.year).toBeUndefined();
+  });
+
   it("applies the diversity decay: two same-artist clones don't both outrank a fresh artist, and the DISPLAYED score stays the true similarity", async () => {
     const { listRecommendations, saveRecSeed } = await import("./recommendations");
     const user = publicUser("user-A");

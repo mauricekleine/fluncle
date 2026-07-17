@@ -33,7 +33,11 @@ export const RecSeedSchema = z
 export const RecommendationFindingSchema = z
   .object({
     artists: z.array(z.string()),
+    // The instrument readout (The Readout Rule): each present only when the row carries it.
+    bpm: z.number().optional(),
+    durationMs: z.number().optional(),
     imageUrl: z.string().optional(),
+    key: z.string().optional(),
     logId: z.string(),
     note: z.string().optional(),
     similarity: z.number(),
@@ -41,6 +45,7 @@ export const RecommendationFindingSchema = z
     spotifyUrl: z.string().optional(),
     title: z.string(),
     trackId: z.string(),
+    year: z.string().optional(),
   })
   .meta({ id: "RecommendationFinding" });
 
@@ -53,12 +58,17 @@ export const RecommendationFindingSchema = z
 export const RecommendationCatalogueSchema = z
   .object({
     artists: z.array(z.string()),
+    // The instrument readout (The Readout Rule): each present only when the row carries it.
+    bpm: z.number().optional(),
+    durationMs: z.number().optional(),
     imageUrl: z.string().optional(),
+    key: z.string().optional(),
     similarity: z.number(),
     spotifyUri: z.string().optional(),
     spotifyUrl: z.string().optional(),
     title: z.string(),
     trackId: z.string(),
+    year: z.string().optional(),
   })
   .meta({ id: "RecommendationCatalogue" });
 
