@@ -340,6 +340,11 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // box's `fluncle-frontier-refresh` cron re-mirrors every crew member's playlist with
   // its agent token. It touches only playlists their owners already minted.
   "POST /admin/frontier-playlists/refresh": "refresh_frontier_playlists",
+  // The mint-cover retry drain (E2) — contract-only oRPC (no TanStack route file; oRPC owns the
+  // path). Admin tier (agent-allowed): the box cron + the operator render + upload every owing
+  // Frontier cover IN THE WORKER with the agent token. `upload_frontier_covers` does not match a
+  // public prefix, so it MUST be listed here to satisfy the "holds exactly" check.
+  "POST /admin/frontier/covers": "upload_frontier_covers",
   // record_health (the public /status dashboard's write) is contract-only oRPC —
   // no TanStack route file; oRPC owns the path directly, like context_track. Admin
   // tier (agent-allowed): the box's status cron POSTs a snapshot with its agent token.

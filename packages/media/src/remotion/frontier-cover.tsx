@@ -4,9 +4,25 @@ import { colors } from "@fluncle/tokens";
 import { OXANIUM_STACK } from "./fonts";
 
 // <FrontierCover> — the per-user cover for a "Fluncle's Frontier" playlist (E2, the
-// public recommendation machine). Rendered NODE-SIDE (Remotion needs a real headless
-// Chromium; it does not run in a Cloudflare Worker) at 640×640 and uploaded to Spotify
-// by the cover script (apps/web/scripts/render-frontier-covers.ts).
+// public recommendation machine), rendered at 640×640.
+//
+// ── THIS IS THE DESIGN MASTER, NOT THE SHIPPING PATH ─────────────────────────
+// The cover that actually lands on Spotify is now rendered IN THE WORKER, at mint time,
+// by a Satori TWIN of this composition: apps/web/src/lib/server/frontier-cover-html.ts
+// (`buildFrontierCoverHtml`) + frontier-cover.ts. Remotion needs a real headless Chromium
+// and cannot run in a Cloudflare Worker, so a Remotion render could only ever be an
+// operator/box pass — and rave-03 is a scale-to-zero ephemeral render box, so there is no
+// durable place to run it on a per-mint cadence. Satori (the same engine behind the OG
+// cards) renders this trivial composition — the founding image + two text layers — inline.
+//
+// THIS FILE STAYS as the visual source of record: it is the reference the twin is checked
+// against. DRIFT RISK — the two are hand-kept in sync. If you change the plate, the scrim,
+// the stamp, or the palette HERE, mirror it in the Satori twin (and its test), and vice
+// versa. One known, deliberate deviation in the twin (documented there): Satori honours a
+// single text-shadow, not the layered pair below. The stamp is "Nº" (N + U+00BA) on BOTH
+// paths — Oxanium has no № glyph (U+2116), so a literal № could only ever render in a
+// system-font fallback here (a quiet brand break) and as .notdef in the Worker; Nº keeps
+// the whole stamp in the brand face everywhere.
 //
 // THE ART IS THE FOUNDING IMAGE. The ground is the original cover painting (the
 // no-text master, `fluncle-cover-no-text.png`): the floating figure, the burning
@@ -36,7 +52,7 @@ export type FrontierCoverProps = {
 export const FrontierCover: React.FC<FrontierCoverProps> = ({ crewNumber }) => {
   const stamp =
     typeof crewNumber === "number" && crewNumber > 0
-      ? `№ ${String(crewNumber).padStart(3, "0")}`
+      ? `Nº ${String(crewNumber).padStart(3, "0")}`
       : null;
 
   return (

@@ -200,6 +200,11 @@ const APPROVED_VERBS = new Set<string>([
   // only; distinct from `approve`/`reject` (the operator's publishing decision).
   "triage",
   "unsave",
+  // `upload` (render + push a Frontier playlist cover onto Spotify) — added deliberately with the
+  // `upload_frontier_covers` mint-cover retry drain (E2). The act of putting a rendered artifact
+  // onto an external platform: distinct from `distribute` (the multi-GB mixtape byte-move),
+  // `publish` (a one-shot social post), and `render` (make the artifact) — this UPLOADS it.
+  "upload",
 ]);
 
 describe("oRPC op-name naming convention (verb_noun, Convention B)", () => {

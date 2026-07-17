@@ -16,6 +16,9 @@ import { type Implementer, toFault } from "./_shared";
 /** How many minted playlists a single refresh tick walks when the caller names no limit. */
 const DEFAULT_REFRESH_LIMIT = 500;
 
+/** How many owing covers a single backfill tick renders when the caller names no limit. */
+const DEFAULT_COVER_LIMIT = 50;
+
 /**
  * Build the `admin-frontier` domain's handler.
  *
@@ -57,9 +60,23 @@ export function adminFrontierHandlers(os: Implementer) {
       }
     });
 
+  // The mint-cover retry drain — admin tier (agent-allowed), the refresh precedent. Renders +
+  // uploads every cover still owing IN THE WORKER (Satori → JPEG). The lazy import keeps
+  // `workers-og` out of the `./orpc` module graph (the mixtape-cover precedent).
+  const uploadCovers = os.upload_frontier_covers.use(adminAuth).handler(async ({ input }) => {
+    try {
+      const { uploadFrontierCovers } = await import("../frontier-cover");
+
+      return await uploadFrontierCovers(input.limit ?? DEFAULT_COVER_LIMIT);
+    } catch (error) {
+      throw toFault(error);
+    }
+  });
+
   return {
     get_frontier_minting: getMinting,
     refresh_frontier_playlists: refresh,
     set_frontier_minting: setMinting,
+    upload_frontier_covers: uploadCovers,
   };
 }

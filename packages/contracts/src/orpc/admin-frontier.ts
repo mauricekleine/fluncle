@@ -87,9 +87,51 @@ export const setFrontierMinting = oc
   .input(z.object({ open: z.boolean() }))
   .output(z.object({ ok: z.literal(true), open: z.boolean() }));
 
+/**
+ * `upload_frontier_covers` → `POST /admin/frontier/covers` (operationId `uploadFrontierCovers`).
+ *
+ * ADMIN tier (adminAuth only, agent-allowed) — the `refresh_frontier_playlists` precedent: the
+ * box's weekly cron (and the operator) drive it with the agent-scoped token. It touches only
+ * playlists their owners already minted, so it creates no new public authority.
+ *
+ * THE COVER RETRY DRAIN. The custom per-user cover renders IN THE WORKER at mint time; this op
+ * is the backfill for the ones that missed — a cover that failed at mint (a Spotify hiccup, a
+ * missing scope) or a playlist minted before covers shipped. It walks the `cover_uploaded_at IS
+ * NULL` rows, renders each cover in the Worker (Satori → JPEG), and uploads it. NO image input:
+ * the Worker renders now (Remotion can't run in a Worker; Satori can). Best-effort per target;
+ * the counts are the summary. Inert until the operator re-auths with `ugc-image-upload` — every
+ * upload degrades cleanly (`missingScope`) and the row stays queued.
+ */
+export const uploadFrontierCovers = oc
+  .route({
+    method: "POST",
+    operationId: "uploadFrontierCovers",
+    path: "/admin/frontier/covers",
+    summary:
+      "Render + upload every Frontier cover still owing (the mint-cover retry drain; agent-tier)",
+    tags: ["Admin"],
+  })
+  .input(z.object({ limit: z.number().int().positive().optional() }))
+  .output(
+    z.object({
+      // Covers whose render or upload faulted (best-effort; retried next tick).
+      failed: z.number(),
+      // Covers rendered but NOT uploaded — the grant lacks `ugc-image-upload` (the dark state).
+      missingScope: z.number(),
+      ok: z.literal(true),
+      // Covers rendered to a JPEG this tick.
+      rendered: z.number(),
+      // Rows walked (playlists with no cover yet).
+      targets: z.number(),
+      // Covers that landed on Spotify this tick.
+      uploaded: z.number(),
+    }),
+  );
+
 /** The `admin-frontier` domain's ops, merged into the root contract by `./index.ts`. */
 export const adminFrontierContract = {
   get_frontier_minting: getFrontierMinting,
   refresh_frontier_playlists: refreshFrontierPlaylists,
   set_frontier_minting: setFrontierMinting,
+  upload_frontier_covers: uploadFrontierCovers,
 };

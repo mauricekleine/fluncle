@@ -5,12 +5,14 @@
 // real, public artifact on the operator's Spotify account, so it is held to the same
 // verified-email bar the recommendation engine is.
 
+import { waitUntil } from "cloudflare:workers";
 import { ORPCError } from "@orpc/server";
 import {
   FRONTIER_MINT_RATE_LIMIT,
   getFrontierState,
   mintOrRefreshFrontierPlaylist,
 } from "../frontier-playlist";
+import { logEvent } from "../log";
 import { privateUserAuth, privateUserMutation } from "../orpc-auth";
 import { apiFault, type Implementer } from "./_shared";
 
@@ -73,6 +75,25 @@ export function meFrontierHandlers(os: Implementer) {
             message: "Frontier sync failed",
             status: 503,
           });
+        }
+
+        // THE COVER LANDS WITH THE MINT. On a fresh CREATE only (a refresh already has its
+        // cover), fire the in-Worker Satori render + Spotify upload on `waitUntil` so it runs
+        // after the response — the mint never waits on it, and a cover failure never fails the
+        // mint (the row keeps its NULL stamp and the `upload_frontier_covers` backfill retries).
+        // The lazy `import` keeps `workers-og` out of the `./orpc` module graph (frontier-cover.ts).
+        if (result.status === "minted" && result.playlistId) {
+          const playlistId = result.playlistId;
+          const crewNumber = context.user.crewNumber ?? null;
+          const userId = context.user.id;
+
+          waitUntil(
+            import("../frontier-cover")
+              .then((cover) => cover.uploadFrontierCoverForUser({ crewNumber, playlistId, userId }))
+              .catch((error) =>
+                logEvent("warn", "frontier.cover-mint-fire-failed", { error, userId }),
+              ),
+          );
         }
 
         return {
