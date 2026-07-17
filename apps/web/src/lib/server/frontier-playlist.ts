@@ -260,13 +260,14 @@ export async function mintOrRefreshFrontierPlaylist(
         return { ok: false, reason: "mint_cap_reached" };
       }
 
-      const me = (await (await step("me", spotifyFetch("/me", accessToken))).json()) as {
-        id: string;
-      };
+      // `POST /me/playlists` — Spotify's Feb-2026 Web API migration RETIRED the
+      // `/users/{id}/playlists` create (bare 403 since 2026-03-09), which also
+      // retires the /me id pre-read the old URL needed. Probed live 2026-07-17:
+      // /me/playlists returns 201 on the same grant the old endpoint 403s.
       const created = (await (
         await step(
           "create",
-          spotifyFetch(`/users/${me.id}/playlists`, accessToken, {
+          spotifyFetch("/me/playlists", accessToken, {
             body: JSON.stringify({ description, name: FRONTIER_PLAYLIST_NAME, public: true }),
             headers: { "Content-Type": "application/json" },
             method: "POST",

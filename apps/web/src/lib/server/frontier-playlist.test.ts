@@ -61,11 +61,9 @@ vi.mock("./spotify", () => ({
       return Promise.reject(new Error("spotify down"));
     }
 
-    if (path === "/me") {
-      return Promise.resolve(new Response(JSON.stringify({ id: "fluncle" })));
-    }
-
-    if (path.startsWith("/users/fluncle/playlists")) {
+    // The create — `POST /me/playlists` (the Feb-2026 migration endpoint; the
+    // retired `/users/{id}/playlists` 403s live, so a mock for it would pin a bug).
+    if (path === "/me/playlists") {
       return Promise.resolve(new Response(JSON.stringify({ id: "pl-new" })));
     }
 
@@ -284,7 +282,7 @@ describe("mint (create-once) + the URI order", () => {
     expect(first).toMatchObject({ ok: true, status: "minted" });
     expect(first).toMatchObject({ playlistUrl: "https://open.spotify.com/playlist/pl-new" });
 
-    const create = spotifyCalls.find((call) => call.path.startsWith("/users/fluncle/playlists"));
+    const create = spotifyCalls.find((call) => call.path === "/me/playlists");
     expect(JSON.parse((create?.init?.body as string) ?? "{}")).toMatchObject({ public: true });
 
     const put = spotifyCalls.find((call) => call.init?.method === "PUT");
@@ -390,7 +388,7 @@ describe("the rolling daily mint cap", () => {
     const result = await mintOrRefreshFrontierPlaylist(makeUser({ id: "new-user" }), now);
 
     expect(result).toEqual({ ok: false, reason: "mint_cap_reached" });
-    expect(spotifyCalls.some((call) => call.path.startsWith("/users/"))).toBe(false);
+    expect(spotifyCalls.some((call) => call.path === "/me/playlists")).toBe(false);
   });
 });
 
@@ -479,3 +477,16 @@ async function importWithHash() {
     hashUrisForTest: (uris: string[]) => createHash("sha256").update(uris.join(",")).digest("hex"),
   };
 }
+
+describe("the retired create endpoint (the Feb-2026 Spotify migration)", () => {
+  it("never calls /users/{id}/playlists — it 403s live since 2026-03-09", async () => {
+    const { mintOrRefreshFrontierPlaylist } = await import("./frontier-playlist");
+
+    settings.set("frontier.minting", "true");
+    recs = { catalogue: [{ spotifyUri: uri("cat1") }], findings: [] };
+    await mintOrRefreshFrontierPlaylist(makeUser({ id: "u-endpoint" }));
+
+    expect(spotifyCalls.some((call) => call.path.startsWith("/users/"))).toBe(false);
+    expect(spotifyCalls.some((call) => call.path === "/me")).toBe(false);
+  });
+});
