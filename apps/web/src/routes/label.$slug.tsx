@@ -97,25 +97,32 @@ export async function resolveLabelPageData(
     return { status: "missing" };
   }
 
-  let catalogue: CatalogueGroupPage<CatalogueArtistGroup>;
+  // Ride the catalogue read in the SAME parallel wave as the findings/artists/alias reads —
+  // all four key only off `label.id` and are mutually independent. A page past the end of the
+  // pager throws `CataloguePageOutOfRangeError`; map ONLY that to null here so it no longer
+  // blocks the batch, and 404 once the wave settles. Any other error still throws.
+  const cataloguePromise = listLabelCatalogue(label.id, sort, page).catch(
+    (error: unknown): CatalogueGroupPage<CatalogueArtistGroup> | null => {
+      if (error instanceof CataloguePageOutOfRangeError) {
+        return null;
+      }
 
-  try {
-    catalogue = await listLabelCatalogue(label.id, sort, page);
-  } catch (error) {
-    // A page past the end of the pager is genuinely not-found, not a 500 — a crawler or a
-    // hand-typed `?page=99` gets an honest 404, never a duplicate of page 1 under a new URL.
-    if (error instanceof CataloguePageOutOfRangeError) {
-      return { status: "missing" };
-    }
+      throw error;
+    },
+  );
 
-    throw error;
-  }
-
-  const [findings, artists, alternateNames] = await Promise.all([
+  const [catalogue, findings, artists, alternateNames] = await Promise.all([
+    cataloguePromise,
     getFindingsByLabel(label.id),
     listArtistsByLabel(label.id),
     getConfirmedAliasNames(label.id),
   ]);
+
+  if (catalogue === null) {
+    // A page past the end of the pager is genuinely not-found, not a 500 — a crawler or a
+    // hand-typed `?page=99` gets an honest 404, never a duplicate of page 1 under a new URL.
+    return { status: "missing" };
+  }
 
   return {
     alternateNames,

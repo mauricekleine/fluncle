@@ -25,6 +25,7 @@ import { listUnresolvedArtists, resolveArtist } from "../artist-resolution";
 import { backfillArtistImages } from "../backfill-artist-images";
 import { backfillArtists } from "../backfill-artists";
 import { buildEntityBioPrompt, fetchEntityFacts, gateBioText } from "../bio";
+import { purgeEntityCache } from "../edge-cache";
 import { adminAuth, operatorGuard } from "../orpc-auth";
 import { getFindingsByArtist } from "../tracks";
 import { ORPCError } from "@orpc/server";
@@ -317,6 +318,10 @@ export function adminArtistsHandlers(os: Implementer) {
           slug: artist.slug,
         };
       }
+
+      // The bio is a primary rendered block on `/artist/<slug>`; drop its cached page so the
+      // new bio surfaces. Only on an actual write (fill-empty may have no-op'd above).
+      purgeEntityCache("artist", artist.slug);
 
       return { bio, ok: true as const, slug: artist.slug };
     } catch (error) {

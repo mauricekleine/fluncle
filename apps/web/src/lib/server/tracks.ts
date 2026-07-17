@@ -1186,13 +1186,16 @@ export async function getSimilarFindings(idOrLogId: string, limit = 6): Promise<
   // The probe rides as raw f32 bytes, NOT as a JSON string — a 14x cliff on hosted that
   // does not reproduce locally (embedding.ts, `toVectorProbe`).
   const probe = toVectorProbe(target);
-  // Rank the native `embedding_blob` column directly — the DB does the cosine in SQL and
-  // ships back only the winners. A candidate without a blob (un-embedded) is skipped by the
-  // `embedding_blob is not null` filter, never seen by `vector_distance_cos` (it throws on a
-  // NULL). Args bind in SQL-TEXT order: probe, then the excluded target, then the limit.
+  // Rank the native `embedding_blob` column directly AND hydrate the winners in the SAME
+  // query — the DB does the cosine in SQL, orders by it, and returns only the winning rows
+  // with their full `TRACK_SELECT` columns, already in ranked order. This folds the old
+  // rank-then-hydrate pair into one round-trip (the target lookup above stays as the
+  // no-embedding guard; `vector_distance_cos` throws on a NULL probe). A candidate without a
+  // blob (un-embedded) is skipped by the `embedding_blob is not null` filter, never seen by
+  // the cosine. Args bind in SQL-TEXT order: probe, then the excluded target, then the limit.
   const rankedResult = await db.execute({
     args: [probe, targetRow.track_id, limit],
-    sql: `select tracks.track_id as track_id,
+    sql: `select ${TRACK_SELECT},
                  vector_distance_cos(tracks.embedding_blob, ?) as dist
           from ${FINDINGS_FROM}
           where findings.log_id is not null
@@ -1202,20 +1205,7 @@ export async function getSimilarFindings(idOrLogId: string, limit = 6): Promise<
           limit ?`,
   });
 
-  const topIds = typedRows<{ track_id: string }>(rankedResult.rows).map((row) => row.track_id);
-
-  if (topIds.length === 0) {
-    return [];
-  }
-
-  // Hydrate the winners in ONE batched query, then re-order to the ranking (the map
-  // is by trackId, unordered). A winner that vanished between the two reads is dropped.
-  const byId = await getTracksByIds(topIds);
-
-  return topIds.flatMap((id) => {
-    const item = byId[id];
-    return item ? [item] : [];
-  });
+  return typedRows<TrackRow>(rankedResult.rows).map((row) => toTrackListItem(row));
 }
 
 // ── `/mix`: the catalogue-aware rail ─────────────────────────────────────────

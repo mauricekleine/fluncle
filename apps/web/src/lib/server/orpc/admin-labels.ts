@@ -13,6 +13,7 @@
 // anything a crawl brought in — and neither ever should. See docs/label-entity.md.
 
 import { buildEntityBioPrompt, fetchEntityFacts, gateBioText } from "../bio";
+import { purgeEntityCache } from "../edge-cache";
 import {
   confirmLabelAlias,
   fillEmptyLabelBio,
@@ -141,6 +142,10 @@ export function adminLabelsHandlers(os: Implementer) {
           slug: label.slug,
         };
       }
+
+      // The bio is a primary rendered block on `/label/<slug>`; drop its cached page so the
+      // new bio surfaces. Only on an actual write (fill-empty may have no-op'd above).
+      purgeEntityCache("label", label.slug);
 
       return { bio, ok: true as const, slug: label.slug };
     } catch (error) {

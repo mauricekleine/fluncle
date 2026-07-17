@@ -28,7 +28,11 @@ const getFindingsByAlbum = vi.fn();
 
 // The router graph imports `env` from cloudflare:workers at module load; stub it so the
 // import resolves in the test runtime (this suite touches no Worker binding).
-vi.mock("cloudflare:workers", () => ({ env: {} }));
+// `waitUntil` is a no-op here: the describe_* handlers fire a fire-and-forget entity-page
+// cache purge (purgeEntityCache) after a bio write, and that rides `waitUntil`. The purge
+// itself no-ops in the test (no `caches` global, no zone token); we only need the call to
+// resolve rather than throw on a missing mock export.
+vi.mock("cloudflare:workers", () => ({ env: {}, waitUntil: () => undefined }));
 
 vi.mock("./artists", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./artists")>();

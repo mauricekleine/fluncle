@@ -9,6 +9,7 @@
 // editorial ruling, so there is no operator-tier op here. See docs/agents/bio-agent.md.
 
 import { getAlbumBySlug, fillEmptyAlbumBio, listAlbumsMissingBio } from "../albums";
+import { purgeEntityCache } from "../edge-cache";
 import { buildEntityBioPrompt, fetchEntityFacts, gateBioText } from "../bio";
 import { adminAuth } from "../orpc-auth";
 import { getFindingsByAlbum } from "../tracks";
@@ -60,6 +61,10 @@ export function adminAlbumsHandlers(os: Implementer) {
           slug: album.slug,
         };
       }
+
+      // The bio is a primary rendered block on `/album/<slug>`; drop its cached page so the
+      // new bio surfaces. Only on an actual write (fill-empty may have no-op'd above).
+      purgeEntityCache("album", album.slug);
 
       return { bio, ok: true as const, slug: album.slug };
     } catch (error) {
