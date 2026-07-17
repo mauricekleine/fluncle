@@ -1,11 +1,41 @@
 import { cloudflare } from "@cloudflare/vite-plugin";
+import { sentryVitePlugin } from "@sentry/vite-plugin";
 import tailwindcss from "@tailwindcss/vite";
 import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import viteReact from "@vitejs/plugin-react";
+import { execSync } from "node:child_process";
 import mdx from "fumadocs-mdx/vite";
 import { resolve } from "node:path";
-import { defineConfig, type Plugin, type Rollup } from "vite";
+import { defineConfig, type Plugin, type PluginOption, type Rollup } from "vite";
 import * as docsConfig from "./source.config";
+
+// The Sentry release name = the build commit SHA (docs/error-tracking.md). On
+// Cloudflare Workers Builds it arrives as WORKERS_CI_COMMIT_SHA; locally we read
+// it from git. Empty when neither is available (a shallow checkout with no git),
+// which the runtime degrades to `undefined` — no release beats a wrong one.
+function resolveSentryRelease(): string {
+  const ciSha = process.env.WORKERS_CI_COMMIT_SHA;
+
+  if (ciSha) {
+    return ciSha;
+  }
+
+  try {
+    return execSync("git rev-parse HEAD", { encoding: "utf8" }).trim();
+  } catch {
+    return "";
+  }
+}
+
+const sentryRelease = resolveSentryRelease();
+
+// Source maps upload only when SENTRY_AUTH_TOKEN is present in the build env
+// (the deployed Cloudflare Workers Build). Without it — local dev, the
+// `deploy:gate`, a contributor build — no token means no plugin, no source maps
+// generated, and the build behaves exactly as before (no `.map` in the served
+// assets). Slugs default to the committed values, overridable from the env.
+const sentryAuthToken = process.env.SENTRY_AUTH_TOKEN;
+const uploadSentrySourceMaps = Boolean(sentryAuthToken);
 
 // A crawler-facing banner prepended to every built JS chunk. The hashed
 // /assets/*.js chunks are among the most-crawled paths by AI bots, so this is
@@ -98,6 +128,19 @@ function crawlerBannerPlugin(): Plugin {
 }
 
 export default defineConfig({
+  // Hidden source maps so the Sentry plugin can upload them, WITHOUT emitting a
+  // `//# sourceMappingURL=` comment (browsers never fetch them) — and the plugin
+  // deletes the `.map` files after upload, so nothing ships in the served assets.
+  // Only when uploading; otherwise off, preserving the prod build's no-sourcemap
+  // behaviour (the crawler-banner comment below relies on it).
+  build: {
+    sourcemap: uploadSentrySourceMaps ? "hidden" : false,
+  },
+  // The build commit SHA, statically inlined so the browser and Worker SDKs stamp
+  // the same release on every event. See lib/sentry-config.ts.
+  define: {
+    "import.meta.env.VITE_FLUNCLE_SENTRY_RELEASE": JSON.stringify(sentryRelease),
+  },
   // fumadocs-ui (the /docs hub) imports from the `lucide-react` barrel. Without
   // pre-bundling, Vite dev serves the un-optimized barrel, whose ~1500 static
   // re-exports each load as a separate module request. Pre-bundling collapses it
@@ -118,7 +161,27 @@ export default defineConfig({
     tanstackStart(),
     viteReact(),
     crawlerBannerPlugin(),
-  ],
+    // Last, per the plugin's guidance. Uploads source maps + associates the
+    // release, then deletes the `.map` files. `errorHandler` downgrades any
+    // upload failure (wrong slug, revoked token, network) to a WARNING so a
+    // Sentry hiccup never aborts a production deploy. Absent when there's no
+    // auth token (local/gate builds), so those never even generate maps.
+    uploadSentrySourceMaps
+      ? sentryVitePlugin({
+          authToken: sentryAuthToken,
+          errorHandler: (err) => {
+            console.warn(`[sentry-vite-plugin] source map upload skipped: ${err.message}`);
+          },
+          org: process.env.SENTRY_ORG ?? "fluncle",
+          project: process.env.SENTRY_PROJECT ?? "fluncle-web",
+          release: { name: sentryRelease || undefined },
+          sourcemaps: {
+            filesToDeleteAfterUpload: ["**/*.map"],
+          },
+          telemetry: false,
+        })
+      : null,
+  ] satisfies PluginOption[],
   resolve: {
     alias: {
       "@": resolve(import.meta.dirname, "src"),

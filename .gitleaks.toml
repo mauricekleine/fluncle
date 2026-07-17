@@ -25,6 +25,13 @@ regexes = [
   # verify domain ownership before accepting URL submissions. Public by design — it is
   # not a credential and grants nothing beyond proving we control the served file.
   '''8337c1b41068549f248bf56f1fc465df''',
+  # The two Sentry DSN public keys (browser + Worker), committed in
+  # apps/web/src/lib/sentry-config.ts. A DSN is a PUBLIC ingestion identifier — like
+  # the R2 account id above, it names where events go but grants nothing on its own
+  # (ingestion is one-way; reading issues needs the auth token, which is never in the
+  # repo). See docs/error-tracking.md.
+  '''b7fe8117b1aa9848d5f8252a65e8b9ae''',
+  '''9843d82b6f64fef790791e58047ed52b''',
   # Feed content-type MIME strings in the surfaces registry (`apiFormat`) — RSS/Atom/
   # JSON-Feed media types, not secrets. gitleaks' generic-api-key rule false-positives
   # the `...+xml` / `...+json` media types.

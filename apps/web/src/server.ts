@@ -1,3 +1,4 @@
+import * as Sentry from "@sentry/cloudflare";
 import handler, { createServerEntry } from "@tanstack/react-start/server-entry";
 import {
   appendAgentLinkHeaders,
@@ -12,8 +13,16 @@ import {
 import { ADMIN_COOKIE_NAME } from "./lib/server/env";
 import { handleMcp } from "./lib/server/mcp";
 import { handleOrpc } from "./lib/server/orpc";
+import { SENTRY_RELEASE, WORKER_SENTRY_DSN } from "./lib/sentry-config";
 
-export default createServerEntry({
+// The whole custom entry, wrapped once by Sentry so any unhandled throw from
+// EITHER path — handleOrpc (mounted first) or the TanStack router beneath it —
+// is captured with a stack. Errors-only, free-tier posture: no tracing, no PII.
+// Gated to production builds: `import.meta.env.PROD` is `false` under vite dev
+// (`bun run dev`, the smoke routine) and statically `true` in the deployed
+// Worker bundle, so no events leave a dev machine. When the DSN is undefined the
+// SDK initializes inert and never sends.
+const serverEntry = createServerEntry({
   async fetch(request) {
     // oRPC owns the API operations it has contracts for, dual-mounted under
     // `/api/v1` and `/api`. It returns null when no procedure matched (the
@@ -80,6 +89,29 @@ export default createServerEntry({
     return url.pathname === "/" ? appendAgentLinkHeaders(located) : located;
   },
 });
+
+// Sentry's `withSentry` wraps a Cloudflare `ExportedHandler`, but TanStack's
+// `ServerEntry.fetch(request, opts?)` is not typed as one (its second parameter is
+// TanStack's, not the Worker's `env`). Rather than the `@ts-expect-error` Sentry's
+// docs reach for, bridge with a real CF handler that delegates the request — the
+// entry only ever reads `request` (env/ctx come from the Cloudflare vite binding,
+// not the fetch args), so nothing is dropped.
+const cfHandler: ExportedHandler<Env> = {
+  fetch(request) {
+    return serverEntry.fetch(request);
+  },
+};
+
+export default Sentry.withSentry(
+  () => ({
+    dsn: import.meta.env.PROD ? WORKER_SENTRY_DSN : undefined,
+    release: SENTRY_RELEASE,
+    // Errors only, free-tier posture (ratified): no tracing, no profiling, no PII.
+    sendDefaultPii: false,
+    tracesSampleRate: 0,
+  }),
+  cfHandler,
+);
 
 // A cheap presence check (not a verify) of the admin grant cookie: enough to keep
 // an operator's signed-in view off the shared edge cache, while the route handlers
