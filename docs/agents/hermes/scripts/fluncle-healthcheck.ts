@@ -491,6 +491,7 @@ const AUTOMATION_CRONS: CronDef[] = [
   { cadenceMs: 10 * 60_000, match: "crawl", service: "cron.crawl" }, // catalogue crawl — one bounded MusicBrainz pass per tick
   { cadenceMs: 30 * 60_000, match: "rank", service: "cron.rank" }, // The Ear's ranking — drains the stale catalogue
   { cadenceMs: 60 * 60_000, match: "label-images", service: "cron.label-images" }, // label logos — resolve one bounded batch of pending labels per tick
+  { cadenceMs: 60 * 60_000, match: "cover-masters", service: "cron.cover-masters" }, // owned album/artist cover masters — one bounded batch per tick
   { cadenceMs: 60 * 60_000, match: "artist-sweep", service: "cron.artist-sweep" },
   { cadenceMs: 10 * 60_000, match: "social-capture", service: "cron.social-capture" },
   // `verify-captures` (a longer match) claims the fluncle-verify-captures dir before the bare
@@ -513,6 +514,9 @@ const AUTOMATION_CRONS: CronDef[] = [
   // a self-read would be circular. Its /status row is emitted self-evidently by
   // probeHealthcheck() below instead.
   { cadenceMs: 7 * 24 * 60 * 60_000, match: "newsletter", service: "cron.newsletter" }, // weekly — a generous floor
+  // The weekly Frontier playlist refresh (E2) — Fri 07:00 Amsterdam; same generous weekly floor
+  // as the newsletter. No token collision: no other cron token contains "frontier-refresh".
+  { cadenceMs: 7 * 24 * 60 * 60_000, match: "frontier-refresh", service: "cron.frontier-refresh" },
   { cadenceMs: 24 * 60 * 60_000, match: "backup", service: "cron.backup" }, // daily DB backup → private R2
   { cadenceMs: 24 * 60 * 60_000, match: "logbook", service: "cron.logbook" }, // daily Logbook author — a generous floor
   // The daily /reach snapshot. `reach` is a substring of no other cron's fluncle-<token> dir
