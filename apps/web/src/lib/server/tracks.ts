@@ -165,7 +165,7 @@ export const FINDINGS_FROM = `findings join tracks on tracks.track_id = findings
 
 // Columns exposed to clients. `features_json` is the enrichment spectral summary,
 // surfaced (parsed) as creative fuel for the video agent.
-const TRACK_SELECT = `tracks.track_id, tracks.spotify_url, tracks.apple_music_url, tracks.title, tracks.album, tracks.album_image_url, tracks.artists_json, tracks.analyzed_at, tracks.analyzed_from,
+export const TRACK_SELECT = `tracks.track_id, tracks.spotify_url, tracks.apple_music_url, tracks.title, tracks.album, tracks.album_image_url, tracks.artists_json, tracks.analyzed_at, tracks.analyzed_from,
   tracks.bpm, tracks.bpm_source, tracks.duration_ms, findings.enrichment_status, tracks.features_json, tracks.in_release_id, tracks.isrc, tracks.key, tracks.key_source, tracks.label, findings.log_id, tracks.popularity,
   tracks.preview_url, tracks.release_date, tracks.source_audio_failures, tracks.source_audio_key, findings.video_url, findings.video_squared_at, findings.video_vehicle, findings.video_grain, findings.video_register, findings.video_model, findings.video_model_reasoning, findings.note, findings.added_at,
   findings.updated_at, findings.added_to_spotify, findings.posted_to_telegram,

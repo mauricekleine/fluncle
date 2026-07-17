@@ -22,6 +22,7 @@ describe("nav model completeness", () => {
       "/artists",
       "/labels",
       "/albums",
+      "/fresh",
       "/galaxies",
       "/logbook",
       "/mixtapes",
@@ -46,7 +47,7 @@ describe("nav model completeness", () => {
     expect(browse?.label).toBe("Browse");
     expect(publicItems(travel ?? { id: "travel", items: [], label: "" }).map((item) => item.id)) //
       .toEqual(["log", "logbook", "galaxies", "mixtapes"]);
-    expect(browse?.items.map((item) => item.id)).toEqual(["artists", "albums", "labels"]);
+    expect(browse?.items.map((item) => item.id)).toEqual(["artists", "albums", "labels", "fresh"]);
   });
 
   // Every heading is one plain word or phrase, and it names something you DO or someone you

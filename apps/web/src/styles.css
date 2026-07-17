@@ -2178,6 +2178,38 @@ body::before {
   opacity: 0.85;
 }
 
+/* The `/fresh` "Records just out" list — the album entities a recent release sits on. A record
+   is a NAMED graph node (it has a page), so its name is a GraphLink carrying its own register
+   (cream, dotted underline, heating to gold on hover) — this is NOT the unlit tier, and never
+   borrows its dust ink. A quiet stardust meta line (artists · release date) sits beneath, on the
+   same flat plate pane as everything else (One Pane). */
+.fresh-records {
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  list-style: none;
+  margin: 0;
+  padding: 0.4rem 0 0;
+}
+
+.fresh-record {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  padding: 0.5rem 0.5rem;
+}
+
+.fresh-record + .fresh-record {
+  border-top: 1px solid color-mix(in oklch, var(--border) 55%, transparent);
+}
+
+.fresh-record-meta {
+  color: var(--stardust);
+  font-size: 0.78rem;
+  line-height: 1.3;
+}
+
 /* ── THE GROUPED QUIETER ROWS ───────────────────────────────────────────────────────────
    At catalogue scale the unlit rows are a discography, so they are GROUPED: the artist page by
    record, the label page by artist then record (components/catalogue-groups.tsx). The register

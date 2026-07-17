@@ -227,6 +227,7 @@ ${tracks.join("\n")}
 - [Mixtapes API](${siteUrl}/api/v1/mixtapes): Fluncle's own DJ mixtapes as JSON, each a checkpoint set with an F-marked Log ID and its tracklist; browse them at ${siteUrl}/mixtapes${galaxiesLine}
 - [The labels](${siteUrl}/labels): every record label Fluncle has found a banger on. Each resolves to a page at ${siteUrl}/label/{slug}: that label's findings, the artists on it, and the rest of its catalogue
 - [The albums](${siteUrl}/albums): every record Fluncle has found a banger on. Each resolves to a page at ${siteUrl}/album/{slug}: that record's findings, its artists, and the label it came out on
+- [What just came out](${siteUrl}/fresh): the newest drum & bass across the whole archive, freshest first. Every release from the last 30 days, ordered by when it came out (not by when Fluncle found it)
 
 ## Submit
 
@@ -297,6 +298,7 @@ ${omitted > 0 ? `\n_${omitted} older findings omitted here; page the rest at ${s
 - The artists: ${siteUrl}/api/v1/artists
 - The labels: ${siteUrl}/labels
 - The albums: ${siteUrl}/albums
+- What just came out: ${siteUrl}/fresh
 - The mixtapes: ${siteUrl}/api/v1/mixtapes${galaxiesLive ? `\n- The sonic galaxies: ${siteUrl}/api/v1/galaxies` : ""}
 - The MCP server: ${siteUrl}/mcp
 `;

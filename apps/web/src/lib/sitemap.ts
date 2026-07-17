@@ -279,6 +279,11 @@ function kindEntries(kind: SitemapKind, bags: SitemapBags): string[] {
         // pages. Shares the hubs' `latest` stamp; the per-edition pages are discovered from it.
         staticEntry(`${siteUrl}/newsletter`, latest),
         staticEntry(`${siteUrl}/artists`, latest),
+        // The new-releases lens — a real editorial hub (indexable, self-canonical): what just came
+        // out across the whole archive. A daily-changing page, so it shares the hubs' freshest-
+        // content `latest` stamp (the builder is pure — the page's own volatility rides its
+        // Cache-Control, not a synthetic "now"), and it is listed unconditionally like /artists.
+        staticEntry(`${siteUrl}/fresh`, latest),
         // The graph HUBS are listed unconditionally, exactly like /artists: a hub is a real
         // page whose content is the whole list, so the per-page thin-content gate (which can,
         // legitimately, admit no DETAIL pages at all) says nothing about whether the hub

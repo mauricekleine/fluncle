@@ -177,6 +177,16 @@ const browseItems: NavItem[] = [
     label: "Labels",
     to: "/labels",
   },
+  {
+    // The temporal lens across the whole taxonomy: not one shelf but what just landed on all of
+    // them — new releases, freshest first. Release dates, never Found dates, so the blurb says
+    // "came out", never "found" (docs/album-entity.md; VOICE.md's Found Rule).
+    blurb: "What just came out, freshest first.",
+    id: "fresh",
+    kind: "route",
+    label: "Fresh",
+    to: "/fresh",
+  },
 ];
 
 // ── Listen ──────────────────────────────────────────────────────────────────────
