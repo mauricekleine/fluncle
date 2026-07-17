@@ -9,8 +9,11 @@ import { logEvent } from "./log";
 
 const spotifyAccountsBaseUrl = "https://accounts.spotify.com";
 const spotifyApiBaseUrl = "https://api.spotify.com/v1";
-// The publish grant: it manages the Fluncle playlist (add a featured track).
-const spotifyScopes = ["playlist-modify-public", "playlist-modify-private"];
+// The publish grant: it manages the Fluncle playlists (add a featured track; mint +
+// re-mirror the per-user Frontier playlists) and uploads their custom covers —
+// `ugc-image-upload` is what un-inerts the Frontier cover leg (frontier-playlist.ts's
+// `putFrontierCover`): without it Spotify 401/403s the image PUT and the leg abstains.
+const spotifyScopes = ["playlist-modify-public", "playlist-modify-private", "ugc-image-upload"];
 // Admin web login asks for identity only — never the playlist-write scopes the
 // publish flow uses. The login exchange reads /v1/me and discards the tokens.
 const spotifyLoginScopes = ["user-read-email"];

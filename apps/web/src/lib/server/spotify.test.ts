@@ -167,3 +167,26 @@ describe("getSpotifyAccessToken refresh lifecycle", () => {
     expect(deleteCount).toBe(0);
   });
 });
+
+describe("the publish grant's authorize URL — the scope pin", () => {
+  it("carries the Frontier cover scope alongside the playlist writes", async () => {
+    const { buildSpotifyAuthUrl } = await import("./spotify");
+    const url = new URL(await buildSpotifyAuthUrl("state-1"));
+    const scopes = (url.searchParams.get("scope") ?? "").split(" ");
+
+    // `ugc-image-upload` is what un-inerts the Frontier cover leg; this pin exists
+    // because the cover feature once shipped with the upload code but WITHOUT the
+    // scope in the re-auth URL — inert with no path to un-inert.
+    expect(scopes).toContain("playlist-modify-public");
+    expect(scopes).toContain("playlist-modify-private");
+    expect(scopes).toContain("ugc-image-upload");
+  });
+
+  it("keeps the admin LOGIN grant identity-only (never the write scopes)", async () => {
+    const { buildSpotifyLoginUrl } = await import("./spotify");
+    const url = new URL(await buildSpotifyLoginUrl("state-1"));
+    const scopes = (url.searchParams.get("scope") ?? "").split(" ");
+
+    expect(scopes).toEqual(["user-read-email"]);
+  });
+});
