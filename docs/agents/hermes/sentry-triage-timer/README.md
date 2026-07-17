@@ -43,7 +43,7 @@ markers:
 
 ## Auto-merge posture (opt-in)
 
-By default a fix lands as an **open, labelled `sentry-triage` PR** for the operator to merge — a
+By default a fix lands as an **open PR on a `sentry-triage/` branch** for the operator to merge — a
 merge to `main` is a production deploy, and this cron has no second reviewer behind it (unlike the
 audit's 05:00 reviewer). To mirror the audit's "merge on green" posture without a second cron, set
 `SENTRY_TRIAGE_AUTOMERGE=1` in the box env: claude then enables GitHub auto-merge on each fix PR

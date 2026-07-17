@@ -76,10 +76,11 @@ triage is done:
 2. If you fixed nothing and filed nothing, stop — open no PR. A clean night is a good outcome.
 3. **Per fixed issue**: branch `sentry-triage/<dateTag>-<shortId>` off `origin/main`, commit the
    fix with a clear `fix(sentry): …` message, `git push -u origin HEAD`, then
-   `gh pr create --base main --label sentry-triage --title "fix(sentry): <shortId> — <gist>" --body-file <body>`.
-   The PR body MUST contain a `Sentry-Issue: <id>` line for the issue it fixes (the driver resolves
-   the issue when this PR merges) and should link the `permalink`. Honour the RUNTIME auto-merge
-   directive.
+   `gh pr create --base main --title "fix(sentry): <shortId> — <gist>" --body-file <body>`.
+   The `sentry-triage/` branch prefix is what identifies a triage PR (the driver + reconcile filter
+   on it — no GitHub label is needed, matching the audit's `audit/` convention). The PR body MUST
+   contain a `Sentry-Issue: <id>` line for the issue it fixes (the driver resolves the issue when
+   this PR merges) and should link the `permalink`. Honour the RUNTIME auto-merge directive.
 4. **If you filed anything**: branch `sentry-triage/<dateTag>-ledger` off `origin/main`, commit the
    `docs/sentry-backlog.md` rows (`docs(sentry): file N issues for review`), push, and open one PR
    titled `docs(sentry): N issues filed for review`. Its body carries a `Sentry-Filed: <id>` line

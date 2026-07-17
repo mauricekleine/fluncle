@@ -26,7 +26,7 @@
 # Auto-merge posture (opt-in, default OFF): set SENTRY_TRIAGE_AUTOMERGE=1 in the box env to have
 # claude enable GitHub auto-merge on each fix PR (`gh pr merge --squash --auto`) so a green
 # deploy:gate merges it hands-off — the audit's "merge on green" posture, without a second cron.
-# Left unset, every fix lands as an OPEN, labelled PR for the operator to merge (the safe default:
+# Left unset, every fix lands as an OPEN PR (on a sentry-triage/ branch) for the operator (the safe default:
 # a merge to main is a production deploy).
 set -uo pipefail
 
@@ -130,7 +130,7 @@ run_triage() {
   if [ "${SENTRY_TRIAGE_AUTOMERGE:-}" = "1" ]; then
     automerge_note="After opening each fix PR, enable auto-merge best-effort: \`gh pr merge <n> --squash --auto\` (green deploy:gate then merges it hands-off). If the repo has auto-merge disabled the command errors — that is fine, leave the PR open and continue; NEVER fail the run over it."
   else
-    automerge_note="Do NOT merge or enable auto-merge. Leave every fix PR OPEN and labelled for the operator (a merge to main is a production deploy)."
+    automerge_note="Do NOT merge or enable auto-merge. Leave every fix PR OPEN for the operator to merge (a merge to main is a production deploy)."
   fi
   if [ "${DRY_RUN}" = "1" ]; then
     runtime_note="RUNTIME: this is a DRY RUN. Locate each bug, make the straightforward fixes, append filed rows to docs/sentry-backlog.md, and write .sentry/report.md — but do NOT run git or gh; leave the branches uncommitted for inspection."
