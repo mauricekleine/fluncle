@@ -3210,8 +3210,10 @@ body::before {
 }
 
 /* The masthead already draws a divider beneath the header, so the first stacked
-   section drops its own top rule to avoid a double line. */
-.account-stack > .account-section:first-child {
+   section drops its own top rule to avoid a double line. The rec door stacks
+   .account-section fields directly (no .account-stack), so it carries the same drop. */
+.account-stack > .account-section:first-child,
+.rec-door > .account-section:first-child {
   border-top: 0;
   padding-top: 0;
 }

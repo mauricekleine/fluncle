@@ -74,19 +74,13 @@ type CrewMenuLink =
 const CREW_MENU_LINKS: CrewMenuLink[] = [
   // "Galaxy", not "My account" — the door's name matches the room (the default
   // /account view is the game record), so the menu reads as honest siblings:
-  // Galaxy / Saves / Settings. Revisit the default door once the rec engine lands.
+  // Galaxy / Saves / ChatDnB / Recommendations / Settings.
   { icon: <PlanetIcon aria-hidden="true" />, id: "galaxy", label: "Galaxy" },
   {
     icon: <BookmarkSimpleIcon aria-hidden="true" />,
     id: "saves",
     label: "Saves",
     search: { tab: "saves" },
-  },
-  {
-    icon: <GearSixIcon aria-hidden="true" />,
-    id: "settings",
-    label: "Settings",
-    search: { tab: "settings" },
   },
   // ChatDnB — LIVE (the verified-user rollout). The menu shows the door to every
   // signed-in user; the /chat page itself communicates the verify gate — a menu item
@@ -105,6 +99,15 @@ const CREW_MENU_LINKS: CrewMenuLink[] = [
     id: "recommendations",
     label: "Recommendations",
     to: "/recommendations",
+  },
+  // Settings sits LAST among the doors, right above Sign out — the frequency
+  // order (the account-redesign ruling): you open the rooms daily and the
+  // wiring rarely, so the wiring lives nearest the exit.
+  {
+    icon: <GearSixIcon aria-hidden="true" />,
+    id: "settings",
+    label: "Settings",
+    search: { tab: "settings" },
   },
   // ── EXTENSION SLOT ──────────────────────────────────────────────────────────
   // A future door lands here flagged `future` (filtered OUT of the render so no dead
