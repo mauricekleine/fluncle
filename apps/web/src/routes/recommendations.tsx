@@ -106,7 +106,8 @@ export const Route = createFileRoute("/recommendations")({
 const MASTHEAD: Record<RecsGate["state"], string> = {
   anonymous: "The crate Fluncle digs from the far side of the archive, pointed at your taste.",
   unverified: "The crate Fluncle digs from the far side of the archive, pointed at your taste.",
-  verified: "Your weekly crate, dug from the far side of the archive.",
+  // The verified door shows no tagline — the playlist header carries the meaning.
+  verified: "",
 };
 
 function RecommendationsPage() {
@@ -118,7 +119,11 @@ function RecommendationsPage() {
         <header className="home-masthead">
           <div>
             <h1 className="home-nameplate">Recommendations</h1>
-            <p className="home-tagline">{MASTHEAD[gate.state]}</p>
+            {/* The verified door carries its own meaning — the tagline speaks only where
+                the gate still has to make the pitch. */}
+            {gate.state === "verified" ? null : (
+              <p className="home-tagline">{MASTHEAD[gate.state]}</p>
+            )}
           </div>
         </header>
 

@@ -3210,10 +3210,8 @@ body::before {
 }
 
 /* The masthead already draws a divider beneath the header, so the first stacked
-   section drops its own top rule to avoid a double line. The rec door stacks
-   .account-section fields directly (no .account-stack), so it carries the same drop. */
-.account-stack > .account-section:first-child,
-.rec-door > .account-section:first-child {
+   section drops its own top rule to avoid a double line. */
+.account-stack > .account-section:first-child {
   border-top: 0;
   padding-top: 0;
 }
@@ -5755,22 +5753,144 @@ body::before {
   opacity: 0.6;
 }
 
-/* ── /recommendations — the per-listener telescope door ───────────────────────────
-   The register split on the wire, rendered: the seed picker + the playlist leg (the
-   instrument register — quiet, functional), then the findings slots (the archive's
-   ignition grammar, borrowed from .saves-row) and the catalogue rows (the Unlit Rule,
-   borrowed from .search-row--unlit). Every value derives from the existing tokens. */
-.rec-door {
+/* ── /recommendations — the playlist builder ──────────────────────────────────────
+   Spotify's own playlist page, in Fluncle's register: ONE column — the playlist
+   header (the 2×2 collage cut from the picks, the name, the one meta fact the
+   interface can't carry, the gold Get-playlist CTA — the page's One Sun), the
+   search, the numbered tracklist being assembled, and the RECOMMENDED shelf
+   below. Every recommended row wears the exact same anatomy (a workbench, not a
+   billboard); the register split rides the LIGHT, never the layout — a finding
+   catches the gold veil and wears the Fluncle seal (the gold coordinate pill in
+   its chips row), a catalogue cut hovers cold. Every value derives from the
+   existing tokens. */
+.rec-build {
+  display: flex;
+  flex-direction: column;
+  gap: 2.2rem;
+}
+
+/* ── the playlist header ─────────────────────────────────────────────────────── */
+.rec-playlist {
   display: flex;
   flex-direction: column;
   gap: 1.2rem;
 }
 
-/* ── the seed picker ─────────────────────────────────────────────────────────── */
-.rec-picker-head {
+/* Spotify's own grammar: the cover bottom-aligned with the identity block. */
+.rec-playlist-head {
+  align-items: flex-end;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem 1.25rem;
+}
+
+/* The cover: a 2×2 collage cut from the first four picks (Spotify's auto-cover
+   grammar). Quadrants butt edge to edge, the way the real ones do. */
+.rec-collage {
+  aspect-ratio: 1;
+  border: 1px solid var(--border);
+  border-radius: var(--rounded-artwork);
+  display: grid;
+  flex: none;
+  grid-template-columns: 1fr 1fr;
+  overflow: hidden;
+  width: clamp(8.5rem, 26vw, 11rem);
+}
+
+.rec-collage img {
+  aspect-ratio: 1;
+  display: block;
+  height: 100%;
+  object-fit: cover;
+  width: 100%;
+}
+
+/* A quadrant with no cover yet — the eclipse fallback (the artwork grammar); at
+   zero picks the whole frame is the fallback, the artifact not yet revealed. */
+.rec-collage-cell {
+  background:
+    linear-gradient(
+      145deg,
+      color-mix(in oklch, var(--primary) 18%, transparent),
+      color-mix(in oklch, var(--destructive) 12%, transparent)
+    ),
+    var(--muted);
+}
+
+.rec-playlist-id {
+  display: flex;
+  flex: 1 1 16rem;
+  flex-direction: column;
+  gap: 0.4rem;
+  min-width: 0;
+  padding-bottom: 0.15rem;
+}
+
+.rec-playlist-name {
+  color: var(--starlight-cream);
+  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-size: clamp(1.45rem, 3.4vw, 2rem);
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  line-height: 1.05;
+}
+
+.rec-playlist-meta {
+  color: var(--stardust);
+  font-size: 0.85rem;
+}
+
+.rec-playlist-cta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin-top: 0.5rem;
+}
+
+/* The only note the header is allowed: WHY the action lies still — and only
+   while it does. */
+.rec-playlist-note {
+  color: var(--stardust);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+/* The build block under the header: the search, the candidates, then the
+   tracklist itself. */
+.rec-playlist-tracks {
+  border-top: 1px solid var(--border);
   display: flex;
   flex-direction: column;
-  gap: 0.35rem;
+  gap: 0.8rem;
+  padding-top: 1rem;
+}
+
+.rec-picks-head {
+  align-items: baseline;
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+  padding: 0 0.5rem;
+}
+
+.rec-picks-head h3 {
+  color: var(--starlight-cream);
+  font-size: 0.95rem;
+  font-weight: 800;
+}
+
+.rec-picks-count {
+  color: var(--stardust);
+  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.rec-muted {
+  color: var(--stardust);
+  font-size: 0.9rem;
+  line-height: 1.45;
 }
 
 .rec-search {
@@ -5793,86 +5913,117 @@ body::before {
   padding-left: 2.2rem;
 }
 
-.rec-seeds {
+/* The tracklist being assembled — numbered like the positions it fills. */
+.rec-pick-list {
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
-}
-
-.rec-seeds-count {
-  color: var(--stardust);
-  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
-  font-size: 0.78rem;
-  font-variant-numeric: tabular-nums;
-}
-
-.rec-chip-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
+  gap: 0.1rem;
   list-style: none;
   margin: 0;
   padding: 0;
 }
 
-.rec-chip {
+.rec-pick-row {
   align-items: center;
-  background: color-mix(in oklch, var(--tape-black) 42%, transparent);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  display: flex;
-  gap: 0.45rem;
-  max-width: 100%;
-  padding: 0.25rem 0.55rem 0.25rem 0.3rem;
+  border-radius: var(--radius);
+  display: grid;
+  gap: 0.65rem;
+  grid-template-columns: 2ch 40px minmax(0, 1fr) auto;
+  padding: 0.4rem 0.5rem;
 }
 
-.rec-chip-cover {
-  aspect-ratio: 1;
-  border-radius: 50%;
-  flex: none;
-  height: 28px;
-  object-fit: cover;
-  width: 28px;
+.rec-pick-index {
+  color: var(--stardust);
+  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
 }
 
-.rec-chip-cover--empty {
-  background: var(--dust-veil);
-  display: block;
-}
-
-.rec-chip-title {
+.rec-pick-title {
   color: var(--starlight-cream);
-  font-size: 0.82rem;
-  max-width: 16rem;
+  font-size: 0.88rem;
+  font-weight: 600;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.rec-chip-remove {
+.rec-pick-remove {
   align-items: center;
+  border-radius: var(--radius);
   color: var(--stardust);
   cursor: pointer;
   display: flex;
-  flex: none;
-  height: 1.1rem;
+  height: 1.75rem;
   justify-content: center;
-  width: 1.1rem;
+  transition:
+    background-color 150ms ease-out,
+    color 150ms ease-out;
+  width: 1.75rem;
 }
 
-.rec-chip-remove:hover,
-.rec-chip-remove:focus-visible {
+.rec-pick-remove:hover,
+.rec-pick-remove:focus-visible {
+  background: var(--gold-veil);
   color: var(--eclipse-glow);
 }
 
-.rec-chip-remove:focus-visible {
+.rec-pick-remove:focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: 2px;
 }
 
-.rec-chip-remove:disabled {
+.rec-pick-remove:disabled {
   cursor: default;
   opacity: 0.5;
+}
+
+/* The next slot, dashed: where the next pick lands. Clicking it wakes the search. */
+.rec-pick-ghost {
+  align-items: center;
+  background: transparent;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  color: var(--stardust);
+  cursor: pointer;
+  display: grid;
+  gap: 0.65rem;
+  grid-template-columns: 2ch 40px minmax(0, 1fr);
+  padding: 0.4rem 0.5rem;
+  text-align: left;
+  transition:
+    background-color 150ms ease-out,
+    border-color 150ms ease-out,
+    color 150ms ease-out;
+  width: 100%;
+}
+
+.rec-pick-ghost:hover,
+.rec-pick-ghost:focus-visible {
+  background: var(--gold-veil);
+  border-color: color-mix(in oklch, var(--primary) 42%, transparent);
+  color: var(--eclipse-glow);
+}
+
+.rec-pick-ghost:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.rec-pick-ghost-cover {
+  align-items: center;
+  aspect-ratio: 1;
+  display: flex;
+  height: 40px;
+  justify-content: center;
+  width: 40px;
+}
+
+.rec-pick-ghost-label {
+  font-size: 0.85rem;
+  font-weight: 600;
 }
 
 /* The empty-state examples — a lesson disguised as a shortcut. */
@@ -5917,38 +6068,52 @@ body::before {
   line-height: 1.45;
 }
 
-/* The candidate rows: cover-led, the whole row an ADD button. */
-.rec-candidate-list {
-  gap: 0.1rem;
-}
-
-.rec-candidate {
+/* ── the shared row grammar: cover, body, and the one Add pill ──────────────────
+   The Add pill — the single "into your picks" gesture on the page (Spotify's own
+   Recommended grammar: the row carries the music, the pill carries the action).
+   Outline at rest; on hover it catches the veil and its text ignites (The Ignition
+   Rule — it heats, never dims); picked it lies still with the gold check. */
+.rec-add-pill {
   align-items: center;
   background: transparent;
-  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--starlight-cream);
   cursor: pointer;
-  display: grid;
-  gap: 0.65rem;
-  grid-template-columns: 40px minmax(0, 1fr) auto;
-  padding: 0.4rem 0.5rem;
-  text-align: left;
-  transition: background-color 150ms ease-out;
-  width: 100%;
+  display: inline-flex;
+  flex: none;
+  font-size: 0.8rem;
+  font-weight: 600;
+  gap: 0.3rem;
+  justify-content: center;
+  min-width: 3.4rem;
+  padding: 0.3rem 0.75rem;
+  transition:
+    background-color 150ms ease-out,
+    border-color 150ms ease-out,
+    color 150ms ease-out;
 }
 
-.rec-candidate:hover:not(:disabled),
-.rec-candidate:focus-visible {
-  background: var(--gold-veil);
+.rec-add-pill:hover:not(:disabled),
+.rec-add-pill:focus-visible {
+  border-color: color-mix(in oklch, var(--primary) 42%, transparent);
+  color: var(--eclipse-glow);
 }
 
-.rec-candidate:focus-visible {
+.rec-add-pill:focus-visible {
   outline: 2px solid var(--ring);
-  outline-offset: -2px;
+  outline-offset: 2px;
 }
 
-.rec-candidate--seeded {
+.rec-add-pill:disabled {
   cursor: default;
   opacity: 0.62;
+}
+
+.rec-add-pill-check {
+  color: var(--eclipse-gold);
+  height: 0.85rem;
+  width: 0.85rem;
 }
 
 .rec-cover {
@@ -5960,10 +6125,87 @@ body::before {
   flex: none;
   height: 40px;
   object-fit: cover;
+  transition:
+    transform 180ms cubic-bezier(0.22, 1, 0.36, 1),
+    border-color 180ms ease-out;
   width: 40px;
 }
 
 .rec-cover--empty {
+  background:
+    linear-gradient(
+      145deg,
+      color-mix(in oklch, var(--primary) 18%, transparent),
+      color-mix(in oklch, var(--destructive) 12%, transparent)
+    ),
+    var(--muted);
+}
+
+/* The cover carries the preview control — positioned for the absolute overlay. */
+.rec-cover-wrap {
+  position: relative;
+}
+
+/* The row tail: the register mark (a finding's Log ID, an uncertified track's
+   Spotify mark) beside the pill, on the candidates. */
+.rec-candidate-tail {
+  align-items: center;
+  color: var(--stardust);
+  display: flex;
+  flex: none;
+  gap: 0.55rem;
+}
+
+.rec-candidate-logid {
+  color: var(--eclipse-gold);
+  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.rec-candidate-out {
+  color: var(--muted-foreground);
+  height: 1rem;
+  width: 1rem;
+}
+
+/* The readout line (The Readout Rule): the shared chips. */
+.rec-readout {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+/* ── the candidates — the search's reply, inline under the field ────────────────
+   The row is inert; the pill is the gesture. An uncertified candidate hovers cold
+   (the Unlit Rule: the Dust Veil, never the certification light). */
+.rec-candidates {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.rec-candidate {
+  align-items: center;
+  border-radius: var(--radius);
+  display: grid;
+  gap: 0.65rem;
+  grid-template-columns: 40px minmax(0, 1fr) auto;
+  padding: 0.4rem 0.5rem;
+  transition: background-color 150ms ease-out;
+}
+
+.rec-candidate:hover {
+  background: var(--gold-veil);
+}
+
+.rec-candidate--unlit:hover {
   background: var(--dust-veil);
 }
 
@@ -5991,138 +6233,61 @@ body::before {
   white-space: nowrap;
 }
 
-.rec-candidate-tail {
-  align-items: center;
-  color: var(--stardust);
+/* ── the Recommended shelf ─────────────────────────────────────────────────────
+   Every row the exact same anatomy — cover, the fused Artist — Title, the
+   Stardust imprint, the instrument readout, the Add pill. A finding differs only
+   by LIGHT: the gold veil on hover and the Fluncle seal in its chips row. */
+.rec-recommended {
   display: flex;
-  flex: none;
-  gap: 0.4rem;
+  flex-direction: column;
+  gap: 0.9rem;
 }
 
-.rec-candidate-logid {
-  color: var(--eclipse-gold);
-  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
-  font-size: 0.75rem;
-  font-variant-numeric: tabular-nums;
-  font-weight: 700;
-  letter-spacing: 0.04em;
+.rec-recommended > h2 {
+  color: var(--starlight-cream);
+  font-size: 0.95rem;
+  font-weight: 800;
 }
 
-.rec-candidate-out {
-  color: var(--muted-foreground);
-  height: 1rem;
-  width: 1rem;
-}
-
-.rec-seeded-check {
-  color: var(--eclipse-gold);
-  height: 1rem;
-  width: 1rem;
-}
-
-.rec-add-glyph {
-  color: var(--stardust);
-  height: 1rem;
-  width: 1rem;
-}
-
-/* ── the findings slots — the archive's ignition grammar (mirrors .saves-row) ──── */
-.rec-from-log {
-  font-size: 0.82rem;
-}
-
-.rec-finding-list {
+.rec-shelf {
+  display: flex;
+  flex-direction: column;
   gap: 0.1rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
 }
 
-.rec-finding-row {
+.rec-row {
   align-items: center;
-  background: transparent;
   border-radius: var(--radius);
   display: grid;
   gap: 0.65rem;
-  grid-template-columns: minmax(3rem, auto) 40px minmax(0, 1fr) auto;
-  padding: 0.5rem;
-  position: relative;
-  transition:
-    background-color 150ms ease-out,
-    color 150ms ease-out;
+  grid-template-columns: 40px minmax(0, 1fr) auto;
+  padding: 0.45rem 0.5rem;
+  transition: background-color 150ms ease-out;
 }
 
-.rec-finding-row:hover,
-.rec-finding-row:focus-within {
-  background: var(--accent);
+.rec-row:hover,
+.rec-row:focus-within {
+  background: var(--gold-veil);
 }
 
-.rec-finding-logid {
-  position: relative;
-  z-index: 1;
-}
-
-.rec-finding-row:hover .track-log-id,
-.rec-finding-row:focus-within .track-log-id {
-  color: var(--accent-foreground);
-}
-
-.rec-finding-row:has(.track-row-link:focus-visible) {
-  box-shadow: inset 0 0 0 2px var(--ring);
-}
-
-/* The cover carries the preview control — positioned + lifted above the stretched link. */
-.rec-cover-wrap {
-  position: relative;
-  z-index: 1;
-}
-
-.rec-finding-row:hover .rec-cover,
-.rec-finding-row:focus-within .rec-cover {
+.rec-row:hover .rec-cover,
+.rec-row:focus-within .rec-cover {
   border-color: color-mix(in oklch, var(--primary) 42%, transparent);
   transform: scale(1.06);
 }
 
-.rec-cover {
-  transition:
-    transform 180ms cubic-bezier(0.22, 1, 0.36, 1),
-    border-color 180ms ease-out;
-}
-
-.rec-finding-body {
+.rec-row-body {
   display: flex;
   flex-direction: column;
-  gap: 0.15rem;
+  gap: 0.12rem;
   min-width: 0;
 }
 
-/* The row body is now the PICK control — a stretched button whose ::after covers the whole
-   row (the track-row discipline), with the coordinate link, preview button, and note lifted
-   above it. The button itself is a bare, left-aligned block; its text carries the register. */
-.rec-pick-stretch {
-  background: transparent;
-  border: 0;
-  color: inherit;
-  cursor: pointer;
-  font: inherit;
-  outline: none;
-  padding: 0;
-  text-align: left;
-}
-
-.rec-pick-stretch::after {
-  content: "";
-  inset: 0;
-  position: absolute;
-}
-
-.rec-pick-stretch:disabled {
-  cursor: default;
-}
-
-.rec-finding-title {
-  min-width: 0;
-}
-
-.rec-finding-titletext {
-  color: var(--foreground);
+.rec-row-title {
+  color: var(--starlight-cream);
   display: block;
   font-weight: 700;
   overflow: hidden;
@@ -6130,121 +6295,64 @@ body::before {
   white-space: nowrap;
 }
 
-/* The pick affordance lives in the trailing tail (mirrors the picker's tail): the gold check
-   when picked, a quiet plus otherwise. Lifted above the stretched pick so it reads as its
-   marker, never a separate target. */
-.rec-finding-tail {
-  align-items: center;
-  display: flex;
-  flex: none;
-  position: relative;
-  z-index: 1;
-}
-
-/* The readout line (The Readout Rule): the shared chips, then the release year for the rows
-   without a Stardust artists line to carry it (the findings register fuses artist + title). */
-.rec-readout {
+/* The chips line: the seal first (the register's mark), then the readout. */
+.rec-row-chips {
   align-items: center;
   display: flex;
   flex-wrap: wrap;
   gap: 0.4rem;
-  position: relative;
-  z-index: 1;
 }
 
-/* The note reads as the WHY — quiet, wrapping, non-interactive. Sits above the stretched
-   row link so its own text stays selectable. */
-.rec-finding-note {
-  color: var(--stardust);
-  font-size: 0.82rem;
-  line-height: 1.4;
-  position: relative;
-  z-index: 1;
-}
-
-/* ── the catalogue rows — the Unlit Rule (mirrors .search-row--unlit) ─────────── */
-.rec-catalogue-list {
-  gap: 0.1rem;
-}
-
-/* The catalogue row is now a grid holding the pick body + a secondary Spotify link — the
-   whole-row `<a>` is gone (a link may not wrap the pick control). The pick body stretches
-   over the row; the Spotify link and pick glyph ride the tail, lifted above it. */
-.rec-catalogue-row {
-  align-items: center;
-  border-radius: var(--radius);
-  display: grid;
-  gap: 0.65rem;
-  grid-template-columns: 40px minmax(0, 1fr) auto;
-  padding: 0.4rem 0.5rem;
-  position: relative;
-  transition: background-color 150ms ease-out;
-}
-
-.rec-catalogue-row--unlit .rec-cover {
+/* The Unlit register: same anatomy, cold — the Dust Veil, the desaturated cover,
+   the ink deferring at rest until the hover warms it. */
+.rec-row--unlit .rec-cover {
   filter: saturate(0.55) brightness(0.8);
   opacity: 0.75;
 }
 
-.rec-catalogue-row:has(.rec-pick-stretch:hover:not(:disabled)),
-.rec-catalogue-row:has(.rec-pick-stretch:focus-visible) {
+.rec-row--unlit .rec-row-title {
+  color: var(--stardust);
+}
+
+.rec-row--unlit:hover,
+.rec-row--unlit:focus-within {
   background: var(--dust-veil);
 }
 
-.rec-catalogue-row:has(.rec-pick-stretch:focus-visible) {
-  box-shadow: inset 0 0 0 2px var(--ring);
-}
-
-.rec-catalogue-body {
-  align-items: flex-start;
-  display: flex;
-  flex-direction: column;
-  gap: 0.1rem;
-  min-width: 0;
-}
-
-/* The same skeleton as the findings title — one row anatomy across the registers —
-   with only the INK deferring (Stardust at rest, cream on heat): the Unlit Rule
-   splits registers by light, never by layout. */
-.rec-catalogue-title {
-  color: var(--stardust);
-  font-weight: 700;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.rec-catalogue-row:has(.rec-pick-stretch:hover:not(:disabled)) .rec-catalogue-title,
-.rec-catalogue-row:has(.rec-pick-stretch:focus-visible) .rec-catalogue-title {
+.rec-row--unlit:hover .rec-row-title,
+.rec-row--unlit:focus-within .rec-row-title {
   color: var(--starlight-cream);
 }
 
-/* The tail: the secondary Spotify link (its own target) and the pick-state glyph. */
-.rec-catalogue-tail {
+/* THE FLUNCLE SEAL — the gold coordinate pill a certified finding wears first in
+   its chips row. The chip anatomy stamped gold (never a filled badge — the One
+   Sun Rule), heating on hover; a link to /log/<id>, where the WHY lives. */
+.rec-seal {
   align-items: center;
-  color: var(--stardust);
-  display: flex;
-  flex: none;
-  gap: 0.5rem;
-  position: relative;
-  z-index: 1;
-}
-
-.rec-catalogue-out {
-  align-items: center;
-  color: var(--muted-foreground);
-  display: inline-flex;
-  transition: color 150ms ease-out;
-}
-
-.rec-catalogue-out:hover,
-.rec-catalogue-out:focus-visible {
-  color: var(--starlight-cream);
-}
-
-.rec-catalogue-out:focus-visible {
+  border: 1px solid color-mix(in oklch, var(--primary) 42%, transparent);
   border-radius: var(--radius);
+  color: var(--eclipse-gold);
+  display: inline-flex;
+  flex: none;
+  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  line-height: 1;
+  padding: 0.28rem 0.45rem;
+  transition:
+    background-color 150ms ease-out,
+    color 150ms ease-out;
+}
+
+.rec-seal:hover,
+.rec-seal:focus-visible {
+  background: var(--gold-veil);
+  color: var(--eclipse-glow);
+}
+
+.rec-seal:focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: 2px;
 }
@@ -6253,60 +6361,46 @@ body::before {
   font-size: 0.82rem;
 }
 
-/* ── the playlist leg ─────────────────────────────────────────────────────────── */
-.rec-frontier {
+/* ── the ghost shelf — the Recommended panel before the first pick ────────────── */
+.rec-recommended-ghost {
+  display: flex;
+  flex-direction: column;
   gap: 0.9rem;
 }
 
-.rec-frontier-lead {
+.rec-ghost-row {
   align-items: center;
-  background: color-mix(in oklch, var(--tape-black) 42%, transparent);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  color: var(--starlight-cream);
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.35rem 0.8rem;
-  padding: 0.7rem 0.9rem;
-  text-decoration: none;
-  transition: border-color 150ms ease-out;
+  display: grid;
+  gap: 0.65rem;
+  grid-template-columns: 40px minmax(0, 1fr);
+  padding: 0.45rem 0.5rem;
 }
 
-.rec-frontier-lead:hover,
-.rec-frontier-lead:focus-visible {
-  border-color: color-mix(in oklch, var(--primary) 42%, transparent);
+.rec-ghost-cover {
+  aspect-ratio: 1;
+  background: var(--dust-veil);
+  border-radius: var(--rounded-artwork);
+  display: block;
+  height: 40px;
+  width: 40px;
 }
 
-.rec-frontier-lead:focus-visible {
-  outline: 2px solid var(--ring);
-  outline-offset: 2px;
-}
-
-.rec-frontier-name {
-  color: var(--eclipse-gold);
-  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
-  font-weight: 800;
-  letter-spacing: 0.03em;
-}
-
-.rec-frontier-synced {
-  color: var(--stardust);
-  font-size: 0.8rem;
-}
-
-.rec-frontier-open {
-  align-items: center;
-  color: var(--eclipse-glow);
-  display: inline-flex;
-  font-size: 0.82rem;
-  gap: 0.3rem;
-  margin-left: auto;
-}
-
-.rec-frontier-action {
+.rec-ghost-lines {
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: 0.45rem;
+}
+
+.rec-ghost-line {
+  background: var(--dust-veil);
+  border-radius: 999px;
+  display: block;
+  height: 0.55rem;
+  width: 58%;
+}
+
+.rec-ghost-line--short {
+  width: 32%;
 }
 
 /* The Grounded Floats Rule (DESIGN.md): under reduced motion, the covers never scale —
@@ -6316,8 +6410,8 @@ body::before {
     transition-property: border-color;
   }
 
-  .rec-finding-row:hover .rec-cover,
-  .rec-finding-row:focus-within .rec-cover {
+  .rec-row:hover .rec-cover,
+  .rec-row:focus-within .rec-cover {
     transform: none !important;
   }
 }

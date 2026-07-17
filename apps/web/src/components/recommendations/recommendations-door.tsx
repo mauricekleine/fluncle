@@ -1,15 +1,17 @@
-// THE VERIFIED WORKING SURFACE — the door behind the gate. It owns the two loader-seeded
-// react-query reads (the seed set + the computed recommendations, the account-door hybrid:
-// SSR real content on first paint, refetchable after a write) and the two CSRF-guarded seed
-// mutations, then lays out the three legs: the picker, the playlist leg, and the register-split
-// list. With zero seeds the picker IS the page — the conversion moment — so the leg and the
-// list stay hidden until Fluncle has something to steer by.
+// THE VERIFIED WORKING SURFACE — the door behind the gate, laid out as THE PLAYLIST
+// BUILDER (Spotify's own playlist-edit grammar, in Fluncle's register): the playlist
+// panel on the left (the header — collage, name, the gold Get-playlist CTA — over the
+// numbered tracklist being assembled, with the search between them) and the Recommended
+// shelf on the right (what the engine lines up from the picks, each row an Add pill).
+// It owns the two loader-seeded react-query reads (the picks + the computed
+// recommendations, the account-door hybrid: SSR real content on first paint, refetchable
+// after a write) and the two CSRF-guarded pick mutations both panels lean on. A pick
+// write invalidates BOTH reads: new picks mean a new shelf.
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { FrontierLeg } from "./frontier-leg";
-import { RecommendationList } from "./recommendation-list";
-import { SeedPicker } from "./seed-picker";
+import { PlaylistPanel } from "./playlist-panel";
+import { RecommendedPanel } from "./recommended-panel";
 import { type RecommendationsResult, type RecSeedItem, seedMutationMessage } from "./shared";
 
 export function RecommendationsDoor({
@@ -28,9 +30,9 @@ export function RecommendationsDoor({
   const queryClient = useQueryClient();
   const [message, setMessage] = useState("");
 
-  // The seed set and the computed recommendations, each seeded from the loader (SSR) and never
+  // The picks and the computed recommendations, each seeded from the loader (SSR) and never
   // refetched on focus — this is a public surface, not the admin board (focus-refetch would
-  // also burn the recommendations' hourly budget). A seed write invalidates BOTH: new seeds
+  // also burn the recommendations' hourly budget). A pick write invalidates BOTH: new picks
   // mean new recommendations.
   const seedsQuery = useQuery({
     initialData: initialSeeds,
@@ -83,27 +85,22 @@ export function RecommendationsDoor({
   });
 
   return (
-    <div className="rec-door">
-      <SeedPicker
+    <div className="rec-build">
+      <PlaylistPanel
+        csrfToken={csrfToken}
         message={message}
         onAdd={(trackId) => seedMutation.mutateAsync({ kind: "add", trackId })}
         onRemove={(trackId) => seedMutation.mutateAsync({ kind: "remove", trackId })}
         seeds={seeds}
       />
-
-      {seeds.length > 0 ? (
-        <>
-          <FrontierLeg csrfToken={csrfToken} />
-          <RecommendationList
-            catalogue={recs.catalogue}
-            findings={recs.findings}
-            onAdd={(trackId) => seedMutation.mutateAsync({ kind: "add", trackId })}
-            onRemove={(trackId) => seedMutation.mutateAsync({ kind: "remove", trackId })}
-            seeds={seeds}
-            seedsSkipped={recs.seedsSkipped}
-          />
-        </>
-      ) : null}
+      <RecommendedPanel
+        catalogue={recs.catalogue}
+        findings={recs.findings}
+        onAdd={(trackId) => seedMutation.mutateAsync({ kind: "add", trackId })}
+        onRemove={(trackId) => seedMutation.mutateAsync({ kind: "remove", trackId })}
+        seeds={seeds}
+        seedsSkipped={recs.seedsSkipped}
+      />
     </div>
   );
 }
