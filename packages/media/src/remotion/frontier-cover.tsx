@@ -18,9 +18,11 @@ import { OXANIUM_STACK } from "./fonts";
 // THIS FILE STAYS as the visual source of record: it is the reference the twin is checked
 // against. DRIFT RISK — the two are hand-kept in sync. If you change the plate, the scrim,
 // the stamp, or the palette HERE, mirror it in the Satori twin (and its test), and vice
-// versa. Two known, deliberate deviations in the twin (documented there): the crew stamp
-// uses "#" not "№" (U+2116 is outside the latin/latin-ext font cut Satori embeds), and
-// Satori honours a single text-shadow, not the layered pair below.
+// versa. One known, deliberate deviation in the twin (documented there): Satori honours a
+// single text-shadow, not the layered pair below. The stamp is "Nº" (N + U+00BA) on BOTH
+// paths — Oxanium has no № glyph (U+2116), so a literal № could only ever render in a
+// system-font fallback here (a quiet brand break) and as .notdef in the Worker; Nº keeps
+// the whole stamp in the brand face everywhere.
 //
 // THE ART IS THE FOUNDING IMAGE. The ground is the original cover painting (the
 // no-text master, `fluncle-cover-no-text.png`): the floating figure, the burning
@@ -50,7 +52,7 @@ export type FrontierCoverProps = {
 export const FrontierCover: React.FC<FrontierCoverProps> = ({ crewNumber }) => {
   const stamp =
     typeof crewNumber === "number" && crewNumber > 0
-      ? `№ ${String(crewNumber).padStart(3, "0")}`
+      ? `Nº ${String(crewNumber).padStart(3, "0")}`
       : null;
 
   return (

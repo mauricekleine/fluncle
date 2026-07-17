@@ -13,10 +13,10 @@ import {
 // is fed, which is where a drift from the master would silently ship a wrong cover.
 
 describe("frontierCrewStamp", () => {
-  it("zero-pads to three digits with the '#' stand-in (# not № — outside the font cut)", () => {
-    expect(frontierCrewStamp(42)).toBe("# 042");
-    expect(frontierCrewStamp(7)).toBe("# 007");
-    expect(frontierCrewStamp(1254)).toBe("# 1254");
+  it("zero-pads to three digits with the all-Oxanium 'Nº' numero (Oxanium has no № glyph)", () => {
+    expect(frontierCrewStamp(42)).toBe("Nº 042");
+    expect(frontierCrewStamp(7)).toBe("Nº 007");
+    expect(frontierCrewStamp(1254)).toBe("Nº 1254");
   });
 
   it("is null for a legacy account (no crew number) — no chip is drawn", () => {
@@ -49,7 +49,7 @@ describe("buildFrontierCoverHtml", () => {
   it("stamps the crew chip bottom-left when the owner has a crew number", () => {
     const html = buildFrontierCoverHtml({ crewNumber: 42 });
 
-    expect(html).toContain("# 042");
+    expect(html).toContain("Nº 042");
     // The printed chip — Tape-Black fill, Dust-Line border, bottom-left.
     expect(html).toContain("border-radius:10px");
     expect(html).toContain("bottom:30px");
@@ -60,7 +60,7 @@ describe("buildFrontierCoverHtml", () => {
     const html = buildFrontierCoverHtml({ crewNumber: null });
 
     // No stamp text, and none of the chip's box.
-    expect(html).not.toContain("# ");
+    expect(html).not.toContain("Nº");
     expect(html).not.toContain("border-radius:10px");
     // The brand plate still renders — the cover is never blank.
     expect(html).toContain("FRONTIER");

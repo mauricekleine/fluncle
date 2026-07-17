@@ -19,11 +19,13 @@ import { BRAND } from "./satori-render";
 // FRONTIER" stacked in Oxanium 800 caps (Starlight Cream); the crew-№ chip bottom-left (Tape
 // Black e6 fill, Dust Line border, Oxanium numerals). Per-user identity rides the STAMP.
 //
-// ── TWO DELIBERATE DEVIATIONS FROM THE MASTER ────────────────────────────────
-//   1. The stamp reads "# 042", not "№ 042": U+2116 (№) is outside the latin/latin-ext
-//      unicode subset the Satori font cut embeds (scripts/cut-satori-fonts.py), so a "№"
-//      would render as a blank .notdef box. "#" is in the cut and reads at thumbnail size.
-//   2. A SINGLE text-shadow, not the master's layered pair — Satori honours one shadow.
+// ── ONE DELIBERATE DEVIATION FROM THE MASTER ─────────────────────────────────
+//   A SINGLE text-shadow, not the master's layered pair — Satori honours one shadow.
+// The stamp is "Nº 042" — N + U+00BA (ordmasculine), both real Oxanium glyphs in the cut.
+// NOT "№" (U+2116): Oxanium itself has no numero glyph (verified against the upstream
+// variable font), so the Remotion master could only ever render № via a system-font
+// fallback — a quiet brand break. Nº is the typographic substitute that keeps the whole
+// stamp in the brand face, ratified on BOTH paths (the master mirrors it).
 // FLUNCLE'S uses the real right-single-quote (U+2019), which IS in the cut (U+2000–206F);
 // workers-og does not decode HTML entities on the way in, so a literal glyph is required.
 
@@ -48,13 +50,13 @@ const COLOR = {
 
 /**
  * The crew-number stamp for a cover, or null when the owner has no crew number (a legacy
- * account) — in which case no chip is drawn, exactly as the Remotion master. "# 042": the
- * ordinal zero-padded to three digits (the master's `padStart(3, "0")`), with "#" standing in
- * for the master's "№" (see the header — U+2116 is outside the embedded font cut).
+ * account) — in which case no chip is drawn, exactly as the Remotion master. "Nº 042": the
+ * ordinal zero-padded to three digits (the master's `padStart(3, "0")`), with "Nº" the
+ * all-Oxanium numero substitute shared with the master (see the header — Oxanium has no №).
  */
 export function frontierCrewStamp(crewNumber: null | number | undefined): null | string {
   return typeof crewNumber === "number" && crewNumber > 0
-    ? `# ${String(crewNumber).padStart(3, "0")}`
+    ? `Nº ${String(crewNumber).padStart(3, "0")}`
     : null;
 }
 
