@@ -136,6 +136,8 @@ export type RecommendationFindingItem = {
   durationMs?: number;
   imageUrl?: string;
   key?: string;
+  /** The imprint, for the Stardust label-and-year line (the Track Row anatomy). */
+  label?: string;
   logId: string;
   note?: string;
   similarity: number;
@@ -159,6 +161,8 @@ export type RecommendationCatalogueItem = {
   durationMs?: number;
   imageUrl?: string;
   key?: string;
+  /** The imprint, for the Stardust label-and-year line (the Track Row anatomy). */
+  label?: string;
   similarity: number;
   spotifyUri?: string;
   spotifyUrl?: string;
