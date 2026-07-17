@@ -161,25 +161,25 @@ function PickGlyph({ disabled, seeded }: { disabled: boolean; seeded: boolean })
   return <PlusIcon aria-hidden className="rec-add-glyph" weight="bold" />;
 }
 
-/** The instrument readout for a row — the shared chips plus the release year (The Readout
- *  Rule). Key formatting rides the reader's own notation, the finding-card idiom. Shared with
- *  the seed picker's candidate rows so every track-shaped row reads the same. */
+/** The instrument readout for a row — the shared chips (The Readout Rule). Key formatting
+ *  rides the reader's own notation, the finding-card idiom. Shared with the seed picker's
+ *  candidate rows so every track-shaped row reads the same. The release year does NOT ride
+ *  here: the Track Row anatomy puts it on the Stardust imprint line (`Label (2017)`), and
+ *  the rec rows align with the home page (RecImprint below). */
 export function TrackReadout({
   bpm,
   durationMs,
   musicalKey,
   notation,
-  year,
 }: {
   bpm?: number;
   durationMs?: number;
   musicalKey?: string;
   notation: KeyNotation;
-  year?: string;
 }) {
   const keyText = formatKey(musicalKey, notation);
 
-  if (!durationMs && !bpm && !keyText && !year) {
+  if (!durationMs && !bpm && !keyText) {
     return null;
   }
 
@@ -191,7 +191,25 @@ export function TrackReadout({
         durationMs={durationMs}
         musicalKey={keyText || undefined}
       />
-      {year ? <span className="rec-year">{year}</span> : null}
+    </span>
+  );
+}
+
+/**
+ * The Stardust imprint line — the home Track Row's `Soulvent Records (2017)` anatomy, worn by
+ * both rec registers so a rec row reads like a log row. PLAIN TEXT deliberately, never a
+ * GraphLink: the row body is a pick BUTTON, and an anchor inside a button is not a thing (the
+ * home row can link its imprint because its stretch is an anchor's ::after, not a button).
+ */
+function RecImprint({ label, year }: { label?: string; year?: string }) {
+  if (!label && !year) {
+    return null;
+  }
+
+  return (
+    <span className="track-label rec-imprint block truncate">
+      {label ?? ""}
+      {label && year ? ` (${year})` : (year ?? "")}
     </span>
   );
 }
@@ -272,12 +290,12 @@ function FindingRow({
         >
           <span className="rec-finding-titletext">{trackLine}</span>
         </button>
+        <RecImprint label={finding.label} year={finding.year} />
         <TrackReadout
           bpm={finding.bpm}
           durationMs={finding.durationMs}
           musicalKey={finding.key}
           notation={notation}
-          year={finding.year}
         />
         {finding.note ? <span className="rec-finding-note">{finding.note}</span> : null}
       </span>
@@ -314,9 +332,6 @@ function CatalogueRow({
   const trackLine = `${track.artists.join(", ")} — ${track.title}`;
   const cover = albumCoverAtSize(track.imageUrl, "small");
   const href = track.spotifyUrl ?? spotifyUrlFromUri(track.spotifyUri);
-  const artistLine = track.year
-    ? `${track.artists.join(", ")} · ${track.year}`
-    : track.artists.join(", ");
   const pickLabel = seeded
     ? `Remove ${trackLine} from your picks`
     : `Add ${trackLine} to your picks`;
@@ -337,8 +352,8 @@ function CatalogueRow({
         onClick={onPick}
         type="button"
       >
-        <span className="rec-catalogue-title">{track.title}</span>
-        <span className="rec-catalogue-artists">{artistLine}</span>
+        <span className="rec-catalogue-title">{trackLine}</span>
+        <RecImprint label={track.label} year={track.year} />
         <TrackReadout
           bpm={track.bpm}
           durationMs={track.durationMs}

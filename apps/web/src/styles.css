@@ -6152,13 +6152,6 @@ body::before {
   z-index: 1;
 }
 
-.rec-year {
-  color: var(--stardust);
-  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
-  font-size: 0.72rem;
-  font-variant-numeric: tabular-nums;
-}
-
 /* The note reads as the WHY — quiet, wrapping, non-interactive. Sits above the stretched
    row link so its own text stays selectable. */
 .rec-finding-note {
@@ -6210,10 +6203,12 @@ body::before {
   min-width: 0;
 }
 
+/* The same skeleton as the findings title — one row anatomy across the registers —
+   with only the INK deferring (Stardust at rest, cream on heat): the Unlit Rule
+   splits registers by light, never by layout. */
 .rec-catalogue-title {
   color: var(--stardust);
-  font-size: 0.88rem;
-  font-weight: 500;
+  font-weight: 700;
   max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -6223,15 +6218,6 @@ body::before {
 .rec-catalogue-row:has(.rec-pick-stretch:hover:not(:disabled)) .rec-catalogue-title,
 .rec-catalogue-row:has(.rec-pick-stretch:focus-visible) .rec-catalogue-title {
   color: var(--starlight-cream);
-}
-
-.rec-catalogue-artists {
-  color: var(--muted-foreground);
-  font-size: 0.76rem;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 /* The tail: the secondary Spotify link (its own target) and the pick-state glyph. */

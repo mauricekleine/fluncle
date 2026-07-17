@@ -104,6 +104,7 @@ type HydrateRow = {
   bpm: null | number;
   duration_ms: null | number;
   key: null | string;
+  label: null | string;
   log_id: null | string;
   note: null | string;
   release_date: null | string;
@@ -516,7 +517,7 @@ async function hydrateTracks(trackIds: string[]): Promise<Map<string, HydrateRow
   ).execute({
     args: ids,
     sql: `select t.track_id, t.title, t.artists_json, t.album_image_url, t.spotify_url,
-        t.spotify_uri, t.key, t.bpm, t.duration_ms, t.release_date, f.log_id, f.note,
+        t.spotify_uri, t.key, t.bpm, t.duration_ms, t.label, t.release_date, f.log_id, f.note,
         (select image_key from albums where albums.id = t.album_id) as album_image_key,
         (select image_state from albums where albums.id = t.album_id) as album_image_state,
         (select image_updated_at from albums where albums.id = t.album_id) as album_image_updated_at
@@ -543,12 +544,14 @@ function readoutOf(row: HydrateRow): {
   bpm?: number;
   durationMs?: number;
   key?: string;
+  label?: string;
   year?: string;
 } {
   return {
     bpm: row.bpm ?? undefined,
     durationMs: row.duration_ms ?? undefined,
     key: row.key ?? undefined,
+    label: row.label ?? undefined,
     year: row.release_date ? row.release_date.slice(0, 4) : undefined,
   };
 }
