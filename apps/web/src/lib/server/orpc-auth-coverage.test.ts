@@ -333,6 +333,9 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // The crawl frontier's state — admin tier: the read half of `crawl_catalogue`, driven
   // by the same on-box sweep (and by the operator, to see where the walk got to).
   get_crawl_status: "admin",
+  // The Frontier kill switch's READ — agent-allowed, the get_capture_budget precedent
+  // (a read of an operator dial is not the dial).
+  get_frontier_minting: "admin",
   // The dream-weaver's proposed-order read (RFC mixability-engine) — admin tier
   // (agent-allowed, like get_track_admin): a PURE read that never writes/publishes, so
   // no operatorGuard. `promote_recording` remains the only way a mixtape exists.
@@ -585,6 +588,9 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // The batch clip-schedule sibling (schedule a selection at once) — operator tier, like
   // its single sibling; the box agent token 403s.
   set_clip_schedules: "operator",
+  // The Frontier kill switch — operator only: opening minting grants the machine
+  // authority over the operator's own Spotify account (the set_capture_budget class).
+  set_frontier_minting: "operator",
   // The hardened post-publish cue backfill — operator tier: it rewrites a published
   // set's surface, so the agent token 403s.
   set_mixtape_cues: "operator",

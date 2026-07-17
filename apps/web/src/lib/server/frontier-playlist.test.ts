@@ -252,6 +252,19 @@ describe("the kill switch (default-deny)", () => {
     settings.set("frontier.minting", "true");
     expect(await isFrontierMintingOpen()).toBe(true);
   });
+
+  it("setFrontierMintingOpen round-trips through the same read (the switch ops' seam)", async () => {
+    const { isFrontierMintingOpen, setFrontierMintingOpen } = await import("./frontier-playlist");
+
+    await setFrontierMintingOpen(true);
+    expect(await isFrontierMintingOpen()).toBe(true);
+
+    await setFrontierMintingOpen(false);
+    expect(await isFrontierMintingOpen()).toBe(false);
+
+    // Closed writes the literal "false", never a deleted row — a re-open is one flip.
+    expect(settings.get("frontier.minting")).toBe("false");
+  });
 });
 
 describe("mint (create-once) + the URI order", () => {

@@ -5,8 +5,12 @@
 // it creates no new public authority; the Worker owns the Spotify grant, the box only
 // triggers.
 
-import { adminAuth } from "../orpc-auth";
-import { refreshAllFrontierPlaylists } from "../frontier-playlist";
+import { adminAuth, operatorGuard } from "../orpc-auth";
+import {
+  isFrontierMintingOpen,
+  refreshAllFrontierPlaylists,
+  setFrontierMintingOpen,
+} from "../frontier-playlist";
 import { type Implementer, toFault } from "./_shared";
 
 /** How many minted playlists a single refresh tick walks when the caller names no limit. */
@@ -28,7 +32,34 @@ export function adminFrontierHandlers(os: Implementer) {
     }
   });
 
+  // The kill switch's read — agent-allowed, the `get_capture_budget` precedent.
+  const getMinting = os.get_frontier_minting.use(adminAuth).handler(async () => {
+    try {
+      return { ok: true as const, open: await isFrontierMintingOpen() };
+    } catch (error) {
+      throw toFault(error);
+    }
+  });
+
+  // The kill switch itself — OPERATOR only (`set_capture_budget` reasoning: opening
+  // minting grants the machine authority over the operator's own Spotify account, a
+  // dial an agent token must never turn).
+  const setMinting = os.set_frontier_minting
+    .use(adminAuth)
+    .use(operatorGuard)
+    .handler(async ({ input }) => {
+      try {
+        await setFrontierMintingOpen(input.open);
+
+        return { ok: true as const, open: await isFrontierMintingOpen() };
+      } catch (error) {
+        throw toFault(error);
+      }
+    });
+
   return {
+    get_frontier_minting: getMinting,
     refresh_frontier_playlists: refresh,
+    set_frontier_minting: setMinting,
   };
 }

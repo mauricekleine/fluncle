@@ -118,6 +118,9 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // clip-card UI (Wave 3-B) shows + copies it. `get_clip_caption` matches the public
   // `get_` prefix so the "holds exactly" check skips it; it lives here for completeness.
   "GET /admin/clips/{clipId}/caption": "get_clip_caption",
+  // The Frontier kill switch's READ — agent-allowed (contract-only oRPC; the
+  // get_capture_budget precedent: a read of an operator dial is not the dial).
+  "GET /admin/frontier/minting": "get_frontier_minting",
   // The sonic galaxy map's admin read (browse-by-feel RFC) — contract-only oRPC (no
   // TanStack route file; oRPC owns the path directly). `list_galaxies_admin` matches
   // the public `list_` prefix so the "holds exactly" check skips it; it lives here for
@@ -462,6 +465,9 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // The clip drip-feed kill switch — contract-only oRPC (no TanStack route file).
   // Operator tier: pause/resume every future scheduled Instagram post.
   "PUT /admin/clips/drip/state": "set_clip_drip",
+  // The Frontier kill switch — OPERATOR only (the set_capture_budget class:
+  // opening minting grants the machine authority over the operator's Spotify account).
+  "PUT /admin/frontier/minting": "set_frontier_minting",
   // The cluster cron's transactional map write (browse-by-feel RFC) — contract-only oRPC
   // (no TanStack route file). Admin tier (agent-allowed): the Worker mints new galaxy
   // ids + handles server-side; the box's `fluncle-cluster` cron drives it.

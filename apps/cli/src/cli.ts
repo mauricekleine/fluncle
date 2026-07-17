@@ -2026,6 +2026,54 @@ function addAdminCommands(program: Command): void {
       );
     });
 
+  frontier
+    .command("status")
+    .description("Whether Frontier minting is open (the kill switch's state)")
+    .option("--json", "Print JSON", false)
+    .action(async (options: { json: boolean }) => {
+      const { frontierStatusCommand } = await import("./commands/admin-frontier");
+      const state = await frontierStatusCommand();
+
+      if (options.json) {
+        printJson(state);
+        return;
+      }
+
+      console.log(state.open ? "Frontier minting is OPEN." : "Frontier minting is closed.");
+    });
+
+  frontier
+    .command("open")
+    .description("Open Frontier minting — the kill switch (operator)")
+    .option("--json", "Print JSON", false)
+    .action(async (options: { json: boolean }) => {
+      const { frontierSetMintingCommand } = await import("./commands/admin-frontier");
+      const state = await frontierSetMintingCommand(true);
+
+      if (options.json) {
+        printJson(state);
+        return;
+      }
+
+      console.log("Frontier minting is OPEN.");
+    });
+
+  frontier
+    .command("close")
+    .description("Close Frontier minting — the kill switch (operator)")
+    .option("--json", "Print JSON", false)
+    .action(async (options: { json: boolean }) => {
+      const { frontierSetMintingCommand } = await import("./commands/admin-frontier");
+      const state = await frontierSetMintingCommand(false);
+
+      if (options.json) {
+        printJson(state);
+        return;
+      }
+
+      console.log("Frontier minting is closed.");
+    });
+
   const catalogue = configureCommand(
     admin
       .command("catalogue")

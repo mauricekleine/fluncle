@@ -50,7 +50,46 @@ export const refreshFrontierPlaylists = oc
     }),
   );
 
+/**
+ * `get_frontier_minting` → `GET /admin/frontier/minting` (operationId `getFrontierMinting`).
+ *
+ * ADMIN tier (agent-allowed read): whether the DEFAULT-DENY kill switch is open — the
+ * `get_capture_budget` precedent (a read of an operator dial is not the dial).
+ */
+export const getFrontierMinting = oc
+  .route({
+    method: "GET",
+    operationId: "getFrontierMinting",
+    path: "/admin/frontier/minting",
+    summary: "Whether Frontier minting is open (the kill switch's state)",
+    tags: ["Admin"],
+  })
+  .input(z.object({}))
+  .output(z.object({ ok: z.literal(true), open: z.boolean() }));
+
+/**
+ * `set_frontier_minting` → `PUT /admin/frontier/minting` (operationId `setFrontierMinting`).
+ *
+ * OPERATOR tier (`adminAuth` + `operatorGuard`) — the `set_capture_budget` precedent:
+ * opening minting lets the machine create public playlists on the operator's own Spotify
+ * account, which is exactly the class of authority an agent token must never grant
+ * itself. One write, effective on the next mint, no deploy (the switch is the
+ * `frontier.minting` settings row; DEFAULT-DENY, only the literal "true" opens).
+ */
+export const setFrontierMinting = oc
+  .route({
+    method: "PUT",
+    operationId: "setFrontierMinting",
+    path: "/admin/frontier/minting",
+    summary: "Open or close Frontier minting — the kill switch (operator)",
+    tags: ["Admin"],
+  })
+  .input(z.object({ open: z.boolean() }))
+  .output(z.object({ ok: z.literal(true), open: z.boolean() }));
+
 /** The `admin-frontier` domain's ops, merged into the root contract by `./index.ts`. */
 export const adminFrontierContract = {
+  get_frontier_minting: getFrontierMinting,
   refresh_frontier_playlists: refreshFrontierPlaylists,
+  set_frontier_minting: setFrontierMinting,
 };

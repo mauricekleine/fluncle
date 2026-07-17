@@ -6,8 +6,12 @@
 //   - `refresh` — one tick of the weekly refresh sweep (`refresh_frontier_playlists`).
 //     This is the command the on-box `fluncle-frontier-refresh` cron drives with the
 //     box's agent token: it prints one JSON summary line.
+//   - `status` — the kill switch's state (`get_frontier_minting`, agent-allowed read).
+//   - `open` / `close` — the kill switch itself (`set_frontier_minting`, OPERATOR only:
+//     the Worker 403s an agent token; opening minting is a Spotify-account authority
+//     grant, the `set_capture_budget` class).
 
-import { adminApiPost } from "../api";
+import { adminApiGet, adminApiPost, adminApiPut } from "../api";
 
 /** The refresh tick's per-run summary — the JSON line the weekly cron reads. */
 export type FrontierRefreshSummary = {
@@ -37,4 +41,17 @@ export async function frontierRefreshCommand(options: {
     "/api/admin/frontier-playlists/refresh",
     limit ? { limit } : {},
   );
+}
+
+/** The kill switch's state as both switch ops return it. */
+export type FrontierMintingState = { ok: true; open: boolean };
+
+/** `fluncle admin frontier status` — read the kill switch (agent-allowed). */
+export async function frontierStatusCommand(): Promise<FrontierMintingState> {
+  return adminApiGet<FrontierMintingState>("/api/admin/frontier/minting");
+}
+
+/** `fluncle admin frontier open|close` — flip the kill switch (operator only). */
+export async function frontierSetMintingCommand(open: boolean): Promise<FrontierMintingState> {
+  return adminApiPut<FrontierMintingState>("/api/admin/frontier/minting", { open });
 }
