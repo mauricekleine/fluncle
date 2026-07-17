@@ -34,7 +34,13 @@ markers:
 
 - A **fix PR** body carries `Sentry-Issue: <id>` lines. On a later night, `reconcile` resolves those
   issues **once the PR has merged to `main`** — we resolve only what actually landed, never a blanket
-  sweep, so an un-merged or reverted fix never wrongly closes an issue.
+  sweep, so an un-merged or reverted fix never wrongly closes an issue. Reconcile is **bounded to PRs
+  merged in the last ~48h** (2 nightly runs of slack): each fix is resolved once, shortly after its
+  merge, and never re-resolved forever. That matters because a resolved issue that later **regresses**
+  is auto-unresolved by Sentry — an unbounded reconcile would silently re-close it every night,
+  masking the regression. A regressed issue's id still lives in its long-merged PR body, but merged
+  PRs are **not** in the fetch dedupe set (only open PRs + the ledger are), so the regression
+  correctly re-enters the nightly worklist as a fresh issue to triage.
 - A **ledger PR** (docs-only) body carries `Sentry-Filed: <id>` lines and appends rows to
   `docs/sentry-backlog.md`, each ending with an invisible `<!-- sentry_id:<id> -->` marker. A filed
   issue is **never** auto-resolved.

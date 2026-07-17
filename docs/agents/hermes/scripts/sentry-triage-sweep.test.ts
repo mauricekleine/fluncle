@@ -14,6 +14,7 @@ import {
   extractFrames,
   FILE_MARKER,
   filterNewIssues,
+  filterRecentlyMerged,
   FIX_MARKER,
   listUnresolvedIssues,
   parseLedgerIds,
@@ -78,6 +79,38 @@ describe("filterNewIssues — the dedupe gate", () => {
   test("an empty covered set passes everything through", () => {
     const all = [issue("1"), issue("2")];
     expect(filterNewIssues(all, new Set()).map((i) => i.id)).toEqual(["1", "2"]);
+  });
+});
+
+describe("filterRecentlyMerged — reconcile only resolves fresh merges", () => {
+  const now = Date.parse("2026-07-18T03:30:00Z");
+  const WINDOW = 48 * 60 * 60_000;
+  const pr = (number: number, mergedAt: string | null) => ({
+    body: `Sentry-Issue: ${number}`,
+    headRefName: `sentry-triage/x-${number}`,
+    mergedAt,
+    number,
+    url: `https://github.com/x/pull/${number}`,
+  });
+
+  test("keeps a PR merged inside the window, drops one merged before it", () => {
+    const fresh = pr(1, "2026-07-17T20:00:00Z"); // ~7.5h ago
+    const stale = pr(2, "2026-07-10T00:00:00Z"); // 8 days ago — a regression here must re-surface
+    const kept = filterRecentlyMerged([fresh, stale], now, WINDOW);
+    expect(kept.map((p) => p.number)).toEqual([1]);
+  });
+
+  test("drops a PR with no mergedAt (an open PR that slipped into the list)", () => {
+    expect(filterRecentlyMerged([pr(3, null)], now, WINDOW)).toEqual([]);
+  });
+
+  test("the boundary is inclusive — exactly windowMs old still counts", () => {
+    const edge = pr(4, new Date(now - WINDOW).toISOString());
+    expect(filterRecentlyMerged([edge], now, WINDOW).map((p) => p.number)).toEqual([4]);
+  });
+
+  test("an unparseable mergedAt is dropped, never resolved", () => {
+    expect(filterRecentlyMerged([pr(5, "not-a-date")], now, WINDOW)).toEqual([]);
   });
 });
 

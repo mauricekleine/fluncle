@@ -16,11 +16,16 @@
 //                                  Prints a one-line JSON summary. Never throws on a bad/absent
 //                                  token — it records the per-project error and writes an empty
 //                                  worklist, so the driver degrades to a clean SKIP.
-//   reconcile                      For every MERGED triage PR, resolve the Sentry issue(s) its
-//                                  body references with `Sentry-Issue:` (idempotent — a re-resolve
-//                                  of an already-resolved issue is a no-op). This is the ONLY path
-//                                  that resolves an issue in Sentry: we resolve a fix that actually
-//                                  landed on `main`, never a blanket sweep. A FILED issue (a
+//   reconcile                      For each triage PR merged in the last ~48h, resolve the Sentry
+//                                  issue(s) its body references with `Sentry-Issue:`. This is the
+//                                  ONLY path that resolves an issue: we resolve a fix that actually
+//                                  landed on `main`, never a blanket sweep. The 48h WINDOW is what
+//                                  makes it safe over time — resolving is not a true no-op, because
+//                                  a resolved issue that later REGRESSES is auto-unresolved by
+//                                  Sentry; an unbounded reconcile would silently re-close it every
+//                                  night, masking the regression. Bounded, each fix is resolved once
+//                                  and a later regression correctly re-enters the worklist (merged
+//                                  PRs are not in the fetch dedupe set). A FILED issue (a
 //                                  `Sentry-Filed:` ref on the ledger PR) is deliberately left alone.
 //   comment <dateTag>              For each OPEN fix PR opened by tonight's run (head
 //                                  `sentry-triage/<dateTag>-…`), post one note on the Sentry issue
@@ -308,8 +313,35 @@ async function commentIssue(
 }
 
 // ── GitHub reads (via the baked `gh`; GH_TOKEN is exported by the driver) ─────────────────────
-type Pr = { body: string; headRefName: string; number: number; url: string };
+type Pr = {
+  body: string;
+  headRefName: string;
+  mergedAt: string | null;
+  number: number;
+  url: string;
+};
 type GhRunner = (args: string[]) => { ok: boolean; stdout: string };
+
+// A merged fix is reconciled only within this window of its merge — see filterRecentlyMerged.
+const RECONCILE_WINDOW_MS = 48 * 60 * 60_000; // 48h ≈ 2 nightly runs of slack for a missed tick.
+
+/**
+ * Keep only PRs merged within `windowMs` of `now`. This bounds `reconcile` so a fix's Sentry issue
+ * is resolved ONCE, shortly after its merge — never re-resolved forever. That matters because a
+ * resolved issue that REGRESSES is auto-unresolved by Sentry; an unbounded reconcile would silently
+ * re-resolve it every night, masking the regression (and suppressing its re-alert). A regressed
+ * issue's id still lives in its long-merged PR body, but merged PRs are NOT in the fetch dedupe set
+ * (only OPEN PRs + the ledger are), so the regression correctly re-enters the nightly worklist.
+ */
+export function filterRecentlyMerged(prs: Pr[], now: number, windowMs: number): Pr[] {
+  return prs.filter((p) => {
+    if (!p.mergedAt) {
+      return false;
+    }
+    const merged = Date.parse(p.mergedAt);
+    return Number.isFinite(merged) && now - merged <= windowMs;
+  });
+}
 
 const defaultGh: GhRunner = (args) => {
   const p = Bun.spawnSync(["gh", ...args], { stderr: "pipe", stdout: "pipe" });
@@ -328,7 +360,7 @@ export function listTriagePrs(state: "open" | "merged", gh: GhRunner = defaultGh
     "--limit",
     "100",
     "--json",
-    "number,headRefName,body,url",
+    "number,headRefName,body,url,mergedAt",
   ]);
   if (!r.ok) {
     log(`gh pr list --state ${state} failed`);
@@ -426,8 +458,13 @@ async function runFetch(ledgerPath: string, outFile: string): Promise<void> {
 async function runReconcile(): Promise<void> {
   const token = requireToken();
   const deps = defaultFetchDeps();
+  // Only RECENTLY-merged fix PRs — resolve each fix's issue once, shortly after its merge, never
+  // forever. A later regression auto-unresolves the issue in Sentry and re-enters the worklist
+  // (merged PRs are not in the fetch dedupe set), so an unbounded reconcile would silently re-close
+  // it every night. See filterRecentlyMerged.
+  const recent = filterRecentlyMerged(listTriagePrs("merged"), Date.now(), RECONCILE_WINDOW_MS);
   const ids = new Set<string>();
-  for (const pr of listTriagePrs("merged")) {
+  for (const pr of recent) {
     for (const id of parseMarkerIds(pr.body ?? "", FIX_MARKER)) {
       ids.add(id);
     }
@@ -465,7 +502,7 @@ export async function main(argv: string[]): Promise<void> {
   const [cmd, a, b] = argv;
   switch (cmd) {
     case "fetch":
-      await runFetch(a ?? ".sentry/issues.json", b ?? ".sentry/issues.json");
+      await runFetch(a ?? "docs/sentry-backlog.md", b ?? ".sentry/issues.json");
       return;
     case "reconcile":
       await runReconcile();
