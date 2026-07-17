@@ -94,5 +94,9 @@ docs/1password-audit.local.md
 # The DURABLE findings record is the committed docs/audit-backlog.md ledger.
 .audit/
 
+# Nightly Sentry-triage working dir (transient: issues.json, report.md).
+# The DURABLE filed record is the committed docs/sentry-backlog.md ledger.
+.sentry/
+
 # /improve advisor session artifacts — deliberately local-only (operator ruling 2026-07-11)
 /plans/

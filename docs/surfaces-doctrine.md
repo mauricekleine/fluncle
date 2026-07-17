@@ -176,6 +176,7 @@ Checked by their last-run freshness (not an HTTP hit), so they carry a `cronName
 | `cron.healthcheck`     | `fluncle-healthcheck`     | every 10m           | probe each service → Discord-ping on a status flip → POST the `/status` snapshot (a rave-02 host systemd timer, not a gateway cron)                                                                                         | hidden    |
 | `cron.backup`          | `fluncle-backup`          | every 24h           | dump the prod DB → gzip → a PRIVATE R2 bucket (owned off-site backup) + prune to 30 daily / 12 monthly (`--no-agent`, zero tokens)                                                                                          | secondary |
 | `cron.reach`           | `fluncle-reach`           | daily 04:00 Amst.   | snapshot Fluncle's follower / subscriber / play / star counts across every platform → one append-only row per (platform, metric) behind the public /reach page (`--no-agent`, Worker HTTP, zero LLM tokens)                 | secondary |
+| `cron.sentry-triage`   | `fluncle-sentry-triage`   | nightly 03:30 Amst. | read the day's unresolved Sentry errors → open a fix PR per straightforward one, file the rest to `docs/sentry-backlog.md` (`claude -p`, subscription auth; its own cron, not the audit rotation)                           | secondary |
 
 ## 3. The per-context weight matrix
 
@@ -288,6 +289,7 @@ The weight ladder within a context is unchanged — **`primary`** (the loud fron
 | `cron.healthcheck`          |           |           |           | hidden    |
 | `cron.backup`               |           |           |           | secondary |
 | `cron.reach`                |           |           |           | secondary |
+| `cron.sentry-triage`        |           |           |           | secondary |
 
 A surface is operator/agent-only where its only display weight is `hidden` (`cli.admin` in `cli`; most crons in `status` — the newsletter, the backup, the reach snapshot, and the audit pair rank `secondary` there) — registered (and probeable) without being advertised.
 

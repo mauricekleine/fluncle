@@ -528,6 +528,10 @@ const AUTOMATION_CRONS: CronDef[] = [
   // each claims its own dir cleanly (same pattern as studio-clip/clip-drip). Both daily.
   { cadenceMs: 24 * 60 * 60_000, match: "audit-review", service: "cron.audit-review" },
   { cadenceMs: 24 * 60 * 60_000, match: "audit", service: "cron.audit" },
+  // Nightly Sentry triage. `sentry-triage` (13 chars) is claimed before the submission-triage
+  // `triage` (6) by longest-match-first, and "sentry-triage" is not a substring of "fluncle-triage"
+  // (nor vice versa), so each claims its own dir cleanly (same pattern as audit-review/audit). Daily.
+  { cadenceMs: 24 * 60 * 60_000, match: "sentry-triage", service: "cron.sentry-triage" },
 ];
 
 type CronVerdict = "fresh-ok" | "lagging" | "failed" | "failed-once" | "no-data";

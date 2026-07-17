@@ -1,0 +1,15 @@
+[Unit]
+Description=fluncle-sentry-triage timer — the nightly Sentry triage at 03:30 Amsterdam on the rave-02 host (not the Hermes gateway)
+
+[Timer]
+# 03:30 Europe/Amsterdam via the explicit OnCalendar TZ suffix — the host clock is UTC (only the
+# Hermes container is TZ-pinned), so we name the zone here; DST-safe, needs systemd >=252. The slot
+# is deliberately clear of the box's other nightly ops crons: the audit at 01:00, the DB backup at
+# 03:00, the reach snapshot at 04:00, the audit reviewer at 05:00. 03:30 sits in the quiet gap after
+# the backup finishes and well before the reviewer. Persistent catches up a tick missed across a box
+# reboot; a late triage is harmless (it just opens tonight's PRs whenever it runs).
+OnCalendar=*-*-* 03:30:00 Europe/Amsterdam
+Persistent=true
+
+[Install]
+WantedBy=timers.target
