@@ -11,6 +11,7 @@ import {
 import { createServerFn } from "@tanstack/react-start";
 import { type ReactNode, useState } from "react";
 import { NotFoundBlackHole } from "@/components/not-found-black-hole";
+import { RootErrorState } from "@/components/root-error-state";
 import { PublicChrome } from "@/components/nav/public-chrome";
 import { isGalaxyMapFullyNamed } from "@/lib/server/galaxies-map";
 import { siteUrl } from "../lib/fluncle-links";
@@ -184,6 +185,10 @@ export const Route = createRootRoute({
       },
     ],
   }),
+  // The site-wide error boundary: an unexpected throw in a loader or render that no
+  // route-local `errorComponent` caught (rough re-entry). Reports the caught error to
+  // Sentry — a custom boundary is not auto-captured. See root-error-state.tsx.
+  errorComponent: RootErrorState,
   // The site-wide 404: the empty coordinate as a black hole (a finding Fluncle went
   // looking for and found nothing where it should be). Catches every unmatched URL and
   // any bubbled `notFound()` without a route-local state; the router serves it at a real

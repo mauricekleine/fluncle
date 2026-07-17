@@ -5,6 +5,7 @@
 
 import { contract } from "@fluncle/contracts/orpc";
 import { type implement, ORPCError } from "@orpc/server";
+import * as Sentry from "@sentry/cloudflare";
 import { logEvent } from "../log";
 import { type OrpcContext } from "../orpc-auth";
 import { type TrackListItem, getTrackByIdOrLogId } from "../tracks";
@@ -91,6 +92,13 @@ export function apiFault(error: unknown): ORPCError<string, ApiFaultData> {
   // An unexpected fault: the raw detail (driver/upstream internals) belongs in
   // the server log, never on the wire to an unauthenticated caller.
   logEvent("error", "api.unexpected-fault", { error });
+
+  // And into Sentry with a stack, for private diagnostics. Tagged to this fault
+  // path so unexpected 500s are one filterable group; no-ops in dev (the Worker
+  // SDK initializes inert off the deployed build — see server.ts).
+  Sentry.captureException(error, {
+    tags: { source: "orpc.apiFault" },
+  });
 
   return new ORPCError("INTERNAL_SERVER_ERROR", {
     data: { apiCode: "error", apiMessage: "Internal error" },

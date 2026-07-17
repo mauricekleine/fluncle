@@ -51,6 +51,8 @@
     "@orpc/zod": "catalog:",
     "@phosphor-icons/react": "catalog:",
     "@scalar/api-reference-react": "~0.9.54",
+    "@sentry/cloudflare": "~10.57.0",
+    "@sentry/tanstackstart-react": "~10.57.0",
     "@tailwindcss/vite": "~4.3.2",
     "@tanstack/react-query": "catalog:",
     "@tanstack/react-router": "~1.170.17",
@@ -76,6 +78,7 @@
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "~1.42.4",
+    "@sentry/vite-plugin": "~5.4.0",
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
     "@vitejs/plugin-react": "~6.0.3",
