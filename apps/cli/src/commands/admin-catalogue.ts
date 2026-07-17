@@ -258,6 +258,9 @@ export type CrawlPassResult = {
   // breaker. The driver must NOT loop: the next tick resumes from durable state.
   rateLimited: boolean;
   seeded: number;
+  // Stale enabled seed labels re-armed this pass — an enabled label is a subscription, so its
+  // later releases surface. Bounded per pass so a mass re-arm spreads over ticks.
+  seedsRearmed: number;
   tracksFound: number;
   tracksSkipped: number;
   tracksWritten: number;

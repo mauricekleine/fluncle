@@ -91,6 +91,24 @@ const BROWSE_PAGE_SIZE = 100;
 const MAX_FAILURES = 5;
 
 /**
+ * THE SEED RE-ARM. An enabled seed label is a SUBSCRIPTION, not a one-shot walk: once its
+ * MusicBrainz browse node finishes paginating it goes `done`, and without this it would stay
+ * done forever — so a release the label pressed AFTER that first drain (a Friday drop) would
+ * never surface. `REARM_AFTER_DAYS` is how stale a `done` seed-label node may get before the
+ * re-arm flips it back to `pending` (cursor 0) to re-paginate. 3 days ⇒ a Friday drop lands by
+ * Monday at the latest, usually sooner (the sweep ticks every ~10 min).
+ */
+export const REARM_AFTER_DAYS = 3;
+
+/**
+ * How many stale seed-label nodes one pass re-arms, oldest-done-first. Bounded so a mass re-arm
+ * — every enabled label crossing the threshold in the same window (88 of them, one deploy-day
+ * cohort) — spreads over passes instead of flooding the frontier head and starving the deep
+ * walk it SHARES the 1 req/s MusicBrainz budget with. A row this pass skips comes round next.
+ */
+export const REARM_BATCH = 10;
+
+/**
  * Spotify anchors filled per pass. Small on purpose: Spotify's 429 is a hard wall (the
  * pilot hit it), the anchor is a nicety rather than the point, and the queue is derived —
  * so whatever this tick misses, the next one picks up. `fillSpotifyAnchors` explains why.
@@ -197,6 +215,11 @@ export type CrawlPass = {
   rateLimited: boolean;
   /** Seed nodes minted from the operator's `enabled` labels this pass. */
   seeded: number;
+  /**
+   * Stale seed-label browse nodes re-armed this pass (bounded by `REARM_BATCH`) — an enabled
+   * label re-paginates on the re-arm threshold so its later releases surface. See `rearmSeedLabels`.
+   */
+  seedsRearmed: number;
   /** Catalogue tracks the walk SAW on the releases it expanded. */
   tracksFound: number;
   /** Tracks already in the archive (by ISRC, or by MB recording id) — the idempotence. */
@@ -491,6 +514,76 @@ async function seedFromEnabledLabels(): Promise<{ minted: number; slugs: string[
   }
 
   return { minted, slugs: enabled.map((label) => label.slug) };
+}
+
+/**
+ * THE SEED RE-ARM — turn an enabled seed label back into a live subscription.
+ *
+ * A `done` node is otherwise TERMINAL: `pickNodes` only ever picks `pending` (or backed-off
+ * `failed`) nodes, so a seed label whose MusicBrainz browse finished paginating goes `done`
+ * and stays there. That is correct for the deep walk (a re-crawl of the same graph writes
+ * zero rows), but it means a label's LATER releases — a Friday drop on a label the operator
+ * enabled — are never seen. An enabled label should be a subscription, not a one-shot walk.
+ *
+ * WHICH node. The seed's `fluncle:label` node only resolves the name→MBID once; the node that
+ * actually browses `/release?label=<mbid>` and paginates is the MusicBrainz label ENTITY node
+ * (`source = 'musicbrainz'`, `kind = 'label'`). Re-arming THAT — `state → 'pending'`, `cursor
+ * → 0` — makes `expandBrowse` re-walk the label's release list from the top. Re-arming the
+ * `fluncle` seed node would be pure waste: its expansion just re-enqueues the (already-present,
+ * still-`done`) MBID node as an `on conflict do nothing` no-op. So this targets `source =
+ * 'musicbrainz'` precisely.
+ *
+ * WHY it stays cheap. The re-paginated browse re-enqueues every release node it lists, but a
+ * known release node is an `on conflict do nothing` — it stays `done`, is not re-walked, and
+ * costs nothing. Only a GENUINELY NEW release id mints a `pending` node and gets walked, and
+ * when it is, the two-layer idempotence in `writeCatalogueTracks` folds any already-held track
+ * (a re-press) to a cheap skip. So a re-armed label costs ~`ceil(release-count / 100)` browse
+ * pages plus one release fetch per new release — at the shared ~1 req/s.
+ *
+ * THE GUARDS, all load-bearing:
+ *   - `seed_state = 'enabled'` (joined on the node's `label_slug`) — a subscription is only for
+ *     labels the operator still seeds from. A `disabled`/`undecided` label's node never re-arms:
+ *     re-arm is crawl SCOPE, the same rule seeding obeys.
+ *   - `kind = 'label'` — never an artist or release node (those are re-reached BY the browse).
+ *   - `state = 'done'` — a `failed` node is owned by its own exponential backoff; never disturb it.
+ *   - `done_at < now − REARM_AFTER_DAYS` — a freshly-drained label is not re-walked immediately.
+ *
+ * BOUNDED. At most `REARM_BATCH` per pass, oldest-done-first, so a cohort of labels all crossing
+ * the threshold together spreads across passes rather than flooding the frontier head. Returns
+ * the count and logs it, so a re-arm wave is visible rather than silent.
+ */
+async function rearmSeedLabels(): Promise<number> {
+  const db = await getDb();
+  const cutoff = new Date(Date.now() - REARM_AFTER_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  const now = new Date().toISOString();
+
+  // One bounded UPDATE. The subquery picks the batch (oldest-done-first, capped) — SQLite forbids
+  // ORDER BY/LIMIT on the UPDATE itself but allows it in the row-selecting subquery. `label_slug`
+  // is joined to the `enabled` seed set (a bounded, tens-of-rows table), never pulled into the isolate.
+  const result = await db.execute({
+    args: [now, cutoff, REARM_BATCH],
+    sql: `update crawl_frontier
+          set state = 'pending', cursor = 0, updated_at = ?
+          where id in (
+            select id from crawl_frontier
+            where kind = 'label'
+              and source = 'musicbrainz'
+              and state = 'done'
+              and done_at is not null
+              and done_at < ?
+              and label_slug in (select slug from labels where seed_state = 'enabled')
+            order by done_at asc, id asc
+            limit ?
+          )`,
+  });
+
+  const rearmed = result.rowsAffected;
+
+  if (rearmed > 0) {
+    logEvent("info", "crawl.seeds-rearmed", { count: rearmed });
+  }
+
+  return rearmed;
 }
 
 // ── The writes ───────────────────────────────────────────────────────────────
@@ -1419,6 +1512,7 @@ export async function crawlCatalogue({
     nodesEnqueued: 0,
     rateLimited: false,
     seeded: 0,
+    seedsRearmed: 0,
     tracksFound: 0,
     tracksSkipped: 0,
     tracksWritten: 0,
@@ -1433,6 +1527,11 @@ export async function crawlCatalogue({
 
   const seed = await seedFromEnabledLabels();
   pass.seeded = seed.minted;
+
+  // Re-arm stale enabled seed labels BEFORE the pick, so a re-armed browse node can be expanded
+  // in this very pass (the subscription rides every tick — the cron needs no change). Bounded, so
+  // this never floods the frontier head ahead of the deep walk they share the rate budget with.
+  pass.seedsRearmed = await rearmSeedLabels();
 
   const nodes = await pickNodes(limit);
 

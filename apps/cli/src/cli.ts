@@ -3378,6 +3378,12 @@ async function runCrawlCatalogue(
       `  ${result.anchorsFilled} Spotify anchor(s) filled${anchorOutcomeSuffix(result.anchorOutcome)}.`,
     );
 
+    if (result.seedsRearmed > 0) {
+      console.log(
+        `  Re-armed ${result.seedsRearmed} enabled seed label(s) to re-check for new releases.`,
+      );
+    }
+
     if (result.labelsDiscovered.length > 0) {
       console.log(
         `  New labels to rule on: ${result.labelsDiscovered.join(", ")} (they are NOT crawled until enabled).`,
