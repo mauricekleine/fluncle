@@ -1095,6 +1095,194 @@ describe("the frontier drain — releases never starve behind a discovery wave",
   });
 });
 
+describe("the seed re-arm (release freshness) — an enabled label is a subscription", () => {
+  // A done seed-label browse node is otherwise TERMINAL, so a label's LATER releases (a Friday
+  // drop) would never surface. The re-arm flips a stale enabled label's MusicBrainz browse node
+  // back to pending (cursor 0) so it re-paginates: a genuinely new release mints rows, a known
+  // one is a cheap on-conflict no-op, and the two-layer idempotence folds any re-pressed track.
+  const NEW_RELEASE = "release-new";
+  const DAY_MS = 24 * 60 * 60 * 1000;
+
+  /** Re-point the Med School browse at a wider release list to model a later drop. */
+  function stubMedschool(releaseIds: string[]): void {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) => {
+        const json = (body: unknown) =>
+          Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
+
+        if (url.includes("/label?query=")) {
+          return json({ labels: [{ id: LABEL_MBID, name: "Med School", score: 100 }] });
+        }
+
+        if (url.includes(`/release?label=${LABEL_MBID}`)) {
+          return json({
+            "release-count": releaseIds.length,
+            releases: releaseIds.map((id) => ({ id })),
+          });
+        }
+
+        if (url.includes(`/release/${SEED_RELEASE}`)) {
+          return json(
+            release(SEED_RELEASE, "Med School", SEED_RELEASE_GROUP, [
+              { id: "rec-1", isrc: "GBCJY1300173", title: "Weightless" },
+              { id: "rec-2", title: "Begin by Letting Go" },
+            ]),
+          );
+        }
+
+        // The NEWLY-pressed release: one genuinely new recording, PLUS rec-1 which the archive
+        // already holds (a re-press) — the two-layer idempotence must fold the known one to a skip.
+        if (url.includes(`/release/${NEW_RELEASE}`)) {
+          return json(
+            release(NEW_RELEASE, "Med School", "rg-new-drop", [
+              { id: "rec-new", title: "Fresh Drop" },
+              { id: "rec-1", isrc: "GBCJY1300173", title: "Weightless" },
+            ]),
+          );
+        }
+
+        return json({});
+      }),
+    );
+  }
+
+  /** Age every done MB-label browse node so it crosses the re-arm threshold. */
+  async function ageSeedLabelNodes(daysAgo: number): Promise<void> {
+    const old = new Date(Date.now() - daysAgo * DAY_MS).toISOString();
+
+    await db.execute({
+      args: [old],
+      sql: `update crawl_frontier set done_at = ?
+            where kind = 'label' and source = 'musicbrainz' and state = 'done'`,
+    });
+  }
+
+  it("re-arms a stale enabled label, discovers its NEW release, and re-walks the known one for nothing", async () => {
+    const { REARM_AFTER_DAYS } = await import("./crawl");
+    const { crawlCatalogue } = await import("./crawl");
+
+    // First drain (hop 0 keeps it to the seed label's own releases): rec-1 + rec-2 land.
+    stubMedschool([SEED_RELEASE]);
+    await drain(0);
+    const before = await db.execute("select track_id from tracks");
+    expect(before.rows.map((row) => text(row.track_id)).sort(compare)).toEqual([
+      "mb_rec-1",
+      "mb_rec-2",
+    ]);
+
+    // Time passes; the label drops a new release. Its done browse node is now past the threshold.
+    stubMedschool([SEED_RELEASE, NEW_RELEASE]);
+    await ageSeedLabelNodes(REARM_AFTER_DAYS + 1);
+
+    // The re-arm rides this pass: it flips the MB label browse node back to pending (cursor 0).
+    const rearmPass = await crawlCatalogue({ limit: 10, maxHop: 0 });
+    expect(rearmPass.seedsRearmed).toBe(1);
+
+    // Drain the rest: the re-paginated browse re-lists SEED_RELEASE (a done node → on-conflict
+    // no-op, never re-walked) AND NEW_RELEASE (a fresh node → walked, mints rec-new).
+    await drain(0);
+
+    const after = await db.execute("select track_id from tracks");
+    // rec-new appeared; rec-1 (on the new release, but already held) wrote nothing — the idempotence.
+    expect(after.rows.map((row) => text(row.track_id)).sort(compare)).toEqual([
+      "mb_rec-1",
+      "mb_rec-2",
+      "mb_rec-new",
+    ]);
+
+    // A re-armed subscription certifies nothing either — the firewall still holds.
+    const findings = await db.execute("select count(*) as n from findings");
+    expect(Number(findings.rows[0]?.n)).toBe(0);
+  });
+
+  it("does NOT re-arm a freshly-drained label (done_at < threshold)", async () => {
+    const { crawlCatalogue } = await import("./crawl");
+
+    stubMedschool([SEED_RELEASE]);
+    await drain(0);
+
+    // done_at is just now — well inside the window. No re-arm, the node stays done.
+    const pass = await crawlCatalogue({ limit: 10, maxHop: 0 });
+    expect(pass.seedsRearmed).toBe(0);
+
+    const node = await db.execute(
+      "select state from crawl_frontier where kind = 'label' and source = 'musicbrainz'",
+    );
+    expect(node.rows[0]?.state).toBe("done");
+  });
+
+  it("never re-arms a DISABLED label's done node, nor a FAILED node", async () => {
+    const { REARM_AFTER_DAYS, crawlCatalogue } = await import("./crawl");
+
+    // Silence the walk itself (nothing enabled to seed), then plant two aged nodes by hand.
+    await db.execute("update labels set seed_state = 'disabled'");
+    const old = new Date(Date.now() - (REARM_AFTER_DAYS + 5) * DAY_MS).toISOString();
+
+    // A DISABLED label's done browse node, well past the threshold — re-arm is crawl SCOPE, so it
+    // must stay done: a label the operator ruled OUT is not re-subscribed.
+    await db.execute({
+      args: ["musicbrainz:label:mb-anjuna", "mb-anjuna", old, old, old],
+      sql: `insert into crawl_frontier
+              (id, kind, source, external_id, hop, parent_id, label_slug, state, done_at, created_at, updated_at)
+            values (?, 'label', 'musicbrainz', ?, 0, null, 'anjunabeats', 'done', ?, ?, ?)`,
+    });
+
+    // A FAILED node whose label IS enabled and IS past the threshold — the exponential backoff
+    // owns a failed node, so the re-arm must never disturb it.
+    await db.execute("update labels set seed_state = 'enabled' where slug = 'medschool'");
+    await db.execute({
+      args: ["musicbrainz:label:mb-failed", "mb-failed", old, old, old],
+      sql: `insert into crawl_frontier
+              (id, kind, source, external_id, hop, parent_id, label_slug, state, failures, done_at, created_at, updated_at)
+            values (?, 'label', 'musicbrainz', ?, 0, null, 'medschool', 'failed', 2, ?, ?, ?)`,
+    });
+
+    const pass = await crawlCatalogue({ limit: 1, maxHop: 0 });
+    expect(pass.seedsRearmed).toBe(0);
+
+    const disabled = await db.execute(
+      "select state from crawl_frontier where id = 'musicbrainz:label:mb-anjuna'",
+    );
+    expect(disabled.rows[0]?.state).toBe("done");
+
+    const failed = await db.execute(
+      "select state from crawl_frontier where id = 'musicbrainz:label:mb-failed'",
+    );
+    expect(failed.rows[0]?.state).toBe("failed");
+  });
+
+  it("re-arms at most REARM_BATCH per pass (oldest-done-first), spreading a mass re-arm over ticks", async () => {
+    const { REARM_AFTER_DAYS, REARM_BATCH, crawlCatalogue } = await import("./crawl");
+
+    // The '88 enabled labels cross the threshold in one window' shape, shrunk to REARM_BATCH + 2.
+    // Every node is a done, aged, enabled-label browse node — so all are re-arm-eligible.
+    await db.execute("update labels set seed_state = 'disabled'"); // silence the seed walk
+    const old = new Date(Date.now() - (REARM_AFTER_DAYS + 2) * DAY_MS).toISOString();
+    const cohort = REARM_BATCH + 2;
+
+    for (let i = 0; i < cohort; i += 1) {
+      const slug = `cohort-${String(i).padStart(2, "0")}`;
+
+      await seedLabel(`Cohort ${i}`, slug, "enabled");
+      await db.execute({
+        args: [`musicbrainz:label:mb-${slug}`, `mb-${slug}`, slug, old, old, old],
+        sql: `insert into crawl_frontier
+                (id, kind, source, external_id, hop, parent_id, label_slug, state, done_at, created_at, updated_at)
+              values (?, 'label', 'musicbrainz', ?, 0, null, ?, 'done', ?, ?, ?)`,
+      });
+    }
+
+    // Pass one re-arms exactly REARM_BATCH — the bound holds even though all cohort+2 are eligible.
+    const first = await crawlCatalogue({ limit: 1, maxHop: 0 });
+    expect(first.seedsRearmed).toBe(REARM_BATCH);
+
+    // The remaining 2 were not dropped — the next tick re-arms them (the spread), and no more.
+    const second = await crawlCatalogue({ limit: 1, maxHop: 0 });
+    expect(second.seedsRearmed).toBe(cohort - REARM_BATCH);
+  });
+});
+
 describe("the anchor priority head — the ear's top candidates anchor first", () => {
   it("spends the head on the highest-ranked un-anchored rows and never advances the cursor off them", async () => {
     const { searchTrackCandidates } = await import("./spotify");

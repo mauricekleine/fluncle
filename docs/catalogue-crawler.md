@@ -76,6 +76,16 @@ A genuinely new label is minted from MusicBrainz's spelling and the track carrie
 
 A catalogue track's `track_id` is `mb_<musicbrainz-recording-id>` — deterministic, so re-crawling the same recording collides on the PK and writes nothing. **A re-crawl of the same graph writes zero new rows.**
 
+## The seed re-arm (release freshness)
+
+Idempotence has a shadow: a `done` frontier node is **terminal**. `pickNodes` only ever picks `pending` nodes (and backed-off `failed` ones), so once a seed label's MusicBrainz browse node finishes paginating it goes `done` and stays done forever. That is correct for the deep walk — but it means a label's **later** releases are invisible. A Friday drop on a label the operator enabled last month never surfaces, because the node that would list it was retired the day it first drained. **An enabled seed label is a subscription, not a one-shot walk.**
+
+So every pass, before it picks, `rearmSeedLabels` flips a stale seed-label browse node back to `pending` (cursor reset to 0) so it **re-paginates**. The node it re-arms is the MusicBrainz label **entity** node (`source = 'musicbrainz'`, `kind = 'label'`) — the one that actually browses `/release?label=<mbid>`; the `fluncle` seed node only resolves the name→MBID once, so re-arming it would just re-enqueue the (already-present) MBID node as a no-op. A node re-arms only when **all** of: its label's `seed_state` is `enabled` (joined on the node's `label_slug`), its `state` is `done`, and its `done_at` is older than **`REARM_AFTER_DAYS` (3)**. A `failed` node is left alone — its exponential backoff owns it — and a `disabled`/`undecided` label's node never re-arms, because re-arm is crawl **scope**, the same rule seeding obeys.
+
+The re-pagination is cheap by construction. Every release the browse re-lists is re-enqueued, but a known release node is an `on conflict do nothing` — it stays `done`, is **not** re-walked, and costs nothing. Only a **genuinely new** release id mints a `pending` node and gets walked; when it is, the two-layer idempotence folds any already-held track (a re-press) to a skip. So a re-armed label costs about `ceil(release-count / 100)` browse pages plus one release fetch per **new** release, all at the shared ~1 req/s — cheap, but it **shares** the MusicBrainz budget with the deep walk. Hence the bound: at most **`REARM_BATCH` (10)** labels re-arm per pass, oldest-`done` first, so a cohort that all crosses the threshold in one window (88 enabled labels a deploy-day apart) spreads over passes instead of flooding the frontier head. Each pass logs `crawl.seeds-rearmed` with the count and reports it as `seedsRearmed`.
+
+The sweep needs no change: the existing `fluncle-crawl` 10-minute timer picks this up — the re-arm rides every pass, so a Friday drop lands by Monday at the latest, usually sooner.
+
 ## The certification rail
 
 `llms.txt` asserts, truthfully, that _"every track in the archive is one he found, listened to, and certified."_ One crawled row leaking into a feed makes that sentence a lie. So the firewall is structural, and it is tested:

@@ -554,6 +554,12 @@ export const CrawlPassSchema = z
     rateLimited: z.boolean(),
     /** Seed nodes minted from the operator's `enabled` labels this pass. */
     seeded: z.number(),
+    /**
+     * Stale seed-label browse nodes re-armed this pass — an enabled label is a subscription,
+     * re-paginating past the re-arm threshold so its later releases (a Friday drop) surface.
+     * Bounded per pass so a mass re-arm spreads over ticks. See docs/catalogue-crawler.md.
+     */
+    seedsRearmed: z.number(),
     /** Catalogue tracks the walk saw on the releases it expanded. */
     tracksFound: z.number(),
     /** Tracks the archive already held (by ISRC, or by MB recording id) — the idempotence. */
