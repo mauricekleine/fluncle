@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  entityPurgeUrl,
   FRESH_SECONDS,
+  isCacheableEntityRequest,
   isCacheableLogPath,
   logPurgeUrls,
   PUBLIC_CACHE_CONTROL,
+  purgeEntityCache,
+  purgeEntityCaches,
   purgeLogCache,
   SWR_SECONDS,
 } from "./edge-cache";
@@ -98,5 +102,75 @@ describe("purgeLogCache", () => {
     // Under Node (no `caches` global, empty `env`) the local delete + global purge
     // both degrade to a no-op — the write path is never blocked and never errors.
     expect(() => purgeLogCache("2026.A.7Q")).not.toThrow();
+  });
+});
+
+describe("isCacheableEntityRequest", () => {
+  it("matches an artist/album/label DETAIL page with no query string", () => {
+    // The three singular entity detail routes, and only their canonical query-less URL.
+    expect(isCacheableEntityRequest("/artist/sub-focus", "")).toBe(true);
+    expect(isCacheableEntityRequest("/album/all-that-jazz", "")).toBe(true);
+    expect(isCacheableEntityRequest("/label/hospital-records", "")).toBe(true);
+    // A trailing slash is the same canonical page.
+    expect(isCacheableEntityRequest("/artist/sub-focus/", "")).toBe(true);
+  });
+
+  it("does NOT cache a paginated/sorted variant (the cache key drops the query)", () => {
+    // The cache key strips the query string, so caching `?page=2` would serve it back
+    // for page 1. A query-bearing request must flow through UNCACHED. This is the exact
+    // collision the guard exists to prevent.
+    expect(isCacheableEntityRequest("/artist/sub-focus", "?page=2")).toBe(false);
+    expect(isCacheableEntityRequest("/label/hospital-records", "?sort=newest")).toBe(false);
+  });
+
+  it("does NOT match the plural INDEX pages or a nested/foreign path", () => {
+    // The indexes (`/artists`) invalidate on any member change, so they ride the fresh
+    // window, not this cache — and a nested path isn't a detail page.
+    expect(isCacheableEntityRequest("/artists", "")).toBe(false);
+    expect(isCacheableEntityRequest("/albums", "")).toBe(false);
+    expect(isCacheableEntityRequest("/labels", "")).toBe(false);
+    expect(isCacheableEntityRequest("/artist/sub-focus/tracks", "")).toBe(false);
+    expect(isCacheableEntityRequest("/artist", "")).toBe(false);
+    expect(isCacheableEntityRequest("/log/2026.A.7Q", "")).toBe(false);
+  });
+});
+
+describe("entityPurgeUrl", () => {
+  const CANONICAL = "https://www.fluncle.com";
+
+  it("builds the canonical detail-page URL per kind, off the canonical origin", () => {
+    expect(entityPurgeUrl("artist", "sub-focus")).toBe(`${CANONICAL}/artist/sub-focus`);
+    expect(entityPurgeUrl("album", "all-that-jazz")).toBe(`${CANONICAL}/album/all-that-jazz`);
+    expect(entityPurgeUrl("label", "hospital-records")).toBe(`${CANONICAL}/label/hospital-records`);
+  });
+
+  it("URL-encodes the slug into the path segment", () => {
+    // Slugs are normally kebab-safe, but anything needing encoding must match the stored
+    // key exactly — a raw space would fragment the purge URL.
+    expect(entityPurgeUrl("artist", "a b")).toBe(`${CANONICAL}/artist/a%20b`);
+  });
+});
+
+describe("purgeEntityCache / purgeEntityCaches", () => {
+  it("is a safe no-op for a missing, blank, or empty target set", () => {
+    // Write paths call these with whatever slug they hold; a blank slug or empty list
+    // must never throw or fire a purge.
+    expect(() => purgeEntityCache("artist", null)).not.toThrow();
+    expect(() => purgeEntityCache("album", undefined)).not.toThrow();
+    expect(() => purgeEntityCache("label", "  ")).not.toThrow();
+    expect(() => purgeEntityCaches([])).not.toThrow();
+    expect(() => purgeEntityCaches([{ kind: "artist", slug: "  " }])).not.toThrow();
+  });
+
+  it("does not throw for real targets outside the Workers runtime", () => {
+    // Under Node the local delete + global purge degrade to a no-op, so the write path
+    // is never blocked and never errors.
+    expect(() => purgeEntityCache("artist", "sub-focus")).not.toThrow();
+    expect(() =>
+      purgeEntityCaches([
+        { kind: "artist", slug: "sub-focus" },
+        { kind: "label", slug: "hospital-records" },
+      ]),
+    ).not.toThrow();
   });
 });

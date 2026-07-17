@@ -23,6 +23,7 @@
 import { randomUUID } from "node:crypto";
 import { slugify } from "@fluncle/contracts/util/galaxy-slug";
 import { getDb, typedRows } from "./db";
+import { purgeEntityCache } from "./edge-cache";
 import { type CatalogueHubPage, clampCatalogueHubLimit, type EntitySitemapRow } from "./labels";
 
 // The thin-content gate for album pages: an `/album/<slug>` page indexes (and enters the
@@ -255,7 +256,15 @@ export async function fillEmptyAlbumBio(
             and (bio is null or trim(bio) = '')`,
   });
 
-  return result.rowsAffected > 0;
+  const wrote = result.rowsAffected > 0;
+
+  if (wrote) {
+    // The bio is a primary rendered block on `/album/<slug>`; refresh its cached page so the
+    // new bio surfaces. Only on an actual write — a fill-empty no-op changed nothing.
+    purgeEntityCache("album", slug);
+  }
+
+  return wrote;
 }
 
 /** One row of the bio worklist: an album with findings but no bio yet. */
