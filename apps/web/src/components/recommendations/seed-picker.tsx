@@ -11,8 +11,10 @@ import { CheckIcon, MagnifyingGlassIcon, PlusIcon, XIcon } from "@phosphor-icons
 import { useEffect, useMemo, useState } from "react";
 import { Input } from "@fluncle/ui/components/input";
 import { SpotifyIcon } from "@/components/platform-icons";
+import { type KeyNotation, useKeyNotation } from "@/lib/key-notation";
 import { albumCoverAtSize } from "@/lib/media";
 import { cn } from "@/lib/utils";
+import { TrackReadout } from "./recommendation-list";
 import { type RecSeedItem } from "./shared";
 
 // The slice of the search resolver's reply the picker consumes — a track candidate. The
@@ -21,8 +23,13 @@ import { type RecSeedItem } from "./shared";
 type SearchHit = {
   albumImageUrl?: string;
   artists: string[];
+  // The instrument readout the resolver already carries (The Readout Rule) — duration is not
+  // in the hit shape, so the candidate row renders what these can back and drops the rest.
+  bpm?: number;
   certified: boolean;
+  key?: string;
   logId?: string;
+  releaseDate?: string;
   title: string;
   trackId: string;
 };
@@ -67,6 +74,7 @@ export function SeedPicker({
   const [results, setResults] = useState<SearchHit[]>([]);
   const [searching, setSearching] = useState(false);
   const [pending, setPending] = useState<Set<string>>(new Set());
+  const { notation } = useKeyNotation();
 
   const seededIds = useMemo(() => new Set(seeds.map((seed) => seed.trackId)), [seeds]);
   const hasSeeds = seeds.length > 0;
@@ -189,6 +197,7 @@ export function SeedPicker({
                 busy={pending.has(hit.trackId)}
                 hit={hit}
                 key={hit.trackId}
+                notation={notation}
                 onAdd={() => void mutate(hit.trackId, onAdd)}
                 seeded={seededIds.has(hit.trackId)}
               />
@@ -215,16 +224,20 @@ export function SeedPicker({
 function CandidateRow({
   busy,
   hit,
+  notation,
   onAdd,
   seeded,
 }: {
   busy: boolean;
   hit: SearchHit;
+  notation: KeyNotation;
   onAdd: () => void;
   seeded: boolean;
 }) {
   const trackLine = `${hit.artists.join(", ")} — ${hit.title}`;
   const cover = albumCoverAtSize(hit.albumImageUrl, "small");
+  const year = hit.releaseDate ? hit.releaseDate.slice(0, 4) : undefined;
+  const artistLine = year ? `${hit.artists.join(", ")} · ${year}` : hit.artists.join(", ");
 
   return (
     <li>
@@ -242,7 +255,8 @@ function CandidateRow({
         )}
         <span className="rec-candidate-body">
           <span className="rec-candidate-title">{hit.title}</span>
-          <span className="rec-candidate-artists">{hit.artists.join(", ")}</span>
+          <span className="rec-candidate-artists">{artistLine}</span>
+          <TrackReadout bpm={hit.bpm} musicalKey={hit.key} notation={notation} />
         </span>
         <span aria-hidden className="rec-candidate-tail">
           {seeded ? (

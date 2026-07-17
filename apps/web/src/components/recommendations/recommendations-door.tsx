@@ -97,6 +97,9 @@ export function RecommendationsDoor({
           <RecommendationList
             catalogue={recs.catalogue}
             findings={recs.findings}
+            onAdd={(trackId) => seedMutation.mutateAsync({ kind: "add", trackId })}
+            onRemove={(trackId) => seedMutation.mutateAsync({ kind: "remove", trackId })}
+            seeds={seeds}
             seedsSkipped={recs.seedsSkipped}
           />
         </>

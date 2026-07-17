@@ -4,6 +4,7 @@ import {
   foldFrontierStatus,
   FRONTIER_CLOSED,
   resolveGateState,
+  SEED_CAP,
   seedMutationMessage,
 } from "./shared";
 
@@ -11,6 +12,14 @@ import {
 // folds. These pin the three that decide what the reader sees: which gate state renders, how
 // the not-yet-merged frontier endpoint 404-folds to "closed", and how the 12-seed cap's 409
 // surfaces the server's honest instruction.
+
+describe("SEED_CAP", () => {
+  it("mirrors the server's MAX_REC_SEEDS (12) — the picked-state UI's cap", () => {
+    // A drift guard: the server 409s a breach at MAX_REC_SEEDS; this literal only decides when
+    // an un-picked row disables, so the two must agree or the UI disables at the wrong count.
+    expect(SEED_CAP).toBe(12);
+  });
+});
 
 describe("resolveGateState", () => {
   it("no session is anonymous", () => {

@@ -1,31 +1,78 @@
 // THE RECOMMENDATIONS LIST — the register split, canon-resolved (ROADMAP § the blend,
 // option B). The ≤3 FINDINGS slots render first, in Fluncle's full voice: the Log ID leads
 // (Oxanium, heats to gold — the Ignition Rule), the cover doubles as a preview play control
-// (the saves-door singleton), the note is quoted as the row's WHY, and the whole row opens
-// /log/<id>. They wear a quiet "from Fluncle's own log" label, never a badge-scream.
+// (the saves-door singleton), the note is quoted as the row's WHY. They wear a quiet "from
+// Fluncle's own log" label, never a badge-scream.
 //
 // Then the CATALOGUE rows in the INSTRUMENT register (DESIGN.md's Unlit Rule): cover, Artist
 // — Title, no coordinate, no note, no invented noun. "Close to what you picked" is the
-// section's ONE helper line — the machine's honest WHY, never per-row testimony. Each links
-// OUT to Spotify, because an uncertified track has no /log page to open.
+// section's ONE helper line — the machine's honest WHY, never per-row testimony.
+//
+// A recommendation you ENDORSE becomes a PICK: the row BODY is a pick control (the seed
+// picker's grammar), so clicking a row seeds that track and refines the next round; a picked
+// row shows the gold check and toggles off. Navigation moves to explicit SECONDARY targets,
+// never nested inside the pick — a findings row keeps its Log ID linking to /log/<id>, a
+// catalogue row keeps its Spotify glyph linking out (the track-row discipline: a stretched
+// control with sibling links lifted above it). Both registers carry the instrument readout
+// (The Readout Rule): the duration/BPM/key chips, and the release year where it exists.
 
-import { PauseIcon, PlayIcon } from "@phosphor-icons/react";
+import { CheckIcon, PauseIcon, PlayIcon, PlusIcon } from "@phosphor-icons/react";
 import { Link } from "@tanstack/react-router";
+import { useMemo, useState } from "react";
 import { SpotifyIcon } from "@/components/platform-icons";
+import { TrackChips } from "@/components/track-row";
+import { formatKey, type KeyNotation, useKeyNotation } from "@/lib/key-notation";
 import { albumCoverAtSize } from "@/lib/media";
 import { usePreviewPlayer } from "@/lib/preview-player";
-import { type RecommendationCatalogueItem, type RecommendationFindingItem } from "./shared";
+import {
+  type RecommendationCatalogueItem,
+  type RecommendationFindingItem,
+  type RecSeedItem,
+  SEED_CAP,
+} from "./shared";
 
 export function RecommendationList({
   catalogue,
   findings,
+  onAdd,
+  onRemove,
+  seeds,
   seedsSkipped,
 }: {
   catalogue: RecommendationCatalogueItem[];
   findings: RecommendationFindingItem[];
+  onAdd: (trackId: string) => Promise<void>;
+  onRemove: (trackId: string) => Promise<void>;
+  seeds: RecSeedItem[];
   seedsSkipped: string[];
 }) {
   const hasAny = findings.length > 0 || catalogue.length > 0;
+  const { notation } = useKeyNotation();
+  const [pending, setPending] = useState<Set<string>>(new Set());
+
+  const seededIds = useMemo(() => new Set(seeds.map((seed) => seed.trackId)), [seeds]);
+  // At the cap an UN-picked row disables (the picker's cap discipline); a picked row always
+  // stays toggle-removable, so the reader can trade one seed for another without a dead end.
+  const atCap = seeds.length >= SEED_CAP;
+
+  // The pick gesture, pending-guarded per track exactly as the picker's own rows are — a click
+  // adds when un-picked, removes when picked (the toggle), and the door refetches both the
+  // seed set and the recommendations after either write.
+  async function pick(trackId: string, seeded: boolean) {
+    setPending((current) => new Set(current).add(trackId));
+
+    try {
+      await (seeded ? onRemove(trackId) : onAdd(trackId));
+    } finally {
+      setPending((current) => {
+        const next = new Set(current);
+
+        next.delete(trackId);
+
+        return next;
+      });
+    }
+  }
 
   if (!hasAny) {
     return (
@@ -45,9 +92,21 @@ export function RecommendationList({
         <section className="account-section rec-findings">
           <p className="account-kicker rec-from-log">From Fluncle&rsquo;s own log</p>
           <ul className="account-list rec-finding-list">
-            {findings.map((finding) => (
-              <FindingRow finding={finding} key={finding.trackId} />
-            ))}
+            {findings.map((finding) => {
+              const seeded = seededIds.has(finding.trackId);
+
+              return (
+                <FindingRow
+                  busy={pending.has(finding.trackId)}
+                  disabled={!seeded && atCap}
+                  finding={finding}
+                  key={finding.trackId}
+                  notation={notation}
+                  onPick={() => void pick(finding.trackId, seeded)}
+                  seeded={seeded}
+                />
+              );
+            })}
           </ul>
         </section>
       ) : null}
@@ -57,9 +116,21 @@ export function RecommendationList({
           <h2>More to dig</h2>
           <p className="account-muted">Close to what you picked.</p>
           <ul className="account-list rec-catalogue-list">
-            {catalogue.map((track) => (
-              <CatalogueRow key={track.trackId} track={track} />
-            ))}
+            {catalogue.map((track) => {
+              const seeded = seededIds.has(track.trackId);
+
+              return (
+                <CatalogueRow
+                  busy={pending.has(track.trackId)}
+                  disabled={!seeded && atCap}
+                  key={track.trackId}
+                  notation={notation}
+                  onPick={() => void pick(track.trackId, seeded)}
+                  seeded={seeded}
+                  track={track}
+                />
+              );
+            })}
           </ul>
         </section>
       ) : null}
@@ -75,16 +146,84 @@ export function RecommendationList({
   );
 }
 
+/** The pick state indicator — the gold check when picked, a quiet plus when not (the picker's
+ *  own glyphs). Decorative: the real control is the stretched pick button that carries the
+ *  aria-label, so this is `aria-hidden`. A row at the cap that is not picked shows nothing. */
+function PickGlyph({ disabled, seeded }: { disabled: boolean; seeded: boolean }) {
+  if (seeded) {
+    return <CheckIcon aria-hidden className="rec-seeded-check" weight="bold" />;
+  }
+
+  if (disabled) {
+    return null;
+  }
+
+  return <PlusIcon aria-hidden className="rec-add-glyph" weight="bold" />;
+}
+
+/** The instrument readout for a row — the shared chips plus the release year (The Readout
+ *  Rule). Key formatting rides the reader's own notation, the finding-card idiom. Shared with
+ *  the seed picker's candidate rows so every track-shaped row reads the same. */
+export function TrackReadout({
+  bpm,
+  durationMs,
+  musicalKey,
+  notation,
+  year,
+}: {
+  bpm?: number;
+  durationMs?: number;
+  musicalKey?: string;
+  notation: KeyNotation;
+  year?: string;
+}) {
+  const keyText = formatKey(musicalKey, notation);
+
+  if (!durationMs && !bpm && !keyText && !year) {
+    return null;
+  }
+
+  return (
+    <span className="rec-readout">
+      <TrackChips
+        bpm={bpm}
+        className="mt-0"
+        durationMs={durationMs}
+        musicalKey={keyText || undefined}
+      />
+      {year ? <span className="rec-year">{year}</span> : null}
+    </span>
+  );
+}
+
 /**
  * A recommended finding — the archive's ignition grammar (the saves-door row). The Log ID
- * leads and heats gold, the cover carries the preview play control through the shared
- * `/api/preview` singleton (starting one row stops any other), the row opens /log/<id>, and
- * the note reads beneath as the WHY. A certified row speaks; it earns the full voice.
+ * leads and heats gold (a link to /log/<id>, the row's secondary target), the cover carries
+ * the preview play control through the shared `/api/preview` singleton, and the note reads
+ * beneath as the WHY. The row BODY is the pick: a stretched button that seeds this finding, so
+ * endorsing it refines the next round. A certified row speaks; it earns the full voice.
  */
-function FindingRow({ finding }: { finding: RecommendationFindingItem }) {
+function FindingRow({
+  busy,
+  disabled,
+  finding,
+  notation,
+  onPick,
+  seeded,
+}: {
+  busy: boolean;
+  disabled: boolean;
+  finding: RecommendationFindingItem;
+  notation: KeyNotation;
+  onPick: () => void;
+  seeded: boolean;
+}) {
   const preview = usePreviewPlayer(finding.trackId);
   const trackLine = `${finding.artists.join(", ")} — ${finding.title}`;
   const cover = albumCoverAtSize(finding.imageUrl, "small");
+  const pickLabel = seeded
+    ? `Remove ${trackLine} from your picks`
+    : `Add ${trackLine} to your picks`;
 
   return (
     <li className="rec-finding-row">
@@ -123,15 +262,28 @@ function FindingRow({ finding }: { finding: RecommendationFindingItem }) {
       </span>
 
       <span className="rec-finding-body min-w-0">
-        <Link
-          aria-label={`Open the log page for ${trackLine}`}
-          className="track-row-link"
-          params={{ logId: finding.logId }}
-          to="/log/$logId"
+        <button
+          aria-label={pickLabel}
+          aria-pressed={seeded}
+          className="rec-finding-title block rec-pick-stretch"
+          disabled={disabled || busy}
+          onClick={onPick}
+          type="button"
         >
-          <span className="rec-finding-title block">{trackLine}</span>
-        </Link>
+          <span className="rec-finding-titletext">{trackLine}</span>
+        </button>
+        <TrackReadout
+          bpm={finding.bpm}
+          durationMs={finding.durationMs}
+          musicalKey={finding.key}
+          notation={notation}
+          year={finding.year}
+        />
         {finding.note ? <span className="rec-finding-note">{finding.note}</span> : null}
+      </span>
+
+      <span className="rec-finding-tail" aria-hidden>
+        <PickGlyph disabled={disabled} seeded={seeded} />
       </span>
     </li>
   );
@@ -139,45 +291,76 @@ function FindingRow({ finding }: { finding: RecommendationFindingItem }) {
 
 /**
  * A recommended catalogue track — the instrument register. Cover-led, cold (the Dust Veil),
- * no coordinate and no note, and it links OUT to Spotify because there is no /log page for a
- * track Fluncle has not certified. The similarity is NEVER printed per row — it's the
- * section's one helper line. A track with no Spotify anchor renders as a bare, quiet row.
+ * no coordinate and no note. The row BODY is the pick (a stretched button that seeds the
+ * track); the Spotify glyph stays as a SECONDARY link out, lifted above the pick so it stays
+ * its own target — an uncertified track has no /log page to open. The similarity is NEVER
+ * printed per row — it's the section's one helper line.
  */
-function CatalogueRow({ track }: { track: RecommendationCatalogueItem }) {
+function CatalogueRow({
+  busy,
+  disabled,
+  notation,
+  onPick,
+  seeded,
+  track,
+}: {
+  busy: boolean;
+  disabled: boolean;
+  notation: KeyNotation;
+  onPick: () => void;
+  seeded: boolean;
+  track: RecommendationCatalogueItem;
+}) {
   const trackLine = `${track.artists.join(", ")} — ${track.title}`;
   const cover = albumCoverAtSize(track.imageUrl, "small");
   const href = track.spotifyUrl ?? spotifyUrlFromUri(track.spotifyUri);
+  const artistLine = track.year
+    ? `${track.artists.join(", ")} · ${track.year}`
+    : track.artists.join(", ");
+  const pickLabel = seeded
+    ? `Remove ${trackLine} from your picks`
+    : `Add ${trackLine} to your picks`;
 
-  const inner = (
-    <>
+  return (
+    <li className="rec-catalogue-row rec-catalogue-row--unlit">
       {cover ? (
         <img alt="" className="rec-cover" height={40} loading="lazy" src={cover} width={40} />
       ) : (
         <span aria-hidden className="rec-cover rec-cover--empty" />
       )}
-      <span className="rec-catalogue-body min-w-0">
-        <span className="rec-catalogue-title">{track.title}</span>
-        <span className="rec-catalogue-artists">{track.artists.join(", ")}</span>
-      </span>
-      {href ? <SpotifyIcon className="rec-candidate-out" /> : null}
-    </>
-  );
 
-  if (!href) {
-    return <li className="rec-catalogue-row rec-catalogue-row--unlit">{inner}</li>;
-  }
-
-  return (
-    <li className="rec-catalogue-row rec-catalogue-row--unlit">
-      <a
-        aria-label={`Open ${trackLine} on Spotify`}
-        className="rec-catalogue-link"
-        href={href}
-        rel="noopener noreferrer"
-        target="_blank"
+      <button
+        aria-label={pickLabel}
+        aria-pressed={seeded}
+        className="rec-catalogue-body rec-pick-stretch min-w-0"
+        disabled={disabled || busy}
+        onClick={onPick}
+        type="button"
       >
-        {inner}
-      </a>
+        <span className="rec-catalogue-title">{track.title}</span>
+        <span className="rec-catalogue-artists">{artistLine}</span>
+        <TrackReadout
+          bpm={track.bpm}
+          durationMs={track.durationMs}
+          musicalKey={track.key}
+          notation={notation}
+        />
+      </button>
+
+      <span className="rec-catalogue-tail">
+        {href ? (
+          <a
+            aria-label={`Open ${trackLine} on Spotify`}
+            className="rec-catalogue-out"
+            href={href}
+            rel="noopener noreferrer"
+            target="_blank"
+          >
+            <SpotifyIcon className="rec-candidate-out" />
+          </a>
+        ) : null}
+        <PickGlyph disabled={disabled} seeded={seeded} />
+      </span>
     </li>
   );
 }

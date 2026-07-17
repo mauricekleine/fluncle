@@ -35,6 +35,12 @@ export type RecsGate =
       state: "verified";
     };
 
+/**
+ * The seed cap, mirrored client-side for the picked-state UI (the server's `MAX_REC_SEEDS`
+ * stays the authority — it 409s a breach; this only decides when an un-picked row disables).
+ */
+export const SEED_CAP = 12;
+
 /** The empty recommendation payload — the zero-seed reply, and the read-failure fallback. */
 export const EMPTY_RECS: RecommendationsResult = {
   catalogue: [],
