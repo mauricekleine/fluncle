@@ -37,6 +37,36 @@ const sentryRelease = resolveSentryRelease();
 const sentryAuthToken = process.env.SENTRY_AUTH_TOKEN;
 const uploadSentrySourceMaps = Boolean(sentryAuthToken);
 
+// One Sentry upload instance per build output. The build emits TWO bundles —
+// the browser client (dist/client) and the Cloudflare Worker (dist/server) —
+// and their runtime error events go to SEPARATE Sentry projects (browser →
+// `fluncle-web`, Worker → `fluncle-worker`; see lib/sentry-config.ts). Sentry
+// resolves source maps PER-PROJECT, so each bundle's maps must upload to its own
+// project or its events resolve minified. Each instance is scoped to its bundle
+// via `sourcemaps.assets`, and — critically — its `filesToDeleteAfterUpload`
+// glob is scoped to the SAME subtree: the delete globs run independently per
+// instance, so scoping keeps one instance from deleting the other's maps before
+// that other has uploaded them. Their union still covers every emitted `.map`,
+// so a tokened build ships zero maps. Both carry the same release and
+// warn-never-fail on any upload error. Org + slugs default to the committed
+// values, overridable from the env.
+function sentryUploadPlugin(project: string, output: "client" | "server"): PluginOption {
+  return sentryVitePlugin({
+    authToken: sentryAuthToken,
+    errorHandler: (err) => {
+      console.warn(`[sentry-vite-plugin] source map upload skipped: ${err.message}`);
+    },
+    org: process.env.SENTRY_ORG ?? "fluncle",
+    project,
+    release: { name: sentryRelease || undefined },
+    sourcemaps: {
+      assets: [`dist/${output}/**`],
+      filesToDeleteAfterUpload: [`dist/${output}/**/*.map`],
+    },
+    telemetry: false,
+  });
+}
+
 // A crawler-facing banner prepended to every built JS chunk. The hashed
 // /assets/*.js chunks are among the most-crawled paths by AI bots, so this is
 // the one place the machinery itself can carry the story. It is Fluncle
@@ -161,25 +191,18 @@ export default defineConfig({
     tanstackStart(),
     viteReact(),
     crawlerBannerPlugin(),
-    // Last, per the plugin's guidance. Uploads source maps + associates the
-    // release, then deletes the `.map` files. `errorHandler` downgrades any
-    // upload failure (wrong slug, revoked token, network) to a WARNING so a
-    // Sentry hiccup never aborts a production deploy. Absent when there's no
-    // auth token (local/gate builds), so those never even generate maps.
+    // Last, per the plugin's guidance. Each instance uploads its bundle's source
+    // maps + associates the release, then deletes only its OWN `.map` files.
+    // `errorHandler` downgrades any upload failure (wrong slug, revoked token,
+    // network) to a WARNING so a Sentry hiccup never aborts a production deploy.
+    // Both absent when there's no auth token (local/gate builds), so those never
+    // even generate maps. Client bundle → `fluncle-web`, Worker bundle →
+    // `fluncle-worker` (SENTRY_PROJECT / SENTRY_PROJECT_WORKER override).
     uploadSentrySourceMaps
-      ? sentryVitePlugin({
-          authToken: sentryAuthToken,
-          errorHandler: (err) => {
-            console.warn(`[sentry-vite-plugin] source map upload skipped: ${err.message}`);
-          },
-          org: process.env.SENTRY_ORG ?? "fluncle",
-          project: process.env.SENTRY_PROJECT ?? "fluncle-web",
-          release: { name: sentryRelease || undefined },
-          sourcemaps: {
-            filesToDeleteAfterUpload: ["**/*.map"],
-          },
-          telemetry: false,
-        })
+      ? sentryUploadPlugin(process.env.SENTRY_PROJECT ?? "fluncle-web", "client")
+      : null,
+    uploadSentrySourceMaps
+      ? sentryUploadPlugin(process.env.SENTRY_PROJECT_WORKER ?? "fluncle-worker", "server")
       : null,
   ] satisfies PluginOption[],
   resolve: {
