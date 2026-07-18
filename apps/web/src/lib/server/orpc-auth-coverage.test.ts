@@ -225,6 +225,10 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // the `backfill_discogs` precedent.
   backfill_label_images: "admin",
   backfill_lastfm: "admin",
+  // The MusicBrainz recording-MBID fill — agent tier (adminAuth only): the MusicBrainz identity
+  // layer. It writes catalogue identity only (an MBID on `tracks`), never a certification, so the
+  // box's agent-token cron drives it, the `backfill_label_images` precedent.
+  backfill_recording_mbids: "admin",
   // The capture sweep is agent-allowed (admin tier): it only fills the public URL
   // Postiz withheld on create + links the analytics release-id — it publishes nothing.
   capture_post_urls: "admin",

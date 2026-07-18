@@ -605,11 +605,17 @@ async function writeCatalogueTracks(
         candidate.releaseDate,
         candidate.inReleaseId,
         candidate.inMasterId,
+        // The MusicBrainz recording MBID — the canonical KG join key (docs/catalogue-crawler.md §
+        // the MusicBrainz identity layer). It is already in the PK (`track_id` is `mb_<mbid>`), but
+        // stamping it here too means a crawled row is graph-joinable off the bat instead of waiting
+        // on the prefix-strip backfill, and the `/log` MusicRecording emits it the moment such a row
+        // is certified in place. The one-off `recording-mbids.ts` strip only catches history up.
+        candidate.recordingId,
       ],
       sql: `insert into tracks
               (track_id, title, artists_json, duration_ms, album, album_image_url, isrc,
-               label, release_date, in_release_id, in_master_id)
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               label, release_date, in_release_id, in_master_id, mb_recording_id)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             on conflict (track_id) do nothing`,
     });
 

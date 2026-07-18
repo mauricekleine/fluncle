@@ -69,6 +69,28 @@ describe("musicRecordingJsonLd (the log page schema)", () => {
     expect(jsonLd).not.toHaveProperty("recordLabel");
   });
 
+  it("omits the MusicBrainz recording anchor when the track carries no MBID (the base fixture)", () => {
+    // No mbRecordingId ⇒ no musicbrainz.org/recording sameAs and only the two Log-ID identifiers.
+    expect(jsonLd.sameAs).not.toContain(expect.stringContaining("musicbrainz.org/recording"));
+    expect((jsonLd.identifier as unknown[]).length).toBe(2);
+  });
+
+  it("emits the MusicBrainz recording MBID as a sameAs + a KG identifier when present", () => {
+    const withMbid = musicRecordingJsonLd(
+      { ...track, mbRecordingId: "b9ad642e-b012-41c7-b4b1-0f0f0f0f0f0f" },
+      "https://img/cover.jpg",
+    );
+
+    expect(withMbid.sameAs).toContain(
+      "https://musicbrainz.org/recording/b9ad642e-b012-41c7-b4b1-0f0f0f0f0f0f",
+    );
+    expect(withMbid.identifier).toContainEqual({
+      "@type": "PropertyValue",
+      propertyID: "musicbrainz-recording-id",
+      value: "b9ad642e-b012-41c7-b4b1-0f0f0f0f0f0f",
+    });
+  });
+
   it("closes the recording→label edge (recordLabel → the label page's Organization @id)", () => {
     const withLabel = musicRecordingJsonLd(
       { ...track, label: "Hospital Records", labelSlug: "hospital-records" },
@@ -312,6 +334,46 @@ describe("musicGroupJsonLd (the artist page schema)", () => {
     );
 
     expect(bare).not.toHaveProperty("sameAs");
+  });
+
+  it("omits alternateName when the artist carries no aliases (the base fixture + an empty array)", () => {
+    // The MusicBrainz identity layer: no aliases ⇒ the key is absent, byte-identical to before.
+    expect(jsonLd).not.toHaveProperty("alternateName");
+
+    const emptied = musicGroupJsonLd(
+      { alternateNames: [], imageUrl: "https://img/x.jpg", name: "X", slug: "x", socials: [] },
+      [],
+    );
+
+    expect(emptied).not.toHaveProperty("alternateName");
+  });
+
+  it("emits a single alias as a scalar alternateName, several as an array", () => {
+    const one = musicGroupJsonLd(
+      {
+        alternateNames: ["DC Breaks"],
+        imageUrl: "https://img/x.jpg",
+        name: "DC Breaks",
+        slug: "dc-breaks",
+        socials: [],
+      },
+      [],
+    );
+
+    expect(one.alternateName).toBe("DC Breaks");
+
+    const many = musicGroupJsonLd(
+      {
+        alternateNames: ["Nu:Tone", "Nutone"],
+        imageUrl: "https://img/x.jpg",
+        name: "Nu:Tone",
+        slug: "nu-tone",
+        socials: [],
+      },
+      [],
+    );
+
+    expect(many.alternateName).toEqual(["Nu:Tone", "Nutone"]);
   });
 
   it("carries the factual bio as description only when one is authored", () => {

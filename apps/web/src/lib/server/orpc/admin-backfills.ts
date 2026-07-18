@@ -23,6 +23,7 @@ import {
 import { type CoverMasterKind, resolveCoverMasters } from "../cover-masters";
 import { resolveLabelImages } from "../label-images";
 import { adminAuth } from "../orpc-auth";
+import { resolveRecordingMbids } from "../recording-mbids";
 import { apiFault, type Implementer, parseBool, parseLimit } from "./_shared";
 
 // Ported verbatim from the live backfill routes.
@@ -229,6 +230,39 @@ export function adminBackfillsHandlers(os: Implementer) {
       }
     });
 
+  // POST /admin/backfill/recording-mbids — agent tier (`adminAuth`): the MusicBrainz identity
+  // layer. It fills each track's canonical recording MBID (crawler PK strip + ISRC resolve through
+  // the shared MusicBrainz client), writing catalogue identity only (no publish, no certification),
+  // so the box's agent-token cron drives it, the `backfill_label_images` precedent.
+  const backfillRecordingMbidsHandler = os.backfill_recording_mbids
+    .use(adminAuth)
+    .handler(async ({ input }) => {
+      try {
+        const { query } = input;
+        const result = await resolveRecordingMbids(
+          parseLimit(query.limit, BACKFILL_DEFAULT_LIMIT, BACKFILL_MAX_LIMIT),
+          parseBool(query.dryRun),
+          query.cursor ?? undefined,
+        );
+
+        return {
+          dryRun: result.dryRun,
+          failed: result.failed,
+          failedCount: result.failedCount,
+          missed: result.missed,
+          missedCount: result.missedCount,
+          nextCursor: result.nextCursor,
+          ok: true as const,
+          prefixStripped: result.prefixStripped,
+          rateLimited: result.rateLimited,
+          resolved: result.resolved,
+          resolvedCount: result.resolvedCount,
+        };
+      } catch (error) {
+        throw apiFault(error);
+      }
+    });
+
   return {
     backfill_apple_catalogue: backfillAppleCatalogueHandler,
     backfill_apple_music: backfillAppleMusicHandler,
@@ -236,5 +270,6 @@ export function adminBackfillsHandlers(os: Implementer) {
     backfill_discogs: backfillDiscogsHandler,
     backfill_label_images: backfillLabelImagesHandler,
     backfill_lastfm: backfillLastfmHandler,
+    backfill_recording_mbids: backfillRecordingMbidsHandler,
   };
 }

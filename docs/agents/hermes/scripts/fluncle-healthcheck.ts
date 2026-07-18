@@ -492,6 +492,7 @@ const AUTOMATION_CRONS: CronDef[] = [
   { cadenceMs: 30 * 60_000, match: "rank", service: "cron.rank" }, // The Ear's ranking — drains the stale catalogue
   { cadenceMs: 60 * 60_000, match: "anchor", service: "cron.anchor" }, // catalogue Spotify anchors via Apify — one bounded batch per hour
   { cadenceMs: 60 * 60_000, match: "label-images", service: "cron.label-images" }, // label logos — resolve one bounded batch of pending labels per tick
+  { cadenceMs: 60 * 60_000, match: "recording-mbids", service: "cron.recording-mbids" }, // MusicBrainz recording MBIDs — crawler PK strip + ISRC resolve, one bounded batch per tick
   { cadenceMs: 60 * 60_000, match: "cover-masters", service: "cron.cover-masters" }, // owned album/artist cover masters — one bounded batch per tick
   { cadenceMs: 60 * 60_000, match: "artist-sweep", service: "cron.artist-sweep" },
   { cadenceMs: 10 * 60_000, match: "social-capture", service: "cron.social-capture" },

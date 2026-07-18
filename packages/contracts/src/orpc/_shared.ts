@@ -101,6 +101,10 @@ export const TrackListItemSchema = z
     labelSlug: z.string().optional(),
     logId: z.string().optional(),
     logPageUrl: z.string().optional(),
+    // The MusicBrainz recording MBID — the canonical KG join key (the MusicBrainz identity
+    // layer). PUBLIC, like `isrc`: the `/log` MusicRecording emits it as a `sameAs`
+    // (`https://musicbrainz.org/recording/<mbid>`) + a KG `identifier`. Absent until filled.
+    mbRecordingId: z.string().optional(),
     note: z.string().optional(),
     // Word-level caption timings for the spoken observation (ms windows), driving the
     // synced subtitles on the radio player. Present only once captured (a fresh

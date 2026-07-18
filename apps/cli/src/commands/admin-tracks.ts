@@ -528,6 +528,44 @@ export async function backfillAppleCatalogueCommand(
   );
 }
 
+export type RecordingMbidsBackfillResult = {
+  dryRun: boolean;
+  failed: Array<{ error: string; trackId: string }>;
+  failedCount: number;
+  // Track ids whose ISRC MusicBrainz has no recording for — attempt-stamped so they drain.
+  missed: string[];
+  missedCount: number;
+  // The track-id cursor to resume the ISRC drain from, or null when it is drained (or a throttle).
+  nextCursor: string | null;
+  ok: boolean;
+  // Crawler-history rows filled from their PK this pass (the free no-vendor strip).
+  prefixStripped: number;
+  rateLimited: boolean;
+  resolved: string[];
+  resolvedCount: number;
+};
+
+// One bounded pass of the recording-MBID fill sweep (the MusicBrainz identity layer) via the admin
+// API. The Worker fills crawler-born rows from their PK for free, then resolves findings/Spotify-born
+// rows' MBID by ISRC through the shared MusicBrainz client (1 req/s, circuit-broken on a throttle).
+// `--dry-run` reports both worklists without a vendor call or write. Pass the prior `nextCursor` to
+// resume the ISRC drain; the CLI loops until it comes back null.
+export async function backfillRecordingMbidsCommand(
+  limit: number,
+  dryRun: boolean,
+  cursor?: string,
+): Promise<RecordingMbidsBackfillResult> {
+  const params = new URLSearchParams({ dryRun: String(dryRun), limit: String(limit) });
+
+  if (cursor) {
+    params.set("cursor", cursor);
+  }
+
+  return adminApiPost<RecordingMbidsBackfillResult>(
+    `/api/admin/backfill/recording-mbids?${params.toString()}`,
+  );
+}
+
 export type VehicleEntry = {
   addedAt: string;
   artists: string[];

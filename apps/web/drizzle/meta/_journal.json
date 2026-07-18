@@ -743,6 +743,13 @@
       "when": 1784368291403,
       "tag": "0105_mushy_invaders",
       "breakpoints": true
+    },
+    {
+      "idx": 106,
+      "version": "6",
+      "when": 1784373475633,
+      "tag": "0106_spotty_punisher",
+      "breakpoints": true
     }
   ]
 }
