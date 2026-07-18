@@ -52,7 +52,7 @@ Each page leads with the findings Fluncle has logged there. An artist, label, or
 ## For agents
 
 - [OpenAPI spec](https://www.fluncle.com/api/v1/openapi.json): the public API as an OpenAPI 3.1 document
-- [MCP server](https://www.fluncle.com/mcp): the same archive as Model Context Protocol tools (Streamable HTTP, no auth) — list, random, search, submit, subscribe
+- [MCP server](https://www.fluncle.com/mcp): the same archive as Model Context Protocol tools (Streamable HTTP, no auth) — list, browse by artist/label/album, search, look up an artist or label, random, submit, subscribe
 - [MCP server card](https://www.fluncle.com/.well-known/mcp/server-card.json): SEP-2127 discovery card for the MCP endpoint
 - [Agent card](https://www.fluncle.com/.well-known/agent-card.json): A2A agent card listing Fluncle's actionable skills (search, list, read, submit, subscribe)
 - [API catalog](https://www.fluncle.com/.well-known/api-catalog): RFC 9727 linkset

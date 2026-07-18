@@ -885,7 +885,7 @@ export const SURFACES: readonly Surface[] = [
     apiFormat: "application/json",
     discoveryUrl: `${SITE}/.well-known/mcp/server-card.json`,
     exposedContent: [
-      "the archive as MCP tools (Streamable HTTP, no auth): list_tracks, list_fresh, get_track, get_random_track, get_status, search_tracks, submit_track, subscribe_newsletter",
+      "the archive as MCP tools (Streamable HTTP, no auth): list_tracks, list_fresh, get_track, get_random_track, get_status, search_archive, get_artist, get_label, build_set, get_similar_artists, list_album_catalogue, list_artist_catalogue, list_label_catalogue, search_tracks, submit_track, subscribe_newsletter",
       "the archive as MCP resources: each finding/mixtape at fluncle://finding/<logId> or fluncle://mixtape/<logId> (its public record)",
       "Fluncle-voiced MCP prompts: recommend_finding, walk_recent_night, decode_coordinate",
     ],
