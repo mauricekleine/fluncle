@@ -115,8 +115,12 @@ function fold(value: string): string {
     .replace(/[^\p{L}\p{N}]+/gu, "");
 }
 
-/** MusicBrainz label search → the MBID whose name folds exactly to ours (or null). */
-async function searchMbLabelId(
+/**
+ * MusicBrainz label search → the MBID whose name folds exactly to ours (or null). Exported so the
+ * label-lineage sweep (label-lineage.ts) resolves a label's identity the SAME way — one shared
+ * search + exact fold, never two divergent copies.
+ */
+export async function searchMbLabelId(
   name: string,
 ): Promise<{ mbid: string | null; rateLimited: boolean }> {
   const { data, rateLimited } = await mbFetch<MbLabelSearchResponse>(

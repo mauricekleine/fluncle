@@ -2213,13 +2213,23 @@ export const galaxies = sqliteTable("galaxies", {
 
 // The many-to-many join between tracks (findings) and their artists. `position` is
 // 1-based and records the original Spotify artist order (first = lead). Composite PK
-// (track_id, artist_id) enforces uniqueness. No `role` column in v1 — nothing reads
-// it (display comes from the kept `artists_json` cache); add via enum-widening later.
+// (track_id, artist_id) enforces uniqueness.
+//
+// ── `role` — the credit KIND (RFC label-lineage-remixer, U2) ──────────────────────
+// NULL = a performer (the default, and the ONLY kind v1 had — a lead/featured artist).
+// `'remixer'` is the first non-null value, DERIVED — never guessed — where the title's
+// "(X Remix)" descriptor names a remixer who EXACTLY folds to one of the track's linked
+// artists (`deriveRemixerNames`, track-match.ts; stamped by `stampRemixerRoles`,
+// artists.ts, at the publish / crawler / anchor write paths + the deploy backfill). An
+// unmatched remixer name (an uncertified remixer with no `artists` row) stays absent —
+// there is no row to stamp. The credit is markup-only for now: it becomes a schema.org
+// `contributor` Role on the MusicRecording (log-schema.ts); the visible page is unchanged.
 export const trackArtists = sqliteTable(
   "track_artists",
   {
     artistId: text("artist_id").notNull(),
     position: integer("position").notNull(),
+    role: text("role", { enum: ["remixer"] }),
     trackId: text("track_id").notNull(),
   },
   (table) => [
@@ -2357,6 +2367,17 @@ export const labels = sqliteTable(
     // The Discogs label id (from the MB label's curated Discogs url-rel) — the source
     // of the logo image. NULL until the resolve sweep walks it (or MB carried no link).
     discogsLabelId: integer("discogs_label_id"),
+    // ── LABEL LINEAGE (RFC label-lineage-remixer, U1) ───────────────────────────────
+    // The label's founding place — MusicBrainz's `area.name` (e.g. "London", "United
+    // Kingdom"). Emitted as the Organization's `location` Place on `/label/<slug>` and
+    // (with `founding_date`) as the visible "Founded 1996 · London" reference line. NULL
+    // until the lineage sweep walks it, or when MB carries no area. See label-lineage.ts.
+    foundedLocation: text("founded_location"),
+    // The label's founding date — MusicBrainz's `life-span.begin`, stored VERBATIM (a bare
+    // year "1996" or a full date "1996-04-29"; never re-formatted). Emitted as the
+    // Organization's `foundingDate` (schema.org accepts a year or a full date). NULL until
+    // walked, or when MB carries no begin date.
+    foundingDate: text("founding_date"),
     id: text("id").primaryKey(),
     // The last time the image resolve sweep attempted this label (reliability/backoff).
     imageAttemptedAt: text("image_attempted_at"),
@@ -2368,6 +2389,21 @@ export const labels = sqliteTable(
     // The image resolve lifecycle (see the header). `pending` is the DDL default so
     // every label — existing and future — enters the worklist automatically.
     imageState: text("image_state", { enum: ["pending", "resolved", "none"] })
+      .notNull()
+      .default("pending"),
+    // ── LABEL LINEAGE reliability (the label-images convention, cloned) ──────────────────────
+    // The lineage sweep (label-lineage.ts) walks each label's MusicBrainz life-span + area +
+    // its label-label relationships once, up its own terminal state machine — the label-images
+    // triple, applied to lineage instead of the logo, so a resolved/none label is never re-walked
+    // and a persistent failure gives up.
+    //   - `lineage_attempted_at` — the last attempt (drives the cooldown backoff).
+    //   - `lineage_failures` — consecutive failures (drives the give-up cap → `none`).
+    //   - `lineage_state` — `pending` (the DDL default, so every existing + future label enters
+    //     the worklist), `resolved` (walked; whatever MB carried is stored), `none` (no MB
+    //     identity to walk — terminal).
+    lineageAttemptedAt: text("lineage_attempted_at"),
+    lineageFailures: integer("lineage_failures").notNull().default(0),
+    lineageState: text("lineage_state", { enum: ["pending", "resolved", "none"] })
       .notNull()
       .default("pending"),
     // ── THE DISCOVERED-LABEL FOLD KEY (catalogue-graph, inline label linking) ────────────────
@@ -2383,6 +2419,16 @@ export const labels = sqliteTable(
     mbLabelId: text("mb_label_id"),
     // The display name — the first raw `tracks.label` spelling seen for this slug.
     name: text("name").notNull(),
+    // ── THE PARENT EDGE (RFC label-lineage-remixer, U1) ─────────────────────────────
+    // The `labels.id` this label is a SUBLABEL / imprint of — MusicBrainz's `label ownership`
+    // / `imprint` label-rel walked with `direction = 'backward'` (verified against real MB data:
+    // Med School → Hospital Records). A self-reference, nullable; the smallest honest model, since
+    // an imprint has one parent in practice and the SUBLABELS are the reverse read (`where
+    // parent_label_id = ?`). Set fill-empty-only by the lineage sweep, and ONLY when the parent MB
+    // label already exists in `labels` by MBID — this path NEVER mints a label (an unmatched parent
+    // is counted in the sweep summary, never created). Emitted as the Organization's
+    // `parentOrganization` / `subOrganization` `@id` edges. See label-lineage.ts.
+    parentLabelId: text("parent_label_id"),
     ruledAt: text("ruled_at"),
     seedState: text("seed_state", { enum: ["enabled", "disabled", "undecided"] })
       .notNull()
@@ -2394,6 +2440,16 @@ export const labels = sqliteTable(
     // The discovered-label fold: `where mb_label_id = ?` resolves an existing label before the
     // alias/slug path, so one MusicBrainz label is one row across every spelling it walks in under.
     uniqueIndex("labels_mb_label_id_idx").on(table.mbLabelId),
+    // The SUBLABELS reverse read (`where parent_label_id = ?`) — the `/label/<slug>` page's
+    // `subOrganization` edges. An indexed seek, not a scan of the growing labels table.
+    index("labels_parent_label_id_idx").on(table.parentLabelId),
+    // The lineage sweep's worklist: `where lineage_state = 'pending'`, slug-cursored. A PARTIAL
+    // index over exactly the un-walked slice, so its cost SHRINKS as the backlog drains rather
+    // than scanning the whole (crawler-swollen) labels table each tick (the recording-mbids
+    // `tracks_mb_recording_id_queue_idx` discipline).
+    index("labels_lineage_queue_idx")
+      .on(table.slug)
+      .where(sql`${table.lineageState} = 'pending'`),
   ],
 );
 

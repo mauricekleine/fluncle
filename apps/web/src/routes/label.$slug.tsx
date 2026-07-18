@@ -26,6 +26,7 @@ import {
   getConfirmedAliasNames,
   getLabelBySlug,
   LABEL_INDEX_MIN_TRACKS,
+  type LabelLineageEdge,
 } from "@/lib/server/labels";
 import { getFindingsByLabel, type TrackListItem } from "@/lib/server/tracks";
 
@@ -60,15 +61,23 @@ type LabelPageData =
       /** The Discogs label id → the Organization JSON-LD's `sameAs` (`discogs.com/label/<id>`). */
       discogsLabelId: number | undefined;
       findings: TrackListItem[];
+      /** The label's founding place (MusicBrainz `area.name`) — the dateline + Organization `location`. */
+      foundedLocation: string | undefined;
+      /** The label's founding date (MusicBrainz `life-span.begin`) — the dateline + `foundingDate`. */
+      foundingDate: string | undefined;
       indexable: boolean;
       /** The label's OWN logo (resolved Discogs/Wikidata image on R2), or undefined. */
       logoImageUrl: string | undefined;
       /** The MusicBrainz label MBID → the Organization JSON-LD's `sameAs` (`musicbrainz.org/label/<mbid>`). */
       mbLabelId: string | undefined;
       name: string;
+      /** The imprint this label belongs to → the Organization's `parentOrganization` edge. */
+      parentLabel: LabelLineageEdge | undefined;
       slug: string;
       sort: CatalogueSort;
       status: "found";
+      /** The sublabels of this label → the Organization's `subOrganization` edges. */
+      subLabels: LabelLineageEdge[];
     }
   | { status: "missing" };
 
@@ -134,6 +143,8 @@ export async function resolveLabelPageData(
     catalogue,
     discogsLabelId: label.discogsLabelId,
     findings,
+    foundedLocation: label.foundedLocation,
+    foundingDate: label.foundingDate,
     // Thin-content gate: index only past LABEL_INDEX_MIN_TRACKS RENDERABLE tracks — the
     // findings PLUS the quieter rows, because both are real content on the page, and a page is
     // thin or not thin on what it renders, never on who wrote it. Below the floor the page
@@ -144,9 +155,11 @@ export async function resolveLabelPageData(
     logoImageUrl: label.logoImageUrl,
     mbLabelId: label.mbLabelId,
     name: label.name,
+    parentLabel: label.parentLabel,
     slug: label.slug,
     sort,
     status: "found",
+    subLabels: label.subLabels ?? [],
   };
 }
 
@@ -175,11 +188,15 @@ function labelHead(loaderData: LabelPageData | undefined) {
     catalogue,
     discogsLabelId,
     findings,
+    foundedLocation,
+    foundingDate,
     indexable,
     logoImageUrl,
     mbLabelId,
     name,
+    parentLabel,
     slug,
+    subLabels,
   } = loaderData;
   // The canonical is SELF-REFERENCING PER PAGE (page 2 is its own page, not a duplicate of page
   // 1) but SORT-COLLAPSING: it always drops the sort param, so `?sort=recent` and the default
@@ -242,11 +259,17 @@ function labelHead(loaderData: LabelPageData | undefined) {
           artists,
           bio,
           discogsLabelId,
+          // The founding facts + imprint hierarchy (RFC label-lineage-remixer U1) → the
+          // Organization's `foundingDate` / `location` / `parentOrganization` / `subOrganization`.
+          foundingDate,
+          location: foundedLocation,
           // The label's own logo becomes the Organization's `logo` (it was only the OG image before).
           logoImageUrl,
           mbLabelId,
           name,
+          parentOrganization: parentLabel,
           slug,
+          subOrganizations: subLabels,
           tracks: graphPageTracks(findings, flattenArtistGroups(catalogue.groups)),
         }),
       ),
@@ -294,6 +317,29 @@ function sortParam(value: unknown): CatalogueSort | undefined {
   return value === "name" || value === "recent" ? value : undefined;
 }
 
+/**
+ * The label's dossier dateline (reference register): "Founded 1996 · London" (date + place),
+ * "Founded 1996" (date only), or the bare place. Undefined when the label carries neither, so the
+ * masthead renders nothing. The founding date is shown as its YEAR (the verbatim value on the row —
+ * a year or a full date — rides the JSON-LD `foundingDate`, but the visible line stays terse).
+ */
+function labelDateline(
+  foundingDate: string | undefined,
+  foundedLocation: string | undefined,
+): string | undefined {
+  const year = foundingDate?.slice(0, 4);
+
+  if (year && foundedLocation) {
+    return `Founded ${year} · ${foundedLocation}`;
+  }
+
+  if (year) {
+    return `Founded ${year}`;
+  }
+
+  return foundedLocation;
+}
+
 function LabelPage() {
   const data = Route.useLoaderData();
   const navigate = Route.useNavigate();
@@ -302,7 +348,9 @@ function LabelPage() {
     return null;
   }
 
-  const { artists, bio, catalogue, findings, name, slug, sort } = data;
+  const { artists, bio, catalogue, findings, foundedLocation, foundingDate, name, slug, sort } =
+    data;
+  const dateline = labelDateline(foundingDate, foundedLocation);
 
   return (
     <main className="log-plate-stage">
@@ -312,6 +360,9 @@ function LabelPage() {
           {/* The dossier bio is the masthead's prose — the reference register (the Three Areas
               Rule; the first-person signature line is retired). Rendered once authored. */}
           {bio ? <p className="log-index-bio">{bio}</p> : undefined}
+          {/* One quiet reference-register line: where and when the label started (label-lineage
+              sweep, U1). Rendered only when MusicBrainz carried a founding date or place. */}
+          {dateline ? <p className="log-index-dateline">{dateline}</p> : undefined}
         </header>
 
         {/* Every band below is conditional: an empty one renders nothing at all, so this page

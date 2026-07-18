@@ -37,7 +37,7 @@
 // worklist can back a missed row off (track-work.ts `ANCHOR_REASK_AFTER_DAYS`) instead of re-asking
 // it every tick (each re-ask is a billed Apify search). See docs/catalogue-crawler.md § the anchor.
 
-import { parseArtistsJson, upsertTrackArtists } from "./artists";
+import { parseArtistsJson, stampRemixerRoles, upsertTrackArtists } from "./artists";
 import { getDb, typedRows } from "./db";
 import { logEvent } from "./log";
 import { matchKey } from "./track-match";
@@ -163,6 +163,9 @@ export async function connectAnchorArtists(
 
   try {
     await upsertTrackArtists(trackId, artistNames, spotifyArtistIds, { fillImages: false });
+    // A newly-anchored crawled remix may have just minted the remixer's `artists` row by its stable
+    // Spotify id — so stamp the remixer credit now the link exists (RFC label-lineage-remixer, U2).
+    await stampRemixerRoles([trackId]);
   } catch (error) {
     logEvent("warn", "anchor.artist-link-failed", { error, trackId });
   }

@@ -335,6 +335,68 @@ export const backfillLabelImages = oc
     }),
   );
 
+/** A failed label-lineage row (`{ error, slug }`). */
+const LabelLineageBackfillFailedSchema = z
+  .object({
+    error: z.string(),
+    slug: z.string(),
+  })
+  .meta({ id: "LabelLineageBackfillFailed" });
+
+/**
+ * `backfill_label_lineage` → `POST /admin/backfill/label-lineage` (operationId
+ * `backfillLabelLineage`).
+ *
+ * Agent tier (`adminAuth`): internal + reversible metadata enrichment (RFC label-lineage-remixer,
+ * U1). It gives each label its FOUNDING facts + its place in the imprint hierarchy from MusicBrainz
+ * — `life-span.begin` → `founding_date`, `area.name` → `founded_location`, and the `backward`
+ * `label ownership` / `imprint` label-rels → `parent_label_id` (matched to an EXISTING label by
+ * MBID; NEVER minted). One bounded, reliability-gated pass over the `labels` worklist (its own
+ * `lineage_state` machine, so it reaches every label the image sweep already retired), the
+ * `backfill_label_images` precedent. Returns `{ ok, dryRun, resolved, resolvedCount, none,
+ * noneCount, failed, failedCount, unmatchedParents, nextCursor, rateLimited }` — `unmatchedParents`
+ * is the parent edges MusicBrainz named but no archive row carries (noted, never minted).
+ */
+export const backfillLabelLineage = oc
+  .route({
+    inputStructure: "detailed",
+    method: "POST",
+    operationId: "backfillLabelLineage",
+    path: "/admin/backfill/label-lineage",
+    summary:
+      "Resolve label lineage (founding date, place, parent imprint) from MusicBrainz (batched)",
+    tags: ["Admin"],
+  })
+  .input(
+    z.object({
+      query: z.object({
+        cursor: z.string().optional(),
+        dryRun: z.string().optional(),
+        limit: z.string().optional(),
+      }),
+    }),
+  )
+  .output(
+    z.object({
+      dryRun: z.boolean(),
+      failed: z.array(LabelLineageBackfillFailedSchema),
+      failedCount: z.number(),
+      nextCursor: z.string().nullable(),
+      // Labels with no MusicBrainz identity to walk — terminal, so they never re-resolve.
+      none: z.array(z.string()),
+      noneCount: z.number(),
+      ok: z.literal(true),
+      // True when the pass STOPPED on the MusicBrainz rate-limit circuit breaker — the CLI stops
+      // looping the cursor and the next tick resumes with a fresh window.
+      rateLimited: z.boolean(),
+      resolved: z.array(z.string()),
+      resolvedCount: z.number(),
+      // Backward parent edges MusicBrainz named but no archive label carries by MBID — noted for
+      // the operator, NEVER minted from this path.
+      unmatchedParents: z.number(),
+    }),
+  );
+
 /** A failed cover-master row (`{ error, slug }`). */
 const CoverMastersFailedSchema = z
   .object({
@@ -465,6 +527,7 @@ export const adminBackfillsContract = {
   backfill_cover_masters: backfillCoverMasters,
   backfill_discogs: backfillDiscogs,
   backfill_label_images: backfillLabelImages,
+  backfill_label_lineage: backfillLabelLineage,
   backfill_lastfm: backfillLastfm,
   backfill_recording_mbids: backfillRecordingMbids,
 };

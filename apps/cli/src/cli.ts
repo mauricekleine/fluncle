@@ -2504,6 +2504,20 @@ function addAdminCommands(program: Command): void {
       await runBackfillLabelImages(options, backfillLabelImagesCommand);
     });
 
+  // `backfill_label_lineage` → `admin backfills label-lineage`. Gives each label its founding facts
+  // (date, place) + its parent imprint from MusicBrainz (life-span + area + label-rels), matched to
+  // an existing label — never minting one.
+  backfill
+    .command("label-lineage")
+    .description("Resolve label lineage (founding date, place, parent imprint) from MusicBrainz")
+    .option("--dry-run", "Report the eligible worklist without any vendor call or write", false)
+    .option("--limit <limit>", "Max labels to process", "50")
+    .option("--json", "Print JSON", false)
+    .action(async (options: BackfillSyncOptions) => {
+      const { backfillLabelLineageCommand } = await import("./commands/admin-labels");
+      await runBackfillLabelLineage(options, backfillLabelLineageCommand);
+    });
+
   // `backfill_recording_mbids` → `admin backfills recording-mbids`. The MusicBrainz identity layer:
   // gives each track its canonical MusicBrainz recording MBID (a free PK strip of crawler-born rows,
   // then an ISRC→recording resolve of findings/Spotify-born rows through the shared MB client).
@@ -3903,6 +3917,89 @@ async function runBackfillCoverMasters(
   const verb = dryRun ? "Would resolve" : "Resolved";
   console.log(
     `${verb} ${resolved.length} ${kind} cover master(s); ${none.length} without a source; ${failed.length} failed.`,
+  );
+
+  for (const slug of resolved) {
+    console.log(`  ${slug}`);
+  }
+
+  for (const item of failed) {
+    console.log(`  ${item.slug}: ${item.error}`);
+  }
+
+  if (failed.length > 0) {
+    process.exitCode = 1;
+  }
+}
+
+async function runBackfillLabelLineage(
+  options: BackfillSyncOptions,
+  backfillLabelLineageCommand: typeof import("./commands/admin-labels").backfillLabelLineageCommand,
+): Promise<void> {
+  const limit = parseListLimit(options.limit);
+  const resolved: string[] = [];
+  const none: string[] = [];
+  const failed: Array<{ error: string; slug: string }> = [];
+  let cursor: string | undefined;
+  let dryRun = options.dryRun;
+  let throttled = false;
+  let unmatchedParents = 0;
+
+  // The cap is on labels actually HANDLED (resolved + none + failed); the loop drains cursors until
+  // the cap is met, the worklist is exhausted (nextCursor null), or MusicBrainz throttles.
+  while (resolved.length + none.length + failed.length < limit) {
+    const remaining = limit - (resolved.length + none.length + failed.length);
+    const result = await backfillLabelLineageCommand(remaining, options.dryRun, cursor);
+    dryRun = result.dryRun;
+    resolved.push(...result.resolved);
+    none.push(...result.none);
+    failed.push(...result.failed);
+    unmatchedParents += result.unmatchedParents;
+
+    if (!options.json) {
+      const verb = result.dryRun ? "would walk" : "walked";
+      console.log(
+        `  …${verb} ${result.resolvedCount}; ${result.noneCount} with no MusicBrainz identity; ${result.failedCount} failed; ${result.unmatchedParents} unmatched parent(s)`,
+      );
+    }
+
+    if (result.rateLimited) {
+      // MusicBrainz circuit breaker tripped. Stop looping the cursor — the next tick resumes fresh.
+      throttled = true;
+      break;
+    }
+
+    if (result.nextCursor === null) {
+      break;
+    }
+
+    cursor = result.nextCursor;
+  }
+
+  if (options.json) {
+    printJson({
+      dryRun,
+      failed,
+      failedCount: failed.length,
+      none,
+      noneCount: none.length,
+      ok: true,
+      rateLimited: throttled,
+      resolved,
+      resolvedCount: resolved.length,
+      unmatchedParents,
+    });
+
+    if (failed.length > 0) {
+      process.exitCode = 1;
+    }
+
+    return;
+  }
+
+  const verb = dryRun ? "Would walk" : "Walked";
+  console.log(
+    `${verb} ${resolved.length} label lineage(s); ${none.length} with no MusicBrainz identity; ${failed.length} failed; ${unmatchedParents} unmatched parent(s).`,
   );
 
   for (const slug of resolved) {

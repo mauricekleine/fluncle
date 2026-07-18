@@ -77,3 +77,42 @@ export async function backfillLabelImagesCommand(
     `/api/admin/backfill/label-images?${params.toString()}`,
   );
 }
+
+export type LabelLineageBackfillResult = {
+  dryRun: boolean;
+  failed: Array<{ error: string; slug: string }>;
+  failedCount: number;
+  // The slug cursor to resume from, or null when the worklist is drained (or a MusicBrainz throttle
+  // stopped the pass). Each pass handles a bounded batch, so the CLI loops until null.
+  nextCursor: string | null;
+  // Labels with no MusicBrainz identity to walk — terminal, so they never re-resolve.
+  none: string[];
+  noneCount: number;
+  ok: boolean;
+  rateLimited: boolean;
+  resolved: string[];
+  resolvedCount: number;
+  // Backward parent edges MusicBrainz named but no archive label carries by MBID — noted, never minted.
+  unmatchedParents: number;
+};
+
+// One bounded pass of the label-lineage fill sweep (RFC label-lineage-remixer, U1) via the admin
+// API. The Worker walks each pending label's MusicBrainz life-span + area + label-rels and writes
+// its founding date/place + parent imprint (matched to an existing label — never minting one).
+// `--dry-run` reports the eligible worklist without a vendor call or write. Pass the prior
+// `nextCursor` to resume; the CLI loops until it comes back null.
+export async function backfillLabelLineageCommand(
+  limit: number,
+  dryRun: boolean,
+  cursor?: string,
+): Promise<LabelLineageBackfillResult> {
+  const params = new URLSearchParams({ dryRun: String(dryRun), limit: String(limit) });
+
+  if (cursor) {
+    params.set("cursor", cursor);
+  }
+
+  return adminApiPost<LabelLineageBackfillResult>(
+    `/api/admin/backfill/label-lineage?${params.toString()}`,
+  );
+}

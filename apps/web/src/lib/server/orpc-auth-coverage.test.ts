@@ -224,6 +224,10 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // (Discogs → Wikidata) into R2, publishes nothing, so the box's agent-token cron drives it,
   // the `backfill_discogs` precedent.
   backfill_label_images: "admin",
+  // The label-lineage resolve sweep — agent tier (adminAuth only): it writes a label's founding
+  // facts + parent imprint onto the `labels` row (never mints a label, publishes nothing), so the
+  // box's agent-token cron drives it, the `backfill_label_images` precedent.
+  backfill_label_lineage: "admin",
   backfill_lastfm: "admin",
   // The MusicBrainz recording-MBID fill — agent tier (adminAuth only): the MusicBrainz identity
   // layer. It writes catalogue identity only (an MBID on `tracks`), never a certification, so the

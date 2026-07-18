@@ -22,6 +22,7 @@ import {
   confirmLabelAlias,
   ensureLabel,
   getConfirmedAliasNames,
+  getLabelBySlug,
   isDistributorLabel,
   labelSlug,
   LabelNotFoundError,
@@ -686,5 +687,69 @@ describe("letterPages (the A–Z lane's page math)", () => {
 
   it("is empty for an empty hub", () => {
     expect(letterPages([], 48)).toEqual([]);
+  });
+});
+
+describe("getLabelBySlug lineage edges (RFC label-lineage-remixer U1)", () => {
+  /** Seed a label row directly (the crawler/lineage-sweep write shape, minus the sweep). */
+  async function seedLabelRow(opts: {
+    foundedLocation?: string;
+    foundingDate?: string;
+    name: string;
+    parentSlug?: string;
+    slug: string;
+  }): Promise<void> {
+    const now = new Date().toISOString();
+    await db.execute({
+      args: [
+        `lbl_${opts.slug}`,
+        opts.name,
+        opts.slug,
+        opts.foundingDate ?? null,
+        opts.foundedLocation ?? null,
+        opts.parentSlug ? `lbl_${opts.parentSlug}` : null,
+        now,
+        now,
+      ],
+      sql: `insert into labels
+              (id, name, slug, founding_date, founded_location, parent_label_id, created_at, updated_at)
+            values (?, ?, ?, ?, ?, ?, ?, ?)`,
+    });
+  }
+
+  it("returns the founding facts, the parent edge, and the sublabels", async () => {
+    await seedLabelRow({
+      foundedLocation: "London",
+      foundingDate: "1996-04-29",
+      name: "Hospital Records",
+      slug: "hospital-records",
+    });
+    await seedLabelRow({
+      foundedLocation: "United Kingdom",
+      foundingDate: "2006",
+      name: "Med School",
+      parentSlug: "hospital-records",
+      slug: "med-school",
+    });
+
+    const child = await getLabelBySlug("med-school");
+    expect(child?.foundingDate).toBe("2006");
+    expect(child?.foundedLocation).toBe("United Kingdom");
+    expect(child?.parentLabel).toEqual({ name: "Hospital Records", slug: "hospital-records" });
+    expect(child?.subLabels).toEqual([]);
+
+    const parent = await getLabelBySlug("hospital-records");
+    expect(parent?.parentLabel).toBeUndefined();
+    expect(parent?.subLabels).toEqual([{ name: "Med School", slug: "med-school" }]);
+  });
+
+  it("carries no lineage when the label has none", async () => {
+    await seedLabelRow({ name: "Bare Label", slug: "bare-label" });
+
+    const label = await getLabelBySlug("bare-label");
+    expect(label?.foundingDate).toBeUndefined();
+    expect(label?.foundedLocation).toBeUndefined();
+    expect(label?.parentLabel).toBeUndefined();
+    expect(label?.subLabels).toEqual([]);
   });
 });

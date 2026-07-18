@@ -691,3 +691,103 @@ describe("mixtapeAlbumJsonLd", () => {
     expect(jsonLd.numTracks).toBe(0);
   });
 });
+
+describe("musicRecordingJsonLd remixer contributor (RFC label-lineage-remixer U2)", () => {
+  it("emits the remixer as a schema.org contributor Role when the title names a credited artist", () => {
+    // The base fixture is "Nobody Else - 1991 Remix" credited to ["Axwell", "1991"], so 1991 is the
+    // remixer — the folded descriptor name matches a linked artist exactly.
+    const jsonLd = musicRecordingJsonLd(track, "https://img/cover.jpg");
+
+    expect(jsonLd.contributor).toEqual([
+      {
+        "@type": "Role",
+        contributor: { "@type": "MusicGroup", name: "1991" },
+        roleName: "remixer",
+      },
+    ]);
+  });
+
+  it("stamps the remixer's @id when it resolves to a known artist entity", () => {
+    const jsonLd = musicRecordingJsonLd(
+      { ...track, artistSlugs: { "1991": "1991" } },
+      "https://img/cover.jpg",
+    );
+
+    expect(jsonLd.contributor).toEqual([
+      {
+        "@type": "Role",
+        contributor: {
+          "@id": "https://www.fluncle.com/artist/1991",
+          "@type": "MusicGroup",
+          name: "1991",
+        },
+        roleName: "remixer",
+      },
+    ]);
+  });
+
+  it("omits contributor for a non-remix title (byte-identical to before)", () => {
+    const jsonLd = musicRecordingJsonLd(
+      { ...track, artists: ["Axwell"], title: "Nobody Else" },
+      "https://img/cover.jpg",
+    );
+
+    expect(jsonLd).not.toHaveProperty("contributor");
+  });
+
+  it("omits contributor when the remixer is not one of the track's credited artists", () => {
+    const jsonLd = musicRecordingJsonLd(
+      { ...track, artists: ["Axwell"], title: "Nobody Else (Calibre Remix)" },
+      "https://img/cover.jpg",
+    );
+
+    expect(jsonLd).not.toHaveProperty("contributor");
+  });
+});
+
+describe("recordLabelJsonLd lineage (RFC label-lineage-remixer U1)", () => {
+  const base = {
+    artists: [],
+    name: "Med School",
+    slug: "med-school",
+    tracks: [],
+  };
+
+  it("emits foundingDate, a location Place, and the parent/sub Organization @id edges", () => {
+    const jsonLd = recordLabelJsonLd({
+      ...base,
+      foundingDate: "2006",
+      location: "United Kingdom",
+      parentOrganization: { name: "Hospital Records", slug: "hospital-records" },
+      subOrganizations: [{ name: "Med School Sampler", slug: "med-school-sampler" }],
+    });
+
+    const org = jsonLd.about as Record<string, unknown>;
+
+    expect(org.foundingDate).toBe("2006");
+    expect(org.location).toEqual({ "@type": "Place", name: "United Kingdom" });
+    expect(org.parentOrganization).toEqual({
+      "@id": "https://www.fluncle.com/label/hospital-records#organization",
+      "@type": "Organization",
+      name: "Hospital Records",
+      url: "https://www.fluncle.com/label/hospital-records",
+    });
+    expect(org.subOrganization).toEqual([
+      {
+        "@id": "https://www.fluncle.com/label/med-school-sampler#organization",
+        "@type": "Organization",
+        name: "Med School Sampler",
+        url: "https://www.fluncle.com/label/med-school-sampler",
+      },
+    ]);
+  });
+
+  it("omits every lineage key when the label carries none (byte-identical to before)", () => {
+    const org = recordLabelJsonLd(base).about as Record<string, unknown>;
+
+    expect(org).not.toHaveProperty("foundingDate");
+    expect(org).not.toHaveProperty("location");
+    expect(org).not.toHaveProperty("parentOrganization");
+    expect(org).not.toHaveProperty("subOrganization");
+  });
+});

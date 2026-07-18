@@ -5,7 +5,7 @@ export type { PublishTrackResult };
 
 import { logPageUrl } from "../fluncle-links";
 import { formatDuration } from "../format";
-import { parseArtistsJson, upsertTrackArtists } from "./artists";
+import { parseArtistsJson, stampRemixerRoles, upsertTrackArtists } from "./artists";
 import { postToBluesky } from "./bluesky";
 import { getDb, typedRow } from "./db";
 import { enrichFromDeezer, lookupIsrcFromDeezer } from "./deezer";
@@ -257,6 +257,10 @@ No database, Spotify, or Telegram changes were made. Enrichment (label, preview)
   // channels; the backfill covers any rows a failed call leaves behind.
   try {
     await upsertTrackArtists(track.trackId, track.artists, track.spotifyArtistIds);
+    // Stamp any remixer credit the title names (RFC label-lineage-remixer, U2) now the edge exists,
+    // so a "(X Remix)" whose remixer folds to a linked artist is credited as a schema.org
+    // contributor Role on the /log MusicRecording. Rides the same best-effort try.
+    await stampRemixerRoles([track.trackId]);
   } catch (artistError) {
     logEvent("warn", "publish.artist-upsert-failed", {
       error: artistError,

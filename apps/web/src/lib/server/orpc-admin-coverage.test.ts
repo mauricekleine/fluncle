@@ -276,6 +276,10 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "POST /admin/backfill/cover-masters": "backfill_cover_masters",
   "POST /admin/backfill/discogs": "backfill_discogs",
   "POST /admin/backfill/label-images": "backfill_label_images",
+  // The label-lineage fill (founding date/place + parent imprint from MusicBrainz) — contract-only
+  // oRPC (no TanStack route file). ADMIN tier (agent-allowed): the on-box `fluncle-label-lineage`
+  // sweep drives it with the agent token, the `backfill_label_images` precedent.
+  "POST /admin/backfill/label-lineage": "backfill_label_lineage",
   "POST /admin/backfill/lastfm": "backfill_lastfm",
   // The MusicBrainz recording-MBID fill (the MusicBrainz identity layer) — contract-only oRPC (no
   // TanStack route file). ADMIN tier (agent-allowed): the on-box `fluncle-recording-mbids` sweep

@@ -2,7 +2,7 @@ import { fluncleEntityId, logPageUrl, siteUrl } from "./fluncle-links";
 import { formatIsoDuration } from "./format";
 import { artistTitleLine, definitionalProse, type LogProseInput } from "./log-prose";
 import { type MixtapeDTO } from "./mixtapes";
-import { fold } from "./server/track-match";
+import { deriveRemixerNames, fold } from "./server/track-match";
 
 // Re-exported for callers that have always reached the log-URL builder through
 // the log schema; the canonical definition now lives in fluncle-links.
@@ -59,6 +59,25 @@ function byArtistNode(
     : { "@type": "MusicGroup", name };
 }
 
+// The REMIXER credit (RFC label-lineage-remixer, U2) → schema.org `contributor` nodes. A remix
+// title ("(Calibre Remix)") names its remixer; `deriveRemixerNames` returns only the credited
+// artists it EXACTLY folds to (never a guess). Each becomes the schema.org-canonical Role pattern
+// (schema.org/docs/roles.html): the `contributor` property points at a `Role` that carries a
+// `roleName` and REPEATS `contributor` for the actual entity — the MusicGroup node (with its
+// `@id` when the remixer is a known artist, the same cross-page anchor `byArtist` uses). Empty
+// (the key is omitted) for a non-remix, or a remixer with no `artists` row — the honest degrade.
+function remixerContributorNodes(
+  title: string,
+  artists: string[],
+  artistSlugs: Record<string, string> | undefined,
+): Record<string, unknown>[] {
+  return deriveRemixerNames(title, artists).map((name) => ({
+    "@type": "Role",
+    contributor: byArtistNode(name, artistSlugs),
+    roleName: "remixer",
+  }));
+}
+
 /**
  * The finding's MEASURED tempo + key, modelled as the composition this recording is
  * of (`recordingOf` → `MusicComposition`, both native schema.org). Fluncle measures
@@ -104,11 +123,16 @@ export function musicRecordingJsonLd(
   imageUrl: string,
 ): Record<string, unknown> {
   const recordingOf = measuredCompositionNode(track);
+  const contributors = remixerContributorNodes(track.title, track.artists, track.artistSlugs);
 
   return {
     "@context": "https://schema.org",
     "@type": "MusicRecording",
     byArtist: track.artists.map((artist) => byArtistNode(artist, track.artistSlugs)),
+    // The remixer credit, when the title names one (a schema.org `contributor` Role). Additive to
+    // `byArtist` — the remixer both performs the recording and holds the remixer role. Omitted
+    // entirely for a non-remix, so a normal finding is byte-identical to before.
+    ...(contributors.length > 0 ? { contributor: contributors } : {}),
     datePublished: track.addedAt.slice(0, 10),
     description: definitionalProse(track),
     duration: formatIsoDuration(track.durationMs),
@@ -561,12 +585,17 @@ function trackItemList(
     "@type": "ItemList",
     itemListElement: tracks.map((track, index) => {
       const url = track.logId ? logPageUrl(track.logId) : track.spotifyUrl;
+      const contributors = remixerContributorNodes(track.title, track.artists, artistSlugs);
 
       return {
         "@type": "ListItem",
         item: {
           "@type": "MusicRecording",
           byArtist: track.artists.map((name) => byArtistNode(name, artistSlugs)),
+          // The remixer credit, when the title names one (a schema.org `contributor` Role) —
+          // the same derivation the /log recording carries, applied per tracklist item. Omitted
+          // entirely for a non-remix.
+          ...(contributors.length > 0 ? { contributor: contributors } : {}),
           // The finding's per-track facts (G1): its ISO-8601 length, its ISRC, and its release
           // date. Present on findings only — a quieter catalogue row carries none of them, so
           // the keys are omitted rather than emitted null (schema that contradicts the page gets
@@ -617,6 +646,17 @@ export type RecordLabelInput = {
    */
   discogsLabelId?: number;
   /**
+   * The label's founding date (`labels.founding_date`, MusicBrainz `life-span.begin` verbatim — a
+   * year or a full date). Emitted as the Organization's `foundingDate` (schema.org accepts either).
+   * Absent ⇒ omitted (the label-lineage sweep, RFC label-lineage-remixer U1).
+   */
+  foundingDate?: string;
+  /**
+   * The label's founding place (`labels.founded_location`, MusicBrainz `area.name`). Emitted as the
+   * Organization's `location` (a `Place` node). Absent ⇒ omitted.
+   */
+  location?: string;
+  /**
    * The label's OWN logo (its resolved image on R2, `labels.image_key` → a served URL), emitted as
    * the Organization's `logo`. Currently only powers the page's OG image; here it becomes part of
    * the entity itself. Absent ⇒ omitted.
@@ -628,9 +668,31 @@ export type RecordLabelInput = {
    */
   mbLabelId?: string;
   name: string;
+  /**
+   * The imprint this label belongs to (`labels.parent_label_id` → name + slug). Emitted as the
+   * Organization's `parentOrganization`, an `@id` edge to the parent's own `#organization` node —
+   * so a crawler reconciles the imprint hierarchy to one graph. Absent ⇒ omitted.
+   */
+  parentOrganization?: { name: string; slug: string };
   slug: string;
+  /**
+   * The sublabels / imprints OF this label (the `parent_label_id` reverse read). Emitted as the
+   * Organization's `subOrganization` `@id` edges (both directions of the hierarchy where
+   * derivable). Absent/empty ⇒ omitted.
+   */
+  subOrganizations?: { name: string; slug: string }[];
   tracks: GraphPageTrack[];
 };
+
+// A parent/sublabel edge → the related label's Organization `@id` node (`<labelPageUrl>#organization`,
+// the exact id `recordLabelJsonLd` mints for the label's own node), so `parentOrganization` /
+// `subOrganization` reconcile to one graph across the imprint hierarchy — the album→label
+// `recordLabel` edge's shape, one entity kind over.
+function labelOrganizationEdge(edge: { name: string; slug: string }): Record<string, unknown> {
+  const url = labelPageUrl(edge.slug);
+
+  return { "@id": `${url}#organization`, "@type": "Organization", name: edge.name, url };
+}
 
 /** The label Organization's off-site identity anchors → its `sameAs` (MusicBrainz, then Discogs). */
 function labelOrganizationSameAs(label: RecordLabelInput): string[] {
@@ -658,6 +720,7 @@ export function recordLabelJsonLd(label: RecordLabelInput): Record<string, unkno
   const pageUrl = labelPageUrl(label.slug);
   const alternateNames = label.alternateNames ?? [];
   const sameAs = labelOrganizationSameAs(label);
+  const subOrganizations = label.subOrganizations ?? [];
 
   return {
     "@context": "https://schema.org",
@@ -675,13 +738,27 @@ export function recordLabelJsonLd(label: RecordLabelInput): Record<string, unkno
       // The factual bio mirrors the page's visible definitional paragraph — omitted cleanly
       // (never `description: null`) until one is authored.
       ...(label.bio ? { description: label.bio } : {}),
+      // The founding facts (the label-lineage sweep, RFC label-lineage-remixer U1): the date rides
+      // schema.org's native `foundingDate`; the place rides a `location` Place node. Each omitted
+      // cleanly when MusicBrainz carried none.
+      ...(label.foundingDate ? { foundingDate: label.foundingDate } : {}),
+      ...(label.location ? { location: { "@type": "Place", name: label.location } } : {}),
       // The label's OWN logo (its resolved R2 image) as the Organization's `logo` — it was only an
       // OG image before; here it becomes part of the entity a crawler reads. Omitted when unresolved.
       ...(label.logoImageUrl ? { logo: label.logoImageUrl } : {}),
       name: label.name,
+      // The imprint hierarchy, both directions where derivable: `parentOrganization` (the label this
+      // is an imprint of) and `subOrganization` (its own sublabels), each an `@id` edge to the
+      // related label's own Organization node. Omitted when the edge is absent.
+      ...(label.parentOrganization
+        ? { parentOrganization: labelOrganizationEdge(label.parentOrganization) }
+        : {}),
       // The off-site identity anchors (MusicBrainz, Discogs) — the label's `sameAs`, the imprint
       // twin of the artist entity's identity graph. Omitted entirely when the label carries none.
       ...(sameAs.length > 0 ? { sameAs } : {}),
+      ...(subOrganizations.length > 0
+        ? { subOrganization: subOrganizations.map(labelOrganizationEdge) }
+        : {}),
       url: pageUrl,
     },
     mainEntity: trackItemList(label.tracks, foldArtistSlugs(label.artists)),
