@@ -55,7 +55,7 @@ const faq: Array<{ answer: string; question: string }> = [
   },
   {
     answer:
-      "A Log ID is a finding's permanent coordinate in the Galaxy, written sector.orbit.mark. In 004.7.2I, the sector 004 counts the days between the epoch (2026-05-30) and the day the finding was made, and the tail 7.2I is a stable signature derived from the recording itself, so a coordinate reads found, not numbered. Each one is minted once, never reassigned, and resolves to a log page at fluncle.com/log/004.7.2I.",
+      "A Log ID is a finding's permanent coordinate in the Galaxy, written sector.orbit.mark. In 004.7.2I, the sector 004 counts the days between the epoch (2026-05-30) and the day the finding was made, and the tail 7.2I is a stable signature derived from the recording itself, so a coordinate reads found, not numbered. Each one is stamped once, never reassigned, and resolves to a log page at fluncle.com/log/004.7.2I.",
     question: "What does a Log ID like 004.7.2I mean?",
   },
   {
@@ -266,7 +266,7 @@ function AboutPage() {
             number of days between the epoch, 2026-05-30, and the day the finding was made.{" "}
             <span className="log-decode-part">7.2I</span> is the tail: a stable signature derived
             from the recording itself, so a coordinate reads found, not numbered. The bare form and
-            the full form, fluncle://004.7.2I, point at the same log page. Coordinates are minted
+            the full form, fluncle://004.7.2I, point at the same log page. Coordinates are stamped
             once and never reassigned.
           </p>
         </section>

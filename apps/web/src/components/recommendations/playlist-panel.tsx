@@ -387,7 +387,7 @@ export function PlaylistPanel({
 }
 
 const MINT_MESSAGE: Record<"minted" | "refreshed" | "unchanged", string> = {
-  minted: "Minted. It's on your Spotify.",
+  minted: "Done. It's on your Spotify.",
   refreshed: "Refreshed with your latest picks.",
   unchanged: "Already up to date.",
 };

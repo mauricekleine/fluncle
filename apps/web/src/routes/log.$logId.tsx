@@ -558,8 +558,8 @@ function LogPage() {
             <span className="log-decode-part">{sector}</span> is the sector: the days between the
             epoch, 2026-05-30, and the day this one was found.{" "}
             <span className="log-decode-part">{tail}</span> is the tail: a stable signature of the
-            recording itself, so a coordinate reads found, not numbered. Minted once, never changed.{" "}
-            <Link to="/about">More on Log IDs and the Galaxy</Link>.
+            recording itself, so a coordinate reads found, not numbered. Stamped once, never
+            changed. <Link to="/about">More on Log IDs and the Galaxy</Link>.
           </p>
         </section>
 
@@ -750,7 +750,7 @@ function MixtapeLogPage({ mixtape }: { mixtape: MixtapeDTO }) {
             <span className="log-decode-part">{sector}</span> is the sector: the days between the
             epoch, 2026-05-30, and the day this set was recorded.{" "}
             <span className="log-decode-part">F</span> marks a mixtape.{" "}
-            <span className="log-decode-part">{tail}</span> is its checkpoint number, minted once
+            <span className="log-decode-part">{tail}</span> is its checkpoint number, stamped once
             and never changed. <Link to="/about">More on Log IDs and the Galaxy</Link>.
           </p>
         </section>
