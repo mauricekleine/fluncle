@@ -56,19 +56,28 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// The serializer: each call runs after the previous one settles, plus the pacing gap.
-// A failure never wedges the chain (both arms advance the gate).
-let tail: Promise<unknown> = Promise.resolve();
+// The pacing gate. Workers-safe by construction: slots are allocated SYNCHRONOUSLY from a
+// module-level timestamp (the isolate is single-threaded, so the read-modify-write below is
+// atomic), and each caller sleeps out its own wait with a timer in its OWN request context.
+//
+// The previous design — a module-level promise chain with a delay() between links — wedged the
+// whole isolate: a link whose request context died (client disconnect, timeout) left behind a
+// timer the runtime never fires (Workers freeze a completed request's timers), so every later
+// MB caller on that isolate queued behind it FOREVER. Observed 2026-07-18: one timed-out
+// label-lineage tick poisoned its isolate, and every wet retry that reused the connection (same
+// isolate) hung until the client gave up — which grew the frozen chain further. With slot
+// allocation, a dead caller merely wastes its slot; nobody ever awaits another request's
+// promises or timers.
+let nextSlotAt = 0;
 
 function throttle<T>(call: () => Promise<T>): Promise<T> {
-  const result = tail.then(call, call);
+  const now = Date.now();
+  const slotAt = Math.max(now, nextSlotAt);
+  nextSlotAt = slotAt + rateLimitIntervalMs;
 
-  tail = result.then(
-    () => delay(rateLimitIntervalMs),
-    () => delay(rateLimitIntervalMs),
-  );
+  const wait = slotAt - now;
 
-  return result;
+  return wait > 0 ? delay(wait).then(call) : call();
 }
 
 /** What one MB call returns: the parsed body, or null — plus whether MB throttled us. */
@@ -103,7 +112,9 @@ export function mbFetch<T>(path: string): Promise<MbResult<T>> {
         return { data: null, rateLimited: false };
       }
 
-      // 503 is MB's "slow down" — honour Retry-After and try again within this slot.
+      // 503 is MB's "slow down" — honour Retry-After and try again within this slot. Push the
+      // slot clock forward too, so OTHER callers (whose slots were pre-allocated) also hold off
+      // for MB's cooldown — the global-backoff property the old serialized chain gave for free.
       if (response.status === 503 && attempt < 2) {
         const retryAfter = Number(response.headers.get("Retry-After")) || 2;
         logEvent("warn", "musicbrainz.retry", {
@@ -112,6 +123,11 @@ export function mbFetch<T>(path: string): Promise<MbResult<T>> {
           retryAfterSeconds: retryAfter,
           status: 503,
         });
+
+        if (rateLimitIntervalMs !== 0) {
+          nextSlotAt = Math.max(nextSlotAt, Date.now() + retryAfter * 1000);
+        }
+
         await delay(rateLimitIntervalMs === 0 ? 0 : retryAfter * 1000);
         continue;
       }
