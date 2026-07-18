@@ -33,7 +33,7 @@ const fetchFresh = createServerFn({ method: "GET" }).handler(
 
 const title = "New drum & bass releases · Fluncle";
 const description =
-  "The newest drum & bass, freshest first. Every release out across the last 30 days, charted in Fluncle's Galaxy.";
+  "The freshest drum & bass, hot off the press. Every release from the last 30 days, tracked as Fluncle spins his way through them.";
 
 /**
  * The page's JSON-LD: an `ItemList` of the rendered tracks as `MusicRecording`s, bounded to what
@@ -117,8 +117,8 @@ function FreshPage() {
           <p className="log-nameplate">Fluncle's Findings</p>
           <h1 className="log-coordinate log-index-title">Fresh</h1>
           <p className="log-index-intro">
-            The newest drum &amp; bass across the frontier, freshest first. What just came out of
-            the pressing plants, not what I&rsquo;ve found yet. The last {data.windowDays} days.
+            The freshest bangers in the sector, hot off the press. Everything here dropped in the
+            last {data.windowDays} days. Still spinning my way through them.
           </p>
         </header>
 
