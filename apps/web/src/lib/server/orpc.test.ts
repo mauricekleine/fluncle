@@ -613,6 +613,9 @@ const PUBLIC_OPERATION_IDS = [
   // Hydrate a whole shared `?set=` chain in one read — the public twin of the web /mix loader's
   // server-only getMixTracksByTokens, so a saved set opens whole on mobile (uncertified tokens
   // included). Public-unauth like the other /mix reads.
+  // The fresh-releases keystone (cc0feb4e): GET /api/v1/tracks/fresh, public by design — the
+  // op landed without this spec pin and turned the deploy gate red (2026-07-18).
+  "listFresh",
   "listSetTracks",
   "listStories",
   "listTracks",
