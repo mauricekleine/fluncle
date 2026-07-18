@@ -149,6 +149,7 @@ type bootKind int
 const (
 	bootMenu    bootKind = iota // no command: the interactive menu (unchanged)
 	bootLatest                  // `latest`: the latest finding's detail
+	bootFresh                   // `fresh`: the newest releases list
 	bootRandom                  // `random`: a random finding's detail
 	bootCoord                   // `<coord>`: a Log ID's finding (or mixtape) detail
 	bootUnknown                 // anything else: a deep-register line, then the menu
@@ -164,9 +165,9 @@ type bootCommand struct {
 }
 
 // parseBootCommand reads the SSH command args (everything after the host) and
-// resolves the opening screen. The deep links are `latest`, `random`, and a bare
-// Log ID coordinate (e.g. 004.7.2I, or the F-marked 019.F.1A). Empty args keep
-// the menu; anything else is unknown.
+// resolves the opening screen. The deep links are `latest`, `fresh`, `random`, and
+// a bare Log ID coordinate (e.g. 004.7.2I, or the F-marked 019.F.1A). Empty args
+// keep the menu; anything else is unknown.
 func parseBootCommand(args []string) bootCommand {
 	raw := strings.TrimSpace(strings.Join(args, " "))
 	if raw == "" {
@@ -175,6 +176,8 @@ func parseBootCommand(args []string) bootCommand {
 	switch strings.ToLower(raw) {
 	case "latest":
 		return bootCommand{kind: bootLatest, raw: raw}
+	case "fresh":
+		return bootCommand{kind: bootFresh, raw: raw}
 	case "random":
 		return bootCommand{kind: bootRandom, raw: raw}
 	}
@@ -397,6 +400,7 @@ type screen string
 const (
 	screenMenu          screen = "menu"
 	screenLatest        screen = "latest"
+	screenFresh         screen = "fresh"
 	screenDetail        screen = "detail"
 	screenArtists       screen = "artists"
 	screenGalaxies      screen = "galaxies"
@@ -424,6 +428,7 @@ type model struct {
 	screen         screen
 	selected       int
 	tracks         []track
+	fresh          []track
 	artists        []artist
 	galaxies       []galaxyItem
 	galaxyTracks   []track
@@ -465,6 +470,11 @@ type track struct {
 	AddedAt          string   `json:"addedAt"`
 	AddedToSpotify   bool     `json:"addedToSpotify"`
 	PostedToTelegram bool     `json:"postedToTelegram"`
+	// ReleaseDate is when the tune came OUT (`YYYY-MM-DD`), carried only by the
+	// /fresh list (the Found Rule keeps this axis distinct from AddedAt). Certified
+	// marks a lit finding; an uncertified /fresh row has it false and a blank LogID.
+	ReleaseDate string `json:"releaseDate,omitempty"`
+	Certified   bool   `json:"certified,omitempty"`
 }
 
 type artist struct {
@@ -543,6 +553,14 @@ type serviceStatus struct {
 type tracksMsg struct {
 	tracks []track
 	total  int
+	err    error
+}
+
+// freshMsg carries the flat /fresh list — newest RELEASES first. Separate from
+// tracksMsg so a fresh row never bleeds into the "Last found" menu footer (a
+// release is not a Found).
+type freshMsg struct {
+	tracks []track
 	err    error
 }
 
@@ -641,6 +659,9 @@ func newModelWithBoot(app *app, width, height int, boot bootCommand) model {
 	case bootLatest, bootRandom, bootCoord:
 		m.screen = screenDetail
 		m.loading = true
+	case bootFresh:
+		m.screen = screenFresh
+		m.loading = true
 	case bootUnknown:
 		m.err = unknownCommandLine(boot.raw)
 	}
@@ -650,7 +671,7 @@ func newModelWithBoot(app *app, width, height int, boot bootCommand) model {
 // unknownCommandLine is the deep-register line for a command the terminal can't
 // place. Names the bad coordinate, points home, no exclamation marks (VOICE.md).
 func unknownCommandLine(raw string) string {
-	return "No coordinate reads " + raw + ". Try latest, random, or a Log ID like 004.7.2I."
+	return "No coordinate reads " + raw + ". Try latest, fresh, random, or a Log ID like 004.7.2I."
 }
 
 func (m model) Init() tea.Cmd {
@@ -660,6 +681,8 @@ func (m model) Init() tea.Cmd {
 	switch m.boot.kind {
 	case bootLatest:
 		return tea.Batch(m.fetchLatestDetail(), m.fetchLive())
+	case bootFresh:
+		return tea.Batch(m.fetchFresh(), m.fetchLive())
 	case bootRandom:
 		return tea.Batch(m.fetchRandom(), m.fetchLive())
 	case bootCoord:
@@ -688,6 +711,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if len(msg.tracks) > 0 {
 			m.footer = &msg.tracks[0]
 		}
+	case freshMsg:
+		m.loading = false
+		if msg.err != nil {
+			m.err = msg.err.Error()
+			return m, nil
+		}
+		m.fresh = msg.tracks
+		m.selected = 0
 	case artistsMsg:
 		m.loading = false
 		if msg.err != nil {
@@ -836,7 +867,7 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch m.screen {
 	case screenMenu:
 		return m.handleMenuKey(key)
-	case screenLatest, screenSearch, screenArtists, screenGalaxies, screenGalaxyDetail, screenMixtapes:
+	case screenLatest, screenFresh, screenSearch, screenArtists, screenGalaxies, screenGalaxyDetail, screenMixtapes:
 		return m.handleListKey(key)
 	case screenAbout:
 		return m.handleAboutKey(key)
@@ -878,6 +909,11 @@ func (m model) handleMenuKey(key string) (tea.Model, tea.Cmd) {
 			m.loading = true
 			m.err = ""
 			return m, m.fetchLatest()
+		case "fresh":
+			m.screen = screenFresh
+			m.loading = true
+			m.err = ""
+			return m, m.fetchFresh()
 		case "artists":
 			m.screen = screenArtists
 			m.loading = true
@@ -927,6 +963,8 @@ func (m model) handleMenuKey(key string) (tea.Model, tea.Cmd) {
 func (m model) handleListKey(key string) (tea.Model, tea.Cmd) {
 	length := len(m.tracks)
 	switch m.screen {
+	case screenFresh:
+		length = len(m.fresh)
 	case screenSearch:
 		length = len(m.results)
 	case screenMixtapes:
@@ -976,6 +1014,15 @@ func (m model) handleListKey(key string) (tea.Model, tea.Cmd) {
 			// out of it returns HERE (detailBack), not to the menu.
 			m.current = &m.galaxyTracks[m.selected]
 			m.detailBack = screenGalaxyDetail
+			m.screen = screenDetail
+			return m, nil
+		}
+		if m.screen == screenFresh {
+			// A fresh row opens the standard finding detail; backing out of it
+			// returns HERE (detailBack), and the detail reads the date as Released
+			// (not Found) because it came in through the fresh screen.
+			m.current = &m.fresh[m.selected]
+			m.detailBack = screenFresh
 			m.screen = screenDetail
 			return m, nil
 		}
@@ -1100,6 +1147,8 @@ func (m model) View() tea.View {
 		content = m.renderMenu()
 	case screenLatest:
 		content = m.renderLatest()
+	case screenFresh:
+		content = m.renderFresh()
 	case screenDetail:
 		content = m.renderDetail()
 	case screenArtists:
@@ -1307,6 +1356,29 @@ func (m model) renderLatest() string {
 	return scaffold("Latest bangers", "", content, help)
 }
 
+func (m model) renderFresh() string {
+	if m.loading {
+		return statusView("Fresh releases", "Scanning what just landed...")
+	}
+	if m.err != "" {
+		return errorView("Fresh releases", m.err)
+	}
+	if len(m.fresh) == 0 {
+		return statusView("Fresh releases", "Nothing new landed. Quiet sector.")
+	}
+
+	// This list is RELEASE-ordered, not archive-ordered: a lit finding leads with its
+	// Log ID, an unlit row leads with NOTHING (no coordinate, no fake ordinal — the
+	// Unlit Rule). selectableTrackRow pads a blank coord to keep the artist column
+	// aligned, so the two registers sit in one clean column.
+	content := make([]string, 0, len(m.fresh))
+	for index, t := range m.fresh {
+		content = append(content, selectableTrackRow(index == m.selected, t.LogID, t.Artists, t.Title))
+	}
+	help := helpLine("↑/↓ j/k move", "enter select", "q back", "ctrl+c quit")
+	return scaffold("Fresh releases", "", content, help)
+}
+
 func (m model) renderSearch() string {
 	if m.loading {
 		return statusView("Search Spotify", "Scanning...")
@@ -1362,7 +1434,16 @@ func (m model) renderDetail() string {
 	} else {
 		lines = append(lines, "")
 	}
-	lines = append(lines, labelStyle.Render("Found: ")+readingStyle.Render(formatDate(t.AddedAt)))
+	// The date axis follows the screen this detail opened from: a /fresh row reads by
+	// RELEASE date and is labelled "Released" (the Found Rule keeps release ⊥ Found);
+	// every other path reads by the day Fluncle found it.
+	if m.detailBack == screenFresh {
+		if released := formatReleaseDate(t.ReleaseDate); released != "" {
+			lines = append(lines, labelStyle.Render("Released: ")+readingStyle.Render(released))
+		}
+	} else {
+		lines = append(lines, labelStyle.Render("Found: ")+readingStyle.Render(formatDate(t.AddedAt)))
+	}
 	if label := strings.TrimSpace(t.Label); label != "" {
 		lines = append(lines, labelStyle.Render("Pressed by: ")+readingStyle.Render(label))
 	}
@@ -1941,6 +2022,8 @@ func (m model) renderPrinted() string {
 
 	var body string
 	switch m.screen {
+	case screenFresh:
+		body = m.renderFresh()
 	case screenMixtapeDetail:
 		body = m.renderMixtapeDetail()
 	case screenMenu:
@@ -2010,6 +2093,20 @@ func (m model) fetchLatest() tea.Cmd {
 		}
 		err := m.app.getJSON("/api/tracks?limit=16", &response)
 		return tracksMsg{tracks: response.Tracks, total: response.TotalCount, err: err}
+	}
+}
+
+// fetchFresh pulls the flat /fresh list — the newest RELEASES over the trailing
+// 30-day window, newest first, certified and uncertified together. Ordered by
+// release date, not Found date; each row carries `certified` + a blank LogID when
+// unlit, so the detail renders it in the Unlit register.
+func (m model) fetchFresh() tea.Cmd {
+	return func() tea.Msg {
+		var response struct {
+			Tracks []track `json:"tracks"`
+		}
+		err := m.app.getJSON("/api/v1/tracks/fresh?limit=50", &response)
+		return freshMsg{tracks: response.Tracks, err: err}
 	}
 }
 
@@ -2269,6 +2366,7 @@ type menuItem struct {
 func menuItems() []menuItem {
 	return []menuItem{
 		{id: "latest", label: "Latest bangers"},
+		{id: "fresh", label: "Fresh releases"},
 		{id: "artists", label: "Artist archive"},
 		{id: "galaxies", label: "Sonic galaxies"},
 		{id: "mixtapes", label: "Mixtape archive"},
@@ -2595,6 +2693,30 @@ func formatDate(value string) string {
 		return value
 	}
 	return timestamp.Format("Jan 2, 2006")
+}
+
+// formatReleaseDate renders a release date, which arrives at Spotify precision —
+// `YYYY-MM-DD`, or the partial `YYYY-MM` / `YYYY` when the label only published
+// that much. Each precision reads at its own grain; anything else falls back to
+// the raw string (never a blank column). Empty in, empty out.
+func formatReleaseDate(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if t, err := time.Parse("2006-01-02", value); err == nil {
+		return t.Format("Jan 2, 2006")
+	}
+	if t, err := time.Parse("2006-01", value); err == nil {
+		return t.Format("Jan 2006")
+	}
+	if t, err := time.Parse("2006", value); err == nil {
+		return t.Format("2006")
+	}
+	if t, err := time.Parse(time.RFC3339, value); err == nil {
+		return t.Format("Jan 2, 2006")
+	}
+	return value
 }
 
 func relativeTime(value string) string {
