@@ -7,6 +7,7 @@
 
 import { waitUntil } from "cloudflare:workers";
 import { ORPCError } from "@orpc/server";
+import { getFrontierEdition, getFrontierEditions } from "../frontier-editions";
 import {
   FRONTIER_MINT_RATE_LIMIT,
   getFrontierState,
@@ -110,8 +111,62 @@ export function meFrontierHandlers(os: Implementer) {
       }
     });
 
+  const listEditions = os.list_private_frontier_editions
+    .use(privateUserAuth)
+    .handler(async ({ context }) => {
+      try {
+        // Scope to the session user; zero editions is a clean empty array, never a 404.
+        return { editions: await getFrontierEditions(context.user.id), ok: true as const };
+      } catch (error) {
+        if (error instanceof ORPCError) {
+          throw error;
+        }
+
+        throw apiFault(error);
+      }
+    });
+
+  const getEdition = os.get_private_frontier_edition
+    .use(privateUserAuth)
+    .handler(async ({ context, input }) => {
+      try {
+        // The path number is raw (the rails keep params as strings). Parse it, and
+        // scope the read by the session user — the number is per-user, so the user_id
+        // predicate is what makes it THIS user's edition. A bad or missing number 404s.
+        const number = Number.parseInt(input.number, 10);
+
+        if (!Number.isInteger(number) || number < 1) {
+          throw new ORPCError("NOT_FOUND", {
+            data: { apiCode: "frontier_edition_not_found", apiMessage: "Edition not found" },
+            message: "Edition not found",
+            status: 404,
+          });
+        }
+
+        const edition = await getFrontierEdition(context.user.id, number);
+
+        if (!edition) {
+          throw new ORPCError("NOT_FOUND", {
+            data: { apiCode: "frontier_edition_not_found", apiMessage: "Edition not found" },
+            message: "Edition not found",
+            status: 404,
+          });
+        }
+
+        return { edition: edition.summary, ok: true as const, tracks: edition.tracks };
+      } catch (error) {
+        if (error instanceof ORPCError) {
+          throw error;
+        }
+
+        throw apiFault(error);
+      }
+    });
+
   return {
+    get_private_frontier_edition: getEdition,
     get_private_frontier_playlist: getFrontier,
+    list_private_frontier_editions: listEditions,
     mint_private_frontier_playlist: mintFrontier,
   };
 }

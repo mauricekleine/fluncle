@@ -584,6 +584,7 @@ const PUBLIC_OPERATION_IDS = [
   "getGraphPreview",
   "getHealth",
   "getPrivateAccountExport",
+  "getPrivateFrontierEdition",
   "getPrivateFrontierPlaylist",
   "getPrivateGalaxyProgress",
   "getPrivateMutationToken",
@@ -602,6 +603,7 @@ const PUBLIC_OPERATION_IDS = [
   "listMixtapes",
   // The public /reach read — Fluncle's numbers across every platform, over time.
   "listPlatformStats",
+  "listPrivateFrontierEditions",
   "listPrivateGalaxyCollection",
   "listPrivateRecSeeds",
   "listPrivateRecommendations",
