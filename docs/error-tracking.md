@@ -2,9 +2,29 @@
 
 Fluncle's web app (`apps/web`) reports unexpected errors to **Sentry** for private diagnostics — the stack traces and context an operator needs to fix a break, visible only to the operator. This is deliberately separate from the **public liveness** surface: the `/status` + `/health` stack (and the on-box `record_health` layer described in [docs/agents/hermes-agent.md](./agents/hermes-agent.md)) answers "is Fluncle up?" for anyone; Sentry answers "what exactly threw, and where?" for the operator. The two never overlap — the health stack is untouched by this wiring, and Sentry never renders on a public surface.
 
-## The posture: errors only, free-tier
+## The posture: errors + sampled DB-query tracing
 
-Ratified: Sentry captures **errors and stacks, nothing else**. No performance tracing (`tracesSampleRate: 0`, no tracing integrations), no session replay, no profiling, and `sendDefaultPii: false`. This keeps the account inside the free tier and keeps event volume to the thing that matters — a real exception with a real stack. Raise this bar only by an explicit decision, not by accident.
+Sentry captures **errors and stacks**, and — since the operator-approved raise onto the paid **Team plan** (5M spans/mo) — **sampled performance tracing focused on database queries**. Still no session replay, no profiling, and `sendDefaultPii: false`. Raise this bar further only by an explicit decision, not by accident.
+
+### What tracing captures
+
+The Worker's `Sentry.withSentry` (`apps/web/src/server.ts`) opens a request transaction; under it, the `getDb()` chokepoint in `apps/web/src/lib/server/db.ts` wraps the created libSQL client in a **Proxy** that runs every `.execute()` and `.batch()` inside a Sentry span — `op: db.query`, `name`/`db.statement` = the SQL string (libSQL already parameterizes to `?`, so the name is the normalized/grouped query, truncated to ~200 chars; `batch` is named `db.batch (<count>)`). One chokepoint means every caller — the raw client and Drizzle alike — is covered without touching call sites. Those spans feed the **Queries insight** and the auto **"Slow DB Queries"** detector (op `db*`, SELECT, ≥500ms). The load-bearing target is the **recommendation vector scan**, which the Frontier bench showed hitting a multi-second wall as the catalogue grows — this measures it in prod rather than guessing.
+
+The span import (`startSpan`) comes from **`@sentry/core`** (env-agnostic), NOT `@sentry/cloudflare` (Worker-oriented), because `db.ts` is also imported by bun scripts that run in Node and by tests. When no Sentry client is active — every one of those Node importers, and any dev/test run — `startSpan` is a safe passthrough that just runs the callback and returns its value, so the wrap is invisible and results are unchanged there.
+
+### The sampler policy
+
+Tracing is sampled by a `tracesSampler` keyed on the transaction name (method + path, e.g. `GET /me/recommendations`), with named rate constants:
+
+- **1.0 (`TRACE_RATE_ALWAYS`)** for the scaling-risk surfaces — any name matching `recommend`, `search`, or `frontier` (the recs / vector-scan paths). These are traced on every request so a slow scan is never missed.
+- **0 (`TRACE_RATE_NONE`)** for pure noise with no query value — health/status probes, robots/sitemap/llms.txt/.well-known, and the OG + cover image + static-asset routes.
+- **0.2 (`TRACE_RATE_BASELINE`)** for everything else — a modest low-traffic baseline.
+
+The name substring is deliberately coarse: server-fn endpoints share a generic transaction name, so this can't perfectly route-match those, but it reliably traces the risk paths and drops the noise. These are the **low-traffic starting settings** — as volume grows toward the 5M-spans/mo budget, lower the baseline first and refine the route lists rather than widening them; keep an eye on the span quota.
+
+### Cost posture and the pending alert
+
+The Team plan's 5M spans/mo is the budget the sampler is tuned against. The **p95 slow-load alert** (fire when a route's p95 crosses a threshold) is configured **operator-side in Sentry** once spans are flowing — it is a deferred dashboard step, not code.
 
 ## What is covered today
 
