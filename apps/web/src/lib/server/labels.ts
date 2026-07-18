@@ -639,6 +639,233 @@ export async function listLabelsCatalogue(options: {
   };
 }
 
+// ── THE CRAWLABLE ?page=N VARIANT: the hub's long tail becomes internal links ────────────────────
+//
+// The keyset read above (`listXxxCatalogue`) is the HUMAN path: it streams the findings-free
+// entities in on scroll, so only the first CATALOGUE_HUB_DEFAULT_LIMIT tiles are ever in the SSR
+// HTML and the deeper ones live ONLY in the sitemap — no crawlable internal link, no link equity,
+// invisible to a crawler that does not run JS, and it compounds daily as the crawler mints entities.
+// This is the CRAWLER path: the SAME grouped, floor-gated, findings-free set, OFFSET-paginated
+// behind a `?page=N` URL so every tile is reachable as a real <a>. One operation, three tables — the
+// generic below takes the entity-specific SQL FRAGMENTS as constants (never reader input; every
+// value is bound), exactly as `catalogue-groups.ts`'s `fetchGroupTracks` does, so the
+// labels/albums/artists reads cannot drift apart.
+//
+// ── SCALE ──────────────────────────────────────────────────────────────────────────────────────
+// This composes two shapes already proven against hosted Turso: the keyset read's grouped
+// having-scan (the sitemap query shape, above) and catalogue-groups.ts's `count(*) over ()` +
+// `limit ? offset ?` window (the entity graph pages, hosted-proven by
+// catalogue-scale.integration.test.ts). The window count runs AFTER `having`, so `total` is the
+// findings-free floor-clearing count; `offset` walks the same scan the keyset read runs per page.
+// The keyset read stays the human hot path (its `slug > ?` prunes pre-group); this OFFSET read is
+// the lower-frequency crawler / deep-link path, the tradeoff a numbered pager requires.
+
+/** The `certified` / `renderable` aggregates, shared by every hub read so the gate has one home. */
+const HUB_CERTIFIED = `sum(case when findings.log_id is not null then 1 else 0 end)`;
+const HUB_RENDERABLE = `${HUB_CERTIFIED} + sum(case when findings.track_id is null then 1 else 0 end)`;
+
+/** A raw hub row — the union of every tile column the three entity kinds select (absent ⇒ undefined). */
+type CatalogueHubRow = {
+  cover_url?: string | null;
+  image_key?: string | null;
+  image_state?: string | null;
+  image_updated_at?: string | null;
+  image_url?: string | null;
+  name: string;
+  slug: string;
+  total: number;
+  track_count: number;
+};
+
+/**
+ * The entity-specific SQL for ONE hub, as CONSTANT fragments (never reader input). `from` is the
+ * entity table joined to `tracks`; the generic appends the shared `left join findings`, the
+ * `group by`, the floor `having`, and the slug order. `select` adds the tile columns `mapRow` reads.
+ */
+export type CatalogueHubQuery<Entry> = {
+  floor: number;
+  from: string;
+  groupBy: string;
+  mapRow: (row: CatalogueHubRow) => Entry;
+  select: string;
+  slugExpr: string;
+};
+
+/** One NUMBERED page of a hub's findings-free section — the crawlable `?page=N` variant's payload. */
+export type CatalogueHubNumberedPage<Entry> = {
+  items: Entry[];
+  page: number;
+  pageCount: number;
+  /** Every findings-free, floor-clearing entity the hub carries, counted in SQL — the pager's key. */
+  total: number;
+};
+
+/** A present first letter of a name-sorted hub, mapped to the page its first entity lands on. */
+export type CatalogueHubLetter = { letter: string; page: number };
+
+/**
+ * A page past the end of a hub's pager does not exist, and says so — the hub twin of
+ * `CataloguePageOutOfRangeError` (catalogue-groups.ts), same semantics: a `?page=99` on a 3-page hub
+ * is NOT clamped to page 1 (that would be a second URL for page 1's tiles, an infinite supply of
+ * them for a crawler), it throws so the route can 404. Kept a hub-local class to keep labels.ts free
+ * of a catalogue-groups import (which would close an artists→labels→catalogue-groups cycle).
+ */
+export class CatalogueHubPageOutOfRangeError extends Error {}
+
+/**
+ * One OFFSET page of a hub's findings-free section. Reads the same grouped, floor-gated,
+ * `sum(certified) = 0` set as the keyset read, plus `count(*) over ()` for the total. Throws
+ * {@link CatalogueHubPageOutOfRangeError} for a page past the end (page 1 of an empty hub is a
+ * legitimate empty page, never a throw). The fragments are constants from the callers; only the
+ * floor, page size, and offset are bound.
+ */
+export async function listCatalogueHubPage<Entry>(
+  query: CatalogueHubQuery<Entry>,
+  page: number,
+): Promise<CatalogueHubNumberedPage<Entry>> {
+  const db = await getDb();
+  const limit = CATALOGUE_HUB_DEFAULT_LIMIT;
+
+  const result = await db.execute({
+    args: [query.floor, limit, (page - 1) * limit],
+    sql: `select ${query.slugExpr} as slug, ${query.select},
+                 ${HUB_RENDERABLE} as track_count,
+                 count(*) over () as total
+          from ${query.from}
+          left join findings on findings.track_id = tracks.track_id
+          group by ${query.groupBy}
+          having ${HUB_CERTIFIED} = 0 and ${HUB_RENDERABLE} >= ?
+          order by ${query.slugExpr} asc
+          limit ? offset ?`,
+  });
+
+  const rows = typedRows<CatalogueHubRow>(result.rows);
+
+  if (rows.length === 0) {
+    // A page past the end 404s; page 1 of a hub with no findings-free entities is a real empty page.
+    if (page > 1) {
+      throw new CatalogueHubPageOutOfRangeError();
+    }
+
+    return { items: [], page: 1, pageCount: 1, total: 0 };
+  }
+
+  const total = Number(rows[0]?.total ?? 0);
+
+  return {
+    items: rows.map((row) => query.mapRow(row)),
+    page,
+    pageCount: Math.max(Math.ceil(total / limit), 1),
+    total,
+  };
+}
+
+/**
+ * Every present first letter of a name-sorted hub, mapped to the page it first appears on — the A–Z
+ * fast lane's data. ONE bounded query: the per-first-char counts over the same having-gated set
+ * (≤ ~37 rows — a–z, digits, a stray punct), folded to pages by {@link letterPages}. The lane links
+ * `?page=N`, so a crawler reaches any region of the alphabet in two hops.
+ */
+export async function listCatalogueHubLetters<Entry>(
+  query: CatalogueHubQuery<Entry>,
+): Promise<CatalogueHubLetter[]> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [query.floor],
+    sql: `select substr(slug, 1, 1) as letter, count(*) as n
+          from (
+            select ${query.slugExpr} as slug
+            from ${query.from}
+            left join findings on findings.track_id = tracks.track_id
+            group by ${query.groupBy}
+            having ${HUB_CERTIFIED} = 0 and ${HUB_RENDERABLE} >= ?
+          )
+          group by letter
+          order by letter asc`,
+  });
+
+  return letterPages(
+    typedRows<{ letter: string; n: number }>(result.rows),
+    CATALOGUE_HUB_DEFAULT_LIMIT,
+  );
+}
+
+/** The total findings-free, floor-clearing entity count for a hub — the param-free pager's key. */
+export async function countCatalogueHub<Entry>(query: CatalogueHubQuery<Entry>): Promise<number> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [query.floor],
+    sql: `select count(*) as n
+          from (
+            select ${query.slugExpr} as slug
+            from ${query.from}
+            left join findings on findings.track_id = tracks.track_id
+            group by ${query.groupBy}
+            having ${HUB_CERTIFIED} = 0 and ${HUB_RENDERABLE} >= ?
+          )`,
+  });
+
+  return Number(typedRows<{ n: number }>(result.rows)[0]?.n ?? 0);
+}
+
+/**
+ * Fold per-first-char counts (slug-ordered) into one page number per DISPLAY letter. Pure, so
+ * `labels.test.ts` pins it. Slugs are lowercase alphanumerics: an a–z lead keeps its letter, any
+ * other lead (a digit) folds into "#". The FIRST (smallest-rank) occurrence of a display letter wins
+ * its page — digits sort before letters, so "#" is contiguous at the front.
+ */
+export function letterPages(
+  counts: { letter: string; n: number }[],
+  pageSize: number,
+): CatalogueHubLetter[] {
+  const byLetter = new Map<string, number>();
+  let rank = 0;
+
+  for (const { letter, n } of counts) {
+    const display = /^[a-z]$/.test(letter) ? letter : "#";
+
+    if (!byLetter.has(display)) {
+      byLetter.set(display, Math.floor(rank / pageSize) + 1);
+    }
+
+    rank += Number(n);
+  }
+
+  return [...byLetter].map(([letter, page]) => ({ letter, page }));
+}
+
+/** The LABELS hub's `?page=N` + A–Z reads, over the same set as the keyset `listLabelsCatalogue`. */
+const LABELS_HUB_QUERY: CatalogueHubQuery<LabelCatalogueEntry> = {
+  floor: LABEL_INDEX_MIN_TRACKS,
+  from: "labels join tracks on tracks.label_id = labels.id",
+  groupBy: "labels.id",
+  mapRow: (row) => ({
+    coverImageUrl: row.cover_url ?? undefined,
+    logoImageUrl: labelLogoUrl(row.image_key ?? null),
+    name: row.name,
+    slug: row.slug,
+    trackCount: Number(row.track_count),
+  }),
+  select: `labels.name as name, labels.image_key as image_key,
+           (select t2.album_image_url from tracks t2
+              where t2.label_id = labels.id and t2.album_image_url is not null
+              order by t2.release_date is null asc, t2.release_date desc, t2.track_id asc
+              limit 1) as cover_url`,
+  slugExpr: "labels.slug",
+};
+
+/** One numbered page of the `/labels` hub's findings-free section (the crawlable `?page=N` view). */
+export function listLabelsCataloguePage(
+  page: number,
+): Promise<CatalogueHubNumberedPage<LabelCatalogueEntry>> {
+  return listCatalogueHubPage(LABELS_HUB_QUERY, page);
+}
+
+/** The `/labels` hub's A–Z fast lane: each present letter → the page its first label lands on. */
+export function listLabelsCatalogueLetters(): Promise<CatalogueHubLetter[]> {
+  return listCatalogueHubLetters(LABELS_HUB_QUERY);
+}
+
 /**
  * The deterministic reconcile: a `labels` row for every distinct label carried by a
  * CERTIFIED finding. The self-healing backstop behind `ensureLabel` (a publish whose

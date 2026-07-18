@@ -25,6 +25,7 @@ import {
   isDistributorLabel,
   labelSlug,
   LabelNotFoundError,
+  letterPages,
   listLabelAliasCandidates,
   listLabelReviewRows,
   listLabels,
@@ -640,5 +641,50 @@ describe("the alias review reads + operator writes", () => {
     expect(await rejectLabelAlias("lba_2")).toBe(false); // gone — no-op
     // The confirmed one survives; only the rejected candidate is gone.
     expect(await listLabelAliasCandidates()).toHaveLength(0);
+  });
+});
+
+// The A–Z fast lane's page math: per-first-char counts (slug-ordered) fold to one page number per
+// DISPLAY letter, so a crawler clicking "M" lands on the page its first M-entity really is on.
+describe("letterPages (the A–Z lane's page math)", () => {
+  it("maps each letter to the page its first entity lands on, at the given page size", () => {
+    // Page size 3: a(3) fills page 1, b(2)+c(1) fill page 2, d(3) fills page 3.
+    const pages = letterPages(
+      [
+        { letter: "a", n: 3 },
+        { letter: "b", n: 2 },
+        { letter: "c", n: 1 },
+        { letter: "d", n: 3 },
+      ],
+      3,
+    );
+
+    expect(pages).toEqual([
+      { letter: "a", page: 1 },
+      { letter: "b", page: 2 },
+      { letter: "c", page: 2 },
+      { letter: "d", page: 3 },
+    ]);
+  });
+
+  it("folds digit-led slugs into a single '#' bucket, keeping its earliest page", () => {
+    // Digits sort before letters, so the "#" bucket is contiguous at the front (rank 0 ⇒ page 1).
+    const pages = letterPages(
+      [
+        { letter: "0", n: 1 },
+        { letter: "9", n: 1 },
+        { letter: "a", n: 1 },
+      ],
+      10,
+    );
+
+    expect(pages).toEqual([
+      { letter: "#", page: 1 },
+      { letter: "a", page: 1 },
+    ]);
+  });
+
+  it("is empty for an empty hub", () => {
+    expect(letterPages([], 48)).toEqual([]);
   });
 });

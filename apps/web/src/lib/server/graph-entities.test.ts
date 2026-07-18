@@ -24,23 +24,34 @@ import { backfillLabels } from "../../../scripts/backfill-labels";
 import {
   ALBUM_INDEX_MIN_TRACKS,
   albumSlug,
+  countAlbumsCatalogue,
   ensureAlbum,
   getAlbumBySlug,
   linkTrackToAlbum,
   listAlbumsCatalogue,
+  listAlbumsCataloguePage,
   listAlbumsMissingBio,
   listAlbumSitemapRows,
   listAlbumsWithFindingCounts,
 } from "./albums";
-import { listArtistsCatalogue, listArtistsMissingBio, upsertTrackArtists } from "./artists";
+import {
+  listArtistsCatalogue,
+  listArtistsCatalogueLetters,
+  listArtistsCataloguePage,
+  listArtistsMissingBio,
+  upsertTrackArtists,
+} from "./artists";
 import { flattenArtistGroups, listLabelCatalogue } from "./catalogue-groups";
 import { createIntegrationDb } from "./integration-db";
 import { getGraphPreview } from "./graph-preview";
 import {
+  CatalogueHubPageOutOfRangeError,
   getLabelBySlug,
   getLabelForAlbum,
   linkTrackToLabel,
   listLabelsCatalogue,
+  listLabelsCatalogueLetters,
+  listLabelsCataloguePage,
   listLabelsMissingBio,
   listLabelsWithFindingCounts,
 } from "./labels";
@@ -672,6 +683,120 @@ describe('the hub "also in the catalogue" reads (findings-free, floor-gated, key
     expect(page.items.map((entry) => entry.name)).toEqual(["Deep Artist"]);
     expect(page.items[0]?.trackCount).toBe(3);
     expect(page.nextCursor).toBeNull();
+  });
+});
+
+// The crawlable ?page=N variant (listXxxCataloguePage) + the A–Z lane (listXxxCatalogueLetters) +
+// the count (countAlbumsCatalogue): the OFFSET read that turns the hub's long tail into internal
+// links. Same floor-gated, findings-free set as the keyset read, but numbered so every tile is a
+// real <a>. The load-bearing contract: the right slice per page, an honest total + pageCount, and a
+// page past the end THROWS (so the route 404s) rather than clamping to page 1.
+describe('the hub "more <entities>" crawlable ?page=N variant', () => {
+  /** Seed N findings-free catalogue tracks on one LABEL, stamping the label_id pointer. */
+  async function seedCatalogueLabel(label: string, count: number): Promise<void> {
+    for (let track = 0; track < count; track++) {
+      const trackId = `${label}-${track}`;
+
+      await seedTrack({ album: null, label, title: `T-${trackId}`, trackId });
+      await linkTrackToLabel(trackId, label);
+    }
+  }
+
+  it("LABELS: pages the findings-free set at the 48-tile window, disjoint, with an honest total", async () => {
+    // 49 findings-free labels at the floor (3 tracks each) → two pages: 48 + 1. Zero-padded names so
+    // the slug order (imprint-00 … imprint-48) is deterministic across the page boundary.
+    for (let label = 0; label < 49; label++) {
+      await seedCatalogueLabel(`Imprint ${String(label).padStart(2, "0")}`, 3);
+    }
+
+    const one = await listLabelsCataloguePage(1);
+    expect(one.items).toHaveLength(48);
+    expect(one.page).toBe(1);
+    expect(one.total).toBe(49);
+    expect(one.pageCount).toBe(2);
+    expect(one.items[0]?.slug).toBe("imprint-00");
+    expect(one.items[0]?.trackCount).toBe(3);
+
+    const two = await listLabelsCataloguePage(2);
+    expect(two.items).toHaveLength(1);
+    expect(two.page).toBe(2);
+    expect(two.total).toBe(49);
+    expect(two.pageCount).toBe(2);
+    expect(two.items[0]?.slug).toBe("imprint-48");
+
+    // The pager is a window over ONE ordered set: page 2 is disjoint from page 1, never a re-slice.
+    const onePage = new Set(one.items.map((entry) => entry.slug));
+    expect(two.items.some((entry) => onePage.has(entry.slug))).toBe(false);
+
+    // A page past the end 404s (throws), never clamps to page 1 (which would duplicate its URL).
+    await expect(listLabelsCataloguePage(3)).rejects.toBeInstanceOf(
+      CatalogueHubPageOutOfRangeError,
+    );
+  });
+
+  it("LABELS: page 1 of an empty hub is a real empty page, not a throw", async () => {
+    const page = await listLabelsCataloguePage(1);
+
+    expect(page).toEqual({ items: [], page: 1, pageCount: 1, total: 0 });
+  });
+
+  it("LABELS: the A–Z lane maps each present letter to its first page, folding digits into '#'", async () => {
+    await seedCatalogueLabel("Alpha Imprint", 3);
+    await seedCatalogueLabel("Bravo Imprint", 3);
+    await seedCatalogueLabel("9 Imprint", 3);
+    // A thin label (below the floor) is absent from the lane, exactly as it is from the page.
+    await seedCatalogueLabel("Thin Imprint", 2);
+
+    const letters = await listLabelsCatalogueLetters();
+
+    // Everything fits on page 1 here; the digit-led "9 imprint" folds into the "#" bucket.
+    expect(letters).toEqual(
+      expect.arrayContaining([
+        { letter: "#", page: 1 },
+        { letter: "a", page: 1 },
+        { letter: "b", page: 1 },
+      ]),
+    );
+    expect(letters.map((entry) => entry.letter)).not.toContain("t"); // the thin one never appears
+  });
+
+  it("ARTISTS: pages, and 404s past the end", async () => {
+    for (const trackId of ["da-1", "da-2", "da-3"]) {
+      await seedTrack({ album: null, label: null, title: trackId, trackId });
+      await upsertTrackArtists(trackId, ["Deep Artist"], [], { fillImages: false });
+    }
+
+    const page = await listArtistsCataloguePage(1);
+    expect(page.items.map((entry) => entry.name)).toEqual(["Deep Artist"]);
+    expect(page.total).toBe(1);
+    expect(page.pageCount).toBe(1);
+
+    expect(await listArtistsCatalogueLetters()).toEqual([{ letter: "d", page: 1 }]);
+    await expect(listArtistsCataloguePage(2)).rejects.toBeInstanceOf(
+      CatalogueHubPageOutOfRangeError,
+    );
+  });
+
+  it("ALBUMS: pages, counts, and 404s past the end", async () => {
+    for (const trackId of ["dr-1", "dr-2", "dr-3"]) {
+      await seedTrack({ album: "Deep Record", label: null, title: trackId, trackId });
+      await linkTrackToAlbum(trackId, "Deep Record");
+    }
+    // A thin record (below the floor) is excluded from both the page and the count.
+    for (const trackId of ["tr-1", "tr-2"]) {
+      await seedTrack({ album: "Thin Record", label: null, title: trackId, trackId });
+      await linkTrackToAlbum(trackId, "Thin Record");
+    }
+
+    const page = await listAlbumsCataloguePage(1);
+    expect(page.items.map((entry) => entry.slug)).toEqual(["deep-record"]);
+    expect(page.total).toBe(1);
+    expect(page.pageCount).toBe(1);
+
+    expect(await countAlbumsCatalogue()).toBe(1);
+    await expect(listAlbumsCataloguePage(2)).rejects.toBeInstanceOf(
+      CatalogueHubPageOutOfRangeError,
+    );
   });
 });
 

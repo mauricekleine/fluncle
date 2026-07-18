@@ -23,7 +23,15 @@
 import { randomUUID } from "node:crypto";
 import { slugify } from "@fluncle/contracts/util/galaxy-slug";
 import { getDb, typedRows } from "./db";
-import { type CatalogueHubPage, clampCatalogueHubLimit, type EntitySitemapRow } from "./labels";
+import {
+  type CatalogueHubNumberedPage,
+  type CatalogueHubPage,
+  type CatalogueHubQuery,
+  clampCatalogueHubLimit,
+  countCatalogueHub,
+  type EntitySitemapRow,
+  listCatalogueHubPage,
+} from "./labels";
 
 // The thin-content gate for album pages: an `/album/<slug>` page indexes (and enters the
 // sitemap) only with this many RENDERABLE tracks or more — its findings plus the quieter
@@ -497,6 +505,41 @@ export async function listAlbumsCatalogue(options: {
     items,
     nextCursor: items.length === limit ? (items[items.length - 1]?.slug ?? null) : null,
   };
+}
+
+/** The ALBUMS hub's `?page=N` read, over the same set as the keyset `listAlbumsCatalogue`. */
+const ALBUMS_HUB_QUERY: CatalogueHubQuery<AlbumCatalogueEntry> = {
+  floor: ALBUM_INDEX_MIN_TRACKS,
+  from: "albums join tracks on tracks.album_id = albums.id",
+  groupBy: "albums.id",
+  mapRow: (row) => ({
+    coverImageUrl: row.cover_url ?? undefined,
+    name: row.name,
+    slug: row.slug,
+    trackCount: Number(row.track_count),
+  }),
+  select: `albums.name as name,
+           (select t2.album_image_url from tracks t2
+              where t2.album_id = albums.id and t2.album_image_url is not null
+              order by t2.release_date is null asc, t2.release_date desc, t2.track_id asc
+              limit 1) as cover_url`,
+  slugExpr: "albums.slug",
+};
+
+/** One numbered page of the `/albums` hub's findings-free section (the crawlable `?page=N` view). */
+export function listAlbumsCataloguePage(
+  page: number,
+): Promise<CatalogueHubNumberedPage<AlbumCatalogueEntry>> {
+  return listCatalogueHubPage(ALBUMS_HUB_QUERY, page);
+}
+
+/**
+ * The `/albums` hub's total findings-free, floor-clearing record count — the param-free page's pager
+ * key. Albums have no A–Z lane (an album's identity is its cover, and browse-by-title-initial is not
+ * how records are dug), so the numbered pager IS the album hub's crawl entry.
+ */
+export function countAlbumsCatalogue(): Promise<number> {
+  return countCatalogueHub(ALBUMS_HUB_QUERY);
 }
 
 // THE ALBUM EDGE IS WRITTEN INLINE, not deferred. The publish path calls `linkTrackToAlbum`

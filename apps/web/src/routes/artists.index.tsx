@@ -1,7 +1,13 @@
-import { Link, createFileRoute } from "@tanstack/react-router";
+import { Link, createFileRoute, notFound } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { ArtistAvatar } from "@/components/artist-avatar";
-import { CatalogueHubSection } from "@/components/catalogue-hub-section";
+import { CataloguePager } from "@/components/catalogue-groups";
+import {
+  CatalogueHubPageSection,
+  CatalogueHubSection,
+  HubLetterLane,
+} from "@/components/catalogue-hub-section";
+import { StoryNotFoundState } from "@/components/stories/stories-states";
 import { siteUrl } from "@/lib/fluncle-links";
 import { findingsCount, tracksCount } from "@/lib/format";
 import { jsonLdScript } from "@/lib/json-ld";
@@ -9,34 +15,83 @@ import {
   type ArtistCatalogueEntry,
   type ArtistIndexEntry,
   listArtistsCatalogue,
+  listArtistsCataloguePage,
+  listArtistsCatalogueLetters,
   listArtistsWithFindingCounts,
 } from "@/lib/server/artists";
-import { CATALOGUE_HUB_DEFAULT_LIMIT, type CatalogueHubPage } from "@/lib/server/labels";
+import {
+  CATALOGUE_HUB_DEFAULT_LIMIT,
+  type CatalogueHubLetter,
+  type CatalogueHubNumberedPage,
+  CatalogueHubPageOutOfRangeError,
+  type CatalogueHubPage,
+} from "@/lib/server/labels";
 
 // The artists index: every artist Fluncle has logged a finding from, cover-led, each linking to
 // its `/artist/<slug>` page — the internal-link hub that keeps the artist pages from being orphans
 // (Unit 3, artist-relationship RFC §3).
 //
-// Below the editorial list, "Also in the catalogue" carries the INDEXABLE findings-free artists
-// the crawler minted a page for (`listArtistsCatalogue`), rendered UNLIT and never claimed.
+// Below the editorial list, "More artists" carries the INDEXABLE findings-free artists the crawler
+// minted a page for. The param-free `/artists` streams them in on scroll (the human read); a
+// crawlable `?page=N` variant SSRs each page's tiles behind a real-anchor pager, and an A–Z fast
+// lane links every region of the alphabet — so the long tail is reachable by internal links, not
+// the sitemap alone.
 
-type ArtistsPageData = {
-  catalogue: CatalogueHubPage<ArtistCatalogueEntry>;
-  findings: ArtistIndexEntry[];
-};
+type ArtistsCatalogue =
+  | { mode: "page"; page: CatalogueHubNumberedPage<ArtistCatalogueEntry> }
+  | { mode: "scroll"; seed: CatalogueHubPage<ArtistCatalogueEntry> };
 
-const fetchArtistsPage = createServerFn({ method: "GET" }).handler(
-  async (): Promise<ArtistsPageData> => {
-    const [findings, catalogue] = await Promise.all([
+type ArtistsPageData =
+  | {
+      catalogue: ArtistsCatalogue;
+      findings: ArtistIndexEntry[];
+      // Each present first letter → the page its first findings-free artist lands on (the A–Z lane).
+      letters: CatalogueHubLetter[];
+      // The current page (1 for the param-free view) — the head's per-page canonical keys off it.
+      page: number;
+      status: "found";
+    }
+  | { status: "missing" };
+
+// Resolve the hub's data. A bare `/artists` (or `?page=1`) is the SCROLL view — the findings grid +
+// the infinite-scroll seed. A `?page=N` (N > 1) is the crawlable PAGE view — the findings grid + one
+// static OFFSET slice. A page past the end throws `CatalogueHubPageOutOfRangeError`, which maps to a
+// 404 (never a clamp to page 1 — that would be a second URL for page 1's tiles).
+async function resolveArtistsPage(page: number | undefined): Promise<ArtistsPageData> {
+  if (page !== undefined && page > 1) {
+    const [paged, findings, letters] = await Promise.all([
+      listArtistsCataloguePage(page).catch((error: unknown) => {
+        if (error instanceof CatalogueHubPageOutOfRangeError) {
+          return null;
+        }
+
+        throw error;
+      }),
       listArtistsWithFindingCounts(),
-      listArtistsCatalogue({ limit: CATALOGUE_HUB_DEFAULT_LIMIT }),
+      listArtistsCatalogueLetters(),
     ]);
 
-    return { catalogue, findings };
-  },
-);
+    if (paged === null) {
+      return { status: "missing" };
+    }
 
-// Subsequent "also in the catalogue" pages go through the SAME serverFn the loader seeded from —
+    return { catalogue: { mode: "page", page: paged }, findings, letters, page, status: "found" };
+  }
+
+  const [findings, seed, letters] = await Promise.all([
+    listArtistsWithFindingCounts(),
+    listArtistsCatalogue({ limit: CATALOGUE_HUB_DEFAULT_LIMIT }),
+    listArtistsCatalogueLetters(),
+  ]);
+
+  return { catalogue: { mode: "scroll", seed }, findings, letters, page: 1, status: "found" };
+}
+
+const fetchArtistsPage = createServerFn({ method: "GET" })
+  .validator((data: { page?: number }) => data)
+  .handler(({ data }): Promise<ArtistsPageData> => resolveArtistsPage(data.page));
+
+// Subsequent "more artists" scroll pages go through the SAME serverFn the loader seeded from —
 // a slug keyset, no oRPC op (the homepage-feed precedent).
 const fetchArtistsCatalogue = createServerFn({ method: "GET" })
   .validator((data: { cursor?: string; limit?: number }) => data)
@@ -47,11 +102,20 @@ const description =
   "Every artist Fluncle has found and logged in the Galaxy, mapped by the bangers they made.";
 
 function artistsHead(loaderData: ArtistsPageData | undefined) {
+  if (loaderData?.status !== "found") {
+    return {};
+  }
+
+  // Self-referencing PER PAGE: `?page=N` is its own canonical, page 1 stays the bare `/artists`
+  // (the artist/label entity-page precedent). The paged variants are real content — `noindex` NEVER.
+  const canonical =
+    loaderData.page > 1 ? `${siteUrl}/artists?page=${loaderData.page}` : `${siteUrl}/artists`;
+
   // The ItemList stays Fluncle's CURATED list (the findings section only): the catalogue artists'
   // pages are already carried by the sitemap. It rides as the `mainEntity` of a `CollectionPage` —
   // the honest shape for "this page is a hub OF a list" — carrying `numberOfItems` so a crawler
   // knows the list's size without counting.
-  const artists = loaderData?.findings ?? [];
+  const artists = loaderData.findings;
   const collectionPage = {
     "@context": "https://schema.org",
     "@type": "CollectionPage",
@@ -70,14 +134,14 @@ function artistsHead(loaderData: ArtistsPageData | undefined) {
   };
 
   return {
-    links: [{ href: `${siteUrl}/artists`, rel: "canonical" }],
+    links: [{ href: canonical, rel: "canonical" }],
     meta: [
       { title },
       { content: description, name: "description" },
       { content: title, property: "og:title" },
       { content: description, property: "og:description" },
       { content: `${siteUrl}/fluncle-cover.png`, property: "og:image" },
-      { content: `${siteUrl}/artists`, property: "og:url" },
+      { content: canonical, property: "og:url" },
       { content: "summary_large_image", name: "twitter:card" },
       { content: title, name: "twitter:title" },
       { content: description, name: "twitter:description" },
@@ -90,15 +154,57 @@ function artistsHead(loaderData: ArtistsPageData | undefined) {
   };
 }
 
-// oxlint-disable-next-line sort-keys -- TanStack canonical property order (loader before head); see AGENTS.md
+// Route options follow TanStack's create-route-property-order (params → validateSearch →
+// loaderDeps → loader → head → component); each step feeds the next's inferred types, so the order
+// isn't alphabetical and sort-keys is off here.
+// oxlint-disable-next-line sort-keys
 export const Route = createFileRoute("/artists/")({
-  component: ArtistsPage,
-  loader: () => fetchArtistsPage(),
+  validateSearch: (search: Record<string, unknown>): ArtistsSearch => ({
+    page: pageParam(search["page"]),
+  }),
+  loaderDeps: ({ search }) => ({ page: search.page }),
+  loader: async ({ deps }): Promise<ArtistsPageData> => {
+    const data = await fetchArtistsPage({ data: { page: deps.page } });
+
+    if (data.status === "missing") {
+      throw notFound();
+    }
+
+    return data;
+  },
   head: ({ loaderData }: { loaderData?: ArtistsPageData }) => artistsHead(loaderData),
+  component: ArtistsPage,
+  notFoundComponent: StoryNotFoundState,
 });
 
+type ArtistsSearch = { page?: number };
+
+/** A page param the reader typed: junk or an absent value folds to undefined (the param-free view). */
+function pageParam(value: unknown): number | undefined {
+  const n = Number(value);
+
+  return Number.isFinite(n) && n >= 1 ? Math.trunc(n) : undefined;
+}
+
 function ArtistsPage() {
-  const { catalogue, findings } = Route.useLoaderData();
+  const data = Route.useLoaderData();
+
+  if (data.status !== "found") {
+    return null;
+  }
+
+  const { catalogue, findings, letters } = data;
+  const buildHref = (page: number) => (page <= 1 ? "/artists" : `/artists?page=${page}`);
+  const lane = <HubLetterLane buildHref={buildHref} label="Artists A to Z" letters={letters} />;
+  const renderTile = (artist: ArtistCatalogueEntry) => (
+    <li key={artist.slug}>
+      <Link params={{ slug: artist.slug }} to="/artist/$slug">
+        <ArtistAvatar className="artist-card-avatar" name={artist.name} src={artist.imageUrl} />
+        <span className="artist-grid-line">{artist.name}</span>
+        <span className="artist-grid-count">{tracksCount(artist.trackCount)}</span>
+      </Link>
+    </li>
+  );
 
   return (
     <main className="log-plate-stage">
@@ -130,30 +236,39 @@ function ArtistsPage() {
           </ul>
         )}
 
-        <CatalogueHubSection
-          gridClassName="artist-avatar-grid"
-          heading="More artists"
-          headingId="artists-catalogue-heading"
-          initialPage={catalogue}
-          listLabel="More artists"
-          queryFn={(cursor) =>
-            fetchArtistsCatalogue({ data: { cursor, limit: CATALOGUE_HUB_DEFAULT_LIMIT } })
-          }
-          queryKey="artists-catalogue"
-          renderTile={(artist) => (
-            <li key={artist.slug}>
-              <Link params={{ slug: artist.slug }} to="/artist/$slug">
-                <ArtistAvatar
-                  className="artist-card-avatar"
-                  name={artist.name}
-                  src={artist.imageUrl}
-                />
-                <span className="artist-grid-line">{artist.name}</span>
-                <span className="artist-grid-count">{tracksCount(artist.trackCount)}</span>
-              </Link>
-            </li>
-          )}
-        />
+        {catalogue.mode === "scroll" ? (
+          <CatalogueHubSection
+            gridClassName="artist-avatar-grid"
+            heading="More artists"
+            headingId="artists-catalogue-heading"
+            initialPage={catalogue.seed}
+            lane={lane}
+            listLabel="More artists"
+            queryFn={(cursor) =>
+              fetchArtistsCatalogue({ data: { cursor, limit: CATALOGUE_HUB_DEFAULT_LIMIT } })
+            }
+            queryKey="artists-catalogue"
+            renderTile={renderTile}
+          />
+        ) : (
+          <CatalogueHubPageSection
+            gridClassName="artist-avatar-grid"
+            heading="More artists"
+            headingId="artists-catalogue-heading"
+            items={catalogue.page.items}
+            lane={lane}
+            listLabel="More artists"
+            pager={
+              <CataloguePager
+                buildHref={buildHref}
+                label="More artists, more pages"
+                page={catalogue.page.page}
+                pageCount={catalogue.page.pageCount}
+              />
+            }
+            renderTile={renderTile}
+          />
+        )}
 
         <footer className="log-plate-footer">
           <Link to="/">Back to the archive</Link>
