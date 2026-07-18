@@ -8,6 +8,8 @@
 // navigator.modelContext has no resource/prompt primitive — so the browser read
 // path is the get_track tool below, and resources/prompts stay server-MCP only.
 
+import { SHARED_TOOL_SPECS, toWebMcpTool } from "./server/tools/specs";
+
 type WebMcpToolResult = {
   content: Array<{ type: "text"; text: string }>;
 };
@@ -54,77 +56,30 @@ export function registerWebMcpTools(): void {
   }
 }
 
-const tools: WebMcpTool[] = [
-  {
-    description:
-      "List the most recent findings and mixtapes in Fluncle's drum & bass archive, newest first.",
-    execute: async (input) => {
-      const limit = typeof input.limit === "number" ? input.limit : 10;
-      const params = new URLSearchParams({ limit: String(limit) });
+// The browser HTTP execute per shared read tool. Name/description/schema come from the shared
+// registry specs (./server/tools/specs); only these hand-written `fetch('/api/…')` bodies are
+// WebMCP's own (the browser has no in-process server functions).
+const httpExecutes: Record<string, WebMcpTool["execute"]> = {
+  get_random_track: async () => jsonResult(await fetchJson("/api/tracks/random")),
+  get_track: async (input) =>
+    jsonResult(await fetchJson(`/api/tracks/${encodeURIComponent(asString(input.idOrLogId))}`)),
+  list_fresh: async (input) => {
+    const limit = typeof input.limit === "number" ? input.limit : 50;
+    const params = new URLSearchParams({ limit: String(limit) });
 
-      return jsonResult(await fetchJson(`/api/tracks?${params}`));
-    },
-    inputSchema: {
-      properties: {
-        limit: {
-          description: "How many tracks to return (1 to 48, default 10).",
-          maximum: 48,
-          minimum: 1,
-          type: "number",
-        },
-      },
-      type: "object",
-    },
-    name: "list_tracks",
+    return jsonResult(await fetchJson(`/api/v1/tracks/fresh?${params}`));
   },
-  {
-    description:
-      "List the newest drum & bass RELEASES across Fluncle's archive: every track that came OUT in the trailing 30-day window, freshest release first. Ordered by RELEASE date (when a track landed), not by when Fluncle found it, so do not say Fluncle found them, only that they just came out. Certified findings carry a Log ID coordinate and cover art; the quieter uncertified rows carry neither.",
-    execute: async (input) => {
-      const limit = typeof input.limit === "number" ? input.limit : 50;
-      const params = new URLSearchParams({ limit: String(limit) });
+  list_tracks: async (input) => {
+    const limit = typeof input.limit === "number" ? input.limit : 10;
+    const params = new URLSearchParams({ limit: String(limit) });
 
-      return jsonResult(await fetchJson(`/api/v1/tracks/fresh?${params}`));
-    },
-    inputSchema: {
-      properties: {
-        limit: {
-          description: "How many releases to return (1 to 100, default 50).",
-          maximum: 100,
-          minimum: 1,
-          type: "integer",
-        },
-      },
-      type: "object",
-    },
-    name: "list_fresh",
+    return jsonResult(await fetchJson(`/api/tracks?${params}`));
   },
-  {
-    description:
-      "Read one finding (or mixtape) in full by its Log ID coordinate or Spotify track id. Returns the same public record its /log page shows: artist, title, Found date, note, BPM, key, links, and the recovered observation transcript.",
-    execute: async (input) =>
-      jsonResult(await fetchJson(`/api/tracks/${encodeURIComponent(asString(input.idOrLogId))}`)),
-    inputSchema: {
-      properties: {
-        idOrLogId: {
-          description: "A Log ID coordinate (e.g. 012.8.0A) or a Spotify track id / URL.",
-          type: "string",
-        },
-      },
-      required: ["idOrLogId"],
-      type: "object",
-    },
-    name: "get_track",
-  },
-  {
-    description: "Pull one random certified track from Fluncle's archive.",
-    execute: async () => jsonResult(await fetchJson("/api/tracks/random")),
-    inputSchema: {
-      properties: {},
-      type: "object",
-    },
-    name: "get_random_track",
-  },
+};
+
+// WebMCP-only tools: the Spotify candidate search + the two write verbs (not in the shared
+// registry — those overlap all read transports; these are MCP + WebMCP surface writes).
+const webmcpOnlyTools: WebMcpTool[] = [
   {
     description:
       "Search Spotify for track candidates by name or Spotify track URL. Use a result's id and spotifyUrl with submit_track.",
@@ -234,10 +189,26 @@ const tools: WebMcpTool[] = [
   },
 ];
 
+// The realized WebMCP tool set: the shared read tools projected from the registry specs (each with
+// its browser HTTP execute), then the WebMCP-only verbs. get_status is codified off WebMCP, so the
+// `webmcp` transport filter drops it.
+const tools: WebMcpTool[] = [
+  ...SHARED_TOOL_SPECS.filter((spec) => spec.transports.includes("webmcp")).map((spec) => {
+    const httpExecute = httpExecutes[spec.name];
+
+    if (!httpExecute) {
+      throw new Error(`WebMCP is missing an HTTP execute for the shared tool ${spec.name}`);
+    }
+
+    return toWebMcpTool(spec, httpExecute);
+  }),
+  ...webmcpOnlyTools,
+];
+
 // `get_recent_tracks` deprecation alias of `list_tracks` (Convention B §4), kept in
 // parity with the server MCP surface (lib/server/mcp.ts). Shares the canonical
 // tool's execute + schema so the two never drift.
-const listTracksTool = tools[0];
+const listTracksTool = tools.find((tool) => tool.name === "list_tracks");
 
 if (!listTracksTool) {
   throw new Error("list_tracks tool missing from the WebMCP tool list");
