@@ -196,6 +196,12 @@ bunx --bun shadcn@latest add dialog
 
 - Keep generated Shadcn components aligned with the existing design tokens and local component conventions before using them in feature code.
 
+## Public Copy
+
+- MUST: Write every public-facing string through the `copywriting-fluncle` skill — load it BEFORE drafting and run its final checks before committing. Public-facing means anything a non-operator reads: web pages outside `/admin`, mobile, meta/OG/link-preview text, feeds, SSH/CLI human-facing text, and social. This applies to one-line edits and empty states; small strings count.
+- MUST: End every change that adds or edits public copy with a `canon-reviewer` pass over the diff, and treat its Flat Copy Test as blocking: copy that describes the page's mechanism (the query window, the sort order, a data-model distinction) instead of speaking from Fluncle's body is off-voice even when mechanically clean. An orchestrator merging a sub-agent's public-surface PR runs the reviewer itself — the agent's own "canon clean" claim does not discharge this.
+- MUST: Sub-agent briefs for public surfaces name both gates explicitly (the skill for writing, the reviewer for acceptance); a brief without them ships flat copy.
+
 ## Database
 
 - MUST: Generate SQL migrations via `bun run --cwd apps/web db:generate`.

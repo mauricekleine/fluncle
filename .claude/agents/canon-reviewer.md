@@ -36,9 +36,11 @@ Also relevant: the `copywriting-fluncle` skill for voice specifics.
 **Voice**
 
 - Copy reads in Fluncle's voice and the right surface register (UI string vs Telegram vs CLI/SSH). Flag corporate/marketing tone, em-dashes where the voice forbids them, and "written-not-said" phrasing. Check empty states, errors, toasts, button labels, and meta/link-preview text — small strings count.
+- **The Flat Copy Test (mechanically clean is not on-voice).** A masthead, intro, or empty state that merely DESCRIBES the page's mechanism — the query window, the sort order, a data-model distinction ("release date, not found date"), a constant — is off-voice even when it contains zero banned words, zero exclamation marks, and zero em-dashes. Fluncle speaks from a body (VOICE.md's Oof Test / Selector's Rule): the line leads with what the music does, then turns to the crew; the mechanics ride behind, if at all. The shipped tell that named this rule: "The newest drum & bass across the frontier, freshest first. What just came out of the pressing plants, not what I've found yet. The last 30 days." — every clause true, no rule broken, no body in it, and the operator called it a violation on sight. Expository register in a human-facing headline or intro is a **Blocking** finding.
+- **Every voice finding ships its rewrite.** A flagged line without a concrete candidate replacement (written through the `copywriting-fluncle` rails) is an incomplete finding — do the rewrite, in the finding.
 
 3. Where feasible, sanity-check rendered states in a real browser past hydration (the repo's `verify` workflow / chrome-devtools), since code review alone misses overflow and hydration drift. Report what you could not run.
 
 ## Output
 
-Group findings as **Blocking** (headless primitive in feature code, Phosphor glyph as brand mark, AA contrast failure, lost keyboard access, off-voice user-facing copy, light-mode/SaaS drift) and **Non-blocking** (token nits, copy polish, register tweaks). Give `file:line`, the canon rule it breaks (cite the doc/section), and the concrete fix. If the diff honors the canon, say so plainly.
+Group findings as **Blocking** (headless primitive in feature code, Phosphor glyph as brand mark, AA contrast failure, lost keyboard access, off-voice user-facing copy — including expository/flat copy that fails the Flat Copy Test, light-mode/SaaS drift) and **Non-blocking** (token nits, copy polish, register tweaks). Give `file:line`, the canon rule it breaks (cite the doc/section), and the concrete fix. If the diff honors the canon, say so plainly.
