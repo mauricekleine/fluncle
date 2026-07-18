@@ -18,10 +18,11 @@ import * as z from "zod";
  * `email_unverified`), and rate-limited (4/h — a real Spotify create/replace). The
  * empty request body keeps oRPC from pre-rejecting a bodyless POST.
  *
- * `status` reports what happened: `minted` (created), `refreshed` (items changed),
- * `unchanged` (the mirror guard skipped the PUT), or `switch_off` (the DEFAULT-DENY
- * kill switch is closed — nothing was created, `playlistUrl` absent). `playlistUrl` is
- * present on every outcome that has a playlist.
+ * `status` reports what happened: `minted` (Spotify playlist created), `refreshed` (its
+ * items changed), `unchanged` (nothing moved since the latest edition), or `edition_only`
+ * (the edition was written but the DEFAULT-DENY kill switch is closed, so no Spotify
+ * playlist — the user's act still checkpoints an edition, `playlistUrl` absent).
+ * `playlistUrl` is present on every outcome that has a playlist.
  */
 export const mintPrivateFrontierPlaylist = oc
   .route({
@@ -36,7 +37,7 @@ export const mintPrivateFrontierPlaylist = oc
     z.object({
       ok: z.literal(true),
       playlistUrl: z.string().optional(),
-      status: z.enum(["minted", "refreshed", "unchanged", "switch_off"]),
+      status: z.enum(["minted", "refreshed", "unchanged", "edition_only"]),
     }),
   );
 
@@ -70,11 +71,16 @@ export const getPrivateFrontierPlaylist = oc
  * One frozen edition's summary — a "past editions" dropdown row. `number` is the
  * per-user monotonic edition number (the ONE name — column, DTO, path param);
  * `refreshedAt` is the UTC instant the refresh froze (the date label derives from
- * it); `trackCount` is how many tracks the frozen playlist carried.
+ * it); `trackCount` is how many tracks the frozen playlist carried. `seedsUsed` /
+ * `seedsSkipped` are the frozen seed accounting the shelf's honesty strings read
+ * ("these two picks aren't steering yet"); both absent on a pre-migration edition
+ * that cannot back them (the Readout Rule's honest absence).
  */
 export const FrontierEditionSummarySchema = z.object({
   number: z.number(),
   refreshedAt: z.string(),
+  seedsSkipped: z.array(z.string()).optional(),
+  seedsUsed: z.number().optional(),
   trackCount: z.number(),
 });
 
@@ -82,7 +88,8 @@ export const FrontierEditionSummarySchema = z.object({
  * One frozen track in an edition — everything the dialog renders without a JOIN.
  * `slot` + `logId` drive the finding/catalogue register split; a catalogue row
  * carries no `logId`. The instrument chips (`bpm`/`key`/`durationMs`) are frozen
- * readouts, present when they were known at freeze time.
+ * readouts, present when they were known at freeze time. `similarity` is the frozen
+ * max-similarity the engine gave the row; absent on a pre-migration edition.
  */
 export const FrontierEditionTrackSchema = z.object({
   artists: z.array(z.string()),
@@ -91,6 +98,7 @@ export const FrontierEditionTrackSchema = z.object({
   imageUrl: z.string().optional(),
   key: z.string().optional(),
   logId: z.string().optional(),
+  similarity: z.number().optional(),
   slot: z.enum(["catalogue", "finding"]),
   spotifyUrl: z.string().optional(),
   title: z.string(),

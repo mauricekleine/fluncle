@@ -164,10 +164,18 @@ type SqlStatement = { args: InValue[]; sql: string };
 /**
  * The desired URI list for a user: findings slots first, then catalogue, de-duped. Also
  * carries the surviving rec rows as FROZEN edition-track inputs (A2) — the SAME de-duped
- * order the PUT sends, so the edition snapshot is a byte-faithful record of what shipped.
+ * order the PUT sends, so the edition snapshot is a byte-faithful record of what shipped —
+ * plus the engine's seed accounting (`seedsUsed`/`seedsSkipped`), frozen onto the edition
+ * so the shelf's honesty strings survive without re-running the engine on a read.
  */
 type DesiredUris =
-  | { ok: true; tracks: FrontierEditionTrackInput[]; uris: string[] }
+  | {
+      ok: true;
+      seedsSkipped: string[];
+      seedsUsed: number;
+      tracks: FrontierEditionTrackInput[];
+      uris: string[];
+    }
   | { ok: false; reason: string };
 
 async function desiredUrisFor(user: PublicUser): Promise<DesiredUris> {
@@ -205,6 +213,7 @@ async function desiredUrisFor(user: PublicUser): Promise<DesiredUris> {
         key: finding.key,
         logId: finding.logId,
         position: 0,
+        similarity: finding.similarity,
         slot: "finding",
         spotifyUri: finding.spotifyUri,
         spotifyUrl: finding.spotifyUrl,
@@ -228,6 +237,7 @@ async function desiredUrisFor(user: PublicUser): Promise<DesiredUris> {
         imageUrl: track.imageUrl,
         key: track.key,
         position: 0,
+        similarity: track.similarity,
         slot: "catalogue",
         spotifyUri: track.spotifyUri,
         spotifyUrl: track.spotifyUrl,
@@ -256,18 +266,17 @@ async function desiredUrisFor(user: PublicUser): Promise<DesiredUris> {
     tracks.push({ ...entry.track, position: tracks.length + 1 });
   }
 
-  return { ok: true, tracks, uris };
+  return { ok: true, seedsSkipped: recs.seedsSkipped, seedsUsed: recs.seedsUsed, tracks, uris };
 }
 
 /**
- * Run the ONE atomic batch that stamps the playlist row AND writes the frozen edition
- * snapshot together — `db.batch(_, "write")` is a real BEGIN…COMMIT that rolls back
- * wholesale on any failure (verified via `setMixtapeMembers`, `mixtapes.ts`), so the
- * edition and the `last_uri_hash` update are one unit: hash-changed ⇔ edition-written,
- * exactly once per change. A `UNIQUE(user_id, number)` collision — near-impossible, since
- * the number derives inline via `coalesce(max(number),0)+1` inside this same transaction —
- * is logged DISTINCTLY so the sweep's tally never mistakes it for a Spotify fault; the
- * error still propagates to the caller's best-effort `{ ok: false }` wrapper.
+ * Run the ONE atomic batch that writes a frozen edition — `db.batch(_, "write")` is a real
+ * BEGIN…COMMIT that rolls back wholesale on any failure (verified via `setMixtapeMembers`,
+ * `mixtapes.ts`), so the parent row + its child tracks commit as one unit. A
+ * `UNIQUE(user_id, number)` collision — near-impossible, since the number derives inline via
+ * `coalesce(max(number),0)+1` inside this same transaction — is logged DISTINCTLY so the
+ * sweep's tally never mistakes it for a Spotify fault; the error still propagates to the
+ * caller's best-effort `{ ok: false }` wrapper.
  */
 async function writeFrontierEdition(statements: SqlStatement[], userId: string): Promise<void> {
   try {
@@ -288,6 +297,48 @@ function hashUris(uris: string[]): string {
   return createHash("sha256").update(uris.join(",")).digest("hex");
 }
 
+/**
+ * The URI hash of a user's LATEST edition — the edition change-detector, the INTERNAL twin
+ * of the mirror's `last_uri_hash`. It re-derives the hash from the newest edition's frozen
+ * child rows (every child carries a `spotify_uri`, since a URI-less rec never reaches the
+ * playlist or the freeze), so "identical desired list ⇒ no new edition row" survives even
+ * for an edition-only user who has NO playlist row (minted while minting was dark). Returns
+ * undefined when the user has no edition yet.
+ */
+async function latestEditionUriHash(userId: string): Promise<string | undefined> {
+  const result = await (
+    await getDb()
+  ).execute({
+    args: [userId, userId],
+    sql: `select fet.spotify_uri
+      from frontier_edition_tracks fet
+      join frontier_editions fe on fe.id = fet.edition_id
+      where fe.user_id = ?
+        and fe.number = (select max(number) from frontier_editions where user_id = ?)
+      order by fet.position asc`,
+  });
+  const rows = typedRows<{ spotify_uri: null | string }>(result.rows);
+
+  if (rows.length === 0) {
+    // No edition at all → undefined. (An edition can carry zero tracks — a user with no
+    // seeds yet — but then the row above still returns nothing; that degenerate case is
+    // indistinguishable from "no edition" here, which is harmless: an empty desired list
+    // hashes to a stable value and the mint path writes edition #1 regardless.)
+    const exists = await (
+      await getDb()
+    ).execute({
+      args: [userId],
+      sql: `select 1 from frontier_editions where user_id = ? limit 1`,
+    });
+
+    if (exists.rows.length === 0) {
+      return undefined;
+    }
+  }
+
+  return hashUris(rows.map((row) => row.spotify_uri ?? ""));
+}
+
 /** Names the failing Spotify call in the error, so a 403 says WHICH request it refused. */
 async function step<T>(name: string, request: Promise<T>): Promise<T> {
   try {
@@ -297,55 +348,110 @@ async function step<T>(name: string, request: Promise<T>): Promise<T> {
   }
 }
 
-export type FrontierSyncStatus = "minted" | "refreshed" | "switch_off" | "unchanged";
+export type FrontierSyncStatus = "edition_only" | "minted" | "refreshed" | "unchanged";
 
 export type FrontierSyncResult =
   | { ok: true; playlistId?: string; playlistUrl?: string; status: FrontierSyncStatus }
   | { ok: false; reason: string };
 
 /**
- * Mint or refresh a user's Frontier playlist — the one entry point.
+ * The result of the edition half — the INTERNAL cache write, ALWAYS allowed (D1). Carries
+ * whether a new edition was actually written (an identical desired list writes none) and
+ * the desired list + hash the mirror half reuses, so the engine runs exactly once.
+ */
+type ComputeResult =
+  | {
+      editionWritten: boolean;
+      hash: string;
+      ok: true;
+      tracks: FrontierEditionTrackInput[];
+      uris: string[];
+    }
+  | { ok: false; reason: string };
+
+/**
+ * Compute the user's recommendations and STORE them as a frozen edition — the internal
+ * cache, decoupled from Spotify minting (RFC D1). ALWAYS allowed: the kill switch gates the
+ * EXTERNAL Spotify effect, never this internal write. The identical-desired-list skip
+ * survives here as "same as the latest edition ⇒ no new edition row" (`latestEditionUriHash`,
+ * the internal twin of the mirror's `last_uri_hash`). The edition is written FIRST — so the
+ * shelf's source of truth lands even when Spotify is down — as its own atomic batch (parent
+ * + children), with the honesty meta (`seedsUsed`/`seedsSkipped`) and per-row `similarity`
+ * frozen in.
+ */
+async function computeAndStoreEdition(user: PublicUser, nowMs: number): Promise<ComputeResult> {
+  const desired = await desiredUrisFor(user);
+
+  if (!desired.ok) {
+    return { ok: false, reason: desired.reason };
+  }
+
+  const hash = hashUris(desired.uris);
+  const latestHash = await latestEditionUriHash(user.id);
+
+  // Identical to the latest edition ⇒ no new edition (the internal hash-skip). The mirror
+  // half still runs independently on the desired list (an edition-only user opening minting
+  // needs the Spotify create even though the edition is unchanged).
+  if (latestHash === hash) {
+    return { editionWritten: false, hash, ok: true, tracks: desired.tracks, uris: desired.uris };
+  }
+
+  await writeFrontierEdition(
+    frontierEditionInsertStatements({
+      createdAt: new Date(nowMs).toISOString(),
+      editionId: randomUUID(),
+      seedsSkipped: desired.seedsSkipped,
+      seedsUsed: desired.seedsUsed,
+      tracks: desired.tracks,
+      userId: user.id,
+    }),
+    user.id,
+  );
+
+  return { editionWritten: true, hash, ok: true, tracks: desired.tracks, uris: desired.uris };
+}
+
+/**
+ * Store the user's edition and (only when minting is OPEN) mirror it to Spotify — the one
+ * entry point for both the "Get playlist" mint and the weekly sweep (RFC D1/D2).
  *
- * The order is the priority:
- *   1. THE KILL SWITCH first. Closed ⇒ `{ ok: true, status: "switch_off" }` with NO
- *      Spotify call — the same shape a caller can surface plainly.
- *   2. Compute the desired URI list (the E1 blend). Empty (no seeds/embeddings yet) is
- *      still a valid list; the playlist simply carries nothing until the user seeds.
- *   3. Mirror guard FIRST for an existing playlist: the desired list's hash matches the
- *      stored one ⇒ return `unchanged` with NO Spotify call at all (not even a token
- *      acquire) — the KV/row hash IS the truth of what the mirror last wrote, so an
- *      unchanged week costs one read (the Telescope's exact discipline).
- *   4. Otherwise acquire the token and either create-once (no row ⇒ mint, bounded by the
- *      daily cap) or full-replace via `PUT /playlists/{id}/items` (the Telescope's proven
- *      endpoint — never the legacy `/tracks` alias). The new hash + `last_synced_at` are
- *      stamped only AFTER the PUT lands, so a failed write retries next time.
- *   5. The description is set at create AND on every CHANGED refresh (bundled with the
- *      item replace), so an edited username or the copy itself propagates without ever
- *      costing a write on an unchanged week.
+ * The edition (the INTERNAL cache, the shelf's source of truth) is written FIRST and ALWAYS,
+ * regardless of the kill switch. The Spotify mirror is the EXTERNAL effect and stays behind
+ * the DEFAULT-DENY switch + the daily mint cap + the `last_uri_hash` mirror guard, unchanged:
  *
- * Best-effort: any Spotify fault becomes `{ ok: false, reason }` — never a throw.
+ *   - Minting DARK ⇒ the edition is born (or confirmed unchanged) and NO Spotify call is
+ *     made — `status: "edition_only"` when an edition was written, `"unchanged"` when the
+ *     desired list matched the latest edition. The user's explicit act is no longer a no-op.
+ *   - Minting OPEN ⇒ after the edition, mirror the desired list: create-once for a user with
+ *     no playlist row (bounded by the rolling daily cap), or full-replace via
+ *     `PUT /playlists/{id}/items` when the mirror hash moved. The description is (re)set with
+ *     every create/change. `status` reports the MIRROR outcome — `minted` / `refreshed` /
+ *     `unchanged`.
+ *
+ * Best-effort: any Spotify fault becomes `{ ok: false, reason }` — never a throw. The edition
+ * has already been written by then, so a Spotify hiccup never costs the shelf its data.
  */
 export async function mintOrRefreshFrontierPlaylist(
   user: PublicUser,
   nowMs: number = Date.now(),
 ): Promise<FrontierSyncResult> {
-  if (!(await isFrontierMintingOpen())) {
-    return { ok: true, status: "switch_off" };
-  }
-
   try {
-    const desired = await desiredUrisFor(user);
+    const compute = await computeAndStoreEdition(user, nowMs);
 
-    if (!desired.ok) {
-      return { ok: false, reason: desired.reason };
+    if (!compute.ok) {
+      return { ok: false, reason: compute.reason };
+    }
+
+    // ── The EXTERNAL Spotify mirror is the ONLY thing the kill switch gates ─────
+    if (!(await isFrontierMintingOpen())) {
+      return { ok: true, status: compute.editionWritten ? "edition_only" : "unchanged" };
     }
 
     const existing = await getFrontierRow(user.id);
     const description = frontierDescription(user);
-    const hash = hashUris(desired.uris);
 
     // ── Mirror guard: an unchanged existing playlist is zero Spotify calls ─────
-    if (existing && existing.last_uri_hash === hash) {
+    if (existing && existing.last_uri_hash === compute.hash) {
       return {
         ok: true,
         playlistId: existing.playlist_id,
@@ -382,35 +488,26 @@ export async function mintOrRefreshFrontierPlaylist(
       await step(
         "replace",
         spotifyFetch(`/playlists/${created.id}/items`, accessToken, {
-          body: JSON.stringify({ uris: desired.uris }),
+          body: JSON.stringify({ uris: compute.uris }),
           headers: { "Content-Type": "application/json" },
           method: "PUT",
         }),
       );
 
+      // The playlist row lands AFTER the Spotify PUT (a failed create retries next tick with
+      // no orphan row). Decoupled from the edition: the edition is already durably written,
+      // so this is a single write, not a batch — the mirror's `last_uri_hash` is its own
+      // idempotence, independent of the edition's.
       const nowIso = new Date(nowMs).toISOString();
 
-      // ONE atomic write: the new playlist row AND its first frozen edition snapshot,
-      // sequenced AFTER the Spotify PUT landed. A split write (a separate `.execute` for
-      // the edition) could stamp the playlist without the edition on a crash, then
-      // double-write the snapshot next refresh — the batch makes it exactly-once.
-      await writeFrontierEdition(
-        [
-          {
-            args: [user.id, created.id, nowIso, nowIso, hash],
-            sql: `insert into user_frontier_playlists
-                (user_id, playlist_id, created_at, last_synced_at, last_uri_hash, cover_uploaded_at)
-              values (?, ?, ?, ?, ?, null)`,
-          },
-          ...frontierEditionInsertStatements({
-            createdAt: nowIso,
-            editionId: randomUUID(),
-            tracks: desired.tracks,
-            userId: user.id,
-          }),
-        ],
-        user.id,
-      );
+      await (
+        await getDb()
+      ).execute({
+        args: [user.id, created.id, nowIso, nowIso, compute.hash],
+        sql: `insert into user_frontier_playlists
+            (user_id, playlist_id, created_at, last_synced_at, last_uri_hash, cover_uploaded_at)
+          values (?, ?, ?, ?, ?, null)`,
+      });
 
       logEvent("info", "frontier.playlist-minted", { playlistId: created.id, userId: user.id });
 
@@ -439,33 +536,22 @@ export async function mintOrRefreshFrontierPlaylist(
     await step(
       "replace",
       spotifyFetch(`/playlists/${playlistId}/items`, accessToken, {
-        body: JSON.stringify({ uris: desired.uris }),
+        body: JSON.stringify({ uris: compute.uris }),
         headers: { "Content-Type": "application/json" },
         method: "PUT",
       }),
     );
 
-    // Stored only AFTER the PUT landed, so a failed write is retried next refresh. The
-    // `last_uri_hash` advance AND the frozen edition commit as ONE atomic batch — a split
-    // write would risk advancing the hash without the edition (or vice versa), breaking
-    // the hash-changed ⇔ edition-written invariant.
+    // The mirror's `last_uri_hash` advances only AFTER the PUT landed, so a failed write
+    // retries next refresh. Its own single write — the edition was already committed above.
     const nowIso = new Date(nowMs).toISOString();
 
-    await writeFrontierEdition(
-      [
-        {
-          args: [nowIso, hash, user.id],
-          sql: `update user_frontier_playlists set last_synced_at = ?, last_uri_hash = ? where user_id = ?`,
-        },
-        ...frontierEditionInsertStatements({
-          createdAt: nowIso,
-          editionId: randomUUID(),
-          tracks: desired.tracks,
-          userId: user.id,
-        }),
-      ],
-      user.id,
-    );
+    await (
+      await getDb()
+    ).execute({
+      args: [nowIso, compute.hash, user.id],
+      sql: `update user_frontier_playlists set last_synced_at = ?, last_uri_hash = ? where user_id = ?`,
+    });
 
     return {
       ok: true,
@@ -505,6 +591,7 @@ export async function getFrontierState(user: PublicUser): Promise<FrontierState>
 }
 
 export type FrontierRefreshCounts = {
+  editionOnly: number;
   failed: number;
   minted: number;
   ok: true;
@@ -516,11 +603,17 @@ export type FrontierRefreshCounts = {
 };
 
 /**
- * Refresh EVERY minted Frontier playlist — the weekly sweep's engine (the
- * `refresh_frontier_playlists` admin op). Respects the kill switch first (a closed
- * switch returns `switchOff: true` and touches nothing), then walks the rows oldest
- * first and mint-or-refreshes each. Best-effort per user: one user's Spotify fault is
- * counted as `failed` and the walk continues.
+ * Write the next Frontier edition for EVERY user who already has one — the weekly sweep's
+ * engine (the `refresh_frontier_playlists` admin op; RFC D2). Runs REGARDLESS of the kill
+ * switch: the edition (the shelf's source of truth) is written for every walked user, and
+ * only the Spotify MIRROR stays conditional on the switch. `switchOff` is reported for
+ * observability but no longer short-circuits the sweep.
+ *
+ * A user still in the DRAFT phase (zero editions) is SKIPPED by construction — the walk
+ * iterates users with at least one edition, so edition #1 is only ever born from that user's
+ * own "Get playlist". The identical-hash skip survives per user (an unchanged desired list
+ * writes no new edition). Best-effort per user: one user's Spotify fault is counted as
+ * `failed` and the walk continues.
  *
  * `limit` bounds a tick so the op stays cheap even as the crew grows; the sweep loops
  * until the whole set is walked.
@@ -529,22 +622,20 @@ export async function refreshAllFrontierPlaylists(
   limit: number,
   nowMs: number = Date.now(),
 ): Promise<FrontierRefreshCounts> {
+  const mintingOpen = await isFrontierMintingOpen();
   const counts: FrontierRefreshCounts = {
+    editionOnly: 0,
     failed: 0,
     minted: 0,
     ok: true,
     refreshed: 0,
     skipped: 0,
-    switchOff: false,
+    // Informational only now — the sweep writes editions regardless. True ⇒ the Spotify
+    // mirror was skipped for every user this tick because minting is closed.
+    switchOff: !mintingOpen,
     total: 0,
     unchanged: 0,
   };
-
-  if (!(await isFrontierMintingOpen())) {
-    counts.switchOff = true;
-
-    return counts;
-  }
 
   const rows = await listFrontierUsers(limit);
   counts.total = rows.length;
@@ -562,11 +653,12 @@ export async function refreshAllFrontierPlaylists(
       counts.minted += 1;
     } else if (result.status === "refreshed") {
       counts.refreshed += 1;
+    } else if (result.status === "edition_only") {
+      // The edition was written but the Spotify mirror was skipped (minting dark).
+      counts.editionOnly += 1;
     } else if (result.status === "unchanged") {
       counts.unchanged += 1;
     } else {
-      // "switch_off" can only appear if the switch flipped mid-walk — count it as
-      // skipped rather than pretending it refreshed.
       counts.skipped += 1;
     }
   }
@@ -575,9 +667,18 @@ export async function refreshAllFrontierPlaylists(
 }
 
 /**
- * The minted-Frontier users the refresh sweep walks, oldest first, hydrated into the
- * `PublicUser` shape the sync needs (the description reads the handle; the recs read
- * the id + verified flag). ONE join, bounded by `limit`.
+ * The users the refresh sweep walks — every user who has COMMITTED, oldest first, hydrated
+ * into the `PublicUser` shape the sync needs (the description reads the handle; the recs read
+ * the id + verified flag). Commitment is the UNION of two kinds of evidence:
+ *
+ *   - an EDITION row (the post-ledger commitment — "Get playlist" born an edition), and
+ *   - a PLAYLIST row (the pre-ledger commitment — a Spotify playlist minted BEFORE editions
+ *     existed; that row IS the evidence of the same "Get playlist" act from before the ledger,
+ *     so such a user is swept and gains their first edition on the next refresh).
+ *
+ * A TRUE draft user — no edition AND no playlist row — is skipped, so the sweep never births
+ * edition #1 for someone who never asked. The union is de-duped by user_id (a user with both
+ * kinds appears once, anchored at the earliest evidence) so oldest-first is stable.
  */
 async function listFrontierUsers(limit: number): Promise<Array<{ user: PublicUser }>> {
   const result = await (
@@ -586,10 +687,18 @@ async function listFrontierUsers(limit: number): Promise<Array<{ user: PublicUse
     args: [limit],
     sql: `select u.id, u.username, u.display_username, u.name, u.image, u.email,
         u.email_verified, u.created_at, u.crew_number
-      from user_frontier_playlists f
-      join "user" u on u.id = f.user_id
+      from (
+        select user_id, min(committed_at) as committed_at
+        from (
+          select fe.user_id as user_id, fe.created_at as committed_at from frontier_editions fe
+          union all
+          select f.user_id as user_id, f.created_at as committed_at from user_frontier_playlists f
+        )
+        group by user_id
+      ) e
+      join "user" u on u.id = e.user_id
       where u.status = 'active'
-      order by f.created_at asc
+      order by e.committed_at asc
       limit ?`,
   });
 

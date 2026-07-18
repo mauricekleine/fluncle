@@ -7,7 +7,7 @@ import {
   frontierEditionInsertStatements,
 } from "./frontier-editions";
 import { type PublicUser } from "./public-auth";
-import { createIntegrationDb, seedCatalogueTrack, seedTrack } from "./integration-db";
+import { createIntegrationDb, rowCount, seedCatalogueTrack, seedTrack } from "./integration-db";
 
 // THE PER-USER RECOMMENDATION ENGINE, PROVEN — against the REAL schema, with
 // vectors we control (the catalogue.integration.test.ts discipline). The engine
@@ -689,5 +689,26 @@ describe("listRecommendations excludeRecent (real SQL)", () => {
     // cat-old aged out of the window, so it returns; cat-recent is still inside it.
     expect(catalogueIds).toContain("cat-old");
     expect(catalogueIds).not.toContain("cat-recent");
+  });
+});
+
+describe("seed writes never create editions (the draft-then-checkpoint boundary)", () => {
+  // RFC D2: seeds are INPUTS; editions are CHECKPOINTS. An edition is born only from the
+  // two triggers ("Get playlist" and the weekly sweep) — never as a side effect of a seed
+  // change. This pins that the seed CRUD path writes zero `frontier_editions` rows, so a
+  // draft-phase user (adding/removing seeds) stays in the draft with nothing frozen.
+  it("saving and removing seeds leaves the edition ledger empty", async () => {
+    const { deleteRecSeed, saveRecSeed } = await import("./recommendations");
+    const user = publicUser("user-A");
+
+    await seedCatalogue("seed-1", { vector: axis(0) });
+    await seedCatalogue("seed-2", { vector: axis(1) });
+
+    await saveRecSeed(user, { trackId: "seed-1" });
+    await saveRecSeed(user, { trackId: "seed-2" });
+    await deleteRecSeed(user, "seed-1");
+
+    expect(await rowCount(db, "frontier_editions")).toBe(0);
+    expect(await rowCount(db, "frontier_edition_tracks")).toBe(0);
   });
 });

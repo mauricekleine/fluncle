@@ -16,10 +16,12 @@ import * as z from "zod";
  * It creates NO new public authority the operator did not already give: every playlist
  * it touches already exists, minted by its own owner.
  *
- * It respects the DEFAULT-DENY kill switch first (a closed switch returns
- * `switchOff: true` and touches nothing), then walks up to `limit` minted playlists
- * oldest first and mint-or-refreshes each. Best-effort per user: one Spotify fault is
- * counted in `failed` and the walk continues. The counts are the sweep's JSON summary.
+ * It writes the next edition for every user with at least one existing edition REGARDLESS
+ * of the kill switch (the edition is the shelf's source of truth); only the Spotify mirror
+ * stays conditional (`switchOff` is reported for observability, never a short-circuit). A
+ * draft-phase user with zero editions is skipped by construction. It walks up to `limit`
+ * users oldest-edition first. Best-effort per user: one Spotify fault is counted in `failed`
+ * and the walk continues. The counts are the sweep's JSON summary.
  */
 export const refreshFrontierPlaylists = oc
   .route({
@@ -32,6 +34,8 @@ export const refreshFrontierPlaylists = oc
   .input(z.object({ limit: z.number().int().positive().optional() }))
   .output(
     z.object({
+      // Editions written without a Spotify mirror (minting dark this tick).
+      editionOnly: z.number(),
       // Users whose sync threw a Spotify fault (best-effort; the walk continues).
       failed: z.number(),
       // Playlists newly created this tick (a user who minted since last refresh).
@@ -39,13 +43,13 @@ export const refreshFrontierPlaylists = oc
       ok: z.literal(true),
       // Playlists whose item list changed and was re-mirrored (distinct from `minted`).
       refreshed: z.number(),
-      // Rows the switch flipped out from under mid-walk (rare).
+      // Any unforeseen per-user status (defensive; expected 0).
       skipped: z.number(),
-      // True ⇒ the kill switch is closed; nothing was touched.
+      // True ⇒ the kill switch is closed; editions were still written, the Spotify mirror skipped.
       switchOff: z.boolean(),
-      // How many minted playlists the tick walked.
+      // How many users the tick walked.
       total: z.number(),
-      // Playlists the mirror guard left untouched (nothing changed).
+      // Users whose desired list matched their latest edition (nothing written or mirrored).
       unchanged: z.number(),
     }),
   );

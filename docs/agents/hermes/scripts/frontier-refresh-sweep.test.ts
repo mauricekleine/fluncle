@@ -3,7 +3,8 @@
 //
 // The contract worth pinning is that the sweep is a PURE TRIGGER: it fires ONE
 // `fluncle admin frontier refresh`, surfaces the op's counts on its own summary line, and
-// (1) reports `switchOff` honestly when the kill switch is closed, (2) stays `ok` when the
+// (1) surfaces `switchOff` + the `editionOnly` count honestly when the kill switch is closed
+// (dark still writes editions, only Spotify is skipped), (2) stays `ok` when the
 // op reports per-user failures (best-effort; retried next week), and (3) reports
 // `ok: false` on a CLI error without throwing.
 //
@@ -26,11 +27,11 @@ N=$(cat "$DIR/count" 2>/dev/null || echo 0)
 N=$((N + 1))
 echo "$N" > "$DIR/count"
 case "$(cat "$DIR/mode")" in
-  ok)       printf '{"ok":true,"total":3,"refreshed":2,"unchanged":1,"minted":0,"skipped":0,"failed":0,"switchOff":false}\\n' ;;
-  # The kill switch is closed — nothing walked.
-  switched) printf '{"ok":true,"total":0,"refreshed":0,"unchanged":0,"minted":0,"skipped":0,"failed":0,"switchOff":true}\\n' ;;
+  ok)       printf '{"ok":true,"total":3,"refreshed":2,"unchanged":1,"minted":0,"editionOnly":0,"skipped":0,"failed":0,"switchOff":false}\\n' ;;
+  # The kill switch is closed — editions are still written (internal cache); Spotify skipped.
+  switched) printf '{"ok":true,"total":2,"refreshed":0,"unchanged":0,"minted":0,"editionOnly":2,"skipped":0,"failed":0,"switchOff":true}\\n' ;;
   # A best-effort per-user Spotify fault — still a successful tick.
-  partial)  printf '{"ok":true,"total":4,"refreshed":2,"unchanged":1,"minted":0,"skipped":0,"failed":1,"switchOff":false}\\n' ;;
+  partial)  printf '{"ok":true,"total":4,"refreshed":2,"unchanged":1,"minted":0,"editionOnly":0,"skipped":0,"failed":1,"switchOff":false}\\n' ;;
   cli-error) printf '{"code":"missing_token","message":"Missing required env vars","ok":false}\\n'; exit 1 ;;
   crash)    printf 'boom\\n' >&2; exit 1 ;;
 esac
@@ -94,13 +95,15 @@ describe("frontier-refresh-sweep is a pure weekly trigger", () => {
     });
   });
 
-  test("reports switchOff honestly when the kill switch is closed", () => {
+  test("reports switchOff + editionOnly honestly when the kill switch is closed", () => {
     mode("switched");
     const summary = run();
 
     expect(calls()).toBe(1);
     expect(summary.switchOff).toBe(true);
     expect(summary.ok).toBe(true);
+    // Dark ⇒ the sweep still writes editions (the internal cache); Spotify is skipped.
+    expect(summary.editionOnly).toBe(2);
   });
 
   test("a per-user failure is still a successful tick (best-effort, retried next week)", () => {

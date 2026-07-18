@@ -30,6 +30,7 @@ const log = (message: string) => console.error(`[frontier-refresh-sweep] ${messa
 
 /** The refresh op's summary — the fields we surface. */
 type FrontierRefreshSummary = {
+  editionOnly?: number;
   failed?: number;
   minted?: number;
   ok?: boolean;
@@ -86,6 +87,7 @@ function isCliErrorPayload(value: unknown): value is { code: string; message: st
 // entrypoint's job below. That keeps the sweep importable (frontier-refresh-sweep.test.ts).
 export function main(): { ok: boolean } & Record<string, unknown> {
   const summary = {
+    editionOnly: 0,
     error: null as null | string,
     failed: 0,
     minted: 0,
@@ -104,12 +106,15 @@ export function main(): { ok: boolean } & Record<string, unknown> {
     summary.refreshed = tick.refreshed ?? 0;
     summary.unchanged = tick.unchanged ?? 0;
     summary.minted = tick.minted ?? 0;
+    summary.editionOnly = tick.editionOnly ?? 0;
     summary.skipped = tick.skipped ?? 0;
     summary.failed = tick.failed ?? 0;
     summary.switchOff = tick.switchOff ?? false;
 
     if (summary.switchOff) {
-      log("Frontier minting is paused (kill switch closed) — nothing refreshed");
+      log(
+        `Frontier minting is paused (kill switch closed) — ${summary.editionOnly} edition(s) written, Spotify skipped`,
+      );
     } else if (summary.failed > 0) {
       log(`${summary.failed} playlist(s) failed to refresh (best-effort; retried next week)`);
     }

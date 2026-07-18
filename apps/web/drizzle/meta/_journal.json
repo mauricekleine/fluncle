@@ -750,6 +750,13 @@
       "when": 1784373475633,
       "tag": "0106_spotty_punisher",
       "breakpoints": true
+    },
+    {
+      "idx": 107,
+      "version": "6",
+      "when": 1784376281583,
+      "tag": "0107_short_legion",
+      "breakpoints": true
     }
   ]
 }

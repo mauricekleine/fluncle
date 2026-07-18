@@ -2026,14 +2026,16 @@ function addAdminCommands(program: Command): void {
         return;
       }
 
+      const counts = `${summary.refreshed} refreshed, ${summary.minted} minted, ${summary.editionOnly} edition-only, ${summary.unchanged} unchanged, ${summary.failed} failed`;
+
       if (summary.switchOff) {
-        console.log("Frontier minting is paused (the kill switch is closed). Nothing refreshed.");
+        console.log(
+          `Frontier minting is paused (the kill switch is closed) — editions written, Spotify skipped. Walked ${summary.total} user(s): ${counts}.`,
+        );
         return;
       }
 
-      console.log(
-        `Walked ${summary.total} playlist(s): ${summary.refreshed} refreshed, ${summary.unchanged} unchanged, ${summary.minted} minted, ${summary.skipped} skipped, ${summary.failed} failed.`,
-      );
+      console.log(`Walked ${summary.total} user(s): ${counts}.`);
     });
 
   frontier
