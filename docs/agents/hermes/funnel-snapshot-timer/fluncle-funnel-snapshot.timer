@@ -1,0 +1,17 @@
+[Unit]
+Description=fluncle-funnel-snapshot timer — record the daily catalogue-funnel snapshot at 23:45 UTC on the rave-02 host (not the Hermes gateway)
+
+[Timer]
+# 23:45 UTC daily — the END of the UTC day the snapshot is KEYED on (the row's `day` is the UTC
+# date), so the day's numbers are captured just before it rolls over. The host clock is UTC, so no
+# TZ suffix is needed; naming UTC is explicit and DST-free. A fixed nightly slot (not a rolling
+# interval that drifts across the day) so the series reads as one clean daily cadence, and it sits in
+# a free minute clear of the other daily jobs (logbook 00:40, audit 01:00, cluster 02:20, backup
+# 03:00, reach 04:00 Amsterdam ≈ 02:00-03:00 UTC, audit-review 05:00). Persistent catches up a
+# snapshot the box slept through on the next wake — a caught-up extra run is a safe no-op (the
+# per-day upsert overwrites the row it already wrote).
+OnCalendar=*-*-* 23:45:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

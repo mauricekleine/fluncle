@@ -1,0 +1,27 @@
+[Unit]
+Description=fluncle-funnel-snapshot — rave-02 host trigger for the daily catalogue-funnel snapshot
+Documentation=https://github.com/mauricekleine/fluncle/blob/main/docs/agents/hermes/funnel-snapshot-timer/README.md
+Wants=network-online.target docker.service
+After=network-online.target docker.service
+# If this unit dies before writing its own /status marker (OOM, missing binary, a crash
+# before the sweep catch runs), the healthcheck prober never sees a failure. This catch-all
+# posts a minimal Discord alert; %n is this unit's full name.
+OnFailure=fluncle-sweep-failure@%n.service
+
+[Service]
+Type=oneshot
+# Root drives the Docker daemon; `docker exec -u hermes` runs the WORK as the unprivileged
+# hermes user. The .sh/.ts pair is BAKED at /opt/hermes-scripts/ (auto-updates from main via
+# pin-watch); this host unit only TRIGGERS it, and the sweep self-writes its /status marker
+# (cron-output.sh). The agent token comes from the shared op-injected ${HOME}/.fluncle-secrets.env
+# the wrapper sources; no new secret (every count is computed Worker-side).
+ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/funnel-snapshot-sweep.sh
+# One tick is a single bare trigger → one Worker request that computes the counts + upserts one row.
+# The stage scan is a once-a-day full scan of `tracks`; the ceiling has ample headroom and sits well
+# under the 24h cadence, so an over-long tick just skips the next trigger and self-heals.
+TimeoutStartSec=600
+# Modest hardening for a root docker-driving oneshot.
+NoNewPrivileges=true
+ProtectControlGroups=true
+ProtectKernelTunables=true
+RestrictSUIDSGID=true

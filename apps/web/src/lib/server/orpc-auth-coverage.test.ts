@@ -352,6 +352,10 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // The Frontier kill switch's READ — agent-allowed, the get_capture_budget precedent
   // (a read of an operator dial is not the dial).
   get_frontier_minting: "admin",
+  // The catalogue funnel read (docs/rfcs/catalogue-funnel-rfc.md) — admin tier: the live
+  // pipeline + the growth series behind `/admin/funnel`. A pure read (agent-allowed like
+  // `get_crawl_status`); its snapshot WRITE sibling is `record_catalogue_snapshot`, below.
+  get_funnel: "admin",
   // The dream-weaver's proposed-order read (RFC mixability-engine) — admin tier
   // (agent-allowed, like get_track_admin): a PURE read that never writes/publishes, so
   // no operatorGuard. `promote_recording` remains the only way a mixtape exists.
@@ -528,6 +532,11 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // operatorGuard), the record_health precedent; the box's sweeps POST their cost
   // rows with the agent token, and it writes only the internal cost_events ledger
   // (no publish), so the agent token drives it.
+  // The daily catalogue-funnel snapshot write (docs/rfcs/catalogue-funnel-rfc.md) — agent
+  // tier (adminAuth only, no operatorGuard), the record_platform_stats precedent; the box's
+  // funnel-snapshot cron POSTs a bare trigger and it writes only the internal
+  // catalogue_snapshots ledger (no publish), so the agent token drives it.
+  record_catalogue_snapshot: "admin",
   record_cost: "admin",
   // The box's status cron POSTs a health snapshot — agent tier (adminAuth only, no
   // operatorGuard), the context_track/note_track precedent; it writes only the
