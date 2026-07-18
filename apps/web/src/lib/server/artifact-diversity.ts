@@ -42,6 +42,19 @@ import {
   scoreNoteEcho,
 } from "./note";
 
+// The worn-through Texture descriptors the 2026-07-14 audit named
+// (docs/planning/homogenisation-evidence.md): the recycled palette the `context_distil`
+// prompt now warns against. Tracked in a fixed order so a re-measure lines up column-for-
+// column against the audit's numbers (rolling 34, breakbeats 27, liquid 25, introspective
+// 25, atmospheric 19 over the 61 context notes).
+export const WORN_TEXTURE_WORDS = [
+  "rolling",
+  "liquid",
+  "introspective",
+  "atmospheric",
+  "breakbeats",
+] as const;
+
 /** One generated artifact in a family: a stable id (a Log ID, a sector) and its prose. */
 export type Artifact = {
   /** The artifact's identity — a finding's Log ID, or a logbook entry's sector label. */
@@ -484,4 +497,433 @@ export function stripLogbookProse(body: string): string {
     .replace(/[*_#>`]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+// ── The NEWSLETTER family (why-lines off editions.content_json) ───────────────────────
+//
+// An edition's per-finding "why" line is the newsletter's generated prose — the same
+// body-clock reflex the other families reach for ("knees went up before I'd clocked the
+// drop"). The content is a JSON payload (`galaxies[].findings[].why`), so the corpus is
+// the flattened set of those lines. A malformed or partial payload (a draft mid-author)
+// must never crash the harness, so the parse is defensive and yields [] on any shape it
+// does not recognise — the same degrade-not-throw contract the public edition read uses.
+
+/** One finding reference inside an edition — matches the `EditionFindingRef` read shape. */
+type EditionFindingRef = { logId?: unknown; why?: unknown };
+/** One galaxy block inside an edition — matches the `EditionGalaxyBlock` read shape. */
+type EditionGalaxyBlock = { findings?: unknown };
+/** The edition content payload as `content_json` stores it. */
+type EditionContentShape = { galaxies?: unknown };
+
+/**
+ * Pull the per-finding "why" lines out of one edition's `content_json` as measurable
+ * artifacts (id = the finding's Log ID, text = the why line). Defensive: a payload that
+ * is not the expected `{ galaxies: [{ findings: [{ logId, why }] }] }` shape — a draft
+ * mid-author, a truncated write, plain garbage — yields an empty array rather than
+ * throwing, so a single bad row never sinks the whole re-run.
+ */
+export function extractEditionWhyLines(contentJson: string): Artifact[] {
+  let parsed: unknown;
+
+  try {
+    parsed = JSON.parse(contentJson);
+  } catch {
+    return [];
+  }
+
+  if (!parsed || typeof parsed !== "object") {
+    return [];
+  }
+
+  const galaxies = (parsed as EditionContentShape).galaxies;
+
+  if (!Array.isArray(galaxies)) {
+    return [];
+  }
+
+  const lines: Artifact[] = [];
+
+  for (const block of galaxies) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+
+    const findings = (block as EditionGalaxyBlock).findings;
+
+    if (!Array.isArray(findings)) {
+      continue;
+    }
+
+    for (const finding of findings) {
+      if (!finding || typeof finding !== "object") {
+        continue;
+      }
+
+      const ref = finding as EditionFindingRef;
+      const why = typeof ref.why === "string" ? ref.why.trim() : "";
+
+      if (why.length === 0) {
+        continue;
+      }
+
+      lines.push({ id: typeof ref.logId === "string" ? ref.logId : "?", text: why });
+    }
+  }
+
+  return lines;
+}
+
+// ── The CONTEXT-NOTE Texture vocabulary (the upstream seed) ───────────────────────────
+//
+// The `context_distil` prompt ends every note on a `Texture: a, b, c` line — 3–6 comma-
+// separated pointers that seed EVERY downstream voice (note, observation, video). The
+// 07-14 audit named this the upstream cause: the descriptor palette is narrow and recycled
+// (`rolling` 34, `breakbeats` 27, `liquid` 25, `introspective` 25, `atmospheric` 19 over 61),
+// and that monochrome fuel flows straight into the notes and observations. The same day the
+// prompt was changed to demand track-specific pointers and name those five as worn through.
+// This histogram is what makes that fix VERIFIABLE: re-run it and the worn five should thin.
+
+/** One tracked worn-through Texture descriptor and how many notes still reach for it. */
+export type WornDescriptor = CrutchWord;
+
+/** The Texture-vocabulary reading over the context notes. */
+export type TextureVocabStats = {
+  /** Descriptor vocabulary ranked by how many notes use it (docFreq ≥ 2), top-K. */
+  descriptors: WordCount[];
+  /** Context notes that carry a parseable `Texture:` line (the measure's denominator). */
+  size: number;
+  /** Total context notes scanned (with non-empty text), parseable Texture line or not. */
+  total: number;
+  /** How many distinct descriptors appear at least once across the corpus. */
+  vocabulary: number;
+  /** The tracked worn-through descriptors, document frequency, in the order asked. */
+  worn: WornDescriptor[];
+};
+
+/**
+ * Pull the descriptors off a context note's final `Texture:` line. The prompt puts it last
+ * ("add exactly one final line beginning 'Texture: '"), so the LAST such line wins if a note
+ * somehow carries more than one. Returns the lowercased, comma-split descriptors with any
+ * surrounding punctuation (the line's trailing full stop) trimmed off; an empty array when no
+ * `Texture:` line is present. A multi-word descriptor ("halogen-lit", "rolling breakbeats") is
+ * kept WHOLE — the descriptor histogram measures the phrase the prompt emits, so a recycled
+ * compound like "rolling breakbeats" surfaces as its own cliché rather than dissolving into
+ * two tokens. (The worn-WORD cut below tokenises, to stay comparable to the audit's counts.)
+ */
+export function extractTextureDescriptors(contextNote: string): string[] {
+  const lines = contextNote.split(/\r?\n/);
+  let textureLine: string | undefined;
+
+  for (const line of lines) {
+    const match = /^\s*texture\s*:\s*(.*)$/i.exec(line);
+
+    if (match && typeof match[1] === "string" && match[1].trim().length > 0) {
+      textureLine = match[1];
+    }
+  }
+
+  if (textureLine === undefined) {
+    return [];
+  }
+
+  return textureLine
+    .split(",")
+    .map((descriptor) =>
+      descriptor
+        .trim()
+        .toLowerCase()
+        // Trim surrounding punctuation (a trailing "." on the last descriptor, stray quotes)
+        // while keeping internal hyphens/spaces — "atmospheric depth." → "atmospheric depth".
+        .replace(/^[^\p{L}\p{N}]+/u, "")
+        .replace(/[^\p{L}\p{N}]+$/u, ""),
+    )
+    .filter((descriptor) => descriptor.length > 0);
+}
+
+/** Split a descriptor into its word tokens (for the audit-comparable worn-WORD count). */
+function descriptorTokens(descriptor: string): string[] {
+  return descriptor.split(/[^\p{L}\p{N}]+/u).filter((token) => token.length > 0);
+}
+
+/**
+ * The Texture-vocabulary histogram over the context notes, plus the document frequency of a
+ * caller-supplied list of worn-through descriptors (the 07-14 audit's `rolling`/`liquid`/
+ * `introspective`/`atmospheric`/`breakbeats`). Each note contributes each of its descriptors
+ * once (a note repeating a descriptor still counts one), so the numbers read as "N of M
+ * notes reach for this".
+ *
+ * TWO cuts, deliberately: the `descriptors` histogram keeps the authored comma-items whole
+ * (so a recycled compound like "rolling breakbeats" is visible as one cliché), while `worn`
+ * counts by WORD TOKEN — a note counts for "rolling" whether it wrote "rolling" or "rolling
+ * breakbeats" — because that is how the audit counted, and a token count is what makes the
+ * 07-14 prompt fix comparable to its before-numbers. Pure and deterministic.
+ */
+export function measureTextureVocab(
+  notes: readonly Artifact[],
+  options: { topK?: number; wornWords?: readonly string[] } = {},
+): TextureVocabStats {
+  const { topK = 20, wornWords = [] } = options;
+  const populated = notes.filter((note) => note.text.trim().length > 0);
+
+  const docFreq = new Map<string, number>();
+  const tokenDocFreq = new Map<string, number>();
+  let withTexture = 0;
+
+  for (const note of populated) {
+    const descriptors = new Set(extractTextureDescriptors(note.text));
+
+    if (descriptors.size === 0) {
+      continue;
+    }
+
+    withTexture += 1;
+
+    for (const descriptor of descriptors) {
+      docFreq.set(descriptor, (docFreq.get(descriptor) ?? 0) + 1);
+    }
+
+    // Word tokens, unioned across this note's descriptors, counted once per note.
+    const tokens = new Set([...descriptors].flatMap((descriptor) => descriptorTokens(descriptor)));
+
+    for (const token of tokens) {
+      tokenDocFreq.set(token, (tokenDocFreq.get(token) ?? 0) + 1);
+    }
+  }
+
+  const descriptors = [...docFreq.entries()]
+    .filter(([, freq]) => freq >= 2)
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, topK)
+    .map(([word, freq]) => ({ docFreq: freq, word }));
+
+  const worn = wornWords.map((word) => {
+    const needle = word.toLowerCase();
+
+    return { docFreq: tokenDocFreq.get(needle) ?? 0, word: needle };
+  });
+
+  return {
+    descriptors,
+    size: withTexture,
+    total: populated.length,
+    vocabulary: docFreq.size,
+    worn,
+  };
+}
+
+// ── The VIDEO axes (categorical distributions + the palette NULL share) ───────────────
+//
+// The video family's homogenisation is not a phrase but a look: four consecutive renders
+// sharing one amber halftone palette (07-13), the register axis collapsing to 92%
+// representational (07-14). Those axes are stored as flat category tags on the finding
+// (video_vehicle / video_grain / video_register / video_palette). This measures each as a
+// simple share-of-population distribution — and reports the NULL share honestly, because
+// `video_palette` (shipped in PR #702) is null on every render made before it existed.
+
+/** One category value and how many artifacts carry it. */
+export type CategoryCount = {
+  /** How many artifacts carry this exact value. */
+  count: number;
+  /** The category value (a vehicle name, a grain family, a register, a palette bucket). */
+  value: string;
+};
+
+/** The distribution of one categorical axis across a population, with its NULL share. */
+export type CategoricalDistribution = {
+  /** The category values ranked by count (desc), then value — the shape of the axis. */
+  categories: CategoryCount[];
+  /** How many rows carry NO value on this axis (`total - present`). */
+  nullCount: number;
+  /** How many rows carry a non-empty value on this axis. */
+  present: number;
+  /** Total rows considered (the population — e.g. every finding that has a video). */
+  total: number;
+};
+
+/**
+ * The distribution of a single categorical axis (vehicle / grain / register / palette) over
+ * a population. A null or blank value is not a category — it is counted into `nullCount`, so
+ * an axis that is mostly unrecorded (palette on pre-#702 renders) reads as a big NULL share
+ * rather than a false "no repetition". Categories are ranked by count so the report leads
+ * with the attractor.
+ */
+export function categoricalDistribution(
+  values: readonly (string | null | undefined)[],
+): CategoricalDistribution {
+  const counts = new Map<string, number>();
+  let present = 0;
+
+  for (const raw of values) {
+    const value = typeof raw === "string" ? raw.trim() : "";
+
+    if (value.length === 0) {
+      continue;
+    }
+
+    present += 1;
+    counts.set(value, (counts.get(value) ?? 0) + 1);
+  }
+
+  const categories = [...counts.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([value, count]) => ({ count, value }));
+
+  return { categories, nullCount: values.length - present, present, total: values.length };
+}
+
+// ── The EMBEDDING-DISTANCE cut (the one automated layer that sees MOVES, not words) ────
+//
+// Every other measure here is lexical — it counts shared WORDS. A paraphrase (the same move
+// in different words) is invisible to it, which is the escape the note echo gate leaves open.
+// A text embedding sees the MEANING, so two scripts that make the same body-clock move in
+// different words land close in vector space even with zero shared content words. This is the
+// only automated layer that could catch that — BUT baseline similarity across one persona,
+// one register, one genre is high by design, so whether the distance actually SEPARATES the
+// condemned pairs from the healthy ones is an empirical question, not an assumption. The math
+// here is pure (cosine distance over supplied vectors); the model that produces the vectors
+// lives in the runner, behind an opt-in flag, so this file needs no model dependency.
+
+/** One artifact and its embedding vector. */
+export type EmbeddedArtifact = {
+  /** The artifact's id (a Log ID). */
+  id: string;
+  /** Its embedding vector (any dimensionality; the model decides). */
+  vector: readonly number[];
+};
+
+/** The embedding distance between one pair of artifacts. */
+export type PairDistance = {
+  /** The first artifact's id. */
+  a: string;
+  /** The second artifact's id. */
+  b: string;
+  /** Their cosine distance (0 = identical direction, up to 2 = opposite). */
+  distance: number;
+};
+
+/** The pairwise embedding-distance reading over a family. */
+export type EmbeddingDistanceStats = {
+  /** Every unordered pair's distance, ascending (closest — most similar — first). */
+  pairs: PairDistance[];
+  /** Mean cosine distance over every unordered pair. */
+  mean: number;
+  /** Standard deviation of the pairwise distances (how tight the corpus clusters). */
+  stdev: number;
+  /** The single smallest pairwise distance (the most-similar pair). */
+  min: number;
+  /** The most-similar pair's ids ([] when fewer than two vectors). */
+  minPair: string[];
+  /** Number of vectors measured (the denominator). */
+  size: number;
+};
+
+/**
+ * Cosine distance between two vectors: `1 - (a·b)/(‖a‖‖b‖)`. Robust to un-normalised inputs
+ * (it divides by the norms), so it does not silently assume the caller normalised. A
+ * zero-length vector has no direction, so its distance is reported as the maximum-unlike 1.
+ */
+export function cosineDistance(a: readonly number[], b: readonly number[]): number {
+  const length = Math.min(a.length, b.length);
+  let dot = 0;
+  let normA = 0;
+  let normB = 0;
+
+  for (let i = 0; i < length; i += 1) {
+    const left = a[i] ?? 0;
+    const right = b[i] ?? 0;
+
+    dot += left * right;
+    normA += left * left;
+    normB += right * right;
+  }
+
+  if (normA === 0 || normB === 0) {
+    return 1;
+  }
+
+  const cosine = dot / (Math.sqrt(normA) * Math.sqrt(normB));
+
+  // Clamp against floating-point drift beyond [-1, 1], then to a distance in [0, 2].
+  return 1 - Math.max(-1, Math.min(1, cosine));
+}
+
+/**
+ * The pairwise embedding-distance reading over a family: every unordered pair's cosine
+ * distance, ascending, plus mean / stdev / min. O(n²) in the corpus — an offline operator
+ * measure over a few hundred vectors, never a request path. Fewer than two vectors gives a
+ * clean zeroed reading.
+ */
+export function pairwiseEmbeddingStats(
+  embedded: readonly EmbeddedArtifact[],
+): EmbeddingDistanceStats {
+  const pairs: PairDistance[] = [];
+
+  for (let i = 0; i < embedded.length; i += 1) {
+    for (let j = i + 1; j < embedded.length; j += 1) {
+      const left = embedded[i];
+      const right = embedded[j];
+
+      if (!left || !right) {
+        continue;
+      }
+
+      pairs.push({ a: left.id, b: right.id, distance: cosineDistance(left.vector, right.vector) });
+    }
+  }
+
+  pairs.sort((x, y) => x.distance - y.distance);
+
+  if (pairs.length === 0) {
+    return { mean: 0, min: 0, minPair: [], pairs, size: embedded.length, stdev: 0 };
+  }
+
+  const mean = pairs.reduce((sum, pair) => sum + pair.distance, 0) / pairs.length;
+  const variance = pairs.reduce((sum, pair) => sum + (pair.distance - mean) ** 2, 0) / pairs.length;
+  const closest = pairs[0];
+
+  return {
+    mean,
+    min: closest ? closest.distance : 0,
+    minPair: closest ? [closest.a, closest.b] : [],
+    pairs,
+    size: embedded.length,
+    stdev: Math.sqrt(variance),
+  };
+}
+
+/**
+ * Where a specific pair sits in a family's pairwise-distance ordering — the validation the
+ * embedding experiment turns on. A condemned pair that lands at rank 1 (the closest pair) far
+ * below the median SEPARATES; one that sits mid-pack OVERLAPS with the healthy pairs and adds
+ * no gate signal. `rank` is 1-based over pairs sorted closest-first; `percentile` is the
+ * fraction of pairs that are FARTHER (more diverse) than this one — 1.0 means "the closest
+ * pair in the whole corpus". Undefined when the pair is not present.
+ */
+export function rankPairDistance(
+  stats: EmbeddingDistanceStats,
+  idA: string,
+  idB: string,
+): { distance: number; percentile: number; rank: number; totalPairs: number } | undefined {
+  const index = stats.pairs.findIndex(
+    (pair) => (pair.a === idA && pair.b === idB) || (pair.a === idB && pair.b === idA),
+  );
+
+  if (index === -1) {
+    return undefined;
+  }
+
+  const pair = stats.pairs[index];
+
+  if (!pair) {
+    return undefined;
+  }
+
+  const totalPairs = stats.pairs.length;
+
+  return {
+    distance: pair.distance,
+    percentile: totalPairs <= 1 ? 1 : (totalPairs - 1 - index) / (totalPairs - 1),
+    rank: index + 1,
+    totalPairs,
+  };
 }
