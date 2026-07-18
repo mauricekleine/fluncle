@@ -2,6 +2,7 @@ import { liveSurfaces } from "@fluncle/registry";
 import { logPageUrl, siteUrl, twitchUrl } from "../fluncle-links";
 import { fluncleDescription } from "../identity";
 import { type FeedItem, type MixtapeDTO, mixtapeDisplayTitle } from "../mixtapes";
+import { FRESH_TRACKS_DEFAULT, FRESH_TRACKS_MAX, listFreshTracks } from "./fresh";
 import { getLiveState, type LiveState } from "./live";
 import { resolveLogPageTarget } from "./log-resolver";
 import { subscribeToNewsletter } from "./newsletter";
@@ -101,6 +102,30 @@ const tools: McpTool[] = [
     },
     name: "list_tracks",
     title: "Recent findings",
+  },
+  {
+    description:
+      "List the newest drum & bass RELEASES across Fluncle's archive: every track that came OUT in the trailing 30-day window, freshest release first. These are ordered by RELEASE date (when a track landed), not by when Fluncle found it, so do not say Fluncle found them, only that they just came out. Certified findings carry a Log ID coordinate and cover art; the quieter uncertified rows carry neither.",
+    execute: async (args) => {
+      const limit = typeof args.limit === "number" ? args.limit : undefined;
+
+      // listFreshTracks strips the private key off findings and mints nothing for the
+      // uncertified rows, so the whole fresh list is safe to world-serve as-is.
+      return listFreshTracks({ limit });
+    },
+    inputSchema: {
+      properties: {
+        limit: {
+          description: `How many releases to return (1 to ${FRESH_TRACKS_MAX}, default ${FRESH_TRACKS_DEFAULT}).`,
+          maximum: FRESH_TRACKS_MAX,
+          minimum: 1,
+          type: "integer",
+        },
+      },
+      type: "object",
+    },
+    name: "list_fresh",
+    title: "Fresh releases",
   },
   {
     description:
@@ -669,7 +694,7 @@ async function dispatch(message: unknown, request: Request): Promise<JsonRpcResp
       return success(id, {
         capabilities: MCP_CAPABILITIES,
         instructions:
-          "Fluncle's drum & bass archive over MCP. TOOLS: list recent findings, read one in full by coordinate, pull a random one, check whether all of Fluncle's systems are operational, search Spotify candidates, submit a track for review, or board the newsletter. RESOURCES: read the archive as a corpus, each finding/mixtape at fluncle://finding/<logId> or fluncle://mixtape/<logId>, its public record. PROMPTS: Fluncle-voiced starting points (recommend a finding for a mood, walk a recent night, decode a Log ID). A submission is a recommendation, not a publish; Fluncle listens before anything goes out.",
+          "Fluncle's drum & bass archive over MCP. TOOLS: list recent findings, list the newest releases (what just came out), read one in full by coordinate, pull a random one, check whether all of Fluncle's systems are operational, search Spotify candidates, submit a track for review, or board the newsletter. RESOURCES: read the archive as a corpus, each finding/mixtape at fluncle://finding/<logId> or fluncle://mixtape/<logId>, its public record. PROMPTS: Fluncle-voiced starting points (recommend a finding for a mood, walk a recent night, decode a Log ID). A submission is a recommendation, not a publish; Fluncle listens before anything goes out.",
         protocolVersion: requested || PROTOCOL_VERSION,
         serverInfo: { name: SERVER_NAME, title: "Fluncle", version: SERVER_VERSION },
       });

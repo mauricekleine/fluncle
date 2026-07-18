@@ -79,6 +79,28 @@ const tools: WebMcpTool[] = [
   },
   {
     description:
+      "List the newest drum & bass RELEASES across Fluncle's archive: every track that came OUT in the trailing 30-day window, freshest release first. Ordered by RELEASE date (when a track landed), not by when Fluncle found it, so do not say Fluncle found them, only that they just came out. Certified findings carry a Log ID coordinate and cover art; the quieter uncertified rows carry neither.",
+    execute: async (input) => {
+      const limit = typeof input.limit === "number" ? input.limit : 50;
+      const params = new URLSearchParams({ limit: String(limit) });
+
+      return jsonResult(await fetchJson(`/api/v1/tracks/fresh?${params}`));
+    },
+    inputSchema: {
+      properties: {
+        limit: {
+          description: "How many releases to return (1 to 100, default 50).",
+          maximum: 100,
+          minimum: 1,
+          type: "integer",
+        },
+      },
+      type: "object",
+    },
+    name: "list_fresh",
+  },
+  {
+    description:
       "Read one finding (or mixtape) in full by its Log ID coordinate or Spotify track id. Returns the same public record its /log page shows: artist, title, Found date, note, BPM, key, links, and the recovered observation transcript.",
     execute: async (input) =>
       jsonResult(await fetchJson(`/api/tracks/${encodeURIComponent(asString(input.idOrLogId))}`)),
