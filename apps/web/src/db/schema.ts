@@ -34,7 +34,7 @@ const float32Vector = customType<{ data: Uint8Array; driverData: Uint8Array }>({
  * `tracks` is the SUPERTYPE half of the supertype/subtype pair it forms with `findings`
  * (below). It carries only what is true of a RECORDING, independent of whether Fluncle
  * ever certified it: identity (`track_id`, `isrc`, the Spotify ids, the Discogs release
- * ids — with room for `mbid` later), the release metadata, the AUDIO ANALYSIS (bpm/key +
+ * ids, the MusicBrainz recording MBID `mb_recording_id`), the release metadata, the AUDIO ANALYSIS (bpm/key +
  * provenance, the spectral feature vector), the MuQ EMBEDDING, and the private full-song
  * capture side-channel. All of it is derivable from the recording itself.
  *
@@ -282,6 +282,28 @@ export const tracks = sqliteTable(
     // The GRAPH POINTER to the normalized `labels` entity (`labels.id`) — the twin of
     // `albumId` above; see its comment for why the pointer exists and what NULL means.
     labelId: text("label_id"),
+    // ── THE CANONICAL KG JOIN KEY (the MusicBrainz identity layer) ───────────────────────────
+    // The MusicBrainz RECORDING MBID — the one identifier that reconciles a track to the wider
+    // open music graph (MusicBrainz, Wikidata, and everything that keys off them). CATALOGUE
+    // identity (it describes the recording, not the certification), so it lives here and is just
+    // as true of an uncertified track. Three fill paths (docs/catalogue-crawler.md):
+    //   - a CRAWLER-born row already carries it in its PK — `track_id` is `mb_<recording-mbid>`
+    //     by construction — so the crawler ALSO stamps it here at mint time (crawl.ts), and one
+    //     idempotent SQL strip backfills history (recording-mbids.ts § the prefix strip).
+    //   - a FINDING/Spotify-born row (`track_id` is a Spotify id) resolves it by ISRC through the
+    //     shared MusicBrainz client (`backfill_recording_mbids` — recording-mbids.ts).
+    // PUBLIC identity, like `isrc`: it feeds the `/log` MusicRecording's `sameAs`
+    // (`https://musicbrainz.org/recording/<mbid>`) + a KG `identifier` PropertyValue, so it is
+    // NOT in `PRIVATE_TRACK_FIELDS`. NULL until a fill path lands it (or forever if MB has no
+    // recording for the ISRC — a missing anchor is honest, never guessed).
+    mbRecordingId: text("mb_recording_id"),
+    // The ISRC→recording resolve ATTEMPT stamp — the reliability marker that drains the
+    // `backfill_recording_mbids` worklist. Stamped on EVERY terminal attempt (a hit AND a clean
+    // miss), so a track whose ISRC MusicBrainz has no recording for is not re-queried on every
+    // tick forever (the `source_audio_attempted_at` / `spotify_anchor_attempted_at` discipline).
+    // NULL until the row has ever been attempted; a crawler/mint fill sets `mb_recording_id`
+    // directly and never needs this. Internal reliability state — no public surface, no lastmod.
+    mbRecordingIdAttemptedAt: text("mb_recording_id_attempted_at"),
     // The Ear's two ranking outputs. See the block comment on `capture_priority` above —
     // these three columns are one unit and are written only by the `rank_catalogue` sweep.
     nearestFindingScore: real("nearest_finding_score"),
@@ -413,6 +435,16 @@ export const tracks = sqliteTable(
     index("tracks_anchor_queue_idx")
       .on(table.isrc)
       .where(sql`${table.spotifyUri} is null and ${table.isrc} is not null`),
+    // The MusicBrainz-recording-MBID fill queue — "no `mb_recording_id` yet, and not yet
+    // attempted" (recording-mbids.ts, `backfill_recording_mbids`). PARTIAL for the anchor
+    // queue's reason: the worklist is DERIVED, and this predicate matches a SHRINKING slice of a
+    // growing table (a row leaves the moment it is filled OR its ISRC resolve is stamped a miss),
+    // so the index shrinks as the backlog drains rather than growing with the catalogue. It backs
+    // BOTH the op's reads: the bounded `mb_` prefix-strip (history's crawler rows) and the
+    // ISRC→recording API drain (findings/Spotify-born rows), both ordered by `track_id`.
+    index("tracks_mb_recording_id_queue_idx")
+      .on(table.trackId)
+      .where(sql`${table.mbRecordingId} is null and ${table.mbRecordingIdAttemptedAt} is null`),
     // The MuQ EMBED queue — "audio on file, no vector yet" (track-work.ts, `kind: "embed"`).
     // PARTIAL, for the same reason the anchor queue is: the worklist is DERIVED, and the
     // predicate matches a shrinking slice of a growing table, so the index shrinks as the
@@ -2404,6 +2436,66 @@ export const labelAliases = sqliteTable(
     index("label_aliases_alias_slug_idx").on(table.aliasSlug),
     // The `/admin/labels` review section reads the open candidates (`where status = 'candidate'`).
     index("label_aliases_status_idx").on(table.status),
+  ],
+);
+
+// ARTIST ALIASES — DnB's many-names problem, solved the label_aliases way (the MusicBrainz
+// identity layer). The exact structural twin of `label_aliases` above: a per-artist side table
+// of alternative spellings, each carrying its source + a status, so the many names a DnB act
+// records under (the alias, the real name, the sort name, a locale variant) reconcile to ONE
+// artist entity WITHOUT ever rewriting `artists.name`. MusicBrainz curates these directly
+// (`inc=aliases` on the artist lookup), so the resolve pipeline harvests them on the same walk it
+// already makes for socials + KG anchors (artist-resolution.ts).
+//
+// ── WHAT EACH COLUMN IS (the label_aliases shape) ───────────────────────────────
+//   - `artist_id`  — the CANONICAL artist this alias belongs to (`artists.id`). The alias is
+//                    another spelling OF this artist, never an artist of its own.
+//   - `alias`      — the raw alternative spelling (a MusicBrainz alias, an operator's typing).
+//   - `alias_slug` — `slugify(alias)`, INDEXED: the fold key. A confirmed/auto alias's slug is
+//                    the artist under another name, kept off the canonical `artists.name`.
+//   - `source`     — where the spelling came from. `musicbrainz` is the harvester; `operator` is
+//                    a hand-added alias; the rest are reserved for future corroboration sources.
+//   - `kind`       — `name` (a real display name — a MusicBrainz "Artist name"/"Legal name"
+//                    alias, or an operator's) or `hint` (a MusicBrainz "Search hint" — a weaker
+//                    lead kept for the record but NEVER rendered publicly).
+//   - `status`     — the TRUST state, mirroring `artist_socials` (not `label_aliases`' weaker
+//                    candidate/confirmed): `auto` (a MusicBrainz-curated alias — authoritative
+//                    and DIRECT, so trusted/public exactly as MB socials are born `auto`) or
+//                    `confirmed` (an operator-added/ruled alias). ONLY `auto`/`confirmed` of
+//                    `kind='name'` feed the public `alternateName` JSON-LD. There is deliberately
+//                    NO `candidate` tier: a MusicBrainz alias is a direct statement of identity,
+//                    not the fuzzy cross-source inference `label_aliases`' Apple×ISRC candidate
+//                    guards — the same reason MB socials skip `candidate` and are born `auto`.
+//
+// IDEMPOTENT and never clobbers a ruling: the unique index is `(artist_id, alias_slug, source)`
+// with `on conflict do nothing`, so a re-resolve over an existing alias is a no-op. See
+// docs/artist-relationship.md.
+export const artistAliases = sqliteTable(
+  "artist_aliases",
+  {
+    alias: text("alias").notNull(),
+    aliasSlug: text("alias_slug").notNull(),
+    artistId: text("artist_id").notNull(),
+    createdAt: text("created_at").notNull(),
+    id: text("id").primaryKey(),
+    kind: text("kind", { enum: ["name", "hint"] }).notNull(),
+    source: text("source", {
+      enum: ["operator", "musicbrainz", "discogs", "spotify"],
+    }).notNull(),
+    status: text("status", { enum: ["auto", "confirmed"] }).notNull(),
+  },
+  (table) => [
+    // One spelling per (artist, source): the harvest upserts `on conflict do nothing`, so a
+    // re-resolve never duplicates an alias and never reverts an operator ruling.
+    uniqueIndex("artist_aliases_artist_slug_source_idx").on(
+      table.artistId,
+      table.aliasSlug,
+      table.source,
+    ),
+    // The public read (`where artist_id = ? and status in ('auto','confirmed') and kind='name'`)
+    // and the fold read (`where alias_slug = ?`). Bounded as aliases grow.
+    index("artist_aliases_artist_id_idx").on(table.artistId),
+    index("artist_aliases_alias_slug_idx").on(table.aliasSlug),
   ],
 );
 

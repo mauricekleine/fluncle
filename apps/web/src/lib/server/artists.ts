@@ -243,6 +243,25 @@ export async function getPublicArtistSocials(artistId: string): Promise<ArtistSo
 }
 
 /**
+ * An artist's PUBLIC alternate names, name-sorted — the `alternateName` array the artist page's
+ * `MusicGroup` JSON-LD carries (the MusicBrainz identity layer, the label page's `getConfirmedAliasNames`
+ * twin). Filters to the trusted, real-name rows: `status in ('auto','confirmed')` (a MusicBrainz-curated
+ * or operator-added alias) AND `kind = 'name'` (a "Search hint" is kept in the table but never rendered).
+ * Empty for an artist with no such alias — the caller omits the key entirely.
+ */
+export async function getPublicArtistAliasNames(artistId: string): Promise<string[]> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [artistId],
+    sql: `select alias from artist_aliases
+          where artist_id = ? and kind = 'name' and status in ('auto', 'confirmed')
+          order by alias collate nocase asc`,
+  });
+
+  return typedRows<{ alias: string }>(result.rows).map((row) => row.alias);
+}
+
+/**
  * The name → slug map for a track's artists (via `track_artists`), so the log
  * page can link each artist name to `/artist/<slug>` and stamp the `@id` on the
  * `byArtist` MusicGroup node. Keyed by the NORMALIZED name (`fold`: lowercased,

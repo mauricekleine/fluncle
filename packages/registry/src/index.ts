@@ -1100,6 +1100,20 @@ export const SURFACES: readonly Surface[] = [
     weights: { status: "hidden" },
   },
   {
+    command: "fluncle admin backfills recording-mbids",
+    exposedContent: [
+      "fill each track's canonical MusicBrainz recording MBID (crawler PK strip + ISRC resolve)",
+    ],
+    kind: "cron",
+    name: "cron.recording-mbids",
+    operatorNotes:
+      "every 60m, run by a rave-02 HOST systemd timer (docs/agents/hermes/recording-mbids-timer/). The MusicBrainz identity layer: gives every track its canonical MusicBrainz recording MBID — the one identifier that reconciles a track to the wider open music graph (MusicBrainz, Wikidata) and the anchor the `/log` MusicRecording emits as a `sameAs` + a KG `identifier`. Two fill paths: a FREE SQL strip of crawler-born rows' PK (`mb_<recording-mbid>` → the `mb_recording_id` column, no vendor call), then an ISRC→recording resolve of the findings/Spotify-born tail through the shared MusicBrainz client (`/isrc/<isrc>`). New crawler rows already carry the MBID at mint time, so this cron catches history up + drains the ISRC tail. METADATA IDENTITY ONLY — it certifies nothing and publishes nothing (agent tier, the `backfill_label_images` precedent). Worker-paced (the box holds no MusicBrainz budget): one bounded batch per tick, 1 req/s, circuit-broken on a throttle. The `tracks` row carries the durable reliability state (`mb_recording_id` + the `mb_recording_id_attempted_at` stamp, a miss stamped so it is not re-queried forever). Zero LLM tokens. Source: docs/agents/hermes/scripts/recording-mbids-sweep.*. See docs/catalogue-crawler.md.",
+    probeConfig: { cadenceMs: 60 * MINUTE_MS, cronName: "fluncle-recording-mbids", kind: "cron" },
+    statusDescription: "fills each track's MusicBrainz recording id",
+    title: "Recording MBIDs",
+    weights: { status: "hidden" },
+  },
+  {
     command: "fluncle admin backfills cover-masters",
     exposedContent: [
       "resolve each pending album/artist its OWN ≤1200² cover master (best source wins) → its own R2 image",

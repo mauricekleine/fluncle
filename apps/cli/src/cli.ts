@@ -2492,6 +2492,20 @@ function addAdminCommands(program: Command): void {
       await runBackfillLabelImages(options, backfillLabelImagesCommand);
     });
 
+  // `backfill_recording_mbids` → `admin backfills recording-mbids`. The MusicBrainz identity layer:
+  // gives each track its canonical MusicBrainz recording MBID (a free PK strip of crawler-born rows,
+  // then an ISRC→recording resolve of findings/Spotify-born rows through the shared MB client).
+  backfill
+    .command("recording-mbids")
+    .description("Fill MusicBrainz recording MBIDs (crawler PK strip + ISRC resolve) over tracks")
+    .option("--dry-run", "Report the eligible worklist without any vendor call or write", false)
+    .option("--limit <limit>", "Max ISRC lookups to process", "50")
+    .option("--json", "Print JSON", false)
+    .action(async (options: BackfillSyncOptions) => {
+      const { backfillRecordingMbidsCommand } = await import("./commands/admin-tracks");
+      await runBackfillRecordingMbids(options, backfillRecordingMbidsCommand);
+    });
+
   // `backfill_cover_masters` → `admin backfills cover-masters --kind album|artist`. Gives each
   // album/artist its OWN ≤1200²-capped cover master (best source wins), downloaded once into R2,
   // instead of hotlinking a third party. The box cron runs both kinds per tick.
@@ -3966,6 +3980,88 @@ async function runBackfillLabelImages(
 
   for (const item of failed) {
     console.log(`  ${item.slug}: ${item.error}`);
+  }
+
+  if (failed.length > 0) {
+    process.exitCode = 1;
+  }
+}
+
+// `admin backfills recording-mbids`: one bounded pass of the recording-MBID fill sweep (the
+// MusicBrainz identity layer). The Worker fills crawler-born rows from their PK for free, then
+// resolves findings/Spotify-born rows' MBID by ISRC (1 req/s, circuit-broken). The cap is on ISRC
+// lookups actually HANDLED (resolved + missed + failed); the loop drains the track-id cursor until
+// the cap is met, the worklist is exhausted, or MusicBrainz throttles.
+async function runBackfillRecordingMbids(
+  options: BackfillSyncOptions,
+  backfillRecordingMbidsCommand: typeof import("./commands/admin-tracks").backfillRecordingMbidsCommand,
+): Promise<void> {
+  const limit = parseListLimit(options.limit);
+  const resolved: string[] = [];
+  const missed: string[] = [];
+  const failed: Array<{ error: string; trackId: string }> = [];
+  let cursor: string | undefined;
+  let dryRun = options.dryRun;
+  let prefixStripped = 0;
+  let throttled = false;
+
+  while (resolved.length + missed.length + failed.length < limit) {
+    const remaining = limit - (resolved.length + missed.length + failed.length);
+    const result = await backfillRecordingMbidsCommand(remaining, options.dryRun, cursor);
+    dryRun = result.dryRun;
+    prefixStripped += result.prefixStripped;
+    resolved.push(...result.resolved);
+    missed.push(...result.missed);
+    failed.push(...result.failed);
+
+    if (!options.json) {
+      const verb = result.dryRun ? "would resolve" : "resolved";
+      console.log(
+        `  …stripped ${result.prefixStripped} from PK; ${verb} ${result.resolvedCount} by ISRC; ${result.missedCount} not in MusicBrainz; ${result.failedCount} failed`,
+      );
+    }
+
+    if (result.rateLimited) {
+      // MusicBrainz circuit breaker tripped. Stop looping the cursor — the next tick resumes fresh.
+      throttled = true;
+      break;
+    }
+
+    if (result.nextCursor === null) {
+      break;
+    }
+
+    cursor = result.nextCursor;
+  }
+
+  if (options.json) {
+    printJson({
+      dryRun,
+      failed,
+      failedCount: failed.length,
+      missed,
+      missedCount: missed.length,
+      ok: true,
+      prefixStripped,
+      rateLimited: throttled,
+      resolved,
+      resolvedCount: resolved.length,
+    });
+
+    if (failed.length > 0) {
+      process.exitCode = 1;
+    }
+
+    return;
+  }
+
+  const verb = dryRun ? "Would fill" : "Filled";
+  console.log(
+    `${verb} ${prefixStripped} recording MBID(s) from crawler PKs; ${resolved.length} by ISRC; ${missed.length} not in MusicBrainz; ${failed.length} failed.`,
+  );
+
+  for (const item of failed) {
+    console.log(`  ${item.trackId}: ${item.error}`);
   }
 
   if (failed.length > 0) {

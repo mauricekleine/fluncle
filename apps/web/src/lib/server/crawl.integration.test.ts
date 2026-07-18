@@ -201,6 +201,16 @@ describe("the catalogue crawler", () => {
       "mb_rec-2",
       "mb_rec-3",
     ]);
+
+    // MINT-TIME MBID (the MusicBrainz identity layer, path b): every crawled row carries its
+    // recording MBID in `mb_recording_id` off the bat — the bare id, not the `mb_`-prefixed PK —
+    // so it is graph-joinable without waiting on the prefix-strip backfill.
+    const mbids = await db.execute(
+      "select track_id, mb_recording_id from tracks where track_id like 'mb\\_%' escape '\\'",
+    );
+    expect(
+      mbids.rows.map((row) => `${text(row.track_id)}=${text(row.mb_recording_id)}`).sort(compare),
+    ).toEqual(["mb_rec-1=rec-1", "mb_rec-2=rec-2", "mb_rec-3=rec-3"]);
   });
 
   it("leaves every agent queue's state at its DDL default — a crawled row is nobody's work item", async () => {

@@ -29,6 +29,10 @@ export type LogSchemaInput = LogProseInput & {
   discogsReleaseUrl?: string;
   durationMs: number;
   isrc?: string;
+  // The MusicBrainz recording MBID (the KG join key). Present ⇒ the MusicRecording gains a
+  // `https://musicbrainz.org/recording/<mbid>` `sameAs` + a `musicbrainz-recording-id`
+  // `identifier` PropertyValue. Absent until a fill path lands it (the honest degrade).
+  mbRecordingId?: string;
   spotifyUrl: string;
   tiktokUrl?: string;
   title: string;
@@ -110,10 +114,21 @@ export function musicRecordingJsonLd(
     duration: formatIsoDuration(track.durationMs),
     genre: "Drum and Bass",
     // The Log ID in BOTH forms as identifiers (not alternateName): the bare
-    // coordinate and the fluncle:// URI are the retrieval tokens.
+    // coordinate and the fluncle:// URI are the retrieval tokens. The MusicBrainz recording MBID
+    // joins the list only when present — the canonical KG anchor a crawler reconciles this
+    // recording to MusicBrainz + Wikidata by (the MusicBrainz identity layer).
     identifier: [
       { "@type": "PropertyValue", propertyID: "fluncle-log-id", value: track.logId },
       { "@type": "PropertyValue", propertyID: "fluncle-log-id", value: `fluncle://${track.logId}` },
+      ...(track.mbRecordingId
+        ? [
+            {
+              "@type": "PropertyValue",
+              propertyID: "musicbrainz-recording-id",
+              value: track.mbRecordingId,
+            },
+          ]
+        : []),
     ],
     image: imageUrl,
     ...(track.isrc ? { isrcCode: track.isrc } : {}),
@@ -140,6 +155,8 @@ export function musicRecordingJsonLd(
       ...(track.appleMusicUrl ? [track.appleMusicUrl] : []),
       ...(track.tiktokUrl ? [track.tiktokUrl] : []),
       ...(track.discogsReleaseUrl ? [track.discogsReleaseUrl] : []),
+      // The MusicBrainz recording page — the canonical KG anchor (present only once filled).
+      ...(track.mbRecordingId ? [`https://musicbrainz.org/recording/${track.mbRecordingId}`] : []),
     ],
     url: logPageUrl(track.logId),
   };
@@ -365,6 +382,13 @@ export function breadcrumbsJsonLd(logId: string): Record<string, unknown> {
 /** The artist page's identity + its confirmed off-site anchors, for `sameAs`. */
 export type MusicGroupArtist = {
   /**
+   * The artist's PUBLIC alternate names (the MusicBrainz identity layer, the label page's
+   * `alternateNames` twin) — the trusted `auto`/`confirmed`, `kind='name'` aliases the resolve
+   * pipeline harvested from MusicBrainz. Emitted as the MusicGroup's `alternateName`. Absent/empty
+   * ⇒ the key is omitted.
+   */
+  alternateNames?: string[];
+  /**
    * The artist's factual bio, when one is authored — the SAME paragraph the page prints. Emitted
    * as the MusicGroup's `description` (schema description mirrors the visible definitional
    * content). Undefined until the bio is backfilled ⇒ the key is omitted, never `description:
@@ -414,6 +438,7 @@ export function musicGroupJsonLd(
 ): Record<string, unknown> {
   const artistUrl = artistPageUrl(artist.slug);
   const sameAs = artistSameAs(artist);
+  const alternateNames = artist.alternateNames ?? [];
   // The page's OWN artist name → slug, folded to match `byArtistNode`'s lookup.
   // Every finding on this page credits this artist, so stamping the nested
   // `byArtist` nodes reconciles each recording back to the artist's `@id` for
@@ -425,6 +450,12 @@ export function musicGroupJsonLd(
     "@context": "https://schema.org",
     "@id": artistUrl,
     "@type": "MusicGroup",
+    // The artist's other recorded names (the MusicBrainz identity layer) — one string collapses to
+    // a scalar, several to an array (both valid schema.org), omitted entirely otherwise, so an
+    // artist without aliases is byte-identical to before. Mirrors the label page's alternateName.
+    ...(alternateNames.length > 0
+      ? { alternateName: alternateNames.length === 1 ? alternateNames[0] : alternateNames }
+      : {}),
     // The factual bio mirrors the page's visible definitional paragraph — omitted cleanly (never
     // `description: null`) until one is authored.
     ...(artist.bio ? { description: artist.bio } : {}),

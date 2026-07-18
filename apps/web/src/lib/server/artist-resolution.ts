@@ -35,6 +35,7 @@
 // All vendor calls are best-effort: a failure for one platform never blocks the
 // others. MB is throttled at 1 req/s (the shared Worker-isolate ceiling).
 
+import { slugify } from "@fluncle/contracts/util/galaxy-slug";
 import { randomUUID } from "node:crypto";
 import { getDb, typedRow, typedRows } from "./db";
 import { readOptionalEnv } from "./env";
@@ -105,10 +106,19 @@ type MbUrlRel = {
   "target-type"?: string;
 };
 
+// One MusicBrainz alias (from `inc=aliases`) — the artist's other recorded names. We read `name`
+// (the display spelling) and `type` (to split real names from "Search hint" leads). `sort-name`,
+// `primary`, `locale`, and the begin/end dates are carried by MB but not needed here.
+type MbAlias = {
+  name?: string;
+  type?: string | null;
+};
+
 type MbArtistResponse = {
   id?: string;
   name?: string;
   relations?: MbUrlRel[];
+  aliases?: MbAlias[];
   error?: unknown;
 };
 
@@ -136,6 +146,14 @@ export type ResolvedSocial = {
   platform: ArtistSocialPlatform;
   url: string;
   source: "musicbrainz" | "firecrawl";
+};
+
+// One harvested alias — an artist's alternate name from MusicBrainz (the many-names problem).
+// `kind` splits a real display name from a "Search hint" (kept for the record, never rendered).
+export type ResolvedAlias = {
+  alias: string;
+  slug: string;
+  kind: "name" | "hint";
 };
 
 export type ArtistResolutionResult = {
@@ -733,12 +751,50 @@ async function extractSocialsFromArtistData(
   return { hubUrls, socials, wikidataQid };
 }
 
+/**
+ * Harvest an MB artist's `inc=aliases` into ResolvedAlias rows — the artist's other recorded names
+ * (the many-names problem). Skips empties and any alias whose slug equals the canonical artist
+ * name's (it IS the primary name, not an alternate); dedupes by slug (first wins). A MusicBrainz
+ * "Search hint" alias is kept as `kind='hint'` (never rendered publicly) — everything else is a
+ * real display name (`kind='name'`).
+ */
+export function extractAliasesFromArtistData(
+  artistData: MbArtistResponse,
+  canonicalName: string,
+): ResolvedAlias[] {
+  const canonicalSlug = slugify(canonicalName);
+  const aliases: ResolvedAlias[] = [];
+  const seen = new Set<string>([canonicalSlug]);
+
+  for (const alias of artistData.aliases ?? []) {
+    const name = alias.name?.trim();
+
+    if (!name) {
+      continue;
+    }
+
+    const slug = slugify(name);
+
+    if (!slug || seen.has(slug)) {
+      continue;
+    }
+
+    seen.add(slug);
+    aliases.push({ alias: name, kind: alias.type === "Search hint" ? "hint" : "name", slug });
+  }
+
+  return aliases;
+}
+
 // ── MB artist resolution (name search + Spotify cross-reference) ───────────────
 
 type MbResolution = {
   mbid: string | null;
   wikidataQid: string | null;
   socials: ResolvedSocial[];
+  // The artist's MusicBrainz aliases (the many-names problem) — harvested off the SAME matched
+  // candidate's `inc=aliases` payload, so they cost no extra MB call.
+  aliases: ResolvedAlias[];
   rateLimited: boolean;
   // The trust the MB socials persist at: an exact Spotify-id identity match earns "auto"
   // (public/trusted); the weaker name+score soft fallback is downgraded to "candidate"
@@ -751,6 +807,7 @@ type MbResolution = {
 
 function emptyResolution(mbid: string | null, rateLimited: boolean): MbResolution {
   return {
+    aliases: [],
     hubUrls: [],
     mbSocialStatus: "candidate",
     mbid,
@@ -826,7 +883,9 @@ export async function resolveArtistViaMb(
     }
 
     const artistResult = await mbFetch<MbArtistResponse>(
-      `/artist/${encodeURIComponent(candidateId)}?inc=url-rels`,
+      // `+aliases` harvests the artist's alternate names on the SAME lookup that classifies its
+      // url-rels — no extra MusicBrainz call (the many-names problem, the MusicBrainz identity layer).
+      `/artist/${encodeURIComponent(candidateId)}?inc=url-rels+aliases`,
     );
 
     if (artistResult.rateLimited) {
@@ -847,6 +906,7 @@ export async function resolveArtistViaMb(
       const { socials, wikidataQid, hubUrls } = await extractSocialsFromArtistData(artistData);
 
       return {
+        aliases: extractAliasesFromArtistData(artistData, trimmedName),
         hubUrls,
         mbSocialStatus: "auto",
         mbid: candidateId,
@@ -883,6 +943,9 @@ export async function resolveArtistViaMb(
     const { socials, wikidataQid, hubUrls } = await extractSocialsFromArtistData(fallbackData);
 
     return {
+      // Even the soft (name+score) match's aliases are harvested — they come from the same MB
+      // entity, and an alias is a low-risk display-name enrichment (never a link on a public page).
+      aliases: extractAliasesFromArtistData(fallbackData, trimmedName),
       hubUrls,
       mbSocialStatus: "candidate",
       mbid: fallbackCandidate.id,
@@ -1287,6 +1350,7 @@ export async function persistResolution(
   mbSocials: ResolvedSocial[],
   mbSocialStatus: "auto" | "candidate",
   firecrawlSocials: ResolvedSocial[],
+  mbAliases: ResolvedAlias[] = [],
 ): Promise<void> {
   const db = await getDb();
   const nowIso = new Date().toISOString();
@@ -1354,6 +1418,21 @@ export async function persistResolution(
             on conflict(artist_id, platform) do nothing`,
     });
   }
+
+  // Upsert the MusicBrainz aliases (the many-names problem). MB is authoritative + DIRECT (a stated
+  // identity, not the fuzzy cross-source inference label_aliases guards behind `candidate`), so they
+  // are born `status='auto'` — trusted/public exactly as MB socials are. Source-stamped
+  // `musicbrainz`; INSERT-only (`on conflict do nothing` on the (artist, alias_slug, source) key), so
+  // a re-resolve never duplicates one and never disturbs an operator-added `confirmed` alias.
+  for (const alias of mbAliases) {
+    await db.execute({
+      args: [`aa_${randomUUID()}`, artistId, alias.alias, alias.slug, alias.kind, nowIso],
+      sql: `insert into artist_aliases
+              (id, artist_id, alias, alias_slug, source, kind, status, created_at)
+            values (?, ?, ?, ?, 'musicbrainz', ?, 'auto', ?)
+            on conflict(artist_id, alias_slug, source) do nothing`,
+    });
+  }
 }
 
 // ── Main entry point ──────────────────────────────────────────────────────────
@@ -1419,6 +1498,7 @@ export async function resolveArtist(artistId: string): Promise<ArtistResolutionR
     mbResult.socials,
     mbResult.mbSocialStatus,
     firecrawlSocials,
+    mbResult.aliases,
   );
 
   return {

@@ -98,6 +98,9 @@ export type TrackRow = {
   // The `/label/<slug>` this finding's imprint has — the `album_slug` twin. See above.
   label_slug: string | null;
   log_id: string | null;
+  // The MusicBrainz recording MBID — the canonical KG join key (the MusicBrainz identity layer).
+  // PUBLIC identity like `isrc`: the `/log` MusicRecording emits it as a `sameAs` + `identifier`.
+  mb_recording_id: string | null;
   note: string | null;
   observation_alignment_json: string | null;
   observation_audio_url: string | null;
@@ -167,7 +170,7 @@ export const FINDINGS_FROM = `findings join tracks on tracks.track_id = findings
 // Columns exposed to clients. `features_json` is the enrichment spectral summary,
 // surfaced (parsed) as creative fuel for the video agent.
 export const TRACK_SELECT = `tracks.track_id, tracks.spotify_url, tracks.apple_music_url, tracks.title, tracks.album, tracks.album_image_url, tracks.artists_json, tracks.analyzed_at, tracks.analyzed_from,
-  tracks.bpm, tracks.bpm_source, tracks.duration_ms, findings.enrichment_status, tracks.features_json, tracks.in_release_id, tracks.isrc, tracks.key, tracks.key_source, tracks.label, findings.log_id, tracks.popularity,
+  tracks.bpm, tracks.bpm_source, tracks.duration_ms, findings.enrichment_status, tracks.features_json, tracks.in_release_id, tracks.isrc, tracks.key, tracks.key_source, tracks.label, tracks.mb_recording_id, findings.log_id, tracks.popularity,
   tracks.preview_url, tracks.release_date, tracks.source_audio_failures, tracks.source_audio_key, findings.video_url, findings.video_squared_at, findings.video_vehicle, findings.video_grain, findings.video_register, findings.video_model, findings.video_model_reasoning, findings.note, findings.added_at,
   findings.updated_at, findings.added_to_spotify, findings.posted_to_telegram,
   findings.observation_audio_url, findings.observation_duration_ms, findings.observation_generated_at, findings.observation_alignment_json,
@@ -399,6 +402,9 @@ export function toLeanTrackListItem(row: LeanTrackRow): LeanTrackListItem {
     labelSlug: row.label_slug ?? undefined,
     logId: row.log_id ?? undefined,
     logPageUrl: row.log_id ? logPageUrl(row.log_id) : undefined,
+    // The MusicBrainz recording MBID (the KG join key) — PUBLIC, like `isrc`; the `/log`
+    // MusicRecording emits it as a `sameAs` + `identifier`. Absent until a fill path lands it.
+    mbRecordingId: row.mb_recording_id ?? undefined,
     note: row.note?.trim() ? row.note : undefined,
     // Version the playback URL by the render timestamp so a re-`observe`
     // (which overwrites observation.mp3 in place) re-keys the edge cache — the

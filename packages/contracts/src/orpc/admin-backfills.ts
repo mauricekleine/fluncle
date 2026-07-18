@@ -396,6 +396,68 @@ export const backfillCoverMasters = oc
     }),
   );
 
+/** A failed recording-MBID row (`{ error, trackId }`). */
+const RecordingMbidsFailedSchema = z
+  .object({
+    error: z.string(),
+    trackId: z.string(),
+  })
+  .meta({ id: "RecordingMbidsBackfillFailed" });
+
+/**
+ * `backfill_recording_mbids` → `POST /admin/backfill/recording-mbids` (operationId
+ * `backfillRecordingMbids`).
+ *
+ * Agent tier (`adminAuth`): internal metadata enrichment (the MusicBrainz identity layer). It gives
+ * every track its canonical MusicBrainz recording MBID — the KG join key the `/log` MusicRecording
+ * emits as a `sameAs` + `identifier` — via two fill paths: a FREE SQL strip of crawler-born rows'
+ * PK (`mb_<recording-mbid>` → the column), then an ISRC→recording resolve over findings/Spotify-born
+ * rows through the shared MusicBrainz client (1 req/s, circuit-broken on a throttle). It writes
+ * catalogue identity only (never a certification), so the box's agent-token cron drives it, the
+ * `backfill_label_images` precedent. Returns `{ ok, dryRun, prefixStripped, resolved, resolvedCount,
+ * missed, missedCount, failed, failedCount, nextCursor, rateLimited }` — `missed` is the ISRCs
+ * MusicBrainz has no recording for (attempt-stamped so the worklist drains), `rateLimited` STOPS the
+ * loop on a MusicBrainz throttle.
+ */
+export const backfillRecordingMbids = oc
+  .route({
+    inputStructure: "detailed",
+    method: "POST",
+    operationId: "backfillRecordingMbids",
+    path: "/admin/backfill/recording-mbids",
+    summary:
+      "Fill MusicBrainz recording MBIDs (crawler PK strip + ISRC resolve) over tracks (batched)",
+    tags: ["Admin"],
+  })
+  .input(
+    z.object({
+      query: z.object({
+        cursor: z.string().optional(),
+        dryRun: z.string().optional(),
+        limit: z.string().optional(),
+      }),
+    }),
+  )
+  .output(
+    z.object({
+      dryRun: z.boolean(),
+      failed: z.array(RecordingMbidsFailedSchema),
+      failedCount: z.number(),
+      // Track ids whose ISRC MusicBrainz has no recording for — attempt-stamped so they drain.
+      missed: z.array(z.string()),
+      missedCount: z.number(),
+      nextCursor: z.string().nullable(),
+      ok: z.literal(true),
+      // Crawler-history rows filled from their PK this pass (the free no-vendor strip).
+      prefixStripped: z.number(),
+      // True when the pass STOPPED on the MusicBrainz rate-limit circuit breaker — the CLI stops
+      // looping the cursor and the next tick resumes with a fresh window.
+      rateLimited: z.boolean(),
+      resolved: z.array(z.string()),
+      resolvedCount: z.number(),
+    }),
+  );
+
 /** The `admin-backfills` domain's ops, merged into the root contract by `./index.ts`. */
 export const adminBackfillsContract = {
   backfill_apple_catalogue: backfillAppleCatalogue,
@@ -404,4 +466,5 @@ export const adminBackfillsContract = {
   backfill_discogs: backfillDiscogs,
   backfill_label_images: backfillLabelImages,
   backfill_lastfm: backfillLastfm,
+  backfill_recording_mbids: backfillRecordingMbids,
 };

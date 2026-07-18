@@ -28,6 +28,7 @@ import { FindingsGrid } from "@/components/graph-sections";
 
 const getArtistBySlug = vi.hoisted(() => vi.fn());
 const getPublicArtistSocials = vi.hoisted(() => vi.fn());
+const getPublicArtistAliasNames = vi.hoisted(() => vi.fn());
 const countArtistFindings = vi.hoisted(() => vi.fn());
 const getFindingsByArtist = vi.hoisted(() => vi.fn());
 const getArtistNeighbours = vi.hoisted(() => vi.fn());
@@ -37,6 +38,7 @@ vi.mock("@/lib/server/artists", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/server/artists")>()),
   countArtistFindings,
   getArtistBySlug,
+  getPublicArtistAliasNames,
   getPublicArtistSocials,
 }));
 
@@ -131,11 +133,13 @@ describe("resolveArtistPageData (the artist page indexability gate)", () => {
   beforeEach(() => {
     getArtistBySlug.mockReset();
     getPublicArtistSocials.mockReset();
+    getPublicArtistAliasNames.mockReset();
     countArtistFindings.mockReset();
     getFindingsByArtist.mockReset();
     getArtistNeighbours.mockReset();
     listArtistCatalogue.mockReset();
     getPublicArtistSocials.mockResolvedValue([]);
+    getPublicArtistAliasNames.mockResolvedValue([]);
     getArtistNeighbours.mockResolvedValue([]);
     listArtistCatalogue.mockResolvedValue(NO_CATALOGUE);
     getArtistBySlug.mockResolvedValue(ARTIST);

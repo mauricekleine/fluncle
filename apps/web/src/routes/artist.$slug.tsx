@@ -41,6 +41,7 @@ import {
   type ArtistSocialLink,
   countArtistFindings,
   getArtistBySlug,
+  getPublicArtistAliasNames,
   getPublicArtistSocials,
 } from "@/lib/server/artists";
 import {
@@ -69,6 +70,9 @@ type ArtistDossier = ArtistSignature & {
 
 type ArtistPageData =
   | {
+      // The artist's PUBLIC alternate names (the MusicBrainz identity layer) — the trusted MB/operator
+      // aliases, fed to the MusicGroup JSON-LD's `alternateName`. Empty when the artist has none.
+      alternateNames: string[];
       // The artist's voiced bio — a short paragraph beneath the dateline, undefined until one
       // is authored (lib/server/bio.ts). The masthead renders it only when present.
       bio: string | undefined;
@@ -162,13 +166,17 @@ export async function resolveArtistPageData(
     },
   );
 
-  const [catalogue, findings, socials, canonicalFindingCount, neighbours] = await Promise.all([
-    cataloguePromise,
-    getFindingsByArtist(artist.id, artist.name),
-    getPublicArtistSocials(artist.id),
-    countArtistFindings(artist.id),
-    getArtistNeighbours(artist.id),
-  ]);
+  const [catalogue, findings, socials, canonicalFindingCount, neighbours, alternateNames] =
+    await Promise.all([
+      cataloguePromise,
+      getFindingsByArtist(artist.id, artist.name),
+      getPublicArtistSocials(artist.id),
+      countArtistFindings(artist.id),
+      getArtistNeighbours(artist.id),
+      // The trusted MB/operator aliases — keyed off `artist.id`, mutually independent, so it rides
+      // the same parallel wave as the four finding/social/neighbour reads (the MusicBrainz identity layer).
+      getPublicArtistAliasNames(artist.id),
+    ]);
 
   if (catalogue === null) {
     // A page past the end of the pager is genuinely not-found, not a 500 — a crawler or a
@@ -185,6 +193,7 @@ export async function resolveArtistPageData(
   );
 
   return {
+    alternateNames,
     bio: artist.bio,
     catalogue,
     dossier: { ...signature, findingCount: gridFindings.length, neighbours },
@@ -224,6 +233,7 @@ function artistHead(loaderData: ArtistPageData | undefined) {
   }
 
   const {
+    alternateNames,
     bio,
     catalogue,
     findings,
@@ -267,6 +277,7 @@ function artistHead(loaderData: ArtistPageData | undefined) {
 
   const musicGroup = musicGroupJsonLd(
     {
+      alternateNames,
       bio,
       imageUrl,
       mbid,
