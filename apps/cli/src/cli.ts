@@ -6868,6 +6868,7 @@ const stringOptions = new Set([
   "--verdict-file",
   "--video",
   "--video-url",
+  "--view",
   "--voice-id",
   "--window-since",
   "--window-until",
