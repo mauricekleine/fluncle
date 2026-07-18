@@ -169,8 +169,14 @@ describe("a child sitemap", () => {
     expect(xml).toContain(`<loc>${siteUrl}/about</loc>`);
     expect(xml).toContain(`<loc>${siteUrl}/privacy</loc>`);
     expect(xml).toContain(`<loc>${siteUrl}/galaxy</loc>`);
-    // 12 hubs; /galaxies is gated on the map being named.
-    expect(xml.match(/<loc>/g)).toHaveLength(12);
+    // The console pages — real indexable surfaces, listed unconditionally.
+    expect(xml).toContain(`<loc>${siteUrl}/docs</loc>`);
+    expect(xml).toContain(`<loc>${siteUrl}/reach</loc>`);
+    expect(xml).toContain(`<loc>${siteUrl}/status</loc>`);
+    // 15 hubs; /mix (gated on getMixChainDepth().open) and /galaxies (gated on the map being
+    // named) are both dark here.
+    expect(xml).not.toContain(`<loc>${siteUrl}/mix</loc>`);
+    expect(xml.match(/<loc>/g)).toHaveLength(15);
   });
 
   it("puts one <loc> per /log page in `findings`, and nothing else", () => {
@@ -249,6 +255,25 @@ describe("a child sitemap", () => {
 
     expect(dark).not.toContain(`<loc>${siteUrl}/galaxies</loc>`);
     expect(lit).toContain(`<loc>${siteUrl}/galaxies</loc>`);
+  });
+
+  it("lists the /mix hub only while its self-lifting gate is open", () => {
+    // Closed (the default): the tool is private, so it is not in the sitemap.
+    const closed = buildSitemapShardXml("pages", 1, EMPTY_SITEMAP_BAGS) ?? "";
+    // Open: the archive is deep enough (getMixChainDepth().open) and the hub lights up — with
+    // no deploy, exactly as /galaxies rides its bag being non-empty.
+    const open = buildSitemapShardXml("pages", 1, bags({ mixOpen: true })) ?? "";
+
+    expect(closed).not.toContain(`<loc>${siteUrl}/mix</loc>`);
+    expect(open).toContain(`<loc>${siteUrl}/mix</loc>`);
+  });
+
+  it("always lists the console pages (docs, reach, status), gate or no gate", () => {
+    const xml = buildSitemapShardXml("pages", 1, EMPTY_SITEMAP_BAGS) ?? "";
+
+    expect(xml).toContain(`<loc>${siteUrl}/docs</loc>`);
+    expect(xml).toContain(`<loc>${siteUrl}/reach</loc>`);
+    expect(xml).toContain(`<loc>${siteUrl}/status</loc>`);
   });
 
   it("puts one <loc> per authored sector-day in `logbook`", () => {
@@ -420,6 +445,7 @@ describe("the URL set is preserved across the split", () => {
     labels: [{ slug: "medschool" }],
     logbook: [{ lastmod: "2026-07-04T02:11:00.000Z", sector: "036" }],
     logs: LOGS,
+    mixOpen: true,
   });
 
   it("emits exactly the union of static hubs + findings + every graph entity + logbook", () => {
@@ -439,6 +465,10 @@ describe("the URL set is preserved across the split", () => {
       `${siteUrl}/about`,
       `${siteUrl}/privacy`,
       `${siteUrl}/galaxy`,
+      `${siteUrl}/docs`,
+      `${siteUrl}/reach`,
+      `${siteUrl}/status`,
+      `${siteUrl}/mix`,
       `${siteUrl}/galaxies`,
       // findings
       `${siteUrl}/log/011.6.8K`,

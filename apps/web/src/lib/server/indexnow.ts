@@ -16,6 +16,8 @@
 
 import { waitUntil } from "cloudflare:workers";
 import { logPageUrl, siteUrl } from "../fluncle-links";
+import { type EntityCacheKind, entityPurgeUrl } from "./edge-cache";
+import { getTrackEntityPurgeTargets } from "./entity-cache-purge";
 
 // The public IndexNow ownership key (32-char lowercase hex). Served verbatim at
 // `https://www.fluncle.com/<key>.txt` by the matching root route. PUBLIC, not a
@@ -52,16 +54,40 @@ export function buildIndexNowPayload(urlList: string[]): IndexNowPayload {
 }
 
 /**
- * Submit a newly published finding's log page to IndexNow. Best-effort,
- * fire-and-forget: never throws, never blocks the publish — same discipline as
- * `notifyNewFinding` / `lastfmLove`. No-op on a missing/blank logId.
+ * The full set of URLs a fresh finding lights up, deduped: its own `/log/<id>` page, every
+ * public GRAPH page the finding joins (its artist(s), album, and label detail pages), and the
+ * `/fresh` new-releases lens the release now sits atop. This is the SAME surface set
+ * `publish.ts` drops from the edge cache on a publish — the entity targets come straight from
+ * the purge's own resolver (`getTrackEntityPurgeTargets`), not a second query — so IndexNow
+ * asks the engines to recrawl exactly what just changed. Exported for the unit test.
  */
-export function submitFindingToIndexNow(logId?: string): void {
+export function buildFindingIndexNowUrls(
+  logId: string,
+  entityTargets: { kind: EntityCacheKind; slug: string }[],
+): string[] {
+  return [
+    ...new Set([
+      logPageUrl(logId),
+      ...entityTargets.map((target) => entityPurgeUrl(target.kind, target.slug)),
+      `${siteUrl}/fresh`,
+    ]),
+  ];
+}
+
+/**
+ * Submit a newly published finding's whole surface set to IndexNow — its log page PLUS the
+ * graph pages it joins (artist/label/album) and the `/fresh` lens — so every page the publish
+ * touched is recrawled within minutes, not just the coordinate page. Best-effort,
+ * fire-and-forget: never throws, never blocks the publish — same discipline as
+ * `notifyNewFinding` / `lastfmLove`. No-op on a missing/blank logId; a missing trackId simply
+ * submits the log page + `/fresh` (no graph pages to resolve).
+ */
+export function submitFindingToIndexNow(logId?: string, trackId?: string): void {
   if (!logId?.trim()) {
     return;
   }
 
-  const task = ping(logPageUrl(logId.trim()));
+  const task = ping(logId.trim(), trackId?.trim() || undefined);
 
   try {
     waitUntil(task);
@@ -76,11 +102,14 @@ export function submitFindingToIndexNow(logId?: string): void {
 // The actual POST. NEVER throws — every failure is swallowed so the publish it
 // rides behind is never affected. IndexNow answers 200/202 on accept and 4xx on a
 // bad key/host; either way a miss is harmless (the next publish or organic recrawl
-// covers it), so the outcome is intentionally ignored.
-async function ping(url: string): Promise<void> {
+// covers it), so the outcome is intentionally ignored. Resolving the graph pages is
+// part of the same swallow: a failed slug read falls back to the log page + `/fresh`.
+async function ping(logId: string, trackId?: string): Promise<void> {
   try {
+    const entityTargets = trackId ? await getTrackEntityPurgeTargets(trackId) : [];
+
     await fetch(INDEXNOW_ENDPOINT, {
-      body: JSON.stringify(buildIndexNowPayload([url])),
+      body: JSON.stringify(buildIndexNowPayload(buildFindingIndexNowUrls(logId, entityTargets))),
       headers: { "Content-Type": "application/json; charset=utf-8" },
       method: "POST",
     });
