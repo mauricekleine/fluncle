@@ -14,9 +14,9 @@ Editions (`frontier_editions` + `frontier_edition_tracks`) are per-user, frozen,
 
 **The shelf IS the latest edition.** Page views read a stored edition (single-row + child-rows read, milliseconds at any pool size). The engine runs only on WRITE triggers — a seed change, the weekly refresh, an explicit refresh — never on a read. Corpus growth does not invalidate anything: freshness rides the weekly cadence, which is what the surface already promises ("refreshed weekly") and what the editions product model already ratified.
 
-## The one product call (decide before building)
+## The product model (operator-ratified 2026-07-18)
 
-Adopting this makes the live shelf show the **novelty blend** (`excludeRecent: true` — the last-8-editions window) instead of today's raw top-30, because that is what an edition is. I recommend exactly that: a shelf that re-digs weekly beats a static leaderboard, it makes the shelf and the minted playlist the same object (no "why does my playlist differ from the page" seam), and the pool is large enough that novelty never starves. The alternative — keep the raw blend on the shelf and store it as a parallel snapshot kind — doubles the write paths for a distinction no listener can see. If the raw blend must survive anywhere, it is a sort-order toggle on the read, not a second engine run.
+**Editions = recommendations.** The shelf renders the seeds + the LATEST edition; the dropdown renders the previous ones; Friday writes the next one and (when minting is open) syncs it to Spotify — so Saturday's page shows Friday's edition. The shelf therefore shows the **novelty blend** (`excludeRecent: true`, the last-8-editions window): a shelf that re-digs weekly beats a static leaderboard, and the shelf and the minted playlist are the same object (no "why does my playlist differ from the page" seam). The novelty window needs no first-edition special case — an empty ledger excludes nothing by construction. Before the first commitment there is only the DRAFT (D2): a live view that is "purely the recommendation" until "Get playlist" mints it into edition #1.
 
 ## Design
 
@@ -24,12 +24,17 @@ Adopting this makes the live shelf show the **novelty blend** (`excludeRecent: t
 
 Today an edition is written only inside `mintOrRefreshFrontierPlaylist` behind the `frontier.minting` kill switch (`switch_off` writes nothing). Split the two effects: `computeAndStoreEdition(user)` (engine → transactional edition write, ALWAYS allowed) and the Spotify mirror (stays behind `frontier.minting` + the daily cap + the `last_uri_hash` guard, unchanged). The kill switch keeps gating the EXTERNAL effect (Spotify writes); it stops gating the INTERNAL cache. `writeFrontierEdition`'s hash-skip survives as "identical desired list → no new edition row".
 
-### D2 — The write triggers (the only places the engine runs)
+### D2 — The draft-then-checkpoint model (operator-ratified 2026-07-18)
 
-- **Seed add/remove** (`save_private_rec_seed` / `delete_private_rec_seed`): recompute inline after the write — the user just acted, one 0.3–4 s compute behind their own mutation is honest, and the shelf they land back on is already correct. SAME-DAY REPLACE rule: a recompute within the same UTC day as the user's latest edition REPLACES that edition's rows (same `number`) instead of appending, so a seed-fiddling session cannot inflate the 8-edition novelty window with five near-identical "editions".
-- **The weekly refresh sweep** (`refresh_frontier_playlists`, Fri 07:00 Amsterdam): already runs the engine per user; now its edition write happens regardless of the minting switch, and the Spotify mirror remains conditional.
-- **First verified visit with seeds but no edition yet**: the loader finds no edition → computes + stores once (the lazy backfill), then reads it. Subsequent visits read.
-- **Explicit refresh**: the existing mint/refresh action on the page keeps working and now also refreshes the shelf; it inherits the same-day-replace rule. The per-user hourly rate limit moves from the read (which becomes ~free) to this recompute path.
+**Before the first "Get playlist": the DRAFT phase.** A user with seeds but no edition sees a LIVE, ephemeral recommendation view — recomputed as they add/remove seeds, persisted nowhere, no dropdown, no edition rows. Nothing to rank novelty against and nothing written: the empty ledger makes `excludeRecent` a no-op by construction. This keeps the live scan on the read path for exactly one bounded cohort (each user passes through the draft once, rate-limited), which is also the one moment live-per-seed recompute is the DESIRED behavior.
+
+**"Get playlist" is the commitment moment.** It births edition #1 (the engine's output, frozen) and — only when `frontier.minting` is open — the Spotify playlist mirroring it. With minting dark it births just the edition; the mirror waits for the flip (D1).
+
+**After the first edition, the engine runs on exactly three triggers, and a shelf read is never one of them:**
+
+- **The weekly refresh sweep** (`refresh_frontier_playlists`, Fri 07:00 Amsterdam): already runs the engine per user; the edition write now happens regardless of the minting switch, the Spotify mirror stays conditional. Saturday's shelf is Friday's edition.
+- **Explicit refresh**: the page's refresh action writes the next edition on demand. The per-user hourly rate limit moves from the read (now ~free) to this recompute path.
+- **A seed change does NOT silently rewrite anything.** Seeds are inputs; editions are checkpoints. A post-mint seed write leaves the latest edition (and any synced playlist) untouched and the shelf shows a quiet staleness nudge — the picks changed since this edition; refresh writes the next one. This kills same-day-replace transaction complexity outright and prevents mid-week Spotify playlist churn from seed fiddling.
 
 ### D3 — The read path
 
