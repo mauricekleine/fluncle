@@ -30,6 +30,7 @@ REPO_DIR="${PINWATCH_REPO_DIR:-/opt/fluncle-build}"
 DOCKERFILE="docs/agents/hermes/Dockerfile"
 LOCK="${PINWATCH_LOCK:-/run/lock/fluncle-pin-watch.lock}"
 KEEP_IMAGES="${PINWATCH_KEEP_IMAGES:-2}"  # running + 1 rollback; each hermes image is ~10GB, so 4 fills the 38GB box
+SWEEP_DRAIN_TIMEOUT="${PINWATCH_SWEEP_DRAIN_TIMEOUT:-300}"  # max seconds to wait for an in-flight sweep to finish before the rebuild proceeds anyway
 
 MODE="--if-stale"
 case "${1:-}" in
@@ -55,6 +56,72 @@ baked_fingerprint() {
 
 log() { printf '[pin-watch] %s\n' "$*" >&2; }
 die() { log "FATAL: $*"; exit 1; }
+
+# ── sweep quiesce (serialize the docker-heavy rebuild against the box's sweeps) ─
+# The rebuild's `docker build` + throwaway pre-smoke `docker run`s contend hard with
+# the daemon (buildkit "only one connection allowed", rapid container create/delete).
+# A sweep timer (fluncle-embed / fluncle-enrich / …) firing its own `docker run`
+# mid-rebuild gets SIGKILLed (137) by that churn — confirmed on rave-02, NOT an OOM.
+# It self-heals next tick but fires a false failure alert every time a rebuild overlaps
+# a sweep (~daily). So before the first `docker build` we STOP the active sweep timers,
+# drain any sweep already mid-run, and GUARANTEE a restart via the EXIT trap.
+STOPPED_TIMERS=()
+
+# Restart EXACTLY the timers we stopped, best-effort so one failing start never strands
+# the rest. Runs from the EXIT trap, so it fires on success, on die(), on a build/smoke
+# failure, AND on the rollback path — a failed rebuild must never leave sweeps disabled.
+# shellcheck disable=SC2329  # invoked indirectly from the EXIT trap set in quiesce_sweeps
+restore_sweep_timers() {
+  [ "${#STOPPED_TIMERS[@]}" -gt 0 ] || return 0
+  local t
+  for t in "${STOPPED_TIMERS[@]}"; do
+    systemctl start "$t" >/dev/null 2>&1 || true
+  done
+  log "restored ${#STOPPED_TIMERS[@]} sweep timer(s)"
+  STOPPED_TIMERS=()
+}
+
+quiesce_sweeps() {
+  local t svc waited
+  # Enumerate the ACTIVE sweep timers dynamically (new sweeps are auto-covered),
+  # EXCLUDING the healthcheck beacon (its dead-man's-switch must keep pinging through
+  # the rebake) and pin-watch itself (never stop the timer that scheduled this run).
+  # pin-watch is `pin-watch.timer`, already outside the fluncle-* glob; the exclude is
+  # listed defensively in case it is ever renamed to fluncle-pin-watch.timer.
+  # --plain drops the leading status glyph so $1 is the bare unit name.
+  mapfile -t STOPPED_TIMERS < <(
+    systemctl list-units --type=timer --state=active --no-legend --plain 'fluncle-*.timer' 2>/dev/null \
+      | awk '{print $1}' \
+      | grep -vxF 'fluncle-healthcheck.timer' \
+      | grep -vxF 'fluncle-pin-watch.timer' || true
+  )
+  [ "${#STOPPED_TIMERS[@]}" -gt 0 ] || { log "no active sweep timers to quiesce"; return 0; }
+
+  # Arm the restart guard BEFORE stopping anything (compose with the ENVTMP cleanup
+  # trap set in step 3), so every exit path from here restores the timers.
+  trap 'restore_sweep_timers; rm -f "$ENVTMP"' EXIT
+
+  for t in "${STOPPED_TIMERS[@]}"; do
+    systemctl stop "$t" >/dev/null 2>&1 || true
+  done
+  log "quiesced ${#STOPPED_TIMERS[@]} sweep timer(s) for the rebuild: ${STOPPED_TIMERS[*]}"
+
+  # Drain: wait (bounded) for any sweep already mid-run to finish, so the rebuild does
+  # not kill it with the very contention we are avoiding. Poll the .service twin of each
+  # stopped .timer; on timeout, log and proceed (a rare stuck sweep must not block forever).
+  for t in "${STOPPED_TIMERS[@]}"; do
+    svc="${t%.timer}.service"
+    waited=0
+    while systemctl is-active --quiet "$svc"; do
+      if [ "$waited" -ge "$SWEEP_DRAIN_TIMEOUT" ]; then
+        log "drain timeout (${SWEEP_DRAIN_TIMEOUT}s): $svc still active — proceeding with the rebuild"
+        break
+      fi
+      sleep 3
+      waited=$((waited + 3))
+    done
+  done
+}
 
 # ── single-flight ─────────────────────────────────────────────────────────────
 exec 9>"$LOCK"
@@ -167,6 +234,13 @@ log "pre-build prune: freeing space (keeping $OLD_IMAGE for rollback)"
 docker images "$IMAGE_REPO" --format '{{.Repository}}:{{.Tag}}' \
   | grep -vxF "$OLD_IMAGE" | xargs -r docker rmi >/dev/null 2>&1 || true
 docker builder prune -f --keep-storage=3GB >/dev/null 2>&1 || true
+
+# ── 3c. quiesce the box's sweep timers for the docker-heavy section ────────────
+# Only reached when a rebuild WILL happen (the no-op --if-stale path exited above);
+# --dry-run reaches here too (it builds + pre-smokes), so it quiesces as well. From
+# here the docker daemon churns (build + throwaway pre-smoke runs + the swap), so
+# stop the sweeps first and let the EXIT trap guarantee they come back.
+quiesce_sweeps
 
 # ── 4. build the new image ────────────────────────────────────────────────────
 SHA="$(git -C "$REPO_DIR" rev-parse --short HEAD)"
