@@ -22,6 +22,7 @@ import {
   type RecommendationFindingItem,
   type RecSeedItem,
   SEED_CAP,
+  skippedSeedsLine,
 } from "./shared";
 
 export function RecommendedPanel({
@@ -128,11 +129,7 @@ export function RecommendedPanel({
       )}
 
       {seedsSkipped.length > 0 && hasAny ? (
-        <p className="rec-muted rec-skipped">
-          {seedsSkipped.length === 1
-            ? "One of your picks isn't steering yet. Fluncle hasn't got its audio."
-            : `${seedsSkipped.length} of your picks aren't steering yet. Fluncle hasn't got their audio.`}
-        </p>
+        <p className="rec-muted rec-skipped">{skippedSeedsLine(seedsSkipped.length)}</p>
       ) : null}
     </section>
   );
