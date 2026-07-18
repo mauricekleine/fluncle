@@ -2642,7 +2642,7 @@ function addAdminCommands(program: Command): void {
   // `describe_label` + the crawl-seed reads → `admin labels` group (Convention B). The
   // voiced-bio author is the label sibling of `admin artists describe`.
   const labels = configureCommand(
-    admin.command("labels").description("Label entity commands (the voiced bio)"),
+    admin.command("labels").description("Label entity commands (voiced bio + slug-split merge)"),
   );
 
   labels.action(() => {
@@ -2694,6 +2694,51 @@ function addAdminCommands(program: Command): void {
     .action(async (slug: string, options: { json: boolean }) => {
       const { draftLabelBioCommand } = await import("./commands/admin-labels");
       await runEntityBioDraft("label", slug, options, draftLabelBioCommand);
+    });
+
+  // `merge_label` → `admin labels merge <losingSlug> <canonicalSlug>` (operator). Fold a slug-split
+  // twin (the Med School / Medschool class) into its canonical row: re-point every FK, reconcile
+  // identity/facts canonical-wins, write the losing name as a confirmed alias, delete the loser —
+  // and the losing slug then 301s to the canonical page.
+  labels
+    .command("merge")
+    .description(
+      "Merge a slug-split label into its canonical row (operator; re-points + redirects)",
+    )
+    .argument("<losingSlug>", "The duplicate label to fold away")
+    .argument("<canonicalSlug>", "The label to keep — everything re-points onto it")
+    .option("--json", "Print JSON", false)
+    .action(async (losingSlug: string, canonicalSlug: string, options: { json: boolean }) => {
+      const { mergeLabelCommand } = await import("./commands/admin-labels");
+      const result = await mergeLabelCommand(losingSlug, canonicalSlug);
+
+      if (options.json) {
+        printJson({ ok: true, result });
+        return;
+      }
+
+      const {
+        aliasWritten,
+        canonicalSlug: canon,
+        losingSlug: loser,
+        reconciled,
+        repointed,
+      } = result;
+
+      console.log(`Merged ${loser} → ${canon}.`);
+      console.log(
+        `  Re-pointed: ${repointed.tracks} track(s), ${repointed.childLabels} sublabel(s), ${repointed.aliases} alias(es).`,
+      );
+      console.log(
+        reconciled.length > 0
+          ? `  Filled onto ${canon} (was empty): ${reconciled.join(", ")}.`
+          : `  Nothing to fill — ${canon} already carried every fact.`,
+      );
+      console.log(`  Seed state resolved to: ${result.seedState}.`);
+      console.log(
+        `  Alias written: "${aliasWritten.alias}" (${aliasWritten.aliasSlug}) → confirmed, so it can never re-mint.`,
+      );
+      console.log(`  /label/${loser} now 301s to /label/${canon}.`);
     });
 
   // `describe_album` → `admin albums` group (Convention B). The voiced-bio author is the

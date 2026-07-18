@@ -25,13 +25,17 @@ import {
   getLabelBySlug,
   isDistributorLabel,
   labelSlug,
+  LabelMergeConflictError,
+  LabelMergeSameRowError,
   LabelNotFoundError,
   letterPages,
   listLabelAliasCandidates,
   listLabelReviewRows,
   listLabels,
+  mergeLabel,
   reconcileLabels,
   rejectLabelAlias,
+  resolveLabelAliasRedirect,
   updateLabelSeedState,
 } from "./labels";
 
@@ -751,5 +755,270 @@ describe("getLabelBySlug lineage edges (RFC label-lineage-remixer U1)", () => {
     expect(label?.foundedLocation).toBeUndefined();
     expect(label?.parentLabel).toBeUndefined();
     expect(label?.subLabels).toEqual([]);
+  });
+});
+
+// ── LABEL MERGE: fold a slug-split twin into its canonical row (RFC musickit-second-authority U2b) ──
+
+/** Insert a full `labels` row with any identity/fact/ruling column set (the merge's inputs). */
+async function insertFullLabel(opts: {
+  discogsLabelId?: number;
+  foundedLocation?: string;
+  foundingDate?: string;
+  id: string;
+  imageKey?: string;
+  imageState?: string;
+  lineageState?: string;
+  mbLabelId?: string;
+  name: string;
+  parentLabelId?: string;
+  ruledAt?: string;
+  seedState?: string;
+  slug: string;
+}): Promise<void> {
+  const now = new Date().toISOString();
+  await db.execute({
+    args: [
+      opts.id,
+      opts.name,
+      opts.slug,
+      opts.seedState ?? "undecided",
+      opts.ruledAt ?? null,
+      opts.mbLabelId ?? null,
+      opts.discogsLabelId ?? null,
+      opts.imageKey ?? null,
+      opts.imageState ?? "pending",
+      opts.foundingDate ?? null,
+      opts.foundedLocation ?? null,
+      opts.parentLabelId ?? null,
+      opts.lineageState ?? "pending",
+      now,
+      now,
+    ],
+    sql: `insert into labels
+            (id, name, slug, seed_state, ruled_at, mb_label_id, discogs_label_id, image_key,
+             image_state, founding_date, founded_location, parent_label_id, lineage_state,
+             created_at, updated_at)
+          values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  });
+}
+
+/** A track hung directly off a label by its `label_id` graph pointer (the FK the merge re-points). */
+async function insertTrackWithLabelId(trackId: string, labelId: string): Promise<void> {
+  await db.execute({
+    args: [trackId, "Tune", '["Artist"]', labelId],
+    sql: `insert into tracks
+            (track_id, title, artists_json, spotify_uri, spotify_url, duration_ms, label_id)
+          values (?, ?, ?, 'uri', 'url', 0, ?)`,
+  });
+}
+
+async function labelIdOfTrack(trackId: string): Promise<null | string> {
+  const result = await db.execute({
+    args: [trackId],
+    sql: `select label_id from tracks where track_id = ?`,
+  });
+
+  return (result.rows[0]?.label_id as null | string) ?? null;
+}
+
+describe("mergeLabel (the operator's slug-split cleanup)", () => {
+  it("re-points every FK, reconciles canonical-wins, writes the alias, deletes the loser", async () => {
+    // Canonical carries the CORRECT identity (a right MBID) but is MISSING founding facts.
+    await insertFullLabel({
+      id: "lbl_canon",
+      mbLabelId: "mb-correct",
+      name: "Med School",
+      seedState: "enabled",
+      slug: "med-school",
+    });
+    // Loser is the slug-split twin: a WRONG MBID (the 2026-07-18 mis-resolve class) but it does
+    // carry a founding date the canonical lacks.
+    await insertFullLabel({
+      foundingDate: "1996",
+      id: "lbl_loser",
+      mbLabelId: "mb-wrong",
+      name: "Medschool",
+      slug: "medschool",
+    });
+    // A child label parented on the LOSER (its parent_label_id must re-point to the canonical).
+    await insertFullLabel({
+      id: "lbl_child",
+      name: "Sub Imprint",
+      parentLabelId: "lbl_loser",
+      slug: "sub-imprint",
+    });
+    // A finding + a catalogue track, both hung off the loser by label_id.
+    await insertTrackWithLabelId("t_find", "lbl_loser");
+    await insertTrackWithLabelId("t_cat", "lbl_loser");
+    // An alias the loser already owned (must re-point onto the canonical).
+    await insertAlias({
+      alias: "Med-School",
+      aliasSlug: "med-school-alt",
+      id: "lba_loser",
+      labelId: "lbl_loser",
+      status: "confirmed",
+    });
+
+    const result = await mergeLabel("medschool", "med-school");
+
+    // FKs re-pointed.
+    expect(await labelIdOfTrack("t_find")).toBe("lbl_canon");
+    expect(await labelIdOfTrack("t_cat")).toBe("lbl_canon");
+    expect(result.repointed.tracks).toBe(2);
+    expect((await getLabelBySlug("sub-imprint"))?.parentLabel).toEqual({
+      name: "Med School",
+      slug: "med-school",
+    });
+    expect(result.repointed.childLabels).toBe(1);
+    expect(result.repointed.aliases).toBe(1);
+
+    // Canonical-wins: the correct MBID stands, the loser's wrong one is DISCARDED; the empty
+    // founding_date fills from the loser.
+    const canon = await getLabelBySlug("med-school");
+    expect(canon?.mbLabelId).toBe("mb-correct");
+    expect(canon?.foundingDate).toBe("1996");
+    expect(result.reconciled).toContain("foundingDate");
+    expect(result.reconciled).not.toContain("mbLabelId");
+
+    // The losing NAME is a confirmed alias on the canonical (so it can never re-mint).
+    expect(await getConfirmedAliasNames("lbl_canon")).toContain("Medschool");
+    expect(result.aliasWritten).toEqual({ alias: "Medschool", aliasSlug: "medschool" });
+
+    // The loser row is gone; the moved alias survives on the canonical.
+    expect(await labelSlugs()).toEqual(["med-school", "sub-imprint"]);
+    expect(await getConfirmedAliasNames("lbl_canon")).toContain("Med-School");
+  });
+
+  it("resolves seed_state by ruled_at precedence — the more recent ruling wins", async () => {
+    await insertFullLabel({
+      id: "lbl_canon",
+      name: "Canon",
+      seedState: "undecided",
+      slug: "canon",
+    });
+    await insertFullLabel({
+      id: "lbl_loser",
+      name: "Loser",
+      ruledAt: "2026-07-10T00:00:00.000Z",
+      seedState: "disabled",
+      slug: "loser",
+    });
+
+    const result = await mergeLabel("loser", "canon");
+
+    // The loser is the only ruled row, so its ruling wins onto the canonical.
+    expect(result.seedState).toBe("disabled");
+    expect((await getLabelBySlug("canon"))?.id).toBe("lbl_canon");
+    expect(await seedStateOf("canon")).toBe("disabled");
+  });
+
+  it("REFUSES when both rows carry an operator ruling and their seed states disagree", async () => {
+    await insertFullLabel({
+      id: "lbl_canon",
+      name: "Canon",
+      ruledAt: "2026-07-11T00:00:00.000Z",
+      seedState: "enabled",
+      slug: "canon",
+    });
+    await insertFullLabel({
+      id: "lbl_loser",
+      name: "Loser",
+      ruledAt: "2026-07-10T00:00:00.000Z",
+      seedState: "disabled",
+      slug: "loser",
+    });
+
+    await expect(mergeLabel("loser", "canon")).rejects.toBeInstanceOf(LabelMergeConflictError);
+
+    // Nothing moved — the loser row is untouched (the transaction never ran).
+    expect(await labelSlugs()).toEqual(["canon", "loser"]);
+  });
+
+  it("closes the re-mint trap: the losing name resolves to the canonical after merge", async () => {
+    await insertFullLabel({ id: "lbl_canon", name: "Med School", slug: "med-school" });
+    await insertFullLabel({ id: "lbl_loser", name: "Medschool", slug: "medschool" });
+
+    await mergeLabel("medschool", "med-school");
+
+    // ensureLabel over the merged-away raw string resolves to the canonical, minting nothing.
+    expect(await ensureLabel("Medschool")).toBe("lbl_canon");
+    expect(await labelSlugs()).toEqual(["med-school"]);
+
+    // And a deploy reconcile over a finding still carrying the raw string never re-mints it.
+    await seedFinding("t_remint", "Medschool");
+    expect(await reconcileLabels()).toBe(0);
+    expect(await labelIdOfTrack("t_remint")).toBe(null); // reconcile mints, the backfill links
+    expect(await labelSlugs()).toEqual(["med-school"]);
+  });
+
+  it("the merged-away slug resolves for the 301 redirect", async () => {
+    await insertFullLabel({ id: "lbl_canon", name: "Med School", slug: "med-school" });
+    await insertFullLabel({ id: "lbl_loser", name: "Medschool", slug: "medschool" });
+
+    await mergeLabel("medschool", "med-school");
+
+    expect(await resolveLabelAliasRedirect("medschool")).toBe("med-school");
+    // A genuinely unknown slug resolves to nothing (the loader 404s it instead of redirecting).
+    expect(await resolveLabelAliasRedirect("never-existed")).toBeUndefined();
+  });
+
+  it("refuses a self-merge and a merge of an unknown slug", async () => {
+    await insertFullLabel({ id: "lbl_canon", name: "Med School", slug: "med-school" });
+
+    await expect(mergeLabel("med-school", "med-school")).rejects.toBeInstanceOf(
+      LabelMergeSameRowError,
+    );
+    await expect(mergeLabel("ghost", "med-school")).rejects.toBeInstanceOf(LabelNotFoundError);
+    await expect(mergeLabel("med-school", "ghost")).rejects.toBeInstanceOf(LabelNotFoundError);
+  });
+
+  // THE ARITY GUARD (the label-lineage.test.ts pattern): every statement in the merge's atomic
+  // batch must bind exactly as many args as it declares placeholders. Real SQL execution already
+  // throws on a mismatch, but this pins it explicitly across a full wet merge.
+  it("binds exactly its placeholders across the whole merge batch", async () => {
+    await insertFullLabel({ id: "lbl_canon", name: "Med School", slug: "med-school" });
+    await insertFullLabel({
+      foundingDate: "1996",
+      id: "lbl_loser",
+      name: "Medschool",
+      slug: "medschool",
+    });
+    await insertFullLabel({
+      id: "lbl_child",
+      name: "Sub",
+      parentLabelId: "lbl_loser",
+      slug: "sub",
+    });
+    await insertTrackWithLabelId("t1", "lbl_loser");
+
+    const batchCalls: Array<{ argc: number; sql: string }> = [];
+    const originalBatch = db.batch.bind(db);
+    db.batch = ((stmts: unknown, mode?: unknown) => {
+      if (Array.isArray(stmts)) {
+        for (const stmt of stmts as Array<{ args?: unknown[]; sql: string }>) {
+          batchCalls.push({
+            argc: Array.isArray(stmt.args) ? stmt.args.length : 0,
+            sql: stmt.sql,
+          });
+        }
+      }
+
+      return originalBatch(
+        stmts as Parameters<Client["batch"]>[0],
+        mode as Parameters<Client["batch"]>[1],
+      );
+    }) as Client["batch"];
+
+    await mergeLabel("medschool", "med-school");
+
+    expect(batchCalls.length).toBeGreaterThan(0);
+    for (const call of batchCalls) {
+      const placeholders = (call.sql.match(/\?/g) ?? []).length;
+      expect({ argc: call.argc, placeholders, sql: call.sql.slice(0, 40) }).toMatchObject({
+        argc: placeholders,
+        placeholders,
+      });
+    }
   });
 });
