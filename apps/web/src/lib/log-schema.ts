@@ -1,4 +1,4 @@
-import { logPageUrl, siteUrl } from "./fluncle-links";
+import { fluncleEntityId, logPageUrl, siteUrl } from "./fluncle-links";
 import { formatIsoDuration } from "./format";
 import { artistTitleLine, definitionalProse, type LogProseInput } from "./log-prose";
 import { type MixtapeDTO } from "./mixtapes";
@@ -119,6 +119,21 @@ export function musicRecordingJsonLd(
     ...(track.isrc ? { isrcCode: track.isrc } : {}),
     ...(track.album ? { inAlbum: { "@type": "MusicAlbum", name: track.album } } : {}),
     name: track.title,
+    // The recording → label edge, closing the same loop the album schema's `recordLabel`
+    // already closes: point at the label page's Organization `@id` (`<labelPageUrl>#organization`)
+    // so a crawler reconciles this recording, its album, and its imprint to one graph. Emitted
+    // only when the finding carries a label WITH a resolved `/label/<slug>` entity — a bare label
+    // string with no page has no `@id` to point at, so it stays silent (the honest degrade).
+    ...(track.label && track.labelSlug
+      ? {
+          recordLabel: {
+            "@id": `${labelPageUrl(track.labelSlug)}#organization`,
+            "@type": "Organization",
+            name: track.label,
+            url: labelPageUrl(track.labelSlug),
+          },
+        }
+      : {}),
     ...(recordingOf ? { recordingOf } : {}),
     sameAs: [
       track.spotifyUrl,
@@ -233,8 +248,12 @@ export function videoObjectJsonLd(
     "@context": "https://schema.org",
     "@type": "VideoObject",
     contentUrl,
+    // The video is Fluncle's own artefact — reference the ONE canonical entity node as both
+    // its creator and publisher, so the video reconciles to the same `@id` as the finding.
+    creator: { "@id": fluncleEntityId },
     description: definitionalProse(track),
     name: artistTitleLine(track),
+    publisher: { "@id": fluncleEntityId },
     thumbnailUrl,
     uploadDate: uploadDateIso(uploadDate),
     url: logPageUrl(track.logId),
@@ -261,8 +280,10 @@ export function mixtapeVideoObjectJsonLd(
     "@context": "https://schema.org",
     "@type": "VideoObject",
     contentUrl,
+    creator: { "@id": fluncleEntityId },
     description: mixtape.note ?? `Fluncle drum & bass mixtape: ${mixtape.title}.`,
     name: mixtape.title,
+    publisher: { "@id": fluncleEntityId },
     thumbnailUrl,
     uploadDate: uploadDateIso(uploadDate),
     url: logPageUrl(logId),
@@ -276,7 +297,10 @@ export function mixtapeAlbumJsonLd(mixtape: MixtapeDTO): Record<string, unknown>
     "@context": "https://schema.org",
     "@type": "MusicAlbum",
     albumProductionType: "https://schema.org/DJMixAlbum",
-    byArtist: { "@id": `${siteUrl}/about`, "@type": "Person", name: "Fluncle" },
+    // The mix is by — and published by — the ONE canonical entity node (`@id`), never a second
+    // dangling `/about` Person that reads as a different thing to a crawler.
+    byArtist: { "@id": fluncleEntityId, "@type": "Person", name: "Fluncle" },
+    ...(mixtape.recordedAt ? { datePublished: mixtape.recordedAt.slice(0, 10) } : {}),
     description: mixtape.note,
     duration: mixtape.durationMs ? formatIsoDuration(mixtape.durationMs) : undefined,
     genre: "Drum and Bass",
@@ -286,6 +310,11 @@ export function mixtapeAlbumJsonLd(mixtape: MixtapeDTO): Record<string, unknown>
     ],
     image: mixtape.coverImageUrl,
     name: mixtape.title,
+    // The renderable member count — the findings the tracklist actually resolves to a `/log`
+    // coordinate (a member without one is dropped from the ItemList below), so `numTracks`
+    // matches what the structured data carries.
+    numTracks: mixtape.members.filter((member) => member.logId).length,
+    publisher: { "@id": fluncleEntityId },
     sameAs: Object.values(mixtape.externalUrls).filter(Boolean),
     track: {
       "@type": "ItemList",
@@ -475,8 +504,14 @@ export function albumPageUrl(slug: string): string {
 /** One track on a graph page: a finding (with a Log ID) or a quieter uncertified row. */
 export type GraphPageTrack = {
   artists: string[];
+  /** The finding's length in ms → the MusicRecording's ISO-8601 `duration`. Findings only. */
+  durationMs?: number;
+  /** The finding's ISRC → the MusicRecording's `isrcCode`. Findings only. */
+  isrc?: string;
   /** Present ⇒ a finding: the item's `url` is its `/log` page. */
   logId?: string;
+  /** The finding's release date → the MusicRecording's `datePublished`. Findings only. */
+  releaseDate?: string;
   /** The off-site URL for a track with no Fluncle page. Absent ⇒ the item carries no url. */
   spotifyUrl?: string;
   title: string;
@@ -501,7 +536,14 @@ function trackItemList(
         item: {
           "@type": "MusicRecording",
           byArtist: track.artists.map((name) => byArtistNode(name, artistSlugs)),
+          // The finding's per-track facts (G1): its ISO-8601 length, its ISRC, and its release
+          // date. Present on findings only — a quieter catalogue row carries none of them, so
+          // the keys are omitted rather than emitted null (schema that contradicts the page gets
+          // discounted; an uncertified row stays as spare as it renders).
+          ...(track.durationMs ? { duration: formatIsoDuration(track.durationMs) } : {}),
+          ...(track.isrc ? { isrcCode: track.isrc } : {}),
           name: track.title,
+          ...(track.releaseDate ? { datePublished: track.releaseDate } : {}),
           ...(url ? { url } : {}),
         },
         position: index + 1,
@@ -538,10 +580,38 @@ export type RecordLabelInput = {
    * CollectionPage). Undefined until backfilled ⇒ the key is omitted, never `description: null`.
    */
   bio?: string;
+  /**
+   * The Discogs label id (`labels.discogs_label_id`) — an off-site identity anchor. Emitted into
+   * the Organization's `sameAs` as `https://www.discogs.com/label/<id>`. Absent ⇒ omitted.
+   */
+  discogsLabelId?: number;
+  /**
+   * The label's OWN logo (its resolved image on R2, `labels.image_key` → a served URL), emitted as
+   * the Organization's `logo`. Currently only powers the page's OG image; here it becomes part of
+   * the entity itself. Absent ⇒ omitted.
+   */
+  logoImageUrl?: string;
+  /**
+   * The MusicBrainz label MBID (`labels.mb_label_id`) — an off-site identity anchor. Emitted into
+   * the Organization's `sameAs` as `https://musicbrainz.org/label/<mbid>`. Absent ⇒ omitted.
+   */
+  mbLabelId?: string;
   name: string;
   slug: string;
   tracks: GraphPageTrack[];
 };
+
+/** The label Organization's off-site identity anchors → its `sameAs` (MusicBrainz, then Discogs). */
+function labelOrganizationSameAs(label: RecordLabelInput): string[] {
+  const anchors = [
+    label.mbLabelId ? `https://musicbrainz.org/label/${label.mbLabelId}` : undefined,
+    typeof label.discogsLabelId === "number"
+      ? `https://www.discogs.com/label/${label.discogsLabelId}`
+      : undefined,
+  ];
+
+  return anchors.filter((url): url is string => Boolean(url));
+}
 
 /**
  * The label page's JSON-LD: a `CollectionPage` ABOUT an `Organization` (schema.org has no
@@ -556,6 +626,7 @@ export type RecordLabelInput = {
 export function recordLabelJsonLd(label: RecordLabelInput): Record<string, unknown> {
   const pageUrl = labelPageUrl(label.slug);
   const alternateNames = label.alternateNames ?? [];
+  const sameAs = labelOrganizationSameAs(label);
 
   return {
     "@context": "https://schema.org",
@@ -573,7 +644,13 @@ export function recordLabelJsonLd(label: RecordLabelInput): Record<string, unkno
       // The factual bio mirrors the page's visible definitional paragraph — omitted cleanly
       // (never `description: null`) until one is authored.
       ...(label.bio ? { description: label.bio } : {}),
+      // The label's OWN logo (its resolved R2 image) as the Organization's `logo` — it was only an
+      // OG image before; here it becomes part of the entity a crawler reads. Omitted when unresolved.
+      ...(label.logoImageUrl ? { logo: label.logoImageUrl } : {}),
       name: label.name,
+      // The off-site identity anchors (MusicBrainz, Discogs) — the label's `sameAs`, the imprint
+      // twin of the artist entity's identity graph. Omitted entirely when the label carries none.
+      ...(sameAs.length > 0 ? { sameAs } : {}),
       url: pageUrl,
     },
     mainEntity: trackItemList(label.tracks, foldArtistSlugs(label.artists)),
@@ -596,8 +673,16 @@ export type MusicAlbumInput = {
   label?: { name: string; slug: string };
   name: string;
   releaseDate?: string;
+  /**
+   * The MusicBrainz release-group MBID (`albums.release_group_mbid`) — the album's off-site
+   * identity anchor. Emitted into `sameAs` as `https://musicbrainz.org/release-group/<mbid>`.
+   * Absent ⇒ omitted.
+   */
+  releaseGroupMbid?: string;
   slug: string;
   tracks: GraphPageTrack[];
+  /** The album's barcode (`albums.upc`) → the MusicAlbum's `gtin13`. Absent ⇒ omitted. */
+  upc?: string;
 };
 
 /**
@@ -637,9 +722,16 @@ export function musicAlbumJsonLd(album: MusicAlbumInput): Record<string, unknown
     // (never `description: null`) until one is authored.
     ...(album.bio ? { description: album.bio } : {}),
     genre: "Drum and Bass",
+    // The album's barcode as `gtin13` — schema.org's global-trade identity for a release.
+    ...(album.upc ? { gtin13: album.upc } : {}),
     ...(album.imageUrl ? { image: album.imageUrl } : {}),
     name: album.name,
     ...(album.releaseDate ? { datePublished: album.releaseDate } : {}),
+    // The off-site identity anchor: the MusicBrainz release group (the album abstraction over its
+    // pressings). Omitted when the album carries no release-group MBID.
+    ...(album.releaseGroupMbid
+      ? { sameAs: [`https://musicbrainz.org/release-group/${album.releaseGroupMbid}`] }
+      : {}),
     track: trackItemList(album.tracks, foldArtistSlugs(album.artists)),
     url: pageUrl,
   };

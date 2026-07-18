@@ -53,7 +53,19 @@ export type AlbumRecord = {
   bio?: string;
   id: string;
   name: string;
+  /**
+   * The album's earliest track release date (`min(tracks.release_date)` across the record's rows),
+   * or undefined when no track carries one — the MusicAlbum JSON-LD's `datePublished`.
+   */
+  releaseDate?: string;
+  /**
+   * The MusicBrainz release-group MBID (`albums.release_group_mbid`), or undefined — the album's
+   * off-site identity anchor the JSON-LD emits into `sameAs`.
+   */
+  releaseGroupMbid?: string;
   slug: string;
+  /** The album's barcode (`albums.upc`), or undefined — the MusicAlbum JSON-LD's `gtin13`. */
+  upc?: string;
 };
 
 /** A row in the `/albums` index + a thin-gated sitemap candidate. */
@@ -210,17 +222,37 @@ export async function linkTrackToAlbum(
 /** Resolve one album by its public slug (undefined = no such album). */
 export async function getAlbumBySlug(slug: string): Promise<AlbumRecord | undefined> {
   const db = await getDb();
+  // `datePublished` is the record's EARLIEST track release date, derived in the SAME read via a
+  // correlated `min()` over the album's tracks (bounded to one album by the `album_id` index — not
+  // a scan of a growing table). `release_group_mbid` + `upc` ride off the `albums` row itself.
   const result = await db.execute({
     args: [slug],
-    sql: `select ${ALBUM_COLUMNS}, bio from albums where slug = ? limit 1`,
+    sql: `select ${ALBUM_COLUMNS}, bio, release_group_mbid, upc,
+                 (select min(t.release_date) from tracks t
+                    where t.album_id = albums.id and t.release_date is not null) as release_date
+          from albums where slug = ? limit 1`,
   });
 
-  const row = typedRows<AlbumRow & { bio: string | null }>(result.rows)[0];
+  const row = typedRows<
+    AlbumRow & {
+      bio: string | null;
+      release_date: string | null;
+      release_group_mbid: string | null;
+      upc: string | null;
+    }
+  >(result.rows)[0];
 
   return row
     ? {
         ...toAlbumRecord(row),
         bio: typeof row.bio === "string" && row.bio.trim() ? row.bio : undefined,
+        releaseDate:
+          typeof row.release_date === "string" && row.release_date ? row.release_date : undefined,
+        releaseGroupMbid:
+          typeof row.release_group_mbid === "string" && row.release_group_mbid
+            ? row.release_group_mbid
+            : undefined,
+        upc: typeof row.upc === "string" && row.upc ? row.upc : undefined,
       }
     : undefined;
 }

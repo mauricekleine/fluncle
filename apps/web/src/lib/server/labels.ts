@@ -297,12 +297,22 @@ export type LabelRecord = {
    * `getLabelBySlug`. See lib/server/bio.ts.
    */
   bio?: string;
+  /**
+   * The Discogs label id (`labels.discogs_label_id`), or undefined — the off-site identity anchor
+   * the public Organization JSON-LD emits into `sameAs` (`discogs.com/label/<id>`).
+   */
+  discogsLabelId: number | undefined;
   id: string;
   /**
    * The label's OWN logo (its resolved Discogs/Wikidata image on R2), or undefined when it has
    * none yet — the caller then falls back to the freshest finding's cover. See label-images.ts.
    */
   logoImageUrl: string | undefined;
+  /**
+   * The MusicBrainz label MBID (`labels.mb_label_id`), or undefined — the off-site identity anchor
+   * the public Organization JSON-LD emits into `sameAs` (`musicbrainz.org/label/<mbid>`).
+   */
+  mbLabelId: string | undefined;
   name: string;
   slug: string;
 };
@@ -333,16 +343,21 @@ export async function getLabelBySlug(slug: string): Promise<LabelRecord | undefi
   const db = await getDb();
   const result = await db.execute({
     args: [slug],
-    sql: `select ${LABEL_COLUMNS}, bio from labels where slug = ? limit 1`,
+    sql: `select ${LABEL_COLUMNS}, bio, mb_label_id, discogs_label_id from labels where slug = ? limit 1`,
   });
 
-  const row = typedRows<LabelRow & { bio: string | null }>(result.rows)[0];
+  const row = typedRows<
+    LabelRow & { bio: string | null; discogs_label_id: number | null; mb_label_id: string | null }
+  >(result.rows)[0];
 
   return row
     ? {
         bio: typeof row.bio === "string" && row.bio.trim() ? row.bio : undefined,
+        discogsLabelId: typeof row.discogs_label_id === "number" ? row.discogs_label_id : undefined,
         id: row.id,
         logoImageUrl: labelLogoUrl(row.image_key),
+        mbLabelId:
+          typeof row.mb_label_id === "string" && row.mb_label_id ? row.mb_label_id : undefined,
         name: row.name,
         slug: row.slug,
       }
@@ -383,9 +398,19 @@ export async function getLabelForAlbum(albumId: string): Promise<LabelRecord | u
 
   const row = typedRows<{ id: string; name: string; slug: string }>(result.rows)[0];
 
-  // The album → label edge closes the graph in JSON-LD (recordLabel) — a name/slug pointer,
-  // never an image — so the logo is deliberately left undefined here.
-  return row ? { id: row.id, logoImageUrl: undefined, name: row.name, slug: row.slug } : undefined;
+  // The album → label edge closes the graph in JSON-LD (recordLabel) — a name/slug pointer, never
+  // the label's own identity anchors or image — so the logo and the MB/Discogs ids are left
+  // undefined here (they belong to the label PAGE's Organization node, not this edge).
+  return row
+    ? {
+        discogsLabelId: undefined,
+        id: row.id,
+        logoImageUrl: undefined,
+        mbLabelId: undefined,
+        name: row.name,
+        slug: row.slug,
+      }
+    : undefined;
 }
 
 /**

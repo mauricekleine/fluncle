@@ -56,16 +56,22 @@ const description = "Every record label Fluncle has found a banger on, mapped ac
 function labelsHead(loaderData: LabelsPageData | undefined) {
   // The ItemList stays Fluncle's CURATED list (the findings section only): the catalogue entities'
   // pages are already carried by the sitemap, and the hub's structured data should mirror what the
-  // hub is editorially about, never balloon to catalogue size.
-  const itemList = {
+  // hub is editorially about, never balloon to catalogue size. It rides as the `mainEntity` of a
+  // `CollectionPage`, carrying `numberOfItems` so the list's size is machine-readable.
+  const labels = loaderData?.findings ?? [];
+  const collectionPage = {
     "@context": "https://schema.org",
-    "@type": "ItemList",
-    itemListElement: loaderData?.findings.map((label, index) => ({
-      "@type": "ListItem",
-      name: label.name,
-      position: index + 1,
-      url: `${siteUrl}/label/${encodeURIComponent(label.slug)}`,
-    })),
+    "@type": "CollectionPage",
+    mainEntity: {
+      "@type": "ItemList",
+      itemListElement: labels.map((label, index) => ({
+        "@type": "ListItem",
+        name: label.name,
+        position: index + 1,
+        url: `${siteUrl}/label/${encodeURIComponent(label.slug)}`,
+      })),
+      numberOfItems: labels.length,
+    },
     name: "Fluncle's labels",
     url: `${siteUrl}/labels`,
   };
@@ -79,11 +85,14 @@ function labelsHead(loaderData: LabelsPageData | undefined) {
       { content: description, property: "og:description" },
       { content: `${siteUrl}/fluncle-cover.png`, property: "og:image" },
       { content: `${siteUrl}/labels`, property: "og:url" },
+      { content: "summary_large_image", name: "twitter:card" },
+      { content: title, name: "twitter:title" },
+      { content: description, name: "twitter:description" },
     ],
     // JSON-LD goes through `jsonLdScript`, which HTML-escapes the serialized payload before
     // it reaches the inline <script>, so a `</script>` in a vendor-sourced label name can't
     // break out (stored-XSS sink, security review).
-    scripts: [jsonLdScript(itemList)],
+    scripts: [jsonLdScript(collectionPage)],
   };
 }
 

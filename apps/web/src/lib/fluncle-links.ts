@@ -72,3 +72,36 @@ export const wikidataUrl = "https://www.wikidata.org/wiki/Q140169844";
 export const lastfmUrl = "https://www.last.fm/user/fluncle";
 
 export const discogsUrl = "https://www.discogs.com/user/fluncle";
+
+// The ONE canonical Fluncle entity node's `@id` — a fragment on the site root, so it is
+// document-independent and every surface can point AT the same thing (`{ "@id": … }`) rather
+// than re-declaring a competing entity. The node itself is fully declared once, on /about (a
+// `Person` — Wikidata P31=Q5 and MusicBrainz both say human; llms.txt says "a single selector,
+// not a team"). WebSite `publisher`, MusicPlaylist/MusicAlbum `creator`, the reach page's
+// `interactionStatistic` carrier, the VideoObject, and the mixtape's `byArtist` all reference it.
+export const fluncleEntityId = `${siteUrl}/#fluncle`;
+
+// The WebSite node's `@id` — the home page's site-level entity, distinct from the Fluncle
+// person it is `publisher`ed by.
+export const fluncleWebsiteId = `${siteUrl}/#website`;
+
+// The identity graph's off-site anchors — the corroboration `sameAs` block. It lives ONCE, on
+// the canonical entity node (/about); every other surface references the node by `@id` instead
+// of re-declaring these. The order is the entity's canonical reading order, shared so the block
+// never drifts between surfaces.
+export const fluncleSameAs: string[] = [
+  spotifyPlaylistUrl,
+  telegramUrl,
+  tiktokUrl,
+  instagramUrl,
+  blueskyUrl,
+  youtubeUrl,
+  mixcloudUrl,
+  soundcloudUrl,
+  twitchUrl,
+  onionUrl,
+  musicbrainzUrl,
+  wikidataUrl,
+  lastfmUrl,
+  discogsUrl,
+];

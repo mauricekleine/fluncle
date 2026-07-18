@@ -57,10 +57,14 @@ type LabelPageData =
       bio: string | undefined;
       /** The crawled catalogue, grouped by artist — one page of it, plus SQL-counted totals. */
       catalogue: CatalogueGroupPage<CatalogueArtistGroup>;
+      /** The Discogs label id → the Organization JSON-LD's `sameAs` (`discogs.com/label/<id>`). */
+      discogsLabelId: number | undefined;
       findings: TrackListItem[];
       indexable: boolean;
       /** The label's OWN logo (resolved Discogs/Wikidata image on R2), or undefined. */
       logoImageUrl: string | undefined;
+      /** The MusicBrainz label MBID → the Organization JSON-LD's `sameAs` (`musicbrainz.org/label/<mbid>`). */
+      mbLabelId: string | undefined;
       name: string;
       slug: string;
       sort: CatalogueSort;
@@ -128,6 +132,7 @@ export async function resolveLabelPageData(
     artists,
     bio: label.bio,
     catalogue,
+    discogsLabelId: label.discogsLabelId,
     findings,
     // Thin-content gate: index only past LABEL_INDEX_MIN_TRACKS RENDERABLE tracks — the
     // findings PLUS the quieter rows, because both are real content on the page, and a page is
@@ -137,6 +142,7 @@ export async function resolveLabelPageData(
     // total, never the rendered page.
     indexable: findings.length + catalogue.totalTracks >= LABEL_INDEX_MIN_TRACKS,
     logoImageUrl: label.logoImageUrl,
+    mbLabelId: label.mbLabelId,
     name: label.name,
     slug: label.slug,
     sort,
@@ -162,8 +168,19 @@ function labelHead(loaderData: LabelPageData | undefined) {
     return {};
   }
 
-  const { alternateNames, artists, bio, catalogue, findings, indexable, logoImageUrl, name, slug } =
-    loaderData;
+  const {
+    alternateNames,
+    artists,
+    bio,
+    catalogue,
+    discogsLabelId,
+    findings,
+    indexable,
+    logoImageUrl,
+    mbLabelId,
+    name,
+    slug,
+  } = loaderData;
   // The canonical is SELF-REFERENCING PER PAGE (page 2 is its own page, not a duplicate of page
   // 1) but SORT-COLLAPSING: it always drops the sort param, so `?sort=recent` and the default
   // A–Z view of the same page fold to one canonical URL rather than diluting each other. Page 1
@@ -224,6 +241,10 @@ function labelHead(loaderData: LabelPageData | undefined) {
           alternateNames,
           artists,
           bio,
+          discogsLabelId,
+          // The label's own logo becomes the Organization's `logo` (it was only the OG image before).
+          logoImageUrl,
+          mbLabelId,
           name,
           slug,
           tracks: graphPageTracks(findings, flattenArtistGroups(catalogue.groups)),

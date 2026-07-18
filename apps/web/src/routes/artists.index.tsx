@@ -48,16 +48,23 @@ const description =
 
 function artistsHead(loaderData: ArtistsPageData | undefined) {
   // The ItemList stays Fluncle's CURATED list (the findings section only): the catalogue artists'
-  // pages are already carried by the sitemap.
-  const itemList = {
+  // pages are already carried by the sitemap. It rides as the `mainEntity` of a `CollectionPage` —
+  // the honest shape for "this page is a hub OF a list" — carrying `numberOfItems` so a crawler
+  // knows the list's size without counting.
+  const artists = loaderData?.findings ?? [];
+  const collectionPage = {
     "@context": "https://schema.org",
-    "@type": "ItemList",
-    itemListElement: loaderData?.findings.map((artist, index) => ({
-      "@type": "ListItem",
-      name: artist.name,
-      position: index + 1,
-      url: `${siteUrl}/artist/${encodeURIComponent(artist.slug)}`,
-    })),
+    "@type": "CollectionPage",
+    mainEntity: {
+      "@type": "ItemList",
+      itemListElement: artists.map((artist, index) => ({
+        "@type": "ListItem",
+        name: artist.name,
+        position: index + 1,
+        url: `${siteUrl}/artist/${encodeURIComponent(artist.slug)}`,
+      })),
+      numberOfItems: artists.length,
+    },
     name: "Fluncle's artists",
     url: `${siteUrl}/artists`,
   };
@@ -71,12 +78,15 @@ function artistsHead(loaderData: ArtistsPageData | undefined) {
       { content: description, property: "og:description" },
       { content: `${siteUrl}/fluncle-cover.png`, property: "og:image" },
       { content: `${siteUrl}/artists`, property: "og:url" },
+      { content: "summary_large_image", name: "twitter:card" },
+      { content: title, name: "twitter:title" },
+      { content: description, name: "twitter:description" },
     ],
     // JSON-LD goes through `jsonLdScript`, which HTML-escapes the serialized
     // payload before it reaches the inline <script>'s `children` (rendered raw via
     // dangerouslySetInnerHTML), so a `</script>` in a (Spotify-sourced) artist name
     // can't break out of the <script> (stored-XSS sink, security review).
-    scripts: [jsonLdScript(itemList)],
+    scripts: [jsonLdScript(collectionPage)],
   };
 }
 

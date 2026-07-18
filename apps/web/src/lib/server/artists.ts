@@ -46,6 +46,13 @@ export type ArtistRecord = {
    */
   bio?: string;
   id: string;
+  /**
+   * The artist's OWN portrait — the owned avatar master (RFC U3b) when resolved, else the raw
+   * Spotify `image_url`, else undefined (a monogram tile / the album-cover fallback covers it).
+   * The entity's `image` in the MusicGroup JSON-LD and the page's og:image, preferred over an
+   * album cover; also the masthead ArtistAvatar's source.
+   */
+  imageUrl: string | undefined;
   mbid: string | undefined;
   name: string;
   slug: string;
@@ -79,7 +86,8 @@ export async function getArtistBySlug(slug: string): Promise<ArtistRecord | unde
   const db = await getDb();
   const result = await db.execute({
     args: [slug],
-    sql: `select id, name, slug, spotify_url, mbid, wikidata_qid, bio
+    sql: `select id, name, slug, spotify_url, mbid, wikidata_qid, bio,
+                 image_url, image_key, image_state, image_updated_at
           from artists where slug = ? limit 1`,
   });
 
@@ -92,6 +100,14 @@ export async function getArtistBySlug(slug: string): Promise<ArtistRecord | unde
   return {
     bio: optionalText(row["bio"]),
     id: row["id"],
+    // The OWNED avatar master (RFC U3b) when resolved, else the raw Spotify image_url — the same
+    // `bestArtistAvatarUrl` ladder the /artists index + the graph chips use.
+    imageUrl: bestArtistAvatarUrl({
+      imageKey: optionalText(row["image_key"]),
+      imageState: optionalText(row["image_state"]),
+      imageUpdatedAt: optionalText(row["image_updated_at"]),
+      imageUrl: optionalText(row["image_url"]),
+    }),
     mbid: optionalText(row["mbid"]),
     name: row["name"],
     slug: typeof row["slug"] === "string" ? row["slug"] : slug,

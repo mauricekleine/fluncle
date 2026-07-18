@@ -17,7 +17,7 @@ import {
   siYoutube,
 } from "simple-icons";
 import { BrandIcon } from "@/components/brand-icon";
-import { siteUrl } from "@/lib/fluncle-links";
+import { fluncleEntityId, siteUrl } from "@/lib/fluncle-links";
 import { fluncleDescription } from "@/lib/identity";
 import { jsonLdScript } from "@/lib/json-ld";
 import {
@@ -497,11 +497,11 @@ const description =
   "Fluncle's reach across every platform, over time: the crew aboard, and how far the findings have carried.";
 
 // The AEO half (docs § Log IDs in search + AI answers): this page is the one place
-// Fluncle's audience numbers exist as DATA, so the head carries them as
-// `interactionStatistic` on the canonical MusicGroup entity — schema.org's
-// InteractionCounter, one FollowAction counter per crew platform, refreshed on every
-// crawl because the loader feeds the head. Every count is already public on its own
-// platform; this only makes the aggregate machine-readable.
+// Fluncle's audience numbers exist as DATA, so the head hangs them as `interactionStatistic`
+// on the ONE canonical Fluncle entity node (`@id`, fully declared on /about) rather than
+// re-declaring a competing entity — schema.org's InteractionCounter, one FollowAction counter
+// per crew platform, refreshed on every crawl because the loader feeds the head. Every count is
+// already public on its own platform; this only makes the aggregate machine-readable.
 function reachHead({ loaderData }: { loaderData?: PlatformStatsView }) {
   const counters = (loaderData?.series ?? []).flatMap((series) => {
     const key = `${series.platform}:${series.metric}`;
@@ -526,9 +526,9 @@ function reachHead({ loaderData }: { loaderData?: PlatformStatsView }) {
 
   const entity = {
     "@context": "https://schema.org",
-    "@type": "MusicGroup",
+    "@id": fluncleEntityId,
+    "@type": "Person",
     description: fluncleDescription,
-    genre: "Drum and Bass",
     image: `${siteUrl}/fluncle-cover.png`,
     ...(counters.length > 0 ? { interactionStatistic: counters } : {}),
     name: "Fluncle",

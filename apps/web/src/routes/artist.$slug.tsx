@@ -78,6 +78,10 @@ type ArtistPageData =
       catalogue: CatalogueGroupPage<CatalogueRecord>;
       dossier: ArtistDossier;
       findings: TrackListItem[];
+      // The artist's OWN portrait (owned avatar master, else Spotify image), or undefined. Preferred
+      // for og:image + the MusicGroup's `image`, and rendered in the masthead. Falls back to the
+      // freshest finding's album cover only when the artist carries no avatar of their own.
+      imageUrl: string | undefined;
       indexable: boolean;
       name: string;
       slug: string;
@@ -186,6 +190,7 @@ export async function resolveArtistPageData(
     catalogue,
     dossier: { ...signature, findingCount: gridFindings.length, neighbours },
     findings,
+    imageUrl: artist.imageUrl,
     // Thin-content gate: index only past ARTIST_INDEX_MIN_FINDINGS RENDERABLE tracks — the
     // certified findings PLUS the quieter catalogue rows, because both are real content on the
     // page and a page is thin or not thin on what it RENDERS, never on who wrote it. Both counts
@@ -223,6 +228,7 @@ function artistHead(loaderData: ArtistPageData | undefined) {
     bio,
     catalogue,
     findings,
+    imageUrl: artistImageUrl,
     indexable,
     name,
     slug,
@@ -251,8 +257,12 @@ function artistHead(loaderData: ArtistPageData | undefined) {
       : findings.length > 0
         ? `Every ${name} banger Fluncle has found and logged in the Galaxy, ${findings.length} so far, each with a coordinate.`
         : `${name} in Fluncle's Galaxy.`;
+  // The artist's OWN portrait leads: its owned avatar master (or Spotify image) is the entity's
+  // true image. Only when it has none does the page fall back to its freshest finding's cover, then
+  // the site cover as the floor. This one URL flows to og:image, twitter:image, and MusicGroup.image.
   const coverFinding = findings[0];
   const imageUrl =
+    artistImageUrl ??
     (coverFinding ? albumCoverAtSize(coverFinding.albumImageUrl, "large") : undefined) ??
     `${siteUrl}/fluncle-cover.png`;
 
@@ -376,12 +386,15 @@ function ArtistPage() {
     return null;
   }
 
-  const { bio, catalogue, dossier, findings, name, slug, socials, sort } = data;
+  const { bio, catalogue, dossier, findings, imageUrl, name, slug, socials, sort } = data;
 
   return (
     <main className="log-plate-stage">
       <article className="log-plate log-index">
         <header className="log-masthead">
+          {/* The entity's own portrait, above its name — the owned avatar master when resolved,
+              a quiet monogram tile otherwise (ArtistAvatar's fallback). */}
+          <ArtistAvatar className="artist-masthead-avatar" name={name} src={imageUrl} />
           <h1 className="log-coordinate log-index-title artist-name">{name}</h1>
           {/* The dossier bio is the masthead's prose — the reference register (the Three Areas
               Rule; the first-person signature line is retired). Rendered once authored. */}

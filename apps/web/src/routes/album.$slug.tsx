@@ -44,8 +44,14 @@ type AlbumPageData =
       indexable: boolean;
       label: LabelRecord | undefined;
       name: string;
+      /** The record's earliest track release date → the MusicAlbum's `datePublished`. */
+      releaseDate: string | undefined;
+      /** The MusicBrainz release-group MBID → the MusicAlbum's `sameAs`. */
+      releaseGroupMbid: string | undefined;
       slug: string;
       status: "found";
+      /** The album's barcode → the MusicAlbum's `gtin13`. */
+      upc: string | undefined;
     }
   | { status: "missing" };
 
@@ -91,8 +97,14 @@ export async function resolveAlbumPageData(slug: string): Promise<AlbumPageData>
     indexable: findings.length + catalogue.total >= ALBUM_INDEX_MIN_TRACKS,
     label,
     name: album.name,
+    // The album's identity anchors + its earliest release date, read in the same `getAlbumBySlug`
+    // pass (the `datePublished`/`sameAs`/`gtin13` the JSON-LD emits). Undefined when the record
+    // carries none.
+    releaseDate: album.releaseDate,
+    releaseGroupMbid: album.releaseGroupMbid,
     slug: album.slug,
     status: "found",
+    upc: album.upc,
   };
 }
 
@@ -105,8 +117,20 @@ function albumHead(loaderData: AlbumPageData | undefined) {
     return {};
   }
 
-  const { artists, bio, catalogue, coverImageUrl, findings, indexable, label, name, slug } =
-    loaderData;
+  const {
+    artists,
+    bio,
+    catalogue,
+    coverImageUrl,
+    findings,
+    indexable,
+    label,
+    name,
+    releaseDate,
+    releaseGroupMbid,
+    slug,
+    upc,
+  } = loaderData;
   const pageUrl = `${siteUrl}/album/${slug}`;
   // Honestly-plain third-person for the machine-facing strings (the Narrator rule).
   const title = `${name} · Fluncle's Findings`;
@@ -144,11 +168,16 @@ function albumHead(loaderData: AlbumPageData | undefined) {
         musicAlbumJsonLd({
           artists,
           bio,
+          // The owned cover master when the album resolved one (bestAlbumCoverUrl already chose it
+          // for the finding's DTO), taken to `large` — never a raw i.scdn.co URL when a master exists.
           imageUrl: albumCoverAtSize(coverImageUrl, "large"),
           label: label ? { name: label.name, slug: label.slug } : undefined,
           name,
+          releaseDate,
+          releaseGroupMbid,
           slug,
           tracks: graphPageTracks(findings, catalogue),
+          upc,
         }),
       ),
       jsonLdScript(albumBreadcrumbsJsonLd(name)),
