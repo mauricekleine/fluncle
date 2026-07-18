@@ -1000,6 +1000,65 @@ export const platformStats = sqliteTable(
   ],
 );
 
+// THE CATALOGUE FUNNEL LEDGER — one row per UTC day, the growth history behind the
+// /admin/funnel page (docs/rfcs/catalogue-funnel-rfc.md, U1). Live counts are cheap; the
+// growth-per-day charts need history nobody records (there is no `anchored_at`, no per-day
+// ledger), so this is the `platform_stats` daily-snapshot pattern applied to the catalogue
+// pipeline: a daily on-box trigger fires the agent-tier `record_catalogue_snapshot` op, the
+// Worker computes every stage total + queue depth + frontier count (all through the SAME
+// predicates the sweeps run — lib/server/funnel.ts, so the funnel can never drift from the
+// real gates), and one row lands per day.
+//
+// `day` (UTC yyyy-mm-dd) is the PRIMARY KEY, so the daily snapshot is UNIQUE + idempotent by
+// construction: a re-fired tick the same day is one `insert … on conflict(day) do update`
+// that OVERWRITES the row with fresh counts, never doubling a bar. Every count is an integer.
+//
+// NO backfill: the series starts with the first real snapshot and grows honestly (invented
+// history is worse than a short chart). NEVER pruned — the series IS the point.
+//
+// The series read is a plain ASC index walk on the `day` PK (`where day >= ? order by day
+// asc`), a lexicographic-equals-chronological window — no `desc()` index (the ratified trap).
+export const catalogueSnapshots = sqliteTable("catalogue_snapshots", {
+  // Queue depth — the `analyze` worklist backlog (track-work.ts `kindClause`), catalogue half.
+  analyzeQueue: integer("analyze_queue").notNull(),
+  // Stage total — uncertified catalogue rows carrying full-song analysis (bpm/key from the audio).
+  analyzed: integer("analyzed").notNull(),
+  // Queue depth — the anchor worklist's re-ask BENCH: rows that WOULD be anchorable but were
+  // attempted inside the 14-day re-ask window, so they sit out (not re-billed) for now.
+  anchorBackoff: integer("anchor_backoff").notNull(),
+  // Queue depth — anchor worklist rows WITH an ISRC (the exact-ISRC anchor path).
+  anchorQueueIsrc: integer("anchor_queue_isrc").notNull(),
+  // Queue depth — anchor worklist rows with NO ISRC (the search-triple anchor path).
+  anchorQueueNoIsrc: integer("anchor_queue_no_isrc").notNull(),
+  // Stage total — uncertified catalogue rows that have gained a Spotify anchor (`spotify_uri`).
+  anchored: integer("anchored").notNull(),
+  // Queue depth — the `capture` worklist backlog (catalogue half). Reflects the capture BRAKE:
+  // a shut budget narrows the catalogue capture queue to 0 (the budget meter says why).
+  captureQueue: integer("capture_queue").notNull(),
+  // Stage total — uncertified catalogue rows whose full-song audio has been captured.
+  captured: integer("captured").notNull(),
+  // Stage total — CERTIFIED tracks (a `findings` row exists). The right edge of the funnel:
+  // the catalogue → archive exit is a number.
+  certified: integer("certified").notNull(),
+  // Stage total — CRAWLED / uncertified: every catalogue track (a `tracks` row with no
+  // `findings` row). The funnel's left edge.
+  crawled: integer("crawled").notNull(),
+  createdAt: text("created_at").notNull(),
+  // The UTC day (yyyy-mm-dd) this snapshot covers. PK ⇒ one row per day, idempotent upsert.
+  day: text("day").primaryKey(),
+  // Queue depth — the `embed` worklist backlog (catalogue half).
+  embedQueue: integer("embed_queue").notNull(),
+  // Stage total — uncertified catalogue rows carrying a MuQ embedding vector.
+  embedded: integer("embedded").notNull(),
+  // Frontier — crawl_frontier nodes fully drained (`done`).
+  frontierDone: integer("frontier_done").notNull(),
+  // Frontier — crawl_frontier nodes still waiting (`pending`); 0 means the reachable graph is drained.
+  frontierPending: integer("frontier_pending").notNull(),
+  // Stage total — the rec-eligibility pool: uncertified rows that clear the EXACT gate
+  // `listRecommendations` scans by (the shared `REC_ELIGIBLE_WHERE`, lib/server/recommendations.ts).
+  recEligible: integer("rec_eligible").notNull(),
+});
+
 export const spotifyAuth = sqliteTable("spotify_auth", {
   accessToken: text("access_token").notNull(),
   expiresAt: text("expires_at").notNull(),

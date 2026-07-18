@@ -1528,6 +1528,24 @@ export const SURFACES: readonly Surface[] = [
   },
   {
     exposedContent: [
+      "daily catalogue-funnel snapshot — one row per UTC day of stage totals + queue depths + frontier counts behind /admin/funnel (--no-agent)",
+    ],
+    kind: "cron",
+    name: "cron.funnel-snapshot",
+    operatorNotes:
+      "23:45 UTC daily (end of the UTC day the snapshot is keyed on). A bare trigger (the reach/anchor shape): fires the AGENT-tier record_catalogue_snapshot op once — the Worker computes every stage total + queue depth + frontier count through the SAME predicates the sweeps run (lib/server/funnel.ts) and UPSERTS one idempotent row per UTC day (a same-day re-run overwrites, never doubles a bar). Zero LLM tokens; the box's agent token drives it and calls the oRPC HTTP endpoint directly (no new CLI command the pinned box CLI would lack), so no new secret. Source: docs/agents/hermes/scripts/funnel-snapshot-sweep.*. See docs/rfcs/catalogue-funnel-rfc.md.",
+    probeConfig: {
+      cadenceMs: 24 * 60 * MINUTE_MS,
+      cronName: "fluncle-funnel-snapshot",
+      kind: "cron",
+      schedule: { time: "23:45", tz: "UTC" },
+    },
+    statusDescription: "records the catalogue pipeline's daily numbers",
+    title: "Funnel snapshot",
+    weights: { status: "hidden" },
+  },
+  {
+    exposedContent: [
       "nightly codebase audit — one domain/night on a 7-day rotation; opens a PR the reviewer merges (claude -p, subscription auth)",
     ],
     kind: "cron",

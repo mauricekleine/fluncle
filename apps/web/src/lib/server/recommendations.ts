@@ -86,6 +86,32 @@ export const FRONTIER_NOVELTY_WINDOW = 8;
 export const RECOMMENDATIONS_RATE_LIMIT = 60;
 export const RECOMMENDATIONS_RATE_WINDOW_MS = 60 * 60 * 1000;
 
+/**
+ * THE REC-ELIGIBILITY PREDICATE — the exact, STATIC WHERE a catalogue row must clear to be
+ * recommendable to any listener. It is the pool the catalogue scan below draws from: an
+ * embedded, Spotify-anchored, non-dismissed, non-duplicate uncertified track under the
+ * long-form veto and outside the near-1.0 display-duplicate band.
+ *
+ * Extracted to a shared constant on purpose (docs/rfcs/catalogue-funnel-rfc.md, U1): the
+ * catalogue FUNNEL's `rec_eligible` count MUST be the same gate this scan uses, and the only
+ * way two counters cannot drift is to share the ONE predicate. The funnel count
+ * (lib/server/funnel.ts) folds this exact fragment into its stage scan, and the
+ * eligibility-agreement integration test proves the two agree on the same fixtures.
+ *
+ * Aliased `t` = `tracks`, `f` = the LEFT-joined `findings`. It carries NO bind params — the
+ * two thresholds are interpolated numeric module constants — so it drops into any query with
+ * a `tracks t left join findings f` shape without disturbing the arg order. The PER-USER
+ * exclusions (the seed set, the recent-editions novelty window) are NOT part of pool
+ * eligibility; `listRecommendations` appends them after this fragment.
+ */
+export const REC_ELIGIBLE_WHERE = `f.track_id is null
+      and t.embedding_blob is not null
+      and t.spotify_uri is not null
+      and t.dismissed_at is null
+      and t.duplicate_of_track_id is null
+      and (t.nearest_finding_score is null or t.nearest_finding_score < ${DUPLICATE_SIMILARITY})
+      and t.duration_ms < ${LONG_FORM_MS}`;
+
 type TrackRefRow = {
   log_id: null | string;
   track_id: string;
@@ -479,13 +505,7 @@ export async function listRecommendations(
         select t.track_id, ${bestDistance} as dist
         from tracks t
         left join findings f on f.track_id = t.track_id
-        where f.track_id is null
-          and t.embedding_blob is not null
-          and t.spotify_uri is not null
-          and t.dismissed_at is null
-          and t.duplicate_of_track_id is null
-          and (t.nearest_finding_score is null or t.nearest_finding_score < ${DUPLICATE_SIMILARITY})
-          and t.duration_ms < ${LONG_FORM_MS}
+        where ${REC_ELIGIBLE_WHERE}
           ${seedExclusion}
           ${recentExclusion}
       )

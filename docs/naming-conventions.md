@@ -69,27 +69,29 @@ Public + private (`/me`) operations, with their OpenAPI `operationId`:
 
 Admin operations (cookie-or-bearer, **not in the public OpenAPI spec**), expressed as method + path:
 
-| Operation                                             | Method + path                                                                                                                |
-| ----------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| Update a track (BPM/key/features/status/video/note)   | `PATCH /admin/tracks/{trackId}`                                                                                              |
-| Upload a video bundle                                 | `POST /admin/tracks/{trackId}/video` (+ `…/video/uploads`, `…/video/finalize`)                                               |
-| Show per-platform social status                       | `GET /admin/tracks/{trackId}/social`                                                                                         |
-| Update one platform's status                          | `PATCH /admin/tracks/{trackId}/social/{platform}`                                                                            |
-| Push a draft to a platform                            | `POST /admin/tracks/{trackId}/social/{platform}/draft`                                                                       |
-| Capture missing post URLs (the sweep)                 | `POST /admin/social/posts/capture` (`capture_post_urls`; collection-level action, no track id)                               |
-| Advance rendered findings into publish (the tick)     | `POST /admin/social/publish/advance` (`advance_publish_queue`; collection-level action, no track id)                         |
-| Pause / resume the publish auto-advance (kill switch) | `PUT /admin/social/publish/advance/state` (`set_publish_advance`; **operator** tier — the box may tick it, never turn it on) |
-| Record an observation                                 | `POST /admin/tracks/{trackId}/observe` (**verb segment on a REST path**)                                                     |
-| Archive a preview                                     | `POST /admin/tracks/{trackId}/preview` (single-word action; `…/preview-archive` retired)                                     |
-| List mixtapes                                         | `GET /admin/mixtapes` (create/publish/members/delete retired — a mixtape is born via `promote_recording`)                    |
-| Update a mixtape                                      | `PATCH /admin/mixtapes/{mixtapeId}`                                                                                          |
-| List the sonic-galaxy map (naming view + cron read)   | `GET /admin/galaxies` (`list_galaxies_admin`)                                                                                |
-| Name / rename / request-split a galaxy                | `PATCH /admin/galaxies/{id}` (`update_galaxy`; **operator** tier — naming is publish-class)                                  |
-| Write the galaxy map (the `fluncle-cluster` cron)     | `PUT /admin/galaxies/map` (`update_galaxy_map`; the Worker mints ids/handles for `id: null` rows)                            |
-| List track embeddings (the cluster engine's input)    | `GET /admin/tracks/embeddings` (`list_track_embeddings`; cursor-paginated)                                                   |
-| YouTube / Mixcloud distribution                       | `…/youtube/initiate`, `…/youtube/finalize`, `…/youtube/publish`, `…/mixcloud/finalize` (**verb segments**)                   |
-| Enrich sweep                                          | `POST /admin/tracks/enrich` (canonical; `…/enrich-sweep` kept as a back-compat alias)                                        |
-| Backfill                                              | `POST /admin/backfill/lastfm`, `…/backfill/discogs`                                                                          |
+| Operation                                             | Method + path                                                                                                                       |
+| ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| Update a track (BPM/key/features/status/video/note)   | `PATCH /admin/tracks/{trackId}`                                                                                                     |
+| Upload a video bundle                                 | `POST /admin/tracks/{trackId}/video` (+ `…/video/uploads`, `…/video/finalize`)                                                      |
+| Show per-platform social status                       | `GET /admin/tracks/{trackId}/social`                                                                                                |
+| Update one platform's status                          | `PATCH /admin/tracks/{trackId}/social/{platform}`                                                                                   |
+| Push a draft to a platform                            | `POST /admin/tracks/{trackId}/social/{platform}/draft`                                                                              |
+| Capture missing post URLs (the sweep)                 | `POST /admin/social/posts/capture` (`capture_post_urls`; collection-level action, no track id)                                      |
+| Advance rendered findings into publish (the tick)     | `POST /admin/social/publish/advance` (`advance_publish_queue`; collection-level action, no track id)                                |
+| Pause / resume the publish auto-advance (kill switch) | `PUT /admin/social/publish/advance/state` (`set_publish_advance`; **operator** tier — the box may tick it, never turn it on)        |
+| Record an observation                                 | `POST /admin/tracks/{trackId}/observe` (**verb segment on a REST path**)                                                            |
+| Archive a preview                                     | `POST /admin/tracks/{trackId}/preview` (single-word action; `…/preview-archive` retired)                                            |
+| List mixtapes                                         | `GET /admin/mixtapes` (create/publish/members/delete retired — a mixtape is born via `promote_recording`)                           |
+| Update a mixtape                                      | `PATCH /admin/mixtapes/{mixtapeId}`                                                                                                 |
+| List the sonic-galaxy map (naming view + cron read)   | `GET /admin/galaxies` (`list_galaxies_admin`)                                                                                       |
+| Name / rename / request-split a galaxy                | `PATCH /admin/galaxies/{id}` (`update_galaxy`; **operator** tier — naming is publish-class)                                         |
+| Write the galaxy map (the `fluncle-cluster` cron)     | `PUT /admin/galaxies/map` (`update_galaxy_map`; the Worker mints ids/handles for `id: null` rows)                                   |
+| List track embeddings (the cluster engine's input)    | `GET /admin/tracks/embeddings` (`list_track_embeddings`; cursor-paginated)                                                          |
+| Record the daily catalogue-funnel snapshot            | `POST /admin/funnel/snapshot` (`record_catalogue_snapshot`; agent tier — the box's daily funnel-snapshot cron POSTs a bare trigger) |
+| Read the catalogue funnel (live pipeline + series)    | `GET /admin/funnel` (`get_funnel`)                                                                                                  |
+| YouTube / Mixcloud distribution                       | `…/youtube/initiate`, `…/youtube/finalize`, `…/youtube/publish`, `…/mixcloud/finalize` (**verb segments**)                          |
+| Enrich sweep                                          | `POST /admin/tracks/enrich` (canonical; `…/enrich-sweep` kept as a back-compat alias)                                               |
+| Backfill                                              | `POST /admin/backfill/lastfm`, `…/backfill/discogs`                                                                                 |
 
 So the API is mostly clean REST (method = verb, path = resource), with a recurring exception: **action sub-resources** (`/observe`, `/publish`, `/draft`, `/preview-archive`, `/youtube/finalize`, `/enrich-sweep`) where a verb is pushed into the path because the operation isn't a plain CRUD on a resource. There is no convention for which verb-segments are allowed or how they're cased (`enrich-sweep` and `preview-archive` are kebab; `observe`, `publish`, `finalize` are single words).
 
