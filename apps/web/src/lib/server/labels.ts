@@ -288,6 +288,9 @@ export async function linkTrackToLabel(
   });
 }
 
+/** A parent or sublabel edge — the name + slug the graph JSON-LD + the visible line read. */
+export type LabelLineageEdge = { name: string; slug: string };
+
 /** The canonical label identity record the public page + JSON-LD read. */
 export type LabelRecord = {
   /**
@@ -302,6 +305,18 @@ export type LabelRecord = {
    * the public Organization JSON-LD emits into `sameAs` (`discogs.com/label/<id>`).
    */
   discogsLabelId: number | undefined;
+  /**
+   * The label's founding place (`labels.founded_location`, MusicBrainz `area.name`), or undefined.
+   * Emitted as the Organization's `location` Place + the visible "Founded … · <place>" line.
+   * Optional — only `getLabelBySlug` carries lineage; a bare edge (`getLabelForAlbum`) omits it.
+   */
+  foundedLocation?: string;
+  /**
+   * The label's founding date (`labels.founding_date`, MusicBrainz `life-span.begin` verbatim — a
+   * year or a full date), or undefined. Emitted as the Organization's `foundingDate` + the visible
+   * "Founded <date> …" line.
+   */
+  foundingDate?: string;
   id: string;
   /**
    * The label's OWN logo (its resolved Discogs/Wikidata image on R2), or undefined when it has
@@ -314,7 +329,18 @@ export type LabelRecord = {
    */
   mbLabelId: string | undefined;
   name: string;
+  /**
+   * The label this one is a SUBLABEL / imprint of (`labels.parent_label_id`), resolved to its
+   * name + slug, or undefined. Emitted as the Organization's `parentOrganization` `@id` edge.
+   */
+  parentLabel?: LabelLineageEdge;
   slug: string;
+  /**
+   * The labels that are sublabels / imprints OF this one (the `parent_label_id` reverse read),
+   * name + slug each — the Organization's `subOrganization` `@id` edges. Empty/undefined for a
+   * label with no children (or a bare edge record).
+   */
+  subLabels?: LabelLineageEdge[];
 };
 
 /** A row in the `/labels` index + a thin-gated sitemap candidate. */
@@ -338,30 +364,93 @@ export type LabelIndexEntry = {
   slug: string;
 };
 
+// The most sublabels a `/label/<slug>` page's `subOrganization` edges will ever carry. Real imprint
+// families are a handful; the cap defends the page + JSON-LD against a pathological crawl folding
+// hundreds of children onto one parent. An indexed seek on `labels_parent_label_id_idx`, never a scan.
+const LABEL_SUBLABELS_LIMIT = 50;
+
+/**
+ * The lineage EDGES for one label — its parent (the imprint it belongs to) resolved to name + slug,
+ * and the sublabels that point back at it. Two indexed seeks (`labels` PK for the parent,
+ * `labels_parent_label_id_idx` for the children), bounded by {@link LABEL_SUBLABELS_LIMIT}. Called
+ * only by the page read, so it is one extra round trip on a single-label render, never a catalogue scan.
+ */
+async function getLabelLineageEdges(
+  labelId: string,
+  parentLabelId: string | null,
+): Promise<{ parentLabel?: LabelLineageEdge; subLabels: LabelLineageEdge[] }> {
+  const db = await getDb();
+
+  const parentResult = parentLabelId
+    ? await db.execute({
+        args: [parentLabelId],
+        sql: `select name, slug from labels where id = ? limit 1`,
+      })
+    : undefined;
+  const parentRow = parentResult
+    ? typedRows<{ name: string; slug: string }>(parentResult.rows)[0]
+    : undefined;
+
+  const childrenResult = await db.execute({
+    args: [labelId, LABEL_SUBLABELS_LIMIT],
+    sql: `select name, slug from labels where parent_label_id = ? order by name collate nocase asc limit ?`,
+  });
+
+  return {
+    parentLabel: parentRow ? { name: parentRow.name, slug: parentRow.slug } : undefined,
+    subLabels: typedRows<{ name: string; slug: string }>(childrenResult.rows).map((child) => ({
+      name: child.name,
+      slug: child.slug,
+    })),
+  };
+}
+
 /** Resolve one label by its public slug (undefined = no such label). */
 export async function getLabelBySlug(slug: string): Promise<LabelRecord | undefined> {
   const db = await getDb();
   const result = await db.execute({
     args: [slug],
-    sql: `select ${LABEL_COLUMNS}, bio, mb_label_id, discogs_label_id from labels where slug = ? limit 1`,
+    sql: `select ${LABEL_COLUMNS}, bio, mb_label_id, discogs_label_id,
+                 founding_date, founded_location, parent_label_id
+          from labels where slug = ? limit 1`,
   });
 
   const row = typedRows<
-    LabelRow & { bio: string | null; discogs_label_id: number | null; mb_label_id: string | null }
+    LabelRow & {
+      bio: string | null;
+      discogs_label_id: number | null;
+      founded_location: string | null;
+      founding_date: string | null;
+      mb_label_id: string | null;
+      parent_label_id: string | null;
+    }
   >(result.rows)[0];
 
-  return row
-    ? {
-        bio: typeof row.bio === "string" && row.bio.trim() ? row.bio : undefined,
-        discogsLabelId: typeof row.discogs_label_id === "number" ? row.discogs_label_id : undefined,
-        id: row.id,
-        logoImageUrl: labelLogoUrl(row.image_key),
-        mbLabelId:
-          typeof row.mb_label_id === "string" && row.mb_label_id ? row.mb_label_id : undefined,
-        name: row.name,
-        slug: row.slug,
-      }
-    : undefined;
+  if (!row) {
+    return undefined;
+  }
+
+  const lineage = await getLabelLineageEdges(row.id, row.parent_label_id);
+
+  return {
+    bio: typeof row.bio === "string" && row.bio.trim() ? row.bio : undefined,
+    discogsLabelId: typeof row.discogs_label_id === "number" ? row.discogs_label_id : undefined,
+    foundedLocation:
+      typeof row.founded_location === "string" && row.founded_location.trim()
+        ? row.founded_location
+        : undefined,
+    foundingDate:
+      typeof row.founding_date === "string" && row.founding_date.trim()
+        ? row.founding_date
+        : undefined,
+    id: row.id,
+    logoImageUrl: labelLogoUrl(row.image_key),
+    mbLabelId: typeof row.mb_label_id === "string" && row.mb_label_id ? row.mb_label_id : undefined,
+    name: row.name,
+    parentLabel: lineage.parentLabel,
+    slug: row.slug,
+    subLabels: lineage.subLabels,
+  };
 }
 
 /**

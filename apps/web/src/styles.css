@@ -2596,6 +2596,16 @@ a.catalogue-letter:focus-visible {
   white-space: pre-wrap;
 }
 
+/* The label dateline — a single quiet reference-register fact ("Founded 1996 · London"),
+   a notch smaller than the bio it sits beneath (the dossier register). Sits on the
+   AA-tuned --muted-foreground token with NO extra opacity, so it clears the contrast floor. */
+.log-index-dateline {
+  color: var(--muted-foreground);
+  font-size: 0.82rem;
+  letter-spacing: 0.01em;
+  margin-top: 0.5rem;
+}
+
 .log-index-empty {
   color: var(--muted-foreground);
   padding: 2rem 0;

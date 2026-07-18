@@ -15,7 +15,7 @@ import {
 import { logEvent } from "./log";
 import { bestArtistAvatarUrl } from "../media";
 import { fetchArtistImages } from "./spotify";
-import { fold } from "./track-match";
+import { deriveRemixerNames, fold } from "./track-match";
 
 // The thin-content gate for artist pages: a `/artist/<slug>` page indexes (and
 // enters the sitemap) only at this many coordinate-bearing findings or more.
@@ -795,6 +795,100 @@ export async function linkTracksToArtistEntities(trackIds?: string[]): Promise<n
   });
 
   return result.rowsAffected;
+}
+
+/**
+ * Stamp `track_artists.role = 'remixer'` for the remixer(s) a track's TITLE names, over a batch of
+ * track ids (RFC label-lineage-remixer, U2). Fill-empty-only (`role is null`) and idempotent — a
+ * re-run over already-stamped rows touches nothing, and it never DOWNGRADES a role. Derivation is
+ * `deriveRemixerNames` (track-match.ts), the same pure function the JSON-LD emit reads, so the
+ * column and the markup agree by construction.
+ *
+ * Runs after the track_artists edge is minted — from the publish path (`upsertTrackArtists`), the
+ * crawler (`linkTracksToArtistEntities`), and the Spotify-anchor step — plus the deploy backfill
+ * (`scripts/backfill-remixer-roles.ts`) for history. It reads the title + credited names off the
+ * `tracks` row itself, so no caller threads the title through. NEVER guesses beyond an exact fold
+ * match: a remixer with no linked `artists` row (uncertified) leaves no row to stamp. Returns the
+ * count of rows stamped. Best-effort by contract — the callers wrap it so a failure never blocks
+ * the write it follows.
+ */
+export async function stampRemixerRoles(trackIds: string[]): Promise<number> {
+  if (trackIds.length === 0) {
+    return 0;
+  }
+
+  const db = await getDb();
+  const placeholders = trackIds.map(() => "?").join(", ");
+
+  // One read: every UNSTAMPED (track, linked-artist) edge in the batch, carrying the track's title
+  // + `artists_json` so the derivation runs per track without a second query. Bounded by the batch
+  // (a crawler release is a handful of tracks; the publish path passes one).
+  const rows = typedRows<{
+    artist_id: string;
+    artist_name: string;
+    artists_json: string;
+    title: string;
+    track_id: string;
+  }>(
+    (
+      await db.execute({
+        args: trackIds,
+        sql: `select ta.track_id, ta.artist_id, a.name as artist_name, t.title, t.artists_json
+              from track_artists ta
+              join artists a on a.id = ta.artist_id
+              join tracks t on t.track_id = ta.track_id
+              where ta.role is null and ta.track_id in (${placeholders})`,
+      })
+    ).rows,
+  );
+
+  if (rows.length === 0) {
+    return 0;
+  }
+
+  const byTrack = new Map<
+    string,
+    { artistsJson: string; linked: Array<{ artistId: string; name: string }>; title: string }
+  >();
+
+  for (const row of rows) {
+    let entry = byTrack.get(row.track_id);
+
+    if (!entry) {
+      entry = { artistsJson: row.artists_json, linked: [], title: row.title };
+      byTrack.set(row.track_id, entry);
+    }
+
+    entry.linked.push({ artistId: row.artist_id, name: row.artist_name });
+  }
+
+  let stamped = 0;
+
+  for (const [trackId, entry] of byTrack) {
+    const remixerFolds = new Set(
+      deriveRemixerNames(entry.title, parseArtistsJson(entry.artistsJson)).map(fold),
+    );
+
+    if (remixerFolds.size === 0) {
+      continue;
+    }
+
+    for (const artist of entry.linked) {
+      if (!remixerFolds.has(fold(artist.name))) {
+        continue;
+      }
+
+      const result = await db.execute({
+        args: [artist.artistId, trackId],
+        sql: `update track_artists set role = 'remixer'
+              where artist_id = ? and track_id = ? and role is null`,
+      });
+
+      stamped += result.rowsAffected;
+    }
+  }
+
+  return stamped;
 }
 
 // Upsert artists + track_artists for a track that was just inserted. Called at

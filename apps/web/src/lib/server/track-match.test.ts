@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildTrackMatchIndex,
   dedupeByRecordingIdentity,
+  deriveRemixerNames,
   fold,
   matchKey,
   normalizeArtists,
@@ -213,5 +214,52 @@ describe("dedupeByRecordingIdentity (the render-time twin fold)", () => {
     );
 
     expect(kept.map((r) => r.trackId).sort()).toEqual(["t_orig", "t_remix"]);
+  });
+});
+
+describe("deriveRemixerNames (the remixer credit, RFC label-lineage-remixer U2)", () => {
+  it("returns the credited artist a '(X Remix)' title names", () => {
+    expect(
+      deriveRemixerNames("Nobody Else (Calibre Remix)", ["Marcus Intalex", "Calibre"]),
+    ).toEqual(["Calibre"]);
+  });
+
+  it("matches a dash-suffixed remix and folds punctuation/accents (S.P.Y ⇄ s p y)", () => {
+    expect(deriveRemixerNames("Nobody Else - S.P.Y Remix", ["Axwell", "S.P.Y"])).toEqual(["S.P.Y"]);
+  });
+
+  it("strips the VIP version word and matches the remainder", () => {
+    expect(
+      deriveRemixerNames("Valley of the Shadows (Alix Perez VIP)", [
+        "Origin Unknown",
+        "Alix Perez",
+      ]),
+    ).toEqual(["Alix Perez"]);
+  });
+
+  it("resolves BOTH names of a co-remix credited individually", () => {
+    expect(
+      deriveRemixerNames("Tune (Calibre & Fabio Remix)", ["Nu:Tone", "Calibre", "Fabio"]).sort(),
+    ).toEqual(["Calibre", "Fabio"]);
+  });
+
+  it("returns nothing for a non-remix title", () => {
+    expect(deriveRemixerNames("Nobody Else", ["Axwell", "Calibre"])).toEqual([]);
+  });
+
+  it("returns nothing for a bare (Remix)/(VIP) with no name", () => {
+    expect(deriveRemixerNames("Nobody Else (VIP)", ["Axwell"])).toEqual([]);
+    expect(deriveRemixerNames("Nobody Else (Remix)", ["Axwell"])).toEqual([]);
+  });
+
+  it("never guesses beyond an exact fold match (an uncredited remixer stays absent)", () => {
+    // The title names Calibre, but Calibre is not one of the track's linked artists.
+    expect(deriveRemixerNames("Nobody Else (Calibre Remix)", ["Axwell", "Marcus Intalex"])).toEqual(
+      [],
+    );
+  });
+
+  it("does NOT treat the neutral 'Original Mix' as a remixer descriptor", () => {
+    expect(deriveRemixerNames("Nobody Else (Original Mix)", ["Axwell"])).toEqual([]);
   });
 });

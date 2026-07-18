@@ -1147,6 +1147,20 @@ export const SURFACES: readonly Surface[] = [
     weights: { status: "hidden" },
   },
   {
+    command: "fluncle admin backfills label-lineage",
+    exposedContent: [
+      "resolve each label's founding date + place + parent imprint from MusicBrainz → the labels row",
+    ],
+    kind: "cron",
+    name: "cron.label-lineage",
+    operatorNotes:
+      "every 60m, run by a rave-02 HOST systemd timer (docs/agents/hermes/label-lineage-timer/). The label entity's LINEAGE half (RFC label-lineage-remixer, U1): gives each label its founding facts + its place in the imprint hierarchy from MusicBrainz — `life-span.begin` → `founding_date`, `area.name` → `founded_location`, and the `backward` `label ownership` / `imprint` label-rels → `parent_label_id` (matched to an EXISTING label by MBID; NEVER minted — an unmatched parent is only counted). A dedicated sweep, not a rider on the label-image sweep, because that one is terminal per label and a logo-resolved label would never get its lineage: this carries its OWN `lineage_state` machine so it reaches every label once. METADATA ONLY — it certifies nothing, mints nothing, publishes nothing (agent tier, the `backfill_label_images` precedent). Worker-paced (the box holds no MusicBrainz budget): one bounded batch per tick, 1 req/s, circuit-broken on a throttle, reusing the shared MB client + exact-fold identity search. The `labels` row carries the durable reliability state (lineage_state/lineage_attempted_at/lineage_failures), so a resolved/none label is terminal. Emitted as the `/label/<slug>` Organization's `foundingDate` / `location` / `parentOrganization` / `subOrganization`. Zero LLM tokens. Source: docs/agents/hermes/scripts/label-lineage-sweep.*. See docs/label-entity.md.",
+    probeConfig: { cadenceMs: 60 * MINUTE_MS, cronName: "fluncle-label-lineage", kind: "cron" },
+    statusDescription: "resolves each label's founding and imprint",
+    title: "Label lineage",
+    weights: { status: "hidden" },
+  },
+  {
     command: "fluncle admin backfills cover-masters",
     exposedContent: [
       "resolve each pending album/artist its OWN ≤1200² cover master (best source wins) → its own R2 image",

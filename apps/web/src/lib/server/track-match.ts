@@ -144,6 +144,44 @@ export function matchKey(artists: string[] | string, title: string): string {
   return JSON.stringify([names, base, descriptor]);
 }
 
+/**
+ * The remixer-credit derivation (RFC label-lineage-remixer, U2): the subset of `artists` a track's
+ * TITLE names as its remixer — and NOTHING beyond an EXACT fold match, so a credit is never guessed.
+ *
+ * The title's version descriptor ("(Calibre Remix)", "Song - S.P.Y VIP") names the remixer; strip
+ * the VERSION word(s) off it (`splitTitle` already folded it) and the remainder is the remixer name
+ * ("calibre", "s p y"). We return only the `artists` whose folded name EQUALS one of those, so an
+ * uncertified remixer the archive has no `artists` row for is never invented, and a co-remix
+ * ("Calibre & Fabio Remix") resolves to BOTH when both are credited (`normalizeArtists` splits the
+ * remainder on `&`/`and`/…). Empty when the title carries no version descriptor, when stripping the
+ * version words leaves nothing (a bare "(Remix)"/"(VIP)"), or when no credited artist folds to it.
+ *
+ * PURE + deterministic, and the SINGLE source of truth for the credit: the DB stamp
+ * (`stampRemixerRoles`, artists.ts) and the JSON-LD emit (log-schema.ts) both read it, so the
+ * `track_artists.role` column and the MusicRecording `contributor` markup agree by construction.
+ */
+export function deriveRemixerNames(title: string, artists: string[]): string[] {
+  const { descriptor } = splitTitle(title);
+
+  if (!descriptor) {
+    return [];
+  }
+
+  const nameTokens = descriptor.split(" ").filter((token) => token && !VERSION_WORDS.has(token));
+
+  if (nameTokens.length === 0) {
+    return [];
+  }
+
+  const candidates = normalizeArtists(nameTokens.join(" "));
+
+  if (candidates.size === 0) {
+    return [];
+  }
+
+  return artists.filter((name) => candidates.has(fold(name)));
+}
+
 /** A catalogue entry the matcher indexes — a finding's identity + its id. */
 export type CatalogueTrack = {
   artists: string[] | string;

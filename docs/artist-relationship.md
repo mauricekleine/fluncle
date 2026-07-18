@@ -91,3 +91,11 @@ Fluncle once championed the artists it featured — following them back on Spoti
 - **2026-07-09 — the manual half.** The operator Follow-now / Undo, the `follow_artist_social` / `unfollow_artist_social` / `record_operator_follow` ops, the Spotify `user-follow-modify` scope, the YouTube subscribe helpers, and the `followed_at` / `muted_at` columns. **`mute` went with them** — muting meant "don't follow this platform", so once nothing followed, it had nothing left to mean.
 
 Reverse this only if the gate lifts — Spotify reopening broader Web API access to dev-mode apps, or a Fluncle business entity qualifying for Extended Quota. Nothing depends on it.
+
+## Remixer credits (the `track_artists.role` column)
+
+The `track_artists` join gains a nullable **`role`** (null = a performer — a lead/featured artist, the only kind v1 had; `'remixer'` the first non-null value). It is DERIVED, never guessed. `deriveRemixerNames` (`track-match.ts`) reads the title's version descriptor — "(Calibre Remix)", "Song - S.P.Y VIP" — strips the version word off it, and returns only the credited `artists` it EXACTLY folds to. So an uncertified remixer with no `artists` row is never invented (there is no row to stamp), and a co-remix ("Calibre & Fabio Remix") resolves to BOTH when both are credited. It is the SINGLE source of truth: the DB stamp and the JSON-LD emit both read it, so the column and the markup agree by construction.
+
+`stampRemixerRoles` (`artists.ts`) stamps `role='remixer'` **fill-empty-only** at every write path that mints a `track_artists` edge — the publish path (`upsertTrackArtists`), the crawler's name-fold link (`linkTracksToArtistEntities`), and the Spotify-anchor step (`connectAnchorArtists`) — and `scripts/backfill-remixer-roles.ts` (deploy `db:backfill`) catches history up, keyset-paged over the titles that plausibly carry a descriptor. Idempotent and non-clobbering.
+
+**Emitted, markup-only.** On the `/log` `MusicRecording` and the graph-page tracklists a remixer renders as a schema.org `contributor` **Role** (the roles.html pattern: `contributor` → a `Role` carrying `roleName: "remixer"` and REPEATING `contributor` for the `MusicGroup`, with its `@id` when the remixer is a known artist). Additive to `byArtist`; the visible page is unchanged (credits are markup-only for now).

@@ -22,6 +22,7 @@ import {
 } from "../backfill";
 import { type CoverMasterKind, resolveCoverMasters } from "../cover-masters";
 import { resolveLabelImages } from "../label-images";
+import { resolveLabelLineage } from "../label-lineage";
 import { adminAuth } from "../orpc-auth";
 import { resolveRecordingMbids } from "../recording-mbids";
 import { apiFault, type Implementer, parseBool, parseLimit } from "./_shared";
@@ -194,6 +195,38 @@ export function adminBackfillsHandlers(os: Implementer) {
       }
     });
 
+  // POST /admin/backfill/label-lineage — agent tier (`adminAuth`): resolves a label's FOUNDING facts
+  // (date, place) + its parent imprint from MusicBrainz, no publish, so the box's agent-token cron
+  // drives it. Reads only — writes catalogue metadata onto the `labels` row, never mints a label.
+  const backfillLabelLineageHandler = os.backfill_label_lineage
+    .use(adminAuth)
+    .handler(async ({ input }) => {
+      try {
+        const { query } = input;
+        const result = await resolveLabelLineage(
+          parseLimit(query.limit, BACKFILL_DEFAULT_LIMIT, BACKFILL_MAX_LIMIT),
+          parseBool(query.dryRun),
+          query.cursor ?? undefined,
+        );
+
+        return {
+          dryRun: result.dryRun,
+          failed: result.failed,
+          failedCount: result.failedCount,
+          nextCursor: result.nextCursor,
+          none: result.none,
+          noneCount: result.noneCount,
+          ok: true as const,
+          rateLimited: result.rateLimited,
+          resolved: result.resolved,
+          resolvedCount: result.resolvedCount,
+          unmatchedParents: result.unmatchedParents,
+        };
+      } catch (error) {
+        throw apiFault(error);
+      }
+    });
+
   // POST /admin/backfill/cover-masters — agent tier (`adminAuth`): resolves an album's/artist's OWN
   // ≤1200²-capped cover master (RFC U3b) into R2, no publish, so the box's agent-token cron drives
   // it. The world-served bucket is `env.VIDEOS` (found.fluncle.com), the label-logo precedent.
@@ -269,6 +302,7 @@ export function adminBackfillsHandlers(os: Implementer) {
     backfill_cover_masters: backfillCoverMastersHandler,
     backfill_discogs: backfillDiscogsHandler,
     backfill_label_images: backfillLabelImagesHandler,
+    backfill_label_lineage: backfillLabelLineageHandler,
     backfill_lastfm: backfillLastfmHandler,
     backfill_recording_mbids: backfillRecordingMbidsHandler,
   };

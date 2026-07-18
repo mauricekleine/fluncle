@@ -62,7 +62,7 @@
 // See docs/catalogue-crawler.md.
 
 import { ensureAlbum } from "./albums";
-import { linkTracksToArtistEntities } from "./artists";
+import { linkTracksToArtistEntities, stampRemixerRoles } from "./artists";
 import { getDb, typedRows } from "./db";
 import { parseDiscogsUrl } from "./discogs";
 import { setLabelMbLabelId } from "./label-images";
@@ -1012,6 +1012,12 @@ async function expandRelease(node: FrontierRow, maxHop: number): Promise<Expansi
   // has found stays unlinked until its
   // entity exists; the one-off `backfill-artist-links.ts` reconciles that (no longer a deploy step).
   await linkTracksToArtistEntities(writtenIds);
+
+  // Stamp any remixer credit these titles name (RFC label-lineage-remixer, U2), now the
+  // `track_artists` edges exist. A crawled remix by an ALREADY-CERTIFIED remixer (the only kind
+  // `linkTracksToArtistEntities` links) gets its `role='remixer'` stamp; an uncertified remixer
+  // has no linked row, so nothing is stamped — the same exact-match-only rail.
+  await stampRemixerRoles(writtenIds);
 
   // The outward edge: the artists on this release, one hop further out. Past the limit
   // nothing is enqueued, which is what makes the walk terminate.
