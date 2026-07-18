@@ -1,15 +1,12 @@
-import { liveSurfaces } from "@fluncle/registry";
-import { logPageUrl, siteUrl, twitchUrl } from "../fluncle-links";
+import { siteUrl, twitchUrl } from "../fluncle-links";
 import { fluncleDescription } from "../identity";
-import { type FeedItem, type MixtapeDTO, mixtapeDisplayTitle } from "../mixtapes";
-import { FRESH_TRACKS_DEFAULT, FRESH_TRACKS_MAX, listFreshTracks } from "./fresh";
+import { type FeedItem, mixtapeDisplayTitle } from "../mixtapes";
 import { getLiveState, type LiveState } from "./live";
-import { resolveLogPageTarget } from "./log-resolver";
 import { subscribeToNewsletter } from "./newsletter";
 import { ApiError, searchTrackCandidates } from "./spotify";
-import { getServiceStatuses, type ServiceHealthStatus } from "./status";
 import { createSubmission } from "./submissions";
-import { getRandomTrack, listTracks, type TrackListItem, toPublicTrackListItem } from "./tracks";
+import { readCoordinate, resourceUri, SHARED_TOOLS, toMcpTool } from "./tools/registry";
+import { listTracks } from "./tracks";
 
 // A small, stateless Model Context Protocol server: the same drum & bass
 // archive the public API exposes, handed to agents over the Streamable HTTP
@@ -43,7 +40,6 @@ const SERVER_NAME = "com.fluncle/fluncle-api";
 const SERVER_VERSION = "1.0.0";
 const MCP_ENDPOINT = `${siteUrl}/mcp`;
 
-const defaultRecentLimit = 10;
 const maxRecentLimit = 48;
 const minQueryLength = 2;
 // How many recent findings/mixtapes resources/list advertises — the same window
@@ -79,108 +75,11 @@ type McpTool = {
   title: string;
 };
 
-const tools: McpTool[] = [
-  {
-    description:
-      "List the most recent findings and mixtapes in Fluncle's drum & bass archive, newest first. Dates mark when each was found or published into the spine.",
-    execute: async (args) => {
-      const page = await listTracks({ includeMixtapes: true, limit: clampLimit(args.limit) });
-
-      // Strip the private capture key before the archive world-serves to the agent.
-      return { ...page, tracks: page.tracks.map(toPublicTrackListItem) };
-    },
-    inputSchema: {
-      properties: {
-        limit: {
-          description: "How many tracks to return (1 to 48, default 10).",
-          maximum: maxRecentLimit,
-          minimum: 1,
-          type: "number",
-        },
-      },
-      type: "object",
-    },
-    name: "list_tracks",
-    title: "Recent findings",
-  },
-  {
-    description:
-      "List the newest drum & bass RELEASES across Fluncle's archive: every track that came OUT in the trailing 30-day window, freshest release first. These are ordered by RELEASE date (when a track landed), not by when Fluncle found it, so do not say Fluncle found them, only that they just came out. Certified findings carry a Log ID coordinate and cover art; the quieter uncertified rows carry neither.",
-    execute: async (args) => {
-      const limit = typeof args.limit === "number" ? args.limit : undefined;
-
-      // listFreshTracks strips the private key off findings and mints nothing for the
-      // uncertified rows, so the whole fresh list is safe to world-serve as-is.
-      return listFreshTracks({ limit });
-    },
-    inputSchema: {
-      properties: {
-        limit: {
-          description: `How many releases to return (1 to ${FRESH_TRACKS_MAX}, default ${FRESH_TRACKS_DEFAULT}).`,
-          maximum: FRESH_TRACKS_MAX,
-          minimum: 1,
-          type: "integer",
-        },
-      },
-      type: "object",
-    },
-    name: "list_fresh",
-    title: "Fresh releases",
-  },
-  {
-    description:
-      "Read one finding (or mixtape) in full by its Log ID coordinate or Spotify track id. Returns the same public record its /log page shows: artist, title, Found date, note, BPM, key, links, galaxy, and the recovered observation transcript. The resource form is fluncle://finding/<logId>.",
-    execute: async (args) => {
-      const idOrLogId = asTrimmedString(args.idOrLogId);
-
-      if (!idOrLogId) {
-        throw new ApiError("invalid_query", "A Log ID or Spotify track id is required", 400);
-      }
-
-      const resolved = await readCoordinate(idOrLogId);
-
-      if (!resolved) {
-        throw new ApiError("track_not_found", `No finding found for ${idOrLogId}`, 404);
-      }
-
-      return resolved.kind === "mixtape"
-        ? { mixtape: resolved.record, ok: true }
-        : { ok: true, track: resolved.record };
-    },
-    inputSchema: {
-      properties: {
-        idOrLogId: {
-          description: "A Log ID coordinate (e.g. 012.8.0A) or a Spotify track id / URL.",
-          type: "string",
-        },
-      },
-      required: ["idOrLogId"],
-      type: "object",
-    },
-    name: "get_track",
-    title: "Read one finding",
-  },
-  {
-    description: "Pull one random certified track from Fluncle's archive.",
-    execute: async () => {
-      const track = await getRandomTrack();
-
-      return track
-        ? { ok: true, track: toPublicTrackListItem(track) }
-        : { code: "track_not_found", message: "No tracks found", ok: false };
-    },
-    inputSchema: { properties: {}, type: "object" },
-    name: "get_random_track",
-    title: "Random finding",
-  },
-  {
-    description:
-      "Check whether all of Fluncle's systems are operational. Returns an overall ok flag, a one-line headline, and the current status of each service (the website, the API, the media zone, the SSH terminal, the DNS zone, the Tor mirror, the render box, and the on-box prober). Read-only; the same health the public /status page shows.",
-    execute: async () => summarizeStatus(),
-    inputSchema: { properties: {}, type: "object" },
-    name: "get_status",
-    title: "Are all systems up?",
-  },
+// The MCP-only tools: the Spotify candidate search + the two write verbs. The five overlapping
+// read tools (list_tracks, list_fresh, get_track, get_random_track, get_status) are projected
+// from the shared registry below, so their name/description/schema never drift from ChatDnB or
+// WebMCP.
+const mcpOnlyTools: McpTool[] = [
   {
     description:
       "Search Spotify for track candidates by name or Spotify track URL. Use a result's id and spotifyUrl with submit_track.",
@@ -288,10 +187,18 @@ const tools: McpTool[] = [
   },
 ];
 
+// The realized MCP tool set: the shared read tools projected from the registry, then the
+// MCP-only verbs. `toMcpTool` bridges the dispatcher's positional (args, request) call and
+// leaves the args un-validated, so the limit tools keep their tolerant clamp.
+const tools: McpTool[] = [
+  ...SHARED_TOOLS.filter((tool) => tool.transports.includes("mcp")).map(toMcpTool),
+  ...mcpOnlyTools,
+];
+
 // `get_recent_tracks` deprecation alias of `list_tracks` (Convention B §4). Shares
 // the canonical tool's execute + schema so the two never drift; kept in tools/list
 // for a deprecation window so agents pinned to the old name keep working.
-const listTracksTool = tools[0];
+const listTracksTool = tools.find((tool) => tool.name === "list_tracks");
 
 if (!listTracksTool) {
   throw new Error("list_tracks tool missing from the MCP tool list");
@@ -314,31 +221,10 @@ tools.push({
 // URIs (fluncle://finding/…, fluncle://mixtape/…) let an agent see the kind
 // before reading; the read also accepts the bare fluncle://<logId> display form.
 
+// The public-record shapers (publicFindingRecord/publicMixtapeRecord) and the coordinate
+// resolver (readCoordinate) + resourceUri now live in the shared tool registry
+// (./tools/registry), so the get_track tool and these resources serve the identical record.
 const RESOURCE_SCHEME = "fluncle://";
-
-type ResolvedRecord =
-  | { kind: "finding"; record: ReturnType<typeof publicFindingRecord> }
-  | { kind: "mixtape"; record: ReturnType<typeof publicMixtapeRecord> };
-
-// Resolve a coordinate (Log ID) or Spotify track id to its public record, reusing
-// the same resolver the /log page uses so the MCP read and the web read never drift.
-async function readCoordinate(idOrLogId: string): Promise<ResolvedRecord | undefined> {
-  const target = await resolveLogPageTarget(idOrLogId);
-
-  if (!target) {
-    return undefined;
-  }
-
-  return target.kind === "mixtape"
-    ? { kind: "mixtape", record: publicMixtapeRecord(target.mixtape) }
-    : { kind: "finding", record: publicFindingRecord(target.track) };
-}
-
-// The resource URI for a coordinated item, typed by kind so an agent reads intent
-// off the URI (fluncle://finding/012.8.0A). Mixtapes carry an F-marked Log ID.
-function resourceUri(kind: "finding" | "mixtape", logId: string | undefined): string | undefined {
-  return logId ? `${RESOURCE_SCHEME}${kind}/${logId}` : undefined;
-}
 
 // Pull the Log ID out of a resource URI. Accepts the typed forms
 // (fluncle://finding/<id>, fluncle://mixtape/<id>) and the bare display form
@@ -377,92 +263,6 @@ function resourceDescriptor(item: FeedItem): {
   const description = firstLine(item.note);
 
   return { mimeType: "application/json", name, uri, ...(description ? { description } : {}) };
-}
-
-// A finding's PUBLIC record — only the fields /log/<id> renders (plus the
-// observation transcript, which /radio renders as visible + screen-reader text).
-// toPublicTrackListItem strips the private full-song capture key first; the raw
-// vibe coordinates, enrichment status, and internal video fields are never included.
-function publicFindingRecord(item: TrackListItem) {
-  const track = toPublicTrackListItem(item);
-
-  return compact({
-    album: track.album,
-    artists: track.artists,
-    bpm: track.bpm === undefined ? undefined : Math.round(track.bpm),
-    coordinate: track.logId,
-    durationMs: track.durationMs,
-    found: track.addedAt,
-    galaxy: track.galaxy?.name,
-    isrc: track.isrc,
-    key: track.key,
-    label: track.label,
-    links: compact({
-      log: track.logPageUrl,
-      spotify: track.spotifyUrl,
-      tiktok: track.tiktokUrl,
-      video: track.videoUrl,
-      youtube: track.youtubeUrl,
-    }),
-    note: track.note,
-    observation: observationRecord(track),
-    title: track.title,
-    type: "finding",
-    uri: resourceUri("finding", track.logId),
-  });
-}
-
-// The recovered observation as a public sub-record: the audio URL (the /log audio
-// element source) plus, when aligned, the transcript /radio renders. Absent when
-// the finding has no observation.
-function observationRecord(track: TrackListItem) {
-  if (!track.observationAudioUrl) {
-    return undefined;
-  }
-
-  const transcript = track.observationAlignment?.words
-    .map((word) => word.text)
-    .join(" ")
-    .trim();
-
-  return compact({
-    audioUrl: track.observationAudioUrl,
-    durationMs: track.observationDurationMs,
-    transcript: transcript ? transcript : undefined,
-  });
-}
-
-// A mixtape's PUBLIC record — the fields the /log mixtape plate renders: the
-// checkpoint title, note, runtime, and the ordered tracklist of coordinated members.
-function publicMixtapeRecord(mixtape: MixtapeDTO) {
-  return compact({
-    bangerCount: mixtape.memberCount,
-    by: "Fluncle",
-    coordinate: mixtape.logId,
-    links: compact({
-      log: mixtape.logId ? logPageUrl(mixtape.logId) : undefined,
-      mixcloud: mixtape.externalUrls.mixcloud,
-      soundcloud: mixtape.externalUrls.soundcloud,
-      youtube: mixtape.externalUrls.youtube,
-    }),
-    note: mixtape.note ?? undefined,
-    recorded: mixtape.recordedAt,
-    runtimeMs: mixtape.durationMs,
-    title: mixtapeDisplayTitle(mixtape.title),
-    tracklist: mixtape.members
-      .filter((member) => member.logId)
-      .map((member, index) =>
-        compact({
-          artists: member.artists,
-          coordinate: member.logId,
-          position: index + 1,
-          startMs: member.startMs,
-          title: member.title,
-        }),
-      ),
-    type: "mixtape",
-    uri: resourceUri("mixtape", mixtape.logId),
-  });
 }
 
 // ── Prompts: Fluncle-voiced starting points ────────────────────────────────
@@ -562,14 +362,6 @@ function firstLine(note: string | undefined): string | undefined {
     .find((part) => part.length > 0);
 
   return line && line.length > 0 ? line : undefined;
-}
-
-// Drop undefined values (and, at the top level, empty link/tracklist containers)
-// so the served JSON carries only present, public fields.
-function compact<T extends Record<string, unknown>>(record: T): Partial<T> {
-  const entries = Object.entries(record).filter(([, value]) => value !== undefined);
-
-  return Object.fromEntries(entries) as Partial<T>;
 }
 
 // The capabilities this server advertises — tools, resources, and prompts, none
@@ -804,106 +596,6 @@ async function dispatch(message: unknown, request: Request): Promise<JsonRpcResp
     default:
       return failure(id, -32601, `Method not found: ${method}`);
   }
-}
-
-// One service in the get_status summary: the registry label, the raw service id,
-// its three-state health, and the probe's short message (null when none).
-type StatusService = {
-  label: string;
-  message: string | null;
-  name: string;
-  status: ServiceHealthStatus;
-};
-
-// A friendly label per `/status` service id, derived from the surfaces registry so
-// the two never drift. The registry records each probed surface's `/status` service
-// id in its operatorNotes (e.g. "Probed on /status as service `r2`"); we read that
-// once and pair the id with the surface's first exposedContent line as a label. Keys
-// the registry doesn't tag (the prober's own self-liveness, the box-reachability probe)
-// fall back to a constant, so they read as their own distinct signal.
-const SERVICE_PROBE_MARKER = /service `([a-z0-9-]+)`/i;
-const registryServiceLabels: Record<string, string> = (() => {
-  const labels: Record<string, string> = {
-    // The rave-02 healthcheck cron's self-liveness — posted only by the prober, not
-    // a registry surface, so it carries no operatorNotes marker.
-    hermes: "the on-box prober (rave-02 healthcheck)",
-    // The scale-to-zero render box's reachability (the conductor state file). A
-    // DIFFERENT signal from `cron.render` (the render cron's last-run freshness),
-    // so it gets its own box-centric label rather than the conductor's description.
-    "render-box": "the scale-to-zero render box's reachability",
-  };
-
-  for (const surface of liveSurfaces()) {
-    const serviceId = surface.operatorNotes?.match(SERVICE_PROBE_MARKER)?.[1];
-    const label = surface.exposedContent[0];
-
-    if (serviceId && label && !(serviceId in labels)) {
-      labels[serviceId] = label;
-    }
-  }
-
-  return labels;
-})();
-
-// A concise operational summary an agent can answer "are all Fluncle systems up?"
-// from. Reads the same public health store the /status page and /api/v1/status read.
-// `ok` is true only when every service is `ok`; a single `down` flips `ok` false and
-// drives a blunt headline. An empty store (the cron has never written) reports unknown
-// rather than a false all-clear.
-async function summarizeStatus(): Promise<{
-  headline: string;
-  ok: boolean;
-  services: StatusService[];
-}> {
-  const rows = await getServiceStatuses();
-  const services: StatusService[] = rows.map((row) => ({
-    label: registryServiceLabels[row.service] ?? row.service,
-    message: row.message,
-    name: row.service,
-    status: row.status,
-  }));
-
-  if (services.length === 0) {
-    return { headline: "No service has reported its health yet.", ok: false, services };
-  }
-
-  const down = services.filter((service) => service.status === "down");
-  const degraded = services.filter((service) => service.status === "degraded");
-  const ok = down.length === 0 && degraded.length === 0;
-
-  return { headline: statusHeadline(services.length, down, degraded), ok, services };
-}
-
-// The one-line verdict. All clear → a plain all-up line; otherwise name the services
-// that are down/degraded so the agent can relay specifics without re-reading the list.
-function statusHeadline(total: number, down: StatusService[], degraded: StatusService[]): string {
-  if (down.length === 0 && degraded.length === 0) {
-    return `All ${total} Fluncle systems are operational.`;
-  }
-
-  const parts: string[] = [];
-
-  if (down.length > 0) {
-    parts.push(`${listNames(down)} down`);
-  }
-
-  if (degraded.length > 0) {
-    parts.push(`${listNames(degraded)} degraded`);
-  }
-
-  return `Not all systems are up: ${parts.join("; ")}.`;
-}
-
-function listNames(services: StatusService[]): string {
-  return services.map((service) => service.name).join(", ");
-}
-
-function clampLimit(value: unknown): number {
-  if (typeof value !== "number" || !Number.isInteger(value) || value < 1) {
-    return defaultRecentLimit;
-  }
-
-  return Math.min(value, maxRecentLimit);
 }
 
 function asTrimmedString(value: unknown): string {

@@ -48,21 +48,17 @@ import {
   toArtistSlug,
 } from "./artists";
 import { readOptionalEnv } from "./env";
-import { type FreshTrack, listFreshTracks } from "./fresh";
 import { getConfirmedAliasNames, getLabelBySlug, labelSlug } from "./labels";
 import { resolveLogPageTarget } from "./log-resolver";
 import { searchArchive } from "./search";
-import { getServiceStatuses } from "./status";
+import { compactFinding, dropEmpty, sharedChatTools } from "./tools/registry";
 import {
   getFindingsByArtist,
   getFindingsByLabel,
   getMixableTracks,
   getMixChainDepth,
-  getRandomTrack,
   getTracksByLogIds,
-  listTracks,
   type TrackListItem,
-  toPublicTrackListItem,
 } from "./tracks";
 
 /** The model family the search tier trusts (search-llm.ts / observation.ts default). */
@@ -71,8 +67,7 @@ const DEFAULT_CHAT_MODEL = "anthropic/claude-haiku-4.5";
 /** How many tool→think steps one turn may take before we stop (a runaway guard). */
 const MAX_STEPS = 8;
 
-/** The recent-window and search caps handed to the tools (mirror the MCP's clamps). */
-const MAX_RECENT = 48;
+/** The search cap handed to the archive-search tool (mirrors the MCP's clamp). */
 const MAX_SEARCH = 12;
 
 /**
@@ -129,36 +124,6 @@ HOW YOU TALK:
 // can name (the catalogue rule, enforced at the wire, not just asked for in the prompt).
 
 /**
- * A finding as Fluncle needs to speak it AND as the card needs to show it: the coordinate, the
- * names, the facts it carries, plus the three display fields the Finding Card renders from —
- * `albumImageUrl` (the DTO's already-chosen best cover), `durationMs`, and a derived `hasPreview`
- * so the card can offer inline playback. The card plays through the live `/api/preview/<logId>`
- * relay, so the raw `previewUrl` (an EXPIRING Deezer token) NEVER rides a tool output — only the
- * boolean does. `hasPreview: false` is kept intact (dropEmpty drops only undefined/null/[]); the
- * card needs the explicit false to know NOT to render a play control.
- */
-function compactFinding(item: TrackListItem) {
-  const track = toPublicTrackListItem(item);
-
-  return dropEmpty({
-    album: track.album,
-    albumImageUrl: track.albumImageUrl,
-    artists: track.artists,
-    bpm: track.bpm === undefined ? undefined : Math.round(track.bpm),
-    coordinate: track.logId,
-    durationMs: track.durationMs,
-    found: track.addedAt,
-    galaxy: track.galaxy?.name,
-    hasPreview: Boolean(track.previewUrl),
-    key: track.key,
-    label: track.label,
-    note: track.note,
-    spotifyUrl: track.spotifyUrl,
-    title: track.title,
-  });
-}
-
-/**
  * Compact an entity's findings for a card, CERTIFIED-ONLY. `getFindingsByArtist`/`getFindingsByLabel`
  * already inner-join `findings … log_id is not null`, but the coordinate filter is the same wire-level
  * grounding boundary search_archive applies — a row without a coordinate is not something Fluncle
@@ -169,27 +134,6 @@ function compactCertifiedFindings(items: TrackListItem[]) {
   return items.map(compactFinding).filter((finding) => finding.coordinate);
 }
 
-/** Drop undefined/empty so a tool result carries only present, real facts (never a null). */
-function dropEmpty<T extends Record<string, unknown>>(record: T): Partial<T> {
-  return Object.fromEntries(
-    Object.entries(record).filter(([, value]) => {
-      if (value === undefined || value === null) {
-        return false;
-      }
-
-      return Array.isArray(value) ? value.length > 0 : true;
-    }),
-  ) as Partial<T>;
-}
-
-function clampInt(value: unknown, max: number, fallback: number): number {
-  if (typeof value !== "number" || !Number.isInteger(value) || value < 1) {
-    return fallback;
-  }
-
-  return Math.min(value, max);
-}
-
 /**
  * Build the tool set. Pure and dependency-light so a test can assert the SHAPE (the names,
  * the schemas, the grounding filter) without a database — the `execute` closures are the
@@ -197,6 +141,10 @@ function clampInt(value: unknown, max: number, fallback: number): number {
  */
 export function buildChatTools() {
   return {
+    // The five overlapping read tools (get_track, get_random_track, get_status, list_fresh,
+    // list_tracks) are projected from the shared registry (./tools/registry), so their
+    // name/description/schema and grounding never drift from the MCP or WebMCP.
+    ...sharedChatTools(),
     build_set: tool({
       description:
         "Chain a mixable set from one of Fluncle's findings. Give it a starting finding — a Log ID coordinate he has logged (e.g. 004.7.2I) or a track name — and it returns an ordered set of what mixes in cleanly after it, each step carrying the REASON it mixes (same key, next key over, tempo locked), never a number. It only ever chains certified findings; it returns nothing when he has not logged a starting point.",
@@ -360,97 +308,6 @@ export function buildChatTools() {
           .describe("The label's name, as it reads on a finding (e.g. Hospital Records)."),
       }),
     }),
-    get_random_track: tool({
-      description: "Pull one random certified finding from the archive.",
-      execute: async () => {
-        const track = await getRandomTrack();
-
-        return track ? { finding: compactFinding(track), ok: true } : { found: false, ok: true };
-      },
-      inputSchema: z.object({}),
-    }),
-    get_status: tool({
-      description:
-        "Check whether Fluncle's own systems are up (the website, API, media zone, terminal, and the rest). Read-only.",
-      execute: async () => summarizeStatus(),
-      inputSchema: z.object({}),
-    }),
-    get_track: tool({
-      description:
-        "Read one certified finding (or a mixtape) in full by its Log ID coordinate (e.g. 004.7.2I, or a mixtape's 019.F.1A) or a Spotify track id/URL. Returns nothing if the coordinate resolves to no finding — which means Fluncle has not found it.",
-      execute: async ({ coordinate }) => {
-        const target = await resolveLogPageTarget(coordinate.trim());
-
-        if (!target) {
-          return { found: false, ok: true };
-        }
-
-        return target.kind === "mixtape"
-          ? { mixtape: compactMixtape(target.mixtape), ok: true }
-          : { finding: compactFinding(target.track), ok: true };
-      },
-      inputSchema: z.object({
-        coordinate: z
-          .string()
-          .describe("A Log ID coordinate (004.7.2I / 019.F.1A) or a Spotify track id or URL."),
-      }),
-    }),
-    list_fresh: tool({
-      description:
-        "List the drum & bass that just CAME OUT — Fluncle's certified findings whose track was RELEASED in the trailing month, freshest release first. Use when someone asks what is new, what just dropped, or what came out lately. These are RELEASE dates, not the dates he found the tune; it returns only certified findings.",
-      execute: async ({ limit }) => {
-        const fresh = await listFreshTracks({ limit: clampInt(limit, MAX_RECENT, 12) });
-
-        // THE GROUNDING BOUNDARY: only certified findings reach the model. An uncertified
-        // catalogue row on the fresh list carries no coordinate and is never something Fluncle
-        // speaks about — drop it before the hydrator is even asked (the Unlit Rule, at the wire).
-        const certified = fresh.tracks.filter((track) => track.certified && track.logId);
-
-        // Hydrate the certified logIds to full findings so each card shows its cover, chips, and a
-        // play control — the same batch hydrate search uses, the exact `list_tracks` compaction
-        // path. A logId the hydrator misses falls back to the fresh row's own fields (still
-        // certified, just without the display extras).
-        const hydrated = await getTracksByLogIds(
-          certified.flatMap((track) => (track.logId ? [track.logId] : [])),
-        );
-        const findings = certified.map((track) => {
-          const item = track.logId ? hydrated[track.logId] : undefined;
-
-          return item ? compactFinding(item) : freshTrackToFinding(track);
-        });
-
-        return { findings, ok: true };
-      },
-      inputSchema: z.object({
-        limit: z
-          .number()
-          .int()
-          .min(1)
-          .max(MAX_RECENT)
-          .optional()
-          .describe("How many (default 12)."),
-      }),
-    }),
-    list_tracks: tool({
-      description:
-        "List Fluncle's most recent certified findings, newest first. Use to walk a recent night or see what he has been logging.",
-      execute: async ({ limit }) => {
-        // Findings only (no mixtapes) — a mixtape is reached by its F-coordinate through
-        // get_track, and keeping the list findings-only means every row is a TrackListItem.
-        const page = await listTracks({ limit: clampInt(limit, MAX_RECENT, 10) });
-
-        return { findings: page.tracks.map(compactFinding), ok: true };
-      },
-      inputSchema: z.object({
-        limit: z
-          .number()
-          .int()
-          .min(1)
-          .max(MAX_RECENT)
-          .optional()
-          .describe("How many (default 10)."),
-      }),
-    }),
     search_archive: tool({
       description:
         "Search Fluncle's archive of certified findings. Handles a name, a label, a key/BPM ask, or 'sounds like <a real track>' (anchors on a real finding and returns the sonically nearest). Returns only certified findings; an empty result means Fluncle has not found anything matching.",
@@ -540,27 +397,6 @@ function mixTrackToFinding(candidate: MixCandidate) {
   });
 }
 
-/**
- * A fresh-release row reduced to the finding fields the card needs — the fallback for a certified
- * release the batch hydrator missed, so it still shows a cover, chips, and its coordinate. `list_fresh`
- * hydrates the full DTO when it can (cover, note, hasPreview); this is the thin certified floor. A
- * fresh row carries no previewUrl, so `hasPreview` is false. The date it carries is a RELEASE date,
- * so the model never speaks of it as freshly found (the Found Rule, echoed on the wire).
- */
-function freshTrackToFinding(track: FreshTrack) {
-  return dropEmpty({
-    albumImageUrl: track.coverImageUrl,
-    artists: track.artists,
-    bpm: track.bpm === undefined ? undefined : Math.round(track.bpm),
-    coordinate: track.logId,
-    durationMs: track.durationMs,
-    hasPreview: false,
-    key: track.key,
-    spotifyUrl: track.spotifyUrl,
-    title: track.title,
-  });
-}
-
 /** A search hit, reduced to the facts Fluncle speaks from (certified rows only reach here). */
 function searchHitToFinding(hit: {
   album?: string;
@@ -584,46 +420,6 @@ function searchHitToFinding(hit: {
     label: hit.label,
     title: hit.title,
   });
-}
-
-/** A mixtape reduced to what Fluncle speaks from — the checkpoint, not the full tracklist. */
-function compactMixtape(mixtape: {
-  durationMs?: number;
-  logId?: string;
-  memberCount?: number;
-  note?: string | null;
-  title: string;
-}) {
-  return dropEmpty({
-    bangerCount: mixtape.memberCount,
-    coordinate: mixtape.logId,
-    note: mixtape.note ?? undefined,
-    runtimeMs: mixtape.durationMs,
-    title: mixtape.title,
-  });
-}
-
-/** A one-line, model-facing status summary (reads the same store /status reads). */
-async function summarizeStatus(): Promise<{ headline: string; ok: boolean }> {
-  const rows = await getServiceStatuses();
-
-  if (rows.length === 0) {
-    return { headline: "No system has reported in yet.", ok: false };
-  }
-
-  const down = rows.filter((row) => row.status === "down").map((row) => row.service);
-  const degraded = rows.filter((row) => row.status === "degraded").map((row) => row.service);
-
-  if (down.length === 0 && degraded.length === 0) {
-    return { headline: `All ${rows.length} systems are up.`, ok: true };
-  }
-
-  const parts = [
-    down.length > 0 ? `${down.join(", ")} down` : "",
-    degraded.length > 0 ? `${degraded.join(", ")} degraded` : "",
-  ].filter(Boolean);
-
-  return { headline: `Not all systems up: ${parts.join("; ")}.`, ok: false };
 }
 
 // ── The wire type ──────────────────────────────────────────────────────────────────────
