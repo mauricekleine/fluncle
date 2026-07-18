@@ -14,13 +14,20 @@ import { CliError } from "../output";
 // title + body to the fill-empty-only endpoint.
 
 export type LogbookGap = LogbookGapsResponse["gaps"][number];
+export type LogbookSpentEntry = LogbookGapsResponse["spent"][number];
 
-/** The sweep's queue + material: sector-days with findings but no entry, oldest first. */
-export async function logbookGapsCommand(limit?: number): Promise<LogbookGap[]> {
+/**
+ * The sweep's queue + material: sector-days with findings but no entry (oldest first) AND
+ * `spent` — the recent authored entries' titles + opener/closer moves, the anti-sameness
+ * fuel the author writes against. Passes both through so the sweep sees the full response.
+ */
+export async function logbookGapsCommand(
+  limit?: number,
+): Promise<{ gaps: LogbookGap[]; spent: LogbookSpentEntry[] }> {
   const query = typeof limit === "number" ? `?limit=${encodeURIComponent(String(limit))}` : "";
   const response = await adminApiGet<LogbookGapsResponse>(`/api/admin/logbook/gaps${query}`);
 
-  return response.gaps;
+  return { gaps: response.gaps, spent: response.spent };
 }
 
 export type LogbookWriteOptions = {

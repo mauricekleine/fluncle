@@ -12,7 +12,13 @@
 //   - `update_logbook_entry` — OPERATOR tier (`adminAuth` + `operatorGuard`): the
 //     operator's overwrite path CAN replace an entry, so a valid agent token 403s.
 
-import { createLogbookEntry, listLogbookGaps, requireSector, updateLogbookEntry } from "../logbook";
+import {
+  createLogbookEntry,
+  listLogbookGaps,
+  listSpentMoves,
+  requireSector,
+  updateLogbookEntry,
+} from "../logbook";
 import { adminAuth, operatorGuard } from "../orpc-auth";
 import { apiFault, parseLimit, type Implementer } from "./_shared";
 
@@ -23,8 +29,11 @@ export function adminLogbookHandlers(os: Implementer) {
   const listLogbookGapsHandler = os.list_logbook_gaps.use(adminAuth).handler(async ({ input }) => {
     try {
       const limit = parseLimit(input.limit, 5, 30);
+      // The worklist AND the anti-sameness fuel in one read: the eligible gaps + the recent
+      // authored entries' spent titles/moves, so the sweep authors against both at once.
+      const [gaps, spent] = await Promise.all([listLogbookGaps({ limit }), listSpentMoves()]);
 
-      return { gaps: await listLogbookGaps({ limit }), ok: true as const };
+      return { gaps, ok: true as const, spent };
     } catch (error) {
       throw apiFault(error);
     }

@@ -5158,12 +5158,14 @@ async function runLogbookGaps(
   logbookGapsCommand: typeof import("./commands/admin-logbook").logbookGapsCommand,
 ): Promise<void> {
   const limit = options.limit === undefined ? undefined : Number.parseInt(options.limit, 10);
-  const gaps = await logbookGapsCommand(
+  const { gaps, spent } = await logbookGapsCommand(
     limit !== undefined && Number.isFinite(limit) ? limit : undefined,
   );
 
   if (options.json) {
-    printJson({ gaps, ok: true });
+    // `spent` (the anti-sameness fuel) rides through so the on-box sweep can hand it to
+    // the author; the human table below shows only the worklist.
+    printJson({ gaps, ok: true, spent });
     return;
   }
 
