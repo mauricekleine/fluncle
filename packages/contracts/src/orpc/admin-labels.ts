@@ -97,6 +97,64 @@ export const updateLabel = oc
   .input(z.object({ id: z.string(), seedState: LabelSeedStateSchema }))
   .output(z.object({ label: LabelAdminItemSchema, ok: z.literal(true) }));
 
+// ── Label merge: fold a slug-split twin into its canonical row (RFC musickit-second-authority, U2b) ──
+// The cleanup for a PRE-EXISTING split — two `labels` rows that mean one label (the Med School /
+// Medschool class). The operator merges the LOSING row into the CANONICAL one: every FK that
+// references the loser re-points, the loser's identity + facts reconcile onto the canonical
+// CANONICAL-WINS (fill-empty-only, so the canonical's correct MBID/logo/founding facts stand and
+// the loser's are never allowed to overwrite them), the losing NAME lands as a `confirmed`
+// alias (so the immutable `tracks.label` free-text can never re-mint the merged-away slug), and
+// the loser row is deleted. The losing slug then 301s to the canonical page. OPERATOR tier: a
+// merge repoints public `/label/<slug>` URLs and reconciles rulings — the `update_label` class.
+
+/**
+ * The merge result — what re-pointed, what reconciled, and the alias the merge wrote. A summary the
+ * CLI prints and `--json` emits. `reconciled` lists exactly the canonical fields FILLED from the
+ * loser (canonical was empty); `repointed` counts the FK rows moved onto the canonical; `seedState`
+ * is the resolved crawl-seed state (by `ruledAt` precedence — the more recent operator ruling wins).
+ */
+export const MergeLabelResultSchema = z
+  .object({
+    /** The losing NAME, written as a `confirmed` alias on the canonical (source `operator`). */
+    aliasWritten: z.object({ alias: z.string(), aliasSlug: z.string() }),
+    canonicalName: z.string(),
+    canonicalSlug: z.string(),
+    losingName: z.string(),
+    losingSlug: z.string(),
+    /** The canonical fields filled FROM the loser (canonical-wins coalesce; empty when none were). */
+    reconciled: z.array(z.string()),
+    /** How many FK rows re-pointed onto the canonical, by table. */
+    repointed: z.object({
+      aliases: z.number(),
+      childLabels: z.number(),
+      tracks: z.number(),
+    }),
+    /** The resolved crawl-seed state (by `ruledAt` precedence). */
+    seedState: LabelSeedStateSchema,
+  })
+  .meta({ id: "MergeLabelResult" });
+
+/**
+ * `merge_label` → `POST /admin/labels/{slug}/merge` (operationId `mergeLabel`).
+ *
+ * OPERATOR tier (`adminAuth` + `operatorGuard`, the `update_label` precedent). Fold the LOSING label
+ * (`slug`) into the CANONICAL one (`canonicalSlug`): re-point every FK, reconcile identity + facts
+ * canonical-wins, land the losing name as a `confirmed` alias, delete the loser. `seed_state`
+ * resolves by `ruled_at` precedence; when BOTH rows carry an operator ruling and their seed states
+ * DISAGREE the op refuses with a 409 (`merge_seed_conflict`) rather than silently pick a side.
+ * `{ ok, result }`. 404 when either slug is unknown; 400 when the two slugs are the same row.
+ */
+export const mergeLabel = oc
+  .route({
+    method: "POST",
+    operationId: "mergeLabel",
+    path: "/admin/labels/{slug}/merge",
+    summary: "Merge a slug-split label into its canonical row (operator; re-points + redirects)",
+    tags: ["Admin"],
+  })
+  .input(z.object({ canonicalSlug: z.string(), slug: z.string() }))
+  .output(z.object({ ok: z.literal(true), result: MergeLabelResultSchema }));
+
 // ── Label aliases: two spellings, one label (RFC musickit-second-authority, U2a) ──────────
 // A second metadata authority (Apple's album `recordLabel`, corroborated by MusicBrainz over a
 // shared ISRC) proposes that "Med School Recordings" is the same label as "Medschool". These
@@ -317,6 +375,7 @@ export const adminLabelsContract = {
   list_label_aliases: listLabelAliases,
   list_labels_admin: listLabelsAdmin,
   list_labels_missing_bio: listLabelsMissingBio,
+  merge_label: mergeLabel,
   reject_label_alias: rejectLabelAlias,
   update_label: updateLabel,
 };

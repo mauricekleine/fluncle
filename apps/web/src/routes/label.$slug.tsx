@@ -1,4 +1,4 @@
-import { Link, createFileRoute, notFound } from "@tanstack/react-router";
+import { Link, createFileRoute, notFound, redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import {
   CatalogueArtistGroups,
@@ -28,6 +28,7 @@ import {
   getLabelBySlug,
   LABEL_INDEX_MIN_TRACKS,
   type LabelLineageEdge,
+  resolveLabelAliasRedirect,
 } from "@/lib/server/labels";
 import { getFindingsByLabel, type TrackListItem } from "@/lib/server/tracks";
 
@@ -80,6 +81,11 @@ type LabelPageData =
       /** The sublabels of this label → the Organization's `subOrganization` edges. */
       subLabels: LabelLineageEdge[];
     }
+  | {
+      /** A merged-away slug: 301 to the canonical label this confirmed alias belongs to. */
+      canonicalSlug: string;
+      status: "redirect";
+    }
   | { status: "missing" };
 
 /**
@@ -107,6 +113,15 @@ export async function resolveLabelPageData(
   const label = await getLabelBySlug(slug);
 
   if (!label) {
+    // A slug with no `labels` row of its own may still be a MERGED-AWAY spelling: a confirmed alias
+    // whose canonical label lives under another slug (docs/label-entity.md § merge). Resolve it and
+    // 301 to the canonical page; a genuinely unknown slug stays MISSING and 404s.
+    const canonicalSlug = await resolveLabelAliasRedirect(slug);
+
+    if (canonicalSlug && canonicalSlug !== slug) {
+      return { canonicalSlug, status: "redirect" };
+    }
+
     return { status: "missing" };
   }
 
@@ -304,6 +319,11 @@ export const Route = createFileRoute("/label/$slug")({
     const data = await fetchLabel({
       data: { page: deps.page, slug: params.slug, sort: deps.sort },
     });
+
+    if (data.status === "redirect") {
+      // The slug is a merged-away spelling — 301 (permanent) to the canonical label's page.
+      throw redirect({ params: { slug: data.canonicalSlug }, statusCode: 301, to: "/label/$slug" });
+    }
 
     if (data.status === "missing") {
       throw notFound();

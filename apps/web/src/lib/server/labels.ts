@@ -24,6 +24,7 @@ import {
   type LabelAdminItem,
   type LabelAliasCandidate,
   type LabelSeedState,
+  type MergeLabelResult,
 } from "@fluncle/contracts";
 import { labelFold, slugify } from "@fluncle/contracts/util/galaxy-slug";
 import { labelLogoUrl } from "../media";
@@ -1315,4 +1316,266 @@ export async function rejectLabelAlias(id: string): Promise<boolean> {
   });
 
   return result.rowsAffected > 0;
+}
+
+/**
+ * The confirmed-alias REDIRECT lookup: does this slug resolve to a canonical label through a
+ * confirmed alias (the spelling of a label the operator merged away)? Returns the owning label's
+ * slug, or undefined. The `/label/<slug>` loader uses it to 301 a merged-away slug to its canonical
+ * page. One indexed read on `label_aliases_alias_slug_idx`, joined to `labels` for the target slug.
+ */
+export async function resolveLabelAliasRedirect(slug: string): Promise<string | undefined> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [slug],
+    sql: `select labels.slug as slug
+          from label_aliases
+          join labels on labels.id = label_aliases.label_id
+          where label_aliases.alias_slug = ? and label_aliases.status = 'confirmed'
+          limit 1`,
+  });
+
+  return typedRows<{ slug: string }>(result.rows)[0]?.slug;
+}
+
+// ── LABEL MERGE: fold a slug-split twin into its canonical row (RFC musickit-second-authority U2b) ──
+// The cleanup for a PRE-EXISTING split — two `labels` rows that mean one label (the Med School /
+// Medschool class U2a stopped going FORWARD). The operator merges the LOSING row into the CANONICAL
+// one, in ONE transaction: re-point every FK that references the loser, reconcile the loser's
+// identity + facts onto the canonical CANONICAL-WINS, land the losing NAME as a confirmed alias
+// (so the immutable `tracks.label` free-text can never re-mint the merged-away slug), and delete the
+// loser. See docs/label-entity.md § merge.
+
+/** Thrown when both rows carry an operator ruling and their seed states disagree — stop and ask. */
+export class LabelMergeConflictError extends Error {}
+
+/** Thrown when the two merge slugs resolve to the same row (nothing to merge). */
+export class LabelMergeSameRowError extends Error {}
+
+/** Every column the merge reads off a label row to re-point, reconcile, and resolve the ruling. */
+type LabelMergeRow = {
+  discogs_label_id: null | number;
+  founded_location: null | string;
+  founding_date: null | string;
+  id: string;
+  image_key: null | string;
+  image_state: "none" | "pending" | "resolved";
+  lineage_state: "none" | "pending" | "resolved";
+  mb_label_id: null | string;
+  name: string;
+  parent_label_id: null | string;
+  ruled_at: null | string;
+  seed_state: LabelSeedState;
+  slug: string;
+};
+
+async function getLabelMergeRow(slug: string): Promise<LabelMergeRow | undefined> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [slug],
+    sql: `select id, slug, name, seed_state, ruled_at, mb_label_id, discogs_label_id,
+                 image_key, image_state, founding_date, founded_location, parent_label_id, lineage_state
+          from labels where slug = ? limit 1`,
+  });
+
+  return typedRows<LabelMergeRow>(result.rows)[0];
+}
+
+/**
+ * Merge the LOSING label (`losingSlug`) into the CANONICAL one (`canonicalSlug`) atomically.
+ *
+ * ── WHAT IT DOES ────────────────────────────────────────────────────────────────
+ * 1. RE-POINTS every FK that references the loser: `tracks.label_id`, the loser's SUBLABELS'
+ *    `labels.parent_label_id`, and `label_aliases.label_id`. (`albums` carries no label FK — its
+ *    label edge is derived at read time from the raw string, docs/album-entity.md.)
+ * 2. RECONCILES the loser's identity + facts onto the canonical CANONICAL-WINS: for `mb_label_id`,
+ *    `discogs_label_id`, `image_key`, `founding_date`, `founded_location`, `parent_label_id`, and
+ *    `lineage_state`, the canonical's existing value ALWAYS stands and the loser's fills only an
+ *    EMPTY canonical slot (coalesce). This is load-bearing: a loser whose MBID mis-resolved to the
+ *    wrong label (the 2026-07-18 "Polydor Records" → J-Pop division miss) must never overwrite the
+ *    canonical's correct identity.
+ * 3. RESOLVES `seed_state` by `ruled_at` precedence (the more recent operator ruling wins). When
+ *    BOTH rows carry a non-null `ruled_at` AND their seed states disagree it throws
+ *    {@link LabelMergeConflictError} — it never silently picks a side.
+ * 4. Writes the losing NAME to `label_aliases` as `confirmed` (source `operator`), so a later
+ *    `ensureLabel`/`reconcileLabels` over the immutable `tracks.label` resolves the merged-away
+ *    slug to the canonical instead of re-minting it.
+ * 5. DELETES the losing row (the alias carries the memory; the losing slug then 301s via
+ *    {@link resolveLabelAliasRedirect}).
+ *
+ * ── ATOMICITY ───────────────────────────────────────────────────────────────────
+ * All of it runs in one `db.batch(_, "write")` (libSQL's one-implicit-transaction batch, the
+ * `updateGalaxyMap` precedent), so a crash can never half-apply a merge. The loser row is DELETED
+ * first so its unique `slug`/`mb_label_id` are free before the canonical adopts them; the FK
+ * re-points match the loser's id VALUE (a plain string column, no cascade), so they still land.
+ */
+export async function mergeLabel(
+  losingSlug: string,
+  canonicalSlug: string,
+): Promise<MergeLabelResult> {
+  const db = await getDb();
+
+  const [loser, canonical] = await Promise.all([
+    getLabelMergeRow(losingSlug),
+    getLabelMergeRow(canonicalSlug),
+  ]);
+
+  if (!loser) {
+    throw new LabelNotFoundError(`No label with slug ${losingSlug}.`);
+  }
+
+  if (!canonical) {
+    throw new LabelNotFoundError(`No label with slug ${canonicalSlug}.`);
+  }
+
+  if (loser.id === canonical.id) {
+    throw new LabelMergeSameRowError(`${losingSlug} and ${canonicalSlug} are the same label.`);
+  }
+
+  // ── seed_state by ruled_at precedence; refuse an operator-vs-operator disagreement ──
+  if (loser.ruled_at && canonical.ruled_at && loser.seed_state !== canonical.seed_state) {
+    throw new LabelMergeConflictError(
+      `Both labels carry an operator ruling and they disagree: ${canonicalSlug} is ${canonical.seed_state} (ruled ${canonical.ruled_at}) and ${losingSlug} is ${loser.seed_state} (ruled ${loser.ruled_at}). Re-rule one to match, then merge.`,
+    );
+  }
+
+  let seedState = canonical.seed_state;
+  let ruledAt = canonical.ruled_at;
+
+  if (loser.ruled_at && (!canonical.ruled_at || loser.ruled_at > canonical.ruled_at)) {
+    // The loser's ruling is the more recent (or the only) one — it wins.
+    seedState = loser.seed_state;
+    ruledAt = loser.ruled_at;
+  }
+
+  // ── identity + facts, CANONICAL-WINS (fill an EMPTY canonical slot from the loser only) ──
+  const reconciled: string[] = [];
+  const take = <T extends number | string>(
+    field: string,
+    canonValue: null | T,
+    loserValue: null | T,
+  ): null | T => {
+    if (canonValue == null && loserValue != null) {
+      reconciled.push(field);
+
+      return loserValue;
+    }
+
+    return canonValue;
+  };
+
+  const mbLabelId = take("mbLabelId", canonical.mb_label_id, loser.mb_label_id);
+  const discogsLabelId = take("discogsLabelId", canonical.discogs_label_id, loser.discogs_label_id);
+  const foundingDate = take("foundingDate", canonical.founding_date, loser.founding_date);
+  const foundedLocation = take(
+    "foundedLocation",
+    canonical.founded_location,
+    loser.founded_location,
+  );
+
+  // The logo and its resolve state travel together: a stored `image_key` with a non-`resolved`
+  // state would be re-walked by the image sweep, so image_state follows whichever row's key wins.
+  const imageKey = take("imageKey", canonical.image_key, loser.image_key);
+  const imageState =
+    canonical.image_key != null
+      ? canonical.image_state
+      : loser.image_key != null
+        ? loser.image_state
+        : canonical.image_state;
+
+  // The parent edge is canonical-wins, but must never point at the (deleted) loser or at the
+  // canonical itself. A canonical whose parent WAS the loser adopts the loser's parent instead.
+  const canonParent = canonical.parent_label_id === loser.id ? null : canonical.parent_label_id;
+  let parentLabelId: null | string = canonParent;
+
+  if (parentLabelId == null && loser.parent_label_id != null) {
+    const loserParent = loser.parent_label_id === canonical.id ? null : loser.parent_label_id;
+
+    if (loserParent != null) {
+      parentLabelId = loserParent;
+      reconciled.push("parentLabelId");
+    }
+  }
+
+  // `pending` is the un-walked "empty" lineage state — adopt the loser's resolved/none when the
+  // canonical has never been walked, so the coalesced founding facts are not re-walked away.
+  let lineageState = canonical.lineage_state;
+
+  if (canonical.lineage_state === "pending" && loser.lineage_state !== "pending") {
+    lineageState = loser.lineage_state;
+    reconciled.push("lineageState");
+  }
+
+  const now = new Date().toISOString();
+
+  const statements: Array<{ args: Array<null | number | string>; sql: string }> = [
+    // 0: DELETE the loser FIRST — frees its slug + UNIQUE mb_label_id before the canonical update
+    //    can adopt them. The FK re-points below match the loser's id VALUE (a plain string column,
+    //    no cascade), so they still land after the row is gone.
+    { args: [loser.id], sql: `delete from labels where id = ?` },
+    // 1: re-point every finding/catalogue track off the loser onto the canonical.
+    { args: [canonical.id, loser.id], sql: `update tracks set label_id = ? where label_id = ?` },
+    // 2: re-point the loser's SUBLABELS onto the canonical — never the canonical itself (that would
+    //    make it its own parent; the canonical's own parent is set in statement 5).
+    {
+      args: [canonical.id, now, loser.id, canonical.id],
+      sql: `update labels set parent_label_id = ?, updated_at = ? where parent_label_id = ? and id <> ?`,
+    },
+    // 3: re-point the loser's OWN aliases onto the canonical. `or ignore` skips a row that would
+    //    collide with an alias the canonical already carries (the (label_id, alias_slug, source)
+    //    unique index); statement 4 then drops those leftovers (duplicates of the canonical's).
+    {
+      args: [canonical.id, loser.id],
+      sql: `update or ignore label_aliases set label_id = ? where label_id = ?`,
+    },
+    // 4: drop any loser-pointed alias that could not move (a duplicate of one the canonical holds).
+    { args: [loser.id], sql: `delete from label_aliases where label_id = ?` },
+    // 5: reconcile the identity + facts + the resolved seed state onto the canonical.
+    {
+      args: [
+        mbLabelId,
+        discogsLabelId,
+        imageKey,
+        imageState,
+        foundingDate,
+        foundedLocation,
+        parentLabelId,
+        lineageState,
+        seedState,
+        ruledAt,
+        now,
+        canonical.id,
+      ],
+      sql: `update labels
+              set mb_label_id = ?, discogs_label_id = ?, image_key = ?, image_state = ?,
+                  founding_date = ?, founded_location = ?, parent_label_id = ?, lineage_state = ?,
+                  seed_state = ?, ruled_at = ?, updated_at = ?
+            where id = ?`,
+    },
+    // 6: the losing NAME becomes a CONFIRMED alias on the canonical, so the immutable tracks.label
+    //    free-text can never re-mint the merged-away slug on a later backfill. Idempotent insert.
+    {
+      args: [`lba_${randomUUID()}`, canonical.id, loser.name, loser.slug, now],
+      sql: `insert into label_aliases (id, label_id, alias, alias_slug, source, kind, status, created_at)
+            values (?, ?, ?, ?, 'operator', 'name', 'confirmed', ?)
+            on conflict (label_id, alias_slug, source) do nothing`,
+    },
+  ];
+
+  const results = await db.batch(statements, "write");
+
+  return {
+    aliasWritten: { alias: loser.name, aliasSlug: loser.slug },
+    canonicalName: canonical.name,
+    canonicalSlug: canonical.slug,
+    losingName: loser.name,
+    losingSlug: loser.slug,
+    reconciled,
+    repointed: {
+      aliases: results[3]?.rowsAffected ?? 0,
+      childLabels: results[2]?.rowsAffected ?? 0,
+      tracks: results[1]?.rowsAffected ?? 0,
+    },
+    seedState,
+  };
 }

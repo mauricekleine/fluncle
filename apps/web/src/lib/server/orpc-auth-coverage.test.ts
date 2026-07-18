@@ -482,6 +482,9 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // (agent-allowed read), the list_labels_admin precedent. A pure read of accounts +
   // their derived artifact counts; it publishes nothing and mutates nothing.
   list_users_admin: "admin",
+  // The label merge (RFC musickit-second-authority U2b) — operator tier: it re-points public
+  // /label/<slug> URLs, reconciles operator rulings, and deletes a row, the update_label class.
+  merge_label: "operator",
   merge_private_galaxy_progress: "private-session",
   // The REF-05 public → private preview-bucket migration — operator tier: a one-off,
   // destructive-capable data move (it can delete public R2 objects), so an agent

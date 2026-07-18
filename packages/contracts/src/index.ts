@@ -54,6 +54,7 @@ import {
   type LabelAliasKindSchema,
   type LabelAliasSourceSchema,
   type LabelSeedStateSchema,
+  type MergeLabelResultSchema,
 } from "./orpc/admin-labels.js";
 import { type UserAdminItemSchema, type UserStatusSchema } from "./orpc/admin-users.js";
 import { type NoteGateSchema, type NoteRejectionSchema } from "./orpc/admin-notes.js";
@@ -171,6 +172,16 @@ export type LabelsAdminResponse = Ok<{ labels: LabelAdminItem[] }>;
 
 /** `PATCH /api/admin/labels/:id` response — the one ruled label. */
 export type LabelUpdateResponse = Ok<{ label: LabelAdminItem }>;
+
+/**
+ * The label-merge summary (`POST /api/admin/labels/:slug/merge`, RFC musickit-second-authority U2b).
+ * Inferred from `MergeLabelResultSchema` (./orpc/admin-labels.ts): what re-pointed, the canonical
+ * fields filled from the loser, the alias written, and the resolved crawl-seed state.
+ */
+export type MergeLabelResult = z.infer<typeof MergeLabelResultSchema>;
+
+/** `POST /api/admin/labels/:slug/merge` response — the merge summary. */
+export type MergeLabelResponse = Ok<{ result: MergeLabelResult }>;
 
 // ── Users (the account roster — the operator's read-only rollout window) ───────
 
