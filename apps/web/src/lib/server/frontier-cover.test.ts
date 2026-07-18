@@ -1,10 +1,11 @@
+import { decode as decodeJpeg } from "jpeg-js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// The in-Worker Frontier-cover orchestration (E2): raster → stage-to-R2 → Cloudflare-Images JPEG
-// → assert the Spotify byte ceiling → upload → clean up. Every prod-only seam (the WASM raster,
-// the R2 bucket, the /cdn-cgi/image transform, the Spotify PUT) is INJECTED or mocked, so this
-// pins the deterministic orchestration — the byte-ceiling gate, the best-effort degradation, the
-// staging cleanup, the per-target tally — without a Workers runtime or Cloudflare Images.
+// The in-Worker Frontier-cover orchestration (E2): raster → jpeg-js encode → assert the Spotify
+// byte ceiling → upload. The raster seam is INJECTED (the workers-og + resvg wasm legs cannot
+// load under vitest), but the JPEG encode is the REAL jpeg-js — pure JS — so the encode leg,
+// the quality ladder, and the ceiling gate are all proven here, not just mocked around. Only
+// the satori/resvg raster itself remains prod-only.
 
 vi.mock("./log", () => ({ logEvent: vi.fn() }));
 vi.mock("./frontier-playlist", () => ({
@@ -16,15 +17,36 @@ const { listFrontierCoverTargets, putFrontierCover } = await import("./frontier-
 const { renderFrontierCoverJpeg, uploadFrontierCoverForUser, uploadFrontierCovers } =
   await import("./frontier-cover");
 
-function fakeBucket() {
-  return {
-    delete: vi.fn(async (_key: string) => undefined),
-    put: vi.fn(async (_key: string, _value: unknown, _options?: unknown) => undefined),
-  };
+/** Synthetic RGBA pixels: a flat dark field (compresses tiny — the happy path). */
+function darkRaster(size: number) {
+  const pixels = new Uint8Array(size * size * 4);
+
+  for (let i = 0; i < pixels.length; i += 4) {
+    pixels[i] = 9;
+    pixels[i + 1] = 10;
+    pixels[i + 2] = 11;
+    pixels[i + 3] = 255;
+  }
+
+  return { height: size, pixels, width: size };
 }
 
-/** A rasteriser stub — a tiny PNG stand-in, so `workers-og` never loads under vitest. */
-const rasterize = async () => new Uint8Array([1, 2, 3]);
+/** Deterministic noise (an LCG): JPEG's worst case, to blow the byte ceiling in the ladder test. */
+function noiseRaster(size: number) {
+  const pixels = new Uint8Array(size * size * 4);
+  let seed = 0x2f6e2b1;
+
+  for (let i = 0; i < pixels.length; i += 1) {
+    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+    pixels[i] = seed & 0xff;
+  }
+
+  for (let i = 3; i < pixels.length; i += 4) {
+    pixels[i] = 255;
+  }
+
+  return { height: size, pixels, width: size };
+}
 
 beforeEach(() => {
   vi.mocked(listFrontierCoverTargets).mockReset();
@@ -32,85 +54,45 @@ beforeEach(() => {
 });
 
 describe("renderFrontierCoverJpeg", () => {
-  it("stages the PNG, transforms to JPEG, base64-encodes it, and evicts the staging object", async () => {
-    const bucket = fakeBucket();
-    const jpeg = new Uint8Array([9, 8, 7, 6]);
-    const transformFetch = vi.fn(
-      async (_url: string, _init: { cf: { image: RequestInitCfPropertiesImage } }) =>
-        new Response(jpeg, { status: 200 }),
-    );
+  it("encodes the raster to a real Base64 JPEG under the ceiling (the whole leg, in-process)", async () => {
+    const rasterize = vi.fn(async (_html: string) => darkRaster(64));
 
-    const result = await renderFrontierCoverJpeg({
-      bucket,
-      crewNumber: 42,
-      rasterize,
-      transformFetch,
-    });
+    const result = await renderFrontierCoverJpeg({ crewNumber: 42, rasterize });
 
-    expect(result).toEqual({ jpegBase64: Buffer.from(jpeg).toString("base64"), ok: true });
-    // Staged under a unique staging key, then evicted.
-    expect(bucket.put).toHaveBeenCalledOnce();
-    const stagedKey = bucket.put.mock.calls[0]?.[0] as string;
-    expect(stagedKey).toMatch(/^frontier-covers\/staging\/.+\.png$/);
-    expect(bucket.delete).toHaveBeenCalledWith(stagedKey);
-    // Converted via the in-Worker `cf.image` transform of the staged found.fluncle.com source —
-    // NEVER a `/cdn-cgi/image/…` URL (a Worker subrequest to its own zone bypasses the edge
-    // interception of that path and 404s against R2; see the module header).
-    const sourceUrl = transformFetch.mock.calls[0]?.[0] as string;
-    const init = transformFetch.mock.calls[0]?.[1];
-    expect(sourceUrl).toContain(stagedKey);
-    expect(sourceUrl).not.toContain("/cdn-cgi/");
-    expect(init?.cf.image).toMatchObject({ fit: "cover", format: "jpeg", quality: 80 });
+    expect(result.ok).toBe(true);
+
+    if (!result.ok) {
+      throw new Error("unreachable");
+    }
+
+    // The Base64 decodes to real JPEG bytes (SOI marker) at the raster's dimensions.
+    const bytes = Buffer.from(result.jpegBase64, "base64");
+    expect(bytes[0]).toBe(0xff);
+    expect(bytes[1]).toBe(0xd8);
+    const decoded = decodeJpeg(bytes);
+    expect({ height: decoded.height, width: decoded.width }).toEqual({ height: 64, width: 64 });
+    // The markup fed to the raster is the Satori twin.
+    expect(rasterize.mock.calls[0]?.[0]).toContain("FRONTIER");
   });
 
-  it("refuses a render over the 192KB Spotify ceiling (loud, never pushes it)", async () => {
-    const bucket = fakeBucket();
-    const tooBig = new Uint8Array(200 * 1024);
-    const transformFetch = vi.fn(async () => new Response(tooBig, { status: 200 }));
+  it("refuses when even the quality ladder's floor blows the 192KB Spotify ceiling (loud)", async () => {
+    // 1024² full-spectrum noise stays far above 192KB even at quality 60.
+    const rasterize = vi.fn(async () => noiseRaster(1024));
 
-    const result = await renderFrontierCoverJpeg({
-      bucket,
-      crewNumber: 1,
-      rasterize,
-      transformFetch,
-    });
+    const result = await renderFrontierCoverJpeg({ crewNumber: 1, rasterize });
 
     expect(result.ok).toBe(false);
     expect(result.ok === false && result.reason).toMatch(/^cover_too_large_/);
-    // Still cleaned up.
-    expect(bucket.delete).toHaveBeenCalledOnce();
   });
 
-  it("surfaces a transform HTTP failure as a best-effort reason (never throws)", async () => {
-    const bucket = fakeBucket();
-    const transformFetch = vi.fn(async () => new Response("nope", { status: 502 }));
-
-    const result = await renderFrontierCoverJpeg({
-      bucket,
-      crewNumber: 1,
-      rasterize,
-      transformFetch,
-    });
-
-    expect(result).toEqual({ ok: false, reason: "transform_502" });
-    expect(bucket.delete).toHaveBeenCalledOnce();
-  });
-
-  it("a raster throw degrades to { ok: false } and STILL evicts the staging object", async () => {
-    const bucket = fakeBucket();
-    const throwingRaster = async () => {
+  it("a raster throw degrades to { ok: false } with the message as the reason", async () => {
+    const rasterize = async () => {
       throw new Error("resvg boom");
     };
 
-    // No transformFetch needed — the raster throws before any transform.
-    const result = await renderFrontierCoverJpeg({
-      bucket,
-      crewNumber: 1,
-      rasterize: throwingRaster,
-    });
+    const result = await renderFrontierCoverJpeg({ crewNumber: 1, rasterize });
 
     expect(result).toEqual({ ok: false, reason: "resvg boom" });
-    expect(bucket.delete).toHaveBeenCalledOnce();
   });
 });
 
