@@ -60,12 +60,17 @@ async function defaultRasterize(html: string): Promise<FrontierRaster> {
   // Remotion master's single-face lockup. "svg" hands back Satori's output un-rastered, so OUR
   // resvg (which exposes raw pixels; workers-og's bundled copy only emits PNG bytes) does the
   // one raster.
-  const response = new ImageResponse(html, {
+  //
+  // The double await is REAL: workers-og's constructor RETURNS an async IIFE — a
+  // Promise<Response> — on the svg format path (read from its dist; the png path returns a
+  // streaming Response synchronously). Its types say `Response` either way, so without the
+  // cast+await this throws `.text is not a function` at runtime (measured in prod, 2026-07-18).
+  const response = await (new ImageResponse(html, {
     fonts: brandFonts(),
     format: "svg",
     height: FRONTIER_COVER_PX,
     width: FRONTIER_COVER_PX,
-  });
+  }) as unknown as Promise<Response> | Response);
 
   return rasterSvgToPixels(await response.text(), FRONTIER_COVER_PX);
 }
