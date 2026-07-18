@@ -17,6 +17,15 @@ The exit status is host-only information — the container can't see host system
 
 Minimal: the failed unit name, systemd's `Result` verdict (`exit-code` / `timeout` / `oom-kill` / …), and the process exit code, plus a pointer to `journalctl -u <unit>`. **Never a journal excerpt** — journald lines can carry sensitive material; the operator reads the journal themselves.
 
+### Two filters, because a notification must mean real trouble
+
+The catch-all's first night was noisy — one alert per failed unit per run — and an operator who learns to ignore the notifier has lost the notifier. So the script suppresses two classes of not-really-trouble failure. Both are safe because the healthcheck prober's freshness lag is the backstop: a sweep that is _genuinely_ stuck stops writing its `/status` marker, and the prober's staleness alert surfaces it regardless of what this hook does or doesn't post.
+
+- **SIGTERM kills are skipped entirely.** When `pin-watch` swaps the hermes container mid-sweep, systemd reports the sweep as killed — but the next timer tick self-heals, so there is nothing to tell anyone. The script reads `ExecMainCode` alongside `ExecMainStatus` and handles both encodings systemd uses for a SIGTERM death: a **signaled** exit (`ExecMainCode=2` / `CLD_KILLED`, `ExecMainStatus=15`, the raw signal number) and a **shell-wrapped** exit (`ExecMainCode=1` / `CLD_EXITED`, `ExecMainStatus=143`, i.e. `128+15`). Either encoding logs the skip to journald (stderr) and exits `0` without posting.
+- **A per-unit cooldown throttles repeats.** Before posting, the script checks a per-unit stamp file (`<state-dir>/<unit>.last`, holding the epoch of that unit's last _posted_ alert). If the last alert is younger than the cooldown (default 6h, override with `SWEEP_FAILURE_COOLDOWN_SECS`) it mutes this repeat — logging why to journald — and deliberately leaves the stamp untouched, so a mute never pushes the next real alert further out. On an actual post it writes the stamp. Net effect: a chronically-failing sweep says so once per ~6h instead of hourly, and an incident window that fails many sweeps at once (a db outage taking down six sweeps) posts at most one line **per unit**. Each posted line carries a `(muted for 6h)` suffix so the operator knows repeats are being suppressed. The cooldown is best-effort: if the state dir is missing or unwritable the script degrades to posting every time rather than swallowing an alert.
+
+The **render condemnation** case is the cooldown's headline customer: a `render exit=1 box-condemned` failure is a self-healing state (the render box condemns itself and recovers on the next wake), so it is deliberately **not** a special case in code — the 6h cooldown is its chosen treatment, capping it at one line per window like any other repeating failure.
+
 ## Deploy (operator-gated — not part of the PR that added this)
 
 `install-host-timers.sh` installs the template unit and lays the host script down at `/opt/fluncle-sweep-failure/`:
