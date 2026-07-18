@@ -30,11 +30,10 @@ Today an edition is written only inside `mintOrRefreshFrontierPlaylist` behind t
 
 **"Get playlist" is the commitment moment.** It births edition #1 (the engine's output, frozen) and — only when `frontier.minting` is open — the Spotify playlist mirroring it. With minting dark it births just the edition; the mirror waits for the flip (D1).
 
-**After the first edition, the engine runs on exactly three triggers, and a shelf read is never one of them:**
+**After the first edition, the engine runs on exactly two triggers, and a shelf read is never one of them:**
 
 - **The weekly refresh sweep** (`refresh_frontier_playlists`, Fri 07:00 Amsterdam): already runs the engine per user; the edition write now happens regardless of the minting switch, the Spotify mirror stays conditional. Saturday's shelf is Friday's edition.
-- **Explicit refresh**: the page's refresh action writes the next edition on demand. The per-user hourly rate limit moves from the read (now ~free) to this recompute path.
-- **A seed change does NOT silently rewrite anything.** Seeds are inputs; editions are checkpoints. A post-mint seed write leaves the latest edition (and any synced playlist) untouched and the shelf shows a quiet staleness nudge — the picks changed since this edition; refresh writes the next one. This kills same-day-replace transaction complexity outright and prevents mid-week Spotify playlist churn from seed fiddling.
+- **A seed change does NOT silently rewrite anything, and there is NO user-triggered recompute.** User-triggered refresh was removed by ratified decision (it cuts into real Spotify rate limits), so the only user trigger into the engine is the one-time "Get playlist" that births edition #1; everything after is the Friday sweep. Seeds are inputs; editions are checkpoints. A post-mint seed write leaves the latest edition (and any synced playlist) untouched, and the shelf shows a quiet, INFORMATIONAL staleness nudge — the picks changed since this edition, and the next set (Friday) lines them up. This kills same-day-replace transaction complexity outright and prevents mid-week Spotify playlist churn from seed fiddling.
 
 ### D3 — The read path
 
@@ -46,7 +45,7 @@ Today an edition is written only inside `mintOrRefreshFrontierPlaylist` behind t
 
 ### D5 — What gets deleted
 
-The live-scan path out of the route: `getRecsGate`'s direct `listRecommendations` call, the react-query `staleTime` load-bearing comment (reads become genuinely cheap), and the read-side rate-limit plumbing. `listRecommendations` itself survives untouched as the engine the write triggers call — including the sonic scans, the register split, and the novelty window.
+The live-scan path off the COMMITTED read: `getRecsGate` no longer calls the engine when a user has an edition (it reads the stored latest via `buildRecsGate`). The DRAFT phase still runs `listRecommendations` on the read path (the one bounded cohort that wants a live per-seed view), so its `account.recs.read` rate limit STAYS — it just moves onto the draft serverFn path (`readDraftRecommendations`) since the web door reads through serverFns, not the oRPC op. `listRecommendations` itself survives untouched as the engine the triggers call — including the sonic scans, the register split, and the novelty window.
 
 ## What this does NOT change
 

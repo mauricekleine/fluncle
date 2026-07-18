@@ -3,12 +3,18 @@ import {
   foldFrontierMint,
   foldFrontierStatus,
   FRONTIER_CLOSED,
+  type FrontierEditionDetail,
   type FrontierEditionSummary,
+  isEditionStale,
+  mintToastMessage,
+  type RecSeedItem,
   resolveGateState,
   resolveOpenSummary,
+  resolvePlaylistCta,
   savedFindingBody,
   SEED_CAP,
   seedMutationMessage,
+  skippedSeedsLine,
 } from "./shared";
 
 const EDITION = (number: number): FrontierEditionSummary => ({
@@ -16,6 +22,30 @@ const EDITION = (number: number): FrontierEditionSummary => ({
   refreshedAt: `2026-07-${String(number).padStart(2, "0")}T12:00:00.000Z`,
   trackCount: 33,
 });
+
+/** A frozen edition detail whose summary carries the seed meta, for the staleness truth table.
+ *  `refreshedAt` is fixed mid-window so seeds can sit clearly before or after the freeze. */
+const detail = (over: Partial<FrontierEditionSummary> = {}): FrontierEditionDetail => ({
+  summary: {
+    number: 1,
+    refreshedAt: "2026-07-10T12:00:00.000Z",
+    seedsSkipped: [],
+    seedsUsed: 2,
+    trackCount: 33,
+    ...over,
+  },
+  tracks: [],
+});
+
+const seed = (trackId: string, addedAt: string): RecSeedItem => ({
+  addedAt,
+  artists: ["A"],
+  title: "T",
+  trackId,
+});
+
+const BEFORE = "2026-07-09T12:00:00.000Z";
+const AFTER = "2026-07-11T12:00:00.000Z";
 
 // The /recommendations door is component-light by design; its judgment lives in PURE folds.
 // These pin what the reader sees: which gate state renders, how the frontier endpoint folds
@@ -97,10 +127,10 @@ describe("foldFrontierMint", () => {
     });
   });
 
-  it("folds a switch_off status to closed", () => {
+  it("carries an edition_only status through as ok (minting dark — the edition was born)", () => {
     expect(
-      foldFrontierMint({ body: { ok: true, status: "switch_off" }, ok: true, status: 200 }),
-    ).toEqual({ kind: "closed" });
+      foldFrontierMint({ body: { ok: true, status: "edition_only" }, ok: true, status: 200 }),
+    ).toEqual({ kind: "ok", playlistUrl: undefined, status: "edition_only" });
   });
 
   it("carries a minted/refreshed/unchanged status and its URL through", () => {
@@ -185,5 +215,112 @@ describe("savedFindingBody", () => {
 
   it("a catalogue cut has no coordinate — it sends only its track id", () => {
     expect(savedFindingBody({ trackId: "t-2" })).toEqual({ trackId: "t-2" });
+  });
+});
+
+describe("mintToastMessage", () => {
+  it("edition_only confirms the save with the Spotify half still to come (minting dark)", () => {
+    expect(mintToastMessage("edition_only")).toBe("Saved. Your Spotify playlist follows soon.");
+  });
+
+  it("reuses the mirror's lines verbatim for minted/refreshed/unchanged", () => {
+    expect(mintToastMessage("minted")).toBe("Done. It's on your Spotify.");
+    expect(mintToastMessage("refreshed")).toBe("Refreshed with your latest picks.");
+    expect(mintToastMessage("unchanged")).toBe("Already up to date.");
+  });
+});
+
+describe("skippedSeedsLine", () => {
+  it("names one skipped pick in the singular", () => {
+    expect(skippedSeedsLine(1)).toBe(
+      "One of your picks isn't steering yet. Fluncle hasn't got its audio.",
+    );
+  });
+
+  it("names several in the plural with the count", () => {
+    expect(skippedSeedsLine(3)).toBe(
+      "3 of your picks aren't steering yet. Fluncle hasn't got their audio.",
+    );
+  });
+});
+
+describe("isEditionStale", () => {
+  it("no change — every pick predates the freeze and the count matches — is not stale", () => {
+    const seeds = [seed("a", BEFORE), seed("b", BEFORE)];
+
+    expect(isEditionStale(detail({ seedsSkipped: [], seedsUsed: 2 }), seeds)).toBe(false);
+  });
+
+  it("a pick added after the freeze is stale (the addedAt half)", () => {
+    const seeds = [seed("a", BEFORE), seed("b", AFTER)];
+
+    expect(isEditionStale(detail({ seedsSkipped: [], seedsUsed: 2 }), seeds)).toBe(true);
+  });
+
+  it("a pick removed since the freeze is stale (the count half)", () => {
+    const seeds = [seed("a", BEFORE)];
+
+    expect(isEditionStale(detail({ seedsSkipped: [], seedsUsed: 2 }), seeds)).toBe(true);
+  });
+
+  it("a swap (one removed, one added) is stale via the added pick's addedAt", () => {
+    const seeds = [seed("a", BEFORE), seed("c", AFTER)];
+
+    expect(isEditionStale(detail({ seedsSkipped: [], seedsUsed: 2 }), seeds)).toBe(true);
+  });
+
+  it("the frozen count includes skipped seeds, so a matching total is not stale", () => {
+    const seeds = [seed("a", BEFORE), seed("b", BEFORE)];
+
+    // Frozen: 1 steered + 1 skipped = 2 total; current 2 all pre-freeze → no drift.
+    expect(isEditionStale(detail({ seedsSkipped: ["z"], seedsUsed: 1 }), seeds)).toBe(false);
+  });
+
+  it("pre-migration NULL meta never nudges on the count half", () => {
+    const seeds = [seed("a", BEFORE)];
+
+    // seedsUsed/seedsSkipped undefined — the count comparison is skipped; every pick predates
+    // the freeze, so the honest answer is not-stale even though the count would differ.
+    expect(isEditionStale(detail({ seedsSkipped: undefined, seedsUsed: undefined }), seeds)).toBe(
+      false,
+    );
+  });
+
+  it("NULL meta still catches a pick added after the freeze (the addedAt half is meta-free)", () => {
+    const seeds = [seed("a", AFTER)];
+
+    expect(isEditionStale(detail({ seedsSkipped: undefined, seedsUsed: undefined }), seeds)).toBe(
+      true,
+    );
+  });
+});
+
+describe("resolvePlaylistCta", () => {
+  it("the draft phase offers the one-time Get playlist commitment", () => {
+    expect(resolvePlaylistCta({ phase: "draft" })).toEqual({ kind: "get-playlist" });
+  });
+
+  it("committed with a playlist URL opens it on Spotify", () => {
+    expect(
+      resolvePlaylistCta({
+        phase: "committed",
+        playlistUrl: "https://open.spotify.com/playlist/x",
+      }),
+    ).toEqual({ kind: "open", url: "https://open.spotify.com/playlist/x" });
+  });
+
+  it("committed with no URL yet (edition_only, Spotify half dark) waits — no control", () => {
+    expect(resolvePlaylistCta({ phase: "committed" })).toEqual({ kind: "waiting" });
+  });
+
+  it("the committed phase NEVER exposes the mint gesture — no user path back into the engine", () => {
+    // The engine's only user trigger is the one-time draft commitment; a committed page view
+    // must offer no button that re-runs it. Whether or not a playlist exists, the CTA is
+    // `open` or `waiting`, never `get-playlist`.
+    expect(resolvePlaylistCta({ phase: "committed" }).kind).not.toBe("get-playlist");
+    expect(
+      resolvePlaylistCta({ phase: "committed", playlistUrl: "https://open.spotify.com/playlist/x" })
+        .kind,
+    ).not.toBe("get-playlist");
   });
 });

@@ -26,10 +26,16 @@ import { apiFault, type Implementer, responseFault } from "./_shared";
  *   - `save_private_rec_seed` — add a seed (by trackId or Log ID); CSRF + the
  *     `account.recs.write`/90 rate limit; 409 `seed_limit` past the 12-seed cap.
  *   - `delete_private_rec_seed` — remove a seed; CSRF + `account.recs.delete`/90.
- *   - `list_private_recommendations` — THE ENGINE. Session + verified email
- *     (the helper's 403), and a modest per-user hourly limit applied here
- *     (`account.recs.read`/RECOMMENDATIONS_RATE_LIMIT): the read costs the
- *     database ≤12 probes × the embedded catalogue per request.
+ *   - `list_private_recommendations` — THE ENGINE (the LIVE vector scan). Session +
+ *     verified email (the helper's 403), and a modest per-user hourly limit applied
+ *     here (`account.recs.read`/RECOMMENDATIONS_RATE_LIMIT), because a scan that runs
+ *     costs the database ≤12 probes × the embedded catalogue. The web `/recommendations`
+ *     shelf no longer reads through this op on the hot path — it reads a stored edition
+ *     (frontier-shelf-from-editions-rfc.md), so a committed page view runs NO scan. The
+ *     scan survives here for the DRAFT phase and for non-web clients (mobile/MCP/CLI)
+ *     that read recommendations directly; the same `account.recs.read` budget also guards
+ *     the web draft path (the route's `readDraftRecommendations`), so both entrances share
+ *     one honest limit.
  */
 export function meRecsHandlers(os: Implementer) {
   const listSeeds = os.list_private_rec_seeds.use(privateUserAuth).handler(async ({ context }) => {

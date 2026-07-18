@@ -13,13 +13,17 @@ import {
 } from "@/components/recommendations/shared";
 import { siteUrl } from "@/lib/fluncle-links";
 import { getFrontierEdition, getFrontierEditions } from "@/lib/server/frontier-editions";
-import { createCsrfToken, getPublicSession } from "@/lib/server/public-auth";
+import { createCsrfToken, getPublicSession, type PublicUser } from "@/lib/server/public-auth";
+import { enforceRateLimit } from "@/lib/server/rate-limit";
 import {
   listRecommendations,
   listRecSeeds,
+  RECOMMENDATIONS_RATE_LIMIT,
+  RECOMMENDATIONS_RATE_WINDOW_MS,
   type RecommendationsResult,
   type RecSeedItem,
 } from "@/lib/server/recommendations";
+import { buildRecsGate } from "@/lib/server/recs-gate";
 
 // ── /recommendations — the per-listener telescope, the crew door ──────────────────────
 //
@@ -35,36 +39,74 @@ import {
 // seeds the verified surface's react-query with real content on first paint.
 
 /**
- * The gate, resolved from the requester's own session. The verified state ALSO carries the
- * SSR-computed seed set + first recommendations (react-query seeds off them) and the mutation
- * token (the account/chat loader-mint pattern — one token, reused for the seed + playlist
- * writes). A read failure on the engine degrades to empty rather than blocking the door.
+ * The DRAFT engine read, rate-limited and degrading — the one place the live vector scan sits
+ * on the read path (the draft cohort; frontier-shelf-from-editions-rfc.md D2). The
+ * `account.recs.read` hourly budget is enforced here (the web door reads through serverFns, not
+ * the oRPC op, so this is where the guard has to land for the door path), then the scan runs;
+ * a limit or a `Response` fault both degrade to empty rather than blocking the door. The
+ * COMMITTED path never calls this — a stored edition read is not a scan.
+ */
+async function readDraftRecommendations(
+  user: PublicUser,
+  request: Request,
+): Promise<RecommendationsResult> {
+  const limited = await enforceRateLimit({
+    action: "account.recs.read",
+    limit: RECOMMENDATIONS_RATE_LIMIT,
+    request,
+    userId: user.id,
+    windowMs: RECOMMENDATIONS_RATE_WINDOW_MS,
+  });
+
+  if (limited) {
+    return EMPTY_RECS;
+  }
+
+  const result = await listRecommendations(user);
+
+  return result instanceof Response ? EMPTY_RECS : result;
+}
+
+/**
+ * The gate, resolved from the requester's own session via `buildRecsGate` (the DI seam — the
+ * "committed page views never run the engine" invariant lives there, unit-tested). The verified
+ * state carries the seed set, the past editions, and — by phase — either the LIVE draft
+ * recommendations or the LATEST frozen edition, plus the mutation token (the account/chat
+ * loader-mint pattern). The engine read is the rate-limited, degrading draft path above.
  */
 const getRecsGate = createServerFn({ method: "GET" }).handler(async (): Promise<RecsGate> => {
-  const user = await getPublicSession(getRequest());
+  const request = getRequest();
+  const user = await getPublicSession(request);
 
-  if (!user) {
-    return { state: "anonymous" };
-  }
-
-  if (!user.emailVerified) {
-    return { state: "unverified" };
-  }
-
-  const [seedsResult, recsResult, editions] = await Promise.all([
-    listRecSeeds(user),
-    listRecommendations(user),
-    getFrontierEditions(user.id),
-  ]);
-
-  return {
-    csrfToken: createCsrfToken(user),
-    editions,
-    recommendations: recsResult instanceof Response ? EMPTY_RECS : recsResult,
-    seeds: seedsResult.seeds,
-    state: "verified",
-  };
+  return buildRecsGate(user, {
+    createCsrfToken,
+    getFrontierEdition,
+    getFrontierEditions,
+    listRecSeeds,
+    runDraftEngine: (draftUser) => readDraftRecommendations(draftUser, request),
+  });
 });
+
+/** The latest frozen edition on its own — the committed shelf's react-query refetch. `null`
+ *  when the user has no edition (the draft phase) or the read races to nothing. */
+const getLatestEdition = createServerFn({ method: "GET" }).handler(
+  async (): Promise<FrontierEditionDetail | null> => {
+    const user = await getPublicSession(getRequest());
+
+    if (!user || !user.emailVerified) {
+      return null;
+    }
+
+    const editions = await getFrontierEditions(user.id);
+    const latest = editions[0];
+
+    if (!latest) {
+      return null;
+    }
+
+    return (await getFrontierEdition(user.id, latest.number)) ?? null;
+  },
+);
 
 /** A user's past editions on their own — the react-query refetch after a real refresh. */
 const loadFrontierEditions = createServerFn({ method: "GET" }).handler(
@@ -104,18 +146,18 @@ const getRecSeeds = createServerFn({ method: "GET" }).handler(async (): Promise<
   return (await listRecSeeds(user)).seeds;
 });
 
-/** The computed recommendations on their own — the react-query refetch after a seed write. */
+/** The DRAFT recommendations on their own — the react-query refetch after a seed write (draft
+ *  phase only). Shares the rate-limited, degrading draft read with the gate. */
 const getRecommendations = createServerFn({ method: "GET" }).handler(
   async (): Promise<RecommendationsResult> => {
-    const user = await getPublicSession(getRequest());
+    const request = getRequest();
+    const user = await getPublicSession(request);
 
     if (!user || !user.emailVerified) {
       return EMPTY_RECS;
     }
 
-    const result = await listRecommendations(user);
-
-    return result instanceof Response ? EMPTY_RECS : result;
+    return readDraftRecommendations(user, request);
   },
 );
 
@@ -178,8 +220,12 @@ function RecommendationsPage() {
         {gate.state === "verified" ? (
           <RecommendationsDoor
             csrfToken={gate.csrfToken}
+            initialEditions={gate.editions}
+            initialLatest={gate.latest}
             initialRecommendations={gate.recommendations}
             initialSeeds={gate.seeds}
+            loadEditions={() => loadFrontierEditions()}
+            loadLatestEdition={() => getLatestEdition()}
             loadRecommendations={() => getRecommendations()}
             loadSeeds={() => getRecSeeds()}
           />

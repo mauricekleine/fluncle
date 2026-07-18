@@ -6,12 +6,14 @@
 // a dashed ghost slot where the next pick lands. The interface carries the meaning; no
 // helper prose.
 //
-// The CTA is coded against the PARALLEL agent's exact interface and folds a 404 gracefully
-// (GET/POST /me/frontier-playlist), so the panel ships whether or not that endpoint has
-// merged: closed reads as one short line under a disabled button and nothing more.
+// The header CTA is phase-driven (`resolvePlaylistCta`): the DRAFT phase shows the one-time
+// "Get playlist" commitment (the mint gesture, lifted into `useFrontierMint` and handed down),
+// the COMMITTED phase opens the synced Spotify playlist or — while the Spotify half is still
+// dark — shows the honest waiting line. There is no refresh control: the engine's only user
+// trigger is that first commit (the other is the Friday sweep).
 
 import { MagnifyingGlassIcon, PlaylistIcon, PlusIcon, XIcon } from "@phosphor-icons/react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@fluncle/ui/components/button";
 import { Input } from "@fluncle/ui/components/input";
@@ -23,13 +25,14 @@ import { albumCoverAtSize } from "@/lib/media";
 import { cn } from "@/lib/utils";
 import { AddPill, padIndex, RecCover, TrackReadout } from "./rec-rows";
 import {
-  foldFrontierMint,
   foldFrontierStatus,
   FRONTIER_CLOSED,
   type FrontierState,
   type RecSeedItem,
+  resolvePlaylistCta,
   SEED_CAP,
 } from "./shared";
+import { type FrontierMint } from "./use-frontier-mint";
 
 // The slice of the search resolver's reply the panel consumes — a track candidate. The
 // endpoint returns more (entities, filters, the sonic anchor); a pick is a TRACK, so the
@@ -79,20 +82,20 @@ async function fetchCandidates(query: string): Promise<SearchHit[]> {
 }
 
 export function PlaylistPanel({
-  csrfToken,
   message,
+  mint,
   onAdd,
   onRemove,
+  phase,
   seeds,
 }: {
-  csrfToken: string;
   message: string;
+  mint: FrontierMint;
   onAdd: (trackId: string) => Promise<void>;
   onRemove: (trackId: string) => Promise<void>;
+  phase: "committed" | "draft";
   seeds: RecSeedItem[];
 }) {
-  const queryClient = useQueryClient();
-  const [mintMessage, setMintMessage] = useState("");
   const [query, setQuery] = useState("");
   const [debounced, setDebounced] = useState("");
   const [results, setResults] = useState<SearchHit[]>([]);
@@ -143,50 +146,11 @@ export function PlaylistPanel({
     return `Refreshes every ${weekday} at ${time}`;
   }, []);
 
-  const mint = useMutation({
-    mutationFn: async () => {
-      const response = await fetch(FRONTIER_PATH, {
-        // The mint takes no parameters, but the op's input schema still expects an
-        // OBJECT — a bodyless POST parses to undefined and 400s (invalid_request).
-        body: JSON.stringify({}),
-        headers: { "Content-Type": "application/json", "x-fluncle-csrf": csrfToken },
-        method: "POST",
-      });
-
-      if (response.status === 401) {
-        window.location.href = "/account";
-
-        return { kind: "closed" as const };
-      }
-
-      const body = await response.json().catch(() => undefined);
-
-      return foldFrontierMint({ body, ok: response.ok, status: response.status });
-    },
-    onSuccess: (result) => {
-      if (result.kind === "closed") {
-        setMintMessage("");
-        queryClient.setQueryData<FrontierState>(["frontier"], FRONTIER_CLOSED);
-
-        return;
-      }
-
-      if (result.kind === "error") {
-        setMintMessage(result.message);
-
-        return;
-      }
-
-      setMintMessage(MINT_MESSAGE[result.status]);
-      void queryClient.invalidateQueries({ queryKey: ["frontier"] });
-
-      // A real refresh (minted/refreshed) writes a new edition; the past-editions dropdown
-      // reads ["rec-editions"], so pull it fresh. An `unchanged` sync wrote no edition.
-      if (result.status === "minted" || result.status === "refreshed") {
-        void queryClient.invalidateQueries({ queryKey: ["rec-editions"] });
-      }
-    },
-  });
+  // The one CTA the header shows, by phase (the shelf-from-editions triggers): DRAFT offers
+  // the one-time "Get playlist" commitment; COMMITTED opens the synced playlist, or — for an
+  // edition-only user whose Spotify half is still dark — shows nothing but the honest waiting
+  // line. There is no refresh control: the engine's only user trigger is that first commit.
+  const cta = resolvePlaylistCta({ phase, playlistUrl: frontier.playlistUrl });
 
   // A keystroke is not a query — the same 180ms debounce the ⌘K dialog uses, so a typed word
   // fires one resolver round trip on its way to being one, not five.
@@ -254,26 +218,28 @@ export function PlaylistPanel({
           <h2 className="rec-playlist-name">Fluncle&rsquo;s Frontier</h2>
           {meta ? <p className="rec-playlist-meta">{meta}</p> : null}
 
-          <div className="rec-playlist-cta">
-            {frontier.playlistUrl ? (
-              <Button
-                nativeButton={false}
-                render={<a href={frontier.playlistUrl} rel="noopener noreferrer" target="_blank" />}
-              >
-                <SpotifyIcon />
-                Open in Spotify
-              </Button>
-            ) : (
-              <Button
-                disabled={!hasPicks || !frontier.mintingOpen || mint.isPending}
-                onClick={() => mint.mutate()}
-                type="button"
-              >
-                <PlaylistIcon aria-hidden="true" weight="bold" />
-                Get playlist
-              </Button>
-            )}
-          </div>
+          {cta.kind === "waiting" ? (
+            // Committed, but the Spotify half is still dark — the set is saved, the playlist
+            // follows when the mirror opens. The honest resting line, no control.
+            <p className="rec-playlist-note">Your Spotify playlist follows soon.</p>
+          ) : (
+            <div className="rec-playlist-cta">
+              {cta.kind === "open" ? (
+                <Button
+                  nativeButton={false}
+                  render={<a href={cta.url} rel="noopener noreferrer" target="_blank" />}
+                >
+                  <SpotifyIcon />
+                  Open in Spotify
+                </Button>
+              ) : (
+                <Button disabled={!hasPicks || mint.isPending} onClick={mint.run} type="button">
+                  <PlaylistIcon aria-hidden="true" weight="bold" />
+                  Get playlist
+                </Button>
+              )}
+            </div>
+          )}
 
           {/* The refresh is automatic now (the weekly box timer), so the header states WHEN
               the next one lands in the reader's own timezone rather than offering a manual
@@ -282,17 +248,13 @@ export function PlaylistPanel({
             <p className="rec-playlist-meta">{nextRefreshLabel}</p>
           ) : null}
 
-          {/* The only note the header is allowed: WHY the action lies still — and only
-              while it does. */}
-          {!frontier.mintingOpen && !frontier.playlistUrl ? (
-            <p className="rec-playlist-note">Playlists open soon.</p>
-          ) : null}
-
-          {mintMessage ? (
-            <p aria-live="polite" className="rec-message">
-              {mintMessage}
-            </p>
-          ) : null}
+          {/* The live region is mounted UNCONDITIONALLY and only its text toggles — a "Get
+              playlist" click updates the text in a region already on the page, so a screen
+              reader announces the outcome (a region inserted together with its content is
+              skipped). */}
+          <p aria-live="polite" className="rec-message">
+            {mint.message || null}
+          </p>
         </div>
       </header>
 
@@ -310,11 +272,11 @@ export function PlaylistPanel({
           />
         </div>
 
-        {message ? (
-          <p aria-live="polite" className="rec-message">
-            {message}
-          </p>
-        ) : null}
+        {/* Same unconditional-mount rule as the mint toast: the seed-write message (a cap 409,
+            say) toggles inside a region already on the page, so a screen reader announces it. */}
+        <p aria-live="polite" className="rec-message">
+          {message || null}
+        </p>
 
         {/* Candidates — the search's reply, inline under the field. The row carries the
             music, the pill carries the pick (the one gesture grammar). */}
@@ -407,12 +369,6 @@ export function PlaylistPanel({
     </section>
   );
 }
-
-const MINT_MESSAGE: Record<"minted" | "refreshed" | "unchanged", string> = {
-  minted: "Done. It's on your Spotify.",
-  refreshed: "Refreshed with your latest picks.",
-  unchanged: "Already up to date.",
-};
 
 /**
  * The playlist's cover — Spotify's 2×2 auto-collage, cut from the first four picks. A
