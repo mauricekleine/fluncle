@@ -21,6 +21,18 @@ This is the **pull model**: the repo is canonical, the box is the deploy target,
 
 A container can't cleanly rebuild and replace _itself_. The rebuild has to run on the **host** (which owns the Docker daemon), so this is a systemd timer on the rave-02 host — the same pattern as the rave-01 [`fluncle-rave-watchdog`](../../../../apps/ssh/watchdog). The Hermes-container crons (enrich/observe/render) do _app_ work; this does _infra_ work.
 
+## Serializing the rebuild against the sweeps
+
+The rebuild is docker-heavy: a `docker build` plus a fistful of throwaway `--rm` pre-smoke `docker run`s, then the container swap. rave-02 also runs the recurring **sweep timers** (`fluncle-embed`, `fluncle-enrich`, `fluncle-label-lineage`, … — each a `*-timer` that fires its own `docker run`). When a sweep fires _during_ a rebuild, the daemon contention (buildkit's "only one connection allowed", the rapid pre-smoke container create/delete churn) **SIGKILLs the sweep container (exit 137)** — confirmed on rave-02, and confirmed **not** an OOM (no kernel OOM log, RAM free, the sweep died seconds after starting). It self-heals on the next tick, but every rebuild that overlaps a sweep (~daily) throws a false failure alarm and burns a wasted tick.
+
+So the rebuild **quiesces the sweeps** for its docker-heavy section. Immediately before the first `docker build` (i.e. _after_ the drift decision — a no-op `--if-stale` run never touches a timer; `--dry-run` does, because it still builds + pre-smokes):
+
+- **Stop the active sweep timers.** They are enumerated **dynamically** — `systemctl list-units --type=timer --state=active … 'fluncle-*.timer'` — so a newly-added sweep is covered automatically, with **two exclusions**: `fluncle-healthcheck.timer` (the dead-man's-switch beacon must keep pinging `/status` through the rebake) and pin-watch's own timer (never stop the timer that scheduled this run — it is `pin-watch.timer`, already outside the `fluncle-*` glob, and is excluded defensively in case it is ever renamed).
+- **Drain any sweep already mid-run.** After stopping the timers, it polls each stopped timer's `.service` twin (`systemctl is-active --quiet`) and waits — bounded to `PINWATCH_SWEEP_DRAIN_TIMEOUT` (default 300s) — so the rebuild does not kill a sweep that was already running. On timeout it logs and proceeds (a rare stuck sweep must not block the rebuild forever).
+- **Guarantee the restart.** An `EXIT` trap (composed with the existing tmpfs-env cleanup trap) restarts **exactly** the timers it stopped, best-effort (`|| true` per timer, so one failing start never strands the rest). Because it rides the `EXIT` trap, it fires on success, on `die()`, on a build/pre-smoke failure, **and on the auto-rollback path** — a failed or rolled-back rebuild never leaves the box with its sweeps disabled, which would be worse than the bug it fixes.
+
+The quiesce is a no-op when there are no active sweep timers, and the whole mechanism only engages once a rebuild is actually committed to.
+
 ## Credential-free by design
 
 It puts **no token on the box** and reads nothing from `op`:
@@ -38,11 +50,13 @@ Default `--if-stale` (the timer); `--force` runs it unconditionally (the operato
 2. **Sync** the public repo into `/opt/fluncle-build` (clone or fetch + hard-reset to `origin/main`).
 3. **Compare pins AND baked content:** the `fluncle` binary release-URL version + the `@anthropic-ai/claude-code@` pin in `docs/agents/hermes/Dockerfile` vs the running container's `fluncle version` / `claude --version`, AND the baked-content fingerprint on `main` (`git ls-tree -r HEAD` over `BAKED_PATHS`) vs the running image's stamp at `/opt/.hermes-baked-fp`. Both current → **no-op**; either drifted (or an empty stamp) → rebuild. The base image (`FROM`) is _not_ watched — a base bump stays a manual operator brake.
 4. **Capture** the running container's runtime env into a `0600` tmpfs file (the rollback-reversibility step) + record the current image as the rollback target.
-5. **Build** the new image (`fluncle-hermes:v<date>-<sha>`), repo-root context, `-f docs/agents/hermes/Dockerfile`.
-6. **Pre-smoke the NEW image in throwaway `--rm` containers — before the live one is touched:** `fluncle version` == the pin; `claude --version` == the pin; an agent-token read returns `{ok:true}`; a publish-class command is **refused** (role boundary intact). Any failure → abort, alert, **the live box is never touched**.
-7. **Swap** (the only moment the live container changes): stop+rm, `docker run` the new image with the captured env + the canonical `§ Run` flags.
-8. **Post-swap smoke:** the gateway is `Running` and `fluncle` answers.
-9. **On any post-swap failure → ROLLBACK:** restore the previous image, confirm it's up, alert loudly. If the rollback itself fails, fire the loudest alert and stop for a human. **The box is never left broken.**
+5. **Quiesce the sweep timers** (only once a rebuild is committed to — see [§ Serializing the rebuild against the sweeps](#serializing-the-rebuild-against-the-sweeps)): stop the active `fluncle-*.timer` sweeps, drain any sweep already mid-run, and arm an EXIT trap that **guarantees** they are restarted on every exit path.
+6. **Build** the new image (`fluncle-hermes:v<date>-<sha>`), repo-root context, `-f docs/agents/hermes/Dockerfile`.
+7. **Pre-smoke the NEW image in throwaway `--rm` containers — before the live one is touched:** `fluncle version` == the pin; `claude --version` == the pin; an agent-token read returns `{ok:true}`; a publish-class command is **refused** (role boundary intact). Any failure → abort, alert, **the live box is never touched**.
+8. **Swap** (the only moment the live container changes): stop+rm, `docker run` the new image with the captured env + the canonical `§ Run` flags.
+9. **Post-swap smoke:** the gateway is `Running` and `fluncle` answers.
+10. **On any post-swap failure → ROLLBACK:** restore the previous image, confirm it's up, alert loudly. If the rollback itself fails, fire the loudest alert and stop for a human. **The box is never left broken.**
+11. **Restore the sweep timers** (the EXIT trap from step 5): whether the run deployed, aborted, or rolled back, the stopped timers are started again before the process exits.
 
 Discord alerts (deploy / rollback / failure) use the `DISCORD_ALERT_WEBHOOK` already in the container's env — no config file.
 
