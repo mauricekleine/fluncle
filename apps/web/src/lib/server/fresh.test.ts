@@ -21,8 +21,18 @@ vi.mock("./db", async (importOriginal) => {
   return { ...actual, getDb: async () => holder.db };
 });
 
+import {
+  freshRecordCovers,
+  freshStream,
+  freshTrackWindowRecordCovers,
+} from "@/components/fresh/data";
 import { createIntegrationDb } from "./integration-db";
-import { FRESH_WINDOW_DAYS, listFreshReleases, listFreshTracks } from "./fresh";
+import {
+  FRESH_RECORDS_WINDOW_DAYS,
+  FRESH_WINDOW_DAYS,
+  listFreshReleases,
+  listFreshTracks,
+} from "./fresh";
 
 // A fixed clock so the window boundaries are deterministic. Relative to this NOW:
 //   weekStart = 2026-07-10, windowStart = 2026-06-17, today = 2026-07-17.
@@ -288,5 +298,177 @@ describe("listFreshReleases", () => {
     const capped = await listFreshTracks({ limit: 2, now: NOW });
     expect(capped.tracks).toHaveLength(2);
     expect(capped.tracks[0]?.title).toBe("Title flat_f_15");
+  });
+});
+
+/** A crawled catalogue track sitting on an album entity, for the records-window tests. */
+async function seedAlbumTrack(options: {
+  albumId: string;
+  albumName: string;
+  albumSlug: string;
+  artists: string[];
+  releaseDate: string;
+  trackId: string;
+}): Promise<void> {
+  await db.execute({
+    args: [options.albumId, options.albumName, options.albumSlug, "x", "x"],
+    sql: `insert or ignore into albums (id, name, slug, created_at, updated_at) values (?, ?, ?, ?, ?)`,
+  });
+  await seedCatalogueTrack({
+    albumId: options.albumId,
+    artists: options.artists,
+    releaseDate: options.releaseDate,
+    trackId: options.trackId,
+  });
+}
+
+describe("listFreshReleases — the album window widens without touching the track stream", () => {
+  it("reaches records past the 30-day track window only when asked, flagging the track-window cut", async () => {
+    // A record 60 days back — inside a 90-day album window, OUTSIDE the 30-day track window.
+    await seedAlbumTrack({
+      albumId: "alb_deep",
+      albumName: "Deep Cut",
+      albumSlug: "deep-cut",
+      artists: ["Seba"],
+      releaseDate: "2026-05-18",
+      trackId: "deep_1",
+    });
+    // A record inside BOTH windows.
+    await seedAlbumTrack({
+      albumId: "alb_recent",
+      albumName: "Recent Cut",
+      albumSlug: "recent-cut",
+      artists: ["Nu:Tone"],
+      releaseDate: "2026-07-14",
+      trackId: "recent_1",
+    });
+
+    // Default (30-day) window: only the recent record surfaces — the feeds' read is unchanged.
+    const narrow = await listFreshReleases(NOW);
+    expect(narrow.records.map((record) => record.slug)).toEqual(["recent-cut"]);
+
+    // Widened (90-day) window: the deep record joins it, flagged as OUTSIDE the track window.
+    const wide = await listFreshReleases(NOW, FRESH_RECORDS_WINDOW_DAYS);
+    expect(wide.records.map((record) => record.slug)).toEqual(["recent-cut", "deep-cut"]);
+    expect(wide.records.find((record) => record.slug === "deep-cut")?.withinTrackWindow).toBe(
+      false,
+    );
+    expect(wide.records.find((record) => record.slug === "recent-cut")?.withinTrackWindow).toBe(
+      true,
+    );
+    // The track stream and its window are untouched by the wider records read.
+    expect(wide.windowDays).toBe(FRESH_WINDOW_DAYS);
+  });
+
+  it("counts the record's tracks, never the artist-multiplied json_each join rows", async () => {
+    // Two tracks, each credited to several artists — the json_each join multiplies rows, so a naive
+    // count(*) would overcount. trackCount must be the distinct-track count: 2.
+    await seedAlbumTrack({
+      albumId: "alb_ep",
+      albumName: "Two Track EP",
+      albumSlug: "two-track-ep",
+      artists: ["Artist A", "Artist B", "Artist C"],
+      releaseDate: "2026-07-14",
+      trackId: "ep_1",
+    });
+    await seedCatalogueTrack({
+      albumId: "alb_ep",
+      artists: ["Artist A", "Artist B"],
+      releaseDate: "2026-07-13",
+      trackId: "ep_2",
+    });
+
+    const { records } = await listFreshReleases(NOW, FRESH_RECORDS_WINDOW_DAYS);
+    expect(records.find((record) => record.slug === "two-track-ep")?.trackCount).toBe(2);
+  });
+});
+
+describe("the view split — the cuts the marquee switches the pills on", () => {
+  it("gives the album view the full 90-day set, the All-view rail only the 30-day cut, both views the stream", async () => {
+    await seedFinding({
+      artists: ["Dimension"],
+      logId: "200.7.1A",
+      releaseDate: "2026-07-15",
+      trackId: "split_f",
+    });
+    await seedCatalogueTrack({
+      artists: ["Lenzman"],
+      releaseDate: "2026-07-12",
+      trackId: "split_c",
+    });
+    await seedAlbumTrack({
+      albumId: "alb_in",
+      albumName: "In Window LP",
+      albumSlug: "in-window-lp",
+      artists: ["Nu:Tone"],
+      releaseDate: "2026-07-14",
+      trackId: "split_in",
+    });
+    await seedAlbumTrack({
+      albumId: "alb_deep",
+      albumName: "Deep Window LP",
+      albumSlug: "deep-window-lp",
+      artists: ["Seba"],
+      releaseDate: "2026-05-18", // 60 days back — album view only
+      trackId: "split_deep",
+    });
+
+    const data = await listFreshReleases(NOW, FRESH_RECORDS_WINDOW_DAYS);
+
+    // The "Albums & EPs" view: every record in the 90-day cut, newest first.
+    expect(freshRecordCovers(data).map((cover) => cover.key)).toEqual([
+      "r-in-window-lp",
+      "r-deep-window-lp",
+    ]);
+    // The "All" view's rail: only the records inside the 30-day track window (today's layout).
+    expect(freshTrackWindowRecordCovers(data).map((cover) => cover.key)).toEqual([
+      "r-in-window-lp",
+    ]);
+    // The track stream (shown by both "All" and "Tracks"): every finding + catalogue row in the
+    // 30-day window. An in-window album's tracks ride the stream as catalogue rows too (`split_in`);
+    // the 60-day album's track (`split_deep`) is outside the track window, so it appears in the album
+    // view alone.
+    expect(
+      freshStream(data)
+        .map((entry) => (entry.kind === "finding" ? entry.finding.trackId : entry.track.trackId))
+        .sort(),
+    ).toEqual(["split_c", "split_f", "split_in"]);
+  });
+});
+
+describe("the fresh FEED contract survives the album-window widening", () => {
+  it("keeps listFreshTracks on the 30-day window — a 60-day record never leaks into a feed read", async () => {
+    // The 30-day track window (what the feeds carry).
+    await seedFinding({
+      artists: ["Dimension"],
+      logId: "200.7.1A",
+      releaseDate: "2026-07-15",
+      trackId: "feed_f",
+    });
+    await seedCatalogueTrack({
+      artists: ["Nu:Tone"],
+      releaseDate: "2026-07-12",
+      trackId: "feed_c",
+    });
+    // A record 60 days back — inside the page's 90-day album view, OUTSIDE the feed's window.
+    await seedAlbumTrack({
+      albumId: "alb_old",
+      albumName: "Old Record",
+      albumSlug: "old-record",
+      artists: ["Seba"],
+      releaseDate: "2026-05-18",
+      trackId: "old_1",
+    });
+
+    const feed = await listFreshTracks({ now: NOW });
+
+    // The flat track list is the 30-day set — the 60-day catalogue row never appears.
+    expect(feed.tracks.map((track) => track.title).sort()).toEqual([
+      "Title feed_c",
+      "Title feed_f",
+    ]);
+    // The feed's album list is the 30-day cut too — the 60-day record does not leak in.
+    expect(feed.albums.map((album) => album.slug)).toEqual([]);
+    expect(feed.windowDays).toBe(FRESH_WINDOW_DAYS);
   });
 });

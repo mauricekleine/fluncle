@@ -71,8 +71,15 @@ function leadArtistAvatarUrl(row: LeadArtistRow): string | undefined {
   });
 }
 
-/** The trailing release window: how far back "just came out" reaches. A constant, never a param. */
+/** The trailing release window the TRACK STREAM reads: how far back "just came out" reaches. This is
+    the contract the syndication feeds pin (`fresh.xml`/`fresh.json` say "the last 30 days"), so it is
+    fixed — the album view widens on its OWN window ({@link FRESH_RECORDS_WINDOW_DAYS}), never this. */
 export const FRESH_WINDOW_DAYS = 30;
+
+/** The trailing window the ALBUM cut reads — wider than the track stream, because a record is a rarer
+    event than a single track and a month-old LP is still fresh. The page's records query reaches this
+    far back; the track stream (and every feed) stays on {@link FRESH_WINDOW_DAYS}. */
+export const FRESH_RECORDS_WINDOW_DAYS = 90;
 
 /** The split inside the window: releases newer than this land in "This week". */
 export const FRESH_WEEK_DAYS = 7;
@@ -115,6 +122,13 @@ export type FreshRecord = {
   releaseDate: string;
   /** `/album/<slug>` — always present, because this row IS an album entity (an inner join minted it). */
   slug: string;
+  /** How many of the record's tracks landed in the query window — the "4 tracks" label the album view
+      prints (a real count of a real entity; the tier the rows belong to is never counted). */
+  trackCount: number;
+  /** True when the record's newest release also falls inside the (narrower) TRACK window — so the "All"
+      view's rail can show today's 30-day cut while the album view reaches the full {@link
+      FRESH_RECORDS_WINDOW_DAYS}. */
+  withinTrackWindow: boolean;
 };
 
 export type FreshReleases = {
@@ -139,6 +153,7 @@ type FreshRecordRow = {
   name: string;
   release_date: string;
   slug: string;
+  track_count: number;
 };
 
 /** A `YYYY-MM-DD` day, `daysAgo` days before `now` (UTC) — the release_date column's own precision. */
@@ -150,12 +165,24 @@ function dayString(now: Date, daysAgo: number): string {
  * The fresh page's data: certified findings + uncertified rows released in the trailing window,
  * bucketed by recency, plus the records they sit on. `now` is injectable so the window is
  * deterministic under test (the `getRadioScheduleAnchor` precedent).
+ *
+ * `recordsWindowDays` widens ONLY the album (records) read — the findings + catalogue track stream
+ * always stays on {@link FRESH_WINDOW_DAYS}, which is the window the syndication feeds pin. It
+ * defaults to that same 30-day window, so `listFreshTracks` (and therefore `fresh.xml`/`fresh.json`)
+ * is byte-identical; the `/fresh` page passes {@link FRESH_RECORDS_WINDOW_DAYS} to reach further back
+ * for its album view.
  */
-export async function listFreshReleases(now: Date = new Date()): Promise<FreshReleases> {
+export async function listFreshReleases(
+  now: Date = new Date(),
+  recordsWindowDays: number = FRESH_WINDOW_DAYS,
+): Promise<FreshReleases> {
   const db = await getDb();
   // `<= today` drops future-dated pre-orders: a record that has not come out yet has not "just
   // come out". `>= windowStart` is the trailing edge. Both bind against the release_date index.
   const windowStart = dayString(now, FRESH_WINDOW_DAYS);
+  // The album cut's own trailing edge — never narrower than the track window (a longer window can
+  // only reach further back), so a record inside the track window is always inside this one too.
+  const recordsWindowStart = dayString(now, Math.max(recordsWindowDays, FRESH_WINDOW_DAYS));
   const weekStart = dayString(now, FRESH_WEEK_DAYS);
   const today = dayString(now, 0);
 
@@ -187,15 +214,18 @@ export async function listFreshReleases(now: Date = new Date()): Promise<FreshRe
             order by tracks.release_date desc, tracks.track_id desc
             limit ?`,
     }),
-    // The records half: the album ENTITIES a fresh release sits on, newest release first. The
+    // The records half: the album ENTITIES a fresh release sits on, newest release first, over the
+    // WIDER records window (`recordsWindowStart`, up to 90 days — albums are rarer than singles). The
     // `join albums` requires an `album_id` (a minted entity), so every row links to `/album/<slug>`.
     // `json_each` is safe under the release_date range — the scan is bounded to the window before the
     // JSON is touched, and the aggregation stays in SQL (AGENTS.md: never fold a growing table in the
-    // isolate). `group_concat(distinct …)` folds the credited artists across the record's fresh rows.
+    // isolate). `group_concat(distinct …)` folds the credited artists across the record's fresh rows,
+    // and `count(distinct tracks.track_id)` counts the tracks (never the artist-multiplied join rows).
     db.execute({
-      args: [windowStart, today, FRESH_RECORDS_LIMIT],
+      args: [recordsWindowStart, today, FRESH_RECORDS_LIMIT],
       sql: `select al.slug as slug, min(al.name) as name,
                    max(tracks.release_date) as release_date,
+                   count(distinct tracks.track_id) as track_count,
                    group_concat(distinct credit.value) as artists,
                    (select t2.album_image_url
                       from tracks t2
@@ -239,6 +269,10 @@ export async function listFreshReleases(now: Date = new Date()): Promise<FreshRe
     name: row.name,
     releaseDate: row.release_date,
     slug: row.slug,
+    trackCount: row.track_count,
+    // The record's newest release decides the flag — inside the 30-day track window (today's rail)
+    // or only inside the wider album window. `>=` is the same boundary the track queries bind.
+    withinTrackWindow: row.release_date >= windowStart,
   }));
 
   const sections: FreshSection[] = (["week", "earlier"] as const).flatMap((key) => {

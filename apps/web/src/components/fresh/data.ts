@@ -15,6 +15,10 @@ import {
   type FreshReleases,
 } from "@/lib/server/fresh";
 
+/** The `/fresh` view the reader has picked (the `?view=` pill). `all` is the default bare-`/fresh`
+    layout; `tracks` is the flat track stream on its own; `albums` centres the album records. */
+export type FreshView = "albums" | "all" | "tracks";
+
 /** One release in the merged, date-sorted stream: a lit finding OR an unlit catalogue row. */
 export type FreshStreamEntry =
   | { kind: "catalogue"; releaseDate: string; track: FreshCatalogueItem }
@@ -31,6 +35,9 @@ export type FreshCover = {
   key: string;
   releaseDate: string;
   title: string;
+  /** How many tracks off the record landed in the window — set on album records only (a finding is
+      one track), so the album view can print "4 tracks". */
+  trackCount?: number;
 } & (
   | { link: "album"; slug: string }
   | { link: "external"; href: string }
@@ -117,6 +124,7 @@ function recordCover(record: FreshRecord): FreshCover {
     releaseDate: record.releaseDate,
     slug: record.slug,
     title: record.name,
+    trackCount: record.trackCount,
   };
 }
 
@@ -127,9 +135,16 @@ export function freshFindingCovers(data: FreshReleases): FreshCover[] {
     .sort((a, b) => byReleaseDesc({ ...a, sort: a.key }, { ...b, sort: b.key }));
 }
 
-/** The album records as cover cards, newest first. */
+/** Every album record as a cover card, newest first — the FULL album cut (up to 90 days back), the
+    "Albums & EPs" view's central grid. */
 export function freshRecordCovers(data: FreshReleases): FreshCover[] {
   return data.records.map(recordCover);
+}
+
+/** The album records inside the narrower TRACK window (today's 30-day cut) — the "All" view's rail,
+    so the default page keeps its existing layout while the album view reaches further back. */
+export function freshTrackWindowRecordCovers(data: FreshReleases): FreshCover[] {
+  return data.records.filter((record) => record.withinTrackWindow).map(recordCover);
 }
 
 /** The single newest cover-bearing release overall — the hero. A finding leads a record on a tie. */
