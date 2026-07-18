@@ -29,12 +29,35 @@ type UserRow = {
   username: null | string;
 };
 
+/** A frozen edition captured by the fake `db.batch` — proves the snapshot hook (A2). */
+type CapturedEdition = {
+  createdAt: string;
+  id: string;
+  tracks: Array<Record<string, unknown>>;
+  userId: string;
+};
+
+/** A rec row rich enough to freeze — the snapshot writer reads the whole thing (A2). */
+type RecRow = {
+  artists?: string[];
+  bpm?: number;
+  durationMs?: number;
+  imageUrl?: string;
+  key?: string;
+  logId?: string;
+  spotifyUri?: string;
+  spotifyUrl?: string;
+  title?: string;
+  trackId?: string;
+};
+
 const settings = new Map<string, string>();
 const rows = new Map<string, FrontierRow>();
 const userRows = new Map<string, UserRow>();
+const editions: CapturedEdition[] = [];
+const batches: Array<{ args: unknown[]; sql: string }[]> = [];
 const spotifyCalls: { init?: RequestInit; path: string }[] = [];
-let recs: { catalogue: { spotifyUri?: string }[]; findings: { spotifyUri?: string }[] } | Response =
-  { catalogue: [], findings: [] };
+let recs: { catalogue: RecRow[]; findings: RecRow[] } | Response = { catalogue: [], findings: [] };
 let failFetch = false;
 
 vi.mock("./settings", () => ({
@@ -72,10 +95,71 @@ vi.mock("./spotify", () => ({
 }));
 
 vi.mock("./db", () => ({
-  getDb: vi.fn(() => Promise.resolve({ execute: fakeExecute })),
+  getDb: vi.fn(() => Promise.resolve({ batch: fakeBatch, execute: fakeExecute })),
   typedRow: (r: unknown[]) => r[0],
   typedRows: (r: unknown[]) => r,
 }));
+
+// The real `frontier-editions` INSERT builder runs — only the DB is faked. So the batch
+// carries the actual parent/child statements A2 folds in, and `fakeBatch` captures them.
+vi.mock("./artists", () => ({ parseArtistsJson: (s: string) => JSON.parse(s) }));
+
+/**
+ * The fake `db.batch(_, "write")` A2's two real-write branches now use. It captures the
+ * frozen-edition inserts (parent + children) into `editions` and delegates the playlist
+ * write to `fakeExecute`, so a test can assert exactly one edition + its frozen rows land
+ * atomically. `unchanged`/`switch_off` never reach a batch, so they capture nothing.
+ */
+function fakeBatch(statements: { args: unknown[]; sql: string }[]): Promise<unknown[]> {
+  batches.push(statements);
+
+  for (const statement of statements) {
+    if (statement.sql.startsWith("insert into frontier_editions ")) {
+      editions.push({
+        createdAt: String(statement.args[3]),
+        id: String(statement.args[0]),
+        tracks: [],
+        userId: String(statement.args[1]),
+      });
+    } else if (statement.sql.startsWith("insert into frontier_edition_tracks")) {
+      const [
+        editionId,
+        position,
+        trackId,
+        logId,
+        title,
+        artistsText,
+        coverUrl,
+        spotifyUri,
+        spotifyUrl,
+        bpm,
+        key,
+        durationMs,
+        slot,
+      ] = statement.args;
+      editions
+        .find((edition) => edition.id === String(editionId))
+        ?.tracks.push({
+          artistsText,
+          bpm,
+          coverUrl,
+          durationMs,
+          key,
+          logId,
+          position,
+          slot,
+          spotifyUri,
+          spotifyUrl,
+          title,
+          trackId,
+        });
+    } else {
+      void fakeExecute(statement);
+    }
+  }
+
+  return Promise.resolve([]);
+}
 
 // A minimal in-memory stand-in for the exact statements frontier-playlist.ts runs.
 function fakeExecute({
@@ -222,6 +306,8 @@ beforeEach(() => {
   settings.clear();
   rows.clear();
   userRows.clear();
+  editions.length = 0;
+  batches.length = 0;
   spotifyCalls.length = 0;
   recs = { catalogue: [], findings: [] };
   failFetch = false;
@@ -365,6 +451,121 @@ describe("refresh (the mirror guard)", () => {
 
     expect(result).toMatchObject({ ok: false });
     expect(rows.get("u1")?.last_uri_hash).toBe("stale-hash");
+  });
+});
+
+describe("the edition snapshot (A2)", () => {
+  beforeEach(() => settings.set("frontier.minting", "true"));
+
+  const richFinding: RecRow = {
+    artists: ["Finding Artist", "Featured"],
+    bpm: 174,
+    durationMs: 270_000,
+    imageUrl: "https://covers.example/find1.jpg",
+    key: "A minor",
+    logId: "001.1.1A",
+    spotifyUri: uri("find1"),
+    spotifyUrl: "https://open.spotify.com/track/find1",
+    title: "Finding One",
+    trackId: "track-find1",
+  };
+  const richCatalogue: RecRow = {
+    artists: ["Catalogue Artist"],
+    spotifyUri: uri("cat1"),
+    spotifyUrl: "https://open.spotify.com/track/cat1",
+    title: "Catalogue One",
+    trackId: "track-cat1",
+  };
+
+  it("a MINTED sync writes exactly one edition + its frozen rows in ONE batch (de-duped PUT order, with readouts)", async () => {
+    const { mintOrRefreshFrontierPlaylist } = await import("./frontier-playlist");
+
+    // A catalogue rec sharing the finding's Spotify URI → the frozen list must de-dupe it,
+    // keeping the finding slot, exactly like the PUT.
+    const dupCatalogue: RecRow = { spotifyUri: uri("find1"), title: "Dup", trackId: "track-dup" };
+    recs = { catalogue: [richCatalogue, dupCatalogue], findings: [richFinding] };
+
+    const result = await mintOrRefreshFrontierPlaylist(makeUser({ id: "u1", username: "alice" }));
+
+    expect(result).toMatchObject({ status: "minted" });
+
+    // ONE batch — the playlist insert AND the edition inserts committed together.
+    expect(batches).toHaveLength(1);
+    const only = batches[0] ?? [];
+    expect(only.some((s) => s.sql.startsWith("insert into user_frontier_playlists"))).toBe(true);
+    expect(only.some((s) => s.sql.startsWith("insert into frontier_editions "))).toBe(true);
+
+    // Exactly one edition, frozen in the de-duped PUT order (find1, cat1 — the dup dropped).
+    expect(editions).toHaveLength(1);
+    const edition = editions[0];
+    expect(edition?.userId).toBe("u1");
+    expect(edition?.tracks.map((t) => t.trackId)).toEqual(["track-find1", "track-cat1"]);
+    expect(edition?.tracks.map((t) => t.position)).toEqual([1, 2]);
+
+    // The finding slot carries its coordinate + frozen readout chips + JSON artists.
+    const finding = edition?.tracks[0];
+    expect(finding?.slot).toBe("finding");
+    expect(finding?.logId).toBe("001.1.1A");
+    expect(finding?.spotifyUri).toBe(uri("find1"));
+    expect(finding?.spotifyUrl).toBe("https://open.spotify.com/track/find1");
+    expect(finding?.coverUrl).toBe("https://covers.example/find1.jpg");
+    expect(finding?.artistsText).toBe(JSON.stringify(["Finding Artist", "Featured"]));
+    expect(finding?.bpm).toBe(174);
+    expect(finding?.key).toBe("A minor");
+    expect(finding?.durationMs).toBe(270_000);
+
+    // The catalogue row stays coordinate-less; readouts it cannot back freeze as null.
+    const catalogue = edition?.tracks[1];
+    expect(catalogue?.slot).toBe("catalogue");
+    expect(catalogue?.logId).toBeNull();
+    expect(catalogue?.bpm).toBeNull();
+    expect(catalogue?.key).toBeNull();
+    expect(catalogue?.durationMs).toBeNull();
+  });
+
+  it("a REFRESHED sync (changed list) writes exactly one edition in ONE batch", async () => {
+    const { mintOrRefreshFrontierPlaylist } = await import("./frontier-playlist");
+
+    recs = { catalogue: [richCatalogue], findings: [richFinding] };
+    seedRow({ last_uri_hash: "stale-hash", playlist_id: "pl-existing", user_id: "u1" });
+
+    const result = await mintOrRefreshFrontierPlaylist(makeUser({ id: "u1", username: "bob" }));
+
+    expect(result).toMatchObject({ status: "refreshed" });
+    expect(batches).toHaveLength(1);
+    expect(editions).toHaveLength(1);
+    expect(editions[0]?.tracks.map((t) => t.trackId)).toEqual(["track-find1", "track-cat1"]);
+    // The batch folds the hash advance AND the edition together (atomic).
+    expect((batches[0] ?? []).some((s) => s.sql.includes("set last_synced_at = ?"))).toBe(true);
+  });
+
+  it("an UNCHANGED sync writes NO edition (and issues no batch at all)", async () => {
+    const { hashUrisForTest, mintOrRefreshFrontierPlaylist } = await importWithHash();
+
+    recs = { catalogue: [richCatalogue], findings: [richFinding] };
+    seedRow({
+      last_uri_hash: hashUrisForTest([uri("find1"), uri("cat1")]),
+      playlist_id: "pl-existing",
+      user_id: "u1",
+    });
+
+    const result = await mintOrRefreshFrontierPlaylist(makeUser({ id: "u1", username: "bob" }));
+
+    expect(result).toMatchObject({ status: "unchanged" });
+    expect(batches).toEqual([]);
+    expect(editions).toEqual([]);
+  });
+
+  it("uses listRecommendations with excludeRecent:true (the novelty switch)", async () => {
+    const { mintOrRefreshFrontierPlaylist } = await import("./frontier-playlist");
+    const { listRecommendations } = await import("./recommendations");
+
+    recs = { catalogue: [], findings: [richFinding] };
+    await mintOrRefreshFrontierPlaylist(makeUser({ id: "u1" }));
+
+    expect(listRecommendations).toHaveBeenCalledWith(expect.objectContaining({ id: "u1" }), {
+      excludeRecent: true,
+    });
   });
 });
 

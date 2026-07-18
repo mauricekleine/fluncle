@@ -47,8 +47,13 @@
 // operator re-auths with the `ugc-image-upload` scope: every PUT 403s the missing
 // scope, is caught, and stamps nothing (`{ uploaded: false, reason: "missing_scope" }`).
 
-import { createHash } from "node:crypto";
+import { type InValue } from "@libsql/client/web";
+import { createHash, randomUUID } from "node:crypto";
 import { getDb, typedRow, typedRows } from "./db";
+import {
+  type FrontierEditionTrackInput,
+  frontierEditionInsertStatements,
+} from "./frontier-editions";
 import { logEvent } from "./log";
 import { type PublicUser } from "./public-auth";
 import { listRecommendations } from "./recommendations";
@@ -153,11 +158,25 @@ async function countRecentMints(nowMs: number): Promise<number> {
   return Number(typedRow<{ mints: number }>(result.rows)?.mints ?? 0);
 }
 
-/** The desired URI list for a user: findings slots first, then catalogue, de-duped. */
-type DesiredUris = { ok: true; uris: string[] } | { ok: false; reason: string };
+/** One statement in a `db.batch(...)` — the playlist write folded with the edition inserts. */
+type SqlStatement = { args: InValue[]; sql: string };
+
+/**
+ * The desired URI list for a user: findings slots first, then catalogue, de-duped. Also
+ * carries the surviving rec rows as FROZEN edition-track inputs (A2) — the SAME de-duped
+ * order the PUT sends, so the edition snapshot is a byte-faithful record of what shipped.
+ */
+type DesiredUris =
+  | { ok: true; tracks: FrontierEditionTrackInput[]; uris: string[] }
+  | { ok: false; reason: string };
 
 async function desiredUrisFor(user: PublicUser): Promise<DesiredUris> {
-  const recs = await listRecommendations(user);
+  // `excludeRecent: true` is the FRONTIER NOVELTY switch — it drops every track from the
+  // user's last FRONTIER_NOVELTY_WINDOW editions so the weekly playlist rotates. This is
+  // the ONLY behaviour change A2 introduces, and it is reached only from the mint/refresh
+  // flow, itself gated by the default-deny `frontier.minting` kill switch — so novelty
+  // stays dark until the operator opens minting (the switch is untouched here).
+  const recs = await listRecommendations(user, { excludeRecent: true });
 
   // `listRecommendations` returns a `jsonError` Response on an unverified email (the
   // learning-cohort gate). A minted Frontier always belonged to a verified user, but
@@ -166,17 +185,102 @@ async function desiredUrisFor(user: PublicUser): Promise<DesiredUris> {
     return { ok: false, reason: "recommendations_unavailable" };
   }
 
-  const ordered = [
-    ...recs.findings.map((finding) => finding.spotifyUri),
-    ...recs.catalogue.map((track) => track.spotifyUri),
-  ].filter((uri): uri is string => Boolean(uri));
+  // Findings slots first, then catalogue — the E1 blend order the PUT sends. Each row is
+  // carried WHOLE (title/artists/cover/links + the frozen bpm/key/duration readouts), so
+  // the snapshot writer freezes exactly the metadata the playlist shipped. A row with no
+  // Spotify URI never reaches the playlist, so it is dropped here before the freeze too.
+  const ordered: Array<{ track: FrontierEditionTrackInput; uri: string }> = [];
+
+  for (const finding of recs.findings) {
+    if (!finding.spotifyUri) {
+      continue;
+    }
+
+    ordered.push({
+      track: {
+        artists: finding.artists,
+        bpm: finding.bpm,
+        durationMs: finding.durationMs,
+        imageUrl: finding.imageUrl,
+        key: finding.key,
+        logId: finding.logId,
+        position: 0,
+        slot: "finding",
+        spotifyUri: finding.spotifyUri,
+        spotifyUrl: finding.spotifyUrl,
+        title: finding.title,
+        trackId: finding.trackId,
+      },
+      uri: finding.spotifyUri,
+    });
+  }
+
+  for (const track of recs.catalogue) {
+    if (!track.spotifyUri) {
+      continue;
+    }
+
+    ordered.push({
+      track: {
+        artists: track.artists,
+        bpm: track.bpm,
+        durationMs: track.durationMs,
+        imageUrl: track.imageUrl,
+        key: track.key,
+        position: 0,
+        slot: "catalogue",
+        spotifyUri: track.spotifyUri,
+        spotifyUrl: track.spotifyUrl,
+        title: track.title,
+        trackId: track.trackId,
+      },
+      uri: track.spotifyUri,
+    });
+  }
 
   // De-dupe preserving order: a finding slot and a catalogue rec could resolve to the
-  // same Spotify track, and a playlist must not carry it twice.
+  // same Spotify track, and a playlist must not carry it twice. The FIRST occurrence wins
+  // (a shared track keeps its finding slot), and `position` is the 1-based rank in this
+  // surviving order — exactly what the PUT sends and what the snapshot freezes.
   const seen = new Set<string>();
-  const uris = ordered.filter((uri) => (seen.has(uri) ? false : (seen.add(uri), true)));
+  const uris: string[] = [];
+  const tracks: FrontierEditionTrackInput[] = [];
 
-  return { ok: true, uris };
+  for (const entry of ordered) {
+    if (seen.has(entry.uri)) {
+      continue;
+    }
+
+    seen.add(entry.uri);
+    uris.push(entry.uri);
+    tracks.push({ ...entry.track, position: tracks.length + 1 });
+  }
+
+  return { ok: true, tracks, uris };
+}
+
+/**
+ * Run the ONE atomic batch that stamps the playlist row AND writes the frozen edition
+ * snapshot together — `db.batch(_, "write")` is a real BEGIN…COMMIT that rolls back
+ * wholesale on any failure (verified via `setMixtapeMembers`, `mixtapes.ts`), so the
+ * edition and the `last_uri_hash` update are one unit: hash-changed ⇔ edition-written,
+ * exactly once per change. A `UNIQUE(user_id, number)` collision — near-impossible, since
+ * the number derives inline via `coalesce(max(number),0)+1` inside this same transaction —
+ * is logged DISTINCTLY so the sweep's tally never mistakes it for a Spotify fault; the
+ * error still propagates to the caller's best-effort `{ ok: false }` wrapper.
+ */
+async function writeFrontierEdition(statements: SqlStatement[], userId: string): Promise<void> {
+  try {
+    await (await getDb()).batch(statements, "write");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+
+    if (/unique constraint failed:\s*frontier_editions/i.test(message)) {
+      logEvent("warn", "frontier.edition-number-collision", { error, userId });
+    }
+
+    throw error;
+  }
 }
 
 /** The sha256 of a URI list — the per-row mirror change-detector. */
@@ -286,14 +390,27 @@ export async function mintOrRefreshFrontierPlaylist(
 
       const nowIso = new Date(nowMs).toISOString();
 
-      await (
-        await getDb()
-      ).execute({
-        args: [user.id, created.id, nowIso, nowIso, hash],
-        sql: `insert into user_frontier_playlists
-            (user_id, playlist_id, created_at, last_synced_at, last_uri_hash, cover_uploaded_at)
-          values (?, ?, ?, ?, ?, null)`,
-      });
+      // ONE atomic write: the new playlist row AND its first frozen edition snapshot,
+      // sequenced AFTER the Spotify PUT landed. A split write (a separate `.execute` for
+      // the edition) could stamp the playlist without the edition on a crash, then
+      // double-write the snapshot next refresh — the batch makes it exactly-once.
+      await writeFrontierEdition(
+        [
+          {
+            args: [user.id, created.id, nowIso, nowIso, hash],
+            sql: `insert into user_frontier_playlists
+                (user_id, playlist_id, created_at, last_synced_at, last_uri_hash, cover_uploaded_at)
+              values (?, ?, ?, ?, ?, null)`,
+          },
+          ...frontierEditionInsertStatements({
+            createdAt: nowIso,
+            editionId: randomUUID(),
+            tracks: desired.tracks,
+            userId: user.id,
+          }),
+        ],
+        user.id,
+      );
 
       logEvent("info", "frontier.playlist-minted", { playlistId: created.id, userId: user.id });
 
@@ -328,13 +445,27 @@ export async function mintOrRefreshFrontierPlaylist(
       }),
     );
 
-    // Stored only AFTER the PUT landed, so a failed write is retried next refresh.
-    await (
-      await getDb()
-    ).execute({
-      args: [new Date(nowMs).toISOString(), hash, user.id],
-      sql: `update user_frontier_playlists set last_synced_at = ?, last_uri_hash = ? where user_id = ?`,
-    });
+    // Stored only AFTER the PUT landed, so a failed write is retried next refresh. The
+    // `last_uri_hash` advance AND the frozen edition commit as ONE atomic batch — a split
+    // write would risk advancing the hash without the edition (or vice versa), breaking
+    // the hash-changed ⇔ edition-written invariant.
+    const nowIso = new Date(nowMs).toISOString();
+
+    await writeFrontierEdition(
+      [
+        {
+          args: [nowIso, hash, user.id],
+          sql: `update user_frontier_playlists set last_synced_at = ?, last_uri_hash = ? where user_id = ?`,
+        },
+        ...frontierEditionInsertStatements({
+          createdAt: nowIso,
+          editionId: randomUUID(),
+          tracks: desired.tracks,
+          userId: user.id,
+        }),
+      ],
+      user.id,
+    );
 
     return {
       ok: true,
