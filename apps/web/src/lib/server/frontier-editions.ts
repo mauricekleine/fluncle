@@ -29,6 +29,14 @@ export type FrontierEditionSummary = {
   number: number;
   /** The edition's `created_at` — when this refresh froze (the date label derives from it). */
   refreshedAt: string;
+  /**
+   * Seeds whose track had no embedding when this edition froze — named honestly so the
+   * shelf can say "these two picks aren't steering yet". `undefined` on a pre-migration
+   * edition that cannot back it (the Readout Rule's honest absence).
+   */
+  seedsSkipped?: string[];
+  /** How many seed vectors actually steered this edition. `undefined` pre-migration. */
+  seedsUsed?: number;
   /** How many tracks the frozen playlist carried. */
   trackCount: number;
 };
@@ -43,6 +51,8 @@ export type FrontierEditionTrack = {
   key?: string;
   /** Present only for a certified-finding slot; a catalogue row stays coordinate-less. */
   logId?: string;
+  /** The frozen max-similarity the engine gave this row. `undefined` pre-migration. */
+  similarity?: number;
   slot: "catalogue" | "finding";
   spotifyUrl?: string;
   title: string;
@@ -59,6 +69,8 @@ export type FrontierEditionTrackInput = {
   logId?: string;
   /** 1-based, the de-duped PUT order. */
   position: number;
+  /** The engine's honest max-similarity for the row; omitted freezes as NULL. */
+  similarity?: number;
   slot: "catalogue" | "finding";
   spotifyUri?: string;
   spotifyUrl?: string;
@@ -69,6 +81,8 @@ export type FrontierEditionTrackInput = {
 type SummaryRow = {
   created_at: string;
   number: number;
+  seeds_skipped_json: null | string;
+  seeds_used: null | number;
   track_count: number;
 };
 
@@ -76,6 +90,8 @@ type EditionRow = {
   created_at: string;
   id: string;
   number: number;
+  seeds_skipped_json: null | string;
+  seeds_used: null | number;
 };
 
 type TrackRow = {
@@ -85,11 +101,31 @@ type TrackRow = {
   duration_ms: null | number;
   key: null | string;
   log_id: null | string;
+  similarity: null | number;
   slot: "catalogue" | "finding";
   spotify_url: null | string;
   title_text: string;
   track_id: string;
 };
+
+/**
+ * Parse a frozen `seeds_skipped_json` cell back to a string array. A pre-migration edition
+ * stores NULL (→ undefined, the honest absence); a corrupt cell degrades to undefined
+ * rather than throwing on a read.
+ */
+function parseSeedsSkipped(value: null | string): string[] | undefined {
+  if (value === null) {
+    return undefined;
+  }
+
+  try {
+    const parsed = JSON.parse(value) as unknown;
+
+    return Array.isArray(parsed) ? parsed.map((entry) => String(entry)) : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * A user's frontier editions, NEWEST FIRST (`number desc`) — the dropdown's list and
@@ -101,7 +137,7 @@ export async function getFrontierEditions(userId: string): Promise<FrontierEditi
     await getDb()
   ).execute({
     args: [userId],
-    sql: `select fe.number, fe.created_at,
+    sql: `select fe.number, fe.created_at, fe.seeds_used, fe.seeds_skipped_json,
         (select count(*) from frontier_edition_tracks fet where fet.edition_id = fe.id) as track_count
       from frontier_editions fe
       where fe.user_id = ?
@@ -111,6 +147,8 @@ export async function getFrontierEditions(userId: string): Promise<FrontierEditi
   return typedRows<SummaryRow>(result.rows).map((row) => ({
     number: row.number,
     refreshedAt: row.created_at,
+    seedsSkipped: parseSeedsSkipped(row.seeds_skipped_json),
+    seedsUsed: row.seeds_used ?? undefined,
     trackCount: Number(row.track_count),
   }));
 }
@@ -127,7 +165,7 @@ export async function getFrontierEdition(
   const db = await getDb();
   const editionResult = await db.execute({
     args: [userId, number],
-    sql: `select id, number, created_at
+    sql: `select id, number, created_at, seeds_used, seeds_skipped_json
       from frontier_editions
       where user_id = ? and number = ?
       limit 1`,
@@ -141,7 +179,7 @@ export async function getFrontierEdition(
   const trackResult = await db.execute({
     args: [edition.id],
     sql: `select track_id, log_id, title_text, artists_text, cover_url, spotify_url,
-        bpm, key, duration_ms, slot
+        bpm, key, duration_ms, similarity, slot
       from frontier_edition_tracks
       where edition_id = ?
       order by position asc`,
@@ -154,6 +192,7 @@ export async function getFrontierEdition(
       imageUrl: row.cover_url ?? undefined,
       key: row.key ?? undefined,
       logId: row.log_id ?? undefined,
+      similarity: row.similarity ?? undefined,
       slot: row.slot,
       spotifyUrl: row.spotify_url ?? undefined,
       title: row.title_text,
@@ -165,6 +204,8 @@ export async function getFrontierEdition(
     summary: {
       number: edition.number,
       refreshedAt: edition.created_at,
+      seedsSkipped: parseSeedsSkipped(edition.seeds_skipped_json),
+      seedsUsed: edition.seeds_used ?? undefined,
       trackCount: tracks.length,
     },
     tracks,
@@ -185,19 +226,33 @@ export async function getFrontierEdition(
  *
  * @param editionId a caller-generated `randomUUID()`, used as the parent id AND the
  *   children's `edition_id` (there is no monotonic id to read back mid-batch).
+ *
+ * `seedsUsed`/`seedsSkipped` FREEZE the engine's seed accounting onto the parent (both
+ * optional — a novelty-only test fixture that does not care about the honesty strings
+ * omits them and they store NULL, exactly like a pre-migration row). `similarity` freezes
+ * per-row; omitted → NULL.
  */
 export function frontierEditionInsertStatements(params: {
   createdAt: string;
   editionId: string;
+  seedsSkipped?: string[];
+  seedsUsed?: number;
   tracks: FrontierEditionTrackInput[];
   userId: string;
 }): SqlStatement[] {
-  const { createdAt, editionId, tracks, userId } = params;
+  const { createdAt, editionId, seedsSkipped, seedsUsed, tracks, userId } = params;
 
   const parent: SqlStatement = {
-    args: [editionId, userId, userId, createdAt],
-    sql: `insert into frontier_editions (id, user_id, number, created_at)
-      values (?, ?, (select coalesce(max(number), 0) + 1 from frontier_editions where user_id = ?), ?)`,
+    args: [
+      editionId,
+      userId,
+      userId,
+      createdAt,
+      seedsUsed ?? null,
+      seedsSkipped ? JSON.stringify(seedsSkipped) : null,
+    ],
+    sql: `insert into frontier_editions (id, user_id, number, created_at, seeds_used, seeds_skipped_json)
+      values (?, ?, (select coalesce(max(number), 0) + 1 from frontier_editions where user_id = ?), ?, ?, ?)`,
   };
 
   const children: SqlStatement[] = tracks.map((track) => ({
@@ -214,12 +269,13 @@ export function frontierEditionInsertStatements(params: {
       track.bpm ?? null,
       track.key ?? null,
       track.durationMs ?? null,
+      track.similarity ?? null,
       track.slot,
     ],
     sql: `insert into frontier_edition_tracks
         (edition_id, position, track_id, log_id, title_text, artists_text, cover_url,
-         spotify_uri, spotify_url, bpm, key, duration_ms, slot)
-      values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         spotify_uri, spotify_url, bpm, key, duration_ms, similarity, slot)
+      values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   }));
 
   return [parent, ...children];

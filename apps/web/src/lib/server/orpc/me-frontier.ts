@@ -24,8 +24,10 @@ import { apiFault, type Implementer } from "./_shared";
  *     the kill-switch state). Session read.
  *   - `mint_private_frontier_playlist` — mint or refresh. CSRF + the
  *     `account.frontier.mint`/4-per-hour rate limit, and a verified-email gate in the
- *     handler (a mint creates a public playlist; an unverified account 403s). A closed
- *     kill switch is a clean `{ ok: true, status: "switch_off" }`, never a fault.
+ *     handler (a mint creates a public playlist; an unverified account 403s). The edition
+ *     (the internal cache) is always written; a closed kill switch is a clean
+ *     `{ ok: true, status: "edition_only" }` (the edition was born, the Spotify half
+ *     skipped), never a fault.
  */
 export function meFrontierHandlers(os: Implementer) {
   const getFrontier = os.get_private_frontier_playlist

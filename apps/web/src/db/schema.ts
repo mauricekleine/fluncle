@@ -1359,12 +1359,20 @@ export const userFrontierPlaylists = sqliteTable("user_frontier_playlists", {
 // `number` is per-user monotonic (`coalesce(max(number),0)+1`), and is the ONE name
 // used everywhere (column, DTO, path param). No status/uri_hash/playlist_id/iso_*
 // columns: nothing reads them — the date label derives its civil date from `created_at`.
+//
+// `seeds_used`/`seeds_skipped_json` FREEZE the engine's seed accounting at write time so
+// the shelf's honesty strings ("these two picks aren't steering yet") survive the freeze
+// without a re-run of the engine on a read (the shelf reads the edition, never the scan).
+// Both are NULLABLE: a pre-migration edition cannot back them, and the surface degrades to
+// omitting what it cannot honestly say (the Readout Rule's honest absence).
 export const frontierEditions = sqliteTable(
   "frontier_editions",
   {
     createdAt: text("created_at").notNull(),
     id: text("id").primaryKey(),
     number: integer("number").notNull(),
+    seedsSkippedJson: text("seeds_skipped_json"),
+    seedsUsed: integer("seeds_used"),
     userId: text("user_id").notNull(),
   },
   (table) => [
@@ -1382,7 +1390,9 @@ export const frontierEditions = sqliteTable(
 // `log_id` is set only for certified-finding slots (the unnamed catalogue tier stays
 // unnamed). `title_text`/`artists_text` mirror `mixtape_tracks` naming; the readouts
 // (`bpm`/`key`/`duration_ms`) are frozen so the dialog renders the chips without a JOIN.
-// `slot` drives the UI register split (finding vs catalogue).
+// `slot` drives the UI register split (finding vs catalogue). `similarity` FREEZES the
+// engine's honest max-similarity for the row (the shelf displays the number and the
+// readout chips) — NULLABLE, so a pre-migration edition degrades to omitting it.
 export const frontierEditionTracks = sqliteTable(
   "frontier_edition_tracks",
   {
@@ -1394,6 +1404,7 @@ export const frontierEditionTracks = sqliteTable(
     key: text("key"),
     logId: text("log_id"),
     position: integer("position").notNull(),
+    similarity: real("similarity"),
     slot: text("slot", { enum: ["finding", "catalogue"] }).notNull(),
     spotifyUri: text("spotify_uri"),
     spotifyUrl: text("spotify_url"),
