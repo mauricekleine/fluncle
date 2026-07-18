@@ -27,6 +27,11 @@ const getPublicArtistSocialsMock = vi.hoisted(() => vi.fn());
 const getLabelBySlugMock = vi.hoisted(() => vi.fn());
 const getConfirmedAliasNamesMock = vi.hoisted(() => vi.fn());
 const getArtistNeighboursMock = vi.hoisted(() => vi.fn());
+// The PR-5 catalogue browse reads (list_album/artist/label_catalogue).
+const getAlbumBySlugMock = vi.hoisted(() => vi.fn());
+const listCatalogueTracksByAlbumMock = vi.hoisted(() => vi.fn());
+const listArtistCatalogueMock = vi.hoisted(() => vi.fn());
+const listLabelCatalogueMock = vi.hoisted(() => vi.fn());
 
 // A faithful stand-in for the deterministic slug helpers (their DB-touching sibling modules stay
 // mocked): "Netsky" → "netsky", "Hospital Records" → "hospital-records".
@@ -51,7 +56,18 @@ vi.mock("./tracks", async (importOriginal) => ({
   getMixChainDepth: getMixChainDepthMock,
   getMixableTracks: getMixableTracksMock,
   getTracksByLogIds: getTracksByLogIdsMock,
+  listCatalogueTracksByAlbum: listCatalogueTracksByAlbumMock,
   listTracks: listTracksMock,
+}));
+
+vi.mock("./albums", () => ({
+  albumSlug: (name: string) => toSlug(name) || undefined,
+  getAlbumBySlug: getAlbumBySlugMock,
+}));
+vi.mock("./catalogue-groups", () => ({
+  CATALOGUE_SORT_DEFAULT: "name",
+  listArtistCatalogue: listArtistCatalogueMock,
+  listLabelCatalogue: listLabelCatalogueMock,
 }));
 
 vi.mock("./search", () => ({ searchArchive: searchArchiveMock }));
@@ -570,6 +586,26 @@ describe("MCP — the archive-read tools PR-2 lifted out of ChatDnB", () => {
     getConfirmedAliasNamesMock.mockResolvedValue([]);
     getArtistNeighboursMock.mockReset();
     getArtistNeighboursMock.mockResolvedValue([]);
+    getAlbumBySlugMock.mockReset();
+    getAlbumBySlugMock.mockResolvedValue(undefined);
+    listCatalogueTracksByAlbumMock.mockReset();
+    listCatalogueTracksByAlbumMock.mockResolvedValue({ total: 0, tracks: [] });
+    listArtistCatalogueMock.mockReset();
+    listArtistCatalogueMock.mockResolvedValue({
+      groups: [],
+      page: 1,
+      pageCount: 1,
+      totalGroups: 0,
+      totalTracks: 0,
+    });
+    listLabelCatalogueMock.mockReset();
+    listLabelCatalogueMock.mockResolvedValue({
+      groups: [],
+      page: 1,
+      pageCount: 1,
+      totalGroups: 0,
+      totalTracks: 0,
+    });
     resolveTargetMock.mockReset();
   });
 
@@ -583,12 +619,56 @@ describe("MCP — the archive-read tools PR-2 lifted out of ChatDnB", () => {
       "get_label",
       "build_set",
       "get_similar_artists",
+      // The three catalogue browse reads (PR-5).
+      "list_album_catalogue",
+      "list_artist_catalogue",
+      "list_label_catalogue",
       // The two writes moved onto the shared registry — still advertised on the MCP.
       "submit_track",
       "subscribe_newsletter",
     ]) {
       expect(names, `${name} advertised`).toContain(name);
     }
+  });
+
+  it("list_album_catalogue world-serves the flat catalogue list, each row certified-tagged", async () => {
+    getAlbumBySlugMock.mockResolvedValue({ id: "alb-1", name: "Colours", slug: "colours" });
+    listCatalogueTracksByAlbumMock.mockResolvedValue({
+      total: 1,
+      tracks: [
+        {
+          artists: ["Netsky"],
+          spotifyUrl: "https://open.spotify.com/track/a",
+          title: "Iron Heart",
+          trackId: "a",
+        },
+      ],
+    });
+
+    const { data, isError } = await callTool("list_album_catalogue", { name: "Colours" });
+
+    expect(isError).toBe(false);
+    expect(getAlbumBySlugMock).toHaveBeenCalledWith("colours");
+    // The MCP world-serves a FLAT catalogue list (never a findings bucket); every row is tagged
+    // certified:false and carries no coordinate — an agent reads them as records, not findings.
+    const catalogue = data.catalogue as Array<Record<string, unknown>>;
+    expect(catalogue).toHaveLength(1);
+    expect(catalogue[0]).toMatchObject({
+      certified: false,
+      release: "Colours",
+      title: "Iron Heart",
+    });
+    expect(catalogue[0]?.coordinate).toBeUndefined();
+  });
+
+  it("list_artist_catalogue returns an empty catalogue for an unlogged name (never an error)", async () => {
+    getArtistBySlugMock.mockResolvedValue(undefined);
+
+    const { data, isError } = await callTool("list_artist_catalogue", { name: "Nobody" });
+
+    expect(isError).toBe(false);
+    expect(data.catalogue).toEqual([]);
+    expect(listArtistCatalogueMock).not.toHaveBeenCalled();
   });
 
   it("search_archive RATE-LIMITS (shared budget) and world-serves BOTH registers, certified-tagged", async () => {
