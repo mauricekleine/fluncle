@@ -12,7 +12,7 @@
 import { type ChartGeometry, chartGeometry as computeChartGeometry } from "@/lib/chart-geometry";
 import {
   type CatalogueSnapshotRow,
-  type FunnelQueues,
+  type FunnelLiveQueues,
   type FunnelStages,
 } from "@/lib/server/funnel";
 
@@ -35,12 +35,21 @@ export type StageLink =
   | { lens: "capture" | "ear"; to: "/admin/catalogue" }
   | { to: "/admin/findings" };
 
+/** The anchor stage's queued-behind, split into the actionable head and the metadata tail. */
+export type StageQueueSplit = { awaitingAudio: number; ready: number };
+
 type StageDef = {
   key: StageKey;
   label: string;
   link: StageLink;
   /** The queue depth waiting behind this stage, from the live queues (undefined = no queue). */
-  queued?: (queues: FunnelQueues) => number;
+  queued?: (queues: FunnelLiveQueues) => number;
+  /**
+   * A two-population split of the queued-behind, for a stage where the single figure hides two
+   * things that mean different things (the anchor worklist: embedded-and-ready vs awaiting audio).
+   * When present the page renders this in place of the plain `queued` figure.
+   */
+  queuedSplit?: (queues: FunnelLiveQueues) => StageQueueSplit;
 };
 
 // The flow order and each stage's operating surface. The crawled rows and every mid-flight
@@ -53,7 +62,10 @@ const STAGE_DEFS: StageDef[] = [
     key: "anchored",
     label: "Anchored",
     link: { lens: "ear", to: "/admin/catalogue" },
-    queued: (q) => q.anchorQueueIsrc + q.anchorQueueNoIsrc,
+    // The anchor queue splits into the embedded head the sweep works now (ready) and the crawler
+    // metadata still awaiting audio — two populations that mean different things, so the page shows
+    // both rather than one folded figure. The split sums to `anchorQueueIsrc + anchorQueueNoIsrc`.
+    queuedSplit: (q) => ({ awaitingAudio: q.anchorQueueAwaitingAudio, ready: q.anchorQueueReady }),
   },
   {
     key: "captured",
@@ -84,6 +96,8 @@ export type FunnelStageBar = {
   link: StageLink;
   /** The queue waiting behind this stage, or undefined when the stage has no drain queue. */
   queued: number | undefined;
+  /** The two-population split of the queued-behind (anchor only), or undefined for every other stage. */
+  queuedSplit: StageQueueSplit | undefined;
   total: number;
   /** 0–100, proportional to the widest stage. 0 when every stage is empty (no divide-by-zero). */
   widthPct: number;
@@ -95,7 +109,7 @@ export type FunnelStageBar = {
  * the slivers they are). When every stage is empty the widest total is 0, so every width is 0 —
  * the guard that keeps an empty pipeline from dividing by zero.
  */
-export function stageBars(stages: FunnelStages, queues: FunnelQueues): FunnelStageBar[] {
+export function stageBars(stages: FunnelStages, queues: FunnelLiveQueues): FunnelStageBar[] {
   const maxTotal = STAGE_DEFS.reduce((max, def) => Math.max(max, stages[def.key]), 0);
 
   return STAGE_DEFS.map((def) => {
@@ -106,6 +120,7 @@ export function stageBars(stages: FunnelStages, queues: FunnelQueues): FunnelSta
       label: def.label,
       link: def.link,
       queued: def.queued ? def.queued(queues) : undefined,
+      queuedSplit: def.queuedSplit ? def.queuedSplit(queues) : undefined,
       total,
       widthPct: maxTotal === 0 ? 0 : (total / maxTotal) * 100,
     };

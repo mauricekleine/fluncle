@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   type CatalogueSnapshotRow,
-  type FunnelQueues,
+  type FunnelLiveQueues,
   type FunnelStages,
 } from "@/lib/server/funnel";
 import {
@@ -25,11 +25,15 @@ const STAGES: FunnelStages = {
   recEligible: 120,
 };
 
-const QUEUES: FunnelQueues = {
+// The ready/awaiting split (35 + 15) sums to the ISRC split (40 + 10) — the same anchor worklist,
+// partitioned two ways, so both partitions total the whole queue.
+const QUEUES: FunnelLiveQueues = {
   analyzeQueue: 30,
   anchorBackoff: 7,
+  anchorQueueAwaitingAudio: 15,
   anchorQueueIsrc: 40,
   anchorQueueNoIsrc: 10,
+  anchorQueueReady: 35,
   captureQueue: 90,
   embedQueue: 20,
 };
@@ -93,8 +97,6 @@ describe("stageBars", () => {
     const bars = stageBars(STAGES, QUEUES);
     const byKey = Object.fromEntries(bars.map((bar) => [bar.key, bar]));
 
-    // Anchor's queued-behind folds both verification paths (ISRC + no-ISRC).
-    expect(byKey.anchored?.queued).toBe(50);
     expect(byKey.captured?.queued).toBe(90);
     expect(byKey.analyzed?.queued).toBe(30);
     expect(byKey.embedded?.queued).toBe(20);
@@ -102,6 +104,23 @@ describe("stageBars", () => {
     expect(byKey.crawled?.queued).toBeUndefined();
     expect(byKey.recEligible?.queued).toBeUndefined();
     expect(byKey.certified?.queued).toBeUndefined();
+    // Anchor carries no folded `queued` — it shows the split instead (below).
+    expect(byKey.anchored?.queued).toBeUndefined();
+  });
+
+  it("splits the anchor stage's queued-behind into ready vs awaiting audio, summing to the whole queue", () => {
+    const bars = stageBars(STAGES, QUEUES);
+    const byKey = Object.fromEntries(bars.map((bar) => [bar.key, bar]));
+
+    // The anchor row is the only one carrying a split; every other stage leaves it undefined.
+    expect(byKey.anchored?.queuedSplit).toEqual({ awaitingAudio: 15, ready: 35 });
+    expect(byKey.captured?.queuedSplit).toBeUndefined();
+    expect(byKey.crawled?.queuedSplit).toBeUndefined();
+    // The split is a partition of the same anchor worklist as the ISRC split, so it totals the same.
+    const split = byKey.anchored?.queuedSplit;
+    expect((split?.ready ?? 0) + (split?.awaitingAudio ?? 0)).toBe(
+      QUEUES.anchorQueueIsrc + QUEUES.anchorQueueNoIsrc,
+    );
   });
 
   it("guards divide-by-zero: an all-empty pipeline is every width 0, never NaN", () => {

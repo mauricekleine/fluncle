@@ -219,6 +219,35 @@ describe("computeCatalogueSnapshotCounts queues (real SQL)", () => {
     expect(counts.captureQueue).toBe(1);
   });
 
+  it("splits the anchor queue by embedding (ready vs awaiting audio), summing to the whole queue", async () => {
+    const { getFunnel } = await import("./funnel");
+    const { countTrackWork } = await import("./track-work");
+
+    // Two un-anchored, otherwise-anchorable rows on opposite sides of the embedded line, plus one
+    // already-anchored row that is in NEITHER (it is off the anchor worklist entirely).
+    await seedCatalogueTrack(db, { trackId: "anc-ready" });
+    await patchTrack("anc-ready", "spotify_uri = null");
+    await embed("anc-ready", axis(0)); // embedded → the sweep's actionable head
+
+    await seedCatalogueTrack(db, { trackId: "anc-awaiting" });
+    await patchTrack("anc-awaiting", "spotify_uri = null"); // no vector → still awaiting audio
+
+    await seedCatalogueTrack(db, { trackId: "already-anchored" }); // keeps its spotify_uri
+
+    const { live } = await getFunnel();
+
+    // The fixtures land one on each side of the embedded line.
+    expect(live.queues.anchorQueueReady).toBe(1);
+    expect(live.queues.anchorQueueAwaitingAudio).toBe(1);
+
+    // THE PIN: the embedding split is a PARTITION of the exact same anchor worklist as the ISRC
+    // split — both ride `kindClause("anchor")` — so it sums to the whole queue, which is itself the
+    // sweep's own count. The two can never disagree.
+    const whole = live.queues.anchorQueueIsrc + live.queues.anchorQueueNoIsrc;
+    expect(live.queues.anchorQueueReady + live.queues.anchorQueueAwaitingAudio).toBe(whole);
+    expect(whole).toBe(await countTrackWork({ kind: "anchor", scope: "catalogue" }));
+  });
+
   it("benches a row attempted inside the re-ask window (anchorBackoff), and keeps a lapsed one in the queue", async () => {
     const { computeCatalogueSnapshotCounts } = await import("./funnel");
     const now = Date.now();
