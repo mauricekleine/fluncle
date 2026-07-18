@@ -25,27 +25,38 @@ import { logEvent } from "./log";
 // Satori (via workers-og) rasterises to PNG only; Spotify's playlist-image endpoint wants a
 // Base64 JPEG ≤256KB. There is no in-Worker JPEG encoder in the dependency set, and adding one
 // (a WASM encoder + a PNG decoder to feed it) would be a heavier, less-proven path than the one
-// the repo already runs for the cover ladder: a Cloudflare Images transform. That transform only
-// reads a SAME-ZONE source URL, so the composited PNG is staged briefly on the world-served R2
+// the repo already runs for the cover ladder: a Cloudflare Images transform. The transform
+// reads a source URL, so the composited PNG is staged briefly on the world-served R2
 // (env.VIDEOS, behind found.fluncle.com) under a unique key, transformed to a 640² JPEG in one
-// `/cdn-cgi/image/format=jpeg` subrequest (the media.ts seam), then the staging object is
-// evicted. Everything is BEST-EFFORT: a render/transform/upload miss NEVER fails the mint and
-// leaves the row's `cover_uploaded_at` NULL, so the backfill op retries it for free.
+// `cf.image`-optioned subrequest, then the staging object is evicted. Everything is
+// BEST-EFFORT: a render/transform/upload miss NEVER fails the mint and leaves the row's
+// `cover_uploaded_at` NULL, so the backfill op retries it for free.
 //
-// CAVEAT (prod-only): the transform edge-fetches the freshly-PUT R2 object. R2 custom-domain
-// reads are read-after-write consistent and the key is unique (no negatively-cached 404), so a
-// cold transform hits the object — but this leg cannot be proven under vitest (no Cloudflare
-// Images), only the orchestration around injected seams is (frontier-cover.test.ts). An
-// alternative all-in-Worker path (resvg raw pixels → a WASM JPEG encoder) is noted here as the
+// THE `cf.image` FORM IS LOAD-BEARING. The first ship used a `/cdn-cgi/image/…/<source>` URL —
+// the shape the cover ladder serves to BROWSERS — and every in-Worker call failed
+// `transform_404` while the identical URL transformed fine from outside (measured in prod,
+// 2026-07-18). A Worker subrequest to its own zone bypasses the edge front-door where the
+// `/cdn-cgi/image/` path is intercepted, so the literal path reached R2 as a key and 404'd.
+// `fetch(source, { cf: { image: {…} } })` is the documented in-Worker invocation; same knobs.
+// This leg still cannot be proven under vitest (no Cloudflare Images); the orchestration around
+// injected seams is (frontier-cover.test.ts), and every miss now LOGS its concrete reason. An
+// alternative all-in-Worker path (resvg raw pixels → a WASM JPEG encoder) remains the noted
 // fallback if the transform proves flaky in prod.
 
 /** The composited-PNG rasteriser seam — injected in tests so `workers-og` never loads there. */
 export type FrontierRasterize = (html: string) => Promise<Uint8Array>;
 
-/** The Cloudflare-Images transform fetch seam — narrowed to the single URL we call, so a test
+/** The Cloudflare-Images transform fetch seam — narrowed to the single call we make, so a test
  * fake need not carry the full `typeof fetch` shape (`preconnect` et al.). The global `fetch`
- * satisfies it. */
-export type TransformFetch = (url: string) => Promise<Response>;
+ * satisfies it. The transform rides the `cf.image` REQUEST OPTIONS, not a `/cdn-cgi/image/…`
+ * URL: a Worker subrequest to its own zone bypasses the edge front-door where that URL path is
+ * intercepted, so the literal path reaches R2 and 404s (measured in prod, 2026-07-18 —
+ * `transform_404` on every mint-fire while the same URL transformed fine from outside). The
+ * `cf`-options form is the documented in-Worker invocation and takes the same knobs. */
+export type TransformFetch = (
+  url: string,
+  init: { cf: { image: RequestInitCfPropertiesImage } },
+) => Promise<Response>;
 
 /**
  * The minimal R2 surface the cover staging uses — put + delete. A structural subset (rather than
@@ -111,12 +122,24 @@ export async function renderFrontierCoverJpeg(opts: {
       httpMetadata: { cacheControl: "public, max-age=60", contentType: "image/png" },
     });
 
-    // One transform: downscale-to-640 (a no-op here — already 640²) + JPEG at quality 80. The
-    // `?v` cache-bust rides the source, the cover-ladder seam (media.ts).
+    // One transform: downscale-to-640 (a no-op here — already 640²) + JPEG at quality 80, via
+    // the `cf.image` request options — the in-Worker invocation (see the seam's header for why
+    // a `/cdn-cgi/image/…` URL cannot work from a Worker subrequest). The `?v` cache-bust rides
+    // the source so the edge never serves a stale rendition of a reused… key path (the key is
+    // already unique; the bust is belt-and-braces).
     const source = `${r2PublicUrl(FOUND_BASE, stagingKey)}?v=${Date.now()}`;
-    const transformUrl = `${FOUND_BASE}/cdn-cgi/image/format=jpeg,quality=80,fit=cover,width=${FRONTIER_COVER_PX},height=${FRONTIER_COVER_PX}/${source}`;
 
-    const response = await doFetch(transformUrl);
+    const response = await doFetch(source, {
+      cf: {
+        image: {
+          fit: "cover",
+          format: "jpeg",
+          height: FRONTIER_COVER_PX,
+          quality: 80,
+          width: FRONTIER_COVER_PX,
+        },
+      },
+    });
 
     if (!response.ok) {
       // Log the reason here as well as returning it — the drain's counts collapse every miss

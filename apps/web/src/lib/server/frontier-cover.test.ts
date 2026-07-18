@@ -35,7 +35,10 @@ describe("renderFrontierCoverJpeg", () => {
   it("stages the PNG, transforms to JPEG, base64-encodes it, and evicts the staging object", async () => {
     const bucket = fakeBucket();
     const jpeg = new Uint8Array([9, 8, 7, 6]);
-    const transformFetch = vi.fn(async (_url: string) => new Response(jpeg, { status: 200 }));
+    const transformFetch = vi.fn(
+      async (_url: string, _init: { cf: { image: RequestInitCfPropertiesImage } }) =>
+        new Response(jpeg, { status: 200 }),
+    );
 
     const result = await renderFrontierCoverJpeg({
       bucket,
@@ -50,10 +53,14 @@ describe("renderFrontierCoverJpeg", () => {
     const stagedKey = bucket.put.mock.calls[0]?.[0] as string;
     expect(stagedKey).toMatch(/^frontier-covers\/staging\/.+\.png$/);
     expect(bucket.delete).toHaveBeenCalledWith(stagedKey);
-    // Converted via the found.fluncle.com Cloudflare-Images JPEG transform (the cover-ladder seam).
-    const transformUrl = transformFetch.mock.calls[0]?.[0] as string;
-    expect(transformUrl).toContain("/cdn-cgi/image/format=jpeg,quality=80");
-    expect(transformUrl).toContain(stagedKey);
+    // Converted via the in-Worker `cf.image` transform of the staged found.fluncle.com source —
+    // NEVER a `/cdn-cgi/image/…` URL (a Worker subrequest to its own zone bypasses the edge
+    // interception of that path and 404s against R2; see the module header).
+    const sourceUrl = transformFetch.mock.calls[0]?.[0] as string;
+    const init = transformFetch.mock.calls[0]?.[1];
+    expect(sourceUrl).toContain(stagedKey);
+    expect(sourceUrl).not.toContain("/cdn-cgi/");
+    expect(init?.cf.image).toMatchObject({ fit: "cover", format: "jpeg", quality: 80 });
   });
 
   it("refuses a render over the 192KB Spotify ceiling (loud, never pushes it)", async () => {
