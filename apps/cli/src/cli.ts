@@ -407,6 +407,16 @@ function addListenCommands(program: Command): void {
     });
 
   program
+    .command("fresh")
+    .description("What just came out, newest release first")
+    .option("--limit <limit>", "Number of releases to fetch")
+    .option("--json", "Print JSON", false)
+    .action(async (options: RecentOptions) => {
+      const { freshCommand } = await import("./commands/fresh");
+      await freshCommand({ json: options.json, limit: parseListLimit(options.limit) });
+    });
+
+  program
     .command("artists")
     .description("Browse artists in Fluncle's archive")
     .argument("[slug]", "Artist slug (omit for the full list)")
