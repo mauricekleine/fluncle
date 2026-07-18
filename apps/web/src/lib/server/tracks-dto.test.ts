@@ -64,6 +64,7 @@ const BASE_ROW: TrackRow = {
   video_grain: null,
   video_model: null,
   video_model_reasoning: null,
+  video_palette: null,
   video_register: null,
   video_squared_at: null,
   video_url: null,

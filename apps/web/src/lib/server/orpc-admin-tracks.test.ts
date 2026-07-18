@@ -264,7 +264,7 @@ describe("oRPC update_track (PATCH /admin/tracks/{trackId})", () => {
 
   it("maps the render's diversity-ledger trio — the finalize-miss correction path", async () => {
     updateTrack.mockResolvedValueOnce({
-      fields: ["videoVehicle", "videoGrain", "videoRegister"],
+      fields: ["videoVehicle", "videoGrain", "videoRegister", "videoPalette"],
       trackId: TRACK_ID,
     });
 
@@ -272,6 +272,7 @@ describe("oRPC update_track (PATCH /admin/tracks/{trackId})", () => {
     const response = await handleOrpc(
       patch(OPERATOR_TOKEN, {
         videoGrain: "grainBayer",
+        videoPalette: "  amber-warm  ",
         videoRegister: "representational",
         videoVehicle: "  arch in the shallows  ",
       }),
@@ -283,6 +284,7 @@ describe("oRPC update_track (PATCH /admin/tracks/{trackId})", () => {
       TRACK_ID,
       {
         videoGrain: "grainBayer",
+        videoPalette: "amber-warm",
         videoRegister: "representational",
         videoVehicle: "arch in the shallows",
       },
@@ -1510,6 +1512,7 @@ describe("oRPC finalize_track_video (POST .../video/finalize)", () => {
       post("/video/finalize", OPERATOR_TOKEN, {
         squared: true,
         videoGrain: "grainCoarseSilver",
+        videoPalette: "amber-warm",
         videoRegister: "abstract",
         videoVehicle: "submarine",
       }),
@@ -1525,6 +1528,7 @@ describe("oRPC finalize_track_video (POST .../video/finalize)", () => {
     expect(update.videoVehicle).toBe("submarine");
     expect(update.videoGrain).toBe("grainCoarseSilver");
     expect(update.videoRegister).toBe("abstract");
+    expect(update.videoPalette).toBe("amber-warm");
     expect(update.videoModel).toBe("anthropic/claude-opus-4-8");
     expect(update.videoModelReasoning).toBe("high");
     expect(typeof update.videoSquaredAt).toBe("string");
@@ -1551,6 +1555,7 @@ describe("oRPC finalize_track_video (POST .../video/finalize)", () => {
       json: async () => ({
         grain: "grainFineEmulsion",
         model: "anthropic/claude-opus-4-8",
+        palette: "teal-cool",
         reasoning: "high",
         register: "representational",
         vehicle: "tidal retreat",
@@ -1566,11 +1571,36 @@ describe("oRPC finalize_track_video (POST .../video/finalize)", () => {
     expect(update.videoVehicle).toBe("tidal retreat");
     expect(update.videoGrain).toBe("grainFineEmulsion");
     expect(update.videoRegister).toBe("representational");
+    // The palette axis recovers from the manifest the same way (docs/planning/
+    // homogenisation-evidence.md — the axis that was invisible before).
+    expect(update.videoPalette).toBe("teal-cool");
   });
 
-  it("skips the R2 read when the body already carries the full trio", async () => {
+  it("skips the R2 read when the body already carries the full set (incl. palette)", async () => {
     getTrackByIdOrLogId.mockResolvedValueOnce(TRACK);
     updateTrack.mockResolvedValueOnce({ fields: ["video_url"], trackId: TRACK_ID });
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      post("/video/finalize", AGENT_TOKEN, {
+        videoGrain: "grainBayer",
+        videoPalette: "blue-cool",
+        videoRegister: "abstract",
+        videoVehicle: "thermal raptor",
+      }),
+    );
+
+    expect(response?.status).toBe(200);
+    expect(bucketGet).not.toHaveBeenCalled();
+    const [, update] = updateTrack.mock.calls[0] as [string, Record<string, unknown>];
+    expect(update.videoVehicle).toBe("thermal raptor");
+    expect(update.videoPalette).toBe("blue-cool");
+  });
+
+  it("reads the manifest to recover palette when the body carries the trio but not palette", async () => {
+    getTrackByIdOrLogId.mockResolvedValueOnce(TRACK);
+    updateTrack.mockResolvedValueOnce({ fields: ["video_url"], trackId: TRACK_ID });
+    bucketGet.mockResolvedValueOnce({ json: async () => ({ palette: "magenta-cool" }) });
 
     const { handleOrpc } = await import("./orpc");
     const response = await handleOrpc(
@@ -1582,9 +1612,10 @@ describe("oRPC finalize_track_video (POST .../video/finalize)", () => {
     );
 
     expect(response?.status).toBe(200);
-    expect(bucketGet).not.toHaveBeenCalled();
+    expect(bucketGet).toHaveBeenCalledWith("004.7.2I/render.json");
     const [, update] = updateTrack.mock.calls[0] as [string, Record<string, unknown>];
     expect(update.videoVehicle).toBe("thermal raptor");
+    expect(update.videoPalette).toBe("magenta-cool");
   });
 
   it("lands the finalize unstamped when no manifest exists (best-effort, never a failure)", async () => {

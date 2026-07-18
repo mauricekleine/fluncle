@@ -45,6 +45,18 @@ A finding with no `logId` cannot be shipped (ship requires a Log ID). If `tracks
 
 ### 2. Diversity check (do not skip)
 
+**FIRST — the assigned cell (when the render conductor set it).** Diversity is DESIGNED IN UP FRONT: before this run started, a deterministic assigner may have chosen this render's grain family, register, and a palette to avoid, and injected them as environment variables (docs/planning/homogenisation-evidence.md — eyeballing recent posters converged on one amber/halftone look, so the family is now assigned, not hoped for). Check them at the top of the run:
+
+```
+echo "grain=${FLUNCLE_VIDEO_GRAIN:-unset} register=${FLUNCLE_VIDEO_REGISTER:-unset} avoid=${FLUNCLE_VIDEO_PALETTE_AVOID:-unset}"
+```
+
+- **When `FLUNCLE_VIDEO_GRAIN` / `FLUNCLE_VIDEO_REGISTER` are SET, they are ASSIGNED — not suggestions.** Do NOT re-choose the grain family or the register. Ship with exactly the assigned `--grain <FLUNCLE_VIDEO_GRAIN>` and `--register <FLUNCLE_VIDEO_REGISTER>`. Your whole creativity lives INSIDE that cell: the vehicle name, the shader concept, the medium/primitive, the motion, the composition, the subject are all still fully yours — pour the invention there. Map your vehicle to the assigned grain family (cookbook §grain families), and stage the assigned register (representational → a placed subject per §presence staging; framed → a portal/sleeve/plate; abstract → a field).
+- **When `FLUNCLE_VIDEO_PALETTE_AVOID` is SET, steer clear of that palette direction** — it names a worn hue/texture; pick a palette clearly away from it.
+- **When they are UNSET (a manual/local render), nothing changes** — the free vehicle/grain/register choice + the immediate-neighbour rule below stand exactly as written.
+
+The immediate-neighbour judgement below still applies WITHIN the assigned cell — it sharpens the vehicle/shape/palette against the feed neighbour; it never overrides the assigned grain family or register.
+
 ```
 fluncle admin tracks vehicles --json
 ```
@@ -71,7 +83,15 @@ One command, ALL THREE hard gates; any one exits non-zero and blocks ship:
 - **Flash safety** (WCAG 2.3.1): a coherent, large-area, >3/sec strobe. This pipeline runs unattended — this gate is the only thing standing between an over-driven bind and shipping a photosensitivity-unsafe clip. A fail means the reactivity is strobing: smooth the offending bind and re-render. Never pass `--allow-flash`.
 - **Arc/deadness** (doctrine 10): the whole-clip structural evolution below the calibrated floor — a composition that never reorganizes across its span (the dead-bars failure), invisible in any single still. A fail means the clip holds one look for 20s: give the field a real arc (the live envelopes driving density/threshold/exposure across the build → drop → main) and re-render.
 
-A pass (or an inconclusive beat-pull verdict) is required before you ship; iterate until it passes. (`detect-beat-pull` is only the fast directional read on the half-res draft while iterating; the verdict that counts is `judge:metrics` on the full render.)
+**And the PALETTE gate (do not skip):**
+
+```
+bun run --cwd packages/video judge:palette <log-id>
+```
+
+This compares the fresh poster's colour histogram against the last three published posters and exits non-zero when the palette is TOO CLOSE to any of them — the axis `judge:metrics` is blind to, and exactly the failure the amber-strip run showed (four consecutive renders one palette). Treat a FAIL like any other gate failure: it is not a ship, it is a rework — swing the palette (and, on a plate render, the light/heat) clearly away from the neighbour and re-render. It never blocks a first render (nothing to clash with).
+
+A pass (or an inconclusive beat-pull verdict) on `judge:metrics`, AND a pass on `judge:palette`, is required before you ship; iterate until both pass. (`detect-beat-pull` is only the fast directional read on the half-res draft while iterating; the verdict that counts is `judge:metrics` on the full render.)
 
 **Then the taste pass (the skill's workflow step 8):** place the render's poster frame NEXT TO the 3 feed-neighbour posters you fetched in step 2, at thumbnail size, and answer the doom-scroll question — would a thumb stop on yours? If it reads as safe wallpaper next to them (same density everywhere, nothing to land on, a recolour of the neighbours' energy), iterate toward the BOLDER move before shipping. A compliant-but-forgettable clip is worse than a slower tick.
 
@@ -102,5 +122,6 @@ You have filmed exactly one finding. **Do not loop back to step 1 to film anothe
 - **`fluncle` is the installed binary, run plainly.** Never the from-source `bun run --cwd apps/cli fluncle …` (it loads the wrong env and reflects uncommitted edits) and never piped through `tail`/`head`. `bun` is only for the `packages/video` render/ship steps.
 - **Upload the WHOLE bundle with `--dir`, never file-by-file — with ONE carve-out: the plate pre-upload.** `fluncle admin tracks video <log-id> --dir packages/video/out/<log-id>` is the sanctioned upload form for the bundle — it ships every artifact so the R2 bundle stays a complete re-renderable source. The single sanctioned file-flag upload is the plate lane's pre-composition step (`--plate`/`--plate-background`, nothing else): it never touches `video_url`, so the finding stays in the queue. A `bundle_incomplete` / partial-upload error means the BUNDLE is missing files (re-run `ship`), not that you should reach for `--allow-partial`; `--allow-partial` is an operator escape hatch for a deliberate poster-only refresh, never for the render automation.
 - **Re-runs must not double-render.** Trust the queue gate. Always re-read the queue at the start; never carry a finding id across runs.
-- **Never ship past the metrics gate.** After the render, `bun run --cwd packages/video judge:metrics <trackId>` must pass (or the beat-pull read be inconclusive). It carries ALL THREE hard gates: beat-pull (motion locked to the kick), WCAG flash safety (a photosensitivity-unsafe strobe), and arc/deadness (a clip that never reorganizes). A non-zero exit means revise the composition and re-render — never ship past it, never `--allow-flash`.
+- **Never ship past the gates.** After the render, `bun run --cwd packages/video judge:metrics <trackId>` must pass (or the beat-pull read be inconclusive) AND `bun run --cwd packages/video judge:palette <log-id>` must pass. `judge:metrics` carries THREE hard gates: beat-pull (motion locked to the kick), WCAG flash safety (a photosensitivity-unsafe strobe), and arc/deadness (a clip that never reorganizes). `judge:palette` is the fourth: the poster's palette must be distinct from the last three published. A non-zero exit on either means revise the composition and re-render — never ship past it, never `--allow-flash`.
+- **The assigned cell is binding.** When `FLUNCLE_VIDEO_GRAIN` / `FLUNCLE_VIDEO_REGISTER` are set in the environment, ship with exactly those (`--grain`/`--register`); never re-choose the family or register, and steer clear of `FLUNCLE_VIDEO_PALETTE_AVOID`. Unset = free choice + the neighbour rule.
 - **The register claim passes the stranger test.** A representational claim must survive it on the shipped poster — a stranger names the subject as a kind AND places it. If the poster reads as material texture only, ship it as `--register abstract`; the ledger stays honest.

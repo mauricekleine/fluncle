@@ -141,6 +141,7 @@ export const TrackListItemSchema = z
     videoGrain: z.string().optional(),
     videoModel: z.string().optional(),
     videoModelReasoning: z.string().optional(),
+    videoPalette: z.string().optional(),
     videoRegister: z.string().optional(),
     videoSquaredAt: z.string().optional(),
     videoUrl: z.string().optional(),

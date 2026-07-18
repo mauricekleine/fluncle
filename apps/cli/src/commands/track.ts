@@ -380,6 +380,7 @@ export async function trackVideoCommand(
       ...(manifest.vehicle ? { videoVehicle: manifest.vehicle } : {}),
       ...(manifest.grain ? { videoGrain: manifest.grain } : {}),
       ...(manifest.register ? { videoRegister: manifest.register } : {}),
+      ...(manifest.palette ? { videoPalette: manifest.palette } : {}),
     },
   );
 
@@ -394,7 +395,7 @@ export async function trackVideoCommand(
 // three 2026-07 renders shipped as unlabelled holes in that ledger before this warn
 // existed. The warning lands on stderr, so the render conductor's log carries it and
 // the ship is auditable after the fact.
-type RenderManifestField = "grain" | "model" | "reasoning" | "register" | "vehicle";
+type RenderManifestField = "grain" | "model" | "palette" | "reasoning" | "register" | "vehicle";
 
 const DIVERSITY_LEDGER_FIELDS = ["vehicle", "grain", "register"] as const;
 
@@ -407,7 +408,7 @@ async function readManifestFields(
     const manifest = (await Bun.file(renderPath).json()) as Record<RenderManifestField, unknown>;
     const parsed: Partial<Record<RenderManifestField, string>> = {};
 
-    for (const key of ["vehicle", "grain", "model", "reasoning", "register"] as const) {
+    for (const key of ["vehicle", "grain", "model", "reasoning", "register", "palette"] as const) {
       const value = manifest[key];
 
       if (typeof value === "string" && value.trim()) {

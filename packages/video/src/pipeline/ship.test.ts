@@ -133,6 +133,8 @@ describe("buildRenderJson", () => {
     hasIntentFile: true,
     hasPropsFile: true,
     model: "anthropic/claude-opus-4-8",
+    palette: "amber-warm",
+    paletteSwatches: ["#e8a94b", "#f2c976", "#171208"],
     plateSubject: null,
     reasoning: "high",
     register: "abstract",
@@ -160,6 +162,9 @@ describe("buildRenderJson", () => {
     });
     // Plate-less renders record a null subject (the field is always present).
     expect(json.plateSubject).toBeNull();
+    // The palette axis rides through as its bucket tag + swatches.
+    expect(json.palette).toBe("amber-warm");
+    expect(json.paletteSwatches).toEqual(["#e8a94b", "#f2c976", "#171208"]);
   });
 
   test("a plate render carries its subject kind through to the ledger", () => {

@@ -99,6 +99,7 @@ function fullRow(stored: StoredTrack) {
     video_grain: null,
     video_model: null,
     video_model_reasoning: null,
+    video_palette: null,
     video_register: null,
     video_url: null,
     video_vehicle: null,

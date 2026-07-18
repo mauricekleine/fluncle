@@ -287,6 +287,10 @@ export function adminTracksHandlers(os: Implementer) {
         update.videoRegister = body.videoRegister.trim().slice(0, 120);
       }
 
+      if (typeof body.videoPalette === "string" && body.videoPalette.trim()) {
+        update.videoPalette = body.videoPalette.trim().slice(0, 120);
+      }
+
       // Straggler repair: one-time backfill of identity fields into null slots
       // (updateTrack enforces immutability once set).
       if (typeof body.isrc === "string") {
@@ -1029,6 +1033,10 @@ export function adminTracksHandlers(os: Implementer) {
         typeof body.videoRegister === "string" && body.videoRegister.trim()
           ? body.videoRegister.trim().slice(0, 120)
           : undefined;
+      const bodyPalette =
+        typeof body.videoPalette === "string" && body.videoPalette.trim()
+          ? body.videoPalette.trim().slice(0, 120)
+          : undefined;
       const bodyModel =
         typeof body.videoModel === "string" && body.videoModel.trim()
           ? body.videoModel.trim().slice(0, 120)
@@ -1045,12 +1053,13 @@ export function adminTracksHandlers(os: Implementer) {
       // same ship this finalize completes, so it is the authority of record; a
       // missing/corrupt manifest yields {} and the finalize lands exactly as before.
       const manifestStamps =
-        bodyVehicle && bodyGrain && bodyRegister
+        bodyVehicle && bodyGrain && bodyRegister && bodyPalette
           ? {}
           : await readRenderManifestStamps(env.VIDEOS, track.logId);
       const videoVehicle = bodyVehicle ?? manifestStamps.vehicle;
       const videoGrain = bodyGrain ?? manifestStamps.grain;
       const videoRegister = bodyRegister ?? manifestStamps.register;
+      const videoPalette = bodyPalette ?? manifestStamps.palette;
       const videoModel = bodyModel ?? manifestStamps.model ?? "anthropic/claude-opus-4-8";
       const videoModelReasoning = bodyReasoning ?? manifestStamps.reasoning ?? "high";
 
@@ -1080,6 +1089,7 @@ export function adminTracksHandlers(os: Implementer) {
         ...(videoVehicle ? { videoVehicle } : {}),
         ...(videoGrain ? { videoGrain } : {}),
         ...(videoRegister ? { videoRegister } : {}),
+        ...(videoPalette ? { videoPalette } : {}),
       });
 
       // Drop stale edge entries on EVERY finalize, not just when track.videoUrl was

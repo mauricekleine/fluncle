@@ -687,6 +687,14 @@ export const findings = sqliteTable(
     // we can compare model × thinking level. Defaults to "high" — the existing
     // videos were authored at high reasoning, so existing rows backfill.
     videoModelReasoning: text("video_model_reasoning").default("high"),
+    // The coarse palette HUE-BUCKET tag of the track's video (e.g. "amber-warm"), derived
+    // deterministically from the render's palette (palette-summary.ts). Set when the video
+    // is uploaded; surfaced beside vehicle/grain/register so the next (ephemeral) video
+    // agent — via the deterministic axis assigner — steers off a worn hue. This is the
+    // palette axis that was invisible when four consecutive renders shared one amber look
+    // (docs/planning/homogenisation-evidence.md). Null = not recorded (older rows / no
+    // palette derivable).
+    videoPalette: text("video_palette"),
     // The visual REGISTER of the track's video — the composition's mode:
     // "abstract" | "representational" | "framed". Set when the video is uploaded;
     // surfaced in /api/tracks alongside the vehicle and grain so the next

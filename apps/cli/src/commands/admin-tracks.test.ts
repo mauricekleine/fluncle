@@ -42,6 +42,17 @@ function finding(trackId: string, logId: string): TrackListItem {
 // note-less finding that the `hasContext` gate must exclude.
 const contextedFinding = finding("track_context", "001.1.1");
 
+// A shipped-video finding carrying the full diversity ledger, incl. the palette axis —
+// the shape `fluncle admin tracks vehicles --json` reads for the axis assigner.
+const videoedFinding: TrackListItem = {
+  ...finding("track_videoed", "003.3.3"),
+  videoGrain: "grainCoarseSilver",
+  videoPalette: "amber-warm",
+  videoRegister: "representational",
+  videoUrl: "https://found.fluncle.com/003.3.3/footage.mp4",
+  videoVehicle: "derelict hull",
+};
+
 // A captured finding exactly as the ADMIN embed queue returns it: the private full-song
 // capture key is PRESENT (the admin read path never strips it — only public reads run
 // through `toPublicTrackListItem`). The on-box embed sweep reads this key to S3-GET the
@@ -77,6 +88,11 @@ await mock.module("../api", () => ({
       return { nextCursor: undefined, totalCount: 1, tracks: [capturedFinding] };
     }
 
+    // The vehicles ledger read: `video_url is not null`, newest first.
+    if (url.searchParams.get("hasVideo") === "true") {
+      return { nextCursor: undefined, totalCount: 1, tracks: [videoedFinding] };
+    }
+
     if (paginateCatalogue && hasContext === null && url.searchParams.get("hasKey") === null) {
       // Two pages: page 1 hands back a cursor, page 2 ends it. An --all fetch
       // (Infinity max) must request both; a finite limit would stop after page 1.
@@ -98,8 +114,14 @@ await mock.module("../api", () => ({
   },
 }));
 
-const { contextQueueCommand, embedQueueCommand, listCommand, noteQueueCommand, queueCommand } =
-  await import("./admin-tracks");
+const {
+  contextQueueCommand,
+  embedQueueCommand,
+  listCommand,
+  noteQueueCommand,
+  queueCommand,
+  vehiclesCommand,
+} = await import("./admin-tracks");
 const { mapTrack } = await import("./recent");
 
 describe("context queue — --retry-empty plumbing", () => {
@@ -129,6 +151,30 @@ describe("context queue — --retry-empty plumbing", () => {
     // the server honours the flag), now also re-picking confirmed-empty finds.
     expect(url.searchParams.get("hasContext")).toBe("false");
     expect(url.searchParams.get("retryEmptyContext")).toBe("true");
+  });
+});
+
+describe("vehicles ledger — the diversity read the axis assigner consumes", () => {
+  beforeEach(() => {
+    requestedPaths = [];
+  });
+
+  test("reads the has-video ledger and carries every axis, palette included", async () => {
+    const ledger = await vehiclesCommand(10);
+
+    expect(requestedPaths).toHaveLength(1);
+    const url = new URL(requestedPaths[0] ?? "", "https://fluncle.test");
+    expect(url.searchParams.get("hasVideo")).toBe("true");
+    expect(url.searchParams.get("order")).toBe("desc");
+
+    expect(ledger).toHaveLength(1);
+    expect(ledger[0]).toMatchObject({
+      grain: "grainCoarseSilver",
+      logId: "003.3.3",
+      palette: "amber-warm",
+      register: "representational",
+      vehicle: "derelict hull",
+    });
   });
 });
 

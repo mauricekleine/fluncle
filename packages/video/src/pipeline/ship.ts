@@ -54,6 +54,7 @@ import { buildCaption, type CaptionTrack, fetchReleaseYear, yearFromReleaseDate 
 import { deletePreviewAudio } from "./download-preview";
 import { fluncleBin, fluncleSpawnEnv } from "./fluncle-bin";
 import { generateIntentStub } from "./intent";
+import { type PaletteSummary, summarizePalette } from "./palette-summary";
 import { renderCover } from "./render-cover";
 import { buildScene, locateFragmentLiteral, resolveGlslBody, type ScenePalette } from "./scene";
 import {
@@ -282,6 +283,12 @@ export type RenderManifestInput = {
   hasIntentFile: boolean;
   hasPropsFile: boolean;
   model: string;
+  /** The coarse palette HUE-BUCKET tag (palette-summary.ts) — the recorded palette
+   *  provenance the finalize path stores as video_palette and the axis assigner reads to
+   *  steer the next render off the worn hue. Null when no palette could be derived. */
+  palette: string | null;
+  /** Up to three dominant hex swatches — the bundle's human-readable palette receipt. */
+  paletteSwatches: string[];
   /** The plate-lane subject KIND when a plate render ships (hull / ruin / flora /
    *  creature / terrain / threshold …); null on abstract/procedural renders. */
   plateSubject: string | null;
@@ -309,6 +316,14 @@ export function buildRenderJson(input: RenderManifestInput): Record<string, unkn
     // The authoring AI model: the upload endpoint reads this and stores it as
     // the track's video_model (surfaced in /api/tracks alongside the vehicle).
     model: input.model,
+    // The PALETTE-ledger entry (docs/planning/homogenisation-evidence.md — the axis that
+    // was invisible when four consecutive renders shared one amber palette): the coarse
+    // hue-bucket tag the finalize path stores as video_palette, so the axis assigner can
+    // steer the next render off the worn hue. Null when no palette was derivable.
+    palette: input.palette,
+    // The dominant hex swatches behind the bucket — the human-readable receipt in the
+    // bundle (never stored on the row; the bucket tag is what the ledger carries).
+    paletteSwatches: input.paletteSwatches,
     // The plate-lane subject-kind ledger entry: judge:diversity reads it (from the
     // local bundle or the public render.json) and WARNs on a same-kind repeat
     // inside the recent window, so plate subjects rotate like every other axis.
@@ -336,6 +351,35 @@ export function buildRenderJson(input: RenderManifestInput): Record<string, unkn
     // as the track's video_vehicle (surfaced in /api/tracks for the next agent).
     vehicle: input.vehicle,
   };
+}
+
+/** Read the bundle's props.json and summarize its palette into a hue-bucket tag +
+ *  swatches, or null when the props file is absent/unparseable or carries no palette.
+ *  Best-effort by contract — never throws, so ship never fails on palette provenance. */
+export function readPropsPalette(
+  propsPath: string,
+  log: (message: string) => void,
+): PaletteSummary | null {
+  if (!existsSync(propsPath)) {
+    return null;
+  }
+  try {
+    const props = JSON.parse(readFileSync(propsPath, "utf8")) as NostalgicCosmosProps;
+    const p = props.palette;
+    if (!p) {
+      return null;
+    }
+    return summarizePalette({
+      accent: p.accent,
+      background: p.background,
+      glow: p.glow,
+      ink: p.ink,
+      swatches: p.swatches,
+    });
+  } catch (error) {
+    log(`palette unresolved: ${error instanceof Error ? error.message : String(error)}`);
+    return null;
+  }
 }
 
 /** The note.txt build: the fixed-template caption for this track + release year. */
@@ -681,6 +725,16 @@ async function main(argv: string[]): Promise<void> {
     log(`structure unclassified: ${error instanceof Error ? error.message : String(error)}`);
   }
 
+  // Palette provenance: summarize the render's derived palette (social-preview's
+  // paletteMix, in props.json) into a coarse hue-bucket tag + dominant swatches. Best-
+  // effort — a missing/unparseable props palette leaves it null, exactly like structure.
+  const paletteSummary = readPropsPalette(paths.propsOutPath, log);
+  if (paletteSummary) {
+    log(`palette: ${paletteSummary.bucket} (${paletteSummary.swatches.join(" ")})`);
+  } else {
+    log("palette unresolved (no props palette in the bundle)");
+  }
+
   log("render.json");
   writeFileSync(
     paths.renderOutPath,
@@ -692,6 +746,8 @@ async function main(argv: string[]): Promise<void> {
         hasIntentFile: existsSync(paths.intentOutPath),
         hasPropsFile: existsSync(paths.propsOutPath),
         model: flags.model ?? renderManifest.model ?? DEFAULT_VIDEO_MODEL,
+        palette: paletteSummary?.bucket ?? null,
+        paletteSwatches: paletteSummary?.swatches ?? [],
         plateSubject: flags.plateSubject ?? renderManifest.plateSubject ?? null,
         reasoning: flags.reasoning ?? renderManifest.reasoning ?? DEFAULT_VIDEO_REASONING,
         register,
