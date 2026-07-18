@@ -14,6 +14,7 @@ import { siSpotify } from "simple-icons";
 import { ArtistAvatar } from "@/components/artist-avatar";
 import { BrandIcon } from "@/components/brand-icon";
 import { TrackArtwork } from "@/components/track-artwork";
+import { tracksCount } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { type FreshCover, type FreshStreamEntry } from "./data";
 
@@ -55,17 +56,20 @@ export function FreshCoverArt({
  * A cover card — a cover-bearing release (a finding or an album record) rendered cover-first. The
  * whole card is one link to where the release lives: a finding's log page (its coordinate), or its
  * Spotify when it has no coordinate yet, or the album's `/album/<slug>` page. The date rides a
- * trailing "Out Jul 3" stamp. `size` scales the whole card; `showDate` hides the stamp where the
- * layout carries the date elsewhere (the timeline spine).
+ * trailing "Out Jul 3" stamp. `showDate` hides the stamp where the layout carries the date elsewhere
+ * (the timeline spine); `showTrackCount` adds a "4 tracks" line on an album record (the album view's
+ * central grid, where the count tells an EP from an LP — a real count of a real entity).
  */
 export function FreshCoverCard({
   cover,
   className,
   showDate = true,
+  showTrackCount = false,
 }: {
   className?: string;
   cover: FreshCover;
   showDate?: boolean;
+  showTrackCount?: boolean;
 }) {
   const inner = (
     <>
@@ -78,6 +82,9 @@ export function FreshCoverCard({
         {showDate ? (
           <span className="fresh-cover-date">
             Out <time dateTime={cover.releaseDate}>{freshDate(cover.releaseDate)}</time>
+            {showTrackCount && cover.link === "album" && cover.trackCount !== undefined ? (
+              <span className="fresh-cover-count"> · {tracksCount(cover.trackCount)}</span>
+            ) : undefined}
           </span>
         ) : undefined}
       </span>

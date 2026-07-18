@@ -6812,6 +6812,12 @@ a.catalogue-letter:focus-visible {
   cursor: default;
 }
 
+/* ── View pills (All / Tracks / Albums & EPs) ──────────────────────────────────────────── */
+.fresh-views {
+  display: flex;
+  margin-bottom: clamp(1.5rem, 3.5vw, 2.5rem);
+}
+
 /* ── Albums rail (shared) ──────────────────────────────────────────────────────────────── */
 .fresh-albums {
   margin-top: clamp(2.5rem, 5vw, 4rem);
@@ -6824,6 +6830,22 @@ a.catalogue-letter:focus-visible {
   list-style: none;
   margin: 0;
   padding: 0;
+}
+
+/* ── Albums board (the "Albums & EPs" view — records at the centre) ────────────────────── */
+/* Larger tiles than the rail: the album cut leads its own view, so the covers carry it. */
+.fresh-albums-grid {
+  display: grid;
+  gap: clamp(1.25rem, 3vw, 2rem);
+  grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* The "· 4 tracks" count trailing the "Out Jul 3" stamp — same quiet tabular register as the date. */
+.fresh-cover-count {
+  color: var(--muted-foreground);
 }
 
 /* ── Footer + picker ───────────────────────────────────────────────────────────────────── */

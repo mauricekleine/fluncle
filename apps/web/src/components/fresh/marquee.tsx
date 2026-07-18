@@ -9,10 +9,17 @@
 import { Link } from "@tanstack/react-router";
 import { ArtistAvatar } from "@/components/artist-avatar";
 import { type FreshReleases } from "@/lib/server/fresh";
-import { FreshAlbumsRail } from "./albums-rail";
-import { freshRecordCovers, freshStream, type FreshStreamEntry } from "./data";
+import { FreshAlbumsBoard, FreshAlbumsRail } from "./albums-rail";
+import {
+  freshRecordCovers,
+  freshStream,
+  freshTrackWindowRecordCovers,
+  type FreshStreamEntry,
+  type FreshView,
+} from "./data";
 import { FreshMasthead } from "./masthead";
 import { freshDateParts, FreshStreamRow } from "./shared";
+import { FreshViewControl } from "./view-control";
 
 const MARQUEE_HEADLINE_COUNT = 6;
 
@@ -102,16 +109,22 @@ function MarqueeHeadline({ entry }: { entry: FreshStreamEntry }) {
   );
 }
 
-export function FreshMarquee({ data }: { data: FreshReleases }) {
+/** The flat track stream — the marquee headlines over the compact rest-rows. The "All" view trails it
+    with the 30-day albums rail; the "Tracks" view drops the rail and shows the stream alone. An empty
+    stream (records but no tracks in the window) reads as a quiet line, never an empty bordered board. */
+function FreshTrackStream({ data, view }: { data: FreshReleases; view: "all" | "tracks" }) {
   const stream = freshStream(data);
   const headlines = stream.slice(0, MARQUEE_HEADLINE_COUNT);
   const rest = stream.slice(MARQUEE_HEADLINE_COUNT);
-  const albums = freshRecordCovers(data);
+
+  if (stream.length === 0) {
+    return (
+      <p className="fresh-empty empty-scanlines">No new tracks landed this month. Quiet sector.</p>
+    );
+  }
 
   return (
-    <div className="fresh-stage fresh-marquee">
-      <FreshMasthead />
-
+    <>
       <ol className="fresh-mq-board">
         {headlines.map((entry) => (
           <MarqueeHeadline
@@ -132,7 +145,30 @@ export function FreshMarquee({ data }: { data: FreshReleases }) {
         </ol>
       ) : undefined}
 
-      <FreshAlbumsRail albums={albums} />
+      {view === "all" ? <FreshAlbumsRail albums={freshTrackWindowRecordCovers(data)} /> : undefined}
+    </>
+  );
+}
+
+export function FreshMarquee({
+  data,
+  onViewChange,
+  view,
+}: {
+  data: FreshReleases;
+  onViewChange: (view: FreshView) => void;
+  view: FreshView;
+}) {
+  return (
+    <div className="fresh-stage fresh-marquee">
+      <FreshMasthead />
+      <FreshViewControl onChange={onViewChange} view={view} />
+
+      {view === "albums" ? (
+        <FreshAlbumsBoard albums={freshRecordCovers(data)} />
+      ) : (
+        <FreshTrackStream data={data} view={view} />
+      )}
     </div>
   );
 }
