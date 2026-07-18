@@ -667,12 +667,18 @@ export async function refreshAllFrontierPlaylists(
 }
 
 /**
- * The users the refresh sweep walks — every user with AT LEAST ONE edition (a draft-phase
- * user with zero editions is skipped, so the sweep never births edition #1), oldest edition
- * first, hydrated into the `PublicUser` shape the sync needs (the description reads the
- * handle; the recs read the id + verified flag). Iterates by EDITIONS, not playlist rows: an
- * edition-only user (minted while minting was dark) has editions but no playlist row, and
- * the sweep must still advance their ledger.
+ * The users the refresh sweep walks — every user who has COMMITTED, oldest first, hydrated
+ * into the `PublicUser` shape the sync needs (the description reads the handle; the recs read
+ * the id + verified flag). Commitment is the UNION of two kinds of evidence:
+ *
+ *   - an EDITION row (the post-ledger commitment — "Get playlist" born an edition), and
+ *   - a PLAYLIST row (the pre-ledger commitment — a Spotify playlist minted BEFORE editions
+ *     existed; that row IS the evidence of the same "Get playlist" act from before the ledger,
+ *     so such a user is swept and gains their first edition on the next refresh).
+ *
+ * A TRUE draft user — no edition AND no playlist row — is skipped, so the sweep never births
+ * edition #1 for someone who never asked. The union is de-duped by user_id (a user with both
+ * kinds appears once, anchored at the earliest evidence) so oldest-first is stable.
  */
 async function listFrontierUsers(limit: number): Promise<Array<{ user: PublicUser }>> {
   const result = await (
@@ -682,13 +688,17 @@ async function listFrontierUsers(limit: number): Promise<Array<{ user: PublicUse
     sql: `select u.id, u.username, u.display_username, u.name, u.image, u.email,
         u.email_verified, u.created_at, u.crew_number
       from (
-        select fe.user_id, min(fe.created_at) as first_edition_at
-        from frontier_editions fe
-        group by fe.user_id
+        select user_id, min(committed_at) as committed_at
+        from (
+          select fe.user_id as user_id, fe.created_at as committed_at from frontier_editions fe
+          union all
+          select f.user_id as user_id, f.created_at as committed_at from user_frontier_playlists f
+        )
+        group by user_id
       ) e
       join "user" u on u.id = e.user_id
       where u.status = 'active'
-      order by e.first_edition_at asc
+      order by e.committed_at asc
       limit ?`,
   });
 

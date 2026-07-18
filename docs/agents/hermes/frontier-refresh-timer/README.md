@@ -8,7 +8,7 @@ Each Friday 07:00 Amsterdam the sweep fires ONE `fluncle admin frontier refresh`
 
 ## Shipped DARK, so first activation is a deliberate operator act
 
-The feature ships behind a **DEFAULT-DENY kill switch** (`frontier.minting` in the `settings` KV): ONLY the literal string `"true"` opens minting; an unset key, a fresh deploy, or a lost row reads as CLOSED. Until the operator flips it, both the `/me` mint op and this refresh sweep are no-ops (`switchOff: true`, nothing touched). So installing this timer is safe on any box: it runs weekly and does nothing until minting is opened.
+The feature ships behind a **DEFAULT-DENY kill switch** (`frontier.minting` in the `settings` KV): ONLY the literal string `"true"` opens minting; an unset key, a fresh deploy, or a lost row reads as CLOSED. The switch gates only the EXTERNAL Spotify effect: with it closed the sweep still performs its weekly EDITION writes (the internal recommendation ledger the shelf reads — `switchOff: true`, editions written and reported as `editionOnly`), and skips only the Spotify mirror. So installing this timer is safe on any box: it never writes to Spotify until the operator opens minting, and its internal edition writes touch nothing a stranger can see.
 
 - **It certifies nothing and creates no new public authority.** Every playlist it touches already exists, minted by its own owner. `refresh_frontier_playlists` is AGENT tier, so the box's existing agent-scoped token drives it — **no new secret**. Zero LLM tokens.
 - **Best-effort per user.** One user's Spotify fault is counted in `failed` and the walk continues; the next week retries.

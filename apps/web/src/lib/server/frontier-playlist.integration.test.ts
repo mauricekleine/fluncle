@@ -422,6 +422,26 @@ describe("refreshAllFrontierPlaylists (the weekly sweep) — D2", () => {
     expect(await editionCount("u-draft")).toBe(0);
   });
 
+  it("sweeps a PRE-LEDGER minter — a playlist row + zero editions gains edition #1", async () => {
+    // The exact prod shape: the operator minted before editions existed, so there is a
+    // user_frontier_playlists row but no frontier_editions row. Walking by editions ALONE
+    // would drop him from the weekly refresh forever; the union over playlist rows catches
+    // him and the sweep writes his edition #1.
+    const { refreshAllFrontierPlaylists } = await import("./frontier-playlist");
+
+    await seedUser(db, { email: "op@fluncle.com", id: "u-preledger" });
+    await insertPlaylistRow("u-preledger", "pl-legacy", "2026-07-17T00:00:00.000Z");
+    expect(await editionCount("u-preledger")).toBe(0);
+
+    recs = result({ findings: [find("f1")] });
+    const swept = await refreshAllFrontierPlaylists(500);
+
+    // Minting is dark, so the edition is written (internal cache) and Spotify is skipped.
+    expect(swept).toMatchObject({ editionOnly: 1, ok: true, switchOff: true, total: 1 });
+    expect(await editionCount("u-preledger")).toBe(1);
+    expect(spotifyCalls).toEqual([]);
+  });
+
   it("writes editions under a DARK switch (switchOff true, editionOnly tallied, no Spotify)", async () => {
     const { mintOrRefreshFrontierPlaylist, refreshAllFrontierPlaylists } =
       await import("./frontier-playlist");

@@ -22,9 +22,11 @@ const DEFAULT_COVER_LIMIT = 50;
 /**
  * Build the `admin-frontier` domain's handler.
  *
- *   - `refresh_frontier_playlists` — walk up to `limit` minted playlists and re-mirror
- *     each from its owner's current recommendations. Respects the DEFAULT-DENY kill
- *     switch first (closed ⇒ `switchOff: true`, nothing touched). Best-effort per user.
+ *   - `refresh_frontier_playlists` — walk up to `limit` committed users (edition- or
+ *     playlist-holders) and write each one's next edition from its owner's current
+ *     recommendations. The edition (the internal cache) is written REGARDLESS of the kill
+ *     switch; only the Spotify mirror is gated (closed ⇒ `switchOff: true` in the summary,
+ *     editions still written, no external Spotify write). Best-effort per user.
  */
 export function adminFrontierHandlers(os: Implementer) {
   const refresh = os.refresh_frontier_playlists.use(adminAuth).handler(async ({ input }) => {

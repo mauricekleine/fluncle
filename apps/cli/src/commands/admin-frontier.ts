@@ -15,6 +15,7 @@ import { adminApiGet, adminApiPost, adminApiPut } from "../api";
 
 /** The refresh tick's per-run summary — the JSON line the weekly cron reads. */
 export type FrontierRefreshSummary = {
+  editionOnly: number;
   failed: number;
   minted: number;
   ok: true;
@@ -28,9 +29,10 @@ export type FrontierRefreshSummary = {
 /**
  * One tick of the Frontier refresh sweep. `fluncle admin frontier refresh [--limit <n>]`.
  *
- * Re-mirrors up to `limit` minted Frontier playlists from their owners' current
- * recommendations. Respects the DEFAULT-DENY kill switch (a closed switch returns
- * `switchOff: true` and touches nothing); best-effort per user.
+ * Writes the next edition for up to `limit` committed users (edition- or playlist-holders)
+ * from their owners' current recommendations. The edition is written regardless of the
+ * DEFAULT-DENY kill switch; a closed switch returns `switchOff: true` and skips only the
+ * Spotify mirror (the edition writes count as `editionOnly`). Best-effort per user.
  */
 export async function frontierRefreshCommand(options: {
   limit?: string;
