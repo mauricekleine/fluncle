@@ -75,10 +75,65 @@ const httpExecutes: Record<string, WebMcpTool["execute"]> = {
 
     return jsonResult(await fetchJson(`/api/tracks?${params}`));
   },
+  // The archive search — the public GET /api/v1/search/archive twin, whose `q` input matches the
+  // tool's `query` 1:1 and whose per-IP limiter is shared with the MCP (orpc/search.ts). Returns
+  // the whole SearchResult (both registers, each row certified-tagged).
+  search_archive: async (input) => {
+    const params = new URLSearchParams({ q: asString(input.query) });
+
+    return jsonResult(await fetchJson(`/api/v1/search/archive?${params}`));
+  },
+  // The two write verbs (submit_track resolves the URL to a candidate first, then POSTs it;
+  // subscribe_newsletter boards the email). Public POST routes; the browser has no in-process fns.
+  submit_track: async (input) => {
+    const spotifyUrl = asString(input.spotifyUrl);
+    const search = (await fetchJson(`/api/search?${new URLSearchParams({ q: spotifyUrl })}`)) as {
+      ok?: boolean;
+      results?: Array<{
+        id: string;
+        spotifyUrl: string;
+        title: string;
+        artists: string[];
+        album?: string;
+        artworkUrl?: string;
+      }>;
+    };
+    const candidate = search.results?.[0];
+
+    if (!candidate) {
+      return jsonResult(search);
+    }
+
+    const submission = await fetchJson("/api/submissions", {
+      body: JSON.stringify({
+        album: candidate.album,
+        artists: candidate.artists,
+        artworkUrl: candidate.artworkUrl,
+        contact: typeof input.contact === "string" ? input.contact : undefined,
+        note: typeof input.note === "string" ? input.note : undefined,
+        source: "web",
+        spotifyTrackId: candidate.id,
+        spotifyUrl: candidate.spotifyUrl,
+        title: candidate.title,
+      }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST",
+    });
+
+    return jsonResult(submission);
+  },
+  subscribe_newsletter: async (input) =>
+    jsonResult(
+      await fetchJson("/api/newsletter", {
+        body: JSON.stringify({ email: asString(input.email) }),
+        headers: { "Content-Type": "application/json" },
+        method: "POST",
+      }),
+    ),
 };
 
-// WebMCP-only tools: the Spotify candidate search + the two write verbs (not in the shared
-// registry — those overlap all read transports; these are MCP + WebMCP surface writes).
+// WebMCP-only tool: the Spotify candidate search (Epic-2 territory, not in the shared registry —
+// it searches Spotify, not the archive).
 const webmcpOnlyTools: WebMcpTool[] = [
   {
     description:
@@ -100,92 +155,6 @@ const webmcpOnlyTools: WebMcpTool[] = [
       type: "object",
     },
     name: "search_tracks",
-  },
-  {
-    description:
-      "Submit a track to Fluncle for review by Spotify track URL. Fluncle gives it a listen before anything publishes. Limited to 5 submissions per connection per hour.",
-    execute: async (input) => {
-      const spotifyUrl = asString(input.spotifyUrl);
-      const search = (await fetchJson(`/api/search?${new URLSearchParams({ q: spotifyUrl })}`)) as {
-        ok?: boolean;
-        results?: Array<{
-          id: string;
-          spotifyUrl: string;
-          title: string;
-          artists: string[];
-          album?: string;
-          artworkUrl?: string;
-        }>;
-      };
-      const candidate = search.results?.[0];
-
-      if (!candidate) {
-        return jsonResult(search);
-      }
-
-      const submission = await fetchJson("/api/submissions", {
-        body: JSON.stringify({
-          album: candidate.album,
-          artists: candidate.artists,
-          artworkUrl: candidate.artworkUrl,
-          contact: typeof input.contact === "string" ? input.contact : undefined,
-          note: typeof input.note === "string" ? input.note : undefined,
-          source: "web",
-          spotifyTrackId: candidate.id,
-          spotifyUrl: candidate.spotifyUrl,
-          title: candidate.title,
-        }),
-        headers: { "Content-Type": "application/json" },
-        method: "POST",
-      });
-
-      return jsonResult(submission);
-    },
-    inputSchema: {
-      properties: {
-        contact: {
-          description: "Optional: where to reach the submitter (max 120 characters).",
-          maxLength: 120,
-          type: "string",
-        },
-        note: {
-          description: "Optional: tell Fluncle why it's a banger (max 500 characters).",
-          maxLength: 500,
-          type: "string",
-        },
-        spotifyUrl: {
-          description: "Spotify track URL, e.g. https://open.spotify.com/track/...",
-          type: "string",
-        },
-      },
-      required: ["spotifyUrl"],
-      type: "object",
-    },
-    name: "submit_track",
-  },
-  {
-    description:
-      "Subscribe an email address to Fluncle's newsletter. Fresh bangers, every Friday, from Fluncle.",
-    execute: async (input) =>
-      jsonResult(
-        await fetchJson("/api/newsletter", {
-          body: JSON.stringify({ email: asString(input.email) }),
-          headers: { "Content-Type": "application/json" },
-          method: "POST",
-        }),
-      ),
-    inputSchema: {
-      properties: {
-        email: {
-          description: "The email address boarding the mothership.",
-          format: "email",
-          type: "string",
-        },
-      },
-      required: ["email"],
-      type: "object",
-    },
-    name: "subscribe_newsletter",
   },
 ];
 

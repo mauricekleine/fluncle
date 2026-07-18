@@ -26,63 +26,24 @@
 // model from the same family the search tier trusts, and a hard "no key ⇒ 503" so an
 // unprovisioned Worker fails honestly rather than pretending.
 
-import { type MixCandidate } from "@fluncle/contracts";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import {
   type InferUITools,
-  type ToolSet,
   type UIDataTypes,
   type UIMessage,
   convertToModelMessages,
   stepCountIs,
   streamText,
-  tool,
 } from "ai";
 import { z } from "zod";
-import { isLogId, isMixtapeLogId } from "../log-id";
-import { MAX_SET_LENGTH, mixReasonLabel, serializeSet, setToken } from "../mix-set";
-import {
-  countArtistFindings,
-  getArtistBySlug,
-  getPublicArtistSocials,
-  toArtistSlug,
-} from "./artists";
 import { readOptionalEnv } from "./env";
-import { getConfirmedAliasNames, getLabelBySlug, labelSlug } from "./labels";
-import { resolveLogPageTarget } from "./log-resolver";
-import { searchArchive } from "./search";
-import { compactFinding, dropEmpty, sharedChatTools } from "./tools/registry";
-import {
-  getFindingsByArtist,
-  getFindingsByLabel,
-  getMixableTracks,
-  getMixChainDepth,
-  getTracksByLogIds,
-  type TrackListItem,
-} from "./tracks";
+import { sharedChatTools } from "./tools/registry";
 
 /** The model family the search tier trusts (search-llm.ts / observation.ts default). */
 const DEFAULT_CHAT_MODEL = "anthropic/claude-haiku-4.5";
 
 /** How many tool→think steps one turn may take before we stop (a runaway guard). */
 const MAX_STEPS = 8;
-
-/** The search cap handed to the archive-search tool (mirrors the MCP's clamp). */
-const MAX_SEARCH = 12;
-
-/**
- * How many mixable steps `build_set` chains off the seed — one full rail's worth of what mixes
- * in next, before the certified-only filter thins it. The seed leads, so the set the card shows
- * (and the `?set=` link it hands to `/mix`) is at most this many rows plus the seed.
- */
-const MIX_CHAIN_LIMIT = 7;
-
-/**
- * How many of an entity's findings ride on a `get_artist`/`get_label` card — the recent/
- * representative ones. The card links to the full `/artist` or `/label` page for the rest, so a
- * dossier reads as a conversation, not a discography dump.
- */
-const MAX_ENTITY_FINDINGS = 6;
 
 // ── The grounding + voice prompt ─────────────────────────────────────────────────────
 //
@@ -105,7 +66,12 @@ THE ARCHIVE:
 - search_archive is your dig: it reaches the whole archive, including "sounds like <a real track>" which anchors on a real finding and returns the sonically nearest ones. list_tracks pages your most recent findings; get_random_track pulls one; get_status checks whether your systems are up.
 - list_fresh is what just came out: the findings whose track was RELEASED in the trailing month, freshest release first. These landed recently out in the wider world, so you say a tune just dropped or came out this month, never that you just found it. When a record came out is not when you found it.
 - get_artist and get_label resolve one artist or label you have logged, by name, and hand back that entity's findings — reach for them when someone asks about a specific artist or label you have found.
+- get_similar_artists takes an artist you have logged and hands back the ones whose sound sits nearest across your findings — reach for it when someone wants artists like the one they named. Naming an artist is always fine, whether or not you have a finding from them.
 - build_set starts from one of your findings — a Log ID coordinate or a track name you have logged — and chains an ordered set of what mixes in cleanly after it, each step carrying the reason it mixes. It only ever chains certified findings, and returns nothing when you have not logged a starting point.
+
+TAKING SOMETHING IN:
+- submit_track takes a Spotify link a raver wants you to hear and drops it in your queue to listen to later. It is a recommendation, not a publish — you have not found it and you do not speak about it as a finding; you just tell them you will give it a listen.
+- subscribe_newsletter boards an email on the Friday newsletter. You can do either right in the conversation when someone asks.
 
 HOW YOU TALK:
 - First person, warm, dry. You react like a body: knees, gun fingers, an "oof" when a tune lands. No exclamation marks, ever. No hype adjectives. State a thing once and leave it alone.
@@ -116,310 +82,19 @@ HOW YOU TALK:
 
 // ── The hands: the archive verbs, wired as AI SDK tools ───────────────────────────────
 //
-// One compact shape per verb, only the fields Fluncle needs to SPEAK from — the coordinate,
-// the names, and the facts a finding actually carries. Every tool reads through the same
-// server functions the MCP server calls, so behaviour never drifts between the agent-facing
-// MCP and this chat. THE GROUNDING BOUNDARY LIVES HERE: search_archive drops any uncertified
-// row before the model sees it, so an uncertified catalogue track is not something the model
-// can name (the catalogue rule, enforced at the wire, not just asked for in the prompt).
+// Every tool ChatDnB exposes now comes from the shared registry (./tools/registry): the archive
+// reads, the entity/dossier reads, the set builder, the "artists like this" read, and the two
+// writes. Their name/description/schema/grounding are single-sourced there, so they never drift
+// from the MCP, and the same in-process server functions back both surfaces.
 
 /**
- * Compact an entity's findings for a card, CERTIFIED-ONLY. `getFindingsByArtist`/`getFindingsByLabel`
- * already inner-join `findings … log_id is not null`, but the coordinate filter is the same wire-level
- * grounding boundary search_archive applies — a row without a coordinate is not something Fluncle
- * speaks about, so it never reaches the model even if a resolver's shape ever changed. Newest-first is
- * preserved from the resolver; the caller slices to {@link MAX_ENTITY_FINDINGS}.
+ * Build the tool set. `request` is threaded onto every tool's ctx so the WRITE tools (submit_track,
+ * subscribe_newsletter) have the submitter hash / rate-limit context; the reads ignore it. Pure and
+ * dependency-light so a test can assert the SHAPE (names + schemas) without a database — the
+ * `execute` closures are the only part that touches Turso, exercised by the route, not the unit test.
  */
-function compactCertifiedFindings(items: TrackListItem[]) {
-  return items.map(compactFinding).filter((finding) => finding.coordinate);
-}
-
-/**
- * Build the tool set. Pure and dependency-light so a test can assert the SHAPE (the names,
- * the schemas, the grounding filter) without a database — the `execute` closures are the
- * only part that touches Turso, and they are exercised by the route, not the unit test.
- */
-export function buildChatTools() {
-  return {
-    // The five overlapping read tools (get_track, get_random_track, get_status, list_fresh,
-    // list_tracks) are projected from the shared registry (./tools/registry), so their
-    // name/description/schema and grounding never drift from the MCP or WebMCP.
-    ...sharedChatTools(),
-    build_set: tool({
-      description:
-        "Chain a mixable set from one of Fluncle's findings. Give it a starting finding — a Log ID coordinate he has logged (e.g. 004.7.2I) or a track name — and it returns an ordered set of what mixes in cleanly after it, each step carrying the REASON it mixes (same key, next key over, tempo locked), never a number. It only ever chains certified findings; it returns nothing when he has not logged a starting point.",
-      execute: async ({ seed }) => {
-        const seedTrack = await resolveSeedTrack(seed.trim());
-
-        // Grounding: no certified finding to start from is the honest "he has not logged it".
-        if (!seedTrack) {
-          return { found: false, ok: true };
-        }
-
-        const seedFinding = compactFinding(seedTrack);
-        const candidates = await getMixableTracks(seedTrack.logId ?? seedTrack.trackId, {
-          limit: MIX_CHAIN_LIMIT,
-        });
-
-        // THE GROUNDING BOUNDARY: only a certified, coordinate-bearing candidate can be named
-        // or ride the `?set=` handoff. An uncertified/coordinateless catalogue row never reaches
-        // the model or the mixer link (the Unlit Rule, enforced at the wire).
-        const steps = candidates.flatMap((candidate) =>
-          candidate.certified && candidate.logId ? [candidate] : [],
-        );
-
-        if (steps.length === 0) {
-          // Seed alone. When the archive itself is too thin to chain a set from the middle of it,
-          // say so in voice rather than handing back a lonely seed — the honest "not enough yet".
-          const depth = await getMixChainDepth();
-
-          return {
-            ok: true,
-            set: dropEmpty({ seed: seedFinding, steps: [], thin: depth.open ? undefined : true }),
-          };
-        }
-
-        // Hydrate the certified steps to full findings (cover, chips, hasPreview) — the same batch
-        // hydrate search uses — then carry each candidate's reason as a human STRING, never the
-        // object and never a score.
-        const hydrated = await getTracksByLogIds(
-          steps.flatMap((step) => (step.logId ? [step.logId] : [])),
-        );
-        const chain = steps.map((candidate) => {
-          const item = candidate.logId ? hydrated[candidate.logId] : undefined;
-          const base = item ? compactFinding(item) : mixTrackToFinding(candidate);
-
-          return { ...base, reason: mixReasonLabel(candidate.reason) };
-        });
-
-        // The seed leads, then the chain in order — the set as `/mix` reproduces it. Every token
-        // is a certified Log ID (the boundary already dropped the rest), capped at the URL max.
-        const tokens = [setToken(seedTrack), ...steps.map((step) => setToken(step))].slice(
-          0,
-          MAX_SET_LENGTH,
-        );
-
-        return {
-          ok: true,
-          set: dropEmpty({
-            seed: seedFinding,
-            setUrl: `/mix?set=${serializeSet(tokens)}`,
-            steps: chain,
-          }),
-        };
-      },
-      inputSchema: z.object({
-        seed: z
-          .string()
-          .min(1)
-          .describe("A finding to start from — a Log ID coordinate (004.7.2I) or a track name."),
-      }),
-    }),
-    get_artist: tool({
-      description:
-        "Look up one artist Fluncle has logged, BY NAME (e.g. Netsky). Returns only his certified findings from that artist, plus their public socials and the slug of their page. Returns nothing — he has not logged them — when there is no certified finding from that name.",
-      execute: async ({ name }) => {
-        const slug = toArtistSlug(name.trim());
-        const artist = slug ? await getArtistBySlug(slug) : undefined;
-
-        if (!artist) {
-          return { found: false, ok: true };
-        }
-
-        const [findingCount, findingItems, socials] = await Promise.all([
-          countArtistFindings(artist.id),
-          getFindingsByArtist(artist.id, artist.name),
-          getPublicArtistSocials(artist.id),
-        ]);
-        const certified = compactCertifiedFindings(findingItems);
-
-        // Grounding: an artist Fluncle has never certified a finding from is not something he
-        // speaks about — the honest "not found", exactly like an unresolved slug.
-        if (findingCount === 0 && certified.length === 0) {
-          return { found: false, ok: true };
-        }
-
-        const findings = certified.slice(0, MAX_ENTITY_FINDINGS);
-
-        return {
-          artist: dropEmpty({
-            // No avatar rides on the artist record; the freshest certified finding's cover is
-            // the representative image (ArtistAvatar/TrackArtwork degrade to a monogram tile).
-            avatarUrl: findings[0]?.albumImageUrl,
-            // The voiced entity bio — undefined until one is authored, so `dropEmpty` ships it
-            // only when it is real (the card renders it as a quiet intro paragraph).
-            bio: artist.bio,
-            findingCount,
-            findings,
-            name: artist.name,
-            slug: artist.slug,
-            socials,
-            spotifyUrl: artist.spotifyUrl,
-          }),
-          ok: true,
-        };
-      },
-      inputSchema: z.object({
-        name: z
-          .string()
-          .min(1)
-          .describe("The artist's name, as it reads on a finding (e.g. Netsky)."),
-      }),
-    }),
-    get_label: tool({
-      description:
-        "Look up one label Fluncle has logged, BY NAME (e.g. Hospital Records). Returns only his certified findings on that label, plus any confirmed alternate spellings and the slug of its page. Returns nothing — he has found nothing on it — when there is no certified finding on that name.",
-      execute: async ({ name }) => {
-        const slug = labelSlug(name);
-        const label = slug ? await getLabelBySlug(slug) : undefined;
-
-        if (!label) {
-          return { found: false, ok: true };
-        }
-
-        const certified = compactCertifiedFindings(await getFindingsByLabel(label.id));
-
-        // Grounding: a label Fluncle has no certified finding on is not something he speaks about.
-        if (certified.length === 0) {
-          return { found: false, ok: true };
-        }
-
-        const aliases = await getConfirmedAliasNames(label.id);
-
-        return {
-          label: dropEmpty({
-            aliases,
-            // The voiced entity bio — undefined until one is authored, so `dropEmpty` ships it
-            // only when it is real (the card renders it as a quiet intro paragraph).
-            bio: label.bio,
-            findingCount: certified.length,
-            findings: certified.slice(0, MAX_ENTITY_FINDINGS),
-            logoUrl: label.logoImageUrl,
-            name: label.name,
-            slug: label.slug,
-          }),
-          ok: true,
-        };
-      },
-      inputSchema: z.object({
-        name: z
-          .string()
-          .min(1)
-          .describe("The label's name, as it reads on a finding (e.g. Hospital Records)."),
-      }),
-    }),
-    search_archive: tool({
-      description:
-        "Search Fluncle's archive of certified findings. Handles a name, a label, a key/BPM ask, or 'sounds like <a real track>' (anchors on a real finding and returns the sonically nearest). Returns only certified findings; an empty result means Fluncle has not found anything matching.",
-      execute: async ({ query }) => {
-        const result = await searchArchive({ limit: MAX_SEARCH, q: query.trim() });
-
-        // THE GROUNDING BOUNDARY, FIRST: an uncertified catalogue row has no coordinate and is
-        // never something Fluncle speaks about — strip it before anything else (before the
-        // hydrator is ever asked about it, so no uncertified logId is even looked up).
-        const certifiedHits = result.results.filter((hit) => hit.certified && hit.logId);
-
-        // A search hit carries no artwork/duration/preview; batch-hydrate the certified ones so
-        // each card can show its cover, chips, and a play control. A logId the hydrator misses
-        // falls back to the bare hit shape (still certified, just without the display extras).
-        const hydrated = await getTracksByLogIds(
-          certifiedHits.flatMap((hit) => (hit.logId ? [hit.logId] : [])),
-        );
-        const findings = certifiedHits.map((hit) => {
-          const item = hit.logId ? hydrated[hit.logId] : undefined;
-
-          return item ? compactFinding(item) : searchHitToFinding(hit);
-        });
-
-        return dropEmpty({
-          anchor: result.anchor?.certified ? searchHitToFinding(result.anchor) : undefined,
-          findings,
-          how: result.kind,
-          ok: true as const,
-        });
-      },
-      inputSchema: z.object({
-        query: z
-          .string()
-          .min(2)
-          .describe("What to dig for — a name, a label, a key/BPM, or 'sounds like <track>'."),
-      }),
-    }),
-  } satisfies ToolSet;
-}
-
-/**
- * Resolve `build_set`'s seed to a CERTIFIED finding Fluncle can chain from, or `undefined`.
- *
- * A coordinate (a finding's, or a mixtape's) resolves directly — but a mixtape is not a mixable
- * seed, so a mixtape target is rejected as not-found. Anything else is treated as a NAME: the top
- * certified search hit is the start (an uncertified hit is not something he opens a set from — the
- * grounding boundary), hydrated to the full finding the mixer engine keys off.
- */
-async function resolveSeedTrack(seed: string): Promise<TrackListItem | undefined> {
-  if (!seed) {
-    return undefined;
-  }
-
-  if (isLogId(seed) || isMixtapeLogId(seed)) {
-    const target = await resolveLogPageTarget(seed);
-
-    return target?.kind === "track" ? target.track : undefined;
-  }
-
-  const result = await searchArchive({ limit: MAX_SEARCH, q: seed });
-  const hit = result.results.find((row) => row.certified && row.logId);
-
-  if (!hit?.logId) {
-    return undefined;
-  }
-
-  return (await getTracksByLogIds([hit.logId]))[hit.logId];
-}
-
-/**
- * A mix candidate reduced to the finding fields the Chain Card needs, WITHOUT its `previewUrl`
- * (a mix candidate carries none anyway) — the fallback for a certified step the batch hydrator
- * missed, so it still shows a cover, chips, and its coordinate. The reason chip is added by the
- * caller as a human string; this never carries a score.
- */
-function mixTrackToFinding(candidate: MixCandidate) {
-  return dropEmpty({
-    albumImageUrl: candidate.albumImageUrl,
-    artists: candidate.artists,
-    bpm: candidate.bpm === undefined ? undefined : Math.round(candidate.bpm),
-    coordinate: candidate.logId,
-    durationMs: candidate.durationMs,
-    hasPreview: false,
-    key: candidate.key,
-    spotifyUrl: candidate.spotifyUrl,
-    title: candidate.title,
-  });
-}
-
-/** A search hit, reduced to the facts Fluncle speaks from (certified rows only reach here). */
-function searchHitToFinding(hit: {
-  album?: string;
-  albumImageUrl?: string;
-  artists: string[];
-  bpm?: number;
-  galaxy?: string;
-  key?: string;
-  label?: string;
-  logId?: string;
-  title: string;
-}) {
-  return dropEmpty({
-    album: hit.album,
-    albumImageUrl: hit.albumImageUrl,
-    artists: hit.artists,
-    bpm: hit.bpm === undefined ? undefined : Math.round(hit.bpm),
-    coordinate: hit.logId,
-    galaxy: hit.galaxy,
-    key: hit.key,
-    label: hit.label,
-    title: hit.title,
-  });
+export function buildChatTools(request?: Request) {
+  return sharedChatTools(request);
 }
 
 // ── The wire type ──────────────────────────────────────────────────────────────────────
@@ -474,13 +149,16 @@ export async function resolveChatModel(): Promise<string> {
  * Returns `null` when there is no `OPENROUTER_API_KEY` — the caller answers 503, the honest
  * "the chat is unprovisioned" (this is a spike; there is no cheaper degraded chat to fall
  * back to, unlike search). The model, the grounding prompt, and the archive tools are wired
- * here; `signal` lets a client disconnect abort the model mid-turn. The grounding system
- * prompt does NOT ride in `messages` — AI SDK 7 rejects `role: "system"` there outright — it
- * goes through `streamText`'s top-level `instructions` option instead.
+ * here; `signal` lets a client disconnect abort the model mid-turn. `request` is the inbound
+ * gated /api/chat request, threaded into the WRITE tools' ctx (submit_track / subscribe_newsletter
+ * need the submitter hash + rate-limit context; the reads ignore it). The grounding system prompt
+ * does NOT ride in `messages` — AI SDK 7 rejects `role: "system"` there outright — it goes through
+ * `streamText`'s top-level `instructions` option instead.
  */
 export async function streamChat(
   messages: FluncleUIMessage[],
   signal?: AbortSignal,
+  request?: Request,
 ): Promise<Response | null> {
   const apiKey = await readOptionalEnv("OPENROUTER_API_KEY");
 
@@ -500,7 +178,7 @@ export async function streamChat(
     // Structure over flourish: he is grounding, not riffing. Low, not zero — the voice needs
     // a little air.
     temperature: 0.4,
-    tools: buildChatTools(),
+    tools: buildChatTools(request),
   });
 
   return result.toUIMessageStreamResponse();

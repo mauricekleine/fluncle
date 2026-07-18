@@ -12,6 +12,29 @@ const statuses = vi.hoisted(() => vi.fn<() => Promise<ServiceStatusRow[]>>());
 const resolveTarget = vi.hoisted(() => vi.fn());
 const listTracksMock = vi.hoisted(() => vi.fn());
 const listFreshMock = vi.hoisted(() => vi.fn());
+// The archive-read tools PR-2 lifted onto the MCP touch these — mocked so the JSON-RPC calls stay
+// hermetic (no DB, no network, no real rate-limit store).
+const searchArchiveMock = vi.hoisted(() => vi.fn());
+const assertRateLimitMock = vi.hoisted(() => vi.fn<() => Promise<void>>());
+const getFindingsByArtistMock = vi.hoisted(() => vi.fn());
+const getFindingsByLabelMock = vi.hoisted(() => vi.fn());
+const getMixableTracksMock = vi.hoisted(() => vi.fn());
+const getMixChainDepthMock = vi.hoisted(() => vi.fn());
+const getTracksByLogIdsMock = vi.hoisted(() => vi.fn());
+const getArtistBySlugMock = vi.hoisted(() => vi.fn());
+const countArtistFindingsMock = vi.hoisted(() => vi.fn());
+const getPublicArtistSocialsMock = vi.hoisted(() => vi.fn());
+const getLabelBySlugMock = vi.hoisted(() => vi.fn());
+const getConfirmedAliasNamesMock = vi.hoisted(() => vi.fn());
+const getArtistNeighboursMock = vi.hoisted(() => vi.fn());
+
+// A faithful stand-in for the deterministic slug helpers (their DB-touching sibling modules stay
+// mocked): "Netsky" → "netsky", "Hospital Records" → "hospital-records".
+const toSlug = (name: string): string =>
+  name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
 
 vi.mock("./status", () => ({
   getServiceStatuses: statuses,
@@ -23,8 +46,28 @@ vi.mock("./log-resolver", () => ({
 
 vi.mock("./tracks", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./tracks")>()),
+  getFindingsByArtist: getFindingsByArtistMock,
+  getFindingsByLabel: getFindingsByLabelMock,
+  getMixChainDepth: getMixChainDepthMock,
+  getMixableTracks: getMixableTracksMock,
+  getTracksByLogIds: getTracksByLogIdsMock,
   listTracks: listTracksMock,
 }));
+
+vi.mock("./search", () => ({ searchArchive: searchArchiveMock }));
+vi.mock("./rate-limit", () => ({ assertRateLimit: assertRateLimitMock }));
+vi.mock("./artists", () => ({
+  countArtistFindings: countArtistFindingsMock,
+  getArtistBySlug: getArtistBySlugMock,
+  getPublicArtistSocials: getPublicArtistSocialsMock,
+  toArtistSlug: toSlug,
+}));
+vi.mock("./labels", () => ({
+  getConfirmedAliasNames: getConfirmedAliasNamesMock,
+  getLabelBySlug: getLabelBySlugMock,
+  labelSlug: (name: string) => toSlug(name) || undefined,
+}));
+vi.mock("./artist-dossier", () => ({ getArtistNeighbours: getArtistNeighboursMock }));
 
 // Partial-mock ./fresh so the constants (FRESH_TRACKS_DEFAULT/MAX) stay real for the
 // list_fresh schema while its DB read is stubbed.
@@ -497,5 +540,163 @@ describe("MCP prompts", () => {
     };
 
     expect(body.error?.code).toBe(-32602);
+  });
+});
+
+describe("MCP — the archive-read tools PR-2 lifted out of ChatDnB", () => {
+  beforeEach(() => {
+    searchArchiveMock.mockReset();
+    assertRateLimitMock.mockReset();
+    assertRateLimitMock.mockResolvedValue(undefined);
+    getFindingsByArtistMock.mockReset();
+    getFindingsByArtistMock.mockResolvedValue([]);
+    getFindingsByLabelMock.mockReset();
+    getFindingsByLabelMock.mockResolvedValue([]);
+    getMixableTracksMock.mockReset();
+    getMixableTracksMock.mockResolvedValue([]);
+    getMixChainDepthMock.mockReset();
+    getMixChainDepthMock.mockResolvedValue({ median: 40, open: true, rankable: 100 });
+    getTracksByLogIdsMock.mockReset();
+    getTracksByLogIdsMock.mockResolvedValue({});
+    getArtistBySlugMock.mockReset();
+    getArtistBySlugMock.mockResolvedValue(undefined);
+    countArtistFindingsMock.mockReset();
+    countArtistFindingsMock.mockResolvedValue(0);
+    getPublicArtistSocialsMock.mockReset();
+    getPublicArtistSocialsMock.mockResolvedValue([]);
+    getLabelBySlugMock.mockReset();
+    getLabelBySlugMock.mockResolvedValue(undefined);
+    getConfirmedAliasNamesMock.mockReset();
+    getConfirmedAliasNamesMock.mockResolvedValue([]);
+    getArtistNeighboursMock.mockReset();
+    getArtistNeighboursMock.mockResolvedValue([]);
+    resolveTargetMock.mockReset();
+  });
+
+  it("advertises every newly-migrated tool in tools/list", async () => {
+    const body = (await rpc("tools/list")) as { result: { tools: Array<{ name: string }> } };
+    const names = body.result.tools.map((tool) => tool.name);
+
+    for (const name of [
+      "search_archive",
+      "get_artist",
+      "get_label",
+      "build_set",
+      "get_similar_artists",
+      // The two writes moved onto the shared registry — still advertised on the MCP.
+      "submit_track",
+      "subscribe_newsletter",
+    ]) {
+      expect(names, `${name} advertised`).toContain(name);
+    }
+  });
+
+  it("search_archive RATE-LIMITS (shared budget) and world-serves BOTH registers, certified-tagged", async () => {
+    searchArchiveMock.mockResolvedValue({
+      degraded: false,
+      entities: [],
+      kind: "token",
+      results: [
+        {
+          artists: ["Nu:Tone"],
+          certified: true,
+          logId: "004.7.2I",
+          title: "Better Places",
+          trackId: "a",
+        },
+        { artists: ["Someone"], certified: false, title: "A Catalogue Cut", trackId: "b" },
+      ],
+    });
+
+    const { data, isError } = await callTool("search_archive", { query: "nu:tone" });
+
+    expect(isError).toBe(false);
+    // 🔴 MANDATORY: the anonymous /mcp shares the public HTTP twin's per-IP budget.
+    expect(assertRateLimitMock).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "search_archive", limit: 30 }),
+    );
+    // Unlike chat's findings-only filter, the MCP serves the WHOLE SearchResult — the uncertified
+    // row rides too, tagged certified:false (never findings-filtered).
+    const results = data.results as Array<Record<string, unknown>>;
+    expect(results).toHaveLength(2);
+    expect(results[0]).toMatchObject({ certified: true, logId: "004.7.2I" });
+    expect(results[1]).toMatchObject({ certified: false, title: "A Catalogue Cut" });
+    expect(results[1]?.logId).toBeUndefined();
+  });
+
+  it("get_artist reads an artist's dossier by name", async () => {
+    getArtistBySlugMock.mockResolvedValue({ id: "art-1", name: "Netsky", slug: "netsky" });
+    countArtistFindingsMock.mockResolvedValue(1);
+    getFindingsByArtistMock.mockResolvedValue([
+      { artists: ["Netsky"], logId: "004.7.2I", title: "Rio" },
+    ]);
+
+    const { data, isError } = await callTool("get_artist", { name: "Netsky" });
+
+    expect(isError).toBe(false);
+    const artist = data.artist as Record<string, unknown>;
+    expect(artist).toMatchObject({ findingCount: 1, name: "Netsky", slug: "netsky" });
+  });
+
+  it("get_label reads a label's dossier by name", async () => {
+    getLabelBySlugMock.mockResolvedValue({
+      id: "lbl-1",
+      logoImageUrl: undefined,
+      name: "Hospital Records",
+      slug: "hospital-records",
+    });
+    getFindingsByLabelMock.mockResolvedValue([
+      { artists: ["Nu:Tone"], logId: "004.7.2I", title: "Better Places" },
+    ]);
+
+    const { data, isError } = await callTool("get_label", { name: "Hospital Records" });
+
+    expect(isError).toBe(false);
+    const label = data.label as Record<string, unknown>;
+    expect(label).toMatchObject({ name: "Hospital Records", slug: "hospital-records" });
+  });
+
+  it("build_set chains a set from a coordinate seed", async () => {
+    resolveTargetMock.mockResolvedValue({
+      kind: "track",
+      track: {
+        artists: ["Seed"],
+        durationMs: 200_000,
+        logId: "004.7.2I",
+        title: "Seed",
+        trackId: "s",
+      },
+    });
+    getMixableTracksMock.mockResolvedValue([]);
+
+    const { data, isError } = await callTool("build_set", { seed: "004.7.2I" });
+
+    expect(isError).toBe(false);
+    const set = data.set as { seed: { coordinate?: string } };
+    expect(set.seed.coordinate).toBe("004.7.2I");
+  });
+
+  it("get_similar_artists returns the nearest artists by name", async () => {
+    getArtistBySlugMock.mockResolvedValue({ id: "art-1", name: "Koven", slug: "koven" });
+    getArtistNeighboursMock.mockResolvedValue([
+      { name: "Camo & Krooked", slug: "camo-krooked" },
+      { name: "Metrik", slug: "metrik" },
+    ]);
+
+    const { data, isError } = await callTool("get_similar_artists", { name: "Koven" });
+
+    expect(isError).toBe(false);
+    expect(getArtistNeighboursMock).toHaveBeenCalledWith("art-1", expect.any(Number));
+    const similar = data.similar as Array<{ slug: string }>;
+    expect(similar.map((artist) => artist.slug)).toEqual(["camo-krooked", "metrik"]);
+  });
+
+  it("get_similar_artists returns found:false for an unlogged name", async () => {
+    getArtistBySlugMock.mockResolvedValue(undefined);
+
+    const { data } = await callTool("get_similar_artists", { name: "Nobody" });
+
+    expect(data.found).toBe(false);
+    expect(getArtistNeighboursMock).not.toHaveBeenCalled();
   });
 });

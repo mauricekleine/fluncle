@@ -24,6 +24,9 @@ const getConfirmedAliasNames = vi.hoisted(() => vi.fn<() => Promise<string[]>>()
 const listFreshTracks = vi.hoisted(() =>
   vi.fn<() => Promise<{ albums: unknown[]; tracks: unknown[]; windowDays: number }>>(),
 );
+const getArtistNeighbours = vi.hoisted(() =>
+  vi.fn<() => Promise<Array<{ imageUrl?: string; name: string; slug: string }>>>(),
+);
 
 // A faithful stand-in for the real deterministic slug helpers (the DB-touching modules stay
 // mocked). "Netsky" → "netsky", "Hospital Records" → "hospital-records" — enough to prove the
@@ -37,6 +40,7 @@ function toSlug(name: string): string {
 
 vi.mock("./env", () => ({ readOptionalEnv }));
 vi.mock("./fresh", () => ({ listFreshTracks }));
+vi.mock("./artist-dossier", () => ({ getArtistNeighbours }));
 vi.mock("./search", () => ({ searchArchive: vi.fn() }));
 vi.mock("./log-resolver", () => ({ resolveLogPageTarget: vi.fn() }));
 vi.mock("./status", () => ({ getServiceStatuses: vi.fn() }));
@@ -109,6 +113,9 @@ beforeEach(() => {
   // suite overrides it with the release rows it needs.
   listFreshTracks.mockReset();
   listFreshTracks.mockResolvedValue({ albums: [], tracks: [], windowDays: 30 });
+  // get_similar_artists defaults to "no neighbours yet"; its suite overrides with real neighbours.
+  getArtistNeighbours.mockReset();
+  getArtistNeighbours.mockResolvedValue([]);
 });
 
 afterEach(() => {
@@ -173,11 +180,14 @@ describe("buildChatTools — the MCP hands", () => {
       "get_artist",
       "get_label",
       "get_random_track",
+      "get_similar_artists",
       "get_status",
       "get_track",
       "list_fresh",
       "list_tracks",
       "search_archive",
+      "submit_track",
+      "subscribe_newsletter",
     ]);
 
     for (const [name, definition] of Object.entries(tools)) {
@@ -388,6 +398,72 @@ describe("buildChatTools — the MCP hands", () => {
     const lookedUp = getTracksByLogIds.mock.calls.at(-1)?.[0] ?? [];
     expect(lookedUp).toContain("004.7.2I");
     expect(lookedUp).not.toContain("999.9.9Z");
+  });
+
+  it("exposes the two WRITE verbs on chat, each with an input schema + executor", () => {
+    // PR-2 puts submit_track + subscribe_newsletter on ChatDnB (gated-session-safe), so Fluncle
+    // can take a submission / newsletter signup mid-conversation.
+    const tools = buildChatTools();
+
+    for (const name of ["submit_track", "subscribe_newsletter"] as const) {
+      expect(tools[name]?.inputSchema, `${name} needs a schema`).toBeDefined();
+      expect(typeof tools[name]?.execute, `${name} needs an executor`).toBe("function");
+    }
+  });
+});
+
+describe("get_similar_artists — the artist-discovery read", () => {
+  function similarExecutor() {
+    const execute = buildChatTools().get_similar_artists?.execute;
+
+    if (typeof execute !== "function") {
+      throw new Error("get_similar_artists executor missing");
+    }
+
+    return execute;
+  }
+
+  it("resolves a NAME through the slug helper and passes the artist id to getArtistNeighbours", async () => {
+    getArtistBySlug.mockResolvedValue({ id: "art-1", name: "Koven", slug: "koven" });
+    getArtistNeighbours.mockResolvedValue([
+      { imageUrl: "https://cover.example/a.jpg", name: "Camo & Krooked", slug: "camo-krooked" },
+      { name: "Metrik", slug: "metrik" },
+    ]);
+
+    const result = (await similarExecutor()({ name: "Koven" }, {} as never)) as {
+      of: { name?: string; slug?: string };
+      similar: { name: string; slug: string }[];
+    };
+
+    // name → slug helper → getArtistBySlug(slug) — the same resolution get_artist uses.
+    expect(toArtistSlug).toHaveBeenCalledWith("Koven");
+    expect(getArtistBySlug).toHaveBeenCalledWith("koven");
+    // A thin pass-through: the id goes to getArtistNeighbours, and its list rides back unchanged.
+    expect(getArtistNeighbours).toHaveBeenCalledWith("art-1", expect.any(Number));
+    expect(result.of).toEqual({ name: "Koven", slug: "koven" });
+    expect(result.similar.map((artist) => artist.slug)).toEqual(["camo-krooked", "metrik"]);
+  });
+
+  it("returns found:false when the name resolves to no artist he has logged", async () => {
+    getArtistBySlug.mockResolvedValue(undefined);
+
+    const result = await similarExecutor()({ name: "Nobody At All" }, {} as never);
+
+    expect(result).toEqual({ found: false, ok: true });
+    expect(getArtistNeighbours).not.toHaveBeenCalled();
+  });
+
+  it("returns an honest empty list when the artist has no neighbours yet (not found:false)", async () => {
+    getArtistBySlug.mockResolvedValue({ id: "art-2", name: "Quiet One", slug: "quiet-one" });
+    getArtistNeighbours.mockResolvedValue([]);
+
+    const result = (await similarExecutor()({ name: "Quiet One" }, {} as never)) as {
+      ok: boolean;
+      similar: unknown[];
+    };
+
+    expect(result.ok).toBe(true);
+    expect(result.similar).toEqual([]);
   });
 });
 

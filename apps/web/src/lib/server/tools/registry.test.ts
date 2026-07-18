@@ -58,15 +58,26 @@ const byName = (name: string): ToolSpec => {
   return spec;
 };
 
-describe("SHARED_TOOLS registry — one definition, five verbs", () => {
-  it("seeds exactly the five overlapping tools", () => {
-    expect(SHARED_TOOL_SPECS.map((spec) => spec.name).sort()).toEqual([
-      "get_random_track",
-      "get_status",
-      "get_track",
-      "list_fresh",
-      "list_tracks",
-    ]);
+// The full realized registry after PR-2: the five overlapping reads, the four reads + one new
+// (`get_similar_artists`) lifted out of ChatDnB, and the two writes.
+const ALL_TOOL_NAMES = [
+  "build_set",
+  "get_artist",
+  "get_label",
+  "get_random_track",
+  "get_similar_artists",
+  "get_status",
+  "get_track",
+  "list_fresh",
+  "list_tracks",
+  "search_archive",
+  "submit_track",
+  "subscribe_newsletter",
+];
+
+describe("SHARED_TOOLS registry — one definition, every verb", () => {
+  it("seeds exactly the registered tools (reads + writes)", () => {
+    expect(SHARED_TOOL_SPECS.map((spec) => spec.name).sort()).toEqual(ALL_TOOL_NAMES);
     // SHARED_TOOLS (spec + execute) mirrors the specs one-for-one.
     expect(SHARED_TOOLS.map((def) => def.name).sort()).toEqual(
       SHARED_TOOL_SPECS.map((spec) => spec.name).sort(),
@@ -162,27 +173,28 @@ describe("tool-set parity — each transport gets exactly its declared projectio
         .map((spec) => spec.name)
         .sort();
 
-    expect(forTransport("mcp")).toEqual([
-      "get_random_track",
-      "get_status",
-      "get_track",
-      "list_fresh",
-      "list_tracks",
-    ]);
-    expect(forTransport("chat")).toEqual([
-      "get_random_track",
-      "get_status",
-      "get_track",
-      "list_fresh",
-      "list_tracks",
-    ]);
-    // get_status absent — WebMCP carries the four read tools only.
+    // Every tool is on the MCP + chat (the two full-coverage surfaces).
+    expect(forTransport("mcp")).toEqual(ALL_TOOL_NAMES);
+    expect(forTransport("chat")).toEqual(ALL_TOOL_NAMES);
+    // WebMCP carries only the tools with a matching public /api endpoint: the four original reads,
+    // the archive search (its `q` twin), and the two writes. The codified asymmetries stay off it —
+    // get_status, get_artist, get_label, build_set, get_similar_artists (no name-keyed public op,
+    // and this PR adds none).
     expect(forTransport("webmcp")).toEqual([
       "get_random_track",
       "get_track",
       "list_fresh",
       "list_tracks",
+      "search_archive",
+      "submit_track",
+      "subscribe_newsletter",
     ]);
+  });
+
+  it("codifies the reads that stay off WebMCP (no name-keyed public endpoint)", () => {
+    for (const name of ["get_artist", "get_label", "build_set", "get_similar_artists"]) {
+      expect(byName(name).transports.sort(), name).toEqual(["chat", "mcp"]);
+    }
   });
 
   it("get_recent_tracks is a per-transport alias, never a shared tool", () => {
@@ -268,6 +280,91 @@ describe("schema snapshot — z.toJSONSchema carries required / min / max", () =
       // The explicit-opts toJSONSchema form deliberately omits additionalProperties:false.
       expect(schema.additionalProperties).toBeUndefined();
     }
+  });
+});
+
+// The registry names now come under the same `verb_noun` naming test the contract ops do
+// (orpc-naming.test.ts). `build_set` brought `build` under it — the sibling of the `anchor` / `drip`
+// pattern (a concrete non-CRUD action verb, added deliberately, mirrored in
+// docs/naming-conventions.md's closed set).
+const VERB_NOUN_SHAPE = /^[a-z]+(?:_[a-z0-9]+)+$/;
+const APPROVED_TOOL_VERBS = new Set<string>([
+  "build",
+  "get",
+  "list",
+  "search",
+  "submit",
+  "subscribe",
+]);
+
+describe("registry naming — verb_noun over the tool names (incl. build)", () => {
+  it("every tool name is lowercase snake_case verb_noun", () => {
+    for (const spec of SHARED_TOOL_SPECS) {
+      expect(VERB_NOUN_SHAPE.test(spec.name), `${spec.name} is not verb_noun`).toBe(true);
+    }
+  });
+
+  it("every tool leads with an approved verb (build_set brings `build` under the convention)", () => {
+    for (const spec of SHARED_TOOL_SPECS) {
+      const verb = spec.name.split("_")[0] ?? spec.name;
+      expect(
+        APPROVED_TOOL_VERBS.has(verb),
+        `${spec.name} leads with unapproved verb "${verb}"`,
+      ).toBe(true);
+    }
+    // build_set is the verb that had to be added — assert it is present and approved.
+    expect(byName("build_set").name.split("_")[0]).toBe("build");
+  });
+});
+
+describe("the auth model — transports authored independently of access", () => {
+  it("the realized MCP tool set contains NO access:session tool (the cross-field guard)", () => {
+    // Not a tautology: nothing projects on `access`, so a future privileged tool mislabeled onto
+    // the anonymous MCP would trip this. Today every MCP tool is public.
+    for (const spec of SHARED_TOOL_SPECS) {
+      if (spec.transports.includes("mcp")) {
+        expect(spec.access, `${spec.name} on the MCP`).toBe("public");
+      }
+    }
+  });
+
+  it("the writes are effect:write + public (the review rule: any user-owned-state mutation is session)", () => {
+    // The two writes mutate no session-owned state (an anonymous submission, a newsletter board),
+    // so they are public — exactly as the anonymous MCP already exposed them. The registry lint: a
+    // future tool that mutates USER-owned state must be access:session (none are today).
+    for (const name of ["submit_track", "subscribe_newsletter"]) {
+      expect(byName(name).effect, name).toBe("write");
+      expect(byName(name).access, name).toBe("public");
+    }
+    // Every read is effect:read.
+    for (const spec of SHARED_TOOL_SPECS) {
+      if (spec.name !== "submit_track" && spec.name !== "subscribe_newsletter") {
+        expect(spec.effect, spec.name).toBe("read");
+      }
+    }
+  });
+});
+
+describe("get_similar_artists — the new artist-discovery read", () => {
+  it("is a lore-canon read on MCP + chat, off WebMCP (a codified asymmetry)", () => {
+    const spec = byName("get_similar_artists");
+    expect(spec.tier).toBe("lore-canon");
+    expect(spec.effect).toBe("read");
+    expect(spec.transports.sort()).toEqual(["chat", "mcp"]);
+  });
+
+  it("takes a required name and an optional bounded limit", () => {
+    const schema = toInputJsonSchema(byName("get_similar_artists")) as {
+      properties: {
+        limit: { maximum: number; minimum: number; type: string };
+        name: { type: string };
+      };
+      required: string[];
+    };
+
+    expect(schema.properties.name.type).toBe("string");
+    expect(schema.required).toEqual(["name"]);
+    expect(schema.properties.limit).toMatchObject({ minimum: 1, type: "integer" });
   });
 });
 

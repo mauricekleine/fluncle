@@ -22,12 +22,29 @@ export type ToolTier = "lore-canon" | "catalogue" | "system";
 
 /**
  * The CLOSED set of output shapes a tool projects to — not a free-form per-tool function, so
- * divergence stays reviewable. `publicRecord` = the MCP full public record; `compactCard` =
- * ChatDnB's compact finding card; `twoBucket` = the (findings, catalogue) split (PR-4); and
- * `identity` = a status summary. The tag names WHICH shape a transport realizes; the server
- * `execute` produces it (switching on `ctx.transport`).
+ * divergence stays reviewable. The tag names WHICH shape a transport realizes; the server
+ * `execute` produces it (branching on `ctx.transport` only where the shapes actually differ).
+ *
+ *   - `publicRecord`   — the MCP's full public record (a finding, or a whole `SearchResult` with
+ *                        BOTH registers certified-tagged).
+ *   - `compactCard`    — ChatDnB's compact finding card (list_tracks/list_fresh, and chat's
+ *                        findings-only `search_archive` until PR-4).
+ *   - `twoBucket`      — the (findings, catalogue) split (PR-4).
+ *   - `identity`       — a status summary.
+ *   - `entityCard`     — an artist/label dossier card (its findings + socials/aliases + slug).
+ *   - `chainCard`      — a `build_set` mix chain (seed + ordered steps + the `/mix` setUrl).
+ *   - `neighbourList`  — a `get_similar_artists` list of nearest artist entities.
+ *   - `acknowledgement`— a write's `{ ok }` receipt (a submission id, a newsletter board).
  */
-export type Projection = "publicRecord" | "compactCard" | "twoBucket" | "identity";
+export type Projection =
+  | "acknowledgement"
+  | "chainCard"
+  | "compactCard"
+  | "entityCard"
+  | "identity"
+  | "neighbourList"
+  | "publicRecord"
+  | "twoBucket";
 
 /** Whether a tool needs a session. AUTHORED INDEPENDENTLY of `transports` (the auth cross-check). */
 export type ToolAccess = "public" | "session";
@@ -167,13 +184,187 @@ export const getStatusSpec = defineSpec({
   transports: ["mcp", "chat"],
 });
 
-/** The five overlapping tool specs. Order: `list_tracks` first (the MCP/WebMCP alias clones it). */
+// ── The archive-read tools that used to live only in ChatDnB ─────────────────────────
+//
+// PR-2 lifts these into the shared registry so the MCP (and, where a public HTTP twin exists,
+// WebMCP) gains a real ARCHIVE search + the entity/dossier reads its Spotify-only `search_tracks`
+// never had. The descriptions are shared, model-facing, and register-neutral — the certified /
+// catalogue register discipline lives in ChatDnB's system prompt (the MCP has no model prose), not
+// in the tool text, so nothing here teaches a tier (DESIGN.md Unlit Rule).
+
+export const searchArchiveSpec = defineSpec({
+  access: "public",
+  description:
+    "Search Fluncle's drum & bass archive. Handles a name, a label, a key or BPM ask, or 'sounds like <a real track>' (it anchors on a real finding and returns the sonically nearest). An empty result means nothing in the archive matched.",
+  effect: "read",
+  input: z.object({
+    query: z
+      .string()
+      .min(2)
+      .describe("What to dig for — a name, a label, a key/BPM, or 'sounds like <track>'."),
+  }),
+  name: "search_archive",
+  // Chat filters to findings-only (until PR-4); the MCP world-serves the whole SearchResult, both
+  // registers certified-tagged; WebMCP reads the public GET /api/v1/search/archive twin.
+  project: { chat: "compactCard", mcp: "publicRecord", webmcp: "publicRecord" },
+  tier: "lore-canon",
+  title: "Search the archive",
+  transports: ["mcp", "chat", "webmcp"],
+});
+
+export const getArtistSpec = defineSpec({
+  access: "public",
+  description:
+    "Look up one artist Fluncle has logged, BY NAME (e.g. Netsky). Returns his certified findings from that artist, plus their public socials and the slug of their page. Returns nothing — he has not logged them — when there is no certified finding from that name.",
+  effect: "read",
+  input: z.object({
+    name: z.string().min(1).describe("The artist's name, as it reads on a finding (e.g. Netsky)."),
+  }),
+  name: "get_artist",
+  // MCP + chat only. The public GET /api/v1/artists/{slug} twin takes a pre-computed SLUG (not the
+  // tool's `name`) and returns a much thinner shape (no findings/socials); resolving name→slug in
+  // the browser risks a stored-slug mismatch, and this PR adds no name-keyed public endpoint. A
+  // codified asymmetry, like get_status off WebMCP.
+  project: { chat: "entityCard", mcp: "entityCard" },
+  tier: "lore-canon",
+  title: "Look up an artist",
+  transports: ["mcp", "chat"],
+});
+
+export const getLabelSpec = defineSpec({
+  access: "public",
+  description:
+    "Look up one label Fluncle has logged, BY NAME (e.g. Hospital Records). Returns his certified findings on that label, plus any confirmed alternate spellings and the slug of its page. Returns nothing — he has found nothing on it — when there is no certified finding on that name.",
+  effect: "read",
+  input: z.object({
+    name: z
+      .string()
+      .min(1)
+      .describe("The label's name, as it reads on a finding (e.g. Hospital Records)."),
+  }),
+  name: "get_label",
+  // MCP + chat only: there is no public GET /labels/{slug} JSON twin for WebMCP to call, and this
+  // PR adds no new HTTP endpoint (a codified asymmetry, like get_status off WebMCP).
+  project: { chat: "entityCard", mcp: "entityCard" },
+  tier: "lore-canon",
+  title: "Look up a label",
+  transports: ["mcp", "chat"],
+});
+
+export const buildSetSpec = defineSpec({
+  access: "public",
+  description:
+    "Chain a mixable set from one of Fluncle's findings. Give it a starting finding — a Log ID coordinate he has logged (e.g. 004.7.2I) or a track name — and it returns an ordered set of what mixes in cleanly after it, each step carrying the REASON it mixes (same key, next key over, tempo locked), never a number. It only ever chains certified findings; it returns nothing when he has not logged a starting point.",
+  effect: "read",
+  input: z.object({
+    seed: z
+      .string()
+      .min(1)
+      .describe("A finding to start from — a Log ID coordinate (004.7.2I) or a track name."),
+  }),
+  name: "build_set",
+  // MCP + chat only: build_set takes a name/coordinate and returns a reasoned set with a /mix
+  // handoff — there is no single public HTTP endpoint that IS that operation (the mixable rail is a
+  // different op, coordinate-in, no setUrl), and this PR adds none. A codified asymmetry.
+  project: { chat: "chainCard", mcp: "chainCard" },
+  tier: "lore-canon",
+  title: "Build a mixable set",
+  transports: ["mcp", "chat"],
+});
+
+/** How many nearest artists `get_similar_artists` returns by default / at most. */
+export const SIMILAR_ARTISTS_DEFAULT = 4;
+export const SIMILAR_ARTISTS_MAX = 12;
+
+export const getSimilarArtistsSpec = defineSpec({
+  access: "public",
+  description:
+    "Given an artist Fluncle has logged, BY NAME (e.g. Koven), return the artists whose sound sits nearest to theirs across his findings. Naming an artist is always allowed. Returns nothing when the name resolves to no artist he has logged, and an empty list when he has one but nothing near it yet.",
+  effect: "read",
+  input: z.object({
+    limit: z
+      .number()
+      .int()
+      .min(1)
+      .max(SIMILAR_ARTISTS_MAX)
+      .optional()
+      .describe(`How many nearest artists to return (1 to ${SIMILAR_ARTISTS_MAX}, default 4).`),
+    name: z.string().min(1).describe("The artist's name, as it reads on a finding (e.g. Koven)."),
+  }),
+  name: "get_similar_artists",
+  // MCP + chat only: the neighbour read is not on a public HTTP op yet (only the artist-page
+  // loader), and this PR adds none — the same codified asymmetry as get_status.
+  project: { chat: "neighbourList", mcp: "neighbourList" },
+  tier: "lore-canon",
+  title: "Artists like this one",
+  transports: ["mcp", "chat"],
+});
+
+// ── The write tools (public writes, gated per surface) ───────────────────────────────
+//
+// Anonymous on the MCP exactly as they were before this PR (the /mcp endpoint has no session);
+// on ChatDnB they ride the gated route (session + verified email + CSRF + dual rate dials), which
+// is strictly safer. `effect: "write"` marks that they receive `ctx.request` (the submitter hash /
+// rate limit). `access: "public"` — they mutate no session-owned state; the auth cross-field test
+// asserts no `access: "session"` tool is ever realized onto the MCP.
+
+export const submitTrackSpec = defineSpec({
+  access: "public",
+  description:
+    "Submit a track to Fluncle for review by Spotify track URL. Fluncle gives it a listen before anything publishes. Limited to 5 submissions per connection per hour.",
+  effect: "write",
+  input: z.object({
+    contact: z
+      .string()
+      .max(120)
+      .optional()
+      .describe("Optional: where to reach the submitter (max 120 characters)."),
+    note: z
+      .string()
+      .max(500)
+      .optional()
+      .describe("Optional: tell Fluncle why it's a banger (max 500 characters)."),
+    spotifyUrl: z.string().describe("Spotify track URL, e.g. https://open.spotify.com/track/..."),
+  }),
+  name: "submit_track",
+  project: { chat: "acknowledgement", mcp: "acknowledgement", webmcp: "acknowledgement" },
+  tier: "system",
+  title: "Submit a track",
+  transports: ["mcp", "chat", "webmcp"],
+});
+
+export const subscribeNewsletterSpec = defineSpec({
+  access: "public",
+  description:
+    "Subscribe an email address to Fluncle's newsletter. Fresh bangers, every Friday, from Fluncle.",
+  effect: "write",
+  input: z.object({
+    email: z.email().describe("The email address boarding the mothership."),
+  }),
+  name: "subscribe_newsletter",
+  project: { chat: "acknowledgement", mcp: "acknowledgement", webmcp: "acknowledgement" },
+  tier: "system",
+  title: "Subscribe to the newsletter",
+  transports: ["mcp", "chat", "webmcp"],
+});
+
+/**
+ * Every shared tool spec, single-sourced. Order: `list_tracks` first (the MCP/WebMCP alias clones
+ * it). The five overlapping read tools, then the reads PR-2 lifted out of ChatDnB, then the writes.
+ */
 export const SHARED_TOOL_SPECS: ToolSpec[] = [
   listTracksSpec,
   listFreshSpec,
   getTrackSpec,
   getRandomTrackSpec,
   getStatusSpec,
+  searchArchiveSpec,
+  getArtistSpec,
+  getLabelSpec,
+  buildSetSpec,
+  getSimilarArtistsSpec,
+  submitTrackSpec,
+  subscribeNewsletterSpec,
 ];
 
 // ── The JSON-Schema bridge + the WebMCP adapter (client-safe) ─────────────────────────
