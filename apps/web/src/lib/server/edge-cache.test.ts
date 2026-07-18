@@ -151,6 +151,45 @@ describe("entityPurgeUrl", () => {
   });
 });
 
+describe("purge targets match the cached URL shapes", () => {
+  // The correctness pin that matters most: a page the read path CACHES but the write
+  // path fails to PURGE would serve stale content forever. Both derivations key off the
+  // same canonical origin + path (edge-cache stores under cacheKeyForPath; the purges
+  // emit entityPurgeUrl/logPurgeUrls), and both drop the query string. Rather than trust
+  // that by inspection, pin it: every purge URL must round-trip back to a CACHEABLE,
+  // query-less path — i.e. the exact shape the read path is willing to store. If either
+  // side ever drifts (origin, encoding, a stray query), the predicate rejects it here.
+  const CANONICAL = "https://www.fluncle.com";
+
+  it("every entity purge URL is a cacheable, query-less canonical detail path", () => {
+    const targets = [
+      { kind: "artist", slug: "sub-focus" },
+      { kind: "album", slug: "all-that-jazz" },
+      { kind: "label", slug: "hospital-records" },
+    ] as const;
+
+    for (const { kind, slug } of targets) {
+      const url = new URL(entityPurgeUrl(kind, slug));
+
+      expect(url.origin).toBe(CANONICAL);
+      expect(url.search).toBe("");
+      // The read path (server.ts) only stores a request isCacheableEntityRequest accepts;
+      // the purge URL must be exactly such a request, or the delete misses the stored entry.
+      expect(isCacheableEntityRequest(url.pathname, url.search)).toBe(true);
+    }
+  });
+
+  it("the finding's own page AND index purge URLs are cacheable, query-less log paths", () => {
+    for (const raw of logPurgeUrls("2026.A.7Q")) {
+      const url = new URL(raw);
+
+      expect(url.origin).toBe(CANONICAL);
+      expect(url.search).toBe("");
+      expect(isCacheableLogPath(url.pathname)).toBe(true);
+    }
+  });
+});
+
 describe("purgeEntityCache / purgeEntityCaches", () => {
   it("is a safe no-op for a missing, blank, or empty target set", () => {
     // Write paths call these with whatever slug they hold; a blank slug or empty list
