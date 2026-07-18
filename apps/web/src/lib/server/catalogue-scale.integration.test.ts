@@ -308,7 +308,7 @@ describe("the sitemap at catalogue volume", () => {
     const { xml } = await renderSitemap();
     const locs = xml.match(/<loc>/g) ?? [];
 
-    // 15 hubs + 1 finding + 2 label pages (Hospital: 1 finding + 900 rows; Metalheadz: 400 rows,
+    // 16 hubs + 1 finding + 2 label pages (Hospital: 1 finding + 900 rows; Metalheadz: 400 rows,
     // no finding — both clear the floor) + 60 crawled artist pages (CRAWLED_ARTISTS per label, a
     // distinct entity each, every one well past the floor). No `albums` rows are minted in this
     // seed, so no album <loc>. `/mix` is dark (the crawled tracks carry no key, so the depth gate
@@ -321,7 +321,7 @@ describe("the sitemap at catalogue volume", () => {
     expect(xml).not.toContain("Crawled");
     expect(xml).not.toContain("mb_lbl_");
     expect(xml).not.toContain("/track/");
-    expect(locs).toHaveLength(15 + 1 + 2 + 2 * CRAWLED_ARTISTS);
+    expect(locs).toHaveLength(16 + 1 + 2 + 2 * CRAWLED_ARTISTS);
   });
 
   it("LISTS the discovered label — the page exists, so the sitemap must point at it", async () => {

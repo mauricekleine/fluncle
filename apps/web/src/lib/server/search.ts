@@ -509,7 +509,7 @@ async function resolveEntity(query: string): Promise<SearchResult | null> {
  * scalars by TYPE, not by convention: nothing a model or a stranger typed can arrive here as
  * anything but a bound value.
  */
-type Clause = { args: (number | string)[]; sql: string };
+export type Clause = { args: (number | string)[]; sql: string };
 
 /**
  * Compile a `SearchFilters` object into `where` clauses. Every value is a BIND ARG; nothing
@@ -522,8 +522,14 @@ type Clause = { args: (number | string)[]; sql: string };
  *
  * `key` goes through {@link keySpellings}, so "Bb minor" and "A# minor" ask one question.
  * `text` goes through the FTS index (a subquery, so bm25 does not have to survive the join).
+ *
+ * EXPORTED because the `/tracks` hub (`tracks-hub.ts`) compiles the SAME filter vocabulary
+ * (`yearMin`/`yearMax`, `bpmMin`/`bpmMax`, `key`, `label`) off the SAME schema — the whole point
+ * of aligning the hub's URL params with `SearchFilters`. The hub passes only that subset (never
+ * `artist`/`album`/`text`) and adds its own `galaxy` clause on top; the key-spelling fold and the
+ * `substr(release_date,1,4)` year compare live HERE, once, so the two surfaces cannot drift.
  */
-function compileFilters(filters: SearchFilters): Clause[] {
+export function compileFilters(filters: SearchFilters): Clause[] {
   const clauses: Clause[] = [];
 
   if (filters.artist) {

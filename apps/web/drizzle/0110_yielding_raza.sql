@@ -1,0 +1,1 @@
+CREATE INDEX `tracks_bpm_idx` ON `tracks` (`bpm`);
