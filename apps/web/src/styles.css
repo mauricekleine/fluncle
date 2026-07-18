@@ -1916,14 +1916,15 @@ body::before {
 }
 
 /* The UNLIT similar-artist chip — a sonically-near artist Fluncle never certified (DESIGN.md's
-   Unlit Rule). It reads a step DOWN from a certified chip: the name stays at the muted colour on
-   HOVER (no cream lift, no primary-tinted border), and the avatar carries the cold dust veil (the
-   same ~0.62 the stream's catalogue-row avatar takes). It is never gold. Focus, and only focus,
-   stays loud — the base `.artist-similar-link:focus-visible` is left untouched, so keyboard reach
-   is never dimmed. */
-.artist-similar-link--unlit:hover {
-  border-color: color-mix(in oklch, var(--border) 80%, transparent);
-  color: var(--muted-foreground);
+   Unlit Rule). It reads a step DOWN from a certified chip: the border holds at dust (no
+   primary-tinted lift), and the avatar carries the cold dust veil (the same ~0.62 the stream's
+   catalogue-row avatar takes). It is never gold — but the ink still HEATS TO CREAM on hover, the
+   register's own precedent (`.unlit-link:hover`, the fresh catalogue rows): the Unlit Rule swaps
+   gold for dust, it never sanctions non-response. `:not(:focus-visible)` keeps the base
+   focus-visible treatment winning when a focused chip is also under the pointer. */
+.artist-similar-link--unlit:hover:not(:focus-visible) {
+  border-color: var(--border);
+  color: var(--starlight-cream);
 }
 
 .artist-similar-avatar--unlit {

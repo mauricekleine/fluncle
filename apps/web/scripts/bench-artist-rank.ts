@@ -185,7 +185,8 @@ async function seedTracks(): Promise<void> {
 
       if (index % 3 === 0) {
         statements.push({
-          args: [trackId, `${String(index % 1000).padStart(3, "0")}.7.1A`, now],
+          // The full index keeps log_id unique past 1000 findings (a %1000 fold collided at 3000).
+          args: [trackId, `${String(index).padStart(6, "0")}.7.1A`, now],
           sql: `insert into findings (track_id, log_id, added_at) values (?, ?, ?)`,
         });
       }
