@@ -17,11 +17,44 @@ import { SENTRY_RELEASE, WORKER_SENTRY_DSN } from "./lib/sentry-config";
 
 // The whole custom entry, wrapped once by Sentry so any unhandled throw from
 // EITHER path — handleOrpc (mounted first) or the TanStack router beneath it —
-// is captured with a stack. Errors-only, free-tier posture: no tracing, no PII.
-// Gated to production builds: `import.meta.env.PROD` is `false` under vite dev
-// (`bun run dev`, the smoke routine) and statically `true` in the deployed
-// Worker bundle, so no events leave a dev machine. When the DSN is undefined the
-// SDK initializes inert and never sends.
+// is captured with a stack. Performance tracing is ON (sampled — see
+// `tracesSampler` below), so the per-query `db.query` spans opened in
+// `lib/server/db.ts` land in Sentry's Queries insight + the auto "Slow DB
+// Queries" detector. `sendDefaultPii: false` still holds. Gated to production
+// builds: `import.meta.env.PROD` is `false` under vite dev (`bun run dev`, the
+// smoke routine) and statically `true` in the deployed Worker bundle, so no
+// events leave a dev machine. When the DSN is undefined the SDK initializes
+// inert and never sends.
+
+// Trace-sampling rates (NAMED so they read at the call site). These are the
+// LOW-TRAFFIC starting settings — as request volume grows toward the Team
+// plan's 5M-spans/mo budget, lower `TRACE_RATE_BASELINE` first and refine the
+// route lists rather than widening them.
+const TRACE_RATE_ALWAYS = 1.0; // scaling-risk paths — a slow scan must never be missed
+const TRACE_RATE_NONE = 0; // pure noise with no query value
+const TRACE_RATE_BASELINE = 0.2; // everything else
+
+// The recs / vector-scan surfaces: these MUST be reliably traced so the
+// recommendation scan hitting a multi-second wall as the catalogue grows is
+// measured in prod, not guessed. Matched as a substring of the transaction name.
+const HIGH_VALUE_TRACE_MATCHERS = ["recommend", "search", "frontier"];
+
+// Pure noise — health/status probes, robots/sitemap/llms.txt/.well-known, and
+// the OG + cover image + static-asset routes carry no query worth a span.
+const NOISE_TRACE_MATCHERS = [
+  "/status",
+  "/health",
+  "/robots",
+  "/sitemap",
+  "/llms.txt",
+  "/.well-known",
+  "/og/",
+  "/mixtape-cover",
+  "/preview/",
+  "/favicon",
+  "/assets/",
+  "/cdn-cgi",
+];
 const serverEntry = createServerEntry({
   async fetch(request) {
     // oRPC owns the API operations it has contracts for, dual-mounted under
@@ -106,9 +139,34 @@ export default Sentry.withSentry(
   () => ({
     dsn: import.meta.env.PROD ? WORKER_SENTRY_DSN : undefined,
     release: SENTRY_RELEASE,
-    // Errors only, free-tier posture (ratified): no tracing, no profiling, no PII.
+    // Tracing on (operator-approved raise from the errors-only posture), still no
+    // profiling and no PII. See docs/error-tracking.md.
     sendDefaultPii: false,
-    tracesSampleRate: 0,
+    // Route sampling keyed on the transaction name (method + path, e.g.
+    // `GET /me/recommendations`). LIMITATION: a substring on the name is
+    // deliberately coarse — server-fn endpoints share a generic transaction
+    // name, so this can't perfectly route-match those; the substring policy on
+    // the risk/noise paths is enough to guarantee the scan surfaces are traced
+    // and the pure noise is dropped.
+    tracesSampler: (samplingContext) => {
+      const name = samplingContext.name;
+
+      if (typeof name !== "string") {
+        return TRACE_RATE_BASELINE;
+      }
+
+      const lower = name.toLowerCase();
+
+      if (HIGH_VALUE_TRACE_MATCHERS.some((matcher) => lower.includes(matcher))) {
+        return TRACE_RATE_ALWAYS;
+      }
+
+      if (NOISE_TRACE_MATCHERS.some((matcher) => lower.includes(matcher))) {
+        return TRACE_RATE_NONE;
+      }
+
+      return TRACE_RATE_BASELINE;
+    },
   }),
   cfHandler,
 );
