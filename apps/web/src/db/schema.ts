@@ -328,6 +328,15 @@ export const tracks = sqliteTable(
     // quarantine + the operator's `flag_wrong_audio` when they rewind a row. Null until the first
     // rejection. Internal, like the rest of the capture side-channel — no public surface, no lastmod.
     sourceAudioRejected: text("source_audio_rejected"),
+    // THE ANCHOR RE-ASK STAMP (docs/catalogue-crawler.md § the anchor). ISO of the last
+    // Spotify-anchor ATTEMPT on a catalogue row, stamped on EVERY attempt — a hit AND a
+    // miss — by the agent-tier `anchor_track` op the box's Apify anchor sweep POSTs to. It
+    // is the backoff the anchor worklist reads: "not on Spotify today" is not "never on
+    // Spotify" (a small-label recording lands on Spotify weeks later), so a missed row is
+    // re-asked, but only after a window (track-work.ts `ANCHOR_REASK_AFTER_DAYS`) — every
+    // re-ask costs real Apify money. NULL until the row has ever been attempted. Internal,
+    // like the rest of the catalogue side-channel — no public surface, no lastmod bump.
+    spotifyAnchorAttemptedAt: text("spotify_anchor_attempted_at"),
     // NULLABLE (they were NOT NULL until the tracks/findings split): a catalogue track
     // resolved from MusicBrainz/Discogs may have no Spotify presence at all. `track_id`
     // stays the opaque PK — today it happens to be the Spotify id; a catalogue-only track
@@ -395,12 +404,12 @@ export const tracks = sqliteTable(
     // history, and a unique index would turn a vendor's duplicate ISRC into a failed
     // migration; the crawler dedupes by READING this index, never by trusting a constraint.
     index("tracks_isrc_idx").on(table.isrc),
-    // The Spotify-anchor queue, and a PARTIAL index because the queue is DERIVED rather
-    // than bookkept: "which catalogue rows have an ISRC but no Spotify id yet" is the
-    // whole worklist, so an anchor a rate-limited pass missed is simply picked up by the
-    // next one, with no state to remember. The partial predicate keeps this index tiny and
-    // — the nice part — SHRINKING as the anchors fill, instead of growing with the table.
-    // See `fillSpotifyAnchors` in lib/server/crawl.ts.
+    // The Spotify-anchor GAUGE index, and a PARTIAL index because the queue is DERIVED rather
+    // than bookkept: "which catalogue rows have an ISRC but no Spotify id yet" is the ISRC-bearing
+    // slice `get_crawl_status` reports as `anchorsPending`. The partial predicate keeps this index
+    // tiny and — the nice part — SHRINKING as the anchors fill, instead of growing with the table.
+    // (The anchor WORKLIST the box drains is wider — every un-anchored catalogue row — and rides
+    // `tracks_anchor_fill_queue_idx` below; see track-work.ts `kind: "anchor"`.)
     index("tracks_anchor_queue_idx")
       .on(table.isrc)
       .where(sql`${table.spotifyUri} is null and ${table.isrc} is not null`),
@@ -419,6 +428,20 @@ export const tracks = sqliteTable(
     index("tracks_embed_queue_idx")
       .on(table.trackId)
       .where(sql`${table.sourceAudioKey} is not null and ${table.embeddingBlob} is null`),
+    // THE SPOTIFY-ANCHOR-FILL WORKLIST (the box's Apify anchor sweep, docs/catalogue-crawler.md
+    // § the anchor). PARTIAL, exactly like the anchor + embed queues above: the worklist is the
+    // un-anchored catalogue (`spotify_uri is null`), a slice that SHRINKS as anchors fill rather
+    // than growing with the table. It indexes `nearest_finding_score` under that predicate so the
+    // sweep's ranked drain — the Ear's best un-anchored candidates first (`nearest_finding_score
+    // DESC`), the "the order IS the budget" law the capture ladder lives by — is an index walk of
+    // the ranked un-anchored rows, not a scan of the growing catalogue. It is a plain btree (never
+    // the vector `libsql_vector_idx` that wedges hosted Turso), so it builds like the queues beside
+    // it. The residual predicates the worklist adds (`duration_ms > 0`, `dismissed_at is null`,
+    // `duplicate_of_track_id is null`, the re-ask backoff) are cheap filters on the small page the
+    // index walk hands back — never a table scan. See track-work.ts `kind: "anchor"`.
+    index("tracks_anchor_fill_queue_idx")
+      .on(table.nearestFindingScore)
+      .where(sql`${table.spotifyUri} is null`),
     // THE OPERATOR'S DISMISSALS — "not for me" (docs/the-ear.md § The operator's actions).
     // PARTIAL, exactly like the anchor + embed queues above: dismissals are rare (an operator
     // act, never a machine one), so the index holds a tiny, near-static slice of a growing

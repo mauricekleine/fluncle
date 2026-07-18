@@ -325,8 +325,8 @@ export type SpotifyIsrcMatch = {
   albumImageUrl?: string;
   /**
    * The track's Spotify artists, each with its stable `id` — carried straight off the SAME
-   * `/search` response the anchor is read from, so the crawler can connect-or-create the track's
-   * artist entities by stable id with NO extra Spotify call (crawl.ts `fillSpotifyAnchors`).
+   * `/search` response, so a caller can connect-or-create the track's artist entities by stable
+   * id with NO extra Spotify call.
    */
   artists: Array<{ id: string; name: string }>;
   spotifyUri: string;
@@ -339,7 +339,8 @@ export type SpotifyIsrcMatch = {
  * is throttling us" and "this track is not on Spotify" are the same answer, and a caller
  * would keep hammering a 429 wall for every remaining track. Measured live during the
  * pilot crawl — a sustained by-ISRC sweep DOES earn a 429 — which is exactly why the
- * signal exists and why `fillSpotifyAnchors` trips a breaker on it.
+ * signal exists (and why catalogue anchor-filling moved off the official Spotify app onto
+ * the box's Apify sweep entirely; see lib/server/anchor.ts).
  */
 export type SpotifyIsrcLookup = {
   match?: SpotifyIsrcMatch;
@@ -755,7 +756,7 @@ export async function spotifyFetch(
     // A 429 on an idempotent call is worth waiting out — but only while retries AND the
     // wait budget both last. A non-idempotent write, an exhausted budget, an exhausted
     // retry count, or any other status all fall through to the SAME error thrown today
-    // (message carries "429", which `spotify-anchor-breaker` and crawl.ts sniff for).
+    // (the message carries "429" for a caller to sniff).
     if (response.status === 429 && retryable && attempt < SPOTIFY_MAX_RETRIES) {
       const waitMs = parseRetryAfterMs(response.headers.get("Retry-After"));
 

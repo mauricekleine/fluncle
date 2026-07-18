@@ -516,20 +516,6 @@ export const verifyCapture = oc
 /** One bounded crawl pass's real numbers. Nothing here is an estimate. */
 export const CrawlPassSchema = z
   .object({
-    /**
-     * How the Spotify anchor fill fared — so `anchorsFilled: 0` is never ambiguous. `filled`
-     * (wrote ≥1), `ok` (Spotify answered, nothing matched / queue drained), `throttled` (a 429),
-     * `unauthorized` (the grant is gone — reconnect Spotify), or `breaker_open` (paused this pass
-     * on the persistent anchor breaker). See docs/catalogue-crawler.md § the anchor.
-     */
-    anchorOutcome: z.enum(["breaker_open", "filled", "ok", "throttled", "unauthorized"]),
-    /**
-     * Spotify `spotify_uri`/`spotify_url` anchors filled onto existing catalogue rows.
-     * A SEPARATE, bounded step from the walk — Spotify's 429 is a hard wall (the pilot hit
-     * it), and its queue is derived (`isrc is not null and spotify_uri is null`), so an
-     * anchor a throttled pass missed is simply picked up by the next tick.
-     */
-    anchorsFilled: z.number(),
     dryRun: z.boolean(),
     /** Frontier nodes expanded this pass. */
     expanded: z.number(),
@@ -591,18 +577,6 @@ export const CrawlStatusSchema = z
     labelsUndecided: z.number(),
     /** What the NEXT crawl would seed from. */
     seedLabels: z.array(z.string()),
-    /**
-     * The Spotify anchor breaker at rest — why `anchorsPending` is (or is not) draining. `tripped`
-     * with a `reason` means the fill is PAUSED: `throttled` waits out the cooldown, `unauthorized`
-     * needs the operator to reconnect Spotify. This is what turns a flat anchor queue from a
-     * silent mystery into an operator work item.
-     */
-    spotifyAnchor: z.object({
-      consecutiveFailures: z.number(),
-      cooldownRemainingMs: z.number(),
-      reason: z.enum(["throttled", "unauthorized"]).nullable(),
-      tripped: z.boolean(),
-    }),
   })
   .meta({ id: "CrawlStatus" });
 
@@ -654,6 +628,81 @@ export const getCrawlStatus = oc
   })
   .input(z.object({}))
   .output(CrawlStatusSchema.extend({ ok: z.literal(true) }));
+
+// ─────────────────────────────────────────────────────────────────────────────
+// THE SPOTIFY ANCHOR — the verify+write boundary. docs/catalogue-crawler.md § the anchor.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * One Spotify candidate the box's Apify sweep found for a catalogue row. The server RE-RUNS
+ * verification against it (never trusting the box's own match), so it carries every signal the
+ * two rungs read: the id (as `spotifyTrackId`, or a `uri`/`url` the server parses one from), the
+ * `isrc` for the exact rung, and `title`/`artists`/`durationMs` for the verified search triple.
+ */
+export const AnchorCandidateSchema = z
+  .object({
+    /** The album/track cover URL, coalesced onto the row when the row has none. */
+    albumImageUrl: z.string().nullish(),
+    /** The candidate's Spotify artists — `name` verifies the triple, `id` links the entity by stable id. */
+    artists: z.array(z.object({ id: z.string().nullish(), name: z.string() })).default([]),
+    durationMs: z.number().nullish(),
+    isrc: z.string().nullish(),
+    /** The bare Spotify track id. Provide this, OR `uri`/`url` for the server to parse one from. */
+    spotifyTrackId: z.string().optional(),
+    title: z.string().default(""),
+    /** `spotify:track:<id>` — an alternative to `spotifyTrackId`. */
+    uri: z.string().optional(),
+    /** `https://open.spotify.com/track/<id>` — an alternative to `spotifyTrackId`. */
+    url: z.string().optional(),
+  })
+  // A candidate with NONE of the three id carriers cannot be anchored to — reject the malformed
+  // payload at the boundary rather than silently dropping it in the handler.
+  .refine((candidate) => Boolean(candidate.spotifyTrackId ?? candidate.uri ?? candidate.url), {
+    error: "a candidate must carry a spotifyTrackId, uri, or url",
+  })
+  .meta({ id: "AnchorCandidate" });
+
+/**
+ * `anchor_track` → `POST /admin/catalogue/anchor` (operationId `anchorTrack`).
+ *
+ * Admin tier (AGENT-allowed WRITE), the `verify_capture` precedent. The box's Apify anchor sweep
+ * (docs/catalogue-crawler.md § the anchor) fetches Spotify candidates for one un-anchored catalogue
+ * row and POSTs them here; the SERVER re-runs the full verification (the box's verdict is never
+ * trusted) and, on a hit, writes the `spotify_uri`/`spotify_url` anchor + links the candidate's
+ * artists by their stable id. Two rungs, precision over recall: exact ISRC first (the actor returns
+ * each candidate's ISRC), else the verified search triple (folded artist set + base title + version
+ * descriptor + duration within ±2s). EVERY attempt stamps `spotify_anchor_attempted_at` — a hit AND
+ * a miss — so the worklist's re-ask backoff can fire.
+ *
+ * It writes only catalogue-identity columns and never certifies (the `rank_catalogue`/`verify_capture`
+ * class), so the box's agent token drives it. 404 when the track does not exist; 409 when it is
+ * certified (a finding's Spotify id is its identity, not an anchor to fill) or already anchored (a
+ * race with a user add). `{ ok, anchored, verifiedBy }` — `verifiedBy` is the rung that matched
+ * (`isrc` | `search`), or null on a clean miss.
+ */
+export const anchorTrack = oc
+  .route({
+    method: "POST",
+    operationId: "anchorTrack",
+    path: "/admin/catalogue/anchor",
+    summary: "Verify box-supplied Spotify candidates against a catalogue row and write its anchor",
+    tags: ["Admin"],
+  })
+  .input(
+    z.object({
+      candidates: z.array(AnchorCandidateSchema).default([]),
+      trackId: z.string().min(1),
+    }),
+  )
+  .output(
+    z.object({
+      /** True when a candidate verified and the anchor was written. */
+      anchored: z.boolean(),
+      ok: z.literal(true),
+      /** Which rung matched (`isrc` | `search`), or null on a clean miss. */
+      verifiedBy: z.enum(["isrc", "search"]).nullable(),
+    }),
+  );
 
 // ─────────────────────────────────────────────────────────────────────────────
 // THE CAPTURE BUDGET — the brake on what the two above cost. docs/the-ear.md.
@@ -782,6 +831,7 @@ export const resetAppleBreaker = oc
 
 /** The `admin-catalogue` domain's ops, merged into the root contract by `./index.ts`. */
 export const adminCatalogueContract = {
+  anchor_track: anchorTrack,
   certify_track: certifyTrack,
   clear_wrong_audio: clearWrongAudio,
   crawl_catalogue: crawlCatalogue,

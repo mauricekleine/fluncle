@@ -51,6 +51,13 @@ const APPROVED_VERBS = new Set<string>([
   // not `drip` (that is the clip-feed's paced, jittered cadence). This names the CHAINING:
   // the step that stops a finished stage from waiting on a human tap.
   "advance",
+  // `anchor` (verify box-supplied Spotify candidates against a catalogue row and, on a hit, write
+  // its `spotify_uri`/`spotify_url` anchor) — added deliberately with the `anchor_track` op
+  // (docs/catalogue-crawler.md § the anchor). Distinct from every verb here: not `resolve` (fix a
+  // known entity's external identity — an artist's socials), not `verify` (check a stored artifact
+  // against a reference and record a verdict), not `update` (a generic patch); it CHECKS candidates
+  // and, only on a hard match, binds the row to its Spotify identity.
+  "anchor",
   "authorize",
   "backfill",
   // `resolve` — resolve an artist's social profiles from MB + Firecrawl (the artist-relationship epic).

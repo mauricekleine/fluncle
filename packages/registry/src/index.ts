@@ -1041,6 +1041,19 @@ export const SURFACES: readonly Surface[] = [
     weights: { status: "hidden" },
   },
   {
+    exposedContent: [
+      "find each un-anchored catalogue row's Spotify track via Apify → its spotify_uri/spotify_url anchor",
+    ],
+    kind: "cron",
+    name: "cron.anchor",
+    operatorNotes:
+      "hourly, run by a rave-02 HOST systemd timer (docs/agents/hermes/anchor-timer/). Fills the catalogue Spotify anchor OFF the official (dev-mode) Spotify app, which starved under 429s at catalogue scale and must stay for user-facing paths: the box runs an Apify Spotify-scraper actor to find candidates for each un-anchored catalogue row and POSTs them to the agent-tier `anchor_track` op, where the WORKER re-runs verification (exact ISRC, else the folded artist+title+±2s search triple — the box's verdict is never trusted) and writes the anchor on a hit. Every attempt stamps a 14-day re-ask backoff so a miss is not re-billed. The ONE new secret is APIFY_API_TOKEN; each row is a billed Apify search (~$0.015), so the default 15 rows/hour ≈ $5-6/day while the backlog drains — pause by stopping the timer, burn attended with `--limit N`. Calls the oRPC HTTP endpoints directly (no new CLI command the pinned box CLI would lack). Source: docs/agents/hermes/scripts/anchor-sweep.*. See docs/catalogue-crawler.md § the anchor.",
+    probeConfig: { cadenceMs: 60 * MINUTE_MS, cronName: "fluncle-anchor", kind: "cron" },
+    statusDescription: "finds each catalogue track's Spotify link",
+    title: "Spotify anchors",
+    weights: { status: "hidden" },
+  },
+  {
     command: "fluncle admin frontier refresh",
     exposedContent: [
       "re-mirror every crew member's Fluncle's Frontier playlist from their current recommendations",

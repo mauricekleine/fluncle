@@ -68,6 +68,7 @@
 // their usual order. A certified finding's capture is a handful a week, it is not the spend,
 // and the archive is never starved by the speculative half.
 
+import { anchorSearchQuery } from "./anchor";
 import { isCatalogueCaptureOpen } from "./capture-budget";
 import { LONG_FORM_MS, MIN_TRACK_MS } from "./catalogue";
 import { parseArtistsJson } from "./artists";
@@ -85,7 +86,17 @@ import {
  * queues: capture never gates the other two (docs/track-lifecycle.md), and analyze never
  * gates embed.
  */
-export type TrackWorkKind = "analyze" | "capture" | "embed";
+export type TrackWorkKind = "analyze" | "anchor" | "capture" | "embed";
+
+/**
+ * THE ANCHOR RE-ASK BACKOFF (docs/catalogue-crawler.md § the anchor). How long a catalogue row
+ * that was ATTEMPTED and missed sits out before the anchor worklist offers it again. "Not on
+ * Spotify today" is NOT "never on Spotify" — a small-label recording lands on Spotify weeks after
+ * its MusicBrainz release — so a missed row must be re-asked; but every re-ask is a billed Apify
+ * search (~$0.015/row), so it is re-asked on a WINDOW, not every tick. 14 days is the ratified
+ * balance: a row genuinely absent today gets a fresh look a fortnight later, at a bounded spend.
+ */
+export const ANCHOR_REASK_AFTER_DAYS = 14;
 
 /**
  * Which half of the archive a worklist covers.
@@ -121,6 +132,12 @@ export type TrackWorkItem = {
    * `analyze`/`embed` (they read it off the row directly) and for a never-analyzed track.
    */
   analyzedFrom?: "full" | "preview";
+  /**
+   * The ready-made Spotify search query for the ANCHOR worklist (`anchorSearchQuery`: the row's
+   * artists then its title) — so the box's Apify sweep stays dumb and never has to know how to
+   * build the query. Attached ONLY for the `anchor` worklist; absent for every other kind.
+   */
+  anchorQuery?: string;
   /**
    * The artist's own YouTube channel id(s) — CAPTURE-only, the sweep's strongest download
    * trust signal (a candidate on the artist's OWN channel is the artist's upload). Attached
@@ -197,6 +214,23 @@ const WORK_ORDER = `order by (f.track_id is not null) desc,
   coalesce(f.added_at, '') desc,
   t.track_id desc`;
 
+/**
+ * THE ANCHOR ORDER — the same "the order IS the budget" law as the capture ladder, for the
+ * metered Apify anchor spend (docs/catalogue-crawler.md § the anchor). The anchor worklist is
+ * catalogue-only (a finding's Spotify id is its identity), so there is no certified/findings
+ * split here; the drain order is:
+ *   1. EMBEDDED rows first (`embedding_blob is not null`) — a row Fluncle has already spent
+ *      capture + embed money on is one he most wants recommendable, so anchor it first.
+ *   2. Then `nearest_finding_score DESC NULLS LAST` — the Ear's best un-anchored candidates,
+ *      the ones closest to his taste, ahead of the unranked tail.
+ *   3. Then `track_id` — a deterministic tiebreak so a batch is reproducible.
+ * Both ordering columns are read IN SQL (never selected into the isolate); the ranked, embedded
+ * head rides `tracks_anchor_fill_queue_idx` (schema.ts).
+ */
+const ANCHOR_ORDER = `order by (t.embedding_blob is not null) desc,
+  t.nearest_finding_score desc nulls last,
+  t.track_id asc`;
+
 /** The scope's WHERE fragment. Static literals — never interpolated user input. */
 export function scopeClause(scope: TrackWorkScope): string {
   if (scope === "findings") {
@@ -248,6 +282,35 @@ export function scopeClause(scope: TrackWorkScope): string {
  *   never runs.
  */
 export function kindClause(kind: TrackWorkKind): { args: string[]; sql: string } {
+  if (kind === "anchor") {
+    // THE ANCHOR WORKLIST (docs/catalogue-crawler.md § the anchor). Catalogue-only by construction
+    // (`f.track_id is null` — a finding's Spotify id is its identity, never re-anchored), so
+    // `kind: "anchor"` with `scope: "findings"` is contradictory (`f.track_id is not null` AND
+    // `f.track_id is null`) and honestly returns an empty page — the anchor worklist is `all`/`catalogue`.
+    // Only rows worth spending a billed Apify search on:
+    //   · `spotify_uri is null`         — the derived worklist: un-anchored rows only.
+    //   · `duration_ms > 0`             — a row with no measured length can never clear the verified
+    //                                     search triple (the ±2s duration signal is missing), so a
+    //                                     search on it is guaranteed-no-stamp money.
+    //   · `dismissed_at is null`        — the operator's "not for me" (docs/the-ear.md); a dismissed
+    //                                     row is out of the telescope, so an anchor buys nothing.
+    //   · `duplicate_of_track_id is null` — a known duplicate of a finding is already in the archive.
+    //   · the RE-ASK BACKOFF            — never attempted, OR attempted longer ago than the window.
+    const cutoff = new Date(
+      Date.now() - ANCHOR_REASK_AFTER_DAYS * 24 * 60 * 60 * 1000,
+    ).toISOString();
+
+    return {
+      args: [cutoff],
+      sql: `f.track_id is null
+            and t.spotify_uri is null
+            and t.duration_ms > 0
+            and t.dismissed_at is null
+            and t.duplicate_of_track_id is null
+            and (t.spotify_anchor_attempted_at is null or t.spotify_anchor_attempted_at < ?)`,
+    };
+  }
+
   if (kind === "capture") {
     const cooldown = new Date(Date.now() - CAPTURE_FAILED_COOLDOWN_MS).toISOString();
 
@@ -350,6 +413,9 @@ export async function listTrackWork(options: {
   const effectiveScope: TrackWorkScope = catalogueShut ? "findings" : scope;
 
   const kindWhere = kindClause(kind);
+  // The `anchor` worklist rides its own budget-order (embedded + ranked first); every other kind
+  // rides the shared capture ladder.
+  const order = kind === "anchor" ? ANCHOR_ORDER : WORK_ORDER;
   const db = await getDb();
   const result = await db.execute({
     args: [...kindWhere.args, page],
@@ -357,47 +423,54 @@ export async function listTrackWork(options: {
           from tracks t
           left join findings f on f.track_id = t.track_id
           where ${scopeClause(effectiveScope)} and ${kindWhere.sql}
-          ${WORK_ORDER}
+          ${order}
           limit ?`,
   });
 
-  const items: TrackWorkItem[] = typedRows<WorkRow>(result.rows).map((row) => ({
-    artists: parseArtistsJson(row.artists_json),
-    capturePriority: row.capture_priority === null ? null : Number(row.capture_priority),
-    certified: Number(row.certified) === 1,
-    durationMs: Number(row.duration_ms),
-    isrc: row.isrc,
-    label: row.label,
-    logId: row.log_id,
-    sourceAudioKey: row.source_audio_key,
-    title: row.title,
-    trackId: row.track_id,
-    // The four CAPTURE-only trust/re-derive signals. Attached for the `capture` worklist
-    // ONLY, so `analyze`/`embed` DTOs stay exactly as they were (byte-identical for those
-    // sweeps). Each follows the finding-only capture DTO's omit-when-empty convention — a
-    // missing BPM, a NULL provenance, a zero failure count and an empty channel set are all
-    // OMITTED rather than surfaced — so the shape the sweep parses is unchanged by the migration.
-    ...(kind === "capture"
-      ? {
-          analyzedFrom:
-            row.analyzed_from === "full" || row.analyzed_from === "preview"
-              ? row.analyzed_from
-              : undefined,
-          bpm:
-            row.bpm !== null && Number.isFinite(Number(row.bpm)) && Number(row.bpm) > 0
-              ? Number(row.bpm)
-              : undefined,
-          sourceAudioFailures:
-            row.source_audio_failures !== null && Number(row.source_audio_failures) > 0
-              ? Number(row.source_audio_failures)
-              : undefined,
-          sourceAudioRejected:
-            typeof row.source_audio_rejected === "string" && row.source_audio_rejected.trim()
-              ? row.source_audio_rejected
-              : undefined,
-        }
-      : {}),
-  }));
+  const items: TrackWorkItem[] = typedRows<WorkRow>(result.rows).map((row) => {
+    const artists = parseArtistsJson(row.artists_json);
+
+    return {
+      artists,
+      capturePriority: row.capture_priority === null ? null : Number(row.capture_priority),
+      certified: Number(row.certified) === 1,
+      durationMs: Number(row.duration_ms),
+      isrc: row.isrc,
+      label: row.label,
+      logId: row.log_id,
+      sourceAudioKey: row.source_audio_key,
+      title: row.title,
+      trackId: row.track_id,
+      // The ANCHOR-only ready-made query, so the box's Apify sweep never builds it (anchor.ts
+      // `anchorSearchQuery`). Attached for the `anchor` worklist ONLY; absent for every other kind.
+      ...(kind === "anchor" ? { anchorQuery: anchorSearchQuery(artists, row.title) } : {}),
+      // The four CAPTURE-only trust/re-derive signals. Attached for the `capture` worklist
+      // ONLY, so `analyze`/`embed` DTOs stay exactly as they were (byte-identical for those
+      // sweeps). Each follows the finding-only capture DTO's omit-when-empty convention — a
+      // missing BPM, a NULL provenance, a zero failure count and an empty channel set are all
+      // OMITTED rather than surfaced — so the shape the sweep parses is unchanged by the migration.
+      ...(kind === "capture"
+        ? {
+            analyzedFrom:
+              row.analyzed_from === "full" || row.analyzed_from === "preview"
+                ? row.analyzed_from
+                : undefined,
+            bpm:
+              row.bpm !== null && Number.isFinite(Number(row.bpm)) && Number(row.bpm) > 0
+                ? Number(row.bpm)
+                : undefined,
+            sourceAudioFailures:
+              row.source_audio_failures !== null && Number(row.source_audio_failures) > 0
+                ? Number(row.source_audio_failures)
+                : undefined,
+            sourceAudioRejected:
+              typeof row.source_audio_rejected === "string" && row.source_audio_rejected.trim()
+                ? row.source_audio_rejected
+                : undefined,
+          }
+        : {}),
+    };
+  });
 
   // The artist-own-channel trust signal is a SEPARATE batched read (a correlated subquery on
   // the main select would bloat every DTO), and it is CAPTURE-only — the same field, off the

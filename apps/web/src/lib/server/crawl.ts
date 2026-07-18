@@ -34,13 +34,16 @@
 // so it cannot supply a stable track identity and cannot be the spine. We still reach
 // the Discogs release graph, but through the join that already exists: MusicBrainz's
 // CURATED `url-rels` relation, which hands us the Discogs release/master id for free, in
-// the same request that brought the tracks, with zero Discogs API calls. Spotify is
-// demoted to a per-track ISRC lookup for the `spotify_uri`/`spotify_url` anchor (its
-// Feb-2026 lockdown removed the batch endpoints and capped `search` at 10 results), and
-// that anchor is optional — a track with no Spotify presence is a perfectly good row. It
-// runs as its own bounded step (`fillSpotifyAnchors`), NOT inside the walk: the first
-// pilot put it in the write path and Spotify 429'd. Its queue is DERIVED, so nothing is
-// lost when it is throttled.
+// the same request that brought the tracks, with zero Discogs API calls. Spotify no longer
+// enters the crawl at all: the `spotify_uri`/`spotify_url` anchor is optional — a track with
+// no Spotify presence is a perfectly good row — and filling it moved ENTIRELY off this Worker
+// path onto the box's Apify-driven anchor sweep (docs/agents/hermes/scripts/anchor-sweep.*),
+// which POSTs verified candidates to the agent-tier `anchor_track` op (lib/server/anchor.ts).
+// The first pilot put a per-ISRC Spotify lookup in the write path and Spotify 429'd; the
+// second ran it as a bounded in-Worker step against the official dev-mode Spotify app, and at
+// catalogue scale THAT starved under sustained 429s too. So the crawl is now MusicBrainz-only,
+// its documented mandate, and the anchor's worklist is DERIVED (`spotify_uri is null`) — nothing
+// is lost when the box sweep is paused. See docs/catalogue-crawler.md § the anchor.
 //
 // ── DETERMINISTIC · RESUMABLE · POLITE · IDEMPOTENT ────────────────────────────
 //   Deterministic — the frontier is picked `order by hop, created_at, id`, so two runs
@@ -59,22 +62,13 @@
 // See docs/catalogue-crawler.md.
 
 import { ensureAlbum } from "./albums";
-import { linkTracksToArtistEntities, upsertTrackArtists } from "./artists";
+import { linkTracksToArtistEntities } from "./artists";
 import { getDb, typedRows } from "./db";
 import { parseDiscogsUrl } from "./discogs";
 import { setLabelMbLabelId } from "./label-images";
 import { ensureLabel, labelFold, labelSlug, listLabels } from "./labels";
 import { logEvent } from "./log";
 import { mbFetch } from "./musicbrainz";
-import {
-  areSpotifyAnchorCallsAllowed,
-  getSpotifyAnchorBreakerState,
-  recordSpotifyAnchorOutcome,
-} from "./spotify-anchor-breaker";
-import { getSetting, setSetting } from "./settings";
-import { findSpotifyTrackByIsrc, searchTrackCandidates, type TrackSearchResult } from "./spotify";
-import { matchKey } from "./track-match";
-import { LONG_FORM_MS } from "./catalogue";
 
 // ── Policy constants ─────────────────────────────────────────────────────────
 
@@ -107,28 +101,6 @@ export const REARM_AFTER_DAYS = 3;
  * walk it SHARES the 1 req/s MusicBrainz budget with. A row this pass skips comes round next.
  */
 export const REARM_BATCH = 10;
-
-/**
- * Spotify anchors filled per pass. Small on purpose: Spotify's 429 is a hard wall (the
- * pilot hit it), the anchor is a nicety rather than the point, and the queue is derived —
- * so whatever this tick misses, the next one picks up. `fillSpotifyAnchors` explains why.
- */
-const ANCHOR_BUDGET = 20;
-
-/**
- * The verified-search rung's OWN per-tick budget — capped BELOW the 20-row walk on purpose. A
- * title+artist `/search` is a heavier call than an exact-ISRC key lookup (it returns up to 8
- * candidates and every one is a row to fold+compare), and Spotify's 429 is a hard wall. So the
- * search rung spends at most ten calls a tick; a row it skips this pass simply comes round on the
- * next rotation. Kept separate from `ANCHOR_BUDGET` so the two rungs are metered independently.
- */
-const ANCHOR_SEARCH_BUDGET = 10;
-
-/** The anchor rotation's keyset cursor (settings KV): the last track_id attempted. */
-const ANCHOR_CURSOR_KEY = "crawl.spotify_anchor_cursor";
-
-/** ±window on the row↔candidate duration match — one of the search rung's three verification signals. */
-const ANCHOR_DURATION_TOLERANCE_MS = 2000;
 
 // The retry window for a FAILED node, growing with its consecutive-failure count — the
 // shipped `backfill_*` backoff, verbatim in shape (backfill.ts): base × 2^failures,
@@ -178,27 +150,8 @@ type TrackCandidate = {
   title: string;
 };
 
-/**
- * What one Spotify anchor-fill pass could do — the signal that ends the silent `anchorsFilled: 0`:
- *   - `filled`       — at least one anchor was written.
- *   - `ok`           — Spotify answered, but nothing in this pass's slice matched (or the queue is
- *                      drained). No action needed.
- *   - `throttled`    — a 429; the app is being rate-limited. Waits out the breaker cooldown.
- *   - `unauthorized` — the Spotify grant is gone; the operator must reconnect (the anchor cannot
- *                      self-heal from this — the cooldown just re-checks).
- *   - `breaker_open` — the fill made NO call this pass because the breaker is tripped.
- */
-export type AnchorFillOutcome = "breaker_open" | "filled" | "ok" | "throttled" | "unauthorized";
-
 /** What one `crawl_catalogue` pass did. Every number here is real, not an estimate. */
 export type CrawlPass = {
-  /**
-   * How the Spotify anchor fill fared — so `anchorsFilled: 0` is never ambiguous between drained,
-   * throttled, unauthorized, and paused (`spotify-anchor-breaker.ts`).
-   */
-  anchorOutcome: AnchorFillOutcome;
-  /** Spotify `spotify_uri`/`spotify_url` anchors filled onto existing catalogue rows. */
-  anchorsFilled: number;
   dryRun: boolean;
   /** Frontier nodes expanded this pass. */
   expanded: number;
@@ -241,17 +194,6 @@ export type CrawlStatus = {
   frontierByKind: { artist: number; label: number; release: number };
   /** The operator's enabled seed labels — what the NEXT crawl would seed from. */
   seedLabels: string[];
-  /**
-   * The Spotify anchor breaker at rest — why the anchor queue is (or is not) draining. Tripped
-   * with a `reason` means the fill is PAUSED (a persistent 429, or a lost grant to reconnect);
-   * this is what turns `anchorsPending` sitting flat from a mystery into an operator work item.
-   */
-  spotifyAnchor: {
-    consecutiveFailures: number;
-    cooldownRemainingMs: number;
-    reason: "throttled" | "unauthorized" | null;
-    tripped: boolean;
-  };
 };
 
 // ── MusicBrainz response shapes (only the fields we consume) ──────────────────
@@ -646,9 +588,10 @@ async function writeCatalogueTracks(
       continue;
     }
 
-    // NO Spotify call here. The anchor is filled by `fillSpotifyAnchors` on its own
-    // bounded, resumable budget — see that function's header for why the pilot forced it
-    // out of this hot path.
+    // NO Spotify call here. The `spotify_uri`/`spotify_url` anchor is filled off this Worker path
+    // entirely — the box's Apify anchor sweep → the agent-tier `anchor_track` op (anchor.ts). Its
+    // worklist is derived (`spotify_uri is null`), so a row landing here with no anchor is simply
+    // picked up on a later anchor tick. See docs/catalogue-crawler.md § the anchor.
     const result = await db.execute({
       args: [
         trackId,
@@ -756,77 +699,6 @@ async function linkTracksToLabel(
   });
 }
 
-/** The stored `artists_json` as a `string[]` — a malformed or non-array value folds to `[]`. */
-function parseArtistsJson(artistsJson: string): string[] {
-  try {
-    const parsed = JSON.parse(artistsJson) as unknown;
-
-    return Array.isArray(parsed)
-      ? parsed.filter((name): name is string => typeof name === "string")
-      : [];
-  } catch {
-    return [];
-  }
-}
-
-/** The free-text query the search rung asks Spotify — the row's artists, then its title. */
-function anchorSearchQuery(artistsJson: string, title: string): string {
-  return [...parseArtistsJson(artistsJson), title].join(" ").trim();
-}
-
-/**
- * Classify a Spotify SEARCH throw into the two breaker signals the ISRC rung reads directly: a
- * 429 is a throttle (`spotifyFetch` throws a plain Error whose message carries the status), and a
- * dead grant is an `ApiError` whose `code` is one of the reauth codes (`getSpotifyAccessToken`).
- * Read by SHAPE, not `instanceof` — so a `vi.mock("./spotify")` that replaces the module can't
- * strand the check on an undefined class.
- */
-function classifySpotifySearchFailure(error: unknown): {
-  rateLimited: boolean;
-  unauthorized: boolean;
-} {
-  const message = error instanceof Error ? error.message : "";
-  const code =
-    typeof error === "object" && error !== null && "code" in error
-      ? String((error as { code: unknown }).code)
-      : "";
-
-  return {
-    rateLimited: message.includes("429"),
-    unauthorized: code === "spotify_not_authenticated" || code === "spotify_reauth_required",
-  };
-}
-
-/**
- * The verified-search gate. A candidate anchors ONLY when it clears ALL THREE signals: the same
- * artist SET, the same base title, and the same version descriptor as the row (all three carried
- * by the ratified `matchKey` fold — which deliberately keeps a remix/VIP descriptor distinct, so
- * the original of a logged VIP can never anchor to the VIP), AND a duration within ±2s of the
- * row's. Of the candidates that clear it, the closest duration wins; if none clear it, `undefined`
- * and the row stays in rotation. A candidate with no duration cannot be verified, so it is dropped.
- */
-function pickVerifiedCandidate(
-  rowArtists: string[],
-  rowTitle: string,
-  rowDurationMs: number,
-  candidates: TrackSearchResult[],
-): TrackSearchResult | undefined {
-  const rowKey = matchKey(rowArtists, rowTitle);
-
-  return candidates
-    .filter(
-      (candidate) =>
-        typeof candidate.durationMs === "number" &&
-        Math.abs(candidate.durationMs - rowDurationMs) <= ANCHOR_DURATION_TOLERANCE_MS &&
-        matchKey(candidate.artists, candidate.title) === rowKey,
-    )
-    .sort(
-      (left, right) =>
-        Math.abs((left.durationMs ?? 0) - rowDurationMs) -
-        Math.abs((right.durationMs ?? 0) - rowDurationMs),
-    )[0];
-}
-
 /**
  * Stamp `tracks.album_id` on the rows this release just wrote — the album twin of
  * `linkTracksToLabel`, and the indexed edge the public `/album/<slug>` page reads by
@@ -862,323 +734,6 @@ async function linkTracksToAlbum(
     sql: `update tracks set album_id = ?
           where track_id in (${trackIds.map(() => "?").join(", ")})`,
   });
-}
-
-/**
- * Connect-or-create a just-anchored catalogue track's ARTISTS by their stable `spotify_artist_id`
- * — the artist twin of `linkTracksToAlbum`, riding the SAME Spotify response the anchor was read
- * from (no extra Spotify call). `upsertTrackArtists` mints an `artists` row per id (folded on the
- * unique `spotify_artist_id`) and stamps the indexed `track_artists` edge, so an artist that once
- * folded fragilely on its NAME now folds on its stable id. It MINTS NO FINDING: every read that
- * means "finding" inner-joins `findings … log_id is not null`, so this link moves none of them —
- * a crawl-minted artist's page renders on its catalogue (bounded by the thin-content floor), never
- * as a certified count. `fillImages: false` keeps avatar fetches off the crawl's hot path — the
- * batched `backfill-artist-images` sweep fills them (one call per 50 ids).
- *
- * Best-effort: the anchor columns are already stamped, so a link failure here must never derail the
- * fill. FALLBACK, load-bearing: a track with NO Spotify presence never reaches here — its artist
- * edge comes from the name-fold `linkTracksToArtistEntities` at write time, minting nothing.
- */
-async function connectAnchorArtists(
-  trackId: string,
-  artistNames: string[],
-  spotifyArtistIds: string[],
-): Promise<void> {
-  if (artistNames.length === 0) {
-    return;
-  }
-
-  try {
-    await upsertTrackArtists(trackId, artistNames, spotifyArtistIds, { fillImages: false });
-  } catch (error) {
-    logEvent("warn", "crawl.anchor-artist-link-failed", { error, trackId });
-  }
-}
-
-/**
- * THE SPOTIFY ANCHOR — a bounded, resumable gap-fill, and deliberately NOT part of the
- * write path.
- *
- * The first live pilot put the by-ISRC lookup inline in the release write, and Spotify
- * 429'd once the volume climbed — a whole release's worth of tracks landing with no
- * anchor and no way to ever get one, because the crawler never revisits a row it wrote.
- * Two lessons, both structural:
- *
- *   1. A per-track vendor lookup does not belong in a graph walk. It has its own rate
- *      budget, its own failure mode, and its own retry semantics. It gets its own step.
- *   2. The queue must be DERIVED, not remembered — `spotify_uri is null` (over the non-finding
- *      rows) IS the worklist, so an anchor missed under a 429 is simply picked up by the next
- *      tick. Nothing is lost, nothing is bookkept.
- *
- * TWO RUNGS, precision over recall. The exact-ISRC lookup is the honest first answer, but the
- * ISRC-only fill rate over the pending pool measured ~zero: most catalogue rows exist on Spotify
- * under a DIFFERENT release than the one the crawl walked (a festival compilation, a label
- * sampler), so the recording's ISRC never appears (or the row has no ISRC at all). The unlock is
- * a title+artist SEARCH — but a search is fuzzy where an ISRC is exact, and a wrong anchor
- * poisons the private telescope playlist and the certify path. So the search rung stamps ONLY on
- * hard verification: a candidate must match the row under the ratified `matchKey` fold (same
- * artist set, same base title, same version descriptor — the original of a logged VIP can never
- * anchor to the VIP) AND land within ±2s of the row's duration. If several verify, the closest
- * duration wins; if none do, no stamp and the row stays in rotation. A miss is fine; a wrong
- * stamp is not.
- *
- * The rungs run in order, per row: the ISRC lookup first when the row carries one, and the search
- * rung only when the row has no ISRC or its ISRC found nothing. The search rung has its OWN
- * per-tick budget (`ANCHOR_SEARCH_BUDGET`), smaller than the 20-row walk because it is the
- * heavier call.
- *
- * The breaker: the first 429 — from EITHER rung — stops the fill for this pass. Spotify is the
- * one vendor here whose 429 is a hard wall rather than a slow-down, and grinding it just earns a
- * longer ban. The rows are already written; the anchor is a nicety, and it can wait ten minutes.
- *
- * Findings are excluded (the anti-join): a certified track's Spotify id is its identity
- * and was written at publish. This only ever touches catalogue rows.
- *
- * A SUSTAINED "Spotify won't answer" regime — a 429 the app earned app-wide, or a lost grant —
- * would otherwise report `anchorsFilled: 0` every tick with no visible reason. So the fill is
- * wrapped in a durable breaker (`spotify-anchor-breaker.ts`, the Apple-sibling pattern): while
- * tripped it makes NO call, and each pass folds its outcome into that breaker so a persistent
- * failure trips it (pausing the re-poke) and surfaces on `get_crawl_status`.
- */
-/** One row of the anchor worklist (both the priority head and the rotation). */
-type AnchorRow = {
-  artists_json: string;
-  duration_ms: number;
-  isrc: string | null;
-  title: string;
-  track_id: string;
-};
-
-async function fillSpotifyAnchors(
-  limit: number,
-): Promise<{ filled: number; outcome: AnchorFillOutcome }> {
-  // The breaker: while tripped, make no Spotify call at all — a persistent throttle or a dead
-  // grant is not re-poked every tick, it waits out the cooldown (or an operator reset).
-  if (!(await areSpotifyAnchorCallsAllowed())) {
-    return { filled: 0, outcome: "breaker_open" };
-  }
-
-  const db = await getDb();
-
-  // THE ROTATION: a keyset cursor on the settings KV. The no-match policy deliberately
-  // leaves a not-on-Spotify row in the queue (re-ask over a "we checked" column) — but with
-  // a fixed `order by track_id limit N` head, twenty permanent no-matches BLOCK the queue
-  // forever: every tick re-asks the same twenty rows and the other thousands never get a
-  // turn. The cursor makes the scan a full rotation: pick up past the last attempted row,
-  // wrap to the top when the tail runs dry.
-  const cursor = (await getSetting(ANCHOR_CURSOR_KEY)) ?? "";
-
-  // THE PRIORITY HEAD (2026-07-16): before the fair rotation, spend up to half the
-  // batch on the EAR'S TOP un-anchored candidates — highest nearest-finding score
-  // first, the same "the order IS the budget" law the capture ladder lives by.
-  // Measured before this head existed: only 10 of the ear's top 200 rows carried an
-  // anchor, so the telescope (which mirrors the first 50 ANCHORED of the top 200)
-  // was drawing from the best-anchored sliver rather than the best candidates.
-  // Duplicates, dismissed rows, and long-form mixes are excluded exactly as the ear
-  // lens excludes them — an anchor here is one the telescope can actually board.
-  const priorityShare = Math.ceil(limit / 2);
-  const priority = await db.execute({
-    args: [LONG_FORM_MS, priorityShare],
-    sql: `select track_id, isrc, title, artists_json, duration_ms from tracks
-          where spotify_uri is null
-            and nearest_finding_score is not null
-            and duplicate_of_track_id is null
-            and dismissed_at is null
-            and duration_ms < ?
-            and not exists (select 1 from findings where findings.track_id = tracks.track_id)
-          order by nearest_finding_score desc, track_id asc
-          limit ?`,
-  });
-  const priorityRows = typedRows<AnchorRow>(priority.rows);
-  const priorityIds = new Set(priorityRows.map((row) => row.track_id));
-
-  let queue = await db.execute({
-    args: [cursor, limit],
-    sql: `select track_id, isrc, title, artists_json, duration_ms from tracks
-          where spotify_uri is null
-            and track_id > ?
-            and not exists (select 1 from findings where findings.track_id = tracks.track_id)
-          order by track_id
-          limit ?`,
-  });
-
-  if (queue.rows.length === 0 && cursor !== "") {
-    queue = await db.execute({
-      args: [limit],
-      sql: `select track_id, isrc, title, artists_json, duration_ms from tracks
-            where spotify_uri is null
-              and not exists (select 1 from findings where findings.track_id = tracks.track_id)
-            order by track_id
-            limit ?`,
-    });
-  }
-
-  let filled = 0;
-  let lastAttempted = "";
-  // The search rung's own meter (see ANCHOR_SEARCH_BUDGET): counts only rows that actually reach
-  // a `/search`, so ISRC hits and budget-skipped rows don't spend it.
-  let searchAttempts = 0;
-
-  // Priority rows lead and NEVER advance the rotation cursor (they are picked by
-  // rank, not by position — advancing the cursor off one would teleport the fair
-  // rotation). Rotation rows follow, deduped against the priority set.
-  const rotationRows = typedRows<AnchorRow>(queue.rows).filter(
-    (row) => !priorityIds.has(row.track_id),
-  );
-  const work: { fromRotation: boolean; row: AnchorRow }[] = [
-    ...priorityRows.map((row) => ({ fromRotation: false, row })),
-    ...rotationRows.map((row) => ({ fromRotation: true, row })),
-  ];
-
-  for (const { fromRotation, row } of work) {
-    if (fromRotation) {
-      lastAttempted = row.track_id;
-    }
-
-    // RUNG ONE — the exact-ISRC key lookup, unchanged. Only reached when the row carries an ISRC;
-    // its stamp-back and its throttle/unauthorized handling are exactly as before.
-    if (row.isrc) {
-      const { match, rateLimited, unauthorized } = await findSpotifyTrackByIsrc(row.isrc);
-
-      if (rateLimited) {
-        // Spotify is throttling the app. Fold it into the breaker (a run of these trips it) and
-        // stop — grinding the 429 wall just earns a longer ban. (The cursor only moves if the
-        // ROTATION was reached — a throttle inside the priority head leaves it in place.)
-        await recordSpotifyAnchorOutcome("throttled");
-
-        if (lastAttempted) {
-          await setSetting(ANCHOR_CURSOR_KEY, lastAttempted);
-        }
-        logEvent("warn", "crawl.spotify-throttled", { filled });
-
-        return { filled, outcome: "throttled" };
-      }
-
-      if (unauthorized) {
-        // The stored Spotify grant is gone — every remaining row would fail identically. Trip the
-        // breaker toward a pause and surface the reason so the operator reconnects, rather than
-        // logging the same silent no-match 20 times a tick forever.
-        await recordSpotifyAnchorOutcome("unauthorized");
-
-        if (lastAttempted) {
-          await setSetting(ANCHOR_CURSOR_KEY, lastAttempted);
-        }
-        logEvent("warn", "crawl.spotify-unauthorized", { filled });
-
-        return { filled, outcome: "unauthorized" };
-      }
-
-      if (match) {
-        await db.execute({
-          args: [match.spotifyUri, match.spotifyUrl, match.albumImageUrl ?? null, row.track_id],
-          sql: `update tracks
-                set spotify_uri = ?, spotify_url = ?, album_image_url = coalesce(album_image_url, ?)
-                where track_id = ?`,
-        });
-        // Connect the track's artists by their stable Spotify id, off the SAME lookup — no extra call.
-        await connectAnchorArtists(
-          row.track_id,
-          match.artists.map((artist) => artist.name),
-          match.artists.map((artist) => artist.id),
-        );
-        filled += 1;
-        continue;
-      }
-
-      // ISRC miss — fall through to the search rung. Not on Spotify UNDER THIS ISRC does not mean
-      // not on Spotify: the recording is often pressed on another release the crawl didn't walk.
-    }
-
-    // RUNG TWO — verified title+artist search, on its own budget. Once the budget is spent the
-    // remaining rows wait for the next rotation (the cursor still advances past them below).
-    // A row with NO measured duration — a MusicBrainz recording with no length is written as
-    // `duration_ms = 0` (the crawl's `recording.length ?? track.length ?? 0`) — can never clear
-    // the verification triple, so it never earns a search call: spending one of the ten metered
-    // calls on it every rotation would be a permanent budget leak toward a guaranteed no-stamp.
-    if (row.duration_ms <= 0 || searchAttempts >= ANCHOR_SEARCH_BUDGET) {
-      continue;
-    }
-
-    searchAttempts += 1;
-
-    let candidates: TrackSearchResult[];
-
-    try {
-      candidates = await searchTrackCandidates(anchorSearchQuery(row.artists_json, row.title));
-    } catch (error) {
-      // `searchTrackCandidates` THROWS on a throttle or a dead grant (where the ISRC rung RETURNS
-      // them). Read those two off the error by shape — same breaker parity as rung one, and no
-      // `instanceof` on a `./spotify` class a test's `vi.mock` would strand.
-      const { rateLimited, unauthorized } = classifySpotifySearchFailure(error);
-
-      if (rateLimited) {
-        await recordSpotifyAnchorOutcome("throttled");
-
-        if (lastAttempted) {
-          await setSetting(ANCHOR_CURSOR_KEY, lastAttempted);
-        }
-        logEvent("warn", "crawl.spotify-throttled", { filled });
-
-        return { filled, outcome: "throttled" };
-      }
-
-      if (unauthorized) {
-        await recordSpotifyAnchorOutcome("unauthorized");
-
-        if (lastAttempted) {
-          await setSetting(ANCHOR_CURSOR_KEY, lastAttempted);
-        }
-        logEvent("warn", "crawl.spotify-unauthorized", { filled });
-
-        return { filled, outcome: "unauthorized" };
-      }
-
-      // An odd best-effort fault that is neither a throttle nor a dead grant: treat it as a
-      // no-match and leave the row in rotation.
-      logEvent("warn", "crawl.spotify-search-failed", { error, trackId: row.track_id });
-      continue;
-    }
-
-    const verified = pickVerifiedCandidate(
-      parseArtistsJson(row.artists_json),
-      row.title,
-      row.duration_ms,
-      candidates,
-    );
-
-    if (verified) {
-      await db.execute({
-        args: [
-          `spotify:track:${verified.id}`,
-          verified.spotifyUrl,
-          verified.artworkUrl ?? null,
-          row.track_id,
-        ],
-        sql: `update tracks
-              set spotify_uri = ?, spotify_url = ?, album_image_url = coalesce(album_image_url, ?)
-              where track_id = ?`,
-      });
-      // The verified candidate carries its artists' stable ids parallel to their names (populated in
-      // `searchTrackCandidates`), so the search-anchored track earns the same stable-id link as an
-      // ISRC-anchored one — off the search response already in hand, no extra call.
-      await connectAnchorArtists(row.track_id, verified.artists, verified.spotifyArtistIds ?? []);
-      filled += 1;
-    }
-    // No verified candidate — no stamp. The row stays in rotation (re-ask over a checked column),
-    // exactly as an ISRC no-match does. Precision over recall: a miss is fine, a wrong stamp is not.
-  }
-
-  // The pass ran clean — Spotify answered (whether or not anything matched). Clear any streak
-  // so a healthy tick after a rough patch lifts the breaker immediately. The cursor advances
-  // past everything attempted (matches AND no-matches), so the next tick starts where this
-  // one ended rather than re-grinding the head.
-  if (lastAttempted !== "") {
-    await setSetting(ANCHOR_CURSOR_KEY, lastAttempted);
-  }
-
-  await recordSpotifyAnchorOutcome("ok");
-
-  return { filled, outcome: filled > 0 ? "filled" : "ok" };
 }
 
 // ── Node expansion ───────────────────────────────────────────────────────────
@@ -1446,8 +1001,9 @@ async function expandRelease(node: FrontierRow, maxHop: number): Promise<Expansi
   // FALLBACK for a track with no Spotify presence: it links a crawled track to an artist Fluncle
   // has ALREADY certified (by name), mints nothing, and makes nothing here countable as a finding
   // (lib/server/artists.ts). The stable-id half runs later, at the Spotify-anchor step
-  // (`connectAnchorArtists`), which MINTS the entity by `spotify_artist_id` for a track that does
-  // have a Spotify presence. A track credited to nobody he has found stays unlinked until its
+  // (`connectAnchorArtists` in anchor.ts, driven by the box's anchor sweep), which MINTS the entity
+  // by `spotify_artist_id` for a track that gains a Spotify presence. A track credited to nobody he
+  // has found stays unlinked until its
   // entity exists; the one-off `backfill-artist-links.ts` reconciles that (no longer a deploy step).
   await linkTracksToArtistEntities(writtenIds);
 
@@ -1501,8 +1057,6 @@ export async function crawlCatalogue({
 } = {}): Promise<CrawlPass> {
   const hopLimit = Math.max(0, Math.min(maxHop, MAX_HOP_CEILING));
   const pass: CrawlPass = {
-    anchorOutcome: "ok",
-    anchorsFilled: 0,
     dryRun,
     expanded: 0,
     failed: 0,
@@ -1579,12 +1133,10 @@ export async function crawlCatalogue({
     }
   }
 
-  // The anchor fill runs LAST and on its own budget, so a Spotify 429 can never cost the
-  // walk a node: by the time it runs, everything this pass discovered is already durable.
-  const anchors = await fillSpotifyAnchors(ANCHOR_BUDGET);
-  pass.anchorsFilled = anchors.filled;
-  pass.anchorOutcome = anchors.outcome;
-
+  // The crawl is MusicBrainz-only now. Filling the Spotify anchor moved ENTIRELY off this Worker
+  // path onto the box's Apify anchor sweep → the agent-tier `anchor_track` op (lib/server/anchor.ts,
+  // docs/catalogue-crawler.md § the anchor); its worklist is derived (`spotify_uri is null`), so a
+  // row the crawl just wrote is picked up by the next anchor tick with no state to remember here.
   const status = await getCrawlStatus();
   pass.frontierPending = status.frontier.pending;
 
@@ -1597,7 +1149,7 @@ export async function crawlCatalogue({
  */
 export async function getCrawlStatus(): Promise<CrawlStatus> {
   const db = await getDb();
-  const [states, kinds, catalogue, anchors, labels, spotifyAnchor] = await Promise.all([
+  const [states, kinds, catalogue, anchors, labels] = await Promise.all([
     db.execute("select state, count(*) as n from crawl_frontier group by state"),
     db.execute("select kind, count(*) as n from crawl_frontier group by kind"),
     // A CATALOGUE track is a `tracks` row with no `findings` row. That anti-join IS the
@@ -1605,16 +1157,15 @@ export async function getCrawlStatus(): Promise<CrawlStatus> {
     db.execute(`select count(*) as n from tracks
                 where not exists (select 1 from findings where findings.track_id = tracks.track_id)`),
     // The anchor gauge — the ISRC-bearing slice of the un-anchored catalogue, kept on the
-    // `tracks_anchor_queue_idx` PARTIAL index so it stays cheap as the table grows. NOTE: since
-    // the search rung, `fillSpotifyAnchors` drains a WIDER worklist (`spotify_uri is null`, ISRC
-    // or not) — this count is the indexed lower-bound gauge, not the full drain set (a no-ISRC row
-    // has no partial index to count it cheaply, and counting the whole table on every status read
-    // is exactly the growing-table scan the DB rules forbid).
+    // `tracks_anchor_queue_idx` PARTIAL index so it stays cheap as the table grows. NOTE: the
+    // anchor sweep drains a WIDER worklist (`spotify_uri is null`, ISRC or not — track-work.ts
+    // `kind: "anchor"`) — this count is the indexed lower-bound gauge, not the full drain set (a
+    // no-ISRC row has no partial index to count it cheaply, and counting the whole table on every
+    // status read is exactly the growing-table scan the DB rules forbid).
     db.execute(`select count(*) as n from tracks
                 where isrc is not null and spotify_uri is null
                   and not exists (select 1 from findings where findings.track_id = tracks.track_id)`),
     listLabels(),
-    getSpotifyAnchorBreakerState(),
   ]);
 
   const frontier = { done: 0, failed: 0, pending: 0, skipped: 0 };
@@ -1638,11 +1189,5 @@ export async function getCrawlStatus(): Promise<CrawlStatus> {
       .filter((label) => label.seedState === "enabled")
       .map((label) => label.name)
       .sort(),
-    spotifyAnchor: {
-      consecutiveFailures: spotifyAnchor.consecutiveFailures,
-      cooldownRemainingMs: spotifyAnchor.cooldownRemainingMs,
-      reason: spotifyAnchor.reason,
-      tripped: spotifyAnchor.tripped,
-    },
   };
 }

@@ -52,7 +52,6 @@ const log = (message: string) => console.error(`[crawl-sweep] ${message}`);
 // ---------------------------------------------------------------------------
 
 type CrawlSummary = {
-  anchorsFilled?: number;
   expanded?: number;
   failed?: number;
   frontierPending?: number;
@@ -157,7 +156,6 @@ export function crawlPassWithRetry(): CrawlSummary {
 
 export function main(): void {
   const summary = {
-    anchorsFilled: 0,
     error: null as string | null,
     expanded: 0,
     failed: 0,
@@ -175,7 +173,6 @@ export function main(): void {
   try {
     const pass = crawlPassWithRetry();
 
-    summary.anchorsFilled = pass.anchorsFilled ?? 0;
     summary.expanded = pass.expanded ?? 0;
     summary.failed = pass.failed ?? 0;
     summary.labelsDiscovered = pass.labelsDiscovered ?? [];

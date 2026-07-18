@@ -621,8 +621,13 @@ export const listTracksAdmin = oc
 
 // ── The audio pipeline's work queues (docs/gpu-batch-embed.md, docs/the-ear.md) ──────
 
-/** Which stage of the audio pipeline a worklist is for: capture → analyze → embed. */
-export const TrackWorkKindSchema = z.enum(["analyze", "capture", "embed"]).meta({
+/**
+ * Which stage of the audio pipeline a worklist is for: capture → analyze → embed. `anchor` is
+ * the catalogue Spotify-anchor worklist (docs/catalogue-crawler.md § the anchor) — un-anchored
+ * catalogue rows the box's Apify sweep fills via `anchor_track`; it carries no audio, so it is a
+ * sibling of the three audio stages rather than one of them.
+ */
+export const TrackWorkKindSchema = z.enum(["analyze", "anchor", "capture", "embed"]).meta({
   id: "TrackWorkKind",
 });
 
@@ -649,6 +654,11 @@ export const TrackWorkScopeSchema = z.enum(["all", "catalogue", "findings"]).met
 export const TrackWorkItemSchema = z
   .object({
     analyzedFrom: z.enum(["full", "preview"]).optional(),
+    /**
+     * The ready-made Spotify search query for the ANCHOR worklist (the row's artists then its
+     * title), so the box's Apify sweep never builds it. Present ONLY on `anchor` rows.
+     */
+    anchorQuery: z.string().optional(),
     artistYoutubeChannelIds: z.array(z.string()).optional(),
     artists: z.array(z.string()),
     bpm: z.number().optional(),
