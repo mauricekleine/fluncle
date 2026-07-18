@@ -17,7 +17,7 @@
 // 128 MB isolate (2,067 MiB transferred / 689 MB of JS heap at 100k). The exact scan
 // in SQL returns the winners only: ~2.5 KB, one round trip, 100% recall.
 //
-// THE THREE RULES THAT MAKE IT WORK, all measured:
+// THE FOUR RULES THAT MAKE IT WORK, all measured:
 //   1. Rank with `vector_distance_cos` in SQL, never in the isolate.
 //   2. BIND THE PROBE AS A RAW BLOB (`toVectorProbe`), never as a JSON string. A text
 //      probe makes the database re-parse 21 KB of JSON once per row: 26,700 ms vs
@@ -28,6 +28,12 @@
 //      minutes; locally it silently builds an EMPTY index. The exact scan (plus a
 //      btree pre-filter where the query allows one) is the ratified shape — there is
 //      no ANN index here, by decision.
+//   4. NEVER fan a MULTI-probe scan out as `union all` branches over a CTE — the
+//      planner flattens the CTE and re-executes the candidate scan once per branch
+//      (12 probes = 12 full blob-dragging passes; 63 s hosted, measured 2026-07-18
+//      on /recommendations). Fold the probes into ONE pass instead:
+//      `min(vector_distance_cos(vec, ?), …)` in the select list — and mind that
+//      one-argument `min()` is the AGGREGATE, so a single probe binds bare.
 //
 // The pure functions stay side-effect-free so they are unit tested with fixture
 // vectors (no DB, no network); `readEmbeddingBlob`/`toVectorProbe` are the only
