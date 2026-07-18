@@ -135,7 +135,9 @@ export const listFreshSpec = defineSpec({
       .describe(`How many releases to return (1 to ${FRESH_LIMIT_MAX}).`),
   }),
   name: "list_fresh",
-  project: { chat: "compactCard", mcp: "publicRecord", webmcp: "publicRecord" },
+  // Chat splits the fresh list into two registers (PR-4): certified findings + the unlit catalogue
+  // rows. The MCP world-serves the whole flat list, each row certified-tagged.
+  project: { chat: "twoBucket", mcp: "publicRecord", webmcp: "publicRecord" },
   tier: "lore-canon",
   title: "Fresh releases",
   transports: ["mcp", "chat", "webmcp"],
@@ -204,9 +206,10 @@ export const searchArchiveSpec = defineSpec({
       .describe("What to dig for — a name, a label, a key/BPM, or 'sounds like <track>'."),
   }),
   name: "search_archive",
-  // Chat filters to findings-only (until PR-4); the MCP world-serves the whole SearchResult, both
-  // registers certified-tagged; WebMCP reads the public GET /api/v1/search/archive twin.
-  project: { chat: "compactCard", mcp: "publicRecord", webmcp: "publicRecord" },
+  // Chat splits the result into two registers (PR-4): certified findings + unlit catalogue rows.
+  // The MCP world-serves the whole SearchResult, both registers certified-tagged; WebMCP reads the
+  // public GET /api/v1/search/archive twin.
+  project: { chat: "twoBucket", mcp: "publicRecord", webmcp: "publicRecord" },
   tier: "lore-canon",
   title: "Search the archive",
   transports: ["mcp", "chat", "webmcp"],
@@ -254,7 +257,7 @@ export const getLabelSpec = defineSpec({
 export const buildSetSpec = defineSpec({
   access: "public",
   description:
-    "Chain a mixable set from one of Fluncle's findings. Give it a starting finding — a Log ID coordinate he has logged (e.g. 004.7.2I) or a track name — and it returns an ordered set of what mixes in cleanly after it, each step carrying the REASON it mixes (same key, next key over, tempo locked), never a number. It only ever chains certified findings; it returns nothing when he has not logged a starting point.",
+    "Chain a mixable set from one of Fluncle's findings. Give it a starting finding — a Log ID coordinate he has logged (e.g. 004.7.2I) or a track name — and it returns an ordered set of what mixes in cleanly after it, each step carrying the REASON it mixes (same key, next key over, tempo locked), never a number. It starts from a finding, and returns nothing when he has not logged a starting point.",
   effect: "read",
   input: z.object({
     seed: z
