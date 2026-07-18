@@ -3,6 +3,16 @@ import { useInfiniteQuery } from "@tanstack/react-query";
 import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { type FormEvent, useEffect, useRef } from "react";
+import { Button } from "@fluncle/ui/components/button";
+import { Input } from "@fluncle/ui/components/input";
+import { Label } from "@fluncle/ui/components/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@fluncle/ui/components/select";
 import { FreshStreamRow } from "@/components/fresh/shared";
 import { isGalaxyMapFullyNamed, listPublicGalaxies } from "@/lib/server/galaxies-map";
 import {
@@ -84,10 +94,50 @@ export const Route = createFileRoute("/tracks")({
 
 // ── The filter bar ──────────────────────────────────────────────────────────────────────
 
+/** One number filter field (a year or a BPM bound) — a Shadcn Label + Input, seeded from the URL. */
+function NumberFilter({
+  defaultValue,
+  id,
+  label,
+  max,
+  min,
+  name,
+  placeholder,
+}: {
+  defaultValue: number | undefined;
+  id: string;
+  label: string;
+  max: number;
+  min: number;
+  name: string;
+  placeholder: string;
+}) {
+  return (
+    <div className="grid gap-1.5">
+      <Label className="text-xs font-medium text-muted-foreground" htmlFor={id}>
+        {label}
+      </Label>
+      <Input
+        className="w-24"
+        defaultValue={defaultValue ?? ""}
+        id={id}
+        inputMode="numeric"
+        max={max}
+        min={min}
+        name={name}
+        placeholder={placeholder}
+        type="number"
+      />
+    </div>
+  );
+}
+
 /**
  * The filter bar: a real form that navigates on submit (never per-keystroke), so the loader
- * re-seeds from a fresh URL and the page stays crawlable + shareable. Uncontrolled inputs seeded
- * from the current search; "Apply filters" submits, "Clear filters" returns to the bare hub.
+ * re-seeds from a fresh URL and the page stays crawlable + shareable. Built on the Shadcn design
+ * system (Input / Label / Select / Button) — the base-ui Select carries its `name` into the form
+ * submit via a hidden input, so the navigate-on-submit read of `FormData` still works. Uncontrolled,
+ * seeded from the current search; "Apply filters" submits, "Clear filters" returns to the bare hub.
  */
 function TracksFilters({
   galaxyOptions,
@@ -105,83 +155,90 @@ function TracksFilters({
     void navigate({ search: parseTracksSearch(raw), to: "/tracks" });
   };
 
+  // `items` maps a Select's value → its trigger label so base-ui renders the LABEL (not the raw
+  // value) in the closed trigger — load-bearing for the "" default (renders "Any …", never a blank)
+  // and for galaxy (value is a slug, label is the name).
+  const keyItems: Record<string, string> = {
+    "": "Any key",
+    ...Object.fromEntries(KEY_FILTER_OPTIONS.map((option) => [option, option])),
+  };
+  const galaxyItems: Record<string, string> = {
+    "": "Any galaxy",
+    ...Object.fromEntries(galaxyOptions.map((galaxy) => [galaxy.slug, galaxy.name])),
+  };
+
   return (
-    <form aria-labelledby="tracks-filter-heading" className="tracks-filters" onSubmit={onSubmit}>
+    <form
+      aria-labelledby="tracks-filter-heading"
+      className="flex flex-wrap items-end gap-x-4 gap-y-3 border-y border-border/55 py-4"
+      onSubmit={onSubmit}
+    >
       <h2 className="sr-only" id="tracks-filter-heading">
         Filter tracks
       </h2>
 
-      <div className="tracks-filter-field">
-        <label htmlFor="tracks-filter-year-min">From year</label>
-        <input
-          defaultValue={search.yearMin ?? ""}
-          id="tracks-filter-year-min"
-          inputMode="numeric"
-          max={2100}
-          min={1990}
-          name="yearMin"
-          placeholder="1995"
-          type="number"
-        />
+      <NumberFilter
+        defaultValue={search.yearMin}
+        id="tracks-filter-year-min"
+        label="From year"
+        max={2100}
+        min={1990}
+        name="yearMin"
+        placeholder="1995"
+      />
+      <NumberFilter
+        defaultValue={search.yearMax}
+        id="tracks-filter-year-max"
+        label="To year"
+        max={2100}
+        min={1990}
+        name="yearMax"
+        placeholder="2026"
+      />
+      <NumberFilter
+        defaultValue={search.bpmMin}
+        id="tracks-filter-bpm-min"
+        label="Min BPM"
+        max={300}
+        min={1}
+        name="bpmMin"
+        placeholder="160"
+      />
+      <NumberFilter
+        defaultValue={search.bpmMax}
+        id="tracks-filter-bpm-max"
+        label="Max BPM"
+        max={300}
+        min={1}
+        name="bpmMax"
+        placeholder="180"
+      />
+
+      <div className="grid gap-1.5">
+        <Label className="text-xs font-medium text-muted-foreground" htmlFor="tracks-filter-key">
+          Key
+        </Label>
+        <Select defaultValue={search.key ?? ""} items={keyItems} name="key">
+          <SelectTrigger className="w-40" id="tracks-filter-key">
+            <SelectValue placeholder="Any key" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="">Any key</SelectItem>
+            {KEY_FILTER_OPTIONS.map((option) => (
+              <SelectItem key={option} value={option}>
+                {option}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
 
-      <div className="tracks-filter-field">
-        <label htmlFor="tracks-filter-year-max">To year</label>
-        <input
-          defaultValue={search.yearMax ?? ""}
-          id="tracks-filter-year-max"
-          inputMode="numeric"
-          max={2100}
-          min={1990}
-          name="yearMax"
-          placeholder="2026"
-          type="number"
-        />
-      </div>
-
-      <div className="tracks-filter-field">
-        <label htmlFor="tracks-filter-bpm-min">Min BPM</label>
-        <input
-          defaultValue={search.bpmMin ?? ""}
-          id="tracks-filter-bpm-min"
-          inputMode="numeric"
-          max={300}
-          min={1}
-          name="bpmMin"
-          placeholder="160"
-          type="number"
-        />
-      </div>
-
-      <div className="tracks-filter-field">
-        <label htmlFor="tracks-filter-bpm-max">Max BPM</label>
-        <input
-          defaultValue={search.bpmMax ?? ""}
-          id="tracks-filter-bpm-max"
-          inputMode="numeric"
-          max={300}
-          min={1}
-          name="bpmMax"
-          placeholder="180"
-          type="number"
-        />
-      </div>
-
-      <div className="tracks-filter-field">
-        <label htmlFor="tracks-filter-key">Key</label>
-        <select defaultValue={search.key ?? ""} id="tracks-filter-key" name="key">
-          <option value="">Any key</option>
-          {KEY_FILTER_OPTIONS.map((option) => (
-            <option key={option} value={option}>
-              {option}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      <div className="tracks-filter-field tracks-filter-field-label">
-        <label htmlFor="tracks-filter-label">Label</label>
-        <input
+      <div className="grid grow gap-1.5">
+        <Label className="text-xs font-medium text-muted-foreground" htmlFor="tracks-filter-label">
+          Label
+        </Label>
+        <Input
+          className="min-w-48"
           defaultValue={search.label ?? ""}
           id="tracks-filter-label"
           name="label"
@@ -193,27 +250,37 @@ function TracksFilters({
       {/* Galaxy is offered ONLY once the sonic map is named (the launch gate): an empty list keeps
           the control off the page entirely (the /galaxies-dark precedent), never a dead select. */}
       {galaxyOptions.length > 0 ? (
-        <div className="tracks-filter-field">
-          <label htmlFor="tracks-filter-galaxy">Galaxy</label>
-          <select defaultValue={search.galaxy ?? ""} id="tracks-filter-galaxy" name="galaxy">
-            <option value="">Any galaxy</option>
-            {galaxyOptions.map((galaxy) => (
-              <option key={galaxy.slug} value={galaxy.slug}>
-                {galaxy.name}
-              </option>
-            ))}
-          </select>
+        <div className="grid gap-1.5">
+          <Label
+            className="text-xs font-medium text-muted-foreground"
+            htmlFor="tracks-filter-galaxy"
+          >
+            Galaxy
+          </Label>
+          <Select defaultValue={search.galaxy ?? ""} items={galaxyItems} name="galaxy">
+            <SelectTrigger className="w-40" id="tracks-filter-galaxy">
+              <SelectValue placeholder="Any galaxy" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="">Any galaxy</SelectItem>
+              {galaxyOptions.map((galaxy) => (
+                <SelectItem key={galaxy.slug} value={galaxy.slug}>
+                  {galaxy.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
       ) : undefined}
 
-      <div className="tracks-filter-actions">
-        <button className="tracks-filter-apply" type="submit">
+      <div className="ml-auto flex items-center gap-2">
+        <Button type="submit" variant="outline">
           Apply filters
-        </button>
+        </Button>
         {tracksSearchHasFilters(search) ? (
-          <Link className="tracks-filter-clear" to="/tracks">
+          <Button nativeButton={false} render={<Link to="/tracks" />} size="sm" variant="ghost">
             Clear filters
-          </Link>
+          </Button>
         ) : undefined}
       </div>
     </form>
@@ -282,8 +349,9 @@ function TracksPage() {
           {/* Reference register (VOICE.md's Three Areas): one factual line naming the superset. The
               newest-first order is SHOWN by the row date column (never stated — the /fresh masthead
               rule), and the lit/unlit split is shown visually, never verbally (DESIGN.md's Unlit
-              Rule: an uncertified row is never introduced as a tier). So the intro names the whole. */}
-          <p className="log-index-intro">Every drum &amp; bass track in the archive.</p>
+              Rule: an uncertified row is never introduced as a tier). "holds", not "in the archive"
+              — the archive is the CERTIFIED collection, and this list is the wider superset. */}
+          <p className="log-index-intro">Every drum &amp; bass track Fluncle holds.</p>
         </header>
 
         <TracksFilters galaxyOptions={galaxyOptions} search={search} />
@@ -292,7 +360,7 @@ function TracksPage() {
           <p className="log-index-empty empty-scanlines">
             {filtered
               ? "No tracks match those filters. Loosen them and try again."
-              : "No tracks logged yet. Quiet sector tonight."}
+              : "Nothing here yet. Quiet sector tonight."}
           </p>
         ) : (
           <ol aria-label="Tracks" className="fresh-rows tracks-hub-list">
@@ -301,10 +369,18 @@ function TracksPage() {
             ))}
             {hasNextPage ? (
               <li className="tracks-hub-more" ref={sentinelRef}>
+                {/* `aria-disabled` (not `disabled`) while fetching, with a no-op guard: a `disabled`
+                    button drops keyboard focus mid-fetch, so the reader loses their place. It stays
+                    focusable and reports `aria-busy` instead. */}
                 <button
+                  aria-busy={isFetchingNextPage}
+                  aria-disabled={isFetchingNextPage}
                   className="tracks-hub-more-button"
-                  disabled={isFetchingNextPage}
-                  onClick={() => void fetchNextPage()}
+                  onClick={() => {
+                    if (!isFetchingNextPage) {
+                      void fetchNextPage();
+                    }
+                  }}
                   type="button"
                 >
                   {isFetchingNextPage ? (
@@ -325,7 +401,7 @@ function TracksPage() {
 
         <footer className="log-plate-footer">
           <Link to="/">Back to the archive</Link>
-          <Link to="/fresh">New releases</Link>
+          <Link to="/fresh">Fresh</Link>
         </footer>
       </article>
     </main>

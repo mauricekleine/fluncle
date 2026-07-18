@@ -19,7 +19,7 @@ export const tracksHubTitle = "Every drum & bass track · Fluncle";
 // Machine-facing (the page's <meta>/OG description), so honestly-plain third person (VOICE.md,
 // Narrator): what the page is, in the nouns a stranger would search for — never a first-person take.
 export const tracksHubDescription =
-  "Every drum & bass track in Fluncle's archive. Filter by release year, tempo, key, and label.";
+  "Every drum & bass track Fluncle holds. Filter by release year, tempo, key, and label.";
 
 // The 24 canonical key spellings (12 sharp pitch classes × major/minor). The value is the SCALE
 // name — the same string `compileFilters`/`parseKey` reads (which folds enharmonics, so "C# major"
@@ -150,7 +150,7 @@ export function tracksHead(search: TracksSearch, firstPage: TracksHubPage | unde
               position: index + 1,
             })),
           },
-          name: "Every drum & bass track in Fluncle's archive",
+          name: "Every drum & bass track Fluncle holds",
           url: canonical,
         }),
       ];
