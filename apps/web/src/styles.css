@@ -2053,6 +2053,40 @@ body::before {
   margin: 0;
 }
 
+/* The A–Z fast lane: real ?page=N anchors above the "more <entities>" grid, so a crawler reaches any
+   region of the alphabet in two hops and a reader can jump. Quiet chrome — Stardust ink, cream on
+   hover, the canonical Eclipse ring on focus (WCAG); a letter with nothing to reach sits dimmer and
+   is aria-hidden. No gold at rest: the light stays with the findings (One Sun). */
+.catalogue-letters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.15rem 0.3rem;
+  margin-top: 0.7rem;
+}
+
+.catalogue-letter {
+  border-radius: var(--rounded-sm);
+  color: var(--stardust);
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.4;
+  padding: 0.05rem 0.3rem;
+  text-decoration: none;
+}
+
+a.catalogue-letter:hover {
+  color: var(--starlight-cream);
+}
+
+a.catalogue-letter:focus-visible {
+  outline: 2px solid var(--eclipse-glow);
+  outline-offset: 2px;
+}
+
+.catalogue-letter-empty {
+  color: color-mix(in oklch, var(--muted-foreground) 50%, transparent);
+}
+
 /* The dimming that makes a tile read as unlit: the artwork/avatar and the name sit a step down at
    rest and lift to full on hover/focus. The name still heats to cream through the grid's own hover
    rule; only the resting light drops. */

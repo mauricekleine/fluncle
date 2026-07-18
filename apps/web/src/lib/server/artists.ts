@@ -2,7 +2,16 @@ import { randomUUID } from "node:crypto";
 import { type ArtistSocialPlatform, ARTIST_SOCIAL_PLATFORMS } from "../artist-socials";
 import { validateSocialUrlForPlatform } from "./artist-resolution";
 import { getDb, typedRow, typedRows } from "./db";
-import { type CatalogueHubPage, clampCatalogueHubLimit, type EntitySitemapRow } from "./labels";
+import {
+  type CatalogueHubLetter,
+  type CatalogueHubNumberedPage,
+  type CatalogueHubPage,
+  type CatalogueHubQuery,
+  clampCatalogueHubLimit,
+  type EntitySitemapRow,
+  listCatalogueHubLetters,
+  listCatalogueHubPage,
+} from "./labels";
 import { logEvent } from "./log";
 import { bestArtistAvatarUrl } from "../media";
 import { fetchArtistImages } from "./spotify";
@@ -495,6 +504,40 @@ export async function listArtistsCatalogue(options: {
     items,
     nextCursor: items.length === limit ? (items[items.length - 1]?.slug ?? null) : null,
   };
+}
+
+/** The ARTISTS hub's `?page=N` + A–Z reads, over the same set as the keyset `listArtistsCatalogue`. */
+const ARTISTS_HUB_QUERY: CatalogueHubQuery<ArtistCatalogueEntry> = {
+  floor: ARTIST_INDEX_MIN_FINDINGS,
+  from: "artists a join track_artists ta on ta.artist_id = a.id join tracks on tracks.track_id = ta.track_id",
+  groupBy: "a.id",
+  mapRow: (row) => ({
+    // The OWNED avatar master (RFC U3b) when resolved, else the raw Spotify image_url.
+    imageUrl: bestArtistAvatarUrl({
+      imageKey: row.image_key ?? null,
+      imageState: row.image_state ?? null,
+      imageUpdatedAt: row.image_updated_at ?? null,
+      imageUrl: row.image_url ?? null,
+    }),
+    name: row.name,
+    slug: row.slug,
+    trackCount: Number(row.track_count),
+  }),
+  select: `a.name as name, a.image_url as image_url, a.image_key as image_key,
+           a.image_state as image_state, a.image_updated_at as image_updated_at`,
+  slugExpr: "a.slug",
+};
+
+/** One numbered page of the `/artists` hub's findings-free section (the crawlable `?page=N` view). */
+export function listArtistsCataloguePage(
+  page: number,
+): Promise<CatalogueHubNumberedPage<ArtistCatalogueEntry>> {
+  return listCatalogueHubPage(ARTISTS_HUB_QUERY, page);
+}
+
+/** The `/artists` hub's A–Z fast lane: each present letter → the page its first artist lands on. */
+export function listArtistsCatalogueLetters(): Promise<CatalogueHubLetter[]> {
+  return listCatalogueHubLetters(ARTISTS_HUB_QUERY);
 }
 
 /** An artist chip on a graph page (the label's roster, the album's credits). */
