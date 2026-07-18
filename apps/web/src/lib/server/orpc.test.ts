@@ -596,6 +596,9 @@ const PUBLIC_OPERATION_IDS = [
   "getTrack",
   "listArtists",
   "listEditions",
+  // The public fresh-releases keystone — GET /tracks/fresh (list_fresh, added by the
+  // fresh-releases API work; this coverage constant was missed at that merge).
+  "listFresh",
   "listGalaxies",
   "listMixOpeners",
   "listMixableArtists",
