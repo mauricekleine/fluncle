@@ -145,7 +145,9 @@ function ChainStep({
           </span>
         </button>
       ) : (
-        <span className="shrink-0">{artwork}</span>
+        // A catalogue step (no coordinate) rides the unlit register: its tile is desaturated
+        // (Dust Veil), never a lit cover — DESIGN.md §157's Unlit Rule, mirroring the /mix unlit row.
+        <span className={logId ? "shrink-0" : "chain-step--unlit shrink-0"}>{artwork}</span>
       )}
 
       <div className="min-w-0 flex-1">

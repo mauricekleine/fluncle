@@ -5661,6 +5661,15 @@ a.catalogue-letter:focus-visible {
   opacity: 0.75;
 }
 
+/* THE UNLIT RULE on a ChatDnB build_set chain step (components/chat/chain-card.tsx). A catalogue
+   step has no coordinate, so its tile catches the same cold DUST VEIL as the /mix unlit row above —
+   never a lit cover on a track Fluncle never certified. Mirrors `.mix-row--unlit` exactly. */
+.chain-step--unlit .track-artwork,
+.chain-step--unlit img {
+  filter: saturate(0.55) brightness(0.8);
+  opacity: 0.75;
+}
+
 /* The way out. A Spotify mark, because that is genuinely where the row goes — there is no
    /log page for a track Fluncle has not been to. */
 .mix-row-out {
