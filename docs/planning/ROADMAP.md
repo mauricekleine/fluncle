@@ -128,10 +128,6 @@ The Fluncle web onion is live on the rave VPS, proxying `www.fluncle.com` (API/R
 
 - **The rave SSH onion (deferred).** A second onion identity → the SSH terminal was scoped but deferred; stand it up if the flex earns its keep.
 
-### MusicKit second authority — the remaining tail (U2b only)
-
-The MusicKit arc shipped whole across seven PRs (#548 the catalog oracle, #550 the facts keystone, #554 the exact-ISRC preview rung, #556 editorial-notes fuel, #563 label aliases, the U3a/U3b cover work — doctrine: [docs/album-artwork.md](../album-artwork.md)), and the `force_capture` dupe-veto escape hatch followed (#583 — the operator override across all three duplicate detectors, sticky through the capture it enables; doctrine: [docs/the-ear.md](../the-ear.md) § Duplicates). One unit remains, carried by the trimmed [docs/musickit-second-authority-rfc.md](../musickit-second-authority-rfc.md): **U2b** — the operator `merge_label` op + slug 301s that clean up the pre-existing label splits (the Medschool/Med School class), deliberately staged behind real U2a alias data accumulating in prod. The staging window has run its course (alias candidates have flowed since #563, and the label entity now carries lineage + founding facts worth not losing in a merge — #704) — ready to pick up.
-
 ### Database latency — evaluate Turso → Cloudflare D1
 
 Turso (libSQL) is the source of truth, hosted in **Ireland**, so every Worker→DB read pays a cross-region hop — a real chunk of the `/log/<id>` ~896 ms cold TTFB (the Worker runs at the edge near the reader; the database doesn't). Cloudflare-native **D1** co-locates with Workers and would shrink that roundtrip. The catch is migration cost: D1 is SQLite with its own ceilings (database-size and write-throughput limits, no libSQL-only features), and the whole Drizzle data layer, migration history, and the per-worktree local-dev story (`turso dev` + `.dev/local.db`, see `docs/local-database.md`) would move with it — a real arc, not a config flip.
