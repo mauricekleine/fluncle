@@ -74,15 +74,17 @@ All `application/json`; the OpenAPI document at `/api/v1/openapi.json` advertise
 
 ### Feeds — subscribable syndication documents
 
-| Surface           | Route           | Format                  | Exposes                                                                   | Weight    |
-| ----------------- | --------------- | ----------------------- | ------------------------------------------------------------------------- | --------- |
-| `feed.rss`        | `/rss.xml`      | `application/rss+xml`   | the 25 most recent findings and mixtapes                                  | primary   |
-| `feed.atom`       | `/atom.xml`     | `application/atom+xml`  | the recent findings and mixtapes as an Atom feed                          | secondary |
-| `feed.json`       | `/feed.json`    | `application/feed+json` | the recent findings and mixtapes as a JSON Feed                           | secondary |
-| `feed.fresh.rss`  | `/fresh.xml`    | `application/rss+xml`   | the newest releases over a 30-day window (release-dated, not found-dated) | secondary |
-| `feed.fresh.json` | `/fresh.json`   | `application/feed+json` | the newest releases over a 30-day window, as a JSON Feed                  | secondary |
-| `feed.podcast`    | `/podcast.xml`  | `application/rss+xml`   | the mixtapes as a podcast feed (episode audio on `found.fluncle.com`)     | secondary |
-| `feed.calendar`   | `/calendar.ics` | `text/calendar`         | planned events as an iCalendar feed (Twitch-linked VEVENTs)               | tertiary  |
+| Surface                 | Route                     | Format                  | Exposes                                                                             | Weight    |
+| ----------------------- | ------------------------- | ----------------------- | ----------------------------------------------------------------------------------- | --------- |
+| `feed.rss`              | `/rss.xml`                | `application/rss+xml`   | the 25 most recent findings and mixtapes                                            | primary   |
+| `feed.atom`             | `/atom.xml`               | `application/atom+xml`  | the recent findings and mixtapes as an Atom feed                                    | secondary |
+| `feed.json`             | `/feed.json`              | `application/feed+json` | the recent findings and mixtapes as a JSON Feed                                     | secondary |
+| `feed.fresh.rss`        | `/fresh.xml`              | `application/rss+xml`   | the newest releases over a 30-day window (release-dated, not found-dated)           | secondary |
+| `feed.fresh.json`       | `/fresh.json`             | `application/feed+json` | the newest releases over a 30-day window, as a JSON Feed                            | secondary |
+| `feed.fresh.artist.rss` | `/artist/:slug/fresh.xml` | `application/rss+xml`   | one artist's newest releases over a 30-day window (release-dated, that artist only) | tertiary  |
+| `feed.fresh.label.rss`  | `/label/:slug/fresh.xml`  | `application/rss+xml`   | one label's newest releases over a 30-day window (release-dated, that label only)   | tertiary  |
+| `feed.podcast`          | `/podcast.xml`            | `application/rss+xml`   | the mixtapes as a podcast feed (episode audio on `found.fluncle.com`)               | secondary |
+| `feed.calendar`         | `/calendar.ics`           | `text/calendar`         | planned events as an iCalendar feed (Twitch-linked VEVENTs)                         | tertiary  |
 
 ### Discovery — machine-/crawler-facing maps
 
@@ -242,6 +244,8 @@ The weight ladder within a context is unchanged — **`primary`** (the loud fron
 | `feed.json`                 | secondary |           |           |           |
 | `feed.fresh.rss`            | secondary |           |           |           |
 | `feed.fresh.json`           | secondary |           |           |           |
+| `feed.fresh.artist.rss`     | tertiary  |           |           |           |
+| `feed.fresh.label.rss`      | tertiary  |           |           |           |
 | `feed.podcast`              | secondary |           |           |           |
 | `feed.calendar`             | tertiary  |           |           |           |
 | `discovery.llms`            | primary   |           |           |           |

@@ -720,6 +720,37 @@ export const SURFACES: readonly Surface[] = [
     weights: { web: "secondary" },
   },
   {
+    // The per-ENTITY release feeds — /fresh.xml narrowed to one artist / one label: what just came
+    // OUT from that entity, over the same 30-day window. LITERAL (only the entity's own tracks,
+    // never a widening to similar artists); uncertified catalogue rows ride along linking out to
+    // Spotify only, no coordinate (the Unlit Rule). Advertised via a <link rel="alternate"> on the
+    // entity page head, not a site-wide feed — a quiet per-entity affordance (web: tertiary).
+    apiFormat: "application/rss+xml",
+    exposedContent: [
+      "one artist's newest releases over a 30-day window, as RSS (release-dated, that artist only)",
+    ],
+    kind: "feed",
+    name: "feed.fresh.artist.rss",
+    operatorNotes:
+      "Slug-parameterized (/artist/:slug/fresh.xml), so there is no fixed URL to health-probe — no probeConfig, like web.artist. An unknown slug 404s; a known artist with nothing in the window serves a valid empty feed. Source: apps/web/src/routes/artist.$slug.fresh[.]xml.ts + src/lib/server/fresh-entity.ts.",
+    route: "/artist/:slug/fresh.xml",
+    url: `${SITE}/artist/:slug/fresh.xml`,
+    weights: { web: "tertiary" },
+  },
+  {
+    apiFormat: "application/rss+xml",
+    exposedContent: [
+      "one label's newest releases over a 30-day window, as RSS (release-dated, that label only)",
+    ],
+    kind: "feed",
+    name: "feed.fresh.label.rss",
+    operatorNotes:
+      "Slug-parameterized (/label/:slug/fresh.xml), so there is no fixed URL to health-probe — no probeConfig, like web.artist. An unknown slug 404s; a known label with nothing in the window serves a valid empty feed. Source: apps/web/src/routes/label.$slug.fresh[.]xml.ts + src/lib/server/fresh-entity.ts.",
+    route: "/label/:slug/fresh.xml",
+    url: `${SITE}/label/:slug/fresh.xml`,
+    weights: { web: "tertiary" },
+  },
+  {
     apiFormat: "application/rss+xml",
     exposedContent: ["the mixtapes as a podcast feed (episode audio on found.fluncle.com)"],
     kind: "feed",

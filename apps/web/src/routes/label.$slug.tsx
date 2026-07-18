@@ -7,6 +7,7 @@ import {
 } from "@/components/catalogue-groups";
 import { ArtistChips, FindingsGrid, graphPageTracks } from "@/components/graph-sections";
 import { StoryNotFoundState } from "@/components/stories/stories-states";
+import { entityFreshChannel } from "@/lib/fresh-feed-rss";
 import { siteUrl } from "@/lib/fluncle-links";
 import { jsonLdScript } from "@/lib/json-ld";
 import { labelBreadcrumbsJsonLd, recordLabelJsonLd } from "@/lib/log-schema";
@@ -231,7 +232,17 @@ function labelHead(loaderData: LabelPageData | undefined) {
     `${siteUrl}/fluncle-cover.png`;
 
   return {
-    links: [{ href: pageUrl, rel: "canonical" }],
+    links: [
+      { href: pageUrl, rel: "canonical" },
+      // RSS discovery: this label's new-releases feed (the 30-day window, this label only).
+      // The bare `/label/<slug>/fresh.xml`, never the paged catalogue URL.
+      {
+        href: `${siteUrl}/label/${slug}/fresh.xml`,
+        rel: "alternate",
+        title: entityFreshChannel("label", name).title,
+        type: "application/rss+xml",
+      },
+    ],
     meta: [
       { title },
       { content: description, name: "description" },

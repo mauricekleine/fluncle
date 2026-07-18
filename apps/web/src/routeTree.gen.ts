@@ -81,6 +81,8 @@ import { Route as AdminClipsRouteImport } from './routes/admin/clips'
 import { Route as AdminChatRouteImport } from './routes/admin/chat'
 import { Route as AdminCatalogueRouteImport } from './routes/admin/catalogue'
 import { Route as AdminArtistsRouteImport } from './routes/admin/artists'
+import { Route as LabelSlugFreshDotxmlRouteImport } from './routes/label.$slug.fresh[.]xml'
+import { Route as ArtistSlugFreshDotxmlRouteImport } from './routes/artist.$slug.fresh[.]xml'
 import { Route as ApiV1StatusRouteImport } from './routes/api/v1/status'
 import { Route as ApiV1PostmanDotjsonRouteImport } from './routes/api/v1/postman[.]json'
 import { Route as ApiV1OpenapiDotjsonRouteImport } from './routes/api/v1/openapi[.]json'
@@ -487,6 +489,16 @@ const AdminArtistsRoute = AdminArtistsRouteImport.update({
   path: '/artists',
   getParentRoute: () => AdminRouteRoute,
 } as any)
+const LabelSlugFreshDotxmlRoute = LabelSlugFreshDotxmlRouteImport.update({
+  id: '/fresh.xml',
+  path: '/fresh.xml',
+  getParentRoute: () => LabelSlugRoute,
+} as any)
+const ArtistSlugFreshDotxmlRoute = ArtistSlugFreshDotxmlRouteImport.update({
+  id: '/fresh.xml',
+  path: '/fresh.xml',
+  getParentRoute: () => ArtistSlugRoute,
+} as any)
 const ApiV1StatusRoute = ApiV1StatusRouteImport.update({
   id: '/api/v1/status',
   path: '/api/v1/status',
@@ -782,14 +794,14 @@ export interface FileRoutesByFullPath {
   '/album/$slug': typeof AlbumSlugRoute
   '/api/chat': typeof ApiChatRoute
   '/api/status': typeof ApiStatusRoute
-  '/artist/$slug': typeof ArtistSlugRoute
+  '/artist/$slug': typeof ArtistSlugRouteWithChildren
   '/cli/latest.sh': typeof CliLatestDotshRoute
   '/docs.md/$': typeof DocsDotmdSplatRoute
   '/docs/$': typeof DocsSplatRoute
   '/docs/api': typeof DocsApiRoute
   '/embed/$logId': typeof EmbedLogIdRoute
   '/galaxies/$slug': typeof GalaxiesSlugRoute
-  '/label/$slug': typeof LabelSlugRoute
+  '/label/$slug': typeof LabelSlugRouteWithChildren
   '/log/$logId': typeof LogLogIdRoute
   '/logbook/$sector': typeof LogbookSectorRoute
   '/newsletter/$number': typeof NewsletterNumberRoute
@@ -819,6 +831,8 @@ export interface FileRoutesByFullPath {
   '/api/v1/openapi.json': typeof ApiV1OpenapiDotjsonRoute
   '/api/v1/postman.json': typeof ApiV1PostmanDotjsonRoute
   '/api/v1/status': typeof ApiV1StatusRoute
+  '/artist/$slug/fresh.xml': typeof ArtistSlugFreshDotxmlRoute
+  '/label/$slug/fresh.xml': typeof LabelSlugFreshDotxmlRoute
   '/api/v1/admin/logout': typeof ApiV1AdminLogoutRoute
   '/api/v1/me/avatar': typeof ApiV1MeAvatarRoute
   '/api/v1/mixtape-cover/$logId': typeof ApiV1MixtapeCoverLogIdRoute
@@ -898,14 +912,14 @@ export interface FileRoutesByTo {
   '/album/$slug': typeof AlbumSlugRoute
   '/api/chat': typeof ApiChatRoute
   '/api/status': typeof ApiStatusRoute
-  '/artist/$slug': typeof ArtistSlugRoute
+  '/artist/$slug': typeof ArtistSlugRouteWithChildren
   '/cli/latest.sh': typeof CliLatestDotshRoute
   '/docs.md/$': typeof DocsDotmdSplatRoute
   '/docs/$': typeof DocsSplatRoute
   '/docs/api': typeof DocsApiRoute
   '/embed/$logId': typeof EmbedLogIdRoute
   '/galaxies/$slug': typeof GalaxiesSlugRoute
-  '/label/$slug': typeof LabelSlugRoute
+  '/label/$slug': typeof LabelSlugRouteWithChildren
   '/log/$logId': typeof LogLogIdRoute
   '/logbook/$sector': typeof LogbookSectorRoute
   '/newsletter/$number': typeof NewsletterNumberRoute
@@ -935,6 +949,8 @@ export interface FileRoutesByTo {
   '/api/v1/openapi.json': typeof ApiV1OpenapiDotjsonRoute
   '/api/v1/postman.json': typeof ApiV1PostmanDotjsonRoute
   '/api/v1/status': typeof ApiV1StatusRoute
+  '/artist/$slug/fresh.xml': typeof ArtistSlugFreshDotxmlRoute
+  '/label/$slug/fresh.xml': typeof LabelSlugFreshDotxmlRoute
   '/api/v1/admin/logout': typeof ApiV1AdminLogoutRoute
   '/api/v1/me/avatar': typeof ApiV1MeAvatarRoute
   '/api/v1/mixtape-cover/$logId': typeof ApiV1MixtapeCoverLogIdRoute
@@ -1017,14 +1033,14 @@ export interface FileRoutesById {
   '/album/$slug': typeof AlbumSlugRoute
   '/api/chat': typeof ApiChatRoute
   '/api/status': typeof ApiStatusRoute
-  '/artist/$slug': typeof ArtistSlugRoute
+  '/artist/$slug': typeof ArtistSlugRouteWithChildren
   '/cli/latest.sh': typeof CliLatestDotshRoute
   '/docs.md/$': typeof DocsDotmdSplatRoute
   '/docs/$': typeof DocsSplatRoute
   '/docs/api': typeof DocsApiRoute
   '/embed/$logId': typeof EmbedLogIdRoute
   '/galaxies/$slug': typeof GalaxiesSlugRoute
-  '/label/$slug': typeof LabelSlugRoute
+  '/label/$slug': typeof LabelSlugRouteWithChildren
   '/log/$logId': typeof LogLogIdRoute
   '/logbook/$sector': typeof LogbookSectorRoute
   '/newsletter/$number': typeof NewsletterNumberRoute
@@ -1054,6 +1070,8 @@ export interface FileRoutesById {
   '/api/v1/openapi.json': typeof ApiV1OpenapiDotjsonRoute
   '/api/v1/postman.json': typeof ApiV1PostmanDotjsonRoute
   '/api/v1/status': typeof ApiV1StatusRoute
+  '/artist/$slug/fresh.xml': typeof ArtistSlugFreshDotxmlRoute
+  '/label/$slug/fresh.xml': typeof LabelSlugFreshDotxmlRoute
   '/api/v1/admin/logout': typeof ApiV1AdminLogoutRoute
   '/api/v1/me/avatar': typeof ApiV1MeAvatarRoute
   '/api/v1/mixtape-cover/$logId': typeof ApiV1MixtapeCoverLogIdRoute
@@ -1174,6 +1192,8 @@ export interface FileRouteTypes {
     | '/api/v1/openapi.json'
     | '/api/v1/postman.json'
     | '/api/v1/status'
+    | '/artist/$slug/fresh.xml'
+    | '/label/$slug/fresh.xml'
     | '/api/v1/admin/logout'
     | '/api/v1/me/avatar'
     | '/api/v1/mixtape-cover/$logId'
@@ -1290,6 +1310,8 @@ export interface FileRouteTypes {
     | '/api/v1/openapi.json'
     | '/api/v1/postman.json'
     | '/api/v1/status'
+    | '/artist/$slug/fresh.xml'
+    | '/label/$slug/fresh.xml'
     | '/api/v1/admin/logout'
     | '/api/v1/me/avatar'
     | '/api/v1/mixtape-cover/$logId'
@@ -1408,6 +1430,8 @@ export interface FileRouteTypes {
     | '/api/v1/openapi.json'
     | '/api/v1/postman.json'
     | '/api/v1/status'
+    | '/artist/$slug/fresh.xml'
+    | '/label/$slug/fresh.xml'
     | '/api/v1/admin/logout'
     | '/api/v1/me/avatar'
     | '/api/v1/mixtape-cover/$logId'
@@ -1472,12 +1496,12 @@ export interface RootRouteChildren {
   AlbumSlugRoute: typeof AlbumSlugRoute
   ApiChatRoute: typeof ApiChatRoute
   ApiStatusRoute: typeof ApiStatusRoute
-  ArtistSlugRoute: typeof ArtistSlugRoute
+  ArtistSlugRoute: typeof ArtistSlugRouteWithChildren
   CliLatestDotshRoute: typeof CliLatestDotshRoute
   DocsDotmdSplatRoute: typeof DocsDotmdSplatRoute
   EmbedLogIdRoute: typeof EmbedLogIdRoute
   GalaxiesSlugRoute: typeof GalaxiesSlugRoute
-  LabelSlugRoute: typeof LabelSlugRoute
+  LabelSlugRoute: typeof LabelSlugRouteWithChildren
   LogLogIdRoute: typeof LogLogIdRoute
   LogbookSectorRoute: typeof LogbookSectorRoute
   NewsletterNumberRoute: typeof NewsletterNumberRoute
@@ -2043,6 +2067,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminArtistsRouteImport
       parentRoute: typeof AdminRouteRoute
     }
+    '/label/$slug/fresh.xml': {
+      id: '/label/$slug/fresh.xml'
+      path: '/fresh.xml'
+      fullPath: '/label/$slug/fresh.xml'
+      preLoaderRoute: typeof LabelSlugFreshDotxmlRouteImport
+      parentRoute: typeof LabelSlugRoute
+    }
+    '/artist/$slug/fresh.xml': {
+      id: '/artist/$slug/fresh.xml'
+      path: '/fresh.xml'
+      fullPath: '/artist/$slug/fresh.xml'
+      preLoaderRoute: typeof ArtistSlugFreshDotxmlRouteImport
+      parentRoute: typeof ArtistSlugRoute
+    }
     '/api/v1/status': {
       id: '/api/v1/status'
       path: '/api/v1/status'
@@ -2418,6 +2456,30 @@ const DocsRouteChildren: DocsRouteChildren = {
 
 const DocsRouteWithChildren = DocsRoute._addFileChildren(DocsRouteChildren)
 
+interface ArtistSlugRouteChildren {
+  ArtistSlugFreshDotxmlRoute: typeof ArtistSlugFreshDotxmlRoute
+}
+
+const ArtistSlugRouteChildren: ArtistSlugRouteChildren = {
+  ArtistSlugFreshDotxmlRoute: ArtistSlugFreshDotxmlRoute,
+}
+
+const ArtistSlugRouteWithChildren = ArtistSlugRoute._addFileChildren(
+  ArtistSlugRouteChildren,
+)
+
+interface LabelSlugRouteChildren {
+  LabelSlugFreshDotxmlRoute: typeof LabelSlugFreshDotxmlRoute
+}
+
+const LabelSlugRouteChildren: LabelSlugRouteChildren = {
+  LabelSlugFreshDotxmlRoute: LabelSlugFreshDotxmlRoute,
+}
+
+const LabelSlugRouteWithChildren = LabelSlugRoute._addFileChildren(
+  LabelSlugRouteChildren,
+)
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AdminRouteRoute: AdminRouteRouteWithChildren,
@@ -2450,12 +2512,12 @@ const rootRouteChildren: RootRouteChildren = {
   AlbumSlugRoute: AlbumSlugRoute,
   ApiChatRoute: ApiChatRoute,
   ApiStatusRoute: ApiStatusRoute,
-  ArtistSlugRoute: ArtistSlugRoute,
+  ArtistSlugRoute: ArtistSlugRouteWithChildren,
   CliLatestDotshRoute: CliLatestDotshRoute,
   DocsDotmdSplatRoute: DocsDotmdSplatRoute,
   EmbedLogIdRoute: EmbedLogIdRoute,
   GalaxiesSlugRoute: GalaxiesSlugRoute,
-  LabelSlugRoute: LabelSlugRoute,
+  LabelSlugRoute: LabelSlugRouteWithChildren,
   LogLogIdRoute: LogLogIdRoute,
   LogbookSectorRoute: LogbookSectorRoute,
   NewsletterNumberRoute: NewsletterNumberRoute,
