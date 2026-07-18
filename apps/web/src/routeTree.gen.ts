@@ -22,6 +22,8 @@ import { Route as PipelineRouteImport } from './routes/pipeline'
 import { Route as OembedRouteImport } from './routes/oembed'
 import { Route as MixRouteImport } from './routes/mix'
 import { Route as GalaxyRouteImport } from './routes/galaxy'
+import { Route as FreshDotxmlRouteImport } from './routes/fresh[.]xml'
+import { Route as FreshDotjsonRouteImport } from './routes/fresh[.]json'
 import { Route as FreshRouteImport } from './routes/fresh'
 import { Route as FeedDotjsonRouteImport } from './routes/feed[.]json'
 import { Route as DocsRouteImport } from './routes/docs'
@@ -187,6 +189,16 @@ const MixRoute = MixRouteImport.update({
 const GalaxyRoute = GalaxyRouteImport.update({
   id: '/galaxy',
   path: '/galaxy',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const FreshDotxmlRoute = FreshDotxmlRouteImport.update({
+  id: '/fresh.xml',
+  path: '/fresh.xml',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const FreshDotjsonRoute = FreshDotjsonRouteImport.update({
+  id: '/fresh.json',
+  path: '/fresh.json',
   getParentRoute: () => rootRouteImport,
 } as any)
 const FreshRoute = FreshRouteImport.update({
@@ -734,6 +746,8 @@ export interface FileRoutesByFullPath {
   '/docs': typeof DocsRouteWithChildren
   '/feed.json': typeof FeedDotjsonRoute
   '/fresh': typeof FreshRoute
+  '/fresh.json': typeof FreshDotjsonRoute
+  '/fresh.xml': typeof FreshDotxmlRoute
   '/galaxy': typeof GalaxyRoute
   '/mix': typeof MixRoute
   '/oembed': typeof OembedRoute
@@ -848,6 +862,8 @@ export interface FileRoutesByTo {
   '/device': typeof DeviceRoute
   '/feed.json': typeof FeedDotjsonRoute
   '/fresh': typeof FreshRoute
+  '/fresh.json': typeof FreshDotjsonRoute
+  '/fresh.xml': typeof FreshDotxmlRoute
   '/galaxy': typeof GalaxyRoute
   '/mix': typeof MixRoute
   '/oembed': typeof OembedRoute
@@ -965,6 +981,8 @@ export interface FileRoutesById {
   '/docs': typeof DocsRouteWithChildren
   '/feed.json': typeof FeedDotjsonRoute
   '/fresh': typeof FreshRoute
+  '/fresh.json': typeof FreshDotjsonRoute
+  '/fresh.xml': typeof FreshDotxmlRoute
   '/galaxy': typeof GalaxyRoute
   '/mix': typeof MixRoute
   '/oembed': typeof OembedRoute
@@ -1083,6 +1101,8 @@ export interface FileRouteTypes {
     | '/docs'
     | '/feed.json'
     | '/fresh'
+    | '/fresh.json'
+    | '/fresh.xml'
     | '/galaxy'
     | '/mix'
     | '/oembed'
@@ -1197,6 +1217,8 @@ export interface FileRouteTypes {
     | '/device'
     | '/feed.json'
     | '/fresh'
+    | '/fresh.json'
+    | '/fresh.xml'
     | '/galaxy'
     | '/mix'
     | '/oembed'
@@ -1313,6 +1335,8 @@ export interface FileRouteTypes {
     | '/docs'
     | '/feed.json'
     | '/fresh'
+    | '/fresh.json'
+    | '/fresh.xml'
     | '/galaxy'
     | '/mix'
     | '/oembed'
@@ -1430,6 +1454,8 @@ export interface RootRouteChildren {
   DocsRoute: typeof DocsRouteWithChildren
   FeedDotjsonRoute: typeof FeedDotjsonRoute
   FreshRoute: typeof FreshRoute
+  FreshDotjsonRoute: typeof FreshDotjsonRoute
+  FreshDotxmlRoute: typeof FreshDotxmlRoute
   GalaxyRoute: typeof GalaxyRoute
   MixRoute: typeof MixRoute
   OembedRoute: typeof OembedRoute
@@ -1602,6 +1628,20 @@ declare module '@tanstack/react-router' {
       path: '/galaxy'
       fullPath: '/galaxy'
       preLoaderRoute: typeof GalaxyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/fresh.xml': {
+      id: '/fresh.xml'
+      path: '/fresh.xml'
+      fullPath: '/fresh.xml'
+      preLoaderRoute: typeof FreshDotxmlRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/fresh.json': {
+      id: '/fresh.json'
+      path: '/fresh.json'
+      fullPath: '/fresh.json'
+      preLoaderRoute: typeof FreshDotjsonRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/fresh': {
@@ -2392,6 +2432,8 @@ const rootRouteChildren: RootRouteChildren = {
   DocsRoute: DocsRouteWithChildren,
   FeedDotjsonRoute: FeedDotjsonRoute,
   FreshRoute: FreshRoute,
+  FreshDotjsonRoute: FreshDotjsonRoute,
+  FreshDotxmlRoute: FreshDotxmlRoute,
   GalaxyRoute: GalaxyRoute,
   MixRoute: MixRoute,
   OembedRoute: OembedRoute,
