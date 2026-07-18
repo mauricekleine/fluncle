@@ -4,6 +4,11 @@
   "compatibility_date": "2026-06-03",
   "compatibility_flags": ["nodejs_compat"],
   "main": "./src/server.ts",
+  // /llms.txt exists as a static file in public/ (the single source of truth), but Cloudflare's
+  // asset handler serves statics BEFORE the Worker — so the agent-discovery interceptor that
+  // re-types it text/markdown never ran in prod (verified live 2026-07-18: text/plain). This
+  // sends the one path through the Worker first; the static file stays as the fallback.
+  "assets": { "run_worker_first": ["/llms.txt"] },
   "observability": {
     "enabled": true,
     "head_sampling_rate": 1,
