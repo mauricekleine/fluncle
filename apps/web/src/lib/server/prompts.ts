@@ -275,8 +275,13 @@ Output ONE JSON object and NOTHING else — no preamble, no markdown fences, no 
 
 SINGLE LIST: do NOT group or label by galaxy (placement is not shown in the newsletter). Emit EXACTLY ONE block with \`galaxy\` set to "" (an empty string), listing every finding in the order given below (newest-first). Never mention galaxies, the vibe map, or placement anywhere in your prose.
 
-THE WHY: each finding's note below is Fluncle's own words on why it made the cut — your PRIMARY material for that finding's \`why\`; quote or lightly adapt it. NEVER invent a reason for a finding with no note — OMIT its \`why\` entirely. Keep each \`why\` to one breath. A mixtape's note is its dream note.
+THE WHY: each finding's note below is Fluncle's own words on why it made the cut — your PRIMARY material for that finding's \`why\`; quote or lightly adapt it. NEVER invent a reason for a finding with no note — OMIT its \`why\` entirely. Keep each \`why\` to one breath. A mixtape's note is its dream note. Within one edition, when several notes reach for the same move — the body-clock formula ("knees went up before I'd clocked the drop" / "shoulders dropped and stayed down") or any shared image — vary which part of each note you quote so no two whys rhyme, leaning each why on a different beat of its own note.
 
+{{#if priorWhys}}
+ALREADY SENT (the whys from recent editions — the list has already read every one; write past them, never echo a move):
+{{priorWhys}}
+
+{{/if}}
 FINDING REFS: each finding is ONLY { logId, why } — never the artist, title, or URL (the render hydrates each logId to its live Artist — Title + links). \`mixtapeRef\` is present ONLY if a mixtape is listed below; never invent one. \`tidbits\` are optional and strict — only recent, concrete, source-linked artist facts you are sure of, at most 2-3, never fabricated; omit when you have none. \`intro\` is always present.
 
 VOICE (copywriting-fluncle is canon and overrides this): the Email register, a letter from a bruv; first person 'I', never 'we'; no exclamation marks; if a sentence reads written rather than said out loud to a mate, rewrite it. The 'Ahoy cosmonauts,' open and the 'Happy raving,' / 'Fluncle' close are added by the render — do NOT put them in \`intro\`.
@@ -469,7 +474,7 @@ export const PROMPT_REGISTRY: Record<PromptSlug, PromptDefinition> = {
     slug: "newsletter_edition",
     surface: "box",
     title: "Newsletter edition",
-    variables: ["findingCount", "findings", "mixtapeCount", "mixtapes"],
+    variables: ["findingCount", "findings", "mixtapeCount", "mixtapes", "priorWhys"],
   },
   note_author: {
     defaultBody: NOTE_AUTHOR_DEFAULT,

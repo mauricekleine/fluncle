@@ -250,4 +250,23 @@ describe("the registry default and the fallback agree on the surrounding prose",
       }),
     ).toBe(built);
   });
+
+  // The spent-whys arm: the `{{#if priorWhys}}` block is the anti-sameness rail, and a
+  // renderer with no `else` is easiest to get subtly wrong there, so pin it with history.
+  test("newsletter_edition — with the already-sent whys", () => {
+    const findings = [{ logId: "021.7.1A", note: "Rolls like weather." }];
+    const mixtapes: { logId?: string; note?: string }[] = [];
+    const priorWhys = ["knees went up before I'd clocked the drop", "shoulders dropped and stayed"];
+    const built = buildNewsletterPrompt(findings, mixtapes, priorWhys).trim();
+
+    expect(
+      fromRegistry("newsletter_edition", {
+        findingCount: "1",
+        findings: "- logId=021.7.1A | note: Rolls like weather.",
+        mixtapeCount: "0",
+        mixtapes: "(none)",
+        priorWhys: "- knees went up before I'd clocked the drop\n- shoulders dropped and stayed",
+      }),
+    ).toBe(built);
+  });
 });
