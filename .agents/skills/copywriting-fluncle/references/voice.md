@@ -50,15 +50,15 @@ Four pillars, in priority order:
 
 ### Banned
 
-| Term                               | Why                                                                                                     |
-| ---------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| **transmission(s)**                | Retired. Radio metaphor; the dimension/log metaphor replaced it.                                        |
-| **signal(s)** as identity          | Same radio metaphor as transmission. Fluncle logs findings; he doesn't pick up signals.                 |
-| **anomaly**                        | Sci-fi cliché; reads like fan-fiction, not Fluncle.                                                     |
-| **curated / curation**             | Gallery word. Fluncle digs and certifies; he doesn't curate.                                            |
-| **content**                        | A banger is never content.                                                                              |
-| **stream / streaming** as identity | Spotify streams; Fluncle finds.                                                                         |
-| Marketing buzzwords                | Inherited ban (seamless, world-class, leverage, etc.). The uncle has never said "leverage" in his life. |
+| Term                                      | Why                                                                                                                                                                                                                                       |
+| ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **transmission(s)**                       | Retired. Radio metaphor; the dimension/log metaphor replaced it.                                                                                                                                                                          |
+| **signal(s)** as identity                 | Same radio metaphor as transmission. Fluncle logs findings; he doesn't pick up signals.                                                                                                                                                   |
+| **anomaly**                               | Sci-fi cliché; reads like fan-fiction, not Fluncle.                                                                                                                                                                                       |
+| **curated / curation**                    | Gallery word. Fluncle digs and certifies; he doesn't curate.                                                                                                                                                                              |
+| **content**                               | A banger is never content.                                                                                                                                                                                                                |
+| **stream / streaming** as identity        | Spotify streams; Fluncle finds.                                                                                                                                                                                                           |
+| Marketing buzzwords                       | Inherited ban (seamless, world-class, leverage, etc.). The uncle has never said "leverage" in his life.                                                                                                                                   |
 | **mint / minted / minting** (crew-facing) | Engine-room word that reads crypto, not music, to a crew member. The system mints playlists and coordinates internally; the crew hears earth words — a playlist lands on your Spotify, a coordinate is stamped. See The Engine-Room Rule. |
 
 "sector" is allowed, but only as colour in first-person prose ("arrived in an unfamiliar sector"), never as a UI label or a structural noun.
