@@ -1,3 +1,4 @@
+import { type MergeLabelResult } from "@fluncle/contracts";
 import { adminApiGet, adminApiPost } from "../api";
 import {
   buildBioBody,
@@ -5,6 +6,26 @@ import {
   type EntityBioResult,
   type EntityBioWorkItem,
 } from "./admin-artists";
+
+// ── The label merge: fold a slug-split twin into its canonical row (RFC musickit-second-authority
+// U2b) ──────────────────────────────────────────────────────────────────────────────────────────
+// Thin HTTP client over the operator-tier `merge_label` op. Re-points every FK off the losing label
+// onto the canonical, reconciles identity/facts canonical-wins, writes the losing name as a
+// confirmed alias, deletes the loser — server-side, in one transaction. See docs/label-entity.md.
+
+// Merge the losing label into the canonical one. The op is keyed by SLUG (the operator's mental
+// model + the redirect key), so no id pre-resolution round-trip is needed.
+export async function mergeLabelCommand(
+  losingSlug: string,
+  canonicalSlug: string,
+): Promise<MergeLabelResult> {
+  const response = await adminApiPost<{ ok: boolean; result: MergeLabelResult }>(
+    `/api/admin/labels/${encodeURIComponent(losingSlug)}/merge`,
+    { canonicalSlug },
+  );
+
+  return response.result;
+}
 
 // ── The voiced bio: the entity-bio engine (thin HTTP client) ──────────────────
 // The label sibling of `admin artists describe`: author the label's bio through the

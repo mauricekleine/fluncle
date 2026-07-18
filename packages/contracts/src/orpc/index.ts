@@ -148,6 +148,8 @@ export {
   listLabelAliases,
   listLabelsAdmin,
   listLabelsMissingBio,
+  mergeLabel,
+  MergeLabelResultSchema,
   rejectLabelAlias,
   updateLabel,
 } from "./admin-labels";
