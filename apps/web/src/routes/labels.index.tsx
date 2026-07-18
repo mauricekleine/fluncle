@@ -101,10 +101,9 @@ function LabelsPage() {
     <main className="log-plate-stage">
       <article className="log-plate log-index">
         <header className="log-masthead">
-          <p className="log-nameplate">Fluncle's Findings</p>
           <h1 className="log-coordinate log-index-title">Labels</h1>
           <p className="log-index-intro">
-            Every label I've pulled a banger off. {findings.length} logged so far.
+            Every drum &amp; bass label with a finding in the archive. {findings.length} logged.
           </p>
         </header>
 

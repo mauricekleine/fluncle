@@ -1,19 +1,20 @@
-// THE GRAPH ENTITIES' OWN OPENING LINES — written once, read twice.
+// THE GRAPH ENTITIES' OPENING LINES — written once, read twice; three of four RETIRED.
 //
-// Fluncle's archive is a graph: log ↔ artist ↔ label ↔ album ↔ galaxy. Each of the four
-// non-log nodes has a page, and each page opens with ONE first-person line framing Fluncle's
-// relationship to it ("I pulled my first tune off Hoofbeats Music on Jun 12, 2026, and I'm up
-// to 3 findings on this label now.").
+// Fluncle's archive is a graph: log ↔ artist ↔ label ↔ album ↔ galaxy. The GALAXY page opens
+// with one first-person intro line (a galaxy is lore); the artist/label/album pages open with
+// NO line at all — their first-person signature lines ("I'm up to 3 findings on this label
+// now") were retired by the Three Areas Rule (DESIGN.md; VOICE.md §5, ratified 2026-07-18):
+// those are CATALOGUE pages, reference shelves where Fluncle appears as data and through the
+// third-person dossier bio, never as narrator.
 //
-// That line has TWO readers: the entity's own page masthead, and the GraphLink hover card that
-// previews the entity from anywhere else in the app. They MUST be the same sentence — a card
-// that paraphrased the page would be a second, drifting voice for the same object. So the
-// builders live here, pure, and both callers import them. The card carries the page's own line
-// BY CONSTRUCTION; there is no second copy to keep in sync (`log-prose.ts` is the precedent —
-// same trick, for the definitional prose the JSON-LD mirrors).
+// The one surviving line has TWO readers: the galaxy page masthead and the GraphLink hover
+// card. They MUST be the same sentence, so the builder lives here, pure, and both callers
+// import it. The dispatch below returns `undefined` for the three catalogue kinds — the card
+// mirrors the page BY CONSTRUCTION either way (for catalogue entities it shows the dossier
+// bio the page shows).
 //
-// VOICE.md: first person, said-not-written, active. Fluncle frames HIS relationship to the
-// entity — never a fabricated bio, never a claim about the music he has not made. The counts
+// VOICE.md, for the SURVIVING GALAXY LINE only: first person, said-not-written, active —
+// never a fabricated bio, never a claim about the music he has not made. The counts
 // are FINDINGS only: the uncertified rows on those pages are never introduced, never named,
 // and never counted aloud (DESIGN.md's Unlit Rule).
 //
@@ -32,7 +33,7 @@
 //    count noun the hover card prints (graph-link.tsx) is "on this label" for the same reason.
 //    `graph-prose.test.ts` pins both rules.
 
-import { findingsCount, formatDateLong } from "./format";
+import { findingsCount } from "./format";
 
 /** The four non-log nodes of the graph — the entities a GraphLink can name. */
 export type GraphEntityKind = "album" | "artist" | "galaxy" | "label";
@@ -60,84 +61,6 @@ export type GraphPreview = {
   name: string;
   slug: string;
 };
-
-/**
- * The artist page's opening line. When Fluncle has a first-found date it opens the dossier the
- * logbook way ("first crossed his path on …"); the bare-count line is the pre-dossier fallback.
- */
-export function artistSignatureLine(
-  name: string,
-  findingCount: number,
-  firstFoundAt: string | undefined,
-): string | undefined {
-  if (findingCount === 0) {
-    return undefined;
-  }
-
-  if (!firstFoundAt) {
-    return findingCount === 1
-      ? "I've found just one of their tunes so far. Play it loud."
-      : `I've found ${findingCount} of their tunes so far. Have a dig.`;
-  }
-
-  const when = formatDateLong(firstFoundAt);
-
-  if (findingCount === 1) {
-    return `I first crossed ${name}'s path on ${when}. Just the one so far. Play it loud.`;
-  }
-
-  return `I first crossed ${name}'s path on ${when}, and I've logged ${findingCount} of their tunes since. Have a dig.`;
-}
-
-/** The label page's opening line — Fluncle's relationship to the label. */
-export function labelSignatureLine(
-  name: string,
-  findingCount: number,
-  firstFoundAt: string | undefined,
-): string | undefined {
-  if (findingCount === 0) {
-    return undefined;
-  }
-
-  if (!firstFoundAt) {
-    return findingCount === 1
-      ? "One finding on this label so far. Play it loud."
-      : `${findingsCount(findingCount)} on this label so far. Have a dig.`;
-  }
-
-  const when = formatDateLong(firstFoundAt);
-
-  if (findingCount === 1) {
-    return `I pulled my first tune off ${name} on ${when}. Just the one so far. Play it loud.`;
-  }
-
-  return `I pulled my first tune off ${name} on ${when}, and I'm up to ${findingsCount(findingCount)} on this label now. Have a dig.`;
-}
-
-/** The album page's opening line — Fluncle's relationship to the record. */
-export function albumSignatureLine(
-  name: string,
-  findingCount: number,
-  firstFoundAt: string | undefined,
-): string | undefined {
-  if (findingCount === 0) {
-    return undefined;
-  }
-
-  if (!firstFoundAt) {
-    return findingCount === 1
-      ? "One finding on this record so far. Play it loud."
-      : `${findingsCount(findingCount)} on this record so far. Have a dig.`;
-  }
-
-  const when = formatDateLong(firstFoundAt);
-
-  if (findingCount === 1) {
-    return `I pulled my first tune off ${name} on ${when}. Just the one so far. Play it loud.`;
-  }
-
-  return `I pulled my first tune off ${name} on ${when}, and I'm up to ${findingsCount(findingCount)} off this record now. Have a dig.`;
-}
 
 /**
  * The galaxy lens page's opening line (the Garnish Rule — a real relation with cosmos trim,
@@ -172,20 +95,16 @@ export function graphSignatureLine(
   kind: GraphEntityKind,
   name: string,
   findingCount: number,
-  firstFoundAt: string | undefined,
+  _firstFoundAt: string | undefined,
 ): string | undefined {
   switch (kind) {
-    case "album": {
-      return albumSignatureLine(name, findingCount, firstFoundAt);
-    }
-    case "artist": {
-      return artistSignatureLine(name, findingCount, firstFoundAt);
-    }
     case "galaxy": {
       return galaxyIntroLine(findingCount);
     }
-    case "label": {
-      return labelSignatureLine(name, findingCount, firstFoundAt);
+    default: {
+      // Artist, label, album: catalogue kinds carry no signature line (the Three Areas Rule) —
+      // the page masthead prints none, so the card prints none, by the same dispatch.
+      return undefined;
     }
   }
 }

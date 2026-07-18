@@ -41,7 +41,6 @@ function PrivacyPage() {
     <main className="log-plate-stage">
       <article className="log-plate log-about">
         <header className="log-masthead">
-          <p className="log-nameplate">Fluncle's Findings</p>
           <h1 className="log-coordinate log-index-title">Privacy</h1>
         </header>
 

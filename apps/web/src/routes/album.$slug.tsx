@@ -9,7 +9,6 @@ import {
 import { GraphLink } from "@/components/graph-link";
 import { StoryNotFoundState } from "@/components/stories/stories-states";
 import { siteUrl } from "@/lib/fluncle-links";
-import { albumSignatureLine, firstFoundAt } from "@/lib/graph-prose";
 import { jsonLdScript } from "@/lib/json-ld";
 import { albumBreadcrumbsJsonLd, musicAlbumJsonLd } from "@/lib/log-schema";
 import { albumCoverAtSize } from "@/lib/media";
@@ -183,16 +182,12 @@ function AlbumPage() {
   }
 
   const { artists, bio, catalogue, findings, label, name } = data;
-  const signature = albumSignatureLine(name, findings.length, firstFoundAt(findings));
 
   return (
     <main className="log-plate-stage">
       <article className="log-plate log-index">
         <header className="log-masthead">
-          <p className="log-nameplate">Fluncle's Findings</p>
           <h1 className="log-coordinate log-index-title artist-name">{name}</h1>
-          {/* No findings, no line. The masthead is just the name (lib/graph-prose.ts). */}
-          {signature ? <p className="log-index-intro">{signature}</p> : undefined}
           {/* The album → label edge, the one link the label page has no twin for. The label's
               NAME is the graph link; the "On" that introduces it is not part of the entity. */}
           {label ? (

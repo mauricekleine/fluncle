@@ -651,7 +651,6 @@ function ReachPage() {
     <main className="log-plate-stage">
       <article className="log-plate log-plate--console text-foreground">
         <header className="log-masthead">
-          <p className="log-nameplate">Fluncle's Findings</p>
           <h1 className="log-coordinate log-index-title">Reach</h1>
           <p className="log-index-intro">
             {crewTotal > 0 && !activeSlug

@@ -26,7 +26,6 @@ import { GraphLink } from "@/components/graph-link";
 import { StoryNotFoundState } from "@/components/stories/stories-states";
 import { type ArtistSocialPlatform } from "@/lib/artist-socials";
 import { siteUrl } from "@/lib/fluncle-links";
-import { artistSignatureLine } from "@/lib/graph-prose";
 import { jsonLdScript } from "@/lib/json-ld";
 import { artistBreadcrumbsJsonLd, musicGroupJsonLd } from "@/lib/log-schema";
 import { bioMetaDescription } from "@/lib/meta-description";
@@ -383,13 +382,9 @@ function ArtistPage() {
     <main className="log-plate-stage">
       <article className="log-plate log-index">
         <header className="log-masthead">
-          <p className="log-nameplate">Fluncle's Findings</p>
           <h1 className="log-coordinate log-index-title artist-name">{name}</h1>
-          <p className="log-index-intro">
-            {artistSignatureLine(name, dossier.findingCount, dossier.firstFoundAt)}
-          </p>
-          {/* The voiced bio sits directly beneath the dateline — body prose that augments the
-              relationship line, never replaces it. Only rendered once one is authored. */}
+          {/* The dossier bio is the masthead's prose — the reference register (the Three Areas
+              Rule; the first-person signature line is retired). Rendered once authored. */}
           {bio ? <p className="log-index-bio">{bio}</p> : undefined}
         </header>
 

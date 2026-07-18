@@ -94,10 +94,9 @@ function ArtistsPage() {
     <main className="log-plate-stage">
       <article className="log-plate log-index">
         <header className="log-masthead">
-          <p className="log-nameplate">Fluncle's Findings</p>
           <h1 className="log-coordinate log-index-title">Artists</h1>
           <p className="log-index-intro">
-            Everyone I've found a banger from out here. {findings.length} logged so far.
+            Every drum &amp; bass artist with a finding in the archive. {findings.length} logged.
           </p>
         </header>
 

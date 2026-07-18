@@ -29,9 +29,9 @@ Avoid SaaS dashboards, bright streaming-app clones, generic landing-page hero se
 - Keep publishing authority behind the authenticated admin API.
 - Put the music first, framed as a finding: artist, title, the Found date, note, Log ID, and the Spotify open action. The music leads the eye; the log frames it.
 - Treat the cover art as the founding document of the visual system; every visual decision descends from it.
-- Carry the narrative on every surface, not just the deep ones: each surface is a representation of one traveler's findings, unified by the Log ID. Narrative saturation is uniform; only technical density grades by surface (VOICE.md's Depth Gradient).
+- Carry the narrative where it lives: each surface is a representation of one traveler's findings, unified by the Log ID, and the page's area decides how much of the fiction it carries — full voice on lore pages, Fluncle as data on the catalogue shelves, chrome on workstations (DESIGN.md's Three Areas Rule; VOICE.md §5 The Three Areas).
 - Make the public app quiet, centered, and fast.
-- Treat reading surfaces and work surfaces as the different things they are: an informational page (the archive, the entity pages) carries prose, lore, and real wiki weight, while a work surface (`/mix`, `/recommendations`, `/chat`) goes straight to the recipe — the interface carries the meaning, never labels and explainers in the way of the work (DESIGN.md's Workbench Rule).
+- Treat the three areas as the different grounds they are: a lore page (the log, the logbook, the galaxies) carries the fiction as content, a catalogue page (the artist/album/label shelves) is a plain reference surface that carries the wiki and SEO weight, and a workstation (`/mix`, `/recommendations`, `/chat`, the console pages) goes straight to the recipe — the interface carries the meaning, never labels and explainers in the way of the work (DESIGN.md's Three Areas Rule; VOICE.md §5 The Three Areas).
 - Treat Telegram and Spotify as first-class destinations.
 - DESIGN.md is the leading visual spec and VOICE.md the leading language spec: where this file overlaps with DESIGN.md on aesthetics, DESIGN.md wins; on language, VOICE.md wins.
 

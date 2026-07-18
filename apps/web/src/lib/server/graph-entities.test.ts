@@ -368,8 +368,9 @@ describe("the graph hover-card preview carries the entity's bio", () => {
     // No bio yet ⇒ the preview carries none (the card renders no bio row, no gap).
     const withoutBio = await getGraphPreview("label", "hospital-records");
     expect(withoutBio.bio).toBeUndefined();
-    // The signature line still rides — the preview is otherwise unchanged.
-    expect(withoutBio.line).toBeDefined();
+    // No signature line on a catalogue entity — retired by the Three Areas Rule; the card
+    // mirrors the page, and the page opens on the name (and the bio, once authored).
+    expect(withoutBio.line).toBeUndefined();
 
     // Author a bio (the entity-bio engine's write) …
     await db.execute({

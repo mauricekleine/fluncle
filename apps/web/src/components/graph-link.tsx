@@ -131,12 +131,13 @@ function PreviewBody({
           ))}
         </span>
       ) : undefined}
-      {/* No findings ⇒ the page prints no opening line, so neither does the card. It carries
-          the page's sentence or it carries none; it never writes one of its own. */}
+      {/* The card carries the page's sentence or it carries none; it never writes one of its
+          own. Since the Three Areas Rule only a GALAXY has one — the catalogue kinds' signature
+          lines are retired (lib/graph-prose.ts), so `line` is undefined for them. */}
       {line ? <p className="graph-card-line">{line}</p> : undefined}
-      {/* The factual bio, BELOW the signature line — the full page's order (Fluncle's relation
-          first, then the objective paragraph). Clamped so a 3–4 sentence bio never makes the
-          card tall. Absent (album/galaxy, or an entity still awaiting its backfilled bio) ⇒ no
+      {/* The factual dossier bio — for the three catalogue kinds this IS the card's prose, the
+          same paragraph their page mastheads print. Clamped so a 3–4 sentence bio never makes
+          the card tall. Absent (a galaxy, or an entity still awaiting its backfilled bio) ⇒ no
           row, no gap. */}
       {bio ? <p className="graph-card-bio">{bio}</p> : undefined}
       {findingCount > 0 ? (

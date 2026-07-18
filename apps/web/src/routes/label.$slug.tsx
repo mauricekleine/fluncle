@@ -8,7 +8,6 @@ import {
 import { ArtistChips, FindingsGrid, graphPageTracks } from "@/components/graph-sections";
 import { StoryNotFoundState } from "@/components/stories/stories-states";
 import { siteUrl } from "@/lib/fluncle-links";
-import { firstFoundAt, labelSignatureLine } from "@/lib/graph-prose";
 import { jsonLdScript } from "@/lib/json-ld";
 import { labelBreadcrumbsJsonLd, recordLabelJsonLd } from "@/lib/log-schema";
 import { bioMetaDescription } from "@/lib/meta-description";
@@ -283,18 +282,14 @@ function LabelPage() {
   }
 
   const { artists, bio, catalogue, findings, name, slug, sort } = data;
-  const signature = labelSignatureLine(name, findings.length, firstFoundAt(findings));
 
   return (
     <main className="log-plate-stage">
       <article className="log-plate log-index">
         <header className="log-masthead">
-          <p className="log-nameplate">Fluncle's Findings</p>
           <h1 className="log-coordinate log-index-title artist-name">{name}</h1>
-          {/* No findings, no line. The masthead is just the name (lib/graph-prose.ts). */}
-          {signature ? <p className="log-index-intro">{signature}</p> : undefined}
-          {/* The voiced bio sits directly beneath the dateline — body prose that augments the
-              relationship line, never replaces it. Only rendered once one is authored. */}
+          {/* The dossier bio is the masthead's prose — the reference register (the Three Areas
+              Rule; the first-person signature line is retired). Rendered once authored. */}
           {bio ? <p className="log-index-bio">{bio}</p> : undefined}
         </header>
 

@@ -612,7 +612,6 @@ function StatusPage() {
     <main className="log-plate-stage">
       <article className="log-plate text-foreground">
         <header className="log-masthead">
-          <p className="log-nameplate">Fluncle's Findings</p>
           <h1 className="log-coordinate log-index-title">System status</h1>
           <p className="text-sm text-muted-foreground">{overallHeadline(reporting)}</p>
         </header>

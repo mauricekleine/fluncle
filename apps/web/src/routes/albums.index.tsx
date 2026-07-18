@@ -91,10 +91,9 @@ function AlbumsPage() {
     <main className="log-plate-stage">
       <article className="log-plate log-index">
         <header className="log-masthead">
-          <p className="log-nameplate">Fluncle's Findings</p>
           <h1 className="log-coordinate log-index-title">Albums</h1>
           <p className="log-index-intro">
-            Every record I've found a banger on. {findings.length} logged so far.
+            Every drum &amp; bass record with a finding in the archive. {findings.length} logged.
           </p>
         </header>
 

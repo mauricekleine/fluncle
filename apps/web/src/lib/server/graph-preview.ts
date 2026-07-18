@@ -7,8 +7,9 @@
 // rather than writing a second, parallel truth:
 //
 //   1. THE LINE IS THE PAGE'S LINE. Not a paraphrase, not a clamped prose excerpt — the same
-//      `graphSignatureLine` the page masthead calls, over the same inputs. One function, two
-//      readers (lib/graph-prose.ts).
+//      `graphSignatureLine` dispatch, over the same inputs. Since the Three Areas Rule only the
+//      galaxy masthead prints one; the three catalogue kinds return undefined here exactly as
+//      their pages print none (lib/graph-prose.ts) — the card's prose for them is the bio.
 //   2. THE COUNT IS THE PAGE'S COUNT. It drives through the same `getFindingsBy*` reads, which
 //      run through the `findings` inner join — so it counts FINDINGS and can never include an
 //      uncertified catalogue row. A card that said "4" over a page that says "3" would be a
