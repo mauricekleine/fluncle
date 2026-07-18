@@ -90,7 +90,7 @@ The Cloudflare **Deploy command** is `bun run --cwd apps/web deploy:cf` (build s
 
 This is not a "local is a bit different" caveat. A developer can benchmark a change locally, see clean numbers, and ship a query that takes **27 seconds** in production. Treat every local performance number as meaningless.
 
-### The three traps
+### The four traps
 
 **1. The probe-binding cliff — bind a query vector as a raw BLOB, never as text.**
 
@@ -112,6 +112,12 @@ A **14× cliff on hosted that does not exist locally.** The text version benchma
 **3. The response cap fails loudly in dev and silently in prod.**
 
 `turso dev` enforces a **10 MiB response cap**; hosted does not. So a query that pulls a large column into the isolate to rank it in JS will **throw in local dev** (at ~460 rows of 21.8 KB embeddings) while in production it just keeps growing — toward **OOMing the 128 MB Worker isolate**, with no error until it dies. That is backwards from a safe failure mode, and it is exactly how `getSimilarFindings` shipped a latent time bomb. **Rank in SQL; never pull a growing column into the isolate.**
+
+**4. A CTE fanned out by `union all` branches is re-executed once per branch — never fan a multi-probe scan out as branches.**
+
+**Measured 2026-07-18** on the production DB, diagnosing the 45-second `/recommendations` page. A multi-probe max-similarity scan written as `with candidates as (…)` + one `union all` branch per probe is NOT materialized: the planner **flattens the CTE into the compound query as a co-routine and re-runs the candidate scan once per branch**. Twelve seed probes meant twelve full passes over `tracks` (23k rows, each dragging the 4 KB `F32_BLOB`) — **63 s hosted**. Locally the table is small, so the shape benchmarks fine and ships.
+
+The ratified multi-probe shape is **one pass with the probes folded in the select list**: `min(vector_distance_cos(vec, ?), vector_distance_cos(vec, ?), …)` — same distance count, one scan, no temp table (an `as materialized` CTE works too, but it copies every candidate's 4 KB vector into a temp table, which becomes its own cliff as candidates grow). Two SQLite details that bite: single-argument `min()` is the **aggregate**, so a one-probe query binds the bare distance term; and when a tiny table should drive the join (74 `findings` vs 23k `tracks`), pin it with `cross join` — the planner picked the 23k-row table as the outer loop on its own. The fixed engine is `listRecommendations` (`apps/web/src/lib/server/recommendations.ts`): 63 s → well under a second.
 
 ### The rule
 

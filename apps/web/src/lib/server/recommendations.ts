@@ -7,10 +7,13 @@
 //
 // Every scan here is a derivative of a PROVEN query shape, never a new one:
 //
-//   - The max-similarity scan is `getTasteCosines` (tracks.ts): one `union all`
-//     branch per probe, each probe bound ONCE as a raw float32 BLOB
-//     (`toVectorProbe` — never text, the 14× hosted cliff), `min(dist)` grouped
-//     per candidate. Bounded by construction: ≤ MAX_REC_SEEDS probes.
+//   - The max-similarity scan is a SINGLE pass over the candidates with one
+//     `vector_distance_cos` term per probe folded by scalar `min(…)`, each
+//     probe bound ONCE as a raw float32 BLOB (`toVectorProbe` — never text,
+//     the 14× hosted cliff). Never a `union all` branch per probe over a CTE:
+//     the planner flattens the CTE and re-runs the candidate scan per branch
+//     (63 s hosted, measured 2026-07-18 — docs/local-database.md). Probe
+//     fan-out is bounded by construction: ≤ MAX_REC_SEEDS terms.
 //   - The rank-and-cut lives IN SQL (`order by dist asc limit ?`), the
 //     `getSimilarFindings` shape — only (track_id, dist) pairs cross the wire,
 //     never a vector (docs/local-database.md: rank in SQL, or OOM the Worker).
@@ -41,8 +44,9 @@ import { type PublicUser } from "./public-auth";
 /**
  * The seed cap. Twelve is the roadmap's "~10" with head-room, and it is
  * LOAD-BEARING for scale: the seed count IS the probe fan-out of every scan below
- * (one `union all` branch per seed vector), so the cap bounds the per-request
- * vector work at ≤ 12 × candidates, whatever the catalogue grows to.
+ * (one distance term per seed vector), so the cap bounds the per-request
+ * vector work at ≤ 12 × candidates. The CANDIDATE side of that product is the
+ * unbounded one — see the scale tripwire on the catalogue scan.
  */
 export const MAX_REC_SEEDS = 12;
 
@@ -385,23 +389,35 @@ export async function listRecommendations(
   const seedExclusion =
     seedIds.length > 0 ? `and t.track_id not in (${seedIds.map(() => "?").join(", ")})` : "";
 
-  const branches = (cte: string) =>
-    probes
-      .map(() => `select track_id, vector_distance_cos(vec, ?) as dist from ${cte}`)
-      .join(" union all ");
+  // ONE PASS, one distance term per probe, folded to the row's best in the
+  // select list (max-similarity = min distance). NEVER a `union all` branch per
+  // probe over a CTE: the planner does not materialize the CTE — it FLATTENS it
+  // and re-executes the candidate scan once per branch, so 12 seeds meant 12
+  // full passes over `tracks` dragging the 4 KB vector each time (63 s measured
+  // hosted, 2026-07-18; docs/local-database.md "Local is not production").
+  //
+  // The one-probe case binds the bare distance: single-argument `min()` is
+  // SQLite's AGGREGATE min and would collapse the scan to one row.
+  const distanceTerms = probes.map(() => "vector_distance_cos(t.embedding_blob, ?)");
+  const bestDistance =
+    distanceTerms.length === 1 ? distanceTerms.join("") : `min(${distanceTerms.join(", ")})`;
 
   // THE CATALOGUE SCAN. Candidates are the ear lens's WHERE + the display-band
   // duplicate cut + the Spotify anchor; each candidate's max-similarity across
-  // the seed set is `min(dist)` over one union-all branch per probe
-  // (getTasteCosines), and the pool is cut IN SQL (getSimilarFindings) — only
-  // (track_id, dist) pairs come back, never a vector.
+  // the seed set is the fold above, and the pool is cut IN SQL
+  // (getSimilarFindings) — only (track_id, dist) pairs come back, never a
+  // vector. SQL-TEXT order decides the bind order: one probe per distance term
+  // in the select list, then the seed exclusions, then the pool limit.
   //
-  // SQL-TEXT order decides the bind order: the CTE binds the seed exclusions
-  // first, then one probe per branch, then the pool limit.
+  // SCALE TRIPWIRE: the probe count is capped (MAX_REC_SEEDS) but the candidate
+  // count is not — it grows with capture + Spotify anchoring (~360 rows,
+  // 2026-07-18), metered dimensions both. When it crosses ~5–10k this scan is
+  // seconds again, and the engine moves OFF the hot path: cache per user keyed
+  // by (seed set, corpus fingerprint) — the `rank_catalogue` self-healing shape.
   const catalogueScan = await db.execute({
-    args: [...seedIds, ...probes, RECOMMENDATIONS_POOL],
-    sql: `with candidates as (
-        select t.track_id, t.embedding_blob as vec
+    args: [...probes, ...seedIds, RECOMMENDATIONS_POOL],
+    sql: `select track_id, dist from (
+        select t.track_id, ${bestDistance} as dist
         from tracks t
         left join findings f on f.track_id = t.track_id
         where f.track_id is null
@@ -413,31 +429,28 @@ export async function listRecommendations(
           and t.duration_ms < ${LONG_FORM_MS}
           ${seedExclusion}
       )
-      select track_id, min(dist) as dist
-      from (${branches("candidates")})
       where dist is not null
-      group by track_id
       order by dist asc, track_id asc
       limit ?`,
   });
 
   // THE FINDINGS SLOTS (option B): the certified findings nearest the seed set,
-  // same max-similarity shape over the finding join. These are the labeled slots
-  // Fluncle's full voice rides — hydrated with the note + Log ID below.
+  // same one-pass fold. `cross join` pins the join order so the tiny findings
+  // table DRIVES and `tracks` is reached by primary key — left to itself the
+  // planner scanned all of `tracks` as the outer loop (the 63 s plan). These are
+  // the labeled slots Fluncle's full voice rides — hydrated with the note +
+  // Log ID below.
   const findingsScan = await db.execute({
-    args: [...seedIds, ...probes, FINDINGS_SLOT_COUNT],
-    sql: `with candidates as (
-        select t.track_id, t.embedding_blob as vec
-        from tracks t
-        join findings f on f.track_id = t.track_id
-        where f.log_id is not null
+    args: [...probes, ...seedIds, FINDINGS_SLOT_COUNT],
+    sql: `select track_id, dist from (
+        select t.track_id, ${bestDistance} as dist
+        from findings f cross join tracks t
+        where t.track_id = f.track_id
+          and f.log_id is not null
           and t.embedding_blob is not null
           ${seedExclusion}
       )
-      select track_id, min(dist) as dist
-      from (${branches("candidates")})
       where dist is not null
-      group by track_id
       order by dist asc, track_id asc
       limit ?`,
   });

@@ -34,11 +34,18 @@ export function RecommendationsDoor({
   // refetched on focus — this is a public surface, not the admin board (focus-refetch would
   // also burn the recommendations' hourly budget). A pick write invalidates BOTH: new picks
   // mean new recommendations.
+  //
+  // The staleTime is LOAD-BEARING: without it react-query treats initialData as already
+  // stale (staleTime 0) and re-runs the whole engine on mount — a second full vector scan
+  // for the exact result the SSR loader just computed, and a second tick off the hourly
+  // budget, on every page open. Freshness rides the mutations (each pick write invalidates
+  // both keys), never the clock.
   const seedsQuery = useQuery({
     initialData: initialSeeds,
     queryFn: loadSeeds,
     queryKey: ["rec-seeds"],
     refetchOnWindowFocus: false,
+    staleTime: 5 * 60_000,
   });
 
   const recsQuery = useQuery({
@@ -46,6 +53,7 @@ export function RecommendationsDoor({
     queryFn: loadRecommendations,
     queryKey: ["recommendations"],
     refetchOnWindowFocus: false,
+    staleTime: 5 * 60_000,
   });
 
   const seeds = seedsQuery.data;
