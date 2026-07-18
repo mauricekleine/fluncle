@@ -121,6 +121,10 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // The Frontier kill switch's READ — agent-allowed (contract-only oRPC; the
   // get_capture_budget precedent: a read of an operator dial is not the dial).
   "GET /admin/frontier/minting": "get_frontier_minting",
+  // The catalogue funnel read (docs/rfcs/catalogue-funnel-rfc.md) — contract-only oRPC (no
+  // TanStack route file; oRPC owns the path directly). `get_funnel` matches the public `get_`
+  // prefix so the "holds exactly" check skips it; it lives here for completeness. Admin tier.
+  "GET /admin/funnel": "get_funnel",
   // The sonic galaxy map's admin read (browse-by-feel RFC) — contract-only oRPC (no
   // TanStack route file; oRPC owns the path directly). `list_galaxies_admin` matches
   // the public `list_` prefix so the "holds exactly" check skips it; it lives here for
@@ -357,6 +361,11 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // Frontier cover IN THE WORKER with the agent token. `upload_frontier_covers` does not match a
   // public prefix, so it MUST be listed here to satisfy the "holds exactly" check.
   "POST /admin/frontier/covers": "upload_frontier_covers",
+  // record_catalogue_snapshot (the catalogue-funnel daily snapshot, docs/rfcs/
+  // catalogue-funnel-rfc.md) is contract-only oRPC — no TanStack route file; oRPC owns the
+  // path directly, like record_health. Admin tier (agent-allowed): the box's funnel-snapshot
+  // cron POSTs a bare trigger with its agent token; the Worker computes + upserts the day's row.
+  "POST /admin/funnel/snapshot": "record_catalogue_snapshot",
   // record_health (the public /status dashboard's write) is contract-only oRPC —
   // no TanStack route file; oRPC owns the path directly, like context_track. Admin
   // tier (agent-allowed): the box's status cron POSTs a snapshot with its agent token.

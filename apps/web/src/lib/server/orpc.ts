@@ -44,6 +44,7 @@ import { galaxiesHandlers } from "./orpc/galaxies";
 import { graphHandlers } from "./orpc/graph";
 import { adminEditionsHandlers } from "./orpc/admin-editions";
 import { adminFrontierHandlers } from "./orpc/admin-frontier";
+import { adminFunnelHandlers } from "./orpc/admin-funnel";
 import { adminHealthHandlers } from "./orpc/admin-health";
 import { adminLabelsHandlers } from "./orpc/admin-labels";
 import { adminLogbookHandlers } from "./orpc/admin-logbook";
@@ -108,6 +109,7 @@ export const router = os.router({
   ...graphHandlers(os),
   ...adminEditionsHandlers(os),
   ...adminFrontierHandlers(os),
+  ...adminFunnelHandlers(os),
   ...adminHealthHandlers(os),
   ...adminLabelsHandlers(os),
   ...adminLogbookHandlers(os),

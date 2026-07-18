@@ -526,6 +526,10 @@ const AUTOMATION_CRONS: CronDef[] = [
   // header (and no other token is a substring of "reach"), so claimCronDirs' longest-match-first
   // pass gives it its own fluncle-reach dir cleanly — no collision guard needed.
   { cadenceMs: 24 * 60 * 60_000, match: "reach", service: "cron.reach" },
+  // The daily catalogue-funnel snapshot (docs/rfcs/catalogue-funnel-rfc.md). `funnel-snapshot`
+  // is a substring of no other cron's fluncle-<token> dir header (and vice versa), so
+  // claimCronDirs' longest-match-first pass claims fluncle-funnel-snapshot cleanly.
+  { cadenceMs: 24 * 60 * 60_000, match: "funnel-snapshot", service: "cron.funnel-snapshot" },
   // The two nightly-audit crons: `audit-review` (12 chars) is claimed before `audit` (5) by
   // longest-match-first, and neither is a substring of the other's `fluncle-…` dir header, so
   // each claims its own dir cleanly (same pattern as studio-clip/clip-drip). Both daily.

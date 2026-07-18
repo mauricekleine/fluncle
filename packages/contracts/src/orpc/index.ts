@@ -35,6 +35,7 @@ import { galaxiesContract } from "./galaxies";
 import { graphContract } from "./graph";
 import { adminEditionsContract } from "./admin-editions";
 import { adminFrontierContract } from "./admin-frontier";
+import { adminFunnelContract } from "./admin-funnel";
 import { adminHealthContract } from "./admin-health";
 import { adminLabelsContract } from "./admin-labels";
 import { adminLogbookContract } from "./admin-logbook";
@@ -257,6 +258,7 @@ export {
   updateTrack,
 } from "./admin-tracks";
 export { adminFrontierContract, refreshFrontierPlaylists } from "./admin-frontier";
+export { adminFunnelContract, getFunnel, recordCatalogueSnapshot } from "./admin-funnel";
 export {
   FrontierEditionSummarySchema,
   FrontierEditionTrackSchema,
@@ -389,6 +391,7 @@ export const contract = {
   ...graphContract,
   ...adminEditionsContract,
   ...adminFrontierContract,
+  ...adminFunnelContract,
   ...adminHealthContract,
   ...adminLabelsContract,
   ...adminLogbookContract,
