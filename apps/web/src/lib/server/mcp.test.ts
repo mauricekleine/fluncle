@@ -11,6 +11,7 @@ import { type TrackListItem } from "./tracks";
 const statuses = vi.hoisted(() => vi.fn<() => Promise<ServiceStatusRow[]>>());
 const resolveTarget = vi.hoisted(() => vi.fn());
 const listTracksMock = vi.hoisted(() => vi.fn());
+const listFreshMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./status", () => ({
   getServiceStatuses: statuses,
@@ -23,6 +24,13 @@ vi.mock("./log-resolver", () => ({
 vi.mock("./tracks", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./tracks")>()),
   listTracks: listTracksMock,
+}));
+
+// Partial-mock ./fresh so the constants (FRESH_TRACKS_DEFAULT/MAX) stay real for the
+// list_fresh schema while its DB read is stubbed.
+vi.mock("./fresh", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./fresh")>()),
+  listFreshTracks: listFreshMock,
 }));
 
 const { handleMcp } = await import("./mcp");
@@ -298,6 +306,65 @@ describe("MCP get_track tool", () => {
 
     expect(isError).toBe(true);
     expect(data.code).toBe("track_not_found");
+  });
+});
+
+describe("MCP list_fresh tool", () => {
+  beforeEach(() => {
+    listFreshMock.mockReset();
+  });
+
+  it("is advertised in tools/list, release-framed and never claiming Fluncle found them", async () => {
+    const body = (await rpc("tools/list")) as {
+      result: { tools: Array<{ description: string; name: string; title: string }> };
+    };
+    const tool = body.result.tools.find((candidate) => candidate.name === "list_fresh");
+
+    expect(tool).toBeDefined();
+    expect(tool?.title).toBe("Fresh releases");
+    // The Found Rule: these are RELEASE dates, not found dates — the description says so
+    // and never tells an assistant Fluncle "found" them.
+    expect(tool?.description).toMatch(/came out|release/i);
+    expect(tool?.description.toLowerCase()).toContain("do not say fluncle found");
+  });
+
+  it("returns the flat fresh payload and passes the limit through", async () => {
+    listFreshMock.mockResolvedValue({
+      albums: [
+        { artists: ["Halogenix"], name: "Record", releaseDate: "2026-07-10", slug: "record" },
+      ],
+      tracks: [
+        {
+          artists: ["Halogenix"],
+          certified: true,
+          logId: "050.7.0A",
+          releaseDate: "2026-07-12",
+          title: "Lit",
+        },
+        { artists: ["Unknown"], certified: false, releaseDate: "2026-07-11", title: "Quiet" },
+      ],
+      windowDays: 30,
+    });
+
+    const { data, isError } = await callTool("list_fresh", { limit: 12 });
+
+    expect(isError).toBe(false);
+    expect(listFreshMock).toHaveBeenCalledWith({ limit: 12 });
+    expect(data.windowDays).toBe(30);
+    const tracks = data.tracks as Array<Record<string, unknown>>;
+    expect(tracks).toHaveLength(2);
+    // The Unlit Rule is structural: the uncertified row carries no coordinate.
+    expect(tracks[0]?.logId).toBe("050.7.0A");
+    expect(tracks[1]?.logId).toBeUndefined();
+    expect(data.albums).toHaveLength(1);
+  });
+
+  it("passes an undefined limit through when none is given (the lib defaults it)", async () => {
+    listFreshMock.mockResolvedValue({ albums: [], tracks: [], windowDays: 30 });
+
+    await callTool("list_fresh");
+
+    expect(listFreshMock).toHaveBeenCalledWith({ limit: undefined });
   });
 });
 
