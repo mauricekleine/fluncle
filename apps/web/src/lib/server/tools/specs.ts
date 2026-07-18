@@ -133,6 +133,12 @@ export const listFreshSpec = defineSpec({
       .max(FRESH_LIMIT_MAX)
       .optional()
       .describe(`How many releases to return (1 to ${FRESH_LIMIT_MAX}).`),
+    view: z
+      .enum(["albums", "all", "tracks"])
+      .optional()
+      .describe(
+        "Which cut to return: 'tracks' for the individual releases, 'albums' for the records those releases sit on, or 'all' for both (the default).",
+      ),
   }),
   name: "list_fresh",
   // Chat splits the fresh list into two registers (PR-4): certified findings + the unlit catalogue

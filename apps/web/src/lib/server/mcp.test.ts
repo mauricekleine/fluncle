@@ -425,6 +425,72 @@ describe("MCP list_fresh tool", () => {
 
     expect(listFreshMock).toHaveBeenCalledWith({ limit: undefined });
   });
+
+  it("view=albums returns only the records; the track stream is emptied", async () => {
+    listFreshMock.mockResolvedValue({
+      albums: [{ artists: ["Break"], name: "Record", releaseDate: "2026-07-10", slug: "record" }],
+      tracks: [
+        {
+          artists: ["Halogenix"],
+          certified: true,
+          logId: "050.7.0A",
+          releaseDate: "2026-07-12",
+          title: "Lit",
+        },
+      ],
+      windowDays: 30,
+    });
+
+    const { data, isError } = await callTool("list_fresh", { view: "albums" });
+
+    expect(isError).toBe(false);
+    expect(data.albums).toHaveLength(1);
+    expect(data.tracks).toHaveLength(0);
+    expect(data.windowDays).toBe(30);
+  });
+
+  it("view=tracks returns only the release stream; the records are emptied", async () => {
+    listFreshMock.mockResolvedValue({
+      albums: [{ artists: ["Break"], name: "Record", releaseDate: "2026-07-10", slug: "record" }],
+      tracks: [
+        {
+          artists: ["Halogenix"],
+          certified: true,
+          logId: "050.7.0A",
+          releaseDate: "2026-07-12",
+          title: "Lit",
+        },
+      ],
+      windowDays: 30,
+    });
+
+    const { data, isError } = await callTool("list_fresh", { view: "tracks" });
+
+    expect(isError).toBe(false);
+    expect(data.tracks).toHaveLength(1);
+    expect(data.albums).toHaveLength(0);
+  });
+
+  it("no view is the same as view=all — both buckets served (backwards-compatible)", async () => {
+    listFreshMock.mockResolvedValue({
+      albums: [{ artists: ["Break"], name: "Record", releaseDate: "2026-07-10", slug: "record" }],
+      tracks: [
+        {
+          artists: ["Halogenix"],
+          certified: true,
+          logId: "050.7.0A",
+          releaseDate: "2026-07-12",
+          title: "Lit",
+        },
+      ],
+      windowDays: 30,
+    });
+
+    const { data } = await callTool("list_fresh", { view: "all" });
+
+    expect(data.albums).toHaveLength(1);
+    expect(data.tracks).toHaveLength(1);
+  });
 });
 
 describe("MCP resources", () => {

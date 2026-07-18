@@ -45,7 +45,7 @@ import {
   listArtistCatalogue,
   listLabelCatalogue,
 } from "../catalogue-groups";
-import { type FreshTrack, listFreshTracks } from "../fresh";
+import { type FreshRecord, type FreshTrack, listFreshTracks } from "../fresh";
 import { getConfirmedAliasNames, getLabelBySlug, labelSlug } from "../labels";
 import { resolveLogPageTarget } from "../log-resolver";
 import { subscribeToNewsletter } from "../newsletter";
@@ -157,6 +157,11 @@ function clampInt(value: unknown, max: number, fallback: number): number {
   }
 
   return Math.min(value, max);
+}
+
+/** Coerce an incoming `list_fresh` view arg to the advertised enum, defaulting to `all`. */
+function normalizeFreshView(value: unknown): "albums" | "all" | "tracks" {
+  return value === "albums" || value === "tracks" ? value : "all";
 }
 
 // ── The MCP `publicRecord` shapers (lifted verbatim from mcp.ts) ─────────────────────
@@ -382,6 +387,16 @@ function freshTrackToCatalogue(track: FreshTrack) {
     title: track.title,
     ...dropEmpty({ spotifyUrl: track.spotifyUrl }),
   };
+}
+
+/**
+ * A fresh RECORD reduced to the SAME unlit catalogue shape (PR-6's `view=albums`). A record has no
+ * Fluncle coordinate, so register-wise it belongs in the unlit bucket exactly like a catalogue
+ * track — named and listed, never spoken as found. Its `name` fills `title`; it carries no Spotify
+ * link, so the row is name + artists only. Reuse, not a new card (DESIGN.md's Unlit Rule).
+ */
+function freshAlbumToCatalogue(album: FreshRecord) {
+  return { artists: album.artists, title: album.name };
 }
 
 /** A search hit Fluncle has not certified, reduced to the unlit catalogue shape. */
@@ -690,6 +705,12 @@ const listFreshTool = {
   ...listFreshSpec,
   execute: async (args, ctx) => {
     const rawLimit = (args as { limit?: unknown }).limit;
+    // The `/fresh` pills' twin (PR-6): `tracks` the release stream, `albums` the records they sit
+    // on, `all` (the default) both. Coerced defensively so a direct execute (a test, a loose caller)
+    // still lands on the enum the schema advertises.
+    const view = normalizeFreshView((args as { view?: unknown }).view);
+    const showTracks = view !== "albums";
+    const showAlbums = view !== "tracks";
 
     if (ctx.transport === "chat") {
       // Chat keeps its own default (12) and tolerant clamp; only the CAP unifies to 100.
@@ -700,8 +721,16 @@ const listFreshTool = {
       // already cover/coordinate-free from listFreshTracks — ride into the UNLIT `catalogue` bucket,
       // named and listed, never spoken as found. NO new server read; this fixes the list_fresh
       // empty-in-chat bug (a fresh window that is all uncertified catalogue used to return nothing).
-      const certified = fresh.tracks.filter((track) => track.certified && track.logId);
-      const catalogue = fresh.tracks.filter((track) => !track.certified).map(freshTrackToCatalogue);
+      const certified = showTracks
+        ? fresh.tracks.filter((track) => track.certified && track.logId)
+        : [];
+      const trackCatalogue = showTracks
+        ? fresh.tracks.filter((track) => !track.certified).map(freshTrackToCatalogue)
+        : [];
+      // PR-6: a fresh RECORD rides the SAME unlit bucket — a coordinate-less entity is register-equal
+      // to a catalogue track, so it reuses the catalogue card (no new shape). Tracks lead, records
+      // follow. `view=albums` shows records alone; `view=tracks` drops them.
+      const albumCatalogue = showAlbums ? fresh.albums.map(freshAlbumToCatalogue) : [];
 
       // Hydrate the certified logIds to full findings so each card shows its cover, chips, and a
       // play control. A logId the hydrator misses falls back to the fresh row's own fields.
@@ -714,14 +743,25 @@ const listFreshTool = {
         return item ? compactFinding(item) : freshTrackToFinding(track);
       });
 
-      return dropEmpty({ catalogue, findings, ok: true as const });
+      return dropEmpty({
+        catalogue: [...trackCatalogue, ...albumCatalogue],
+        findings,
+        ok: true as const,
+      });
     }
 
     // MCP/WebMCP world-serve the whole flat fresh list (findings + uncertified rows) as-is —
-    // listFreshTracks strips the private key and mints nothing for the uncertified rows.
+    // listFreshTracks strips the private key and mints nothing for the uncertified rows. `view`
+    // narrows the flat payload: `all` (default) keeps both buckets (backwards-compatible), a single
+    // view empties the other.
     const limit = typeof rawLimit === "number" ? rawLimit : undefined;
+    const fresh = await listFreshTracks({ limit });
 
-    return listFreshTracks({ limit });
+    return {
+      albums: showAlbums ? fresh.albums : [],
+      tracks: showTracks ? fresh.tracks : [],
+      windowDays: fresh.windowDays,
+    };
   },
 } satisfies ToolDef;
 
