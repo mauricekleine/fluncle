@@ -237,10 +237,14 @@ export function PlaylistPanel({
 
   // The one meta fact the interface can't carry: the weekly freshening (or when it last
   // landed, once minted). Everything else the header needs, the rows already say.
-  const meta =
-    frontier.playlistUrl && frontier.lastSyncedAt
+  // The past fact only — when it last landed. The FUTURE (the weekly freshening) is now
+  // owned by the next-refresh line below, so the pre-playlist state keeps its cadence pitch
+  // while a synced playlist reads as a clean last/next pair with no duplicate cadence line.
+  const meta = !frontier.playlistUrl
+    ? "Refreshed every week"
+    : frontier.lastSyncedAt
       ? `Refreshed ${formatDateLong(frontier.lastSyncedAt)}`
-      : "Refreshed every week";
+      : "";
 
   return (
     <section className="rec-playlist">
@@ -248,7 +252,7 @@ export function PlaylistPanel({
         <PlaylistCollage covers={seeds.map((seed) => seed.imageUrl).slice(0, 4)} />
         <div className="rec-playlist-id">
           <h2 className="rec-playlist-name">Fluncle&rsquo;s Frontier</h2>
-          <p className="rec-playlist-meta">{meta}</p>
+          {meta ? <p className="rec-playlist-meta">{meta}</p> : null}
 
           <div className="rec-playlist-cta">
             {frontier.playlistUrl ? (
