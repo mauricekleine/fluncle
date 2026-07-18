@@ -59,6 +59,11 @@ packages/video/set-out/
 # TanStack Start temp/cache
 apps/web/.tanstack/
 
+# Downloaded text-embedding model cache for the homogenisation harness's
+# `--embed` cut (measure-artifact-diversity.ts). Fetched at runtime from
+# Hugging Face into this dir — a runtime cache, never codebase history.
+apps/web/.cache/
+
 # Test coverage reports (vitest --coverage)
 coverage/
 **/coverage/

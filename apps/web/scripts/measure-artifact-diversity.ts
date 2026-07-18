@@ -6,8 +6,13 @@
  * artifact family wants a cheap, honest diversity metric run on the REAL corpus, so the
  * "our artifacts drift toward a mean" claim stays falsifiable. "An anti-sameness effort
  * with no metric is folklore." The notes already had one (`scoreNoteEcho` + the note-sweep
- * `--dry-run`); this runs the SAME measures across all three WRITTEN families — notes,
- * spoken observations, logbook entries — off the live archive and prints a ranked report.
+ * `--dry-run`); this runs the SAME measures across the WRITTEN families — notes, spoken
+ * observations, logbook entries, and the newsletter's per-finding why-lines — off the live
+ * archive and prints a ranked report. It also cuts the upstream context-note `Texture:`
+ * vocabulary (the seed the 07-14 audit named), the stored video axes (vehicle / grain /
+ * register / palette, with the palette NULL share reported honestly), and — behind `--embed`
+ * — a SEMANTIC cut: it embeds the written corpora with a local bge-class text model and
+ * measures pairwise embedding distance, the one automated layer that sees MOVES not words.
  *
  * READ-ONLY. Nothing but SELECTs. It measures; it changes no artifact and writes no DB row.
  *
@@ -32,12 +37,23 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   type Artifact,
+  categoricalDistribution,
+  type CategoricalDistribution,
+  type EmbeddedArtifact,
+  type EmbeddingDistanceStats,
+  extractEditionWhyLines,
   type FamilyDiversity,
   measureFamily,
   measureRegisters,
+  measureTextureVocab,
+  pairwiseEmbeddingStats,
+  rankPairDistance,
   type RegisterStats,
   stripLogbookProse,
+  type TextureVocabStats,
+  WORN_TEXTURE_WORDS,
 } from "../src/lib/server/artifact-diversity";
+import { contentOverlap } from "../src/lib/server/note";
 
 // The crutch words the 2026-07-14 audit tracked on the observations — the closer formula
 // ("enjoy"/"cosmonaut"), the "hope" reflex, and the "shoulders" body-image tic. Tracked in a
@@ -372,7 +388,49 @@ function measureBoth(family: string, artifacts: Artifact[]): FamilyReport {
   };
 }
 
-async function readCorpora(url: string): Promise<FamilyReport[]> {
+// Suffix duplicate ids so a why-line that references the same finding across two editions
+// stays a DISTINCT artifact (the lift scan filters by id !== id, so identical ids would be
+// read as self and never compared). With one sent edition today this is a no-op; it keeps
+// the newsletter cut honest once the corpus reaches the ≥4-edition re-measure the ledger asks for.
+function uniqueIds(artifacts: Artifact[]): Artifact[] {
+  const seen = new Map<string, number>();
+
+  return artifacts.map((artifact) => {
+    const n = (seen.get(artifact.id) ?? 0) + 1;
+
+    seen.set(artifact.id, n);
+
+    return n === 1 ? artifact : { ...artifact, id: `${artifact.id}#${n}` };
+  });
+}
+
+/** The tags of one finding's video, as stored (any axis may be null on an older render). */
+type VideoAxes = {
+  grain: string | null;
+  palette: string | null;
+  register: string | null;
+  vehicle: string | null;
+};
+
+/** The whole archive reading: the family readings plus the Texture + video cuts + raw corpora. */
+type ArchiveReading = {
+  /** The overlap/register readings, ranked in the report. */
+  families: FamilyReport[];
+  /** The raw written corpora, kept for the optional `--embed` semantic cut. */
+  corpora: { name: string; texts: Artifact[] }[];
+  /** The upstream context-note Texture vocabulary. */
+  texture: TextureVocabStats;
+  /** The stored video axes, one distribution per axis. */
+  video: {
+    grain: CategoricalDistribution;
+    palette: CategoricalDistribution;
+    register: CategoricalDistribution;
+    total: number;
+    vehicle: CategoricalDistribution;
+  };
+};
+
+async function readCorpora(url: string): Promise<ArchiveReading> {
   const authToken = process.env.TURSO_AUTH_TOKEN;
   const client = createClient(authToken ? { authToken, url } : { url });
 
@@ -401,20 +459,319 @@ async function readCorpora(url: string): Promise<FamilyReport[]> {
       text: stripLogbookProse(cellText(row.body, "")),
     }));
 
-    return [
-      measureBoth("notes", notes),
-      measureBoth("observations", observations),
-      measureBoth("logbook", logbook),
-    ];
+    // The newsletter family: the per-finding "why" lines flattened out of every SENT
+    // edition's content_json (a draft mid-author is not a shipped artifact). A malformed
+    // payload yields no lines rather than crashing the re-run.
+    const editionRows = await client.execute(
+      "SELECT content_json FROM editions WHERE status = 'sent' ORDER BY number",
+    );
+    const newsletter: Artifact[] = uniqueIds(
+      editionRows.rows.flatMap((row) => extractEditionWhyLines(cellText(row.content_json, ""))),
+    );
+
+    // The upstream seed: the context notes' `Texture:` vocabulary.
+    const contextRows = await client.execute(
+      "SELECT log_id, context_note FROM findings WHERE context_note IS NOT NULL AND trim(context_note) != ''",
+    );
+    const contextNotes: Artifact[] = contextRows.rows.map((row) => ({
+      id: cellText(row.log_id, "?"),
+      text: cellText(row.context_note, ""),
+    }));
+    const texture = measureTextureVocab(contextNotes, { wornWords: WORN_TEXTURE_WORDS });
+
+    // The video axes: the flat category tags on every finding that HAS a video.
+    const videoRows = await client.execute(
+      "SELECT video_vehicle, video_grain, video_register, video_palette FROM findings WHERE video_url IS NOT NULL AND trim(video_url) != ''",
+    );
+    const axes: VideoAxes[] = videoRows.rows.map((row) => ({
+      grain: typeof row.video_grain === "string" ? row.video_grain : null,
+      palette: typeof row.video_palette === "string" ? row.video_palette : null,
+      register: typeof row.video_register === "string" ? row.video_register : null,
+      vehicle: typeof row.video_vehicle === "string" ? row.video_vehicle : null,
+    }));
+
+    return {
+      corpora: [
+        { name: "notes", texts: notes },
+        { name: "observations", texts: observations },
+        { name: "logbook", texts: logbook.map((entry) => ({ ...entry })) },
+        { name: "newsletter", texts: newsletter },
+      ],
+      families: [
+        measureBoth("notes", notes),
+        measureBoth("observations", observations),
+        measureBoth("logbook", logbook),
+        measureBoth("newsletter", newsletter),
+      ],
+      texture,
+      video: {
+        grain: categoricalDistribution(axes.map((axis) => axis.grain)),
+        palette: categoricalDistribution(axes.map((axis) => axis.palette)),
+        register: categoricalDistribution(axes.map((axis) => axis.register)),
+        total: axes.length,
+        vehicle: categoricalDistribution(axes.map((axis) => axis.vehicle)),
+      },
+    };
   } finally {
     client.close();
   }
 }
 
+// ── The Texture + video render sections ───────────────────────────────────────────────
+
+function renderTexture(texture: TextureVocabStats): string {
+  const lines: string[] = [];
+
+  lines.push("## Context-note Texture vocabulary (the upstream seed)");
+  lines.push("");
+  lines.push(
+    `The \`context_distil\` prompt ends every note on a \`Texture:\` line — 3–6 pointers that seed ` +
+      `EVERY downstream voice. The 2026-07-14 audit named this the upstream cause of the written ` +
+      `families' sameness, and the prompt was changed the same day to demand track-specific pointers ` +
+      `and warn off the worn five. This is the number that makes that fix falsifiable: re-run it and ` +
+      `the worn descriptors should thin as new notes are distilled.`,
+  );
+  lines.push("");
+  lines.push(
+    `**${texture.size} of ${texture.total} context notes carry a parseable \`Texture:\` line; ${texture.vocabulary} distinct descriptors in all.**`,
+  );
+  lines.push("");
+  lines.push("**The worn five (the audit's tracked descriptors), notes reaching for each:**");
+  lines.push("");
+  lines.push(
+    texture.worn.map((worn) => `\`${worn.word}\` ${worn.docFreq}/${texture.size}`).join(", ") ||
+      "_none tracked._",
+  );
+  lines.push("");
+  lines.push("**Most-widespread descriptors (in ≥2 notes):**");
+  lines.push("");
+  lines.push(
+    texture.descriptors.length === 0
+      ? "_None recurring._"
+      : texture.descriptors
+          .map((entry) => `\`${entry.word}\` (${entry.docFreq}/${texture.size})`)
+          .join(", "),
+  );
+  lines.push("");
+
+  return lines.join("\n");
+}
+
+function renderDistribution(label: string, dist: CategoricalDistribution): string {
+  const lines: string[] = [];
+  const nullShare = dist.total === 0 ? 0 : dist.nullCount / dist.total;
+  const topShare = (count: number) => (dist.present === 0 ? 0 : count / dist.present);
+
+  lines.push(
+    `- **${label}:** ${dist.categories.length} distinct over ${dist.present} recorded` +
+      ` — NULL on ${dist.nullCount}/${dist.total} (${pct(nullShare)}).`,
+  );
+
+  if (dist.categories.length > 0) {
+    const top = dist.categories
+      .slice(0, 6)
+      .map((cat) => `\`${cat.value}\` ${cat.count} (${pct(topShare(cat.count))})`)
+      .join(", ");
+
+    lines.push(`  - Top: ${top}`);
+  }
+
+  return lines.join("\n");
+}
+
+function renderVideo(video: ArchiveReading["video"]): string {
+  const lines: string[] = [];
+
+  lines.push("## Video axes (vehicle / grain / register / palette)");
+  lines.push("");
+  lines.push(
+    `The video family's sameness is a LOOK, not a phrase: four consecutive renders sharing one ` +
+      `amber halftone palette (07-13), the register axis collapsing to representational (07-14). ` +
+      `Those axes are stored as flat tags on the finding. Measured over the **${video.total}** findings ` +
+      `that have a video. \`video_palette\` shipped in PR #702, so it reads NULL on every render made ` +
+      `before it — the share below is reported honestly, not hidden.`,
+  );
+  lines.push("");
+  lines.push(renderDistribution("vehicle", video.vehicle));
+  lines.push(renderDistribution("grain", video.grain));
+  lines.push(renderDistribution("register", video.register));
+  lines.push(renderDistribution("palette", video.palette));
+  lines.push("");
+
+  return lines.join("\n");
+}
+
+// ── The embedding (semantic) cut ──────────────────────────────────────────────────────
+//
+// A local bge-class text model, fetched once into a gitignored cache and run offline — no
+// secret, no paid API, no Workers AI (that is a separate roadmap pilot). Opt-in via `--embed`
+// so a normal re-run stays instant and needs no model. The math (cosineDistance,
+// pairwiseEmbeddingStats, rankPairDistance) is pure and unit-tested; only the vectors come
+// from the model.
+
+const EMBED_MODEL = "Xenova/bge-small-en-v1.5";
+
+async function embedCorpus(texts: readonly Artifact[]): Promise<EmbeddedArtifact[]> {
+  const { env, pipeline } = await import("@huggingface/transformers");
+
+  // Keep the download inside the gitignored apps/web/.cache dir (a runtime cache).
+  env.cacheDir = join(dirname(fileURLToPath(import.meta.url)), "..", ".cache", "transformers");
+
+  const extractor = await pipeline("feature-extraction", EMBED_MODEL, { dtype: "fp32" });
+  const embedded: EmbeddedArtifact[] = [];
+
+  for (const artifact of texts) {
+    if (artifact.text.trim().length === 0) {
+      continue;
+    }
+
+    const output = await extractor(artifact.text, { normalize: true, pooling: "mean" });
+
+    embedded.push({ id: artifact.id, vector: Array.from(output.data as Iterable<number>) });
+  }
+
+  return embedded;
+}
+
+/** The validation verdict for one family: does its lexically-worst pair separate in embedding space? */
+function renderEmbeddingFamily(
+  name: string,
+  stats: EmbeddingDistanceStats,
+  lexicalWorstPair: string[],
+  texts: Map<string, string>,
+): string {
+  const lines: string[] = [];
+  // The lexical overlap for a pair — the same content-word Jaccard the echo gate uses. This
+  // is what turns the closest-pairs list into the gate-worthiness test: embedding-close +
+  // lexical-LOW is a paraphrase `scoreEcho` cannot see (the case for a second rail).
+  const lexical = (a: string, b: string): number => {
+    const left = texts.get(a);
+    const right = texts.get(b);
+
+    return left !== undefined && right !== undefined ? contentOverlap(left, right) : 0;
+  };
+
+  lines.push(`### ${name} — ${stats.size} embedded`);
+  lines.push("");
+
+  if (stats.pairs.length === 0) {
+    lines.push("_Fewer than two vectors; no pairwise distance._");
+    lines.push("");
+
+    return lines.join("\n");
+  }
+
+  lines.push(
+    `- **Mean pairwise distance:** ${stats.mean.toFixed(4)} (± ${stats.stdev.toFixed(4)} stdev)`,
+  );
+  lines.push(
+    `- **Closest pair (min distance):** ${stats.min.toFixed(4)}` +
+      (stats.minPair.length === 2 ? ` — ${stats.minPair[0]} ↔ ${stats.minPair[1]}` : ""),
+  );
+
+  // The validation: where does the LEXICALLY-worst pair (the one scoreEcho would already
+  // condemn) sit in the SEMANTIC ordering? Rank 1 far below the mean = the two agree, the
+  // condemned pair separates. Mid-pack = the semantic layer does not single it out.
+  if (lexicalWorstPair.length === 2) {
+    const [left, right] = lexicalWorstPair;
+    const ranked = left && right ? rankPairDistance(stats, left, right) : undefined;
+
+    if (ranked && left && right) {
+      const zScore = stats.stdev === 0 ? 0 : (ranked.distance - stats.mean) / stats.stdev;
+
+      lines.push(
+        `- **Lexically-worst pair (${left} ↔ ${right}, ${pct(lexical(left, right))} word overlap):** ` +
+          `embedding distance ${ranked.distance.toFixed(4)}, rank ${ranked.rank} of ${ranked.totalPairs} closest ` +
+          `(${pct(ranked.percentile)} of pairs are more diverse), ${zScore.toFixed(2)}σ from the mean.`,
+      );
+    } else {
+      lines.push(
+        `- **Lexically-worst pair (${left} ↔ ${right}):** not both embedded (one side had no prose).`,
+      );
+    }
+  }
+
+  // The top-5 embedding-closest pairs, with their LEXICAL overlap alongside — the agreement
+  // check. A pair that is embedding-close but lexical-far is a PARAPHRASE the word gate misses
+  // (the case for a second rail); broad agreement means embedding just restates scoreEcho.
+  lines.push("- **Embedding-closest pairs (with their lexical word overlap):**");
+
+  for (const pair of stats.pairs.slice(0, 5)) {
+    lines.push(
+      `  - ${pair.a} ↔ ${pair.b}: distance ${pair.distance.toFixed(4)}, lexical ${pct(lexical(pair.a, pair.b))}`,
+    );
+  }
+
+  lines.push("");
+
+  return lines.join("\n");
+}
+
+async function renderEmbedding(reading: ArchiveReading): Promise<string> {
+  const lines: string[] = [];
+
+  lines.push("## Embedding distance — the semantic cut (experiment)");
+  lines.push("");
+  lines.push(
+    `Every other measure here counts shared WORDS, so a paraphrase — the same move in different ` +
+      `words — is invisible to it (the escape \`scoreEcho\` leaves open). A text embedding sees the ` +
+      `MEANING. Ratified 2026-07-18 as a VALIDATION experiment, not a shipped gate: the question is ` +
+      `whether semantic distance actually SEPARATES the operator-condemned pairs from the healthy ` +
+      `ones, given that baseline similarity across one persona/register/genre is high by design. ` +
+      `Model: \`${EMBED_MODEL}\` (a cheap bge-class model, run locally, no secret, no paid API). The ` +
+      `"lexically-worst pair" per family is this harness's own max content-word-overlap pair — the ` +
+      `one \`scoreEcho\` already flags — used here as the known-condemned probe.`,
+  );
+  lines.push("");
+
+  // Embed the two ~61 written corpora (the ledger's Monrroe/Muffler condemned pair is an
+  // observation), plus the smaller families for completeness where they have ≥2 artifacts.
+  for (const corpus of reading.corpora) {
+    const family = reading.families.find((reading) => reading.family === corpus.name);
+
+    if (!family || family.size < 2) {
+      continue;
+    }
+
+    const embedded = await embedCorpus(corpus.texts);
+    const stats = pairwiseEmbeddingStats(embedded);
+    const texts = new Map(corpus.texts.map((artifact) => [artifact.id, artifact.text]));
+
+    lines.push(renderEmbeddingFamily(corpus.name, stats, family.maxPair, texts));
+  }
+
+  lines.push("### Reading the cut (the decision rule)");
+  lines.push("");
+  lines.push(
+    "Decision rule (ratified 2026-07-18): if semantic distance SEPARATES the condemned pairs " +
+      "cleanly from the healthy ones, it is a candidate second rail beside `scoreEcho`; if it " +
+      "OVERLAPS, it stays a corpus dashboard number and nothing more is spent. Two things to read " +
+      "off the numbers above. FIRST — does the lexically-condemned pair sink in the semantic " +
+      "ordering? (A σ well below the mean and a high percentile = the two agree it is unusually " +
+      "alike.) SECOND — are the embedding-CLOSEST pairs ones the word gate would MISS, i.e. do they " +
+      "carry LOWER lexical overlap than the condemned pair? Those are paraphrases `scoreEcho` is " +
+      "blind to (the escape it leaves open) — the only reason a semantic rail would earn its keep. " +
+      "A unimodal spread with no gap between condemned and healthy means no fixed threshold can be " +
+      "a clean binary gate; the honest use of that is a RANKED review signal, never an auto-block.",
+  );
+  lines.push("");
+
+  return lines.join("\n");
+}
+
 async function main(): Promise<void> {
   const url = resolveDbUrl();
-  const readings = await readCorpora(url);
-  const report = renderReport(readings, { db: dbLabel(url), when: new Date().toISOString() });
+  const reading = await readCorpora(url);
+  const meta = { db: dbLabel(url), when: new Date().toISOString() };
+
+  let report = renderReport(reading.families, meta);
+
+  report += `\n${renderTexture(reading.texture)}`;
+  report += `\n${renderVideo(reading.video)}`;
+
+  if (process.argv.includes("--embed")) {
+    report += `\n${await renderEmbedding(reading)}`;
+  }
 
   const out = arg("--out");
 
