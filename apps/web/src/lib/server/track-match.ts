@@ -29,7 +29,12 @@ const VERSION_WORDS = new Set([
 ]);
 
 // Suffixes that name a version but are NOT distinguishing — they are the original.
-const NEUTRAL_DESCRIPTORS = new Set(["original mix", "original", "extended mix"]);
+const NEUTRAL_DESCRIPTORS = new Set([
+  "original mix",
+  "original",
+  "extended mix",
+  "original version",
+]);
 
 const ARTIST_SPLIT = /\s*(?:,|&|\/|\band\b|\bx\b|\bvs\b|\bversus\b|\bwith\b)\s*/;
 const FEAT_INLINE = /\b(?:feat|ft|featuring)\b\.?.*$/i;
@@ -175,4 +180,85 @@ export function resolveTrackByText(
   title: string,
 ): string | null {
   return index.get(matchKey(artists, title)) ?? null;
+}
+
+/** The fields the recording-identity fold reads off a catalogue row. */
+export type RecordingIdentity = {
+  artists: string[] | string;
+  isrc: string | null | undefined;
+  releaseDate: string | null | undefined;
+  spotifyUrl: string | null | undefined;
+  title: string;
+  trackId: string;
+};
+
+/**
+ * The RENDER-TIME half of the duplicate defence. The SQL reads already drop rows an operator has
+ * STAMPED as duplicates (`duplicate_of_track_id` / `dismissed_at`), but the crawler leaves most
+ * twins unstamped — the SAME recording reissued under a second barcode — so the graph pages fold
+ * whatever the stamping has not caught over the bounded slice they load.
+ *
+ * Rows sharing one {@link matchKey} identity collapse to ONE representative, and the kept row is
+ * the most ANCHORED: a Spotify-anchored row wins, then an ISRC-bearing one, then the newest
+ * release, then the lowest track id — a stable final tiebreak so the choice is deterministic
+ * regardless of the order the rows arrive in. First-appearance order is otherwise preserved, so a
+ * fold never reshuffles the list the SQL already ordered.
+ */
+export function dedupeByRecordingIdentity<T>(
+  rows: T[],
+  identify: (row: T) => RecordingIdentity,
+): T[] {
+  const order: string[] = [];
+  const best = new Map<string, { id: RecordingIdentity; row: T }>();
+
+  for (const row of rows) {
+    const id = identify(row);
+    const key = matchKey(id.artists, id.title);
+    const held = best.get(key);
+
+    if (!held) {
+      best.set(key, { id, row });
+      order.push(key);
+    } else if (isMoreAnchored(id, held.id)) {
+      best.set(key, { id, row });
+    }
+  }
+
+  const kept: T[] = [];
+
+  for (const key of order) {
+    const held = best.get(key);
+
+    if (held) {
+      kept.push(held.row);
+    }
+  }
+
+  return kept;
+}
+
+/** True when `candidate` is the better representative of a recording than `current`. */
+function isMoreAnchored(candidate: RecordingIdentity, current: RecordingIdentity): boolean {
+  const candidateSpotify = candidate.spotifyUrl ? 1 : 0;
+  const currentSpotify = current.spotifyUrl ? 1 : 0;
+
+  if (candidateSpotify !== currentSpotify) {
+    return candidateSpotify > currentSpotify;
+  }
+
+  const candidateIsrc = candidate.isrc ? 1 : 0;
+  const currentIsrc = current.isrc ? 1 : 0;
+
+  if (candidateIsrc !== currentIsrc) {
+    return candidateIsrc > currentIsrc;
+  }
+
+  const candidateDate = candidate.releaseDate ?? "";
+  const currentDate = current.releaseDate ?? "";
+
+  if (candidateDate !== currentDate) {
+    return candidateDate > currentDate;
+  }
+
+  return candidate.trackId < current.trackId;
 }

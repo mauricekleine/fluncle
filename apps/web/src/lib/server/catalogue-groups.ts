@@ -77,6 +77,7 @@
 
 import { parseArtistsJson } from "./artists";
 import { getDb, typedRows } from "./db";
+import { dedupeByRecordingIdentity, type RecordingIdentity } from "./track-match";
 import { type CatalogueTrackItem } from "./tracks";
 
 /** How the reader may order the groups. */
@@ -172,11 +173,24 @@ type GroupTrackRow = {
   album_slug: string | null;
   artists_json: string;
   group_key: string;
+  isrc: string | null;
   release_date: string | null;
   spotify_url: string | null;
   title: string;
   track_id: string;
 };
+
+/** The recording identity a loaded catalogue row exposes to the render-time dedupe fold. */
+function groupRowIdentity(row: GroupTrackRow): RecordingIdentity {
+  return {
+    artists: parseArtistsJson(row.artists_json),
+    isrc: row.isrc,
+    releaseDate: row.release_date,
+    spotifyUrl: row.spotify_url,
+    title: row.title,
+    trackId: row.track_id,
+  };
+}
 
 /**
  * The group ORDER, in SQL. Both sorts force the nameless bucket last, and both put undated
@@ -254,6 +268,7 @@ export async function listArtistCatalogue(
           left join findings on findings.track_id = tracks.track_id
           left join albums al on al.id = tracks.album_id
           where ta.artist_id = ? and findings.track_id is null
+                and tracks.duplicate_of_track_id is null and tracks.dismissed_at is null
           group by lower(coalesce(tracks.album, ''))
           order by ${groupOrderSql(sort)}
           limit ? offset ?`,
@@ -279,18 +294,33 @@ export async function listArtistCatalogue(
     sort,
   );
   const byRecord = groupBy(tracks, (row) => row.group_key);
+  let removed = 0;
+  const groups = rows.map((row) => {
+    const held = byRecord.get(row.group_key) ?? [];
+    const deduped = dedupeByRecordingIdentity(held, groupRowIdentity);
 
-  return {
-    groups: rows.map((row) => ({
+    removed += held.length - deduped.length;
+
+    return {
       name: row.name === "" ? undefined : row.name,
       releaseDate: row.release_date ?? undefined,
       slug: row.slug ?? undefined,
-      tracks: (byRecord.get(row.group_key) ?? []).map(toTrack),
-    })),
+      tracks: deduped.map(toTrack),
+    };
+  });
+
+  return {
+    groups,
     page,
     pageCount: Math.max(Math.ceil(totalGroups / GRAPH_GROUP_PAGE_SIZE), 1),
     totalGroups,
-    totalTracks: Number(rows[0]?.total_tracks ?? 0),
+    // The SQL total counts every unstamped twin in this artist's slice; the fold has collapsed
+    // them, so subtract what it removed. Clamped to what actually rendered so the thin-content
+    // gate never reports fewer tracks than the page shows.
+    totalTracks: Math.max(
+      Number(rows[0]?.total_tracks ?? 0) - removed,
+      flattenRecords(groups).length,
+    ),
   };
 }
 
@@ -328,7 +358,8 @@ export async function listLabelCatalogue(
     sql: `select count(*) as total_tracks
           from tracks
           left join findings on findings.track_id = tracks.track_id
-          where tracks.label_id = ? and findings.track_id is null`,
+          where tracks.label_id = ? and findings.track_id is null
+                and tracks.duplicate_of_track_id is null and tracks.dismissed_at is null`,
   });
   const totalTracks = Number(
     typedRows<{ total_tracks: number }>(totals.rows)[0]?.total_tracks ?? 0,
@@ -349,6 +380,7 @@ export async function listLabelCatalogue(
           join json_each(tracks.artists_json) credit
           left join artists a on a.name = credit.value collate nocase
           where tracks.label_id = ? and findings.track_id is null
+                and tracks.duplicate_of_track_id is null and tracks.dismissed_at is null
           group by lower(credit.value)
           order by ${groupOrderSql(sort)}
           limit ? offset ?`,
@@ -374,23 +406,31 @@ export async function listLabelCatalogue(
     sort,
   );
   const byArtist = groupBy(tracks, (row) => row.group_key);
+  let removed = 0;
+  const groups = rows.map((row) => {
+    const held = byArtist.get(row.group_key) ?? [];
+    const records = intoRecords(held);
+
+    removed += records.removed;
+
+    return {
+      name: row.name,
+      recordCount: Number(row.record_count),
+      records: records.records,
+      slug: row.slug ?? undefined,
+      truncated: Number(row.track_count) > held.length,
+    };
+  });
 
   return {
-    groups: rows.map((row) => {
-      const held = byArtist.get(row.group_key) ?? [];
-
-      return {
-        name: row.name,
-        recordCount: Number(row.record_count),
-        records: intoRecords(held),
-        slug: row.slug ?? undefined,
-        truncated: Number(row.track_count) > held.length,
-      };
-    }),
+    groups,
     page,
     pageCount: Math.max(Math.ceil(totalGroups / GRAPH_GROUP_PAGE_SIZE), 1),
     totalGroups,
-    totalTracks,
+    // The SQL total counts every unstamped twin the label carries; the fold has collapsed the
+    // ones in this slice, so subtract them. Clamped to the rendered count so the thin-content
+    // gate never reports fewer tracks than the page shows.
+    totalTracks: Math.max(totalTracks - removed, flattenArtistGroups(groups).length),
   };
 }
 
@@ -419,12 +459,12 @@ async function fetchGroupTracks(
   const placeholders = keys.map(() => "?").join(", ");
   const result = await db.execute({
     args: [entityId, ...keys, GRAPH_GROUP_TRACK_LIMIT],
-    sql: `select track_id, title, artists_json, spotify_url, album, album_slug, release_date,
-                 group_key
+    sql: `select track_id, title, artists_json, spotify_url, isrc, album, album_slug,
+                 release_date, group_key
           from (
             select tracks.track_id as track_id, tracks.title as title,
                    tracks.artists_json as artists_json, tracks.spotify_url as spotify_url,
-                   tracks.album as album, al.slug as album_slug,
+                   tracks.isrc as isrc, tracks.album as album, al.slug as album_slug,
                    tracks.release_date as release_date,
                    ${keySql} as group_key,
                    row_number() over (
@@ -435,7 +475,9 @@ async function fetchGroupTracks(
             ${joinSql}
             left join findings on findings.track_id = tracks.track_id
             left join albums al on al.id = tracks.album_id
-            where ${whereSql} and findings.track_id is null and ${keySql} in (${placeholders})
+            where ${whereSql} and findings.track_id is null
+                  and tracks.duplicate_of_track_id is null and tracks.dismissed_at is null
+                  and ${keySql} in (${placeholders})
           )
           where rn <= ?`,
   });
@@ -459,32 +501,49 @@ function groupBy<T>(rows: T[], key: (row: T) => string): Map<string, T[]> {
   return map;
 }
 
-/** Split one artist's rows (already ordered by SQL) into their records, order preserved. */
-function intoRecords(rows: GroupTrackRow[]): CatalogueRecord[] {
-  const records: CatalogueRecord[] = [];
-  const index = new Map<string, CatalogueRecord>();
+/**
+ * Split one artist's rows (already ordered by SQL) into their records, order preserved, folding
+ * the twins the stamping missed WITHIN each record (a reissue under a second barcode renders
+ * once). Reports how many rows the fold removed so the caller can keep `totalTracks` honest.
+ */
+function intoRecords(rows: GroupTrackRow[]): { records: CatalogueRecord[]; removed: number } {
+  const buckets: GroupTrackRow[][] = [];
+  const index = new Map<string, GroupTrackRow[]>();
 
   for (const row of rows) {
     const key = (row.album ?? "").toLowerCase();
     const held = index.get(key);
 
     if (held) {
-      held.tracks.push(toTrack(row));
+      held.push(row);
       continue;
     }
 
-    const record: CatalogueRecord = {
-      name: row.album ?? undefined,
-      releaseDate: row.release_date ?? undefined,
-      slug: row.album_slug ?? undefined,
-      tracks: [toTrack(row)],
-    };
+    const bucket = [row];
 
-    index.set(key, record);
-    records.push(record);
+    index.set(key, bucket);
+    buckets.push(bucket);
   }
 
-  return records;
+  let removed = 0;
+  const records = buckets.map((bucket) => {
+    const deduped = dedupeByRecordingIdentity(bucket, groupRowIdentity);
+
+    removed += bucket.length - deduped.length;
+
+    // Every row in a bucket shares the record's album/slug; the release date leads with the
+    // first (the SQL order already put the record's newest-or-A–Z row first).
+    const head = bucket[0];
+
+    return {
+      name: head?.album ?? undefined,
+      releaseDate: head?.release_date ?? undefined,
+      slug: head?.album_slug ?? undefined,
+      tracks: deduped.map(toTrack),
+    };
+  });
+
+  return { records, removed };
 }
 
 /** Every rendered row on a grouped page, flattened — what the JSON-LD describes. */

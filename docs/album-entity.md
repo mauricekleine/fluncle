@@ -80,6 +80,15 @@ An **empty set renders nothing at all** — not an empty state, not a heading wi
 
 Accessibility gets an `aria-label` on the list (`More tracks on <entity>`), because an unlabelled list of links is an accessibility failure. It names the **tracks**, never the tier.
 
+### A recording renders once (the duplicate defence)
+
+A single recording reaches the catalogue under **several barcodes** — the same track on the original single, a compilation, a reissue — so a naive tracklist renders _"20 Man Down"_ twice and _"Selecta"_ twice. The graph pages hold one row per **recording**, and they do it in two layers, both display-level (the rows still exist; they are just not both shown):
+
+- **The stamped veto, in SQL.** Every catalogue read here (`listCatalogueTracksByAlbum`, and the grouped `listArtistCatalogue` / `listLabelCatalogue` reads in `catalogue-groups.ts`) drops any row an operator has marked `duplicate_of_track_id` or `dismissed_at`, alongside the finding anti-join — and drops it from the `count(*) over ()` total too, so the thin-content gate keys off the same set the page renders.
+- **The render-time fold, in the isolate.** The crawler leaves most twins **unstamped**, so each page folds its bounded slice by recording identity — the shared `matchKey` from `track-match.ts` (`dedupeByRecordingIdentity`), the exact identity the Rekordbox matcher uses, so a remix or VIP is never folded onto the original but `(Original Version)` is. One representative survives per identity, chosen deterministically: the **Spotify-anchored** row wins, then an **ISRC**-bearing one, then the **newest** release, then the lowest id. The slice is bounded (≤ `GRAPH_PAGE_CATALOGUE_LIMIT`), so this is the few-hundred-row isolate fold AGENTS.md permits, never a scan. The total the thin-content gate reads is the folded count, so a page of ten barcodes of three recordings is a three-track page, not a ten-track one.
+
+This is the render half only: it does not stamp anything or widen the catalogue's own duplicate graph (that heavier path — `readCatalogueIdentity`, the rank sweep — is deliberately not walked from a page load).
+
 ### The thin-content gate
 
 A page indexes (and enters the sitemap) only past **`ALBUM_INDEX_MIN_TRACKS` / `LABEL_INDEX_MIN_TRACKS` = 3 renderable tracks** — its findings **plus** the quieter rows, because both are real content on the page. Below it the page still serves 200 (deep links, link equity) but is `noindex, follow` and stays out of the sitemap.
