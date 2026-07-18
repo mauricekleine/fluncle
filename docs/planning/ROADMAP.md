@@ -355,7 +355,9 @@ Today `search_tracks` (the MCP tool + the submit-candidate flow) calls `searchTr
 
 **The open sub-question to settle when scoped:** coverage. Internal search only finds what we have crawled, so submitting a brand-new track not yet in the catalogue needs either a Spotify fallback for the submit-something-new case, or a submit flow that accepts a pasted Spotify URL directly (no search needed). Decide the fallback posture before cutting Spotify out of the submit path specifically; the DISCOVERY/browse read paths can go internal immediately.
 
-**Dependency:** this epic is the prerequisite for the archive-search tool in the tool-tiers epic above — build the internal catalogue search once, then both the MCP/ChatDnB search tool and every other surface read from it.
+**Shares a filter schema with the coming `/tracks` hub (2026-07-18).** A new root page will list ALL tracks behind a series of filters — `/tracks?bpm=170-175&era=2015&key=8A`. The search LLM tier already "emits FILTERS, never rows" (docs/search.md), so the hub and the internal catalogue search must share ONE filter schema (bpm range, era, key, …), not grow two divergent ones. When this epic lands the internal search, define the filter vocabulary once and let both the `/tracks` hub and the search read it. Awareness item, not a blocker for the tool-tiers rollout.
+
+**Not a dependency of the tool-tiers epic (corrected 2026-07-18).** An earlier note claimed this epic gated the tool-tiers archive-search tool. The tool-tiers RFC verified LIVE that `searchArchive` is ALREADY catalogue-inclusive (the one deliberate LEFT JOIN, `certified`-tagged rows), so the MCP/ChatDnB archive-search tool ships in Epic 1 with no dependency here. This epic is only about retiring the SPOTIFY candidate search on the submit/write path and collapsing `search_archive` → the canonical `search_tracks` name.
 
 ## The Fluncle models — the voice, the eye, the ear (idea, 2026-07-11)
 
