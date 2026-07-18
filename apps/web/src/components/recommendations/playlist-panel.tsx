@@ -127,7 +127,7 @@ export function PlaylistPanel({
   // its next fire, and read it back in the browser's locale + zone. Computed client-side and
   // only shown once the status query resolves the playlist, so there is no SSR/timezone
   // hydration split.
-  const nextRefreshLabel = useMemo(() => {
+  const refreshCadence = useMemo(() => {
     const fire = nextScheduledRun(
       { time: "07:00", tz: "Europe/Amsterdam", weekday: 5 },
       new Date().toISOString(),
@@ -143,7 +143,7 @@ export function PlaylistPanel({
       when,
     );
 
-    return `Refreshes every ${weekday} at ${time}`;
+    return `every ${weekday} at ${time}`;
   }, []);
 
   // The one CTA the header shows, by phase (the shelf-from-editions triggers): DRAFT offers
@@ -199,16 +199,21 @@ export function PlaylistPanel({
     }
   }
 
-  // The one meta fact the interface can't carry: the weekly freshening (or when it last
-  // landed, once minted). Everything else the header needs, the rows already say.
-  // The past fact only — when it last landed. The FUTURE (the weekly freshening) is now
-  // owned by the next-refresh line below, so the pre-playlist state keeps its cadence pitch
-  // while a synced playlist reads as a clean last/next pair with no duplicate cadence line.
-  const meta = !frontier.playlistUrl
+  // The one meta fact the interface can't carry: the weekly freshening. One line, above the
+  // CTA: the last refresh and the standing cadence joined on a middle dot ("Refreshed
+  // Jul 17, 2026 · every Friday at 7:00 AM"), so the button is never sandwiched between two
+  // near-identical lines. The cadence half appends only once the status query resolves the
+  // playlist client-side — the same guard the old below-button line rode, so the SSR render
+  // stays byte-stable and the cadence lands as a post-hydration update (no timezone split).
+  const lastLine = !frontier.playlistUrl
     ? "Refreshed every week"
     : frontier.lastSyncedAt
       ? `Refreshed ${formatDateLong(frontier.lastSyncedAt)}`
       : "";
+  const meta =
+    frontier.playlistUrl && lastLine && refreshCadence
+      ? `${lastLine} · ${refreshCadence}`
+      : lastLine;
 
   return (
     <section className="rec-playlist">
@@ -240,13 +245,6 @@ export function PlaylistPanel({
               )}
             </div>
           )}
-
-          {/* The refresh is automatic now (the weekly box timer), so the header states WHEN
-              the next one lands in the reader's own timezone rather than offering a manual
-              trigger. Quiet meta register, not a control. */}
-          {frontier.playlistUrl && nextRefreshLabel ? (
-            <p className="rec-playlist-meta">{nextRefreshLabel}</p>
-          ) : null}
 
           {/* The live region is mounted UNCONDITIONALLY and only its text toggles — a "Get
               playlist" click updates the text in a region already on the page, so a screen
