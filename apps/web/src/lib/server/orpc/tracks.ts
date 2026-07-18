@@ -3,6 +3,7 @@
 // op here and one spread line in the root — no other domain's file is touched.
 
 import { ORPCError } from "@orpc/server";
+import { clampFreshLimit, listFreshTracks } from "../fresh";
 import {
   decodeTrackCursor,
   getMixableTracks,
@@ -188,10 +189,24 @@ export function tracksHandlers(os: Implementer) {
     }
   });
 
+  // `list_fresh` — WHAT JUST CAME OUT: the flat, capped list of newest RELEASES over the trailing
+  // 30-day window (the release-date axis, the opposite of `list_tracks`' found-date feed). The lib
+  // read returns the unlit-safe shape verbatim (an uncertified row carries no logId/cover), so this
+  // is a thin pass-through; the tolerant `limit` string is clamped to [1, 100] (default 50).
+  const listFreshHandler = os.list_fresh.handler(async ({ input }) => {
+    try {
+      const limit = clampFreshLimit(input.limit === undefined ? undefined : Number(input.limit));
+      return await listFreshTracks({ limit });
+    } catch (error) {
+      throw apiFault(error);
+    }
+  });
+
   return {
     get_random_track: getRandomTrackHandler,
     get_similar_findings: getSimilarFindingsHandler,
     get_track: getTrack,
+    list_fresh: listFreshHandler,
     list_mixable_tracks: listMixableTracksHandler,
     list_tracks: listTracksHandler,
   };

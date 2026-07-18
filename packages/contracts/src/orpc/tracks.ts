@@ -6,6 +6,8 @@ import { oc } from "@orpc/contract";
 import * as z from "zod";
 import {
   FeedItemSchema,
+  FreshAlbumSchema,
+  FreshTrackSchema,
   MixCandidateSchema,
   MixtapeDTOSchema,
   TrackListItemSchema,
@@ -179,10 +181,38 @@ export const listMixableTracks = oc
   .output(z.object({ findings: z.array(MixCandidateSchema), ok: z.literal(true) }));
 
 /** The `tracks` domain's ops, merged into the root contract by `./index.ts`. */
+/**
+ * `list_fresh` → `GET /tracks/fresh` (operationId `listFresh`).
+ *
+ * WHAT JUST CAME OUT: the newest drum & bass RELEASES over a trailing 30-day window, newest release
+ * first, flat and capped (`limit`, a tolerant string, default 50, max 100). Ordered by
+ * `tracks.release_date` — NOT `findings.added_at` — so this is "just landed", never "Fluncle found"
+ * (VOICE.md's Found Rule; the opposite date axis from `list_tracks`). Every track is unlit-safe: an
+ * uncertified catalogue row carries no `logId` and no cover (the Unlit Rule, structural in the DTO).
+ * `albums` are the album entities those releases sit on.
+ */
+export const listFresh = oc
+  .route({
+    method: "GET",
+    operationId: "listFresh",
+    path: "/tracks/fresh",
+    summary: "List what just came out (newest releases)",
+    tags: ["Tracks"],
+  })
+  .input(z.object({ limit: z.string().optional() }))
+  .output(
+    z.object({
+      albums: z.array(FreshAlbumSchema),
+      tracks: z.array(FreshTrackSchema),
+      windowDays: z.number(),
+    }),
+  );
+
 export const tracksContract = {
   get_random_track: getRandomTrack,
   get_similar_findings: getSimilarFindings,
   get_track: getTrack,
+  list_fresh: listFresh,
   list_mixable_tracks: listMixableTracks,
   list_tracks: listTracks,
 };

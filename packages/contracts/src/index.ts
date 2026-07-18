@@ -67,6 +67,8 @@ import { type MixArtistSchema } from "./orpc/mix.js";
 import {
   type ClipDTOSchema,
   type EditionDTOSchema,
+  type FreshAlbumSchema,
+  type FreshTrackSchema,
   type MixtapeDTOSchema,
   type MixtapeSocialPostItemSchema,
   type PublicUserSchema,
@@ -345,6 +347,19 @@ export type TrackFeatures = z.infer<typeof TrackFeaturesSchema>;
  * wire. Field docs live on the schema.
  */
 export type TrackListItem = z.infer<typeof TrackListItemSchema>;
+
+/** One track on the flat `/fresh` list — unlit-safe (logId/cover present iff `certified`). */
+export type FreshTrack = z.infer<typeof FreshTrackSchema>;
+
+/** An album entity a fresh release sits on. */
+export type FreshAlbum = z.infer<typeof FreshAlbumSchema>;
+
+/** The `list_fresh` response body: newest RELEASES first, plus the records they sit on. */
+export type FreshTracksResponse = {
+  albums: FreshAlbum[];
+  tracks: FreshTrack[];
+  windowDays: number;
+};
 
 /**
  * Why one finding mixes out of another — a `/mix` candidate's reason chip. Inferred

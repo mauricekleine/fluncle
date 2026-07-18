@@ -225,6 +225,45 @@ export const MixCandidateSchema = MixTrackSchema.extend({
 }).meta({ id: "MixCandidate" });
 
 /**
+ * One track on the FLAT `/fresh` list (`list_fresh`) — what just came OUT, newest RELEASE first.
+ * Structurally unlit-safe like {@link MixTrackSchema}: a `certified` finding carries its `logId`
+ * coordinate and its `coverImageUrl`; an uncertified catalogue row carries NEITHER (present ⇔
+ * `certified`, so a consumer physically cannot render an uncertified row as a named finding — the
+ * Unlit Rule). `releaseDate` is the day the tune came OUT, never the day Fluncle found it (the Found
+ * Rule): a surface labels it "Released", never "Found".
+ */
+export const FreshTrackSchema = z
+  .object({
+    artists: z.array(z.string()),
+    bpm: z.number().optional(),
+    certified: z.boolean(),
+    /** The album cover. Present ⇔ `certified` (an uncertified row leads with nothing — Unlit Rule). */
+    coverImageUrl: z.string().optional(),
+    durationMs: z.number().optional(),
+    key: z.string().optional(),
+    /** The permanent coordinate. Present ⇔ `certified` (structurally). */
+    logId: z.string().optional(),
+    /** `YYYY-MM-DD` — the RELEASE date, never the Found date. */
+    releaseDate: z.string(),
+    spotifyUrl: z.string().optional(),
+    title: z.string(),
+  })
+  .meta({ id: "FreshTrack" });
+
+/** An album entity a fresh release sits on — the browse-graph half of `/fresh`. */
+export const FreshAlbumSchema = z
+  .object({
+    artists: z.array(z.string()),
+    coverImageUrl: z.string().optional(),
+    name: z.string(),
+    /** `YYYY-MM-DD` — the newest RELEASE date across the record's fresh tracks. */
+    releaseDate: z.string(),
+    /** `/album/<slug>` — always present; this row IS a minted album entity. */
+    slug: z.string(),
+  })
+  .meta({ id: "FreshAlbum" });
+
+/**
  * The radio.fluncle.com now-playing slot (`RadioNowPlaying` in ../index.ts; the
  * radio-broadcast RFC, Unit A). The server-authoritative position on the shared loop
  * — `currentTrack` + `offsetMs` is what's playing right now; `nextTrack` the

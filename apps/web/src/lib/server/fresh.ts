@@ -258,3 +258,96 @@ export async function listFreshReleases(now: Date = new Date()): Promise<FreshRe
 
   return { records, sections, windowDays: FRESH_WINDOW_DAYS };
 }
+
+/** The flat "fresh tracks" default + ceiling — a discovery list, not an infinite feed. */
+export const FRESH_TRACKS_DEFAULT = 50;
+export const FRESH_TRACKS_MAX = 100;
+
+/**
+ * One track on the FLAT fresh list — the shape the syndication surfaces (API, feed, MCP, CLI, SSH)
+ * read. A `certified` finding carries its Log ID coordinate and cover; an uncertified catalogue row
+ * carries NEITHER (the Unlit Rule is structural here — `logId`/`coverImageUrl` are present iff
+ * `certified`, so a consumer physically cannot render an uncertified row as a named finding). Every
+ * date is a RELEASE date (VOICE.md's Found Rule) — a surface labels it "Released", never "Found".
+ */
+export type FreshTrack = {
+  artists: string[];
+  bpm?: number;
+  certified: boolean;
+  coverImageUrl?: string;
+  durationMs?: number;
+  key?: string;
+  logId?: string;
+  releaseDate: string;
+  spotifyUrl?: string;
+  title: string;
+};
+
+/** The flat fresh payload: newest RELEASES first, plus the album entities they sit on. */
+export type FreshTracks = {
+  albums: FreshRecord[];
+  tracks: FreshTrack[];
+  windowDays: number;
+};
+
+/** Clamp the requested list size into `[1, FRESH_TRACKS_MAX]`, defaulting to {@link FRESH_TRACKS_DEFAULT}. */
+export function clampFreshLimit(limit?: number): number {
+  if (typeof limit !== "number" || !Number.isFinite(limit)) {
+    return FRESH_TRACKS_DEFAULT;
+  }
+  return Math.max(1, Math.min(FRESH_TRACKS_MAX, Math.floor(limit)));
+}
+
+/**
+ * The flat, capped fresh list every non-web surface reads: `listFreshReleases`' findings and
+ * catalogue rows folded into ONE newest-release-first list (a finding leads a catalogue row on a
+ * date tie — the lit register first), capped, plus the album records. Reuses `listFreshReleases`,
+ * so it inherits the same window bounds + index + the public-strip already applied to findings.
+ */
+export async function listFreshTracks(options?: {
+  limit?: number;
+  now?: Date;
+}): Promise<FreshTracks> {
+  const limit = clampFreshLimit(options?.limit);
+  const data = await listFreshReleases(options?.now);
+
+  const findings: FreshTrack[] = data.sections.flatMap((section) =>
+    section.findings.map((finding) => ({
+      artists: finding.artists,
+      bpm: finding.bpm,
+      certified: true,
+      coverImageUrl: finding.albumImageUrl,
+      durationMs: finding.durationMs,
+      key: finding.key,
+      logId: finding.logId,
+      releaseDate: finding.releaseDate ?? "",
+      spotifyUrl: finding.spotifyUrl,
+      title: finding.title,
+    })),
+  );
+  const catalogue: FreshTrack[] = data.sections.flatMap((section) =>
+    section.catalogue.map((track) => ({
+      artists: track.artists,
+      certified: false,
+      releaseDate: track.releaseDate,
+      spotifyUrl: track.spotifyUrl,
+      title: track.title,
+    })),
+  );
+
+  // Newest release first; on a date tie a certified finding leads (the lit register first), then the
+  // order is stable by title so the list is deterministic (no clock, no random — the AGENTS.md rule).
+  const tracks = [...findings, ...catalogue]
+    .sort((a, b) => {
+      if (a.releaseDate !== b.releaseDate) {
+        return a.releaseDate < b.releaseDate ? 1 : -1;
+      }
+      if (a.certified !== b.certified) {
+        return a.certified ? -1 : 1;
+      }
+      return a.title.localeCompare(b.title);
+    })
+    .slice(0, limit);
+
+  return { albums: data.records, tracks, windowDays: data.windowDays };
+}

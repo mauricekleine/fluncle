@@ -22,7 +22,7 @@ vi.mock("./db", async (importOriginal) => {
 });
 
 import { createIntegrationDb } from "./integration-db";
-import { FRESH_WINDOW_DAYS, listFreshReleases } from "./fresh";
+import { FRESH_WINDOW_DAYS, listFreshReleases, listFreshTracks } from "./fresh";
 
 // A fixed clock so the window boundaries are deterministic. Relative to this NOW:
 //   weekStart = 2026-07-10, windowStart = 2026-06-17, today = 2026-07-17.
@@ -246,5 +246,47 @@ describe("listFreshReleases", () => {
 
     // The lead artist's image (Spotify, no owned master) is the avatar — never the featured artist's.
     expect(row?.artistAvatarUrl).toBe("https://i.scdn.co/image/workforce");
+  });
+
+  it("flattens into a capped list, newest release first, unlit rows coordinate-free", async () => {
+    // A finding and a catalogue row released the SAME day — the certified finding must lead the tie.
+    await seedFinding({
+      artists: ["Line25"],
+      logId: "049.7.1F",
+      releaseDate: "2026-07-15",
+      trackId: "flat_f_15",
+    });
+    await seedCatalogueTrack({
+      artists: ["Cataract"],
+      releaseDate: "2026-07-15",
+      trackId: "flat_c_15",
+    });
+    // An older release in the window sorts below both.
+    await seedCatalogueTrack({
+      artists: ["Older"],
+      releaseDate: "2026-07-01",
+      trackId: "flat_c_01",
+    });
+
+    const all = await listFreshTracks({ now: NOW });
+    expect(all.tracks.map((track) => track.title)).toEqual([
+      "Title flat_f_15",
+      "Title flat_c_15",
+      "Title flat_c_01",
+    ]);
+
+    // The certified finding carries its coordinate; an uncertified row carries NONE (the Unlit Rule).
+    const finding = all.tracks[0];
+    expect(finding?.certified).toBe(true);
+    expect(finding?.logId).toBe("049.7.1F");
+    const unlit = all.tracks[1];
+    expect(unlit?.certified).toBe(false);
+    expect(unlit?.logId).toBeUndefined();
+    expect(unlit?.coverImageUrl).toBeUndefined();
+
+    // The limit caps the flat list.
+    const capped = await listFreshTracks({ limit: 2, now: NOW });
+    expect(capped.tracks).toHaveLength(2);
+    expect(capped.tracks[0]?.title).toBe("Title flat_f_15");
   });
 });

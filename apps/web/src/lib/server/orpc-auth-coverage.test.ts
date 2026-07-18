@@ -137,6 +137,9 @@ const PUBLIC_UNAUTH_OPS = new Set<string>([
   // tool a stranger uses with no account, and it exposes only what is already public on
   // every track chip (keys, BPMs, artist names). The `/mix` page's own gate is a live
   // archive-depth measurement, not auth.
+  // What just came out — newest RELEASES over a 30-day window. Anonymous by design: it lists what
+  // is already public everywhere (Spotify), and uncertified rows carry no coordinate (the Unlit Rule).
+  "list_fresh",
   "list_mix_openers",
   "list_mixable_artists",
   "list_mixable_tracks",

@@ -535,6 +535,20 @@ export const SURFACES: readonly Surface[] = [
   {
     apiFormat: "application/json",
     discoveryUrl: `${SITE}/api/v1/openapi.json`,
+    // Ordered by tracks.release_date, NOT findings.added_at — "what just came OUT", the release-date
+    // twin of the found-date /api/v1/tracks feed. Uncertified rows carry no coordinate (Unlit Rule).
+    exposedContent: [
+      "what just came out — newest drum & bass releases over a 30-day window, flat (limit max 100)",
+    ],
+    kind: "api",
+    name: "api.fresh",
+    route: "/api/v1/tracks/fresh",
+    url: `${SITE}/api/v1/tracks/fresh`,
+    weights: { web: "secondary" },
+  },
+  {
+    apiFormat: "application/json",
+    discoveryUrl: `${SITE}/api/v1/openapi.json`,
     exposedContent: ["published mixtapes as JSON"],
     kind: "api",
     name: "api.mixtapes",

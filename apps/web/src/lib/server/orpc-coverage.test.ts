@@ -92,6 +92,7 @@ const PUBLIC_ROUTE_OPS: Record<string, string> = {
   "GET /search/archive": "search_archive",
   "GET /stories": "list_stories",
   "GET /tracks": "list_tracks",
+  "GET /tracks/fresh": "list_fresh",
   "GET /tracks/random": "get_random_track",
   "GET /tracks/{idOrLogId}": "get_track",
   // The `/mix` set-builder rail (RFC mixability-engine). Contract-only oRPC — no
