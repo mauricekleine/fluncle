@@ -21,6 +21,9 @@ const countArtistFindings = vi.hoisted(() => vi.fn<() => Promise<number>>());
 const labelSlug = vi.hoisted(() => vi.fn<(name: string) => string | undefined>());
 const getLabelBySlug = vi.hoisted(() => vi.fn<(slug: string) => Promise<unknown>>());
 const getConfirmedAliasNames = vi.hoisted(() => vi.fn<() => Promise<string[]>>());
+const listFreshTracks = vi.hoisted(() =>
+  vi.fn<() => Promise<{ albums: unknown[]; tracks: unknown[]; windowDays: number }>>(),
+);
 
 // A faithful stand-in for the real deterministic slug helpers (the DB-touching modules stay
 // mocked). "Netsky" → "netsky", "Hospital Records" → "hospital-records" — enough to prove the
@@ -33,6 +36,7 @@ function toSlug(name: string): string {
 }
 
 vi.mock("./env", () => ({ readOptionalEnv }));
+vi.mock("./fresh", () => ({ listFreshTracks }));
 vi.mock("./search", () => ({ searchArchive: vi.fn() }));
 vi.mock("./log-resolver", () => ({ resolveLogPageTarget: vi.fn() }));
 vi.mock("./status", () => ({ getServiceStatuses: vi.fn() }));
@@ -101,6 +105,10 @@ beforeEach(() => {
   getLabelBySlug.mockResolvedValue(undefined);
   getConfirmedAliasNames.mockReset();
   getConfirmedAliasNames.mockResolvedValue([]);
+  // list_fresh defaults to "nothing came out" so an unrelated test never trips it; the fresh
+  // suite overrides it with the release rows it needs.
+  listFreshTracks.mockReset();
+  listFreshTracks.mockResolvedValue({ albums: [], tracks: [], windowDays: 30 });
 });
 
 afterEach(() => {
@@ -167,6 +175,7 @@ describe("buildChatTools — the MCP hands", () => {
       "get_random_track",
       "get_status",
       "get_track",
+      "list_fresh",
       "list_tracks",
       "search_archive",
     ]);
@@ -333,6 +342,50 @@ describe("buildChatTools — the MCP hands", () => {
 
     expect(getTracksByLogIds).toHaveBeenCalledTimes(1);
     const lookedUp = getTracksByLogIds.mock.calls[0]?.[0] ?? [];
+    expect(lookedUp).toContain("004.7.2I");
+    expect(lookedUp).not.toContain("999.9.9Z");
+  });
+
+  it("list_fresh returns only certified findings — an uncertified release never reaches the model", async () => {
+    listFreshTracks.mockResolvedValue({
+      albums: [],
+      tracks: [
+        {
+          artists: ["Nu:Tone"],
+          certified: true,
+          coverImageUrl: "https://cover.example/better-places.jpg",
+          logId: "004.7.2I",
+          releaseDate: "2026-07-15",
+          title: "Better Places",
+        },
+        {
+          artists: ["Someone"],
+          certified: false,
+          // An uncertified catalogue release can carry a coordinate-shaped id; it must still
+          // never be named or hydrated (the Unlit Rule at the wire).
+          logId: "999.9.9Z",
+          releaseDate: "2026-07-16",
+          title: "An Uncertified Cut",
+        },
+      ],
+      windowDays: 30,
+    });
+
+    const tools = buildChatTools();
+    const execute = tools.list_fresh?.execute;
+    if (typeof execute !== "function") {
+      throw new Error("list_fresh executor missing");
+    }
+
+    const result = (await execute({}, {} as never)) as {
+      findings: { coordinate?: string; title: string }[];
+    };
+
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings[0]?.title).toBe("Better Places");
+    expect(result.findings[0]?.coordinate).toBe("004.7.2I");
+    // The uncertified release's logId is never even hydrated (the filter is BEFORE the hydrator).
+    const lookedUp = getTracksByLogIds.mock.calls.at(-1)?.[0] ?? [];
     expect(lookedUp).toContain("004.7.2I");
     expect(lookedUp).not.toContain("999.9.9Z");
   });

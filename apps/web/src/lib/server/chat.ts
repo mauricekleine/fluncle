@@ -48,6 +48,7 @@ import {
   toArtistSlug,
 } from "./artists";
 import { readOptionalEnv } from "./env";
+import { type FreshTrack, listFreshTracks } from "./fresh";
 import { getConfirmedAliasNames, getLabelBySlug, labelSlug } from "./labels";
 import { resolveLogPageTarget } from "./log-resolver";
 import { searchArchive } from "./search";
@@ -107,6 +108,7 @@ THE ARCHIVE:
 - Your findings are the tracks you have personally certified. A finding has a permanent Log ID coordinate like 004.7.2I; a mixtape carries the same shape with the letter F in the middle slot (019.F.1A). Use get_track to resolve a coordinate someone gives you.
 - You only ever speak about your certified findings — the tools only return those. If it is not in a tool result, it is not something you talk about.
 - search_archive is your dig: it reaches the whole archive, including "sounds like <a real track>" which anchors on a real finding and returns the sonically nearest ones. list_tracks pages your most recent findings; get_random_track pulls one; get_status checks whether your systems are up.
+- list_fresh is what just came out: the findings whose track was RELEASED in the trailing month, freshest release first. These landed recently out in the wider world, so you say a tune just dropped or came out this month, never that you just found it. When a record came out is not when you found it.
 - get_artist and get_label resolve one artist or label you have logged, by name, and hand back that entity's findings — reach for them when someone asks about a specific artist or label you have found.
 - build_set starts from one of your findings — a Log ID coordinate or a track name you have logged — and chains an ordered set of what mixes in cleanly after it, each step carrying the reason it mixes. It only ever chains certified findings, and returns nothing when you have not logged a starting point.
 
@@ -393,6 +395,42 @@ export function buildChatTools() {
           .describe("A Log ID coordinate (004.7.2I / 019.F.1A) or a Spotify track id or URL."),
       }),
     }),
+    list_fresh: tool({
+      description:
+        "List the drum & bass that just CAME OUT — Fluncle's certified findings whose track was RELEASED in the trailing month, freshest release first. Use when someone asks what is new, what just dropped, or what came out lately. These are RELEASE dates, not the dates he found the tune; it returns only certified findings.",
+      execute: async ({ limit }) => {
+        const fresh = await listFreshTracks({ limit: clampInt(limit, MAX_RECENT, 12) });
+
+        // THE GROUNDING BOUNDARY: only certified findings reach the model. An uncertified
+        // catalogue row on the fresh list carries no coordinate and is never something Fluncle
+        // speaks about — drop it before the hydrator is even asked (the Unlit Rule, at the wire).
+        const certified = fresh.tracks.filter((track) => track.certified && track.logId);
+
+        // Hydrate the certified logIds to full findings so each card shows its cover, chips, and a
+        // play control — the same batch hydrate search uses, the exact `list_tracks` compaction
+        // path. A logId the hydrator misses falls back to the fresh row's own fields (still
+        // certified, just without the display extras).
+        const hydrated = await getTracksByLogIds(
+          certified.flatMap((track) => (track.logId ? [track.logId] : [])),
+        );
+        const findings = certified.map((track) => {
+          const item = track.logId ? hydrated[track.logId] : undefined;
+
+          return item ? compactFinding(item) : freshTrackToFinding(track);
+        });
+
+        return { findings, ok: true };
+      },
+      inputSchema: z.object({
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(MAX_RECENT)
+          .optional()
+          .describe("How many (default 12)."),
+      }),
+    }),
     list_tracks: tool({
       description:
         "List Fluncle's most recent certified findings, newest first. Use to walk a recent night or see what he has been logging.",
@@ -499,6 +537,27 @@ function mixTrackToFinding(candidate: MixCandidate) {
     key: candidate.key,
     spotifyUrl: candidate.spotifyUrl,
     title: candidate.title,
+  });
+}
+
+/**
+ * A fresh-release row reduced to the finding fields the card needs — the fallback for a certified
+ * release the batch hydrator missed, so it still shows a cover, chips, and its coordinate. `list_fresh`
+ * hydrates the full DTO when it can (cover, note, hasPreview); this is the thin certified floor. A
+ * fresh row carries no previewUrl, so `hasPreview` is false. The date it carries is a RELEASE date,
+ * so the model never speaks of it as freshly found (the Found Rule, echoed on the wire).
+ */
+function freshTrackToFinding(track: FreshTrack) {
+  return dropEmpty({
+    albumImageUrl: track.coverImageUrl,
+    artists: track.artists,
+    bpm: track.bpm === undefined ? undefined : Math.round(track.bpm),
+    coordinate: track.logId,
+    durationMs: track.durationMs,
+    hasPreview: false,
+    key: track.key,
+    spotifyUrl: track.spotifyUrl,
+    title: track.title,
   });
 }
 
