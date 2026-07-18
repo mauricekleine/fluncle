@@ -10,19 +10,14 @@
 // (GET/POST /me/frontier-playlist), so the panel ships whether or not that endpoint has
 // merged: closed reads as one short line under a disabled button and nothing more.
 
-import {
-  ArrowClockwiseIcon,
-  MagnifyingGlassIcon,
-  PlaylistIcon,
-  PlusIcon,
-  XIcon,
-} from "@phosphor-icons/react";
+import { MagnifyingGlassIcon, PlaylistIcon, PlusIcon, XIcon } from "@phosphor-icons/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@fluncle/ui/components/button";
 import { Input } from "@fluncle/ui/components/input";
 import { SpotifyIcon } from "@/components/platform-icons";
 import { formatDateLong } from "@/lib/format";
+import { nextScheduledRun } from "@/lib/next-run";
 import { type KeyNotation, useKeyNotation } from "@/lib/key-notation";
 import { albumCoverAtSize } from "@/lib/media";
 import { cn } from "@/lib/utils";
@@ -122,6 +117,31 @@ export function PlaylistPanel({
   });
 
   const frontier = statusQuery.data ?? FRONTIER_CLOSED;
+
+  // When the next automatic refresh lands, in the reader's OWN timezone. The box re-mirrors
+  // every Frontier playlist weekly on a Fri 07:00 Amsterdam host timer
+  // (docs/agents/hermes/frontier-refresh-timer); we take that fixed wall-clock schedule, find
+  // its next fire, and read it back in the browser's locale + zone. Computed client-side and
+  // only shown once the status query resolves the playlist, so there is no SSR/timezone
+  // hydration split.
+  const nextRefreshLabel = useMemo(() => {
+    const fire = nextScheduledRun(
+      { time: "07:00", tz: "Europe/Amsterdam", weekday: 5 },
+      new Date().toISOString(),
+    );
+
+    if (!fire) {
+      return "";
+    }
+
+    const when = new Date(fire);
+    const weekday = new Intl.DateTimeFormat(undefined, { weekday: "long" }).format(when);
+    const time = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(
+      when,
+    );
+
+    return `Refreshes every ${weekday} at ${time}`;
+  }, []);
 
   const mint = useMutation({
     mutationFn: async () => {
@@ -232,28 +252,13 @@ export function PlaylistPanel({
 
           <div className="rec-playlist-cta">
             {frontier.playlistUrl ? (
-              <>
-                <Button
-                  nativeButton={false}
-                  render={
-                    <a href={frontier.playlistUrl} rel="noopener noreferrer" target="_blank" />
-                  }
-                >
-                  <SpotifyIcon />
-                  Open in Spotify
-                </Button>
-                {frontier.mintingOpen ? (
-                  <Button
-                    disabled={mint.isPending}
-                    onClick={() => mint.mutate()}
-                    type="button"
-                    variant="outline"
-                  >
-                    <ArrowClockwiseIcon aria-hidden="true" weight="bold" />
-                    Refresh playlist
-                  </Button>
-                ) : null}
-              </>
+              <Button
+                nativeButton={false}
+                render={<a href={frontier.playlistUrl} rel="noopener noreferrer" target="_blank" />}
+              >
+                <SpotifyIcon />
+                Open in Spotify
+              </Button>
             ) : (
               <Button
                 disabled={!hasPicks || !frontier.mintingOpen || mint.isPending}
@@ -265,6 +270,13 @@ export function PlaylistPanel({
               </Button>
             )}
           </div>
+
+          {/* The refresh is automatic now (the weekly box timer), so the header states WHEN
+              the next one lands in the reader's own timezone rather than offering a manual
+              trigger. Quiet meta register, not a control. */}
+          {frontier.playlistUrl && nextRefreshLabel ? (
+            <p className="rec-playlist-meta">{nextRefreshLabel}</p>
+          ) : null}
 
           {/* The only note the header is allowed: WHY the action lies still — and only
               while it does. */}
