@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { fluncleEntityId } from "./fluncle-links";
 import { serializeJsonLd } from "./json-ld";
 import { definitionalProse } from "./log-prose";
 import {
@@ -61,6 +62,35 @@ describe("musicRecordingJsonLd (the log page schema)", () => {
       track.discogsReleaseUrl,
     ]);
     expect(jsonLd.url).toBe("https://www.fluncle.com/log/004.7.2I");
+  });
+
+  it("omits recordLabel when the finding carries no label entity", () => {
+    // The base fixture has no label/labelSlug — no recording→label edge to draw.
+    expect(jsonLd).not.toHaveProperty("recordLabel");
+  });
+
+  it("closes the recording→label edge (recordLabel → the label page's Organization @id)", () => {
+    const withLabel = musicRecordingJsonLd(
+      { ...track, label: "Hospital Records", labelSlug: "hospital-records" },
+      "https://img/cover.jpg",
+    );
+
+    expect(withLabel.recordLabel).toEqual({
+      "@id": "https://www.fluncle.com/label/hospital-records#organization",
+      "@type": "Organization",
+      name: "Hospital Records",
+      url: "https://www.fluncle.com/label/hospital-records",
+    });
+  });
+
+  it("omits recordLabel when the label has no resolved /label page (a bare string is silent)", () => {
+    // A label string with no entity has no `@id` to point at — the honest degrade is silence.
+    const bareLabel = musicRecordingJsonLd(
+      { ...track, label: "Some Bootleg", labelSlug: undefined },
+      "https://img/cover.jpg",
+    );
+
+    expect(bareLabel).not.toHaveProperty("recordLabel");
   });
 
   it("omits the optional fields when the finding lacks them (the degraded render)", () => {
@@ -347,6 +377,11 @@ describe("videoObjectJsonLd (the finding's video schema)", () => {
     expect(jsonLd.url).toBe("https://www.fluncle.com/log/004.7.2I");
   });
 
+  it("is created + published BY the one canonical Fluncle entity node (@id)", () => {
+    expect(jsonLd.creator).toEqual({ "@id": fluncleEntityId });
+    expect(jsonLd.publisher).toEqual({ "@id": fluncleEntityId });
+  });
+
   it("mirrors the visible prose and dates the upload from the freshest stamp", () => {
     expect(jsonLd.description).toBe(definitionalProse(track));
     // A full ISO 8601 datetime WITH a timezone (Google's VideoObject requirement) —
@@ -418,6 +453,28 @@ describe("recordLabelJsonLd (the label page schema — U2a alternateName)", () =
       organizationOf({ ...base, bio: "Medschool is Hospital Records' sister label." }).description,
     ).toBe("Medschool is Hospital Records' sister label.");
   });
+
+  it("emits the Organization's sameAs from the MusicBrainz + Discogs ids, and omits it when absent", () => {
+    // No anchors ⇒ no sameAs key at all.
+    expect(organizationOf(base)).not.toHaveProperty("sameAs");
+
+    expect(organizationOf({ ...base, discogsLabelId: 1111, mbLabelId: "mbid-med" }).sameAs).toEqual(
+      ["https://musicbrainz.org/label/mbid-med", "https://www.discogs.com/label/1111"],
+    );
+
+    // Only one anchor present ⇒ a one-element sameAs, not a hole.
+    expect(organizationOf({ ...base, mbLabelId: "mbid-med" }).sameAs).toEqual([
+      "https://musicbrainz.org/label/mbid-med",
+    ]);
+  });
+
+  it("carries the label's own logo as the Organization's logo only when resolved", () => {
+    expect(organizationOf(base)).not.toHaveProperty("logo");
+
+    expect(organizationOf({ ...base, logoImageUrl: "https://img/medschool-logo.png" }).logo).toBe(
+      "https://img/medschool-logo.png",
+    );
+  });
 });
 
 describe("musicAlbumJsonLd (the album page schema)", () => {
@@ -444,6 +501,61 @@ describe("musicAlbumJsonLd (the album page schema)", () => {
         bio: "Colours in the Dark is the third studio album by Netsky, released in 2019.",
       }).description,
     ).toBe("Colours in the Dark is the third studio album by Netsky, released in 2019.");
+  });
+
+  it("emits datePublished, gtin13, and the MusicBrainz sameAs when the record carries them", () => {
+    const jsonLd = musicAlbumJsonLd({
+      ...base,
+      releaseDate: "2019-08-02",
+      releaseGroupMbid: "rg-mbid-123",
+      upc: "0123456789012",
+    });
+
+    expect(jsonLd.datePublished).toBe("2019-08-02");
+    expect(jsonLd.gtin13).toBe("0123456789012");
+    expect(jsonLd.sameAs).toEqual(["https://musicbrainz.org/release-group/rg-mbid-123"]);
+  });
+
+  it("omits datePublished, gtin13, and sameAs when the record carries none", () => {
+    const jsonLd = musicAlbumJsonLd(base);
+
+    expect(jsonLd).not.toHaveProperty("datePublished");
+    expect(jsonLd).not.toHaveProperty("gtin13");
+    expect(jsonLd).not.toHaveProperty("sameAs");
+  });
+
+  it("carries each finding's duration, ISRC, and datePublished on its track MusicRecording (G1)", () => {
+    const jsonLd = musicAlbumJsonLd({
+      ...base,
+      tracks: [
+        {
+          artists: ["Netsky"],
+          durationMs: 215_000,
+          isrc: "GBKCF1900759",
+          logId: "004.7.2I",
+          releaseDate: "2019-08-02",
+          title: "Nobody Else",
+        },
+        // A quieter catalogue row carries none of the per-track facts — it stays spare.
+        { artists: ["Netsky"], spotifyUrl: "https://open.spotify.com/track/x", title: "Deep cut" },
+      ],
+    });
+
+    const list = jsonLd.track as {
+      itemListElement: Array<{ item: Record<string, unknown> }>;
+    };
+    const finding = list.itemListElement[0]?.item;
+    const catalogue = list.itemListElement[1]?.item;
+
+    expect(finding).toMatchObject({
+      datePublished: "2019-08-02",
+      duration: "PT3M35S",
+      isrcCode: "GBKCF1900759",
+      url: "https://www.fluncle.com/log/004.7.2I",
+    });
+    expect(catalogue).not.toHaveProperty("duration");
+    expect(catalogue).not.toHaveProperty("isrcCode");
+    expect(catalogue).not.toHaveProperty("datePublished");
   });
 });
 
@@ -473,6 +585,12 @@ describe("mixtapeAlbumJsonLd", () => {
 
     expect(jsonLd["@type"]).toBe("MusicAlbum");
     expect(jsonLd.albumProductionType).toBe("https://schema.org/DJMixAlbum");
+    // The mix is by — and published by — the ONE canonical entity node (@id), never a dangling
+    // /about Person that reads as a different thing.
+    expect(jsonLd.byArtist).toEqual({ "@id": fluncleEntityId, "@type": "Person", name: "Fluncle" });
+    expect(jsonLd.publisher).toEqual({ "@id": fluncleEntityId });
+    // numTracks counts the renderable members (those with a /log coordinate).
+    expect(jsonLd.numTracks).toBe(1);
     expect(jsonLd.identifier).toEqual([
       { "@type": "PropertyValue", propertyID: "fluncle-log-id", value: "019.F.1A" },
       { "@type": "PropertyValue", propertyID: "fluncle-log-id", value: "fluncle://019.F.1A" },
@@ -488,5 +606,26 @@ describe("mixtapeAlbumJsonLd", () => {
         },
       ],
     });
+    // No recordedAt on this fixture ⇒ no datePublished key (never a null).
+    expect(jsonLd).not.toHaveProperty("datePublished");
+  });
+
+  it("dates the album from recordedAt (the day the set was recorded)", () => {
+    const jsonLd = mixtapeAlbumJsonLd({
+      addedAt: "2026-06-18T21:00:00.000Z",
+      artists: ["Fluncle"],
+      externalUrls: {},
+      logId: "019.F.1A",
+      memberCount: 0,
+      members: [],
+      recordedAt: "2026-06-14T22:00:00.000Z",
+      status: "published",
+      title: "Checkpoint one",
+      type: "mixtape",
+    });
+
+    expect(jsonLd.datePublished).toBe("2026-06-14");
+    // An empty tracklist ⇒ numTracks 0.
+    expect(jsonLd.numTracks).toBe(0);
   });
 });

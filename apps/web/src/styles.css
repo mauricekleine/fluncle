@@ -2009,6 +2009,12 @@ body::before {
   width: min(6.5rem, 100%);
 }
 
+/* The artist page masthead portrait: the entity's own face above its name. Larger than a
+   grid card, cover-led and quiet (the monogram fallback covers an unresolved avatar). */
+.artist-masthead-avatar {
+  width: min(5rem, 40%);
+}
+
 .artist-avatar-grid a:hover .artist-card-avatar,
 .artist-avatar-grid a:focus-visible .artist-card-avatar {
   border-color: color-mix(in oklch, var(--primary) 42%, transparent);

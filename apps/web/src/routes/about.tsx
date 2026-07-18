@@ -1,21 +1,10 @@
 import { Link, createFileRoute } from "@tanstack/react-router";
 import {
-  blueskyUrl,
   chromeExtensionUrl,
-  discogsUrl,
-  instagramUrl,
-  lastfmUrl,
-  mixcloudUrl,
-  musicbrainzUrl,
+  fluncleEntityId,
+  fluncleSameAs,
   onionUrl,
   siteUrl,
-  soundcloudUrl,
-  spotifyPlaylistUrl,
-  telegramUrl,
-  tiktokUrl,
-  twitchUrl,
-  wikidataUrl,
-  youtubeUrl,
 } from "@/lib/fluncle-links";
 import { fluncleDescription, fluncleMetaDescription } from "@/lib/identity";
 import { jsonLdScript } from "@/lib/json-ld";
@@ -95,29 +84,19 @@ export function faqAnchor(question: string): string {
 
 function aboutHead() {
   const pageUrl = `${siteUrl}/about`;
+  // THE ONE canonical Fluncle entity node — declared once, here, and referenced by `@id`
+  // everywhere else (the home WebSite's `publisher`, every MusicPlaylist/MusicAlbum `creator`, the
+  // reach page's `interactionStatistic` carrier, the VideoObjects, the mixtape `byArtist`). It is a
+  // `Person`, not a `MusicGroup`: Wikidata P31=Q5 and MusicBrainz both say human, and llms.txt says
+  // "a single selector, not a team". The full `sameAs` identity block lives ONCE, on this node.
   const entity = {
     "@context": "https://schema.org",
-    "@type": "MusicGroup",
+    "@id": fluncleEntityId,
+    "@type": "Person",
     description: fluncleDescription,
-    genre: "Drum and Bass",
     image: `${siteUrl}/fluncle-cover.png`,
     name: "Fluncle",
-    sameAs: [
-      spotifyPlaylistUrl,
-      telegramUrl,
-      tiktokUrl,
-      instagramUrl,
-      blueskyUrl,
-      youtubeUrl,
-      mixcloudUrl,
-      soundcloudUrl,
-      twitchUrl,
-      onionUrl,
-      musicbrainzUrl,
-      wikidataUrl,
-      lastfmUrl,
-      discogsUrl,
-    ],
+    sameAs: fluncleSameAs,
     url: `${siteUrl}/`,
   };
   const faqPage = {

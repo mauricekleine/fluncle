@@ -37,34 +37,55 @@ const description =
  * `</script>` in a Spotify-sourced title can't break out — the stored-XSS sink).
  */
 function freshItemList(data: FreshReleases): Record<string, unknown> {
-  type Entry = { artists: string[]; title: string; url?: string };
+  type Entry = { artists: string[]; releaseDate?: string; title: string; url?: string };
   const entries: Entry[] = data.sections.flatMap((section) => [
     ...section.findings.flatMap((finding) =>
       finding.logId
-        ? [{ artists: finding.artists, title: finding.title, url: logPageUrl(finding.logId) }]
+        ? [
+            {
+              artists: finding.artists,
+              releaseDate: finding.releaseDate,
+              title: finding.title,
+              url: logPageUrl(finding.logId),
+            },
+          ]
         : [],
     ),
     ...section.catalogue.map((track) => ({
       artists: track.artists,
+      // The unlit row's own release date — the whole page is ordered by it, so the structured
+      // data carries it too (this IS "what just came out").
+      releaseDate: track.releaseDate,
       title: track.title,
       url: track.spotifyUrl,
     })),
   ]);
 
-  return {
-    "@context": "https://schema.org",
+  // The rendered tracks as an ItemList, riding as the `mainEntity` of a `CollectionPage` (the hub
+  // shape the graph indexes now use) with `numberOfItems` so the list's size is machine-readable.
+  const itemList = {
     "@type": "ItemList",
     itemListElement: entries.map((entry, index) => ({
       "@type": "ListItem",
       item: {
         "@type": "MusicRecording",
         byArtist: entry.artists.map((name) => ({ "@type": "MusicGroup", name })),
+        // The release date — the one fact this page is sorted by — as each recording's
+        // `datePublished`. Present on every row (both halves carry a release_date).
+        ...(entry.releaseDate ? { datePublished: entry.releaseDate } : {}),
         genre: "Drum and Bass",
         name: entry.title,
         ...(entry.url ? { url: entry.url } : {}),
       },
       position: index + 1,
     })),
+    numberOfItems: entries.length,
+  };
+
+  return {
+    "@context": "https://schema.org",
+    "@type": "CollectionPage",
+    mainEntity: itemList,
     name: "New drum & bass releases",
     url: `${siteUrl}/fresh`,
   };

@@ -64,7 +64,20 @@ export function graphPageTracks(
   return [
     ...findings.flatMap((finding) =>
       finding.logId
-        ? [{ artists: finding.artists, logId: finding.logId, title: finding.title }]
+        ? [
+            {
+              artists: finding.artists,
+              // The finding's per-track facts (G1) — its length, ISRC, and release date — so the
+              // graph page's JSON-LD MusicRecordings carry duration/isrcCode/datePublished. All
+              // live on the finding's TrackListItem already; the quieter catalogue rows below
+              // carry none of them (they stay as spare as they render).
+              durationMs: finding.durationMs,
+              isrc: finding.isrc,
+              logId: finding.logId,
+              releaseDate: finding.releaseDate,
+              title: finding.title,
+            },
+          ]
         : [],
     ),
     ...catalogue.map((track) => ({

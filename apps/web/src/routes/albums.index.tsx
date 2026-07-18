@@ -49,16 +49,22 @@ const description = "Every record Fluncle has found a banger on, mapped across t
 
 function albumsHead(loaderData: AlbumsPageData | undefined) {
   // The ItemList stays Fluncle's CURATED list (the findings section only): the catalogue records'
-  // pages are already carried by the sitemap.
-  const itemList = {
+  // pages are already carried by the sitemap. It rides as the `mainEntity` of a `CollectionPage`,
+  // carrying `numberOfItems` so the list's size is machine-readable without counting.
+  const albums = loaderData?.findings ?? [];
+  const collectionPage = {
     "@context": "https://schema.org",
-    "@type": "ItemList",
-    itemListElement: loaderData?.findings.map((album, index) => ({
-      "@type": "ListItem",
-      name: album.name,
-      position: index + 1,
-      url: `${siteUrl}/album/${encodeURIComponent(album.slug)}`,
-    })),
+    "@type": "CollectionPage",
+    mainEntity: {
+      "@type": "ItemList",
+      itemListElement: albums.map((album, index) => ({
+        "@type": "ListItem",
+        name: album.name,
+        position: index + 1,
+        url: `${siteUrl}/album/${encodeURIComponent(album.slug)}`,
+      })),
+      numberOfItems: albums.length,
+    },
     name: "Fluncle's albums",
     url: `${siteUrl}/albums`,
   };
@@ -72,8 +78,11 @@ function albumsHead(loaderData: AlbumsPageData | undefined) {
       { content: description, property: "og:description" },
       { content: `${siteUrl}/fluncle-cover.png`, property: "og:image" },
       { content: `${siteUrl}/albums`, property: "og:url" },
+      { content: "summary_large_image", name: "twitter:card" },
+      { content: title, name: "twitter:title" },
+      { content: description, name: "twitter:description" },
     ],
-    scripts: [jsonLdScript(itemList)],
+    scripts: [jsonLdScript(collectionPage)],
   };
 }
 

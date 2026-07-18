@@ -16,23 +16,7 @@ import { StoriesDialog } from "@/components/stories/stories-dialog";
 import { TrackRow } from "@/components/track-row";
 import { ScrollArea } from "@fluncle/ui/components/scroll-area";
 import { TooltipProvider } from "@fluncle/ui/components/tooltip";
-import {
-  blueskyUrl,
-  discogsUrl,
-  instagramUrl,
-  lastfmUrl,
-  mixcloudUrl,
-  musicbrainzUrl,
-  onionUrl,
-  siteUrl,
-  soundcloudUrl,
-  spotifyPlaylistUrl,
-  telegramUrl,
-  tiktokUrl,
-  twitchUrl,
-  wikidataUrl,
-  youtubeUrl,
-} from "@/lib/fluncle-links";
+import { fluncleEntityId, fluncleWebsiteId, siteUrl, telegramUrl } from "@/lib/fluncle-links";
 import { fluncleAsciiLogo, fluncleDescription } from "@/lib/identity";
 import { jsonLdScript } from "@/lib/json-ld";
 import { type FeedItem } from "@/lib/mixtapes";
@@ -107,42 +91,29 @@ export const Route = createFileRoute("/")({
     // can't break out of the <script> (stored-XSS sink, security review).
     scripts: [
       // The site-level entity block (no SearchAction: there is no search results
-      // page, and schema must mirror what the page actually does).
+      // page, and schema must mirror what the page actually does). It carries the WebSite's own
+      // `@id` and is `publisher`ed BY the ONE canonical Fluncle node (`@id`, declared on /about) —
+      // the home page (highest authority, hit first) points at the same entity everything else does.
       jsonLdScript({
         "@context": "https://schema.org",
+        "@id": fluncleWebsiteId,
         "@type": "WebSite",
         description: fluncleDescription,
         name: "Fluncle",
+        publisher: { "@id": fluncleEntityId },
         url: `${siteUrl}/`,
       }),
       jsonLdScript({
         "@context": "https://schema.org",
         "@type": "MusicPlaylist",
+        // The mix is Fluncle's — reference the ONE canonical node rather than re-declaring the
+        // full identity graph here (the `sameAs` block lives once, on that node at /about).
+        creator: { "@id": fluncleEntityId },
         description: fluncleDescription,
         genre: "Drum and Bass",
         image: `${siteUrl}/fluncle-cover.png`,
         name: "Fluncle's Findings",
         numTracks: loaderData?.totalCount,
-        // The full identity graph, matching /about's MusicGroup so the home
-        // page (highest authority, hit first by crawlers) declares the same
-        // corroboration anchors. Same order as /about so the entity reads
-        // identically everywhere.
-        sameAs: [
-          spotifyPlaylistUrl,
-          telegramUrl,
-          tiktokUrl,
-          instagramUrl,
-          blueskyUrl,
-          youtubeUrl,
-          mixcloudUrl,
-          soundcloudUrl,
-          twitchUrl,
-          onionUrl,
-          musicbrainzUrl,
-          wikidataUrl,
-          lastfmUrl,
-          discogsUrl,
-        ],
         track: loaderData?.tracks.flatMap((track) => {
           if (track.type === "mixtape") {
             return [];
