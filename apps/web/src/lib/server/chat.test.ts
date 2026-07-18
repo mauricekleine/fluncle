@@ -495,6 +495,53 @@ describe("buildChatTools — the MCP hands", () => {
     expect(lookedUp).not.toContain("999.9.9Z");
   });
 
+  it("view=albums surfaces the records as unlit catalogue rows — reused shape, no coordinate", async () => {
+    listFreshTracks.mockResolvedValue({
+      albums: [
+        {
+          artists: ["Break", "Kyo"],
+          name: "Simpler Times",
+          releaseDate: "2026-07-18",
+          slug: "simpler-times",
+        },
+      ],
+      tracks: [
+        {
+          artists: ["Nu:Tone"],
+          certified: true,
+          coverImageUrl: "https://cover.example/bp.jpg",
+          logId: "004.7.2I",
+          releaseDate: "2026-07-15",
+          title: "Better Places",
+        },
+      ],
+      windowDays: 30,
+    });
+
+    const tools = buildChatTools();
+    const execute = tools.list_fresh?.execute;
+    if (typeof execute !== "function") {
+      throw new Error("list_fresh executor missing");
+    }
+
+    const result = (await execute({ view: "albums" }, {} as never)) as {
+      catalogue?: Record<string, unknown>[];
+      findings?: unknown[];
+    };
+
+    // The records ride the UNLIT bucket — a record has no coordinate, so it is register-equal to a
+    // catalogue track (reused shape, no new card). The track stream is dropped for this view.
+    expect(result.findings).toBeUndefined();
+    expect(result.catalogue).toHaveLength(1);
+    const row = result.catalogue?.[0] ?? {};
+    expect(row.title).toBe("Simpler Times");
+    expect(row.artists).toEqual(["Break", "Kyo"]);
+    // A record carries no Spotify link and never a lit field.
+    for (const lit of ["coordinate", "logId", "spotifyUrl", "note", "bpm", "key"]) {
+      expect(row, `record row must not carry ${lit}`).not.toHaveProperty(lit);
+    }
+  });
+
   it("exposes the two WRITE verbs on chat, each with an input schema + executor", () => {
     // PR-2 puts submit_track + subscribe_newsletter on ChatDnB (gated-session-safe), so Fluncle
     // can take a submission / newsletter signup mid-conversation.

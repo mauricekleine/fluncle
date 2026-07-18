@@ -4,6 +4,7 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { Command, CommanderError } from "commander";
 import { fluncleAsciiLogo, fluncleTagline } from "./brand";
+import { type FreshView } from "./commands/fresh";
 import { setEnvProfile } from "./env";
 import { spotifyPlaylistUrl, telegramUrl } from "./links";
 import { printJson, toJsonFailure } from "./output";
@@ -22,6 +23,12 @@ type AddOptions = {
 type RecentOptions = {
   json: boolean;
   limit?: string;
+};
+
+type FreshOptions = {
+  json: boolean;
+  limit?: string;
+  view?: string;
 };
 
 type AdminListOptions = {
@@ -410,10 +417,15 @@ function addListenCommands(program: Command): void {
     .command("fresh")
     .description("What just came out, newest release first")
     .option("--limit <limit>", "Number of releases to fetch")
+    .option("--view <view>", "Which cut to show: all, tracks, or albums", "all")
     .option("--json", "Print JSON", false)
-    .action(async (options: RecentOptions) => {
+    .action(async (options: FreshOptions) => {
       const { freshCommand } = await import("./commands/fresh");
-      await freshCommand({ json: options.json, limit: parseListLimit(options.limit) });
+      await freshCommand({
+        json: options.json,
+        limit: parseListLimit(options.limit),
+        view: parseFreshView(options.view),
+      });
     });
 
   program
@@ -6028,6 +6040,16 @@ function parseListLimit(value: string | undefined): number {
   }
 
   return limit;
+}
+
+function parseFreshView(value: string | undefined): FreshView {
+  const view = value ?? "all";
+
+  if (view !== "all" && view !== "tracks" && view !== "albums") {
+    throw new Error("View must be one of: all, tracks, albums");
+  }
+
+  return view;
 }
 
 // Resolve the tri-state key filter from the two accepted forms: `--no-key`
