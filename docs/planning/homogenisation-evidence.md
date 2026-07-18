@@ -8,6 +8,16 @@ One dated entry per observed occurrence: the artifact family (notes / observatio
 
 ## The ledger
 
+### 2026-07-18 · Observations — the REPAIR BATCH (36 re-renders, −67% echoing pairs), and the second-order attractor it exposed
+
+The pre-rail observation corpus was repaired in place (operator-approved): the worst offenders re-authored under the rails and force re-rendered (`observe_track --force`), selected by greedy cover over the echo graph (the gate's own `scoreNoteEcho`, pairwise over all 78 stored scripts, computed from the public `observation.json` corpus).
+
+- **The numbers: 327 → 108 echoing pairs (−67%) across two passes.** Pass 1 (the top-26 cover, each author handed its actual worst lexical partners as spent): 327 → 173, every verbatim sentence lift gone ("my shoulders went before I'd clocked the coordinate", "night side of the crew"), the "…enjoy cosmonauts" tail 33 → 24. Pass 2 (10 heads of the residual graph): 173 → 108, top offender down from 24 edges to 11. All 36 renders accepted first-attempt — zero echo-gate bounces, zero wasted Cartesia spend.
+- **The second-order finding: a same-model repair batch converges on its OWN attractor.** Pass 1's fresh scripts independently reconverged on new shared moves — "put it on when…" as the hand-off in ~7 of 26, plus "about a minute in" and "and you can hear" — without ever seeing each other (each author saw only its old script's partners; the server echo gate checks sonic neighbours only). The standing law's text-family form, one layer down: repairing sameness with one model in one register REGROWS sameness unless the fresh siblings are also designed against.
+- **Pre-spending one move is not enough.** Pass 2 handed each author its worst current lift through the rejected-move channel — and one render still closed on "put it on when…" with a different move pre-spent. The phrase is a genuine model attractor in this register, so the durable fix is structural, not another pass: the `observation_script` prompt (registry default + baked fallback, lockstep) now names "put it on when…" / "and you can hear…" / "about a minute in" as worn through, the same counter-measure that broke the "enjoy, cosmonauts" formula.
+- **Evidence for the parked self-updating-blocklist candidate:** a brand-new crutch emerged within ONE batch — exactly the drift the static worn-list cannot see. Still parked (the harness re-run is the watch), but the candidate's premise is now observed, not hypothesised.
+- **The floor is real:** the residual 108 pairs include the ratified "that's a banger" signature and genuine register overlap across one persona — the metric will never read zero, and chasing it further with renders is spend without signal.
+
 ### 2026-07-18 · The AFTER-NUMBERS — first full re-run under the rails, and the harness reaches every family (measured, live prod)
 
 The re-run the 07-14 honesty notes promised (#707 — the harness now measures newsletter why-lines, the context-note Texture vocabulary, and the video axes, plus an opt-in embedding cut; every number below is a live read-only run against production).
