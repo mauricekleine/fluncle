@@ -219,6 +219,43 @@ describe("resolveLabelLineage", () => {
     expect(row?.["lineage_state"]).toBe("pending");
   });
 
+  it("pauses on the spent response budget with a resume cursor, leaving the unwalked tail unstamped", async () => {
+    // Three eligible labels with stored MBIDs (one mbFetch each). The Date.now spy jumps 70s per
+    // vendor call — past the 60s response budget after the FIRST label — modelling the shared
+    // MusicBrainz chain congested by another sweep. The pass must hand back what it finished plus
+    // a cursor, never run the client into its fetch timeout.
+    await seedLabel({ mbLabelId: "mb-a", name: "Alpha", slug: "alpha" });
+    await seedLabel({ mbLabelId: "mb-b", name: "Bravo", slug: "bravo" });
+    await seedLabel({ mbLabelId: "mb-c", name: "Charlie", slug: "charlie" });
+
+    let now = 1_700_000_000_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+
+    try {
+      mbFetch.mockImplementation(async () => {
+        now += 70_000;
+
+        return lineageResponse({ begin: "1994" });
+      });
+
+      const result = await resolveLabelLineage(10, false);
+
+      expect(result.resolved).toEqual(["alpha"]);
+      expect(result.rateLimited).toBe(false);
+      // Resume right after the last handled label — the CLI's drain loop re-requests from here.
+      expect(result.nextCursor).toBe("alpha");
+
+      // The paused tail carries NO attempt stamp, so the resumed request is not cooldown-blocked.
+      for (const slug of ["bravo", "charlie"]) {
+        const row = await labelRow(slug);
+        expect(row?.["lineage_state"]).toBe("pending");
+        expect(row?.["lineage_attempted_at"]).toBeNull();
+      }
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it("a dry run reports the worklist and touches no vendor or write", async () => {
     await seedLabel({ mbLabelId: "mb-dry", name: "Dry", slug: "dry" });
 

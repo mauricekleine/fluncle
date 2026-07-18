@@ -44,6 +44,15 @@ const COOLDOWN_MS = 6 * 60 * 60 * 1000; // 6h
 // persistently-failing label is never retried forever.
 const MAX_FAILURES = 5;
 
+// Wall-clock response budget for one pass. `mbFetch`'s serializer is ONE shared chain per isolate,
+// so under cross-sweep contention (the crawler, recording-mbids, the artist sweep) each of this
+// pass's calls can queue for minutes behind another sweep's backlog — long enough to push a full
+// batch past the box CLI's 5-minute fetch timeout while the walk keeps running server-side
+// (observed 2026-07-18: the tick reported "timed out" yet the labels came back stamped). Spending
+// the budget is a pause, not a failure: the pass returns what it handled with a resume cursor, and
+// the CLI's drain loop issues a fresh request (with a fresh budget) for the rest.
+const RESPONSE_BUDGET_MS = 60_000;
+
 // The MusicBrainz label-label relationship TYPES that express a parent (this label is the child /
 // imprint / owned entity). Verified against real MB data (Med School → Hospital Records is `label
 // ownership`; Hospital Records → M*A*S*H is `imprint`): when we look up the CHILD, the parent
@@ -335,6 +344,9 @@ export async function resolveLabelLineage(
   const failed: Array<{ error: string; slug: string }> = [];
   let unmatchedParents = 0;
   let rateLimited = false;
+  let budgetPaused = false;
+  let lastHandledSlug: string | null = null;
+  const deadline = Date.now() + RESPONSE_BUDGET_MS;
 
   if (dryRun) {
     for (const row of rows) {
@@ -342,6 +354,17 @@ export async function resolveLabelLineage(
     }
   } else {
     for (const row of rows) {
+      if (Date.now() >= deadline) {
+        // Budget spent — pause, don't fail. The unwalked rest of this page resumes from the
+        // cursor on the CLI's next request; the paused labels were NOT stamped, so no cooldown.
+        budgetPaused = true;
+        logEvent("info", "label-lineage.budget-pause", {
+          handled: resolved.length + none.length + failed.length,
+          pageSize: rows.length,
+        });
+        break;
+      }
+
       const outcome = await resolveOneLabel(row);
 
       if (outcome.kind === "rate-limited") {
@@ -367,25 +390,38 @@ export async function resolveLabelLineage(
           unmatchedParents: outcome.unmatchedParents,
         });
         resolved.push(row.slug);
+        lastHandledSlug = row.slug;
         continue;
       }
 
       if (outcome.kind === "none") {
         await markNone(row.slug);
         none.push(row.slug);
+        lastHandledSlug = row.slug;
         continue;
       }
 
       // failed — back off (streak + cooldown), give up past MAX_FAILURES.
       await recordFailure(row.slug, row.lineage_failures);
       failed.push({ error: outcome.error, slug: row.slug });
+      lastHandledSlug = row.slug;
     }
   }
 
   // Drained when the page came back short. On a throttle-stop, null the cursor so the CLI stops
-  // looping this tick (the next tick resumes from the top; the cooldown re-skips this pass's labels).
+  // looping this tick (the next tick resumes from the top; the cooldown re-skips this pass's
+  // labels). On a budget pause, resume right after the last HANDLED label — the unwalked tail of
+  // this page carries no stamp, so the very next request picks it up. A pause that handled nothing
+  // (a >60s worklist query — pathological) nulls the cursor rather than hand the CLI the SAME
+  // cursor back, which would loop it forever; the hourly tick retries.
   const lastSlug = rows.at(-1)?.slug ?? null;
-  const nextCursor = rateLimited || rows.length < batchLimit ? null : lastSlug;
+  const nextCursor = rateLimited
+    ? null
+    : budgetPaused
+      ? lastHandledSlug
+      : rows.length < batchLimit
+        ? null
+        : lastSlug;
 
   return {
     dryRun,
