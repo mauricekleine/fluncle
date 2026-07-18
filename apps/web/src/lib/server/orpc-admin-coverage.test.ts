@@ -318,6 +318,11 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // the one act the catalogue domain forbids a machine (docs/the-ear.md § The operator's actions).
   "POST /admin/catalogue/certify": "certify_track",
   "POST /admin/catalogue/crawl": "crawl_catalogue",
+  // The demand reorder tick — contract-only oRPC (no TanStack route file). ADMIN tier
+  // (agent-allowed): the on-box `fluncle-demand` cron triggers it with the agent token. The
+  // Worker reads Simple Analytics + rewrites only the two derived reorder columns
+  // (demand_score / demand_rank), never a certification (docs/catalogue-crawler.md § Demand).
+  "POST /admin/catalogue/demand": "record_demand",
   // The dupe-veto escape hatch — contract-only oRPC. OPERATOR tier: overruling the sweep's own
   // duplicate verdict so a WRONG-vetoed row can be captured (docs/the-ear.md § Duplicates).
   "POST /admin/catalogue/force-capture": "force_capture",

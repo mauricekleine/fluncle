@@ -1,0 +1,28 @@
+[Unit]
+Description=fluncle-demand — rave-02 host trigger for the nightly demand reorder (crawl/capture priority from Simple Analytics pageviews)
+Documentation=https://github.com/mauricekleine/fluncle/blob/main/docs/agents/hermes/demand-timer/README.md
+Wants=network-online.target docker.service
+After=network-online.target docker.service
+# If this unit dies before writing its own /status marker (OOM, missing binary, a crash before the
+# sweep catch runs), the healthcheck prober never sees a failure. This catch-all posts a minimal
+# Discord alert; %n is this unit's full name.
+OnFailure=fluncle-sweep-failure@%n.service
+
+[Service]
+Type=oneshot
+# Root drives the Docker daemon; `docker exec -u hermes` runs the WORK as the unprivileged hermes
+# user. This sweep needs NO secrets file — `demand` is a bare trigger: the box's agent-scoped token
+# (which rides the container env like the other CLI sweeps) drives the AGENT-tier record_demand op,
+# and the Simple Analytics key lives Worker-side. The .sh/.ts pair is BAKED at /opt/hermes-scripts/
+# (Unit A — auto-updates from main via pin-watch); this host unit only TRIGGERS it, and the sweep
+# self-writes its /status marker (cron-output.sh) so the prober stays honest.
+ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/demand-sweep.sh
+# One `fluncle admin catalogue demand` call; the Worker fetches Simple Analytics (bounded page cap)
+# and rewrites two reorder columns. A generous ceiling for a slow SA read or a cold Worker, with the
+# sweep's own single retry inside it.
+TimeoutStartSec=300
+# Modest hardening for a root docker-driving oneshot.
+NoNewPrivileges=true
+ProtectControlGroups=true
+ProtectKernelTunables=true
+RestrictSUIDSGID=true
