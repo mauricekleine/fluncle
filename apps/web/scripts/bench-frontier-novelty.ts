@@ -136,10 +136,10 @@ async function timeIt(run: () => Promise<unknown>): Promise<number> {
 }
 
 /** Insert `count` embedded catalogue candidates (a `tracks` row, no `findings` row). */
-async function seedCandidates(count: number): Promise<void> {
+async function seedCandidates(from: number, count: number): Promise<void> {
   const chunk = 400;
 
-  for (let start = 0; start < count; start += chunk) {
+  for (let start = from; start < count; start += chunk) {
     const end = Math.min(count, start + chunk);
     const statements = [];
 
@@ -156,7 +156,7 @@ async function seedCandidates(count: number): Promise<void> {
           270_000,
           blobArg(randomUnitVector()),
         ],
-        sql: `insert into tracks
+        sql: `insert or ignore into tracks
           (track_id, title, artists_json, spotify_uri, spotify_url, duration_ms, embedding_blob)
           values (?, ?, ?, ?, ?, ?, ?)`,
       });
@@ -191,13 +191,13 @@ async function seedFindings(count: number): Promise<void> {
             270_000,
             blobArg(randomUnitVector()),
           ],
-          sql: `insert into tracks
+          sql: `insert or ignore into tracks
             (track_id, title, artists_json, spotify_uri, spotify_url, duration_ms, embedding_blob)
             values (?, ?, ?, ?, ?, ?, ?)`,
         },
         {
           args: [trackId, `${String(index).padStart(3, "0")}.1.1A`, new Date().toISOString()],
-          sql: `insert into findings (track_id, log_id, added_at) values (?, ?, ?)`,
+          sql: `insert or ignore into findings (track_id, log_id, added_at) values (?, ?, ?)`,
         },
       );
     }
@@ -232,7 +232,7 @@ async function seedEditions(): Promise<string> {
 
       statements.push({
         args: [editionId, userId, edition, new Date().toISOString()],
-        sql: `insert into frontier_editions (id, user_id, number, created_at) values (?, ?, ?, ?)`,
+        sql: `insert or ignore into frontier_editions (id, user_id, number, created_at) values (?, ?, ?, ?)`,
       });
 
       for (let position = 1; position <= tracksPerEdition; position += 1) {
@@ -245,7 +245,7 @@ async function seedEditions(): Promise<string> {
 
         statements.push({
           args: [editionId, position, trackId, "Frozen", `["Frozen"]`, "catalogue"],
-          sql: `insert into frontier_edition_tracks
+          sql: `insert or ignore into frontier_edition_tracks
             (edition_id, position, track_id, title_text, artists_text, slot)
             values (?, ?, ?, ?, ?, ?)`,
         });
@@ -375,13 +375,17 @@ async function main(): Promise<void> {
     );
 
     if (existing < count) {
-      await seedCandidates(count);
+      await seedCandidates(existing, count);
     }
 
     const deriveSamples: number[] = [];
     const catalogueSamples: number[] = [];
     const findingsSamples: number[] = [];
     const refreshSamples: number[] = [];
+    // BASELINE — the SAME scans with NO recent-set exclusion, so the added cost of novelty
+    // (the `not in (…264 ids)`) is isolable from the base vector scan's own cost.
+    const baseCatalogueSamples: number[] = [];
+    const baseFindingsSamples: number[] = [];
 
     for (let iteration = 0; iteration < iterations; iteration += 1) {
       const derive = () =>
@@ -395,6 +399,8 @@ async function main(): Promise<void> {
       deriveSamples.push(await timeIt(derive));
       catalogueSamples.push(await timeIt(catalogue));
       findingsSamples.push(await timeIt(findings));
+      baseCatalogueSamples.push(await timeIt(() => client.execute(catalogueScan(probes, []))));
+      baseFindingsSamples.push(await timeIt(() => client.execute(findingsScan(probes, []))));
       refreshSamples.push(
         await timeIt(async () => {
           await derive();
@@ -408,10 +414,19 @@ async function main(): Promise<void> {
     const withinBudget = refreshP50 < BUDGET_MS;
     allWithinBudget &&= withinBudget;
 
+    const baseCatP50 = percentile(baseCatalogueSamples, 50);
+    const baseFindP50 = percentile(baseFindingsSamples, 50);
+    const catP50 = percentile(catalogueSamples, 50);
+    const findP50 = percentile(findingsSamples, 50);
+
     console.log(`── ${count} candidates ─────────────────────────────────────────`);
     console.log(`  derive        p50 ${percentile(deriveSamples, 50).toFixed(1)} ms`);
-    console.log(`  catalogue     p50 ${percentile(catalogueSamples, 50).toFixed(1)} ms`);
-    console.log(`  findings      p50 ${percentile(findingsSamples, 50).toFixed(1)} ms`);
+    console.log(
+      `  catalogue     p50 ${catP50.toFixed(1)} ms  (base ${baseCatP50.toFixed(1)} ms → novelty +${(catP50 - baseCatP50).toFixed(1)} ms)`,
+    );
+    console.log(
+      `  findings      p50 ${findP50.toFixed(1)} ms  (base ${baseFindP50.toFixed(1)} ms → novelty +${(findP50 - baseFindP50).toFixed(1)} ms)`,
+    );
     console.log(
       `  FULL REFRESH  p50 ${refreshP50.toFixed(1)} ms  ${withinBudget ? "✓ under" : "✗ OVER"} ${BUDGET_MS} ms budget`,
     );
