@@ -62,7 +62,8 @@ vi.mock("@/lib/server/artist-dossier", async (importOriginal) => ({
   getArtistNeighbours,
 }));
 
-const { Route, resolveArtistPageData } = await import("./artist.$slug");
+const { ARTIST_CATALOGUE_SORT_DEFAULT, Route, resolveArtistPageData } =
+  await import("./artist.$slug");
 
 const ARTIST = {
   id: "artist-drift",
@@ -96,6 +97,35 @@ function robotsMeta(data: unknown): string | undefined {
 function metaDescription(data: unknown): string | undefined {
   return headMeta(data).find((entry) => entry.name === "description")?.content;
 }
+
+/** The route's resolved catalogue sort for a given (validated) search — where the default lands. */
+function resolvedSort(search: { page?: number; sort?: "name" | "recent" }): string {
+  const deps = Route.options.loaderDeps?.({ search } as never) as { sort: string } | undefined;
+
+  return deps?.sort ?? "";
+}
+
+describe("the artist page catalogue default (latest release first)", () => {
+  it("defaults to the 'recent' (Latest release) key — the dropdown's own sort key", () => {
+    // Reused verbatim, never a fresh ordering: the constant IS the value the dropdown's "Latest
+    // release" option carries, so the control reflects the default on the first (param-free) load.
+    expect(ARTIST_CATALOGUE_SORT_DEFAULT).toBe("recent");
+  });
+
+  it("resolves to latest-release with NO sort param, so a bare /artist/<slug> opens on it", () => {
+    // No `?sort` in the URL → `validateSearch` narrows `sort` to undefined → the loader falls to
+    // the artist default. This is the "both must agree" pin: the URL default and the sort handed
+    // to the server read are the SAME latest-release key.
+    expect(resolvedSort({})).toBe("recent");
+  });
+
+  it("still round-trips an explicitly chosen sort through the URL", () => {
+    // A reader who picks A–Z (or re-picks Latest release) keeps exactly that — the default only
+    // fills an ABSENT param, it never overrides a present one.
+    expect(resolvedSort({ sort: "name" })).toBe("name");
+    expect(resolvedSort({ sort: "recent" })).toBe("recent");
+  });
+});
 
 describe("resolveArtistPageData (the artist page indexability gate)", () => {
   beforeEach(() => {
