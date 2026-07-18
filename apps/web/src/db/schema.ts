@@ -1,4 +1,4 @@
-import { sql } from "drizzle-orm";
+import { desc, sql } from "drizzle-orm";
 import {
   check,
   customType,
@@ -1291,6 +1291,62 @@ export const userFrontierPlaylists = sqliteTable("user_frontier_playlists", {
   playlistId: text("playlist_id").notNull(),
   userId: text("user_id").primaryKey(),
 });
+
+// A user's FRONTIER EDITIONS — one FROZEN snapshot per real weekly refresh of their
+// Frontier playlist, read two ways: (a) the NOVELTY LEDGER the engine re-derives its
+// last-N-editions exclusion set from (so the weekly playlist rotates), and (b) the
+// HISTORY the "past editions" dropdown/dialog reads for track recovery. Modeled on the
+// `mixtapes` + `mixtape_tracks` frozen-snapshot precedent (child rows, not a JSON column
+// — novelty is then a plain indexed join, no per-row `json_each` hosted trap).
+//
+// `user_id` is a logical FK (no SQL cascade), matching every sibling per-user table —
+// deletion is application-code (`accountDeletionStatements`), never a constraint.
+// `number` is per-user monotonic (`coalesce(max(number),0)+1`), and is the ONE name
+// used everywhere (column, DTO, path param). No status/uri_hash/playlist_id/iso_*
+// columns: nothing reads them — the date label derives its civil date from `created_at`.
+export const frontierEditions = sqliteTable(
+  "frontier_editions",
+  {
+    createdAt: text("created_at").notNull(),
+    id: text("id").primaryKey(),
+    number: integer("number").notNull(),
+    userId: text("user_id").notNull(),
+  },
+  (table) => [
+    uniqueIndex("frontier_editions_user_number_idx").on(table.userId, table.number),
+    // Serves BOTH the newest-first dropdown AND the last-8 novelty derive.
+    index("frontier_editions_user_number_desc_idx").on(table.userId, desc(table.number)),
+  ],
+);
+
+// A frontier edition's FROZEN tracklist — the de-duped PUT order the playlist actually
+// sent (A2). `track_id` is the id novelty excludes on and the id the Save action files.
+// `log_id` is set only for certified-finding slots (the unnamed catalogue tier stays
+// unnamed). `title_text`/`artists_text` mirror `mixtape_tracks` naming; the readouts
+// (`bpm`/`key`/`duration_ms`) are frozen so the dialog renders the chips without a JOIN.
+// `slot` drives the UI register split (finding vs catalogue).
+export const frontierEditionTracks = sqliteTable(
+  "frontier_edition_tracks",
+  {
+    artistsText: text("artists_text").notNull(),
+    bpm: integer("bpm"),
+    coverUrl: text("cover_url"),
+    durationMs: integer("duration_ms"),
+    editionId: text("edition_id").notNull(),
+    key: text("key"),
+    logId: text("log_id"),
+    position: integer("position").notNull(),
+    slot: text("slot", { enum: ["finding", "catalogue"] }).notNull(),
+    spotifyUri: text("spotify_uri"),
+    spotifyUrl: text("spotify_url"),
+    titleText: text("title_text").notNull(),
+    trackId: text("track_id").notNull(),
+  },
+  (table) => [
+    uniqueIndex("frontier_edition_tracks_edition_position_idx").on(table.editionId, table.position),
+    index("frontier_edition_tracks_edition_id_idx").on(table.editionId),
+  ],
+);
 
 export const userSavedFindings = sqliteTable(
   "user_saved_findings",

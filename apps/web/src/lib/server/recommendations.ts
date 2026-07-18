@@ -64,6 +64,20 @@ export const RECOMMENDATIONS_POOL = RECOMMENDATIONS_PAGE * 3 + 25;
 export const FINDINGS_SLOT_COUNT = 3;
 
 /**
+ * The NOVELTY WINDOW — how many of a user's most recent Frontier editions the weekly
+ * refresh excludes from, so the playlist rotates instead of restating the same ~33
+ * tracks every week. Consumed here (the `excludeRecent` derive) and by the snapshot hook
+ * (A2, frontier-playlist.ts) that writes the editions this reads back.
+ *
+ * DESIGN ASSUMPTION (operator decision, no relaxation/fallback): by go-live the candidate
+ * pool is thousands, so `candidates − (≤ FRONTIER_NOVELTY_WINDOW editions × ≤33 tracks)
+ * ≫ target` and the strict `NOT IN` always fills. We do NOT build for a small pool that
+ * could starve — if it ever did, the honest behavior is a shorter playlist that week,
+ * never a guard that re-admits a just-served track.
+ */
+export const FRONTIER_NOVELTY_WINDOW = 8;
+
+/**
  * The GET /me/recommendations rate limit: a modest per-user hourly budget,
  * because each request is a real vector scan in the database (≤ 12 probes ×
  * the embedded catalogue) — cheap enough to compute per request, not cheap
@@ -340,14 +354,22 @@ export async function deleteRecSeed(
  * GATED on a VERIFIED EMAIL (the learning-cohort ruling): a signed-in but
  * unverified account gets a 403 `email_unverified`, never a silent empty list.
  * The session itself is the caller's job (`privateUserAuth`).
+ *
+ * `options.excludeRecent` (default false) turns on FRONTIER NOVELTY: when true, every
+ * track in the user's last FRONTIER_NOVELTY_WINDOW Frontier editions is excluded from
+ * both scans, so the weekly playlist rotates. Default false keeps the live-page shelf
+ * (the `/recommendations` reads) byte-identical to today — only the refresh path (A2)
+ * passes true.
  */
 export async function listRecommendations(
   user: PublicUser,
+  options?: { excludeRecent?: boolean },
 ): Promise<RecommendationsResult | Response> {
   if (!user.emailVerified) {
     return jsonError(403, "email_unverified", "Verify your email to get your recommendations.");
   }
 
+  const excludeRecent = options?.excludeRecent ?? false;
   const db = await getDb();
 
   // The seed vectors — ≤ MAX_REC_SEEDS rows, each carrying its embedding blob
@@ -389,6 +411,43 @@ export async function listRecommendations(
   const seedExclusion =
     seedIds.length > 0 ? `and t.track_id not in (${seedIds.map(() => "?").join(", ")})` : "";
 
+  // FRONTIER NOVELTY: the track ids in this user's last FRONTIER_NOVELTY_WINDOW editions,
+  // re-derived from the ledger each refresh (self-healing — no `last_used` tag to keep in
+  // sync). The outer `where fe.user_id = ?` is LOAD-BEARING: it binds
+  // `index(user_id, number desc)` and bounds the scan to one user (a bare `id in (...)`
+  // subquery would leave the outer as a full table scan). Only computed when
+  // `excludeRecent` is on, so the default live-page read stays exactly as before.
+  //
+  // NO relaxation / fallback / guards (operator decision): the pool is thousands of
+  // candidates, so the strict `not in` always fills the target — see FRONTIER_NOVELTY_WINDOW.
+  const excludedIds: string[] = [];
+
+  if (excludeRecent) {
+    const recentResult = await db.execute({
+      args: [user.id, user.id, FRONTIER_NOVELTY_WINDOW],
+      sql: `select fet.track_id
+        from frontier_editions fe
+        join frontier_edition_tracks fet on fet.edition_id = fe.id
+        where fe.user_id = ?
+          and fe.id in (select id from frontier_editions where user_id = ? order by number desc limit ?)
+        group by fet.track_id`,
+    });
+
+    for (const row of typedRows<{ track_id: string }>(recentResult.rows)) {
+      excludedIds.push(row.track_id);
+    }
+  }
+
+  // The recent-editions membership prune — placed IMMEDIATELY AFTER `${seedExclusion}` in
+  // both scans, with `...excludedIds` appended IMMEDIATELY AFTER `...seedIds` in both args
+  // arrays, so the bind order stays `[...probes, ...seedIds, ...excludedIds, LIMIT]`. Like
+  // the seed exclusion, it is a membership check the single-pass fold already visits — no
+  // second scan, no per-probe fan-out.
+  const recentExclusion =
+    excludeRecent && excludedIds.length > 0
+      ? `and t.track_id not in (${excludedIds.map(() => "?").join(", ")})`
+      : "";
+
   // ONE PASS, one distance term per probe, folded to the row's best in the
   // select list (max-similarity = min distance). NEVER a `union all` branch per
   // probe over a CTE: the planner does not materialize the CTE — it FLATTENS it
@@ -415,7 +474,7 @@ export async function listRecommendations(
   // seconds again, and the engine moves OFF the hot path: cache per user keyed
   // by (seed set, corpus fingerprint) — the `rank_catalogue` self-healing shape.
   const catalogueScan = await db.execute({
-    args: [...probes, ...seedIds, RECOMMENDATIONS_POOL],
+    args: [...probes, ...seedIds, ...excludedIds, RECOMMENDATIONS_POOL],
     sql: `select track_id, dist from (
         select t.track_id, ${bestDistance} as dist
         from tracks t
@@ -428,6 +487,7 @@ export async function listRecommendations(
           and (t.nearest_finding_score is null or t.nearest_finding_score < ${DUPLICATE_SIMILARITY})
           and t.duration_ms < ${LONG_FORM_MS}
           ${seedExclusion}
+          ${recentExclusion}
       )
       where dist is not null
       order by dist asc, track_id asc
@@ -441,7 +501,7 @@ export async function listRecommendations(
   // the labeled slots Fluncle's full voice rides — hydrated with the note +
   // Log ID below.
   const findingsScan = await db.execute({
-    args: [...probes, ...seedIds, FINDINGS_SLOT_COUNT],
+    args: [...probes, ...seedIds, ...excludedIds, FINDINGS_SLOT_COUNT],
     sql: `select track_id, dist from (
         select t.track_id, ${bestDistance} as dist
         from findings f cross join tracks t
@@ -449,6 +509,7 @@ export async function listRecommendations(
           and f.log_id is not null
           and t.embedding_blob is not null
           ${seedExclusion}
+          ${recentExclusion}
       )
       where dist is not null
       order by dist asc, track_id asc
