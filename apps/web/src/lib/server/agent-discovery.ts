@@ -190,7 +190,7 @@ function agentCard() {
     skills: [
       {
         description:
-          "Search Spotify for drum & bass track candidates by name or Spotify track URL. Use a result to submit a track for Fluncle to review.",
+          "Search Spotify for track candidates by name or Spotify track URL. Use a result to submit a track for Fluncle to review.",
         examples: ["Search for a Camo & Krooked track", "Find candidates for a Spotify track URL"],
         id: "search-tracks",
         name: "Search tracks",
@@ -201,7 +201,7 @@ function agentCard() {
           "List the most recent findings and mixtapes in Fluncle's drum & bass archive, newest first, cursor-paginated.",
         examples: ["List the latest findings", "Page through Fluncle's archive"],
         id: "list-tracks",
-        name: "List findings",
+        name: "Recent findings",
         tags: ["drum-and-bass", "archive", "catalogue"],
       },
       {
@@ -209,7 +209,7 @@ function agentCard() {
           "Read one finding or mixtape in full by its Log ID coordinate or Spotify track id, or pull a random certified track from the archive.",
         examples: ["Read the finding at fluncle://012.8.0A", "Pull a random finding"],
         id: "get-track",
-        name: "Read a finding",
+        name: "Read one finding",
         tags: ["drum-and-bass", "finding", "coordinate"],
       },
       {
@@ -351,7 +351,7 @@ ${tracks.join("\n")}
 - [OpenAPI spec](${siteUrl}/api/v1/openapi.json): the public API as an OpenAPI 3.1 document
 - [MCP server](${siteUrl}/mcp): the archive over Model Context Protocol (Streamable HTTP, no auth), tools, resources (each finding at fluncle://finding/<logId>), and Fluncle-voiced prompts
 - [MCP server card](${siteUrl}/.well-known/mcp/server-card.json): SEP-2127 discovery card for the MCP endpoint
-- [Agent card](${siteUrl}/.well-known/agent-card.json): A2A agent card — Fluncle's actionable skills (search, list, read, submit, subscribe)
+- [Agent card](${siteUrl}/.well-known/agent-card.json): A2A agent card listing Fluncle's actionable skills (search, list, read, submit, subscribe)
 - [API catalog](${siteUrl}/.well-known/api-catalog): RFC 9727 linkset
 - [Agent skills](${siteUrl}/.well-known/agent-skills/index.json): the fluncle-api skill, with digest
 - [llms.txt](${siteUrl}/llms.txt): the plain-language map of the Galaxy
