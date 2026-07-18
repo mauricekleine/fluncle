@@ -159,6 +159,12 @@ export function PlaylistPanel({
 
       setMintMessage(MINT_MESSAGE[result.status]);
       void queryClient.invalidateQueries({ queryKey: ["frontier"] });
+
+      // A real refresh (minted/refreshed) writes a new edition; the past-editions dropdown
+      // reads ["rec-editions"], so pull it fresh. An `unchanged` sync wrote no edition.
+      if (result.status === "minted" || result.status === "refreshed") {
+        void queryClient.invalidateQueries({ queryKey: ["rec-editions"] });
+      }
     },
   });
 

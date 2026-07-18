@@ -6427,6 +6427,23 @@ body::before {
   font-size: 0.82rem;
 }
 
+/* ── the past-editions dialog ─────────────────────────────────────────────────── */
+/* The context eyebrow above the date: the live playlist's name, quieted so a frozen
+   edition reads by its date and never as the live Frontier. */
+.rec-edition-eyebrow {
+  color: var(--muted-foreground);
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+/* The two per-row gestures on a frozen row's tail — open in Spotify, save. Sits in the
+   row grid's trailing `auto` column. */
+.rec-edition-actions {
+  align-items: center;
+  display: flex;
+  gap: 0.15rem;
+}
+
 /* ── the ghost shelf — the Recommended panel before the first pick ────────────── */
 .rec-recommended-ghost {
   display: flex;

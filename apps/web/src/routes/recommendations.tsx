@@ -3,9 +3,16 @@ import { createServerFn } from "@tanstack/react-start";
 import { getRequest } from "@tanstack/react-start/server";
 import { type ReactNode } from "react";
 import { Button } from "@fluncle/ui/components/button";
+import { FrontierEditions } from "@/components/recommendations/frontier-editions";
 import { RecommendationsDoor } from "@/components/recommendations/recommendations-door";
-import { EMPTY_RECS, type RecsGate } from "@/components/recommendations/shared";
+import {
+  EMPTY_RECS,
+  type FrontierEditionDetail,
+  type FrontierEditionSummary,
+  type RecsGate,
+} from "@/components/recommendations/shared";
 import { siteUrl } from "@/lib/fluncle-links";
+import { getFrontierEdition, getFrontierEditions } from "@/lib/server/frontier-editions";
 import { createCsrfToken, getPublicSession } from "@/lib/server/public-auth";
 import {
   listRecommendations,
@@ -44,18 +51,47 @@ const getRecsGate = createServerFn({ method: "GET" }).handler(async (): Promise<
     return { state: "unverified" };
   }
 
-  const [seedsResult, recsResult] = await Promise.all([
+  const [seedsResult, recsResult, editions] = await Promise.all([
     listRecSeeds(user),
     listRecommendations(user),
+    getFrontierEditions(user.id),
   ]);
 
   return {
     csrfToken: createCsrfToken(user),
+    editions,
     recommendations: recsResult instanceof Response ? EMPTY_RECS : recsResult,
     seeds: seedsResult.seeds,
     state: "verified",
   };
 });
+
+/** A user's past editions on their own — the react-query refetch after a real refresh. */
+const loadFrontierEditions = createServerFn({ method: "GET" }).handler(
+  async (): Promise<FrontierEditionSummary[]> => {
+    const user = await getPublicSession(getRequest());
+
+    if (!user || !user.emailVerified) {
+      return [];
+    }
+
+    return getFrontierEditions(user.id);
+  },
+);
+
+/** One past edition's frozen tracklist, lazy-loaded when the dialog opens (null = no edition
+ *  at that number for this user). Scoped to the requester's own session on every call. */
+const loadFrontierEdition = createServerFn({ method: "GET" })
+  .validator((data: { number: number }) => data)
+  .handler(async ({ data: { number } }): Promise<FrontierEditionDetail | null> => {
+    const user = await getPublicSession(getRequest());
+
+    if (!user || !user.emailVerified) {
+      return null;
+    }
+
+    return (await getFrontierEdition(user.id, number)) ?? null;
+  });
 
 /** The seed set on its own — the react-query refetch after a seed write. */
 const getRecSeeds = createServerFn({ method: "GET" }).handler(async (): Promise<RecSeedItem[]> => {
@@ -125,6 +161,18 @@ function RecommendationsPage() {
               <p className="home-tagline">{MASTHEAD[gate.state]}</p>
             )}
           </div>
+          {/* The archive-browse control sits top-right, verified only (the mix.tsx masthead
+              pattern); it renders nothing until there is a past edition to reach back to. */}
+          {gate.state === "verified" ? (
+            <div className="home-masthead-actions">
+              <FrontierEditions
+                csrfToken={gate.csrfToken}
+                initialEditions={gate.editions}
+                loadEdition={(number) => loadFrontierEdition({ data: { number } })}
+                loadEditions={() => loadFrontierEditions()}
+              />
+            </div>
+          ) : null}
         </header>
 
         {gate.state === "verified" ? (

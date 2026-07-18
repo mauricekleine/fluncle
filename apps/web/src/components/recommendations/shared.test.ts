@@ -3,15 +3,24 @@ import {
   foldFrontierMint,
   foldFrontierStatus,
   FRONTIER_CLOSED,
+  type FrontierEditionSummary,
   resolveGateState,
+  resolveOpenSummary,
+  savedFindingBody,
   SEED_CAP,
   seedMutationMessage,
 } from "./shared";
 
-// The /recommendations door is component-light by design; its judgment lives in four PURE
-// folds. These pin the three that decide what the reader sees: which gate state renders, how
-// the not-yet-merged frontier endpoint 404-folds to "closed", and how the 12-seed cap's 409
-// surfaces the server's honest instruction.
+const EDITION = (number: number): FrontierEditionSummary => ({
+  number,
+  refreshedAt: `2026-07-${String(number).padStart(2, "0")}T12:00:00.000Z`,
+  trackCount: 33,
+});
+
+// The /recommendations door is component-light by design; its judgment lives in PURE folds.
+// These pin what the reader sees: which gate state renders, how the frontier endpoint folds
+// to "closed", how the 12-seed cap's 409 surfaces, which past edition the dropdown opens, and
+// the register-aware save body (a finding carries its Log ID, a catalogue cut does not).
 
 describe("SEED_CAP", () => {
   it("mirrors the server's MAX_REC_SEEDS (12) — the picked-state UI's cap", () => {
@@ -147,5 +156,34 @@ describe("seedMutationMessage", () => {
     expect(seedMutationMessage({ body: undefined, ok: false, status: 500 })).toBe(
       "Could not update your seeds. Try again in a moment.",
     );
+  });
+});
+
+describe("resolveOpenSummary", () => {
+  const editions = [EDITION(3), EDITION(2), EDITION(1)];
+
+  it("a null openNumber selects nothing — the dialog stays closed", () => {
+    expect(resolveOpenSummary(editions, null)).toBeNull();
+  });
+
+  it("resolves the summary whose number matches the opened one", () => {
+    expect(resolveOpenSummary(editions, 2)).toEqual(EDITION(2));
+  });
+
+  it("a number no longer in the list resolves to null, never a wrong edition", () => {
+    expect(resolveOpenSummary(editions, 9)).toBeNull();
+  });
+});
+
+describe("savedFindingBody", () => {
+  it("a finding carries its Log ID so the save stores it", () => {
+    expect(savedFindingBody({ logId: "241.7.3A", trackId: "t-1" })).toEqual({
+      logId: "241.7.3A",
+      trackId: "t-1",
+    });
+  });
+
+  it("a catalogue cut has no coordinate — it sends only its track id", () => {
+    expect(savedFindingBody({ trackId: "t-2" })).toEqual({ trackId: "t-2" });
   });
 });

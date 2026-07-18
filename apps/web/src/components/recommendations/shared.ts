@@ -7,6 +7,10 @@
 // this door consumes — imported type-only so nothing server-side reaches the client bundle.
 
 import {
+  type FrontierEditionSummary,
+  type FrontierEditionTrack,
+} from "@/lib/server/frontier-editions";
+import {
   type RecommendationCatalogueItem,
   type RecommendationFindingItem,
   type RecommendationsResult,
@@ -14,10 +18,22 @@ import {
 } from "@/lib/server/recommendations";
 
 export type {
+  FrontierEditionSummary,
+  FrontierEditionTrack,
   RecommendationCatalogueItem,
   RecommendationFindingItem,
   RecommendationsResult,
   RecSeedItem,
+};
+
+/**
+ * One past edition, opened: the summary that named it in the dropdown plus its frozen
+ * tracklist (Unit A1's `getFrontierEdition` return shape, `null` when the number resolves
+ * to no edition for the user). The edition dialog reads this via its lazy per-open query.
+ */
+export type FrontierEditionDetail = {
+  summary: FrontierEditionSummary;
+  tracks: FrontierEditionTrack[];
 };
 
 /**
@@ -30,6 +46,7 @@ export type RecsGate =
   | { state: "unverified" }
   | {
       csrfToken: string;
+      editions: FrontierEditionSummary[];
       recommendations: RecommendationsResult;
       seeds: RecSeedItem[];
       state: "verified";
@@ -161,6 +178,35 @@ export function seedMutationMessage(input: { body: unknown; ok: boolean; status:
   }
 
   return message ?? "Could not update your seeds. Try again in a moment.";
+}
+
+/**
+ * Which past edition the dialog opens, from the dropdown's `openNumber` state and the loaded
+ * summary list. `null` — nothing selected, or a number no longer in the list — closes the
+ * dialog: the EditionDialog returns null on a null summary, so its number narrows inside (no
+ * non-null assertion).
+ */
+export function resolveOpenSummary(
+  editions: FrontierEditionSummary[],
+  openNumber: number | null,
+): FrontierEditionSummary | null {
+  if (openNumber === null) {
+    return null;
+  }
+
+  return editions.find((edition) => edition.number === openNumber) ?? null;
+}
+
+/**
+ * The save POST body for a frozen row — the register-aware shape (Unit E's generalized save):
+ * a finding carries its Log ID so the save stores it; a catalogue cut has no coordinate, so it
+ * sends only its track id and the save files it unnamed.
+ */
+export function savedFindingBody(track: {
+  logId?: string;
+  trackId: string;
+}): { logId: string; trackId: string } | { trackId: string } {
+  return track.logId ? { logId: track.logId, trackId: track.trackId } : { trackId: track.trackId };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
