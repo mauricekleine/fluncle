@@ -354,7 +354,9 @@ function TracksPage() {
           <p className="log-index-intro">Every drum &amp; bass track Fluncle holds.</p>
         </header>
 
-        <TracksFilters galaxyOptions={galaxyOptions} search={search} />
+        {/* Keyed by the search state: the inputs are uncontrolled (`defaultValue`), so without a
+            remount "Clear filters" leaves stale values on screen while the list resets under them. */}
+        <TracksFilters galaxyOptions={galaxyOptions} key={JSON.stringify(search)} search={search} />
 
         {entries.length === 0 ? (
           <p className="log-index-empty empty-scanlines">
