@@ -200,13 +200,13 @@ export function SavesDoorSkeleton() {
 }
 
 /**
- * A saved finding, rendered the way every finding renders (the ignition grammar of
- * `.track-row`): the Log ID leads and heats to gold, the row washes the Gold Veil, the
- * cover scales — and the whole row is one link to `/log/<id>`. The cover carries the
- * inline play control (the `.preview-art` scrim + glyph), previewing through the shared
- * `/api/preview` singleton so starting one row stops any other. Remove and the saved
- * note recede behind the ⋮ menu; removing a save destroys nothing in the archive, so it
- * stays a plain action (no confirm).
+ * A saved row. The register rides the LIGHT, never the layout (the Unlit Rule): a
+ * certified finding (`logId` present) renders the way every finding renders — the Log ID
+ * leads and heats to gold, the row washes the Gold Veil, the cover scales and carries the
+ * inline play control, and the whole row is one link to `/log/<id>`. An uncertified
+ * catalogue save (no `logId`) renders cold in the unlit register — no coordinate, no
+ * `/log` link, the cover on the Dust Veil, the title deferring at rest. Both wear the same
+ * ⋮ menu; removing a save destroys nothing in the archive, so it stays a plain action.
  */
 function SavedFindingRow({
   csrfToken,
@@ -220,10 +220,6 @@ function SavedFindingRow({
   setMessage: (message: string) => void;
 }) {
   const [busy, setBusy] = useState(false);
-  // Key the preview off the trackId (the row's own identity, and what `/api/preview`
-  // resolves). One shared <audio> element backs every row, so `toggle` starts this
-  // finding and stops whatever was playing.
-  const preview = usePreviewPlayer(finding.trackId);
   const trackLine = `${finding.artists.join(", ")} — ${finding.title}`;
 
   async function remove() {
@@ -245,15 +241,85 @@ function SavedFindingRow({
     }
   }
 
+  // The unlit register: an uncertified catalogue save has no coordinate to print, so it
+  // prints none, its cover catches the cold Dust Veil, and the title defers at rest — the
+  // same treatment /mix and Recommended use. No preview control (a catalogue cut is seen
+  // from a distance, not visited); the empty leading cell keeps the covers column-aligned.
+  if (!finding.logId) {
+    return (
+      <li className="saves-row saves-row--unlit">
+        <span aria-hidden className="saves-row-logid" />
+
+        <span className="saves-cover-wrap">
+          {finding.imageUrl ? (
+            <img
+              alt=""
+              className="saves-cover"
+              height={40}
+              loading="lazy"
+              src={albumCoverAtSize(finding.imageUrl, "small")}
+              width={40}
+            />
+          ) : (
+            <span aria-hidden className="saves-cover" />
+          )}
+        </span>
+
+        <span className="saves-row-body min-w-0">
+          <span className="saves-row-title block">{trackLine}</span>
+          <span className="saves-row-meta">Saved {formatDateLong(finding.savedAt)}</span>
+        </span>
+
+        <SavedFindingMenu busy={busy} finding={finding} onRemove={() => void remove()} />
+      </li>
+    );
+  }
+
+  // The guard above narrows `logId` to a present coordinate — hand it down explicitly
+  // (no non-null assertion) so the lit row owns the `/log/<id>` targets.
+  return (
+    <SavedFindingLitRow
+      busy={busy}
+      finding={finding}
+      logId={finding.logId}
+      onRemove={remove}
+      trackLine={trackLine}
+    />
+  );
+}
+
+/**
+ * The lit variant — a certified finding, split into its own component so the preview
+ * hook (which subscribes to the shared `/api/preview` singleton) is only summoned for a
+ * row that actually previews. `logId` is the caller's narrowed coordinate.
+ */
+function SavedFindingLitRow({
+  busy,
+  finding,
+  logId,
+  onRemove,
+  trackLine,
+}: {
+  busy: boolean;
+  finding: SavedFinding;
+  logId: string;
+  onRemove: () => Promise<void>;
+  trackLine: string;
+}) {
+  // Key the preview off the trackId (the row's own identity, and what `/api/preview`
+  // resolves). One shared <audio> element backs every row, so `toggle` starts this
+  // finding and stops whatever was playing.
+  const preview = usePreviewPlayer(finding.trackId);
+
   return (
     <li className="saves-row">
       <Link
         aria-label={`Open the log page for ${trackLine}`}
         className="track-log-id track-log-id-link saves-row-logid"
-        params={{ logId: finding.logId }}
+        params={{ logId }}
         to="/log/$logId"
       >
-        {finding.logId}
+        {logId}
       </Link>
 
       <span className="preview-art saves-cover-wrap">
@@ -296,7 +362,7 @@ function SavedFindingRow({
         <Link
           aria-label={`Open the log page for ${trackLine}`}
           className="track-row-link"
-          params={{ logId: finding.logId }}
+          params={{ logId }}
           to="/log/$logId"
         >
           <span className="saves-row-title block">{trackLine}</span>
@@ -304,7 +370,7 @@ function SavedFindingRow({
         <span className="saves-row-meta">Saved {formatDateLong(finding.savedAt)}</span>
       </span>
 
-      <SavedFindingMenu busy={busy} finding={finding} onRemove={() => void remove()} />
+      <SavedFindingMenu busy={busy} finding={finding} onRemove={() => void onRemove()} />
     </li>
   );
 }

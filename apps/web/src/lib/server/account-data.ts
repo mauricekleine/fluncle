@@ -55,7 +55,8 @@ type SavedRow = {
   album_image_updated_at: string | null;
   album_image_url: string | null;
   artists_json: string;
-  log_id: string;
+  // Null for an uncertified catalogue save (no `findings` row → no coordinate).
+  log_id: string | null;
   note: string | null;
   saved_at: string;
   title: string;
@@ -139,11 +140,15 @@ export type GalaxyProgressResult = {
   wins: number;
 };
 
-/** One saved finding as the list returns it (`listSavedFindings`). */
+/**
+ * One saved track as the list returns it (`listSavedFindings`). `logId` rides only on
+ * a certified finding — an uncertified catalogue save omits it (the unlit tier stays
+ * unnamed), and the account list renders that row without a coordinate.
+ */
 export type SavedFindingItem = {
   artists: string[];
   imageUrl?: string;
-  logId: string;
+  logId?: string;
   note?: string;
   savedAt: string;
   title: string;
@@ -506,12 +511,15 @@ export async function listSavedFindings(
     await getDb()
   ).execute({
     args: [user.id],
+    // Join `tracks` DIRECTLY (not through `findings`) so an uncertified catalogue save
+    // — a `tracks` row with no `findings` row — still resolves. `s.log_id` is the stored
+    // coordinate (null for a catalogue save); the row's register split rides that.
     sql: `select s.track_id, s.log_id, s.saved_at, s.note, t.title, t.artists_json, t.album_image_url,
         (select image_key from albums where albums.id = t.album_id) as album_image_key,
         (select image_state from albums where albums.id = t.album_id) as album_image_state,
         (select image_updated_at from albums where albums.id = t.album_id) as album_image_updated_at
       from user_saved_findings s
-      join (findings join tracks on tracks.track_id = findings.track_id) t on t.track_id = s.track_id
+      join tracks t on t.track_id = s.track_id
       where s.user_id = ?
       order by s.saved_at desc`,
   });
@@ -526,7 +534,7 @@ export async function listSavedFindings(
         imageUpdatedAt: row.album_image_updated_at,
         spotifyUrl: row.album_image_url,
       }),
-      logId: row.log_id,
+      logId: row.log_id ?? undefined,
       note: row.note ?? undefined,
       savedAt: row.saved_at,
       title: row.title,
@@ -540,7 +548,7 @@ export async function saveFinding(
   body: unknown,
 ): Promise<
   | Response
-  | { ok: true; savedFinding: { logId: string; note?: string; savedAt: string; trackId: string } }
+  | { ok: true; savedFinding: { logId?: string; note?: string; savedAt: string; trackId: string } }
 > {
   if (!isRecord(body)) {
     return jsonError(400, "invalid_request", "Invalid saved finding");
@@ -556,8 +564,11 @@ export async function saveFinding(
     typeof body.note === "string" && body.note.trim() ? body.note.trim().slice(0, 500) : null;
   const track = await findTrackByTrackOrLog(id);
 
-  if (!track?.log_id) {
-    return jsonError(404, "track_not_found", "No finding at that coordinate");
+  // ANY track can be saved — a certified finding stores its `log_id`, an uncertified
+  // catalogue track stores `null` (the unlit tier stays unnamed). Only a token that
+  // resolves to no track at all 404s.
+  if (!track) {
+    return jsonError(404, "track_not_found", "No track at that coordinate");
   }
 
   const now = new Date().toISOString();
@@ -577,7 +588,7 @@ export async function saveFinding(
   return {
     ok: true,
     savedFinding: {
-      logId: track.log_id,
+      logId: track.log_id ?? undefined,
       note: note ?? undefined,
       savedAt: now,
       trackId: track.track_id,
@@ -1237,7 +1248,11 @@ async function findTrackByTrackOrLog(trackIdOrLogId: string): Promise<TrackRefRo
     await getDb()
   ).execute({
     args: [value, value],
-    sql: `select tracks.track_id, findings.log_id from findings join tracks on tracks.track_id = findings.track_id
+    // LEFT JOIN so ANY track resolves — a certified finding carries its `log_id`, an
+    // uncertified catalogue track (a `tracks` row with no `findings` row) resolves with
+    // a null `log_id`. Resolving by either a raw track id OR a Log ID.
+    sql: `select tracks.track_id, findings.log_id from tracks
+      left join findings on findings.track_id = tracks.track_id
       where tracks.track_id = ? or findings.log_id = ? limit 1`,
   });
 
