@@ -1115,6 +1115,17 @@ export function accountDeletionStatements({
       sql: `delete from user_saved_findings where user_id = ?`,
     },
     {
+      // The user's frozen Frontier editions (the novelty ledger + history). Child rows
+      // FIRST — there is no SQL cascade (logical FK), so the child delete is scoped by a
+      // subquery over the parent before the parent rows go.
+      args: [userId],
+      sql: `delete from frontier_edition_tracks where edition_id in (select id from frontier_editions where user_id = ?)`,
+    },
+    {
+      args: [userId],
+      sql: `delete from frontier_editions where user_id = ?`,
+    },
+    {
       // The user's Frontier playlist row (E2). This drops OUR pointer to the Spotify
       // playlist; the playlist itself lives on Fluncle's Spotify account and is left as
       // an orphan artifact (no per-user OAuth to revoke), harmless and unreachable once

@@ -109,6 +109,17 @@ describe("deleteAccount (real SQL via accountDeletionStatements)", () => {
         sql: `insert into push_tokens (token, user_id, platform, created_at, last_seen_at)
           values (?, ?, ?, ?, ?)`,
       },
+      {
+        args: [`fe-${userId}`, userId, 1, now],
+        sql: `insert into frontier_editions (id, user_id, number, created_at)
+          values (?, ?, ?, ?)`,
+      },
+      {
+        args: [`fe-${userId}`, 1, trackId, "Frozen Title", `["Frozen Artist"]`, "catalogue"],
+        sql: `insert into frontier_edition_tracks
+          (edition_id, position, track_id, title_text, artists_text, slot)
+          values (?, ?, ?, ?, ?, ?)`,
+      },
     ]);
 
     await seedSubmission(db, {
@@ -137,6 +148,8 @@ describe("deleteAccount (real SQL via accountDeletionStatements)", () => {
       "user_galaxy_collections",
       "user_galaxy_state",
       "push_tokens",
+      "frontier_editions",
+      "frontier_edition_tracks",
       "session",
       "account",
     ]) {
@@ -195,6 +208,18 @@ describe("deleteAccount (real SQL via accountDeletionStatements)", () => {
       `select count(*) as n from user_saved_sets where user_id = 'user-B'`,
     );
     expect(Number(bSets.rows[0]?.n)).toBe(1);
+
+    // B's frontier editions + their frozen tracks survive A's deletion (child scoped by
+    // the parent subquery, so B's children are never caught by A's delete).
+    const bEditions = await db.execute(
+      `select count(*) as n from frontier_editions where user_id = 'user-B'`,
+    );
+    expect(Number(bEditions.rows[0]?.n)).toBe(1);
+
+    const bEditionTracks = await db.execute(
+      `select count(*) as n from frontier_edition_tracks where edition_id = 'fe-user-B'`,
+    );
+    expect(Number(bEditionTracks.rows[0]?.n)).toBe(1);
 
     const bUser = await db.execute({
       args: ["user-B"],

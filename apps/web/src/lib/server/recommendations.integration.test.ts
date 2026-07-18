@@ -1,6 +1,11 @@
 import { type Client } from "@libsql/client";
+import { randomUUID } from "node:crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import {
+  type FrontierEditionTrackInput,
+  frontierEditionInsertStatements,
+} from "./frontier-editions";
 import { type PublicUser } from "./public-auth";
 import { createIntegrationDb, seedCatalogueTrack, seedTrack } from "./integration-db";
 
@@ -549,5 +554,140 @@ describe("listRecommendations (real SQL)", () => {
     // never bleed across accounts.
     expect(resultA.catalogue[0]?.trackId).toBe("near-a");
     expect(resultB.catalogue[0]?.trackId).toBe("near-b");
+  });
+});
+
+// ── Frontier novelty: the excludeRecent flag over the editions ledger ─────────
+
+describe("listRecommendations excludeRecent (real SQL)", () => {
+  /** Freeze an edition holding the given track ids — the exact builder A2 uses. */
+  async function insertEdition(
+    userId: string,
+    trackIds: Array<{ slot?: "catalogue" | "finding"; trackId: string }>,
+  ): Promise<void> {
+    const tracks: FrontierEditionTrackInput[] = trackIds.map((entry, index) => ({
+      artists: ["Frozen Artist"],
+      position: index + 1,
+      slot: entry.slot ?? "catalogue",
+      title: `Frozen ${entry.trackId}`,
+      trackId: entry.trackId,
+    }));
+
+    await db.batch(
+      frontierEditionInsertStatements({
+        createdAt: new Date().toISOString(),
+        editionId: randomUUID(),
+        tracks,
+        userId,
+      }),
+      "write",
+    );
+  }
+
+  it("default (and explicit false) is byte-identical to today — editions present are ignored", async () => {
+    const { listRecommendations, saveRecSeed } = await import("./recommendations");
+    const user = publicUser("user-A");
+    const home = axis(0);
+
+    await seedCatalogue("seed-1", { vector: home });
+    await saveRecSeed(user, { trackId: "seed-1" });
+    await seedCatalogue("cat-1", { vector: blend(home, axis(1), 0.1) });
+
+    // The behaviour BEFORE any edition exists.
+    const baseline = await listRecommendations(user);
+
+    // Freeze an edition that holds the candidate — this WOULD exclude it if novelty were on.
+    await insertEdition("user-A", [{ trackId: "cat-1" }]);
+
+    const withDefault = await listRecommendations(user);
+    const withExplicitFalse = await listRecommendations(user, { excludeRecent: false });
+
+    // Neither the default nor an explicit false consults the ledger: both equal the
+    // pre-edition baseline byte-for-byte, and the candidate is still recommended.
+    expect(withDefault).toEqual(baseline);
+    expect(withExplicitFalse).toEqual(baseline);
+
+    if (withDefault instanceof Response) {
+      expect.unreachable("a verified user's read never faults");
+
+      return;
+    }
+
+    expect(withDefault.catalogue.map((row) => row.trackId)).toContain("cat-1");
+  });
+
+  it("excludeRecent:true drops every track in the last editions from BOTH registers", async () => {
+    const { listRecommendations, saveRecSeed } = await import("./recommendations");
+    const user = publicUser("user-A");
+    const home = axis(0);
+
+    await seedCatalogue("seed-1", { vector: home });
+    await saveRecSeed(user, { trackId: "seed-1" });
+
+    // Two catalogue + two finding candidates, all near the seed so all would win a slot.
+    await seedCatalogue("cat-recent", { vector: blend(home, axis(1), 0.05) });
+    await seedCatalogue("cat-clean", { vector: blend(home, axis(2), 0.05) });
+    await seedFinding("find-recent", { logId: "001.1.1A", vector: blend(home, axis(3), 0.05) });
+    await seedFinding("find-clean", { logId: "002.1.1A", vector: blend(home, axis(4), 0.05) });
+
+    // A recent edition froze one of each — the novelty window must drop both.
+    await insertEdition("user-A", [
+      { trackId: "cat-recent" },
+      { slot: "finding", trackId: "find-recent" },
+    ]);
+
+    const result = await listRecommendations(user, { excludeRecent: true });
+
+    expect(result).not.toBeInstanceOf(Response);
+
+    if (result instanceof Response) {
+      return;
+    }
+
+    const catalogueIds = result.catalogue.map((row) => row.trackId);
+    const findingIds = result.findings.map((row) => row.trackId);
+
+    expect(catalogueIds).not.toContain("cat-recent");
+    expect(findingIds).not.toContain("find-recent");
+    // The clean candidates — in no edition — still ride.
+    expect(catalogueIds).toContain("cat-clean");
+    expect(findingIds).toContain("find-clean");
+  });
+
+  it("only the last FRONTIER_NOVELTY_WINDOW editions exclude — an older one no longer does", async () => {
+    const { FRONTIER_NOVELTY_WINDOW, listRecommendations, saveRecSeed } =
+      await import("./recommendations");
+    const user = publicUser("user-A");
+    const home = axis(0);
+
+    await seedCatalogue("seed-1", { vector: home });
+    await saveRecSeed(user, { trackId: "seed-1" });
+    await seedCatalogue("cat-old", { vector: blend(home, axis(1), 0.05) });
+    await seedCatalogue("cat-recent", { vector: blend(home, axis(2), 0.05) });
+
+    // The oldest edition holds cat-old...
+    await insertEdition("user-A", [{ trackId: "cat-old" }]);
+
+    // ...then exactly FRONTIER_NOVELTY_WINDOW newer filler editions push it out of the window.
+    for (let index = 0; index < FRONTIER_NOVELTY_WINDOW - 1; index += 1) {
+      await insertEdition("user-A", [{ trackId: `filler-${index}` }]);
+    }
+
+    // The newest edition (the window's leading edge) holds cat-recent.
+    await insertEdition("user-A", [{ trackId: "cat-recent" }]);
+
+    const result = await listRecommendations(user, { excludeRecent: true });
+
+    expect(result).not.toBeInstanceOf(Response);
+
+    if (result instanceof Response) {
+      return;
+    }
+
+    const catalogueIds = result.catalogue.map((row) => row.trackId);
+
+    // cat-old aged out of the window, so it returns; cat-recent is still inside it.
+    expect(catalogueIds).toContain("cat-old");
+    expect(catalogueIds).not.toContain("cat-recent");
   });
 });
