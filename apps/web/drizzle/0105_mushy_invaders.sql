@@ -1,0 +1,2 @@
+ALTER TABLE `tracks` ADD `spotify_anchor_attempted_at` text;--> statement-breakpoint
+CREATE INDEX `tracks_anchor_fill_queue_idx` ON `tracks` (`nearest_finding_score`) WHERE "tracks"."spotify_uri" is null;

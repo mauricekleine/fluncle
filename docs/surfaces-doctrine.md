@@ -168,6 +168,7 @@ Checked by their last-run freshness (not an HTTP hit), so they carry a `cronName
 | `cron.embed`           | `fluncle-embed`           | every 5m            | MuQ-large audio embedding (1024-d) for sonic similarity + clusters (`--no-agent`, on-box torch)                                                                                                                             | hidden    |
 | `cron.crawl`           | `fluncle-crawl`           | every 10m           | walk the MusicBrainz release graph outward from the operator's enabled seed labels → uncertified catalogue rows (`--no-agent`)                                                                                              | hidden    |
 | `cron.rank`            | `fluncle-rank`            | every 30m           | score each stale catalogue track against every embedded finding → its nearest finding + capture priority (`--no-agent`)                                                                                                     | hidden    |
+| `cron.anchor`          | `fluncle-anchor`          | hourly              | fill each un-anchored catalogue row's Spotify anchor via an Apify actor → `anchor_track` (Worker verifies; the official Spotify app is left for user-facing paths; box activation operator-gated)                           | hidden    |
 | `cron.artist-sweep`    | `fluncle-artist-sweep`    | every 60m           | resolve each artist's social identity: MB url-rel walk + Firecrawl gap-fill (`--no-agent`, Worker-side)                                                                                                                     | hidden    |
 | `cron.label-images`    | `fluncle-label-images`    | every 60m           | resolve each pending label's own logo (Discogs → Wikidata → cover floor) → its own R2 image (`--no-agent`, Worker-side)                                                                                                     | hidden    |
 | `cron.cover-masters`   | `fluncle-cover-masters`   | every 60m           | resolve each pending album/artist its own ≤1200² cover master (best source wins) → its own R2 image (`--no-agent`, Worker-side)                                                                                             | hidden    |
@@ -281,6 +282,7 @@ The weight ladder within a context is unchanged — **`primary`** (the loud fron
 | `cron.embed`                |           |           |           | hidden    |
 | `cron.crawl`                |           |           |           | hidden    |
 | `cron.rank`                 |           |           |           | hidden    |
+| `cron.anchor`               |           |           |           | hidden    |
 | `cron.artist-sweep`         |           |           |           | hidden    |
 | `cron.label-images`         |           |           |           | hidden    |
 | `cron.cover-masters`        |           |           |           | hidden    |

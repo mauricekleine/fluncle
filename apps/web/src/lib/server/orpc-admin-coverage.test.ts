@@ -282,6 +282,10 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // token. It certifies nothing (no `findings` row) and captures no audio, so it needs no
   // operator gate; RULING on a seed label — what may be crawled at all — is `update_label`,
   // and that stays operator tier.
+  // The Spotify anchor write — contract-only oRPC (no TanStack route file). AGENT tier (the
+  // rank_catalogue/verify_capture precedent): the box's `fluncle-anchor` Apify sweep POSTs verified
+  // candidates and the Worker writes only catalogue-identity columns (never a certification).
+  "POST /admin/catalogue/anchor": "anchor_track",
   // The operator's reset for the cross-cutting Apple failure-regime breaker (RFC musickit U1) —
   // contract-only oRPC (no TanStack route file). OPERATOR tier: it re-arms a spend-adjacent
   // external integration a machine should not silently un-brake (the `set_capture_budget` rule).

@@ -4,6 +4,10 @@
 //   THE CRAWLER (docs/catalogue-crawler.md) — what makes the rows exist:
 //   - `crawl_catalogue`  — one bounded, resumable pass of the MusicBrainz walk.
 //   - `get_crawl_status` — the crawl frontier's state.
+//   - `anchor_track`     — verify box-supplied Spotify candidates against a catalogue row and, on a
+//     hit, write its `spotify_uri`/`spotify_url` anchor. The box's Apify sweep fetches candidates;
+//     the SERVER re-runs verification (the box's verdict is never trusted). It never certifies, so
+//     it is agent-allowed like `rank_catalogue`/`verify_capture`. See ../anchor.ts.
 //
 //   THE EAR (docs/the-ear.md) — the ranked read over them:
 //   - `list_catalogue_tracks` — the ranked read. An ordered walk of a precomputed column;
@@ -29,6 +33,8 @@
 // `crawl_catalogue`'s params ride the query string of a bodyless POST, so its handler reads
 // `input.query.*` and applies the same tolerant parse/clamp the backfills do.
 
+import { ORPCError } from "@orpc/server";
+import { type AnchorCandidate, anchorTrack, AnchorTrackError } from "../anchor";
 import { resetAppleBreaker } from "../apple-breaker";
 import {
   getCatalogueCaptureState,
@@ -72,6 +78,31 @@ function parseMaxHop(value: string | undefined): number {
   }
 
   return Math.min(hop, MAX_HOP_CEILING);
+}
+
+/**
+ * The bare Spotify track id from an anchor candidate: `spotifyTrackId` if given, else parsed from
+ * its `uri` (`spotify:track:<id>`) or `url` (`https://open.spotify.com/track/<id>`). Undefined when
+ * none resolves — the caller drops that candidate rather than anchor to a phantom id.
+ */
+function resolveSpotifyTrackId(candidate: {
+  spotifyTrackId?: string;
+  uri?: string;
+  url?: string;
+}): string | undefined {
+  const direct = candidate.spotifyTrackId?.trim();
+
+  if (direct) {
+    return direct;
+  }
+
+  const fromUri = candidate.uri?.trim().match(/^spotify:track:([A-Za-z0-9]+)$/)?.[1];
+
+  if (fromUri) {
+    return fromUri;
+  }
+
+  return candidate.url?.trim().match(/\/track\/([A-Za-z0-9]+)/)?.[1];
 }
 
 /** Build the `admin-catalogue` domain's handlers. */
@@ -261,6 +292,56 @@ export function adminCatalogueHandlers(os: Implementer) {
     }
   });
 
+  // POST /admin/catalogue/anchor — AGENT tier. Verify box-supplied Spotify candidates against one
+  // catalogue row and, on a hit, write its anchor (docs/catalogue-crawler.md § the anchor). The box
+  // only fetches candidates via Apify; the SERVER re-runs the full verification here (the box's own
+  // match is never trusted — the `verify_capture` doctrine). The `AnchorTrackError` rails map to the
+  // honest HTTP status: missing → 404, certified/already-anchored → 409 (a race with a user add).
+  const anchorTrackHandler = os.anchor_track.use(adminAuth).handler(async ({ input }) => {
+    try {
+      // Normalise each candidate to a bare Spotify track id (from `spotifyTrackId`, or parsed from
+      // its `uri`/`url`); a candidate with no resolvable id cannot be anchored to, so it is dropped.
+      const candidates = input.candidates.flatMap((candidate): AnchorCandidate[] => {
+        const spotifyTrackId = resolveSpotifyTrackId(candidate);
+
+        if (!spotifyTrackId) {
+          return [];
+        }
+
+        return [
+          {
+            albumImageUrl: candidate.albumImageUrl ?? null,
+            artists: candidate.artists.map((artist) => ({
+              id: artist.id ?? null,
+              name: artist.name,
+            })),
+            durationMs: candidate.durationMs ?? null,
+            isrc: candidate.isrc ?? null,
+            spotifyTrackId,
+            title: candidate.title,
+          },
+        ];
+      });
+
+      const result = await anchorTrack(input.trackId, candidates);
+
+      return { ...result, ok: true as const };
+    } catch (error) {
+      if (error instanceof AnchorTrackError) {
+        throw new ORPCError(error.reason === "not_found" ? "NOT_FOUND" : "CONFLICT", {
+          data: {
+            apiCode: error.reason,
+            apiMessage: error.message,
+          },
+          message: error.message,
+          status: error.reason === "not_found" ? 404 : 409,
+        });
+      }
+
+      throw apiFault(error);
+    }
+  });
+
   // GET /admin/catalogue/capture-budget — the spend readout. Admin tier (agent-allowed READ,
   // the `get_crawl_status` precedent): reading what a budget has left publishes nothing and
   // spends nothing, and the box's sweeps are entitled to know why the queue went quiet.
@@ -318,6 +399,7 @@ export function adminCatalogueHandlers(os: Implementer) {
     });
 
   return {
+    anchor_track: anchorTrackHandler,
     certify_track: certifyTrackHandler,
     clear_wrong_audio: clearWrongAudioHandler,
     crawl_catalogue: crawlCatalogueHandler,

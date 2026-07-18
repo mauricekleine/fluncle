@@ -1,0 +1,17 @@
+[Unit]
+Description=fluncle-anchor timer — fill catalogue Spotify anchors via Apify, one bounded batch every hour on the rave-02 host (not the Hermes gateway)
+
+[Timer]
+# First tick shortly after boot (staggered at 11min, off the other sweeps' minutes), then hourly.
+# The CADENCE is the metered-spend throttle: each row is a billed Apify search (~$0.015), so the
+# default 15 rows/hour ≈ 360 rows/day ≈ $5-6/day while the backlog drains — a deliberate, bounded
+# spend, not a firehose. The worklist is DERIVED (`spotify_uri is null`) and every attempt stamps a
+# re-ask backoff, so a tick that finds it drained is a cheap no-op and a tick missed across a reboot
+# costs nothing. Pause the spend entirely by stopping the timer; burn the backlog faster, attended,
+# with `--limit N`. See README.md for the cost math.
+OnBootSec=11min
+OnUnitActiveSec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

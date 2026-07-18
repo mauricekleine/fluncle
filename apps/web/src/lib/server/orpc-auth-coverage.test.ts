@@ -188,6 +188,11 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // the readiness gates (see ../publish-advance.ts). `draft_track_social` still 403s an
   // agent-tier YouTube push, so nothing ELSE gained that power.
   advance_publish_queue: "admin",
+  // The Spotify anchor write — ADMIN tier (adminAuth only, no operatorGuard), the
+  // `rank_catalogue`/`verify_capture` precedent: the box's Apify anchor sweep POSTs verified
+  // candidates and the Worker writes only catalogue-identity columns (`spotify_uri`/`spotify_url`),
+  // never a certification, so the box's agent token drives it. See docs/catalogue-crawler.md § the anchor.
+  anchor_track: "admin",
   // The crew announcement — operator tier: it posts a public Telegram crew callout
   // (and is one-shot, marker-guarded), so the agent token 403s.
   announce_mixtape: "operator",

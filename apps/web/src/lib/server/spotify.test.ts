@@ -227,7 +227,7 @@ describe("spotifyFetch 429 backoff", () => {
 
     vi.stubGlobal("fetch", fetchMock);
 
-    // The message still carries "429" — the shape `spotify-anchor-breaker` and crawl.ts sniff.
+    // The message still carries "429" — the shape a caller sniffs to tell a throttle apart.
     await expect(searchTrackCandidates("amen break")).rejects.toThrow(/429/);
     expect(searchCalls).toBe(1);
   });
