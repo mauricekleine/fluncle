@@ -26,6 +26,12 @@ export const Route = createFileRoute("/galaxy")({
         content: description,
         name: "description",
       },
+      // A client-only canvas: crawlers see chrome and no content, so the page stays out of the
+      // index (operator-ruled 2026-07-18). The OG card below keeps it fully shareable.
+      {
+        content: "noindex",
+        name: "robots",
+      },
       {
         content: title,
         property: "og:title",

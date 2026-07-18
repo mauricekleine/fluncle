@@ -238,6 +238,13 @@ const crewItems: NavItem[] = [
     to: "/docs",
   },
   {
+    blurb: "Follow a banger through every machine, end to end.",
+    id: "pipeline",
+    kind: "route",
+    label: "Pipeline",
+    to: "/pipeline",
+  },
+  {
     action: "submit",
     blurb: "Heard something? Send it my way.",
     id: "submit",

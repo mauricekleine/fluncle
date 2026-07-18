@@ -1,4 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { siteUrl } from "@/lib/fluncle-links";
 import { useEffect, useRef } from "react";
 
 // Fluncle's /pipeline — a wide, draggable infographic of a finding's whole life, from the
@@ -14,6 +15,7 @@ const description =
 export const Route = createFileRoute("/pipeline")({
   component: PipelinePage,
   head: () => ({
+    links: [{ href: `${siteUrl}/pipeline`, rel: "canonical" }],
     meta: [
       { title },
       { content: description, name: "description" },
