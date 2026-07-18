@@ -17,8 +17,11 @@ Type=oneshot
 ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/publish-advance-sweep.sh
 # One `curl --max-time 30` POST that triggers the Worker to advance at most ONE ready
 # finding into the publish push. The Worker no-ops instantly while the kill switch is on
-# (which is the default), and on an empty/unready queue.
-TimeoutStartSec=120
+# (which is the default), and on an empty/unready queue. The curl is wall-clock-capped at
+# 30s; 240s is the ceiling on the surrounding docker-exec/shell so a tick that merely overlaps
+# a pin-watch docker image build (~4 min of heavy CPU contention on this 4-vCPU box) is not
+# false-killed by scheduling starvation; still far under the 30-min cadence.
+TimeoutStartSec=240
 # Modest hardening for a root docker-driving oneshot.
 NoNewPrivileges=true
 ProtectControlGroups=true

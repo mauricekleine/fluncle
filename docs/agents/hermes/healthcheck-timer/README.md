@@ -18,7 +18,7 @@ Each tick is one `docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/
 2. `fluncle-healthcheck.ts` probes each service in parallel (each with a short 3–5s timeout), diffs every status against `${HOME}/.healthcheck/state.json`, Discord-pings only on a flip to `down` or a recovery, and POSTs the snapshot to the agent-tier `record_health` op that `/status` reads.
 3. It pings the optional external dead-man's-switch beacon (`HEALTHCHECK_BEACON_URL`) so an outside service alerts if THIS box ever stops ticking, and prints one JSON summary line.
 
-A clean tick runs ~5s, well inside the unit's `TimeoutStartSec=120` (which matches the old `--no-agent` cron's 120s job budget). The prober's own `cron.healthcheck` `/status` row is now **self-evident** (reaching the probe means the timer fired → `ok`), not a gateway-output-dir read — a host-timer prober has no Hermes cron output dir of its own, and reading its own would be circular.
+A clean tick runs ~5s, well inside the unit's `TimeoutStartSec=300` (raised from 120s so a pin-watch docker image build's ~4-min CPU-contention window can't false-kill the prober and masquerade a build as an outage). The prober's own `cron.healthcheck` `/status` row is now **self-evident** (reaching the probe means the timer fired → `ok`), not a gateway-output-dir read — a host-timer prober has no Hermes cron output dir of its own, and reading its own would be circular.
 
 ## Deploy (on rave-02, one time)
 

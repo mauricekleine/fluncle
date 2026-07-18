@@ -56,6 +56,9 @@ const FIRECRAWL_SEARCH_URL = "https://api.firecrawl.dev/v2/search";
 // homepage can be very slow; best-effort → abort and move on).
 const FIRECRAWL_TIMEOUT_MS = 45_000;
 const YOUTUBE_CHANNELS_API = "https://www.googleapis.com/youtube/v3/channels?part=id&maxResults=1";
+// The YouTube handle→channel lookup is a best-effort refinement (the @handle URL is a
+// fine fallback), so bound it too — an unbounded fetch here can hang the whole resolve.
+const YOUTUBE_RESOLVE_TIMEOUT_MS = 10_000;
 
 // ── Rate limiter ─────────────────────────────────────────────────────────────
 // The MB gate lives in ./musicbrainz.ts — the ONE client every MB caller in the
@@ -343,6 +346,9 @@ async function resolveYouTubeHandleToChannelUrl(rawUrl: string): Promise<string>
     const apiUrl = `${YOUTUBE_CHANNELS_API}&forHandle=@${encodeURIComponent(handle)}`;
     const response = await fetch(apiUrl, {
       headers: { Authorization: `Bearer ${accessToken}` },
+      // Bound the call — an unbounded fetch here can stall the whole resolve, and the
+      // handle-only URL below is a fine fallback. Matches the Firecrawl gap-fill's deadline.
+      signal: AbortSignal.timeout(YOUTUBE_RESOLVE_TIMEOUT_MS),
     });
 
     if (!response.ok) {

@@ -17,8 +17,12 @@ Type=oneshot
 # box's existing agent-scoped token drives it.
 ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/crawl-sweep.sh
 # A PURE trigger — zero LLM tokens. One pass is ~10 MusicBrainz calls paced at ~1 req/s in
-# the Worker (≈12s), plus headroom for a Retry-After'd 503. 120s is generous.
-TimeoutStartSec=120
+# the Worker (≈12–38s normal), plus headroom for a Retry-After'd 503. The old 120s ceiling
+# false-killed a tick that merely overlapped a pin-watch docker image build (~4 min of heavy
+# CPU contention on this 4-vCPU box); 600s clears that window with room to spare. It equals
+# the 10-min cadence: systemd never starts a new tick while one is active, so an over-long
+# pass just skips the next trigger and self-heals — it is a backstop, never the normal path.
+TimeoutStartSec=600
 # Modest hardening for a root docker-driving oneshot.
 NoNewPrivileges=true
 ProtectControlGroups=true

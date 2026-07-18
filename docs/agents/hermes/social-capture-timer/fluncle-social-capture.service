@@ -16,8 +16,11 @@ Type=oneshot
 # marker (cron-output.sh) so the prober stays honest.
 ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/social-capture-sweep.sh
 # One `curl --max-time 30` POST that triggers the Worker to drain the "pushed but no URL"
-# backlog. A short cap; the Worker no-ops once every pending post has a captured URL.
-TimeoutStartSec=120
+# backlog. The curl itself is wall-clock-capped at 30s; the Worker no-ops once every pending
+# post has a captured URL. 240s is the ceiling on the surrounding docker-exec/shell so a tick
+# that merely overlaps a pin-watch docker image build (~4 min of heavy CPU contention on this
+# 4-vCPU box) is not false-killed by scheduling starvation; still far under the 10-min cadence.
+TimeoutStartSec=240
 # Modest hardening for a root docker-driving oneshot.
 NoNewPrivileges=true
 ProtectControlGroups=true
