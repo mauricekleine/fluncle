@@ -15,6 +15,7 @@ import { Button } from "@fluncle/ui/components/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@fluncle/ui/components/popover";
 import { Switch } from "@fluncle/ui/components/switch";
 import { siteUrl } from "@/lib/fluncle-links";
+import { jsonLdScript } from "@/lib/json-ld";
 import { formatDateLong } from "@/lib/format";
 import { activeSliceForOffset } from "@/lib/observation-slices";
 import { videoClipCrop, videoCrop, videoCropPoster, videoVersion } from "@/lib/media";
@@ -47,6 +48,9 @@ import { useVideoStallRecovery } from "@/lib/use-video-recovery";
 const title = "Fluncle, observing";
 const description =
   "Drum & bass bangers from another dimension. One continuous run of Fluncle's findings, each playing under the observation he logged when he got there.";
+// The link-preview image: the site cover the other pages fall back to. Without it
+// the summary_large_image card unfurls blank.
+const coverUrl = `${siteUrl}/fluncle-cover.png`;
 
 // Fluncle's voice, recovered-log register (copywriting-fluncle, VOICE.md §5):
 // in-fiction, no banned identity words (NEVER broadcast/station/tune in/live —
@@ -106,7 +110,25 @@ export const Route = createFileRoute("/radio")({
       { content: title, property: "og:title" },
       { content: description, property: "og:description" },
       { content: `${siteUrl}/radio`, property: "og:url" },
+      { content: coverUrl, property: "og:image" },
       { content: "summary_large_image", name: "twitter:card" },
+      { content: coverUrl, name: "twitter:image" },
+    ],
+    // A minimal CreativeWork node: /radio is one continuous, always-on player of
+    // Fluncle's findings — an honest CreativeWork, not a licensed BroadcastService.
+    scripts: [
+      jsonLdScript({
+        "@context": "https://schema.org",
+        "@type": "CreativeWork",
+        creator: { "@type": "Person", name: "Fluncle" },
+        description,
+        genre: "Drum and bass",
+        image: coverUrl,
+        inLanguage: "en",
+        isAccessibleForFree: true,
+        name: title,
+        url: `${siteUrl}/radio`,
+      }),
     ],
   }),
 });
