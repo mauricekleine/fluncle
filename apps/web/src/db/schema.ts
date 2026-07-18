@@ -417,6 +417,13 @@ export const tracks = sqliteTable(
     // over a text column (not the vector `libsql_vector_idx` that wedges hosted Turso), so it
     // builds like `tracks_key_idx` / `tracks_isrc_idx` beside it.
     index("tracks_release_date_idx").on(table.releaseDate),
+    // The `/tracks` hub's BPM-range filter (`bpm >= ? and bpm <= ?`) over the whole-archive
+    // browse list. A plain ASC btree — SQLite reverse-scans it, and a `desc()` index would poison
+    // the drizzle snapshot into rebuilding every index on the next migration (the ratified trap).
+    // The hub's primary sort still rides `tracks_release_date_idx`; this index earns its keep for a
+    // narrow BPM range the planner can seek rather than filtering every scanned row. Builds like the
+    // `tracks_key_idx` btree beside it (never the vector `libsql_vector_idx` that wedges hosted Turso).
+    index("tracks_bpm_idx").on(table.bpm),
     index("tracks_nearest_finding_score_idx").on(table.nearestFindingScore),
     index("tracks_capture_priority_idx").on(table.capturePriority),
     index("tracks_source_audio_attempted_at_idx").on(table.sourceAudioAttemptedAt),

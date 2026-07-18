@@ -2612,6 +2612,50 @@ a.catalogue-letter:focus-visible {
   text-align: center;
 }
 
+/* ── /tracks hub — the two-register list + its load-more ──────────────────────────────
+   The filter bar is built from the Shadcn design system (Input / Label / Select / Button) with
+   Tailwind layout utilities in the route — no bespoke control tokens here. The list reuses
+   `.fresh-rows` / `FreshStreamRow` unchanged; only the load-more row is styled below. */
+.tracks-hub-list {
+  margin-top: 0.4rem;
+}
+
+.tracks-hub-more {
+  border-top: 1px solid color-mix(in oklch, var(--border) 55%, transparent);
+  list-style: none;
+}
+
+.tracks-hub-more-button {
+  align-items: center;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  display: flex;
+  font-size: 0.85rem;
+  font-weight: 700;
+  gap: 0.5rem;
+  justify-content: center;
+  min-height: 3.25rem;
+  width: 100%;
+}
+
+/* Stardust bold text, Gold Veil hover (DESIGN.md's Track Row pagination spec): the wash lands and
+   the text ignites to Eclipse Glow — a heat, never a dim. While fetching, `aria-disabled` marks it
+   busy without dropping keyboard focus (a `disabled` button ejects focus mid-fetch). */
+.tracks-hub-more-button:hover:not([aria-disabled="true"]),
+.tracks-hub-more-button:focus-visible {
+  background: var(--gold-veil, color-mix(in oklch, var(--eclipse-gold) 10%, transparent));
+  color: var(--eclipse-glow);
+}
+
+.tracks-hub-more-button:focus-visible {
+  outline: 2px solid var(--eclipse-glow);
+  outline-offset: -2px;
+}
+
+.tracks-hub-more-button[aria-disabled="true"] {
+  cursor: default;
+}
+
 .log-index-list {
   display: grid;
   list-style: none;

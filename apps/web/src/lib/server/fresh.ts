@@ -44,17 +44,20 @@ import {
 // is 1-based with the lead first, so the scalar subquery picks the lead; the join is a PK lookup on
 // `artists`. Both are indexed (`track_artists_track_id_idx`, the `artists` PK) and the outer scan is
 // already window-bounded + LIMIT-capped, so this stays a bounded seek, never a growing-table scan.
-const LEAD_ARTIST_JOIN = `left join artists fresh_lead_artist on fresh_lead_artist.id = (
+// EXPORTED so the `/tracks` hub (`tracks-hub.ts`) can hang the SAME lead-artist avatar on its rows
+// without re-deriving the join — it renders through the identical `FreshStreamRow`, so it wants the
+// identical avatar (dimmed into the unlit register on a catalogue row).
+export const LEAD_ARTIST_JOIN = `left join artists fresh_lead_artist on fresh_lead_artist.id = (
         select ta.artist_id from track_artists ta
         where ta.track_id = tracks.track_id
         order by ta.position asc limit 1)`;
-const LEAD_ARTIST_SELECT = `fresh_lead_artist.image_url as artist_image_url,
+export const LEAD_ARTIST_SELECT = `fresh_lead_artist.image_url as artist_image_url,
        fresh_lead_artist.image_key as artist_image_key,
        fresh_lead_artist.image_state as artist_image_state,
        fresh_lead_artist.image_updated_at as artist_image_updated_at`;
 
 /** The four `artists` image columns the lead-artist join selects, on any fresh row. */
-type LeadArtistRow = {
+export type LeadArtistRow = {
   artist_image_key: string | null;
   artist_image_state: string | null;
   artist_image_updated_at: string | null;
@@ -62,7 +65,7 @@ type LeadArtistRow = {
 };
 
 /** The lead artist's best avatar (owned master when resolved, else Spotify) for a joined row. */
-function leadArtistAvatarUrl(row: LeadArtistRow): string | undefined {
+export function leadArtistAvatarUrl(row: LeadArtistRow): string | undefined {
   return bestArtistAvatarUrl({
     imageKey: row.artist_image_key,
     imageState: row.artist_image_state,

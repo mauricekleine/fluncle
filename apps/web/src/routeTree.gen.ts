@@ -9,6 +9,7 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as TracksRouteImport } from './routes/tracks'
 import { Route as StatusRouteImport } from './routes/status'
 import { Route as SitemapDotxmlRouteImport } from './routes/sitemap[.]xml'
 import { Route as RssDotxmlRouteImport } from './routes/rss[.]xml'
@@ -128,6 +129,11 @@ import { Route as ApiV1AdminSpotifyAuthCallbackRouteImport } from './routes/api/
 import { Route as ApiV1AdminMixcloudAuthStartRouteImport } from './routes/api/v1/admin/mixcloud/auth/start'
 import { Route as ApiV1AdminMixcloudAuthCallbackRouteImport } from './routes/api/v1/admin/mixcloud/auth/callback'
 
+const TracksRoute = TracksRouteImport.update({
+  id: '/tracks',
+  path: '/tracks',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const StatusRoute = StatusRouteImport.update({
   id: '/status',
   path: '/status',
@@ -773,6 +779,7 @@ export interface FileRoutesByFullPath {
   '/rss.xml': typeof RssDotxmlRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/status': typeof StatusRoute
+  '/tracks': typeof TracksRoute
   '/admin/artists': typeof AdminArtistsRoute
   '/admin/catalogue': typeof AdminCatalogueRoute
   '/admin/chat': typeof AdminChatRoute
@@ -891,6 +898,7 @@ export interface FileRoutesByTo {
   '/rss.xml': typeof RssDotxmlRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/status': typeof StatusRoute
+  '/tracks': typeof TracksRoute
   '/admin/artists': typeof AdminArtistsRoute
   '/admin/catalogue': typeof AdminCatalogueRoute
   '/admin/chat': typeof AdminChatRoute
@@ -1012,6 +1020,7 @@ export interface FileRoutesById {
   '/rss.xml': typeof RssDotxmlRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/status': typeof StatusRoute
+  '/tracks': typeof TracksRoute
   '/admin/artists': typeof AdminArtistsRoute
   '/admin/catalogue': typeof AdminCatalogueRoute
   '/admin/chat': typeof AdminChatRoute
@@ -1134,6 +1143,7 @@ export interface FileRouteTypes {
     | '/rss.xml'
     | '/sitemap.xml'
     | '/status'
+    | '/tracks'
     | '/admin/artists'
     | '/admin/catalogue'
     | '/admin/chat'
@@ -1252,6 +1262,7 @@ export interface FileRouteTypes {
     | '/rss.xml'
     | '/sitemap.xml'
     | '/status'
+    | '/tracks'
     | '/admin/artists'
     | '/admin/catalogue'
     | '/admin/chat'
@@ -1372,6 +1383,7 @@ export interface FileRouteTypes {
     | '/rss.xml'
     | '/sitemap.xml'
     | '/status'
+    | '/tracks'
     | '/admin/artists'
     | '/admin/catalogue'
     | '/admin/chat'
@@ -1493,6 +1505,7 @@ export interface RootRouteChildren {
   RssDotxmlRoute: typeof RssDotxmlRoute
   SitemapDotxmlRoute: typeof SitemapDotxmlRoute
   StatusRoute: typeof StatusRoute
+  TracksRoute: typeof TracksRoute
   AlbumSlugRoute: typeof AlbumSlugRoute
   ApiChatRoute: typeof ApiChatRoute
   ApiStatusRoute: typeof ApiStatusRoute
@@ -1563,6 +1576,13 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/tracks': {
+      id: '/tracks'
+      path: '/tracks'
+      fullPath: '/tracks'
+      preLoaderRoute: typeof TracksRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/status': {
       id: '/status'
       path: '/status'
@@ -2509,6 +2529,7 @@ const rootRouteChildren: RootRouteChildren = {
   RssDotxmlRoute: RssDotxmlRoute,
   SitemapDotxmlRoute: SitemapDotxmlRoute,
   StatusRoute: StatusRoute,
+  TracksRoute: TracksRoute,
   AlbumSlugRoute: AlbumSlugRoute,
   ApiChatRoute: ApiChatRoute,
   ApiStatusRoute: ApiStatusRoute,

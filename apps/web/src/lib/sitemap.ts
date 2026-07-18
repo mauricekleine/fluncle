@@ -292,6 +292,10 @@ function kindEntries(kind: SitemapKind, bags: SitemapBags): string[] {
         // content `latest` stamp (the builder is pure — the page's own volatility rides its
         // Cache-Control, not a synthetic "now"), and it is listed unconditionally like /artists.
         staticEntry(`${siteUrl}/fresh`, latest),
+        // The whole-archive track index — a real hub (indexable, self-canonical): every track,
+        // findings + catalogue, newest release first. Listed unconditionally like /fresh; a
+        // filtered view (`?bpmMin=…`) is `noindex` per-request, so only the bare hub is a URL here.
+        staticEntry(`${siteUrl}/tracks`, latest),
         // The graph HUBS are listed unconditionally, exactly like /artists: a hub is a real
         // page whose content is the whole list, so the per-page thin-content gate (which can,
         // legitimately, admit no DETAIL pages at all) says nothing about whether the hub
