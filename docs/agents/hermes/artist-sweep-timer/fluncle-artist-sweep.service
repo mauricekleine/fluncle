@@ -16,8 +16,14 @@ Type=oneshot
 # marker (cron-output.sh) so the prober stays honest.
 ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/artist-sweep.sh
 # A pure Worker-trigger (agent-tier resolve_artist: the MusicBrainz url-rel walk + Firecrawl
-# gap-fill + YouTube channel-ID resolution); one bounded batch per tick. Zero box tokens.
-TimeoutStartSec=300
+# gap-fill + YouTube channel-ID resolution); one bounded batch per tick. Zero box tokens. A
+# healthy tick is ~55s. The real fix for the chronic timeouts is upstream — every external
+# fetch on the resolve path now carries a deadline (the shared MB client, the Firecrawl
+# gap-fill, the YouTube lookup), and the box driver bounds each `fluncle` CLI call — so one
+# hung item fails that item instead of blocking the whole batch. This 900s ceiling is only
+# the backstop: 3× a healthy tick plus the ~4-min pin-watch-build contention window, and far
+# under the 60-min cadence.
+TimeoutStartSec=900
 # Modest hardening for a root docker-driving oneshot.
 NoNewPrivileges=true
 ProtectControlGroups=true

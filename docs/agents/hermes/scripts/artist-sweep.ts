@@ -41,6 +41,14 @@ const BATCH_CAP = 5; // artists resolved per tick (MB is 1 req/s; 5 artists ≈ 
 const QUEUE_LIMIT = 50;
 const IMAGE_BACKFILL_LIMIT = 50; // one Spotify /v1/artists batch per tick
 
+// Per-CLI-call wall-clock ceiling. The Worker's `resolve_artist` is itself bounded now
+// (the MB client and every gap-fill fetch carry a deadline), but this is the box-side
+// backstop: if one request still hangs, it fails THAT item (caught per-artist below and
+// counted `failed`) instead of blocking the whole sweep until systemd kills it mid-run —
+// which is exactly what made the queue head retry forever, tick after tick. Generous vs a
+// healthy resolve (a paced MB walk + a ≤45s Firecrawl gap-fill), tight vs the 900s ceiling.
+const CLI_CALL_TIMEOUT_MS = 120_000;
+
 const FLUNCLE_BIN = process.env.FLUNCLE_BIN ?? "fluncle";
 
 const log = (message: string) => console.error(`[artist-sweep] ${message}`);
@@ -73,10 +81,15 @@ export function fluncleJson<T>(args: string[]): T {
   const result = spawnSync(FLUNCLE_BIN, [...args, "--json"], {
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
+    timeout: CLI_CALL_TIMEOUT_MS,
   });
 
   if (result.error) {
-    throw new Error(`failed to spawn ${FLUNCLE_BIN}: ${result.error.message}`);
+    // A timeout kill (SIGTERM after CLI_CALL_TIMEOUT_MS) surfaces here as an ETIMEDOUT
+    // error — name it so a hung item is legible in the cron log, not just "failed to spawn".
+    const timedOut = (result.error as NodeJS.ErrnoException).code === "ETIMEDOUT";
+    const detail = timedOut ? `timed out after ${CLI_CALL_TIMEOUT_MS}ms` : result.error.message;
+    throw new Error(`fluncle ${args.join(" ")} ${detail}`);
   }
 
   const code = result.status ?? 1;

@@ -18,8 +18,10 @@ Type=oneshot
 ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/label-images-sweep.sh
 # A PURE trigger — zero LLM tokens. One batch is a few labels, each ~4 MusicBrainz/Discogs calls
 # paced at ~1 req/s in the Worker; the vendor circuit breaker stops the pass on a throttle, so a
-# tick is well under a minute. 120s is generous.
-TimeoutStartSec=120
+# tick is well under a minute normally. The old 120s ceiling false-killed a tick that merely
+# overlapped a pin-watch docker image build (~4 min of heavy CPU contention on this 4-vCPU box);
+# 480s clears that window and still sits far under the 60-min cadence.
+TimeoutStartSec=480
 # Modest hardening for a root docker-driving oneshot.
 NoNewPrivileges=true
 ProtectControlGroups=true

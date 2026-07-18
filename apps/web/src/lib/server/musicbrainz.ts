@@ -29,6 +29,17 @@ const MUSICBRAINZ_API_ROOT = "https://musicbrainz.org/ws/2";
  */
 export const MB_USER_AGENT = "Fluncle/1.0 (+https://www.fluncle.com)";
 
+/**
+ * Per-request wall-clock deadline. MB is 1 req/s paced, so a healthy call answers in
+ * well under a second; anything past this is a stalled socket. It MUST be bounded:
+ * every caller shares the one serialized `throttle` gate below, so a single hung
+ * request would wedge the whole chain — and, in turn, every box driver that blocks on
+ * it (`fluncle-artist-sweep`, `fluncle-crawl`, `fluncle-backfill`) until their systemd
+ * ceiling kills them. An aborted request resolves to `{ data: null }`, the same as any
+ * network error — a stall is not throttling, so never `rateLimited`.
+ */
+const MB_REQUEST_TIMEOUT_MS = 15_000;
+
 /** The pacing floor between two MB calls. Mutable ONLY via the test seam below. */
 let rateLimitIntervalMs = 1100;
 
@@ -80,8 +91,13 @@ export function mbFetch<T>(path: string): Promise<MbResult<T>> {
       let response: Response;
 
       try {
-        response = await fetch(url, { headers: { "User-Agent": MB_USER_AGENT } });
+        response = await fetch(url, {
+          headers: { "User-Agent": MB_USER_AGENT },
+          signal: AbortSignal.timeout(MB_REQUEST_TIMEOUT_MS),
+        });
       } catch (error) {
+        // A network error OR a timeout abort (AbortSignal.timeout → TimeoutError) —
+        // both mean this call yielded nothing; move on rather than wedge the chain.
         logEvent("warn", "musicbrainz.request-threw", { error, path });
 
         return { data: null, rateLimited: false };
