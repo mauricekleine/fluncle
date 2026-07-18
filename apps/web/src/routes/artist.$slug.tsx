@@ -25,6 +25,7 @@ import { FindingsGrid } from "@/components/graph-sections";
 import { GraphLink } from "@/components/graph-link";
 import { StoryNotFoundState } from "@/components/stories/stories-states";
 import { type ArtistSocialPlatform } from "@/lib/artist-socials";
+import { entityFreshChannel } from "@/lib/fresh-feed-rss";
 import { siteUrl } from "@/lib/fluncle-links";
 import { jsonLdScript } from "@/lib/json-ld";
 import { artistBreadcrumbsJsonLd, musicGroupJsonLd } from "@/lib/log-schema";
@@ -297,6 +298,14 @@ function artistHead(loaderData: ArtistPageData | undefined) {
   return {
     links: [
       { href: pageUrl, rel: "canonical" },
+      // RSS discovery: this artist's new-releases feed (the 30-day window, this artist only).
+      // The bare `/artist/<slug>/fresh.xml`, never the paged catalogue URL.
+      {
+        href: `${siteUrl}/artist/${slug}/fresh.xml`,
+        rel: "alternate",
+        title: entityFreshChannel("artist", name).title,
+        type: "application/rss+xml",
+      },
       // oEmbed discovery: a pasted /artist link unfurls as a `link`-type card
       // (name + cover). See routes/oembed.ts.
       {
