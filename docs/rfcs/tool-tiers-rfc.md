@@ -4,7 +4,7 @@
 **For:** a fresh build session or a small team of agents (5 ordered PRs, mostly parallelizable after PR-1).
 **Canon/authority:** the codebase (`apps/web/src/lib/server/{mcp,chat,webmcp,search,fresh}.ts`), `DESIGN.md` (Unlit Rule §157), `VOICE.md` / the copywriting-fluncle voice canon (Found Rule; probe fiction), `docs/naming-conventions.md` (verb_noun), `docs/planning/ROADMAP.md` (the two ratified epics). This is planning, not spec.
 
-> Process note: four divergent research threads (recon of both tool systems; shared-registry architecture; the two-tier taxonomy; sequencing/auth/naming/tests), a /taste pass, and a 3-role adversarial panel (staff engineer; canon/voice; product-scope/security). The reviewers found **real, load-bearing errors** — a factually-wrong security "leash," an internal `build_set` contradiction, an oversold structural guarantee, an input-schema break, four stale model-facing strings. Their corrections are baked in; live verifications in the appendix.
+> Process note: four divergent research threads (recon of both tool systems; shared-registry architecture; the two-tier taxonomy; sequencing/auth/naming/tests), a /taste pass, and a 3-role adversarial panel (staff engineer; canon/voice; product-scope/security). The reviewers found **real, load-bearing errors** — a factually-wrong security "leash," an oversold structural guarantee, an input-schema break, four stale model-facing strings — all baked in. One panel flag (the canon reviewer's "`build_set` must stay certified-only") was itself **overturned by the operator**: `/mix`, `build_set`'s web twin, is already catalogue-aware, so `build_set` surfaces catalogue too (Unit C). All handoff decisions are resolved (see "Decisions"). Live verifications in the appendix.
 
 ## The standard (definition of done)
 
@@ -64,7 +64,7 @@ type ToolDef<In extends z.ZodType = z.ZodType> = {
 
 **Migration (least churn):** seed with the 5 overlapping tools (`get_track`, `get_random_track`, `get_status`, `list_fresh`, `list_tracks`), each declaring its `project` per transport lifted from today's code, then `mcp.ts`/`chat.ts`/`webmcp.ts` spread `SHARED_TOOLS.filter(t => t.transports.includes(<x>)).map(to<X>Tool)` alongside their transport-only extras.
 
-**PR-1 is NOT input-schema-behavior-preserving (staff-eng, must-decide).** The three transports disagree on input schemas today — `get_track` names its arg `idOrLogId` on MCP/WebMCP but `coordinate` in chat; `list_fresh` caps at 100 on MCP/WebMCP but 48 in chat; `list_tracks` is `number` (MCP) vs `integer` (chat). Unifying forces a choice, and one path (renaming `idOrLogId`) is a breaking change for existing MCP clients. This is **Decision 2** below, not a silent merge.
+**PR-1 is NOT input-schema-behavior-preserving (staff-eng, must-decide).** The three transports disagree on input schemas today — `get_track` names its arg `idOrLogId` on MCP/WebMCP but `coordinate` in chat; `list_fresh` caps at 100 on MCP/WebMCP but 48 in chat; `list_tracks` is `number` (MCP) vs `integer` (chat). Unifying forces a choice. **Resolved (operator):** canonical `idOrLogId` (rename chat's `coordinate` — 0 current consumers, so no break), `list_fresh` cap = 100, `list_tracks` = `integer`.
 
 **The MCP `.parse()` change eats tolerant clamping (staff-eng, per-tool).** MCP does not validate args today — the limit tools _clamp_ (`clampLimit`, `mcp.ts:901`), so `limit: 100` works and `limit: "10"` falls to a default. A bare `z…max(48).parse()` would **throw** on both. For the clamping tools, the shared schema must preserve clamp semantics (`.catch()`/`.default()` in the Zod schema, or `.safeParse` + fall back to the clamp) — not a blanket strict parse. Land per-tool, with a test.
 
@@ -85,7 +85,7 @@ type ToolDef<In extends z.ZodType = z.ZodType> = {
 
 Today ChatDnB discards `certified: false` rows at the wire. PR-4 stops discarding them **in exactly two tools** and surfaces them in the unlit register.
 
-**Only `search_archive` and `list_fresh` split. `build_set` stays certified-only (canon reviewer — VIOLATION if changed).** A mix chain is _lit by construction_: every step carries a spoken `reason` (narration) and the `?set=` handoff is a stream of certified Log ID tokens (`chat.ts:249`) — a `ChatCatalogueTrack` has no `logId`/bpm/key, cannot ride the token stream, and cannot earn a reason without the very fields the unlit shape forbids. `build_set`'s existing `candidate.certified && candidate.logId` filter is correct and load-bearing. A regression test must assert `build_set` never emits a `catalogue` bucket.
+**All THREE list-returning tools split — `search_archive`, `list_fresh`, AND `build_set` — because `build_set` is the chat twin of `/mix`, which is already catalogue-aware (operator correction, 2026-07-18; the panel's canon reviewer got this wrong).** The `/mix` rail runs `MIX_FROM = tracks left join findings` (`tracks.ts:1251`) — "an uncertified track competes on exactly the same terms as a finding" (`tracks.ts:1247`) — and its `MixTrack` DTO already encodes the Unlit Rule in three lines (`tracks.ts:1281`: `certified` flag, `logId` present iff certified). The `?set=` handoff carries catalogue too: the shared `setToken(track: { logId?: string; trackId: string })` (`mix-set.ts`) uses the `trackId` when there is no coordinate. And the step `reason` ("Same key", "tempo locked") is a **mixability measurement** (a chip), not editorial narration — measurement is explicitly allowed on uncertified tracks (the certification rail: measure yes, speak no). So the canon reviewer's premise ("a mix chain is lit by construction, the tokens are certified Log IDs") is false against the live `/mix`. **The fix:** `build_set` drops its `candidate.certified && candidate.logId` filter (`chat.ts:219`) to match `/mix` — it chains BOTH registers, catalogue steps riding in the unlit mix register (bpm/key + a mixability reason chip, `trackId` token, NO coordinate/note/observation, never narrated). It returns the existing `set` shape rendered by `ChainCard` (which shows chips, not free prose per step — so no narration surface is added; it stays exactly as canon-safe as `/mix` is today). Regression test: `build_set` chains catalogue candidates in the unlit register (bpm/key/reason, no coordinate), matching `/mix`.
 
 **The output contract:**
 
@@ -128,13 +128,15 @@ Three internal read tools (both transports), each resolving a name to a slug the
 - **PR-5 (browse tools)** — depends on PR-4's `catalogue` bucket + card; ships last.
 - Deploy discipline: space the merges; PR-4/PR-5 both touch `chat.ts` + the chat components — sequence them.
 
-## Decisions needed BEFORE handoff
+## Decisions — RESOLVED by the operator (2026-07-18)
 
-1. **`build` verb.** `build_set` isn't in `APPROVED_VERBS` (verified) and the new registry naming test surfaces it. **Recommend: add `build` to the closed set with a documented reason** (the pattern the file uses for `anchor`/`drip`/`certify`). Confirm, or rename.
-2. **Input-schema unification (staff-eng — a breaking-change call).** Unify `get_track`'s arg name (`idOrLogId` vs `coordinate`) — **recommend keeping `idOrLogId` and adding `coordinate` as an accepted alias** so no MCP client breaks — and `list_fresh`'s cap (**recommend 100** everywhere, the more generous machine bound; chat's cards page anyway). Confirm both.
-3. **`search_archive` canonical name.** Keep `search_archive` through Epic 1 (no collision), collapse to `search_tracks` in Epic 2 when Spotify retires. Confirm the two-step.
-4. **Writes in ChatDnB.** Confirm `submit_track` + `subscribe_newsletter` appear as ChatDnB tools (gated-session-safe).
-5. **Catalogue register loudness in prose.** How much may Fluncle say around a catalogue list ("here's what's out there, none of them mine yet" vs a bare list)? A voice call for `copywriting-fluncle` — it sets the exact copy.
+1. **`build` verb** → **add `build` to the closed `APPROVED_VERBS` set** with a documented reason (the `anchor`/`drip`/`certify` pattern). (Recommendation ratified by keeping `build_set`.)
+2. **Input-schema unification** → **`list_fresh` cap = 100** everywhere; **`get_track` = canonical `idOrLogId`** — with **0 current consumers** the simplest path is to rename chat's `coordinate` arg to `idOrLogId` (an alias is optional insurance, not required). No breaking-change risk.
+3. **`search_archive` name** → keep `search_archive` through Epic 1; **collapse to `search_tracks` in Epic 2** when the Spotify tool retires. Ratified.
+4. **Writes in ChatDnB** → **yes**, `submit_track` + `subscribe_newsletter` are ChatDnB tools (gated-session-safe).
+5. **Catalogue register loudness** → **a bare list.** Fluncle names and lists catalogue rows with no surrounding "here's what's out there" prose framing; the list stands alone (the copy for the empty-state + any lead-in still goes through `copywriting-fluncle`, but the default is bare).
+
+_All decisions resolved — the RFC is ready to hand to a build session._
 
 ## Acceptance criteria
 
@@ -144,7 +146,7 @@ Three internal read tools (both transports), each resolving a name to a slug the
 - **Auth cross-field test:** the realized MCP tool set contains no `access: "session"` tool; a registry lint that any state-mutating tool is `access: "session"`.
 - **Rate-limit test:** the MCP `search_archive` execute calls `assertRateLimit({ action: "search_archive", … })`; a sonic query carries an abort timeout.
 - **Schema snapshot test:** each tool's `z.toJSONSchema` output snapshot carries its `required`/min/max (guards a zod-version bump silently changing output) — a snapshot, not a self-comparison.
-- **Naming test** over the registry tool names (verb_noun + `APPROVED_VERBS` incl. `build`); **`build_set` never emits a `catalogue` bucket** (regression).
+- **Naming test** over the registry tool names (verb_noun + `APPROVED_VERBS` incl. `build`); **`build_set` chains catalogue candidates in the unlit mix register** (bpm/key/reason chip, `trackId` token, no coordinate/note), matching `/mix` (regression).
 - **Grounding invariants** on both transports: `previewUrl`/expiring tokens and the private capture key never leak.
 - **Red-team canon eval** (PR-4): the uncrawled-label prompt set asserts no narration verbs on catalogue rows.
 - Docs: `docs/surfaces-doctrine.md` `mcp.server` exposedContent; the naming closed-verb set; the ROADMAP epic flipped to "Epic 1 has no Epic-2 read dependency."
@@ -154,7 +156,7 @@ Three internal read tools (both transports), each resolving a name to a slug the
 
 - **🔴 The anonymous MCP's new reach.** `search_archive` on `/mcp` is a cost/DoS path (8s unleashed vector scan + a real-money LLM tier) — **mitigated only by the mandatory shared `assertRateLimit` + the sonic abort timeout in PR-2.** The earlier "leash" claim was retracted as factually wrong.
 - **Prose leakage** (narration ≠ citation) — the residual the note-less shape can't catch on chat; carried by the tightened prompt + the red-team eval, and honestly probabilistic, not structural.
-- **`build_set` contradiction** — struck; it stays certified-only, with a regression test.
+- **`build_set` register** — resolved: it mirrors `/mix` and chains catalogue in the unlit register (the panel's "certified-only" was wrong; `/mix` is already catalogue-aware, and `ChainCard` shows chips not prose, so no narration surface is added).
 - **Input-schema break** (`get_track` arg rename) — mitigated by the `coordinate` alias (Decision 2).
 - **The `.parse()` clamp regression** — per-tool clamp-preserving schemas, not a blanket strict parse.
 - **The render either/or bug** — `{findings, catalogue}` must render both buckets, heading gated on `findings.length > 0`.
