@@ -49,7 +49,6 @@ import {
   type CatalogueRecord,
   type CatalogueSort,
   listArtistCatalogue,
-  parseCatalogueSort,
 } from "@/lib/server/catalogue-groups";
 import { getFindingsByArtist, type TrackListItem } from "@/lib/server/tracks";
 
@@ -320,6 +319,14 @@ function artistHead(loaderData: ArtistPageData | undefined) {
   };
 }
 
+// The artist page opens on the artist's LATEST RELEASE — the dropdown's "recent" key ("Latest
+// release"), not the shared A–Z default the label/album reads (`CATALOGUE_SORT_DEFAULT`). An
+// artist page is read like a discography: the newest record is what a visitor came for, so it
+// leads on the first (param-free) load and the dropdown reflects it. An explicit `?sort=name`
+// still round-trips to A–Z. Kept an artist-scoped constant (not a flip of the shared default) so
+// the crawler-stability argument the shared default is built on still holds for the label pages.
+export const ARTIST_CATALOGUE_SORT_DEFAULT: CatalogueSort = "recent";
+
 // Route options follow TanStack's create-route-property-order (each step feeds the
 // next's inferred types), which isn't alphabetical — so sort-keys is off here.
 // oxlint-disable-next-line sort-keys
@@ -329,8 +336,13 @@ export const Route = createFileRoute("/artist/$slug")({
     sort: sortParam(search["sort"]),
   }),
   // Defaults land HERE, so the loader always gets a real page + sort while the URL keeps them
-  // implicit (a bare `/artist/<slug>` is the canonical, crawlable view).
-  loaderDeps: ({ search }) => ({ page: search.page ?? 1, sort: parseCatalogueSort(search.sort) }),
+  // implicit (a bare `/artist/<slug>` is the canonical, crawlable view). `validateSearch` has
+  // already narrowed `sort` to a known key or undefined, so an absent one falls to the artist
+  // default — latest release first.
+  loaderDeps: ({ search }) => ({
+    page: search.page ?? 1,
+    sort: search.sort ?? ARTIST_CATALOGUE_SORT_DEFAULT,
+  }),
   loader: async ({ deps, params }): Promise<ArtistPageData> => {
     const data = await fetchArtist({
       data: { page: deps.page, slug: params.slug, sort: deps.sort },

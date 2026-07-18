@@ -23,6 +23,7 @@ vi.mock("./db", async (importOriginal) => {
 });
 
 import { backfillArtistLinks } from "../../../scripts/backfill-artist-links";
+import { ARTIST_CATALOGUE_SORT_DEFAULT } from "../../routes/artist.$slug";
 import { getArtistBySlug } from "./artists";
 import {
   CataloguePageOutOfRangeError,
@@ -207,6 +208,26 @@ describe("listArtistCatalogue (the artist page's records)", () => {
     ]);
     // THE RAIL: not one quieter row carries a coordinate, so none can pose as a finding.
     expect(flattenRecords(page.groups).every((track) => !("logId" in track))).toBe(true);
+  });
+
+  it("defaults the artist page to latest release first (no sort param → release-date-desc)", async () => {
+    const artist = await getArtistBySlug("nu-tone");
+
+    if (!artist) {
+      throw new Error("artist missing");
+    }
+
+    // Drive the read with the SAME sort a param-free /artist/<slug> resolves to — the artist
+    // route's default. So this pins the on-first-load ordering, not merely the "recent" branch:
+    // the newest dated record leads, the older one follows, the undated (nameless) bucket sorts
+    // last and never vanishes.
+    const page = await listArtistCatalogue(artist.id, ARTIST_CATALOGUE_SORT_DEFAULT, 1);
+
+    expect(page.groups.map((group) => group.name)).toEqual([
+      "The Elements", // 2022 — newest release, first
+      "Words Gone Forever", // 2018
+      undefined, // the undated nameless bucket, forced last
+    ]);
   });
 
   it("links a record heading to its album ENTITY even when the album has no finding", async () => {
