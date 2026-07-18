@@ -114,6 +114,12 @@ const APPROVED_VERBS = new Set<string>([
   // verbatim. Adding a genuinely new verb is a deliberate edit here (with a reason),
   // which is exactly the gate this test exists to enforce.
   "add",
+  // `build` (chain a mixable set from a seed finding — the `build_set` tool, tools/specs.ts) —
+  // added deliberately when `build_set` moved into the shared tool registry and came under the
+  // `verb_noun` naming test. The sibling of `anchor` / `drip`: a concrete non-CRUD action verb.
+  // Distinct from `create`/`mint` (make a new persisted entity) — `build_set` mints nothing; it
+  // ASSEMBLES an ordered set from findings the archive already holds and hands back a `/mix` link.
+  "build",
   // `announce` (post a published mixtape's crew callout to the Telegram crew channel) —
   // added deliberately with the `announce_mixtape` op. The last lifecycle step; neither
   // `publish` (mint/flip) nor `distribute` (the byte-move) names the act of telling the crew.

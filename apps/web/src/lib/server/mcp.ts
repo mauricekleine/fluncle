@@ -2,9 +2,7 @@ import { siteUrl, twitchUrl } from "../fluncle-links";
 import { fluncleDescription } from "../identity";
 import { type FeedItem, mixtapeDisplayTitle } from "../mixtapes";
 import { getLiveState, type LiveState } from "./live";
-import { subscribeToNewsletter } from "./newsletter";
 import { ApiError, searchTrackCandidates } from "./spotify";
-import { createSubmission } from "./submissions";
 import { readCoordinate, resourceUri, SHARED_TOOLS, toMcpTool } from "./tools/registry";
 import { listTracks } from "./tracks";
 
@@ -75,10 +73,10 @@ type McpTool = {
   title: string;
 };
 
-// The MCP-only tools: the Spotify candidate search + the two write verbs. The five overlapping
-// read tools (list_tracks, list_fresh, get_track, get_random_track, get_status) are projected
-// from the shared registry below, so their name/description/schema never drift from ChatDnB or
-// WebMCP.
+// The MCP-only tool: the Spotify candidate search (Epic-2 territory — it searches Spotify, not the
+// archive, and is not in the shared registry). Every other tool — the archive reads, the entity /
+// dossier reads, the set builder, "artists like this", and the two write verbs — is projected from
+// the shared registry below, so its name/description/schema never drifts from ChatDnB or WebMCP.
 const mcpOnlyTools: McpTool[] = [
   {
     description:
@@ -105,85 +103,6 @@ const mcpOnlyTools: McpTool[] = [
     },
     name: "search_tracks",
     title: "Search tracks",
-  },
-  {
-    description:
-      "Submit a track to Fluncle for review by Spotify track URL. Fluncle gives it a listen before anything publishes. Limited to 5 submissions per connection per hour.",
-    execute: async (args, request) => {
-      const spotifyUrl = asTrimmedString(args.spotifyUrl);
-
-      if (!spotifyUrl) {
-        throw new ApiError("invalid_query", "A Spotify track URL is required", 400);
-      }
-
-      const results = await searchTrackCandidates(spotifyUrl);
-      const candidate = results[0];
-
-      if (!candidate) {
-        throw new ApiError("track_not_found", "No track matched that Spotify URL", 404);
-      }
-
-      const submission = await createSubmission(
-        {
-          album: candidate.album,
-          artists: candidate.artists,
-          artworkUrl: candidate.artworkUrl,
-          contact: optionalString(args.contact),
-          note: optionalString(args.note),
-          source: "web",
-          spotifyTrackId: candidate.id,
-          spotifyUrl: candidate.spotifyUrl,
-          title: candidate.title,
-        },
-        request,
-      );
-
-      return { ok: true, submission };
-    },
-    inputSchema: {
-      properties: {
-        contact: {
-          description: "Optional: where to reach the submitter (max 120 characters).",
-          maxLength: 120,
-          type: "string",
-        },
-        note: {
-          description: "Optional: tell Fluncle why it's a banger (max 500 characters).",
-          maxLength: 500,
-          type: "string",
-        },
-        spotifyUrl: {
-          description: "Spotify track URL, e.g. https://open.spotify.com/track/...",
-          type: "string",
-        },
-      },
-      required: ["spotifyUrl"],
-      type: "object",
-    },
-    name: "submit_track",
-    title: "Submit a track",
-  },
-  {
-    description:
-      "Subscribe an email address to Fluncle's newsletter. Fresh bangers, every Friday, from Fluncle.",
-    execute: async (args, request) => {
-      await subscribeToNewsletter({ email: asTrimmedString(args.email) }, request);
-
-      return { ok: true };
-    },
-    inputSchema: {
-      properties: {
-        email: {
-          description: "The email address boarding the mothership.",
-          format: "email",
-          type: "string",
-        },
-      },
-      required: ["email"],
-      type: "object",
-    },
-    name: "subscribe_newsletter",
-    title: "Subscribe to the newsletter",
   },
 ];
 
@@ -486,7 +405,7 @@ async function dispatch(message: unknown, request: Request): Promise<JsonRpcResp
       return success(id, {
         capabilities: MCP_CAPABILITIES,
         instructions:
-          "Fluncle's drum & bass archive over MCP. TOOLS: list recent findings, list the newest releases (what just came out), read one in full by coordinate, pull a random one, check whether all of Fluncle's systems are operational, search Spotify candidates, submit a track for review, or board the newsletter. RESOURCES: read the archive as a corpus, each finding/mixtape at fluncle://finding/<logId> or fluncle://mixtape/<logId>, its public record. PROMPTS: Fluncle-voiced starting points (recommend a finding for a mood, walk a recent night, decode a Log ID). A submission is a recommendation, not a publish; Fluncle listens before anything goes out.",
+          "Fluncle's drum & bass archive over MCP. TOOLS: list recent findings, list the newest releases (what just came out), read one in full by coordinate, pull a random one, search the archive itself, look up an artist or a label, find the artists nearest another in sound, chain a mixable set from a finding, check whether all of Fluncle's systems are operational, search Spotify candidates, submit a track for review, or board the newsletter. RESOURCES: read the archive as a corpus, each finding/mixtape at fluncle://finding/<logId> or fluncle://mixtape/<logId>, its public record. PROMPTS: Fluncle-voiced starting points (recommend a finding for a mood, walk a recent night, decode a Log ID). A submission is a recommendation, not a publish; Fluncle listens before anything goes out.",
         protocolVersion: requested || PROTOCOL_VERSION,
         serverInfo: { name: SERVER_NAME, title: "Fluncle", version: SERVER_VERSION },
       });
@@ -600,10 +519,6 @@ async function dispatch(message: unknown, request: Request): Promise<JsonRpcResp
 
 function asTrimmedString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
-}
-
-function optionalString(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {

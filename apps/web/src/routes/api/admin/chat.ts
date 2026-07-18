@@ -37,7 +37,7 @@ export const serverHandlers: ApiHandlers = {
       return jsonError(400, "invalid_messages", "Expected { messages: [UIMessage, …] }");
     }
 
-    const response = await streamChat(messages, request.signal);
+    const response = await streamChat(messages, request.signal, request);
 
     if (!response) {
       // No OPENROUTER_API_KEY. A chat has no cheaper degraded answer (unlike search's

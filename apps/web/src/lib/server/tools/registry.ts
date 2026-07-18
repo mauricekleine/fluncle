@@ -24,16 +24,35 @@
 // (the four sanctioned output shapes), and the tool-set parity + output-shape tests assert
 // `execute` honours it. Divergence stays constrained to the four named shapes.
 
+import { type MixCandidate } from "@fluncle/contracts";
 import { liveSurfaces } from "@fluncle/registry";
 import { tool } from "ai";
 import { type z } from "zod";
 import { logPageUrl } from "../../fluncle-links";
+import { isLogId, isMixtapeLogId } from "../../log-id";
+import { MAX_SET_LENGTH, mixReasonLabel, serializeSet, setToken } from "../../mix-set";
 import { type MixtapeDTO, mixtapeDisplayTitle } from "../../mixtapes";
-import { type FreshTrack, listFreshTracks } from "../fresh";
-import { resolveLogPageTarget } from "../log-resolver";
-import { ApiError } from "../spotify";
-import { getServiceStatuses, type ServiceHealthStatus } from "../status";
+import { getArtistNeighbours } from "../artist-dossier";
 import {
+  countArtistFindings,
+  getArtistBySlug,
+  getPublicArtistSocials,
+  toArtistSlug,
+} from "../artists";
+import { type FreshTrack, listFreshTracks } from "../fresh";
+import { getConfirmedAliasNames, getLabelBySlug, labelSlug } from "../labels";
+import { resolveLogPageTarget } from "../log-resolver";
+import { subscribeToNewsletter } from "../newsletter";
+import { assertRateLimit } from "../rate-limit";
+import { searchArchive } from "../search";
+import { ApiError, searchTrackCandidates } from "../spotify";
+import { getServiceStatuses, type ServiceHealthStatus } from "../status";
+import { createSubmission } from "../submissions";
+import {
+  getFindingsByArtist,
+  getFindingsByLabel,
+  getMixableTracks,
+  getMixChainDepth,
   getRandomTrack,
   getTracksByLogIds,
   listTracks,
@@ -49,6 +68,15 @@ import {
   listTracksSpec,
   MAX_RECENT_LIMIT,
   SHARED_TOOL_SPECS,
+  SIMILAR_ARTISTS_DEFAULT,
+  SIMILAR_ARTISTS_MAX,
+  buildSetSpec,
+  getArtistSpec,
+  getLabelSpec,
+  getSimilarArtistsSpec,
+  searchArchiveSpec,
+  submitTrackSpec,
+  subscribeNewsletterSpec,
   type ToolSpec,
   toInputJsonSchema,
   type Transport,
@@ -92,6 +120,11 @@ export type ToolDef = ToolSpec & {
 /** Trim a value to a string, or "" when it is not one (the tolerant coercion the MCP uses). */
 function asTrimmedString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
+}
+
+/** Pass a string arg through untouched, or `undefined` when it is not a string (optional fields). */
+function optionalString(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
 }
 
 /** The recent-window default (the cap `MAX_RECENT_LIMIT` lives in ./specs alongside the schema). */
@@ -323,6 +356,115 @@ function freshTrackToFinding(track: FreshTrack) {
   });
 }
 
+// ── The archive-read helpers (lifted verbatim from chat.ts) ──────────────────────────
+//
+// PR-2 moved search_archive / get_artist / get_label / build_set out of chat.ts into the shared
+// registry. Their compact shapers + the seed resolver move with them, unchanged, so the MCP + chat
+// executes read exactly what ChatDnB read before.
+
+/** The archive-search cap handed to search_archive / the build_set seed resolver. */
+const MAX_SEARCH = 12;
+
+/**
+ * How many mixable steps `build_set` chains off the seed — one full rail's worth of what mixes
+ * in next, before the certified-only filter thins it (the seed leads; the card + `/mix` link are
+ * at most this many rows plus the seed).
+ */
+const MIX_CHAIN_LIMIT = 7;
+
+/**
+ * How many of an entity's findings ride on a `get_artist`/`get_label` card — the recent/
+ * representative ones. The card links to the full page for the rest, so a dossier reads as a
+ * conversation, not a discography dump.
+ */
+const MAX_ENTITY_FINDINGS = 6;
+
+// The MCP `search_archive`'s shared rate-limit budget — the SAME `action` + window as the public
+// HTTP twin (orpc/search.ts), so the anonymous MCP and the public /api surface share one per-IP
+// limiter (its tier-4 sonic + LLM path spends real money; the /mcp endpoint has no session).
+const SEARCH_ARCHIVE_RL_LIMIT = 30;
+const SEARCH_ARCHIVE_RL_WINDOW_MS = 60 * 1000;
+
+/**
+ * Compact an entity's findings for a card, CERTIFIED-ONLY. The resolvers already inner-join on a
+ * coordinate, but the coordinate filter is the same wire-level grounding boundary search_archive
+ * applies — a row without a coordinate is not something Fluncle speaks about, so it never reaches
+ * the model even if a resolver's shape ever changed. Newest-first is preserved; the caller slices.
+ */
+function compactCertifiedFindings(items: TrackListItem[]) {
+  return items.map(compactFinding).filter((finding) => finding.coordinate);
+}
+
+/** A search hit, reduced to the facts Fluncle speaks from (certified rows only reach here). */
+function searchHitToFinding(hit: {
+  album?: string;
+  albumImageUrl?: string;
+  artists: string[];
+  bpm?: number;
+  galaxy?: string;
+  key?: string;
+  label?: string;
+  logId?: string;
+  title: string;
+}) {
+  return dropEmpty({
+    album: hit.album,
+    albumImageUrl: hit.albumImageUrl,
+    artists: hit.artists,
+    bpm: hit.bpm === undefined ? undefined : Math.round(hit.bpm),
+    coordinate: hit.logId,
+    galaxy: hit.galaxy,
+    key: hit.key,
+    label: hit.label,
+    title: hit.title,
+  });
+}
+
+/**
+ * A mix candidate reduced to the finding fields the Chain Card needs, WITHOUT its `previewUrl`
+ * (a mix candidate carries none anyway) — the fallback for a certified step the batch hydrator
+ * missed. The reason chip is added by the caller as a human string; this never carries a score.
+ */
+function mixTrackToFinding(candidate: MixCandidate) {
+  return dropEmpty({
+    albumImageUrl: candidate.albumImageUrl,
+    artists: candidate.artists,
+    bpm: candidate.bpm === undefined ? undefined : Math.round(candidate.bpm),
+    coordinate: candidate.logId,
+    durationMs: candidate.durationMs,
+    hasPreview: false,
+    key: candidate.key,
+    spotifyUrl: candidate.spotifyUrl,
+    title: candidate.title,
+  });
+}
+
+/**
+ * Resolve `build_set`'s seed to a CERTIFIED finding Fluncle can chain from, or `undefined`.
+ * A coordinate resolves directly (a mixtape is not a mixable seed, so it is rejected); anything
+ * else is a NAME — the top certified search hit is the start, hydrated to the full finding.
+ */
+async function resolveSeedTrack(seed: string): Promise<TrackListItem | undefined> {
+  if (!seed) {
+    return undefined;
+  }
+
+  if (isLogId(seed) || isMixtapeLogId(seed)) {
+    const target = await resolveLogPageTarget(seed);
+
+    return target?.kind === "track" ? target.track : undefined;
+  }
+
+  const result = await searchArchive({ limit: MAX_SEARCH, q: seed });
+  const hit = result.results.find((row) => row.certified && row.logId);
+
+  if (!hit?.logId) {
+    return undefined;
+  }
+
+  return (await getTracksByLogIds([hit.logId]))[hit.logId];
+}
+
 // ── The `identity` (status) summarizers ──────────────────────────────────────────────
 
 /** One service in the MCP get_status summary. */
@@ -542,13 +684,285 @@ const getStatusTool = {
     ctx.transport === "chat" ? summarizeStatusChat() : summarizeStatusMcp(),
 } satisfies ToolDef;
 
-/** The five overlapping tools, single-sourced. Order: `list_tracks` first (the MCP alias clones it). */
+// ── The archive-read tools PR-2 lifted out of ChatDnB ────────────────────────────────
+
+const searchArchiveTool = {
+  ...searchArchiveSpec,
+  execute: async (args, ctx) => {
+    const query = asTrimmedString((args as { query?: unknown }).query);
+
+    if (ctx.transport === "chat") {
+      // CHAT keeps its findings-only projection (until PR-4): an uncertified catalogue row has no
+      // coordinate and is never something Fluncle speaks about — strip it before the hydrator is
+      // ever asked about it (the Unlit Rule, at the wire).
+      const result = await searchArchive({ limit: MAX_SEARCH, q: query });
+      const certifiedHits = result.results.filter((hit) => hit.certified && hit.logId);
+      const hydrated = await getTracksByLogIds(
+        certifiedHits.flatMap((hit) => (hit.logId ? [hit.logId] : [])),
+      );
+      const findings = certifiedHits.map((hit) => {
+        const item = hit.logId ? hydrated[hit.logId] : undefined;
+
+        return item ? compactFinding(item) : searchHitToFinding(hit);
+      });
+
+      return dropEmpty({
+        anchor: result.anchor?.certified ? searchHitToFinding(result.anchor) : undefined,
+        findings,
+        how: result.kind,
+        ok: true as const,
+      });
+    }
+
+    // MCP world-serves the WHOLE SearchResult — both registers, each row certified-tagged (never
+    // findings-filtered, exactly like list_fresh). First, the mandatory shared limiter: the
+    // anonymous /mcp has no session, and this search's sonic + LLM tiers spend real money, so it
+    // shares the public HTTP twin's per-IP budget (same `action`, same window ⇒ one limiter).
+    if (ctx.request) {
+      await assertRateLimit({
+        action: "search_archive",
+        limit: SEARCH_ARCHIVE_RL_LIMIT,
+        request: ctx.request,
+        windowMs: SEARCH_ARCHIVE_RL_WINDOW_MS,
+      });
+    }
+
+    return { ok: true as const, ...(await searchArchive({ limit: MAX_SEARCH, q: query })) };
+  },
+} satisfies ToolDef;
+
+const getArtistTool = {
+  ...getArtistSpec,
+  execute: async (args) => {
+    const name = asTrimmedString((args as { name?: unknown }).name);
+    const slug = name ? toArtistSlug(name) : "";
+    const artist = slug ? await getArtistBySlug(slug) : undefined;
+
+    if (!artist) {
+      return { found: false, ok: true };
+    }
+
+    const [findingCount, findingItems, socials] = await Promise.all([
+      countArtistFindings(artist.id),
+      getFindingsByArtist(artist.id, artist.name),
+      getPublicArtistSocials(artist.id),
+    ]);
+    const certified = compactCertifiedFindings(findingItems);
+
+    // An artist Fluncle has never certified a finding from is not something he speaks about.
+    if (findingCount === 0 && certified.length === 0) {
+      return { found: false, ok: true };
+    }
+
+    const findings = certified.slice(0, MAX_ENTITY_FINDINGS);
+
+    return {
+      artist: dropEmpty({
+        avatarUrl: findings[0]?.albumImageUrl,
+        bio: artist.bio,
+        findingCount,
+        findings,
+        name: artist.name,
+        slug: artist.slug,
+        socials,
+        spotifyUrl: artist.spotifyUrl,
+      }),
+      ok: true,
+    };
+  },
+} satisfies ToolDef;
+
+const getLabelTool = {
+  ...getLabelSpec,
+  execute: async (args) => {
+    const name = asTrimmedString((args as { name?: unknown }).name);
+    const slug = name ? labelSlug(name) : undefined;
+    const label = slug ? await getLabelBySlug(slug) : undefined;
+
+    if (!label) {
+      return { found: false, ok: true };
+    }
+
+    const certified = compactCertifiedFindings(await getFindingsByLabel(label.id));
+
+    // A label Fluncle has no certified finding on is not something he speaks about.
+    if (certified.length === 0) {
+      return { found: false, ok: true };
+    }
+
+    const aliases = await getConfirmedAliasNames(label.id);
+
+    return {
+      label: dropEmpty({
+        aliases,
+        bio: label.bio,
+        findingCount: certified.length,
+        findings: certified.slice(0, MAX_ENTITY_FINDINGS),
+        logoUrl: label.logoImageUrl,
+        name: label.name,
+        slug: label.slug,
+      }),
+      ok: true,
+    };
+  },
+} satisfies ToolDef;
+
+const buildSetTool = {
+  ...buildSetSpec,
+  execute: async (args) => {
+    const seedTrack = await resolveSeedTrack(asTrimmedString((args as { seed?: unknown }).seed));
+
+    // No certified finding to start from is the honest "he has not logged it".
+    if (!seedTrack) {
+      return { found: false, ok: true };
+    }
+
+    const seedFinding = compactFinding(seedTrack);
+    const candidates = await getMixableTracks(seedTrack.logId ?? seedTrack.trackId, {
+      limit: MIX_CHAIN_LIMIT,
+    });
+
+    // THE GROUNDING BOUNDARY (preserved until PR-4): only a certified, coordinate-bearing
+    // candidate can be named or ride the `?set=` handoff.
+    const steps = candidates.flatMap((candidate) =>
+      candidate.certified && candidate.logId ? [candidate] : [],
+    );
+
+    if (steps.length === 0) {
+      const depth = await getMixChainDepth();
+
+      return {
+        ok: true,
+        set: dropEmpty({ seed: seedFinding, steps: [], thin: depth.open ? undefined : true }),
+      };
+    }
+
+    const hydrated = await getTracksByLogIds(
+      steps.flatMap((step) => (step.logId ? [step.logId] : [])),
+    );
+    const chain = steps.map((candidate) => {
+      const item = candidate.logId ? hydrated[candidate.logId] : undefined;
+      const base = item ? compactFinding(item) : mixTrackToFinding(candidate);
+
+      return { ...base, reason: mixReasonLabel(candidate.reason) };
+    });
+
+    const tokens = [setToken(seedTrack), ...steps.map((step) => setToken(step))].slice(
+      0,
+      MAX_SET_LENGTH,
+    );
+
+    return {
+      ok: true,
+      set: dropEmpty({
+        seed: seedFinding,
+        setUrl: `/mix?set=${serializeSet(tokens)}`,
+        steps: chain,
+      }),
+    };
+  },
+} satisfies ToolDef;
+
+const getSimilarArtistsTool = {
+  ...getSimilarArtistsSpec,
+  execute: async (args) => {
+    const source = args as { limit?: unknown; name?: unknown };
+    const name = asTrimmedString(source.name);
+    const slug = name ? toArtistSlug(name) : "";
+    const artist = slug ? await getArtistBySlug(slug) : undefined;
+
+    // An unresolved name is the honest "he has not logged them" — same as get_artist.
+    if (!artist) {
+      return { found: false, ok: true };
+    }
+
+    // A thin pass-through of the artist page's neighbour read (getArtistNeighbours). The neighbour
+    // MECHANISM is a separate operator workstream — this only resolves name→slug→id and relays what
+    // it returns; if `ArtistNeighbour` later gains a register field it rides through unchanged.
+    const limit = clampInt(source.limit, SIMILAR_ARTISTS_MAX, SIMILAR_ARTISTS_DEFAULT);
+    const similar = await getArtistNeighbours(artist.id, limit);
+
+    return { of: dropEmpty({ name: artist.name, slug: artist.slug }), ok: true, similar };
+  },
+} satisfies ToolDef;
+
+// ── The write tools PR-2 lifted into the shared registry ─────────────────────────────
+//
+// They receive `ctx.request` (the submitter hash / rate limit). On the MCP it is the inbound
+// JSON-RPC Request; on ChatDnB it is threaded from the gated /api/chat route (session-safe).
+
+const submitTrackTool = {
+  ...submitTrackSpec,
+  execute: async (args, ctx) => {
+    if (!ctx.request) {
+      throw new ApiError("invalid_query", "A request context is required to submit", 400);
+    }
+
+    const source = args as { contact?: unknown; note?: unknown; spotifyUrl?: unknown };
+    const spotifyUrl = asTrimmedString(source.spotifyUrl);
+
+    if (!spotifyUrl) {
+      throw new ApiError("invalid_query", "A Spotify track URL is required", 400);
+    }
+
+    const candidate = (await searchTrackCandidates(spotifyUrl))[0];
+
+    if (!candidate) {
+      throw new ApiError("track_not_found", "No track matched that Spotify URL", 404);
+    }
+
+    const submission = await createSubmission(
+      {
+        album: candidate.album,
+        artists: candidate.artists,
+        artworkUrl: candidate.artworkUrl,
+        contact: optionalString(source.contact),
+        note: optionalString(source.note),
+        source: "web",
+        spotifyTrackId: candidate.id,
+        spotifyUrl: candidate.spotifyUrl,
+        title: candidate.title,
+      },
+      ctx.request,
+    );
+
+    return { ok: true, submission };
+  },
+} satisfies ToolDef;
+
+const subscribeNewsletterTool = {
+  ...subscribeNewsletterSpec,
+  execute: async (args, ctx) => {
+    if (!ctx.request) {
+      throw new ApiError("invalid_query", "A request context is required to subscribe", 400);
+    }
+
+    await subscribeToNewsletter(
+      { email: asTrimmedString((args as { email?: unknown }).email) },
+      ctx.request,
+    );
+
+    return { ok: true };
+  },
+} satisfies ToolDef;
+
+/**
+ * Every shared tool, single-sourced. Order mirrors SHARED_TOOL_SPECS: `list_tracks` first (the MCP
+ * alias clones it), the five overlapping reads, the reads lifted out of ChatDnB, then the writes.
+ */
 export const SHARED_TOOLS: ToolDef[] = [
   listTracksTool,
   listFreshTool,
   getTrackTool,
   getRandomTrackTool,
   getStatusTool,
+  searchArchiveTool,
+  getArtistTool,
+  getLabelTool,
+  buildSetTool,
+  getSimilarArtistsTool,
+  submitTrackTool,
+  subscribeNewsletterTool,
 ];
 
 // ── The server transport adapters ─────────────────────────────────────────────────────
@@ -581,17 +995,23 @@ export function toMcpTool(def: ToolDef): McpToolDescriptor {
 /**
  * Project a ToolDef onto ChatDnB's AI-SDK tool set. The Zod object goes STRAIGHT to `ai`'s
  * `tool({ inputSchema })` — never through JSON Schema, which erases the `z.infer` arg typing. The
- * SDK's `abortSignal` maps to `ctx.signal`; `ctx.transport` is "chat".
+ * SDK's `abortSignal` maps to `ctx.signal`; `ctx.transport` is "chat". `request` is threaded from
+ * the gated /api/chat route so the WRITE tools have the submitter hash / rate-limit context the AI
+ * SDK's `execute` options do not carry (the SDK gives no inbound `Request`).
  */
-export function toAiSdkTool<In extends z.ZodType>(def: {
-  description: string;
-  execute: (args: Record<string, unknown>, ctx: ToolCtx) => Promise<unknown>;
-  input: In;
-}) {
+export function toAiSdkTool<In extends z.ZodType>(
+  def: {
+    description: string;
+    execute: (args: Record<string, unknown>, ctx: ToolCtx) => Promise<unknown>;
+    input: In;
+  },
+  request?: Request,
+) {
   return tool({
     description: def.description,
     execute: async (args: z.infer<In>, options: { abortSignal?: AbortSignal }) =>
       def.execute(args as Record<string, unknown>, {
+        request,
         signal: options?.abortSignal,
         transport: "chat",
       }),
@@ -600,15 +1020,23 @@ export function toAiSdkTool<In extends z.ZodType>(def: {
 }
 
 /**
- * The five shared tools projected onto ChatDnB, as a literal-keyed object so `InferUITools` keeps
- * each tool's precise types when chat.ts spreads it alongside its chat-only tools.
+ * Every shared chat tool, as a literal-keyed object so `InferUITools` keeps each tool's precise
+ * types. `request` is threaded onto every tool's `ctx` (the writes need it; the reads ignore it),
+ * so ChatDnB now exposes the full archive read set + the two writes from one source of truth.
  */
-export function sharedChatTools() {
+export function sharedChatTools(request?: Request) {
   return {
-    get_random_track: toAiSdkTool(getRandomTrackTool),
-    get_status: toAiSdkTool(getStatusTool),
-    get_track: toAiSdkTool(getTrackTool),
-    list_fresh: toAiSdkTool(listFreshTool),
-    list_tracks: toAiSdkTool(listTracksTool),
+    build_set: toAiSdkTool(buildSetTool, request),
+    get_artist: toAiSdkTool(getArtistTool, request),
+    get_label: toAiSdkTool(getLabelTool, request),
+    get_random_track: toAiSdkTool(getRandomTrackTool, request),
+    get_similar_artists: toAiSdkTool(getSimilarArtistsTool, request),
+    get_status: toAiSdkTool(getStatusTool, request),
+    get_track: toAiSdkTool(getTrackTool, request),
+    list_fresh: toAiSdkTool(listFreshTool, request),
+    list_tracks: toAiSdkTool(listTracksTool, request),
+    search_archive: toAiSdkTool(searchArchiveTool, request),
+    submit_track: toAiSdkTool(submitTrackTool, request),
+    subscribe_newsletter: toAiSdkTool(subscribeNewsletterTool, request),
   };
 }

@@ -76,6 +76,35 @@ const DEFAULT_LIMIT = 12;
  */
 const SONIC_LIMIT = 12;
 
+/**
+ * The hard ceiling on the sonic vector scan. The scan is the one query here that has no other
+ * bound: it drags every embedded row's blob through `vector_distance_cos` (SEARCH_FROM, ~41k
+ * rows and growing), and it ran 8.07s on prod with no way to stop it — a cost/DoS path once
+ * the archive grows, on a surface (`/mcp`) that has no session to lean on. libSQL's `execute`
+ * takes no per-statement signal, so the scan cannot be CANCELLED; what a timeout does is stop
+ * the caller (and the Worker request) WAITING on it past this ceiling. Set above the measured
+ * prod latency with headroom, so it never trips a legitimate query today — it is the ceiling a
+ * growing catalogue cannot push the wait past, not a tuning knob for the common case.
+ */
+export const SONIC_SCAN_TIMEOUT_MS = 12_000;
+
+/**
+ * Resolve `work`, or reject once `ms` elapses — the caller stops waiting even though the
+ * underlying `db.execute` cannot be cancelled. Uses `AbortSignal.timeout` for the timer so the
+ * bound is a single, cheap platform primitive. Exported for a focused unit test.
+ */
+export async function raceWithTimeout<T>(work: Promise<T>, ms: number, label: string): Promise<T> {
+  const timeout = new Promise<never>((_resolve, reject) => {
+    const signal = AbortSignal.timeout(ms);
+
+    signal.addEventListener("abort", () => reject(new Error(`${label} timed out after ${ms}ms`)), {
+      once: true,
+    });
+  });
+
+  return Promise.race([work, timeout]);
+}
+
 /** The whole answer: which tier resolved it, what it found, and what it understood. */
 export type SearchResult = {
   /** The real track the sonic tier anchored on (`sonic` only). */
@@ -692,20 +721,24 @@ async function runSonic(filters: SearchFilters, limit: number): Promise<SearchRe
   ].join(" and ");
 
   const db = await getDb();
-  const result = await db.execute({
-    // SQL-TEXT ORDER: the probe's `?` (in the select list) binds before the where clause's.
-    args: [
-      toVectorProbe(anchor.vector),
-      ...clauses.flatMap((clause) => clause.args),
-      anchor.hit.trackId,
-      limit,
-    ],
-    sql: `select ${SEARCH_SELECT}, vector_distance_cos(tracks.embedding_blob, ?) as dist
+  const result = await raceWithTimeout(
+    db.execute({
+      // SQL-TEXT ORDER: the probe's `?` (in the select list) binds before the where clause's.
+      args: [
+        toVectorProbe(anchor.vector),
+        ...clauses.flatMap((clause) => clause.args),
+        anchor.hit.trackId,
+        limit,
+      ],
+      sql: `select ${SEARCH_SELECT}, vector_distance_cos(tracks.embedding_blob, ?) as dist
           from ${SEARCH_FROM}
           where ${where}
           order by dist asc, tracks.track_id asc
           limit ?`,
-  });
+    }),
+    SONIC_SCAN_TIMEOUT_MS,
+    "sonic vector scan",
+  );
 
   return {
     anchor: anchor.hit,
