@@ -261,7 +261,7 @@ export function mixtapeVideoObjectJsonLd(
     "@context": "https://schema.org",
     "@type": "VideoObject",
     contentUrl,
-    description: mixtape.note ?? `Fluncle drum & bass mixtape — ${mixtape.title}.`,
+    description: mixtape.note ?? `Fluncle drum & bass mixtape: ${mixtape.title}.`,
     name: mixtape.title,
     thumbnailUrl,
     uploadDate: uploadDateIso(uploadDate),
