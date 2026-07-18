@@ -698,6 +698,38 @@ async function upsertSpotifyAuth(
   });
 }
 
+// ── The 429 backoff ──────────────────────────────────────────────────────────
+// Spotify's rate limit is per-APP over a rolling ~30s window, and every subsystem
+// shares the one app — adds, publish, the crawler's anchor sweep, the Frontier rec
+// playlists, /reach, and search all draw on the same budget. So a burst (the operator
+// adding tracks one-by-one) can earn a 429. A 429 is a pure REJECTION — Spotify did
+// not run the request's side effect — and it carries a `Retry-After` (seconds). We
+// honour it: wait it out and retry. Operator-ratified: a throttled call may take a few
+// seconds longer; an unbounded hang is not acceptable inside a Worker request, so the
+// added wait is HARD-CAPPED.
+//
+// Retry is confined to IDEMPOTENT methods: GET/HEAD, plus the playlist PUTs, which are
+// full-ordered-replaces / detail-sets — replaying one yields the identical state. A
+// non-idempotent write (a playlist-create POST, a track-add POST) is NEVER auto-retried
+// here: it throws the exact 429 error today's callers do. The publish flow's own
+// `withRetries` (./retry) already owns the track-add retry, and that is safe precisely
+// because a 429 add never landed.
+const SPOTIFY_MAX_RETRIES = 2;
+// The ceiling on total added wait across all retries of one call. ~10s: enough to ride
+// out a short throttle, bounded so a throttled Worker request slows but never hangs.
+const SPOTIFY_RETRY_BUDGET_MS = 10_000;
+// The wait when Spotify omits `Retry-After` — a conservative floor for its 30s window.
+const SPOTIFY_DEFAULT_RETRY_MS = 1_000;
+// The HTTP methods whose replay is side-effect-free (so a 429 retry cannot double-write).
+const SPOTIFY_IDEMPOTENT_METHODS = new Set(["GET", "HEAD", "PUT"]);
+
+/** `Retry-After` (delta-seconds) → ms; the default floor when absent or unparseable. */
+function parseRetryAfterMs(header: null | string): number {
+  const seconds = Number((header ?? "").trim());
+
+  return Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : SPOTIFY_DEFAULT_RETRY_MS;
+}
+
 export async function spotifyFetch(
   path: string,
   accessToken: string,
@@ -706,16 +738,45 @@ export async function spotifyFetch(
   const headers = new Headers(init.headers);
   headers.set("Authorization", `Bearer ${accessToken}`);
 
-  const response = await fetch(`${spotifyApiBaseUrl}${path}`, {
-    ...init,
-    headers,
-  });
+  const method = (init.method ?? "GET").toUpperCase();
+  const retryable = SPOTIFY_IDEMPOTENT_METHODS.has(method);
+  let spentMs = 0;
 
-  if (!response.ok) {
+  for (let attempt = 0; ; attempt += 1) {
+    const response = await fetch(`${spotifyApiBaseUrl}${path}`, {
+      ...init,
+      headers,
+    });
+
+    if (response.ok) {
+      return response;
+    }
+
+    // A 429 on an idempotent call is worth waiting out — but only while retries AND the
+    // wait budget both last. A non-idempotent write, an exhausted budget, an exhausted
+    // retry count, or any other status all fall through to the SAME error thrown today
+    // (message carries "429", which `spotify-anchor-breaker` and crawl.ts sniff for).
+    if (response.status === 429 && retryable && attempt < SPOTIFY_MAX_RETRIES) {
+      const waitMs = parseRetryAfterMs(response.headers.get("Retry-After"));
+
+      if (spentMs + waitMs <= SPOTIFY_RETRY_BUDGET_MS) {
+        spentMs += waitMs;
+        // "warn", not "error": a throttle is expected backpressure, visible in the logs
+        // without paging Sentry. The query string is dropped so a search term never lands
+        // in a log line.
+        logEvent("warn", "spotify.rate-limited-retry", {
+          attempt: attempt + 1,
+          endpoint: path.split("?")[0] ?? path,
+          method,
+          waitMs,
+        });
+        await new Promise((resolve) => setTimeout(resolve, waitMs));
+        continue;
+      }
+    }
+
     throw new Error(await readApiError(response, "Spotify API request failed"));
   }
-
-  return response;
 }
 
 async function readApiError(response: Response, fallback: string): Promise<string> {
