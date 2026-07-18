@@ -19,6 +19,17 @@ import { type TrackCursor, type TrackListItem, decodeTrackCursor, listTracks } f
 
 const markdownTracksLimit = 25;
 
+// The A2A (Agent2Agent) protocol version the agent card declares conformance to.
+// A2A is the cross-vendor agent-interop standard backed by the Agent Governance /
+// AI Agent Interoperability effort (originated at Google, now stewarded by the
+// Linux Foundation with Google/Microsoft/OpenAI/Anthropic and others). The card is
+// the A2A analogue of the MCP server card (mcp.ts) — a discovery document, not a new
+// runtime surface.
+const a2aProtocolVersion = "1.0.0";
+// The agent's own version (distinct from the protocol version), mirroring the MCP
+// server card's SERVER_VERSION so the two discovery cards read the same.
+const a2aAgentVersion = "1.0.0";
+
 // llms-full.txt page size and a runaway backstop; if the archive ever exceeds
 // the cap we render up to it and say so (never a silent truncation).
 const llmsFullPageSize = 100;
@@ -91,6 +102,11 @@ export async function handleAgentDiscovery(request: Request): Promise<Response |
   switch (url.pathname) {
     case "/.well-known/api-catalog":
       return apiCatalogResponse();
+    // The A2A agent card, served at the current canonical path and the legacy short
+    // path older clients still probe (same bytes).
+    case "/.well-known/agent-card.json":
+    case "/.well-known/agent.json":
+      return agentCardResponse();
     case "/.well-known/agent-skills/index.json":
       return skillsIndexResponse();
     case "/.well-known/agent-skills/fluncle-api/SKILL.md":
@@ -141,6 +157,92 @@ function apiCatalogResponse(): Response {
     headers: {
       "Cache-Control": "public, max-age=3600",
       "Content-Type": "application/linkset+json",
+    },
+  });
+}
+
+// The A2A Agent Card — the cross-vendor agent-discovery document (the A2A analogue
+// of the MCP server card). It advertises Fluncle's ACTIONABLE public capabilities as
+// A2A `skills`, each mapping 1:1 to a real op the public API and the MCP server both
+// expose (the MCP tool list is the source of truth) — search / list / read tracks,
+// submit a track, subscribe to the newsletter. Honest scope: these are the archive's
+// public read + submit ops over plain HTTP+JSON under `/api/v1` (documented by the
+// OpenAPI + llms.txt the card points at); Fluncle is not a conversational A2A task
+// agent, so it declares no streaming and no push, and invents no capability.
+//
+// The identity strings come from lib/identity.ts (fluncleDescription) and
+// lib/fluncle-links.ts (siteUrl) verbatim, as the MCP card does. Keys are
+// alphabetized to satisfy sort-keys, matching serverCard()/apiCatalogResponse().
+function agentCard() {
+  return {
+    capabilities: { pushNotifications: false, streaming: false },
+    // Input/output content types for the actionable ops: JSON request/response over HTTP.
+    defaultInputModes: ["application/json", "text/plain"],
+    defaultOutputModes: ["application/json"],
+    description: fluncleDescription,
+    // Where an agent reads the full contract behind these skills.
+    documentationUrl: `${siteUrl}/llms.txt`,
+    name: "Fluncle",
+    // A2A transport enum: the public API is RESTful HTTP+JSON, not JSON-RPC or gRPC.
+    preferredTransport: "HTTP+JSON",
+    protocolVersion: a2aProtocolVersion,
+    provider: { organization: "Fluncle", url: siteUrl },
+    skills: [
+      {
+        description:
+          "Search Spotify for track candidates by name or Spotify track URL. Use a result to submit a track for Fluncle to review.",
+        examples: ["Search for a Camo & Krooked track", "Find candidates for a Spotify track URL"],
+        id: "search-tracks",
+        name: "Search tracks",
+        tags: ["drum-and-bass", "search", "spotify"],
+      },
+      {
+        description:
+          "List the most recent findings and mixtapes in Fluncle's drum & bass archive, newest first, cursor-paginated.",
+        examples: ["List the latest findings", "Page through Fluncle's archive"],
+        id: "list-tracks",
+        name: "Recent findings",
+        tags: ["drum-and-bass", "archive", "catalogue"],
+      },
+      {
+        description:
+          "Read one finding or mixtape in full by its Log ID coordinate or Spotify track id, or pull a random certified track from the archive.",
+        examples: ["Read the finding at fluncle://012.8.0A", "Pull a random finding"],
+        id: "get-track",
+        name: "Read one finding",
+        tags: ["drum-and-bass", "finding", "coordinate"],
+      },
+      {
+        description:
+          "Submit a track to Fluncle for review by Spotify track URL. Fluncle gives it a listen before anything publishes.",
+        examples: ["Submit a Spotify track URL for Fluncle to review"],
+        id: "submit-track",
+        name: "Submit a track",
+        tags: ["drum-and-bass", "submission"],
+      },
+      {
+        description:
+          "Subscribe an email address to Fluncle's newsletter. Fresh bangers, every Friday, from Fluncle.",
+        examples: ["Subscribe an email address to the newsletter"],
+        id: "subscribe-newsletter",
+        name: "Subscribe to the newsletter",
+        tags: ["newsletter", "email"],
+      },
+    ],
+    // The base URL of the actionable HTTP+JSON surface these skills resolve to.
+    url: `${siteUrl}/api/v1`,
+    version: a2aAgentVersion,
+  };
+}
+
+// Served at the current canonical A2A path `/.well-known/agent-card.json` AND the
+// legacy short path `/.well-known/agent.json` (older A2A clients still probe it) —
+// same bytes, maximal reach.
+function agentCardResponse(): Response {
+  return new Response(JSON.stringify(agentCard(), null, 2), {
+    headers: {
+      "Cache-Control": "public, max-age=3600",
+      "Content-Type": "application/json",
     },
   });
 }
@@ -249,6 +351,7 @@ ${tracks.join("\n")}
 - [OpenAPI spec](${siteUrl}/api/v1/openapi.json): the public API as an OpenAPI 3.1 document
 - [MCP server](${siteUrl}/mcp): the archive over Model Context Protocol (Streamable HTTP, no auth), tools, resources (each finding at fluncle://finding/<logId>), and Fluncle-voiced prompts
 - [MCP server card](${siteUrl}/.well-known/mcp/server-card.json): SEP-2127 discovery card for the MCP endpoint
+- [Agent card](${siteUrl}/.well-known/agent-card.json): A2A agent card listing Fluncle's actionable skills (search, list, read, submit, subscribe)
 - [API catalog](${siteUrl}/.well-known/api-catalog): RFC 9727 linkset
 - [Agent skills](${siteUrl}/.well-known/agent-skills/index.json): the fluncle-api skill, with digest
 - [llms.txt](${siteUrl}/llms.txt): the plain-language map of the Galaxy

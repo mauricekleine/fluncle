@@ -124,6 +124,90 @@ describe("handleAgentDiscovery — /llms.txt", () => {
   });
 });
 
+describe("handleAgentDiscovery — the A2A agent card", () => {
+  async function fetchCard(path: string) {
+    const res = await handleAgentDiscovery(new Request(`https://www.fluncle.com${path}`));
+
+    expect(res).toBeDefined();
+    expect(res?.headers.get("Content-Type")).toBe("application/json");
+    expect(res?.headers.get("Cache-Control")).toBe("public, max-age=3600");
+
+    return JSON.parse((await res?.text()) ?? "{}");
+  }
+
+  it("serves the SAME card at the canonical and the legacy well-known paths", async () => {
+    // The current canonical A2A path and the legacy short path older clients still
+    // probe must return byte-identical bytes — one source, two doors.
+    const canonical = await handleAgentDiscovery(
+      new Request("https://www.fluncle.com/.well-known/agent-card.json"),
+    );
+    const legacy = await handleAgentDiscovery(
+      new Request("https://www.fluncle.com/.well-known/agent.json"),
+    );
+
+    expect(await canonical?.text()).toBe(await legacy?.text());
+  });
+
+  it("carries every A2A-required top-level field", async () => {
+    const card = await fetchCard("/.well-known/agent-card.json");
+
+    // The A2A v1.0 required set: protocolVersion, name, description, url, provider,
+    // capabilities, skills. A missing one makes the card fail a conformant validator.
+    for (const field of [
+      "protocolVersion",
+      "name",
+      "description",
+      "url",
+      "provider",
+      "capabilities",
+      "skills",
+    ]) {
+      expect(card[field]).toBeDefined();
+    }
+  });
+
+  it("uses the identity strings verbatim and points at the real actionable surface", async () => {
+    const card = await fetchCard("/.well-known/agent-card.json");
+
+    expect(card.name).toBe("Fluncle");
+    // fluncleDescription (lib/identity.ts), reused verbatim as the MCP card does.
+    expect(card.description).toContain("Drum & bass bangers from another dimension.");
+    expect(card.url).toBe("https://www.fluncle.com/api/v1");
+    expect(card.provider).toEqual({ organization: "Fluncle", url: "https://www.fluncle.com" });
+    expect(card.documentationUrl).toBe("https://www.fluncle.com/llms.txt");
+    expect(card.preferredTransport).toBe("HTTP+JSON");
+  });
+
+  it("declares an honest, non-conversational capability scope", async () => {
+    const card = await fetchCard("/.well-known/agent-card.json");
+
+    // Fluncle is a read + submit archive over HTTP, not a streaming/push A2A task agent —
+    // so it must not claim either capability.
+    expect(card.capabilities).toEqual({ pushNotifications: false, streaming: false });
+  });
+
+  it("advertises exactly the actionable public ops as skills — no invented capability", async () => {
+    const card = await fetchCard("/.well-known/agent-card.json");
+
+    // Each skill maps 1:1 to a real op the public API + MCP server expose (the MCP tool
+    // list is the source of truth): search / list / read tracks, submit, subscribe.
+    expect(card.skills.map((skill: { id: string }) => skill.id)).toEqual([
+      "search-tracks",
+      "list-tracks",
+      "get-track",
+      "submit-track",
+      "subscribe-newsletter",
+    ]);
+
+    for (const skill of card.skills) {
+      expect(typeof skill.name).toBe("string");
+      expect(typeof skill.description).toBe("string");
+      expect(Array.isArray(skill.tags)).toBe(true);
+      expect(Array.isArray(skill.examples)).toBe(true);
+    }
+  });
+});
+
 describe("appendOnionLocation", () => {
   it("points an HTML response at the onion with the request's exact path", () => {
     const url = new URL("https://www.fluncle.com/log/241.7.3A");
