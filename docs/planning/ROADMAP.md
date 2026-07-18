@@ -324,6 +324,29 @@ What remains is the PUBLIC exposure call:
 
 The spike's rails carried forward unchanged into the user tier and carry into any public version: grounding is the product, he never speaks about an uncertified track (ratified canon — the catalogue is a utility layer with no narrative voice), the surface stays a quiet plate rather than a SaaS chat window (`PRODUCT.md` bans the streaming-app clone by name), and the voice gate applies — this is him _talking_, the most exposed his voice ever gets.
 
+## Epic — the tool tiers: align the MCP and ChatDnB, extend both to the catalogue (2026-07-18, operator-ratified)
+
+**The realization that names it:** ChatDnB does NOT consume the MCP — they are two SEPARATE tool implementations (`mcp.ts`'s `tools[]` and `chat.ts`'s `buildChatTools()`) that both call the same in-process server functions but define their own, drifting tool sets. That is why `list_fresh` filled in the bare MCP (a real Claude-app conversation) while ChatDnB returned empty the same afternoon (2026-07-18): the MCP's `list_fresh` returns the full fresh list, ChatDnB's filters to certified findings, and the current fresh window happens to be all uncertified catalogue. Same question, two answers, because two tool sets.
+
+The scope audit that motivated it (bare MCP, 2026-07-18): **findings-only** — `list_tracks`/`get_recent_tracks` (Recent findings), `get_random_track` (Random finding), `get_track` (Read one finding, by coordinate). **Catalogue** — only `list_fresh`. **External Spotify** — `search_tracks` actually searches SPOTIFY for submission candidates, not Fluncle at all, so the bare MCP has NO way to search the archive/catalogue (ChatDnB has `search_archive`, findings-grounded, but the MCP never exposes it). Two gaps: no archive/catalogue SEARCH on the MCP, and no catalogue BROWSE (by artist/label/album — the crawler's world `/albums`, `/labels`, `/artist` already expose on the web).
+
+**The operator-ratified shape:**
+
+- **One shared tool set, two transports.** Extract the tool definitions into a single source of truth both the MCP transport (`mcp.ts`) and the ChatDnB engine (`chat.ts`) consume, so they cannot drift again. MCP and ChatDnB expose the SAME tool calls. (ChatDnB adds nothing the MCP lacks; the MCP gains the archive tools ChatDnB already has.)
+- **The two tiers, both surfaces carry both.** LORE/CANON tools stay findings-grounded and speak in full Fluncle voice (coordinate, note, observation) — the certified archive. CATALOGUE tools (`list_fresh`, a new archive/catalogue SEARCH, catalogue BROWSE) surface the wider DnB world in the **unlit register**: named honestly and LISTED, never NARRATED (this keeps the ratified canon — "the catalogue is a utility layer with no narrative voice" — intact; the change is that the catalogue can now be _surfaced_, not that it earns a voice).
+- **The grounding boundary evolves, it does not loosen.** From "certified findings only" to "anything IN THE ARCHIVE — findings OR catalogue — rendered in the right register." Still never invents, still never speaks from outside the archive (no raw Spotify results as answers); catalogue rows are real, crawler-minted, already public on `/fresh`, so surfacing them is not hallucination.
+- **Missing tools to add:** an internal archive/catalogue `search` (see the search epic below — it is the prerequisite), catalogue browse (`list_artist_catalogue` / by label / by album), and `list_fresh` into ChatDnB. Optionally a copy fallback in the interim: when ChatDnB's certified-fresh list is empty, point to `/fresh` for the wider release list.
+
+## Epic — search goes internal: cut Spotify out of the read path (2026-07-18, operator-ratified)
+
+Today `search_tracks` (the MCP tool + the submit-candidate flow) calls `searchTrackCandidates` → **Spotify's API**. The original reason was sound: a search result carried the Spotify URL that `submit_track` needs. But the catalogue crawler now mints catalogue rows WITH `spotify_url` (and Apple/ISRC anchors), so **the internal catalogue can serve the same search** — with two wins: it stops eating the Spotify app's rate limits (freeing them for the user paths), and it makes "search Fluncle" actually search Fluncle.
+
+**The shape:** move every search consumer onto ONE internal catalogue search, across the board — the MCP search tool, the public `search_tracks` API op, the SSH rave terminal, the CLI, and any other surface (enumerate them first; the web CMD+K already uses the internal `search_archive`, so part of this is unifying `search_archive` + `search_tracks` into one catalogue-scoped search with a findings/catalogue register split). Spotify stays ONLY where it is genuinely irreplaceable — the actual submission/enrichment fetch of a track we do not yet hold — never in the search READ path.
+
+**The open sub-question to settle when scoped:** coverage. Internal search only finds what we have crawled, so submitting a brand-new track not yet in the catalogue needs either a Spotify fallback for the submit-something-new case, or a submit flow that accepts a pasted Spotify URL directly (no search needed). Decide the fallback posture before cutting Spotify out of the submit path specifically; the DISCOVERY/browse read paths can go internal immediately.
+
+**Dependency:** this epic is the prerequisite for the archive-search tool in the tool-tiers epic above — build the internal catalogue search once, then both the MCP/ChatDnB search tool and every other surface read from it.
+
 ## The Fluncle models — the voice, the eye, the ear (idea, 2026-07-11)
 
 One arc, three probes. Fluncle already generates — notes, observations, logbook entries, shader videos, sprites, covers — but always by **constraining a stranger**: a general model held in line by a prompt, a skill, and a voice gate. The question this arc asks is what changes when the model has **only ever known Fluncle**.
