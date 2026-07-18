@@ -6,6 +6,7 @@ import {
   FilmReelIcon,
   FilmSlateIcon,
   FilmStripIcon,
+  FunnelIcon,
   GearSixIcon,
   type Icon,
   ListNumbersIcon,
@@ -76,6 +77,7 @@ export type AdminNavCurrent =
   | "costs"
   | "dashboard"
   | "findings"
+  | "funnel"
   | "galaxies"
   | "labels"
   | "mixable-order"
@@ -100,6 +102,7 @@ type AdminNavPath =
   | "/admin/clips"
   | "/admin/costs"
   | "/admin/findings"
+  | "/admin/funnel"
   | "/admin/galaxies"
   | "/admin/labels"
   | "/admin/mixable-order"
@@ -168,16 +171,27 @@ const OBJECT_SECTIONS: NavSection[] = [
         to: "/admin/renders",
       },
       { icon: UsersThreeIcon, key: "artists", label: "Artists", to: "/admin/artists" },
-      { icon: TagIcon, key: "labels", label: "Labels", to: "/admin/labels" },
-      // The Ear: every track the archive knows and Fluncle never logged, ranked by how close
-      // it sits to something he did (docs/the-ear.md). It sits with the finding-adjacent
-      // objects because that is what it is FOR — the thing a row here becomes is a finding.
-      // No count badge: the honest number is "how many are worth your time", and a COUNT
-      // cannot answer that. A telescope with a backlog badge is a conveyor belt.
-      { icon: BinocularsIcon, key: "catalogue", label: "Catalogue", to: "/admin/catalogue" },
       { icon: PlanetIcon, key: "galaxies", label: "Galaxies", to: "/admin/galaxies" },
     ],
     key: "objects",
+  },
+  // The Catalogue group — the catalogue machine's own cockpit (the-funnel RFC). Funnel is the
+  // one-page view of the pipeline; Catalogue (The Ear) ranks the uncertified rows; Labels is
+  // the crawl-SEED control (it moved down here from the object nav because ruling on a label
+  // steers what the NEXT crawl digs — a catalogue-machine lever, not a pipeline object).
+  {
+    entries: [
+      { icon: FunnelIcon, key: "funnel", label: "Funnel", to: "/admin/funnel" },
+      // The Ear: every track the archive knows and Fluncle never logged, ranked by how close
+      // it sits to something he did (docs/the-ear.md). The nav label is its NAME ("The Ear",
+      // the voice canon's — docs/the-ear.md owns the concept); the route stays /admin/catalogue
+      // (the domain key). No count badge: the honest number is "how many are worth your time",
+      // and a COUNT cannot answer that. A telescope with a backlog badge is a conveyor belt.
+      { icon: BinocularsIcon, key: "catalogue", label: "The Ear", to: "/admin/catalogue" },
+      { icon: TagIcon, key: "labels", label: "Labels", to: "/admin/labels" },
+    ],
+    key: "catalogue",
+    label: "Catalogue",
   },
   {
     entries: [

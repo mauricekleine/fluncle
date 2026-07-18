@@ -17,6 +17,7 @@ import {
   siYoutube,
 } from "simple-icons";
 import { BrandIcon } from "@/components/brand-icon";
+import { chartGeometry as sharedChartGeometry } from "@/lib/chart-geometry";
 import { fluncleEntityId, siteUrl } from "@/lib/fluncle-links";
 import { fluncleDescription } from "@/lib/identity";
 import { jsonLdScript } from "@/lib/json-ld";
@@ -239,26 +240,11 @@ const CHART_PAD_Y = 18;
 
 type ChartSeries = { label: string; points: ReachPoint[] };
 
-function chartGeometry(points: ReachPoint[]) {
-  const values = points.map((point) => point.value);
-  const max = Math.max(...values);
-  const min = Math.min(...values);
-  const span = max - min;
-  const usable = CHART_H - CHART_PAD_Y * 2;
-
-  const coords = points.map((point, index) => {
-    const x = points.length === 1 ? CHART_W : (index / (points.length - 1)) * CHART_W;
-    const y = span === 0 ? CHART_H / 2 : CHART_PAD_Y + (1 - (point.value - min) / span) * usable;
-
-    return { x, y };
-  });
-
-  const last = coords[coords.length - 1] ?? { x: CHART_W, y: CHART_H / 2 };
-  const line = coords.map((coord) => `${coord.x},${coord.y}`).join(" ");
-  const area = `M0,${CHART_H} L${coords.map((c) => `${c.x},${c.y}`).join(" L")} L${CHART_W},${CHART_H} Z`;
-
-  return { area, last, line, max, min };
-}
+// The geometry is the SHARED `chart-geometry.ts` helper (one line-chart shape for /reach and
+// /admin/funnel), pinned to this console's taller viewBox. Output is unchanged from the former
+// inline version — same math, same live-edge-at-the-right-edge quirk (see that module).
+const chartGeometry = (points: ReachPoint[]) =>
+  sharedChartGeometry(points, { height: CHART_H, padY: CHART_PAD_Y, width: CHART_W });
 
 function ReachChart({ series }: { series: ChartSeries }) {
   const points = series.points;
