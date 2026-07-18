@@ -51,7 +51,9 @@ CODE="$(systemctl show -p ExecMainCode --value -- "$UNIT" 2>/dev/null || true)"
 # pin-watch swaps the hermes container mid-sweep. Two encodings to catch:
 #   • signaled death:  ExecMainCode=2 (CLD_KILLED), ExecMainStatus=15 (the signal number)
 #   • shell-wrapped:   ExecMainCode=1 (CLD_EXITED), ExecMainStatus=143 (128+15, an exit code)
-if { [ "$STATUS" = "15" ] && [ "$CODE" = "2" ]; } || [ "$STATUS" = "143" ]; then
+# NEVER skip a `Result=timeout` death: systemd delivers TimeoutStartSec kills via SIGTERM too,
+# and a chronic timeout is exactly the trouble this notifier exists to surface.
+if [ "$RESULT" != "timeout" ] && { { [ "$STATUS" = "15" ] && [ "$CODE" = "2" ]; } || [ "$STATUS" = "143" ]; }; then
   echo "fluncle-sweep-failure: ${UNIT} died on SIGTERM (result=${RESULT:-unknown}, code=${CODE:-?}, status=${STATUS:-?}) — likely a container swap; not posting, the next tick self-heals." >&2
   exit 0
 fi
