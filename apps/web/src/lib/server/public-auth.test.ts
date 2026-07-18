@@ -8,6 +8,8 @@ import {
   requireJsonMutation,
   resolvePublicAuthSecret,
   type PublicUser,
+  LAST_SEEN_BUMP_MS,
+  shouldBumpLastSeen,
 } from "./public-auth";
 
 // The config builder only stores the db lazily (drizzleAdapter), so a stub is enough
@@ -205,5 +207,18 @@ describe("public auth hardening", () => {
 
       expect(requireJsonMutation(request, user)).toBeUndefined();
     });
+  });
+});
+
+describe("shouldBumpLastSeen (the presence-stamp throttle)", () => {
+  it("always bumps a never-seen user (NULL stamp)", () => {
+    expect(shouldBumpLastSeen(null, 1_000)).toBe(true);
+  });
+
+  it("holds inside the window and bumps once it has fully passed", () => {
+    const seen = 1_000_000;
+
+    expect(shouldBumpLastSeen(seen, seen + LAST_SEEN_BUMP_MS)).toBe(false);
+    expect(shouldBumpLastSeen(seen, seen + LAST_SEEN_BUMP_MS + 1)).toBe(true);
   });
 });

@@ -1,4 +1,5 @@
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
+import { waitUntil } from "cloudflare:workers";
 import { expo } from "@better-auth/expo";
 import { betterAuth, type Auth, type BetterAuthOptions } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
@@ -61,6 +62,7 @@ type PublicUserRow = {
   email_verified: number;
   id: string;
   image: string | null;
+  last_seen_at: number | null;
   name: string | null;
   status: "active" | "deleted" | "suspended";
   username: string | null;
@@ -454,6 +456,32 @@ export async function getPublicAuth(): Promise<PublicAuth> {
   return publicAuthPromise;
 }
 
+/** How stale the presence stamp may get before an authenticated request refreshes it. */
+export const LAST_SEEN_BUMP_MS = 60 * 60 * 1000;
+
+/**
+ * Whether this request should refresh `last_seen_at` — NULL always does (the user has never
+ * been stamped), otherwise only once the window has fully passed. Pure, so the throttle is
+ * unit-pinned without a session harness.
+ */
+export function shouldBumpLastSeen(lastSeenMs: number | null, now: number): boolean {
+  return lastSeenMs == null || now - lastSeenMs > LAST_SEEN_BUMP_MS;
+}
+
+/** Best-effort presence write — never throws (the caller fire-and-forgets it). */
+async function bumpLastSeen(userId: string): Promise<void> {
+  try {
+    await (
+      await getDb()
+    ).execute({
+      args: [Date.now(), userId],
+      sql: `update "user" set last_seen_at = ? where id = ?`,
+    });
+  } catch {
+    // Swallowed: a missed stamp self-heals on the next request past the window.
+  }
+}
+
 export async function getPublicSession(request: Request): Promise<PublicUser | undefined> {
   const auth = await getPublicAuth();
   const session = await auth.api.getSession({ headers: request.headers });
@@ -471,12 +499,29 @@ export async function getPublicSession(request: Request): Promise<PublicUser | u
     await getDb()
   ).execute({
     args: [sessionUser.id],
-    sql: `select id, username, display_username, name, image, created_at, status, email, email_verified, crew_number from "user" where id = ? limit 1`,
+    sql: `select id, username, display_username, name, image, created_at, status, email, email_verified, crew_number, last_seen_at from "user" where id = ? limit 1`,
   });
   const user = typedRow<PublicUserRow>(result.rows);
 
   if (!user || user.status !== "active") {
     return undefined;
+  }
+
+  // The presence stamp the /admin/users board reads ("Not seen yet" ⇔ NULL). Written HERE —
+  // the one chokepoint every authenticated request resolves through — because nothing else
+  // ever wrote it: the column shipped with the auth config declaring it and no writer, so the
+  // board read NULL for every user forever (found 2026-07-18). Throttled to once per window so
+  // the auth hot path stays read-only almost always, and fire-and-forget so a failed stamp
+  // never touches the session (the submitFindingToIndexNow discipline).
+  if (shouldBumpLastSeen(user.last_seen_at, Date.now())) {
+    const bump = bumpLastSeen(user.id);
+
+    try {
+      waitUntil(bump);
+    } catch {
+      // Outside a request context (vitest, scripts): let it run detached, still swallowed.
+      bump.catch(() => undefined);
+    }
   }
 
   return {
