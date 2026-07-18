@@ -33,6 +33,7 @@ let db: Client;
 /** A crawled (uncertified) track: a `tracks` row with no `findings` row. */
 async function seedCatalogueTrack(options: {
   albumId?: string;
+  albumImageUrl?: string;
   artists: string[];
   releaseDate: null | string;
   trackId: string;
@@ -45,10 +46,11 @@ async function seedCatalogueTrack(options: {
       options.releaseDate,
       options.albumId ?? null,
       `https://open.spotify.com/track/${options.trackId}`,
+      options.albumImageUrl ?? null,
     ],
     sql: `insert into tracks
-            (track_id, title, artists_json, release_date, album_id, spotify_url, duration_ms)
-          values (?, ?, ?, ?, ?, ?, 210000)`,
+            (track_id, title, artists_json, release_date, album_id, spotify_url, album_image_url, duration_ms)
+          values (?, ?, ?, ?, ?, ?, ?, 210000)`,
   });
 }
 
@@ -181,6 +183,7 @@ describe("listFreshReleases", () => {
     // newest release on it, and its artists folded distinct across its fresh tracks.
     await seedCatalogueTrack({
       albumId: "alb_wgf",
+      albumImageUrl: "https://i.scdn.co/image/wgf-newest",
       artists: ["Nu:Tone"],
       releaseDate: "2026-07-14",
       trackId: "r_wgf1",
@@ -206,5 +209,42 @@ describe("listFreshReleases", () => {
     expect(wgf?.name).toBe("Words Gone Forever");
     expect(wgf?.releaseDate).toBe("2026-07-14");
     expect([...(wgf?.artists ?? [])].sort()).toEqual(["Logistics", "Nu:Tone"]);
+    // The record carries a cover: the album art off its NEWEST-released track that has one.
+    expect(wgf?.coverImageUrl).toBe("https://i.scdn.co/image/wgf-newest");
+  });
+
+  it("attaches the lead artist's avatar to a catalogue row (the row shows WHO, dimmed in the UI)", async () => {
+    // A lead artist with a stored image, plus a featured artist without one — the join must pick the
+    // LEAD (position 1), never the feature, so the avatar is the right face.
+    await db.execute({
+      args: ["art_lead", "Workforce", "workforce", "https://i.scdn.co/image/workforce", "x", "x"],
+      sql: `insert into artists (id, name, slug, image_url, created_at, updated_at)
+            values (?, ?, ?, ?, ?, ?)`,
+    });
+    await db.execute({
+      args: ["art_feat", "Tim Reaper", "tim-reaper", "x", "x"],
+      sql: `insert into artists (id, name, slug, created_at, updated_at) values (?, ?, ?, ?, ?)`,
+    });
+    await seedCatalogueTrack({
+      artists: ["Workforce", "Tim Reaper"],
+      releaseDate: "2026-07-14",
+      trackId: "c_avatar",
+    });
+    await db.execute({
+      args: ["c_avatar", "art_lead"],
+      sql: `insert into track_artists (track_id, artist_id, position) values (?, ?, 1)`,
+    });
+    await db.execute({
+      args: ["c_avatar", "art_feat"],
+      sql: `insert into track_artists (track_id, artist_id, position) values (?, ?, 2)`,
+    });
+
+    const { sections } = await listFreshReleases(NOW);
+    const row = sections
+      .flatMap((section) => section.catalogue)
+      .find((track) => track.trackId === "c_avatar");
+
+    // The lead artist's image (Spotify, no owned master) is the avatar — never the featured artist's.
+    expect(row?.artistAvatarUrl).toBe("https://i.scdn.co/image/workforce");
   });
 });

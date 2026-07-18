@@ -26,6 +26,7 @@
 // complement for the unlit half — is the same structural guard the rest of `tracks.ts` uses:
 // a catalogue row has no `findings` columns to map, so it cannot leak into a finding surface.
 
+import { bestArtistAvatarUrl } from "../media";
 import { parseArtistsJson } from "./artists";
 import { getDb, typedRows } from "./db";
 import {
@@ -37,6 +38,38 @@ import {
   toTrackListItem,
   type TrackRow,
 } from "./tracks";
+
+// The LEAD ARTIST's owned/Spotify avatar, joined per track so a row can show WHO made it (the
+// artist image, monogram-fallback in the UI) rather than only its album art. `track_artists.position`
+// is 1-based with the lead first, so the scalar subquery picks the lead; the join is a PK lookup on
+// `artists`. Both are indexed (`track_artists_track_id_idx`, the `artists` PK) and the outer scan is
+// already window-bounded + LIMIT-capped, so this stays a bounded seek, never a growing-table scan.
+const LEAD_ARTIST_JOIN = `left join artists fresh_lead_artist on fresh_lead_artist.id = (
+        select ta.artist_id from track_artists ta
+        where ta.track_id = tracks.track_id
+        order by ta.position asc limit 1)`;
+const LEAD_ARTIST_SELECT = `fresh_lead_artist.image_url as artist_image_url,
+       fresh_lead_artist.image_key as artist_image_key,
+       fresh_lead_artist.image_state as artist_image_state,
+       fresh_lead_artist.image_updated_at as artist_image_updated_at`;
+
+/** The four `artists` image columns the lead-artist join selects, on any fresh row. */
+type LeadArtistRow = {
+  artist_image_key: string | null;
+  artist_image_state: string | null;
+  artist_image_updated_at: string | null;
+  artist_image_url: string | null;
+};
+
+/** The lead artist's best avatar (owned master when resolved, else Spotify) for a joined row. */
+function leadArtistAvatarUrl(row: LeadArtistRow): string | undefined {
+  return bestArtistAvatarUrl({
+    imageKey: row.artist_image_key,
+    imageState: row.artist_image_state,
+    imageUpdatedAt: row.artist_image_updated_at,
+    imageUrl: row.artist_image_url,
+  });
+}
 
 /** The trailing release window: how far back "just came out" reaches. A constant, never a param. */
 export const FRESH_WINDOW_DAYS = 30;
@@ -54,13 +87,20 @@ export const FRESH_RECORDS_LIMIT = 24;
 /** Which recency bucket a release falls in — the page's two sections. */
 export type FreshBucket = "earlier" | "week";
 
-/** An uncertified row on the fresh page — the unlit `CatalogueTrackItem`, plus the date it landed. */
-export type FreshCatalogueItem = CatalogueTrackItem & { releaseDate: string };
+/** An uncertified row on the fresh page — the unlit `CatalogueTrackItem`, plus the date it landed and
+    the lead artist's avatar (dimmed in the unlit register; a monogram of `artists[0]` when absent). */
+export type FreshCatalogueItem = CatalogueTrackItem & {
+  artistAvatarUrl?: string;
+  releaseDate: string;
+};
+
+/** A certified finding on the fresh page — the full `TrackListItem` plus its lead artist's avatar. */
+export type FreshFinding = TrackListItem & { artistAvatarUrl?: string };
 
 /** One recency section: the findings (lit) and the quieter rows (unlit) that landed in its window. */
 export type FreshSection = {
   catalogue: FreshCatalogueItem[];
-  findings: TrackListItem[];
+  findings: FreshFinding[];
   key: FreshBucket;
 };
 
@@ -68,6 +108,9 @@ export type FreshSection = {
 export type FreshRecord = {
   /** The credited artists, folded distinct across the record's fresh tracks. */
   artists: string[];
+  /** The record's own cover art (any of its tracks' album art) — a raw provider URL, resized at
+      render via {@link albumCoverAtSize}. Undefined when no track on the record carries art. */
+  coverImageUrl: string | undefined;
   name: string;
   releaseDate: string;
   /** `/album/<slug>` — always present, because this row IS an album entity (an inner join minted it). */
@@ -82,7 +125,7 @@ export type FreshReleases = {
   windowDays: number;
 };
 
-type FreshCatalogueRow = {
+type FreshCatalogueRow = LeadArtistRow & {
   artists_json: string;
   release_date: string;
   spotify_url: string | null;
@@ -92,6 +135,7 @@ type FreshCatalogueRow = {
 
 type FreshRecordRow = {
   artists: string | null;
+  cover_url: string | null;
   name: string;
   release_date: string;
   slug: string;
@@ -117,23 +161,27 @@ export async function listFreshReleases(now: Date = new Date()): Promise<FreshRe
 
   const [findingsResult, catalogueResult, recordsResult] = await Promise.all([
     // The lit half: findings whose track was RELEASED in the window. Drives through the finding
-    // inner join, so it can only ever return findings — the full `TRACK_SELECT` the Track Row reads.
+    // inner join, so it can only ever return findings — the full `TRACK_SELECT` the Track Row reads,
+    // plus the lead artist's avatar columns.
     db.execute({
       args: [windowStart, today, FRESH_FINDINGS_LIMIT],
-      sql: `select ${TRACK_SELECT} from ${FINDINGS_FROM}
+      sql: `select ${TRACK_SELECT}, ${LEAD_ARTIST_SELECT} from ${FINDINGS_FROM}
+            ${LEAD_ARTIST_JOIN}
             where tracks.release_date >= ? and tracks.release_date <= ?
             order by tracks.release_date desc, tracks.track_id desc
             limit ?`,
     }),
     // The unlit half: the anti-join's exact complement (a `tracks` row with no `findings` row),
-    // released in the window. Only the four unlit columns — no cover, no coordinate, nothing a
-    // finding surface could render (DESIGN.md's Unlit Rule; `listCatalogueTracksByAlbum`'s shape).
+    // released in the window. No album COVER and no coordinate — nothing that would let it read as a
+    // finding (DESIGN.md's Unlit Rule). The lead artist's avatar rides along, but the UI dims it into
+    // the unlit register (the `catalogue-grid` precedent), so it identifies WHO without lighting up.
     db.execute({
       args: [windowStart, today, FRESH_CATALOGUE_LIMIT],
       sql: `select tracks.track_id, tracks.title, tracks.artists_json,
-                   tracks.spotify_url, tracks.release_date
+                   tracks.spotify_url, tracks.release_date, ${LEAD_ARTIST_SELECT}
             from tracks
             left join findings on findings.track_id = tracks.track_id
+            ${LEAD_ARTIST_JOIN}
             where findings.track_id is null
               and tracks.release_date >= ? and tracks.release_date <= ?
             order by tracks.release_date desc, tracks.track_id desc
@@ -148,7 +196,12 @@ export async function listFreshReleases(now: Date = new Date()): Promise<FreshRe
       args: [windowStart, today, FRESH_RECORDS_LIMIT],
       sql: `select al.slug as slug, min(al.name) as name,
                    max(tracks.release_date) as release_date,
-                   group_concat(distinct credit.value) as artists
+                   group_concat(distinct credit.value) as artists,
+                   (select t2.album_image_url
+                      from tracks t2
+                      where t2.album_id = al.id and t2.album_image_url is not null
+                      order by t2.release_date is null asc, t2.release_date desc, t2.track_id asc
+                      limit 1) as cover_url
             from tracks
             join albums al on al.id = tracks.album_id
             join json_each(tracks.artists_json) credit
@@ -159,11 +212,15 @@ export async function listFreshReleases(now: Date = new Date()): Promise<FreshRe
     }),
   ]);
 
-  const findings = typedRows<TrackRow>(findingsResult.rows).map((row) =>
-    toPublicTrackListItem(toTrackListItem(row)),
+  const findings: FreshFinding[] = typedRows<TrackRow & LeadArtistRow>(findingsResult.rows).map(
+    (row) => ({
+      ...toPublicTrackListItem(toTrackListItem(row)),
+      artistAvatarUrl: leadArtistAvatarUrl(row),
+    }),
   );
   const catalogue: FreshCatalogueItem[] = typedRows<FreshCatalogueRow>(catalogueResult.rows).map(
     (row) => ({
+      artistAvatarUrl: leadArtistAvatarUrl(row),
       artists: parseArtistsJson(row.artists_json),
       releaseDate: row.release_date,
       spotifyUrl: row.spotify_url ?? undefined,
@@ -178,6 +235,7 @@ export async function listFreshReleases(now: Date = new Date()): Promise<FreshRe
       .split(",")
       .map((name) => name.trim())
       .filter(Boolean),
+    coverImageUrl: row.cover_url ?? undefined,
     name: row.name,
     releaseDate: row.release_date,
     slug: row.slug,
