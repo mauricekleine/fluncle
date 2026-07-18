@@ -8,6 +8,29 @@ One dated entry per observed occurrence: the artifact family (notes / observatio
 
 ## The ledger
 
+### 2026-07-18 · Videos — the counter-measure ships (designed-in diversity: the axis assigner, palette provenance, the palette gate)
+
+The audit's fix-map items (3) and (4) — the missing palette metric and the 92% register collapse — get their mechanism (#702). The standing law applied literally: diversity is now DESIGNED IN before generation, not hoped for from the agent eyeballing recent posters (which produced the amber strip anyway).
+
+- **The deterministic axis assigner** (`assign-video-axes.ts`, wired into `render-conductor.sh`): before each unattended render, the conductor computes the render's cell from the vehicles ledger — grain = least-recently-used family not in the last 3 renders (universe: the skill's six baked families ∪ the ledger's own values); register = largest deficit vs a tunable quota (representational 45% / abstract 35% / framed 20% over the last 12 — dials to break the collapse, not taste law); palette-avoid = a negative directive against the worn amber/halftone class until palette provenance exists, then data-driven (avoid the dominant hue bucket of the last 3). Injected as `FLUNCLE_VIDEO_*` env vars; **fail-open by contract** — an assigner error never blocks a render.
+- **The assignment is binding in the render brief:** when the vars are set the grain family and register are ASSIGNED, not suggestions; the agent's creativity (vehicle, shader, motion, composition) lives inside the cell. Unset (manual/local renders) = the old free choice, unchanged.
+- **Palette provenance:** a compact palette summary (dominant swatches + a deterministic HSV hue-bucket tag like "amber-warm") is written into render.json at ship and stored in the new `findings.video_palette` column, carried on the vehicles ledger — the axis that was invisible when the 07-13 strip happened is now recorded per render.
+- **The palette gate** (`judge:palette`, a fourth hard ship gate beside `judge:metrics`): the fresh poster's HSV histogram vs the last 3 published posters, hard-failing under a Bhattacharyya floor calibrated 2026-07-18 on real posters (the amber lookalike pair vs healthy pairs). This is the check that would have caught the 07-13 strip automatically.
+
+**Honesty note:** mechanisms, not after-numbers. The conductor + render-brief halves ride the next box bake, so the assigner is not live until then; `video_palette` is NULL on every existing row and fills as new renders ship (the assigner's data-driven palette path activates on its own); the proof is the next consecutive-renders strip reading as five different looks, plus the measure harness's video cut once it lands.
+
+### 2026-07-18 · Logbook — the counter-measure ships (the notes' rail, third family) + the three live entries repaired
+
+The 07-16 duplicate-title entry gets its answer (#695) — the proven notes/observations mechanism ported to the logbook, deliberately lighter (no rejections ledger; the sweep's stay-a-gap behaviour IS the ledger):
+
+- **Layer A — deterministic title-collision guard:** `createLogbookEntry` normalizes the candidate title and 422s an exact/near match against ANY stored title (`title_echoes_logbook`, naming the colliding sector); the operator overwrite excludes only the sector's own row. This single layer would have caught the 07-16 duplicate.
+- **Layer B — spent-moves fuel:** the gaps read now carries the recent ~12 entries' titles + openers + closers as SPENT, threaded into the `logbook_entry` prompt in lockstep (registry default + baked fallback), naming the worn moves explicitly (the "Shoulders…" family, the quiet-sector opener, the body-clock formula, the "Enjoy, cosmonauts." closer).
+- **Layer C — scored body-echo gate:** the draft body vs the recent 6 other entries through the shared `scoreEcho` (≥4-word lift / ≥0.3 content-word overlap), 422 on echo; the sweep re-authors once with the offending phrase named, then leaves the day a gap for a colder pass. Dials in `settings`, bounded on read.
+
+**The content repair (operator-gated, task 2):** the three "Shoulders Down" entries were retitled and de-rhymed via the operator overwrite — 012 "Floated off the coordinate", 018 "The music did the diagnostic", 019 "The softness was structural" — verified live on /logbook.
+
+**Honesty note:** mechanisms, not after-numbers (the logbook corpus is n=8). The on-box sweep half rides the next box bake. A pre-existing DB prompt override authors without the spent block until the operator re-saves it; the server rails enforce regardless.
+
 ### 2026-07-16 · Logbook — an exact DUPLICATE TITLE, and it's the crutch word (operator-observed, corpus-verified)
 
 The /logbook index now shows two of its seven entries wearing the same title: sector 012 "Shoulders down" (authored 2026-07-14) and sector 018 "Shoulders Down" (authored 2026-07-15) — identical but for case, on the public surface where every title is read side by side. Verified against prod: 7 entries, both rows `generated_by = agent`, authored on CONSECUTIVE sweep days despite covering sector-days six apart.
@@ -71,5 +94,5 @@ Learned during the video-overhaul and batch-render runs, written down before thi
 
 ## What the ledger still wants
 
-- **A metric per family.** Notes have `scoreNoteEcho`; observations have the taste-pack word counts; videos, covers, and sprites have nothing — a palette-histogram + texture-family tag per render would have caught the 07-13 strip automatically. "An anti-sameness effort with no metric is folklore" (ROADMAP).
+- **A metric per family.** Notes have `scoreNoteEcho`; observations have the taste-pack word counts; videos now have the palette-histogram gate + a per-render palette tag (the 07-18 entry — exactly the check that would have caught the 07-13 strip); covers and sprites still have nothing. "An anti-sameness effort with no metric is folklore" (ROADMAP).
 - **Entries from families not yet observed** (covers, sprites, clip captions) — absence of evidence there is so far just absence of looking.
