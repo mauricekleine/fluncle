@@ -1134,7 +1134,7 @@ export function createRenderer(container: HTMLElement): Renderer {
     );
 
     // The way out to the music itself; pressing it never steers the ship.
-    const label = "Open in Spotify";
+    const label = "Listen on Spotify";
     const labelWidth = ctx.measureText(label).width;
     const linkX = linkOnOwnRow ? x + 8 : x + cardWidth - 8 - labelWidth;
     const linkY = linkOnOwnRow ? y + 57 : y + 45;

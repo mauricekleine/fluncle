@@ -63,7 +63,7 @@ export const Route = createFileRoute("/rss.xml")({
         const items = rows.map((row) => {
           const artists = parseArtistsJson(row.artists_json);
           const title =
-            row.item_type === "mixtape" ? row.title : `${artists.join(", ")} - ${row.title}`;
+            row.item_type === "mixtape" ? row.title : `${artists.join(", ")} — ${row.title}`;
           // A finding's home is its own /log page (the citation surface the archive
           // owns); Spotify stays in the body. Fall back to Spotify only when no
           // coordinate has been minted yet.

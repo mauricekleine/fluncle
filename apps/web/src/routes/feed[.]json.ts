@@ -62,7 +62,7 @@ export const Route = createFileRoute("/feed.json")({
         const items = rows.map((row) => {
           const artists = parseArtistsJson(row.artists_json);
           const title =
-            row.item_type === "mixtape" ? row.title : `${artists.join(", ")} - ${row.title}`;
+            row.item_type === "mixtape" ? row.title : `${artists.join(", ")} — ${row.title}`;
           // Keep the Spotify link reachable from the item body now that the item URL
           // points to the /log home.
           const contentText = [title, row.note?.trim() || undefined, row.spotify_url ?? undefined]

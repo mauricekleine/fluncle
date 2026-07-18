@@ -64,7 +64,7 @@ export const Route = createFileRoute("/atom.xml")({
         const entries = rows.map((row) => {
           const artists = parseArtistsJson(row.artists_json);
           const title =
-            row.item_type === "mixtape" ? row.title : `${artists.join(", ")} - ${row.title}`;
+            row.item_type === "mixtape" ? row.title : `${artists.join(", ")} — ${row.title}`;
           const summary = row.note?.trim() ? `${title}\n\n${row.note.trim()}` : title;
           // A finding's home is its own /log page (the citation surface the archive
           // owns); Spotify stays in the per-entry content. Fall back to Spotify only
