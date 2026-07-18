@@ -154,3 +154,34 @@ describe("resolveRecordingMbids", () => {
     expect(execute).toHaveBeenCalledTimes(2); // count + list, no writes
   });
 });
+
+// THE ARITY GUARD. The strip statement shipped with two placeholders and one bound arg — a
+// mismatch the mocked db.execute could never surface (prod threw LibsqlError "expected 2, got
+// 1" on every wet pass). Every statement this module issues must bind exactly as many args as
+// it declares placeholders; none of its SQL carries a literal '?', so the count is exact.
+describe("every statement binds exactly its placeholders", () => {
+  it("holds across a full wet pass (strip + worklist + resolved + missed writes)", async () => {
+    execute.mockResolvedValueOnce({ rowsAffected: 2 });
+    execute.mockResolvedValueOnce({
+      rows: [
+        { isrc: "GBABC1200001", track_id: "spotifyA" },
+        { isrc: "GBABC1200002", track_id: "spotifyB" },
+      ],
+    });
+    execute.mockResolvedValue({ rows: [], rowsAffected: 1 });
+    mbFetch.mockResolvedValueOnce(mbHit("rec-uuid-A"));
+    mbFetch.mockResolvedValueOnce(MB_MISS);
+
+    await resolveRecordingMbids(10, false);
+
+    for (const [call] of execute.mock.calls as Array<[{ args?: unknown[]; sql: string }]>) {
+      const placeholders = (call.sql.match(/\?/g) ?? []).length;
+
+      expect({
+        args: (call.args ?? []).length,
+        placeholders,
+        sql: call.sql.slice(0, 60),
+      }).toMatchObject({ args: placeholders, placeholders });
+    }
+  });
+});
