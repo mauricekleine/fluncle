@@ -1,6 +1,7 @@
 import { ArrowRightIcon, PauseIcon, PlayIcon } from "@phosphor-icons/react";
 import { Link } from "@tanstack/react-router";
 import { type ChatFinding, FindingCard } from "@/components/chat/finding-card";
+import { SpotifyIcon } from "@/components/platform-icons";
 import { TrackArtwork } from "@/components/track-artwork";
 import { formatKey, type KeyNotation } from "@/lib/key-notation";
 import { albumCoverAtSize } from "@/lib/media";
@@ -15,6 +16,12 @@ import { Badge } from "@fluncle/ui/components/badge";
 // carrying the REASON it mixes as a quiet chip (the `mixReasonLabel` string, NEVER a number),
 // and a footer that hands the whole ordered set to `/mix`. It mirrors the Finding Card's play +
 // coordinate idioms so the chain reads like the rest of the archive, one step closer to a set.
+//
+// The chain carries BOTH registers, exactly like `/mix` (which is already catalogue-aware). A
+// certified step lights its coordinate and plays; a catalogue step Fluncle has not certified rides
+// the UNLIT mix register — it still carries its mixability (bpm/key + the reason chip, a
+// measurement, not narration) and its `?set=` token, but no coordinate, no play, no /log link, and
+// it links out to Spotify instead. A catalogue step cannot leak a coordinate: it has none.
 
 /**
  * A chain step: a {@link ChatFinding} plus the human `reason` it mixes (the `mixReasonLabel`
@@ -138,7 +145,9 @@ function ChainStep({
           </span>
         </button>
       ) : (
-        <span className="shrink-0">{artwork}</span>
+        // A catalogue step (no coordinate) rides the unlit register: its tile is desaturated
+        // (Dust Veil), never a lit cover — DESIGN.md §157's Unlit Rule, mirroring the /mix unlit row.
+        <span className={logId ? "shrink-0" : "chain-step--unlit shrink-0"}>{artwork}</span>
       )}
 
       <div className="min-w-0 flex-1">
@@ -158,6 +167,21 @@ function ChainStep({
           {keyText ? <span className="text-xs text-muted-foreground">{keyText}</span> : null}
         </div>
       </div>
+
+      {/* A catalogue step rides the unlit mix register — it carries its mixability (bpm/key + the
+          reason chip, a measurement) but no coordinate, so it links OUT to Spotify the way an
+          unlit /mix row does. A certified step has its coordinate above and never shows this. */}
+      {!logId && step.spotifyUrl ? (
+        <a
+          aria-label={`Open ${title} on Spotify`}
+          className="shrink-0 text-muted-foreground transition-colors hover:text-foreground"
+          href={step.spotifyUrl}
+          rel="noreferrer"
+          target="_blank"
+        >
+          <SpotifyIcon aria-hidden="true" className="size-4" />
+        </a>
+      ) : null}
     </li>
   );
 }

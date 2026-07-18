@@ -356,6 +356,38 @@ function freshTrackToFinding(track: FreshTrack) {
   });
 }
 
+// ── The chat `catalogue` shapers (the unlit register, PR-4) ──────────────────────────
+//
+// A catalogue row is a track Fluncle knows is out there but has never certified. Its shape is the
+// DISTINCT `ChatCatalogueTrack` (mirror of the server's `CatalogueTrackItem`): a name, its artists,
+// a best-effort way out, and quiet context — and NOTHING that would make Fluncle speak about it as
+// a finding (no coordinate/note/observation/cover/galaxy/bpm/key/hasPreview). `artists` + `title`
+// are always present; `dropEmpty` strips only the optional context so a row carries no null.
+
+/** A fresh RELEASE row Fluncle has not certified, reduced to the unlit catalogue shape. */
+function freshTrackToCatalogue(track: FreshTrack) {
+  return {
+    artists: track.artists,
+    title: track.title,
+    ...dropEmpty({ spotifyUrl: track.spotifyUrl }),
+  };
+}
+
+/** A search hit Fluncle has not certified, reduced to the unlit catalogue shape. */
+function searchHitToCatalogue(hit: {
+  album?: string;
+  artists: string[];
+  label?: string;
+  spotifyUrl?: string;
+  title: string;
+}) {
+  return {
+    artists: hit.artists,
+    title: hit.title,
+    ...dropEmpty({ label: hit.label, release: hit.album, spotifyUrl: hit.spotifyUrl }),
+  };
+}
+
 // ── The archive-read helpers (lifted verbatim from chat.ts) ──────────────────────────
 //
 // PR-2 moved search_archive / get_artist / get_label / build_set out of chat.ts into the shared
@@ -366,9 +398,9 @@ function freshTrackToFinding(track: FreshTrack) {
 const MAX_SEARCH = 12;
 
 /**
- * How many mixable steps `build_set` chains off the seed — one full rail's worth of what mixes
- * in next, before the certified-only filter thins it (the seed leads; the card + `/mix` link are
- * at most this many rows plus the seed).
+ * How many mixable steps `build_set` chains off the seed — one full rail's worth of what mixes in
+ * next, both registers (the seed leads; the card + `/mix` link are at most this many rows plus the
+ * seed).
  */
 const MIX_CHAIN_LIMIT = 7;
 
@@ -421,9 +453,12 @@ function searchHitToFinding(hit: {
 }
 
 /**
- * A mix candidate reduced to the finding fields the Chain Card needs, WITHOUT its `previewUrl`
- * (a mix candidate carries none anyway) — the fallback for a certified step the batch hydrator
- * missed. The reason chip is added by the caller as a human string; this never carries a score.
+ * A mix candidate reduced to the fields the Chain Card needs, WITHOUT its `previewUrl` (a mix
+ * candidate carries none anyway). It shapes two kinds of step: the fallback for a CERTIFIED step
+ * the batch hydrator missed, and — since PR-4 — a genuine CATALOGUE step, which carries no
+ * `coordinate` (its `logId` is undefined) and so rides the unlit mix register with its bpm/key and
+ * a Spotify way out, but nothing that would name it. The reason chip is added by the caller as a
+ * human string; this never carries a score.
  */
 function mixTrackToFinding(candidate: MixCandidate) {
   return dropEmpty({
@@ -601,10 +636,13 @@ const listFreshTool = {
       // Chat keeps its own default (12) and tolerant clamp; only the CAP unifies to 100.
       const fresh = await listFreshTracks({ limit: clampInt(rawLimit, FRESH_LIMIT_MAX, 12) });
 
-      // THE GROUNDING BOUNDARY: only certified findings reach the model. An uncertified catalogue
-      // row on the fresh list carries no coordinate and is never something Fluncle speaks about —
-      // drop it before the hydrator is even asked (the Unlit Rule, at the wire).
+      // THE REGISTER SPLIT (PR-4): the fresh list carries both registers. Certified releases
+      // hydrate into `findings` (Fluncle speaks about them as just dropped); the uncertified rows —
+      // already cover/coordinate-free from listFreshTracks — ride into the UNLIT `catalogue` bucket,
+      // named and listed, never spoken as found. NO new server read; this fixes the list_fresh
+      // empty-in-chat bug (a fresh window that is all uncertified catalogue used to return nothing).
       const certified = fresh.tracks.filter((track) => track.certified && track.logId);
+      const catalogue = fresh.tracks.filter((track) => !track.certified).map(freshTrackToCatalogue);
 
       // Hydrate the certified logIds to full findings so each card shows its cover, chips, and a
       // play control. A logId the hydrator misses falls back to the fresh row's own fields.
@@ -617,7 +655,7 @@ const listFreshTool = {
         return item ? compactFinding(item) : freshTrackToFinding(track);
       });
 
-      return { findings, ok: true };
+      return dropEmpty({ catalogue, findings, ok: true as const });
     }
 
     // MCP/WebMCP world-serve the whole flat fresh list (findings + uncertified rows) as-is —
@@ -692,11 +730,17 @@ const searchArchiveTool = {
     const query = asTrimmedString((args as { query?: unknown }).query);
 
     if (ctx.transport === "chat") {
-      // CHAT keeps its findings-only projection (until PR-4): an uncertified catalogue row has no
-      // coordinate and is never something Fluncle speaks about — strip it before the hydrator is
-      // ever asked about it (the Unlit Rule, at the wire).
+      // THE REGISTER SPLIT (PR-4): split result.results by certification into two buckets BEFORE
+      // returning. The sonic tier has NO certified-first order, so the register is decided by
+      // FIELD-PRESENCE (a coordinate), never list position. Certified hits hydrate into `findings`
+      // (Fluncle speaks about them in full); every other row rides into the UNLIT `catalogue` bucket
+      // (named and listed only, never narrated). A row that claims certified without a coordinate
+      // still lands in catalogue — it is not something Fluncle speaks about.
       const result = await searchArchive({ limit: MAX_SEARCH, q: query });
       const certifiedHits = result.results.filter((hit) => hit.certified && hit.logId);
+      const catalogue = result.results
+        .filter((hit) => !(hit.certified && hit.logId))
+        .map(searchHitToCatalogue);
       const hydrated = await getTracksByLogIds(
         certifiedHits.flatMap((hit) => (hit.logId ? [hit.logId] : [])),
       );
@@ -708,6 +752,7 @@ const searchArchiveTool = {
 
       return dropEmpty({
         anchor: result.anchor?.certified ? searchHitToFinding(result.anchor) : undefined,
+        catalogue,
         findings,
         how: result.kind,
         ok: true as const,
@@ -822,10 +867,15 @@ const buildSetTool = {
       limit: MIX_CHAIN_LIMIT,
     });
 
-    // THE GROUNDING BOUNDARY (preserved until PR-4): only a certified, coordinate-bearing
-    // candidate can be named or ride the `?set=` handoff.
-    const steps = candidates.flatMap((candidate) =>
-      candidate.certified && candidate.logId ? [candidate] : [],
+    // THE REGISTER SPLIT (PR-4): the chain carries BOTH registers, exactly like /mix (which is
+    // already catalogue-aware). A certified candidate rides lit (coordinate + play + a `?set=` Log
+    // ID token); a catalogue candidate rides the UNLIT mix register — its bpm/key + reason chip (a
+    // measurement, not narration) and a `?set=` trackId token, but no coordinate/note/observation.
+    // The register is decided by the `certified` FLAG, mirroring /mix (MixTrack: logId is present
+    // iff certified): normalize so a non-certified candidate never carries a coordinate even if a
+    // malformed row held a stray id. `setToken` then resolves the missing coordinate to the trackId.
+    const steps = candidates.map((candidate) =>
+      candidate.certified ? candidate : { ...candidate, logId: undefined },
     );
 
     if (steps.length === 0) {

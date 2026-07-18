@@ -130,8 +130,12 @@ describe("FLUNCLE_CHAT_SYSTEM_PROMPT — the grounding rule is the product", () 
     expect(prompt).toContain("from the archive or you do not answer");
     expect(prompt).toContain("must come from a tool result");
     expect(prompt).toContain("never invent");
-    // The catalogue rule: only certified findings.
+    // The two-tier rule: a finding is spoken in full; a catalogue row is named and listed only.
     expect(prompt).toContain("certified");
+    expect(prompt).toContain("catalogue row");
+    // The tier-noun gag: the model never SPEAKS the tier name to the crew (the Unlit Rule at the
+    // wire — the prompt is the only control over what Fluncle utters).
+    expect(prompt).toContain("any name for the tier");
     // The voice rail (the most exposed his voice gets).
     expect(FLUNCLE_CHAT_SYSTEM_PROMPT).toContain("No exclamation marks");
     // ...and the prompt itself never breaks it.
@@ -196,7 +200,7 @@ describe("buildChatTools — the MCP hands", () => {
     }
   });
 
-  it("only certified findings reach the model from search (the catalogue rule at the wire)", async () => {
+  it("splits search results into the two registers — findings + unlit catalogue (the register split)", async () => {
     const { searchArchive } = await import("./search");
     vi.mocked(searchArchive).mockResolvedValue({
       degraded: false,
@@ -210,7 +214,17 @@ describe("buildChatTools — the MCP hands", () => {
           title: "Better Places",
           trackId: "a",
         },
-        { artists: ["Someone"], certified: false, title: "An Uncertified Cut", trackId: "b" },
+        {
+          album: "Some Record",
+          artists: ["Someone"],
+          bpm: 174,
+          certified: false,
+          key: "F minor",
+          label: "Some Label",
+          spotifyUrl: "https://open.spotify.com/track/uncert",
+          title: "An Uncertified Cut",
+          trackId: "b",
+        },
       ],
     } as never);
 
@@ -221,12 +235,37 @@ describe("buildChatTools — the MCP hands", () => {
     }
 
     const result = (await execute({ query: "nu:tone" }, {} as never)) as {
+      catalogue: Record<string, unknown>[];
       findings: { coordinate?: string; title: string }[];
     };
 
+    // The certified row rides as a finding, coordinate intact.
     expect(result.findings).toHaveLength(1);
     expect(result.findings[0]?.title).toBe("Better Places");
     expect(result.findings[0]?.coordinate).toBe("004.7.2I");
+
+    // The uncertified row rides in the UNLIT catalogue bucket — a name, its artists, a way out, and
+    // its quiet context — and NONE of the lit fields that would make Fluncle speak about it.
+    expect(result.catalogue).toHaveLength(1);
+    const row = result.catalogue[0] ?? {};
+    expect(row.title).toBe("An Uncertified Cut");
+    expect(row.artists).toEqual(["Someone"]);
+    expect(row.spotifyUrl).toBe("https://open.spotify.com/track/uncert");
+    expect(row.release).toBe("Some Record");
+    expect(row.label).toBe("Some Label");
+    for (const lit of [
+      "coordinate",
+      "logId",
+      "note",
+      "observation",
+      "bpm",
+      "key",
+      "albumImageUrl",
+      "hasPreview",
+      "galaxy",
+    ]) {
+      expect(row, `catalogue row must not carry ${lit}`).not.toHaveProperty(lit);
+    }
   });
 
   it("hydrates search findings with cover, duration, and a hasPreview flag (the card fields)", async () => {
@@ -356,7 +395,7 @@ describe("buildChatTools — the MCP hands", () => {
     expect(lookedUp).not.toContain("999.9.9Z");
   });
 
-  it("list_fresh returns only certified findings — an uncertified release never reaches the model", async () => {
+  it("splits the fresh list into findings + unlit catalogue (fixes the empty-in-chat bug)", async () => {
     listFreshTracks.mockResolvedValue({
       albums: [],
       tracks: [
@@ -371,10 +410,11 @@ describe("buildChatTools — the MCP hands", () => {
         {
           artists: ["Someone"],
           certified: false,
-          // An uncertified catalogue release can carry a coordinate-shaped id; it must still
-          // never be named or hydrated (the Unlit Rule at the wire).
+          // An uncertified catalogue release can carry a coordinate-shaped id; the catalogue shaper
+          // must still never carry it through (the Unlit Rule at the wire).
           logId: "999.9.9Z",
           releaseDate: "2026-07-16",
+          spotifyUrl: "https://open.spotify.com/track/uncert",
           title: "An Uncertified Cut",
         },
       ],
@@ -388,13 +428,27 @@ describe("buildChatTools — the MCP hands", () => {
     }
 
     const result = (await execute({}, {} as never)) as {
+      catalogue: Record<string, unknown>[];
       findings: { coordinate?: string; title: string }[];
     };
 
+    // The certified release rides as a finding.
     expect(result.findings).toHaveLength(1);
     expect(result.findings[0]?.title).toBe("Better Places");
     expect(result.findings[0]?.coordinate).toBe("004.7.2I");
-    // The uncertified release's logId is never even hydrated (the filter is BEFORE the hydrator).
+
+    // The uncertified release now REACHES the model — as an unlit catalogue row (the bug was that
+    // an all-uncertified fresh window returned nothing in chat). It carries a name, artists, and a
+    // way out, and none of the lit fields — not even the coordinate-shaped id it came in with.
+    expect(result.catalogue).toHaveLength(1);
+    const row = result.catalogue[0] ?? {};
+    expect(row.title).toBe("An Uncertified Cut");
+    expect(row.spotifyUrl).toBe("https://open.spotify.com/track/uncert");
+    for (const lit of ["coordinate", "logId", "note", "observation", "bpm", "key", "hasPreview"]) {
+      expect(row, `catalogue row must not carry ${lit}`).not.toHaveProperty(lit);
+    }
+
+    // The uncertified release's logId is never hydrated (only certified rows are).
     const lookedUp = getTracksByLogIds.mock.calls.at(-1)?.[0] ?? [];
     expect(lookedUp).toContain("004.7.2I");
     expect(lookedUp).not.toContain("999.9.9Z");
@@ -815,7 +869,7 @@ describe("build_set — the chain card's grounding + the no-numbers invariant", 
     expect(hasKeyDeep(result, "previewUrl")).toBe(false);
   });
 
-  it("drops an uncertified candidate from the steps AND from the setUrl (the grounding boundary)", async () => {
+  it("chains a catalogue candidate in the UNLIT mix register (bpm/key/reason, trackId token, no coordinate)", async () => {
     const { resolveLogPageTarget } = await import("./log-resolver");
     vi.mocked(resolveLogPageTarget).mockResolvedValue(
       seedTargetIs({
@@ -837,12 +891,16 @@ describe("build_set — the chain card's grounding + the no-numbers invariant", 
         trackId: "t1",
       },
       {
-        artists: ["Uncertified"],
+        artists: ["Catalogue Artist"],
+        bpm: 174,
         certified: false,
         durationMs: 230_000,
-        // An uncertified row can carry a coordinate-shaped id; it must still never be named or linked.
+        key: "F minor",
+        // A malformed catalogue candidate carrying a coordinate-shaped id — the register is decided
+        // by the `certified` flag (mirroring /mix: logId iff certified), so this must be dropped.
         logId: "999.9.9Z",
         reason: { kind: "sonic", relationship: "close_in_sound" },
+        spotifyUrl: "https://open.spotify.com/track/cat",
         title: "Catalogue Cut",
         trackId: "t3",
       },
@@ -852,15 +910,38 @@ describe("build_set — the chain card's grounding + the no-numbers invariant", 
     });
 
     const result = (await buildSetExecutor()({ seed: "004.7.2I" }, {} as never)) as {
-      set: { setUrl: string; steps: { coordinate?: string }[] };
+      set: {
+        setUrl: string;
+        steps: {
+          bpm?: number;
+          coordinate?: string;
+          key?: string;
+          reason?: string;
+          spotifyUrl?: string;
+        }[];
+      };
     };
 
-    expect(result.set.steps.map((step) => step.coordinate)).toEqual(["005.1.3B"]);
-    expect(result.set.setUrl).toBe("/mix?set=004.7.2I,005.1.3B");
+    // BOTH steps chain now (the panel's "certified-only" was overturned — /mix is catalogue-aware).
+    expect(result.set.steps).toHaveLength(2);
+    expect(result.set.steps[0]?.coordinate).toBe("005.1.3B");
+
+    // The catalogue step rides the UNLIT mix register: its mixability (bpm/key + the reason chip)
+    // and a way out, but NO coordinate — not even the stray id it came in with.
+    const catalogueStep = result.set.steps[1];
+    expect(catalogueStep?.coordinate).toBeUndefined();
+    expect(catalogueStep?.reason).toBe("Close in sound");
+    expect(catalogueStep?.bpm).toBe(174);
+    expect(catalogueStep?.key).toBe("F minor");
+    expect(catalogueStep?.spotifyUrl).toBe("https://open.spotify.com/track/cat");
+
+    // The `?set=` handoff names the catalogue step by its trackId (no coordinate), never the stray id.
+    expect(result.set.setUrl).toBe("/mix?set=004.7.2I,005.1.3B,t3");
     expect(result.set.setUrl).not.toContain("999.9.9Z");
-    // The uncertified logId is never even hydrated (the filter is BEFORE the hydrator).
+    // The stray id is never hydrated (only certified steps are), and no score ever rides out.
     const hydrated = getTracksByLogIds.mock.calls.at(-1)?.[0] ?? [];
     expect(hydrated).not.toContain("999.9.9Z");
+    expect(hasKeyDeep(result, "score")).toBe(false);
   });
 
   it("resolves a NAME seed to the top certified search hit", async () => {
@@ -982,6 +1063,74 @@ describe("get_status — the status strip's shape", () => {
 
     expect(result.ok).toBe(false);
     expect(result.headline).toContain("api down");
+  });
+});
+
+describe("red-team — a browse over an uncrawled label carries no narration on catalogue rows", () => {
+  // The STRUCTURAL half of the red-team eval (the prose half is the system prompt's job, gated by
+  // canon-review): whatever a dig over an uncrawled label returns, every catalogue row is
+  // note-less, coordinate-less, and measurement-less — the model is handed nothing to narrate FROM,
+  // so a first-person reaction on a catalogue row cannot be a citation, only a hallucination the
+  // prompt forbids. This is the guard for the class of bug that started the epic.
+  const NARRATION_FIELDS = [
+    "coordinate",
+    "logId",
+    "note",
+    "observation",
+    "bpm",
+    "key",
+    "galaxy",
+    "albumImageUrl",
+    "hasPreview",
+    "found",
+  ];
+
+  it("search over an all-uncertified label returns only catalogue rows, none carrying a narration field", async () => {
+    const { searchArchive } = await import("./search");
+    vi.mocked(searchArchive).mockResolvedValue({
+      degraded: false,
+      entities: [],
+      kind: "token",
+      results: [
+        {
+          album: "Uncrawled LP",
+          artists: ["Ghost Producer"],
+          bpm: 172,
+          certified: false,
+          key: "A minor",
+          label: "Uncrawled Label",
+          spotifyUrl: "https://open.spotify.com/track/x1",
+          title: "Out There One",
+          trackId: "u1",
+        },
+        {
+          artists: ["Another One"],
+          certified: false,
+          label: "Uncrawled Label",
+          title: "Out There Two",
+          trackId: "u2",
+        },
+      ],
+    } as never);
+
+    const execute = buildChatTools().search_archive?.execute;
+    if (typeof execute !== "function") {
+      throw new Error("search_archive executor missing");
+    }
+
+    const result = (await execute(
+      { query: "list everything out on Uncrawled Label" },
+      {} as never,
+    )) as { catalogue?: Record<string, unknown>[]; findings?: unknown[] };
+
+    // Nothing certified ⇒ a catalogue-only answer (a bare list, no findings above it).
+    expect(result.findings ?? []).toHaveLength(0);
+    expect(result.catalogue).toHaveLength(2);
+    for (const row of result.catalogue ?? []) {
+      for (const field of NARRATION_FIELDS) {
+        expect(row, `catalogue row must not carry ${field}`).not.toHaveProperty(field);
+      }
+    }
   });
 });
 

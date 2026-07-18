@@ -8,7 +8,9 @@ import {
 import { DefaultChatTransport, getToolName, isToolUIPart } from "ai";
 import { type FormEvent, Fragment, type ReactNode, useMemo, useState } from "react";
 import { ArtistCard, type ChatArtist } from "@/components/chat/artist-card";
+import { CatalogueList } from "@/components/chat/catalogue-card";
 import { ChainCard, type ChatSet } from "@/components/chat/chain-card";
+import { collectChatFindings, planListOutput } from "@/components/chat/chat-output";
 import { linkifyCoordinates } from "@/components/chat/chat-coordinate";
 import { type ChatFinding, FindingCard } from "@/components/chat/finding-card";
 import { FindingList } from "@/components/chat/finding-list";
@@ -314,18 +316,27 @@ function renderFindingOutput(output: unknown, notation: KeyNotation): ReactNode 
     return <FindingCard finding={output.finding as ChatFinding} notation={notation} />;
   }
 
-  if ("findings" in output && Array.isArray(output.findings) && output.findings.length > 0) {
-    const anchor = "anchor" in output && output.anchor ? (output.anchor as ChatFinding) : undefined;
+  // A list tool (search_archive / list_fresh) returns two typed buckets — certified findings and
+  // unlit catalogue rows. THE RENDER FIX: both must render, never either/or (a naive branch on
+  // catalogue-first would hide the findings). The findings lead, the catalogue block follows in
+  // the unlit register; the "Tracks" heading appears only when findings render above it.
+  const plan = planListOutput(output);
 
+  if (plan) {
     return (
       <div className="flex flex-col gap-2">
-        {anchor ? (
+        {plan.anchor ? (
           <>
             <p className="px-1 text-xs text-muted-foreground">Anchored on</p>
-            <FindingCard finding={anchor} notation={notation} />
+            <FindingCard finding={plan.anchor} notation={notation} />
           </>
         ) : null}
-        <FindingList findings={output.findings as ChatFinding[]} notation={notation} />
+        {plan.findings.length > 0 ? (
+          <FindingList findings={plan.findings} notation={notation} />
+        ) : null}
+        {plan.catalogue.length > 0 ? (
+          <CatalogueList catalogue={plan.catalogue} heading={plan.catalogueHeading} />
+        ) : null}
       </div>
     );
   }
@@ -345,73 +356,6 @@ function SkeletonCard(): ReactNode {
       </div>
     </div>
   );
-}
-
-// Every finding visible on the transcript, deduped by coordinate — the FULL tool-output
-// shape, so both consumers read one walk: the now-playing bar derives its lean rows from it,
-// and the prose coordinate links (chat-coordinate.tsx) hand it to their hover cards, which is
-// why a coordinate Fluncle just dug needs no fetch at all.
-function collectChatFindings(messages: FluncleUIMessage[]): Map<string, ChatFinding> {
-  const byLogId = new Map<string, ChatFinding>();
-
-  for (const message of messages) {
-    for (const part of message.parts) {
-      if (!isToolUIPart(part) || part.state !== "output-available") {
-        continue;
-      }
-
-      const output = part.output;
-
-      if (typeof output !== "object" || output === null) {
-        continue;
-      }
-
-      const findings: ChatFinding[] = [];
-
-      if ("finding" in output && output.finding) {
-        findings.push(output.finding as ChatFinding);
-      }
-      if ("anchor" in output && output.anchor) {
-        findings.push(output.anchor as ChatFinding);
-      }
-      if ("findings" in output && Array.isArray(output.findings)) {
-        findings.push(...(output.findings as ChatFinding[]));
-      }
-      // A chain card nests its seed + steps one level down — both are previewable certified
-      // findings, so the now-playing bar reaches them the same as a top-level result set.
-      if ("set" in output && output.set && typeof output.set === "object") {
-        const set = output.set as { seed?: ChatFinding; steps?: ChatFinding[] };
-
-        if (set.seed) {
-          findings.push(set.seed);
-        }
-        if (Array.isArray(set.steps)) {
-          findings.push(...set.steps);
-        }
-      }
-
-      // An artist/label card nests its entity's findings one level down — they are previewable
-      // too, so the now-playing bar reaches them the same as a top-level result set.
-      for (const entityKey of ["artist", "label"] as const) {
-        const entity =
-          entityKey in output
-            ? (output as Record<string, { findings?: unknown }>)[entityKey]
-            : undefined;
-
-        if (entity && Array.isArray(entity.findings)) {
-          findings.push(...(entity.findings as ChatFinding[]));
-        }
-      }
-
-      for (const finding of findings) {
-        if (finding.coordinate && !byLogId.has(finding.coordinate)) {
-          byLogId.set(finding.coordinate, finding);
-        }
-      }
-    }
-  }
-
-  return byLogId;
 }
 
 // The now-playing bar's lean row set, derived from the transcript's findings map. Only
