@@ -6432,10 +6432,8 @@ body::before {
    edition reads by its date and never as the live Frontier. */
 .rec-edition-eyebrow {
   color: var(--muted-foreground);
-  font-size: 0.72rem;
+  font-size: 0.76rem;
   font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
 }
 
 /* The two per-row gestures on a frozen row's tail — open in Spotify, save. Sits in the

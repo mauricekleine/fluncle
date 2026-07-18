@@ -101,13 +101,15 @@ function EditionDialogInner({
         <DialogHeader>
           <p className="rec-edition-eyebrow">Fluncle&rsquo;s Frontier</p>
           <DialogTitle>{dateLabel}</DialogTitle>
-          <DialogDescription>Refreshed {dateLabel}</DialogDescription>
+          <DialogDescription>
+            {summary.trackCount} {summary.trackCount === 1 ? "track" : "tracks"}
+          </DialogDescription>
         </DialogHeader>
 
         {editionQuery.isPending ? (
           <EditionLoading />
         ) : editionQuery.isError || !detail ? (
-          <p className="rec-muted">Couldn&rsquo;t pull that edition. Try again in a moment.</p>
+          <p className="rec-muted">Could not pull that edition. Try again in a moment.</p>
         ) : detail.tracks.length === 0 ? (
           <p className="rec-muted">Nothing in this one.</p>
         ) : (
@@ -251,7 +253,11 @@ function SaveControl({
       variant="ghost"
     >
       {save.isPending ? (
-        <CircleNotchIcon aria-hidden="true" className="animate-spin" weight="bold" />
+        <CircleNotchIcon
+          aria-hidden="true"
+          className="animate-spin motion-reduce:animate-none"
+          weight="bold"
+        />
       ) : saved ? (
         <BookmarkSimpleIcon aria-hidden="true" weight="fill" />
       ) : (
