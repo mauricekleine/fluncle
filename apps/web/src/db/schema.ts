@@ -2305,6 +2305,56 @@ export const trackArtists = sqliteTable(
   ],
 );
 
+// ── The similar-artists engine's derived artifacts (artist-relationship doc, D6) ─────────────
+//
+// Two precomputed tables that lift the `/artist/<slug>` "similar artists" rail off the
+// page-load whole-corpus vector read. They are to the artist graph what the `catalogue_*`
+// ranking columns are to The Ear (docs/the-ear.md): a nightly-style precompute, self-healing
+// off a corpus fingerprint, so the request path does no vector math. The `rank_artists` sweep
+// (lib/server/artist-dossier.ts) writes them; `getArtistNeighbours` reads `artist_similar`.
+
+// One artist's position in MuQ embedding space — the MEAN over EVERY embedded track that
+// credits them, findings AND catalogue alike (the rail is catalogue-wide by design; the only
+// filter is `embedding_blob IS NOT NULL`). The artist-level mean is the accepted shape here:
+// The Ear's max-similarity-never-a-centroid doctrine is about a per-USER taste that is
+// multi-modal, whereas an artist's own discography IS the thing being summarised, so its
+// centroid is a faithful identity point. `vector_count` is how many track vectors folded into
+// the mean (0 means the artist lost all embeddings — its row + edges are dropped). `rank_corpus`
+// is the staleness fingerprint the sweep stamped: a row whose fingerprint disagrees with the
+// live corpus is stale and recomputes on a later tick. `centroid_blob` is a native
+// `F32_BLOB(1024)` so the edge re-rank ranks it IN SQL (`vector_distance_cos`), never in the isolate.
+export const artistCentroids = sqliteTable("artist_centroids", {
+  artistId: text("artist_id").primaryKey(),
+  centroidBlob: float32Vector("centroid_blob").notNull(),
+  computedAt: text("computed_at").notNull(),
+  rankCorpus: text("rank_corpus").notNull(),
+  vectorCount: integer("vector_count").notNull(),
+});
+
+// The precomputed top-K sonically-nearest neighbours for each artist — the edges the rail reads.
+// K is 8 (the rail shows 4; the headroom is for the MCP `get_similar_artists` tool). `similarity`
+// is cosine similarity to the target's centroid (1 − `vector_distance_cos`), `rank` is its 0-based
+// position (0 = nearest). The PK is (artist_id, rank): the read is an ordered PK-prefix walk of one
+// artist's edges (`order by rank limit N`), a btree range scan, never a table scan of a growing
+// table — no `desc()` anywhere (SQLite reverse-scans a plain ASC index for a descending read).
+// `rank_corpus` is the edge-freshness fingerprint (the same value the centroids carry), so the
+// sweep can tell an artist's edges from an older corpus apart from fresh ones and re-rank the drift.
+export const artistSimilar = sqliteTable(
+  "artist_similar",
+  {
+    artistId: text("artist_id").notNull(),
+    computedAt: text("computed_at").notNull(),
+    neighbourArtistId: text("neighbour_artist_id").notNull(),
+    rank: integer("rank").notNull(),
+    rankCorpus: text("rank_corpus").notNull(),
+    similarity: real("similarity").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.artistId, table.rank] }),
+    index("artist_similar_neighbour_idx").on(table.neighbourArtistId),
+  ],
+);
+
 // The artist social identity graph — one row per (artist, platform). Mirrors
 // `mixtape_social_posts` structurally. `platform` covers the social surfaces only
 // (spotify|youtube|mixcloud|soundcloud|instagram|tiktok|bandcamp|twitter|facebook|

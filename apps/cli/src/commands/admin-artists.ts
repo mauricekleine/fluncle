@@ -146,6 +146,41 @@ export async function resolveArtistCommand(artistId: string): Promise<ArtistReso
   );
 }
 
+// ── The similar-artists precompute sweep (D6) ─────────────────────────────────
+// The artist-graph sibling of `admin catalogue rank`: one tick of the sweep that keeps the
+// `/artist/<slug>` "similar artists" rail off the page's hot path. The CLI is a thin pacer —
+// the Worker owns the vector arithmetic; `remaining > 0` means run it again.
+
+/** One `rank_artists` tick's summary — the JSON line a cron reads. */
+export type RankArtistsSummary = {
+  centroidsComputed: number;
+  centroidsRemoved: number;
+  corpus: string;
+  edgesWritten: number;
+  embeddedTracks: number;
+  links: number;
+  remaining: number;
+};
+
+/**
+ * One tick of the similar-artists sweep. `fluncle admin artists rank [--limit <n>]`.
+ *
+ * Recomputes up to `limit` stale artist centroids (the mean over EVERY embedded track that
+ * credits the artist — findings AND catalogue) and re-ranks each one's top-K sonic neighbours
+ * in SQL, then purges any orphan centroid. Idempotent, resume-safe, a no-op on a settled graph.
+ */
+export async function rankArtistsCommand(options: {
+  limit?: string;
+}): Promise<{ summary: RankArtistsSummary }> {
+  const limit = options.limit ? Number.parseInt(options.limit, 10) : undefined;
+  const response = await adminApiPost<{ ok: true; summary: RankArtistsSummary }>(
+    "/api/admin/artists/rank",
+    limit ? { limit } : {},
+  );
+
+  return { summary: response.summary };
+}
+
 export type ArtistsBackfillResult = {
   dryRun: boolean;
   failed: Array<{ error: string; logId: string }>;

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   type ArtistEmbeddingGroup,
   meanEmbedding,
+  rankArtistsCorpus,
   rankSimilarArtists,
   summarizeArtistSignature,
 } from "./artist-dossier";
@@ -106,6 +107,22 @@ describe("rankSimilarArtists — the similar-artists ranking", () => {
     ];
 
     expect(rankSimilarArtists("drift", withEmptyCandidate, 4).map((n) => n.slug)).toEqual(["echo"]);
+  });
+});
+
+describe("rankArtistsCorpus — the staleness fingerprint", () => {
+  it("folds the ranking-logic version, embedded-track count, and link count into one string", () => {
+    expect(rankArtistsCorpus(120, 340)).toBe("v1:120:340");
+  });
+
+  it("moves when either corpus number moves (an embed, a re-link) so a row goes stale", () => {
+    const base = rankArtistsCorpus(120, 340);
+
+    // A new embedded track (first number) or a new artist↔track link (second) both diverge, and
+    // a divergence is what the sweep compares with `<>` to re-rank — a deletion diverges too.
+    expect(rankArtistsCorpus(121, 340)).not.toBe(base);
+    expect(rankArtistsCorpus(120, 341)).not.toBe(base);
+    expect(rankArtistsCorpus(119, 340)).not.toBe(base);
   });
 });
 
