@@ -186,12 +186,20 @@ function StageBarBody({ bar }: { bar: FunnelStageBar }) {
       </span>
       <span className="flex shrink-0 items-baseline gap-2 text-right tabular-nums">
         <span className="text-sm font-medium">{formatCount(bar.total)}</span>
-        {bar.queued !== undefined ? (
-          <span className="w-24 text-xs text-muted-foreground">
+        {/* The queued-behind cell holds a fixed width across every row so the totals line up. The
+            anchor row shows the two populations (the embedded head the sweep works, and the
+            metadata still awaiting audio); every other row shows the single queued figure. */}
+        {bar.queuedSplit ? (
+          <span className="w-24 text-xs text-muted-foreground sm:w-56">
+            {formatCount(bar.queuedSplit.ready)} ready ·{" "}
+            {formatCount(bar.queuedSplit.awaitingAudio)} awaiting audio
+          </span>
+        ) : bar.queued !== undefined ? (
+          <span className="w-24 text-xs text-muted-foreground sm:w-56">
             {formatCount(bar.queued)} queued
           </span>
         ) : (
-          <span aria-hidden="true" className="w-24" />
+          <span aria-hidden="true" className="w-24 sm:w-56" />
         )}
       </span>
       <ArrowRightIcon
