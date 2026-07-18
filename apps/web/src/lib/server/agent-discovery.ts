@@ -1,3 +1,8 @@
+// The static map lives at public/llms.txt (a single source of truth). Cloudflare
+// serves that file as text/plain, but it is advertised as text/markdown (the Link
+// header + the api-catalog), so we intercept /llms.txt here and re-serve the SAME
+// bytes with the correct content-type — mirroring llms-full.txt, which already does.
+import llmsTxt from "../../../public/llms.txt?raw";
 import { siteUrl, spotifyPlaylistUrl, telegramUrl } from "../fluncle-links";
 import { findingsCount } from "../format";
 import { fluncleDescription } from "../identity";
@@ -90,6 +95,8 @@ export async function handleAgentDiscovery(request: Request): Promise<Response |
       return skillsIndexResponse();
     case "/.well-known/agent-skills/fluncle-api/SKILL.md":
       return skillResponse();
+    case "/llms.txt":
+      return llmsTxtResponse();
     case "/llms-full.txt":
       return llmsFullResponse();
     case "/":
@@ -225,6 +232,7 @@ ${tracks.join("\n")}
 - [Random track](${siteUrl}/api/v1/tracks/random): one pick from the archive, as JSON
 - [Artists API](${siteUrl}/api/v1/artists): every artist with a published finding, most findings first, as JSON; /api/v1/artists/{slug} for one artist. Each resolves to a page at ${siteUrl}/artist/{slug}: that artist's findings plus their verified identity links (MusicGroup + sameAs)
 - [Mixtapes API](${siteUrl}/api/v1/mixtapes): Fluncle's own DJ mixtapes as JSON, each a checkpoint set with an F-marked Log ID and its tracklist; browse them at ${siteUrl}/mixtapes${galaxiesLine}
+- [The artists](${siteUrl}/artists): every artist Fluncle has found a banger from. Each resolves to a page at ${siteUrl}/artist/{slug}: that artist's findings and their verified identity links
 - [The labels](${siteUrl}/labels): every record label Fluncle has found a banger on. Each resolves to a page at ${siteUrl}/label/{slug}: that label's findings, the artists on it, and the rest of its catalogue
 - [The albums](${siteUrl}/albums): every record Fluncle has found a banger on. Each resolves to a page at ${siteUrl}/album/{slug}: that record's findings, its artists, and the label it came out on
 - [What just came out](${siteUrl}/fresh): the newest drum & bass across the whole archive, freshest first. Every release from the last 30 days, ordered by when it came out (not by when Fluncle found it)
@@ -295,7 +303,7 @@ ${omitted > 0 ? `\n_${omitted} older findings omitted here; page the rest at ${s
 - The playlist: ${spotifyPlaylistUrl}
 - The Telegram feed: ${telegramUrl}
 - The JSON API: ${siteUrl}/api/v1/tracks
-- The artists: ${siteUrl}/api/v1/artists
+- The artists: ${siteUrl}/artists
 - The labels: ${siteUrl}/labels
 - The albums: ${siteUrl}/albums
 - What just came out: ${siteUrl}/fresh
@@ -329,6 +337,25 @@ function renderFinding(track: TrackListItem): string {
   facts.push(track.spotifyUrl);
   lines.push(`  ${facts.join(" · ")}`);
 
+  // The graph edges carried on the finding itself (album + label slugs load in the
+  // same select), rendered as their entity-page URLs so an agent can walk the graph
+  // without a second fetch. The artist edge has no slug on the list DTO (artists are
+  // a name array here), so it is not linkable from this row — the /artists hub above
+  // is the entry point for that leg.
+  const graph: string[] = [];
+
+  if (track.labelSlug) {
+    graph.push(`label ${siteUrl}/label/${track.labelSlug}`);
+  }
+
+  if (track.albumSlug) {
+    graph.push(`album ${siteUrl}/album/${track.albumSlug}`);
+  }
+
+  if (graph.length > 0) {
+    lines.push(`  ${graph.join(" · ")}`);
+  }
+
   return lines.join("\n");
 }
 
@@ -340,6 +367,21 @@ function renderMixtape(track: Extract<FeedItem, { type: "mixtape" }>): string {
   ].filter(Boolean);
 
   return [`- **${track.title}** (${coordinate})`, `  ${facts.join(" · ")}`].join("\n");
+}
+
+// /llms.txt: the static map (public/llms.txt), re-served with the text/markdown
+// content-type it is advertised as (Cloudflare's static handler serves the raw
+// file as text/plain). Same bytes, honest content-type — the llms-full.txt shape.
+function llmsTxtResponse(): Response {
+  return new Response(llmsTxt, {
+    headers: {
+      "Cache-Control": "public, max-age=3600",
+      "Content-Type": "text/markdown; charset=utf-8",
+      Link: agentLinkHeader,
+      Vary: "Accept",
+      "x-markdown-tokens": String(Math.ceil(llmsTxt.length / 4)),
+    },
+  });
 }
 
 async function llmsFullResponse(): Promise<Response> {

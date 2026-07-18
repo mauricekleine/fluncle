@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { appendOnionLocation, renderLlmsFull } from "./agent-discovery";
+import { appendOnionLocation, handleAgentDiscovery, renderLlmsFull } from "./agent-discovery";
 import { type TrackListItem } from "./tracks";
 
 // A stand-in v3 onion hostname (56 base32 chars, correct shape, not a real
@@ -40,9 +40,29 @@ describe("renderLlmsFull", () => {
     expect(doc).toContain("Drum & bass bangers from another dimension.");
     expect(doc).toContain("How to read a Log ID");
     expect(doc).toContain("## The findings (0)");
-    // The artist + mixtape entity surfaces are advertised in the crawler/LLM map.
-    expect(doc).toContain("/api/v1/artists");
+    // The artist hub sits parallel to the labels + albums hubs (the human page, not
+    // the API), and the mixtape surface is advertised too.
+    expect(doc).toContain("The artists: https://www.fluncle.com/artists");
+    expect(doc).toContain("The labels: https://www.fluncle.com/labels");
+    expect(doc).toContain("The albums: https://www.fluncle.com/albums");
     expect(doc).toContain("/api/v1/mixtapes");
+  });
+
+  it("appends the album + label entity-page URLs a finding carries (graph traversal)", () => {
+    const doc = renderLlmsFull(
+      [finding({ albumSlug: "mosaik", labelSlug: "hospital-records", logId: "012.8.0A" })],
+      1,
+    );
+
+    expect(doc).toContain("label https://www.fluncle.com/label/hospital-records");
+    expect(doc).toContain("album https://www.fluncle.com/album/mosaik");
+  });
+
+  it("omits the graph line when a finding carries no album/label slug", () => {
+    const doc = renderLlmsFull([finding({ logId: "012.8.0A" })], 1);
+
+    expect(doc).not.toContain("/label/");
+    expect(doc).not.toContain("/album/");
   });
 
   it("renders a finding with its coordinate and present facts", () => {
@@ -87,6 +107,20 @@ describe("renderLlmsFull", () => {
     // Named: the galaxies API joins the "More" pointer list.
     expect(renderLlmsFull([], 0, true)).toContain("The sonic galaxies: ");
     expect(renderLlmsFull([], 0, true)).toContain("/api/v1/galaxies");
+  });
+});
+
+describe("handleAgentDiscovery — /llms.txt", () => {
+  it("serves the static map as text/markdown (not the static text/plain)", async () => {
+    const res = await handleAgentDiscovery(new Request("https://www.fluncle.com/llms.txt"));
+
+    expect(res).toBeDefined();
+    expect(res?.headers.get("Content-Type")).toBe("text/markdown; charset=utf-8");
+
+    const body = await res?.text();
+    // The SAME bytes as public/llms.txt — a single source of truth, re-typed.
+    expect(body).toContain("# Fluncle");
+    expect(body).toContain("Reading a Log ID");
   });
 });
 
