@@ -22,6 +22,7 @@ import { Route as PipelineRouteImport } from './routes/pipeline'
 import { Route as OembedRouteImport } from './routes/oembed'
 import { Route as MixRouteImport } from './routes/mix'
 import { Route as GalaxyRouteImport } from './routes/galaxy'
+import { Route as FreshRouteImport } from './routes/fresh'
 import { Route as FeedDotjsonRouteImport } from './routes/feed[.]json'
 import { Route as DocsRouteImport } from './routes/docs'
 import { Route as DeviceRouteImport } from './routes/device'
@@ -186,6 +187,11 @@ const MixRoute = MixRouteImport.update({
 const GalaxyRoute = GalaxyRouteImport.update({
   id: '/galaxy',
   path: '/galaxy',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const FreshRoute = FreshRouteImport.update({
+  id: '/fresh',
+  path: '/fresh',
   getParentRoute: () => rootRouteImport,
 } as any)
 const FeedDotjsonRoute = FeedDotjsonRouteImport.update({
@@ -727,6 +733,7 @@ export interface FileRoutesByFullPath {
   '/device': typeof DeviceRoute
   '/docs': typeof DocsRouteWithChildren
   '/feed.json': typeof FeedDotjsonRoute
+  '/fresh': typeof FreshRoute
   '/galaxy': typeof GalaxyRoute
   '/mix': typeof MixRoute
   '/oembed': typeof OembedRoute
@@ -840,6 +847,7 @@ export interface FileRoutesByTo {
   '/chat': typeof ChatRoute
   '/device': typeof DeviceRoute
   '/feed.json': typeof FeedDotjsonRoute
+  '/fresh': typeof FreshRoute
   '/galaxy': typeof GalaxyRoute
   '/mix': typeof MixRoute
   '/oembed': typeof OembedRoute
@@ -956,6 +964,7 @@ export interface FileRoutesById {
   '/device': typeof DeviceRoute
   '/docs': typeof DocsRouteWithChildren
   '/feed.json': typeof FeedDotjsonRoute
+  '/fresh': typeof FreshRoute
   '/galaxy': typeof GalaxyRoute
   '/mix': typeof MixRoute
   '/oembed': typeof OembedRoute
@@ -1073,6 +1082,7 @@ export interface FileRouteTypes {
     | '/device'
     | '/docs'
     | '/feed.json'
+    | '/fresh'
     | '/galaxy'
     | '/mix'
     | '/oembed'
@@ -1186,6 +1196,7 @@ export interface FileRouteTypes {
     | '/chat'
     | '/device'
     | '/feed.json'
+    | '/fresh'
     | '/galaxy'
     | '/mix'
     | '/oembed'
@@ -1301,6 +1312,7 @@ export interface FileRouteTypes {
     | '/device'
     | '/docs'
     | '/feed.json'
+    | '/fresh'
     | '/galaxy'
     | '/mix'
     | '/oembed'
@@ -1417,6 +1429,7 @@ export interface RootRouteChildren {
   DeviceRoute: typeof DeviceRoute
   DocsRoute: typeof DocsRouteWithChildren
   FeedDotjsonRoute: typeof FeedDotjsonRoute
+  FreshRoute: typeof FreshRoute
   GalaxyRoute: typeof GalaxyRoute
   MixRoute: typeof MixRoute
   OembedRoute: typeof OembedRoute
@@ -1589,6 +1602,13 @@ declare module '@tanstack/react-router' {
       path: '/galaxy'
       fullPath: '/galaxy'
       preLoaderRoute: typeof GalaxyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/fresh': {
+      id: '/fresh'
+      path: '/fresh'
+      fullPath: '/fresh'
+      preLoaderRoute: typeof FreshRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/feed.json': {
@@ -2371,6 +2391,7 @@ const rootRouteChildren: RootRouteChildren = {
   DeviceRoute: DeviceRoute,
   DocsRoute: DocsRouteWithChildren,
   FeedDotjsonRoute: FeedDotjsonRoute,
+  FreshRoute: FreshRoute,
   GalaxyRoute: GalaxyRoute,
   MixRoute: MixRoute,
   OembedRoute: OembedRoute,

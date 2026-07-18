@@ -17,6 +17,8 @@ describe("resolveCrumbs", () => {
   it("makes an index page its own unlinked tail", () => {
     expect(resolveCrumbs("/log")).toEqual([{ label: "Log" }]);
     expect(resolveCrumbs("/artists")).toEqual([{ label: "Artists" }]);
+    // /fresh is a hub too — one crumb, unlinked (the new-releases lens).
+    expect(resolveCrumbs("/fresh")).toEqual([{ label: "Fresh" }]);
   });
 
   it("hangs a finding off /log with the coordinate as the tail", () => {

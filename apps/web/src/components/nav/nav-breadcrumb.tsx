@@ -37,6 +37,7 @@ const SEGMENTS: Record<string, { index?: string; label: string }> = {
   artists: { label: "Artists" },
   chat: { label: "ChatDnB" },
   docs: { label: "Docs" },
+  fresh: { label: "Fresh" },
   galaxies: { label: "Galaxies" },
   label: { index: "/labels", label: "Labels" },
   labels: { label: "Labels" },

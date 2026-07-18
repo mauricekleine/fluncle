@@ -397,6 +397,20 @@ export const SURFACES: readonly Surface[] = [
     weights: { web: "secondary" },
   },
   {
+    discoveryUrl: `${SITE}/llms.txt`,
+    exposedContent: [
+      "/fresh — what just came out: every drum & bass track released in the trailing 30-day window, freshest first, findings in full voice and the quieter rows in the unlit register",
+    ],
+    kind: "web_route",
+    name: "web.fresh",
+    operatorNotes:
+      "The new-releases lens over the whole archive — the SEO answer to 'new dnb releases', a weekly-refreshed query. Orders by tracks.release_date (when a tune CAME OUT), never findings.added_at (when Fluncle FOUND it) — the two are unrelated, and the copy never claims he found these. A HUB, so it is always indexable + listed unconditionally in the sitemap (like /albums), never the per-detail thin-content gate. The window read rides the tracks_release_date_idx btree so it stays a bounded range scan as the catalogue grows (lib/server/fresh.ts). The INDEX is always-200, so it is HTTP-probeable.",
+    probeConfig: { cadenceMs: PROBE_CADENCE_MS, kind: "http", timeoutMs: PROBE_TIMEOUT_MS },
+    route: "/fresh",
+    url: `${SITE}/fresh`,
+    weights: { web: "secondary" },
+  },
+  {
     exposedContent: [
       "/galaxies — the browse-by-feel lens: the archive grouped into operator-named sonic galaxies (k-means over the MuQ audio embedding space)",
       "/galaxies/:slug — one galaxy: its findings core-first, plus the adjacent galaxies by sound",

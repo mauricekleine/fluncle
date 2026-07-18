@@ -378,6 +378,14 @@ export const tracks = sqliteTable(
   (table) => [
     index("tracks_album_id_idx").on(table.albumId),
     index("tracks_label_id_idx").on(table.labelId),
+    // The `/fresh` window read ("what just came out"): `release_date BETWEEN <30d ago> AND
+    // <today>` ordered `release_date DESC`. Over a table built to grow to five figures, an
+    // unindexed range scan is exactly the full scan of a growing table AGENTS.md forbids, so
+    // release_date is a btree index — the range predicate + the ORDER BY both ride it, and the
+    // window bounds the scan to ~a month of rows however big the catalogue gets. A plain btree
+    // over a text column (not the vector `libsql_vector_idx` that wedges hosted Turso), so it
+    // builds like `tracks_key_idx` / `tracks_isrc_idx` beside it.
+    index("tracks_release_date_idx").on(table.releaseDate),
     index("tracks_nearest_finding_score_idx").on(table.nearestFindingScore),
     index("tracks_capture_priority_idx").on(table.capturePriority),
     index("tracks_source_audio_attempted_at_idx").on(table.sourceAudioAttemptedAt),
