@@ -25,7 +25,11 @@
 
 import { spawnSync } from "node:child_process";
 
-const BATCH_LIMIT = Number(process.env.FLUNCLE_LABEL_LINEAGE_LIMIT ?? "25");
+// 10, not 25: the lineage walk costs ~TWO MusicBrainz requests per label (the lookup + its
+// rels) at the shared 1 req/s, so 25 ≈ 50s blew the CLI's HTTP timeout on every tick while
+// 10 ≈ 20s clears it comfortably (measured live 2026-07-18). recording-mbids keeps 25 on its
+// one-call-per-row math; lineage pays double per row.
+const BATCH_LIMIT = Number(process.env.FLUNCLE_LABEL_LINEAGE_LIMIT ?? "10");
 
 const FLUNCLE_BIN = process.env.FLUNCLE_BIN ?? "fluncle";
 
