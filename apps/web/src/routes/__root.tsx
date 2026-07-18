@@ -105,6 +105,18 @@ export const Route = createRootRoute({
         title: "Fluncle's Mixtapes",
         type: "application/rss+xml",
       },
+      {
+        href: "/fresh.xml",
+        rel: "alternate",
+        title: "New drum & bass releases",
+        type: "application/rss+xml",
+      },
+      {
+        href: "/fresh.json",
+        rel: "alternate",
+        title: "New drum & bass releases",
+        type: "application/feed+json",
+      },
     ],
     meta: [
       {

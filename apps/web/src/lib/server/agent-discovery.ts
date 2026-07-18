@@ -228,7 +228,9 @@ ${tracks.join("\n")}
 ## Data
 
 - [RSS feed](${siteUrl}/rss.xml): the 25 most recent tracks
+- [Fresh releases feed](${siteUrl}/fresh.xml): the newest drum & bass RELEASES over the last 30 days, as RSS (also ${siteUrl}/fresh.json as a JSON Feed) — release-dated (when a tune came out), not found-dated
 - [Tracks API](${siteUrl}/api/v1/tracks): the archive as JSON, cursor-paginated; accepts limit (max 48) and cursor query params
+- [Fresh API](${siteUrl}/api/v1/tracks/fresh): what just came out — the newest releases over a 30-day window, as JSON; accepts limit (max 100)
 - [Random track](${siteUrl}/api/v1/tracks/random): one pick from the archive, as JSON
 - [Artists API](${siteUrl}/api/v1/artists): every artist with a published finding, most findings first, as JSON; /api/v1/artists/{slug} for one artist. Each resolves to a page at ${siteUrl}/artist/{slug}: that artist's findings plus their verified identity links (MusicGroup + sameAs)
 - [Mixtapes API](${siteUrl}/api/v1/mixtapes): Fluncle's own DJ mixtapes as JSON, each a checkpoint set with an F-marked Log ID and its tracklist; browse them at ${siteUrl}/mixtapes${galaxiesLine}
@@ -469,6 +471,8 @@ The server card (SEP-2127) is at \`${siteUrl}/.well-known/mcp/server-card.json\`
 ## Everything else
 
 - \`GET /rss.xml\`: the 25 most recent findings as RSS.
+- \`GET /fresh.xml\` (+ \`/fresh.json\`): the newest releases over a 30-day window, as RSS / JSON Feed.
+- \`GET /api/v1/tracks/fresh\`: what just came out, as JSON (limit max 100).
 - \`GET /llms.txt\`: the plain-language map of the Galaxy.
 - \`GET /api/v1/openapi.json\`: this API as an OpenAPI 3.1 document.
 - \`GET /api/v1/health\`: liveness, \`{"ok": true}\`.

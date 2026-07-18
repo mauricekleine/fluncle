@@ -60,6 +60,7 @@ All `application/json`; the OpenAPI document at `/api/v1/openapi.json` advertise
 | `api.tracks`            | `/api/v1/tracks`            | the archive as JSON, cursor-paginated (limit max 48, cursor)                                                                                 | primary   |
 | `api.track`             | `/api/v1/tracks/:idOrLogId` | one finding or mixtape by Spotify id or Log ID                                                                                               | secondary |
 | `api.tracks.random`     | `/api/v1/tracks/random`     | one finding at random                                                                                                                        | secondary |
+| `api.fresh`             | `/api/v1/tracks/fresh`      | what just came out — the newest releases over a 30-day window (release-dated), flat (limit max 100)                                          | secondary |
 | `api.mixtapes`          | `/api/v1/mixtapes`          | published mixtapes as JSON                                                                                                                   | secondary |
 | `api.artists`           | `/api/v1/artists`           | every artist with at least one published finding, finding-count ordered, plus `/api/v1/artists/{slug}`                                       | secondary |
 | `api.galaxies`          | `/api/v1/galaxies`          | every named sonic galaxy + member count as JSON, plus `/api/v1/galaxies/{slug}` for one galaxy's findings (empty/404 behind the launch gate) | secondary |
@@ -73,13 +74,15 @@ All `application/json`; the OpenAPI document at `/api/v1/openapi.json` advertise
 
 ### Feeds — subscribable syndication documents
 
-| Surface         | Route           | Format                  | Exposes                                                               | Weight    |
-| --------------- | --------------- | ----------------------- | --------------------------------------------------------------------- | --------- |
-| `feed.rss`      | `/rss.xml`      | `application/rss+xml`   | the 25 most recent findings and mixtapes                              | primary   |
-| `feed.atom`     | `/atom.xml`     | `application/atom+xml`  | the recent findings and mixtapes as an Atom feed                      | secondary |
-| `feed.json`     | `/feed.json`    | `application/feed+json` | the recent findings and mixtapes as a JSON Feed                       | secondary |
-| `feed.podcast`  | `/podcast.xml`  | `application/rss+xml`   | the mixtapes as a podcast feed (episode audio on `found.fluncle.com`) | secondary |
-| `feed.calendar` | `/calendar.ics` | `text/calendar`         | planned events as an iCalendar feed (Twitch-linked VEVENTs)           | tertiary  |
+| Surface           | Route           | Format                  | Exposes                                                                   | Weight    |
+| ----------------- | --------------- | ----------------------- | ------------------------------------------------------------------------- | --------- |
+| `feed.rss`        | `/rss.xml`      | `application/rss+xml`   | the 25 most recent findings and mixtapes                                  | primary   |
+| `feed.atom`       | `/atom.xml`     | `application/atom+xml`  | the recent findings and mixtapes as an Atom feed                          | secondary |
+| `feed.json`       | `/feed.json`    | `application/feed+json` | the recent findings and mixtapes as a JSON Feed                           | secondary |
+| `feed.fresh.rss`  | `/fresh.xml`    | `application/rss+xml`   | the newest releases over a 30-day window (release-dated, not found-dated) | secondary |
+| `feed.fresh.json` | `/fresh.json`   | `application/feed+json` | the newest releases over a 30-day window, as a JSON Feed                  | secondary |
+| `feed.podcast`    | `/podcast.xml`  | `application/rss+xml`   | the mixtapes as a podcast feed (episode audio on `found.fluncle.com`)     | secondary |
+| `feed.calendar`   | `/calendar.ics` | `text/calendar`         | planned events as an iCalendar feed (Twitch-linked VEVENTs)               | tertiary  |
 
 ### Discovery — machine-/crawler-facing maps
 
@@ -100,9 +103,9 @@ All `application/json`; the OpenAPI document at `/api/v1/openapi.json` advertise
 
 The `/mcp` endpoint speaks the full protocol, not just tools: **tools** (verbs), **resources** (the archive as a readable corpus, one URI per coordinate), and **prompts** (Fluncle-voiced starting points). Streamable HTTP, no auth. Resources and prompts are server-MCP only — `navigator.modelContext` (the browser WebMCP surface, `lib/webmcp.ts`) has no resource/prompt primitive, so it mirrors the tool set alone (the browser read path is the `get_track` tool).
 
-| Surface      | Route  | Exposes                                                                                                                                                                                                                                                                                                                                    | Weight  |
-| ------------ | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------- |
-| `mcp.server` | `/mcp` | **tools**: `list_tracks`, `get_track`, `get_random_track`, `get_status`, `search_tracks`, `submit_track`, `subscribe_newsletter`. **resources**: each finding/mixtape at `fluncle://finding/<logId>` or `fluncle://mixtape/<logId>` (its public `/log` record). **prompts**: `recommend_finding`, `walk_recent_night`, `decode_coordinate` | primary |
+| Surface      | Route  | Exposes                                                                                                                                                                                                                                                                                                                                                  | Weight  |
+| ------------ | ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| `mcp.server` | `/mcp` | **tools**: `list_tracks`, `list_fresh`, `get_track`, `get_random_track`, `get_status`, `search_tracks`, `submit_track`, `subscribe_newsletter`. **resources**: each finding/mixtape at `fluncle://finding/<logId>` or `fluncle://mixtape/<logId>` (its public `/log` record). **prompts**: `recommend_finding`, `walk_recent_night`, `decode_coordinate` | primary |
 
 ### DNS — the delegated authoritative zone
 
@@ -112,15 +115,16 @@ The `/mcp` endpoint speaks the full protocol, not just tools: **tools** (verbs),
 
 ### SSH — the rave terminal
 
-| Surface    | Command                | Exposes                                                                                                                                                                                                                                            | Weight  |
-| ---------- | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
-| `ssh.rave` | `ssh rave.fluncle.com` | the rave terminal TUI (Latest bangers, Artist archive, Sonic galaxies, Mixtape archive, Random banger, Submit a track, Subscribe, Install CLI, System status, About, Quit), plus the deep-register one-shots `ssh rave.fluncle.com latest\|random` | primary |
+| Surface    | Command                | Exposes                                                                                                                                                                                                                                                                   | Weight  |
+| ---------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| `ssh.rave` | `ssh rave.fluncle.com` | the rave terminal TUI (Latest bangers, Fresh releases, Artist archive, Sonic galaxies, Mixtape archive, Random banger, Submit a track, Subscribe, Install CLI, System status, About, Quit), plus the deep-register one-shots `ssh rave.fluncle.com latest\|fresh\|random` | primary |
 
 ### CLI — the `fluncle` thin client
 
 | Surface              | Command                  | Exposes                                                                                                           | Weight    |
 | -------------------- | ------------------------ | ----------------------------------------------------------------------------------------------------------------- | --------- |
 | `cli.recent`         | `fluncle recent`         | the latest bangers, newest first (alias `list`)                                                                   | primary   |
+| `cli.fresh`          | `fluncle fresh`          | the newest drum & bass releases, newest out first (release-dated, not found-dated)                                | secondary |
 | `cli.mixtapes`       | `fluncle mixtapes`       | Fluncle's checkpoint sets                                                                                         | secondary |
 | `cli.artists`        | `fluncle artists`        | every artist with at least one published finding (a bare `slug` looks one up)                                     | secondary |
 | `cli.open`           | `fluncle open`           | pick a track, open it in Spotify                                                                                  | secondary |
@@ -222,6 +226,7 @@ The weight ladder within a context is unchanged — **`primary`** (the loud fron
 | `api.tracks`                | primary   |           |           | secondary |
 | `api.track`                 | secondary |           |           |           |
 | `api.tracks.random`         | secondary |           |           |           |
+| `api.fresh`                 | secondary |           |           |           |
 | `api.mixtapes`              | secondary |           |           |           |
 | `api.artists`               | secondary |           |           |           |
 | `api.galaxies`              | secondary |           |           |           |
@@ -235,6 +240,8 @@ The weight ladder within a context is unchanged — **`primary`** (the loud fron
 | `feed.rss`                  | primary   |           |           |           |
 | `feed.atom`                 | secondary |           |           |           |
 | `feed.json`                 | secondary |           |           |           |
+| `feed.fresh.rss`            | secondary |           |           |           |
+| `feed.fresh.json`           | secondary |           |           |           |
 | `feed.podcast`              | secondary |           |           |           |
 | `feed.calendar`             | tertiary  |           |           |           |
 | `discovery.llms`            | primary   |           |           |           |
@@ -251,6 +258,7 @@ The weight ladder within a context is unchanged — **`primary`** (the loud fron
 | `dns.zone`                  | tertiary  |           |           | tertiary  |
 | `ssh.rave`                  | primary   | primary   |           | secondary |
 | `cli.recent`                | tertiary  |           | primary   |           |
+| `cli.fresh`                 | tertiary  |           | secondary |           |
 | `cli.mixtapes`              |           |           | secondary |           |
 | `cli.artists`               |           |           | secondary |           |
 | `cli.open`                  |           |           | secondary |           |

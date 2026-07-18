@@ -695,6 +695,31 @@ export const SURFACES: readonly Surface[] = [
     weights: { web: "secondary" },
   },
   {
+    // The RELEASE-date syndication twins — what just came OUT (not what Fluncle found). Uncertified
+    // catalogue rows ride along linking out to Spotify only, no coordinate (the Unlit Rule).
+    apiFormat: "application/rss+xml",
+    exposedContent: [
+      "the newest drum & bass releases over a 30-day window, as RSS (release-dated, not found-dated)",
+    ],
+    kind: "feed",
+    name: "feed.fresh.rss",
+    probeConfig: { cadenceMs: PROBE_CADENCE_MS, kind: "http", timeoutMs: PROBE_TIMEOUT_MS },
+    route: "/fresh.xml",
+    url: `${SITE}/fresh.xml`,
+    weights: { web: "secondary" },
+  },
+  {
+    apiFormat: "application/feed+json",
+    exposedContent: [
+      "the newest drum & bass releases over a 30-day window, as a JSON Feed (release-dated)",
+    ],
+    kind: "feed",
+    name: "feed.fresh.json",
+    route: "/fresh.json",
+    url: `${SITE}/fresh.json`,
+    weights: { web: "secondary" },
+  },
+  {
     apiFormat: "application/rss+xml",
     exposedContent: ["the mixtapes as a podcast feed (episode audio on found.fluncle.com)"],
     kind: "feed",
@@ -829,7 +854,7 @@ export const SURFACES: readonly Surface[] = [
     apiFormat: "application/json",
     discoveryUrl: `${SITE}/.well-known/mcp/server-card.json`,
     exposedContent: [
-      "the archive as MCP tools (Streamable HTTP, no auth): list_tracks, get_track, get_random_track, get_status, search_tracks, submit_track, subscribe_newsletter",
+      "the archive as MCP tools (Streamable HTTP, no auth): list_tracks, list_fresh, get_track, get_random_track, get_status, search_tracks, submit_track, subscribe_newsletter",
       "the archive as MCP resources: each finding/mixtape at fluncle://finding/<logId> or fluncle://mixtape/<logId> (its public record)",
       "Fluncle-voiced MCP prompts: recommend_finding, walk_recent_night, decode_coordinate",
     ],
@@ -861,8 +886,8 @@ export const SURFACES: readonly Surface[] = [
   {
     command: "ssh rave.fluncle.com",
     exposedContent: [
-      "the rave terminal TUI: Latest bangers, Artist archive, Sonic galaxies, Mixtape archive, Random banger, Submit, Subscribe, Install CLI, System status, About",
-      "deep-register one-shots: `ssh rave.fluncle.com latest|random`",
+      "the rave terminal TUI: Latest bangers, Fresh releases, Artist archive, Sonic galaxies, Mixtape archive, Random banger, Submit, Subscribe, Install CLI, System status, About",
+      "deep-register one-shots: `ssh rave.fluncle.com latest|fresh|random`",
     ],
     kind: "ssh",
     name: "ssh.rave",
@@ -879,6 +904,14 @@ export const SURFACES: readonly Surface[] = [
     kind: "cli",
     name: "cli.recent",
     weights: { cli: "primary", web: "tertiary" },
+  },
+  {
+    command: "fluncle fresh",
+    // Release-date axis, distinct from `recent`'s found-date: what just CAME OUT, not what he found.
+    exposedContent: ["the newest drum & bass releases, newest out first"],
+    kind: "cli",
+    name: "cli.fresh",
+    weights: { cli: "secondary", web: "tertiary" },
   },
   {
     command: "fluncle mixtapes",
