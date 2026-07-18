@@ -478,7 +478,7 @@ const Mixtape: React.FC = () => (
       <div
         style={{ color: c.starlightCream, fontFamily: font.body, fontSize: 40, fontWeight: 700 }}
       >
-        Fluncle dreaming №1
+        Fluncle dreaming Nº1
       </div>
       <div style={{ ...coordType, color: c.nebulaViolet, fontSize: 34 }}>000.F.1A</div>
     </div>

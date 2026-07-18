@@ -119,6 +119,13 @@ export async function renderFrontierCoverJpeg(opts: {
     const response = await doFetch(transformUrl);
 
     if (!response.ok) {
+      // Log the reason here as well as returning it — the drain's counts collapse every miss
+      // into `failed`, so without this line a prod-only transform fault is undiagnosable.
+      logEvent("warn", "frontier.cover-render-failed", {
+        reason: `transform_${response.status}`,
+        stagingKey,
+      });
+
       return { ok: false, reason: `transform_${response.status}` };
     }
 
@@ -127,6 +134,11 @@ export async function renderFrontierCoverJpeg(opts: {
     if (jpeg.byteLength > FRONTIER_COVER_MAX_JPEG_BYTES) {
       // The render blew the Spotify ceiling — refuse rather than push a too-large image. A
       // design change is the only way here (a 640² q80 dark cover is far under), so it is loud.
+      logEvent("warn", "frontier.cover-render-failed", {
+        bytes: jpeg.byteLength,
+        reason: `cover_too_large_${jpeg.byteLength}`,
+      });
+
       return { ok: false, reason: `cover_too_large_${jpeg.byteLength}` };
     }
 

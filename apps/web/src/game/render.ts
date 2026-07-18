@@ -826,7 +826,7 @@ export function createRenderer(container: HTMLElement): Renderer {
       ctx.font = '7px "Oxanium", "Space Grotesk", ui-sans-serif, system-ui, sans-serif';
       ctx.fillStyle = palette.cream;
       ctx.textAlign = "center";
-      fillTextFromCapTop(`№${view.crewNumber}`, Math.round(shipX), Math.round(shipY) - bottom - 9);
+      fillTextFromCapTop(`Nº${view.crewNumber}`, Math.round(shipX), Math.round(shipY) - bottom - 9);
       ctx.textAlign = "left";
     }
   }

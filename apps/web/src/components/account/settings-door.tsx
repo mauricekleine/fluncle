@@ -434,7 +434,7 @@ export function SettingsDoor({
                   until the one-time backfill stamps it. */}
               {user.crewNumber !== undefined ? (
                 <>
-                  <span className="account-portrait-crew">Crew №{user.crewNumber}</span> ·{" "}
+                  <span className="account-portrait-crew">Crew Nº{user.crewNumber}</span> ·{" "}
                 </>
               ) : null}
               crew since {joined}
