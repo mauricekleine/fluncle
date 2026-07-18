@@ -7,15 +7,17 @@ import { oc } from "@orpc/contract";
 import * as z from "zod";
 
 /**
- * A saved finding as `listSavedFindings` returns it (a row of the live GET
- * /me/saved-findings body). `note` is absent when the user saved no note.
+ * A saved track as `listSavedFindings` returns it (a row of the live GET
+ * /me/saved-findings body). `note` is absent when the user saved no note. `logId`
+ * rides only on a certified finding — an uncertified catalogue save omits it (the
+ * unlit tier stays unnamed).
  */
 export const SavedFindingSchema = z
   .object({
     artists: z.array(z.string()),
     // The cover URL (best-source resolve) — the recognition cue the row leads with.
     imageUrl: z.string().optional(),
-    logId: z.string(),
+    logId: z.string().optional(),
     note: z.string().optional(),
     savedAt: z.string(),
     title: z.string(),
@@ -58,10 +60,11 @@ export const listPrivateSavedFindings = oc
  * `save_private_finding` → `POST /me/saved-findings`
  * (operationId `savePrivateFinding`).
  *
- * Save a finding (by trackId or Log ID, with an optional note). CSRF-guarded;
- * reuses `saveFinding`, preserving the `{ ok: true, savedFinding }` envelope (the
- * echoed finding carries logId/note/savedAt/trackId — no title/artists) and the
- * live `invalid_request`/400, `track_not_found`/404 codes.
+ * Save a track (by trackId or Log ID, with an optional note). Any track saves — a
+ * certified finding echoes its `logId`, an uncertified catalogue track omits it.
+ * CSRF-guarded; reuses `saveFinding`, preserving the `{ ok: true, savedFinding }`
+ * envelope (the echoed row carries logId?/note/savedAt/trackId — no title/artists)
+ * and the live `invalid_request`/400, `track_not_found`/404 codes.
  */
 export const savePrivateFinding = oc
   .route({
@@ -76,7 +79,7 @@ export const savePrivateFinding = oc
     z.object({
       ok: z.literal(true),
       savedFinding: z.object({
-        logId: z.string(),
+        logId: z.string().optional(),
         note: z.string().optional(),
         savedAt: z.string(),
         trackId: z.string(),

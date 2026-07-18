@@ -1,4 +1,4 @@
-import { desc, sql } from "drizzle-orm";
+import { sql } from "drizzle-orm";
 import {
   check,
   customType,
@@ -1313,9 +1313,12 @@ export const frontierEditions = sqliteTable(
     userId: text("user_id").notNull(),
   },
   (table) => [
+    // The `(user_id, number)` btree serves every read: it bounds the last-8 novelty
+    // derive to one user, and SQLite walks it in REVERSE for the newest-first dropdown
+    // and the derive's `order by number desc limit N` — a dedicated DESC index would be
+    // redundant (and drizzle-kit's turso dialect cannot round-trip a `desc()` index
+    // expression through a later column ALTER, so it must not exist).
     uniqueIndex("frontier_editions_user_number_idx").on(table.userId, table.number),
-    // Serves BOTH the newest-first dropdown AND the last-8 novelty derive.
-    index("frontier_editions_user_number_desc_idx").on(table.userId, desc(table.number)),
   ],
 );
 
@@ -1348,11 +1351,17 @@ export const frontierEditionTracks = sqliteTable(
   ],
 );
 
+// A signed-in user's saved tracks. `track_id` is the identity a save files against
+// (the unique key with `user_id`); `log_id` is the certified finding's coordinate,
+// present ONLY when the saved track IS a finding — an uncertified catalogue track
+// saves with a null `log_id` (the unlit tier stays unnamed). The `user_saved_findings`
+// name is a legacy artifact from the findings-only era; the list now holds any track,
+// and a later pass may rename it to `user_saved_tracks`.
 export const userSavedFindings = sqliteTable(
   "user_saved_findings",
   {
     id: text("id").primaryKey(),
-    logId: text("log_id").notNull(),
+    logId: text("log_id"),
     note: text("note"),
     savedAt: text("saved_at").notNull(),
     trackId: text("track_id").notNull(),

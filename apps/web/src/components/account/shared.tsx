@@ -61,10 +61,12 @@ export type Collection = {
   galaxies: GalaxyCompletion[];
 };
 
+// A saved track. `logId` rides only on a certified finding — an uncertified catalogue
+// save omits it, and its row renders in the unlit register (no coordinate, no /log link).
 export type SavedFinding = {
   artists: string[];
   imageUrl?: string;
-  logId: string;
+  logId?: string;
   note?: string;
   savedAt: string;
   title: string;

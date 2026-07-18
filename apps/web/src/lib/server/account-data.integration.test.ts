@@ -4,6 +4,7 @@ import { type PublicUser } from "./public-auth";
 import {
   createIntegrationDb,
   rowCount,
+  seedCatalogueTrack,
   seedSubmission,
   seedTrack,
   seedUser,
@@ -376,6 +377,101 @@ describe("/me cross-user data scoping (real SQL, two seeded users)", () => {
 
     expect(orphan?.status).toBe("logged");
     expect(orphan?.logId).toBeUndefined();
+  });
+});
+
+describe("saveFinding (real SQL, any track — findings AND catalogue)", () => {
+  const userA = "user-A";
+
+  // The success shape of `saveFinding` (the non-Response branch).
+  type SaveResult = {
+    savedFinding: { logId?: string; note?: string; savedAt: string; trackId: string };
+  };
+
+  beforeEach(async () => {
+    await seedUser(db, { email: "a@example.com", id: userA, username: "aaa" });
+  });
+
+  it("saves a certified finding by trackId, storing its log_id (finding path unchanged)", async () => {
+    const { saveFinding, listSavedFindings } = await import("./account-data");
+    await seedTrack(db, { logId: "log-cert", trackId: "track-cert-00000000" });
+
+    const result = await saveFinding(publicUser(userA), { trackId: "track-cert-00000000" });
+    expect(result).not.toBeInstanceOf(Response);
+    expect((result as SaveResult).savedFinding.logId).toBe("log-cert");
+    expect((result as SaveResult).savedFinding.trackId).toBe("track-cert-00000000");
+
+    // The stored row carries the coordinate (the finding path is byte-identical).
+    const stored = await db.execute("select track_id, log_id from user_saved_findings");
+    expect(stored.rows.length).toBe(1);
+    expect(stored.rows[0]?.log_id).toBe("log-cert");
+
+    const list = await listSavedFindings(publicUser(userA));
+    expect(list.savedFindings.map((f) => ({ logId: f.logId, trackId: f.trackId }))).toEqual([
+      { logId: "log-cert", trackId: "track-cert-00000000" },
+    ]);
+  });
+
+  it("saves a certified finding by its Log ID, still storing the coordinate", async () => {
+    const { saveFinding } = await import("./account-data");
+    await seedTrack(db, { logId: "log-by-id", trackId: "track-byid-00000000" });
+
+    const result = await saveFinding(publicUser(userA), { logId: "log-by-id" });
+    expect(result).not.toBeInstanceOf(Response);
+    expect((result as SaveResult).savedFinding.logId).toBe("log-by-id");
+    expect((result as SaveResult).savedFinding.trackId).toBe("track-byid-00000000");
+
+    const stored = await db.execute("select log_id from user_saved_findings");
+    expect(stored.rows[0]?.log_id).toBe("log-by-id");
+  });
+
+  it("saves an UNCERTIFIED catalogue track with a null log_id and lists it", async () => {
+    const { saveFinding, listSavedFindings } = await import("./account-data");
+    // A `tracks` row with NO `findings` row — the row the findings-only ceiling dropped.
+    await seedCatalogueTrack(db, {
+      artists: ["Nobody"],
+      title: "Cold Cut",
+      trackId: "track-cat-000000000",
+    });
+
+    const result = await saveFinding(publicUser(userA), { trackId: "track-cat-000000000" });
+    expect(result).not.toBeInstanceOf(Response);
+    expect((result as SaveResult).savedFinding.logId).toBeUndefined();
+    expect((result as SaveResult).savedFinding.trackId).toBe("track-cat-000000000");
+
+    // Stored with a NULL coordinate (the unlit tier stays unnamed).
+    const stored = await db.execute("select track_id, log_id from user_saved_findings");
+    expect(stored.rows.length).toBe(1);
+    expect(stored.rows[0]?.log_id).toBeNull();
+
+    // The list read joins `tracks` directly, so the catalogue row renders sanely with no
+    // coordinate — the null `log_id` does not crash the mapper.
+    const list = await listSavedFindings(publicUser(userA));
+    expect(list.savedFindings.length).toBe(1);
+    expect(list.savedFindings[0]?.logId).toBeUndefined();
+    expect(list.savedFindings[0]?.title).toBe("Cold Cut");
+    expect(list.savedFindings[0]?.artists).toEqual(["Nobody"]);
+    expect(list.savedFindings[0]?.trackId).toBe("track-cat-000000000");
+  });
+
+  it("upserts on (user_id, track_id) — re-saving a catalogue track updates in place", async () => {
+    const { saveFinding } = await import("./account-data");
+    await seedCatalogueTrack(db, { trackId: "track-cat-000000000" });
+
+    await saveFinding(publicUser(userA), { note: "first", trackId: "track-cat-000000000" });
+    await saveFinding(publicUser(userA), { note: "second", trackId: "track-cat-000000000" });
+
+    const stored = await db.execute("select note from user_saved_findings");
+    expect(stored.rows.length).toBe(1);
+    expect(stored.rows[0]?.note).toBe("second");
+  });
+
+  it("404s a token that resolves to no track at all", async () => {
+    const { saveFinding } = await import("./account-data");
+
+    const result = await saveFinding(publicUser(userA), { trackId: "track-ghost-0000000" });
+    expect(result).toBeInstanceOf(Response);
+    expect((result as Response).status).toBe(404);
   });
 });
 

@@ -3798,6 +3798,40 @@ body::before {
   white-space: normal;
 }
 
+/* THE UNLIT RULE (DESIGN.md) on a saved row. A track the user saved that Fluncle never
+   certified has no coordinate to print, so it prints none; its cover catches the cold
+   DUST VEIL and its title defers at rest until hover warms it — the same treatment /mix
+   (`.mix-row--unlit`) and Recommended (`.rec-row--unlit`) use, because it is the same
+   rule and a reader who has met it once should not have to learn it twice. The register
+   IS the statement, and the tier is never given a noun. Focus stays Eclipse Gold on every
+   control — focus is an accessibility affordance, not a claim about the music. */
+.saves-row--unlit .saves-row-title {
+  color: var(--stardust);
+  font-weight: 500;
+}
+
+.saves-row--unlit .saves-cover {
+  filter: saturate(0.55) brightness(0.8);
+  opacity: 0.75;
+}
+
+.saves-row--unlit:hover,
+.saves-row--unlit:focus-within {
+  background: var(--dust-veil);
+}
+
+.saves-row--unlit:hover .saves-row-title,
+.saves-row--unlit:focus-within .saves-row-title {
+  color: var(--starlight-cream);
+}
+
+/* The unlit cover never heats to the certification tint the lit row's cover takes; it
+   scales on hover (motion, not light) but its border stays neutral. */
+.saves-row--unlit:hover .saves-cover,
+.saves-row--unlit:focus-within .saves-cover {
+  border-color: var(--border);
+}
+
 /* The Sent ledger, held clearly apart from the keep-lists above it. A status
    register: title (a link only when logged) + a badge, no cover, no bookmark. */
 .saves-sent {
