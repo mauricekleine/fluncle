@@ -55,6 +55,20 @@ const LogbookGapSchema = z
   })
   .meta({ id: "LogbookGap" });
 
+/**
+ * One already-authored entry distilled to its SPENT moves — the anti-sameness fuel the
+ * author is handed so it re-uses neither a title nor an opening/closing move (`opener` =
+ * first sentence, `closer` = last, figure tokens stripped).
+ */
+const LogbookSpentEntrySchema = z
+  .object({
+    closer: z.string(),
+    opener: z.string(),
+    sector: z.number(),
+    title: z.string(),
+  })
+  .meta({ id: "LogbookSpentEntry" });
+
 /** The `{ entry, ok }` envelope the create/update ops return (`skipped` on a create no-op). */
 const LogbookEntryEnvelope = z.object({
   entry: LogbookEntrySchema,
@@ -70,7 +84,10 @@ const LogbookEntryEnvelope = z.object({
  * and NO logbook entry, oldest first, bounded by `limit`. Each gap carries the day's
  * findings with their internal authoring fuel (`contextNote`, `observationScript`)
  * plus the `posterUrl` figure targets, so the box's `fluncle-logbook` cron picks a
- * day AND gathers its material in one call. Preserves `{ gaps, ok }`.
+ * day AND gathers its material in one call. Also carries `spent` — the most recent
+ * authored entries distilled to their titles + opener/closer moves, the anti-sameness
+ * fuel the author writes AGAINST (every listed title/move is taken). Preserves
+ * `{ gaps, ok }`; `spent` is additive.
  */
 export const listLogbookGaps = oc
   .route({
@@ -81,7 +98,13 @@ export const listLogbookGaps = oc
     tags: ["Admin"],
   })
   .input(z.object({ limit: z.string().optional() }))
-  .output(z.object({ gaps: z.array(LogbookGapSchema), ok: z.literal(true) }));
+  .output(
+    z.object({
+      gaps: z.array(LogbookGapSchema),
+      ok: z.literal(true),
+      spent: z.array(LogbookSpentEntrySchema),
+    }),
+  );
 
 /**
  * `create_logbook_entry` → `POST /admin/logbook/{sector}` (operationId

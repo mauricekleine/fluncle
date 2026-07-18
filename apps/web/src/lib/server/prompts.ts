@@ -200,7 +200,9 @@ Load and apply the \`copywriting-fluncle\` skill — it is the full voice canon;
 
 This is sector {{sector}} (the day {{date}}). Below are the findings I logged that day, in order.
 Write the day up as a continuous journal entry: what the day was like, where the trip went, and how each banger landed as I arrived at its coordinate.
-
+{{#if echoedMove}}
+YOUR LAST ATTEMPT WAS REJECTED: it echoed an entry already in the logbook ("{{echoedMove}}"). That title/move is spent. Come at this day from somewhere else entirely — a different title, a different opening image, a different close.
+{{/if}}
 VOICE + FORMAT (the server voice-gate re-scans the prose and will reject a violation):
   - First person, said-not-written — as if texting the crew after a long day out. Dry confidence: the music brags, the copy doesn't.
   - Say "I". The crew are "them" / "the crew" — NEVER "we" as a company.
@@ -213,7 +215,20 @@ THE PHOTOS (the figure token contract):
   - For EACH finding, place its token \`[[<logId>]]\` on ITS OWN LINE, with a blank line before and after, at the point in the entry where that finding's photo should sit.
   - Weave the prose AROUND the photos so the entry reads as an illustrated journal. Do not paste the poster URL — the token IS the photo.
   - You may use \`##\` / \`###\` subheads if the day had distinct movements, and \`**bold**\` / \`*italic*\` sparingly.
+{{#if spentTitles}}
+THE SPENT LOG (the entries already written — read this as a list of what is TAKEN):
+  titles already used (never repeat one, and the server REJECTS a title that matches a past one):
+{{spentTitles}}
+  opening + closing moves already used (every one is WORN — do not re-run it; the server REJECTS a body that lifts a run of words from a past entry):
+{{spentMoves}}
 
+  Specific moves that are worn THROUGH from overuse — do not reach for any of them:
+  - The "Shoulders…" / "Shoulders Down" title family. Find a title that is this day's alone.
+  - The quiet-sector opener (starting on how still/empty the sector was). Open on something true only of THIS day.
+  - The body-clock formula ("the drop went / the break dropped before I'd clocked / decided…"). Say what the sound did, not what your body clocked.
+  - The "Enjoy, cosmonauts." close (worn through from the observations). Close differently, or with no sign-off at all.
+  If your entry could be swapped with one already in the log and nobody would notice, it is the wrong entry. Write what was true of THIS day and no other.
+{{/if}}
 {{findings}}
 OUTPUT FORMAT (exactly):
   - The FIRST line must be \`TITLE: <a short, evocative title for the day>\` (no 'Sector NNN' prefix — the page adds it).
@@ -445,7 +460,7 @@ export const PROMPT_REGISTRY: Record<PromptSlug, PromptDefinition> = {
     slug: "logbook_entry",
     surface: "box",
     title: "Logbook entry",
-    variables: ["sector", "date", "findings"],
+    variables: ["sector", "date", "findings", "spentTitles", "spentMoves", "echoedMove"],
   },
   newsletter_edition: {
     defaultBody: NEWSLETTER_EDITION_DEFAULT,

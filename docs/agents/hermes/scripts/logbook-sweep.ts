@@ -55,6 +55,13 @@ import { resolveSweepPrompt } from "./prompt-fetch";
 const BATCH_CAP = 1;
 const GAP_LIMIT = 10; // hard ceiling on the gap read (we only act on BATCH_CAP)
 
+// The re-author budget when the Worker's anti-sameness rails reject an entry (a title
+// collision or a body echo). ONE retry: the second attempt is handed the offending
+// title/phrase, so it knows exactly which move is spent. A second echo means the model has
+// nothing fresh for this day — leave it a gap (silence beats a repeated day) and let the
+// next tick try. Mirrors note-sweep's ECHO_RETRIES.
+const ECHO_RETRIES = 1;
+
 const FLUNCLE_BIN = process.env.FLUNCLE_BIN ?? "fluncle";
 const CLAUDE_BIN = process.env.CLAUDE_BIN ?? "claude";
 
@@ -86,13 +93,27 @@ type Gap = {
   sector?: number;
 };
 
+// One already-authored entry distilled to its SPENT moves — the anti-sameness fuel. Every
+// listed title/opener/closer is taken; the author writes AGAINST them. Carried as ONE
+// top-level list on the gaps response (not per-gap).
+export type Spent = {
+  closer?: string;
+  opener?: string;
+  sector?: number;
+  title?: string;
+};
+
 type ClaudeEnvelope = {
   is_error?: boolean;
   result?: string;
   subtype?: string;
 };
 
-type Outcome = "authored" | "alreadyAuthored" | "gateSkipped" | "skipped";
+type Outcome = "authored" | "alreadyAuthored" | "echoSkipped" | "gateSkipped" | "skipped";
+
+// What the Worker made of a delivered entry. `echoedMove` carries the offending title or
+// lifted phrase the anti-sameness rails caught, so the re-author pass can route around it.
+type Delivery = { echoedMove?: string; outcome: Outcome };
 
 // A narrow sentinel the loop throws to abort the batch on a claude auth failure.
 class ClaudeAuthError extends Error {}
@@ -205,6 +226,49 @@ function buildFindingBlocks(findings: GapFinding[]): string[] {
 }
 
 // ---------------------------------------------------------------------------
+// THE SPENT MOVES — the recent authored entries' titles + opener/closer moves, handed to
+// the author as a list of what is already TAKEN (the anti-sameness rail's fuel, the sibling
+// of note-sweep's neighbour block). Two pre-joined strings: the titles, and the moves.
+// Shared by BOTH prompt paths (the registry `{{spentTitles}}`/`{{spentMoves}}` variables and
+// the baked-in fallback), so the two paths cannot drift.
+// ---------------------------------------------------------------------------
+
+function buildSpentTitles(spent: Spent[]): string {
+  return spent
+    .flatMap((entry) => {
+      const title = entry.title?.trim();
+
+      return title ? [`  - sector ${entry.sector ?? "?"}: "${title}"`] : [];
+    })
+    .join("\n");
+}
+
+function buildSpentMoves(spent: Spent[]): string {
+  return spent
+    .flatMap((entry) => {
+      const opener = entry.opener?.trim();
+      const closer = entry.closer?.trim();
+
+      if (!opener && !closer) {
+        return [];
+      }
+
+      const lines = [`  - sector ${entry.sector ?? "?"}:`];
+
+      if (opener) {
+        lines.push(`      opened: ${opener}`);
+      }
+
+      if (closer) {
+        lines.push(`      closed: ${closer}`);
+      }
+
+      return lines;
+    })
+    .join("\n");
+}
+
+// ---------------------------------------------------------------------------
 // THE PROMPT VARIABLES — the facts the builder below used to interpolate in TS, handed
 // to the REGISTRY template instead. The prose all lives in the template now (so the
 // operator can tune every rail, including the figure-token contract), and the sweep
@@ -212,11 +276,18 @@ function buildFindingBlocks(findings: GapFinding[]): string[] {
 // `logbook_entry` registry entry exactly, or the template renders holes.
 // ---------------------------------------------------------------------------
 
-function promptVariables(gap: Gap): Record<string, string | undefined> {
+function promptVariables(
+  gap: Gap,
+  spent: Spent[],
+  echoedMove?: string,
+): Record<string, string | undefined> {
   return {
     date: gap.date ? gap.date.slice(0, 10) : "unknown",
+    echoedMove,
     findings: buildFindingBlocks(gap.findings ?? []).join("\n"),
     sector: String(gap.sector ?? 0),
+    spentMoves: buildSpentMoves(spent),
+    spentTitles: buildSpentTitles(spent),
   };
 }
 
@@ -232,10 +303,41 @@ function promptVariables(gap: Gap): Record<string, string | undefined> {
 // apps/web/src/lib/server/prompts.ts.
 // ---------------------------------------------------------------------------
 
-export function buildAuthoringPrompt(gap: Gap): string {
+export function buildAuthoringPrompt(gap: Gap, spent: Spent[] = [], echoedMove?: string): string {
   const sector = gap.sector ?? 0;
   const date = gap.date ? gap.date.slice(0, 10) : "unknown";
   const findingBlocks = buildFindingBlocks(gap.findings ?? []);
+  const spentTitles = buildSpentTitles(spent);
+  const spentMoves = buildSpentMoves(spent);
+
+  // The re-author pass: the model's own echo (a colliding title or lifted phrase), handed
+  // back as the thing to route around (the note-sweep echoBlock precedent).
+  const echoBlock = echoedMove
+    ? [
+        `YOUR LAST ATTEMPT WAS REJECTED: it echoed an entry already in the logbook ("${echoedMove}"). That title/move is spent. Come at this day from somewhere else entirely — a different title, a different opening image, a different close.`,
+        "",
+      ]
+    : [];
+
+  // THE SPENT LOG — the recent entries' titles + opener/closer moves as a list of what is
+  // TAKEN. Present only when there is history to write against (the first entries have none).
+  const spentBlock = spentTitles
+    ? [
+        "THE SPENT LOG (the entries already written — read this as a list of what is TAKEN):",
+        "  titles already used (never repeat one, and the server REJECTS a title that matches a past one):",
+        spentTitles,
+        "  opening + closing moves already used (every one is WORN — do not re-run it; the server REJECTS a body that lifts a run of words from a past entry):",
+        spentMoves,
+        "",
+        "  Specific moves that are worn THROUGH from overuse — do not reach for any of them:",
+        '  - The "Shoulders…" / "Shoulders Down" title family. Find a title that is this day\'s alone.',
+        "  - The quiet-sector opener (starting on how still/empty the sector was). Open on something true only of THIS day.",
+        '  - The body-clock formula ("the drop went / the break dropped before I\'d clocked / decided…"). Say what the sound did, not what your body clocked.',
+        '  - The "Enjoy, cosmonauts." close (worn through from the observations). Close differently, or with no sign-off at all.',
+        "  If your entry could be swapped with one already in the log and nobody would notice, it is the wrong entry. Write what was true of THIS day and no other.",
+        "",
+      ]
+    : [];
 
   return [
     "You are Fluncle, writing your LOGBOOK entry for ONE day of the voyage — a first-person traveler's journal.",
@@ -244,6 +346,7 @@ export function buildAuthoringPrompt(gap: Gap): string {
     `This is sector ${sector} (the day ${date}). Below are the findings I logged that day, in order.`,
     "Write the day up as a continuous journal entry: what the day was like, where the trip went, and how each banger landed as I arrived at its coordinate.",
     "",
+    ...echoBlock,
     "VOICE + FORMAT (the server voice-gate re-scans the prose and will reject a violation):",
     "  - First person, said-not-written — as if texting the crew after a long day out. Dry confidence: the music brags, the copy doesn't.",
     '  - Say "I". The crew are "them" / "the crew" — NEVER "we" as a company.',
@@ -257,6 +360,7 @@ export function buildAuthoringPrompt(gap: Gap): string {
     "  - Weave the prose AROUND the photos so the entry reads as an illustrated journal. Do not paste the poster URL — the token IS the photo.",
     "  - You may use `##` / `###` subheads if the day had distinct movements, and `**bold**` / `*italic*` sparingly.",
     "",
+    ...spentBlock,
     ...findingBlocks,
     "OUTPUT FORMAT (exactly):",
     "  - The FIRST line must be `TITLE: <a short, evocative title for the day>` (no 'Sector NNN' prefix — the page adds it).",
@@ -282,11 +386,15 @@ export function buildAuthoringPrompt(gap: Gap): string {
 // `--prompt-version`.
 type AuthoredEntry = { body: string; promptVersion: number | null; title: string };
 
-async function authorEntry(gap: Gap): Promise<AuthoredEntry | null> {
+async function authorEntry(
+  gap: Gap,
+  spent: Spent[],
+  echoedMove?: string,
+): Promise<AuthoredEntry | null> {
   const { prompt, promptVersion } = await resolveSweepPrompt({
-    fallback: () => buildAuthoringPrompt(gap),
+    fallback: () => buildAuthoringPrompt(gap, spent, echoedMove),
     slug: "logbook_entry",
-    variables: promptVariables(gap),
+    variables: promptVariables(gap, spent, echoedMove),
   });
 
   if (promptVersion === null) {
@@ -382,9 +490,29 @@ function parseAuthoredEntry(text: string): { body: string; title: string } | nul
   return { body, title: match[1].trim() };
 }
 
+/**
+ * Pull the offending move out of the Worker's anti-sameness rejection so the re-author pass
+ * can name the spent move back to the model. Two shapes, both quoted (raw from a
+ * human-readable error, BACKSLASH-escaped from a `--json` one):
+ *   - a body echo: `it lifts "…" straight from sector NNN` (the note-sweep phrasing).
+ *   - a title collision: `The title "…" repeats sector NNN's …`.
+ * Best-effort — a miss just means a less pointed retry.
+ */
+export function readEchoedMove(output: string): string | undefined {
+  const lifted = /it lifts \\?"([^"\\]+)\\?"/.exec(output);
+
+  if (lifted?.[1]) {
+    return lifted[1];
+  }
+
+  const title = /The title \\?"([^"\\]+)\\?"/.exec(output);
+
+  return title?.[1];
+}
+
 // ---------------------------------------------------------------------------
 // Deliver one entry: write the body to a temp file, post via the CLI (the Worker
-// voice-gates + fills-empty-only + stores), clean up.
+// voice-gates + anti-sameness-gates + fills-empty-only + stores), clean up.
 // ---------------------------------------------------------------------------
 
 function deliverEntry(
@@ -392,7 +520,7 @@ function deliverEntry(
   title: string,
   body: string,
   promptVersion: number | null,
-): Outcome {
+): Delivery {
   const dir = mkdtempSync(join(tmpdir(), "logbook-sweep-"));
   const bodyPath = join(dir, "entry.md");
 
@@ -416,7 +544,23 @@ function deliverEntry(
     ]);
 
     if (code !== 0) {
-      const detail = `${stdout}\n${stderr}`.toLowerCase();
+      const combined = `${stdout}\n${stderr}`;
+      const detail = combined.toLowerCase();
+
+      // THE ANTI-SAMENESS RAILS: a colliding title or an echoed body. Distinct from the
+      // voice gate because it is RECOVERABLE — the model gets one more pass, told exactly
+      // which title/move it spent.
+      if (detail.includes("title_echoes_logbook") || detail.includes("body_echoes_logbook")) {
+        const echoedMove = readEchoedMove(combined);
+
+        log(
+          `sector ${sector}: the anti-sameness rail rejected the entry${
+            echoedMove ? ` (it echoed "${echoedMove}")` : ""
+          }`,
+        );
+
+        return { echoedMove, outcome: "echoSkipped" };
+      }
 
       if (
         detail.includes("voice_gate") ||
@@ -432,12 +576,12 @@ function deliverEntry(
           `sector ${sector}: voice gate / validation rejected the entry — skipping (stays queued)`,
         );
 
-        return "gateSkipped";
+        return { outcome: "gateSkipped" };
       }
 
       log(`sector ${sector}: create exited ${code}: ${stderr.trim().slice(-200)}`);
 
-      return "skipped";
+      return { outcome: "skipped" };
     }
 
     try {
@@ -446,7 +590,7 @@ function deliverEntry(
       if (parsed.skipped) {
         log(`sector ${sector}: an entry already stands — no-op`);
 
-        return "alreadyAuthored";
+        return { outcome: "alreadyAuthored" };
       }
     } catch {
       // Non-JSON success is unexpected but harmless; treat as an authored fill.
@@ -454,7 +598,7 @@ function deliverEntry(
 
     log(`sector ${sector}: entry authored`);
 
-    return "authored";
+    return { outcome: "authored" };
   } finally {
     rmSync(dir, { force: true, recursive: true });
   }
@@ -464,7 +608,7 @@ function deliverEntry(
 // Per-day: author → deliver.
 // ---------------------------------------------------------------------------
 
-async function authorOne(gap: Gap): Promise<Outcome> {
+async function authorOne(gap: Gap, spent: Spent[]): Promise<Outcome> {
   const sector = gap.sector;
 
   if (typeof sector !== "number" || !gap.findings?.length) {
@@ -473,13 +617,36 @@ async function authorOne(gap: Gap): Promise<Outcome> {
     return "skipped";
   }
 
-  const authored = await authorEntry(gap);
+  // Author → deliver, with ONE re-author if the Worker's anti-sameness rails reject the
+  // entry (a title collision or a body echo). The retry is handed the offending title/phrase,
+  // so the second pass knows exactly which move is spent. Two echoes and we stop: the day
+  // stays a gap, because a day that reads like one already in the log is worse than a gap.
+  let delivery: Delivery = { outcome: "skipped" };
+  let echoedMove: string | undefined;
 
-  if (!authored) {
-    return "skipped";
+  for (let attempt = 0; attempt <= ECHO_RETRIES; attempt += 1) {
+    const authored = await authorEntry(gap, spent, echoedMove);
+
+    if (!authored) {
+      return "skipped";
+    }
+
+    delivery = deliverEntry(sector, authored.title, authored.body, authored.promptVersion);
+
+    if (delivery.outcome !== "echoSkipped") {
+      break;
+    }
+
+    echoedMove = delivery.echoedMove;
+
+    if (attempt < ECHO_RETRIES) {
+      log(`sector ${sector}: re-authoring once, routing around the echo`);
+    } else {
+      log(`sector ${sector}: still echoing the logbook — left a gap for the next tick`);
+    }
   }
 
-  return deliverEntry(sector, authored.title, authored.body, authored.promptVersion);
+  return delivery.outcome;
 }
 
 // ---------------------------------------------------------------------------
@@ -525,7 +692,7 @@ function pingClaudeAuthFailure(detail: string): void {
 // ---------------------------------------------------------------------------
 
 async function main(): Promise<void> {
-  const response = fluncleJson<{ gaps?: Gap[] }>([
+  const response = fluncleJson<{ gaps?: Gap[]; spent?: Spent[] }>([
     "admin",
     "logbook",
     "gaps",
@@ -533,10 +700,16 @@ async function main(): Promise<void> {
     String(GAP_LIMIT),
   ]);
   const gaps = response.gaps ?? [];
+  // The anti-sameness fuel: the recent entries' spent titles + opener/closer moves. The same
+  // list the author writes against and the Worker's rails enforce. Empty on a fresh logbook.
+  const spent = response.spent ?? [];
 
   const summary = {
     alreadyAuthored: 0,
     authored: 0,
+    // The entry echoed the logbook twice over and was left a gap — the anti-sameness rail
+    // firing. The day stays in the gap list for a later, colder pass.
+    echoSkipped: 0,
     failed: 0,
     gapsRemaining: gaps.length,
     gateSkipped: 0,
@@ -550,12 +723,14 @@ async function main(): Promise<void> {
 
   for (const gap of gaps.slice(0, BATCH_CAP)) {
     try {
-      const outcome = await authorOne(gap);
+      const outcome = await authorOne(gap, spent);
 
       if (outcome === "authored") {
         summary.authored += 1;
       } else if (outcome === "alreadyAuthored") {
         summary.alreadyAuthored += 1;
+      } else if (outcome === "echoSkipped") {
+        summary.echoSkipped += 1;
       } else if (outcome === "gateSkipped") {
         summary.gateSkipped += 1;
       } else {

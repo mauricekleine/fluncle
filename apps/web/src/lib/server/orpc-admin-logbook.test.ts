@@ -10,6 +10,7 @@ import { AGENT_TOKEN, OPERATOR_TOKEN, readJson, req, setAdminTokenEnv } from "./
 
 const createLogbookEntry = vi.fn();
 const listLogbookGaps = vi.fn();
+const listSpentMoves = vi.fn();
 const updateLogbookEntry = vi.fn();
 
 vi.mock("./logbook", async () => {
@@ -18,6 +19,7 @@ vi.mock("./logbook", async () => {
   return {
     createLogbookEntry: (...args: unknown[]) => createLogbookEntry(...args),
     listLogbookGaps: (...args: unknown[]) => listLogbookGaps(...args),
+    listSpentMoves: (...args: unknown[]) => listSpentMoves(...args),
     // Keep the real `requireSector` (the handlers call it to parse the path param).
     requireSector: actual.requireSector,
     updateLogbookEntry: (...args: unknown[]) => updateLogbookEntry(...args),
@@ -37,6 +39,7 @@ beforeAll(setAdminTokenEnv);
 beforeEach(() => {
   createLogbookEntry.mockReset();
   listLogbookGaps.mockReset();
+  listSpentMoves.mockReset();
   updateLogbookEntry.mockReset();
 });
 
@@ -48,14 +51,23 @@ describe("oRPC list_logbook_gaps (GET /admin/logbook/gaps)", () => {
     expect(listLogbookGaps).not.toHaveBeenCalled();
   });
 
-  it("lets the AGENT read the gap worklist", async () => {
+  it("lets the AGENT read the gap worklist (with the spent anti-sameness fuel)", async () => {
     listLogbookGaps.mockResolvedValueOnce([]);
+    listSpentMoves.mockResolvedValueOnce([
+      { closer: "I played it twice.", opener: "A low sub opened.", sector: 35, title: "A drift" },
+    ]);
 
     const { handleOrpc } = await import("./orpc");
     const response = await handleOrpc(req("/admin/logbook/gaps", "GET", AGENT_TOKEN));
 
     expect(response?.status).toBe(200);
-    expect(await readJson(response)).toEqual({ gaps: [], ok: true });
+    expect(await readJson(response)).toEqual({
+      gaps: [],
+      ok: true,
+      spent: [
+        { closer: "I played it twice.", opener: "A low sub opened.", sector: 35, title: "A drift" },
+      ],
+    });
   });
 });
 

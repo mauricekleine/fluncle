@@ -607,9 +607,23 @@ export type LogbookGapFinding = {
   title: string;
 };
 
+/**
+ * One already-authored entry, distilled to its SPENT moves — the anti-sameness fuel the
+ * sweep hands the author so it never re-uses a title or an opening/closing move. `opener`
+ * is the entry's first sentence, `closer` its last (both with the `[[logId]]` figure
+ * tokens stripped). Carried as ONE top-level list on the gaps response (not per-gap), most
+ * recent sector first. See docs/agents/logbook-agent.md.
+ */
+export type LogbookSpentEntry = {
+  closer: string;
+  opener: string;
+  sector: number;
+  title: string;
+};
+
 export type LogbookEntriesResponse = Ok<{ entries: LogbookEntryDTO[] }>;
 export type LogbookEntryResponse = Ok<{ entry: LogbookEntryDTO; skipped?: boolean }>;
-export type LogbookGapsResponse = Ok<{ gaps: LogbookGap[] }>;
+export type LogbookGapsResponse = Ok<{ gaps: LogbookGap[]; spent: LogbookSpentEntry[] }>;
 
 // ── Subscription (the operator's private cost ledger, COST-02) ───────────────
 

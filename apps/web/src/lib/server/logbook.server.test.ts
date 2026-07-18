@@ -90,10 +90,14 @@ describe("createLogbookEntry — the fill-empty-only guarantee", () => {
           return [];
         },
       },
+      // The title-collision guard's read — no stored titles, so no collision.
+      { match: /select sector, title from logbook_entries$/, rows: () => [] },
+      // The body echo gate's neighbour read — no recent entries, so nothing to echo.
+      { match: /where sector != \?/, rows: () => [] },
       {
         // The existence SELECT returns nothing first, then the post-insert read
         // returns the stored row.
-        match: /from logbook_entries where sector/,
+        match: /where sector = \?/,
         rows: () => (inserted.length === 0 ? [] : inserted),
       },
     ]);
@@ -150,8 +154,11 @@ describe("updateLogbookEntry — the operator overwrite", () => {
           return [];
         },
       },
+      // The operator path still runs the title-collision guard (against OTHER sectors) —
+      // no other titles here, so it passes.
+      { match: /select sector, title from logbook_entries$/, rows: () => [] },
       {
-        match: /from logbook_entries where sector/,
+        match: /where sector = \?/,
         rows: () => [{ ...EXISTING_ROW, generated_by: storedGeneratedBy }],
       },
     ]);
@@ -162,6 +169,35 @@ describe("updateLogbookEntry — the operator overwrite", () => {
     expect(entry.generatedBy).toBe("operator");
     const insert = executeCalls.find((call) => /insert into logbook_entries/i.test(call.sql));
     expect(insert?.sql).toMatch(/'operator'/);
+  });
+
+  it("re-saving a sector's OWN title passes (the exclude-self rule), but a cross-sector collision 422s", async () => {
+    // Sector 018 already holds "Shoulders Down"; sector 036 holds "A slow drift".
+    const STORED = [
+      { sector: 18, title: "Shoulders Down" },
+      { sector: 36, title: "A slow drift" },
+    ];
+
+    setRoutes([
+      { match: /insert into logbook_entries/, rows: () => [] },
+      { match: /select sector, title from logbook_entries$/, rows: () => STORED },
+      { match: /where sector = \?/, rows: () => [{ ...EXISTING_ROW, title: "A slow drift" }] },
+    ]);
+    const { updateLogbookEntry } = await import("./logbook");
+    const { ApiError } = await import("./spotify");
+
+    // Re-saving sector 36 under its own (normalized-equal) title is allowed.
+    await expect(
+      updateLogbookEntry(36, { body: CLEAN_BODY, title: "A Slow Drift" }),
+    ).resolves.toBeDefined();
+
+    // But taking sector 018's title on sector 036 collides (case- + punctuation-insensitive).
+    await expect(
+      updateLogbookEntry(36, { body: CLEAN_BODY, title: "shoulders down" }),
+    ).rejects.toMatchObject({ code: "title_echoes_logbook" });
+    await expect(
+      updateLogbookEntry(36, { body: CLEAN_BODY, title: "Shoulders, Down" }),
+    ).rejects.toBeInstanceOf(ApiError);
   });
 });
 
@@ -221,5 +257,189 @@ describe("listLogbookGaps — the self-healing window", () => {
     expect(gaps[0]?.findings[0]?.note).toBeUndefined();
 
     vi.useRealTimers();
+  });
+});
+
+// ── The anti-sameness rail (Layers A + C) ─────────────────────────────────────
+
+// A neighbour body a draft can lift a run of words from (the low-end run below).
+const NEIGHBOR_BODY =
+  "The low end rolled in slow and patient and it never let go of the whole room that night.";
+
+describe("createLogbookEntry — the title-collision guard (Layer A, deterministic)", () => {
+  it("rejects a title that NORMALIZED-matches a stored title (case + punctuation insensitive)", async () => {
+    setRoutes([
+      // Empty sector (create is fill-empty-only), so the guard is reached.
+      { match: /where sector = \?/, rows: () => [] },
+      // Sector 018 already holds "Shoulders Down".
+      {
+        match: /select sector, title from logbook_entries$/,
+        rows: () => [{ sector: 18, title: "Shoulders Down" }],
+      },
+    ]);
+    const { createLogbookEntry } = await import("./logbook");
+
+    // "Shoulders, Down" (punctuation + case) normalizes to the same "shoulders down".
+    await expect(
+      createLogbookEntry(19, { body: CLEAN_BODY, title: "Shoulders, Down" }),
+    ).rejects.toMatchObject({ code: "title_echoes_logbook", status: 422 });
+    // No INSERT ran — the guard fired before the store.
+    expect(executeCalls.every((call) => !/insert/i.test(call.sql))).toBe(true);
+  });
+});
+
+describe("createLogbookEntry — the body echo gate (Layer C, scored)", () => {
+  function echoRoutes(neighborBody: string) {
+    return [
+      { match: /insert into logbook_entries/, rows: () => [] },
+      { match: /where sector = \?/, rows: () => [] },
+      { match: /select sector, title from logbook_entries$/, rows: () => [] },
+      // The recent-entries neighbour read.
+      { match: /where sector != \?/, rows: () => [{ body: neighborBody, sector: 12 }] },
+      // The dials — unset, so the calibrated defaults (minPhraseWords 4, maxOverlap 0.3).
+      { match: /from settings where key/, rows: () => [] },
+    ];
+  }
+
+  it("rejects a body that LIFTS a run of words from a recent entry", async () => {
+    setRoutes(echoRoutes(NEIGHBOR_BODY));
+    const { createLogbookEntry } = await import("./logbook");
+
+    const lifted =
+      "I leaned back as the low end rolled in slow and patient, and the crew felt every second of it.";
+
+    await expect(
+      createLogbookEntry(19, { body: lifted, title: "A fresh title" }),
+    ).rejects.toMatchObject({ code: "body_echoes_logbook", status: 422 });
+    expect(executeCalls.every((call) => !/insert/i.test(call.sql))).toBe(true);
+  });
+
+  it("rejects a body that reuses a recent entry's words WHOLESALE (the overlap path)", async () => {
+    const neighbor =
+      "Halogen light. Tidal sub. Gunmetal break. Coiled tension. Dusk pressure everywhere in the sector.";
+    setRoutes(echoRoutes(neighbor));
+    const { createLogbookEntry } = await import("./logbook");
+
+    // Same distinctive words, reordered so no 4-word run is shared — the overlap catches it.
+    const overlap =
+      "Pressure everywhere, coiled and tidal across the sector. The break felt gunmetal, the sub dusk-toned, tension under halogen light.";
+
+    await expect(
+      createLogbookEntry(19, { body: overlap, title: "Another fresh title" }),
+    ).rejects.toMatchObject({ code: "body_echoes_logbook", status: 422 });
+  });
+
+  it("passes a clean, genuinely-different body (nothing to echo)", async () => {
+    const inserted: Record<string, unknown>[] = [];
+
+    setRoutes([
+      {
+        match: /insert into logbook_entries/,
+        rows: (args) => {
+          inserted.push({
+            body: args[2],
+            generated_at: args[5],
+            generated_by: args[3],
+            sector: args[0],
+            title: args[1],
+          });
+
+          return [];
+        },
+      },
+      { match: /select sector, title from logbook_entries$/, rows: () => [] },
+      // A recent entry that shares nothing with the draft below.
+      {
+        match: /where sector != \?/,
+        rows: () => [
+          { body: "Bright stabs cut across a jittery amen while the crew hollered.", sector: 12 },
+        ],
+      },
+      { match: /from settings where key/, rows: () => [] },
+      { match: /where sector = \?/, rows: () => (inserted.length === 0 ? [] : inserted) },
+    ]);
+    const { createLogbookEntry } = await import("./logbook");
+
+    const result = await createLogbookEntry(19, { body: CLEAN_BODY, title: "A slow drift" });
+
+    expect(result.skipped).toBe(false);
+    expect(result.entry.generatedBy).toBe("agent");
+  });
+});
+
+describe("listSpentMoves — the anti-sameness fuel (Layer B)", () => {
+  it("distills each entry to its opener + closer (first/last sentence, tokens stripped), newest first, capped", async () => {
+    setRoutes([
+      {
+        match: /select sector, title, body from logbook_entries order by sector desc limit \?/,
+        rows: () => [
+          {
+            body: "A low sub opened the night.\n\n[[036.7.2I]]\n\nThe crew stopped talking. I played it twice.",
+            sector: 36,
+            title: "A slow drift",
+          },
+          { body: "One long roller, start to finish.", sector: 35, title: "One roller" },
+        ],
+      },
+    ]);
+    const { listSpentMoves } = await import("./logbook");
+
+    const spent = await listSpentMoves();
+
+    // Newest sector first, and the query is capped (default 12).
+    expect(spent.map((entry) => entry.sector)).toEqual([36, 35]);
+    expect(executeCalls[0]?.args?.[0]).toBe(12);
+    // Opener = first sentence, closer = last sentence, with the figure token stripped out.
+    expect(spent[0]).toMatchObject({
+      closer: "I played it twice.",
+      opener: "A low sub opened the night.",
+      title: "A slow drift",
+    });
+    expect(spent[0]?.opener).not.toContain("[[036.7.2I]]");
+    // A single-sentence body: opener === closer.
+    expect(spent[1]?.opener).toBe("One long roller, start to finish.");
+    expect(spent[1]?.closer).toBe("One long roller, start to finish.");
+  });
+});
+
+describe("getLogbookEchoThresholds — the tunable dials, bounded on read", () => {
+  function settingsRoutes(values: Record<string, string>) {
+    return [
+      {
+        match: /from settings where key/,
+        rows: (args: unknown[]) => {
+          const key = String(args[0]);
+
+          return key in values ? [{ value: values[key] }] : [];
+        },
+      },
+    ];
+  }
+
+  it("falls back to the calibrated defaults when the KV is unset", async () => {
+    setRoutes(settingsRoutes({}));
+    const { getLogbookEchoThresholds } = await import("./logbook-echo");
+
+    expect(await getLogbookEchoThresholds()).toEqual({ maxOverlap: 0.3, minPhraseWords: 4 });
+  });
+
+  it("degrades a nonsense KV value to the default rather than disabling the gate", async () => {
+    // minPhraseWords 1 (below the floor of 2) and maxOverlap 0 (below 0.05) would open/shut
+    // the gate — both must snap back to the defaults.
+    setRoutes(
+      settingsRoutes({ logbook_echo_max_overlap: "0", logbook_echo_min_phrase_words: "1" }),
+    );
+    const { getLogbookEchoThresholds } = await import("./logbook-echo");
+
+    expect(await getLogbookEchoThresholds()).toEqual({ maxOverlap: 0.3, minPhraseWords: 4 });
+  });
+
+  it("reads valid in-bounds KV values", async () => {
+    setRoutes(
+      settingsRoutes({ logbook_echo_max_overlap: "0.5", logbook_echo_min_phrase_words: "6" }),
+    );
+    const { getLogbookEchoThresholds } = await import("./logbook-echo");
+
+    expect(await getLogbookEchoThresholds()).toEqual({ maxOverlap: 0.5, minPhraseWords: 6 });
   });
 });
