@@ -8,6 +8,16 @@ One dated entry per observed occurrence: the artifact family (notes / observatio
 
 ## The ledger
 
+### 2026-07-18 · The AFTER-NUMBERS — first full re-run under the rails, and the harness reaches every family (measured, live prod)
+
+The re-run the 07-14 honesty notes promised (#707 — the harness now measures newsletter why-lines, the context-note Texture vocabulary, and the video axes, plus an opt-in embedding cut; every number below is a live read-only run against production).
+
+- **Observations under the 07-14 rail (corpus 61→76): the rail is holding.** Mean pairwise overlap **0.0816 → 0.0683**; the exact "enjoy cosmonauts" closer fell **32/61 (52%) → 21/76 (28%)**; every crutch flat in absolute count while the corpus grew, so every rate fell (`hope` 83%→67%, `cosmonaut` 62%→50%, `shoulders` 26/76); the top opener is down to 5/76. Exactly the "flat, not shrinking" trajectory the 07-14 entry predicted for a working rail — holding the line, not yet reversing it (still the worst family, 71/76 echoing).
+- **The Texture seed fix is measurably diluting.** `rolling` 56%→45%, `breakbeats` 44%→35%, `atmospheric` 31%→25% (counts near-flat, corpus 61→77). The phrase histogram surfaced a compound the word-count dissolved: **"rolling breakbeats" as its own 17/77 cliché**. Consequence for the self-updating-blocklist candidate: the static 07-14 fix is working — **measure said don't build it yet**; the candidate stays parked, re-judged at the next re-run.
+- **Video axes, first stored-column baseline:** vehicle stays the most diverse axis (71 distinct/73); register still collapsed at **89.7% representational** (the 07-18 assigner ships against exactly this; not live until the box bake); `video_palette` NULL 100% — fills as new renders ship.
+- **Newsletter:** n=6 why-lines / 1 sent edition, clean (0/6 echoing) but `shoulders` already in 2/6; re-measure at ≥4 editions stands.
+- **The embedding-distance experiment (ratified 07-18): verdict OVERLAPS → dashboard number, not a gate.** The condemned lexical pairs DO sink semantically (−1.25σ/top 10.5% observations, −1.78σ/top 5% notes) — but the spread is unimodal with no gap (298 observation pairs sit closer than the condemned one), so a fixed threshold would over-fire on same-persona baseline. Per the ratified decision rule: stays a corpus dashboard number, no auto-gate wired. **The caveat with legs:** the embedding-CLOSEST pairs carry lower lexical overlap than the condemned pair (8.9–20.8% vs 29.6%) — genuine paraphrases `scoreEcho` is structurally blind to. If a semantic layer is ever revisited it should be a ranked review signal (top-K closest pairs to the attention queue), never a hard threshold.
+
 ### 2026-07-18 · Videos — the counter-measure ships (designed-in diversity: the axis assigner, palette provenance, the palette gate)
 
 The audit's fix-map items (3) and (4) — the missing palette metric and the 92% register collapse — get their mechanism (#702). The standing law applied literally: diversity is now DESIGNED IN before generation, not hoped for from the agent eyeballing recent posters (which produced the amber strip anyway).
@@ -94,5 +104,5 @@ Learned during the video-overhaul and batch-render runs, written down before thi
 
 ## What the ledger still wants
 
-- **A metric per family.** Notes have `scoreNoteEcho`; observations have the taste-pack word counts; videos now have the palette-histogram gate + a per-render palette tag (the 07-18 entry — exactly the check that would have caught the 07-13 strip); covers and sprites still have nothing. "An anti-sameness effort with no metric is folklore" (ROADMAP).
+- **A metric per family.** Notes have `scoreNoteEcho`; observations, newsletter why-lines, the context-note Texture vocabulary, and the stored video axes are all one harness command as of the 07-18 after-numbers entry; videos additionally carry the palette-histogram gate + a per-render palette tag (exactly the check that would have caught the 07-13 strip). Covers and sprites still have nothing. "An anti-sameness effort with no metric is folklore" (ROADMAP).
 - **Entries from families not yet observed** (covers, sprites, clip captions) — absence of evidence there is so far just absence of looking.
