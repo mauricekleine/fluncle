@@ -95,8 +95,23 @@ const fetchAlbumsCatalogue = createServerFn({ method: "GET" })
   .validator((data: { cursor?: string; limit?: number }) => data)
   .handler(({ data }) => listAlbumsCatalogue({ cursor: data.cursor, limit: data.limit }));
 
-const title = "Fluncle: the albums";
-const description = "Every record Fluncle has found a banger on, mapped across the Galaxy.";
+// Machine-facing strings stay honestly-plain third-person (the Narrator rule), and they carry the
+// genre keyword — Bing flagged the hub layer for short, keyword-free titles and identical paged
+// meta (2026-07-18). Paged variants bake their page number into BOTH strings.
+const title = "Drum & bass albums, EPs and singles · Fluncle";
+const description =
+  "Every drum & bass album, EP and single Fluncle has pulled a banger from, mapped across the Galaxy with the artists and labels behind them.";
+
+function pagedMeta(page: number): { description: string; title: string } {
+  if (page <= 1) {
+    return { description, title };
+  }
+
+  return {
+    description: `Page ${page} of every drum & bass album, EP and single Fluncle has pulled a banger from, with the artists and labels behind them.`,
+    title: `Drum & bass albums, page ${page} · Fluncle`,
+  };
+}
 
 function albumsHead(loaderData: AlbumsPageData | undefined) {
   if (loaderData?.status !== "found") {
@@ -129,18 +144,20 @@ function albumsHead(loaderData: AlbumsPageData | undefined) {
     url: `${siteUrl}/albums`,
   };
 
+  const meta = pagedMeta(loaderData.page);
+
   return {
     links: [{ href: canonical, rel: "canonical" }],
     meta: [
-      { title },
-      { content: description, name: "description" },
-      { content: title, property: "og:title" },
-      { content: description, property: "og:description" },
+      { title: meta.title },
+      { content: meta.description, name: "description" },
+      { content: meta.title, property: "og:title" },
+      { content: meta.description, property: "og:description" },
       { content: `${siteUrl}/fluncle-cover.png`, property: "og:image" },
       { content: canonical, property: "og:url" },
       { content: "summary_large_image", name: "twitter:card" },
-      { content: title, name: "twitter:title" },
-      { content: description, name: "twitter:description" },
+      { content: meta.title, name: "twitter:title" },
+      { content: meta.description, name: "twitter:description" },
     ],
     scripts: [jsonLdScript(collectionPage)],
   };

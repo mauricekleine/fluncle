@@ -97,9 +97,24 @@ const fetchArtistsCatalogue = createServerFn({ method: "GET" })
   .validator((data: { cursor?: string; limit?: number }) => data)
   .handler(({ data }) => listArtistsCatalogue({ cursor: data.cursor, limit: data.limit }));
 
-const title = "Fluncle: the artists";
+// Machine-facing strings stay honestly-plain third-person (the Narrator rule), and they carry the
+// genre keyword: "Fluncle: the artists" told a search engine nothing, and Bing flagged the whole
+// hub layer for short titles + identical paged meta (2026-07-18). Paged variants get their page
+// number baked into BOTH strings so no two `?page=N` URLs share identical meta.
+const title = "Drum & bass artists, A to Z · Fluncle";
 const description =
-  "Every artist Fluncle has found and logged in the Galaxy, mapped by the bangers they made.";
+  "Every drum & bass artist Fluncle has found and logged in the Galaxy, A to Z, each mapped by the bangers they made and the labels that pressed them.";
+
+function pagedMeta(page: number): { description: string; title: string } {
+  if (page <= 1) {
+    return { description, title };
+  }
+
+  return {
+    description: `Page ${page} of every drum & bass artist Fluncle has found and logged in the Galaxy, A to Z, each mapped by the bangers they made.`,
+    title: `Drum & bass artists, page ${page} · Fluncle`,
+  };
+}
 
 function artistsHead(loaderData: ArtistsPageData | undefined) {
   if (loaderData?.status !== "found") {
@@ -133,18 +148,20 @@ function artistsHead(loaderData: ArtistsPageData | undefined) {
     url: `${siteUrl}/artists`,
   };
 
+  const meta = pagedMeta(loaderData.page);
+
   return {
     links: [{ href: canonical, rel: "canonical" }],
     meta: [
-      { title },
-      { content: description, name: "description" },
-      { content: title, property: "og:title" },
-      { content: description, property: "og:description" },
+      { title: meta.title },
+      { content: meta.description, name: "description" },
+      { content: meta.title, property: "og:title" },
+      { content: meta.description, property: "og:description" },
       { content: `${siteUrl}/fluncle-cover.png`, property: "og:image" },
       { content: canonical, property: "og:url" },
       { content: "summary_large_image", name: "twitter:card" },
-      { content: title, name: "twitter:title" },
-      { content: description, name: "twitter:description" },
+      { content: meta.title, name: "twitter:title" },
+      { content: meta.description, name: "twitter:description" },
     ],
     // JSON-LD goes through `jsonLdScript`, which HTML-escapes the serialized
     // payload before it reaches the inline <script>'s `children` (rendered raw via

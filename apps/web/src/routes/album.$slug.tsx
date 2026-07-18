@@ -139,12 +139,27 @@ function albumHead(loaderData: AlbumPageData | undefined) {
   // it falls back to the templated line verbatim, so nothing regresses. It describes the page it
   // is actually on, and never names the tier the quieter rows belong to — that tier has no public
   // name (docs/album-entity.md), so "catalogue" cannot leak into a SERP snippet.
+  // The bare fallback folds in the facts the loader already carries (year, label) so even a
+  // bio-less, findings-less record clears the search engines' short-description floor with
+  // something true rather than padding.
+  const releaseYear = releaseDate?.slice(0, 4);
+  const factClause = [
+    releaseYear === undefined ? undefined : `a ${releaseYear} release`,
+    label === undefined
+      ? undefined
+      : // "pressed on" when the label stands alone — "The tracks on X, on Y" doubles the "on".
+        `${releaseYear === undefined ? "pressed " : ""}on ${label.name}`,
+  ]
+    .filter((part) => part !== undefined)
+    .join(" ");
   const description =
     bio !== undefined
       ? bioMetaDescription(bio)
       : findings.length > 0
         ? `Every banger Fluncle has found on ${name} and logged in the Galaxy, ${findings.length} so far, each with a coordinate.`
-        : `The tracks on ${name}, charted in Fluncle's Galaxy.`;
+        : factClause
+          ? `The tracks on ${name}, ${factClause}, charted in Fluncle's Galaxy with the artists behind them.`
+          : `The tracks on ${name}, charted in Fluncle's Galaxy with the artists behind them.`;
   const imageUrl = albumCoverAtSize(coverImageUrl, "large") ?? `${siteUrl}/fluncle-cover.png`;
 
   return {

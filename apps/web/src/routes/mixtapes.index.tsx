@@ -8,8 +8,9 @@ import { listMixtapes } from "@/lib/server/mixtapes";
 
 const fetchMixtapes = createServerFn({ method: "GET" }).handler(() => listMixtapes());
 
-const title = "Fluncle: mixtapes";
-const description = "Fluncle's own DJ mixtapes, checkpoints he mixes from his findings.";
+const title = "Drum & bass mixtapes, mixed from the findings · Fluncle";
+const description =
+  "Fluncle's own DJ mixtapes: drum & bass sets mixed from his findings, each one a checkpoint on the voyage with its own Log ID.";
 
 // oxlint-disable-next-line sort-keys -- TanStack canonical property order (loader before head); see AGENTS.md
 export const Route = createFileRoute("/mixtapes/")({

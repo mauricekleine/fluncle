@@ -95,8 +95,23 @@ const fetchLabelsCatalogue = createServerFn({ method: "GET" })
   .validator((data: { cursor?: string; limit?: number }) => data)
   .handler(({ data }) => listLabelsCatalogue({ cursor: data.cursor, limit: data.limit }));
 
-const title = "Fluncle: the labels";
-const description = "Every record label Fluncle has found a banger on, mapped across the Galaxy.";
+// Machine-facing strings stay honestly-plain third-person (the Narrator rule), and they carry the
+// genre keyword — Bing flagged the hub layer for short, keyword-free titles and identical paged
+// meta (2026-07-18). Paged variants bake their page number into BOTH strings.
+const title = "Drum & bass record labels, A to Z · Fluncle";
+const description =
+  "Every drum & bass record label Fluncle has found a banger on, A to Z: the imprints behind the findings, with the founding facts and lineage that link them.";
+
+function pagedMeta(page: number): { description: string; title: string } {
+  if (page <= 1) {
+    return { description, title };
+  }
+
+  return {
+    description: `Page ${page} of every drum & bass record label Fluncle has found a banger on, A to Z: the imprints behind the findings.`,
+    title: `Drum & bass record labels, page ${page} · Fluncle`,
+  };
+}
 
 function labelsHead(loaderData: LabelsPageData | undefined) {
   if (loaderData?.status !== "found") {
@@ -130,18 +145,20 @@ function labelsHead(loaderData: LabelsPageData | undefined) {
     url: `${siteUrl}/labels`,
   };
 
+  const meta = pagedMeta(loaderData.page);
+
   return {
     links: [{ href: canonical, rel: "canonical" }],
     meta: [
-      { title },
-      { content: description, name: "description" },
-      { content: title, property: "og:title" },
-      { content: description, property: "og:description" },
+      { title: meta.title },
+      { content: meta.description, name: "description" },
+      { content: meta.title, property: "og:title" },
+      { content: meta.description, property: "og:description" },
       { content: `${siteUrl}/fluncle-cover.png`, property: "og:image" },
       { content: canonical, property: "og:url" },
       { content: "summary_large_image", name: "twitter:card" },
-      { content: title, name: "twitter:title" },
-      { content: description, name: "twitter:description" },
+      { content: meta.title, name: "twitter:title" },
+      { content: meta.description, name: "twitter:description" },
     ],
     // JSON-LD goes through `jsonLdScript`, which HTML-escapes the serialized payload before
     // it reaches the inline <script>, so a `</script>` in a vendor-sourced label name can't

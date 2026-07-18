@@ -22,7 +22,7 @@ const fetchGalaxyPanes = createServerFn({ method: "GET" }).handler(() =>
   listGalaxyPanes(PANE_COVER_CAP),
 );
 
-const title = "Fluncle: the galaxies";
+const title = "The sonic galaxies of drum & bass · Fluncle";
 const description =
   "Every finding in the Galaxy, grouped by how it hits. Wander the sonic galaxies of Fluncle's Findings.";
 

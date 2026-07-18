@@ -492,9 +492,9 @@ function crewSeries(rows: ReachRow[]): ReachPoint[] {
     .map(([day, value]) => ({ at: `${day}T00:00:00.000Z`, value }));
 }
 
-const title = "Reach · Fluncle";
+const title = "Fluncle's reach across every platform";
 const description =
-  "Fluncle's reach across every platform, over time: the crew aboard, and how far the findings have carried.";
+  "How far the findings have carried, platform by platform, and the crew aboard over time.";
 
 // The AEO half (docs § Log IDs in search + AI answers): this page is the one place
 // Fluncle's audience numbers exist as DATA, so the head hangs them as `interactionStatistic`

@@ -18,7 +18,7 @@ const fetchLog = createServerFn({ method: "GET" }).handler(() =>
   listTracks({ lean: true, limit: logIndexLimit }),
 );
 
-const title = "Fluncle: the log";
+const title = "The drum & bass log, every finding by coordinate · Fluncle";
 const description =
   "Every finding in Fluncle's log: one Log ID per track, the date it was found, and the coordinate page that decodes it.";
 
