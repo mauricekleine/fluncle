@@ -80,7 +80,6 @@ const MINT_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 /** The `/me/frontier-playlist` mint rate limit — a modest per-user hourly budget. */
 export const FRONTIER_MINT_RATE_LIMIT = 4;
-export const FRONTIER_MINT_RATE_WINDOW_MS = 60 * 60 * 1000;
 
 /** A minted/refreshed playlist's public web URL. */
 export function frontierPlaylistUrl(playlistId: string): string {

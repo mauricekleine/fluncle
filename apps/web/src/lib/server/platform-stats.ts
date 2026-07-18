@@ -25,6 +25,7 @@ import { type FetchImpl, readOptionalEnv } from "./env";
 import { logEvent } from "./log";
 import { getPostizPlatformAnalytics } from "./postiz";
 import { countSegmentRecipients } from "./resend";
+import { clampSnapshotWindow } from "./snapshot-window";
 import { fetchPlaylistFollowerCount } from "./spotify";
 import { getTwitchAccessToken, readTwitchClientId } from "./twitch";
 
@@ -614,11 +615,6 @@ export type PlatformStatsView = {
   windowDays: number;
 };
 
-// The default page window — a season of daily snapshots, bounded so the read stays
-// small (≈ 14 metrics × 90 days).
-const DEFAULT_WINDOW_DAYS = 90;
-const MAX_WINDOW_DAYS = 365;
-
 /** One stored row as `platform_stats` returns it. */
 type PlatformStatDbRow = {
   captured_at: string;
@@ -636,7 +632,7 @@ type PlatformStatDbRow = {
  * value. Bounded by the window, so the read stays small as the ledger grows.
  */
 export async function listPlatformStats(windowDays?: number): Promise<PlatformStatsView> {
-  const window = clampWindow(windowDays);
+  const window = clampSnapshotWindow(windowDays);
   const since = new Date(Date.now() - window * 24 * 60 * 60 * 1000).toISOString();
   const db = await getDb();
 
@@ -672,13 +668,4 @@ export async function listPlatformStats(windowDays?: number): Promise<PlatformSt
   }
 
   return { series: [...byKey.values()], windowDays: window };
-}
-
-/** Clamp the requested window to a sane bounded range (default 90, max 365). */
-function clampWindow(windowDays?: number): number {
-  if (typeof windowDays !== "number" || !Number.isFinite(windowDays) || windowDays <= 0) {
-    return DEFAULT_WINDOW_DAYS;
-  }
-
-  return Math.min(Math.trunc(windowDays), MAX_WINDOW_DAYS);
 }
