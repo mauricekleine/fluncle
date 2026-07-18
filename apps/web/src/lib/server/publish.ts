@@ -383,10 +383,11 @@ No database, Spotify, or Telegram changes were made. Enrichment (label, preview)
     });
   }
   // Best-effort: ping IndexNow (Bing/Yandex + the shared network) so the fresh
-  // log page is crawled within minutes (indexnow.ts). Fire-and-forget via
-  // waitUntil; the key is a PUBLIC ownership token, so this needs no operator
-  // secret and NEVER throws or blocks the publish — same discipline as above.
-  submitFindingToIndexNow(logId);
+  // log page AND the graph pages it joins (artist/label/album) + the /fresh lens are
+  // crawled within minutes (indexnow.ts) — the same surfaces the purge above dropped
+  // from cache. Fire-and-forget via waitUntil; the key is a PUBLIC ownership token, so
+  // this needs no operator secret and NEVER throws or blocks the publish.
+  submitFindingToIndexNow(logId, track.trackId);
 
   const message = `Banger logged
 
@@ -551,7 +552,7 @@ export async function certifyExistingTrack(
     // re-render / re-crawl. All fire-and-forget-safe.
     purgeLogCache(logId);
     purgeTrackEntityPages(trackId);
-    submitFindingToIndexNow(logId);
+    submitFindingToIndexNow(logId, trackId);
   }
 
   const note = options.note ?? row.finding_note ?? undefined;

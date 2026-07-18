@@ -39,6 +39,7 @@ import { ARTIST_INDEX_MIN_FINDINGS, listArtistSitemapRows, parseArtistsJson } fr
 import { getDb, typedRows } from "./db";
 import { GALAXY_INDEX_MIN_FINDINGS, listPublicGalaxies } from "./galaxies-map";
 import { LABEL_INDEX_MIN_TRACKS, listLabelSitemapRows } from "./labels";
+import { getMixChainDepth } from "./tracks";
 
 type TrackRow = {
   added_at: string;
@@ -140,6 +141,7 @@ export async function collectSitemapBags(): Promise<SitemapBags> {
     galaxyEntries,
     labelEntries,
     albumEntries,
+    mixDepth,
   ] = await Promise.all([
     // lastmod = freshest of (video_squared_at, updated_at, added_at). added_at
     // is NOT NULL, and ISO strings sort lexicographically, so coalescing the
@@ -177,6 +179,10 @@ export async function collectSitemapBags(): Promise<SitemapBags> {
     // invariant this file exists to hold.
     listLabelSitemapRows(LABEL_INDEX_MIN_TRACKS),
     listAlbumSitemapRows(ALBUM_INDEX_MIN_TRACKS),
+    // The `/mix` gate — the SAME self-lifting verdict its route checks on every load
+    // (`getMixChainDepth().open`), memoized per-isolate, so the sitemap lists the hub the day
+    // the tool opens to the world and drops it the day it would close, with no deploy.
+    getMixChainDepth(),
   ]);
 
   const logbook: SitemapLogbookEntry[] = typedRows<{
@@ -228,6 +234,7 @@ export async function collectSitemapBags(): Promise<SitemapBags> {
       ...typedRows<TrackRow>(trackResult.rows).map(trackPage),
       ...typedRows<MixtapeRow>(mixtapeResult.rows).map(mixtapePage),
     ],
+    mixOpen: mixDepth.open,
   };
 }
 

@@ -27,7 +27,10 @@ vi.mock("../lib/server/galaxies-map", () => ({
   isGalaxyMapFullyNamed: vi.fn(async () => false),
   listPublicGalaxies: vi.fn(async () => []),
 }));
-vi.mock("../lib/server/tracks", () => ({ getTrackByIdOrLogId }));
+vi.mock("../lib/server/tracks", () => ({
+  getMixChainDepth: vi.fn(async () => ({ open: false })),
+  getTrackByIdOrLogId,
+}));
 // Raster nothing in the test: a fake ImageResponse just carries the passed headers.
 // The fonts are the real bundled bytes from lib/server/satori-render (Vite's
 // `?inline` resolves under vitest), so nothing font-side needs mocking.

@@ -117,6 +117,10 @@ export const Route = createFileRoute("/account")({
           "Private Fluncle account settings, Galaxy progress, saved findings, and submissions.",
         name: "description",
       },
+      // A private, per-user surface (identity, saves, Galaxy progress): it exists for the
+      // signed-in crew, but there is nothing here for a crawler to index — same posture as
+      // /recommendations. Self-canonical above, `noindex` here.
+      { content: "noindex", name: "robots" },
     ],
   }),
   component: AccountPage,

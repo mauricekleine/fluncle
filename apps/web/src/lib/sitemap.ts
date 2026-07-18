@@ -126,6 +126,13 @@ export type SitemapBags = {
   logbook: SitemapLogbookEntry[];
   /** The `/log/<coordinate>` pages: findings AND published mixtapes. */
   logs: SitemapLogPage[];
+  /**
+   * Whether `/mix` is open to the world — the route's own self-lifting gate
+   * (`getMixChainDepth().open`). Listed in `pages` only while true, exactly as `/galaxies`
+   * rides `galaxies.length`: the launch gate self-lifts with no deploy, and the sitemap
+   * lights the hub up the same day the tool does.
+   */
+  mixOpen: boolean;
 };
 
 export const EMPTY_SITEMAP_BAGS: SitemapBags = {
@@ -135,6 +142,7 @@ export const EMPTY_SITEMAP_BAGS: SitemapBags = {
   labels: [],
   logbook: [],
   logs: [],
+  mixOpen: false,
 };
 
 // Escape the five XML metacharacters so a Spotify-sourced title/artist or an
@@ -293,6 +301,16 @@ function kindEntries(kind: SitemapKind, bags: SitemapBags): string[] {
         staticEntry(`${siteUrl}/about`),
         staticEntry(`${siteUrl}/privacy`),
         staticEntry(`${siteUrl}/galaxy`),
+        // The console pages — real, self-canonical, indexable surfaces that were footer-only
+        // for discovery until now: the docs hub, the reach page, and the live status board.
+        staticEntry(`${siteUrl}/docs`),
+        staticEntry(`${siteUrl}/reach`),
+        staticEntry(`${siteUrl}/status`),
+        // The `/mix` tool — listed only while its self-lifting gate is open (the same
+        // `getMixChainDepth().open` the route checks). Closed, the tool is private (operator
+        // + strangers sent home), so it stays out of the sitemap; the day the archive is deep
+        // enough it opens on its own, the hub lights up here with no deploy.
+        ...(bags.mixOpen ? [staticEntry(`${siteUrl}/mix`)] : []),
         // The `/galaxies` lens index — listed only once the launch gate has opened (the route
         // feeds an empty `galaxies` bag before then, keeping the pre-launch dark state).
         ...(bags.galaxies.length > 0 ? [staticEntry(`${siteUrl}/galaxies`)] : []),
