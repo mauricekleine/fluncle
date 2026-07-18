@@ -1067,6 +1067,11 @@ async function captureFinding(finding: CaptureFinding): Promise<FindingOutcome> 
 
   const dir = mkdtempSync(join(tmpdir(), "fluncle-capture-"));
 
+  // The bad-audio memory lives OUTSIDE the try: a run that grew it and then errored still
+  // persists it on the `failed` patch in the catch, so a paid-for rejection is never lost.
+  let rejectedMemory: RejectedSource[] = parseRejectedSources(finding.sourceAudioRejected);
+  let memoryDirty = false;
+
   try {
     // THE SEARCH LADDER (bounded — QUERY_VARIANTS billed searches max, never a loop).
     // Ranked ACCEPTANCE is the gate between steps, not raw-candidate count: the 2026-07-14
@@ -1138,8 +1143,6 @@ async function captureFinding(finding: CaptureFinding): Promise<FindingOutcome> 
     // `source_audio_key`) is folded into the same backstop, so a row quarantined before the
     // general memory shipped still refuses its known-bad bytes. `memoryDirty` tracks whether this
     // run added a rejection, so the terminal write persists the grown memory exactly once.
-    let rejectedMemory: RejectedSource[] = parseRejectedSources(finding.sourceAudioRejected);
-    let memoryDirty = false;
     const rejectedIds = rejectedVideoIds(rejectedMemory);
     const knownBadShas = rejectedShas(rejectedMemory);
     const legacyRejectHash = extractSourceAudioSha256(finding.sourceAudioKey);
@@ -1166,10 +1169,10 @@ async function captureFinding(finding: CaptureFinding): Promise<FindingOutcome> 
     // Walk the (pre-filtered) candidates: download → known-bad sha backstop → real-duration
     // re-check → THE FINGERPRINT GATE. A verified MATCH (or an abstain, when there is no
     // reference) is stored + stamped; a fingerprint MISMATCH rejects the candidate, remembers it,
-    // and falls through to the next upload. A DRM/bot-walled hit is skipped (recoverable); a
-    // non-recoverable error aborts (→ `failed`).
+    // and falls through to the next upload. A DRM/bot-walled hit is skipped (recoverable) but
+    // keeps the run off the terminal `unmatched` (see below); a non-recoverable error aborts
+    // (→ `failed`).
     let lastError: unknown;
-    let sawRejection = false;
     for (const candidate of attempts) {
       try {
         let file: { ext: string; path: string };
@@ -1198,7 +1201,6 @@ async function captureFinding(finding: CaptureFinding): Promise<FindingOutcome> 
         if (knownBadShas.has(fileDigest)) {
           log(`candidate ${candidate.candidate.id} is the known wrong audio — trying next`);
           rmSync(file.path, { force: true });
-          sawRejection = true;
           continue;
         }
 
@@ -1228,7 +1230,6 @@ async function captureFinding(finding: CaptureFinding): Promise<FindingOutcome> 
           memoryDirty = true;
           knownBadShas.add(fileDigest);
           rmSync(file.path, { force: true });
-          sawRejection = true;
           continue;
         }
 
@@ -1275,12 +1276,15 @@ async function captureFinding(finding: CaptureFinding): Promise<FindingOutcome> 
       }
     }
 
-    // Nothing stored. Either every fresh candidate was WRONG AUDIO (known-bad or a fingerprint
-    // mismatch) or wrong-length, or the pre-filter left nothing to try. Land `unmatched` (terminal
-    // — the queue never re-burns it; a fresh finding still jumps it newest-first) and PERSIST the
-    // grown memory so the next re-capture skips the rejected sources. A genuine download error
-    // (nothing was rejected) rethrows to the `failed` path instead.
-    if (sawRejection || rejectedIds.size > 0 || !lastError) {
+    // Nothing stored. `unmatched` (terminal — the queue never re-burns it; a fresh finding
+    // still jumps it newest-first) is landed ONLY when the walk actually DISPROVED every
+    // upload: each fresh candidate was WRONG AUDIO (known-bad or a fingerprint mismatch) or
+    // wrong-length, or the pre-filter left nothing to try. A recoverable skip (DRM/bot-wall)
+    // disproves nothing — the skipped upload can be the RIGHT audio (the 047.0.8M case: the
+    // correct art-track bot-walled, two wrong songs fingerprint-rejected, and the rejections
+    // masked the transient error into a terminal verdict) — so any `lastError` rethrows into
+    // the retryable `failed` path, whose patch carries the grown memory too.
+    if (!lastError) {
       const update: Record<string, unknown> = {
         captureStatus: "unmatched",
         sourceAudioAttemptedAt: new Date().toISOString(),
@@ -1301,11 +1305,15 @@ async function captureFinding(finding: CaptureFinding): Promise<FindingOutcome> 
     // absent → 0 → a first failure lands 1, a second lands 2, … up to the cap.
     const priorFailures =
       typeof finding.sourceAudioFailures === "number" ? finding.sourceAudioFailures : 0;
-    await patchTrack(trackId, {
+    const update: Record<string, unknown> = {
       captureStatus: "failed",
       sourceAudioAttemptedAt: new Date().toISOString(),
       sourceAudioFailures: priorFailures + 1,
-    }).catch((patchError: unknown) => {
+    };
+    if (memoryDirty) {
+      update.sourceAudioRejected = JSON.stringify(rejectedMemory);
+    }
+    await patchTrack(trackId, update).catch((patchError: unknown) => {
       log(`failed to record failure for ${trackId}: ${String(patchError)}`);
     });
     log(
