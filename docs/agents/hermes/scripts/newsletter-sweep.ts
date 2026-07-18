@@ -79,6 +79,13 @@ const FIND_CAP = Number(process.env.NEWSLETTER_FIND_CAP ?? "50");
 const PAGE_LIMIT = 48; // /api/tracks page size (matches the doctrine)
 const PAGE_CAP = 12; // hard ceiling on pages fetched (backstop against a cursor loop)
 
+// The anti-sameness rail (the light half — the ledger holds the heavy rail until ≥4
+// editions): how many of the most-recent SENT editions to mine for already-sent why-lines,
+// and how many of those lines to hand the author as SPENT moves. Small on purpose — the
+// moves worth writing past are the recent ones, and the corpus is n=1 sent edition today.
+const PRIOR_EDITION_CAP = 4;
+const PRIOR_WHY_CAP = 12;
+
 const DISCORD_ALERT_WEBHOOK = process.env.DISCORD_ALERT_WEBHOOK;
 
 // --dry-run: do everything EXCEPT persist + deliver — print what WOULD be drafted.
@@ -92,7 +99,7 @@ const log = (message: string) => console.error(`[newsletter-sweep] ${message}`);
 // ---------------------------------------------------------------------------
 
 type Edition = {
-  content?: { galaxies?: Array<{ findings?: unknown[] }>; mixtapeRef?: unknown };
+  content?: { galaxies?: Array<{ findings?: Array<{ why?: unknown }> }>; mixtapeRef?: unknown };
   id?: string;
   number?: number | null;
   status?: string;
@@ -256,6 +263,50 @@ function computeSince(editions: Edition[], nowIso: string): string {
   return weekAgo.toISOString();
 }
 
+/**
+ * The why-lines already sent, mined from the most-recent SENT editions' content — handed
+ * to the author as SPENT moves (the sibling of the logbook sweep's spent titles/openers).
+ * A why that has already gone out to the list is a move to write past, not repeat.
+ *
+ * Best-effort by construction: only sent editions count, newest first; an edition whose
+ * content is missing or malformed contributes nothing and never throws. Empty on a fresh
+ * list (no sent edition yet), which the template reads as absent.
+ */
+export function collectPriorWhys(editions: Edition[]): string[] {
+  const sent = editions
+    .filter((e) => e.status === "sent")
+    .sort((a, b) => (b.number ?? 0) - (a.number ?? 0))
+    .slice(0, PRIOR_EDITION_CAP);
+
+  const whys: string[] = [];
+
+  for (const edition of sent) {
+    const galaxies = edition.content?.galaxies;
+
+    if (!Array.isArray(galaxies)) {
+      continue;
+    }
+
+    for (const block of galaxies) {
+      const findings = block?.findings;
+
+      if (!Array.isArray(findings)) {
+        continue;
+      }
+
+      for (const finding of findings) {
+        const why = typeof finding?.why === "string" ? finding.why.trim() : "";
+
+        if (why) {
+          whys.push(why);
+        }
+      }
+    }
+  }
+
+  return whys.slice(0, PRIOR_WHY_CAP);
+}
+
 function fetchFindings(since: string, until: string): Finding[] {
   const findings: Finding[] = [];
   let cursor: string | undefined;
@@ -336,6 +387,14 @@ function mixtapeBlock(mixtapes: Mixtape[]): string {
   return lines.length ? lines.join("\n") : "(none)";
 }
 
+// The already-sent why-lines as the author reads them: one bullet per line. Empty string
+// when there is no history (the template's `{{#if priorWhys}}` then drops the whole block).
+// Shared by BOTH prompt paths so the registry template and the baked fallback cannot drift.
+
+function priorWhysBlock(priorWhys: string[]): string {
+  return priorWhys.map((why) => `- ${why}`).join("\n");
+}
+
 // ---------------------------------------------------------------------------
 // THE PROMPT VARIABLES — the facts `buildAuthoringPrompt` used to interpolate in TS,
 // handed to the REGISTRY template instead. The prose (the JSON shape, the voice rails,
@@ -344,15 +403,17 @@ function mixtapeBlock(mixtapes: Mixtape[]): string {
 // entry exactly, or the template renders holes.
 // ---------------------------------------------------------------------------
 
-function promptVariables(
+export function promptVariables(
   findings: Finding[],
   mixtapes: Mixtape[],
+  priorWhys: string[] = [],
 ): Record<string, string | undefined> {
   return {
     findingCount: String(findings.length),
     findings: findingBlock(findings),
     mixtapeCount: String(mixtapes.length),
     mixtapes: mixtapeBlock(mixtapes),
+    priorWhys: priorWhysBlock(priorWhys),
   };
 }
 
@@ -360,7 +421,21 @@ function promptVariables(
 // (see `authorEdition`); this builder is what runs when that fetch fails for ANY reason.
 // Keep it in lockstep with the `newsletter_edition` default body in
 // apps/web/src/lib/server/prompts.ts.
-export function buildAuthoringPrompt(findings: Finding[], mixtapes: Mixtape[]): string {
+export function buildAuthoringPrompt(
+  findings: Finding[],
+  mixtapes: Mixtape[],
+  priorWhys: string[] = [],
+): string {
+  // The already-sent why-lines as a list of what the list has read (present only when there
+  // is history — the first edition has none). Mirrors the `{{#if priorWhys}}` template block.
+  const priorBlock = priorWhys.length
+    ? [
+        "ALREADY SENT (the whys from recent editions — the list has already read every one; write past them, never echo a move):",
+        priorWhysBlock(priorWhys),
+        "",
+      ]
+    : [];
+
   return [
     "You are Fluncle, authoring this week's newsletter edition — the uncle with the good records, writing a letter to the people on his list.",
     "Load and apply the `copywriting-fluncle` skill BEFORE you write a word — it is the full voice canon (Email register) and governs every line. Let it win over anything restated here.",
@@ -378,8 +453,9 @@ export function buildAuthoringPrompt(findings: Finding[], mixtapes: Mixtape[]): 
     "",
     'SINGLE LIST: do NOT group or label by galaxy (placement is not shown in the newsletter). Emit EXACTLY ONE block with `galaxy` set to "" (an empty string), listing every finding in the order given below (newest-first). Never mention galaxies, the vibe map, or placement anywhere in your prose.',
     "",
-    "THE WHY: each finding's note below is Fluncle's own words on why it made the cut — your PRIMARY material for that finding's `why`; quote or lightly adapt it. NEVER invent a reason for a finding with no note — OMIT its `why` entirely. Keep each `why` to one breath. A mixtape's note is its dream note.",
+    "THE WHY: each finding's note below is Fluncle's own words on why it made the cut — your PRIMARY material for that finding's `why`; quote or lightly adapt it. NEVER invent a reason for a finding with no note — OMIT its `why` entirely. Keep each `why` to one breath. A mixtape's note is its dream note. Within one edition, when several notes reach for the same move — the body-clock formula (\"knees went up before I'd clocked the drop\" / \"shoulders dropped and stayed down\") or any shared image — vary which part of each note you quote so no two whys rhyme, leaning each why on a different beat of its own note.",
     "",
+    ...priorBlock,
     "FINDING REFS: each finding is ONLY { logId, why } — never the artist, title, or URL (the render hydrates each logId to its live Artist — Title + links). `mixtapeRef` is present ONLY if a mixtape is listed below; never invent one. `tidbits` are optional and strict — only recent, concrete, source-linked artist facts you are sure of, at most 2-3, never fabricated; omit when you have none. `intro` is always present.",
     "",
     "VOICE (copywriting-fluncle is canon and overrides this): the Email register, a letter from a bruv; first person 'I', never 'we'; no exclamation marks; if a sentence reads written rather than said out loud to a mate, rewrite it. The 'Ahoy cosmonauts,' open and the 'Happy raving,' / 'Fluncle' close are added by the render — do NOT put them in `intro`.",
@@ -427,11 +503,12 @@ function countFindings(content: { galaxies?: Array<{ findings?: unknown[] }> }):
 async function authorEdition(
   findings: Finding[],
   mixtapes: Mixtape[],
+  priorWhys: string[],
 ): Promise<AuthoredEdition | null> {
   const { prompt, promptVersion } = await resolveSweepPrompt({
-    fallback: () => buildAuthoringPrompt(findings, mixtapes),
+    fallback: () => buildAuthoringPrompt(findings, mixtapes, priorWhys),
     slug: "newsletter_edition",
-    variables: promptVariables(findings, mixtapes),
+    variables: promptVariables(findings, mixtapes, priorWhys),
   });
 
   if (promptVersion === null) {
@@ -699,11 +776,13 @@ async function main(): Promise<void> {
     return;
   }
 
-  // 5. AUTHOR (the one agentic step)
+  // 5. AUTHOR (the one agentic step). The already-sent why-lines ride in as SPENT moves —
+  // derived here from the sent editions `listEditions` already read, no extra round-trip.
+  const priorWhys = collectPriorWhys(editions);
   let authored: AuthoredEdition | null;
 
   try {
-    authored = await authorEdition(findings, mixtapes);
+    authored = await authorEdition(findings, mixtapes, priorWhys);
   } catch (error) {
     if (error instanceof ClaudeAuthError) {
       pingClaudeAuthFailure(error.message);
