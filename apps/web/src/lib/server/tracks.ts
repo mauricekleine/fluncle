@@ -844,6 +844,32 @@ export async function getTrackContextNote(idOrLogId: string): Promise<string | n
 }
 
 /**
+ * The stored observation script + its prompt-version provenance, for the force
+ * re-render path: a re-render of the SAME script is not a re-author, so the row's
+ * provenance must survive it (a null here can mean "authored before the registry" —
+ * an honest null the render path must not overwrite). Column-only read like
+ * `getTrackContextNote`.
+ */
+export async function getObservationProvenance(
+  idOrLogId: string,
+): Promise<{ promptVersion: number | null; script: string | null }> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [idOrLogId, idOrLogId],
+    sql: `select observation_script, observation_prompt_version from findings where track_id = ? or log_id = ? limit 1`,
+  });
+  const row = typedRow<{
+    observation_prompt_version: number | null;
+    observation_script: string | null;
+  }>(result.rows);
+
+  return {
+    promptVersion: row?.observation_prompt_version ?? null,
+    script: row?.observation_script ?? null,
+  };
+}
+
+/**
  * The R2 key of a finding's captured FULL SONG (`source_audio_key`), or null when
  * the finding is unknown OR not yet captured. A dedicated column-only read (like
  * `getTrackContextNote`) rather than a widening of `TRACK_SELECT`/`toTrackListItem`:
