@@ -316,11 +316,16 @@ export const getSimilarArtistsSpec = defineSpec({
 // `tier: "catalogue"` — unlike search_archive/list_fresh (both registers ⇒ lore-canon), a browse
 // returns ONLY the catalogue register. The descriptions signal that register ("named and listed,
 // never spoken as found") without naming a leakable tier-noun or any mechanism (the Flat Copy Test).
+//
+// NOTE on the `title`s: they name the internal tier word ("catalogue"). That is a TOOLING-REGISTER
+// surface only (a human label for the tool in an MCP client / the workbench) — it must NEVER be
+// rendered as crew-facing card chrome. The chat card stays bare/unheaded (DESIGN.md §157, the Unlit
+// Rule); the tier is never a noun the crew reads.
 
 export const listAlbumCatalogueSpec = defineSpec({
   access: "public",
   description:
-    "List the tracks on one album Fluncle knows, BY NAME (e.g. Colours). These are records he knows are out there but has never certified as a finding: named and listed only, never spoken as found. Each row carries its artists, its title, and a way to hear it, nothing more. Returns nothing when the name matches no album he knows.",
+    "List the tracks on one album Fluncle knows, BY NAME (e.g. Colours). These are records he knows are out there but has never certified as a finding: named and listed only, never spoken as found. Each row carries its artists, its title, and a Spotify link when there's one, nothing more. Returns nothing when the name matches no album he knows.",
   effect: "read",
   input: z.object({
     name: z.string().min(1).describe("The album's title, as it reads on a record (e.g. Colours)."),
@@ -328,14 +333,14 @@ export const listAlbumCatalogueSpec = defineSpec({
   name: "list_album_catalogue",
   project: { chat: "twoBucket", mcp: "publicRecord" },
   tier: "catalogue",
-  title: "An album's catalogue",
+  title: "List an album's catalogue",
   transports: ["mcp", "chat"],
 });
 
 export const listArtistCatalogueSpec = defineSpec({
   access: "public",
   description:
-    "List one artist's tracks Fluncle knows but has never made a finding, BY NAME (e.g. Netsky). These are records of theirs he knows are out there but has never certified: named and listed only, never spoken as found. Each row carries the artists, the title, and a way to hear it, nothing more. Returns nothing when the name matches no artist he knows.",
+    "List one artist's tracks Fluncle knows, BY NAME (e.g. Netsky). These are records of theirs he knows are out there but has never certified as a finding: named and listed only, never spoken as found. Each row carries the artists, the title, and a Spotify link when there's one, nothing more. Returns nothing when the name matches no artist he knows.",
   effect: "read",
   input: z.object({
     name: z.string().min(1).describe("The artist's name, as it reads on a finding (e.g. Netsky)."),
@@ -343,14 +348,14 @@ export const listArtistCatalogueSpec = defineSpec({
   name: "list_artist_catalogue",
   project: { chat: "twoBucket", mcp: "publicRecord" },
   tier: "catalogue",
-  title: "An artist's catalogue",
+  title: "List an artist's catalogue",
   transports: ["mcp", "chat"],
 });
 
 export const listLabelCatalogueSpec = defineSpec({
   access: "public",
   description:
-    "List the tracks on one label Fluncle knows but has never made a finding, BY NAME (e.g. Hospital Records). These are records on it he knows are out there but has never certified: named and listed only, never spoken as found. Each row carries the artists, the title, and a way to hear it, nothing more. Returns nothing when the name matches no label he knows.",
+    "List the tracks on one label Fluncle knows, BY NAME (e.g. Hospital Records). These are records on it he knows are out there but has never certified as a finding: named and listed only, never spoken as found. Each row carries the artists, the title, and a Spotify link when there's one, nothing more. Returns nothing when the name matches no label he knows.",
   effect: "read",
   input: z.object({
     name: z
@@ -361,7 +366,7 @@ export const listLabelCatalogueSpec = defineSpec({
   name: "list_label_catalogue",
   project: { chat: "twoBucket", mcp: "publicRecord" },
   tier: "catalogue",
-  title: "A label's catalogue",
+  title: "List a label's catalogue",
   transports: ["mcp", "chat"],
 });
 
