@@ -21,12 +21,7 @@ export function FreshViewControl({
 }) {
   return (
     <div className="fresh-views">
-      <SegmentedControl
-        label="What to show"
-        onChange={onChange}
-        options={VIEW_OPTIONS}
-        value={view}
-      />
+      <SegmentedControl label="View" onChange={onChange} options={VIEW_OPTIONS} value={view} />
     </div>
   );
 }
