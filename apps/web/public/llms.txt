@@ -39,7 +39,7 @@ Each page leads with the findings Fluncle has logged there. An artist, label, or
 ## Data
 
 - [RSS feed](https://www.fluncle.com/rss.xml): the 25 most recent findings and mixtapes
-- [Fresh releases feed](https://www.fluncle.com/fresh.xml): the newest drum & bass releases over a 30-day window, as RSS (release-dated). Per-entity twins live at /artist/<slug>/fresh.xml and /label/<slug>/fresh.xml — the same feed narrowed to one artist or one label
+- [Fresh releases feed](https://www.fluncle.com/fresh.xml): the newest drum & bass releases over a 30-day window, as RSS (release-dated). Per-entity twins live at /artist/<slug>/fresh.xml and /label/<slug>/fresh.xml: the same feed narrowed to one artist or one label
 - [Tracks API](https://www.fluncle.com/api/v1/tracks): the archive as JSON, cursor-paginated; accepts limit (max 48) and cursor query params
 - [Mixtapes API](https://www.fluncle.com/api/v1/mixtapes): published mixtapes as JSON
 - [Random track](https://www.fluncle.com/api/v1/tracks/random): one pick from the archive, as JSON
