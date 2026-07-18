@@ -166,6 +166,22 @@ clear_fail() {
   awk -F'\t' -v id="$id" '$1!=id' "$FAILS_FILE" 2>/dev/null >"$FAILS_FILE.tmp" && mv "$FAILS_FILE.tmp" "$FAILS_FILE"
 }
 
+# `0` (success) when the finding now carries a SHIPPED video — the REAL proof a render
+# worked, as opposed to a bare EXIT=0. A render can exit clean without shipping a video: the
+# `claude -p` agent gets cut off mid-render by a usage limit (a clean exit, no video), or it
+# renders a video the quality gates reject and withholds it. Treating that EXIT=0 as success
+# clears the poison ledger and re-picks the SAME finding forever — the head-of-line loop
+# (2026-07-17: 047.8.6J, then 047.6.6P, each spent hours false-succeeding). Best-effort: on
+# any API/parse failure it returns 0 (assume shipped) so a transient read glitch NEVER wrongly
+# poisons a good render — a real success is the norm, the no-video false-success the exception.
+render_produced_video() {
+  local id="$1" out
+  [ -n "$id" ] || return 0
+  out="$("$FLUNCLE_BIN" admin tracks get "$id" --json 2>/dev/null || printf '')"
+  [ -n "$out" ] || return 0
+  printf '%s' "$out" | "$BUN_BIN" -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const t=JSON.parse(s).track||{};process.exit(t.videoUrl?0:1)}catch(e){process.exit(0)}})'
+}
+
 # Freshen a RESUMED snapshot's stale checkout to current `main`. The render box is
 # scale-to-zero (asleep but for a render), so it can't watch `main` itself like the
 # rave-02 `fluncle-pin-watch` timer — the conductor does it here, at wake, before the
@@ -301,12 +317,22 @@ if [ "$state" = "rendering" ]; then
     emit_render_cost "$(read_or "$RENDER_LOGID_FILE" '')" "$render_iso" "${result##*DURATION=}"
 
     # Poison accounting: a non-zero render EXIT (it ran but failed — e.g. the 13s crash)
-    # counts against this finding; a clean EXIT=0 clears its ledger (a good render proves
-    # the finding and the pipeline). The idle pick below then skips a poisoned head.
+    # counts against this finding. A clean EXIT=0 is NOT proof on its own — a render can exit
+    # clean without shipping a video (a usage-limit cutoff, or a gate-rejected video withheld).
+    # So an EXIT=0 clears the ledger ONLY when the video actually landed; a no-video EXIT=0 is
+    # a FALSE success and counts as a failure, so a serially-false-succeeding finding poisons
+    # and is skipped (2026-07-17 loop). The idle pick below then skips a poisoned head.
     rendered_logid="$(read_or "$RENDER_LOGID_FILE" '')"
     render_exit="${result#EXIT=}"; render_exit="${render_exit%% *}"
     case "$render_exit" in
-      0) clear_fail "$rendered_logid" ;;
+      0)
+        if render_produced_video "$rendered_logid"; then
+          clear_fail "$rendered_logid"
+        else
+          log "render EXIT=0 but $rendered_logid still has no video — false success, counting as a failure"
+          bump_fail "$rendered_logid"
+        fi
+        ;;
       '' | *[!0-9]*) : ;; # unparseable exit — leave the ledger untouched
       *) bump_fail "$rendered_logid" ;;
     esac
