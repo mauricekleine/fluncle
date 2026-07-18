@@ -58,6 +58,11 @@ const PUBLIC_ROUTE_OPS: Record<string, string> = {
   "GET /me": "get_current_private_user",
   "GET /me/csrf": "get_private_mutation_token",
   "GET /me/export/{exportId}": "get_private_account_export",
+  // The frozen Frontier editions history — contract-only oRPC (no TanStack route file
+  // under /api/v1/me), documented here as part of the public surface net. Private-session
+  // at the op (the session read scopes by user); zero editions is a clean empty array.
+  "GET /me/frontier-editions": "list_private_frontier_editions",
+  "GET /me/frontier-editions/{number}": "get_private_frontier_edition",
   "GET /me/galaxy-progress": "get_private_galaxy_progress",
   // The cross-device preferences store — contract-only oRPC (no TanStack route file
   // under /api/v1/me), documented here as part of the public surface net.

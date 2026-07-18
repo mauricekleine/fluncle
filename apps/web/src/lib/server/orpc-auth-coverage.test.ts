@@ -342,6 +342,10 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   get_mixable_order: "admin",
   get_mixtape_social: "admin",
   get_private_account_export: "private-session",
+  // One of the signed-in user's frozen Frontier editions + its tracklist — private-session
+  // (privateUserAuth), the get_private_frontier_playlist precedent. Scoped by the session
+  // user; the number alone never reaches another user's edition.
+  get_private_frontier_edition: "private-session",
   // The signed-in user's Frontier playlist state (E2) — private-session
   // (privateUserAuth), the get_private_galaxy_progress precedent.
   get_private_frontier_playlist: "private-session",
@@ -414,6 +418,9 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // (agent-allowed): the box sweep reads the neighbourhood every tick, and both are pure reads.
   list_observation_neighbours: "admin",
   list_observation_rejections: "admin",
+  // The signed-in user's frozen Frontier editions list ("past editions" dropdown) —
+  // private-session (privateUserAuth), the list_private_saved_findings precedent.
+  list_private_frontier_editions: "private-session",
   // The collection browser read (the /account Galaxy tab) — private-session
   // (privateUserAuth), the get_private_galaxy_progress precedent.
   list_private_galaxy_collection: "private-session",

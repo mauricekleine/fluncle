@@ -66,8 +66,91 @@ export const getPrivateFrontierPlaylist = oc
     }),
   );
 
+/**
+ * One frozen edition's summary — a "past editions" dropdown row. `number` is the
+ * per-user monotonic edition number (the ONE name — column, DTO, path param);
+ * `refreshedAt` is the UTC instant the refresh froze (the date label derives from
+ * it); `trackCount` is how many tracks the frozen playlist carried.
+ */
+export const FrontierEditionSummarySchema = z.object({
+  number: z.number(),
+  refreshedAt: z.string(),
+  trackCount: z.number(),
+});
+
+/**
+ * One frozen track in an edition — everything the dialog renders without a JOIN.
+ * `slot` + `logId` drive the finding/catalogue register split; a catalogue row
+ * carries no `logId`. The instrument chips (`bpm`/`key`/`durationMs`) are frozen
+ * readouts, present when they were known at freeze time.
+ */
+export const FrontierEditionTrackSchema = z.object({
+  artists: z.array(z.string()),
+  bpm: z.number().optional(),
+  durationMs: z.number().optional(),
+  imageUrl: z.string().optional(),
+  key: z.string().optional(),
+  logId: z.string().optional(),
+  slot: z.enum(["catalogue", "finding"]),
+  spotifyUrl: z.string().optional(),
+  title: z.string(),
+  trackId: z.string(),
+});
+
+/**
+ * `list_private_frontier_editions` → `GET /me/frontier-editions`
+ * (operationId `listPrivateFrontierEditions`).
+ *
+ * The signed-in user's frozen Frontier editions, newest first — the "past editions"
+ * dropdown's list and the history read. Scoped to the session user. Zero editions is
+ * a clean empty array, never a 404. A missing session is the rails-encoded 401.
+ */
+export const listPrivateFrontierEditions = oc
+  .route({
+    method: "GET",
+    operationId: "listPrivateFrontierEditions",
+    path: "/me/frontier-editions",
+    summary: "List the signed-in user's frozen Frontier editions",
+    tags: ["Me"],
+  })
+  .output(
+    z.object({
+      editions: z.array(FrontierEditionSummarySchema),
+      ok: z.literal(true),
+    }),
+  );
+
+/**
+ * `get_private_frontier_edition` → `GET /me/frontier-editions/{number}`
+ * (operationId `getPrivateFrontierEdition`).
+ *
+ * One of the signed-in user's frozen editions + its tracklist, by the per-user
+ * edition number. `number` is a raw path string (the rails keep params raw); the
+ * handler parses it and scopes the read by the session user, so the number alone
+ * never reaches another user's edition. 404 if the user has no edition with that
+ * number.
+ */
+export const getPrivateFrontierEdition = oc
+  .route({
+    method: "GET",
+    operationId: "getPrivateFrontierEdition",
+    path: "/me/frontier-editions/{number}",
+    summary: "Get one of the signed-in user's frozen Frontier editions",
+    tags: ["Me"],
+  })
+  .input(z.object({ number: z.string() }))
+  .output(
+    z.object({
+      edition: FrontierEditionSummarySchema,
+      ok: z.literal(true),
+      tracks: z.array(FrontierEditionTrackSchema),
+    }),
+  );
+
 /** The `me-frontier` domain's ops, merged into the root contract by `./index.ts`. */
 export const meFrontierContract = {
+  get_private_frontier_edition: getPrivateFrontierEdition,
   get_private_frontier_playlist: getPrivateFrontierPlaylist,
+  list_private_frontier_editions: listPrivateFrontierEditions,
   mint_private_frontier_playlist: mintPrivateFrontierPlaylist,
 };

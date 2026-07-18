@@ -258,7 +258,11 @@ export {
 } from "./admin-tracks";
 export { adminFrontierContract, refreshFrontierPlaylists } from "./admin-frontier";
 export {
+  FrontierEditionSummarySchema,
+  FrontierEditionTrackSchema,
+  getPrivateFrontierEdition,
   getPrivateFrontierPlaylist,
+  listPrivateFrontierEditions,
   meFrontierContract,
   mintPrivateFrontierPlaylist,
 } from "./me-frontier";
