@@ -230,12 +230,17 @@ type EntityRow = {
 /** How many jump targets one kind may offer beside the rows. */
 const ENTITY_LIMIT = 3;
 
+/** A read for one entity kind: the SQL, plus how many times its `predicate` binds the needle. */
+type EntityQuery = { needleBinds: number; sql: string };
+
 /**
  * The read for one entity kind, with `predicate` closing over `lower(name)`.
  *
  * `kind` is a closed union and `predicate` is one of two literals below — nothing a stranger
  * typed is ever interpolated here; the needle and the limit are BIND ARGS, as everywhere else
- * in this file.
+ * in this file. `needleBinds` reports how many `?` in the returned SQL consume the needle, so
+ * {@link matchEntities} binds it exactly that many times (an artist matches the needle against
+ * its name AND its aliases, so it binds more than once).
  *
  * An ARTIST is listed whatever it carries: the table is minted off the artist graph and every
  * row has a page. A LABEL or an ALBUM must have at least one CERTIFIED finding on it, and that
@@ -245,13 +250,40 @@ const ENTITY_LIMIT = 3;
  * put on the `/labels` and `/albums` index rows, so a label reads here exactly as it reads there.
  * A LABEL additionally carries its own logo (`labels.image_key`); the mapper leads with it over
  * the cover, so the search row shows the real logo when the sweep has resolved one.
+ *
+ * AN ARTIST ANSWERS TO EVERY NAME. Beyond the canonical `artists.name`, the artist read also
+ * resolves through `artist_aliases` — the MusicBrainz-harvested AKAs that solve DnB's many-names
+ * problem (a producer records under several names for one identity; `artist-resolution.ts` writes
+ * them). The alias is matched by the SAME `predicate` as the name — exact in tier 2, prefix in
+ * tier 3 — so an AKA becomes a jump target exactly as the primary name is, and it does so in the
+ * DETERMINISTIC tiers, in front of the model: alias resolution keeps working when the LLM is down.
+ * The alias set is gated to the SAME trust the public `alternateName` uses: a real display-name
+ * alias (`kind='name'`) that is trusted (`status in ('auto','confirmed')`). A `hint` — a weak MB
+ * "Search hint" lead, never rendered publicly — never resolves a search either. `name_rank` breaks
+ * a tie the primary name's way: an artist the query names DIRECTLY outranks one it reaches only
+ * through an alias, so a name that is one artist's primary and another's AKA still lands on the
+ * primary. Matched on `lower(alias)` — the same case-insensitive raw compare the name uses, not
+ * the slug — and correlated by `artist_id` (`artist_aliases_artist_id_idx`), over an `artists`
+ * table that stays archive-sized, so the read is bounded however deep the catalogue gets.
  */
-function entitySql(kind: SearchEntity["kind"], predicate: string): string {
+function entitySql(kind: SearchEntity["kind"], predicate: string): EntityQuery {
   if (kind === "artist") {
-    return `select name, slug, image_url, image_key, image_state, image_updated_at from artists
-            where lower(name) ${predicate}
-            order by length(name) asc, name asc
-            limit ?`;
+    return {
+      needleBinds: 3,
+      sql: `select artists.name as name, artists.slug as slug, artists.image_url as image_url,
+              artists.image_key as image_key, artists.image_state as image_state,
+              artists.image_updated_at as image_updated_at,
+              case when lower(artists.name) ${predicate} then 0 else 1 end as name_rank
+            from artists
+            where lower(artists.name) ${predicate}
+               or exists (select 1 from artist_aliases
+                          where artist_aliases.artist_id = artists.id
+                            and artist_aliases.kind = 'name'
+                            and artist_aliases.status in ('auto', 'confirmed')
+                            and lower(artist_aliases.alias) ${predicate})
+            order by name_rank asc, length(artists.name) asc, artists.name asc
+            limit ?`,
+    };
   }
 
   const table = kind === "album" ? "albums" : "labels";
@@ -259,7 +291,9 @@ function entitySql(kind: SearchEntity["kind"], predicate: string): string {
   // Labels carry their own logo; albums don't (the pointer to the label owns that image).
   const logoSelect = kind === "label" ? "labels.image_key as logo_key," : "";
 
-  return `select ${table}.name as name, ${table}.slug as slug, ${logoSelect}
+  return {
+    needleBinds: 1,
+    sql: `select ${table}.name as name, ${table}.slug as slug, ${logoSelect}
             (select t.album_image_url
                from tracks t join findings f on f.track_id = t.track_id
                where t.${pointer} = ${table}.id and f.log_id is not null
@@ -269,7 +303,8 @@ function entitySql(kind: SearchEntity["kind"], predicate: string): string {
             and exists (select 1 from tracks t2 join findings f2 on f2.track_id = t2.track_id
                         where t2.${pointer} = ${table}.id and f2.log_id is not null)
           order by length(${table}.name) asc, ${table}.name asc
-          limit ?`;
+          limit ?`,
+  };
 }
 
 /**
@@ -292,10 +327,11 @@ async function matchEntities(
     return [];
   }
 
+  const { needleBinds, sql } = entitySql(kind, mode === "exact" ? "= ?" : "like ? || '%'");
   const db = await getDb();
   const result = await db.execute({
-    args: [needle, limit],
-    sql: entitySql(kind, mode === "exact" ? "= ?" : "like ? || '%'"),
+    args: [...Array<string>(needleBinds).fill(needle), limit],
+    sql,
   });
 
   return typedRows<EntityRow>(result.rows).map((row) => ({

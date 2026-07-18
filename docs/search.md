@@ -27,6 +27,15 @@ Two rails hold:
 - **A label or an album is offered only with a certified finding on it.** The [catalogue crawler](./catalogue-crawler.md) mints a `labels` row for every imprint it walks past, and a page with nothing certified on it is a destination that is an empty room. Those decline the jump and fall back to being the filter they always were — never a dead link. (An `albums` row is minted only off a finding by construction, so its guard is a belt-and-braces twin of the label's.)
 - **The entity tables are archive-sized, not catalogue-sized** — an album and a label earn a row only off a certified finding — so the prefix match stays a cheap read however deep the catalogue gets.
 
+### An artist answers to every name
+
+DnB has a many-names problem: a producer records under several names for one identity. The [artist entity](./artist-relationship.md) already solves it in storage — the MusicBrainz-harvested AKAs land in `artist_aliases`, keyed to the canonical `artists.id` — and the artist read here folds that table in, so an alias resolves to the artist exactly as the primary name does. It happens in the **deterministic tiers**, on the same entity code path: exact in tier 2 (type an act's other name, jump to their page with their findings under it), prefix in tier 3 (type the start of an AKA, the artist surfaces as a jump target). No FTS index is touched — an alias is keyed on `artist_id`, not on `tracks`, so the honest place to answer it is the entity read, not a denormalised copy of the AKA onto the track index. And because it sits **in front of the model**, an AKA keeps resolving when the LLM is down — the same rule the whole resolver is built on.
+
+Two rules carry the trust and the tie:
+
+- **Only a trusted display-name alias resolves** — `kind='name'` and `status in ('auto','confirmed')`, the exact set that feeds the public `alternateName`. For an artist there is no weaker `candidate` tier: a MusicBrainz alias is a direct statement of identity (born `auto`, trusted like an operator's `confirmed`), unlike the fuzzy cross-source `candidate` a `label_aliases` row must earn. A `hint` — a weak MB "Search hint" lead, never rendered publicly — never resolves a search either.
+- **The primary name wins a tie.** A query that is one artist's real name and another's AKA lands on the one it names directly: the read ranks a name match ahead of an alias-only match before length and alphabetical order.
+
 ### The model emits filters, never rows
 
 Tier 4's model is handed a sentence and returns a `SearchFilters` object — `{ artist?, label?, album?, key?, bpmMin?, bpmMax?, yearMin?, yearMax?, text?, soundsLike? }` — which the server compiles into bound SQL over real columns. It never sees a track, never names one, and never returns one. **A hallucinated finding is not a risk that is mitigated here; it is a thing the architecture cannot express.** The worst a bad parse can do is filter for something that is not in the archive and return an honest empty state.

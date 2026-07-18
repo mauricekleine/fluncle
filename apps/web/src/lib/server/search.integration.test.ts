@@ -315,6 +315,95 @@ describe("tier 2 — an exact entity name", () => {
   });
 });
 
+// ── Aliases · an artist answers to every name ────────────────────────────────────────
+
+// The MusicBrainz-harvested AKAs (`artist-resolution.ts`) that solve DnB's many-names problem
+// were invisible to search — a crew member typing a producer's other name found nothing. They
+// now resolve through the SAME entity path the primary name does, in the deterministic tiers
+// (exact in tier 2, prefix in tier 3), in front of the model — so an AKA is a jump target
+// exactly as the real name is, and it keeps working when the LLM is down.
+describe("aliases — an artist answers to every name", () => {
+  beforeEach(async () => {
+    // A second artist whose PRIMARY name collides with one of Netsky's aliases (the tie case).
+    await db.execute({
+      args: [],
+      sql: `insert into artists (id, name, slug, created_at, updated_at)
+            values ('a2', 'Origin', 'origin', '2026-07-01', '2026-07-01')`,
+    });
+
+    // Netsky's AKAs. One MB-curated (`auto`), one operator-ruled (`confirmed`) — both trusted,
+    // exactly as they feed the public `alternateName`. One `hint` (a weak MB "Search hint" lead,
+    // never public) that must NOT resolve. One that is ALSO Origin's primary name (the tie).
+    const aliasRows: [string, string, string, string, string, string][] = [
+      ["aa1", "Boris Daenen", "boris-daenen", "musicbrainz", "name", "auto"],
+      ["aa2", "Netsky Live", "netsky-live", "operator", "name", "confirmed"],
+      ["aa3", "Phantom Hint", "phantom-hint", "musicbrainz", "hint", "auto"],
+      ["aa4", "Origin", "origin", "musicbrainz", "name", "auto"],
+    ];
+
+    for (const [id, alias, slug, source, kind, status] of aliasRows) {
+      await db.execute({
+        args: [id, alias, slug, source, kind, status],
+        sql: `insert into artist_aliases
+                (id, artist_id, alias, alias_slug, source, kind, status, created_at)
+              values (?, 'a1', ?, ?, ?, ?, ?, '2026-07-01')`,
+      });
+    }
+  });
+
+  it("resolves an EXACT alias to the artist page — with the same findings the name gives", async () => {
+    const byName = await searchArchive({ q: "Netsky" });
+    const byAlias = await searchArchive({ q: "Boris Daenen" });
+
+    expect(byAlias.kind).toBe("entity");
+    expect(byAlias.redirect).toBe("/artist/netsky");
+    expect(byAlias.entities).toEqual([{ kind: "artist", name: "Netsky", slug: "netsky" }]);
+    // The alias lands on the canonical artist, so it lists exactly what the real name lists.
+    expect(byAlias.results.map((hit) => hit.trackId)).toEqual(byName.results.map((h) => h.trackId));
+    expect(byAlias.results.map((hit) => hit.trackId)).toEqual([
+      "certified-netsky",
+      "uncertified-netsky",
+    ]);
+    expect(translateQuery).not.toHaveBeenCalled();
+  });
+
+  it("trusts BOTH an `auto` (MusicBrainz) and a `confirmed` (operator) alias", async () => {
+    // For an artist, `auto` is a DIRECT MB statement of identity — trusted exactly as an
+    // operator-`confirmed` alias is (there is no weaker `candidate` tier). Both resolve.
+    expect((await searchArchive({ q: "Boris Daenen" })).redirect).toBe("/artist/netsky");
+    expect((await searchArchive({ q: "Netsky Live" })).redirect).toBe("/artist/netsky");
+  });
+
+  it("prefix-matches an alias as a tier-3 jump target, exactly as it does the name", async () => {
+    // "boris" is a bare token that is nobody's exact name — it falls to tier 3, where the prefix
+    // jump lives. The AKA surfaces the artist beside the (here empty) row set.
+    const result = await searchArchive({ q: "boris" });
+
+    expect(result.kind).toBe("token");
+    expect(result.entities).toEqual([{ kind: "artist", name: "Netsky", slug: "netsky" }]);
+    expect(translateQuery).not.toHaveBeenCalled();
+  });
+
+  it("lets the PRIMARY name win a tie against another artist's alias", async () => {
+    // "Origin" is Origin's real name AND Netsky's AKA. A name the query names DIRECTLY must beat
+    // one it only reaches through an alias — so this lands on Origin, never on Netsky.
+    const result = await searchArchive({ q: "Origin" });
+
+    expect(result.redirect).toBe("/artist/origin");
+    expect(result.entities).toEqual([{ kind: "artist", name: "Origin", slug: "origin" }]);
+  });
+
+  it("does NOT resolve a `hint` alias — a weak lead is never a public answer", async () => {
+    // A MB "Search hint" is kept for the record but never rendered publicly, so it never
+    // resolves a search either. "Phantom Hint" names no artist here; it falls through.
+    const result = await searchArchive({ q: "Phantom Hint" });
+
+    expect(result.redirect).toBeUndefined();
+    expect(result.entities).toEqual([]);
+    expect(result.kind).not.toBe("entity");
+  });
+});
+
 // ── Tier 3 · the bare token ──────────────────────────────────────────────────────────
 
 describe("tier 3 — a bare token", () => {
