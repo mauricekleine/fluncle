@@ -63,28 +63,43 @@ describe("pageNumbers", () => {
 
 let db: Client;
 
-/** A crawled (uncertified) track: a `tracks` row with no `findings` row. */
+/**
+ * A crawled (uncertified) track: a `tracks` row with no `findings` row. `title` defaults to a
+ * unique `Title <id>`; pass an explicit one (with matching `artists`) to seed a TWIN — two rows
+ * the crawler left unstamped that share one recording identity. The stamping columns
+ * (`duplicateOfTrackId` / `dismissedAt`) and the anchors (`spotifyUrl` / `isrc`) are optional.
+ */
 async function seedCatalogueTrack(options: {
   album: null | string;
   artists: string[];
+  dismissedAt?: string;
+  duplicateOfTrackId?: string;
+  isrc?: string;
   labelId: string;
   releaseDate: null | string;
+  spotifyUrl?: null | string;
+  title?: string;
   trackId: string;
 }): Promise<void> {
   await db.execute({
     args: [
       options.trackId,
-      `Title ${options.trackId}`,
+      options.title ?? `Title ${options.trackId}`,
       JSON.stringify(options.artists),
       options.album,
       options.labelId,
       options.releaseDate,
-      `https://open.spotify.com/track/${options.trackId}`,
+      options.spotifyUrl === undefined
+        ? `https://open.spotify.com/track/${options.trackId}`
+        : options.spotifyUrl,
+      options.isrc ?? null,
+      options.duplicateOfTrackId ?? null,
+      options.dismissedAt ?? null,
     ],
     sql: `insert into tracks
             (track_id, title, artists_json, album, label_id, release_date, spotify_url,
-             duration_ms)
-          values (?, ?, ?, ?, ?, ?, ?, 0)`,
+             isrc, duplicate_of_track_id, dismissed_at, duration_ms)
+          values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
   });
 }
 
@@ -363,5 +378,120 @@ describe("listLabelCatalogue (the label page's artists, then records)", () => {
     const page = await listLabelCatalogue("lbl_1", "name", 1);
 
     expect(page).toMatchObject({ groups: [], totalGroups: 0, totalTracks: 0 });
+  });
+});
+
+describe("the duplicate defence (a recording renders once)", () => {
+  // One artist, one record, seeded with the four cases the graph pages have to survive:
+  //   · an unstamped TWIN (two rows, one identity) the crawler never marked — folds to one;
+  //   · a STAMPED duplicate (`duplicate_of_track_id`) — vetoed in SQL;
+  //   · a DISMISSED row (`dismissed_at`) — vetoed in SQL;
+  //   · a genuinely distinct recording (a remix, distinct descriptor) — kept apart.
+  beforeEach(async () => {
+    await seedArtist("art_serum", "Serum", "serum");
+    // The twin: same title + artist, so one recording identity. Only one carries the Spotify
+    // anchor, so the fold must keep THAT row and drop the bare one.
+    await seedCatalogueTrack({
+      album: "Rudeboy",
+      artists: ["Serum"],
+      labelId: "lbl_1",
+      releaseDate: "2019-01-01",
+      spotifyUrl: "https://open.spotify.com/track/anchored",
+      title: "20 Man Down",
+      trackId: "t_anchored",
+    });
+    await seedCatalogueTrack({
+      album: "Rudeboy",
+      artists: ["Serum"],
+      labelId: "lbl_1",
+      releaseDate: "2019-01-01",
+      spotifyUrl: null,
+      title: "20 Man Down",
+      trackId: "t_bare",
+    });
+    // Stamped a duplicate by the operator → out of the SQL read entirely.
+    await seedCatalogueTrack({
+      album: "Rudeboy",
+      artists: ["Serum"],
+      duplicateOfTrackId: "t_anchored",
+      labelId: "lbl_1",
+      releaseDate: "2019-01-01",
+      title: "Selecta",
+      trackId: "t_stamped",
+    });
+    // Dismissed → out of the SQL read too.
+    await seedCatalogueTrack({
+      album: "Rudeboy",
+      artists: ["Serum"],
+      dismissedAt: "2026-07-01T00:00:00.000Z",
+      labelId: "lbl_1",
+      releaseDate: "2019-01-01",
+      title: "On the Block",
+      trackId: "t_dismissed",
+    });
+    // A remix is a DIFFERENT recording (distinct descriptor + here a real gap) — never folded.
+    await seedCatalogueTrack({
+      album: "Rudeboy",
+      artists: ["Serum"],
+      labelId: "lbl_1",
+      releaseDate: "2019-01-01",
+      title: "Baddadan",
+      trackId: "t_orig",
+    });
+    await seedCatalogueTrack({
+      album: "Rudeboy",
+      artists: ["Serum"],
+      labelId: "lbl_1",
+      releaseDate: "2019-01-01",
+      title: "Baddadan (Kanine Remix)",
+      trackId: "t_remix",
+    });
+    await backfillArtistLinks(db);
+  });
+
+  it("folds the label page to one row per recording, votes the anchored twin, counts the deduped set", async () => {
+    const page = await listLabelCatalogue("lbl_1", "name", 1);
+    const rendered = flattenArtistGroups(page.groups).map((track) => track.trackId);
+
+    // The twin folds to the Spotify-anchored row; the bare twin, the stamped duplicate and the
+    // dismissed row are all gone; the two genuine recordings survive.
+    expect(rendered.sort()).toEqual(["t_anchored", "t_orig", "t_remix"]);
+    // Total reflects what renders — never the four vetoed/folded rows.
+    expect(page.totalTracks).toBe(3);
+  });
+
+  it("folds the artist page the same way and keeps its count honest", async () => {
+    const artist = await getArtistBySlug("serum");
+
+    if (!artist) {
+      throw new Error("artist missing");
+    }
+
+    const page = await listArtistCatalogue(artist.id, "name", 1);
+    const rendered = flattenRecords(page.groups).map((track) => track.trackId);
+
+    expect(rendered.sort()).toEqual(["t_anchored", "t_orig", "t_remix"]);
+    expect(page.totalTracks).toBe(3);
+  });
+
+  it("folds a '(Original Version)' reissue onto its base title (RC3 end to end)", async () => {
+    // Same identity as the anchored "20 Man Down", tagged as the original version — collapses onto it.
+    await seedCatalogueTrack({
+      album: "Rudeboy",
+      artists: ["Serum"],
+      labelId: "lbl_1",
+      releaseDate: "2019-01-01",
+      spotifyUrl: null,
+      title: "20 Man Down (Original Version)",
+      trackId: "t_original_version",
+    });
+    await backfillArtistLinks(db);
+
+    const page = await listLabelCatalogue("lbl_1", "name", 1);
+    const rendered = flattenArtistGroups(page.groups).map((track) => track.trackId);
+
+    expect(rendered).not.toContain("t_original_version");
+    expect(rendered.sort()).toEqual(["t_anchored", "t_orig", "t_remix"]);
+    expect(page.totalTracks).toBe(3);
   });
 });

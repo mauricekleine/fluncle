@@ -48,19 +48,39 @@ import { getFindingsByAlbum, getFindingsByLabel, listCatalogueTracksByAlbum } fr
 
 let db: Client;
 
-/** A track in the universal music object. `logId` present ⇒ it is also a CERTIFIED finding. */
+/**
+ * A track in the universal music object. `logId` present ⇒ it is also a CERTIFIED finding. The
+ * stamping columns (`duplicateOfTrackId` / `dismissedAt`) and the anchors (`spotifyUrl` / `isrc`)
+ * are optional — pass a shared `title` (artists are fixed to `["Artist"]`) to seed an unstamped
+ * TWIN, two rows sharing one recording identity.
+ */
 async function seedTrack(options: {
   album: null | string;
+  dismissedAt?: string;
+  duplicateOfTrackId?: string;
+  isrc?: string;
   label: null | string;
   logId?: string;
+  spotifyUrl?: null | string;
   title: string;
   trackId: string;
 }): Promise<void> {
   await db.execute({
-    args: [options.trackId, options.title, '["Artist"]', options.album, options.label],
+    args: [
+      options.trackId,
+      options.title,
+      '["Artist"]',
+      options.album,
+      options.label,
+      options.spotifyUrl === undefined ? "https://open.spotify.com/track/x" : options.spotifyUrl,
+      options.isrc ?? null,
+      options.duplicateOfTrackId ?? null,
+      options.dismissedAt ?? null,
+    ],
     sql: `insert into tracks
-            (track_id, title, artists_json, spotify_uri, spotify_url, duration_ms, album, label)
-          values (?, ?, ?, 'uri', 'https://open.spotify.com/track/x', 0, ?, ?)`,
+            (track_id, title, artists_json, spotify_uri, duration_ms, album, label,
+             spotify_url, isrc, duplicate_of_track_id, dismissed_at)
+          values (?, ?, ?, 'uri', 0, ?, ?, ?, ?, ?, ?)`,
   });
 
   if (options.logId) {
@@ -351,6 +371,86 @@ describe("the finding reads vs the anti-join (the safety property)", () => {
       name: "Hospital Records",
       slug: "hospital-records",
     });
+  });
+});
+
+describe("the album page renders a recording once (the duplicate defence)", () => {
+  beforeEach(async () => {
+    // The twin: same title + artist ⇒ one recording identity, reissued under a second barcode.
+    // Only one row carries the Spotify anchor, so the fold must keep THAT one.
+    await seedTrack({
+      album: "Rudeboy",
+      label: "Hospital Records",
+      spotifyUrl: "https://open.spotify.com/track/anchored",
+      title: "20 Man Down",
+      trackId: "t_anchored",
+    });
+    await seedTrack({
+      album: "Rudeboy",
+      label: "Hospital Records",
+      spotifyUrl: null,
+      title: "20 Man Down",
+      trackId: "t_bare",
+    });
+    // Operator-stamped duplicate + a dismissed row — both vetoed in SQL, out of the slice AND
+    // the total.
+    await seedTrack({
+      album: "Rudeboy",
+      duplicateOfTrackId: "t_anchored",
+      label: "Hospital Records",
+      title: "Selecta",
+      trackId: "t_stamped",
+    });
+    await seedTrack({
+      album: "Rudeboy",
+      dismissedAt: "2026-07-01T00:00:00.000Z",
+      label: "Hospital Records",
+      title: "On the Block",
+      trackId: "t_dismissed",
+    });
+    // Two genuinely distinct recordings (a remix is a distinct descriptor) survive.
+    await seedTrack({
+      album: "Rudeboy",
+      label: "Hospital Records",
+      title: "Baddadan",
+      trackId: "t_orig",
+    });
+    await seedTrack({
+      album: "Rudeboy",
+      label: "Hospital Records",
+      title: "Baddadan (Kanine Remix)",
+      trackId: "t_remix",
+    });
+    // Mint the (findings-free) album entity inline and stamp `album_id` on every row, exactly as
+    // the crawler does — the album page reads by that pointer. `reconcile()` would not, because it
+    // only mints entities a CERTIFIED finding carries, and none of these rows is certified.
+    for (const trackId of [
+      "t_anchored",
+      "t_bare",
+      "t_stamped",
+      "t_dismissed",
+      "t_orig",
+      "t_remix",
+    ]) {
+      await linkTrackToAlbum(trackId, "Rudeboy");
+    }
+  });
+
+  it("folds the twin, vetoes the stamped/dismissed rows, and counts only what renders", async () => {
+    const album = await getAlbumBySlug("rudeboy");
+
+    if (!album) {
+      throw new Error("album missing");
+    }
+
+    const catalogue = await listCatalogueTracksByAlbum(album.id);
+    const rendered = catalogue.tracks.map((track) => track.trackId);
+
+    // One row per recording: the anchored twin kept, the bare twin folded away, the stamped and
+    // dismissed rows vetoed, the two genuine recordings kept.
+    expect(rendered.sort()).toEqual(["t_anchored", "t_orig", "t_remix"]);
+    // The thin-content total reflects the deduped, un-vetoed set — never the six seeded rows.
+    expect(catalogue.total).toBe(3);
   });
 });
 

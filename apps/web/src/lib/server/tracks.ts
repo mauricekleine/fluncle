@@ -20,6 +20,7 @@ import { discogsReleaseUrl } from "./discogs";
 import { cosineFromDistance, readEmbeddingBlob, toVectorProbe } from "./embedding";
 import { logEvent } from "./log";
 import { isLogId } from "../log-id";
+import { dedupeByRecordingIdentity } from "./track-match";
 import {
   applyTaste,
   type MixCandidate as RankCandidate,
@@ -750,6 +751,8 @@ export type CatalogueSlice = {
 
 type CatalogueTrackRow = {
   artists_json: string;
+  isrc: string | null;
+  release_date: string | null;
   spotify_url: string | null;
   title: string;
   total: number;
@@ -772,21 +775,39 @@ export async function listCatalogueTracksByAlbum(albumId: string): Promise<Catal
   const db = await getDb();
   const result = await db.execute({
     args: [albumId, GRAPH_PAGE_CATALOGUE_LIMIT],
-    sql: `select tracks.track_id, tracks.title, tracks.artists_json,
-                 tracks.spotify_url, count(*) over () as total
+    // The two `is null` guards past the finding anti-join are the STAMPED half of the duplicate
+    // defence: a row an operator has marked a duplicate (`duplicate_of_track_id`) or dismissed
+    // (`dismissed_at`) leaves both the slice AND the `count(*) over ()` total, so the thin-content
+    // gate keys off the same set the page renders. The crawler leaves most twins unstamped, so the
+    // slice is folded again below (`dedupeByRecordingIdentity`) before it crosses the wire.
+    sql: `select tracks.track_id, tracks.title, tracks.artists_json, tracks.spotify_url,
+                 tracks.isrc, tracks.release_date, count(*) over () as total
           from tracks
           left join findings on findings.track_id = tracks.track_id
           where tracks.album_id = ? and findings.track_id is null
+                and tracks.duplicate_of_track_id is null and tracks.dismissed_at is null
           order by tracks.release_date is null asc, tracks.release_date desc,
                    tracks.title collate nocase asc
           limit ?`,
   });
 
   const rows = typedRows<CatalogueTrackRow>(result.rows);
+  const deduped = dedupeByRecordingIdentity(rows, (row) => ({
+    artists: parseArtistsJson(row.artists_json),
+    isrc: row.isrc,
+    releaseDate: row.release_date,
+    spotifyUrl: row.spotify_url,
+    title: row.title,
+    trackId: row.track_id,
+  }));
+  const rawTotal = Number(rows[0]?.total ?? 0);
 
   return {
-    total: Number(rows[0]?.total ?? 0),
-    tracks: rows.map((row) => ({
+    // The SQL total counts every unstamped twin; the fold has now collapsed the ones in this
+    // slice, so subtract them. Clamped to the rendered count so the gate never reports fewer
+    // tracks than the page shows (`count(distinct)` in SQL would double-scan the growing table).
+    total: Math.max(rawTotal - (rows.length - deduped.length), deduped.length),
+    tracks: deduped.map((row) => ({
       artists: parseArtistsJson(row.artists_json),
       spotifyUrl: row.spotify_url ?? undefined,
       title: row.title,
