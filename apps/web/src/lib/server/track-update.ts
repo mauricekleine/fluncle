@@ -201,6 +201,8 @@ export type TrackUpdate = {
   videoGrain?: string;
   /** The video's visual REGISTER (register ledger; surfaced in /api/tracks). */
   videoRegister?: string;
+  /** The video's coarse palette HUE-BUCKET tag (palette ledger; surfaced in /api/tracks). */
+  videoPalette?: string;
 };
 
 // The fields whose write changes a PUBLIC surface, so it should move the
@@ -222,6 +224,7 @@ const VISIBLE_FIELDS = new Set<keyof TrackUpdate>([
   "videoGrain",
   "videoModel",
   "videoModelReasoning",
+  "videoPalette",
   "videoRegister",
   "videoSquaredAt",
   "videoUrl",
@@ -275,6 +278,7 @@ const CERTIFICATION_FIELDS = new Set<keyof TrackUpdate>([
   "videoGrain",
   "videoModel",
   "videoModelReasoning",
+  "videoPalette",
   "videoRegister",
   "videoSquaredAt",
   "videoUrl",
@@ -470,6 +474,11 @@ export async function updateTrack(
   if (update.videoRegister !== undefined) {
     findingSets.push("video_register = ?");
     findingArgs.push(update.videoRegister);
+  }
+
+  if (update.videoPalette !== undefined) {
+    findingSets.push("video_palette = ?");
+    findingArgs.push(update.videoPalette);
   }
 
   if (update.videoModel !== undefined) {

@@ -11,6 +11,7 @@
     "detect-beat-pull": "bun src/pipeline/detect-beat-pull.ts",
     "judge:metrics": "bun src/pipeline/analyze-motion.ts",
     "judge:diversity": "bun src/pipeline/judge-diversity.ts",
+    "judge:palette": "bun src/pipeline/judge-palette.ts",
     "validate:intent": "bun src/pipeline/validate-intent.ts",
     "validate:scene": "bun src/pipeline/validate-scene.ts",
     "emit:scene": "bun src/pipeline/emit-scene.ts",

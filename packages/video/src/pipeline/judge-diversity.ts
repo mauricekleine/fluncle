@@ -199,7 +199,7 @@ export function featureOf(img: RgbImage): DiversityFeature {
   };
 }
 
-function bhattacharyya(a: Float32Array, b: Float32Array): number {
+export function bhattacharyya(a: Float32Array, b: Float32Array): number {
   let bc = 0;
   for (let i = 0; i < a.length; i++) {
     bc += Math.sqrt(a[i] * b[i]);

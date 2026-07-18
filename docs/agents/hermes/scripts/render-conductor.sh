@@ -457,6 +457,25 @@ creds="$(mktemp)"
   # procedural fallback (never a failure).
   printf 'export GEMINI_API_KEY=%s\n' "${GEMINI_API_KEY:-}"
 } >"$creds"
+
+# DETERMINISTIC DIVERSITY AXES (docs/planning/homogenisation-evidence.md; ROADMAP
+# § Homogenisation): diversity must be DESIGNED IN UP FRONT — assign the grain family,
+# register, and a palette-avoid directive from the vehicles ledger BEFORE the render, so
+# the agent's creativity lives inside a fixed cell instead of eyeballing recent posters
+# (which produced the amber/halftone attractor anyway). assign-video-axes.ts reads the
+# ledger on stdin and emits `FLUNCLE_VIDEO_*` env lines; we append them to the box env.
+# FAIL-OPEN by contract: any hiccup (the assigner errors, bun/fluncle missing) leaves the
+# vars absent and the render falls back to today's free-choice behaviour — an axis assign
+# NEVER blocks a render. The box sources this file with `set -a`, so bare KEY='value'
+# lines export.
+axes="$("$FLUNCLE_BIN" admin tracks vehicles --json 2>>"$LOG_FILE" | "$BUN_BIN" "$SCRIPT_DIR/assign-video-axes.ts" 2>>"$LOG_FILE" || printf '')"
+if [ -n "$axes" ]; then
+  printf '%s\n' "$axes" >>"$creds"
+  log "assigned video axes: $(printf '%s' "$axes" | tr '\n' ' ')"
+else
+  log "video-axis assigner produced no assignment — render falls back to free choice"
+fi
+
 "$BOX_BIN" scp "$creds" "$boxid:/dev/shm/fluncle.env" >/dev/null 2>&1
 rm -f "$creds"
 

@@ -63,12 +63,21 @@ export function artifactByField(field: string): VideoArtifact | undefined {
 export type RenderManifestStamps = {
   grain?: string;
   model?: string;
+  /** The coarse palette hue-bucket tag (render.json `palette`; palette-summary.ts). */
+  palette?: string;
   reasoning?: string;
   register?: string;
   vehicle?: string;
 };
 
-const MANIFEST_STAMP_KEYS = ["grain", "model", "reasoning", "register", "vehicle"] as const;
+const MANIFEST_STAMP_KEYS = [
+  "grain",
+  "model",
+  "palette",
+  "reasoning",
+  "register",
+  "vehicle",
+] as const;
 
 // THE TRANSPORT-PROOF STAMP FALLBACK (the 044.1.3L lesson, 2026-07-14): the render
 // box's ship crashed mid-upload (a Bun segfault on the box runtime), the agent

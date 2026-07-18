@@ -167,6 +167,7 @@ const FinalizeVideoBodySchema = z.looseObject({
   videoGrain: z.unknown().optional(),
   videoModel: z.unknown().optional(),
   videoModelReasoning: z.unknown().optional(),
+  videoPalette: z.unknown().optional(),
   videoRegister: z.unknown().optional(),
   videoVehicle: z.unknown().optional(),
 });

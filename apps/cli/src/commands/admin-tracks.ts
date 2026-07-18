@@ -572,6 +572,9 @@ export type VehicleEntry = {
   logId?: string;
   grain?: string;
   register?: string;
+  // The coarse palette hue-bucket tag (palette ledger) — the axis assigner reads it to
+  // steer the next render off a worn hue. Absent on rows shipped before palette provenance.
+  palette?: string;
   title: string;
   vehicle?: string;
 };
@@ -586,6 +589,7 @@ export async function vehiclesCommand(limit: number): Promise<VehicleEntry[]> {
     artists: track.artists,
     grain: track.videoGrain,
     logId: track.logId,
+    palette: track.videoPalette,
     register: track.videoRegister,
     title: track.title,
     vehicle: track.videoVehicle,

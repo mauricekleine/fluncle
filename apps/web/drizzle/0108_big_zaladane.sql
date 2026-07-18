@@ -1,0 +1,1 @@
+ALTER TABLE `findings` ADD `video_palette` text;
