@@ -96,6 +96,19 @@ export type SavedSet = {
   updatedAt: string;
 };
 
+// A watched artist or label (D2a). `name`/`slug` come joined from the entity's own row, so
+// the account row links to `/artist/<slug>` or `/label/<slug>`. `includeSimilar` rides along
+// for completeness; it has no consumer or control yet (the deferred digest reads it).
+export type Watch = {
+  createdAt: string;
+  entityId: string;
+  id: string;
+  includeSimilar: boolean;
+  kind: "artist" | "label";
+  name: string;
+  slug: string;
+};
+
 /** The three signed-in doors. Absent from the URL = the Galaxy (the default view). */
 export type AccountTab = "galaxy" | "saves" | "settings";
 
@@ -121,6 +134,7 @@ export type SavesDoorData = {
   sets: SavedSet[];
   submissions: Submission[];
   tab: "saves";
+  watches: Watch[];
 };
 
 export type SettingsDoorData = {

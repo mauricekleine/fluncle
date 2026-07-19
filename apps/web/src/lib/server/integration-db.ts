@@ -142,6 +142,34 @@ export async function seedCatalogueTrack(
   });
 }
 
+type SeedEntity = {
+  id: string;
+  name?: string;
+  slug: string;
+};
+
+/** Inserts an `artists` row — the columns a watch join reads (id, name, slug). */
+export async function seedArtist(client: Client, artist: SeedEntity): Promise<void> {
+  const now = new Date().toISOString();
+
+  await client.execute({
+    args: [artist.id, artist.name ?? "Test Artist", artist.slug, now, now],
+    sql: `insert into artists (id, name, slug, created_at, updated_at)
+      values (?, ?, ?, ?, ?)`,
+  });
+}
+
+/** Inserts a `labels` row — the columns a watch join reads (id, name, slug). */
+export async function seedLabel(client: Client, label: SeedEntity): Promise<void> {
+  const now = new Date().toISOString();
+
+  await client.execute({
+    args: [label.id, label.name ?? "Test Label", label.slug, now, now],
+    sql: `insert into labels (id, name, slug, created_at, updated_at)
+      values (?, ?, ?, ?, ?)`,
+  });
+}
+
 type SeedSubmission = {
   contact?: null | string;
   createdAt?: string;

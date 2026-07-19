@@ -49,6 +49,7 @@ import {
   type SavedSet,
   type SavesDoorData,
   type Submission,
+  type Watch,
 } from "./shared";
 
 export function SavesDoor({
@@ -61,7 +62,7 @@ export function SavesDoor({
   refresh: () => Promise<void>;
 }) {
   const [setsMessage, setSetsMessage] = useState("");
-  const { saved, sets, submissions } = data;
+  const { saved, sets, submissions, watches } = data;
 
   return (
     <div className="account-tab-panel">
@@ -93,6 +94,8 @@ export function SavesDoor({
           </p>
         ) : null}
       </section>
+
+      <WatchingSection csrfToken={csrfToken} refresh={refresh} watches={watches} />
 
       <SentLedger submissions={submissions} />
     </div>
@@ -531,6 +534,94 @@ function SavedSetRow({
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
+      </span>
+    </li>
+  );
+}
+
+// The Watching list (D2a): the artists and labels the user asked to keep an eye on. A watch
+// keeps nothing in the archive and destroys nothing when removed, so — like the saved-set
+// row — the entity links out and Unwatch is a plain action, no destructive-confirm dialog.
+// The email digest that will read these watches is deferred; this list is the substrate.
+function WatchingSection({
+  csrfToken,
+  refresh,
+  watches,
+}: {
+  csrfToken: string;
+  refresh: () => Promise<void>;
+  watches: Watch[];
+}) {
+  const [message, setMessage] = useState("");
+
+  return (
+    <section className="account-section">
+      <h2>Watching</h2>
+      <ListEmpty
+        items={watches}
+        empty="Nothing watched yet. Tap Watch on any artist or label and it lands here."
+      >
+        {watches.map((watch) => (
+          <WatchRow
+            csrfToken={csrfToken}
+            key={watch.id}
+            refresh={refresh}
+            setMessage={setMessage}
+            watch={watch}
+          />
+        ))}
+      </ListEmpty>
+      {message ? (
+        <p aria-live="polite" className="account-muted">
+          {message}
+        </p>
+      ) : null}
+    </section>
+  );
+}
+
+// One watched entity: its name links back to the entity page (artist or label), a quiet kind
+// label sits beside it, and Unwatch drops the account row (a plain CSRF fetch then a refresh,
+// the page's established mutation shape). Removing a watch touches nothing but this list.
+function WatchRow({
+  csrfToken,
+  refresh,
+  setMessage,
+  watch,
+}: {
+  csrfToken: string;
+  refresh: () => Promise<void>;
+  setMessage: (message: string) => void;
+  watch: Watch;
+}) {
+  async function unwatch() {
+    const response = await fetch(`/api/me/watches/${watch.id}`, {
+      headers: { "Content-Type": "application/json", "x-fluncle-csrf": csrfToken },
+      method: "DELETE",
+    });
+
+    setMessage(response.ok ? "" : "Could not stop watching that. Try again in a moment.");
+    await refresh();
+  }
+
+  return (
+    <li className="account-set-row">
+      {watch.kind === "artist" ? (
+        <Link params={{ slug: watch.slug }} to="/artist/$slug">
+          {watch.name}
+        </Link>
+      ) : (
+        <Link params={{ slug: watch.slug }} to="/label/$slug">
+          {watch.name}
+        </Link>
+      )}
+      <span className="account-set-actions">
+        <span className="account-muted text-xs">
+          {watch.kind === "artist" ? "Artist" : "Label"}
+        </span>
+        <Button onClick={() => void unwatch()} size="sm" type="button" variant="ghost">
+          Unwatch
+        </Button>
       </span>
     </li>
   );

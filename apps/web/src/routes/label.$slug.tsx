@@ -7,6 +7,7 @@ import {
 } from "@/components/catalogue-groups";
 import { ArtistChips, FindingsGrid, graphPageTracks } from "@/components/graph-sections";
 import { StoryNotFoundState } from "@/components/stories/stories-states";
+import { WatchButton } from "@/components/watch-button";
 import { entityFreshChannel } from "@/lib/fresh-feed-rss";
 import { siteUrl } from "@/lib/fluncle-links";
 import { jsonLdScript } from "@/lib/json-ld";
@@ -67,6 +68,8 @@ type LabelPageData =
       foundedLocation: string | undefined;
       /** The label's founding date (MusicBrainz `life-span.begin`) — the dateline + `foundingDate`. */
       foundingDate: string | undefined;
+      /** The label entity's id — the key a signed-in user's watch files against (D2a). */
+      id: string;
       indexable: boolean;
       /** The label's OWN logo (resolved Discogs/Wikidata image on R2), or undefined. */
       logoImageUrl: string | undefined;
@@ -161,6 +164,7 @@ export async function resolveLabelPageData(
     findings,
     foundedLocation: label.foundedLocation,
     foundingDate: label.foundingDate,
+    id: label.id,
     // Thin-content gate: index only past LABEL_INDEX_MIN_TRACKS RENDERABLE tracks — the
     // findings PLUS the quieter rows, because both are real content on the page, and a page is
     // thin or not thin on what it renders, never on who wrote it. Below the floor the page
@@ -379,7 +383,7 @@ function LabelPage() {
     return null;
   }
 
-  const { artists, bio, catalogue, findings, foundedLocation, foundingDate, name, slug, sort } =
+  const { artists, bio, catalogue, findings, foundedLocation, foundingDate, id, name, slug, sort } =
     data;
   const dateline = labelDateline(foundingDate, foundedLocation);
 
@@ -394,6 +398,11 @@ function LabelPage() {
           {/* One quiet reference-register line: where and when the label started (label-lineage
               sweep, U1). Rendered only when MusicBrainz carried a founding date or place. */}
           {dateline ? <p className="log-index-dateline">{dateline}</p> : undefined}
+          {/* The quiet watch control — a signed-in user keeps an eye on this label. Renders
+              nothing for a signed-out visitor (the account never gates the page). */}
+          <div className="mt-4">
+            <WatchButton entityId={id} kind="label" name={name} />
+          </div>
         </header>
 
         {/* Every band below is conditional: an empty one renders nothing at all, so this page

@@ -24,6 +24,7 @@ import {
 import { FindingsGrid } from "@/components/graph-sections";
 import { GraphLink } from "@/components/graph-link";
 import { StoryNotFoundState } from "@/components/stories/stories-states";
+import { WatchButton } from "@/components/watch-button";
 import { type ArtistSocialPlatform } from "@/lib/artist-socials";
 import { entityFreshChannel } from "@/lib/fresh-feed-rss";
 import { siteUrl } from "@/lib/fluncle-links";
@@ -85,6 +86,8 @@ type ArtistPageData =
       // The artist's OWN portrait (owned avatar master, else Spotify image), or undefined. Preferred
       // for og:image + the MusicGroup's `image`, and rendered in the masthead. Falls back to the
       // freshest finding's album cover only when the artist carries no avatar of their own.
+      // The artist entity's id — the key a signed-in user's watch files against (D2a).
+      id: string;
       imageUrl: string | undefined;
       indexable: boolean;
       name: string;
@@ -199,6 +202,7 @@ export async function resolveArtistPageData(
     catalogue,
     dossier: { ...signature, findingCount: gridFindings.length, neighbours },
     findings,
+    id: artist.id,
     imageUrl: artist.imageUrl,
     // Thin-content gate: index only past ARTIST_INDEX_MIN_FINDINGS RENDERABLE tracks — the
     // certified findings PLUS the quieter catalogue rows, because both are real content on the
@@ -418,7 +422,7 @@ function ArtistPage() {
     return null;
   }
 
-  const { bio, catalogue, dossier, findings, imageUrl, name, slug, socials, sort } = data;
+  const { bio, catalogue, dossier, findings, id, imageUrl, name, slug, socials, sort } = data;
 
   return (
     <main className="log-plate-stage">
@@ -431,6 +435,11 @@ function ArtistPage() {
           {/* The dossier bio is the masthead's prose — the reference register (the Three Areas
               Rule; the first-person signature line is retired). Rendered once authored. */}
           {bio ? <p className="log-index-bio">{bio}</p> : undefined}
+          {/* The quiet watch control — a signed-in user keeps an eye on this artist. Renders
+              nothing for a signed-out visitor (the account never gates the page). */}
+          <div className="mt-4">
+            <WatchButton entityId={id} kind="artist" name={name} />
+          </div>
         </header>
 
         {/* The findings lead: the logged tracks are the primary entity in the Galaxy — the artist
