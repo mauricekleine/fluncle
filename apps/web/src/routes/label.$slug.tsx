@@ -399,10 +399,9 @@ function LabelPage() {
               sweep, U1). Rendered only when MusicBrainz carried a founding date or place. */}
           {dateline ? <p className="log-index-dateline">{dateline}</p> : undefined}
           {/* The quiet watch control — a signed-in user keeps an eye on this label. Renders
-              nothing for a signed-out visitor (the account never gates the page). */}
-          <div className="mt-4">
-            <WatchButton entityId={id} kind="label" name={name} />
-          </div>
+              nothing for a signed-out visitor (the account never gates the page) — no wrapper, so
+              the null face leaves no empty grid item in the masthead. */}
+          <WatchButton entityId={id} kind="label" name={name} />
         </header>
 
         {/* Every band below is conditional: an empty one renders nothing at all, so this page

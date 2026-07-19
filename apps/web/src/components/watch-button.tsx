@@ -1,4 +1,4 @@
-import { EyeIcon, EyeSlashIcon } from "@phosphor-icons/react";
+import { EyeIcon } from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
 import { Button } from "@fluncle/ui/components/button";
 
@@ -160,20 +160,21 @@ export function WatchButton({
 
   return (
     <Button
-      aria-label={watching ? `Unwatch ${name}` : `Watch ${name}`}
+      // The accessible name CONTAINS the visible label (WCAG 2.5.3 Label in Name — a speech-input
+      // user says "click Watching"); `aria-pressed` alone carries the toggle-to-unwatch semantics.
+      aria-label={watching ? `Watching ${name}` : `Watch ${name}`}
       aria-pressed={watching}
-      className="shrink-0"
+      // `mt-4` lives HERE, not on a route wrapper: the null faces (signed-out, loading) must render
+      // truly nothing — no empty grid item, no dead masthead space (the never-gates law, visually).
+      className="mt-4 shrink-0"
       disabled={busy}
       onClick={() => void (watching ? unwatch() : watch())}
       size="sm"
       type="button"
       variant="outline"
     >
-      {watching ? (
-        <EyeSlashIcon aria-hidden="true" className="size-4" weight="bold" />
-      ) : (
-        <EyeIcon aria-hidden="true" className="size-4" weight="bold" />
-      )}
+      {/* One glyph, two weights: regular-idle → fill-active (DESIGN.md § Iconography). */}
+      <EyeIcon aria-hidden="true" className="size-4" weight={watching ? "fill" : "bold"} />
       {watching ? "Watching" : "Watch"}
     </Button>
   );

@@ -436,10 +436,9 @@ function ArtistPage() {
               Rule; the first-person signature line is retired). Rendered once authored. */}
           {bio ? <p className="log-index-bio">{bio}</p> : undefined}
           {/* The quiet watch control — a signed-in user keeps an eye on this artist. Renders
-              nothing for a signed-out visitor (the account never gates the page). */}
-          <div className="mt-4">
-            <WatchButton entityId={id} kind="artist" name={name} />
-          </div>
+              nothing for a signed-out visitor (the account never gates the page) — no wrapper, so
+              the null face leaves no empty grid item in the masthead. */}
+          <WatchButton entityId={id} kind="artist" name={name} />
         </header>
 
         {/* The findings lead: the logged tracks are the primary entity in the Galaxy — the artist

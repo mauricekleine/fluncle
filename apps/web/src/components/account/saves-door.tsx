@@ -619,7 +619,15 @@ function WatchRow({
         <span className="account-muted text-xs">
           {watch.kind === "artist" ? "Artist" : "Label"}
         </span>
-        <Button onClick={() => void unwatch()} size="sm" type="button" variant="ghost">
+        <Button
+          // Every row's button reads "Unwatch" — the name disambiguates for a screen reader, and
+          // containing the visible text keeps it 2.5.3-safe.
+          aria-label={`Unwatch ${watch.name}`}
+          onClick={() => void unwatch()}
+          size="sm"
+          type="button"
+          variant="ghost"
+        >
           Unwatch
         </Button>
       </span>
