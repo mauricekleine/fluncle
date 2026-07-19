@@ -2635,10 +2635,47 @@ a.catalogue-letter:focus-visible {
 }
 
 /* ── /tracks hub — the two-register reference list ────────────────────────────────────────
-   The filter bar is built from the Shadcn design system (Input / Label / Select / Button) with
-   Tailwind layout utilities in the route — no bespoke control tokens here. Below it, numbered pages
-   of `TracksHubRow` (its own component, NOT `/fresh`'s cover card): a dense, cover-led reference row.
-   The year fast lane + the pager reuse the shared `.catalogue-letters` / `.catalogue-pager` chrome. */
+   The filter bar is the pill grammar (slice B): one quiet row of compact, iconed pill controls
+   built from the Shadcn design system (Popover / Select / Combobox / Button), each auto-applying its
+   axis to the URL on change. The pills are chrome on a catalogue page — quiet, dark, bordered, no
+   gold but the focus ring (the Unlit register + One Sun Rule). The chrome of each pill lives on its
+   Shadcn trigger; only the shared LAYOUT lives here. Below it, numbered pages of `TracksHubRow` (its
+   own component, NOT `/fresh`'s cover card): a dense, cover-led reference row. The year fast lane +
+   the pager reuse the shared `.catalogue-letters` / `.catalogue-pager` chrome. */
+
+/* The pill row: wraps gracefully to two rows on a narrow (375px) viewport; every pill is shrinkable. */
+.tracks-filter-bar {
+  align-items: center;
+  border-block: 1px solid color-mix(in oklch, var(--border) 55%, transparent);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding-block: 1rem;
+}
+
+/* Shared pill LAYOUT only (the appearance rides each control's own Shadcn trigger): keep pills from
+   growing unbounded and let them shrink on a narrow row. */
+.tracks-filter-pill {
+  max-width: 100%;
+  min-width: 0;
+}
+
+/* The pill's value text fills the pill and left-aligns (so the chevron sits at the right edge, as on
+   the Select trigger) and truncates rather than stretching the row — a long imprint name stays a pill. */
+.tracks-filter-pill-value {
+  flex: 1 1 auto;
+  overflow: hidden;
+  max-width: 11rem;
+  min-width: 0;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* "Clear filters" sits at the trailing edge of the row (wraps to the last line on a narrow viewport). */
+.tracks-filter-clear {
+  margin-inline-start: auto;
+}
 
 /* "312 matches" — the filtered count by the form, quiet Stardust ink. */
 .tracks-hub-matchline {
