@@ -34,6 +34,10 @@ setsid bash -c '
   # measure 76-98 turns) so a stall fails fast and the next hourly tick retries.
   export BASH_MAX_TIMEOUT_MS=3600000
   export BASH_DEFAULT_TIMEOUT_MS=900000
+  # Harness-level guarantee behind the prompt rail: no background tasks at all
+  # (headless kills backgrounded Bash ~5s after the final result — the 07-19
+  # dead-render class). Documented: code.claude.com/docs/en/env-vars.md
+  export CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1
   __start=$(date +%s)
   claude -p "$(cat '"$PROMPT"')" --model opus --dangerously-skip-permissions \
     --max-turns 150 \
