@@ -22,7 +22,7 @@ fluncle admin tracks video <log-id> --dir packages/video/out/<log-id>
 
 Claude Code delivery is **at-least-once** — this prompt may fire more than once for the same tick, or overlap a slow run. Do **not** add your own locks or state. Safety comes from the queue itself: `fluncle admin tracks queue` returns only findings whose `video_url` is unset, oldest first. The moment a finding is shipped, `fluncle admin tracks video` sets its `video_url`, so it **leaves the queue** and the next run cannot pick it again. So:
 
-- Always re-read the queue at the START of the run. Never trust a finding id from a previous run.
+- Always resolve the finding at the START of the run — the conductor-assigned `FLUNCLE_RENDER_LOG_ID` when set (injected fresh for THIS run), else the live queue head. Never trust a finding id from a previous run, and always apply the videoUrl guard before filming.
 - A finding is "claimed" the instant its `video_url` is set (the ship step). Until then it is fair game; after then it is invisible to the queue. There is no intermediate lock — and you do not need one, because you film at most one per run and the queue gates it.
 - If two runs race on the same head, the worst case is one wasted render, never a double-published video: the second `track video` upload just re-points `video_url` at the same finding. This is acceptable; do not engineer around it beyond the queue gate.
 
@@ -37,7 +37,16 @@ You run under `claude -p`: the process exits the moment you end your turn, and e
 
 Run from the root of a Fluncle repo checkout. `bun` runs the video kit (never npm/pnpm/yarn); the `fluncle` CLI is the installed binary (see **Tools** above) — never the from-source `bun run --cwd apps/cli` form.
 
-### 1. Read the queue head
+### 1. The finding for this run
+
+**FIRST — the assigned finding (when the conductor set it).** The conductor resolves the render pick BEFORE this run starts — the oldest queued finding minus any it has poison-skipped for repeated failures — and injects it as an environment variable. Check it at the top:
+
+```
+echo "assigned=${FLUNCLE_RENDER_LOG_ID:-unset}"
+```
+
+- **When `FLUNCLE_RENDER_LOG_ID` is SET, that is THE finding — do not re-pick.** Fetch it with `fluncle admin tracks get <log-id> --json`. If it already carries a `videoUrl`, STOP with a one-line note (another run shipped it; the re-run guard). Never substitute the queue head for the assignment: the conductor's failure accounting is attached to this exact Log ID, and a self-picked head can be one the conductor deliberately skipped.
+- **When it is UNSET (a manual/local run), read the queue head yourself:**
 
 ```
 fluncle admin tracks queue --limit 1 --json

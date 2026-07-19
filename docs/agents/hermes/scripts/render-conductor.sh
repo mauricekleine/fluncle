@@ -129,6 +129,14 @@ emit_render_cost() {
   esac
 }
 
+# One-line Discord ping (best-effort — alerting never fails a tick).
+discord_alert() {
+  [ -n "${DISCORD_ALERT_WEBHOOK:-}" ] || return 0
+  curl -sS -o /dev/null --max-time 10 -H 'Content-Type: application/json' \
+    -d "$(printf '{"content":"%s"}' "$1")" \
+    "$DISCORD_ALERT_WEBHOOK" 2>>"$LOG_FILE" || true
+}
+
 # --- poison ledger (head-of-line-block guard; see POISON_* config) -----------------
 # A tab-separated file of `logId  count  lastFailEpoch`. Manipulated with awk (present on
 # the box) via write-to-temp-then-mv so a killed tick never leaves a half-written ledger.
@@ -152,11 +160,7 @@ bump_fail() {
   if [ "$next" -eq "$POISON_THRESHOLD" ]; then
     log "POISON: $id failed $next consecutive renders — skipping it for ${POISON_TTL}s"
     emit "render-conductor: POISON-SKIP $id after $next failed renders"
-    if [ -n "${DISCORD_ALERT_WEBHOOK:-}" ]; then
-      curl -sS -o /dev/null --max-time 10 -H 'Content-Type: application/json' \
-        -d "$(printf '{"content":"render conductor: POISON-SKIP %s after %s failed renders — needs a look (%s/admin)"}' "$id" "$next" "$API_URL")" \
-        "$DISCORD_ALERT_WEBHOOK" 2>>"$LOG_FILE" || true
-    fi
+    discord_alert "render conductor: POISON-SKIP $id after $next failed renders — needs a look ($API_URL/admin)"
   fi
 }
 
@@ -331,6 +335,14 @@ if [ "$state" = "rendering" ]; then
         else
           log "render EXIT=0 but $rendered_logid still has no video — false success, counting as a failure"
           bump_fail "$rendered_logid"
+          # STALL WARNING one failure ahead of the poison alert: two consecutive clean
+          # exits with no video landing is the silent-waste signature (a whole render's
+          # tokens burned twice with nothing shipped) — page the operator an hour before
+          # the poison threshold instead of after a third burn.
+          stall_count="$(awk -F'\t' -v id="$rendered_logid" '$1==id{print $2+0}' "$FAILS_FILE" 2>/dev/null || printf 0)"
+          if [ "${stall_count:-0}" -eq $((POISON_THRESHOLD - 1)) ]; then
+            discord_alert "render conductor: STALL WARNING — $rendered_logid exited clean ${stall_count}x with no video landing; one more poisons it ($API_URL/admin)"
+          fi
         fi
         ;;
       '' | *[!0-9]*) : ;; # unparseable exit — leave the ledger untouched
@@ -452,6 +464,13 @@ creds="$(mktemp)"
   printf 'export FLUNCLE_API_TOKEN=%s\n' "$FLUNCLE_API_TOKEN"
   printf 'export FLUNCLE_API_URL=%s\n' "$API_URL"
   printf 'export FLUNCLE_GL=swangle\n'
+  # THE ASSIGNED FINDING (poison↔queue coherence): the render agent must film the
+  # SAME finding this conductor accounts for. Before this, the agent re-read the
+  # queue itself and could re-pick a head the conductor had just poison-skipped —
+  # the fail counter then bumped an innocent finding while the offender burned
+  # tokens uncounted (2026-07-19: 049.4.4G took fail #2 for 049.7.6B's renders).
+  # The prompt treats this as THE pick when set; its videoUrl guard keeps re-runs safe.
+  printf 'export FLUNCLE_RENDER_LOG_ID=%s\n' "$head"
   # The plate lane: the render agent authors photographic plates via Gemini. The key
   # arrives here from the 1P-injected sweep secrets; absent -> the agent's documented
   # procedural fallback (never a failure).
