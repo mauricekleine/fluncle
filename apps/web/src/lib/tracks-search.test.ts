@@ -4,6 +4,8 @@
 import { describe, expect, it } from "vitest";
 import {
   KEY_FILTER_OPTIONS,
+  type TracksSearch,
+  buildTracksHref,
   parseTracksSearch,
   tracksHead,
   tracksMastheadLine,
@@ -101,6 +103,64 @@ describe("KEY_FILTER_OPTIONS", () => {
     // Sharp spellings only — the parser folds "Db major" to "C# major", so the control offers "C#".
     expect(KEY_FILTER_OPTIONS).toContain("C# major");
     expect(KEY_FILTER_OPTIONS).not.toContain("Db major");
+  });
+});
+
+describe("buildTracksHref", () => {
+  it("a bare, unfiltered page 1 is the plain /tracks (no query)", () => {
+    expect(buildTracksHref({}, 1)).toBe("/tracks");
+  });
+
+  it("drops the page param on page 1 but sets it beyond", () => {
+    expect(buildTracksHref({}, 1)).toBe("/tracks");
+    expect(buildTracksHref({}, 4)).toBe("/tracks?page=4");
+  });
+
+  it("serializes EVERY filter axis — bpm included, since it stays in the search vocabulary", () => {
+    // The BPM control is gone from the UI, but a `?bpmMin=` filter arriving by URL must survive
+    // paging, so the pager href still carries it. Every axis the parser reads, the builder writes.
+    const filters: TracksSearch = {
+      bpmMax: 180,
+      bpmMin: 160,
+      galaxy: "green-sector",
+      key: "F minor",
+      label: "Hospital Records",
+      yearMax: 2026,
+      yearMin: 2015,
+    };
+    const href = buildTracksHref(filters, 2);
+
+    expect(href).toContain("yearMin=2015");
+    expect(href).toContain("yearMax=2026");
+    expect(href).toContain("bpmMin=160");
+    expect(href).toContain("bpmMax=180");
+    expect(href).toContain("key=F+minor");
+    expect(href).toContain("label=Hospital+Records");
+    expect(href).toContain("galaxy=green-sector");
+    expect(href).toContain("page=2");
+  });
+
+  it("round-trips every axis: parse(build(filters)) === filters", () => {
+    // The load-bearing invariant — the builder and `parseTracksSearch` stay in lockstep, so a pager
+    // link never silently drops a filter. Rebuild the search record from the href and re-parse it.
+    const filters: TracksSearch = {
+      bpmMax: 180,
+      bpmMin: 160,
+      galaxy: "green-sector",
+      key: "F minor",
+      label: "Hospital Records",
+      yearMax: 2026,
+      yearMin: 2015,
+    };
+    const query = buildTracksHref(filters, 1).split("?")[1] ?? "";
+    const record = Object.fromEntries(new URLSearchParams(query));
+
+    expect(parseTracksSearch(record)).toEqual(filters);
+  });
+
+  it("omits the axes that are unset (a single-axis filter carries only itself)", () => {
+    expect(buildTracksHref({ label: "Metalheadz" }, 1)).toBe("/tracks?label=Metalheadz");
+    expect(buildTracksHref({ yearMin: 1995 }, 1)).toBe("/tracks?yearMin=1995");
   });
 });
 

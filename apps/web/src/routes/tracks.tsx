@@ -1,9 +1,26 @@
 import { Link, createFileRoute, notFound, useNavigate } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
-import { type FormEvent } from "react";
+import { type KeyboardEvent, type ReactNode, useMemo, useState } from "react";
+import {
+  CalendarBlankIcon,
+  CaretDownIcon,
+  MusicNotesIcon,
+  PlanetIcon,
+  TagIcon,
+} from "@phosphor-icons/react";
 import { Button } from "@fluncle/ui/components/button";
+import {
+  Combobox,
+  ComboboxContent,
+  ComboboxEmpty,
+  ComboboxInput,
+  ComboboxItem,
+  ComboboxList,
+  ComboboxTrigger,
+} from "@fluncle/ui/components/combobox";
 import { Input } from "@fluncle/ui/components/input";
 import { Label } from "@fluncle/ui/components/label";
+import { Popover, PopoverContent, PopoverTrigger } from "@fluncle/ui/components/popover";
 import {
   Select,
   SelectContent,
@@ -19,6 +36,7 @@ import { isGalaxyMapFullyNamed, listPublicGalaxies } from "@/lib/server/galaxies
 import {
   type CatalogueHubNumberedPage,
   CatalogueHubPageOutOfRangeError,
+  listKnownLabelNames,
 } from "@/lib/server/labels";
 import {
   type TracksHubEntry,
@@ -31,6 +49,7 @@ import {
 import {
   KEY_FILTER_OPTIONS,
   type TracksSearch,
+  buildTracksHref,
   parseTracksSearch,
   tracksHead,
   tracksMastheadLine,
@@ -58,12 +77,13 @@ import {
 type GalaxyOption = { name: string; slug: string };
 
 /** The serverFn payload: a page of the hub (or "missing" for a page past the end), the year lane, the
-    whole held count, and the galaxy options for the filter control. */
+    whole held count, and the galaxy + label options for the filter controls. */
 type TracksFetchResult =
   | {
       galaxyOptions: GalaxyOption[];
       heldTotal: number;
       hub: CatalogueHubNumberedPage<TracksHubEntry>;
+      labelOptions: string[];
       status: "found";
       years: TracksHubYearLaneEntry[];
     }
@@ -77,6 +97,7 @@ type TracksLoaderData = {
   hasFilters: boolean;
   heldTotal: number;
   hub: CatalogueHubNumberedPage<TracksHubEntry>;
+  labelOptions: string[];
   page: number;
   years: TracksHubYearLaneEntry[];
 };
@@ -96,9 +117,10 @@ function pageParam(value: unknown): number | undefined {
 const fetchTracksHubPage = createServerFn({ method: "GET" })
   .validator((data: { filters: TracksHubFilters; page: number }) => data)
   .handler(async ({ data }): Promise<TracksFetchResult> => {
-    const [galaxiesNamed, galaxyOptions] = await Promise.all([
+    const [galaxiesNamed, galaxyOptions, labelOptions] = await Promise.all([
       data.filters.galaxy ? isGalaxyMapFullyNamed() : Promise.resolve(false),
       listPublicGalaxies(),
+      listKnownLabelNames(),
     ]);
     const filters: TracksHubFilters = {
       ...data.filters,
@@ -122,6 +144,7 @@ const fetchTracksHubPage = createServerFn({ method: "GET" })
         galaxyOptions: galaxyOptions.map((galaxy) => ({ name: galaxy.name, slug: galaxy.slug })),
         heldTotal: heldTotal < 0 ? hub.total : heldTotal,
         hub,
+        labelOptions,
         status: "found",
         years,
       };
@@ -164,6 +187,7 @@ export const Route = createFileRoute("/tracks")({
       hasFilters: tracksSearchHasFilters(filters),
       heldTotal: data.heldTotal,
       hub: data.hub,
+      labelOptions: data.labelOptions,
       page,
       years: data.years,
     };
@@ -180,200 +204,336 @@ export const Route = createFileRoute("/tracks")({
   notFoundComponent: StoryNotFoundState,
 });
 
-// ── The filter bar (slice A leaves its behaviour intact; slice B redesigns it) ──────────────
+// ── The filter bar — the pill grammar (slice B) ─────────────────────────────────────────────
+// One quiet row of compact, iconed pill controls, each AUTO-APPLYING: it commits its axis to the
+// URL the instant it changes (a fresh filter set is a fresh list, so the page resets to 1), the
+// loader re-seeds from that URL, and the whole bar remounts (`key` on the search state) so every
+// control reads its value from one source of truth — the URL — and never drifts. No Apply button;
+// a quiet "Clear filters" ghost appears only while a filter is live. The BPM control is gone (the
+// axis stays in the search vocabulary — a `?bpmMin=` still narrows the list — but the UI for it
+// retired). The pills are chrome on a catalogue page: quiet, dark, bordered, no gold but the focus
+// ring (DESIGN.md's Unlit register + One Sun Rule), Phosphor icons only (Iconography).
 
-/** One number filter field (a year or a BPM bound) — a Shadcn Label + Input, seeded from the URL. */
-function NumberFilter({
-  defaultValue,
-  id,
-  label,
-  max,
-  min,
-  name,
-  placeholder,
+// The Popover trigger carries no Shadcn base chrome of its own (unlike the Select / Combobox
+// triggers, which bake theirs), so the year pill wears this shared string to match them exactly:
+// the same bordered, quiet, dark pill with the same Eclipse-Gold focus ring convention.
+const PILL_TRIGGER_CLASS =
+  "flex w-fit items-center justify-between gap-1.5 rounded-md border border-input bg-transparent py-2 pr-2 pl-2.5 text-sm whitespace-nowrap shadow-xs transition-[color,box-shadow] outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 dark:bg-input/30 dark:hover:bg-input/50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4";
+
+/** A year the popover typed: junk / non-positive / out of a sane range folds to undefined. */
+function yearParam(value: string): number | undefined {
+  const n = Number(value.trim());
+
+  return Number.isInteger(n) && n >= 1900 && n <= 2200 ? n : undefined;
+}
+
+/** The label a year range reads as in its closed pill — quiet, never a mechanism ("yearMin=…"). */
+function yearRangeLabel(from: number | undefined, to: number | undefined): string {
+  if (from !== undefined && to !== undefined) {
+    return `${from} – ${to}`;
+  }
+  if (from !== undefined) {
+    return `From ${from}`;
+  }
+  if (to !== undefined) {
+    return `Until ${to}`;
+  }
+
+  return "Any year";
+}
+
+/** The year range — ONE pill opening a small two-field popover (from / to). It commits when the
+    popover closes (click-away, Escape, Tab-out) or on Enter, and only when the range actually
+    changed, so a glance that opens and closes navigates nowhere. */
+function YearRangePill({
+  from,
+  onCommit,
+  to,
 }: {
-  defaultValue: number | undefined;
-  id: string;
-  label: string;
-  max: number;
-  min: number;
-  name: string;
-  placeholder: string;
+  from: number | undefined;
+  onCommit: (from: number | undefined, to: number | undefined) => void;
+  to: number | undefined;
 }) {
+  const [open, setOpen] = useState(false);
+  const [fromValue, setFromValue] = useState(from === undefined ? "" : String(from));
+  const [toValue, setToValue] = useState(to === undefined ? "" : String(to));
+
+  const apply = () => {
+    const nextFrom = yearParam(fromValue);
+    const nextTo = yearParam(toValue);
+    // No-op guard: re-navigating to the same URL would re-run the loader for nothing.
+    if (nextFrom !== from || nextTo !== to) {
+      onCommit(nextFrom, nextTo);
+    }
+  };
+
+  const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      apply();
+      setOpen(false);
+    }
+  };
+
   return (
-    <div className="grid gap-1.5">
-      <Label className="text-xs font-medium text-muted-foreground" htmlFor={id}>
-        {label}
-      </Label>
-      <Input
-        className="w-24"
-        defaultValue={defaultValue ?? ""}
-        id={id}
-        inputMode="numeric"
-        max={max}
-        min={min}
-        name={name}
-        placeholder={placeholder}
-        type="number"
-      />
-    </div>
+    <Popover
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (!next) {
+          apply();
+        }
+      }}
+      open={open}
+    >
+      <PopoverTrigger
+        aria-label={`Release year: ${yearRangeLabel(from, to)}`}
+        className={`${PILL_TRIGGER_CLASS} tracks-filter-pill`}
+      >
+        <CalendarBlankIcon className="size-4 shrink-0 text-muted-foreground" />
+        <span className="tracks-filter-pill-value">{yearRangeLabel(from, to)}</span>
+        <CaretPill />
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-64 gap-3">
+        <div className="grid grid-cols-2 gap-3">
+          <div className="grid gap-1.5">
+            <Label
+              className="text-xs font-medium text-muted-foreground"
+              htmlFor="tracks-filter-year-from"
+            >
+              From
+            </Label>
+            <Input
+              id="tracks-filter-year-from"
+              inputMode="numeric"
+              onChange={(event) => setFromValue(event.target.value)}
+              onKeyDown={onKeyDown}
+              placeholder="1995"
+              value={fromValue}
+            />
+          </div>
+          <div className="grid gap-1.5">
+            <Label
+              className="text-xs font-medium text-muted-foreground"
+              htmlFor="tracks-filter-year-to"
+            >
+              To
+            </Label>
+            <Input
+              id="tracks-filter-year-to"
+              inputMode="numeric"
+              onChange={(event) => setToValue(event.target.value)}
+              onKeyDown={onKeyDown}
+              placeholder="2026"
+              value={toValue}
+            />
+          </div>
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+/** The shared chevron every pill wears on its right edge (the base-ui Select's own caret, matched). */
+function CaretPill() {
+  return <CaretDownIcon className="size-4 shrink-0 text-muted-foreground" />;
+}
+
+/** A single-select pill (Key, Galaxy): a base-ui Select dressed as a pill, committing on change.
+    `items` maps value → trigger label so the closed pill reads the LABEL, and "" renders the quiet
+    "Any …" default rather than a blank. */
+function SelectPill({
+  ariaLabel,
+  emptyLabel,
+  icon,
+  onCommit,
+  options,
+  value,
+}: {
+  ariaLabel: string;
+  emptyLabel: string;
+  icon: ReactNode;
+  onCommit: (value: string | undefined) => void;
+  options: { label: string; value: string }[];
+  value: string | undefined;
+}) {
+  const items: Record<string, string> = {
+    "": emptyLabel,
+    ...Object.fromEntries(options.map((option) => [option.value, option.label])),
+  };
+
+  return (
+    <Select
+      items={items}
+      onValueChange={(next) => onCommit(next ? next : undefined)}
+      value={value ?? ""}
+    >
+      <SelectTrigger aria-label={ariaLabel} className="tracks-filter-pill">
+        {icon}
+        <SelectValue placeholder={emptyLabel} />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value="">{emptyLabel}</SelectItem>
+        {options.map((option) => (
+          <SelectItem key={option.value} value={option.value}>
+            {option.label}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
+
+/** A label option in the combobox: a known name, or the free-typed string offered as a creatable. */
+type LabelOption = { isNew?: boolean; label: string; value: string };
+
+/** The label combobox pill — typeahead over the KNOWN labels, but a free-typed string that matches
+    none is still offered (the filter compiles against the raw `tracks.label` string, so an unknown
+    imprint is a valid filter). Selecting any row commits; "Any label" clears. */
+function LabelComboboxPill({
+  onCommit,
+  options,
+  value,
+}: {
+  onCommit: (value: string | undefined) => void;
+  options: string[];
+  value: string | undefined;
+}) {
+  const [open, setOpen] = useState(false);
+  const [inputValue, setInputValue] = useState("");
+
+  const items = useMemo<LabelOption[]>(() => {
+    const trimmed = inputValue.trim();
+    const lower = trimmed.toLocaleLowerCase();
+    const matches = options.filter((name) => name.toLocaleLowerCase().includes(lower));
+    const exact = options.some((name) => name.toLocaleLowerCase() === lower);
+    const view: LabelOption[] = [];
+    // Offer "Any label" as the clear affordance only when there is a live label to clear and the
+    // reader is not mid-search (a search is intent to pick or create, not to clear).
+    if (value !== undefined && trimmed === "") {
+      view.push({ label: "Any label", value: "" });
+    }
+    view.push(...matches.map((name) => ({ label: name, value: name })));
+    if (trimmed !== "" && !exact) {
+      view.push({ isNew: true, label: trimmed, value: trimmed });
+    }
+
+    return view;
+  }, [inputValue, options, value]);
+
+  const selected: LabelOption | null = value === undefined ? null : { label: value, value };
+
+  return (
+    <Combobox
+      filter={null}
+      inputValue={inputValue}
+      isItemEqualToValue={(a, b) => a?.value === b?.value}
+      items={items}
+      itemToStringLabel={(item: LabelOption | null) => item?.label ?? ""}
+      onInputValueChange={(next) => setInputValue(next)}
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (!next) {
+          setInputValue("");
+        }
+      }}
+      onValueChange={(item) => onCommit(item && item.value !== "" ? item.value : undefined)}
+      open={open}
+      value={selected}
+    >
+      <ComboboxTrigger aria-label={`Label: ${value ?? "Any label"}`} className="tracks-filter-pill">
+        <TagIcon className="size-4 shrink-0 text-muted-foreground" />
+        <span className="tracks-filter-pill-value">{value ?? "Any label"}</span>
+      </ComboboxTrigger>
+      <ComboboxContent align="start">
+        <ComboboxInput placeholder="Search labels" />
+        <ComboboxEmpty>No labels match that.</ComboboxEmpty>
+        <ComboboxList>
+          {items.map((item) => (
+            <ComboboxItem key={item.value === "" ? "__any__" : item.value} value={item}>
+              {item.isNew ? `Filter by “${item.label}”` : item.label}
+            </ComboboxItem>
+          ))}
+        </ComboboxList>
+      </ComboboxContent>
+    </Combobox>
   );
 }
 
 /**
- * The filter bar: a real form that navigates on submit (never per-keystroke), so the loader
- * re-seeds from a fresh URL and the page stays crawlable + shareable. Built on the Shadcn design
- * system (Input / Label / Select / Button) — the base-ui Select carries its `name` into the form
- * submit via a hidden input, so the navigate-on-submit read of `FormData` still works. Uncontrolled,
- * seeded from the current search; "Apply filters" submits (which resets to page 1 — a fresh filter
- * set is a fresh list), "Clear filters" returns to the bare hub.
+ * The filter bar: one quiet row of pill controls, each auto-applying to the URL on change. The bar
+ * is keyed on the search state upstream (`TracksPage`), so a commit remounts it and every control
+ * re-seeds from the URL — the single source of truth. No submit; "Clear filters" returns to the
+ * bare hub.
  */
 function TracksFilters({
   galaxyOptions,
+  labelOptions,
   search,
 }: {
   galaxyOptions: GalaxyOption[];
+  labelOptions: string[];
   search: TracksSearch;
 }) {
   const navigate = useNavigate();
 
-  const onSubmit = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    const raw = Object.fromEntries(form.entries());
-    // `parseTracksSearch` carries no `page`, so a filter change drops the page param → page 1.
-    void navigate({ search: parseTracksSearch(raw), to: "/tracks" });
-  };
-
-  // `items` maps a Select's value → its trigger label so base-ui renders the LABEL (not the raw
-  // value) in the closed trigger — load-bearing for the "" default (renders "Any …", never a blank)
-  // and for galaxy (value is a slug, label is the name).
-  const keyItems: Record<string, string> = {
-    "": "Any key",
-    ...Object.fromEntries(KEY_FILTER_OPTIONS.map((option) => [option, option])),
-  };
-  const galaxyItems: Record<string, string> = {
-    "": "Any galaxy",
-    ...Object.fromEntries(galaxyOptions.map((galaxy) => [galaxy.slug, galaxy.name])),
+  // Merge a patch over the current filters and navigate. Dropping `page` (it is not in `search`)
+  // resets to page 1; `validateSearch` re-parses, folding "" / non-positive values to undefined.
+  const commit = (patch: Partial<TracksSearch>) => {
+    void navigate({ search: { ...search, ...patch }, to: "/tracks" });
   };
 
   return (
-    <form
-      aria-labelledby="tracks-filter-heading"
-      className="flex flex-wrap items-end gap-x-4 gap-y-3 border-y border-border/55 py-4"
-      onSubmit={onSubmit}
-    >
+    <section aria-labelledby="tracks-filter-heading" className="tracks-filter-bar">
       <h2 className="sr-only" id="tracks-filter-heading">
         Filter tracks
       </h2>
 
-      <NumberFilter
-        defaultValue={search.yearMin}
-        id="tracks-filter-year-min"
-        label="From year"
-        max={2100}
-        min={1990}
-        name="yearMin"
-        placeholder="1995"
-      />
-      <NumberFilter
-        defaultValue={search.yearMax}
-        id="tracks-filter-year-max"
-        label="To year"
-        max={2100}
-        min={1990}
-        name="yearMax"
-        placeholder="2026"
-      />
-      <NumberFilter
-        defaultValue={search.bpmMin}
-        id="tracks-filter-bpm-min"
-        label="Min BPM"
-        max={300}
-        min={1}
-        name="bpmMin"
-        placeholder="160"
-      />
-      <NumberFilter
-        defaultValue={search.bpmMax}
-        id="tracks-filter-bpm-max"
-        label="Max BPM"
-        max={300}
-        min={1}
-        name="bpmMax"
-        placeholder="180"
+      <YearRangePill
+        from={search.yearMin}
+        onCommit={(yearMin, yearMax) => commit({ yearMax, yearMin })}
+        to={search.yearMax}
       />
 
-      <div className="grid gap-1.5">
-        <Label className="text-xs font-medium text-muted-foreground" htmlFor="tracks-filter-key">
-          Key
-        </Label>
-        <Select defaultValue={search.key ?? ""} items={keyItems} name="key">
-          <SelectTrigger className="w-40" id="tracks-filter-key">
-            <SelectValue placeholder="Any key" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="">Any key</SelectItem>
-            {KEY_FILTER_OPTIONS.map((option) => (
-              <SelectItem key={option} value={option}>
-                {option}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
+      <SelectPill
+        ariaLabel={`Key: ${search.key ?? "any"}`}
+        emptyLabel="Any key"
+        icon={<MusicNotesIcon className="size-4 shrink-0 text-muted-foreground" />}
+        onCommit={(key) => commit({ key })}
+        options={KEY_FILTER_OPTIONS.map((option) => ({ label: option, value: option }))}
+        value={search.key}
+      />
 
-      <div className="grid grow gap-1.5">
-        <Label className="text-xs font-medium text-muted-foreground" htmlFor="tracks-filter-label">
-          Label
-        </Label>
-        <Input
-          className="min-w-48"
-          defaultValue={search.label ?? ""}
-          id="tracks-filter-label"
-          name="label"
-          placeholder="e.g. Hospital Records"
-          type="text"
-        />
-      </div>
+      <LabelComboboxPill
+        onCommit={(label) => commit({ label })}
+        options={labelOptions}
+        value={search.label}
+      />
 
       {/* Galaxy is offered ONLY once the sonic map is named (the launch gate): an empty list keeps
-          the control off the page entirely (the /galaxies-dark precedent), never a dead select. */}
+          the control off the page entirely (the /galaxies-dark precedent), never a dead pill. */}
       {galaxyOptions.length > 0 ? (
-        <div className="grid gap-1.5">
-          <Label
-            className="text-xs font-medium text-muted-foreground"
-            htmlFor="tracks-filter-galaxy"
-          >
-            Galaxy
-          </Label>
-          <Select defaultValue={search.galaxy ?? ""} items={galaxyItems} name="galaxy">
-            <SelectTrigger className="w-40" id="tracks-filter-galaxy">
-              <SelectValue placeholder="Any galaxy" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="">Any galaxy</SelectItem>
-              {galaxyOptions.map((galaxy) => (
-                <SelectItem key={galaxy.slug} value={galaxy.slug}>
-                  {galaxy.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
+        <SelectPill
+          ariaLabel={`Galaxy: ${search.galaxy ?? "any"}`}
+          emptyLabel="Any galaxy"
+          icon={<PlanetIcon className="size-4 shrink-0 text-muted-foreground" />}
+          onCommit={(galaxy) => commit({ galaxy })}
+          options={galaxyOptions.map((galaxy) => ({ label: galaxy.name, value: galaxy.slug }))}
+          value={search.galaxy}
+        />
       ) : undefined}
 
-      <div className="ml-auto flex items-center gap-2">
-        <Button type="submit" variant="outline">
-          Apply filters
+      {tracksSearchHasFilters(search) ? (
+        <Button
+          className="tracks-filter-clear"
+          nativeButton={false}
+          render={<Link to="/tracks" />}
+          size="sm"
+          variant="ghost"
+        >
+          Clear filters
         </Button>
-        {tracksSearchHasFilters(search) ? (
-          <Button nativeButton={false} render={<Link to="/tracks" />} size="sm" variant="ghost">
-            Clear filters
-          </Button>
-        ) : undefined}
-      </div>
-    </form>
+      ) : undefined}
+    </section>
   );
 }
 
@@ -386,43 +546,9 @@ function matchCount(count: number): string {
   return `${numberFormatter.format(count)} ${count === 1 ? "match" : "matches"}`;
 }
 
-/** Build a real `/tracks?…` href for a page, composing the active filters — the pager + year-lane
-    anchors a crawler follows. Page 1 drops the `page` param; a bare, unfiltered page-1 is `/tracks`. */
-function buildTracksHref(filters: TracksSearch, page: number): string {
-  const params = new URLSearchParams();
-
-  if (filters.yearMin !== undefined) {
-    params.set("yearMin", String(filters.yearMin));
-  }
-  if (filters.yearMax !== undefined) {
-    params.set("yearMax", String(filters.yearMax));
-  }
-  if (filters.bpmMin !== undefined) {
-    params.set("bpmMin", String(filters.bpmMin));
-  }
-  if (filters.bpmMax !== undefined) {
-    params.set("bpmMax", String(filters.bpmMax));
-  }
-  if (filters.key !== undefined) {
-    params.set("key", filters.key);
-  }
-  if (filters.label !== undefined) {
-    params.set("label", filters.label);
-  }
-  if (filters.galaxy !== undefined) {
-    params.set("galaxy", filters.galaxy);
-  }
-  if (page > 1) {
-    params.set("page", String(page));
-  }
-
-  const query = params.toString();
-
-  return query ? `/tracks?${query}` : "/tracks";
-}
-
 function TracksPage() {
-  const { filters, galaxyOptions, hasFilters, heldTotal, hub, years } = Route.useLoaderData();
+  const { filters, galaxyOptions, hasFilters, heldTotal, hub, labelOptions, years } =
+    Route.useLoaderData();
   const buildHref = (page: number) => buildTracksHref(filters, page);
 
   return (
@@ -440,11 +566,13 @@ function TracksPage() {
           <p className="log-index-intro">{tracksMastheadLine(heldTotal)}</p>
         </header>
 
-        {/* Keyed by the search state: the inputs are uncontrolled (`defaultValue`), so without a
-            remount "Clear filters" leaves stale values on screen while the list resets under them. */}
+        {/* Keyed by the search state: each pill seeds its local state from the URL, so a fresh URL
+            must remount the bar to re-seed every control (otherwise a cleared filter would leave a
+            stale value on a pill while the list resets under it). The URL is the one source of truth. */}
         <TracksFilters
           galaxyOptions={galaxyOptions}
           key={JSON.stringify(filters)}
+          labelOptions={labelOptions}
           search={filters}
         />
 

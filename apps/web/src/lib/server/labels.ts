@@ -513,6 +513,30 @@ export async function getLabelForAlbum(albumId: string): Promise<LabelRecord | u
  * top of this file). It drives from the findings join, so it is bounded by the archive
  * rather than by the catalogue. The sitemap filters it further by the thin-content gate.
  */
+/**
+ * Just the NAMES of the labels Fluncle has pulled a banger off — the typeahead pool for the
+ * `/tracks` filter's label combobox. The same findings-bounded set `listLabelsWithFindingCounts`
+ * returns (a label he never certified on is rightly absent), and the same alphabetical order, but
+ * without the per-group cover/date subqueries that read carries — strictly a lighter pass over the
+ * SAME already-shipping join, so it inherits its proven shape while staying archive-bounded (~the
+ * label count, not the catalogue). The control still compiles a free-typed string that matches no
+ * known name, so this is a suggestion pool, never a closed set.
+ */
+export async function listKnownLabelNames(): Promise<string[]> {
+  const db = await getDb();
+  const result = await db.execute({
+    sql: `select labels.name as name
+          from labels
+          join tracks on tracks.label_id = labels.id
+          join findings on findings.track_id = tracks.track_id
+          where findings.log_id is not null
+          group by labels.id
+          order by labels.name collate nocase asc`,
+  });
+
+  return typedRows<{ name: string }>(result.rows).map((row) => row.name);
+}
+
 export async function listLabelsWithFindingCounts(): Promise<LabelIndexEntry[]> {
   const db = await getDb();
   const result = await db.execute({

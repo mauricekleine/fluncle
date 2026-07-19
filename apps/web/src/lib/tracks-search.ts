@@ -17,7 +17,7 @@ export type TracksSearch = TracksHubFilters;
 // carries the genre keyword and the paged variants bake their page number into BOTH strings.
 export const tracksHubTitle = "Every drum & bass track, newest first · Fluncle";
 export const tracksHubDescription =
-  "Every drum & bass track Fluncle holds, newest release first. Filter the whole list by release year, tempo, key, and label, or jump straight to a year.";
+  "Every drum & bass track Fluncle holds, newest release first. Filter the whole list by release year, key, and label, or jump straight to a year.";
 
 /** The `<title>` + `<meta name="description">` for one page of the hub. Page 1 is the base pair. */
 export function tracksPagedMeta(page: number): { description: string; title: string } {
@@ -26,7 +26,7 @@ export function tracksPagedMeta(page: number): { description: string; title: str
   }
 
   return {
-    description: `Page ${page} of every drum & bass track Fluncle holds, newest release first. Filter by release year, tempo, key, and label.`,
+    description: `Page ${page} of every drum & bass track Fluncle holds, newest release first. Filter by release year, key, and label, or jump to a year.`,
     title: `Every drum & bass track, page ${page} · Fluncle`,
   };
 }
@@ -112,6 +112,48 @@ export function parseTracksSearch(search: Record<string, unknown>): TracksSearch
 /** True when ANY filter axis is active — the bit the head keys `noindex` off. */
 export function tracksSearchHasFilters(search: TracksSearch): boolean {
   return Object.values(search).some((value) => value !== undefined);
+}
+
+/**
+ * Build a real `/tracks?…` href for a page, composing the active filters — the pager + year-lane
+ * anchors a crawler follows. Page 1 drops the `page` param; a bare, unfiltered page-1 is `/tracks`.
+ *
+ * Lives here, beside `parseTracksSearch`, so the two stay in LOCKSTEP: every axis this serializes is
+ * one that read parses back, and the round-trip (`parse → build → parse`) is unit-pinned. It carries
+ * `bpmMin`/`bpmMax` even though the filter bar no longer offers a BPM control — the axis stays in the
+ * search vocabulary (search still compiles it), so a bpm filter arriving by URL must survive paging.
+ */
+export function buildTracksHref(filters: TracksSearch, page: number): string {
+  const params = new URLSearchParams();
+
+  if (filters.yearMin !== undefined) {
+    params.set("yearMin", String(filters.yearMin));
+  }
+  if (filters.yearMax !== undefined) {
+    params.set("yearMax", String(filters.yearMax));
+  }
+  if (filters.bpmMin !== undefined) {
+    params.set("bpmMin", String(filters.bpmMin));
+  }
+  if (filters.bpmMax !== undefined) {
+    params.set("bpmMax", String(filters.bpmMax));
+  }
+  if (filters.key !== undefined) {
+    params.set("key", filters.key);
+  }
+  if (filters.label !== undefined) {
+    params.set("label", filters.label);
+  }
+  if (filters.galaxy !== undefined) {
+    params.set("galaxy", filters.galaxy);
+  }
+  if (page > 1) {
+    params.set("page", String(page));
+  }
+
+  const query = params.toString();
+
+  return query ? `/tracks?${query}` : "/tracks";
 }
 
 /** What the head reads off the loaded page: which page it is, the page's entries (for the ItemList),
