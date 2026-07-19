@@ -1915,6 +1915,28 @@ body::before {
   width: 1.5rem;
 }
 
+/* The UNLIT similar-artist chip — a sonically-near artist Fluncle never certified (DESIGN.md's
+   Unlit Rule). It reads a step DOWN from a certified chip: the border holds at dust (no
+   primary-tinted lift), and the avatar carries the cold dust veil (the same ~0.62 the stream's
+   catalogue-row avatar takes). It is never gold — but the ink still HEATS TO CREAM on hover, the
+   register's own precedent (`.unlit-link:hover`, the fresh catalogue rows): the Unlit Rule swaps
+   gold for dust, it never sanctions non-response. `:not(:focus-visible)` keeps the base
+   focus-visible treatment winning when a focused chip is also under the pointer. */
+.artist-similar-link--unlit:hover:not(:focus-visible) {
+  border-color: var(--border);
+  color: var(--starlight-cream);
+}
+
+.artist-similar-avatar--unlit {
+  opacity: 0.62;
+  transition: opacity 150ms ease-out;
+}
+
+.artist-similar-link--unlit:hover .artist-similar-avatar--unlit,
+.artist-similar-link--unlit:focus-visible .artist-similar-avatar--unlit {
+  opacity: 0.85;
+}
+
 /* The round artist avatar — a cover-led Spotify image with a monogram fallback
    tile (image_url null). Shared by the /artists index cards + the similar-artists
    chips; the size is set by the caller's class. */

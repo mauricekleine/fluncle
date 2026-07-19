@@ -2657,6 +2657,21 @@ function addAdminCommands(program: Command): void {
       await runEntityDescribe("artist", slug, options, describeArtistCommand);
     });
 
+  // `rank_artists` → `admin artists rank`. One tick of the similar-artists precompute sweep
+  // (artist centroids + top-K edges) — the artist-graph sibling of `admin catalogue rank`. The
+  // periodic `--no-agent` cron drives it with the box's agent token; `remaining > 0` = run again.
+  artists
+    .command("rank")
+    .description(
+      "Run one tick of the similar-artists sweep (artist centroids + nearest neighbours)",
+    )
+    .option("--limit <limit>", "Stale artists per tick (default 100)")
+    .option("--json", "Print JSON", false)
+    .action(async (options: CatalogueRankOptions) => {
+      const { rankArtistsCommand } = await import("./commands/admin-artists");
+      await runArtistsRank(options, rankArtistsCommand);
+    });
+
   // `draft_artist_bio` → `admin artists draft-bio <slug>`. The box's bio sweep's TRIGGER: the
   // Worker gathers the grounding (Firecrawl facts + finding titles) and returns a
   // ready-to-author prompt + its provenance version. Prints the JSON the sweep consumes.
@@ -5784,6 +5799,25 @@ async function runGalaxies(
       `${galaxy.name.padEnd(40)} ${String(galaxy.memberCount).padStart(3)} finding${galaxy.memberCount === 1 ? "" : "s"}`,
     );
   }
+}
+
+async function runArtistsRank(
+  options: CatalogueRankOptions,
+  rankArtistsCommand: typeof import("./commands/admin-artists").rankArtistsCommand,
+): Promise<void> {
+  const { summary } = await rankArtistsCommand({ limit: options.limit });
+
+  if (options.json) {
+    printJson({ ok: true, summary });
+    return;
+  }
+
+  const removed =
+    summary.centroidsRemoved > 0 ? ` Purged ${summary.centroidsRemoved} orphan(s).` : "";
+
+  console.log(
+    `Ranked ${summary.centroidsComputed} artist(s); wrote ${summary.edgesWritten} edges.${removed} ${summary.remaining} still stale.`,
+  );
 }
 
 async function runCatalogueRank(

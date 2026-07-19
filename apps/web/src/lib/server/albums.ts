@@ -25,10 +25,7 @@ import { slugify } from "@fluncle/contracts/util/galaxy-slug";
 import { getDb, typedRows } from "./db";
 import {
   type CatalogueHubNumberedPage,
-  type CatalogueHubPage,
   type CatalogueHubQuery,
-  clampCatalogueHubLimit,
-  countCatalogueHub,
   type EntitySitemapRow,
   listCatalogueHubPage,
 } from "./labels";
@@ -450,64 +447,7 @@ export type AlbumCatalogueEntry = {
   trackCount: number;
 };
 
-/**
- * One page of the ALBUMS hub's "also in the catalogue" section: every album with ZERO certified
- * findings whose page clears the renderable-track floor ({@link ALBUM_INDEX_MIN_TRACKS}) — the
- * complement of `listAlbumsWithFindingCounts`. The exact twin of `listLabelsCatalogue`; that
- * function carries the scale note (the proven sitemap query shape + a `sum(certified) = 0` clause
- * and a slug keyset, all bound as params, no fresh hosted-Turso proof needed).
- */
-export async function listAlbumsCatalogue(options: {
-  cursor?: string;
-  limit?: number;
-}): Promise<CatalogueHubPage<AlbumCatalogueEntry>> {
-  const db = await getDb();
-  const limit = clampCatalogueHubLimit(options.limit);
-  const cursor = typeof options.cursor === "string" ? options.cursor : "";
-
-  const result = await db.execute({
-    args: [cursor, ALBUM_INDEX_MIN_TRACKS, limit],
-    // The record's own cover from any of its tracks — a findings-free album has no finding cover,
-    // and every track on one record shares the same album art (docs/album-artwork.md).
-    sql: `select albums.slug as slug, albums.name as name,
-                 sum(case when findings.log_id is not null then 1 else 0 end)
-               + sum(case when findings.track_id is null then 1 else 0 end) as track_count,
-                 (select t2.album_image_url
-                    from tracks t2
-                    where t2.album_id = albums.id and t2.album_image_url is not null
-                    order by t2.release_date is null asc, t2.release_date desc, t2.track_id asc
-                    limit 1) as cover_url
-          from albums
-          join tracks on tracks.album_id = albums.id
-          left join findings on findings.track_id = tracks.track_id
-          where albums.slug > ?
-          group by albums.id
-          having sum(case when findings.log_id is not null then 1 else 0 end) = 0
-             and sum(case when findings.log_id is not null then 1 else 0 end)
-               + sum(case when findings.track_id is null then 1 else 0 end) >= ?
-          order by albums.slug asc
-          limit ?`,
-  });
-
-  const items = typedRows<{
-    cover_url: string | null;
-    name: string;
-    slug: string;
-    track_count: number;
-  }>(result.rows).map((row) => ({
-    coverImageUrl: row.cover_url ?? undefined,
-    name: row.name,
-    slug: row.slug,
-    trackCount: Number(row.track_count),
-  }));
-
-  return {
-    items,
-    nextCursor: items.length === limit ? (items[items.length - 1]?.slug ?? null) : null,
-  };
-}
-
-/** The ALBUMS hub's `?page=N` read, over the same set as the keyset `listAlbumsCatalogue`. */
+/** The ALBUMS hub's `?page=N` read, over the findings-free, floor-gated set of records. */
 const ALBUMS_HUB_QUERY: CatalogueHubQuery<AlbumCatalogueEntry> = {
   floor: ALBUM_INDEX_MIN_TRACKS,
   from: "albums join tracks on tracks.album_id = albums.id",
@@ -526,20 +466,15 @@ const ALBUMS_HUB_QUERY: CatalogueHubQuery<AlbumCatalogueEntry> = {
   slugExpr: "albums.slug",
 };
 
-/** One numbered page of the `/albums` hub's findings-free section (the crawlable `?page=N` view). */
+/**
+ * One numbered page of the `/albums` hub's findings-free section (the `?page=N` view). Albums have
+ * no A–Z lane (an album's identity is its cover, and browse-by-title-initial is not how records are
+ * dug), so the numbered pager IS the album hub's crawl entry into the long tail.
+ */
 export function listAlbumsCataloguePage(
   page: number,
 ): Promise<CatalogueHubNumberedPage<AlbumCatalogueEntry>> {
   return listCatalogueHubPage(ALBUMS_HUB_QUERY, page);
-}
-
-/**
- * The `/albums` hub's total findings-free, floor-clearing record count — the param-free page's pager
- * key. Albums have no A–Z lane (an album's identity is its cover, and browse-by-title-initial is not
- * how records are dug), so the numbered pager IS the album hub's crawl entry.
- */
-export function countAlbumsCatalogue(): Promise<number> {
-  return countCatalogueHub(ALBUMS_HUB_QUERY);
 }
 
 // THE ALBUM EDGE IS WRITTEN INLINE, not deferred. The publish path calls `linkTrackToAlbum`

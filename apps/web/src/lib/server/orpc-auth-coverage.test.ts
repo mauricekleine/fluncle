@@ -536,6 +536,10 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // columns, and only on CATALOGUE rows (a `tracks` row with no `findings` row). It
   // cannot mint a coordinate, write a note, or certify anything — those columns do not
   // exist on the rows it can reach — so the box's agent token drives it.
+  // The similar-artists precompute sweep — AGENT tier (adminAuth only), the rank_catalogue
+  // precedent. It writes only derived artist-graph artifacts (centroids + edges) and certifies
+  // nothing, so the box's agent-token cron drives it.
+  rank_artists: "admin",
   rank_catalogue: "admin",
   // The append-only cost ledger's write (COST-01) — agent tier (adminAuth only, no
   // operatorGuard), the record_health precedent; the box's sweeps POST their cost

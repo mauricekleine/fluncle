@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   type ArtistEmbeddingGroup,
+  artistCentroidFingerprint,
   meanEmbedding,
   rankSimilarArtists,
   summarizeArtistSignature,
@@ -106,6 +107,21 @@ describe("rankSimilarArtists — the similar-artists ranking", () => {
     ];
 
     expect(rankSimilarArtists("drift", withEmptyCandidate, 4).map((n) => n.slug)).toEqual(["echo"]);
+  });
+});
+
+describe("artistCentroidFingerprint — the per-artist staleness fingerprint", () => {
+  it("folds the ranking-logic version and the artist's own embedded-track count into one string", () => {
+    expect(artistCentroidFingerprint(5)).toBe("v1:5");
+  });
+
+  it("moves when the artist's embedded-track count moves (an embed, a re-link, a deletion)", () => {
+    const base = artistCentroidFingerprint(5);
+
+    // The count is PER-ARTIST, so only an artist whose OWN discography changed goes stale — not the
+    // whole archive on any global change. A gain and a loss both diverge (compared with `<>`).
+    expect(artistCentroidFingerprint(6)).not.toBe(base);
+    expect(artistCentroidFingerprint(4)).not.toBe(base);
   });
 });
 
