@@ -126,6 +126,30 @@ describe("downloadCappedImage — the ≤1200 cap", () => {
 
     expect(image).toBeUndefined();
   });
+
+  it("a 404 is a definitive miss (undefined), never a throw", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("not here", { status: 404 })),
+    );
+
+    expect(
+      await downloadCappedImage("https://coverartarchive.org/release/x/front-500"),
+    ).toBeUndefined();
+  });
+
+  it("a 503 THROWS (transient outage → the row lands failed + cooldown, never terminal none)", async () => {
+    // The 2026-07-19 archive.org outage regression: a retryable status must never read as
+    // "this source has no cover" — that converted a CAA outage into permanent give-ups.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("bad gateway", { status: 503 })),
+    );
+
+    await expect(
+      downloadCappedImage("https://coverartarchive.org/release/x/front-500"),
+    ).rejects.toThrow(/transient source error 503/);
+  });
 });
 
 describe("resolveCoverMasters — the album ladder", () => {

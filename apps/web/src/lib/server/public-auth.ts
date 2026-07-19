@@ -374,6 +374,22 @@ export function createPublicAuthOptions(
       expo(),
     ],
     secret: publicAuthSecret(),
+    // Cache the session in a signed cookie so `getSession` resolves the session + user
+    // from the cookie instead of TWO sequential DB reads on every authenticated BROWSER
+    // request. Safe here: `getPublicSession` reads only `.id` off the cached session and
+    // then does its OWN fresh full-user read for every gate (`status`, `email_verified`),
+    // so nothing we gate on is ever served stale (the custom fields are `returned: false`
+    // below, so the cached session never carried them anyway). The one tradeoff is
+    // session-token REVOCATION latency — a server-revoked session can stay valid on a
+    // client until the cookie's `maxAge` — bounded short (60 s); a deactivated/deleted user
+    // is still caught immediately by the fresh `status !== "active"` check. Bearer clients
+    // (CLI/mobile) carry no cookie, so they are unaffected and keep resolving on the DB.
+    session: {
+      cookieCache: {
+        enabled: true,
+        maxAge: 60,
+      },
+    },
     // "Continue with Google" — spread in ONLY when both creds are present
     // (`readGoogleProvider`), so an unprovisioned Worker (or the device-auth test)
     // registers no provider and the whole leg is a no-op. A half-empty config
