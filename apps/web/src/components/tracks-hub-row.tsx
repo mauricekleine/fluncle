@@ -12,6 +12,7 @@ import { CaretRightIcon } from "@phosphor-icons/react";
 import { Link } from "@tanstack/react-router";
 import { siSpotify } from "simple-icons";
 import { BrandIcon } from "@/components/brand-icon";
+import { GraphLink } from "@/components/graph-link";
 import { TrackArtwork } from "@/components/track-artwork";
 import { albumCoverAtSize } from "@/lib/media";
 import { type TracksHubArtistLink, type TracksHubEntry } from "@/lib/server/tracks-hub";
@@ -22,8 +23,11 @@ function releaseYear(releaseDate: string): string {
   return releaseDate.slice(0, 4) || "—";
 }
 
-/** The artist credits as links: a resolved artist goes to `/artist/<slug>`, an unresolved one stays
-    plain text (nowhere honest to send you). Commas between, the tracklist convention. */
+/** The artist credits: a resolved artist is a GraphLink to `/artist/<slug>` (DESIGN.md §5 — wherever
+    a surface names a graph node, the name is a GraphLink, never a bespoke link; the dotted underline
+    is the affordance that tells it from an unresolved plain-text name). Commas between, the
+    tracklist convention. The resting ink defers to the meta line's Stardust via the host override in
+    styles.css (the `.track-label .graph-link` precedent); the heat stays the component's own. */
 function ArtistCredits({ artists }: { artists: TracksHubArtistLink[] }) {
   return (
     <>
@@ -31,13 +35,9 @@ function ArtistCredits({ artists }: { artists: TracksHubArtistLink[] }) {
         <span key={`${artist.name}-${index}`}>
           {index > 0 ? ", " : null}
           {artist.slug ? (
-            <Link
-              className="tracks-hub-row-entity"
-              params={{ slug: artist.slug }}
-              to="/artist/$slug"
-            >
+            <GraphLink kind="artist" slug={artist.slug}>
               {artist.name}
-            </Link>
+            </GraphLink>
           ) : (
             artist.name
           )}
@@ -47,8 +47,8 @@ function ArtistCredits({ artists }: { artists: TracksHubArtistLink[] }) {
   );
 }
 
-/** The imprint credit — a `/label/<slug>` link when the label has a page, plain text when it does
-    not, and nothing at all when the track carries no label. Rides after the artists on the meta line. */
+/** The imprint credit — a GraphLink to `/label/<slug>` when the label has a page, plain text when it
+    does not, and nothing at all when the track carries no label. Rides after the artists. */
 function LabelCredit({ label, slug }: { label?: string; slug?: string }) {
   if (!label) {
     return null;
@@ -58,9 +58,9 @@ function LabelCredit({ label, slug }: { label?: string; slug?: string }) {
     <>
       {" · "}
       {slug ? (
-        <Link className="tracks-hub-row-entity" params={{ slug }} to="/label/$slug">
+        <GraphLink kind="label" slug={slug}>
           {label}
-        </Link>
+        </GraphLink>
       ) : (
         label
       )}

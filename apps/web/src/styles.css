@@ -2714,7 +2714,8 @@ a.catalogue-letter:focus-visible {
   outline-offset: 2px;
 }
 
-/* The artist · label meta line — quiet Stardust, each entity a graph link that heats to cream. */
+/* The artist · label meta line — quiet muted ink; each named entity is a GraphLink (DESIGN.md §5,
+   the signature component — never a bespoke link per surface). */
 .tracks-hub-row-meta {
   color: var(--muted-foreground);
   font-size: 0.8rem;
@@ -2725,20 +2726,18 @@ a.catalogue-letter:focus-visible {
   white-space: nowrap;
 }
 
-.tracks-hub-row-entity {
-  color: var(--stardust);
-  text-decoration: none;
-  transition: color 150ms ease-out;
+/* The ink is the host's (the `.track-label .graph-link` precedent): a cream entity name on a dense
+   48-row reference list would invert the hierarchy and pull the eye off the titles, so the link
+   inherits the meta line's muted ink at rest — the dotted underline is the whole affordance (and
+   what tells a linked artist from an unresolved plain-text one) — and still heats to Eclipse Glow
+   on hover/focus. The Ignition Rule intact, the row's register intact. */
+.tracks-hub-row-meta .graph-link {
+  color: inherit;
 }
 
-.tracks-hub-row-entity:hover {
-  color: var(--starlight-cream);
-}
-
-.tracks-hub-row-entity:focus-visible {
-  border-radius: var(--rounded-sm);
-  outline: 2px solid var(--eclipse-glow);
-  outline-offset: 2px;
+.tracks-hub-row-meta .graph-link:hover,
+.tracks-hub-row-meta .graph-link:focus-visible {
+  color: var(--eclipse-glow);
 }
 
 .tracks-hub-row-caret {
