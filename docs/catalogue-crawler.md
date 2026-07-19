@@ -102,6 +102,23 @@ The re-pagination is cheap by construction. Every release the browse re-lists is
 
 The sweep needs no change: the existing `fluncle-crawl` 10-minute timer picks this up — the re-arm rides every pass, so a Friday drop lands by Monday at the latest, usually sooner.
 
+## The MusicKit freshness tap (day-one releases)
+
+The seed re-arm closes the freshness gap **within MusicBrainz** — but MusicBrainz has a gap of its own: its editorial database lags a release by **~2 weeks**, because a volunteer has to enter it. So a Friday drop is not merely late through the crawl's own cadence; it does not **exist** in the source the crawl walks until well after the weekend it mattered. On `/fresh`, that reads as a hole.
+
+The doctrine amendment (operator-ratified 2026-07-19): **MusicBrainz walks the graph; Apple Music taps freshness.** MusicBrainz stays the spine — the complete, recording-centric, ISRC-bearing walk this whole doc describes. Apple Music, which carries a release on **day one**, becomes a bounded per-label freshness probe: [`apple-releases.ts`](../apps/web/src/lib/server/apple-releases.ts) taps the **latest releases** of each **enabled seed label** and mints metadata-only catalogue rows (a `tracks` row with no `findings` row) carrying their real, day-one release dates — so they surface on `/fresh` immediately, and the MB walk fills in the graph edges behind them at its own pace.
+
+It is the crawl's rules, held exactly:
+
+- **The same allowlist, never widened.** It probes only labels whose `seed_state` is `enabled` — the crawl's own seed set. It mints tracks/albums for the **probed** label and nothing else: no new labels, no artist-graph hops, and never a certification. Rows land in the unlit tier exactly like a crawl mint.
+- **The archive's invariants hold.** `tracks.label` is the archive's own spelling of the seed label (so `slugify(tracks.label) = labels.slug`, the disabled-label-veto invariant), and the row links to the **known** seed label directly — never a re-resolve of Apple's `recordLabel` string. `capture_status` is never named at insert; the DDL default lands.
+- **Label-id resolution is exact-or-nothing.** No Apple label id exists anywhere, so each enabled label resolves its `apple_label_id` once via Apple catalog search, accepting **only an exact name-fold match** against the seed label's own name (a wrong match would mint wrong-label rows). Ambiguous or no-fold ⇒ left null, the attempt stamped, and counted — never guessed. The `labels.apple_label_*` triple is the label-images reliability convention (state / attempted_at / failures), so a persistent no-match gives up to `none`.
+- **It shares the Apple budget.** Every call consults the cross-cutting breaker + the shared 18/min meter (`apple-breaker.ts`), the same governor U1's Apple sweeps ride, and a tripped breaker / spent window stops the pass cleanly. It is a **no-op until the three `APPLE_MUSIC_*` Worker secrets are provisioned** — the tap ships dark.
+
+**The dedupe contract** is the load-bearing design point, because now two acquirers mint an uncertified row for the same recording: the MB crawl (`mb_<recording-mbid>`) and this tap (`ap_<apple-song-id>`). Whichever lands first, the other must fold onto it, not mint a twin. The strong key is the **ISRC** (both carry it when the vendor has one). But an Apple-first row can arrive with a **missing or divergent** ISRC — Apple and MusicBrainz occasionally disagree — so a second, tighter fold closes that hole: an **exact title fold within the same album** ([`catalogue-dedupe.ts`](../apps/web/src/lib/server/catalogue-dedupe.ts)). Two pressings/paths of one recording share an album row (folded on the release-group MBID, or the album-title slug when Apple has no release group), so an equal album_id + an equal title fold is the same track. The fold is deliberately tight — exact, one album — so a VIP/remix (a different title) is never merged. `writeCatalogueTracks` (the MB side) and `writeAppleTracks` (the Apple side) both carry the same three layers, so the two converge from **either** direction.
+
+The tap runs as its own daily on-box sweep, `fluncle-apple-releases` (`docs/agents/hermes/apple-releases-timer/`), Worker-paced exactly like the crawl — the box holds no Apple identity, so the probe happens in the Worker (`backfill_apple_releases`, agent tier) and the timer only paces it.
+
 ## The certification rail
 
 `llms.txt` asserts, truthfully, that _"every track in the archive is one he found, listened to, and certified."_ One crawled row leaking into a feed makes that sentence a lie. So the firewall is structural, and it is tested:

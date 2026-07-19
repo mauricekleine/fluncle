@@ -1119,6 +1119,24 @@ export const SURFACES: readonly Surface[] = [
     weights: { status: "hidden" },
   },
   {
+    command: "fluncle admin backfills apple-releases",
+    exposedContent: [
+      "tap Apple Music's latest releases for the operator's enabled seed labels → day-one uncertified catalogue rows",
+    ],
+    kind: "cron",
+    name: "cron.apple-releases",
+    operatorNotes:
+      "every 24h, run by a rave-02 HOST systemd timer (docs/agents/hermes/apple-releases-timer/). The MusicKit FRESHNESS TAP (D8): MusicBrainz WALKS the graph (cron.crawl) but lags a release ~2 weeks; Apple has it day one, so this taps each ENABLED seed label's latest releases and mints METADATA-ONLY catalogue rows (a `tracks` row with no `findings` row) with their real release dates — closing the /fresh lag cliff. It certifies nothing, publishes nothing, and never widens the graph (no new labels, no artist hops). Deduped against the MB crawl from both directions (ISRC + same-album title fold). Worker-paced (the three APPLE_MUSIC_* secrets live on the Worker); a NO-OP until they are provisioned. Zero LLM tokens. Source: docs/agents/hermes/scripts/apple-releases-sweep.*. See docs/catalogue-crawler.md.",
+    probeConfig: {
+      cadenceMs: 24 * 60 * MINUTE_MS,
+      cronName: "fluncle-apple-releases",
+      kind: "cron",
+    },
+    statusDescription: "taps day-one releases from the enabled labels",
+    title: "Freshness tap",
+    weights: { status: "hidden" },
+  },
+  {
     command: "fluncle admin catalogue rank",
     exposedContent: [
       "score each stale catalogue track against every embedded finding → its nearest finding + capture priority",
