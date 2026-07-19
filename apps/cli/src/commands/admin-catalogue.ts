@@ -56,6 +56,37 @@ export async function catalogueRankCommand(options: { limit?: string }): Promise
   return { summary: response.summary, telescope: response.telescope };
 }
 
+/** The demand tick's summary — the JSON line the nightly cron reads. */
+export type RecordDemandSummary = {
+  configured: boolean;
+  demandedArtists: number;
+  demandedLabels: number;
+  frontierPromoted: number;
+  pagesRead: number;
+  totalPageviews: number;
+  tracksScored: number;
+  unknownSlugs: number;
+  window: { end: string; start: string };
+};
+
+/**
+ * One demand tick. `fluncle admin catalogue demand`.
+ *
+ * A bare trigger (the `reach collect` shape): the WORKER reads Simple Analytics for the
+ * `/artist/<slug>` + `/label/<slug>` pageviews and rewrites the two derived reorder columns
+ * (`tracks.demand_score` + `crawl_frontier.demand_rank`) — a rank-order-only, idempotent,
+ * within-tier reorder toward what real visitors looked at. Unprovisioned (no SA key) it is a
+ * clean `configured: false` no-op. The box holds no SA key; the Worker owns it.
+ */
+export async function catalogueDemandCommand(): Promise<RecordDemandSummary> {
+  const response = await adminApiPost<{ ok: true; summary: RecordDemandSummary }>(
+    "/api/admin/catalogue/demand",
+    {},
+  );
+
+  return response.summary;
+}
+
 /**
  * What the Telescope playlist mirror did after the tick (docs/the-ear.md § Fluncle's
  * Telescope). The sync is best-effort server-side, so this is the operator's ONLY window

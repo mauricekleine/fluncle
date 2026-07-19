@@ -53,6 +53,7 @@ import {
   setTrackDismissed,
   verifyCapture,
 } from "../catalogue";
+import { recordDemand } from "../demand";
 import { syncTelescopePlaylist } from "../telescope-playlist";
 import { crawlCatalogue, DEFAULT_MAX_HOP, getCrawlStatus, MAX_HOP_CEILING } from "../crawl";
 import { adminAuth, operatorGuard } from "../orpc-auth";
@@ -134,6 +135,18 @@ export function adminCatalogueHandlers(os: Implementer) {
       const telescope = await syncTelescopePlaylist();
 
       return { ok: true, summary, telescope } as const;
+    } catch (error) {
+      throw apiFault(error);
+    }
+  });
+
+  // POST /admin/catalogue/demand — one demand tick (docs/catalogue-crawler.md § Demand). AGENT tier,
+  // the `rank_catalogue` precedent: the Worker reads Simple Analytics and rewrites the two derived
+  // reorder columns (`tracks.demand_score` + `crawl_frontier.demand_rank`), never certifying. A
+  // clean no-op when the SA key is absent.
+  const recordDemandHandler = os.record_demand.use(adminAuth).handler(async () => {
+    try {
+      return { ok: true, summary: await recordDemand() } as const;
     } catch (error) {
       throw apiFault(error);
     }
@@ -410,6 +423,7 @@ export function adminCatalogueHandlers(os: Implementer) {
     list_catalogue_tracks: listCatalogueTracksHandler,
     list_unverified_captures: listUnverifiedCapturesHandler,
     rank_catalogue: rankCatalogueHandler,
+    record_demand: recordDemandHandler,
     requeue_unmatched_captures: requeueUnmatchedCapturesHandler,
     reset_apple_breaker: resetAppleBreakerHandler,
     set_capture_budget: setCaptureBudgetHandler,

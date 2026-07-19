@@ -2120,6 +2120,32 @@ function addAdminCommands(program: Command): void {
     });
 
   catalogue
+    .command("demand")
+    .description("Reorder crawl/capture priority from Simple Analytics pageviews (one tick)")
+    .option("--json", "Print JSON", false)
+    .action(async (options: JsonOptions) => {
+      const { catalogueDemandCommand } = await import("./commands/admin-catalogue");
+      const summary = await catalogueDemandCommand();
+
+      if (options.json) {
+        printJson({ ok: true, summary });
+        return;
+      }
+
+      if (!summary.configured) {
+        console.log("Simple Analytics is not configured — demand left untouched (a clean no-op).");
+        return;
+      }
+
+      console.log(
+        `Read ${summary.pagesRead} page(s) over ${summary.window.start}…${summary.window.end}. ` +
+          `Demanded ${summary.demandedArtists} artist(s) + ${summary.demandedLabels} label(s) ` +
+          `(${summary.unknownSlugs} unknown skipped); scored ${summary.tracksScored} track(s), ` +
+          `promoted ${summary.frontierPromoted} frontier node(s).`,
+      );
+    });
+
+  catalogue
     .command("list")
     .description(
       "The ranked catalogue: closest to a finding (ear), next to capture, or wrong audio",

@@ -33,7 +33,12 @@
 //   2. Then `capture_priority` DESC — the Ear's pre-audio ladder (artist > label >
 //      seed-label > nothing; a ruled-out label is vetoed). Every finding ties at 0 here,
 //      so the rung only ever orders the catalogue.
-//   3. Then newest-first within the findings (today's behaviour), and the track id as a
+//   3. Then `demand_score` DESC — the DEMAND signal (docs/catalogue-crawler.md § Demand): the
+//      pageviews of the artists/labels real visitors looked at, a WITHIN-TIER reorder written by
+//      `record_demand`. It sits below the ladder, so it only ever breaks a tie — it never lifts
+//      a row across a tier and never past the veto (the `>= 0` exclusion runs first, in
+//      `kindClause`). A finding ties at 0 here too, so it never reorders the findings.
+//   4. Then newest-first within the findings (today's behaviour), and the track id as a
 //      deterministic tiebreak so a tick is reproducible.
 //
 // Never alphabetical, never insertion order.
@@ -201,16 +206,25 @@ const WORK_SELECT = `t.track_id, t.title, t.artists_json, t.isrc, t.label, t.dur
 
 /**
  * THE ORDER. One ORDER BY, evaluated in SQL — the queue is never re-sorted in the isolate.
- * See the module header: certified first, then the pre-audio ladder, then newest-first
- * within the findings, then the id.
+ * See the module header: certified first, then the pre-audio ladder, then the DEMAND signal,
+ * then newest-first within the findings, then the id.
  *
  * `coalesce(t.capture_priority, 0)` is what makes one clause serve both halves: every
  * finding reads 0 (the column is only ever written on a catalogue row), so the rung
  * cannot reorder the findings among themselves — and a VETOED catalogue row (−1) sorts
  * below an unranked one, which is precisely the intent.
+ *
+ * `coalesce(t.demand_score, 0)` is the DEMAND reorder (docs/catalogue-crawler.md § Demand),
+ * and its POSITION is the whole contract: it sits AFTER `capture_priority`, so it only ever
+ * reorders rows of the SAME tier — a demanded row is captured before an undemanded sibling at
+ * its tier, never lifted across the ladder, and NEVER past the `capture_priority >= 0` veto
+ * (that predicate excludes a ruled-out row in `kindClause` before this ORDER BY is reached).
+ * A finding reads 0 here too (demand_score is only written where a demanded entity hangs off a
+ * row), so it cannot reorder the findings among themselves.
  */
 const WORK_ORDER = `order by (f.track_id is not null) desc,
   coalesce(t.capture_priority, 0) desc,
+  coalesce(t.demand_score, 0) desc,
   coalesce(f.added_at, '') desc,
   t.track_id desc`;
 

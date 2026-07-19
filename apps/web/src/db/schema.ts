@@ -222,6 +222,17 @@ export const tracks = sqliteTable(
     captureVerifiedAt: text("capture_verified_at"),
     catalogueRankCorpus: text("catalogue_rank_corpus"),
     catalogueRankedAt: text("catalogue_ranked_at"),
+    // THE DEMAND SIGNAL (docs/catalogue-crawler.md § Demand). The summed Simple Analytics
+    // pageviews of the DEMANDED entities this track hangs off — an artist on it (via
+    // `track_artists`) or its `label_id` — that real visitors looked at over the trailing
+    // window. It is a RANK-ORDER-ONLY reorder key, never a magnitude and never an override:
+    // the capture work queue (track-work.ts) reads it as a SECONDARY sort AFTER
+    // `capture_priority` (within-tier only), and the `capture_priority >= 0` veto still wins,
+    // so a ruled-out-label row is never resurrected by demand. Written ONLY by the
+    // `record_demand` op, which CLEARS every score then re-sets — a bounded, idempotent,
+    // deterministic rewrite the derived sweeps (rank_catalogue's `capture_priority`) never
+    // touch. NULL on a row no demanded entity hangs off (the common case).
+    demandScore: integer("demand_score"),
     // THE OPERATOR'S "NOT FOR ME" (docs/the-ear.md § The operator's actions). An ISO stamp,
     // written ONLY on a catalogue row when the operator dismisses it from the ear/capture
     // workstation — "I looked, it is not for me." It is a REVERSIBLE veto (the operator can
@@ -505,6 +516,14 @@ export const tracks = sqliteTable(
     index("tracks_dismissed_idx")
       .on(table.dismissedAt)
       .where(sql`${table.dismissedAt} is not null`),
+    // THE DEMAND CLEAR (docs/catalogue-crawler.md § Demand). `record_demand` re-writes the demand
+    // columns clear-then-set every night, and the clear is `where demand_score is not null`. At
+    // catalogue scale only a few hundred rows are ever scored, so this partial index makes the
+    // nightly clear (and the `tracksScored` recount) a seek to exactly those rows rather than a
+    // scan of the growing `tracks` table — the `tracks_dismissed_idx` shape.
+    index("tracks_demand_score_idx")
+      .on(table.demandScore)
+      .where(sql`${table.demandScore} is not null`),
     // The MIXABILITY pre-filter, and the one index `/mix` cannot be public without.
     //
     // The key is MANDATORY to be rankable (`scoreMix`'s floor: a pair whose key we do not
@@ -2858,6 +2877,13 @@ export const crawlFrontier = sqliteTable(
     createdAt: text("created_at").notNull(),
     // The browse offset already consumed (paginated `label` / `artist` nodes only).
     cursor: integer("cursor").notNull().default(0),
+    // THE DEMAND REORDER (docs/catalogue-crawler.md § Demand). 0 = a node belonging to an
+    // entity real visitors looked at (its seed label's subtree, via `label_slug`, or an
+    // artist node matched by MBID); 1 = every other node. Written ONLY by the `record_demand`
+    // op (clear-all-to-1 then set-0). The pick order is `(state, hop, demand_rank, created_at,
+    // id)`, so demand only REORDERS WITHIN A HOP — breadth-first by hop is preserved, and a
+    // ruled-out label never becomes a seed node, so demand can never resurrect one.
+    demandRank: integer("demand_rank").notNull().default(1),
     doneAt: text("done_at"),
     // The MB entity's MBID — or, for a seed `label` node, the operator's `labels.slug`.
     externalId: text("external_id").notNull(),
@@ -2880,10 +2906,19 @@ export const crawlFrontier = sqliteTable(
     updatedAt: text("updated_at").notNull(),
   },
   (table) => [
-    // The pick: `where state in (…) order by hop, created_at, id` — breadth-first and
-    // deterministic, so two runs over the same graph expand the same nodes in the same
-    // order. Leading with `state` keeps a drained frontier's tick a cheap no-op.
-    index("crawl_frontier_pick_idx").on(table.state, table.hop, table.createdAt, table.id),
+    // The pick: `where state in (…) order by hop, demand_rank, created_at, id` — breadth-first
+    // and deterministic, so two runs over the same graph expand the same nodes in the same
+    // order. `demand_rank` sits AFTER `hop` (a within-hop tiebreak only: a demanded node is
+    // picked before an undemanded sibling at the same hop, never ahead of a nearer hop), so
+    // the demand reorder cannot break breadth-first. Leading with `state` keeps a drained
+    // frontier's tick a cheap no-op.
+    index("crawl_frontier_pick_idx").on(
+      table.state,
+      table.hop,
+      table.demandRank,
+      table.createdAt,
+      table.id,
+    ),
     // The per-seed status read (and the subtree prune, when one is needed).
     index("crawl_frontier_label_idx").on(table.labelSlug),
   ],

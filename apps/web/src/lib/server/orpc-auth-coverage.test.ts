@@ -547,6 +547,12 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // catalogue_snapshots ledger (no publish), so the agent token drives it.
   record_catalogue_snapshot: "admin",
   record_cost: "admin",
+  // The demand tick (docs/catalogue-crawler.md § Demand) — agent tier (adminAuth only, no
+  // operatorGuard), the record_platform_stats / rank_catalogue precedent: the box's nightly
+  // demand cron POSTs a bare trigger and the Worker reads Simple Analytics + rewrites only the
+  // two derived reorder columns (demand_score / demand_rank), never a certification, so the
+  // agent token drives it.
+  record_demand: "admin",
   // The box's status cron POSTs a health snapshot — agent tier (adminAuth only, no
   // operatorGuard), the context_track/note_track precedent; it writes only the
   // internal service_status/status_events tables (no publish), so the agent token drives it.
