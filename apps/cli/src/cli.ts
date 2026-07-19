@@ -5768,7 +5768,7 @@ async function runArtistsRank(
     summary.centroidsRemoved > 0 ? ` Purged ${summary.centroidsRemoved} orphan(s).` : "";
 
   console.log(
-    `Ranked ${summary.centroidsComputed} artist(s) over ${summary.embeddedTracks} embedded tracks; wrote ${summary.edgesWritten} edges.${removed} ${summary.remaining} still stale.`,
+    `Ranked ${summary.centroidsComputed} artist(s); wrote ${summary.edgesWritten} edges.${removed} ${summary.remaining} still stale.`,
   );
 }
 

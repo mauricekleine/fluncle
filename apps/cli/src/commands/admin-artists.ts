@@ -155,10 +155,8 @@ export async function resolveArtistCommand(artistId: string): Promise<ArtistReso
 export type RankArtistsSummary = {
   centroidsComputed: number;
   centroidsRemoved: number;
-  corpus: string;
   edgesWritten: number;
-  embeddedTracks: number;
-  links: number;
+  logicVersion: string;
   remaining: number;
 };
 

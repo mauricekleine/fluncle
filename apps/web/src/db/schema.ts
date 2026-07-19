@@ -2310,7 +2310,7 @@ export const trackArtists = sqliteTable(
 // Two precomputed tables that lift the `/artist/<slug>` "similar artists" rail off the
 // page-load whole-corpus vector read. They are to the artist graph what the `catalogue_*`
 // ranking columns are to The Ear (docs/the-ear.md): a nightly-style precompute, self-healing
-// off a corpus fingerprint, so the request path does no vector math. The `rank_artists` sweep
+// off a PER-ARTIST fingerprint, so the request path does no vector math. The `rank_artists` sweep
 // (lib/server/artist-dossier.ts) writes them; `getArtistNeighbours` reads `artist_similar`.
 
 // One artist's position in MuQ embedding space — the MEAN over EVERY embedded track that
@@ -2320,9 +2320,11 @@ export const trackArtists = sqliteTable(
 // multi-modal, whereas an artist's own discography IS the thing being summarised, so its
 // centroid is a faithful identity point. `vector_count` is how many track vectors folded into
 // the mean (0 means the artist lost all embeddings — its row + edges are dropped). `rank_corpus`
-// is the staleness fingerprint the sweep stamped: a row whose fingerprint disagrees with the
-// live corpus is stale and recomputes on a later tick. `centroid_blob` is a native
-// `F32_BLOB(1024)` so the edge re-rank ranks it IN SQL (`vector_distance_cos`), never in the isolate.
+// is the PER-ARTIST staleness fingerprint the sweep stamped (`"<version>:<this artist's embedded-track
+// count>"`): a row whose fingerprint disagrees with the artist's live count is stale and recomputes
+// on a later tick — so a new finding re-stales only the artists it credits, never the whole archive.
+// `centroid_blob` is a native `F32_BLOB(1024)` so the edge re-rank ranks it IN SQL
+// (`vector_distance_cos`), never in the isolate.
 export const artistCentroids = sqliteTable("artist_centroids", {
   artistId: text("artist_id").primaryKey(),
   centroidBlob: float32Vector("centroid_blob").notNull(),

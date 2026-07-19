@@ -174,24 +174,38 @@ describe("rankArtists — the sweep", () => {
     expect(await centroidCount()).toBe(5);
   });
 
-  it("is a no-op on a settled graph and re-ranks when the corpus fingerprint moves", async () => {
+  it("re-stales ONLY the artists whose own discography changed (per-artist staleness)", async () => {
     await seedCertifiedArtist("a", axis(0));
     await seedCertifiedArtist("b", blend(axis(0), axis(1), 0.1));
 
     const settled = await rankArtists(100, NOW);
     expect(settled.remaining).toBe(0);
 
-    // Re-running changes nothing (idempotent no-op).
+    // Idempotent no-op on a settled graph.
     const again = await rankArtists(100, NOW);
     expect(again.centroidsComputed).toBe(0);
     expect(again.remaining).toBe(0);
 
-    // Embedding a NEW track moves the corpus fingerprint → every centroid goes stale.
+    // A brand-new artist stales ONLY itself — a and b are untouched (their own counts didn't move).
+    // This is the whole point of a PER-ARTIST fingerprint: a new finding is not a full re-drain.
     await seedCertifiedArtist("c", blend(axis(0), axis(1), 0.2));
-    const moved = await rankArtists(100, NOW);
-    expect(moved.corpus).not.toBe(settled.corpus);
-    expect(moved.centroidsComputed).toBeGreaterThan(0);
-    expect(moved.remaining).toBe(0);
+    const added = await rankArtists(100, NOW);
+    expect(added.centroidsComputed).toBe(1);
+    expect(added.remaining).toBe(0);
+
+    // Adding a second embedded track to an EXISTING artist stales only that artist (its count moved).
+    await seedCatalogueTrack(db, { title: "a extra", trackId: "a-extra" });
+    await link("a-extra", "a");
+    await embed("a-extra", blend(axis(0), axis(2), 0.1));
+    const grown = await rankArtists(100, NOW);
+    expect(grown.centroidsComputed).toBe(1);
+
+    // A's centroid now folds TWO vectors (its original finding + the new catalogue track).
+    const aCount = await db.execute({
+      args: ["a"],
+      sql: `select vector_count from artist_centroids where artist_id = ?`,
+    });
+    expect(Number(aCount.rows[0]?.vector_count)).toBe(2);
   });
 
   it("purges an orphan centroid whose artist lost every embedded track", async () => {

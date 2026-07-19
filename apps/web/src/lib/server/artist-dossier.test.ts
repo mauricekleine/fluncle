@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   type ArtistEmbeddingGroup,
+  artistCentroidFingerprint,
   meanEmbedding,
-  rankArtistsCorpus,
   rankSimilarArtists,
   summarizeArtistSignature,
 } from "./artist-dossier";
@@ -110,19 +110,18 @@ describe("rankSimilarArtists — the similar-artists ranking", () => {
   });
 });
 
-describe("rankArtistsCorpus — the staleness fingerprint", () => {
-  it("folds the ranking-logic version, embedded-track count, and link count into one string", () => {
-    expect(rankArtistsCorpus(120, 340)).toBe("v1:120:340");
+describe("artistCentroidFingerprint — the per-artist staleness fingerprint", () => {
+  it("folds the ranking-logic version and the artist's own embedded-track count into one string", () => {
+    expect(artistCentroidFingerprint(5)).toBe("v1:5");
   });
 
-  it("moves when either corpus number moves (an embed, a re-link) so a row goes stale", () => {
-    const base = rankArtistsCorpus(120, 340);
+  it("moves when the artist's embedded-track count moves (an embed, a re-link, a deletion)", () => {
+    const base = artistCentroidFingerprint(5);
 
-    // A new embedded track (first number) or a new artist↔track link (second) both diverge, and
-    // a divergence is what the sweep compares with `<>` to re-rank — a deletion diverges too.
-    expect(rankArtistsCorpus(121, 340)).not.toBe(base);
-    expect(rankArtistsCorpus(120, 341)).not.toBe(base);
-    expect(rankArtistsCorpus(119, 340)).not.toBe(base);
+    // The count is PER-ARTIST, so only an artist whose OWN discography changed goes stale — not the
+    // whole archive on any global change. A gain and a loss both diverge (compared with `<>`).
+    expect(artistCentroidFingerprint(6)).not.toBe(base);
+    expect(artistCentroidFingerprint(4)).not.toBe(base);
   });
 });
 

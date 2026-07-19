@@ -504,10 +504,11 @@ export const listArtistsMissingBio = oc
  * each one's top-K sonically-nearest neighbours entirely in SQL, then purges any orphan centroid
  * whose artist lost every embedded track.
  *
- * SELF-HEALING. Staleness is a fingerprint of the corpus (`"<embedded tracks>:<links>"`) stored
- * on each row, so embedding a track or repointing an artist link makes the affected rows re-rank
- * on later ticks. No invalidation call from the publish/embed/crawl paths, and a no-op on an
- * unchanged graph. `remaining` is the "run me again" signal. `{ ok, summary }`.
+ * SELF-HEALING. Staleness is a PER-ARTIST fingerprint (`"<version>:<the artist's embedded-track
+ * count>"`) stored on each centroid, so embedding a track or repointing a link re-stales only the
+ * few artists it credits — not the whole archive — and those re-rank on later ticks. No
+ * invalidation call from the publish/embed/crawl paths, and a no-op on an unchanged graph.
+ * `remaining` is the "run me again" signal (a cold whole-archive drain is many ticks). `{ ok, summary }`.
  */
 export const rankArtists = oc
   .route({
@@ -517,17 +518,15 @@ export const rankArtists = oc
     summary: "One tick of the similar-artists sweep (artist centroids + top-K edges)",
     tags: ["Admin"],
   })
-  .input(z.object({ limit: z.coerce.number().int().min(1).max(1000).default(100) }))
+  .input(z.object({ limit: z.coerce.number().int().min(1).max(1000).default(50) }))
   .output(
     z.object({
       ok: z.literal(true),
       summary: z.object({
         centroidsComputed: z.number(),
         centroidsRemoved: z.number(),
-        corpus: z.string(),
         edgesWritten: z.number(),
-        embeddedTracks: z.number(),
-        links: z.number(),
+        logicVersion: z.string(),
         remaining: z.number(),
       }),
     }),

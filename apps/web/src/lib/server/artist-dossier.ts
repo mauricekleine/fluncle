@@ -41,8 +41,26 @@ export const ARTIST_NEIGHBOURS_LIMIT = 4;
  */
 export const ARTIST_SIMILAR_EDGES = 8;
 
-/** How many stale/orphan artists one `rank_artists` tick recomputes (bounds the tick's cost). */
-export const ARTIST_RANK_BATCH_SIZE = 100;
+/**
+ * How many stale/orphan artists one `rank_artists` tick recomputes — the LOAD-BEARING knob that
+ * keeps a tick inside the box timer's 600 s window. The tick's cost is dominated by pass 2, where
+ * each recomputed artist triggers one exact `vector_distance_cos` scan of the whole
+ * `artist_centroids` table (there is no ANN index on Turso — ratified; see the sweep's SCALING
+ * ENVELOPE note). At ~5k artists a probe is ≈ 2 s, so a full 50-artist tick is ≈ 100 s of scans —
+ * comfortable headroom under 600 s, and room for the table to grow. In STEADY STATE only the
+ * handful of artists whose discography changed that day are stale, so a daily tick is a fraction
+ * of this. A cold first drain of the whole archive is many ticks (operator runs the CLI in a loop);
+ * `--limit` raises it while the table is small and lowers it as it grows past ~10k.
+ */
+export const ARTIST_RANK_BATCH_SIZE = 50;
+
+/**
+ * How many artists' vectors/writes ride ONE round trip within a tick. Pass 1 fetches a chunk's
+ * vectors in a single `IN (…)` query (a chunk is bounded, so this is not the pull-the-whole-table
+ * trap — it is the blessed bounded artist-dossier-means read) and flushes the chunk's centroid
+ * writes in one `client.batch`; the edge writes flush the same way. Keeps each payload small.
+ */
+export const ARTIST_RANK_CHUNK = 25;
 
 /** The pure signature summary derived from an artist's findings. */
 export type ArtistSignature = {
@@ -187,17 +205,26 @@ export function summarizeArtistSignature(findings: SignatureFinding[]): ArtistSi
 const ARTIST_RANK_LOGIC_VERSION = "v1";
 
 /**
- * The fingerprint of the corpus a centroid/edge was computed against —
- * `"<version>:<embedded tracks>:<track↔artist links>"`. It moves whenever the artist
- * graph's SONIC inputs could change: embed a track and the first number moves (a new
- * vector to fold into a mean); add or repoint an artist↔track link and the second moves
- * (a mean gains or loses a member). A row whose stored fingerprint disagrees with the
- * live one is stale and recomputes on a later tick — so the sweep converges after ANY
- * archive change and needs no invalidation call from the publish/embed/crawl paths.
- * Compared with `<>` (never `<`), so a DELETED track/link is caught like an added one.
+ * The PER-ARTIST staleness fingerprint stored on a centroid —
+ * `"<version>:<the artist's embedded-track count>"`. It is deliberately PER-ARTIST, not
+ * global: a centroid's VALUE only moves when THAT artist's own embedded-track set changes
+ * (a track of theirs gains/loses its embedding, or an artist↔track link is added/removed),
+ * so keying staleness on the artist's own count means a new finding re-stales only the few
+ * artists it credits — not all ~5k. (A global "<embedded tracks>:<links>" fingerprint, the
+ * `rank_catalogue` shape, would re-stale EVERY centroid on any archive change; correct there
+ * because a catalogue row's ranking against the findings genuinely moves for all rows, wrong
+ * here because an artist's mean does not.) Steady state is then the handful of artists whose
+ * discography changed that day, and a full re-rank only happens on a cold start or a
+ * {@link ARTIST_RANK_LOGIC_VERSION} bump.
+ *
+ * The count catches the dominant cases (embed/un-embed a track, add/remove a link). A RE-EMBED
+ * of an existing track — same count, new vector — is the one change the count misses; it is
+ * rare (a wrong-audio re-capture) and is swept up by the next count change or a logic-version
+ * bump. Stamped from the DB ROW COUNT, never the decoded-vector count, so a single malformed
+ * blob can never leave an artist perpetually stale.
  */
-export function rankArtistsCorpus(embeddedTracks: number, links: number): string {
-  return `${ARTIST_RANK_LOGIC_VERSION}:${embeddedTracks}:${links}`;
+export function artistCentroidFingerprint(embeddedTrackCount: number): string {
+  return `${ARTIST_RANK_LOGIC_VERSION}:${embeddedTrackCount}`;
 }
 
 // ── The sweep (`rank_artists`) ──────────────────────────────────────────────────────────
@@ -208,34 +235,39 @@ export type RankArtistsSummary = {
   centroidsComputed: number;
   /** Orphan centroids purged this tick (the artist lost every embedded track). */
   centroidsRemoved: number;
-  /** The live corpus fingerprint this tick ranked against. */
-  corpus: string;
   /** Distinct edge rows written this tick (`centroidsComputed × ≤K`). */
   edgesWritten: number;
-  /** Embedded tracks — the vectors a centroid can fold in. */
-  embeddedTracks: number;
-  /** Track↔artist links — the graph the means are grouped over. */
-  links: number;
+  /** The staleness-logic version this tick ran (a bump forces a full self-healing re-rank). */
+  logicVersion: string;
   /** Stale/orphan artists still pending after this tick — the "run me again" signal. */
   remaining: number;
 };
 
-type ArtistVectorRow = { embedding_blob: unknown };
+type ArtistVectorRow = { artist_id: string; embedding_blob: unknown };
 type StaleArtistRow = { artist_id: string };
 type EdgeCandidateRow = { dist: number; neighbour_id: string };
 
-// The stale/orphan candidate set (bound: `corpus`), shared by the sweep and `countStaleArtists`.
-// Two arms:
-//   1. STALE — an artist crediting ≥1 embedded track whose centroid is missing or carries a
-//      fingerprint that disagrees with the live corpus (it must be (re)computed).
+// The stale/orphan candidate set, shared by the sweep and `countStaleArtists`. Two arms, keyed on
+// the PER-ARTIST fingerprint (`artistCentroidFingerprint`), so only artists whose OWN embedded-track
+// set drifted are picked:
+//   1. STALE — an artist crediting ≥1 embedded track whose centroid is missing OR whose stored
+//      fingerprint disagrees with `<version>:<their live embedded-track count>`.
 //   2. ORPHAN — a centroid whose artist no longer credits ANY embedded track (its vectors were
 //      cleared, e.g. a wrong-audio flag) — it must be purged so it stops ranking as a neighbour.
-const STALE_ARTISTS_INNER = `select ta.artist_id as artist_id
-            from track_artists ta
-            join tracks t on t.track_id = ta.track_id
-            left join artist_centroids ac on ac.artist_id = ta.artist_id
-            where t.embedding_blob is not null
-              and (ac.artist_id is null or ac.rank_corpus <> ?)
+// The version literal is a trusted constant (never user input), so it interpolates safely into the
+// `<>` comparison; the scan takes no bind args. The GROUP BY is one indexed aggregate over the
+// embedded tracks — run once per tick, not per artist.
+const STALE_ARTISTS_INNER = `select live.artist_id as artist_id
+            from (
+              select ta.artist_id as artist_id, count(*) as n
+              from track_artists ta
+              join tracks t on t.track_id = ta.track_id
+              where t.embedding_blob is not null
+              group by ta.artist_id
+            ) live
+            left join artist_centroids ac on ac.artist_id = live.artist_id
+            where ac.artist_id is null
+               or ac.rank_corpus <> ('${ARTIST_RANK_LOGIC_VERSION}:' || live.n)
             union
             select ac.artist_id as artist_id
             from artist_centroids ac
@@ -250,16 +282,42 @@ const STALE_ARTISTS_PAGE = `select artist_id from (${STALE_ARTISTS_INNER})
           order by artist_id asc
           limit ?`;
 
-/** Count the stale/orphan artists still pending for `corpus` — the `remaining` gauge. */
-async function countStaleArtists(corpus: string): Promise<number> {
+/** Count the stale/orphan artists still pending — the `remaining` gauge. */
+async function countStaleArtists(): Promise<number> {
   const db = await getDb();
   const result = await db.execute({
-    args: [corpus],
+    args: [],
     sql: `select count(*) as n from (${STALE_ARTISTS_INNER})`,
   });
 
   return Number(typedRows<{ n: number }>(result.rows)[0]?.n ?? 0);
 }
+
+/** Split `items` into consecutive chunks of at most `size` (bounds each round trip's payload). */
+function chunk<T>(items: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+
+  for (let start = 0; start < items.length; start += size) {
+    chunks.push(items.slice(start, start + size));
+  }
+
+  return chunks;
+}
+
+// The edge re-rank probe — one exact `vector_distance_cos` scan of `artist_centroids` for a single
+// target, the probe supplied as the STORED blob via a subquery so no vector crosses the wire and no
+// probe is ever bound as text (embedding.ts rule 2). Ties break on the neighbour's id, so a tick is
+// deterministic. This is `rank_artists`'s heaviest statement and its cost grows LINEARLY with the
+// centroid count — see the SCALING ENVELOPE note on `rankArtists`.
+const EDGE_RERANK_SQL = `select ac.artist_id as neighbour_id,
+                   vector_distance_cos(
+                     ac.centroid_blob,
+                     (select centroid_blob from artist_centroids where artist_id = ?)
+                   ) as dist
+            from artist_centroids ac
+            where ac.artist_id <> ?
+            order by dist asc, ac.artist_id asc
+            limit ?`;
 
 /**
  * One tick of the similar-artists precompute sweep — the artist-graph sibling of
@@ -269,25 +327,39 @@ async function countStaleArtists(corpus: string): Promise<number> {
  * centroid whose artist lost every embedded track.
  *
  * The tick, in order:
- *   1. Read the live corpus fingerprint (`rankArtistsCorpus`).
- *   2. Take up to `limit` stale/orphan artists (`STALE_ARTISTS_PAGE`), oldest-id first.
- *   3. For each, pull ITS OWN vectors in a bounded per-artist read (never the whole corpus in
- *      one pull; blobs, never JSON text) and take the mean:
- *        · a mean exists → upsert the centroid (stored via `vector32()`, the sole write form),
- *          then re-rank its edges with `vector_distance_cos` scanning `artist_centroids` — the
- *          target's probe is the STORED blob via a subquery, so no vector crosses the wire and
- *          no probe is ever bound as text (embedding.ts rule 2).
- *        · no vectors (an orphan) → delete the centroid + its edges.
- *      Every write is stamped with the fingerprint, so a recomputed artist leaves the stale set.
+ *   1. Take up to `limit` stale/orphan artists (`STALE_ARTISTS_PAGE`), oldest-id first. Staleness
+ *      is PER-ARTIST (`artistCentroidFingerprint`): only artists whose OWN embedded-track set
+ *      drifted are picked, so a new finding re-stales the few artists it credits, not the archive.
+ *   2. PASS 1 — recompute centroids in bounded CHUNKS, both round trips batched: one `IN (…)` query
+ *      fetches a chunk's vectors (blobs, never text), and one `client.batch` flushes the chunk's
+ *      centroid upserts (mean stored via `vector32()`, the sole write form) + orphan deletes. Pass 1
+ *      is fully flushed before pass 2, so the edge re-rank scans a centroids table already holding
+ *      this tick's fresh vectors. The fingerprint is stamped from the DB ROW COUNT (not the decoded
+ *      count) so a malformed blob can't leave an artist perpetually stale.
+ *   3. PASS 2 — re-rank each recomputed artist's edges. The scans stay PER-ARTIST reads (each a
+ *      bounded ~O(centroid-count) scan) rather than one giant batched statement, so no single query
+ *      runs unbounded; the edge WRITES are batched per chunk to collapse their round trips. The
+ *      LIMIT is what bounds pass 2 — see the envelope note.
  *
- * SELF-HEALING + eventual-consistency: staleness is the fingerprint, so any archive change
- * re-ranks the affected rows over later ticks. An early tick may rank an artist against a
+ * ── SCALING ENVELOPE (read before raising the default) ────────────────────────────────────────
+ * Pass 2's per-probe cost grows LINEARLY with the centroid count: the exact `vector_distance_cos`
+ * scan drags every centroid blob (≈ 4 KB each) once per probe — there is NO ANN index on Turso, by
+ * ratified decision (docs/local-database.md), so this full scan is inherent to exact centroid
+ * ranking. Measured ≈ 2 s/probe at ~5k artists (hosted). The `limit` knob keeps a tick inside the
+ * 600 s box timer (a 50-artist tick ≈ 100 s at 5k); steady state is a fraction of one tick (only the
+ * day's changed artists are stale). A cold whole-archive drain is `ceil(artists / limit)` ticks,
+ * driven by the operator looping the CLI. When the centroid table outgrows the exact scan (roughly
+ * as it passes ~10–20k artists and a single tick stops fitting the timer at a useful limit), the
+ * recorded escape hatch is the roadmap's Cloudflare Vectorize spike (an ANN index for the artist
+ * centroids); until then this exact scan is correct and the limit is the throttle.
+ *
+ * SELF-HEALING + eventual-consistency: staleness is the per-artist fingerprint, so an archive change
+ * re-ranks the affected artists over later ticks. An early tick may rank an artist against a
  * neighbour whose own centroid is about to refresh, but a centroid's VALUE only moves when that
- * neighbour's embedded-track set changed (most are byte-identical across corpus versions), and
- * continuous archive growth re-ranks the drift on the next fingerprint move — the accepted shape
- * for a browse-adjacent rail (the same self-healing contract as `rankCatalogue`). Idempotent and
- * resume-safe: a crash mid-tick leaves the un-stamped artists stale for the next tick; a re-run on
- * a settled graph is a no-op. `now` is injected so the ranking logic carries no `Date.now`.
+ * neighbour's embedded-track set changed, and the next change re-ranks the drift — the accepted
+ * shape for a browse-adjacent rail. Idempotent and resume-safe: a crash mid-tick leaves the
+ * un-stamped artists stale for the next tick; a re-run on a settled graph is a no-op. `now` is
+ * injected so the ranking logic carries no `Date.now`.
  */
 export async function rankArtists(
   limit = ARTIST_RANK_BATCH_SIZE,
@@ -296,21 +368,7 @@ export async function rankArtists(
   const db = await getDb();
   const bounded = Math.max(0, limit);
 
-  const countResult = await db.execute({
-    args: [],
-    sql: `select
-            (select count(*) from tracks where embedding_blob is not null) as embedded,
-            (select count(*) from track_artists) as links`,
-  });
-  const counts = typedRows<{ embedded: number; links: number }>(countResult.rows)[0];
-  const embeddedTracks = Number(counts?.embedded ?? 0);
-  const links = Number(counts?.links ?? 0);
-  const corpus = rankArtistsCorpus(embeddedTracks, links);
-
-  const staleResult = await db.execute({
-    args: [corpus, bounded],
-    sql: STALE_ARTISTS_PAGE,
-  });
+  const staleResult = await db.execute({ args: [bounded], sql: STALE_ARTISTS_PAGE });
   const staleArtists = typedRows<StaleArtistRow>(staleResult.rows).map((row) => row.artist_id);
 
   if (staleArtists.length === 0) {
@@ -318,132 +376,145 @@ export async function rankArtists(
     return {
       centroidsComputed: 0,
       centroidsRemoved: 0,
-      corpus,
       edgesWritten: 0,
-      embeddedTracks,
-      links,
-      remaining: await countStaleArtists(corpus),
+      logicVersion: ARTIST_RANK_LOGIC_VERSION,
+      remaining: await countStaleArtists(),
     };
   }
 
   const stamp = now();
   let centroidsRemoved = 0;
   let edgesWritten = 0;
+  // Each recomputed artist carries the fingerprint it was stamped with, so pass 2's edge rows get
+  // the same value (the schema keeps edge + centroid `rank_corpus` in lockstep).
+  const computed: { artistId: string; fingerprint: string }[] = [];
 
-  // PASS 1 — recompute (or purge) centroids, and FLUSH them, so pass 2's edge re-rank scans a
-  // centroids table that already holds THIS tick's fresh vectors. Doing edges before the flush
-  // would rank every artist against an empty/stale table (the probe subquery would find nothing).
-  const centroidWrites: InStatement[] = [];
-  const computed: string[] = [];
-
-  for (const artistId of staleArtists) {
-    // The artist's own vectors — a bounded per-artist pull (blobs, never JSON text).
+  // ── PASS 1 — recompute (or purge) centroids in bounded chunks, batching BOTH round trips ──────
+  for (const artistChunk of chunk(staleArtists, ARTIST_RANK_CHUNK)) {
+    const placeholders = artistChunk.map(() => "?").join(", ");
+    // One IN-query for the whole chunk's vectors — the (a) round-trip fix. Bounded by the chunk,
+    // so this is the blessed bounded artist-dossier-means read, not the pull-the-whole-table trap.
     const vectorResult = await db.execute({
-      args: [artistId],
-      sql: `select t.embedding_blob as embedding_blob
+      args: artistChunk,
+      sql: `select ta.artist_id as artist_id, t.embedding_blob as embedding_blob
             from track_artists ta
             join tracks t on t.track_id = ta.track_id
-            where ta.artist_id = ? and t.embedding_blob is not null`,
+            where ta.artist_id in (${placeholders}) and t.embedding_blob is not null`,
     });
 
-    const vectors: number[][] = [];
+    // Group each artist's vectors + count its embedded-track ROWS (the fingerprint's count).
+    const grouped = new Map<string, { count: number; vectors: number[][] }>();
+
+    for (const artistId of artistChunk) {
+      grouped.set(artistId, { count: 0, vectors: [] });
+    }
 
     for (const row of typedRows<ArtistVectorRow>(vectorResult.rows)) {
+      const entry = grouped.get(row.artist_id);
+
+      if (!entry) {
+        continue;
+      }
+
+      // The DB row count is the artist's embedded-track count; decode is best-effort on top of it.
+      entry.count += 1;
       // The driver hands a blob back as an ArrayBuffer, not a Uint8Array (embedding.ts).
       const embedding = readEmbeddingBlob(row.embedding_blob);
 
       if (embedding) {
-        vectors.push(embedding);
+        entry.vectors.push(embedding);
       }
     }
 
-    const mean = meanEmbedding(vectors);
+    const centroidWrites: InStatement[] = [];
 
-    if (!mean) {
-      // An orphan (its vectors were cleared between the candidate scan and now): purge it so it
-      // stops ranking as anyone's neighbour, and drop its own edges.
+    for (const artistId of artistChunk) {
+      const entry = grouped.get(artistId);
+      const mean = entry ? meanEmbedding(entry.vectors) : null;
+
+      if (!entry || entry.count === 0 || !mean) {
+        // An orphan (no embedded track now): purge its centroid AND every edge it touches — its
+        // OWN edges, and the edges POINTING TO it (via the `neighbour_artist_id` index), so a
+        // purged artist vanishes from every rail immediately rather than lingering as a stale
+        // neighbour on artists that per-artist staleness would not otherwise re-rank.
+        centroidWrites.push({
+          args: [artistId],
+          sql: `delete from artist_centroids where artist_id = ?`,
+        });
+        centroidWrites.push({
+          args: [artistId],
+          sql: `delete from artist_similar where artist_id = ?`,
+        });
+        centroidWrites.push({
+          args: [artistId],
+          sql: `delete from artist_similar where neighbour_artist_id = ?`,
+        });
+        centroidsRemoved += 1;
+        continue;
+      }
+
+      // Stamp the fingerprint from the DB ROW COUNT so a lone malformed blob never loops the artist.
+      const fingerprint = artistCentroidFingerprint(entry.count);
+
+      // Store the mean the SOLE write form — `vector32()` converts the validated float array
+      // server-side (embedding.ts / track-update.ts precedent; the Worker never encodes a vector).
       centroidWrites.push({
-        args: [artistId],
-        sql: `delete from artist_centroids where artist_id = ?`,
+        args: [artistId, JSON.stringify(mean), entry.count, fingerprint, stamp],
+        sql: `insert into artist_centroids (artist_id, centroid_blob, vector_count, rank_corpus, computed_at)
+              values (?, vector32(?), ?, ?, ?)
+              on conflict(artist_id) do update set
+                centroid_blob = excluded.centroid_blob,
+                vector_count = excluded.vector_count,
+                rank_corpus = excluded.rank_corpus,
+                computed_at = excluded.computed_at`,
       });
-      centroidWrites.push({
-        args: [artistId],
-        sql: `delete from artist_similar where artist_id = ?`,
-      });
-      centroidsRemoved += 1;
-      continue;
+      computed.push({ artistId, fingerprint });
     }
 
-    // Store the mean the SOLE write form — `vector32()` converts the validated float array
-    // server-side (embedding.ts / track-update.ts precedent; the Worker never encodes a vector).
-    centroidWrites.push({
-      args: [artistId, JSON.stringify(mean), vectors.length, corpus, stamp],
-      sql: `insert into artist_centroids (artist_id, centroid_blob, vector_count, rank_corpus, computed_at)
-            values (?, vector32(?), ?, ?, ?)
-            on conflict(artist_id) do update set
-              centroid_blob = excluded.centroid_blob,
-              vector_count = excluded.vector_count,
-              rank_corpus = excluded.rank_corpus,
-              computed_at = excluded.computed_at`,
-    });
-    computed.push(artistId);
+    if (centroidWrites.length > 0) {
+      await db.batch(centroidWrites, "write");
+    }
   }
 
-  if (centroidWrites.length > 0) {
-    await db.batch(centroidWrites, "write");
-  }
+  // ── PASS 2 — re-rank each recomputed artist's edges against the now-fresh centroids table ─────
+  for (const computedChunk of chunk(computed, ARTIST_RANK_CHUNK)) {
+    const edgeWrites: InStatement[] = [];
 
-  // PASS 2 — re-rank each recomputed artist's edges IN SQL against the now-fresh centroids table.
-  const edgeWrites: InStatement[] = [];
-
-  for (const artistId of computed) {
-    // An exact `vector_distance_cos` scan of the (thousands-scale) centroids table; the target's
-    // probe is supplied as the STORED blob via a subquery, so no vector crosses the wire and no
-    // probe is ever bound as text (embedding.ts rule 2). Ties break on the neighbour's id, so a
-    // tick is deterministic. Excludes the artist itself.
-    const edgeResult = await db.execute({
-      args: [artistId, artistId, ARTIST_SIMILAR_EDGES],
-      sql: `select ac.artist_id as neighbour_id,
-                   vector_distance_cos(
-                     ac.centroid_blob,
-                     (select centroid_blob from artist_centroids where artist_id = ?)
-                   ) as dist
-            from artist_centroids ac
-            where ac.artist_id <> ?
-            order by dist asc, ac.artist_id asc
-            limit ?`,
-    });
-    const edges = typedRows<EdgeCandidateRow>(edgeResult.rows);
-
-    // Replace the artist's edge set wholesale (the rank column is its PK second half, so a shrunk
-    // neighbour set never leaves a stale high-rank row behind).
-    edgeWrites.push({ args: [artistId], sql: `delete from artist_similar where artist_id = ?` });
-
-    edges.forEach((edge, index) => {
-      edgeWrites.push({
-        args: [artistId, edge.neighbour_id, 1 - Number(edge.dist), index, corpus, stamp],
-        sql: `insert into artist_similar
-                (artist_id, neighbour_artist_id, similarity, rank, rank_corpus, computed_at)
-              values (?, ?, ?, ?, ?, ?)`,
+    for (const { artistId, fingerprint } of computedChunk) {
+      // A bounded per-artist scan (NOT batched into one giant statement — the scans stay separate so
+      // no single query runs unbounded; the WRITES below are the batched part).
+      const edgeResult = await db.execute({
+        args: [artistId, artistId, ARTIST_SIMILAR_EDGES],
+        sql: EDGE_RERANK_SQL,
       });
-      edgesWritten += 1;
-    });
-  }
+      const edges = typedRows<EdgeCandidateRow>(edgeResult.rows);
 
-  if (edgeWrites.length > 0) {
-    await db.batch(edgeWrites, "write");
-  }
+      // Replace the artist's edge set wholesale (the rank column is its PK second half, so a shrunk
+      // neighbour set never leaves a stale high-rank row behind).
+      edgeWrites.push({ args: [artistId], sql: `delete from artist_similar where artist_id = ?` });
 
-  const centroidsComputed = computed.length;
+      edges.forEach((edge, index) => {
+        edgeWrites.push({
+          args: [artistId, edge.neighbour_id, 1 - Number(edge.dist), index, fingerprint, stamp],
+          sql: `insert into artist_similar
+                  (artist_id, neighbour_artist_id, similarity, rank, rank_corpus, computed_at)
+                values (?, ?, ?, ?, ?, ?)`,
+        });
+        edgesWritten += 1;
+      });
+    }
+
+    if (edgeWrites.length > 0) {
+      await db.batch(edgeWrites, "write");
+    }
+  }
 
   return {
-    centroidsComputed,
+    centroidsComputed: computed.length,
     centroidsRemoved,
-    corpus,
     edgesWritten,
-    embeddedTracks,
-    links,
-    remaining: await countStaleArtists(corpus),
+    logicVersion: ARTIST_RANK_LOGIC_VERSION,
+    remaining: await countStaleArtists(),
   };
 }
 
