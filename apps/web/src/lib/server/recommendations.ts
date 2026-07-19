@@ -398,18 +398,39 @@ export async function listRecommendations(
   const excludeRecent = options?.excludeRecent ?? false;
   const db = await getDb();
 
-  // The seed vectors — ≤ MAX_REC_SEEDS rows, each carrying its embedding blob
-  // OUT of the database exactly once per request (a bounded, capped read — the
-  // one place a vector legitimately enters the isolate, to be re-bound as the
-  // probes below). A seed without a vector is skipped honestly and reported.
-  const seedResult = await db.execute({
-    args: [user.id],
-    sql: `select s.track_id, t.embedding_blob
-      from user_rec_seeds s
-      join tracks t on t.track_id = s.track_id
-      where s.user_id = ?
-      order by s.added_at asc, s.track_id asc`,
-  });
+  // The seed vectors and the FRONTIER NOVELTY set are two mutually independent reads
+  // (each keyed only on the user), so they run CONCURRENTLY instead of laddering. The seed
+  // read is the one place a vector legitimately leaves the database — ≤ MAX_REC_SEEDS blobs,
+  // bounded and capped, re-bound as the probes below; a seed without a vector is skipped
+  // honestly and reported. The novelty read (only when `excludeRecent` is on) is the track
+  // ids in this user's last FRONTIER_NOVELTY_WINDOW editions, re-derived from the ledger each
+  // refresh (self-healing — no `last_used` tag to keep in sync); its outer `where fe.user_id
+  // = ?` is LOAD-BEARING — it binds `index(user_id, number desc)` and bounds the scan to one
+  // user (a bare `id in (...)` subquery would leave the outer as a full table scan). The
+  // default live-page read (`excludeRecent` false) fires a single query here, exactly as
+  // before. NO relaxation / fallback (operator decision): the pool is thousands of
+  // candidates, so the strict `not in` always fills the target — see FRONTIER_NOVELTY_WINDOW.
+  const [seedResult, recentResult] = await Promise.all([
+    db.execute({
+      args: [user.id],
+      sql: `select s.track_id, t.embedding_blob
+        from user_rec_seeds s
+        join tracks t on t.track_id = s.track_id
+        where s.user_id = ?
+        order by s.added_at asc, s.track_id asc`,
+    }),
+    excludeRecent
+      ? db.execute({
+          args: [user.id, user.id, FRONTIER_NOVELTY_WINDOW],
+          sql: `select fet.track_id
+            from frontier_editions fe
+            join frontier_edition_tracks fet on fet.edition_id = fe.id
+            where fe.user_id = ?
+              and fe.id in (select id from frontier_editions where user_id = ? order by number desc limit ?)
+            group by fet.track_id`,
+        })
+      : null,
+  ]);
   const seedRows = typedRows<SeedVectorRow>(seedResult.rows);
   const probes: Uint8Array[] = [];
   const seedIds: string[] = [];
@@ -437,28 +458,11 @@ export async function listRecommendations(
   const seedExclusion =
     seedIds.length > 0 ? `and t.track_id not in (${seedIds.map(() => "?").join(", ")})` : "";
 
-  // FRONTIER NOVELTY: the track ids in this user's last FRONTIER_NOVELTY_WINDOW editions,
-  // re-derived from the ledger each refresh (self-healing — no `last_used` tag to keep in
-  // sync). The outer `where fe.user_id = ?` is LOAD-BEARING: it binds
-  // `index(user_id, number desc)` and bounds the scan to one user (a bare `id in (...)`
-  // subquery would leave the outer as a full table scan). Only computed when
-  // `excludeRecent` is on, so the default live-page read stays exactly as before.
-  //
-  // NO relaxation / fallback / guards (operator decision): the pool is thousands of
-  // candidates, so the strict `not in` always fills the target — see FRONTIER_NOVELTY_WINDOW.
+  // Drain the FRONTIER NOVELTY read fired concurrently above (null when `excludeRecent`
+  // is off) into the exclusion id set.
   const excludedIds: string[] = [];
 
-  if (excludeRecent) {
-    const recentResult = await db.execute({
-      args: [user.id, user.id, FRONTIER_NOVELTY_WINDOW],
-      sql: `select fet.track_id
-        from frontier_editions fe
-        join frontier_edition_tracks fet on fet.edition_id = fe.id
-        where fe.user_id = ?
-          and fe.id in (select id from frontier_editions where user_id = ? order by number desc limit ?)
-        group by fet.track_id`,
-    });
-
+  if (recentResult) {
     for (const row of typedRows<{ track_id: string }>(recentResult.rows)) {
       excludedIds.push(row.track_id);
     }
@@ -487,54 +491,56 @@ export async function listRecommendations(
   const bestDistance =
     distanceTerms.length === 1 ? distanceTerms.join("") : `min(${distanceTerms.join(", ")})`;
 
-  // THE CATALOGUE SCAN. Candidates are the ear lens's WHERE + the display-band
-  // duplicate cut + the Spotify anchor; each candidate's max-similarity across
-  // the seed set is the fold above, and the pool is cut IN SQL
-  // (getSimilarFindings) — only (track_id, dist) pairs come back, never a
-  // vector. SQL-TEXT order decides the bind order: one probe per distance term
-  // in the select list, then the seed exclusions, then the pool limit.
+  // THE CATALOGUE SCAN and THE FINDINGS SLOTS — two mutually independent one-pass folds
+  // over the SAME binds, so they run CONCURRENTLY (two server-side scans in parallel, one
+  // scan of wall-clock instead of two stacked). Each ranks IN SQL (getSimilarFindings) —
+  // only (track_id, dist) pairs come back, never a vector. SQL-TEXT order decides the bind
+  // order: one probe per distance term in the select list, then the seed + novelty
+  // exclusions, then the limit.
   //
-  // SCALE TRIPWIRE: the probe count is capped (MAX_REC_SEEDS) but the candidate
-  // count is not — it grows with capture + Spotify anchoring (~360 rows,
-  // 2026-07-18), metered dimensions both. When it crosses ~5–10k this scan is
-  // seconds again, and the engine moves OFF the hot path: cache per user keyed
-  // by (seed set, corpus fingerprint) — the `rank_catalogue` self-healing shape.
-  const catalogueScan = await db.execute({
-    args: [...probes, ...seedIds, ...excludedIds, RECOMMENDATIONS_POOL],
-    sql: `select track_id, dist from (
-        select t.track_id, ${bestDistance} as dist
-        from tracks t
-        left join findings f on f.track_id = t.track_id
-        where ${REC_ELIGIBLE_WHERE}
-          ${seedExclusion}
-          ${recentExclusion}
-      )
-      where dist is not null
-      order by dist asc, track_id asc
-      limit ?`,
-  });
-
-  // THE FINDINGS SLOTS (option B): the certified findings nearest the seed set,
-  // same one-pass fold. `cross join` pins the join order so the tiny findings
-  // table DRIVES and `tracks` is reached by primary key — left to itself the
-  // planner scanned all of `tracks` as the outer loop (the 63 s plan). These are
-  // the labeled slots Fluncle's full voice rides — hydrated with the note +
-  // Log ID below.
-  const findingsScan = await db.execute({
-    args: [...probes, ...seedIds, ...excludedIds, FINDINGS_SLOT_COUNT],
-    sql: `select track_id, dist from (
-        select t.track_id, ${bestDistance} as dist
-        from findings f cross join tracks t
-        where t.track_id = f.track_id
-          and f.log_id is not null
-          and t.embedding_blob is not null
-          ${seedExclusion}
-          ${recentExclusion}
-      )
-      where dist is not null
-      order by dist asc, track_id asc
-      limit ?`,
-  });
+  //   - CATALOGUE candidates are the ear lens's WHERE + the display-band duplicate cut + the
+  //     Spotify anchor. SCALE TRIPWIRE: the probe count is capped (MAX_REC_SEEDS) but the
+  //     candidate count is not — it grows with capture + Spotify anchoring (~360 rows,
+  //     2026-07-18). When it crosses ~5–10k this scan is seconds again and the engine moves
+  //     OFF the hot path: cache per user keyed by (seed set, corpus fingerprint) — the
+  //     `rank_catalogue` self-healing shape. (Concurrency does not move THAT wall; it only
+  //     stops the findings scan from stacking on top of it.)
+  //   - FINDINGS SLOTS (option B): the certified findings nearest the seed set, same fold.
+  //     `cross join` pins the join order so the tiny findings table DRIVES and `tracks` is
+  //     reached by primary key — left to itself the planner scanned all of `tracks` as the
+  //     outer loop (the 63 s plan). These are the labeled slots Fluncle's full voice rides —
+  //     hydrated with the note + Log ID below.
+  const [catalogueScan, findingsScan] = await Promise.all([
+    db.execute({
+      args: [...probes, ...seedIds, ...excludedIds, RECOMMENDATIONS_POOL],
+      sql: `select track_id, dist from (
+          select t.track_id, ${bestDistance} as dist
+          from tracks t
+          left join findings f on f.track_id = t.track_id
+          where ${REC_ELIGIBLE_WHERE}
+            ${seedExclusion}
+            ${recentExclusion}
+        )
+        where dist is not null
+        order by dist asc, track_id asc
+        limit ?`,
+    }),
+    db.execute({
+      args: [...probes, ...seedIds, ...excludedIds, FINDINGS_SLOT_COUNT],
+      sql: `select track_id, dist from (
+          select t.track_id, ${bestDistance} as dist
+          from findings f cross join tracks t
+          where t.track_id = f.track_id
+            and f.log_id is not null
+            and t.embedding_blob is not null
+            ${seedExclusion}
+            ${recentExclusion}
+        )
+        where dist is not null
+        order by dist asc, track_id asc
+        limit ?`,
+    }),
+  ]);
 
   const cataloguePool = typedRows<ScanRow>(catalogueScan.rows);
   const findingSlots = typedRows<ScanRow>(findingsScan.rows);
