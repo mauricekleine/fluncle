@@ -597,8 +597,9 @@ export const CrawlPassSchema = z
     seeded: z.number(),
     /**
      * Stale seed-label browse nodes re-armed this pass — an enabled label is a subscription,
-     * re-paginating past the re-arm threshold so its later releases (a Friday drop) surface.
-     * Bounded per pass so a mass re-arm spreads over ticks. See docs/catalogue-crawler.md.
+     * re-reading the TAIL of its release list past the re-arm threshold so its later releases (a
+     * Friday drop, which lands at the unsorted list's end) surface. Bounded per pass so a mass
+     * re-arm spreads over ticks. See docs/catalogue-crawler.md § the seed re-arm.
      */
     seedsRearmed: z.number(),
     /** Catalogue tracks the walk saw on the releases it expanded. */
