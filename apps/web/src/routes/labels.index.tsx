@@ -1,11 +1,7 @@
 import { Link, createFileRoute, notFound } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { CataloguePager } from "@/components/catalogue-groups";
-import {
-  CatalogueHubPageSection,
-  CatalogueHubSection,
-  HubLetterLane,
-} from "@/components/catalogue-hub-section";
+import { CatalogueHubPageSection, HubLetterLane } from "@/components/catalogue-hub-section";
 import { StoryNotFoundState } from "@/components/stories/stories-states";
 import { TrackArtwork } from "@/components/track-artwork";
 import { siteUrl } from "@/lib/fluncle-links";
@@ -13,14 +9,11 @@ import { findingsCount, tracksCount } from "@/lib/format";
 import { jsonLdScript } from "@/lib/json-ld";
 import { albumCoverAtSize } from "@/lib/media";
 import {
-  CATALOGUE_HUB_DEFAULT_LIMIT,
   type CatalogueHubLetter,
   type CatalogueHubNumberedPage,
   CatalogueHubPageOutOfRangeError,
-  type CatalogueHubPage,
   type LabelCatalogueEntry,
   type LabelIndexEntry,
-  listLabelsCatalogue,
   listLabelsCataloguePage,
   listLabelsCatalogueLetters,
   listLabelsWithFindingCounts,
@@ -36,18 +29,14 @@ import {
 //
 // This TOP section is deliberately NARROWER than the sitemap — Fluncle's own editorial list, "every
 // label I've pulled a banger off". Below it, "More labels" carries the other half the sitemap always
-// has: the INDEXABLE findings-free labels the crawler minted a page for. The param-free `/labels`
-// streams them in on scroll (the human read); a crawlable `?page=N` variant SSRs each page's tiles
-// behind a real-anchor pager, and an A–Z fast lane links every region of the alphabet — so the long
-// tail is reachable by internal links, not the sitemap alone.
-
-type LabelsCatalogue =
-  | { mode: "page"; page: CatalogueHubNumberedPage<LabelCatalogueEntry> }
-  | { mode: "scroll"; seed: CatalogueHubPage<LabelCatalogueEntry> };
+// has: the INDEXABLE findings-free labels the crawler minted a page for. Every page — page 1
+// included — SSRs one static slice of tiles behind a real-anchor `?page=N` pager, with an A–Z fast
+// lane linking every region of the alphabet — so the long tail is reachable by internal links (and
+// the footer by everyone), not the sitemap alone.
 
 type LabelsPageData =
   | {
-      catalogue: LabelsCatalogue;
+      catalogue: CatalogueHubNumberedPage<LabelCatalogueEntry>;
       findings: LabelIndexEntry[];
       letters: CatalogueHubLetter[];
       page: number;
@@ -56,44 +45,29 @@ type LabelsPageData =
   | { status: "missing" };
 
 async function resolveLabelsPage(page: number | undefined): Promise<LabelsPageData> {
-  if (page !== undefined && page > 1) {
-    const [paged, findings, letters] = await Promise.all([
-      listLabelsCataloguePage(page).catch((error: unknown) => {
-        if (error instanceof CatalogueHubPageOutOfRangeError) {
-          return null;
-        }
+  const requested = page ?? 1;
+  const [paged, findings, letters] = await Promise.all([
+    listLabelsCataloguePage(requested).catch((error: unknown) => {
+      if (error instanceof CatalogueHubPageOutOfRangeError) {
+        return null;
+      }
 
-        throw error;
-      }),
-      listLabelsWithFindingCounts(),
-      listLabelsCatalogueLetters(),
-    ]);
-
-    if (paged === null) {
-      return { status: "missing" };
-    }
-
-    return { catalogue: { mode: "page", page: paged }, findings, letters, page, status: "found" };
-  }
-
-  const [findings, seed, letters] = await Promise.all([
+      throw error;
+    }),
     listLabelsWithFindingCounts(),
-    listLabelsCatalogue({ limit: CATALOGUE_HUB_DEFAULT_LIMIT }),
     listLabelsCatalogueLetters(),
   ]);
 
-  return { catalogue: { mode: "scroll", seed }, findings, letters, page: 1, status: "found" };
+  if (paged === null) {
+    return { status: "missing" };
+  }
+
+  return { catalogue: paged, findings, letters, page: requested, status: "found" };
 }
 
 const fetchLabelsPage = createServerFn({ method: "GET" })
   .validator((data: { page?: number }) => data)
   .handler(({ data }): Promise<LabelsPageData> => resolveLabelsPage(data.page));
-
-// Subsequent "more labels" scroll pages go through the SAME serverFn the loader seeded from —
-// a slug keyset, no oRPC op (the homepage-feed precedent).
-const fetchLabelsCatalogue = createServerFn({ method: "GET" })
-  .validator((data: { cursor?: string; limit?: number }) => data)
-  .handler(({ data }) => listLabelsCatalogue({ cursor: data.cursor, limit: data.limit }));
 
 // Machine-facing strings stay honestly-plain third-person (the Narrator rule), and they carry the
 // genre keyword — Bing flagged the hub layer for short, keyword-free titles and identical paged
@@ -250,39 +224,23 @@ function LabelsPage() {
           </ul>
         )}
 
-        {catalogue.mode === "scroll" ? (
-          <CatalogueHubSection
-            gridClassName="artist-grid"
-            heading="More labels"
-            headingId="labels-catalogue-heading"
-            initialPage={catalogue.seed}
-            lane={lane}
-            listLabel="More labels"
-            queryFn={(cursor) =>
-              fetchLabelsCatalogue({ data: { cursor, limit: CATALOGUE_HUB_DEFAULT_LIMIT } })
-            }
-            queryKey="labels-catalogue"
-            renderTile={renderTile}
-          />
-        ) : (
-          <CatalogueHubPageSection
-            gridClassName="artist-grid"
-            heading="More labels"
-            headingId="labels-catalogue-heading"
-            items={catalogue.page.items}
-            lane={lane}
-            listLabel="More labels"
-            pager={
-              <CataloguePager
-                buildHref={buildHref}
-                label="More labels, more pages"
-                page={catalogue.page.page}
-                pageCount={catalogue.page.pageCount}
-              />
-            }
-            renderTile={renderTile}
-          />
-        )}
+        <CatalogueHubPageSection
+          gridClassName="artist-grid"
+          heading="More labels"
+          headingId="labels-catalogue-heading"
+          items={catalogue.items}
+          lane={lane}
+          listLabel="More labels"
+          pager={
+            <CataloguePager
+              buildHref={buildHref}
+              label="More labels, more pages"
+              page={catalogue.page}
+              pageCount={catalogue.pageCount}
+            />
+          }
+          renderTile={renderTile}
+        />
 
         <footer className="log-plate-footer">
           <Link to="/">Back to the archive</Link>
