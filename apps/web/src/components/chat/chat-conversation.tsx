@@ -16,6 +16,7 @@ import { type ChatFinding, FindingCard } from "@/components/chat/finding-card";
 import { FindingList } from "@/components/chat/finding-list";
 import { type ChatLabel, LabelCard } from "@/components/chat/label-card";
 import { type ChatMixtape, MixtapeCard } from "@/components/chat/mixtape-card";
+import { type ChatNeighbour, NeighbourList } from "@/components/chat/neighbour-card";
 import { type ChatStatus, StatusStrip } from "@/components/chat/status-strip";
 import { MixPreviewBar } from "@/components/mix/mix-preview-bar";
 import { type KeyNotation, useKeyNotation } from "@/lib/key-notation";
@@ -301,6 +302,17 @@ function renderFindingOutput(output: unknown, notation: KeyNotation): ReactNode 
 
   if ("label" in output && output.label) {
     return <LabelCard label={output.label as ChatLabel} notation={notation} />;
+  }
+
+  // get_similar_artists → the "similar artists" chip rail; each neighbour carries `certified`, so a
+  // catalogue-only one renders unlit (structural, like every other branch).
+  if ("similar" in output && Array.isArray(output.similar)) {
+    return (
+      <NeighbourList
+        neighbours={output.similar as ChatNeighbour[]}
+        of={(output as { of?: { name?: string; slug?: string } }).of}
+      />
+    );
   }
 
   if ("mixtape" in output && output.mixtape) {

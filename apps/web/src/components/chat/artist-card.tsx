@@ -15,6 +15,7 @@ import {
 } from "simple-icons";
 import { ArtistAvatar } from "@/components/artist-avatar";
 import { BrandIcon } from "@/components/brand-icon";
+import { type ChatCatalogueTrack, CatalogueList } from "@/components/chat/catalogue-card";
 import { type ChatFinding } from "@/components/chat/finding-card";
 import { FindingList } from "@/components/chat/finding-list";
 import { type ArtistSocialPlatform } from "@/lib/artist-socials";
@@ -37,6 +38,10 @@ export type ChatArtist = {
   avatarUrl?: string;
   /** The voiced entity bio — a short intro paragraph, present only once one is authored. */
   bio?: string;
+  /** The records of this artist Fluncle knows are out there but has never certified — present when
+      the entity is catalogue-only (no findings). Rendered in the unlit register (the Unlit Rule):
+      named and listed, never a coordinate, never gold, never presented as one of his Findings. */
+  catalogue?: ChatCatalogueTrack[];
   findingCount?: number;
   findings?: ChatFinding[];
   name?: string;
@@ -108,6 +113,7 @@ export function ArtistCard({ artist, notation }: { artist: ChatArtist; notation:
   const slug = artist.slug;
   const socials = artist.socials ?? [];
   const findings = artist.findings ?? [];
+  const catalogue = artist.catalogue ?? [];
   const count = artist.findingCount ?? findings.length;
   const bio = artist.bio;
 
@@ -151,6 +157,11 @@ export function ArtistCard({ artist, notation }: { artist: ChatArtist; notation:
       ) : null}
 
       {findings.length > 0 ? <FindingList findings={findings} notation={notation} /> : null}
+
+      {/* A catalogue-only artist (no findings) lists their records in the unlit register — the
+          Dust Veil, no coordinate, no gold (DESIGN.md's Unlit Rule). Bare, no heading: the block
+          is the only content, so a heading would exist just to name the tier. */}
+      {catalogue.length > 0 ? <CatalogueList catalogue={catalogue} /> : null}
     </div>
   );
 }

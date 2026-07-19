@@ -27,6 +27,10 @@ export type ChatCatalogueTrack = {
   label?: string;
   /** The record it came off, when known — context, never a per-track lit claim. */
   release?: string;
+  /** When it came OUT (a release date), present only on the fresh list. A public RELEASE fact, NOT
+      a Fluncle measurement like the bpm/key/cover an unlit row never carries — so it is register-safe
+      here. The row does not print it; it rides the tool output so Fluncle can cite when it dropped. */
+  releaseDate?: string;
   /** The way out. A catalogue row has no /log page, so Spotify is where it goes (when it has one). */
   spotifyUrl?: string;
   title: string;

@@ -36,6 +36,10 @@ export type ChatFinding = {
   key?: string;
   label?: string;
   note?: string;
+  /** When the track came OUT (a release date), present only on the fresh list — a public fact the
+      Found Rule frames as released, never found. Optional so every other tool that emits a finding
+      is unaffected. The card does not print it; it rides the tool output so Fluncle can cite it. */
+  releaseDate?: string;
   spotifyUrl?: string;
   title?: string;
 };
