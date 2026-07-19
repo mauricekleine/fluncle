@@ -2,11 +2,11 @@ import { describe, expect, it } from "vitest";
 import { formatReleaseDate } from "./format";
 
 describe("formatReleaseDate (the /tracks date column)", () => {
-  it("spells out a full YYYY-MM-DD release date, long month, in UTC", () => {
-    expect(formatReleaseDate("2026-07-05")).toBe("July 5, 2026");
-    expect(formatReleaseDate("2024-12-22")).toBe("December 22, 2024");
+  it("formats a full YYYY-MM-DD release date in the canon short-month form, in UTC", () => {
+    expect(formatReleaseDate("2026-07-05")).toBe("Jul 5, 2026");
+    expect(formatReleaseDate("2024-12-22")).toBe("Dec 22, 2024");
     // Pinned to UTC so a midnight date never slips a day under a client's timezone.
-    expect(formatReleaseDate("2026-01-01")).toBe("January 1, 2026");
+    expect(formatReleaseDate("2026-01-01")).toBe("Jan 1, 2026");
   });
 
   it("stays honest on a partial-precision date — the YEAR alone, never a fabricated month or day", () => {

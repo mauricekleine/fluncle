@@ -2778,9 +2778,9 @@ a.catalogue-letter:focus-visible {
 }
 
 /* The release date — the date column, Oxanium tabular like every other number (the Tabular Rule).
-   Left-aligned and wide enough for the spelled-out human date ("September 22, 2026"); the cover and
-   body flow after it. A partial-precision or undated row prints just the year (or an em dash), which
-   sits comfortably inside the same column. */
+   Left-aligned and wide enough for the short-month archival date ("Sep 22, 2026"); the cover and body
+   flow after it. A partial-precision or undated row prints just the year (or an em dash), which sits
+   comfortably inside the same column. */
 .tracks-hub-row-date {
   color: var(--muted-foreground);
   flex: none;
@@ -2790,16 +2790,7 @@ a.catalogue-letter:focus-visible {
   letter-spacing: 0.01em;
   text-align: left;
   white-space: nowrap;
-  width: 9rem;
-}
-
-/* On a phone the spelled-out date would eat the row: drop the column to a comfortable width and let a
-   long month wrap to a second line rather than crowd the cover + title. */
-@media (max-width: 30rem) {
-  .tracks-hub-row-date {
-    width: 5.5rem;
-    white-space: normal;
-  }
+  width: 5.5rem;
 }
 
 /* Cover-led: 3.25rem album art (the .track-artwork base carries the size + radius). A finding shows
