@@ -14,14 +14,9 @@ import { siSpotify } from "simple-icons";
 import { BrandIcon } from "@/components/brand-icon";
 import { GraphLink } from "@/components/graph-link";
 import { TrackArtwork } from "@/components/track-artwork";
+import { formatReleaseDate } from "@/lib/format";
 import { albumCoverAtSize } from "@/lib/media";
 import { type TracksHubArtistLink, type TracksHubEntry } from "@/lib/server/tracks-hub";
-
-/** The release year the date column prints — the first four chars of an ISO release date, or a dash
-    for an undated catalogue row (nothing to anchor the year lane to). */
-function releaseYear(releaseDate: string): string {
-  return releaseDate.slice(0, 4) || "—";
-}
 
 /** The artist credits: a resolved artist is a GraphLink to `/artist/<slug>` (DESIGN.md §5 — wherever
     a surface names a graph node, the name is a GraphLink, never a bespoke link; the dotted underline
@@ -70,14 +65,14 @@ function LabelCredit({ label, slug }: { label?: string; slug?: string }) {
 
 /** One row of the `/tracks` hub, in the register its entry declares. */
 export function TracksHubRow({ entry }: { entry: TracksHubEntry }) {
-  const year = releaseYear(entry.releaseDate);
+  const releaseLabel = formatReleaseDate(entry.releaseDate);
 
   if (entry.kind === "finding") {
     const { finding } = entry;
 
     return (
       <li className="tracks-hub-row tracks-hub-row-lit">
-        <span className="tracks-hub-row-year">{year}</span>
+        <span className="tracks-hub-row-date">{releaseLabel}</span>
         <TrackArtwork
           alt=""
           className="tracks-hub-row-cover"
@@ -117,7 +112,7 @@ export function TracksHubRow({ entry }: { entry: TracksHubEntry }) {
 
   return (
     <li className="tracks-hub-row tracks-hub-row-unlit">
-      <span className="tracks-hub-row-year">{year}</span>
+      <span className="tracks-hub-row-date">{releaseLabel}</span>
       {/* No cover on an unlit row — TrackArtwork's eclipse fallback stands in (the coverless dust
           row is half of what tells a catalogue row from a finding; the Unlit Rule holds). */}
       <TrackArtwork alt="" className="tracks-hub-row-cover" />

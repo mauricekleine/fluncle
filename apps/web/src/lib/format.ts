@@ -38,6 +38,34 @@ export function formatDateLong(value: string): string {
   return dateLongFormatter.format(new Date(value));
 }
 
+// The full human release date ("July 5, 2026") for the /tracks reference row's date column — the one
+// place a spelled-out month reads, where the row has the horizontal room the tabular feed forms
+// (formatDate/formatDateLong) do not. UTC-pinned like its siblings so SSR matches hydration.
+const releaseDateFormatter = new Intl.DateTimeFormat("en-US", {
+  day: "numeric",
+  month: "long",
+  timeZone: "UTC",
+  year: "numeric",
+});
+
+// Matches a full `YYYY-MM-DD` day — the only precision we can spell out honestly. Spotify's and
+// MusicBrainz's `release_date` is stored raw and can be year-only ("2026") or year-month ("2026-07").
+const FULL_DAY = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * The /tracks row's date column. A full `YYYY-MM-DD` release date reads as the spelled-out human date
+ * ("July 5, 2026"); a partial-precision date stays honest at the YEAR alone (never fabricating a month
+ * or day the source never gave — `new Date("2026")` would otherwise render "January 1"); an
+ * empty/absent value shows an em dash.
+ */
+export function formatReleaseDate(releaseDate: string): string {
+  if (FULL_DAY.test(releaseDate)) {
+    return releaseDateFormatter.format(new Date(releaseDate));
+  }
+
+  return releaseDate.slice(0, 4) || "—";
+}
+
 export function formatDurationField(durationMs?: number | null): string {
   return durationMs ? formatDuration(durationMs) : "";
 }
