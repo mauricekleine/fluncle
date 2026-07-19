@@ -2504,6 +2504,20 @@ function addAdminCommands(program: Command): void {
       await runBackfillAppleCatalogue(options, backfillAppleCatalogueCommand);
     });
 
+  // `backfill_apple_releases` → `admin backfills apple-releases`. The MusicKit freshness tap (D8):
+  // a bounded probe over ENABLED seed labels that mints day-one catalogue rows from Apple's latest
+  // releases, closing the ~2-week MusicBrainz-editorial-lag on /fresh. Catalogue identity only.
+  backfill
+    .command("apple-releases")
+    .description("Tap Apple's latest releases for enabled seed labels into catalogue rows")
+    .option("--dry-run", "Report the labels that would be probed without any Apple call", false)
+    .option("--limit <limit>", "Max enabled seed labels to probe per pass", "5")
+    .option("--json", "Print JSON", false)
+    .action(async (options: BackfillSyncOptions) => {
+      const { backfillAppleReleasesCommand } = await import("./commands/admin-tracks");
+      await runBackfillAppleReleases(options, backfillAppleReleasesCommand);
+    });
+
   // `backfill_artists` → `admin backfills artists`. Back-fills the artist entity
   // tables (artists + track_artists) for existing findings that predate Unit 1.
   backfill
@@ -3826,6 +3840,112 @@ async function runBackfillAppleCatalogue(
 
   if (failed.length > 0) {
     process.exitCode = 1;
+  }
+}
+
+async function runBackfillAppleReleases(
+  options: BackfillSyncOptions,
+  backfillAppleReleasesCommand: typeof import("./commands/admin-tracks").backfillAppleReleasesCommand,
+): Promise<void> {
+  const perPass = parseListLimit(options.limit);
+  const newTrackIds: string[] = [];
+  const resolvedLabels: string[] = [];
+  const unresolvedLabels: string[] = [];
+  let dryRun = options.dryRun;
+  let throttled = false;
+  let breakerTripped = false;
+  let configured = true;
+  let labelsProbed = 0;
+  let albumsSeen = 0;
+  let newRows = 0;
+  let skippedKnown = 0;
+
+  // No cursor: each pass advances the probed labels' `apple_releases_checked_at`, so the CLI loops
+  // until a pass probes nothing (the enabled labels are all fresh this window) or a breaker stops
+  // it. The hard pass cap defends against a pathological loop (a pass always probes ≥1 label when
+  // any is eligible, so ~ceil(enabledLabels / perPass) passes drain the window).
+  const MAX_PASSES = 100;
+
+  for (let pass = 0; pass < MAX_PASSES; pass += 1) {
+    const result = await backfillAppleReleasesCommand(perPass, options.dryRun);
+    dryRun = result.dryRun;
+    configured = result.configured;
+    labelsProbed += result.labelsProbed;
+    albumsSeen += result.albumsSeen;
+    newRows += result.newRows;
+    skippedKnown += result.skippedKnown;
+    newTrackIds.push(...result.newTrackIds);
+    resolvedLabels.push(...result.resolvedLabels);
+    unresolvedLabels.push(...result.unresolvedLabels);
+
+    if (!options.json) {
+      const verb = result.dryRun ? "would probe" : "probed";
+      console.log(
+        `  …${verb} ${result.dryRun ? result.resolvedLabels.length : result.labelsProbed} label(s); ${result.newRows} new; ${result.skippedKnown} known; ${result.unresolvedLabels.length} unresolved`,
+      );
+    }
+
+    if (!result.configured) {
+      break;
+    }
+
+    if (result.breakerTripped) {
+      breakerTripped = true;
+      break;
+    }
+
+    if (result.rateLimited) {
+      throttled = true;
+      break;
+    }
+
+    // A dry run reports the eligible set once and does not advance any stamp, so a second pass would
+    // repeat it forever — stop after the single preview pass.
+    if (result.dryRun) {
+      break;
+    }
+
+    // A pass that probed no label (and resolved none) drained the eligible worklist this window.
+    if (result.labelsProbed === 0 && result.resolvedLabels.length === 0) {
+      break;
+    }
+  }
+
+  if (options.json) {
+    printSweepJson(
+      {
+        albumsSeen,
+        breakerTripped,
+        configured,
+        dryRun,
+        labelsProbed,
+        newRows,
+        newTrackIds,
+        rateLimited: throttled,
+        resolvedLabels,
+        skippedKnown,
+        unresolvedLabels,
+      },
+      0,
+    );
+    return;
+  }
+
+  if (!configured) {
+    console.log(
+      "Apple releases tap is not configured (the Worker's MusicKit secrets are unset) — nothing probed.",
+    );
+    return;
+  }
+
+  const verb = dryRun ? "Would probe" : "Probed";
+  const probedCount = dryRun ? resolvedLabels.length : labelsProbed;
+  console.log(
+    `${verb} ${probedCount} enabled seed label(s); ${newRows} new catalogue row(s); ${skippedKnown} already known; ${resolvedLabels.length} resolved; ${unresolvedLabels.length} unresolved.`,
+  );
+
+  for (const slug of unresolvedLabels) {
+    console.log(`  no exact Apple label match: ${slug}`);
   }
 }
 

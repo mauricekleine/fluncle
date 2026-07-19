@@ -745,6 +745,111 @@ describe("the seed re-arm (release freshness) — an enabled label is a subscrip
   });
 });
 
+// ── THE DEDUPE CONTRACT: MB-walk-later convergence with an Apple-first row (D8) ──────────────────
+//
+// The MusicKit freshness tap (apple-releases.ts) mints `ap_<song-id>` rows for day-one releases.
+// When the MB crawl later walks the SAME release, its `writeCatalogueTracks` must recognise the
+// Apple-first row instead of minting an `mb_` twin — by ISRC (layer 1) OR, when the ISRC is missing
+// / divergent, by an EXACT title fold within the same album (layer 2). The seed release
+// (release-seed) presses "Weightless" (ISRC GBCJY1300173) and "Begin by Letting Go" (no ISRC) on
+// release-group rg-medschool-sampler → album slug "med-school-sampler".
+
+/** Mint an `albums` row the crawl will resolve the seed release onto (it adopts the RG onto it). */
+async function seedAlbumRow(id: string, name: string, slug: string): Promise<void> {
+  await db.execute({
+    args: [id, name, slug, NOW, NOW],
+    sql: `insert into albums (id, name, slug, created_at, updated_at) values (?, ?, ?, ?, ?)`,
+  });
+}
+
+/** Seed an Apple-first catalogue row (`ap_<id>`) with an album link — the shape the tap mints. */
+async function seedAppleRow(row: {
+  albumId: string;
+  isrc: null | string;
+  title: string;
+  trackId: string;
+}): Promise<void> {
+  await db.execute({
+    args: [row.trackId, row.title, JSON.stringify(["Etherwood"]), 261901, row.isrc, row.albumId],
+    sql: `insert into tracks (track_id, title, artists_json, duration_ms, isrc, album_id)
+          values (?, ?, ?, ?, ?, ?)`,
+  });
+}
+
+describe("the crawl converges onto an Apple-first row instead of minting a twin", () => {
+  it("folds a later MB walk to a skip when the ISRC matches (no mb_ twin)", async () => {
+    await seedAlbumRow("alb_seed", "Med School sampler", "med-school-sampler");
+    // The tap already minted "Weightless" with the shared ISRC.
+    await seedAppleRow({
+      albumId: "alb_seed",
+      isrc: "GBCJY1300173",
+      title: "Weightless",
+      trackId: "ap_weightless",
+    });
+
+    await drain();
+
+    // No `mb_rec-1` twin — the crawl recognised the ap_ row by ISRC.
+    const weightless = await db.execute(
+      "select track_id from tracks where title = 'Weightless' order by track_id",
+    );
+    expect(weightless.rows.map((row) => text(row.track_id))).toEqual(["ap_weightless"]);
+    // The other seed track + the hop-2 track still mint as normal.
+    const all = await db.execute("select count(*) as n from tracks");
+    expect(Number(all.rows[0]?.n)).toBe(3); // ap_weightless + mb_rec-2 + mb_rec-3
+  });
+
+  it("folds a later MB walk to a skip via same-album title fold when the ISRC is missing/divergent", async () => {
+    await seedAlbumRow("alb_seed", "Med School sampler", "med-school-sampler");
+    // "Weightless" tapped with a DIVERGENT ISRC (Apple/MB disagree) — layer 1 misses it.
+    await seedAppleRow({
+      albumId: "alb_seed",
+      isrc: "XXDIVERGENT01",
+      title: "Weightless",
+      trackId: "ap_weightless",
+    });
+    // "Begin by Letting Go" tapped with NO ISRC — layer 1 has nothing to match.
+    await seedAppleRow({
+      albumId: "alb_seed",
+      isrc: null,
+      title: "Begin by Letting Go",
+      trackId: "ap_begin",
+    });
+
+    await drain();
+
+    // Neither seed-release track minted an `mb_` twin — both converged on the ap_ row by the
+    // same-album exact title fold.
+    const twins = await db.execute(
+      "select track_id from tracks where track_id like 'mb\\_rec-1' escape '\\' or track_id like 'mb\\_rec-2' escape '\\'",
+    );
+    expect(twins.rows).toHaveLength(0);
+    // The hop-2 track (a DIFFERENT album, different title) is unaffected and still minted.
+    const hop2 = await db.execute("select track_id from tracks where title = 'A Hop-2 Track'");
+    expect(hop2.rows.map((row) => text(row.track_id))).toEqual(["mb_rec-3"]);
+  });
+
+  it("does NOT merge a same-titled track on a DIFFERENT album (the fold is album-scoped)", async () => {
+    // An Apple row titled "Weightless" but on an UNRELATED album — the crawl must still mint its
+    // own "Weightless" for the seed release (different album_id ⇒ not a convergence).
+    await seedAlbumRow("alb_other", "Some Other Record", "some-other-record");
+    await seedAppleRow({
+      albumId: "alb_other",
+      isrc: null,
+      title: "Weightless",
+      trackId: "ap_unrelated",
+    });
+
+    await drain();
+
+    const weightless = await db.execute(
+      "select track_id from tracks where title = 'Weightless' order by track_id",
+    );
+    // Both exist — the album-scoped fold did not merge across albums.
+    expect(weightless.rows.map((row) => text(row.track_id))).toEqual(["ap_unrelated", "mb_rec-1"]);
+  });
+});
+
 describe("the tail-first re-arm — a subscription reads only the NEW end of the list", () => {
   // MusicBrainz's release browse has NO date sort: its order is append-ish, so a label's NEWEST
   // pressings sit at the TAIL. A re-arm therefore reads the list END-first and stops at the first

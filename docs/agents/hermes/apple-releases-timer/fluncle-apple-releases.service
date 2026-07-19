@@ -1,0 +1,28 @@
+[Unit]
+Description=fluncle-apple-releases — rave-02 host trigger for the MusicKit freshness tap's bounded probe
+Documentation=https://github.com/mauricekleine/fluncle/blob/main/docs/agents/hermes/apple-releases-timer/README.md
+Wants=network-online.target docker.service
+After=network-online.target docker.service
+# If this unit dies before writing its own /status marker (OOM, missing binary, a crash
+# before the sweep catch runs), the healthcheck prober never sees a failure. This catch-all
+# posts a minimal Discord alert; %n is this unit's full name.
+OnFailure=fluncle-sweep-failure@%n.service
+
+[Service]
+Type=oneshot
+# Root drives the Docker daemon; `docker exec -u hermes` runs the WORK as the unprivileged hermes
+# user. The .sh/.ts pair is BAKED at /opt/hermes-scripts/ (auto-updates from main via pin-watch);
+# this host unit only TRIGGERS it, and the sweep self-writes its /status marker (cron-output.sh).
+# NO new secret: `backfill_apple_releases` is AGENT tier, so the box's existing agent-scoped token
+# drives it. The three APPLE_MUSIC_* secrets live on the WORKER (never the box); the probe is a
+# Worker-paced sweep, so the box just drives the CLI.
+ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/apple-releases-sweep.sh
+# A PURE trigger — zero LLM tokens. The probe's Apple calls are paced by the shared 18/min meter,
+# so the CLI can loop passes for a few minutes when a fresh label has many releases; 600s clears
+# that with room to spare and still sits far under the 24h cadence.
+TimeoutStartSec=600
+# Modest hardening for a root docker-driving oneshot.
+NoNewPrivileges=true
+ProtectControlGroups=true
+ProtectKernelTunables=true
+RestrictSUIDSGID=true

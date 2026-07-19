@@ -277,6 +277,9 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // catalogue identity only (a URL on `tracks`, facts on `albums`), never a certification.
   "POST /admin/backfill/apple-catalogue": "backfill_apple_catalogue",
   "POST /admin/backfill/apple-music": "backfill_apple_music",
+  // The MusicKit freshness tap (D8): a bounded probe over ENABLED seed labels that mints day-one
+  // catalogue rows from Apple's latest releases — catalogue identity only, never a certification.
+  "POST /admin/backfill/apple-releases": "backfill_apple_releases",
   "POST /admin/backfill/artist-images": "backfill_artist_images",
   "POST /admin/backfill/artists": "backfill_artists",
   // Agent tier: the box's `fluncle-cover-masters` cron drives it. It owns an album's/artist's

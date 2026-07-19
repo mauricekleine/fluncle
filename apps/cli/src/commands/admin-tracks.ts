@@ -528,6 +528,36 @@ export async function backfillAppleCatalogueCommand(
   );
 }
 
+export type AppleReleasesBackfillResult = {
+  albumsSeen: number;
+  // True when the pass STOPPED on the cross-cutting Apple breaker (suspended token / spent budget).
+  breakerTripped: boolean;
+  configured: boolean;
+  dryRun: boolean;
+  labelsProbed: number;
+  newRows: number;
+  newTrackIds: string[];
+  // True when the pass STOPPED on the Apple 429 rate-limit circuit breaker.
+  rateLimited: boolean;
+  resolvedLabels: string[];
+  skippedKnown: number;
+  unresolvedLabels: string[];
+};
+
+// One bounded pass of the MusicKit freshness tap (D8) — a probe over ENABLED seed labels that mints
+// day-one catalogue rows from Apple's latest releases. No cursor: the worklist is the oldest-probed
+// enabled labels each tick, so the CLI loops until a pass probes nothing.
+export async function backfillAppleReleasesCommand(
+  limit: number,
+  dryRun: boolean,
+): Promise<AppleReleasesBackfillResult> {
+  const params = new URLSearchParams({ dryRun: String(dryRun), limit: String(limit) });
+
+  return adminApiPost<AppleReleasesBackfillResult>(
+    `/api/admin/backfill/apple-releases?${params.toString()}`,
+  );
+}
+
 export type RecordingMbidsBackfillResult = {
   dryRun: boolean;
   failed: Array<{ error: string; trackId: string }>;

@@ -1,0 +1,21 @@
+[Unit]
+Description=fluncle-apple-releases timer — tap Apple Music's latest releases for the enabled seed labels once a day on the rave-02 host (not the Hermes gateway)
+
+[Timer]
+# First tick shortly after boot (staggered at 23min, off the other sweeps' minutes), then every
+# 24h. Apple's editorial catalogue has a release on day one, where MusicBrainz lags ~2 weeks, so a
+# DAILY tap is enough to keep /fresh current for every enabled seed label — a Friday drop lands by
+# Saturday. Each pass probes a bounded few labels and self-drains within the day (the CLI loops
+# passes until every enabled label's `apple_releases_checked_at` is fresh this window). A tick that
+# finds every label already tapped is a cheap no-op.
+#
+# The `labels` rows are the durable state (per-label `apple_label_state`/`apple_label_attempted_at`/
+# `apple_label_failures`/`apple_releases_checked_at`), so a tick missed across a reboot costs
+# nothing — Persistent catches it up and the next tick resumes; the cadence gate re-skips labels
+# already tapped this window.
+OnBootSec=23min
+OnUnitActiveSec=24h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

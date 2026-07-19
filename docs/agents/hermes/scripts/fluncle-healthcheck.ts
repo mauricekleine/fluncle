@@ -489,6 +489,7 @@ const AUTOMATION_CRONS: CronDef[] = [
   { cadenceMs: 60 * 60_000, match: "observation", service: "cron.observation" },
   { cadenceMs: 30 * 60_000, match: "backfill", service: "cron.backfill" },
   { cadenceMs: 10 * 60_000, match: "crawl", service: "cron.crawl" }, // catalogue crawl — one bounded MusicBrainz pass per tick
+  { cadenceMs: 24 * 60 * 60_000, match: "apple-releases", service: "cron.apple-releases" }, // MusicKit freshness tap — day-one releases for enabled seed labels
   { cadenceMs: 30 * 60_000, match: "rank", service: "cron.rank" }, // The Ear's ranking — drains the stale catalogue
   { cadenceMs: 60 * 60_000, match: "anchor", service: "cron.anchor" }, // catalogue Spotify anchors via Apify — one bounded batch per hour
   { cadenceMs: 60 * 60_000, match: "label-images", service: "cron.label-images" }, // label logos — resolve one bounded batch of pending labels per tick

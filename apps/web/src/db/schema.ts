@@ -2538,6 +2538,32 @@ export const artistSocials = sqliteTable(
 export const labels = sqliteTable(
   "labels",
   {
+    // ── THE MUSICKIT FRESHNESS TAP (D8) ──────────────────────────────────────────────
+    // Apple Music becomes a per-label FRESHNESS probe for ENABLED seed labels only: a bounded
+    // "latest releases" tap that mints METADATA-ONLY catalogue rows with day-one release dates,
+    // closing the ~2-week MusicBrainz-editorial-lag cliff on /fresh. MusicBrainz still WALKS the
+    // graph (crawl.ts); Apple only TAPS freshness — it never expands the graph (no new labels, no
+    // artist hops) and never certifies. See apple-releases.ts + docs/catalogue-crawler.md.
+    //   - `apple_label_id`         — the Apple catalog record-label id, resolved ONCE via Apple
+    //                                catalog search accepting ONLY an EXACT name-fold match (a wrong
+    //                                match would mint wrong-label rows). NULL until resolved / when
+    //                                Apple has no exact-fold label. NON-KEYING (existing rows NULL).
+    //   - `apple_label_state`      — the resolution lifecycle: `pending` (the DDL default, so every
+    //                                label enters the worklist), `resolved` (an id is stored), `none`
+    //                                (no exact-fold Apple label after the give-up cap — terminal).
+    //   - `apple_label_attempted_at` / `apple_label_failures` — the shipped reliability pair (the
+    //                                label-images convention): the last resolution attempt (the
+    //                                cooldown backoff) + the consecutive-failure streak (→ `none`).
+    //   - `apple_releases_checked_at` — when the probe last tapped this (resolved) label's latest
+    //                                releases. Drives the oldest-first rotation + the re-probe
+    //                                cadence. NULL until first probed.
+    appleLabelAttemptedAt: text("apple_label_attempted_at"),
+    appleLabelFailures: integer("apple_label_failures").notNull().default(0),
+    appleLabelId: text("apple_label_id"),
+    appleLabelState: text("apple_label_state", { enum: ["pending", "resolved", "none"] })
+      .notNull()
+      .default("pending"),
+    appleReleasesCheckedAt: text("apple_releases_checked_at"),
     // ── THE VOICED BIO (the artist/label bio engine) ────────────────────────────────
     // A short, Fluncle-voiced public bio for the label — the written sibling of a finding's
     // editorial `note`, grounded in Firecrawl facts + the tracks Fluncle has actually LOGGED
@@ -2641,6 +2667,14 @@ export const labels = sqliteTable(
     index("labels_lineage_queue_idx")
       .on(table.slug)
       .where(sql`${table.lineageState} = 'pending'`),
+    // The MusicKit freshness-tap worklist (D8): the probe reads ENABLED seed labels oldest-probe
+    // first (`order by apple_releases_checked_at asc`). A PARTIAL index over exactly that
+    // allowlisted slice, so the probe never scans the crawler-swollen labels table — the seed set
+    // is tens of rows, the table is thousands. Plain ASC (SQLite reverse-scans it); a `desc()`
+    // index poisons the snapshot (the drizzle-kit desc-index trap).
+    index("labels_apple_probe_queue_idx")
+      .on(table.appleReleasesCheckedAt)
+      .where(sql`${table.seedState} = 'enabled'`),
   ],
 );
 

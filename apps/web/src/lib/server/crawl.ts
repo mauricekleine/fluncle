@@ -63,6 +63,7 @@
 
 import { ensureAlbum } from "./albums";
 import { linkTracksToArtistEntities, stampRemixerRoles } from "./artists";
+import { existingAlbumTitleFolds, foldTrackTitle } from "./catalogue-dedupe";
 import { getDb, typedRows } from "./db";
 import { parseDiscogsUrl } from "./discogs";
 import { setLabelMbLabelId } from "./label-images";
@@ -273,6 +274,10 @@ function frontierId(source: CrawlNodeSource, kind: CrawlNodeKind, externalId: st
  * Spotify id for a finding; a catalogue track mints its own from the identity that
  * actually exists for it — the MusicBrainz recording MBID. Deterministic, so re-crawling
  * the same recording collides on the primary key and writes nothing.
+ *
+ * The freshness tap (apple-releases.ts) is the sibling minter: its rows carry `ap_<apple-song-id>`,
+ * the same namespaced-id convention off the identity Apple gives it. The two converge on ONE row
+ * per recording via the shared dedupe contract (ISRC + same-album title fold — catalogue-dedupe.ts).
  */
 export function catalogueTrackId(recordingMbid: string): string {
   return `mb_${recordingMbid}`;
@@ -570,13 +575,21 @@ async function rearmSeedLabels(): Promise<number> {
 /**
  * Write a release's tracks into `tracks` as CATALOGUE rows — and nowhere near `findings`.
  *
- * IDEMPOTENCE, in two layers, because one is not enough:
+ * IDEMPOTENCE, in THREE layers, because two were not enough once the freshness tap arrived:
  *   1. A bounded pre-read over the candidates' ISRCs + minted ids (`tracks_isrc_idx`).
  *      An ISRC is the recording's real identity, so a track Fluncle already CERTIFIED —
  *      whose `track_id` is a Spotify id, not `mb_…` — is recognised and skipped. Without
  *      this the crawler would happily mint a second, uncertified row for a finding.
- *   2. `on conflict (track_id) do nothing` on the insert, which closes the race the
- *      pre-read cannot (two ticks, same recording) at the primary key.
+ *   2. THE SAME-ALBUM TITLE-FOLD CONVERGENCE (`releaseAlbumId`). An Apple-tapped row
+ *      (`ap_<id>`, apple-releases.ts) can arrive with a MISSING or DIVERGENT ISRC — Apple
+ *      and MusicBrainz occasionally disagree on a recording's ISRC — so layer 1 would miss
+ *      it and this later MB walk of the same release would mint an `mb_` twin. This closes
+ *      that: a candidate whose title EXACT-folds to an existing row on the SAME album row
+ *      (the release's `album_id`, resolved before the write) is recognised as that row and
+ *      skipped. Deliberately TIGHT — exact fold, one album — so a VIP/remix (a different
+ *      title, "Foo VIP" ≠ "Foo") is never merged. See catalogue-dedupe.ts.
+ *   3. `on conflict (track_id) do nothing` on the insert, which closes the race the
+ *      pre-reads cannot (two ticks, same recording) at the primary key.
  *
  * `capture_status` and every other queue column are simply never named: the DDL defaults
  * land, the row is nobody's work item, and no agent sweep can reach it (the enrichment,
@@ -584,6 +597,7 @@ async function rearmSeedLabels(): Promise<number> {
  */
 async function writeCatalogueTracks(
   candidates: TrackCandidate[],
+  releaseAlbumId: null | string,
 ): Promise<{ skipped: number; written: number; writtenIds: string[] }> {
   if (candidates.length === 0) {
     return { skipped: 0, written: 0, writtenIds: [] };
@@ -613,14 +627,22 @@ async function writeCatalogueTracks(
     }
   }
 
+  // Layer 2: the same-album title-fold convergence index (the Apple-twin guard).
+  const albumTitleFolds = await existingAlbumTitleFolds(releaseAlbumId);
+
   let written = 0;
   let skipped = 0;
   const writtenIds: string[] = [];
 
   for (const candidate of candidates) {
     const trackId = catalogueTrackId(candidate.recordingId);
+    const titleFold = foldTrackTitle(candidate.title);
 
-    if (heldIds.has(trackId) || (candidate.isrc && heldIsrcs.has(candidate.isrc))) {
+    if (
+      heldIds.has(trackId) ||
+      (candidate.isrc && heldIsrcs.has(candidate.isrc)) ||
+      (releaseAlbumId && titleFold && albumTitleFolds.has(titleFold))
+    ) {
       skipped += 1;
       continue;
     }
@@ -664,6 +686,11 @@ async function writeCatalogueTracks(
       if (candidate.isrc) {
         heldIsrcs.add(candidate.isrc);
       }
+
+      if (titleFold) {
+        // Guard two candidates on one release that fold to the same title within this batch.
+        albumTitleFolds.set(titleFold, trackId);
+      }
     } else {
       skipped += 1;
     }
@@ -690,7 +717,7 @@ async function writeCatalogueTracks(
  * pointing at nothing. Purely resolve-and-stamp — it never mints (the discovered label was
  * already minted by `ensureLabel` above, and a known label already exists).
  *
- * Its album twin is `linkTracksToAlbum` below: the album edge is written INLINE at crawl
+ * Its album twin is `linkTracksToAlbumId` below: the album edge is written INLINE at crawl
  * time now, folded on the release-group MBID, not deferred to a deploy backfill.
  */
 async function linkTracksToLabel(
@@ -745,28 +772,18 @@ async function linkTracksToLabel(
 /**
  * Stamp `tracks.album_id` on the rows this release just wrote — the album twin of
  * `linkTracksToLabel`, and the indexed edge the public `/album/<slug>` page reads by
- * (docs/album-entity.md). ONE connect-or-create + one batched UPDATE per RELEASE, never per
- * track, mirroring the label pattern above.
+ * (docs/album-entity.md). ONE batched UPDATE per RELEASE, never per track, mirroring the label
+ * pattern above.
  *
- * The fold key is the release-group MBID (`ensureAlbum(name, releaseGroupMbid)`): every pressing
- * of one record resolves to the SAME album row, and an album a finding minted first is adopted
- * onto the mbid rather than duplicated. FALLBACK, load-bearing: a release with no release group
- * (or `ensureAlbum` returning nothing for a blank title) still links by `ensureAlbum`'s slug path
- * — nothing here hard-requires the mbid. Best-effort: a failure must not derail the crawl, so it
- * mirrors the deploy-era backstop's tolerance while writing the edge live per tick.
+ * `albumId` is resolved ONCE by the caller (`ensureAlbum(release.title, releaseGroupMbid)`) BEFORE
+ * the write, because the same id is the same-album title-fold dedupe key `writeCatalogueTracks`
+ * needs — resolving it in two places would risk two ids. The fold key is the release-group MBID
+ * (every pressing of one record → the SAME album row; an album a finding minted first is adopted
+ * onto the mbid rather than duplicated), with `ensureAlbum`'s slug fallback for a release MB has no
+ * release group for. A null id (a blank title, no release group) links nothing.
  */
-async function linkTracksToAlbum(
-  trackIds: string[],
-  albumName: null | string,
-  releaseGroupMbid: null | string,
-): Promise<void> {
-  if (trackIds.length === 0) {
-    return;
-  }
-
-  const albumId = await ensureAlbum(albumName, releaseGroupMbid);
-
-  if (!albumId) {
+async function linkTracksToAlbumId(trackIds: string[], albumId: null | string): Promise<void> {
+  if (trackIds.length === 0 || !albumId) {
     return;
   }
 
@@ -1138,17 +1155,21 @@ async function expandRelease(node: FrontierRow, maxHop: number): Promise<Expansi
     }
   }
 
-  const { skipped, written, writtenIds } = await writeCatalogueTracks(candidates);
+  // The album row, resolved ONCE up front (folded on the release-group MBID, slug fallback). It is
+  // the same-album title-fold dedupe key `writeCatalogueTracks` reads (the Apple-twin guard) AND
+  // the `album_id` edge stamped below — one resolve, so the two can never disagree.
+  const albumId =
+    (await ensureAlbum(release.title ?? null, release["release-group"]?.id ?? null)) ?? null;
+
+  const { skipped, written, writtenIds } = await writeCatalogueTracks(candidates, albumId);
 
   if (labelName) {
     await linkTracksToLabel(writtenIds, labelName, mbLabelId);
   }
 
-  // The album edge, stamped INLINE and folded on the release-group MBID — every pressing of a
-  // record resolves to one album row. FALLBACK: a release MusicBrainz has no release group for
-  // links by the album title's slug instead (`ensureAlbum`), and a release with no title links
-  // nothing. Purely additive; a crawled album is minted here now, no deploy backfill.
-  await linkTracksToAlbum(writtenIds, release.title ?? null, release["release-group"]?.id ?? null);
+  // The album edge, stamped INLINE — every pressing of a record resolves to one album row.
+  // Purely additive; a crawled album is minted here now, no deploy backfill.
+  await linkTracksToAlbumId(writtenIds, albumId);
 
   // The other indexed edge these rows need, stamped in the same breath as `label_id` and for
   // the same reason: `/artist/<slug>` shows the rest of an artist's catalogue, and it can only
