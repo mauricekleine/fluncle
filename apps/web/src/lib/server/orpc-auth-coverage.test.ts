@@ -286,6 +286,9 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // delete_private_saved_set precedent (docs/the-ear.md § The per-user telescopes).
   delete_private_rec_seed: "private-session",
   delete_private_saved_set: "private-session",
+  // The watch remove (D2a) — private-session (privateUserMutation), the
+  // delete_private_saved_set precedent. Unwatching only drops the account row.
+  delete_private_watch: "private-session",
   delete_recording: "operator",
   delete_subscription: "operator",
   // The album-bio authoring step — agent tier (adminAuth only, no operatorGuard), the
@@ -454,6 +457,9 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   list_private_saved_findings: "private-session",
   list_private_saved_sets: "private-session",
   list_private_submissions: "private-session",
+  // The watched-entities list (D2a) — private-session (privateUserAuth), the
+  // list_private_saved_sets precedent. Scoped to the caller's own session user.
+  list_private_watches: "private-session",
   // The prompt registry's operator read — OPERATOR tier. It returns every prompt's full
   // edit history, and it is the surface the operator edits Fluncle's voice from; editing
   // what Fluncle SAYS is publish-class, so an agent token 403s. Its agent-tier sibling
@@ -545,6 +551,12 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // catalogue_snapshots ledger (no publish), so the agent token drives it.
   record_catalogue_snapshot: "admin",
   record_cost: "admin",
+  // The demand tick (docs/catalogue-crawler.md § Demand) — agent tier (adminAuth only, no
+  // operatorGuard), the record_platform_stats / rank_catalogue precedent: the box's nightly
+  // demand cron POSTs a bare trigger and the Worker reads Simple Analytics + rewrites only the
+  // two derived reorder columns (demand_score / demand_rank), never a certification, so the
+  // agent token drives it.
+  record_demand: "admin",
   // The box's status cron POSTs a health snapshot — agent tier (adminAuth only, no
   // operatorGuard), the context_track/note_track precedent; it writes only the
   // internal service_status/status_events tables (no publish), so the agent token drives it.
@@ -612,6 +624,9 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // save_private_finding precedent; the 12-seed cap 409s in the helper.
   save_private_rec_seed: "private-session",
   save_private_set: "private-session",
+  // The watch write (D2a) — private-session (privateUserMutation), the save_private_set
+  // precedent. Watching only saves the entity to the caller's account.
+  save_private_watch: "private-session",
   send_edition: "operator",
   // The catalogue capture budget + its kill switch — operator tier, like `set_clip_drip`
   // and `set_publish_advance`. It is the ONE operator-tier op in the `admin-catalogue`

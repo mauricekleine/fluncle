@@ -222,6 +222,17 @@ export const tracks = sqliteTable(
     captureVerifiedAt: text("capture_verified_at"),
     catalogueRankCorpus: text("catalogue_rank_corpus"),
     catalogueRankedAt: text("catalogue_ranked_at"),
+    // THE DEMAND SIGNAL (docs/catalogue-crawler.md § Demand). The summed Simple Analytics
+    // pageviews of the DEMANDED entities this track hangs off — an artist on it (via
+    // `track_artists`) or its `label_id` — that real visitors looked at over the trailing
+    // window. It is a RANK-ORDER-ONLY reorder key, never a magnitude and never an override:
+    // the capture work queue (track-work.ts) reads it as a SECONDARY sort AFTER
+    // `capture_priority` (within-tier only), and the `capture_priority >= 0` veto still wins,
+    // so a ruled-out-label row is never resurrected by demand. Written ONLY by the
+    // `record_demand` op, which CLEARS every score then re-sets — a bounded, idempotent,
+    // deterministic rewrite the derived sweeps (rank_catalogue's `capture_priority`) never
+    // touch. NULL on a row no demanded entity hangs off (the common case).
+    demandScore: integer("demand_score"),
     // THE OPERATOR'S "NOT FOR ME" (docs/the-ear.md § The operator's actions). An ISO stamp,
     // written ONLY on a catalogue row when the operator dismisses it from the ear/capture
     // workstation — "I looked, it is not for me." It is a REVERSIBLE veto (the operator can
@@ -427,6 +438,22 @@ export const tracks = sqliteTable(
     index("tracks_nearest_finding_score_idx").on(table.nearestFindingScore),
     index("tracks_capture_priority_idx").on(table.capturePriority),
     index("tracks_source_audio_attempted_at_idx").on(table.sourceAudioAttemptedAt),
+    // THE CAPTURE-MISMATCH ATTENTION READ (attention.ts `listCaptureSuspectRows`, docs/the-ear.md
+    // § Wrong audio). The /admin attention queue's suspect list is `capture_verification =
+    // 'mismatch'` ordered `capture_verified_at ASC` — over a table designed to grow to five figures,
+    // an unindexed filter on `capture_verification` is the full scan of a growing table AGENTS.md
+    // forbids (measured ~5s p95 in prod). A COMPOSITE btree seeks it: the leading column turns the
+    // `= 'mismatch'` filter into a range seek, and the trailing column serves the `ORDER BY
+    // capture_verified_at ASC` from the index instead of a sort (`track_id` is the PK tiebreaker, so
+    // it need not be in the index). It also serves the backfill worklist's `capture_verification is
+    // null` seek (catalogue.ts `listUnverifiedCaptures`) off the same leading column. PLAIN ASC
+    // columns — a `desc()` index would poison the drizzle snapshot into rebuilding every index on the
+    // next migration (the ratified trap) — and a plain btree, never the vector `libsql_vector_idx`
+    // that wedges hosted Turso, so it builds like `tracks_key_idx` beside it.
+    index("tracks_capture_verification_verified_at_idx").on(
+      table.captureVerification,
+      table.captureVerifiedAt,
+    ),
     // The crawler's idempotence check — "do we already hold this ISRC?" — before minting a
     // row. A predicate on `tracks.isrc` over a table designed to grow to five figures, so
     // it is indexed. NOT unique: an ISRC is not guaranteed distinct across the archive's
@@ -489,6 +516,14 @@ export const tracks = sqliteTable(
     index("tracks_dismissed_idx")
       .on(table.dismissedAt)
       .where(sql`${table.dismissedAt} is not null`),
+    // THE DEMAND CLEAR (docs/catalogue-crawler.md § Demand). `record_demand` re-writes the demand
+    // columns clear-then-set every night, and the clear is `where demand_score is not null`. At
+    // catalogue scale only a few hundred rows are ever scored, so this partial index makes the
+    // nightly clear (and the `tracksScored` recount) a seek to exactly those rows rather than a
+    // scan of the growing `tracks` table — the `tracks_dismissed_idx` shape.
+    index("tracks_demand_score_idx")
+      .on(table.demandScore)
+      .where(sql`${table.demandScore} is not null`),
     // The MIXABILITY pre-filter, and the one index `/mix` cannot be public without.
     //
     // The key is MANDATORY to be rankable (`scoreMix`'s floor: a pair whose key we do not
@@ -1532,6 +1567,44 @@ export const userSavedSets = sqliteTable(
     userId: text("user_id").notNull(),
   },
   (table) => [index("user_saved_sets_user_updated_idx").on(table.userId, table.updatedAt)],
+);
+
+// A signed-in user's WATCHED entities — the artists and labels they asked to keep an eye
+// on. The saved-sets sibling exactly (a per-user list keyed by the Better Auth user, a
+// logical FK with no SQL cascade — deletion is application code in
+// `accountDeletionStatements`, never a constraint). THE ACCOUNT NEVER GATES THE FEATURE:
+// a signed-out visitor sees no watch control at all (the control simply does not render,
+// the SaveSetDialog precedent), and the per-entity fresh feeds (`/artist/<slug>/fresh.xml`)
+// stay the anonymous watcher equivalent, untouched.
+//
+// `kind` + `entity_id` point at the `artists.id` / `labels.id` this watch is for — resolved
+// by ID at write time and stored WITHOUT any denormalized name/slug (the entity's own row
+// stays the source of truth; the account list joins for the display name at read time). The
+// UNIQUE on (user_id, kind, entity_id) makes watching twice idempotent — a second watch of
+// the same entity upserts rather than duplicating.
+//
+// `include_similar` is HEADROOM with no consumer yet: the deferred email digest (operator
+// deferral 2026-07-19) will read it to decide whether a watch also pulls in sonically-near
+// entities. It defaults OFF in storage and has no UI — nothing writes anything but the
+// default today. Do not build a control for it until the digest lands.
+export const userWatches = sqliteTable(
+  "user_watches",
+  {
+    createdAt: text("created_at").notNull(),
+    entityId: text("entity_id").notNull(),
+    id: text("id").primaryKey(),
+    includeSimilar: integer("include_similar", { mode: "boolean" }).notNull().default(false),
+    kind: text("kind", { enum: ["artist", "label"] }).notNull(),
+    userId: text("user_id").notNull(),
+  },
+  (table) => [
+    // Watching twice is a no-op, not a duplicate row — the save path upserts on this key.
+    uniqueIndex("user_watches_user_kind_entity_idx").on(table.userId, table.kind, table.entityId),
+    // The `/account` list read: `where user_id = ? order by created_at desc`. A plain ASC
+    // btree (SQLite reverse-scans it) — never a `desc()` index, which poisons the drizzle
+    // snapshot into rebuilding every index on the next migration (the ratified trap).
+    index("user_watches_user_created_idx").on(table.userId, table.createdAt),
+  ],
 );
 
 // A signed-in user's cross-device preferences — the account-backed home for a
@@ -2856,6 +2929,13 @@ export const crawlFrontier = sqliteTable(
     createdAt: text("created_at").notNull(),
     // The browse offset already consumed (paginated `label` / `artist` nodes only).
     cursor: integer("cursor").notNull().default(0),
+    // THE DEMAND REORDER (docs/catalogue-crawler.md § Demand). 0 = a node belonging to an
+    // entity real visitors looked at (its seed label's subtree, via `label_slug`, or an
+    // artist node matched by MBID); 1 = every other node. Written ONLY by the `record_demand`
+    // op (clear-all-to-1 then set-0). The pick order is `(state, hop, demand_rank, created_at,
+    // id)`, so demand only REORDERS WITHIN A HOP — breadth-first by hop is preserved, and a
+    // ruled-out label never becomes a seed node, so demand can never resurrect one.
+    demandRank: integer("demand_rank").notNull().default(1),
     doneAt: text("done_at"),
     // The MB entity's MBID — or, for a seed `label` node, the operator's `labels.slug`.
     externalId: text("external_id").notNull(),
@@ -2878,10 +2958,19 @@ export const crawlFrontier = sqliteTable(
     updatedAt: text("updated_at").notNull(),
   },
   (table) => [
-    // The pick: `where state in (…) order by hop, created_at, id` — breadth-first and
-    // deterministic, so two runs over the same graph expand the same nodes in the same
-    // order. Leading with `state` keeps a drained frontier's tick a cheap no-op.
-    index("crawl_frontier_pick_idx").on(table.state, table.hop, table.createdAt, table.id),
+    // The pick: `where state in (…) order by hop, demand_rank, created_at, id` — breadth-first
+    // and deterministic, so two runs over the same graph expand the same nodes in the same
+    // order. `demand_rank` sits AFTER `hop` (a within-hop tiebreak only: a demanded node is
+    // picked before an undemanded sibling at the same hop, never ahead of a nearer hop), so
+    // the demand reorder cannot break breadth-first. Leading with `state` keeps a drained
+    // frontier's tick a cheap no-op.
+    index("crawl_frontier_pick_idx").on(
+      table.state,
+      table.hop,
+      table.demandRank,
+      table.createdAt,
+      table.id,
+    ),
     // The per-seed status read (and the subtree prune, when one is needed).
     index("crawl_frontier_label_idx").on(table.labelSlug),
   ],

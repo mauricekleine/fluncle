@@ -61,6 +61,7 @@ import { mePreferencesContract } from "./me-preferences";
 import { meRecsContract } from "./me-recs";
 import { meSavedContract } from "./me-saved";
 import { meSetsContract } from "./me-sets";
+import { meWatchesContract } from "./me-watches";
 import { mixContract } from "./mix";
 import { mixtapesContract } from "./mixtapes";
 import { newsletterContract } from "./newsletter";
@@ -316,6 +317,13 @@ export {
   SavedSetSchema,
   updatePrivateSavedSet,
 } from "./me-sets";
+export {
+  deletePrivateWatch,
+  listPrivateWatches,
+  savePrivateWatch,
+  WatchKindSchema,
+  WatchSchema,
+} from "./me-watches";
 export { listMixtapes } from "./mixtapes";
 export { type NewsletterBody, subscribeNewsletter } from "./newsletter";
 export { getRadioNowPlaying, getRandomRadioTrack } from "./radio";
@@ -419,6 +427,7 @@ export const contract = {
   ...meRecsContract,
   ...meSavedContract,
   ...meSetsContract,
+  ...meWatchesContract,
   ...mixContract,
   ...mixtapesContract,
   ...newsletterContract,

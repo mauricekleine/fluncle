@@ -1527,6 +1527,25 @@ export const SURFACES: readonly Surface[] = [
     weights: { status: "secondary" },
   },
   {
+    command: "fluncle admin catalogue demand",
+    exposedContent: [
+      "nightly demand reorder — reads Simple Analytics pageviews for /artist + /label pages and reorders crawl/capture priority toward what real visitors looked at (--no-agent)",
+    ],
+    kind: "cron",
+    name: "cron.demand",
+    operatorNotes:
+      "04:40 Amsterdam daily (just after the 04:00 reach snapshot — both daily analytics reads in one window). A bare trigger (the reach/rank shape): fires the AGENT-tier record_demand op once — the WORKER reads Simple Analytics for the /artist/<slug> + /label/<slug> pageviews over the trailing 30 days and REWRITES two derived reorder columns, tracks.demand_score (the capture queue's within-tier secondary sort) and crawl_frontier.demand_rank (the frontier pick's within-hop tiebreak). RANK-ORDER ONLY: it reorders within a tier and never overrides the capture_priority veto (a ruled-out label is never resurrected); the seed-allowlist crawl gate is untouched. Clear-then-set, so a same-window re-run is idempotent. Unprovisioned (no SIMPLE_ANALYTICS_API_KEY) it returns configured:false and is a clean no-op. Zero LLM tokens; the box's agent token drives it and the SA key lives Worker-side (no new box secret). Source: docs/agents/hermes/scripts/demand-sweep.*. See docs/catalogue-crawler.md § Demand.",
+    probeConfig: {
+      cadenceMs: 24 * 60 * MINUTE_MS,
+      cronName: "fluncle-demand",
+      kind: "cron",
+      schedule: { time: "04:40", tz: "Europe/Amsterdam" },
+    },
+    statusDescription: "leans the catalogue toward what visitors looked at",
+    title: "Demand reorder",
+    weights: { status: "hidden" },
+  },
+  {
     exposedContent: [
       "daily catalogue-funnel snapshot — one row per UTC day of stage totals + queue depths + frontier counts behind /admin/funnel (--no-agent)",
     ],

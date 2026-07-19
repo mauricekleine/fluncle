@@ -268,6 +268,61 @@ export const rankCatalogue = oc
   );
 
 /**
+ * `record_demand` → `POST /admin/catalogue/demand` (operationId `recordDemand`).
+ *
+ * Admin tier (AGENT-allowed): one demand tick (docs/catalogue-crawler.md § Demand), the job a
+ * nightly `--no-agent` cron drives. The WORKER reads Simple Analytics (`Api-Key` header, its own
+ * secret) for the `/artist/<slug>` + `/label/<slug>` pageviews over the trailing window, resolves
+ * the looked-at slugs to entities, and REWRITES two derived reorder columns: `tracks.demand_score`
+ * (the capture queue's within-tier secondary sort) and `crawl_frontier.demand_rank` (the frontier
+ * pick's within-hop tiebreak). Each run CLEARS every prior value then re-sets — bounded, idempotent,
+ * deterministic.
+ *
+ * RANK-ORDER ONLY. Demand reorders within an existing tier; it never overrides the `capture_priority`
+ * ladder or its `>= 0` veto (a ruled-out label is never resurrected), and the seed-allowlist crawl
+ * gate is untouched. It certifies nothing and writes only these two reorder columns — the
+ * `rank_catalogue` / `record_platform_stats` class — so the box's agent token drives it.
+ *
+ * DEGRADES GRACEFULLY: with no `SIMPLE_ANALYTICS_API_KEY` the Worker returns a clean `configured:
+ * false` no-op — it writes nothing (never wiping the demand columns on a transient missing key).
+ * `{ ok, summary }`.
+ */
+export const recordDemand = oc
+  .route({
+    method: "POST",
+    operationId: "recordDemand",
+    path: "/admin/catalogue/demand",
+    summary: "One demand tick: reorder crawl/capture priority from Simple Analytics pageviews",
+    tags: ["Admin"],
+  })
+  .input(z.object({}))
+  .output(
+    z.object({
+      ok: z.literal(true),
+      summary: z.object({
+        /** True when the SA key is set and the fetch ran; false = a clean no-op (unprovisioned). */
+        configured: z.boolean(),
+        /** Distinct demanded artists resolved to an entity this run. */
+        demandedArtists: z.number(),
+        /** Distinct demanded labels resolved to an entity this run. */
+        demandedLabels: z.number(),
+        /** Pending frontier nodes promoted to `demand_rank = 0`. */
+        frontierPromoted: z.number(),
+        /** SA `pages` rows read (before the artist/label path filter). */
+        pagesRead: z.number(),
+        /** Total pageviews across the demanded (resolved) entities. */
+        totalPageviews: z.number(),
+        /** Distinct tracks that received a `demand_score` this run. */
+        tracksScored: z.number(),
+        /** Analytics slugs that resolve to no entity — skipped silently. */
+        unknownSlugs: z.number(),
+        /** The trailing window queried, inclusive `YYYY-MM-DD` bounds. */
+        window: z.object({ end: z.string(), start: z.string() }),
+      }),
+    }),
+  );
+
+/**
  * `clear_wrong_audio` → `POST /admin/catalogue/wrong-audio/clear` (operationId `clearWrongAudio`).
  *
  * OPERATOR tier — the operator's override on the wrong-audio quarantine (docs/the-ear.md § Wrong
@@ -842,6 +897,7 @@ export const adminCatalogueContract = {
   list_catalogue_tracks: listCatalogueTracks,
   list_unverified_captures: listUnverifiedCaptures,
   rank_catalogue: rankCatalogue,
+  record_demand: recordDemand,
   requeue_unmatched_captures: requeueUnmatchedCaptures,
   reset_apple_breaker: resetAppleBreaker,
   set_capture_budget: setCaptureBudget,

@@ -21,6 +21,7 @@ import {
   listSavedFindings,
   listSavedSets,
   listUserSubmissions,
+  listWatches,
   meResponse,
 } from "@/lib/server/account-data";
 import { createCsrfToken, getPublicSession } from "@/lib/server/public-auth";
@@ -60,10 +61,11 @@ const getAccountDoorData = createServerFn({ method: "GET" })
     }
 
     if (data.tab === "saves") {
-      const [saved, sets, submissions] = await Promise.all([
+      const [saved, sets, submissions, watches] = await Promise.all([
         listSavedFindings(user),
         listSavedSets(user),
         listUserSubmissions(user),
+        listWatches(user),
       ]);
 
       return {
@@ -71,6 +73,7 @@ const getAccountDoorData = createServerFn({ method: "GET" })
         sets: sets.savedSets,
         submissions: submissions.submissions,
         tab: "saves",
+        watches: watches.watches,
       };
     }
 

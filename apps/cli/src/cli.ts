@@ -257,6 +257,7 @@ type BackfillSyncOptions = {
 
 type CoverMastersOptions = BackfillSyncOptions & {
   kind?: string;
+  retryNone?: boolean;
 };
 
 type CrawlOptions = {
@@ -2119,6 +2120,32 @@ function addAdminCommands(program: Command): void {
     });
 
   catalogue
+    .command("demand")
+    .description("Reorder crawl/capture priority from Simple Analytics pageviews (one tick)")
+    .option("--json", "Print JSON", false)
+    .action(async (options: JsonOptions) => {
+      const { catalogueDemandCommand } = await import("./commands/admin-catalogue");
+      const summary = await catalogueDemandCommand();
+
+      if (options.json) {
+        printJson({ ok: true, summary });
+        return;
+      }
+
+      if (!summary.configured) {
+        console.log("Simple Analytics is not configured — demand left untouched (a clean no-op).");
+        return;
+      }
+
+      console.log(
+        `Read ${summary.pagesRead} page(s) over ${summary.window.start}…${summary.window.end}. ` +
+          `Demanded ${summary.demandedArtists} artist(s) + ${summary.demandedLabels} label(s) ` +
+          `(${summary.unknownSlugs} unknown skipped); scored ${summary.tracksScored} track(s), ` +
+          `promoted ${summary.frontierPromoted} frontier node(s).`,
+      );
+    });
+
+  catalogue
     .command("list")
     .description(
       "The ranked catalogue: closest to a finding (ear), next to capture, or wrong audio",
@@ -2552,6 +2579,11 @@ function addAdminCommands(program: Command): void {
     .description("Resolve owned ≤1200² cover masters (album/artist) into R2")
     .option("--kind <kind>", "Which entity to drain: album | artist", "album")
     .option("--dry-run", "Report the eligible worklist without any fetch or write", false)
+    .option(
+      "--retry-none",
+      "First re-queue a bounded batch of terminal none rows to pending, then run the pass",
+      false,
+    )
     .option("--limit <limit>", "Max entities to process", "50")
     .option("--json", "Print JSON", false)
     .action(async (options: CoverMastersOptions) => {
@@ -3935,8 +3967,10 @@ async function runBackfillCoverMasters(
 ): Promise<void> {
   const limit = parseListLimit(options.limit);
   const kind = options.kind === "artist" ? "artist" : "album";
+  const retryNone = options.retryNone ?? false;
   const resolved: string[] = [];
   const none: string[] = [];
+  const requeued: string[] = [];
   const failed: Array<{ error: string; slug: string }> = [];
   let cursor: string | undefined;
   let dryRun = options.dryRun;
@@ -3945,10 +3979,19 @@ async function runBackfillCoverMasters(
   // until the cap is met or the worklist is exhausted (nextCursor null).
   while (resolved.length + none.length + failed.length < limit) {
     const remaining = limit - (resolved.length + none.length + failed.length);
-    const result = await backfillCoverMastersCommand(kind, remaining, options.dryRun, cursor);
+    // Re-queue only on the FIRST call (no cursor yet); a cursored continuation is draining the
+    // pass worklist and must not re-flip the head of the `none` list again each iteration.
+    const result = await backfillCoverMastersCommand(
+      kind,
+      remaining,
+      options.dryRun,
+      cursor,
+      retryNone && cursor === undefined,
+    );
     dryRun = result.dryRun;
     resolved.push(...result.resolved);
     none.push(...result.none);
+    requeued.push(...(result.requeued ?? []));
     failed.push(...result.failed);
 
     if (!options.json) {
@@ -3975,6 +4018,8 @@ async function runBackfillCoverMasters(
       noneCount: none.length,
       ok: true,
       rateLimited: false,
+      requeued,
+      requeuedCount: requeued.length,
       resolved,
       resolvedCount: resolved.length,
     });
@@ -3987,8 +4032,11 @@ async function runBackfillCoverMasters(
   }
 
   const verb = dryRun ? "Would resolve" : "Resolved";
+  const requeuedNote = retryNone
+    ? ` (${dryRun ? "would re-queue" : "re-queued"} ${requeued.length} from none)`
+    : "";
   console.log(
-    `${verb} ${resolved.length} ${kind} cover master(s); ${none.length} without a source; ${failed.length} failed.`,
+    `${verb} ${resolved.length} ${kind} cover master(s); ${none.length} without a source; ${failed.length} failed${requeuedNote}.`,
   );
 
   for (const slug of resolved) {

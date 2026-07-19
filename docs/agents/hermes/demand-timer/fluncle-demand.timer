@@ -1,0 +1,17 @@
+[Unit]
+Description=fluncle-demand timer — reorder crawl/capture priority from Simple Analytics at 04:40 Amsterdam on the rave-02 host (not the Hermes gateway)
+
+[Timer]
+# 04:40 Europe/Amsterdam via the explicit OnCalendar TZ suffix — the host clock is UTC (only the
+# Hermes container is TZ-pinned), so we name the zone here; DST-safe, needs systemd >=252. A fixed
+# deep-off-peak nightly slot rather than a rolling interval that drifts across the day, so the
+# reorder settles at the same wall-clock moment every night. Chosen to sit in a free minute clear of
+# the other daily jobs (logbook 00:40, audit 01:00, cluster 02:20, backup 03:00, reach 04:00,
+# audit-review 05:00) — and specifically AFTER the reach snapshot (04:00), so both daily analytics
+# reads run in the same window. Persistent catches up a slot the box slept through on the next wake;
+# a caught-up extra run is a safe no-op (the rewrite is a full clear-then-set — idempotent).
+OnCalendar=*-*-* 04:40:00 Europe/Amsterdam
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -175,6 +175,23 @@ One row of `crawl_frontier` is one node of the graph and one unit of work.
 
 Reliability follows the shipped `backfill_*` convention verbatim: `attempted_at` / `attempts` / `failures` / `done_at`. A failed node backs off exponentially on its consecutive-failure count and is retried by a later tick; past 5 failures it stays `failed` and is never picked again. `parent_id` records the edge that discovered a node, so a bad subtree is traceable and prunable; `label_slug` carries the enabled seed the whole subtree descends from.
 
+## Demand
+
+The crawler decides WHAT the archive knows and, within the operator's rulings, The Ear guesses the order to capture it in. But that order is a machine's guess about taste — it has no idea which of those thousands of catalogue rows a real human came looking for. **Demand** closes that gap with the one signal the site already collects: Simple Analytics pageviews.
+
+A nightly `--no-agent` sweep (`fluncle-demand`, [docs/agents/hermes/demand-timer/](./agents/hermes/demand-timer/)) fires the AGENT-tier `record_demand` op once. The **Worker** holds the Simple Analytics key (`SIMPLE_ANALYTICS_API_KEY`, a Worker secret) and does the fetch itself (`GET simpleanalytics.com/fluncle.com.json` — the APEX host; `www` 404s — with an `Api-Key` header) over the trailing 30 days; the box is a bare trigger holding no key. It keeps only the `/artist/<slug>` and `/label/<slug>` pageviews, resolves each slug to an entity (an unknown slug is skipped silently), and REWRITES two dedicated reorder columns:
+
+- **`tracks.demand_score`** — for every track of a demanded artist (via `track_artists`) or label (via `tracks.label_id`), the summed pageviews of its demanded entities. The capture work queue ([track-work.ts](../apps/web/src/lib/server/track-work.ts)) reads it as a **secondary** sort key, `coalesce(demand_score, 0) desc`, AFTER `capture_priority`.
+- **`crawl_frontier.demand_rank`** — `0` on the pending frontier nodes of a demanded entity (a demanded label's whole seed subtree via `label_slug`; an artist node matched by MBID), `1` on the rest. The pick order becomes `(state, hop, demand_rank, created_at, id)`.
+
+Three constraints are load-bearing and non-negotiable:
+
+- **Rank-order only, never magnitude, never an override.** Demand reorders WITHIN an existing tier — a demanded row is captured (or crawled) before an undemanded sibling _at its tier_, never lifted across it.
+- **The veto always wins.** `demand_score` sits below `capture_priority`, and the `capture_priority >= 0` exclusion runs first (in `kindClause`), so a ruled-out label (tier −1) or a duplicate (−2) is never resurrected by demand however many pageviews it has. Breadth-first by hop is likewise preserved: `demand_rank` only tiebreaks within a hop.
+- **The seed-allowlist gate is untouched.** A demanded label that is not an enabled seed has no pending frontier nodes, so promoting it does nothing — demand can never widen the crawl past the operator's rulings.
+
+The rewrite is a full **clear-then-set** each run, so it is idempotent, deterministic, and bounded (the demanded set is the head of the pageview distribution). Unprovisioned (no key), the op is a clean no-op — it writes nothing at all, so a transient missing key never wipes the columns.
+
 ## What this does not do
 
 - **It does not capture audio.** Not a byte. The acquisition layer is operator-gated and lives in the private companion repo; this repo knows only that "a captured full song appears in private R2 under a key."

@@ -201,6 +201,15 @@ export async function downloadCappedImage(url: string): Promise<FetchedImage | u
   const response = await fetch(url);
 
   if (!response.ok) {
+    // A retryable status is an OUTAGE, not an answer: during the 2026-07-19 archive.org 503 wave
+    // every walked CAA-only album fell through this `undefined` into terminal `none` — a transient
+    // outage converted into a permanent give-up. Throw instead, so the caller's catch lands the
+    // row `failed` (cooldown + retry, give-up only past MAX_FAILURES). A 404 stays a definitive
+    // miss: the source genuinely has no cover.
+    if (response.status >= 500 || response.status === 429) {
+      throw new Error(`transient source error ${response.status} from ${new URL(url).hostname}`);
+    }
+
     return undefined;
   }
 
@@ -293,6 +302,11 @@ export type CoverMastersResult = {
   dryRun: boolean;
   // The `kind` this pass drained — `album` or `artist`.
   kind: CoverMasterKind;
+  // Slugs re-queued from terminal `none` back to `pending` this call, before the pass ran — the
+  // `retry=none` operator heal (empty when retry was not requested). In a dry run, what WOULD
+  // requeue without writing.
+  requeued: string[];
+  requeuedCount: number;
   // Slugs given an owned master this pass (or, in a dry run, the eligible worklist).
   resolved: string[];
   resolvedCount: number;
@@ -449,6 +463,49 @@ async function recordFailure(
   });
 }
 
+/**
+ * The `retry=none` operator heal: re-queue a bounded, slug-ordered batch of the kind's TERMINAL
+ * `none` rows back to `pending` so the next pass walks the ladder again — for the class where a
+ * cover went `none` historically (every source was down or absent then) but a source EXISTS now
+ * (a fresh Apple template, or a recovered Cover Art Archive). Kind-scoped (`albums` xor `artists`,
+ * never both) and `image_state = 'none'`-scoped, so a `resolved` or `pending` row is never touched.
+ * Resets `image_failures` to 0 and clears `image_attempted_at`, making each re-queued row
+ * immediately eligible (no cooldown wait) for the same-call pass that follows. A dry run reads the
+ * batch it WOULD requeue and writes nothing. Returns the re-queued slugs (in slug order).
+ */
+async function requeueTerminalNone(
+  kind: CoverMasterKind,
+  limit: number,
+  dryRun: boolean,
+): Promise<string[]> {
+  const db = await getDb();
+  const table = kind === "album" ? "albums" : "artists";
+
+  const selected = await db.execute({
+    args: [limit],
+    sql: `select slug from ${table}
+          where image_state = 'none'
+          order by slug asc limit ?`,
+  });
+  const slugs = typedRows<{ slug: string }>(selected.rows).map((row) => row.slug);
+
+  if (dryRun || slugs.length === 0) {
+    return slugs;
+  }
+
+  const placeholders = slugs.map(() => "?").join(", ");
+
+  await db.execute({
+    args: slugs,
+    sql: `update ${table}
+          set image_state = 'pending', image_failures = 0, image_attempted_at = null
+          where slug in (${placeholders})`,
+  });
+  logEvent("info", "cover-masters.requeued", { count: slugs.length, kind });
+
+  return slugs;
+}
+
 // ── The per-entity resolve (the ladder) ──────────────────────────────────────────────────────
 
 async function storeMaster(
@@ -547,6 +604,10 @@ async function resolveOneArtist(
  * One bounded, idempotent pass of the owned-cover-master resolve sweep for `kind`. `bucket` is
  * the world-served R2 (`env.VIDEOS`, behind found.fluncle.com); the handler injects it (tests
  * inject a fake). A dry run reports the eligible worklist without any fetch or write.
+ *
+ * When `retryNone` is set, a bounded batch of the kind's terminal `none` rows is FIRST re-queued to
+ * `pending` (see `requeueTerminalNone`) and then the same pass runs, so an operator burn heals the
+ * historically-floored rows in one call. A dry run reports what WOULD requeue without writing.
  */
 export async function resolveCoverMasters(
   bucket: Pick<R2Bucket, "put">,
@@ -554,8 +615,10 @@ export async function resolveCoverMasters(
   limit: number,
   dryRun: boolean,
   cursor?: string,
+  retryNone = false,
 ): Promise<CoverMastersResult> {
   const batchLimit = Math.max(1, Math.min(limit, MAX_BATCH));
+  const requeued = retryNone ? await requeueTerminalNone(kind, batchLimit, dryRun) : [];
   const rows =
     kind === "album"
       ? await listPendingAlbums(batchLimit, cursor)
@@ -612,6 +675,8 @@ export async function resolveCoverMasters(
     none,
     noneCount: none.length,
     rateLimited: false,
+    requeued,
+    requeuedCount: requeued.length,
     resolved,
     resolvedCount: resolved.length,
   };

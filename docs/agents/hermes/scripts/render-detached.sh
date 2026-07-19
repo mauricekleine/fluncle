@@ -27,8 +27,20 @@ setsid bash -c '
   cd "$HOME/fluncle"
   set -a; . /dev/shm/fluncle.env; set +a
   export PATH="$HOME/.local/bin:$PATH"
+  # Foreground-render rails: a full render must fit in ONE blocking Bash call
+  # (the prompt forbids run_in_background — under -p the process exits with the
+  # turn and a backgrounded render dies unshipped), so raise the Bash tool
+  # timeout ceiling to 60 min. --max-turns bounds a wedged run (healthy renders
+  # measure 76-98 turns) so a stall fails fast and the next hourly tick retries.
+  export BASH_MAX_TIMEOUT_MS=3600000
+  export BASH_DEFAULT_TIMEOUT_MS=900000
+  # Harness-level guarantee behind the prompt rail: no background tasks at all
+  # (headless kills backgrounded Bash ~5s after the final result — the 07-19
+  # dead-render class). Documented: code.claude.com/docs/en/env-vars.md
+  export CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1
   __start=$(date +%s)
   claude -p "$(cat '"$PROMPT"')" --model opus --dangerously-skip-permissions \
+    --max-turns 150 \
     > "$HOME/conductor-run.log" 2>&1
   __rc=$?
   printf "EXIT=%s @ %s DURATION=%s\n" "$__rc" "$(date -u +%FT%TZ)" "$(( $(date +%s) - __start ))" \

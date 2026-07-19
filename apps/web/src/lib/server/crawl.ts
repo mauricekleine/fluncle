@@ -323,7 +323,10 @@ async function settle(
 
 /**
  * The pass's pick: the next `limit` nodes to expand — breadth-first and deterministic
- * (`hop, created_at, id`) WITHIN each half of a kind-aware split. It takes `pending`
+ * (`hop, demand_rank, created_at, id`) WITHIN each half of a kind-aware split. `demand_rank`
+ * (docs/catalogue-crawler.md § Demand) sits AFTER `hop`, so a demanded entity's subtree is
+ * expanded before its undemanded siblings AT THE SAME HOP — never ahead of a nearer hop, so
+ * breadth-first is preserved. It takes `pending`
  * nodes plus `failed` ones whose exponential backoff has elapsed and which have not
  * yet been abandoned — so a transient 503 is retried by a later tick instead of
  * silently pruning a subtree.
@@ -363,7 +366,7 @@ async function pickNodes(limit: number): Promise<FrontierRow[]> {
     sql: `select id, kind, source, external_id, hop, cursor, failures, label_slug
           from crawl_frontier
           where kind = 'release' and ${eligible}
-          order by hop asc, created_at asc, id asc
+          order by hop asc, demand_rank asc, created_at asc, id asc
           limit ?`,
   });
   const releaseRows = typedRows<FrontierRow>(releases.rows);
@@ -382,7 +385,7 @@ async function pickNodes(limit: number): Promise<FrontierRow[]> {
           from crawl_frontier
           where ${eligible}
             ${releaseRows.length > 0 ? `and id not in (${placeholders})` : ""}
-          order by hop asc, created_at asc, id asc
+          order by hop asc, demand_rank asc, created_at asc, id asc
           limit ?`,
   });
 

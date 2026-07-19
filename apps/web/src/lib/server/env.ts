@@ -184,6 +184,13 @@ const envKeys = [
   // from the distil's so the two can be tuned independently: one is a summariser, the other a
   // parser. Unprovisioned, search degrades to full text and keeps working.
   "OPENROUTER_SEARCH_MODEL",
+  // Simple Analytics read API — the demand signal (docs/catalogue-crawler.md § Demand). The
+  // Worker fetches the pageview stats itself (`GET simpleanalytics.com/fluncle.com.json`, the
+  // APEX host, with an `Api-Key` header) and reorders crawl/capture priority toward the artists
+  // and labels real visitors looked at. OPTIONAL, read via readOptionalEnv: absent, the
+  // `record_demand` op degrades to a clean no-op (it writes nothing — never wiping the demand
+  // columns on a transient missing key), so the whole leg is dark until the operator sets it.
+  "SIMPLE_ANALYTICS_API_KEY",
   // ChatDnB (the admin-gated /admin/chat spike, lib/server/chat.ts) — the model that
   // holds Fluncle's voice and answers over his own archive tools. OPTIONAL, non-secret
   // override for the chat model; absent, it defaults to `anthropic/claude-haiku-4.5`, the
