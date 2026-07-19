@@ -67,6 +67,40 @@ export function HubLetterLane({
 }
 
 /**
+ * The YEAR fast lane — the A–Z lane mechanic mapped onto TIME. A quiet strip of the release years
+ * present in a time-sorted hub (`/tracks`), newest first, each a real `<a href="?page=N">` to the
+ * page that year's first release lands on. Unlike the letter lane there is no fixed alphabet and no
+ * "absent" slot: a year is here because the result set holds it. Same quiet chrome as the letter lane
+ * (Stardust ink, cream on hover, the Eclipse ring on focus); no gold at rest (One Sun). Renders
+ * nothing when the set spans no dated release (an all-undated or empty list).
+ */
+export function HubYearLane({
+  buildHref,
+  label,
+  years,
+}: {
+  /** Build a hub URL for a page number (page 1 ⇒ the bare hub path). */
+  buildHref: (page: number) => string;
+  /** The nav's accessible name — "Tracks by year" (literal chrome). */
+  label: string;
+  years: { page: number; year: string }[];
+}) {
+  if (years.length === 0) {
+    return undefined;
+  }
+
+  return (
+    <nav aria-label={label} className="catalogue-letters">
+      {years.map((entry) => (
+        <a className="catalogue-letter" href={buildHref(entry.page)} key={entry.year}>
+          {entry.year}
+        </a>
+      ))}
+    </nav>
+  );
+}
+
+/**
  * The static, SSR-rendered `?page=N` slice of a hub's findings-free section. Same grid, same tiles,
  * same unlit register as the editorial section above; every tile is in the HTML and the pager below
  * is real anchors, so a crawler that runs no JS walks the whole long tail. `lane` (the A–Z row) rides
