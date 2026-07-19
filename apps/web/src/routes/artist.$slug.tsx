@@ -467,15 +467,26 @@ function ArtistPage() {
               {dossier.neighbours.map((neighbour) => (
                 <li key={neighbour.slug}>
                   {/* The same graph link as everywhere else, in its chip skin — hovering a kin
-                      artist previews them before you commit to the click. */}
+                      artist previews them before you commit to the click. A neighbour Fluncle
+                      never certified renders UNLIT (DESIGN.md's Unlit Rule): the avatar sits a
+                      step down and the chip stays cool — listed, never introduced, no gold. Focus
+                      stays loud. */}
                   <GraphLink
-                    className="artist-similar-link"
+                    className={
+                      neighbour.certified
+                        ? "artist-similar-link"
+                        : "artist-similar-link artist-similar-link--unlit"
+                    }
                     kind="artist"
                     slug={neighbour.slug}
                     variant="chip"
                   >
                     <ArtistAvatar
-                      className="artist-similar-avatar"
+                      className={
+                        neighbour.certified
+                          ? "artist-similar-avatar"
+                          : "artist-similar-avatar artist-similar-avatar--unlit"
+                      }
                       name={neighbour.name}
                       src={neighbour.imageUrl}
                     />

@@ -7,6 +7,7 @@
 //     Worker re-fetches the Spotify track metadata and upserts artists + track_artists.
 //     Idempotent per finding; rate-paced to stay inside Spotify's burst ceiling.
 
+import { rankArtists } from "../artist-dossier";
 import {
   addArtistSocial,
   ArtistSocialNotFoundError,
@@ -391,6 +392,18 @@ export function adminArtistsHandlers(os: Implementer) {
       }
     });
 
+  // POST /admin/artists/rank — agent tier (`adminAuth`), the `rank_catalogue` precedent: one
+  // tick of the similar-artists precompute sweep (artist centroids + top-K edges). It writes only
+  // derived artist-graph artifacts and certifies nothing, so the box's agent-token cron drives it.
+  // `remaining > 0` means run it again.
+  const rankArtistsHandler = os.rank_artists.use(adminAuth).handler(async ({ input }) => {
+    try {
+      return { ok: true as const, summary: await rankArtists(input.limit) };
+    } catch (error) {
+      throw apiFault(error);
+    }
+  });
+
   return {
     add_artist_social: addArtistSocialHandler,
     backfill_artist_images: backfillArtistImagesHandler,
@@ -401,6 +414,7 @@ export function adminArtistsHandlers(os: Implementer) {
     list_artist_socials: listArtistSocialsHandler,
     list_artists_missing_bio: listArtistsMissingBioHandler,
     list_unresolved_artists: listUnresolvedArtistsHandler,
+    rank_artists: rankArtistsHandler,
     remove_artist_social: removeArtistSocialHandler,
     resolve_artist: resolveArtistHandler,
     review_artist: reviewArtistHandler,

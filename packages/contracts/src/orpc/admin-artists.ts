@@ -489,6 +489,49 @@ export const listArtistsMissingBio = oc
   .input(z.object({ limit: z.string().optional() }))
   .output(z.object({ artists: z.array(ArtistBioWorkItemSchema), ok: z.literal(true) }));
 
+// ── The similar-artists precompute sweep (artist-relationship doc, D6) ─────────────────
+// `rank_artists` is the artist-graph sibling of `rank_catalogue`: one bounded, self-healing
+// tick that recomputes stale artist centroids + their top-K sonic edges (the `/artist/<slug>`
+// "similar artists" rail reads the edges). Agent tier, the `rank_catalogue` precedent — it
+// writes only DERIVED artist-graph artifacts and certifies nothing.
+
+/**
+ * `rank_artists` → `POST /admin/artists/rank` (operationId `rankArtists`).
+ *
+ * Admin tier (AGENT-allowed): one tick of the similar-artists precompute sweep, the job a
+ * periodic `--no-agent` cron drives. It recomputes up to `limit` stale artist centroids (the
+ * mean over EVERY embedded track that credits the artist — findings AND catalogue) and re-ranks
+ * each one's top-K sonically-nearest neighbours entirely in SQL, then purges any orphan centroid
+ * whose artist lost every embedded track.
+ *
+ * SELF-HEALING. Staleness is a PER-ARTIST fingerprint (`"<version>:<the artist's embedded-track
+ * count>"`) stored on each centroid, so embedding a track or repointing a link re-stales only the
+ * few artists it credits — not the whole archive — and those re-rank on later ticks. No
+ * invalidation call from the publish/embed/crawl paths, and a no-op on an unchanged graph.
+ * `remaining` is the "run me again" signal (a cold whole-archive drain is many ticks). `{ ok, summary }`.
+ */
+export const rankArtists = oc
+  .route({
+    method: "POST",
+    operationId: "rankArtists",
+    path: "/admin/artists/rank",
+    summary: "One tick of the similar-artists sweep (artist centroids + top-K edges)",
+    tags: ["Admin"],
+  })
+  .input(z.object({ limit: z.coerce.number().int().min(1).max(1000).default(50) }))
+  .output(
+    z.object({
+      ok: z.literal(true),
+      summary: z.object({
+        centroidsComputed: z.number(),
+        centroidsRemoved: z.number(),
+        edgesWritten: z.number(),
+        logicVersion: z.string(),
+        remaining: z.number(),
+      }),
+    }),
+  );
+
 /** The `admin-artists` domain's ops, merged into the root contract by `./index.ts`. */
 export const adminArtistsContract = {
   add_artist_social: addArtistSocial,
@@ -500,6 +543,7 @@ export const adminArtistsContract = {
   list_artist_socials: listArtistSocials,
   list_artists_missing_bio: listArtistsMissingBio,
   list_unresolved_artists: listUnresolvedArtists,
+  rank_artists: rankArtists,
   remove_artist_social: removeArtistSocial,
   resolve_artist: resolveArtist,
   review_artist: reviewArtist,

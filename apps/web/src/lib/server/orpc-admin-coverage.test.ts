@@ -250,6 +250,10 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // route file; oRPC owns the path directly). Agent tier: the box's bio sweep drives the
   // fill-empty-only write with its agent token, the note_track precedent.
   "POST /admin/albums/{slug}/bio": "describe_album",
+  // The similar-artists precompute sweep (D6) — contract-only oRPC (no TanStack route file;
+  // oRPC owns the path directly). Agent tier: the box's agent-token cron drives one tick. It
+  // does not match a public prefix, so it lives here to satisfy the "holds exactly" check.
+  "POST /admin/artists/rank": "rank_artists",
   // The identity-graph per-social write (Unit 5) — contract-only oRPC (no TanStack route
   // file; oRPC owns the path directly). Operator tier (the queue's manual confirm).
   "POST /admin/artists/socials/{socialId}/confirm": "confirm_artist_social",
