@@ -33,6 +33,7 @@ import {
   type TracksSearch,
   parseTracksSearch,
   tracksHead,
+  tracksMastheadLine,
   tracksSearchHasFilters,
 } from "@/lib/tracks-search";
 
@@ -433,11 +434,10 @@ function TracksPage() {
               the held count riding it. The newest-first order is SHOWN by the row date column (never
               stated — the /fresh masthead rule), and the lit/unlit split is shown visually, never
               verbally (the Unlit Rule). "holds", not "in the archive" — the archive is the CERTIFIED
-              collection, and this list is the wider superset. */}
-          <p className="log-index-intro">
-            Every drum &amp; bass track Fluncle holds
-            {heldTotal > 1 ? <>, all {numberFormatter.format(heldTotal)} of them</> : undefined}.
-          </p>
+              collection, and this list is the wider superset. ONE composed string (see
+              tracksMastheadLine): a conditional JSX clause SSRs as comment-split text nodes, which
+              naive text extraction misreads as a missing count. */}
+          <p className="log-index-intro">{tracksMastheadLine(heldTotal)}</p>
         </header>
 
         {/* Keyed by the search state: the inputs are uncontrolled (`defaultValue`), so without a
