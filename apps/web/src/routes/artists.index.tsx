@@ -2,11 +2,7 @@ import { Link, createFileRoute, notFound } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { ArtistAvatar } from "@/components/artist-avatar";
 import { CataloguePager } from "@/components/catalogue-groups";
-import {
-  CatalogueHubPageSection,
-  CatalogueHubSection,
-  HubLetterLane,
-} from "@/components/catalogue-hub-section";
+import { CatalogueHubPageSection, HubLetterLane } from "@/components/catalogue-hub-section";
 import { StoryNotFoundState } from "@/components/stories/stories-states";
 import { siteUrl } from "@/lib/fluncle-links";
 import { findingsCount, tracksCount } from "@/lib/format";
@@ -14,17 +10,14 @@ import { jsonLdScript } from "@/lib/json-ld";
 import {
   type ArtistCatalogueEntry,
   type ArtistIndexEntry,
-  listArtistsCatalogue,
   listArtistsCataloguePage,
   listArtistsCatalogueLetters,
   listArtistsWithFindingCounts,
 } from "@/lib/server/artists";
 import {
-  CATALOGUE_HUB_DEFAULT_LIMIT,
   type CatalogueHubLetter,
   type CatalogueHubNumberedPage,
   CatalogueHubPageOutOfRangeError,
-  type CatalogueHubPage,
 } from "@/lib/server/labels";
 
 // The artists index: every artist Fluncle has logged a finding from, cover-led, each linking to
@@ -32,70 +25,50 @@ import {
 // (Unit 3, artist-relationship RFC §3).
 //
 // Below the editorial list, "More artists" carries the INDEXABLE findings-free artists the crawler
-// minted a page for. The param-free `/artists` streams them in on scroll (the human read); a
-// crawlable `?page=N` variant SSRs each page's tiles behind a real-anchor pager, and an A–Z fast
-// lane links every region of the alphabet — so the long tail is reachable by internal links, not
-// the sitemap alone.
-
-type ArtistsCatalogue =
-  | { mode: "page"; page: CatalogueHubNumberedPage<ArtistCatalogueEntry> }
-  | { mode: "scroll"; seed: CatalogueHubPage<ArtistCatalogueEntry> };
+// minted a page for. Every page — page 1 included — SSRs one static slice of tiles behind a
+// real-anchor `?page=N` pager, with an A–Z fast lane linking every region of the alphabet — so the
+// long tail is reachable by internal links (and the footer by everyone), not the sitemap alone.
 
 type ArtistsPageData =
   | {
-      catalogue: ArtistsCatalogue;
+      catalogue: CatalogueHubNumberedPage<ArtistCatalogueEntry>;
       findings: ArtistIndexEntry[];
       // Each present first letter → the page its first findings-free artist lands on (the A–Z lane).
       letters: CatalogueHubLetter[];
-      // The current page (1 for the param-free view) — the head's per-page canonical keys off it.
+      // The current page (1 for the bare `/artists`) — the head's per-page canonical keys off it.
       page: number;
       status: "found";
     }
   | { status: "missing" };
 
-// Resolve the hub's data. A bare `/artists` (or `?page=1`) is the SCROLL view — the findings grid +
-// the infinite-scroll seed. A `?page=N` (N > 1) is the crawlable PAGE view — the findings grid + one
-// static OFFSET slice. A page past the end throws `CatalogueHubPageOutOfRangeError`, which maps to a
-// 404 (never a clamp to page 1 — that would be a second URL for page 1's tiles).
+// Resolve the hub's data: the findings grid + one static OFFSET slice of the findings-free section.
+// A bare `/artists` (or `?page=1`) is page 1; a `?page=N` is the Nth slice. A page past the end
+// throws `CatalogueHubPageOutOfRangeError`, which maps to a 404 (never a clamp to page 1 — that
+// would be a second URL for page 1's tiles).
 async function resolveArtistsPage(page: number | undefined): Promise<ArtistsPageData> {
-  if (page !== undefined && page > 1) {
-    const [paged, findings, letters] = await Promise.all([
-      listArtistsCataloguePage(page).catch((error: unknown) => {
-        if (error instanceof CatalogueHubPageOutOfRangeError) {
-          return null;
-        }
+  const requested = page ?? 1;
+  const [paged, findings, letters] = await Promise.all([
+    listArtistsCataloguePage(requested).catch((error: unknown) => {
+      if (error instanceof CatalogueHubPageOutOfRangeError) {
+        return null;
+      }
 
-        throw error;
-      }),
-      listArtistsWithFindingCounts(),
-      listArtistsCatalogueLetters(),
-    ]);
-
-    if (paged === null) {
-      return { status: "missing" };
-    }
-
-    return { catalogue: { mode: "page", page: paged }, findings, letters, page, status: "found" };
-  }
-
-  const [findings, seed, letters] = await Promise.all([
+      throw error;
+    }),
     listArtistsWithFindingCounts(),
-    listArtistsCatalogue({ limit: CATALOGUE_HUB_DEFAULT_LIMIT }),
     listArtistsCatalogueLetters(),
   ]);
 
-  return { catalogue: { mode: "scroll", seed }, findings, letters, page: 1, status: "found" };
+  if (paged === null) {
+    return { status: "missing" };
+  }
+
+  return { catalogue: paged, findings, letters, page: requested, status: "found" };
 }
 
 const fetchArtistsPage = createServerFn({ method: "GET" })
   .validator((data: { page?: number }) => data)
   .handler(({ data }): Promise<ArtistsPageData> => resolveArtistsPage(data.page));
-
-// Subsequent "more artists" scroll pages go through the SAME serverFn the loader seeded from —
-// a slug keyset, no oRPC op (the homepage-feed precedent).
-const fetchArtistsCatalogue = createServerFn({ method: "GET" })
-  .validator((data: { cursor?: string; limit?: number }) => data)
-  .handler(({ data }) => listArtistsCatalogue({ cursor: data.cursor, limit: data.limit }));
 
 // Machine-facing strings stay honestly-plain third-person (the Narrator rule), and they carry the
 // genre keyword: "Fluncle: the artists" told a search engine nothing, and Bing flagged the whole
@@ -253,39 +226,23 @@ function ArtistsPage() {
           </ul>
         )}
 
-        {catalogue.mode === "scroll" ? (
-          <CatalogueHubSection
-            gridClassName="artist-avatar-grid"
-            heading="More artists"
-            headingId="artists-catalogue-heading"
-            initialPage={catalogue.seed}
-            lane={lane}
-            listLabel="More artists"
-            queryFn={(cursor) =>
-              fetchArtistsCatalogue({ data: { cursor, limit: CATALOGUE_HUB_DEFAULT_LIMIT } })
-            }
-            queryKey="artists-catalogue"
-            renderTile={renderTile}
-          />
-        ) : (
-          <CatalogueHubPageSection
-            gridClassName="artist-avatar-grid"
-            heading="More artists"
-            headingId="artists-catalogue-heading"
-            items={catalogue.page.items}
-            lane={lane}
-            listLabel="More artists"
-            pager={
-              <CataloguePager
-                buildHref={buildHref}
-                label="More artists, more pages"
-                page={catalogue.page.page}
-                pageCount={catalogue.page.pageCount}
-              />
-            }
-            renderTile={renderTile}
-          />
-        )}
+        <CatalogueHubPageSection
+          gridClassName="artist-avatar-grid"
+          heading="More artists"
+          headingId="artists-catalogue-heading"
+          items={catalogue.items}
+          lane={lane}
+          listLabel="More artists"
+          pager={
+            <CataloguePager
+              buildHref={buildHref}
+              label="More artists, more pages"
+              page={catalogue.page}
+              pageCount={catalogue.pageCount}
+            />
+          }
+          renderTile={renderTile}
+        />
 
         <footer className="log-plate-footer">
           <Link to="/">Back to the archive</Link>

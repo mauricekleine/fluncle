@@ -1,7 +1,7 @@
 import { Link, createFileRoute, notFound } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { CataloguePager } from "@/components/catalogue-groups";
-import { CatalogueHubPageSection, CatalogueHubSection } from "@/components/catalogue-hub-section";
+import { CatalogueHubPageSection } from "@/components/catalogue-hub-section";
 import { StoryNotFoundState } from "@/components/stories/stories-states";
 import { TrackArtwork } from "@/components/track-artwork";
 import { siteUrl } from "@/lib/fluncle-links";
@@ -11,16 +11,12 @@ import { albumCoverAtSize } from "@/lib/media";
 import {
   type AlbumCatalogueEntry,
   type AlbumIndexEntry,
-  countAlbumsCatalogue,
-  listAlbumsCatalogue,
   listAlbumsCataloguePage,
   listAlbumsWithFindingCounts,
 } from "@/lib/server/albums";
 import {
-  CATALOGUE_HUB_DEFAULT_LIMIT,
   type CatalogueHubNumberedPage,
   CatalogueHubPageOutOfRangeError,
-  type CatalogueHubPage,
 } from "@/lib/server/labels";
 
 // The albums index: every record Fluncle has logged a finding off, cover-led (the album art
@@ -29,18 +25,14 @@ import {
 //
 // The TOP section is bounded by the ARCHIVE, not the catalogue: an album earns a row here because
 // Fluncle found something on it. Below it, "More records" carries the INDEXABLE findings-free records
-// the crawler minted a page for. The param-free `/albums` streams them in on scroll (the human read);
-// a crawlable `?page=N` variant SSRs each page's tiles behind a real-anchor pager. Albums have NO A–Z
-// lane — an album's identity is its cover, not a title-initial, so browse-by-letter is not how records
-// are dug — so the numbered pager IS the album hub's crawl entry into the long tail.
-
-type AlbumsCatalogue =
-  | { mode: "page"; page: CatalogueHubNumberedPage<AlbumCatalogueEntry> }
-  | { mode: "scroll"; pageCount: number; seed: CatalogueHubPage<AlbumCatalogueEntry> };
+// the crawler minted a page for. Every page — page 1 included — SSRs one static slice of tiles behind
+// a real-anchor `?page=N` pager. Albums have NO A–Z lane — an album's identity is its cover, not a
+// title-initial, so browse-by-letter is not how records are dug — so the numbered pager IS the album
+// hub's crawl entry into the long tail.
 
 type AlbumsPageData =
   | {
-      catalogue: AlbumsCatalogue;
+      catalogue: CatalogueHubNumberedPage<AlbumCatalogueEntry>;
       findings: AlbumIndexEntry[];
       page: number;
       status: "found";
@@ -48,52 +40,28 @@ type AlbumsPageData =
   | { status: "missing" };
 
 async function resolveAlbumsPage(page: number | undefined): Promise<AlbumsPageData> {
-  if (page !== undefined && page > 1) {
-    const [paged, findings] = await Promise.all([
-      listAlbumsCataloguePage(page).catch((error: unknown) => {
-        if (error instanceof CatalogueHubPageOutOfRangeError) {
-          return null;
-        }
+  const requested = page ?? 1;
+  const [paged, findings] = await Promise.all([
+    listAlbumsCataloguePage(requested).catch((error: unknown) => {
+      if (error instanceof CatalogueHubPageOutOfRangeError) {
+        return null;
+      }
 
-        throw error;
-      }),
-      listAlbumsWithFindingCounts(),
-    ]);
-
-    if (paged === null) {
-      return { status: "missing" };
-    }
-
-    return { catalogue: { mode: "page", page: paged }, findings, page, status: "found" };
-  }
-
-  const [findings, seed, total] = await Promise.all([
+      throw error;
+    }),
     listAlbumsWithFindingCounts(),
-    listAlbumsCatalogue({ limit: CATALOGUE_HUB_DEFAULT_LIMIT }),
-    countAlbumsCatalogue(),
   ]);
 
-  return {
-    catalogue: {
-      mode: "scroll",
-      pageCount: Math.max(Math.ceil(total / CATALOGUE_HUB_DEFAULT_LIMIT), 1),
-      seed,
-    },
-    findings,
-    page: 1,
-    status: "found",
-  };
+  if (paged === null) {
+    return { status: "missing" };
+  }
+
+  return { catalogue: paged, findings, page: requested, status: "found" };
 }
 
 const fetchAlbumsPage = createServerFn({ method: "GET" })
   .validator((data: { page?: number }) => data)
   .handler(({ data }): Promise<AlbumsPageData> => resolveAlbumsPage(data.page));
-
-// Subsequent "more records" scroll pages go through the SAME serverFn the loader seeded from —
-// a slug keyset, no oRPC op (the homepage-feed precedent).
-const fetchAlbumsCatalogue = createServerFn({ method: "GET" })
-  .validator((data: { cursor?: string; limit?: number }) => data)
-  .handler(({ data }) => listAlbumsCatalogue({ cursor: data.cursor, limit: data.limit }));
 
 // Machine-facing strings stay honestly-plain third-person (the Narrator rule), and they carry the
 // genre keyword — Bing flagged the hub layer for short, keyword-free titles and identical paged
@@ -245,45 +213,22 @@ function AlbumsPage() {
           </ul>
         )}
 
-        {catalogue.mode === "scroll" ? (
-          <CatalogueHubSection
-            gridClassName="artist-grid"
-            heading="More records"
-            headingId="albums-catalogue-heading"
-            initialPage={catalogue.seed}
-            lane={
-              <CataloguePager
-                buildHref={buildHref}
-                label="More records, more pages"
-                page={1}
-                pageCount={catalogue.pageCount}
-              />
-            }
-            listLabel="More records"
-            queryFn={(cursor) =>
-              fetchAlbumsCatalogue({ data: { cursor, limit: CATALOGUE_HUB_DEFAULT_LIMIT } })
-            }
-            queryKey="albums-catalogue"
-            renderTile={renderTile}
-          />
-        ) : (
-          <CatalogueHubPageSection
-            gridClassName="artist-grid"
-            heading="More records"
-            headingId="albums-catalogue-heading"
-            items={catalogue.page.items}
-            listLabel="More records"
-            pager={
-              <CataloguePager
-                buildHref={buildHref}
-                label="More records, more pages"
-                page={catalogue.page.page}
-                pageCount={catalogue.page.pageCount}
-              />
-            }
-            renderTile={renderTile}
-          />
-        )}
+        <CatalogueHubPageSection
+          gridClassName="artist-grid"
+          heading="More records"
+          headingId="albums-catalogue-heading"
+          items={catalogue.items}
+          listLabel="More records"
+          pager={
+            <CataloguePager
+              buildHref={buildHref}
+              label="More records, more pages"
+              page={catalogue.page}
+              pageCount={catalogue.pageCount}
+            />
+          }
+          renderTile={renderTile}
+        />
 
         <footer className="log-plate-footer">
           <Link to="/">Back to the archive</Link>

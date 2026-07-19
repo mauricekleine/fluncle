@@ -8,124 +8,18 @@
 // SUPERSET ("More labels"), which the Unlit Rule permits. The tiles are the SAME grid as the
 // section above; only the light drops.
 //
-// Data flows exactly like the homepage feed (routes/index.tsx): a `useInfiniteQuery` seeded from
-// the loader's first page (`initialData`), a slug keyset for `getNextPageParam`, and an
-// IntersectionObserver that pages the rest in. Public → `refetchOnWindowFocus: false`. The query
-// re-hits the SAME `createServerFn` the loader used; no oRPC op, no second unseeded fetch.
+// ONE navigation model, for humans and crawlers alike: every page — page 1 included — SSRs its own
+// slice of tiles behind a real-anchor pager, and (on `/labels` + `/artists`) an A–Z fast lane links
+// every region of the alphabet. Nothing loads on scroll, so the footer stays reachable at every
+// catalogue size, and every tile past the first page is a real `?page=N` <a> a crawler follows.
 
-import { CircleNotchIcon } from "@phosphor-icons/react";
-import { useInfiniteQuery } from "@tanstack/react-query";
-import { type ReactNode, useEffect, useRef } from "react";
-import { type CatalogueHubPage } from "@/lib/server/labels";
+import { type ReactNode } from "react";
 
-export function CatalogueHubSection<Entry extends { slug: string }>({
-  gridClassName,
-  headingId,
-  heading,
-  initialPage,
-  lane,
-  listLabel,
-  queryFn,
-  queryKey,
-  renderTile,
-}: {
-  /** The grid class shared with the section above: "artist-grid" (covers) or "artist-avatar-grid". */
-  gridClassName: string;
-  /** The section's quiet heading — names the superset, e.g. "More labels" (never the tier). */
-  heading: string;
-  /** DOM id linking the heading to its <section> (aria-labelledby). */
-  headingId: string;
-  /** The loader's first page — the SSR seed; the section renders nothing when it is empty. */
-  initialPage: CatalogueHubPage<Entry>;
-  /**
-   * The crawl nav rendered ABOVE the grid: the A–Z fast lane (artists/labels) or the numbered pager
-   * (albums). This is the human page's ONLY crawlable path into the deeper `?page=N` tiles the
-   * infinite scroll loads with JS — a crawler follows it, a reader keeps scrolling.
-   */
-  lane?: ReactNode;
-  /** The grid's accessible name — names the TRACKS/entities, never the tier. */
-  listLabel: string;
-  /** Fetch the next page for a cursor (undefined = first page); the route's createServerFn. */
-  queryFn: (cursor: string | undefined) => Promise<CatalogueHubPage<Entry>>;
-  /** A stable react-query key, unique per hub (e.g. "labels-catalogue"). */
-  queryKey: string;
-  /** Render one tile — a hub-specific <li> (cover vs avatar, logo fallback, the target route). */
-  renderTile: (entry: Entry) => ReactNode;
-}) {
-  const { data, fetchNextPage, hasNextPage, isFetchingNextPage } = useInfiniteQuery({
-    getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
-    initialData: { pageParams: [undefined], pages: [initialPage] },
-    initialPageParam: undefined as string | undefined,
-    queryFn: ({ pageParam }) => queryFn(pageParam),
-    queryKey: [queryKey],
-    refetchOnWindowFocus: false,
-  });
-
-  const sentinelRef = useRef<HTMLLIElement | null>(null);
-
-  // Auto-fetch when the trailing sentinel drifts near the viewport bottom. The page scrolls the
-  // document (no ScrollArea here), so the observer roots on the viewport. It re-arms after each
-  // page settles; the sentinel is only in the tree while there is a next page to pull.
-  useEffect(() => {
-    const sentinel = sentinelRef.current;
-
-    if (!sentinel || !hasNextPage || isFetchingNextPage) {
-      return;
-    }
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries.some((entry) => entry.isIntersecting)) {
-          void fetchNextPage();
-        }
-      },
-      { rootMargin: "480px" },
-    );
-
-    observer.observe(sentinel);
-
-    return () => {
-      observer.disconnect();
-    };
-  }, [fetchNextPage, hasNextPage, isFetchingNextPage]);
-
-  const entries = data.pages.flatMap((page) => page.items);
-
-  // An empty first page renders NOTHING — no heading, no empty state (the unnamed-tier rule: a
-  // heading over an absent band is how a real page turns into a doorway page).
-  if (entries.length === 0) {
-    return undefined;
-  }
-
-  return (
-    <section aria-labelledby={headingId} className="catalogue-section catalogue-hub">
-      <div className="catalogue-hub-head">
-        <h2 className="catalogue-hub-heading" id={headingId}>
-          {heading}
-        </h2>
-        {lane}
-      </div>
-
-      <ul aria-label={listLabel} className={`${gridClassName} catalogue-grid`}>
-        {entries.map((entry) => renderTile(entry))}
-        {hasNextPage ? (
-          <li aria-hidden="true" className="catalogue-hub-sentinel" ref={sentinelRef}>
-            {isFetchingNextPage ? (
-              <CircleNotchIcon className="animate-spin" weight="bold" />
-            ) : undefined}
-          </li>
-        ) : undefined}
-      </ul>
-    </section>
-  );
-}
-
-// ── THE CRAWLABLE VARIANTS: the static `?page=N` section + the A–Z fast lane ─────────────────────
+// ── THE PAGED SECTION + THE A–Z FAST LANE ────────────────────────────────────────────────────────
 //
-// These render for a crawler or a deep link, never on the param-free page (which keeps the infinite
-// scroll above). The paged section is the SAME grid + register, but a static SSR slice of one page
-// with a real-anchor pager; the letter lane is a row of real `?page=N` anchors so any region of the
-// alphabet is two hops away. Both are quiet chrome — the light stays with the findings (One Sun).
+// Every page renders this: a static SSR slice of one page's tiles behind a real-anchor pager. The
+// letter lane is a row of real `?page=N` anchors so any region of the alphabet is two hops away.
+// Both are quiet chrome — the light stays with the findings (One Sun).
 
 const HUB_LETTERS = ["#", ..."abcdefghijklmnopqrstuvwxyz".split("")] as const;
 
@@ -173,10 +67,10 @@ export function HubLetterLane({
 }
 
 /**
- * The static, SSR-rendered `?page=N` slice of a hub's findings-free section — the crawler's view.
- * Same grid, same tiles, same unlit register as the infinite-scroll section; the difference is that
- * every tile is in the HTML and the pager below is real anchors. `lane` (the A–Z row) rides in the
- * head, `pager` below the grid, exactly like an artist/label entity page.
+ * The static, SSR-rendered `?page=N` slice of a hub's findings-free section. Same grid, same tiles,
+ * same unlit register as the editorial section above; every tile is in the HTML and the pager below
+ * is real anchors, so a crawler that runs no JS walks the whole long tail. `lane` (the A–Z row) rides
+ * in the head, `pager` below the grid, exactly like an artist/label entity page.
  */
 export function CatalogueHubPageSection<Entry extends { slug: string }>({
   gridClassName,

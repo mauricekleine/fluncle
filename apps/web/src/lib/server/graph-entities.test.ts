@@ -24,18 +24,15 @@ import { backfillLabels } from "../../../scripts/backfill-labels";
 import {
   ALBUM_INDEX_MIN_TRACKS,
   albumSlug,
-  countAlbumsCatalogue,
   ensureAlbum,
   getAlbumBySlug,
   linkTrackToAlbum,
-  listAlbumsCatalogue,
   listAlbumsCataloguePage,
   listAlbumsMissingBio,
   listAlbumSitemapRows,
   listAlbumsWithFindingCounts,
 } from "./albums";
 import {
-  listArtistsCatalogue,
   listArtistsCatalogueLetters,
   listArtistsCataloguePage,
   listArtistsMissingBio,
@@ -49,7 +46,6 @@ import {
   getLabelBySlug,
   getLabelForAlbum,
   linkTrackToLabel,
-  listLabelsCatalogue,
   listLabelsCatalogueLetters,
   listLabelsCataloguePage,
   listLabelsMissingBio,
@@ -566,132 +562,12 @@ describe("the album index is bounded by the ARCHIVE, not the catalogue", () => {
 });
 
 // The hub's SECOND section: the INDEXABLE findings-free entities, the complement of the editorial
-// index reads above. The load-bearing properties: (1) a findings-BEARING entity is NEVER here (it
-// belongs to the editorial section), (2) the ≥3 renderable-track floor gates a thin entity out,
-// and (3) the slug keyset pages forward and drains to null.
-describe('the hub "also in the catalogue" reads (findings-free, floor-gated, keyset-paged)', () => {
-  /** Seed N catalogue (findings-free) tracks on one LABEL, stamping the label_id pointer. */
-  async function seedCatalogueLabel(label: string, trackIds: string[]): Promise<void> {
-    for (const trackId of trackIds) {
-      await seedTrack({ album: null, label, title: `T-${trackId}`, trackId });
-      await linkTrackToLabel(trackId, label);
-    }
-  }
-
-  it("LABELS: excludes a findings-bearing label, and gates the thin one out by the floor", async () => {
-    // A findings-BEARING label with 3 renderable tracks (1 finding + 2 catalogue): it clears the
-    // floor, but `sum(certified) = 0` keeps it out — it lives in the EDITORIAL section, never here.
-    await seedTrack({
-      album: null,
-      label: "Certified Imprint",
-      logId: "001.1.1A",
-      title: "Cert",
-      trackId: "cert-1",
-    });
-    await linkTrackToLabel("cert-1", "Certified Imprint");
-    await seedCatalogueLabel("Certified Imprint", ["cert-2", "cert-3"]);
-
-    // A findings-FREE label with 3 catalogue tracks: clears the floor, so it belongs here.
-    await seedCatalogueLabel("Deep Catalogue", ["deep-1", "deep-2", "deep-3"]);
-    // A findings-free label with only 2: below the floor, gated out.
-    await seedCatalogueLabel("Thin Imprint", ["thin-1", "thin-2"]);
-
-    const page = await listLabelsCatalogue({ limit: 50 });
-
-    expect(page.items.map((entry) => entry.slug)).toEqual(["deep-catalogue"]);
-    expect(page.items[0]?.trackCount).toBe(3);
-    expect(page.nextCursor).toBeNull();
-  });
-
-  it("LABELS: the slug keyset pages forward and drains to null", async () => {
-    await seedCatalogueLabel("Alpha Imprint", ["a1", "a2", "a3"]);
-    await seedCatalogueLabel("Bravo Imprint", ["b1", "b2", "b3"]);
-    await seedCatalogueLabel("Charlie Imprint", ["c1", "c2", "c3"]);
-
-    const first = await listLabelsCatalogue({ limit: 2 });
-    expect(first.items.map((entry) => entry.slug)).toEqual(["alpha-imprint", "bravo-imprint"]);
-    // A full page came back, so there may be more: the cursor is the last row's slug.
-    expect(first.nextCursor).toBe("bravo-imprint");
-
-    const second = await listLabelsCatalogue({ cursor: first.nextCursor ?? undefined, limit: 2 });
-    expect(second.items.map((entry) => entry.slug)).toEqual(["charlie-imprint"]);
-    // A short page drains the section.
-    expect(second.nextCursor).toBeNull();
-  });
-
-  it("ALBUMS: excludes a findings-bearing record, gates the thin one, includes the deep one", async () => {
-    // Findings-bearing (1 finding + 2 catalogue) — excluded by `sum(certified) = 0`.
-    await seedTrack({
-      album: "Certified Record",
-      label: null,
-      logId: "001.1.1A",
-      title: "Cert",
-      trackId: "ac-1",
-    });
-    await linkTrackToAlbum("ac-1", "Certified Record");
-    for (const trackId of ["ac-2", "ac-3"]) {
-      await seedTrack({ album: "Certified Record", label: null, title: trackId, trackId });
-      await linkTrackToAlbum(trackId, "Certified Record");
-    }
-
-    // Findings-free with 3 catalogue tracks — in.
-    for (const trackId of ["dr-1", "dr-2", "dr-3"]) {
-      await seedTrack({ album: "Deep Record", label: null, title: trackId, trackId });
-      await linkTrackToAlbum(trackId, "Deep Record");
-    }
-    // Findings-free with 2 — thin, out.
-    for (const trackId of ["tr-1", "tr-2"]) {
-      await seedTrack({ album: "Thin Record", label: null, title: trackId, trackId });
-      await linkTrackToAlbum(trackId, "Thin Record");
-    }
-
-    const page = await listAlbumsCatalogue({ limit: 50 });
-
-    expect(page.items.map((entry) => entry.slug)).toEqual(["deep-record"]);
-    expect(page.items[0]?.trackCount).toBe(3);
-    expect(page.nextCursor).toBeNull();
-  });
-
-  it("ARTISTS: excludes a findings-bearing artist, gates the thin one, includes the deep one", async () => {
-    // Findings-bearing (1 finding + 2 catalogue), all credited to one artist — excluded.
-    await seedTrack({
-      album: null,
-      label: null,
-      logId: "001.1.1A",
-      title: "Cert",
-      trackId: "arc-1",
-    });
-    await upsertTrackArtists("arc-1", ["Certified Artist"], [], { fillImages: false });
-    for (const trackId of ["arc-2", "arc-3"]) {
-      await seedTrack({ album: null, label: null, title: trackId, trackId });
-      await upsertTrackArtists(trackId, ["Certified Artist"], [], { fillImages: false });
-    }
-
-    // Findings-free with 3 catalogue tracks — in.
-    for (const trackId of ["ard-1", "ard-2", "ard-3"]) {
-      await seedTrack({ album: null, label: null, title: trackId, trackId });
-      await upsertTrackArtists(trackId, ["Deep Artist"], [], { fillImages: false });
-    }
-    // Findings-free with 2 — thin, out.
-    for (const trackId of ["art-1", "art-2"]) {
-      await seedTrack({ album: null, label: null, title: trackId, trackId });
-      await upsertTrackArtists(trackId, ["Thin Artist"], [], { fillImages: false });
-    }
-
-    const page = await listArtistsCatalogue({ limit: 50 });
-
-    expect(page.items.map((entry) => entry.name)).toEqual(["Deep Artist"]);
-    expect(page.items[0]?.trackCount).toBe(3);
-    expect(page.nextCursor).toBeNull();
-  });
-});
-
-// The crawlable ?page=N variant (listXxxCataloguePage) + the A–Z lane (listXxxCatalogueLetters) +
-// the count (countAlbumsCatalogue): the OFFSET read that turns the hub's long tail into internal
-// links. Same floor-gated, findings-free set as the keyset read, but numbered so every tile is a
-// real <a>. The load-bearing contract: the right slice per page, an honest total + pageCount, and a
-// page past the end THROWS (so the route 404s) rather than clamping to page 1.
-describe('the hub "more <entities>" crawlable ?page=N variant', () => {
+// index reads above, served as a numbered `?page=N` surface (listXxxCataloguePage) with an A–Z lane
+// (listXxxCatalogueLetters). The load-bearing contract: (1) a findings-BEARING entity is NEVER here
+// (it belongs to the editorial section), (2) the ≥3 renderable-track floor gates a thin entity out,
+// (3) the right disjoint slice per page with an honest total + pageCount, and (4) a page past the
+// end THROWS (so the route 404s) rather than clamping to page 1.
+describe('the hub "more <entities>" ?page=N section', () => {
   /** Seed N findings-free catalogue tracks on one LABEL, stamping the label_id pointer. */
   async function seedCatalogueLabel(label: string, count: number): Promise<void> {
     for (let track = 0; track < count; track++) {
@@ -777,12 +653,12 @@ describe('the hub "more <entities>" crawlable ?page=N variant', () => {
     );
   });
 
-  it("ALBUMS: pages, counts, and 404s past the end", async () => {
+  it("ALBUMS: pages, and 404s past the end", async () => {
     for (const trackId of ["dr-1", "dr-2", "dr-3"]) {
       await seedTrack({ album: "Deep Record", label: null, title: trackId, trackId });
       await linkTrackToAlbum(trackId, "Deep Record");
     }
-    // A thin record (below the floor) is excluded from both the page and the count.
+    // A thin record (below the floor) is excluded from the page and its total.
     for (const trackId of ["tr-1", "tr-2"]) {
       await seedTrack({ album: "Thin Record", label: null, title: trackId, trackId });
       await linkTrackToAlbum(trackId, "Thin Record");
@@ -793,10 +669,33 @@ describe('the hub "more <entities>" crawlable ?page=N variant', () => {
     expect(page.total).toBe(1);
     expect(page.pageCount).toBe(1);
 
-    expect(await countAlbumsCatalogue()).toBe(1);
     await expect(listAlbumsCataloguePage(2)).rejects.toBeInstanceOf(
       CatalogueHubPageOutOfRangeError,
     );
+  });
+
+  it("LABELS: a findings-bearing label is excluded (sum(certified) = 0), findings-free is in", async () => {
+    // A findings-BEARING label with 3 renderable tracks (1 finding + 2 catalogue): it clears the
+    // floor, but `sum(certified) = 0` keeps it out — it lives in the EDITORIAL section, never here.
+    await seedTrack({
+      album: null,
+      label: "Certified Imprint",
+      logId: "001.1.1A",
+      title: "Cert",
+      trackId: "cert-1",
+    });
+    await linkTrackToLabel("cert-1", "Certified Imprint");
+    for (const trackId of ["cert-2", "cert-3"]) {
+      await seedTrack({ album: null, label: "Certified Imprint", title: trackId, trackId });
+      await linkTrackToLabel(trackId, "Certified Imprint");
+    }
+
+    // A findings-FREE label with 3 catalogue tracks clears the floor, so it belongs here.
+    await seedCatalogueLabel("Deep Catalogue", 3);
+
+    const page = await listLabelsCataloguePage(1);
+    expect(page.items.map((entry) => entry.slug)).toEqual(["deep-catalogue"]);
+    expect(page.total).toBe(1);
   });
 });
 
