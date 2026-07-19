@@ -367,6 +367,7 @@ function freshTrackToFinding(track: FreshTrack) {
     durationMs: track.durationMs,
     hasPreview: false,
     key: track.key,
+    releaseDate: track.releaseDate,
     spotifyUrl: track.spotifyUrl,
     title: track.title,
   });
@@ -380,12 +381,14 @@ function freshTrackToFinding(track: FreshTrack) {
 // a finding (no coordinate/note/observation/cover/galaxy/bpm/key/hasPreview). `artists` + `title`
 // are always present; `dropEmpty` strips only the optional context so a row carries no null.
 
-/** A fresh RELEASE row Fluncle has not certified, reduced to the unlit catalogue shape. */
+/** A fresh RELEASE row Fluncle has not certified, reduced to the unlit catalogue shape. Its
+    `releaseDate` is a public RELEASE fact (when it came out), NOT a Fluncle measurement like the
+    bpm/key an uncertified row never carries — so it rides the unlit row without lighting it. */
 function freshTrackToCatalogue(track: FreshTrack) {
   return {
     artists: track.artists,
     title: track.title,
-    ...dropEmpty({ spotifyUrl: track.spotifyUrl }),
+    ...dropEmpty({ releaseDate: track.releaseDate, spotifyUrl: track.spotifyUrl }),
   };
 }
 
@@ -740,7 +743,12 @@ const listFreshTool = {
       const findings = certified.map((track) => {
         const item = track.logId ? hydrated[track.logId] : undefined;
 
-        return item ? compactFinding(item) : freshTrackToFinding(track);
+        // Carry the RELEASE date onto both paths — the hydrated finding (the common case, whose
+        // generic shaper does not know a release date) and the fallback (which reads it from the
+        // fresh row itself) — so Fluncle can say when a certified tune dropped.
+        return item
+          ? { ...compactFinding(item), releaseDate: track.releaseDate }
+          : freshTrackToFinding(track);
       });
 
       return dropEmpty({
@@ -893,9 +901,32 @@ const getArtistTool = {
     ]);
     const certified = compactCertifiedFindings(findingItems);
 
-    // An artist Fluncle has never certified a finding from is not something he speaks about.
+    // Naming an artist is always allowed (the Unlit Rule silences uncertified TRACKS, never
+    // artists). When Fluncle has certified nothing from this artist, hand back the UNLIT entity —
+    // his name, socials, and bio, plus the records of theirs Fluncle knows are out there but has
+    // never certified — so the model can name the artist and LIST their catalogue, never present
+    // them as one of Fluncle's Findings. The catalogue is the SAME grouped read the /artist page
+    // uses, flattened to a bounded, coordinate-free row slice (the unlit register).
     if (findingCount === 0 && certified.length === 0) {
-      return { found: false, ok: true };
+      const page = await listArtistCatalogue(artist.id, CATALOGUE_SORT_DEFAULT, 1);
+      const catalogue = page.groups
+        .flatMap((record) =>
+          record.tracks.map((item) => catalogueItemToChat(item, { release: record.name })),
+        )
+        .slice(0, CATALOGUE_BROWSE_LIMIT);
+
+      return {
+        artist: dropEmpty({
+          bio: artist.bio,
+          catalogue,
+          findings: [],
+          name: artist.name,
+          slug: artist.slug,
+          socials,
+          spotifyUrl: artist.spotifyUrl,
+        }),
+        ok: true,
+      };
     }
 
     const findings = certified.slice(0, MAX_ENTITY_FINDINGS);

@@ -477,6 +477,9 @@ describe("buildChatTools — the MCP hands", () => {
     expect(result.findings).toHaveLength(1);
     expect(result.findings[0]?.title).toBe("Better Places");
     expect(result.findings[0]?.coordinate).toBe("004.7.2I");
+    // Both registers carry the RELEASE date so Fluncle can say when a tune dropped (a public
+    // release fact, framed as released not found).
+    expect((result.findings[0] as { releaseDate?: string }).releaseDate).toBe("2026-07-15");
 
     // The uncertified release now REACHES the model — as an unlit catalogue row (the bug was that
     // an all-uncertified fresh window returned nothing in chat). It carries a name, artists, and a
@@ -485,6 +488,8 @@ describe("buildChatTools — the MCP hands", () => {
     const row = result.catalogue[0] ?? {};
     expect(row.title).toBe("An Uncertified Cut");
     expect(row.spotifyUrl).toBe("https://open.spotify.com/track/uncert");
+    // The release date is register-safe on an unlit row — a public fact, not a Fluncle measurement.
+    expect(row.releaseDate).toBe("2026-07-16");
     for (const lit of ["coordinate", "logId", "note", "observation", "bpm", "key", "hasPreview"]) {
       expect(row, `catalogue row must not carry ${lit}`).not.toHaveProperty(lit);
     }
@@ -493,6 +498,49 @@ describe("buildChatTools — the MCP hands", () => {
     const lookedUp = getTracksByLogIds.mock.calls.at(-1)?.[0] ?? [];
     expect(lookedUp).toContain("004.7.2I");
     expect(lookedUp).not.toContain("999.9.9Z");
+  });
+
+  it("carries the release date on a HYDRATED certified finding (the common path, not just the fallback)", async () => {
+    // The certified fresh finding usually hydrates to a full record whose generic shaper knows no
+    // release date; the execute must spread the fresh row's date onto it so the hydrated card still
+    // carries when it dropped.
+    listFreshTracks.mockResolvedValue({
+      albums: [],
+      tracks: [
+        {
+          artists: ["Nu:Tone"],
+          certified: true,
+          coverImageUrl: "https://cover.example/bp.jpg",
+          logId: "004.7.2I",
+          releaseDate: "2026-07-15",
+          title: "Better Places",
+        },
+      ],
+      windowDays: 30,
+    });
+    // The hydrator returns the full finding (no releaseDate of its own).
+    getTracksByLogIds.mockResolvedValue({
+      "004.7.2I": {
+        artists: ["Nu:Tone"],
+        logId: "004.7.2I",
+        title: "Better Places",
+        trackId: "a",
+      },
+    });
+
+    const tools = buildChatTools();
+    const execute = tools.list_fresh?.execute;
+    if (typeof execute !== "function") {
+      throw new Error("list_fresh executor missing");
+    }
+
+    const result = (await execute({}, {} as never)) as {
+      findings: { coordinate?: string; releaseDate?: string; title: string }[];
+    };
+
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings[0]?.coordinate).toBe("004.7.2I");
+    expect(result.findings[0]?.releaseDate).toBe("2026-07-15");
   });
 
   it("view=albums surfaces the records as unlit catalogue rows — reused shape, no coordinate", async () => {
@@ -840,14 +888,89 @@ describe("get_artist / get_label — the entity cards' grounding", () => {
     expect(result).toEqual({ found: false, ok: true });
   });
 
-  it("get_artist returns found:false for an artist with zero certified findings", async () => {
-    getArtistBySlug.mockResolvedValue({ id: "art-2", name: "Quiet One", slug: "quiet-one" });
+  it("get_artist returns the UNLIT entity (name + catalogue, no findings) for a catalogue-only artist", async () => {
+    // He has certified nothing from this artist, but the artist row EXISTS and carries records in
+    // the catalogue. The Unlit Rule silences uncertified TRACKS, never artists — so instead of the
+    // old found:false, get_artist names the artist and lists their records in the unlit register.
+    getArtistBySlug.mockResolvedValue({
+      bio: "A quiet one from the far sectors.",
+      id: "art-2",
+      name: "Quiet One",
+      slug: "quiet-one",
+      spotifyUrl: "https://open.spotify.com/artist/q",
+    });
     countArtistFindings.mockResolvedValue(0);
     getFindingsByArtist.mockResolvedValue([]);
+    getPublicArtistSocials.mockResolvedValue([
+      { platform: "spotify", url: "https://open.spotify.com/artist/q" },
+    ]);
+    listArtistCatalogue.mockResolvedValue({
+      groups: [
+        {
+          name: "Far Sectors EP",
+          tracks: [
+            {
+              artists: ["Quiet One"],
+              spotifyUrl: "https://open.spotify.com/track/z",
+              title: "Drift",
+            },
+          ],
+        },
+      ],
+      page: 1,
+      pageCount: 1,
+      totalGroups: 1,
+      totalTracks: 1,
+    });
 
-    const result = await artistExecutor()({ name: "Quiet One" }, {} as never);
+    const result = (await artistExecutor()({ name: "Quiet One" }, {} as never)) as {
+      artist: {
+        bio?: string;
+        catalogue?: { release?: string; title: string }[];
+        findings?: unknown[];
+        name?: string;
+        slug?: string;
+        socials?: { platform: string }[];
+      };
+    };
 
-    expect(result).toEqual({ found: false, ok: true });
+    // Not the old found:false — the entity resolves and names the artist.
+    expect(result.artist).toBeDefined();
+    expect(result.artist.name).toBe("Quiet One");
+    expect(result.artist.slug).toBe("quiet-one");
+    // The catalogue is the SAME grouped read the /artist page uses (name → slug → id → the read).
+    expect(listArtistCatalogue).toHaveBeenCalledWith("art-2", "name", 1);
+    expect(result.artist.catalogue).toHaveLength(1);
+    const row = result.artist.catalogue?.[0];
+    expect(row?.title).toBe("Drift");
+    expect(row?.release).toBe("Far Sectors EP");
+    // An unlit row never carries a coordinate (the wire-level Unlit Rule).
+    expect(row).not.toHaveProperty("coordinate");
+    // Socials + bio still ride (naming an artist is always allowed); no findings, no findingCount.
+    expect(result.artist.socials).toEqual([
+      { platform: "spotify", url: "https://open.spotify.com/artist/q" },
+    ]);
+    expect(result.artist.bio).toBe("A quiet one from the far sectors.");
+    expect(result.artist).not.toHaveProperty("findingCount");
+    // dropEmpty strips the empty findings array, so the entity carries no findings at all.
+    expect(result.artist.findings ?? []).toEqual([]);
+  });
+
+  it("get_artist still names a resolved artist even with an empty catalogue (never found:false)", async () => {
+    // A resolved artist with neither findings nor catalogue is still NAMED — the entity carries his
+    // name (and socials/bio when present), never the old found:false. Naming an artist is allowed.
+    getArtistBySlug.mockResolvedValue({ id: "art-3", name: "Faint Trace", slug: "faint-trace" });
+    countArtistFindings.mockResolvedValue(0);
+    getFindingsByArtist.mockResolvedValue([]);
+    // listArtistCatalogue defaults to empty groups (beforeEach).
+
+    const result = (await artistExecutor()({ name: "Faint Trace" }, {} as never)) as {
+      artist?: { name?: string };
+      found?: boolean;
+    };
+
+    expect(result.found).toBeUndefined();
+    expect(result.artist?.name).toBe("Faint Trace");
   });
 
   it("drops an entity finding with no coordinate before it reaches the model (the wire boundary)", async () => {
