@@ -272,10 +272,17 @@ function YearRangePill({
 
   return (
     <Popover
-      onOpenChange={(next) => {
+      onOpenChange={(next, eventDetails) => {
         setOpen(next);
         if (!next) {
-          apply();
+          // Escape CANCELS (the universal convention): restore the fields from the URL's committed
+          // values and apply nothing. Any other close (click-away, Tab-out, Enter) commits the range.
+          if (eventDetails.reason === "escape-key") {
+            setFromValue(from === undefined ? "" : String(from));
+            setToValue(to === undefined ? "" : String(to));
+          } else {
+            apply();
+          }
         }
       }}
       open={open}
@@ -456,7 +463,7 @@ function LabelComboboxPill({
         </span>
       </ComboboxTrigger>
       <ComboboxContent align="start">
-        <ComboboxInput placeholder="Search labels" />
+        <ComboboxInput aria-label="Search labels" placeholder="Search labels" />
         <ComboboxEmpty>No labels match that.</ComboboxEmpty>
         <ComboboxList>
           {items.map((item) => (
@@ -506,7 +513,7 @@ function TracksFilters({
       />
 
       <SelectPill
-        ariaLabel={`Key: ${search.key ?? "any"}`}
+        ariaLabel={`Key: ${search.key ?? "Any key"}`}
         emptyLabel="Any key"
         icon={<MusicNotesIcon className="size-4 shrink-0 text-muted-foreground" />}
         onCommit={(key) => commit({ key })}
@@ -526,7 +533,7 @@ function TracksFilters({
         <SelectPill
           // The aria-label speaks the galaxy's NAME (what the pill shows), never the slug the URL carries.
           ariaLabel={`Galaxy: ${
-            galaxyOptions.find((galaxy) => galaxy.slug === search.galaxy)?.name ?? "any"
+            galaxyOptions.find((galaxy) => galaxy.slug === search.galaxy)?.name ?? "Any galaxy"
           }`}
           emptyLabel="Any galaxy"
           icon={<PlanetIcon className="size-4 shrink-0 text-muted-foreground" />}
