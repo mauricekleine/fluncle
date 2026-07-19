@@ -571,6 +571,7 @@ const PUBLIC_OPERATION_IDS = [
   // The recommendation-seed domain (docs/the-ear.md § The per-user telescopes).
   "deletePrivateRecSeed",
   "deletePrivateSavedSet",
+  "deletePrivateWatch",
   "deregisterDevice",
   "exportPrivateAccountData",
   // Artist reads — public, no auth required (Unit 4 of the artist-relationship RFC).
@@ -610,6 +611,7 @@ const PUBLIC_OPERATION_IDS = [
   "listPrivateSavedFindings",
   "listPrivateSavedSets",
   "listPrivateSubmissions",
+  "listPrivateWatches",
   // Hydrate a whole shared `?set=` chain in one read — the public twin of the web /mix loader's
   // server-only getMixTracksByTokens, so a saved set opens whole on mobile (uncertified tokens
   // included). Public-unauth like the other /mix reads.
@@ -625,6 +627,7 @@ const PUBLIC_OPERATION_IDS = [
   "savePrivateFinding",
   "savePrivateRecSeed",
   "savePrivateSet",
+  "savePrivateWatch",
   "searchArchive",
   "searchTracks",
   "submitTrack",

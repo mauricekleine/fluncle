@@ -1550,6 +1550,44 @@ export const userSavedSets = sqliteTable(
   (table) => [index("user_saved_sets_user_updated_idx").on(table.userId, table.updatedAt)],
 );
 
+// A signed-in user's WATCHED entities — the artists and labels they asked to keep an eye
+// on. The saved-sets sibling exactly (a per-user list keyed by the Better Auth user, a
+// logical FK with no SQL cascade — deletion is application code in
+// `accountDeletionStatements`, never a constraint). THE ACCOUNT NEVER GATES THE FEATURE:
+// a signed-out visitor sees no watch control at all (the control simply does not render,
+// the SaveSetDialog precedent), and the per-entity fresh feeds (`/artist/<slug>/fresh.xml`)
+// stay the anonymous watcher equivalent, untouched.
+//
+// `kind` + `entity_id` point at the `artists.id` / `labels.id` this watch is for — resolved
+// by ID at write time and stored WITHOUT any denormalized name/slug (the entity's own row
+// stays the source of truth; the account list joins for the display name at read time). The
+// UNIQUE on (user_id, kind, entity_id) makes watching twice idempotent — a second watch of
+// the same entity upserts rather than duplicating.
+//
+// `include_similar` is HEADROOM with no consumer yet: the deferred email digest (operator
+// deferral 2026-07-19) will read it to decide whether a watch also pulls in sonically-near
+// entities. It defaults OFF in storage and has no UI — nothing writes anything but the
+// default today. Do not build a control for it until the digest lands.
+export const userWatches = sqliteTable(
+  "user_watches",
+  {
+    createdAt: text("created_at").notNull(),
+    entityId: text("entity_id").notNull(),
+    id: text("id").primaryKey(),
+    includeSimilar: integer("include_similar", { mode: "boolean" }).notNull().default(false),
+    kind: text("kind", { enum: ["artist", "label"] }).notNull(),
+    userId: text("user_id").notNull(),
+  },
+  (table) => [
+    // Watching twice is a no-op, not a duplicate row — the save path upserts on this key.
+    uniqueIndex("user_watches_user_kind_entity_idx").on(table.userId, table.kind, table.entityId),
+    // The `/account` list read: `where user_id = ? order by created_at desc`. A plain ASC
+    // btree (SQLite reverse-scans it) — never a `desc()` index, which poisons the drizzle
+    // snapshot into rebuilding every index on the next migration (the ratified trap).
+    index("user_watches_user_created_idx").on(table.userId, table.createdAt),
+  ],
+);
+
 // A signed-in user's cross-device preferences — the account-backed home for a
 // setting that today lives device-local (the Scales/Camelot key-notation choice in
 // localStorage). ONE row per user (the `user_id` primary key), holding a single
