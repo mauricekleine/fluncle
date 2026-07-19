@@ -82,6 +82,32 @@ export const MAX_HOP_CEILING = 3;
 /** MusicBrainz's browse page size ceiling. One page = one request. */
 const BROWSE_PAGE_SIZE = 100;
 
+/**
+ * THE CURSOR, SIGNED — one integer carries a browse node's walk DIRECTION and its offset, so
+ * the tail-first re-arm needs no schema column (the frontier stays exactly as wide as it was):
+ *
+ *   `cursor >= 0`  — a FORWARD walk (a cold seed's initial drain). `offset = cursor`. The whole
+ *                    list, head to tail, one page a tick. Unchanged from before this existed.
+ *   `cursor === REARM_TAIL` (`-1`) — a re-armed node whose tail has not been located yet. Its
+ *                    first backward tick probes the CURRENT `release-count`, then reads the tail.
+ *   `cursor <= -2` — a backward DESCENT page. `offset = descendOffset(cursor)` (a page walking
+ *                    from the tail toward the head, stopping at the first all-known page).
+ *
+ * The three bands are disjoint by construction, so `expandBrowse` reads the mode straight off
+ * the sign with no ambiguity, and `descendCursor(0) = -2` never collides with `REARM_TAIL`.
+ */
+const REARM_TAIL = -1;
+
+/** A backward-descent offset → its (negative) cursor. `0 → -2`, `100 → -102`. */
+function descendCursor(offset: number): number {
+  return -(offset + 2);
+}
+
+/** A descent cursor → its browse offset — the inverse of {@link descendCursor}. */
+function descendOffset(cursor: number): number {
+  return -cursor - 2;
+}
+
 /** Consecutive failures after which a node is abandoned (stays `failed`, never picked). */
 const MAX_FAILURES = 5;
 
@@ -90,10 +116,13 @@ const MAX_FAILURES = 5;
  * MusicBrainz browse node finishes paginating it goes `done`, and without this it would stay
  * done forever — so a release the label pressed AFTER that first drain (a Friday drop) would
  * never surface. `REARM_AFTER_DAYS` is how stale a `done` seed-label node may get before the
- * re-arm flips it back to `pending` (cursor 0) to re-paginate. 3 days ⇒ a Friday drop lands by
- * Monday at the latest, usually sooner (the sweep ticks every ~10 min).
+ * re-arm flips it back to `pending` to re-check its list. Now that a re-arm reads only the
+ * TAIL of the list (`expandRearmedBrowse`, ~1 browse page) instead of re-walking the whole
+ * thing forward, the cadence is DAILY — ~1 page per re-armed label costs ~99 nodes/day of the
+ * ~1,400-node budget — so a Friday drop lands by Saturday, bounded only by MusicBrainz's own
+ * ingest lag (the sweep ticks every ~10 min).
  */
-export const REARM_AFTER_DAYS = 3;
+export const REARM_AFTER_DAYS = 1;
 
 /**
  * How many stale seed-label nodes one pass re-arms, oldest-done-first. Bounded so a mass re-arm
@@ -266,7 +295,8 @@ const fold = labelFold;
 /**
  * Enqueue a node, unless the frontier already holds it. `on conflict do nothing` is the
  * whole cycle guard: an artist reached from two different releases is ONE node.
- * Returns 1 when a node was actually minted.
+ * Returns 1 when a node was actually minted, 0 when it collided — the NEWNESS signal the
+ * tail-first re-arm early-stops on (a browse page that mints 0 new nodes is already walked).
  */
 async function enqueue(node: {
   externalId: string;
@@ -478,17 +508,20 @@ async function seedFromEnabledLabels(): Promise<{ minted: number; slugs: string[
  * WHICH node. The seed's `fluncle:label` node only resolves the name→MBID once; the node that
  * actually browses `/release?label=<mbid>` and paginates is the MusicBrainz label ENTITY node
  * (`source = 'musicbrainz'`, `kind = 'label'`). Re-arming THAT — `state → 'pending'`, `cursor
- * → 0` — makes `expandBrowse` re-walk the label's release list from the top. Re-arming the
- * `fluncle` seed node would be pure waste: its expansion just re-enqueues the (already-present,
+ * → REARM_TAIL` — makes `expandBrowse` re-read the label's release list TAIL-FIRST. Re-arming
+ * the `fluncle` seed node would be pure waste: its expansion just re-enqueues the (already-present,
  * still-`done`) MBID node as an `on conflict do nothing` no-op. So this targets `source =
  * 'musicbrainz'` precisely.
  *
- * WHY it stays cheap. The re-paginated browse re-enqueues every release node it lists, but a
- * known release node is an `on conflict do nothing` — it stays `done`, is not re-walked, and
- * costs nothing. Only a GENUINELY NEW release id mints a `pending` node and gets walked, and
- * when it is, the two-layer idempotence in `writeCatalogueTracks` folds any already-held track
- * (a re-press) to a cheap skip. So a re-armed label costs ~`ceil(release-count / 100)` browse
- * pages plus one release fetch per new release — at the shared ~1 req/s.
+ * WHY it stays cheap — TAIL-FIRST, not a full re-walk. MusicBrainz's release browse has NO date
+ * sort: its order is append-ish, so a label's NEWEST releases sit at the END of the list (page 1
+ * is the oldest pressing, the last page the newest). So the re-arm does NOT re-walk the whole
+ * list from the head — `expandRearmedBrowse` starts at the LAST page and pages backward, stopping
+ * at the first page that adds nothing new (every release node already present ⇒ the territory
+ * below is already walked). In steady state that is ONE browse page (probe + tail) per label with
+ * no drop, so the DAILY cadence (`REARM_AFTER_DAYS = 1`) costs ~99 nodes/day of the ~1,400 budget.
+ * A genuinely new release still mints a `pending` node and gets walked, and the two-layer
+ * idempotence in `writeCatalogueTracks` folds any already-held track (a re-press) to a cheap skip.
  *
  * THE GUARDS, all load-bearing:
  *   - `seed_state = 'enabled'` (joined on the node's `label_slug`) — a subscription is only for
@@ -510,10 +543,11 @@ async function rearmSeedLabels(): Promise<number> {
   // One bounded UPDATE. The subquery picks the batch (oldest-done-first, capped) — SQLite forbids
   // ORDER BY/LIMIT on the UPDATE itself but allows it in the row-selecting subquery. `label_slug`
   // is joined to the `enabled` seed set (a bounded, tens-of-rows table), never pulled into the isolate.
+  // `cursor → REARM_TAIL` arms the TAIL-FIRST re-read (`expandRearmedBrowse`), not a full forward re-walk.
   const result = await db.execute({
-    args: [now, cutoff, REARM_BATCH],
+    args: [REARM_TAIL, now, cutoff, REARM_BATCH],
     sql: `update crawl_frontier
-          set state = 'pending', cursor = 0, updated_at = ?
+          set state = 'pending', cursor = ?, updated_at = ?
           where id in (
             select id from crawl_frontier
             where kind = 'label'
@@ -850,33 +884,28 @@ async function expandSeedLabel(node: FrontierRow): Promise<Expansion> {
   return { ...EMPTY, enqueued };
 }
 
-/**
- * A MusicBrainz label (or artist) node → one page of its releases, as `release` nodes.
- *
- * ONE request per tick per node. A label with 900 releases stays `pending` with its
- * browse cursor advanced, so it drains across ticks instead of blowing a single one — the
- * resumability that matters most in practice, because the biggest seed label is also the
- * one most likely to be interrupted.
- */
-async function expandBrowse(node: FrontierRow, maxHop: number): Promise<Expansion> {
-  const childHop = node.kind === "label" ? 0 : node.hop + 1;
-
-  if (childHop > maxHop) {
-    return { ...EMPTY, next: { cursor: 0, note: `hop limit ${maxHop}`, state: "done" } };
-  }
-
-  const key = node.kind === "label" ? "label" : "artist";
-  const browse = await mb<MbReleaseBrowse>(
-    `/release?${key}=${node.external_id}&limit=${BROWSE_PAGE_SIZE}&offset=${node.cursor}`,
-  );
-  const releases = (browse?.releases ?? []).filter(
+/** The `{ id }` releases off a browse response — the ill-formed ones dropped. */
+function browseReleases(browse: MbReleaseBrowse | null): { id: string }[] {
+  return (browse?.releases ?? []).filter(
     (release): release is { id: string } => typeof release.id === "string",
   );
+}
 
-  let enqueued = 0;
+/**
+ * Enqueue one browse page's releases as `release` nodes and return how many were GENUINELY NEW
+ * (an `on conflict do nothing` no-op returns 0). That new-count is load-bearing twice over: it is
+ * the walk's outward edge (`enqueued`), and it is the tail-first re-arm's EARLY-STOP signal — a
+ * page that mints nothing new means every release below it is already walked.
+ */
+async function enqueueReleaseNodes(
+  node: FrontierRow,
+  releases: { id: string }[],
+  childHop: number,
+): Promise<number> {
+  let newlyEnqueued = 0;
 
   for (const release of releases) {
-    enqueued += await enqueue({
+    newlyEnqueued += await enqueue({
       externalId: release.id,
       hop: childHop,
       kind: "release",
@@ -886,6 +915,51 @@ async function expandBrowse(node: FrontierRow, maxHop: number): Promise<Expansio
     });
   }
 
+  return newlyEnqueued;
+}
+
+/**
+ * A MusicBrainz label (or artist) node → one page of its releases, as `release` nodes.
+ *
+ * ONE request per tick per node (the tail-first re-arm's first tick is the one exception — a
+ * count probe plus the tail read). A node stays `pending` with its browse cursor advanced, so a
+ * 900-release label drains across ticks instead of blowing a single one — the resumability that
+ * matters most in practice, because the biggest seed label is also the one most likely to be
+ * interrupted.
+ *
+ * TWO WALKS, read straight off the signed cursor (see `REARM_TAIL` / `descendCursor`):
+ *   - `cursor >= 0` — a COLD node's FORWARD drain (`expandForwardBrowse`): the whole list, head
+ *     to tail, one page a tick. The initial walk must see everything.
+ *   - `cursor < 0`  — a RE-ARMED node's TAIL-FIRST re-read (`expandRearmedBrowse`): MusicBrainz's
+ *     browse has no date sort and appends new pressings at the END, so the fresh drop lives at the
+ *     tail. Page backward from the last page, stop at the first all-known page.
+ */
+async function expandBrowse(node: FrontierRow, maxHop: number): Promise<Expansion> {
+  const childHop = node.kind === "label" ? 0 : node.hop + 1;
+
+  if (childHop > maxHop) {
+    return { ...EMPTY, next: { cursor: 0, note: `hop limit ${maxHop}`, state: "done" } };
+  }
+
+  const key = node.kind === "label" ? "label" : "artist";
+
+  return node.cursor < 0
+    ? expandRearmedBrowse(node, key, childHop)
+    : expandForwardBrowse(node, key, childHop);
+}
+
+/** A COLD browse node's forward drain — the whole release list, head to tail, one page a tick. */
+async function expandForwardBrowse(
+  node: FrontierRow,
+  key: string,
+  childHop: number,
+): Promise<Expansion> {
+  const browse = await mb<MbReleaseBrowse>(
+    `/release?${key}=${node.external_id}&limit=${BROWSE_PAGE_SIZE}&offset=${node.cursor}`,
+  );
+  const releases = browseReleases(browse);
+  const enqueued = await enqueueReleaseNodes(node, releases, childHop);
+
   const consumed = node.cursor + releases.length;
   const total = browse?.["release-count"] ?? consumed;
   const hasMore = releases.length === BROWSE_PAGE_SIZE && consumed < total;
@@ -894,6 +968,78 @@ async function expandBrowse(node: FrontierRow, maxHop: number): Promise<Expansio
     ...EMPTY,
     enqueued,
     next: { cursor: hasMore ? consumed : 0, state: hasMore ? "pending" : "done" },
+  };
+}
+
+/**
+ * A RE-ARMED browse node's TAIL-FIRST re-read. Because MusicBrainz appends new pressings at the
+ * end of an unsorted browse list, a re-arm only needs to look at the TAIL — it starts at the last
+ * page and pages backward, stopping the moment a page adds nothing new.
+ *
+ * FIRST tick (`cursor === REARM_TAIL`): the tail's offset depends on the CURRENT count, which the
+ * node does not store, so it is probed (`limit=1`) and the tail read in the SAME tick — the count
+ * that aims the tail is then at most one shared-client hop stale, which closes the race below.
+ *
+ * THE GROW RACE. If the count GREW between the probe and the tail read, `offset` aimed at the OLD
+ * tail and the page missed the newest rows `[staleTotal, total)`. Re-aim the descent at the FRESH
+ * tail and do NOT early-stop — the true newest have not been seen. This can only happen on the
+ * first (tail-locating) page; a normal descent page is deliberately below the tail, so it is never
+ * mistaken for an under-aim. Growth AFTER the tail read is the NEXT daily re-arm's job.
+ *
+ * EARLY STOP: a page that mints nothing new (`newlyEnqueued === 0`) means everything below is
+ * already walked; and `offset === 0` is the floor (the whole list re-swept). Either ends the walk.
+ * The one-page label (< `BROWSE_PAGE_SIZE` releases) is the degenerate tail = page 0 case, handled
+ * by the same two conditions. Every new release still mints a `pending` node the deep walk drains.
+ */
+async function expandRearmedBrowse(
+  node: FrontierRow,
+  key: string,
+  childHop: number,
+): Promise<Expansion> {
+  const browse = (offset: number, limit: number): Promise<MbReleaseBrowse | null> =>
+    mb<MbReleaseBrowse>(`/release?${key}=${node.external_id}&limit=${limit}&offset=${offset}`);
+
+  let offset: number;
+  let staleTotal: null | number = null;
+
+  if (node.cursor === REARM_TAIL) {
+    const probe = await browse(0, 1);
+    staleTotal = probe?.["release-count"] ?? 0;
+
+    if (staleTotal <= 0) {
+      // MusicBrainz now lists nothing for this label — nothing to re-walk. Done, cheaply.
+      return { ...EMPTY, next: { cursor: 0, state: "done" } };
+    }
+
+    offset = Math.max(0, staleTotal - BROWSE_PAGE_SIZE);
+  } else {
+    offset = descendOffset(node.cursor);
+  }
+
+  const page = await browse(offset, BROWSE_PAGE_SIZE);
+  const releases = browseReleases(page);
+  const total = page?.["release-count"] ?? offset + releases.length;
+  const enqueued = await enqueueReleaseNodes(node, releases, childHop);
+
+  if (staleTotal !== null && total > staleTotal) {
+    // The count grew in the probe→tail window: re-aim at the fresh tail, cover the miss next tick.
+    return {
+      ...EMPTY,
+      enqueued,
+      next: { cursor: descendCursor(Math.max(0, total - BROWSE_PAGE_SIZE)), state: "pending" },
+    };
+  }
+
+  if (enqueued === 0 || offset === 0) {
+    return { ...EMPTY, enqueued, next: { cursor: 0, state: "done" } };
+  }
+
+  // Descend one page toward the head. Clamp at 0 so a non-page-aligned tail offset (`total` is
+  // rarely a multiple of the page size) lands on the head remainder rather than a negative offset.
+  return {
+    ...EMPTY,
+    enqueued,
+    next: { cursor: descendCursor(Math.max(0, offset - BROWSE_PAGE_SIZE)), state: "pending" },
   };
 }
 
@@ -1149,6 +1295,10 @@ export async function crawlCatalogue({
       const throttled = error instanceof ThrottledError;
 
       await settle(node.id, "failed", {
+        // Preserve the browse cursor across a transient failure so the retry RESUMES where it was —
+        // a paginated forward drain keeps its offset, and a re-armed node keeps its tail-first state
+        // (`REARM_TAIL`/descent) instead of collapsing to `0`, which would restart it as a full walk.
+        cursor: node.cursor,
         failures: node.failures + 1,
         note: throttled ? "musicbrainz rate-limited" : String(error).slice(0, 200),
       });

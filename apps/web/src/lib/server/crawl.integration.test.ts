@@ -559,8 +559,9 @@ describe("the frontier drain — releases never starve behind a discovery wave",
 describe("the seed re-arm (release freshness) — an enabled label is a subscription", () => {
   // A done seed-label browse node is otherwise TERMINAL, so a label's LATER releases (a Friday
   // drop) would never surface. The re-arm flips a stale enabled label's MusicBrainz browse node
-  // back to pending (cursor 0) so it re-paginates: a genuinely new release mints rows, a known
-  // one is a cheap on-conflict no-op, and the two-layer idempotence folds any re-pressed track.
+  // back to pending with the TAIL-FIRST cursor (REARM_TAIL) so it re-reads the END of the release
+  // list (where MB's unsorted browse appends new pressings): a genuinely new release mints rows, a
+  // known one is a cheap on-conflict no-op, and the two-layer idempotence folds any re-pressed track.
   const NEW_RELEASE = "release-new";
   const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -636,11 +637,11 @@ describe("the seed re-arm (release freshness) — an enabled label is a subscrip
     stubMedschool([SEED_RELEASE, NEW_RELEASE]);
     await ageSeedLabelNodes(REARM_AFTER_DAYS + 1);
 
-    // The re-arm rides this pass: it flips the MB label browse node back to pending (cursor 0).
+    // The re-arm rides this pass: it flips the MB label browse node back to pending (REARM_TAIL).
     const rearmPass = await crawlCatalogue({ limit: 10, maxHop: 0 });
     expect(rearmPass.seedsRearmed).toBe(1);
 
-    // Drain the rest: the re-paginated browse re-lists SEED_RELEASE (a done node → on-conflict
+    // Drain the rest: the tail-first re-read re-lists SEED_RELEASE (a done node → on-conflict
     // no-op, never re-walked) AND NEW_RELEASE (a fresh node → walked, mints rec-new).
     await drain(0);
 
@@ -846,5 +847,230 @@ describe("the crawl converges onto an Apple-first row instead of minting a twin"
     );
     // Both exist — the album-scoped fold did not merge across albums.
     expect(weightless.rows.map((row) => text(row.track_id))).toEqual(["ap_unrelated", "mb_rec-1"]);
+  });
+});
+
+describe("the tail-first re-arm — a subscription reads only the NEW end of the list", () => {
+  // MusicBrainz's release browse has NO date sort: its order is append-ish, so a label's NEWEST
+  // pressings sit at the TAIL. A re-arm therefore reads the list END-first and stops at the first
+  // all-known page — it never re-walks the whole thing forward. These cases pin that mechanic:
+  // the multi-page early stop, the < 100-release label, the probe→tail count-grew race, and the
+  // guarantee that a COLD (never-drained) label still full-walks FORWARD from the head.
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const MB_LABEL_NODE = `musicbrainz:label:${LABEL_MBID}`;
+  const AGED = new Date(Date.now() - 5 * DAY_MS).toISOString();
+
+  const releaseId = (index: number): string => `r${String(index).padStart(3, "0")}`;
+
+  /** The offset+limit MusicBrainz was browsed at, in call order — how we prove which pages ran. */
+  function recordBrowseOffsets(): string[] {
+    return browseOffsets;
+  }
+  let browseOffsets: string[] = [];
+
+  /**
+   * A Med School release browse that RESPECTS offset+limit (the real endpoint's contract) so the
+   * tail-first walk's paging is exercised for real. `list()` returns the CURRENT `{ count, ids }`,
+   * and may key off the requested `limit` to model a count that grew between the probe (limit 1)
+   * and the tail read (limit 100). Every unknown release id resolves to one fresh recording.
+   */
+  function stubPaginated(list: (limit: number) => { count: number; ids: string[] }): void {
+    browseOffsets = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) => {
+        const json = (body: unknown) =>
+          Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
+
+        if (url.includes("/label?query=")) {
+          return json({ labels: [{ id: LABEL_MBID, name: "Med School", score: 100 }] });
+        }
+
+        if (url.includes(`/release?label=${LABEL_MBID}`)) {
+          const params = new URL(url).searchParams;
+          const offset = Number(params.get("offset") ?? "0");
+          const limit = Number(params.get("limit") ?? "100");
+          browseOffsets.push(`${offset}:${limit}`);
+          const { count, ids } = list(limit);
+
+          return json({
+            "release-count": count,
+            releases: ids.slice(offset, offset + limit).map((id) => ({ id })),
+          });
+        }
+
+        const detail = url.match(/\/release\/([^?]+)/);
+
+        if (detail) {
+          const id = detail[1] ?? "";
+
+          return json(release(id, "Med School", `rg-${id}`, [{ id: `rec-${id}`, title: id }]));
+        }
+
+        return json({});
+      }),
+    );
+  }
+
+  /** Plant a DONE MB-label browse node (aged past the re-arm threshold) plus its walked releases. */
+  async function planDrainedLabel(knownCount: number): Promise<void> {
+    await db.execute({
+      args: [MB_LABEL_NODE, LABEL_MBID, "medschool", AGED, AGED, AGED],
+      sql: `insert into crawl_frontier
+              (id, kind, source, external_id, hop, parent_id, label_slug, state, cursor, done_at, created_at, updated_at)
+            values (?, 'label', 'musicbrainz', ?, 0, null, ?, 'done', 0, ?, ?, ?)`,
+    });
+
+    for (let i = 0; i < knownCount; i += 1) {
+      const id = releaseId(i);
+      await db.execute({
+        args: [`musicbrainz:release:${id}`, id, "medschool", AGED, AGED, AGED],
+        sql: `insert into crawl_frontier
+                (id, kind, source, external_id, hop, parent_id, label_slug, state, cursor, done_at, created_at, updated_at)
+              values (?, 'release', 'musicbrainz', ?, 2, null, ?, 'done', 0, ?, ?, ?)`,
+      });
+    }
+  }
+
+  it("pages the TAIL backward and EARLY-STOPS mid-list — the head pages are never re-read", async () => {
+    const { crawlCatalogue } = await import("./crawl");
+
+    // 250 releases already walked; a 251st (rNEW) appears at the tail. The re-arm should read the
+    // last page, find rNEW, step back ONE page (all-known), and stop — never touching the head.
+    const known = Array.from({ length: 250 }, (_, i) => releaseId(i));
+    const fresh = [...known, "rNEW"];
+    await planDrainedLabel(250);
+    stubPaginated(() => ({ count: fresh.length, ids: fresh }));
+
+    const rearm = await crawlCatalogue({ limit: 10, maxHop: 0 });
+    expect(rearm.seedsRearmed).toBe(1);
+
+    // Drain the frontier the re-arm opened.
+    await drain(0);
+
+    // The tail-first paging: probe (offset 0, limit 1), the tail page (offset 151), then ONE page
+    // back (offset 51) which is all-known → STOP. Offset 0 (the head) is NEVER browsed at limit 100.
+    const pages = recordBrowseOffsets();
+    expect(pages).toEqual(["0:1", "151:100", "51:100"]);
+    expect(pages).not.toContain("0:100");
+
+    // The genuinely new release was walked and its track minted; the 250 known nodes never re-ran.
+    const fresh_track = await db.execute(
+      "select track_id from tracks where track_id = 'mb_rec-rNEW'",
+    );
+    expect(fresh_track.rows.length).toBe(1);
+    const known_state = await db.execute(
+      "select count(*) as n from crawl_frontier where kind = 'release' and attempts > 0",
+    );
+    // Only rNEW's release node was ever expanded (attempts > 0); the 250 planted ones stayed at rest.
+    expect(Number(known_state.rows[0]?.n)).toBe(1);
+  });
+
+  it("a label with < 100 releases has its tail at page 0 — one page, then done", async () => {
+    const { crawlCatalogue } = await import("./crawl");
+
+    // 3 known releases + 1 fresh = 4 total, all inside a single page. The tail IS page 0.
+    const fresh = ["r000", "r001", "r002", "rNEW"];
+    await planDrainedLabel(3);
+    stubPaginated(() => ({ count: fresh.length, ids: fresh }));
+
+    await crawlCatalogue({ limit: 10, maxHop: 0 });
+    await drain(0);
+
+    // Probe (offset 0, limit 1) then the single page at offset 0 — no descent, because offset 0 is
+    // both the tail and the floor. The MB label node is done again.
+    expect(recordBrowseOffsets()).toEqual(["0:1", "0:100"]);
+    const node = await db.execute(
+      `select state, cursor from crawl_frontier where id = '${MB_LABEL_NODE}'`,
+    );
+    expect(node.rows[0]?.state).toBe("done");
+    expect(Number(node.rows[0]?.cursor)).toBe(0);
+
+    const fresh_track = await db.execute(
+      "select track_id from tracks where track_id = 'mb_rec-rNEW'",
+    );
+    expect(fresh_track.rows.length).toBe(1);
+  });
+
+  it("does NOT skip the newest rows when the count GREW between the probe and the tail read", async () => {
+    const { crawlCatalogue } = await import("./crawl");
+
+    // The race: the probe (limit 1) sees 150; by the tail read (limit 100) five more have landed
+    // (155). Aimed at the OLD tail (offset 50), the tail page is all-known — a naive early-stop
+    // there would MISS r150..r154. The grow-guard must re-aim at the fresh tail and cover them.
+    const known = Array.from({ length: 150 }, (_, i) => releaseId(i)); // r000..r149
+    const grown = Array.from({ length: 155 }, (_, i) => releaseId(i)); // + r150..r154 (the newest)
+    await planDrainedLabel(150);
+    stubPaginated((limit) =>
+      limit === 1 ? { count: 150, ids: known } : { count: 155, ids: grown },
+    );
+
+    await crawlCatalogue({ limit: 10, maxHop: 0 });
+    await drain(0);
+
+    // All five newest releases were walked and minted — none lost to the race.
+    const newest = await db.execute(
+      "select track_id from tracks where track_id in ('mb_rec-r150','mb_rec-r151','mb_rec-r152','mb_rec-r153','mb_rec-r154') order by track_id",
+    );
+    expect(newest.rows.map((row) => text(row.track_id))).toEqual([
+      "mb_rec-r150",
+      "mb_rec-r151",
+      "mb_rec-r152",
+      "mb_rec-r153",
+      "mb_rec-r154",
+    ]);
+  });
+
+  it("a re-arm that finds NOTHING new stops in one tick — the cheap steady state", async () => {
+    const { crawlCatalogue } = await import("./crawl");
+
+    // 120 releases, all already walked, nothing new. The tail page mints zero → immediate done.
+    const known = Array.from({ length: 120 }, (_, i) => releaseId(i));
+    await planDrainedLabel(120);
+    stubPaginated(() => ({ count: known.length, ids: known }));
+
+    await crawlCatalogue({ limit: 10, maxHop: 0 });
+    await drain(0);
+
+    // Probe + one tail page (offset 20), all-known → STOP. No descent, no track written.
+    expect(recordBrowseOffsets()).toEqual(["0:1", "20:100"]);
+    const written = await db.execute("select count(*) as n from tracks");
+    expect(Number(written.rows[0]?.n)).toBe(0);
+    const node = await db.execute(`select state from crawl_frontier where id = '${MB_LABEL_NODE}'`);
+    expect(node.rows[0]?.state).toBe("done");
+  });
+
+  it("a COLD (never-drained) label still full-walks FORWARD from the head", async () => {
+    const { crawlCatalogue } = await import("./crawl");
+
+    // A cold MB-label node (cursor 0, pending) with 250 releases. The forward drain must start at
+    // the HEAD (offset 0) and advance ASCENDING — never the tail-first cursor a re-arm uses.
+    // Silence the seed walk so the planted node is the only thing pending to pick.
+    await db.execute("update labels set seed_state = 'disabled'");
+    const all = Array.from({ length: 250 }, (_, i) => releaseId(i));
+    stubPaginated(() => ({ count: all.length, ids: all }));
+    await db.execute({
+      args: [MB_LABEL_NODE, LABEL_MBID, "medschool", NOW, NOW],
+      sql: `insert into crawl_frontier
+              (id, kind, source, external_id, hop, parent_id, label_slug, state, cursor, created_at, updated_at)
+            values (?, 'label', 'musicbrainz', ?, 0, null, ?, 'pending', 0, ?, ?)`,
+    });
+
+    // One pass expands the label node (no release nodes pending yet, so it is picked).
+    await crawlCatalogue({ limit: 1, maxHop: 0 });
+
+    // Forward: browsed at offset 0 (the head), and the node advanced to a POSITIVE cursor (100),
+    // still pending — the opposite of the tail-first re-arm's negative cursor.
+    expect(recordBrowseOffsets()).toEqual(["0:100"]);
+    const node = await db.execute(
+      `select state, cursor from crawl_frontier where id = '${MB_LABEL_NODE}'`,
+    );
+    expect(node.rows[0]?.state).toBe("pending");
+    expect(Number(node.rows[0]?.cursor)).toBe(100);
+  });
+
+  it("re-arms daily — REARM_AFTER_DAYS is 1", async () => {
+    const { REARM_AFTER_DAYS } = await import("./crawl");
+    expect(REARM_AFTER_DAYS).toBe(1);
   });
 });
