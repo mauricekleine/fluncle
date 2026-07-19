@@ -525,11 +525,15 @@ export async function getLabelForAlbum(albumId: string): Promise<LabelRecord | u
 export async function listKnownLabelNames(): Promise<string[]> {
   const db = await getDb();
   const result = await db.execute({
+    // `trim(labels.name) <> ''` drops a blank/whitespace-only (or null) name at the source, so the
+    // filter combobox never offers an empty "Any label"-looking row. `trim(null)` is null and
+    // `null <> ''` is not true, so a null name falls out the same way.
     sql: `select labels.name as name
           from labels
           join tracks on tracks.label_id = labels.id
           join findings on findings.track_id = tracks.track_id
           where findings.log_id is not null
+            and trim(labels.name) <> ''
           group by labels.id
           order by labels.name collate nocase asc`,
   });

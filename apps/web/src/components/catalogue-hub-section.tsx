@@ -13,7 +13,8 @@
 // every region of the alphabet. Nothing loads on scroll, so the footer stays reachable at every
 // catalogue size, and every tile past the first page is a real `?page=N` <a> a crawler follows.
 
-import { type ReactNode } from "react";
+import { CaretLeftIcon, CaretRightIcon } from "@phosphor-icons/react";
+import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 
 // ── THE PAGED SECTION + THE A–Z FAST LANE ────────────────────────────────────────────────────────
 //
@@ -67,12 +68,35 @@ export function HubLetterLane({
 }
 
 /**
- * The YEAR fast lane — the A–Z lane mechanic mapped onto TIME. A quiet strip of the release years
- * present in a time-sorted hub (`/tracks`), newest first, each a real `<a href="?page=N">` to the
- * page that year's first release lands on. Unlike the letter lane there is no fixed alphabet and no
- * "absent" slot: a year is here because the result set holds it. Same quiet chrome as the letter lane
- * (Stardust ink, cream on hover, the Eclipse ring on focus); no gold at rest (One Sun). Renders
- * nothing when the set spans no dated release (an all-undated or empty list).
+ * Whether a horizontal scroller can move further in each direction, from its scroll metrics. Pure, so
+ * it is unit-pinned. A 1px slack absorbs the sub-pixel rounding a browser leaves at the far edge, so a
+ * fully-scrolled lane reliably reads as "cannot go further".
+ */
+export function laneScrollAffordances(metrics: {
+  clientWidth: number;
+  scrollLeft: number;
+  scrollWidth: number;
+}): { canScrollLeft: boolean; canScrollRight: boolean } {
+  return {
+    canScrollLeft: metrics.scrollLeft > 1,
+    canScrollRight: metrics.scrollLeft + metrics.clientWidth < metrics.scrollWidth - 1,
+  };
+}
+
+/**
+ * The YEAR fast lane — the A–Z lane mechanic mapped onto TIME. The release years present in a
+ * time-sorted hub (`/tracks`), newest first, each a real `<a href="?page=N">` to the page that year's
+ * first release lands on. Unlike the letter lane there is no fixed alphabet and no "absent" slot: a
+ * year is here because the result set holds it.
+ *
+ * Where the entity hubs' letter lane WRAPS to as many rows as it needs, this is a SINGLE
+ * non-wrapping row inside a horizontally-scrollable strip, with a caret on each side that pages it by
+ * roughly a viewport; a caret dims and goes inert at the end it would scroll past. The chips stay the
+ * shared `.catalogue-letter` chrome (Stardust ink, cream on hover, the Eclipse ring on focus; no gold
+ * at rest — One Sun); only the container differs, so the letter lanes are untouched. Every chip is a
+ * real anchor in the SSR HTML, so a crawler with no JS still walks the whole strip; the carets are a
+ * progressive enhancement over the native overflow scroll. Renders nothing when the set spans no
+ * dated release (an all-undated or empty list).
  */
 export function HubYearLane({
   buildHref,
@@ -85,18 +109,83 @@ export function HubYearLane({
   label: string;
   years: { page: number; year: string }[];
 }) {
+  const scrollerRef = useRef<HTMLDivElement>(null);
+  const [affordances, setAffordances] = useState({ canScrollLeft: false, canScrollRight: false });
+
+  const measure = useCallback(() => {
+    const el = scrollerRef.current;
+
+    if (el) {
+      setAffordances(laneScrollAffordances(el));
+    }
+  }, []);
+
+  // Track the scroll position + width so each caret reflects whether there is anywhere left to go.
+  // Client-only (the effect never runs on the server); a ResizeObserver re-measures when the strip or
+  // its content changes width.
+  useEffect(() => {
+    const el = scrollerRef.current;
+
+    if (!el) {
+      return;
+    }
+
+    measure();
+    el.addEventListener("scroll", measure, { passive: true });
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+
+    return () => {
+      el.removeEventListener("scroll", measure);
+      observer.disconnect();
+    };
+  }, [measure]);
+
   if (years.length === 0) {
     return undefined;
   }
 
+  // Page by roughly a viewport. `scrollBy` with no explicit behavior inherits the container's CSS
+  // `scroll-behavior`, which is gated on `prefers-reduced-motion: no-preference` — so the motion is
+  // smooth for most and instant for anyone who asked for less.
+  const pageBy = (direction: -1 | 1) => {
+    const el = scrollerRef.current;
+
+    if (el) {
+      el.scrollBy({ left: direction * el.clientWidth * 0.8 });
+    }
+  };
+
   return (
-    <nav aria-label={label} className="catalogue-letters">
-      {years.map((entry) => (
-        <a className="catalogue-letter" href={buildHref(entry.page)} key={entry.year}>
-          {entry.year}
-        </a>
-      ))}
-    </nav>
+    <div className="hub-year-lane">
+      <button
+        aria-label="Scroll years left"
+        className="hub-year-lane-caret"
+        disabled={!affordances.canScrollLeft}
+        onClick={() => pageBy(-1)}
+        type="button"
+      >
+        <CaretLeftIcon aria-hidden="true" size={16} weight="bold" />
+      </button>
+
+      <nav aria-label={label} className="hub-year-lane-scroller" ref={scrollerRef}>
+        {years.map((entry) => (
+          <a className="catalogue-letter" href={buildHref(entry.page)} key={entry.year}>
+            {entry.year}
+          </a>
+        ))}
+      </nav>
+
+      <button
+        aria-label="Scroll years right"
+        className="hub-year-lane-caret"
+        disabled={!affordances.canScrollRight}
+        onClick={() => pageBy(1)}
+        type="button"
+      >
+        <CaretRightIcon aria-hidden="true" size={16} weight="bold" />
+      </button>
+    </div>
   );
 }
 

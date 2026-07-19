@@ -2109,6 +2109,77 @@ a.catalogue-letter:focus-visible {
   color: color-mix(in oklch, var(--muted-foreground) 50%, transparent);
 }
 
+/* The /tracks YEAR lane: a SINGLE non-wrapping row of the shared .catalogue-letter chips in a
+   horizontally-scrollable strip, flanked by a caret on each side — where the entity hubs' A–Z lane
+   (.catalogue-letters, above) wraps to as many rows as it needs. Only the container changes here; the
+   letter lanes keep .catalogue-letters untouched. */
+.hub-year-lane {
+  align-items: center;
+  display: flex;
+  gap: 0.25rem;
+  margin-top: 0.7rem;
+}
+
+.hub-year-lane-scroller {
+  display: flex;
+  flex: 1;
+  flex-wrap: nowrap;
+  gap: 0.15rem 0.3rem;
+  min-width: 0;
+  overflow-x: auto;
+  /* The scrollbar is hidden — the carets and the native swipe are the affordance; the row stays quiet
+     chrome. Firefox + IE via the standard properties, WebKit/Blink via the pseudo-element below. */
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.hub-year-lane-scroller::-webkit-scrollbar {
+  display: none;
+}
+
+/* Each chip holds its intrinsic width — no shrinking to fit, so the strip actually overflows and
+   scrolls rather than squeezing the years together. */
+.hub-year-lane-scroller > .catalogue-letter {
+  flex: none;
+}
+
+/* Smooth paging for most; instant for anyone who asked for reduced motion. `scrollBy` inherits this. */
+@media (prefers-reduced-motion: no-preference) {
+  .hub-year-lane-scroller {
+    scroll-behavior: smooth;
+  }
+}
+
+/* The caret buttons — quiet chrome matched to the chips (Stardust ink, cream on hover, the canonical
+   Eclipse ring on focus). Phosphor interface icons. Disabled at an end: dimmer, and inert to the
+   pointer (WCAG exempts a disabled control from the contrast floor). */
+.hub-year-lane-caret {
+  align-items: center;
+  background: none;
+  border: 0;
+  border-radius: var(--rounded-sm);
+  color: var(--stardust);
+  cursor: pointer;
+  display: flex;
+  flex: none;
+  justify-content: center;
+  padding: 0.15rem;
+}
+
+.hub-year-lane-caret:hover:not(:disabled) {
+  color: var(--starlight-cream);
+}
+
+.hub-year-lane-caret:focus-visible {
+  outline: 2px solid var(--eclipse-glow);
+  outline-offset: 2px;
+}
+
+.hub-year-lane-caret:disabled {
+  color: color-mix(in oklch, var(--muted-foreground) 45%, transparent);
+  cursor: default;
+}
+
 /* The dimming that makes a tile read as unlit: the artwork/avatar and the name sit a step down at
    rest and lift to full on hover/focus. The name still heats to cream through the grid's own hover
    rule; only the resting light drops. */
@@ -2706,16 +2777,20 @@ a.catalogue-letter:focus-visible {
   border-top: 0;
 }
 
-/* The release year — the date column, Oxanium tabular like every other number (the Tabular Rule). */
-.tracks-hub-row-year {
+/* The release date — the date column, Oxanium tabular like every other number (the Tabular Rule).
+   Left-aligned and wide enough for the short-month archival date ("Sep 22, 2026"); the cover and body
+   flow after it. A partial-precision or undated row prints just the year (or an em dash), which sits
+   comfortably inside the same column. */
+.tracks-hub-row-date {
   color: var(--muted-foreground);
   flex: none;
   font-family: var(--fresh-oxanium);
   font-size: 0.78rem;
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.01em;
-  text-align: right;
-  width: 2.8rem;
+  text-align: left;
+  white-space: nowrap;
+  width: 5.5rem;
 }
 
 /* Cover-led: 3.25rem album art (the .track-artwork base carries the size + radius). A finding shows

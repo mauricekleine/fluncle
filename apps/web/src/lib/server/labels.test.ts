@@ -29,6 +29,7 @@ import {
   LabelMergeSameRowError,
   LabelNotFoundError,
   letterPages,
+  listKnownLabelNames,
   listLabelAliasCandidates,
   listLabelReviewRows,
   listLabels,
@@ -1020,5 +1021,38 @@ describe("mergeLabel (the operator's slug-split cleanup)", () => {
         placeholders,
       });
     }
+  });
+});
+
+// ── THE /tracks LABEL FILTER POOL ───────────────────────────────────────────────────────────
+
+describe("listKnownLabelNames (the /tracks label filter typeahead pool)", () => {
+  /** Point a certified track at a label row — the `tracks.label_id → labels.id` join key the pool
+      reads by (seedFinding writes the raw string but not the graph pointer). */
+  async function pointTrackAtLabel(trackId: string, labelId: string): Promise<void> {
+    await db.execute({
+      args: [labelId, trackId],
+      sql: `update tracks set label_id = ? where track_id = ?`,
+    });
+  }
+
+  it("drops a blank-named label so the combobox never offers an empty option", async () => {
+    await insertLabel("lbl_real", "Hospital Records", "hospital-records");
+    await insertLabel("lbl_blank", "", "blank-label");
+    await insertLabel("lbl_space", "   ", "space-label");
+    await seedFinding("t-real", "Hospital Records");
+    await seedFinding("t-blank", "");
+    await seedFinding("t-space", "   ");
+    await pointTrackAtLabel("t-real", "lbl_real");
+    await pointTrackAtLabel("t-blank", "lbl_blank");
+    await pointTrackAtLabel("t-space", "lbl_space");
+
+    const names = await listKnownLabelNames();
+
+    // The real imprint is offered; neither the empty nor the whitespace-only name is.
+    expect(names).toContain("Hospital Records");
+    expect(names).not.toContain("");
+    expect(names).not.toContain("   ");
+    expect(names.every((name) => name.trim() !== "")).toBe(true);
   });
 });

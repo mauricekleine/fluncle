@@ -4,7 +4,12 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { CataloguePager } from "./catalogue-groups";
-import { CatalogueHubPageSection, HubLetterLane } from "./catalogue-hub-section";
+import {
+  CatalogueHubPageSection,
+  HubLetterLane,
+  HubYearLane,
+  laneScrollAffordances,
+} from "./catalogue-hub-section";
 
 const buildHref = (page: number) => (page <= 1 ? "/artists" : `/artists?page=${page}`);
 
@@ -35,6 +40,63 @@ describe("HubLetterLane", () => {
     expect(
       renderToStaticMarkup(<HubLetterLane buildHref={buildHref} label="x" letters={[]} />),
     ).toBe("");
+  });
+});
+
+describe("HubYearLane (the /tracks single-row year scroller)", () => {
+  const buildYearHref = (page: number) => (page <= 1 ? "/tracks" : `/tracks?page=${page}`);
+
+  it("SSRs every year as a real ?page=N anchor plus a caret on each side", () => {
+    const html = renderToStaticMarkup(
+      <HubYearLane
+        buildHref={buildYearHref}
+        label="Tracks by year"
+        years={[
+          { page: 1, year: "2026" },
+          { page: 3, year: "2024" },
+        ]}
+      />,
+    );
+
+    // Every year is a crawlable anchor, using the same chip chrome as the letter lane.
+    expect(html).toContain('<a class="catalogue-letter" href="/tracks">2026</a>');
+    expect(html).toContain('<a class="catalogue-letter" href="/tracks?page=3">2024</a>');
+    // The scroller carries the nav's literal accessible name; the shared wrapping class is NOT used.
+    expect(html).toContain('aria-label="Tracks by year"');
+    expect(html).not.toContain("catalogue-letters");
+    // A real <button> on each side, keyboard-reachable, with literal chrome labels.
+    expect(html).toContain('aria-label="Scroll years left"');
+    expect(html).toContain('aria-label="Scroll years right"');
+    expect(html).toContain("<button");
+  });
+
+  it("renders nothing when the set spans no dated release", () => {
+    expect(
+      renderToStaticMarkup(<HubYearLane buildHref={buildYearHref} label="x" years={[]} />),
+    ).toBe("");
+  });
+});
+
+describe("laneScrollAffordances (the caret enable/disable logic)", () => {
+  it("cannot go left at the start, can go right when content overflows", () => {
+    expect(laneScrollAffordances({ clientWidth: 300, scrollLeft: 0, scrollWidth: 900 })).toEqual({
+      canScrollLeft: false,
+      canScrollRight: true,
+    });
+  });
+
+  it("cannot go right once scrolled to the far end (1px slack for rounding)", () => {
+    expect(laneScrollAffordances({ clientWidth: 300, scrollLeft: 600, scrollWidth: 900 })).toEqual({
+      canScrollLeft: true,
+      canScrollRight: false,
+    });
+  });
+
+  it("offers neither direction when the content fits with no overflow", () => {
+    expect(laneScrollAffordances({ clientWidth: 900, scrollLeft: 0, scrollWidth: 900 })).toEqual({
+      canScrollLeft: false,
+      canScrollRight: false,
+    });
   });
 });
 
