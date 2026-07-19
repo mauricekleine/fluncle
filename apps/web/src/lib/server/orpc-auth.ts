@@ -122,12 +122,6 @@ export const operatorProcedure = adminProcedure.use(operatorGuard);
 // matching `ORPCError` via `responseFault` (./orpc/_shared) so the rails encoder
 // reproduces the legacy `{ code, message, ok: false }` body at the same status.
 
-// The context a private-user handler sees past `privateUserAuth` /
-// `privateUserMutation`: the resolved public user, guaranteed non-null.
-export type PrivateUserContext = OrpcContext & {
-  user: PublicUser;
-};
-
 // Lazy import to avoid a static cycle at module-eval time: orpc-auth is imported
 // by ./orpc/_shared, which account-data's import chain transitively reaches.
 async function liftResponseToFault(response: Response): Promise<never> {

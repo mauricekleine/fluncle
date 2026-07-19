@@ -58,8 +58,8 @@ const byName = (name: string): ToolSpec => {
   return spec;
 };
 
-// The full realized registry after PR-2: the five overlapping reads, the four reads + one new
-// (`get_similar_artists`) lifted out of ChatDnB, and the two writes.
+// The full realized registry after PR-5: the five overlapping reads, the four reads + one new
+// (`get_similar_artists`) lifted out of ChatDnB, the three catalogue browse reads, and the two writes.
 const ALL_TOOL_NAMES = [
   "build_set",
   "get_artist",
@@ -68,7 +68,10 @@ const ALL_TOOL_NAMES = [
   "get_similar_artists",
   "get_status",
   "get_track",
+  "list_album_catalogue",
+  "list_artist_catalogue",
   "list_fresh",
+  "list_label_catalogue",
   "list_tracks",
   "search_archive",
   "submit_track",
@@ -192,7 +195,15 @@ describe("tool-set parity — each transport gets exactly its declared projectio
   });
 
   it("codifies the reads that stay off WebMCP (no name-keyed public endpoint)", () => {
-    for (const name of ["get_artist", "get_label", "build_set", "get_similar_artists"]) {
+    for (const name of [
+      "get_artist",
+      "get_label",
+      "build_set",
+      "get_similar_artists",
+      "list_album_catalogue",
+      "list_artist_catalogue",
+      "list_label_catalogue",
+    ]) {
       expect(byName(name).transports.sort(), name).toEqual(["chat", "mcp"]);
     }
   });
@@ -365,6 +376,48 @@ describe("get_similar_artists — the new artist-discovery read", () => {
     expect(schema.properties.name.type).toBe("string");
     expect(schema.required).toEqual(["name"]);
     expect(schema.properties.limit).toMatchObject({ minimum: 1, type: "integer" });
+  });
+});
+
+describe("the catalogue browse tools — the unlit register, by name (PR-5)", () => {
+  const BROWSE_TOOLS = ["list_album_catalogue", "list_artist_catalogue", "list_label_catalogue"];
+
+  it("are catalogue-tier reads on MCP + chat, off WebMCP (a codified asymmetry)", () => {
+    for (const name of BROWSE_TOOLS) {
+      const spec = byName(name);
+      expect(spec.tier, name).toBe("catalogue");
+      expect(spec.effect, name).toBe("read");
+      expect(spec.access, name).toBe("public");
+      expect(spec.transports.sort(), name).toEqual(["chat", "mcp"]);
+      // Chat splits into the two buckets (catalogue-only by construction); the MCP world-serves.
+      expect(spec.project, name).toEqual({ chat: "twoBucket", mcp: "publicRecord" });
+    }
+  });
+
+  it("each takes a single required name", () => {
+    for (const name of BROWSE_TOOLS) {
+      const schema = toInputJsonSchema(byName(name)) as {
+        properties: { name: { type: string } };
+        required: string[];
+      };
+
+      expect(schema.properties.name.type, name).toBe("string");
+      expect(schema.required, name).toEqual(["name"]);
+    }
+  });
+
+  it("names the tier in neither the description nor the title (mechanism-free, Flat Copy Test)", () => {
+    // The register discipline reads "named and listed, never spoken as found" — never a mechanism
+    // word (anti-join / uncertified / the catalogue table), which would teach a leakable tier.
+    for (const name of BROWSE_TOOLS) {
+      const spec = byName(name);
+      const text = `${spec.description} ${spec.title}`.toLowerCase();
+
+      expect(text, `${name} description`).toContain("named and listed only, never spoken as found");
+      for (const banned of ["anti-join", "uncertified", "catalogue table"]) {
+        expect(text, `${name} leaks "${banned}"`).not.toContain(banned);
+      }
+    }
   });
 });
 

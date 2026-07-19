@@ -41,6 +41,20 @@ const FunnelQueuesSchema = z
   })
   .meta({ id: "FunnelQueues" });
 
+/**
+ * The LIVE queue depths — the persisted queues plus the anchor worklist split by whether the row
+ * already carries a MuQ embedding. `anchorQueueReady` is the embedded head the hourly anchor sweep
+ * actually works (the actionable number); `anchorQueueAwaitingAudio` is crawler metadata still
+ * waiting on capture/embed (it costs nothing until the audio pipeline reaches it). Both derive from
+ * the SAME anchor worklist predicate, so they sum to `anchorQueueIsrc + anchorQueueNoIsrc`. This
+ * split is a live-read refinement only — it is never persisted, so it rides `live.queues`, not the
+ * snapshot row.
+ */
+const FunnelLiveQueuesSchema = FunnelQueuesSchema.extend({
+  anchorQueueAwaitingAudio: z.number().int(),
+  anchorQueueReady: z.number().int(),
+}).meta({ id: "FunnelLiveQueues" });
+
 /** The operator's spend levers, surfaced as gauges. */
 const FunnelMetersSchema = z
   .object({
@@ -120,7 +134,7 @@ export const getFunnel = oc
     z.object({
       live: z.object({
         meters: FunnelMetersSchema,
-        queues: FunnelQueuesSchema,
+        queues: FunnelLiveQueuesSchema,
         stages: FunnelStagesSchema,
       }),
       series: z.array(CatalogueSnapshotRowSchema),

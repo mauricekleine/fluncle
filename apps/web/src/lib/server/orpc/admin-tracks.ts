@@ -52,6 +52,7 @@ import {
   ENRICHMENT_STATUS_FILTERS,
   decodeTrackCursor,
   getMixableOrder,
+  getObservationProvenance,
   getSimilarFindings,
   getTrackContextNote,
   listTracks,
@@ -562,7 +563,19 @@ export function adminTracksHandlers(os: Implementer) {
       // mechanical scan (defence in depth) and hard-fails on any violation.
       const script = gateObservationScript(body.script);
       const durationTargetSec = resolveDurationTargetSec(body.durationTargetSec);
-      const promptVersion = typeof body.promptVersion === "number" ? body.promptVersion : null;
+      let promptVersion = typeof body.promptVersion === "number" ? body.promptVersion : null;
+
+      // A force re-render of the UNCHANGED script (a voice/delivery re-tune) is not a
+      // re-author: the stored prompt-version provenance describes who wrote the SCRIPT,
+      // so it survives the render. Only an explicit --prompt-version, or a genuinely new
+      // script, moves it — and an honest pre-registry null stays null.
+      if (force && typeof body.promptVersion !== "number") {
+        const stored = await getObservationProvenance(track.trackId);
+
+        if (stored.script !== null && stored.script === script) {
+          promptVersion = stored.promptVersion;
+        }
+      }
 
       // THE ECHO GATE — the anti-sameness rail, run BEFORE the paid Cartesia render so a
       // bounced draft costs nothing. Score the script against the finding's sonic

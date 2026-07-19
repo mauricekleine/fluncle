@@ -238,16 +238,6 @@ function liftedPhrase(a: string, b: string, minPhraseWords: number): string {
   return carriesContent ? best.join(" ") : "";
 }
 
-/**
- * The longest run of consecutive words two strings share (with a content word), or "".
- * Exported so the SPOKEN observation echo gate (observation.ts) measures a lift over exactly
- * the same word stream and the same run-finder the written-note gate does — one definition of
- * "a lifted phrase" across both written families.
- */
-export function longestSharedPhrase(a: string, b: string, minPhraseWords: number): string {
-  return liftedPhrase(a, b, minPhraseWords);
-}
-
 // ── The GENERIC echo scorer — one definition of "does this text echo its neighbourhood" ──
 //
 // The notes were the first family to get an echo gate; the spoken observations are the

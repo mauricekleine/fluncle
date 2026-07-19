@@ -27,6 +27,12 @@ const listFreshTracks = vi.hoisted(() =>
 const getArtistNeighbours = vi.hoisted(() =>
   vi.fn<() => Promise<Array<{ imageUrl?: string; name: string; slug: string }>>>(),
 );
+// The PR-5 catalogue browse reads. `getAlbumBySlug`/`listCatalogueTracksByAlbum` back
+// list_album_catalogue; the two grouped reads back list_artist/label_catalogue.
+const getAlbumBySlug = vi.hoisted(() => vi.fn<(slug: string) => Promise<unknown>>());
+const listCatalogueTracksByAlbum = vi.hoisted(() => vi.fn<() => Promise<unknown>>());
+const listArtistCatalogue = vi.hoisted(() => vi.fn<() => Promise<unknown>>());
+const listLabelCatalogue = vi.hoisted(() => vi.fn<() => Promise<unknown>>());
 
 // A faithful stand-in for the real deterministic slug helpers (the DB-touching modules stay
 // mocked). "Netsky" → "netsky", "Hospital Records" → "hospital-records" — enough to prove the
@@ -62,8 +68,18 @@ vi.mock("./tracks", () => ({
   getMixableTracks,
   getRandomTrack: vi.fn(),
   getTracksByLogIds,
+  listCatalogueTracksByAlbum,
   listTracks: vi.fn(),
   toPublicTrackListItem: (item: unknown) => item,
+}));
+vi.mock("./albums", () => ({
+  albumSlug: (name: string) => toSlug(name) || undefined,
+  getAlbumBySlug,
+}));
+vi.mock("./catalogue-groups", () => ({
+  CATALOGUE_SORT_DEFAULT: "name",
+  listArtistCatalogue,
+  listLabelCatalogue,
 }));
 
 import {
@@ -116,6 +132,28 @@ beforeEach(() => {
   // get_similar_artists defaults to "no neighbours yet"; its suite overrides with real neighbours.
   getArtistNeighbours.mockReset();
   getArtistNeighbours.mockResolvedValue([]);
+  // The catalogue browse reads default to "no such record" so an unrelated test never trips them;
+  // the browse suite overrides them with the rows it needs.
+  getAlbumBySlug.mockReset();
+  getAlbumBySlug.mockResolvedValue(undefined);
+  listCatalogueTracksByAlbum.mockReset();
+  listCatalogueTracksByAlbum.mockResolvedValue({ total: 0, tracks: [] });
+  listArtistCatalogue.mockReset();
+  listArtistCatalogue.mockResolvedValue({
+    groups: [],
+    page: 1,
+    pageCount: 1,
+    totalGroups: 0,
+    totalTracks: 0,
+  });
+  listLabelCatalogue.mockReset();
+  listLabelCatalogue.mockResolvedValue({
+    groups: [],
+    page: 1,
+    pageCount: 1,
+    totalGroups: 0,
+    totalTracks: 0,
+  });
 });
 
 afterEach(() => {
@@ -187,7 +225,10 @@ describe("buildChatTools — the MCP hands", () => {
       "get_similar_artists",
       "get_status",
       "get_track",
+      "list_album_catalogue",
+      "list_artist_catalogue",
       "list_fresh",
+      "list_label_catalogue",
       "list_tracks",
       "search_archive",
       "submit_track",
@@ -454,6 +495,53 @@ describe("buildChatTools — the MCP hands", () => {
     expect(lookedUp).not.toContain("999.9.9Z");
   });
 
+  it("view=albums surfaces the records as unlit catalogue rows — reused shape, no coordinate", async () => {
+    listFreshTracks.mockResolvedValue({
+      albums: [
+        {
+          artists: ["Break", "Kyo"],
+          name: "Simpler Times",
+          releaseDate: "2026-07-18",
+          slug: "simpler-times",
+        },
+      ],
+      tracks: [
+        {
+          artists: ["Nu:Tone"],
+          certified: true,
+          coverImageUrl: "https://cover.example/bp.jpg",
+          logId: "004.7.2I",
+          releaseDate: "2026-07-15",
+          title: "Better Places",
+        },
+      ],
+      windowDays: 30,
+    });
+
+    const tools = buildChatTools();
+    const execute = tools.list_fresh?.execute;
+    if (typeof execute !== "function") {
+      throw new Error("list_fresh executor missing");
+    }
+
+    const result = (await execute({ view: "albums" }, {} as never)) as {
+      catalogue?: Record<string, unknown>[];
+      findings?: unknown[];
+    };
+
+    // The records ride the UNLIT bucket — a record has no coordinate, so it is register-equal to a
+    // catalogue track (reused shape, no new card). The track stream is dropped for this view.
+    expect(result.findings).toBeUndefined();
+    expect(result.catalogue).toHaveLength(1);
+    const row = result.catalogue?.[0] ?? {};
+    expect(row.title).toBe("Simpler Times");
+    expect(row.artists).toEqual(["Break", "Kyo"]);
+    // A record carries no Spotify link and never a lit field.
+    for (const lit of ["coordinate", "logId", "spotifyUrl", "note", "bpm", "key"]) {
+      expect(row, `record row must not carry ${lit}`).not.toHaveProperty(lit);
+    }
+  });
+
   it("exposes the two WRITE verbs on chat, each with an input schema + executor", () => {
     // PR-2 puts submit_track + subscribe_newsletter on ChatDnB (gated-session-safe), so Fluncle
     // can take a submission / newsletter signup mid-conversation.
@@ -518,6 +606,161 @@ describe("get_similar_artists — the artist-discovery read", () => {
 
     expect(result.ok).toBe(true);
     expect(result.similar).toEqual([]);
+  });
+});
+
+describe("the catalogue browse tools — name → the unlit catalogue bucket (PR-5)", () => {
+  function browseExecutor(
+    name: "list_album_catalogue" | "list_artist_catalogue" | "list_label_catalogue",
+  ) {
+    const execute = buildChatTools()[name]?.execute;
+
+    if (typeof execute !== "function") {
+      throw new Error(`${name} executor missing`);
+    }
+
+    return execute;
+  }
+
+  it("list_album_catalogue resolves a NAME and returns a catalogue-only two-bucket", async () => {
+    getAlbumBySlug.mockResolvedValue({ id: "alb-1", name: "Colours", slug: "colours" });
+    listCatalogueTracksByAlbum.mockResolvedValue({
+      total: 2,
+      tracks: [
+        {
+          artists: ["Netsky"],
+          spotifyUrl: "https://open.spotify.com/track/a",
+          title: "Iron Heart",
+          trackId: "a",
+        },
+        { artists: ["Netsky"], title: "Come Alive", trackId: "b" },
+      ],
+    });
+
+    const result = (await browseExecutor("list_album_catalogue")(
+      { name: "Colours" },
+      {} as never,
+    )) as {
+      catalogue: Array<Record<string, unknown>>;
+      findings: unknown[];
+      ok: boolean;
+    };
+
+    // name → albumSlug → getAlbumBySlug(slug), then the anti-join read.
+    expect(getAlbumBySlug).toHaveBeenCalledWith("colours");
+    expect(listCatalogueTracksByAlbum).toHaveBeenCalledWith("alb-1");
+    // Catalogue-only by construction: findings is always empty; the rows carry the record as context
+    // and NOTHING lit (no coordinate/note/cover/bpm/key).
+    expect(result).toMatchObject({ ok: true });
+    expect(result.findings).toEqual([]);
+    expect(result.catalogue).toHaveLength(2);
+    expect(result.catalogue[0]).toMatchObject({
+      artists: ["Netsky"],
+      release: "Colours",
+      spotifyUrl: "https://open.spotify.com/track/a",
+      title: "Iron Heart",
+    });
+    for (const row of result.catalogue) {
+      for (const lit of ["coordinate", "note", "bpm", "key", "albumImageUrl", "hasPreview"]) {
+        expect(row[lit], `catalogue row leaks ${lit}`).toBeUndefined();
+      }
+    }
+  });
+
+  it("list_artist_catalogue flattens the grouped page into catalogue rows", async () => {
+    getArtistBySlug.mockResolvedValue({ id: "art-9", name: "Netsky", slug: "netsky" });
+    listArtistCatalogue.mockResolvedValue({
+      groups: [
+        {
+          name: "Colours",
+          releaseDate: "2012-06-04",
+          slug: "colours",
+          tracks: [{ artists: ["Netsky"], title: "Iron Heart", trackId: "a" }],
+        },
+      ],
+      page: 1,
+      pageCount: 1,
+      totalGroups: 1,
+      totalTracks: 1,
+    });
+
+    const result = (await browseExecutor("list_artist_catalogue")(
+      { name: "Netsky" },
+      {} as never,
+    )) as {
+      catalogue: Array<Record<string, unknown>>;
+      findings: unknown[];
+    };
+
+    expect(getArtistBySlug).toHaveBeenCalledWith("netsky");
+    expect(listArtistCatalogue).toHaveBeenCalledWith("art-9", "name", 1);
+    expect(result.findings).toEqual([]);
+    expect(result.catalogue).toEqual([
+      { artists: ["Netsky"], release: "Colours", title: "Iron Heart" },
+    ]);
+  });
+
+  it("list_label_catalogue flattens the artist→record grouping and carries the label as context", async () => {
+    getLabelBySlug.mockResolvedValue({
+      id: "lbl-9",
+      name: "Hospital Records",
+      slug: "hospital-records",
+    });
+    listLabelCatalogue.mockResolvedValue({
+      groups: [
+        {
+          name: "Netsky",
+          recordCount: 1,
+          records: [
+            {
+              name: "Colours",
+              releaseDate: undefined,
+              slug: "colours",
+              tracks: [{ artists: ["Netsky"], title: "Iron Heart", trackId: "a" }],
+            },
+          ],
+          slug: "netsky",
+          truncated: false,
+        },
+      ],
+      page: 1,
+      pageCount: 1,
+      totalGroups: 1,
+      totalTracks: 1,
+    });
+
+    const result = (await browseExecutor("list_label_catalogue")(
+      { name: "Hospital Records" },
+      {} as never,
+    )) as {
+      catalogue: Array<Record<string, unknown>>;
+    };
+
+    expect(getLabelBySlug).toHaveBeenCalledWith("hospital-records");
+    expect(listLabelCatalogue).toHaveBeenCalledWith("lbl-9", "name", 1);
+    expect(result.catalogue).toEqual([
+      { artists: ["Netsky"], label: "Hospital Records", release: "Colours", title: "Iron Heart" },
+    ]);
+  });
+
+  it("an unresolved name is the honest empty catalogue bucket, never an error", async () => {
+    getAlbumBySlug.mockResolvedValue(undefined);
+    getArtistBySlug.mockResolvedValue(undefined);
+    getLabelBySlug.mockResolvedValue(undefined);
+
+    for (const name of [
+      "list_album_catalogue",
+      "list_artist_catalogue",
+      "list_label_catalogue",
+    ] as const) {
+      const result = await browseExecutor(name)({ name: "Nothing Of His" }, {} as never);
+
+      expect(result, name).toEqual({ catalogue: [], findings: [], ok: true });
+    }
+    // Not one of the reads was reached — an unresolved name never touches the anti-join.
+    expect(listCatalogueTracksByAlbum).not.toHaveBeenCalled();
+    expect(listArtistCatalogue).not.toHaveBeenCalled();
+    expect(listLabelCatalogue).not.toHaveBeenCalled();
   });
 });
 

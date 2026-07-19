@@ -10,9 +10,10 @@ The voice is swappable: it's the `CARTESIA_VOICE_ID` Worker var in `apps/web/wra
 
 ## Voice settings
 
-Cartesia has no stability/style/similarity sliders — the read is the clone plus one knob:
+Cartesia has no stability/style/similarity sliders — the read is the clone plus the `generation_config` delivery steer:
 
-- **`speed: 0.78`** — `DEFAULT_CARTESIA_SPEED` in `observation.ts`, dialed by ear. Cartesia's speed knob is gentle and non-linear (it barely shifts the pace), so 0.78 is about as measured as it goes without dropping toward its 0.6 floor. Don't fight it for a much slower read — it won't go there.
+- **`speed: 0.85`** — `DEFAULT_CARTESIA_SPEED` in `observation.ts`. Dialed by ear in the 2026-07-18 bake-off (a listener had flagged the 0.78 reads as flat); Cartesia's speed knob is gentle and non-linear, so this is a lift in presence more than pace. Don't fight it for a much slower read — it won't go there.
+- **`emotion: "excited"`** — `DEFAULT_CARTESIA_EMOTION`, same bake-off. This steers the DELIVERY awake, not the persona: the words stay dry and deadpan-calm (the register rules below are unchanged), and the model reads the emotion against the transcript's own subtext — a no-rush roller stays a no-rush roller, just present instead of flat. The uncle leaning in over the tune, still never a DJ working a crowd.
 
 ## Pacing — no `<break>` tags
 

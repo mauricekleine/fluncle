@@ -133,6 +133,12 @@ export const listFreshSpec = defineSpec({
       .max(FRESH_LIMIT_MAX)
       .optional()
       .describe(`How many releases to return (1 to ${FRESH_LIMIT_MAX}).`),
+    view: z
+      .enum(["albums", "all", "tracks"])
+      .optional()
+      .describe(
+        "Which cut to return: 'tracks' for the individual releases, 'albums' for the records those releases sit on, or 'all' for both (the default).",
+      ),
   }),
   name: "list_fresh",
   // Chat splits the fresh list into two registers (PR-4): certified findings + the unlit catalogue
@@ -303,6 +309,73 @@ export const getSimilarArtistsSpec = defineSpec({
   transports: ["mcp", "chat"],
 });
 
+// ── The catalogue browse tools (PR-5) ────────────────────────────────────────────────
+//
+// Three name→slug→id reads over the existing anti-join catalogue reads. Each returns an album's /
+// artist's / label's records that Fluncle knows are out there but has never certified — a
+// catalogue-only result BY CONSTRUCTION (the reads anti-join findings). Chat gets the catalogue-only
+// two-bucket ({ findings: [], catalogue }), which renders bare/unheaded (the Unlit Rule); the MCP
+// world-serves the flat catalogue list, each row certified-tagged (like list_fresh). MCP + chat
+// only, like get_artist/get_label/build_set — there is no name-keyed public HTTP endpoint for these
+// (the web reads take a pre-computed slug), and this PR adds none. A codified WebMCP asymmetry.
+//
+// `tier: "catalogue"` — unlike search_archive/list_fresh (both registers ⇒ lore-canon), a browse
+// returns ONLY the catalogue register. The descriptions signal that register ("named and listed,
+// never spoken as found") without naming a leakable tier-noun or any mechanism (the Flat Copy Test).
+//
+// NOTE on the `title`s: they name the internal tier word ("catalogue"). That is a TOOLING-REGISTER
+// surface only (a human label for the tool in an MCP client / the workbench) — it must NEVER be
+// rendered as crew-facing card chrome. The chat card stays bare/unheaded (DESIGN.md §157, the Unlit
+// Rule); the tier is never a noun the crew reads.
+
+export const listAlbumCatalogueSpec = defineSpec({
+  access: "public",
+  description:
+    "List the tracks on one album Fluncle knows, BY NAME (e.g. Colours). These are records he knows are out there but has never certified as a finding: named and listed only, never spoken as found. Each row carries its artists, its title, and a Spotify link when there's one, nothing more. Returns nothing when the name matches no album he knows.",
+  effect: "read",
+  input: z.object({
+    name: z.string().min(1).describe("The album's title, as it reads on a record (e.g. Colours)."),
+  }),
+  name: "list_album_catalogue",
+  project: { chat: "twoBucket", mcp: "publicRecord" },
+  tier: "catalogue",
+  title: "List an album's catalogue",
+  transports: ["mcp", "chat"],
+});
+
+export const listArtistCatalogueSpec = defineSpec({
+  access: "public",
+  description:
+    "List one artist's tracks Fluncle knows, BY NAME (e.g. Netsky). These are records of theirs he knows are out there but has never certified as a finding: named and listed only, never spoken as found. Each row carries the artists, the title, and a Spotify link when there's one, nothing more. Returns nothing when the name matches no artist he knows.",
+  effect: "read",
+  input: z.object({
+    name: z.string().min(1).describe("The artist's name, as it reads on a finding (e.g. Netsky)."),
+  }),
+  name: "list_artist_catalogue",
+  project: { chat: "twoBucket", mcp: "publicRecord" },
+  tier: "catalogue",
+  title: "List an artist's catalogue",
+  transports: ["mcp", "chat"],
+});
+
+export const listLabelCatalogueSpec = defineSpec({
+  access: "public",
+  description:
+    "List the tracks on one label Fluncle knows, BY NAME (e.g. Hospital Records). These are records on it he knows are out there but has never certified as a finding: named and listed only, never spoken as found. Each row carries the artists, the title, and a Spotify link when there's one, nothing more. Returns nothing when the name matches no label he knows.",
+  effect: "read",
+  input: z.object({
+    name: z
+      .string()
+      .min(1)
+      .describe("The label's name, as it reads on a finding (e.g. Hospital Records)."),
+  }),
+  name: "list_label_catalogue",
+  project: { chat: "twoBucket", mcp: "publicRecord" },
+  tier: "catalogue",
+  title: "List a label's catalogue",
+  transports: ["mcp", "chat"],
+});
+
 // ── The write tools (public writes, gated per surface) ───────────────────────────────
 //
 // Anonymous on the MCP exactly as they were before this PR (the /mcp endpoint has no session);
@@ -353,7 +426,8 @@ export const subscribeNewsletterSpec = defineSpec({
 
 /**
  * Every shared tool spec, single-sourced. Order: `list_tracks` first (the MCP/WebMCP alias clones
- * it). The five overlapping read tools, then the reads PR-2 lifted out of ChatDnB, then the writes.
+ * it). The five overlapping read tools, then the reads PR-2 lifted out of ChatDnB, then the PR-5
+ * catalogue browse reads, then the writes.
  */
 export const SHARED_TOOL_SPECS: ToolSpec[] = [
   listTracksSpec,
@@ -366,6 +440,9 @@ export const SHARED_TOOL_SPECS: ToolSpec[] = [
   getLabelSpec,
   buildSetSpec,
   getSimilarArtistsSpec,
+  listAlbumCatalogueSpec,
+  listArtistCatalogueSpec,
+  listLabelCatalogueSpec,
   submitTrackSpec,
   subscribeNewsletterSpec,
 ];

@@ -312,7 +312,7 @@ function AdminCataloguePage() {
         </div>
       }
       subtitle={summaryLine(summary)}
-      title="Catalogue"
+      title="The Ear"
     >
       <div className="space-y-4 p-4 sm:p-5">
         {/* THE SPEND, on the capture lens. It lives here and not on a settings page because

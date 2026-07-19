@@ -106,6 +106,7 @@ export type ObservationArtifact = ObservationScript & {
   audioUrl: string; // found.fluncle.com/<log-id>/observation.mp3
   contextNote?: string; // the firecrawl facts used as fuel (also stored on the row)
   durationMs: number;
+  emotion?: string; // the delivery steer (absent on renders before 2026-07-18)
   generatedAt: string;
   provider: "cartesia";
   speed: number; // the render speed
@@ -918,8 +919,14 @@ const CARTESIA_MODEL = "sonic-3";
 const CARTESIA_SAMPLE_RATE = 44100;
 const CARTESIA_MP3_KBPS = 96;
 
-/** The render speed, dialed by ear (a hair above the spike's 0.76). */
-export const DEFAULT_CARTESIA_SPEED = 0.78;
+/**
+ * The delivery, picked by ear in the 2026-07-18 bake-off (two scripts × six configs;
+ * a listener had flagged the reads as flat). `excited` at 0.85 keeps the uncle-over-
+ * the-tune register — awake and present, not a DJ working a crowd — and won clearly
+ * on both a climber and a deep no-rush roller. Speed was 0.78 pre-facelift.
+ */
+export const DEFAULT_CARTESIA_SPEED = 0.85;
+export const DEFAULT_CARTESIA_EMOTION = "excited";
 
 /**
  * Strip any legacy `<break/>` SSML (Cartesia doesn't parse it, and the catalog-free
@@ -1104,7 +1111,7 @@ export async function renderObservationCartesia(
   const response = await fetch(`${CARTESIA_API}/tts/sse`, {
     body: JSON.stringify({
       add_timestamps: true,
-      generation_config: { speed },
+      generation_config: { emotion: DEFAULT_CARTESIA_EMOTION, speed },
       language: "en",
       model_id: CARTESIA_MODEL,
       output_format: { container: "raw", encoding: "pcm_s16le", sample_rate: CARTESIA_SAMPLE_RATE },

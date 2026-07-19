@@ -10,6 +10,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   bpmIsMissing,
+  captureSessionSeed,
   filterRejectedCandidates,
   buildSearchQuery,
   buildSourceAudioKey,
@@ -660,5 +661,38 @@ describe("rerollSessionId — one fresh sticky exit per run", () => {
     const strip = (value: string) => value.replace(/[^0-9A-Za-z.]/g, "");
 
     expect(strip(rerollSessionId(base))).not.toBe(strip(base));
+  });
+});
+
+describe("captureSessionSeed — retry runs rotate off the flagged exit", () => {
+  test("a clean first run keeps the historic bare-id seed (byte-identical happy path)", () => {
+    expect(captureSessionSeed("047.0.8M", 0)).toBe("047.0.8M");
+  });
+
+  test("each retry run seeds a distinct .a<failures> session", () => {
+    expect(captureSessionSeed("047.0.8M", 1)).toBe("047.0.8M.a1");
+    expect(captureSessionSeed("047.0.8M", 2)).toBe("047.0.8M.a2");
+    expect(captureSessionSeed("047.0.8M", 1)).not.toBe(captureSessionSeed("047.0.8M", 2));
+  });
+
+  test("the .a namespace never collides with the in-run .r1 re-roll sessions", () => {
+    // Run 0 burns <id> and (re-rolled) <id>.r1; run 1 must start on neither.
+    const run0 = ["047.0.8M", rerollSessionId("047.0.8M")];
+    const run1Base = captureSessionSeed("047.0.8M", 1);
+
+    expect(run0).not.toContain(run1Base);
+    expect(run0).not.toContain(rerollSessionId(run1Base));
+  });
+
+  test("the .a marker SURVIVES the session sanitizer through the real URL builder", () => {
+    const url = buildStickyProxyUrl({
+      host: "proxy.example",
+      password: "pw",
+      port: "823",
+      sessionId: captureSessionSeed("mb_206b56cc-02eb-403f-9a6c-78c915247e2a", 3),
+      username: "user",
+    });
+
+    expect(url).toContain(".a3");
   });
 });

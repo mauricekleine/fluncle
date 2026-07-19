@@ -18,10 +18,13 @@ import {
   confirmLabelAlias,
   fillEmptyLabelBio,
   getLabelBySlug,
+  LabelMergeConflictError,
+  LabelMergeSameRowError,
   LabelNotFoundError,
   listLabelAliasCandidates,
   listLabels,
   listLabelsMissingBio,
+  mergeLabel,
   rejectLabelAlias,
   updateLabelSeedState,
 } from "../labels";
@@ -55,6 +58,47 @@ export function adminLabelsHandlers(os: Implementer) {
       } catch (error) {
         if (error instanceof LabelNotFoundError) {
           throw new ORPCError("NOT_FOUND", { message: error.message });
+        }
+
+        throw apiFault(error);
+      }
+    });
+
+  // POST /admin/labels/{slug}/merge — OPERATOR tier: fold a slug-split label into its canonical
+  // row. Re-points every FK, reconciles canonical-wins, writes the losing name as a confirmed
+  // alias, deletes the loser. Purges BOTH slugs' edge-cached pages so the merge (and the new 301
+  // on the losing slug) surfaces. A ruled-vs-ruled seed disagreement 409s (stop-and-ask).
+  const mergeLabelHandler = os.merge_label
+    .use(adminAuth)
+    .use(operatorGuard)
+    .handler(async ({ input }) => {
+      try {
+        const result = await mergeLabel(input.slug, input.canonicalSlug);
+
+        // Drop both cached pages: the canonical (its content changed) and the loser (now a 301).
+        purgeEntityCache("label", result.losingSlug);
+        purgeEntityCache("label", result.canonicalSlug);
+
+        return { ok: true as const, result };
+      } catch (error) {
+        if (error instanceof LabelNotFoundError) {
+          throw new ORPCError("NOT_FOUND", { message: error.message });
+        }
+
+        if (error instanceof LabelMergeSameRowError) {
+          throw new ORPCError("BAD_REQUEST", {
+            data: { apiCode: "merge_same_row", apiMessage: error.message },
+            message: error.message,
+            status: 400,
+          });
+        }
+
+        if (error instanceof LabelMergeConflictError) {
+          throw new ORPCError("CONFLICT", {
+            data: { apiCode: "merge_seed_conflict", apiMessage: error.message },
+            message: error.message,
+            status: 409,
+          });
         }
 
         throw apiFault(error);
@@ -222,6 +266,7 @@ export function adminLabelsHandlers(os: Implementer) {
     list_label_aliases: listLabelAliasesHandler,
     list_labels_admin: listLabelsAdminHandler,
     list_labels_missing_bio: listLabelsMissingBioHandler,
+    merge_label: mergeLabelHandler,
     reject_label_alias: rejectLabelAliasHandler,
     update_label: updateLabelHandler,
   };
