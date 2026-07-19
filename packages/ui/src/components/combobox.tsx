@@ -14,6 +14,12 @@ import { InputGroup, InputGroupAddon } from "#components/input-group";
 
 const Combobox = ComboboxPrimitive.Root;
 
+// The trigger's base chrome, exported so a sibling control with no baked Shadcn chrome of its own
+// (e.g. a PopoverTrigger dressed as the same pill) can wear the identical string and stay in
+// lockstep with this trigger and the Select's — one definition, no drift.
+const comboboxTriggerClass =
+  "flex w-fit items-center justify-between gap-1.5 rounded-md border border-input bg-transparent py-2 pr-2 pl-2.5 text-sm whitespace-nowrap shadow-xs transition-[color,box-shadow] outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-input/30 dark:hover:bg-input/50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4";
+
 function ComboboxValue({ ...props }: ComboboxPrimitive.Value.Props) {
   return <ComboboxPrimitive.Value data-slot="combobox-value" {...props} />;
 }
@@ -22,10 +28,7 @@ function ComboboxTrigger({ className, children, ...props }: ComboboxPrimitive.Tr
   return (
     <ComboboxPrimitive.Trigger
       data-slot="combobox-trigger"
-      className={cn(
-        "flex w-fit items-center justify-between gap-1.5 rounded-md border border-input bg-transparent py-2 pr-2 pl-2.5 text-sm whitespace-nowrap shadow-xs transition-[color,box-shadow] outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-input/30 dark:hover:bg-input/50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
-        className,
-      )}
+      className={cn(comboboxTriggerClass, className)}
       {...props}
     >
       {children}
@@ -139,4 +142,5 @@ export {
   ComboboxList,
   ComboboxTrigger,
   ComboboxValue,
+  comboboxTriggerClass,
 };

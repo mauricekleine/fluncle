@@ -17,6 +17,7 @@ import {
   ComboboxItem,
   ComboboxList,
   ComboboxTrigger,
+  comboboxTriggerClass,
 } from "@fluncle/ui/components/combobox";
 import { Input } from "@fluncle/ui/components/input";
 import { Label } from "@fluncle/ui/components/label";
@@ -214,12 +215,6 @@ export const Route = createFileRoute("/tracks")({
 // retired). The pills are chrome on a catalogue page: quiet, dark, bordered, no gold but the focus
 // ring (DESIGN.md's Unlit register + One Sun Rule), Phosphor icons only (Iconography).
 
-// The Popover trigger carries no Shadcn base chrome of its own (unlike the Select / Combobox
-// triggers, which bake theirs), so the year pill wears this shared string to match them exactly:
-// the same bordered, quiet, dark pill with the same Eclipse-Gold focus ring convention.
-const PILL_TRIGGER_CLASS =
-  "flex w-fit items-center justify-between gap-1.5 rounded-md border border-input bg-transparent py-2 pr-2 pl-2.5 text-sm whitespace-nowrap shadow-xs transition-[color,box-shadow] outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 dark:bg-input/30 dark:hover:bg-input/50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4";
-
 /** A year the popover typed: junk / non-positive / out of a sane range folds to undefined. */
 function yearParam(value: string): number | undefined {
   const n = Number(value.trim());
@@ -236,7 +231,7 @@ function yearRangeLabel(from: number | undefined, to: number | undefined): strin
     return `From ${from}`;
   }
   if (to !== undefined) {
-    return `Until ${to}`;
+    return `To ${to}`;
   }
 
   return "Any year";
@@ -287,10 +282,18 @@ function YearRangePill({
     >
       <PopoverTrigger
         aria-label={`Release year: ${yearRangeLabel(from, to)}`}
-        className={`${PILL_TRIGGER_CLASS} tracks-filter-pill`}
+        className={`${comboboxTriggerClass} tracks-filter-pill`}
       >
         <CalendarBlankIcon className="size-4 shrink-0 text-muted-foreground" />
-        <span className="tracks-filter-pill-value">{yearRangeLabel(from, to)}</span>
+        <span
+          className={
+            from === undefined && to === undefined
+              ? "tracks-filter-pill-value text-muted-foreground"
+              : "tracks-filter-pill-value"
+          }
+        >
+          {yearRangeLabel(from, to)}
+        </span>
         <CaretPill />
       </PopoverTrigger>
       <PopoverContent align="start" className="w-64 gap-3">
@@ -442,7 +445,15 @@ function LabelComboboxPill({
     >
       <ComboboxTrigger aria-label={`Label: ${value ?? "Any label"}`} className="tracks-filter-pill">
         <TagIcon className="size-4 shrink-0 text-muted-foreground" />
-        <span className="tracks-filter-pill-value">{value ?? "Any label"}</span>
+        <span
+          className={
+            value === undefined
+              ? "tracks-filter-pill-value text-muted-foreground"
+              : "tracks-filter-pill-value"
+          }
+        >
+          {value ?? "Any label"}
+        </span>
       </ComboboxTrigger>
       <ComboboxContent align="start">
         <ComboboxInput placeholder="Search labels" />
@@ -513,7 +524,10 @@ function TracksFilters({
           the control off the page entirely (the /galaxies-dark precedent), never a dead pill. */}
       {galaxyOptions.length > 0 ? (
         <SelectPill
-          ariaLabel={`Galaxy: ${search.galaxy ?? "any"}`}
+          // The aria-label speaks the galaxy's NAME (what the pill shows), never the slug the URL carries.
+          ariaLabel={`Galaxy: ${
+            galaxyOptions.find((galaxy) => galaxy.slug === search.galaxy)?.name ?? "any"
+          }`}
           emptyLabel="Any galaxy"
           icon={<PlanetIcon className="size-4 shrink-0 text-muted-foreground" />}
           onCommit={(galaxy) => commit({ galaxy })}
