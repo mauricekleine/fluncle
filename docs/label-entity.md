@@ -154,6 +154,18 @@ A label logo is a **trademark shown to identify the label** — nominative use, 
 
 The album entity inherits the same class of collision (two records that share a name fold into one page); its disambiguation is the same map, run the other way. See [docs/album-entity.md](./album-entity.md#the-known-limit-two-records-one-name).
 
+## Merging a slug-split label (the operator cleanup)
+
+Aliases stop a split going FORWARD; `merge_label` cleans up the PRE-EXISTING ones — two `labels` rows that already mean one label because their spellings slugged apart before an alias caught them (the Med School / Medschool class). The operator runs `fluncle admin labels merge <losingSlug> <canonicalSlug>` (operator tier, `POST /api/admin/labels/{slug}/merge`), folding the LOSING row into the CANONICAL one in a single transaction. `mergeLabel` in `apps/web/src/lib/server/labels.ts` does the work; a merge is proven by the harness in `labels.test.ts`.
+
+**It re-points every FK, misses none.** The loser's referencing rows all move onto the canonical: `tracks.label_id` (every finding and catalogue track), `labels.parent_label_id` (the loser's sublabels adopt the canonical as their parent, #704's lineage edge), and `label_aliases.label_id` (the loser's own aliases). `albums` carries no label FK — its label edge is derived at read time from the raw string, so there is nothing to re-point there. The `crawl_frontier` queue keys by label SLUG, not by id, and is transient resumable state, so it is deliberately outside this id-FK re-point.
+
+**Identity + facts reconcile CANONICAL-WINS.** For `mb_label_id`, `discogs_label_id`, the logo (`image_key`), `founding_date`, `founded_location`, `parent_label_id`, and `lineage_state`, the canonical's existing value always stands and the loser's fills only an EMPTY canonical slot (coalesce). This is load-bearing: the 2026-07-18 audit found a loser row whose MBID had mis-resolved to a J-Pop division of Universal Japan with bogus founding facts — the merge lets the canonical's correct identity stand and DISCARDS the loser's wrong one, never overwriting.
+
+**`seed_state` resolves by `ruled_at` precedence, and stops and asks on a real conflict.** The more recent operator ruling wins. But when BOTH rows carry a non-null `ruled_at` AND their seed states disagree, the op REFUSES with a 409 (`merge_seed_conflict`) telling the operator to re-rule one to match first — it never silently picks a side.
+
+**The losing name becomes a confirmed alias, and the losing slug 301s.** The loser's display name lands in `label_aliases` as `confirmed` (source `operator`) before the loser row is deleted, so the immutable `tracks.label` free-text can never re-mint the merged-away slug on a later deploy backfill (the same re-mint guard U2a closed, `ensureLabel`/`reconcileLabels` consult confirmed aliases). The `/label/<slug>` loader then reads that confirmed alias (`resolveLabelAliasRedirect`) and 301s the merged-away slug to the canonical page — no new table, and the sitemap already carries only rows in `labels`, so deleting the loser drops it from the sitemap too. Both slugs' edge-cached pages are purged on the merge.
+
 ## Label lineage: founding facts + the imprint hierarchy
 
 A label carries three more facts once the lineage sweep walks it: **`founding_date`** (MusicBrainz's `life-span.begin`, stored verbatim — a bare year "1996" or a full date "1996-04-29", never re-formatted), **`founded_location`** (its `area.name` — "London", "United Kingdom"), and **`parent_label_id`** (the imprint it is a sublabel of). The first two are plain columns; the third is the interesting one.

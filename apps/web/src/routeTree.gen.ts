@@ -76,6 +76,7 @@ import { Route as AdminMixableOrderRouteImport } from './routes/admin/mixable-or
 import { Route as AdminLoginRouteImport } from './routes/admin/login'
 import { Route as AdminLabelsRouteImport } from './routes/admin/labels'
 import { Route as AdminGalaxiesRouteImport } from './routes/admin/galaxies'
+import { Route as AdminFunnelRouteImport } from './routes/admin/funnel'
 import { Route as AdminFindingsRouteImport } from './routes/admin/findings'
 import { Route as AdminCostsRouteImport } from './routes/admin/costs'
 import { Route as AdminClipsRouteImport } from './routes/admin/clips'
@@ -465,6 +466,11 @@ const AdminGalaxiesRoute = AdminGalaxiesRouteImport.update({
   path: '/galaxies',
   getParentRoute: () => AdminRouteRoute,
 } as any)
+const AdminFunnelRoute = AdminFunnelRouteImport.update({
+  id: '/funnel',
+  path: '/funnel',
+  getParentRoute: () => AdminRouteRoute,
+} as any)
 const AdminFindingsRoute = AdminFindingsRouteImport.update({
   id: '/findings',
   path: '/findings',
@@ -786,6 +792,7 @@ export interface FileRoutesByFullPath {
   '/admin/clips': typeof AdminClipsRoute
   '/admin/costs': typeof AdminCostsRoute
   '/admin/findings': typeof AdminFindingsRoute
+  '/admin/funnel': typeof AdminFunnelRoute
   '/admin/galaxies': typeof AdminGalaxiesRoute
   '/admin/labels': typeof AdminLabelsRoute
   '/admin/login': typeof AdminLoginRoute
@@ -905,6 +912,7 @@ export interface FileRoutesByTo {
   '/admin/clips': typeof AdminClipsRoute
   '/admin/costs': typeof AdminCostsRoute
   '/admin/findings': typeof AdminFindingsRoute
+  '/admin/funnel': typeof AdminFunnelRoute
   '/admin/galaxies': typeof AdminGalaxiesRoute
   '/admin/labels': typeof AdminLabelsRoute
   '/admin/login': typeof AdminLoginRoute
@@ -1027,6 +1035,7 @@ export interface FileRoutesById {
   '/admin/clips': typeof AdminClipsRoute
   '/admin/costs': typeof AdminCostsRoute
   '/admin/findings': typeof AdminFindingsRoute
+  '/admin/funnel': typeof AdminFunnelRoute
   '/admin/galaxies': typeof AdminGalaxiesRoute
   '/admin/labels': typeof AdminLabelsRoute
   '/admin/login': typeof AdminLoginRoute
@@ -1150,6 +1159,7 @@ export interface FileRouteTypes {
     | '/admin/clips'
     | '/admin/costs'
     | '/admin/findings'
+    | '/admin/funnel'
     | '/admin/galaxies'
     | '/admin/labels'
     | '/admin/login'
@@ -1269,6 +1279,7 @@ export interface FileRouteTypes {
     | '/admin/clips'
     | '/admin/costs'
     | '/admin/findings'
+    | '/admin/funnel'
     | '/admin/galaxies'
     | '/admin/labels'
     | '/admin/login'
@@ -1390,6 +1401,7 @@ export interface FileRouteTypes {
     | '/admin/clips'
     | '/admin/costs'
     | '/admin/findings'
+    | '/admin/funnel'
     | '/admin/galaxies'
     | '/admin/labels'
     | '/admin/login'
@@ -2045,6 +2057,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminGalaxiesRouteImport
       parentRoute: typeof AdminRouteRoute
     }
+    '/admin/funnel': {
+      id: '/admin/funnel'
+      path: '/funnel'
+      fullPath: '/admin/funnel'
+      preLoaderRoute: typeof AdminFunnelRouteImport
+      parentRoute: typeof AdminRouteRoute
+    }
     '/admin/findings': {
       id: '/admin/findings'
       path: '/findings'
@@ -2419,6 +2438,7 @@ interface AdminRouteRouteChildren {
   AdminClipsRoute: typeof AdminClipsRoute
   AdminCostsRoute: typeof AdminCostsRoute
   AdminFindingsRoute: typeof AdminFindingsRoute
+  AdminFunnelRoute: typeof AdminFunnelRoute
   AdminGalaxiesRoute: typeof AdminGalaxiesRoute
   AdminLabelsRoute: typeof AdminLabelsRoute
   AdminLoginRoute: typeof AdminLoginRoute
@@ -2442,6 +2462,7 @@ const AdminRouteRouteChildren: AdminRouteRouteChildren = {
   AdminClipsRoute: AdminClipsRoute,
   AdminCostsRoute: AdminCostsRoute,
   AdminFindingsRoute: AdminFindingsRoute,
+  AdminFunnelRoute: AdminFunnelRoute,
   AdminGalaxiesRoute: AdminGalaxiesRoute,
   AdminLabelsRoute: AdminLabelsRoute,
   AdminLoginRoute: AdminLoginRoute,

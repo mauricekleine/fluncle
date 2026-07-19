@@ -22,6 +22,7 @@ const fillEmptyNote = vi.fn();
 const getTrackByIdOrLogId = vi.fn();
 const getSimilarFindings = vi.fn();
 const getTrackContextNote = vi.fn();
+const getObservationProvenance = vi.fn();
 const put = vi.fn();
 // env.VIDEOS.get — the finalize handler's transport-proof stamp fallback reads the
 // bundle's render.json off R2 when the body misses the diversity-ledger trio.
@@ -86,6 +87,7 @@ vi.mock("./tracks", async (importOriginal) => {
 
   return {
     ...actual,
+    getObservationProvenance: (id: string) => getObservationProvenance(id),
     getSimilarFindings: (...args: unknown[]) => getSimilarFindings(...args),
     getTrackByIdOrLogId: (id: string) => getTrackByIdOrLogId(id),
     getTrackContextNote: (id: string) => getTrackContextNote(id),
@@ -170,6 +172,9 @@ beforeEach(() => {
   // echo-gate tests below stock it deliberately.
   getSimilarFindings.mockReset().mockResolvedValue([]);
   getTrackContextNote.mockReset().mockResolvedValue(null);
+  // Default: no stored observation — a force re-render only inherits provenance when a
+  // test stocks a matching stored script deliberately.
+  getObservationProvenance.mockReset().mockResolvedValue({ promptVersion: null, script: null });
   put.mockReset();
   // Default: no render.json on R2 — the fallback yields {} and every pre-existing
   // finalize test keeps its exact old behaviour. The fallback tests stock it.
@@ -601,6 +606,53 @@ describe("oRPC observe_track (POST /admin/tracks/{trackId}/observe)", () => {
     // The whole render path runs again — the deliberate operator re-render.
     expect(renderObservationCartesia).toHaveBeenCalled();
     expect(updateTrack).toHaveBeenCalled();
+  });
+
+  it("force + the UNCHANGED script preserves the stored prompt-version provenance (a re-render is not a re-author)", async () => {
+    getTrackByIdOrLogId.mockResolvedValueOnce({
+      ...TRACK,
+      observationAudioUrl: "https://found.fluncle.com/004.7.2I/observation.mp3?v=1",
+      observationDurationMs: 30000,
+      observationGeneratedAt: "2026-06-01T00:00:00.000Z",
+    });
+    getObservationProvenance.mockResolvedValueOnce({ promptVersion: 3, script: GOOD_SCRIPT });
+    updateTrack.mockResolvedValueOnce({ fields: [], trackId: TRACK_ID });
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      post("/observe", OPERATOR_TOKEN, { force: true, script: GOOD_SCRIPT }),
+    );
+
+    expect(response?.status).toBe(200);
+    expect(updateTrack).toHaveBeenCalledWith(
+      TRACK_ID,
+      expect.objectContaining({ observationPromptVersion: 3 }),
+    );
+  });
+
+  it("force with a NEW script does not inherit the old script's provenance", async () => {
+    getTrackByIdOrLogId.mockResolvedValueOnce({
+      ...TRACK,
+      observationAudioUrl: "https://found.fluncle.com/004.7.2I/observation.mp3?v=1",
+      observationDurationMs: 30000,
+      observationGeneratedAt: "2026-06-01T00:00:00.000Z",
+    });
+    getObservationProvenance.mockResolvedValueOnce({
+      promptVersion: 3,
+      script: "A different stored script entirely, from another authoring pass.",
+    });
+    updateTrack.mockResolvedValueOnce({ fields: [], trackId: TRACK_ID });
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      post("/observe", OPERATOR_TOKEN, { force: true, script: GOOD_SCRIPT }),
+    );
+
+    expect(response?.status).toBe(200);
+    expect(updateTrack).toHaveBeenCalledWith(
+      TRACK_ID,
+      expect.objectContaining({ observationPromptVersion: null }),
+    );
   });
 
   it("422s a script with a banned identity word before spending a render", async () => {

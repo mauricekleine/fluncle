@@ -438,6 +438,22 @@ export const tracks = sqliteTable(
     index("tracks_nearest_finding_score_idx").on(table.nearestFindingScore),
     index("tracks_capture_priority_idx").on(table.capturePriority),
     index("tracks_source_audio_attempted_at_idx").on(table.sourceAudioAttemptedAt),
+    // THE CAPTURE-MISMATCH ATTENTION READ (attention.ts `listCaptureSuspectRows`, docs/the-ear.md
+    // § Wrong audio). The /admin attention queue's suspect list is `capture_verification =
+    // 'mismatch'` ordered `capture_verified_at ASC` — over a table designed to grow to five figures,
+    // an unindexed filter on `capture_verification` is the full scan of a growing table AGENTS.md
+    // forbids (measured ~5s p95 in prod). A COMPOSITE btree seeks it: the leading column turns the
+    // `= 'mismatch'` filter into a range seek, and the trailing column serves the `ORDER BY
+    // capture_verified_at ASC` from the index instead of a sort (`track_id` is the PK tiebreaker, so
+    // it need not be in the index). It also serves the backfill worklist's `capture_verification is
+    // null` seek (catalogue.ts `listUnverifiedCaptures`) off the same leading column. PLAIN ASC
+    // columns — a `desc()` index would poison the drizzle snapshot into rebuilding every index on the
+    // next migration (the ratified trap) — and a plain btree, never the vector `libsql_vector_idx`
+    // that wedges hosted Turso, so it builds like `tracks_key_idx` beside it.
+    index("tracks_capture_verification_verified_at_idx").on(
+      table.captureVerification,
+      table.captureVerifiedAt,
+    ),
     // The crawler's idempotence check — "do we already hold this ISRC?" — before minting a
     // row. A predicate on `tracks.isrc` over a table designed to grow to five figures, so
     // it is indexed. NOT unique: an ISRC is not guaranteed distinct across the archive's
@@ -1551,6 +1567,44 @@ export const userSavedSets = sqliteTable(
     userId: text("user_id").notNull(),
   },
   (table) => [index("user_saved_sets_user_updated_idx").on(table.userId, table.updatedAt)],
+);
+
+// A signed-in user's WATCHED entities — the artists and labels they asked to keep an eye
+// on. The saved-sets sibling exactly (a per-user list keyed by the Better Auth user, a
+// logical FK with no SQL cascade — deletion is application code in
+// `accountDeletionStatements`, never a constraint). THE ACCOUNT NEVER GATES THE FEATURE:
+// a signed-out visitor sees no watch control at all (the control simply does not render,
+// the SaveSetDialog precedent), and the per-entity fresh feeds (`/artist/<slug>/fresh.xml`)
+// stay the anonymous watcher equivalent, untouched.
+//
+// `kind` + `entity_id` point at the `artists.id` / `labels.id` this watch is for — resolved
+// by ID at write time and stored WITHOUT any denormalized name/slug (the entity's own row
+// stays the source of truth; the account list joins for the display name at read time). The
+// UNIQUE on (user_id, kind, entity_id) makes watching twice idempotent — a second watch of
+// the same entity upserts rather than duplicating.
+//
+// `include_similar` is HEADROOM with no consumer yet: the deferred email digest (operator
+// deferral 2026-07-19) will read it to decide whether a watch also pulls in sonically-near
+// entities. It defaults OFF in storage and has no UI — nothing writes anything but the
+// default today. Do not build a control for it until the digest lands.
+export const userWatches = sqliteTable(
+  "user_watches",
+  {
+    createdAt: text("created_at").notNull(),
+    entityId: text("entity_id").notNull(),
+    id: text("id").primaryKey(),
+    includeSimilar: integer("include_similar", { mode: "boolean" }).notNull().default(false),
+    kind: text("kind", { enum: ["artist", "label"] }).notNull(),
+    userId: text("user_id").notNull(),
+  },
+  (table) => [
+    // Watching twice is a no-op, not a duplicate row — the save path upserts on this key.
+    uniqueIndex("user_watches_user_kind_entity_idx").on(table.userId, table.kind, table.entityId),
+    // The `/account` list read: `where user_id = ? order by created_at desc`. A plain ASC
+    // btree (SQLite reverse-scans it) — never a `desc()` index, which poisons the drizzle
+    // snapshot into rebuilding every index on the next migration (the ratified trap).
+    index("user_watches_user_created_idx").on(table.userId, table.createdAt),
+  ],
 );
 
 // A signed-in user's cross-device preferences — the account-backed home for a

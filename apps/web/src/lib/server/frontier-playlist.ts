@@ -80,7 +80,6 @@ const MINT_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 /** The `/me/frontier-playlist` mint rate limit — a modest per-user hourly budget. */
 export const FRONTIER_MINT_RATE_LIMIT = 4;
-export const FRONTIER_MINT_RATE_WINDOW_MS = 60 * 60 * 1000;
 
 /** A minted/refreshed playlist's public web URL. */
 export function frontierPlaylistUrl(playlistId: string): string {
@@ -436,18 +435,26 @@ export async function mintOrRefreshFrontierPlaylist(
   nowMs: number = Date.now(),
 ): Promise<FrontierSyncResult> {
   try {
-    const compute = await computeAndStoreEdition(user, nowMs);
+    // The internal compute (the edition write) and the two mint-DECISION reads (the
+    // kill switch + the existing playlist row) are mutually independent — the switch
+    // and the row gate only the EXTERNAL Spotify mirror, never the compute — so they run
+    // CONCURRENTLY instead of laddering after the ~2 s compute (the tiny reads hide under
+    // it). Each is its own libsql `execute`, so the three fire as concurrent subrequests.
+    const [compute, mintingOpen, existing] = await Promise.all([
+      computeAndStoreEdition(user, nowMs),
+      isFrontierMintingOpen(),
+      getFrontierRow(user.id),
+    ]);
 
     if (!compute.ok) {
       return { ok: false, reason: compute.reason };
     }
 
     // ── The EXTERNAL Spotify mirror is the ONLY thing the kill switch gates ─────
-    if (!(await isFrontierMintingOpen())) {
+    if (!mintingOpen) {
       return { ok: true, status: compute.editionWritten ? "edition_only" : "unchanged" };
     }
 
-    const existing = await getFrontierRow(user.id);
     const description = frontierDescription(user);
 
     // ── Mirror guard: an unchanged existing playlist is zero Spotify calls ─────
@@ -460,11 +467,14 @@ export async function mintOrRefreshFrontierPlaylist(
       };
     }
 
-    const accessToken = await getSpotifyAccessToken();
-
     // ── Create-once ──────────────────────────────────────────────────────────
     if (!existing) {
-      const mints = await countRecentMints(nowMs);
+      // The mint-cap ledger read and the Spotify token fetch are independent — one
+      // bounds the create, the other authorizes it — so they run together.
+      const [accessToken, mints] = await Promise.all([
+        getSpotifyAccessToken(),
+        countRecentMints(nowMs),
+      ]);
 
       if (mints >= FRONTIER_DAILY_MINT_CAP) {
         return { ok: false, reason: "mint_cap_reached" };
@@ -520,6 +530,7 @@ export async function mintOrRefreshFrontierPlaylist(
     }
 
     // ── Refresh an existing playlist (the item list changed) ────────────────────
+    const accessToken = await getSpotifyAccessToken();
     const playlistId = existing.playlist_id;
 
     // Re-set the description (bundled with the change, so an unchanged week costs

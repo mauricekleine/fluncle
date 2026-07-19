@@ -1,0 +1,1 @@
+CREATE INDEX `tracks_capture_verification_verified_at_idx` ON `tracks` (`capture_verification`,`capture_verified_at`);

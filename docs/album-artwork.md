@@ -49,6 +49,15 @@ fluncle admin backfills cover-masters --kind album  --dry-run   # eligible ALBUM
 fluncle admin backfills cover-masters --kind artist --dry-run   # eligible ARTIST worklist; no writes
 ```
 
+### The operator heal (`--retry-none`)
+
+A terminal `image_state='none'` is a permanent give-up: the entity had no usable source when the sweep last walked its ladder, so it hotlinks the stored third-party raw URL forever — and when that third party goes down (the Cover Art Archive / archive.org 503 outage class), the public page renders a broken cover. `--retry-none` is the one-command heal for the case where a source EXISTS now but did not then (a fresh Apple `artwork_url_template`, or a recovered Cover Art Archive): it FIRST re-queues a bounded, slug-ordered batch of the kind's terminal `none` rows back to `pending` (kind-scoped `UPDATE ... SET image_state='pending', image_failures=0, image_attempted_at=NULL` — a `resolved` or `pending` row is never touched), then runs the normal bounded pass in the SAME call so a manual burn re-walks the ladder and mints the owned master immediately. `--dry-run --retry-none` reports which slugs WOULD re-queue without writing; the re-queued count rides back on `requeued`/`requeuedCount`.
+
+```bash
+fluncle admin backfills cover-masters --kind album --retry-none --dry-run   # what WOULD re-queue
+fluncle admin backfills cover-masters --kind album --retry-none             # heal: re-queue + re-walk
+```
+
 ## Operator verification
 
 The Cloudflare Images zone toggle (decision B) is ON, but confirm a transform actually serves in prod after the first masters resolve (any resolved `albums/<slug>.<ext>` key):

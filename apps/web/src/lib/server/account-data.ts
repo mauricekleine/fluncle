@@ -170,6 +170,22 @@ export type SavedSetItem = {
   updatedAt: string;
 };
 
+/**
+ * One watched entity as the list returns it (`listWatches`). `name`/`slug` are joined from
+ * the entity's own `artists`/`labels` row at read time — never denormalized onto the watch —
+ * so the account row links to `/artist/<slug>` or `/label/<slug>` and shows the live name.
+ * `includeSimilar` rides along for completeness; it has no consumer yet (the deferred digest).
+ */
+export type WatchItem = {
+  createdAt: string;
+  entityId: string;
+  id: string;
+  includeSimilar: boolean;
+  kind: "artist" | "label";
+  name: string;
+  slug: string;
+};
+
 /** One submission as the signed-in user sees it (`listUserSubmissions`). */
 export type PrivateSubmissionItem = {
   artists: string[];
@@ -828,6 +844,161 @@ function rowToItem(row: SavedSetRow): SavedSetItem {
   };
 }
 
+// ── Watched entities (the artists + labels a user keeps an eye on) ────────────
+// The saved-sets sibling, one table over. THE ACCOUNT NEVER GATES THE FEATURE: watching
+// only SAVES the entity to the account; every entity page stays fully usable signed-out.
+// The email digest that will READ these is deferred (operator ruling 2026-07-19) — this is
+// the substrate only, so `include_similar` is stored (default off) but has no consumer.
+
+type WatchRow = {
+  created_at: string;
+  entity_id: string;
+  id: string;
+  include_similar: number;
+  kind: "artist" | "label";
+  name: string | null;
+  slug: string | null;
+};
+
+const WATCH_KINDS = new Set(["artist", "label"]);
+
+/**
+ * The signed-in user's watched artists and labels, newest first. The entity name + slug are
+ * joined from the entity's OWN row at read time (a per-row seek on the `artists`/`labels`
+ * primary key, bounded by the user's watch count — never a scan of a growing table), so a
+ * renamed entity always reads current and nothing is denormalized onto the watch. A watch
+ * whose entity has vanished (no join match) is dropped from the read rather than rendered
+ * nameless.
+ */
+export async function listWatches(user: PublicUser): Promise<{ ok: true; watches: WatchItem[] }> {
+  const result = await (
+    await getDb()
+  ).execute({
+    args: [user.id],
+    sql: `select w.id, w.kind, w.entity_id, w.include_similar, w.created_at,
+        coalesce(a.name, l.name) as name,
+        coalesce(a.slug, l.slug) as slug
+      from user_watches w
+      left join artists a on w.kind = 'artist' and a.id = w.entity_id
+      left join labels l on w.kind = 'label' and l.id = w.entity_id
+      where w.user_id = ?
+      order by w.created_at desc`,
+  });
+
+  return {
+    ok: true,
+    watches: typedRows<WatchRow>(result.rows)
+      .filter((row): row is WatchRow & { name: string; slug: string } =>
+        Boolean(row.name && row.slug),
+      )
+      .map((row) => ({
+        createdAt: row.created_at,
+        entityId: row.entity_id,
+        id: row.id,
+        includeSimilar: row.include_similar === 1,
+        kind: row.kind,
+        name: row.name,
+        slug: row.slug,
+      })),
+  };
+}
+
+/**
+ * Watch an artist or label, resolved by its entity id. Idempotent: a second watch of the
+ * same entity upserts on the (user, kind, entity) unique key rather than duplicating, and
+ * echoes the row that ended up stored (the original `id`/`createdAt`, so a re-watch is a
+ * true no-op the client can trust). `include_similar` is stored at its default (off) — there
+ * is no UI or path that writes anything else yet. A bad `kind` is `invalid_request`/400; an
+ * id that matches no entity of that kind is `entity_not_found`/404.
+ */
+export async function saveWatch(
+  user: PublicUser,
+  body: unknown,
+): Promise<
+  | Response
+  | {
+      ok: true;
+      watch: {
+        createdAt: string;
+        entityId: string;
+        id: string;
+        includeSimilar: boolean;
+        kind: "artist" | "label";
+      };
+    }
+> {
+  if (!isRecord(body)) {
+    return jsonError(400, "invalid_request", "Invalid watch");
+  }
+
+  const kind = typeof body.kind === "string" ? body.kind : "";
+  const entityId = typeof body.entityId === "string" ? body.entityId.trim() : "";
+
+  if (!WATCH_KINDS.has(kind) || !entityId) {
+    return jsonError(400, "invalid_request", "Invalid watch");
+  }
+
+  const db = await getDb();
+  // Resolve the entity by its id in the RIGHT table — the existence check that keeps a watch
+  // pointing at something real. The table is chosen by the validated `kind`, never
+  // interpolated from user input.
+  const table = kind === "artist" ? "artists" : "labels";
+  const entity = await db.execute({
+    args: [entityId],
+    sql: `select id from ${table} where id = ? limit 1`,
+  });
+
+  if (entity.rows.length === 0) {
+    return jsonError(404, "entity_not_found", "No artist or label at that id");
+  }
+
+  const id = randomUUID();
+  const now = new Date().toISOString();
+
+  await db.execute({
+    args: [id, user.id, kind, entityId, now],
+    sql: `insert into user_watches (id, user_id, kind, entity_id, include_similar, created_at)
+      values (?, ?, ?, ?, 0, ?)
+      on conflict(user_id, kind, entity_id) do nothing`,
+  });
+
+  // Read the row that actually landed (the fresh insert, or a pre-existing watch the
+  // conflict left untouched) so the echo carries the true stored id/createdAt.
+  const stored = await db.execute({
+    args: [user.id, kind, entityId],
+    sql: `select id, kind, entity_id, include_similar, created_at
+      from user_watches where user_id = ? and kind = ? and entity_id = ? limit 1`,
+  });
+  const row = typedRow<WatchRow>(stored.rows);
+
+  return {
+    ok: true,
+    watch: {
+      createdAt: row?.created_at ?? now,
+      entityId,
+      id: row?.id ?? id,
+      includeSimilar: (row?.include_similar ?? 0) === 1,
+      kind: kind as "artist" | "label",
+    },
+  };
+}
+
+/** Stop watching an entity — scoped to the owner (another user's watch id is a 404). */
+export async function deleteWatch(user: PublicUser, id: string): Promise<Response | { ok: true }> {
+  const result = await (
+    await getDb()
+  ).execute({
+    args: [user.id, id],
+    sql: `delete from user_watches where user_id = ? and id = ?`,
+  });
+
+  if ((result.rowsAffected ?? 0) === 0) {
+    return jsonError(404, "watch_not_found", "No watch to remove");
+  }
+
+  return { ok: true };
+}
+
 // ── User preferences (the cross-device settings store) ────────────────────────
 // One row per user holding the whole `UserPreferences` object as JSON. The account
 // NEVER gates a feature: every preference also has a device-local home, so this is
@@ -963,6 +1134,7 @@ export async function exportAccountData(user: PublicUser): Promise<{
     savedFindings: SavedFindingItem[];
     savedSets: SavedSetItem[];
     submissions: PrivateSubmissionItem[];
+    watches: WatchItem[];
   };
   ok: true;
 }> {
@@ -973,13 +1145,14 @@ export async function exportAccountData(user: PublicUser): Promise<{
   const requestedAt = new Date().toISOString();
   const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
   const exportId = randomUUID();
-  const [progress, saved, sets, submissions, preferences, recSeeds] = await Promise.all([
+  const [progress, saved, sets, submissions, preferences, recSeeds, watches] = await Promise.all([
     getGalaxyProgress(user),
     listSavedFindings(user),
     listSavedSets(user),
     listUserSubmissions(user),
     getUserPreferences(user),
     listRecSeeds(user),
+    listWatches(user),
   ]);
 
   await (
@@ -1006,6 +1179,7 @@ export async function exportAccountData(user: PublicUser): Promise<{
       savedFindings: saved.savedFindings,
       savedSets: sets.savedSets,
       submissions: submissions.submissions,
+      watches: watches.watches,
     },
     ok: true,
   };
@@ -1067,6 +1241,7 @@ export async function deleteAccount(user: PublicUser): Promise<{
     submissions: string;
     user: string;
     verifications: string;
+    watches: string;
   };
 }> {
   const db = await getDb();
@@ -1088,6 +1263,7 @@ export async function deleteAccount(user: PublicUser): Promise<{
     submissions: "anonymized",
     user: "marked_deleted",
     verifications: "deleted",
+    watches: "deleted",
   };
 
   await db.batch(
@@ -1147,6 +1323,12 @@ export function accountDeletionStatements({
     {
       args: [userId],
       sql: `delete from user_saved_sets where user_id = ?`,
+    },
+    {
+      // The user's watched artists + labels (D2a). A logical FK (no SQL cascade), the
+      // saved-sets precedent — deletion is application code, never a constraint.
+      args: [userId],
+      sql: `delete from user_watches where user_id = ?`,
     },
     {
       args: [userId],

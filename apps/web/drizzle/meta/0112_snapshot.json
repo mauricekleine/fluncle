@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "f810f98f-ce63-4014-8e6d-d8b6dcc4c232",
+  "id": "94d5f460-d66a-42a8-8d29-f4402de1c912",
   "prevId": "d7e55136-07e2-4809-ab0b-e72f91afbdb6",
   "tables": {
     "account": {
@@ -957,14 +957,6 @@
           "autoincrement": false,
           "default": 0
         },
-        "demand_rank": {
-          "name": "demand_rank",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": 1
-        },
         "done_at": {
           "name": "done_at",
           "type": "text",
@@ -1055,7 +1047,7 @@
       "indexes": {
         "crawl_frontier_pick_idx": {
           "name": "crawl_frontier_pick_idx",
-          "columns": ["state", "hop", "demand_rank", "created_at", "id"],
+          "columns": ["state", "hop", "created_at", "id"],
           "isUnique": false
         },
         "crawl_frontier_label_idx": {
@@ -4558,13 +4550,6 @@
           "notNull": false,
           "autoincrement": false
         },
-        "demand_score": {
-          "name": "demand_score",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
         "dismissed_at": {
           "name": "dismissed_at",
           "type": "text",
@@ -4848,6 +4833,11 @@
           "columns": ["source_audio_attempted_at"],
           "isUnique": false
         },
+        "tracks_capture_verification_verified_at_idx": {
+          "name": "tracks_capture_verification_verified_at_idx",
+          "columns": ["capture_verification", "capture_verified_at"],
+          "isUnique": false
+        },
         "tracks_isrc_idx": {
           "name": "tracks_isrc_idx",
           "columns": ["isrc"],
@@ -4882,12 +4872,6 @@
           "columns": ["dismissed_at"],
           "isUnique": false,
           "where": "\"tracks\".\"dismissed_at\" is not null"
-        },
-        "tracks_demand_score_idx": {
-          "name": "tracks_demand_score_idx",
-          "columns": ["demand_score"],
-          "isUnique": false,
-          "where": "\"tracks\".\"demand_score\" is not null"
         },
         "tracks_key_idx": {
           "name": "tracks_key_idx",

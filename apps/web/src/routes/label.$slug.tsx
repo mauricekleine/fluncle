@@ -1,4 +1,4 @@
-import { Link, createFileRoute, notFound } from "@tanstack/react-router";
+import { Link, createFileRoute, notFound, redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import {
   CatalogueArtistGroups,
@@ -7,6 +7,7 @@ import {
 } from "@/components/catalogue-groups";
 import { ArtistChips, FindingsGrid, graphPageTracks } from "@/components/graph-sections";
 import { StoryNotFoundState } from "@/components/stories/stories-states";
+import { WatchButton } from "@/components/watch-button";
 import { entityFreshChannel } from "@/lib/fresh-feed-rss";
 import { siteUrl } from "@/lib/fluncle-links";
 import { jsonLdScript } from "@/lib/json-ld";
@@ -28,6 +29,7 @@ import {
   getLabelBySlug,
   LABEL_INDEX_MIN_TRACKS,
   type LabelLineageEdge,
+  resolveLabelAliasRedirect,
 } from "@/lib/server/labels";
 import { getFindingsByLabel, type TrackListItem } from "@/lib/server/tracks";
 
@@ -66,6 +68,8 @@ type LabelPageData =
       foundedLocation: string | undefined;
       /** The label's founding date (MusicBrainz `life-span.begin`) — the dateline + `foundingDate`. */
       foundingDate: string | undefined;
+      /** The label entity's id — the key a signed-in user's watch files against (D2a). */
+      id: string;
       indexable: boolean;
       /** The label's OWN logo (resolved Discogs/Wikidata image on R2), or undefined. */
       logoImageUrl: string | undefined;
@@ -79,6 +83,11 @@ type LabelPageData =
       status: "found";
       /** The sublabels of this label → the Organization's `subOrganization` edges. */
       subLabels: LabelLineageEdge[];
+    }
+  | {
+      /** A merged-away slug: 301 to the canonical label this confirmed alias belongs to. */
+      canonicalSlug: string;
+      status: "redirect";
     }
   | { status: "missing" };
 
@@ -107,6 +116,15 @@ export async function resolveLabelPageData(
   const label = await getLabelBySlug(slug);
 
   if (!label) {
+    // A slug with no `labels` row of its own may still be a MERGED-AWAY spelling: a confirmed alias
+    // whose canonical label lives under another slug (docs/label-entity.md § merge). Resolve it and
+    // 301 to the canonical page; a genuinely unknown slug stays MISSING and 404s.
+    const canonicalSlug = await resolveLabelAliasRedirect(slug);
+
+    if (canonicalSlug && canonicalSlug !== slug) {
+      return { canonicalSlug, status: "redirect" };
+    }
+
     return { status: "missing" };
   }
 
@@ -146,6 +164,7 @@ export async function resolveLabelPageData(
     findings,
     foundedLocation: label.foundedLocation,
     foundingDate: label.foundingDate,
+    id: label.id,
     // Thin-content gate: index only past LABEL_INDEX_MIN_TRACKS RENDERABLE tracks — the
     // findings PLUS the quieter rows, because both are real content on the page, and a page is
     // thin or not thin on what it renders, never on who wrote it. Below the floor the page
@@ -305,6 +324,11 @@ export const Route = createFileRoute("/label/$slug")({
       data: { page: deps.page, slug: params.slug, sort: deps.sort },
     });
 
+    if (data.status === "redirect") {
+      // The slug is a merged-away spelling — 301 (permanent) to the canonical label's page.
+      throw redirect({ params: { slug: data.canonicalSlug }, statusCode: 301, to: "/label/$slug" });
+    }
+
     if (data.status === "missing") {
       throw notFound();
     }
@@ -359,7 +383,7 @@ function LabelPage() {
     return null;
   }
 
-  const { artists, bio, catalogue, findings, foundedLocation, foundingDate, name, slug, sort } =
+  const { artists, bio, catalogue, findings, foundedLocation, foundingDate, id, name, slug, sort } =
     data;
   const dateline = labelDateline(foundingDate, foundedLocation);
 
@@ -374,6 +398,10 @@ function LabelPage() {
           {/* One quiet reference-register line: where and when the label started (label-lineage
               sweep, U1). Rendered only when MusicBrainz carried a founding date or place. */}
           {dateline ? <p className="log-index-dateline">{dateline}</p> : undefined}
+          {/* The quiet watch control — a signed-in user keeps an eye on this label. Renders
+              nothing for a signed-out visitor (the account never gates the page) — no wrapper, so
+              the null face leaves no empty grid item in the masthead. */}
+          <WatchButton entityId={id} kind="label" name={name} />
         </header>
 
         {/* Every band below is conditional: an empty one renders nothing at all, so this page

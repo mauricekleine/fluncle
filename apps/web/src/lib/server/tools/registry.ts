@@ -32,6 +32,7 @@ import { logPageUrl } from "../../fluncle-links";
 import { isLogId, isMixtapeLogId } from "../../log-id";
 import { MAX_SET_LENGTH, mixReasonLabel, serializeSet, setToken } from "../../mix-set";
 import { type MixtapeDTO, mixtapeDisplayTitle } from "../../mixtapes";
+import { albumSlug, getAlbumBySlug } from "../albums";
 import { getArtistNeighbours } from "../artist-dossier";
 import {
   countArtistFindings,
@@ -39,7 +40,12 @@ import {
   getPublicArtistSocials,
   toArtistSlug,
 } from "../artists";
-import { type FreshTrack, listFreshTracks } from "../fresh";
+import {
+  CATALOGUE_SORT_DEFAULT,
+  listArtistCatalogue,
+  listLabelCatalogue,
+} from "../catalogue-groups";
+import { type FreshRecord, type FreshTrack, listFreshTracks } from "../fresh";
 import { getConfirmedAliasNames, getLabelBySlug, labelSlug } from "../labels";
 import { resolveLogPageTarget } from "../log-resolver";
 import { subscribeToNewsletter } from "../newsletter";
@@ -49,12 +55,14 @@ import { ApiError, searchTrackCandidates } from "../spotify";
 import { getServiceStatuses, type ServiceHealthStatus } from "../status";
 import { createSubmission } from "../submissions";
 import {
+  type CatalogueTrackItem,
   getFindingsByArtist,
   getFindingsByLabel,
   getMixableTracks,
   getMixChainDepth,
   getRandomTrack,
   getTracksByLogIds,
+  listCatalogueTracksByAlbum,
   listTracks,
   type TrackListItem,
   toPublicTrackListItem,
@@ -74,6 +82,9 @@ import {
   getArtistSpec,
   getLabelSpec,
   getSimilarArtistsSpec,
+  listAlbumCatalogueSpec,
+  listArtistCatalogueSpec,
+  listLabelCatalogueSpec,
   searchArchiveSpec,
   submitTrackSpec,
   subscribeNewsletterSpec,
@@ -146,6 +157,11 @@ function clampInt(value: unknown, max: number, fallback: number): number {
   }
 
   return Math.min(value, max);
+}
+
+/** Coerce an incoming `list_fresh` view arg to the advertised enum, defaulting to `all`. */
+function normalizeFreshView(value: unknown): "albums" | "all" | "tracks" {
+  return value === "albums" || value === "tracks" ? value : "all";
 }
 
 // ── The MCP `publicRecord` shapers (lifted verbatim from mcp.ts) ─────────────────────
@@ -373,6 +389,16 @@ function freshTrackToCatalogue(track: FreshTrack) {
   };
 }
 
+/**
+ * A fresh RECORD reduced to the SAME unlit catalogue shape (PR-6's `view=albums`). A record has no
+ * Fluncle coordinate, so register-wise it belongs in the unlit bucket exactly like a catalogue
+ * track — named and listed, never spoken as found. Its `name` fills `title`; it carries no Spotify
+ * link, so the row is name + artists only. Reuse, not a new card (DESIGN.md's Unlit Rule).
+ */
+function freshAlbumToCatalogue(album: FreshRecord) {
+  return { artists: album.artists, title: album.name };
+}
+
 /** A search hit Fluncle has not certified, reduced to the unlit catalogue shape. */
 function searchHitToCatalogue(hit: {
   album?: string;
@@ -385,6 +411,54 @@ function searchHitToCatalogue(hit: {
     artists: hit.artists,
     title: hit.title,
     ...dropEmpty({ label: hit.label, release: hit.album, spotifyUrl: hit.spotifyUrl }),
+  };
+}
+
+// ── The catalogue browse shapers (PR-5) ──────────────────────────────────────────────
+//
+// A catalogue browse (list_album/artist/label_catalogue) resolves a NAME to a slug then id, then
+// reads an existing anti-join over `tracks` — so every row it can ever return is a record Fluncle
+// has never certified. The rows carry only a name, its artists, a way out, and quiet context (the
+// record / the label). NOTHING lit — no coordinate/note/observation/cover/galaxy/bpm/key.
+
+/** How many catalogue rows a browse tool returns — a bounded slice of a (possibly huge) discography. */
+const CATALOGUE_BROWSE_LIMIT = 24;
+
+/**
+ * A catalogue (anti-join) row reduced to the unlit chat shape, with the optional record / label
+ * context the page it came off already knows. `artists` + `title` are always present; `dropEmpty`
+ * strips the optional context so a row carries no null.
+ */
+function catalogueItemToChat(
+  item: CatalogueTrackItem,
+  context: { label?: string; release?: string } = {},
+) {
+  return {
+    artists: item.artists,
+    title: item.title,
+    ...dropEmpty({ label: context.label, release: context.release, spotifyUrl: item.spotifyUrl }),
+  };
+}
+
+/**
+ * Project a browse tool's chat-shaped catalogue rows per transport. Chat gets the catalogue-only
+ * two-bucket ({ findings: [], catalogue }) that renders bare/unheaded; the MCP world-serves the flat
+ * catalogue list, each row certified-tagged (mirrors how list_fresh's MCP projection serves its
+ * uncertified rows — never a coordinate, so an agent reads them as records, not findings).
+ */
+function projectCatalogueBrowse(
+  catalogue: ReturnType<typeof catalogueItemToChat>[],
+  total: number,
+  ctx: ToolCtx,
+) {
+  if (ctx.transport === "chat") {
+    return { catalogue, findings: [], ok: true as const };
+  }
+
+  return {
+    catalogue: catalogue.map((row) => ({ certified: false as const, ...row })),
+    ok: true as const,
+    total,
   };
 }
 
@@ -631,6 +705,12 @@ const listFreshTool = {
   ...listFreshSpec,
   execute: async (args, ctx) => {
     const rawLimit = (args as { limit?: unknown }).limit;
+    // The `/fresh` pills' twin (PR-6): `tracks` the release stream, `albums` the records they sit
+    // on, `all` (the default) both. Coerced defensively so a direct execute (a test, a loose caller)
+    // still lands on the enum the schema advertises.
+    const view = normalizeFreshView((args as { view?: unknown }).view);
+    const showTracks = view !== "albums";
+    const showAlbums = view !== "tracks";
 
     if (ctx.transport === "chat") {
       // Chat keeps its own default (12) and tolerant clamp; only the CAP unifies to 100.
@@ -641,8 +721,16 @@ const listFreshTool = {
       // already cover/coordinate-free from listFreshTracks — ride into the UNLIT `catalogue` bucket,
       // named and listed, never spoken as found. NO new server read; this fixes the list_fresh
       // empty-in-chat bug (a fresh window that is all uncertified catalogue used to return nothing).
-      const certified = fresh.tracks.filter((track) => track.certified && track.logId);
-      const catalogue = fresh.tracks.filter((track) => !track.certified).map(freshTrackToCatalogue);
+      const certified = showTracks
+        ? fresh.tracks.filter((track) => track.certified && track.logId)
+        : [];
+      const trackCatalogue = showTracks
+        ? fresh.tracks.filter((track) => !track.certified).map(freshTrackToCatalogue)
+        : [];
+      // PR-6: a fresh RECORD rides the SAME unlit bucket — a coordinate-less entity is register-equal
+      // to a catalogue track, so it reuses the catalogue card (no new shape). Tracks lead, records
+      // follow. `view=albums` shows records alone; `view=tracks` drops them.
+      const albumCatalogue = showAlbums ? fresh.albums.map(freshAlbumToCatalogue) : [];
 
       // Hydrate the certified logIds to full findings so each card shows its cover, chips, and a
       // play control. A logId the hydrator misses falls back to the fresh row's own fields.
@@ -655,14 +743,25 @@ const listFreshTool = {
         return item ? compactFinding(item) : freshTrackToFinding(track);
       });
 
-      return dropEmpty({ catalogue, findings, ok: true as const });
+      return dropEmpty({
+        catalogue: [...trackCatalogue, ...albumCatalogue],
+        findings,
+        ok: true as const,
+      });
     }
 
     // MCP/WebMCP world-serve the whole flat fresh list (findings + uncertified rows) as-is —
-    // listFreshTracks strips the private key and mints nothing for the uncertified rows.
+    // listFreshTracks strips the private key and mints nothing for the uncertified rows. `view`
+    // narrows the flat payload: `all` (default) keeps both buckets (backwards-compatible), a single
+    // view empties the other.
     const limit = typeof rawLimit === "number" ? rawLimit : undefined;
+    const fresh = await listFreshTracks({ limit });
 
-    return listFreshTracks({ limit });
+    return {
+      albums: showAlbums ? fresh.albums : [],
+      tracks: showTracks ? fresh.tracks : [],
+      windowDays: fresh.windowDays,
+    };
   },
 } satisfies ToolDef;
 
@@ -936,6 +1035,85 @@ const getSimilarArtistsTool = {
   },
 } satisfies ToolDef;
 
+// ── The catalogue browse tools (PR-5) ────────────────────────────────────────────────
+//
+// name → slug → id → an existing anti-join read. An unresolved name is the honest empty (no album/
+// artist/label he knows) — an empty catalogue bucket, never an error, exactly as get_artist /
+// get_label do. The artist/label reads are GROUPED by record + paginated; a browse takes the first
+// page (the stable A–Z default) and flattens it to a bounded row slice.
+
+const listAlbumCatalogueTool = {
+  ...listAlbumCatalogueSpec,
+  execute: async (args, ctx) => {
+    const name = asTrimmedString((args as { name?: unknown }).name);
+    const slug = name ? albumSlug(name) : undefined;
+    const album = slug ? await getAlbumBySlug(slug) : undefined;
+
+    if (!album) {
+      return projectCatalogueBrowse([], 0, ctx);
+    }
+
+    const slice = await listCatalogueTracksByAlbum(album.id);
+    const catalogue = slice.tracks
+      .slice(0, CATALOGUE_BROWSE_LIMIT)
+      .map((item) => catalogueItemToChat(item, { release: album.name }));
+
+    return projectCatalogueBrowse(catalogue, slice.total, ctx);
+  },
+} satisfies ToolDef;
+
+const listArtistCatalogueTool = {
+  ...listArtistCatalogueSpec,
+  execute: async (args, ctx) => {
+    const name = asTrimmedString((args as { name?: unknown }).name);
+    const slug = name ? toArtistSlug(name) : "";
+    const artist = slug ? await getArtistBySlug(slug) : undefined;
+
+    if (!artist) {
+      return projectCatalogueBrowse([], 0, ctx);
+    }
+
+    // The artist's catalogue is grouped by record; flatten the first page, each row keeping its
+    // record name as quiet context (never a per-track lit claim).
+    const page = await listArtistCatalogue(artist.id, CATALOGUE_SORT_DEFAULT, 1);
+    const catalogue = page.groups
+      .flatMap((record) =>
+        record.tracks.map((item) => catalogueItemToChat(item, { release: record.name })),
+      )
+      .slice(0, CATALOGUE_BROWSE_LIMIT);
+
+    return projectCatalogueBrowse(catalogue, page.totalTracks, ctx);
+  },
+} satisfies ToolDef;
+
+const listLabelCatalogueTool = {
+  ...listLabelCatalogueSpec,
+  execute: async (args, ctx) => {
+    const name = asTrimmedString((args as { name?: unknown }).name);
+    const slug = name ? labelSlug(name) : undefined;
+    const label = slug ? await getLabelBySlug(slug) : undefined;
+
+    if (!label) {
+      return projectCatalogueBrowse([], 0, ctx);
+    }
+
+    // The label's catalogue is grouped by artist then record; flatten the first page, each row
+    // keeping the label name (and its record) as quiet context.
+    const page = await listLabelCatalogue(label.id, CATALOGUE_SORT_DEFAULT, 1);
+    const catalogue = page.groups
+      .flatMap((group) =>
+        group.records.flatMap((record) =>
+          record.tracks.map((item) =>
+            catalogueItemToChat(item, { label: label.name, release: record.name }),
+          ),
+        ),
+      )
+      .slice(0, CATALOGUE_BROWSE_LIMIT);
+
+    return projectCatalogueBrowse(catalogue, page.totalTracks, ctx);
+  },
+} satisfies ToolDef;
+
 // ── The write tools PR-2 lifted into the shared registry ─────────────────────────────
 //
 // They receive `ctx.request` (the submitter hash / rate limit). On the MCP it is the inbound
@@ -998,7 +1176,8 @@ const subscribeNewsletterTool = {
 
 /**
  * Every shared tool, single-sourced. Order mirrors SHARED_TOOL_SPECS: `list_tracks` first (the MCP
- * alias clones it), the five overlapping reads, the reads lifted out of ChatDnB, then the writes.
+ * alias clones it), the five overlapping reads, the reads lifted out of ChatDnB, the PR-5 catalogue
+ * browse reads, then the writes.
  */
 export const SHARED_TOOLS: ToolDef[] = [
   listTracksTool,
@@ -1011,6 +1190,9 @@ export const SHARED_TOOLS: ToolDef[] = [
   getLabelTool,
   buildSetTool,
   getSimilarArtistsTool,
+  listAlbumCatalogueTool,
+  listArtistCatalogueTool,
+  listLabelCatalogueTool,
   submitTrackTool,
   subscribeNewsletterTool,
 ];
@@ -1083,7 +1265,10 @@ export function sharedChatTools(request?: Request) {
     get_similar_artists: toAiSdkTool(getSimilarArtistsTool, request),
     get_status: toAiSdkTool(getStatusTool, request),
     get_track: toAiSdkTool(getTrackTool, request),
+    list_album_catalogue: toAiSdkTool(listAlbumCatalogueTool, request),
+    list_artist_catalogue: toAiSdkTool(listArtistCatalogueTool, request),
     list_fresh: toAiSdkTool(listFreshTool, request),
+    list_label_catalogue: toAiSdkTool(listLabelCatalogueTool, request),
     list_tracks: toAiSdkTool(listTracksTool, request),
     search_archive: toAiSdkTool(searchArchiveTool, request),
     submit_track: toAiSdkTool(submitTrackTool, request),

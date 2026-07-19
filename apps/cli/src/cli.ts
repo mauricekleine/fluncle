@@ -4,6 +4,7 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { Command, CommanderError } from "commander";
 import { fluncleAsciiLogo, fluncleTagline } from "./brand";
+import { type FreshView } from "./commands/fresh";
 import { setEnvProfile } from "./env";
 import { spotifyPlaylistUrl, telegramUrl } from "./links";
 import { printJson, toJsonFailure } from "./output";
@@ -22,6 +23,12 @@ type AddOptions = {
 type RecentOptions = {
   json: boolean;
   limit?: string;
+};
+
+type FreshOptions = {
+  json: boolean;
+  limit?: string;
+  view?: string;
 };
 
 type AdminListOptions = {
@@ -250,6 +257,7 @@ type BackfillSyncOptions = {
 
 type CoverMastersOptions = BackfillSyncOptions & {
   kind?: string;
+  retryNone?: boolean;
 };
 
 type CrawlOptions = {
@@ -410,10 +418,15 @@ function addListenCommands(program: Command): void {
     .command("fresh")
     .description("What just came out, newest release first")
     .option("--limit <limit>", "Number of releases to fetch")
+    .option("--view <view>", "Which cut to show: all, tracks, or albums", "all")
     .option("--json", "Print JSON", false)
-    .action(async (options: RecentOptions) => {
+    .action(async (options: FreshOptions) => {
       const { freshCommand } = await import("./commands/fresh");
-      await freshCommand({ json: options.json, limit: parseListLimit(options.limit) });
+      await freshCommand({
+        json: options.json,
+        limit: parseListLimit(options.limit),
+        view: parseFreshView(options.view),
+      });
     });
 
   program
@@ -2566,6 +2579,11 @@ function addAdminCommands(program: Command): void {
     .description("Resolve owned ≤1200² cover masters (album/artist) into R2")
     .option("--kind <kind>", "Which entity to drain: album | artist", "album")
     .option("--dry-run", "Report the eligible worklist without any fetch or write", false)
+    .option(
+      "--retry-none",
+      "First re-queue a bounded batch of terminal none rows to pending, then run the pass",
+      false,
+    )
     .option("--limit <limit>", "Max entities to process", "50")
     .option("--json", "Print JSON", false)
     .action(async (options: CoverMastersOptions) => {
@@ -2656,7 +2674,7 @@ function addAdminCommands(program: Command): void {
   // `describe_label` + the crawl-seed reads → `admin labels` group (Convention B). The
   // voiced-bio author is the label sibling of `admin artists describe`.
   const labels = configureCommand(
-    admin.command("labels").description("Label entity commands (the voiced bio)"),
+    admin.command("labels").description("Label entity commands (voiced bio + slug-split merge)"),
   );
 
   labels.action(() => {
@@ -2708,6 +2726,51 @@ function addAdminCommands(program: Command): void {
     .action(async (slug: string, options: { json: boolean }) => {
       const { draftLabelBioCommand } = await import("./commands/admin-labels");
       await runEntityBioDraft("label", slug, options, draftLabelBioCommand);
+    });
+
+  // `merge_label` → `admin labels merge <losingSlug> <canonicalSlug>` (operator). Fold a slug-split
+  // twin (the Med School / Medschool class) into its canonical row: re-point every FK, reconcile
+  // identity/facts canonical-wins, write the losing name as a confirmed alias, delete the loser —
+  // and the losing slug then 301s to the canonical page.
+  labels
+    .command("merge")
+    .description(
+      "Merge a slug-split label into its canonical row (operator; re-points + redirects)",
+    )
+    .argument("<losingSlug>", "The duplicate label to fold away")
+    .argument("<canonicalSlug>", "The label to keep — everything re-points onto it")
+    .option("--json", "Print JSON", false)
+    .action(async (losingSlug: string, canonicalSlug: string, options: { json: boolean }) => {
+      const { mergeLabelCommand } = await import("./commands/admin-labels");
+      const result = await mergeLabelCommand(losingSlug, canonicalSlug);
+
+      if (options.json) {
+        printJson({ ok: true, result });
+        return;
+      }
+
+      const {
+        aliasWritten,
+        canonicalSlug: canon,
+        losingSlug: loser,
+        reconciled,
+        repointed,
+      } = result;
+
+      console.log(`Merged ${loser} → ${canon}.`);
+      console.log(
+        `  Re-pointed: ${repointed.tracks} track(s), ${repointed.childLabels} sublabel(s), ${repointed.aliases} alias(es).`,
+      );
+      console.log(
+        reconciled.length > 0
+          ? `  Filled onto ${canon} (was empty): ${reconciled.join(", ")}.`
+          : `  Nothing to fill — ${canon} already carried every fact.`,
+      );
+      console.log(`  Seed state resolved to: ${result.seedState}.`);
+      console.log(
+        `  Alias written: "${aliasWritten.alias}" (${aliasWritten.aliasSlug}) → confirmed, so it can never re-mint.`,
+      );
+      console.log(`  /label/${loser} now 301s to /label/${canon}.`);
     });
 
   // `describe_album` → `admin albums` group (Convention B). The voiced-bio author is the
@@ -3889,8 +3952,10 @@ async function runBackfillCoverMasters(
 ): Promise<void> {
   const limit = parseListLimit(options.limit);
   const kind = options.kind === "artist" ? "artist" : "album";
+  const retryNone = options.retryNone ?? false;
   const resolved: string[] = [];
   const none: string[] = [];
+  const requeued: string[] = [];
   const failed: Array<{ error: string; slug: string }> = [];
   let cursor: string | undefined;
   let dryRun = options.dryRun;
@@ -3899,10 +3964,19 @@ async function runBackfillCoverMasters(
   // until the cap is met or the worklist is exhausted (nextCursor null).
   while (resolved.length + none.length + failed.length < limit) {
     const remaining = limit - (resolved.length + none.length + failed.length);
-    const result = await backfillCoverMastersCommand(kind, remaining, options.dryRun, cursor);
+    // Re-queue only on the FIRST call (no cursor yet); a cursored continuation is draining the
+    // pass worklist and must not re-flip the head of the `none` list again each iteration.
+    const result = await backfillCoverMastersCommand(
+      kind,
+      remaining,
+      options.dryRun,
+      cursor,
+      retryNone && cursor === undefined,
+    );
     dryRun = result.dryRun;
     resolved.push(...result.resolved);
     none.push(...result.none);
+    requeued.push(...(result.requeued ?? []));
     failed.push(...result.failed);
 
     if (!options.json) {
@@ -3929,6 +4003,8 @@ async function runBackfillCoverMasters(
       noneCount: none.length,
       ok: true,
       rateLimited: false,
+      requeued,
+      requeuedCount: requeued.length,
       resolved,
       resolvedCount: resolved.length,
     });
@@ -3941,8 +4017,11 @@ async function runBackfillCoverMasters(
   }
 
   const verb = dryRun ? "Would resolve" : "Resolved";
+  const requeuedNote = retryNone
+    ? ` (${dryRun ? "would re-queue" : "re-queued"} ${requeued.length} from none)`
+    : "";
   console.log(
-    `${verb} ${resolved.length} ${kind} cover master(s); ${none.length} without a source; ${failed.length} failed.`,
+    `${verb} ${resolved.length} ${kind} cover master(s); ${none.length} without a source; ${failed.length} failed${requeuedNote}.`,
   );
 
   for (const slug of resolved) {
@@ -6056,6 +6135,16 @@ function parseListLimit(value: string | undefined): number {
   return limit;
 }
 
+function parseFreshView(value: string | undefined): FreshView {
+  const view = value ?? "all";
+
+  if (view !== "all" && view !== "tracks" && view !== "albums") {
+    throw new Error("View must be one of: all, tracks, albums");
+  }
+
+  return view;
+}
+
 // Resolve the tri-state key filter from the two accepted forms: `--no-key`
 // (Commander sets `key === false`) or `--has-key true|false`. Absent both ⇒
 // undefined (no filter — list everything). `--no-key` wins if both are given.
@@ -6872,6 +6961,7 @@ const stringOptions = new Set([
   "--verdict-file",
   "--video",
   "--video-url",
+  "--view",
   "--voice-id",
   "--window-since",
   "--window-until",

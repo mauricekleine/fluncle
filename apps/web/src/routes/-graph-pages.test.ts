@@ -23,6 +23,9 @@ const getLabelForAlbum = vi.hoisted(() => vi.fn());
 // The label page reads confirmed aliases for its JSON-LD `alternateName` (U2a); this gate test
 // is blind to them, so it stays a stub returning none.
 const getConfirmedAliasNames = vi.hoisted(() => vi.fn(async () => []));
+// A missing label slug consults the merge-redirect resolver (U2b) before 404ing; this gate test
+// has no merged labels, so it stays a stub returning none (an unknown slug stays missing → 404).
+const resolveLabelAliasRedirect = vi.hoisted(() => vi.fn(async () => undefined));
 const getAlbumBySlug = vi.hoisted(() => vi.fn());
 const listArtistsByLabel = vi.hoisted(() => vi.fn());
 const listArtistsByAlbum = vi.hoisted(() => vi.fn());
@@ -36,6 +39,7 @@ vi.mock("@/lib/server/labels", async (importOriginal) => ({
   getConfirmedAliasNames,
   getLabelBySlug,
   getLabelForAlbum,
+  resolveLabelAliasRedirect,
 }));
 
 vi.mock("@/lib/server/albums", async (importOriginal) => ({

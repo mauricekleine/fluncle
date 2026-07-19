@@ -34,6 +34,7 @@ import { getCatalogueCaptureState } from "./capture-budget";
 import { getCrawlStatus } from "./crawl";
 import { getDb, typedRow, typedRows } from "./db";
 import { REC_ELIGIBLE_WHERE } from "./recommendations";
+import { clampSnapshotWindow } from "./snapshot-window";
 import { ANCHOR_REASK_AFTER_DAYS, countTrackWork, kindClause } from "./track-work";
 
 /** The funnel's stage totals — cumulative counts of rows that have reached each stage. */
@@ -70,8 +71,19 @@ export type FunnelQueues = {
   embedQueue: number;
 };
 
-/** The crawl frontier's coarse state — the two numbers the funnel carries. */
-export type FunnelFrontier = { done: number; pending: number };
+/**
+ * The LIVE queue depths — the persisted `FunnelQueues` plus the anchor worklist split by whether the
+ * row already carries a MuQ embedding. This split is a live-read refinement only (never persisted),
+ * so it lives here and not on `FunnelQueues` / the snapshot row: `anchorQueueReady` is the embedded
+ * head the hourly anchor sweep actually works (the actionable number); `anchorQueueAwaitingAudio` is
+ * crawler metadata still waiting on capture/embed (it costs nothing until the audio pipeline reaches
+ * it). Both derive from the SAME anchor worklist predicate, so they sum to `anchorQueueIsrc +
+ * anchorQueueNoIsrc`.
+ */
+export type FunnelLiveQueues = FunnelQueues & {
+  anchorQueueAwaitingAudio: number;
+  anchorQueueReady: number;
+};
 
 /** Every integer the daily snapshot persists — the stages, the queues, and the frontier. */
 export type CatalogueSnapshotCounts = FunnelStages &
@@ -105,15 +117,11 @@ export type FunnelMeters = {
 export type FunnelView = {
   live: {
     meters: FunnelMeters;
-    queues: FunnelQueues;
+    queues: FunnelLiveQueues;
     stages: FunnelStages;
   };
   series: CatalogueSnapshotRow[];
 };
-
-/** The default series window — a season of daily snapshots, bounded so the read stays small. */
-const DEFAULT_WINDOW_DAYS = 90;
-const MAX_WINDOW_DAYS = 365;
 
 type StageRow = {
   analyzed: number | null;
@@ -129,6 +137,11 @@ type AnchorSplitRow = { with_isrc: number | null; without_isrc: number | null };
 
 /** The drainable anchor worklist split by the two verification paths. */
 type AnchorSplit = { withIsrc: number; withoutIsrc: number };
+
+type AnchorEmbeddingSplitRow = { awaiting_audio: number | null; ready: number | null };
+
+/** The drainable anchor worklist split by whether the row already carries a MuQ embedding. */
+type AnchorEmbeddingSplit = { awaitingAudio: number; ready: number };
 
 /**
  * The whole set of catalogue counts, each through the product's own predicate. Independent
@@ -210,6 +223,35 @@ async function countAnchorQueueByIsrc(): Promise<AnchorSplit> {
   const row = typedRow<AnchorSplitRow>(result.rows);
 
   return { withIsrc: Number(row?.with_isrc ?? 0), withoutIsrc: Number(row?.without_isrc ?? 0) };
+}
+
+/**
+ * The drainable anchor worklist, split by whether the row already carries a MuQ embedding. Rides the
+ * SAME `kindClause("anchor")` fragment `countAnchorQueueByIsrc` uses — one predicate, partitioned on
+ * `embedding_blob is not null` — so the split can never disagree with the queue the sweep drains, and
+ * the two halves sum to the whole anchor queue by construction:
+ *   - `ready`        — embedded rows awaiting an anchor: the head the hourly anchor sweep actually
+ *                      works, the actionable number.
+ *   - `awaitingAudio`— the same worklist with no embedding yet: crawler metadata deep in the ladder,
+ *                      costing nothing until capture/embed reach it.
+ * `embedding_blob is not null` reads the cell's null flag, not its bytes (no vector crosses the wire —
+ * the same `union all`-free single-pass shape the stage scan uses). Live-read only: never persisted.
+ */
+async function countAnchorQueueByEmbedding(): Promise<AnchorEmbeddingSplit> {
+  const anchor = kindClause("anchor");
+  const db = await getDb();
+  const result = await db.execute({
+    args: anchor.args,
+    sql: `select
+            sum(case when t.embedding_blob is not null then 1 else 0 end) as ready,
+            sum(case when t.embedding_blob is null then 1 else 0 end) as awaiting_audio
+          from tracks t
+          left join findings f on f.track_id = t.track_id
+          where ${anchor.sql}`,
+  });
+  const row = typedRow<AnchorEmbeddingSplitRow>(result.rows);
+
+  return { awaitingAudio: Number(row?.awaiting_audio ?? 0), ready: Number(row?.ready ?? 0) };
 }
 
 /**
@@ -326,15 +368,6 @@ type SnapshotDbRow = {
   rec_eligible: number;
 };
 
-/** Clamp the requested series window to a sane bounded range (default 90 days, max 365). */
-function clampWindow(windowDays?: number): number {
-  if (typeof windowDays !== "number" || !Number.isFinite(windowDays) || windowDays <= 0) {
-    return DEFAULT_WINDOW_DAYS;
-  }
-
-  return Math.min(Math.trunc(windowDays), MAX_WINDOW_DAYS);
-}
-
 /**
  * The bounded snapshot series, oldest-first. A plain ASC index walk on the `day` PK
  * (`where day >= ? order by day asc`) — `day` is lexicographic-equals-chronological, so the
@@ -381,9 +414,10 @@ async function readSnapshotSeries(windowDays: number): Promise<CatalogueSnapshot
  * plus the bounded day-by-day series read back from the ledger. `get_funnel` handler body.
  */
 export async function getFunnel(windowDays?: number): Promise<FunnelView> {
-  const window = clampWindow(windowDays);
-  const [counts, captureState, series] = await Promise.all([
+  const window = clampSnapshotWindow(windowDays);
+  const [counts, anchorEmbeddingSplit, captureState, series] = await Promise.all([
     computeCatalogueSnapshotCounts(),
+    countAnchorQueueByEmbedding(),
     getCatalogueCaptureState(),
     readSnapshotSeries(window),
   ]);
@@ -406,8 +440,10 @@ export async function getFunnel(windowDays?: number): Promise<FunnelView> {
       queues: {
         analyzeQueue: counts.analyzeQueue,
         anchorBackoff: counts.anchorBackoff,
+        anchorQueueAwaitingAudio: anchorEmbeddingSplit.awaitingAudio,
         anchorQueueIsrc: counts.anchorQueueIsrc,
         anchorQueueNoIsrc: counts.anchorQueueNoIsrc,
+        anchorQueueReady: anchorEmbeddingSplit.ready,
         captureQueue: counts.captureQueue,
         embedQueue: counts.embedQueue,
       },

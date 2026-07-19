@@ -12,6 +12,7 @@ import { env } from "cloudflare:workers";
 import { FOUND_BASE, trackMedia } from "../media";
 import {
   buildContextQuery,
+  DEFAULT_CARTESIA_EMOTION,
   DEFAULT_CARTESIA_SPEED,
   fetchTrackContext,
   type ObservationArtifact,
@@ -108,6 +109,7 @@ export async function renderAndStoreObservation(
     ...(contextNote ? { contextNote } : {}),
     durationMs,
     durationTargetSec: options.durationTargetSec,
+    emotion: DEFAULT_CARTESIA_EMOTION,
     generatedAt,
     logId,
     provider: "cartesia",

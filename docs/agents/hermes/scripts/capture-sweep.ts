@@ -277,6 +277,21 @@ export function rerollSessionId(sessionId: string): string {
 }
 
 /**
+ * The per-RUN sticky-session seed: `<id>` on a clean first run, `<id>.a<failures>` on a
+ * retry. A bot-challenge flag is an IP-reputation ruling that outlives the run, and the
+ * seed used to be the bare track id — so a `failed` row's next run landed on the exact
+ * exit that just got flagged and burned a challenge (plus the run's one re-roll) before
+ * seeing a fresh one. Folding the persisted failure count in rotates every retry run onto
+ * an unburned exit for free, with no flagged-IP ledger to keep or expire (we never see
+ * exit IPs — the provider maps session → exit; flags decay on their own). Within a run the
+ * session stays sticky as before, and `.a<n>` never collides with the `.r1` re-roll
+ * namespace (run N's re-roll is `<id>.a<n>.r1`). The `.` survives the session sanitizer.
+ */
+export function captureSessionSeed(idOrLogId: string, priorFailures: number): string {
+  return priorFailures > 0 ? `${idOrLogId}.a${priorFailures}` : idOrLogId;
+}
+
+/**
  * The duration match-guard: accept a candidate only if its length is within
  * max(toleranceSec, targetSec × tolerancePct) of the finding's Spotify duration. Returns
  * false for a missing/zero target (we can't guard without a reference length).
@@ -1036,11 +1051,17 @@ async function captureFinding(finding: CaptureFinding): Promise<FindingOutcome> 
   const keyRoot = logId ?? `catalogue/${trackId}`;
 
   const primaryQuery = buildSearchQuery(finding, 0);
+  // The persisted consecutive-failure count: drives the retry backoff bookkeeping in the
+  // catch below AND rotates the sticky session per retry run (captureSessionSeed) so a
+  // retry never re-lands on the exit whose flag just failed it.
+  const priorFailures =
+    typeof finding.sourceAudioFailures === "number" ? finding.sourceAudioFailures : 0;
+  const sessionSeed = captureSessionSeed(logId ?? trackId, priorFailures);
   const proxyUrl = buildStickyProxyUrl({
     host: PROXY_HOST,
     password: PROXY_PASSWORD,
     port: PROXY_PORT,
-    sessionId: logId ?? trackId,
+    sessionId: sessionSeed,
     username: PROXY_USERNAME,
   });
   // THE BOT-CHALLENGE RE-ROLL (one per run). A "Sign in to confirm you're not a bot" is an
@@ -1052,7 +1073,7 @@ async function captureFinding(finding: CaptureFinding): Promise<FindingOutcome> 
     host: PROXY_HOST,
     password: PROXY_PASSWORD,
     port: PROXY_PORT,
-    sessionId: rerollSessionId(logId ?? trackId),
+    sessionId: rerollSessionId(sessionSeed),
     username: PROXY_USERNAME,
   });
   let activeProxyUrl = proxyUrl;
@@ -1302,9 +1323,8 @@ async function captureFinding(finding: CaptureFinding): Promise<FindingOutcome> 
     // consecutive-failure count + stamp the attempt: the capture queue holds a `failed`
     // row out until `source_audio_attempted_at` is past the cooldown, and drops it once
     // the count hits the cap. The admin DTO surfaces the prior count (when non-zero), so
-    // absent → 0 → a first failure lands 1, a second lands 2, … up to the cap.
-    const priorFailures =
-      typeof finding.sourceAudioFailures === "number" ? finding.sourceAudioFailures : 0;
+    // absent → 0 → a first failure lands 1, a second lands 2, … up to the cap. The bumped
+    // count also rotates the NEXT run's session seed (captureSessionSeed above).
     const update: Record<string, unknown> = {
       captureStatus: "failed",
       sourceAudioAttemptedAt: new Date().toISOString(),

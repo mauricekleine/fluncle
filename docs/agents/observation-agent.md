@@ -69,7 +69,7 @@ Writing alignment does **not** bump `updated_at` (it describes an existing artif
 - `context_note` and the script carry **facts only** — never quote or closely paraphrase lyrics. The Worker filters known lyric domains out of the firecrawl context; a leaked lyric in a _spoken_ artifact is a copyright + voice problem at once.
 - Never invent a factual claim; the context note and track props are authoritative.
 - The observation carries **no commercial track audio** — only Fluncle's spoken voice. The artifact is internal until the operator stands up a surface that plays it.
-- The cloned Fluncle voice is **live** — `CARTESIA_VOICE_ID` points at it in `wrangler.jsonc`, and `observation.ts` sets the one knob Cartesia exposes (`DEFAULT_CARTESIA_SPEED = 0.78`, dialed by ear).
+- The cloned Fluncle voice is **live** — `CARTESIA_VOICE_ID` points at it in `wrangler.jsonc`, and `observation.ts` sets the delivery (`DEFAULT_CARTESIA_SPEED = 0.85` + `DEFAULT_CARTESIA_EMOTION = "excited"`, picked by ear in the 2026-07-18 bake-off after a listener flagged the 0.78 reads as flat; the persona stays the uncle over the tune).
 - Loudness normalization (the render can sit hot vs the ~−24 LUFS observation norm) can't run in the Worker. If observations drift in loudness, the agent runs one `loudnorm` ffmpeg pass before passing the mp3 — not a v1 blocker.
 
 ## Worker secrets (the operator sets these)

@@ -15,6 +15,10 @@ export type CoverMastersBackfillResult = {
   noneCount: number;
   ok: boolean;
   rateLimited: boolean;
+  // Slugs re-queued from terminal `none` → `pending` by `--retry-none` before the pass ran (absent
+  // on a normal pass — the field is optional so a non-retry response is untouched).
+  requeued?: string[];
+  requeuedCount?: number;
   resolved: string[];
   resolvedCount: number;
 };
@@ -24,17 +28,24 @@ export type CoverMastersBackfillResult = {
 // Archive → Spotify; artist: Spotify), downscaled to ≤1200 by the requested rendition, and stores
 // it once in our own R2. Idempotent + self-draining (a resolved/none entity leaves the worklist).
 // `--dry-run` reports the eligible worklist without any fetch or write. Pass the prior pass's
-// `nextCursor` to resume; the CLI loops until it comes back null.
+// `nextCursor` to resume; the CLI loops until it comes back null. `retryNone` sends `retry=none`,
+// re-queuing a bounded batch of terminal `none` rows to `pending` before the pass runs (the
+// operator heal for a cover that went `none` historically but now has a source).
 export async function backfillCoverMastersCommand(
   kind: CoverMastersKind,
   limit: number,
   dryRun: boolean,
   cursor?: string,
+  retryNone = false,
 ): Promise<CoverMastersBackfillResult> {
   const params = new URLSearchParams({ dryRun: String(dryRun), kind, limit: String(limit) });
 
   if (cursor) {
     params.set("cursor", cursor);
+  }
+
+  if (retryNone) {
+    params.set("retry", "none");
   }
 
   return adminApiPost<CoverMastersBackfillResult>(
