@@ -26,6 +26,13 @@ Claude Code delivery is **at-least-once** — this prompt may fire more than onc
 - A finding is "claimed" the instant its `video_url` is set (the ship step). Until then it is fair game; after then it is invisible to the queue. There is no intermediate lock — and you do not need one, because you film at most one per run and the queue gates it.
 - If two runs race on the same head, the worst case is one wasted render, never a double-published video: the second `track video` upload just re-points `video_url` at the same finding. This is acceptable; do not engineer around it beyond the queue gate.
 
+## Headless discipline — the render dies with your turn
+
+You run under `claude -p`: the process exits the moment you end your turn, and every background task dies with it. There is no re-invocation, no task notification, no scheduled wakeup — those exist only in interactive sessions. (On 2026-07-19 three consecutive runs each ended their turn "waiting for the render to finish"; all three renders died unshipped and the tick produced nothing.)
+
+- **Run every render, encode, and upload in the FOREGROUND** — one plain blocking Bash call. Never `run_in_background`, never your own `nohup`/`setsid`, never a monitor or wakeup you plan to "wait for". The Bash timeout ceiling is raised for this run (`BASH_MAX_TIMEOUT_MS`) precisely so a full render fits in one blocking call — pass a generous `timeout` on the render call itself instead of backgrounding it.
+- **Never end your turn while work is in flight.** The run ends ONLY when the ship upload has succeeded and `video_url` is confirmed set — or when you stop early with an explicit one-line blocker report. A turn that ends "waiting" is a failed run that wastes the whole tick.
+
 ## Steps
 
 Run from the root of a Fluncle repo checkout. `bun` runs the video kit (never npm/pnpm/yarn); the `fluncle` CLI is the installed binary (see **Tools** above) — never the from-source `bun run --cwd apps/cli` form.
