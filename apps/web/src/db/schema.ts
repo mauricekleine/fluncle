@@ -427,6 +427,22 @@ export const tracks = sqliteTable(
     index("tracks_nearest_finding_score_idx").on(table.nearestFindingScore),
     index("tracks_capture_priority_idx").on(table.capturePriority),
     index("tracks_source_audio_attempted_at_idx").on(table.sourceAudioAttemptedAt),
+    // THE CAPTURE-MISMATCH ATTENTION READ (attention.ts `listCaptureSuspectRows`, docs/the-ear.md
+    // § Wrong audio). The /admin attention queue's suspect list is `capture_verification =
+    // 'mismatch'` ordered `capture_verified_at ASC` — over a table designed to grow to five figures,
+    // an unindexed filter on `capture_verification` is the full scan of a growing table AGENTS.md
+    // forbids (measured ~5s p95 in prod). A COMPOSITE btree seeks it: the leading column turns the
+    // `= 'mismatch'` filter into a range seek, and the trailing column serves the `ORDER BY
+    // capture_verified_at ASC` from the index instead of a sort (`track_id` is the PK tiebreaker, so
+    // it need not be in the index). It also serves the backfill worklist's `capture_verification is
+    // null` seek (catalogue.ts `listUnverifiedCaptures`) off the same leading column. PLAIN ASC
+    // columns — a `desc()` index would poison the drizzle snapshot into rebuilding every index on the
+    // next migration (the ratified trap) — and a plain btree, never the vector `libsql_vector_idx`
+    // that wedges hosted Turso, so it builds like `tracks_key_idx` beside it.
+    index("tracks_capture_verification_verified_at_idx").on(
+      table.captureVerification,
+      table.captureVerifiedAt,
+    ),
     // The crawler's idempotence check — "do we already hold this ISRC?" — before minting a
     // row. A predicate on `tracks.isrc` over a table designed to grow to five figures, so
     // it is indexed. NOT unique: an ISRC is not guaranteed distinct across the archive's
