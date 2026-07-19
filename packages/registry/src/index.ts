@@ -418,7 +418,7 @@ export const SURFACES: readonly Surface[] = [
     kind: "web_route",
     name: "web.tracks",
     operatorNotes:
-      "The top-level track index — the whole archive as one browse list, findings in full voice and the catalogue rows in the unlit register (DESIGN.md). Ordered by tracks.release_date (what came out), never findings.added_at (the Found Rule), keyset-paginated over the tracks_release_date_idx btree so it stays a bounded reverse scan as the catalogue grows (lib/server/tracks-hub.ts). The filter params MIRROR the search vocabulary verbatim (yearMin/yearMax, bpmMin/bpmMax, key, label; galaxy is the one extension). The bare HUB is always indexable + in the sitemap; ANY filter param present flips it to noindex, and the canonical is always the bare /tracks. The INDEX is always-200, so it is HTTP-probeable.",
+      "The top-level track index — the whole archive as one browse list, findings in full voice and the catalogue rows in the unlit register (DESIGN.md). Ordered by tracks.release_date (what came out), never findings.added_at (the Found Rule), numbered-paginated (?page=N) over the tracks_release_date_idx btree with a quiet YEAR fast lane, so a crawler with no JS walks the whole list (lib/server/tracks-hub.ts). The filter params MIRROR the search vocabulary verbatim (yearMin/yearMax, bpmMin/bpmMax, key, label; galaxy is the one extension). The bare HUB is always indexable + in the sitemap, each page self-canonical; ANY filter param present flips it to noindex, and paged bare URLs stay out of the sitemap. The INDEX is always-200, so it is HTTP-probeable.",
     probeConfig: { cadenceMs: PROBE_CADENCE_MS, kind: "http", timeoutMs: PROBE_TIMEOUT_MS },
     route: "/tracks",
     url: `${SITE}/tracks`,

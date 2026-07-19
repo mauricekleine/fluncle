@@ -2612,48 +2612,166 @@ a.catalogue-letter:focus-visible {
   text-align: center;
 }
 
-/* ── /tracks hub — the two-register list + its load-more ──────────────────────────────
+/* ── /tracks hub — the two-register reference list ────────────────────────────────────────
    The filter bar is built from the Shadcn design system (Input / Label / Select / Button) with
-   Tailwind layout utilities in the route — no bespoke control tokens here. The list reuses
-   `.fresh-rows` / `FreshStreamRow` unchanged; only the load-more row is styled below. */
-.tracks-hub-list {
-  margin-top: 0.4rem;
-}
+   Tailwind layout utilities in the route — no bespoke control tokens here. Below it, numbered pages
+   of `TracksHubRow` (its own component, NOT `/fresh`'s cover card): a dense, cover-led reference row.
+   The year fast lane + the pager reuse the shared `.catalogue-letters` / `.catalogue-pager` chrome. */
 
-.tracks-hub-more {
-  border-top: 1px solid color-mix(in oklch, var(--border) 55%, transparent);
-  list-style: none;
-}
-
-.tracks-hub-more-button {
-  align-items: center;
+/* "312 matches" — the filtered count by the form, quiet Stardust ink. */
+.tracks-hub-matchline {
   color: var(--muted-foreground);
-  cursor: pointer;
-  display: flex;
-  font-size: 0.85rem;
-  font-weight: 700;
-  gap: 0.5rem;
-  justify-content: center;
-  min-height: 3.25rem;
-  width: 100%;
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
+  margin-top: 0.7rem;
 }
 
-/* Stardust bold text, Gold Veil hover (DESIGN.md's Track Row pagination spec): the wash lands and
-   the text ignites to Eclipse Glow — a heat, never a dim. While fetching, `aria-disabled` marks it
-   busy without dropping keyboard focus (a `disabled` button ejects focus mid-fetch). */
-.tracks-hub-more-button:hover:not([aria-disabled="true"]),
-.tracks-hub-more-button:focus-visible {
-  background: var(--gold-veil, color-mix(in oklch, var(--eclipse-gold) 10%, transparent));
+.tracks-hub-rows {
+  display: flex;
+  flex-direction: column;
+  list-style: none;
+  margin: 0.6rem 0 0;
+  padding: 0;
+}
+
+.tracks-hub-row {
+  align-items: center;
+  border-top: 1px solid color-mix(in oklch, var(--border) 55%, transparent);
+  display: flex;
+  gap: 0.85rem;
+  min-height: 3.75rem;
+  padding: 0.5rem 0;
+}
+
+.tracks-hub-row:first-child {
+  border-top: 0;
+}
+
+/* The release year — the date column, Oxanium tabular like every other number (the Tabular Rule). */
+.tracks-hub-row-year {
+  color: var(--muted-foreground);
+  flex: none;
+  font-family: var(--fresh-oxanium);
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+  text-align: right;
+  width: 2.8rem;
+}
+
+/* Cover-led: 3.25rem album art (the .track-artwork base carries the size + radius). A finding shows
+   its real cover; an unlit catalogue row shows the eclipse fallback, dimmed a step (the Unlit Rule). */
+.tracks-hub-row-cover {
+  flex: none;
+}
+
+.tracks-hub-row-unlit .tracks-hub-row-cover {
+  opacity: 0.66;
+  transition: opacity 150ms ease-out;
+}
+
+.tracks-hub-row-unlit:hover .tracks-hub-row-cover {
+  opacity: 0.85;
+}
+
+.tracks-hub-row-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.tracks-hub-row-title {
+  color: var(--stardust);
+  font-size: 0.9rem;
+  line-height: 1.3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: color 150ms ease-out;
+  white-space: nowrap;
+}
+
+/* A finding's title heats to Eclipse Glow on hover/focus (it links to its log page); a catalogue
+   row's title is plain text and never lights. */
+.tracks-hub-row-lit .tracks-hub-row-title {
+  color: var(--starlight-cream);
+  font-weight: 500;
+}
+
+.tracks-hub-row-title-link {
+  text-decoration: none;
+}
+
+.tracks-hub-row-title-link:hover,
+.tracks-hub-row-title-link:focus-visible {
   color: var(--eclipse-glow);
 }
 
-.tracks-hub-more-button:focus-visible {
+.tracks-hub-row-title-link:focus-visible {
+  border-radius: var(--rounded-sm);
   outline: 2px solid var(--eclipse-glow);
-  outline-offset: -2px;
+  outline-offset: 2px;
 }
 
-.tracks-hub-more-button[aria-disabled="true"] {
-  cursor: default;
+/* The artist · label meta line — quiet Stardust, each entity a graph link that heats to cream. */
+.tracks-hub-row-meta {
+  color: var(--muted-foreground);
+  font-size: 0.8rem;
+  line-height: 1.3;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tracks-hub-row-entity {
+  color: var(--stardust);
+  text-decoration: none;
+  transition: color 150ms ease-out;
+}
+
+.tracks-hub-row-entity:hover {
+  color: var(--starlight-cream);
+}
+
+.tracks-hub-row-entity:focus-visible {
+  border-radius: var(--rounded-sm);
+  outline: 2px solid var(--eclipse-glow);
+  outline-offset: 2px;
+}
+
+.tracks-hub-row-caret {
+  color: var(--muted-foreground);
+  flex: none;
+}
+
+/* The Spotify listen mark on a catalogue row (its one honest destination — no detail page). */
+.tracks-hub-row-listen {
+  align-items: center;
+  color: var(--stardust);
+  display: flex;
+  flex: none;
+}
+
+.tracks-hub-row-mark {
+  height: 0.9rem;
+  /* 0.62 rest (not the fresh row's 0.55): this mark is the listen link's sole sighted affordance,
+     so it keeps a margin over the 3:1 non-text AA floor on Deep Field. */
+  opacity: 0.62;
+  transition: opacity 150ms ease-out;
+  width: 0.9rem;
+}
+
+.tracks-hub-row-listen:hover .tracks-hub-row-mark,
+.tracks-hub-row-listen:focus-visible .tracks-hub-row-mark {
+  opacity: 0.85;
+}
+
+.tracks-hub-row-listen:focus-visible {
+  border-radius: var(--rounded-sm);
+  outline: 2px solid var(--eclipse-glow);
+  outline-offset: 2px;
 }
 
 .log-index-list {

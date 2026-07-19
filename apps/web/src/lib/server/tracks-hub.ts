@@ -4,10 +4,11 @@
 // certified findings and the wider catalogue he is charting, in ONE newest-release-first list you
 // can filter and page through. It is a CATALOGUE page (VOICE.md's Three Areas) — a reference shelf,
 // not a lore page — and it renders the two-register grammar the rest of the archive lives by: a
-// certified finding is LIT (its cover-lead avatar, its Log ID coordinate, a link to `/log/<logId>`),
-// an uncertified catalogue row is UNLIT (a dimmed avatar, no coordinate, out to Spotify — DESIGN.md's
-// Unlit Rule). Both registers are enforced once, in `FreshStreamRow` (`components/fresh/shared.tsx`),
-// which this hub renders through unchanged; the split here is structural, in the mapper below.
+// certified finding is LIT (its cover, its Log ID coordinate, a link to `/log/<logId>`), an
+// uncertified catalogue row is UNLIT (no cover — the eclipse fallback — no coordinate, out to
+// Spotify — DESIGN.md's Unlit Rule). The register is a bit the mapper reads, structural in the shape
+// below; the row component (`components/tracks-hub-row.tsx`) renders each register without deciding
+// which one it is.
 //
 // ── RELEASE DATE, NOT FOUND DATE ───────────────────────────────────────────────────────
 // Like `/fresh`, this list is ordered by `tracks.release_date` (when a tune CAME OUT), never
@@ -17,13 +18,17 @@
 //
 // ── WHY IT SCALES ──────────────────────────────────────────────────────────────────────
 // Unlike `/fresh` (a 30-day window), this is the UNBOUNDED archive, so it cannot fold the whole
-// table into the isolate. Instead it is KEYSET-paginated: the primary sort (`release_date desc`)
-// rides the `tracks_release_date_idx` btree as a reverse scan, a `limit + 1` caps every page, and
-// the cursor resumes at the exact `{releaseDate, trackId}` boundary — never an OFFSET that re-scans
-// the skipped prefix as the archive grows (AGENTS.md: never a full scan of a growing table). The
-// filter predicates are the same compiled vocabulary `/search` uses (`compileFilters`), plus the
-// BPM-range filter that motivated `tracks_bpm_idx`. Proven against HOSTED Turso by
-// `apps/web/scripts/bench-tracks-hub.ts` — never `turso dev` (docs/local-database.md).
+// table into the isolate. It is NUMBERED-page paginated (the `/labels` + `/albums` + `/artists` hub
+// precedent, #731): the primary sort (`release_date desc`) rides the `tracks_release_date_idx` btree
+// as a reverse scan, and each page is a `limit ? offset ?` slice of it — a real `?page=N` URL a
+// crawler follows, no keyset cursor and nothing that loads on scroll. The total (for the pager +
+// the CollectionPage `numberOfItems`) is a separate `count(*)` over the same filtered set, run in
+// parallel. TRACK_SELECT is a NAMED column list — never `select *` — so the wide embedding BLOBs on
+// `tracks` never cross into the isolate at 30k rows (AGENTS.md's database rule). The filter
+// predicates are the same compiled vocabulary `/search` uses (`compileFilters`), plus the BPM-range
+// filter that motivated `tracks_bpm_idx`. The offset walk over a growing table is the tradeoff a
+// numbered pager makes; it must be proven against HOSTED Turso (a scratch DB) before any scale
+// claim, never `turso dev` (docs/local-database.md, "Local is not production").
 
 import { type SearchFilters } from "@fluncle/contracts/orpc";
 import { parseArtistsJson } from "./artists";
@@ -36,26 +41,26 @@ import {
   type LeadArtistRow,
   leadArtistAvatarUrl,
 } from "./fresh";
+import { type CatalogueHubNumberedPage, CatalogueHubPageOutOfRangeError } from "./labels";
 import { type Clause, compileFilters } from "./search";
+import { fold } from "./track-match";
 import { TRACK_SELECT, toPublicTrackListItem, toTrackListItem, type TrackRow } from "./tracks";
 
 // Note: this hub deliberately does NOT drive through `tracks.ts`'s inner `FINDINGS_FROM` join — it
 // uses a LEFT join so a catalogue row (no `findings` row) survives in the unlit register.
 
-/** A browse page's size — a reading surface, not an infinite feed, but deep enough to fill a viewport. */
-export const TRACKS_HUB_PAGE_SIZE = 25;
-/** The hard ceiling a caller-supplied limit is clamped to (a hostile `?limit` can't fold the archive). */
-export const TRACKS_HUB_MAX_LIMIT = 50;
+/** A browse page's size — a reading surface, not an infinite feed. Shared with the year fast lane's
+    year → page mapping, so a year links to exactly the page its first release lands on. */
+export const TRACKS_HUB_PAGE_SIZE = 48;
 
 /**
  * The hub's filter axes. The shared six MIRROR `SearchFiltersSchema` VERBATIM
  * (`yearMin`/`yearMax`, `bpmMin`/`bpmMax`, `key`, `label`) — same names, same semantics, compiled by
  * the same `compileFilters` — so one filter vocabulary reads the same on `/search` and here.
  *
- * `galaxy` (a galaxy SLUG) is the one extension beyond that schema. It does not exist on
- * `SearchFiltersSchema` yet; it is a CANDIDATE for the shared vocabulary once search grows a
- * galaxy tier. Because a galaxy lives on `findings.galaxy_id`, filtering by it structurally narrows
- * the list to certified findings — the filtered list simply contains only lit rows, rendered honestly.
+ * `galaxy` (a galaxy SLUG) is the one extension beyond that schema. Because a galaxy lives on
+ * `findings.galaxy_id`, filtering by it structurally narrows the list to certified findings — the
+ * filtered list simply contains only lit rows, rendered honestly.
  */
 export type TracksHubFilters = {
   bpmMax?: number;
@@ -68,99 +73,49 @@ export type TracksHubFilters = {
 };
 
 /**
- * The keyset cursor: the ordering tuple of the last row on the page. `release_date` is nullable
- * (an undated catalogue row), and the list orders nulls LAST, so the cursor carries the null too.
- * A SEPARATE type from the feed's `TrackCursor` (which keys `{addedAt, trackId}`) — the two orders
- * are unrelated, so overloading one cursor across both would be a silent bug.
+ * One artist credit on a hub row, with the `/artist/<slug>` slug when the artist entity exists (a
+ * bare name when it does not — nowhere honest to send you, so the row component renders it plain).
+ * Resolved in the SAME select that loaded the row (a JSON subquery over `track_artists`), so linking
+ * every artist on 48 rows costs no per-row round trip.
  */
-export type TracksHubCursor = {
-  releaseDate: string | null;
-  trackId: string;
-};
+export type TracksHubArtistLink = { name: string; slug?: string };
 
 /**
- * One row of the hub, in the exact shape `FreshStreamRow` reads (`FreshStreamEntry`): a lit finding
- * or an unlit catalogue row, plus the top-level release date the row's date column prints. Kept
- * structurally identical to `FreshStreamEntry` so the shared row component renders it unchanged.
+ * One row of the hub: a lit finding or an unlit catalogue row, plus the release date the row's date
+ * column prints and the resolved artist links both registers render. A finding carries its full
+ * public DTO (cover, coordinate, label + slug); a catalogue row carries only the columns the unlit
+ * register renders (no cover crosses the wire — the Unlit Rule is structural in this shape), plus
+ * the label + slug so its imprint still links to `/label/<slug>` when the entity exists.
  */
 export type TracksHubEntry =
-  | { finding: FreshFinding; kind: "finding"; releaseDate: string }
-  | { kind: "catalogue"; releaseDate: string; track: FreshCatalogueItem };
+  | {
+      artistLinks: TracksHubArtistLink[];
+      finding: FreshFinding;
+      kind: "finding";
+      releaseDate: string;
+    }
+  | {
+      artistLinks: TracksHubArtistLink[];
+      kind: "catalogue";
+      label?: string;
+      labelSlug?: string;
+      releaseDate: string;
+      track: FreshCatalogueItem;
+    };
 
-/** A page of the hub: the entries, and the cursor to the next page (absent at the end). */
-export type TracksHubPage = {
-  entries: TracksHubEntry[];
-  nextCursor?: string;
-};
+/** A present release YEAR in the result set, mapped to the page its first (newest) release lands on
+    — the year fast lane's data (the A–Z lane mechanic mapped onto time). */
+export type TracksHubYearLaneEntry = { page: number; year: string };
 
-/** The row shape the unified read hands back — `TRACK_SELECT` + the lead-artist columns + the flag. */
+/** The row shape the unified read hands back — `TRACK_SELECT` + the lead-artist columns + the flag +
+    the artist-slug JSON. */
 type TracksHubRow = LeadArtistRow &
   TrackRow & {
+    /** The `[{name, slug}]` JSON for the row's artists (via `track_artists`), or "[]"/null for none. */
+    artist_slugs_json: string | null;
     /** 1 ⇔ a `findings` row exists ⇔ this is a certified finding (lit); 0 ⇔ a catalogue row (unlit). */
     certified: number;
   };
-
-export function encodeTracksHubCursor(cursor: TracksHubCursor): string {
-  return Buffer.from(JSON.stringify(cursor)).toString("base64url");
-}
-
-export function decodeTracksHubCursor(
-  value: string | null | undefined,
-): TracksHubCursor | undefined {
-  if (!value) {
-    return undefined;
-  }
-
-  try {
-    const parsed = JSON.parse(Buffer.from(value, "base64url").toString("utf8")) as TracksHubCursor;
-
-    // `releaseDate` is `string | null` (an undated row); `trackId` is always a string. Anything
-    // else is a hand-mangled cursor — degrade to "page from the top", never throw.
-    if (
-      typeof parsed.trackId === "string" &&
-      (parsed.releaseDate === null || typeof parsed.releaseDate === "string")
-    ) {
-      return { releaseDate: parsed.releaseDate, trackId: parsed.trackId };
-    }
-  } catch {
-    return undefined;
-  }
-
-  return undefined;
-}
-
-/** Clamp a caller-supplied limit into `[1, TRACKS_HUB_MAX_LIMIT]`, defaulting to the page size. */
-export function clampTracksHubLimit(limit?: number): number {
-  if (typeof limit !== "number" || !Number.isFinite(limit)) {
-    return TRACKS_HUB_PAGE_SIZE;
-  }
-
-  return Math.max(1, Math.min(TRACKS_HUB_MAX_LIMIT, Math.floor(limit)));
-}
-
-/**
- * The keyset "after this cursor" predicate for the `(release_date desc, track_id desc)` order, with
- * nulls sorting LAST (SQLite's native `desc` null placement). Two branches, because the null tail is
- * a different regime:
- *   - cursor on a DATED row → the rest of the dated rows (smaller date, or equal date + smaller id)
- *     AND the whole null tail follow it.
- *   - cursor in the NULL tail → only null rows with a smaller id follow.
- */
-export function tracksHubCursorClause(cursor: TracksHubCursor): Clause {
-  if (cursor.releaseDate === null) {
-    return {
-      args: [cursor.trackId],
-      sql: `tracks.release_date is null and tracks.track_id < ?`,
-    };
-  }
-
-  return {
-    args: [cursor.releaseDate, cursor.releaseDate, cursor.trackId],
-    sql: `(tracks.release_date is null
-           or tracks.release_date < ?
-           or (tracks.release_date = ? and tracks.track_id < ?))`,
-  };
-}
 
 /**
  * The galaxy clause — the hub's one extension past `compileFilters`. A galaxy lives on
@@ -178,11 +133,8 @@ function galaxyClause(slug: string): Clause {
   };
 }
 
-/** Assemble the full where-clause set: the shared compiled filters + galaxy + the keyset cursor. */
-export function tracksHubClauses(
-  filters: TracksHubFilters,
-  cursor: TracksHubCursor | undefined,
-): Clause[] {
+/** Assemble the where-clause set: the shared compiled filters + the galaxy extension. */
+export function tracksHubClauses(filters: TracksHubFilters): Clause[] {
   // The shared six, compiled by the SAME function `/search` uses. Only the shared subset is passed
   // — never `artist`/`album`/`text` — so the compiled SQL is exactly the hub's filter vocabulary.
   const shared: SearchFilters = {
@@ -200,22 +152,70 @@ export function tracksHubClauses(
     clauses.push(galaxyClause(filters.galaxy));
   }
 
-  if (cursor) {
-    clauses.push(tracksHubCursorClause(cursor));
+  return clauses;
+}
+
+/** The `where …` fragment + its bound args for a filter set (empty string when nothing is filtered). */
+function whereFor(clauses: Clause[]): { args: (number | string)[]; where: string } {
+  return {
+    args: clauses.flatMap((clause) => clause.args),
+    where: clauses.length > 0 ? `where ${clauses.map((clause) => clause.sql).join(" and ")}` : "",
+  };
+}
+
+/** The `track_artists → artists` JSON subquery: `[{name, slug}]` for the row's artists, one indexed
+    seek (`track_artists_track_id_idx` + the `artists` PK), the lead-artist subquery's sibling. */
+const ARTIST_SLUGS_SELECT = `(select json_group_array(json_object('name', a.name, 'slug', a.slug))
+     from track_artists ta join artists a on a.id = ta.artist_id
+     where ta.track_id = tracks.track_id) as artist_slugs_json`;
+
+/** Fold a row's artist-slug JSON into a `fold(name) → slug` map (the `getArtistSlugMap` shape),
+    keyed by the NORMALIZED name so a casing/accent drift between the canonical `artists.name` and
+    the `artists_json` display cache still resolves. A blank/absent JSON yields an empty map. */
+function parseArtistSlugMap(json: string | null): Map<string, string> {
+  const map = new Map<string, string>();
+
+  if (!json) {
+    return map;
   }
 
-  return clauses;
+  try {
+    const parsed = JSON.parse(json) as unknown;
+
+    if (Array.isArray(parsed)) {
+      for (const entry of parsed) {
+        const name = (entry as Record<string, unknown>)?.["name"];
+        const slug = (entry as Record<string, unknown>)?.["slug"];
+
+        if (typeof name === "string" && typeof slug === "string" && slug) {
+          map.set(fold(name), slug);
+        }
+      }
+    }
+  } catch {
+    return map;
+  }
+
+  return map;
 }
 
 /** Map one unified row to its register shape — a lit finding, or an unlit catalogue row. */
 function toTracksHubEntry(row: TracksHubRow): TracksHubEntry {
   const releaseDate = row.release_date ?? "";
   const artistAvatarUrl = leadArtistAvatarUrl(row);
+  const displayArtists = parseArtistsJson(row.artists_json);
+  const slugMap = parseArtistSlugMap(row.artist_slugs_json);
+  const artistLinks: TracksHubArtistLink[] = displayArtists.map((name) => {
+    const slug = slugMap.get(fold(name));
+
+    return slug ? { name, slug } : { name };
+  });
 
   if (row.certified) {
     // A finding carries the full `TRACK_SELECT` columns (findings.* are non-null here); map it the
     // way `/fresh` does — public-stripped, plus the lead-artist avatar.
     return {
+      artistLinks,
       finding: { ...toPublicTrackListItem(toTrackListItem(row)), artistAvatarUrl },
       kind: "finding",
       releaseDate,
@@ -223,13 +223,17 @@ function toTracksHubEntry(row: TracksHubRow): TracksHubEntry {
   }
 
   // A catalogue row: the findings.* columns are null and NEVER read. Only the `tracks` columns map,
-  // and no cover and no coordinate cross the wire (the Unlit Rule is structural in this shape).
+  // and no cover and no coordinate cross the wire (the Unlit Rule is structural in this shape). The
+  // label + slug ride along so the row's imprint still links to `/label/<slug>` when it has a page.
   return {
+    artistLinks,
     kind: "catalogue",
+    label: row.label ?? undefined,
+    labelSlug: row.label_slug ?? undefined,
     releaseDate,
     track: {
       artistAvatarUrl,
-      artists: parseArtistsJson(row.artists_json),
+      artists: displayArtists,
       releaseDate,
       spotifyUrl: row.spotify_url ?? undefined,
       title: row.title,
@@ -239,60 +243,117 @@ function toTracksHubEntry(row: TracksHubRow): TracksHubEntry {
 }
 
 /**
- * Build the hub's read as `{ args, sql }` — the ONE place the query shape lives, so the hosted-scale
- * bench (`scripts/bench-tracks-hub.ts`) measures and `EXPLAIN`s the EXACT query production runs, not
- * a hand-copied twin that could drift. A LEFT join (never `FINDINGS_FROM`'s inner join): a catalogue
- * row must survive in the unlit register. `certified` is the one bit the mapper reads to pick the
- * register. The order rides `tracks_release_date_idx` (reverse scan), nulls last natively; `track_id
- * desc` is the stable tiebreaker that makes the cursor a total order.
+ * ONE numbered page of the `/tracks` hub: every track (findings + catalogue) that survives the
+ * filters, newest release first, as a `limit ? offset ?` slice riding `tracks_release_date_idx`.
+ * Throws {@link CatalogueHubPageOutOfRangeError} for a page past the end (page 1 of an empty result
+ * is a legitimate empty page, never a throw) so the route can 404 rather than clamp — a `?page=99`
+ * on a 3-page hub is NOT a second URL for page 1's rows. The `count(*)` for the total runs in
+ * parallel over the same filtered set.
  */
-export function tracksHubQuery(
+export async function listTracksHubPage(
   filters: TracksHubFilters,
-  cursor: TracksHubCursor | undefined,
-  limit: number,
-): { args: (number | string)[]; sql: string } {
-  const clauses = tracksHubClauses(filters, cursor);
-  const where =
-    clauses.length > 0 ? `where ${clauses.map((clause) => clause.sql).join(" and ")}` : "";
+  page: number,
+): Promise<CatalogueHubNumberedPage<TracksHubEntry>> {
+  const db = await getDb();
+  const limit = TRACKS_HUB_PAGE_SIZE;
+  const { args, where } = whereFor(tracksHubClauses(filters));
+
+  const [countResult, pageResult] = await Promise.all([
+    db.execute({
+      args,
+      sql: `select count(*) as total
+            from tracks
+            left join findings on findings.track_id = tracks.track_id
+            ${where}`,
+    }),
+    db.execute({
+      args: [...args, limit, (page - 1) * limit],
+      sql: `select ${TRACK_SELECT}, ${LEAD_ARTIST_SELECT},
+                   (findings.track_id is not null) as certified,
+                   ${ARTIST_SLUGS_SELECT}
+            from tracks
+            left join findings on findings.track_id = tracks.track_id
+            ${LEAD_ARTIST_JOIN}
+            ${where}
+            order by tracks.release_date desc, tracks.track_id desc
+            limit ? offset ?`,
+    }),
+  ]);
+
+  const total = Number(typedRows<{ total: number }>(countResult.rows)[0]?.total ?? 0);
+  const rows = typedRows<TracksHubRow>(pageResult.rows);
+
+  if (rows.length === 0 && page > 1) {
+    throw new CatalogueHubPageOutOfRangeError();
+  }
 
   return {
-    args: [...clauses.flatMap((clause) => clause.args), limit],
-    sql: `select ${TRACK_SELECT}, ${LEAD_ARTIST_SELECT},
-                 (findings.track_id is not null) as certified
-          from tracks
-          left join findings on findings.track_id = tracks.track_id
-          ${LEAD_ARTIST_JOIN}
-          ${where}
-          order by tracks.release_date desc, tracks.track_id desc
-          limit ?`,
+    items: rows.map(toTracksHubEntry),
+    page,
+    pageCount: Math.max(Math.ceil(total / limit), 1),
+    total,
   };
 }
 
 /**
- * One page of the `/tracks` hub: every track (findings + catalogue) that survives the filters,
- * newest release first, keyset-paginated. `limit + 1` is fetched to detect a next page without a
- * second count query; the cursor is the last VISIBLE row's ordering tuple.
+ * The whole held count: every track Fluncle holds, findings + catalogue. Drives the masthead's "all
+ * N of them" line when a filter is active (so the masthead still names the archive's true size while
+ * the filtered count sits by the form). A bare `count(*)`, the cheapest read on the table. On an
+ * UNFILTERED view the page read's own total already IS this, so the route reuses it and skips this.
  */
-export async function listTracksHub(options: {
-  cursor?: string;
-  filters?: TracksHubFilters;
-  limit?: number;
-}): Promise<TracksHubPage> {
+export async function countAllTracks(): Promise<number> {
   const db = await getDb();
-  const filters = options.filters ?? {};
-  const limit = clampTracksHubLimit(options.limit);
-  const cursor = decodeTracksHubCursor(options.cursor);
-  const result = await db.execute(tracksHubQuery(filters, cursor, limit + 1));
+  const result = await db.execute(`select count(*) as total from tracks`);
 
-  const rows = typedRows<TracksHubRow>(result.rows);
-  const hasMore = rows.length > limit;
-  const visible = hasMore ? rows.slice(0, limit) : rows;
-  const entries = visible.map(toTracksHubEntry);
-  const last = visible.at(-1);
-  const nextCursor =
-    hasMore && last
-      ? encodeTracksHubCursor({ releaseDate: last.release_date, trackId: last.track_id })
-      : undefined;
+  return Number(typedRows<{ total: number }>(result.rows)[0]?.total ?? 0);
+}
 
-  return { entries, nextCursor };
+/**
+ * Fold per-year counts (newest year first) into one page number per year — the year fast lane. Pure,
+ * so it is unit-pinned. Because the list orders `release_date desc`, every release of a later year
+ * sorts before any release of an earlier one, so a year's first row lands at the running rank of all
+ * later years' rows; its page is `floor(rank / pageSize) + 1`. Undated rows sort last and never move
+ * a year, so the lane read excludes them.
+ */
+export function yearPages(
+  counts: { n: number; year: string }[],
+  pageSize: number,
+): TracksHubYearLaneEntry[] {
+  const lane: TracksHubYearLaneEntry[] = [];
+  let rank = 0;
+
+  for (const { n, year } of counts) {
+    lane.push({ page: Math.floor(rank / pageSize) + 1, year });
+    rank += Number(n);
+  }
+
+  return lane;
+}
+
+/**
+ * The year fast lane: every release YEAR present in the (dated) result set, newest first, each
+ * mapped to the page its first release lands on. ONE grouped query over the same filtered set the
+ * page read uses (composing with any active non-year filter), folded to pages by {@link yearPages} —
+ * never a per-year query. The route hides the lane when a year filter is active (a single year needs
+ * no time lane), so the filters here carry no year bound in practice.
+ */
+export async function listTracksHubYearLane(
+  filters: TracksHubFilters,
+): Promise<TracksHubYearLaneEntry[]> {
+  const db = await getDb();
+  const clauses = tracksHubClauses(filters);
+  const datedClauses: Clause[] = [{ args: [], sql: `tracks.release_date is not null` }, ...clauses];
+  const { args, where } = whereFor(datedClauses);
+
+  const result = await db.execute({
+    args,
+    sql: `select substr(tracks.release_date, 1, 4) as year, count(*) as n
+          from tracks
+          left join findings on findings.track_id = tracks.track_id
+          ${where}
+          group by year
+          order by year desc`,
+  });
+
+  return yearPages(typedRows<{ n: number; year: string }>(result.rows), TRACKS_HUB_PAGE_SIZE);
 }
