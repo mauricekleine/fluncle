@@ -34,6 +34,7 @@ import { getCatalogueCaptureState } from "./capture-budget";
 import { getCrawlStatus } from "./crawl";
 import { getDb, typedRow, typedRows } from "./db";
 import { REC_ELIGIBLE_WHERE } from "./recommendations";
+import { clampSnapshotWindow } from "./snapshot-window";
 import { ANCHOR_REASK_AFTER_DAYS, countTrackWork, kindClause } from "./track-work";
 
 /** The funnel's stage totals — cumulative counts of rows that have reached each stage. */
@@ -84,9 +85,6 @@ export type FunnelLiveQueues = FunnelQueues & {
   anchorQueueReady: number;
 };
 
-/** The crawl frontier's coarse state — the two numbers the funnel carries. */
-export type FunnelFrontier = { done: number; pending: number };
-
 /** Every integer the daily snapshot persists — the stages, the queues, and the frontier. */
 export type CatalogueSnapshotCounts = FunnelStages &
   FunnelQueues & { frontierDone: number; frontierPending: number };
@@ -124,10 +122,6 @@ export type FunnelView = {
   };
   series: CatalogueSnapshotRow[];
 };
-
-/** The default series window — a season of daily snapshots, bounded so the read stays small. */
-const DEFAULT_WINDOW_DAYS = 90;
-const MAX_WINDOW_DAYS = 365;
 
 type StageRow = {
   analyzed: number | null;
@@ -374,15 +368,6 @@ type SnapshotDbRow = {
   rec_eligible: number;
 };
 
-/** Clamp the requested series window to a sane bounded range (default 90 days, max 365). */
-function clampWindow(windowDays?: number): number {
-  if (typeof windowDays !== "number" || !Number.isFinite(windowDays) || windowDays <= 0) {
-    return DEFAULT_WINDOW_DAYS;
-  }
-
-  return Math.min(Math.trunc(windowDays), MAX_WINDOW_DAYS);
-}
-
 /**
  * The bounded snapshot series, oldest-first. A plain ASC index walk on the `day` PK
  * (`where day >= ? order by day asc`) — `day` is lexicographic-equals-chronological, so the
@@ -429,7 +414,7 @@ async function readSnapshotSeries(windowDays: number): Promise<CatalogueSnapshot
  * plus the bounded day-by-day series read back from the ledger. `get_funnel` handler body.
  */
 export async function getFunnel(windowDays?: number): Promise<FunnelView> {
-  const window = clampWindow(windowDays);
+  const window = clampSnapshotWindow(windowDays);
   const [counts, anchorEmbeddingSplit, captureState, series] = await Promise.all([
     computeCatalogueSnapshotCounts(),
     countAnchorQueueByEmbedding(),
