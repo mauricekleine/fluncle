@@ -237,12 +237,15 @@ export function adminBackfillsHandlers(os: Implementer) {
         const { query } = input;
         // Tolerant parse, like limit/dryRun: any value other than `artist` is `album` (the default).
         const kind: CoverMasterKind = query.kind === "artist" ? "artist" : "album";
+        // Tolerant parse: only `retry=none` re-queues terminal `none` rows; any other value is off.
+        const retryNone = query.retry === "none";
         const result = await resolveCoverMasters(
           env.VIDEOS,
           kind,
           parseLimit(query.limit, BACKFILL_DEFAULT_LIMIT, BACKFILL_MAX_LIMIT),
           parseBool(query.dryRun),
           query.cursor ?? undefined,
+          retryNone,
         );
 
         return {
@@ -255,6 +258,8 @@ export function adminBackfillsHandlers(os: Implementer) {
           noneCount: result.noneCount,
           ok: true as const,
           rateLimited: result.rateLimited,
+          requeued: result.requeued,
+          requeuedCount: result.requeuedCount,
           resolved: result.resolved,
           resolvedCount: result.resolvedCount,
         };

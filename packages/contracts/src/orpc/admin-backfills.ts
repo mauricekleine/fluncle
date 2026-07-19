@@ -416,7 +416,9 @@ const CoverMastersFailedSchema = z
  * gated pass over the `pending` worklist, slug-cursored, the box's agent-token cron drives it.
  * Returns `{ ok, kind, dryRun, resolved, resolvedCount, none, noneCount, failed, failedCount,
  * nextCursor, rateLimited }` — `none` is the entities with no usable source (floored to the raw
- * URL, terminal).
+ * URL, terminal). `?retry=none` FIRST re-queues a bounded batch of terminal `none` rows to
+ * `pending` (the operator heal for a cover that went `none` historically but now has a source),
+ * then runs the pass in the same call; the re-queued slugs come back as `requeued`/`requeuedCount`.
  */
 export const backfillCoverMasters = oc
   .route({
@@ -436,6 +438,11 @@ export const backfillCoverMasters = oc
         // string, clamped in-handler like `limit`/`dryRun` — never a 400 on a stray value.
         kind: z.string().optional(),
         limit: z.string().optional(),
+        // `none` re-queues a bounded batch of the kind's TERMINAL `none` rows back to `pending`
+        // BEFORE the pass runs — the operator heal for a cover that went `none` historically but
+        // now has a source (a fresh Apple template / a recovered Cover Art Archive). Tolerant
+        // string, clamped in-handler like `kind` — any value other than `none` is ignored.
+        retry: z.string().optional(),
       }),
     }),
   )
@@ -453,6 +460,11 @@ export const backfillCoverMasters = oc
       ok: z.literal(true),
       // Uniform with the label-images sweep; image CDNs are not throttled, so this never trips.
       rateLimited: z.boolean(),
+      // Slugs re-queued from terminal `none` → `pending` this call by `retry=none`, before the pass
+      // ran (in a dry run, what WOULD requeue). Optional so a consumer that never sends `retry` is
+      // untouched — the field is simply absent / empty on a normal pass.
+      requeued: z.array(z.string()).optional(),
+      requeuedCount: z.number().optional(),
       resolved: z.array(z.string()),
       resolvedCount: z.number(),
     }),
