@@ -31,6 +31,26 @@ export function tracksPagedMeta(page: number): { description: string; title: str
   };
 }
 
+const heldCountFormatter = new Intl.NumberFormat("en-US");
+
+/**
+ * The masthead's intro line, composed as ONE string (reference register — the factual line naming
+ * the superset, the held count riding it). One string on purpose, not JSX fragments: a conditional
+ * JSX clause SSRs as several text nodes split by `<!-- -->` hydration markers, and a naive text
+ * extractor (a first-text-node reader, a `>text<` regex) then sees only the first fragment — which
+ * is exactly how a live check misread the count as missing (2026-07-19; the clause was present in
+ * the HTML and post-hydration all along). A single text node is unambiguous for every reader.
+ * Pure, so the clause's presence at a real count is unit-pinned. The count clause drops at ≤ 1
+ * ("all 0 of them" is not a sentence).
+ */
+export function tracksMastheadLine(heldTotal: number): string {
+  const base = "Every drum & bass track Fluncle holds";
+
+  return heldTotal > 1
+    ? `${base}, all ${heldCountFormatter.format(heldTotal)} of them.`
+    : `${base}.`;
+}
+
 // The 24 canonical key spellings (12 sharp pitch classes × major/minor). The value is the SCALE
 // name — the same string `compileFilters`/`parseKey` reads (which folds enharmonics, so "C# major"
 // covers "Db major"). `parseKey` accepts scale names only, NOT Camelot codes ("8A"), so the control

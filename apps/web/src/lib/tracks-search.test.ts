@@ -6,8 +6,24 @@ import {
   KEY_FILTER_OPTIONS,
   parseTracksSearch,
   tracksHead,
+  tracksMastheadLine,
   tracksSearchHasFilters,
 } from "./tracks-search";
+
+describe("tracksMastheadLine", () => {
+  it("carries the held count as ONE composed string when the count is real", () => {
+    // One string, one SSR text node — no comment-split fragments a text extractor can truncate.
+    expect(tracksMastheadLine(31788)).toBe(
+      "Every drum & bass track Fluncle holds, all 31,788 of them.",
+    );
+    expect(tracksMastheadLine(2)).toBe("Every drum & bass track Fluncle holds, all 2 of them.");
+  });
+
+  it("drops the count clause at 0 / 1 (never 'all 0 of them')", () => {
+    expect(tracksMastheadLine(0)).toBe("Every drum & bass track Fluncle holds.");
+    expect(tracksMastheadLine(1)).toBe("Every drum & bass track Fluncle holds.");
+  });
+});
 
 describe("parseTracksSearch", () => {
   it("keeps the clean, mirrored filter vocabulary", () => {

@@ -17,16 +17,18 @@
  *   1. A 25k-catalogue-row archive (+ a few thousand findings) with realistic release_date / bpm /
  *      key / label distributions — the big-catalogue regime the hub is born into.
  *   2. An ABSOLUTE p50 budget: every hub query shape must come in UNDER 800 ms hosted — the
- *      unfiltered first page, a DEEP cursor page, a BPM-range filter, a KEY filter, a YEAR range,
+ *      unfiltered first page, a DEEP offset page + the 48-id hydrate, a BPM-range filter, a KEY
+ *      filter, a YEAR range,
  *      and a COMBINED filter. No vectors here — this is pure btree-index verification.
  *   3. `EXPLAIN QUERY PLAN` per shape, so the operator can SEE that the primary sort rides
  *      `tracks_release_date_idx` (a reverse scan, never a full table scan of a growing table) and
  *      that `tracks_bpm_idx` is available to a narrow BPM range.
  *
  * ── THE SHAPE UNDER TEST IS THE REAL ONE ──────────────────────────────────────
- * The query is built by `tracksHubQuery` (lib/server/tracks-hub.ts) — the SAME builder the route's
- * `listTracksHub` runs — so the bench cannot drift from production. Only the scalar filter/cursor
- * args are bound; there is no vector probe, so none of the blob-binding traps apply.
+ * The queries are built by `tracksHubIdPageQuery` / `tracksHubHydrateQuery` / `tracksHubCountQuery`
+ * (lib/server/tracks-hub.ts) — the SAME builders the route's `listTracksHubPage` runs — so the bench
+ * cannot drift from production. Only scalar filter/paging args are bound; there is no vector probe,
+ * so none of the blob-binding traps apply.
  *
  * ── USAGE ─────────────────────────────────────────────────────────────────────
  *   SCRATCH_TURSO_DATABASE_URL=libsql://<scratch>.turso.io \
@@ -46,9 +48,10 @@ import { fileURLToPath } from "node:url";
 
 import { ensureSearchIndex } from "../src/db/search-index";
 import {
-  type TracksHubCursor,
   TRACKS_HUB_PAGE_SIZE,
-  tracksHubQuery,
+  tracksHubCountQuery,
+  tracksHubHydrateQuery,
+  tracksHubIdPageQuery,
 } from "../src/lib/server/tracks-hub";
 
 /** The absolute ship-gate budget — every hub query shape's p50 must be under this, hosted. */
@@ -93,7 +96,7 @@ const migrationsFolder = fileURLToPath(new URL("../drizzle", import.meta.url));
 /**
  * A deterministic `YYYY-MM-DD` release date for a row index, spread across ~2005–2026 (≈3 rows per
  * day, so ties are common — the realistic case for the `track_id` tiebreak). Lower index = NEWER, so
- * a deep cursor is a high index. Returned for BOTH the seed and the deep-cursor computation.
+ * a deep page is a high offset. Returned for the seed.
  */
 function releaseDateForIndex(index: number): string {
   const end = Date.UTC(2026, 11, 31);
@@ -224,33 +227,39 @@ async function main(): Promise<void> {
   console.log(`Seeding ${findingsCount} findings…`);
   await seedFindings(findingsCount);
 
-  // A DEEP cursor — ~80% of the way down the list (a high index = an old release date).
-  const deepIndex = Math.floor(catalogueCount * 0.8);
-  const deepCursor: TracksHubCursor = {
-    releaseDate: releaseDateForIndex(deepIndex),
-    trackId: `cat-${deepIndex}`,
-  };
+  // The numbered-page model (the 2026-07-19 late-row-lookup follow-up): step 1 pages the bare ids
+  // (`limit ? offset ?`, no SELECT-list subqueries — the shape the OFFSET walk pays), step 2
+  // hydrates exactly one page's ids with the full column set, and the pager's `count(*)` runs
+  // beside them. A DEEP page is the shape the one-step read blew up on (it evaluated the per-row
+  // subqueries for every offset-skipped row — 9.3 s live at page 300), so it is the load-bearing
+  // number here.
+  const limit = TRACKS_HUB_PAGE_SIZE;
+  const deepOffset = Math.floor((catalogueCount * 0.8) / limit) * limit;
 
-  const limit = TRACKS_HUB_PAGE_SIZE + 1;
+  // A realistic hydrate arg: one page's worth of seeded ids (which ids barely matters — the cost is
+  // the ≤48 per-row subquery sets, identical for any id list of the same size).
+  const hydrateIds = Array.from({ length: limit }, (_, index) => `cat-${index}`);
 
   const shapes: { args: (number | string)[]; name: string; sql: string }[] = [
-    { name: "unfiltered first page", ...tracksHubQuery({}, undefined, limit) },
-    { name: "deep cursor page", ...tracksHubQuery({}, deepCursor, limit) },
+    { name: "id page 1 (unfiltered)", ...tracksHubIdPageQuery({}, limit, 0) },
+    { name: `id page @ offset ${deepOffset}`, ...tracksHubIdPageQuery({}, limit, deepOffset) },
+    { name: "hydrate 48 ids", ...tracksHubHydrateQuery(hydrateIds) },
+    { name: "count(*) (unfiltered)", ...tracksHubCountQuery({}) },
     {
-      name: "BPM range (172–176)",
-      ...tracksHubQuery({ bpmMax: 176, bpmMin: 172 }, undefined, limit),
+      name: "id page (BPM 172–176)",
+      ...tracksHubIdPageQuery({ bpmMax: 176, bpmMin: 172 }, limit, 0),
     },
-    { name: "key (F minor)", ...tracksHubQuery({ key: "F minor" }, undefined, limit) },
+    { name: "id page (key F minor)", ...tracksHubIdPageQuery({ key: "F minor" }, limit, 0) },
     {
-      name: "year range (2018–2020)",
-      ...tracksHubQuery({ yearMax: 2020, yearMin: 2018 }, undefined, limit),
+      name: "id page (year 2018–2020)",
+      ...tracksHubIdPageQuery({ yearMax: 2020, yearMin: 2018 }, limit, 0),
     },
     {
-      name: "combined (BPM + year + label)",
-      ...tracksHubQuery(
+      name: "id page (BPM + year + label)",
+      ...tracksHubIdPageQuery(
         { bpmMax: 180, bpmMin: 170, label: "Hospital Records", yearMax: 2026, yearMin: 2015 },
-        undefined,
         limit,
+        0,
       ),
     },
   ];

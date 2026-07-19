@@ -249,42 +249,115 @@ function toTracksHubEntry(row: TracksHubRow): TracksHubEntry {
  * is a legitimate empty page, never a throw) so the route can 404 rather than clamp — a `?page=99`
  * on a 3-page hub is NOT a second URL for page 1's rows. The `count(*)` for the total runs in
  * parallel over the same filtered set.
+ *
+ * ── LATE ROW LOOKUP: page the IDS, then hydrate exactly 48 ─────────────────────────────
+ * SQLite evaluates SELECT-list scalar subqueries for every row it MATERIALIZES, and `offset` skips
+ * rows AFTER materialization — so a one-step read that carries `TRACK_SELECT`'s per-row subqueries
+ * (album/label/galaxy slugs, the lead-artist join, the artist-slug JSON) pays them for every
+ * offset-skipped row too: page 300 executed ~14,400 subquery sets, not 48 (measured live
+ * 2026-07-19 — 3.7 s at page 2, 9.3 s at page 300, vs 1.3 s at page 1). So the read is TWO steps:
+ *
+ *   1. Page the bare ids — `select track_id … order by release_date desc … limit ? offset ?`, no
+ *      SELECT-list subqueries, so the offset walk touches only the `tracks_release_date_idx` order
+ *      and the filter predicates.
+ *   2. Hydrate exactly those ≤48 ids with the full column set (`where track_id in (…)`), re-ordered
+ *      in code by the step-1 position (the `in` clause returns rows in arbitrary order).
  */
+/** The filtered `count(*)` — the pager's total, over the same clause set as the id page. */
+export function tracksHubCountQuery(filters: TracksHubFilters): {
+  args: (number | string)[];
+  sql: string;
+} {
+  const { args, where } = whereFor(tracksHubClauses(filters));
+
+  return {
+    args,
+    sql: `select count(*) as total
+          from tracks
+          left join findings on findings.track_id = tracks.track_id
+          ${where}`,
+  };
+}
+
+/**
+ * Step 1's SQL: the bare id slice. No SELECT-list subqueries, so the offset walk touches only the
+ * `tracks_release_date_idx` order and the filter predicates. The left join stays — a galaxy filter
+ * predicates on `findings.galaxy_id`. Exported so the hosted bench (`scripts/bench-tracks-hub.ts`)
+ * measures the EXACT production shape.
+ */
+export function tracksHubIdPageQuery(
+  filters: TracksHubFilters,
+  limit: number,
+  offset: number,
+): { args: (number | string)[]; sql: string } {
+  const { args, where } = whereFor(tracksHubClauses(filters));
+
+  return {
+    args: [...args, limit, offset],
+    sql: `select tracks.track_id as track_id
+          from tracks
+          left join findings on findings.track_id = tracks.track_id
+          ${where}
+          order by tracks.release_date desc, tracks.track_id desc
+          limit ? offset ?`,
+  };
+}
+
+/**
+ * Step 2's SQL: hydrate exactly one page's ids with the full column set. The per-row subqueries run
+ * once per HYDRATED row (≤ the page size), whatever the offset was. Exported for the hosted bench.
+ */
+export function tracksHubHydrateQuery(ids: string[]): { args: string[]; sql: string } {
+  const placeholders = ids.map(() => "?").join(", ");
+
+  return {
+    args: ids,
+    sql: `select ${TRACK_SELECT}, ${LEAD_ARTIST_SELECT},
+                 (findings.track_id is not null) as certified,
+                 ${ARTIST_SLUGS_SELECT}
+          from tracks
+          left join findings on findings.track_id = tracks.track_id
+          ${LEAD_ARTIST_JOIN}
+          where tracks.track_id in (${placeholders})`,
+  };
+}
+
 export async function listTracksHubPage(
   filters: TracksHubFilters,
   page: number,
 ): Promise<CatalogueHubNumberedPage<TracksHubEntry>> {
   const db = await getDb();
   const limit = TRACKS_HUB_PAGE_SIZE;
-  const { args, where } = whereFor(tracksHubClauses(filters));
 
-  const [countResult, pageResult] = await Promise.all([
-    db.execute({
-      args,
-      sql: `select count(*) as total
-            from tracks
-            left join findings on findings.track_id = tracks.track_id
-            ${where}`,
-    }),
-    db.execute({
-      args: [...args, limit, (page - 1) * limit],
-      sql: `select ${TRACK_SELECT}, ${LEAD_ARTIST_SELECT},
-                   (findings.track_id is not null) as certified,
-                   ${ARTIST_SLUGS_SELECT}
-            from tracks
-            left join findings on findings.track_id = tracks.track_id
-            ${LEAD_ARTIST_JOIN}
-            ${where}
-            order by tracks.release_date desc, tracks.track_id desc
-            limit ? offset ?`,
-    }),
+  // Step 1 (+ the total, in parallel): the id slice.
+  const [countResult, idsResult] = await Promise.all([
+    db.execute(tracksHubCountQuery(filters)),
+    db.execute(tracksHubIdPageQuery(filters, limit, (page - 1) * limit)),
   ]);
 
   const total = Number(typedRows<{ total: number }>(countResult.rows)[0]?.total ?? 0);
-  const rows = typedRows<TracksHubRow>(pageResult.rows);
+  const ids = typedRows<{ track_id: string }>(idsResult.rows).map((row) => row.track_id);
 
-  if (rows.length === 0 && page > 1) {
+  if (ids.length === 0 && page > 1) {
     throw new CatalogueHubPageOutOfRangeError();
+  }
+
+  // Step 2: hydrate exactly the page's ids. Empty page (page 1 of an empty result) skips the trip.
+  const rows: TracksHubRow[] = [];
+
+  if (ids.length > 0) {
+    const hydrated = await db.execute(tracksHubHydrateQuery(ids));
+
+    // Re-impose the step-1 order: `in (…)` returns rows in storage order, not list order.
+    const byId = new Map(typedRows<TracksHubRow>(hydrated.rows).map((row) => [row.track_id, row]));
+
+    for (const id of ids) {
+      const row = byId.get(id);
+
+      if (row) {
+        rows.push(row);
+      }
+    }
   }
 
   return {
