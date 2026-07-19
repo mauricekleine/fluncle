@@ -5,7 +5,7 @@
 // The rail itself (`list_mixable_tracks`) lives in ./tracks.ts, where its `/tracks/{id}/…`
 // path belongs.
 
-import { parseSetParam } from "../../mix-set";
+import { parseSetParam, parseTasteParam } from "../../mix-set";
 import { getMixOpeners, getMixTracksByTokens, listMixableArtists } from "../tracks";
 import { apiFault, type Implementer } from "./_shared";
 
@@ -25,14 +25,6 @@ function parseLimit(raw: string | undefined, fallback: number, max: number): num
   }
 
   return Math.min(parsed, max);
-}
-
-/** Split the `taste` seed — a comma-separated artist-slug list — into clean slugs. */
-function parseTaste(raw: string | undefined): string[] {
-  return (raw ?? "")
-    .split(",")
-    .map((slug) => slug.trim())
-    .filter(Boolean);
 }
 
 /** Build the `mix` domain's handlers — the taste-seed reads. Public, unauthenticated. */
@@ -58,7 +50,7 @@ export function mixHandlers(os: Implementer) {
   const listMixOpenersHandler = os.list_mix_openers.handler(async ({ input }) => {
     try {
       const limit = parseLimit(input.limit, OPENERS_DEFAULT_LIMIT, OPENERS_MAX_LIMIT);
-      const tracks = await getMixOpeners(parseTaste(input.taste), { limit });
+      const tracks = await getMixOpeners(parseTasteParam(input.taste), { limit });
 
       return { ok: true, tracks } as const;
     } catch (error) {
