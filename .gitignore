@@ -68,6 +68,10 @@ apps/web/.cache/
 coverage/
 **/coverage/
 
+# Playwright E2E output (tests/e2e) — the HTML report + per-run traces/results.
+apps/web/playwright-report/
+apps/web/test-results/
+
 # Sprite assets mirrored into the web app's public/ by apps/web/scripts/copy-sprites.ts.
 # Source of truth is the @fluncle/sprites package (packages/sprites/assets); these are
 # generated copies served at stable paths. (galaxy/og.png + amen.mp3 stay tracked.)

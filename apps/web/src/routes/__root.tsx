@@ -2,6 +2,7 @@
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
+  type ErrorComponentProps,
   HeadContent,
   Outlet,
   Scripts,
@@ -9,11 +10,12 @@ import {
   useLoaderData,
 } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { NotFoundBlackHole } from "@/components/not-found-black-hole";
 import { RootErrorState } from "@/components/root-error-state";
 import { PublicChrome } from "@/components/nav/public-chrome";
 import { isGalaxyMapFullyNamed } from "@/lib/server/galaxies-map";
+import { isStaleBuildError, recoverFromStaleBuild } from "@/lib/stale-build-recovery";
 import { siteUrl } from "../lib/fluncle-links";
 import { fluncleMetaDescription } from "../lib/identity";
 import appCss from "../styles.css?url";
@@ -200,7 +202,7 @@ export const Route = createRootRoute({
   // The site-wide error boundary: an unexpected throw in a loader or render that no
   // route-local `errorComponent` caught (rough re-entry). Reports the caught error to
   // Sentry — a custom boundary is not auto-captured. See root-error-state.tsx.
-  errorComponent: RootErrorState,
+  errorComponent: RootErrorBoundary,
   // The site-wide 404: the empty coordinate as a black hole (a finding Fluncle went
   // looking for and found nothing where it should be). Catches every unmatched URL and
   // any bubbled `notFound()` without a route-local state; the router serves it at a real
@@ -209,12 +211,43 @@ export const Route = createRootRoute({
   notFoundComponent: NotFoundBlackHole,
 });
 
+// The site-wide error boundary, one step ahead of the error screen: a deploy replaces
+// every hashed asset, so a tab still holding an older build 404s on the next lazy chunk
+// and client-side navigation dies. When the caught error IS that failure, take the
+// standard remedy — one guarded reload onto the current build — and render the normal
+// error state behind it in case the reload is suppressed (see lib/stale-build-recovery).
+function RootErrorBoundary(props: ErrorComponentProps): ReactNode {
+  const { error } = props;
+
+  useEffect(() => {
+    if (isStaleBuildError(error)) {
+      recoverFromStaleBuild();
+    }
+  }, [error]);
+
+  return <RootErrorState {...props} />;
+}
+
 function RootLayout(): ReactNode {
   // One QueryClient per app instance (created once via useState so it survives
   // re-renders). Admin boards read through it so they refetch on window focus —
   // handy when the operator tabs back from TikTok/YouTube.
   const [queryClient] = useState(() => new QueryClient());
   const { galaxiesLive } = useLoaderData({ from: Route.id });
+
+  // The other place a stale build surfaces: Vite fires `vite:preloadError` when a
+  // module preload 404s, BEFORE the router ever sees a rejection. Preventing the
+  // default suppresses the unhandled throw; the guarded reload picks up the new build.
+  useEffect(() => {
+    const onPreloadError = (event: Event): void => {
+      event.preventDefault();
+      recoverFromStaleBuild();
+    };
+
+    window.addEventListener("vite:preloadError", onPreloadError);
+
+    return () => window.removeEventListener("vite:preloadError", onPreloadError);
+  }, []);
 
   return (
     <html lang="en">

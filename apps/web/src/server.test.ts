@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // The production fetch dispatch SPINE (server.ts). server.ts composes the Worker's
 // one fetch handler: `handleOrpc` mounted AHEAD of `handleMcp` AHEAD of
@@ -160,5 +160,104 @@ describe("server.ts dispatch spine", () => {
     expect(hoisted.handleAgentDiscovery).toHaveBeenCalledTimes(1);
     // The router body was served (via withEdgeCache's render), not an oRPC/MCP frame.
     expect(await response.text()).toBe("router-sentinel");
+  });
+});
+
+// The shared-cache ISOLATION guards, driven end to end through the real dispatch spine.
+// Every one of these is a correctness rail rather than a performance knob: a miss stores
+// a document under a key it will later be served from, so an admin view, a personalized
+// response, or a query VARIANT landing in that store is a live bug (an operator's board
+// handed to the public, or page 2's body served as page 1). The predicates are unit-pinned
+// in lib/server/edge-cache.test.ts; what is proven HERE is that server.ts actually applies
+// them — with a stand-in `caches.default` installed so "did it shared-cache?" is observable
+// instead of silently no-opping the way the bare Node runtime does.
+describe("server.ts shared-cache isolation", () => {
+  let entries: Map<string, Response>;
+  let previousCaches: unknown;
+
+  beforeEach(() => {
+    entries = new Map<string, Response>();
+    const globals = globalThis as { caches?: unknown };
+    previousCaches = globals.caches;
+    globals.caches = {
+      default: {
+        delete: async (key: Request) => entries.delete(key.url),
+        match: async (key: Request) => entries.get(key.url)?.clone(),
+        put: async (key: Request, response: Response) => {
+          entries.set(key.url, response);
+        },
+      },
+    };
+  });
+
+  afterEach(() => {
+    (globalThis as { caches?: unknown }).caches = previousCaches;
+  });
+
+  /** Dispatch, then let the `waitUntil`-extended `cache.put` settle before asserting. */
+  async function dispatchAndSettle(
+    url: string,
+    headers: Record<string, string> = {},
+  ): Promise<void> {
+    await dispatch(url, headers);
+    await Promise.resolve();
+    await Promise.resolve();
+  }
+
+  it("shared-caches a public hub GET under its canonical key", async () => {
+    await dispatchAndSettle("https://www.fluncle.com/artists", { accept: "text/html" });
+
+    expect([...entries.keys()]).toEqual(["https://www.fluncle.com/artists"]);
+  });
+
+  it("NEVER shared-caches an admin view", async () => {
+    // The presence of the admin grant cookie is enough to bypass: an operator must always
+    // see live data, and their rendered document must never become the public's copy.
+    await dispatchAndSettle("https://www.fluncle.com/artists", {
+      accept: "text/html",
+      cookie: "fluncle_admin=some-grant; other=1",
+    });
+    await dispatchAndSettle("https://www.fluncle.com/log/abc123", {
+      accept: "text/html",
+      cookie: "fluncle_admin=some-grant",
+    });
+
+    expect(entries.size).toBe(0);
+  });
+
+  it("NEVER shared-caches a query variant (which would collide onto the canonical entry)", async () => {
+    // The cache key drops the query string, so a cached `?page=2` would be served back as
+    // page 1. Both hub and entity variants must flow through uncached.
+    await dispatchAndSettle("https://www.fluncle.com/artists?page=2", { accept: "text/html" });
+    await dispatchAndSettle("https://www.fluncle.com/tracks?galaxy=drift", {
+      accept: "text/html",
+    });
+    await dispatchAndSettle("https://www.fluncle.com/artist/sub-focus?page=2", {
+      accept: "text/html",
+    });
+
+    expect(entries.size).toBe(0);
+  });
+
+  it("NEVER shared-caches a non-HTML request or a non-GET", async () => {
+    // A non-HTML Accept is a data client, not a page view; a mutation is never cacheable.
+    await dispatchAndSettle("https://www.fluncle.com/artists", { accept: "application/json" });
+    await worker.fetch(
+      new Request("https://www.fluncle.com/artists", {
+        headers: { accept: "text/html" },
+        method: "POST",
+      }),
+    );
+    await Promise.resolve();
+
+    expect(entries.size).toBe(0);
+  });
+
+  it("NEVER shared-caches an account or admin surface", async () => {
+    for (const path of ["/account", "/admin", "/admin/tracks", "/recommendations", "/chat"]) {
+      await dispatchAndSettle(`https://www.fluncle.com${path}`, { accept: "text/html" });
+    }
+
+    expect(entries.size).toBe(0);
   });
 });

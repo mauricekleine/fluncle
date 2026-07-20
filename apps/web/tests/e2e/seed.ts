@@ -1,0 +1,106 @@
+// The synthetic E2E seed — a small, deterministic, COMMITTED dataset.
+//
+// Everyday local dev seeds its DB from a PROD SNAPSHOT (`.dev/seed.sql`,
+// gitignored). This repo is public and CI has no snapshot, so the e2e stack seeds
+// a fresh empty DB with these fixtures instead: real generated migrations
+// (applied by `db:migrate` before this runs) + this handful of rows. Everything
+// here is invented — no real artists, no prod IDs, no external media URLs.
+//
+// It REUSES the `integration-db.ts` seed factories (the same ones the vitest
+// integration suite uses), so the fixture shapes can never drift from the schema.
+// Media fields are left null: no fixture points at the prod CDN, so every seeded
+// page renders with zero external fetches.
+
+import { createClient, type Client } from "@libsql/client";
+import {
+  seedAlbum,
+  seedArtist,
+  seedLabel,
+  seedMixtape,
+  seedTrack,
+} from "../../src/lib/server/integration-db";
+import { LIBSQL_URL } from "./stack";
+
+// One graph entity of each kind, so the `/artist`, `/label`, `/album`, and
+// `/mixtapes` pages a follow-up spec exercises have a real row to resolve.
+const ARTIST = { id: "e2e-artist-nova", name: "Nova Kestrel", slug: "nova-kestrel" };
+const LABEL = { id: "e2e-label-driftwave", name: "Driftwave Audio", slug: "driftwave-audio" };
+const ALBUM = { id: "e2e-album-signal", name: "Signal Bloom", slug: "signal-bloom" };
+
+// Eight findings with distinct titles, artists, and Log IDs. The titles are the
+// pilot spec's assertion targets, so they are intentionally unmistakable strings
+// no real archive would carry. `addedAt` descends so the newest-first feed order
+// is deterministic (FINDING_LOG_ID_PATTERN: `\d{3,4}\.\d\.\d[A-Z]`).
+type FindingFixture = { artist: string; logId: string; title: string };
+
+const FINDINGS: FindingFixture[] = [
+  { artist: "Nova Kestrel", logId: "701.1.0A", title: "Synthetic Aurora" },
+  { artist: "Cobalt Mirage", logId: "702.2.0B", title: "Neon Undertow" },
+  { artist: "Halcyon Drift", logId: "703.3.0C", title: "Glassbottom Reverie" },
+  { artist: "Pulsewidth", logId: "704.4.0D", title: "Cathode Sunrise" },
+  { artist: "Marrow & Vane", logId: "705.5.0E", title: "Velvet Static" },
+  { artist: "Sable Lung", logId: "706.6.0F", title: "Paper Lantern Riot" },
+  { artist: "Quiet Cartel", logId: "707.7.0G", title: "Ferrite Bloom" },
+  { artist: "Ostrich Ballet", logId: "708.8.0H", title: "Tungsten Lullaby" },
+];
+
+const MIXTAPE = { id: "e2e-mixtape-1", logId: "700.F.1A", title: "Dream Sector One" };
+
+/** The seeded finding titles, exported so the spec asserts on identity, not counts. */
+export const SEEDED_FINDING_TITLES = FINDINGS.map((finding) => finding.title);
+export const SEEDED_MIXTAPE_TITLE = MIXTAPE.title;
+
+/** A base epoch for the descending `added_at` values (fixed, so runs are identical). */
+const BASE_EPOCH_MS = Date.UTC(2026, 0, 1, 12, 0, 0);
+
+export async function seedE2eData(client: Client): Promise<void> {
+  await seedArtist(client, ARTIST);
+  await seedLabel(client, LABEL);
+  await seedAlbum(client, ALBUM);
+
+  for (const [index, finding] of FINDINGS.entries()) {
+    const trackId = `e2e-track-${index + 1}`;
+    // Newer findings first: index 0 is the most recent.
+    const addedAt = new Date(BASE_EPOCH_MS - index * 60_000).toISOString();
+
+    await seedTrack(client, {
+      addedAt,
+      artists: [finding.artist],
+      label: LABEL.name,
+      logId: finding.logId,
+      title: finding.title,
+      trackId,
+    });
+  }
+
+  // Wire the first finding into the full graph (album ↔ label ↔ artist) so a
+  // follow-up spec has one finding that resolves every entity page with content.
+  await client.execute({
+    args: [ALBUM.id, LABEL.id, "e2e-track-1"],
+    sql: `update tracks set album_id = ?, label_id = ? where track_id = ?`,
+  });
+  await client.execute({
+    args: ["e2e-track-1", ARTIST.id],
+    sql: `insert into track_artists (track_id, artist_id, position) values (?, ?, 0)`,
+  });
+
+  await seedMixtape(client, {
+    addedAt: new Date(BASE_EPOCH_MS + 60_000).toISOString(),
+    id: MIXTAPE.id,
+    logId: MIXTAPE.logId,
+    title: MIXTAPE.title,
+  });
+}
+
+/** Standalone entry point (`bun run tests/e2e/seed.ts`) — global-setup imports `seedE2eData`. */
+async function main(): Promise<void> {
+  const client = createClient({ authToken: "e2e-local", url: LIBSQL_URL });
+
+  await seedE2eData(client);
+  client.close();
+  console.log(`e2e seed: ${FINDINGS.length} findings + 1 mixtape + artist/label/album.`);
+}
+
+if (import.meta.main) {
+  await main();
+}
