@@ -115,25 +115,38 @@ function pageParam(value: unknown): number | undefined {
 // only once the whole sonic map is named (the gate `/galaxies` ships behind), so a single mid-naming
 // galaxy can never leak via `?galaxy=`. It reads the page + the year lane + the held count together,
 // and returns "missing" for a page past the end so the loader can 404 rather than clamp.
+//
+// ONE WAVE, NOT TWO. Every round trip here is the Worker reaching a database a continent away, so a
+// sequential wave costs a full latency unit however cheap its SQL. The filter-control options
+// (galaxies, label names) do not depend on the page read and the page read does not depend on them,
+// so they are all fired together. The one genuine dependency is the launch gate: when — and ONLY
+// when — a `?galaxy=` is present, the gate must settle before the filter set is known, so that path
+// alone keeps its leading round trip. The gate is never weakened to save it.
 const fetchTracksHubPage = createServerFn({ method: "GET" })
   .validator((data: { filters: TracksHubFilters; page: number }) => data)
   .handler(async ({ data }): Promise<TracksFetchResult> => {
-    const [galaxiesNamed, galaxyOptions, labelOptions] = await Promise.all([
-      data.filters.galaxy ? isGalaxyMapFullyNamed() : Promise.resolve(false),
-      listPublicGalaxies(),
-      listKnownLabelNames(),
-    ]);
-    const filters: TracksHubFilters = {
-      ...data.filters,
-      galaxy: galaxiesNamed ? data.filters.galaxy : undefined,
-    };
+    // Fired first and awaited last: the option lists ride alongside the page read rather than ahead
+    // of it.
+    const optionsPromise = Promise.all([listPublicGalaxies(), listKnownLabelNames()]);
+    // In flight before the gate's `await`, so a rejection there would leave this one unobserved for a
+    // tick. Attaching a handler now keeps it accounted for; the real result is still read below.
+    void optionsPromise.catch(() => undefined);
+    // The gate is consulted only when a galaxy filter is actually asked for; with none asked for the
+    // filter set is already final and nothing has to be awaited to know it.
+    const filters: TracksHubFilters = data.filters.galaxy
+      ? {
+          ...data.filters,
+          galaxy: (await isGalaxyMapFullyNamed()) ? data.filters.galaxy : undefined,
+        }
+      : data.filters;
     const hasFilters = tracksSearchHasFilters(filters);
     // The year lane is the A–Z lane over time; a year filter already narrows to one region of it, so
     // it is hidden then (the lane read is skipped, not just unrendered).
     const yearFiltered = filters.yearMin !== undefined || filters.yearMax !== undefined;
 
     try {
-      const [hub, years, heldTotal] = await Promise.all([
+      const [[galaxies, labelOptions], hub, years, heldTotal] = await Promise.all([
+        optionsPromise,
         listTracksHubPage(filters, data.page),
         yearFiltered ? Promise.resolve([]) : listTracksHubYearLane(filters),
         // On an unfiltered view the page read's own total already IS the held count; only a filtered
@@ -142,7 +155,7 @@ const fetchTracksHubPage = createServerFn({ method: "GET" })
       ]);
 
       return {
-        galaxyOptions: galaxyOptions.map((galaxy) => ({ name: galaxy.name, slug: galaxy.slug })),
+        galaxyOptions: galaxies.map((galaxy) => ({ name: galaxy.name, slug: galaxy.slug })),
         heldTotal: heldTotal < 0 ? hub.total : heldTotal,
         hub,
         labelOptions,

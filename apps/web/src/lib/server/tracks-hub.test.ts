@@ -32,6 +32,10 @@ import {
   countAllTracks,
   listTracksHubPage,
   listTracksHubYearLane,
+  resetTracksHubAggregateCache,
+  tracksHubCountQuery,
+  tracksHubIdPageQuery,
+  tracksHubYearLaneQuery,
   yearPages,
 } from "./tracks-hub";
 
@@ -118,6 +122,10 @@ function ids(entries: TracksHubEntry[]): string[] {
 beforeEach(async () => {
   db = await createIntegrationDb();
   holder.db = db;
+  // The page-independent aggregates (the pager total, the year lane) ride a 60 s in-isolate memo.
+  // Each case reseeds a FRESH database behind the same module, so the memo must start cold or a case
+  // would read the previous case's totals.
+  resetTracksHubAggregateCache();
 });
 
 describe("listTracksHubPage — the register split + the linked row", () => {
@@ -341,5 +349,85 @@ describe("countAllTracks", () => {
     await seedTrack({ releaseDate: null, trackId: "c2" });
 
     expect(await countAllTracks()).toBe(3);
+  });
+});
+
+// The scanning reads carry `left join findings` ONLY when a predicate reads a findings column.
+// `findings.track_id` is that table's PRIMARY KEY, so the join is 1:0..1 and dropping it cannot
+// change a result — but a deep page's offset walk stops paying a discarded PK probe per skipped row,
+// and the year lane's grouped scan is left referencing `tracks.release_date` alone. This pins the
+// SHAPE (what SQL is emitted); the hosted timings are the bench's job, never this suite's.
+describe("the findings join is paid only when a predicate reads it", () => {
+  it("drops the join from the id page, the count, and the year lane under tracks-only filters", () => {
+    for (const filters of [
+      {},
+      { bpmMin: 170 },
+      { key: "F minor" },
+      { label: "Hospital Records" },
+    ]) {
+      expect(tracksHubIdPageQuery(filters, 48, 0).sql).not.toContain("findings");
+      expect(tracksHubCountQuery(filters).sql).not.toContain("findings");
+      expect(tracksHubYearLaneQuery(filters).sql).not.toContain("findings");
+    }
+  });
+
+  it("keeps the join for a galaxy filter, whose predicate reads findings.galaxy_id", () => {
+    expect(tracksHubIdPageQuery({ galaxy: "green-sector" }, 48, 0).sql).toContain(
+      "left join findings",
+    );
+    expect(tracksHubCountQuery({ galaxy: "green-sector" }).sql).toContain("left join findings");
+    expect(tracksHubYearLaneQuery({ galaxy: "green-sector" }).sql).toContain("left join findings");
+  });
+
+  it("counts the same page total with the join dropped as the join would have produced", async () => {
+    // A finding and a catalogue row: were the join not 1:0..1, the certified row would double.
+    await seedTrack({ releaseDate: "2022-01-01", trackId: "f1" });
+    await certify({ logId: "200.7.1A", trackId: "f1" });
+    await seedTrack({ releaseDate: "2021-01-01", trackId: "c1" });
+
+    const { items, total } = await listTracksHubPage({}, 1);
+
+    expect(total).toBe(2);
+    expect(ids(items)).toEqual(["f1", "c1"]);
+  });
+});
+
+describe("the page-independent aggregates are memoised", () => {
+  it("serves one total and one year lane across a walk down the pager", async () => {
+    await seedTrack({ releaseDate: "2024-01-01", trackId: "a" });
+    await seedTrack({ releaseDate: "2023-01-01", trackId: "b" });
+
+    const first = await listTracksHubPage({}, 1);
+
+    // A row added AFTER the memo warmed: the id slice (never memoised) sees it, the total does not
+    // until the window rolls. That is the whole trade — a page's ROWS are always current.
+    await seedTrack({ releaseDate: "2022-01-01", trackId: "c" });
+
+    const second = await listTracksHubPage({}, 1);
+
+    expect(first.total).toBe(2);
+    expect(second.total).toBe(2);
+    expect(ids(second.items)).toEqual(["a", "b", "c"]);
+
+    // The memo is per filter SET, so a different filter set is its own live read.
+    expect((await listTracksHubPage({ yearMin: 2022 }, 1)).total).toBe(3);
+  });
+
+  it("keeps the out-of-range 404 reading the id slice, never the memoised total", async () => {
+    await seedTrack({ releaseDate: "2024-01-01", trackId: "a" });
+
+    await expect(listTracksHubPage({}, 2)).rejects.toBeInstanceOf(CatalogueHubPageOutOfRangeError);
+  });
+
+  it("evicts a failed load instead of serving the rejection for the rest of the window", async () => {
+    await seedTrack({ releaseDate: "2024-01-01", trackId: "a" });
+    await db.execute(`alter table tracks rename to tracks_away`);
+
+    await expect(countAllTracks()).rejects.toBeTruthy();
+
+    await db.execute(`alter table tracks_away rename to tracks`);
+
+    // Same memo window: a cached rejection would keep failing here. It recovers, so it did not cache.
+    expect(await countAllTracks()).toBe(1);
   });
 });

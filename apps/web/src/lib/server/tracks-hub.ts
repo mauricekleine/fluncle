@@ -29,6 +29,34 @@
 // filter that motivated `tracks_bpm_idx`. The offset walk over a growing table is the tradeoff a
 // numbered pager makes; it must be proven against HOSTED Turso (a scratch DB) before any scale
 // claim, never `turso dev` (docs/local-database.md, "Local is not production").
+//
+// ── THE JOIN IS PAID ONLY WHEN IT IS READ ──────────────────────────────────────────────
+// `findings.track_id` is the PRIMARY KEY of `findings`, so `left join findings` is strictly
+// cardinality-preserving — it can neither add nor drop a `tracks` row nor repeat one. Of the hub's
+// predicates only the GALAXY extension reads a `findings` column; the shared six read `tracks`
+// alone. So the two scanning reads and the pager's `count(*)` drop the join whenever no clause names
+// `findings.`. Measured by `explain query plan` (SHAPE evidence — the timings belong to the hosted
+// bench, never to a local run), the win is NOT where it looks:
+//
+//   • THE YEAR LANE is where it is large. Carrying the join, the planner chose a bare `SCAN tracks`
+//     — a full scan of the WIDE row, dragging every `F32_BLOB(1024)` embedding off disk to read one
+//     10-byte date — plus a `findings` probe per row. Without it: `SEARCH tracks USING COVERING
+//     INDEX tracks_release_date_idx`. The table is never touched at all.
+//   • THE `count(*)` loses its per-row `findings` probe: `SCAN tracks USING COVERING INDEX …
+//     + SEARCH findings … LEFT-JOIN` becomes a lone covering scan.
+//   • THE ID PAGE is unchanged — SQLite already proved the join unused there and elided it. Dropping
+//     it in the builder is defensive tidiness, not a speedup; it is honest to say so.
+//
+// The HYDRATE step keeps the join unconditionally: it reads findings columns for real.
+//
+// ── THE PAGE-INDEPENDENT READS ARE MEMOISED ────────────────────────────────────────────
+// The pager's `count(*)` and the year lane are IDENTICAL for every `?page=N` of the same filter set
+// — two full-set aggregates re-run on every deep page for an answer that did not change. They ride a
+// short in-isolate TTL memo (see {@link HUB_AGGREGATE_TTL_MS}) that also de-duplicates concurrent
+// in-flight loads, so a crawler walking the pager pays them once per window rather than once per
+// page. Staleness is structurally harmless: the total feeds only the pager's page COUNT and the
+// masthead number, never the 404 decision (that reads the id slice's emptiness), and the same 60 s
+// window is already what the bare hub's edge cache accepts.
 
 import { type SearchFilters } from "@fluncle/contracts/orpc";
 import { parseArtistsJson } from "./artists";
@@ -163,6 +191,78 @@ function whereFor(clauses: Clause[]): { args: (number | string)[]; where: string
   };
 }
 
+/** The join a scanning read only pays when a predicate actually reads a `findings` column. Derived
+    from the compiled SQL rather than from `filters.galaxy` so a future findings-reading clause turns
+    it back on by itself — the join is never silently dropped out from under a predicate that needs
+    it. Safe to drop otherwise: `findings.track_id` is that table's PRIMARY KEY, so the LEFT JOIN is
+    1:0..1 and cannot change which `tracks` rows survive or how many times each appears. */
+function findingsJoinFor(clauses: Clause[]): string {
+  return clauses.some((clause) => clause.sql.includes("findings."))
+    ? "left join findings on findings.track_id = tracks.track_id"
+    : "";
+}
+
+/** The window a page-independent aggregate (the pager total, the year lane) may be served stale
+    within — matched to the bare hub's edge-cache freshness window. */
+const HUB_AGGREGATE_TTL_MS = 60_000;
+
+/** A hard ceiling on distinct memoised filter sets, so an adversarial filter fan-out cannot grow the
+    isolate's memory without bound. The oldest insertion is evicted first (a Map iterates in
+    insertion order), which is the right victim: the bare hub is re-inserted constantly. */
+const HUB_AGGREGATE_CACHE_MAX = 32;
+
+type HubAggregateEntry = { expires: number; value: Promise<unknown> };
+
+const hubAggregateCache = new Map<string, HubAggregateEntry>();
+
+/**
+ * Serve a page-independent aggregate from the in-isolate TTL memo, loading it at most once per
+ * window. The PROMISE is cached rather than the resolved value, so concurrent pages of the same
+ * filter set share one in-flight query instead of racing N identical full-set scans; a rejection
+ * evicts itself, so a failed load is never cached.
+ */
+async function memoizedAggregate<T>(key: string, load: () => Promise<T>): Promise<T> {
+  const cached = hubAggregateCache.get(key);
+  const now = Date.now();
+
+  if (cached && cached.expires > now) {
+    return cached.value as Promise<T>;
+  }
+
+  const value = load();
+
+  hubAggregateCache.set(key, { expires: now + HUB_AGGREGATE_TTL_MS, value });
+
+  if (hubAggregateCache.size > HUB_AGGREGATE_CACHE_MAX) {
+    const oldest = hubAggregateCache.keys().next();
+
+    if (!oldest.done) {
+      hubAggregateCache.delete(oldest.value);
+    }
+  }
+
+  try {
+    return await value;
+  } catch (error) {
+    hubAggregateCache.delete(key);
+
+    throw error;
+  }
+}
+
+/** Drop every memoised aggregate. The hub's reads are never invalidated in production (the TTL is
+    the whole contract); this exists so a test that reseeds the database between cases starts from a
+    cold memo rather than reading the previous case's totals. */
+export function resetTracksHubAggregateCache(): void {
+  hubAggregateCache.clear();
+}
+
+/** The memo key for a filter set — the compiled clause set, which is exactly what the SQL and its
+    bound args are built from, so two filter objects that compile identically share one entry. */
+function aggregateKey(kind: string, clauses: Clause[]): string {
+  return `${kind}:${JSON.stringify(clauses.map((clause) => [clause.sql, clause.args]))}`;
+}
+
 /** The `track_artists → artists` JSON subquery: `[{name, slug}]` for the row's artists, one indexed
     seek (`track_artists_track_id_idx` + the `artists` PK), the lead-artist subquery's sibling. */
 const ARTIST_SLUGS_SELECT = `(select json_group_array(json_object('name', a.name, 'slug', a.slug))
@@ -268,21 +368,24 @@ export function tracksHubCountQuery(filters: TracksHubFilters): {
   args: (number | string)[];
   sql: string;
 } {
-  const { args, where } = whereFor(tracksHubClauses(filters));
+  const clauses = tracksHubClauses(filters);
+  const { args, where } = whereFor(clauses);
 
   return {
     args,
     sql: `select count(*) as total
           from tracks
-          left join findings on findings.track_id = tracks.track_id
+          ${findingsJoinFor(clauses)}
           ${where}`,
   };
 }
 
 /**
  * Step 1's SQL: the bare id slice. No SELECT-list subqueries, so the offset walk touches only the
- * `tracks_release_date_idx` order and the filter predicates. The left join stays — a galaxy filter
- * predicates on `findings.galaxy_id`. Exported so the hosted bench (`scripts/bench-tracks-hub.ts`)
+ * `tracks_release_date_idx` order and the filter predicates. The `findings` join appears ONLY when a
+ * predicate reads it (the galaxy filter) — the plan here is identical either way (SQLite already
+ * elided the unused join), so that is tidiness rather than a speedup; the join drop earns its keep
+ * on the year lane and the `count(*)`. Exported so the hosted bench (`scripts/bench-tracks-hub.ts`)
  * measures the EXACT production shape.
  */
 export function tracksHubIdPageQuery(
@@ -290,13 +393,14 @@ export function tracksHubIdPageQuery(
   limit: number,
   offset: number,
 ): { args: (number | string)[]; sql: string } {
-  const { args, where } = whereFor(tracksHubClauses(filters));
+  const clauses = tracksHubClauses(filters);
+  const { args, where } = whereFor(clauses);
 
   return {
     args: [...args, limit, offset],
     sql: `select tracks.track_id as track_id
           from tracks
-          left join findings on findings.track_id = tracks.track_id
+          ${findingsJoinFor(clauses)}
           ${where}
           order by tracks.release_date desc, tracks.track_id desc
           limit ? offset ?`,
@@ -322,6 +426,19 @@ export function tracksHubHydrateQuery(ids: string[]): { args: string[]; sql: str
   };
 }
 
+/** The pager's total for a filter set, served from the TTL memo. Page-independent by construction —
+    every `?page=N` of one filter set asks the same question of the same rows. */
+async function countTracksHub(filters: TracksHubFilters): Promise<number> {
+  const query = tracksHubCountQuery(filters);
+
+  return memoizedAggregate(aggregateKey("count", tracksHubClauses(filters)), async () => {
+    const db = await getDb();
+    const result = await db.execute(query);
+
+    return Number(typedRows<{ total: number }>(result.rows)[0]?.total ?? 0);
+  });
+}
+
 export async function listTracksHubPage(
   filters: TracksHubFilters,
   page: number,
@@ -329,13 +446,13 @@ export async function listTracksHubPage(
   const db = await getDb();
   const limit = TRACKS_HUB_PAGE_SIZE;
 
-  // Step 1 (+ the total, in parallel): the id slice.
-  const [countResult, idsResult] = await Promise.all([
-    db.execute(tracksHubCountQuery(filters)),
+  // Step 1 (+ the total, in parallel): the id slice. The total is page-independent, so it rides the
+  // TTL memo — a walk down the pager pays that full-set aggregate once, not once per page.
+  const [total, idsResult] = await Promise.all([
+    countTracksHub(filters),
     db.execute(tracksHubIdPageQuery(filters, limit, (page - 1) * limit)),
   ]);
 
-  const total = Number(typedRows<{ total: number }>(countResult.rows)[0]?.total ?? 0);
   const ids = typedRows<{ track_id: string }>(idsResult.rows).map((row) => row.track_id);
 
   if (ids.length === 0 && page > 1) {
@@ -373,12 +490,15 @@ export async function listTracksHubPage(
  * N of them" line when a filter is active (so the masthead still names the archive's true size while
  * the filtered count sits by the form). A bare `count(*)`, the cheapest read on the table. On an
  * UNFILTERED view the page read's own total already IS this, so the route reuses it and skips this.
+ * Page-independent, so it rides the same TTL memo as the pager's total.
  */
 export async function countAllTracks(): Promise<number> {
-  const db = await getDb();
-  const result = await db.execute(`select count(*) as total from tracks`);
+  return memoizedAggregate(aggregateKey("count", []), async () => {
+    const db = await getDb();
+    const result = await db.execute(`select count(*) as total from tracks`);
 
-  return Number(typedRows<{ total: number }>(result.rows)[0]?.total ?? 0);
+    return Number(typedRows<{ total: number }>(result.rows)[0]?.total ?? 0);
+  });
 }
 
 /**
@@ -410,23 +530,41 @@ export function yearPages(
  * never a per-year query. The route hides the lane when a year filter is active (a single year needs
  * no time lane), so the filters here carry no year bound in practice.
  */
-export async function listTracksHubYearLane(
-  filters: TracksHubFilters,
-): Promise<TracksHubYearLaneEntry[]> {
-  const db = await getDb();
-  const clauses = tracksHubClauses(filters);
-  const datedClauses: Clause[] = [{ args: [], sql: `tracks.release_date is not null` }, ...clauses];
-  const { args, where } = whereFor(datedClauses);
+export function tracksHubYearLaneQuery(filters: TracksHubFilters): {
+  args: (number | string)[];
+  clauses: Clause[];
+  sql: string;
+} {
+  const clauses: Clause[] = [
+    { args: [], sql: `tracks.release_date is not null` },
+    ...tracksHubClauses(filters),
+  ];
+  const { args, where } = whereFor(clauses);
 
-  const result = await db.execute({
+  return {
     args,
+    clauses,
+    // Unfiltered (and under any `tracks`-only filter) this references `tracks.release_date` and
+    // nothing else, so the grouped scan is a covering read of `tracks_release_date_idx` rather than a
+    // drag over the wide row — the embedding BLOBs on `tracks` are never touched.
     sql: `select substr(tracks.release_date, 1, 4) as year, count(*) as n
           from tracks
-          left join findings on findings.track_id = tracks.track_id
+          ${findingsJoinFor(clauses)}
           ${where}
           group by year
           order by year desc`,
-  });
+  };
+}
 
-  return yearPages(typedRows<{ n: number; year: string }>(result.rows), TRACKS_HUB_PAGE_SIZE);
+export async function listTracksHubYearLane(
+  filters: TracksHubFilters,
+): Promise<TracksHubYearLaneEntry[]> {
+  const { clauses, ...query } = tracksHubYearLaneQuery(filters);
+
+  return memoizedAggregate(aggregateKey("years", clauses), async () => {
+    const db = await getDb();
+    const result = await db.execute(query);
+
+    return yearPages(typedRows<{ n: number; year: string }>(result.rows), TRACKS_HUB_PAGE_SIZE);
+  });
 }
