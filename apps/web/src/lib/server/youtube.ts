@@ -18,6 +18,12 @@ const googleTokenUrl = "https://oauth2.googleapis.com/token";
 const youtubeScopes = [
   "https://www.googleapis.com/auth/youtube.upload",
   "https://www.googleapis.com/auth/youtube.force-ssl",
+  // The metrics ledger's read side (Wave 2 of the reach loops): youtube.readonly for
+  // videos.list statistics, yt-analytics.readonly for per-video retention/watch-time
+  // (averageViewPercentage — the real short-form signal). Added ahead of the ingestion
+  // slice so ONE operator re-consent covers it; harmless until the reader exists.
+  "https://www.googleapis.com/auth/youtube.readonly",
+  "https://www.googleapis.com/auth/yt-analytics.readonly",
 ];
 
 type YouTubeTokenResponse = {
