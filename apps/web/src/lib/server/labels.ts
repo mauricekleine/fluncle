@@ -344,26 +344,6 @@ export type LabelRecord = {
   subLabels?: LabelLineageEdge[];
 };
 
-/**
- * A row in the `/labels` editorial index — exactly the four fields the tile renders and nothing
- * more. The catalogue count and the freshest-finding `lastmod` used to ride along "for the
- * sitemap"; the sitemap has driven off `listLabelSitemapRows` for a while now, so both were dead
- * weight — and the catalogue count in particular was a CATALOGUE-SCALE correlated subquery
- * running once per editorial row on every `/labels` render.
- */
-export type LabelIndexEntry = {
-  /**
-   * The label's cover — the freshest finding's album art, preferring that album's OWNED master
-   * through the Cloudflare Images ladder (the fallback for the logo).
-   */
-  coverImageUrl: string | undefined;
-  findingCount: number;
-  /** The label's OWN logo (its resolved Discogs/Wikidata image on R2), or undefined. */
-  logoImageUrl: string | undefined;
-  name: string;
-  slug: string;
-};
-
 // The most sublabels a `/label/<slug>` page's `subOrganization` edges will ever carry. Real imprint
 // families are a handful; the cap defends the page + JSON-LD against a pathological crawl folding
 // hundreds of children onto one parent. An indexed seek on `labels_parent_label_id_idx`, never a scan.
@@ -502,58 +482,6 @@ export async function getLabelForAlbum(albumId: string): Promise<LabelRecord | u
     : undefined;
 }
 
-// ── THE EDITORIAL HALF OF A HUB (the findings-bounded top section) ────────────────────────────
-//
-// `/albums`, `/labels`, and `/artists` each open with Fluncle's own list — the entities he has
-// pulled a banger off — above the crawler's quieter long tail. That list is bounded by the
-// ARCHIVE rather than the catalogue, so it grows a row a day rather than a row a crawl. It still
-// grows without limit, though, and it used to SSR whole: ~80–120 tiles of markup, each carrying a
-// per-row correlated subquery, on every render of every page. So it is now WINDOWED on the same
-// 48-tile page the catalogue half uses, behind the SAME `?page=N` param — one pager for the whole
-// hub, no second interaction to learn: page N is slice N of both sections, and once the editorial
-// list runs out the deeper pages are pure long tail.
-//
-// The total is a SECOND, deliberately separate statement: `count(*) over ()` would report zero on
-// a page past the editorial list's end (the header's "N logged" and the pager's reach both need
-// the honest figure). It is a bare grouped count over the findings join — archive-bounded, no
-// correlated subqueries — so it costs a fraction of the slice it accompanies.
-
-/** One windowed page of a hub's editorial (findings-bounded) section. */
-export type EditorialHubPage<Entry> = {
-  items: Entry[];
-  page: number;
-  pageCount: number;
-  /** Every entity in the editorial list, counted in SQL — the header's figure and the pager's key. */
-  total: number;
-};
-
-/** The `limit ? offset ?` args for one editorial page (the shared 48-tile window). */
-export function editorialArgs(page: number): number[] {
-  return [CATALOGUE_HUB_DEFAULT_LIMIT, (Math.max(page, 1) - 1) * CATALOGUE_HUB_DEFAULT_LIMIT];
-}
-
-/** Count an editorial set from its grouped row source (`select 1 … group by …`), in SQL. */
-export async function countEditorial(groupedRows: string): Promise<number> {
-  const db = await getDb();
-  const result = await db.execute(`select count(*) as total from (${groupedRows})`);
-
-  return Number(typedRows<{ total: number }>(result.rows)[0]?.total ?? 0);
-}
-
-/** Assemble the editorial page envelope; page 1 of an empty list is a real (empty) page. */
-export function editorialPage<Entry>(
-  items: Entry[],
-  page: number,
-  total: number,
-): EditorialHubPage<Entry> {
-  return {
-    items,
-    page,
-    pageCount: Math.max(Math.ceil(total / CATALOGUE_HUB_DEFAULT_LIMIT), 1),
-    total,
-  };
-}
-
 /**
  * The cover columns of ONE representative track, packed into a single correlated subquery.
  *
@@ -580,14 +508,7 @@ function coverJsonSelect(from: string, where: string, order: string): string {
 /** Any track on the entity, freshest release first — the CATALOGUE tile's cover. */
 const CATALOGUE_COVER_ORDER = `t2.release_date is null asc, t2.release_date desc, t2.track_id asc`;
 
-/** The freshest CERTIFIED finding on a label — the editorial `/labels` tile's cover. */
-const LABEL_FINDING_COVER_JSON = coverJsonSelect(
-  `findings f2 join tracks t2 on t2.track_id = f2.track_id`,
-  `t2.label_id = labels.id and f2.log_id is not null`,
-  `f2.added_at desc`,
-);
-
-/** Any track on a label — the catalogue `/labels` tile's cover. */
+/** Any track on a label — the `/labels` hub tile's cover, certified or not. */
 const LABEL_CATALOGUE_COVER_JSON = coverJsonSelect(
   `tracks t2`,
   `t2.label_id = labels.id and t2.album_image_url is not null`,
@@ -630,23 +551,12 @@ export function coverFromJson(raw: unknown): string | undefined {
 }
 
 /**
- * One windowed page of every label with at least one coordinate-bearing finding, with its finding
- * count and its cover (the freshest finding's album art, preferring that album's owned master).
- * Alphabetical by name — the `/labels` index order.
- *
- * The PUBLIC index read, and it is deliberately blind to `seed_state`: a skipped label's
- * findings render exactly as they always did (crawl scope, never storage — the rule at the
- * top of this file). It drives from the findings join, so it is bounded by the archive
- * rather than by the catalogue. The sitemap is a separate read (`listLabelSitemapRows`).
- */
-/**
  * Just the NAMES of the labels Fluncle has pulled a banger off — the typeahead pool for the
- * `/tracks` filter's label combobox. The same findings-bounded set `listLabelsWithFindingCounts`
- * returns (a label he never certified on is rightly absent), and the same alphabetical order, but
- * without the per-group cover/date subqueries that read carries — strictly a lighter pass over the
- * SAME already-shipping join, so it inherits its proven shape while staying archive-bounded (~the
- * label count, not the catalogue). The control still compiles a free-typed string that matches no
- * known name, so this is a suggestion pool, never a closed set.
+ * `/tracks` filter's label combobox. Findings-bounded (a label he never certified on is rightly
+ * absent), alphabetical, but without the per-group cover/date subqueries a tile read carries —
+ * strictly a lighter pass over the same findings join, so it stays archive-bounded (~the label
+ * count, not the catalogue). The control still compiles a free-typed string that matches no known
+ * name, so this is a suggestion pool, never a closed set.
  */
 export async function listKnownLabelNames(): Promise<string[]> {
   const db = await getDb();
@@ -667,49 +577,6 @@ export async function listKnownLabelNames(): Promise<string[]> {
   return typedRows<{ name: string }>(result.rows).map((row) => row.name);
 }
 
-export async function listLabelsWithFindingCounts(
-  page: number,
-): Promise<EditorialHubPage<LabelIndexEntry>> {
-  const db = await getDb();
-  const [slice, total] = await Promise.all([
-    db.execute({
-      args: editorialArgs(page),
-      sql: `select labels.name as name, labels.slug as slug, labels.image_key as image_key,
-                   count(*) as finding_count,
-                   ${LABEL_FINDING_COVER_JSON} as cover_json
-            from labels
-            join tracks on tracks.label_id = labels.id
-            join findings on findings.track_id = tracks.track_id
-            where findings.log_id is not null
-            group by labels.id
-            order by labels.name collate nocase asc
-            limit ? offset ?`,
-    }),
-    countEditorial(`select 1
-                    from labels
-                    join tracks on tracks.label_id = labels.id
-                    join findings on findings.track_id = tracks.track_id
-                    where findings.log_id is not null
-                    group by labels.id`),
-  ]);
-
-  const items = typedRows<{
-    cover_json: string | null;
-    finding_count: number;
-    image_key: string | null;
-    name: string;
-    slug: string;
-  }>(slice.rows).map((row) => ({
-    coverImageUrl: coverFromJson(row.cover_json),
-    findingCount: Number(row.finding_count),
-    logoImageUrl: labelLogoUrl(row.image_key),
-    name: row.name,
-    slug: row.slug,
-  }));
-
-  return editorialPage(items, page, total);
-}
-
 /** A sitemap candidate: an entity whose page clears the thin-content floor. */
 export type EntitySitemapRow = {
   coverImageUrl: string | undefined;
@@ -721,14 +588,13 @@ export type EntitySitemapRow = {
 /**
  * Every LABEL whose page clears the thin-content floor — findings or no findings.
  *
- * ── WHY THIS IS NOT `listLabelsWithFindingCounts` ───────────────────────────────────────
- * That read is the `/labels` HUB: Fluncle's own editorial list of the labels he has pulled a
- * banger off, so it drives from the findings join and a label he never certified on is
- * rightly absent. The SITEMAP asks a different question — "what pages exist and may be
- * indexed?" — and since a label page now exists on crawled content alone, answering it with
- * the hub's read would orphan every one of those pages from the sitemap. That orphaning is
- * precisely the invariant album-entity.md states ("an indexable page is never orphaned from
- * it"), so the two reads have to differ.
+ * ── WHY THIS IS NOT `listLabelsHubPage` ─────────────────────────────────────────────────
+ * That read is the PAGED `/labels` index: one alphabetical `?page=N` window over the same
+ * floor-clearing set, for a human to browse. The SITEMAP asks a different question — "what
+ * pages exist and may be indexed?" — so it wants the WHOLE set at once (no `limit`/`offset`)
+ * and only the slug + `lastmod` a `<url>` needs, never the tile columns. Same floor, same
+ * grouped scan; different shape, so they stay two reads (the sitemap must never be paged to a
+ * page size, or it would omit every entity past the window and orphan its page).
  *
  * ── THE FLOOR IS APPLIED IN SQL ─────────────────────────────────────────────────────────
  * `having` it, not filtering it in the isolate: a wide crawl mints a `labels` row per imprint
@@ -737,9 +603,7 @@ export type EntitySitemapRow = {
  * filter a growing table in the Worker). `minTracks` is the caller's constant, so the gate
  * has exactly one definition and the page and the sitemap cannot drift apart.
  *
- * The counts are conditional aggregates over ONE pass (`left join findings`), which is
- * strictly less work than the hub read it replaces here: that one did the same grouped scan
- * AND two correlated subqueries per row.
+ * The counts are conditional aggregates over ONE pass (`left join findings`).
  */
 export async function listLabelSitemapRows(minTracks: number): Promise<EntitySitemapRow[]> {
   const db = await getDb();
@@ -775,34 +639,40 @@ export async function listLabelSitemapRows(minTracks: number): Promise<EntitySit
   }));
 }
 
-// ── "ALSO IN THE CATALOGUE": the hub's findings-free second section ─────────────────────────
+// ── THE UNIFIED HUB: one catalogue-scale index per entity (ratified 2026-07-20) ───────────────
 //
-// The three hubs (`/labels`, `/albums`, `/artists`) lead with Fluncle's editorial list (the
-// findings-joined reads above) and carry a SECOND section below it: the INDEXABLE findings-free
-// entities — the ones the crawler minted a page for on crawled content alone. It is the hub-shaped
-// twin of the SITEMAP read: same grouped scan, same renderable-track floor in SQL, but keyed to
-// exactly the entities the editorial section leaves out (ZERO certified findings). ONE navigation
-// model serves humans and crawlers alike — every page SSRs one OFFSET slice behind a `?page=N`
-// pager (below), so every tile is reachable as a real <a> and nothing depends on running JS.
+// `/labels`, `/albums`, and `/artists` are each ONE index of every entity Fluncle holds —
+// certified findings and the wider catalogue alike, alphabetical, in a single paginated list (the
+// `/tracks` hub's shape, one node type up). The old two-section shape (Fluncle's editorial list on
+// top, the crawler's quiet tail below) is retired: the operator's ruling is one unified index, with
+// a certified entity distinguished VISUALLY — its name takes the certification light (DESIGN.md's
+// Unlit Rule, Eclipse Gold) — never VERBALLY (no badge, no tier heading, no count of findings).
+//
+// Each row carries its name, slug, cover, its RENDERABLE track count (findings + the quieter rows,
+// the superset noun the tile prints), and a `certified` flag (≥1 coordinate-bearing finding). ONE
+// navigation model serves humans and crawlers alike — every page SSRs one OFFSET slice behind a
+// `?page=N` pager, so every tile is reachable as a real <a> and nothing depends on running JS.
 
-/** The hub read's page size, shared by all three "also in the catalogue" sections. */
+/** The hub read's page size, shared by all three entity indexes. */
 export const CATALOGUE_HUB_DEFAULT_LIMIT = 48;
 
-/** A label tile in the "also in the catalogue" section — the quiet, unlit twin of a hub row. */
-export type LabelCatalogueEntry = {
-  /** A representative cover from any of the label's tracks (finding-free labels have no finding cover). */
+/** A label tile in the unified `/labels` index — lit (certified) or unlit, one row shape for both. */
+export type LabelHubEntry = {
+  /** True ⇔ the label carries ≥1 coordinate-bearing finding — the certification light, visual only. */
+  certified: boolean;
+  /** A representative cover from any of the label's tracks (a finding cover when it has one). */
   coverImageUrl: string | undefined;
   /** The label's OWN logo (its resolved Discogs/Wikidata image on R2), preferred over the cover. */
   logoImageUrl: string | undefined;
   name: string;
   slug: string;
-  /** Renderable tracks on the label (all catalogue here, since it carries no findings). */
+  /** Renderable tracks on the label — findings plus the quieter rows, the tile's "N tracks". */
   trackCount: number;
 };
 
-// ── THE ?page=N PAGED SECTION: the hub's long tail becomes internal links ─────────────────────────
+// ── THE ?page=N PAGED INDEX: the whole hub becomes internal links ─────────────────────────────────
 //
-// Every page SSRs one OFFSET slice of the findings-free set behind a `?page=N` URL so every tile is
+// Every page SSRs one OFFSET slice of the WHOLE entity set behind a `?page=N` URL so every tile is
 // reachable as a real <a> — no crawlable-link gap, no dependence on running JS, and the footer stays
 // reachable at every catalogue size. One operation, three tables — the generic below takes the
 // entity-specific SQL FRAGMENTS as constants (never reader input; every value is bound), exactly as
@@ -810,19 +680,23 @@ export type LabelCatalogueEntry = {
 // apart.
 //
 // ── SCALE ──────────────────────────────────────────────────────────────────────────────────────
-// This composes two shapes already proven against hosted Turso: the sitemap read's grouped
-// having-scan (the findings-free, floor-gated set, above) and catalogue-groups.ts's
-// `count(*) over ()` + `limit ? offset ?` window (the entity graph pages, hosted-proven by
-// catalogue-scale.integration.test.ts). The window count runs AFTER `having`, so `total` is the
-// findings-free floor-clearing count; each page's `offset` walks one bounded slice of that grouped
-// scan — the tradeoff a numbered pager requires, and never a whole-table rank in the isolate.
+// This is the same grouped-scan shape already proven against hosted Turso (catalogue-groups.ts's
+// `count(*) over ()` + `limit ? offset ?` window, hosted-proven by catalogue-scale.integration.test.ts)
+// — the scan (entity ⋈ tracks, `left join findings`, grouped) is UNCHANGED; only the `having`
+// admits certified entities now (`sum(certified) > 0 OR renderable >= floor`) instead of the
+// findings-free set alone, so the same walk returns a slightly larger grouped set. The window count
+// runs AFTER `having`, so `total` is the whole floor-clearing count; each page's `offset` walks one
+// bounded slice of that grouped scan — the tradeoff a numbered pager requires, never a whole-table
+// rank in the isolate.
 
 /** The `certified` / `renderable` aggregates, shared by every hub read so the gate has one home. */
 const HUB_CERTIFIED = `sum(case when findings.log_id is not null then 1 else 0 end)`;
 const HUB_RENDERABLE = `${HUB_CERTIFIED} + sum(case when findings.track_id is null then 1 else 0 end)`;
 
-/** A raw hub TILE row — the union of every tile column the three entity kinds select. */
+/** A raw hub TILE row — the union of every tile column the three entity kinds select. The gated scan
+    stamps `track_count` + `certified` onto it; the rest are the entity's own columns. */
 type CatalogueHubRow = {
+  certified?: number | null;
   cover_json?: string | null;
   cover_url?: string | null;
   image_key?: string | null;
@@ -864,7 +738,8 @@ export type CatalogueHubNumberedPage<Entry> = {
   letters?: CatalogueHubLetter[];
   page: number;
   pageCount: number;
-  /** Every findings-free, floor-clearing entity the hub carries, counted in SQL — the pager's key. */
+  /** Every floor-clearing entity the hub carries (certified + catalogue), counted in SQL — the
+      pager's key and the masthead's total. */
   total: number;
 };
 
@@ -878,36 +753,42 @@ export type CatalogueHubLetter = { letter: string; page: number };
  * them for a crawler), it throws so the route can 404. Kept a hub-local class to keep labels.ts free
  * of a catalogue-groups import (which would close an artists→labels→catalogue-groups cycle).
  *
- * The three ENTITY hubs no longer raise it — they each carry an editorial section too, so only the
- * ROUTE can tell whether a page is past the end of everything. `/tracks` (one section, one read)
- * still does.
+ * The three ENTITY hubs do not raise it — `listHubPage` returns an honest empty page past the end
+ * and each ROUTE 404s off `page > pageCount`. `/tracks` (its own reader) still throws.
  */
 export class CatalogueHubPageOutOfRangeError extends Error {}
 
 /**
- * One OFFSET page of a hub's findings-free section, plus its total and (optionally) its A–Z lane —
- * from ONE pass over the gated set.
+ * One OFFSET page of the WHOLE entity index — certified findings + the wider catalogue, alphabetical
+ * — plus its total and (optionally) its A–Z lane, from ONE pass over the gated set.
  *
  * ── WHY ONE PASS ────────────────────────────────────────────────────────────────────────────────
- * `/artists` and `/labels` used to run this read AND a separate letter-lane read on every render:
+ * `/artists` and `/labels` used to run a page read AND a separate letter-lane read on every render:
  * two catalogue-scale grouped `having` scans per request, the second one purely to count entities
- * per initial. The gated set is now a MATERIALIZED CTE walked once and consumed by three arms of
- * one compound select — the total, the page's slice, and the per-initial counts. `materialized` is
+ * per initial. The gated set is a MATERIALIZED CTE walked once and consumed by three arms of one
+ * compound select — the total, the page's slice, and the per-initial counts. `materialized` is
  * load-bearing: a plain CTE is flattened and RE-EXECUTED per `union all` branch (the trap AGENTS.md
  * records), which is exactly the two-scan cost this removes.
  *
+ * ── WHAT THE GATE ADMITS ────────────────────────────────────────────────────────────────────────
+ * A CERTIFIED entity is always in (`sum(certified) > 0`); an uncertified catalogue entity is in only
+ * when its page clears the thin-content floor (`renderable >= floor`). That disjunction is the whole
+ * ruling: the certified rows the editorial section used to carry, and the floor-gated catalogue rows
+ * the second section used to, folded into ONE alphabetical list. The gated scan stamps each row's
+ * `certified` flag (the certification light the tile reads) beside its renderable count.
+ *
  * ── WHY THE TILES ARE A SECOND STATEMENT ────────────────────────────────────────────────────────
- * The gated scan carries only slug + renderable count. The tile columns (name, cover, owned-master
- * key) come off a plain indexed `where slug in (…)` lookup of the ≤48 slugs the page actually
- * shows, so the per-row cover subqueries run 48 times rather than once per entity in the gated set.
+ * The gated scan carries only slug + renderable count + certified. The tile columns (name, cover,
+ * owned-master key) come off a plain indexed `where slug in (…)` lookup of the ≤48 slugs the page
+ * actually shows, so the per-row cover subqueries run 48 times rather than once per entity in the
+ * gated set — the certified flag/count join the PAGED rows, never a whole-table read into the isolate.
  *
  * A page past the end is NOT an error here: it returns an empty slice with the honest `total` and
- * `pageCount`, and the ROUTE decides the 404 — it also carries an editorial section, which may
- * still have rows on a page the catalogue half has run out on. Nothing is ever clamped to page 1.
+ * `pageCount`, and the ROUTE decides the 404 off `page > pageCount`. Nothing is ever clamped to page 1.
  *
  * The fragments are constants from the callers; only the floor, page size, and offset are bound.
  */
-export async function listCatalogueHubPage<Entry>(
+export async function listHubPage<Entry>(
   query: CatalogueHubQuery<Entry>,
   page: number,
   withLetters = false,
@@ -915,33 +796,35 @@ export async function listCatalogueHubPage<Entry>(
   const db = await getDb();
   const limit = CATALOGUE_HUB_DEFAULT_LIMIT;
   // Arm 1 is the total (always exactly one row, so an empty page still reports an honest size);
-  // arm 2 is the page's slice; arm 3 is the A–Z lane's per-initial counts. `kind` discriminates,
-  // and `slug`/`n` carry the letter arm's payload — one column shape across all three arms.
+  // arm 2 is the page's slice, carrying `certified`; arm 3 is the A–Z lane's per-initial counts.
+  // `kind` discriminates; `slug`/`n`/`cert` are one column shape across all three arms (the total
+  // and letter arms carry a 0 placeholder in `cert`).
   const letterArm = withLetters
     ? `union all
-       select 'letter' as kind, substr(g.slug, 1, 1) as slug, count(*) as n
+       select 'letter' as kind, substr(g.slug, 1, 1) as slug, count(*) as n, 0 as cert
        from gated g group by substr(g.slug, 1, 1)`
     : "";
 
   const result = await db.execute({
     args: [query.floor, limit, (page - 1) * limit],
     sql: `with gated as materialized (
-            select ${query.slugExpr} as slug, ${HUB_RENDERABLE} as track_count
+            select ${query.slugExpr} as slug, ${HUB_RENDERABLE} as track_count,
+                   (${HUB_CERTIFIED} > 0) as certified
             from ${query.from}
             left join findings on findings.track_id = tracks.track_id
             group by ${query.groupBy}
-            having ${HUB_CERTIFIED} = 0 and ${HUB_RENDERABLE} >= ?
+            having ${HUB_CERTIFIED} > 0 or ${HUB_RENDERABLE} >= ?
           )
-          select 'total' as kind, '' as slug, (select count(*) from gated) as n
+          select 'total' as kind, '' as slug, (select count(*) from gated) as n, 0 as cert
           union all
           select * from (
-            select 'row' as kind, g.slug as slug, g.track_count as n
+            select 'row' as kind, g.slug as slug, g.track_count as n, g.certified as cert
             from gated g order by g.slug asc limit ? offset ?
           )
           ${letterArm}`,
   });
 
-  const rows = typedRows<{ kind: string; n: number; slug: string }>(result.rows);
+  const rows = typedRows<{ cert: number; kind: string; n: number; slug: string }>(result.rows);
   const total = Number(rows.find((row) => row.kind === "total")?.n ?? 0);
   // A compound select gives no cross-arm order guarantee, so the arms are split and re-sorted
   // here — over 48 slugs and ~27 letters, never a growing set.
@@ -968,11 +851,11 @@ export async function listCatalogueHubPage<Entry>(
 /**
  * The tile columns for one page's slugs — a bounded, index-driven `where slug in (…)` over the
  * entity table alone. Returns them in the slice's slug order (the lookup's own order is not
- * guaranteed), each carrying its renderable count off the gated scan.
+ * guaranteed), each carrying its renderable count + certified flag off the gated scan.
  */
 async function hubTiles<Entry>(
   query: CatalogueHubQuery<Entry>,
-  slice: { n: number; slug: string }[],
+  slice: { cert: number; n: number; slug: string }[],
 ): Promise<Entry[]> {
   if (slice.length === 0) {
     return [];
@@ -992,7 +875,9 @@ async function hubTiles<Entry>(
   return slice.flatMap((row) => {
     const tile = bySlug.get(row.slug);
 
-    return tile ? [query.mapRow({ ...tile, track_count: Number(row.n) })] : [];
+    return tile
+      ? [query.mapRow({ ...tile, certified: Number(row.cert), track_count: Number(row.n) })]
+      : [];
   });
 }
 
@@ -1022,13 +907,14 @@ export function letterPages(
   return [...byLetter].map(([letter, page]) => ({ letter, page }));
 }
 
-/** The LABELS hub's `?page=N` + A–Z reads, over the findings-free, floor-gated set of labels. */
-const LABELS_HUB_QUERY: CatalogueHubQuery<LabelCatalogueEntry> = {
+/** The LABELS hub's `?page=N` + A–Z reads, over every floor-clearing label (certified + catalogue). */
+const LABELS_HUB_QUERY: CatalogueHubQuery<LabelHubEntry> = {
   entity: "labels",
   floor: LABEL_INDEX_MIN_TRACKS,
   from: "labels join tracks on tracks.label_id = labels.id",
   groupBy: "labels.id",
   mapRow: (row) => ({
+    certified: Boolean(row.certified),
     coverImageUrl: coverFromJson(row.cover_json),
     logoImageUrl: labelLogoUrl(row.image_key ?? null),
     name: row.name,
@@ -1041,13 +927,12 @@ const LABELS_HUB_QUERY: CatalogueHubQuery<LabelCatalogueEntry> = {
 };
 
 /**
- * One numbered page of the `/labels` hub's findings-free section (the crawlable `?page=N` view),
- * carrying the A–Z fast lane: each present letter → the page its first label lands on.
+ * One numbered page of the unified `/labels` index (the crawlable `?page=N` view) — every label
+ * Fluncle holds, certified and catalogue alike, carrying the A–Z fast lane: each present letter →
+ * the page its first label lands on.
  */
-export function listLabelsCataloguePage(
-  page: number,
-): Promise<CatalogueHubNumberedPage<LabelCatalogueEntry>> {
-  return listCatalogueHubPage(LABELS_HUB_QUERY, page, true);
+export function listLabelsHubPage(page: number): Promise<CatalogueHubNumberedPage<LabelHubEntry>> {
+  return listHubPage(LABELS_HUB_QUERY, page, true);
 }
 
 /**

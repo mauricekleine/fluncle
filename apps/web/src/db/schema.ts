@@ -2937,9 +2937,9 @@ export const artistAliases = sqliteTable(
 // fold over a record's pressings — falling back to the slug when MusicBrainz has no release
 // group. So an album entity now exists for a catalogue-only record too (the crawler is to
 // albums what it already is to `labels`: a mint path), and `tracks.album_id` is stamped off the
-// bat rather than at a deploy backfill. The `/albums` EDITORIAL index stays bounded by the
-// archive (it is findings-joined — `listAlbumsWithFindingCounts`); the crawl-minted rows are the
-// "other songs on this album" tier and reach a public `/album/<slug>` only through the
+// bat rather than at a deploy backfill. The `/albums` index lists every record Fluncle holds in
+// one alphabetical list (`listAlbumsHubPage`) — a certified record reads lit, a crawl-minted one
+// unlit — and a crawl-minted record reaches a public `/album/<slug>` only through the
 // renderable-track thin-content gate.
 //
 // The known limit, inherited from the slug identity: two different albums that share a

@@ -357,6 +357,7 @@ export const SURFACES: readonly Surface[] = [
   {
     discoveryUrl: `${SITE}/llms.txt`,
     exposedContent: [
+      "/artists — one A–Z index of every drum & bass artist Fluncle holds, certified and catalogue alike",
       "/artist/:slug — one artist's page: its findings, its identity links, and the rest of its catalogue",
     ],
     kind: "web_route",
@@ -370,7 +371,7 @@ export const SURFACES: readonly Surface[] = [
   {
     discoveryUrl: `${SITE}/llms.txt`,
     exposedContent: [
-      "/labels — every record label Fluncle has found a banger on",
+      "/labels — one A–Z index of every drum & bass record label Fluncle holds, certified and catalogue alike",
       "/label/:slug — one label: its findings, the artists on it, and the rest of its catalogue",
     ],
     kind: "web_route",
@@ -385,7 +386,7 @@ export const SURFACES: readonly Surface[] = [
   {
     discoveryUrl: `${SITE}/llms.txt`,
     exposedContent: [
-      "/albums — every record Fluncle has found a banger on",
+      "/albums — one alphabetical index of every drum & bass album Fluncle holds, certified and catalogue alike",
       "/album/:slug — one record: its findings, its artists, its label, and the rest of its tracklist",
     ],
     kind: "web_route",

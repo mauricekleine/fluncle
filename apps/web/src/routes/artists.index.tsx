@@ -2,61 +2,48 @@ import { Link, createFileRoute, notFound } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { ArtistAvatar } from "@/components/artist-avatar";
 import { CataloguePager } from "@/components/catalogue-groups";
-import { CatalogueHubPageSection, HubLetterLane } from "@/components/catalogue-hub-section";
+import { HubLetterLane } from "@/components/catalogue-hub-section";
 import { StoryNotFoundState } from "@/components/stories/stories-states";
 import { siteUrl } from "@/lib/fluncle-links";
-import { findingsCount, tracksCount } from "@/lib/format";
+import { tracksCount } from "@/lib/format";
 import { jsonLdScript } from "@/lib/json-ld";
 import { albumCoverAtSize, COVER_TILE_SIZE } from "@/lib/media";
-import {
-  type ArtistCatalogueEntry,
-  type ArtistIndexEntry,
-  listArtistsCataloguePage,
-  listArtistsWithFindingCounts,
-} from "@/lib/server/artists";
-import { type CatalogueHubNumberedPage, type EditorialHubPage } from "@/lib/server/labels";
+import { type ArtistHubEntry, listArtistsHubPage } from "@/lib/server/artists";
+import { type CatalogueHubNumberedPage } from "@/lib/server/labels";
 
-// The artists index: every artist Fluncle has logged a finding from, cover-led, each linking to
-// its `/artist/<slug>` page — the internal-link hub that keeps the artist pages from being orphans
-// (Unit 3, artist-relationship RFC §3).
+// The artists index: ONE alphabetical index of every artist Fluncle holds — the certified findings
+// and the wider catalogue he is charting — cover-led, each tile linking to its `/artist/<slug>`
+// page (the internal-link hub that keeps the artist pages from being orphans). A certified artist's
+// name takes the certification light (DESIGN.md's Unlit Rule, Eclipse Gold); an uncertified one
+// keeps the plain ink. The distinction is visual only — no badge, no tier heading, no finding count.
 //
-// Below the editorial list, "More artists" carries the INDEXABLE findings-free artists the crawler
-// minted a page for. Every page — page 1 included — SSRs one static slice of tiles behind a
-// real-anchor `?page=N` pager, with an A–Z fast lane linking every region of the alphabet — so the
-// long tail is reachable by internal links (and the footer by everyone), not the sitemap alone.
+// Every page — page 1 included — SSRs one static slice of tiles behind a real-anchor `?page=N`
+// pager, with an A–Z fast lane linking every region of the alphabet, so the whole index is reachable
+// by internal links (and the footer by everyone), not the sitemap alone.
+
+const countFormatter = new Intl.NumberFormat("en-US");
 
 type ArtistsPageData =
   | {
-      catalogue: CatalogueHubNumberedPage<ArtistCatalogueEntry>;
-      findings: EditorialHubPage<ArtistIndexEntry>;
+      hub: CatalogueHubNumberedPage<ArtistHubEntry>;
       // The current page (1 for the bare `/artists`) — the head's per-page canonical keys off it.
       page: number;
       status: "found";
     }
   | { status: "missing" };
 
-// Resolve the hub's data in TWO reads, one per section. A bare `/artists` (or `?page=1`) is page 1;
-// a `?page=N` is the Nth slice of BOTH sections, so the hub keeps a single pager and a single URL
-// space however far the archive grows. The logged list runs out first, and from there the deeper
-// pages are pure long tail. A page past the end of BOTH 404s — never a clamp to page 1, which would
-// be a second URL for page 1's tiles.
-//
-// The A–Z lane no longer costs a read of its own: it rides on the long-tail page's single scan
-// (`listArtistsCataloguePage`), which used to be shadowed by a second, catalogue-scale grouped scan
-// whose only job was counting entities per initial. That second scan made this the slowest page on
-// the site.
+// ONE read serves the whole index. A `?page=N` past the end returns an honest empty page, so the
+// route 404s off `page > pageCount` rather than clamping to page 1 (which would be a second URL for
+// page 1's tiles). Page 1 of an empty index is a legitimate empty page, never a 404.
 async function resolveArtistsPage(page: number | undefined): Promise<ArtistsPageData> {
   const requested = page ?? 1;
-  const [catalogue, findings] = await Promise.all([
-    listArtistsCataloguePage(requested),
-    listArtistsWithFindingCounts(requested),
-  ]);
+  const hub = await listArtistsHubPage(requested);
 
-  if (requested > Math.max(catalogue.pageCount, findings.pageCount)) {
+  if (requested > hub.pageCount) {
     return { status: "missing" };
   }
 
-  return { catalogue, findings, page: requested, status: "found" };
+  return { hub, page: requested, status: "found" };
 }
 
 const fetchArtistsPage = createServerFn({ method: "GET" })
@@ -64,12 +51,11 @@ const fetchArtistsPage = createServerFn({ method: "GET" })
   .handler(({ data }): Promise<ArtistsPageData> => resolveArtistsPage(data.page));
 
 // Machine-facing strings stay honestly-plain third-person (the Narrator rule), and they carry the
-// genre keyword: "Fluncle: the artists" told a search engine nothing, and Bing flagged the whole
-// hub layer for short titles + identical paged meta (2026-07-18). Paged variants get their page
-// number baked into BOTH strings so no two `?page=N` URLs share identical meta.
-const title = "Drum & bass artists, A to Z · Fluncle";
+// genre keyword: Bing flagged the hub layer for short titles + identical paged meta (2026-07-18).
+// Paged variants bake their page number into BOTH strings so no two `?page=N` URLs share meta.
+const title = "Every drum & bass artist, A to Z · Fluncle";
 const description =
-  "Every drum & bass artist Fluncle has found and logged in the Galaxy, A to Z, each mapped by the bangers they made and the labels that pressed them.";
+  "Every drum & bass artist Fluncle holds, A to Z: the names behind the bangers, with the labels that pressed them.";
 
 function pagedMeta(page: number): { description: string; title: string } {
   if (page <= 1) {
@@ -77,8 +63,8 @@ function pagedMeta(page: number): { description: string; title: string } {
   }
 
   return {
-    description: `Page ${page} of every drum & bass artist Fluncle has found and logged in the Galaxy, A to Z, each mapped by the bangers they made.`,
-    title: `Drum & bass artists, page ${page} · Fluncle`,
+    description: `Page ${page} of every drum & bass artist Fluncle holds, A to Z, the names behind the bangers.`,
+    title: `Every drum & bass artist, page ${page} · Fluncle`,
   };
 }
 
@@ -92,11 +78,10 @@ function artistsHead(loaderData: ArtistsPageData | undefined) {
   const canonical =
     loaderData.page > 1 ? `${siteUrl}/artists?page=${loaderData.page}` : `${siteUrl}/artists`;
 
-  // The ItemList stays Fluncle's CURATED list (the findings section only): the catalogue artists'
-  // pages are already carried by the sitemap. It rides as the `mainEntity` of a `CollectionPage` —
-  // the honest shape for "this page is a hub OF a list" — carrying `numberOfItems` so a crawler
-  // knows the list's size without counting.
-  const artists = loaderData.findings.items;
+  // The ItemList carries the page's tiles — every one is a real `/artist/<slug>` page — as the
+  // `mainEntity` of a `CollectionPage`, with `numberOfItems` set to the whole index size so a
+  // crawler knows the list's true size without counting.
+  const artists = loaderData.hub.items;
   const collectionPage = {
     "@context": "https://schema.org",
     "@type": "CollectionPage",
@@ -108,9 +93,9 @@ function artistsHead(loaderData: ArtistsPageData | undefined) {
         position: index + 1,
         url: `${siteUrl}/artist/${encodeURIComponent(artist.slug)}`,
       })),
-      numberOfItems: artists.length,
+      numberOfItems: loaderData.hub.total,
     },
-    name: "Fluncle's artists",
+    name: "Every drum & bass artist Fluncle holds",
     url: `${siteUrl}/artists`,
   };
 
@@ -169,6 +154,15 @@ function pageParam(value: unknown): number | undefined {
   return Number.isFinite(n) && n >= 1 ? Math.trunc(n) : undefined;
 }
 
+// One composed string (not JSX fragments) so the count is a single SSR text node — a conditional
+// clause SSRs as several nodes split by hydration markers, which a naive text extractor misreads.
+// The count clause drops at ≤ 1 ("all 1 of them" is not a sentence).
+function mastheadLine(total: number): string {
+  return total > 1
+    ? `Every drum & bass artist, all ${countFormatter.format(total)} of them.`
+    : "Every drum & bass artist.";
+}
+
 function ArtistsPage() {
   const data = Route.useLoaderData();
 
@@ -176,82 +170,56 @@ function ArtistsPage() {
     return null;
   }
 
-  const { catalogue, findings } = data;
+  const { hub } = data;
   const buildHref = (page: number) => (page <= 1 ? "/artists" : `/artists?page=${page}`);
-  const pageCount = Math.max(catalogue.pageCount, findings.pageCount);
-  const lane = (
-    <HubLetterLane buildHref={buildHref} label="Artists A to Z" letters={catalogue.letters ?? []} />
-  );
-  // ONE pager for the whole hub. It rides inside the long-tail section as before — but that section
-  // renders nothing when its slice is empty, and the logged list can still have pages left there, so
-  // the same pager is rendered on its own in that case rather than stranding the reader.
-  const pager = (
-    <CataloguePager
-      buildHref={buildHref}
-      label="More artists, more pages"
-      page={data.page}
-      pageCount={pageCount}
-    />
-  );
-  const renderTile = (artist: ArtistCatalogueEntry) => (
-    <li key={artist.slug}>
-      <Link params={{ slug: artist.slug }} to="/artist/$slug">
-        <ArtistAvatar
-          className="artist-card-avatar"
-          name={artist.name}
-          src={albumCoverAtSize(artist.imageUrl, COVER_TILE_SIZE)}
-        />
-        <span className="artist-grid-line">{artist.name}</span>
-        <span className="artist-grid-count">{tracksCount(artist.trackCount)}</span>
-      </Link>
-    </li>
-  );
 
   return (
     <main className="log-plate-stage">
       <article className="log-plate log-index">
         <header className="log-masthead">
           <h1 className="log-coordinate log-index-title">Artists</h1>
-          <p className="log-index-intro">
-            Every drum &amp; bass artist with a finding in the archive. {findings.total} logged.
-          </p>
+          <p className="log-index-intro">{mastheadLine(hub.total)}</p>
         </header>
 
-        {findings.total === 0 ? (
-          <p className="log-index-empty empty-scanlines">No artists logged yet. Quiet sector.</p>
-        ) : findings.items.length > 0 ? (
-          <ul className="artist-avatar-grid" aria-label="Artists">
-            {findings.items.map((artist) => (
-              <li key={artist.slug}>
-                <Link params={{ slug: artist.slug }} to="/artist/$slug">
-                  <ArtistAvatar
-                    className="artist-card-avatar"
-                    name={artist.name}
-                    src={albumCoverAtSize(artist.imageUrl, COVER_TILE_SIZE)}
-                  />
-                  <span className="artist-grid-line">{artist.name}</span>
-                  <span className="artist-grid-count">{findingsCount(artist.findingCount)}</span>
-                </Link>
-              </li>
-            ))}
-          </ul>
-        ) : null}
-
-        <CatalogueHubPageSection
-          gridClassName="artist-avatar-grid"
-          heading="More artists"
-          headingId="artists-catalogue-heading"
-          items={catalogue.items}
-          lane={lane}
-          listLabel="More artists"
-          pager={pager}
-          renderTile={renderTile}
-        />
-
-        {catalogue.items.length === 0 ? pager : null}
+        {hub.total === 0 ? (
+          <p className="log-index-empty empty-scanlines">No drum &amp; bass artists yet.</p>
+        ) : (
+          <>
+            <HubLetterLane
+              buildHref={buildHref}
+              label="Artists A to Z"
+              letters={hub.letters ?? []}
+            />
+            <ul aria-label="Artists" className="artist-avatar-grid hub-grid">
+              {hub.items.map((artist) => (
+                <li key={artist.slug}>
+                  <Link
+                    className={artist.certified ? "hub-tile-certified" : undefined}
+                    params={{ slug: artist.slug }}
+                    to="/artist/$slug"
+                  >
+                    <ArtistAvatar
+                      className="artist-card-avatar"
+                      name={artist.name}
+                      src={albumCoverAtSize(artist.imageUrl, COVER_TILE_SIZE)}
+                    />
+                    <span className="artist-grid-line">{artist.name}</span>
+                    <span className="artist-grid-count">{tracksCount(artist.trackCount)}</span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+            <CataloguePager
+              buildHref={buildHref}
+              label="More artists, more pages"
+              page={hub.page}
+              pageCount={hub.pageCount}
+            />
+          </>
+        )}
 
         <footer className="log-plate-footer">
-          <Link to="/">Back to the archive</Link>
+          <Link to="/">Home</Link>
           <Link to="/log">The full log</Link>
         </footer>
       </article>

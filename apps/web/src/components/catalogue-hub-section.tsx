@@ -1,20 +1,13 @@
-// The "more <entities>" section: the SECOND section of each hub (`/labels`, `/albums`, `/artists`).
+// The hub fast lanes: the A–Z letter lane (`/labels`, `/artists`) and the `/tracks` year lane.
 //
-// The hub leads with Fluncle's editorial list — the entities he has certified a finding off. This
-// section is everything BELOW that: the INDEXABLE findings-free entities the crawler minted a page
-// for on crawled content alone. It is honestly quieter — the unlit register (DESIGN.md) — and its
-// copy never NAMES the tier (the word "catalogue" never appears in public copy) or claims Fluncle
-// found/logged/certified these (docs/album-entity.md, the unnamed tier). The heading names the
-// SUPERSET ("More labels"), which the Unlit Rule permits. The tiles are the SAME grid as the
-// section above; only the light drops.
-//
-// ONE navigation model, for humans and crawlers alike: every page — page 1 included — SSRs its own
-// slice of tiles behind a real-anchor pager, and (on `/labels` + `/artists`) an A–Z fast lane links
-// every region of the alphabet. Nothing loads on scroll, so the footer stays reachable at every
-// catalogue size, and every tile past the first page is a real `?page=N` <a> a crawler follows.
+// The three entity hubs (`/labels`, `/albums`, `/artists`) are each ONE catalogue-scale index of
+// every entity Fluncle holds, paginated behind a real-anchor `?page=N` pager (the route renders the
+// grid; the pager is `CataloguePager`). This file owns the fast lanes that ride above those grids:
+// a row of real `?page=N` anchors so any region of the alphabet — or, on `/tracks`, any release
+// year — is two hops away. Nothing loads on scroll, so a crawler with no JS walks the whole lane.
 
 import { CaretLeftIcon, CaretRightIcon } from "@phosphor-icons/react";
-import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 // ── THE PAGED SECTION + THE A–Z FAST LANE ────────────────────────────────────────────────────────
 //
@@ -186,54 +179,5 @@ export function HubYearLane({
         <CaretRightIcon aria-hidden="true" size={16} weight="bold" />
       </button>
     </div>
-  );
-}
-
-/**
- * The static, SSR-rendered `?page=N` slice of a hub's findings-free section. Same grid, same tiles,
- * same unlit register as the editorial section above; every tile is in the HTML and the pager below
- * is real anchors, so a crawler that runs no JS walks the whole long tail. `lane` (the A–Z row) rides
- * in the head, `pager` below the grid, exactly like an artist/label entity page.
- */
-export function CatalogueHubPageSection<Entry extends { slug: string }>({
-  gridClassName,
-  headingId,
-  heading,
-  items,
-  lane,
-  listLabel,
-  pager,
-  renderTile,
-}: {
-  gridClassName: string;
-  heading: string;
-  headingId: string;
-  /** The page's tiles — the OFFSET slice the loader resolved for this `?page=N`. */
-  items: Entry[];
-  lane?: ReactNode;
-  listLabel: string;
-  /** The real-anchor pager below the grid (CataloguePager). */
-  pager?: ReactNode;
-  renderTile: (entry: Entry) => ReactNode;
-}) {
-  if (items.length === 0) {
-    return undefined;
-  }
-
-  return (
-    <section aria-labelledby={headingId} className="catalogue-section catalogue-hub">
-      <div className="catalogue-hub-head">
-        <h2 className="catalogue-hub-heading" id={headingId}>
-          {heading}
-        </h2>
-        {lane}
-      </div>
-
-      <ul aria-label={listLabel} className={`${gridClassName} catalogue-grid`}>
-        {items.map((entry) => renderTile(entry))}
-      </ul>
-
-      {pager}
-    </section>
   );
 }

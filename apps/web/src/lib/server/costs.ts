@@ -9,7 +9,7 @@
 //     failure can't break the real vendor operation it rides alongside (the
 //     note/observation/context/email still lands). A failure is logged, swallowed.
 //   - `getCostInsights({ windowDays, topFindings })` — the two GROUP BY reads
-//     behind `/admin/usage` (the `listArtistsWithFindingCounts` raw-SQL-aggregate
+//     behind `/admin/usage` (the `listHubPage` raw-SQL-aggregate
 //     precedent): a per-STEP rollup (cash | subsidized in SEPARATE columns) and a
 //     per-FINDING top-N (cash DESC), windowed by `occurred_at`. Unpriced
 //     (`estimated_usd IS NULL`) rows are COUNTED separately, NEVER summed as 0, and
@@ -194,7 +194,7 @@ function optionalText(value: unknown): string | null {
  *      count, so the split renders AS the split.
  *   2. per-FINDING top-N — the highest CASH-cost findings, joined to `tracks`.
  * Cash and subsidized are NEVER summed together; unpriced rows are counted, never
- * added as $0. Raw SQL (the `listArtistsWithFindingCounts` precedent).
+ * added as $0. Raw SQL (the `listHubPage` precedent).
  */
 export async function getCostInsights(
   options: { topFindings?: number; windowDays?: number } = {},

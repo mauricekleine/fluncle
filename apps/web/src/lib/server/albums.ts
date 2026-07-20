@@ -27,12 +27,8 @@ import { getDb, typedRows } from "./db";
 import {
   type CatalogueHubNumberedPage,
   type CatalogueHubQuery,
-  countEditorial,
-  type EditorialHubPage,
-  editorialArgs,
-  editorialPage,
   type EntitySitemapRow,
-  listCatalogueHubPage,
+  listHubPage,
 } from "./labels";
 
 // The thin-content gate for album pages: an `/album/<slug>` page indexes (and enters the
@@ -76,20 +72,6 @@ export type AlbumRecord = {
   slug: string;
   /** The album's barcode (`albums.upc`), or undefined — the MusicAlbum JSON-LD's `gtin13`. */
   upc?: string;
-};
-
-/**
- * A row in the `/albums` editorial index — exactly the four fields the tile renders. The catalogue
- * count and the freshest-finding `lastmod` used to ride along "for the sitemap"; the sitemap has
- * driven off `listAlbumSitemapRows` for a while now, so both were dead weight — and the catalogue
- * count in particular was a CATALOGUE-SCALE correlated subquery per editorial row, on every render.
- */
-export type AlbumIndexEntry = {
-  /** The album's cover — its OWNED master when resolved, else its freshest finding's album art. */
-  coverImageUrl: string | undefined;
-  findingCount: number;
-  name: string;
-  slug: string;
 };
 
 const ALBUM_COLUMNS = "id, name, slug, created_at, updated_at";
@@ -374,55 +356,6 @@ function albumCover(row: AlbumCoverRow): string | undefined {
 }
 
 /**
- * One windowed page of every album with at least one coordinate-bearing finding, with its finding
- * count and its cover. Alphabetical by name — the `/albums` index order.
- *
- * BOUNDED BY THE ARCHIVE, NOT THE CATALOGUE: it drives from the findings join, so an
- * album Fluncle has never certified anything on is never listed, however many catalogue
- * tracks hang off it. The sitemap is a separate read (`listAlbumSitemapRows`).
- */
-export async function listAlbumsWithFindingCounts(
-  page: number,
-): Promise<EditorialHubPage<AlbumIndexEntry>> {
-  const db = await getDb();
-  const [slice, total] = await Promise.all([
-    db.execute({
-      args: editorialArgs(page),
-      sql: `select albums.name as name, albums.slug as slug,
-                   count(*) as finding_count, ${ALBUM_COVER_SELECT},
-                   (select t2.album_image_url
-                      from findings f2 join tracks t2 on t2.track_id = f2.track_id
-                      where t2.album_id = albums.id and f2.log_id is not null
-                      order by f2.added_at desc limit 1) as cover_url
-            from albums
-            join tracks on tracks.album_id = albums.id
-            join findings on findings.track_id = tracks.track_id
-            where findings.log_id is not null
-            group by albums.id
-            order by albums.name collate nocase asc
-            limit ? offset ?`,
-    }),
-    countEditorial(`select 1
-                    from albums
-                    join tracks on tracks.album_id = albums.id
-                    join findings on findings.track_id = tracks.track_id
-                    where findings.log_id is not null
-                    group by albums.id`),
-  ]);
-
-  const items = typedRows<AlbumCoverRow & { finding_count: number; name: string; slug: string }>(
-    slice.rows,
-  ).map((row) => ({
-    coverImageUrl: albumCover(row),
-    findingCount: Number(row.finding_count),
-    name: row.name,
-    slug: row.slug,
-  }));
-
-  return editorialPage(items, page, total);
-}
-
-/**
  * Every ALBUM whose page clears the thin-content floor — findings or no findings. The exact twin
  * of `listLabelSitemapRows`, and that function carries the reasoning: the `/albums` hub is
  * Fluncle's editorial list (findings-joined), while the SITEMAP must carry every page that exists
@@ -463,23 +396,26 @@ export async function listAlbumSitemapRows(minTracks: number): Promise<EntitySit
   );
 }
 
-/** An album tile in the "also in the catalogue" section — the quiet, unlit twin of a hub row. */
-export type AlbumCatalogueEntry = {
-  /** A representative cover from any of the album's tracks (the record's own Spotify art). */
+/** An album tile in the unified `/albums` index — lit (certified) or unlit, one row shape for both. */
+export type AlbumHubEntry = {
+  /** True ⇔ the album carries ≥1 coordinate-bearing finding — the certification light, visual only. */
+  certified: boolean;
+  /** A representative cover — its OWNED master when resolved, else any of its tracks' Spotify art. */
   coverImageUrl: string | undefined;
   name: string;
   slug: string;
-  /** Renderable tracks on the album (all catalogue here, since it carries no findings). */
+  /** Renderable tracks on the album — findings plus the quieter rows, the tile's "N tracks". */
   trackCount: number;
 };
 
-/** The ALBUMS hub's `?page=N` read, over the findings-free, floor-gated set of records. */
-const ALBUMS_HUB_QUERY: CatalogueHubQuery<AlbumCatalogueEntry> = {
+/** The ALBUMS hub's `?page=N` read, over every floor-clearing record (certified + catalogue). */
+const ALBUMS_HUB_QUERY: CatalogueHubQuery<AlbumHubEntry> = {
   entity: "albums",
   floor: ALBUM_INDEX_MIN_TRACKS,
   from: "albums join tracks on tracks.album_id = albums.id",
   groupBy: "albums.id",
   mapRow: (row) => ({
+    certified: Boolean(row.certified),
     coverImageUrl: albumCover(row),
     name: row.name,
     slug: row.slug,
@@ -494,14 +430,13 @@ const ALBUMS_HUB_QUERY: CatalogueHubQuery<AlbumCatalogueEntry> = {
 };
 
 /**
- * One numbered page of the `/albums` hub's findings-free section (the `?page=N` view). Albums have
- * no A–Z lane (an album's identity is its cover, and browse-by-title-initial is not how records are
- * dug), so the numbered pager IS the album hub's crawl entry into the long tail.
+ * One numbered page of the unified `/albums` index (the `?page=N` view) — every record Fluncle
+ * holds, certified and catalogue alike, alphabetical. Albums have no A–Z lane (an album's identity
+ * is its cover, and browse-by-title-initial is not how records are dug), so the numbered pager is
+ * the album hub's crawl entry into the long tail.
  */
-export function listAlbumsCataloguePage(
-  page: number,
-): Promise<CatalogueHubNumberedPage<AlbumCatalogueEntry>> {
-  return listCatalogueHubPage(ALBUMS_HUB_QUERY, page);
+export function listAlbumsHubPage(page: number): Promise<CatalogueHubNumberedPage<AlbumHubEntry>> {
+  return listHubPage(ALBUMS_HUB_QUERY, page);
 }
 
 // THE ALBUM EDGE IS WRITTEN INLINE, not deferred. The publish path calls `linkTrackToAlbum`
