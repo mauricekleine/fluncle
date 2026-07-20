@@ -4,7 +4,7 @@ import { cosineSimilarity, EMBEDDING_DIMS, readEmbeddingBlob, toVectorProbe } fr
 import { createIntegrationDb, seedTrack } from "./integration-db";
 import { parseKey, toCamelot } from "../key-camelot";
 import { isNamedMove, rankMixable, sonicGateOpen, toMixTrack } from "./mixability";
-import { getFindingsByGalaxyRanked, getMixableTracks } from "./tracks";
+import { getFindingsByGalaxyRanked, getMixableTracks, getTasteCosines } from "./tracks";
 
 // The other two readers that used to pull every vector into the isolate, now ranked IN SQL
 // (lib/server/embedding.ts, docs/local-database.md "Local is not production"): the `/mix` rail
@@ -286,5 +286,91 @@ describe("the seeded vector round-trips through vector32/readEmbeddingBlob", () 
     expect(decoded).not.toBeNull();
     // float32 storage, so compare at float32 precision, not bit-for-bit against a float64.
     expect(cosineSimilarity(decoded ?? [], original)).toBeCloseTo(1, 6);
+  });
+});
+
+// ── The taste fold ────────────────────────────────────────────────────────────────────────
+// `getTasteCosines` is the `/mix` rail's second vector statement: each shortlisted track's
+// similarity to its NEAREST seed probe. It used to be one `union all` branch per probe over a
+// `shortlist` CTE — the flattening trap (docs/local-database.md), which re-read every
+// shortlisted vector once per probe. It is now ONE pass with the probes folded by scalar
+// `min(…)` in the select list.
+//
+// The pin is the file's usual one: the SQL cosine equals the JS cosine. Both branches are
+// covered on purpose — single-argument `min()` is SQLite's AGGREGATE min, so a one-probe query
+// that wrapped its lone term would collapse the whole scan to a single row instead of scoring
+// every track, and it would do so SILENTLY.
+
+/** The reference: each track's max similarity over the probes, computed in the isolate. */
+function tasteInIsolate(
+  rows: MixSeed[],
+  trackIds: string[],
+  probes: number[][],
+): Map<string, number> {
+  const best = new Map<string, number>();
+
+  for (const trackId of trackIds) {
+    const embedding = rows.find((row) => row.trackId === trackId)?.embedding;
+
+    if (!embedding) {
+      continue;
+    }
+
+    best.set(trackId, Math.max(...probes.map((probe) => cosineSimilarity(embedding, probe))));
+  }
+
+  return best;
+}
+
+describe("the /mix taste fold ranks in SQL", () => {
+  const shortlist = ["t_01", "t_02", "t_03", "t_04", "t_05"];
+
+  it("matches the in-isolate max-similarity over many probes", async () => {
+    const rows = corpus();
+
+    await seed(rows);
+
+    const probes = [pseudoVector(11), pseudoVector(12), pseudoVector(13)];
+    const cosines = await getTasteCosines(
+      shortlist,
+      probes.map((probe) => toVectorProbe(probe)),
+    );
+    const expected = tasteInIsolate(rows, shortlist, probes);
+
+    expect([...cosines.keys()].sort()).toEqual(shortlist);
+
+    for (const trackId of shortlist) {
+      // float32 storage, so compare at float32 precision.
+      expect(cosines.get(trackId)).toBeCloseTo(expected.get(trackId) ?? Number.NaN, 6);
+    }
+  });
+
+  it("scores EVERY track on a single probe rather than collapsing to one row", async () => {
+    const rows = corpus();
+
+    await seed(rows);
+
+    const probe = pseudoVector(11);
+    const cosines = await getTasteCosines(shortlist, [toVectorProbe(probe)]);
+    const expected = tasteInIsolate(rows, shortlist, [probe]);
+
+    expect([...cosines.keys()].sort()).toEqual(shortlist);
+
+    for (const trackId of shortlist) {
+      expect(cosines.get(trackId)).toBeCloseTo(expected.get(trackId) ?? Number.NaN, 6);
+    }
+  });
+
+  it("skips a shortlisted track with no vector instead of failing the scan", async () => {
+    const rows = corpus().map((row) =>
+      row.trackId === "t_03" ? { ...row, embedding: null } : row,
+    );
+
+    await seed(rows);
+
+    const cosines = await getTasteCosines(shortlist, [toVectorProbe(pseudoVector(11))]);
+
+    expect(cosines.has("t_03")).toBe(false);
+    expect([...cosines.keys()].sort()).toEqual(shortlist.filter((id) => id !== "t_03"));
   });
 });
