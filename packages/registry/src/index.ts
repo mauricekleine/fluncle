@@ -1218,6 +1218,20 @@ export const SURFACES: readonly Surface[] = [
     weights: { status: "hidden" },
   },
   {
+    command: "fluncle admin backfills artist-edges",
+    exposedContent: [
+      "fold each edge-less track's artists_json names onto existing artist identities → track_artists edges",
+    ],
+    kind: "cron",
+    name: "cron.artist-edges",
+    operatorNotes:
+      "every 60m, run by a rave-02 HOST systemd timer (docs/agents/hermes/artist-edges-timer/). The track_artists GRAPH BACKFILL (RFC artist-primary-capture, slice 0): the graph is crawl-era-only (born 2026-07-15) — only ~12.3k of ~37.5k tracks carry edges — so this folds each edge-less track's `artists_json` NAMES onto EXISTING `artists` identities and writes the `track_artists` edges, making the graph as full as honest matching allows (slice 1's identity-keyed capture authorization reads it). The matcher is IDENTITY-HONEST: each name matches by exact case-insensitive fold, then via `artist_aliases` (kind='name', status auto|confirmed — the search resolver's alias semantics); a fold two distinct identities share is ambiguous and matches nothing (fail-closed). It MINTS NOTHING — a bare name is not enough identity to create an entity — and reports the UNMATCHED RESIDUAL (credited names with no identity), which decides whether a later paced MusicBrainz credit-sweep is worth running. METADATA / GRAPH IDENTITY ONLY — it certifies nothing and publishes nothing (agent tier, the `backfill_recording_mbids` precedent). Worker-paced with NO vendor call (pure DB set-based matching, so no rate limit / circuit breaker): one bounded batch per tick folds the whole ~1.8k-row artist+alias corpus into one in-memory map and matches each track batch against it. The `tracks` row carries the durable reliability state (the `artist_edges_backfilled_at` stamp on EVERY visited row — matched, partial, or zero — so the worklist drains and a re-run is a no-op). New tracks are minted WITH edges (publish path + crawler link), so this catches history up and drains in a handful of ticks. Zero LLM tokens. Source: docs/agents/hermes/scripts/artist-edges-sweep.*. See docs/artist-relationship.md.",
+    probeConfig: { cadenceMs: 60 * MINUTE_MS, cronName: "fluncle-artist-edges", kind: "cron" },
+    statusDescription: "folds artists_json names onto artist identities",
+    title: "Artist edges",
+    weights: { status: "hidden" },
+  },
+  {
     command: "fluncle admin backfills label-lineage",
     exposedContent: [
       "resolve each label's founding date + place + parent imprint from MusicBrainz → the labels row",

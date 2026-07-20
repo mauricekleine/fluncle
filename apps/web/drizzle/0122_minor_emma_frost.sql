@@ -1,0 +1,2 @@
+ALTER TABLE `tracks` ADD `artist_edges_backfilled_at` text;--> statement-breakpoint
+CREATE INDEX `tracks_artist_edges_backfill_queue_idx` ON `tracks` (`track_id`) WHERE "tracks"."artist_edges_backfilled_at" is null;

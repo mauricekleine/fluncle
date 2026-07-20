@@ -24,6 +24,7 @@ import { listDueFreshnessLabels, mintLabelReleases } from "../label-releases";
 import { type CoverMasterKind, resolveCoverMasters } from "../cover-masters";
 import { resolveLabelImages } from "../label-images";
 import { resolveLabelLineage } from "../label-lineage";
+import { resolveArtistEdges } from "../backfill-artist-edges";
 import { adminAuth } from "../orpc-auth";
 import { resolveRecordingMbids } from "../recording-mbids";
 import { apiFault, type Implementer, parseBool, parseLimit } from "./_shared";
@@ -346,9 +347,46 @@ export function adminBackfillsHandlers(os: Implementer) {
       }
     });
 
+  // POST /admin/backfill/artist-edges — agent tier (`adminAuth`): the track_artists graph backfill
+  // (RFC artist-primary-capture, slice 0). Folds each edge-less track's `artists_json` names onto
+  // EXISTING artist identities (exact fold + `artist_aliases`) and writes the edges `insert or
+  // ignore`. Mints nothing, makes NO vendor call, stamps every visited track so the worklist drains
+  // — catalogue-graph identity only (no publish, no certification), so the box's agent-token cron
+  // drives it, the `backfill_recording_mbids` precedent.
+  const backfillArtistEdgesHandler = os.backfill_artist_edges
+    .use(adminAuth)
+    .handler(async ({ input }) => {
+      try {
+        const { query } = input;
+        const result = await resolveArtistEdges(
+          parseLimit(query.limit, BACKFILL_DEFAULT_LIMIT, BACKFILL_MAX_LIMIT),
+          parseBool(query.dryRun),
+          query.cursor ?? undefined,
+        );
+
+        return {
+          dryRun: result.dryRun,
+          edgesWritten: result.edgesWritten,
+          fullyMatched: result.fullyMatched,
+          fullyMatchedCount: result.fullyMatchedCount,
+          nextCursor: result.nextCursor,
+          ok: true as const,
+          partiallyMatched: result.partiallyMatched,
+          partiallyMatchedCount: result.partiallyMatchedCount,
+          scanned: result.scanned,
+          unmatchedNames: result.unmatchedNames,
+          zeroMatched: result.zeroMatched,
+          zeroMatchedCount: result.zeroMatchedCount,
+        };
+      } catch (error) {
+        throw apiFault(error);
+      }
+    });
+
   return {
     backfill_apple_catalogue: backfillAppleCatalogueHandler,
     backfill_apple_music: backfillAppleMusicHandler,
+    backfill_artist_edges: backfillArtistEdgesHandler,
     backfill_cover_masters: backfillCoverMastersHandler,
     backfill_discogs: backfillDiscogsHandler,
     backfill_label_images: backfillLabelImagesHandler,
