@@ -67,9 +67,12 @@ const BATCH_CAP = 4; // findings analyzed per tick (sane small cap, 3–5 band)
 const QUEUE_LIMIT = 50; // hard ceiling on the queue read (we only act on BATCH_CAP)
 
 // The catalogue arm's own cap, spent only AFTER the findings arm has taken what it needs — a
-// speculative row never delays a certified one. Small, because a full-song analysis is
-// seconds-scale and the tick shares a 5-minute cadence with the rest of the sweep fleet.
-const CATALOGUE_BATCH_CAP = 2;
+// speculative row never delays a certified one. Env-tunable (the FLUNCLE_LABEL_LINEAGE_LIMIT
+// precedent) so the catch-up pace is a unit-file knob, not a rebake: measured 2026-07-20, a
+// 2-row tick used 8–15s of its 5-minute window while capture ran ~2,200/day — the baked cap
+// was the pipeline's sandbag. The default stays the conservative 2; the enrich timer unit
+// passes the raised catch-up value, and saturation later means deleting one env line.
+const CATALOGUE_BATCH_CAP = Number(process.env.FLUNCLE_ENRICH_CATALOGUE_BATCH ?? "2");
 
 // The queue read for the catalogue arm goes over DIRECT HTTP, not the baked CLI: the box's
 // `fluncle` binary is a PINNED release, so a read through a new CLI command would gate this

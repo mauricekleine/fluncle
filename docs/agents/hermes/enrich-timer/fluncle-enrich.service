@@ -18,7 +18,11 @@ Type=oneshot
 # its /status marker (cron-output.sh) so the fluncle-healthcheck prober stays honest. Parallel
 # host timers replace the one serial gateway runner (~300s global budget); a staggered
 # OnBootSec spreads the simultaneous 5-min ticks so the latency-sensitive sweeps never pile.
-ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/enrich-sweep.sh
+# Catch-up pace (2026-07-20): the catalogue-analyze arm runs 12 rows/tick (~3,450/day ceiling)
+# while capture drains the crawled backlog at ~2,200/day — a measured 2-row tick used 8-15s of
+# its 5-minute window, so 12 stays comfortably inside it. At saturation, delete the -e flag to
+# fall back to the sweep's conservative baked default of 2.
+ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home -e FLUNCLE_ENRICH_CATALOGUE_BATCH=12 hermes bash /opt/hermes-scripts/enrich-sweep.sh
 # Pure on-box DSP over a bounded batch (cap 4); a clean tick is seconds, a full batch well
 # under two minutes. This is the most CPU-bound sweep, so a pin-watch docker image build (~4
 # min of heavy CPU contention on this 4-vCPU box) overlapping a full batch stretches it the
