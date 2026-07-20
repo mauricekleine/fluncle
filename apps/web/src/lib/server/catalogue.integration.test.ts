@@ -122,6 +122,56 @@ async function applySeedOptions(trackId: string, options: SeedOptions): Promise<
 const labelSql = `update tracks set label = ? where track_id = ?`;
 const isrcSql = `update tracks set isrc = ? where track_id = ?`;
 
+// ── The artist graph + label rulings, for AUTHORIZATION (RFC artist-primary-capture, slice 1) ──
+// Capture authorization is artist-driven: a track may be bought iff a credited artist is QUALIFIED
+// (an identity edge in `track_artists`, either to an artist with a certified finding or one with a
+// weighted release count ≥ 3 on enabled labels) OR its label is `enabled`. These helpers seed that
+// graph so the sweep's real SQL — not a mock — decides.
+
+/** Insert an `artists` row (the qualification set is keyed on `artists.id`). */
+async function seedArtistRow(id: string, name: string, slug: string): Promise<void> {
+  await db.execute({
+    args: [id, name, slug],
+    sql: `insert into artists (id, name, slug, created_at, updated_at)
+          values (?, ?, ?, '2026-07-01T00:00:00.000Z', '2026-07-01T00:00:00.000Z')`,
+  });
+}
+
+/** Insert a `track_artists` edge — the identity link authorization reads. */
+async function edge(
+  trackId: string,
+  artistId: string,
+  position = 0,
+  role: null | "remixer" = null,
+): Promise<void> {
+  await db.execute({
+    args: [trackId, artistId, position, role],
+    sql: `insert into track_artists (track_id, artist_id, position, role) values (?, ?, ?, ?)`,
+  });
+}
+
+/** Point a track at a label entity (`tracks.label_id`) — the weighted-count join reads it. */
+async function linkLabel(trackId: string, labelId: string): Promise<void> {
+  await db.execute({
+    args: [labelId, trackId],
+    sql: `update tracks set label_id = ? where track_id = ?`,
+  });
+}
+
+/** Insert a `labels` row with a `seed_state` ruling (enabled seeds discovery AND authorizes). */
+async function ruleLabel(
+  id: string,
+  name: string,
+  slug: string,
+  seedState: "disabled" | "enabled" | "undecided",
+): Promise<void> {
+  await db.execute({
+    args: [id, name, slug, seedState],
+    sql: `insert into labels (id, name, slug, seed_state, created_at, updated_at)
+          values (?, ?, ?, ?, '2026-07-01T00:00:00.000Z', '2026-07-01T00:00:00.000Z')`,
+  });
+}
+
 /** Read a catalogue row's stored ranking columns straight from the table. */
 async function rankingOf(trackId: string): Promise<{
   capture_priority: number | null;
@@ -262,7 +312,7 @@ describe("the sweep — batching, staleness, and self-healing", () => {
 
     const first = await rankCatalogue();
     expect(first.scored).toBe(1);
-    expect(first.corpus).toBe("v3:1:1");
+    expect(first.corpus).toBe("v4:1:1:0:0:0");
     expect((await rankingOf("cat-a")).nearest_finding_track_id).toBe("finding-a");
 
     // Nothing changed: the fingerprint matches, so there is no candidate at all.
@@ -278,7 +328,7 @@ describe("the sweep — batching, staleness, and self-healing", () => {
     await seedFinding("finding-b", { vector: blend(axis(0), axis(1), 0.4) });
 
     const third = await rankCatalogue();
-    expect(third.corpus).toBe("v3:2:2");
+    expect(third.corpus).toBe("v4:2:2:0:0:0");
     expect(third.scored).toBe(1);
     expect(third.quarantined).toBe(0);
     expect((await rankingOf("cat-a")).nearest_finding_track_id).toBe("finding-b");
@@ -330,8 +380,11 @@ describe("the sweep — batching, staleness, and self-healing", () => {
     // Neither corpus number moved, so the fingerprint alone would leave it on the ladder
     // forever — the bug the 58 first-ever catalogue embeds hit. The scoring path always
     // nulls `capture_priority`, so tier-still-set + vector-present is the stale signal.
+    await seedArtistRow("art-fa", "Finding Artist", "finding-artist");
     await seedFinding("finding-a", { artists: ["Finding Artist"], vector: axis(0) });
+    await edge("finding-a", "art-fa"); // certifies the artist qualified
     await seedCatalogue("cat-a", { artists: ["Finding Artist"] });
+    await edge("cat-a", "art-fa"); // the row credits the qualified artist by identity
 
     const first = await rankCatalogue();
     expect(first.prioritized).toBe(1);
@@ -370,75 +423,173 @@ describe("the sweep — batching, staleness, and self-healing", () => {
     // Stamped, with an honest null score — not left stale to be re-picked every tick.
     const ranking = await rankingOf("cat-a");
     expect(ranking.nearest_finding_score).toBeNull();
-    expect(ranking.catalogue_rank_corpus).toBe("v3:1:0");
+    expect(ranking.catalogue_rank_corpus).toBe("v4:1:0:0:0:0");
     expect(summary.remaining).toBe(0);
   });
 });
 
-describe("the capture queue — the pre-audio priority ladder", () => {
+describe("the capture queue — authorization, then the priority ladder", () => {
   beforeEach(async () => {
+    // A QUALIFIED artist (Krakota): an artists row + a certified finding crediting it by identity.
+    await seedArtistRow("art-krakota", "Krakota", "krakota");
     await seedFinding("finding-a", {
       artists: ["Krakota"],
       label: "Hospital Records",
       vector: axis(0),
     });
-    // A label the operator rules the crawler may seed from, carrying no finding yet.
-    await db.execute({
-      args: ["lbl-seed", "Critical Music", "critical-music", "enabled"],
-      sql: `insert into labels (id, name, slug, seed_state, created_at, updated_at)
-            values (?, ?, ?, ?, '2026-07-01T00:00:00.000Z', '2026-07-01T00:00:00.000Z')`,
-    });
-    // And the real shape of the veto: a label the operator ruled OUT that nonetheless CARRIES
-    // a finding — a crossover remix. All 8 disabled labels in the live archive look like this.
+    await edge("finding-a", "art-krakota");
+    // Hospital Records: ENABLED (authorizes) AND carries a finding (the tier-2 hint).
+    await ruleLabel("lbl-hospital", "Hospital Records", "hospital-records", "enabled");
+    // Critical Music: ENABLED, nothing certified on it yet (the tier-1 rung).
+    await ruleLabel("lbl-seed", "Critical Music", "critical-music", "enabled");
+    // The veto's real shape: a label the operator ruled OUT that nonetheless CARRIES a finding —
+    // a crossover remix. All 8 disabled labels in the live archive look like this.
     await seedFinding("finding-crossover", { artists: ["Above & Beyond"], label: "Anjunabeats" });
-    await db.execute({
-      args: ["lbl-out", "Anjunabeats", "anjunabeats", "disabled"],
-      sql: `insert into labels (id, name, slug, seed_state, created_at, updated_at)
-            values (?, ?, ?, ?, '2026-07-01T00:00:00.000Z', '2026-07-01T00:00:00.000Z')`,
-    });
+    await ruleLabel("lbl-out", "Anjunabeats", "anjunabeats", "disabled");
+    // Atlantic UK: NOT enabled, but CARRIES a finding — the label-mate counter-example.
+    await seedFinding("finding-atlantic", { artists: ["A Crossover"], label: "Atlantic UK" });
   });
 
-  it("tiers an un-embedded catalogue track by how close its METADATA sits to the archive", async () => {
+  it("tiers AUTHORIZED tracks by the priority ladder, and SINKS the unauthorized", async () => {
     const { rankCatalogue } = await import("./catalogue");
 
     // No vectors on any of these — they have never been captured, which is exactly why the
     // Ear cannot rank them and this ladder has to.
+    // A qualified artist (by identity edge) on an UNDECIDED label — authorized, tier 3.
     await seedCatalogue("cat-artist", { artists: ["Krakota"], label: "Some Other Label" });
+    await edge("cat-artist", "art-krakota");
+    // Authorized via its ENABLED label, which also carries a finding — the tier-2 hint (via fold).
     await seedCatalogue("cat-label", { artists: ["Nobody"], label: "hospital records." });
+    // Authorized via its enabled label, nothing certified yet — tier 1.
     await seedCatalogue("cat-seed", { artists: ["Nobody"], label: "Critical Music" });
-    await seedCatalogue("cat-none", { artists: ["Nobody"], label: "Nobody's Imprint" });
-    // The veto, on real archive shape: Anjunabeats CARRIES a finding (the crossover above) and
-    // is RULED OUT. Without the veto this is tier 2 and the capture budget buys trance.
+    // No qualified artist, label not enabled — UNAUTHORIZED (the new negative tier).
+    await seedCatalogue("cat-unauth", { artists: ["Nobody"], label: "Nobody's Imprint" });
+    // The veto, on real archive shape: Anjunabeats CARRIES a finding and is RULED OUT. Checked
+    // before authorization — a qualified artist (edge) still sinks to −1.
     await seedCatalogue("cat-vetoed", { artists: ["Krakota"], label: "Anjunabeats" });
+    await edge("cat-vetoed", "art-krakota");
 
     const summary = await rankCatalogue();
 
     expect(summary.prioritized).toBe(5);
     expect(summary.scored).toBe(0);
 
-    // 3 — an artist already on a finding. The strongest signal there is.
+    // 3 — a credited artist is qualified (identity). Capture follows the artist, even onto an
+    // undecided label the operator has not ruled on.
     expect((await rankingOf("cat-artist")).capture_priority).toBe(3);
-    // 2 — its label already carries a finding. Note the fold: `hospital records.` and
-    // `Hospital Records` are one label, the same way they are everywhere else in the archive.
+    // 2 — authorized via its enabled label, which also carries a finding. Note the fold:
+    // `hospital records.` and `Hospital Records` are one label everywhere else in the archive.
     expect((await rankingOf("cat-label")).capture_priority).toBe(2);
-    // 1 — in-lane but unproven: a label the operator seeds from, nothing certified on it yet.
+    // 1 — in-lane but unproven: an enabled label, nothing certified on it yet.
     expect((await rankingOf("cat-seed")).capture_priority).toBe(1);
-    // 0 — nothing ties it to the archive.
-    expect((await rankingOf("cat-none")).capture_priority).toBe(0);
-    // −1 — VETOED. Its label carries a finding AND its artist is on a finding, and the operator
-    // still said "not our lane". His ruling beats both signals; the row stays, ranked last.
-    //
-    // The veto has its OWN tier, strictly below `none`, and that is what makes it enforceable:
-    // the capture WORK QUEUE (track-work.ts) excludes it with `capture_priority >= 0`. Sharing
-    // `none`'s 0 would leave it merely sorted last — and a queue drains, so last arrives.
+    // −3 — UNAUTHORIZED. No qualified artist, and its label is not enabled. Metadata welcome,
+    // money withheld — excluded from the capture queue by the existing `capture_priority >= 0`.
+    expect((await rankingOf("cat-unauth")).capture_priority).toBe(-3);
+    // −1 — VETOED, checked FIRST. A qualified artist on a ruled-out label still sinks; his ruling
+    // beats the strongest signal. The veto has its own tier, distinct from `unauthorized` (−3).
     expect((await rankingOf("cat-vetoed")).capture_priority).toBe(-1);
+  });
+
+  it("authorizes an EDGE-LESS track via its enabled label (the pre-backfill common case)", async () => {
+    const { rankCatalogue } = await import("./catalogue");
+
+    // ~2/3 of catalogue rows carry no graph edges until slice 0 drains. This one has none, and an
+    // unknown artist name — but its label is enabled, so it is authorized and captureable.
+    await seedCatalogue("cat-edgeless", { artists: ["Unknown Name"], label: "Critical Music" });
+
+    await rankCatalogue();
+
+    expect((await rankingOf("cat-edgeless")).capture_priority).toBe(1);
+  });
+
+  it("does NOT authorize a label-mate off a finding on a NON-enabled label (Atlantic-UK pin)", async () => {
+    const { rankCatalogue } = await import("./catalogue");
+
+    // Atlantic UK carries a finding but is not enabled. A crawled label-mate with no qualified
+    // artist must NOT ride that lone finding into the budget — the exact overshoot this rule ends.
+    await seedCatalogue("cat-atlantic", { artists: ["Nobody"], label: "Atlantic UK" });
+
+    await rankCatalogue();
+
+    expect((await rankingOf("cat-atlantic")).capture_priority).toBe(-3);
+  });
+
+  it("qualifies an artist by WEIGHTED release count ≥ 3 on enabled labels (no finding needed)", async () => {
+    const { rankCatalogue } = await import("./catalogue");
+
+    // An artist with no certified finding, but three primary credits on enabled labels — weighted
+    // 3.0, exactly the threshold. He qualifies, so a catalogue row crediting him is authorized.
+    await seedArtistRow("art-worker", "Session Worker", "session-worker");
+
+    for (const index of [0, 1, 2]) {
+      await seedCatalogue(`rel-${index}`, { artists: ["Session Worker"], label: "Critical Music" });
+      await linkLabel(`rel-${index}`, "lbl-seed");
+      await edge(`rel-${index}`, "art-worker");
+    }
+
+    await seedCatalogue("cat-worker", { artists: ["Session Worker"], label: "Undecided Imprint" });
+    await edge("cat-worker", "art-worker");
+
+    await rankCatalogue();
+
+    expect((await rankingOf("cat-worker")).capture_priority).toBe(3);
+  });
+
+  it("holds the WEIGHTED arity guard — 2 primary + 1 remixer is 2.5, below the threshold", async () => {
+    const { rankCatalogue } = await import("./catalogue");
+
+    // The weighting is load-bearing: primary credit 1.0, remixer 0.5. Two primaries and one remix
+    // sum to 2.5 — NOT qualified — so a row crediting this artist on an undecided label sinks.
+    await seedArtistRow("art-light", "Light Credit", "light-credit");
+    await seedCatalogue("rel-p0", { artists: ["Light Credit"], label: "Critical Music" });
+    await linkLabel("rel-p0", "lbl-seed");
+    await edge("rel-p0", "art-light");
+    await seedCatalogue("rel-p1", { artists: ["Light Credit"], label: "Critical Music" });
+    await linkLabel("rel-p1", "lbl-seed");
+    await edge("rel-p1", "art-light");
+    await seedCatalogue("rel-r0", { artists: ["Light Credit"], label: "Critical Music" });
+    await linkLabel("rel-r0", "lbl-seed");
+    await edge("rel-r0", "art-light", 0, "remixer");
+
+    await seedCatalogue("cat-light", { artists: ["Light Credit"], label: "Undecided Imprint" });
+    await edge("cat-light", "art-light");
+
+    await rankCatalogue();
+
+    // 2.5 < 3 → not qualified, and the undecided label does not authorize → unauthorized.
+    expect((await rankingOf("cat-light")).capture_priority).toBe(-3);
+  });
+
+  it("re-ranks an old row when the ARTIST GRAPH grows — the gate reaches rows ranked before it", async () => {
+    const { rankCatalogue } = await import("./catalogue");
+
+    // The load-bearing self-healing property (RFC slice 1): slice 0's backfill adds edges, and the
+    // corpus fingerprint must MOVE so a row ranked before its edge existed re-derives its tier.
+    await seedArtistRow("art-late", "Late Edge", "late-edge");
+    await seedFinding("finding-late", { artists: ["Late Edge"], label: "Some Label" });
+    await edge("finding-late", "art-late"); // Late Edge is qualified
+    // A catalogue row that credits Late Edge but has NO edge yet (pre-backfill) on an undecided label.
+    await seedCatalogue("cat-late", { artists: ["Late Edge"], label: "Undecided Imprint" });
+
+    await rankCatalogue();
+    // Edge-less + undecided label → unauthorized, exactly as the strict identity rule requires.
+    expect((await rankingOf("cat-late")).capture_priority).toBe(-3);
+
+    // Slice 0 folds the name onto the real artist row: the edge lands.
+    await edge("cat-late", "art-late");
+
+    // The fingerprint moved (the track_artists count grew), so the row re-ranks and authorizes.
+    await rankCatalogue();
+    expect((await rankingOf("cat-late")).capture_priority).toBe(3);
   });
 
   it("keeps the two lenses disjoint — a track with audio leaves the capture queue", async () => {
     const { listCatalogueTracks, rankCatalogue } = await import("./catalogue");
 
     await seedCatalogue("cat-hungry", { artists: ["Krakota"] });
+    await edge("cat-hungry", "art-krakota");
     await seedCatalogue("cat-fed", { artists: ["Krakota"], vector: blend(axis(0), axis(1), 0.2) });
+    await edge("cat-fed", "art-krakota");
 
     await rankCatalogue();
 
@@ -495,21 +646,28 @@ describe("the read — the ranked page, and the WHY on every row", () => {
   it("orders the capture queue by priority, DESC, and carries the reason for each rung", async () => {
     const { listCatalogueTracks, rankCatalogue } = await import("./catalogue");
 
+    await seedArtistRow("art-krakota", "Krakota", "krakota");
     await seedFinding("finding-a", { artists: ["Krakota"], label: "Hospital Records" });
-    await seedCatalogue("cat-none", { artists: ["Nobody"] });
+    await edge("finding-a", "art-krakota");
+    await ruleLabel("lbl-hospital", "Hospital Records", "hospital-records", "enabled");
+    await ruleLabel("lbl-seed", "Critical Music", "critical-music", "enabled");
+    // A qualified artist (edge) — tier 3. Authorized via its enabled label + a finding — tier 2.
+    // Authorized via its enabled label alone — tier 1.
+    await seedCatalogue("cat-seed", { artists: ["Nobody"], label: "Critical Music" });
     await seedCatalogue("cat-artist", { artists: ["Krakota"] });
+    await edge("cat-artist", "art-krakota");
     await seedCatalogue("cat-label", { artists: ["Nobody"], label: "Hospital Records" });
 
     await rankCatalogue();
 
     const page = await listCatalogueTracks("capture");
 
-    expect(page.map((track) => track.trackId)).toEqual(["cat-artist", "cat-label", "cat-none"]);
+    expect(page.map((track) => track.trackId)).toEqual(["cat-artist", "cat-label", "cat-seed"]);
     // The ladder rung is re-derived through the SAME pure function the sweep used to WRITE
     // the tier, so the sort key and the explanation cannot drift apart.
     expect(page[0]?.captureReason).toEqual({ kind: "artist", name: "Krakota" });
     expect(page[1]?.captureReason).toEqual({ kind: "label", name: "Hospital Records" });
-    expect(page[2]?.captureReason).toEqual({ kind: "none", name: null });
+    expect(page[2]?.captureReason).toEqual({ kind: "seed-label", name: "Critical Music" });
   });
 
   it("shows nothing at all when the catalogue is empty — the honest state today", async () => {
@@ -562,8 +720,14 @@ describe("duplicates — a crawled copy of a finding is flagged, never bought", 
     // ISRC, cosmetically different formatting (hyphens/case), the shape a raw equality would miss.
     await seedFinding("finding-owned", { isrc: "GBAYE1234567", title: "Infinity" });
     await seedCatalogue("cat-dupe", { isrc: "gb-aye-12-34567", title: "Infinity (copy)" });
-    // A genuine candidate with no clash — the queue must still hand THIS one out.
-    await seedCatalogue("cat-real", { artists: ["Nobody"], title: "A Real Candidate" });
+    // A genuine candidate with no clash, on an ENABLED label so it is authorized — the queue must
+    // still hand THIS one out.
+    await ruleLabel("lbl-seed", "Critical Music", "critical-music", "enabled");
+    await seedCatalogue("cat-real", {
+      artists: ["Nobody"],
+      label: "Critical Music",
+      title: "A Real Candidate",
+    });
 
     const summary = await rankCatalogue();
     expect(summary.prioritized).toBe(2);
@@ -645,8 +809,9 @@ describe("duplicates — a crawled copy of a finding is flagged, never bought", 
     await rankCatalogue();
     const cleared = await rankingOf("cat-dupe");
     expect(cleared.duplicate_of_track_id).toBeNull();
-    // It falls back to the ordinary metadata ladder — nothing ties it to the (now empty) archive.
-    expect(cleared.capture_priority).toBe(0);
+    // It falls back to the ordinary ladder — no qualified artist and no enabled label in the (now
+    // empty) archive, so it is UNAUTHORIZED: metadata welcome, money withheld.
+    expect(cleared.capture_priority).toBe(-3);
   });
 });
 
@@ -679,8 +844,14 @@ describe("matchKey duplicate — a logged track's twin is flagged, ISRC-blind an
       artists: ["unquote", "bop"],
       title: "DRIFTING-AWAY",
     });
-    // A genuine candidate with no clash — the queue must still hand THIS one out first.
-    await seedCatalogue("cat-real", { artists: ["Nobody"], title: "A Real Candidate" });
+    // A genuine candidate with no clash, on an ENABLED label so it is authorized — the queue must
+    // still hand THIS one out first.
+    await ruleLabel("lbl-seed", "Critical Music", "critical-music", "enabled");
+    await seedCatalogue("cat-real", {
+      artists: ["Nobody"],
+      label: "Critical Music",
+      title: "A Real Candidate",
+    });
 
     const summary = await rankCatalogue();
     expect(summary.prioritized).toBe(2);
@@ -778,13 +949,16 @@ describe("matchKey duplicate — a logged track's twin is flagged, ISRC-blind an
   it("the force-capture sentinel is respected: a `duplicate-cleared` twin is NOT re-stamped, either side of the boundary", async () => {
     const { rankCatalogue } = await import("./catalogue");
 
+    await seedArtistRow("art-known", "Known", "known");
     await seedFinding("finding-twin", {
       artists: ["Known"],
       title: "The Same Song",
       vector: axis(0),
     });
+    await edge("finding-twin", "art-known"); // Known is a qualified artist
     // Pre-audio (no vector): a matchKey twin the operator already forced past the veto.
     await seedCatalogue("cat-preaudio", { artists: ["Known"], title: "The Same Song" });
+    await edge("cat-preaudio", "art-known");
     await markCleared("cat-preaudio");
     // Scored (a vector): same identity, also force-cleared.
     await seedCatalogue("cat-scored", {
@@ -838,16 +1012,19 @@ describe("wrong audio — a cross-title near-1.0 capture is quarantined, never t
 
     // The audit's real case: Flowidus "Find Your Love" captured the audio of the SAME artist's
     // already-logged "Shelter", so its vector is identical to Shelter's under a different title.
+    await seedArtistRow("art-flowidus", "Flowidus", "flowidus");
     await seedFinding("finding-shelter", {
       artists: ["Flowidus"],
       title: "Shelter",
       vector: axis(0),
     });
+    await edge("finding-shelter", "art-flowidus"); // Flowidus is a qualified artist
     await seedCatalogue("cat-fyl", {
       artists: ["Flowidus"],
       title: "Find Your Love",
       vector: axis(0),
     });
+    await edge("cat-fyl", "art-flowidus");
     await withSourceKey("cat-fyl", "catalogue/cat-fyl/badbeef.webm");
 
     const summary = await rankCatalogue();
@@ -934,16 +1111,19 @@ describe("wrong audio — a cross-title near-1.0 capture is quarantined, never t
   it("the operator force-clear is sticky: a cleared row re-ranks normally and is never re-quarantined", async () => {
     const { clearWrongAudio, QUARANTINE_CLEARED, rankCatalogue } = await import("./catalogue");
 
+    await seedArtistRow("art-flowidus", "Flowidus", "flowidus");
     await seedFinding("finding-shelter", {
       artists: ["Flowidus"],
       title: "Shelter",
       vector: axis(0),
     });
+    await edge("finding-shelter", "art-flowidus"); // Flowidus is a qualified artist
     await seedCatalogue("cat-fyl", {
       artists: ["Flowidus"],
       title: "Find Your Love",
       vector: axis(0),
     });
+    await edge("cat-fyl", "art-flowidus");
     await withSourceKey("cat-fyl", "catalogue/cat-fyl/badbeef.webm");
 
     await rankCatalogue();
@@ -1061,9 +1241,12 @@ describe("the operator's actions — dismiss/restore, and the deterministic-dupl
     // Open it so the catalogue half is actually served — that is what makes the exclusion visible.
     await setCatalogueCapturePaused(false);
 
+    await seedArtistRow("art-known", "Known", "known");
     await seedFinding("finding-a", { artists: ["Known"], vector: axis(0) });
-    // A cold catalogue row whose artist is on a finding → capture tier 3, so it WOULD be captured.
+    await edge("finding-a", "art-known"); // Known is a qualified artist
+    // A cold catalogue row crediting the qualified artist → capture tier 3, so it WOULD be captured.
     await seedCatalogue("cat-hot", { artists: ["Known"] });
+    await edge("cat-hot", "art-known");
     await rankCatalogue();
 
     const before = await listTrackWork({ kind: "capture", scope: "catalogue" });
@@ -1312,12 +1495,15 @@ describe("the dupe-veto escape hatch — force_capture", () => {
     // A finding and an UNCAPTURED catalogue row share an ISRC (a mis-assigned one) → the pre-audio
     // ISRC veto marks the catalogue row a duplicate at tier −2, so it is never bought. The artist is
     // also on the finding, so its HONEST ladder tier is 3 (artist).
+    await seedArtistRow("art-known", "Known", "known");
     await seedFinding("finding-owned", {
       artists: ["Known"],
       isrc: "GBTEST0000009",
       vector: axis(0),
     });
+    await edge("finding-owned", "art-known"); // Known is a qualified artist
     await seedCatalogue("cat-wrongisrc", { artists: ["Known"], isrc: "GBTEST0000009" });
+    await edge("cat-wrongisrc", "art-known");
     await rankCatalogue();
     expect((await rankingOf("cat-wrongisrc")).duplicate_of_track_id).toBe("finding-owned");
     expect((await rankingOf("cat-wrongisrc")).capture_priority).toBe(-2);
@@ -1604,15 +1790,21 @@ describe("the long-form veto — a continuous mix never reaches a lens or the mo
 
     await setCatalogueCapturePaused(false);
     await seedFinding("finding-a", { vector: axis(0) });
+    // Both rows are on an ENABLED label (authorized), so the ONLY thing separating them is
+    // duration — isolating the long-form veto (RFC artist-primary-capture keeps authorization
+    // orthogonal to the duration guard).
+    await ruleLabel("lbl-seed", "Critical Music", "critical-music", "enabled");
     await seedCatalogueTrack(db, {
       artists: ["Someone"],
       durationMs: 78 * 60_000,
+      label: "Critical Music",
       title: "Summer Selection (Continuous mix 1)",
       trackId: "cat-mix-uncaptured",
     });
     await seedCatalogueTrack(db, {
       artists: ["Someone"],
       durationMs: 5 * 60_000,
+      label: "Critical Music",
       title: "Buy Me",
       trackId: "cat-buyme",
     });

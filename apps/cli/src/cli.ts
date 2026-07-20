@@ -5920,7 +5920,9 @@ async function runCatalogueList(
               ? `${reason.name} is a label the crawler digs from`
               : reason?.kind === "skipped-label"
                 ? `${reason.name} is not your lane — ranked last, kept anyway`
-                : "nothing ties it to the archive yet");
+                : reason?.kind === "unauthorized"
+                  ? "no artist here has earned the spend yet — held back, kept anyway"
+                  : "nothing ties it to the archive yet");
 
       console.log(`${String(track.capturePriority ?? 0)}  ${identity.padEnd(52)} ${why}`);
       continue;

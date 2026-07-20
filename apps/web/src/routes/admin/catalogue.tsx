@@ -844,6 +844,11 @@ function captureWhy(reason: CapturePriorityReason | null): string {
       // The veto, said plainly. The row is still here — it is just last, and it says why.
       return `${reason.name} is not your lane. Ranked last, kept anyway.`;
     }
+    case "unauthorized": {
+      // Money withheld, metadata welcome — no qualified artist, and the label is not a seed.
+      // It flips the moment an artist qualifies or the label is enabled. Kept, never bought.
+      return "No artist here has earned the spend yet. Held back, kept anyway.";
+    }
     default: {
       return "Nothing ties it to the archive yet.";
     }
@@ -864,6 +869,9 @@ function captureTierLabel(reason: CapturePriorityReason | null): string {
     }
     case "skipped-label": {
       return "Not our lane";
+    }
+    case "unauthorized": {
+      return "Not qualified";
     }
     default: {
       return "Cold";

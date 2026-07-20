@@ -144,6 +144,16 @@ async function seedDisabledLabel(name: string, slug: string): Promise<void> {
   });
 }
 
+// An ENABLED label — the label side of capture authorization (RFC artist-primary-capture,
+// slice 1): a catalogue track on it is in-lane and captureable even without a graph edge.
+async function seedEnabledLabel(name: string, slug: string): Promise<void> {
+  await db.execute({
+    args: [`lbl-${slug}`, name, slug],
+    sql: `insert into labels (id, name, slug, seed_state, created_at, updated_at)
+          values (?, ?, ?, 'enabled', '2026-07-01T00:00:00.000Z', '2026-07-01T00:00:00.000Z')`,
+  });
+}
+
 /** Stamp a track's ISRC — the recording identity the duplicate detector matches on. */
 async function setIsrc(trackId: string, isrc: string): Promise<void> {
   await db.execute({ args: [isrc, trackId], sql: `update tracks set isrc = ? where track_id = ?` });
@@ -274,21 +284,24 @@ describe("listTrackWork — the order is the budget", () => {
       title: "More Trance",
       trackId: "cat1000000000000000000",
     });
+    // An in-lane, unproven track: on an ENABLED label, so it is authorized (RFC
+    // artist-primary-capture, slice 1) and lands the tier-1 seed rung.
+    await seedEnabledLabel("Critical Music", "critical-music");
     await seedCatalogueTrack(db, {
       artists: ["Nobody We Know"],
-      label: "Some Unknown Label",
+      label: "Critical Music",
       title: "In Our Lane, Unproven",
       trackId: "cat2000000000000000000",
     });
 
     // The Ear's sweep writes the tiers — and the veto gets its OWN tier (−1), which is the
-    // only reason SQL can tell it apart from `none`'s 0.
+    // only reason SQL can tell it apart from an authorized in-lane row.
     await rankCatalogue();
 
     const priorities = await db.execute(
       `select track_id, capture_priority from tracks where track_id like 'cat%' order by track_id`,
     );
-    expect(priorities.rows.map((row) => Number(row.capture_priority))).toEqual([-1, 0]);
+    expect(priorities.rows.map((row) => Number(row.capture_priority))).toEqual([-1, 1]);
 
     // THE PROOF. The vetoed track is not merely ordered last — it is NOT IN THE QUEUE. A veto
     // that only sorts last is not a veto: the queue drains, and last eventually arrives.
@@ -313,9 +326,12 @@ describe("listTrackWork — the order is the budget", () => {
     await setIsrc("aaaaaaaaaaaaaaaaaaaaaa", "GBAYE1234567");
     await seedCatalogueTrack(db, { title: "Infinity (copy)", trackId: "cat1000000000000000000" });
     await setIsrc("cat1000000000000000000", "gb-aye-12-34567"); // same ISRC, cosmetic difference
-    // A real candidate with no ISRC clash — the queue must still hand THIS one out.
+    // A real candidate with no ISRC clash, on an ENABLED label so it is authorized — the queue
+    // must still hand THIS one out.
+    await seedEnabledLabel("Critical Music", "critical-music");
     await seedCatalogueTrack(db, {
       artists: ["Nobody We Know"],
+      label: "Critical Music",
       title: "A Real Candidate",
       trackId: "cat2000000000000000000",
     });
@@ -326,8 +342,8 @@ describe("listTrackWork — the order is the budget", () => {
       `select track_id, capture_priority, duplicate_of_track_id from tracks
        where track_id like 'cat%' order by track_id`,
     );
-    // The duplicate is tier −2 (below the label veto's −1) and carries the finding it duplicates.
-    expect(priorities.rows.map((row) => Number(row.capture_priority))).toEqual([-2, 0]);
+    // The duplicate is tier −2 (below the label veto's −1); the real candidate is the tier-1 seed.
+    expect(priorities.rows.map((row) => Number(row.capture_priority))).toEqual([-2, 1]);
     expect(priorities.rows[0]?.duplicate_of_track_id).toBe("aaaaaaaaaaaaaaaaaaaaaa");
 
     // THE PROOF. The duplicate is NOT in the capture queue — the SAME `capture_priority >= 0`

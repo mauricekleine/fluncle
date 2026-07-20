@@ -58,10 +58,20 @@ import { matchKey } from "./track-match";
 /**
  * The reason a catalogue track sits where it does in the CAPTURE queue — the row's WHY,
  * before it has any audio to measure. `kind` is the ladder rung; `name` is the thing that
- * matched (the artist, or the label), and is null only for `none`.
+ * matched (the artist, or the label), and is null for the reasons that name nothing (`none`,
+ * `unauthorized`).
+ *
+ * ── AUTHORIZATION VS PRIORITY (RFC artist-primary-capture, slice 1) ────────────────────
+ * Two questions live here, and they are cleanly separated. AUTHORIZATION — may we spend a
+ * metered per-GB byte on this row at all? — is artist-driven: yes iff a credited artist is
+ * QUALIFIED (identity, through the `track_artists` graph) OR its label is `enabled`. PRIORITY
+ * — among the rows we MAY buy, who first? — keeps the old explainable ladder as an ordering
+ * hint. A row that fails authorization lands `unauthorized` (a negative tier, excluded from
+ * the capture queue by the existing `capture_priority >= 0` predicate); a `disabled` label is
+ * still the harder `skipped-label` veto, checked first.
  */
 export type CapturePriorityReason = {
-  kind: "artist" | "label" | "none" | "seed-label" | "skipped-label";
+  kind: "artist" | "label" | "none" | "seed-label" | "skipped-label" | "unauthorized";
   name: string | null;
 };
 
@@ -78,6 +88,19 @@ export type CapturePriorityReason = {
  * DISPLAY property the-ear.md promises survives untouched: the row keeps its place in the
  * capture lens (`capture_priority is not null`), still sorts last under `order by … desc`, and
  * still carries its honest reason line. Ordered last, kept anyway — and never bought.
+ *
+ * ── THE NEGATIVE BAND, AND WHY `unauthorized` IS −3 (RFC artist-primary-capture, slice 1) ──
+ * Three distinct negatives now share the "never bought, but kept and shown, ranked last"
+ * contract, and their ORDER on the board (a DESC read) is by how SPECIFIC the reason is:
+ *   −1 `skipped-label` — the operator's explicit ruling ("not your lane"). The hardest NO.
+ *   −2 `duplicate`     — an identity fact ("already in the archive"); set outside this map,
+ *                        in the sweep (see `DUPLICATE_CAPTURE_TIER`).
+ *   −3 `unauthorized`  — the softest: no qualified artist yet, and the label is not `enabled`.
+ *                        It reads dead last because it is the DEFAULT withholding, not a
+ *                        judgement — and it is the one most likely to FLIP to authorized as the
+ *                        `track_artists` graph drains (slice 0) or the operator enables a label.
+ * All three are excluded from the capture queue by the single `capture_priority >= 0` predicate
+ * (track-work.ts) — no new mechanism, one more value riding a rail that already exists.
  */
 const CAPTURE_TIER: Record<CapturePriorityReason["kind"], number> = {
   artist: 3,
@@ -85,6 +108,7 @@ const CAPTURE_TIER: Record<CapturePriorityReason["kind"], number> = {
   none: 0,
   "seed-label": 1,
   "skipped-label": -1,
+  unauthorized: -3,
 };
 
 /**
@@ -344,50 +368,79 @@ function appendRejectedSha(
   return JSON.stringify(next);
 }
 
-/** The archive's cheap identity sets — bounded by the FINDING count, never the catalogue. */
+/**
+ * The archive's cheap identity sets — bounded by the FINDING count (and the in-lane `enabled`
+ * subset), never by the raw catalogue that grows.
+ */
 export type ArchiveAffinity = {
   /** Label slugs the operator ruled OUT (`labels.seed_state = 'disabled'`) — "not our lane". */
   disabledLabels: Set<string>;
-  /** Lowercased names of every artist on a finding. */
+  /** Lowercased names of every artist on a finding — the tier-3 ORDERING hint (never authorization). */
   findingArtists: Set<string>;
-  /** Label slugs that already carry a finding. */
+  /** Label slugs that already carry a finding — the tier-2 ORDERING hint (never authorization). */
   findingLabels: Set<string>;
+  /**
+   * The QUALIFIED artist ids — the AUTHORIZATION set (RFC artist-primary-capture, slice 1). An
+   * `artists.id` is qualified iff it has ≥1 certified finding (via `track_artists` → `findings`)
+   * OR its weighted release count on `enabled` labels is ≥ 3 (primary credit 1.0, `remixer` 0.5).
+   * Matched by IDENTITY through the `track_artists` graph, never by name-fold: a name string is
+   * not enough identity to spend on. Bounded by the finding count + the enabled-label release set.
+   */
+  qualifiedArtists: Set<string>;
   /** Label slugs the operator rules the crawler may seed from (`labels.seed_state = 'enabled'`). */
   seedLabels: Set<string>;
 };
 
-/** A catalogue track's identity, in the shape the capture ladder needs. */
-export type CaptureCandidate = { artists: string[]; label: string | null };
+/**
+ * A catalogue track's identity, in the shape the capture ladder needs. `artistIds` are the
+ * graph edges (`track_artists.artist_id`) that drive AUTHORIZATION; `artists` are the raw names
+ * that drive the tier-3 ORDERING hint and are spoken back on the row. An edge-less row (no slice-0
+ * fold yet) carries an empty `artistIds` and can only authorize via its `enabled` label.
+ */
+export type CaptureCandidate = { artistIds: string[]; artists: string[]; label: string | null };
 
 /**
  * Where a not-yet-captured catalogue track sits in the capture queue, and why.
  *
- * The ladder, strongest first — each rung is a claim about how likely Fluncle is to love a
- * track we have never heard:
+ * ── TWO QUESTIONS, CLEANLY SEPARATED (RFC artist-primary-capture, slice 1) ──────────────
+ * AUTHORIZATION decides whether we may spend a metered per-GB byte on this row at all; PRIORITY
+ * decides, among the rows we may buy, who first. Capture is artist-driven, discovery is
+ * label-driven — an artist who moved from a scene label to a major arrives by themselves, and
+ * his other tunes deserve the spend even though the major is not a seed.
  *
  *   ✗ · `skipped-label` — THE VETO, checked FIRST. Its label is one the operator ruled OUT
- *                      ("not our lane"). Tier 0, no matter what else is true of the track.
- *   3 · `artist`     — an artist on it is ALREADY on a finding. The strongest signal there
- *                      is: his ear has said yes to this artist, so a different tune of
- *                      theirs is the likeliest thing in the catalogue to land.
- *   2 · `label`      — its label already carries a finding. A DnB label is a curator; a
- *                      label he has found on is a crate he digs in.
- *   1 · `seed-label` — its label is one he rules the crawler may seed from, but nothing on
- *                      it has been certified yet. In-lane, unproven.
- *   0 · `none`       — nothing ties it to the archive. Captured last, or not at all.
+ *                      ("not our lane"). Tier −1, no matter what else is true of the track.
+ *   ✗ · `unauthorized`  — no credited artist is QUALIFIED and the label is not `enabled`.
+ *                      Metadata welcome, money withheld. Tier −3 (excluded by the same
+ *                      `capture_priority >= 0` queue predicate as the veto).
+ *
+ * Among AUTHORIZED rows the old explainable ladder survives as the ORDERING hint:
+ *   3 · `artist`     — a credited artist is qualified (identity), OR an artist name is already
+ *                      on a finding. The strongest signal: his ear has said yes to this artist.
+ *   2 · `label`      — its label already carries a finding. A crate he digs in — but only a
+ *                      HINT now: a finding lifts its ARTIST, never its label's neighbours, so
+ *                      this rung is reachable ONLY once the row is already authorized.
+ *   1 · `seed-label` — its label is `enabled`, nothing certified on it yet. In-lane, unproven.
+ *   0 · `none`       — authorized with no ordering hint (unreachable in practice: authorization
+ *                      is a qualified artist [→3] or an enabled label [→≥1]). Kept for legacy rows.
+ *
+ * ── WHY AUTHORIZATION IS BY IDENTITY, AND WHAT CHANGED ──────────────────────────────────
+ * `findingLabels` was the tier-2 AUTHORIZER; it is now a hint only. The counter-example is
+ * live: a single Atlantic-UK finding used to lift EVERY crawled Atlantic-UK track to tier 2 and
+ * into the capture budget. A finding is evidence about an ARTIST, not a licence to buy a label's
+ * whole catalogue — so `findingLabels` no longer opens the gate, and an un-`enabled` label with
+ * a lone crossover finding no longer authorizes its label-mates. Matching is by `artists.id`
+ * through the `track_artists` graph, never a name-fold: a name string is not enough identity to
+ * spend money on (an edge-less row can only authorize via its `enabled` label).
  *
  * ── WHY THE VETO IS NOT OPTIONAL, AND WHY IT IS NOT A CRAWL-SCOPE VIOLATION ─────────────
  * Every one of the operator's 8 DISABLED labels — Anjunabeats, Armada, Axtone, Positiva … —
- * CARRIES A FINDING: each arrived on a single crossover remix. So without the veto, "its
- * label already carries a finding" fires on all of them, and the capture queue would spend
- * a metered, per-GB audio budget buying trance and house records the operator has explicitly
- * said are not his lane. That is not a hypothetical; it was caught ranking real archive data.
- *
- * And it does NOT breach the crawl-scope-never-storage rule (docs/label-entity.md). A ruling
- * governs what Fluncle ACQUIRES next, and a capture IS an acquisition — the same class of act
- * as a crawl, just further down the same pipe. Nothing stored moves: the track keeps its row,
- * keeps appearing in the capture lens, and keeps its honest reason line ("not our lane"). It
- * is ordered last, not deleted, hidden, or changed.
+ * CARRIES A FINDING: each arrived on a single crossover remix. The veto sinks them before any
+ * other signal, and it does NOT breach the crawl-scope-never-storage rule (docs/label-entity.md):
+ * a ruling governs what Fluncle ACQUIRES next, and a capture IS an acquisition. Nothing stored
+ * moves — the track keeps its row, keeps appearing in the capture lens, and keeps its honest
+ * reason line. It is ordered last, not deleted, hidden, or changed. The same is true of an
+ * `unauthorized` row: withheld, never removed.
  *
  * PURE, so the ladder has exactly one authority: the sweep calls it to WRITE the tier, and
  * the surface calls it to EXPLAIN the tier. They cannot drift, because they are the same
@@ -408,13 +461,34 @@ export function capturePriorityFor(
     };
   }
 
-  for (const artist of candidate.artists) {
-    if (archive.findingArtists.has(artist.trim().toLowerCase())) {
-      return { priority: CAPTURE_TIER.artist, reason: { kind: "artist", name: artist } };
-    }
+  // AUTHORIZATION: a credited artist is qualified (identity, through the graph) OR the label is
+  // `enabled`. Nothing else opens the gate — not a name match, not a finding on the label.
+  const enabledLabel = Boolean(slug && candidate.label && archive.seedLabels.has(slug));
+  const qualifiedArtist = candidate.artistIds.some((id) => archive.qualifiedArtists.has(id));
+
+  if (!qualifiedArtist && !enabledLabel) {
+    return { priority: CAPTURE_TIER.unauthorized, reason: { kind: "unauthorized", name: null } };
+  }
+
+  // PRIORITY (authorized rows only): the old explainable ladder, now a pure ordering hint.
+  // Tier 3 fires on the qualified identity OR the name-fold finding-artist hint — both are
+  // valid ordering signals, and both are only reachable here, past the authorization gate.
+  const nameOnFinding = candidate.artists.find((artist) =>
+    archive.findingArtists.has(artist.trim().toLowerCase()),
+  );
+
+  if (qualifiedArtist || nameOnFinding !== undefined) {
+    // Speak the name back: prefer a spelling that is actually on a finding, else the row's first
+    // credit (the qualified-by-weighted-count case), else null (an enabled-label-only qualifier).
+    const named = nameOnFinding ?? candidate.artists[0] ?? null;
+
+    return { priority: CAPTURE_TIER.artist, reason: { kind: "artist", name: named } };
   }
 
   if (slug && candidate.label) {
+    // Tier 2 is a HINT now, reachable only because the row is already authorized (its label is
+    // `enabled`). A finding on the label no longer authorizes its neighbours (the Atlantic-UK
+    // counter-example), so this can only fire on an enabled label that also carries a finding.
     if (archive.findingLabels.has(slug)) {
       return { priority: CAPTURE_TIER.label, reason: { kind: "label", name: candidate.label } };
     }
@@ -428,6 +502,32 @@ export function capturePriorityFor(
   }
 
   return { priority: CAPTURE_TIER.none, reason: { kind: "none", name: null } };
+}
+
+/**
+ * The capture ladder for a STORED row — `capturePriorityFor` plus the OPERATOR-AUTHORIZATION
+ * override (RFC artist-primary-capture, slice 1). A force-captured row (`DUPLICATE_CLEARED`,
+ * docs/the-ear.md § Duplicates) is an explicit operator decision to SPEND: he overruled the
+ * duplicate veto to get this exact row bought. That same act lifts the artist-driven authorization
+ * gate — so an otherwise-`unauthorized` cleared row is floored to `none` (tier 0), which keeps it
+ * capture-eligible (the escape hatch's whole point) and its staleness re-pick alive once the fresh
+ * vector lands (`capture_priority >= 0`). The DISABLED-label veto is still checked first inside
+ * `capturePriorityFor` and is NEVER floored: overruling a duplicate verdict is not overruling a
+ * label ruling. Both the sweep (the write authority) and the surface (the explanation) call THIS,
+ * so the tier and its reason still cannot drift.
+ */
+function ladderTierForRow(
+  candidate: CaptureCandidate,
+  archive: ArchiveAffinity,
+  operatorAuthorized: boolean,
+): { priority: number; reason: CapturePriorityReason } {
+  const base = capturePriorityFor(candidate, archive);
+
+  if (operatorAuthorized && base.reason.kind === "unauthorized") {
+    return { priority: CAPTURE_TIER.none, reason: { kind: "none", name: null } };
+  }
+
+  return base;
 }
 
 // ── The staleness fingerprint ────────────────────────────────────────────────────────
@@ -460,6 +560,17 @@ export function capturePriorityFor(
  * The fingerprint is compared with `<>`, never `<`, so a DELETED finding (the count goes
  * down) is caught exactly like an added one.
  *
+ * ── THE GRAPH SIGNALS (RFC artist-primary-capture, slice 1) ────────────────────────────
+ * Authorization now depends on inputs the two finding counts do NOT move: the `track_artists`
+ * graph (a qualified artist is an identity edge), and the `enabled`/`disabled` label rulings. So
+ * three more signals fold in, and each is load-bearing: a ranking computed before the graph
+ * carried a row's edges — or before a label was enabled — would authorize it wrongly and stay
+ * that way, because nothing would re-stale it. `trackArtists` is the total edge count (it MOVES
+ * as slice 0's backfill drains, so every catalogue row re-ranks against the growing graph and the
+ * new gate reaches old rows); `enabledLabels` / `disabledLabels` are the ruling counts (they move
+ * on a seed-state change). The qualified SET is a function of exactly these plus the findings, so
+ * folding the raw inputs is both sufficient and cheaper than recomputing the set in the count phase.
+ *
  * A leading RANKING-LOGIC VERSION is folded in so a change to the sweep's ALGORITHM (not just
  * the corpus) invalidates every stored fingerprint and forces one self-healing full re-rank —
  * the same mechanism, no bulk write, no manual invalidation. Bump it only when the ranking
@@ -467,12 +578,20 @@ export function capturePriorityFor(
  * duplicate detection (docs/the-ear.md § Duplicates), which must re-mark rows already ranked;
  * `v3` added the matchKey-vs-findings detector (the 2026-07-15 "Drifting Away" ruling), which
  * must re-mark an ALREADY-RANKED scored row that earlier ticks left as a discovery — a 0.94 twin
- * of a logged finding whose corpus counts never moved would otherwise keep its stale ear slot.
+ * of a logged finding whose corpus counts never moved would otherwise keep its stale ear slot;
+ * `v4` moved capture authorization from labels to the artist graph (RFC artist-primary-capture,
+ * slice 1), so every already-ranked pre-audio row must re-derive its tier under the new gate.
  */
-const RANK_LOGIC_VERSION = "v3";
+const RANK_LOGIC_VERSION = "v4";
 
-export function rankCorpus(findings: number, embeddedFindings: number): string {
-  return `${RANK_LOGIC_VERSION}:${findings}:${embeddedFindings}`;
+export function rankCorpus(
+  findings: number,
+  embeddedFindings: number,
+  trackArtists: number,
+  enabledLabels: number,
+  disabledLabels: number,
+): string {
+  return `${RANK_LOGIC_VERSION}:${findings}:${embeddedFindings}:${trackArtists}:${enabledLabels}:${disabledLabels}`;
 }
 
 // ── The sweep ────────────────────────────────────────────────────────────────────────
@@ -541,6 +660,11 @@ function preAudioPriority(
   archive: ArchiveAffinity,
   findingIsrcs: Map<string, string>,
   findingMatchKeys: Map<string, string>,
+  // The row's graph edges (`track_artists.artist_id`), for the artist-driven authorization gate
+  // (RFC artist-primary-capture, slice 1). Empty for an edge-less row — it can only authorize via
+  // its `enabled` label. Passed alongside the candidate rather than parsed from it because the
+  // edges live in `track_artists`, not on the `tracks` row.
+  artistIds: string[],
 ): { duplicateOf: null | string; priority: number } {
   // The operator's force-capture (`DUPLICATE_CLEARED`) overrules the duplicate veto stickily
   // (docs/the-ear.md § Duplicates): skip BOTH duplicate probes so the row lands on its HONEST
@@ -560,40 +684,108 @@ function preAudioPriority(
   const duplicateOf = isrcDup ?? keyDup;
   const priority = duplicateOf
     ? DUPLICATE_CAPTURE_TIER
-    : capturePriorityFor(
-        { artists: parseArtistsJson(candidate.artists_json), label: candidate.label },
+    : ladderTierForRow(
+        { artistIds, artists: parseArtistsJson(candidate.artists_json), label: candidate.label },
         archive,
+        // A cleared row's duplicate probes were already skipped above; the same operator ruling
+        // authorizes its spend, so an unauthorized cleared row is floored to a capture-eligible tier.
+        cleared,
       ).priority;
 
   return { duplicateOf, priority };
 }
 
 /**
+ * The graph edges for a BATCH of candidate tracks — `track_id` → its `track_artists.artist_id`
+ * list, for the artist-driven authorization gate (RFC artist-primary-capture, slice 1).
+ *
+ * ONE batched `in (…)` read, bounded by the batch and riding `track_artists_track_id_idx` — never
+ * a per-row subquery over the growing table (the tracks-hub late-row-lookup lesson at sweep scale).
+ * A track absent from the map (or here, an edge-less row) has no edges yet: `capturePriorityFor`
+ * reads that as an empty `artistIds`, so it can authorize only via an `enabled` label until slice 0
+ * folds its names onto real `artists` rows.
+ */
+async function readTrackArtistIds(trackIds: string[]): Promise<Map<string, string[]>> {
+  const byTrack = new Map<string, string[]>();
+
+  if (trackIds.length === 0) {
+    return byTrack;
+  }
+
+  const db = await getDb();
+  const result = await db.execute({
+    args: trackIds,
+    sql: `select track_id, artist_id
+          from track_artists
+          where track_id in (${trackIds.map(() => "?").join(", ")})`,
+  });
+
+  for (const row of typedRows<{ artist_id: string; track_id: string }>(result.rows)) {
+    const list = byTrack.get(row.track_id);
+
+    if (list) {
+      list.push(row.artist_id);
+    } else {
+      byTrack.set(row.track_id, [row.artist_id]);
+    }
+  }
+
+  return byTrack;
+}
+
+/**
  * Read the archive's affinity sets. Bounded by the FINDING count (tens of rows today,
- * thousands at worst) — never by the catalogue, which is the table that grows.
+ * thousands at worst) and the in-lane `enabled`-label release set — never by the catalogue,
+ * which is the table that grows.
  */
 async function readArchiveAffinity(): Promise<ArchiveAffinity> {
   const db = await getDb();
-  const [artistResult, labelResult, seedResult] = await Promise.all([
-    db.execute({
-      args: [],
-      sql: `select tracks.artists_json as artists_json
-            from findings join tracks on tracks.track_id = findings.track_id`,
-    }),
-    db.execute({
-      args: [],
-      sql: `select distinct tracks.label as label
-            from findings join tracks on tracks.track_id = findings.track_id
-            where tracks.label is not null and trim(tracks.label) <> ''`,
-    }),
-    db.execute({
-      args: [],
-      // The operator's rulings. The ONE sanctioned way `seed_state` reaches this module: it
-      // orders what Fluncle ACQUIRES next (a capture is an acquisition), and it never decides
-      // what is shown, kept, or removed — see `capturePriorityFor`.
-      sql: `select slug, seed_state from labels where seed_state in ('enabled', 'disabled')`,
-    }),
-  ]);
+  const [artistResult, labelResult, seedResult, findingQualifiedResult, weightedQualifiedResult] =
+    await Promise.all([
+      db.execute({
+        args: [],
+        sql: `select tracks.artists_json as artists_json
+              from findings join tracks on tracks.track_id = findings.track_id`,
+      }),
+      db.execute({
+        args: [],
+        sql: `select distinct tracks.label as label
+              from findings join tracks on tracks.track_id = findings.track_id
+              where tracks.label is not null and trim(tracks.label) <> ''`,
+      }),
+      db.execute({
+        args: [],
+        // The operator's rulings. The ONE sanctioned way `seed_state` reaches this module: it
+        // orders what Fluncle ACQUIRES next (a capture is an acquisition), and it never decides
+        // what is shown, kept, or removed — see `capturePriorityFor`.
+        sql: `select slug, seed_state from labels where seed_state in ('enabled', 'disabled')`,
+      }),
+      // QUALIFIED (a): an artist id with ≥1 CERTIFIED finding, through the graph. ONE set-building
+      // pass, bounded by the finding count (each finding credits a handful of artists) — never the
+      // catalogue. Rides `track_artists_track_id_idx` on the findings join.
+      db.execute({
+        args: [],
+        sql: `select distinct ta.artist_id as artist_id
+              from track_artists ta
+              join findings f on f.track_id = ta.track_id`,
+      }),
+      // QUALIFIED (b): an artist id whose WEIGHTED release count on `enabled` labels is ≥ 3
+      // (primary credit 1.0, remixer 0.5). ONE set-building pass, bounded by the IN-LANE subset:
+      // it walks only tracks on enabled labels (via the indexed `tracks.label_id` → `labels.id`
+      // join, `tracks_label_id_idx`), never the whole catalogue. `label_id` is the graph-resolved
+      // pointer, so an unlinked label STRING that merely folds to an enabled slug does not count —
+      // exactly the identity-only discipline the qualified set is built on.
+      db.execute({
+        args: [],
+        sql: `select ta.artist_id as artist_id
+              from labels l
+              join tracks t on t.label_id = l.id
+              join track_artists ta on ta.track_id = t.track_id
+              where l.seed_state = 'enabled'
+              group by ta.artist_id
+              having sum(case when ta.role = 'remixer' then 0.5 else 1.0 end) >= 3`,
+      }),
+    ]);
 
   const findingArtists = new Set<string>();
 
@@ -620,7 +812,17 @@ async function readArchiveAffinity(): Promise<ArchiveAffinity> {
     (row.seed_state === "disabled" ? disabledLabels : seedLabels).add(row.slug);
   }
 
-  return { disabledLabels, findingArtists, findingLabels, seedLabels };
+  const qualifiedArtists = new Set<string>();
+
+  for (const row of typedRows<{ artist_id: string }>(findingQualifiedResult.rows)) {
+    qualifiedArtists.add(row.artist_id);
+  }
+
+  for (const row of typedRows<{ artist_id: string }>(weightedQualifiedResult.rows)) {
+    qualifiedArtists.add(row.artist_id);
+  }
+
+  return { disabledLabels, findingArtists, findingLabels, qualifiedArtists, seedLabels };
 }
 
 /**
@@ -886,15 +1088,35 @@ export async function rankCatalogue(limit = RANK_BATCH_SIZE): Promise<RankCatalo
   const db = await getDb();
   const countResult = await db.execute({
     args: [],
+    // The corpus fingerprint's inputs, in ONE cheap read. The two finding counts are the corpus
+    // half; the three below are the graph half authorization now depends on (RFC
+    // artist-primary-capture, slice 1) — the total `track_artists` edge count (moves as slice 0's
+    // backfill drains, re-staling every catalogue row so the new gate reaches old rows) and the
+    // enabled/disabled ruling counts (move on a seed-state change).
     sql: `select
             (select count(*) from findings) as findings,
             (select count(*) from findings join tracks ft on ft.track_id = findings.track_id
-             where ft.embedding_blob is not null) as embedded`,
+             where ft.embedding_blob is not null) as embedded,
+            (select count(*) from track_artists) as track_artists,
+            (select count(*) from labels where seed_state = 'enabled') as enabled_labels,
+            (select count(*) from labels where seed_state = 'disabled') as disabled_labels`,
   });
-  const counts = typedRows<{ embedded: number; findings: number }>(countResult.rows)[0];
+  const counts = typedRows<{
+    disabled_labels: number;
+    embedded: number;
+    enabled_labels: number;
+    findings: number;
+    track_artists: number;
+  }>(countResult.rows)[0];
   const findings = Number(counts?.findings ?? 0);
   const embeddedFindings = Number(counts?.embedded ?? 0);
-  const corpus = rankCorpus(findings, embeddedFindings);
+  const corpus = rankCorpus(
+    findings,
+    embeddedFindings,
+    Number(counts?.track_artists ?? 0),
+    Number(counts?.enabled_labels ?? 0),
+    Number(counts?.disabled_labels ?? 0),
+  );
 
   // The stale catalogue rows: fingerprint drift (the corpus moved) OR a vector that arrived
   // after the row was last ranked (it still carries a NON-NEGATIVE pre-audio tier the scoring
@@ -1031,21 +1253,33 @@ export async function rankCatalogue(limit = RANK_BATCH_SIZE): Promise<RankCatalo
     );
   });
   const needsPreAudio = unvectored.length > 0 || nearWrongAudio.length > 0;
-  const [archive, findingIsrcs, findingIdentities, findingMatchKeys, catalogueIdentity] =
-    await Promise.all([
-      needsPreAudio ? readArchiveAffinity() : undefined,
-      needsPreAudio ? readFindingIsrcs() : undefined,
-      nearWrongAudio.length > 0 ? readFindingIdentities() : undefined,
-      // The INVERTED finding identity map (matchKey → finding) — needed on EVERY tick with
-      // candidates, because a matchKey twin of a logged finding (the "Drifting Away" ruling) can
-      // hide at ANY score, not just the near-1.0 band: an unvectored row may duplicate a finding
-      // by title, and a scored row at 0.94 may be that finding's YouTube-rip twin.
-      readFindingMatchKeys(),
-      // The catalogue-internal duplicate corpus — needed on EVERY tick with candidates: a vectored
-      // row may be a captured sibling of another catalogue row (declutter the ear lens), and an
-      // unvectored row may duplicate an already-captured sibling (veto it off the capture queue).
-      readCatalogueIdentity(),
-    ]);
+  // The graph edges for every row that will run the pre-audio ladder (an unvectored row, or a
+  // vectored row about to be QUARANTINED back to it) — ONE batched read for the whole tick.
+  const preAudioTrackIds = needsPreAudio
+    ? [...unvectored, ...nearWrongAudio].map((row) => row.track_id)
+    : [];
+  const [
+    artistIdsByTrack,
+    archive,
+    findingIsrcs,
+    findingIdentities,
+    findingMatchKeys,
+    catalogueIdentity,
+  ] = await Promise.all([
+    readTrackArtistIds(preAudioTrackIds),
+    needsPreAudio ? readArchiveAffinity() : undefined,
+    needsPreAudio ? readFindingIsrcs() : undefined,
+    nearWrongAudio.length > 0 ? readFindingIdentities() : undefined,
+    // The INVERTED finding identity map (matchKey → finding) — needed on EVERY tick with
+    // candidates, because a matchKey twin of a logged finding (the "Drifting Away" ruling) can
+    // hide at ANY score, not just the near-1.0 band: an unvectored row may duplicate a finding
+    // by title, and a scored row at 0.94 may be that finding's YouTube-rip twin.
+    readFindingMatchKeys(),
+    // The catalogue-internal duplicate corpus — needed on EVERY tick with candidates: a vectored
+    // row may be a captured sibling of another catalogue row (declutter the ear lens), and an
+    // unvectored row may duplicate an already-captured sibling (veto it off the capture queue).
+    readCatalogueIdentity(),
+  ]);
 
   // ── The scored half, now with the wrong-audio veto (docs/the-ear.md § Wrong audio) ──
   let quarantined = 0;
@@ -1129,6 +1363,7 @@ export async function rankCatalogue(limit = RANK_BATCH_SIZE): Promise<RankCatalo
               archive,
               findingIsrcs ?? new Map<string, string>(),
               findingMatchKeys,
+              artistIdsByTrack.get(candidate.track_id) ?? [],
             )
           : { duplicateOf: null, priority: 0 };
         quarantined += 1;
@@ -1282,6 +1517,7 @@ export async function rankCatalogue(limit = RANK_BATCH_SIZE): Promise<RankCatalo
         archive,
         findingIsrcs ?? new Map<string, string>(),
         findingMatchKeys,
+        artistIdsByTrack.get(candidate.track_id) ?? [],
       );
 
       // THEN the catalogue-internal duplicate: this uncaptured row may be the same master as an
@@ -1668,6 +1904,11 @@ export async function listCatalogueTracks(
     ),
   );
   const archive = lens === "capture" ? await readArchiveAffinity() : undefined;
+  // The capture lens re-derives each row's WHY through the SAME pure ladder the sweep wrote it
+  // with, so the two cannot drift — and that now needs the row's graph edges for the artist-driven
+  // authorization gate (RFC artist-primary-capture, slice 1). ONE batched read for the page.
+  const artistIdsByTrack =
+    lens === "capture" ? await readTrackArtistIds(rows.map((row) => row.track_id)) : undefined;
 
   const items = rows.map((row) => {
     const artists = parseArtistsJson(row.artists_json);
@@ -1695,7 +1936,11 @@ export async function listCatalogueTracks(
       bpm: row.bpm,
       capturePriority: row.capture_priority,
       captureReason: archive
-        ? capturePriorityFor({ artists, label: row.label }, archive).reason
+        ? ladderTierForRow(
+            { artistIds: artistIdsByTrack?.get(row.track_id) ?? [], artists, label: row.label },
+            archive,
+            row.capture_status === DUPLICATE_CLEARED,
+          ).reason
         : null,
       captureStatus: row.capture_status,
       captureVerification: row.capture_verification,
@@ -2226,16 +2471,18 @@ export async function verifyCapture(
   }
 
   // A MISMATCH on a CATALOGUE row — quarantine it (the machine may rewind an uncertified row).
-  const [archive, findingIsrcs, findingMatchKeys] = await Promise.all([
+  const [archive, findingIsrcs, findingMatchKeys, artistIdsByTrack] = await Promise.all([
     readArchiveAffinity(),
     readFindingIsrcs(),
     readFindingMatchKeys(),
+    readTrackArtistIds([trackId]),
   ]);
   const preAudio = preAudioPriority(
     { artists_json: row.artists_json, isrc: row.isrc, label: row.label, title: row.title },
     archive,
     findingIsrcs,
     findingMatchKeys,
+    artistIdsByTrack.get(trackId) ?? [],
   );
   const rejected = appendRejectedSha(
     row.source_audio_rejected,

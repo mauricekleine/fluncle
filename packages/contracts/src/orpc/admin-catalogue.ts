@@ -67,23 +67,26 @@ export const CatalogueLensSchema = z
   .meta({ id: "CatalogueLens" });
 
 /**
- * Why a not-yet-captured track sits where it does in the capture queue. The rungs, strongest
- * first: `artist` (someone on it is already on a finding), `label` (its label already carries
- * one), `seed-label` (its label is one the operator seeds from), `none`.
+ * Why a not-yet-captured track sits where it does in the capture queue. Two questions live here,
+ * cleanly separated (RFC artist-primary-capture): AUTHORIZATION (may we spend a metered per-GB
+ * byte on it at all?) is artist-driven; PRIORITY (among the rows we may buy, who first?) keeps the
+ * old explainable ladder as an ordering hint. Among AUTHORIZED rows, strongest first: `artist` (a
+ * credited artist is qualified, or a name is already on a finding), `label` (its label carries a
+ * finding — a hint only now), `seed-label` (its label is one the operator seeds from), `none`.
  *
- * `skipped-label` is the VETO, and it outranks all of them: its label is one the operator ruled
- * OUT ("not our lane"), so the track sinks to tier −1 whatever else is true of it. It is not
- * decoration — every one of the 8 disabled labels in the archive CARRIES a finding (each
- * arrived on a single crossover remix), so without the veto the `label` rung fires on all of
- * them and the metered capture budget goes on trance.
- *
- * Its OWN tier (−1, strictly below `none`) is what makes it enforceable rather than merely
- * decorative: the capture work queue excludes it in SQL (`capture_priority >= 0`). A veto that
- * only sorts last is not a veto — the queue drains, and last arrives (docs/gpu-batch-embed.md).
+ * The two negatives are excluded from the capture queue by the same `capture_priority >= 0` SQL
+ * predicate — money withheld, metadata welcome, the row kept and shown ranked last:
+ *  - `skipped-label` (−1) is the VETO: its label is one the operator ruled OUT ("not our lane").
+ *    Not decoration — every one of the 8 disabled labels CARRIES a finding (each arrived on a
+ *    crossover remix), so without the veto the `label` rung fires on all of them and the metered
+ *    budget goes on trance.
+ *  - `unauthorized` (−3) is the softer withholding: no credited artist is qualified and the label
+ *    is not `enabled`. It flips to authorized the moment an artist qualifies or the label is
+ *    enabled — the reason most likely to change as the artist graph fills.
  */
 export const CapturePriorityReasonSchema = z
   .object({
-    kind: z.enum(["artist", "label", "none", "seed-label", "skipped-label"]),
+    kind: z.enum(["artist", "label", "none", "seed-label", "skipped-label", "unauthorized"]),
     name: z.string().nullable(),
   })
   .meta({ id: "CapturePriorityReason" });
