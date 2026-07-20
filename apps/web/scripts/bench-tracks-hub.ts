@@ -18,16 +18,16 @@
  *      key / label distributions — the big-catalogue regime the hub is born into.
  *   2. An ABSOLUTE p50 budget: every hub query shape must come in UNDER 800 ms hosted — the
  *      unfiltered first page, a DEEP offset page + the 48-id hydrate, a BPM-range filter, a KEY
- *      filter, a YEAR range,
- *      and a COMBINED filter. No vectors here — this is pure btree-index verification.
+ *      filter, a YEAR range, a COMBINED filter, and the whole-set YEAR LANE scan. No vectors here —
+ *      this is pure btree-index verification.
  *   3. `EXPLAIN QUERY PLAN` per shape, so the operator can SEE that the primary sort rides
  *      `tracks_release_date_idx` (a reverse scan, never a full table scan of a growing table) and
  *      that `tracks_bpm_idx` is available to a narrow BPM range.
  *
  * ── THE SHAPE UNDER TEST IS THE REAL ONE ──────────────────────────────────────
- * The queries are built by `tracksHubIdPageQuery` / `tracksHubHydrateQuery` / `tracksHubCountQuery`
- * (lib/server/tracks-hub.ts) — the SAME builders the route's `listTracksHubPage` runs — so the bench
- * cannot drift from production. Only scalar filter/paging args are bound; there is no vector probe,
+ * The queries are built by `tracksHubIdPageQuery` / `tracksHubHydrateQuery` / `tracksHubCountQuery` /
+ * `tracksHubYearLaneQuery` (lib/server/tracks-hub.ts) — the SAME builders the route's
+ * `listTracksHubPage` + `listTracksHubYearLane` run — so the bench cannot drift from production. Only scalar filter/paging args are bound; there is no vector probe,
  * so none of the blob-binding traps apply.
  *
  * ── USAGE ─────────────────────────────────────────────────────────────────────
@@ -52,6 +52,7 @@ import {
   tracksHubCountQuery,
   tracksHubHydrateQuery,
   tracksHubIdPageQuery,
+  tracksHubYearLaneQuery,
 } from "../src/lib/server/tracks-hub";
 
 /** The absolute ship-gate budget — every hub query shape's p50 must be under this, hosted. */
@@ -240,11 +241,20 @@ async function main(): Promise<void> {
   // the ≤48 per-row subquery sets, identical for any id list of the same size).
   const hydrateIds = Array.from({ length: limit }, (_, index) => `cat-${index}`);
 
+  // The lane builder also hands back its compiled clauses (the memo key in production); the bench
+  // wants only the SQL + its args.
+  const yearLane = tracksHubYearLaneQuery({});
+
   const shapes: { args: (number | string)[]; name: string; sql: string }[] = [
     { name: "id page 1 (unfiltered)", ...tracksHubIdPageQuery({}, limit, 0) },
     { name: `id page @ offset ${deepOffset}`, ...tracksHubIdPageQuery({}, limit, deepOffset) },
     { name: "hydrate 48 ids", ...tracksHubHydrateQuery(hydrateIds) },
     { name: "count(*) (unfiltered)", ...tracksHubCountQuery({}) },
+    // The year fast lane — the hub's OTHER whole-set scan, and the one the `findings` join was
+    // costing most (it forced a bare `SCAN tracks` over the wide embedding-bearing row; without the
+    // join it is a covering read of `tracks_release_date_idx`). It is memoised per filter set in
+    // production, but the cold read still has to come in under budget.
+    { args: yearLane.args, name: "year lane (unfiltered)", sql: yearLane.sql },
     {
       name: "id page (BPM 172–176)",
       ...tracksHubIdPageQuery({ bpmMax: 176, bpmMin: 172 }, limit, 0),
