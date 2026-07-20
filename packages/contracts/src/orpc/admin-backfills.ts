@@ -670,10 +670,72 @@ export const backfillArtistEdges = oc
     }),
   );
 
+/**
+ * `backfill_artist_credits` → `POST /admin/backfill/artist-credits` (operationId
+ * `backfillArtistCredits`).
+ *
+ * Agent tier (`adminAuth`): the MB CREDIT SWEEP (RFC artist-primary-capture, slice 1b) — the sibling
+ * that completes what `backfill_artist_edges` (slice 0) could not. Slice 0's name-fold left a
+ * zero-matched residual (a track it stamped but wrote no edge, because no credited name folded to an
+ * existing identity); this sweep picks up that residual. For each zero-matched track carrying a
+ * MusicBrainz recording identity (`mb_recording_id`, or the `mb_<recording-mbid>` PK a crawler-born
+ * row carries), ONE paced `/recording/<mbid>?inc=artist-credits` lookup through the shared MusicBrainz
+ * client names its credited artists WITH their MB artist ids: each is matched to an existing `artists`
+ * row by `mbid` else MINTED (identity-true — a real MBID is identity, the licence slice 0 lacked), and
+ * the `track_artists` edges are written. A zero-matched track with NO MB identity is TERMINALLY
+ * SKIPPED. It writes catalogue-graph identity only (no publish, no certification), so the box's
+ * agent-token cron drives it, the `backfill_recording_mbids` precedent. Its OWN reliability stamp
+ * (`artist_credits_backfilled_at`) — DISTINCT from slice 0's, whose semantics it never disturbs.
+ * Worker-paced (1 req/s, circuit-broken on a throttle) with a 60s response budget. Returns `{ ok,
+ * dryRun, scanned, mintedArtists, matchedArtists, edgesWritten, skippedNoIdentity, rateLimited,
+ * nextCursor }`.
+ */
+export const backfillArtistCredits = oc
+  .route({
+    inputStructure: "detailed",
+    method: "POST",
+    operationId: "backfillArtistCredits",
+    path: "/admin/backfill/artist-credits",
+    summary:
+      "Mint identity-true artists from MusicBrainz credits for slice 0's zero-matched residual (batched)",
+    tags: ["Admin"],
+  })
+  .input(
+    z.object({
+      query: z.object({
+        cursor: z.string().optional(),
+        dryRun: z.string().optional(),
+        limit: z.string().optional(),
+      }),
+    }),
+  )
+  .output(
+    z.object({
+      dryRun: z.boolean(),
+      // `track_artists` edges written this pass (or, in a dry run, 0 — the edges are unknowable
+      // without the vendor calls a dry run skips).
+      edgesWritten: z.number(),
+      // Credited artists matched to an EXISTING `artists` row by MB artist id this pass.
+      matchedArtists: z.number(),
+      // NEW `artists` rows minted by MB artist id this pass (identity-true — a real MBID backs each).
+      mintedArtists: z.number(),
+      nextCursor: z.string().nullable(),
+      ok: z.literal(true),
+      // True when the pass STOPPED on the MusicBrainz rate-limit circuit breaker — the CLI stops
+      // looping the cursor and the next tick resumes with a fresh window.
+      rateLimited: z.boolean(),
+      // Worklist rows VISITED this pass (edged + skipped) — the CLI loop's cap unit.
+      scanned: z.number(),
+      // Zero-matched rows carrying NO MB recording identity — terminally skipped (stamped, never retried).
+      skippedNoIdentity: z.number(),
+    }),
+  );
+
 /** The `admin-backfills` domain's ops, merged into the root contract by `./index.ts`. */
 export const adminBackfillsContract = {
   backfill_apple_catalogue: backfillAppleCatalogue,
   backfill_apple_music: backfillAppleMusic,
+  backfill_artist_credits: backfillArtistCredits,
   backfill_artist_edges: backfillArtistEdges,
   backfill_cover_masters: backfillCoverMasters,
   backfill_discogs: backfillDiscogs,

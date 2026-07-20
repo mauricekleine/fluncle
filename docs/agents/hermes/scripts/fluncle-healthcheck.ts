@@ -495,6 +495,7 @@ const AUTOMATION_CRONS: CronDef[] = [
   { cadenceMs: 60 * 60_000, match: "label-images", service: "cron.label-images" }, // label logos — resolve one bounded batch of pending labels per tick
   { cadenceMs: 60 * 60_000, match: "recording-mbids", service: "cron.recording-mbids" }, // MusicBrainz recording MBIDs — crawler PK strip + ISRC resolve, one bounded batch per tick
   { cadenceMs: 60 * 60_000, match: "artist-edges", service: "cron.artist-edges" }, // track_artists graph backfill — fold artists_json names onto existing artist identities, one bounded batch per tick
+  { cadenceMs: 5 * 60_000, match: "artist-credits", service: "cron.artist-credits" }, // MB credit sweep — mint identity-true artists from MusicBrainz credits for slice 0's zero-matched residual, one bounded batch per tick
   { cadenceMs: 60 * 60_000, match: "label-lineage", service: "cron.label-lineage" }, // label founding + parent imprint from MusicBrainz — one bounded batch per tick
   { cadenceMs: 60 * 60_000, match: "cover-masters", service: "cron.cover-masters" }, // owned album/artist cover masters — one bounded batch per tick
   { cadenceMs: 60 * 60_000, match: "artist-sweep", service: "cron.artist-sweep" },

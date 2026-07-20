@@ -914,6 +914,59 @@ export async function upsertTrackArtists(
 }
 
 /**
+ * MINT-OR-MATCH an artist by its MusicBrainz artist id — the identity-true mint the MB credit sweep
+ * (`backfill_artist_credits`, RFC artist-primary-capture slice 1b) writes the zero-matched residual's
+ * edges onto. It is the SIBLING of `upsertTrackArtists`'s mint block above and shares its slug
+ * primitive (`mintArtistSlug`), but keys on a DIFFERENT identity: a real MB artist id, not a Spotify
+ * id or a bare name. That distinction is the whole licence to mint here — the slice-0 backfill mints
+ * NOTHING because a bare name is not enough identity to create an entity, whereas an MB artist id IS
+ * identity (a curated, dereferenceable MBID), so a row born from one is honest.
+ *
+ * WHY A DEDICATED HELPER, not `upsertTrackArtists`: that path resolves by `spotify_artist_id`/name
+ * and fires a best-effort Spotify avatar fetch per call — neither fits an mbid-keyed catalogue-graph
+ * fill (the avatar is the `backfill-artist-images` sweep's job, and matching by name would defeat the
+ * identity guarantee). There is NO pre-existing mbid mint path to reuse — `artists.mbid` is only ever
+ * set today by `artist-resolution.ts` as a `coalesce` UPDATE on an already-existing certified artist,
+ * never at CREATE. So this is the one canonical mbid mint, colocated with its Spotify twin.
+ *
+ * Matches an existing row by `mbid` (the `artists_mbid_idx` seek) and returns `{ artistId, minted:
+ * false }`; else mints a fresh row (surrogate uuid id, a slug via the shared collision-checked
+ * `mintArtistSlug`, the mbid, the name) and returns `{ artistId, minted: true }`. The caller serializes
+ * its mints (one paced pass, awaited per artist), so a same-mbid mint twice in one pass is guarded by
+ * a caller-side cache; across passes the `where mbid = ?` match absorbs it. Writes identity only — no
+ * edge, no avatar, no certification.
+ */
+export async function ensureArtistByMbid(
+  name: string,
+  mbid: string,
+): Promise<{ artistId: string; minted: boolean }> {
+  const db = await getDb();
+
+  const existing = await db.execute({
+    args: [mbid],
+    sql: `select id from artists where mbid = ? limit 1`,
+  });
+
+  const existingId = typedRows<{ id: string }>(existing.rows)[0]?.id;
+
+  if (existingId) {
+    return { artistId: existingId, minted: false };
+  }
+
+  const newId = randomUUID();
+  const slug = await mintArtistSlug(newId, name);
+  const nowIso = new Date().toISOString();
+
+  await db.execute({
+    args: [newId, mbid, name, slug, nowIso, nowIso],
+    sql: `insert into artists (id, mbid, name, slug, created_at, updated_at)
+          values (?, ?, ?, ?, ?, ?)`,
+  });
+
+  return { artistId: newId, minted: true };
+}
+
+/**
  * Fill `artists.image_url` for the given Spotify artist ids that still lack an image.
  * Only the null-image rows are fetched (one batched Spotify `/v1/artists` call), so a
  * repeat over already-imaged artists costs a single indexed read and no API call —

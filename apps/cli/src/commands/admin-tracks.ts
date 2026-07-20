@@ -613,6 +613,47 @@ export async function backfillArtistEdgesCommand(
   );
 }
 
+export type ArtistCreditsBackfillResult = {
+  dryRun: boolean;
+  // `track_artists` edges written this pass (or, in a dry run, 0 — unknowable without the vendor calls).
+  edgesWritten: number;
+  // Credited artists matched to an EXISTING artists row by MB artist id this pass.
+  matchedArtists: number;
+  // NEW artists rows minted by MB artist id this pass (identity-true — a real MBID backs each).
+  mintedArtists: number;
+  // The track-id cursor to resume from, or null once the worklist is drained (or a throttle-stop).
+  nextCursor: string | null;
+  ok: boolean;
+  // True when the pass STOPPED on the MusicBrainz rate-limit circuit breaker.
+  rateLimited: boolean;
+  // Worklist rows VISITED this pass (edged + skipped) — the loop's cap unit.
+  scanned: number;
+  // Zero-matched rows carrying NO MB recording identity — terminally skipped (stamped, never retried).
+  skippedNoIdentity: number;
+};
+
+// One bounded pass of the MB credit sweep (RFC artist-primary-capture, slice 1b) via the admin API.
+// Completes slice 0's zero-matched residual: for each zero-matched track carrying a MusicBrainz
+// recording identity, the Worker fetches its artist-credits through the shared MB client (1 req/s,
+// circuit-broken on a throttle) and mints/matches artists BY MB id, then writes the edges. `--dry-run`
+// reports the eligible worklist without any vendor call or write. Pass the prior `nextCursor` to
+// resume; the CLI loops until it comes back null.
+export async function backfillArtistCreditsCommand(
+  limit: number,
+  dryRun: boolean,
+  cursor?: string,
+): Promise<ArtistCreditsBackfillResult> {
+  const params = new URLSearchParams({ dryRun: String(dryRun), limit: String(limit) });
+
+  if (cursor) {
+    params.set("cursor", cursor);
+  }
+
+  return adminApiPost<ArtistCreditsBackfillResult>(
+    `/api/admin/backfill/artist-credits?${params.toString()}`,
+  );
+}
+
 export type VehicleEntry = {
   addedAt: string;
   artists: string[];

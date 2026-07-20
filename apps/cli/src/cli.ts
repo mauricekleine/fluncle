@@ -2601,6 +2601,25 @@ function addAdminCommands(program: Command): void {
       await runBackfillArtistEdges(options, backfillArtistEdgesCommand);
     });
 
+  // `backfill_artist_credits` → `admin backfills artist-credits`. The MB credit sweep (RFC
+  // artist-primary-capture, slice 1b): completes slice 0's zero-matched residual — for each
+  // zero-matched track with a MusicBrainz recording identity, one paced `inc=artist-credits` lookup
+  // through the shared MB client mints/matches artists BY MB id and writes the edges. Default `--limit`
+  // EQUALS the op's server MAX_BATCH (40 — each row is one paced MB call) so the cursor loop fires one
+  // HTTP request per tick.
+  backfill
+    .command("artist-credits")
+    .description(
+      "Mint identity-true artists from MusicBrainz credits for the zero-matched residual",
+    )
+    .option("--dry-run", "Report the eligible worklist without any vendor call or write", false)
+    .option("--limit <limit>", "Max worklist rows to visit", "40")
+    .option("--json", "Print JSON", false)
+    .action(async (options: BackfillSyncOptions) => {
+      const { backfillArtistCreditsCommand } = await import("./commands/admin-tracks");
+      await runBackfillArtistCredits(options, backfillArtistCreditsCommand);
+    });
+
   // `backfill_cover_masters` → `admin backfills cover-masters --kind album|artist`. Gives each
   // album/artist its OWN ≤1200²-capped cover master (best source wins), downloaded once into R2,
   // instead of hotlinking a third party. The box cron runs both kinds per tick.
@@ -4394,6 +4413,78 @@ async function runBackfillArtistEdges(
   const verb = dryRun ? "Would write" : "Wrote";
   console.log(
     `${verb} ${edgesWritten} track_artists edge(s) over ${scanned} track(s): ${fullyMatched.length} fully matched, ${partiallyMatched.length} partially, ${zeroMatched.length} with none; ${unmatchedNames} credited name(s) left unmatched.`,
+  );
+}
+
+// `admin backfills artist-credits`: one bounded pass of the MB credit sweep (RFC
+// artist-primary-capture, slice 1b). Completes slice 0's zero-matched residual — for each zero-matched
+// track carrying a MusicBrainz recording identity, the Worker fetches its artist-credits (1 req/s,
+// circuit-broken), mints/matches artists BY MB id, and writes the edges. The cap is on rows VISITED;
+// the loop drains the track-id cursor until the cap is met, the worklist is exhausted, or MusicBrainz
+// throttles. `--limit` defaults to the op's server MAX_BATCH (40), so a full first page equals the
+// limit and the loop stops after ONE HTTP request (a budget pause resumes on the next request).
+async function runBackfillArtistCredits(
+  options: BackfillSyncOptions,
+  backfillArtistCreditsCommand: typeof import("./commands/admin-tracks").backfillArtistCreditsCommand,
+): Promise<void> {
+  const limit = parseListLimit(options.limit) ?? 40;
+  let cursor: string | undefined;
+  let dryRun = options.dryRun;
+  let scanned = 0;
+  let mintedArtists = 0;
+  let matchedArtists = 0;
+  let edgesWritten = 0;
+  let skippedNoIdentity = 0;
+  let throttled = false;
+
+  while (scanned < limit) {
+    const remaining = limit - scanned;
+    const result = await backfillArtistCreditsCommand(remaining, options.dryRun, cursor);
+    dryRun = result.dryRun;
+    scanned += result.scanned;
+    mintedArtists += result.mintedArtists;
+    matchedArtists += result.matchedArtists;
+    edgesWritten += result.edgesWritten;
+    skippedNoIdentity += result.skippedNoIdentity;
+
+    if (!options.json) {
+      const verb = result.dryRun ? "would visit" : "visited";
+      console.log(
+        `  …${verb} ${result.scanned}; minted ${result.mintedArtists}, matched ${result.matchedArtists} artist(s); wrote ${result.edgesWritten} edge(s); ${result.skippedNoIdentity} without a MusicBrainz identity`,
+      );
+    }
+
+    if (result.rateLimited) {
+      // MusicBrainz circuit breaker tripped. Stop looping the cursor — the next tick resumes fresh.
+      throttled = true;
+      break;
+    }
+
+    if (result.nextCursor === null) {
+      break;
+    }
+
+    cursor = result.nextCursor;
+  }
+
+  if (options.json) {
+    printJson({
+      dryRun,
+      edgesWritten,
+      matchedArtists,
+      mintedArtists,
+      ok: true,
+      rateLimited: throttled,
+      scanned,
+      skippedNoIdentity,
+    });
+
+    return;
+  }
+
+  const verb = dryRun ? "Would visit" : "Visited";
+  console.log(
+    `${verb} ${scanned} track(s): minted ${mintedArtists}, matched ${matchedArtists} artist(s); wrote ${edgesWritten} track_artists edge(s); ${skippedNoIdentity} carried no MusicBrainz identity.`,
   );
 }
 

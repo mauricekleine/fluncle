@@ -277,6 +277,10 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // catalogue identity only (a URL on `tracks`, facts on `albums`), never a certification.
   "POST /admin/backfill/apple-catalogue": "backfill_apple_catalogue",
   "POST /admin/backfill/apple-music": "backfill_apple_music",
+  // Agent tier: the box's `fluncle-artist-credits` cron drives it. The MB credit sweep (RFC
+  // artist-primary-capture, slice 1b) — mints identity-true artists BY MB id + writes edges for slice
+  // 0's zero-matched residual, never a certification, never a publish.
+  "POST /admin/backfill/artist-credits": "backfill_artist_credits",
   // Agent tier: the box's `fluncle-artist-edges` cron drives it. The track_artists graph backfill
   // (RFC artist-primary-capture, slice 0) — folds artists_json names onto existing identities, never
   // a certification, never a publish.
