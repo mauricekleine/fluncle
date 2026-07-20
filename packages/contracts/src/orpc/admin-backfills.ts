@@ -277,122 +277,81 @@ export const backfillAppleCatalogue = oc
     }),
   );
 
-/** One credited artist on a candidate album — its name, and its stable Spotify id (grounding key). */
-const LabelReleaseArtistSchema = z
-  .object({ id: z.string().nullish(), name: z.string() })
-  .meta({ id: "LabelReleaseArtist" });
-
-/** One track on a candidate album, mapped from the actor's inline `tracks[]`. */
-const LabelReleaseTrackSchema = z
-  .object({
-    durationMs: z.number().nullish(),
-    isrc: z.string().nullish(),
-    spotifyTrackId: z.string(),
-    title: z.string(),
-    /** `spotify:track:<id>` (the actor's `track_uri`); a fallback is derived server-side when absent. */
-    uri: z.string().nullish(),
-    /** `https://open.spotify.com/track/<id>` (the actor's `track_url`); derived when absent. */
-    url: z.string().nullish(),
-  })
-  .meta({ id: "LabelReleaseTrack" });
-
-/**
- * One candidate album the box's Apify sweep mapped from a single actor result item. The server
- * RE-RUNS the whole gate against it (never trusting the box): `artists[].id` is the GROUNDING key,
- * `albumLabel`/`albumCopyright` the optional ATTRIBUTION signals (both null in the actor's
- * `albums`-search mode — the tap runs on grounding alone there), and `tracks[]` the inline recordings.
- */
-const LabelReleaseAlbumSchema = z
-  .object({
-    albumCopyright: z.string().nullish(),
-    albumId: z.string().nullish(),
-    albumLabel: z.string().nullish(),
-    albumName: z.string().nullish(),
-    artists: z.array(LabelReleaseArtistSchema).default([]),
-    releaseDate: z.string().nullish(),
-    tracks: z.array(LabelReleaseTrackSchema).default([]),
-  })
-  .meta({ id: "LabelReleaseAlbum" });
-
-/**
- * `list_label_releases_work` → `GET /admin/backfill/label-releases/work` (operationId
- * `listLabelReleasesWork`).
- *
- * Agent tier (`adminAuth`), the `list_track_work` precedent — the FRESHNESS TAP's worklist. The
- * ENABLED seed labels DUE for a fresh-release probe (oldest-probe-stamp first, up to `limit`), each
- * as `{ slug, name }`: the box's Apify sweep builds a `label:"<name>" tag:new` actor query off the
- * name and POSTs the result back keyed by the slug. A pure read — it stamps nothing (the mint op
- * stamps on the POST-back), so a stopped tick loses nothing and re-running drains what is due.
- */
-export const listLabelReleasesWork = oc
-  .route({
-    method: "GET",
-    operationId: "listLabelReleasesWork",
-    path: "/admin/backfill/label-releases/work",
-    summary: "The enabled seed labels due for a fresh-release probe (slug + name)",
-    tags: ["Admin"],
-  })
-  .input(z.object({ limit: z.coerce.number().int().min(1).max(200).default(50) }))
-  .output(
-    z.object({
-      labels: z.array(z.object({ name: z.string(), slug: z.string() })),
-      ok: z.literal(true),
-    }),
-  );
-
 /**
  * `backfill_label_releases` → `POST /admin/backfill/label-releases` (operationId
  * `backfillLabelReleases`).
  *
- * Agent tier (`adminAuth`) — the FRESHNESS TAP's verify+mint receiver (D8), the `anchor_track`
- * precedent. The box ran the Apify actor `musicae~spotify-extended-scraper` for ONE enabled seed
- * label (`albums:["label:\"<name>\" tag:new"]`) and mapped each result album (with its inline
- * `tracks[]` + `artists[]`) to a candidate; it POSTs them here and the SERVER re-runs the FULL gate
- * (the box's verdict is never trusted). An album mints ONLY when it clears ARTIST-GROUNDING (≥1 of
- * its Spotify artist ids is already in `artists.spotify_artist_id` — the primary anchor), AND, when
- * the actor populated a LABEL signal (`albumLabel`/`albumCopyright` — both null in `albums`-search
- * mode), that signal fold-matches the seed name. Survivors mint METADATA-ONLY catalogue rows (a
- * `tracks` row with no `findings` row) with their day-one release dates — closing the ~2-week
- * MusicBrainz-editorial-lag on /fresh. Deduped against the MB crawl from both directions (Spotify id /
- * uri / ISRC + same-album title fold), never a certification, no graph expansion. It writes catalogue
- * identity only, so the box's agent token drives it. Completing a label stamps its re-probe cadence;
- * a slug that is not an enabled seed label is a no-op (`found:false`). The Worker touches NO official
- * Spotify API on this path — the tap is on Apify's separate budget.
+ * Agent tier (`adminAuth`) — the FRESHNESS TAP (D8). ONE bounded probe pass over the operator's
+ * ENABLED seed labels (`labels.seed_state = 'enabled'` — the crawl allowlist, never widened): the
+ * WORKER searches each label's fresh releases on the official Spotify API (`label:"<name>" tag:new`),
+ * reads each hit as a SINGLE `GET /albums/{id}` (the batch endpoints are 403 at our tier), and mints
+ * METADATA-ONLY catalogue rows (a `tracks` row with no `findings` row) carrying their day-one release
+ * dates — closing the ~2-week MusicBrainz-editorial-lag on /fresh. An album mints only when it clears
+ * BOTH signals: ARTIST-GROUNDING (≥1 of its Spotify artist ids already in `artists.spotify_artist_id`
+ * — the primary anchor against cross-genre homonym junk) AND an EXACT fold-match of the seed name in
+ * the ℗/© copyright. An undated album is dropped outright (/fresh could never show it). MusicBrainz
+ * still WALKS the graph; the tap only TAPS freshness — no new labels, no artist hops, never a
+ * certification. Deduped against the MB crawl from both directions (Spotify id / uri / ISRC +
+ * same-album title fold).
+ *
+ * PACED BY THE SHARED CALL METER, and deliberately a second-class citizen on it: the tap proceeds
+ * only while the per-app window is below its own ceiling (a FRACTION of the meter's max), so it
+ * leaves headroom for the user-facing mints rather than spending the window down. Hitting that
+ * ceiling reports `budgetPaused` and ENDS the pass cleanly — the durable per-label cadence stamps
+ * resume it next tick. `configured: false` when the publish path's Spotify grant is gone. No cursor:
+ * the worklist is the oldest-probed enabled labels each tick, so re-running drains what is due.
  */
 export const backfillLabelReleases = oc
   .route({
     method: "POST",
     operationId: "backfillLabelReleases",
     path: "/admin/backfill/label-releases",
-    summary: "Verify a seed label's Apify-supplied fresh releases and mint the catalogue rows",
+    summary: "Tap Spotify's fresh releases for enabled seed labels into catalogue rows (bounded)",
     tags: ["Admin"],
   })
   .input(
     z.object({
-      candidates: z.array(LabelReleaseAlbumSchema).default([]),
-      labelSlug: z.string().min(1),
+      // A real JSON boolean, never a coerced string: `z.coerce.boolean()` reads the STRING "false"
+      // as true, which would turn a dry run into a live pass. The body is JSON, so this is honest.
+      dryRun: z.boolean().default(false),
+      limit: z.coerce.number().int().min(1).max(200).default(5),
     }),
   )
   .output(
     z.object({
-      // Albums that PASSED the gate (grounded AND, when a label signal was present, attributed).
+      // Albums that PASSED both signals (artist-grounded AND an exact copyright match).
       albumsMatched: z.number(),
-      // Albums the box supplied for this label this call (before the gate).
+      // Albums the label searches returned this pass (before the gate).
       albumsSeen: z.number(),
-      // False when the slug is not an ENABLED seed label — a no-op, nothing minted or stamped.
-      found: z.boolean(),
-      labelSlug: z.string(),
-      // Catalogue rows minted this call (never a certification).
+      // True when the pass STEPPED BACK from the shared Spotify window at the tap's own ceiling,
+      // leaving the remaining headroom for the user-facing paths. Clean; resumes next tick.
+      budgetPaused: z.boolean(),
+      // False when the Spotify grant is gone — the whole tap is a no-op this tick (reconnect needed).
+      configured: z.boolean(),
+      dryRun: z.boolean(),
+      // Single album/track reads that 404/5xx'd and were SKIPPED (not a label failure stamp).
+      failedFetches: z.number(),
+      // Labels that hit a TRANSIENT Spotify error on their SEARCH this pass (backed off, re-probed).
+      failedLabels: z.array(z.string()),
+      // True when the pass ended early on the per-pass single-fetch ceiling — a soft cap; the
+      // un-stamped labels resume next tick.
+      fetchCeilingHit: z.boolean(),
+      // The seed-label slugs probed this pass — or, in a dry run, the ones that WOULD be probed.
+      labelSlugs: z.array(z.string()),
+      // Enabled seed labels whose fresh-release search actually ran this pass.
+      labelsProbed: z.number(),
+      // Catalogue rows minted this pass (never a certification).
       newRows: z.number(),
-      // The minted track ids — bounded (a label's fresh releases).
+      // The minted track ids — bounded (a few labels x their fresh releases).
       newTrackIds: z.array(z.string()),
       ok: z.literal(true),
+      // True when the pass STOPPED on a Spotify 429 (the backstop beneath the meter).
+      rateLimited: z.boolean(),
       // Tracks skipped because the archive already holds them (Spotify id / uri / ISRC / same-album
       // title fold) — the dedupe contract, working.
       skippedKnown: z.number(),
-      // Albums DROPPED because a label signal WAS present but did not fold-match the seed name (a
-      // homonym label the fuzzy filter returned). Always 0 in the actor's grounding-only mode.
-      skippedUnattributed: z.number(),
+      // Albums DROPPED for carrying no release_date — a row /fresh could never surface.
+      skippedUndated: z.number(),
       // Albums DROPPED for artist-grounding (no artist on the album is in our archive yet — a
       // homonym label, or a debut awaiting the MB backfill).
       skippedUngrounded: z.number(),
@@ -665,5 +624,4 @@ export const adminBackfillsContract = {
   backfill_label_releases: backfillLabelReleases,
   backfill_lastfm: backfillLastfm,
   backfill_recording_mbids: backfillRecordingMbids,
-  list_label_releases_work: listLabelReleasesWork,
 };
