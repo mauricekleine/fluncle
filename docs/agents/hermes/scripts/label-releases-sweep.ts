@@ -23,10 +23,13 @@
 //   (a) FETCH the due seed labels from the Worker with the box's AGENT token
 //       (`GET /api/admin/backfill/label-releases/work`). Each row is `{ slug, name }`.
 //   (b) For each label RUN the Apify actor once (`albums:["label:\"<name>\" tag:new"]`), returning
-//       up to `searchKeywordLimit` fresh albums, each with its inline `tracks[]` (+ ISRCs) + `artists[]`.
-//   (c) MAP each result album to a candidate ({ albumId, albumName, albumLabel, albumCopyright,
-//       releaseDate, artists, tracks }). `albumLabel`/`albumCopyright` are NULL in the actor's
-//       `albums`-search mode (measured live 2026-07-20) — the Worker gates on artist-grounding there.
+//       ONE dataset item PER fresh album — its metadata NESTED in `item.albums[0]`, its `tracks[]`
+//       (+ ISRCs) + `artists[]` at the item's top level.
+//   (c) MAP each item to a candidate ({ albumId, albumName, albumLabel, albumCopyright, releaseDate,
+//       artists, tracks }), reading the album fields from the nested `item.albums[0]`. An item with no
+//       album metadata OR no release_date is DROPPED (a null release_date row can never show on
+//       /fresh). `albumLabel`/`albumCopyright` come back NULL in this mode (measured live 2026-07-20)
+//       — the Worker gates on artist-grounding there.
 //   (d) POST the label's candidates to `backfill_label_releases`. The WORKER re-runs the FULL gate
 //       (artist-grounding + label attribution + dedupe — the box's match is NEVER trusted) and mints
 //       the survivors. Completing a label stamps its re-probe cadence, so an empty result is not
@@ -83,17 +86,33 @@ type ApifyTrack = {
   track_url?: string;
 };
 
-/** One item in the actor's `albums`-search result array — one fresh album for the label query. */
-export type ApifyAlbumItem = {
+/** The album metadata — the actor NESTS it in `item.albums[0]`, NOT at the item's top level. */
+type ApifyAlbum = {
   album_copyright?: null | string;
   album_id?: string;
   album_label?: null | string;
   album_name?: string;
   album_release_date?: string;
+  album_total_tracks?: number;
+  album_upc?: string;
+};
+
+/**
+ * One item in the actor's `albums`-search result array = ONE album. Its metadata is NESTED under
+ * `albums[0]` (verified live), while its `tracks[]` + `artists[]` sit at the item's top level. The
+ * earlier flat shape read `item.album_*` and always got `undefined` — the null-release_date bug that
+ * minted /fresh-invisible rows. `target`/`result`/`type`/`mode` are the actor's per-item metadata.
+ */
+export type ApifyAlbumItem = {
+  albums?: ApifyAlbum[];
   artists?: ApifyArtist[];
   error?: null | string;
+  mode?: string;
+  result?: string;
   success?: boolean;
+  target?: string;
   tracks?: ApifyTrack[];
+  type?: string;
 };
 
 /** One credited artist in the verify+mint request body. */
@@ -159,9 +178,21 @@ export type LabelReleasesDeps = {
 
 // ── Pure mappers (unit-tested against the real actor payload shape) ────────────
 
-/** Map one actor result album to a candidate, or null when it carries no usable track. */
+/**
+ * Map one actor result album to a candidate, or null when it is unusable. The album metadata is read
+ * from the NESTED `item.albums[0]` (the tracks + artists stay at item level). A candidate is dropped
+ * when it has no album metadata OR no `album_release_date`: a catalogue row with a null release_date
+ * can never surface on /fresh (the /fresh window filters on it), so minting it is a silent no-op.
+ */
 export function albumItemToCandidate(item: ApifyAlbumItem): LabelReleaseAlbumPayload | null {
   if (item.success === false) {
+    return null;
+  }
+
+  const albumMeta = item.albums?.[0];
+
+  // No album metadata, or no day-one date → the row could never show on /fresh, so never mint it.
+  if (!albumMeta || !albumMeta.album_release_date) {
     return null;
   }
 
@@ -189,16 +220,16 @@ export function albumItemToCandidate(item: ApifyAlbumItem): LabelReleaseAlbumPay
   }
 
   return {
-    albumCopyright: item.album_copyright ?? null,
-    albumId: item.album_id ?? null,
-    albumLabel: item.album_label ?? null,
-    albumName: item.album_name ?? null,
+    albumCopyright: albumMeta.album_copyright ?? null,
+    albumId: albumMeta.album_id ?? null,
+    albumLabel: albumMeta.album_label ?? null,
+    albumName: albumMeta.album_name ?? null,
     artists: (item.artists ?? [])
       .filter((artist): artist is ApifyArtist & { artist_name: string } =>
         Boolean(artist.artist_name),
       )
       .map((artist) => ({ id: artist.artist_id ?? null, name: artist.artist_name })),
-    releaseDate: item.album_release_date ?? null,
+    releaseDate: albumMeta.album_release_date,
     tracks,
   };
 }

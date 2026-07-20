@@ -49,6 +49,7 @@ const SEGMENTS: Record<string, { index?: string; label: string }> = {
   recommendations: { label: "Recommendations" },
   status: { label: "Status" },
   stories: { label: "Stories" },
+  terms: { label: "Terms" },
   tracks: { label: "Tracks" },
 };
 

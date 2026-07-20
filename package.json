@@ -49,9 +49,9 @@
   "type": "module",
   "scripts": {
     "build": "turbo run build",
-    "check": "bun run lint && bun run format:check && bun run typecheck && bun run test && bun run build",
+    "check": "bun run lint && bun run format:check && bun run typecheck && bun run test && bun run test:scripts && bun run build",
     "check:fix": "bun run lint:fix && bun run format",
-    "deploy:gate": "bun run format:check && bun run lint && bun run typecheck && bun run test",
+    "deploy:gate": "bun run format:check && bun run lint && bun run typecheck && bun run test && bun run test:scripts",
     "dev": "turbo run dev",
     "format": "oxfmt --write .",
     "format:check": "oxfmt --check .",

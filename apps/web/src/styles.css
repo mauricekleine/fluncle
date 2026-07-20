@@ -5581,6 +5581,36 @@ a.catalogue-letter:focus-visible {
   padding-top: 1.25rem;
 }
 
+/* The quietest band: the meta/legal links, centered and small below the machinery, dimmer
+   than the nerd row so they read as footnotes rather than as navigation. */
+.nav-footer-legal {
+  align-items: center;
+  border-top: 1px solid var(--border);
+  color: var(--muted-foreground);
+  display: flex;
+  gap: 0.5rem;
+  justify-content: center;
+  padding-bottom: 1.5rem;
+  padding-top: 1.25rem;
+}
+
+.nav-footer-legal-link {
+  border-radius: var(--radius-md, 0.5rem);
+  color: var(--muted-foreground);
+  font-size: 0.78rem;
+  padding: 0.2rem 0.4rem;
+  transition:
+    color 150ms ease-out,
+    background-color 150ms ease-out;
+}
+
+.nav-footer-legal-link:hover,
+.nav-footer-legal-link:focus-visible {
+  background: var(--gold-veil, color-mix(in oklch, var(--eclipse-gold) 10%, transparent));
+  color: var(--eclipse-glow);
+  outline: none;
+}
+
 /* The sibling of .nav-footer-heading ("Follow Fluncle", "For the nerds") — same register,
    same sentence case, so the colophon reads as one voice rather than half of it shouting. */
 .nav-footer-rowlabel {
@@ -5682,7 +5712,8 @@ a.catalogue-letter:focus-visible {
   .nav-breadcrumb a,
   .nav-footer-link,
   .nav-follow-link,
-  .nav-nerd-link {
+  .nav-nerd-link,
+  .nav-footer-legal-link {
     transition: none;
   }
 }
