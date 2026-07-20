@@ -59,6 +59,7 @@ import { type PublicUser } from "./public-auth";
 import { listRecommendations } from "./recommendations";
 import { getSetting, setSetting } from "./settings";
 import { getSpotifyAccessToken, spotifyFetch } from "./spotify";
+import { isSpotifyCallBudgetAvailable, recordSpotifyCall } from "./spotify-budget";
 
 /** The kill-switch key on the shared `settings` KV. DEFAULT-DENY (only "true" opens). */
 export const FRONTIER_MINTING_KEY = "frontier.minting";
@@ -80,6 +81,26 @@ const MINT_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 /** The `/me/frontier-playlist` mint rate limit — a modest per-user hourly budget. */
 export const FRONTIER_MINT_RATE_LIMIT = 4;
+
+/**
+ * How many committed users a single paced-drain tick processes. Deliberately SMALL — the
+ * sweep no longer bursts every playlist in one tick (which collided with the shared per-app
+ * Spotify budget and 429'd live user paths); it drains a batch, stamps each, and resumes next
+ * tick. At a ~15-minute cadence a batch of 5 clears ~480 users/day, so the whole crew refreshes
+ * well inside the {@link FRONTIER_REFRESH_MIN_AGE_MS} window — each user still refreshes ~weekly,
+ * just spread across the day instead of all at 07:00. The CLI `--limit` overrides for an
+ * attended burn.
+ */
+export const FRONTIER_REFRESH_BATCH = 5;
+
+/**
+ * A user is DUE for a paced refresh once their last-processed stamp (`user_frontier_refresh`)
+ * is older than this. ~6 days keeps the per-user cadence weekly while letting the drain run
+ * every few minutes without reprocessing the same user each tick. A user with NO stamp (never
+ * processed, or a pending mint the hot path deferred) is always due, so a fresh mint jumps the
+ * queue ahead of the weekly refreshers.
+ */
+export const FRONTIER_REFRESH_MIN_AGE_MS = 6 * 24 * 60 * 60 * 1000;
 
 /** A minted/refreshed playlist's public web URL. */
 export function frontierPlaylistUrl(playlistId: string): string {
@@ -347,7 +368,7 @@ async function step<T>(name: string, request: Promise<T>): Promise<T> {
   }
 }
 
-export type FrontierSyncStatus = "edition_only" | "minted" | "refreshed" | "unchanged";
+export type FrontierSyncStatus = "building" | "edition_only" | "minted" | "refreshed" | "unchanged";
 
 export type FrontierSyncResult =
   | { ok: true; playlistId?: string; playlistUrl?: string; status: FrontierSyncStatus }
@@ -411,21 +432,215 @@ async function computeAndStoreEdition(user: PublicUser, nowMs: number): Promise<
 }
 
 /**
- * Store the user's edition and (only when minting is OPEN) mirror it to Spotify — the one
- * entry point for both the "Get playlist" mint and the weekly sweep (RFC D1/D2).
+ * Stamp WHEN the paced drain last PROCESSED this user (`user_frontier_refresh`) — the cursor
+ * the due-query orders and gates by. Upsert, so the row is born on the first processing and
+ * advances thereafter. Best-effort: a stamp hiccup logs and is swallowed — it never downgrades
+ * an otherwise-successful sync, and a missed stamp only means the next tick re-evaluates the
+ * user (idempotent).
+ */
+async function stampFrontierRefreshed(userId: string, nowMs: number): Promise<void> {
+  try {
+    await (
+      await getDb()
+    ).execute({
+      args: [userId, new Date(nowMs).toISOString()],
+      sql: `insert into user_frontier_refresh (user_id, refreshed_at) values (?, ?)
+        on conflict(user_id) do update set refreshed_at = excluded.refreshed_at`,
+    });
+  } catch (error) {
+    logEvent("warn", "frontier.stamp-failed", { error, userId });
+  }
+}
+
+/**
+ * The edition + Spotify mirror, WITHOUT the stamp or the best-effort wrapper — the body
+ * {@link mintOrRefreshFrontierPlaylist} wraps. Split out so the wrapper can stamp the drain
+ * cursor on a settled non-`building` outcome and swallow a throw once, in one place.
+ */
+async function syncFrontier(user: PublicUser, nowMs: number): Promise<FrontierSyncResult> {
+  // The internal compute (the edition write) and the two mint-DECISION reads (the
+  // kill switch + the existing playlist row) are mutually independent — the switch
+  // and the row gate only the EXTERNAL Spotify mirror, never the compute — so they run
+  // CONCURRENTLY instead of laddering after the ~2 s compute (the tiny reads hide under
+  // it). Each is its own libsql `execute`, so the three fire as concurrent subrequests.
+  const [compute, mintingOpen, existing] = await Promise.all([
+    computeAndStoreEdition(user, nowMs),
+    isFrontierMintingOpen(),
+    getFrontierRow(user.id),
+  ]);
+
+  if (!compute.ok) {
+    return { ok: false, reason: compute.reason };
+  }
+
+  // ── The EXTERNAL Spotify mirror is the ONLY thing the kill switch gates ─────
+  if (!mintingOpen) {
+    return { ok: true, status: compute.editionWritten ? "edition_only" : "unchanged" };
+  }
+
+  const description = frontierDescription(user);
+
+  // ── Mirror guard: an unchanged existing playlist is zero Spotify calls ─────
+  if (existing && existing.last_uri_hash === compute.hash) {
+    return {
+      ok: true,
+      playlistId: existing.playlist_id,
+      playlistUrl: frontierPlaylistUrl(existing.playlist_id),
+      status: "unchanged",
+    };
+  }
+
+  // ── The shared per-app Spotify budget gate ─────────────────────────────────
+  // Both remaining branches SPEND Spotify writes. Consult the shared meter BEFORE firing:
+  // a spent window means DEFER, never burst through — the per-app budget is one bucket every
+  // Spotify path draws on, and a live signup's create must not lose the race to a background
+  // drain. The edition is already durably written, so deferring costs the user nothing but a
+  // short wait: the paced sweep completes the owed write inside a fresh window. `building`
+  // carries the existing playlist URL through for a deferred REFRESH (the user keeps their
+  // current playlist); a deferred CREATE has none yet (the UI says "on its way").
+  if (!(await isSpotifyCallBudgetAvailable(nowMs))) {
+    return existing
+      ? {
+          ok: true,
+          playlistId: existing.playlist_id,
+          playlistUrl: frontierPlaylistUrl(existing.playlist_id),
+          status: "building",
+        }
+      : { ok: true, status: "building" };
+  }
+
+  // ── Create-once ──────────────────────────────────────────────────────────
+  if (!existing) {
+    // The mint-cap ledger read and the Spotify token fetch are independent — one
+    // bounds the create, the other authorizes it — so they run together.
+    const [accessToken, mints] = await Promise.all([
+      getSpotifyAccessToken(),
+      countRecentMints(nowMs),
+    ]);
+
+    if (mints >= FRONTIER_DAILY_MINT_CAP) {
+      return { ok: false, reason: "mint_cap_reached" };
+    }
+
+    // `POST /me/playlists` — Spotify's Feb-2026 Web API migration RETIRED the
+    // `/users/{id}/playlists` create (bare 403 since 2026-03-09), which also
+    // retires the /me id pre-read the old URL needed. Probed live 2026-07-17:
+    // /me/playlists returns 201 on the same grant the old endpoint 403s.
+    const created = (await (
+      await step(
+        "create",
+        spotifyFetch("/me/playlists", accessToken, {
+          body: JSON.stringify({ description, name: FRONTIER_PLAYLIST_NAME, public: true }),
+          headers: { "Content-Type": "application/json" },
+          method: "POST",
+        }),
+      )
+    ).json()) as { id: string };
+    await recordSpotifyCall(nowMs);
+
+    await step(
+      "replace",
+      spotifyFetch(`/playlists/${created.id}/items`, accessToken, {
+        body: JSON.stringify({ uris: compute.uris }),
+        headers: { "Content-Type": "application/json" },
+        method: "PUT",
+      }),
+    );
+    await recordSpotifyCall(nowMs);
+
+    // The playlist row lands AFTER the Spotify PUT (a failed create retries next tick with
+    // no orphan row). Decoupled from the edition: the edition is already durably written,
+    // so this is a single write, not a batch — the mirror's `last_uri_hash` is its own
+    // idempotence, independent of the edition's.
+    const nowIso = new Date(nowMs).toISOString();
+
+    await (
+      await getDb()
+    ).execute({
+      args: [user.id, created.id, nowIso, nowIso, compute.hash],
+      sql: `insert into user_frontier_playlists
+            (user_id, playlist_id, created_at, last_synced_at, last_uri_hash, cover_uploaded_at)
+          values (?, ?, ?, ?, ?, null)`,
+    });
+
+    logEvent("info", "frontier.playlist-minted", { playlistId: created.id, userId: user.id });
+
+    return {
+      ok: true,
+      playlistId: created.id,
+      playlistUrl: frontierPlaylistUrl(created.id),
+      status: "minted",
+    };
+  }
+
+  // ── Refresh an existing playlist (the item list changed) ────────────────────
+  const accessToken = await getSpotifyAccessToken();
+  const playlistId = existing.playlist_id;
+
+  // Re-set the description (bundled with the change, so an unchanged week costs
+  // nothing), then full-replace the items.
+  await step(
+    "details",
+    spotifyFetch(`/playlists/${playlistId}`, accessToken, {
+      body: JSON.stringify({ description }),
+      headers: { "Content-Type": "application/json" },
+      method: "PUT",
+    }),
+  );
+  await recordSpotifyCall(nowMs);
+
+  await step(
+    "replace",
+    spotifyFetch(`/playlists/${playlistId}/items`, accessToken, {
+      body: JSON.stringify({ uris: compute.uris }),
+      headers: { "Content-Type": "application/json" },
+      method: "PUT",
+    }),
+  );
+  await recordSpotifyCall(nowMs);
+
+  // The mirror's `last_uri_hash` advances only AFTER the PUT landed, so a failed write
+  // retries next refresh. Its own single write — the edition was already committed above.
+  const nowIso = new Date(nowMs).toISOString();
+
+  await (
+    await getDb()
+  ).execute({
+    args: [nowIso, compute.hash, user.id],
+    sql: `update user_frontier_playlists set last_synced_at = ?, last_uri_hash = ? where user_id = ?`,
+  });
+
+  return {
+    ok: true,
+    playlistId,
+    playlistUrl: frontierPlaylistUrl(playlistId),
+    status: "refreshed",
+  };
+}
+
+/**
+ * Store the user's edition and (only when minting is OPEN, and there is Spotify budget) mirror
+ * it to Spotify — the one entry point for both the "Get playlist" mint and the paced sweep
+ * (RFC D1/D2).
  *
  * The edition (the INTERNAL cache, the shelf's source of truth) is written FIRST and ALWAYS,
- * regardless of the kill switch. The Spotify mirror is the EXTERNAL effect and stays behind
- * the DEFAULT-DENY switch + the daily mint cap + the `last_uri_hash` mirror guard, unchanged:
+ * regardless of the kill switch or the budget. The Spotify mirror is the EXTERNAL effect and
+ * stays behind the DEFAULT-DENY switch + the daily mint cap + the `last_uri_hash` mirror guard,
+ * plus the shared per-app Spotify budget:
  *
  *   - Minting DARK ⇒ the edition is born (or confirmed unchanged) and NO Spotify call is
  *     made — `status: "edition_only"` when an edition was written, `"unchanged"` when the
- *     desired list matched the latest edition. The user's explicit act is no longer a no-op.
- *   - Minting OPEN ⇒ after the edition, mirror the desired list: create-once for a user with
- *     no playlist row (bounded by the rolling daily cap), or full-replace via
- *     `PUT /playlists/{id}/items` when the mirror hash moved. The description is (re)set with
- *     every create/change. `status` reports the MIRROR outcome — `minted` / `refreshed` /
- *     `unchanged`.
+ *     desired list matched the latest edition.
+ *   - Minting OPEN, budget SPENT ⇒ the edition is written and the Spotify write is DEFERRED —
+ *     `status: "building"`. The paced sweep completes the owed create/refresh in a fresh
+ *     window, so a live signup never eats a 429 in their face.
+ *   - Minting OPEN, budget FREE ⇒ mirror the desired list: create-once for a user with no
+ *     playlist row (bounded by the rolling daily cap), or full-replace when the mirror hash
+ *     moved. `status` reports the MIRROR outcome — `minted` / `refreshed` / `unchanged`.
+ *
+ * A settled, non-`building` outcome STAMPS the paced-drain cursor (`user_frontier_refresh`) so
+ * the sweep rotates past this user for ~a week; a `building` defer or a fault leaves the cursor
+ * untouched, so the user stays DUE and the next tick retries.
  *
  * Best-effort: any Spotify fault becomes `{ ok: false, reason }` — never a throw. The edition
  * has already been written by then, so a Spotify hiccup never costs the shelf its data.
@@ -435,141 +650,16 @@ export async function mintOrRefreshFrontierPlaylist(
   nowMs: number = Date.now(),
 ): Promise<FrontierSyncResult> {
   try {
-    // The internal compute (the edition write) and the two mint-DECISION reads (the
-    // kill switch + the existing playlist row) are mutually independent — the switch
-    // and the row gate only the EXTERNAL Spotify mirror, never the compute — so they run
-    // CONCURRENTLY instead of laddering after the ~2 s compute (the tiny reads hide under
-    // it). Each is its own libsql `execute`, so the three fire as concurrent subrequests.
-    const [compute, mintingOpen, existing] = await Promise.all([
-      computeAndStoreEdition(user, nowMs),
-      isFrontierMintingOpen(),
-      getFrontierRow(user.id),
-    ]);
+    const result = await syncFrontier(user, nowMs);
 
-    if (!compute.ok) {
-      return { ok: false, reason: compute.reason };
+    // A settled outcome (the edition landed, and the mirror ran, was unchanged, or was skipped
+    // by the kill switch) advances the cursor. A `building` defer must NOT — it owes a Spotify
+    // write the sweep still has to complete, so the user must stay DUE.
+    if (result.ok && result.status !== "building") {
+      await stampFrontierRefreshed(user.id, nowMs);
     }
 
-    // ── The EXTERNAL Spotify mirror is the ONLY thing the kill switch gates ─────
-    if (!mintingOpen) {
-      return { ok: true, status: compute.editionWritten ? "edition_only" : "unchanged" };
-    }
-
-    const description = frontierDescription(user);
-
-    // ── Mirror guard: an unchanged existing playlist is zero Spotify calls ─────
-    if (existing && existing.last_uri_hash === compute.hash) {
-      return {
-        ok: true,
-        playlistId: existing.playlist_id,
-        playlistUrl: frontierPlaylistUrl(existing.playlist_id),
-        status: "unchanged",
-      };
-    }
-
-    // ── Create-once ──────────────────────────────────────────────────────────
-    if (!existing) {
-      // The mint-cap ledger read and the Spotify token fetch are independent — one
-      // bounds the create, the other authorizes it — so they run together.
-      const [accessToken, mints] = await Promise.all([
-        getSpotifyAccessToken(),
-        countRecentMints(nowMs),
-      ]);
-
-      if (mints >= FRONTIER_DAILY_MINT_CAP) {
-        return { ok: false, reason: "mint_cap_reached" };
-      }
-
-      // `POST /me/playlists` — Spotify's Feb-2026 Web API migration RETIRED the
-      // `/users/{id}/playlists` create (bare 403 since 2026-03-09), which also
-      // retires the /me id pre-read the old URL needed. Probed live 2026-07-17:
-      // /me/playlists returns 201 on the same grant the old endpoint 403s.
-      const created = (await (
-        await step(
-          "create",
-          spotifyFetch("/me/playlists", accessToken, {
-            body: JSON.stringify({ description, name: FRONTIER_PLAYLIST_NAME, public: true }),
-            headers: { "Content-Type": "application/json" },
-            method: "POST",
-          }),
-        )
-      ).json()) as { id: string };
-
-      await step(
-        "replace",
-        spotifyFetch(`/playlists/${created.id}/items`, accessToken, {
-          body: JSON.stringify({ uris: compute.uris }),
-          headers: { "Content-Type": "application/json" },
-          method: "PUT",
-        }),
-      );
-
-      // The playlist row lands AFTER the Spotify PUT (a failed create retries next tick with
-      // no orphan row). Decoupled from the edition: the edition is already durably written,
-      // so this is a single write, not a batch — the mirror's `last_uri_hash` is its own
-      // idempotence, independent of the edition's.
-      const nowIso = new Date(nowMs).toISOString();
-
-      await (
-        await getDb()
-      ).execute({
-        args: [user.id, created.id, nowIso, nowIso, compute.hash],
-        sql: `insert into user_frontier_playlists
-            (user_id, playlist_id, created_at, last_synced_at, last_uri_hash, cover_uploaded_at)
-          values (?, ?, ?, ?, ?, null)`,
-      });
-
-      logEvent("info", "frontier.playlist-minted", { playlistId: created.id, userId: user.id });
-
-      return {
-        ok: true,
-        playlistId: created.id,
-        playlistUrl: frontierPlaylistUrl(created.id),
-        status: "minted",
-      };
-    }
-
-    // ── Refresh an existing playlist (the item list changed) ────────────────────
-    const accessToken = await getSpotifyAccessToken();
-    const playlistId = existing.playlist_id;
-
-    // Re-set the description (bundled with the change, so an unchanged week costs
-    // nothing), then full-replace the items.
-    await step(
-      "details",
-      spotifyFetch(`/playlists/${playlistId}`, accessToken, {
-        body: JSON.stringify({ description }),
-        headers: { "Content-Type": "application/json" },
-        method: "PUT",
-      }),
-    );
-
-    await step(
-      "replace",
-      spotifyFetch(`/playlists/${playlistId}/items`, accessToken, {
-        body: JSON.stringify({ uris: compute.uris }),
-        headers: { "Content-Type": "application/json" },
-        method: "PUT",
-      }),
-    );
-
-    // The mirror's `last_uri_hash` advances only AFTER the PUT landed, so a failed write
-    // retries next refresh. Its own single write — the edition was already committed above.
-    const nowIso = new Date(nowMs).toISOString();
-
-    await (
-      await getDb()
-    ).execute({
-      args: [nowIso, compute.hash, user.id],
-      sql: `update user_frontier_playlists set last_synced_at = ?, last_uri_hash = ? where user_id = ?`,
-    });
-
-    return {
-      ok: true,
-      playlistId,
-      playlistUrl: frontierPlaylistUrl(playlistId),
-      status: "refreshed",
-    };
+    return result;
   } catch (error) {
     logEvent("warn", "frontier.sync-failed", { error, userId: user.id });
 
@@ -602,6 +692,12 @@ export async function getFrontierState(user: PublicUser): Promise<FrontierState>
 }
 
 export type FrontierRefreshCounts = {
+  // True ⇒ the pass STOPPED early because the shared Spotify budget was spent. The stamps are
+  // durable, so the next tick resumes from where it left off.
+  budgetPaused: boolean;
+  // Users whose owed Spotify write was DEFERRED this tick (budget spent mid-pass); they stay
+  // DUE and the next tick completes them.
+  building: number;
   editionOnly: number;
   failed: number;
   minted: number;
@@ -614,20 +710,23 @@ export type FrontierRefreshCounts = {
 };
 
 /**
- * Write the next Frontier edition for EVERY user who already has one — the weekly sweep's
- * engine (the `refresh_frontier_playlists` admin op; RFC D2). Runs REGARDLESS of the kill
- * switch: the edition (the shelf's source of truth) is written for every walked user, and
- * only the Spotify MIRROR stays conditional on the switch. `switchOff` is reported for
- * observability but no longer short-circuits the sweep.
+ * One paced-drain tick — the `refresh_frontier_playlists` admin op (RFC D2), reshaped from a
+ * one-shot BURST into a bounded, RESUMABLE drain so it stops colliding with the shared per-app
+ * Spotify budget (which 429'd live user paths every Friday).
  *
- * A user still in the DRAFT phase (zero editions) is SKIPPED by construction — the walk
- * iterates users with at least one edition, so edition #1 is only ever born from that user's
- * own "Get playlist". The identical-hash skip survives per user (an unchanged desired list
- * writes no new edition). Best-effort per user: one user's Spotify fault is counted as
- * `failed` and the walk continues.
+ * It processes at most `limit` DUE committed users, PENDING MINTS FIRST (a user waiting for
+ * their first playlist beats a weekly refresher), then oldest-refreshed. A user is DUE when
+ * their drain cursor (`user_frontier_refresh`) is unset or older than
+ * {@link FRONTIER_REFRESH_MIN_AGE_MS}, so the whole crew still refreshes ~weekly — just spread
+ * across many ticks instead of one overloaded 07:00 pass.
  *
- * `limit` bounds a tick so the op stays cheap even as the crew grows; the sweep loops
- * until the whole set is walked.
+ * Runs REGARDLESS of the kill switch: the edition (the shelf's source of truth) is written for
+ * every processed user; only the Spotify MIRROR stays conditional on the switch. When minting
+ * is OPEN, the pass consults the shared Spotify budget before each user and STOPS cleanly when
+ * the window is spent (`budgetPaused: true`) — never bursting through a hot window; the durable
+ * cursor resumes next tick. A user still in the DRAFT phase (no edition AND no playlist) is
+ * skipped by construction. Best-effort per user: one Spotify fault is `failed` and the walk
+ * continues.
  */
 export async function refreshAllFrontierPlaylists(
   limit: number,
@@ -635,6 +734,8 @@ export async function refreshAllFrontierPlaylists(
 ): Promise<FrontierRefreshCounts> {
   const mintingOpen = await isFrontierMintingOpen();
   const counts: FrontierRefreshCounts = {
+    budgetPaused: false,
+    building: 0,
     editionOnly: 0,
     failed: 0,
     minted: 0,
@@ -648,10 +749,19 @@ export async function refreshAllFrontierPlaylists(
     unchanged: 0,
   };
 
-  const rows = await listFrontierUsers(limit);
+  const rows = await listDueFrontierUsers(limit, nowMs);
   counts.total = rows.length;
 
   for (const row of rows) {
+    // Pace against the shared per-app Spotify budget: when minting is OPEN and the window is
+    // spent, STOP the pass cleanly — the cursor is durable, so the next tick resumes from the
+    // users we did not reach. Under DARK minting the sweep makes no Spotify call, so the budget
+    // never gates it (editions still flow).
+    if (mintingOpen && !(await isSpotifyCallBudgetAvailable(nowMs))) {
+      counts.budgetPaused = true;
+      break;
+    }
+
     const result = await mintOrRefreshFrontierPlaylist(row.user, nowMs);
 
     if (!result.ok) {
@@ -659,8 +769,17 @@ export async function refreshAllFrontierPlaylists(
       continue;
     }
 
+    if (result.status === "building") {
+      // A race: the budget was spent between the pre-check and the write. The user still owes a
+      // Spotify write (unstamped, stays DUE) — stop the pass; the next tick resumes.
+      counts.building += 1;
+      counts.budgetPaused = true;
+      break;
+    }
+
     if (result.status === "minted") {
-      // A row that vanished then re-minted mid-walk (rare) — counted honestly.
+      // A user waiting for their FIRST playlist (a pending mint the hot path deferred, or a
+      // pre-ledger/edition-only user opening under budget) — the create the drain completes.
       counts.minted += 1;
     } else if (result.status === "refreshed") {
       counts.refreshed += 1;
@@ -678,24 +797,35 @@ export async function refreshAllFrontierPlaylists(
 }
 
 /**
- * The users the refresh sweep walks — every user who has COMMITTED, oldest first, hydrated
- * into the `PublicUser` shape the sync needs (the description reads the handle; the recs read
- * the id + verified flag). Commitment is the UNION of two kinds of evidence:
+ * The DUE committed users the paced drain processes this tick, PENDING MINTS FIRST then oldest
+ * refreshed, hydrated into the `PublicUser` shape the sync needs (the description reads the
+ * handle; the recs read the id + verified flag). Commitment is the UNION of two kinds of
+ * evidence:
  *
  *   - an EDITION row (the post-ledger commitment — "Get playlist" born an edition), and
  *   - a PLAYLIST row (the pre-ledger commitment — a Spotify playlist minted BEFORE editions
- *     existed; that row IS the evidence of the same "Get playlist" act from before the ledger,
- *     so such a user is swept and gains their first edition on the next refresh).
+ *     existed; that row IS the evidence of the same "Get playlist" act from before the ledger).
  *
- * A TRUE draft user — no edition AND no playlist row — is skipped, so the sweep never births
+ * A TRUE draft user — no edition AND no playlist row — is skipped, so the drain never births
  * edition #1 for someone who never asked. The union is de-duped by user_id (a user with both
- * kinds appears once, anchored at the earliest evidence) so oldest-first is stable.
+ * kinds appears once, anchored at the earliest evidence).
+ *
+ * DUE = no drain cursor yet (never processed — a fresh mint or a deferred pending mint), OR a
+ * cursor older than {@link FRONTIER_REFRESH_MIN_AGE_MS}. Ordering puts users with NO playlist
+ * row (pending creates) ahead of refreshers, then oldest-cursor (falling back to the earliest
+ * commitment) first — so a user waiting for their first playlist jumps the weekly queue. All
+ * per-user tables here are crew-sized (bounded by users, never the catalogue), so this is a
+ * small join, not a growing-table scan.
  */
-async function listFrontierUsers(limit: number): Promise<Array<{ user: PublicUser }>> {
+async function listDueFrontierUsers(
+  limit: number,
+  nowMs: number,
+): Promise<Array<{ user: PublicUser }>> {
+  const dueBefore = new Date(nowMs - FRONTIER_REFRESH_MIN_AGE_MS).toISOString();
   const result = await (
     await getDb()
   ).execute({
-    args: [limit],
+    args: [dueBefore, limit],
     sql: `select u.id, u.username, u.display_username, u.name, u.image, u.email,
         u.email_verified, u.created_at, u.crew_number
       from (
@@ -708,8 +838,11 @@ async function listFrontierUsers(limit: number): Promise<Array<{ user: PublicUse
         group by user_id
       ) e
       join "user" u on u.id = e.user_id
+      left join user_frontier_playlists p on p.user_id = e.user_id
+      left join user_frontier_refresh r on r.user_id = e.user_id
       where u.status = 'active'
-      order by e.committed_at asc
+        and (r.refreshed_at is null or r.refreshed_at < ?)
+      order by (p.user_id is null) desc, coalesce(r.refreshed_at, e.committed_at) asc
       limit ?`,
   });
 
@@ -773,6 +906,9 @@ export async function putFrontierCover(
       },
       method: "PUT",
     });
+    // A real Spotify write fired — record it into the shared meter so the background cover
+    // drain draws on the same budget as the mint + refresh (a 401/403 still spent the call).
+    await recordSpotifyCall(nowMs);
 
     // A missing scope is the EXPECTED state until the operator re-auths — a clean,
     // logged degrade, not a fault. Spotify answers 403 (and, for some token states,

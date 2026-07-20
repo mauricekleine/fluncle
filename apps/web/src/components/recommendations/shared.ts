@@ -93,12 +93,14 @@ export const FRONTIER_CLOSED: FrontierState = { mintingOpen: false };
 
 /**
  * The outcome of `POST /me/frontier-playlist`, folded to what the surface renders next.
- * Slice A decoupled the edition write from the Spotify mirror, so the status is one of four:
+ * Slice A decoupled the edition write from the Spotify mirror, so the status is one of five:
  * `edition_only` (the edition was born, the Spotify half is dark), `minted`/`refreshed` (the
- * mirror ran), or `unchanged` (nothing moved). There is no `switch_off` any more — a closed
- * kill switch is a clean `edition_only`, never a no-op.
+ * mirror ran), `unchanged` (nothing moved), or `building` (the edition was born, but the shared
+ * per-app Spotify budget was spent, so the playlist write was DEFERRED to the paced sweep — the
+ * user waits a beat, never a 429). There is no `switch_off` any more — a closed kill switch is a
+ * clean `edition_only`, never a no-op.
  */
-export type FrontierMintStatus = "edition_only" | "minted" | "refreshed" | "unchanged";
+export type FrontierMintStatus = "building" | "edition_only" | "minted" | "refreshed" | "unchanged";
 
 export type FrontierMintResult =
   | { kind: "closed" }
@@ -163,6 +165,7 @@ export function foldFrontierMint(input: {
   const status = input.body.status;
 
   if (
+    status === "building" ||
     status === "edition_only" ||
     status === "minted" ||
     status === "refreshed" ||
@@ -180,12 +183,16 @@ export function foldFrontierMint(input: {
 
 /**
  * The toast a "Get playlist" click surfaces, by outcome. `minted`/`refreshed`/`unchanged`
- * reuse the mirror's existing lines verbatim; `edition_only` (minting dark — the current
- * reality) confirms the set is saved and the Spotify playlist follows when the operator opens
- * the mirror. Chrome register: literal, no "edition/refresh-the-engine" vocabulary.
+ * reuse the mirror's existing lines verbatim; `edition_only` (minting dark) confirms the set
+ * is saved and the Spotify playlist follows when the operator opens the mirror; `building`
+ * (minting open, but the shared Spotify budget was spent) confirms the save and tells the
+ * reader the playlist is on its way — a reassuring wait, never an error. Chrome register:
+ * literal, no "edition/refresh-the-engine" vocabulary.
  */
 export function mintToastMessage(status: FrontierMintStatus): string {
   switch (status) {
+    case "building":
+      return "Saved. Your Spotify playlist is on its way.";
     case "edition_only":
       return "Saved. Your Spotify playlist follows soon.";
     case "minted":
