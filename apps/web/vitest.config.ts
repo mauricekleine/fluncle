@@ -29,7 +29,10 @@ export default defineConfig({
       },
     },
     environment: "node",
-    include: ["src/**/*.test.{ts,tsx}"],
+    // `src/**` is the app; `scripts/**` lets a standalone script (e.g. the
+    // post-deploy probe) carry a focused unit test for its pure logic. Coverage
+    // stays scoped to `src/**` (above), so a script's lines never move the floor.
+    include: ["src/**/*.test.{ts,tsx}", "scripts/**/*.test.{ts,tsx}"],
     // 20s (not vitest's 5s default): the first test in each admin oRPC file cold-imports
     // the whole ./orpc app graph (the router + every contract + the server modules) before
     // its first request, which can exceed 5s on a loaded Cloudflare build box — a false-fail
