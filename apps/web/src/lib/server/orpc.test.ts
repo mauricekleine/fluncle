@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { SENTRY_RELEASE } from "../sentry-config";
 import { get, MIXTAPE, readJson, TRACK } from "./orpc-test-kit";
 
 // The proof route + the rails seam. `resolveLogPageTarget` is mocked — the
@@ -148,13 +149,19 @@ describe("oRPC proof route — GET /tracks/{idOrLogId} (get_track)", () => {
 });
 
 describe("oRPC public read — GET /health (get_health)", () => {
-  it("serves the bare { ok: true } envelope with Cache-Control: no-store", async () => {
+  // `sha` = the deployed commit, sourced from the SAME build-time constant Sentry
+  // uses (SENTRY_RELEASE), so health and Sentry can never disagree. Asserting
+  // against that constant keeps the expectation coupled to the one source rather
+  // than a hardcoded value: `null` when the build resolved no SHA, else the string.
+  const expectedSha = SENTRY_RELEASE ?? null;
+
+  it("serves { ok: true, sha } with Cache-Control: no-store", async () => {
     const { handleOrpc } = await import("./orpc");
     const response = await handleOrpc(get("https://www.fluncle.com/api/v1/health"));
 
     expect(response?.status).toBe(200);
     expect(response?.headers.get("Cache-Control")).toBe("no-store");
-    expect(await readJson(response)).toEqual({ ok: true });
+    expect(await readJson(response)).toEqual({ ok: true, sha: expectedSha });
   });
 
   it("serves the same handler on the bare /api alias", async () => {
@@ -163,7 +170,7 @@ describe("oRPC public read — GET /health (get_health)", () => {
 
     expect(response?.status).toBe(200);
     expect(response?.headers.get("Cache-Control")).toBe("no-store");
-    expect(await readJson(response)).toEqual({ ok: true });
+    expect(await readJson(response)).toEqual({ ok: true, sha: expectedSha });
   });
 });
 

@@ -20,6 +20,7 @@
     "lint": "oxlint --type-aware",
     "postinstall": "fumadocs-mdx",
     "preview": "bun run build && wrangler dev",
+    "probe": "bun run scripts/post-deploy-probe.ts",
     "pretypecheck": "fumadocs-mdx",
     "r2:cors": "wrangler r2 bucket cors set fluncle-videos --file r2-cors.json",
     "smoke:browser": "bun run smoke:shell && bun run smoke:queue && bun run smoke:touch",
