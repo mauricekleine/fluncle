@@ -8,9 +8,9 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+  ASSIGNED_REGISTER,
   assignGrain,
   assignPaletteAvoid,
-  assignRegister,
   BAKED_GRAIN_FAMILIES,
   computeAssignment,
   type LedgerEntry,
@@ -81,59 +81,19 @@ describe("assignGrain — LRU excluding the last 3", () => {
   });
 });
 
-describe("assignRegister — largest deficit vs target", () => {
-  test("the collapse case (all representational) assigns abstract or framed", () => {
-    // 24/26 representational → the recent window is all representational.
-    const entries = Array.from({ length: 12 }, () =>
+describe("register — representational is a prerequisite (operator ruling 2026-07-20)", () => {
+  test("every assignment is representational regardless of the recent window", () => {
+    // The register rotation is retired: an abstract-heavy window, a representational-heavy
+    // window, and an empty ledger all assign representational. Diversity lives in the
+    // grain / palette / plate-subject axes, which vary WITHIN the register.
+    const abstractHeavy = Array.from({ length: 12 }, () => entry("grainDither", "abstract"));
+    const repHeavy = Array.from({ length: 12 }, () =>
       entry("grainFineEmulsion", "representational"),
     );
-    const register = assignRegister(entries);
-    expect(["abstract", "framed"]).toContain(register);
-    // Framed has the larger non-representational target (0.20 > 0.15 after the
-    // 2026-07-20 TikTok retune), so the larger deficit → framed.
-    expect(register).toBe("framed");
-  });
-
-  test("fills the most-starved register", () => {
-    // A window heavy on abstract + representational, none framed → framed is most starved.
-    const entries = [
-      entry("g", "abstract"),
-      entry("g", "representational"),
-      entry("g", "abstract"),
-      entry("g", "representational"),
-      entry("g", "abstract"),
-      entry("g", "representational"),
-    ];
-    expect(assignRegister(entries)).toBe("framed");
-  });
-
-  test("empty ledger picks the highest-target register (representational)", () => {
-    // Zero window: deficit = target * 0 - 0 = 0 for all; ties break by REGISTERS order
-    // (abstract first). With no neighbour, the order tiebreak stands.
-    expect(assignRegister([])).toBe("abstract");
-  });
-
-  test("tie breaks toward what the immediate neighbour is NOT", () => {
-    // Construct a genuine deficit tie between two registers and check the neighbour tiebreak.
-    // Targets are pinned explicitly — this test exercises the tiebreak MECHANICS, not the
-    // tunable default weights. With rep .45 abstract .35 framed .20 → target counts
-    // 4.5/3.5/2.0; actual rep 4, abstract 3, framed 2 (9 entries) leaves deficits rep .5,
-    // abstract .5, framed 0 — rep & abstract tie. Immediate neighbour = representational,
-    // so pick abstract.
-    const entries = [
-      entry("g", "representational"), // immediate neighbour
-      entry("g", "representational"),
-      entry("g", "representational"),
-      entry("g", "representational"),
-      entry("g", "abstract"),
-      entry("g", "abstract"),
-      entry("g", "abstract"),
-      entry("g", "framed"),
-      entry("g", "framed"),
-    ];
-    expect(assignRegister(entries, { abstract: 0.35, framed: 0.2, representational: 0.45 })).toBe(
-      "abstract",
-    );
+    expect(computeAssignment(abstractHeavy).register).toBe("representational");
+    expect(computeAssignment(repHeavy).register).toBe("representational");
+    expect(computeAssignment([]).register).toBe("representational");
+    expect(ASSIGNED_REGISTER).toBe("representational");
   });
 });
 

@@ -40,22 +40,15 @@ export const BAKED_GRAIN_FAMILIES = [
 // immediate neighbourhood's grain). Among the rest, the least-recently-used wins.
 const GRAIN_RECENT_WINDOW = 3;
 
-// The register quota — retuned 2026-07-20 on the operator's TikTok read: the
-// representational renders (the plate-lane pieces with real shapes, figures,
-// artifacts) consistently outperform, abstract consistently underperforms. So
-// representational is the strong default and abstract/framed keep REAL floors —
-// the 07-14 anti-collapse purpose stands (never back to 92% one-register), the
-// split just follows the audience now. Not taste law — the operator retunes by
-// editing here (or the FLUNCLE_VIDEO_REGISTER_TARGETS env override). Must sum to 1.
-export const DEFAULT_REGISTER_TARGETS: Record<VideoRegister, number> = {
-  abstract: 0.15,
-  framed: 0.2,
-  representational: 0.65,
-};
-
-// The register decision looks back over this many renders (a wider window than grain — a
-// register drifts over a longer arc, and the collapse was measured over ~dozens).
-const REGISTER_WINDOW = 12;
+// The register — RETIRED from rotation by operator ruling 2026-07-20: representational
+// is a PREREQUISITE, not a quota. The TikTok read is unambiguous (the plate-lane pieces
+// with real shapes, figures, artifacts consistently outperform; abstract consistently
+// underperforms — "when it's lacking, we're back to the videos we used to render"), so
+// every render stages a presence. Diversity now lives entirely in the grain family, the
+// palette-avoid directive, the plate subject-kind rotation (judge:diversity enforces it),
+// and the vehicle — the axes that vary WITHIN representational. The 07-14 anti-collapse
+// quota this replaces is preserved in git history should the ruling ever soften.
+export const ASSIGNED_REGISTER: VideoRegister = "representational";
 
 // The palette-avoid directive looks at this many recent renders.
 const PALETTE_RECENT_WINDOW = 3;
@@ -63,7 +56,6 @@ const PALETTE_RECENT_WINDOW = 3;
 // ── Types ───────────────────────────────────────────────────────────────────────────────
 
 export type VideoRegister = "abstract" | "representational" | "framed";
-export const REGISTERS: readonly VideoRegister[] = ["abstract", "representational", "framed"];
 
 /** One vehicles-ledger entry, as `fluncle admin tracks vehicles --json` emits it. All
  *  fields optional/loose — the ledger is a public read and older rows omit newer axes. */
@@ -151,59 +143,6 @@ export function assignGrain(entries: LedgerEntry[]): string {
   return best;
 }
 
-// ── Register: largest deficit vs target over the last REGISTER_WINDOW ────────────────────
-
-function asRegister(value: unknown): VideoRegister | null {
-  return typeof value === "string" && (REGISTERS as readonly string[]).includes(value)
-    ? (value as VideoRegister)
-    : null;
-}
-
-/**
- * The register carrying the largest DEFICIT against its target share over the last
- * REGISTER_WINDOW renders. Deficit = target_count − actual_count, where
- * target_count = target_share × window_size. The collapse case (24/26 representational →
- * the recent window is all representational) yields a large positive deficit for BOTH
- * abstract and framed and a negative one for representational, so the pick is abstract or
- * framed — exactly the swing the evidence demands. Ties break toward whatever the
- * immediate neighbour is NOT, then by REGISTERS order.
- */
-export function assignRegister(
-  entries: LedgerEntry[],
-  targets = DEFAULT_REGISTER_TARGETS,
-): VideoRegister {
-  const window = entries
-    .slice(0, REGISTER_WINDOW)
-    .map((e) => asRegister(e.register))
-    .filter((r): r is VideoRegister => r !== null);
-  const windowSize = window.length;
-
-  const actual: Record<VideoRegister, number> = { abstract: 0, framed: 0, representational: 0 };
-  for (const r of window) {
-    actual[r] += 1;
-  }
-
-  // The immediate neighbour's register (newest entry that declares one) — the tiebreak.
-  const neighbour = entries.map((e) => asRegister(e.register)).find((r) => r !== null) ?? null;
-
-  const deficitOf = (r: VideoRegister): number => targets[r] * windowSize - actual[r];
-
-  let best: VideoRegister = REGISTERS[0];
-  for (const r of REGISTERS) {
-    const d = deficitOf(r);
-    const bd = deficitOf(best);
-    if (d > bd) {
-      best = r;
-    } else if (d === bd && r !== best) {
-      // Tie: prefer whichever is NOT the immediate neighbour; else keep REGISTERS order.
-      if (best === neighbour && r !== neighbour) {
-        best = r;
-      }
-    }
-  }
-  return best;
-}
-
 // ── Palette: a negative directive from what is worn ─────────────────────────────────────
 
 /** The most-repeated non-null value in a list, plus its count. */
@@ -260,14 +199,11 @@ export function assignPaletteAvoid(entries: LedgerEntry[]): string | null {
 
 // ── Compose ─────────────────────────────────────────────────────────────────────────────
 
-export function computeAssignment(
-  entries: LedgerEntry[],
-  targets = DEFAULT_REGISTER_TARGETS,
-): Assignment {
+export function computeAssignment(entries: LedgerEntry[]): Assignment {
   return {
     grain: assignGrain(entries),
     paletteAvoid: assignPaletteAvoid(entries),
-    register: assignRegister(entries, targets),
+    register: ASSIGNED_REGISTER,
   };
 }
 
