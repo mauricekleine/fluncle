@@ -360,7 +360,7 @@ describe("FindingsGrid render contract (the band the artist page now delegates t
     expect(html).not.toContain('class="artist-grid"');
   });
 
-  it("still renders the cover grid, each cover a /log link, when findings exist", async () => {
+  it("still renders the cover grid, each cover a /log link, under a visible curator heading, when findings exist", async () => {
     const html = await renderFindingsGrid([
       {
         albumImageUrl: "https://i.scdn.co/image/cover",
@@ -373,5 +373,9 @@ describe("FindingsGrid render contract (the band the artist page now delegates t
 
     expect(html).toContain('class="artist-grid"');
     expect(html).toContain("/log/001.1.1A");
+    // The findings block is now titled (DESIGN.md mixed-list carve-out): a VISIBLE curator
+    // heading, wired as the grid's accessible name via aria-labelledby (no duplicate aria-label).
+    expect(html).toContain("Recommended by Fluncle");
+    expect(html).toContain('aria-labelledby="findings-grid-heading"');
   });
 });

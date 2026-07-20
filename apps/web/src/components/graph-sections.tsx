@@ -93,10 +93,14 @@ export function graphPageTracks(
 }
 
 /**
- * The findings band: the cover grid that LEADS every graph page. Only coordinate-bearing
- * findings render (the grid is a grid of log links).
+ * The findings band: the cover grid that LEADS every graph page, under a VISIBLE section
+ * heading (the reference-register curator label — "Recommended by Fluncle"). Only
+ * coordinate-bearing findings render (the grid is a grid of log links). The heading is
+ * permitted here by DESIGN.md's mixed-list carve-out: a findings block MAY be introduced,
+ * because a finding is a named object. That carve-out stops at this band — the uncertified
+ * quieter rows below stay unheaded and unnamed (UnlitTracks, the unnamed tier).
  *
- * An entity with none renders NOTHING here — no grid, no heading, no empty state. It used
+ * An entity with none renders NOTHING here — no heading, no grid, no empty state. It used
  * to print "Quiet sector." and that line is exactly what made a crawler-discovered label
  * read as a doorway page: an apology for the absent half, sitting above the half that is
  * actually there. A page with no findings is not a broken findings page; it is a page about
@@ -107,7 +111,7 @@ export function FindingsGrid({
   label,
 }: {
   findings: TrackListItem[];
-  /** The list's accessible name, e.g. "Findings on Hospital Records". */
+  /** The visible section heading over the grid, e.g. "Recommended by Fluncle". Also the grid's accessible name (via `aria-labelledby`). */
   label: string;
 }) {
   const grid = findings.filter((finding) => finding.logId);
@@ -117,29 +121,34 @@ export function FindingsGrid({
   }
 
   return (
-    <ul aria-label={label} className="artist-grid">
-      {grid.map((finding) =>
-        finding.logId ? (
-          <li key={finding.trackId}>
-            <Link params={{ logId: finding.logId }} to="/log/$logId">
-              {/* The rung matches the SLOT, not the master: this grid's columns are
+    <section className="artist-findings">
+      <p className="artist-similar-label" id="findings-grid-heading">
+        {label}
+      </p>
+      <ul aria-labelledby="findings-grid-heading" className="artist-grid">
+        {grid.map((finding) =>
+          finding.logId ? (
+            <li key={finding.trackId}>
+              <Link params={{ logId: finding.logId }} to="/log/$logId">
+                {/* The rung matches the SLOT, not the master: this grid's columns are
                   `minmax(6.5rem, 1fr)` inside a 44rem plate, so a cover renders around 104–120 CSS
                   px and wants ~240 device px on a 2× screen. The 300 rung covers that with room;
                   the 640 one this used to ask for was ~8× the pixels a tile can show, on a page
                   whose whole HTML is 11 KB (43 KB → 10 KB per cover, measured on /album/addicted).
                   The `large` rung still rides og:image + the JSON-LD, where the consumer is a
                   crawler's full-size card rather than a tile. */}
-              <TrackArtwork
-                alt=""
-                className="artist-grid-cover"
-                src={albumCoverAtSize(finding.albumImageUrl, "medium")}
-              />
-              <span className="artist-grid-line">{artistTitleLine(finding)}</span>
-            </Link>
-          </li>
-        ) : null,
-      )}
-    </ul>
+                <TrackArtwork
+                  alt=""
+                  className="artist-grid-cover"
+                  src={albumCoverAtSize(finding.albumImageUrl, "medium")}
+                />
+                <span className="artist-grid-line">{artistTitleLine(finding)}</span>
+              </Link>
+            </li>
+          ) : null,
+        )}
+      </ul>
+    </section>
   );
 }
 

@@ -1973,6 +1973,20 @@ body::before {
   text-transform: uppercase;
 }
 
+/* The findings LEAD band on a graph page (artist/album/label): the visible curator
+   heading ("Recommended by Fluncle") over the cover grid, grouped into ONE plate row so
+   the plate's grid gap owns the separation from the masthead and the heading stays tight
+   to its grid. The heading's LOOK is the shared .artist-similar-label; this band only owns
+   its internal layout (the DESIGN.md mixed-list carve-out: a findings block may be titled). */
+.artist-findings {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.artist-findings .artist-similar-label {
+  margin-bottom: 0;
+}
+
 /* The Instagram-style cover grid of findings (artist page + /artists index):
    square covers, tight gutters, dark and cover-led — a Fluncle grid, not a
    streaming clone. Reuses the .track-artwork treatment on each cover. */
