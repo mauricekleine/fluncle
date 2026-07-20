@@ -1656,6 +1656,21 @@ body::before {
   gap: 0.6rem;
 }
 
+/* The trail handoff: a quiet block that hands the arriving reader the way onward
+   from a single finding — the whole run (the Spotify playlist) and the mothership
+   (the Friday newsletter). It rides the plate flow with no banner and no gradient;
+   the lede reads like the rest of the plate's prose, the buttons reuse .log-actions. */
+.log-trail {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.log-trail-lede {
+  color: var(--stardust);
+  font-size: 0.95rem;
+  line-height: 1.55;
+}
+
 .log-decode {
   color: var(--stardust);
   display: grid;
