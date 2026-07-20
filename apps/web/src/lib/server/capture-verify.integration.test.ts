@@ -92,7 +92,14 @@ describe("verifyCapture — the verdict routing", () => {
   });
 
   it("QUARANTINES a catalogue MISMATCH: rewound, sha remembered, back in the capture queue", async () => {
-    await seedCatalogueTrack(db, { trackId: "cat_wrong" });
+    // A captured row was AUTHORIZED when it was bought (RFC artist-primary-capture, slice 1); seed
+    // it on an enabled label so the re-derived pre-audio tier keeps it in the capture queue.
+    await db.execute({
+      args: ["lbl-seed", "Critical Music", "critical-music", "enabled"],
+      sql: `insert into labels (id, name, slug, seed_state, created_at, updated_at)
+            values (?, ?, ?, ?, '2026-07-01T00:00:00.000Z', '2026-07-01T00:00:00.000Z')`,
+    });
+    await seedCatalogueTrack(db, { label: "Critical Music", trackId: "cat_wrong" });
     await capture("cat_wrong", SHA);
     await embed("cat_wrong");
 
@@ -101,10 +108,10 @@ describe("verifyCapture — the verdict routing", () => {
     const row = await readRow("cat_wrong");
 
     // The wrong-audio rewind: status flipped, the poisoned vector dropped, the pre-audio tier
-    // re-derived (a plain row lands 0 — back on the capture ladder for a fresh download).
+    // re-derived (its enabled label lands tier 1 — back on the capture ladder for a fresh download).
     expect(row.capture_status).toBe(WRONG_AUDIO_STATUS);
     expect(row.embedding_blob).toBeNull();
-    expect(row.capture_priority).toBe(0);
+    expect(row.capture_priority).toBe(1);
     // The verdict IS kept on the quarantined row — the lens's honest WHY (a preview mismatch, not
     // an archive collision); the fresh capture's ingest gate overwrites it when the re-download lands.
     expect(row.capture_verification).toBe("mismatch");

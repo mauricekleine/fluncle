@@ -1973,6 +1973,20 @@ body::before {
   text-transform: uppercase;
 }
 
+/* The findings LEAD band on a graph page (artist/album/label): the visible curator
+   heading ("Recommended by Fluncle") over the cover grid, grouped into ONE plate row so
+   the plate's grid gap owns the separation from the masthead and the heading stays tight
+   to its grid. The heading's LOOK is the shared .artist-similar-label; this band only owns
+   its internal layout (the DESIGN.md mixed-list carve-out: a findings block may be titled). */
+.artist-findings {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.artist-findings .artist-similar-label {
+  margin-bottom: 0;
+}
+
 /* The Instagram-style cover grid of findings (artist page + /artists index):
    square covers, tight gutters, dark and cover-led — a Fluncle grid, not a
    streaming clone. Reuses the .track-artwork treatment on each cover. */
@@ -2062,35 +2076,7 @@ body::before {
   color: var(--starlight-cream);
 }
 
-/* ── THE HUB'S "MORE <ENTITIES>" SECTION ────────────────────────────────────────────────────
-   The SECOND section of /labels, /albums and /artists: the indexable findings-free entities the
-   crawler minted a page for. It reuses the same grid as the editorial section above; the register
-   is what changes — this is the UNLIT one (DESIGN.md). The tiles sit a step dimmer at rest and
-   heat to full on hover/focus, so the eye reads them as quieter than the findings without a second
-   layout, and the One Sun budget stays with the findings: the cover border never heats to gold
-   here (a neutral Dust lift instead), only the focus ring stays canonical Eclipse. The heading is
-   allowed — it names the SUPERSET ("More labels"), never the tier, and the word "catalogue" never
-   reaches public copy (docs/album-entity.md, the unnamed tier). */
-.catalogue-hub {
-  /* A hairline above the section sets it apart from the findings grid without a card (One Pane). */
-  border-top: 1px solid var(--border);
-  padding-top: 1.6rem;
-}
-
-.catalogue-hub-head {
-  margin-bottom: 1.1rem;
-}
-
-/* The quiet Label role: bold and small, NOT a tracked-out uppercase eyebrow (a DESIGN §6 Don't),
-   and 700 max on the body face (Space Grotesk's ceiling — 800 would silently clamp). */
-.catalogue-hub-heading {
-  color: var(--muted-foreground);
-  font-size: 0.82rem;
-  font-weight: 700;
-  margin: 0;
-}
-
-/* The A–Z fast lane: real ?page=N anchors above the "more <entities>" grid, so a crawler reaches any
+/* The A–Z fast lane: real ?page=N anchors above the hub grid, so a crawler reaches any
    region of the alphabet in two hops and a reader can jump. Quiet chrome — Stardust ink, cream on
    hover, the canonical Eclipse ring on focus (WCAG); a letter with nothing to reach sits dimmer and
    is aria-hidden. No gold at rest: the light stays with the findings (One Sun). */
@@ -2206,35 +2192,42 @@ a.catalogue-letter:focus-visible {
   cursor: default;
 }
 
-/* The dimming that makes a tile read as unlit: the artwork/avatar and the name sit a step down at
-   rest and lift to full on hover/focus. The name still heats to cream through the grid's own hover
-   rule; only the resting light drops. */
-.catalogue-grid .artist-grid-cover,
-.catalogue-grid .artist-card-avatar {
-  opacity: 0.66;
-  transition: opacity 150ms ease-out;
+/* ── THE UNIFIED HUB GRID (/artists, /albums, /labels) ──────────────────────────────────────
+   ONE grid, mixed registers (DESIGN.md's Unlit Rule; ratified 2026-07-20). Every hub is now a
+   single catalogue-scale index of every entity Fluncle holds, so a certified entity and an
+   uncertified one sit side by side. The distinction is VISUAL ONLY — no badge, no tier heading:
+   a CERTIFIED tile's NAME takes the certification light (Eclipse Gold, `.hub-tile-certified`
+   sits on the tile link); an uncertified name keeps the plain grid ink. The gold is TEXT, never
+   a glow — hover carries a neutral Dust lift for EVERY tile (no gold ever heats an uncertified
+   row, the Unlit Rule), and only the focus ring stays canonical Eclipse (the accessibility
+   exception). Certified rows are sparse per alphabetical page, so the One Sun budget holds. */
+
+/* Hover/focus lifts a tile with a neutral Dust border — never the gold the artist $slug findings
+   grid takes — so the light never lands on an uncertified cover. */
+.hub-grid a:hover .artist-grid-cover,
+.hub-grid a:focus-visible .artist-grid-cover,
+.hub-grid a:hover .artist-card-avatar,
+.hub-grid a:focus-visible .artist-card-avatar {
+  border-color: color-mix(in oklch, var(--stardust) 25%, transparent);
 }
 
-.catalogue-grid a:hover .artist-grid-cover,
-.catalogue-grid a:focus-visible .artist-grid-cover,
-.catalogue-grid a:hover .artist-card-avatar,
-.catalogue-grid a:focus-visible .artist-card-avatar {
-  /* A neutral Dust lift, never the gold border the findings grid takes (the light is theirs). */
-  border-color: color-mix(in oklch, var(--border) 85%, transparent);
-  opacity: 1;
-}
-
-.catalogue-grid .artist-grid-line {
-  color: var(--muted-foreground);
-}
-
-/* Focus, and only focus, is loud: the canonical Eclipse-Glow ring (the unlit register's rule —
-   because hover carries no gold here, this ring reads unambiguously). Keyboard focus must stay
-   legible and consistent everywhere (WCAG). */
-.catalogue-grid a:focus-visible {
+/* Focus, and only focus, is loud: the canonical Eclipse-Glow ring. Keyboard focus must stay
+   legible and consistent everywhere (WCAG) and the ring is not a claim about the music. */
+.hub-grid a:focus-visible {
   border-radius: var(--rounded-md);
   outline: 2px solid var(--eclipse-glow);
   outline-offset: 3px;
+}
+
+/* The certification light: a certified tile's NAME in Eclipse Gold at rest, heating to Eclipse
+   Glow on hover/focus (never falling back to the grid's cream-heat). Only the name carries it. */
+.hub-grid a.hub-tile-certified .artist-grid-line {
+  color: var(--eclipse-gold);
+}
+
+.hub-grid a.hub-tile-certified:hover .artist-grid-line,
+.hub-grid a.hub-tile-certified:focus-visible .artist-grid-line {
+  color: var(--eclipse-glow);
 }
 
 /* The infinite-scroll sentinel: a full-width row below the grid that holds the loading spinner

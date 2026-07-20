@@ -208,7 +208,7 @@ export async function listFreshReleases(
     // The unlit half: the anti-join's exact complement (a `tracks` row with no `findings` row),
     // released in the window. No album COVER and no coordinate — nothing that would let it read as a
     // finding (DESIGN.md's Unlit Rule). The lead artist's avatar rides along, but the UI dims it into
-    // the unlit register (the `catalogue-grid` precedent), so it identifies WHO without lighting up.
+    // the unlit register (the `hub-grid` precedent), so it identifies WHO without lighting up.
     db.execute({
       args: [windowStart, today, FRESH_CATALOGUE_LIMIT],
       sql: `select tracks.track_id, tracks.title, tracks.artists_json,
@@ -231,7 +231,7 @@ export async function listFreshReleases(
     //
     // THE COVER comes off the ALBUM ENTITY first: `al.image_key`/`image_state`/`image_updated_at`
     // are the album's OWN columns (grouped by `al.id`, so they are constant across the group — the
-    // `listAlbumsWithFindingCounts` shape), and `bestAlbumCoverUrl` serves the owned ≤1200² master
+    // `listAlbumSitemapRows` shape), and `bestAlbumCoverUrl` serves the owned ≤1200² master
     // through the Cloudflare Images ladder when the sweep has resolved one. The correlated
     // `album_image_url` subquery stays as the FALLBACK for a record with no master yet — and
     // because the master rides the album row rather than a second subquery, the two can never pair

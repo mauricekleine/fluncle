@@ -261,7 +261,7 @@ describe("the label page", () => {
     getLabelBySlug.mockResolvedValue(LABEL);
     const withoutBio = await resolveLabelPageData("hospital-records", "name", 1);
     expect(labelMetaDescription(withoutBio)).toBe(
-      "Every banger Fluncle has found on Hospital Records and logged in the Galaxy, 1 so far, each with a coordinate.",
+      "Drum & bass tracks on Hospital Records that Fluncle recommends, 1 so far, with the artists behind them.",
     );
   });
 

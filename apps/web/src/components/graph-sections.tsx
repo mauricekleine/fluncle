@@ -93,23 +93,27 @@ export function graphPageTracks(
 }
 
 /**
- * The findings band: the cover grid that LEADS every graph page. Only coordinate-bearing
- * findings render (the grid is a grid of log links).
+ * The catalogue-register curator heading over the findings block — fixed, and folded into the
+ * component (not a prop) so no call site can reintroduce an entity-named title ("Findings on X").
+ * The lore-area surfaces carry the archive's own cosmos name; a catalogue/entity page reads plainly
+ * (VOICE.md Three Areas; DESIGN.md Unlit Rule mixed-list carve-out, operator-ratified 2026-07-20).
+ */
+const FINDINGS_HEADING = "Recommended by Fluncle";
+
+/**
+ * The findings band: the cover grid that LEADS every graph page, under a VISIBLE section heading
+ * ("Recommended by Fluncle"). Only coordinate-bearing findings render (the grid is a grid of log
+ * links). The heading is permitted here by DESIGN.md's mixed-list carve-out: a findings block MAY
+ * be introduced, because a finding is a named object. That carve-out stops at this band — the
+ * uncertified quieter rows below stay unheaded and unnamed (UnlitTracks, the unnamed tier).
  *
- * An entity with none renders NOTHING here — no grid, no heading, no empty state. It used
+ * An entity with none renders NOTHING here — no heading, no grid, no empty state. It used
  * to print "Quiet sector." and that line is exactly what made a crawler-discovered label
  * read as a doorway page: an apology for the absent half, sitting above the half that is
  * actually there. A page with no findings is not a broken findings page; it is a page about
  * something else.
  */
-export function FindingsGrid({
-  findings,
-  label,
-}: {
-  findings: TrackListItem[];
-  /** The list's accessible name, e.g. "Findings on Hospital Records". */
-  label: string;
-}) {
+export function FindingsGrid({ findings }: { findings: TrackListItem[] }) {
   const grid = findings.filter((finding) => finding.logId);
 
   if (grid.length === 0) {
@@ -117,29 +121,36 @@ export function FindingsGrid({
   }
 
   return (
-    <ul aria-label={label} className="artist-grid">
-      {grid.map((finding) =>
-        finding.logId ? (
-          <li key={finding.trackId}>
-            <Link params={{ logId: finding.logId }} to="/log/$logId">
-              {/* The rung matches the SLOT, not the master: this grid's columns are
+    <section className="artist-findings">
+      {/* A real H2 (styled by .artist-similar-label) so the visible section heading joins the page
+          outline — H1 (entity) → H2 (this) → the sibling H2s. Its `aria-labelledby` names the grid. */}
+      <h2 className="artist-similar-label" id="findings-grid-heading">
+        {FINDINGS_HEADING}
+      </h2>
+      <ul aria-labelledby="findings-grid-heading" className="artist-grid">
+        {grid.map((finding) =>
+          finding.logId ? (
+            <li key={finding.trackId}>
+              <Link params={{ logId: finding.logId }} to="/log/$logId">
+                {/* The rung matches the SLOT, not the master: this grid's columns are
                   `minmax(6.5rem, 1fr)` inside a 44rem plate, so a cover renders around 104–120 CSS
                   px and wants ~240 device px on a 2× screen. The 300 rung covers that with room;
                   the 640 one this used to ask for was ~8× the pixels a tile can show, on a page
                   whose whole HTML is 11 KB (43 KB → 10 KB per cover, measured on /album/addicted).
                   The `large` rung still rides og:image + the JSON-LD, where the consumer is a
                   crawler's full-size card rather than a tile. */}
-              <TrackArtwork
-                alt=""
-                className="artist-grid-cover"
-                src={albumCoverAtSize(finding.albumImageUrl, "medium")}
-              />
-              <span className="artist-grid-line">{artistTitleLine(finding)}</span>
-            </Link>
-          </li>
-        ) : null,
-      )}
-    </ul>
+                <TrackArtwork
+                  alt=""
+                  className="artist-grid-cover"
+                  src={albumCoverAtSize(finding.albumImageUrl, "medium")}
+                />
+                <span className="artist-grid-line">{artistTitleLine(finding)}</span>
+              </Link>
+            </li>
+          ) : null,
+        )}
+      </ul>
+    </section>
   );
 }
 
@@ -158,7 +169,7 @@ export function ArtistChips({ artists, title }: { artists: ArtistChip[]; title: 
 
   return (
     <nav aria-label={title} className="artist-similar">
-      <p className="artist-similar-label">{title}</p>
+      <h2 className="artist-similar-label">{title}</h2>
       <ul className="artist-similar-list">
         {artists.map((artist) => (
           <li key={artist.slug}>

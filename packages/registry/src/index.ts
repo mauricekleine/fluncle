@@ -357,6 +357,7 @@ export const SURFACES: readonly Surface[] = [
   {
     discoveryUrl: `${SITE}/llms.txt`,
     exposedContent: [
+      "/artists — one A–Z index of every drum & bass artist Fluncle holds",
       "/artist/:slug — one artist's page: its findings, its identity links, and the rest of its catalogue",
     ],
     kind: "web_route",
@@ -370,13 +371,13 @@ export const SURFACES: readonly Surface[] = [
   {
     discoveryUrl: `${SITE}/llms.txt`,
     exposedContent: [
-      "/labels — every record label Fluncle has found a banger on",
+      "/labels — one A–Z index of every drum & bass record label Fluncle holds",
       "/label/:slug — one label: its findings, the artists on it, and the rest of its catalogue",
     ],
     kind: "web_route",
     name: "web.labels",
     operatorNotes:
-      "The label half of the graph (log ↔ artist ↔ label ↔ album). The INDEX is probeable (always 200); the slug page is not, so the probe targets /labels. A label below the renderable-track floor renders noindex + stays out of the sitemap (the ARTIST_INDEX_MIN_FINDINGS precedent). The page is BLIND to the label's crawl seed_state — that is crawl scope, never storage (docs/label-entity.md); the operator's ruling station is /admin/labels.",
+      "The label half of the graph (log ↔ artist ↔ label ↔ album). The INDEX is probeable (always 200); the slug page is not, so the probe targets /labels. /labels is ONE unified A–Z index of every label Fluncle holds (certified lit, catalogue unlit), paged behind ?page=N. A label below the renderable-track floor renders noindex + stays out of the sitemap (the ARTIST_INDEX_MIN_FINDINGS precedent). The page is BLIND to the label's crawl seed_state — that is crawl scope, never storage (docs/label-entity.md); the operator's ruling station is /admin/labels.",
     probeConfig: { cadenceMs: PROBE_CADENCE_MS, kind: "http", timeoutMs: PROBE_TIMEOUT_MS },
     route: "/labels",
     url: `${SITE}/labels`,
@@ -385,13 +386,13 @@ export const SURFACES: readonly Surface[] = [
   {
     discoveryUrl: `${SITE}/llms.txt`,
     exposedContent: [
-      "/albums — every record Fluncle has found a banger on",
+      "/albums — one alphabetical index of every drum & bass album Fluncle holds",
       "/album/:slug — one record: its findings, its artists, its label, and the rest of its tracklist",
     ],
     kind: "web_route",
     name: "web.albums",
     operatorNotes:
-      "The album half of the graph, and the node that closes it: the album page carries the album → label edge (a link, plus `albumRelease.recordLabel` in its MusicAlbum JSON-LD). The INDEX is probeable (always 200); the slug page is not. The `/albums` index stays archive-bounded (findings-joined), but a crawl-minted findings-free album is PUBLIC on its content — a row renders its page, a below-floor page renders noindex + stays out of the sitemap, like a discovered label (docs/album-entity.md).",
+      "The album half of the graph, and the node that closes it: the album page carries the album → label edge (a link, plus `albumRelease.recordLabel` in its MusicAlbum JSON-LD). The INDEX is probeable (always 200); the slug page is not. /albums is ONE unified alphabetical index of every record Fluncle holds (certified lit, catalogue unlit), paged behind ?page=N; a crawl-minted findings-free album is PUBLIC on its content — a row renders its page, a below-floor page renders noindex + stays out of the sitemap, like a discovered label (docs/album-entity.md).",
     probeConfig: { cadenceMs: PROBE_CADENCE_MS, kind: "http", timeoutMs: PROBE_TIMEOUT_MS },
     route: "/albums",
     url: `${SITE}/albums`,

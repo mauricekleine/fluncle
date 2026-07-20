@@ -285,17 +285,27 @@ describe("a label earns a page on its content, not on Fluncle's", () => {
     expect(data.findings.map((finding) => finding.logId)).toEqual(["004.7.2I"]);
   });
 
-  it("keeps the zero-finding label out of the /labels HUB — that list is Fluncle's own", async () => {
-    // The hub and the sitemap answer different questions, and this is the seam. `/labels` says
-    // "every label I've pulled a banger off", so a label he has certified nothing on is not on
-    // it and would be a lie if it were. The SITEMAP is the machine's complete map of pages that
-    // exist, and it DOES carry Metalheadz (asserted below). Narrower hub, complete sitemap.
-    const { listLabelsWithFindingCounts } = await import("./labels");
-    const entries = await listLabelsWithFindingCounts(1);
+  it("carries BOTH labels in the unified /labels index — certified lit, discovered unlit", async () => {
+    // The unified index (ratified 2026-07-20) is one catalogue-scale list of every label Fluncle
+    // holds: Hospital reads CERTIFIED (it carries a finding), Metalheadz reads uncertified but is IN
+    // — its 400 crawled rows clear the renderable floor. Alphabetical; the certification light rides
+    // the `certified` flag, never a heading. The tile counts RENDERABLE tracks (findings + catalogue).
+    const { listLabelsHubPage } = await import("./labels");
+    const entries = await listLabelsHubPage(1);
 
-    expect(entries.items.map((entry) => entry.slug)).toEqual(["hospital-records"]);
-    expect(entries.items[0]).toMatchObject({ findingCount: 1 });
-    expect(entries.total).toBe(1);
+    expect(
+      entries.items.map((entry) => ({ certified: entry.certified, slug: entry.slug })),
+    ).toEqual([
+      { certified: true, slug: "hospital-records" },
+      { certified: false, slug: "metalheadz" },
+    ]);
+    expect(entries.items.find((entry) => entry.slug === "hospital-records")?.trackCount).toBe(
+      1 + CROWDED_LABEL,
+    );
+    expect(entries.items.find((entry) => entry.slug === "metalheadz")?.trackCount).toBe(
+      DISCOVERED_LABEL,
+    );
+    expect(entries.total).toBe(2);
   });
 });
 

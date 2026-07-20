@@ -301,7 +301,7 @@ describe("resolveArtistPageData (the artist page indexability gate)", () => {
     getArtistBySlug.mockResolvedValue(ARTIST);
     const withoutBio = await resolveArtistPageData("drift", "name", 1);
     expect(metaDescription(withoutBio)).toBe(
-      "Every Drift banger Fluncle has found and logged in the Galaxy, 1 so far, each with a coordinate.",
+      "Drum & bass tracks by Drift that Fluncle recommends, 1 so far, with the labels and releases behind them.",
     );
   });
 });
@@ -339,8 +339,7 @@ describe("FindingsGrid render contract (the band the artist page now delegates t
   /** SSR FindingsGrid through a router (its <Link> needs one), returning the static HTML. */
   async function renderFindingsGrid(findings: unknown[]): Promise<string> {
     const rootRoute = createRootRoute({
-      component: () =>
-        createElement(FindingsGrid, { findings, label: "Findings featuring Drift" } as never),
+      component: () => createElement(FindingsGrid, { findings } as never),
     });
     // The band's covers link to /log/$logId — the router needs the route so Link builds the href.
     const logRoute = createRoute({ getParentRoute: () => rootRoute, path: "/log/$logId" });
@@ -360,7 +359,7 @@ describe("FindingsGrid render contract (the band the artist page now delegates t
     expect(html).not.toContain('class="artist-grid"');
   });
 
-  it("still renders the cover grid, each cover a /log link, when findings exist", async () => {
+  it("still renders the cover grid, each cover a /log link, under a visible curator heading, when findings exist", async () => {
     const html = await renderFindingsGrid([
       {
         albumImageUrl: "https://i.scdn.co/image/cover",
@@ -373,5 +372,11 @@ describe("FindingsGrid render contract (the band the artist page now delegates t
 
     expect(html).toContain('class="artist-grid"');
     expect(html).toContain("/log/001.1.1A");
+    // The findings block is titled (DESIGN.md mixed-list carve-out): a VISIBLE curator heading,
+    // a real H2 (page outline), wired as the grid's accessible name via aria-labelledby. The
+    // string is folded into the component (no `label` prop), so it can't drift per call site.
+    expect(html).toContain("Recommended by Fluncle");
+    expect(html).toMatch(/<h2[^>]*id="findings-grid-heading"/);
+    expect(html).toContain('aria-labelledby="findings-grid-heading"');
   });
 });

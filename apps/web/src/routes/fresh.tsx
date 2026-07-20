@@ -35,7 +35,7 @@ const fetchFresh = createServerFn({ method: "GET" }).handler(
 
 const title = "New drum & bass releases · Fluncle";
 const description =
-  "The freshest drum & bass, hot off the press. Every release from the last 30 days, tracked as Fluncle spins his way through them.";
+  "The newest drum & bass releases from the last 30 days, with the artists behind them.";
 
 /**
  * The page's JSON-LD: an `ItemList` of the rendered tracks as `MusicRecording`s, bounded to what

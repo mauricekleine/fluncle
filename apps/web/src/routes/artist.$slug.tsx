@@ -260,7 +260,7 @@ function artistHead(loaderData: ArtistPageData | undefined) {
       : `${siteUrl}/artist/${slug}`;
   // The <title>/meta stay honestly-plain third-person (the Narrator rule); the
   // first person lives only in the on-page voice frame.
-  const title = `${name} · Fluncle's Findings`;
+  const title = `${name} · Fluncle`;
   // The factual bio is the honest, UNIQUE description when one is authored — the same objective
   // paragraph the page prints, trimmed to the meta cap. Absent (the bio backfill is in flight for
   // many artists), it falls back to the templated line verbatim, so nothing regresses. This one
@@ -269,8 +269,8 @@ function artistHead(loaderData: ArtistPageData | undefined) {
     bio !== undefined
       ? bioMetaDescription(bio)
       : findings.length > 0
-        ? `Every ${name} banger Fluncle has found and logged in the Galaxy, ${findings.length} so far, each with a coordinate.`
-        : `${name} in Fluncle's Galaxy.`;
+        ? `Drum & bass tracks by ${name} that Fluncle recommends, ${findings.length} so far, with the labels and releases behind them.`
+        : `Drum & bass tracks by ${name}, with the labels and releases behind them.`;
   // The artist's OWN portrait leads: its owned avatar master (or Spotify image) is the entity's
   // true image. Only when it has none does the page fall back to its freshest finding's cover, then
   // the site cover as the floor. This one URL flows to og:image, twitter:image, and MusicGroup.image.
@@ -453,11 +453,11 @@ function ArtistPage() {
             empty-state apology. Its catalogue tracklist below and its masthead bio carry the page,
             exactly as a crawler-discovered label's does (graph-sections.tsx header: a page with no
             findings is a page about something else). Socials and kin follow. */}
-        <FindingsGrid findings={findings} label={`Findings featuring ${name}`} />
+        <FindingsGrid findings={findings} />
 
         {socials.length > 0 ? (
           <nav aria-label={`Follow ${name}`} className="artist-follow">
-            <p className="artist-similar-label">Follow {name}</p>
+            <h2 className="artist-similar-label">Follow {name}</h2>
             <div className="artist-socials">
               {socials.map((social) => (
                 <SocialLink key={social.platform} social={social} />
@@ -468,7 +468,7 @@ function ArtistPage() {
 
         {dossier.neighbours.length > 0 ? (
           <nav aria-label="Similar artists" className="artist-similar">
-            <p className="artist-similar-label">Similar artists</p>
+            <h2 className="artist-similar-label">Similar artists</h2>
             <ul className="artist-similar-list">
               {dossier.neighbours.map((neighbour) => (
                 <li key={neighbour.slug}>
@@ -542,7 +542,7 @@ function ArtistPage() {
 
         <footer className="log-plate-footer">
           <Link to="/artists">All artists</Link>
-          <Link to="/">Back to the archive</Link>
+          <Link to="/">Home</Link>
         </footer>
       </article>
     </main>
