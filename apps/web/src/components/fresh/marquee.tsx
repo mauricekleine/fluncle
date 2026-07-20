@@ -119,7 +119,9 @@ function FreshTrackStream({ data, view }: { data: FreshReleases; view: "all" | "
 
   if (stream.length === 0) {
     return (
-      <p className="fresh-empty empty-scanlines">No new tracks landed this month. Quiet sector.</p>
+      <p className="fresh-empty empty-scanlines">
+        No new tracks in the last {data.windowDays} days.
+      </p>
     );
   }
 

@@ -133,7 +133,7 @@ function albumHead(loaderData: AlbumPageData | undefined) {
   } = loaderData;
   const pageUrl = `${siteUrl}/album/${slug}`;
   // Honestly-plain third-person for the machine-facing strings (the Narrator rule).
-  const title = `${name} · Fluncle's Findings`;
+  const title = `${name} · Fluncle`;
   // The factual bio is the honest, UNIQUE description when one is authored — the same objective
   // paragraph the page prints, trimmed to the meta cap. Absent (the bio backfill is in flight),
   // it falls back to the templated line verbatim, so nothing regresses. It describes the page it
@@ -156,10 +156,10 @@ function albumHead(loaderData: AlbumPageData | undefined) {
     bio !== undefined
       ? bioMetaDescription(bio)
       : findings.length > 0
-        ? `Every banger Fluncle has found on ${name} and logged in the Galaxy, ${findings.length} so far, each with a coordinate.`
+        ? `Drum & bass tracks on ${name} that Fluncle recommends, ${findings.length} so far, with the artists behind them.`
         : factClause
-          ? `The tracks on ${name}, ${factClause}, charted in Fluncle's Galaxy with the artists behind them.`
-          : `The tracks on ${name}, charted in Fluncle's Galaxy with the artists behind them.`;
+          ? `The tracks on ${name}, ${factClause}, with the artists behind them.`
+          : `The tracks on ${name}, with the artists behind them.`;
   const imageUrl = albumCoverAtSize(coverImageUrl, "large") ?? `${siteUrl}/fluncle-cover.png`;
 
   return {
@@ -249,7 +249,7 @@ function AlbumPage() {
 
         {/* Every band below is conditional: an empty one renders nothing at all, so this page
             is only ever about what it actually carries (components/graph-sections.tsx). */}
-        <FindingsGrid findings={findings} label={`Findings on ${name}`} />
+        <FindingsGrid findings={findings} />
 
         <ArtistChips artists={artists} title={`Artists on ${name}`} />
 
@@ -258,7 +258,7 @@ function AlbumPage() {
 
         <footer className="log-plate-footer">
           <Link to="/albums">All albums</Link>
-          <Link to="/">Back to the archive</Link>
+          <Link to="/">Home</Link>
         </footer>
       </article>
     </main>
