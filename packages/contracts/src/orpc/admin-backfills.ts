@@ -278,27 +278,27 @@ export const backfillAppleCatalogue = oc
   );
 
 /**
- * `backfill_apple_releases` → `POST /admin/backfill/apple-releases` (operationId
- * `backfillAppleReleases`).
+ * `backfill_label_releases` → `POST /admin/backfill/label-releases` (operationId
+ * `backfillLabelReleases`).
  *
- * Agent tier (`adminAuth`) — the MusicKit FRESHNESS TAP (D8). One bounded probe over the operator's
- * ENABLED seed labels (`labels.seed_state = 'enabled'` — the crawl allowlist, never widened): it
- * resolves each label's Apple `record-labels` id once (EXACT name-fold only), taps its latest
- * releases, and mints METADATA-ONLY catalogue rows (a `tracks` row with no `findings` row) carrying
- * their day-one release dates — closing the ~2-week MusicBrainz-editorial-lag on /fresh. MusicBrainz
- * still WALKS the graph (the crawler); Apple only TAPS freshness for the probed label — no new
- * labels, no artist hops, never a certification. Deduped against the MB crawl from both directions
- * (ISRC + same-album title fold). NO-OP until the MusicKit secrets are provisioned
- * (`configured: false`). No cursor — the worklist is the oldest-probed enabled labels each tick.
+ * Agent tier (`adminAuth`) — the FRESHNESS TAP (D8). One bounded probe over the operator's ENABLED
+ * seed labels (`labels.seed_state = 'enabled'` — the crawl allowlist, never widened): it searches
+ * each label's fresh releases on Spotify (`label:"<name>" tag:new`), keeps only the albums whose
+ * copyrights name the label (the fuzzy `label:` filter is post-filtered on the ℗/© strings), and
+ * mints METADATA-ONLY catalogue rows (a `tracks` row with no `findings` row) carrying their day-one
+ * release dates — closing the ~2-week MusicBrainz-editorial-lag on /fresh. MusicBrainz still WALKS
+ * the graph (the crawler); the tap only TAPS freshness for the probed label — no new labels, no
+ * artist hops, never a certification. Deduped against the MB crawl from both directions (Spotify id /
+ * uri / ISRC + same-album title fold). Reuses the publish path's Spotify OAuth; `configured: false`
+ * when that grant is gone. No cursor — the worklist is the oldest-probed enabled labels each tick.
  */
-export const backfillAppleReleases = oc
+export const backfillLabelReleases = oc
   .route({
     inputStructure: "detailed",
     method: "POST",
-    operationId: "backfillAppleReleases",
-    path: "/admin/backfill/apple-releases",
-    summary:
-      "Tap Apple Music latest releases for enabled seed labels into catalogue rows (bounded)",
+    operationId: "backfillLabelReleases",
+    path: "/admin/backfill/label-releases",
+    summary: "Tap Spotify's fresh releases for enabled seed labels into catalogue rows (bounded)",
     tags: ["Admin"],
   })
   .input(
@@ -311,29 +311,29 @@ export const backfillAppleReleases = oc
   )
   .output(
     z.object({
-      // Distinct albums the probe inspected across the labels this pass.
+      // Albums that PASSED the copyrights post-filter (genuinely this label's) across the labels.
+      albumsMatched: z.number(),
+      // Albums the label search returned this pass (before the copyrights filter).
       albumsSeen: z.number(),
-      // True when the pass STOPPED on the cross-cutting Apple breaker (suspended token / spent call
-      // budget) rather than a 429.
-      breakerTripped: z.boolean(),
+      // False when the Spotify grant is gone — the whole tap is a no-op this tick (reconnect needed).
       configured: z.boolean(),
       dryRun: z.boolean(),
-      // Enabled seed labels whose latest releases were tapped this pass.
+      // Labels that hit a TRANSIENT Spotify error this pass (backed off, re-probed later).
+      failedLabels: z.array(z.string()),
+      // The seed-label slugs probed this pass — or, in a dry run, the ones that WOULD be probed.
+      labelSlugs: z.array(z.string()),
+      // Enabled seed labels whose fresh-release search actually ran this pass.
       labelsProbed: z.number(),
       // Catalogue rows minted this pass (never a certification).
       newRows: z.number(),
       // The minted track ids — bounded (a few labels × their fresh releases).
       newTrackIds: z.array(z.string()),
       ok: z.literal(true),
-      // True when the pass STOPPED on an Apple 429 — the CLI stops looping; the next tick resumes.
+      // True when the pass STOPPED on a Spotify 429 — the CLI stops looping; the next tick resumes.
       rateLimited: z.boolean(),
-      // Enabled labels that gained an Apple `record-labels` id this pass (a one-time resolution).
-      resolvedLabels: z.array(z.string()),
-      // Songs skipped because the archive already holds them (ISRC / Apple id / same-album title
-      // fold) — the dedupe contract, working.
+      // Tracks skipped because the archive already holds them (Spotify id / uri / ISRC / same-album
+      // title fold) — the dedupe contract, working.
       skippedKnown: z.number(),
-      // Enabled labels Apple has no EXACT-fold match for this pass (left null, attempt stamped).
-      unresolvedLabels: z.array(z.string()),
     }),
   );
 
@@ -596,11 +596,11 @@ export const backfillRecordingMbids = oc
 export const adminBackfillsContract = {
   backfill_apple_catalogue: backfillAppleCatalogue,
   backfill_apple_music: backfillAppleMusic,
-  backfill_apple_releases: backfillAppleReleases,
   backfill_cover_masters: backfillCoverMasters,
   backfill_discogs: backfillDiscogs,
   backfill_label_images: backfillLabelImages,
   backfill_label_lineage: backfillLabelLineage,
+  backfill_label_releases: backfillLabelReleases,
   backfill_lastfm: backfillLastfm,
   backfill_recording_mbids: backfillRecordingMbids,
 };

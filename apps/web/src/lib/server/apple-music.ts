@@ -31,13 +31,7 @@ import { logEvent } from "./log";
 // The Apple Music catalogue songs endpoint. The `us` storefront is a sensible default
 // — the returned `music.apple.com/us/…` URL geo-redirects to the visitor's own
 // storefront when they open it, so the stored value is effectively region-neutral.
-// The `us`-storefront catalog root. `songs` is the ISRC-resolve endpoint (below); the freshness
-// tap (apple-releases.ts) reaches OTHER resources off the same base (`record-labels/{id}`, its
-// `latest-releases` view, and per-album `tracks`) via `requestAppleCatalogResource`. Storefront is
-// hard-coded `us` throughout: the returned `music.apple.com/us/…` URL geo-redirects to the
-// visitor's own storefront when opened, so the stored value is effectively region-neutral.
-const CATALOG_BASE = "https://api.music.apple.com/v1/catalog/us";
-const CATALOG_SONGS_URL = `${CATALOG_BASE}/songs`;
+const CATALOG_SONGS_URL = "https://api.music.apple.com/v1/catalog/us/songs";
 const USER_AGENT = "Fluncle/1.0 (+https://www.fluncle.com)";
 
 // The developer-token lifetime. Apple caps a MusicKit token at 6 months; we mint for
@@ -771,23 +765,6 @@ export async function requestAppleCatalog(
   query: string,
   signal?: AbortSignal,
 ): Promise<AppleCatalogRequestOutcome> {
-  return requestAppleCatalogResource(`songs?${query}`, signal);
-}
-
-/**
- * The GENERIC authed catalog GET — any resource under the `us` catalog root, sharing the exact
- * token mint/cache and failure discipline of `requestAppleCatalog` (429 ⇒ back off; a 401/403 bad
- * token drops the cache + flags `authFailed` so the caller feeds the breaker; any other non-2xx is
- * a plain error). `pathAndQuery` is everything after the catalog base — e.g.
- * `record-labels/<id>?views=latest-releases`, `albums/<id>/tracks`, `search?types=record-labels&…`.
- * `requestAppleCatalog` is now a thin `songs?<query>` shim over this. Never throws. Exported so the
- * freshness tap (apple-releases.ts) reads the repo's FIRST non-songs resources through the one
- * shared token/breaker path rather than a bespoke Apple integration.
- */
-export async function requestAppleCatalogResource(
-  pathAndQuery: string,
-  signal?: AbortSignal,
-): Promise<AppleCatalogRequestOutcome> {
   const credentials = await readAppleMusicCredentials();
 
   if (!credentials) {
@@ -797,7 +774,7 @@ export async function requestAppleCatalogResource(
   try {
     const token = await developerToken(credentials);
 
-    const response = await fetch(`${CATALOG_BASE}/${pathAndQuery}`, {
+    const response = await fetch(`${CATALOG_SONGS_URL}?${query}`, {
       headers: {
         Authorization: `Bearer ${token}`,
         "User-Agent": USER_AGENT,
@@ -838,7 +815,7 @@ export async function requestAppleCatalogResource(
     return { body, configured: true, ok: true };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    logEvent("error", "apple-music.catalog-failed", { error, path: pathAndQuery });
+    logEvent("error", "apple-music.catalog-failed", { error, query });
 
     return { configured: true, error: message, ok: false, rateLimited: false };
   }

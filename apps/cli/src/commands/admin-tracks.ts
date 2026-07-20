@@ -528,33 +528,32 @@ export async function backfillAppleCatalogueCommand(
   );
 }
 
-export type AppleReleasesBackfillResult = {
+export type LabelReleasesBackfillResult = {
+  albumsMatched: number;
   albumsSeen: number;
-  // True when the pass STOPPED on the cross-cutting Apple breaker (suspended token / spent budget).
-  breakerTripped: boolean;
   configured: boolean;
   dryRun: boolean;
+  failedLabels: string[];
+  labelSlugs: string[];
   labelsProbed: number;
   newRows: number;
   newTrackIds: string[];
-  // True when the pass STOPPED on the Apple 429 rate-limit circuit breaker.
+  // True when the pass STOPPED on the Spotify 429 rate-limit backoff.
   rateLimited: boolean;
-  resolvedLabels: string[];
   skippedKnown: number;
-  unresolvedLabels: string[];
 };
 
-// One bounded pass of the MusicKit freshness tap (D8) — a probe over ENABLED seed labels that mints
-// day-one catalogue rows from Apple's latest releases. No cursor: the worklist is the oldest-probed
-// enabled labels each tick, so the CLI loops until a pass probes nothing.
-export async function backfillAppleReleasesCommand(
+// One bounded pass of the freshness tap (D8) — a probe over ENABLED seed labels that mints day-one
+// catalogue rows from Spotify's fresh releases. No cursor: the worklist is the oldest-probed enabled
+// labels each tick, so the CLI loops until a pass probes nothing.
+export async function backfillLabelReleasesCommand(
   limit: number,
   dryRun: boolean,
-): Promise<AppleReleasesBackfillResult> {
+): Promise<LabelReleasesBackfillResult> {
   const params = new URLSearchParams({ dryRun: String(dryRun), limit: String(limit) });
 
-  return adminApiPost<AppleReleasesBackfillResult>(
-    `/api/admin/backfill/apple-releases?${params.toString()}`,
+  return adminApiPost<LabelReleasesBackfillResult>(
+    `/api/admin/backfill/label-releases?${params.toString()}`,
   );
 }
 

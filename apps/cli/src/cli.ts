@@ -2504,18 +2504,19 @@ function addAdminCommands(program: Command): void {
       await runBackfillAppleCatalogue(options, backfillAppleCatalogueCommand);
     });
 
-  // `backfill_apple_releases` → `admin backfills apple-releases`. The MusicKit freshness tap (D8):
-  // a bounded probe over ENABLED seed labels that mints day-one catalogue rows from Apple's latest
-  // releases, closing the ~2-week MusicBrainz-editorial-lag on /fresh. Catalogue identity only.
+  // `backfill_label_releases` → `admin backfills label-releases`. The freshness tap (D8): a bounded
+  // probe over ENABLED seed labels that mints day-one catalogue rows from Spotify's fresh releases
+  // (fuzzy `label:` search + copyrights post-filter), closing the ~2-week MusicBrainz-editorial-lag
+  // on /fresh. Catalogue identity only.
   backfill
-    .command("apple-releases")
-    .description("Tap Apple's latest releases for enabled seed labels into catalogue rows")
-    .option("--dry-run", "Report the labels that would be probed without any Apple call", false)
+    .command("label-releases")
+    .description("Tap Spotify's fresh releases for enabled seed labels into catalogue rows")
+    .option("--dry-run", "Report the labels that would be probed without any Spotify call", false)
     .option("--limit <limit>", "Max enabled seed labels to probe per pass", "5")
     .option("--json", "Print JSON", false)
     .action(async (options: BackfillSyncOptions) => {
-      const { backfillAppleReleasesCommand } = await import("./commands/admin-tracks");
-      await runBackfillAppleReleases(options, backfillAppleReleasesCommand);
+      const { backfillLabelReleasesCommand } = await import("./commands/admin-tracks");
+      await runBackfillLabelReleases(options, backfillLabelReleasesCommand);
     });
 
   // `backfill_artists` → `admin backfills artists`. Back-fills the artist entity
@@ -3843,54 +3844,50 @@ async function runBackfillAppleCatalogue(
   }
 }
 
-async function runBackfillAppleReleases(
+async function runBackfillLabelReleases(
   options: BackfillSyncOptions,
-  backfillAppleReleasesCommand: typeof import("./commands/admin-tracks").backfillAppleReleasesCommand,
+  backfillLabelReleasesCommand: typeof import("./commands/admin-tracks").backfillLabelReleasesCommand,
 ): Promise<void> {
   const perPass = parseListLimit(options.limit);
   const newTrackIds: string[] = [];
-  const resolvedLabels: string[] = [];
-  const unresolvedLabels: string[] = [];
+  const labelSlugs: string[] = [];
+  const failedLabels: string[] = [];
   let dryRun = options.dryRun;
   let throttled = false;
-  let breakerTripped = false;
   let configured = true;
   let labelsProbed = 0;
   let albumsSeen = 0;
+  let albumsMatched = 0;
   let newRows = 0;
   let skippedKnown = 0;
 
-  // No cursor: each pass advances the probed labels' `apple_releases_checked_at`, so the CLI loops
-  // until a pass probes nothing (the enabled labels are all fresh this window) or a breaker stops
-  // it. The hard pass cap defends against a pathological loop (a pass always probes ≥1 label when
-  // any is eligible, so ~ceil(enabledLabels / perPass) passes drain the window).
+  // No cursor: each pass advances the probed labels' `label_releases_checked_at`, so the CLI loops
+  // until a pass probes nothing (the enabled labels are all fresh this window), Spotify throttles, or
+  // the grant is gone. The hard pass cap defends against a pathological loop (a pass probes ≥1 label
+  // when any is eligible, so ~ceil(enabledLabels / perPass) passes drain the window).
   const MAX_PASSES = 100;
 
   for (let pass = 0; pass < MAX_PASSES; pass += 1) {
-    const result = await backfillAppleReleasesCommand(perPass, options.dryRun);
+    const result = await backfillLabelReleasesCommand(perPass, options.dryRun);
     dryRun = result.dryRun;
     configured = result.configured;
     labelsProbed += result.labelsProbed;
     albumsSeen += result.albumsSeen;
+    albumsMatched += result.albumsMatched;
     newRows += result.newRows;
     skippedKnown += result.skippedKnown;
     newTrackIds.push(...result.newTrackIds);
-    resolvedLabels.push(...result.resolvedLabels);
-    unresolvedLabels.push(...result.unresolvedLabels);
+    labelSlugs.push(...result.labelSlugs);
+    failedLabels.push(...result.failedLabels);
 
     if (!options.json) {
       const verb = result.dryRun ? "would probe" : "probed";
       console.log(
-        `  …${verb} ${result.dryRun ? result.resolvedLabels.length : result.labelsProbed} label(s); ${result.newRows} new; ${result.skippedKnown} known; ${result.unresolvedLabels.length} unresolved`,
+        `  …${verb} ${result.labelSlugs.length} label(s); ${result.albumsMatched} matched album(s); ${result.newRows} new; ${result.skippedKnown} known; ${result.failedLabels.length} failed`,
       );
     }
 
     if (!result.configured) {
-      break;
-    }
-
-    if (result.breakerTripped) {
-      breakerTripped = true;
       break;
     }
 
@@ -3905,8 +3902,8 @@ async function runBackfillAppleReleases(
       break;
     }
 
-    // A pass that probed no label (and resolved none) drained the eligible worklist this window.
-    if (result.labelsProbed === 0 && result.resolvedLabels.length === 0) {
+    // A pass that probed no label drained the eligible worklist this window.
+    if (result.labelsProbed === 0) {
       break;
     }
   }
@@ -3914,17 +3911,17 @@ async function runBackfillAppleReleases(
   if (options.json) {
     printSweepJson(
       {
+        albumsMatched,
         albumsSeen,
-        breakerTripped,
         configured,
         dryRun,
+        failedLabels,
+        labelSlugs,
         labelsProbed,
         newRows,
         newTrackIds,
         rateLimited: throttled,
-        resolvedLabels,
         skippedKnown,
-        unresolvedLabels,
       },
       0,
     );
@@ -3933,19 +3930,19 @@ async function runBackfillAppleReleases(
 
   if (!configured) {
     console.log(
-      "Apple releases tap is not configured (the Worker's MusicKit secrets are unset) — nothing probed.",
+      "Label-releases tap is a no-op — the Worker's Spotify grant is gone; reconnect Spotify.",
     );
     return;
   }
 
   const verb = dryRun ? "Would probe" : "Probed";
-  const probedCount = dryRun ? resolvedLabels.length : labelsProbed;
+  const probedCount = dryRun ? labelSlugs.length : labelsProbed;
   console.log(
-    `${verb} ${probedCount} enabled seed label(s); ${newRows} new catalogue row(s); ${skippedKnown} already known; ${resolvedLabels.length} resolved; ${unresolvedLabels.length} unresolved.`,
+    `${verb} ${probedCount} enabled seed label(s); ${albumsMatched} matched album(s); ${newRows} new catalogue row(s); ${skippedKnown} already known; ${failedLabels.length} failed.`,
   );
 
-  for (const slug of unresolvedLabels) {
-    console.log(`  no exact Apple label match: ${slug}`);
+  for (const slug of failedLabels) {
+    console.log(`  transient Spotify error: ${slug}`);
   }
 }
 

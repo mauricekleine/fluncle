@@ -275,8 +275,8 @@ function frontierId(source: CrawlNodeSource, kind: CrawlNodeKind, externalId: st
  * actually exists for it — the MusicBrainz recording MBID. Deterministic, so re-crawling
  * the same recording collides on the primary key and writes nothing.
  *
- * The freshness tap (apple-releases.ts) is the sibling minter: its rows carry `ap_<apple-song-id>`,
- * the same namespaced-id convention off the identity Apple gives it. The two converge on ONE row
+ * The freshness tap (label-releases.ts) is the sibling minter: its rows carry `sp_<spotify-track-id>`,
+ * the same namespaced-id convention off the identity Spotify gives it. The two converge on ONE row
  * per recording via the shared dedupe contract (ISRC + same-album title fold — catalogue-dedupe.ts).
  */
 export function catalogueTrackId(recordingMbid: string): string {
@@ -580,8 +580,8 @@ async function rearmSeedLabels(): Promise<number> {
  *      An ISRC is the recording's real identity, so a track Fluncle already CERTIFIED —
  *      whose `track_id` is a Spotify id, not `mb_…` — is recognised and skipped. Without
  *      this the crawler would happily mint a second, uncertified row for a finding.
- *   2. THE SAME-ALBUM TITLE-FOLD CONVERGENCE (`releaseAlbumId`). An Apple-tapped row
- *      (`ap_<id>`, apple-releases.ts) can arrive with a MISSING or DIVERGENT ISRC — Apple
+ *   2. THE SAME-ALBUM TITLE-FOLD CONVERGENCE (`releaseAlbumId`). A freshness-tapped row
+ *      (`sp_<id>`, label-releases.ts) can arrive with a MISSING or DIVERGENT ISRC — Spotify
  *      and MusicBrainz occasionally disagree on a recording's ISRC — so layer 1 would miss
  *      it and this later MB walk of the same release would mint an `mb_` twin. This closes
  *      that: a candidate whose title EXACT-folds to an existing row on the SAME album row

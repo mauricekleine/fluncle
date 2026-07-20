@@ -820,6 +820,20 @@
       "when": 1784460728941,
       "tag": "0116_classy_master_mold",
       "breakpoints": true
+    },
+    {
+      "idx": 117,
+      "version": "6",
+      "when": 1784524952649,
+      "tag": "0117_gray_skin",
+      "breakpoints": true
+    },
+    {
+      "idx": 118,
+      "version": "6",
+      "when": 1784524986948,
+      "tag": "0118_fresh_nighthawk",
+      "breakpoints": true
     }
   ]
 }
