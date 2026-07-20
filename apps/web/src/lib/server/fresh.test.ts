@@ -223,6 +223,65 @@ describe("listFreshReleases", () => {
     expect(wgf?.coverImageUrl).toBe("https://i.scdn.co/image/wgf-newest");
   });
 
+  // THE OWNED COVER MASTER on the records cut. A record whose master the cover-masters sweep has
+  // resolved must serve it through the Cloudflare Images ladder — never the raw provider URL the
+  // track carries (a Cover Art Archive hotlink is a three-hop cross-origin redirect with no rung).
+  // A record with no master falls back to that raw URL exactly as before. Both are asserted in ONE
+  // read, over two records, so the pairing is proven too: the master rides the album row, so it can
+  // never be handed to a different record's fallback.
+  it("serves a record's owned cover master, and falls back to the raw art when there is none", async () => {
+    await db.execute({
+      args: [
+        "alb_owned",
+        "Owned Record",
+        "owned-record",
+        "albums/owned-record.jpg",
+        "resolved",
+        "2026-07-01T00:00:00.000Z",
+        "x",
+        "x",
+      ],
+      sql: `insert into albums
+              (id, name, slug, image_key, image_state, image_updated_at, created_at, updated_at)
+            values (?, ?, ?, ?, ?, ?, ?, ?)`,
+    });
+    // A master that was attempted and found nothing (`none`) — the unresolved half of the rail. Its
+    // stale `image_key` must NOT be served: only `resolved` reaches the ladder.
+    await db.execute({
+      args: ["alb_raw", "Raw Record", "raw-record", "albums/raw-record.jpg", "none", "x", "x"],
+      sql: `insert into albums
+              (id, name, slug, image_key, image_state, created_at, updated_at)
+            values (?, ?, ?, ?, ?, ?, ?)`,
+    });
+    await seedCatalogueTrack({
+      albumId: "alb_owned",
+      albumImageUrl: "https://coverartarchive.org/release/owned/front",
+      artists: ["Workforce"],
+      releaseDate: "2026-07-14",
+      trackId: "r_owned",
+    });
+    await seedCatalogueTrack({
+      albumId: "alb_raw",
+      albumImageUrl: "https://coverartarchive.org/release/raw/front",
+      artists: ["Halogenix"],
+      releaseDate: "2026-07-13",
+      trackId: "r_raw",
+    });
+
+    const { records } = await listFreshReleases(NOW);
+    const owned = records.find((record) => record.slug === "owned-record");
+    const raw = records.find((record) => record.slug === "raw-record");
+
+    // The owned master: our own zone, our own key, a ladder rung, and the `?v` vintage bust.
+    expect(owned?.coverImageUrl).toBe(
+      "https://found.fluncle.com/cdn-cgi/image/width=640,format=auto/" +
+        `https://found.fluncle.com/albums/owned-record.jpg?v=${Date.parse("2026-07-01T00:00:00.000Z")}`,
+    );
+    expect(owned?.coverImageUrl).not.toContain("coverartarchive.org");
+    // No master resolved: the raw provider URL, byte-identical to the old behaviour.
+    expect(raw?.coverImageUrl).toBe("https://coverartarchive.org/release/raw/front");
+  });
+
   it("attaches the lead artist's avatar to a catalogue row (the row shows WHO, dimmed in the UI)", async () => {
     // A lead artist with a stored image, plus a featured artist without one — the join must pick the
     // LEAD (position 1), never the feature, so the avatar is the right face.
