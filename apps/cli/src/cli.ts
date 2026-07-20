@@ -3860,6 +3860,8 @@ async function runBackfillLabelReleases(
   let albumsMatched = 0;
   let newRows = 0;
   let skippedKnown = 0;
+  let failedFetches = 0;
+  let fetchCeilingHit = false;
 
   // No cursor: each pass advances the probed labels' `label_releases_checked_at`, so the CLI loops
   // until a pass probes nothing (the enabled labels are all fresh this window), Spotify throttles, or
@@ -3876,6 +3878,8 @@ async function runBackfillLabelReleases(
     albumsMatched += result.albumsMatched;
     newRows += result.newRows;
     skippedKnown += result.skippedKnown;
+    failedFetches += result.failedFetches;
+    fetchCeilingHit = fetchCeilingHit || result.fetchCeilingHit;
     newTrackIds.push(...result.newTrackIds);
     labelSlugs.push(...result.labelSlugs);
     failedLabels.push(...result.failedLabels);
@@ -3883,7 +3887,7 @@ async function runBackfillLabelReleases(
     if (!options.json) {
       const verb = result.dryRun ? "would probe" : "probed";
       console.log(
-        `  …${verb} ${result.labelSlugs.length} label(s); ${result.albumsMatched} matched album(s); ${result.newRows} new; ${result.skippedKnown} known; ${result.failedLabels.length} failed`,
+        `  …${verb} ${result.labelSlugs.length} label(s); ${result.albumsMatched} matched album(s); ${result.newRows} new; ${result.skippedKnown} known; ${result.failedFetches} fetch-fail; ${result.failedLabels.length} search-fail`,
       );
     }
 
@@ -3915,7 +3919,9 @@ async function runBackfillLabelReleases(
         albumsSeen,
         configured,
         dryRun,
+        failedFetches,
         failedLabels,
+        fetchCeilingHit,
         labelSlugs,
         labelsProbed,
         newRows,
@@ -3938,11 +3944,15 @@ async function runBackfillLabelReleases(
   const verb = dryRun ? "Would probe" : "Probed";
   const probedCount = dryRun ? labelSlugs.length : labelsProbed;
   console.log(
-    `${verb} ${probedCount} enabled seed label(s); ${albumsMatched} matched album(s); ${newRows} new catalogue row(s); ${skippedKnown} already known; ${failedLabels.length} failed.`,
+    `${verb} ${probedCount} enabled seed label(s); ${albumsMatched} matched album(s); ${newRows} new catalogue row(s); ${skippedKnown} already known; ${failedFetches} fetch-fail; ${failedLabels.length} search-fail.`,
   );
 
+  if (fetchCeilingHit) {
+    console.log("  (a pass ended early on the single-fetch ceiling — resumes next tick)");
+  }
+
   for (const slug of failedLabels) {
-    console.log(`  transient Spotify error: ${slug}`);
+    console.log(`  search error: ${slug}`);
   }
 }
 

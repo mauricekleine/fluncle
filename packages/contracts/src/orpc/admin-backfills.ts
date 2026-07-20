@@ -318,8 +318,13 @@ export const backfillLabelReleases = oc
       // False when the Spotify grant is gone — the whole tap is a no-op this tick (reconnect needed).
       configured: z.boolean(),
       dryRun: z.boolean(),
-      // Labels that hit a TRANSIENT Spotify error this pass (backed off, re-probed later).
+      // Single album/track reads that 404/5xx'd and were SKIPPED (not a label failure stamp).
+      failedFetches: z.number(),
+      // Labels that hit a TRANSIENT Spotify error on their SEARCH this pass (backed off, re-probed).
       failedLabels: z.array(z.string()),
+      // True when the pass ENDED EARLY on the per-pass single-fetch ceiling — a soft cap; the
+      // un-stamped labels resume next tick.
+      fetchCeilingHit: z.boolean(),
       // The seed-label slugs probed this pass — or, in a dry run, the ones that WOULD be probed.
       labelSlugs: z.array(z.string()),
       // Enabled seed labels whose fresh-release search actually ran this pass.

@@ -20,11 +20,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const holder = vi.hoisted(() => ({ db: undefined as Client | undefined }));
 
-// The Spotify client mock's mutable state: a per-test responder routed by path, the grant switch,
-// and a throw switch (429 / other). `calls` records every path so a test can assert WHICH labels
-// were searched (the allowlist gate).
+// The Spotify client mock's mutable state: a per-test responder routed by path, the grant switch, a
+// throw switch (429 / other), and a per-path failure predicate (a single read that 404/5xx's).
+// `calls` records every path so a test can assert WHICH endpoints were hit (the tier contract).
 const spotify = vi.hoisted(() => ({
   calls: [] as string[],
+  failPath: (_path: string): boolean => false,
   grantGone: false,
   respond: (_path: string): unknown => ({}),
   throwKind: null as "429" | "error" | null,
@@ -63,7 +64,7 @@ vi.mock("./spotify", () => {
         throw new Error("Spotify request failed: 429 Too Many Requests");
       }
 
-      if (spotify.throwKind === "error") {
+      if (spotify.throwKind === "error" || spotify.failPath(path)) {
         throw new Error("Spotify request failed: 500");
       }
 
@@ -77,8 +78,8 @@ import {
   copyrightMatchesLabel,
   labelReleaseTrackId,
   parseLabelAlbumSearch,
-  parseProbeAlbums,
-  parseProbeTracks,
+  parseProbeAlbum,
+  parseProbeTrack,
   probeLabelReleases,
 } from "./label-releases";
 import { listFreshReleases } from "./fresh";
@@ -105,42 +106,39 @@ function searchBody(albumIds: string[]): unknown {
   return { albums: { items: albumIds.map((id) => ({ id })) } };
 }
 
-function albumsBody(albums: AlbumFixture[]): unknown {
+/** The SINGLE-album response (`GET /albums/{id}`) — the album object is the top-level body. */
+function albumBody(album: AlbumFixture): unknown {
   return {
-    albums: albums.map((album) => ({
-      copyrights: album.copyrights.map((text) => ({ text, type: "P" })),
-      id: album.id,
-      name: album.name,
-      release_date: album.releaseDate,
-      tracks: { items: album.trackIds.map((id) => ({ id })) },
-    })),
+    copyrights: album.copyrights.map((text) => ({ text, type: "P" })),
+    id: album.id,
+    name: album.name,
+    release_date: album.releaseDate,
+    tracks: { items: album.trackIds.map((id) => ({ id })) },
   };
 }
 
-function tracksBody(tracks: TrackFixture[]): unknown {
+/** The SINGLE-track response (`GET /tracks/{id}`) — the track object is the top-level body. */
+function trackBody(track: TrackFixture): unknown {
   return {
-    tracks: tracks.map((track) => ({
-      artists: (track.artistNames ?? ["Test Artist"]).map((name) => ({ name })),
-      duration_ms: track.durationMs ?? 270_000,
-      external_ids: track.isrc ? { isrc: track.isrc } : {},
-      external_urls: { spotify: `https://open.spotify.com/track/${track.id}` },
-      id: track.id,
-      name: track.title,
-      uri: `spotify:track:${track.id}`,
-    })),
+    artists: (track.artistNames ?? ["Test Artist"]).map((name) => ({ name })),
+    duration_ms: track.durationMs ?? 270_000,
+    external_ids: track.isrc ? { isrc: track.isrc } : {},
+    external_urls: { spotify: `https://open.spotify.com/track/${track.id}` },
+    id: track.id,
+    name: track.title,
+    uri: `spotify:track:${track.id}`,
   };
 }
 
-/** Parse the `?ids=a,b,c` list off a batch path. */
-function idsOf(path: string): string[] {
-  const q = path.split("ids=")[1] ?? "";
-
-  return q.split(",").filter(Boolean);
+/** The trailing `{id}` path segment of a single-resource read (`/albums/{id}` → `id`). */
+function idSegment(path: string): string {
+  return decodeURIComponent((path.split("?")[0] ?? "").split("/").pop() ?? "");
 }
 
 /**
- * A per-label Spotify fixture: the search returns `searchAlbumIds`, `/albums?ids=` returns the
- * matching full albums (in requested order), `/tracks?ids=` the matching full tracks. Routes by path.
+ * A per-label Spotify fixture: the search returns `searchAlbumIds`; each `GET /albums/{id}` returns
+ * that one album; each `GET /tracks/{id}` returns that one track. SINGLES only — the batch endpoints
+ * are 403 at our tier and are never called. An unknown id returns `{}` (parses to null).
  */
 function setSpotifyFixture(config: {
   albums?: AlbumFixture[];
@@ -155,20 +153,16 @@ function setSpotifyFixture(config: {
       return searchBody(config.searchAlbumIds ?? []);
     }
 
-    if (path.startsWith("/albums?ids=")) {
-      const wanted = idsOf(path)
-        .map((id) => albumsById.get(id))
-        .filter((a): a is AlbumFixture => a !== undefined);
+    if (path.startsWith("/albums/")) {
+      const album = albumsById.get(idSegment(path));
 
-      return albumsBody(wanted);
+      return album ? albumBody(album) : {};
     }
 
-    if (path.startsWith("/tracks?ids=")) {
-      const wanted = idsOf(path)
-        .map((id) => tracksById.get(id))
-        .filter((t): t is TrackFixture => t !== undefined);
+    if (path.startsWith("/tracks/")) {
+      const track = tracksById.get(idSegment(path));
 
-      return tracksBody(wanted);
+      return track ? trackBody(track) : {};
     }
 
     return {};
@@ -197,6 +191,7 @@ beforeEach(async () => {
   spotify.calls = [];
   spotify.grantGone = false;
   spotify.throwKind = null;
+  spotify.failPath = () => false;
   spotify.respond = () => ({});
 });
 
@@ -209,47 +204,43 @@ describe("parseLabelAlbumSearch", () => {
   });
 });
 
-describe("parseProbeAlbums", () => {
-  it("reads copyrights + track ids + date, dropping null entries", () => {
+describe("parseProbeAlbum", () => {
+  it("reads copyrights + track ids + date off a SINGLE album body", () => {
     const body = {
-      albums: [
-        {
-          copyrights: [{ text: "℗ 2026 Hospital Records", type: "P" }],
-          id: "a1",
-          name: "New EP",
-          release_date: "2026-07-19",
-          tracks: { items: [{ id: "t1" }, { id: "t2" }] },
-        },
-        null, // an invalid id → Spotify returns null → dropped
-      ],
+      copyrights: [{ text: "℗ 2026 Hospital Records", type: "P" }],
+      id: "a1",
+      name: "New EP",
+      release_date: "2026-07-19",
+      tracks: { items: [{ id: "t1" }, { id: "t2" }] },
     };
 
-    expect(parseProbeAlbums(body)).toEqual([
-      {
-        copyrights: ["℗ 2026 Hospital Records"],
-        id: "a1",
-        name: "New EP",
-        releaseDate: "2026-07-19",
-        trackIds: ["t1", "t2"],
-      },
-    ]);
+    expect(parseProbeAlbum(body)).toEqual({
+      copyrights: ["℗ 2026 Hospital Records"],
+      id: "a1",
+      name: "New EP",
+      releaseDate: "2026-07-19",
+      trackIds: ["t1", "t2"],
+    });
+    expect(parseProbeAlbum(null)).toBeNull();
+    expect(parseProbeAlbum({ name: "no id" })).toBeNull();
   });
 });
 
-describe("parseProbeTracks", () => {
-  it("reads ISRC + duration + uri/url + artists", () => {
-    const tracks = parseProbeTracks(
-      tracksBody([{ durationMs: 300_000, id: "t1", isrc: "GB0000000001", title: "Foo" }]),
+describe("parseProbeTrack", () => {
+  it("reads ISRC + duration + uri/url + artists off a SINGLE track body", () => {
+    const track = parseProbeTrack(
+      trackBody({ durationMs: 300_000, id: "t1", isrc: "GB0000000001", title: "Foo" }),
     );
 
-    expect(tracks).toHaveLength(1);
-    expect(tracks[0]).toMatchObject({
+    expect(track).toMatchObject({
       durationMs: 300_000,
       isrc: "GB0000000001",
       spotifyTrackId: "t1",
       spotifyUri: "spotify:track:t1",
       title: "Foo",
     });
+    expect(parseProbeTrack(null)).toBeNull();
+    expect(parseProbeTrack({ id: "t1" })).toBeNull(); // no name
   });
 });
 
@@ -353,6 +344,73 @@ describe("probeLabelReleases", () => {
     expect(spotify.calls.some((path) => path.includes("t_junk"))).toBe(false);
   });
 
+  it("uses ONLY the SINGLE endpoints — never the 403 batch endpoints (the tier contract)", async () => {
+    await seedEnabledLabel(db, { id: "lbl_1", name: "Medschool", slug: "medschool" });
+
+    setSpotifyFixture({
+      albums: [
+        {
+          copyrights: ["℗ 2026 Medschool"],
+          id: "alb1",
+          name: "New EP",
+          releaseDate: "2026-07-19",
+          trackIds: ["t1"],
+        },
+      ],
+      searchAlbumIds: ["alb1"],
+      tracks: [{ id: "t1", isrc: "GB0000000001", title: "Foo" }],
+    });
+
+    await probeLabelReleases();
+
+    // The batch endpoints are GONE at our tier — the probe must never call them.
+    expect(spotify.calls.some((path) => path.startsWith("/albums?ids="))).toBe(false);
+    expect(spotify.calls.some((path) => path.startsWith("/tracks?ids="))).toBe(false);
+    // It DID hit the single reads.
+    expect(spotify.calls).toContain("/albums/alb1");
+    expect(spotify.calls).toContain("/tracks/t1");
+  });
+
+  it("SKIPS a failed single album read (and its label is still stamped — not a label failure)", async () => {
+    await seedEnabledLabel(db, { id: "lbl_1", name: "Medschool", slug: "medschool" });
+
+    setSpotifyFixture({
+      albums: [
+        {
+          copyrights: ["℗ 2026 Medschool"],
+          id: "good",
+          name: "New EP",
+          releaseDate: "2026-07-19",
+          trackIds: ["t1"],
+        },
+        // `bad` is in the search results but its single read 404s.
+        {
+          copyrights: ["℗ 2026 Medschool"],
+          id: "bad",
+          name: "Broken EP",
+          releaseDate: "2026-07-19",
+          trackIds: ["t2"],
+        },
+      ],
+      searchAlbumIds: ["good", "bad"],
+      tracks: [{ id: "t1", isrc: "GB0000000001", title: "Foo" }],
+    });
+    spotify.failPath = (path) => path === "/albums/bad";
+
+    const result = await probeLabelReleases();
+
+    expect(result.failedFetches).toBe(1); // the `bad` album read, skipped
+    expect(result.failedLabels).toEqual([]); // NOT a label failure — the search succeeded
+    expect(result.newRows).toBe(1); // the `good` album still minted
+    expect(result.newTrackIds).toEqual(["sp_t1"]);
+    // The label WAS stamped (a per-album miss does not hold the whole label back).
+    const stamp = await db.execute(
+      "select label_releases_checked_at, label_releases_failures from labels where slug = 'medschool'",
+    );
+    expect(stamp.rows[0]?.label_releases_checked_at).not.toBeNull();
+    expect(Number(stamp.rows[0]?.label_releases_failures)).toBe(0);
+  });
+
   it("mints a valid catalogue row with the ARCHIVE's label spelling, the anchor, and the day-one date", async () => {
     await seedEnabledLabel(db, { id: "lbl_1", name: "Medschool", slug: "medschool" });
 
@@ -450,7 +508,7 @@ describe("probeLabelReleases", () => {
     expect(result.newRows).toBe(0);
     // The finding's `spotify_uri` is caught by the pre-fetch filter, so the tap never even fetches
     // the album's tracks — the cheapest possible convergence.
-    expect(spotify.calls.some((path) => path.startsWith("/tracks?ids="))).toBe(false);
+    expect(spotify.calls.some((path) => path.startsWith("/tracks/"))).toBe(false);
     // Still exactly one row for this track (the finding), no `sp_t1` twin.
     const rows = await db.execute("select track_id from tracks where track_id in ('t1','sp_t1')");
     expect(rows.rows.map((row) => row.track_id)).toEqual(["t1"]);
@@ -541,8 +599,8 @@ describe("probeLabelReleases", () => {
 
     expect(second.newRows).toBe(0);
     // The second pass never re-fetches the album's tracks — `unmintedSpotifyTrackIds` sees them all
-    // already held, so no `/tracks?ids=` call is made for that album.
-    expect(spotify.calls.some((path) => path.startsWith("/tracks?ids="))).toBe(false);
+    // already held, so no `/tracks/{id}` call is made for that album.
+    expect(spotify.calls.some((path) => path.startsWith("/tracks/"))).toBe(false);
     expect(Number((await db.execute("select count(*) as n from tracks")).rows[0]?.n)).toBe(1);
   });
 

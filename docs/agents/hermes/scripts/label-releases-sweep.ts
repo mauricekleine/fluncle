@@ -35,7 +35,9 @@ const log = (message: string) => console.error(`[label-releases-sweep] ${message
 type LabelReleasesSummary = {
   albumsMatched?: number;
   configured?: boolean;
+  failedFetches?: number;
   failedLabels?: string[];
+  fetchCeilingHit?: boolean;
   labelsProbed?: number;
   newRows?: number;
   ok?: boolean;
@@ -103,6 +105,7 @@ export function main(): void {
   const summary = {
     albumsMatched: 0,
     error: null as string | null,
+    failedFetches: 0,
     failedLabels: 0,
     labelsProbed: 0,
     newRows: 0,
@@ -116,6 +119,7 @@ export function main(): void {
     summary.albumsMatched = pass.albumsMatched ?? 0;
     summary.newRows = pass.newRows ?? 0;
     summary.skippedKnown = pass.skippedKnown ?? 0;
+    summary.failedFetches = pass.failedFetches ?? 0;
     summary.failedLabels = pass.failedLabels?.length ?? 0;
 
     if (pass.configured === false) {
