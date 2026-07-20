@@ -50,6 +50,15 @@ const MIXTAPE = { id: "e2e-mixtape-1", logId: "700.F.1A", title: "Dream Sector O
 export const SEEDED_FINDING_TITLES = FINDINGS.map((finding) => finding.title);
 export const SEEDED_MIXTAPE_TITLE = MIXTAPE.title;
 
+// ── APPENDED (account journey) ────────────────────────────────────────────────
+// The account journey (tests/e2e/account.spec.ts) saves ONE finding and then looks
+// for it on `/account?tab=saves`, so it needs that finding's Log ID as well as its
+// title. It uses the FIRST fixture — the one wired into the full artist ↔ label ↔
+// album graph above — so the page it saves from is the richest one seeded. Derived
+// from `FINDINGS`, never re-typed, so the two can never disagree.
+export const SEEDED_SAVE_TARGET_LOG_ID = FINDINGS[0]?.logId ?? "";
+export const SEEDED_SAVE_TARGET_TITLE = FINDINGS[0]?.title ?? "";
+
 /** A base epoch for the descending `added_at` values (fixed, so runs are identical). */
 const BASE_EPOCH_MS = Date.UTC(2026, 0, 1, 12, 0, 0);
 
