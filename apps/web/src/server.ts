@@ -5,11 +5,7 @@ import {
   appendOnionLocation,
   handleAgentDiscovery,
 } from "./lib/server/agent-discovery";
-import {
-  isCacheableEntityRequest,
-  isCacheableLogPath,
-  withEdgeCache,
-} from "./lib/server/edge-cache";
+import { edgeCachePolicyFor, withEdgeCache } from "./lib/server/edge-cache";
 import { ADMIN_COOKIE_NAME } from "./lib/server/env";
 import { handleMcp } from "./lib/server/mcp";
 import { handleOrpc } from "./lib/server/orpc";
@@ -87,23 +83,31 @@ const serverEntry = createServerEntry({
       return discovery;
     }
 
-    // Edge-cache the public log surfaces (`/log` and `/log/<id>`) and the entity detail
-    // pages (`/artist|/album|/label/<slug>`): the cold path is Worker SSR + Turso reads per
-    // render, but these pages change rarely, so short-TTL + stale-while-revalidate
-    // (edge-cache.ts) makes the hot path a cache hit and the write paths purge on change.
-    // Scoped to a plain GET HTML view that no admin is signed into — an admin must always see
-    // live data, and a personalized/non-HTML response must never be shared-cached. Entity
-    // pages cache only their canonical (query-less) URL; a paginated/sorted variant flows
-    // through uncached so it can't collide onto page 1 (isCacheableEntityRequest).
+    // Edge-cache the public read surfaces: the log pages (`/log`, `/log/<id>`), the entity
+    // detail pages (`/artist|/album|/label/<slug>`), and the hub/index pages (`/`, `/artists`,
+    // `/albums`, `/labels`, `/tracks`, `/fresh`). The cold path is Worker SSR + Turso reads per
+    // render — measured at ~1s for `/artists`, ~98% of it server think — so a short TTL plus
+    // stale-while-revalidate (edge-cache.ts) turns the hot path into a cache hit. Detail pages
+    // additionally get an explicit purge from the write paths; a hub rides a 60s fresh window
+    // instead, because it invalidates on any member change (see edge-cache.ts for the call).
+    //
+    // `edgeCachePolicyFor` is the single decision point for WHICH paths are cacheable and under
+    // which TTL, including the query-string rule: the cache key drops the query, so only a bare
+    // canonical URL is cached and a paginated/filtered variant (`?page=2`, `?galaxy=…`,
+    // `?story=…`) flows through uncached rather than colliding onto page 1. The guards it cannot
+    // see are enforced here: a plain GET, an HTML-accepting client, and no admin cookie — an
+    // admin must always see live data, and a personalized/non-HTML response must never be
+    // shared-cached.
     const url = new URL(request.url);
+    const cachePolicy = edgeCachePolicyFor(url.pathname, url.search);
 
     if (
+      cachePolicy &&
       request.method === "GET" &&
-      (isCacheableLogPath(url.pathname) || isCacheableEntityRequest(url.pathname, url.search)) &&
       !hasAdminCookie(request) &&
       (request.headers.get("accept")?.includes("text/html") ?? false)
     ) {
-      const cached = await withEdgeCache(request, async () => handler.fetch(request));
+      const cached = await withEdgeCache(request, async () => handler.fetch(request), cachePolicy);
 
       // The per-path .onion pill is most valuable here: a Tor user on /log/<id>
       // should land on that exact finding's onion page. Inert until the onion

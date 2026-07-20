@@ -101,3 +101,47 @@ describe("Cache-Control on the crawler-facing surfaces", () => {
     expect(res.headers.get("Cache-Control")).not.toContain("immutable");
   });
 });
+
+// The SSR HTML surfaces are the other half of the cache-header contract. They do not
+// answer from a route handler — `server.ts` wraps them in `withEdgeCache`, which stamps
+// the directive from the policy `edgeCachePolicyFor` picked. So the literal to lock here
+// is the policy's, plus the routing decision that says which pages get which one. The
+// behaviour behind them (store/serve/stale/never-store) is proven in
+// `lib/server/edge-cache.test.ts`.
+describe("Cache-Control on the edge-cached HTML surfaces", () => {
+  it("the detail pages carry the short-fresh, hour-tailed directive", async () => {
+    const { PAGE_CACHE_POLICY, edgeCachePolicyFor } = await import("../lib/server/edge-cache");
+
+    expect(PAGE_CACHE_POLICY.cacheControl).toBe(
+      "public, max-age=0, s-maxage=300, stale-while-revalidate=3600",
+    );
+    // Not a day: the document references build-scoped `/assets/<hash>.js`, so a stale tail
+    // longer than the deploy cadence serves HTML whose chunks are already 404s.
+    expect(PAGE_CACHE_POLICY.cacheControl).not.toContain("86400");
+    expect(edgeCachePolicyFor("/log/2026.A.7Q", "")).toBe(PAGE_CACHE_POLICY);
+    expect(edgeCachePolicyFor("/artist/sub-focus", "")).toBe(PAGE_CACHE_POLICY);
+  });
+
+  it("the hub pages carry the minute-fresh directive", async () => {
+    const { HUB_CACHE_POLICY, edgeCachePolicyFor } = await import("../lib/server/edge-cache");
+
+    expect(HUB_CACHE_POLICY.cacheControl).toBe(
+      "public, max-age=0, s-maxage=60, stale-while-revalidate=600",
+    );
+
+    for (const path of ["/", "/artists", "/albums", "/labels", "/tracks", "/fresh"]) {
+      expect(edgeCachePolicyFor(path, "")).toBe(HUB_CACHE_POLICY);
+    }
+  });
+
+  it("no directive is minted for a query variant or a private surface", async () => {
+    const { edgeCachePolicyFor } = await import("../lib/server/edge-cache");
+
+    // The cache key drops the query, so a variant must never be shared-cached.
+    expect(edgeCachePolicyFor("/artists", "?page=2")).toBeUndefined();
+    expect(edgeCachePolicyFor("/tracks", "?galaxy=drift")).toBeUndefined();
+    // Nor an account/admin surface.
+    expect(edgeCachePolicyFor("/account", "")).toBeUndefined();
+    expect(edgeCachePolicyFor("/admin/tracks", "")).toBeUndefined();
+  });
+});
