@@ -36,7 +36,8 @@
 // `copyrights` array (present at our tier): an album is kept ONLY when the seed label's name
 // FOLD-matches one of its ℗/© strings. No copyright match ⇒ skip (never mint on the fuzzy hit
 // alone). Album-track objects carry no ISRC at our tier either, so each kept album's tracks are
-// fetched individually (`GET /tracks?ids=`) for `external_ids.isrc` + duration.
+// fetched one at a time (`GET /tracks/{id}`) for `external_ids.isrc` + duration. SINGLES ONLY: the
+// batch endpoints (`/albums?ids=`, `/tracks?ids=`) are 403 at our tier — see MAX_FETCHES_PER_PASS.
 //
 // ── THE DEDUPE CONTRACT (the load-bearing design point — catalogue-dedupe.ts) ─────────────────
 // This probe and the MB crawl converge on ONE row per recording from EITHER direction:
@@ -79,16 +80,32 @@ const FAILURE_COOLDOWN_MAX_MS = 7 * 24 * 60 * 60 * 1000;
  *  multiple of the per-pass cap, so cooling-down rows never starve an eligible one out of the pass. */
 const WORKLIST_OVERSCAN = PROBE_LABELS_PER_PASS * 4;
 
-/** Fresh albums the search asks for (Spotify's page cap is 50). */
-const SEARCH_LIMIT = 50;
+/** Fresh albums the search asks for. Spotify DOCUMENTS a page cap of 50, but OUR app's limited
+ *  tier rejects any search `limit` above 10 with a 400 (measured live 2026-07-20: 10 → 200, every
+ *  value 20–50 → 400) — the same family of quiet tier-cuts as the missing album `label` field. Ten
+ *  is plenty: `tag:new` spans two weeks and even the busiest seed label ships fewer fresh records
+ *  than that. */
+const SEARCH_LIMIT = 10;
 
 /** Albums inspected per label per pass, so one junk-heavy label (a fuzzy `label:` match returning
- *  scores of unrelated albums) cannot drain the whole Spotify budget in a single pass. */
+ *  unrelated albums) cannot drain the whole Spotify budget in a single pass. Effectively bounded by
+ *  `SEARCH_LIMIT` (10) already; this is a belt on top of it. */
 const MAX_ALBUMS_PER_LABEL = 40;
 
-/** Spotify's batch caps: 20 albums / 50 tracks per `?ids=` request. */
-const ALBUMS_BATCH = 20;
-const TRACKS_BATCH = 50;
+/**
+ * SINGLES ONLY — the batch endpoints are GONE at our app tier. Measured live 2026-07-20:
+ * `GET /v1/albums?ids=…` → 403 and `GET /v1/tracks?ids=…` → 403 (the same family of tier-cuts as the
+ * missing album `label` field and the search `limit` ≤ 10 cap), while the SINGLE reads
+ * `GET /v1/albums/{id}` and `GET /v1/tracks/{id}` both → 200 (the single album carries `copyrights`;
+ * the single track carries `external_ids.isrc` + duration). So the probe fetches one id at a time.
+ *
+ * Budget stays sane by construction: only fuzzy-search HITS get an album read (≤ `SEARCH_LIMIT`
+ * per label → tens/day archive-wide), and only copyright-PASSING albums get their tracks read. This
+ * ceiling is the backstop against one pathological day spraying calls: once a pass has made this
+ * many single reads it ends CLEANLY (no more labels this tick), leaving the un-stamped labels for
+ * the next tick — the durable `label_releases_checked_at` cadence resumes exactly where it left off.
+ */
+const MAX_FETCHES_PER_PASS = 150;
 
 // ── Types ──────────────────────────────────────────────────────────────────────────────────────
 
@@ -102,7 +119,7 @@ type LabelProbeRow = {
   slug: string;
 };
 
-/** A parsed full album (`/albums?ids=`) — the fields the copyrights post-filter + the mint read. */
+/** A parsed full album (`GET /albums/{id}`) — the fields the copyrights post-filter + the mint read. */
 export type ProbeAlbum = {
   copyrights: string[];
   id: string;
@@ -111,7 +128,7 @@ export type ProbeAlbum = {
   trackIds: string[];
 };
 
-/** A parsed full track (`/tracks?ids=`) — everything a valid catalogue row needs. */
+/** A parsed full track (`GET /tracks/{id}`) — everything a valid catalogue row needs. */
 export type ProbeTrack = {
   artistNames: string[];
   durationMs: number;
@@ -135,6 +152,12 @@ export type LabelReleasesProbeResult = {
   failedLabels: string[];
   /** The seed-label slugs probed this pass — or, in a dry run, the ones that WOULD be probed. */
   labelSlugs: string[];
+  /** Single album/track reads that failed (a 404/5xx on `GET /albums/{id}` or `/tracks/{id}`) and
+   *  were SKIPPED — never a label failure stamp (that is reserved for the search call). */
+  failedFetches: number;
+  /** True when the pass ENDED EARLY on the per-pass single-fetch ceiling (`MAX_FETCHES_PER_PASS`).
+   *  The un-stamped labels resume next tick; a soft cap, not an error. */
+  fetchCeilingHit: boolean;
   /** Enabled seed labels whose fresh-release search actually ran this pass. */
   labelsProbed: number;
   /** Catalogue rows this pass minted (never a certification). */
@@ -152,17 +175,6 @@ export type LabelReleasesProbeResult = {
 
 function asString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
-}
-
-/** Chunk an array into groups of at most `size` (the Spotify `?ids=` batching). */
-function chunk<T>(items: T[], size: number): T[][] {
-  const out: T[][] = [];
-
-  for (let i = 0; i < items.length; i += size) {
-    out.push(items.slice(i, i + size));
-  }
-
-  return out;
 }
 
 /**
@@ -185,100 +197,85 @@ export function parseLabelAlbumSearch(body: unknown): string[] {
 }
 
 /**
- * A Spotify `/albums?ids=` response → the parsed albums (copyrights + track ids + date). A null
- * entry (an invalid id) drops out. `copyrights` is flattened to its `text` strings for the fold.
+ * A Spotify `GET /albums/{id}` response → the parsed album (copyrights + track ids + date), or null
+ * when the body carries no id. The SINGLE-album shape: the album object is the top-level body (no
+ * `{ albums: [...] }` batch wrapper — the batch endpoint is 403 at our tier). `copyrights` is
+ * flattened to its `text` strings for the fold. Pure, so the probe tests pin it directly.
  */
-export function parseProbeAlbums(body: unknown): ProbeAlbum[] {
-  const list = (body as { albums?: unknown[] } | null | undefined)?.albums;
-  const albums: ProbeAlbum[] = [];
-
-  for (const raw of Array.isArray(list) ? list : []) {
-    if (!raw || typeof raw !== "object") {
-      continue;
-    }
-
-    const album = raw as {
-      copyrights?: Array<{ text?: unknown }>;
-      id?: unknown;
-      name?: unknown;
-      release_date?: unknown;
-      tracks?: { items?: Array<{ id?: unknown }> };
-    };
-    const id = asString(album.id);
-
-    if (!id) {
-      continue;
-    }
-
-    const copyrights = (Array.isArray(album.copyrights) ? album.copyrights : [])
-      .map((entry) => asString(entry?.text))
-      .filter((text): text is string => Boolean(text));
-    const trackIds = (Array.isArray(album.tracks?.items) ? album.tracks.items : [])
-      .map((track) => asString(track?.id))
-      .filter((tid): tid is string => Boolean(tid));
-
-    albums.push({
-      copyrights,
-      id,
-      name: asString(album.name),
-      releaseDate: asString(album.release_date),
-      trackIds,
-    });
+export function parseProbeAlbum(body: unknown): ProbeAlbum | null {
+  if (!body || typeof body !== "object") {
+    return null;
   }
 
-  return albums;
+  const album = body as {
+    copyrights?: Array<{ text?: unknown }>;
+    id?: unknown;
+    name?: unknown;
+    release_date?: unknown;
+    tracks?: { items?: Array<{ id?: unknown }> };
+  };
+  const id = asString(album.id);
+
+  if (!id) {
+    return null;
+  }
+
+  return {
+    copyrights: (Array.isArray(album.copyrights) ? album.copyrights : [])
+      .map((entry) => asString(entry?.text))
+      .filter((text): text is string => Boolean(text)),
+    id,
+    name: asString(album.name),
+    releaseDate: asString(album.release_date),
+    trackIds: (Array.isArray(album.tracks?.items) ? album.tracks.items : [])
+      .map((track) => asString(track?.id))
+      .filter((tid): tid is string => Boolean(tid)),
+  };
 }
 
 /**
- * A Spotify `/tracks?ids=` response → the parsed tracks (ISRC + duration + uri/url + artists). A
- * null entry drops out. `duration_ms` is the real duration (`duration_ms` is NOT NULL on `tracks`;
- * 0 is the honest unknown). A track with no id or no name drops out.
+ * A Spotify `GET /tracks/{id}` response → the parsed track (ISRC + duration + uri/url + artists), or
+ * null when the body carries no id or no name. The SINGLE-track shape: the track object is the
+ * top-level body (no `{ tracks: [...] }` batch wrapper — the batch endpoint is 403 at our tier).
+ * `duration_ms` is the real duration (`duration_ms` is NOT NULL on `tracks`; 0 is the honest
+ * unknown). Pure, so the probe tests pin it directly.
  */
-export function parseProbeTracks(body: unknown): ProbeTrack[] {
-  const list = (body as { tracks?: unknown[] } | null | undefined)?.tracks;
-  const tracks: ProbeTrack[] = [];
-
-  for (const raw of Array.isArray(list) ? list : []) {
-    if (!raw || typeof raw !== "object") {
-      continue;
-    }
-
-    const track = raw as {
-      artists?: Array<{ name?: unknown }>;
-      duration_ms?: unknown;
-      external_ids?: { isrc?: unknown };
-      external_urls?: { spotify?: unknown };
-      id?: unknown;
-      name?: unknown;
-      uri?: unknown;
-    };
-    const spotifyTrackId = asString(track.id);
-    const title = asString(track.name);
-
-    if (!spotifyTrackId || !title) {
-      continue;
-    }
-
-    const artistNames = (Array.isArray(track.artists) ? track.artists : [])
-      .map((artist) => asString(artist?.name))
-      .filter((name): name is string => Boolean(name));
-    const duration = track.duration_ms;
-
-    tracks.push({
-      artistNames,
-      durationMs:
-        typeof duration === "number" && Number.isFinite(duration) ? Math.round(duration) : 0,
-      isrc: asString(track.external_ids?.isrc),
-      spotifyTrackId,
-      spotifyUri: asString(track.uri) ?? `spotify:track:${spotifyTrackId}`,
-      spotifyUrl:
-        asString(track.external_urls?.spotify) ??
-        `https://open.spotify.com/track/${spotifyTrackId}`,
-      title,
-    });
+export function parseProbeTrack(body: unknown): ProbeTrack | null {
+  if (!body || typeof body !== "object") {
+    return null;
   }
 
-  return tracks;
+  const track = body as {
+    artists?: Array<{ name?: unknown }>;
+    duration_ms?: unknown;
+    external_ids?: { isrc?: unknown };
+    external_urls?: { spotify?: unknown };
+    id?: unknown;
+    name?: unknown;
+    uri?: unknown;
+  };
+  const spotifyTrackId = asString(track.id);
+  const title = asString(track.name);
+
+  if (!spotifyTrackId || !title) {
+    return null;
+  }
+
+  const duration = track.duration_ms;
+
+  return {
+    artistNames: (Array.isArray(track.artists) ? track.artists : [])
+      .map((artist) => asString(artist?.name))
+      .filter((name): name is string => Boolean(name)),
+    durationMs:
+      typeof duration === "number" && Number.isFinite(duration) ? Math.round(duration) : 0,
+    isrc: asString(track.external_ids?.isrc),
+    spotifyTrackId,
+    spotifyUri: asString(track.uri) ?? `spotify:track:${spotifyTrackId}`,
+    spotifyUrl:
+      asString(track.external_urls?.spotify) ?? `https://open.spotify.com/track/${spotifyTrackId}`,
+    title,
+  };
 }
 
 /**
@@ -650,19 +647,28 @@ function labelSearchPath(labelName: string): string {
 // ── The pass ──────────────────────────────────────────────────────────────────────────────────
 
 /** How probing one label ended — the signal the main loop acts on. */
-type LabelSignal = "continue" | "stop-rate" | "stop-unauth";
+type LabelSignal = "continue" | "stop-budget" | "stop-rate" | "stop-unauth";
+
+/** A mutable per-PASS single-fetch counter, threaded through every label so the ceiling is a
+ *  pass-wide budget rather than a per-label one. */
+type FetchBudget = { fetches: number };
 
 /**
- * Probe ONE label: search its fresh releases, copyright-filter the albums, mint the tracks the
- * archive does not already hold. Stamps the cadence on success, backs the label off on a transient
- * error. Returns whether the pass should continue, stop on a 429, or stop on a gone grant.
+ * Probe ONE label: search its fresh releases, copyright-filter the albums (each fetched as a SINGLE
+ * `GET /albums/{id}` — the batch endpoint is 403 at our tier), and mint the tracks the archive does
+ * not already hold (each fetched as a SINGLE `GET /tracks/{id}`). Stamps the cadence on success,
+ * backs the LABEL off only on a search error; a failed single album/track read is skipped + counted,
+ * never a label stamp. Returns whether the pass should continue, stop on the fetch ceiling, a 429, or
+ * a gone grant.
  */
 async function probeOneLabel(
   label: LabelProbeRow,
   accessToken: string,
   result: LabelReleasesProbeResult,
+  budget: FetchBudget,
 ): Promise<LabelSignal> {
-  // 1. Search the label's fresh releases.
+  // 1. Search the label's fresh releases. A search error backs the LABEL off (the one place that
+  //    stamps a label failure — its own read failed, so its whole probe is untrustworthy this tick).
   const search = await spotifyGet(labelSearchPath(label.name), accessToken);
 
   if (search.kind === "unauthorized") {
@@ -694,11 +700,19 @@ async function probeOneLabel(
     return "continue";
   }
 
-  // 2. Fetch the full albums (batched) for their copyrights + track ids.
+  // 2. Fetch each album as a SINGLE `GET /albums/{id}` (the batch endpoint is 403 at our tier). A
+  //    failed single read SKIPS that album and continues — never a label stamp.
   const albums: ProbeAlbum[] = [];
 
-  for (const ids of chunk(albumIds, ALBUMS_BATCH)) {
-    const outcome = await spotifyGet(`/albums?ids=${ids.join(",")}`, accessToken);
+  for (const id of albumIds) {
+    if (budget.fetches >= MAX_FETCHES_PER_PASS) {
+      result.fetchCeilingHit = true;
+
+      return "stop-budget";
+    }
+
+    budget.fetches += 1;
+    const outcome = await spotifyGet(`/albums/${encodeURIComponent(id)}`, accessToken);
 
     if (outcome.kind === "unauthorized") {
       return "stop-unauth";
@@ -711,22 +725,22 @@ async function probeOneLabel(
     }
 
     if (outcome.kind === "failed") {
-      // A transient error mid-label — back it off and DON'T stamp the cadence, so the next tick
-      // re-probes (the dedupe skips anything already minted).
-      await recordLabelFailure(label.slug, label.failures);
-      result.failedLabels.push(label.slug);
-
-      return "continue";
+      result.failedFetches += 1;
+      continue;
     }
 
-    albums.push(...parseProbeAlbums(outcome.body));
+    const album = parseProbeAlbum(outcome.body);
+
+    if (album) {
+      albums.push(album);
+    }
   }
 
   // 3. THE POST-FILTER: keep only albums whose copyrights name the seed label.
   const matched = albums.filter((album) => copyrightMatchesLabel(album.copyrights, label.name));
   result.albumsMatched += matched.length;
 
-  // 4. Mint the un-held tracks of each matched album.
+  // 4. Mint the un-held tracks of each matched album, each fetched as a SINGLE `GET /tracks/{id}`.
   for (const album of matched) {
     const unminted = await unmintedSpotifyTrackIds(album.trackIds);
 
@@ -736,8 +750,15 @@ async function probeOneLabel(
 
     const probeTracks: ProbeTrack[] = [];
 
-    for (const ids of chunk(unminted, TRACKS_BATCH)) {
-      const outcome = await spotifyGet(`/tracks?ids=${ids.join(",")}`, accessToken);
+    for (const id of unminted) {
+      if (budget.fetches >= MAX_FETCHES_PER_PASS) {
+        result.fetchCeilingHit = true;
+
+        return "stop-budget";
+      }
+
+      budget.fetches += 1;
+      const outcome = await spotifyGet(`/tracks/${encodeURIComponent(id)}`, accessToken);
 
       if (outcome.kind === "unauthorized") {
         return "stop-unauth";
@@ -750,13 +771,15 @@ async function probeOneLabel(
       }
 
       if (outcome.kind === "failed") {
-        await recordLabelFailure(label.slug, label.failures);
-        result.failedLabels.push(label.slug);
-
-        return "continue";
+        result.failedFetches += 1;
+        continue;
       }
 
-      probeTracks.push(...parseProbeTracks(outcome.body));
+      const track = parseProbeTrack(outcome.body);
+
+      if (track) {
+        probeTracks.push(track);
+      }
     }
 
     // The album row, folded on the album-title slug (Spotify carries no release-group MBID).
@@ -797,7 +820,9 @@ export async function probeLabelReleases({
     albumsSeen: 0,
     configured: true,
     dryRun,
+    failedFetches: 0,
     failedLabels: [],
+    fetchCeilingHit: false,
     labelSlugs: [],
     labelsProbed: 0,
     newRows: 0,
@@ -831,14 +856,18 @@ export async function probeLabelReleases({
     return { ...result, configured: false };
   }
 
+  // The single-fetch budget, shared across every label this pass so the ceiling is pass-wide.
+  const budget: FetchBudget = { fetches: 0 };
+
   for (const label of eligible) {
-    const signal = await probeOneLabel(label, accessToken, result);
+    const signal = await probeOneLabel(label, accessToken, result, budget);
 
     if (signal === "stop-unauth") {
       return { ...result, configured: false };
     }
 
-    if (signal === "stop-rate") {
+    // A 429 or the fetch ceiling both END the pass cleanly — the un-stamped labels resume next tick.
+    if (signal === "stop-rate" || signal === "stop-budget") {
       break;
     }
   }

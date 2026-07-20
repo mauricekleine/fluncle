@@ -24,6 +24,10 @@ set -uo pipefail
 export PATH="/usr/local/bin:/root/.bun/bin:${PATH:-/usr/bin:/bin}"
 export BUN_BIN="${BUN_BIN:-/usr/local/bin/bun}"
 
+# Headless `claude -p` kills backgrounded Bash ~5s after the final result; a sweep that
+# backgrounds work and ends its turn loses it silently. Documented: code.claude.com/docs/en/env-vars.md
+export CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1
+
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 AUDIT_DIR="${SCRIPT_DIR}/audit"
 

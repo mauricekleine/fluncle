@@ -22,7 +22,7 @@ case "$(cat "$(dirname "$0")/mode")" in
   unconfigured) printf '{"ok":true,"configured":false,"dryRun":false,"labelsProbed":0,"newRows":0,"skippedKnown":0,"labelSlugs":[],"failedLabels":[],"albumsSeen":0,"albumsMatched":0,"rateLimited":false,"failedCount":0}\\n' ;;
   cli-error) printf '{"code":"missing_token","message":"Missing required env vars: FLUNCLE_API_TOKEN","ok":false}\\n'; exit 1 ;;
   crash) printf 'boom\\n' >&2; exit 1 ;;
-  *) printf '{"ok":true,"configured":true,"dryRun":false,"labelsProbed":3,"newRows":7,"skippedKnown":12,"labelSlugs":["medschool","hospital","ram"],"failedLabels":["tiny-imprint"],"albumsSeen":40,"albumsMatched":4,"rateLimited":false,"failedCount":0}\\n' ;;
+  *) printf '{"ok":true,"configured":true,"dryRun":false,"labelsProbed":3,"newRows":7,"skippedKnown":12,"labelSlugs":["medschool","hospital","ram"],"failedLabels":["tiny-imprint"],"failedFetches":2,"fetchCeilingHit":false,"albumsSeen":9,"albumsMatched":4,"rateLimited":false,"failedCount":0}\\n' ;;
 esac
 `;
 
@@ -51,6 +51,7 @@ afterAll(() => {
 type Pass = {
   albumsMatched?: number;
   configured?: boolean;
+  failedFetches?: number;
   failedLabels?: string[];
   labelSlugs?: string[];
   labelsProbed?: number;
@@ -69,6 +70,7 @@ describe("label-releases-sweep's fluncleJson", () => {
     expect(pass.newRows).toBe(7);
     expect(pass.skippedKnown).toBe(12);
     expect(pass.albumsMatched).toBe(4);
+    expect(pass.failedFetches).toBe(2);
     expect(pass.labelSlugs).toEqual(["medschool", "hospital", "ram"]);
     expect(pass.failedLabels).toEqual(["tiny-imprint"]);
   });
