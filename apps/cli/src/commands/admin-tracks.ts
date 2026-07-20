@@ -545,6 +545,8 @@ export type LabelReleasesBackfillResult = {
   // True when the pass STOPPED on the Spotify 429 rate-limit backoff.
   rateLimited: boolean;
   skippedKnown: number;
+  // Albums dropped for artist-grounding (no artist on the album is in our archive yet).
+  skippedUngrounded: number;
 };
 
 // One bounded pass of the freshness tap (D8) — a probe over ENABLED seed labels that mints day-one

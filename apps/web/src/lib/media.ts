@@ -184,6 +184,18 @@ const OWNED_COVER_WIDTH: Record<CoverSize, number> = {
   xl: 1200,
 };
 
+/**
+ * THE RUNG THE HUB GRIDS ASK FOR — `/albums`, `/labels`, `/artists`, and any other tile of the
+ * `.artist-grid` / `.artist-avatar-grid` family.
+ *
+ * Those grids are `repeat(auto-fill, minmax(6.5rem, 1fr))`: a tile measures ~114px on the plate
+ * (an artist avatar ~102px), so a 2× retina display wants ~230 device px. `medium` (300) covers
+ * that with headroom; the `large` (640) rung those grids used to request was a 5.6× over-fetch of
+ * every cover on the page, and `small` (64) would visibly soften on retina. One named constant so
+ * the three hubs cannot drift apart.
+ */
+export const COVER_TILE_SIZE: CoverSize = "medium";
+
 // The Spotify album-art id is the 16-char size code + a 24-char (hex) cover hash.
 const SPOTIFY_ALBUM_IMAGE_RE = /^(https:\/\/i\.scdn\.co\/image\/)ab67616d[0-9a-f]{8}([0-9a-f]+)$/;
 

@@ -339,6 +339,9 @@ export const backfillLabelReleases = oc
       // Tracks skipped because the archive already holds them (Spotify id / uri / ISRC / same-album
       // title fold) — the dedupe contract, working.
       skippedKnown: z.number(),
+      // Albums that passed the exact copyright match but were DROPPED for artist-grounding (no artist
+      // on the album is in our archive yet — a homonym label, or a debut awaiting the MB backfill).
+      skippedUngrounded: z.number(),
     }),
   );
 

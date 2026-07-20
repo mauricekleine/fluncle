@@ -193,6 +193,7 @@ export function adminBackfillsHandlers(os: Implementer) {
           ok: true as const,
           rateLimited: result.rateLimited,
           skippedKnown: result.skippedKnown,
+          skippedUngrounded: result.skippedUngrounded,
         };
       } catch (error) {
         throw apiFault(error);

@@ -19,13 +19,13 @@ export default defineConfig({
       provider: "v8",
       reporter: ["text", "html"],
       // Ratchet floors: a few points below today's measured coverage
-      // (stmts 28.1 / branch 24.0 / funcs 24.1 / lines 28.2) so the gate blocks
+      // (stmts 47.8 / branch 42.1 / funcs 41.7 / lines 48.0) so the gate blocks
       // regressions without failing the current suite. Raise these as coverage grows.
       thresholds: {
-        branches: 19,
-        functions: 20,
-        lines: 24,
-        statements: 24,
+        branches: 38,
+        functions: 37,
+        lines: 44,
+        statements: 44,
       },
     },
     environment: "node",
@@ -33,6 +33,10 @@ export default defineConfig({
     // post-deploy probe) carry a focused unit test for its pure logic. Coverage
     // stays scoped to `src/**` (above), so a script's lines never move the floor.
     include: ["src/**/*.test.{ts,tsx}", "scripts/**/*.test.{ts,tsx}"],
+    // No test reaches the real internet. `readOptionalEnv` loads the operator's
+    // `.dev.vars`, so a write-path test otherwise runs with LIVE credentials and
+    // fires the real integration (see src/test/block-network.ts).
+    setupFiles: ["src/test/block-network.ts"],
     // 20s (not vitest's 5s default): the first test in each admin oRPC file cold-imports
     // the whole ./orpc app graph (the router + every contract + the server modules) before
     // its first request, which can exceed 5s on a loaded Cloudflare build box — a false-fail

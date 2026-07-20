@@ -43,6 +43,7 @@ type LabelReleasesSummary = {
   ok?: boolean;
   rateLimited?: boolean;
   skippedKnown?: number;
+  skippedUngrounded?: number;
 };
 
 export function fluncleJson<T>(args: string[]): T {
@@ -111,6 +112,7 @@ export function main(): void {
     newRows: 0,
     ok: true,
     skippedKnown: 0,
+    skippedUngrounded: 0,
   };
 
   try {
@@ -119,6 +121,7 @@ export function main(): void {
     summary.albumsMatched = pass.albumsMatched ?? 0;
     summary.newRows = pass.newRows ?? 0;
     summary.skippedKnown = pass.skippedKnown ?? 0;
+    summary.skippedUngrounded = pass.skippedUngrounded ?? 0;
     summary.failedFetches = pass.failedFetches ?? 0;
     summary.failedLabels = pass.failedLabels?.length ?? 0;
 

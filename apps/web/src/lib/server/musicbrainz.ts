@@ -56,28 +56,64 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// The pacing gate. Workers-safe by construction: slots are allocated SYNCHRONOUSLY from a
-// module-level timestamp (the isolate is single-threaded, so the read-modify-write below is
-// atomic), and each caller sleeps out its own wait with a timer in its OWN request context.
+// The pacing gate — BOTH properties, learned the hard way across 2026-07-18/19:
 //
-// The previous design — a module-level promise chain with a delay() between links — wedged the
-// whole isolate: a link whose request context died (client disconnect, timeout) left behind a
-// timer the runtime never fires (Workers freeze a completed request's timers), so every later
-// MB caller on that isolate queued behind it FOREVER. Observed 2026-07-18: one timed-out
-// label-lineage tick poisoned its isolate, and every wet retry that reused the connection (same
-// isolate) hung until the client gave up — which grew the frozen chain further. With slot
-// allocation, a dead caller merely wastes its slot; nobody ever awaits another request's
-// promises or timers.
+// 1. SINGLE-FILE (in-flight serialization). MusicBrainz wants one polite client, and the
+//    original promise chain guaranteed it implicitly. The pure slot allocator that briefly
+//    replaced it paced ARRIVALS at 1.1s but let calls OVERLAP whenever one ran long — under
+//    MB's evening slowdown the overlap compounded into real 503-throttling of our IP
+//    (observed 2026-07-19 ~21:30 UTC: `throttled: true` sweeps, label-images ticks stretched
+//    past the box CLI's 5-minute timeout). Each caller therefore waits for the previous
+//    call to settle before firing.
+// 2. WEDGE-IMMUNE (the 2026-07-18 lesson). A predecessor whose request context died (client
+//    timeout) can leave a frozen timer/fetch the runtime never settles, so the wait races a
+//    deadline on the CALLER'S OWN clock — a dead head delays the queue by at most
+//    CHAIN_WAIT_FACTOR slots, never forever, and every queued caller's own timer keeps
+//    ticking, so the whole queue unwedges together.
+//
+// The slot timestamp still paces arrivals (and the 503 handler pushes it forward for a
+// global backoff); the chain is the mutual exclusion on top.
 let nextSlotAt = 0;
+let tail: Promise<unknown> = Promise.resolve();
+
+// How long a caller will wait on its predecessor, in units of the pacing interval: covers a
+// legitimately slow call (a 15s aborted fetch + two Retry-After sleeps + retries ≈ 25-35s at
+// the 1.1s production interval → ~44s bound) while keeping the unwedge bound tight. Scaled by
+// the interval so the test seam (interval 0/10ms) keeps tests instant.
+const CHAIN_WAIT_FACTOR = 40;
 
 function throttle<T>(call: () => Promise<T>): Promise<T> {
-  const now = Date.now();
-  const slotAt = Math.max(now, nextSlotAt);
-  nextSlotAt = slotAt + rateLimitIntervalMs;
+  const prev = tail;
 
-  const wait = slotAt - now;
+  const run = (async () => {
+    const chainWait = rateLimitIntervalMs * CHAIN_WAIT_FACTOR;
 
-  return wait > 0 ? delay(wait).then(call) : call();
+    // Serialize behind the predecessor — but never past the deadline on our own clock.
+    if (chainWait > 0) {
+      await Promise.race([prev.then(noop, noop), delay(chainWait)]);
+    } else {
+      await Promise.race([prev.then(noop, noop), Promise.resolve()]);
+    }
+
+    // Arrival pacing on top (the 1 req/s etiquette + the 503 push-forward).
+    const now = Date.now();
+    const slotAt = Math.max(now, nextSlotAt);
+    nextSlotAt = slotAt + rateLimitIntervalMs;
+
+    if (slotAt > now) {
+      await delay(slotAt - now);
+    }
+
+    return call();
+  })();
+
+  tail = run.then(noop, noop);
+
+  return run;
+}
+
+function noop(): void {
+  // The chain never propagates results or rejections — links only sequence.
 }
 
 /** What one MB call returns: the parsed body, or null — plus whether MB throttled us. */

@@ -77,6 +77,8 @@ export async function seedUser(client: Client, user: SeedUser): Promise<void> {
 }
 
 type SeedTrack = {
+  /** The finding's found-date (ISO). Defaults to now; set it to control feed ordering. */
+  addedAt?: string;
   addedToSpotify?: boolean;
   artists?: string[];
   durationMs?: number;
@@ -96,14 +98,14 @@ type SeedTrack = {
  * `findings` row — the shape every finding read must exclude), use `seedCatalogueTrack`.
  */
 export async function seedTrack(client: Client, track: SeedTrack): Promise<void> {
-  const now = new Date().toISOString();
+  const addedAt = track.addedAt ?? new Date().toISOString();
 
   await seedCatalogueTrack(client, track);
   await client.execute({
     args: [
       track.trackId,
       track.logId,
-      now,
+      addedAt,
       track.addedToSpotify ? 1 : 0,
       track.postedToTelegram ? 1 : 0,
     ],
@@ -167,6 +169,56 @@ export async function seedLabel(client: Client, label: SeedEntity): Promise<void
     args: [label.id, label.name ?? "Test Label", label.slug, now, now],
     sql: `insert into labels (id, name, slug, created_at, updated_at)
       values (?, ?, ?, ?, ?)`,
+  });
+}
+
+/** Inserts an `albums` row — the columns the graph pages + cover chain read (id, name, slug). */
+export async function seedAlbum(client: Client, album: SeedEntity): Promise<void> {
+  const now = new Date().toISOString();
+
+  await client.execute({
+    args: [album.id, album.name ?? "Test Album", album.slug, now, now],
+    sql: `insert into albums (id, name, slug, created_at, updated_at)
+      values (?, ?, ?, ?, ?)`,
+  });
+}
+
+type SeedMixtape = {
+  addedAt?: string;
+  durationMs?: number;
+  id: string;
+  /** The `F`-marked mixtape coordinate. NULL leaves the mixtape unminted (out of the feed). */
+  logId: null | string;
+  note?: null | string;
+  sequenceNumber?: null | number;
+  status?: "distributing" | "published";
+  title?: string;
+};
+
+/**
+ * Inserts a `mixtapes` row (the dream checkpoint). A `published` mixtape with a
+ * `log_id` + `added_at` is what the public feed's mixtape arm reads
+ * (`listPublishedMixtapeFeedRows`); the defaults seed exactly that.
+ */
+export async function seedMixtape(client: Client, mixtape: SeedMixtape): Promise<void> {
+  const now = new Date().toISOString();
+
+  await client.execute({
+    args: [
+      mixtape.id,
+      mixtape.logId,
+      mixtape.sequenceNumber ?? null,
+      mixtape.title ?? "Test Mixtape",
+      mixtape.status ?? "published",
+      mixtape.note ?? null,
+      mixtape.durationMs ?? 3_600_000,
+      mixtape.addedAt ?? now,
+      now,
+      now,
+    ],
+    sql: `insert into mixtapes
+      (id, log_id, sequence_number, title, status, note, duration_ms, added_at, created_at, updated_at)
+      values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   });
 }
 

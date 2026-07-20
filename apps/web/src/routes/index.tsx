@@ -4,6 +4,7 @@ import {
   Link,
   createFileRoute,
   useCanGoBack,
+  useLoaderData,
   useNavigate,
   useRouter,
 } from "@tanstack/react-router";
@@ -145,6 +146,10 @@ const coverArt = (
 
 function HomePage() {
   const initialPage = Route.useLoaderData();
+  // The Galaxies launch gate is already resolved ONCE per request by the root loader (the nav
+  // and the colophon link the lens through it). Read that value rather than asking the database
+  // the same question a second time inside the home loader — same gate, one round-trip.
+  const { galaxiesLive } = useLoaderData({ from: "__root__" });
   const { story } = Route.useSearch();
   const navigate = useNavigate();
   const router = useRouter();
@@ -155,6 +160,13 @@ function HomePage() {
   // Focus-refetch is intentionally OFF: the archive barely changes minute to
   // minute, and refetching every loaded page on tab-back would waste bandwidth
   // and risk a scroll jump for someone reading deep in the list.
+  //
+  // `staleTime` is what makes the SEED actually count. Without it the seeded page
+  // is stale the instant it hydrates, so every home load fired a `/api/tracks`
+  // refetch for the exact ten rows SSR had just delivered — a guaranteed duplicate
+  // round-trip on the site's front door. A minute of trust matches the pill below
+  // it and the pace the archive actually moves at; a real navigation back to `/`
+  // re-runs the loader anyway.
   const {
     data,
     error: loadError,
@@ -170,6 +182,7 @@ function HomePage() {
     queryFn: ({ pageParam }) => fetchTracks({ cursor: pageParam, limit: HOME_PAGE_SIZE }),
     queryKey: ["home-feed"],
     refetchOnWindowFocus: false,
+    staleTime: 60_000,
   });
 
   const tracks = data.pages.flatMap((page) => page.tracks);
@@ -314,7 +327,7 @@ function HomePage() {
               )}
               {/* The link hub: actions, then the quiet links pushed to the
                   bottom of the column. */}
-              <HomeLinkHub galaxiesLive={initialPage.galaxiesLive} />
+              <HomeLinkHub galaxiesLive={galaxiesLive} />
             </aside>
 
             <section aria-labelledby="playlist-title" className="flex min-w-0 flex-col lg:min-h-0">

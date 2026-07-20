@@ -513,7 +513,16 @@ export function SearchTrigger(): ReactNode {
       >
         <MagnifyingGlassIcon aria-hidden="true" className="search-trigger-icon" />
         <span className="search-trigger-label">Search</span>
-        <kbd className="search-trigger-kbd">{isApple ? "⌘K" : "Ctrl K"}</kbd>
+        {/* The key hint is a VISUAL affordance only. Left exposed, the button's visible text reads
+            "Search ⌘K" while its accessible name is "Search the archive" — the visible label is
+            then not contained in the accessible name, which is a WCAG 2.5.3 failure (Lighthouse's
+            `label-content-name-mismatch`) and, worse, leaves a voice-control user saying a phrase
+            the button does not answer to. Hidden, the visible label is "Search", which the
+            accessible name does contain; `aria-keyshortcuts` above already tells assistive tech
+            about the shortcut, in the form it is meant to be announced. */}
+        <kbd aria-hidden="true" className="search-trigger-kbd">
+          {isApple ? "⌘K" : "Ctrl K"}
+        </kbd>
       </button>
 
       <SearchDialog onOpenChange={setOpen} open={open} />
