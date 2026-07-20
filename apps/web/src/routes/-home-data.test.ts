@@ -1,6 +1,6 @@
 // `loadHomeData` — the home feed's server-side composition — against a REAL libSQL database (the
 // migrations, the finding inner-join, the mixtape merge). The home page is the highest-traffic
-// surface, and its loader is a four-read fan-out whose merge rules (findings + mixtapes interleaved
+// surface, and its loader is a three-read fan-out whose merge rules (findings + mixtapes interleaved
 // by date, a findings-only `totalCount`, the newest-finding-with-footage resolved across the WHOLE
 // archive) are pure SQL — a mocked-DB test would pass while any of them was broken. So this drives
 // the real `listTracks` merge on the real schema, exactly like the server-side integration suites.
@@ -11,7 +11,7 @@ import { createIntegrationDb, seedCatalogueTrack, seedTrack } from "@/lib/server
 import { HOME_PAGE_SIZE, loadHomeData } from "./-home-data";
 
 // The one live database, swapped in fresh for each test. `getDb` closes over it, so the REAL query
-// functions (`listTracks`, `getLiveState`, `isGalaxyMapFullyNamed`) run REAL SQL against the REAL
+// functions (`listTracks`, `getLiveState`) run REAL SQL against the REAL
 // migrated schema. The route imports `getDb` through `@/lib/server/tracks` → `./db`, the same module
 // this alias resolves to.
 let db: Client;
@@ -76,7 +76,7 @@ afterEach(() => {
 });
 
 describe("loadHomeData — the empty archive", () => {
-  it("returns an honest empty shape, no story, offline, and the Galaxies gate closed", async () => {
+  it("returns an honest empty shape, no story, and offline", async () => {
     const data = await loadHomeData();
 
     expect(data.tracks).toEqual([]);
@@ -84,10 +84,9 @@ describe("loadHomeData — the empty archive", () => {
     expect(data.nextCursor).toBeUndefined();
     // No finding with footage anywhere ⇒ no stories entry point.
     expect(data.newestStoryLogId).toBeUndefined();
-    // The two ambient reads default cleanly on an empty archive (they carry their own tests; here we
-    // only prove the loader wires them through).
+    // The ambient read defaults cleanly on an empty archive (it carries its own tests; here we
+    // only prove the loader wires it through).
     expect(data.live.on).toBe(false);
-    expect(data.galaxiesLive).toBe(false);
   });
 });
 
@@ -202,8 +201,8 @@ describe("loadHomeData — page one and the stories entry point", () => {
   });
 });
 
-describe("loadHomeData — the Galaxies gate wiring", () => {
-  it("reports galaxiesLive true once the whole galaxy map is named", async () => {
+describe("loadHomeData — the Galaxies gate is NOT the home loader's job", () => {
+  it("never carries a galaxiesLive of its own (the root loader owns that one read)", async () => {
     await db.execute({
       args: [],
       sql: `insert into galaxies (id, handle, centroid_json, name, slug, created_at, updated_at)
@@ -212,6 +211,9 @@ describe("loadHomeData — the Galaxies gate wiring", () => {
 
     const data = await loadHomeData();
 
-    expect(data.galaxiesLive).toBe(true);
+    // A fully named map would once have flipped a `galaxiesLive` here — a duplicate of the value
+    // the root loader already resolved for the nav. The home page reads it from there now, so this
+    // loader must not ask the database again.
+    expect(data).not.toHaveProperty("galaxiesLive");
   });
 });
