@@ -3,8 +3,12 @@
 // law that a signed-out visitor sees NOTHING new on an entity page. The control starts in the
 // "loading" face and returns null; the session check runs in a `useEffect`, which never fires
 // under SSR — so the FIRST PAINT is always empty, and a signed-out client (whose
-// `/api/me/watches` check resolves to 401) simply never leaves that empty state. This pins the
-// default-empty render (vitest env = node, no DOM — the catalogue-hub-section.test.tsx style).
+// session is not confirmed) simply never leaves that empty state. This pins the default-empty
+// render (vitest env = node, no DOM — the catalogue-hub-section.test.tsx style).
+//
+// The session is now read from the shared client store BEFORE any request goes out, so an
+// anonymous visitor costs the origin nothing at all — no guaranteed-401 `/api/me/watches`. That
+// half is a network fact, verified in a real browser past hydration rather than here.
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { WatchButton } from "./watch-button";

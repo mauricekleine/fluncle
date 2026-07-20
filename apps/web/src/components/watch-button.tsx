@@ -1,21 +1,26 @@
 import { EyeIcon } from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
 import { Button } from "@fluncle/ui/components/button";
+import { authClient } from "@/lib/auth-client";
 
 // The quiet secondary in an artist/label masthead: a signed-in user watches the entity so a
 // future digest can reach for it (that digest is deferred — this only SAVES the watch).
 //
 // THE ACCOUNT NEVER GATES THE FEATURE. A signed-OUT visitor sees NOTHING here — no button,
 // no upsell — so the entity page reads identically whether or not you have an account. We
-// render only once `/api/me/watches` confirms a session (the SaveSetDialog precedent); the
-// anonymous watcher equivalent is the entity's own fresh feed (`/artist/<slug>/fresh.xml`),
-// which this never touches.
+// render only once a session is confirmed (the SaveSetDialog precedent); the anonymous
+// watcher equivalent is the entity's own fresh feed (`/artist/<slug>/fresh.xml`), which this
+// never touches.
 //
-// The one fetch on mount answers BOTH questions the control needs — a 401 means signed-out
-// (render nothing), a 200 hands back the user's watches so we can tell whether THIS entity is
-// already among them and start on the right face. The label shows the current state
-// ("Watch" ↔ "Watching", the ratified "Save finding" → "Saved" family), with `aria-pressed`
-// carrying the toggle state and the `aria-label` naming the action for assistive tech.
+// THE SESSION IS RESOLVED CLIENT-SIDE FIRST (`authClient.useSession()`, the shared store the
+// crew slot already reads on every page), so a signed-OUT visit costs the origin NOTHING —
+// these are PUBLIC pages, and a guaranteed-401 `/api/me/watches` on every anonymous view was
+// both a wasted round-trip and the console error behind a Lighthouse best-practices ding.
+// Once a session IS known — including a sign-in later in the same session, which re-runs the
+// check — the one fetch tells us whether THIS entity is already watched, so the control
+// starts on the right face. The label shows the current state ("Watch" ↔ "Watching", the
+// ratified "Save finding" → "Saved" family), with `aria-pressed` carrying the toggle state
+// and the `aria-label` naming the action for assistive tech.
 
 type Face = "loading" | "not-watching" | "signed-out" | "watching";
 
@@ -34,9 +39,23 @@ export function WatchButton({
   // The stored watch's id, held so unwatch can DELETE it by id. Present only while watching.
   const [watchId, setWatchId] = useState<string | undefined>(undefined);
   const [busy, setBusy] = useState(false);
+  const { data: session } = authClient.useSession();
+  const userId = session?.user.id;
 
   useEffect(() => {
     let cancelled = false;
+
+    // No session, no request — and the origin never sees a doomed 401. The store's own
+    // "still resolving" flag is deliberately NOT a dependency here: it flips while the
+    // signed-in user is already known and would fire a second identical read for nothing,
+    // and it buys no render either, since a resolving session and a signed-out one both
+    // show the same thing — nothing at all.
+    if (!userId) {
+      setFace("signed-out");
+      setWatchId(undefined);
+
+      return;
+    }
 
     void fetch("/api/me/watches")
       .then(async (res) => {
@@ -68,7 +87,7 @@ export function WatchButton({
     return () => {
       cancelled = true;
     };
-  }, [entityId, kind]);
+  }, [entityId, kind, userId]);
 
   async function csrf(): Promise<string | undefined> {
     const res = await fetch("/api/me/csrf");
