@@ -168,7 +168,12 @@ const FinalizeVideoBodySchema = z.looseObject({
   videoModel: z.unknown().optional(),
   videoModelReasoning: z.unknown().optional(),
   videoPalette: z.unknown().optional(),
+  // The two provenance stamps render.json always carried but finalize never persisted (Wave-1 C).
+  // Optional like the rest — no caller sends them today; the handler reads them from the uploaded
+  // render.json when absent, so the render prompt + the CLI need no change.
+  videoPlateSubject: z.unknown().optional(),
   videoRegister: z.unknown().optional(),
+  videoStructure: z.unknown().optional(),
   videoVehicle: z.unknown().optional(),
 });
 

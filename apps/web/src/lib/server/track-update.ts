@@ -203,6 +203,10 @@ export type TrackUpdate = {
   videoRegister?: string;
   /** The video's coarse palette HUE-BUCKET tag (palette ledger; surfaced in /api/tracks). */
   videoPalette?: string;
+  /** The video's plate-lane SUBJECT KIND (plate-subject ledger; render.json `plateSubject`). */
+  videoPlateSubject?: string;
+  /** The video's dominant STRUCTURAL family (structure ledger; render.json `structure.dominant`). */
+  videoStructure?: string;
 };
 
 // The fields whose write changes a PUBLIC surface, so it should move the
@@ -225,7 +229,9 @@ const VISIBLE_FIELDS = new Set<keyof TrackUpdate>([
   "videoModel",
   "videoModelReasoning",
   "videoPalette",
+  "videoPlateSubject",
   "videoRegister",
+  "videoStructure",
   "videoSquaredAt",
   "videoUrl",
   "videoVehicle",
@@ -279,7 +285,9 @@ const CERTIFICATION_FIELDS = new Set<keyof TrackUpdate>([
   "videoModel",
   "videoModelReasoning",
   "videoPalette",
+  "videoPlateSubject",
   "videoRegister",
+  "videoStructure",
   "videoSquaredAt",
   "videoUrl",
   "videoVehicle",
@@ -479,6 +487,16 @@ export async function updateTrack(
   if (update.videoPalette !== undefined) {
     findingSets.push("video_palette = ?");
     findingArgs.push(update.videoPalette);
+  }
+
+  if (update.videoPlateSubject !== undefined) {
+    findingSets.push("video_plate_subject = ?");
+    findingArgs.push(update.videoPlateSubject);
+  }
+
+  if (update.videoStructure !== undefined) {
+    findingSets.push("video_structure = ?");
+    findingArgs.push(update.videoStructure);
   }
 
   if (update.videoModel !== undefined) {

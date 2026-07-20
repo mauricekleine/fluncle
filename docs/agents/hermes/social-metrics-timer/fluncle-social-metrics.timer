@@ -1,0 +1,15 @@
+[Unit]
+Description=fluncle-social-metrics timer — snapshot each published post's performance daily at 22:15 UTC on the rave-02 host (not the Hermes gateway)
+
+[Timer]
+# 22:15 UTC daily — a quiet nightly slot that does NOT collide with the 23:45 UTC funnel snapshot
+# (nor the ~02:00-03:00 UTC reach/demand window). The host clock is UTC, so no TZ suffix is needed;
+# naming UTC is explicit and DST-free. A fixed nightly slot (not a rolling interval) so the series
+# reads as one clean daily cadence. Persistent catches up a snapshot the box slept through on the
+# next wake — a caught-up extra run the same UTC day is a safe no-op (the per-day unique index makes
+# the append idempotent).
+OnCalendar=*-*-* 22:15:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

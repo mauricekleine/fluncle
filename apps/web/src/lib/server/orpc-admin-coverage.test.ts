@@ -454,6 +454,11 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // path directly). A collection-level sweep that recovers the public YouTube/TikTok
   // post URLs Postiz withholds on create. Admin tier — the on-box capture cron drives
   // it; it only fills the public url and links the analytics release-id.
+  // record_social_metrics — contract-only oRPC (no TanStack route file; oRPC owns the
+  // path directly). The daily per-post performance snapshot: reads each published post's
+  // Postiz per-post analytics into the append-only social_metrics ledger. Admin tier — the
+  // on-box `fluncle-social-metrics` cron drives it; the Worker holds the Postiz key.
+  "POST /admin/social/metrics/record": "record_social_metrics",
   "POST /admin/social/posts/capture": "capture_post_urls",
   // The render → publish auto-advance tick — contract-only oRPC (no TanStack route file).
   // Admin tier (agent-allowed): the on-box `fluncle-publish-advance` cron triggers it and

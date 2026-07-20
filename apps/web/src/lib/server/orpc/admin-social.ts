@@ -36,6 +36,7 @@ import { logEvent } from "../log";
 import { captionForPlatform } from "../mentions";
 import { adminAuth, operatorGuard } from "../orpc-auth";
 import { postizSetReleaseId, pushTikTokDraft, pushYouTubeShort, resolveSocialUrl } from "../postiz";
+import { recordSocialMetrics } from "../social-metrics";
 import {
   ADVANCE_DAILY_PUSH_CAP,
   ADVANCE_PER_TICK_CAP,
@@ -399,6 +400,36 @@ export function adminSocialHandlers(os: Implementer) {
     }
   });
 
+  // POST /admin/social/metrics/record — AGENT tier (`adminAuth` only; the box's daily
+  // social-metrics cron drives it with the agent token — the `record_platform_stats` /
+  // `capture_post_urls` precedent, the box holds no Postiz key). A bare trigger: the Worker
+  // snapshots each published post's Postiz per-post analytics into the append-only `social_metrics`
+  // ledger (≤25 Postiz requests/run) and returns the run's outcome + the SA social→site arrivals.
+  const recordSocialMetricsHandler = os.record_social_metrics.use(adminAuth).handler(async () => {
+    try {
+      const result = await recordSocialMetrics();
+
+      return {
+        budget: result.budget,
+        configured: result.configured,
+        day: result.day,
+        eligible: result.eligible,
+        failed: result.failed,
+        inserted: result.inserted,
+        missing: result.missing,
+        ok: true as const,
+        polled: result.polled,
+        referrals: {
+          arrivals: result.referrals.arrivals,
+          configured: result.referrals.configured,
+          total: result.referrals.total,
+        },
+      };
+    } catch (error) {
+      throw toFault(error);
+    }
+  });
+
   // POST /admin/social/publish/advance — ADMIN tier (the on-box `fluncle-publish-advance`
   // cron drives it with the agent token; the box holds no Postiz key, it only triggers —
   // the `drip_clips` / `capture_post_urls` precedent). ONE bounded, idempotent tick of the
@@ -572,6 +603,7 @@ export function adminSocialHandlers(os: Implementer) {
     capture_post_urls: capturePostUrlsHandler,
     draft_track_social: draftTrackSocialHandler,
     list_track_social: listTrackSocialHandler,
+    record_social_metrics: recordSocialMetricsHandler,
     set_publish_advance: setPublishAdvanceHandler,
     update_track_social: updateTrackSocialHandler,
   };

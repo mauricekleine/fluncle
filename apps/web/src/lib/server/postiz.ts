@@ -143,6 +143,140 @@ export async function getPostizPlatformAnalytics(
   return metrics;
 }
 
+/** A single post's normalized performance metrics. Every field is NULLABLE — Postiz returns a
+ *  platform-dependent SUBSET of labels, so an unreported metric stays null (never zero, so a real
+ *  zero and "the platform didn't report it" stay distinguishable). `averageViewPercentage` is the
+ *  one fractional value (0–100); the rest are whole counts. */
+export type SocialPostMetrics = {
+  averageViewPercentage: null | number;
+  comments: null | number;
+  impressions: null | number;
+  likes: null | number;
+  saves: null | number;
+  shares: null | number;
+  views: null | number;
+  watchTimeSeconds: null | number;
+};
+
+/** The outcome of reading one post's analytics: the metrics, or MISSING — Postiz answers
+ *  `{ missing: true }` for a post whose platform release-id it hasn't resolved yet (a TikTok inbox
+ *  draft the operator hasn't linked in-app). MISSING is skipped by the caller, never an error. */
+export type PostAnalyticsResult =
+  | { kind: "metrics"; metrics: SocialPostMetrics }
+  | { kind: "missing" };
+
+/** The latest daily total for a Postiz analytics label — the current cumulative value (we snapshot
+ *  the newest point; day-over-day deltas across our own snapshots give velocity). Null when the
+ *  series is empty or the total isn't a finite number. */
+function latestTotal(data: unknown): null | number {
+  if (!Array.isArray(data) || data.length === 0) {
+    return null;
+  }
+
+  const last = data.at(-1) as { total?: unknown } | undefined;
+  const raw = last?.total;
+  const value = typeof raw === "string" ? Number(raw) : typeof raw === "number" ? raw : NaN;
+
+  return Number.isFinite(value) ? value : null;
+}
+
+/**
+ * Map Postiz's per-post label series onto the normalized metric shape. Postiz returns the SAME
+ * shape as the channel endpoint — an array of `{ label, data: [{ total, date }] }` — with
+ * platform-dependent labels, OR the object `{ missing: true }` when the post's release-id is
+ * unresolved. Label matching is keyword-based + ORDERED (the more specific label wins): "average
+ * view percentage" is checked before a bare "view", "watch time" before "view", "impressions"
+ * before "view". An unrecognised label is ignored, so a Postiz label change degrades to a missing
+ * metric, never a wrong one (the `getPostizPlatformAnalytics` discipline). Pure — unit-testable
+ * with zero network.
+ */
+export function parsePostAnalytics(raw: unknown): PostAnalyticsResult {
+  if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) {
+    if ((raw as Record<string, unknown>).missing === true) {
+      return { kind: "missing" };
+    }
+  }
+
+  const metrics: SocialPostMetrics = {
+    averageViewPercentage: null,
+    comments: null,
+    impressions: null,
+    likes: null,
+    saves: null,
+    shares: null,
+    views: null,
+    watchTimeSeconds: null,
+  };
+
+  const entries = Array.isArray(raw) ? (raw as { data?: unknown; label?: unknown }[]) : [];
+
+  for (const entry of entries) {
+    if (typeof entry.label !== "string") {
+      continue;
+    }
+
+    const label = entry.label.toLowerCase();
+    const value = latestTotal(entry.data);
+
+    if (value === null) {
+      continue;
+    }
+
+    // Ordered, most-specific first. A count truncs to an int; the percentage keeps its fraction.
+    if (label.includes("average") || label.includes("percentage") || label.includes("retention")) {
+      metrics.averageViewPercentage = value;
+    } else if (label.includes("watch")) {
+      metrics.watchTimeSeconds = Math.trunc(value);
+    } else if (label.includes("impression") || label.includes("reach")) {
+      metrics.impressions = Math.trunc(value);
+    } else if (label.includes("comment")) {
+      metrics.comments = Math.trunc(value);
+    } else if (label.includes("share") || label.includes("repost") || label.includes("retweet")) {
+      metrics.shares = Math.trunc(value);
+    } else if (label.includes("save") || label.includes("bookmark") || label.includes("favorite")) {
+      metrics.saves = Math.trunc(value);
+    } else if (label.includes("like")) {
+      metrics.likes = Math.trunc(value);
+    } else if (label.includes("view") || label.includes("play")) {
+      metrics.views = Math.trunc(value);
+    }
+  }
+
+  return { kind: "metrics", metrics };
+}
+
+/**
+ * One post's analytics — `GET /analytics/post/{postId}?date=N`. READ-ONLY (never publishes). The
+ * social-metrics snapshot's per-post read: returns the normalized metrics, or MISSING when Postiz
+ * hasn't resolved the post's platform release-id yet (`{ missing: true }` — a TikTok inbox draft the
+ * operator hasn't finished in-app). A non-2xx throws a typed `ApiError` so the SWEEP can catch it
+ * per-post and skip that one row (never failing the whole batch). `fetchImpl` is injectable so the
+ * whole snapshot is unit-testable with zero real network.
+ */
+export async function getPostizPostAnalytics(
+  postId: string,
+  days = 7,
+  fetchImpl: typeof fetch = fetch,
+): Promise<PostAnalyticsResult> {
+  const response = await postizFetch(
+    `/analytics/post/${encodeURIComponent(postId)}?date=${days}`,
+    { method: "GET" },
+    fetchImpl,
+  );
+
+  if (!response.ok) {
+    throw new ApiError(
+      "postiz_post_analytics",
+      `Postiz post analytics failed (${response.status})`,
+      502,
+    );
+  }
+
+  // The body parses leniently (the /posts list proved Postiz can leave bare control chars in a
+  // string value); an unparseable body reads as "no metrics", never a throw.
+  return parsePostAnalytics(await readLenientJson(response));
+}
+
 /** Register a public HTTPS media URL with Postiz (it pulls it). Returns the ref. */
 async function uploadFromUrl(url: string): Promise<Media> {
   const response = await postizFetch("/upload-from-url", {

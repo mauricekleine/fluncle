@@ -574,6 +574,11 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // every platform credential and the op writes only the internal platform_stats
   // table (no publish), so the box's agent token drives the bare trigger.
   record_platform_stats: "admin",
+  // The box's daily social-metrics cron snapshots each published post's Postiz per-post analytics —
+  // agent tier (adminAuth only, no operatorGuard), the record_platform_stats / capture_post_urls
+  // precedent: the Worker owns the Postiz key and the op writes only the internal social_metrics
+  // ledger (no publish), so the box's agent token drives the bare trigger.
+  record_social_metrics: "admin",
   // The weekly Frontier refresh (E2) — ADMIN tier (adminAuth only, no operatorGuard):
   // the box's `fluncle-frontier-refresh` cron drives it with the agent token, the
   // `advance_publish_queue` / `rank_catalogue` precedent. It re-mirrors playlists that

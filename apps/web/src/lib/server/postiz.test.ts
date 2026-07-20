@@ -11,7 +11,7 @@ vi.mock("./env", () => ({
   readOptionalEnv: async () => undefined,
 }));
 
-import { pushInstagramReel, resolveSocialUrl } from "./postiz";
+import { parsePostAnalytics, pushInstagramReel, resolveSocialUrl } from "./postiz";
 
 const BASE = "https://api.postiz.com/public/v1";
 
@@ -185,5 +185,81 @@ describe("resolveSocialUrl (instagram)", () => {
     ]);
 
     expect(await resolveSocialUrl("post-9", "instagram")).toBeNull();
+  });
+});
+
+// The per-post analytics parser (`parsePostAnalytics`) — the pure label-mapping half of the
+// social-metrics snapshot. Postiz returns the SAME shape as the channel endpoint (an array of
+// `{ label, data: [{ total, date }] }`) or the object `{ missing: true }`. Label matching is
+// keyword-based + ordered (the more specific label wins), the latest daily point is taken, an
+// unrecognised label is ignored, and a `{ missing: true }` post reads as MISSING.
+describe("parsePostAnalytics", () => {
+  const series = (label: string, ...totals: string[]) => ({
+    data: totals.map((total, i) => ({ date: `2026-07-0${i + 1}`, total })),
+    label,
+  });
+
+  it("maps the latest daily total per known label onto the metric shape", () => {
+    const result = parsePostAnalytics([
+      series("Views", "1000", "1500"),
+      series("Likes", "40", "55"),
+      series("Comments", "3", "4"),
+      series("Shares", "1", "2"),
+    ]);
+
+    expect(result.kind).toBe("metrics");
+
+    if (result.kind !== "metrics") {
+      throw new Error("expected metrics");
+    }
+
+    expect(result.metrics.views).toBe(1500);
+    expect(result.metrics.likes).toBe(55);
+    expect(result.metrics.comments).toBe(4);
+    expect(result.metrics.shares).toBe(2);
+    // An unreported metric stays null (never zero).
+    expect(result.metrics.impressions).toBeNull();
+    expect(result.metrics.saves).toBeNull();
+  });
+
+  it("reads MISSING from `{ missing: true }` (a post whose release-id is unresolved)", () => {
+    expect(parsePostAnalytics({ missing: true }).kind).toBe("missing");
+  });
+
+  it("keeps the fraction for average view percentage but truncs counts, and prefers the specific label", () => {
+    const result = parsePostAnalytics([
+      series("Average view percentage", "42.7"),
+      series("Total watch time", "12345.9"),
+      series("Impressions", "9000"),
+      series("Saves", "12"),
+    ]);
+
+    if (result.kind !== "metrics") {
+      throw new Error("expected metrics");
+    }
+
+    // "average"/"percentage" beats a bare "view" and keeps its fraction.
+    expect(result.metrics.averageViewPercentage).toBeCloseTo(42.7);
+    // "watch" is a count (whole seconds), and beats "view".
+    expect(result.metrics.watchTimeSeconds).toBe(12_345);
+    expect(result.metrics.impressions).toBe(9000);
+    expect(result.metrics.saves).toBe(12);
+    // No bare "Views" label present → views stays null.
+    expect(result.metrics.views).toBeNull();
+  });
+
+  it("ignores an unrecognised label and an empty series (degrades to a missing metric, never wrong)", () => {
+    const result = parsePostAnalytics([
+      series("Engagement rate score"), // no data points
+      { data: [], label: "Views" },
+      series("Reactions", "7"), // unrecognised → ignored
+    ]);
+
+    if (result.kind !== "metrics") {
+      throw new Error("expected metrics");
+    }
+
+    expect(result.metrics.views).toBeNull();
+    expect(result.metrics.likes).toBeNull();
   });
 });

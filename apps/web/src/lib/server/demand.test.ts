@@ -25,7 +25,14 @@ vi.mock("./db", async (importOriginal) => {
 });
 
 import { createIntegrationDb } from "./integration-db";
-import { extractEntityPath, recordDemand, summarizeDemand } from "./demand";
+import {
+  classifySocialReferrer,
+  extractEntityPath,
+  readSocialReferrers,
+  recordDemand,
+  summarizeDemand,
+  summarizeReferrers,
+} from "./demand";
 import { setCatalogueCapturePaused } from "./capture-budget";
 import { listTrackWork } from "./track-work";
 
@@ -308,5 +315,75 @@ describe("recordDemand — the rewrite", () => {
     expect(summary.configured).toBe(false);
     expect(summary.tracksScored).toBe(0);
     expect(await demandScore("t1")).toBe(42); // untouched
+  });
+});
+
+// ── The social referrers read (Part 3 — the site-side half of reach) ─────────────────────────────
+// `classifySocialReferrer` / `summarizeReferrers` are pure; `readSocialReferrers` folds an SA
+// `fields=referrers` response into per-platform social→site arrivals (unprovisioned → clean no-op).
+
+/** A fetch stub returning the given SA `referrers` as a version-5 response. */
+function saReferrersFetch(referrers: { pageviews?: number; value: string }[]): typeof fetch {
+  return (async () =>
+    new Response(JSON.stringify({ referrers }), { status: 200 })) as unknown as typeof fetch;
+}
+
+describe("classifySocialReferrer", () => {
+  it("maps a known social host (incl. short-link + subdomain) to its platform", () => {
+    expect(classifySocialReferrer("t.co")).toBe("x");
+    expect(classifySocialReferrer("www.tiktok.com")).toBe("tiktok");
+    expect(classifySocialReferrer("l.instagram.com")).toBe("instagram");
+    expect(classifySocialReferrer("youtu.be")).toBe("youtube");
+  });
+
+  it("returns undefined for a non-social referrer", () => {
+    expect(classifySocialReferrer("google.com")).toBeUndefined();
+    expect(classifySocialReferrer("")).toBeUndefined();
+  });
+});
+
+describe("summarizeReferrers", () => {
+  it("folds several hosts of one platform together and drops non-social + zero rows, highest-first", () => {
+    const arrivals = summarizeReferrers([
+      { pageviews: 10, value: "t.co" },
+      { pageviews: 5, value: "twitter.com" },
+      { pageviews: 40, value: "www.tiktok.com" },
+      { pageviews: 100, value: "google.com" }, // non-social → dropped
+      { pageviews: 0, value: "youtube.com" }, // zero → dropped
+    ]);
+
+    expect(arrivals).toEqual([
+      { pageviews: 40, platform: "tiktok" },
+      { pageviews: 15, platform: "x" },
+    ]);
+  });
+});
+
+describe("readSocialReferrers", () => {
+  it("returns per-platform arrivals + the total from the SA referrers read", async () => {
+    const result = await readSocialReferrers({
+      fetchImpl: saReferrersFetch([
+        { pageviews: 30, value: "www.tiktok.com" },
+        { pageviews: 12, value: "t.co" },
+      ]),
+      now: NOW,
+    });
+
+    expect(result.configured).toBe(true);
+    expect(result.total).toBe(42);
+    expect(result.arrivals).toEqual([
+      { pageviews: 30, platform: "tiktok" },
+      { pageviews: 12, platform: "x" },
+    ]);
+  });
+
+  it("is a clean no-op with no key (never a wrong signal)", async () => {
+    delete process.env.SIMPLE_ANALYTICS_API_KEY;
+
+    const result = await readSocialReferrers({ fetchImpl: saReferrersFetch([]), now: NOW });
+
+    expect(result.configured).toBe(false);
+    expect(result.total).toBe(0);
+    expect(result.arrivals).toEqual([]);
   });
 });

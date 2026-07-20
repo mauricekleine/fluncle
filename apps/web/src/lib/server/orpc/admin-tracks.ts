@@ -292,6 +292,14 @@ export function adminTracksHandlers(os: Implementer) {
         update.videoPalette = body.videoPalette.trim().slice(0, 120);
       }
 
+      if (typeof body.videoPlateSubject === "string" && body.videoPlateSubject.trim()) {
+        update.videoPlateSubject = body.videoPlateSubject.trim().slice(0, 120);
+      }
+
+      if (typeof body.videoStructure === "string" && body.videoStructure.trim()) {
+        update.videoStructure = body.videoStructure.trim().slice(0, 120);
+      }
+
       // Straggler repair: one-time backfill of identity fields into null slots
       // (updateTrack enforces immutability once set).
       if (typeof body.isrc === "string") {
@@ -1050,6 +1058,14 @@ export function adminTracksHandlers(os: Implementer) {
         typeof body.videoPalette === "string" && body.videoPalette.trim()
           ? body.videoPalette.trim().slice(0, 120)
           : undefined;
+      const bodyPlateSubject =
+        typeof body.videoPlateSubject === "string" && body.videoPlateSubject.trim()
+          ? body.videoPlateSubject.trim().slice(0, 120)
+          : undefined;
+      const bodyStructure =
+        typeof body.videoStructure === "string" && body.videoStructure.trim()
+          ? body.videoStructure.trim().slice(0, 120)
+          : undefined;
       const bodyModel =
         typeof body.videoModel === "string" && body.videoModel.trim()
           ? body.videoModel.trim().slice(0, 120)
@@ -1065,14 +1081,22 @@ export function adminTracksHandlers(os: Implementer) {
       // own render.json from R2 and fill the gaps. The manifest was uploaded by the
       // same ship this finalize completes, so it is the authority of record; a
       // missing/corrupt manifest yields {} and the finalize lands exactly as before.
+      // `structure`/`plateSubject` are the two provenance fields render.json ALWAYS carried but the
+      // finalize path never persisted (Wave-1 C). No caller (the CLI, the render agent) sends them
+      // in the body, so they are read from the manifest — meaning the manifest read must run unless
+      // the body already supplied EVERY stamp. Adding them to the skip guard keeps the R2 read on
+      // for exactly the (near-universal) case where the two new stamps are absent from the body,
+      // without changing the render prompt or the CLI at all.
       const manifestStamps =
-        bodyVehicle && bodyGrain && bodyRegister && bodyPalette
+        bodyVehicle && bodyGrain && bodyRegister && bodyPalette && bodyStructure && bodyPlateSubject
           ? {}
           : await readRenderManifestStamps(env.VIDEOS, track.logId);
       const videoVehicle = bodyVehicle ?? manifestStamps.vehicle;
       const videoGrain = bodyGrain ?? manifestStamps.grain;
       const videoRegister = bodyRegister ?? manifestStamps.register;
       const videoPalette = bodyPalette ?? manifestStamps.palette;
+      const videoPlateSubject = bodyPlateSubject ?? manifestStamps.plateSubject;
+      const videoStructure = bodyStructure ?? manifestStamps.structure;
       const videoModel = bodyModel ?? manifestStamps.model ?? "anthropic/claude-opus-4-8";
       const videoModelReasoning = bodyReasoning ?? manifestStamps.reasoning ?? "high";
 
@@ -1103,6 +1127,8 @@ export function adminTracksHandlers(os: Implementer) {
         ...(videoGrain ? { videoGrain } : {}),
         ...(videoRegister ? { videoRegister } : {}),
         ...(videoPalette ? { videoPalette } : {}),
+        ...(videoPlateSubject ? { videoPlateSubject } : {}),
+        ...(videoStructure ? { videoStructure } : {}),
       });
 
       // Drop stale edge entries on EVERY finalize, not just when track.videoUrl was
