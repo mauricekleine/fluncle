@@ -4433,6 +4433,7 @@ async function runBackfillArtistCredits(
   let scanned = 0;
   let mintedArtists = 0;
   let matchedArtists = 0;
+  let adoptedArtists = 0;
   let edgesWritten = 0;
   let skippedNoIdentity = 0;
   let throttled = false;
@@ -4444,13 +4445,14 @@ async function runBackfillArtistCredits(
     scanned += result.scanned;
     mintedArtists += result.mintedArtists;
     matchedArtists += result.matchedArtists;
+    adoptedArtists += result.adoptedArtists;
     edgesWritten += result.edgesWritten;
     skippedNoIdentity += result.skippedNoIdentity;
 
     if (!options.json) {
       const verb = result.dryRun ? "would visit" : "visited";
       console.log(
-        `  …${verb} ${result.scanned}; minted ${result.mintedArtists}, matched ${result.matchedArtists} artist(s); wrote ${result.edgesWritten} edge(s); ${result.skippedNoIdentity} without a MusicBrainz identity`,
+        `  …${verb} ${result.scanned}; minted ${result.mintedArtists}, adopted ${result.adoptedArtists}, matched ${result.matchedArtists} artist(s); wrote ${result.edgesWritten} edge(s); ${result.skippedNoIdentity} without a MusicBrainz identity`,
       );
     }
 
@@ -4469,6 +4471,7 @@ async function runBackfillArtistCredits(
 
   if (options.json) {
     printJson({
+      adoptedArtists,
       dryRun,
       edgesWritten,
       matchedArtists,
@@ -4484,7 +4487,7 @@ async function runBackfillArtistCredits(
 
   const verb = dryRun ? "Would visit" : "Visited";
   console.log(
-    `${verb} ${scanned} track(s): minted ${mintedArtists}, matched ${matchedArtists} artist(s); wrote ${edgesWritten} track_artists edge(s); ${skippedNoIdentity} carried no MusicBrainz identity.`,
+    `${verb} ${scanned} track(s): minted ${mintedArtists}, adopted ${adoptedArtists}, matched ${matchedArtists} artist(s); wrote ${edgesWritten} track_artists edge(s); ${skippedNoIdentity} carried no MusicBrainz identity.`,
   );
 }
 

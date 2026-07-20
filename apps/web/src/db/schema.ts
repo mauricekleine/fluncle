@@ -2482,16 +2482,7 @@ export const artists = sqliteTable(
     updatedAt: text("updated_at").notNull(),
     wikidataQid: text("wikidata_qid"),
   },
-  (table) => [
-    index("artists_name_idx").on(table.name),
-    // The MusicBrainz-artist-id lookup index (RFC artist-primary-capture, slice 1b). The MB credit
-    // sweep (`backfill_artist_credits`) matches each credited artist by its real MB id BEFORE minting
-    // — `select id from artists where mbid = ?` — and it MINTS artists too, so the table grows. An
-    // indexed seek keeps that match off a full scan of a growing table (AGENTS.md forbids exactly
-    // that). Plain ASC (never `desc()` — it poisons the drizzle snapshot); NULLs are fine (a
-    // Spotify/name-minted artist carries no mbid and is simply absent from the seek).
-    index("artists_mbid_idx").on(table.mbid),
-  ],
+  (table) => [index("artists_name_idx").on(table.name)],
 );
 
 // The sonic galaxy — a stable-ID, operator-named cluster over the MuQ embedding

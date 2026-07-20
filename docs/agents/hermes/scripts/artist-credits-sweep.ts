@@ -46,9 +46,11 @@ const log = (message: string) => console.error(`[artist-credits-sweep] ${message
 // ---------------------------------------------------------------------------
 
 type ArtistCreditsSummary = {
+  // Existing artists that gained an mbid via an unambiguous name fold this pass (the adopt rung).
+  adoptedArtists?: number;
   // `track_artists` edges written this pass.
   edgesWritten?: number;
-  // Credited artists matched to an existing artists row by MB id.
+  // Credited artists matched to an existing artists row by exact MB id.
   matchedArtists?: number;
   // NEW artists rows minted by MB artist id this pass.
   mintedArtists?: number;
@@ -118,6 +120,7 @@ function isCliErrorPayload(value: unknown): value is { code: string; message: st
 
 export function main(): void {
   const summary = {
+    adoptedArtists: 0,
     edgesWritten: 0,
     error: null as string | null,
     matchedArtists: 0,
@@ -139,6 +142,7 @@ export function main(): void {
 
     summary.scanned = pass.scanned ?? 0;
     summary.mintedArtists = pass.mintedArtists ?? 0;
+    summary.adoptedArtists = pass.adoptedArtists ?? 0;
     summary.matchedArtists = pass.matchedArtists ?? 0;
     summary.edgesWritten = pass.edgesWritten ?? 0;
     summary.skippedNoIdentity = pass.skippedNoIdentity ?? 0;

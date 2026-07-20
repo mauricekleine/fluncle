@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "420ae88e-97a9-4cf6-8fcb-1193a33cdc84",
+  "id": "dbb0bc69-b002-4809-bc9e-5ec29e6c510e",
   "prevId": "338fadab-a704-4672-b365-6e28c5553e2c",
   "tables": {
     "account": {
@@ -778,11 +778,6 @@
         "artists_name_idx": {
           "name": "artists_name_idx",
           "columns": ["name"],
-          "isUnique": false
-        },
-        "artists_mbid_idx": {
-          "name": "artists_mbid_idx",
-          "columns": ["mbid"],
           "isUnique": false
         }
       },
@@ -4798,15 +4793,15 @@
           "notNull": false,
           "autoincrement": false
         },
-        "artist_edges_backfilled_at": {
-          "name": "artist_edges_backfilled_at",
+        "artist_credits_backfilled_at": {
+          "name": "artist_credits_backfilled_at",
           "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
-        "artist_credits_backfilled_at": {
-          "name": "artist_credits_backfilled_at",
+        "artist_edges_backfilled_at": {
+          "name": "artist_edges_backfilled_at",
           "type": "text",
           "primaryKey": false,
           "notNull": false,

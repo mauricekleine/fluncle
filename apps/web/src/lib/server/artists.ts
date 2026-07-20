@@ -914,45 +914,25 @@ export async function upsertTrackArtists(
 }
 
 /**
- * MINT-OR-MATCH an artist by its MusicBrainz artist id — the identity-true mint the MB credit sweep
- * (`backfill_artist_credits`, RFC artist-primary-capture slice 1b) writes the zero-matched residual's
- * edges onto. It is the SIBLING of `upsertTrackArtists`'s mint block above and shares its slug
- * primitive (`mintArtistSlug`), but keys on a DIFFERENT identity: a real MB artist id, not a Spotify
- * id or a bare name. That distinction is the whole licence to mint here — the slice-0 backfill mints
- * NOTHING because a bare name is not enough identity to create an entity, whereas an MB artist id IS
- * identity (a curated, dereferenceable MBID), so a row born from one is honest.
+ * MINT a fresh artist row keyed on a MusicBrainz artist id — the identity-true mint the MB credit
+ * sweep (`backfill_artist_credits`, RFC artist-primary-capture slice 1b) reaches for LAST, after the
+ * sweep has ruled out both an exact-mbid match AND an unambiguous name ADOPT (see the resolver in
+ * `backfill-artist-credits.ts`). It is the SIBLING of `upsertTrackArtists`'s mint block above and
+ * shares its slug primitive (`mintArtistSlug`), but keys on a DIFFERENT identity: a real MB artist
+ * id, not a Spotify id or a bare name. That distinction is the whole licence to mint — the slice-0
+ * backfill mints NOTHING because a bare name is not enough identity to create an entity, whereas an
+ * MB artist id IS identity (a curated, dereferenceable MBID), so a row born from one is honest.
  *
  * WHY A DEDICATED HELPER, not `upsertTrackArtists`: that path resolves by `spotify_artist_id`/name
  * and fires a best-effort Spotify avatar fetch per call — neither fits an mbid-keyed catalogue-graph
- * fill (the avatar is the `backfill-artist-images` sweep's job, and matching by name would defeat the
- * identity guarantee). There is NO pre-existing mbid mint path to reuse — `artists.mbid` is only ever
- * set today by `artist-resolution.ts` as a `coalesce` UPDATE on an already-existing certified artist,
- * never at CREATE. So this is the one canonical mbid mint, colocated with its Spotify twin.
- *
- * Matches an existing row by `mbid` (the `artists_mbid_idx` seek) and returns `{ artistId, minted:
- * false }`; else mints a fresh row (surrogate uuid id, a slug via the shared collision-checked
- * `mintArtistSlug`, the mbid, the name) and returns `{ artistId, minted: true }`. The caller serializes
- * its mints (one paced pass, awaited per artist), so a same-mbid mint twice in one pass is guarded by
- * a caller-side cache; across passes the `where mbid = ?` match absorbs it. Writes identity only — no
- * edge, no avatar, no certification.
+ * fill (the avatar is the `backfill-artist-images` sweep's job). There is NO pre-existing mbid mint
+ * path to reuse — `artists.mbid` is only ever set today by `artist-resolution.ts` as a `coalesce`
+ * UPDATE on an already-existing certified artist, never at CREATE. So this is the one canonical mbid
+ * mint, colocated with its Spotify twin. Returns the new artist id. Writes identity only — no edge,
+ * no avatar, no certification.
  */
-export async function ensureArtistByMbid(
-  name: string,
-  mbid: string,
-): Promise<{ artistId: string; minted: boolean }> {
+export async function mintArtistByMbid(name: string, mbid: string): Promise<string> {
   const db = await getDb();
-
-  const existing = await db.execute({
-    args: [mbid],
-    sql: `select id from artists where mbid = ? limit 1`,
-  });
-
-  const existingId = typedRows<{ id: string }>(existing.rows)[0]?.id;
-
-  if (existingId) {
-    return { artistId: existingId, minted: false };
-  }
-
   const newId = randomUUID();
   const slug = await mintArtistSlug(newId, name);
   const nowIso = new Date().toISOString();
@@ -963,7 +943,29 @@ export async function ensureArtistByMbid(
           values (?, ?, ?, ?, ?, ?)`,
   });
 
-  return { artistId: newId, minted: true };
+  return newId;
+}
+
+/**
+ * ADOPT a MusicBrainz artist id onto an EXISTING artist row that has none — the rung the MB credit
+ * sweep takes when a credited name folds UNAMBIGUOUSLY onto an artist Fluncle already holds (a
+ * Spotify-keyed row minted at publish/anchor, `mbid` still NULL) but which slice 0 could not link
+ * because it lived inside a compound credit string ("Sub Focus & Dimension"). Adopting instead of
+ * minting is what stops this sweep becoming a mass generator of split-identity duplicates (the class
+ * the label-merge op cleans for labels — artists have no merge op at all). NON-CLOBBERING via
+ * `coalesce` + a `mbid is null` guard (never overwrite an mbid already there — a wrong merge is
+ * unrecoverable), the `artist-resolution.ts` precedent; bumps `updated_at` because a resolved MBID is
+ * a public identity fact (it feeds the artist page's `sameAs` / KG anchor).
+ */
+export async function adoptArtistMbid(artistId: string, mbid: string): Promise<void> {
+  const db = await getDb();
+  const nowIso = new Date().toISOString();
+
+  await db.execute({
+    args: [mbid, nowIso, artistId],
+    sql: `update artists set mbid = coalesce(mbid, ?), updated_at = ?
+          where id = ? and mbid is null`,
+  });
 }
 
 /**

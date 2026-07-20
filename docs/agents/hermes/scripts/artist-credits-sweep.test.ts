@@ -25,11 +25,11 @@ import { join } from "node:path";
 // cannot ride on an env var either.)
 const STUB = `#!/bin/bash
 case "$(cat "$(dirname "$0")/mode")" in
-  drained) printf '{"ok":true,"dryRun":false,"scanned":0,"mintedArtists":0,"matchedArtists":0,"edgesWritten":0,"skippedNoIdentity":0,"rateLimited":false,"nextCursor":null}\\n' ;;
-  throttled) printf '{"ok":true,"dryRun":false,"scanned":3,"mintedArtists":2,"matchedArtists":1,"edgesWritten":3,"skippedNoIdentity":0,"rateLimited":true,"nextCursor":null}\\n' ;;
+  drained) printf '{"ok":true,"dryRun":false,"scanned":0,"mintedArtists":0,"adoptedArtists":0,"matchedArtists":0,"edgesWritten":0,"skippedNoIdentity":0,"rateLimited":false,"nextCursor":null}\\n' ;;
+  throttled) printf '{"ok":true,"dryRun":false,"scanned":3,"mintedArtists":2,"adoptedArtists":1,"matchedArtists":1,"edgesWritten":3,"skippedNoIdentity":0,"rateLimited":true,"nextCursor":null}\\n' ;;
   cli-error) printf '{"code":"missing_token","message":"Missing required env vars: FLUNCLE_API_TOKEN","ok":false}\\n'; exit 1 ;;
   crash) printf 'boom\\n' >&2; exit 1 ;;
-  *) printf '{"ok":true,"dryRun":false,"scanned":5,"mintedArtists":4,"matchedArtists":2,"edgesWritten":7,"skippedNoIdentity":1,"rateLimited":false,"nextCursor":"t-5"}\\n' ;;
+  *) printf '{"ok":true,"dryRun":false,"scanned":5,"mintedArtists":4,"adoptedArtists":3,"matchedArtists":2,"edgesWritten":7,"skippedNoIdentity":1,"rateLimited":false,"nextCursor":"t-5"}\\n' ;;
 esac
 `;
 
@@ -57,6 +57,7 @@ afterAll(() => {
 });
 
 type Pass = {
+  adoptedArtists?: number;
   edgesWritten?: number;
   matchedArtists?: number;
   mintedArtists?: number;
@@ -74,6 +75,7 @@ describe("artist-credits-sweep's fluncleJson", () => {
     expect(pass.ok).toBe(true);
     expect(pass.scanned).toBe(5);
     expect(pass.mintedArtists).toBe(4);
+    expect(pass.adoptedArtists).toBe(3);
     expect(pass.matchedArtists).toBe(2);
     expect(pass.edgesWritten).toBe(7);
     expect(pass.skippedNoIdentity).toBe(1);

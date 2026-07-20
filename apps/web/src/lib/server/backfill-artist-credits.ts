@@ -9,17 +9,31 @@
 // exactly the tracks capture-authorization (slice 1) cannot reason about, because authorization
 // matches BY IDENTITY through the `track_artists` graph.
 //
-// ── IDENTITY-TRUE MINTING (the licence slice 0 lacked) ───────────────────────────────────────────
+// ── THE THREE-RUNG RESOLVE (mbid → ADOPT → mint) ─────────────────────────────────────────────────
 // A zero-matched track that carries a MusicBrainz RECORDING identity — `tracks.mb_recording_id`, or
 // the `mb_<recording-mbid>` PK a crawler-born row carries (BOTH checked, via the shared
-// `recordingMbidFromTrackId`) — can be resolved honestly: ONE paced `/recording/<mbid>?inc=artist-
-// credits` lookup through the shared MB client names its credited artists WITH their real MB artist
-// ids. An MB artist id IS identity (a curated, dereferenceable MBID), so this sweep MAY mint from it
-// where slice 0 could not: each credited artist is matched to an existing `artists` row by `mbid`,
-// else MINTED via `ensureArtistByMbid` (the one canonical mbid mint, sibling of `upsertTrackArtists`).
-// Then the `track_artists` edges are written `insert or ignore` (position from credit order, role
-// null — the slice-0 edge shape). A zero-matched track with NO MB identity is TERMINALLY SKIPPED: it
-// gets the stamp so it drains, and is never retried (there is no key to resolve it by).
+// `recordingMbidFromTrackId`) — is resolved by ONE paced `/recording/<mbid>?inc=artist-credits` lookup
+// through the shared MB client, which names its credited artists WITH their real MB artist ids. Each
+// credited artist resolves down a THREE-RUNG ladder, and the middle rung is the whole reason this is
+// safe:
+//   1. EXACT mbid — an `artists` row already carries this MB artist id → use it.
+//   2. ADOPT — the credit NAME folds UNAMBIGUOUSLY onto an existing artist that has NO mbid yet.
+//      This is the common case and the trap: the zero-matched residual is dominated by COMPOUND
+//      credit strings ("Sub Focus & Dimension" as one `artists_json` entry) whose real MB credits
+//      resolve to artists Fluncle ALREADY holds as Spotify-keyed rows (mbid still NULL) — slice 0
+//      just could not match the compound string. Minting here would spawn a DUPLICATE per such credit,
+//      a mass generator of the split-identity class (the one the label-merge op cleans for labels —
+//      artists have NO merge op at all). So instead we ADOPT: stamp the mbid onto that existing row
+//      (`coalesce`, the artist-resolution precedent) and reuse it. The fold is the slice-0 matcher
+//      (`buildArtistFoldMap` + `artist_aliases`), reused wholesale, built ONCE per pass.
+//   3. MINT — no mbid match and no unambiguous adoptable fold → mint a fresh `artists` row keyed on
+//      the MB artist id (`mintArtistByMbid`). An MB artist id IS identity (a curated, dereferenceable
+//      MBID), so a row born from one is honest — the licence slice 0 lacked.
+// Fail-closed at every ambiguity: a fold two distinct identities share, OR a fold match whose row
+// already carries a DIFFERENT mbid, drops through to MINT — because a wrong MERGE of two artists is
+// unrecoverable (no merge op), whereas a rare SPLIT is. Then the `track_artists` edges are written
+// `insert or ignore` (position from credit order, role null — the slice-0 edge shape). A zero-matched
+// track with NO MB identity is TERMINALLY SKIPPED: stamped so it drains, never retried.
 //
 // ── RELIABILITY: an OWN stamp, slice 0's untouched ───────────────────────────────────────────────
 // The per-row stamp is `tracks.artist_credits_backfilled_at` — DISTINCT from slice 0's
@@ -37,7 +51,9 @@
 // loop fires one request per tick (a budget pause resumes with a fresh budget on the next request).
 
 import { getDb, typedRows } from "./db";
-import { ensureArtistByMbid } from "./artists";
+import { adoptArtistMbid, mintArtistByMbid } from "./artists";
+import { buildArtistFoldMap } from "./backfill-artist-edges";
+import { fold } from "./track-match";
 import { logEvent } from "./log";
 import { mbFetch } from "./musicbrainz";
 import { recordingMbidFromTrackId } from "./recording-mbids";
@@ -68,8 +84,11 @@ export type ArtistCreditsBackfillResult = {
   scanned: number;
   // NEW `artists` rows minted by MB artist id this pass (identity-true; a real MBID backs each).
   mintedArtists: number;
-  // Credited artists that matched an EXISTING `artists` row by `mbid` this pass.
+  // Credited artists that matched an EXISTING `artists` row by exact `mbid` this pass.
   matchedArtists: number;
+  // EXISTING artists that had no mbid and gained one this pass via an unambiguous name fold (the
+  // duplicate-prevention rung — a Spotify-keyed row slice 0 could not match, now MB-identified).
+  adoptedArtists: number;
   // `track_artists` edges written this pass (or, in a dry run, the count that WOULD be written).
   edgesWritten: number;
   // Zero-matched rows carrying NO MB recording identity — terminally skipped (stamped, never retried).
@@ -87,23 +106,86 @@ export type ArtistCreditsBackfillResult = {
 type MbArtistCredit = { artist?: { id?: string; name?: string }; name?: string };
 type MbRecordingCredits = { "artist-credit"?: MbArtistCredit[] };
 
-/** One credited artist resolved to an identity, carrying its 1-based credit position + mint flag. */
+/** One credited artist resolved to an identity, carrying its 1-based credit position. */
 type CreditEdge = { artistId: string; position: number };
 
 /** One recording resolve's outcome. The no-identity SKIP is handled inline (before any vendor call),
  *  so it is not one of these — a resolved recording either yields edges or hits the throttle wall. */
 type ResolveOutcome =
-  | { kind: "edged"; edges: CreditEdge[]; minted: number; matched: number }
+  | { kind: "edged"; edges: CreditEdge[]; minted: number; matched: number; adopted: number }
   | { kind: "rate-limited" };
 
+/** How one credited artist resolved down the mbid → ADOPT → mint ladder. */
+type CreditResolution = { artistId: string; outcome: "matched" | "adopted" | "minted" };
+type CreditResolver = (name: string, mbid: string) => Promise<CreditResolution>;
+
 /**
- * Fetch one recording's artist-credits and resolve each credited artist to an identity — matching an
- * existing `artists` row by `mbid`, else MINTING one. Dedupes to ONE edge per distinct artist (the
- * 1-based position of its FIRST occurrence, the `matchTrackNames` rule); the natural key would dedupe
- * anyway. Skips the Various-Artists placeholder and any credit with no artist MBID. Returns
- * `rate-limited` when MusicBrainz is actively throttling so the pass can circuit-break.
+ * Build the per-pass credit resolver ONCE from the whole `artists` + trusted-alias corpus (the slice-0
+ * set-based discipline — the fold map is built once, never per credit). It holds three in-memory maps,
+ * kept consistent as it adopts/mints so within-pass repeats resolve to the SAME row:
+ *   - `foldMap` (fold → artistId): the slice-0 matcher `buildArtistFoldMap`, reused wholesale — a fold
+ *     two distinct identities share is dropped (ambiguous), so a hit is unambiguous by construction.
+ *   - `mbidToArtistId` (mbid → artistId): rung 1's exact-mbid seek, in memory (no per-credit query).
+ *   - `mbidByArtistId` (artistId → mbid|null): the ADOPT decision reads it — a folded row with no mbid
+ *     is adopted; one already carrying a DIFFERENT mbid is a homonym and falls through to MINT.
  */
-async function resolveRecordingCredits(mbid: string): Promise<ResolveOutcome> {
+function createCreditResolver(
+  corpus: ReadonlyArray<{ id: string; mbid: string | null; name: string }>,
+  aliases: ReadonlyArray<{ alias: string; artist_id: string }>,
+): CreditResolver {
+  const foldMap = buildArtistFoldMap(corpus, aliases);
+  const mbidByArtistId = new Map<string, string | null>();
+  const mbidToArtistId = new Map<string, string>();
+
+  for (const artist of corpus) {
+    mbidByArtistId.set(artist.id, artist.mbid);
+
+    if (artist.mbid) {
+      mbidToArtistId.set(artist.mbid, artist.id);
+    }
+  }
+
+  return async (name, mbid) => {
+    // Rung 1: an existing row already carries this exact MB artist id.
+    const byMbid = mbidToArtistId.get(mbid);
+
+    if (byMbid !== undefined) {
+      return { artistId: byMbid, outcome: "matched" };
+    }
+
+    // Rung 2: ADOPT — the name folds UNAMBIGUOUSLY onto an existing artist that has NO mbid yet. A
+    // folded row already carrying a DIFFERENT mbid (rung 1 would have caught a SAME one) is a homonym,
+    // so it is NOT adopted — it falls through to mint (fail closed: a wrong merge is unrecoverable).
+    const foldedId = foldMap.get(fold(name));
+
+    if (foldedId !== undefined && (mbidByArtistId.get(foldedId) ?? null) === null) {
+      await adoptArtistMbid(foldedId, mbid);
+      mbidByArtistId.set(foldedId, mbid);
+      mbidToArtistId.set(mbid, foldedId);
+
+      return { artistId: foldedId, outcome: "adopted" };
+    }
+
+    // Rung 3: MINT a fresh identity-true row (no mbid match, no adoptable fold).
+    const newId = await mintArtistByMbid(name, mbid);
+    mbidByArtistId.set(newId, mbid);
+    mbidToArtistId.set(mbid, newId);
+
+    return { artistId: newId, outcome: "minted" };
+  };
+}
+
+/**
+ * Fetch one recording's artist-credits and resolve each credited artist down the mbid → ADOPT → mint
+ * ladder (via `resolve`). Dedupes to ONE edge per distinct artist (the 1-based position of its FIRST
+ * occurrence, the `matchTrackNames` rule); the natural key would dedupe anyway. Skips the
+ * Various-Artists placeholder and any credit with no artist MBID or no name. Returns `rate-limited`
+ * when MusicBrainz is actively throttling so the pass can circuit-break.
+ */
+async function resolveRecordingCredits(
+  mbid: string,
+  resolve: CreditResolver,
+): Promise<ResolveOutcome> {
   const { data, rateLimited } = await mbFetch<MbRecordingCredits>(
     `/recording/${encodeURIComponent(mbid)}?inc=artist-credits`,
   );
@@ -121,6 +203,7 @@ async function resolveRecordingCredits(mbid: string): Promise<ResolveOutcome> {
   const seen = new Set<string>();
   let minted = 0;
   let matched = 0;
+  let adopted = 0;
 
   for (let i = 0; i < credits.length; i++) {
     const credit = credits[i];
@@ -131,10 +214,12 @@ async function resolveRecordingCredits(mbid: string): Promise<ResolveOutcome> {
       continue;
     }
 
-    const { artistId, minted: wasMinted } = await ensureArtistByMbid(artistName, artistMbid);
+    const { artistId, outcome } = await resolve(artistName, artistMbid);
 
-    if (wasMinted) {
+    if (outcome === "minted") {
       minted += 1;
+    } else if (outcome === "adopted") {
+      adopted += 1;
     } else {
       matched += 1;
     }
@@ -147,12 +232,36 @@ async function resolveRecordingCredits(mbid: string): Promise<ResolveOutcome> {
     edges.push({ artistId, position: i + 1 });
   }
 
-  return { edges, kind: "edged", matched, minted };
+  return { adopted, edges, kind: "edged", matched, minted };
 }
 
 // ── DB layer ─────────────────────────────────────────────────────────────────────────────────────
 
 type WorkRow = { mb_recording_id: string | null; track_id: string };
+
+/** Load the whole `artists` corpus (id + canonical name + mbid) for the per-pass resolver — one
+ *  bounded read, the slice-0 `loadArtists` shape plus the `mbid` the ADOPT/exact-mbid rungs need. */
+async function loadArtistCorpus(
+  db: Awaited<ReturnType<typeof getDb>>,
+): Promise<Array<{ id: string; mbid: string | null; name: string }>> {
+  const result = await db.execute({ args: [], sql: `select id, name, mbid from artists` });
+
+  return typedRows<{ id: string; mbid: string | null; name: string }>(result.rows);
+}
+
+/** Load the TRUSTED alias corpus — real-name AKAs only (`kind='name'`, `status in ('auto',
+ *  'confirmed')`), the slice-0 / search-resolver alias semantics, reused verbatim. One bounded read. */
+async function loadAliases(
+  db: Awaited<ReturnType<typeof getDb>>,
+): Promise<Array<{ alias: string; artist_id: string }>> {
+  const result = await db.execute({
+    args: [],
+    sql: `select artist_id, alias from artist_aliases
+          where kind = 'name' and status in ('auto', 'confirmed')`,
+  });
+
+  return typedRows<{ alias: string; artist_id: string }>(result.rows);
+}
 
 /**
  * One bounded page of the worklist: slice 0's ZERO-MATCHED residual not yet visited by THIS sweep —
@@ -244,6 +353,7 @@ export async function resolveArtistCredits(
   let scanned = 0;
   let mintedArtists = 0;
   let matchedArtists = 0;
+  let adoptedArtists = 0;
   let edgesWritten = 0;
   let skippedNoIdentity = 0;
   let rateLimited = false;
@@ -253,8 +363,9 @@ export async function resolveArtistCredits(
 
   if (dryRun) {
     // Report the eligible worklist without a vendor call or write — `scanned` is the page it WOULD
-    // work; the mint/match/edge counts are unknowable without the vendor calls, so they stay zero.
+    // work; the mint/adopt/match/edge counts are unknowable without the vendor calls, so they stay zero.
     return {
+      adoptedArtists: 0,
       dryRun,
       edgesWritten: 0,
       matchedArtists: 0,
@@ -266,6 +377,27 @@ export async function resolveArtistCredits(
       skippedNoIdentity: 0,
     };
   }
+
+  if (rows.length === 0) {
+    // A drained tick stays a single-query no-op — no corpus read, no resolver built.
+    return {
+      adoptedArtists: 0,
+      dryRun,
+      edgesWritten: 0,
+      matchedArtists: 0,
+      mintedArtists: 0,
+      nextCursor: null,
+      ok: true,
+      rateLimited: false,
+      scanned: 0,
+      skippedNoIdentity: 0,
+    };
+  }
+
+  // Build the per-pass credit resolver ONCE from the whole artist + trusted-alias corpus (the slice-0
+  // set-based discipline — the fold map is not rebuilt per credit).
+  const [corpus, aliases] = await Promise.all([loadArtistCorpus(db), loadAliases(db)]);
+  const resolve = createCreditResolver(corpus, aliases);
 
   for (const row of rows) {
     if (Date.now() >= deadline) {
@@ -287,7 +419,7 @@ export async function resolveArtistCredits(
       continue;
     }
 
-    const outcome = await resolveRecordingCredits(mbid);
+    const outcome = await resolveRecordingCredits(mbid, resolve);
 
     if (outcome.kind === "rate-limited") {
       // Circuit breaker: MusicBrainz is actively throttling. Stop; do NOT stamp this row (it was
@@ -296,15 +428,17 @@ export async function resolveArtistCredits(
       break;
     }
 
-    // `edged` (including a zero-credit no-match): write the edges, count the mints/matches, stamp.
+    // `edged` (including a zero-credit no-match): write the edges, count mint/adopt/match, stamp.
     edgesWritten += await insertEdges(db, row.track_id, outcome.edges);
     mintedArtists += outcome.minted;
     matchedArtists += outcome.matched;
+    adoptedArtists += outcome.adopted;
     await stampVisited(db, row.track_id);
     scanned += 1;
     lastHandledTrackId = row.track_id;
 
     logEvent("info", "artist-credits.resolved", {
+      adopted: outcome.adopted,
       edges: outcome.edges.length,
       matched: outcome.matched,
       minted: outcome.minted,
@@ -328,6 +462,7 @@ export async function resolveArtistCredits(
         : lastTrackId;
 
   return {
+    adoptedArtists,
     dryRun,
     edgesWritten,
     matchedArtists,

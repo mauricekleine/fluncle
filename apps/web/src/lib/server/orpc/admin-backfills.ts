@@ -394,6 +394,7 @@ export function adminBackfillsHandlers(os: Implementer) {
         );
 
         return {
+          adoptedArtists: result.adoptedArtists,
           dryRun: result.dryRun,
           edgesWritten: result.edgesWritten,
           matchedArtists: result.matchedArtists,

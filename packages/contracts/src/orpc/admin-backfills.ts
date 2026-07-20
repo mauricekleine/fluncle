@@ -680,15 +680,18 @@ export const backfillArtistEdges = oc
  * existing identity); this sweep picks up that residual. For each zero-matched track carrying a
  * MusicBrainz recording identity (`mb_recording_id`, or the `mb_<recording-mbid>` PK a crawler-born
  * row carries), ONE paced `/recording/<mbid>?inc=artist-credits` lookup through the shared MusicBrainz
- * client names its credited artists WITH their MB artist ids: each is matched to an existing `artists`
- * row by `mbid` else MINTED (identity-true — a real MBID is identity, the licence slice 0 lacked), and
- * the `track_artists` edges are written. A zero-matched track with NO MB identity is TERMINALLY
+ * client names its credited artists WITH their MB artist ids. Each resolves down a three-rung ladder:
+ * an EXACT `mbid` match, else an ADOPT (the credit name folds unambiguously onto an existing artist
+ * with no mbid — the common case, since the residual is dominated by compound credit strings whose
+ * members Fluncle already holds as Spotify-keyed rows; adopting instead of minting is what stops this
+ * sweep spawning split-identity duplicates), else a MINT of a fresh identity-true row. The
+ * `track_artists` edges are then written. A zero-matched track with NO MB identity is TERMINALLY
  * SKIPPED. It writes catalogue-graph identity only (no publish, no certification), so the box's
  * agent-token cron drives it, the `backfill_recording_mbids` precedent. Its OWN reliability stamp
  * (`artist_credits_backfilled_at`) — DISTINCT from slice 0's, whose semantics it never disturbs.
  * Worker-paced (1 req/s, circuit-broken on a throttle) with a 60s response budget. Returns `{ ok,
- * dryRun, scanned, mintedArtists, matchedArtists, edgesWritten, skippedNoIdentity, rateLimited,
- * nextCursor }`.
+ * dryRun, scanned, mintedArtists, matchedArtists, adoptedArtists, edgesWritten, skippedNoIdentity,
+ * rateLimited, nextCursor }`.
  */
 export const backfillArtistCredits = oc
   .route({
@@ -711,11 +714,14 @@ export const backfillArtistCredits = oc
   )
   .output(
     z.object({
+      // EXISTING artists that had no mbid and gained one via an unambiguous name fold this pass — the
+      // duplicate-prevention rung (a Spotify-keyed row slice 0 could not match, now MB-identified).
+      adoptedArtists: z.number(),
       dryRun: z.boolean(),
       // `track_artists` edges written this pass (or, in a dry run, 0 — the edges are unknowable
       // without the vendor calls a dry run skips).
       edgesWritten: z.number(),
-      // Credited artists matched to an EXISTING `artists` row by MB artist id this pass.
+      // Credited artists matched to an EXISTING `artists` row by exact MB artist id this pass.
       matchedArtists: z.number(),
       // NEW `artists` rows minted by MB artist id this pass (identity-true — a real MBID backs each).
       mintedArtists: z.number(),

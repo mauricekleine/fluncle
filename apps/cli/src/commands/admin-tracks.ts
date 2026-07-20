@@ -614,10 +614,13 @@ export async function backfillArtistEdgesCommand(
 }
 
 export type ArtistCreditsBackfillResult = {
+  // EXISTING artists that had no mbid and gained one via an unambiguous name fold this pass — the
+  // duplicate-prevention rung (a Spotify-keyed row slice 0 could not match, now MB-identified).
+  adoptedArtists: number;
   dryRun: boolean;
   // `track_artists` edges written this pass (or, in a dry run, 0 — unknowable without the vendor calls).
   edgesWritten: number;
-  // Credited artists matched to an EXISTING artists row by MB artist id this pass.
+  // Credited artists matched to an EXISTING artists row by exact MB artist id this pass.
   matchedArtists: number;
   // NEW artists rows minted by MB artist id this pass (identity-true — a real MBID backs each).
   mintedArtists: number;
