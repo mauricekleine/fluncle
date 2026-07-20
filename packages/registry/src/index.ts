@@ -584,8 +584,8 @@ export const SURFACES: readonly Surface[] = [
     apiFormat: "application/json",
     discoveryUrl: `${SITE}/api/v1/openapi.json`,
     exposedContent: [
-      "every album in the catalogue, alphabetical, paginated, as JSON",
-      "/api/v1/albums/{slug} — one album's identity, cover, and catalogue counts, as JSON",
+      "every album in the archive, alphabetical, paginated, as JSON",
+      "/api/v1/albums/{slug} — one album's identity, cover, and counts, as JSON",
     ],
     kind: "api",
     name: "api.albums",
@@ -598,8 +598,8 @@ export const SURFACES: readonly Surface[] = [
     apiFormat: "application/json",
     discoveryUrl: `${SITE}/api/v1/openapi.json`,
     exposedContent: [
-      "every artist in the catalogue, alphabetical, paginated, as JSON",
-      "/api/v1/artists/{slug} — one artist's identity and catalogue counts, as JSON",
+      "every artist in the archive, alphabetical, paginated, as JSON",
+      "/api/v1/artists/{slug} — one artist's identity, finding count, and track count, as JSON",
     ],
     kind: "api",
     name: "api.artists",
@@ -612,8 +612,8 @@ export const SURFACES: readonly Surface[] = [
     apiFormat: "application/json",
     discoveryUrl: `${SITE}/api/v1/openapi.json`,
     exposedContent: [
-      "every label in the catalogue, alphabetical, paginated, as JSON",
-      "/api/v1/labels/{slug} — one label's identity, lineage, and catalogue counts, as JSON",
+      "every label in the archive, alphabetical, paginated, as JSON",
+      "/api/v1/labels/{slug} — one label's identity, lineage, and counts, as JSON",
     ],
     kind: "api",
     name: "api.labels",
