@@ -59,6 +59,7 @@ Autonomy has a boundary. Stop, flag, and recommend — don't guess — for:
 
 - **Direction:** anything that changes product direction or canon.
 - **Operator-only steps:** secrets, infrastructure, dashboard/security settings, production credentials, paid/destructive actions, anything you genuinely can't (or shouldn't) do yourself.
+- **Remote box mutations don't delegate.** A sub-agent's permission classifiers block remote box mutations (box `start`/`stop`/`delete`, remote `systemctl`, `docker exec` against a live box) — so a delegated slice that needs one stalls or silently skips it. Run those yourself in the main session (or hand them to the operator), and keep the sub-agent's brief to the repo-side work.
 - **Surfaced unknowns:** a real fork or blocker the brief didn't anticipate, where the human's context settles it faster than a spike.
 - **Taste:** subjective quality calls (design, copy, anything where "does it read well?" is the bar).
 
