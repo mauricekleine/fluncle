@@ -12,7 +12,9 @@ function edgeCache(): Cache | undefined {
   return store?.default;
 }
 
-// Edge HTML cache for the public log surfaces (`/log` and `/log/<id>`).
+// Edge HTML cache for the public read surfaces: the log pages (`/log`, `/log/<id>`),
+// the entity detail pages (`/artist|/album|/label/<slug>`), and the hub/index pages
+// (`/`, `/artists`, `/albums`, `/labels`, `/tracks`, `/fresh`).
 //
 // Why the Cache API, not bare `Cache-Control`: this Worker IS the origin — it
 // renders the SSR document itself rather than `fetch()`ing an upstream. Cloudflare
@@ -31,23 +33,70 @@ function edgeCache(): Cache | undefined {
 // entry carries a long hard TTL (the full SWR window) plus our own freshness stamp,
 // and `withEdgeCache` decides fresh / stale-serve-and-revalidate / miss from it.
 
-// Fresh window: within this many seconds a cached document is served as-is. Short
-// because a re-enrichment or re-tag should surface quickly even if a purge is
-// missed; long enough that bursts of crawler/share traffic collapse onto one render.
-export const FRESH_SECONDS = 300;
-// Stale-while-revalidate tail: past the fresh window we still serve the cached copy
-// (instantly) for up to this long while a background render refreshes it. A day is
-// ample for a quiet archive — a finding rarely changes, and any change purges anyway.
-export const SWR_SECONDS = 86_400;
+/**
+ * One cache policy: how long a stored document counts as fresh, how long past that it may
+ * still be served while a background render refreshes it, and the browser/CDN-facing
+ * directive that states both. Two instances exist (below) — a page policy and a hub policy —
+ * because a DETAIL page and an INDEX page go stale for different reasons.
+ */
+export type EdgeCachePolicy = {
+  /** The browser/CDN-facing `Cache-Control` for a response served under this policy. */
+  readonly cacheControl: string;
+  /** Within this many seconds of being stored, a cached document is served as-is. */
+  readonly freshSeconds: number;
+  /** What we ask `caches.default` to keep the entry for: the whole fresh+stale window. */
+  readonly storedMaxAge: number;
+  /** Past the fresh window, how long a stale copy may still be served while it refreshes. */
+  readonly swrSeconds: number;
+};
 
-// The browser/CDN-facing directive. `s-maxage`/`stale-while-revalidate` let any
-// downstream shared cache (and Cloudflare's own, where applicable) apply the same
-// policy; `max-age=0` keeps private browser caches honest so a viewer always
-// revalidates against the edge rather than pinning a stale page locally.
-export const PUBLIC_CACHE_CONTROL = `public, max-age=0, s-maxage=${FRESH_SECONDS}, stale-while-revalidate=${SWR_SECONDS}`;
-// What we tell `caches.default` to keep the entry for: the entire fresh+stale window,
-// so a stale-serve is possible. Freshness inside that window is judged by our stamp.
-const STORED_MAX_AGE = FRESH_SECONDS + SWR_SECONDS;
+// `s-maxage`/`stale-while-revalidate` let any downstream shared cache (and Cloudflare's own,
+// where applicable) apply the same policy; `max-age=0` keeps private browser caches honest so
+// a viewer always revalidates against the edge rather than pinning a stale page locally.
+function policy(freshSeconds: number, swrSeconds: number): EdgeCachePolicy {
+  return {
+    cacheControl: `public, max-age=0, s-maxage=${freshSeconds}, stale-while-revalidate=${swrSeconds}`,
+    freshSeconds,
+    storedMaxAge: freshSeconds + swrSeconds,
+    swrSeconds,
+  };
+}
+
+// Fresh window for a DETAIL page (`/log/<id>`, `/artist|/album|/label/<slug>`) and the purged
+// `/log` index. Short because a re-enrichment or re-tag should surface quickly even if a purge
+// is missed; long enough that bursts of crawler/share traffic collapse onto one render.
+export const FRESH_SECONDS = 300;
+// Stale-while-revalidate tail for a detail page. Deliberately ~an hour, NOT a day: the SSR
+// document references BUILD-SCOPED hashed asset URLs (`/assets/<hash>.js`), so HTML that
+// outlives its build hands a client dead chunk URLs and breaks client-side navigation until a
+// reload. Deploys land many times a day, so an hour keeps the stale tail inside the deploy
+// cadence; the client-side chunk-load recovery in `routes/__root.tsx` is the second half of
+// that guarantee. A page hit at least once an hour never pays a cold render anyway (the first
+// request past the fresh window serves stale and refreshes behind it).
+export const SWR_SECONDS = 3_600;
+
+/** The detail-page / `/log` policy. */
+export const PAGE_CACHE_POLICY = policy(FRESH_SECONDS, SWR_SECONDS);
+
+// Fresh window for a HUB/INDEX page (`/`, `/artists`, `/albums`, `/labels`, `/tracks`,
+// `/fresh`). A minute, because an index invalidates on ANY member change — a new finding, an
+// enrichment, an artist bio, a catalogue row the crawler minted — across four entity kinds and
+// several write paths. Wiring an explicit purge into every one of those would be a wide,
+// easy-to-miss fan-out, and the crawler alone would purge the hubs continuously, which defeats
+// the cache. A 60s ceiling is the better trade: bounded, self-healing, and zero coupling to the
+// write paths, while still collapsing effectively all crawler and visitor traffic onto one
+// render per minute (the measured cold render for `/artists` is ~1s, ~98% of it server think).
+export const HUB_FRESH_SECONDS = 60;
+// Short stale tail for the same reason the detail tail is short (build-scoped assets), and
+// shorter still because a hub's whole job is to show what just landed.
+export const HUB_SWR_SECONDS = 600;
+
+/** The hub/index policy. */
+export const HUB_CACHE_POLICY = policy(HUB_FRESH_SECONDS, HUB_SWR_SECONDS);
+
+/** The detail-page directive. Kept as a named export because it is the site's default shape. */
+export const PUBLIC_CACHE_CONTROL = PAGE_CACHE_POLICY.cacheControl;
+
 // Our own freshness stamp (epoch ms at store time); read back to compute age.
 const STAMP_HEADER = "x-edge-cached-at";
 
@@ -57,10 +106,11 @@ export function isCacheableLogPath(pathname: string): boolean {
 }
 
 // The public entity DETAIL pages we edge-cache: `/artist/<slug>`, `/album/<slug>`,
-// `/label/<slug>` (singular + a single slug segment). Deliberately NOT the plural index
-// pages (`/artists`, `/albums`, `/labels`) — those invalidate on any member change, so they
-// ride the fresh window instead of an explicit purge. A trailing slash is tolerated; a
-// nested path (`/artist/<slug>/x`) is not a detail page.
+// `/label/<slug>` (singular + a single slug segment). The plural index pages are cached too,
+// but under the separate, shorter HUB policy below — they invalidate on any member change, so
+// they ride a 60s fresh window instead of an explicit purge, whereas a detail page is purged by
+// the write paths. A trailing slash is tolerated; a nested path (`/artist/<slug>/x`) is not a
+// detail page.
 const ENTITY_DETAIL_PATH = /^\/(?:artist|album|label)\/[^/]+\/?$/;
 
 /**
@@ -71,6 +121,53 @@ const ENTITY_DETAIL_PATH = /^\/(?:artist|album|label)\/[^/]+\/?$/;
  */
 export function isCacheableEntityRequest(pathname: string, search: string): boolean {
   return search === "" && ENTITY_DETAIL_PATH.test(pathname);
+}
+
+// The public HUB/index pages: the archive front door, the four editorial indexes, and the
+// fresh-releases board. These are the SLOW pages — each is a multi-row aggregate query, and
+// `/artists` measured ~1s of server think — and they are the ones crawlers hammer, so they are
+// where an edge hit is worth the most. `/log` is deliberately absent: it is on the page policy
+// because the finding write paths already purge it explicitly.
+const HUB_PATHS_BELOW_ROOT = new Set(["/albums", "/artists", "/fresh", "/labels", "/tracks"]);
+
+/**
+ * True for a cacheable hub/index page — AND ONLY when it carries no query string, for exactly
+ * the reason `isCacheableEntityRequest` demands it: the cache key drops the query
+ * (cacheKeyForPath), so a paginated/filtered/sorted variant (`?page=2`, `?galaxy=…`,
+ * `?view=…`, `?story=…`) would collide onto the canonical page-1 entry. Only the bare
+ * canonical URL — what a crawler and a first-time visitor hit — is cached; every variant flows
+ * through uncached and correct. A single trailing slash is tolerated (`/artists/`), and note
+ * that it keys as its own entry rather than folding onto the unslashed one, so no variant can
+ * ever be served for another URL.
+ */
+export function isCacheableHubRequest(pathname: string, search: string): boolean {
+  if (search !== "") {
+    return false;
+  }
+
+  if (pathname === "/") {
+    return true;
+  }
+
+  const trimmed = pathname.endsWith("/") ? pathname.slice(0, -1) : pathname;
+
+  return HUB_PATHS_BELOW_ROOT.has(trimmed);
+}
+
+/**
+ * THE chokepoint: the policy this request should be edge-cached under, or `undefined` when it
+ * must not be shared-cached at all. Every caller (server.ts) goes through this one function, so
+ * the "which paths are cacheable, and for how long" decision is defined and tested in one place.
+ *
+ * Callers remain responsible for the request-shape guards this function cannot see: GET only, no
+ * admin cookie, and an HTML-accepting client (see server.ts).
+ */
+export function edgeCachePolicyFor(pathname: string, search: string): EdgeCachePolicy | undefined {
+  if (isCacheableLogPath(pathname) || isCacheableEntityRequest(pathname, search)) {
+    return PAGE_CACHE_POLICY;
+  }
+
+  return isCacheableHubRequest(pathname, search) ? HUB_CACHE_POLICY : undefined;
 }
 
 // The canonical origin for cache keys. Storing and purging both key off THIS origin
@@ -88,13 +185,14 @@ function cacheKeyForPath(pathname: string): Request {
 }
 
 /**
- * Serve a cacheable log document through `caches.default` with manual
- * stale-while-revalidate. `render` produces the fresh response on a miss or a
- * background refresh; it is only invoked when needed.
+ * Serve a cacheable document through `caches.default` with manual stale-while-revalidate,
+ * under the given policy (from `edgeCachePolicyFor`). `render` produces the fresh response on
+ * a miss or a background refresh; it is only invoked when needed.
  */
 export async function withEdgeCache(
   request: Request,
   render: () => Promise<Response>,
+  cachePolicy: EdgeCachePolicy = PAGE_CACHE_POLICY,
 ): Promise<Response> {
   const cache = edgeCache();
 
@@ -109,35 +207,36 @@ export async function withEdgeCache(
   if (hit) {
     const ageSeconds = cacheAgeSeconds(hit);
 
-    if (ageSeconds < FRESH_SECONDS) {
-      return tagHit(hit, "fresh");
+    if (ageSeconds < cachePolicy.freshSeconds) {
+      return tagHit(hit, "fresh", cachePolicy);
     }
 
     // Stale but within the SWR tail: serve the stale copy now, refresh behind it.
-    waitUntil(refresh(cache, cacheKey, render));
+    waitUntil(refresh(cache, cacheKey, render, cachePolicy));
 
-    return tagHit(hit, "stale");
+    return tagHit(hit, "stale", cachePolicy);
   }
 
   // Cold miss: render, store (if cacheable), and serve.
   const response = await render();
 
   if (isStorable(response)) {
-    waitUntil(cache.put(cacheKey, toStoredResponse(response.clone())));
+    waitUntil(cache.put(cacheKey, toStoredResponse(response.clone(), cachePolicy)));
   }
 
-  return tagResponse(response, "miss");
+  return tagResponse(response, "miss", cachePolicy);
 }
 
 async function refresh(
   cache: Cache,
   cacheKey: Request,
   render: () => Promise<Response>,
+  cachePolicy: EdgeCachePolicy,
 ): Promise<void> {
   const response = await render();
 
   if (isStorable(response)) {
-    await cache.put(cacheKey, toStoredResponse(response));
+    await cache.put(cacheKey, toStoredResponse(response, cachePolicy));
   } else {
     // The page stopped being cacheable (e.g. it now 404s/redirects): evict so the
     // next request re-renders instead of resurrecting a stale body.
@@ -155,9 +254,9 @@ function isStorable(response: Response): boolean {
 }
 
 // Re-wrap with the public Cache-Control, our freshness stamp, and a stored hard TTL.
-function toStoredResponse(response: Response): Response {
+function toStoredResponse(response: Response, cachePolicy: EdgeCachePolicy): Response {
   const stored = new Response(response.body, response);
-  stored.headers.set("Cache-Control", `public, s-maxage=${STORED_MAX_AGE}`);
+  stored.headers.set("Cache-Control", `public, s-maxage=${cachePolicy.storedMaxAge}`);
   stored.headers.set(STAMP_HEADER, String(Date.now()));
 
   return stored;
@@ -175,20 +274,24 @@ function cacheAgeSeconds(response: Response): number {
 
 // On the way out to the client, present the real SWR directive (not the long stored
 // TTL) and a debug status so a preview can confirm hit/miss without guessing.
-function tagHit(response: Response, status: "fresh" | "stale"): Response {
+function tagHit(
+  response: Response,
+  status: "fresh" | "stale",
+  cachePolicy: EdgeCachePolicy,
+): Response {
   const out = new Response(response.body, response);
-  out.headers.set("Cache-Control", PUBLIC_CACHE_CONTROL);
+  out.headers.set("Cache-Control", cachePolicy.cacheControl);
   out.headers.delete(STAMP_HEADER);
   out.headers.set("x-edge-cache", status);
 
   return out;
 }
 
-function tagResponse(response: Response, status: string): Response {
+function tagResponse(response: Response, status: string, cachePolicy: EdgeCachePolicy): Response {
   const out = new Response(response.body, response);
 
   if (isStorable(response)) {
-    out.headers.set("Cache-Control", PUBLIC_CACHE_CONTROL);
+    out.headers.set("Cache-Control", cachePolicy.cacheControl);
   }
 
   out.headers.set("x-edge-cache", status);
