@@ -528,40 +528,10 @@ export async function backfillAppleCatalogueCommand(
   );
 }
 
-export type LabelReleasesBackfillResult = {
-  albumsMatched: number;
-  albumsSeen: number;
-  configured: boolean;
-  dryRun: boolean;
-  // Single album/track reads that 404/5xx'd and were skipped (not a label failure stamp).
-  failedFetches: number;
-  failedLabels: string[];
-  // True when the pass ended early on the per-pass single-fetch ceiling.
-  fetchCeilingHit: boolean;
-  labelSlugs: string[];
-  labelsProbed: number;
-  newRows: number;
-  newTrackIds: string[];
-  // True when the pass STOPPED on the Spotify 429 rate-limit backoff.
-  rateLimited: boolean;
-  skippedKnown: number;
-  // Albums dropped for artist-grounding (no artist on the album is in our archive yet).
-  skippedUngrounded: number;
-};
-
-// One bounded pass of the freshness tap (D8) — a probe over ENABLED seed labels that mints day-one
-// catalogue rows from Spotify's fresh releases. No cursor: the worklist is the oldest-probed enabled
-// labels each tick, so the CLI loops until a pass probes nothing.
-export async function backfillLabelReleasesCommand(
-  limit: number,
-  dryRun: boolean,
-): Promise<LabelReleasesBackfillResult> {
-  const params = new URLSearchParams({ dryRun: String(dryRun), limit: String(limit) });
-
-  return adminApiPost<LabelReleasesBackfillResult>(
-    `/api/admin/backfill/label-releases?${params.toString()}`,
-  );
-}
+// The freshness tap (D8) has no CLI helper: it moved off the official Spotify budget onto the Apify
+// actor (the anchor-sweep model), so the BOX runs the actor + POSTs candidates to the agent-tier
+// verify+mint op directly — there is no Worker pass for the CLI to drive. See
+// docs/agents/hermes/scripts/label-releases-sweep.ts.
 
 export type RecordingMbidsBackfillResult = {
   dryRun: boolean;

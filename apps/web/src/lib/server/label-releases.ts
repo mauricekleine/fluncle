@@ -1,4 +1,4 @@
-// THE FRESHNESS TAP (D8) — Spotify as the day-one freshness feed for the archive.
+// THE FRESHNESS TAP (D8) — the day-one freshness feed for the archive, off the Apify actor.
 //
 // ── THE DOCTRINE AMENDMENT (operator-ratified 2026-07-19; vendor swapped 2026-07-20) ──────────
 // MusicBrainz WALKS the graph (crawl.ts): label → releases → artists → their releases, the whole
@@ -8,48 +8,57 @@
 // catalogue rows with their real (day-one) release dates, closing the lag cliff. The tap never
 // walks the graph and never certifies — it only taps freshness.
 //
-// ── WHY SPOTIFY, NOT APPLE ────────────────────────────────────────────────────────────────────
-// The first cut used Apple Music's `record-labels` catalog. Live probes (2026-07-19) measured its
-// seed-label coverage at 2/99 — only Hospital and one other resolved; RAM, Shogun, Viper, Critical,
-// UKF and the rest simply do not exist as Apple record-label entities. A search-based Apple
-// resolution was a MEASURED dead end. Spotify carries every seed label's fresh releases, and we
-// already hold its OAuth (the publish path), so the tap rides the existing Spotify client — no new
-// secret. Everything downstream of resolution (the dedupe contract, the mint path, the allowlist
-// gate, the sweep/cron shape) is unchanged; only the vendor and the resolution mechanism differ.
+// ── THE ANCHOR-SWEEP MOVE (2026-07-20): off the official Spotify budget, onto Apify ────────────
+// The first cut of this tap ran the Spotify reads IN THE WORKER against the official dev-mode
+// Spotify app — the SAME app the user-facing paths (adds, publish, the Frontier playlist mints)
+// depend on. That app is rate-limited to death at its tier: the batch endpoints are 403, the search
+// `limit` is capped at 10, and sustained probing starved under 429s and blocked the tap's backfill.
+// So the tap moved OFF that budget onto the Apify actor `musicae~spotify-extended-scraper` — the
+// SAME actor + box-runs-actor / Worker-verifies split the catalogue ANCHOR already uses (anchor.ts).
+// The BOX runs the actor (docs/agents/hermes/scripts/label-releases-sweep.*): it reads the due seed
+// labels from `list_label_releases_work`, runs `albums:["label:\"<name>\" tag:new"]` once per label,
+// maps each result album (with its inline `tracks[]` + `artists[]`) to a candidate, and POSTs a
+// label's candidates to this module's `backfill_label_releases` verify+mint op. The Worker no longer
+// touches the official Spotify API on this path at all — the tap is on Apify's separate budget.
+//
+// THE BOX'S VERDICT IS NEVER TRUSTED. The box only fetches candidates; this module re-runs the FULL
+// grounding + attribution + dedupe (the anchor/verify_capture doctrine: the box measures, the Worker
+// rules), so a re-baked box script can never loosen the match rule or mint junk.
 //
 // ── THE HARD CONSTRAINTS (never widened) ─────────────────────────────────────────────────────
 //   - ENABLED seed labels ONLY (`labels.seed_state = 'enabled'` — the crawl gate's allowlist). A
-//     disabled/undecided label is never probed. The probe mints tracks/albums for the PROBED
-//     label and NOTHING else: no new labels, no artist-graph hops, no certification. Rows land in
-//     the unlit tier exactly like a crawl mint (a `tracks` row with no `findings` row).
+//     disabled/undecided label is never in the worklist, and the mint op re-checks the seed state
+//     (a label disabled mid-flight is a no-op). The probe mints tracks/albums for the PROBED label
+//     and NOTHING else: no new labels, no artist-graph hops, no certification. Rows land in the
+//     unlit tier exactly like a crawl mint (a `tracks` row with no `findings` row).
 //   - The archive's invariants hold: `tracks.label` is the archive's OWN spelling of the seed
 //     label (so `slugify(tracks.label) = labels.slug`, the disabled-label-veto invariant the Ear's
 //     capture ladder depends on), and the row is linked to the KNOWN seed label directly (never a
-//     re-resolve of Spotify's label string). `capture_status` is never named at insert — the DDL
+//     re-resolve of the actor's label string). `capture_status` is never named at insert — the DDL
 //     default lands, so the row is nobody's capture work item until the operator rules.
 //
-// ── THE TWO-SIGNAL GATE: artist-grounding AND an exact copyright match (mandatory) ────────────
-// `GET /search?type=album&q=label:"<name>" tag:new` finds a label's last-two-weeks releases with
-// day-one dates — but its `label:` filter is FUZZY for generic names (live: `label:"RAM Records"`
-// returned 93 junk albums), and OUR Spotify tier has NO `label` field on the album object at all.
-// A single loose filter is not enough: the FIRST live drain minted 195 rows, MANY cross-genre (an
-// Indian devotional record, Brazilian live albums, a Christmas record) that reached PUBLIC /fresh —
-// because a loose SUBSTRING copyright match caught homonym labels worldwide ("Lens" ⊂ "Silent Lens";
-// "Pilot." ⊂ Brazilian "Kelton Piloto"). So an album mints ONLY when BOTH signals agree:
-//   (A) ARTIST-GROUNDING (the primary identity/genre anchor) — at least one of the album's Spotify
-//       artist ids (`artists[].id`, carried on the album object — a LOCAL DB lookup, no extra call)
-//       is already in our `artists.spotify_artist_id`. This killed 100% of the cross-genre junk
-//       (every junk row was by an artist we had never certified). See `knownSpotifyArtistIds`.
-//   (B) EXACT COPYRIGHT MATCH (the secondary attribution confirmation) — the copyright's label
-//       portion (`stripCopyrightPrefix`, dropping the ℗/© + year) fold-EQUALS the seed name, not a
-//       substring `includes`. See `copyrightMatchesLabel`.
+// ── THE GATE: artist-grounding (mandatory) AND label attribution (when the actor gives it) ─────
+// `albums:["label:\"<name>\" tag:new"]` forwards Spotify's `label:` freshness filter — but that
+// filter is FUZZY for generic names (live: `label:"RAM Records"` returned 93 junk albums), so a
+// single loose filter is not enough. The FIRST live drain of the old cut minted 195 rows, MANY
+// cross-genre (an Indian devotional record, Brazilian live albums) that reached PUBLIC /fresh. So an
+// album mints ONLY when it clears grounding, and additionally the label signal when one is present:
+//   (A) ARTIST-GROUNDING (the PRIMARY identity/genre anchor, ALWAYS required) — at least one of the
+//       album's Spotify artist ids (`artists[].id`, carried on the actor's result item) is already
+//       in our `artists.spotify_artist_id`. This killed 100% of the cross-genre junk (every junk row
+//       was by an artist we had never certified). See `knownSpotifyArtistIds`.
+//   (B) LABEL ATTRIBUTION (the SECONDARY confirmation, applied ONLY when the actor populates it) —
+//       the actor's `album_label` (exact-fold-equals the seed name, a real field — stronger than a
+//       copyright parse), or failing that its `album_copyright` (the ℗/© string, exact-fold on the
+//       stripped label portion). In `albums`-search mode the actor returns BOTH null (measured live
+//       2026-07-20), so the tap runs on grounding ALONE there — the documented, operator-ratified
+//       fallback (see `labelAttributionSignal`). The gate is GRACEFUL: the moment a mode/actor
+//       populates `album_label`, the second gate engages with no code change.
 // THE DELIBERATE TRADEOFF: a brand-NEW artist's debut on a real seed label is skipped until they
-// exist in our archive — the MB tail-first re-arm backfills that within a day or two. Correctness
-// over completeness is the right call for a public surface.
-//
-// Album-track objects carry no ISRC at our tier, so each kept album's tracks are fetched one at a
-// time (`GET /tracks/{id}`) for `external_ids.isrc` + duration. SINGLES ONLY: the batch endpoints
-// (`/albums?ids=`, `/tracks?ids=`) are 403 at our tier — see MAX_FETCHES_PER_PASS.
+// exist in our archive — the MB tail-first re-arm backfills that within a day or two. And in
+// grounding-only mode, a KNOWN artist's release on a DIFFERENT label that the fuzzy `label:` filter
+// mis-returned would be minted under the seed label; that narrow edge self-corrects via the MB
+// crawl's dedupe convergence (below). Correctness over completeness for a public surface.
 //
 // ── THE DEDUPE CONTRACT (the load-bearing design point — catalogue-dedupe.ts) ─────────────────
 // This probe and the MB crawl converge on ONE row per recording from EITHER direction:
@@ -60,244 +69,94 @@
 //      branch, so a later MB walk of a tap-first row folds to a skip instead of an `mb_` twin.
 //
 // ── BUDGET ────────────────────────────────────────────────────────────────────────────────────
-// GET-only, riding the existing Spotify client (`spotifyFetch` + its 429 Retry-After backoff, #675)
-// and the publish path's OAuth (`getSpotifyAccessToken`). ~1 search/label/day + a trickle of
-// album/track reads — negligible. A 429 STOPS the pass cleanly (durable state, resumes next tick); a
-// gone grant reports `configured: false` and is a no-op until the operator reconnects Spotify.
+// The Worker does NO vendor call on this path — it verifies box-supplied candidates and writes. The
+// Apify spend lives on the box (~$0.005/result item, the anchor rate): one album search per due seed
+// label per day, a handful of albums each → a few cents a day. See ../label-releases-timer/README.md.
 
 import { ensureAlbum } from "./albums";
 import { linkTracksToArtistEntities } from "./artists";
 import { existingAlbumTitleFolds, foldTrackTitle } from "./catalogue-dedupe";
 import { getDb, typedRows } from "./db";
 import { labelFold } from "./labels";
-import { ApiError, getSpotifyAccessToken, SPOTIFY_REAUTH_REQUIRED, spotifyFetch } from "./spotify";
 
 // ── Policy constants ──────────────────────────────────────────────────────────────────────────
 
-/** Enabled seed labels probed per pass — oldest-probe-stamp first. Bounded so one tick stays a
- *  trickle on the shared Spotify budget, leaving headroom for the live publish/reach calls. */
+/** Enabled seed labels the worklist returns per read, oldest-probe-stamp first. The box paces its
+ *  own per-tick batch under this; the read is just the eligible set, capped by the caller's limit. */
 export const PROBE_LABELS_PER_PASS = 5;
 
-/** How stale a label's last probe may get before it is re-tapped. The cron runs daily, so 20h means
+/** How stale a label's last probe may get before it is due again. The cron runs daily, so 20h means
  *  every enabled label's freshness is refreshed each day without re-probing one twice a day when the
- *  CLI loops passes. */
+ *  box loops passes. */
 const REPROBE_INTERVAL_MS = 20 * 60 * 60 * 1000;
 
-/** The base cooldown between two probe ATTEMPTS on a label that hit a transient Spotify error
- *  (failure-scaled below), so a persistently-erroring label backs off instead of retrying each tick. */
-const FAILURE_COOLDOWN_BASE_MS = 6 * 60 * 60 * 1000;
-const FAILURE_COOLDOWN_MAX_MS = 7 * 24 * 60 * 60 * 1000;
-
 /** How many enabled-label rows the worklist reads before the TS eligibility refine — a small
- *  multiple of the per-pass cap, so cooling-down rows never starve an eligible one out of the pass. */
+ *  multiple of the per-pass cap, so recently-probed rows never starve a due one out of the read. */
 const WORKLIST_OVERSCAN = PROBE_LABELS_PER_PASS * 4;
 
-/** Fresh albums the search asks for. Spotify DOCUMENTS a page cap of 50, but OUR app's limited
- *  tier rejects any search `limit` above 10 with a 400 (measured live 2026-07-20: 10 → 200, every
- *  value 20–50 → 400) — the same family of quiet tier-cuts as the missing album `label` field. Ten
- *  is plenty: `tag:new` spans two weeks and even the busiest seed label ships fewer fresh records
- *  than that. */
-const SEARCH_LIMIT = 10;
+// ── Candidate shapes (what the box POSTs; the Worker re-verifies) ─────────────────────────────
 
-/** Albums inspected per label per pass, so one junk-heavy label (a fuzzy `label:` match returning
- *  unrelated albums) cannot drain the whole Spotify budget in a single pass. Effectively bounded by
- *  `SEARCH_LIMIT` (10) already; this is a belt on top of it. */
-const MAX_ALBUMS_PER_LABEL = 40;
+/** One credited artist on a candidate album — its name, and its stable Spotify id (the grounding key). */
+export type LabelReleaseArtist = { id?: null | string; name: string };
+
+/** One track on a candidate album, mapped from the actor's inline `tracks[]`. */
+export type LabelReleaseTrackCandidate = {
+  durationMs?: null | number;
+  isrc?: null | string;
+  spotifyTrackId: string;
+  title: string;
+  /** `spotify:track:<id>` — the actor's `track_uri`; a fallback is derived when absent. */
+  uri?: null | string;
+  /** `https://open.spotify.com/track/<id>` — the actor's `track_url`; a fallback is derived when absent. */
+  url?: null | string;
+};
 
 /**
- * SINGLES ONLY — the batch endpoints are GONE at our app tier. Measured live 2026-07-20:
- * `GET /v1/albums?ids=…` → 403 and `GET /v1/tracks?ids=…` → 403 (the same family of tier-cuts as the
- * missing album `label` field and the search `limit` ≤ 10 cap), while the SINGLE reads
- * `GET /v1/albums/{id}` and `GET /v1/tracks/{id}` both → 200 (the single album carries `copyrights`;
- * the single track carries `external_ids.isrc` + duration). So the probe fetches one id at a time.
- *
- * Budget stays sane by construction: only fuzzy-search HITS get an album read (≤ `SEARCH_LIMIT`
- * per label → tens/day archive-wide), and only copyright-PASSING albums get their tracks read. This
- * ceiling is the backstop against one pathological day spraying calls: once a pass has made this
- * many single reads it ends CLEANLY (no more labels this tick), leaving the un-stamped labels for
- * the next tick — the durable `label_releases_checked_at` cadence resumes exactly where it left off.
+ * One candidate album for a label, mapped from ONE actor result item. Carries the album's identity,
+ * its GROUNDING key (`artists[].id`), its optional LABEL-ATTRIBUTION signals (`albumLabel`/
+ * `albumCopyright` — both null in the actor's `albums`-search mode), and its inline tracks.
  */
-const MAX_FETCHES_PER_PASS = 150;
-
-// ── Types ──────────────────────────────────────────────────────────────────────────────────────
-
-/** One enabled seed label as the worklist reads it (identity + the probe reliability columns). */
-type LabelProbeRow = {
-  attemptedAt: null | string;
-  checkedAt: null | string;
-  failures: number;
-  id: string;
-  name: string;
-  slug: string;
+export type LabelReleaseAlbumCandidate = {
+  albumCopyright?: null | string;
+  albumId?: null | string;
+  albumLabel?: null | string;
+  albumName?: null | string;
+  artists: LabelReleaseArtist[];
+  releaseDate?: null | string;
+  tracks: LabelReleaseTrackCandidate[];
 };
 
-/** A parsed full album (`GET /albums/{id}`) — the fields the two-signal gate + the mint read. */
-export type ProbeAlbum = {
-  copyrights: string[];
-  id: string;
-  name: null | string;
-  releaseDate: null | string;
-  /** The album's Spotify artist ids (`artists[].id`) — the ARTIST-GROUNDING key. Carried on the
-   *  album object itself, so grounding is a local DB lookup, never an extra Spotify call. */
-  spotifyArtistIds: string[];
-  trackIds: string[];
-};
-
-/** A parsed full track (`GET /tracks/{id}`) — everything a valid catalogue row needs. */
-export type ProbeTrack = {
-  artistNames: string[];
-  durationMs: number;
-  isrc: null | string;
-  spotifyTrackId: string;
-  spotifyUri: string;
-  spotifyUrl: string;
-  title: string;
-};
-
-/** One probe pass's honest numbers — the op summary + the CLI/cron readout. */
-export type LabelReleasesProbeResult = {
-  /** Albums that PASSED BOTH signals (artist-grounded AND exact copyright match) and will mint. */
+/** One label's verify+mint result — the op summary + the box's per-label tally. */
+export type MintLabelReleasesResult = {
+  /** Albums that PASSED the gate (grounded AND, when a label signal was present, attributed) and minted. */
   albumsMatched: number;
-  /** Albums the label search returned across every label this pass (before the two-signal gate). */
+  /** Albums the box supplied for this label this call (before the gate). */
   albumsSeen: number;
-  /** False when the Spotify grant is gone — the whole tap is a no-op this tick (reconnect needed). */
-  configured: boolean;
-  dryRun: boolean;
-  /** Labels that hit a TRANSIENT Spotify error this pass (backed off, re-probed later). */
-  failedLabels: string[];
-  /** The seed-label slugs probed this pass — or, in a dry run, the ones that WOULD be probed. */
-  labelSlugs: string[];
-  /** Single album/track reads that failed (a 404/5xx on `GET /albums/{id}` or `/tracks/{id}`) and
-   *  were SKIPPED — never a label failure stamp (that is reserved for the search call). */
-  failedFetches: number;
-  /** True when the pass ENDED EARLY on the per-pass single-fetch ceiling (`MAX_FETCHES_PER_PASS`).
-   *  The un-stamped labels resume next tick; a soft cap, not an error. */
-  fetchCeilingHit: boolean;
-  /** Enabled seed labels whose fresh-release search actually ran this pass. */
-  labelsProbed: number;
-  /** Catalogue rows this pass minted (never a certification). */
+  /** False when the slug is not an ENABLED seed label — the op is a no-op and stamps nothing. */
+  found: boolean;
+  labelSlug: string;
+  /** Catalogue rows this call minted (never a certification). */
   newRows: number;
-  /** The minted track ids — bounded (a few labels × their fresh releases), so honest to return. */
+  /** The minted track ids — bounded (a label's fresh releases), so honest to return. */
   newTrackIds: string[];
-  /** True when the pass STOPPED on a Spotify 429 — the CLI stops looping; the next tick resumes. */
-  rateLimited: boolean;
-  /** Tracks skipped because they already exist in the archive (Spotify id / uri / ISRC / same-album
+  /** Tracks skipped because the archive already holds them (Spotify id / uri / ISRC / same-album
    *  title fold) — the dedupe contract, working. */
   skippedKnown: number;
-  /** Albums that passed the EXACT copyright match but were DROPPED for artist-grounding — no artist
-   *  on the album is in our archive yet (a homonym label, or a debut awaiting the MB backfill). */
+  /** Albums DROPPED because a label-attribution signal WAS present but did not fold-match the seed
+   *  name (a homonym label the fuzzy filter returned). Always 0 in the actor's grounding-only mode. */
+  skippedUnattributed: number;
+  /** Albums DROPPED for artist-grounding — no artist on the album is in our archive yet (a homonym
+   *  label, or a debut awaiting the MB backfill). */
   skippedUngrounded: number;
 };
+
+/** One enabled seed label as the worklist returns it (identity the box's actor query reads). */
+export type FreshnessProbeLabel = { name: string; slug: string };
 
 // ── Pure helpers (exported for tests) ───────────────────────────────────────────────────────────
 
 function asString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
-}
-
-/**
- * A Spotify album-search response → the album ids, in Spotify's returned order. Tolerant at every
- * hop (a malformed body yields an empty list, never a throw).
- */
-export function parseLabelAlbumSearch(body: unknown): string[] {
-  const items = (body as { albums?: { items?: unknown[] } } | null | undefined)?.albums?.items;
-  const ids: string[] = [];
-
-  for (const raw of Array.isArray(items) ? items : []) {
-    const id = asString((raw as { id?: unknown }).id);
-
-    if (id) {
-      ids.push(id);
-    }
-  }
-
-  return ids;
-}
-
-/**
- * A Spotify `GET /albums/{id}` response → the parsed album (copyrights + track ids + date), or null
- * when the body carries no id. The SINGLE-album shape: the album object is the top-level body (no
- * `{ albums: [...] }` batch wrapper — the batch endpoint is 403 at our tier). `copyrights` is
- * flattened to its `text` strings for the fold. Pure, so the probe tests pin it directly.
- */
-export function parseProbeAlbum(body: unknown): ProbeAlbum | null {
-  if (!body || typeof body !== "object") {
-    return null;
-  }
-
-  const album = body as {
-    artists?: Array<{ id?: unknown }>;
-    copyrights?: Array<{ text?: unknown }>;
-    id?: unknown;
-    name?: unknown;
-    release_date?: unknown;
-    tracks?: { items?: Array<{ id?: unknown }> };
-  };
-  const id = asString(album.id);
-
-  if (!id) {
-    return null;
-  }
-
-  return {
-    copyrights: (Array.isArray(album.copyrights) ? album.copyrights : [])
-      .map((entry) => asString(entry?.text))
-      .filter((text): text is string => Boolean(text)),
-    id,
-    name: asString(album.name),
-    releaseDate: asString(album.release_date),
-    spotifyArtistIds: (Array.isArray(album.artists) ? album.artists : [])
-      .map((artist) => asString(artist?.id))
-      .filter((aid): aid is string => Boolean(aid)),
-    trackIds: (Array.isArray(album.tracks?.items) ? album.tracks.items : [])
-      .map((track) => asString(track?.id))
-      .filter((tid): tid is string => Boolean(tid)),
-  };
-}
-
-/**
- * A Spotify `GET /tracks/{id}` response → the parsed track (ISRC + duration + uri/url + artists), or
- * null when the body carries no id or no name. The SINGLE-track shape: the track object is the
- * top-level body (no `{ tracks: [...] }` batch wrapper — the batch endpoint is 403 at our tier).
- * `duration_ms` is the real duration (`duration_ms` is NOT NULL on `tracks`; 0 is the honest
- * unknown). Pure, so the probe tests pin it directly.
- */
-export function parseProbeTrack(body: unknown): ProbeTrack | null {
-  if (!body || typeof body !== "object") {
-    return null;
-  }
-
-  const track = body as {
-    artists?: Array<{ name?: unknown }>;
-    duration_ms?: unknown;
-    external_ids?: { isrc?: unknown };
-    external_urls?: { spotify?: unknown };
-    id?: unknown;
-    name?: unknown;
-    uri?: unknown;
-  };
-  const spotifyTrackId = asString(track.id);
-  const title = asString(track.name);
-
-  if (!spotifyTrackId || !title) {
-    return null;
-  }
-
-  const duration = track.duration_ms;
-
-  return {
-    artistNames: (Array.isArray(track.artists) ? track.artists : [])
-      .map((artist) => asString(artist?.name))
-      .filter((name): name is string => Boolean(name)),
-    durationMs:
-      typeof duration === "number" && Number.isFinite(duration) ? Math.round(duration) : 0,
-    isrc: asString(track.external_ids?.isrc),
-    spotifyTrackId,
-    spotifyUri: asString(track.uri) ?? `spotify:track:${spotifyTrackId}`,
-    spotifyUrl:
-      asString(track.external_urls?.spotify) ?? `https://open.spotify.com/track/${spotifyTrackId}`,
-    title,
-  };
 }
 
 /**
@@ -310,14 +169,12 @@ export function stripCopyrightPrefix(text: string): string {
 }
 
 /**
- * THE COPYRIGHT SIGNAL (secondary): does one of an album's copyright strings name the seed label
- * EXACTLY? The copyright's label portion (`stripCopyrightPrefix`) is fold-compared to the seed name
- * for EQUALITY — not a substring `includes`. This is deliberate: a loose substring match caught
- * homonym labels worldwide for generic seed names ("Lens" matched any copyright containing "lens" —
- * "℗ 2026 Silent Lens"; "Pilot." matched Brazilian "Kelton Piloto"), spraying cross-genre junk onto
- * a PUBLIC surface. Exact-fold-equal rejects "silent lens" ≠ "lens" while still confirming a real
- * "℗ 2026 <Seed Label>" attribution. It is the SECONDARY confirmation — the ARTIST-GROUNDING gate
- * (`knownSpotifyArtistIds`) is the primary identity/genre anchor. Pure, so the probe tests pin it.
+ * THE COPYRIGHT SIGNAL: does one of an album's copyright strings name the seed label EXACTLY? The
+ * copyright's label portion (`stripCopyrightPrefix`) is fold-compared to the seed name for EQUALITY —
+ * not a substring `includes`. This is deliberate: a loose substring match caught homonym labels
+ * worldwide for generic seed names ("Lens" matched "℗ 2026 Silent Lens"; "Pilot." matched Brazilian
+ * "Kelton Piloto"), spraying cross-genre junk onto a PUBLIC surface. Exact-fold-equal rejects
+ * "silent lens" ≠ "lens" while still confirming a real "℗ 2026 <Seed Label>" attribution. Pure.
  */
 export function copyrightMatchesLabel(copyrights: string[], seedLabelName: string): boolean {
   const want = labelFold(seedLabelName);
@@ -327,6 +184,35 @@ export function copyrightMatchesLabel(copyrights: string[], seedLabelName: strin
   }
 
   return copyrights.some((text) => labelFold(stripCopyrightPrefix(text)) === want);
+}
+
+/**
+ * THE LABEL-ATTRIBUTION signal (secondary), computed off whatever the actor gave. Precedence:
+ *   1. `album_label` present → the STRONG signal: exact-fold-equals the seed name.
+ *   2. else `album_copyright` present → the ℗/© string: `copyrightMatchesLabel`.
+ *   3. else → NO signal (`present:false`) — the actor's `albums`-search mode, where both are null.
+ *      The gate then runs on artist-grounding ALONE (the documented fallback).
+ * Returns `{ present, matches }`: an album passes attribution when `!present || matches`.
+ */
+export function labelAttributionSignal(
+  album: Pick<LabelReleaseAlbumCandidate, "albumCopyright" | "albumLabel">,
+  seedLabelName: string,
+): { matches: boolean; present: boolean } {
+  const label = asString(album.albumLabel);
+
+  if (label) {
+    const want = labelFold(seedLabelName);
+
+    return { matches: Boolean(want) && labelFold(label) === want, present: true };
+  }
+
+  const copyright = asString(album.albumCopyright);
+
+  if (copyright) {
+    return { matches: copyrightMatchesLabel([copyright], seedLabelName), present: true };
+  }
+
+  return { matches: false, present: false };
 }
 
 // ── Identity ─────────────────────────────────────────────────────────────────────────────────
@@ -344,6 +230,36 @@ export function labelReleaseTrackId(spotifyTrackId: string): string {
   return `sp_${spotifyTrackId}`;
 }
 
+/** The write shape one album's tracks take — a candidate track resolved to what the insert needs. */
+type WritableTrack = {
+  artistNames: string[];
+  durationMs: number;
+  isrc: null | string;
+  spotifyTrackId: string;
+  spotifyUri: string;
+  spotifyUrl: string;
+  title: string;
+};
+
+/** Resolve one candidate track (+ the album's artists) to the write shape, deriving the uri/url. */
+function toWritableTrack(
+  track: LabelReleaseTrackCandidate,
+  albumArtistNames: string[],
+): WritableTrack {
+  return {
+    artistNames: albumArtistNames,
+    durationMs:
+      typeof track.durationMs === "number" && Number.isFinite(track.durationMs)
+        ? Math.round(track.durationMs)
+        : 0,
+    isrc: asString(track.isrc),
+    spotifyTrackId: track.spotifyTrackId,
+    spotifyUri: asString(track.uri) ?? `spotify:track:${track.spotifyTrackId}`,
+    spotifyUrl: asString(track.url) ?? `https://open.spotify.com/track/${track.spotifyTrackId}`,
+    title: track.title,
+  };
+}
+
 // ── The write (the tap half of the dedupe contract) ─────────────────────────────────────────────
 
 /**
@@ -356,7 +272,7 @@ export function labelReleaseTrackId(spotifyTrackId: string): string {
  *      on `tracks`, so this app-level guard is what stops a duplicate anchor);
  *   3. its ISRC anywhere in `tracks` (a finding, a crawl mint, an earlier probe);
  *   4. an EXACT title fold on the SAME album (the no/divergent-ISRC MB-twin convergence).
- * Then `on conflict (track_id) do nothing` closes the two-ticks race at the primary key.
+ * Then `on conflict (track_id) do nothing` closes the two-calls race at the primary key.
  *
  * `label` is the ARCHIVE's own spelling (the seed label's `name`), so `slugify(tracks.label)` lands
  * on `labels.slug`; `label_id` is stamped at the KNOWN seed label directly. `spotify_uri`/`spotify_url`
@@ -364,7 +280,7 @@ export function labelReleaseTrackId(spotifyTrackId: string): string {
  * never named — the DDL defaults land and no agent sweep can reach a `findings`-less row.
  */
 async function writeLabelReleaseTracks(
-  tracks: ProbeTrack[],
+  tracks: WritableTrack[],
   ctx: {
     albumId: null | string;
     albumName: null | string;
@@ -481,7 +397,7 @@ async function writeLabelReleaseTracks(
   if (writtenIds.length > 0) {
     const placeholders = writtenIds.map(() => "?").join(", ");
 
-    // The label edge, stamped directly at the KNOWN seed label — no re-resolve of Spotify's string.
+    // The label edge, stamped directly at the KNOWN seed label — no re-resolve of the actor's string.
     await db.execute({
       args: [ctx.labelId, ...writtenIds],
       sql: `update tracks set label_id = ? where track_id in (${placeholders})`,
@@ -506,49 +422,13 @@ async function writeLabelReleaseTracks(
 }
 
 /**
- * Of a set of Spotify track ids, the ones the archive does NOT already hold (by `sp_<id>`, a bare-id
- * finding, or the `spotify_uri` anchor) — the pre-fetch filter that skips the per-album `/tracks`
- * read for an album whose tracks are all already minted, keeping a daily re-probe a true trickle.
- */
-async function unmintedSpotifyTrackIds(spotifyTrackIds: string[]): Promise<string[]> {
-  if (spotifyTrackIds.length === 0) {
-    return [];
-  }
-
-  const db = await getDb();
-  const idKeys = spotifyTrackIds.flatMap((id) => [labelReleaseTrackId(id), id]);
-  const uris = spotifyTrackIds.map((id) => `spotify:track:${id}`);
-
-  const existing = await db.execute({
-    args: [...idKeys, ...uris],
-    sql: `select track_id, spotify_uri from tracks
-          where track_id in (${idKeys.map(() => "?").join(", ")})
-             or spotify_uri in (${uris.map(() => "?").join(", ")})`,
-  });
-
-  const held = new Set<string>();
-
-  for (const row of typedRows<{ spotify_uri: null | string; track_id: string }>(existing.rows)) {
-    held.add(row.track_id);
-
-    if (row.spotify_uri) {
-      held.add(row.spotify_uri);
-    }
-  }
-
-  return spotifyTrackIds.filter(
-    (id) => !held.has(labelReleaseTrackId(id)) && !held.has(id) && !held.has(`spotify:track:${id}`),
-  );
-}
-
-/**
- * THE ARTIST-GROUNDING gate (the primary identity/genre anchor): of a set of Spotify artist ids,
+ * THE ARTIST-GROUNDING gate (the PRIMARY identity/genre anchor): of a set of Spotify artist ids,
  * the ones already in our archive (`artists.spotify_artist_id`). An album mints ONLY when at least
  * one of ITS artist ids is in this set — which kills 100% of the cross-genre junk the fuzzy Spotify
- * `label:` search returns (an Indian devotional record, a Brazilian live album — every one by an
+ * `label:` filter returns (an Indian devotional record, a Brazilian live album — every one by an
  * artist we have never certified), while keeping a real seed-label release (whose artists we already
- * hold). A local, indexed lookup on the unique `spotify_artist_id` — NO extra Spotify call; the
- * album object already carries `artists[].id`. The `in` list is bounded by the pass's few albums.
+ * hold). A local, indexed lookup on the unique `spotify_artist_id` — the actor already carried
+ * `artists[].id`, so grounding is DB-only, never an extra vendor call.
  */
 async function knownSpotifyArtistIds(spotifyArtistIds: string[]): Promise<Set<string>> {
   const ids = [...new Set(spotifyArtistIds.filter(Boolean))];
@@ -569,17 +449,9 @@ async function knownSpotifyArtistIds(spotifyArtistIds: string[]): Promise<Set<st
   );
 }
 
-// ── Label reliability writers ───────────────────────────────────────────────────────────────────
+// ── The label cadence stamp ───────────────────────────────────────────────────────────────────
 
-function failureCooldownMs(failures: number): number {
-  if (failures <= 0) {
-    return FAILURE_COOLDOWN_BASE_MS;
-  }
-
-  return Math.min(FAILURE_COOLDOWN_BASE_MS * 2 ** Math.min(failures, 10), FAILURE_COOLDOWN_MAX_MS);
-}
-
-/** A successful probe: stamp the cadence + clear the failure streak. */
+/** A completed probe: stamp the cadence + clear any legacy failure streak. */
 async function markLabelChecked(slug: string): Promise<void> {
   const db = await getDb();
 
@@ -591,32 +463,122 @@ async function markLabelChecked(slug: string): Promise<void> {
   });
 }
 
-/** A transient Spotify error: bump the streak + stamp the attempt (drives the backoff). */
-async function recordLabelFailure(slug: string, priorFailures: number): Promise<void> {
-  const db = await getDb();
-
-  await db.execute({
-    args: [priorFailures + 1, new Date().toISOString(), slug],
-    sql: `update labels
-          set label_releases_failures = ?, label_releases_attempted_at = ?
-          where slug = ?`,
-  });
-}
-
-// ── The worklist ────────────────────────────────────────────────────────────────────────────────
+// ── The verify + mint op (agent tier; the box POSTs a label's candidates here) ────────────────
 
 /**
- * The probe worklist: ENABLED seed labels, oldest-probe-stamp first (NULLs — never-probed — sort
- * first). Reads over the partial `labels_label_releases_queue_idx`, so it never scans the
- * crawler-swollen labels table. The TS eligibility refine (below) drops labels re-probed too
- * recently or cooling down after an error.
+ * VERIFY box-supplied candidates for ONE label and mint the ones that clear the gate. The box ran
+ * the Apify actor for `labelSlug` and mapped each result album to a candidate; this re-runs the FULL
+ * grounding + attribution + dedupe (the box's verdict is never trusted) and writes the survivors as
+ * catalogue rows for the KNOWN seed label. On completion it stamps `label_releases_checked_at` so the
+ * worklist backs the label off for the re-probe window — a label with zero fresh releases is stamped
+ * too, so an empty result is not re-asked (or re-billed) every tick.
+ *
+ * A slug that is NOT an enabled seed label (disabled mid-flight, or never seeded) is a NO-OP:
+ * `found:false`, nothing minted, nothing stamped.
+ */
+export async function mintLabelReleases(
+  labelSlug: string,
+  candidates: LabelReleaseAlbumCandidate[],
+): Promise<MintLabelReleasesResult> {
+  const result: MintLabelReleasesResult = {
+    albumsMatched: 0,
+    albumsSeen: 0,
+    found: false,
+    labelSlug,
+    newRows: 0,
+    newTrackIds: [],
+    skippedKnown: 0,
+    skippedUnattributed: 0,
+    skippedUngrounded: 0,
+  };
+
+  const db = await getDb();
+  const labelResult = await db.execute({
+    args: [labelSlug],
+    sql: `select id, name from labels where slug = ? and seed_state = 'enabled' limit 1`,
+  });
+  const label = typedRows<{ id: string; name: string }>(labelResult.rows)[0];
+
+  if (!label) {
+    return result;
+  }
+
+  result.found = true;
+
+  // Grounding set — every candidate album's artist ids, resolved in ONE indexed DB lookup.
+  const known = await knownSpotifyArtistIds(
+    candidates.flatMap((album) =>
+      album.artists.map((artist) => artist.id).filter((id): id is string => Boolean(id)),
+    ),
+  );
+
+  for (const album of candidates) {
+    result.albumsSeen += 1;
+
+    // (B) LABEL ATTRIBUTION — only gates when the actor gave a signal; grounding-only otherwise.
+    const attribution = labelAttributionSignal(album, label.name);
+
+    if (attribution.present && !attribution.matches) {
+      result.skippedUnattributed += 1;
+      continue;
+    }
+
+    // (A) ARTIST-GROUNDING — always required.
+    const grounded = album.artists.some((artist) => artist.id && known.has(artist.id));
+
+    if (!grounded) {
+      result.skippedUngrounded += 1;
+      continue;
+    }
+
+    result.albumsMatched += 1;
+
+    const albumArtistNames = album.artists
+      .map((artist) => asString(artist.name))
+      .filter((name): name is string => Boolean(name));
+    const writable = album.tracks
+      .filter((track) => asString(track.spotifyTrackId) && asString(track.title))
+      .map((track) => toWritableTrack(track, albumArtistNames));
+
+    if (writable.length === 0) {
+      continue;
+    }
+
+    // The album row, folded on the album-title slug (Spotify carries no release-group MBID).
+    const albumId = (await ensureAlbum(asString(album.albumName), null)) ?? null;
+    const { skipped, written, writtenIds } = await writeLabelReleaseTracks(writable, {
+      albumId,
+      albumName: asString(album.albumName),
+      labelId: label.id,
+      labelName: label.name,
+      releaseDate: asString(album.releaseDate),
+    });
+
+    result.newRows += written;
+    result.skippedKnown += skipped;
+    result.newTrackIds.push(...writtenIds);
+  }
+
+  await markLabelChecked(labelSlug);
+
+  return result;
+}
+
+// ── The worklist read (agent tier; the box asks which labels are due) ─────────────────────────
+
+/** One enabled seed label as the worklist SQL reads it (identity + the last-probe stamp). */
+type LabelProbeRow = { checkedAt: null | string; name: string; slug: string };
+
+/**
+ * The probe worklist SQL: ENABLED seed labels, oldest-probe-stamp first (NULLs — never-probed —
+ * sort first). Reads over the partial `labels_label_releases_queue_idx`, so it never scans the
+ * crawler-swollen labels table. The TS refine (below) drops labels re-probed too recently.
  */
 async function listProbeLabels(): Promise<LabelProbeRow[]> {
   const db = await getDb();
   const result = await db.execute({
     args: [WORKLIST_OVERSCAN],
-    sql: `select id, slug, name, label_releases_checked_at, label_releases_attempted_at,
-                 label_releases_failures
+    sql: `select slug, name, label_releases_checked_at
           from labels
           where seed_state = 'enabled'
           order by label_releases_checked_at asc, slug asc
@@ -624,34 +586,18 @@ async function listProbeLabels(): Promise<LabelProbeRow[]> {
   });
 
   return typedRows<{
-    id: string;
-    label_releases_attempted_at: null | string;
     label_releases_checked_at: null | string;
-    label_releases_failures: null | number;
     name: string;
     slug: string;
   }>(result.rows).map((row) => ({
-    attemptedAt: row.label_releases_attempted_at,
     checkedAt: row.label_releases_checked_at,
-    failures: typeof row.label_releases_failures === "number" ? row.label_releases_failures : 0,
-    id: row.id,
     name: row.name,
     slug: row.slug,
   }));
 }
 
-/** Whether a label is eligible to be probed THIS pass, given the reliability state and the clock. */
-function isEligible(label: LabelProbeRow, now: number): boolean {
-  // Backing off after a transient error: skip until the failure-scaled cooldown elapses.
-  if (label.failures > 0 && label.attemptedAt) {
-    const last = Date.parse(label.attemptedAt);
-
-    if (Number.isFinite(last) && now - last < failureCooldownMs(label.failures)) {
-      return false;
-    }
-  }
-
-  // Otherwise eligible once the last successful probe is stale (or it was never probed).
+/** Whether a label is due to be probed, given the clock and its last successful-probe stamp. */
+function isDue(label: LabelProbeRow, now: number): boolean {
   if (!label.checkedAt) {
     return true;
   }
@@ -661,300 +607,18 @@ function isEligible(label: LabelProbeRow, now: number): boolean {
   return !Number.isFinite(last) || now - last >= REPROBE_INTERVAL_MS;
 }
 
-// ── The Spotify reads ──────────────────────────────────────────────────────────────────────────
-
-/** One Spotify GET's outcome, from the pass's point of view. */
-type SpotifyGet =
-  | { body: unknown; kind: "ok" }
-  | { kind: "failed" }
-  | { kind: "ratelimited" }
-  | { kind: "unauthorized" };
-
 /**
- * One authed Spotify GET, reusing the publish path's token + the client's 429 backoff. Never throws:
- * a gone grant → `unauthorized` (the pass stops, a no-op until reconnect), a 429 → `ratelimited`
- * (the pass stops cleanly), any other error → `failed` (the caller backs the label off). The
- * `findSpotifyTrackByIsrc` discipline, verbatim.
+ * The freshness-tap worklist: the ENABLED seed labels DUE for a probe (oldest first, up to `limit`),
+ * each as `{ slug, name }` — the box builds its `label:"<name>" tag:new` actor query off the name and
+ * POSTs the result back keyed by the slug. A pure read: it stamps nothing (the mint op stamps on the
+ * POST-back), the `list_track_work`/anchor-worklist precedent.
  */
-async function spotifyGet(path: string, accessToken: string): Promise<SpotifyGet> {
-  try {
-    const response = await spotifyFetch(path, accessToken);
-
-    return { body: await response.json(), kind: "ok" };
-  } catch (error) {
-    if (
-      error instanceof ApiError &&
-      (error.code === "spotify_not_authenticated" || error.code === SPOTIFY_REAUTH_REQUIRED)
-    ) {
-      return { kind: "unauthorized" };
-    }
-
-    if (error instanceof Error && error.message.includes("429")) {
-      return { kind: "ratelimited" };
-    }
-
-    return { kind: "failed" };
-  }
-}
-
-function labelSearchPath(labelName: string): string {
-  // `q=label:"<name>" tag:new` — the label's last-two-weeks releases with day-one dates.
-  const q = `label:"${labelName}" tag:new`;
-  const params = new URLSearchParams({ limit: String(SEARCH_LIMIT), q, type: "album" });
-
-  return `/search?${params.toString()}`;
-}
-
-// ── The pass ──────────────────────────────────────────────────────────────────────────────────
-
-/** How probing one label ended — the signal the main loop acts on. */
-type LabelSignal = "continue" | "stop-budget" | "stop-rate" | "stop-unauth";
-
-/** A mutable per-PASS single-fetch counter, threaded through every label so the ceiling is a
- *  pass-wide budget rather than a per-label one. */
-type FetchBudget = { fetches: number };
-
-/**
- * Probe ONE label: search its fresh releases, copyright-filter the albums (each fetched as a SINGLE
- * `GET /albums/{id}` — the batch endpoint is 403 at our tier), and mint the tracks the archive does
- * not already hold (each fetched as a SINGLE `GET /tracks/{id}`). Stamps the cadence on success,
- * backs the LABEL off only on a search error; a failed single album/track read is skipped + counted,
- * never a label stamp. Returns whether the pass should continue, stop on the fetch ceiling, a 429, or
- * a gone grant.
- */
-async function probeOneLabel(
-  label: LabelProbeRow,
-  accessToken: string,
-  result: LabelReleasesProbeResult,
-  budget: FetchBudget,
-): Promise<LabelSignal> {
-  // 1. Search the label's fresh releases. A search error backs the LABEL off (the one place that
-  //    stamps a label failure — its own read failed, so its whole probe is untrustworthy this tick).
-  const search = await spotifyGet(labelSearchPath(label.name), accessToken);
-
-  if (search.kind === "unauthorized") {
-    return "stop-unauth";
-  }
-
-  if (search.kind === "ratelimited") {
-    result.rateLimited = true;
-
-    return "stop-rate";
-  }
-
-  if (search.kind === "failed") {
-    await recordLabelFailure(label.slug, label.failures);
-    result.failedLabels.push(label.slug);
-
-    return "continue";
-  }
-
-  result.labelsProbed += 1;
-  result.labelSlugs.push(label.slug);
-
-  const albumIds = [...new Set(parseLabelAlbumSearch(search.body))].slice(0, MAX_ALBUMS_PER_LABEL);
-  result.albumsSeen += albumIds.length;
-
-  if (albumIds.length === 0) {
-    await markLabelChecked(label.slug);
-
-    return "continue";
-  }
-
-  // 2. Fetch each album as a SINGLE `GET /albums/{id}` (the batch endpoint is 403 at our tier). A
-  //    failed single read SKIPS that album and continues — never a label stamp.
-  const albums: ProbeAlbum[] = [];
-
-  for (const id of albumIds) {
-    if (budget.fetches >= MAX_FETCHES_PER_PASS) {
-      result.fetchCeilingHit = true;
-
-      return "stop-budget";
-    }
-
-    budget.fetches += 1;
-    const outcome = await spotifyGet(`/albums/${encodeURIComponent(id)}`, accessToken);
-
-    if (outcome.kind === "unauthorized") {
-      return "stop-unauth";
-    }
-
-    if (outcome.kind === "ratelimited") {
-      result.rateLimited = true;
-
-      return "stop-rate";
-    }
-
-    if (outcome.kind === "failed") {
-      result.failedFetches += 1;
-      continue;
-    }
-
-    const album = parseProbeAlbum(outcome.body);
-
-    if (album) {
-      albums.push(album);
-    }
-  }
-
-  // 3. THE TWO-SIGNAL GATE (belt and suspenders — both required before an album mints onto PUBLIC
-  //    /fresh): (a) ARTIST-GROUNDING — at least one of the album's Spotify artist ids is already in
-  //    our archive (the primary identity/genre anchor, `knownSpotifyArtistIds`), AND (b) the EXACT
-  //    copyright label match (the secondary attribution confirmation, `copyrightMatchesLabel`). The
-  //    first live drain minted 195 rows, many cross-genre (an Indian devotional record, Brazilian
-  //    live albums) because the fuzzy `label:` search + a loose substring copyright match let homonym
-  //    labels through; both were by artists we had never certified. Grounding is what closes that.
-  //
-  //    THE DELIBERATE TRADEOFF: a brand-NEW artist's debut on a real seed label is SKIPPED until they
-  //    exist in our archive — D7's MusicBrainz tail-first re-arm backfills that within a day or two.
-  //    Correctness over completeness is the right call for a public surface.
-  const copyrightOk = albums.filter((album) => copyrightMatchesLabel(album.copyrights, label.name));
-  const known = await knownSpotifyArtistIds(copyrightOk.flatMap((album) => album.spotifyArtistIds));
-  const matched: ProbeAlbum[] = [];
-
-  for (const album of copyrightOk) {
-    if (album.spotifyArtistIds.some((id) => known.has(id))) {
-      matched.push(album);
-    } else {
-      // Right label name, but no artist we know — a homonym label or a debut. Dropped, counted.
-      result.skippedUngrounded += 1;
-    }
-  }
-
-  result.albumsMatched += matched.length;
-
-  // 4. Mint the un-held tracks of each matched album, each fetched as a SINGLE `GET /tracks/{id}`.
-  for (const album of matched) {
-    const unminted = await unmintedSpotifyTrackIds(album.trackIds);
-
-    if (unminted.length === 0) {
-      continue;
-    }
-
-    const probeTracks: ProbeTrack[] = [];
-
-    for (const id of unminted) {
-      if (budget.fetches >= MAX_FETCHES_PER_PASS) {
-        result.fetchCeilingHit = true;
-
-        return "stop-budget";
-      }
-
-      budget.fetches += 1;
-      const outcome = await spotifyGet(`/tracks/${encodeURIComponent(id)}`, accessToken);
-
-      if (outcome.kind === "unauthorized") {
-        return "stop-unauth";
-      }
-
-      if (outcome.kind === "ratelimited") {
-        result.rateLimited = true;
-
-        return "stop-rate";
-      }
-
-      if (outcome.kind === "failed") {
-        result.failedFetches += 1;
-        continue;
-      }
-
-      const track = parseProbeTrack(outcome.body);
-
-      if (track) {
-        probeTracks.push(track);
-      }
-    }
-
-    // The album row, folded on the album-title slug (Spotify carries no release-group MBID).
-    const albumId = (await ensureAlbum(album.name, null)) ?? null;
-    const { skipped, written, writtenIds } = await writeLabelReleaseTracks(probeTracks, {
-      albumId,
-      albumName: album.name,
-      labelId: label.id,
-      labelName: label.name,
-      releaseDate: album.releaseDate,
-    });
-
-    result.newRows += written;
-    result.skippedKnown += skipped;
-    result.newTrackIds.push(...writtenIds);
-  }
-
-  await markLabelChecked(label.slug);
-
-  return "continue";
-}
-
-/**
- * ONE bounded probe pass. Reads the enabled seed labels due for work and probes each — a Spotify
- * fresh-release search → the copyrights post-filter → a per-track ISRC read → the deduped mint. A
- * gone Spotify grant makes the whole pass a no-op (`configured: false`); a 429 STOPS it cleanly
- * (durable state resumes next tick).
- *
- * `dryRun` reports the labels that WOULD be probed and makes no Spotify call and no write.
- */
-export async function probeLabelReleases({
-  dryRun = false,
-  limit = PROBE_LABELS_PER_PASS,
-}: { dryRun?: boolean; limit?: number } = {}): Promise<LabelReleasesProbeResult> {
+export async function listDueFreshnessLabels(limit: number): Promise<FreshnessProbeLabel[]> {
   const now = Date.now();
-  const result: LabelReleasesProbeResult = {
-    albumsMatched: 0,
-    albumsSeen: 0,
-    configured: true,
-    dryRun,
-    failedFetches: 0,
-    failedLabels: [],
-    fetchCeilingHit: false,
-    labelSlugs: [],
-    labelsProbed: 0,
-    newRows: 0,
-    newTrackIds: [],
-    rateLimited: false,
-    skippedKnown: 0,
-    skippedUngrounded: 0,
-  };
+  const cap = Math.max(1, limit);
 
-  const cap = Math.max(1, Math.min(limit, PROBE_LABELS_PER_PASS));
-  const candidates = await listProbeLabels();
-  const eligible = candidates.filter((label) => isEligible(label, now)).slice(0, cap);
-
-  if (eligible.length === 0) {
-    return result;
-  }
-
-  if (dryRun) {
-    // Report the eligible labels (the "would probe" set) without any Spotify call or write.
-    result.labelSlugs = eligible.map((label) => label.slug);
-
-    return result;
-  }
-
-  // The publish path's OAuth. A gone grant makes the whole tap a no-op until the operator reconnects
-  // Spotify — the same posture the ISRC-anchor legs take (findSpotifyTrackByIsrc).
-  let accessToken: string;
-
-  try {
-    accessToken = await getSpotifyAccessToken();
-  } catch {
-    return { ...result, configured: false };
-  }
-
-  // The single-fetch budget, shared across every label this pass so the ceiling is pass-wide.
-  const budget: FetchBudget = { fetches: 0 };
-
-  for (const label of eligible) {
-    const signal = await probeOneLabel(label, accessToken, result, budget);
-
-    if (signal === "stop-unauth") {
-      return { ...result, configured: false };
-    }
-
-    // A 429 or the fetch ceiling both END the pass cleanly — the un-stamped labels resume next tick.
-    if (signal === "stop-rate" || signal === "stop-budget") {
-      break;
-    }
-  }
-
-  return result;
+  return (await listProbeLabels())
+    .filter((label) => isDue(label, now))
+    .slice(0, cap)
+    .map((label) => ({ name: label.name, slug: label.slug }));
 }
