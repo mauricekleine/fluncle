@@ -37,7 +37,11 @@ import { spawnSync } from "node:child_process";
 // so a full batch is well under the cron timeout; a drained worklist is a cheap no-op.
 // ---------------------------------------------------------------------------
 
-const BATCH_LIMIT = Number(process.env.FLUNCLE_ARTIST_EDGES_LIMIT ?? "200");
+// 100, not the op's MAX_BATCH of 200: the CLI's shared limit validator caps every list/backfill
+// limit at 100, so 200 fails client-side before any request ("Limit must be an integer between 1
+// and 100", found live 2026-07-20). 100 ≤ the server clamp keeps the one-request-per-tick property
+// (a full page meets the CLI cap in one call); the drain just takes twice the ticks.
+const BATCH_LIMIT = Number(process.env.FLUNCLE_ARTIST_EDGES_LIMIT ?? "100");
 
 const FLUNCLE_BIN = process.env.FLUNCLE_BIN ?? "fluncle";
 
