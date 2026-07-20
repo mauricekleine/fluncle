@@ -16,12 +16,17 @@ import * as z from "zod";
  * It creates NO new public authority the operator did not already give: every playlist
  * it touches already exists, minted by its own owner.
  *
- * It writes the next edition for every user with at least one existing edition REGARDLESS
- * of the kill switch (the edition is the shelf's source of truth); only the Spotify mirror
- * stays conditional (`switchOff` is reported for observability, never a short-circuit). A
- * draft-phase user with zero editions is skipped by construction. It walks up to `limit`
- * users oldest-edition first. Best-effort per user: one Spotify fault is counted in `failed`
- * and the walk continues. The counts are the sweep's JSON summary.
+ * A PACED, RESUMABLE DRAIN (not a one-shot burst): each tick processes up to `limit` DUE
+ * committed users — PENDING MINTS first, then oldest-refreshed — stamping a durable per-user
+ * cursor as it goes, so the whole crew refreshes ~weekly spread across ticks instead of one
+ * overloaded pass that 429'd Spotify's shared per-app budget. It writes the next edition for
+ * every processed user REGARDLESS of the kill switch (the edition is the shelf's source of
+ * truth); only the Spotify mirror stays conditional (`switchOff` is reported for observability,
+ * never a short-circuit). When minting is open, the pass consults the shared Spotify budget and
+ * STOPS cleanly when the window is spent (`budgetPaused: true`) — the cursor resumes next tick.
+ * A draft-phase user with zero editions is skipped by construction. Best-effort per user: one
+ * Spotify fault is counted in `failed` and the walk continues. The counts are the sweep's JSON
+ * summary.
  */
 export const refreshFrontierPlaylists = oc
   .route({
@@ -34,6 +39,12 @@ export const refreshFrontierPlaylists = oc
   .input(z.object({ limit: z.number().int().positive().optional() }))
   .output(
     z.object({
+      // True ⇒ the pass STOPPED early because the shared per-app Spotify budget was spent;
+      // the durable per-user cursor resumes the remaining users next tick.
+      budgetPaused: z.boolean(),
+      // Users whose owed Spotify write was DEFERRED this tick (budget spent mid-pass); they
+      // stay DUE and the next tick completes them.
+      building: z.number(),
       // Editions written without a Spotify mirror (minting dark this tick).
       editionOnly: z.number(),
       // Users whose sync threw a Spotify fault (best-effort; the walk continues).
@@ -47,7 +58,7 @@ export const refreshFrontierPlaylists = oc
       skipped: z.number(),
       // True ⇒ the kill switch is closed; editions were still written, the Spotify mirror skipped.
       switchOff: z.boolean(),
-      // How many users the tick walked.
+      // How many DUE users the tick fetched to process (the paced batch).
       total: z.number(),
       // Users whose desired list matched their latest edition (nothing written or mirrored).
       unchanged: z.number(),

@@ -3,9 +3,10 @@
 // over the `refresh_frontier_playlists` oRPC op — the CLI holds no sync logic; the
 // mirror + the Spotify writes happen inside the Worker. It is a pacer, not an engine.
 //
-//   - `refresh` — one tick of the weekly refresh sweep (`refresh_frontier_playlists`).
-//     This is the command the on-box `fluncle-frontier-refresh` cron drives with the
-//     box's agent token: it prints one JSON summary line.
+//   - `refresh` — one tick of the paced refresh DRAIN (`refresh_frontier_playlists`).
+//     This is the command the on-box `fluncle-frontier-refresh` cron drives (every ~15
+//     min) with the box's agent token: it processes one batch of DUE users and prints one
+//     JSON summary line. `--limit` overrides the batch size for an attended burn.
 //   - `status` — the kill switch's state (`get_frontier_minting`, agent-allowed read).
 //   - `open` / `close` — the kill switch itself (`set_frontier_minting`, OPERATOR only:
 //     the Worker 403s an agent token; opening minting is a Spotify-account authority
@@ -13,8 +14,10 @@
 
 import { adminApiGet, adminApiPost, adminApiPut } from "../api";
 
-/** The refresh tick's per-run summary — the JSON line the weekly cron reads. */
+/** The refresh tick's per-run summary — the JSON line the paced-drain cron reads. */
 export type FrontierRefreshSummary = {
+  budgetPaused: boolean;
+  building: number;
   editionOnly: number;
   failed: number;
   minted: number;

@@ -1,20 +1,22 @@
 #!/usr/bin/env bun
-// frontier-refresh-sweep.ts — the bun orchestrator behind the `--no-agent` weekly
-// Frontier-refresh cron (`fluncle-frontier-refresh`). E2, the public recommendation
-// machine (docs/planning/ROADMAP.md § the public recommendation machine).
+// frontier-refresh-sweep.ts — the bun orchestrator behind the `--no-agent` Frontier-refresh
+// cron (`fluncle-frontier-refresh`). E2, the public recommendation machine
+// (docs/planning/ROADMAP.md § the public recommendation machine).
 //
 // Version-controlled source; the repo is canonical and the box is a deploy target
 // (fluncle-hermes-operator skill). Invoked by the bash wrapper (frontier-refresh-sweep.sh)
-// the host timer execs weekly — see that file's header for the wire-up and
+// the host timer execs every ~15 min — see that file's header for the wire-up and
 // ../cron/README.md for the cron model.
 //
-// WHAT IT DOES. One weekly tick re-mirrors every crew member's "Fluncle's Frontier"
-// playlist from their CURRENT recommendations — the Discover-Weekly-style refresh. The
-// CLI holds no sync logic; this driver holds even less. It fires ONE
-// `fluncle admin frontier refresh` (the `refresh_frontier_playlists` op), which walks
-// the playlists inside the Worker, respects the DEFAULT-DENY kill switch, and full-
-// replaces each playlist whose recommendation set changed (skipping the unchanged ones
-// via the per-row mirror hash). It prints one JSON summary line.
+// WHAT IT DOES. One tick of the PACED DRAIN — it re-mirrors a BATCH of DUE crew members'
+// "Fluncle's Frontier" playlists from their CURRENT recommendations, spreading the weekly
+// refresh across ticks instead of bursting every playlist at once (which 429'd Spotify's
+// shared per-app budget). The CLI holds no sync logic; this driver holds even less. It fires
+// ONE `fluncle admin frontier refresh` (the `refresh_frontier_playlists` op), which processes
+// one batch inside the Worker (pending mints first, then oldest-refreshed), respects the
+// DEFAULT-DENY kill switch, consults the shared Spotify budget and stops cleanly when it is
+// spent (`budgetPaused`), and full-replaces each playlist whose recommendation set changed
+// (skipping the unchanged ones via the per-row mirror hash). It prints one JSON summary line.
 //
 // It certifies nothing and creates no new public authority: every playlist it touches
 // already exists, minted by its own owner. `refresh_frontier_playlists` is AGENT tier,
@@ -30,6 +32,8 @@ const log = (message: string) => console.error(`[frontier-refresh-sweep] ${messa
 
 /** The refresh op's summary — the fields we surface. */
 type FrontierRefreshSummary = {
+  budgetPaused?: boolean;
+  building?: number;
   editionOnly?: number;
   failed?: number;
   minted?: number;
@@ -87,6 +91,8 @@ function isCliErrorPayload(value: unknown): value is { code: string; message: st
 // entrypoint's job below. That keeps the sweep importable (frontier-refresh-sweep.test.ts).
 export function main(): { ok: boolean } & Record<string, unknown> {
   const summary = {
+    budgetPaused: false,
+    building: 0,
     editionOnly: 0,
     error: null as null | string,
     failed: 0,
@@ -110,13 +116,19 @@ export function main(): { ok: boolean } & Record<string, unknown> {
     summary.skipped = tick.skipped ?? 0;
     summary.failed = tick.failed ?? 0;
     summary.switchOff = tick.switchOff ?? false;
+    summary.building = tick.building ?? 0;
+    summary.budgetPaused = tick.budgetPaused ?? false;
 
     if (summary.switchOff) {
       log(
         `Frontier minting is paused (kill switch closed) — ${summary.editionOnly} edition(s) written, Spotify skipped`,
       );
+    } else if (summary.budgetPaused) {
+      log(
+        `Spotify budget spent — paused after ${summary.building} deferred; the durable cursor resumes next tick`,
+      );
     } else if (summary.failed > 0) {
-      log(`${summary.failed} playlist(s) failed to refresh (best-effort; retried next week)`);
+      log(`${summary.failed} playlist(s) failed to refresh (best-effort; retried next tick)`);
     }
   } catch (error) {
     summary.ok = false;

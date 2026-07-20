@@ -1468,6 +1468,24 @@ export const userFrontierPlaylists = sqliteTable("user_frontier_playlists", {
   userId: text("user_id").primaryKey(),
 });
 
+// THE PACED-DRAIN CURSOR — one row per committed Frontier user, stamping WHEN the paced
+// refresh sweep last PROCESSED them (`refreshed_at`, ISO). It exists because the sweep
+// stopped bursting every playlist in one tick (which 429'd Spotify's shared per-app budget)
+// and became a bounded, RESUMABLE drain: each tick refreshes only a batch of users whose
+// stamp is older than ~6 days, stamps each as it goes, and the next tick picks up where it
+// left off — so a weekly refresh of the whole crew spreads across the day instead of dying
+// in one overloaded tick. A user with NO row here (never processed, or a pending mint the
+// hot path deferred under a hot budget) reads as DUE, so a fresh mint is picked up first.
+//
+// It lives here rather than on `user_frontier_playlists` because a PENDING-MINT user (their
+// edition is written but the Spotify create was deferred) has no playlist row yet — the
+// stamp must survive the gap between commitment and the paced create. `user_id` is a logical
+// FK (no SQL cascade), matching every sibling per-user table; deletion is application code.
+export const userFrontierRefresh = sqliteTable("user_frontier_refresh", {
+  refreshedAt: text("refreshed_at").notNull(),
+  userId: text("user_id").primaryKey(),
+});
+
 // A user's FRONTIER EDITIONS — one FROZEN snapshot per real weekly refresh of their
 // Frontier playlist, read two ways: (a) the NOVELTY LEDGER the engine re-derives its
 // last-N-editions exclusion set from (so the weekly playlist rotates), and (b) the
