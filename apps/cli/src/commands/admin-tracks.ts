@@ -533,7 +533,11 @@ export type LabelReleasesBackfillResult = {
   albumsSeen: number;
   configured: boolean;
   dryRun: boolean;
+  // Single album/track reads that 404/5xx'd and were skipped (not a label failure stamp).
+  failedFetches: number;
   failedLabels: string[];
+  // True when the pass ended early on the per-pass single-fetch ceiling.
+  fetchCeilingHit: boolean;
   labelSlugs: string[];
   labelsProbed: number;
   newRows: number;
