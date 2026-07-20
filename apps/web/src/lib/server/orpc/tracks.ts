@@ -3,6 +3,7 @@
 // op here and one spread line in the root — no other domain's file is touched.
 
 import { ORPCError } from "@orpc/server";
+import { parseSetParam, parseTasteParam } from "../../mix-set";
 import { clampFreshLimit, listFreshTracks } from "../fresh";
 import {
   decodeTrackCursor,
@@ -171,15 +172,15 @@ export function tracksHandlers(os: Implementer) {
   const listMixableTracksHandler = os.list_mixable_tracks.handler(async ({ input }) => {
     try {
       const limit = parseLimit(input.limit, MIXABLE_DEFAULT_LIMIT, MIXABLE_MAX_LIMIT);
-      const splitList = (raw: string | undefined) =>
-        (raw ?? "")
-          .split(",")
-          .map((value) => value.trim())
-          .filter(Boolean);
-
+      // Reuse the canonical `/mix` codec parsers (mix-set) rather than an ad-hoc splitter:
+      // `taste` is a seed capped at MAX_TASTE_ARTISTS (10, slug-validated), `exclude` a set
+      // of chain tokens capped at MAX_SET_LENGTH (32, token-validated). This is a public
+      // unauth read with no rate limiter, so bounding the IN/NOT-IN placeholder lists here
+      // keeps a huge query string from inflating the whole-archive vector scan. The web
+      // client already enforces these caps, so nothing valid is rejected.
       const findings = await getMixableTracks(input.idOrLogId, {
-        artistSlugs: splitList(input.taste),
-        exclude: splitList(input.exclude),
+        artistSlugs: parseTasteParam(input.taste),
+        exclude: parseSetParam(input.exclude),
         limit,
       });
 

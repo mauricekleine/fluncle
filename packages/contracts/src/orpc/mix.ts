@@ -64,7 +64,7 @@ export const listMixableArtists = oc
     summary: "List the artists a mix can be seeded from",
     tags: ["Mix"],
   })
-  .input(z.object({ limit: z.string().optional(), q: z.string().optional() }))
+  .input(z.object({ limit: z.string().optional(), q: z.string().max(200).optional() }))
   .output(z.object({ artists: z.array(MixArtistSchema), ok: z.literal(true) }));
 
 /**
