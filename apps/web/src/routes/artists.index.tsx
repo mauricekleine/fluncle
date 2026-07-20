@@ -1,6 +1,6 @@
 import { Link, createFileRoute, notFound, useNavigate } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "@fluncle/ui/components/button";
 import { ArtistAvatar } from "@/components/artist-avatar";
 import { CataloguePager } from "@/components/catalogue-groups";
@@ -13,6 +13,7 @@ import { jsonLdScript } from "@/lib/json-ld";
 import { albumCoverAtSize, COVER_TILE_SIZE } from "@/lib/media";
 import {
   type ArtistHubEntry,
+  artistNamesBySlugs,
   listArtistsHubPage,
   listSimilarArtistTiles,
 } from "@/lib/server/artists";
@@ -47,6 +48,9 @@ type ArtistsFoundData = {
 };
 
 type ArtistsSimilarData = {
+  /** The compared artists' display names — the results intro names its anchors ("Closest in sound
+      to X and Y."). Empty (all-unknown slugs) falls back to a referent-free line. */
+  names: string[];
   /** The nearest-in-sound results, as hub tiles (the unlit/lit treatment is reused verbatim). */
   results: ArtistHubEntry[];
   status: "similar";
@@ -86,10 +90,20 @@ function parseCompareSlugs(like: string): string[] {
 
 const fetchSimilarArtists = createServerFn({ method: "GET" })
   .validator((data: { like: string }) => data)
-  .handler(async ({ data }): Promise<{ results: ArtistHubEntry[] }> => {
+  .handler(async ({ data }): Promise<{ names: string[]; results: ArtistHubEntry[] }> => {
     const slugs = parseCompareSlugs(data.like);
 
-    return { results: slugs.length > 0 ? await listSimilarArtistTiles(slugs) : [] };
+    if (slugs.length === 0) {
+      return { names: [], results: [] };
+    }
+
+    // The compared artists' NAMES (for the intro) and the nearest-in-sound TILES ride one wave.
+    const [names, results] = await Promise.all([
+      artistNamesBySlugs(slugs),
+      listSimilarArtistTiles(slugs),
+    ]);
+
+    return { names, results };
   });
 
 // Machine-facing strings stay honestly-plain third-person (the Narrator rule), and they carry the
@@ -195,10 +209,13 @@ export const Route = createFileRoute("/artists/")({
   }),
   loaderDeps: ({ search }) => ({ like: search.like, page: search.page, q: search.q }),
   loader: async ({ deps }): Promise<ArtistsPageData> => {
-    if (deps.like !== undefined) {
+    // A compare needs TWO or more artists; a single-slug (or empty) `?like=` is not a comparison, so
+    // it falls through to the bare hub rather than serving a one-anchor "sounds like these" (the op
+    // 400s below two, and the loader mirrors that minimum rather than drifting from it).
+    if (deps.like !== undefined && parseCompareSlugs(deps.like).length >= 2) {
       const data = await fetchSimilarArtists({ data: { like: deps.like } });
 
-      return { results: data.results, status: "similar" };
+      return { names: data.names, results: data.results, status: "similar" };
     }
 
     const data = await fetchArtistsPage({ data: { page: deps.page, q: deps.q } });
@@ -266,20 +283,45 @@ function ArtistTileContent({ artist }: { artist: ArtistHubEntry }) {
 /**
  * The browse grid + its quiet "Compare sounds" select mode. At rest every tile is a link to its
  * `/artist/<slug>` page. In select mode each tile becomes a toggle button (aria-pressed, keyboard
- * operable) with a focus-ring selection outline (NOT gold — the light stays with the findings, One
- * Sun); picking two or more and hitting "Sounds like these" navigates to `?like=a,b`.
+ * operable) with a focus-ring selection outline (Eclipse-Glow, the reader-taste ruling — NOT a
+ * certification claim); picking two to six and hitting "Sounds like these" navigates to `?like=a,b`.
+ * Focus follows the mode toggle (Cancel on enter, "Compare sounds" on exit) so the keyboard is never
+ * stranded on a button that just unmounted.
  */
 function ArtistsBrowseGrid({ artists }: { artists: ArtistHubEntry[] }) {
   const navigate = useNavigate();
   const [selecting, setSelecting] = useState(false);
   const [selected, setSelected] = useState<string[]>([]);
+  const compareButtonRef = useRef<HTMLButtonElement>(null);
+  const cancelButtonRef = useRef<HTMLButtonElement>(null);
+  const didMount = useRef(false);
+
+  // Move focus with the mode change (skip the first render so it never steals focus on mount): the
+  // button the reader activated unmounts on the toggle, so focus lands on its replacement rather than
+  // dropping to the body.
+  useEffect(() => {
+    if (!didMount.current) {
+      didMount.current = true;
+
+      return;
+    }
+
+    (selecting ? cancelButtonRef.current : compareButtonRef.current)?.focus();
+  }, [selecting]);
+
+  const atCap = selected.length >= MAX_COMPARE_SLUGS;
 
   const toggle = (slug: string) =>
-    setSelected((prev) =>
-      prev.includes(slug)
-        ? prev.filter((value) => value !== slug)
-        : [...prev, slug].slice(0, MAX_COMPARE_SLUGS),
-    );
+    setSelected((prev) => {
+      if (prev.includes(slug)) {
+        return prev.filter((value) => value !== slug);
+      }
+
+      // Refuse past the cap rather than silently swallowing the pick — the unselected tiles are also
+      // `disabled` at the cap, so the refusal is perceivable (dimmed + inert) and the hint reads the
+      // ceiling ("6 selected."). This guard is the belt to that suspenders.
+      return prev.length >= MAX_COMPARE_SLUGS ? prev : [...prev, slug];
+    });
 
   const exit = () => {
     setSelecting(false);
@@ -292,17 +334,20 @@ function ArtistsBrowseGrid({ artists }: { artists: ArtistHubEntry[] }) {
     }
   };
 
+  const hint =
+    selected.length < 2 ? "Pick two to six artists to compare." : `${selected.length} selected.`;
+
   return (
     <>
       <div className="hub-compare-bar">
+        {/* Persistently mounted so the aria-live region announces its first populated state: an
+            empty→text change is announced, whereas a region that mounts already-populated may not. */}
+        <span aria-live="polite" className="hub-compare-hint">
+          {selecting ? hint : ""}
+        </span>
         {selecting ? (
           <>
-            <span aria-live="polite" className="hub-compare-hint">
-              {selected.length < 2
-                ? "Pick two or more artists to compare."
-                : `${selected.length} selected.`}
-            </span>
-            <Button onClick={exit} size="sm" type="button" variant="ghost">
+            <Button onClick={exit} ref={cancelButtonRef} size="sm" type="button" variant="ghost">
               Cancel
             </Button>
             <Button disabled={selected.length < 2} onClick={compare} size="sm" type="button">
@@ -310,48 +355,75 @@ function ArtistsBrowseGrid({ artists }: { artists: ArtistHubEntry[] }) {
             </Button>
           </>
         ) : (
-          <Button onClick={() => setSelecting(true)} size="sm" type="button" variant="ghost">
+          <Button
+            onClick={() => setSelecting(true)}
+            ref={compareButtonRef}
+            size="sm"
+            type="button"
+            variant="ghost"
+          >
             Compare sounds
           </Button>
         )}
       </div>
 
       <ul aria-label="Artists" className="artist-avatar-grid hub-grid">
-        {artists.map((artist) => (
-          <li key={artist.slug}>
-            {selecting ? (
-              <button
-                aria-pressed={selected.includes(artist.slug)}
-                className={`hub-tile-select${artist.certified ? " hub-tile-certified" : ""}`}
-                onClick={() => toggle(artist.slug)}
-                type="button"
-              >
-                <ArtistTileContent artist={artist} />
-              </button>
-            ) : (
-              <Link
-                className={artist.certified ? "hub-tile-certified" : undefined}
-                params={{ slug: artist.slug }}
-                to="/artist/$slug"
-              >
-                <ArtistTileContent artist={artist} />
-              </Link>
-            )}
-          </li>
-        ))}
+        {artists.map((artist) => {
+          const isSelected = selected.includes(artist.slug);
+
+          return (
+            <li key={artist.slug}>
+              {selecting ? (
+                <button
+                  aria-pressed={isSelected}
+                  className={`hub-tile-select${artist.certified ? " hub-tile-certified" : ""}`}
+                  disabled={atCap && !isSelected}
+                  onClick={() => toggle(artist.slug)}
+                  type="button"
+                >
+                  <ArtistTileContent artist={artist} />
+                </button>
+              ) : (
+                <Link
+                  className={artist.certified ? "hub-tile-certified" : undefined}
+                  params={{ slug: artist.slug }}
+                  to="/artist/$slug"
+                >
+                  <ArtistTileContent artist={artist} />
+                </Link>
+              )}
+            </li>
+          );
+        })}
       </ul>
     </>
   );
 }
 
-/** The `?like=a,b` results view — the artists nearest in sound to the compared set. */
-function ArtistsSimilarView({ results }: { results: ArtistHubEntry[] }) {
+/** Join names into one plain phrase: "X", "X and Y", "X, Y and Z" — the results intro's anchor list. */
+function namesToPhrase(names: string[]): string {
+  if (names.length <= 1) {
+    return names[0] ?? "";
+  }
+
+  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
+/** The `?like=a,b` results view — the artists nearest in sound to the compared set, named. */
+function ArtistsSimilarView({ names, results }: { names: string[]; results: ArtistHubEntry[] }) {
+  // Name the anchors when we resolved them ("Closest in sound to X and Y."); if every slug was
+  // unknown, fall back to a referent-free reference line rather than dangling a "these".
+  const intro =
+    names.length > 0
+      ? `Closest in sound to ${namesToPhrase(names)}.`
+      : "Drum & bass artists, closest in sound first.";
+
   return (
     <main className="log-plate-stage">
       <article className="log-plate log-index">
         <header className="log-masthead">
           <h1 className="log-coordinate log-index-title">Artists</h1>
-          <p className="log-index-intro">Drum &amp; bass artists, closest in sound first.</p>
+          <p className="log-index-intro">{intro}</p>
         </header>
 
         {results.length === 0 ? (
@@ -390,7 +462,7 @@ function ArtistsPage() {
   }
 
   if (data.status === "similar") {
-    return <ArtistsSimilarView results={data.results} />;
+    return <ArtistsSimilarView names={data.names} results={data.results} />;
   }
 
   const { hub, q } = data;

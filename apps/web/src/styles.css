@@ -2344,16 +2344,24 @@ a.catalogue-letter:focus-visible {
   outline-offset: 3px;
 }
 
-/* SELECTED — the same Eclipse ring, made persistent (so the selection reads even when focus moves
-   on), plus a ringed avatar. NOT gold: selection is not a certification claim. */
+/* SELECTED — the canonical Eclipse ring made persistent (so the selection still reads when focus
+   moves on). The ring is Eclipse-Glow (gold heated one step), and carrying gold here is legal on two
+   counts: the Unlit Rule's focus-ring exemption (an interaction affordance is not a claim about the
+   music), and the /mix taste-picker ruling (`.taste-artist--on` above) that a READER's own selection
+   may carry gold — the gold is the reader's, not Fluncle's certification. Crucially it rides the
+   OUTLINE only: no gold lands on the (possibly-uncertified) cover, so the Unlit Rule holds and there
+   is exactly ONE gold cue per selected tile (One Sun). */
 .hub-grid .hub-tile-select[aria-pressed="true"] {
   border-radius: var(--rounded-md);
   outline: 2px solid var(--eclipse-glow);
   outline-offset: 3px;
 }
 
-.hub-grid .hub-tile-select[aria-pressed="true"] .artist-card-avatar {
-  border-color: var(--eclipse-glow);
+/* At the six-artist cap the unselected tiles disable + dim, so the refusal is perceivable (inert,
+   dimmed) while the hint reads the ceiling ("6 selected."); the selected tiles stay live to deselect. */
+.hub-grid .hub-tile-select:disabled {
+  cursor: default;
+  opacity: 0.4;
 }
 
 /* The infinite-scroll sentinel: a full-width row below the grid that holds the loading spinner

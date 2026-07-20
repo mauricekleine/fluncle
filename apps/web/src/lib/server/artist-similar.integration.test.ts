@@ -26,7 +26,8 @@ vi.mock("./db", async (importOriginal) => {
 
 // Imported AFTER the mock so every module's `getDb` is the mocked one.
 const { rankArtists, listSimilarArtistNeighbours } = await import("./artist-dossier");
-const { getArtistListItemBySlug, listSimilarArtistsApi } = await import("./artists");
+const { artistNamesBySlugs, getArtistListItemBySlug, listSimilarArtistsApi } =
+  await import("./artists");
 const { handleOrpc } = await import("./orpc");
 
 const DIMS = 1024;
@@ -163,6 +164,14 @@ describe("listSimilarArtistsApi — the ArtistListItem projection", () => {
     });
     // spotifyUrl rides through from the artists row.
     expect(artists.find((artist) => artist.slug === "d")?.spotifyUrl).toContain("/artist/d");
+  });
+});
+
+describe("artistNamesBySlugs — the results-view anchor names", () => {
+  it("returns names in the given slug order and drops unknown slugs", async () => {
+    expect(await artistNamesBySlugs(["b", "a"])).toEqual(["b", "a"]);
+    expect(await artistNamesBySlugs(["a", "ghost", "d"])).toEqual(["a", "d"]);
+    expect(await artistNamesBySlugs([])).toEqual([]);
   });
 });
 

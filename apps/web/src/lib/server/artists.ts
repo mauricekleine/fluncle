@@ -660,6 +660,34 @@ export async function listSimilarArtistsApi(slugs: string[]): Promise<ArtistList
   });
 }
 
+/**
+ * The display NAMES for a bounded set of artist slugs, returned in the GIVEN slug order (an unknown
+ * slug is dropped) — the "sounds like these" results view names its anchors from this ("Closest in
+ * sound to X and Y."). One indexed `slug in (…)` read over the ≤6 compared slugs.
+ */
+export async function artistNamesBySlugs(slugs: string[]): Promise<string[]> {
+  if (slugs.length === 0) {
+    return [];
+  }
+
+  const db = await getDb();
+  const placeholders = slugs.map(() => "?").join(", ");
+  const result = await db.execute({
+    args: slugs,
+    sql: `select slug, name from artists where slug in (${placeholders})`,
+  });
+
+  const bySlug = new Map(
+    typedRows<{ name: string; slug: string }>(result.rows).map((row) => [row.slug, row.name]),
+  );
+
+  return slugs.flatMap((slug) => {
+    const name = bySlug.get(slug);
+
+    return name ? [name] : [];
+  });
+}
+
 export function parseArtistsJson(value: string): string[] {
   try {
     const artists = JSON.parse(value) as unknown;
