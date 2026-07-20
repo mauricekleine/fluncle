@@ -18,6 +18,15 @@ assert.equal(
 );
 assert.equal(okResult.errors.length, 0, "a valid stub has zero errors");
 
+// The failure-path stub seeds REPRESENTATIONAL, never the retired "abstract" register
+// (operator ruling 2026-07-20: the automated feed is all-representational). The honest
+// "no subject" combination — representational + subjectClass "none" — must be valid.
+assert.equal(
+  stub.register,
+  "representational",
+  "the stub seeds the representational register, not the retired abstract",
+);
+
 // Optional doctrine fields validate when present.
 const withDoctrine = {
   ...stub,

@@ -326,11 +326,17 @@ export function generateIntentStub(trackId: string, logId: string | null): Rende
     dropMs: 0,
     logId,
     motionModel: "constant-drift",
-    register: "abstract",
+    // The automated feed is ALL-REPRESENTATIONAL (operator ruling 2026-07-20; see
+    // docs/agents/hermes/scripts/assign-video-axes.ts): representational is a
+    // PREREQUISITE, not a choice, so the failure-path stub seeds it too — never the
+    // retired "abstract" register, which would seed a look the feed no longer ships. The
+    // three-value register ENUM stays intact for manual renders + archived bundles.
+    register: "representational",
     schema: RENDER_INTENT_SCHEMA,
     secondaryPeaks: [],
-    // The generated stub is an abstract field: no subject. Declaring it explicitly
-    // keeps the presence fields exercised and the honest "no subject" state legible.
+    // The honest "we don't actually know" state: representational per the ruling, but
+    // with NO declared subject — subjectClass "none" keeps the presence fields exercised
+    // and the no-subject state legible (the validator allows representational + "none").
     subjectClass: "none",
     textureFamily: "nebula",
     trackId,
