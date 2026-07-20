@@ -33,6 +33,10 @@ export default defineConfig({
     // post-deploy probe) carry a focused unit test for its pure logic. Coverage
     // stays scoped to `src/**` (above), so a script's lines never move the floor.
     include: ["src/**/*.test.{ts,tsx}", "scripts/**/*.test.{ts,tsx}"],
+    // No test reaches the real internet. `readOptionalEnv` loads the operator's
+    // `.dev.vars`, so a write-path test otherwise runs with LIVE credentials and
+    // fires the real integration (see src/test/block-network.ts).
+    setupFiles: ["src/test/block-network.ts"],
     // 20s (not vitest's 5s default): the first test in each admin oRPC file cold-imports
     // the whole ./orpc app graph (the router + every contract + the server modules) before
     // its first request, which can exceed 5s on a loaded Cloudflare build box — a false-fail
