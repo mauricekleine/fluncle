@@ -47,28 +47,29 @@ Every route is served canonically under `/api/v1/*`, with the bare `/api/*` path
 
 Public + private (`/me`) operations, with their OpenAPI `operationId`:
 
-| Method + path                            | operationId                                               | Shape                                                                            |
-| ---------------------------------------- | --------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| `GET /tracks`                            | `listTracks`                                              | verb+Noun, camelCase                                                             |
-| `GET /tracks/random`                     | `getRandomTrack`                                          | verb+Noun                                                                        |
-| `GET /tracks/{idOrLogId}`                | (not in spec)                                             |                                                                                  |
-| `GET /search`                            | `searchTracks`                                            | verb+Noun                                                                        |
-| `GET /albums`, `GET /albums/{slug}`      | `listAlbums` / `getAlbum`                                 | catalogue-scoped list (A–Z, paginated) + by-slug get; CLI planned (later slice)  |
-| `GET /labels`, `GET /labels/{slug}`      | `listLabels` / `getLabel`                                 | catalogue-scoped list (A–Z, paginated) + by-slug get; CLI planned (later slice)  |
-| `GET /artists`, `GET /artists/{slug}`    | `listArtists` / `getArtist`                               | catalogue-scoped now (was findings-only); list is A–Z + paginated; CLI `artists` |
-| `POST /submissions`                      | `submitTrack`                                             | **operationId noun ≠ path noun** (`submissions` vs `Track`)                      |
-| `POST /newsletter`                       | `subscribeNewsletter`                                     | verb+Noun                                                                        |
-| `GET /me`                                | `getCurrentPrivateUser`                                   | the `Private` infix marks the cookie-auth tier                                   |
-| `GET /me/csrf`                           | `getPrivateMutationToken`                                 | **operationId noun ≠ path noun** (`csrf` vs `MutationToken`)                     |
-| `GET/PUT /me/galaxy-progress`            | `getPrivateGalaxyProgress` / `mergePrivateGalaxyProgress` | PUT verb is `merge`, not `update`                                                |
-| `GET/POST /me/saved-findings`            | `listPrivateSavedFindings` / `savePrivateFinding`         | **noun is `findings`, not `tracks`**                                             |
-| `DELETE /me/saved-findings/{trackId}`    | (not in spec)                                             | path param is `trackId`, resource is `findings`                                  |
-| `GET /me/submissions`                    | `listPrivateSubmissions`                                  |                                                                                  |
-| `POST /me/export`, `GET /me/export/{id}` | `exportPrivateAccountData`                                |                                                                                  |
-| `POST /me/delete`                        | `deletePrivateAccount`                                    | **`POST` on a `/delete` path**, not `DELETE /me`                                 |
-| `PATCH /me/profile`                      | (not in spec)                                             |                                                                                  |
-| `GET/PATCH /me/preferences`              | `getPrivatePreferences` / `updatePrivatePreferences`      | cross-device prefs (key notation); PATCH partial-merges                          |
-| `GET /health`                            | `getHealth`                                               |                                                                                  |
+| Method + path                            | operationId                                               | Shape                                                                               |
+| ---------------------------------------- | --------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `GET /tracks`                            | `listTracks`                                              | verb+Noun, camelCase                                                                |
+| `GET /tracks/random`                     | `getRandomTrack`                                          | verb+Noun                                                                           |
+| `GET /tracks/{idOrLogId}`                | (not in spec)                                             |                                                                                     |
+| `GET /search`                            | `searchTracks`                                            | verb+Noun                                                                           |
+| `GET /search/archive`                    | `searchArchive`                                           | the four-tier archive search (coordinate → entity → FTS → NL filters); CLI `search` |
+| `GET /albums`, `GET /albums/{slug}`      | `listAlbums` / `getAlbum`                                 | catalogue-scoped list (A–Z, paginated) + by-slug get; CLI `albums`                  |
+| `GET /labels`, `GET /labels/{slug}`      | `listLabels` / `getLabel`                                 | catalogue-scoped list (A–Z, paginated) + by-slug get; CLI `labels`                  |
+| `GET /artists`, `GET /artists/{slug}`    | `listArtists` / `getArtist`                               | catalogue-scoped now (was findings-only); list is A–Z + paginated; CLI `artists`    |
+| `POST /submissions`                      | `submitTrack`                                             | **operationId noun ≠ path noun** (`submissions` vs `Track`)                         |
+| `POST /newsletter`                       | `subscribeNewsletter`                                     | verb+Noun                                                                           |
+| `GET /me`                                | `getCurrentPrivateUser`                                   | the `Private` infix marks the cookie-auth tier                                      |
+| `GET /me/csrf`                           | `getPrivateMutationToken`                                 | **operationId noun ≠ path noun** (`csrf` vs `MutationToken`)                        |
+| `GET/PUT /me/galaxy-progress`            | `getPrivateGalaxyProgress` / `mergePrivateGalaxyProgress` | PUT verb is `merge`, not `update`                                                   |
+| `GET/POST /me/saved-findings`            | `listPrivateSavedFindings` / `savePrivateFinding`         | **noun is `findings`, not `tracks`**                                                |
+| `DELETE /me/saved-findings/{trackId}`    | (not in spec)                                             | path param is `trackId`, resource is `findings`                                     |
+| `GET /me/submissions`                    | `listPrivateSubmissions`                                  |                                                                                     |
+| `POST /me/export`, `GET /me/export/{id}` | `exportPrivateAccountData`                                |                                                                                     |
+| `POST /me/delete`                        | `deletePrivateAccount`                                    | **`POST` on a `/delete` path**, not `DELETE /me`                                    |
+| `PATCH /me/profile`                      | (not in spec)                                             |                                                                                     |
+| `GET/PATCH /me/preferences`              | `getPrivatePreferences` / `updatePrivatePreferences`      | cross-device prefs (key notation); PATCH partial-merges                             |
+| `GET /health`                            | `getHealth`                                               |                                                                                     |
 
 Admin operations (cookie-or-bearer, **not in the public OpenAPI spec**), expressed as method + path:
 

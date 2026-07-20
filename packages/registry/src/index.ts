@@ -1005,9 +1005,32 @@ export const SURFACES: readonly Surface[] = [
   },
   {
     command: "fluncle artists",
-    exposedContent: ["every artist with at least one published finding (bare `slug` looks one up)"],
+    exposedContent: ["every artist Fluncle holds, A to Z (bare `slug` looks one up)"],
     kind: "cli",
     name: "cli.artists",
+    weights: { cli: "secondary" },
+  },
+  {
+    command: "fluncle albums",
+    exposedContent: ["every album Fluncle holds, A to Z (bare `slug` looks one up)"],
+    kind: "cli",
+    name: "cli.albums",
+    weights: { cli: "secondary" },
+  },
+  {
+    command: "fluncle labels",
+    exposedContent: ["every label Fluncle holds, A to Z (bare `slug` looks one up)"],
+    kind: "cli",
+    name: "cli.labels",
+    weights: { cli: "secondary" },
+  },
+  {
+    command: "fluncle search",
+    exposedContent: [
+      "search the archive by coordinate, track, artist, label, or album (four-tier resolver)",
+    ],
+    kind: "cli",
+    name: "cli.search",
     weights: { cli: "secondary" },
   },
   {

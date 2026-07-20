@@ -1,33 +1,64 @@
-// The `artists` CLI command — thin `publicApiGet` reads over the public
-// `list_artists` / `get_artist` oRPC ops. Mirrors the `recent`/`mixtapes`
-// pattern: fetch, format, return.
+// The `artists` CLI command — a thin `publicApiGet` read over the public
+// `list_artists` / `get_artist` oRPC ops, rendered in the catalogue reference
+// register (plain, no cosmos: `/artists` is a reference shelf, VOICE.md §5).
+//
+// `list_artists` is now the unified index — every artist Fluncle holds, A to Z,
+// one page at a time — so the bare list pages with `--page` and each row carries
+// a plain track count (the Unlit Rule keeps the certified/tier marker off the
+// row; `--json` carries `certified` and the finding count). A bare `slug` reads
+// one artist's dossier.
 
-import {
-  type ArtistGetResponse,
-  type ArtistsResponse,
-  type ArtistListItem,
-} from "@fluncle/contracts";
+import { type ArtistGetResponse, type ArtistsResponse } from "@fluncle/contracts";
 import { publicApiGet } from "../api";
+import { printJson } from "../output";
+import { entityDetailLines, printEntityIndex } from "./entity-browse";
 
-export type { ArtistListItem };
+export async function artistsCommand({
+  json,
+  page,
+  slug,
+}: {
+  json: boolean;
+  page: number;
+  slug: string | undefined;
+}): Promise<void> {
+  if (slug) {
+    const response = await publicApiGet<ArtistGetResponse>(
+      `/api/v1/artists/${encodeURIComponent(slug)}`,
+    );
 
-/**
- * Every artist with at least one finding, finding-count descending.
- * The data behind `fluncle artists` (list).
- */
-export async function artistsListCommand(): Promise<ArtistListItem[]> {
-  const response = await publicApiGet<ArtistsResponse>("/api/v1/artists");
-  return response.artists;
-}
+    if (json) {
+      printJson(response);
+      return;
+    }
 
-/**
- * One artist by slug. Throws the standard `publicApiGet` error on 404 (the
- * server's "No artist with slug …" message surfaces there).
- * The data behind `fluncle artists <slug>`.
- */
-export async function artistsGetCommand(slug: string): Promise<ArtistListItem> {
-  const response = await publicApiGet<ArtistGetResponse>(
-    `/api/v1/artists/${encodeURIComponent(slug)}`,
+    const { artist } = response;
+    const lines = entityDetailLines(
+      artist.name,
+      artist.slug,
+      artist.trackCount,
+      artist.findingCount,
+    );
+
+    if (artist.spotifyUrl) {
+      lines.push(`Spotify: ${artist.spotifyUrl}`);
+    }
+
+    console.log(lines.join("\n"));
+    return;
+  }
+
+  const response = await publicApiGet<ArtistsResponse>(`/api/v1/artists?page=${page}`);
+
+  if (json) {
+    printJson(response);
+    return;
+  }
+
+  printEntityIndex(
+    response.artists,
+    response,
+    { plural: "artists", singular: "artist" },
+    "artists",
   );
-  return response.artist;
 }

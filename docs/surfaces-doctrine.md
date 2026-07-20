@@ -132,7 +132,10 @@ The `/mcp` endpoint speaks the full protocol, not just tools: **tools** (verbs),
 | `cli.recent`         | `fluncle recent`         | the latest bangers, newest first (alias `list`)                                                                   | primary   |
 | `cli.fresh`          | `fluncle fresh`          | the newest drum & bass releases, newest out first (release-dated, not found-dated)                                | secondary |
 | `cli.mixtapes`       | `fluncle mixtapes`       | Fluncle's checkpoint sets                                                                                         | secondary |
-| `cli.artists`        | `fluncle artists`        | every artist with at least one published finding (a bare `slug` looks one up)                                     | secondary |
+| `cli.artists`        | `fluncle artists`        | every artist Fluncle holds, A to Z (a bare `slug` looks one up)                                                   | secondary |
+| `cli.albums`         | `fluncle albums`         | every album Fluncle holds, A to Z (a bare `slug` looks one up)                                                    | secondary |
+| `cli.labels`         | `fluncle labels`         | every label Fluncle holds, A to Z (a bare `slug` looks one up)                                                    | secondary |
+| `cli.search`         | `fluncle search`         | search the archive by coordinate, track, artist, label, or album (four-tier resolver)                             | secondary |
 | `cli.open`           | `fluncle open`           | pick a track, open it in Spotify                                                                                  | secondary |
 | `cli.random`         | `fluncle random`         | the archive throws one back                                                                                       | secondary |
 | `cli.subscribe`      | `fluncle subscribe`      | subscribe to the Friday newsletter                                                                                | secondary |
@@ -273,6 +276,9 @@ The weight ladder within a context is unchanged — **`primary`** (the loud fron
 | `cli.fresh`                 | tertiary  |           | secondary |           |
 | `cli.mixtapes`              |           |           | secondary |           |
 | `cli.artists`               |           |           | secondary |           |
+| `cli.albums`                |           |           | secondary |           |
+| `cli.labels`                |           |           | secondary |           |
+| `cli.search`                |           |           | secondary |           |
 | `cli.open`                  |           |           | secondary |           |
 | `cli.random`                |           |           | secondary |           |
 | `cli.subscribe`             |           |           | secondary |           |

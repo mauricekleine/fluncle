@@ -98,6 +98,20 @@ type JsonOptions = {
   json: boolean;
 };
 
+// The catalogue-index browse commands (`artists`, `albums`, `labels`): a JSON
+// toggle plus the 1-based `--page` cursor over the A-to-Z list.
+type BrowseOptions = {
+  json: boolean;
+  page?: string;
+};
+
+// `search` over the archive: a JSON toggle plus an optional result cap (1-50,
+// the `search_archive` op's ceiling).
+type SearchOptions = {
+  json: boolean;
+  limit?: string;
+};
+
 type SubscribeOptions = JsonOptions;
 
 type VersionOptions = {
@@ -430,13 +444,51 @@ function addListenCommands(program: Command): void {
     });
 
   program
-    .command("artists")
-    .description("Browse artists in Fluncle's archive")
-    .argument("[slug]", "Artist slug (omit for the full list)")
+    .command("albums")
+    .description("Browse the albums in Fluncle's archive")
+    .argument("[slug]", "Album slug (omit for the A-to-Z list)")
+    .option("--page <n>", "Which page of the list (default 1)")
     .option("--json", "Print JSON", false)
-    .action(async (slug: string | undefined, options: JsonOptions) => {
-      const { artistsListCommand, artistsGetCommand } = await import("./commands/artists");
-      await runArtists(slug, options, { artistsGetCommand, artistsListCommand });
+    .action(async (slug: string | undefined, options: BrowseOptions) => {
+      const { albumsCommand } = await import("./commands/albums");
+      await albumsCommand({ json: options.json, page: parsePage(options.page), slug });
+    });
+
+  program
+    .command("artists")
+    .description("Browse the artists in Fluncle's archive")
+    .argument("[slug]", "Artist slug (omit for the A-to-Z list)")
+    .option("--page <n>", "Which page of the list (default 1)")
+    .option("--json", "Print JSON", false)
+    .action(async (slug: string | undefined, options: BrowseOptions) => {
+      const { artistsCommand } = await import("./commands/artists");
+      await artistsCommand({ json: options.json, page: parsePage(options.page), slug });
+    });
+
+  program
+    .command("labels")
+    .description("Browse the labels in Fluncle's archive")
+    .argument("[slug]", "Label slug (omit for the A-to-Z list)")
+    .option("--page <n>", "Which page of the list (default 1)")
+    .option("--json", "Print JSON", false)
+    .action(async (slug: string | undefined, options: BrowseOptions) => {
+      const { labelsCommand } = await import("./commands/labels");
+      await labelsCommand({ json: options.json, page: parsePage(options.page), slug });
+    });
+
+  program
+    .command("search")
+    .description("Search the archive for a track, artist, label, or album")
+    .argument("<query...>", "What to look for")
+    .option("--limit <n>", "Max results to return (1-50)")
+    .option("--json", "Print JSON", false)
+    .action(async (query: string[], options: SearchOptions) => {
+      const { searchCommand } = await import("./commands/search");
+      await searchCommand({
+        json: options.json,
+        limit: parseSearchLimit(options.limit),
+        query: query.join(" "),
+      });
     });
 
   program
@@ -5809,51 +5861,6 @@ async function runRecent(
   console.log(trackRows(tracks).join("\n"));
 }
 
-async function runArtists(
-  slug: string | undefined,
-  options: JsonOptions,
-  commands: {
-    artistsGetCommand: typeof import("./commands/artists").artistsGetCommand;
-    artistsListCommand: typeof import("./commands/artists").artistsListCommand;
-  },
-): Promise<void> {
-  if (slug) {
-    const artist = await commands.artistsGetCommand(slug);
-
-    if (options.json) {
-      printJson({ artist, ok: true });
-      return;
-    }
-
-    console.log(`${artist.name}  (${artist.slug})`);
-    console.log(`Findings: ${artist.findingCount}`);
-
-    if (artist.spotifyUrl) {
-      console.log(`Spotify: ${artist.spotifyUrl}`);
-    }
-
-    return;
-  }
-
-  const artists = await commands.artistsListCommand();
-
-  if (options.json) {
-    printJson({ artists, ok: true });
-    return;
-  }
-
-  if (artists.length === 0) {
-    console.log("No artists in the archive yet.");
-    return;
-  }
-
-  for (const a of artists) {
-    console.log(
-      `${a.name.padEnd(40)} ${String(a.findingCount).padStart(3)} finding${a.findingCount === 1 ? "" : "s"}`,
-    );
-  }
-}
-
 async function runGalaxies(
   slug: string | undefined,
   options: JsonOptions,
@@ -6265,6 +6272,35 @@ function parseListLimit(value: string | undefined): number {
 
   if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
     throw new Error("Limit must be an integer between 1 and 100");
+  }
+
+  return limit;
+}
+
+// The 1-based `--page` cursor for the catalogue-index commands. Absent ⇒ page 1;
+// the server clamps a page past the end (an empty page renders its own line).
+function parsePage(value: string | undefined): number {
+  const page = Number.parseInt(value ?? "1", 10);
+
+  if (!Number.isInteger(page) || page < 1) {
+    throw new Error("Page must be a positive integer");
+  }
+
+  return page;
+}
+
+// `search --limit`. Optional (absent ⇒ the server's default); capped at the
+// `search_archive` op's ceiling of 50 so an over-cap value fails here with a
+// clear message rather than as an opaque schema rejection over the wire.
+function parseSearchLimit(value: string | undefined): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  const limit = Number.parseInt(value, 10);
+
+  if (!Number.isInteger(limit) || limit < 1 || limit > 50) {
+    throw new Error("Limit must be an integer between 1 and 50");
   }
 
   return limit;
@@ -7063,6 +7099,7 @@ const stringOptions = new Set([
   "--model",
   "--note",
   "--order",
+  "--page",
   "--parent-id",
   "--plate",
   "--plate-background",
@@ -7112,6 +7149,13 @@ Listen:
   fluncle open telegram [--browser|--app]       Open the Telegram feed
   fluncle random [--json]                       The archive throws one back
   fluncle subscribe [email]                     Fresh bangers, every Friday
+
+Browse:
+  fluncle search <query> [--limit 20] [--json]  Search the archive for a track, artist, label, or album
+  fluncle artists [slug] [--page 1] [--json]    Artists in the archive, A to Z
+  fluncle albums [slug] [--page 1] [--json]     Albums in the archive, A to Z
+  fluncle labels [slug] [--page 1] [--json]     Labels in the archive, A to Z
+  fluncle fresh [--limit 10] [--view all]       What just came out, newest release first
 
 Share:
   fluncle submit [search-or-spotify-url]   Send a track for review

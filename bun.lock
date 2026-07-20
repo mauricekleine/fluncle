@@ -114,7 +114,6 @@
       "devDependencies": {
         "@fluncle/test-support": "workspace:*",
         "@raycast/eslint-config": "~2.2.0",
-        "@types/bun": "catalog:",
         "@types/node": "catalog:",
         "@types/react": "catalog:",
         "typescript": "catalog:",
@@ -243,7 +242,6 @@
       "version": "0.1.0",
       "devDependencies": {
         "@fluncle/test-support": "workspace:*",
-        "@types/bun": "catalog:",
         "@types/node": "catalog:",
         "typescript": "catalog:",
       },
