@@ -7151,11 +7151,11 @@ Listen:
   fluncle subscribe [email]                     Fresh bangers, every Friday
 
 Browse:
-  fluncle search <query> [--limit 20] [--json]  Search the archive for a track, artist, label, or album
-  fluncle artists [slug] [--page 1] [--json]    Artists in the archive, A to Z
-  fluncle albums [slug] [--page 1] [--json]     Albums in the archive, A to Z
-  fluncle labels [slug] [--page 1] [--json]     Labels in the archive, A to Z
-  fluncle fresh [--limit 10] [--view all]       What just came out, newest release first
+  fluncle search <query> [--limit 20] [--json]      Search the archive for a track, artist, label, or album
+  fluncle artists [slug] [--page 1] [--json]        Artists in the archive, A to Z
+  fluncle albums [slug] [--page 1] [--json]         Albums in the archive, A to Z
+  fluncle labels [slug] [--page 1] [--json]         Labels in the archive, A to Z
+  fluncle fresh [--limit 10] [--view all] [--json]  What just came out, newest release first
 
 Share:
   fluncle submit [search-or-spotify-url]   Send a track for review

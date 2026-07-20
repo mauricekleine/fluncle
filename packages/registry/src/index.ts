@@ -1026,9 +1026,7 @@ export const SURFACES: readonly Surface[] = [
   },
   {
     command: "fluncle search",
-    exposedContent: [
-      "search the archive by coordinate, track, artist, label, or album (four-tier resolver)",
-    ],
+    exposedContent: ["search the archive by coordinate, track, artist, label, or album"],
     kind: "cli",
     name: "cli.search",
     weights: { cli: "secondary" },
