@@ -1489,11 +1489,27 @@ async function getTasteProbes(artistSlugs: string[]): Promise<Uint8Array[]> {
  * cosine DISTANCES is the max over the similarities). Ranked in SQL: the shortlist's vectors
  * never enter the isolate, only one number per row comes back.
  *
- * One `union all` branch per probe over a shortlist CTE, so each probe binds ONCE as a raw
- * float32 blob — never as text (the 14× hosted cliff; embedding.ts). Bounded by construction:
- * ≤ `MAX_TASTE_PROBES × TASTE_SHORTLIST` distances.
+ * ONE PASS, one distance term per probe, folded to the row's best in the select list — the
+ * ratified multi-probe shape (`listRecommendations`, recommendations.ts; docs/local-database.md).
+ * Each probe binds ONCE as a raw float32 blob, never as text (the 14× hosted cliff;
+ * embedding.ts), and only one number per row comes back — the shortlist's vectors never enter
+ * the isolate.
+ *
+ * NEVER a `union all` branch per probe over a shortlist CTE, which is what this was. The planner
+ * does not materialize the CTE — it FLATTENS it and re-executes the shortlist scan once per
+ * branch, so up to `MAX_TASTE_PROBES` probes meant up to 24 passes over the same
+ * `TASTE_SHORTLIST` rows, dragging each 4 KB vector every time. Measured in prod on the public
+ * `/mix` rail (Sentry, 2026-07-18→20): p95 7.4 s for this one statement. "Bounded by
+ * construction" was true and beside the point — a bounded 24× re-read is still a 24× re-read.
+ *
+ * The one-probe case binds the BARE distance term: single-argument `min()` is SQLite's AGGREGATE
+ * min, which would collapse the whole scan to one row.
+ *
+ * Exported for the vector-SQL pin (`tracks-vector-sql.test.ts`), which proves the fold's SQL
+ * cosine equals the JS cosine over the same probes — including the one-probe branch, the case a
+ * naive `min()` silently breaks. Not part of the module's public surface.
  */
-async function getTasteCosines(
+export async function getTasteCosines(
   trackIds: string[],
   probes: Uint8Array[],
 ): Promise<Map<string, number>> {
@@ -1503,22 +1519,16 @@ async function getTasteCosines(
 
   const db = await getDb();
   const ids = trackIds.map(() => "?").join(", ");
-  const branches = probes
-    .map(() => `select track_id, vector_distance_cos(vec, ?) as dist from shortlist`)
-    .join(" union all ");
+  const distanceTerms = probes.map(() => "vector_distance_cos(embedding_blob, ?)");
+  const bestDistance =
+    distanceTerms.length === 1 ? distanceTerms.join("") : `min(${distanceTerms.join(", ")})`;
 
   const result = await db.execute({
-    // SQL-TEXT order: the shortlist's ids bind inside the CTE, then one probe per branch.
-    args: [...trackIds, ...probes],
-    sql: `with shortlist as (
-            select track_id, embedding_blob as vec
-            from tracks
-            where track_id in (${ids}) and embedding_blob is not null
-          )
-          select track_id, min(dist) as dist
-          from (${branches})
-          where dist is not null
-          group by track_id`,
+    // SQL-TEXT order: one probe per distance term in the select list, then the shortlist's ids.
+    args: [...probes, ...trackIds],
+    sql: `select track_id, ${bestDistance} as dist
+          from tracks
+          where track_id in (${ids}) and embedding_blob is not null`,
   });
 
   const byTrackId = new Map<string, number>();
