@@ -33,7 +33,7 @@ Two things are worth knowing before you change any of it. The dev worker runs un
 
 `seed.ts` holds a small, deterministic, committed dataset — invented titles and artists, no real IDs, no external media URLs. Local dev seeds from a prod snapshot (`.dev/seed.sql`, gitignored); that snapshot must never be committed and CI does not have it, so this suite seeds a fresh empty DB instead.
 
-It currently contains 8 published findings (distinct titles, artists, and Log IDs, with descending `added_at`), 1 published mixtape, and one artist / label / album — with the first finding wired into the full artist ↔ label ↔ album graph.
+It currently contains 8 published findings (distinct titles, artists, and Log IDs, with descending `added_at`), 1 published mixtape, and one artist / label / album — with the first finding wired into the full artist ↔ label ↔ album graph. Plus one further finding that satisfies the `/radio` ELIGIBILITY predicate (a square master, an observation, its length, a Log ID), which nothing else does, so the radio loop has exactly one thing it can ever resolve to.
 
 Fixtures build on the `src/lib/server/integration-db.ts` factories (`seedTrack`, `seedArtist`, `seedLabel`, `seedAlbum`, `seedMixtape`, …) — the same ones the vitest integration suite uses, so fixture shapes cannot drift from the schema. Add a fixture there, not in a parallel helper.
 
