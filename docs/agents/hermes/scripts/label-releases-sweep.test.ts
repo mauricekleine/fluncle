@@ -1,11 +1,12 @@
 // Unit tests for label-releases-sweep.ts — the FRESHNESS TAP cron's orchestrator (D8).
 //
 // The box only maps the actor's albums → candidates + POSTs them; the Worker verifies (grounds,
-// attributes, dedupes, mints). So the contract worth pinning here is the box's MAPPING (the actor's
-// `albums`-search result item → a candidate album with its inline tracks + artists + album fields)
-// and the tick's tally + fault handling. The fixture is the shape the real actor returns for
-// `albums:["label:\"<name>\" tag:new"]` (album fields + tracks[] w/ ISRC + artists[]; label/copyright
-// NULL in this mode, measured live 2026-07-20).
+// attributes, dedupes, mints). So the contract worth pinning here is the box's MAPPING and the tick's
+// tally + fault handling. The fixture is the REAL shape the actor returns for
+// `albums:["label:\"<name>\" tag:new"]` (verified live): ONE dataset item PER album, the album
+// metadata NESTED in `item.albums[0]`, its `tracks[]` (w/ ISRC) + `artists[]` at the item's TOP level;
+// `album_label`/`album_copyright` NULL in this mode. The NESTING is load-bearing — the first cut read
+// `item.album_*` at top level and always got `undefined`, minting /fresh-invisible null-date rows.
 //
 // Runs outside any package's test runner (bun:test), like anchor-sweep.test.ts:
 //   bun test docs/agents/hermes/scripts/label-releases-sweep.test.ts
@@ -21,18 +22,28 @@ import {
   runLabelReleasesTick,
 } from "./label-releases-sweep";
 
-// A representative slice of the actor's `albums`-search output: two fresh albums for one label. Each
-// album carries album fields + a top-level `artists[]` + inline `tracks[]` (with ISRC). `album_label`
-// / `album_copyright` are NULL in this mode — the Worker gates on artist-grounding there.
+// The REAL actor shape (verified live): ONE dataset item PER album, the album metadata NESTED in
+// `albums[0]`, its `tracks[]` (+ ISRCs) + `artists[]` at the item's TOP level. `album_label`/
+// `album_copyright` come back NULL in the `albums`-search mode — the Worker gates on grounding there.
 const APIFY_SAMPLE: ApifyAlbumItem[] = [
   {
-    album_copyright: null,
-    album_id: "3alb1",
-    album_label: null,
-    album_name: "New EP",
-    album_release_date: "2026-07-19",
+    albums: [
+      {
+        album_copyright: null,
+        album_id: "3alb1",
+        album_label: null,
+        album_name: "New EP",
+        album_release_date: "2026-07-19",
+        album_total_tracks: 1,
+        album_upc: "5054960000001",
+      },
+    ],
     artists: [{ artist_id: "29rsvX8tM1cbyZhn554CFk", artist_name: "Keeno" }],
+    error: null,
+    mode: "keyword",
+    result: "1/3",
     success: true,
+    target: 'label:"Hospital Records" tag:new',
     tracks: [
       {
         track_duration_ms: 319_112,
@@ -43,11 +54,10 @@ const APIFY_SAMPLE: ApifyAlbumItem[] = [
         track_url: "https://open.spotify.com/track/0RceyuivB4augSTMbNLKfw",
       },
     ],
+    type: "album",
   },
   {
-    album_id: "3alb2",
-    album_name: "Another Single",
-    album_release_date: "2026-07-18",
+    albums: [{ album_id: "3alb2", album_name: "Another Single", album_release_date: "2026-07-18" }],
     // Artists present, but a track with no id is dropped; the good track survives.
     artists: [{ artist_id: "03JgNMfOmGHddbWkzlZ7n4", artist_name: "Bop" }],
     success: true,
@@ -60,11 +70,12 @@ const APIFY_SAMPLE: ApifyAlbumItem[] = [
         track_name: "Skankin",
       },
     ],
+    type: "album",
   },
 ];
 
 describe("albumItemToCandidate", () => {
-  test("maps an album (fields, artists, inline tracks with isrc/uri/url)", () => {
+  test("reads the NESTED album (albums[0]) + the item-level tracks/artists", () => {
     expect(albumItemToCandidate(APIFY_SAMPLE[0])).toEqual({
       albumCopyright: null,
       albumId: "3alb1",
@@ -88,6 +99,8 @@ describe("albumItemToCandidate", () => {
   test("drops a track with no id, keeps the album when at least one survives", () => {
     const candidate = albumItemToCandidate(APIFY_SAMPLE[1]);
 
+    expect(candidate?.albumId).toBe("3alb2"); // read from the nested albums[0]
+    expect(candidate?.releaseDate).toBe("2026-07-18");
     expect(candidate?.tracks.map((track) => track.spotifyTrackId)).toEqual([
       "1bQvXpSuvnJqAAMkmEIwhu",
     ]);
@@ -99,17 +112,45 @@ describe("albumItemToCandidate", () => {
     expect(candidate?.albumCopyright).toBeNull();
   });
 
-  test("returns null for a failed item or an album with no usable track", () => {
-    expect(albumItemToCandidate({ success: false, tracks: [] })).toBeNull();
-    expect(albumItemToCandidate({ success: true, tracks: [{ track_name: "no id" }] })).toBeNull();
-    expect(albumItemToCandidate({ success: true })).toBeNull();
+  test("DROPS an item with a nested album but NO release_date (a /fresh-invisible row)", () => {
+    // The album exists, the tracks are good — but a null release_date means the minted row could
+    // never surface on /fresh, so it must never be POSTed.
+    const item: ApifyAlbumItem = {
+      albums: [{ album_id: "x", album_name: "Dateless" /* no album_release_date */ }],
+      artists: [{ artist_id: "a", artist_name: "Someone" }],
+      success: true,
+      tracks: [{ track_id: "t", track_isrc: "GB0000000009", track_name: "Song" }],
+    };
+
+    expect(albumItemToCandidate(item)).toBeNull();
   });
 
-  test("passes an album_label/copyright signal through when the actor gives one", () => {
+  test("returns null for a failed item, no albums[], or no usable track", () => {
+    expect(albumItemToCandidate({ success: false })).toBeNull();
+    // Tracks present but NO nested album at all → drop (the old flat-shape bug looked like this).
+    expect(
+      albumItemToCandidate({ success: true, tracks: [{ track_id: "t", track_name: "x" }] }),
+    ).toBeNull();
+    // A dated album but no usable track → drop.
+    expect(
+      albumItemToCandidate({
+        albums: [{ album_id: "x", album_release_date: "2026-07-19" }],
+        success: true,
+        tracks: [{ track_name: "no id" }],
+      }),
+    ).toBeNull();
+  });
+
+  test("passes a nested album_label/copyright signal through when the actor gives one", () => {
     const candidate = albumItemToCandidate({
-      album_copyright: "℗ 2026 Hospital Records",
-      album_id: "a",
-      album_label: "Hospital Records",
+      albums: [
+        {
+          album_copyright: "℗ 2026 Hospital Records",
+          album_id: "a",
+          album_label: "Hospital Records",
+          album_release_date: "2026-07-19",
+        },
+      ],
       artists: [{ artist_id: "x", artist_name: "London Elektricity" }],
       success: true,
       tracks: [{ track_id: "t", track_name: "Song" }],
@@ -121,10 +162,10 @@ describe("albumItemToCandidate", () => {
 });
 
 describe("mapAlbumItems / parseLimitArg", () => {
-  test("mapAlbumItems keeps only the track-carrying albums", () => {
+  test("maps a multi-item run to multiple candidates, dropping the unusable ones", () => {
     const items: ApifyAlbumItem[] = [
       ...APIFY_SAMPLE,
-      { success: true, tracks: [{ track_name: "trackless" }] },
+      { success: true, tracks: [{ track_name: "trackless" }] }, // no album, no track id → dropped
     ];
 
     expect(mapAlbumItems(items).map((album) => album.albumId)).toEqual(["3alb1", "3alb2"]);
