@@ -1,4 +1,5 @@
 import { Link } from "@tanstack/react-router";
+import { type ChatCatalogueTrack, CatalogueList } from "@/components/chat/catalogue-card";
 import { type ChatFinding } from "@/components/chat/finding-card";
 import { FindingList } from "@/components/chat/finding-list";
 import { TrackArtwork } from "@/components/track-artwork";
@@ -19,6 +20,10 @@ export type ChatLabel = {
   aliases?: string[];
   /** The voiced entity bio — a short intro paragraph, present only once one is authored. */
   bio?: string;
+  /** The records on this label Fluncle knows are out there but has never certified — present when
+      the entity is catalogue-only (no findings). Rendered in the unlit register (the Unlit Rule):
+      named and listed, never a coordinate, never gold, never presented as one of his Findings. */
+  catalogue?: ChatCatalogueTrack[];
   findingCount?: number;
   findings?: ChatFinding[];
   logoUrl?: string;
@@ -30,6 +35,7 @@ export function LabelCard({ label, notation }: { label: ChatLabel; notation: Key
   const name = label.name ?? "";
   const slug = label.slug;
   const findings = label.findings ?? [];
+  const catalogue = label.catalogue ?? [];
   const count = label.findingCount ?? findings.length;
   const aliases = label.aliases ?? [];
   const bio = label.bio;
@@ -73,6 +79,11 @@ export function LabelCard({ label, notation }: { label: ChatLabel; notation: Key
       ) : null}
 
       {findings.length > 0 ? <FindingList findings={findings} notation={notation} /> : null}
+
+      {/* A catalogue-only label (no findings) lists the records on it in the unlit register — the
+          Dust Veil, no coordinate, no gold (DESIGN.md's Unlit Rule). Bare, no heading: the block
+          is the only content, so a heading would exist just to name the tier. */}
+      {catalogue.length > 0 ? <CatalogueList catalogue={catalogue} /> : null}
     </div>
   );
 }
