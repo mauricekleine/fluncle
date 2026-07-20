@@ -34,6 +34,7 @@ const INTERNAL_PATHS = [
   "/docs",
   "/status",
   "/privacy",
+  "/terms",
   "/docs/$",
 ];
 
@@ -79,6 +80,12 @@ describe("NavFooter SSR anchors", () => {
     ]) {
       expect(html).toContain(`href="${path}"`);
     }
+  });
+
+  it("renders the quiet meta/legal links (privacy + terms)", () => {
+    expect(html).toContain('href="/privacy"');
+    expect(html).toContain('href="/terms"');
+    expect(html).toContain('aria-label="Legal"');
   });
 
   it("renders the developer docs deep-links via the /docs splat", () => {

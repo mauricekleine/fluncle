@@ -119,6 +119,19 @@ export function NavFooter({ galaxiesLive }: { galaxiesLive: boolean }): ReactNod
         </nav>
         <HomeStatusPill />
       </div>
+
+      {/* The quietest band on the plate: the meta/legal pages. Kept out of the story
+          columns above (those are the crawl graph) and set small and low, where a
+          reader looks for them and nowhere else has to. */}
+      <nav aria-label="Legal" className="nav-footer-legal">
+        <Link className="nav-footer-legal-link" to="/privacy">
+          Privacy
+        </Link>
+        <span aria-hidden="true">·</span>
+        <Link className="nav-footer-legal-link" to="/terms">
+          Terms
+        </Link>
+      </nav>
     </footer>
   );
 }
