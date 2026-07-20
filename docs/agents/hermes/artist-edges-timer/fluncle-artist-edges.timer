@@ -1,0 +1,19 @@
+[Unit]
+Description=fluncle-artist-edges timer — fold one bounded batch of artists_json names onto artist identities every 60m on the rave-02 host (not the Hermes gateway)
+
+[Timer]
+# First tick shortly after boot (staggered at 17min, off the other sweeps' minutes), then every
+# 60m. The ~25k-row pre-graph history drains in a handful of ticks (a batch is 200 tracks, no vendor
+# call, no rate limit); after that a tick is a cheap no-op. New tracks are minted WITH edges (the
+# publish path + the crawler's link step), so this sweep only catches HISTORY up — there is no prize
+# for hurrying, and an hourly cadence drains it with room to spare.
+#
+# The `tracks` worklist is the durable state (the `artist_edges_backfilled_at` stamp on every
+# visited row), so a tick missed across a reboot costs nothing — Persistent catches it up and the
+# next tick resumes from the top; the stamps re-skip the rows already backfilled.
+OnBootSec=17min
+OnUnitActiveSec=60min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

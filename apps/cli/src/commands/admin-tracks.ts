@@ -571,6 +571,49 @@ export async function backfillRecordingMbidsCommand(
   );
 }
 
+export type ArtistEdgesBackfillResult = {
+  dryRun: boolean;
+  // `track_artists` edges written this pass (or, in a dry run, the count that WOULD be written).
+  edgesWritten: number;
+  // Track ids where EVERY credited name matched an existing identity.
+  fullyMatched: string[];
+  fullyMatchedCount: number;
+  // The track-id cursor to resume from, or null once the worklist is drained.
+  nextCursor: string | null;
+  ok: boolean;
+  // Track ids where SOME names matched and some did not (their unmatched names feed the residual).
+  partiallyMatched: string[];
+  partiallyMatchedCount: number;
+  // Tracks VISITED this pass (fully + partially + zero) — the loop's cap unit.
+  scanned: number;
+  // Total credited names across the batch that matched NO identity — the future MB-sweep residual.
+  unmatchedNames: number;
+  // Track ids where NO credited name matched an identity.
+  zeroMatched: string[];
+  zeroMatchedCount: number;
+};
+
+// One bounded pass of the track_artists graph backfill (RFC artist-primary-capture, slice 0) via the
+// admin API. The Worker folds each edge-less track's `artists_json` names onto EXISTING artist
+// identities (exact fold + `artist_aliases`) and writes the edges — no vendor call, mints nothing,
+// stamps every visited track so the worklist drains. `--dry-run` reports the classification without
+// any write. Pass the prior `nextCursor` to resume; the CLI loops until it comes back null.
+export async function backfillArtistEdgesCommand(
+  limit: number,
+  dryRun: boolean,
+  cursor?: string,
+): Promise<ArtistEdgesBackfillResult> {
+  const params = new URLSearchParams({ dryRun: String(dryRun), limit: String(limit) });
+
+  if (cursor) {
+    params.set("cursor", cursor);
+  }
+
+  return adminApiPost<ArtistEdgesBackfillResult>(
+    `/api/admin/backfill/artist-edges?${params.toString()}`,
+  );
+}
+
 export type VehicleEntry = {
   addedAt: string;
   artists: string[];

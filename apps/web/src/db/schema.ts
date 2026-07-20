@@ -108,6 +108,16 @@ export const tracks = sqliteTable(
     // visitor's account region). NULL until the ISRC resolves (or forever, if it never
     // does — a missing link is honest, a wrong one is not).
     appleMusicUrl: text("apple_music_url"),
+    // The track_artists graph backfill's per-ROW reliability stamp (RFC artist-primary-capture,
+    // slice 0). The graph is crawl-era-only — history carries artist NAMES in `artists_json` but no
+    // identity edge — and `backfill_artist_edges` folds those names onto EXISTING `artists` rows. A
+    // track whose names match NO identity writes no edge, so the "no edge yet" anti-join alone would
+    // re-chew it every tick forever; this stamp retires EVERY visited track (matched, partial, OR
+    // zero-match) so the worklist drains to empty and a re-run is a cheap no-op — the
+    // `mb_recording_id_attempted_at` discipline, one column over. NULL until the row has been
+    // attempted; a track minted WITH edges (publish / crawler link) never needs it. Internal
+    // reliability state — no public surface, no lastmod (a `tracks` write moves no finding).
+    artistEdgesBackfilledAt: text("artist_edges_backfilled_at"),
     artistsJson: text("artists_json").notNull(),
     // The Apple Music backfill's per-ROW reliability state (RFC musickit-second-authority,
     // U1). These MOVED here from `findings` — and the move is the whole point. `apple_music_url`
@@ -479,6 +489,17 @@ export const tracks = sqliteTable(
     index("tracks_mb_recording_id_queue_idx")
       .on(table.trackId)
       .where(sql`${table.mbRecordingId} is null and ${table.mbRecordingIdAttemptedAt} is null`),
+    // The track_artists graph-backfill queue — "not yet attempted by the name-fold backfill"
+    // (backfill-artist-edges.ts, `backfill_artist_edges`, RFC artist-primary-capture slice 0).
+    // PARTIAL for the `tracks_mb_recording_id_queue_idx` reason: the worklist is DERIVED and this
+    // predicate matches a SHRINKING slice of a growing table (a row leaves the moment it is
+    // stamped), so the index shrinks as the backlog drains rather than growing with the catalogue.
+    // The worklist's second leg — "no `track_artists` edge yet" — is an anti-join that rides
+    // `track_artists_track_id_idx`, so this index carries only the ordered `track_id` candidate walk
+    // the stamp gates.
+    index("tracks_artist_edges_backfill_queue_idx")
+      .on(table.trackId)
+      .where(sql`${table.artistEdgesBackfilledAt} is null`),
     // The MuQ EMBED queue — "audio on file, no vector yet" (track-work.ts, `kind: "embed"`).
     // PARTIAL, for the same reason the anchor queue is: the worklist is DERIVED, and the
     // predicate matches a shrinking slice of a growing table, so the index shrinks as the
