@@ -1162,6 +1162,91 @@ export function unreviewedSocials<T extends { createdAt: string; reviewedAt: str
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 }
 
+// The two platforms a finding's caption tags today (lib/server/mentions.ts weaves a mention line
+// ONLY for `tiktok` + `youtube`, and ONLY from `auto`/`confirmed` handles). So a fresh link on one
+// of these — once approved — feeds the caption mention loop the moment a finding's video posts.
+// Kept in lockstep with `MentionPlatform` in mentions.ts; these lead the high-priority section.
+const MENTION_LOOP_PLATFORMS = new Set<ArtistSocialPlatform>(["tiktok", "youtube"]);
+
+/** One fresh (unreviewed) link paired with the artist it belongs to — a row in the fresh-links queue. */
+export type FreshLinkEntry = {
+  artist: ArtistOverviewItem;
+  social: ArtistSocial;
+};
+
+/** The fresh-links review queue split by mention-loop impact (docs/artist-relationship.md §review queue). */
+export type FreshLinksPartition = {
+  /**
+   * Fresh links whose artist has at least one finding — these GATE the caption mention loop, so
+   * they lead the board. Mention-loop platforms (tiktok, youtube) sort first, then the rest; then
+   * by artist name, then oldest-first.
+   */
+  highPriority: FreshLinkEntry[];
+  /**
+   * Every other fresh link (catalogue-only artists, no posting implication yet) — in the queue's
+   * prior order: artist name (the loader's order), then oldest-first within an artist.
+   */
+  everythingElse: FreshLinkEntry[];
+};
+
+/** Order a HIGH-PRIORITY fresh link: mention-loop platforms first, then artist name, then oldest. */
+function compareHighPriorityLink(left: FreshLinkEntry, right: FreshLinkEntry): number {
+  const leftMention = MENTION_LOOP_PLATFORMS.has(left.social.platform) ? 0 : 1;
+  const rightMention = MENTION_LOOP_PLATFORMS.has(right.social.platform) ? 0 : 1;
+
+  if (leftMention !== rightMention) {
+    return leftMention - rightMention;
+  }
+
+  const byName = left.artist.name.localeCompare(right.artist.name);
+
+  if (byName !== 0) {
+    return byName;
+  }
+
+  return left.social.createdAt.localeCompare(right.social.createdAt);
+}
+
+/**
+ * Partition every fresh (unreviewed) artist-social link into the two review sections the board
+ * renders. A link is HIGH PRIORITY when its artist has at least one finding (`findingCount > 0`,
+ * the canonical coordinate-bearing count that the whole codebase means by "finding"): an approved
+ * handle for a findings-bearing artist immediately feeds the caption mention loop
+ * (lib/server/mentions.ts tags only `auto`/`confirmed` handles when a finding's video posts), while
+ * a catalogue-only artist's link carries no posting implication yet.
+ *
+ * SERVER-AUTHORED so the split never depends on what a page happens to load: each input item already
+ * carries its server-computed `findingCount`, and the board's fetch (`listAllArtistsWithSocials`) is
+ * unbounded, so the high-priority section is COMPLETE and leads regardless of row order. Within it,
+ * the two mention-loop platforms (tiktok, youtube) sort first — the links that gate a caption today
+ * read at the top. `everythingElse` preserves the queue's prior order (the loader is name-sorted and
+ * `unreviewedSocials` is oldest-first, so pushing in iteration order yields name-then-oldest, exactly
+ * as the section read before the split). The row SET is unchanged — this is a partition + ordering
+ * change, not a filter: every link `unreviewedSocials` surfaced still surfaces.
+ */
+export function partitionFreshLinks(artists: readonly ArtistOverviewItem[]): FreshLinksPartition {
+  const highPriority: FreshLinkEntry[] = [];
+  const everythingElse: FreshLinkEntry[] = [];
+
+  for (const artist of artists) {
+    const fresh = unreviewedSocials(artist.socials);
+
+    if (fresh.length === 0) {
+      continue;
+    }
+
+    const bucket = artist.findingCount > 0 ? highPriority : everythingElse;
+
+    for (const social of fresh) {
+      bucket.push({ artist, social });
+    }
+  }
+
+  highPriority.sort(compareHighPriorityLink);
+
+  return { everythingElse, highPriority };
+}
+
 // The `/admin/artists` overview — EVERY artist Fluncle features, name-sorted, each with its
 // full socials list (confirmed, auto, and candidate) and its finding count. Unlike the review
 // QUEUE above (which narrows to the not-yet-confirmed backlog that feeds the /admin attention
