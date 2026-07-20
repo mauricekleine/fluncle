@@ -79,8 +79,12 @@ const FAILURE_COOLDOWN_MAX_MS = 7 * 24 * 60 * 60 * 1000;
  *  multiple of the per-pass cap, so cooling-down rows never starve an eligible one out of the pass. */
 const WORKLIST_OVERSCAN = PROBE_LABELS_PER_PASS * 4;
 
-/** Fresh albums the search asks for (Spotify's page cap is 50). */
-const SEARCH_LIMIT = 50;
+/** Fresh albums the search asks for. Spotify DOCUMENTS a page cap of 50, but OUR app's limited
+ *  tier rejects any search `limit` above 10 with a 400 (measured live 2026-07-20: 10 → 200, every
+ *  value 20–50 → 400) — the same family of quiet tier-cuts as the missing album `label` field. Ten
+ *  is plenty: `tag:new` spans two weeks and even the busiest seed label ships fewer fresh records
+ *  than that. */
+const SEARCH_LIMIT = 10;
 
 /** Albums inspected per label per pass, so one junk-heavy label (a fuzzy `label:` match returning
  *  scores of unrelated albums) cannot drain the whole Spotify budget in a single pass. */
