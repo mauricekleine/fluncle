@@ -414,7 +414,15 @@ function LabelPage() {
             there is more than one group to order; the pager below only when there is more than
             one page. Changing either resets to page 1 — a different order has different pages. */}
         {catalogue.groups.length > 0 ? (
-          <section aria-label={`Artists released on ${name}`} className="catalogue-section">
+          <section aria-labelledby="label-catalogue-heading" className="catalogue-section">
+            {/* The section's name, promoted from an `aria-label` to a real H2 so the heading
+                outline runs H1 → H2 → H3 (the artist names inside are H3s, and a page that jumps
+                H1 → H3 fails `heading-order`). It stays visually hidden, so the page's quiet look
+                is unchanged — and the string is the same one the aria-label already carried: it
+                names the ARTISTS, never the tier their tracks belong to. */}
+            <h2 className="sr-only" id="label-catalogue-heading">
+              Artists released on {name}
+            </h2>
             {catalogue.totalGroups > 1 ? (
               <CatalogueSortControl
                 label="Sort artists"
