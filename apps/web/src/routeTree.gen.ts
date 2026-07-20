@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as TracksRouteImport } from './routes/tracks'
+import { Route as TermsRouteImport } from './routes/terms'
 import { Route as StatusRouteImport } from './routes/status'
 import { Route as SitemapDotxmlRouteImport } from './routes/sitemap[.]xml'
 import { Route as RssDotxmlRouteImport } from './routes/rss[.]xml'
@@ -134,6 +135,11 @@ import { Route as ApiV1AdminMixcloudAuthCallbackRouteImport } from './routes/api
 const TracksRoute = TracksRouteImport.update({
   id: '/tracks',
   path: '/tracks',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const TermsRoute = TermsRouteImport.update({
+  id: '/terms',
+  path: '/terms',
   getParentRoute: () => rootRouteImport,
 } as any)
 const StatusRoute = StatusRouteImport.update({
@@ -792,6 +798,7 @@ export interface FileRoutesByFullPath {
   '/rss.xml': typeof RssDotxmlRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/status': typeof StatusRoute
+  '/terms': typeof TermsRoute
   '/tracks': typeof TracksRoute
   '/admin/artists': typeof AdminArtistsRoute
   '/admin/catalogue': typeof AdminCatalogueRoute
@@ -913,6 +920,7 @@ export interface FileRoutesByTo {
   '/rss.xml': typeof RssDotxmlRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/status': typeof StatusRoute
+  '/terms': typeof TermsRoute
   '/tracks': typeof TracksRoute
   '/admin/artists': typeof AdminArtistsRoute
   '/admin/catalogue': typeof AdminCatalogueRoute
@@ -1037,6 +1045,7 @@ export interface FileRoutesById {
   '/rss.xml': typeof RssDotxmlRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/status': typeof StatusRoute
+  '/terms': typeof TermsRoute
   '/tracks': typeof TracksRoute
   '/admin/artists': typeof AdminArtistsRoute
   '/admin/catalogue': typeof AdminCatalogueRoute
@@ -1162,6 +1171,7 @@ export interface FileRouteTypes {
     | '/rss.xml'
     | '/sitemap.xml'
     | '/status'
+    | '/terms'
     | '/tracks'
     | '/admin/artists'
     | '/admin/catalogue'
@@ -1283,6 +1293,7 @@ export interface FileRouteTypes {
     | '/rss.xml'
     | '/sitemap.xml'
     | '/status'
+    | '/terms'
     | '/tracks'
     | '/admin/artists'
     | '/admin/catalogue'
@@ -1406,6 +1417,7 @@ export interface FileRouteTypes {
     | '/rss.xml'
     | '/sitemap.xml'
     | '/status'
+    | '/terms'
     | '/tracks'
     | '/admin/artists'
     | '/admin/catalogue'
@@ -1530,6 +1542,7 @@ export interface RootRouteChildren {
   RssDotxmlRoute: typeof RssDotxmlRoute
   SitemapDotxmlRoute: typeof SitemapDotxmlRoute
   StatusRoute: typeof StatusRoute
+  TermsRoute: typeof TermsRoute
   TracksRoute: typeof TracksRoute
   AlbumSlugRoute: typeof AlbumSlugRoute
   ApiChatRoute: typeof ApiChatRoute
@@ -1606,6 +1619,13 @@ declare module '@tanstack/react-router' {
       path: '/tracks'
       fullPath: '/tracks'
       preLoaderRoute: typeof TracksRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/terms': {
+      id: '/terms'
+      path: '/terms'
+      fullPath: '/terms'
+      preLoaderRoute: typeof TermsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/status': {
@@ -2571,6 +2591,7 @@ const rootRouteChildren: RootRouteChildren = {
   RssDotxmlRoute: RssDotxmlRoute,
   SitemapDotxmlRoute: SitemapDotxmlRoute,
   StatusRoute: StatusRoute,
+  TermsRoute: TermsRoute,
   TracksRoute: TracksRoute,
   AlbumSlugRoute: AlbumSlugRoute,
   ApiChatRoute: ApiChatRoute,

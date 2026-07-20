@@ -446,6 +446,14 @@ export const SURFACES: readonly Surface[] = [
     url: `${SITE}/privacy`,
     weights: { web: "tertiary" },
   },
+  {
+    exposedContent: ["the terms of use"],
+    kind: "web_route",
+    name: "web.terms",
+    route: "/terms",
+    url: `${SITE}/terms`,
+    weights: { web: "tertiary" },
+  },
 
   // ── Subdomains (sibling hosts on the same Worker) ──────────────────────────
   {

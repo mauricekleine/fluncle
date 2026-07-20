@@ -40,6 +40,7 @@ Generated from the `SURFACES` catalog. Each row is the registry `name`, its addr
 | `web.tracks`     | `/tracks`     | the whole list — every track (findings + catalogue), newest release first, filterable by year, tempo, key, label, galaxy; bare hub indexable, any filter `noindex` | secondary |
 | `web.galaxies`   | `/galaxies`   | the browse-by-feel lens — the archive grouped into operator-named sonic galaxies + `/galaxies/:slug`; dark until the operator names the whole map                  | secondary |
 | `web.privacy`    | `/privacy`    | the privacy policy                                                                                                                                                 | tertiary  |
+| `web.terms`      | `/terms`      | the terms of use                                                                                                                                                   | tertiary  |
 
 ### Subdomains — sibling hosts on the same Worker
 
@@ -221,6 +222,7 @@ The weight ladder within a context is unchanged — **`primary`** (the loud fron
 | `web.tracks`                | secondary |           |           |           |
 | `web.galaxies`              | secondary | secondary |           |           |
 | `web.privacy`               | tertiary  |           |           |           |
+| `web.terms`                 | tertiary  |           |           |           |
 | `subdomain.galaxy`          | primary   | secondary |           |           |
 | `subdomain.radio`           | secondary |           |           |           |
 | `subdomain.found`           | tertiary  |           |           | tertiary  |

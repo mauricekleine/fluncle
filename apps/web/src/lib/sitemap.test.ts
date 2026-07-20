@@ -169,15 +169,16 @@ describe("a child sitemap", () => {
 
     expect(xml).toContain(`<loc>${siteUrl}/about</loc>`);
     expect(xml).toContain(`<loc>${siteUrl}/privacy</loc>`);
+    expect(xml).toContain(`<loc>${siteUrl}/terms</loc>`);
     expect(xml).toContain(`<loc>${siteUrl}/galaxy</loc>`);
     // The console pages — real indexable surfaces, listed unconditionally.
     expect(xml).toContain(`<loc>${siteUrl}/docs</loc>`);
     expect(xml).toContain(`<loc>${siteUrl}/reach</loc>`);
     expect(xml).toContain(`<loc>${siteUrl}/status</loc>`);
-    // 16 hubs; /mix (gated on getMixChainDepth().open) and /galaxies (gated on the map being
+    // 17 hubs; /mix (gated on getMixChainDepth().open) and /galaxies (gated on the map being
     // named) are both dark here.
     expect(xml).not.toContain(`<loc>${siteUrl}/mix</loc>`);
-    expect(xml.match(/<loc>/g)).toHaveLength(16);
+    expect(xml.match(/<loc>/g)).toHaveLength(17);
   });
 
   it("puts one <loc> per /log page in `findings`, and nothing else", () => {
@@ -466,6 +467,7 @@ describe("the URL set is preserved across the split", () => {
       `${siteUrl}/tracks`,
       `${siteUrl}/about`,
       `${siteUrl}/privacy`,
+      `${siteUrl}/terms`,
       `${siteUrl}/galaxy`,
       `${siteUrl}/docs`,
       `${siteUrl}/reach`,

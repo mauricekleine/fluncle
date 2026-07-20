@@ -304,6 +304,7 @@ function kindEntries(kind: SitemapKind, bags: SitemapBags): string[] {
         staticEntry(`${siteUrl}/albums`, latest),
         staticEntry(`${siteUrl}/about`),
         staticEntry(`${siteUrl}/privacy`),
+        staticEntry(`${siteUrl}/terms`),
         staticEntry(`${siteUrl}/galaxy`),
         // The console pages — real, self-canonical, indexable surfaces that were footer-only
         // for discovery until now: the docs hub, the reach page, and the live status board.
