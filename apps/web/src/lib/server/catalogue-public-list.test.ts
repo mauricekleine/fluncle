@@ -231,3 +231,47 @@ describe("listArtistsApiPage / getArtistListItemBySlug", () => {
     expect(await getArtistListItemBySlug("nope")).toBeUndefined();
   });
 });
+
+// The hub NAME FILTER (`?q=` on /artists //albums //labels) — applied SQL-side inside the ONE gated
+// CTE, so the shared `HUB_INCLUSION_HAVING` gate is untouched: a name match is a NARROWING of the
+// same floor-clearing set, never a widening of it. Proven against the real schema, same seeded world.
+describe("listHubPage — the name filter (?q=)", () => {
+  it("narrows the labels hub to a substring match, case-insensitively", async () => {
+    const aurora = await listLabelsHubPage(1, "aurora");
+    expect(aurora.items.map((label) => label.slug)).toEqual(["aurora-rec"]);
+    expect(aurora.total).toBe(1);
+
+    // A substring anywhere in the name matches (not just a prefix), and the match ignores case.
+    expect((await listLabelsHubPage(1, "trax")).items.map((l) => l.slug)).toEqual(["zephyr-trax"]);
+    expect((await listLabelsHubPage(1, "AURORA")).items.map((l) => l.slug)).toEqual(["aurora-rec"]);
+  });
+
+  it("stays gate-consistent: a name match on a below-floor (thin) entity is still excluded", async () => {
+    // "Tiny Imprint" matches by name but its page is below the renderable floor — the gate keeps it
+    // out with OR without the filter, so the filtered result is empty (never a widening).
+    expect((await listLabelsHubPage(1, "tiny")).total).toBe(0);
+    expect((await listArtistsHubPage(1, "uno")).total).toBe(0);
+  });
+
+  it("keeps the filtered set a SUBSET of the unfiltered gated set (never a new row)", async () => {
+    const unfiltered = new Set((await listLabelsHubPage(1)).items.map((label) => label.slug));
+
+    // A single-letter filter that matches every in-set label still yields only rows the bare hub has.
+    for (const label of (await listLabelsHubPage(1, "r")).items) {
+      expect(unfiltered.has(label.slug)).toBe(true);
+    }
+  });
+
+  it("drops the A–Z lane while filtering (the letter arm is skipped — a name search is not a browse)", async () => {
+    // The unfiltered hub carries a populated lane; the filtered one carries none (withLetters is off,
+    // so the letter arm never runs and the lane comes back empty — the route hides it either way).
+    expect((await listLabelsHubPage(1)).letters?.length).toBeGreaterThan(0);
+    expect((await listLabelsHubPage(1, "aurora")).letters).toEqual([]);
+    expect((await listArtistsHubPage(1, "ada")).letters).toEqual([]);
+  });
+
+  it("filters the artists + albums hubs the same way", async () => {
+    expect((await listArtistsHubPage(1, "ada")).items.map((a) => a.slug)).toEqual(["ada"]);
+    expect((await listAlbumsHubPage(1, "alpha")).items.map((a) => a.slug)).toEqual(["alpha-lp"]);
+  });
+});

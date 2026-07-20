@@ -49,6 +49,9 @@ const PUBLIC_ROUTE_OPS: Record<string, string> = {
   // No TanStack route file under /api/v1/artists; oRPC serves these straight off the
   // registry. Public reads (now catalogue-scoped + paginated), no auth required.
   "GET /artists": "list_artists",
+  // The "sounds like these" multi-artist sonic read. A literal `/artists/similar` path — it takes
+  // precedence over `/artists/{slug}` the same way `/tracks/random` does over `/tracks/{idOrLogId}`.
+  "GET /artists/similar": "list_similar_artists",
   "GET /artists/{slug}": "get_artist",
   // The galaxies domain — contract-only oRPC (browse-by-feel RFC). No TanStack route
   // file under /api/v1/galaxies; oRPC serves these straight off the registry. Public

@@ -734,9 +734,24 @@ export type CatalogueHubQuery<Entry> = {
   from: string;
   groupBy: string;
   mapRow: (row: CatalogueHubRow) => Entry;
+  /**
+   * The entity's display-name column (e.g. `labels.name`, `a.name`) — the column the optional NAME
+   * FILTER matches against (`where <nameExpr> like ?`). It is a bare grouped column of the entity
+   * table, never reader input, so it interpolates into the gated scan the same way `from`/`groupBy` do.
+   */
+  nameExpr: string;
   select: string;
   slugExpr: string;
 };
+
+/**
+ * Escape the LIKE metacharacters in a reader's search term so a literal `%`, `_`, or `\` matches
+ * itself rather than acting as a wildcard. The pattern is bound as `%<escaped>%` with an explicit
+ * `escape '\'` clause (see `listHubPage`), so a search for "50%" finds "50%" and not everything.
+ */
+function escapeLikePattern(term: string): string {
+  return term.replace(/[\\%_]/g, (char) => `\\${char}`);
+}
 
 /** One NUMBERED page of a hub's findings-free section — the crawlable `?page=N` variant's payload. */
 export type CatalogueHubNumberedPage<Entry> = {
@@ -803,6 +818,7 @@ export async function listHubPage<Entry>(
   query: CatalogueHubQuery<Entry>,
   page: number,
   withLetters = false,
+  nameFilter?: string,
 ): Promise<CatalogueHubNumberedPage<Entry>> {
   const db = await getDb();
   const limit = CATALOGUE_HUB_DEFAULT_LIMIT;
@@ -816,13 +832,23 @@ export async function listHubPage<Entry>(
        from gated g group by substr(g.slug, 1, 1)`
     : "";
 
+  // The optional NAME FILTER narrows the gated set BEFORE the gate is applied — a `where <nameExpr>
+  // like ?` on the entity's name column, so the total, the page's slice, and the A–Z lane all agree
+  // (every arm reads the ONE `gated` CTE). It leaves `HUB_INCLUSION_HAVING` untouched (the gate stays
+  // single-sourced): a name match that does not clear the floor is still out. The pattern's `?` sits
+  // inside the CTE ahead of the floor `?`, so its bind arg leads.
+  const term = typeof nameFilter === "string" ? nameFilter.trim() : "";
+  const nameWhere = term ? `where ${query.nameExpr} like ? escape '\\'` : "";
+  const nameArgs = term ? [`%${escapeLikePattern(term)}%`] : [];
+
   const result = await db.execute({
-    args: [query.floor, limit, (page - 1) * limit],
+    args: [...nameArgs, query.floor, limit, (page - 1) * limit],
     sql: `with gated as materialized (
             select ${query.slugExpr} as slug, ${HUB_RENDERABLE} as track_count,
                    (${HUB_CERTIFIED} > 0) as certified
             from ${query.from}
             left join findings on findings.track_id = tracks.track_id
+            ${nameWhere}
             group by ${query.groupBy}
             having ${HUB_INCLUSION_HAVING}
           )
@@ -1043,6 +1069,7 @@ const LABELS_HUB_QUERY: CatalogueHubQuery<LabelHubEntry> = {
     slug: row.slug,
     trackCount: Number(row.track_count),
   }),
+  nameExpr: "labels.name",
   select: `labels.name as name, labels.image_key as image_key,
            ${LABEL_CATALOGUE_COVER_JSON} as cover_json`,
   slugExpr: "labels.slug",
@@ -1053,8 +1080,13 @@ const LABELS_HUB_QUERY: CatalogueHubQuery<LabelHubEntry> = {
  * Fluncle holds, certified and catalogue alike, carrying the A–Z fast lane: each present letter →
  * the page its first label lands on.
  */
-export function listLabelsHubPage(page: number): Promise<CatalogueHubNumberedPage<LabelHubEntry>> {
-  return listHubPage(LABELS_HUB_QUERY, page, true);
+export function listLabelsHubPage(
+  page: number,
+  nameFilter?: string,
+): Promise<CatalogueHubNumberedPage<LabelHubEntry>> {
+  // A name search hides the A–Z lane (the reader is looking a label up by name, not browsing the
+  // alphabet), so the letter arm is skipped when a filter is active.
+  return listHubPage(LABELS_HUB_QUERY, page, !nameFilter, nameFilter);
 }
 
 // Derives its scan + floor from LABELS_HUB_QUERY (the web hub's), so the MCP browse and the
@@ -1123,6 +1155,50 @@ export async function hubFindingCountsBySlug(
 
   for (const row of typedRows<{ finding_count: number; slug: string }>(result.rows)) {
     map.set(row.slug, Number(row.finding_count));
+  }
+
+  return map;
+}
+
+/**
+ * Counts for a BOUNDED SET of slugs — the `HUB_CERTIFIED` (certified-finding) + `HUB_RENDERABLE`
+ * (renderable-track) aggregates over the same shared fragments the hub gate uses, so a row's
+ * `certified`/`findingCount`/`trackCount` here agree with the hub's determination by construction.
+ * The plural sibling of `hubCountsBySlug`, for a caller that already has a handful of slugs in hand
+ * (the multi-artist "sounds like these" results) and wants their counts in one indexed read rather
+ * than one round trip each. Returns a slug → counts map; a slug with no tracks is simply absent.
+ */
+export async function hubCountsBySlugs(
+  query: Pick<CatalogueHubQuery<unknown>, "from" | "groupBy" | "slugExpr">,
+  slugs: string[],
+): Promise<Map<string, { certified: boolean; findingCount: number; trackCount: number }>> {
+  if (slugs.length === 0) {
+    return new Map();
+  }
+
+  const db = await getDb();
+  const placeholders = slugs.map(() => "?").join(", ");
+  const result = await db.execute({
+    args: slugs,
+    sql: `select ${query.slugExpr} as slug, ${HUB_CERTIFIED} as finding_count,
+                 ${HUB_RENDERABLE} as track_count
+          from ${query.from}
+          left join findings on findings.track_id = tracks.track_id
+          where ${query.slugExpr} in (${placeholders})
+          group by ${query.groupBy}`,
+  });
+
+  const map = new Map<string, { certified: boolean; findingCount: number; trackCount: number }>();
+
+  for (const row of typedRows<{ finding_count: number; slug: string; track_count: number }>(
+    result.rows,
+  )) {
+    const findingCount = Number(row.finding_count);
+    map.set(row.slug, {
+      certified: findingCount > 0,
+      findingCount,
+      trackCount: Number(row.track_count),
+    });
   }
 
   return map;

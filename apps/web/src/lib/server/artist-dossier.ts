@@ -29,7 +29,13 @@
 
 import { type InStatement } from "@libsql/client/web";
 import { getDb, typedRows } from "./db";
-import { type EmbeddingCandidate, readEmbeddingBlob, rankBySimilarity } from "./embedding";
+import {
+  type EmbeddingCandidate,
+  readEmbeddingBlob,
+  rankBySimilarity,
+  toVectorProbe,
+} from "./embedding";
+import { bestArtistAvatarUrl } from "../media";
 
 /** How many "same sector" neighbours the artist page shows (top-N, self excluded). */
 export const ARTIST_NEIGHBOURS_LIMIT = 4;
@@ -160,6 +166,73 @@ export function rankSimilarArtists(
 
   for (const group of groups) {
     if (group.artistId === targetArtistId) {
+      continue;
+    }
+
+    const mean = meanEmbedding(group.vectors);
+
+    if (mean) {
+      candidates.push({
+        embedding: mean,
+        item: { imageUrl: group.imageUrl, name: group.name, slug: group.slug },
+      });
+    }
+  }
+
+  return rankBySimilarity(target, candidates, limit);
+}
+
+// ── The multi-artist "sounds like these" ranking (browse-by-feel on /artists) ─────────────
+
+/** The most artists a "sounds like these" compare accepts — the isolate averages this many stored
+ *  centroids into one probe (a bounded read), so it never grows into a whole-corpus pull. */
+export const MAX_SIMILAR_ARTISTS_INPUT = 6;
+
+/** How many neighbours the multi-artist "sounds like these" results return (the tile grid + the API). */
+export const SIMILAR_ARTISTS_LIMIT = 12;
+
+/**
+ * Rank the artists sonically nearest to the AVERAGE of several SELECTED artists' mean embeddings —
+ * the pure, in-isolate expression of the multi-artist "sounds like these" scan
+ * ({@link listSimilarArtistNeighbours} does exactly this IN SQL against `artist_centroids`). The
+ * probe is the mean of the selected artists' centroids (each already a mean over that artist's own
+ * tracks), so every selected artist weighs EQUALLY regardless of catalogue depth. The selected
+ * artists are excluded from their own results. Returns [] when no selected artist has a vector to
+ * position from — never throws. Deterministic: ties break toward the earlier candidate via
+ * `rankBySimilarity`, so a fixed group order yields a fixed result. The `rankSimilarArtists` twin,
+ * lifted from one target to several.
+ */
+export function rankSimilarToArtists(
+  selectedArtistIds: string[],
+  groups: ArtistEmbeddingGroup[],
+  limit: number,
+): ArtistIdentity[] {
+  const selected = new Set(selectedArtistIds);
+  const selectedMeans: number[][] = [];
+
+  for (const group of groups) {
+    if (!selected.has(group.artistId)) {
+      continue;
+    }
+
+    const mean = meanEmbedding(group.vectors);
+
+    if (mean) {
+      selectedMeans.push(mean);
+    }
+  }
+
+  // The probe is the mean OF the selected artists' means — equal weight per artist, not per track.
+  const target = meanEmbedding(selectedMeans);
+
+  if (!target) {
+    return [];
+  }
+
+  const candidates: EmbeddingCandidate<ArtistIdentity>[] = [];
+
+  for (const group of groups) {
+    if (selected.has(group.artistId)) {
       continue;
     }
 
@@ -566,6 +639,119 @@ export async function getArtistNeighbours(
   return typedRows<NeighbourRow>(result.rows).map((row) => ({
     certified: Number(row.certified) === 1,
     imageUrl: row.image_url ?? undefined,
+    name: row.name,
+    slug: row.slug,
+  }));
+}
+
+// ── The multi-artist "sounds like these" read (the exact scan, one live probe) ────────────
+
+/** One "sounds like these" result — the ranked artist IDENTITY only; the caller adds counts/certified
+ *  off the shared hub gate, so the tier stays single-sourced (see artists.ts's two projections). */
+export type SimilarArtistNeighbour = {
+  artistId: string;
+  imageUrl: string | undefined;
+  name: string;
+  slug: string;
+};
+
+type SimilarArtistRow = {
+  artist_id: string;
+  image_key: string | null;
+  image_state: string | null;
+  image_updated_at: string | null;
+  image_url: string | null;
+  name: string;
+  slug: string;
+};
+
+/**
+ * The artists sonically nearest to a SET of selected artists — the "sounds like these" multi-select
+ * on `/artists`. Two bounded reads:
+ *
+ *   1. Read the ≤{@link MAX_SIMILAR_ARTISTS_INPUT} selected artists' STORED centroids (an indexed
+ *      `slug in (…)` join to `artist_centroids`), decode them, and average them in the isolate into
+ *      one probe (the mean OF means — each selected artist weighs equally). A slug with no centroid
+ *      simply does not contribute; if none do, there is nothing to rank from and the result is empty.
+ *   2. The exact `vector_distance_cos` scan of `artist_centroids` with that averaged probe bound as a
+ *      RAW float32 BLOB (embedding.ts rule 2 — a text probe is the measured 14× hosted cliff), the
+ *      selected artists excluded. This is the SAME scan SHAPE the hosted-proven `rank_artists` sweep
+ *      runs per tick ({@link EDGE_RERANK_SQL}); the only differences are that the probe is a live
+ *      averaged BLOB rather than a stored single centroid, and the exclusion is a set rather than one
+ *      id. No ANN index (ratified — docs/local-database.md); the exact scan is ≈ 2 s at ~5k artists.
+ *
+ * Returns the ranked identity (name/slug/avatar); `certified` + the counts are the CALLER's job, off
+ * the shared hub gate, so the lit/unlit tier here agrees with the rest of the page. Never throws.
+ */
+export async function listSimilarArtistNeighbours(
+  slugs: string[],
+  limit: number,
+): Promise<SimilarArtistNeighbour[]> {
+  const cleaned = [...new Set(slugs.map((slug) => slug.trim()).filter(Boolean))].slice(
+    0,
+    MAX_SIMILAR_ARTISTS_INPUT,
+  );
+
+  if (cleaned.length === 0 || limit <= 0) {
+    return [];
+  }
+
+  const db = await getDb();
+  const selectedPlaceholders = cleaned.map(() => "?").join(", ");
+  const selectedResult = await db.execute({
+    args: cleaned,
+    sql: `select a.id as artist_id, ac.centroid_blob as centroid_blob
+          from artists a
+          join artist_centroids ac on ac.artist_id = a.id
+          where a.slug in (${selectedPlaceholders})`,
+  });
+  const selected = typedRows<{ artist_id: string; centroid_blob: unknown }>(selectedResult.rows);
+
+  if (selected.length === 0) {
+    return [];
+  }
+
+  const vectors: number[][] = [];
+
+  for (const row of selected) {
+    const vector = readEmbeddingBlob(row.centroid_blob);
+
+    if (vector) {
+      vectors.push(vector);
+    }
+  }
+
+  const probe = meanEmbedding(vectors);
+
+  if (!probe) {
+    return [];
+  }
+
+  const selectedIds = selected.map((row) => row.artist_id);
+  const idPlaceholders = selectedIds.map(() => "?").join(", ");
+  // Bind order follows the `?` order in the SQL: the probe BLOB (in the select list) leads, then the
+  // excluded ids, then the limit.
+  const result = await db.execute({
+    args: [toVectorProbe(probe), ...selectedIds, Math.max(0, limit)],
+    sql: `select a.id as artist_id, a.slug as slug, a.name as name, a.image_url as image_url,
+                 a.image_key as image_key, a.image_state as image_state,
+                 a.image_updated_at as image_updated_at,
+                 vector_distance_cos(ac.centroid_blob, ?) as dist
+          from artist_centroids ac
+          join artists a on a.id = ac.artist_id
+          where ac.artist_id not in (${idPlaceholders})
+          order by dist asc, ac.artist_id asc
+          limit ?`,
+  });
+
+  return typedRows<SimilarArtistRow>(result.rows).map((row) => ({
+    artistId: row.artist_id,
+    imageUrl: bestArtistAvatarUrl({
+      imageKey: row.image_key,
+      imageState: row.image_state,
+      imageUpdatedAt: row.image_updated_at,
+      imageUrl: row.image_url,
+    }),
     name: row.name,
     slug: row.slug,
   }));

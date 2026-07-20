@@ -73,8 +73,31 @@ export const getArtist = oc
   .input(z.object({ slug: z.string() }))
   .output(z.object({ artist: ArtistListItemSchema, ok: z.literal(true) }));
 
+/**
+ * `list_similar_artists` → `GET /artists/similar?slugs=a,b,c` (operationId `listSimilarArtists`).
+ *
+ * The artists sitting sonically nearest to the AVERAGE of the given artists' audio positions — the
+ * "sounds like these" compare. `slugs` is a comma-separated list of 2+ artist slugs (capped at 6; a
+ * blank/whitespace list resolves to none). The response is `{ ok: true, artists }` — up to twelve
+ * `ArtistListItem`s ordered nearest first, the given artists excluded from their own results, each
+ * carrying its `certified` flag (an uncertified neighbour is a real result, never a certified one).
+ * A literal path under `/artists`, so it takes precedence over `/artists/{slug}` the same way
+ * `/tracks/random` does over `/tracks/{idOrLogId}`. Contract-only oRPC; public, no auth.
+ */
+export const listSimilarArtists = oc
+  .route({
+    method: "GET",
+    operationId: "listSimilarArtists",
+    path: "/artists/similar",
+    summary: "List the artists that sound most like a set of artists",
+    tags: ["Artists"],
+  })
+  .input(z.object({ slugs: z.string() }))
+  .output(z.object({ artists: z.array(ArtistListItemSchema), ok: z.literal(true) }));
+
 /** The `artists` domain's ops, merged into the root contract by `./index.ts`. */
 export const artistsContract = {
   get_artist: getArtist,
   list_artists: listArtists,
+  list_similar_artists: listSimilarArtists,
 };

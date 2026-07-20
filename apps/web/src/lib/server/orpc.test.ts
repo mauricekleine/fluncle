@@ -624,6 +624,8 @@ const PUBLIC_OPERATION_IDS = [
   "listPrivateSavedSets",
   "listPrivateSubmissions",
   "listPrivateWatches",
+  // The multi-artist "sounds like these" sonic read — public, no auth (the /artists compare).
+  "listSimilarArtists",
   // Hydrate a whole shared `?set=` chain in one read — the public twin of the web /mix loader's
   // server-only getMixTracksByTokens, so a saved set opens whole on mobile (uncertified tokens
   // included). Public-unauth like the other /mix reads.

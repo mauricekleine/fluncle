@@ -1,10 +1,12 @@
 // The `artists` domain router module. Implements the public artist-read contract
 // ops off the shared implementer the root (../orpc.ts) hands in. Mirrors the
 // `mixtapes` pattern: list and get, both public, no auth. The list is the unified
-// `/artists` catalogue index, paginated (`listArtistsApiPage`).
+// `/artists` catalogue index, paginated (`listArtistsApiPage`); `list_similar_artists`
+// is the "sounds like these" multi-artist sonic read.
 
 import { ORPCError } from "@orpc/server";
-import { getArtistListItemBySlug, listArtistsApiPage } from "../artists";
+import { MAX_SIMILAR_ARTISTS_INPUT } from "../artist-dossier";
+import { getArtistListItemBySlug, listArtistsApiPage, listSimilarArtistsApi } from "../artists";
 import { apiFault, type Implementer, parseCataloguePage } from "./_shared";
 
 /**
@@ -47,5 +49,42 @@ export function artistsHandlers(os: Implementer) {
     }
   });
 
-  return { get_artist: getArtistHandler, list_artists: listArtistsHandler };
+  // `list_similar_artists` — the "sounds like these" multi-artist sonic read. `slugs` is the
+  // comma-separated pool (2..MAX validated artist slugs; a 1-slug / junk / over-cap request 400s
+  // here, the get_mixable_order in-handler precedent). The ranking + exclusion of the given artists
+  // happens in `listSimilarArtistsApi`.
+  const listSimilarArtistsHandler = os.list_similar_artists.handler(async ({ input }) => {
+    const slugs = [
+      ...new Set(
+        input.slugs
+          .split(",")
+          .map((value) => value.trim())
+          .filter(Boolean),
+      ),
+    ];
+
+    if (slugs.length < 2 || slugs.length > MAX_SIMILAR_ARTISTS_INPUT) {
+      throw new ORPCError("BAD_REQUEST", {
+        data: {
+          apiCode: "invalid_request",
+          apiMessage: `Provide 2 to ${MAX_SIMILAR_ARTISTS_INPUT} artist slugs to compare`,
+        },
+        message: `Provide 2 to ${MAX_SIMILAR_ARTISTS_INPUT} artist slugs to compare`,
+      });
+    }
+
+    try {
+      const artists = await listSimilarArtistsApi(slugs);
+
+      return { artists, ok: true } as const;
+    } catch (error) {
+      throw apiFault(error);
+    }
+  });
+
+  return {
+    get_artist: getArtistHandler,
+    list_artists: listArtistsHandler,
+    list_similar_artists: listSimilarArtistsHandler,
+  };
 }

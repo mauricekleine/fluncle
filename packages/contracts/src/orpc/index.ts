@@ -83,7 +83,13 @@ export {
   getAlbum,
   listAlbums,
 } from "./albums";
-export { ArtistListItemSchema, artistsContract, getArtist, listArtists } from "./artists";
+export {
+  ArtistListItemSchema,
+  artistsContract,
+  getArtist,
+  listArtists,
+  listSimilarArtists,
+} from "./artists";
 export {
   getLabel,
   LabelDetailSchema,

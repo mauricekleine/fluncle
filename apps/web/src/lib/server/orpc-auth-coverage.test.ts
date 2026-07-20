@@ -137,6 +137,8 @@ const PUBLIC_UNAUTH_OPS = new Set<string>([
   "get_similar_findings",
   "get_track",
   "list_artists",
+  // The multi-artist "sounds like these" sonic read — public, no auth (the /artists compare).
+  "list_similar_artists",
   "list_editions",
   "list_galaxies",
   // The `/mix` rail read + the two taste-seed reads. All public-unauth: `/mix` is a free

@@ -2230,6 +2230,132 @@ a.catalogue-letter:focus-visible {
   color: var(--eclipse-glow);
 }
 
+/* ── THE HUB NAME SEARCH (/artists, /albums, /labels) ───────────────────────────────────────
+   One quiet, bordered text field: reference-register chrome on a catalogue page, a Phosphor glass
+   icon left, a clear button right when there is a term. No gold but the focus ring (the Unlit
+   register + One Sun Rule). The field itself is the Shadcn Input; only the icon/clear framing lives
+   here. */
+.hub-search {
+  margin-top: 1rem;
+  max-width: 22rem;
+  position: relative;
+}
+
+.hub-search-icon {
+  color: var(--muted-foreground);
+  left: 0.7rem;
+  pointer-events: none;
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.hub-search-input {
+  padding-inline: 2rem;
+  width: 100%;
+}
+
+/* The field is `type="search"` (semantic + the mobile "Search" key), but it carries its OWN clear
+   button (.hub-search-clear), so suppress WebKit's native cancel glyph — otherwise a filled field
+   shows two X's. */
+.hub-search-input::-webkit-search-cancel-button {
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.hub-search-clear {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: var(--rounded-md);
+  color: var(--muted-foreground);
+  cursor: pointer;
+  display: flex;
+  padding: 0.35rem;
+  position: absolute;
+  right: 0.35rem;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.hub-search-clear:hover {
+  color: var(--starlight-cream);
+}
+
+.hub-search-clear:focus-visible {
+  outline: 2px solid var(--eclipse-glow);
+  outline-offset: 2px;
+}
+
+/* ── THE /artists "COMPARE SOUNDS" SELECT MODE ─────────────────────────────────────────────
+   A quiet toolbar above the grid, and — while selecting — each tile becomes a toggle BUTTON that
+   matches the anchor tile exactly (the same avatar/name/count children) with the native button
+   chrome reset. The selection outline is the canonical focus RING (Eclipse-Glow), never gold: the
+   light in this system belongs to the findings, so a selected tile is ringed, not lit (One Sun). */
+.hub-compare-bar {
+  align-items: center;
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+  margin-top: 1rem;
+}
+
+.hub-compare-hint {
+  color: var(--muted-foreground);
+  font-size: 0.82rem;
+  margin-inline-end: auto;
+}
+
+/* The select-mode tile button: reset native chrome and mirror `.artist-avatar-grid a`'s layout so a
+   toggle tile is visually identical to the link tile it replaces. */
+.hub-grid .hub-tile-select {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  color: var(--stardust);
+  cursor: pointer;
+  display: grid;
+  font: inherit;
+  gap: 0.45rem;
+  justify-items: center;
+  padding: 0;
+  text-align: center;
+  width: 100%;
+}
+
+.hub-grid .hub-tile-select:hover .artist-card-avatar {
+  border-color: color-mix(in oklch, var(--stardust) 25%, transparent);
+}
+
+.hub-grid .hub-tile-select:hover .artist-grid-line {
+  color: var(--starlight-cream);
+}
+
+/* A certified artist's NAME still takes the gold in select mode (the certification light is a fact
+   about the artist, independent of the browse mode). */
+.hub-grid .hub-tile-select.hub-tile-certified .artist-grid-line {
+  color: var(--eclipse-gold);
+}
+
+/* Keyboard focus — the canonical Eclipse ring, as everywhere. */
+.hub-grid .hub-tile-select:focus-visible {
+  border-radius: var(--rounded-md);
+  outline: 2px solid var(--eclipse-glow);
+  outline-offset: 3px;
+}
+
+/* SELECTED — the same Eclipse ring, made persistent (so the selection reads even when focus moves
+   on), plus a ringed avatar. NOT gold: selection is not a certification claim. */
+.hub-grid .hub-tile-select[aria-pressed="true"] {
+  border-radius: var(--rounded-md);
+  outline: 2px solid var(--eclipse-glow);
+  outline-offset: 3px;
+}
+
+.hub-grid .hub-tile-select[aria-pressed="true"] .artist-card-avatar {
+  border-color: var(--eclipse-glow);
+}
+
 /* The infinite-scroll sentinel: a full-width row below the grid that holds the loading spinner
    and is what the IntersectionObserver watches. It carries no tile of its own. */
 .catalogue-hub-sentinel {
