@@ -1,0 +1,103 @@
+name: E2E
+
+# The public-flow browser suite (apps/web/tests/e2e). It boots its own fully
+# isolated stack — libSQL on :9440 over a fresh empty db seeded with committed
+# synthetic fixtures, plus Vite on :3140 — so it needs no secrets and no
+# .dev.vars. See apps/web/tests/e2e/README.md.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+
+permissions:
+  contents: read
+
+env:
+  # Both pinned so a CI run never picks up a surprise build. The e2e stack shells
+  # out to `turso dev` for its throwaway libSQL server, and `turso dev` is only a
+  # launcher — it execs `sqld`, which must be on PATH separately (on a dev Mac both
+  # arrive via Homebrew; a runner has neither). The sqld version matches the one
+  # local dev runs, so CI and a laptop exercise the same server.
+  TURSO_CLI_VERSION: v1.0.30
+  SQLD_VERSION: v0.24.31
+
+jobs:
+  e2e:
+    name: Public flows (chromium)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Cache Bun packages
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            bun-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # The release tarball, not the `curl | bash` installer: a pinned version from
+      # a known URL is the same hygiene as SHA-pinning the actions above.
+      - name: Install Turso CLI
+        run: |
+          curl -sSfL -o /tmp/turso-cli.tar.gz \
+            "https://github.com/tursodatabase/turso-cli/releases/download/${TURSO_CLI_VERSION}/turso-cli_Linux_x86_64.tar.gz"
+          tar -xzf /tmp/turso-cli.tar.gz -C /tmp turso
+          sudo install -m 0755 /tmp/turso /usr/local/bin/turso
+          turso --version
+
+      # `turso dev` execs `sqld`; without it the stack fails at boot with
+      # "Could not start libsql-server … make sure sqld is on your PATH".
+      - name: Install sqld (libsql-server)
+        run: |
+          curl -sSfL -o /tmp/sqld.tar.xz \
+            "https://github.com/tursodatabase/libsql/releases/download/libsql-server-${SQLD_VERSION}/libsql-server-x86_64-unknown-linux-gnu.tar.xz"
+          tar -xJf /tmp/sqld.tar.xz -C /tmp
+          sudo install -m 0755 /tmp/libsql-server-x86_64-unknown-linux-gnu/sqld /usr/local/bin/sqld
+          sqld --version
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            playwright-${{ runner.os }}-
+
+      - name: Install Playwright chromium
+        working-directory: apps/web
+        run: bunx playwright install --with-deps chromium
+
+      - name: Run E2E suite
+        working-directory: apps/web
+        run: bun run test:e2e
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: playwright-report
+          path: |
+            apps/web/playwright-report/
+            apps/web/test-results/
+            apps/web/.dev/e2e-turso.log
+          retention-days: 7
+          include-hidden-files: true
