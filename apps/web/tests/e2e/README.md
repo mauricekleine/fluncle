@@ -23,7 +23,9 @@ One Bun orchestrator, `scripts/e2e-stack.ts`, is Playwright's `webServer`. It bu
 5. applies the synthetic seed (`seed.ts`)
 6. boots Vite; Playwright waits on `/api/health`
 
-`globalTeardown` restores `.dev.vars` afterwards. A crashed run self-heals: the next boot restores from the backup it finds under the gitignored `.dev/`.
+`globalSetup` then warms the dev server (see below), and `globalTeardown` restores `.dev.vars` afterwards. A crashed run self-heals: the next boot restores from the backup it finds under the gitignored `.dev/`.
+
+**The warm-up matters.** This is a dev server, so it pre-bundles dependencies on demand. On a cold cache it can discover one _while already serving the page_, re-optimize, and answer the in-flight module requests with `504 (Outdated Optimize Dep)` — the client entry then fails to import and the page never hydrates. It self-heals on the next load, so `globalSetup` absorbs it with throwaway loads until one comes back clean. That is what lets every spec keep a strict fail-on-any-console-error gate with no filters. The race is timing-dependent and does not reproduce on a fast machine even with the cache deleted; it showed up first on CI.
 
 Two things are worth knowing before you change any of it. The dev worker runs under `@cloudflare/vite-plugin`, which injects `.dev.vars` as the worker's bindings and **ignores** process env — so the DB URL has to land in that file, which is why it is materialized before Vite starts. And Playwright starts its `webServer` **before** `globalSetup` (and the runner is Node, with no `Bun` globals), which is why the stack is built by the webServer command rather than a `globalSetup`.
 

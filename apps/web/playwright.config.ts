@@ -10,11 +10,12 @@ import { BASE_URL } from "./tests/e2e/stack";
 // libSQL, migrates, seeds, and runs Vite in the foreground; Playwright waits for
 // `/api/health`, runs the suite, then SIGTERMs it.
 //
-// There is no `globalSetup`: Playwright starts the `webServer` BEFORE globalSetup
-// runs (globalSetup may even fetch the server), so the stack has to be built by
-// the command itself. `globalTeardown` restores `.dev.vars` — Playwright kills the
-// server by process group, so the orchestrator's own SIGTERM trap is not
-// guaranteed to finish, while this hook always runs.
+// The stack is NOT built in `globalSetup`: Playwright starts the `webServer`
+// BEFORE globalSetup runs (globalSetup may even fetch the server), so it has to be
+// built by the command itself. globalSetup is used for what it is good for here —
+// warming the dev server once the stack is up. `globalTeardown` restores
+// `.dev.vars`: Playwright kills the server by process group, so the orchestrator's
+// own SIGTERM trap is not guaranteed to finish, while this hook always runs.
 //
 // This is DISTINCT from the hand-rolled admin smokes under `tests/browser/`
 // (those drive a live dev server as the operator, run by hand / the nightly
@@ -28,6 +29,9 @@ export default defineConfig({
   // The synthetic DB is shared + read-only across specs, but a single worker keeps
   // the run deterministic and avoids Vite dev-server contention. Cheap at this size.
   fullyParallel: false,
+  // Runs after the webServer is up: absorbs the dev server's cold-start dep
+  // pre-bundling so every spec measures a steady-state server.
+  globalSetup: "./tests/e2e/global-setup.ts",
   globalTeardown: "./tests/e2e/global-teardown.ts",
   projects: [
     {
