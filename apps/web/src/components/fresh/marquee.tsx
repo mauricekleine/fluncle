@@ -18,7 +18,7 @@ import {
   type FreshView,
 } from "./data";
 import { FreshMasthead } from "./masthead";
-import { freshDateParts, FreshStreamRow } from "./shared";
+import { freshAvatarSrc, freshDateParts, FreshStreamRow } from "./shared";
 import { FreshViewControl } from "./view-control";
 
 const MARQUEE_HEADLINE_COUNT = 6;
@@ -55,7 +55,7 @@ function MarqueeHeadline({ entry }: { entry: FreshStreamEntry }) {
         <ArtistAvatar
           className="fresh-mq-avatar"
           name={finding.artists[0] ?? finding.title}
-          src={finding.artistAvatarUrl}
+          src={freshAvatarSrc(finding.artistAvatarUrl)}
         />
         {finding.logId ? (
           <Link
@@ -90,7 +90,7 @@ function MarqueeHeadline({ entry }: { entry: FreshStreamEntry }) {
       <ArtistAvatar
         className="fresh-mq-avatar fresh-mq-avatar-unlit"
         name={track.artists[0] ?? track.title}
-        src={track.artistAvatarUrl}
+        src={freshAvatarSrc(track.artistAvatarUrl)}
       />
       {track.spotifyUrl ? (
         <a

@@ -429,8 +429,14 @@ function ArtistPage() {
       <article className="log-plate log-index">
         <header className="log-masthead">
           {/* The entity's own portrait, above its name — the owned avatar master when resolved,
-              a quiet monogram tile otherwise (ArtistAvatar's fallback). */}
-          <ArtistAvatar className="artist-masthead-avatar" name={name} src={imageUrl} />
+              a quiet monogram tile otherwise (ArtistAvatar's fallback). The masthead slot is
+              `min(5rem, 40%)` — 80 CSS px, 160 on a 2× screen — so it takes the 300 rung; the 640
+              the DTO hands out is the og:image size, not this one. */}
+          <ArtistAvatar
+            className="artist-masthead-avatar"
+            name={name}
+            src={albumCoverAtSize(imageUrl, "medium")}
+          />
           <h1 className="log-coordinate log-index-title artist-name">{name}</h1>
           {/* The dossier bio is the masthead's prose — the reference register (the Three Areas
               Rule; the first-person signature line is retired). Rendered once authored. */}
@@ -488,7 +494,9 @@ function ArtistPage() {
                           : "artist-similar-avatar artist-similar-avatar--unlit"
                       }
                       name={neighbour.name}
-                      src={neighbour.imageUrl}
+                      // A 1.5rem chip avatar — 48 device px at 2× — takes the 64 rung, never the
+                      // 640 master the DTO hands out (26× the pixels this tile can show).
+                      src={albumCoverAtSize(neighbour.imageUrl, "small")}
                     />
                     <span>{neighbour.name}</span>
                   </GraphLink>
@@ -503,7 +511,16 @@ function ArtistPage() {
             band here — nothing renders until the crawl fills it. The sort control rides above
             only with more than one record to order; the pager only with more than one page. */}
         {catalogue.groups.length > 0 ? (
-          <section aria-label={`More from ${name}`} className="catalogue-section">
+          <section aria-labelledby="artist-catalogue-heading" className="catalogue-section">
+            {/* The section's name, promoted from an `aria-label` to a real H2 so the heading
+                outline runs H1 → H2 → H3 (the record names inside are H3s, and a page that
+                jumps H1 → H3 fails `heading-order`). It stays visually hidden, so nothing about
+                the page's quiet, headingless look changes — and the string is the same one the
+                aria-label already carried: it names the RECORDS, never the tier they belong to
+                (graph-sections.tsx, the unnamed tier). */}
+            <h2 className="sr-only" id="artist-catalogue-heading">
+              More from {name}
+            </h2>
             {catalogue.totalGroups > 1 ? (
               <CatalogueSortControl
                 label="Sort records"

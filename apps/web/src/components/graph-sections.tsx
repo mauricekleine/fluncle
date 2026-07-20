@@ -28,7 +28,11 @@
 //     label, no "see also". The tier it belongs to has no public name and never will. A
 //     screen-reader user gets an accessible name on the list ("More tracks on <entity>")
 //     because an unlabelled list of links is an accessibility failure — that names the
-//     TRACKS, never the tier.
+//     TRACKS, never the tier. The BAND around it (the artist/label page's
+//     `.catalogue-section`) may likewise carry a visually-hidden H2 holding that same
+//     superset name, so the heading outline runs H1 → H2 → H3 rather than jumping a
+//     level; it names the records or the artists the band belongs to, never the tier,
+//     and it is never visible.
 //   - IT CANNOT BE MISTAKEN FOR A FINDING. No coordinate (it has none), no cover-led gold,
 //     muted ink, a hairline rule above it, and it links OUT (a track with no Log ID has no
 //     page here to link to). The resting and hover states carry NO Eclipse Gold, so a lit
@@ -118,10 +122,17 @@ export function FindingsGrid({
         finding.logId ? (
           <li key={finding.trackId}>
             <Link params={{ logId: finding.logId }} to="/log/$logId">
+              {/* The rung matches the SLOT, not the master: this grid's columns are
+                  `minmax(6.5rem, 1fr)` inside a 44rem plate, so a cover renders around 104–120 CSS
+                  px and wants ~240 device px on a 2× screen. The 300 rung covers that with room;
+                  the 640 one this used to ask for was ~8× the pixels a tile can show, on a page
+                  whose whole HTML is 11 KB (43 KB → 10 KB per cover, measured on /album/addicted).
+                  The `large` rung still rides og:image + the JSON-LD, where the consumer is a
+                  crawler's full-size card rather than a tile. */}
               <TrackArtwork
                 alt=""
                 className="artist-grid-cover"
-                src={albumCoverAtSize(finding.albumImageUrl, "large")}
+                src={albumCoverAtSize(finding.albumImageUrl, "medium")}
               />
               <span className="artist-grid-line">{artistTitleLine(finding)}</span>
             </Link>
@@ -157,10 +168,13 @@ export function ArtistChips({ artists, title }: { artists: ArtistChip[]; title: 
               slug={artist.slug}
               variant="chip"
             >
+              {/* A chip avatar is 1.5rem — 24 CSS px, 48 on a 2× screen — so it takes the 64 rung,
+                  not the 640 the DTO hands out (a 26× over-fetch on a tile this size). An avatar
+                  that is not an owned master passes through `albumCoverAtSize` untouched. */}
               <ArtistAvatar
                 className="artist-similar-avatar"
                 name={artist.name}
-                src={artist.imageUrl}
+                src={albumCoverAtSize(artist.imageUrl, "small")}
               />
               <span>{artist.name}</span>
             </GraphLink>

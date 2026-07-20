@@ -15,8 +15,19 @@ import { ArtistAvatar } from "@/components/artist-avatar";
 import { BrandIcon } from "@/components/brand-icon";
 import { TrackArtwork } from "@/components/track-artwork";
 import { tracksCount } from "@/lib/format";
+import { albumCoverAtSize } from "@/lib/media";
 import { cn } from "@/lib/utils";
 import { type FreshCover, type FreshStreamEntry } from "./data";
+
+/**
+ * A lead-artist avatar sized for the slot it lands in, rather than for the DTO's og:image rung.
+ * Every avatar on this page is a small round tile — 2.25–3rem — so the 300 rung covers even a 3rem
+ * marquee avatar on a 2× screen with headroom, where the 640 the DTO hands out was up to 13× the
+ * pixels the tile can show. An avatar that is not an owned cover master passes through untouched.
+ */
+export function freshAvatarSrc(src: string | undefined): string | undefined {
+  return albumCoverAtSize(src, "medium");
+}
 
 const partsFormatter = new Intl.DateTimeFormat("en-US", {
   day: "numeric",
@@ -161,7 +172,7 @@ export function FreshStreamRow({
         <ArtistAvatar
           className="fresh-row-avatar"
           name={finding.artists[0] ?? finding.title}
-          src={finding.artistAvatarUrl}
+          src={freshAvatarSrc(finding.artistAvatarUrl)}
         />
         {finding.logId ? (
           <Link
@@ -200,7 +211,7 @@ export function FreshStreamRow({
       <ArtistAvatar
         className="fresh-row-avatar fresh-row-avatar-unlit"
         name={track.artists[0] ?? track.title}
-        src={track.artistAvatarUrl}
+        src={freshAvatarSrc(track.artistAvatarUrl)}
       />
       {track.spotifyUrl ? (
         <a
