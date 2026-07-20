@@ -59,8 +59,69 @@ export const SEEDED_MIXTAPE_TITLE = MIXTAPE.title;
 export const SEEDED_SAVE_TARGET_LOG_ID = FINDINGS[0]?.logId ?? "";
 export const SEEDED_SAVE_TARGET_TITLE = FINDINGS[0]?.title ?? "";
 
+// ── APPENDED: the reader/graph specs' identity handles ──────────────────────────────
+// Derived from the fixtures above, never a second description of them. The `/log` and graph
+// specs assert on identity (a coordinate, a slug, a name), so they need the values the base
+// fixtures already carry — not new rows. Nothing here changes what is seeded.
+
+/** The seeded finding coordinates, in feed order (index 0 is the newest). */
+export const SEEDED_FINDING_LOG_IDS = FINDINGS.map((finding) => finding.logId);
+
+/**
+ * The one finding wired into the FULL graph (artist ↔ label ↔ album) by `seedE2eData` below.
+ * Its `/log/<logId>` page is the reader spec's subject, and every graph page resolves through it.
+ */
+export const SEEDED_GRAPH_FINDING = {
+  artist: FINDINGS[0]?.artist ?? "",
+  logId: FINDINGS[0]?.logId ?? "",
+  title: FINDINGS[0]?.title ?? "",
+};
+
+/** The seeded graph entities — the `/artist`, `/label`, and `/album` pages' identities. */
+export const SEEDED_GRAPH_ENTITIES = {
+  album: { name: ALBUM.name, slug: ALBUM.slug },
+  artist: { name: ARTIST.name, slug: ARTIST.slug },
+  label: { name: LABEL.name, slug: LABEL.slug },
+};
+
 /** A base epoch for the descending `added_at` values (fixed, so runs are identical). */
 const BASE_EPOCH_MS = Date.UTC(2026, 0, 1, 12, 0, 0);
+
+// ── APPENDED: the RADIO fixture (radio.spec.ts) ──────────────────────────────
+//
+// `/radio` plays only a RADIO-ELIGIBLE finding, and eligibility is a real
+// predicate on `findings` (tracks.ts `getRadioEligibleTracks`): a clean square
+// master (`video_squared_at`), an observation (`observation_audio_url`), its
+// length (`observation_duration_ms` — the audio IS the schedule clock), and a
+// Log ID. None of the eight findings above carries any of that, so the eligible
+// set would be EMPTY and the surface would only ever speak its quiet-sector copy.
+// This is the one finding that satisfies the predicate.
+//
+// It is a SEPARATE row rather than an upgrade of an existing fixture, so the
+// eight above (and the specs asserting on them) are untouched.
+//
+// The observation URL points at the same absolute media host the product derives
+// its video crops from; `blockExternalRequests` stubs both, so the surface still
+// makes zero live requests — radio's entry gate opens on its own bounded timer
+// when the media cannot start, which is exactly the state the spec drives.
+const RADIO_FINDING = {
+  artist: "Lantern Wick",
+  logId: "709.9.0J",
+  observationAudioUrl: "https://found.fluncle.com/709.9.0J/observation.mp3",
+  // Ten minutes: far longer than any spec run, so the shared schedule cannot roll
+  // to another segment mid-assertion. With one eligible finding the loop is this
+  // finding, forever, and `nextTrack` is (correctly) omitted as self-referential.
+  observationDurationMs: 600_000,
+  title: "Salt Marsh Signal",
+  trackId: "e2e-track-radio",
+} as const;
+
+/** The one radio-eligible seeded finding — the only thing `/radio` can ever resolve to. */
+export const SEEDED_RADIO_FINDING = {
+  artist: RADIO_FINDING.artist,
+  logId: RADIO_FINDING.logId,
+  title: RADIO_FINDING.title,
+};
 
 export async function seedE2eData(client: Client): Promise<void> {
   await seedArtist(client, ARTIST);
@@ -93,6 +154,32 @@ export async function seedE2eData(client: Client): Promise<void> {
     sql: `insert into track_artists (track_id, artist_id, position) values (?, ?, 0)`,
   });
 
+  // The radio-eligible finding (see RADIO_FINDING above). Seeded like any other,
+  // then given the four eligibility columns the base factory does not carry.
+  await seedTrack(client, {
+    addedAt: new Date(BASE_EPOCH_MS - FINDINGS.length * 60_000).toISOString(),
+    artists: [RADIO_FINDING.artist],
+    label: LABEL.name,
+    logId: RADIO_FINDING.logId,
+    title: RADIO_FINDING.title,
+    trackId: RADIO_FINDING.trackId,
+  });
+  await client.execute({
+    args: [
+      new Date(BASE_EPOCH_MS).toISOString(),
+      RADIO_FINDING.observationAudioUrl,
+      RADIO_FINDING.observationDurationMs,
+      new Date(BASE_EPOCH_MS).toISOString(),
+      RADIO_FINDING.trackId,
+    ],
+    sql: `update findings
+          set video_squared_at = ?,
+              observation_audio_url = ?,
+              observation_duration_ms = ?,
+              observation_generated_at = ?
+          where track_id = ?`,
+  });
+
   await seedMixtape(client, {
     addedAt: new Date(BASE_EPOCH_MS + 60_000).toISOString(),
     id: MIXTAPE.id,
@@ -107,7 +194,9 @@ async function main(): Promise<void> {
 
   await seedE2eData(client);
   client.close();
-  console.log(`e2e seed: ${FINDINGS.length} findings + 1 mixtape + artist/label/album.`);
+  console.log(
+    `e2e seed: ${FINDINGS.length + 1} findings (1 radio-eligible) + 1 mixtape + artist/label/album.`,
+  );
 }
 
 if (import.meta.main) {
