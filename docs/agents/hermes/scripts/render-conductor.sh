@@ -34,7 +34,7 @@
 #     unrecognized custom var passes Hermes' provider-cred blocklist, like the
 #     other sweeps). Used for the queue gate here AND injected to the box.
 #   - CLAUDE_CODE_OAUTH_TOKEN + BOX_API_KEY — file-sourced from a 0600
-#     ${HOME}/.render-conductor.env. CLAUDE_CODE_OAUTH_TOKEN is a RECOGNIZED
+#     ${HOME}/.fluncle-secrets.env. CLAUDE_CODE_OAUTH_TOKEN is a RECOGNIZED
 #     provider cred Hermes HARD-BLOCKS from the cron env (GHSA-rhgp-j443-p4rf),
 #     so it can only reach this script via a file; BOX_API_KEY rides along.
 #     Written from the configured 1Password items (see the ops runbook note).
