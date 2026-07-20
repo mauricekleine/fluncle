@@ -65,15 +65,23 @@ export type RenderManifestStamps = {
   model?: string;
   /** The coarse palette hue-bucket tag (render.json `palette`; palette-summary.ts). */
   palette?: string;
+  /** The plate-lane subject KIND (render.json top-level `plateSubject`; null on abstract renders). */
+  plateSubject?: string;
   reasoning?: string;
   register?: string;
+  /** The dominant STRUCTURAL family — render.json `structure.dominant` (a nested object, not a
+   *  top-level string), so it is read separately from the flat string stamps below. */
+  structure?: string;
   vehicle?: string;
 };
 
+// The flat top-level string stamps render.json carries (each read verbatim, trimmed + capped).
+// `structure` is deliberately absent: it is a nested `{ dominant }` object, read separately below.
 const MANIFEST_STAMP_KEYS = [
   "grain",
   "model",
   "palette",
+  "plateSubject",
   "reasoning",
   "register",
   "vehicle",
@@ -106,6 +114,19 @@ export async function readRenderManifestStamps(
 
       if (typeof value === "string" && value.trim()) {
         stamps[key] = value.trim().slice(0, 120);
+      }
+    }
+
+    // `structure` is the render's diversity object `{ dominant, secondary?, confidence, signals }`
+    // (shader-structure.ts `StructureManifest`); the CHECKED axis this ledger persists is its
+    // `dominant` family. Read it out of the nested object — the flat-string loop above skips it.
+    const structure = manifest.structure;
+
+    if (structure !== null && typeof structure === "object") {
+      const dominant = (structure as Record<string, unknown>).dominant;
+
+      if (typeof dominant === "string" && dominant.trim()) {
+        stamps.structure = dominant.trim().slice(0, 120);
       }
     }
 

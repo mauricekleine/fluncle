@@ -737,6 +737,12 @@ export const findings = sqliteTable(
     // (docs/planning/homogenisation-evidence.md). Null = not recorded (older rows / no
     // palette derivable).
     videoPalette: text("video_palette"),
+    // The plate-lane SUBJECT KIND of the track's video (e.g. "hull" / "ruin" / "flora" /
+    // "creature" / "terrain" / "threshold"), lifted from the bundle's render.json `plateSubject`.
+    // Set when the video is uploaded; the plate-subject diversity axis judge:diversity reads to
+    // rotate plate subjects. NULL on plate-less (abstract/procedural) renders and older rows that
+    // predate the column — the provenance render.json always carried but never persisted (Wave-1 C).
+    videoPlateSubject: text("video_plate_subject"),
     // The visual REGISTER of the track's video — the composition's mode:
     // "abstract" | "representational" | "framed". Set when the video is uploaded;
     // surfaced in /api/tracks alongside the vehicle and grain so the next
@@ -752,6 +758,12 @@ export const findings = sqliteTable(
     // footage.mp4 → footage.social.mp4 R2 rename migration (that copy alone doesn't
     // make footage.mp4 square). The presence of the timestamp is the only thing read.
     videoSquaredAt: text("video_squared_at"),
+    // The dominant STRUCTURAL family the render's resolved shader body classifies to
+    // (cellular / flow / caustic / filament / lattice / radial / metaball / other), lifted from
+    // the bundle's render.json `structure.dominant`. The CHECKED diversity axis beside the
+    // free-text vehicle NAME — set when the video is uploaded so a creatively-named repeat can't
+    // hide. NULL when the body couldn't be classified or on rows that predate the column (Wave-1 C).
+    videoStructure: text("video_structure"),
     videoUrl: text("video_url"),
     // The travelling vehicle of the track's video (e.g. "voronoi cellular",
     // "caustic web"). Set when the video is uploaded; surfaced in /api/tracks so
@@ -1679,6 +1691,72 @@ export const socialPosts = sqliteTable(
     url: text("url"),
   },
   (table) => [uniqueIndex("social_posts_track_platform_idx").on(table.trackId, table.platform)],
+);
+
+// THE SOCIAL-METRICS LEDGER — append-only per-post performance snapshots, one row per
+// (post × source × captured day). The `platform_stats` daily-snapshot pattern applied to a
+// finding's INDIVIDUAL posts: `platform_stats` counts the whole channel (followers, total likes),
+// this counts each posted video's own reach, so per-video velocity (day-over-day deltas) becomes
+// measurable. A daily on-box trigger fires the agent-tier `record_social_metrics` op; the Worker
+// reads each published `social_posts` row's Postiz per-post analytics and APPENDS today's numbers.
+//
+// APPEND-ONLY BY DESIGN — never an upsert-latest: velocity matters, so the series keeps every day's
+// snapshot rather than overwriting a single "latest" row. Idempotence is per-DAY, not per-write:
+// the `(external_id, source, captured_day)` unique index means a second run the same UTC day is a
+// no-op (INSERT … ON CONFLICT DO NOTHING), so a re-fired tick never doubles a day's point.
+//
+// `captured_day` (UTC yyyy-mm-dd, derived from `captured_at` at write time) is stored as its own
+// column so the idempotency index is a plain btree — a SQLite unique index can't span an expression,
+// and deriving the day in SQL at index time is exactly what libSQL won't do. Every metric column is
+// NULLABLE: Postiz returns a platform-dependent subset of labels, so an absent metric is null (never
+// zero — a real zero and "the platform didn't report it" must stay distinguishable).
+export const socialMetrics = sqliteTable(
+  "social_metrics",
+  {
+    // Average % of the video watched (0–100), a real — the only fractional metric. Null when unreported.
+    averageViewPercentage: real("average_view_percentage"),
+    // The ISO instant this snapshot was taken. The series' fine-grained x-axis.
+    capturedAt: text("captured_at").notNull(),
+    // The UTC day (yyyy-mm-dd) derived from `captured_at`. The idempotency key's day component:
+    // one snapshot per (post, source) per day. A plain column so the unique index below is a btree.
+    capturedDay: text("captured_day").notNull(),
+    comments: integer("comments"),
+    createdAt: text("created_at").notNull(),
+    // The Postiz post id (`social_posts.external_id`) this snapshot measures. The join back to the post.
+    externalId: text("external_id").notNull(),
+    id: text("id").primaryKey(),
+    impressions: integer("impressions"),
+    likes: integer("likes"),
+    // The platform the post lives on. Plain TEXT with an enum narrow (a new platform needs no DDL).
+    platform: text("platform", { enum: ["tiktok", "youtube"] }).notNull(),
+    saves: integer("saves"),
+    shares: integer("shares"),
+    // Where the numbers came from. `postiz` today; room for `youtube_analytics` / `tiktok_display` /
+    // `csv` later without a migration — the source is part of the idempotency key, so two sources can
+    // snapshot the same post on the same day without colliding.
+    source: text("source", { enum: ["postiz", "youtube_analytics", "tiktok_display", "csv"] })
+      .notNull()
+      .default("postiz"),
+    // The finding this post belongs to (`social_posts.track_id` → `findings.track_id`). Denormalised
+    // onto the row so a per-finding read never has to re-join `social_posts`. No declared FK (this
+    // schema declares none).
+    trackId: text("track_id").notNull(),
+    views: integer("views"),
+    // Watch time in whole seconds. Null when unreported.
+    watchTimeSeconds: integer("watch_time_seconds"),
+  },
+  (table) => [
+    // The idempotency guard: one snapshot per (post, source, UTC day). The daily INSERT … ON
+    // CONFLICT DO NOTHING keys on this, so a re-fired tick never doubles a day's point.
+    uniqueIndex("social_metrics_external_source_day_idx").on(
+      table.externalId,
+      table.source,
+      table.capturedDay,
+    ),
+    // The per-finding series read (a finding's posts over time), a plain ASC walk — no desc() index
+    // (the ratified drizzle-kit turso trap); readers order in the query.
+    index("social_metrics_track_captured_at_idx").on(table.trackId, table.capturedAt),
+  ],
 );
 
 // Distribution links no longer live here — they are the single source of truth in

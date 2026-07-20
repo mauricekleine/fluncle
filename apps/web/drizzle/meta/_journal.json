@@ -834,6 +834,13 @@
       "when": 1784524986948,
       "tag": "0118_fresh_nighthawk",
       "breakpoints": true
+    },
+    {
+      "idx": 119,
+      "version": "6",
+      "when": 1784542641271,
+      "tag": "0119_sudden_inhumans",
+      "breakpoints": true
     }
   ]
 }

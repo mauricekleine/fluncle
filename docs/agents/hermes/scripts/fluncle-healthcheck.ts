@@ -535,6 +535,11 @@ const AUTOMATION_CRONS: CronDef[] = [
   // is a substring of no other cron's fluncle-<token> dir header (and vice versa), so
   // claimCronDirs' longest-match-first pass claims fluncle-funnel-snapshot cleanly.
   { cadenceMs: 24 * 60 * 60_000, match: "funnel-snapshot", service: "cron.funnel-snapshot" },
+  // The daily per-post social-metrics snapshot. `social-metrics` and `social-capture` are the same
+  // length and neither is a substring of the other's `fluncle-…` dir header, so claimCronDirs'
+  // longest-match-first pass gives each its own dir cleanly (the social-capture/verify-captures
+  // pattern). Keep both entries.
+  { cadenceMs: 24 * 60 * 60_000, match: "social-metrics", service: "cron.social-metrics" },
   // The two nightly-audit crons: `audit-review` (12 chars) is claimed before `audit` (5) by
   // longest-match-first, and neither is a substring of the other's `fluncle-…` dir header, so
   // each claims its own dir cleanly (same pattern as studio-clip/clip-drip). Both daily.

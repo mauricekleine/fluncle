@@ -54,6 +54,45 @@ type SimpleAnalyticsPage = {
 
 type SimpleAnalyticsResponse = { pages?: SimpleAnalyticsPage[] };
 
+/** One `referrers` row from the SA `version=5&fields=referrers` response — a referring host
+ *  (`value`, e.g. `t.co`, `www.tiktok.com`) with its trailing-window pageviews/visitors. */
+type SimpleAnalyticsReferrer = {
+  pageviews?: number;
+  value?: string;
+  visitors?: number;
+};
+
+/** The social platforms whose referral host we count as a social→site arrival. Keyed by a stable
+ *  slug (the platform the visitor came FROM); each value is the substrings that mark that host in
+ *  SA's `referrers[].value` (a hostname or short-link domain). Matched by substring so `t.co`,
+ *  `www.tiktok.com`, and `l.instagram.com` all resolve. Kept small + explicit — an unknown referrer
+ *  is simply not a social arrival, never a wrong one (the demand-read discipline). */
+const SOCIAL_REFERRER_HOSTS: Record<string, string[]> = {
+  bluesky: ["bsky.app", "bsky.social"],
+  facebook: ["facebook.com", "fb.com", "fb.me"],
+  instagram: ["instagram.com"],
+  reddit: ["reddit.com", "redd.it"],
+  tiktok: ["tiktok.com"],
+  x: ["t.co", "twitter.com", "x.com"],
+  youtube: ["youtube.com", "youtu.be"],
+};
+
+/** One social platform's arrivals to the site over the window (pageviews from its referral host). */
+export type SocialReferralArrival = { pageviews: number; platform: string };
+
+/** The `readSocialReferrers` outcome — the site-side half of the reach picture (who clicked THROUGH
+ *  from a social post to the site), the counterpart to the post-side Postiz per-post metrics. */
+export type SocialReferralsResult = {
+  /** Per-platform arrivals, highest-first; only platforms with a non-zero count are present. */
+  arrivals: SocialReferralArrival[];
+  /** True when the SA key is set and the read ran; false = a clean no-op (unprovisioned). */
+  configured: boolean;
+  /** Total social→site arrivals across every known social host this window. */
+  total: number;
+  /** The trailing window queried, inclusive `YYYY-MM-DD` bounds. */
+  window: { end: string; start: string };
+};
+
 /** The op's honest per-run summary — what the CLI prints and the /status marker carries. */
 export type RecordDemandSummary = {
   /** True when `SIMPLE_ANALYTICS_API_KEY` is set and the fetch ran; false = a clean no-op. */
@@ -348,4 +387,98 @@ export async function recordDemand(
     unknownSlugs: requestedSlugs - resolvedSlugs,
     window,
   };
+}
+
+/** Which social platform (if any) an SA referral host belongs to — the first `SOCIAL_REFERRER_HOSTS`
+ *  entry whose substrings the host contains. `undefined` for a non-social referrer (a search engine,
+ *  a blog, direct). Pure. */
+export function classifySocialReferrer(rawValue: string): string | undefined {
+  const host = rawValue.trim().toLowerCase();
+
+  if (!host) {
+    return undefined;
+  }
+
+  for (const [platform, needles] of Object.entries(SOCIAL_REFERRER_HOSTS)) {
+    if (needles.some((needle) => host.includes(needle))) {
+      return platform;
+    }
+  }
+
+  return undefined;
+}
+
+/** Sum SA referrer pageviews per social platform (a platform can appear under several hosts —
+ *  `t.co` + `twitter.com` + `x.com` all fold into `x`). Highest-first; zero-count platforms are
+ *  dropped. Pure — unit-testable with no network. */
+export function summarizeReferrers(referrers: SimpleAnalyticsReferrer[]): SocialReferralArrival[] {
+  const byPlatform = new Map<string, number>();
+
+  for (const referrer of referrers) {
+    const platform =
+      typeof referrer.value === "string" ? classifySocialReferrer(referrer.value) : undefined;
+
+    if (!platform) {
+      continue;
+    }
+
+    const pageviews =
+      typeof referrer.pageviews === "number" && referrer.pageviews > 0 ? referrer.pageviews : 0;
+
+    if (pageviews === 0) {
+      continue;
+    }
+
+    byPlatform.set(platform, (byPlatform.get(platform) ?? 0) + pageviews);
+  }
+
+  return [...byPlatform.entries()]
+    .map(([platform, pageviews]) => ({ pageviews, platform }))
+    .sort((a, b) => b.pageviews - a.pageviews);
+}
+
+/**
+ * Read Simple Analytics REFERRERS for the trailing window and fold them into per-platform
+ * social→site arrivals — the site-side half of reach (who clicked THROUGH from a social post),
+ * the counterpart to the post-side Postiz per-post metrics. Same SA v5 shape + key + hostname as
+ * the demand `pages` read, just `fields=referrers`. Best-effort by contract: unprovisioned (no
+ * `SIMPLE_ANALYTICS_API_KEY`) it is a clean no-op (`configured: false`, empty arrivals), and it
+ * never throws on a slow/failed SA read — a null arrivals block never fails the sweep that carries
+ * it. Aggregate-only (SA has no per-user tracking); it stores nothing.
+ */
+export async function readSocialReferrers(
+  options: RecordDemandOptions = {},
+): Promise<SocialReferralsResult> {
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const now = options.now ?? new Date();
+  const end = isoDate(now);
+  const start = isoDate(new Date(now.getTime() - DEMAND_WINDOW_DAYS * 24 * 60 * 60 * 1000));
+  const window = { end, start };
+
+  const key = await readOptionalEnv("SIMPLE_ANALYTICS_API_KEY");
+
+  if (!key) {
+    return { arrivals: [], configured: false, total: 0, window };
+  }
+
+  const url =
+    `https://simpleanalytics.com/${SA_HOSTNAME}.json` +
+    `?version=5&fields=referrers&start=${window.start}&end=${window.end}&limit=${DEMAND_PAGE_LIMIT}`;
+
+  const response = await fetchImpl(url, {
+    headers: { "Api-Key": key },
+    signal: AbortSignal.timeout(SA_TIMEOUT_MS),
+  });
+
+  if (!response.ok) {
+    throw new Error(
+      `Simple Analytics referrers read failed (${response.status}): ${(await response.text()).slice(0, 200)}`,
+    );
+  }
+
+  const body = (await response.json()) as { referrers?: SimpleAnalyticsReferrer[] };
+  const arrivals = summarizeReferrers(Array.isArray(body.referrers) ? body.referrers : []);
+  const total = arrivals.reduce((sum, arrival) => sum + arrival.pageviews, 0);
+
+  return { arrivals, configured: true, total, window };
 }

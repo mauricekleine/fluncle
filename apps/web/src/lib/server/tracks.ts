@@ -121,8 +121,10 @@ export type TrackRow = {
   video_model: string | null;
   video_model_reasoning: string | null;
   video_palette: string | null;
+  video_plate_subject: string | null;
   video_register: string | null;
   video_squared_at: string | null;
+  video_structure: string | null;
   video_url: string | null;
   video_vehicle: string | null;
   added_to_spotify: number;
@@ -172,7 +174,7 @@ export const FINDINGS_FROM = `findings join tracks on tracks.track_id = findings
 // surfaced (parsed) as creative fuel for the video agent.
 export const TRACK_SELECT = `tracks.track_id, tracks.spotify_url, tracks.apple_music_url, tracks.title, tracks.album, tracks.album_image_url, tracks.artists_json, tracks.analyzed_at, tracks.analyzed_from,
   tracks.bpm, tracks.bpm_source, tracks.duration_ms, findings.enrichment_status, tracks.features_json, tracks.in_release_id, tracks.isrc, tracks.key, tracks.key_source, tracks.label, tracks.mb_recording_id, findings.log_id, tracks.popularity,
-  tracks.preview_url, tracks.release_date, tracks.source_audio_failures, tracks.source_audio_key, findings.video_url, findings.video_squared_at, findings.video_vehicle, findings.video_grain, findings.video_register, findings.video_palette, findings.video_model, findings.video_model_reasoning, findings.note, findings.added_at,
+  tracks.preview_url, tracks.release_date, tracks.source_audio_failures, tracks.source_audio_key, findings.video_url, findings.video_squared_at, findings.video_vehicle, findings.video_grain, findings.video_register, findings.video_palette, findings.video_plate_subject, findings.video_structure, findings.video_model, findings.video_model_reasoning, findings.note, findings.added_at,
   findings.updated_at, findings.added_to_spotify, findings.posted_to_telegram,
   findings.observation_audio_url, findings.observation_duration_ms, findings.observation_generated_at, findings.observation_alignment_json,
   (select name from galaxies where galaxies.id = findings.galaxy_id) as galaxy_name,
@@ -439,8 +441,10 @@ export function toLeanTrackListItem(row: LeanTrackRow): LeanTrackListItem {
     videoGrain: row.video_grain ?? undefined,
     videoModel: row.video_model ?? undefined,
     videoPalette: row.video_palette ?? undefined,
+    videoPlateSubject: row.video_plate_subject ?? undefined,
     videoRegister: row.video_register ?? undefined,
     videoSquaredAt: row.video_squared_at ?? undefined,
+    videoStructure: row.video_structure ?? undefined,
     videoUrl: row.video_url ?? undefined,
     videoVehicle: row.video_vehicle ?? undefined,
     youtubeUrl: row.youtube_url ?? undefined,

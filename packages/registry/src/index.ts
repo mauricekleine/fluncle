@@ -1584,6 +1584,24 @@ export const SURFACES: readonly Surface[] = [
   },
   {
     exposedContent: [
+      "daily per-post social-metrics snapshot — appends each published post's Postiz reach (views/likes/comments/…) into an append-only ledger, one row per post per day (--no-agent)",
+    ],
+    kind: "cron",
+    name: "cron.social-metrics",
+    operatorNotes:
+      "22:15 UTC daily (clear of the 23:45 funnel snapshot). A bare trigger (the funnel-snapshot/reach shape): fires the AGENT-tier record_social_metrics op once — the Worker selects a deterministic ≤25-post budget (every post published in the last 14 days, then a rolling least-recently-snapshotted tail; the Postiz 30/hour cap), reads each one's Postiz per-post analytics, and APPENDS one social_metrics row per (post, source, UTC day) — append-only (velocity), idempotent per day. Also reads the Simple-Analytics social→site referrer arrivals for observability. Zero LLM tokens; the box's agent token drives it and the Postiz + SA keys live Worker-side (no new secret). Source: docs/agents/hermes/scripts/social-metrics-sweep.*.",
+    probeConfig: {
+      cadenceMs: 24 * 60 * MINUTE_MS,
+      cronName: "fluncle-social-metrics",
+      kind: "cron",
+      schedule: { time: "22:15", tz: "UTC" },
+    },
+    statusDescription: "records how far each posted video reached",
+    title: "Social metrics",
+    weights: { status: "hidden" },
+  },
+  {
+    exposedContent: [
       "nightly codebase audit — one domain/night on a 7-day rotation; opens a PR the reviewer merges (claude -p, subscription auth)",
     ],
     kind: "cron",

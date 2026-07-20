@@ -236,12 +236,63 @@ export const setPublishAdvance = oc
   .input(z.object({ paused: z.boolean() }))
   .output(z.object({ ok: z.literal(true), paused: z.boolean() }));
 
+/**
+ * `record_social_metrics` → `POST /admin/social/metrics/record` (operationId
+ * `recordSocialMetrics`).
+ *
+ * AGENT tier (`adminAuth`, NOT `operatorGuard`): the box's daily social-metrics cron drives it with
+ * its agent token — the `record_platform_stats` / `capture_post_urls` precedent (the box holds no
+ * Postiz key; the Worker owns it). A bare trigger (empty body). The Worker reads each PUBLISHED
+ * post's Postiz per-post analytics and APPENDS one `social_metrics` row per (post, source, UTC day)
+ * — append-only (velocity), idempotent per day (a same-day re-run lands `inserted: 0`). Bounded to
+ * ≤25 Postiz requests/run (the platform's 30/hour cap). It also reads the Simple-Analytics
+ * social→site referrer arrivals (best-effort, one non-Postiz request), returned for observability.
+ * Internal write only (no public lastmod moves). Returns the per-run outcome.
+ */
+export const recordSocialMetrics = oc
+  .route({
+    method: "POST",
+    operationId: "recordSocialMetrics",
+    path: "/admin/social/metrics/record",
+    summary: "Snapshot each published post's Postiz performance into the social-metrics ledger",
+    tags: ["Admin"],
+  })
+  .input(z.looseObject({}))
+  .output(
+    z.object({
+      /** The per-run Postiz request budget honoured (≤25). */
+      budget: z.number().int(),
+      /** True when the Postiz key was present and the snapshot half ran. */
+      configured: z.boolean(),
+      /** The UTC day the run's snapshots are keyed on. */
+      day: z.string(),
+      /** Published posts with a Postiz id — the pool the budget selects from. */
+      eligible: z.number().int(),
+      /** Posts whose Postiz read errored (skipped, never failing the batch). */
+      failed: z.number().int(),
+      /** Snapshot rows actually appended this run (0 on a same-day re-run). */
+      inserted: z.number().int(),
+      /** Posts Postiz reported as `{ missing: true }` (release-id unresolved) — skipped. */
+      missing: z.number().int(),
+      ok: z.literal(true),
+      /** Posts actually read from Postiz this run (≤ budget). */
+      polled: z.number().int(),
+      /** The site-side reach block: social→site arrivals from Simple Analytics (best-effort). */
+      referrals: z.object({
+        arrivals: z.array(z.object({ pageviews: z.number().int(), platform: z.string() })),
+        configured: z.boolean(),
+        total: z.number().int(),
+      }),
+    }),
+  );
+
 /** The `admin-social` domain's ops, merged into the root contract by `./index.ts`. */
 export const adminSocialContract = {
   advance_publish_queue: advancePublishQueue,
   capture_post_urls: capturePostUrls,
   draft_track_social: draftTrackSocial,
   list_track_social: listTrackSocial,
+  record_social_metrics: recordSocialMetrics,
   set_publish_advance: setPublishAdvance,
   update_track_social: updateTrackSocial,
 };

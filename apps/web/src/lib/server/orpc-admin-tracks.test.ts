@@ -1608,8 +1608,12 @@ describe("oRPC finalize_track_video (POST .../video/finalize)", () => {
         grain: "grainFineEmulsion",
         model: "anthropic/claude-opus-4-8",
         palette: "teal-cool",
+        // The plate subject is a top-level string; the structure is a NESTED { dominant } object
+        // (render.json's StructureManifest) — the finalize path reads `structure.dominant` out of it.
+        plateSubject: "ruin",
         reasoning: "high",
         register: "representational",
+        structure: { confidence: 0.8, dominant: "filament" },
         vehicle: "tidal retreat",
       }),
     });
@@ -1626,18 +1630,26 @@ describe("oRPC finalize_track_video (POST .../video/finalize)", () => {
     // The palette axis recovers from the manifest the same way (docs/planning/
     // homogenisation-evidence.md — the axis that was invisible before).
     expect(update.videoPalette).toBe("teal-cool");
+    // The two provenance stamps render.json always carried but finalize never persisted (Wave-1 C):
+    // the plate subject (top-level string) and the structural family (nested `structure.dominant`).
+    expect(update.videoPlateSubject).toBe("ruin");
+    expect(update.videoStructure).toBe("filament");
   });
 
-  it("skips the R2 read when the body already carries the full set (incl. palette)", async () => {
+  it("skips the R2 read when the body already carries the full set (incl. structure + plate subject)", async () => {
     getTrackByIdOrLogId.mockResolvedValueOnce(TRACK);
     updateTrack.mockResolvedValueOnce({ fields: ["video_url"], trackId: TRACK_ID });
 
     const { handleOrpc } = await import("./orpc");
+    // The full set now includes the two provenance stamps render.json always carried
+    // (structure + plate subject); only when ALL are present is the R2 manifest read skipped.
     const response = await handleOrpc(
       post("/video/finalize", AGENT_TOKEN, {
         videoGrain: "grainBayer",
         videoPalette: "blue-cool",
+        videoPlateSubject: "hull",
         videoRegister: "abstract",
+        videoStructure: "cellular",
         videoVehicle: "thermal raptor",
       }),
     );
@@ -1647,6 +1659,8 @@ describe("oRPC finalize_track_video (POST .../video/finalize)", () => {
     const [, update] = updateTrack.mock.calls[0] as [string, Record<string, unknown>];
     expect(update.videoVehicle).toBe("thermal raptor");
     expect(update.videoPalette).toBe("blue-cool");
+    expect(update.videoStructure).toBe("cellular");
+    expect(update.videoPlateSubject).toBe("hull");
   });
 
   it("reads the manifest to recover palette when the body carries the trio but not palette", async () => {
