@@ -1156,6 +1156,22 @@ export const twitchAuth = sqliteTable("twitch_auth", {
   updatedAt: text("updated_at").notNull(),
 });
 
+// TikTok — the Display API OAuth store (Login Kit v2), same shape as youtube_auth /
+// twitch_auth (the box never holds the durable credential; the Worker mints an access
+// token on demand). The refresh token lives ~365 days and ROTATES on refresh (a new
+// value replaces the stored one), the access token ~24h. Used by the daily social-metrics
+// snapshot to read `POST /v2/video/list/` per-video metrics into the `social_metrics`
+// ledger under the `tiktok_display` source. DORMANT until the operator runs
+// `fluncle admin auth tiktok` and connects. Single row, service PK = "tiktok".
+export const tiktokAuth = sqliteTable("tiktok_auth", {
+  accessToken: text("access_token").notNull(),
+  expiresAt: text("expires_at").notNull(),
+  refreshToken: text("refresh_token").notNull(),
+  scope: text("scope").notNull(),
+  service: text("service").primaryKey(),
+  updatedAt: text("updated_at").notNull(),
+});
+
 // Instagram — the "Instagram API with Instagram Login" LONG-LIVED token (60 days) for
 // followers_count. There is NO refresh_token: the token itself is refreshed in place
 // (graph.instagram.com/refresh_access_token), so this table has no refresh column and

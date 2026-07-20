@@ -686,6 +686,9 @@ export type YouTubeAuthStartResponse = Ok<{ authUrl: string }>;
 /** `/api/admin/mixcloud/auth/start` response. */
 export type MixcloudAuthStartResponse = Ok<{ authUrl: string }>;
 
+/** `/api/admin/tiktok/auth/start` response (mirrors the YouTube shape). */
+export type TikTokAuthStartResponse = Ok<{ authUrl: string }>;
+
 /**
  * `/api/admin/lastfm/auth/start` response: the Last.fm desktop-auth request token
  * plus the authorize URL to approve it in-browser (logged in as `fluncle`). The

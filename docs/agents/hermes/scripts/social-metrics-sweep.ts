@@ -46,6 +46,7 @@ export type RecordSocialMetricsResponse = {
   ok?: boolean;
   polled?: number;
   referrals?: { total?: number };
+  tiktok?: { inserted?: number; matched?: number };
 };
 
 /** One tick's honest summary — the JSON line the /status prober reads. */
@@ -58,6 +59,10 @@ export type SocialMetricsSummary = {
   ok: boolean;
   polled: null | number;
   referralArrivals: null | number;
+  /** TikTok Display-API rows appended this tick (the `tiktok_display` source). */
+  tiktokInserted: null | number;
+  /** TikTok videos matched to a published post this tick. */
+  tiktokMatched: null | number;
 };
 
 /** The injected effects — so the tick's outcome mapping is provable with a stub (no network). */
@@ -78,6 +83,8 @@ export async function runSocialMetricsTick(deps: SocialMetricsDeps): Promise<Soc
     ok: true,
     polled: null,
     referralArrivals: null,
+    tiktokInserted: null,
+    tiktokMatched: null,
   };
 
   try {
@@ -97,6 +104,10 @@ export async function runSocialMetricsTick(deps: SocialMetricsDeps): Promise<Soc
     summary.missing = typeof response.missing === "number" ? response.missing : null;
     summary.referralArrivals =
       typeof response.referrals?.total === "number" ? response.referrals.total : null;
+    summary.tiktokInserted =
+      typeof response.tiktok?.inserted === "number" ? response.tiktok.inserted : null;
+    summary.tiktokMatched =
+      typeof response.tiktok?.matched === "number" ? response.tiktok.matched : null;
   } catch (error) {
     summary.ok = false;
     summary.error = error instanceof Error ? error.message : String(error);

@@ -562,6 +562,9 @@ const ADMIN_CARVE_OUT_ROUTE_PREFIXES = [
   // browser redirects like the others, not RPC JSON — permanent carve-outs.
   "twitch/auth/",
   "instagram/auth/",
+  // TikTok Display-API OAuth (per-video metrics ledger): 302 browser redirects like the
+  // others, not RPC JSON — a permanent carve-out.
+  "tiktok/auth/",
 ];
 
 const ADMIN_CARVE_OUT_ROUTES = new Set([

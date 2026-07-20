@@ -3,7 +3,7 @@ import { useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { Toaster } from "@fluncle/ui/components/sonner";
 
-// The OAuth connect routes (Spotify / YouTube / Mixcloud) redirect to
+// The OAuth connect routes (Spotify / YouTube / Mixcloud / TikTok) redirect to
 // `/admin?<service>=connected` after storing their token server-side. This mounts
 // the toaster and turns that marker into a toast, then strips it from the URL so a
 // refresh doesn't re-fire it. Lives in the admin shell — the public app stays
@@ -11,6 +11,7 @@ import { Toaster } from "@fluncle/ui/components/sonner";
 const CONNECTED_LABELS: Record<string, string> = {
   mixcloud: "Mixcloud connected",
   spotify: "Spotify connected",
+  tiktok: "TikTok connected",
   youtube: "YouTube connected",
 };
 

@@ -307,5 +307,195 @@ describe("recordSocialMetrics", () => {
     // The site-side reach block rides along regardless.
     expect(summary.referrals.total).toBe(42);
     expect(summary.referrals.arrivals).toEqual([{ pageviews: 42, platform: "tiktok" }]);
+    // The TikTok half is a clean no-op with no injected collector + no creds.
+    expect(summary.tiktok).toEqual({
+      configured: false,
+      fetched: 0,
+      inserted: 0,
+      matched: 0,
+      skipped: 0,
+    });
+  });
+});
+
+// A published tiktok post carrying its native-id permalink — the row the TikTok half matches
+// a `video/list` id against.
+async function seedTikTokPost(input: { trackId: string; videoId: string }): Promise<void> {
+  await db.execute({
+    args: [
+      crypto.randomUUID(),
+      input.trackId,
+      "tiktok",
+      "published",
+      `https://www.tiktok.com/@fluncle/video/${input.videoId}`,
+      NOW.toISOString(),
+      "2026-07-01T00:00:00.000Z",
+      "2026-07-01T00:00:00.000Z",
+    ],
+    sql: `insert into social_posts (id, track_id, platform, status, url, published_at, created_at, updated_at)
+          values (?, ?, ?, ?, ?, ?, ?, ?)`,
+  });
+}
+
+async function tiktokRowCount(externalId: string): Promise<number> {
+  const result = await db.execute({
+    args: [externalId],
+    sql: `select count(*) as n from social_metrics where external_id = ? and source = 'tiktok_display'`,
+  });
+
+  return Number(result.rows[0]?.n ?? 0);
+}
+
+describe("recordSocialMetrics — the TikTok Display-API half", () => {
+  it("matches each video to its post by native id and appends a tiktok_display snapshot; a same-day re-run appends nothing", async () => {
+    await seedTikTokPost({ trackId: "track-1", videoId: "999111" });
+
+    const collectTikTokVideos = () =>
+      Promise.resolve([{ comments: 4, id: "999111", likes: 30, shares: 2, views: 900 }]);
+
+    const first = await recordSocialMetrics({
+      collectTikTokVideos,
+      fetchAnalytics: () => Promise.resolve({ kind: "missing" }),
+      now: NOW,
+      readReferrers: () => Promise.resolve(NO_REFERRALS),
+    });
+
+    expect(first.tiktok).toEqual({
+      configured: true,
+      fetched: 1,
+      inserted: 1,
+      matched: 1,
+      skipped: 0,
+    });
+    expect(await tiktokRowCount("999111")).toBe(1);
+
+    const row = (
+      await db.execute({
+        args: ["999111"],
+        sql: `select * from social_metrics where external_id = ? and source = 'tiktok_display'`,
+      })
+    ).rows[0] as Record<string, unknown>;
+    expect(row.source).toBe("tiktok_display");
+    expect(row.platform).toBe("tiktok");
+    expect(row.track_id).toBe("track-1");
+    expect(Number(row.views)).toBe(900);
+    expect(Number(row.likes)).toBe(30);
+    expect(Number(row.shares)).toBe(2);
+    // Unreported columns stay null.
+    expect(row.impressions).toBeNull();
+
+    // Same UTC day again → idempotent (the (external_id, source, captured_day) key).
+    const second = await recordSocialMetrics({
+      collectTikTokVideos,
+      fetchAnalytics: () => Promise.resolve({ kind: "missing" }),
+      now: NOW,
+      readReferrers: () => Promise.resolve(NO_REFERRALS),
+    });
+
+    expect(second.tiktok.inserted).toBe(0);
+    expect(await tiktokRowCount("999111")).toBe(1);
+  });
+
+  it("coexists with the Postiz snapshot of the SAME post (source disambiguates the key)", async () => {
+    // The same finding, ONE tiktok post row carrying BOTH its Postiz id AND its native-id
+    // permalink: Postiz snapshots it by the POSTIZ id, TikTok by the NATIVE video id. Both land —
+    // the source is part of the idempotency key.
+    await db.execute({
+      args: [
+        crypto.randomUUID(),
+        "track-x",
+        "tiktok",
+        "published",
+        "postiz-id",
+        "https://www.tiktok.com/@fluncle/video/555",
+        NOW.toISOString(),
+        "2026-07-01T00:00:00.000Z",
+        "2026-07-01T00:00:00.000Z",
+      ],
+      sql: `insert into social_posts (id, track_id, platform, status, external_id, url, published_at, created_at, updated_at)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    });
+
+    const summary = await recordSocialMetrics({
+      collectTikTokVideos: () =>
+        Promise.resolve([{ comments: null, id: "555", likes: 9, shares: null, views: 80 }]),
+      fetchAnalytics: () =>
+        Promise.resolve({ kind: "metrics", metrics: metrics({ likes: 7, views: 70 }) }),
+      now: NOW,
+      readReferrers: () => Promise.resolve(NO_REFERRALS),
+    });
+
+    expect(summary.inserted).toBe(1); // the Postiz row
+    expect(summary.tiktok.inserted).toBe(1); // the tiktok_display row
+    expect(await metricsRowCount("postiz-id")).toBe(1);
+    expect(await tiktokRowCount("555")).toBe(1);
+  });
+
+  it("counts a video with no matching post as skipped (never inserts)", async () => {
+    const summary = await recordSocialMetrics({
+      collectTikTokVideos: () =>
+        Promise.resolve([{ comments: null, id: "orphan", likes: 1, shares: null, views: 1 }]),
+      fetchAnalytics: () => Promise.resolve({ kind: "missing" }),
+      now: NOW,
+      readReferrers: () => Promise.resolve(NO_REFERRALS),
+    });
+
+    expect(summary.tiktok).toEqual({
+      configured: true,
+      fetched: 1,
+      inserted: 0,
+      matched: 0,
+      skipped: 1,
+    });
+    expect(await tiktokRowCount("orphan")).toBe(0);
+  });
+
+  it("is a clean no-op when TikTok is unconnected (collector returns null)", async () => {
+    await seedTikTokPost({ trackId: "track-1", videoId: "999111" });
+
+    const summary = await recordSocialMetrics({
+      collectTikTokVideos: () => Promise.resolve(null),
+      fetchAnalytics: () => Promise.resolve({ kind: "missing" }),
+      now: NOW,
+      readReferrers: () => Promise.resolve(NO_REFERRALS),
+    });
+
+    expect(summary.tiktok.configured).toBe(false);
+    expect(summary.tiktok.fetched).toBe(0);
+    expect(await tiktokRowCount("999111")).toBe(0);
+  });
+
+  it("runs the TikTok half even with no Postiz key (independent source)", async () => {
+    delete process.env.POSTIZ_API_KEY;
+    await seedTikTokPost({ trackId: "track-1", videoId: "42" });
+
+    const summary = await recordSocialMetrics({
+      collectTikTokVideos: () =>
+        Promise.resolve([{ comments: null, id: "42", likes: 2, shares: null, views: 5 }]),
+      now: NOW,
+      readReferrers: () => Promise.resolve(NO_REFERRALS),
+    });
+
+    expect(summary.configured).toBe(false); // Postiz half no-op
+    expect(summary.tiktok.inserted).toBe(1); // TikTok half still ran
+    expect(await tiktokRowCount("42")).toBe(1);
+  });
+
+  it("never fails the run when the collector throws (logged + skipped)", async () => {
+    const summary = await recordSocialMetrics({
+      collectTikTokVideos: () => Promise.reject(new Error("tiktok 500")),
+      fetchAnalytics: () => Promise.resolve({ kind: "missing" }),
+      now: NOW,
+      readReferrers: () => Promise.resolve(NO_REFERRALS),
+    });
+
+    // The default no-op summary survives; the run itself did not throw.
+    expect(summary.tiktok).toEqual({
+      configured: false,
+      fetched: 0,
+      inserted: 0,
+      matched: 0,
+      skipped: 0,
+    });
   });
 });

@@ -25,6 +25,7 @@ const RESPONSE: RecordSocialMetricsResponse = {
   ok: true,
   polled: 25,
   referrals: { total: 137 },
+  tiktok: { inserted: 3, matched: 4 },
 };
 
 function deps(overrides: Partial<SocialMetricsDeps> = {}): SocialMetricsDeps {
@@ -46,6 +47,8 @@ describe("runSocialMetricsTick", () => {
     expect(summary.polled).toBe(25);
     expect(summary.missing).toBe(2);
     expect(summary.referralArrivals).toBe(137);
+    expect(summary.tiktokInserted).toBe(3);
+    expect(summary.tiktokMatched).toBe(4);
     expect(summary.error).toBeNull();
   });
 
@@ -78,5 +81,7 @@ describe("runSocialMetricsTick", () => {
     expect(summary.day).toBe("2026-07-20");
     expect(summary.inserted).toBeNull();
     expect(summary.referralArrivals).toBeNull();
+    expect(summary.tiktokInserted).toBeNull();
+    expect(summary.tiktokMatched).toBeNull();
   });
 });
