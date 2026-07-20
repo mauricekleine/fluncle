@@ -1,0 +1,5 @@
+# The enrichment scripts fetch real audio and write back through the admin API. Their
+# tests must not. `[test] preload` runs ONLY under `bun test`, so a real enrichment run
+# is untouched. See packages/test-support.
+[test]
+preload = ["@fluncle/test-support/preload"]

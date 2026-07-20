@@ -1,18 +1,19 @@
 {
-  "name": "@fluncle/registry",
+  "name": "@fluncle/test-support",
   "version": "0.1.0",
   "private": true,
   "license": "Apache-2.0",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    "./no-network": "./src/no-network.ts",
+    "./preload": "./src/preload.ts"
   },
   "scripts": {
     "test": "bun test",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
-    "@fluncle/test-support": "workspace:*",
+    "@types/bun": "catalog:",
     "@types/node": "catalog:",
     "typescript": "catalog:"
   }

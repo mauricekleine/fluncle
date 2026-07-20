@@ -64,8 +64,21 @@ function loadConfig(): void {
     return;
   }
 
-  config({ path: join(homedir(), `.config/fluncle/.env.${profile}`), quiet: true });
   loadedProfile = profile;
+
+  // Never hand the operator's real profile to a test run. `~/.config/fluncle/.env.production`
+  // holds a PRODUCTION admin token, and the default base URL is www.fluncle.com — so without
+  // this, one validation regression (or a new test that forgets to point at a fixture server)
+  // is a real admin command fired against the live archive. `bun test` sets NODE_ENV=test and
+  // the subprocess tests inherit it, so this one signal covers both the in-process suites and
+  // the spawn-the-real-binary ones. `bun run`/the shipped binary never set it, so nothing
+  // about how the CLI behaves for a human or on the box changes.
+  // The transport half of the same rail is packages/test-support (bunfig `[test] preload`).
+  if (process.env.NODE_ENV === "test") {
+    return;
+  }
+
+  config({ path: join(homedir(), `.config/fluncle/.env.${profile}`), quiet: true });
 }
 
 function getEnvProfile(): EnvProfile {

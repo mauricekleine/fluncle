@@ -30,6 +30,7 @@
         "dotenv": "catalog:",
       },
       "devDependencies": {
+        "@fluncle/test-support": "workspace:*",
         "@types/bun": "catalog:",
         "typescript": "catalog:",
       },
@@ -43,6 +44,7 @@
       "version": "0.1.0",
       "devDependencies": {
         "@fluncle/contracts": "workspace:*",
+        "@fluncle/test-support": "workspace:*",
         "@types/bun": "catalog:",
         "@types/chrome": "~0.2.2",
         "typescript": "catalog:",
@@ -94,6 +96,7 @@
         "react-native-worklets": "0.8.3",
       },
       "devDependencies": {
+        "@fluncle/test-support": "workspace:*",
         "@types/react": "catalog:",
         "eslint": "~9.39.4",
         "eslint-config-expo": "~56.0.4",
@@ -109,7 +112,9 @@
         "react": "~19.2.7",
       },
       "devDependencies": {
+        "@fluncle/test-support": "workspace:*",
         "@raycast/eslint-config": "~2.2.0",
+        "@types/bun": "catalog:",
         "@types/node": "catalog:",
         "@types/react": "catalog:",
         "typescript": "catalog:",
@@ -172,6 +177,7 @@
       },
       "devDependencies": {
         "@cloudflare/vite-plugin": "~1.42.4",
+        "@fluncle/test-support": "workspace:*",
         "@huggingface/transformers": "~3.8.1",
         "@playwright/test": "~1.61.1",
         "@sentry/vite-plugin": "~5.4.0",
@@ -196,6 +202,7 @@
         "zod": "catalog:",
       },
       "devDependencies": {
+        "@fluncle/test-support": "workspace:*",
         "@types/node": "catalog:",
         "typescript": "catalog:",
       },
@@ -207,6 +214,7 @@
         "@fluncle/video": "workspace:*",
       },
       "devDependencies": {
+        "@fluncle/test-support": "workspace:*",
         "@types/bun": "catalog:",
         "typescript": "catalog:",
       },
@@ -234,6 +242,8 @@
       "name": "@fluncle/registry",
       "version": "0.1.0",
       "devDependencies": {
+        "@fluncle/test-support": "workspace:*",
+        "@types/bun": "catalog:",
         "@types/node": "catalog:",
         "typescript": "catalog:",
       },
@@ -241,6 +251,15 @@
     "packages/sprites": {
       "name": "@fluncle/sprites",
       "version": "0.0.0",
+    },
+    "packages/test-support": {
+      "name": "@fluncle/test-support",
+      "version": "0.1.0",
+      "devDependencies": {
+        "@types/bun": "catalog:",
+        "@types/node": "catalog:",
+        "typescript": "catalog:",
+      },
     },
     "packages/tokens": {
       "name": "@fluncle/tokens",
@@ -290,6 +309,7 @@
         "remotion": "catalog:",
       },
       "devDependencies": {
+        "@fluncle/test-support": "workspace:*",
         "@types/bun": "catalog:",
         "@types/react": "catalog:",
         "@types/react-dom": "catalog:",
@@ -770,6 +790,8 @@
     "@fluncle/sprites": ["@fluncle/sprites@workspace:packages/sprites"],
 
     "@fluncle/ssh": ["@fluncle/ssh@workspace:apps/ssh"],
+
+    "@fluncle/test-support": ["@fluncle/test-support@workspace:packages/test-support"],
 
     "@fluncle/tokens": ["@fluncle/tokens@workspace:packages/tokens"],
 

@@ -1,0 +1,3 @@
+[test]
+# No test in this package reaches the real internet. See packages/test-support.
+preload = ["@fluncle/test-support/preload"]

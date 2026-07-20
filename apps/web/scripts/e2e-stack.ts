@@ -92,7 +92,16 @@ async function main(): Promise<void> {
   console.log(`e2e-stack: booting Vite on :${VITE_PORT}…`);
   vite = Bun.spawn(
     ["bun", "run", "dev:vite", "--", "--host", "127.0.0.1", "--port", String(VITE_PORT)],
-    { cwd: WEB_ROOT, env: process.env, stdio: ["ignore", "inherit", "inherit"] },
+    {
+      cwd: WEB_ROOT,
+      // Arms the SERVER half of the no-network rail (vite.config.ts's
+      // `e2eNoNetworkGuard`). The browser stub in tests/e2e/browser.ts covers what the
+      // page asks for; this covers what the dev server does behind those requests —
+      // otherwise a `/podcast.xml` render HEADs the production CDN and a preview lookup
+      // reaches itunes.apple.com, with the template's fake creds in hand.
+      env: { ...process.env, FLUNCLE_E2E_BLOCK_OUTBOUND: "1" },
+      stdio: ["ignore", "inherit", "inherit"],
+    },
   );
 
   // Block on Vite: this keeps the orchestrator (and thus turso) alive for the

@@ -39,6 +39,7 @@
     "remotion": "catalog:"
   },
   "devDependencies": {
+    "@fluncle/test-support": "workspace:*",
     "@types/bun": "catalog:",
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",

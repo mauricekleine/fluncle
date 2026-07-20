@@ -1,4 +1,5 @@
 [test]
 # Stub @raycast/api before any test file imports fluncle.ts. The real module's
 # entry is resolved by the Raycast CLI at build time, not by bun. See test-preload.ts.
-preload = ["./test-preload.ts"]
+# No test in this package reaches the real internet. See packages/test-support.
+preload = ["@fluncle/test-support/preload", "./test-preload.ts"]
