@@ -29,6 +29,9 @@
     "smoke:routine": "bun run scripts/smoke-routine.ts",
     "smoke:shell": "bun tests/browser/shell-smoke.ts",
     "smoke:touch": "bun tests/browser/admin-touch-smoke.ts",
+    "test:e2e": "playwright test",
+    "test:e2e:install": "playwright install chromium",
+    "test:e2e:report": "playwright show-report",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --coverage"
   },
@@ -83,6 +86,7 @@
   "devDependencies": {
     "@cloudflare/vite-plugin": "~1.42.4",
     "@huggingface/transformers": "~3.8.1",
+    "@playwright/test": "~1.61.1",
     "@sentry/vite-plugin": "~5.4.0",
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
