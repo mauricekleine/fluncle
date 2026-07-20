@@ -556,11 +556,11 @@ function LogPage() {
         <section aria-label="How to read a Log ID" className="log-decode">
           <h2>How to read the coordinate</h2>
           <p>
-            <span className="log-decode-part">{sector}</span> is the sector: the days between the
-            epoch, 2026-05-30, and the day this one was found.{" "}
-            <span className="log-decode-part">{tail}</span> is the tail: a stable signature of the
-            recording itself, so a coordinate reads found, not numbered. Stamped once, never
-            changed. <Link to="/about">More on Log IDs and the Galaxy</Link>.
+            <span className="log-decode-part">{sector}</span> counts the days from the start of my
+            log, 2026-05-30, to the day I found this one.{" "}
+            <span className="log-decode-part">{tail}</span> comes from the recording itself, so this
+            track keeps the same code forever. Found, not numbered. Stamped once, never changed.{" "}
+            <Link to="/about">More on Log IDs and the Galaxy</Link>.
           </p>
         </section>
 
