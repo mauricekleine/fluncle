@@ -20,40 +20,18 @@ import { fluncleEntityId, fluncleWebsiteId, siteUrl, telegramUrl } from "@/lib/f
 import { fluncleAsciiLogo, fluncleDescription } from "@/lib/identity";
 import { jsonLdScript } from "@/lib/json-ld";
 import { type FeedItem } from "@/lib/mixtapes";
-import { isGalaxyMapFullyNamed } from "@/lib/server/galaxies-map";
-import { getLiveState } from "@/lib/server/live";
-import { listTracks } from "@/lib/server/tracks";
 import { fetchTracks, type TracksResponse } from "@/lib/tracks";
 import { registerWebMcpTools } from "@/lib/webmcp";
-
-const pageSize = 10;
+import { HOME_PAGE_SIZE, loadHomeData } from "./-home-data";
 
 type HomeSearch = {
   /** The Log ID of the story open in the dialog (masked to /log/<id>). */
   story?: string;
 };
 
-// Server-rendering the first page keeps the archive readable for crawlers
-// (search engines and AI agents alike) that never execute JavaScript. Alongside
-// it we resolve the newest finding WITH footage across the whole archive, so the
-// cover's story ring opens the viewer at the latest story even when that story
-// isn't on the first page (it usually isn't, once newer findings land before
-// their footage does). Same ordering as the stories feed, so it lines up.
-const fetchHomeData = createServerFn({ method: "GET" }).handler(async () => {
-  const [page, latestStory, live, galaxiesLive] = await Promise.all([
-    listTracks({ includeMixtapes: true, lean: true, limit: pageSize }),
-    listTracks({ hasVideo: true, lean: true, limit: 1 }),
-    // The live-set callout, read server-side so the banner SSRs with no flash
-    // (staleness already applied). Offline almost always — a quiet, cheap read.
-    getLiveState(),
-    // The browse-by-feel launch gate (decision 5): the dev-row Galaxies link stays
-    // dark until the whole sonic map is named, so the homepage never links a lens
-    // that 404s. One cheap COUNT; lights up the moment the last name lands.
-    isGalaxyMapFullyNamed(),
-  ]);
-
-  return { ...page, galaxiesLive, live, newestStoryLogId: latestStory.tracks[0]?.logId };
-});
+// The home feed's composition lives in `./-home-data` (a testable pure function); the serverFn is a
+// thin wrapper so the loader keeps its one-primitive shape.
+const fetchHomeData = createServerFn({ method: "GET" }).handler(loadHomeData);
 
 // Route options follow TanStack's create-route-property-order (each step feeds the
 // next's inferred types), which isn't alphabetical — so sort-keys is off here.
@@ -189,7 +167,7 @@ function HomePage() {
     // below); narrow it to the plain feed page the queryFn returns.
     initialData: { pageParams: [undefined], pages: [initialPage as TracksResponse] },
     initialPageParam: undefined as string | undefined,
-    queryFn: ({ pageParam }) => fetchTracks({ cursor: pageParam, limit: pageSize }),
+    queryFn: ({ pageParam }) => fetchTracks({ cursor: pageParam, limit: HOME_PAGE_SIZE }),
     queryKey: ["home-feed"],
     refetchOnWindowFocus: false,
   });
