@@ -5,12 +5,8 @@ import { getDb, typedRow, typedRows } from "./db";
 import {
   type CatalogueHubNumberedPage,
   type CatalogueHubQuery,
-  countEditorial,
-  type EditorialHubPage,
-  editorialArgs,
-  editorialPage,
   type EntitySitemapRow,
-  listCatalogueHubPage,
+  listHubPage,
 } from "./labels";
 import { logEvent } from "./log";
 import { bestArtistAvatarUrl } from "../media";
@@ -73,20 +69,6 @@ export type ArtistRecord = {
 export type ArtistSocialLink = {
   platform: ArtistSocialPlatform;
   url: string;
-};
-
-/**
- * A row in the `/artists` editorial index — exactly the three fields the card renders. A
- * representative album cover and the freshest-finding `lastmod` used to ride along "for the
- * sitemap"; the sitemap has driven off `listArtistSitemapRows` for a while now, so both were dead
- * weight — and the cover in particular was a correlated subquery per row, on every render.
- */
-export type ArtistIndexEntry = {
-  findingCount: number;
-  /** The artist's avatar — their OWNED master when resolved, else the raw Spotify profile image. */
-  imageUrl: string | undefined;
-  name: string;
-  slug: string;
 };
 
 function optionalText(value: unknown): string | undefined {
@@ -311,8 +293,7 @@ export async function getArtistSlugMap(trackId: string): Promise<Record<string, 
 
 /**
  * The CANONICAL coordinate-bearing finding count for one artist — the pure
- * `track_artists` inner join (NO `artists_json` fallback), the SAME count the
- * `/artists` index uses (`listArtistsWithFindingCounts`). It is the artist page's
+ * `track_artists` inner join (NO `artists_json` fallback). It is the artist page's
  * FINDING count (the masthead line, the dossier); the page's `indexable` gate adds
  * the catalogue total to it (findings PLUS renderable catalogue tracks), keyed off the
  * canonical join both sides so an indexable page is never orphaned from the sitemap.
@@ -331,63 +312,6 @@ export async function countArtistFindings(artistId: string): Promise<number> {
   const count = row?.["finding_count"];
 
   return typeof count === "number" ? count : 0;
-}
-
-/** The findings-joined row source both the `/artists` editorial slice and its total group over. */
-const ARTISTS_EDITORIAL_FROM = `from artists a
-          join track_artists ta on ta.artist_id = a.id
-          join (findings join tracks on tracks.track_id = findings.track_id) t
-            on t.track_id = ta.track_id and t.log_id is not null
-          group by a.id`;
-
-/**
- * One windowed page of every artist that has at least one coordinate-bearing finding, with its
- * finding count and its avatar. Ordered alphabetically by name (case-insensitive) — the `/artists`
- * index order. The sitemap is a separate read (`listArtistSitemapRows`).
- */
-export async function listArtistsWithFindingCounts(
-  page: number,
-): Promise<EditorialHubPage<ArtistIndexEntry>> {
-  const db = await getDb();
-  const [slice, total] = await Promise.all([
-    db.execute({
-      args: editorialArgs(page),
-      sql: `select a.name as name, a.slug as slug, a.image_url as image_url,
-                   a.image_key as image_key, a.image_state as image_state,
-                   a.image_updated_at as image_updated_at,
-                   count(t.track_id) as finding_count
-            ${ARTISTS_EDITORIAL_FROM}
-            order by a.name collate nocase asc
-            limit ? offset ?`,
-    }),
-    countEditorial(`select 1 ${ARTISTS_EDITORIAL_FROM}`),
-  ]);
-
-  const items: ArtistIndexEntry[] = [];
-
-  for (const raw of slice.rows) {
-    const row = raw as Record<string, unknown>;
-    const name = row["name"];
-    const slug = row["slug"];
-    const findingCount = row["finding_count"];
-
-    if (typeof name === "string" && typeof slug === "string" && typeof findingCount === "number") {
-      items.push({
-        findingCount,
-        // The OWNED avatar master (RFC U3b) when resolved, else the raw Spotify image_url.
-        imageUrl: bestArtistAvatarUrl({
-          imageKey: optionalText(row["image_key"]),
-          imageState: optionalText(row["image_state"]),
-          imageUpdatedAt: optionalText(row["image_updated_at"]),
-          imageUrl: optionalText(row["image_url"]),
-        }),
-        name,
-        slug,
-      });
-    }
-  }
-
-  return editorialPage(items, page, total);
 }
 
 /**
@@ -437,23 +361,27 @@ export async function listArtistSitemapRows(minTracks: number): Promise<EntitySi
   }));
 }
 
-/** An artist tile in the "also in the catalogue" section — the quiet, unlit twin of a hub row. */
-export type ArtistCatalogueEntry = {
-  /** The artist's canonical Spotify avatar (undefined → the tile renders a monogram). */
+/** An artist tile in the unified `/artists` index — lit (certified) or unlit, one row shape for both. */
+export type ArtistHubEntry = {
+  /** True ⇔ the artist has ≥1 coordinate-bearing finding — the certification light, visual only. */
+  certified: boolean;
+  /** The artist's avatar — their OWNED master when resolved, else the raw Spotify profile image
+      (undefined → the tile renders a monogram). */
   imageUrl: string | undefined;
   name: string;
   slug: string;
-  /** Renderable tracks credited to the artist (all catalogue here, since they carry no findings). */
+  /** Renderable tracks credited to the artist — findings plus the quieter rows, the tile's "N tracks". */
   trackCount: number;
 };
 
-/** The ARTISTS hub's `?page=N` + A–Z reads, over the findings-free, floor-gated set of artists. */
-const ARTISTS_HUB_QUERY: CatalogueHubQuery<ArtistCatalogueEntry> = {
+/** The ARTISTS hub's `?page=N` + A–Z reads, over every floor-clearing artist (certified + catalogue). */
+const ARTISTS_HUB_QUERY: CatalogueHubQuery<ArtistHubEntry> = {
   entity: "artists a",
   floor: ARTIST_INDEX_MIN_FINDINGS,
   from: "artists a join track_artists ta on ta.artist_id = a.id join tracks on tracks.track_id = ta.track_id",
   groupBy: "a.id",
   mapRow: (row) => ({
+    certified: Boolean(row.certified),
     // The OWNED avatar master (RFC U3b) when resolved, else the raw Spotify image_url.
     imageUrl: bestArtistAvatarUrl({
       imageKey: row.image_key ?? null,
@@ -471,13 +399,14 @@ const ARTISTS_HUB_QUERY: CatalogueHubQuery<ArtistCatalogueEntry> = {
 };
 
 /**
- * One numbered page of the `/artists` hub's findings-free section (the crawlable `?page=N` view),
- * carrying the A–Z fast lane: each present letter → the page its first artist lands on.
+ * One numbered page of the unified `/artists` index (the crawlable `?page=N` view) — every artist
+ * Fluncle holds, certified and catalogue alike, carrying the A–Z fast lane: each present letter →
+ * the page its first artist lands on.
  */
-export function listArtistsCataloguePage(
+export function listArtistsHubPage(
   page: number,
-): Promise<CatalogueHubNumberedPage<ArtistCatalogueEntry>> {
-  return listCatalogueHubPage(ARTISTS_HUB_QUERY, page, true);
+): Promise<CatalogueHubNumberedPage<ArtistHubEntry>> {
+  return listHubPage(ARTISTS_HUB_QUERY, page, true);
 }
 
 /** An artist chip on a graph page (the label's roster, the album's credits). */

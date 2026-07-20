@@ -4,12 +4,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { CataloguePager } from "./catalogue-groups";
-import {
-  CatalogueHubPageSection,
-  HubLetterLane,
-  HubYearLane,
-  laneScrollAffordances,
-} from "./catalogue-hub-section";
+import { HubLetterLane, HubYearLane, laneScrollAffordances } from "./catalogue-hub-section";
 
 const buildHref = (page: number) => (page <= 1 ? "/artists" : `/artists?page=${page}`);
 
@@ -125,47 +120,5 @@ describe("CataloguePager (the hub's numbered pager) renders real anchors", () =>
         <CataloguePager buildHref={buildHref} label="x" page={1} pageCount={1} />,
       ),
     ).toBe("");
-  });
-});
-
-describe("CatalogueHubPageSection", () => {
-  it("SSRs the page's tiles plus its head lane and its footer pager", () => {
-    const html = renderToStaticMarkup(
-      <CatalogueHubPageSection
-        gridClassName="artist-grid"
-        heading="More artists"
-        headingId="artists-catalogue-heading"
-        items={[{ slug: "aphrodite" }, { slug: "bcee" }]}
-        lane={
-          <HubLetterLane
-            buildHref={buildHref}
-            label="Artists A to Z"
-            letters={[{ letter: "a", page: 1 }]}
-          />
-        }
-        listLabel="More artists"
-        pager={
-          <CataloguePager
-            buildHref={buildHref}
-            label="More artists, more pages"
-            page={1}
-            pageCount={3}
-          />
-        }
-        renderTile={(entry) => (
-          <li key={entry.slug}>
-            <a href={`/artist/${entry.slug}`}>{entry.slug}</a>
-          </li>
-        )}
-      />,
-    );
-
-    // Every tile is in the HTML (not fetched on scroll) — the crawler sees them all.
-    expect(html).toContain('href="/artist/aphrodite"');
-    expect(html).toContain('href="/artist/bcee"');
-    // The lane rides in the head; the pager rides below.
-    expect(html).toContain("catalogue-letter");
-    expect(html).toContain("Page 1 of 3");
-    expect(html).toContain('id="artists-catalogue-heading"');
   });
 });

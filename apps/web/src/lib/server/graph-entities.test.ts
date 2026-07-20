@@ -27,12 +27,11 @@ import {
   ensureAlbum,
   getAlbumBySlug,
   linkTrackToAlbum,
-  listAlbumsCataloguePage,
+  listAlbumsHubPage,
   listAlbumsMissingBio,
   listAlbumSitemapRows,
-  listAlbumsWithFindingCounts,
 } from "./albums";
-import { listArtistsCataloguePage, listArtistsMissingBio, upsertTrackArtists } from "./artists";
+import { listArtistsHubPage, listArtistsMissingBio, upsertTrackArtists } from "./artists";
 import { flattenArtistGroups, listLabelCatalogue } from "./catalogue-groups";
 import { createIntegrationDb } from "./integration-db";
 import { getGraphPreview } from "./graph-preview";
@@ -40,9 +39,8 @@ import {
   getLabelBySlug,
   getLabelForAlbum,
   linkTrackToLabel,
-  listLabelsCataloguePage,
+  listLabelsHubPage,
   listLabelsMissingBio,
-  listLabelsWithFindingCounts,
 } from "./labels";
 import { getFindingsByAlbum, getFindingsByLabel, listCatalogueTracksByAlbum } from "./tracks";
 
@@ -350,20 +348,24 @@ describe("the finding reads vs the anti-join (the safety property)", () => {
     expect(labelTracks[0]).not.toHaveProperty("logId");
   });
 
-  it("counts only the FINDINGS on the editorial index reads", async () => {
-    const albums = await listAlbumsWithFindingCounts(1);
-    const labels = await listLabelsWithFindingCounts(1);
+  it("carries a certified entity into the unified index, lit, with the renderable track count", async () => {
+    const albums = await listAlbumsHubPage(1);
+    const labels = await listLabelsHubPage(1);
 
-    // The finding count is what the page SHOWS, and it is now the only count these reads carry:
-    // the quieter rows are the sitemap's business (listAlbumSitemapRows / listLabelSitemapRows),
-    // so the hub no longer pays a catalogue-scale correlated count per editorial row.
-    expect(albums.items[0]).toEqual({
-      coverImageUrl: undefined,
-      findingCount: 1,
+    // The unified index lists every entity Fluncle holds. Wormhole / Hospital each carry a finding,
+    // so they read CERTIFIED (the certification light), and the tile counts RENDERABLE tracks — the
+    // finding plus the quieter catalogue row beneath it (t1 + t2 = 2), the superset noun.
+    expect(albums.items[0]).toMatchObject({
+      certified: true,
       name: "Wormhole",
       slug: "wormhole",
+      trackCount: 2,
     });
-    expect(labels.items[0]).toMatchObject({ findingCount: 1, name: "Hospital Records" });
+    expect(labels.items[0]).toMatchObject({
+      certified: true,
+      name: "Hospital Records",
+      trackCount: 2,
+    });
     expect(albums.total).toBe(1);
     expect(labels.total).toBe(1);
   });
@@ -546,8 +548,10 @@ describe("the album sitemap is catalogue-aware: a findings-free album with enoug
   });
 });
 
-describe("the album index is bounded by the ARCHIVE, not the catalogue", () => {
-  it("never lists an album Fluncle has no finding on", async () => {
+describe("the unified album index: certified + floor-clearing catalogue, one A–Z list", () => {
+  it("lists a certified album (lit) and a floor-clearing catalogue album (unlit), alphabetically", async () => {
+    // A CERTIFIED album: one finding, below the ≥3 floor, but a finding is always in — the light is
+    // its certification, not its size.
     await seedTrack({
       album: "Wormhole",
       label: null,
@@ -555,22 +559,50 @@ describe("the album index is bounded by the ARCHIVE, not the catalogue", () => {
       title: "A",
       trackId: "t1",
     });
-    await seedTrack({ album: "Never Found", label: null, title: "B", trackId: "t2" });
+
+    // A CATALOGUE-only album that clears the renderable floor (3 tracks, no finding): minted inline
+    // like the crawler does. It joins the SAME index, unlit.
+    const deepId = await ensureAlbum("Deep Space", "rg-deep-space");
+    for (const trackId of ["d1", "d2", "d3"]) {
+      await seedTrack({ album: "Deep Space", label: null, title: trackId, trackId });
+    }
+    await db.execute({
+      args: [deepId ?? "", "d1", "d2", "d3"],
+      sql: `update tracks set album_id = ? where track_id in (?, ?, ?)`,
+    });
+
+    // A THIN catalogue album (1 track, below the floor): out of the index, though its page renders.
+    const faintId = await ensureAlbum("Faint", "rg-faint");
+    await seedTrack({ album: "Faint", label: null, title: "one", trackId: "f1" });
+    await db.execute({
+      args: [faintId ?? "", "f1"],
+      sql: `update tracks set album_id = ? where track_id = ?`,
+    });
+
     await reconcile();
 
-    expect((await listAlbumsWithFindingCounts(1)).items.map((album) => album.slug)).toEqual([
-      "wormhole",
+    const page = await listAlbumsHubPage(1);
+
+    // Alphabetical, both registers in one list; the thin catalogue album is absent.
+    expect(page.items.map((album) => album.slug)).toEqual(["deep-space", "wormhole"]);
+    expect(page.total).toBe(2);
+    // The certification light rides the flag: Deep Space unlit, Wormhole lit.
+    expect(page.items.map((album) => ({ certified: album.certified, slug: album.slug }))).toEqual([
+      { certified: false, slug: "deep-space" },
+      { certified: true, slug: "wormhole" },
     ]);
+    // The tile counts RENDERABLE tracks (the superset noun), never findings.
+    expect(page.items.find((album) => album.slug === "deep-space")?.trackCount).toBe(3);
   });
 });
 
-// The hub's SECOND section: the INDEXABLE findings-free entities, the complement of the editorial
-// index reads above, served as a numbered `?page=N` surface (listXxxCataloguePage) with an A–Z lane
-// (listXxxCatalogueLetters). The load-bearing contract: (1) a findings-BEARING entity is NEVER here
-// (it belongs to the editorial section), (2) the ≥3 renderable-track floor gates a thin entity out,
-// (3) the right disjoint slice per page with an honest total + pageCount, and (4) a page past the
-// end THROWS (so the route 404s) rather than clamping to page 1.
-describe('the hub "more <entities>" ?page=N section', () => {
+// The unified hub, served as a numbered `?page=N` surface (listXxxHubPage) with an A–Z lane. The
+// load-bearing contract: (1) EVERY entity Fluncle holds is here — certified findings AND the wider
+// catalogue, in one alphabetical list, each row carrying its `certified` flag; (2) the ≥3
+// renderable-track floor gates a thin UNCERTIFIED entity out (a certified one is always in); (3) the
+// right disjoint slice per page with an honest total + pageCount; and (4) a page past the end
+// returns an honest empty page (so the ROUTE 404s off page > pageCount) rather than clamping to page 1.
+describe("the unified hub ?page=N index", () => {
   /** Seed N findings-free catalogue tracks on one LABEL, stamping the label_id pointer. */
   async function seedCatalogueLabel(label: string, count: number): Promise<void> {
     for (let track = 0; track < count; track++) {
@@ -588,7 +620,7 @@ describe('the hub "more <entities>" ?page=N section', () => {
       await seedCatalogueLabel(`Imprint ${String(label).padStart(2, "0")}`, 3);
     }
 
-    const one = await listLabelsCataloguePage(1);
+    const one = await listLabelsHubPage(1);
     expect(one.items).toHaveLength(48);
     expect(one.page).toBe(1);
     expect(one.total).toBe(49);
@@ -596,7 +628,7 @@ describe('the hub "more <entities>" ?page=N section', () => {
     expect(one.items[0]?.slug).toBe("imprint-00");
     expect(one.items[0]?.trackCount).toBe(3);
 
-    const two = await listLabelsCataloguePage(2);
+    const two = await listLabelsHubPage(2);
     expect(two.items).toHaveLength(1);
     expect(two.page).toBe(2);
     expect(two.total).toBe(49);
@@ -609,7 +641,7 @@ describe('the hub "more <entities>" ?page=N section', () => {
 
     // A page past the end is an honest empty page with the real total, never a clamp to page 1
     // (which would duplicate its URL); the route turns "past the end of every section" into a 404.
-    expect(await listLabelsCataloguePage(3)).toMatchObject({
+    expect(await listLabelsHubPage(3)).toMatchObject({
       items: [],
       page: 3,
       pageCount: 2,
@@ -618,7 +650,7 @@ describe('the hub "more <entities>" ?page=N section', () => {
   });
 
   it("LABELS: page 1 of an empty hub is a real empty page, not a throw", async () => {
-    const page = await listLabelsCataloguePage(1);
+    const page = await listLabelsHubPage(1);
 
     expect(page).toEqual({ items: [], letters: [], page: 1, pageCount: 1, total: 0 });
   });
@@ -630,7 +662,7 @@ describe('the hub "more <entities>" ?page=N section', () => {
     // A thin label (below the floor) is absent from the lane, exactly as it is from the page.
     await seedCatalogueLabel("Thin Imprint", 2);
 
-    const letters = (await listLabelsCataloguePage(1)).letters ?? [];
+    const letters = (await listLabelsHubPage(1)).letters ?? [];
 
     // Everything fits on page 1 here; the digit-led "9 imprint" folds into the "#" bucket.
     expect(letters).toEqual(
@@ -649,16 +681,16 @@ describe('the hub "more <entities>" ?page=N section', () => {
       await upsertTrackArtists(trackId, ["Deep Artist"], [], { fillImages: false });
     }
 
-    const page = await listArtistsCataloguePage(1);
+    const page = await listArtistsHubPage(1);
     expect(page.items.map((entry) => entry.name)).toEqual(["Deep Artist"]);
     expect(page.total).toBe(1);
     expect(page.pageCount).toBe(1);
 
     expect(page.letters).toEqual([{ letter: "d", page: 1 }]);
 
-    // A page past the end is an honest EMPTY page carrying the real total — the route (which also
-    // has an editorial section to place) decides the 404. Nothing is ever clamped to page 1.
-    const past = await listArtistsCataloguePage(2);
+    // A page past the end is an honest EMPTY page carrying the real total — the route decides the
+    // 404 off `page > pageCount`. Nothing is ever clamped to page 1.
+    const past = await listArtistsHubPage(2);
     expect(past).toMatchObject({ items: [], page: 2, pageCount: 1, total: 1 });
   });
 
@@ -673,17 +705,16 @@ describe('the hub "more <entities>" ?page=N section', () => {
       await linkTrackToAlbum(trackId, "Thin Record");
     }
 
-    const page = await listAlbumsCataloguePage(1);
+    const page = await listAlbumsHubPage(1);
     expect(page.items.map((entry) => entry.slug)).toEqual(["deep-record"]);
     expect(page.total).toBe(1);
     expect(page.pageCount).toBe(1);
 
-    expect(await listAlbumsCataloguePage(2)).toMatchObject({ items: [], page: 2, total: 1 });
+    expect(await listAlbumsHubPage(2)).toMatchObject({ items: [], page: 2, total: 1 });
   });
 
-  it("LABELS: a findings-bearing label is excluded (sum(certified) = 0), findings-free is in", async () => {
-    // A findings-BEARING label with 3 renderable tracks (1 finding + 2 catalogue): it clears the
-    // floor, but `sum(certified) = 0` keeps it out — it lives in the EDITORIAL section, never here.
+  it("LABELS: a findings-bearing label is LIT and a findings-free floor-clearing one is UNLIT, both in one list", async () => {
+    // A findings-BEARING label (1 finding + 2 catalogue): certified, so it reads LIT and is always in.
     await seedTrack({
       album: null,
       label: "Certified Imprint",
@@ -697,20 +728,26 @@ describe('the hub "more <entities>" ?page=N section', () => {
       await linkTrackToLabel(trackId, "Certified Imprint");
     }
 
-    // A findings-FREE label with 3 catalogue tracks clears the floor, so it belongs here.
+    // A findings-FREE label with 3 catalogue tracks clears the floor: UNLIT, and in the same list.
     await seedCatalogueLabel("Deep Catalogue", 3);
 
-    const page = await listLabelsCataloguePage(1);
-    expect(page.items.map((entry) => entry.slug)).toEqual(["deep-catalogue"]);
-    expect(page.total).toBe(1);
+    const page = await listLabelsHubPage(1);
+    // Both, alphabetical; the certification light rides the `certified` flag, never a heading.
+    expect(page.items.map((entry) => ({ certified: entry.certified, slug: entry.slug }))).toEqual([
+      { certified: true, slug: "certified-imprint" },
+      { certified: false, slug: "deep-catalogue" },
+    ]);
+    expect(page.total).toBe(2);
+    // The tile counts RENDERABLE tracks (findings + the quieter rows), the superset noun.
+    expect(page.items.find((entry) => entry.slug === "certified-imprint")?.trackCount).toBe(3);
   });
 });
 
-// The COVER a hub tile renders, and the WINDOW the editorial list is served through. Two things the
+// The COVER a hub tile renders, and the WINDOW the unified index is served through. Two things the
 // hubs used to get wrong at once: every cover was hotlinked raw off whichever provider captured it
 // (the album's OWNED master on Fluncle's R2 was never consulted, though the sweep had resolved one),
-// and the editorial list SSR'd whole — every logged entity, on every page, forever.
-describe("the hub tiles: the owned cover master + the editorial window", () => {
+// and the list SSR'd whole — every entity, on every page, forever.
+describe("the hub tiles: the owned cover master + the 48-tile window", () => {
   /** Point a track at a raw provider cover (what the capture stored on the track row). */
   async function setTrackCover(trackId: string, url: string): Promise<void> {
     await db.execute({
@@ -741,7 +778,7 @@ describe("the hub tiles: the owned cover master + the editorial window", () => {
     await reconcile();
     await resolveAlbumMaster("wormhole", "albums/wormhole.jpg");
 
-    const [album] = (await listAlbumsWithFindingCounts(1)).items;
+    const [album] = (await listAlbumsHubPage(1)).items;
 
     expect(album?.coverImageUrl).toBe(
       "https://found.fluncle.com/cdn-cgi/image/width=640,format=auto/https://found.fluncle.com/albums/wormhole.jpg?v=1784505600000",
@@ -749,7 +786,7 @@ describe("the hub tiles: the owned cover master + the editorial window", () => {
 
     // The LABEL borrows that same record's cover, and must borrow the owned master with it — the
     // four columns have to come off ONE picked track, never a mix of two.
-    const [label] = (await listLabelsWithFindingCounts(1)).items;
+    const [label] = (await listLabelsHubPage(1)).items;
 
     expect(label?.coverImageUrl).toBe(album?.coverImageUrl);
   });
@@ -765,8 +802,8 @@ describe("the hub tiles: the owned cover master + the editorial window", () => {
     await setTrackCover("t1", "https://coverartarchive.org/release/abc/front");
     await reconcile();
 
-    const [album] = (await listAlbumsWithFindingCounts(1)).items;
-    const [label] = (await listLabelsWithFindingCounts(1)).items;
+    const [album] = (await listAlbumsHubPage(1)).items;
+    const [label] = (await listLabelsHubPage(1)).items;
 
     expect(album?.coverImageUrl).toBe("https://coverartarchive.org/release/abc/front");
     expect(label?.coverImageUrl).toBe("https://coverartarchive.org/release/abc/front");
@@ -780,14 +817,14 @@ describe("the hub tiles: the owned cover master + the editorial window", () => {
     }
     await resolveAlbumMaster("deep-record", "albums/deep-record.jpg");
 
-    const page = await listAlbumsCataloguePage(1);
+    const page = await listAlbumsHubPage(1);
 
     expect(page.items[0]?.coverImageUrl).toContain("/cdn-cgi/image/width=640,format=auto/");
     expect(page.items[0]?.coverImageUrl).toContain("albums/deep-record.jpg");
   });
 
-  it("windows the editorial list at 48, with an honest total on every page", async () => {
-    // 50 logged records → two pages: 48 + 2. Zero-padded names so the alphabetical order is
+  it("windows the unified index at 48, with an honest total on every page", async () => {
+    // 50 certified records → two pages: 48 + 2. Zero-padded names so the alphabetical order is
     // deterministic across the page boundary.
     for (let album = 0; album < 50; album++) {
       const name = `Record ${String(album).padStart(2, "0")}`;
@@ -797,8 +834,8 @@ describe("the hub tiles: the owned cover master + the editorial window", () => {
       await linkTrackToAlbum(trackId, name);
     }
 
-    const one = await listAlbumsWithFindingCounts(1);
-    const two = await listAlbumsWithFindingCounts(2);
+    const one = await listAlbumsHubPage(1);
+    const two = await listAlbumsHubPage(2);
 
     expect(one.items).toHaveLength(48);
     expect(one.total).toBe(50);
@@ -807,9 +844,9 @@ describe("the hub tiles: the owned cover master + the editorial window", () => {
 
     expect(two.items.map((entry) => entry.name)).toEqual(["Record 48", "Record 49"]);
     // The total is a SEPARATE read precisely so it stays honest past the window's end — the
-    // header's "N logged" and the pager's reach both key off it.
+    // masthead count and the pager's reach both key off it.
     expect(two.total).toBe(50);
-    expect((await listAlbumsWithFindingCounts(3)).total).toBe(50);
+    expect((await listAlbumsHubPage(3)).total).toBe(50);
 
     // The window is disjoint: page 2 is never a re-slice of page 1.
     const onPageOne = new Set(one.items.map((entry) => entry.slug));
