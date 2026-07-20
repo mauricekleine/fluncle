@@ -89,8 +89,9 @@ describe("assignRegister — largest deficit vs target", () => {
     );
     const register = assignRegister(entries);
     expect(["abstract", "framed"]).toContain(register);
-    // Abstract has the larger target (0.35 > 0.20), so the larger deficit → abstract.
-    expect(register).toBe("abstract");
+    // Framed has the larger non-representational target (0.20 > 0.15 after the
+    // 2026-07-20 TikTok retune), so the larger deficit → framed.
+    expect(register).toBe("framed");
   });
 
   test("fills the most-starved register", () => {
@@ -114,9 +115,11 @@ describe("assignRegister — largest deficit vs target", () => {
 
   test("tie breaks toward what the immediate neighbour is NOT", () => {
     // Construct a genuine deficit tie between two registers and check the neighbour tiebreak.
-    // window size 10, targets rep .45 abstract .35 framed .20 → target counts 4.5/3.5/2.0.
-    // actual rep 4, abstract 3, framed 2 (9 entries) leaves deficits rep .5, abstract .5,
-    // framed 0 — rep & abstract tie. Immediate neighbour = representational, so pick abstract.
+    // Targets are pinned explicitly — this test exercises the tiebreak MECHANICS, not the
+    // tunable default weights. With rep .45 abstract .35 framed .20 → target counts
+    // 4.5/3.5/2.0; actual rep 4, abstract 3, framed 2 (9 entries) leaves deficits rep .5,
+    // abstract .5, framed 0 — rep & abstract tie. Immediate neighbour = representational,
+    // so pick abstract.
     const entries = [
       entry("g", "representational"), // immediate neighbour
       entry("g", "representational"),
@@ -128,7 +131,9 @@ describe("assignRegister — largest deficit vs target", () => {
       entry("g", "framed"),
       entry("g", "framed"),
     ];
-    expect(assignRegister(entries)).toBe("abstract");
+    expect(assignRegister(entries, { abstract: 0.35, framed: 0.2, representational: 0.45 })).toBe(
+      "abstract",
+    );
   });
 });
 

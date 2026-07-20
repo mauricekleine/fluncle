@@ -40,15 +40,17 @@ export const BAKED_GRAIN_FAMILIES = [
 // immediate neighbourhood's grain). Among the rest, the least-recently-used wins.
 const GRAIN_RECENT_WINDOW = 3;
 
-// The register quota. These numbers EXIST TO BREAK THE 92% REPRESENTATIONAL COLLAPSE
-// (07-14), not as taste law — the operator retunes them by editing here (or the
-// FLUNCLE_VIDEO_REGISTER_TARGETS env override). Starting point: representational is still
-// the weighted default (mix ruling 2026-07-04), but abstract and framed get real, enforced
-// floors so the feed stops being a monoculture. Must sum to 1.
+// The register quota — retuned 2026-07-20 on the operator's TikTok read: the
+// representational renders (the plate-lane pieces with real shapes, figures,
+// artifacts) consistently outperform, abstract consistently underperforms. So
+// representational is the strong default and abstract/framed keep REAL floors —
+// the 07-14 anti-collapse purpose stands (never back to 92% one-register), the
+// split just follows the audience now. Not taste law — the operator retunes by
+// editing here (or the FLUNCLE_VIDEO_REGISTER_TARGETS env override). Must sum to 1.
 export const DEFAULT_REGISTER_TARGETS: Record<VideoRegister, number> = {
-  abstract: 0.35,
+  abstract: 0.15,
   framed: 0.2,
-  representational: 0.45,
+  representational: 0.65,
 };
 
 // The register decision looks back over this many renders (a wider window than grain — a
