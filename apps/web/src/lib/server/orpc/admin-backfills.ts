@@ -20,7 +20,7 @@ import {
   backfillDiscogsIds,
   backfillLastfmLoves,
 } from "../backfill";
-import { probeAppleReleases } from "../apple-releases";
+import { probeLabelReleases } from "../label-releases";
 import { type CoverMasterKind, resolveCoverMasters } from "../cover-masters";
 import { resolveLabelImages } from "../label-images";
 import { resolveLabelLineage } from "../label-lineage";
@@ -163,33 +163,34 @@ export function adminBackfillsHandlers(os: Implementer) {
       }
     });
 
-  // POST /admin/backfill/apple-releases — agent tier (`adminAuth`): the MusicKit FRESHNESS TAP
-  // (D8). A bounded probe over ENABLED seed labels that mints day-one catalogue rows from Apple's
-  // latest releases — catalogue identity only (no publish, no certification, no graph expansion),
-  // so the box's agent-token cron drives it. A NO-OP until the MusicKit secrets are provisioned.
-  const backfillAppleReleasesHandler = os.backfill_apple_releases
+  // POST /admin/backfill/label-releases — agent tier (`adminAuth`): the FRESHNESS TAP (D8). A
+  // bounded probe over ENABLED seed labels that mints day-one catalogue rows from Spotify's fresh
+  // releases (fuzzy `label:` search + copyrights post-filter) — catalogue identity only (no publish,
+  // no certification, no graph expansion), so the box's agent-token cron drives it. Reuses the
+  // publish path's Spotify OAuth; a no-op until the operator has connected Spotify.
+  const backfillLabelReleasesHandler = os.backfill_label_releases
     .use(adminAuth)
     .handler(async ({ input }) => {
       try {
         const { query } = input;
-        const result = await probeAppleReleases({
+        const result = await probeLabelReleases({
           dryRun: parseBool(query.dryRun),
           limit: parseLimit(query.limit, BACKFILL_DEFAULT_LIMIT, BACKFILL_MAX_LIMIT),
         });
 
         return {
+          albumsMatched: result.albumsMatched,
           albumsSeen: result.albumsSeen,
-          breakerTripped: result.breakerTripped,
           configured: result.configured,
           dryRun: result.dryRun,
+          failedLabels: result.failedLabels,
+          labelSlugs: result.labelSlugs,
           labelsProbed: result.labelsProbed,
           newRows: result.newRows,
           newTrackIds: result.newTrackIds,
           ok: true as const,
           rateLimited: result.rateLimited,
-          resolvedLabels: result.resolvedLabels,
           skippedKnown: result.skippedKnown,
-          unresolvedLabels: result.unresolvedLabels,
         };
       } catch (error) {
         throw apiFault(error);
@@ -338,11 +339,11 @@ export function adminBackfillsHandlers(os: Implementer) {
   return {
     backfill_apple_catalogue: backfillAppleCatalogueHandler,
     backfill_apple_music: backfillAppleMusicHandler,
-    backfill_apple_releases: backfillAppleReleasesHandler,
     backfill_cover_masters: backfillCoverMastersHandler,
     backfill_discogs: backfillDiscogsHandler,
     backfill_label_images: backfillLabelImagesHandler,
     backfill_label_lineage: backfillLabelLineageHandler,
+    backfill_label_releases: backfillLabelReleasesHandler,
     backfill_lastfm: backfillLastfmHandler,
     backfill_recording_mbids: backfillRecordingMbidsHandler,
   };

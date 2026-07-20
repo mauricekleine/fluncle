@@ -277,9 +277,6 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // catalogue identity only (a URL on `tracks`, facts on `albums`), never a certification.
   "POST /admin/backfill/apple-catalogue": "backfill_apple_catalogue",
   "POST /admin/backfill/apple-music": "backfill_apple_music",
-  // The MusicKit freshness tap (D8): a bounded probe over ENABLED seed labels that mints day-one
-  // catalogue rows from Apple's latest releases — catalogue identity only, never a certification.
-  "POST /admin/backfill/apple-releases": "backfill_apple_releases",
   "POST /admin/backfill/artist-images": "backfill_artist_images",
   "POST /admin/backfill/artists": "backfill_artists",
   // Agent tier: the box's `fluncle-cover-masters` cron drives it. It owns an album's/artist's
@@ -291,6 +288,10 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // oRPC (no TanStack route file). ADMIN tier (agent-allowed): the on-box `fluncle-label-lineage`
   // sweep drives it with the agent token, the `backfill_label_images` precedent.
   "POST /admin/backfill/label-lineage": "backfill_label_lineage",
+  // The freshness tap (D8): a bounded probe over ENABLED seed labels that mints day-one catalogue
+  // rows from Spotify's fresh releases (fuzzy label search + copyrights post-filter) — catalogue
+  // identity only, never a certification.
+  "POST /admin/backfill/label-releases": "backfill_label_releases",
   "POST /admin/backfill/lastfm": "backfill_lastfm",
   // The MusicBrainz recording-MBID fill (the MusicBrainz identity layer) — contract-only oRPC (no
   // TanStack route file). ADMIN tier (agent-allowed): the on-box `fluncle-recording-mbids` sweep

@@ -208,10 +208,6 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // metadata enrichment (resolve each finding's Apple Music URL EXACTLY by ISRC, no
   // publish), so the box's agent-token cron drives it, the `backfill_discogs` precedent.
   backfill_apple_music: "admin",
-  // The MusicKit freshness tap (D8) — agent tier (adminAuth only): internal metadata acquisition
-  // (mint day-one catalogue rows from Apple's latest releases for ENABLED seed labels, no publish,
-  // no certification), so the box's agent-token cron drives it, the `backfill_apple_catalogue` twin.
-  backfill_apple_releases: "admin",
   // The artist-avatar backfill — agent tier (adminAuth only): internal + reversible
   // enrichment (fetch each artist's Spotify image), same tier as backfill_artists.
   backfill_artist_images: "admin",
@@ -232,6 +228,10 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // facts + parent imprint onto the `labels` row (never mints a label, publishes nothing), so the
   // box's agent-token cron drives it, the `backfill_label_images` precedent.
   backfill_label_lineage: "admin",
+  // The freshness tap (D8) — agent tier (adminAuth only): internal metadata acquisition (mint
+  // day-one catalogue rows from Spotify's fresh releases for ENABLED seed labels, no publish, no
+  // certification), so the box's agent-token cron drives it, the `backfill_apple_catalogue` twin.
+  backfill_label_releases: "admin",
   backfill_lastfm: "admin",
   // The MusicBrainz recording-MBID fill — agent tier (adminAuth only): the MusicBrainz identity
   // layer. It writes catalogue identity only (an MBID on `tracks`), never a certification, so the

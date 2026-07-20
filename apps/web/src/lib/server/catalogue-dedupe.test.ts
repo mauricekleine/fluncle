@@ -1,5 +1,5 @@
 // The shared catalogue dedupe primitives — pinned directly, since the whole convergence contract
-// (crawl.integration.test.ts + apple-releases.test.ts) rests on the fold behaving exactly this way.
+// (crawl.integration.test.ts + label-releases.test.ts) rests on the fold behaving exactly this way.
 
 import { describe, expect, it } from "vitest";
 

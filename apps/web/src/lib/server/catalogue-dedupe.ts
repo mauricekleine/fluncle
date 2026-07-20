@@ -2,17 +2,17 @@
 //
 // Two independent paths now mint an uncertified `tracks` row for the same recording:
 //   - the MusicBrainz crawl (crawl.ts) — `track_id = mb_<recording-mbid>`, the graph WALK;
-//   - the MusicKit freshness tap (apple-releases.ts) — `track_id = ap_<apple-song-id>`, the
-//     day-one FRESHNESS probe over enabled seed labels.
+//   - the freshness tap (label-releases.ts) — `track_id = sp_<spotify-track-id>`, the day-one
+//     FRESHNESS probe over enabled seed labels (Spotify).
 //
 // Whichever lands first, the other MUST recognise it instead of minting a duplicate twin. The
 // strong key is the ISRC (both carry it when the vendor has one), and that catches most cases.
-// But an Apple-minted row can arrive with a MISSING or DIVERGENT ISRC (Apple and MusicBrainz
+// But a tap-minted row can arrive with a MISSING or DIVERGENT ISRC (Spotify and MusicBrainz
 // occasionally disagree on a recording's ISRC), and then the later MB walk of the same release
 // would mint an `mb_` twin. This module closes that hole with a SECOND, tighter fold: an EXACT
 // title fold WITHIN the same album (`tracks.album_id`). Two pressings/paths of one recording
-// share an album row (folded on the release-group MBID, or on the album-title slug when Apple has
-// no release group), so an equal album_id + an equal title fold is the same track. The fold is
+// share an album row (folded on the release-group MBID, or on the album-title slug when the tap
+// has no release group), so an equal album_id + an equal title fold is the same track. The fold is
 // deliberately TIGHT — exact, and only within one album — so a VIP/remix (a DIFFERENT title:
 // "Foo VIP" folds apart from "Foo") is never merged into its original.
 
