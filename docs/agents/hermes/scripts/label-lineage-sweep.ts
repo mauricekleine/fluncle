@@ -29,7 +29,11 @@ import { spawnSync } from "node:child_process";
 // rels) at the shared 1 req/s, so 25 ≈ 50s blew the CLI's HTTP timeout on every tick while
 // 10 ≈ 20s clears it comfortably (measured live 2026-07-18). recording-mbids keeps 25 on its
 // one-call-per-row math; lineage pays double per row.
-const BATCH_LIMIT = Number(process.env.FLUNCLE_LABEL_LINEAGE_LIMIT ?? "10");
+// 8 = the server op's MAX_BATCH, so one tick is EXACTLY ONE HTTP request (see the
+// label-images-sweep comment: the CLI's cursor loop + a kept-alive second request after a long
+// first response is the hang class both label crons burned on). 8/tick hourly still clears
+// ~192 labels/day.
+const BATCH_LIMIT = Number(process.env.FLUNCLE_LABEL_LINEAGE_LIMIT ?? "8");
 
 const FLUNCLE_BIN = process.env.FLUNCLE_BIN ?? "fluncle";
 

@@ -41,7 +41,13 @@ import { spawnSync } from "node:child_process";
 // cron's timeout. The Worker itself clamps a single pass to `MAX_BATCH` (4) labels regardless.
 // ---------------------------------------------------------------------------
 
-const BATCH_LIMIT = Number(process.env.FLUNCLE_LABEL_IMAGES_LIMIT ?? "6");
+// 4 = the server op's MAX_BATCH, so one tick is EXACTLY ONE HTTP request. The CLI's cursor
+// loop fires a SECOND request when the server clamps below the asked limit, and a second
+// request on the CLI's kept-alive connection after a LONG first response hangs to the 5-minute
+// fetch timeout (the 2026-07-19/20 label-images outage; same matrix as the lineage saga —
+// fresh connections resolved in seconds while the box tick died). Single-request ticks
+// sidestep connection reuse entirely; the hourly cadence still clears ~96 labels/day.
+const BATCH_LIMIT = Number(process.env.FLUNCLE_LABEL_IMAGES_LIMIT ?? "4");
 
 const FLUNCLE_BIN = process.env.FLUNCLE_BIN ?? "fluncle";
 
