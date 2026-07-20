@@ -35,6 +35,7 @@ import { Route as AtomDotxmlRouteImport } from './routes/atom[.]xml'
 import { Route as AccountRouteImport } from './routes/account'
 import { Route as AboutRouteImport } from './routes/about'
 import { Route as R8337c1b41068549f248bf56f1fc465dfDottxtRouteImport } from './routes/8337c1b41068549f248bf56f1fc465df[.]txt'
+import { Route as CoordinateRouteImport } from './routes/$coordinate'
 import { Route as AdminRouteRouteImport } from './routes/admin/route'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as StoriesIndexRouteImport } from './routes/stories.index'
@@ -261,6 +262,11 @@ const R8337c1b41068549f248bf56f1fc465dfDottxtRoute =
     path: '/8337c1b41068549f248bf56f1fc465df.txt',
     getParentRoute: () => rootRouteImport,
   } as any)
+const CoordinateRoute = CoordinateRouteImport.update({
+  id: '/$coordinate',
+  path: '/$coordinate',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AdminRouteRoute = AdminRouteRouteImport.update({
   id: '/admin',
   path: '/admin',
@@ -760,6 +766,7 @@ const ApiV1AdminMixcloudAuthCallbackRoute =
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/admin': typeof AdminRouteRouteWithChildren
+  '/$coordinate': typeof CoordinateRoute
   '/8337c1b41068549f248bf56f1fc465df.txt': typeof R8337c1b41068549f248bf56f1fc465dfDottxtRoute
   '/about': typeof AboutRoute
   '/account': typeof AccountRoute
@@ -881,6 +888,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/$coordinate': typeof CoordinateRoute
   '/8337c1b41068549f248bf56f1fc465df.txt': typeof R8337c1b41068549f248bf56f1fc465dfDottxtRoute
   '/about': typeof AboutRoute
   '/account': typeof AccountRoute
@@ -1003,6 +1011,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/admin': typeof AdminRouteRouteWithChildren
+  '/$coordinate': typeof CoordinateRoute
   '/8337c1b41068549f248bf56f1fc465df.txt': typeof R8337c1b41068549f248bf56f1fc465dfDottxtRoute
   '/about': typeof AboutRoute
   '/account': typeof AccountRoute
@@ -1127,6 +1136,7 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/admin'
+    | '/$coordinate'
     | '/8337c1b41068549f248bf56f1fc465df.txt'
     | '/about'
     | '/account'
@@ -1248,6 +1258,7 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/$coordinate'
     | '/8337c1b41068549f248bf56f1fc465df.txt'
     | '/about'
     | '/account'
@@ -1369,6 +1380,7 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/admin'
+    | '/$coordinate'
     | '/8337c1b41068549f248bf56f1fc465df.txt'
     | '/about'
     | '/account'
@@ -1492,6 +1504,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AdminRouteRoute: typeof AdminRouteRouteWithChildren
+  CoordinateRoute: typeof CoordinateRoute
   R8337c1b41068549f248bf56f1fc465dfDottxtRoute: typeof R8337c1b41068549f248bf56f1fc465dfDottxtRoute
   AboutRoute: typeof AboutRoute
   AccountRoute: typeof AccountRoute
@@ -1768,6 +1781,13 @@ declare module '@tanstack/react-router' {
       path: '/8337c1b41068549f248bf56f1fc465df.txt'
       fullPath: '/8337c1b41068549f248bf56f1fc465df.txt'
       preLoaderRoute: typeof R8337c1b41068549f248bf56f1fc465dfDottxtRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/$coordinate': {
+      id: '/$coordinate'
+      path: '/$coordinate'
+      fullPath: '/$coordinate'
+      preLoaderRoute: typeof CoordinateRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin': {
@@ -2524,6 +2544,7 @@ const LabelSlugRouteWithChildren = LabelSlugRoute._addFileChildren(
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AdminRouteRoute: AdminRouteRouteWithChildren,
+  CoordinateRoute: CoordinateRoute,
   R8337c1b41068549f248bf56f1fc465dfDottxtRoute:
     R8337c1b41068549f248bf56f1fc465dfDottxtRoute,
   AboutRoute: AboutRoute,

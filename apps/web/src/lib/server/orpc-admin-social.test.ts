@@ -53,6 +53,13 @@ vi.mock("./captions", () => ({
   readCaptions: (...args: unknown[]) => readCaptions(...args),
 }));
 
+// The mention-injection seam is proved in mentions.test.ts; here it passes the caption
+// through unchanged so the push assertions stay about auth + orchestration (and the
+// handler never touches the DB via `captionForPlatform`).
+vi.mock("./mentions", () => ({
+  captionForPlatform: (_trackId: string, _platform: string, caption: string) => caption,
+}));
+
 const TRACK_ID = "track-123";
 
 const TRACK = {

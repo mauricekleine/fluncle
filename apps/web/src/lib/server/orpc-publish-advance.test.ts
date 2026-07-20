@@ -76,6 +76,13 @@ vi.mock("./captions", () => ({
   readCaptions: (...a: unknown[]) => readCaptions(...a),
 }));
 
+// Mention injection is pinned in mentions.test.ts; here it passes the caption through so
+// the advance tests stay about the safety argument (claim / gates / caps) and never reach
+// the DB through `captionForPlatform`.
+vi.mock("./mentions", () => ({
+  captionForPlatform: (_t: string, _p: string, caption: string) => caption,
+}));
+
 const ADVANCE = "/admin/social/publish/advance";
 const STATE = "/admin/social/publish/advance/state";
 

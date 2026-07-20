@@ -33,6 +33,7 @@ import { ORPCError } from "@orpc/server";
 import { trackMedia, videoAudioStripped, videoVersion } from "../../media";
 import { readCaptions } from "../captions";
 import { logEvent } from "../log";
+import { captionForPlatform } from "../mentions";
 import { adminAuth, operatorGuard } from "../orpc-auth";
 import { postizSetReleaseId, pushTikTokDraft, pushYouTubeShort, resolveSocialUrl } from "../postiz";
 import {
@@ -284,7 +285,12 @@ export function adminSocialHandlers(os: Implementer) {
         }
 
         const captions = await readCaptions([track.logId]);
-        const caption = captions[track.logId] ?? "";
+        const rawCaption = captions[track.logId] ?? "";
+        const mentionPlatform = platform === "tiktok" ? "tiktok" : "youtube";
+        // Weave in the finding's trusted lead-artist @handles for THIS platform, read at
+        // push time so the freshest artist_socials trust state applies (and each platform
+        // gets its own handle). Byte-identical to the bundle caption when there is none.
+        const caption = await captionForPlatform(track.trackId, mentionPlatform, rawCaption);
 
         // The same push the auto-advance makes — one code path, so the manual tap and the
         // machine can never disagree about which cut goes to which platform.
@@ -466,9 +472,9 @@ export function adminSocialHandlers(os: Implementer) {
         }
 
         const captions = await readCaptions([candidate.logId]);
-        const caption = captions[candidate.logId] ?? "";
+        const rawCaption = captions[candidate.logId] ?? "";
 
-        if (!caption) {
+        if (!rawCaption) {
           for (const platform of candidate.pending) {
             hold(platform, "no_caption", candidate.trackId);
           }
@@ -502,8 +508,11 @@ export function adminSocialHandlers(os: Implementer) {
           budget -= 1;
 
           // (g) The push. The claim row is already `failed`, so an error here needs no
-          // write — it just stops, visibly, and the operator owns the retry.
+          // write — it just stops, visibly, and the operator owns the retry. The caption
+          // gains this platform's trusted lead-artist @handles here (per-platform, read at
+          // push time), so a fresh confirm reaches an already-rendered bundle.
           try {
+            const caption = await captionForPlatform(candidate.trackId, platform, rawCaption);
             const { postId, status } = await pushToPlatform(candidate, platform, caption);
 
             await upsertPost(candidate.trackId, platform, status, postId);
