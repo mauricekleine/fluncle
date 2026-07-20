@@ -1,13 +1,17 @@
 import { randomUUID } from "node:crypto";
+import { type ArtistListItem } from "@fluncle/contracts";
 import { type ArtistSocialPlatform, ARTIST_SOCIAL_PLATFORMS } from "../artist-socials";
 import { validateSocialUrlForPlatform } from "./artist-resolution";
-import { getDb, typedRow, typedRows } from "./db";
+import { getDb, typedRows } from "./db";
 import {
   type CatalogueBrowsePage,
   type CatalogueBrowseQuery,
   type CatalogueHubNumberedPage,
   type CatalogueHubQuery,
+  type CatalogueListPage,
   type EntitySitemapRow,
+  hubCountsBySlug,
+  hubFindingCountsBySlug,
   listCatalogueBrowsePage,
   listHubPage,
 } from "./labels";
@@ -487,81 +491,94 @@ export async function listArtistsByAlbum(albumId: string): Promise<ArtistChip[]>
   return listArtistsByEntity("tracks.album_id", albumId);
 }
 
-/** A public artist list item — the `list_artists` / `get_artist` API shape. */
-export type ArtistListItem = {
-  findingCount: number;
-  name: string;
-  slug: string;
-  spotifyUrl: string | undefined;
-};
+// ── THE PUBLIC CATALOGUE LIST/GET API OPS (list_artists / get_artist) ─────────────────────
+//
+// The artist twin of the label/album API ops (read labels.ts for the shared shape): the list is
+// the SAME unified `/artists` index the web page serves — built on the shared `listHubPage` off
+// `ARTISTS_HUB_QUERY`, so the API list, the web hub, and the MCP browse can never disagree on which
+// artists exist. The artist hub tile projects the AVATAR; the API row carries `spotifyUrl` instead
+// (the shape the CLI + SSH consume), plus the `findingCount` the tile omits — both fetched for the
+// page's ≤48 slugs. `get_artist` resolves ANY artist that has a page (below-floor artists render on
+// `/artist/<slug>` too, just noindex).
 
-type ArtistRow = {
-  finding_count: number;
-  name: string;
-  slug: string;
-  spotify_url: string | null;
-};
+/** Spotify profile URLs for a BOUNDED set of artist slugs — the ONE column `list_artists` carries
+ *  that the artist hub tile does not (the tile projects the avatar; the API row carries spotify). */
+async function artistSpotifyUrlsBySlug(slugs: string[]): Promise<Map<string, string>> {
+  if (slugs.length === 0) {
+    return new Map();
+  }
 
-function toArtistListItem(row: ArtistRow): ArtistListItem {
+  const db = await getDb();
+  const placeholders = slugs.map(() => "?").join(", ");
+  const result = await db.execute({
+    args: slugs,
+    sql: `select slug, spotify_url from artists where slug in (${placeholders})`,
+  });
+
+  const map = new Map<string, string>();
+
+  for (const row of typedRows<{ slug: string; spotify_url: string | null }>(result.rows)) {
+    if (row.spotify_url) {
+      map.set(row.slug, row.spotify_url);
+    }
+  }
+
+  return map;
+}
+
+/**
+ * One alphabetical page of the unified `/artists` index over the API — the `list_artists` read: the
+ * SAME floor-clearing set the `/artists` web page and the MCP browse serve (all three off
+ * `HUB_INCLUSION_HAVING`). Reuses the hub reader for the page + pager, and stamps each row's
+ * `spotifyUrl` + `findingCount` from bounded per-page reads over the shared fragments.
+ */
+export async function listArtistsApiPage(page: number): Promise<CatalogueListPage<ArtistListItem>> {
+  const hub = await listHubPage(ARTISTS_HUB_QUERY, page, false);
+  const slugs = hub.items.map((item) => item.slug);
+  const [findingCounts, spotifyUrls] = await Promise.all([
+    hubFindingCountsBySlug(ARTISTS_HUB_QUERY, slugs),
+    artistSpotifyUrlsBySlug(slugs),
+  ]);
+
   return {
-    findingCount: row.finding_count,
-    name: row.name,
-    slug: row.slug,
-    spotifyUrl: row.spotify_url ?? undefined,
+    items: hub.items.map((item) => ({
+      certified: item.certified,
+      findingCount: findingCounts.get(item.slug) ?? 0,
+      name: item.name,
+      slug: item.slug,
+      spotifyUrl: spotifyUrls.get(item.slug),
+      trackCount: item.trackCount,
+    })),
+    page: hub.page,
+    pageCount: hub.pageCount,
+    total: hub.total,
   };
 }
 
 /**
- * All artists with at least one PUBLISHED finding, ordered by finding count
- * descending. `finding_count` counts only published findings (a `track_artists`
- * row whose track has `log_id IS NOT NULL`); the inner join also drops any artist
- * with zero published findings. Used by `list_artists`.
- */
-export async function listArtists(): Promise<ArtistListItem[]> {
-  const db = await getDb();
-  const result = await db.execute({
-    args: [],
-    sql: `select
-            a.name,
-            a.slug,
-            a.spotify_url,
-            count(ta.track_id) as finding_count
-          from artists a
-          join track_artists ta on ta.artist_id = a.id
-          join (findings join tracks on tracks.track_id = findings.track_id) t on t.track_id = ta.track_id and t.log_id is not null
-          group by a.id
-          order by finding_count desc, a.name asc`,
-  });
-
-  return typedRows<ArtistRow>(result.rows).map(toArtistListItem);
-}
-
-/**
- * Look up one artist by slug for the public API, with the SAME published gate as
- * `listArtists`: an artist with zero published findings resolves to `undefined`
- * (the caller turns that into a 404), so list + get agree on which artists exist.
- * Distinct from `getArtistBySlug`, which returns the richer `ArtistRecord` the
- * artist PAGE + JSON-LD read. Used by `get_artist`.
+ * Look up one artist by slug for the public API — the `get_artist` read. Resolves ANY artist that
+ * has a page (a below-floor, crawled artist the browse index omits still renders on `/artist/<slug>`,
+ * just noindex), so get is intentionally wider than the list. Counts come from `hubCountsBySlug`
+ * (the same aggregates the hub gate uses), so a certified artist's list row and get read agree.
+ * Undefined only when no artist carries the slug (the caller turns that into a 404).
  */
 export async function getArtistListItemBySlug(slug: string): Promise<ArtistListItem | undefined> {
-  const db = await getDb();
-  const result = await db.execute({
-    args: [slug],
-    sql: `select
-            a.name,
-            a.slug,
-            a.spotify_url,
-            count(ta.track_id) as finding_count
-          from artists a
-          join track_artists ta on ta.artist_id = a.id
-          join (findings join tracks on tracks.track_id = findings.track_id) t on t.track_id = ta.track_id and t.log_id is not null
-          where a.slug = ?
-          group by a.id
-          limit 1`,
-  });
+  const record = await getArtistBySlug(slug);
 
-  const row = typedRow<ArtistRow>(result.rows);
-  return row ? toArtistListItem(row) : undefined;
+  if (!record) {
+    return undefined;
+  }
+
+  const counts = await hubCountsBySlug(ARTISTS_HUB_QUERY, slug);
+
+  return {
+    certified: counts.certified,
+    findingCount: counts.findingCount,
+    name: record.name,
+    slug: record.slug,
+    spotifyUrl: record.spotifyUrl,
+    trackCount: counts.trackCount,
+  };
 }
 
 export function parseArtistsJson(value: string): string[] {

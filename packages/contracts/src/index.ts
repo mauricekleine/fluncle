@@ -26,7 +26,9 @@
 // (`z.unknown()`), so inferring them would erase the CLI's typed send shape.
 
 import { type z } from "zod";
+import { type AlbumDetailSchema, type AlbumListItemSchema } from "./orpc/albums.js";
 import { type ArtistListItemSchema } from "./orpc/artists.js";
+import { type LabelDetailSchema, type LabelListItemSchema } from "./orpc/labels.js";
 import {
   type AttentionQueueSchema,
   type AttentionRowSchema,
@@ -103,21 +105,54 @@ export type ApiFailure = {
   message: string;
 };
 
+// ── Pagination ─────────────────────────────────────────────────────────────
+
+/** The page metadata every catalogue list op returns alongside its rows. */
+export type CataloguePage = { page: number; pageCount: number; total: number };
+
 // ── Artist ───────────────────────────────────────────────────────────────────
 
 /**
  * A public artist list item, as `GET /api/v1/artists` and `GET /api/v1/artists/:slug`
  * emit it. Inferred from `ArtistListItemSchema` (./orpc/artists.ts) — the minimal
- * identity shape (name, slug, finding count, optional Spotify URL) shared by the
- * list and get ops.
+ * identity shape (name, slug, finding count, certified flag, track count, optional
+ * Spotify URL) shared by the list and get ops.
  */
 export type ArtistListItem = z.infer<typeof ArtistListItemSchema>;
 
-/** `GET /api/v1/artists` response — all artists with at least one finding. */
-export type ArtistsResponse = Ok<{ artists: ArtistListItem[] }>;
+/** `GET /api/v1/artists` response — one page of catalogue artists, alphabetical. */
+export type ArtistsResponse = Ok<{ artists: ArtistListItem[] } & CataloguePage>;
 
 /** `GET /api/v1/artists/:slug` response — one artist by slug. */
 export type ArtistGetResponse = Ok<{ artist: ArtistListItem }>;
+
+// ── Album ──────────────────────────────────────────────────────────────────
+
+/** A public album list item, as `GET /api/v1/albums` emits it. */
+export type AlbumListItem = z.infer<typeof AlbumListItemSchema>;
+
+/** A single album's full read, as `GET /api/v1/albums/:slug` emits it. */
+export type AlbumDetail = z.infer<typeof AlbumDetailSchema>;
+
+/** `GET /api/v1/albums` response — one page of catalogue albums, alphabetical. */
+export type AlbumsResponse = Ok<{ albums: AlbumListItem[] } & CataloguePage>;
+
+/** `GET /api/v1/albums/:slug` response — one album by slug. */
+export type AlbumGetResponse = Ok<{ album: AlbumDetail }>;
+
+// ── Label (public) ───────────────────────────────────────────────────────────
+
+/** A public label list item, as `GET /api/v1/labels` emits it. */
+export type LabelListItem = z.infer<typeof LabelListItemSchema>;
+
+/** A single label's full read, as `GET /api/v1/labels/:slug` emits it. */
+export type LabelDetail = z.infer<typeof LabelDetailSchema>;
+
+/** `GET /api/v1/labels` response — one page of catalogue labels, alphabetical. */
+export type LabelsResponse = Ok<{ labels: LabelListItem[] } & CataloguePage>;
+
+/** `GET /api/v1/labels/:slug` response — one label by slug. */
+export type LabelGetResponse = Ok<{ label: LabelDetail }>;
 
 // ── Galaxy (the sonic map) ───────────────────────────────────────────────────
 

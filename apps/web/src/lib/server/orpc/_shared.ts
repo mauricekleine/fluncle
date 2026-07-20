@@ -25,6 +25,18 @@ export type Implementer = ReturnType<typeof implement<typeof contract, OrpcConte
 export { parseBool, parseLimit } from "../query-params";
 
 /**
+ * Parse the `page` query arg of a catalogue list op (list_albums / list_labels / list_artists).
+ * Tolerant like `list_tracks`: any non-positive-integer value degrades to page 1 — never a 400.
+ * The page SIZE is fixed by the shared hub reader (the API list serves the same paged index the
+ * web hub does), so there is no `limit` to parse.
+ */
+export function parseCataloguePage(pageArg: string | undefined): number {
+  const parsed = Number(pageArg);
+
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : 1;
+}
+
+/**
  * Fetch a track by id or Log ID, or throw the canonical NOT_FOUND fault. The single
  * source of the `not_found` / "No track with id …" 404 that the admin track/social
  * handlers raised inline; the wire body (apiCode/apiMessage/status) is preserved

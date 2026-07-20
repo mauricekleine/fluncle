@@ -30,8 +30,10 @@ import { adminCostsContract } from "./admin-costs";
 import { adminGalaxiesContract } from "./admin-galaxies";
 import { adminPromptsContract } from "./admin-prompts";
 import { adminReachContract } from "./admin-reach";
+import { albumsContract } from "./albums";
 import { artistsContract } from "./artists";
 import { galaxiesContract } from "./galaxies";
+import { labelsContract } from "./labels";
 import { graphContract } from "./graph";
 import { adminEditionsContract } from "./admin-editions";
 import { adminFrontierContract } from "./admin-frontier";
@@ -74,7 +76,22 @@ import { tracksContract } from "./tracks";
 
 // Re-export the per-op contracts so existing importers (and the typed client)
 // keep their entrypoints.
+export {
+  AlbumDetailSchema,
+  albumsContract,
+  AlbumListItemSchema,
+  getAlbum,
+  listAlbums,
+} from "./albums";
 export { ArtistListItemSchema, artistsContract, getArtist, listArtists } from "./artists";
+export {
+  getLabel,
+  LabelDetailSchema,
+  LabelEdgeSchema,
+  LabelListItemSchema,
+  labelsContract,
+  listLabels,
+} from "./labels";
 export {
   listMixableArtists,
   listMixOpeners,
@@ -396,9 +413,11 @@ export const contract = {
   ...adminGalaxiesContract,
   ...adminPromptsContract,
   ...adminReachContract,
+  ...albumsContract,
   ...artistsContract,
   ...galaxiesContract,
   ...graphContract,
+  ...labelsContract,
   ...adminEditionsContract,
   ...adminFrontierContract,
   ...adminFunnelContract,

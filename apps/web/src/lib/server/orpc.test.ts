@@ -581,6 +581,8 @@ const PUBLIC_OPERATION_IDS = [
   "deletePrivateWatch",
   "deregisterDevice",
   "exportPrivateAccountData",
+  // Catalogue entity reads — public, no auth. list ops are catalogue-scoped + paginated.
+  "getAlbum",
   // Artist reads — public, no auth required (Unit 4 of the artist-relationship RFC).
   "getArtist",
   "getCurrentPrivateUser",
@@ -591,6 +593,7 @@ const PUBLIC_OPERATION_IDS = [
   // entity's own public page already prints).
   "getGraphPreview",
   "getHealth",
+  "getLabel",
   "getPrivateAccountExport",
   "getPrivateFrontierEdition",
   "getPrivateFrontierPlaylist",
@@ -602,9 +605,11 @@ const PUBLIC_OPERATION_IDS = [
   "getRandomTrack",
   "getSimilarFindings",
   "getTrack",
+  "listAlbums",
   "listArtists",
   "listEditions",
   "listGalaxies",
+  "listLabels",
   "listMixOpeners",
   "listMixableArtists",
   "listMixableTracks",

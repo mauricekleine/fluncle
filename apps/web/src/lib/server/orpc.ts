@@ -39,9 +39,11 @@ import { adminCostsHandlers } from "./orpc/admin-costs";
 import { adminGalaxiesHandlers } from "./orpc/admin-galaxies";
 import { adminPromptsHandlers } from "./orpc/admin-prompts";
 import { adminReachHandlers } from "./orpc/admin-reach";
+import { albumsHandlers } from "./orpc/albums";
 import { artistsHandlers } from "./orpc/artists";
 import { galaxiesHandlers } from "./orpc/galaxies";
 import { graphHandlers } from "./orpc/graph";
+import { labelsHandlers } from "./orpc/labels";
 import { adminEditionsHandlers } from "./orpc/admin-editions";
 import { adminFrontierHandlers } from "./orpc/admin-frontier";
 import { adminFunnelHandlers } from "./orpc/admin-funnel";
@@ -105,9 +107,11 @@ export const router = os.router({
   ...adminGalaxiesHandlers(os),
   ...adminPromptsHandlers(os),
   ...adminReachHandlers(os),
+  ...albumsHandlers(os),
   ...artistsHandlers(os),
   ...galaxiesHandlers(os),
   ...graphHandlers(os),
+  ...labelsHandlers(os),
   ...adminEditionsHandlers(os),
   ...adminFrontierHandlers(os),
   ...adminFunnelHandlers(os),

@@ -23,6 +23,8 @@ import { randomUUID } from "node:crypto";
 import {
   type LabelAdminItem,
   type LabelAliasCandidate,
+  type LabelDetail,
+  type LabelListItem,
   type LabelSeedState,
   type MergeLabelResult,
 } from "@fluncle/contracts";
@@ -1067,6 +1069,164 @@ const LABELS_BROWSE_QUERY: CatalogueBrowseQuery = {
 
 export function listLabelsBrowsePage(page: number): Promise<CatalogueBrowsePage> {
   return listCatalogueBrowsePage(LABELS_BROWSE_QUERY, page);
+}
+
+// ── THE PUBLIC CATALOGUE LIST/GET API OPS (list_labels / get_label + the album/artist twins) ─────
+//
+// The public API list ops serve the SAME index the web /labels //albums //artists pages do: every
+// entity that clears the unified hub gate (`HUB_INCLUSION_HAVING` — a certified entity is always in,
+// an uncertified one only above the renderable floor). So they are built ON the shared hub reader
+// (`listHubPage`, which already carries the gate, the cover tile lookup, and the pager) rather than
+// a bespoke scan — the API list, the web hub, and the MCP browse can never disagree on which entities
+// exist, and there is no separate scale proof to carry (the shared CTE is the hosted-proven one). The
+// API adds the ONE column the web tile does not project: `findingCount`, which is `HUB_CERTIFIED` (a
+// group's certified-finding count) fetched for the page's ≤48 slugs; cover/logo ride the hub row.
+//
+// The GET ops resolve ANY entity that has a page — a below-floor entity the browse index omits still
+// renders on its `/label//album//artist/<slug>` page (just noindex) — so get is intentionally WIDER
+// than the list index.
+
+/** One page of a catalogue list API op — the envelope the handlers wrap in `{ ok, <rows>, … }`. */
+export type CatalogueListPage<Entry> = {
+  items: Entry[];
+  page: number;
+  pageCount: number;
+  total: number;
+};
+
+/**
+ * Per-slug finding count — the `HUB_CERTIFIED` aggregate (a group's certified-finding count) over a
+ * BOUNDED set of slugs, reusing a hub query's scan fragments so it agrees with that query's own
+ * certified determination by construction. The API list adds this ONE column the web hub tile does
+ * not project; `certified` + `trackCount` already ride the hub row.
+ */
+export async function hubFindingCountsBySlug(
+  query: Pick<CatalogueHubQuery<unknown>, "from" | "groupBy" | "slugExpr">,
+  slugs: string[],
+): Promise<Map<string, number>> {
+  if (slugs.length === 0) {
+    return new Map();
+  }
+
+  const db = await getDb();
+  const placeholders = slugs.map(() => "?").join(", ");
+  const result = await db.execute({
+    args: slugs,
+    sql: `select ${query.slugExpr} as slug, ${HUB_CERTIFIED} as finding_count
+          from ${query.from}
+          left join findings on findings.track_id = tracks.track_id
+          where ${query.slugExpr} in (${placeholders})
+          group by ${query.groupBy}`,
+  });
+
+  const map = new Map<string, number>();
+
+  for (const row of typedRows<{ finding_count: number; slug: string }>(result.rows)) {
+    map.set(row.slug, Number(row.finding_count));
+  }
+
+  return map;
+}
+
+/**
+ * One entity's counts by slug — the `get_*` op's shape, computed the SAME way as the hub gate
+ * (`HUB_CERTIFIED` / `HUB_RENDERABLE`) so a certified entity's list row and its get read agree.
+ * Resolves ANY slug (a below-floor entity the list omits too); an entity with no tracks reports zero.
+ */
+export async function hubCountsBySlug(
+  query: Pick<CatalogueHubQuery<unknown>, "from" | "groupBy" | "slugExpr">,
+  slug: string,
+): Promise<{ certified: boolean; findingCount: number; trackCount: number }> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [slug],
+    sql: `select ${HUB_CERTIFIED} as finding_count, ${HUB_RENDERABLE} as track_count
+          from ${query.from}
+          left join findings on findings.track_id = tracks.track_id
+          where ${query.slugExpr} = ?
+          group by ${query.groupBy}`,
+  });
+
+  const row = typedRows<{ finding_count: number; track_count: number }>(result.rows)[0];
+  const findingCount = Number(row?.finding_count ?? 0);
+
+  return { certified: findingCount > 0, findingCount, trackCount: Number(row?.track_count ?? 0) };
+}
+
+/**
+ * One alphabetical page of the unified `/labels` index over the API — the `list_labels` read: the
+ * SAME floor-clearing set the `/labels` web page and the MCP browse serve (all three off
+ * `HUB_INCLUSION_HAVING`), so they can never disagree on which labels exist. Reuses the hub reader
+ * for the page + covers + pager, and stamps each row's `findingCount` from the shared fragments.
+ * Blind to `seed_state` (crawl scope, never storage), like every public label read.
+ */
+export async function listLabelsApiPage(page: number): Promise<CatalogueListPage<LabelListItem>> {
+  const hub = await listHubPage(LABELS_HUB_QUERY, page, false);
+  const findingCounts = await hubFindingCountsBySlug(
+    LABELS_HUB_QUERY,
+    hub.items.map((item) => item.slug),
+  );
+
+  return {
+    items: hub.items.map((item) => ({
+      certified: item.certified,
+      coverImageUrl: item.coverImageUrl,
+      findingCount: findingCounts.get(item.slug) ?? 0,
+      logoImageUrl: item.logoImageUrl,
+      name: item.name,
+      slug: item.slug,
+      trackCount: item.trackCount,
+    })),
+    page: hub.page,
+    pageCount: hub.pageCount,
+    total: hub.total,
+  };
+}
+
+/** A representative cover borrowed from any of a label's tracks — the single-label cover read. */
+async function labelCoverUrl(labelId: string): Promise<string | undefined> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [labelId],
+    sql: `select ${LABEL_CATALOGUE_COVER_JSON} as cover_json from labels where labels.id = ? limit 1`,
+  });
+
+  return coverFromJson(typedRows<{ cover_json: string | null }>(result.rows)[0]?.cover_json);
+}
+
+/**
+ * One label's full public read — the `get_label` op's shape. Resolves ANY label that has a page (a
+ * below-floor label the browse index omits still renders on `/label/<slug>`, just noindex), so get
+ * is intentionally wider than the list. Counts come from `hubCountsBySlug` (the same aggregates the
+ * hub gate uses), so a certified label's list row and get read agree. Undefined when no label
+ * carries the slug (the handler 404s).
+ */
+export async function getLabelDetail(slug: string): Promise<LabelDetail | undefined> {
+  const record = await getLabelBySlug(slug);
+
+  if (!record) {
+    return undefined;
+  }
+
+  const counts = await hubCountsBySlug(LABELS_HUB_QUERY, slug);
+  const coverImageUrl = await labelCoverUrl(record.id);
+
+  return {
+    bio: record.bio,
+    certified: counts.certified,
+    coverImageUrl,
+    discogsLabelId: record.discogsLabelId,
+    findingCount: counts.findingCount,
+    foundedLocation: record.foundedLocation,
+    foundingDate: record.foundingDate,
+    logoImageUrl: record.logoImageUrl,
+    mbLabelId: record.mbLabelId,
+    name: record.name,
+    parentLabel: record.parentLabel,
+    slug: record.slug,
+    subLabels: record.subLabels && record.subLabels.length > 0 ? record.subLabels : undefined,
+    trackCount: counts.trackCount,
+  };
 }
 
 /**

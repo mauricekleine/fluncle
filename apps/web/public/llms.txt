@@ -34,8 +34,12 @@ Fluncle's archive is a graph: every finding links to the artists who made it, th
 
 Each page leads with the findings Fluncle has logged there. An artist, label, or record Fluncle has come across while charting the wider archive but has not yet certified a finding from still gets a page: an honest record of what they put out, findings first, the rest of the tracks below. A page with too little on it stays reachable but out of the index. The `/artists`, `/labels`, and `/albums` indexes list every artist, label, and album in the archive, A to Z, the ones Fluncle has certified a finding from marked in gold.
 
-- [Artists API](https://www.fluncle.com/api/v1/artists): all artists with at least one finding, finding-count ordered, as JSON
-- [Artist by slug](https://www.fluncle.com/api/v1/artists/{slug}): one artist's identity and finding count, as JSON
+- [Artists API](https://www.fluncle.com/api/v1/artists): every artist in the catalogue, alphabetical and paginated, as JSON
+- [Artist by slug](https://www.fluncle.com/api/v1/artists/{slug}): one artist's identity and catalogue counts, as JSON
+- [Labels API](https://www.fluncle.com/api/v1/labels): every label in the catalogue, alphabetical and paginated, as JSON
+- [Label by slug](https://www.fluncle.com/api/v1/labels/{slug}): one label's identity, lineage, and catalogue counts, as JSON
+- [Albums API](https://www.fluncle.com/api/v1/albums): every album in the catalogue, alphabetical and paginated, as JSON
+- [Album by slug](https://www.fluncle.com/api/v1/albums/{slug}): one album's identity, cover, and catalogue counts, as JSON
 
 ## Data
 

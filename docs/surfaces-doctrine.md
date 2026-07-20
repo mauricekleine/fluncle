@@ -64,7 +64,9 @@ All `application/json`; the OpenAPI document at `/api/v1/openapi.json` advertise
 | `api.tracks.random`     | `/api/v1/tracks/random`     | one finding at random                                                                                                                        | secondary |
 | `api.fresh`             | `/api/v1/tracks/fresh`      | what just came out — the newest releases over a 30-day window (release-dated), flat (limit max 100)                                          | secondary |
 | `api.mixtapes`          | `/api/v1/mixtapes`          | published mixtapes as JSON                                                                                                                   | secondary |
-| `api.artists`           | `/api/v1/artists`           | every artist with at least one published finding, finding-count ordered, plus `/api/v1/artists/{slug}`                                       | secondary |
+| `api.albums`            | `/api/v1/albums`            | every album in the catalogue, alphabetical + paginated, plus `/api/v1/albums/{slug}` for one album's identity, cover, and catalogue counts   | secondary |
+| `api.artists`           | `/api/v1/artists`           | every artist in the catalogue, alphabetical + paginated, plus `/api/v1/artists/{slug}` for one artist's identity and catalogue counts        | secondary |
+| `api.labels`            | `/api/v1/labels`            | every label in the catalogue, alphabetical + paginated, plus `/api/v1/labels/{slug}` for one label's identity, lineage, and catalogue counts | secondary |
 | `api.galaxies`          | `/api/v1/galaxies`          | every named sonic galaxy + member count as JSON, plus `/api/v1/galaxies/{slug}` for one galaxy's findings (empty/404 behind the launch gate) | secondary |
 | `api.search`            | `/api/v1/search`            | Spotify search candidates for submitting a track                                                                                             | secondary |
 | `api.search.archive`    | `/api/v1/search/archive`    | search the archive — a coordinate, an entity name, a bare word (FTS5), a natural-language query, or a sonic one ("sounds like …")            | primary   |
@@ -234,7 +236,9 @@ The weight ladder within a context is unchanged — **`primary`** (the loud fron
 | `api.tracks.random`         | secondary |           |           |           |
 | `api.fresh`                 | secondary |           |           |           |
 | `api.mixtapes`              | secondary |           |           |           |
+| `api.albums`                | secondary |           |           |           |
 | `api.artists`               | secondary |           |           |           |
+| `api.labels`                | secondary |           |           |           |
 | `api.galaxies`              | secondary |           |           |           |
 | `api.search`                | secondary |           |           |           |
 | `api.search.archive`        | primary   |           |           |           |

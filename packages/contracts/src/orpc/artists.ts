@@ -1,6 +1,8 @@
-// The `artists` domain contract module — public artist-entity reads (Unit 4 of
-// the artist-relationship RFC). Follows the `mixtapes` pattern: a plain list op
-// and a by-slug get op, both public reads.
+// The `artists` domain contract module — public artist-entity reads. Follows the
+// `mixtapes` pattern: a list op and a by-slug get op, both public reads. `list_artists`
+// serves the SAME unified `/artists` index the web page does — every artist Fluncle holds
+// that clears the thin-content floor, paginated; the older findings-only, finding-count-
+// ordered read is gone. `get_artist` resolves any artist that has a page.
 
 import { oc } from "@orpc/contract";
 import * as z from "zod";
@@ -9,44 +11,56 @@ import * as z from "zod";
  * A public artist list item — the minimal shape the list and get ops emit. The
  * public identifier is `slug` (the internal surrogate `id` never crosses the wire);
  * these fields are sufficient for the CLI, SSH terminal, and llms.txt consumers, and
- * the `/artist/<slug>` page (Unit 3) derives its richer shape from the same row.
- * `findingCount` counts only PUBLISHED findings.
+ * the `/artist/<slug>` page derives its richer shape from the same row. `findingCount`
+ * counts published findings; `certified` is `findingCount > 0`; `trackCount` is the artist's
+ * renderable tracks (findings plus the quieter catalogue rows).
  */
 export const ArtistListItemSchema = z
   .object({
+    certified: z.boolean(),
     findingCount: z.number(),
     name: z.string(),
     slug: z.string(),
     spotifyUrl: z.string().optional(),
+    trackCount: z.number(),
   })
   .meta({ id: "ArtistListItem" });
 
 /**
  * `list_artists` → `GET /artists` (operationId `listArtists`).
  *
- * Every artist with at least one published finding, ordered by finding count
- * descending (the most-represented artists first). Contract-only oRPC: there is no
- * TanStack route file under /api/v1/artists; oRPC serves it straight off the
- * registry. The response is `{ ok: true, artists }`, mirroring the `list_mixtapes`
- * envelope.
+ * The unified `/artists` index — every artist Fluncle holds that clears the thin-content floor,
+ * ordered alphabetically by name, one page at a time. This is the SAME index the `/artists` web
+ * page serves. `page` is a 1-based tolerant string query param (default 1); the page size is
+ * fixed. Contract-only oRPC: there is no TanStack route file under /api/v1/artists; oRPC serves it
+ * straight off the registry. The response is `{ ok: true, artists, page, pageCount, total }`.
  */
 export const listArtists = oc
   .route({
     method: "GET",
     operationId: "listArtists",
     path: "/artists",
-    summary: "List artists with at least one published finding",
+    summary: "List every artist Fluncle holds, A to Z, one page at a time",
     tags: ["Artists"],
   })
-  .output(z.object({ artists: z.array(ArtistListItemSchema), ok: z.literal(true) }));
+  .input(z.object({ page: z.string().optional() }))
+  .output(
+    z.object({
+      artists: z.array(ArtistListItemSchema),
+      ok: z.literal(true),
+      page: z.number(),
+      pageCount: z.number(),
+      total: z.number(),
+    }),
+  );
 
 /**
  * `get_artist` → `GET /artists/{slug}` (operationId `getArtist`).
  *
- * Public read of a single artist by their unique slug. Returns the same
- * `ArtistListItem` shape as the list, wrapped in `{ ok: true, artist }`. A slug
- * that matches no artist with at least one published finding is a 404 (so list and
- * get agree on which artists exist).
+ * Public read of a single artist by their unique slug. Returns the same `ArtistListItem` shape as
+ * the list, wrapped in `{ ok: true, artist }`. Resolves any artist that has a page — a below-floor,
+ * crawled artist the list omits still renders on its `/artist/<slug>` page — so get is
+ * intentionally wider than the list index. A slug that matches no artist is a 404.
  */
 export const getArtist = oc
   .route({

@@ -40,9 +40,14 @@ const PUBLIC_ROUTE_OPS: Record<string, string> = {
   // as part of the public surface net.
   "DELETE /me/rec-seeds/{trackId}": "delete_private_rec_seed",
   "DELETE /me/saved-findings/{trackId}": "unsave_private_finding",
+  // The albums domain — contract-only oRPC (the catalogue-browse API). No TanStack route
+  // file under /api/v1/albums; oRPC serves these straight off the registry. Public reads,
+  // catalogue-scoped + paginated, no auth.
+  "GET /albums": "list_albums",
+  "GET /albums/{slug}": "get_album",
   // The artists domain — contract-only oRPC (Unit 4 of the artist-relationship RFC).
   // No TanStack route file under /api/v1/artists; oRPC serves these straight off the
-  // registry. Public reads, no auth required.
+  // registry. Public reads (now catalogue-scoped + paginated), no auth required.
   "GET /artists": "list_artists",
   "GET /artists/{slug}": "get_artist",
   // The galaxies domain — contract-only oRPC (browse-by-feel RFC). No TanStack route
@@ -55,6 +60,11 @@ const PUBLIC_ROUTE_OPS: Record<string, string> = {
   // why one op serves every graph link in the app without an N+1.
   "GET /graph/{kind}/{slug}": "get_graph_preview",
   "GET /health": "get_health",
+  // The labels domain — contract-only oRPC (the catalogue-browse API). No TanStack route
+  // file under /api/v1/labels; oRPC serves these straight off the registry. Public reads,
+  // catalogue-scoped + paginated, blind to seed_state (crawl scope, never storage), no auth.
+  "GET /labels": "list_labels",
+  "GET /labels/{slug}": "get_label",
   "GET /me": "get_current_private_user",
   "GET /me/csrf": "get_private_mutation_token",
   "GET /me/export/{exportId}": "get_private_account_export",
