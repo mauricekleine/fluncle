@@ -406,7 +406,7 @@ function LabelPage() {
 
         {/* Every band below is conditional: an empty one renders nothing at all, so this page
             is only ever about what it actually carries (components/graph-sections.tsx). */}
-        <FindingsGrid findings={findings} label="Recommended by Fluncle" />
+        <FindingsGrid findings={findings} />
 
         <ArtistChips artists={artists} title={`Artists on ${name}`} />
 

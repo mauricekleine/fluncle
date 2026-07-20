@@ -118,7 +118,11 @@ function FreshTrackStream({ data, view }: { data: FreshReleases; view: "all" | "
   const rest = stream.slice(MARQUEE_HEADLINE_COUNT);
 
   if (stream.length === 0) {
-    return <p className="fresh-empty empty-scanlines">No new tracks in the last 30 days.</p>;
+    return (
+      <p className="fresh-empty empty-scanlines">
+        No new tracks in the last {data.windowDays} days.
+      </p>
+    );
   }
 
   return (

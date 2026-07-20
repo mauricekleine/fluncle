@@ -453,11 +453,11 @@ function ArtistPage() {
             empty-state apology. Its catalogue tracklist below and its masthead bio carry the page,
             exactly as a crawler-discovered label's does (graph-sections.tsx header: a page with no
             findings is a page about something else). Socials and kin follow. */}
-        <FindingsGrid findings={findings} label="Recommended by Fluncle" />
+        <FindingsGrid findings={findings} />
 
         {socials.length > 0 ? (
           <nav aria-label={`Follow ${name}`} className="artist-follow">
-            <p className="artist-similar-label">Follow {name}</p>
+            <h2 className="artist-similar-label">Follow {name}</h2>
             <div className="artist-socials">
               {socials.map((social) => (
                 <SocialLink key={social.platform} social={social} />
@@ -468,7 +468,7 @@ function ArtistPage() {
 
         {dossier.neighbours.length > 0 ? (
           <nav aria-label="Similar artists" className="artist-similar">
-            <p className="artist-similar-label">Similar artists</p>
+            <h2 className="artist-similar-label">Similar artists</h2>
             <ul className="artist-similar-list">
               {dossier.neighbours.map((neighbour) => (
                 <li key={neighbour.slug}>

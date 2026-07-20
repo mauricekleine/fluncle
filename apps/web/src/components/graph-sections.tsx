@@ -93,12 +93,19 @@ export function graphPageTracks(
 }
 
 /**
- * The findings band: the cover grid that LEADS every graph page, under a VISIBLE section
- * heading (the reference-register curator label — "Recommended by Fluncle"). Only
- * coordinate-bearing findings render (the grid is a grid of log links). The heading is
- * permitted here by DESIGN.md's mixed-list carve-out: a findings block MAY be introduced,
- * because a finding is a named object. That carve-out stops at this band — the uncertified
- * quieter rows below stay unheaded and unnamed (UnlitTracks, the unnamed tier).
+ * The catalogue-register curator heading over the findings block — fixed, and folded into the
+ * component (not a prop) so no call site can reintroduce an entity-named title ("Findings on X").
+ * The lore-area surfaces carry the archive's own cosmos name; a catalogue/entity page reads plainly
+ * (VOICE.md Three Areas; DESIGN.md Unlit Rule mixed-list carve-out, operator-ratified 2026-07-20).
+ */
+const FINDINGS_HEADING = "Recommended by Fluncle";
+
+/**
+ * The findings band: the cover grid that LEADS every graph page, under a VISIBLE section heading
+ * ("Recommended by Fluncle"). Only coordinate-bearing findings render (the grid is a grid of log
+ * links). The heading is permitted here by DESIGN.md's mixed-list carve-out: a findings block MAY
+ * be introduced, because a finding is a named object. That carve-out stops at this band — the
+ * uncertified quieter rows below stay unheaded and unnamed (UnlitTracks, the unnamed tier).
  *
  * An entity with none renders NOTHING here — no heading, no grid, no empty state. It used
  * to print "Quiet sector." and that line is exactly what made a crawler-discovered label
@@ -106,14 +113,7 @@ export function graphPageTracks(
  * actually there. A page with no findings is not a broken findings page; it is a page about
  * something else.
  */
-export function FindingsGrid({
-  findings,
-  label,
-}: {
-  findings: TrackListItem[];
-  /** The visible section heading over the grid, e.g. "Recommended by Fluncle". Also the grid's accessible name (via `aria-labelledby`). */
-  label: string;
-}) {
+export function FindingsGrid({ findings }: { findings: TrackListItem[] }) {
   const grid = findings.filter((finding) => finding.logId);
 
   if (grid.length === 0) {
@@ -122,9 +122,11 @@ export function FindingsGrid({
 
   return (
     <section className="artist-findings">
-      <p className="artist-similar-label" id="findings-grid-heading">
-        {label}
-      </p>
+      {/* A real H2 (styled by .artist-similar-label) so the visible section heading joins the page
+          outline — H1 (entity) → H2 (this) → the sibling H2s. Its `aria-labelledby` names the grid. */}
+      <h2 className="artist-similar-label" id="findings-grid-heading">
+        {FINDINGS_HEADING}
+      </h2>
       <ul aria-labelledby="findings-grid-heading" className="artist-grid">
         {grid.map((finding) =>
           finding.logId ? (
@@ -167,7 +169,7 @@ export function ArtistChips({ artists, title }: { artists: ArtistChip[]; title: 
 
   return (
     <nav aria-label={title} className="artist-similar">
-      <p className="artist-similar-label">{title}</p>
+      <h2 className="artist-similar-label">{title}</h2>
       <ul className="artist-similar-list">
         {artists.map((artist) => (
           <li key={artist.slug}>
