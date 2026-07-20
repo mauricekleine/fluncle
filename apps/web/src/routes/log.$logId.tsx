@@ -556,11 +556,11 @@ function LogPage() {
         <section aria-label="How to read a Log ID" className="log-decode">
           <h2>How to read the coordinate</h2>
           <p>
-            <span className="log-decode-part">{sector}</span> is the sector: the days between the
-            epoch, 2026-05-30, and the day this one was found.{" "}
-            <span className="log-decode-part">{tail}</span> is the tail: a stable signature of the
-            recording itself, so a coordinate reads found, not numbered. Stamped once, never
-            changed. <Link to="/about">More on Log IDs and the Galaxy</Link>.
+            <span className="log-decode-part">{sector}</span> counts the days from the start of my
+            log, May 30, 2026, to the day I found this one.{" "}
+            <span className="log-decode-part">{tail}</span> comes from the recording itself, so this
+            track keeps the same code forever. Found, not numbered. Stamped once, never changed.{" "}
+            <Link to="/about">More on Log IDs and the Galaxy</Link>.
           </p>
         </section>
 
@@ -587,18 +587,20 @@ function LogPage() {
         ) : undefined}
 
         {/*
-          The trail handoff. A finding is one waypoint on the trail Fluncle leaves for the
-          crew (LORE.md); this block hands the arriving reader the way onward — the whole
-          run (the Spotify playlist, the highest-value zero-login return) and the mothership
-          (the Friday newsletter, reusing the ratified SubscribeDialog + its canon copy). It
-          sits AFTER the finding and "Close in sound", never above the video: the music-first
-          hierarchy leads, the trail follows. No banner, no gradient — a quiet line in the
-          plate flow, the buttons carrying the literal actions per the Chrome Rule.
+          The follow-along handoff — the ENTRY-POINT register (operator ruling 2026-07-20):
+          a social viewer lands here knowing nothing, so the lede speaks plain human first
+          person and introduces Fluncle without cosmos vocabulary ("waypoint"/"trail" mean
+          nothing to a stranger; deep lore stays on the deep pages). It offers the two
+          zero-login return paths (the Spotify playlist + the Friday newsletter, reusing
+          the ratified SubscribeDialog). It sits AFTER the finding and "Close in sound",
+          never above the video: the music-first hierarchy leads. No banner, no gradient —
+          a quiet line in the plate flow, the buttons carrying the literal actions per the
+          Chrome Rule.
         */}
-        <section aria-label="Follow the trail" className="log-trail">
+        <section aria-label="Follow along" className="log-trail">
           <p className="log-trail-lede">
-            You&rsquo;ve landed on one waypoint. I keep the rest of the trail on the playlist, and I
-            send fresh bangers out every Friday.
+            Hi, I&rsquo;m Fluncle. I collect drum &amp; bass bangers. Follow the playlist, or join
+            the newsletter and I&rsquo;ll send you fresh ones every Friday.
           </p>
           <div className="log-actions">
             <Button
