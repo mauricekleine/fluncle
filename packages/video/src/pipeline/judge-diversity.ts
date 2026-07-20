@@ -33,7 +33,6 @@ import path from "node:path";
 import { GLSL } from "../remotion/journey/glsl";
 
 import { decodeImageRgb, type RgbImage } from "./frames";
-import { type IntentRegister, REGISTERS } from "./intent";
 import {
   classifyCompositionStructure,
   labelWithStructure,
@@ -238,7 +237,6 @@ type FeedTrack = {
   logId?: string | null;
   videoVehicle?: string | null;
   videoStructure?: string | null;
-  videoRegister?: string | null;
 };
 
 /** A recent published finding that has a video: its coordinate + poetic vehicle name +
@@ -248,19 +246,11 @@ export type LedgerEntry = {
   vehicle: string | null;
   /** The structure family from the feed, if it exposes one yet; else null (classify on the fly). */
   feedStructure: StructureFamily | null;
-  /** The diversity register from the feed, if exposed; else null (resolve from render.json). */
-  feedRegister: IntentRegister | null;
 };
 
 function asFamily(value: unknown): StructureFamily | null {
   return typeof value === "string" && (STRUCTURE_FAMILIES as readonly string[]).includes(value)
     ? (value as StructureFamily)
-    : null;
-}
-
-function asRegister(value: unknown): IntentRegister | null {
-  return typeof value === "string" && (REGISTERS as readonly string[]).includes(value)
-    ? (value as IntentRegister)
     : null;
 }
 
@@ -275,7 +265,6 @@ export async function fetchRecentLedger(limit: number): Promise<LedgerEntry[]> {
   for (const t of body.tracks ?? []) {
     if (t.videoVehicle && t.logId) {
       entries.push({
-        feedRegister: asRegister(t.videoRegister),
         feedStructure: asFamily(t.videoStructure),
         logId: t.logId,
         vehicle: t.videoVehicle,
@@ -341,21 +330,6 @@ export async function structureOfLogId(logId: string): Promise<StructureFamily |
   return classifyCompositionStructure(source, glslSnippets)?.dominant ?? null;
 }
 
-/** The diversity register recorded for a logId, from the local render.json. Null when
- *  the bundle isn't reachable or the register is unset. Mirrors structureOfLogId. */
-export async function registerOfLogId(logId: string): Promise<IntentRegister | null> {
-  const manifest = path.join(OUT_DIR, logId, "render.json");
-  if (existsSync(manifest)) {
-    try {
-      const parsed = JSON.parse(readFileSync(manifest, "utf8")) as { register?: unknown };
-      return asRegister(parsed.register);
-    } catch {
-      return null;
-    }
-  }
-  return null;
-}
-
 function asPlateSubject(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim().toLowerCase() : null;
 }
@@ -386,13 +360,11 @@ export async function plateSubjectOfLogId(logId: string): Promise<string | null>
   }
 }
 
-/** A recent neighbour with its resolved structural family + register (null when unresolved). */
+/** A recent neighbour with its resolved structural family (null when unresolved). */
 export type StructureNeighbour = {
   logId: string;
   vehicle: string | null;
   family: StructureFamily | null;
-  /** The neighbour's diversity register — representational repeats demote FAIL→WARN. */
-  register: IntentRegister | null;
 };
 
 export type StructureGateStatus = "pass" | "warn" | "fail" | "skipped";
@@ -420,20 +392,20 @@ function findingsAgo(index: number): string {
  * a soft rhyme; beyond it, clear. A null subject family skips the gate (never fails a
  * ship because a body couldn't be classified). No fs, no network — heavily tested.
  *
- * The PRESENCE nuance: the structural classifier reads the ALGORITHM's fingerprint,
- * and every raymarched/SDF presence subject — a ship, a ruin, a creature — classifies
- * the same (`metaball`/`other`). So a hard structural FAIL between two REPRESENTATIONAL
- * findings would punish a ship vs a tree vs a colossus as if they were the same world,
- * when the SUBJECT is exactly what diverges (and the poster edge-distance + subjectClass
- * carry that). So a same-family repeat inside the FAIL window DEMOTES to WARN when BOTH
- * entries are `register: "representational"`. Texture-register repeats stay a hard FAIL
- * (three cellular fields in six is the failure this gate was built for). `subjectRegister`
- * defaults to null, so existing callers keep the strict texture-era behavior.
+ * The feed is now ALL-REPRESENTATIONAL (operator ruling 2026-07-20; see
+ * docs/agents/hermes/scripts/assign-video-axes.ts): representational is a PREREQUISITE,
+ * not one register among several. So the gate polices structural-family sameness WITHIN
+ * representational — a same-family repeat inside the FAIL window is a hard FAIL regardless
+ * of register. The earlier representational→WARN demotion existed only because
+ * representational was rare (so presence pairs wouldn't be punished); under the
+ * all-representational feed EVERY consecutive pair would qualify, defanging the gate
+ * entirely, so it is gone. The SUBJECT-kind axis the structural fingerprint can't see
+ * (a ship vs a ruin vs a creature all classify the same `metaball`/`other`) is policed by
+ * evaluatePlateSubjectGate, which stays WARN-only as the softer second layer.
  */
 export function evaluateStructureGate(
   subject: StructureFamily | null,
   neighbours: StructureNeighbour[],
-  subjectRegister: IntentRegister | null = null,
 ): StructureGate {
   if (!subject) {
     return {
@@ -457,18 +429,6 @@ export function evaluateStructureGate(
   const neighbour = neighbours[repeatAt];
   const label = labelWithStructure(neighbour.vehicle, neighbour.family);
   if (repeatAt < STRUCTURE_FAIL_WINDOW) {
-    // Presence demotion: two representational subjects that classify the same family
-    // are different WORLDS (ship vs ruin vs creature) even though the fingerprint can't
-    // see it — soft-rhyme, don't hard-fail. Texture repeats stay a FAIL.
-    if (subjectRegister === "representational" && neighbour.register === "representational") {
-      return {
-        neighbours,
-        repeatAt,
-        status: "warn",
-        subject,
-        verdict: `${subject} shipped ${findingsAgo(repeatAt)} as ${label} — but both are representational subjects (raymarched/SDF bodies classify alike); the SUBJECT is what diverges, so this is a rhyme, not a repeat. Keep the subjects distinct (a different subjectClass/silhouette)`,
-      };
-    }
     return {
       neighbours,
       repeatAt,
@@ -563,14 +523,13 @@ export async function plateSubjectLedger(entries: LedgerEntry[]): Promise<PlateS
   return out;
 }
 
-/** Fetch + classify the structural family + register of each recent ledger entry
- *  (best-effort). Feed values win; the local render.json fills gaps. */
+/** Fetch + classify the structural family of each recent ledger entry (best-effort).
+ *  Feed values win; the local render.json fills gaps. */
 export async function classifyLedger(entries: LedgerEntry[]): Promise<StructureNeighbour[]> {
   const out: StructureNeighbour[] = [];
   for (const entry of entries) {
     const family = entry.feedStructure ?? (await structureOfLogId(entry.logId));
-    const register = entry.feedRegister ?? (await registerOfLogId(entry.logId));
-    out.push({ family, logId: entry.logId, register, vehicle: entry.vehicle });
+    out.push({ family, logId: entry.logId, vehicle: entry.vehicle });
   }
   return out;
 }
@@ -622,7 +581,6 @@ export async function judgeDiversity(
     neighbours?: number;
     structureNeighbours?: number;
     assumeStructure?: StructureFamily;
-    assumeRegister?: IntentRegister;
     assumePlateSubject?: string;
   } = {},
 ): Promise<DiversityReport> {
@@ -664,10 +622,8 @@ export async function judgeDiversity(
     // The structural axis: classify the subject + the recent ledger, then the pure gate.
     const subjectFamily =
       opts.assumeStructure ?? (subjectLogId ? await structureOfLogId(subjectLogId) : null);
-    const subjectRegister =
-      opts.assumeRegister ?? (subjectLogId ? await registerOfLogId(subjectLogId) : null);
     const structureEntries = await classifyLedger(ledger.slice(0, structureWanted));
-    const structure = evaluateStructureGate(subjectFamily, structureEntries, subjectRegister);
+    const structure = evaluateStructureGate(subjectFamily, structureEntries);
 
     // The plate-subject axis (advisory). Resolve the subject's kind first and only
     // read the neighbours' render.jsons when there is a kind to compare — the
@@ -720,36 +676,24 @@ if (import.meta.main) {
     );
     process.exit(2);
   }
-  const assumeRegisterRaw = flagValue("--assume-register");
-  const assumeRegister = assumeRegisterRaw
-    ? (asRegister(assumeRegisterRaw) ?? undefined)
-    : undefined;
-  if (assumeRegisterRaw && !assumeRegister) {
-    console.error(
-      `--assume-register must be one of ${REGISTERS.join(", ")}; got "${assumeRegisterRaw}"`,
-    );
-    process.exit(2);
-  }
   const assumePlateSubject = flagValue("--assume-plate-subject");
   const valueFlags = new Set([
     "--neighbours",
     "--structure-neighbours",
     "--assume-structure",
-    "--assume-register",
     "--assume-plate-subject",
   ]);
   const subject = args.find((a, i) => !a.startsWith("--") && !valueFlags.has(args[i - 1] ?? ""));
 
   if (!subject) {
     console.error(
-      "usage: judge-diversity <posterPathOrLogId> [--neighbours N] [--structure-neighbours N] [--assume-structure <family>] [--assume-register <register>] [--assume-plate-subject <kind>] [--strict] [--json]",
+      "usage: judge-diversity <posterPathOrLogId> [--neighbours N] [--structure-neighbours N] [--assume-structure <family>] [--assume-plate-subject <kind>] [--strict] [--json]",
     );
     process.exit(2);
   }
 
   const report = await judgeDiversity(subject, {
     assumePlateSubject,
-    assumeRegister,
     assumeStructure,
     neighbours,
     structureNeighbours,

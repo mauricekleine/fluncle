@@ -64,6 +64,9 @@ const ECHO_RETRIES = 1;
 
 const FLUNCLE_BIN = process.env.FLUNCLE_BIN ?? "fluncle";
 const CLAUDE_BIN = process.env.CLAUDE_BIN ?? "claude";
+// Headless `claude -p` kills backgrounded Bash ~5s after the final result; a sweep that
+// backgrounds work and ends its turn loses it silently. Force it off for the spawned claude.
+process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS = "1";
 
 // The authoring model + optional reasoning effort. Env-configurable; default the
 // spike-proven Sonnet alias (the note/observe-sweep precedent).

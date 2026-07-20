@@ -87,6 +87,10 @@ const QUEUE_LIMIT = 200; // the server's `parseLimit` ceiling for the bio queue
 
 const FLUNCLE_BIN = process.env.FLUNCLE_BIN ?? "fluncle";
 const CLAUDE_BIN = process.env.CLAUDE_BIN ?? "claude";
+// Headless `claude -p` kills backgrounded Bash ~5s after the final result; a sweep that
+// backgrounds work and ends its turn loses it silently. Force it off for the spawned claude.
+// Set here (not in the album/artist/label-bio-sweep.sh wrappers) so the shared path covers all three.
+process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS = "1";
 
 // The authoring model. A shared default plus per-kind overrides, all defaulting to the
 // spike-proven Sonnet alias (the voiced-note family; NOT haiku).
