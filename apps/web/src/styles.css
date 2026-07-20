@@ -2208,7 +2208,7 @@ a.catalogue-letter:focus-visible {
 .hub-grid a:focus-visible .artist-grid-cover,
 .hub-grid a:hover .artist-card-avatar,
 .hub-grid a:focus-visible .artist-card-avatar {
-  border-color: color-mix(in oklch, var(--border) 85%, transparent);
+  border-color: color-mix(in oklch, var(--stardust) 25%, transparent);
 }
 
 /* Focus, and only focus, is loud: the canonical Eclipse-Glow ring. Keyboard focus must stay

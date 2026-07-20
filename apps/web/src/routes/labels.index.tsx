@@ -56,7 +56,7 @@ const fetchLabelsPage = createServerFn({ method: "GET" })
 // meta (2026-07-18). Paged variants bake their page number into BOTH strings.
 const title = "Every drum & bass record label, A to Z · Fluncle";
 const description =
-  "Every drum & bass record label Fluncle holds, A to Z: the imprints behind the bangers, with the founding facts and lineage that link them.";
+  "Every drum & bass record label Fluncle holds, A to Z, with the founding facts and lineage that link them.";
 
 function pagedMeta(page: number): { description: string; title: string } {
   if (page <= 1) {
@@ -64,7 +64,7 @@ function pagedMeta(page: number): { description: string; title: string } {
   }
 
   return {
-    description: `Page ${page} of every drum & bass record label Fluncle holds, A to Z: the imprints behind the bangers.`,
+    description: `Page ${page} of every drum & bass record label Fluncle holds, A to Z.`,
     title: `Every drum & bass record label, page ${page} · Fluncle`,
   };
 }
@@ -155,8 +155,8 @@ function pageParam(value: unknown): number | undefined {
 // drops at ≤ 1 ("all 1 of them" is not a sentence).
 function mastheadLine(total: number): string {
   return total > 1
-    ? `Every drum & bass label, all ${countFormatter.format(total)} of them.`
-    : "Every drum & bass label.";
+    ? `Every drum & bass label Fluncle holds, all ${countFormatter.format(total)} of them.`
+    : "Every drum & bass label Fluncle holds.";
 }
 
 function LabelsPage() {
@@ -209,7 +209,7 @@ function LabelsPage() {
             </ul>
             <CataloguePager
               buildHref={buildHref}
-              label="More labels, more pages"
+              label="Labels, more pages"
               page={hub.page}
               pageCount={hub.pageCount}
             />

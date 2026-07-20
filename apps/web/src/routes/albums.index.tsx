@@ -148,8 +148,8 @@ function pageParam(value: unknown): number | undefined {
 // drops at ≤ 1 ("all 1 of them" is not a sentence).
 function mastheadLine(total: number): string {
   return total > 1
-    ? `Every drum & bass record, all ${countFormatter.format(total)} of them.`
-    : "Every drum & bass record.";
+    ? `Every drum & bass record Fluncle holds, all ${countFormatter.format(total)} of them.`
+    : "Every drum & bass record Fluncle holds.";
 }
 
 function AlbumsPage() {
@@ -195,7 +195,7 @@ function AlbumsPage() {
             </ul>
             <CataloguePager
               buildHref={buildHref}
-              label="More records, more pages"
+              label="Albums, more pages"
               page={hub.page}
               pageCount={hub.pageCount}
             />

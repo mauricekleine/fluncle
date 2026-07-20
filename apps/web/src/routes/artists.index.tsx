@@ -55,7 +55,7 @@ const fetchArtistsPage = createServerFn({ method: "GET" })
 // Paged variants bake their page number into BOTH strings so no two `?page=N` URLs share meta.
 const title = "Every drum & bass artist, A to Z · Fluncle";
 const description =
-  "Every drum & bass artist Fluncle holds, A to Z: the names behind the bangers, with the labels that pressed them.";
+  "Every drum & bass artist Fluncle holds, A to Z, with the labels that pressed their records.";
 
 function pagedMeta(page: number): { description: string; title: string } {
   if (page <= 1) {
@@ -63,7 +63,7 @@ function pagedMeta(page: number): { description: string; title: string } {
   }
 
   return {
-    description: `Page ${page} of every drum & bass artist Fluncle holds, A to Z, the names behind the bangers.`,
+    description: `Page ${page} of every drum & bass artist Fluncle holds, A to Z.`,
     title: `Every drum & bass artist, page ${page} · Fluncle`,
   };
 }
@@ -159,8 +159,8 @@ function pageParam(value: unknown): number | undefined {
 // The count clause drops at ≤ 1 ("all 1 of them" is not a sentence).
 function mastheadLine(total: number): string {
   return total > 1
-    ? `Every drum & bass artist, all ${countFormatter.format(total)} of them.`
-    : "Every drum & bass artist.";
+    ? `Every drum & bass artist Fluncle holds, all ${countFormatter.format(total)} of them.`
+    : "Every drum & bass artist Fluncle holds.";
 }
 
 function ArtistsPage() {
@@ -211,7 +211,7 @@ function ArtistsPage() {
             </ul>
             <CataloguePager
               buildHref={buildHref}
-              label="More artists, more pages"
+              label="Artists, more pages"
               page={hub.page}
               pageCount={hub.pageCount}
             />
